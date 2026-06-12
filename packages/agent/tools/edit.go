@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
 )
 
 // EditTool applies one or more exact-match replacements to a file.
@@ -67,8 +67,23 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	// Normalize to \n for matching.
 	body := string(bytes.ReplaceAll(orig, []byte("\r\n"), []byte("\n")))
 
-	// Validate all edits first (against original content, not sequentially).
+	// Normalize the model-supplied oldText/newText line endings to \n as
+	// well. A model that copied bytes out of a `read` of a CRLF file may
+	// hand us \r\n in oldText; without this the literal match against the
+	// \n-normalized body would fail with a confusing "not found". We work
+	// on \n-only copies throughout and re-apply the file's native ending
+	// once, at the end, so newText that already contains \r\n does not get
+	// double-converted into \r\r\n.
+	edits := make([]editOp, len(a.Edits))
 	for i, e := range a.Edits {
+		edits[i] = editOp{
+			OldText: normalizeNewlines(e.OldText),
+			NewText: normalizeNewlines(e.NewText),
+		}
+	}
+
+	// Validate all edits first (against original content, not sequentially).
+	for i, e := range edits {
 		if e.OldText == "" {
 			return core.ToolResult{}, fmt.Errorf("edit %d: oldText must not be empty", i+1)
 		}
@@ -89,8 +104,8 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		start, end  int
 		replacement string
 	}
-	spans := make([]span, 0, len(a.Edits))
-	for _, e := range a.Edits {
+	spans := make([]span, 0, len(edits))
+	for _, e := range edits {
 		idx := strings.Index(body, e.OldText)
 		spans = append(spans, span{start: idx, end: idx + len(e.OldText), replacement: e.NewText})
 	}
@@ -118,7 +133,10 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	out.WriteString(body[prev:])
 	newBody := out.String()
 
-	// Restore line endings.
+	// Restore line endings. newBody is guaranteed \n-only at this point
+	// (both the file body and every replacement were normalized above),
+	// so a single \n->\r\n pass is exact and idempotent — it cannot turn
+	// an existing \r\n into \r\r\n.
 	if nl == "\r\n" {
 		newBody = strings.ReplaceAll(newBody, "\n", "\r\n")
 	}
@@ -146,6 +164,17 @@ func detectLineEnding(b []byte) string {
 		return "\r\n"
 	}
 	return "\n"
+}
+
+// normalizeNewlines collapses \r\n (and bare \r) to \n so model-supplied
+// oldText/newText compare and splice consistently against the
+// \n-normalized file body.
+func normalizeNewlines(s string) string {
+	if !strings.ContainsRune(s, '\r') {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
 }
 
 // diffContextLines is the number of unchanged lines kept on each
@@ -225,9 +254,50 @@ type diffOp struct {
 	line string
 }
 
+// diffLines returns a context-diff op stream for a -> b.
+//
+// The full LCS table is O(m*n) in both time and memory, which is fatal
+// for large files: a 50k-line file with a one-line change would allocate
+// ~(50000)^2 ints (~20GB) and OOM. Real edits touch a small contiguous
+// region and leave long identical prefixes and suffixes, so we strip the
+// common head and tail lines first and run the quadratic LCS only over
+// the differing middle. The trimmed prefix/suffix are re-attached as
+// plain context ops, producing byte-for-byte the same op stream the full
+// LCS would have for these (identical-prefix/suffix) inputs.
 func diffLines(a, b []string) []diffOp {
-	// LCS table.
+	// Common prefix.
+	p := 0
+	for p < len(a) && p < len(b) && a[p] == b[p] {
+		p++
+	}
+	// Common suffix (not overlapping the prefix).
+	s := 0
+	for s < len(a)-p && s < len(b)-p && a[len(a)-1-s] == b[len(b)-1-s] {
+		s++
+	}
+
+	midA := a[p : len(a)-s]
+	midB := b[p : len(b)-s]
+
+	ops := make([]diffOp, 0, p+len(midA)+len(midB)+s)
+	for i := 0; i < p; i++ {
+		ops = append(ops, diffOp{' ', a[i]})
+	}
+	ops = append(ops, lcsDiff(midA, midB)...)
+	for i := len(a) - s; i < len(a); i++ {
+		ops = append(ops, diffOp{' ', a[i]})
+	}
+	return ops
+}
+
+// lcsDiff is the classic O(m*n) LCS diff. Callers must trim common
+// prefix/suffix lines first (see diffLines) so m and n stay bounded by
+// the size of the actual change, not the whole file.
+func lcsDiff(a, b []string) []diffOp {
 	m, n := len(a), len(b)
+	if m == 0 && n == 0 {
+		return nil
+	}
 	dp := make([][]int, m+1)
 	for i := range dp {
 		dp[i] = make([]int, n+1)

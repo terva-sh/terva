@@ -1,16 +1,16 @@
 package modes
 
 import (
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/tui"
 )
 
 // sessionOpsDialog is the picker shown when the user runs `/session`
 // without an argument. Offers the two portable-file operations on
 // the current conversation: export (write the in-memory transcript
-// plus meta to a .zotsession file) and import (load a .zotsession
+// plus meta to a .tervasession file) and import (load a .tervasession
 // from another machine and swap it in as the active session).
 //
-// Shape mirrors telegramDialog and logoutDialog: tiny list, arrow
+// Shape mirrors connectDialog and logoutDialog: tiny list, arrow
 // keys to move, enter to pick, esc to cancel.
 type sessionOpsDialog struct {
 	active bool

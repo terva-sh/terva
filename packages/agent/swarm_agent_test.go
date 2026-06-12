@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/patriceckhart/zot/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/swarm"
 )
 
 // TestSwarmEmitterMirrorDormantUntilStdoutBreaks regresses the
@@ -16,7 +16,7 @@ import (
 //
 // Symptom: events.jsonl held two copies of every event because the
 // child mirrored each event to disk AND the supervisor parsed the
-// child's stdout and appended each event to disk too. On next zot
+// child's stdout and appended each event to disk too. On next terva
 // launch the replay produced two transcript lines per real one.
 //
 // Fix invariant: while stdout writes succeed (i.e. the supervisor is

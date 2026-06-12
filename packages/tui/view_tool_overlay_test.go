@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 func TestLiveToolOverlayRemainsAfterAssistantToolUse(t *testing.T) {

@@ -8,11 +8,11 @@ import (
 	"runtime"
 	"strings"
 
-	zotdocs "github.com/patriceckhart/zot"
-	"github.com/patriceckhart/zot/packages/agent/skills"
-	"github.com/patriceckhart/zot/packages/agent/tools"
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/provider"
+	tervadocs "terva.sh/terva"
+	"terva.sh/terva/packages/agent/skills"
+	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
 )
 
 // Resolved is the effective configuration after merging CLI, config, defaults.
@@ -31,6 +31,13 @@ type Resolved struct {
 	SystemPrompt string
 	MaxSteps     int
 	Sandbox      *tools.Sandbox
+
+	// MaxOutput is the resolved model's maximum output-token budget
+	// (from the catalog). Passed to the agent so each turn requests
+	// the model's full output capacity instead of the provider's
+	// conservative default (e.g. Bedrock's 4096, which truncates
+	// long writes/edits with stopReason=length).
+	MaxOutput int
 
 	// SkillTool is the on-demand skill loader registered with the
 	// agent's tool registry, or nil if no SKILL.md files were
@@ -78,11 +85,12 @@ func (r *Resolved) MergeExtensionTools(mgr ExtensionToolSource) {
 	// addendum is preserved by walking the existing append slice.
 	append_ := r.systemAppend
 	r.SystemPrompt = BuildSystemPrompt(SystemPromptOpts{
-		CWD:        r.CWD,
-		Tools:      toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
-		Custom:     r.systemCustom,
-		Append:     append_,
-		ZotDocsDir: filepath.Join(ZotHome(), "docs"),
+		CWD:          r.CWD,
+		Tools:        toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
+		Custom:       r.systemCustom,
+		Append:       append_,
+		TervaDocsDir: filepath.Join(TervaHome(), "docs"),
+		StatusTool:   r.ToolRegistry["terva_status"] != nil,
 	})
 }
 
@@ -120,7 +128,7 @@ func toolSummariesFromRegistry(reg core.Registry, cached map[string]string) []To
 	return out
 }
 
-// defaultModelForProvider returns the model id zot prefers when the
+// defaultModelForProvider returns the model id terva prefers when the
 // caller didn't pick one. Mirrors the per-provider switch used at
 // multiple points in Resolve; centralised so the unknown-model
 // recovery path and the no-model-configured path can't drift.
@@ -142,7 +150,7 @@ func defaultModelForProvider(prov string) string {
 		return "deepseek-v4-pro"
 	case "google":
 		return "gemini-2.5-pro"
-	case "ollama":
+	case "ollama", "openai-compatible":
 		return ""
 	case "moonshotai", "moonshotai-cn":
 		return "kimi-k2.6"
@@ -187,7 +195,7 @@ func defaultModelForProvider(prov string) string {
 	}
 }
 
-// knownProviders is the set of provider ids zot recognises. Used by
+// knownProviders is the set of provider ids terva recognises. Used by
 // Resolve to validate args.Provider, by extension-callers, and by the
 // auto-fallback logic that picks any logged-in provider when the user's
 // preferred one has no credentials.
@@ -202,6 +210,7 @@ var knownProviders = []string{
 	"opencode", "opencode-go",
 	"amazon-bedrock", "google-vertex", "azure-openai-responses",
 	"github-copilot", "cloudflare-workers-ai", "cloudflare-ai-gateway",
+	"openai-compatible",
 }
 
 func isKnownProvider(name string) bool {
@@ -265,7 +274,13 @@ func canonicalProvider(name string) string {
 // login flow. requireCred controls whether missing credentials are a
 // hard error (used by print/json modes).
 func Resolve(args Args, requireCred bool) (Resolved, error) {
-	cfg, _ := LoadConfig()
+	// eff is the layered (project-over-user) read view; cfg is the pristine,
+	// writable user layer. Every existing read/repair below stays on cfg so
+	// behaviour is unchanged and the model-repair paths only ever persist the
+	// user config. eff.ContextFiles (project-or-user, resolved absolute) feeds
+	// startup context-file injection.
+	eff := ResolveConfig(args.CWD)
+	cfg := eff.User
 
 	// User-requested provider (explicit > config > default).
 	// Normalise common aliases (e.g. "bedrock" -> "amazon-bedrock")
@@ -303,9 +318,37 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		method    string
 		accountID string
 		credErr   error
+		// compatCtx is the user's default context window for an
+		// openai-compatible endpoint, applied to a model id that isn't in
+		// the active catalogue (not yet discovered). 0 = unknown.
+		compatCtx int
+		// compatBaseURL is the openai-compatible endpoint captured at
+		// /login. It is the FALLBACK base URL — applied only after an
+		// explicit --base-url flag and any per-model models.json baseUrl,
+		// so a model can point at a different endpoint than the login one.
+		compatBaseURL string
 	)
 	if provName == "ollama" {
 		cred = firstNonEmpty(args.APIKey, "ollama")
+		method = "apikey"
+	} else if provName == "openai-compatible" {
+		// A user-configured OpenAI-compatible endpoint (local model
+		// server, gateway, ...). The base URL and model id were captured
+		// in the login form and live in auth.json; the API key is
+		// optional, so fall back to a harmless sentinel bearer token when
+		// the server doesn't need one. Seed --base-url / --model from the
+		// stored values when the caller didn't pass them explicitly.
+		storedBaseURL, storedModel, storedCtx := AuthStoreFor().Extras(provName)
+		compatCtx = storedCtx
+		// Remember the login endpoint as a fallback, but DON'T assign it to
+		// args.BaseURL yet: a per-model `baseUrl` in models.json must be able
+		// to override it (applied after the model is resolved, below).
+		compatBaseURL = storedBaseURL
+		if args.Model == "" && cfg.Model == "" {
+			args.Model = storedModel
+		}
+		storedKey, _, _, _ := ResolveCredentialFull(provName, args.APIKey)
+		cred = firstNonEmpty(storedKey, "openai-compatible")
 		method = "apikey"
 	} else {
 		cred, method, accountID, credErr = ResolveCredentialFull(provName, args.APIKey)
@@ -313,7 +356,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 
 	// If the user did NOT explicitly pick a provider and the default one
 	// has no credentials, auto-fall-back to whichever provider is actually
-	// logged in. That way running plain `zot` after `/login` (any provider)
+	// logged in. That way running plain `terva` after `/login` (any provider)
 	// never shows a "not logged in" banner.
 	userPickedProvider := args.Provider != ""
 	if credErr != nil && !userPickedProvider && provName != "ollama" {
@@ -321,11 +364,11 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// env-based credential is discovered, e.g. an env-only
 		// amazon-bedrock setup (AWS_BEARER_TOKEN_BEDROCK / AWS_PROFILE /
 		// IAM keys) when no config.json pins the provider, such as after
-		// pointing ZOT_HOME at a fresh home dir. Iteration order of
+		// pointing TERVA_HOME at a fresh home dir. Iteration order of
 		// knownProviders defines fallback priority. ollama is skipped:
 		// it has no credential and would always "match".
 		for _, other := range knownProviders {
-			if other == provName || other == "ollama" {
+			if other == provName || other == "ollama" || other == "openai-compatible" {
 				continue
 			}
 			if c, m, a, err := ResolveCredentialFull(other, args.APIKey); err == nil {
@@ -336,40 +379,53 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		}
 	}
 
+	// ollama and openai-compatible are open-catalogue: the model id is
+	// whatever the local/custom server understands and has no baked-in
+	// catalog entry or default.
+	openCatalogue := provName == "ollama" || provName == "openai-compatible"
 	model := firstNonEmpty(args.Model, cfg.Model)
 	if model == "" {
-		if provName == "ollama" {
+		switch provName {
+		case "ollama":
 			return Resolved{}, fmt.Errorf("ollama requires --model (e.g. --model llama3)")
+		case "openai-compatible":
+			return Resolved{}, fmt.Errorf("openai-compatible requires a model; set it during /login or pass --model")
+		default:
+			model = defaultModelForProvider(provName)
 		}
-		model = defaultModelForProvider(provName)
 	}
 	// If the resolved model belongs to a different provider (e.g. config
 	// says gpt-5 but we fell back to anthropic), pick that provider's default.
-	if provName != "ollama" {
+	if !openCatalogue {
 		if m, err := provider.FindModel("", model); err == nil && m.Provider != provName {
 			model = defaultModelForProvider(provName)
 		}
 	}
 	resolvedModel, err := provider.FindModel(provName, model)
-	if err != nil && provName == "ollama" {
-		// ollama is intentionally open-catalogue: any model id the
-		// local server understands is valid, even if not in the
-		// baked-in catalog.
+	if err != nil && openCatalogue {
+		// Any model id the local/custom server understands is valid,
+		// even if not in the baked-in catalog. For openai-compatible,
+		// prefer the user's configured default context window over the
+		// generic guess so auto-compaction and the context % are sane.
+		ctxWin := 32768
+		if provName == "openai-compatible" && compatCtx > 0 {
+			ctxWin = compatCtx
+		}
 		resolvedModel = provider.Model{
-			Provider:      "ollama",
+			Provider:      provName,
 			ID:            model,
 			DisplayName:   model,
-			ContextWindow: 32768,
+			ContextWindow: ctxWin,
 			MaxOutput:     8192,
 			BaseURL:       args.BaseURL,
-			Source:        "ollama",
+			Source:        provName,
 		}
 		err = nil
 	}
 	if err != nil {
 		// The model the user (or persisted config) asked for is no
 		// longer in the active catalogue — they probably removed it
-		// from their models.json or upgraded zot and the id changed.
+		// from their models.json or upgraded terva and the id changed.
 		// Refusing to launch is the wrong move: it strands the user
 		// with no way to even open the TUI and pick a new model.
 		// Fall back to the provider's default, warn on stderr, and,
@@ -391,7 +447,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 			}
 		}
 		fmt.Fprintf(os.Stderr,
-			"zot: model %q is not in the active catalogue; using %q instead. Pick a different model with --model or /model.\n",
+			"terva: model %q is not in the active catalogue; using %q instead. Pick a different model with --model or /model.\n",
 			model, fm.ID)
 		if args.Model == "" && cfg.Model == model {
 			cfg.Model = fm.ID
@@ -401,15 +457,24 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		model = fm.ID
 	}
 
-	// If the model defines a base URL (e.g. local ollama) and the
-	// user didn't pass --base-url, use the model's URL. For ollama,
-	// keep http://localhost:11434 as a fallback only after the model
-	// metadata has had a chance to provide a custom baseUrl.
+	// Base-URL precedence (highest first):
+	//   1. explicit --base-url flag (args.BaseURL is only the flag here)
+	//   2. per-model baseUrl from models.json (resolvedModel.BaseURL)
+	//   3. the openai-compatible endpoint captured at /login (compatBaseURL)
+	//   4. provider default (ollama localhost)
+	// This lets a models.json model point at a different endpoint than the
+	// one stored at login — e.g. one model on a gateway, another local.
 	if args.BaseURL == "" && resolvedModel.BaseURL != "" {
 		args.BaseURL = resolvedModel.BaseURL
 	}
+	if args.BaseURL == "" && compatBaseURL != "" {
+		args.BaseURL = compatBaseURL
+	}
 	if args.BaseURL == "" && provName == "ollama" {
 		args.BaseURL = "http://localhost:11434"
+	}
+	if provName == "openai-compatible" && args.BaseURL == "" {
+		return Resolved{}, fmt.Errorf("openai-compatible requires a base url; set it during /login or pass --base-url")
 	}
 
 	// If the model has a base URL, credentials are optional (local
@@ -421,14 +486,14 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	}
 
 	if credErr != nil && requireCred {
-		return Resolved{}, fmt.Errorf("%w; set %s_API_KEY, pass --api-key, or run `zot` and /login",
+		return Resolved{}, fmt.Errorf("%w; set %s_API_KEY, pass --api-key, or run `terva` and /login",
 			credErr, envVarName(provName))
 	}
 
 	sandbox := tools.NewSandbox(args.CWD)
-	reg := buildToolRegistry(args, args.CWD, sandbox)
+	reg := buildToolRegistry(args, args.CWD, sandbox, provName, method)
 
-	docsDir, _ := zotdocs.EnsureInstalled(ZotHome())
+	docsDir, _ := tervadocs.EnsureInstalled(TervaHome())
 
 	// Skill discovery: scan project + global locations + built-in
 	// skills shipped with the binary. If any are found, register
@@ -445,7 +510,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	)
 	if !args.NoSkill {
 		homeDir, _ := os.UserHomeDir()
-		discovered, _ = skills.Discover(ZotHome(), args.CWD, homeDir, args.WithSkills)
+		discovered, _ = skills.Discover(TervaHome(), args.CWD, homeDir, args.WithSkills)
 		if len(discovered) > 0 {
 			skillTool = skills.NewTool(discovered)
 			reg[skillTool.Name()] = skillTool
@@ -457,7 +522,15 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	summaries := toolSummaries(reg, args)
 
 	append_ := append([]string(nil), args.AppendSystemPrompt...)
-	if agentsAddendum := readAgentsContext(args.CWD, ZotHome()); agentsAddendum != "" {
+	// Startup context files (project/user config_files, then --context-file
+	// flags) inject just before AGENTS.md so repo policy stays the most
+	// specific layer. Fail-fast: an explicitly-named missing file is a typo.
+	if ctxBlock, err := readStartupContextFiles(args.CWD, eff.ContextFiles, args.ContextFiles); err != nil {
+		return Resolved{}, err
+	} else if ctxBlock != "" {
+		append_ = append(append_, ctxBlock)
+	}
+	if agentsAddendum := readAgentsContext(args.CWD, TervaHome()); agentsAddendum != "" {
 		append_ = append(append_, agentsAddendum)
 	}
 	if skillAddendum != "" {
@@ -469,19 +542,20 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 
 	// Custom system prompt resolution order:
 	//   1. --system-prompt flag (highest priority; ad-hoc per run)
-	//   2. $ZOT_HOME/SYSTEM.md (persistent user override)
+	//   2. $TERVA_HOME/SYSTEM.md (persistent user override)
 	//   3. built-in default (defaultIdentity + defaultGuidelines)
 	custom := args.SystemPrompt
 	if custom == "" {
-		custom = readUserSystemPrompt(ZotHome())
+		custom = readUserSystemPrompt(TervaHome())
 	}
 
 	sys := BuildSystemPrompt(SystemPromptOpts{
-		CWD:        args.CWD,
-		Tools:      summaries,
-		Custom:     custom,
-		Append:     append_,
-		ZotDocsDir: docsDir,
+		CWD:          args.CWD,
+		Tools:        summaries,
+		Custom:       custom,
+		Append:       append_,
+		TervaDocsDir: docsDir,
+		StatusTool:   reg["terva_status"] != nil,
 	})
 
 	reasoning := provider.NormalizeReasoning(firstNonEmpty(args.Reasoning, cfg.Reasoning))
@@ -501,6 +575,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		ToolSummary:      summaries,
 		SystemPrompt:     sys,
 		MaxSteps:         max,
+		MaxOutput:        resolvedModel.MaxOutput,
 		Sandbox:          sandbox,
 		SkillTool:        skillTool,
 		systemAppend:     append_,
@@ -509,16 +584,16 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	}, nil
 }
 
-// readUserSystemPrompt looks for $ZOT_HOME/SYSTEM.md and returns its
+// readUserSystemPrompt looks for $TERVA_HOME/SYSTEM.md and returns its
 // trimmed contents, or "" when the file is missing / unreadable /
 // empty. Errors are intentionally swallowed: the file is optional,
 // and any failure to read it should fall back to the built-in
 // default system prompt rather than crash the run.
-func readUserSystemPrompt(zotHome string) string {
-	if zotHome == "" {
+func readUserSystemPrompt(tervaHome string) string {
+	if tervaHome == "" {
 		return ""
 	}
-	path := filepath.Join(zotHome, "SYSTEM.md")
+	path := filepath.Join(tervaHome, "SYSTEM.md")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -527,10 +602,10 @@ func readUserSystemPrompt(zotHome string) string {
 }
 
 // readAgentsContext loads optional AGENTS.md instruction files. No
-// default file is created or required: zot only includes files that
-// already exist. Global instructions ($ZOT_HOME/AGENTS.md) come first,
+// default file is created or required: terva only includes files that
+// already exist. Global instructions ($TERVA_HOME/AGENTS.md) come first,
 // followed by project instructions from the top-most parent down to cwd.
-func readAgentsContext(cwd, zotHome string) string {
+func readAgentsContext(cwd, tervaHome string) string {
 	type contextFile struct {
 		path    string
 		content string
@@ -572,7 +647,7 @@ func readAgentsContext(cwd, zotHome string) string {
 		}
 	}
 
-	addFirstFromDir(zotHome)
+	addFirstFromDir(tervaHome)
 
 	if cwd != "" {
 		abs, err := filepath.Abs(cwd)
@@ -621,7 +696,7 @@ func (r Resolved) NewClient() provider.Client {
 		panic("NewClient called without credential; check HasCredential first")
 	}
 	switch r.Provider {
-	case "ollama":
+	case "ollama", "openai-compatible":
 		return provider.NewOpenAI(r.Credential, r.BaseURL)
 	case "kimi":
 		// kimi-coding speaks anthropic-messages on api.kimi.com/coding.
@@ -768,19 +843,27 @@ func (r *Resolved) UseSandbox(s *tools.Sandbox) {
 func (r Resolved) NewAgent() *core.Agent {
 	a := core.NewAgent(r.NewClient(), r.Model, r.SystemPrompt, r.ToolRegistry)
 	a.MaxSteps = r.MaxSteps
+	a.MaxTokens = r.MaxOutput
 	a.Reasoning = r.Reasoning
+	// Bind the live agent into terva_status so it can report current model,
+	// reasoning, and token usage (the registry — and thus the tool — is
+	// built before the agent exists).
+	if st, ok := r.ToolRegistry["terva_status"].(*tools.StatusTool); ok {
+		st.Agent = a
+	}
 	return a
 }
 
-func buildToolRegistry(args Args, cwd string, sandbox *tools.Sandbox) core.Registry {
+func buildToolRegistry(args Args, cwd string, sandbox *tools.Sandbox, provName, authMethod string) core.Registry {
 	if args.NoTools {
 		return core.Registry{}
 	}
 	all := map[string]core.Tool{
-		"read":  &tools.ReadTool{CWD: cwd, Sandbox: sandbox},
-		"write": &tools.WriteTool{CWD: cwd, Sandbox: sandbox},
-		"edit":  &tools.EditTool{CWD: cwd, Sandbox: sandbox},
-		"bash":  &tools.BashTool{CWD: cwd, Sandbox: sandbox},
+		"read":         &tools.ReadTool{CWD: cwd, Sandbox: sandbox},
+		"write":        &tools.WriteTool{CWD: cwd, Sandbox: sandbox},
+		"edit":         &tools.EditTool{CWD: cwd, Sandbox: sandbox},
+		"bash":         &tools.BashTool{CWD: cwd, Sandbox: sandbox},
+		"terva_status": &tools.StatusTool{Provider: provName, CWD: cwd, AuthMethod: authMethod, BaseURL: args.BaseURL},
 	}
 	reg := core.Registry{}
 	if len(args.Tools) == 0 {
@@ -829,7 +912,7 @@ func kimiCodeHeaders() map[string]string {
 		}
 	}
 	if deviceID == "" {
-		deviceID = "zot"
+		deviceID = "zot" // rename:keep — bound to existing kimi device sessions
 	}
 	return map[string]string{
 		"User-Agent":         "KimiCLI/1.41.0",

@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-// TestExtInstallDotSource verifies that `zot ext install .` derives the
+// TestExtInstallDotSource verifies that `terva ext install .` derives the
 // extension name from the resolved directory name rather than collapsing
 // to the extensions/ parent directory (the false "already exists" bug).
 func TestExtInstallDotSource(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("ZOT_HOME", home)
+	t.Setenv("TERVA_HOME", home)
 
 	// Pre-create extensions/ to mimic a normal first run.
 	if err := os.MkdirAll(filepath.Join(home, "extensions"), 0o755); err != nil {
@@ -52,7 +52,7 @@ func TestExtInstallDotSource(t *testing.T) {
 // guard logic does not crash for well-formed input.
 func TestExtInstallNamedDir(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("ZOT_HOME", home)
+	t.Setenv("TERVA_HOME", home)
 
 	src := filepath.Join(t.TempDir(), "myext")
 	if err := os.MkdirAll(src, 0o755); err != nil {
@@ -117,10 +117,10 @@ func TestCopyDirRespectsGitignore(t *testing.T) {
 
 func TestGitignoreNegation(t *testing.T) {
 	g := loadGitignoreFromString("build/\n!build/keep.txt\n")
-	if !g.match("build", true) {
+	if !g.Match("build", true) {
 		t.Fatal("expected build/ dir to be ignored")
 	}
-	if g.match("build/keep.txt", false) {
+	if g.Match("build/keep.txt", false) {
 		t.Fatal("expected build/keep.txt to be re-included by negation")
 	}
 }

@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/patriceckhart/zot/packages/provider"
-	"github.com/patriceckhart/zot/packages/provider/auth"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/auth"
+	"terva.sh/terva/packages/tui"
 )
 
 // loginStep is the current node in the login dialog state machine.
@@ -60,11 +60,11 @@ func (d *loginDialog) Active() bool { return d != nil && d.step != loginStepClos
 
 // Open starts the dialog from scratch and captures the current
 // login status for each provider so the picker can show it.
-// zotHome is the zot state directory ($ZOT_HOME); auth.json
+// tervaHome is the terva state directory ($TERVA_HOME); auth.json
 // lives inside it. Passing the path in (instead of importing
 // the agent package to call AuthPath()) avoids a cyclic import
 // between agent and agent/modes.
-func (d *loginDialog) Open(zotHome string) {
+func (d *loginDialog) Open(tervaHome string) {
 	d.step = loginStepMethod
 	d.method = ""
 	d.provider = ""
@@ -85,7 +85,7 @@ func (d *loginDialog) Open(zotHome string) {
 	// provider as not-logged-in. The status line just won't show
 	// anything useful in that case, which is fine — the user
 	// was about to log in anyway.
-	path := filepath.Join(zotHome, "auth.json")
+	path := filepath.Join(tervaHome, "auth.json")
 	if creds, err := auth.NewStore(path).Load(); err == nil {
 		d.status["anthropic"] = creds.Method("anthropic")
 		d.status["openai"] = ""

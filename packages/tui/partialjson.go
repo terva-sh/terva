@@ -8,7 +8,7 @@ import "strings"
 // what's available with ok=true but done=false. If the closing
 // unescaped quote has been reached, done=true.
 //
-// This is deliberately small and best-effort: zot uses it to show
+// This is deliberately small and best-effort: terva uses it to show
 // the live body of a `write` tool call while the model is still
 // typing it, before the full JSON object has been received. It
 // assumes the field is a top-level key (no nested lookup), matches

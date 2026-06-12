@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 func mustJSON(t *testing.T, v any) json.RawMessage {

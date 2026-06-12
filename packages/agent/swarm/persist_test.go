@@ -14,7 +14,7 @@ import (
 
 // TestSpawnWritesMetaJSON asserts the durability contract: every
 // successful Spawn leaves a meta.json on disk with the agent's
-// identity bits. Without this, Reload on the next zot launch can't
+// identity bits. Without this, Reload on the next terva launch can't
 // find the agent and the user loses access to the worktree.
 func TestSpawnWritesMetaJSON(t *testing.T) {
 	root := t.TempDir()
@@ -61,7 +61,7 @@ func TestSpawnWritesMetaJSON(t *testing.T) {
 	}
 }
 
-// TestReloadRebuildsDetachedAgents simulates a zot restart by spawning
+// TestReloadRebuildsDetachedAgents simulates a terva restart by spawning
 // in one Swarm, throwing it away, then opening a fresh Swarm against
 // the same root and calling Reload. The user-visible state — id,
 // task, branch, dir — must come back, and status must be Detached so
@@ -556,7 +556,7 @@ func TestSpawnReqPersistsModel(t *testing.T) {
 // updating this assertion is the failure mode this catches.
 func TestSwarmAgentArgsIncludesModelFlags(t *testing.T) {
 	args := swarmAgentArgs(swarmAgentArgsOpts{
-		Exe: "/zot", Dir: "/wt", SessionPath: "/s.json", InboxPath: "/in.sock",
+		Exe: "/terva", Dir: "/wt", SessionPath: "/s.json", InboxPath: "/in.sock",
 		Task: "do x", Model: "gpt-5", Provider: "openai",
 	})
 	want := []string{"--model", "gpt-5", "--provider", "openai"}
@@ -741,7 +741,7 @@ func TestActiveSessionScopesSnapshotAll(t *testing.T) {
 // Swarm instance is still SessionID="sess-A" after a fresh New +
 // Reload reads it back from meta.json. Without persistence, the
 // scope filter would forget which session owned each agent after
-// a zot restart and the dashboard would leak everything again.
+// a terva restart and the dashboard would leak everything again.
 func TestSessionIDPersistsAcrossReload(t *testing.T) {
 	root := t.TempDir()
 	mkSwarm := func() *Swarm {
@@ -785,7 +785,7 @@ func TestSessionIDPersistsAcrossReload(t *testing.T) {
 // were spawned without an active session, e.g. via a test rig or
 // scripted caller) carry SessionID == "" and remain visible from
 // every scope. Otherwise the schema bump would orphan every
-// pre-existing agent the moment a user upgraded zot.
+// pre-existing agent the moment a user upgraded terva.
 func TestEmptySessionIDIsVisibleFromAnyScope(t *testing.T) {
 	root := t.TempDir()
 	f := New(Config{
@@ -813,6 +813,66 @@ func TestEmptySessionIDIsVisibleFromAnyScope(t *testing.T) {
 
 	_ = f.Stop(a.ID)
 	a.Wait()
+}
+
+// TestResumePreservesSessionID guards the regression where Resume
+// rebuilt the agentMeta / Agent without SessionID, so the trailing
+// writeAgentMeta persisted an empty session_id and permanently
+// un-scoped the agent from its host session. We spawn under a scope,
+// Resume, and assert both the in-memory field and the on-disk
+// meta.json still carry the original session_id.
+func TestResumePreservesSessionID(t *testing.T) {
+	root := t.TempDir()
+	f := New(Config{
+		Root: root, RepoRoot: root,
+		NewRunner: func(a *Agent) Runner {
+			return RunnerFunc(func(ctx context.Context, _ Sink) error { <-ctx.Done(); return ctx.Err() })
+		},
+	})
+
+	f.SetActiveSession("sess-scope")
+	a, err := f.Spawn(context.Background(), "scoped task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := a.ID
+	if a.SessionID != "sess-scope" {
+		t.Fatalf("spawn produced SessionID %q; want sess-scope", a.SessionID)
+	}
+	// Move the agent out of the running state so Resume accepts it.
+	_ = f.Stop(id)
+	a.Wait()
+
+	a2, err := f.Resume(context.Background(), id)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	defer func() { _ = f.Stop(id); a2.Wait() }()
+
+	// In-memory field must survive Resume.
+	if a2.SessionID != "sess-scope" {
+		t.Errorf("after resume, a2.SessionID = %q; want sess-scope", a2.SessionID)
+	}
+
+	// The on-disk meta.json that Resume rewrote must still scope the
+	// agent. This is the field that was being clobbered.
+	m, err := readAgentMeta(f.agentStateDir(id))
+	if err != nil {
+		t.Fatalf("read meta after resume: %v", err)
+	}
+	if m.SessionID != "sess-scope" {
+		t.Errorf("meta.json session_id = %q after resume; want sess-scope", m.SessionID)
+	}
+
+	// And the scope filter must still find it only under its session.
+	f.SetActiveSession("sess-scope")
+	if got := snapshotIDs(f.SnapshotAll()); len(got) != 1 || got[0] != id {
+		t.Errorf("scoped to sess-scope after resume, ids = %v; want [%s]", got, id)
+	}
+	f.SetActiveSession("other")
+	if got := snapshotIDs(f.SnapshotAll()); len(got) != 0 {
+		t.Errorf("scoped to other after resume, ids = %v; want []", got)
+	}
 }
 
 func snapshotIDs(ss []AgentSnapshot) []string {

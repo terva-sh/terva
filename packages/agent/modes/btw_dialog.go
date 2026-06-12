@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/provider"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/tui"
 )
 
 // btwTurn is one user/assistant pair within a side chat. Kept

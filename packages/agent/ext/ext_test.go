@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/extproto"
 )
 
 // ---------- test harness ----------
@@ -123,7 +123,7 @@ func (h *extHarness) handshake(t *testing.T) {
 	h.sendToExt(t, extproto.HelloAckFromHost{
 		Type:            "hello_ack",
 		ProtocolVersion: extproto.ProtocolVersion,
-		ZotVersion:      "0.0.0-test",
+		TervaVersion:    "0.0.0-test",
 		Provider:        "anthropic",
 		Model:           "claude-test",
 	})

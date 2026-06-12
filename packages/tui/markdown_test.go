@@ -9,7 +9,7 @@ func TestRenderMarkdownTableWrapsToWidth(t *testing.T) {
 	in := strings.Join([]string{
 		"| Area | What’s visible | Summary |",
 		"| --- | --- | --- |",
-		"| Overall UI | Dark terminal/TUI-style interface | A screenshot of an AI/coding-agent session, likely inside zot or a similar terminal app. |",
+		"| Overall UI | Dark terminal/TUI-style interface | A screenshot of an AI/coding-agent session, likely inside terva or a similar terminal app. |",
 		"| Main content | Markdown-formatted response | The assistant is describing what was seen in a previous screenshot. |",
 	}, "\n")
 	out := RenderMarkdown(in, Dark, 80)
@@ -38,7 +38,7 @@ func TestRenderMarkdownTableAlignsColumns(t *testing.T) {
 		"| Claude Code | TypeScript | Node.js |",
 		"| Codex CLI | Rust | Natives Binary (npm-Wrapper) |",
 		"| OpenCode | TypeScript (+ Go für TUI) | Bun, kompiliertes Binary |",
-		"| zot | Go | Natives Binary |",
+		"| terva | Go | Natives Binary |",
 	}, "\n")
 	out := RenderMarkdown(in, Dark, 80)
 	plain := stripANSI(out)

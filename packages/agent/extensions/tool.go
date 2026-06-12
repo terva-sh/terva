@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
 )
 
 // extensionTool wraps a single extension-registered tool as a

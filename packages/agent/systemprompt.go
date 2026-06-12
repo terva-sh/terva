@@ -19,12 +19,17 @@ type ToolSummary struct {
 
 // SystemPromptOpts configures BuildSystemPrompt.
 type SystemPromptOpts struct {
-	CWD        string
-	Tools      []ToolSummary
-	Custom     string   // if set, replaces the default identity entirely
-	Append     []string // extra text appended at the end
-	Now        time.Time
-	ZotDocsDir string
+	CWD          string
+	Tools        []ToolSummary
+	Custom       string   // if set, replaces the default identity entirely
+	Append       []string // extra text appended at the end
+	Now          time.Time
+	TervaDocsDir string
+	// StatusTool adds a one-line hint that the terva_status tool exists.
+	// Set only when that tool is actually in the registry (it can be
+	// dropped by --no-tools or a --tools allowlist), so the prompt never
+	// advertises a tool the model can't call.
+	StatusTool bool
 }
 
 // BuildSystemPrompt constructs the system prompt.
@@ -33,7 +38,7 @@ type SystemPromptOpts struct {
 // the cached prefix on every request, so bloat is cumulatively
 // expensive. We ship only:
 //
-//   - A one-paragraph identity (who zot is, what the name means,
+//   - A one-paragraph identity (who terva is, what the name means,
 //     what the TUI expects for output format).
 //   - The date + cwd footer so the model has current-context.
 //
@@ -45,7 +50,7 @@ type SystemPromptOpts struct {
 //
 // Users who want extra biasing can use --system-prompt (replace),
 // --append-system-prompt (additive, repeatable), or drop a
-// SYSTEM.md in $ZOT_HOME that overrides the default identity.
+// SYSTEM.md in $TERVA_HOME that overrides the default identity.
 func BuildSystemPrompt(o SystemPromptOpts) string {
 	if o.Now.IsZero() {
 		o.Now = time.Now()
@@ -64,10 +69,14 @@ func BuildSystemPrompt(o SystemPromptOpts) string {
 		sb.WriteString(defaultIdentity)
 	}
 
-	if strings.TrimSpace(o.ZotDocsDir) != "" {
-		sb.WriteString("\n\nZot's own docs are installed under ")
-		sb.WriteString(o.ZotDocsDir)
-		sb.WriteString("; use the read tool there when you need details about zot RPC, extensions, skills, or built-in behaviour.")
+	if strings.TrimSpace(o.TervaDocsDir) != "" {
+		sb.WriteString("\n\nTerva's own docs are installed under ")
+		sb.WriteString(o.TervaDocsDir)
+		sb.WriteString("; use the read tool there when you need details about terva RPC, extensions, skills, or built-in behaviour.")
+	}
+
+	if o.StatusTool {
+		sb.WriteString("\n\nCall the terva_status tool (no arguments) to check your own runtime state — current model, provider, working directory, reasoning effort, and how full your context window is — for example to decide whether to summarise before the context fills. Its tool description lists every field it returns.")
 	}
 
 	for _, a := range o.Append {
@@ -82,7 +91,7 @@ func BuildSystemPrompt(o SystemPromptOpts) string {
 	return sb.String()
 }
 
-const defaultIdentity = `You are an expert coding assistant operating inside zot, a coding agent harness. The name "zot" stands for "zero-overhead-tool"; if the user asks what zot means, answer exactly that.
+const defaultIdentity = `You are Terva, an expert coding assistant operating inside terva, a coding agent harness. Introduce yourself as Terva when asked who you are. If the user asks what terva means: terva is Finnish for pine tar — the traditional preservative and cure-all; answer exactly that.
 
 Your output renders in a TUI that understands markdown for prose and plain text for tool output. Use markdown freely, keep answers concise, and let tool calls speak for themselves rather than narrating them in prose before you invoke them. Act first, then summarise what you did.
 

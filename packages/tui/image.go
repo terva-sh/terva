@@ -12,6 +12,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"terva.sh/terva/packages/envcompat"
 )
 
 // ImageProtocol describes which inline-image escape the current
@@ -28,16 +30,16 @@ const (
 // by the current terminal, or ImageProtocolNone.
 //
 // The default is to auto-detect: if the terminal advertises iTerm2 or
-// Kitty-graphics support, we use it. The ZOT_INLINE_IMAGES env var
+// Kitty-graphics support, we use it. The TERVA_INLINE_IMAGES env var
 // overrides the default:
 //
-//	ZOT_INLINE_IMAGES=off         -> force text fallback
-//	ZOT_INLINE_IMAGES=placeholder -> force text fallback (alias for off)
-//	ZOT_INLINE_IMAGES=iterm       -> force iTerm2 protocol
-//	ZOT_INLINE_IMAGES=kitty       -> force Kitty protocol
-//	ZOT_INLINE_IMAGES=auto        -> explicit auto-detect (same as default)
+//	TERVA_INLINE_IMAGES=off         -> force text fallback
+//	TERVA_INLINE_IMAGES=placeholder -> force text fallback (alias for off)
+//	TERVA_INLINE_IMAGES=iterm       -> force iTerm2 protocol
+//	TERVA_INLINE_IMAGES=kitty       -> force Kitty protocol
+//	TERVA_INLINE_IMAGES=auto        -> explicit auto-detect (same as default)
 func DetectImageProtocol() ImageProtocol {
-	switch strings.ToLower(os.Getenv("ZOT_INLINE_IMAGES")) {
+	switch strings.ToLower(envcompat.Get("INLINE_IMAGES")) {
 	case "off", "none", "false", "0", "placeholder", "text":
 		return ImageProtocolNone
 	case "iterm", "iterm2":
@@ -58,7 +60,7 @@ func detectImageProtocolAuto() ImageProtocol {
 	// VS Code's integrated terminal exposes several protocol-ish env
 	// combinations depending on the underlying shell/pty, but its image
 	// layer is inconsistent enough that auto-enable is more annoying than
-	// useful. Users can still force a protocol via ZOT_INLINE_IMAGES.
+	// useful. Users can still force a protocol via TERVA_INLINE_IMAGES.
 	if strings.EqualFold(termProgram, "vscode") {
 		return ImageProtocolNone
 	}
@@ -73,11 +75,11 @@ func detectImageProtocolAuto() ImageProtocol {
 		return ImageProtocolITerm2
 	}
 	// iTerm2's OSC 1337 inline image rendering is incompatible with
-	// zot's full-screen per-row redraw: subsequent row clears erase
+	// terva's full-screen per-row redraw: subsequent row clears erase
 	// all but the first rendered image row, and doNotMoveCursor=1 is
 	// not reliable across iTerm versions. Leave ghostty/kitty untouched
 	// and fall back to the text placeholder in iTerm by default. Users
-	// can still force the protocol with ZOT_INLINE_IMAGES=iterm.
+	// can still force the protocol with TERVA_INLINE_IMAGES=iterm.
 	if termProgram == "iTerm.app" {
 		return ImageProtocolNone
 	}
@@ -214,11 +216,11 @@ func ImageDimensions(data []byte) (int, int) {
 const defaultCellAspectRatio = 2.0
 
 // CellAspectRatio returns the pixel-height / pixel-width ratio for one
-// terminal cell. ZOT_CELL_ASPECT lets users tune inline-image row
+// terminal cell. TERVA_CELL_ASPECT lets users tune inline-image row
 // reservation for terminals/fonts where the default causes overlap or
 // excessive blank space. Values outside a sane range are ignored.
 func CellAspectRatio() float64 {
-	v := strings.TrimSpace(os.Getenv("ZOT_CELL_ASPECT"))
+	v := strings.TrimSpace(envcompat.Get("CELL_ASPECT"))
 	if v == "" {
 		return defaultCellAspectRatio
 	}

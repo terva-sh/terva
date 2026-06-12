@@ -15,16 +15,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/agent/extensions"
-	"github.com/patriceckhart/zot/packages/agent/extproto"
-	"github.com/patriceckhart/zot/packages/agent/modes"
-	"github.com/patriceckhart/zot/packages/agent/skills"
-	"github.com/patriceckhart/zot/packages/agent/swarm"
-	"github.com/patriceckhart/zot/packages/agent/tools"
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/provider"
-	"github.com/patriceckhart/zot/packages/provider/auth"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/agent/chat/external"
+	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/agent/skills"
+	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/auth"
+	"terva.sh/terva/packages/tui"
 )
 
 // interactiveExtHooks is a tiny adapter that lets the extension
@@ -176,9 +178,24 @@ func fanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 	}
 }
 
-// Run is the top-level entrypoint for the zot binary.
+// Run is the top-level entrypoint for the terva binary.
 func Run(rawArgs []string, version string) error {
-	// Subcommand router: `zot bot ...` is handled separately so the
+	// One-shot migration hint when the data dir resolved to the
+	// legacy pre-rename location (which keeps working forever).
+	if note, ok := envcompat.HomeMigrationNote(); ok {
+		fmt.Fprintln(os.Stderr, note)
+	}
+
+	// External chat connectors ($TERVA_HOME/connectors — global only,
+	// never project-local) register before any dispatch so `terva bot`
+	// and the TUI's /connect both see them alongside the compiled-in
+	// services.
+	external.SetTervaVersion(version)
+	for _, err := range external.RegisterDiscovered(TervaHome()) {
+		fmt.Fprintln(os.Stderr, "connector load:", err)
+	}
+
+	// Subcommand router: `terva bot ...` is handled separately so the
 	// generic flag parser doesn't reject "bot" as a positional arg.
 	if handled, err := runBotCommand(rawArgs, version); handled {
 		return err
@@ -189,7 +206,13 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runUpdateCommand(rawArgs, version); handled {
 		return err
 	}
-	// `zot rpc` is shorthand for `zot --rpc` so third-party apps can
+	if handled, err := runModelsCommand(rawArgs); handled {
+		return err
+	}
+	if handled, err := runMigrateCommand(rawArgs); handled {
+		return err
+	}
+	// `terva rpc` is shorthand for `terva --rpc` so third-party apps can
 	// spawn the binary with a clean argv. Strip the leading 'rpc'
 	// token and let the rest flow through the normal arg parser.
 	if len(rawArgs) > 0 && rawArgs[0] == "rpc" {
@@ -206,12 +229,26 @@ func Run(rawArgs []string, version string) error {
 		return nil
 	}
 	if args.Version {
-		fmt.Println("zot", version)
+		fmt.Println("terva", version)
 		return nil
 	}
+	// Dev connectors load loudly, exactly as named, for exactly this
+	// invocation — there is deliberately no discovery-based dev mode
+	// (see docs/plans/chat-connectors.md).
+	for _, p := range args.ConnectorManifests {
+		name, err := external.RegisterManifest(p)
+		if err != nil {
+			return fmt.Errorf("--connector-manifest %s: %w", p, err)
+		}
+		fmt.Fprintf(os.Stderr, "terva: dev connector %q loaded for this run (%s)\n", name, p)
+	}
 	// Model catalog: load any cached discovery data before we inspect
-	// the model list (list-models, print/json, interactive).
+	// the model list (list-models, print/json, interactive). User
+	// models.json is applied LAST so its per-model overrides win over
+	// both cached/live discovery and the openai-compatible default model
+	// (which RegisterExtraModel writes with a generic 8192 max-output).
 	LoadCachedModels()
+	LoadCompatModel()
 	LoadUserModels()
 
 	// Repair config.json so a stale (provider, model) pair from an
@@ -229,8 +266,11 @@ func Run(rawArgs []string, version string) error {
 	ctx := context.Background()
 
 	// Kick an async refresh of the live model catalog. The first run of
-	// zot hits the network; subsequent runs within CacheTTL do nothing.
+	// terva hits the network; subsequent runs within CacheTTL do nothing.
 	RefreshModelsAsync()
+	// Always re-list a configured openai-compatible endpoint (not cache
+	// gated): a local server's loaded models change frequently.
+	RefreshCompatModelsAsync()
 
 	switch args.Mode {
 	case ModePrint:
@@ -271,7 +311,7 @@ func (nonInteractiveExtHooks) ClosePanel(string, string)                        
 // wire tools into the resolved registry, and a cleanup closure to
 // defer. Mirrors the interactive-mode setup minus the TUI hooks.
 func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, version string) (*extensions.Manager, func()) {
-	extMgr := extensions.New(ZotHome(), r.CWD, version, r.Provider, r.Model, nonInteractiveExtHooks{})
+	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, nonInteractiveExtHooks{})
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
 	}
@@ -286,15 +326,40 @@ func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, 
 	return extMgr, func() { extMgr.Stop(2 * time.Second) }
 }
 
+// headlessConfirmGate returns the confirmation gate for a headless
+// mode (print / json / rpc / swarm-agent) when --no-yolo is set, or nil
+// otherwise. There is no interactive prompt in these modes, so the gate
+// is constructed with a nil inner Confirmer: every tool call is refused
+// with a model-readable reason (see core.ConfirmGate.Check) instead of
+// running unconfirmed. A one-line stderr note tells the human why the
+// tools are being refused; the actual gating happens in the
+// BeforeToolExecute closure that calls gate.Check first.
+func headlessConfirmGate(args Args, mode string) *core.ConfirmGate {
+	if !args.NoYolo {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "note: --no-yolo in %s mode refuses tool calls (no interactive prompt available to confirm them)\n", mode)
+	return core.NewConfirmGate(nil)
+}
+
 // wireNonInteractiveAgentExtHooks installs the same BeforeToolExecute
 // / BeforeTurn / BeforeAssistantMessage / OnEvent hooks the
 // interactive path wires up, so extensions get their normal
-// event-intercept surface in print / json / rpc flows too.
-func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager) {
+// event-intercept surface in print / json / rpc flows too. When gate
+// is non-nil (--no-yolo) it runs FIRST in BeforeToolExecute, mirroring
+// interactive mode, so a refusal short-circuits before the extension
+// intercept sees the call.
+func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate) {
 	if ag == nil || extMgr == nil {
 		return
 	}
 	ag.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+		if gate != nil {
+			ok, reason, _ := gate.Check(call.Name, core.BuildPreview(call.Arguments, 120))
+			if !ok {
+				return false, reason, nil
+			}
+		}
 		res := extMgr.InterceptToolCall(ctx, call.ID, call.Name, call.Arguments)
 		if res.Block {
 			return false, res.Reason, nil
@@ -316,9 +381,7 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 }
 
 func runPrintMode(ctx context.Context, args Args, version string) error {
-	if args.NoYolo {
-		fmt.Fprintln(os.Stderr, "warning: --no-yolo has no effect in print mode (no interactive prompt available); tools will run without confirmation")
-	}
+	confirmGate := headlessConfirmGate(args, "print")
 	r, err := Resolve(args, true)
 	if err != nil {
 		return err
@@ -327,7 +390,7 @@ func runPrintMode(ctx context.Context, args Args, version string) error {
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate)
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 
@@ -347,9 +410,7 @@ func runPrintMode(ctx context.Context, args Args, version string) error {
 }
 
 func runJSONMode(ctx context.Context, args Args, version string) error {
-	if args.NoYolo {
-		fmt.Fprintln(os.Stderr, "warning: --no-yolo has no effect in json mode (no interactive prompt available); tools will run without confirmation")
-	}
+	confirmGate := headlessConfirmGate(args, "json")
 	r, err := Resolve(args, true)
 	if err != nil {
 		return err
@@ -358,7 +419,7 @@ func runJSONMode(ctx context.Context, args Args, version string) error {
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate)
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 
@@ -400,7 +461,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// the host hooks adapter can dereference it after construction.
 	var iv *modes.Interactive
 	extHooks := &interactiveExtHooks{ivPtr: &iv}
-	extMgr := extensions.New(ZotHome(), r.CWD, version, r.Provider, r.Model, extHooks)
+	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
 	// --ext paths first so they win against installed extensions of
 	// the same name (loadOne's first-write-wins semantics).
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
@@ -431,7 +492,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 
 	// Build the swarm supervisor BEFORE the agent so the auto-swarm
 	// tool can reference it during tool-registry construction. State
-	// lives under ZotHome/swarm so per-agent meta/events survive
+	// lives under TervaHome/swarm so per-agent meta/events survive
 	// restarts; the user can hunt orphaned agents down with
 	// `git worktree list` if anything misbehaves.
 	//
@@ -440,7 +501,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// in this outer scope rather than scoping it tighter.
 	var swarmMgr *swarm.Swarm
 	swarmMgr = swarm.New(swarm.Config{
-		Root:     filepath.Join(ZotHome(), "swarm"),
+		Root:     filepath.Join(TervaHome(), "swarm"),
 		RepoRoot: r.CWD,
 	})
 	// Pull any previously-spawned agents off disk so the dashboard
@@ -562,7 +623,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// rescue (a bad key, a typo'd base URL, or a corporate gateway that
 	// only the originally-picked provider needed). Re-resolving without
 	// them lets the rescue retry use env vars / auth.json / provider
-	// defaults the way zot would have without the overrides.
+	// defaults the way terva would have without the overrides.
 	buildAgentForRescue := func(providerOverride, modelOverride string) (*core.Agent, string, string, error) {
 		next := args
 		next.APIKey = ""
@@ -841,10 +902,10 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		// Fresh session in the new cwd's bucket. We bypass
 		// openOrCreateSession's --continue / --resume branches
 		// because /cd's semantics are "start fresh here", matching
-		// what relaunching `zot --cwd <path>` would do today.
+		// what relaunching `terva --cwd <path>` would do today.
 		if !args.NoSess {
-			core.PruneEmptySessions(ZotHome(), absPath)
-			newSess, serr := core.NewSession(ZotHome(), absPath, newProvider, newModel, version)
+			core.PruneEmptySessions(TervaHome(), absPath)
+			newSess, serr := core.NewSession(TervaHome(), absPath, newProvider, newModel, version)
 			if serr != nil {
 				return fmt.Errorf("open session in %s: %v", absPath, serr)
 			}
@@ -866,6 +927,60 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		return nil
 	}
 
+	// newSession closes the current session and opens a fresh one in the
+	// same cwd — the in-place equivalent of relaunching terva, and what
+	// changeCWD does minus the directory change. The agent keeps its
+	// provider/model/tools (no rebuild); only its transcript and running
+	// cost are reset. The outgoing session is flushed and stays on disk
+	// (PruneEmptySessions reclaims it only if it was empty). Wired into
+	// InteractiveConfig.NewSession and invoked by /new.
+	newSession := func(providerName, model string) error {
+		currentAg := ag
+		if currentAg == nil {
+			return fmt.Errorf("no agent running; log in first")
+		}
+		if providerName == "" {
+			providerName = r.Provider
+		}
+		if model == "" {
+			model = currentAg.Model
+		}
+
+		// Flush + close the outgoing session so its transcript is whole
+		// on disk before we let go of it.
+		persistMu.Lock()
+		if sess != nil {
+			writeNewTranscriptLocked(currentAg, sess, sessBaselineMsgs)
+			_ = sess.Close()
+			sess = nil
+		}
+		sessBaselineMsgs = 0
+		persistMu.Unlock()
+
+		// Reset the live conversation: empty transcript, zeroed meters.
+		currentAg.SetMessages(nil)
+		currentAg.SeedCost(provider.Usage{})
+		currentAg.SeedLastTurnUsage(provider.Usage{})
+
+		// Fresh session in the same cwd's bucket. With --no-session the
+		// transcript reset above is the whole effect.
+		if !args.NoSess {
+			core.PruneEmptySessions(TervaHome(), args.CWD)
+			ns, serr := core.NewSession(TervaHome(), args.CWD, providerName, model, version)
+			if serr != nil {
+				return fmt.Errorf("open new session: %v", serr)
+			}
+			persistMu.Lock()
+			sess = ns
+			sessBaselineMsgs = 0
+			persistMu.Unlock()
+			if swarmMgr != nil {
+				swarmMgr.SetActiveSession(ns.ID)
+			}
+		}
+		return nil
+	}
+
 	term := tui.NewProcTerm()
 
 	// Kick off the async update check so the banner can appear when the
@@ -874,7 +989,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	updateCh := make(chan modes.UpdateInfo, 1)
 	go func() {
 		defer close(updateCh)
-		src := <-CheckForUpdateAsync(ZotHome(), version)
+		src := <-CheckForUpdateAsync(TervaHome(), version)
 		updateCh <- modes.UpdateInfo{
 			Current:   src.Current,
 			Latest:    src.Latest,
@@ -917,10 +1032,10 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	}()
 
 	initialCfg, _ := LoadConfig()
-	theme, _, themeErr := tui.DetectThemeWithCustom(ZotHome(), initialCfg.Theme, 80*time.Millisecond)
+	theme, _, themeErr := tui.DetectThemeWithCustom(TervaHome(), initialCfg.Theme, 80*time.Millisecond)
 	if themeErr != nil {
 		fmt.Fprintln(os.Stderr, "theme load:", themeErr)
-		if initialCfg.Theme != "" && !tui.ThemeExists(ZotHome(), initialCfg.Theme) {
+		if initialCfg.Theme != "" && !tui.ThemeExists(TervaHome(), initialCfg.Theme) {
 			initialCfg.Theme = ""
 			_ = SaveConfig(initialCfg)
 		}
@@ -936,14 +1051,66 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		swarmMgr.SetActiveSession(sess.ID)
 	}
 	// Best-effort shutdown on interactive exit: stop all running
-	// agents so they don't outlive their parent zot.
+	// agents so they don't outlive their parent terva.
 	defer swarmMgr.StopAll()
+
+	// /migrate hooks: the dialog drives the stages, these closures run
+	// the engine (migrate.go). migPlan/migReport thread state between
+	// the calls; migrationExited flips when the legacy dir — including
+	// the live session file — was deleted, so the post-Run flush must
+	// be skipped and the user told to restart.
+	var migPlan MigrationPlan
+	var migReport MigrationCopyReport
+	migrationExited := false
+	migration := &modes.MigrationHooks{
+		Plan: func() modes.MigrationState {
+			migPlan = PlanMigration(r.CWD)
+			return modes.MigrationState{
+				OldDir:            migPlan.OldDir,
+				NewDir:            migPlan.NewDir,
+				EnvNote:           migPlan.EnvNote,
+				ProjectOldDir:     migPlan.ProjectOldDir,
+				ProjectNewDir:     migPlan.ProjectNewDir,
+				ProjectConflict:   migPlan.ProjectConflict,
+				UserDirApplicable: migPlan.UserDirApplicable(),
+				ProjectApplicable: migPlan.ProjectApplicable(),
+				AlreadyMigrated:   migPlan.AlreadyMigrated,
+				NothingToDo:       migPlan.NothingToDo(),
+			}
+		},
+		CopyUserData: func() (modes.MigrationCopyResult, error) {
+			migReport = CopyUserData(migPlan.OldDir, migPlan.NewDir)
+			if migReport.Clean() {
+				if err := FinalizeMigration(); err != nil {
+					return modes.MigrationCopyResult{}, err
+				}
+			}
+			return modes.MigrationCopyResult{
+				FilesCopied:     migReport.FilesCopied,
+				SymlinksCopied:  migReport.SymlinksCopied,
+				SkippedExisting: len(migReport.SkippedExisting),
+				Errors:          migReport.Errors,
+				Clean:           migReport.Clean(),
+			}, nil
+		},
+		Finalize: FinalizeMigration,
+		RemoveOldDir: func() error {
+			if err := RemoveOldUserDir(migPlan, migReport); err != nil {
+				return err
+			}
+			migrationExited = true
+			return nil
+		},
+		RenameProject: func() error { return RenameProjectDir(migPlan) },
+	}
 
 	iv = modes.NewInteractive(modes.InteractiveConfig{
 		Terminal:                   term,
 		Theme:                      theme,
 		InlineImagesEnabled:        initialCfg.InlineImagesEnabled,
 		AutoSwarmEnabled:           initialCfg.AutoSwarmEnabled,
+		RecursiveFileSuggest:       initialCfg.RecursiveFileSuggest,
+		RespectGitignore:           initialCfg.RespectGitignore,
 		ThemeName:                  initialCfg.Theme,
 		ExtensionThemes:            extMgr.ThemeOptions,
 		AutoSwarmSystemAddendum:    AutoSwarmSystemAddendum,
@@ -957,7 +1124,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		Tools:                      r.ToolRegistry,
 		MaxSteps:                   r.MaxSteps,
 		CWD:                        r.CWD,
-		ZotHome:                    ZotHome(),
+		TervaHome:                  TervaHome(),
 		Version:                    version,
 		UpdateInfoChan:             updateCh,
 		Sandbox:                    sharedSandbox,
@@ -966,6 +1133,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		AuthManager:                mgr,
 		BuildAgent:                 buildAgent,
 		SetKimiCLIFallbackDisabled: SetKimiCLIFallbackDisabled,
+		Migration:                  migration,
 		BuildAgentFor:              buildAgentFor,
 		BuildAgentForRescue:        buildAgentForRescue,
 		LoggedInProviders: func() []string {
@@ -981,9 +1149,18 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			if !seen["ollama"] {
 				out = append(out, "ollama")
 			}
+			// openai-compatible is reachable once configured (base URL
+			// set; the API key is optional, so a keyless endpoint won't
+			// have surfaced via ResolveCredential above).
+			if !seen["openai-compatible"] {
+				if bu, _, _ := AuthStoreFor().Extras("openai-compatible"); bu != "" {
+					out = append(out, "openai-compatible")
+				}
+			}
 			return out
 		},
 		LoadSession: loadSession,
+		NewSession:  newSession,
 		ChangeCWD:   changeCWD,
 		CurrentSessionPath: func() string {
 			if sess == nil {
@@ -1039,7 +1216,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			// model still sees them through the system-prompt
 			// manifest and the skill tool.
 			userHome, _ := os.UserHomeDir()
-			list, _ := skills.Discover(ZotHome(), r.CWD, userHome, args.WithSkills)
+			list, _ := skills.Discover(TervaHome(), r.CWD, userHome, args.WithSkills)
 			return skills.VisibleSkills(list)
 		},
 		NoYolo:      args.NoYolo,
@@ -1055,6 +1232,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 				_ = sess.UpdateModel(providerName, model)
 			}
 		},
+		RefreshCompatModels: RefreshCompatModelsAsync,
 	})
 
 	// Bind the interactive TUI as the Confirmer. We deferred this
@@ -1065,7 +1243,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		confirmGate.SetConfirmer(iv)
 	}
 
-	// Signal-driven flush: a SIGTERM / SIGHUP to the zot process
+	// Signal-driven flush: a SIGTERM / SIGHUP to the terva process
 	// (closed terminal window, system shutdown, kill) used to lose
 	// the entire in-memory transcript because the deferred post-Run
 	// flush below never ran. Per-message persistence above covers
@@ -1103,14 +1281,23 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 
 	runErr := iv.Run(ctx)
 
-	// Flush final transcript to session (only if we had / ended up with an agent).
-	if finalAg := iv.Agent(); finalAg != nil {
+	// Flush final transcript to session (only if we had / ended up with
+	// an agent). Skipped when /migrate just deleted the legacy data dir:
+	// the session file went with it, and the copy in the new dir was
+	// flushed before the copy pass ran.
+	if finalAg := iv.Agent(); finalAg != nil && !migrationExited {
 		persistMu.Lock()
 		if sess != nil {
 			writeNewTranscriptLocked(finalAg, sess, sessBaselineMsgs)
 			sessBaselineMsgs = len(finalAg.Messages())
 		}
 		persistMu.Unlock()
+	}
+	if migrationExited {
+		fmt.Fprintf(os.Stderr, "terva: migration complete — data now lives in %s; the old zot dir was removed.\nRestart terva to continue.\n", migPlan.NewDir) // rename:keep
+		if migPlan.EnvNote != "" {
+			fmt.Fprintln(os.Stderr, "terva: "+migPlan.EnvNote)
+		}
 	}
 	return runErr
 }
@@ -1121,10 +1308,10 @@ func openOrCreateSession(args Args, r Resolved, ag *core.Agent, version string) 
 	if args.NoSess {
 		return nil, nil
 	}
-	// Sweep meta-only files left over from older zot versions (and from
+	// Sweep meta-only files left over from older terva versions (and from
 	// any session that crashed before its first AppendMessage). Cheap;
 	// reads the first few bytes of each file in the cwd's session dir.
-	core.PruneEmptySessions(ZotHome(), args.CWD)
+	core.PruneEmptySessions(TervaHome(), args.CWD)
 	var (
 		s    *core.Session
 		msgs []provider.Message
@@ -1146,7 +1333,7 @@ func openOrCreateSession(args Args, r Resolved, ag *core.Agent, version string) 
 			msgs = nil
 		}
 	case args.Continue:
-		latest := core.LatestSession(ZotHome(), args.CWD)
+		latest := core.LatestSession(TervaHome(), args.CWD)
 		if latest != "" {
 			s, msgs, err = core.OpenSession(latest)
 		}
@@ -1163,6 +1350,11 @@ func openOrCreateSession(args Args, r Resolved, ag *core.Agent, version string) 
 		return nil, err
 	}
 	if s != nil {
+		// Startup path: stderr is still ours (no TUI yet), so surface
+		// anything OpenSession had to skip instead of losing it.
+		for _, w := range s.LoadWarnings {
+			fmt.Fprintln(os.Stderr, "terva:", w)
+		}
 		ag.SetMessages(msgs)
 		if cum, last, uerr := core.SessionUsageDetail(s.Path); uerr == nil {
 			ag.SeedCost(cum)
@@ -1170,11 +1362,11 @@ func openOrCreateSession(args Args, r Resolved, ag *core.Agent, version string) 
 		}
 		return s, nil
 	}
-	return core.NewSession(ZotHome(), args.CWD, r.Provider, r.Model, version)
+	return core.NewSession(TervaHome(), args.CWD, r.Provider, r.Model, version)
 }
 
 func pickSession(cwd string) (string, error) {
-	files := core.ListSessions(ZotHome(), cwd)
+	files := core.ListSessions(TervaHome(), cwd)
 	if len(files) == 0 {
 		fmt.Fprintln(os.Stderr, "no sessions for", cwd)
 		return "", nil
@@ -1256,18 +1448,22 @@ func printModels() {
 		}
 	}
 
-	header := fmt.Sprintf("%-*s  %-*s  %8s  %8s  %s  %-*s  %s",
+	header := fmt.Sprintf("%-*s  %-*s  %8s  %8s  %s  %s  %-*s  %s",
 		provW, "provider",
 		idW, "model id",
-		"context", "max-out", "reasoning",
+		"context", "max-out", "reasoning", "vision",
 		srcW, "source",
 		"name")
 	fmt.Println(header)
 
 	for _, m := range models {
 		reason := " "
-		if m.Reasoning {
+		if m.Has(provider.CapReasoning) {
 			reason = "✓"
+		}
+		vision := " "
+		if m.Has(provider.CapImageInput) {
+			vision = "✓"
 		}
 		source := m.Source
 		if source == "" {
@@ -1276,11 +1472,11 @@ func printModels() {
 		if m.Speculative {
 			source = "speculative"
 		}
-		fmt.Printf("%-*s  %-*s  %8d  %8d     %s      %-*s  %s\n",
+		fmt.Printf("%-*s  %-*s  %8d  %8d     %s         %s     %-*s  %s\n",
 			provW, m.Provider,
 			idW, m.ID,
 			m.ContextWindow, m.MaxOutput,
-			reason,
+			reason, vision,
 			srcW, source,
 			m.DisplayName)
 	}

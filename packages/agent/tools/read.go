@@ -1,4 +1,4 @@
-// Package tools implements zot's built-in tools: read, write, edit, bash.
+// Package tools implements terva's built-in tools: read, write, edit, bash.
 package tools
 
 import (
@@ -10,13 +10,22 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
 )
 
 const (
 	maxReadLines = 2000
 	maxReadBytes = 50 * 1024
+	// maxReadFileBytes bounds how much of a file we pull into memory
+	// before line-splitting and applying offset/limit. It is much larger
+	// than maxReadBytes so offset-based paging can reach content past the
+	// 50KiB result cap, but still finite so a multi-GB file cannot OOM us.
+	maxReadFileBytes = 10 * 1024 * 1024
+	// maxImageBytes caps inline image reads. Images are returned whole
+	// (no paging), so an oversized image would otherwise be loaded
+	// entirely into memory and shipped to the model verbatim.
+	maxImageBytes = 5 * 1024 * 1024
 )
 
 // ReadTool reads file contents from disk.
@@ -62,6 +71,9 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 
 	// Image handling.
 	if mime := imageMIME(path); mime != "" {
+		if info.Size() > maxImageBytes {
+			return core.ToolResult{}, fmt.Errorf("%s is %d bytes; image reads are capped at %d bytes", a.Path, info.Size(), maxImageBytes)
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return core.ToolResult{}, err
@@ -77,15 +89,19 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	}
 	defer f.Close()
 
-	// Read up to maxReadBytes and also line-limit.
-	limited := io.LimitReader(f, int64(maxReadBytes)+1)
+	// Pull the file into memory up to a generous hard cap so offset-based
+	// paging can reach content beyond the 50KiB *result* cap. The 50KiB
+	// cap (maxReadBytes) is applied LATER, to the selected slice, not here
+	// — applying it before offset/limit would make read(path, offset=N)
+	// return nothing for any N past 50KiB.
+	limited := io.LimitReader(f, int64(maxReadFileBytes)+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	truncBytes := len(data) > maxReadBytes
-	if truncBytes {
-		data = data[:maxReadBytes]
+	truncFile := len(data) > maxReadFileBytes
+	if truncFile {
+		data = data[:maxReadFileBytes]
 	}
 
 	if looksBinary(data) {
@@ -117,6 +133,22 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		truncLines = true
 	}
 
+	// Apply the byte cap to the SELECTED slice (post offset/limit), so a
+	// large window is trimmed but paging still works. We count bytes
+	// including the trailing newline we emit per line. We always keep at
+	// least one line so a single over-cap line still returns content
+	// (truncated) rather than an empty result.
+	truncBytes := false
+	byteCount := 0
+	for i, line := range selected {
+		byteCount += len(line) + 1 // +1 for the '\n' we emit below
+		if byteCount > maxReadBytes && i > 0 {
+			selected = selected[:i]
+			truncBytes = true
+			break
+		}
+	}
+
 	// Raw file contents go to the model. We deliberately DON'T
 	// prepend line numbers here: they'd inflate the token count by
 	// ~15-20% on typical source files (7 bytes per line, every
@@ -131,7 +163,7 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		sb.WriteString(line)
 		sb.WriteByte('\n')
 	}
-	if truncLines || truncBytes {
+	if truncLines || truncBytes || truncFile {
 		sb.WriteString("\n")
 	}
 	if truncLines {
@@ -139,6 +171,9 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	}
 	if truncBytes {
 		sb.WriteString(fmt.Sprintf("... [truncated at %d bytes]\n", maxReadBytes))
+	}
+	if truncFile {
+		sb.WriteString(fmt.Sprintf("... [file exceeds %d bytes; tail not loaded — page with offset]\n", maxReadFileBytes))
 	}
 
 	return core.ToolResult{
@@ -148,6 +183,7 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			"start_line":      start + 1, // 1-indexed; TUI draws the gutter
 			"lines_truncated": truncLines,
 			"bytes_truncated": truncBytes,
+			"file_truncated":  truncFile,
 			"total_lines":     len(lines),
 		},
 	}, nil

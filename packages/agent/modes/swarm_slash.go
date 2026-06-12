@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/patriceckhart/zot/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/swarm"
 )
 
 // runSwarm dispatches /swarm subcommands. Layout:

@@ -147,10 +147,17 @@ type ShutdownAckFromExt struct {
 	Type string `json:"type"`
 }
 
+// HelloAckFromHost carries the host's identity. ZotVersion and
+// TervaVersion are the SAME value under both naming eras: existing
+// extensions parse zot_version, so it is kept indefinitely —
+// extension wire compatibility is an explicit invariant of the
+// rename (docs/plans/rename-terva.md); the golden tests in
+// extproto_test.go enforce it.
 type HelloAckFromHost struct {
 	Type            string `json:"type"`
 	ProtocolVersion int    `json:"protocol_version"`
 	ZotVersion      string `json:"zot_version"`
+	TervaVersion    string `json:"terva_version,omitempty"`
 	Provider        string `json:"provider"`
 	Model           string `json:"model"`
 	CWD             string `json:"cwd"`

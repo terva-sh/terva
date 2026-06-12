@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -10,13 +9,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/agent/modes/telegram"
-	"github.com/patriceckhart/zot/packages/core"
+	"terva.sh/terva/packages/agent/chat"
+	"terva.sh/terva/packages/agent/chat/external"
+	"terva.sh/terva/packages/core"
 )
 
 // detachChild configures cmd to run in its own process group so tty
@@ -26,16 +25,20 @@ import (
 // inherited). See botcmd_unix.go and botcmd_windows.go.
 var detachChild func(cmd *exec.Cmd)
 
-// runBotCommand dispatches `zot telegram-bot ...` subcommands. The
-// short alias "tg" is also accepted. Returns true if rawArgs begins
-// with a recognised subcommand, false otherwise.
+// runBotCommand dispatches `terva bot ...` subcommands. The connector
+// is chosen with --connector NAME (default: the sole registered
+// service). `terva telegram-bot ...` and `terva tg ...` remain as aliases
+// that pin --connector=telegram.
 func runBotCommand(rawArgs []string, version string) (handled bool, err error) {
 	if len(rawArgs) == 0 {
 		return false, nil
 	}
+	connectorName := ""
 	switch rawArgs[0] {
+	case "bot":
+		// connector from --connector or the registry default
 	case "telegram-bot", "tg":
-		// recognised
+		connectorName = "telegram"
 	default:
 		return false, nil
 	}
@@ -45,174 +48,248 @@ func runBotCommand(rawArgs []string, version string) (handled bool, err error) {
 		sub = rawArgs[1]
 		tail = rawArgs[2:]
 	}
+
+	// `terva bot link` installs an external connector manifest; it
+	// resolves no service, so handle it before the lookup below.
+	if sub == "link" {
+		return true, botLink(tail)
+	}
+
+	tail, flagged := extractConnectorFlag(tail)
+	if flagged != "" {
+		connectorName = flagged
+	}
+	// Dev manifests register before the name is resolved so
+	// `terva bot run --connector-manifest ./x.json` needs no
+	// --connector. They stay in the tail: `bot start` re-execs
+	// `bot run` with the same args, and the child must re-load them.
+	devNames, err := registerDevManifests(tail)
+	if err != nil {
+		return true, err
+	}
+	if connectorName == "" && len(devNames) == 1 {
+		connectorName = devNames[0]
+	}
+	if connectorName == "" {
+		connectorName = chat.DefaultServiceName()
+	}
+	if connectorName == "" {
+		return true, fmt.Errorf("no chat connectors compiled into this binary (built with -tags terva_no_telegram?)")
+	}
+	svc, ok := chat.Lookup(connectorName)
+	if !ok {
+		return true, fmt.Errorf("unknown connector %q (available: %s)", connectorName, serviceNames())
+	}
+
 	switch sub {
 	case "", "help", "-h", "--help":
 		printBotHelp()
 		return true, nil
 	case "setup":
-		return true, botSetup(tail)
+		if svc.Setup == nil {
+			return true, fmt.Errorf("connector %q has no setup flow", svc.Name)
+		}
+		return true, svc.Setup(TervaHome())
 	case "status":
-		return true, botStatus()
+		return true, botStatus(svc)
 	case "reset":
-		return true, botReset()
+		return true, botReset(svc)
 	case "run":
-		return true, botRun(tail, version)
+		return true, botRun(svc, tail, version)
 	case "start":
-		return true, botStart(tail)
+		return true, botStart(svc, tail)
 	case "stop":
-		return true, botStop()
+		return true, botStop(svc)
 	case "logs":
-		return true, botLogs(tail)
+		return true, botLogs(svc, tail)
 	default:
 		printBotHelp()
 		return true, fmt.Errorf("unknown bot subcommand %q", sub)
 	}
 }
 
-// printBotHelp prints usage for `zot bot`.
-func printBotHelp() {
-	fmt.Fprint(os.Stderr, `zot telegram-bot — telegram bridge
-
-usage:
-  zot telegram-bot setup                       paste a BotFather token, verify, save
-  zot telegram-bot status                      show bridge config and whether it's running
-  zot telegram-bot run [flags]                 run in the foreground (ctrl+c to stop)
-  zot telegram-bot start [flags]               launch in background, detach, return immediately
-  zot telegram-bot stop                        sigterm the running background bot, sigkill if needed
-  zot telegram-bot logs [--follow]             tail the background bot's log file
-  zot telegram-bot reset                       forget token + allowed user
-
-setup flow:
-  1. talk to @BotFather on telegram, /newbot, copy the token
-  2. run "zot telegram-bot setup" and paste the token
-  3. run "zot telegram-bot start" (background) or "zot telegram-bot run" (foreground)
-  4. send /start to your bot from telegram; the first sender claims it
-
-while the bot is running, dm it anything and the message is forwarded
-to the agent the same way it would be from the tui. image attachments
-(photos or image/* documents) are passed to vision-capable models.
-telegram commands the bot handles directly: /help, /status, /stop.
-
-config & state:
-  $ZOT_HOME/bot.json       # bot token + paired user (mode 0600)
-  $ZOT_HOME/bot.pid        # pid of the running bot (written by run/start)
-  $ZOT_HOME/logs/bot.log   # stdout+stderr from "zot telegram-bot start"
-`)
+// registerDevManifests loads every --connector-manifest PATH found in
+// args (left in place — ParseArgs knows the flag and `bot start`
+// forwards the tail verbatim to the detached `bot run`). Returns the
+// registered service names.
+func registerDevManifests(args []string) ([]string, error) {
+	var names []string
+	for i := 0; i < len(args); i++ {
+		path := ""
+		if args[i] == "--connector-manifest" && i+1 < len(args) {
+			path = args[i+1]
+			i++
+		} else if v, ok := strings.CutPrefix(args[i], "--connector-manifest="); ok {
+			path = v
+		}
+		if path == "" {
+			continue
+		}
+		name, err := external.RegisterManifest(path)
+		if err != nil {
+			return nil, fmt.Errorf("--connector-manifest %s: %w", path, err)
+		}
+		fmt.Fprintf(os.Stderr, "terva: dev connector %q loaded for this run (%s)\n", name, path)
+		names = append(names, name)
+	}
+	return names, nil
 }
 
-// botSetup interactively reads a bot token, verifies it via getMe, and saves it.
-func botSetup(_ []string) error {
-	cfg, err := telegram.LoadConfig(ZotHome())
+// botLink implements `terva bot link <connector.json>`: symlink the
+// manifest into $TERVA_HOME/connectors/<name>/ so it persists across
+// runs as a visible, auditable artifact (`terva bot status` shows the
+// link target; `terva bot reset` removes it).
+func botLink(tail []string) error {
+	if len(tail) != 1 {
+		return fmt.Errorf("usage: terva bot link <path/to/connector.json>")
+	}
+	dst, err := external.Link(TervaHome(), tail[0])
 	if err != nil {
 		return err
 	}
-
-	fmt.Print("telegram bot token (from @BotFather): ")
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return err
-	}
-	token := strings.TrimSpace(line)
-	if token == "" {
-		return fmt.Errorf("no token provided")
-	}
-
-	client := telegram.NewClient(token)
-	me, err := client.GetMe(context.Background())
-	if err != nil {
-		return fmt.Errorf("token rejected by telegram: %w", err)
-	}
-	cfg.BotToken = token
-	cfg.BotUsername = me.Username
-	cfg.BotID = me.ID
-	// Any stored pairing might be for a different bot; clear it.
-	cfg.AllowedUserID = 0
-	cfg.LastUpdateID = 0
-	if err := telegram.SaveConfig(ZotHome(), cfg); err != nil {
-		return err
-	}
-	fmt.Printf("\nsaved: @%s (id=%d) to %s\n", me.Username, me.ID, telegram.ConfigPath(ZotHome()))
-	fmt.Println("next: run `zot telegram-bot run`, then send /start to your bot from telegram.")
+	fmt.Println("linked", dst)
+	fmt.Println("the connector now loads in every terva run; `terva bot reset --connector <name>` unlinks it.")
 	return nil
 }
 
-// botStatus prints the current bot config without the token, plus
-// whether the background process is alive.
-func botStatus() error {
-	cfg, err := telegram.LoadConfig(ZotHome())
-	if err != nil {
-		return err
+// extractConnectorFlag strips --connector NAME / --connector=NAME
+// from args and returns the remainder plus the chosen name ("" when
+// absent). Remaining args pass through to ParseArgs untouched.
+func extractConnectorFlag(args []string) (rest []string, name string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--connector" && i+1 < len(args) {
+			name = args[i+1]
+			i++
+			continue
+		}
+		if v, ok := strings.CutPrefix(a, "--connector="); ok {
+			name = v
+			continue
+		}
+		rest = append(rest, a)
 	}
-	if cfg.BotToken == "" {
-		fmt.Println("telegram: not configured (run `zot telegram-bot setup`)")
-		return nil
-	}
-	maskedTok := maskToken(cfg.BotToken)
-	fmt.Printf("telegram bot: @%s (id=%d)\n", cfg.BotUsername, cfg.BotID)
-	fmt.Printf("token:        %s\n", maskedTok)
-	if cfg.AllowedUserID == 0 {
-		fmt.Println("paired with:  (unpaired — send /start from telegram to claim)")
-	} else {
-		fmt.Printf("paired with:  telegram user id %d\n", cfg.AllowedUserID)
-	}
-	fmt.Printf("last update:  %d\n", cfg.LastUpdateID)
-	fmt.Printf("config file:  %s\n", telegram.ConfigPath(ZotHome()))
+	return rest, name
+}
 
-	pid, alive, _ := telegram.IsRunning(ZotHome())
+func serviceNames() string {
+	var names []string
+	for _, s := range chat.Services() {
+		names = append(names, s.Name)
+	}
+	if len(names) == 0 {
+		return "none compiled in"
+	}
+	return strings.Join(names, ", ")
+}
+
+// printBotHelp prints usage for `terva bot`.
+func printBotHelp() {
+	fmt.Fprintf(os.Stderr, `terva bot — chat-service bridge (connectors: %s)
+
+usage:
+  terva bot setup                       provision credentials for the connector
+  terva bot status                      show bridge config and whether it's running
+  terva bot run [flags]                 run in the foreground (ctrl+c to stop)
+  terva bot start [flags]               launch in background, detach, return immediately
+  terva bot stop                        sigterm the running background bot, sigkill if needed
+  terva bot logs [--follow]             tail the background bot's log file
+  terva bot reset                       forget credentials + paired user
+  terva bot link <connector.json>       install an external connector (symlink)
+
+every subcommand accepts --connector NAME to pick the chat service;
+with one connector compiled in it is the default. "terva telegram-bot"
+and "terva tg" are aliases for "terva bot --connector=telegram".
+
+external connectors are separate executables speaking a small json
+protocol on stdio (see docs/connectors.md). installed ones live at
+$TERVA_HOME/connectors/<name>/connector.json; --connector-manifest PATH
+loads one for a single run while developing it.
+
+telegram setup flow:
+  1. talk to @BotFather on telegram, /newbot, copy the token
+  2. run "terva bot setup" and paste the token
+  3. run "terva bot start" (background) or "terva bot run" (foreground)
+  4. send /start to your bot; the first sender claims it
+
+while the bot is running, dm it anything and the message is forwarded
+to the agent the same way it would be from the tui. image attachments
+are passed to vision-capable models. commands the bot handles
+directly: /help, /status, /stop.
+
+config & state (telegram):
+  $TERVA_HOME/bot.json       # bot token + paired user (mode 0600)
+  $TERVA_HOME/bot.pid        # pid of the running bot (written by run/start)
+  $TERVA_HOME/logs/bot.log   # stdout+stderr from "terva bot start"
+`, serviceNames())
+}
+
+// botStatus prints the connector's config block plus daemon liveness.
+func botStatus(svc chat.Service) error {
+	if svc.StatusText != nil {
+		text, err := svc.StatusText(TervaHome())
+		if err != nil {
+			return err
+		}
+		fmt.Println(text)
+		if !svc.Configured(TervaHome()) {
+			return nil
+		}
+	}
+
+	pid, alive, _ := chat.IsRunning(TervaHome(), svc.Name)
 	switch {
 	case alive:
 		fmt.Printf("process:      running (pid %d)\n", pid)
 	case pid > 0:
-		fmt.Printf("process:      stopped (stale pid %d in %s)\n", pid, telegram.PIDPath(ZotHome()))
+		fmt.Printf("process:      stopped (stale pid %d in %s)\n", pid, chat.PIDPath(TervaHome(), svc.Name))
 	default:
 		fmt.Println("process:      stopped")
 	}
-	logPath := telegram.LogPath(ZotHome())
+	logPath := chat.LogPath(TervaHome(), svc.Name)
 	if fi, err := os.Stat(logPath); err == nil {
 		fmt.Printf("log file:     %s (%d bytes)\n", logPath, fi.Size())
 	}
 	return nil
 }
 
-// botReset wipes the on-disk bot.json entry.
-func botReset() error {
-	p := telegram.ConfigPath(ZotHome())
-	if _, err := os.Stat(p); os.IsNotExist(err) {
-		fmt.Println("no bot config to reset")
-		return nil
+// botReset wipes the connector's persisted credentials.
+func botReset(svc chat.Service) error {
+	if svc.Reset == nil {
+		return fmt.Errorf("connector %q has no reset flow", svc.Name)
 	}
-	if err := os.Remove(p); err != nil {
-		return err
-	}
-	fmt.Println("removed", p)
-	return nil
-}
-
-// botStart launches `zot telegram-bot run` as a detached child process, writes
-// its pid to $ZOT_HOME/bot.pid, and returns immediately. Stdout/stderr
-// of the child are redirected to $ZOT_HOME/logs/bot.log.
-func botStart(rawTail []string) error {
-	// Refuse to start if another bot is already running.
-	if pid, alive, _ := telegram.IsRunning(ZotHome()); alive {
-		return fmt.Errorf("bot is already running (pid %d); use `zot telegram-bot stop` first", pid)
-	}
-	_ = telegram.RemovePID(ZotHome()) // clear any stale pid file
-
-	cfg, err := telegram.LoadConfig(ZotHome())
+	removed, err := svc.Reset(TervaHome())
 	if err != nil {
 		return err
 	}
-	if cfg.BotToken == "" {
-		return fmt.Errorf("no bot token configured — run `zot telegram-bot setup` first")
+	if removed == "" {
+		fmt.Println("no bot config to reset")
+		return nil
+	}
+	fmt.Println("removed", removed)
+	return nil
+}
+
+// botStart launches `terva bot run` as a detached child process, writes
+// its pid file, and returns immediately. Stdout/stderr of the child
+// are redirected to the connector's log file.
+func botStart(svc chat.Service, rawTail []string) error {
+	// Refuse to start if another bot is already running.
+	if pid, alive, _ := chat.IsRunning(TervaHome(), svc.Name); alive {
+		return fmt.Errorf("bot is already running (pid %d); use `terva bot stop` first", pid)
+	}
+	_ = chat.RemovePID(TervaHome(), svc.Name) // clear any stale pid file
+
+	if !svc.Configured(TervaHome()) {
+		return fmt.Errorf("connector %q is not configured — run `terva bot setup` first", svc.Name)
 	}
 
 	self, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("locate zot binary: %w", err)
+		return fmt.Errorf("locate terva binary: %w", err)
 	}
 
-	logPath := telegram.LogPath(ZotHome())
+	logPath := chat.LogPath(TervaHome(), svc.Name)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return err
 	}
@@ -227,12 +304,13 @@ func botStart(rawTail []string) error {
 	// Users hit cryptic tls / exec errors on that path; fail clearly.
 	if strings.Contains(self, string(os.PathSeparator)+"go-build") ||
 		strings.Contains(self, string(os.PathSeparator)+"go-tmp") {
-		return fmt.Errorf("detected `go run` temp binary at %s — run `make install` (or copy ./bin/zot to your PATH) and use the installed binary for `start`", self)
+		return fmt.Errorf("detected `go run` temp binary at %s — run `make install` (or copy ./bin/terva to your PATH) and use the installed binary for `start`", self)
 	}
 
-	// Child argv: same flags the user passed to `zot telegram-bot start`,
-	// mapped to `zot telegram-bot run`. Preserves --provider, --model, --cwd, etc.
-	args := append([]string{"telegram-bot", "run"}, rawTail...)
+	// Child argv: same flags the user passed to `terva bot start`,
+	// mapped to `terva bot run` with the connector pinned. Preserves
+	// --provider, --model, --cwd, etc.
+	args := append([]string{"bot", "run", "--connector=" + svc.Name}, rawTail...)
 	cmd := exec.Command(self, args...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -245,51 +323,51 @@ func botStart(rawTail []string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("spawn: %w", err)
 	}
-	if err := telegram.WritePID(ZotHome(), cmd.Process.Pid); err != nil {
+	if err := chat.WritePID(TervaHome(), svc.Name, cmd.Process.Pid); err != nil {
 		_ = cmd.Process.Kill()
 		return fmt.Errorf("write pid: %w", err)
 	}
 	// Don't wait() — detach. OS will reparent the child to init when we exit.
 	go func() { _ = cmd.Process.Release() }()
 
-	fmt.Printf("started zot telegram-bot as pid %d (logs: %s)\n", cmd.Process.Pid, logPath)
-	fmt.Println("use `zot telegram-bot logs -f` to tail, `zot telegram-bot stop` to stop.")
+	fmt.Printf("started terva bot (%s) as pid %d (logs: %s)\n", svc.Name, cmd.Process.Pid, logPath)
+	fmt.Println("use `terva bot logs -f` to tail, `terva bot stop` to stop.")
 	return nil
 }
 
 // botStop sends SIGTERM to the running bot (SIGKILL if it doesn't
 // exit within 5s) and cleans up the pid file.
-func botStop() error {
-	pid, alive, err := telegram.IsRunning(ZotHome())
+func botStop(svc chat.Service) error {
+	pid, alive, err := chat.IsRunning(TervaHome(), svc.Name)
 	if err != nil {
 		return err
 	}
 	if !alive {
 		if pid > 0 {
-			_ = telegram.RemovePID(ZotHome())
+			_ = chat.RemovePID(TervaHome(), svc.Name)
 			fmt.Printf("no live process; cleared stale pid %d\n", pid)
 			return nil
 		}
 		fmt.Println("bot is not running")
 		return nil
 	}
-	if err := telegram.StopProcess(pid, 5*time.Second); err != nil {
+	if err := chat.StopProcess(pid, 5*time.Second); err != nil {
 		return fmt.Errorf("stop pid %d: %w", pid, err)
 	}
-	_ = telegram.RemovePID(ZotHome())
+	_ = chat.RemovePID(TervaHome(), svc.Name)
 	fmt.Printf("stopped pid %d\n", pid)
 	return nil
 }
 
 // botLogs prints (or tails with --follow) the bot log file.
-func botLogs(rawTail []string) error {
+func botLogs(svc chat.Service, rawTail []string) error {
 	follow := false
 	for _, a := range rawTail {
 		if a == "-f" || a == "--follow" {
 			follow = true
 		}
 	}
-	p := telegram.LogPath(ZotHome())
+	p := chat.LogPath(TervaHome(), svc.Name)
 	f, err := os.Open(p)
 	if errors.Is(err, os.ErrNotExist) {
 		fmt.Println("no log file at", p)
@@ -323,8 +401,8 @@ func botLogs(rawTail []string) error {
 	}
 }
 
-// botRun starts the polling loop in the foreground. Ctrl+C stops it.
-func botRun(rawTail []string, version string) error {
+// botRun starts the chat-ops loop in the foreground. Ctrl+C stops it.
+func botRun(svc chat.Service, rawTail []string, version string) error {
 	// Parse only a small subset of flags relevant to bot run. We reuse
 	// the main args parser so --provider/--model/--cwd/--api-key/--reasoning
 	// behave the same as in the tui.
@@ -339,12 +417,9 @@ func botRun(rawTail []string, version string) error {
 		return err
 	}
 
-	cfg, err := telegram.LoadConfig(ZotHome())
+	conn, pairing, err := svc.NewConnector(TervaHome(), nil)
 	if err != nil {
 		return err
-	}
-	if cfg.BotToken == "" {
-		return fmt.Errorf("no bot token configured — run `zot telegram-bot setup` first")
 	}
 
 	agent := resolved.NewAgent()
@@ -362,18 +437,14 @@ func botRun(rawTail []string, version string) error {
 		}
 	}
 
-	var b *telegram.Bot
-	b = &telegram.Bot{
-		Client:     telegram.NewClient(cfg.BotToken),
+	var loop *chat.Loop
+	loop = &chat.Loop{
+		Connector:  conn,
 		Agent:      agent,
-		Config:     cfg,
-		ZotHome:    ZotHome(),
 		Provider:   resolved.Provider,
 		AuthMethod: resolved.AuthMethod,
 		CWD:        args.CWD,
-		Save: func(c telegram.Config) error {
-			return telegram.SaveConfig(ZotHome(), c)
-		},
+		Pairing:    pairing,
 		RefreshCreds: func() error {
 			// Re-run the same resolver the tui uses so we pick up
 			// refreshed oauth tokens, re-logins, and model switches.
@@ -385,17 +456,15 @@ func botRun(rawTail []string, version string) error {
 			}
 			agent.Client = next.NewClient()
 			agent.Model = next.Model
-			b.Provider = next.Provider
-			b.AuthMethod = next.AuthMethod
-			b.CWD = next.CWD
+			loop.UpdateStatusContext(next.Provider, next.AuthMethod, next.CWD)
 			return nil
 		},
 	}
 
-	// Record our pid so `zot telegram-bot status` / `zot telegram-bot stop` can find us,
+	// Record our pid so `terva bot status` / `terva bot stop` can find us,
 	// regardless of whether we were started directly or via `bot start`.
-	_ = telegram.WritePID(ZotHome(), os.Getpid())
-	defer telegram.RemovePID(ZotHome())
+	_ = chat.WritePID(TervaHome(), svc.Name, os.Getpid())
+	defer chat.RemovePID(TervaHome(), svc.Name)
 
 	// Translate sigterm/sigint into a context cancel so the bot's goroutines
 	// and the currently-running turn wind down cleanly.
@@ -407,43 +476,25 @@ func botRun(rawTail []string, version string) error {
 		cancel()
 	}()
 	defer cancel()
-	return b.Run(ctx)
+	return loop.Run(ctx)
 }
 
 // openOrCreateSessionForBot reuses the same logic as interactive mode
 // but never prompts (no TTY picker); falls back to latest or new.
 func openOrCreateSessionForBot(args Args, r Resolved, ag *core.Agent, version string) (*core.Session, []any, error) {
 	if args.Continue {
-		if latest := core.LatestSession(ZotHome(), args.CWD); latest != "" {
+		if latest := core.LatestSession(TervaHome(), args.CWD); latest != "" {
 			s, msgs, err := core.OpenSession(latest)
 			if err != nil {
 				return nil, nil, err
+			}
+			for _, w := range s.LoadWarnings {
+				fmt.Fprintln(os.Stderr, "terva:", w)
 			}
 			ag.SetMessages(msgs)
 			return s, nil, nil
 		}
 	}
-	s, err := core.NewSession(ZotHome(), args.CWD, r.Provider, r.Model, version)
+	s, err := core.NewSession(TervaHome(), args.CWD, r.Provider, r.Model, version)
 	return s, nil, err
 }
-
-// maskToken returns "123456:ABC...xyz" so copies of zot telegram-bot status can be
-// pasted into bug reports without leaking the full token.
-func maskToken(tok string) string {
-	if len(tok) <= 10 {
-		return "<hidden>"
-	}
-	// telegram tokens look like "123456789:ABCD..." — keep the id, mask the body.
-	i := strings.IndexByte(tok, ':')
-	if i < 0 {
-		return tok[:4] + "..." + tok[len(tok)-4:]
-	}
-	body := tok[i+1:]
-	if len(body) < 8 {
-		return tok[:i+1] + "<hidden>"
-	}
-	return tok[:i+1] + body[:3] + "..." + body[len(body)-3:]
-}
-
-// _ compile-time hint so the strconv import stays if we later add numeric parsing.
-var _ = strconv.Itoa

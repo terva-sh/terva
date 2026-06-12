@@ -8,9 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"terva.sh/terva/packages/ignore"
 )
 
-// runExtCommand dispatches `zot ext ...` subcommands. Returns
+// runExtCommand dispatches `terva ext ...` subcommands. Returns
 // (handled=true, err) if rawArgs starts with "ext"; otherwise
 // (handled=false, nil) so the main router falls through to the
 // regular flag parser.
@@ -45,19 +47,19 @@ func runExtCommand(rawArgs []string) (handled bool, err error) {
 }
 
 func printExtHelp() {
-	fmt.Fprintln(os.Stderr, `zot ext — manage extensions
+	fmt.Fprintln(os.Stderr, `terva ext — manage extensions
 
 usage:
-  zot ext list                    list installed extensions and their state
-  zot ext logs <name> [-f]        cat / tail an extension's stderr log
-  zot ext enable <name>           re-enable a disabled extension
-  zot ext disable <name>          disable without removing
-  zot ext remove <name>           delete an extension directory
-  zot ext install <path|git-url>  copy / clone an extension into $ZOT_HOME/extensions/
+  terva ext list                    list installed extensions and their state
+  terva ext logs <name> [-f]        cat / tail an extension's stderr log
+  terva ext enable <name>           re-enable a disabled extension
+  terva ext disable <name>          disable without removing
+  terva ext remove <name>           delete an extension directory
+  terva ext install <path|git-url>  copy / clone an extension into $TERVA_HOME/extensions/
 
 extensions live under:
-  $ZOT_HOME/extensions/<name>/extension.json   (global)
-  ./.zot/extensions/<name>/extension.json      (project-local)`)
+  $TERVA_HOME/extensions/<name>/extension.json   (global)
+  ./.terva/extensions/<name>/extension.json      (project-local)`)
 }
 
 // extList walks both the global and project-local extension dirs and
@@ -108,7 +110,7 @@ func extList() error {
 	}
 	if len(rows) == 0 {
 		fmt.Fprintln(os.Stderr, "no extensions installed")
-		fmt.Fprintln(os.Stderr, "see docs/extensions.md to write your own, or `zot ext install <path|url>`")
+		fmt.Fprintln(os.Stderr, "see docs/extensions.md to write your own, or `terva ext install <path|url>`")
 		return nil
 	}
 	fmt.Printf("%-12s  %-20s  %-10s  %-8s  %-10s  %s\n", "scope", "name", "version", "enabled", "language", "dir")
@@ -124,7 +126,7 @@ func extList() error {
 // tails it (-f).
 func extLogs(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: zot ext logs <name> [-f]")
+		return fmt.Errorf("usage: terva ext logs <name> [-f]")
 	}
 	name := args[0]
 	follow := false
@@ -133,7 +135,7 @@ func extLogs(args []string) error {
 			follow = true
 		}
 	}
-	logPath := filepath.Join(ZotHome(), "logs", "ext-"+name+".log")
+	logPath := filepath.Join(TervaHome(), "logs", "ext-"+name+".log")
 	if _, err := os.Stat(logPath); err != nil {
 		return fmt.Errorf("no log for %q at %s", name, logPath)
 	}
@@ -159,7 +161,7 @@ func extToggle(args []string, enabled bool) error {
 		if !enabled {
 			verb = "disable"
 		}
-		return fmt.Errorf("usage: zot ext %s <name>", verb)
+		return fmt.Errorf("usage: terva ext %s <name>", verb)
 	}
 	name := args[0]
 	dir, err := findExtensionDir(name)
@@ -195,7 +197,7 @@ func extToggle(args []string, enabled bool) error {
 // prompt (skip with --yes).
 func extRemove(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: zot ext remove <name> [--yes]")
+		return fmt.Errorf("usage: terva ext remove <name> [--yes]")
 	}
 	name := args[0]
 	yes := false
@@ -225,14 +227,14 @@ func extRemove(args []string) error {
 }
 
 // extInstall copies a local directory or shallow-clones a git URL
-// into $ZOT_HOME/extensions/. Validates the destination contains an
+// into $TERVA_HOME/extensions/. Validates the destination contains an
 // extension.json before reporting success.
 func extInstall(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: zot ext install <path|git-url>")
+		return fmt.Errorf("usage: terva ext install <path|git-url>")
 	}
 	src := args[0]
-	dest := filepath.Join(ZotHome(), "extensions")
+	dest := filepath.Join(TervaHome(), "extensions")
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
@@ -272,7 +274,7 @@ func extInstall(args []string) error {
 	// Resolve to an absolute, cleaned path before deriving the install
 	// name. Otherwise relative sources like "." or "./" collapse to a
 	// basename of ".", and the destination wrongly resolves to the
-	// extensions/ parent directory (which zot creates on first run),
+	// extensions/ parent directory (which terva creates on first run),
 	// triggering a false "already exists" failure.
 	absSrc, err := filepath.Abs(src)
 	if err != nil {
@@ -295,11 +297,11 @@ func extInstall(args []string) error {
 
 func extensionDirs() map[string]string {
 	out := map[string]string{}
-	if h := ZotHome(); h != "" {
+	if h := TervaHome(); h != "" {
 		out["global"] = filepath.Join(h, "extensions")
 	}
 	if cwd, err := os.Getwd(); err == nil {
-		out["project"] = filepath.Join(cwd, ".zot", "extensions")
+		out["project"] = filepath.Join(cwd, ".terva", "extensions")
 	}
 	return out
 }
@@ -322,7 +324,7 @@ func dashIfEmpty(s string) string {
 }
 
 // copyDir does a recursive copy of src to dst preserving file mode
-// bits. Used by `zot ext install <local-path>`.
+// bits. Used by `terva ext install <local-path>`.
 //
 // Entries matched by the source's root .gitignore are skipped, and
 // .git itself is always skipped. This keeps non-portable, regeneratable
@@ -344,7 +346,7 @@ func copyDir(src, dst string) error {
 			if info.IsDir() && name == ".git" {
 				return filepath.SkipDir
 			}
-			if ig.match(filepath.ToSlash(rel), info.IsDir()) {
+			if ig.Match(filepath.ToSlash(rel), info.IsDir()) {
 				if info.IsDir() {
 					return filepath.SkipDir
 				}
@@ -370,98 +372,11 @@ func copyDir(src, dst string) error {
 	})
 }
 
-// gitignore is a minimal .gitignore matcher. It supports the common
-// patterns used in real extension repos: blank lines, comments (#),
-// negation (!), directory-only patterns (trailing /), anchored
-// patterns (leading /), and the * / ? / [..] wildcards via
-// filepath.Match. It intentionally does not implement ** globstar or
-// nested per-directory .gitignore files; the goal is to drop obvious
-// non-portable directories, not to be a faithful git reimplementation.
-type gitignore struct {
-	rules []gitignoreRule
-}
+// gitignore matching lives in packages/ignore so the @-file picker in
+// packages/agent/modes can share it without an import cycle. These
+// thin aliases keep the existing call sites (and tests) terse.
+type gitignore = ignore.Gitignore
 
-type gitignoreRule struct {
-	pattern  string
-	negate   bool
-	dirOnly  bool
-	anchored bool
-}
+func loadGitignore(root string) *gitignore { return ignore.Load(root) }
 
-func loadGitignore(root string) *gitignore {
-	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
-	if err != nil {
-		return &gitignore{}
-	}
-	return loadGitignoreFromString(string(data))
-}
-
-func loadGitignoreFromString(data string) *gitignore {
-	g := &gitignore{}
-	for _, line := range strings.Split(data, "\n") {
-		line = strings.TrimRight(line, "\r")
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		r := gitignoreRule{pattern: trimmed}
-		if strings.HasPrefix(r.pattern, "!") {
-			r.negate = true
-			r.pattern = r.pattern[1:]
-		}
-		if strings.HasSuffix(r.pattern, "/") {
-			r.dirOnly = true
-			r.pattern = strings.TrimSuffix(r.pattern, "/")
-		}
-		if strings.HasPrefix(r.pattern, "/") {
-			r.anchored = true
-			r.pattern = strings.TrimPrefix(r.pattern, "/")
-		}
-		if r.pattern == "" {
-			continue
-		}
-		g.rules = append(g.rules, r)
-	}
-	return g
-}
-
-// match reports whether the slash-separated relative path should be
-// ignored. Later rules win, so a trailing negation can re-include a
-// previously ignored path.
-func (g *gitignore) match(rel string, isDir bool) bool {
-	ignored := false
-	for _, r := range g.rules {
-		if r.dirOnly && !isDir {
-			continue
-		}
-		if r.matchPath(rel) {
-			ignored = !r.negate
-		}
-	}
-	return ignored
-}
-
-func (r gitignoreRule) matchPath(rel string) bool {
-	if r.anchored || strings.Contains(r.pattern, "/") {
-		if ok, _ := filepath.Match(r.pattern, rel); ok {
-			return true
-		}
-		// Anchored directory pattern also matches everything beneath it.
-		return strings.HasPrefix(rel, r.pattern+"/")
-	}
-	// Unanchored: match the basename of any path component.
-	base := rel
-	if i := strings.LastIndex(rel, "/"); i >= 0 {
-		base = rel[i+1:]
-	}
-	if ok, _ := filepath.Match(r.pattern, base); ok {
-		return true
-	}
-	// Match a directory component anywhere in the path.
-	for _, part := range strings.Split(rel, "/") {
-		if ok, _ := filepath.Match(r.pattern, part); ok {
-			return true
-		}
-	}
-	return false
-}
+func loadGitignoreFromString(data string) *gitignore { return ignore.Parse(data) }

@@ -63,7 +63,7 @@ func TestSpawnRunsAndCompletes(t *testing.T) {
 }
 
 // TestSpawnAgentSharesRepoRoot verifies the only-mode-we-support:
-// every spawned agent points its cwd at the parent zot's RepoRoot.
+// every spawned agent points its cwd at the parent terva's RepoRoot.
 func TestSpawnAgentSharesRepoRoot(t *testing.T) {
 	f := newTestSwarm(t, func(a *Agent) Runner {
 		return RunnerFunc(func(ctx context.Context, sink Sink) error { return nil })

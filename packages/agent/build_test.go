@@ -6,21 +6,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 func TestReadAgentsContextLoadsGlobalAndAncestors(t *testing.T) {
 	root := t.TempDir()
-	zotHome := filepath.Join(root, "zot-home")
+	tervaHome := filepath.Join(root, "terva-home")
 	project := filepath.Join(root, "repo")
 	nested := filepath.Join(project, "packages", "app")
-	if err := os.MkdirAll(zotHome, 0o755); err != nil {
+	if err := os.MkdirAll(tervaHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(zotHome, "AGENTS.md"), []byte("global rule"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tervaHome, "AGENTS.md"), []byte("global rule"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(project, "AGENTS.md"), []byte("repo rule"), 0o644); err != nil {
@@ -30,7 +30,7 @@ func TestReadAgentsContextLoadsGlobalAndAncestors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := readAgentsContext(nested, zotHome)
+	got := readAgentsContext(nested, tervaHome)
 	for _, want := range []string{"global rule", "repo rule", "app rule"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("readAgentsContext missing %q in:\n%s", want, got)
@@ -48,15 +48,79 @@ func TestReadAgentsContextMissingFilesIsEmpty(t *testing.T) {
 	}
 }
 
+func TestResolveInjectsContextFilesBeforeAgents(t *testing.T) {
+	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5"}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "brief.md"), []byte("CONTEXT-BRIEF"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("AGENT-RULE"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Resolve(Args{CWD: dir, ContextFiles: []string{"brief.md"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ic := strings.Index(r.SystemPrompt, "CONTEXT-BRIEF")
+	ia := strings.Index(r.SystemPrompt, "AGENT-RULE")
+	if ic < 0 {
+		t.Fatalf("context file not injected:\n%s", r.SystemPrompt)
+	}
+	if ia < 0 {
+		t.Fatalf("AGENTS.md not injected:\n%s", r.SystemPrompt)
+	}
+	if ic > ia {
+		t.Fatalf("context file should precede AGENTS.md (ctx=%d agents=%d)", ic, ia)
+	}
+}
+
+func TestResolveLoadsProjectConfigContextFiles(t *testing.T) {
+	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5"}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "playbook.md"), []byte("PLAYBOOK-X"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectConfig(t, dir, `{"context_files":["playbook.md"]}`)
+
+	r, err := Resolve(Args{CWD: dir}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.SystemPrompt, "PLAYBOOK-X") {
+		t.Fatalf("project-config context file not injected:\n%s", r.SystemPrompt)
+	}
+}
+
+func TestResolveMissingContextFileErrors(t *testing.T) {
+	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Resolve(Args{CWD: t.TempDir(), ContextFiles: []string{"missing.md"}}, false)
+	if err == nil {
+		t.Fatal("expected Resolve to fail fast on a missing --context-file")
+	}
+}
+
 // TestResolveFallsBackWhenConfiguredModelIsGone reproduces the
 // startup failure caught by the user's screenshot: the persisted
 // config.json points at a model id that's no longer in the active
-// catalogue (because they edited models.json or zot's bundled
+// catalogue (because they edited models.json or terva's bundled
 // catalogue changed). Resolve must NOT error — strands the user
 // with no way to fix it from the TUI — and should repair the config
 // so the next launch is silent.
 func TestResolveFallsBackWhenConfiguredModelIsGone(t *testing.T) {
-	t.Setenv("ZOT_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	// Persist a stale model id.
 	stale := "gpt-5.5-pro-not-real"
@@ -91,7 +155,7 @@ func TestResolveFallsBackWhenConfiguredModelIsGone(t *testing.T) {
 // persisted config. If the user passed --model X explicitly and X is
 // unknown, we still fall back, but we don't touch their config.
 func TestResolveExplicitFlagStaleDoesNotRepairConfig(t *testing.T) {
-	t.Setenv("ZOT_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	good := "gpt-5"
 	if err := SaveConfig(Config{Provider: "openai", Model: good}); err != nil {
@@ -112,12 +176,12 @@ func TestResolveExplicitFlagStaleDoesNotRepairConfig(t *testing.T) {
 }
 
 // TestResolveEnvOnlyBedrockDiscoveredWithoutConfig reproduces issue
-// #15: pointing ZOT_HOME at a fresh dir drops the persisted
+// #15: pointing TERVA_HOME at a fresh dir drops the persisted
 // config.json (which pinned provider=amazon-bedrock). Resolve must
 // still discover bedrock from the AWS env vars instead of falling back
 // to anthropic and reporting "not logged in".
 func TestResolveEnvOnlyBedrockDiscoveredWithoutConfig(t *testing.T) {
-	t.Setenv("ZOT_HOME", t.TempDir()) // fresh home: no config.json
+	t.Setenv("TERVA_HOME", t.TempDir()) // fresh home: no config.json
 	// Disable the Kimi CLI token fallback so a developer machine with a
 	// real Kimi CLI login doesn't pre-empt bedrock in the scan.
 	if err := SetKimiCLIFallbackDisabled(true); err != nil {
@@ -143,9 +207,9 @@ func TestResolveEnvOnlyBedrockDiscoveredWithoutConfig(t *testing.T) {
 }
 
 func TestResolveOllamaUsesModelBaseURLBeforeDefault(t *testing.T) {
-	t.Setenv("ZOT_HOME", t.TempDir())
-	provider.SetLiveModels(nil)
-	defer provider.SetLiveModels(nil)
+	t.Setenv("TERVA_HOME", t.TempDir())
+	provider.ResetCatalogLayers()
+	defer provider.ResetCatalogLayers()
 	provider.SetUserModels([]provider.Model{{
 		Provider:      "ollama",
 		ID:            "qwen-local",
@@ -165,9 +229,9 @@ func TestResolveOllamaUsesModelBaseURLBeforeDefault(t *testing.T) {
 }
 
 func TestResolveOllamaFallsBackToDefaultBaseURL(t *testing.T) {
-	t.Setenv("ZOT_HOME", t.TempDir())
-	provider.SetLiveModels(nil)
-	defer provider.SetLiveModels(nil)
+	t.Setenv("TERVA_HOME", t.TempDir())
+	provider.ResetCatalogLayers()
+	defer provider.ResetCatalogLayers()
 
 	r, err := Resolve(Args{Provider: "ollama", Model: "any-local-model"}, false)
 	if err != nil {

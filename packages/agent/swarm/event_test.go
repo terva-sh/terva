@@ -80,7 +80,7 @@ func TestReadEventLogIgnoresGarbage(t *testing.T) {
 // supervisor parsed child stdout and called log.Append(ev), AND the
 // child's mirror appended the same event. Two writes per event
 // landed in the file in quick succession with near-identical
-// timestamps, and the next zot launch replayed everything twice —
+// timestamps, and the next terva launch replayed everything twice —
 // the user saw every transcript line duplicated.
 //
 // The write-time fix makes the child's mirror dormant when the

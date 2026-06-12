@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/tui"
 )
 
 // confirmRequest is one pending confirmation. The agent goroutine

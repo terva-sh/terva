@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/extproto"
 )
 
 // EmitEvent fires a one-way lifecycle event to every extension that
@@ -18,10 +18,6 @@ import (
 // names are still routed (subscribers can use any string they want).
 func (m *Manager) EmitEvent(ev extproto.EventFromHost) {
 	ev.Type = "event"
-	frame, err := extproto.Encode(ev)
-	if err != nil {
-		return
-	}
 	m.mu.RLock()
 	subs := make([]*Extension, 0, len(m.ext))
 	for _, ext := range m.ext {
@@ -41,7 +37,7 @@ func (m *Manager) EmitEvent(ev extproto.EventFromHost) {
 				// the calling goroutine.
 				_ = recover()
 			}()
-			_, _ = ext.stdin.Write(frame)
+			_ = ext.writeFrame(ev)
 		}(ext)
 	}
 }
@@ -172,18 +168,11 @@ func (m *Manager) askIntercept(ctx context.Context, ext *Extension, payload extp
 
 	payload.Type = "event_intercept"
 	payload.ID = id
-	frame, err := extproto.Encode(payload)
-	if err != nil {
+	if err := ext.writeFrame(payload); err != nil {
 		ext.mu.Lock()
 		delete(ext.pendingIntercept, id)
 		ext.mu.Unlock()
-		return InterceptResult{}
-	}
-	if _, err := ext.stdin.Write(frame); err != nil {
-		ext.mu.Lock()
-		delete(ext.pendingIntercept, id)
-		ext.mu.Unlock()
-		fmt.Fprintf(ext.logFile, "[zot] intercept write failed: %v\n", err)
+		fmt.Fprintf(ext.logFile, "[terva] intercept write failed: %v\n", err)
 		return InterceptResult{}
 	}
 
@@ -199,7 +188,7 @@ func (m *Manager) askIntercept(ctx context.Context, ext *Extension, payload extp
 		ext.mu.Lock()
 		delete(ext.pendingIntercept, id)
 		ext.mu.Unlock()
-		fmt.Fprintf(ext.logFile, "[zot] intercept %s timed out; allowing\n", payload.Event)
+		fmt.Fprintf(ext.logFile, "[terva] intercept %s timed out; allowing\n", payload.Event)
 		return InterceptResult{}
 	case <-ctx.Done():
 		ext.mu.Lock()

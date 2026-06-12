@@ -3,10 +3,11 @@ package agent
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
-	"github.com/patriceckhart/zot/packages/tui"
 	"golang.org/x/term"
+	"terva.sh/terva/packages/tui"
 )
 
 // Mode is the CLI run mode.
@@ -38,6 +39,12 @@ type Args struct {
 	AppendSystemPrompt []string
 	Reasoning          string
 
+	// ContextFiles are paths passed via --context-file (repeatable). Each
+	// file's contents are injected into the system prompt at startup, in
+	// order, after any project/user .terva/config.json context_files. See
+	// readStartupContextFiles.
+	ContextFiles []string
+
 	Continue bool
 	Resume   bool
 	Session  string
@@ -59,15 +66,22 @@ type Args struct {
 	// can run "with only this one extension" via --no-ext --ext PATH.
 	NoExt bool
 
+	// ConnectorManifests are connector.json paths passed via
+	// --connector-manifest (repeatable). Each loads ONE external chat
+	// connector as a dev service for this invocation only — nothing
+	// is discovered, nothing persists (the --ext precedent; see
+	// docs/plans/chat-connectors.md, phase 4).
+	ConnectorManifests []string
+
 	// NoSkill disables ALL skill discovery for this run, including
 	// the built-in skills compiled into the binary. The system
 	// prompt loses its "Available skills" manifest and the `skill`
-	// tool isn't registered. Useful for running zot without any
+	// tool isn't registered. Useful for running terva without any
 	// extra context biasing the model.
 	NoSkill bool
 
 	// WithSkills controls loading user-installed skills from
-	// $ZOT_HOME/skills/, .zot/skills/, .claude/skills/, and
+	// $TERVA_HOME/skills/, .terva/skills/, .claude/skills/, and
 	// .agents/skills/. It defaults to true; --no-skill disables all
 	// skill discovery, including built-ins.
 	WithSkills bool
@@ -172,6 +186,15 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.AppendSystemPrompt = append(a.AppendSystemPrompt, v)
+		case "--context-file":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			// Repeatable; each value is a file whose contents are injected
+			// into the system prompt in order. Relative paths resolve
+			// against args.CWD later, in readStartupContextFiles.
+			a.ContextFiles = append(a.ContextFiles, v)
 		case "--ext", "-e":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -183,6 +206,12 @@ func ParseArgs(in []string) (Args, error) {
 			a.Exts = append(a.Exts, v)
 		case "--no-ext", "--no-extensions":
 			a.NoExt = true
+		case "--connector-manifest":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.ConnectorManifests = append(a.ConnectorManifests, v)
 		case "--no-skill", "--no-skills":
 			a.NoSkill = true
 		case "--with-skills", "--with-skill":
@@ -255,12 +284,31 @@ func ParseArgs(in []string) (Args, error) {
 
 	if a.CWD == "" {
 		a.CWD, _ = os.Getwd()
+	} else {
+		// A user-supplied --cwd is resolved to an absolute path and
+		// verified to be an existing directory up front. Without this,
+		// a typo'd or relative workspace fails lazily and confusingly
+		// later (bash's cmd.Dir errors per command, writes fail when
+		// joining a missing parent, the system prompt shows a relative
+		// path, and per-cwd session keys diverge from the absolute form).
+		abs, err := filepath.Abs(a.CWD)
+		if err != nil {
+			return a, fmt.Errorf("--cwd %q: %w", a.CWD, err)
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return a, fmt.Errorf("--cwd %q: %w", a.CWD, err)
+		}
+		if !info.IsDir() {
+			return a, fmt.Errorf("--cwd %q is not a directory", a.CWD)
+		}
+		a.CWD = abs
 	}
 	return a, nil
 }
 
 // PrintHelp writes the help text to stderr. When stderr is a TTY it
-// uses the same palette as zot's TUI; when redirected it falls back to
+// uses the same palette as terva's TUI; when redirected it falls back to
 // plain text with no ANSI escapes.
 func PrintHelp(version string) {
 	th := tui.Dark
@@ -320,43 +368,56 @@ func PrintHelp(version string) {
 	fmt.Fprintln(os.Stderr)
 	var headline string
 	if useColor {
-		headline = th.AccentBar(th.Assistant) + assistant(tui.Bold("i'm zot. yet another coding agent harness."))
+		headline = th.AccentBar(th.Assistant) + assistant(tui.Bold("i'm terva. yet another coding agent harness."))
 	} else {
-		headline = "i'm zot. yet another coding agent harness."
+		headline = "i'm terva. yet another coding agent harness."
 	}
 	fmt.Fprintln(os.Stderr, headline)
 	fmt.Fprintln(os.Stderr, muted("ask anything, or type /help inside the tui to see commands."))
 	fmt.Fprintf(os.Stderr, "%s %s\n", muted("version:"), fg(version))
 
 	section("modes",
-		row{"zot", "interactive tui"},
-		row{"zot \"prompt\"", "interactive, pre-filled prompt"},
-		row{"zot -p \"prompt\"", "print final text, exit"},
-		row{"zot --json \"prompt\"", "newline-delimited json events, exit"},
-		row{"zot rpc", "json-rpc loop on stdin/stdout (see docs/rpc.md)"},
+		row{"terva", "interactive tui"},
+		row{"terva \"prompt\"", "interactive, pre-filled prompt"},
+		row{"terva -p \"prompt\"", "print final text, exit"},
+		row{"terva --json \"prompt\"", "newline-delimited json events, exit"},
+		row{"terva rpc", "json-rpc loop on stdin/stdout (see docs/rpc.md)"},
 	)
 	section("extensions",
-		row{"zot ext list", "list installed extensions"},
-		row{"zot ext install <path|url>", "install into $ZOT_HOME/extensions/"},
-		row{"zot --ext ./path/to/ext", "load an extension for this run only"},
-		row{"zot ext help", "show all extension subcommands"},
+		row{"terva ext list", "list installed extensions"},
+		row{"terva ext install <path|url>", "install into $TERVA_HOME/extensions/"},
+		row{"terva --ext ./path/to/ext", "load an extension for this run only"},
+		row{"terva ext help", "show all extension subcommands"},
+	)
+	section("custom models",
+		row{"terva models init", "scaffold $TERVA_HOME/models.json to edit"},
+		row{"terva models init --force", "overwrite an existing models.json"},
 	)
 	section("self-update",
-		row{"zot update", "download and install the latest release"},
-		row{"zot update --check", "show whether a new release is available"},
+		row{"terva update", "download and install the latest release"},
+		row{"terva update --check", "show whether a new release is available"},
 	)
-	section("telegram",
-		row{"zot telegram-bot setup", "configure a telegram bot (from BotFather)"},
-		row{"zot telegram-bot run", "foreground bridge (ctrl+c to stop)"},
-		row{"zot telegram-bot start", "background bridge (detached)"},
-		row{"zot telegram-bot stop", "stop the background bridge"},
-		row{"zot telegram-bot logs [-f]", "tail the background bridge log"},
-		row{"zot telegram-bot status", "config + running state"},
-		row{"zot telegram-bot reset", "forget saved token"},
-		row{"zot tg ...", "short alias for telegram-bot"},
+	section("migrate from zot", // rename:keep
+		row{"terva migrate", "copy the legacy zot data dir to the terva location (interactive)"}, // rename:keep
+		row{"terva migrate --dry-run", "show what would be migrated; change nothing"},
+		row{"terva migrate --yes --keep-old", "migrate without prompts; keep the old dir"},
+		row{"terva migrate --yes --remove-old", "migrate without prompts; delete the old dir"},
+	)
+	section("chat bot",
+		row{"terva bot setup", "configure a chat connector (telegram via BotFather)"},
+		row{"terva bot run", "foreground bridge (ctrl+c to stop)"},
+		row{"terva bot start", "background bridge (detached)"},
+		row{"terva bot stop", "stop the background bridge"},
+		row{"terva bot logs [-f]", "tail the background bridge log"},
+		row{"terva bot status", "config + running state"},
+		row{"terva bot reset", "forget saved credentials"},
+		row{"terva bot ... --connector NAME", "pick the chat service (default: telegram)"},
+		row{"terva bot link <connector.json>", "install an external connector by symlink"},
+		row{"--connector-manifest PATH", "load an external connector for this run only (dev)"},
+		row{"terva telegram-bot / terva tg ...", "aliases for bot --connector=telegram"},
 	)
 	section("provider and model flags",
-		row{"--provider", "provider to use (anthropic|openai|openai-codex|kimi|deepseek|google|ollama)"},
+		row{"--provider", "provider to use (anthropic|openai|openai-codex|kimi|deepseek|google|ollama|openai-compatible)"},
 		row{"--model ID", "model id (see --list-models)"},
 		row{"--api-key KEY", "api key for this run (env / auth.json fallback)"},
 		row{"--base-url URL", "override provider api base url"},
@@ -365,13 +426,14 @@ func PrintHelp(version string) {
 	section("prompt and session flags",
 		row{"--system-prompt TEXT", "replace the default system prompt"},
 		row{"--append-system-prompt TEXT", "append to the system prompt (repeatable)"},
+		row{"--context-file PATH", "inject a file's contents into the system prompt (repeatable)"},
 		row{"-c, --continue", "continue the most recent session for this cwd"},
 		row{"-r, --resume", "pick a session to resume"},
 		row{"--session PATH", "resume a specific session file"},
 		row{"--no-session", "do not read or write a session file"},
 	)
 	section("workspace, tools, skills",
-		row{"--cwd PATH", "treat PATH as the working directory"},
+		row{"--cwd PATH", "treat PATH (an existing directory) as the working directory"},
 		row{"--no-tools", "disable all tools"},
 		row{"--tools csv", "only enable the listed tools"},
 		row{"--no-yolo", "ask before running every tool call"},

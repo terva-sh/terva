@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/tui"
 )
 
 // spinner drives the busy animation shown in the status bar while a

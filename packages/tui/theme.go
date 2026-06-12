@@ -6,7 +6,7 @@ package tui
 import "strings"
 
 // TerminalColor describes a terminal colour in one of the colour
-// spaces terminals commonly support. Most of zot's theme still uses
+// spaces terminals commonly support. Most of terva's theme still uses
 // xterm-256 indexes, but user-bubble backgrounds can also use ANSI
 // theme slots (for example SGR 100 / bright-black background) so they
 // match the user's terminal theme rather than the fixed 256-colour
@@ -33,7 +33,7 @@ func ColorRGB(r, g, b int) TerminalColor {
 	return TerminalColor{Mode: terminalColorRGB, R: r, G: g, B: b}
 }
 
-// ANSI 256-color palette used by zot. Defined as numeric codes so we
+// ANSI 256-color palette used by terva. Defined as numeric codes so we
 // can swap themes without changing any render code.
 type Theme struct {
 	FG           int
@@ -43,7 +43,7 @@ type Theme struct {
 	User         int            // label color for the user role
 	UserBubbleBG TerminalColor  // background tint behind user message rows
 	UserBubbleFG int            // foreground colour for user message rows
-	Assistant    int            // label color for the zot role
+	Assistant    int            // label color for the terva role
 	Tool         int
 	ToolOut      int
 	Error        int
@@ -153,7 +153,7 @@ var Dark = Theme{
 	User:              180,                  // warm tan (unused now that the speaker label is gone, kept for skin compat)
 	UserBubbleBG:      ColorRGB(66, 69, 75), // #42454B
 	UserBubbleFG:      248,                  // slightly lighter grey for readability on #42454B
-	Assistant:         117,                  // bright cyan — the zot label color
+	Assistant:         117,                  // bright cyan — the terva label color
 	Tool:              114,                  // green
 	ToolOut:           245,
 	Error:             203,
@@ -212,7 +212,7 @@ func (t Theme) BG(c TerminalColor, s string) string {
 
 // AccentBar returns a 2-cell-wide leader: a coloured half-block
 // glyph followed by a plain space gutter. Used as the speaker-label
-// prefix in the chat ("▌ you", "▌ zot") and as the editor prompt so
+// prefix in the chat ("▌ you", "▌ terva") and as the editor prompt so
 // the bar reads consistently across the UI.
 func (t Theme) AccentBar(c int) string {
 	return t.FG256(c, "▌ ")
@@ -231,7 +231,7 @@ func (t Theme) SelectionStyle() string {
 }
 
 // BackgroundStyle returns the SGR prefix for the optional full-row
-// TUI background. Empty means zot should leave the terminal's
+// TUI background. Empty means terva should leave the terminal's
 // configured background untouched.
 func (t Theme) BackgroundStyle() string {
 	if t.Background == nil {
@@ -272,13 +272,13 @@ func (t Theme) UserBubble(s string, width int) string {
 
 // UserBubbleRow renders one user-bubble row prefixed with a coloured
 // half-block accent bar ("▌ ") so every line of the bubble has the
-// zot-blue gutter at the very left. The bar lives outside the bubble
+// terva-blue gutter at the very left. The bar lives outside the bubble
 // tint (chat bg) so the bubble itself sits inside it. Width is the
 // outer width including the bar; the bubble content is padded to
 // width-2 (the bar + its trailing space).
 func (t Theme) UserBubbleRow(content string, width int) string {
 	// Bar plus a single space gutter, in the assistant accent colour
-	// so it matches the tool-box / app accent and reads as zot's voice
+	// so it matches the tool-box / app accent and reads as terva's voice
 	// marker. Two cells wide.
 	bar := t.FG256(t.Assistant, "▌ ")
 	bubbleW := width - 2

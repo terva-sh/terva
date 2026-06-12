@@ -15,13 +15,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
 )
 
 const (
 	maxBashLines = 2000
 	maxBashBytes = 50 * 1024
+	// defaultBashTimeout bounds a command when the model omits an explicit
+	// timeout. Without it a runaway command (a hung server, an infinite
+	// loop, a command awaiting stdin) would block the agent forever.
+	defaultBashTimeout = 120 * time.Second
 )
 
 // BashTool runs a shell command in the agent's cwd.
@@ -35,7 +39,7 @@ type bashArgs struct {
 	Timeout int    `json:"timeout,omitempty"`
 }
 
-const bashSchema = `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer"}},"required":["command"]}`
+const bashSchema = `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","description":"Maximum run time in seconds before the command is killed. Defaults to 120 if omitted."}},"required":["command"]}`
 
 func (t *BashTool) Name() string            { return "bash" }
 func (t *BashTool) Description() string     { return "Run a shell command. stdout+stderr merged." }
@@ -57,12 +61,15 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		cwd, _ = os.Getwd()
 	}
 
-	runCtx := ctx
-	var cancel context.CancelFunc
+	// Apply an explicit timeout, or a sane default when the model omits
+	// one. timeoutDur is recorded so the result can tell the model how
+	// long it waited before killing a hung command.
+	timeoutDur := defaultBashTimeout
 	if a.Timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, time.Duration(a.Timeout)*time.Second)
-		defer cancel()
+		timeoutDur = time.Duration(a.Timeout) * time.Second
 	}
+	runCtx, cancel := context.WithTimeout(ctx, timeoutDur)
+	defer cancel()
 
 	start := time.Now()
 	cmd := newShellCmd(runCtx, a.Command)
@@ -79,8 +86,13 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		return core.ToolResult{}, fmt.Errorf("start: %w", err)
 	}
 
-	// Writer to both the buffer (trimmed) and progress callback.
+	// captured holds the in-memory result we show inline (capped at
+	// maxBashBytes). spill tees the *complete* stream to a temp file so
+	// the "full output" link is genuinely full, not a re-labeled copy of
+	// the capped buffer. totalBytes tracks the real, un-capped size.
 	captured := &bytes.Buffer{}
+	spill := newSpillWriter()
+	var totalBytes int64
 	done := make(chan struct{})
 
 	// Watch for context cancellation and kill the entire process
@@ -103,6 +115,8 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			n, err := pr.Read(buf)
 			if n > 0 {
 				chunk := buf[:n]
+				totalBytes += int64(n)
+				spill.Write(chunk)
 				if captured.Len() < maxBashBytes {
 					room := maxBashBytes - captured.Len()
 					if n > room {
@@ -124,9 +138,10 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	waitErr := cmd.Wait()
 	pw.Close()
 	<-done
+	spill.Close()
 
 	output := captured.String()
-	truncBytes := captured.Len() >= maxBashBytes
+	truncBytes := totalBytes > int64(maxBashBytes)
 	lines := strings.Split(output, "\n")
 	truncLines := false
 	if len(lines) > maxBashLines {
@@ -145,6 +160,13 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	}
 
 	elapsed := time.Since(start)
+
+	// Distinguish a timeout from an external cancel. runCtx carries the
+	// deadline; if it fired while the parent ctx is still live, we killed
+	// the command for running too long. Surfacing this (rather than a bare
+	// "[exit -1]") lets the model react — raise the timeout, background the
+	// command, or split the work.
+	timedOut := runCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
 
 	// Terminal-log style: echo the command on the first line with
 	// a shell-prompt prefix, a blank line, the captured output, and
@@ -172,17 +194,26 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	} else {
 		fmt.Fprintf(&sb, "[exit %d]", exitCode)
 	}
+	if timedOut {
+		fmt.Fprintf(&sb, " (timed out after %s)", humanDuration(timeoutDur))
+	}
 
+	// Surface the genuinely-full output only when we actually dropped
+	// bytes or lines from the inline view. The spill file was tee'd from
+	// the complete stream, so it is the real full output, not a relabeled
+	// copy of the capped buffer. When nothing was dropped, discard it.
 	var fullPath string
 	if truncBytes || truncLines {
-		fullPath = writeFullOutput(output)
+		fullPath = spill.Path()
 		if fullPath != "" {
 			fmt.Fprintf(&sb, " (full output: %s)", fullPath)
 		}
+	} else {
+		spill.Discard()
 	}
 	fmt.Fprintf(&sb, "  Took %s", humanDuration(elapsed))
 
-	isErr := exitCode != 0 || ctx.Err() != nil
+	isErr := exitCode != 0 || ctx.Err() != nil || timedOut
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: sb.String()}},
 		IsError: isErr,
@@ -191,6 +222,7 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			"full_output_path": fullPath,
 			"lines_truncated":  truncLines,
 			"bytes_truncated":  truncBytes,
+			"timed_out":        timedOut,
 			"duration_ms":      elapsed.Milliseconds(),
 		},
 	}, nil
@@ -218,14 +250,67 @@ func humanDuration(d time.Duration) string {
 	}
 }
 
-func writeFullOutput(s string) string {
-	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	name := filepath.Join(os.TempDir(), "zot-bash-"+hex.EncodeToString(b)+".log")
-	if err := os.WriteFile(name, []byte(s), 0o600); err != nil {
+// spillWriter tees the command's complete stdout+stderr stream to a temp
+// file as it arrives. Unlike the old writeFullOutput, which wrote the
+// already-capped in-memory buffer to a file labeled "full output" (a lie
+// for byte-truncated runs), this captures the genuine, un-capped output
+// without holding it all in memory. The file is created lazily on the
+// first byte so commands with no output never touch the disk, and
+// Discard removes it when the inline view was complete (nothing dropped).
+type spillWriter struct {
+	f    *os.File
+	path string
+	err  error
+}
+
+func newSpillWriter() *spillWriter { return &spillWriter{} }
+
+// Write appends a chunk, creating the backing file on first use. Errors
+// are latched and silently swallow further writes — a failed spill must
+// not break command execution; the inline (capped) output still stands.
+func (w *spillWriter) Write(p []byte) {
+	if w.err != nil {
+		return
+	}
+	if w.f == nil {
+		b := make([]byte, 6)
+		_, _ = rand.Read(b)
+		name := filepath.Join(os.TempDir(), "terva-bash-"+hex.EncodeToString(b)+".log")
+		f, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			w.err = err
+			return
+		}
+		w.f, w.path = f, name
+	}
+	if _, err := w.f.Write(p); err != nil {
+		w.err = err
+	}
+}
+
+// Close flushes and closes the backing file (if any).
+func (w *spillWriter) Close() {
+	if w.f != nil {
+		_ = w.f.Close()
+	}
+}
+
+// Path returns the spill file path, or "" if nothing was written or the
+// spill failed.
+func (w *spillWriter) Path() string {
+	if w.err != nil {
 		return ""
 	}
-	return name
+	return w.path
+}
+
+// Discard removes the spill file. Used when the inline output was
+// complete, so there is no "full output" worth keeping.
+func (w *spillWriter) Discard() {
+	if w.path != "" {
+		_ = os.Remove(w.path)
+		w.path = ""
+	}
 }
 
 func newShellCmd(ctx context.Context, command string) *exec.Cmd {

@@ -8,10 +8,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/provider/auth"
+	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/provider/auth"
 )
 
 // Config is the persisted user configuration.
@@ -21,7 +22,7 @@ type Config struct {
 	Reasoning string `json:"reasoning"`
 	Theme     string `json:"theme"`
 
-	// InlineImagesEnabled controls whether zot draws screenshots inline
+	// InlineImagesEnabled controls whether terva draws screenshots inline
 	// when the terminal supports an image protocol. nil/missing means
 	// auto (enabled when supported); false disables; true forces the
 	// detected protocol when available.
@@ -32,58 +33,84 @@ type Config struct {
 	// default; nil/missing means disabled. Toggle from /settings.
 	AutoSwarmEnabled *bool `json:"auto_swarm_enabled,omitempty"`
 
+	// RecursiveFileSuggest controls the @-mention file picker. When true
+	// the picker fuzzy-searches the whole project tree below the working
+	// directory; nil/missing/false keeps the default directory-by-
+	// directory browse. Toggle from /settings.
+	RecursiveFileSuggest *bool `json:"recursive_file_suggest,omitempty"`
+
+	// RespectGitignore controls whether the @-mention file picker hides
+	// files and directories matched by the project's root .gitignore (in
+	// both flat and recursive modes). nil/missing means the default,
+	// which is on; false shows ignored entries. Toggle from /settings.
+	RespectGitignore *bool `json:"respect_gitignore,omitempty"`
+
 	// LastChangelogShown is the version whose release-notes
 	// dialog the user has already seen. When the running binary's
 	// version differs, the next interactive run shows the
 	// changelog (fetched from the GitHub release page) once and
 	// updates this field. Empty means "never shown".
 	LastChangelogShown string `json:"last_changelog_shown,omitempty"`
+
+	// ContextFiles are startup context files injected into the system
+	// prompt, in order. This is the user-scope default; a project's
+	// .terva/config.json overrides it (nearest-wins). Paths may be
+	// relative (resolved against the config file's directory) or
+	// absolute. See ResolveConfig / readStartupContextFiles.
+	ContextFiles []string `json:"context_files,omitempty"`
 }
 
-// ZotHome returns $ZOT_HOME or the OS-default data dir.
+// ProjectConfig is the subset of configuration a project (.terva/config.json)
+// is permitted to set. It is intentionally NOT the full Config: the type is
+// the guard, so a cloned repo can only influence what this struct exposes —
+// it cannot redirect base_url, swap providers, change the user's theme, etc.
+// Widen this deliberately (see docs/plans/startup-context-files.md).
+type ProjectConfig struct {
+	// ContextFiles are startup context files to inject, in order. The
+	// project layer is UNTRUSTED for path targets: a cloned repo's
+	// .terva/config.json could otherwise point at ~/.ssh/id_ed25519 and
+	// exfiltrate it into the system prompt. So entries here must be
+	// project-relative and stay within the project root (the directory
+	// containing .terva/). Absolute paths and root-escapes (../) are
+	// rejected at load time (see containedContextFiles); the surviving
+	// entries are resolved to absolute against the project root and only
+	// absolute paths are retained. The trusted user layer (Config) has no
+	// such restriction.
+	ContextFiles []string `json:"context_files,omitempty"`
+}
+
+// Project-local config lives in the same per-project directory terva
+// already uses for skills and extensions. Both spellings are read
+// (".terva" preferred — envcompat.ProjectDirNames); nothing writes
+// these directories, users author them.
+
+// TervaHome returns the user data dir: $TERVA_HOME / $TERVA_HOME or the
+// OS default, with rename-aware fallback (envcompat.Home is the one
+// resolver — docs/plans/rename-terva.md, phase 1).
 //
-// All zot state (config.json, auth.json, sessions/, logs/) lives under
+// All terva state (config.json, auth.json, sessions/, logs/) lives under
 // this directory.
-func ZotHome() string {
-	if v := os.Getenv("ZOT_HOME"); v != "" {
-		return v
-	}
-	switch runtime.GOOS {
-	case "darwin":
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, "Library", "Application Support", "zot")
-		}
-	case "windows":
-		if v := os.Getenv("LOCALAPPDATA"); v != "" {
-			return filepath.Join(v, "zot")
-		}
-	}
-	if v := os.Getenv("XDG_STATE_HOME"); v != "" {
-		return filepath.Join(v, "zot")
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".local", "state", "zot")
-	}
-	return ".zot"
+func TervaHome() string {
+	return envcompat.Home()
 }
 
 // ConfigPath returns the path to config.json.
-func ConfigPath() string { return filepath.Join(ZotHome(), "config.json") }
+func ConfigPath() string { return filepath.Join(TervaHome(), "config.json") }
 
 // AuthPath returns the path to auth.json.
-func AuthPath() string { return filepath.Join(ZotHome(), "auth.json") }
+func AuthPath() string { return filepath.Join(TervaHome(), "auth.json") }
 
 // KimiCLIFallbackDisabledPath returns a sentinel that disables falling
-// back to the official Kimi Code CLI token after `zot /logout kimi`.
+// back to the official Kimi Code CLI token after `terva /logout kimi`.
 func KimiCLIFallbackDisabledPath() string {
-	return filepath.Join(ZotHome(), "kimi-cli-fallback-disabled")
+	return filepath.Join(TervaHome(), "kimi-cli-fallback-disabled")
 }
 
 // SessionsPath returns the directory holding session files.
-func SessionsPath() string { return filepath.Join(ZotHome(), "sessions") }
+func SessionsPath() string { return filepath.Join(TervaHome(), "sessions") }
 
 // LogsPath returns the directory holding log files.
-func LogsPath() string { return filepath.Join(ZotHome(), "logs") }
+func LogsPath() string { return filepath.Join(TervaHome(), "logs") }
 
 // LoadConfig reads the config file, returning defaults if missing.
 func LoadConfig() (Config, error) {
@@ -103,7 +130,7 @@ func LoadConfig() (Config, error) {
 
 // SaveConfig writes the config file, creating parent dirs.
 func SaveConfig(c Config) error {
-	if err := os.MkdirAll(ZotHome(), 0o755); err != nil {
+	if err := os.MkdirAll(TervaHome(), 0o755); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")
@@ -111,6 +138,203 @@ func SaveConfig(c Config) error {
 		return err
 	}
 	return os.WriteFile(ConfigPath(), b, 0o644)
+}
+
+// absolutizeContextFiles resolves each non-absolute entry against baseDir and
+// cleans the result, so the returned slice holds absolute paths only. Empty
+// entries are dropped. Returns nil for an empty input so callers can treat
+// "nil" as "this layer set nothing".
+func absolutizeContextFiles(baseDir string, files []string) []string {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		if f == "" {
+			continue
+		}
+		if !filepath.IsAbs(f) {
+			f = filepath.Join(baseDir, f)
+		}
+		out = append(out, filepath.Clean(f))
+	}
+	return out
+}
+
+// containedContextFiles is the project-layer (UNTRUSTED) counterpart to
+// absolutizeContextFiles. A project's .terva/config.json may come from a cloned
+// repo, so its context_files paths must not be allowed to point outside the
+// project root — otherwise a malicious repo could ship
+// {"context_files":["/home/user/.ssh/id_ed25519"]} (or "../../etc/passwd")
+// and exfiltrate arbitrary local files into the system prompt on launch.
+//
+// root is the project root (the directory containing .terva/). For each entry we:
+//   - drop empties;
+//   - reject absolute paths (they escape the repo-relative contract);
+//   - resolve the relative path against root and reject anything that, after
+//     filepath.Clean, escapes root via .. — including symlinked components that
+//     resolve outside root, which is cheap to check with filepath.EvalSymlinks.
+//
+// Rejected entries are skipped with a clear stderr warning naming the offending
+// path; launch is NOT aborted (degrade gracefully, matching how a malformed
+// project config is already tolerated in ResolveConfig). Surviving entries are
+// returned as absolute, cleaned paths. Returns nil for empty input.
+func containedContextFiles(root string, files []string) []string {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		if f == "" {
+			continue
+		}
+		if filepath.IsAbs(f) {
+			fmt.Fprintf(os.Stderr, "terva: ignoring project-config context file %q: absolute paths are not allowed; project-config context files must stay within the project\n", f)
+			continue
+		}
+		abs := filepath.Clean(filepath.Join(root, f))
+		if !withinRoot(root, abs) {
+			fmt.Fprintf(os.Stderr, "terva: ignoring project-config context file %q: resolves outside the project root %q; project-config context files must stay within the project\n", f, root)
+			continue
+		}
+		out = append(out, abs)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// withinRoot reports whether abs (already absolute + cleaned) is the same as,
+// or nested under, root. It guards against ../ escapes lexically and against
+// symlinked components that resolve outside root by also checking the
+// real (symlink-evaluated) path when the target — or its nearest existing
+// ancestor — can be resolved. A path that doesn't yet exist still passes the
+// lexical check; the loader (readStartupContextFiles) reports a clean
+// not-found error later.
+func withinRoot(root, abs string) bool {
+	if !lexicallyWithin(root, abs) {
+		return false
+	}
+	// Evaluate symlinks on the deepest existing ancestor of abs (abs itself
+	// may not exist yet) and on root, then re-check containment so a symlink
+	// pointing out of the tree can't sneak through.
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return true // can't resolve root; rely on the lexical check
+	}
+	probe := abs
+	for {
+		if real, err := filepath.EvalSymlinks(probe); err == nil {
+			return lexicallyWithin(realRoot, real)
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return true // reached the filesystem root without resolving; trust lexical
+		}
+		probe = parent
+	}
+}
+
+// lexicallyWithin reports whether abs is root or a descendant of root, purely
+// by path arithmetic (no filesystem access).
+func lexicallyWithin(root, abs string) bool {
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// LoadProjectConfig walks from cwd toward the filesystem root and returns the
+// FIRST .terva/config.json found (nearest-wins, stop on first) — so a repo with
+// its own config uses it alone, and a repo without one inherits the nearest
+// ancestor's. This differs deliberately from readAgentsContext, which cascades
+// (collects an AGENTS.md at every level): config fields are scalars where
+// merging up the tree is confusing, whereas AGENTS.md is additive prose.
+//
+// ContextFiles in the returned config are resolved to absolute paths against
+// the project root (the directory that contains .terva/). Because that config
+// may come from a cloned repo, ContextFiles entries are containment-checked:
+// absolute paths and root-escapes are dropped with a stderr warning (see
+// containedContextFiles), so the project layer can never read files outside
+// its own tree. Returns (nil, nil) when no project config exists anywhere up
+// the tree.
+func LoadProjectConfig(cwd string) (*ProjectConfig, error) {
+	if cwd == "" {
+		return nil, nil
+	}
+	dir, err := filepath.Abs(cwd)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		// Both project-dir spellings are checked at each level,
+		// new-name first, before moving up — a directory's own
+		// .terva beats its own .terva beats any ancestor's.
+		for _, dirName := range envcompat.ProjectDirNames() {
+			path := filepath.Join(dir, dirName, "config.json")
+			b, err := os.ReadFile(path)
+			if err == nil {
+				var pc ProjectConfig
+				if err := json.Unmarshal(b, &pc); err != nil {
+					return nil, fmt.Errorf("parse %s: %w", path, err)
+				}
+				// Paths are repo-relative AND untrusted: resolve against dir
+				// (the project root that contains the config dir), not against
+				// the config dir itself, and reject absolute paths /
+				// root-escapes so a cloned repo cannot exfiltrate files
+				// outside its own tree.
+				pc.ContextFiles = containedContextFiles(dir, pc.ContextFiles)
+				return &pc, nil
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				// Exists but unreadable (perms, etc.) — surface it; it's an
+				// explicit, authored file the user expects to take effect.
+				return nil, fmt.Errorf("read %s: %w", path, err)
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // hit the filesystem root
+		}
+		dir = parent
+	}
+	return nil, nil
+}
+
+// EffectiveConfig is the read-time view of configuration. Reads consult the
+// project layer (nearest .terva/config.json) overlaid on the user layer
+// ($TERVA_HOME/config.json); the embedded Config is that merged view.
+//
+// Writes must target the User layer only — never the merged view — so a
+// project value can never be persisted into the user's config.json. v1
+// overlays only ContextFiles, so every other embedded field equals User.
+type EffectiveConfig struct {
+	Config        // merged read view (ContextFiles resolved to absolute)
+	User   Config // pristine, writable user layer
+}
+
+// ResolveConfig builds the EffectiveConfig for cwd: the user config overlaid
+// with the allowlisted fields from the nearest .terva/config.json. ContextFiles
+// resolve nearest-wins (the project's list if it set one, else the user's) and
+// are held as absolute paths.
+//
+// A malformed project config is surfaced on stderr and then ignored, so a
+// broken .terva/config.json can never strand the user with no way to launch.
+func ResolveConfig(cwd string) EffectiveConfig {
+	user, _ := LoadConfig()
+	eff := EffectiveConfig{Config: user, User: user}
+	pc, err := LoadProjectConfig(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "terva: ignoring project config: %v\n", err)
+	}
+	if pc != nil && pc.ContextFiles != nil {
+		eff.Config.ContextFiles = pc.ContextFiles // already absolute
+	} else {
+		eff.Config.ContextFiles = absolutizeContextFiles(TervaHome(), user.ContextFiles)
+	}
+	return eff
 }
 
 // AuthStoreFor returns the auth.Store backed by AuthPath().

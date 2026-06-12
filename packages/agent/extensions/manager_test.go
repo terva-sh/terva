@@ -3,13 +3,16 @@ package extensions
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
 
-	"github.com/patriceckhart/zot/packages/agent/extproto"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"terva.sh/terva/packages/agent/extproto"
 	"testing"
 	"time"
 )
@@ -259,5 +262,205 @@ done
 	}
 	if hooks.panelExts[0] != "panel-mock" {
 		t.Errorf("ext name: want %q, got %q", "panel-mock", hooks.panelExts[0])
+	}
+}
+
+// TestHandshakeTimeoutSkipsExtension verifies that an extension binary
+// that opens but never prints a hello frame (a daemon, a REPL, a
+// typo'd path) does not hang terva startup. Discover must return inside
+// helloTimeout (plus slack), report the failure as an error, and leave
+// the manager usable with no extension registered.
+func TestHandshakeTimeoutSkipsExtension(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stub extension uses /bin/sh; skip on windows")
+	}
+
+	tmp := t.TempDir()
+	extDir := filepath.Join(tmp, "extensions", "silent")
+	if err := os.MkdirAll(extDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Never prints hello. Blocks on stdin so the process stays alive
+	// indefinitely until terva kills it on handshake timeout.
+	script := "#!/bin/sh\ncat >/dev/null\n"
+	if err := os.WriteFile(filepath.Join(extDir, "run.sh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mfb, _ := json.Marshal(map[string]any{"name": "silent", "exec": "./run.sh"})
+	if err := os.WriteFile(filepath.Join(extDir, "extension.json"), mfb, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := New(tmp, "", "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
+	defer mgr.Stop(time.Second)
+
+	start := time.Now()
+	errs := mgr.Discover(context.Background())
+	elapsed := time.Since(start)
+
+	// Must return promptly after the handshake timeout, not hang.
+	if elapsed > helloTimeout+3*time.Second {
+		t.Fatalf("Discover took %s; expected to return near helloTimeout (%s)", elapsed, helloTimeout)
+	}
+	// And it must actually have waited for the timeout, not bailed early
+	// for some other reason.
+	if elapsed < helloTimeout {
+		t.Fatalf("Discover returned in %s, before helloTimeout (%s)", elapsed, helloTimeout)
+	}
+	// The failure must be reported.
+	if len(errs) == 0 {
+		t.Fatal("Discover reported no error for a never-handshaking extension")
+	}
+	var sawHandshakeErr bool
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "hello") {
+			sawHandshakeErr = true
+		}
+	}
+	if !sawHandshakeErr {
+		t.Fatalf("expected a hello/handshake error, got %v", errs)
+	}
+	// The extension must not be registered.
+	if len(mgr.All()) != 0 {
+		t.Fatalf("silent extension was registered despite failing handshake: %v", mgr.All())
+	}
+}
+
+// TestConcurrentLargeFramesNoInterleave fires many concurrent
+// InvokeTool calls, each carrying a payload well over PIPE_BUF (4KiB),
+// at a single extension. The stub parses every tool_call line as JSON
+// and echoes the payload's length back; if any two frames had
+// interleaved on the shared stdin pipe, the stub's per-line JSON parse
+// would fail or report the wrong length. Run under -race to also catch
+// unsynchronised writes to the pipe.
+func TestConcurrentLargeFramesNoInterleave(t *testing.T) {
+	// The stub (testdata/cmd/echostub) registers `bigtool` and replies
+	// to each tool_call with the byte length of args.payload. It's a
+	// compiled Go binary rather than a shell+python stub on purpose:
+	// python stdin read-ahead / per-spawn timing occasionally left a
+	// call unanswered (a 60s timeout that looked like a host bug but
+	// wasn't), so a missing reply here now means a genuine host-side
+	// frame corruption — exactly what this test guards against.
+	stub := buildEchoStub(t)
+
+	tmp := t.TempDir()
+	extDir := filepath.Join(tmp, "extensions", "echo")
+	if err := os.MkdirAll(extDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mfb, _ := json.Marshal(map[string]any{"name": "echo", "exec": stub})
+	if err := os.WriteFile(filepath.Join(extDir, "extension.json"), mfb, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := New(tmp, "", "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
+	if errs := mgr.Discover(context.Background()); len(errs) > 0 {
+		t.Fatalf("discover errors: %v", errs)
+	}
+	defer mgr.Stop(2 * time.Second)
+	mgr.WaitForReady(3 * time.Second)
+
+	if !mgr.HasTool("bigtool") {
+		t.Fatal("bigtool not registered")
+	}
+
+	// Fire many concurrent calls, each with a distinct large payload so
+	// a mixed-up reply (wrong length) is detectable. Payloads vary in
+	// size and all exceed PIPE_BUF (4KiB) — interleaved writes would
+	// corrupt a frame at n=2, so 16 concurrent writers is ample
+	// detection headroom. The stub answers calls sequentially (one
+	// python3 spawn per line), so keep n modest and the per-call
+	// deadline generous: under a saturated `go test -race ./...` sweep
+	// those spawns slow down, and a tight deadline would flake without
+	// any frame actually corrupting.
+	const n = 16
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errsCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			size := 5000 + i*200 // 5000..8000 bytes, all > 4KiB
+			payload := strings.Repeat("x", size)
+			args, _ := json.Marshal(map[string]string{"payload": payload})
+			res, err := mgr.InvokeTool(ctx, "bigtool", json.RawMessage(args), 60*time.Second)
+			if err != nil {
+				errsCh <- fmt.Errorf("call %d: %w", i, err)
+				return
+			}
+			if res.IsError {
+				errsCh <- fmt.Errorf("call %d: stub reported error: %s", i, toolText(res))
+				return
+			}
+			got := strings.TrimSpace(toolText(res))
+			want := strconv.Itoa(size)
+			if got != want {
+				errsCh <- fmt.Errorf("call %d: payload length %q, want %q (frame corruption)", i, got, want)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errsCh)
+	for e := range errsCh {
+		t.Error(e)
+	}
+}
+
+// toolText concatenates the text blocks of a tool result.
+func toolText(r extproto.ToolResultFromExt) string {
+	var b strings.Builder
+	for _, c := range r.Content {
+		if c.Type == "text" {
+			b.WriteString(c.Text)
+		}
+	}
+	return b.String()
+}
+
+// buildEchoStub compiles testdata/cmd/echostub into a temp binary and
+// returns its path, mirroring swarm's buildStubChild. A compiled Go
+// stub gives the frame-integrity test a deterministic extension with no
+// interpreter/stdin-buffering variance.
+func buildEchoStub(t *testing.T) string {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "echostub")
+	if runtime.GOOS == "windows" {
+		out += ".exe"
+	}
+	cmd := exec.Command("go", "build", "-o", out, "./testdata/cmd/echostub")
+	// Pass the test runner's env so `go build` finds HOME/PATH/GOCACHE;
+	// disable CGO for a hermetic build across machines.
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build echostub: %v\n%s", err, b)
+	}
+	return out
+}
+
+// TestNewCorrelationIDUniqueUnderConcurrency pins the fix for the
+// wall-clock-microsecond collision: many IDs minted concurrently (the
+// shape of a concurrent InvokeTool burst) must all be distinct, or the
+// pending-map registration of one request clobbers another's reply
+// channel and a caller hangs.
+func TestNewCorrelationIDUniqueUnderConcurrency(t *testing.T) {
+	const n = 4000
+	ids := make([]string, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ids[i] = newCorrelationID()
+		}(i)
+	}
+	wg.Wait()
+	seen := make(map[string]struct{}, n)
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			t.Fatalf("duplicate correlation id %q minted concurrently", id)
+		}
+		seen[id] = struct{}{}
 	}
 }

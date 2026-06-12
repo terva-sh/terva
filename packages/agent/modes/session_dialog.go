@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/tui"
 )
 
 // sessionDialog is the inline picker shown when the user runs /sessions.

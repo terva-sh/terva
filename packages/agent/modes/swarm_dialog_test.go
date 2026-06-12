@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/agent/swarm"
-	"github.com/patriceckhart/zot/packages/provider"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/tui"
 )
 
 // staticSnapshots returns a deterministic snapshot slice for the

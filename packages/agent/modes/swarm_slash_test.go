@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/swarm"
 )
 
 // newInteractiveForSwarmTest builds the minimal Interactive scaffolding

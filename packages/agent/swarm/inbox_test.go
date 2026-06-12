@@ -22,7 +22,7 @@ func shortSocketDir(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("swarm inbox transport uses Unix-domain sockets; Windows support will use a named-pipe backend")
 	}
-	dir, err := os.MkdirTemp("/tmp", "zot-in-")
+	dir, err := os.MkdirTemp("/tmp", "terva-in-")
 	if err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestIsNoListenerErrMatchesECONNREFUSED(t *testing.T) {
 
 // TestInboxNewSupervisorPreemptsOld documents that only one
 // supervisor connection at a time is honoured. The swarm design
-// assumes a single parent zot owns each agent; if a second
+// assumes a single parent terva owns each agent; if a second
 // parent dials, the listener boots the first one. The first
 // supervisor's already-delivered messages still land in the
 // channel — what we're guarding against is silent dual ownership,

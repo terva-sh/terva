@@ -1,4 +1,4 @@
-// Package sdk is the public Go SDK for embedding the zot agent
+// Package sdk is the public Go SDK for embedding the terva agent
 // runtime in third-party programs. It is the only stable, importable
 // surface the project exposes; everything under internal/ is subject
 // to change without notice.
@@ -19,7 +19,7 @@
 // Runtime per project / cwd. The Cancel call interrupts the active
 // prompt; subsequent prompts work normally.
 //
-// For a non-Go consumer, run `zot rpc` and speak the same JSON
+// For a non-Go consumer, run `terva rpc` and speak the same JSON
 // schema over stdin/stdout. See docs/rpc.md.
 package sdk
 
@@ -29,13 +29,13 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/patriceckhart/zot/packages/agent"
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/agent"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
 )
 
 // Config configures a Runtime. All fields are optional; sensible
-// defaults are read from $ZOT_HOME/config.json, env vars, and the
+// defaults are read from $TERVA_HOME/config.json, env vars, and the
 // resolver chain (the same one the cli uses).
 type Config struct {
 	// Provider is "anthropic" or "openai". Empty = use the user's
@@ -56,6 +56,12 @@ type Config struct {
 	// AppendSystemPrompt is appended to the built-in (or overridden)
 	// system prompt. Useful for project-specific instructions.
 	AppendSystemPrompt []string
+
+	// ContextFiles are startup context files whose contents are injected
+	// into the system prompt, in order (same as the --context-file flag).
+	// Project/user .terva/config.json context_files are loaded too, ahead of
+	// these. Relative paths resolve against CWD.
+	ContextFiles []string
 
 	// Reasoning sets the reasoning effort for models that support it
 	// ("low", "medium", "high"). Empty = no reasoning.
@@ -83,7 +89,7 @@ type Config struct {
 	Lock bool
 }
 
-// Runtime is one zot agent session. Safe for use from one goroutine
+// Runtime is one terva agent session. Safe for use from one goroutine
 // at a time per Runtime; create separate Runtimes for parallel work.
 type Runtime struct {
 	mu       sync.Mutex
@@ -111,6 +117,7 @@ func New(cfg Config) (*Runtime, error) {
 		BaseURL:            cfg.BaseURL,
 		SystemPrompt:       cfg.SystemPrompt,
 		AppendSystemPrompt: cfg.AppendSystemPrompt,
+		ContextFiles:       cfg.ContextFiles,
 		Reasoning:          cfg.Reasoning,
 		MaxSteps:           cfg.MaxSteps,
 		Tools:              cfg.Tools,
@@ -153,11 +160,7 @@ func (r *Runtime) Messages() []Message {
 	src := r.agent.Messages()
 	out := make([]Message, len(src))
 	for i, m := range src {
-		out[i] = Message{
-			Role:    string(m.Role),
-			Content: convertContent(m.Content),
-			Time:    m.Time.Format("2006-01-02T15:04:05Z"),
-		}
+		out[i] = core.MessageToWire(m)
 	}
 	return out
 }
@@ -229,7 +232,7 @@ func (r *Runtime) Prompt(ctx context.Context, text string, images []Image) (<-ch
 			r.mu.Unlock()
 		}()
 		err := r.agent.Prompt(subCtx, text, imgBlocks, func(ev core.AgentEvent) {
-			out <- toEvent(ev)
+			out <- core.EventToWire(ev)
 		})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			out <- Event{Type: "error", Error: err.Error()}

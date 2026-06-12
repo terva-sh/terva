@@ -9,14 +9,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/agent/modes"
-	"github.com/patriceckhart/zot/packages/agent/swarm"
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/provider"
 )
 
 // runSwarmAgentMode is the daemon-mode entry point used by every
-// swarm-spawned zot subprocess. It's intentionally close in shape to
+// swarm-spawned terva subprocess. It's intentionally close in shape to
 // runJSONMode but with two key differences:
 //
 //   - Lifetime: the process stays alive across many user turns. The
@@ -24,7 +25,7 @@ import (
 //     turns arrive through the inbox unix socket at args.SwarmAgent.
 //
 //   - Output: every emitted JSON line is also mirrored verbatim into
-//     events.jsonl (see ZOT_SWARM_EVENT_LOG) so a separate zot
+//     events.jsonl (see TERVA_SWARM_EVENT_LOG) so a separate terva
 //     process can /swarm open this agent and replay its full history
 //     even after the parent that spawned us is long gone.
 //
@@ -37,6 +38,7 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 		return fmt.Errorf("--swarm-agent requires a socket path")
 	}
 
+	confirmGate := headlessConfirmGate(args, "swarm-agent")
 	r, err := Resolve(args, true)
 	if err != nil {
 		return err
@@ -45,7 +47,7 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate)
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 
@@ -62,11 +64,11 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 
 	// Event log is owned by the supervisor's runner via stdout, but
 	// the daemon also writes a redundant copy here when the runner's
-	// pipe is closed (e.g. parent zot exited but the agent is still
+	// pipe is closed (e.g. parent terva exited but the agent is still
 	// running headless). The env var is set by the runner; if it's
 	// empty we silently skip the second mirror.
 	var logMirror *swarm.EventLog
-	if path := os.Getenv("ZOT_SWARM_EVENT_LOG"); path != "" {
+	if path := envcompat.Get("SWARM_EVENT_LOG"); path != "" {
 		logMirror, _ = swarm.OpenEventLog(path)
 	}
 	if logMirror != nil {
@@ -101,7 +103,7 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 			// agent; if a user really wants to interrupt and start
 			// another, they should send "cancel" first.
 			mu.Unlock()
-			em.emit("error", map[string]any{"message": "agent busy; send 'cancel' first"})
+			em.emit("error", map[string]any{"error": "agent busy; send 'cancel' first"})
 			return
 		}
 		busyTurn = true
@@ -219,7 +221,7 @@ func (e *swarmEmitter) emit(typ string, data map[string]any) {
 		if err == nil {
 			line = append(line, '\n')
 			if _, werr := e.w.Write(line); werr != nil {
-				// Supervisor's stdout pipe is gone (parent zot exited
+				// Supervisor's stdout pipe is gone (parent terva exited
 				// but we kept running). Switch to mirror-only mode so
 				// subsequent events still get persisted; also retro-
 				// actively log this very event to the mirror so it

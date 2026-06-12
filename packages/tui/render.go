@@ -31,7 +31,7 @@ type Renderer struct {
 	// prevHadImage tracks whether the previous frame contained an
 	// inline-image escape so we can force a full clear+repaint whenever
 	// the image set changes. Only matters when inline images are
-	// enabled via ZOT_INLINE_IMAGES; defaults to false.
+	// enabled via TERVA_INLINE_IMAGES; defaults to false.
 	prevHadImage bool
 
 	// Main-screen flow renderer state. logLines is the full logical
@@ -62,9 +62,9 @@ type Renderer struct {
 	// \x1b[3J just drops scrollback rows without moving the
 	// viewport, which is what we actually want.
 	//
-	// The trade-off when keepScrollback is true: stale zot frames
+	// The trade-off when keepScrollback is true: stale terva frames
 	// remain in scrollback above the live view, so scrolling up
-	// in VS Code's terminal shows old (already-superseded) zot
+	// in VS Code's terminal shows old (already-superseded) terva
 	// output. That is strictly less disruptive than the
 	// scrollbar yanking to top on every Ctrl+L, and it is a
 	// limitation specific to VS Code's terminal that we have no
@@ -333,7 +333,7 @@ func (r *Renderer) Draw(lines []string, cursorRow, cursorCol int) {
 	// When inline images are in play we always full-repaint (clear
 	// screen first, then rewrite every row). Terminals manage image
 	// pixels in a layer we cannot diff against, so the per-line cache
-	// is unreliable. Inline images are opt-in via ZOT_INLINE_IMAGES;
+	// is unreliable. Inline images are opt-in via TERVA_INLINE_IMAGES;
 	// the common code path below is the fast cached diff.
 	curHasImage := false
 	curHasKittyImage := false
@@ -412,7 +412,7 @@ func (r *Renderer) Draw(lines []string, cursorRow, cursorCol int) {
 	r.cursorCol = cursorCol
 }
 
-// DrawLog renders zot in the terminal's main screen as normal terminal
+// DrawLog renders terva in the terminal's main screen as normal terminal
 // flow rather than a fixed full-screen frame. Chat lines are emitted once
 // into the host terminal scrollback; the current bottom block (dialogs,
 // slash popup, status, editor) is erased and redrawn in place at the end.
@@ -445,7 +445,7 @@ func (r *Renderer) DrawLog(chat, bottom []string, cursorBottomRow, cursorCol int
 	for range bottomMarginRows {
 		lines = append(lines, paintBackgroundRow("", r.cols, r.theme))
 	}
-	// In main-screen flow mode zot normally emits only its logical
+	// In main-screen flow mode terva normally emits only its logical
 	// content rows and leaves the rest of the terminal viewport alone.
 	// When a theme background is configured, fill that otherwise-idle
 	// space with painted blank rows so the full window is tinted while
@@ -721,6 +721,51 @@ func (r *Renderer) DrawLog(chat, bottom []string, cursorBottomRow, cursorCol int
 	r.logLines = append(r.logLines[:0], lines...)
 	r.cursorRow = cursorBottomRow
 	r.cursorCol = cursorCol
+}
+
+// TeardownLog erases the live bottom band (status bar + input editor +
+// reserved margin) that DrawLog paints below the conversation, leaving
+// the chat transcript untouched in scrollback and the cursor parked on a
+// fresh line right after it.
+//
+// This is the exit counterpart to DrawLog. terva stays on the terminal's
+// main screen and emits chat as ordinary scrollback, so on quit we must
+// not clear the screen (that would wipe the conversation the user just
+// had) but we also can't leave the transient input/status frame sitting
+// under the returning shell prompt. Moving to the first row of the bottom
+// band and erasing to the end of the screen drops exactly the live chrome
+// and nothing above it.
+//
+// No-op before the first DrawLog (nothing was painted). Uses only the
+// tracked hardware-cursor/viewport state, so it works whether the last
+// frame ended via the full-repaint or incremental-diff path.
+func (r *Renderer) TeardownLog() {
+	if r.out == nil || !r.logInit {
+		return
+	}
+	// First row of the bottom band in the logical buffer. The band is
+	// anchored at the bottom of the viewport, so this is at or above the
+	// current hardware cursor; clamp into the visible viewport in case a
+	// tall (scrolled) chat pushed the chat start above the viewport top.
+	target := len(r.logChat)
+	if target < r.logViewportTop {
+		target = r.logViewportTop
+	}
+	var w strings.Builder
+	w.WriteString(SeqHideCursor)
+	if diff := target - r.logHardwareRow; diff > 0 {
+		w.WriteString("\x1b[" + itoa(diff) + "B")
+	} else if diff < 0 {
+		w.WriteString("\x1b[" + itoa(-diff) + "A")
+	}
+	w.WriteString("\r")
+	w.WriteString(SeqEraseToEnd)
+	w.WriteString(SeqShowCursor)
+	_, _ = io.WriteString(r.out, w.String())
+	// Force a clean full repaint if anything draws after teardown (e.g. a
+	// late async redraw racing the exit); the band is gone now.
+	r.logInit = false
+	r.logLines = nil
 }
 
 // sameLines reports whether two []string have the exact same

@@ -1,5 +1,5 @@
 // stubchild is a minimal swarm-agent stand-in used by the runner
-// end-to-end test. It speaks the daemon protocol the real zot
+// end-to-end test. It speaks the daemon protocol the real terva
 // binary will implement next:
 //
 //   - parses --swarm-agent <path>, --session <path>, --cwd <path>,
@@ -14,7 +14,7 @@
 //
 // The runner test compiles this binary into a tempdir, points
 // swarm's execRunner at it via Command, and asserts the events
-// flow through correctly without needing the full zot model
+// flow through correctly without needing the full terva model
 // machinery.
 package main
 

@@ -1,6 +1,6 @@
-// Package ext is the Go SDK for writing zot extensions.
+// Package ext is the Go SDK for writing terva extensions.
 //
-// An extension is a subprocess that talks to zot over its stdin/stdout
+// An extension is a subprocess that talks to terva over its stdin/stdout
 // in newline-delimited JSON. This package wraps the wire format so
 // extension authors can write straightforward Go without reimplementing
 // the protocol.
@@ -9,7 +9,7 @@
 //
 //	package main
 //
-//	import "github.com/patriceckhart/zot/packages/agent/ext"
+//	import "terva.sh/terva/packages/agent/ext"
 //
 //	func main() {
 //	    ext := ext.New("hello", "1.0.0")
@@ -20,7 +20,7 @@
 //	}
 //
 // Build it, drop the binary + an extension.json next to it under
-// `$ZOT_HOME/extensions/hello/`, and zot picks it up on next launch.
+// `$TERVA_HOME/extensions/hello/`, and terva picks it up on next launch.
 //
 // The same wire format also has reference clients in TypeScript and
 // Python under examples/extensions/. Use whichever language fits.
@@ -35,7 +35,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/patriceckhart/zot/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/extproto"
 )
 
 func base64Encode(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
@@ -43,13 +43,13 @@ func base64Encode(b []byte) string { return base64.StdEncoding.EncodeToString(b)
 // CommandHandler is invoked when the user runs the extension's
 // registered slash command. args is everything the user typed after
 // the command name (already trimmed). Return a Response describing
-// what zot should do next.
+// what terva should do next.
 type CommandHandler func(args string) Response
 
 // ToolHandler is invoked when the LLM calls a tool the extension
 // registered. args is the raw JSON object the model produced; the
 // handler is responsible for parsing/validating it. Return a
-// ToolResult describing what zot should send back to the model.
+// ToolResult describing what terva should send back to the model.
 type ToolHandler func(args json.RawMessage) ToolResult
 
 // EventHandler is called for each lifecycle event the extension
@@ -58,7 +58,7 @@ type ToolHandler func(args json.RawMessage) ToolResult
 // worker.
 type EventHandler func(ev Event)
 
-// Event is a lifecycle notification from zot. The fields populated
+// Event is a lifecycle notification from terva. The fields populated
 // depend on Name (the host's event_name string):
 //
 //	session_start    : (no extra fields)
@@ -183,7 +183,7 @@ func TextErrorResult(s string) ToolResult {
 	return ToolResult{Content: []ToolContent{Text(s)}, IsError: true}
 }
 
-// Response tells zot how to react to a command invocation. Construct
+// Response tells terva how to react to a command invocation. Construct
 // one with Prompt(), Insert(), Display(), or Noop().
 type Panel struct {
 	ID     string
@@ -216,7 +216,7 @@ func Insert(text string) Response { return Response{Action: "insert", Insert: te
 func Display(text string) Response { return Response{Action: "display", Display: text} }
 
 // OpenPanel returns a Response that opens an interactive extension-owned
-// panel inside zot.
+// panel inside terva.
 func OpenPanel(id, title string, lines []string, footer string) Response {
 	return Response{Action: "open_panel", OpenPanel: &Panel{ID: id, Title: title, Lines: lines, Footer: footer}}
 }
@@ -231,7 +231,7 @@ func Errorf(format string, args ...any) Response {
 	return Response{Action: "noop", Error: fmt.Sprintf(format, args...)}
 }
 
-// Extension is one zot extension. Construct with New, register
+// Extension is one terva extension. Construct with New, register
 // commands, then call Run.
 type Extension struct {
 	name    string
@@ -275,11 +275,11 @@ type toolDef struct {
 	schema      json.RawMessage
 }
 
-// HostInfo is what the host (zot) tells us in HelloAck. Useful for
+// HostInfo is what the host (terva) tells us in HelloAck. Useful for
 // extensions that want to behave differently per provider.
 type HostInfo struct {
 	ProtocolVersion int
-	ZotVersion      string
+	ZotVersion      string // rename:keep — public SDK API
 	Provider        string
 	Model           string
 	CWD             string
@@ -309,8 +309,8 @@ func New(name, version string) *Extension {
 // Returns the zero value if Run hasn't started yet.
 func (e *Extension) Host() HostInfo { return e.host }
 
-// Logf writes a line to the extension's stderr, which zot captures to
-// $ZOT_HOME/logs/ext-<name>.log. Use this for debug output: anything
+// Logf writes a line to the extension's stderr, which terva captures to
+// $TERVA_HOME/logs/ext-<name>.log. Use this for debug output: anything
 // you print to stdout would corrupt the JSON wire protocol.
 func (e *Extension) Logf(format string, args ...any) {
 	fmt.Fprintf(e.stderr, "["+e.name+"] "+format+"\n", args...)
@@ -344,13 +344,13 @@ func (e *Extension) RenderPanel(panelID, title string, lines []string, footer st
 	_ = e.send(extproto.PanelRenderFromExt{Type: "panel_render", PanelID: panelID, Title: title, Lines: lines, Footer: footer})
 }
 
-// ClosePanel tells zot to close panelID.
+// ClosePanel tells terva to close panelID.
 func (e *Extension) ClosePanel(panelID string) {
 	_ = e.send(extproto.PanelCloseFromExt{Type: "panel_close", PanelID: panelID})
 }
 
 // Command registers a slash-command handler. Call this BEFORE Run().
-// Once Run is going, when the user runs /name in zot, fn is invoked
+// Once Run is going, when the user runs /name in terva, fn is invoked
 // with the remaining args.
 //
 // Naming conflicts with built-in commands (e.g. /help) are silently
@@ -365,7 +365,7 @@ func (e *Extension) Command(name, description string, fn CommandHandler) {
 
 // Tool registers an LLM-callable tool. schema is a JSON Schema
 // object describing the tool's args (the same shape Anthropic /
-// OpenAI accept). Call this BEFORE Run(); zot folds extension tools
+// OpenAI accept). Call this BEFORE Run(); terva folds extension tools
 // into the agent's registry once the extension's ready frame fires.
 //
 // Naming conflicts with built-in tools (read, write, edit, bash,
@@ -438,7 +438,7 @@ func (e *Extension) InterceptAssistantMessage(fn AssistantMessageHandler) {
 	e.mu.Unlock()
 }
 
-// Notify pushes an info-level status note into zot's chat without
+// Notify pushes an info-level status note into terva's chat without
 // requiring a slash command from the user.
 func (e *Extension) Notify(level, message string) {
 	_ = e.send(extproto.NotifyFromExt{
@@ -448,7 +448,7 @@ func (e *Extension) Notify(level, message string) {
 	})
 }
 
-// Run starts the protocol loop. Blocks until stdin closes (zot has
+// Run starts the protocol loop. Blocks until stdin closes (terva has
 // shut us down). Returns the first fatal error, or nil on clean exit.
 func (e *Extension) Run() error {
 	// Send hello, then re-announce all commands (covers Command calls
@@ -521,9 +521,15 @@ func (e *Extension) Run() error {
 		case "hello_ack":
 			var ack extproto.HelloAckFromHost
 			if err := json.Unmarshal(line, &ack); err == nil {
+				// Renamed hosts send terva_version (and keep
+				// terva_version); either spelling fills the same field.
+				hostVersion := ack.TervaVersion
+				if hostVersion == "" {
+					hostVersion = ack.ZotVersion // rename:keep — frozen wire field
+				}
 				e.host = HostInfo{
 					ProtocolVersion: ack.ProtocolVersion,
-					ZotVersion:      ack.ZotVersion,
+					ZotVersion:      hostVersion, // rename:keep — public SDK API
 					Provider:        ack.Provider,
 					Model:           ack.Model,
 					CWD:             ack.CWD,

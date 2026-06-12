@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/patriceckhart/zot/packages/provider"
+import "terva.sh/terva/packages/provider"
 
 type configSettingsStore struct{}
 
@@ -19,6 +19,24 @@ func (configSettingsStore) SetAutoSwarm(enabled bool) error {
 		return err
 	}
 	cfg.AutoSwarmEnabled = &enabled
+	return SaveConfig(cfg)
+}
+
+func (configSettingsStore) SetRecursiveFileSuggest(enabled bool) error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.RecursiveFileSuggest = &enabled
+	return SaveConfig(cfg)
+}
+
+func (configSettingsStore) SetRespectGitignore(enabled bool) error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.RespectGitignore = &enabled
 	return SaveConfig(cfg)
 }
 

@@ -7,17 +7,17 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 // ModelCachePath returns the on-disk location of the merged model cache.
 func ModelCachePath() string {
-	return filepath.Join(ZotHome(), "models-cache.json")
+	return filepath.Join(TervaHome(), "models-cache.json")
 }
 
 // UserModelsPath returns the path to the user's models.json override.
 func UserModelsPath() string {
-	return filepath.Join(ZotHome(), "models.json")
+	return filepath.Join(TervaHome(), "models.json")
 }
 
 // LoadCachedModels loads the cache file and applies it to the provider
@@ -33,17 +33,82 @@ func LoadCachedModels() {
 	}
 }
 
-// LoadUserModels reads $ZOT_HOME/models.json and merges any user-defined
+// LoadUserModels reads $TERVA_HOME/models.json and merges any user-defined
 // models into the active catalog. User models take highest precedence.
 // Any validation issues (bad provider id, empty model id, malformed
 // JSON, negative widths) are surfaced as one warning per line on stderr;
 // the well-formed entries from the rest of the file are still loaded.
 func LoadUserModels() {
-	models, warnings := provider.LoadUserModelsWithWarnings(UserModelsPath())
+	overrides, warnings := provider.LoadUserModelsWithWarnings(UserModelsPath())
 	for _, w := range warnings {
-		fmt.Fprintln(os.Stderr, "zot:", w)
+		fmt.Fprintln(os.Stderr, "terva:", w)
 	}
-	provider.SetUserModels(models)
+	if len(overrides) == 0 {
+		return
+	}
+	provider.SetUserOverrides(overrides)
+}
+
+// LoadCompatModel registers the configured openai-compatible endpoint's
+// model into the active catalog so it shows up in the /model picker
+// (open-catalogue models have no baked-in entry). No-op when the
+// provider isn't configured.
+func LoadCompatModel() {
+	baseURL, model, ctxWin := AuthStoreFor().Extras("openai-compatible")
+	if baseURL == "" || model == "" {
+		return
+	}
+	if ctxWin <= 0 {
+		ctxWin = 32768
+	}
+	provider.RegisterExtraModel(provider.Model{
+		Provider:      "openai-compatible",
+		ID:            model,
+		DisplayName:   model,
+		ContextWindow: ctxWin,
+		MaxOutput:     8192,
+		BaseURL:       baseURL,
+		Source:        "openai-compatible",
+	})
+}
+
+// compatDefaultContext returns the user's configured default context
+// window for the openai-compatible endpoint, or 32768 when unset.
+func compatDefaultContext() int {
+	if _, _, ctxWin := AuthStoreFor().Extras("openai-compatible"); ctxWin > 0 {
+		return ctxWin
+	}
+	return 32768
+}
+
+// RefreshCompatModelsAsync discovers the openai-compatible endpoint's
+// models in the background and registers them into the active catalog.
+// Unlike RefreshModelsAsync it is NOT gated on the 6h model cache: a
+// local server's loaded model set changes often and the /v1/models query
+// is cheap, so we re-list on every launch (and after a fresh login).
+// No-op when the endpoint isn't configured.
+func RefreshCompatModelsAsync() {
+	baseURL, _, _ := AuthStoreFor().Extras("openai-compatible")
+	if baseURL == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		// No re-apply dance needed here: discovery writes the "extra"
+		// catalog layer, and the user's models.json lives in the
+		// higher-precedence "user" layer, so hand-set overrides (e.g.
+		// maxTokens on the default model) win over discovered values
+		// by construction.
+		key, _, _ := ResolveCredential("openai-compatible", "")
+		live, err := provider.DiscoverOpenAICompatible(ctx, baseURL, key, compatDefaultContext())
+		if err != nil {
+			return
+		}
+		for _, m := range live {
+			provider.RegisterExtraModel(m)
+		}
+	}()
 }
 
 // ValidateAndRepairConfig checks the persisted config.json's
@@ -62,24 +127,27 @@ func LoadUserModels() {
 func ValidateAndRepairConfig() {
 	cfg, err := LoadConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "zot: config.json: %v (using defaults)\n", err)
+		fmt.Fprintf(os.Stderr, "terva: config.json: %v (using defaults)\n", err)
 		return
 	}
 	changed := false
 
 	if cfg.Provider != "" && !isKnownProvider(cfg.Provider) {
-		fmt.Fprintf(os.Stderr, "zot: config.json: unknown provider %q reset to \"anthropic\"\n", cfg.Provider)
+		fmt.Fprintf(os.Stderr, "terva: config.json: unknown provider %q reset to \"anthropic\"\n", cfg.Provider)
 		cfg.Provider = "anthropic"
 		cfg.Model = ""
 		changed = true
 	}
 
-	if cfg.Provider != "" && cfg.Model != "" {
+	// ollama and openai-compatible are open-catalogue: any model id the
+	// local/custom server understands is valid, so never rewrite it here.
+	openCatalogue := cfg.Provider == "ollama" || cfg.Provider == "openai-compatible"
+	if cfg.Provider != "" && cfg.Model != "" && !openCatalogue {
 		if _, err := provider.FindModel(cfg.Provider, cfg.Model); err != nil {
 			if m, err := provider.FindModel("", cfg.Model); err == nil {
 				fix := defaultModelForProvider(cfg.Provider)
 				fmt.Fprintf(os.Stderr,
-					"zot: config.json: model %q belongs to provider %q (config has provider=%q); switched model to %q\n",
+					"terva: config.json: model %q belongs to provider %q (config has provider=%q); switched model to %q\n",
 					cfg.Model, m.Provider, cfg.Provider, fix)
 				cfg.Model = fix
 				changed = true
@@ -87,7 +155,7 @@ func ValidateAndRepairConfig() {
 				// Model id not in any catalog. Reset to provider's default.
 				fix := defaultModelForProvider(cfg.Provider)
 				fmt.Fprintf(os.Stderr,
-					"zot: config.json: model %q not found in the active catalog; switched to %q\n",
+					"terva: config.json: model %q not found in the active catalog; switched to %q\n",
 					cfg.Model, fix)
 				cfg.Model = fix
 				changed = true
@@ -97,7 +165,7 @@ func ValidateAndRepairConfig() {
 
 	if changed {
 		if err := SaveConfig(cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "zot: config.json: failed to persist repair: %v\n", err)
+			fmt.Fprintf(os.Stderr, "terva: config.json: failed to persist repair: %v\n", err)
 		}
 	}
 }
@@ -157,10 +225,13 @@ func refreshModels() {
 			all = append(all, live...)
 		}
 	}
-
 	if len(all) == 0 {
 		return
 	}
+	// SetLiveModels writes only the "live" catalog layer; the compat
+	// default model (extra layer) and models.json entries (user layer)
+	// survive this landing at any time relative to other refreshes —
+	// precedence is structural, not call-ordered.
 	provider.SetLiveModels(all)
 	_ = provider.SaveCache(ModelCachePath(), provider.ModelCache{
 		FetchedAt: time.Now().UTC(),

@@ -101,3 +101,50 @@ func TestDrawLogResizeForcesFullRedraw(t *testing.T) {
 		t.Fatal("post-resize redraw skipped; the new frame would never reach the terminal")
 	}
 }
+
+// TestTeardownLogErasesBandKeepsChat pins the exit cleanup: after the
+// last frame, TeardownLog must move the cursor up off the live band and
+// erase to the end of the screen (dropping the status/input chrome)
+// without emitting any screen/scrollback clear that would wipe the chat
+// transcript sitting in scrollback above.
+func TestTeardownLogErasesBandKeepsChat(t *testing.T) {
+	var buf bytes.Buffer
+	r := NewRenderer(&buf)
+	r.Resize(80, 24)
+
+	// Two chat rows, a two-row live band; cursor on the band's 2nd row.
+	r.DrawLog([]string{"hello", "world"}, []string{"status", "▌ "}, 1, 2)
+	buf.Reset()
+
+	r.TeardownLog()
+	out := buf.String()
+
+	if !strings.Contains(out, SeqEraseToEnd) {
+		t.Fatalf("teardown must erase to end of screen; got %q", out)
+	}
+	// Must NOT wipe the screen or scrollback — that would destroy the
+	// conversation the user just had.
+	if strings.Contains(out, SeqClearScreenNoHome) || strings.Contains(out, SeqClearScreen) || strings.Contains(out, SeqClearScrollback) {
+		t.Fatalf("teardown wiped screen/scrollback; chat transcript must survive: %q", out)
+	}
+	// Cursor sits on band row index 1 (logical row 3: 2 chat rows + the
+	// "status" row); the band starts at logical row 2, so teardown moves
+	// up exactly one row before erasing.
+	if !strings.Contains(out, "\x1b[1A") {
+		t.Fatalf("teardown should move cursor up to the band start; got %q", out)
+	}
+}
+
+// TestTeardownLogBeforeDrawIsNoOp guards the early-exit guard: tearing
+// down before anything was ever painted must not emit stray escapes.
+func TestTeardownLogBeforeDrawIsNoOp(t *testing.T) {
+	var buf bytes.Buffer
+	r := NewRenderer(&buf)
+	r.Resize(80, 24) // Resize itself emits a clear; ignore that.
+	buf.Reset()
+
+	r.TeardownLog()
+	if buf.Len() != 0 {
+		t.Fatalf("teardown before first DrawLog emitted %d bytes; want 0: %q", buf.Len(), buf.String())
+	}
+}

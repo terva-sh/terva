@@ -1,0 +1,93 @@
+package agent
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestParseArgsCWDDefaultsToGetwd(t *testing.T) {
+	a, err := ParseArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, _ := os.Getwd()
+	if a.CWD != wd {
+		t.Fatalf("default cwd = %q, want %q", a.CWD, wd)
+	}
+}
+
+func TestParseArgsCWDAbsolutizesExistingDir(t *testing.T) {
+	dir := t.TempDir()
+	// Drive a relative path through to confirm it's resolved to absolute.
+	parent := filepath.Dir(dir)
+	rel := filepath.Base(dir)
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(parent); err != nil {
+		t.Fatal(err)
+	}
+	// Restore the original cwd so sibling tests in this package aren't
+	// affected (Go runs them in the same process).
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	a, err := ParseArgs([]string{"--cwd", rel})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !filepath.IsAbs(a.CWD) {
+		t.Fatalf("cwd not absolutized: %q", a.CWD)
+	}
+	// EvalSymlinks both sides: macOS /tmp is a symlink, so a raw string
+	// compare would spuriously fail.
+	got, _ := filepath.EvalSymlinks(a.CWD)
+	want, _ := filepath.EvalSymlinks(dir)
+	if got != want {
+		t.Fatalf("cwd = %q, want %q", got, want)
+	}
+}
+
+func TestParseArgsCWDRejectsMissingDir(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	_, err := ParseArgs([]string{"--cwd", missing})
+	if err == nil {
+		t.Fatal("expected error for missing --cwd dir, got nil")
+	}
+	if !strings.Contains(err.Error(), "--cwd") {
+		t.Fatalf("error should mention --cwd: %v", err)
+	}
+}
+
+func TestParseArgsContextFileRepeatablePreservesOrder(t *testing.T) {
+	a, err := ParseArgs([]string{"--context-file", "a.md", "--context-file", "b.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.ContextFiles) != 2 || a.ContextFiles[0] != "a.md" || a.ContextFiles[1] != "b.md" {
+		t.Fatalf("context files = %v, want [a.md b.md]", a.ContextFiles)
+	}
+}
+
+func TestParseArgsContextFileRequiresValue(t *testing.T) {
+	_, err := ParseArgs([]string{"--context-file"})
+	if err == nil {
+		t.Fatal("expected error when --context-file has no value")
+	}
+}
+
+func TestParseArgsCWDRejectsFile(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "afile")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ParseArgs([]string{"--cwd", f})
+	if err == nil {
+		t.Fatal("expected error for --cwd pointing at a file, got nil")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("error should say not a directory: %v", err)
+	}
+}

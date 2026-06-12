@@ -14,7 +14,7 @@ import (
 )
 
 // Inbox is the supervisor-side handle on a per-agent unix socket
-// that the parent zot uses to send follow-up prompts (and other
+// that the parent terva uses to send follow-up prompts (and other
 // control lines) to a running swarm agent.
 //
 // Protocol on the wire: one UTF-8 message per line, newline-
@@ -155,7 +155,7 @@ type Listener struct {
 	path string
 	ln   net.Listener
 	// active is the most recent accepted connection. The protocol
-	// only expects one supervisor (the parent zot), so newer
+	// only expects one supervisor (the parent terva), so newer
 	// connections preempt older ones — the previous parent
 	// presumably crashed.
 	mu     sync.Mutex

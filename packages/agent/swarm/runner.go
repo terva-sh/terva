@@ -13,11 +13,11 @@ import (
 	"time"
 )
 
-// execRunner spawns `zot --swarm-agent <inbox> --session <path>` in
+// execRunner spawns `terva --swarm-agent <inbox> --session <path>` in
 // the host's working directory (Agent.Dir, which is always the parent
-// zot's RepoRoot) and consumes its JSONL event stream on stdout.
+// terva's RepoRoot) and consumes its JSONL event stream on stdout.
 //
-// Why a long-lived daemon and not `zot --print`: the supervisor and
+// Why a long-lived daemon and not `terva --print`: the supervisor and
 // the user expect agents to keep accepting follow-up prompts. A
 // one-shot subprocess can't do that; this design gives each swarm
 // agent a persistent session file plus an inbox socket the parent
@@ -30,12 +30,12 @@ import (
 //
 // The on-disk log is the durable record. The Sink updates are an
 // in-memory mirror so the dashboard doesn't have to tail the file
-// for the parent's own agents. /swarm open in a separate zot would
+// for the parent's own agents. /swarm open in a separate terva would
 // read the log directly.
 type execRunner struct {
 	agent *Agent
 
-	// Command overrides the default `zot --swarm-agent ...`
+	// Command overrides the default `terva --swarm-agent ...`
 	// invocation. Tests set this to a fake binary (or `go run`
 	// against a tiny stub program) so the supervisor logic can be
 	// tested without a real child. Production code leaves it nil.
@@ -46,7 +46,7 @@ type execRunner struct {
 	// with <swarm-root>/agents/<id>/session.json. Tests that
 	// hand-build an Agent without going through Spawn must set
 	// one of the two; the runner refuses to invent a fallback
-	// because the only plausible one (<Dir>/.zot/session.json)
+	// because the only plausible one (<Dir>/.terva/session.json)
 	// would litter the user's repo — every agent's Dir points
 	// at it directly.
 	SessionPath string
@@ -56,7 +56,7 @@ type execRunner struct {
 // so future per-agent overrides (e.g. tools, reasoning) can be added
 // without churning the signature. The fields map 1:1 onto child CLI
 // flags; empty values omit the flag entirely and let the child
-// resolve a default the same way a normal `zot` invocation does.
+// resolve a default the same way a normal `terva` invocation does.
 type swarmAgentArgsOpts struct {
 	Exe         string
 	Dir         string
@@ -129,7 +129,7 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 	//      <swarm-root>/agents/<id>/session.json so the per-
 	//      agent state is entirely outside the working tree.
 	//      Crucial because Agent.Dir points at the user's repo;
-	//      any .zot/ scratch directory under Dir would litter
+	//      any .terva/ scratch directory under Dir would litter
 	//      their source tree.
 	//
 	// There is no third fallback. If neither path is set we
@@ -171,8 +171,8 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = r.agent.Dir
 	cmd.Env = append(os.Environ(),
-		"ZOT_SWARM_AGENT_ID="+r.agent.ID,
-		"ZOT_SWARM_EVENT_LOG="+logPath,
+		"TERVA_SWARM_AGENT_ID="+r.agent.ID,
+		"TERVA_SWARM_EVENT_LOG="+logPath,
 	)
 
 	stdout, err := cmd.StdoutPipe()
@@ -209,19 +209,19 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 				if ev, ok := parseEventLine(trimmed); ok {
 					_ = log.Append(ev)
 					applyEventToSink(ev, sink)
-					// Fan turn_end up to any subscriber on the
-					// supervised Agent. Daemons stay alive across
-					// many turns, so Wait()-style hooks would
-					// never fire; per-turn callbacks let auto-
-					// swarm summarise as each task completes.
-					if ev.Type == "turn_end" && r.agent != nil {
+					// Fan the TASK-level turn_end up to any subscriber on
+					// the supervised Agent. Daemons stay alive across many
+					// turns, so Wait()-style hooks would never fire; a
+					// per-task callback lets auto-swarm summarise as each
+					// initial task completes. taskLevelTurnEnd filters out
+					// the core agent's intermediate per-turn turn_ends so
+					// the callback fires exactly once per ag.Prompt.
+					if step, errMsg, ok := taskLevelTurnEnd(ev); ok && r.agent != nil {
 						r.agent.mu.Lock()
 						fn := r.agent.OnTurnEnd
 						r.agent.mu.Unlock()
 						if fn != nil {
-							step, _ := ev.Data["step"].(float64)
-							errMsg, _ := ev.Data["error"].(string)
-							go fn(int(step), errMsg)
+							go fn(step, errMsg)
 						}
 					}
 				} else {
@@ -282,6 +282,33 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 	return nil
 }
 
+// taskLevelTurnEnd reports whether ev is the swarm wrapper's
+// task-level turn_end — the single event runSwarmAgentMode emits when
+// the child's ag.Prompt returns — as opposed to the core agent's
+// per-turn turn_end events fired after every internal turn of its
+// tool-calling loop.
+//
+// The discriminator: only the wrapper stamps a "step" field (plus
+// "error"); the core agent's per-turn turn_ends carry "stop" instead
+// (see modes.EventToJSON for core.EvTurnEnd). Treating the per-turn
+// events as task completion made the auto-swarm watcher declare a
+// sub-agent "finished" right after its first tool call — flushing a
+// premature, misleading summary and dropping the watch before the real
+// completion arrived, so the supervisor believed the agent ran forever.
+//
+// Returns the wrapper's step and error string when ok is true.
+func taskLevelTurnEnd(ev Event) (step int, errMsg string, ok bool) {
+	if ev.Type != "turn_end" {
+		return 0, "", false
+	}
+	if _, has := ev.Data["step"]; !has {
+		return 0, "", false
+	}
+	s, _ := ev.Data["step"].(float64)
+	e, _ := ev.Data["error"].(string)
+	return int(s), e, true
+}
+
 // parseEventLine attempts to decode one JSONL line as an Event.
 // Returns ok=false for non-JSON or JSON without a "type" field.
 func parseEventLine(line string) (Event, bool) {
@@ -305,9 +332,22 @@ func parseEventLine(line string) (Event, bool) {
 // few event types are interpreted; the rest still land in the
 // durable log via the caller.
 func applyEventToSink(ev Event, sink Sink) {
+	// eventMessageContent extracts the content blocks of a
+	// user/assistant message event. Canonical shape (core.WireEvent)
+	// nests them under "message"; durable logs written before the
+	// serializer unification carried them flat under "content", so
+	// keep reading both — old events.jsonl files replay forever.
+	eventMessageContent := func(data map[string]any) ([]any, bool) {
+		if m, ok := data["message"].(map[string]any); ok {
+			c, ok := m["content"].([]any)
+			return c, ok
+		}
+		c, ok := data["content"].([]any)
+		return c, ok
+	}
 	switch ev.Type {
 	case "assistant_message":
-		if c, ok := ev.Data["content"].([]any); ok {
+		if c, ok := eventMessageContent(ev.Data); ok {
 			for _, blk := range c {
 				m, _ := blk.(map[string]any)
 				if t, _ := m["type"].(string); t == "text" {
@@ -319,7 +359,7 @@ func applyEventToSink(ev Event, sink Sink) {
 		}
 		sink.Activity("idle")
 	case "user_message":
-		if c, ok := ev.Data["content"].([]any); ok {
+		if c, ok := eventMessageContent(ev.Data); ok {
 			for _, blk := range c {
 				m, _ := blk.(map[string]any)
 				if t, _ := m["type"].(string); t == "text" {
@@ -346,7 +386,13 @@ func applyEventToSink(ev Event, sink Sink) {
 		// return value, not from this event. Don't overwrite the
 		// activity here.
 	case "error":
-		if msg, _ := ev.Data["message"].(string); msg != "" {
+		// Canonical key is "error"; "message" appears in durable logs
+		// written before the serializer unification.
+		msg, _ := ev.Data["error"].(string)
+		if msg == "" {
+			msg, _ = ev.Data["message"].(string)
+		}
+		if msg != "" {
 			sink.Transcript("error: " + msg)
 		}
 	}

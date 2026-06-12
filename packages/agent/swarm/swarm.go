@@ -1,12 +1,12 @@
-// Package swarm implements zot's multi-agent supervisor.
+// Package swarm implements terva's multi-agent supervisor.
 //
-// A Swarm manages a set of headless zot subprocesses ("agents")
+// A Swarm manages a set of headless terva subprocesses ("agents")
 // that share the host's working directory. The interactive TUI
 // exposes the supervisor through the /swarm slash command and a
 // dashboard dialog; non-TUI code can drive it directly through
 // this package.
 //
-// Every agent runs with cwd == the parent zot's RepoRoot — the
+// Every agent runs with cwd == the parent terva's RepoRoot — the
 // same files the user sees, the same files the main agent edits.
 // There is no git worktree, no per-agent branch, no isolation. If
 // you want parallel edits on a separate branch, use normal git
@@ -19,7 +19,7 @@
 //
 // The Runner abstraction means tests can swap a fake in instead of
 // really spawning a subprocess; the production Runner shells out to
-// `zot --swarm-agent ...` so we reuse zot's own model resolution
+// `terva --swarm-agent ...` so we reuse terva's own model resolution
 // and tooling without re-implementing the agent loop.
 package swarm
 
@@ -50,16 +50,16 @@ const (
 // Config configures a Swarm.
 type Config struct {
 	// Root is the directory under which per-agent state files live.
-	// Typically <ZotHome>/swarm, but tests pass a tempdir.
+	// Typically <TervaHome>/swarm, but tests pass a tempdir.
 	Root string
 
 	// RepoRoot is the working directory every spawned agent runs
-	// in — the same cwd the parent zot is using. There is no
+	// in — the same cwd the parent terva is using. There is no
 	// per-agent isolation: agents edit the host's files directly.
 	RepoRoot string
 
 	// NewRunner produces the Runner for an Agent. If nil, the default
-	// `zot --swarm-agent ...` exec runner is used. Tests inject a fake
+	// `terva --swarm-agent ...` exec runner is used. Tests inject a fake
 	// here.
 	NewRunner func(a *Agent) Runner
 
@@ -126,7 +126,7 @@ func New(cfg Config) *Swarm {
 }
 
 // SetActiveSession scopes the dashboard view (and Spawn stamping)
-// to a particular host zot session id. Pass empty to clear the
+// to a particular host terva session id. Pass empty to clear the
 // scope and revert to "show every agent" (the original behaviour).
 //
 // Existing in-memory agents keep their SessionID; only the filter
@@ -201,9 +201,9 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 	logPath := filepath.Join(stateDir, "events.jsonl")
 	sessionPath := filepath.Join(stateDir, "session.json")
 	// Unix sockets have a hard 104-byte path limit on darwin and 108
-	// on linux. Long ZOT_HOME paths plus an agent slug blow that cap
+	// on linux. Long TERVA_HOME paths plus an agent slug blow that cap
 	// quickly. Pick the shortest path that still keeps sockets
-	// per-swarm-root so two zot instances on the same machine don't
+	// per-swarm-root so two terva instances on the same machine don't
 	// collide. inboxSocketPath falls back from $TMPDIR to /tmp if
 	// neither is short enough.
 	inboxPath, err := inboxSocketPath(f.cfg.Root, id)
@@ -242,7 +242,7 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 	f.order = append(f.order, id)
 	f.mu.Unlock()
 
-	// Persist the agent's identity so a later `zot` invocation can
+	// Persist the agent's identity so a later `terva` invocation can
 	// reload it from disk via Swarm.Reload. Best-effort: if the disk
 	// is read-only we still let the runner start, the user just won't
 	// see this agent on the next launch.

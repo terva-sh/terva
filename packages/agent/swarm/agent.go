@@ -21,12 +21,12 @@ type Agent struct {
 	// subprocess's model resolution. Empty means "inherit whatever
 	// the child resolves on its own from config / env / flags" —
 	// the historical behaviour. Persisted in meta.json so Resume
-	// keeps using the same model across zot restarts.
+	// keeps using the same model across terva restarts.
 	Model    string
 	Provider string
 
 	// SessionID, when non-empty, scopes the agent to a particular
-	// host zot session: the dashboard only surfaces agents whose
+	// host terva session: the dashboard only surfaces agents whose
 	// SessionID matches the active session. Empty means "unscoped"
 	// (legacy meta files from before the field existed, or agents
 	// spawned without a session context such as in tests). Set at
@@ -52,7 +52,7 @@ type Agent struct {
 	// EventLogPath is the durable JSONL event log for this agent.
 	// The runner appends every well-formed event from the child
 	// (plus lifecycle events of its own) here. /swarm open in any
-	// zot process reads from this file to replay the full history.
+	// terva process reads from this file to replay the full history.
 	EventLogPath string
 
 	// SessionPath is the child's persistent session file. Surfaced
@@ -71,12 +71,14 @@ type Agent struct {
 	finished   time.Time
 	lastErr    error
 
-	// OnTurnEnd, if set, fires once per turn_end event the runner
-	// observes from the child daemon. Used by auto-swarm watchers
-	// to detect that a sub-agent's first (or n-th) task has
-	// finished without waiting for the long-lived daemon itself to
-	// exit — sub-agents keep running on the inbox even after the
-	// initial task completes, so Wait() never unblocks for them.
+	// OnTurnEnd, if set, fires once per TASK-level turn_end the runner
+	// observes from the child daemon — i.e. once each time the child's
+	// ag.Prompt returns, not after every internal turn of its
+	// tool-calling loop (the runner filters those out). Used by
+	// auto-swarm watchers to detect that a sub-agent's first (or n-th)
+	// task has finished without waiting for the long-lived daemon
+	// itself to exit — sub-agents keep running on the inbox even after
+	// the initial task completes, so Wait() never unblocks for them.
 	OnTurnEnd func(step int, errMsg string)
 
 	ctx    context.Context

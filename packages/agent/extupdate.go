@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// updateAllExtensions iterates $ZOT_HOME/extensions/* and tries to
+// updateAllExtensions iterates $TERVA_HOME/extensions/* and tries to
 // update each one in place via `git pull --ff-only`. Failures are
 // per-extension and never abort the loop; the caller can treat any
 // error here as advisory only.
@@ -38,14 +38,14 @@ import (
 // remote git URL would be a real footgun. Extension authors are
 // expected to commit a working binary (or instruct the user to
 // rebuild manually via /reload-ext + their own build).
-func updateAllExtensions(zotHome string) {
-	dir := filepath.Join(zotHome, "extensions")
+func updateAllExtensions(tervaHome string) {
+	dir := filepath.Join(tervaHome, "extensions")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return // no extensions installed; nothing to do
 		}
-		fmt.Fprintf(os.Stderr, "zot update: skipping extension update (read %s: %v)\n", dir, err)
+		fmt.Fprintf(os.Stderr, "terva update: skipping extension update (read %s: %v)\n", dir, err)
 		return
 	}
 
@@ -67,7 +67,7 @@ func updateAllExtensions(zotHome string) {
 	}
 
 	fmt.Println()
-	fmt.Println("zot update: updating extensions...")
+	fmt.Println("terva update: updating extensions...")
 
 	var updated, upToDate, skipped, failed int
 	for _, name := range names {
@@ -85,7 +85,7 @@ func updateAllExtensions(zotHome string) {
 		}
 	}
 
-	fmt.Printf("zot update: extensions: %d updated, %d up-to-date, %d skipped, %d failed\n",
+	fmt.Printf("terva update: extensions: %d updated, %d up-to-date, %d skipped, %d failed\n",
 		updated, upToDate, skipped, failed)
 }
 
@@ -180,7 +180,7 @@ func updateOneExtension(extDir, name string) string {
 func gitStash(ctx context.Context, dir string) (stashRef string, stashed bool, err error) {
 	// Tag the stash with a recognisable name so the user can find it
 	// later if pop fails and they want to inspect it.
-	msg := fmt.Sprintf("zot-update-%d", time.Now().Unix())
+	msg := fmt.Sprintf("terva-update-%d", time.Now().Unix())
 	out, err := runGit(ctx, dir, "stash", "push", "--include-untracked", "-m", msg)
 	if err != nil {
 		return "", false, fmt.Errorf("%s", strings.TrimSpace(out))
@@ -196,7 +196,7 @@ func gitStash(ctx context.Context, dir string) (stashRef string, stashed bool, e
 	if lerr == nil {
 		for _, line := range strings.Split(listOut, "\n") {
 			if strings.Contains(line, msg) {
-				// line looks like: "stash@{0}: On main: zot-update-1700000000"
+				// line looks like: "stash@{0}: On main: terva-update-1700000000"
 				if idx := strings.Index(line, ":"); idx > 0 {
 					return strings.TrimSpace(line[:idx]), true, nil
 				}

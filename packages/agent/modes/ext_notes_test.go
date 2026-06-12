@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/tui"
 )
 
 func newNotesTestInteractive() *Interactive {

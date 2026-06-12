@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/mattn/go-runewidth"
-	"github.com/patriceckhart/zot/packages/provider"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/tui"
 )
 
 // modelDialog is an inline picker for choosing the active model.
@@ -78,19 +78,45 @@ func (d *modelDialog) Active() bool { return d != nil && d.active }
 
 // refilter rebuilds view from all according to query, and snaps the
 // cursor to either the current model (if visible) or the first row.
+//
+// Query words starting with ':' are capability filters (":img",
+// ":reasoning" — see capFilterToken); the rest fuzzy-matches
+// provider/id/name as before. Tokens must be split off BEFORE
+// normalizeModelQuery, which strips the ':' marker.
 func (d *modelDialog) refilter() {
-	needle := normalizeModelQuery(d.query)
-	if needle == "" {
-		d.view = append([]provider.Model(nil), d.all...)
-	} else {
-		out := make([]provider.Model, 0, len(d.all))
-		for _, m := range d.all {
-			if strings.Contains(normalizeModelQuery(m.Provider+" "+m.ID+" "+m.DisplayName), needle) {
-				out = append(out, m)
+	var capFilters []provider.Capability
+	var textParts []string
+	for _, tok := range strings.Fields(d.query) {
+		if strings.HasPrefix(tok, ":") {
+			if c, ok := capFilterToken(tok[1:]); ok {
+				capFilters = append(capFilters, c)
+				continue
+			}
+			// Unrecognized (or still being typed) token: no effect.
+			continue
+		}
+		textParts = append(textParts, tok)
+	}
+	needle := normalizeModelQuery(strings.Join(textParts, " "))
+
+	out := make([]provider.Model, 0, len(d.all))
+	for _, m := range d.all {
+		if needle != "" && !strings.Contains(normalizeModelQuery(m.Provider+" "+m.ID+" "+m.DisplayName), needle) {
+			continue
+		}
+		matched := true
+		for _, c := range capFilters {
+			if !m.Has(c) {
+				matched = false
+				break
 			}
 		}
-		d.view = out
+		if !matched {
+			continue
+		}
+		out = append(out, m)
 	}
+	d.view = out
 	d.cursor = 0
 	for i, m := range d.view {
 		if m.ID == d.current {
@@ -98,6 +124,21 @@ func (d *modelDialog) refilter() {
 			break
 		}
 	}
+}
+
+// capFilterToken maps a ":token" spelling (without the colon) to the
+// capability it filters on. Several aliases per capability because the
+// picker is typed blind.
+func capFilterToken(tok string) (provider.Capability, bool) {
+	switch strings.ToLower(tok) {
+	case "img", "image", "images", "vision":
+		return provider.CapImageInput, true
+	case "reasoning", "reason", "thinking":
+		return provider.CapReasoning, true
+	case "imggen", "imagegen", "image-gen", "image-out", "imageout":
+		return provider.CapImageOutput, true
+	}
+	return "", false
 }
 
 // sortedModels returns a fresh slice sorted by provider, then model id.
@@ -144,7 +185,7 @@ func (d *modelDialog) Render(th tui.Theme, width int) []string {
 			hint = fmt.Sprintf("filter: %s (%d matches)", d.query, len(d.view))
 		}
 	} else {
-		hint += " - type to filter"
+		hint += " - type to filter, :img/:reasoning by capability"
 	}
 	lines = append(lines, th.FG256(th.Muted, hint))
 
@@ -181,8 +222,16 @@ func (d *modelDialog) Render(th tui.Theme, width int) []string {
 	for i := start; i < end; i++ {
 		m := d.view[i]
 		reason := " "
-		if m.Reasoning {
+		if m.Has(provider.CapReasoning) {
 			reason = "✦"
+		}
+		// Vision marker, same column family as the reasoning glyph.
+		// Most models carry it (the capability defaults true); its
+		// absence is the signal — a text-only model in a session full
+		// of screenshots is worth noticing before picking it.
+		vision := " "
+		if m.Has(provider.CapImageInput) {
+			vision = "◈"
 		}
 		tag := ""
 		switch {
@@ -195,11 +244,11 @@ func (d *modelDialog) Render(th tui.Theme, width int) []string {
 		if m.ID == d.current {
 			curMark = "● "
 		}
-		plain := fmt.Sprintf(" %s%s   %s %s  %s%s",
+		plain := fmt.Sprintf(" %s%s   %s %s%s  %s%s",
 			curMark,
 			padRight(m.Provider, provW),
 			padRight(m.ID, idW),
-			reason, tag, m.DisplayName)
+			reason, vision, tag, m.DisplayName)
 		if i == d.cursor {
 			lines = append(lines, th.PadHighlight(plain, width))
 		} else {

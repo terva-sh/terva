@@ -1,11 +1,12 @@
 package modes
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
-	"github.com/patriceckhart/zot/packages/provider"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/tui"
 )
 
 // rescueDialog offers a quick model swap when the active turn fails
@@ -226,7 +227,6 @@ func classifyRescueError(err error) (bool, string) {
 		return false, ""
 	}
 	msg := err.Error()
-	low := strings.ToLower(msg)
 
 	// Don't trigger on payload-too-large; that path already has its
 	// own auto-compact handling.
@@ -234,7 +234,39 @@ func classifyRescueError(err error) (bool, string) {
 		return false, ""
 	}
 
-	// Network failures.
+	// Typed classification first: in-tree providers return
+	// *provider.ProviderError, so status codes are data, not prose.
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) {
+		switch {
+		case pe.Status == 401:
+			return true, "authentication failed: " + shortError(msg)
+		case pe.Status == 403:
+			return true, "permission denied: " + shortError(msg)
+		case pe.Status == 429:
+			return true, "rate limited: " + shortError(msg)
+		case pe.Status >= 500:
+			return true, "provider unavailable: " + shortError(msg)
+		case pe.Status == 0 && pe.Transient:
+			// Stream death / transient in-stream errors.
+			return true, "network failure: " + shortError(msg)
+		case pe.Status == 0:
+			// In-stream API errors without a status: fall through to
+			// the prose heuristics below — the provider's own error
+			// vocabulary ("invalid_authentication", …) still carries
+			// the class.
+		default:
+			// 4xx other than auth/rate (400 validation, 404, …):
+			// switching models won't fix it; surface as-is.
+			return false, ""
+		}
+	} else if provider.IsTransportError(err) {
+		return true, "network failure: " + shortError(msg)
+	}
+
+	// Prose fallback for untyped errors (custom SDK clients, auth
+	// wrappers) and in-stream API errors without a status code.
+	low := strings.ToLower(msg)
 	if strings.Contains(low, "timeout") ||
 		strings.Contains(low, "deadline exceeded") ||
 		strings.Contains(low, "connection refused") ||
@@ -244,7 +276,6 @@ func classifyRescueError(err error) (bool, string) {
 		strings.Contains(low, "eof") {
 		return true, "network failure: " + shortError(msg)
 	}
-
 	switch {
 	case containsAny(low, "http 401", " 401:", "invalid_authentication", "token expired", "api key appears to be invalid"):
 		return true, "authentication failed: " + shortError(msg)
@@ -281,12 +312,17 @@ func shortError(msg string) string {
 	return msg[:max] + "..."
 }
 
-// extractFailedProvider tries to pull the failing provider name out
-// of an error string ("kimi: http 401: ...", "openai: http 503: ...").
-// Returns "" when nothing recognisable is found.
+// extractFailedProvider pulls the failing provider name from a typed
+// provider error, falling back to parsing the conventional
+// "provider: http NNN: …" prefix for untyped errors. Returns "" when
+// nothing recognisable is found.
 func extractFailedProvider(err error) string {
 	if err == nil {
 		return ""
+	}
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) && pe.Provider != "" {
+		return pe.Provider
 	}
 	msg := err.Error()
 	if i := strings.Index(msg, ":"); i > 0 {

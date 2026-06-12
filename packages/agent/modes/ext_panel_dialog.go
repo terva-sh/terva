@@ -5,7 +5,7 @@ import (
 
 	"github.com/mattn/go-runewidth"
 
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/tui"
 )
 
 type extPanelDialog struct {

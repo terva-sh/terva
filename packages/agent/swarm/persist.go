@@ -5,7 +5,7 @@ package swarm
 // Every Spawn writes a meta.json next to the agent's events.jsonl and
 // session.json. The file captures the immutable identity bits (id,
 // task, branch, dir) plus the paths the runner needs to resume the
-// agent later. On a fresh zot launch, Swarm.Reload() walks
+// agent later. On a fresh terva launch, Swarm.Reload() walks
 // <root>/agents/*/meta.json and re-registers every agent it finds in
 // StatusDetached so the user can see, view, resume, or remove them
 // from the dashboard.
@@ -49,7 +49,7 @@ type agentMeta struct {
 	SessionPath  string    `json:"session_path"`
 
 	// SessionID, when non-empty, scopes the agent to a particular
-	// host zot session: the dashboard only shows agents whose
+	// host terva session: the dashboard only shows agents whose
 	// SessionID matches the active session. Older meta.json files
 	// (and agents spawned outside of any session, e.g. by tests or
 	// scripted callers that didn't call SetActiveSession) have an
@@ -317,7 +317,7 @@ func replayEventsIntoAgent(a *Agent, evs []Event) {
 // Resume re-attaches a Runner to a previously-spawned agent. The
 // existing worktree, session file, branch, and inbox path are kept;
 // only the in-memory Agent and its runner are replaced. Use this to
-// continue a swarm session across zot restarts:
+// continue a swarm session across terva restarts:
 //
 //	swarmMgr.Reload()
 //	a, err := swarmMgr.Resume(ctx, "alpha-12345")
@@ -349,6 +349,10 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Model: existing.Model, Provider: existing.Provider,
 		InboxPath: existing.InboxPath, EventLogPath: existing.EventLogPath,
 		SessionPath: existing.SessionPath,
+		// SessionID is spawn-time scoping; it must survive Resume or
+		// writeAgentMeta below would persist an empty session_id and
+		// permanently un-scope the agent from its host session.
+		SessionID: existing.SessionID,
 	}
 
 	a := &Agent{
@@ -358,6 +362,7 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Started:      m.Started,
 		Model:        m.Model,
 		Provider:     m.Provider,
+		SessionID:    m.SessionID,
 		InboxPath:    m.InboxPath,
 		EventLogPath: m.EventLogPath,
 		SessionPath:  m.SessionPath,

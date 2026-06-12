@@ -120,7 +120,7 @@ func LanguageFromPath(p string) string {
 // terminal syntax formatters while preserving foreground colors and styles.
 // Chroma's inherited styles can assign black backgrounds to a few tokens
 // (notably punctuation/error-ish spans), which looks like random black blocks
-// inside zot's dark-gray tool boxes. Foreground color is enough for code.
+// inside terva's dark-gray tool boxes. Foreground color is enough for code.
 func stripANSIBackgrounds(s string) string {
 	var out strings.Builder
 	out.Grow(len(s))

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/tui"
 )
 
 // sessionTreeDialog renders the branch topology for the current

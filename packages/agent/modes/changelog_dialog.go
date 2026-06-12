@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/tui"
 )
 
 // changelogDialog is the one-shot release-notes overlay shown the
-// first time a user launches a new zot version. The body is the
+// first time a user launches a new terva version. The body is the
 // markdown from the GitHub release page, rendered through the same
 // pipeline used for assistant messages so code fences + bold +
 // links look right.
@@ -76,7 +76,7 @@ func (d *changelogDialog) Render(th tui.Theme, width int) []string {
 	if !d.Active() {
 		return nil
 	}
-	title := fmt.Sprintf("zot %s \u2014 release notes (any key to dismiss)", d.version)
+	title := fmt.Sprintf("terva %s \u2014 release notes (any key to dismiss)", d.version)
 	out := []string{frameHeaderColor(th, title, width, th.Accent)}
 	if d.url != "" {
 		out = append(out, "  "+th.FG256(th.Muted, d.url))

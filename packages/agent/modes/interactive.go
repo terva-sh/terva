@@ -3,6 +3,7 @@ package modes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,16 +11,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/agent/extensions"
-	"github.com/patriceckhart/zot/packages/agent/extproto"
-	"github.com/patriceckhart/zot/packages/agent/modes/telegram"
-	"github.com/patriceckhart/zot/packages/agent/skills"
-	"github.com/patriceckhart/zot/packages/agent/swarm"
-	"github.com/patriceckhart/zot/packages/agent/tools"
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/provider"
-	"github.com/patriceckhart/zot/packages/provider/auth"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/agent/chat"
+	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/identity"
+	"terva.sh/terva/packages/agent/skills"
+	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/auth"
+	"terva.sh/terva/packages/tui"
 )
 
 // InteractiveConfig configures the interactive loop.
@@ -46,6 +48,16 @@ type InteractiveConfig struct {
 	// re-reading config.json on every open.
 	AutoSwarmEnabled *bool
 
+	// RecursiveFileSuggest mirrors the persisted recursive_file_suggest
+	// flag at startup. When true the @-mention picker fuzzy-searches the
+	// whole project tree instead of browsing one directory at a time.
+	RecursiveFileSuggest *bool
+
+	// RespectGitignore mirrors the persisted respect_gitignore flag at
+	// startup. nil means the default (on); when false the @-mention
+	// picker shows files matched by the project's root .gitignore.
+	RespectGitignore *bool
+
 	// ThemeName mirrors the persisted config theme value. Empty means auto.
 	ThemeName string
 	// ExtensionThemes returns themes bundled with loaded extensions.
@@ -58,7 +70,7 @@ type InteractiveConfig struct {
 	AutoSwarmSystemAddendum string
 	SettingsStore           SettingsStore
 
-	// Agent is optional. If nil, zot opens without credentials; the
+	// Agent is optional. If nil, terva opens without credentials; the
 	// user must /login before they can prompt.
 	Agent *core.Agent
 
@@ -72,9 +84,14 @@ type InteractiveConfig struct {
 	// the concrete provider/model in use.
 	BuildAgent func() (*core.Agent, string, string, error)
 
-	// SetKimiCLIFallbackDisabled controls whether zot may fall back to
-	// the official Kimi Code CLI token when zot has no stored Kimi token.
+	// SetKimiCLIFallbackDisabled controls whether terva may fall back to
+	// the official Kimi Code CLI token when terva has no stored Kimi token.
 	SetKimiCLIFallbackDisabled func(disabled bool) error
+
+	// Migration wires /migrate to the zot→terva migration engine. // rename:keep
+	// Optional: when nil, /migrate reports that the host didn't
+	// enable it.
+	Migration *MigrationHooks
 
 	// BuildAgentFor rebuilds the agent with an explicit provider/model
 	// override (used by the /model picker when switching providers).
@@ -95,9 +112,9 @@ type InteractiveConfig struct {
 	// picker to only show reachable models.
 	LoggedInProviders func() []string
 
-	// ZotHome is the root directory for sessions/, used by /sessions
+	// TervaHome is the root directory for sessions/, used by /sessions
 	// and the update-check cache.
-	ZotHome string
+	TervaHome string
 
 	// Version is the binary's current version (from main.version).
 	// Used only for display; the update check itself is done outside
@@ -118,7 +135,17 @@ type InteractiveConfig struct {
 	// callback returns the new agent message slice so the TUI can invalidate.
 	LoadSession func(path string) error
 
-	// ChangeCWD switches the running zot session's working directory
+	// NewSession closes the current session and starts a fresh one in
+	// the same cwd: the agent keeps its provider/model/tools but its
+	// transcript and running cost are reset, and a new session file is
+	// opened (the old one stays on disk). providerName/model are the
+	// live values so the new session's metadata is accurate. Returns an
+	// error if no agent is running or the session can't be created.
+	//
+	// Optional: when nil, /new reports a clear error instead of no-oping.
+	NewSession func(providerName, model string) error
+
+	// ChangeCWD switches the running terva session's working directory
 	// to path. The host closes the current session, rebuilds the
 	// agent so tools / AGENTS.md / sandbox bind to the new cwd, and
 	// opens a fresh session there. Returns an error if path doesn't
@@ -150,6 +177,11 @@ type InteractiveConfig struct {
 	// It should update config.json and (if there's an active session)
 	// write a new meta row so resume picks up the same model.
 	PersistModel func(providerName, model string)
+
+	// RefreshCompatModels, if set, kicks a background /v1/models discovery
+	// for a configured openai-compatible endpoint so a fresh login surfaces
+	// all of the server's models in the picker without a restart.
+	RefreshCompatModels func()
 
 	OnAssistant  func(m provider.Message)
 	OnToolResult func(id string, r core.ToolResult)
@@ -228,6 +260,8 @@ type chatCacheKey struct {
 type SettingsStore interface {
 	SetInlineImages(enabled bool) error
 	SetAutoSwarm(enabled bool) error
+	SetRecursiveFileSuggest(enabled bool) error
+	SetRespectGitignore(enabled bool) error
 	SetReasoning(level string) error
 	SetTheme(name string) error
 }
@@ -270,15 +304,25 @@ type Interactive struct {
 	// it. We snapshot the total expected stream length (already
 	// streamed + still pending) at the moment the tool starts, and
 	// hold the block back until the pacer reaches it.
-	toolGate         map[string]int
-	statusErr        string
-	statusOK         string
-	liveBlock        []string // live streaming/tool progress rendered outside scrollback
-	helpBlock        []string // rendered above the chat when /help was typed
-	cumUsage         provider.Usage
-	lastCtxInput     int // input_tokens of the most recent turn — approximates current context size
-	busy             bool
-	dirty            chan struct{}
+	toolGate     map[string]int
+	statusErr    string
+	statusOK     string
+	liveBlock    []string // live streaming/tool progress rendered outside scrollback
+	helpBlock    []string // rendered above the chat when /help was typed
+	cumUsage     provider.Usage
+	lastCtxInput int // input_tokens of the most recent turn — approximates current context size
+	busy         bool
+	dirty        chan struct{}
+	// actions marshals work onto the main Run() goroutine. Off-main
+	// goroutines (spawned extension command invocations, the auth-code
+	// submit goroutine, host hooks) enqueue a closure here instead of
+	// touching main-loop-only state directly — tui.Editor and the
+	// dialogs have no internal locking and are otherwise only mutated
+	// from the key loop. The main select loop drains and runs each
+	// func on the main goroutine. Buffered so a burst of enqueues from
+	// a background goroutine doesn't block it; runOnMain falls back to
+	// running inline only when the channel is full (best-effort).
+	actions          chan func()
 	cancelTurn       context.CancelFunc
 	scrollOffset     int // rows from the bottom; 0 = pinned to latest
 	prevScrollOffset int // last value redraw snapped against; tracks intent
@@ -338,12 +382,13 @@ type Interactive struct {
 	changelogDialog   *changelogDialog
 	confirmDialog     *confirmDialog
 	logoutDialog      *logoutDialog
-	telegramDialog    *telegramDialog
+	connectDialog     *connectDialog
 	settingsDialog    *settingsDialog
-	telegramBridge    *telegram.Bridge
+	chatBridge        *chat.Bridge
 	sessionOpsDialog  *sessionOpsDialog
 	sessionTreeDialog *sessionTreeDialog
 	extPanel          *extPanelDialog
+	migrateDialog     *migrateDialog
 
 	// swarmWatch tracks auto-swarm sub-agents the main agent spawned
 	// via swarm_spawn. Each entry holds the agent + the task text;
@@ -453,6 +498,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		toolCalls:         map[string]*tui.ToolCallView{},
 		toolGate:          map[string]int{},
 		dirty:             make(chan struct{}, 8),
+		actions:           make(chan func(), 64),
 		dialog:            newLoginDialog(),
 		modelDialog:       newModelDialog(),
 		rescueDialog:      newRescueDialog(),
@@ -464,16 +510,19 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		changelogDialog:   newChangelogDialog(),
 		confirmDialog:     newConfirmDialog(),
 		logoutDialog:      newLogoutDialog(),
-		telegramDialog:    newTelegramDialog(),
+		connectDialog:     newConnectDialog(),
 		settingsDialog:    newSettingsDialog(),
 		sessionOpsDialog:  newSessionOpsDialog(),
 		sessionTreeDialog: newSessionTreeDialog(),
 		extPanel:          newExtPanelDialog(),
+		migrateDialog:     newMigrateDialog(),
 		suggest:           newSlashSuggester(),
 		fileSuggest:       newFileSuggester(),
 		spin:              newSpinner(cfg.Theme),
 		inputHistoryIndex: -1,
 	}
+	i.fileSuggest.SetRecursive(cfg.RecursiveFileSuggest != nil && *cfg.RecursiveFileSuggest)
+	i.fileSuggest.SetRespectGitignore(cfg.RespectGitignore == nil || *cfg.RespectGitignore)
 	if cfg.Agent != nil {
 		i.agent = cfg.Agent
 		i.view.Messages = cfg.Agent.Messages()
@@ -504,8 +553,8 @@ func (i *Interactive) Run(ctx context.Context) error {
 	}
 	defer restore()
 	defer func() {
-		if i.telegramBridge != nil {
-			i.telegramBridge.Stop()
+		if i.chatBridge != nil {
+			i.chatBridge.Stop()
 		}
 	}()
 
@@ -514,12 +563,20 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// selection over the wheel-speed boost, so we no longer turn it
 	// on automatically. Wheel events fall through to the terminal's
 	// own scrollback handler.
-	// Keep zot on the terminal's main screen. We intentionally do not
+	// Keep terva on the terminal's main screen. We intentionally do not
 	// enter the alternate-screen buffer (CSI ?1049h). The renderer emits
 	// chat as normal terminal flow/scrollback and redraws only the live
 	// input/status block on normal typing.
 	_, _ = term.Write([]byte(tui.SeqBracketedPasteOn + tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqClearScreenNoHome + tui.SeqClearScrollback + tui.MoveTo(1, 1)))
 	defer term.Write([]byte(tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqBracketedPasteOff + tui.SeqShowCursor))
+	// Erase the live status/input band on exit so the returning shell
+	// prompt lands on a clean line right after the conversation instead of
+	// underneath a stale frame. Runs before the resets above (defers are
+	// LIFO) while the renderer's cursor/viewport state still matches what's
+	// on screen. The chat transcript stays in scrollback.
+	if i.rend != nil {
+		defer i.rend.TeardownLog()
+	}
 
 	// Streaming pacer: drains buffered text deltas at a steady rate
 	// so typewriter feel is identical across providers regardless of
@@ -568,7 +625,7 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// want to dismiss it (e.g. to check /help or /exit first).
 	if i.agent == nil {
 		i.statusErr = "not logged in. pick a login method below or press esc to dismiss."
-		i.dialog.Open(i.cfg.ZotHome)
+		i.dialog.Open(i.cfg.TervaHome)
 	}
 
 	// Input goroutine. Buffered generously so a drag-drop that the
@@ -688,6 +745,22 @@ func (i *Interactive) Run(ctx context.Context) error {
 		case ev := <-authEvents:
 			i.handleAuthEvent(ev)
 			i.invalidate()
+		case fn := <-i.actions:
+			// Work marshalled onto the main goroutine by off-main
+			// callers (see runOnMain). Drain a burst so a flurry of
+			// editor inserts / dialog updates all land before the
+			// next redraw rather than one per loop turn.
+			fn()
+		drainActions:
+			for {
+				select {
+				case fn2 := <-i.actions:
+					fn2()
+				default:
+					break drainActions
+				}
+			}
+			i.invalidate()
 		case info, ok := <-updates:
 			if ok && info.Available {
 				i.mu.Lock()
@@ -728,7 +801,7 @@ func (i *Interactive) Run(ctx context.Context) error {
 			// of its inline editors (spawn task or prompt composer)
 			// is active so the cursor blink in those editors works
 			// the same way it does inside btw.
-			if i.busy || i.btwDialog.Loading() || i.swarmDialog.NeedsTickRefresh() {
+			if i.busy || i.btwDialog.Loading() || i.migrateDialog.Loading() || i.swarmDialog.NeedsTickRefresh() {
 				requestRedraw()
 			}
 		}
@@ -739,6 +812,26 @@ func (i *Interactive) invalidate() {
 	select {
 	case i.dirty <- struct{}{}:
 	default:
+	}
+}
+
+// runOnMain queues fn to execute on the main Run() goroutine. Use it
+// from any goroutine other than the key loop to mutate main-loop-only
+// state (the editor, dialogs, etc.), which have no internal locking.
+// If the action buffer is somehow saturated we fall back to running
+// fn inline so the work isn't silently dropped; that path is best-
+// effort and only reachable under extreme back-pressure, where a
+// rare unsynchronised mutation is preferable to losing the user's
+// inserted text entirely.
+func (i *Interactive) runOnMain(fn func()) {
+	if fn == nil {
+		return
+	}
+	select {
+	case i.actions <- fn:
+	default:
+		fn()
+		i.invalidate()
 	}
 }
 
@@ -868,7 +961,7 @@ func (i *Interactive) buildChatLocked(cols int) []string {
 	}
 
 	// Update-available banner: prepended above everything else so it's
-	// the first thing the user sees when opening a new zot session.
+	// the first thing the user sees when opening a new terva session.
 	// Once rendered, it stays until the user updates to a newer
 	// version — we don't persist a "dismissed" flag because this is
 	// cheap and re-showing it is how most users remember to update.
@@ -1021,8 +1114,8 @@ func (i *Interactive) redraw() {
 		dialog = i.confirmDialog.Render(i.cfg.Theme, cols)
 	case i.logoutDialog.Active():
 		dialog = i.logoutDialog.Render(i.cfg.Theme, cols)
-	case i.telegramDialog.Active():
-		dialog = i.telegramDialog.Render(i.cfg.Theme, cols)
+	case i.connectDialog.Active():
+		dialog = i.connectDialog.Render(i.cfg.Theme, cols)
 	case i.settingsDialog.Active():
 		dialog = i.settingsDialog.Render(i.cfg.Theme, cols)
 	case i.sessionOpsDialog.Active():
@@ -1031,6 +1124,8 @@ func (i *Interactive) redraw() {
 		dialog = i.sessionTreeDialog.Render(i.cfg.Theme, cols)
 	case i.extPanel.Active():
 		dialog = i.extPanel.Render(i.cfg.Theme, cols)
+	case i.migrateDialog.Active():
+		dialog = i.migrateDialog.Render(i.cfg.Theme, cols)
 	}
 	if len(dialog) > 0 {
 		dialog = padDialogFrame(dialog)
@@ -1104,7 +1199,7 @@ func (i *Interactive) redraw() {
 	}
 
 	// Busy prefix shown at the far left of the status bar. The
-	// spinner glyph and its funny-line message share the `zot`
+	// spinner glyph and its funny-line message share the `terva`
 	// label colour (Theme.Assistant) so the whole "who's working"
 	// band reads at a glance. Elapsed time stays muted because it
 	// drifts every second and shouldn't grab focus.
@@ -1137,7 +1232,7 @@ func (i *Interactive) redraw() {
 		ContextUsed:    i.lastCtxInput,
 		ContextMax:     ctxMax,
 		AutoCompacting: i.autoCompacting,
-		Telegram:       i.telegramBridge != nil && i.telegramBridge.Active(),
+		ChatConnected:  i.chatBridgeName(),
 		Cols:           cols,
 	})
 	edLines, curR, curC := i.ed.Render(cols)
@@ -1378,7 +1473,7 @@ func hasImageEscape(line string) bool {
 
 // snapViewportStartToImageBlock treats inline images as atomic blocks for
 // scrolling. Terminal image protocols draw from a single escape row into a
-// separate graphics layer; the following blank rows are only zot's reserved
+// separate graphics layer; the following blank rows are only terva's reserved
 // footprint. If the viewport starts on one of those blank rows, there is no
 // correct partial-image state to render. Snap back to the escape row instead
 // so the image is either shown from its beginning or skipped entirely.
@@ -1591,6 +1686,18 @@ func (i *Interactive) ctrlCExitArmed() bool {
 	return !t.IsZero() && time.Since(t) <= ctrlCExitWindow
 }
 
+// clearFileSuggestQuery strips the filter the user typed after the
+// last "@", leaving the bare "@" so the picker stays open. Called when
+// navigating between directory levels (Right/Left): the filter applied
+// to the level the user was on, not the one being entered, so carrying
+// it forward would wrongly hide the new directory's contents.
+func (i *Interactive) clearFileSuggestQuery() {
+	val := i.ed.Value()
+	if idx := strings.LastIndex(val, "@"); idx >= 0 {
+		i.ed.SetValue(val[:idx+1])
+	}
+}
+
 func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 	// Any key that isn't ctrl+c invalidates an armed ctrl+c-exit, so
 	// pressing ctrl+c then typing then ctrl+c much later doesn't quit
@@ -1709,15 +1816,61 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		i.invalidate()
 		return false
 	}
-	if i.telegramDialog.Active() {
-		if k.Kind == tui.KeyCtrlC {
-			i.telegramDialog.Close()
+	if i.migrateDialog.Active() {
+		if k.Kind == tui.KeyCtrlC && !i.migrateDialog.Loading() {
+			i.migrateDialog.Close()
 			i.invalidate()
 			return false
 		}
-		act := i.telegramDialog.HandleKey(k)
+		act := i.migrateDialog.HandleKey(k)
+		switch {
+		case act.StartCopy:
+			// Make the on-disk session file whole BEFORE it gets
+			// copied, so the new dir's copy isn't missing the turns
+			// that only live in memory.
+			if i.cfg.FlushSession != nil {
+				i.cfg.FlushSession()
+			}
+			go func() {
+				res, err := i.cfg.Migration.CopyUserData()
+				i.runOnMain(func() {
+					i.migrateDialog.SetCopyResult(res, err)
+					i.invalidate()
+				})
+				i.invalidate()
+			}()
+		case act.RenameProject:
+			i.migrateDialog.SetRenameResult(i.cfg.Migration.RenameProject())
+		case act.RemoveAndExit:
+			if err := i.cfg.Migration.RemoveOldDir(); err != nil {
+				i.mu.Lock()
+				i.statusErr = "remove old dir: " + err.Error()
+				i.mu.Unlock()
+				i.migrateDialog.Close()
+				i.invalidate()
+				return false
+			}
+			// The legacy dir — including the live session file this
+			// process was writing — is gone. Exit now; cli.go skips
+			// its final flush and prints the restart message.
+			return true
+		case act.KeepOld:
+			i.mu.Lock()
+			i.statusOK = "migrated — old dir kept; restart terva to fully switch over"
+			i.mu.Unlock()
+		}
+		i.invalidate()
+		return false
+	}
+	if i.connectDialog.Active() {
+		if k.Kind == tui.KeyCtrlC {
+			i.connectDialog.Close()
+			i.invalidate()
+			return false
+		}
+		act := i.connectDialog.HandleKey(k)
 		if act.Select {
-			i.doTelegram(act.Action)
+			i.doConnector(act.Action)
 		}
 		i.invalidate()
 		return false
@@ -1842,7 +1995,7 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		// ("be quiet" in a shell) rather than a deliberate
 		// decision to kill a multi-minute model call that's
 		// already cost tokens. Use esc to interrupt a turn; use
-		// a deliberate double-ctrl+c to exit zot entirely. First
+		// a deliberate double-ctrl+c to exit terva entirely. First
 		// press arms the exit hint, second press within
 		// ctrlCExitWindow quits.
 		if i.busy {
@@ -1983,7 +2136,6 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 				i.invalidate()
 				return false
 			}
-			i.mu.Unlock()
 		}
 		// In multi-line / wrapped input, Up first moves inside the editor.
 		// At the editor's top edge it falls back to chat scrolling, preserving
@@ -2069,12 +2221,21 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 			i.fileSuggest.Down()
 			return false
 		case tui.KeyRight:
-			// Open selected directory.
-			i.fileSuggest.Right()
+			// Open selected directory. The filter the user typed picked
+			// that directory at the current level; once we descend it no
+			// longer applies to the directory's contents, so clear it.
+			// Otherwise typing "@eda" then right would re-filter inside
+			// eda/ by "eda" and show nothing.
+			if i.fileSuggest.Right() {
+				i.clearFileSuggestQuery()
+			}
 			return false
 		case tui.KeyLeft:
-			// Go back to parent directory.
-			i.fileSuggest.Left()
+			// Go back to parent directory. Clear the filter for the same
+			// reason as Right: it was scoped to the level we just left.
+			if i.fileSuggest.Left() {
+				i.clearFileSuggestQuery()
+			}
 			return false
 		case tui.KeyEnter:
 			if entry, ok := i.fileSuggest.SelectedEntry(i.ed.Value()); ok {
@@ -2187,8 +2348,8 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		// stays a complete record of the session, not just the half
 		// that originated on the phone. On a goroutine so the
 		// network write doesn't delay the local turn.
-		if i.telegramBridge != nil && i.telegramBridge.Active() {
-			go i.telegramBridge.OnUserTyped(text)
+		if i.chatBridge != nil && i.chatBridge.Active() {
+			go i.chatBridge.OnUserTyped(text)
 		}
 		// If a turn is already in flight, queue this prompt inside the
 		// agent loop so it is delivered at the next safe model-call
@@ -2326,8 +2487,14 @@ func (i *Interactive) invokeExtensionCommand(ctx context.Context, name, args str
 		}
 		i.startTurn(i.runCtx, resp.Prompt)
 	case "insert":
-		i.ed.Insert(resp.Insert)
-		i.invalidate()
+		// invokeExtensionCommand runs on a background goroutine, but
+		// tui.Editor has no locking and is otherwise mutated only from
+		// the main key loop. Marshal the insert onto the main goroutine
+		// so we don't race the renderer / key handler.
+		text := resp.Insert
+		i.runOnMain(func() {
+			i.ed.Insert(text)
+		})
 	case "display":
 		i.appendExtensionNote(name, resp.Display, "info")
 	case "noop", "":
@@ -2422,7 +2589,7 @@ func (i *Interactive) Submit(text string) {
 // caches, and points the file picker at the new directory.
 //
 // The fresh agent's transcript is empty (new session) so the chat
-// view starts blank, matching what relaunching `zot --cwd <path>`
+// view starts blank, matching what relaunching `terva --cwd <path>`
 // would show. Cost meters reset.
 func (i *Interactive) ApplyChangedCWD(ag *core.Agent, provider, model, cwd string) {
 	i.mu.Lock()
@@ -2524,10 +2691,15 @@ func (i *Interactive) CancelTurn() {
 	}
 }
 
-// Insert places text at the cursor in the editor.
+// Insert places text at the cursor in the editor. Called from
+// extension host hooks that run on background goroutines, so the
+// editor mutation is marshalled onto the main Run() goroutine —
+// tui.Editor has no internal locking and is otherwise only touched
+// by the key loop.
 func (i *Interactive) Insert(text string) {
-	i.ed.Insert(text)
-	i.invalidate()
+	i.runOnMain(func() {
+		i.ed.Insert(text)
+	})
 }
 
 // Display appends a styled note from extName to the chat without a
@@ -2622,6 +2794,9 @@ func (i *Interactive) openSettingsDialog() {
 		autoSwarmHint = "swarm supervisor not available in this mode"
 	}
 
+	recursiveFiles := i.cfg.RecursiveFileSuggest != nil && *i.cfg.RecursiveFileSuggest
+	respectGitignore := i.cfg.RespectGitignore == nil || *i.cfg.RespectGitignore
+
 	reasoningOptions := []settingsOption{
 		{value: "", label: "off", desc: "no reasoning"},
 		{value: "minimum", label: "minimum", desc: "very brief (~1k tokens)"},
@@ -2647,7 +2822,7 @@ func (i *Interactive) openSettingsDialog() {
 	if themeName == "" {
 		themeName = "auto"
 	}
-	if themeName != "auto" && !tui.ThemeExists(i.cfg.ZotHome, themeName) {
+	if themeName != "auto" && !tui.ThemeExists(i.cfg.TervaHome, themeName) {
 		themeName = "auto"
 		i.cfg.ThemeName = ""
 		if i.cfg.SettingsStore != nil {
@@ -2657,7 +2832,7 @@ func (i *Interactive) openSettingsDialog() {
 	}
 	themeOptions := []settingsOption{}
 	themeChoice := 0
-	availableThemes := tui.AvailableThemes(i.cfg.ZotHome)
+	availableThemes := tui.AvailableThemes(i.cfg.TervaHome)
 	if i.cfg.ExtensionThemes != nil {
 		availableThemes = append(availableThemes, i.cfg.ExtensionThemes()...)
 	}
@@ -2686,6 +2861,18 @@ func (i *Interactive) openSettingsDialog() {
 			hint:     autoSwarmHint,
 		},
 		{
+			key:   "recursive_file_suggest",
+			label: "recursive @-file search",
+			desc:  "fuzzy-search the whole project tree when picking files with @ instead of browsing one directory at a time",
+			value: recursiveFiles,
+		},
+		{
+			key:   "respect_gitignore",
+			label: "hide gitignored files in @-picker",
+			desc:  "skip files and directories matched by the project's root .gitignore (and .git) when picking files with @",
+			value: respectGitignore,
+		},
+		{
 			key:     "reasoning",
 			label:   "thinking level",
 			desc:    "reasoning depth for thinking-capable models",
@@ -2696,7 +2883,7 @@ func (i *Interactive) openSettingsDialog() {
 		{
 			key:     "theme",
 			label:   "color theme",
-			desc:    "choose a theme from $ZOT_HOME/themes or a loaded extension",
+			desc:    "choose a theme from $TERVA_HOME/themes or a loaded extension",
 			options: themeOptions,
 			choice:  themeChoice,
 		},
@@ -2767,6 +2954,40 @@ func (i *Interactive) applySettingToggle(key string, value bool) {
 		i.statusOK = "auto-swarm " + onOff(value)
 		i.statusErr = ""
 		i.mu.Unlock()
+	case "recursive_file_suggest":
+		val := value
+		i.cfg.RecursiveFileSuggest = &val
+		if i.cfg.SettingsStore != nil {
+			if err := i.cfg.SettingsStore.SetRecursiveFileSuggest(value); err != nil {
+				i.mu.Lock()
+				i.statusErr = "settings: " + err.Error()
+				i.mu.Unlock()
+				return
+			}
+		}
+		// Flip the live picker so the next @ reflects the new mode
+		// without restarting terva. SetRecursive drops its cache.
+		i.fileSuggest.SetRecursive(value)
+		i.mu.Lock()
+		i.statusOK = "recursive @-file search " + onOff(value)
+		i.statusErr = ""
+		i.mu.Unlock()
+	case "respect_gitignore":
+		val := value
+		i.cfg.RespectGitignore = &val
+		if i.cfg.SettingsStore != nil {
+			if err := i.cfg.SettingsStore.SetRespectGitignore(value); err != nil {
+				i.mu.Lock()
+				i.statusErr = "settings: " + err.Error()
+				i.mu.Unlock()
+				return
+			}
+		}
+		i.fileSuggest.SetRespectGitignore(value)
+		i.mu.Lock()
+		i.statusOK = "hide gitignored files in @-picker " + onOff(value)
+		i.statusErr = ""
+		i.mu.Unlock()
 	}
 }
 
@@ -2794,13 +3015,13 @@ func (i *Interactive) applyThemeNow(name string) {
 	if tui.IsLightTheme(i.cfg.Theme) {
 		detected = tui.Light
 	}
-	th, applied, err := tui.LoadThemeFromHome(i.cfg.ZotHome, name, detected)
+	th, applied, err := tui.LoadThemeFromHome(i.cfg.TervaHome, name, detected)
 	if err != nil {
 		if i.cfg.SettingsStore != nil {
 			_ = i.cfg.SettingsStore.SetTheme("auto")
 		}
 		i.cfg.ThemeName = ""
-		th, applied, _ = tui.LoadThemeFromHome(i.cfg.ZotHome, "auto", detected)
+		th, applied, _ = tui.LoadThemeFromHome(i.cfg.TervaHome, "auto", detected)
 		i.mu.Lock()
 		i.statusErr = "theme missing; reset to default"
 		i.mu.Unlock()
@@ -3113,6 +3334,8 @@ func (i *Interactive) runSlash(ctx context.Context, cmd string) (done bool) {
 		i.shellBlock = nil
 		i.view.InvalidateRenderCache()
 		i.mu.Unlock()
+	case "/new":
+		i.startNewSession()
 	case "/help":
 		i.mu.Lock()
 		i.helpBlock = renderHelpBlock(i.cfg.Theme, i.lastCols())
@@ -3124,7 +3347,9 @@ func (i *Interactive) runSlash(ctx context.Context, cmd string) (done bool) {
 		i.scrollOffset = 0
 		i.mu.Unlock()
 	case "/login":
-		i.dialog.Open(i.cfg.ZotHome)
+		i.dialog.Open(i.cfg.TervaHome)
+	case "/migrate":
+		i.openMigrateDialog()
 	case "/logout":
 		if len(parts) >= 2 {
 			// Explicit target: /logout anthropic | openai | all
@@ -3148,7 +3373,7 @@ func (i *Interactive) runSlash(ctx context.Context, cmd string) (done bool) {
 	case "/settings":
 		i.openSettingsDialog()
 	case "/sessions":
-		i.sessionDialog.Open(i.cfg.ZotHome, i.cfg.CWD)
+		i.sessionDialog.Open(i.cfg.TervaHome, i.cfg.CWD)
 	case "/jump":
 		i.openJumpDialog(parts[1:])
 	case "/btw":
@@ -3189,7 +3414,7 @@ func (i *Interactive) runSlash(ctx context.Context, cmd string) (done bool) {
 		// Hidden command: switch the running session's cwd. Not in
 		// slash_suggest, not in /help. Used by the workspaces
 		// extension's panel-key Enter handler so picking a row
-		// jumps zot into that directory without relaunching.
+		// jumps terva into that directory without relaunching.
 		//
 		// Recovers the raw argument (path) from the original cmd
 		// string rather than parts, so paths with spaces survive.
@@ -3257,12 +3482,12 @@ func (i *Interactive) runSlash(ctx context.Context, cmd string) (done bool) {
 		i.mu.Unlock()
 	case "/reload-ext":
 		i.runReloadExt(ctx)
-	case "/telegram", "/tg":
+	case "/connect", "/telegram", "/tg":
 		if len(parts) >= 2 {
-			i.doTelegram(parts[1])
+			i.doConnector(parts[1])
 			break
 		}
-		i.openTelegramDialog()
+		i.openConnectDialog()
 	case "/session":
 		if len(parts) >= 2 {
 			action := parts[1]
@@ -3303,6 +3528,38 @@ func (i *Interactive) runSlash(ctx context.Context, cmd string) (done bool) {
 // listed, plus an "all" entry when more than one is present. If
 // nothing's logged in, writes a status line instead of opening an
 // empty dialog.
+// openMigrateDialog plans a zot→terva migration and opens the staged // rename:keep
+// /migrate dialog. Project-only runs (no user dir to copy) finalize
+// the no-fallback marker right away — same rule as the CLI path.
+func (i *Interactive) openMigrateDialog() {
+	if i.cfg.Migration == nil || i.cfg.Migration.Plan == nil {
+		i.mu.Lock()
+		i.statusErr = "/migrate unavailable: host did not wire Migration"
+		i.mu.Unlock()
+		i.invalidate()
+		return
+	}
+	st := i.cfg.Migration.Plan()
+	if st.NothingToDo {
+		i.mu.Lock()
+		i.statusOK = "nothing to migrate — already on the terva data dir"
+		i.mu.Unlock()
+		i.invalidate()
+		return
+	}
+	if !st.UserDirApplicable && !st.AlreadyMigrated && i.cfg.Migration.Finalize != nil {
+		if err := i.cfg.Migration.Finalize(); err != nil {
+			i.mu.Lock()
+			i.statusErr = "write the no-fallback marker: " + err.Error()
+			i.mu.Unlock()
+			i.invalidate()
+			return
+		}
+	}
+	i.migrateDialog.Open(st)
+	i.invalidate()
+}
+
 func (i *Interactive) openLogoutDialog() {
 	if i.cfg.AuthManager == nil {
 		i.mu.Lock()
@@ -3459,11 +3716,11 @@ func (i *Interactive) doLogout(target string) {
 }
 
 func providerSetupInfo(provider string) (string, []string, bool) {
-	const docsURL = "https://raw.githubusercontent.com/patriceckhart/zot/main/docs/providers.md"
+	docsURL := identity.RawDocURL("docs/providers.md")
 	switch provider {
 	case "amazon-bedrock":
 		return "Amazon Bedrock setup", []string{
-			"Amazon Bedrock uses AWS credentials instead of a generic zot API-key entry.",
+			"Amazon Bedrock uses AWS credentials instead of a generic terva API-key entry.",
 			"Configure an AWS profile, IAM keys, bearer token, or role-based credentials.",
 			"",
 			"For Bedrock API keys, set:",
@@ -3581,10 +3838,17 @@ func (i *Interactive) submitManualOAuthCode(code string) {
 		return
 	}
 	go func() {
-		if err := i.cfg.AuthManager.CompleteManualOAuth(i.runCtx, code); err != nil {
-			i.dialog.ShowResult(false, err.Error())
-			i.invalidate()
-		}
+		// CompleteManualOAuth already emits an "error" (or "success")
+		// event on AuthManager.Events(), which the main Run() loop
+		// consumes via handleAuthEvent and routes to the loginDialog on
+		// the main goroutine. Mutating i.dialog here would race that
+		// goroutine — loginDialog has no mutex — so we just trigger the
+		// exchange and let the event path deliver the result. The
+		// returned error is surfaced via the emitted event; the only
+		// non-emitting branches (empty code / no flow in progress) are
+		// unreachable from the dialog submit path, which gates on a
+		// non-empty SubmitCode with a manual flow already started.
+		_ = i.cfg.AuthManager.CompleteManualOAuth(i.runCtx, code)
 	}()
 }
 
@@ -3739,6 +4003,48 @@ func totalTurnsLocked(msgs []provider.Message) int {
 		}
 	}
 	return n
+}
+
+// startNewSession closes the current session and starts a fresh one in
+// the same directory via the cli-provided callback, then resets the TUI
+// to an empty transcript. The previous session stays on disk (resume it
+// later with /sessions); this is the in-place equivalent of quitting and
+// relaunching terva. Dispatched by /new, which is a turn-cancelling command
+// so the agent is idle by the time we get here.
+func (i *Interactive) startNewSession() {
+	if i.cfg.NewSession == nil {
+		i.mu.Lock()
+		i.statusErr = "starting a new session is not wired in this build"
+		i.statusOK = ""
+		i.mu.Unlock()
+		return
+	}
+	if err := i.cfg.NewSession(i.cfg.Provider, i.cfg.Model); err != nil {
+		i.mu.Lock()
+		i.statusErr = err.Error()
+		i.statusOK = ""
+		i.mu.Unlock()
+		return
+	}
+	i.mu.Lock()
+	// The callback reset the agent's transcript and cost; mirror that in
+	// the view and the status-bar meters.
+	if i.agent != nil {
+		i.view.Messages = i.agent.Messages()
+	}
+	i.toolCalls = map[string]*tui.ToolCallView{}
+	i.toolOrder = nil
+	i.cumUsage = provider.Usage{}
+	i.lastCtxInput = 0
+	i.parkedTurn = 0
+	i.parkedTotal = 0
+	i.scrollOffset = 0
+	i.extNotes = nil
+	i.helpBlock = nil
+	i.statusErr = ""
+	i.statusOK = "started a new session"
+	i.view.InvalidateRenderCache()
+	i.mu.Unlock()
 }
 
 // applySessionSelection loads the given session via the cli-provided
@@ -3912,17 +4218,32 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 	// the existing agent — no rebuild needed because the underlying
 	// client is reusable. Rescue retries always rebuild so a stale
 	// auth header / base URL can't carry over.
+	//
+	// "Reusable" only holds when the resolved endpoint doesn't change.
+	// A per-model models.json baseUrl can route two models of the same
+	// provider to different backends (one on a gateway, another local).
+	// The provider client captures its base URL immutably at construction
+	// and the terva_status tool caches it at build time, so mutating Model
+	// in place would keep firing requests at — and reporting — the
+	// previous model's endpoint. When the base URL differs, fall through
+	// to a full rebuild (which re-runs Resolve and reconstructs both the
+	// client and the status tool). Without a builder we can't rebuild, so
+	// keep the in-place swap as a fallback — no worse than before.
 	if !rescue && i.agent != nil && m.Provider == i.cfg.Provider {
-		i.mu.Lock()
-		i.cfg.Model = m.ID
-		i.agent.Model = m.ID
-		i.statusOK = "model: " + m.ID
-		i.statusErr = ""
-		i.mu.Unlock()
-		if i.cfg.PersistModel != nil {
-			i.cfg.PersistModel(i.cfg.Provider, m.ID)
+		cur, curErr := provider.FindModel(i.cfg.Provider, i.cfg.Model)
+		endpointChanged := curErr != nil || cur.BaseURL != m.BaseURL
+		if !endpointChanged || builder == nil {
+			i.mu.Lock()
+			i.cfg.Model = m.ID
+			i.agent.Model = m.ID
+			i.statusOK = "model: " + m.ID
+			i.statusErr = ""
+			i.mu.Unlock()
+			if i.cfg.PersistModel != nil {
+				i.cfg.PersistModel(i.cfg.Provider, m.ID)
+			}
+			return
 		}
-		return
 	}
 	if builder == nil {
 		i.mu.Lock()
@@ -3976,9 +4297,9 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 	i.mu.Unlock()
 	// The new agent was built off the base tool registry, so any
 	// dynamically-registered tools (telegram_send_*) need to be
-	// reattached. applyTelegramTools is a no-op when the bridge is
+	// reattached. applyChatTools is a no-op when the bridge is
 	// idle so the cross-provider path still works on a vanilla setup.
-	i.applyTelegramTools(i.telegramBridge != nil && i.telegramBridge.Active())
+	i.applyChatTools(i.chatBridge != nil && i.chatBridge.Active())
 	if i.cfg.PersistModel != nil {
 		i.cfg.PersistModel(p, md)
 	}
@@ -3993,6 +4314,42 @@ func (i *Interactive) handleAuthEvent(ev auth.Event) {
 	case "error":
 		i.dialog.ShowResult(false, ev.Message)
 	case "success":
+		// A fresh openai-compatible login is the only api-key flow that
+		// also carries a target model (captured in the login form). Persist
+		// the provider+model so the rebuilt agent — and the next launch —
+		// point at the local/custom endpoint. Other providers rely on the
+		// auto-fallback in Resolve and don't need this.
+		if ev.Provider == "openai-compatible" && i.cfg.AuthManager != nil {
+			baseURL, mdl, ctxWin := i.cfg.AuthManager.Store().Extras("openai-compatible")
+			if mdl != "" {
+				// Register the model into the live catalog so it appears
+				// in the /model picker without a restart, then persist the
+				// pick so the rebuilt agent and the next launch use it.
+				// (A full /v1/models discovery also runs in the background.)
+				if baseURL != "" {
+					if ctxWin <= 0 {
+						ctxWin = 32768
+					}
+					provider.RegisterExtraModel(provider.Model{
+						Provider:      "openai-compatible",
+						ID:            mdl,
+						DisplayName:   mdl,
+						ContextWindow: ctxWin,
+						MaxOutput:     8192,
+						BaseURL:       baseURL,
+						Source:        "openai-compatible",
+					})
+				}
+				if i.cfg.PersistModel != nil {
+					i.cfg.PersistModel("openai-compatible", mdl)
+				}
+				// Discover the rest of the endpoint's models in the
+				// background so they all appear in /model without a restart.
+				if i.cfg.RefreshCompatModels != nil {
+					i.cfg.RefreshCompatModels()
+				}
+			}
+		}
 		// Rebuild the agent with the fresh credential.
 		ag, prov, model, err := i.cfg.BuildAgent()
 		if err != nil {
@@ -4006,7 +4363,7 @@ func (i *Interactive) handleAuthEvent(ev auth.Event) {
 		i.statusErr = ""
 		i.statusOK = "logged in to " + ev.Provider + " via " + ev.Method
 		i.mu.Unlock()
-		i.applyTelegramTools(i.telegramBridge != nil && i.telegramBridge.Active())
+		i.applyChatTools(i.chatBridge != nil && i.chatBridge.Active())
 		i.dialog.ShowResult(true, "")
 	}
 }
@@ -4258,14 +4615,59 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 	if i.agent == nil {
 		return
 	}
+	// Surface a dropped-image note up front: the provider layer
+	// silently strips images for models without the image-input
+	// capability (better than 400-bricking the session), but silence
+	// here would leave the user wondering why the model never saw
+	// their screenshot.
+	if len(images) > 0 {
+		i.mu.Lock()
+		provName, modelID := i.cfg.Provider, i.cfg.Model
+		i.mu.Unlock()
+		if m, err := provider.FindModel(provName, modelID); err == nil && !m.Has(provider.CapImageInput) {
+			i.mu.Lock()
+			i.statusErr = fmt.Sprintf("note: %s can't see images — %d attachment(s) will be dropped", modelID, len(images))
+			i.mu.Unlock()
+			i.invalidate()
+		}
+	}
+	ctx, cancel := context.WithCancel(parent)
+
+	// Atomically decide whether to start this turn or fold it back into
+	// the queue. The busy check and the busy claim happen under one
+	// continuous lock hold so two producers on different goroutines
+	// (key loop, telegram bridge, auto-swarm watcher, extension prompt
+	// actions) can't both observe idle and both launch a turn — that
+	// race interleaved transcript appends and ran two concurrent
+	// agent.Prompt calls. See deep-review Part B #3.
+	i.mu.Lock()
+	if i.busy {
+		// Lost the race (or a turn was already running): queue the text
+		// instead of starting a second concurrent turn. Mirror the
+		// queue semantics used by SubmitOrQueue / the editor submit
+		// path — prefer the agent's in-loop queue so the prompt lands
+		// at the next safe model-call boundary, falling back to the
+		// host-side queue when there's no agent yet.
+		ag := i.agent
+		i.mu.Unlock()
+		cancel()
+		if ag != nil {
+			ag.QueueMessage(prompt)
+		} else {
+			i.mu.Lock()
+			i.queued = append(i.queued, prompt)
+			i.mu.Unlock()
+		}
+		i.invalidate()
+		return
+	}
 	// Pre-turn safety: if the most recent context measurement is
 	// already past the auto-compact threshold, condense before
 	// sending so the next outbound request stays under the limit.
 	// The condense flow re-fires the user's queued prompt for us, so
-	// we just hand it off and exit.
-	i.mu.Lock()
-	needsPreCompact := !i.autoCompacting && i.shouldAutoCompactLocked()
-	if needsPreCompact {
+	// we just hand it off and exit. We have NOT claimed busy yet, so
+	// the compact flow owns scheduling the re-fire.
+	if !i.autoCompacting && i.shouldAutoCompactLocked() {
 		if prompt != "" {
 			i.queued = append([]string{prompt}, i.queued...)
 		}
@@ -4273,14 +4675,11 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 		i.extNotes = append(i.extNotes, autoCompactNoteLine(i.cfg.Theme, "context near limit — condensing history before sending..."))
 		i.pendingPostCompactNote = "context auto-compacted; sending your last message"
 		i.mu.Unlock()
+		cancel()
 		i.invalidate()
 		i.runCompact(parent, true)
 		return
 	}
-	i.mu.Unlock()
-
-	ctx, cancel := context.WithCancel(parent)
-	i.mu.Lock()
 	i.busy = true
 	i.spin.Start()
 	i.cancelTurn = cancel
@@ -4299,7 +4698,7 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 	// "last frame had the previous turn's tool overlay" and
 	// "this frame had it cleared above". Without this, the guard
 	// reads delta = -(rows in cleared overlay) and decrements
-	// scrollOffset, which on terminals that mirror zot's pane
+	// scrollOffset, which on terminals that mirror terva's pane
 	// scroll into the host scrollbar visibly yanks the viewport.
 	// See autofollow_shrink_test.go for the exact arithmetic.
 	i.prevChatLen = 0
@@ -4371,7 +4770,7 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 		}
 		// Persist the assistant's reply (and every tool row before
 		// it) to the session file while the turn memory is hot.
-		// Without this, WriteNewTranscript only fires at zot exit,
+		// Without this, WriteNewTranscript only fires at terva exit,
 		// meaning a crash or ungraceful kill drops the whole
 		// conversation. FlushSession is idempotent (it advances the
 		// baseline so subsequent flushes only write new rows).
@@ -4496,13 +4895,16 @@ func autoCompactNoteLine(th tui.Theme, msg string) string {
 }
 
 // isPayloadTooLargeError matches HTTP 413 responses surfaced by the
-// provider clients. The error formatting differs slightly between
-// providers (anthropic and openai both prepend the status code), so
-// we look for the canonical 413 marker as well as the conventional
-// 'payload too large' phrase.
+// provider clients — typed status first, with a prose fallback for
+// untyped errors and for providers that phrase oversize rejections
+// without the status code.
 func isPayloadTooLargeError(err error) bool {
 	if err == nil {
 		return false
+	}
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) && pe.Status != 0 {
+		return pe.Status == 413
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "http 413") || strings.Contains(msg, " 413") || strings.HasPrefix(msg, "413 ") || strings.Contains(msg, "payload too large") || strings.Contains(msg, "request entity too large")
@@ -4656,6 +5058,17 @@ func (i *Interactive) handleEvent(ev core.AgentEvent) {
 			i.statusOK = "cancelled"
 			return
 		}
+		if e.Stop == provider.StopLength {
+			// The model hit its output-token cap mid-response, so the
+			// reply (often a long write/edit) is truncated. Surface it
+			// explicitly, otherwise the turn just ends and reads like
+			// the UI gave up. The agent already requests the model's
+			// full MaxOutput budget, so this means the response genuinely
+			// exceeded that ceiling; ask the user to continue.
+			i.statusErr = "response hit the model's output-token limit and was cut off, ask it to continue"
+			i.statusOK = ""
+			return
+		}
 		// Don't surface mid-loop stream errors as a red banner here.
 		// EvTurnEnd fires after every step in a multi-step tool loop,
 		// so a transient 503 / network blip would briefly paint a red
@@ -4730,129 +5143,155 @@ func (i *Interactive) Confirm(toolName string, preview string) core.ConfirmDecis
 	return <-resp
 }
 
-// openTelegramDialog shows the picker for `/telegram` with no arg.
+// openConnectDialog shows the picker for `/connect` with no arg.
 // Items depend on current state: disconnect + status when running,
 // connect + status when stopped.
-func (i *Interactive) openTelegramDialog() {
-	items := i.telegramMenuItems()
+func (i *Interactive) openConnectDialog() {
+	items := i.connectMenuItems()
 	if len(items) == 0 {
+		msg := i.connectorName() + " not configured. run `terva bot setup` first."
+		if chat.DefaultServiceName() == "" {
+			msg = "no chat connectors compiled into this binary"
+		}
 		i.mu.Lock()
-		i.statusErr = "telegram not configured. run `zot telegram-bot setup` first."
+		i.statusErr = msg
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
-	i.telegramDialog.Open(items)
+	i.connectDialog.Open(items)
 	i.invalidate()
 }
 
-// telegramMenuItems builds the dialog entries for the current
-// bridge state. Returns empty when no bot.json exists so the
+// connectorName returns the active chat service's name: the running
+// bridge's connector when connected, otherwise the registry default.
+func (i *Interactive) connectorName() string {
+	if i.chatBridge != nil && i.chatBridge.Active() {
+		return i.chatBridge.Connector.Name()
+	}
+	return chat.DefaultServiceName()
+}
+
+// chatBridgeName names the connected bridge for the status bar, ""
+// when disconnected.
+func (i *Interactive) chatBridgeName() string {
+	if i.chatBridge != nil && i.chatBridge.Active() {
+		return i.chatBridge.Connector.Name()
+	}
+	return ""
+}
+
+// connectMenuItems builds the dialog entries for the current bridge
+// state. Returns empty when the service isn't configured so the
 // caller can show a helpful status line instead of an empty menu.
-func (i *Interactive) telegramMenuItems() []telegramItem {
-	cfg, err := telegram.LoadConfig(i.cfg.ZotHome)
-	if err != nil || cfg.BotToken == "" {
+func (i *Interactive) connectMenuItems() []connectItem {
+	svc, ok := chat.Lookup(chat.DefaultServiceName())
+	if !ok || !svc.Configured(i.cfg.TervaHome) {
 		return nil
 	}
-	var items []telegramItem
-	if i.telegramBridge != nil && i.telegramBridge.Active() {
-		items = append(items, telegramItem{label: "disconnect", action: "disconnect", hint: "stop mirroring"})
-		st := i.telegramBridge.State()
+	var items []connectItem
+	if i.chatBridge != nil && i.chatBridge.Active() {
+		items = append(items, connectItem{label: "disconnect", action: "disconnect", hint: "stop mirroring"})
+		st := i.chatBridge.State()
 		hint := "active"
 		if st.Username != "" {
 			hint += " as @" + st.Username
 		}
-		items = append(items, telegramItem{label: "status", action: "status", hint: hint})
+		items = append(items, connectItem{label: "status", action: "status", hint: hint})
 	} else {
-		label := "connect"
 		hint := "start mirroring dms into this session"
-		if cfg.AllowedUserID == 0 {
+		if _, pairing, err := svc.NewConnector(i.cfg.TervaHome, nil); err == nil && pairing.AllowedUserID == "" {
 			hint = "awaiting pairing (send /start to the bot once connected)"
 		}
-		items = append(items, telegramItem{label: label, action: "connect", hint: hint})
-		items = append(items, telegramItem{label: "status", action: "status", hint: "disconnected"})
+		items = append(items, connectItem{label: "connect", action: "connect", hint: hint})
+		items = append(items, connectItem{label: "status", action: "status", hint: "disconnected"})
 	}
 	return items
 }
 
-// doTelegram dispatches one of the three explicit actions. Called
-// from /telegram <action> or after the picker selects a row.
-func (i *Interactive) doTelegram(action string) {
+// doConnector dispatches one of the three explicit actions. Called
+// from /connect <action> or after the picker selects a row.
+func (i *Interactive) doConnector(action string) {
 	switch action {
 	case "connect":
-		i.telegramConnect()
+		i.connectorConnect()
 	case "disconnect":
-		i.telegramDisconnect()
+		i.connectorDisconnect()
 	case "status":
-		i.telegramStatus()
+		i.connectorStatus()
 	default:
 		i.mu.Lock()
-		i.statusErr = "unknown telegram action: " + action + " (use connect, disconnect, or status)"
+		i.statusErr = "unknown /connect action: " + action + " (use connect, disconnect, or status)"
 		i.mu.Unlock()
 		i.invalidate()
 	}
 }
 
-// telegramConnect starts the bridge. Refuses if it's already
-// running or if the on-disk bot.json is missing a token.
-func (i *Interactive) telegramConnect() {
-	if i.telegramBridge != nil && i.telegramBridge.Active() {
+// connectorConnect starts the bridge for the default chat service.
+// Refuses if it's already running or the service isn't configured.
+func (i *Interactive) connectorConnect() {
+	if i.chatBridge != nil && i.chatBridge.Active() {
 		i.mu.Lock()
-		i.statusOK = "telegram already connected"
+		i.statusOK = i.connectorName() + " already connected"
 		i.statusErr = ""
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
-	cfg, err := telegram.LoadConfig(i.cfg.ZotHome)
-	if err != nil {
+	svc, ok := chat.Lookup(chat.DefaultServiceName())
+	if !ok {
 		i.mu.Lock()
-		i.statusErr = "telegram: " + err.Error()
+		i.statusErr = "no chat connectors compiled in"
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
-	if cfg.BotToken == "" {
+	if !svc.Configured(i.cfg.TervaHome) {
 		i.mu.Lock()
-		i.statusErr = "telegram: no bot token configured. run `zot telegram-bot setup` first."
+		i.statusErr = svc.Name + ": not configured. run `terva bot setup` first."
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
 	// Refuse to start when a background daemon is already polling
-	// the same bot. Two concurrent long-poll consumers race each
-	// update and one always loses, so DMs get half-delivered. The
-	// user can `zot telegram-bot stop` first, then /telegram connect.
-	if pid, alive, _ := telegram.IsRunning(i.cfg.ZotHome); alive && pid > 0 {
+	// the same service. Two concurrent consumers race each update
+	// and one always loses, so messages get half-delivered. The user
+	// can `terva bot stop` first, then /connect.
+	if pid, alive, _ := chat.IsRunning(i.cfg.TervaHome, svc.Name); alive && pid > 0 {
 		i.mu.Lock()
-		i.statusErr = fmt.Sprintf("telegram: bot daemon already running (pid %d). stop it with `zot telegram-bot stop` first.", pid)
+		i.statusErr = fmt.Sprintf("%s: bot daemon already running (pid %d). stop it with `terva bot stop` first.", svc.Name, pid)
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
-	i.telegramBridge = &telegram.Bridge{
-		Client: telegram.NewClient(cfg.BotToken),
-		Config: cfg,
-		Save: func(next telegram.Config) error {
-			return telegram.SaveConfig(i.cfg.ZotHome, next)
-		},
-		Host: &telegramHost{iv: i},
-	}
-	if err := i.telegramBridge.Start(i.runCtx); err != nil {
-		i.telegramBridge = nil
+	host := &chatHost{iv: i}
+	conn, pairing, err := svc.NewConnector(i.cfg.TervaHome, func(msg string) { host.Notify("warn", msg) })
+	if err != nil {
 		i.mu.Lock()
-		i.statusErr = "telegram connect failed: " + err.Error()
+		i.statusErr = svc.Name + ": " + err.Error()
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
-	i.applyTelegramTools(true)
-	state := i.telegramBridge.State()
-	label := "telegram connected"
+	i.chatBridge = &chat.Bridge{Connector: conn, Host: host, Pairing: pairing}
+	if err := i.chatBridge.Start(i.runCtx); err != nil {
+		i.chatBridge = nil
+		i.mu.Lock()
+		i.statusErr = svc.Name + " connect failed: " + err.Error()
+		i.mu.Unlock()
+		i.invalidate()
+		return
+	}
+	i.applyChatTools(true)
+	state := i.chatBridge.State()
+	label := svc.Name + " connected"
+	if svc.Dev {
+		label = svc.Name + " (dev) connected"
+	}
 	if state.Username != "" {
 		label += " as @" + state.Username
 	}
-	if state.PairedID == 0 {
+	if state.PairedID == "" {
 		label += " — send /start to the bot from your phone to claim it"
 	}
 	i.mu.Lock()
@@ -4862,48 +5301,49 @@ func (i *Interactive) telegramConnect() {
 	i.invalidate()
 }
 
-// telegramDisconnect stops the bridge. No-op when already stopped.
-func (i *Interactive) telegramDisconnect() {
-	if i.telegramBridge == nil || !i.telegramBridge.Active() {
+// connectorDisconnect stops the bridge. No-op when already stopped.
+func (i *Interactive) connectorDisconnect() {
+	name := i.connectorName()
+	if i.chatBridge == nil || !i.chatBridge.Active() {
 		i.mu.Lock()
-		i.statusOK = "telegram already disconnected"
+		i.statusOK = name + " already disconnected"
 		i.statusErr = ""
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
-	i.telegramBridge.Stop()
-	i.applyTelegramTools(false)
+	i.chatBridge.Stop()
+	i.applyChatTools(false)
 	i.mu.Lock()
-	i.statusOK = "telegram disconnected"
+	i.statusOK = name + " disconnected"
 	i.statusErr = ""
 	i.mu.Unlock()
 	i.invalidate()
 }
 
-// telegramSenderAdapter wraps the bridge so the tools package can
-// drive it without importing telegram directly. The Active() check
-// is forwarded to the bridge so the tool can fail clearly with a
-// model-readable error when the user disconnected mid-turn.
-type telegramSenderAdapter struct {
-	bridge *telegram.Bridge
+// chatSenderAdapter wraps the bridge so the tools package can drive
+// it without importing chat directly. The Active() check is forwarded
+// to the bridge so the tool can fail clearly with a model-readable
+// error when the user disconnected mid-turn.
+type chatSenderAdapter struct {
+	bridge *chat.Bridge
 }
 
-func (a telegramSenderAdapter) SendImage(ctx context.Context, path, caption string) error {
+func (a chatSenderAdapter) SendImage(ctx context.Context, path, caption string) error {
 	if a.bridge == nil {
-		return fmt.Errorf("telegram bridge is not connected")
+		return fmt.Errorf("chat bridge is not connected")
 	}
 	return a.bridge.SendImage(ctx, path, caption)
 }
 
-func (a telegramSenderAdapter) SendDocument(ctx context.Context, path, caption string) error {
+func (a chatSenderAdapter) SendDocument(ctx context.Context, path, caption string) error {
 	if a.bridge == nil {
-		return fmt.Errorf("telegram bridge is not connected")
+		return fmt.Errorf("chat bridge is not connected")
 	}
 	return a.bridge.SendDocument(ctx, path, caption)
 }
 
-func (a telegramSenderAdapter) Active() bool {
+func (a chatSenderAdapter) Active() bool {
 	return a.bridge != nil && a.bridge.Active()
 }
 
@@ -4923,12 +5363,15 @@ func (i *Interactive) TrackSwarmAgent(a *swarm.Agent, task string) {
 }
 
 // trackSwarmAgent records a freshly-spawned auto-swarm agent and
-// subscribes to its turn_end events. Sub-agents are long-lived
-// daemons that keep running on the inbox after the initial task,
-// so we can't wait on agent.Wait() — it never returns until the
+// subscribes to its task-level turn_end events. Sub-agents are
+// long-lived daemons that keep running on the inbox after the initial
+// task, so we can't wait on agent.Wait() — it never returns until the
 // whole daemon dies. Instead we mark each entry done on its first
-// turn_end (the initial task finishing), and when every tracked
-// entry has reported in, flush a single summary into the main chat.
+// task-level turn_end (the initial ag.Prompt returning), and when every
+// tracked entry has reported in, flush a single summary into the main
+// chat. The runner only fires OnTurnEnd for task-level turn_ends, never
+// for the core agent's intermediate per-turn turn_ends — otherwise a
+// sub-agent would be declared "finished" after its very first tool call.
 //
 // Wired in from cli.go via SwarmSpawnTool.OnSpawned only when auto-
 // swarm is enabled, so this is a no-op when the feature is off.
@@ -4942,31 +5385,58 @@ func (i *Interactive) trackSwarmAgent(a *swarm.Agent, task string) {
 	i.swarmWatchMu.Unlock()
 
 	a.SetOnTurnEnd(func(step int, errMsg string) {
-		i.swarmWatchMu.Lock()
-		if entry.done {
-			i.swarmWatchMu.Unlock()
-			return
-		}
-		entry.done = true
-		entry.err = errMsg
-		allDone := true
-		for _, e := range i.swarmWatch {
-			if !e.done {
-				allDone = false
-				break
-			}
-		}
-		var batch []*swarmWatchEntry
-		if allDone {
-			batch = i.swarmWatch
-			i.swarmWatch = nil
-		}
-		i.swarmWatchMu.Unlock()
-		if len(batch) == 0 {
-			return
-		}
-		i.flushSwarmSummary(batch)
+		i.finalizeSwarmEntry(entry, errMsg)
 	})
+
+	// Fallback finaliser: a sub-agent that crashes, is stopped, or
+	// otherwise exits before it ever emits a task-level turn_end would
+	// never trip the OnTurnEnd path above, leaving entry.done == false
+	// forever. Because the summary only flushes once *every* tracked
+	// entry is done, one such zombie would wedge every future auto-
+	// swarm summary in the session. swarm.run closes the agent's done
+	// channel exactly when it reaches a terminal state (done / failed /
+	// killed), so Wait() unblocks then; we finalise the entry from
+	// there as a safety net. For a healthy long-lived daemon Wait()
+	// simply blocks until the daemon dies, by which point OnTurnEnd has
+	// already marked the entry done and finalizeSwarmEntry is a no-op.
+	go func() {
+		a.Wait()
+		i.finalizeSwarmEntry(entry, "")
+	}()
+}
+
+// finalizeSwarmEntry marks one tracked auto-swarm entry done and, when
+// that completes the batch, flushes the summary. Idempotent: the first
+// caller (task-level turn_end or the terminal-state waiter, whichever
+// fires first) wins and later calls are no-ops. errMsg is recorded
+// only on the winning call so a turn-level error survives into the
+// summary; a terminal-state finalise passes "" and lets the snapshot's
+// own Err carry any crash detail.
+func (i *Interactive) finalizeSwarmEntry(entry *swarmWatchEntry, errMsg string) {
+	i.swarmWatchMu.Lock()
+	if entry.done {
+		i.swarmWatchMu.Unlock()
+		return
+	}
+	entry.done = true
+	entry.err = errMsg
+	allDone := true
+	for _, e := range i.swarmWatch {
+		if !e.done {
+			allDone = false
+			break
+		}
+	}
+	var batch []*swarmWatchEntry
+	if allDone {
+		batch = i.swarmWatch
+		i.swarmWatch = nil
+	}
+	i.swarmWatchMu.Unlock()
+	if len(batch) == 0 {
+		return
+	}
+	i.flushSwarmSummary(batch)
 }
 
 // flushSwarmSummary composes a synthetic user turn describing every
@@ -5039,7 +5509,7 @@ func (i *Interactive) applyAutoSwarmSystemPrompt(active bool) {
 
 // applyAutoSwarmTool registers (active=true) or removes (active=false)
 // the swarm_spawn tool on the running agent so the model only sees it
-// when /settings -> auto-swarm is enabled. Mirrors applyTelegramTools'
+// when /settings -> auto-swarm is enabled. Mirrors applyChatTools'
 // snapshot+mutate pattern so extension tools and /reload-ext additions
 // survive a toggle.
 func (i *Interactive) applyAutoSwarmTool(active bool) {
@@ -5064,65 +5534,83 @@ func (i *Interactive) applyAutoSwarmTool(active bool) {
 	i.agent.SetTools(next)
 }
 
-// applyTelegramTools registers (active=true) or removes (active=false)
-// the telegram_send_image and telegram_send_file tools on the running
-// agent so the model only sees them while the bridge is connected.
-// Snapshots and mutates the live tool registry so any extension or
-// /reload-ext additions made while Telegram is connected survive a
-// later /telegram disconnect (we only add or strip the two telegram
-// entries, never the rest).
-func (i *Interactive) applyTelegramTools(active bool) {
+// applyChatTools registers (active=true) or removes (active=false)
+// the chat_send_image and chat_send_file tools on the running agent
+// so the model only sees them while a bridge is connected. Snapshots
+// and mutates the live tool registry so any extension or /reload-ext
+// additions made while connected survive a later disconnect (we only
+// add or strip the two chat entries, never the rest).
+func (i *Interactive) applyChatTools(active bool) {
 	if i.agent == nil {
 		return
 	}
 	current := i.agent.Tools
 	next := core.Registry{}
 	for name, t := range current {
-		if name == "telegram_send_image" || name == "telegram_send_file" {
+		if name == "chat_send_image" || name == "chat_send_file" {
 			continue
 		}
 		next[name] = t
 	}
-	if active {
-		sender := telegramSenderAdapter{bridge: i.telegramBridge}
-		next["telegram_send_image"] = &tools.TelegramSendImageTool{
-			CWD: i.cfg.CWD, Sandbox: i.cfg.Sandbox, Sender: sender,
+	if active && i.chatBridge != nil {
+		caps := i.chatBridge.Connector.Capabilities()
+		sender := chatSenderAdapter{bridge: i.chatBridge}
+		if caps.SendsImages {
+			next["chat_send_image"] = &tools.ChatSendImageTool{
+				CWD: i.cfg.CWD, Sandbox: i.cfg.Sandbox, Sender: sender,
+			}
 		}
-		next["telegram_send_file"] = &tools.TelegramSendFileTool{
-			CWD: i.cfg.CWD, Sandbox: i.cfg.Sandbox, Sender: sender,
+		if caps.SendsFiles {
+			next["chat_send_file"] = &tools.ChatSendFileTool{
+				CWD: i.cfg.CWD, Sandbox: i.cfg.Sandbox, Sender: sender,
+			}
 		}
 	}
 	i.agent.SetTools(next)
 }
 
-// telegramStatus writes a one-liner describing the bridge state.
+// connectorStatus writes a one-liner describing the bridge state.
 // Reports on both the in-tui bridge and the background daemon so
 // the user isn't confused when the daemon owns the poll loop.
-func (i *Interactive) telegramStatus() {
+func (i *Interactive) connectorStatus() {
+	name := chat.DefaultServiceName()
+	if name == "" && (i.chatBridge == nil || !i.chatBridge.Active()) {
+		i.mu.Lock()
+		i.statusOK = "no chat connectors compiled into this binary"
+		i.statusErr = ""
+		i.mu.Unlock()
+		i.invalidate()
+		return
+	}
+	// Dev connectors (--connector-manifest) are tagged so they are
+	// never mistaken for installed ones.
+	label := name
+	if svc, ok := chat.Lookup(name); ok && svc.Dev {
+		label = name + " (dev)"
+	}
 	var msg string
-	if i.telegramBridge != nil && i.telegramBridge.Active() {
-		s := i.telegramBridge.State()
-		msg = "telegram: connected (tui bridge)"
+	if i.chatBridge != nil && i.chatBridge.Active() {
+		s := i.chatBridge.State()
+		name = i.chatBridge.Connector.Name()
+		label = name
+		if svc, ok := chat.Lookup(name); ok && svc.Dev {
+			label = name + " (dev)"
+		}
+		msg = label + ": connected (tui bridge)"
 		if s.Username != "" {
 			msg += " as @" + s.Username
 		}
-		if s.PairedID != 0 {
-			msg += fmt.Sprintf(" - paired with user %d", s.PairedID)
+		if s.PairedID != "" {
+			msg += " - paired with user " + s.PairedID
 		} else {
 			msg += " - awaiting pairing"
 		}
-	} else if pid, alive, _ := telegram.IsRunning(i.cfg.ZotHome); alive && pid > 0 {
-		msg = fmt.Sprintf("telegram: background daemon running (pid %d) - /telegram connect won't work until you stop it", pid)
+	} else if pid, alive, _ := chat.IsRunning(i.cfg.TervaHome, name); alive && pid > 0 {
+		msg = fmt.Sprintf("%s: background daemon running (pid %d) - /connect won't work until you stop it", label, pid)
+	} else if svc, ok := chat.Lookup(name); !ok || !svc.Configured(i.cfg.TervaHome) {
+		msg = label + ": not configured. run `terva bot setup` first."
 	} else {
-		cfg, _ := telegram.LoadConfig(i.cfg.ZotHome)
-		if cfg.BotToken == "" {
-			msg = "telegram: not configured. run `zot telegram-bot setup` first."
-		} else {
-			msg = "telegram: disconnected"
-			if cfg.BotUsername != "" {
-				msg += " (@" + cfg.BotUsername + " ready to connect)"
-			}
-		}
+		msg = label + ": disconnected (ready to connect)"
 	}
 	i.mu.Lock()
 	i.statusOK = msg
@@ -5131,17 +5619,17 @@ func (i *Interactive) telegramStatus() {
 	i.invalidate()
 }
 
-// telegramHost adapts *Interactive to telegram.Host so the bridge
-// can call back into the TUI without importing modes directly.
-type telegramHost struct{ iv *Interactive }
+// chatHost adapts *Interactive to chat.Host so the bridge can call
+// back into the TUI without importing modes directly.
+type chatHost struct{ iv *Interactive }
 
-func (h *telegramHost) SubmitOrQueue(prompt string, images []provider.ImageBlock) {
+func (h *chatHost) SubmitOrQueue(prompt string, images []provider.ImageBlock) {
 	h.iv.SubmitOrQueue(prompt, images)
 }
 
-func (h *telegramHost) CancelTurn() { h.iv.CancelTurn() }
+func (h *chatHost) CancelTurn() { h.iv.CancelTurn() }
 
-func (h *telegramHost) Status() string {
+func (h *chatHost) Status() string {
 	h.iv.mu.Lock()
 	providerName := h.iv.cfg.Provider
 	model := h.iv.cfg.Model
@@ -5157,7 +5645,7 @@ func (h *telegramHost) Status() string {
 	if m, err := provider.FindModel(providerName, model); err == nil {
 		ctxMax = m.ContextWindow
 	}
-	return telegram.FormatStatus(telegram.StatusSnapshot{
+	return chat.FormatStatus(chat.StatusSnapshot{
 		Provider:     providerName,
 		Model:        model,
 		CWD:          cwd,
@@ -5170,7 +5658,7 @@ func (h *telegramHost) Status() string {
 	})
 }
 
-func (h *telegramHost) Notify(level, message string) {
+func (h *chatHost) Notify(level, message string) {
 	h.iv.mu.Lock()
 	switch level {
 	case "error", "warn":
@@ -5190,8 +5678,8 @@ func (h *telegramHost) Notify(level, message string) {
 // transcript on fork; no parent/siblings on tree).
 func (i *Interactive) openSessionOpsDialog() {
 	items := []sessionOpsItem{
-		{label: "export", action: "export", hint: "write the current session to a .zotsession file"},
-		{label: "import", action: "import", hint: "load a .zotsession file into this directory"},
+		{label: "export", action: "export", hint: "write the current session to a .tervasession file"},
+		{label: "import", action: "import", hint: "load a .tervasession file into this directory"},
 		{label: "fork", action: "fork", hint: "branch from a past user message into a new session"},
 		{label: "tree", action: "tree", hint: "switch between branches in this directory"},
 	}
@@ -5268,7 +5756,7 @@ func (i *Interactive) doSessionExport(dst string) {
 	i.invalidate()
 }
 
-// doSessionImport copies the .zotsession file at src into the
+// doSessionImport copies the .tervasession file at src into the
 // running cwd's sessions directory and loads it as the active
 // session, same as `/sessions` -> pick. When src is empty we ask
 // the user to pass a path (no usable default here).
@@ -5276,7 +5764,7 @@ func (i *Interactive) doSessionImport(src string) {
 	src = unquotePath(src)
 	if src == "" {
 		i.mu.Lock()
-		i.statusErr = "import: pass a path — e.g. /session import ~/Downloads/work.zotsession"
+		i.statusErr = "import: pass a path — e.g. /session import ~/Downloads/work.tervasession"
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -5289,7 +5777,7 @@ func (i *Interactive) doSessionImport(src string) {
 		i.invalidate()
 		return
 	}
-	newPath, err := core.ImportSession(src, i.cfg.ZotHome, i.cfg.CWD, i.cfg.Version)
+	newPath, err := core.ImportSession(src, i.cfg.TervaHome, i.cfg.CWD, i.cfg.Version)
 	if err != nil {
 		i.mu.Lock()
 		i.statusErr = "import: " + err.Error()
@@ -5414,7 +5902,7 @@ func (i *Interactive) doSessionFork() {
 // Pick an entry to switch into it (same semantics as /sessions
 // picking a past session, but with the parent/child indentation).
 func (i *Interactive) doSessionTree() {
-	if i.cfg.ZotHome == "" || i.cfg.CWD == "" {
+	if i.cfg.TervaHome == "" || i.cfg.CWD == "" {
 		i.mu.Lock()
 		i.statusErr = "tree: session storage not configured"
 		i.mu.Unlock()
@@ -5426,7 +5914,7 @@ func (i *Interactive) doSessionTree() {
 	if i.cfg.FlushSession != nil {
 		i.cfg.FlushSession()
 	}
-	roots := core.BuildSessionTree(i.cfg.ZotHome, i.cfg.CWD)
+	roots := core.BuildSessionTree(i.cfg.TervaHome, i.cfg.CWD)
 	if len(roots) == 0 {
 		i.mu.Lock()
 		i.statusErr = "tree: no sessions in this directory yet"
@@ -5498,7 +5986,7 @@ func (i *Interactive) applyForkSelection(msgIdx int) {
 	// msgIdx is 0-indexed message position; copy msgIdx+1 rows so
 	// the selected user message is included.
 	upTo := msgIdx + 1
-	newPath, err := core.BranchSession(src, i.cfg.ZotHome, i.cfg.CWD, i.cfg.Version, upTo)
+	newPath, err := core.BranchSession(src, i.cfg.TervaHome, i.cfg.CWD, i.cfg.Version, upTo)
 	if err != nil {
 		i.mu.Lock()
 		i.statusErr = "fork: " + err.Error()
@@ -5623,7 +6111,7 @@ func (i *Interactive) assistantMessageSideEffects(m provider.Message) {
 	if i.cfg.OnAssistant != nil {
 		i.cfg.OnAssistant(m)
 	}
-	if i.telegramBridge != nil && i.telegramBridge.Active() {
+	if i.chatBridge != nil && i.chatBridge.Active() {
 		var sb strings.Builder
 		for _, c := range m.Content {
 			if tb, ok := c.(provider.TextBlock); ok {
@@ -5634,7 +6122,7 @@ func (i *Interactive) assistantMessageSideEffects(m provider.Message) {
 			}
 		}
 		if text := sb.String(); strings.TrimSpace(text) != "" {
-			go i.telegramBridge.OnAssistantText(text)
+			go i.chatBridge.OnAssistantText(text)
 		}
 	}
 }

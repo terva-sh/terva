@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"golang.org/x/term"
+	"terva.sh/terva/packages/envcompat"
 )
 
 // DetectThemeFromBackground queries the controlling tty for its
@@ -26,7 +27,7 @@ import (
 func DetectThemeFromBackground(timeout time.Duration) Theme {
 	// Honour explicit override env var first; some users / CI envs
 	// know better than the heuristic.
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("ZOT_THEME"))) {
+	switch strings.ToLower(strings.TrimSpace(envcompat.Get("THEME"))) {
 	case "dark":
 		return Dark
 	case "light":
@@ -155,7 +156,7 @@ func parseOSC11Reply(s string) (float64, float64, float64, bool) {
 // debugDetect is used only in development to help diagnose
 // detection issues; never invoked in production code paths.
 func debugDetect() {
-	fmt.Fprintf(os.Stderr, "zot theme detection: stdin tty=%v stdout tty=%v\n",
+	fmt.Fprintf(os.Stderr, "terva theme detection: stdin tty=%v stdout tty=%v\n",
 		term.IsTerminal(int(os.Stdin.Fd())),
 		term.IsTerminal(int(os.Stdout.Fd())))
 }

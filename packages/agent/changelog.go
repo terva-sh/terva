@@ -5,27 +5,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
+
+	"terva.sh/terva/packages/agent/identity"
 )
 
 // ChangelogInfo is what FetchChangelog returns. Body is the markdown
-// from the GitHub release page; URL points back to that page so the
-// dialog can offer "open in browser".
+// from the release page; URL points back to that page so the dialog
+// can offer "open in browser".
 type ChangelogInfo struct {
 	Version string
 	Body    string
 	URL     string
 }
 
-// FetchChangelog hits the GitHub releases API for the given version
+// FetchChangelog hits the fork's releases API for the given version
 // (must already include the leading "v") and returns the release
 // notes body. Returns an empty ChangelogInfo on any failure or when
 // the body is empty; the caller treats either as "skip silently".
 //
-// Honours $GITHUB_TOKEN for private-repo access. Times out at 4s so
-// startup never blocks on a flaky network.
+// Honours identity.ReleaseHostToken() for private-repo access. Times
+// out at 4s so startup never blocks on a flaky network.
 // semverOnly strips commit hash and date suffixes from version strings
 // like "0.1.12 (25b2bd4, 2026-04-25T09:25:45Z)" to get just "0.1.12".
 func semverOnly(v string) string {
@@ -45,21 +46,20 @@ func FetchChangelog(ctx context.Context, version string) (ChangelogInfo, error) 
 	// of a tagged one so developers always see the newest changelog.
 	var url string
 	if version == "0.0.0" {
-		url = "https://api.github.com/repos/patriceckhart/zot/releases/latest"
+		url = identity.ReleasesAPILatest
 	} else {
 		tag := version
 		if !strings.HasPrefix(tag, "v") {
 			tag = "v" + tag
 		}
-		url = fmt.Sprintf("https://api.github.com/repos/patriceckhart/zot/releases/tags/%s", tag)
+		url = identity.ReleaseTagAPI(tag)
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return ChangelogInfo{}, err
 	}
-	req.Header.Set("accept", "application/vnd.github+json")
-	req.Header.Set("x-github-api-version", "2022-11-28")
-	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+	req.Header.Set("accept", "application/json")
+	if tok := identity.ReleaseHostToken(); tok != "" {
 		req.Header.Set("authorization", "Bearer "+tok)
 	}
 
@@ -70,7 +70,7 @@ func FetchChangelog(ctx context.Context, version string) (ChangelogInfo, error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return ChangelogInfo{}, fmt.Errorf("github api %d", resp.StatusCode)
+		return ChangelogInfo{}, fmt.Errorf("release api %d", resp.StatusCode)
 	}
 
 	var body struct {

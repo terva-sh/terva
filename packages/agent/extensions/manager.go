@@ -1,11 +1,11 @@
-// Package extensions implements the host side of zot's subprocess
+// Package extensions implements the host side of terva's subprocess
 // extension protocol. The Manager discovers extensions in well-known
 // directories, spawns each one, completes the hello handshake, and
 // routes slash commands to the right extension.
 //
-// Each extension is its own process, communicating with zot over its
+// Each extension is its own process, communicating with terva over its
 // stdin/stdout in newline-delimited JSON. Stderr is redirected to a
-// per-extension log file under $ZOT_HOME/logs/. Crashing one
+// per-extension log file under $TERVA_HOME/logs/. Crashing one
 // extension does not affect the others or the host.
 //
 // See docs/extensions.md for the user-facing reference and
@@ -23,17 +23,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/agent/extproto"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/tui"
 )
 
 // Manifest is the extension.json file shipped alongside an
-// extension's executable. It tells zot how to launch the extension
+// extension's executable. It tells terva how to launch the extension
 // and provides display metadata.
 type Manifest struct {
 	Name        string   `json:"name"`
@@ -47,12 +50,12 @@ type Manifest struct {
 
 // IsEnabled returns the manifest's effective enabled state. Default
 // is true so adding a new extension folder Just Works without an
-// extra zot ext enable command.
+// extra terva ext enable command.
 func (m Manifest) IsEnabled() bool {
 	return m.Enabled == nil || *m.Enabled
 }
 
-// Extension is a running extension subprocess and the metadata zot
+// Extension is a running extension subprocess and the metadata terva
 // tracks about it.
 type Extension struct {
 	Manifest Manifest
@@ -66,6 +69,15 @@ type Extension struct {
 	helloAck bool
 	commands []extproto.RegisterCommandFromExt
 	tools    []extproto.RegisterToolFromExt
+
+	// stdinMu serialises every write to this extension's stdin pipe.
+	// Many goroutines (per-subscriber EmitEvent, InvokeTool, Invoke,
+	// askIntercept, panel frames, shutdown) target the same pipe; a
+	// frame larger than PIPE_BUF (4KiB — e.g. an intercepted `write`
+	// tool call carrying a whole file) can otherwise interleave with a
+	// concurrent write and corrupt the extension's stdin stream. All
+	// writes go through writeFrame, which holds this lock.
+	stdinMu sync.Mutex
 
 	// readyCh is closed when the extension sends a ReadyFromExt
 	// frame, or when the host gives up waiting (registrationGrace).
@@ -92,6 +104,25 @@ type Extension struct {
 	// EmitEvent / InterceptToolCall to filter recipients.
 	eventSubs     map[string]struct{}
 	interceptSubs map[string]struct{}
+}
+
+// writeFrame marshals v and writes it to the extension's stdin pipe
+// under stdinMu, so the bytes of one frame never interleave with
+// another goroutine's. Every host->extension write goes through here.
+// Returns the encode error or the write error; a nil stdin (extension
+// that never spawned, e.g. theme-only) is treated as a no-op error.
+func (e *Extension) writeFrame(v any) error {
+	frame, err := extproto.Encode(v)
+	if err != nil {
+		return err
+	}
+	e.stdinMu.Lock()
+	defer e.stdinMu.Unlock()
+	if e.stdin == nil {
+		return errors.New("extension stdin not available")
+	}
+	_, err = e.stdin.Write(frame)
+	return err
 }
 
 // HostHooks is the small interface the manager calls back into the
@@ -128,14 +159,14 @@ type HostHooks interface {
 	ClosePanel(extName, panelID string)
 }
 
-// Manager owns every extension subprocess for the lifetime of zot.
+// Manager owns every extension subprocess for the lifetime of terva.
 type Manager struct {
-	zotHome    string
-	cwd        string
-	zotVersion string
-	provider   string
-	model      string
-	hooks      HostHooks
+	tervaHome    string
+	cwd          string
+	tervaVersion string
+	provider     string
+	model        string
+	hooks        HostHooks
 
 	mu  sync.RWMutex
 	ext map[string]*Extension // keyed by manifest name
@@ -162,11 +193,11 @@ type Manager struct {
 
 // New constructs an empty Manager. Call Discover to populate it from
 // the on-disk extension directories.
-func New(zotHome, cwd, zotVersion, provider, model string, hooks HostHooks) *Manager {
+func New(tervaHome, cwd, tervaVersion, provider, model string, hooks HostHooks) *Manager {
 	return &Manager{
-		zotHome:      zotHome,
+		tervaHome:    tervaHome,
 		cwd:          cwd,
-		zotVersion:   zotVersion,
+		tervaVersion: tervaVersion,
 		provider:     provider,
 		model:        model,
 		hooks:        hooks,
@@ -228,14 +259,18 @@ func (m *Manager) Discover(ctx context.Context) []error {
 
 // searchDirs returns the directories the discoverer walks, in
 // priority order: project-local first (so a project can override
-// global behavior), then global.
+// global behavior), then global. Both project-dir spellings are
+// walked, new name first (the rename's dual-read seam; dedup by
+// extension basename makes .terva win over .terva for the same name).
 func (m *Manager) searchDirs() []string {
 	var dirs []string
 	if m.cwd != "" {
-		dirs = append(dirs, filepath.Join(m.cwd, ".zot", "extensions"))
+		for _, dirName := range envcompat.ProjectDirNames() {
+			dirs = append(dirs, filepath.Join(m.cwd, dirName, "extensions"))
+		}
 	}
-	if m.zotHome != "" {
-		dirs = append(dirs, filepath.Join(m.zotHome, "extensions"))
+	if m.tervaHome != "" {
+		dirs = append(dirs, filepath.Join(m.tervaHome, "extensions"))
 	}
 	return dirs
 }
@@ -260,7 +295,7 @@ func (m *Manager) loadOne(ctx context.Context, dir string) error {
 		return errors.New("manifest: exec is required")
 	}
 	if !mf.IsEnabled() {
-		// Quietly skip disabled extensions; zot ext list will show them.
+		// Quietly skip disabled extensions; terva ext list will show them.
 		return nil
 	}
 
@@ -301,8 +336,8 @@ func (m *Manager) loadOne(ctx context.Context, dir string) error {
 }
 
 // LoadExplicit loads each path as an ad-hoc extension. Used for
-// `zot --ext <path>` so extension authors can iterate on a working
-// copy without having to `zot ext install` after every change.
+// `terva --ext <path>` so extension authors can iterate on a working
+// copy without having to `terva ext install` after every change.
 //
 // Loaded BEFORE Discover so explicit paths win on name conflicts
 // against installed extensions. Spawns happen in parallel like the
@@ -439,7 +474,7 @@ func (m *Manager) Reload(ctx context.Context, grace time.Duration) ReloadStats {
 	stats.Loaded = len(m.ext)
 	m.mu.RUnlock()
 
-	// Wait for ready frames. Use the same 3s grace zot uses at
+	// Wait for ready frames. Use the same 3s grace terva uses at
 	// startup so the reload feels no slower than a cold boot.
 	readyDeadline := time.Now().Add(grace)
 	if time.Until(readyDeadline) < 3*time.Second {
@@ -469,7 +504,7 @@ func (m *Manager) Reload(ctx context.Context, grace time.Duration) ReloadStats {
 //
 // Waits run in parallel: total time is max(per-extension wait), not
 // sum. Without this, a single slow extension (e.g. `npx tsx` cold)
-// would gate every other extension's wait too and zot startup would
+// would gate every other extension's wait too and terva startup would
 // scale linearly with the number of slow runtimes installed.
 //
 // Call after Discover and before relying on tool registrations.
@@ -490,7 +525,7 @@ func (m *Manager) WaitForReady(grace time.Duration) {
 			select {
 			case <-ext.readyCh:
 			case <-deadline:
-				fmt.Fprintf(ext.logFile, "[zot] timed out waiting for ready frame; proceeding\n")
+				fmt.Fprintf(ext.logFile, "[terva] timed out waiting for ready frame; proceeding\n")
 				ext.readyOnce.Do(func() { close(ext.readyCh) })
 			}
 		}(ext)
@@ -502,7 +537,7 @@ func (m *Manager) WaitForReady(grace time.Duration) {
 // runs the synchronous portion of the hello handshake. Asynchronous
 // frames are processed in a goroutine started here.
 func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
-	logsDir := filepath.Join(m.zotHome, "logs")
+	logsDir := filepath.Join(m.tervaHome, "logs")
 	_ = os.MkdirAll(logsDir, 0o755)
 	logPath := filepath.Join(logsDir, "ext-"+ext.Manifest.Name+".log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -511,7 +546,7 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 	}
 	ext.LogPath = logPath
 	ext.logFile = logFile
-	fmt.Fprintf(logFile, "\n[zot] starting %s/%s at %s\n", ext.Manifest.Name, ext.Manifest.Version, time.Now().Format(time.RFC3339))
+	fmt.Fprintf(logFile, "\n[terva] starting %s/%s at %s\n", ext.Manifest.Name, ext.Manifest.Version, time.Now().Format(time.RFC3339))
 
 	// Exec resolution rules:
 	//   - absolute path:                 used as-is.
@@ -553,12 +588,35 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 	ext.stdin = stdin
 	ext.stdout = stdout
 
-	// Hello handshake. Read the extension's HelloFromExt synchronously
-	// so we can fail fast on a broken extension; everything after is
-	// processed in the read goroutine.
+	// Hello handshake. Read the extension's HelloFromExt with a deadline
+	// so a binary that never prints hello (a daemon, a REPL, a typo'd
+	// path that opens and waits) can't brick terva startup: Discover()
+	// blocks on every spawn returning, so an unbounded Scan() here would
+	// hang the whole launch with no diagnostic.
+	//
+	// The blocking scanner.Scan() runs on its own goroutine; we race it
+	// against a timer. On timeout we kill the subprocess, which unblocks
+	// the goroutine's Scan() (stdout closes) so it can return and the
+	// channel send is consumed — no leaked reader goroutine.
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	if !scanner.Scan() {
+	scanned := make(chan bool, 1)
+	go func() { scanned <- scanner.Scan() }()
+
+	var ok bool
+	select {
+	case ok = <-scanned:
+	case <-time.After(helloTimeout):
+		_ = cmd.Process.Kill()
+		<-scanned // Scan() now returns false on the closed stdout.
+		fmt.Fprintf(logFile, "[terva] extension %s failed to handshake within %s; killed and skipped\n", ext.Manifest.Name, helloTimeout)
+		return fmt.Errorf("extension %s failed to send hello within %s", ext.Manifest.Name, helloTimeout)
+	case <-ctx.Done():
+		_ = cmd.Process.Kill()
+		<-scanned
+		return ctx.Err()
+	}
+	if !ok {
 		return fmt.Errorf("extension exited before hello: %w", scanner.Err())
 	}
 	var hello extproto.HelloFromExt
@@ -571,17 +629,18 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 	// Trust the manifest's name; ignore mismatch from the hello.
 	ext.helloAck = true
 
-	ack, _ := extproto.Encode(extproto.HelloAckFromHost{
+	hostVersion := m.tervaVersion
+	if err := ext.writeFrame(extproto.HelloAckFromHost{
 		Type:            "hello_ack",
 		ProtocolVersion: extproto.ProtocolVersion,
-		ZotVersion:      m.zotVersion,
+		ZotVersion:      hostVersion, // rename:keep — frozen wire field
+		TervaVersion:    hostVersion,
 		Provider:        m.provider,
 		Model:           m.model,
 		CWD:             m.cwd,
 		ExtensionDir:    ext.Dir,
 		DataDir:         ext.Dir,
-	})
-	if _, err := stdin.Write(ack); err != nil {
+	}); err != nil {
 		return fmt.Errorf("send hello_ack: %w", err)
 	}
 
@@ -606,6 +665,14 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 // even faster once they've started, so this rarely affects them.
 const readyIdleWindow = 250 * time.Millisecond
 
+// helloTimeout bounds how long spawn() waits for an extension's hello
+// frame before giving up on it. Kept consistent with the 3s ready
+// grace terva uses elsewhere (see WaitForReady / Reload) so a slow but
+// legitimate runtime cold-start still has room to print hello. Past
+// this the subprocess is killed and the extension is skipped without
+// blocking the rest of Discover.
+const helloTimeout = 3 * time.Second
+
 func (m *Manager) assumeReadyAfterIdle(ext *Extension) {
 	ext.mu.Lock()
 	last := ext.lastFrameTime
@@ -622,7 +689,7 @@ func (m *Manager) assumeReadyAfterIdle(ext *Extension) {
 		if current.Equal(last) {
 			// No new frame in the idle window. Treat as ready.
 			ext.readyOnce.Do(func() {
-				fmt.Fprintf(ext.logFile, "[zot] no ready frame; auto-readying after idle (legacy SDK?)\n")
+				fmt.Fprintf(ext.logFile, "[terva] no ready frame; auto-readying after idle (legacy SDK?)\n")
 				close(ext.readyCh)
 			})
 			return
@@ -651,7 +718,7 @@ func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
 		}
 		m.mu.Unlock()
 		ext.readyOnce.Do(func() { close(ext.readyCh) })
-		fmt.Fprintf(ext.logFile, "[zot] extension %s read loop exited at %s\n", ext.Manifest.Name, time.Now().Format(time.RFC3339))
+		fmt.Fprintf(ext.logFile, "[terva] extension %s read loop exited at %s\n", ext.Manifest.Name, time.Now().Format(time.RFC3339))
 	}()
 
 	for scanner.Scan() {
@@ -661,7 +728,7 @@ func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
 		ext.mu.Unlock()
 		var frame extproto.Frame
 		if err := json.Unmarshal(line, &frame); err != nil {
-			fmt.Fprintf(ext.logFile, "[zot] malformed json from extension: %v\n", err)
+			fmt.Fprintf(ext.logFile, "[terva] malformed json from extension: %v\n", err)
 			continue
 		}
 		switch frame.Type {
@@ -682,7 +749,7 @@ func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
 		case "register_tool":
 			var rt extproto.RegisterToolFromExt
 			if err := json.Unmarshal(line, &rt); err != nil {
-				fmt.Fprintf(ext.logFile, "[zot] bad register_tool frame: %v\n", err)
+				fmt.Fprintf(ext.logFile, "[terva] bad register_tool frame: %v\n", err)
 				continue
 			}
 			// Validate the schema parses as JSON. If not, refuse to
@@ -690,7 +757,7 @@ func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
 			if len(rt.Schema) > 0 {
 				var tmp any
 				if err := json.Unmarshal(rt.Schema, &tmp); err != nil {
-					fmt.Fprintf(ext.logFile, "[zot] tool %q: schema is not valid json (%v); skipped\n", rt.Name, err)
+					fmt.Fprintf(ext.logFile, "[terva] tool %q: schema is not valid json (%v); skipped\n", rt.Name, err)
 					continue
 				}
 			}
@@ -767,7 +834,7 @@ func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
 				if strings.HasPrefix(text, "/") {
 					m.hooks.SubmitSlash(text)
 				} else {
-					fmt.Fprintf(ext.logFile, "[zot] submit_slash refused (not a slash command): %q\n", s.Text)
+					fmt.Fprintf(ext.logFile, "[terva] submit_slash refused (not a slash command): %q\n", s.Text)
 				}
 			}
 		case "command_response":
@@ -804,7 +871,7 @@ func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
 		case "shutdown_ack":
 			// Caller of Stop is waiting on the process exit, not this frame.
 		default:
-			fmt.Fprintf(ext.logFile, "[zot] unknown frame type %q\n", frame.Type)
+			fmt.Fprintf(ext.logFile, "[terva] unknown frame type %q\n", frame.Type)
 		}
 	}
 }
@@ -828,7 +895,7 @@ func (m *Manager) Commands() []CommandInfo {
 }
 
 // CommandInfo is one extension-registered slash command, surfaced to
-// the rest of zot for display purposes.
+// the rest of terva for display purposes.
 type CommandInfo struct {
 	Extension   string
 	Name        string
@@ -889,13 +956,12 @@ func (m *Manager) InvokeTool(ctx context.Context, name string, args json.RawMess
 	ext.pendingTool[id] = ch
 	ext.mu.Unlock()
 
-	frame, _ := extproto.Encode(extproto.ToolCallFromHost{
+	if err := ext.writeFrame(extproto.ToolCallFromHost{
 		Type: "tool_call",
 		ID:   id,
 		Name: name,
 		Args: args,
-	})
-	if _, err := ext.stdin.Write(frame); err != nil {
+	}); err != nil {
 		ext.mu.Lock()
 		delete(ext.pendingTool, id)
 		ext.mu.Unlock()
@@ -953,13 +1019,12 @@ func (m *Manager) Invoke(ctx context.Context, name, args string, timeout time.Du
 	ext.pending[id] = ch
 	ext.mu.Unlock()
 
-	frame, _ := extproto.Encode(extproto.CommandInvokedFromHost{
+	if err := ext.writeFrame(extproto.CommandInvokedFromHost{
 		Type: "command_invoked",
 		ID:   id,
 		Name: name,
 		Args: args,
-	})
-	if _, err := ext.stdin.Write(frame); err != nil {
+	}); err != nil {
 		ext.mu.Lock()
 		delete(ext.pending, id)
 		ext.mu.Unlock()
@@ -992,9 +1057,7 @@ func (m *Manager) SendPanelKey(extName, panelID, key, text string) error {
 	if !ok {
 		return fmt.Errorf("no extension %q", extName)
 	}
-	frame, _ := extproto.Encode(extproto.PanelKeyFromHost{Type: "panel_key", PanelID: panelID, Key: key, Text: text})
-	_, err := ext.stdin.Write(frame)
-	return err
+	return ext.writeFrame(extproto.PanelKeyFromHost{Type: "panel_key", PanelID: panelID, Key: key, Text: text})
 }
 
 func (m *Manager) SendPanelClose(extName, panelID string) error {
@@ -1004,9 +1067,7 @@ func (m *Manager) SendPanelClose(extName, panelID string) error {
 	if !ok {
 		return fmt.Errorf("no extension %q", extName)
 	}
-	frame, _ := extproto.Encode(extproto.PanelCloseFromHost{Type: "panel_close", PanelID: panelID})
-	_, err := ext.stdin.Write(frame)
-	return err
+	return ext.writeFrame(extproto.PanelCloseFromHost{Type: "panel_close", PanelID: panelID})
 }
 
 func (m *Manager) Stop(gracePeriod time.Duration) {
@@ -1024,10 +1085,12 @@ func stopExtensions(exts []*Extension, gracePeriod time.Duration) {
 		if ext.stdin == nil {
 			continue
 		}
-		if frame, err := extproto.Encode(extproto.ShutdownFromHost{Type: "shutdown"}); err == nil {
-			_, _ = ext.stdin.Write(frame)
-		}
+		_ = ext.writeFrame(extproto.ShutdownFromHost{Type: "shutdown"})
+		// Close under stdinMu so we don't yank the pipe out from under a
+		// concurrent writeFrame on another goroutine.
+		ext.stdinMu.Lock()
 		_ = ext.stdin.Close()
+		ext.stdinMu.Unlock()
 	}
 
 	deadline := time.Now().Add(gracePeriod)
@@ -1062,7 +1125,7 @@ func stopExtensions(exts []*Extension, gracePeriod time.Duration) {
 }
 
 // All returns every extension currently tracked, enabled or not.
-// Used by `zot ext list`.
+// Used by `terva ext list`.
 func (m *Manager) All() []*Extension {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1076,6 +1139,19 @@ func (m *Manager) All() []*Extension {
 // newCorrelationID returns a short non-cryptographic id. We don't
 // need uniqueness across processes, just within the lifetime of one
 // extension's pending map.
+// corrSeq makes correlation IDs collision-free across concurrent
+// callers. The wall-clock prefix alone (microsecond resolution) was not
+// unique enough: a tight burst of concurrent InvokeTool / intercept /
+// command calls could mint the same ID within one microsecond, and the
+// second registration would overwrite the first's reply channel in the
+// pending map — so one caller received the other's response (or none)
+// and hung. See the frame-integrity test in manager_test.go.
+var corrSeq atomic.Uint64
+
+// newCorrelationID returns a process-unique id for matching a host
+// request to its extension response. The timestamp keeps ids readable
+// in the per-extension log; the atomic counter guarantees uniqueness.
 func newCorrelationID() string {
-	return strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "")
+	ts := strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "")
+	return ts + "-" + strconv.FormatUint(corrSeq.Add(1), 10)
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/mattn/go-runewidth"
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/tui"
 )
 
 // helpKeyRows is the list of keybindings shown by /help.
@@ -69,7 +69,7 @@ func renderHelpBlock(th tui.Theme, width int) []string {
 	}
 
 	var out []string
-	out = append(out, frameHeader(th, "zot help", width), "")
+	out = append(out, frameHeader(th, "terva help", width), "")
 
 	// commands section
 	out = append(out, tui.Bold("slash commands:"))

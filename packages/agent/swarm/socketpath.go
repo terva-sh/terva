@@ -17,14 +17,14 @@ const maxUnixSocketPath = 100
 
 // inboxSocketPath returns a per-agent unix-socket path that's short
 // enough to actually work (see maxUnixSocketPath) and unique per
-// swarm root so two zot instances on the same machine don't collide.
+// swarm root so two terva instances on the same machine don't collide.
 //
 // Strategy:
 //
 //  1. Try <root>/agents/<id>/in.sock. This is the obvious place and
 //     puts everything next to the durable state; on most setups it
 //     fits.
-//  2. If that's too long, fall back to <tmp>/zot-swarm-<roothash>/<id>.sock.
+//  2. If that's too long, fall back to <tmp>/terva-swarm-<roothash>/<id>.sock.
 //     We hash root rather than embedding it so the tmp directory name
 //     stays short. SHA-1's first 8 hex chars is plenty: collisions
 //     only matter within a single user's tmp dir and we already
@@ -38,7 +38,7 @@ func inboxSocketPath(root, agentID string) (string, error) {
 		return primary, nil
 	}
 	tmp := os.TempDir()
-	dir := filepath.Join(tmp, "zot-swarm-"+rootTag(root))
+	dir := filepath.Join(tmp, "terva-swarm-"+rootTag(root))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("socket tmp dir: %w", err)
 	}
@@ -59,7 +59,7 @@ func inboxSocketPath(root, agentID string) (string, error) {
 }
 
 // rootTag returns a stable 8-hex-char tag for the swarm root. Used
-// in the tmp-dir name so two parallel zot instances with different
+// in the tmp-dir name so two parallel terva instances with different
 // roots don't share sockets.
 func rootTag(root string) string { return shortHash(root) }
 

@@ -6,7 +6,7 @@ import (
 
 	"github.com/mattn/go-runewidth"
 
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/tui"
 )
 
 // slashCommand is one entry in the autocomplete popup. Header rows
@@ -25,7 +25,7 @@ type slashCommand struct {
 // the streaming response without trouble.
 func slashCancelsTurn(head string) bool {
 	switch head {
-	case "/clear", "/compact", "/logout", "/login", "/model", "/reload-ext", "/cd":
+	case "/new", "/clear", "/compact", "/logout", "/login", "/model", "/reload-ext", "/cd", "/migrate":
 		return true
 	}
 	return false
@@ -38,8 +38,9 @@ var slashCatalog = []slashCommand{
 	{Name: "/login", Desc: "log in via api key or subscription"},
 	{Name: "/logout", Desc: "clear a provider's credentials"},
 	{Name: "/model", Desc: "pick a model (or /model <id>)"},
+	{Name: "/new", Desc: "start a fresh session (the current one stays on disk)"},
 	{Name: "/sessions", Desc: "resume a previous session for this directory"},
-	{Name: "/session", Desc: "export the current session to a .zotsession file, or import one"},
+	{Name: "/session", Desc: "export the current session to a .tervasession file, or import one"},
 	{Name: "/jump", Desc: "scroll the chat to a previous turn (or /jump <text>)"},
 	{Name: "/compact", Desc: "summarize and replace the transcript to free up context"},
 	{Name: "/study", Desc: "read every file in the cwd (or a passed file/dir) so the agent has full context"},
@@ -49,10 +50,11 @@ var slashCatalog = []slashCommand{
 	{Name: "/skills", Desc: "list discovered skills (SKILL.md files)"},
 	{Name: "/swarm", Desc: "supervise background agents that share this working directory"},
 	{Name: "/reload-ext", Desc: "hot-reload all extensions (re-read manifests and respawn)"},
-	{Name: "/telegram", Desc: "connect, disconnect, or show status of the telegram bridge"},
+	{Name: "/connect", Desc: "connect, disconnect, or show status of the chat bridge (telegram)"},
+	{Name: "/migrate", Desc: "move your zot data dir to the terva location"}, // rename:keep
 	{Name: "/settings", Desc: "open settings"},
 	{Name: "/clear", Desc: "clear the chat transcript"},
-	{Name: "/exit", Desc: "exit zot"},
+	{Name: "/exit", Desc: "exit terva"},
 }
 
 // slashSuggester renders the popup that appears when the editor starts

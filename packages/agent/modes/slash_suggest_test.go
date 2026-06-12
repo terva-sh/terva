@@ -28,6 +28,20 @@ func TestSlashSuggesterHasSwarm(t *testing.T) {
 	}
 }
 
+func TestSlashNewIsRegisteredAndDestructive(t *testing.T) {
+	s := newSlashSuggester()
+	if got := commandNames(s.matches("/ne")); !contains(got, "/new") {
+		t.Fatalf("/new missing from suggestions, got %v", got)
+	}
+	if !isKnownSlashCommand("/new") {
+		t.Fatal("/new not recognized as a known slash command")
+	}
+	// /new resets the transcript, so it must cancel an in-flight turn.
+	if !slashCancelsTurn("/new") {
+		t.Fatal("/new should cancel an in-flight turn before running")
+	}
+}
+
 func commandNames(cmds []slashCommand) []string {
 	out := make([]string, 0, len(cmds))
 	for _, c := range cmds {

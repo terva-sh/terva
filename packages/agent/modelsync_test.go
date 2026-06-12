@@ -13,7 +13,7 @@ import (
 // model to anthropic's default and persist.
 func TestValidateAndRepairConfig_MismatchedPair(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("ZOT_HOME", home)
+	t.Setenv("TERVA_HOME", home)
 
 	must := func(c Config) {
 		t.Helper()
@@ -46,7 +46,7 @@ func TestValidateAndRepairConfig_MismatchedPair(t *testing.T) {
 // (e.g. user removed it from a previous build).
 func TestValidateAndRepairConfig_UnknownProvider(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("ZOT_HOME", home)
+	t.Setenv("TERVA_HOME", home)
 
 	b, _ := json.Marshal(Config{Provider: "made-up-provider", Model: "some-model"})
 	_ = os.WriteFile(filepath.Join(home, "config.json"), b, 0o644)
@@ -67,7 +67,7 @@ func TestValidateAndRepairConfig_UnknownProvider(t *testing.T) {
 // longer in the catalog.
 func TestValidateAndRepairConfig_UnknownModel(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("ZOT_HOME", home)
+	t.Setenv("TERVA_HOME", home)
 
 	b, _ := json.Marshal(Config{Provider: "anthropic", Model: "claude-deleted-model"})
 	_ = os.WriteFile(filepath.Join(home, "config.json"), b, 0o644)
@@ -85,7 +85,7 @@ func TestValidateAndRepairConfig_UnknownModel(t *testing.T) {
 
 func TestValidateAndRepairConfig_DuplicateModelIDValidForConfiguredProvider(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("ZOT_HOME", home)
+	t.Setenv("TERVA_HOME", home)
 
 	b, _ := json.Marshal(Config{Provider: "openai-codex", Model: "gpt-5.5"})
 	_ = os.WriteFile(filepath.Join(home, "config.json"), b, 0o644)
@@ -104,7 +104,7 @@ func TestValidateAndRepairConfig_DuplicateModelIDValidForConfiguredProvider(t *t
 // TestValidateAndRepairConfig_HappyPath leaves a valid config alone.
 func TestValidateAndRepairConfig_HappyPath(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("ZOT_HOME", home)
+	t.Setenv("TERVA_HOME", home)
 
 	b, _ := json.Marshal(Config{Provider: "anthropic", Model: "claude-sonnet-4-5"})
 	_ = os.WriteFile(filepath.Join(home, "config.json"), b, 0o644)
