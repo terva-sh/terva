@@ -253,7 +253,7 @@ func NewGoogleVertex(apiKey, baseURL string) Client {
 }
 
 // NewAzureOpenAIResponses delegates to the real Azure OpenAI client.
-// Despite the provider id mentioning "responses", zot uses Azure's
+// Despite the provider id mentioning "responses", terva uses Azure's
 // Chat Completions endpoint (older but functionally complete for our
 // agent loop) to avoid duplicating the full openai-responses wire
 // client. Models register under provider id `azure-openai-responses`
@@ -332,7 +332,7 @@ func NewCloudflareAIGateway(apiKey, baseURL string) Client {
 
 // NewGithubCopilot returns a GitHub Copilot client. The provided
 // credential must be a GitHub Personal Access Token (PAT) with Copilot
-// access enabled; zot trades it for a short-lived Copilot token on
+// access enabled; terva trades it for a short-lived Copilot token on
 // every inference request (cached in memory until ~5min before expiry).
 //
 // Wire format: OpenAI Chat Completions. Copilot-specific headers

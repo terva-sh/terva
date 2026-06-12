@@ -3,7 +3,7 @@ package provider
 // Hand-curated catalog supplements that the bulk builtin catalog
 // (catalog_builtin.go) doesn't cover.
 //
-//   - openai-responses: zot-specific provider id for the public OpenAI
+//   - openai-responses: terva-specific provider id for the public OpenAI
 //     Responses API (api.openai.com/v1/responses). Separate from
 //     `openai` (Chat Completions) and `openai-codex` (ChatGPT subscription).
 //   - kimi/kimi-k2-thinking: matches the Anthropic-Messages endpoint

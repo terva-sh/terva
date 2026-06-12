@@ -1,7 +1,7 @@
 // Package auth handles credential storage and the two login flows
-// supported by zot: API key and (experimental) subscription OAuth.
+// supported by terva: API key and (experimental) subscription OAuth.
 //
-// All credentials live in $ZOT_HOME/auth.json (mode 0600).
+// All credentials live in $TERVA_HOME/auth.json (mode 0600).
 package auth
 
 import (
@@ -28,9 +28,19 @@ type Credentials struct {
 // ProviderCreds holds credentials for a single provider. Most providers
 // use either APIKey or OAuth; OpenAI may store both so the public API
 // route and ChatGPT/Codex subscription route can coexist.
+//
+// BaseURL, Model and ContextWindow are only populated for the
+// openai-compatible provider, whose endpoint has no catalog entry to
+// fall back on. They're captured in the login form and persisted here:
+// BaseURL is where requests go, Model is the default selection, and
+// ContextWindow is the default size applied to discovered models the
+// server doesn't describe (0 means "unknown / use the built-in default").
 type ProviderCreds struct {
-	APIKey string      `json:"api_key,omitempty"`
-	OAuth  *OAuthToken `json:"oauth,omitempty"`
+	APIKey        string      `json:"api_key,omitempty"`
+	OAuth         *OAuthToken `json:"oauth,omitempty"`
+	BaseURL       string      `json:"base_url,omitempty"`
+	Model         string      `json:"model,omitempty"`
+	ContextWindow int         `json:"context_window,omitempty"`
 }
 
 // OAuthToken is an OAuth 2 token set with refresh support.
@@ -60,9 +70,11 @@ func (t *OAuthToken) Expired() bool {
 }
 
 // Has reports whether at least one credential is present for provider.
+// A configured openai-compatible endpoint (base URL set, key optional)
+// counts as present even without an API key.
 func (c *Credentials) Has(provider string) bool {
 	p := c.get(provider)
-	return p != nil && (p.APIKey != "" || p.OAuth != nil)
+	return p != nil && (p.APIKey != "" || p.OAuth != nil || p.BaseURL != "")
 }
 
 // Method returns "apikey", "oauth", or "" for the given provider.
@@ -76,6 +88,10 @@ func (c *Credentials) Method(provider string) string {
 	}
 	if p.OAuth != nil {
 		return "oauth"
+	}
+	// A keyless openai-compatible endpoint is still an api-key style login.
+	if p.BaseURL != "" {
+		return "apikey"
 	}
 	return ""
 }
@@ -107,7 +123,7 @@ func (c *Credentials) setAdditional(provider string, p ProviderCreds) {
 	if c.AdditionalAPIKeyCreds == nil {
 		c.AdditionalAPIKeyCreds = map[string]ProviderCreds{}
 	}
-	if p.APIKey == "" && p.OAuth == nil {
+	if p.APIKey == "" && p.OAuth == nil && p.BaseURL == "" {
 		delete(c.AdditionalAPIKeyCreds, provider)
 		if len(c.AdditionalAPIKeyCreds) == 0 {
 			c.AdditionalAPIKeyCreds = nil
@@ -173,6 +189,46 @@ func (s *Store) SetAPIKey(provider, key string) error {
 		p.OAuth = nil
 	}
 	return s.saveLocked(c)
+}
+
+// SetCompatAPIKey stores credentials for an OpenAI-compatible endpoint:
+// the (optional) API key plus the user-supplied base URL and model id.
+// Unlike SetAPIKey it also persists BaseURL/Model and tolerates an empty
+// key, since many local servers (LM Studio, llama.cpp, vLLM) accept any
+// or no bearer token.
+func (s *Store) SetCompatAPIKey(provider, key, baseURL, model string, contextWindow int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	cur := ProviderCreds{}
+	if existing := c.get(provider); existing != nil {
+		cur = *existing
+	}
+	cur.APIKey = key
+	cur.OAuth = nil
+	cur.BaseURL = baseURL
+	cur.Model = model
+	cur.ContextWindow = contextWindow
+	c.setAdditional(provider, cur)
+	return s.saveLocked(c)
+}
+
+// Extras returns the persisted base URL, default model and default
+// context window for provider. Only the openai-compatible provider
+// populates these (captured in its login form); every other provider
+// returns zero values.
+func (s *Store) Extras(provider string) (baseURL, model string, contextWindow int) {
+	c, err := s.Load()
+	if err != nil {
+		return "", "", 0
+	}
+	if p := c.get(provider); p != nil {
+		return p.BaseURL, p.Model, p.ContextWindow
+	}
+	return "", "", 0
 }
 
 // SetOAuth replaces the OAuth token for provider and saves to disk.

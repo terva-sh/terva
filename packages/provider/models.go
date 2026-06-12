@@ -43,10 +43,87 @@ type Model struct {
 	// "live" (discovered via /v1/models), or "cache" (loaded from the
 	// on-disk cache). Informational.
 	Source string
+
+	// Caps holds explicit capability assertions; an absent key means
+	// unknown and resolves through capDefaults via Has. Treat as
+	// immutable after construction — Model is copied by value
+	// everywhere, so the map is shared between copies; the only writer
+	// is the layer merge, which builds fresh maps (mergeCaps). All
+	// reads go through Has, never the map directly. See
+	// docs/plans/model-capabilities.md.
+	Caps map[Capability]bool
+}
+
+// Capability names one per-model feature flag. Typed string, not
+// iota: the same names appear in models.json `capabilities` keys and
+// in the on-disk model cache.
+type Capability string
+
+const (
+	// CapImageInput marks vision models: ImageBlocks in user/tool
+	// content serialize and the tool-image mirror runs. Models that
+	// can't take images get image blocks dropped at serialization
+	// instead of 400-bricking the session.
+	CapImageInput Capability = "image-input"
+	// CapImageOutput marks image-generation models. Reserved: no
+	// consumer yet; tags without consumers are allowed (they're data).
+	CapImageOutput Capability = "image-output"
+	// CapReasoning is the query-surface alias for the legacy
+	// Model.Reasoning field — Has falls back to it, so filters and
+	// display treat reasoning like any other capability without
+	// migrating the field's existing consumers.
+	CapReasoning Capability = "reasoning"
+)
+
+// capDefaults resolves a capability nobody asserted. Every key added
+// to the constants above MUST pick its default here, choosing the
+// safe/common case: image-input defaults true because most modern API
+// models are vision and silently dropping images for every unknown
+// model would be the worse regression.
+var capDefaults = map[Capability]bool{
+	CapImageInput:  true,
+	CapImageOutput: false,
+}
+
+// KnownCapabilities lists every capability terva understands, for
+// models.json validation warnings.
+func KnownCapabilities() []Capability {
+	return []Capability{CapImageInput, CapImageOutput, CapReasoning}
+}
+
+// Has reports whether the model has the capability: an explicit
+// assertion when present, the legacy Reasoning field for
+// CapReasoning, the per-capability default otherwise. This is the
+// only sanctioned read path for Caps.
+func (m Model) Has(c Capability) bool {
+	if v, ok := m.Caps[c]; ok {
+		return v
+	}
+	if c == CapReasoning {
+		return m.Reasoning
+	}
+	return capDefaults[c]
+}
+
+// mergeCaps overlays over's keys onto base, returning a fresh map
+// when there is anything to overlay. Neither input is mutated: base
+// frequently aliases a catalog literal or another layer's entry.
+func mergeCaps(base, over map[Capability]bool) map[Capability]bool {
+	if len(over) == 0 {
+		return base
+	}
+	out := make(map[Capability]bool, len(base)+len(over))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range over {
+		out[k] = v
+	}
+	return out
 }
 
 // Catalog is the hardcoded, read-only list of supported models.
-// Prices are USD per 1M tokens. The list is curated to what zot's
+// Prices are USD per 1M tokens. The list is curated to what terva's
 // clients (Anthropic Messages + OpenAI Chat Completions) can actually
 // talk to; models that are only reachable through the OpenAI Responses
 // API (o1-pro, o3-pro, gpt-5-pro) are omitted.
@@ -110,12 +187,19 @@ var Catalog = []Model{
 		ContextWindow: 1000000, MaxOutput: 384000, Reasoning: true,
 		PriceInput: 0.435, PriceOutput: 0.87, PriceCacheRead: 0.003625,
 		BaseURL: "https://api.deepseek.com",
+		// Explicit assertion, not just the default: the V3-era API
+		// rejected image parts and terva hardcoded deepseek as text-only;
+		// this row is what deleted that name check (see
+		// docs/plans/model-capabilities.md). A future deepseek model
+		// without vision gets image-input:false on its own row.
+		Caps: map[Capability]bool{CapImageInput: true},
 	},
 	{
 		Provider: "deepseek", ID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash",
 		ContextWindow: 1000000, MaxOutput: 384000, Reasoning: true,
 		PriceInput: 0.14, PriceOutput: 0.28, PriceCacheRead: 0.0028,
 		BaseURL: "https://api.deepseek.com",
+		Caps:    map[Capability]bool{CapImageInput: true},
 	},
 
 	// ---- Kimi / Kimi Code ----
@@ -265,6 +349,12 @@ var Catalog = []Model{
 		PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, PriceCacheWrite: 3.75,
 		Speculative: true,
 	},
+	{
+		Provider: "anthropic", ID: "claude-fable-5", DisplayName: "Claude Fable 5",
+		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
+		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 0.5, PriceCacheWrite: 6.25,
+		Speculative: true,
+	},
 
 	// ---- Speculative: OpenAI ----
 	// Public OpenAI API route. The ChatGPT/Codex subscription route is
@@ -335,44 +425,119 @@ var DefaultModel = Catalog[0] // claude-sonnet-4-5
 // ----- active (merged) catalog -----
 //
 // Callers should use Active() / FindModel / ModelsForProvider for
-// lookups. They return the baked-in Catalog merged with any live
-// models loaded via SetLiveModels.
+// lookups. The catalog they see is merged from four declarative
+// layers, lowest to highest precedence:
+//
+//	builtin — the baked-in Catalog (extended from init()s)
+//	live    — /v1/models discovery or its disk cache (SetLiveModels)
+//	extra   — individually registered models, e.g. the
+//	          openai-compatible endpoint's listing (RegisterExtraModel)
+//	user    — $TERVA_HOME/models.json overrides (SetUserOverrides)
+//
+// Precedence is data, not call ordering: each setter replaces only
+// its own layer and the merge recomputes here. A standard live
+// refresh landing after compat discovery can no longer wipe the
+// compat models, and models.json overrides survive every refresh
+// without being re-applied. (The old single-overlay design enforced
+// precedence by Load*/Set* call order across two packages and lost
+// RegisterExtraModel entries whenever SetLiveModels ran second.)
 
 var (
-	activeMu  sync.RWMutex
-	active    []Model // live overlay merged in via SetLiveModels; nil = none yet
-	activeSet bool    // true once SetLiveModels has run (even with empty live)
+	activeMu   sync.RWMutex
+	layerLive  []Model
+	layerExtra []Model
+	layerUser  []UserOverride
+	// merged is the cached layer merge, recomputed on every layer
+	// write (writes are rare; reads are hot). nil means no layer has
+	// ever been set and Active() serves the baked-in Catalog.
+	merged []Model
 )
 
-// SetLiveModels replaces the "live" overlay used by the active catalog.
-// Typically called after a successful /v1/models discovery or on load
-// from the on-disk cache.
+// remergeLocked recomputes the merged catalog. Callers hold activeMu.
+func remergeLocked() {
+	out := MergeCatalog(layerLive)
+	out = upsertModels(out, layerExtra)
+	out = applyUserOverrides(out, layerUser)
+	merged = out
+}
+
+// upsertModels overlays layer onto base: same provider/id replaces in
+// place (wholesale), new entries append in layer order.
+func upsertModels(base, layer []Model) []Model {
+	if len(layer) == 0 {
+		return base
+	}
+	index := make(map[string]int, len(base))
+	for i, m := range base {
+		index[m.Provider+"/"+m.ID] = i
+	}
+	for _, m := range layer {
+		if i, ok := index[m.Provider+"/"+m.ID]; ok {
+			base[i] = m
+			continue
+		}
+		base = append(base, m)
+		index[m.Provider+"/"+m.ID] = len(base) - 1
+	}
+	return base
+}
+
+// SetLiveModels replaces the "live" layer. Typically called after a
+// successful /v1/models discovery or on load from the on-disk cache.
 func SetLiveModels(live []Model) {
 	activeMu.Lock()
 	defer activeMu.Unlock()
-	activeSet = true
-	if len(live) == 0 {
-		active = nil
-		return
+	layerLive = append([]Model(nil), live...)
+	remergeLocked()
+}
+
+// RegisterExtraModel upserts a single model into the "extra" layer,
+// replacing any layer entry with the same provider/id. Used for models
+// that are neither in the baked-in catalog nor discovered via the
+// standard refresh — currently the openai-compatible endpoint's
+// models. Entries persist across SetLiveModels calls.
+func RegisterExtraModel(m Model) {
+	activeMu.Lock()
+	defer activeMu.Unlock()
+	replaced := false
+	for i, e := range layerExtra {
+		if e.Provider == m.Provider && e.ID == m.ID {
+			layerExtra[i] = m
+			replaced = true
+			break
+		}
 	}
-	active = MergeCatalog(live)
+	if !replaced {
+		layerExtra = append(layerExtra, m)
+	}
+	remergeLocked()
+}
+
+// ResetCatalogLayers clears every overlay layer (live, extra, user),
+// returning Active() to the baked-in Catalog. Intended for tests that
+// need a pristine catalog regardless of what earlier tests installed.
+func ResetCatalogLayers() {
+	activeMu.Lock()
+	defer activeMu.Unlock()
+	layerLive, layerExtra, layerUser, merged = nil, nil, nil, nil
 }
 
 // Active returns the current merged catalog.
 //
-// When no live overlay has been set it returns the fully-assembled
-// static Catalog. Reading Catalog here (rather than capturing it into
-// a package-level var initializer) is load-bearing: the extended
-// catalog in catalog_builtin.go / extra_models.go is appended from
-// init() functions, which run AFTER package-level var initializers.
-// Snapshotting Catalog at var-init time would freeze the picker to the
-// curated seed list and drop every extra provider (openrouter, groq,
-// xai, ...). Deferring the read to call time avoids that ordering trap.
+// When no layer has ever been set it returns the fully-assembled
+// static Catalog. Reading Catalog at call time (rather than capturing
+// it into a package-level var initializer) is load-bearing: the
+// extended catalog in catalog_builtin.go / extra_models.go is appended
+// from init() functions, which run AFTER package-level var
+// initializers. Snapshotting Catalog at var-init time would freeze the
+// picker to the curated seed list and drop every extra provider
+// (openrouter, groq, xai, ...). The same applies to remergeLocked —
+// it only ever runs from a setter call, well after init.
 func Active() []Model {
 	activeMu.RLock()
 	defer activeMu.RUnlock()
-	src := active
-	if !activeSet || src == nil {
+	src := merged
+	if src == nil {
 		src = Catalog
 	}
 	out := make([]Model, len(src))

@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"terva.sh/terva/packages/envcompat"
 )
 
 const anthropicDefaultBaseURL = "https://api.anthropic.com"
@@ -528,11 +530,11 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 		return nil, err
 	}
 
-	// Optional debug dump: when $ZOT_DEBUG_ANTHROPIC is a file path
+	// Optional debug dump: when $TERVA_DEBUG_ANTHROPIC is a file path
 	// we append every outgoing request body to it, one JSON object
 	// per line. Useful for diffing turn N vs turn N+1 to understand
 	// why the cache prefix isn't matching.
-	if dump := os.Getenv("ZOT_DEBUG_ANTHROPIC"); dump != "" {
+	if dump := envcompat.Get("DEBUG_ANTHROPIC"); dump != "" {
 		if f, derr := os.OpenFile(dump, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); derr == nil {
 			_, _ = f.Write(body)
 			_, _ = f.Write([]byte{'\n'})
@@ -578,7 +580,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("anthropic: http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return nil, NewHTTPError("anthropic", resp.StatusCode, resp.Header.Get("Retry-After"), string(b))
 	}
 
 	out := make(chan Event, 16)
@@ -618,6 +620,11 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 		usage      Usage
 		stop       StopReason = StopEnd
 		finalErr   error
+		// sawStop tracks the message_stop terminal frame. If the raw
+		// channel closes before it (connection death mid-stream,
+		// including mid-tool-call), the message is truncated and we must
+		// surface an error rather than report a clean StopEnd.
+		sawStop bool
 	)
 	_ = activeIdx // read-only indicator used for legacy parity
 
@@ -668,6 +675,10 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 			return
 		case ev, ok := <-raw:
 			if !ok {
+				if !sawStop {
+					stop = StopError
+					finalErr = NewStreamDeathError("anthropic", "message_stop")
+				}
 				sendDone()
 				return
 			}
@@ -801,6 +812,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 					stop = StopToolUse
 				}
 			case "message_stop":
+				sawStop = true
 				sendDone()
 				return
 			case "error":
@@ -812,7 +824,12 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &e)
 				stop = StopError
-				finalErr = fmt.Errorf("anthropic %s: %s", e.Error.Type, e.Error.Message)
+				// Anthropic's documented transient error types: 529
+				// overloaded, 500 api_error, 429 rate_limit_error.
+				transient := e.Error.Type == "overloaded_error" ||
+					e.Error.Type == "api_error" ||
+					e.Error.Type == "rate_limit_error"
+				finalErr = NewAPIError("anthropic", e.Error.Type+": "+e.Error.Message, transient)
 				sendDone()
 				return
 			}

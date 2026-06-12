@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -148,7 +150,7 @@ func TestAnthropicBuildRequestStripsAssistantImages(t *testing.T) {
 			{Role: RoleAssistant, Content: []Content{
 				TextBlock{Text: "done"},
 				ImageBlock{MimeType: "image/png", Data: []byte("png")},
-				TextBlock{Text: "Saved image: `zot-gemini-image-x.png`"},
+				TextBlock{Text: "Saved image: `terva-gemini-image-x.png`"},
 			}},
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "hello"}}},
 		},
@@ -304,6 +306,62 @@ func TestOpenAIStreamHappyPath(t *testing.T) {
 	}
 	if done.Stop != StopEnd {
 		t.Fatalf("stop=%v", done.Stop)
+	}
+}
+
+// TestOpenAIStreamDeathMidToolCall simulates a connection that dies
+// mid-stream after a partial tool call and BEFORE the [DONE] terminal
+// frame. The handler writes a tool-call delta, then returns (closing the
+// connection) without ever sending [DONE]. The client must surface this
+// as EventDone{Stop: StopError} with a non-nil error wrapping
+// io.ErrUnexpectedEOF, not a clean StopEnd — otherwise the truncated
+// message is silently accepted and neither retry nor rescue fires.
+func TestOpenAIStreamDeathMidToolCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl, _ := w.(http.Flusher)
+		write := func(s string) {
+			_, _ = w.Write([]byte(s))
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+		// Announce a tool call and stream partial arguments, then return
+		// without [DONE] — the http server closes the body, the client's
+		// raw SSE channel closes mid-stream.
+		write("data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"do_thing\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n")
+		write("data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"partial\\\":\"}}]},\"finish_reason\":null}]}\n\n")
+		// Connection dies here: no more frames, no [DONE].
+	}))
+	defer srv.Close()
+
+	c := NewOpenAI("x", srv.URL)
+	evs, err := c.Stream(context.Background(), Request{Model: "gpt-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var done EventDone
+	var sawToolStart bool
+	for ev := range evs {
+		switch e := ev.(type) {
+		case EventToolStart:
+			sawToolStart = true
+		case EventDone:
+			done = e
+		}
+	}
+	if !sawToolStart {
+		t.Fatalf("expected a tool-start event before the connection died")
+	}
+	if done.Stop != StopError {
+		t.Fatalf("stop=%v, want StopError on mid-stream connection death", done.Stop)
+	}
+	if done.Err == nil {
+		t.Fatalf("expected a non-nil error on mid-stream connection death")
+	}
+	if !errors.Is(done.Err, io.ErrUnexpectedEOF) {
+		t.Fatalf("err=%v, want it to wrap io.ErrUnexpectedEOF", done.Err)
 	}
 }
 

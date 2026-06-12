@@ -227,6 +227,89 @@ func looksLikeChatModel(id string) bool {
 	return false
 }
 
+// DiscoverOpenAICompatible lists every model id a user-configured
+// OpenAI-compatible endpoint reports from /v1/models. The standard
+// response carries only ids, so context sizes are best-effort: we read
+// the common non-standard hints (vLLM's max_model_len, others'
+// context_length / context_window) when present and otherwise fall back
+// to defaultCtx. The API key is optional — keyless local servers are
+// common. Obvious non-chat artefacts (embeddings, rerankers, audio) are
+// skipped to keep the picker focused on usable models.
+func DiscoverOpenAICompatible(ctx context.Context, baseURL, key string, defaultCtx int) ([]Model, error) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return nil, fmt.Errorf("empty base url")
+	}
+	url := baseURL + "/models"
+	if !strings.HasSuffix(baseURL, "/v1") {
+		url = baseURL + "/v1/models"
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if key != "" {
+		req.Header.Set("authorization", "Bearer "+key)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("openai-compatible discover http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var page struct {
+		Data []struct {
+			ID            string `json:"id"`
+			MaxModelLen   int    `json:"max_model_len"`  // vLLM
+			ContextLength int    `json:"context_length"` // some gateways
+			ContextWindow int    `json:"context_window"` // some gateways
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, fmt.Errorf("openai-compatible discover parse: %w", err)
+	}
+	var out []Model
+	for _, d := range page.Data {
+		if d.ID == "" || !looksLikeLocalChatModel(d.ID) {
+			continue
+		}
+		ctxWin := defaultCtx
+		for _, hint := range []int{d.MaxModelLen, d.ContextLength, d.ContextWindow} {
+			if hint > 0 {
+				ctxWin = hint
+				break
+			}
+		}
+		out = append(out, Model{
+			Provider:      "openai-compatible",
+			ID:            d.ID,
+			DisplayName:   d.ID,
+			ContextWindow: ctxWin,
+			BaseURL:       baseURL,
+			Source:        "live",
+		})
+	}
+	return out, nil
+}
+
+// looksLikeLocalChatModel errs heavily toward inclusion — local model
+// ids are arbitrary (qwen2.5-coder, llama3, a filesystem path, ...), so
+// we can't allow-list by name like the hosted OpenAI catalogue does.
+// Instead we only exclude families that clearly aren't chat models.
+func looksLikeLocalChatModel(id string) bool {
+	lower := strings.ToLower(id)
+	for _, bad := range []string{"embed", "rerank", "whisper", "tts", "clip", "moderation"} {
+		if strings.Contains(lower, bad) {
+			return false
+		}
+	}
+	return true
+}
+
 const openrouterDefaultBaseURL = "https://openrouter.ai/api/v1"
 
 // DiscoverOpenRouter lists models from OpenRouter's public /models
@@ -258,7 +341,11 @@ func DiscoverOpenRouter(ctx context.Context, baseURL string) ([]Model, error) {
 			ID            string `json:"id"`
 			Name          string `json:"name"`
 			ContextLength int    `json:"context_length"`
-			Pricing       struct {
+			Architecture  struct {
+				InputModalities  []string `json:"input_modalities"`
+				OutputModalities []string `json:"output_modalities"`
+			} `json:"architecture"`
+			Pricing struct {
 				Prompt          string `json:"prompt"`
 				Completion      string `json:"completion"`
 				InputCacheRead  string `json:"input_cache_read"`
@@ -284,7 +371,7 @@ func DiscoverOpenRouter(ctx context.Context, baseURL string) ([]Model, error) {
 			display = d.ID
 		}
 		ctxWin := d.ContextLength
-		if ctxWin == 0 {
+		if d.TopProvider.ContextLength > 0 && (ctxWin == 0 || d.TopProvider.ContextLength < ctxWin) {
 			ctxWin = d.TopProvider.ContextLength
 		}
 		maxOut := 0
@@ -304,9 +391,37 @@ func DiscoverOpenRouter(ctx context.Context, baseURL string) ([]Model, error) {
 			PriceCacheWrite: perMillionTokens(d.Pricing.InputCacheWrite),
 			BaseURL:         baseURL,
 			Source:          "live",
+			Caps:            modalityCaps(d.Architecture.InputModalities, d.Architecture.OutputModalities),
 		})
 	}
 	return out, nil
+}
+
+// modalityCaps converts a discovery endpoint's modality lists into
+// explicit capability assertions. Nothing is asserted (nil) when the
+// endpoint omitted the field, so the per-capability defaults still
+// apply — discovery enrichment is opportunistic, never load-bearing.
+func modalityCaps(input, output []string) map[Capability]bool {
+	caps := map[Capability]bool{}
+	if len(input) > 0 {
+		caps[CapImageInput] = containsModality(input, "image")
+	}
+	if len(output) > 0 {
+		caps[CapImageOutput] = containsModality(output, "image")
+	}
+	if len(caps) == 0 {
+		return nil
+	}
+	return caps
+}
+
+func containsModality(list []string, want string) bool {
+	for _, m := range list {
+		if strings.EqualFold(strings.TrimSpace(m), want) {
+			return true
+		}
+	}
+	return false
 }
 
 // openrouterSupportsReasoning reports whether OpenRouter's

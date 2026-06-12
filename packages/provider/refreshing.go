@@ -40,6 +40,16 @@ func (c *RefreshingClient) Name() string {
 	return c.inner.Name()
 }
 
+// Unwrap exposes the wrapped client so capability probes (e.g.
+// ClientMirrorsToolImages) can see through the refresh layer. The inner
+// client may be rebuilt on token refresh; the returned value is the
+// current one at call time.
+func (c *RefreshingClient) Unwrap() Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.inner
+}
+
 func (c *RefreshingClient) Stream(ctx context.Context, req Request) (<-chan Event, error) {
 	if c.refresh != nil {
 		if newToken, err := c.refresh(ctx); err == nil && newToken != "" {

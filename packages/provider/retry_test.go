@@ -2,10 +2,15 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 )
 
@@ -117,26 +122,35 @@ func TestIsTransientHTTPStatus(t *testing.T) {
 }
 
 func TestIsTransientConnectError(t *testing.T) {
-	good := []string{
-		"read tcp: connection reset by peer",
-		"dial tcp: connection refused",
-		"unexpected EOF",
-		"upstream connect error or disconnect/reset before headers",
-		"tls handshake error: bad cert",
-		"i/o timeout",
+	// Classification is by error TYPE now. Prose-rendered transport
+	// failures no longer classify (except the deliberate edge-proxy
+	// list); notably a TLS bad-certificate failure is permanent and is
+	// NOT retried anymore.
+	good := []error{
+		&net.OpError{Op: "read", Err: os.NewSyscallError("read", syscall.ECONNRESET)},
+		&net.OpError{Op: "dial", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)},
+		io.ErrUnexpectedEOF,
+		fmt.Errorf("request: %w", io.EOF),
+		&net.DNSError{Err: "no such host", Name: "api.example.com"},
+		os.ErrDeadlineExceeded, // net.Error with Timeout() == true
+		stringErr("upstream connect error or disconnect/reset before headers"),
+		stringErr("transport failure: connection terminated"),
 	}
-	for _, m := range good {
-		if !isTransientConnectError(stringErr(m)) {
-			t.Errorf("%q should be transient", m)
+	for _, e := range good {
+		if !isTransientConnectError(e) {
+			t.Errorf("%q should be transient", e)
 		}
 	}
-	bad := []string{
-		"context canceled",
-		"json: cannot unmarshal",
+	bad := []error{
+		context.Canceled,
+		context.DeadlineExceeded,
+		stringErr("json: cannot unmarshal"),
+		stringErr("tls handshake error: bad cert"),
+		stringErr("read tcp: connection reset by peer"), // prose-only, no type: not classified
 	}
-	for _, m := range bad {
-		if isTransientConnectError(stringErr(m)) {
-			t.Errorf("%q should NOT be transient", m)
+	for _, e := range bad {
+		if isTransientConnectError(e) {
+			t.Errorf("%q should NOT be transient", e)
 		}
 	}
 }

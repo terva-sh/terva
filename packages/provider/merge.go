@@ -35,6 +35,10 @@ func MergeCatalog(live []Model) []Model {
 			if l.DisplayName != "" {
 				s.DisplayName = l.DisplayName
 			}
+			// Capabilities: discovery fills only keys the curated
+			// catalog left absent — catalog explicit beats discovery
+			// heuristics, both lose to models.json (applied later).
+			s.Caps = mergeCaps(l.Caps, s.Caps)
 			staticIndex[k] = s
 		} else {
 			// New live id we'd never heard of. Best-effort defaults.

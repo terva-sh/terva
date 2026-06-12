@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +20,13 @@ type LoginResult struct {
 	APIKey   string // populated when Method == "apikey"
 	Code     string // populated when Method == "oauth"
 	State    string // OAuth state (caller should verify)
-	Err      error
+	// BaseURL, Model and ContextWindow are populated only for the
+	// openai-compatible provider, whose login form captures a custom
+	// endpoint, default model id, and default context-window size.
+	BaseURL       string
+	Model         string
+	ContextWindow int
+	Err           error
 }
 
 // Server is a tiny local HTTP server used by the login flows. It binds
@@ -121,6 +128,7 @@ func APIKeyProviders() []string {
 		"minimax", "minimax-cn", "fireworks", "vercel-ai-gateway",
 		"opencode", "opencode-go", "amazon-bedrock", "google-vertex", "azure-openai-responses",
 		"github-copilot", "cloudflare-workers-ai", "cloudflare-ai-gateway",
+		"openai-compatible",
 	}
 }
 
@@ -144,7 +152,10 @@ func (s *Server) handleAPIKey(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, apiKeyProviderMessage(), http.StatusBadRequest)
 			return
 		}
-		tpl.ExecuteTemplate(w, "apikey", map[string]any{"Provider": provider})
+		tpl.ExecuteTemplate(w, "apikey", map[string]any{
+			"Provider": provider,
+			"Compat":   provider == "openai-compatible",
+		})
 	case http.MethodPost:
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -152,19 +163,45 @@ func (s *Server) handleAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 		provider := strings.TrimSpace(r.FormValue("provider"))
 		key := strings.TrimSpace(r.FormValue("api_key"))
-		if provider == "" || key == "" {
+		baseURL := strings.TrimSpace(r.FormValue("base_url"))
+		model := strings.TrimSpace(r.FormValue("model"))
+		// Default context window for discovered models the server doesn't
+		// describe. Optional; blank / unparseable leaves it 0 ("unknown").
+		contextWindow, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("context_window")))
+		if contextWindow < 0 {
+			contextWindow = 0
+		}
+		compat := provider == "openai-compatible"
+		if provider == "" {
+			s.errorPage(w, "missing provider")
+			return
+		}
+		if compat {
+			// The key is optional for local endpoints, but we need
+			// somewhere to send requests and a model id to send them with.
+			if baseURL == "" || model == "" {
+				s.errorPage(w, "base url and model are required for an openai-compatible endpoint")
+				return
+			}
+		} else if key == "" {
 			s.errorPage(w, "missing provider or api key")
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
-		if err := s.probeFn(ctx, provider, key); err != nil {
-			s.errorPage(w, err.Error())
-			s.results <- LoginResult{Provider: provider, Method: "apikey", Err: err}
+		var probeErr error
+		if compat {
+			probeErr = ProbeOpenAICompatible(ctx, baseURL, key)
+		} else {
+			probeErr = s.probeFn(ctx, provider, key)
+		}
+		if probeErr != nil {
+			s.errorPage(w, probeErr.Error())
+			s.results <- LoginResult{Provider: provider, Method: "apikey", Err: probeErr}
 			return
 		}
 		s.successPage(w, provider, "api key")
-		s.results <- LoginResult{Provider: provider, Method: "apikey", APIKey: key}
+		s.results <- LoginResult{Provider: provider, Method: "apikey", APIKey: key, BaseURL: baseURL, Model: model, ContextWindow: contextWindow}
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -248,52 +285,70 @@ func Redirect(w http.ResponseWriter, r *http.Request, u *url.URL) {
 // the browser tab looks like the tui: black on white, monospace, thin
 // rules, no rounded boxes, no color.
 
-var tpl = template.Must(template.New("index").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>zot login</title>` + monoStyle + `</head><body>
+var tpl = template.Must(template.New("index").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>terva login</title>` + monoStyle + `</head><body>
 ` + logoTag + `
-<h1><span class="zot">zot</span> login</h1>
+<h1><span class="terva">terva</span> login</h1>
 <hr class="rule">
-<p>paste an api key for anthropic, openai, kimi, deepseek, or google. <span class="zot">zot</span> probes the provider once, then saves the key to <span class="mono">~/Library/Application Support/zot/auth.json</span>.</p>
+<p>paste an api key for anthropic, openai, kimi, deepseek, or google. <span class="terva">terva</span> probes the provider once, then saves the key to <span class="mono">~/Library/Application Support/terva/auth.json</span>.</p>
 <p>
   <a href="/apikey?provider=anthropic">anthropic api key →</a><br>
   <a href="/apikey?provider=openai">openai api key →</a><br>
   <a href="/apikey?provider=kimi">kimi api key →</a><br>
   <a href="/apikey?provider=deepseek">deepseek api key →</a><br>
-  <a href="/apikey?provider=google">google gemini api key →</a>
+  <a href="/apikey?provider=google">google gemini api key →</a><br>
+  <a href="/apikey?provider=openai-compatible">openai-compatible endpoint (local / custom) →</a>
 </p>
 <hr class="rule">
-<p class="muted">for a subscription login (claude pro/max - chatgpt plus/pro - kimi code - github copilot), close this tab and run /login inside <span class="zot">zot</span>.</p>
+<p class="muted">for a subscription login (claude pro/max - chatgpt plus/pro - kimi code - github copilot), close this tab and run /login inside <span class="terva">terva</span>.</p>
 </body></html>`))
 
 func init() {
-	template.Must(tpl.New("apikey").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>zot login</title>` + monoStyle + `<style>
+	template.Must(tpl.New("apikey").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>terva login</title>` + monoStyle + `<style>
   form { display: flex; flex-direction: column; gap: 0.75rem; }
   label { font-size: 0.875rem; }
 </style></head><body>
 ` + logoTag + `
-<h1><span class="zot">zot</span> login - {{.Provider}} api key</h1>
+<h1><span class="terva">terva</span> login - {{.Provider}} api key</h1>
 <hr class="rule">
-<p>paste your {{.Provider}} api key. <span class="zot">zot</span> will probe the provider with it once, then save it if the key is accepted.</p>
+{{if .Compat}}
+<p>point <span class="terva">terva</span> at any openai-compatible endpoint (lm studio, vllm, llama.cpp, ollama's /v1, a gateway, ...). enter the base url and a default model id; <span class="terva">terva</span> also auto-lists every model the endpoint serves from <span class="mono">/v1/models</span> in the <span class="mono">/model</span> picker. the api key is optional - many local servers ignore it.</p>
+<p class="muted">the context window is a default for models the server doesn't describe its size for. leave blank if unsure; override per model in <span class="mono">models.json</span>.</p>
+<form method="POST" action="/apikey">
+  <input type="hidden" name="provider" value="{{.Provider}}" />
+  <label for="base_url">base url (e.g. http://localhost:1234/v1)</label>
+  <input id="base_url" name="base_url" type="text" autocomplete="off" autofocus placeholder="http://localhost:1234/v1" />
+  <label for="model">default model id (e.g. qwen2.5-coder)</label>
+  <input id="model" name="model" type="text" autocomplete="off" />
+  <label for="context_window">default context window in tokens (optional, e.g. 32768)</label>
+  <input id="context_window" name="context_window" type="number" min="0" autocomplete="off" placeholder="32768" />
+  <label for="api_key">api key (optional)</label>
+  <input id="api_key" name="api_key" type="password" autocomplete="off" />
+  <button type="submit">log in</button>
+</form>
+{{else}}
+<p>paste your {{.Provider}} api key. <span class="terva">terva</span> will probe the provider with it once, then save it if the key is accepted.</p>
 <form method="POST" action="/apikey">
   <input type="hidden" name="provider" value="{{.Provider}}" />
   <label for="api_key">api key</label>
   <input id="api_key" name="api_key" type="password" autocomplete="off" autofocus />
   <button type="submit">log in</button>
 </form>
+{{end}}
 </body></html>`))
 
-	template.Must(tpl.New("success").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>zot - logged in</title>` + monoStyle + `</head><body>
+	template.Must(tpl.New("success").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>terva - logged in</title>` + monoStyle + `</head><body>
 ` + logoTag + `
 <h1><span class="mark">✓</span> logged in to {{.Provider}}</h1>
 <hr class="rule">
 <p class="msg">method: {{.Method}}</p>
-<p class="muted"><span class="zot">zot</span> received the callback. you can close this tab and return to the terminal.</p>
+<p class="muted"><span class="terva">terva</span> received the callback. you can close this tab and return to the terminal.</p>
 </body></html>`))
 
-	template.Must(tpl.New("error").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>zot - error</title>` + monoStyle + `</head><body>
+	template.Must(tpl.New("error").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>terva - error</title>` + monoStyle + `</head><body>
 ` + logoTag + `
 <h1><span class="mark">✗</span> login failed</h1>
 <hr class="rule">
 <p class="msg mono">{{.Message}}</p>
-<p class="muted">go back to <span class="zot">zot</span> and try again.</p>
+<p class="muted">go back to <span class="terva">terva</span> and try again.</p>
 </body></html>`))
 }

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"terva.sh/terva/packages/envcompat"
 )
 
 // Event is delivered on Manager.Events().
@@ -33,6 +35,17 @@ type Manager struct {
 
 	oauthCtx    context.Context
 	oauthCancel context.CancelFunc
+
+	// In-flight loopback flow state, remembered so the manual paste-back
+	// flow can adopt it for providers whose "manual" variant shares the
+	// same loopback redirect (OpenAI/Codex). Without this, StartManualOAuth
+	// would mint a fresh state pointing at the same callback port that the
+	// live server only accepts the original state for, producing a
+	// guaranteed "state mismatch" when the user opens the displayed URL.
+	oauthOp    *OAuthProvider
+	oauthPKCE  PKCE
+	oauthState string
+	oauthURL   string
 
 	manualOp            *OAuthProvider
 	manualStoreProvider string
@@ -113,8 +126,14 @@ func (m *Manager) consumeKeyServerResults() {
 			m.emit(Event{Kind: "error", Provider: res.Provider, Method: res.Method, Message: res.Err.Error()})
 			continue
 		}
-		if err := m.store.SetAPIKey(res.Provider, res.APIKey); err != nil {
-			m.emit(Event{Kind: "error", Provider: res.Provider, Method: "apikey", Message: err.Error()})
+		var setErr error
+		if res.Provider == "openai-compatible" {
+			setErr = m.store.SetCompatAPIKey(res.Provider, res.APIKey, res.BaseURL, res.Model, res.ContextWindow)
+		} else {
+			setErr = m.store.SetAPIKey(res.Provider, res.APIKey)
+		}
+		if setErr != nil {
+			m.emit(Event{Kind: "error", Provider: res.Provider, Method: "apikey", Message: setErr.Error()})
 			continue
 		}
 		m.emit(Event{Kind: "success", Provider: res.Provider, Method: "apikey"})
@@ -183,6 +202,14 @@ func (m *Manager) StartOAuth(provider string) (string, error) {
 	m.oauthServer = cs
 	m.oauthCtx = ctx
 	m.oauthCancel = cancel
+	// Remember this flow's generation so a subsequent StartManualOAuth for
+	// a provider sharing this loopback redirect adopts it instead of
+	// minting a conflicting state on the same callback port.
+	opCopy := op
+	m.oauthOp = &opCopy
+	m.oauthPKCE = pkce
+	m.oauthState = state
+	m.oauthURL = authURL
 	m.mu.Unlock()
 
 	go m.awaitOAuth(ctx, op, storeProvider, provider, cs, pkce, state)
@@ -322,6 +349,29 @@ func (m *Manager) StartManualOAuth(provider string) (string, error) {
 		return "", fmt.Errorf("provider must be anthropic, openai, openai-codex, kimi, github-copilot, deepseek, or google")
 	}
 
+	// If a loopback OAuth flow is already in progress for a provider that
+	// shares this redirect URI (OpenAI/Codex has no off-host manual page,
+	// so its "manual" variant reuses the same localhost:port callback),
+	// adopt that flow's pkce/state/URL instead of minting a fresh one.
+	// Otherwise the displayed URL would carry a state the already-running
+	// callback server rejects, yielding "state mismatch". Providers with a
+	// genuinely separate manual redirect (Anthropic's copy-code page) fall
+	// through to a fresh generation as before.
+	m.mu.Lock()
+	if m.oauthServer != nil && m.oauthOp != nil && m.oauthURL != "" &&
+		m.oauthOp.RedirectURI() == op.RedirectURI() {
+		m.manualOp = &op
+		m.manualStoreProvider = storeProvider
+		m.manualEventProvider = provider
+		m.manualPKCE = m.oauthPKCE
+		m.manualState = m.oauthState
+		authURL := m.oauthURL
+		m.mu.Unlock()
+		m.emit(Event{Kind: "started", Provider: provider, Method: "oauth", URL: authURL})
+		return authURL, nil
+	}
+	m.mu.Unlock()
+
 	pkce, err := NewPKCE()
 	if err != nil {
 		return "", err
@@ -411,10 +461,10 @@ func parseManualCodeInput(s string) (code, state string) {
 // (containers, SSH without display forwarding, etc.) instead of
 // trying to bind a callback port the user can never reach.
 func HasBrowser() bool {
-	if os.Getenv("ZOT_NO_BROWSER") != "" {
+	if envcompat.Get("NO_BROWSER") != "" {
 		return false
 	}
-	if os.Getenv("ZOT_FORCE_BROWSER") != "" {
+	if envcompat.Get("FORCE_BROWSER") != "" {
 		return true
 	}
 	if _, err := os.Stat("/.dockerenv"); err == nil {

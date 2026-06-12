@@ -210,3 +210,38 @@ func ProbeAPIKey(ctx context.Context, provider, key string) error {
 	}
 	return nil
 }
+
+// ProbeOpenAICompatible verifies a user-supplied OpenAI-compatible
+// endpoint by listing its models. The API key is optional: many local
+// servers (LM Studio, llama.cpp, vLLM without auth) accept any or no
+// bearer token. A reachable server that answers (even with 404, since
+// not every server implements /models) counts as success; only 401/403
+// means the key was rejected, and a transport error (connection refused
+// / DNS failure) means the URL is wrong or the server is down.
+func ProbeOpenAICompatible(ctx context.Context, baseURL, key string) error {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return fmt.Errorf("empty base url")
+	}
+	u := baseURL + "/models"
+	if !strings.HasSuffix(baseURL, "/v1") {
+		u = baseURL + "/v1/models"
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return err
+	}
+	if key != "" {
+		req.Header.Set("authorization", "Bearer "+key)
+	}
+	c := &http.Client{Timeout: 15 * time.Second}
+	resp, err := c.Do(req)
+	if err != nil {
+		return fmt.Errorf("could not reach %s: %w", u, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("endpoint rejected the key (http %d)", resp.StatusCode)
+	}
+	return nil
+}

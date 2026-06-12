@@ -109,7 +109,7 @@ func TestOpenAIAuthorizeURL(t *testing.T) {
 	if state == p.Verifier {
 		t.Fatal("openai state should be random, not verifier")
 	}
-	if q.Get("originator") != "zot" {
+	if q.Get("originator") != "terva" {
 		t.Fatalf("originator=%q", q.Get("originator"))
 	}
 }
@@ -248,6 +248,47 @@ func TestCallbackServerStateMismatch(t *testing.T) {
 	}
 	if r.Err == nil || !strings.Contains(r.Err.Error(), "state") {
 		t.Fatalf("want state error, got %+v", r)
+	}
+}
+
+// TestStartManualOAuthAdoptsLoopbackFlow locks the fix for the Codex
+// "state mismatch" bug: the interactive login starts the loopback flow
+// (StartOAuth) and the paste-back flow (StartManualOAuth) back-to-back
+// for the same provider. OpenAI's manual variant has no off-host page,
+// so it shares the localhost:1455 callback the loopback flow already
+// owns. The manual URL must therefore carry the SAME state the live
+// callback server expects, otherwise opening the displayed URL redirects
+// back with a state the server rejects ("state mismatch").
+func TestStartManualOAuthAdoptsLoopbackFlow(t *testing.T) {
+	m := NewManager(NewStore(filepath.Join(t.TempDir(), "auth.json")))
+	m.openBrowser = false
+
+	loopURL, err := m.StartOAuth("openai-codex")
+	if err != nil {
+		// Port 1455 is fixed by OpenAI's client registration; skip if it's
+		// busy rather than fail a hermetic run.
+		t.Skipf("cannot start loopback flow (port likely busy): %v", err)
+	}
+	defer m.CancelOAuth()
+
+	manualURL, err := m.StartManualOAuth("openai-codex")
+	if err != nil {
+		t.Fatalf("StartManualOAuth: %v", err)
+	}
+
+	stateOf := func(raw string) string {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", raw, err)
+		}
+		return u.Query().Get("state")
+	}
+	loopState, manualState := stateOf(loopURL), stateOf(manualURL)
+	if loopState == "" {
+		t.Fatal("loopback URL has empty state")
+	}
+	if manualState != loopState {
+		t.Fatalf("manual state %q != loopback state %q: opening the displayed URL would yield a state mismatch", manualState, loopState)
 	}
 }
 

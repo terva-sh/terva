@@ -5,7 +5,7 @@ package provider
 // Auth chain:
 //
 //  1. User stores a GitHub Personal Access Token (PAT) in
-//     COPILOT_GITHUB_TOKEN (or via zot's auth.json, when wired). The PAT
+//     COPILOT_GITHUB_TOKEN (or via terva's auth.json, when wired). The PAT
 //     is the long-lived credential; it never hits the inference endpoint.
 //  2. We trade the PAT for a short-lived Copilot token by hitting
 //     `GET https://api.github.com/copilot_internal/v2/token` with the PAT
@@ -19,7 +19,7 @@ package provider
 //       - X-Initiator: user|agent
 //       - Openai-Intent: conversation-edits
 //       - Copilot-Vision-Request: true (when images present; not wired
-//         here because the zot openai client currently sends images inline)
+//         here because the terva openai client currently sends images inline)
 //
 // Token caching: short-lived tokens last ~30min. We cache one per PAT in
 // memory for the process lifetime and refresh on demand. No disk cache.

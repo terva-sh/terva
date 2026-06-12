@@ -360,3 +360,10 @@ func (r *renamedClient) Name() string { return r.name }
 func (r *renamedClient) Stream(ctx context.Context, req Request) (<-chan Event, error) {
 	return r.inner.Stream(ctx, req)
 }
+
+// Unwrap exposes the wrapped client so capability probes (e.g.
+// ClientMirrorsToolImages) can see through the rename layer. Without
+// this, the MirrorsToolImages() capability of the inner codex/gemini
+// client is hidden behind renamedClient and tool-result image mirroring
+// silently never fires for openai-responses / google-vertex.
+func (r *renamedClient) Unwrap() Client { return r.inner }

@@ -17,7 +17,7 @@ import (
 
 // anthMaxImageSide is Anthropic's per-image dimension cap when a
 // request contains more than one image. Single-image requests are
-// allowed up to 8000 px, but zot conversations routinely include
+// allowed up to 8000 px, but terva conversations routinely include
 // multiple images (a screenshot here, a tool result image there)
 // so we always normalise down to the stricter limit. 2000 px on the
 // longest side is well below their cap and still readable for the

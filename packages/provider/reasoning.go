@@ -2,7 +2,7 @@ package provider
 
 import "strings"
 
-// NormalizeReasoning canonicalizes zot's user-facing thinking levels.
+// NormalizeReasoning canonicalizes terva's user-facing thinking levels.
 // Empty string means reasoning/thinking is disabled.
 func NormalizeReasoning(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
@@ -23,7 +23,7 @@ func NormalizeReasoning(level string) string {
 	}
 }
 
-// ReasoningBudget returns zot's approximate token budget for thinking-capable
+// ReasoningBudget returns terva's approximate token budget for thinking-capable
 // providers that accept explicit budgets.
 func ReasoningBudget(level string) int {
 	switch NormalizeReasoning(level) {
@@ -42,7 +42,7 @@ func ReasoningBudget(level string) int {
 	}
 }
 
-// AnthropicAdaptiveEffort maps zot's user-facing thinking levels onto the
+// AnthropicAdaptiveEffort maps terva's user-facing thinking levels onto the
 // effort enum used by Anthropic's adaptive-thinking models (Opus 4.7+).
 // These models reject explicit thinking budgets; thinking depth is
 // controlled by output_config.effort instead. Returns "" when reasoning
@@ -62,13 +62,13 @@ func AnthropicAdaptiveEffort(level string) string {
 	}
 }
 
-// OpenAIReasoningEffort maps zot's six-level setting onto the effort enum
+// OpenAIReasoningEffort maps terva's six-level setting onto the effort enum
 // accepted by OpenAI-compatible chat-completions endpoints.
 func OpenAIReasoningEffort(level string) string {
 	switch NormalizeReasoning(level) {
 	case "minimum", "low":
 		// Many OpenAI-compatible endpoints only accept low/medium/high.
-		// Use low for zot's minimum instead of the newer minimal enum.
+		// Use low for terva's minimum instead of the newer minimal enum.
 		return "low"
 	case "medium":
 		return "medium"
@@ -79,11 +79,11 @@ func OpenAIReasoningEffort(level string) string {
 	}
 }
 
-// OpenAICompatAnthropicEffort maps zot's user-facing thinking levels
+// OpenAICompatAnthropicEffort maps terva's user-facing thinking levels
 // onto reasoning_effort values when an adaptive-thinking Anthropic
 // model (Opus 4.7+) is served over the OpenAI-compatible chat-
 // completions wire (openrouter, opencode, ...). Differs from
-// OpenAIReasoningEffort only at the top: zot's "maximum" maps to
+// OpenAIReasoningEffort only at the top: terva's "maximum" maps to
 // "xhigh" instead of being clamped to "high", so the model's full
 // adaptive-thinking ceiling is preserved when reachable through a
 // gateway that accepts the effort knob.
@@ -102,7 +102,7 @@ func OpenAICompatAnthropicEffort(level string) string {
 	}
 }
 
-// OpenAICodexReasoningEffort maps zot levels onto the ChatGPT/Codex
+// OpenAICodexReasoningEffort maps terva levels onto the ChatGPT/Codex
 // Responses backend enum. That backend rejects "minimal" and uses
 // "xhigh" for the highest tier on recent GPT-5.x models.
 func OpenAICodexReasoningEffort(level string) string {

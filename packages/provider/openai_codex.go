@@ -19,7 +19,7 @@ import (
 // Wire protocol notes:
 //   - Endpoint: POST https://chatgpt.com/backend-api/codex/responses
 //   - Headers: Authorization: Bearer <access_token>, chatgpt-account-id: <id>,
-//     OpenAI-Beta: responses=experimental, originator: zot
+//     OpenAI-Beta: responses=experimental, originator: terva
 //   - Body: OpenAI Responses API shape (not chat/completions).
 //     input: [{role, content: [{type: "input_text" | "input_image" | ... }]}]
 //     instructions: <system prompt>
@@ -59,7 +59,13 @@ func NewOpenAICodex(token, accountID, baseURL string) Client {
 
 func (c *codexClient) Name() string { return "openai-codex" }
 
-// ---- Responses API wire types (subset needed for zot's surface) ----
+// MirrorsToolImages reports that tool-result images must be mirrored into
+// a following user message. The Responses API's function_call_output only
+// carries a string (see buildRequest), so image bytes can't ride along
+// with the tool result and are delivered via the mirror instead.
+func (c *codexClient) MirrorsToolImages() bool { return true }
+
+// ---- Responses API wire types (subset needed for terva's surface) ----
 
 type codexInputText struct {
 	Type string `json:"type"` // "input_text"
@@ -332,8 +338,8 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 		httpReq.Header.Set("authorization", "Bearer "+c.token)
 		httpReq.Header.Set("chatgpt-account-id", c.accountID)
 		httpReq.Header.Set("openai-beta", "responses=experimental")
-		httpReq.Header.Set("originator", "zot")
-		httpReq.Header.Set("user-agent", fmt.Sprintf("zot (%s %s)", runtime.GOOS, runtime.GOARCH))
+		httpReq.Header.Set("originator", "terva")
+		httpReq.Header.Set("user-agent", fmt.Sprintf("terva (%s %s)", runtime.GOOS, runtime.GOARCH))
 		return httpReq, nil
 	}
 
@@ -344,7 +350,7 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("openai-codex: http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return nil, NewHTTPError("openai-codex", resp.StatusCode, resp.Header.Get("Retry-After"), string(b))
 	}
 
 	out := make(chan Event, 16)
@@ -385,6 +391,12 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 		usage    Usage
 		stop     StopReason = StopEnd
 		finalErr error
+		// sawTerminal tracks the wire's terminal frame
+		// (response.completed/.done, or the .failed/error variants). If
+		// the raw channel closes before one of these (connection death
+		// mid-stream, including mid-tool-call), the response is truncated
+		// and we surface an error instead of a clean StopEnd.
+		sawTerminal bool
 	)
 
 	assemble := func() Message {
@@ -433,6 +445,10 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 			return
 		case ev, ok := <-raw:
 			if !ok {
+				if !sawTerminal {
+					stop = StopError
+					finalErr = NewStreamDeathError("openai-codex", "response.completed")
+				}
 				sendDone()
 				return
 			}
@@ -577,6 +593,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				} else {
 					stop = StopEnd
 				}
+				sawTerminal = true
 				sendDone()
 				return
 			case "response.failed":
@@ -589,7 +606,8 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &p)
 				stop = StopError
-				finalErr = fmt.Errorf("codex: %s", p.Response.Error.Message)
+				finalErr = NewAPIError("openai-codex", p.Response.Error.Message, false)
+				sawTerminal = true
 				sendDone()
 				return
 			case "error":
@@ -603,7 +621,10 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 					msg = p.Code
 				}
 				stop = StopError
-				finalErr = fmt.Errorf("codex error: %s", msg)
+				// The gateway uses rate_limit_* codes for transient
+				// throttling on the ChatGPT backend.
+				finalErr = NewAPIError("openai-codex", msg, strings.HasPrefix(p.Code, "rate_limit"))
+				sawTerminal = true
 				sendDone()
 				return
 			}

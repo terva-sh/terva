@@ -561,15 +561,15 @@ func (c *bedrockClient) Stream(ctx context.Context, req Request) (<-chan Event, 
 		msg := strings.TrimSpace(string(b))
 		// A 403 on the bearer route is almost always a region mismatch:
 		// short-term Bedrock API keys are scoped to the region of the
-		// console session that minted them, but zot defaults to
+		// console session that minted them, but terva defaults to
 		// us-east-1. Surface the resolved region and the fix so the user
 		// is not left guessing why a freshly-copied key is "invalid".
 		if resp.StatusCode == http.StatusForbidden && c.bearerToken != "" {
-			return nil, fmt.Errorf(
-				"bedrock: http 403 (region=%s): %s\nhint: Bedrock API keys are region-scoped. If your key was created in another region, set AWS_REGION (e.g. AWS_REGION=eu-central-1) or pass --base-url https://bedrock-runtime.<region>.amazonaws.com",
-				c.region, msg)
+			return nil, NewHTTPError("bedrock", resp.StatusCode, "", fmt.Sprintf(
+				"(region=%s): %s\nhint: Bedrock API keys are region-scoped. If your key was created in another region, set AWS_REGION (e.g. AWS_REGION=eu-central-1) or pass --base-url https://bedrock-runtime.<region>.amazonaws.com",
+				c.region, msg))
 		}
-		return nil, fmt.Errorf("bedrock: http %d: %s", resp.StatusCode, msg)
+		return nil, NewHTTPError("bedrock", resp.StatusCode, resp.Header.Get("Retry-After"), msg)
 	}
 	out := make(chan Event, 16)
 	go c.runStream(ctx, resp, req, out)
@@ -587,6 +587,11 @@ func (c *bedrockClient) runStream(ctx context.Context, resp *http.Response, req 
 	stop := StopEnd
 	finalMsg := Message{Role: RoleAssistant, Time: time.Now()}
 	var usage Usage
+	// sawStop tracks the messageStop terminal frame. If the event stream
+	// reaches EOF before it (connection death mid-stream, including
+	// mid-tool-call), the message is truncated and we surface an error
+	// rather than report a clean StopEnd.
+	sawStop := false
 
 	for {
 		if ctx.Err() != nil {
@@ -596,6 +601,14 @@ func (c *bedrockClient) runStream(ctx context.Context, resp *http.Response, req 
 		evt, err := readEventStreamMessage(resp.Body)
 		if err != nil {
 			if err == io.EOF {
+				if !sawStop {
+					out <- EventDone{
+						Stop:    StopError,
+						Err:     NewStreamDeathError("bedrock", "messageStop"),
+						Message: finalMsg,
+					}
+					return
+				}
 				break
 			}
 			out <- EventDone{Stop: StopError, Err: err, Message: finalMsg}
@@ -607,7 +620,15 @@ func (c *bedrockClient) runStream(ctx context.Context, resp *http.Response, req 
 		}
 		messageType := evt.headerString(":message-type")
 		if messageType == "exception" {
-			out <- EventDone{Stop: StopError, Err: fmt.Errorf("bedrock exception (%s): %s", evt.headerString(":exception-type"), string(evt.payload)), Message: finalMsg}
+			excType := evt.headerString(":exception-type")
+			// Bedrock's transient exception vocabulary: throttling,
+			// service unavailability, internal faults, model timeouts.
+			low := strings.ToLower(excType)
+			transient := strings.Contains(low, "throttl") ||
+				strings.Contains(low, "unavailable") ||
+				strings.Contains(low, "internalserver") ||
+				strings.Contains(low, "timeout")
+			out <- EventDone{Stop: StopError, Err: NewAPIError("bedrock", "exception ("+excType+"): "+string(evt.payload), transient), Message: finalMsg}
 			return
 		}
 		switch eventType {
@@ -684,6 +705,7 @@ func (c *bedrockClient) runStream(ctx context.Context, resp *http.Response, req 
 				finalMsg.Content = append(finalMsg.Content, TextBlock{Text: st.text.String()})
 			}
 		case "messageStop":
+			sawStop = true
 			var d struct {
 				StopReason string `json:"stopReason"`
 			}

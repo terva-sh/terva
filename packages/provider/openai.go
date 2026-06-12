@@ -92,6 +92,19 @@ func (c *openaiClient) Name() string {
 	return "openai"
 }
 
+// MirrorsToolImages reports that this client needs tool-result images
+// mirrored into a following user message by the agent loop, rather than
+// carried inside the `tool` message itself. The chat-completions wire
+// (which every openaiClient-backed provider speaks — openai,
+// openai-compatible, ollama, groq, xai, kimi, azure-openai-responses,
+// and the rest) only accepts text in a `tool` message; see
+// buildOAIToolContent. This describes the WIRE FORMAT only; whether
+// the current model can see images at all is the per-model
+// image-input capability, which the agent loop checks alongside this
+// (a former `!= "deepseek"` name check here — see
+// docs/plans/model-capabilities.md).
+func (c *openaiClient) MirrorsToolImages() bool { return true }
+
 // ---- wire types ----
 
 type oaiContentText struct {
@@ -183,6 +196,43 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 	if maxTok <= 0 {
 		maxTok = m.MaxOutput
 	}
+	// Clamp max_tokens so output plus a minimum input reservation fits
+	// within the context window. Some providers (OpenRouter) enforce
+	// input + max_output <= context_length and reject requests where the
+	// total exceeds it. Reserving headroom guarantees the system prompt,
+	// first message, and tool definitions have room.
+	//
+	// The cap is derived from the context window, never from MaxOutput:
+	// MaxOutput is already the output ceiling, so subtracting from it
+	// would shrink every model's budget even when its output comfortably
+	// fits the window. We only lower maxTok when ContextWindow - reserve
+	// is actually tighter than the requested budget, which is exactly the
+	// pathological case (e.g. a model whose MaxOutput equals its window).
+	//
+	// The reserve is proportional (window/8, capped at 4096) rather than a
+	// flat 4096 so small-window models aren't over-penalized: a flat 4096
+	// would halve gpt-4's 8192 budget, while window/8 reserves a sensible
+	// 1024 there and still tops out at 4096 for large contexts.
+	//
+	// Some providers (OpenRouter) report inflated model-level context
+	// windows (e.g. 1000000) while the serving provider enforces a much
+	// tighter limit (e.g. 262144). Discovery already prefers the serving
+	// provider's smaller context_length, so m.ContextWindow is the real
+	// limit by the time we get here.
+	if m.ContextWindow > 0 {
+		reserve := m.ContextWindow / 8
+		const maxReserve = 4096
+		if reserve > maxReserve {
+			reserve = maxReserve
+		}
+		clamped := m.ContextWindow - reserve
+		if clamped < 1 {
+			clamped = 1
+		}
+		if maxTok > clamped {
+			maxTok = clamped
+		}
+	}
 	if m.Reasoning {
 		if maxTok > 0 {
 			out.MaxCompletionTok = &maxTok
@@ -192,7 +242,7 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 			// Some gateways expose adaptive-thinking Anthropic models through
 			// the OpenAI-compatible chat-completions wire. They accept the
 			// same reasoning_effort knob, including the top "xhigh" tier;
-			// don't clamp zot's "maximum" to "high" for those models.
+			// don't clamp terva's "maximum" to "high" for those models.
 			effort = OpenAICompatAnthropicEffort(req.Reasoning)
 		}
 		if effort != "" {
@@ -209,11 +259,15 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 		out.Messages = append(out.Messages, oaiMessage{Role: "system", Content: req.System})
 	}
 
-	// DeepSeek's chat-completions API rejects the multimodal content
-	// schema (parts arrays containing image_url). Force every user/tool
-	// message to a plain string and silently drop image blocks for
-	// this provider so historical sessions with screenshots still replay.
-	textOnly := c.name == "deepseek"
+	// Models without the image-input capability (a vision-less local
+	// GGUF, a server that 400s on multimodal parts) get every
+	// user/tool message forced to a plain string and image blocks
+	// silently dropped, so historical sessions with screenshots still
+	// replay instead of bricking every subsequent turn. Per-model via
+	// the capability tag (docs/plans/model-capabilities.md); this
+	// replaced a provider-wide `c.name == "deepseek"` check that had
+	// gone stale against the V4 catalog entries.
+	textOnly := !m.Has(CapImageInput)
 
 	req.Messages = RepairOrphanedToolResults(req.Messages)
 	for _, msg := range req.Messages {
@@ -265,7 +319,7 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 			}
 			// Kimi rejects assistant messages with neither visible text nor
 			// tool calls ("assistant must not be empty"). This can happen when
-			// a previous stream produced only reasoning_content, which zot keeps
+			// a previous stream produced only reasoning_content, which terva keeps
 			// internally for provider replay but cannot send back as standalone
 			// assistant content on OpenAI-compatible chat-completions APIs.
 			if am.Content == nil && len(am.ToolCalls) == 0 {
@@ -278,7 +332,7 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 			// flattening the tool output to plain text.
 			for _, b := range msg.Content {
 				if tr, ok := b.(ToolResultBlock); ok {
-					content := buildOAIToolContent(tr.Content, tr.IsError, textOnly)
+					content := buildOAIToolContent(tr.Content, tr.IsError)
 					out.Messages = append(out.Messages, oaiMessage{
 						Role:       "tool",
 						ToolCallID: tr.CallID,
@@ -327,30 +381,43 @@ func buildOAIUserContent(blocks []Content, textOnly bool) interface{} {
 	return buildOAIContentBlocks(blocks, false)
 }
 
-func buildOAIToolContent(blocks []Content, isError, textOnly bool) interface{} {
-	hasImage := false
+// buildOAIToolContent renders a tool result for a chat-completions
+// `tool` message. That role only accepts text: chat-completions cannot
+// carry images in a tool message, and several OpenAI-compatible servers
+// reject array / image_url content there outright (HTTP 400 "'content'
+// field must be a string or an array of objects"). Image bytes are
+// instead delivered by the agent loop, which mirrors tool-result images
+// into the following user message (mirrorToolImagesAsUser in
+// packages/core/agent.go) — that is where vision models actually receive
+// them. This mirrors the text-only treatment the Responses path already
+// uses (see buildRequest in openai_codex.go); a short note is emitted for
+// an image-only result so the tool message is never empty and the model
+// knows the image arrives in the next message.
+func buildOAIToolContent(blocks []Content, isError bool) string {
+	var sb strings.Builder
+	imageCount := 0
 	for _, b := range blocks {
-		if _, ok := b.(ImageBlock); ok {
-			hasImage = true
-			break
-		}
-	}
-	if textOnly || !hasImage {
-		var sb strings.Builder
-		for _, b := range blocks {
-			if tb, ok := b.(TextBlock); ok {
-				if sb.Len() > 0 {
-					sb.WriteString("\n")
-				}
-				sb.WriteString(tb.Text)
+		switch v := b.(type) {
+		case TextBlock:
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
 			}
+			sb.WriteString(v.Text)
+		case ImageBlock:
+			imageCount++
 		}
-		if isError && sb.Len() > 0 {
-			sb.WriteString(" [error]")
-		}
-		return sb.String()
 	}
-	return buildOAIContentBlocks(blocks, isError)
+	if sb.Len() == 0 && imageCount > 0 {
+		if imageCount == 1 {
+			sb.WriteString("[image returned; see the following message]")
+		} else {
+			fmt.Fprintf(&sb, "[%d images returned; see the following message]", imageCount)
+		}
+	}
+	if isError && sb.Len() > 0 {
+		sb.WriteString(" [error]")
+	}
+	return sb.String()
 }
 
 func buildOAIContentBlocks(blocks []Content, isError bool) []interface{} {
@@ -408,7 +475,7 @@ func (c *openaiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("%s: http %d: %s", c.Name(), resp.StatusCode, strings.TrimSpace(string(b)))
+		return nil, NewHTTPError(c.Name(), resp.StatusCode, resp.Header.Get("Retry-After"), string(b))
 	}
 
 	out := make(chan Event, 16)
@@ -447,6 +514,11 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 		usage        Usage
 		stop         StopReason = StopEnd
 		finalErr     error
+		// sawDone tracks the [DONE] terminal frame. If the raw channel
+		// closes before it (TCP drop mid-stream, including mid-tool-call),
+		// the message is truncated and we must surface an error so the
+		// agent retries or rescues instead of treating it as clean.
+		sawDone bool
 	)
 
 	appendText := func(delta string) {
@@ -509,10 +581,15 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 			return
 		case ev, ok := <-raw:
 			if !ok {
+				if !sawDone {
+					stop = StopError
+					finalErr = NewStreamDeathError(c.Name(), "[DONE]")
+				}
 				sendDone()
 				return
 			}
 			if ev.Data == "[DONE]" {
+				sawDone = true
 				sendDone()
 				return
 			}
@@ -551,7 +628,13 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 			}
 			if chunk.Error != nil {
 				stop = StopError
-				finalErr = fmt.Errorf("openai: %s", chunk.Error.Message)
+				// Transient when the provider's own error vocabulary
+				// says so; openai-wire servers use these type strings
+				// for retryable conditions.
+				transient := chunk.Error.Type == "server_error" ||
+					chunk.Error.Type == "rate_limit_error" ||
+					chunk.Error.Type == "overloaded_error"
+				finalErr = NewAPIError(c.Name(), chunk.Error.Message, transient)
 				sendDone()
 				return
 			}

@@ -1,4 +1,4 @@
-// Package provider defines the LLM client abstraction used by zot.
+// Package provider defines the LLM client abstraction used by terva.
 //
 // It supports exactly two providers: Anthropic (Messages API) and
 // OpenAI (Chat Completions API). Everything above this package operates
@@ -64,7 +64,7 @@ func (ToolResultBlock) isContent() {}
 // providers that require it on follow-up requests (OpenAI Codex with
 // thinking enabled) can replay the same payload they emitted earlier.
 // Summary is the human-readable reasoning summary (may be empty); the
-// encrypted blob is opaque to zot. ID is the provider-issued reasoning
+// encrypted blob is opaque to terva. ID is the provider-issued reasoning
 // item id.
 type ReasoningBlock struct {
 	ID        string `json:"reasoning_id,omitempty"`
@@ -231,4 +231,40 @@ type Client interface {
 	// and is closed after EventDone. Errors during request setup are
 	// returned directly; runtime errors arrive as EventDone{Err: ...}.
 	Stream(ctx context.Context, req Request) (<-chan Event, error)
+}
+
+// unwrapper is implemented by clients that wrap another Client (e.g.
+// RefreshingClient, renamedClient). Capability probes use it to see
+// through wrappers instead of type-asserting directly on the outermost
+// client, which silently fails whenever a wrapper sits in front.
+type unwrapper interface {
+	Unwrap() Client
+}
+
+// ClientMirrorsToolImages reports whether c (looking through any wrapper
+// layers) needs tool-result images mirrored into a following user
+// message by the agent loop. Some wire formats can't carry images inside
+// a tool result (OpenAI chat-completions, the Responses/codex
+// function_call_output), so those clients opt in via a
+// MirrorsToolImages() bool method.
+//
+// The agent loop MUST call this helper rather than type-asserting the
+// interface directly on the client it holds: codex always ships wrapped
+// in a RefreshingClient and openai-responses/google-vertex in a
+// renamedClient, neither of which is the concrete client that implements
+// the capability. The inline assertion silently returns false for those
+// providers, so the image bytes get stripped from the tool result with
+// nothing ever mirrored back in.
+func ClientMirrorsToolImages(c Client) bool {
+	for c != nil {
+		if m, ok := c.(interface{ MirrorsToolImages() bool }); ok {
+			return m.MirrorsToolImages()
+		}
+		u, ok := c.(unwrapper)
+		if !ok {
+			return false
+		}
+		c = u.Unwrap()
+	}
+	return false
 }

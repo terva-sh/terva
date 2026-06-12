@@ -163,6 +163,42 @@ func TestBedrockModelSupportsCaching(t *testing.T) {
 	}
 }
 
+func TestBedrockBuildRequestMaxTokens(t *testing.T) {
+	client := &bedrockClient{region: "us-east-1"}
+
+	// A non-zero MaxTokens must flow through to InferenceConfig so the
+	// model gets its full output budget. This is the regression guard
+	// for long writes/edits being truncated at Bedrock's 4096 default.
+	req, err := client.buildRequest(Request{
+		Model:     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+		MaxTokens: 64000,
+		Messages: []Message{
+			{Role: RoleUser, Content: []Content{TextBlock{Text: "hello"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.InferenceConfig.MaxTokens != 64000 {
+		t.Errorf("MaxTokens = %d, want 64000", req.InferenceConfig.MaxTokens)
+	}
+
+	// Zero still falls back to the conservative provider default so an
+	// unset budget never sends maxTokens:0 (which Bedrock rejects).
+	reqZero, err := client.buildRequest(Request{
+		Model: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+		Messages: []Message{
+			{Role: RoleUser, Content: []Content{TextBlock{Text: "hello"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reqZero.InferenceConfig.MaxTokens != 4096 {
+		t.Errorf("zero MaxTokens default = %d, want 4096", reqZero.InferenceConfig.MaxTokens)
+	}
+}
+
 func TestBedrockBuildRequestCachingClaudeModel(t *testing.T) {
 	// A Claude model (PriceCacheWrite > 0) should get cachePoint markers
 	// in the system array and on the last user message.

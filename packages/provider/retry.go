@@ -118,30 +118,24 @@ func synthesizeResponse(status int, body []byte) *http.Response {
 }
 
 // isTransientConnectError reports whether err looks like a transient
-// network failure that's worth retrying. The classic "upstream connect
-// error or disconnect/reset before headers" from edge proxies (Envoy,
-// Cloudflare, GFE) shows up as several different concrete error types
-// across HTTP/1, HTTP/2, and TLS handshakes — easier to match by
-// substring on the rendered message than to enumerate every type.
+// network failure that's worth retrying. Classification is by error
+// TYPE (IsTransportError: timeouts, EOFs, resets, refusals, DNS) plus
+// a short, deliberate prose list for edge-proxy failures (Envoy,
+// Cloudflare, GFE) that genuinely reach Go only as message text inside
+// an HTTP/2 GOAWAY or RST debug payload — those have no concrete error
+// type to match. Keep that list short; anything with a real type
+// belongs in IsTransportError.
 func isTransientConnectError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return false
+	if IsTransportError(err) {
+		return true
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "connection reset") ||
-		strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "broken pipe") ||
-		strings.Contains(msg, "unexpected eof") ||
-		strings.Contains(msg, "eof") ||
-		strings.Contains(msg, "no such host") ||
-		strings.Contains(msg, "tls handshake") ||
-		strings.Contains(msg, "i/o timeout") ||
-		strings.Contains(msg, "transport failure") ||
-		strings.Contains(msg, "upstream connect error") ||
-		strings.Contains(msg, "disconnect/reset before headers")
+	return strings.Contains(msg, "upstream connect error") ||
+		strings.Contains(msg, "disconnect/reset before headers") ||
+		strings.Contains(msg, "transport failure")
 }
 
 // isTransientHTTPStatus reports whether a non-200 status code is

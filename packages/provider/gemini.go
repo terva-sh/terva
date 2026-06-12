@@ -25,7 +25,7 @@ import (
 // consumer Gemini Advanced / Google One AI subscriptions; programmatic
 // access requires either an AI Studio API key (this client) or Vertex
 // AI / GCP service-account credentials (separate provider, not yet
-// implemented in zot).
+// implemented in terva).
 
 const geminiDefaultBaseURL = "https://generativelanguage.googleapis.com"
 
@@ -54,7 +54,7 @@ func (c *geminiClient) Name() string { return "google" }
 // ---- wire types ----
 //
 // Subset of Gemini's Content / Part / GenerateContentRequest schema.
-// Only the fields zot actually emits or consumes are declared here.
+// Only the fields terva actually emits or consumes are declared here.
 
 type gemInlineData struct {
 	MimeType string `json:"mimeType"`
@@ -81,7 +81,7 @@ type gemPart struct {
 	FunctionCall     *gemFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *gemFunctionResponse `json:"functionResponse,omitempty"`
 	// Thought: true marks a thought-summary part. Outgoing parts
-	// from zot never set this; incoming chunks might.
+	// from terva never set this; incoming chunks might.
 	Thought bool `json:"thought,omitempty"`
 }
 
@@ -332,7 +332,7 @@ func saveGeminiImageToWorkingDir(mimeType string, data []byte) (string, error) {
 	case "image/gif":
 		ext = ".gif"
 	}
-	name := "zot-gemini-image-" + uuid.NewString() + ext
+	name := "terva-gemini-image-" + uuid.NewString() + ext
 	path := filepath.Join(".", name)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", err
@@ -386,7 +386,7 @@ func convertGemToolResultParts(blocks []Content) []gemPart {
 	return parts
 }
 
-// geminiThinkingConfig maps zot's reasoning level ("low"/"medium"/"high")
+// geminiThinkingConfig maps terva's reasoning level ("low"/"medium"/"high")
 // to Gemini's thinkingConfig. The right knob depends on the model
 // generation: 2.5 family uses thinkingBudget (tokens), 3.x uses
 // thinkingLevel (enum). Returns nil when the level is unrecognised.
@@ -485,7 +485,7 @@ func (c *geminiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("google: http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return nil, NewHTTPError("google", resp.StatusCode, resp.Header.Get("Retry-After"), string(b))
 	}
 
 	out := make(chan Event, 16)
@@ -523,6 +523,13 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 		stop        StopReason = StopEnd
 		finalErr    error
 		toolCounter int
+		// sawFinish tracks whether any candidate carried an explicit
+		// terminal finishReason. The Gemini SSE wire has no [DONE]
+		// sentinel — a clean stream always ends with a non-empty
+		// finishReason. If the raw channel closes without one (connection
+		// death mid-stream, including mid-tool-call), the response is
+		// truncated and we surface an error instead of a clean StopEnd.
+		sawFinish bool
 	)
 
 	appendText := func(delta string) {
@@ -608,6 +615,10 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 			return
 		case ev, ok := <-raw:
 			if !ok {
+				if !sawFinish {
+					stop = StopError
+					finalErr = NewStreamDeathError("google", "a finishReason")
+				}
 				sendDone()
 				return
 			}
@@ -647,7 +658,13 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 			}
 			if chunk.Error != nil {
 				stop = StopError
-				finalErr = fmt.Errorf("google: %s", chunk.Error.Message)
+				// Gemini's in-stream error block carries an HTTP-style
+				// code; classify it exactly like a response status.
+				pe := NewHTTPError("google", chunk.Error.Code, "", chunk.Error.Message)
+				if chunk.Error.Code == 0 {
+					pe = NewAPIError("google", chunk.Error.Message, false)
+				}
+				finalErr = pe
 				sendDone()
 				return
 			}
@@ -683,6 +700,13 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 					appendText(part.Text)
 					out <- EventTextDelta{Delta: part.Text}
 				}
+				if cand.FinishReason != "" {
+					// Any non-empty finishReason is a legitimate
+					// terminal signal (STOP, MAX_TOKENS, or a block
+					// reason); record it so a subsequent channel close
+					// is treated as a clean end rather than a drop.
+					sawFinish = true
+				}
 				switch cand.FinishReason {
 				case "STOP", "":
 					// "" arrives on intermediate chunks; only
@@ -694,7 +718,7 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 					stop = StopLength
 				case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY":
 					stop = StopError
-					finalErr = fmt.Errorf("google: response blocked (%s)", cand.FinishReason)
+					finalErr = NewAPIError("google", "response blocked ("+cand.FinishReason+")", false)
 				}
 			}
 			if chunk.UsageMetadata != nil {

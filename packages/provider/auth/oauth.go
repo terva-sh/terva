@@ -20,7 +20,7 @@ import (
 // WARNING: the client ids used here belong to the official first-party
 // CLIs (Claude Code for Anthropic, Codex CLI for OpenAI). Using them from
 // third-party software is against the respective terms of service and
-// may be revoked at any time. zot exposes this only behind
+// may be revoked at any time. terva exposes this only behind
 // --experimental-oauth.
 type OAuthProvider struct {
 	Name           string
@@ -78,7 +78,7 @@ var (
 
 	// Anthropic manual / headless variant: redirects to Anthropic's
 	// copy-code page instead of a local loopback port, used when there
-	// is no browser on the machine running zot (e.g. inside a Docker
+	// is no browser on the machine running terva (e.g. inside a Docker
 	// container or over plain SSH).
 	AnthropicManualOAuth = OAuthProvider{
 		Name:         "anthropic",
@@ -108,7 +108,7 @@ var (
 		ExtraAuthArgs: map[string]string{
 			"id_token_add_organizations": "true",
 			"codex_cli_simplified_flow":  "true",
-			"originator":                 "zot",
+			"originator":                 "terva",
 		},
 	}
 

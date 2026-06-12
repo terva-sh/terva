@@ -30,7 +30,7 @@ func RequestKimiDeviceAuthorization(ctx context.Context) (KimiDeviceAuthorizatio
 	}
 	req.Header.Set("content-type", "application/x-www-form-urlencoded")
 	req.Header.Set("accept", "application/json")
-	req.Header.Set("user-agent", "zot")
+	req.Header.Set("user-agent", "zot") // rename:keep — bound to existing kimi device sessions
 
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
@@ -81,7 +81,7 @@ func pollKimiDeviceTokenOnce(ctx context.Context, deviceCode string) (*OAuthToke
 	}
 	req.Header.Set("content-type", "application/x-www-form-urlencoded")
 	req.Header.Set("accept", "application/json")
-	req.Header.Set("user-agent", "zot")
+	req.Header.Set("user-agent", "zot") // rename:keep — bound to existing kimi device sessions
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("kimi token poll: %w", err)
