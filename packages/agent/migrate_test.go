@@ -10,17 +10,21 @@ import (
 )
 
 // pinMigrateEnv points the envcompat resolvers at temp dirs (XDG for
-// linux, $HOME for darwin — os.UserHomeDir honors $HOME) and clears
-// the explicit overrides, returning the base both "terva" and "zot"
-// default dirs resolve under.
+// linux, $HOME for darwin — os.UserHomeDir honors $HOME — and
+// %LOCALAPPDATA% for windows) and clears the explicit overrides,
+// returning the base both "terva" and "zot" default dirs resolve
+// under.
 func pinMigrateEnv(t *testing.T) string {
 	t.Helper()
 	base := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", base)
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		home := t.TempDir()
 		t.Setenv("HOME", home)
 		base = filepath.Join(home, "Library", "Application Support")
+	case "windows":
+		t.Setenv("LOCALAPPDATA", base)
 	}
 	t.Setenv("TERVA_HOME", "")
 	t.Setenv("ZOT_HOME", "")

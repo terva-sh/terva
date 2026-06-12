@@ -114,10 +114,13 @@ func TestSessionCompactionRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, msgs, err := OpenSession(path)
+	reopened, msgs, err := OpenSession(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// OpenSession reopens the file for appending; windows can't remove
+	// the TempDir while that handle is live.
+	defer reopened.Close()
 	if len(msgs) != 1 || !reflect.DeepEqual(msgs[0], summary) {
 		t.Errorf("compaction load mismatch: %#v", msgs)
 	}

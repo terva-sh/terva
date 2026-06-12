@@ -10,16 +10,20 @@ import (
 // pinStateBase points osDefaultDir at a temp location and returns the
 // directory the "terva"/"zot" dirs resolve under. XDG_STATE_HOME covers
 // linux; darwin resolves through $HOME/Library/Application Support
-// (os.UserHomeDir honors $HOME), so that gets pinned too — without it,
-// these tests read the developer's real data dirs.
+// (os.UserHomeDir honors $HOME) and windows through %LOCALAPPDATA%, so
+// those get pinned too — without them, these tests read the
+// developer's (or CI runner's) real data dirs.
 func pinStateBase(t *testing.T) string {
 	t.Helper()
 	base := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", base)
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		home := t.TempDir()
 		t.Setenv("HOME", home)
 		base = filepath.Join(home, "Library", "Application Support")
+	case "windows":
+		t.Setenv("LOCALAPPDATA", base)
 	}
 	return base
 }

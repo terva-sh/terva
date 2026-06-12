@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -31,6 +32,11 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	tervaBin = filepath.Join(tmp, "terva")
+	if runtime.GOOS == "windows" {
+		// exec on windows resolves executables by extension; a bare
+		// "terva" builds fine but can never be spawned.
+		tervaBin += ".exe"
+	}
 
 	// Plain build (no -race): the test binary itself runs under
 	// whatever flags `go test` got; the subprocess just needs to be
