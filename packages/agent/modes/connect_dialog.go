@@ -1,40 +1,40 @@
 package modes
 
 import (
-	"github.com/patriceckhart/zot/packages/tui"
+	"terva.sh/terva/packages/tui"
 )
 
-// telegramDialog is the picker shown when the user runs `/telegram`
-// without an argument. Lists the three actions (connect, disconnect,
-// status) and routes the choice back to the Interactive via
-// telegramAction.
+// connectDialog is the picker shown when the user runs `/connect`
+// (alias `/telegram`) without an argument. Lists the three actions
+// (connect, disconnect, status) and routes the choice back to the
+// Interactive via connectAction.
 //
 // Shape mirrors logoutDialog: a tiny list of rows with the cursor
 // moved by arrow keys and enter to pick, esc to cancel.
-type telegramDialog struct {
+type connectDialog struct {
 	active bool
-	items  []telegramItem
+	items  []connectItem
 	cursor int
 }
 
-type telegramItem struct {
+type connectItem struct {
 	label  string
 	action string // "connect" | "disconnect" | "status"
 	hint   string // muted text shown after the label (e.g. "not configured", "active")
 }
 
-type telegramAction struct {
+type connectAction struct {
 	Select bool
 	Action string
 	Close  bool
 }
 
-func newTelegramDialog() *telegramDialog { return &telegramDialog{} }
+func newConnectDialog() *connectDialog { return &connectDialog{} }
 
 // Open shows the picker with items describing the current state.
 // items is rendered in order; the caller builds it so connect is
 // only offered when disconnected, and vice versa.
-func (d *telegramDialog) Open(items []telegramItem) bool {
+func (d *connectDialog) Open(items []connectItem) bool {
 	if len(items) == 0 {
 		return false
 	}
@@ -45,13 +45,13 @@ func (d *telegramDialog) Open(items []telegramItem) bool {
 }
 
 // Close hides the dialog.
-func (d *telegramDialog) Close() { d.active = false }
+func (d *connectDialog) Close() { d.active = false }
 
 // Active reports whether the dialog is consuming input.
-func (d *telegramDialog) Active() bool { return d != nil && d.active }
+func (d *connectDialog) Active() bool { return d != nil && d.active }
 
 // HandleKey advances the selection or resolves the dialog.
-func (d *telegramDialog) HandleKey(k tui.Key) telegramAction {
+func (d *connectDialog) HandleKey(k tui.Key) connectAction {
 	switch k.Kind {
 	case tui.KeyUp:
 		if d.cursor > 0 {
@@ -63,21 +63,21 @@ func (d *telegramDialog) HandleKey(k tui.Key) telegramAction {
 		}
 	case tui.KeyEsc:
 		d.Close()
-		return telegramAction{Close: true}
+		return connectAction{Close: true}
 	case tui.KeyEnter:
 		if len(d.items) == 0 {
 			d.Close()
-			return telegramAction{Close: true}
+			return connectAction{Close: true}
 		}
 		it := d.items[d.cursor]
 		d.Close()
-		return telegramAction{Select: true, Action: it.action}
+		return connectAction{Select: true, Action: it.action}
 	}
-	return telegramAction{}
+	return connectAction{}
 }
 
 // Render returns the dialog lines.
-func (d *telegramDialog) Render(th tui.Theme, width int) []string {
+func (d *connectDialog) Render(th tui.Theme, width int) []string {
 	if !d.Active() {
 		return nil
 	}

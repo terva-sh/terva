@@ -1,11 +1,11 @@
-package telegram
+package chat
 
 import (
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 // StatusSnapshot is the small cross-host state bundle rendered for
