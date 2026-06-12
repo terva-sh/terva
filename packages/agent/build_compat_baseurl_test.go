@@ -41,6 +41,31 @@ func TestResolveModelBaseURLBeatsLoginBaseURL(t *testing.T) {
 	}
 }
 
+// Regression: the open-catalogue fallback must register its synthesized
+// model in the active catalog. Auto-compaction, the status-bar gauge,
+// and /status all read the context window via provider.FindModel — an
+// unregistered model left them all seeing 0, so auto-compaction never
+// fired and the configured compat context window was silently dropped.
+func TestResolveRegistersOpenCatalogueModel(t *testing.T) {
+	t.Setenv("TERVA_HOME", t.TempDir())
+	if err := AuthStoreFor().SetCompatAPIKey("openai-compatible", "", "https://login.example/v1", "login-default", 192000); err != nil {
+		t.Fatal(err)
+	}
+	provider.ResetCatalogLayers()
+	defer provider.ResetCatalogLayers()
+
+	if _, err := Resolve(Args{Provider: "openai-compatible", Model: "some-unregistered-model"}, false); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	m, err := provider.FindModel("openai-compatible", "some-unregistered-model")
+	if err != nil {
+		t.Fatalf("synthesized model not in the active catalog: %v", err)
+	}
+	if m.ContextWindow != 192000 {
+		t.Fatalf("ContextWindow = %d, want the configured compat default 192000", m.ContextWindow)
+	}
+}
+
 // A model id the endpoint serves but that isn't pinned in models.json
 // (open-catalogue) has no baseUrl of its own, so it correctly falls back
 // to the login endpoint.

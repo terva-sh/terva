@@ -420,6 +420,14 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 			BaseURL:       args.BaseURL,
 			Source:        provName,
 		}
+		// Register it: every context-window consumer (auto-compaction,
+		// the status-bar gauge, /status, chat status) looks the model
+		// up in the active catalog by id, so an unregistered synthesized
+		// model left them all seeing 0 — auto-compaction never fired for
+		// open-catalogue models. The extra layer is upserted by compat
+		// discovery and outranked by models.json, so better data still
+		// wins when it exists.
+		provider.RegisterExtraModel(resolvedModel)
 		err = nil
 	}
 	if err != nil {
