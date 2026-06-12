@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# zot installer.
+# terva installer — downloads from the project's release host (see the
+# channel-identity block below; never from upstream).
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/patriceckhart/zot/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/patriceckhart/zot/main/install.sh | bash -s -- v0.0.1 ~/bin
+#   curl -fsSL https://www.terva.sh/install.sh | bash
+#   curl -fsSL https://www.terva.sh/install.sh | bash -s -- v0.0.1 ~/bin
 #
 # Positional arguments:
 #   $1  version    — release tag (e.g. v0.0.1). Defaults to "latest".
@@ -14,26 +15,31 @@
 #                    if it isn't already.
 #
 # Environment overrides:
-#   ZOT_VERSION    same as $1
-#   ZOT_PREFIX     same as $2
-#   GITHUB_TOKEN   personal access token — required while the repo is
-#                  private, ignored once it goes public. Must have at
-#                  least `contents:read` scope on the zot repository.
+#   TERVA_VERSION    same as $1
+#   TERVA_PREFIX     same as $2
+#   An access token for the release host (the variable named by
+#   TOKEN_VAR below) — required only while the repo is private; needs
+#   read access to the terva repository.
 #
 # The script detects your OS and architecture, downloads the matching
-# archive from the GitHub release, verifies the sha256 against the
-# release's checksums.txt, extracts the binary, and moves it into the
-# prefix directory. No sudo unless you explicitly pick a prefix that
-# needs it.
+# archive from the release, verifies the sha256 against the release's
+# checksums.txt, extracts the binary, and moves it into the prefix
+# directory. No sudo unless you explicitly pick a prefix that needs it.
 
 set -euo pipefail
 
-OWNER="patriceckhart"
-REPO="zot"
-BINARY="zot"
+# --- channel identity (the release-cut rewrites this block; scripts/release.sh) ---
+HOST="https://github.com"
+OWNER="terva-sh"
+REPO="terva"
+API_LATEST="https://api.github.com/repos/${OWNER}/${REPO}/releases/latest"
+TOKEN_VAR="GITHUB_TOKEN"
+# --- end channel identity ---
 
-VERSION="${1:-${ZOT_VERSION:-latest}}"
-PREFIX="${2:-${ZOT_PREFIX:-}}"
+BINARY="terva"
+
+VERSION="${1:-${TERVA_VERSION:-latest}}"
+PREFIX="${2:-${TERVA_PREFIX:-}}"
 
 msg()  { printf "\033[1m==>\033[0m %s\n" "$*"; }
 warn() { printf "\033[33mwarn:\033[0m %s\n" "$*" >&2; }
@@ -43,8 +49,10 @@ command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v tar  >/dev/null 2>&1 || die "tar is required"
 
 # CURL_AUTH is prepended to every curl invocation so private-repo
-# downloads work while $GITHUB_TOKEN is set. Empty array when the repo
-# is public.
+# downloads work while the channel's token variable is set. Empty
+# array when the repo is public. The token variable's NAME comes from
+# the channel block ($TOKEN_VAR); ${!TOKEN_VAR} reads its value —
+# supported on bash 3.2.
 #
 # Note the "${CURL_AUTH[@]+"${CURL_AUTH[@]}"}" pattern at every call
 # site: bash 3.2 (the default /bin/bash on macOS) treats an
@@ -53,9 +61,10 @@ command -v tar  >/dev/null 2>&1 || die "tar is required"
 # guard expands to nothing when the array is empty and to the
 # array's contents when it isn't. Bash 4+ doesn't need this, but
 # the installer's primary audience is `curl | bash` on macOS.
+TOKEN="${!TOKEN_VAR:-}"
 CURL_AUTH=()
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-  CURL_AUTH=(-H "Authorization: Bearer $GITHUB_TOKEN")
+if [ -n "$TOKEN" ]; then
+  CURL_AUTH=(-H "Authorization: Bearer $TOKEN")
 fi
 
 # ---- detect OS + arch ----
@@ -81,18 +90,12 @@ esac
 # ---- resolve version ----
 
 if [ "$VERSION" = "latest" ]; then
-  # Private-repo friendly: hit the api, grab tag_name. Falls back to
-  # following the /releases/latest redirect on public repos.
-  if [ ${#CURL_AUTH[@]} -gt 0 ]; then
-    VERSION=$(curl -fsSL "${CURL_AUTH[@]+"${CURL_AUTH[@]}"}" \
-      "https://api.github.com/repos/${OWNER}/${REPO}/releases/latest" \
-      | sed -nE 's/.*"tag_name": *"([^"]+)".*/\1/p' | head -n1)
-  else
-    VERSION=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-      "https://github.com/${OWNER}/${REPO}/releases/latest" \
-      | sed -E 's|.*/tag/([^/]+).*|\1|')
-  fi
-  [ -n "$VERSION" ] || die "could not resolve latest version (set GITHUB_TOKEN if the repo is private)"
+  # Forgejo's release API carries the same tag_name field GitHub's
+  # does, and works with or without auth, so use it unconditionally.
+  VERSION=$(curl -fsSL "${CURL_AUTH[@]+"${CURL_AUTH[@]}"}" \
+    "$API_LATEST" \
+    | sed -nE 's/.*"tag_name": *"([^"]+)".*/\1/p' | head -n1)
+  [ -n "$VERSION" ] || die "could not resolve latest version (set $TOKEN_VAR if the repo is private)"
 fi
 
 case "$VERSION" in v*) ;; *) VERSION="v$VERSION" ;; esac
@@ -126,7 +129,7 @@ mkdir -p "$PREFIX"
 # ---- download + verify + extract ----
 
 ARCHIVE="${BINARY}_${VER_NUM}_${OS}_${ARCH}.tar.gz"
-BASE_URL="https://github.com/${OWNER}/${REPO}/releases/download/${VERSION}"
+BASE_URL="${HOST}/${OWNER}/${REPO}/releases/download/${VERSION}"
 ARCHIVE_URL="${BASE_URL}/${ARCHIVE}"
 CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
@@ -135,7 +138,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 msg "downloading ${ARCHIVE}"
 curl -fsSL "${CURL_AUTH[@]+"${CURL_AUTH[@]}"}" -o "$TMP/$ARCHIVE" "$ARCHIVE_URL" \
-  || die "download failed: $ARCHIVE_URL (set GITHUB_TOKEN if the repo is private)"
+  || die "download failed: $ARCHIVE_URL (set $TOKEN_VAR if the repo is private)"
 
 msg "verifying checksum"
 curl -fsSL "${CURL_AUTH[@]+"${CURL_AUTH[@]}"}" -o "$TMP/checksums.txt" "$CHECKSUMS_URL" \
@@ -164,6 +167,14 @@ msg "installing to $PREFIX/$BINARY"
 install -m 0755 "$TMP/$BINARY" "$PREFIX/$BINARY" 2>/dev/null \
   || { cp "$TMP/$BINARY" "$PREFIX/$BINARY" && chmod 0755 "$PREFIX/$BINARY"; }
 
+# ---- rename compat ----
+# terva was formerly zot; keep muscle memory and old scripts # rename:keep
+# working for a release cycle with a compat symlink, unless a # rename:keep
+# real zot binary (not ours) already sits there. # rename:keep
+if [ ! -e "$PREFIX/zot" ] || [ -L "$PREFIX/zot" ]; then # rename:keep
+  { ln -sf "$PREFIX/$BINARY" "$PREFIX/zot" && msg "compat symlink: $PREFIX/zot -> $BINARY"; } 2>/dev/null || true # rename:keep
+fi
+
 # ---- PATH hint ----
 
 case ":$PATH:" in
@@ -175,6 +186,6 @@ case ":$PATH:" in
     ;;
 esac
 
-msg "installed $("$PREFIX/$BINARY" --version 2>/dev/null || echo zot)"
-msg "run:  zot          (interactive tui)"
-msg "run:  zot --help   (all flags and subcommands)"
+msg "installed $("$PREFIX/$BINARY" --version 2>/dev/null || echo terva)"
+msg "run:  terva          (interactive tui)"
+msg "run:  terva --help   (all flags and subcommands)"

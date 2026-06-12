@@ -1,23 +1,27 @@
-# GoReleaser config — builds cross-platform binaries and GitHub Release
-# artifacts for zot.
+# GoReleaser config — PUBLIC channel. This file ships at the repo root
+# of the curated `release` branch on github.com/terva-sh/terva, copied
+# there by the release-cut (scripts/release.sh); it replaces the
+# internal Forgejo-publishing config wholesale. Releases publish as
+# GitHub Releases, triggered by the v* tag the publish flow pushes to
+# the mirror. See docs/plans/release-process.md.
 #
-# Triggered by pushing a tag like `v0.1.0`. The release workflow runs
-# `goreleaser release --clean`, which compiles every target, packs
-# them into `.tar.gz` (Unix) / `.zip` (Windows) archives, generates a
-# checksum file, and uploads everything to a GitHub Release.
+# The region between the shared-packaging markers must stay
+# byte-identical with the internal .goreleaser.yaml — enforced by
+# `scripts/release.sh check-overlay` in CI.
 
 version: 2
 
-project_name: zot
+project_name: terva
 
+# --- shared packaging (keep byte-identical with scripts/release-overlay/.goreleaser.yaml) ---
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - id: zot
-    main: ./cmd/zot
-    binary: zot
+  - id: terva
+    main: ./cmd/terva
+    binary: terva
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin, windows]
@@ -36,15 +40,15 @@ builds:
       - -X main.date={{.Date}}
 
 archives:
-  - id: zot
-    # Human-friendly name: zot_0.1.0_darwin_arm64.tar.gz
+  - id: terva
+    # Human-friendly name: terva_0.1.0_darwin_arm64.tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README.md
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
 
 checksum:
   name_template: "checksums.txt"
@@ -57,7 +61,9 @@ snapshot:
 
 changelog:
   sort: asc
-  use: github
+  # `git` reads the local log; the github/gitea modes query the host's
+  # API, which the fork's Forgejo release flow doesn't need.
+  use: git
   filters:
     exclude:
       - "^docs:"
@@ -74,21 +80,29 @@ changelog:
     - title: other
       order: 999
 
+# --- end shared packaging ---
+
 release:
   github:
-    owner: patriceckhart
-    name: zot
+    owner: terva-sh
+    name: terva
   draft: false
   prerelease: auto
   # Auto-generated release notes include the changelog groups above plus
   # an install snippet so the release page itself is a landing page.
   header: |
-    ## zot {{ .Tag }}
+    ## terva {{ .Tag }}
+
+    > terva is the project formerly known as zot. Existing installs keep <!-- rename:keep -->
+    > working: the self-updater bridges the rename, `ZOT_*` env vars and <!-- rename:keep -->
+    > pre-rename data directories are still read (deprecation window: two <!-- rename:keep -->
+    > tagged releases for env vars; data dirs forever), and `.zotsession` <!-- rename:keep -->
+    > files import forever. Details: docs/fork.md.
 
     one-liner install:
 
     ```bash
-    curl -fsSL https://raw.githubusercontent.com/patriceckhart/zot/main/install.sh | bash
+    curl -fsSL https://www.terva.sh/install.sh | bash
     ```
 
     or download a binary below, `chmod +x`, and drop it on your `$PATH`.

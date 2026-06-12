@@ -1,40 +1,50 @@
-# zot installer for Windows (PowerShell).
+# terva installer for Windows (PowerShell) — downloads from the
+# project's release host (see the channel-identity block below; never
+# from upstream).
 #
 # Usage (in PowerShell):
-#   iwr -useb https://raw.githubusercontent.com/patriceckhart/zot/main/install.ps1 | iex
+#   iwr -useb https://www.terva.sh/install.ps1 | iex
 #
 # Or with arguments:
-#   $env:ZOT_VERSION = "v0.0.1"
-#   $env:ZOT_PREFIX  = "$HOME\bin"
-#   iwr -useb https://raw.githubusercontent.com/patriceckhart/zot/main/install.ps1 | iex
+#   $env:TERVA_VERSION = "v0.0.1"
+#   $env:TERVA_PREFIX  = "$HOME\bin"
+#   iwr -useb https://www.terva.sh/install.ps1 | iex
 #
-# Detects architecture, downloads the matching .zip from the GitHub
-# release, verifies the sha256 against checksums.txt, extracts zot.exe,
-# and moves it into $ZOT_PREFIX (defaults to $HOME\bin, added to PATH
+# Detects architecture, downloads the matching .zip from the release,
+# verifies the sha256 against checksums.txt, extracts terva.exe,
+# and moves it into $TERVA_PREFIX (defaults to $HOME\bin, added to PATH
 # via the User environment if missing).
 #
-# $env:GITHUB_TOKEN is optional for the public repo. Set it to a PAT
-# with `contents:read` scope if you hit GitHub API rate limits (or if
-# you are installing from a private fork); the script then uses it for
-# the version lookup and every download.
+# An access token (the env var named by $tokenVar below) is optional
+# for a public repo. Set it to a token with read access if the repo is
+# private; the script then uses it for the version lookup and every
+# download.
 
 
 [CmdletBinding()]
 param(
-  [string]$Version = $env:ZOT_VERSION,
-  [string]$Prefix  = $env:ZOT_PREFIX
+  [string]$Version = $env:TERVA_VERSION,
+  [string]$Prefix  = $env:TERVA_PREFIX
 )
 
 $ErrorActionPreference = "Stop"
 
-$owner  = "patriceckhart"
-$repo   = "zot"
-$binary = "zot"
+# --- channel identity (the release-cut rewrites this block; scripts/release.sh) ---
+$gitHost   = "https://github.com"
+$owner     = "terva-sh"
+$repo      = "terva"
+$apiLatest = "https://api.github.com/repos/$owner/$repo/releases/latest"
+$tokenVar  = "GITHUB_TOKEN"
+# --- end channel identity ---
+
+$binary = "terva"
 
 # Build Authorization header list once; used on every HTTP call so the
-# script works against private repos when $env:GITHUB_TOKEN is set.
+# script works against private repos when the channel's token variable
+# is set.
+$token = [Environment]::GetEnvironmentVariable($tokenVar)
 $headers = @{}
-if ($env:GITHUB_TOKEN) { $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)" }
+if ($token) { $headers["Authorization"] = "Bearer $token" }
 
 if (-not $Version) { $Version = "latest" }
 if (-not $Prefix)  { $Prefix  = Join-Path $HOME "bin" }
@@ -60,21 +70,22 @@ if ($arch -eq "arm64") {
 
 # ---- resolve version ----
 #
-# Resolve "latest" through the GitHub releases API. This works the same
-# on Windows PowerShell 5.1 and PowerShell 7+, unlike scraping the
-# /releases/latest redirect target: on PS7 the final URL lives at
+# Resolve "latest" through the Forgejo releases API (GitHub-compatible
+# tag_name field). This works the same on Windows PowerShell 5.1 and
+# PowerShell 7+, unlike scraping the /releases/latest redirect target:
+# on PS7 the final URL lives at
 # $resp.BaseResponse.RequestMessage.RequestUri while on PS5.1 it is
 # $resp.BaseResponse.ResponseUri, and relying on either breaks on the
 # other runtime. The API returns the tag directly, so there is nothing
 # to scrape.
 
 if ($Version -eq "latest") {
-  $apiUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
-  # GitHub's API wants a User-Agent; Invoke-RestMethod sets one, but be
-  # explicit so corporate proxies that strip it don't trip a 403.
+  $apiUrl = $apiLatest
+  # Be explicit about User-Agent so corporate proxies that strip the
+  # default don't trip a 403.
   $apiHeaders = @{} + $headers
-  if (-not $apiHeaders.ContainsKey("User-Agent")) { $apiHeaders["User-Agent"] = "zot-installer" }
-  $apiHeaders["Accept"] = "application/vnd.github+json"
+  if (-not $apiHeaders.ContainsKey("User-Agent")) { $apiHeaders["User-Agent"] = "terva-installer" }
+  $apiHeaders["Accept"] = "application/json"
 
   try {
     $api = Invoke-RestMethod -UseBasicParsing -Headers $apiHeaders -Uri $apiUrl
@@ -84,7 +95,7 @@ if ($Version -eq "latest") {
     if ($status -eq 404) {
       Die "no published release found for $owner/$repo (the repo may have no releases yet)"
     } elseif ($status -eq 401 -or $status -eq 403) {
-      Die "GitHub API request was rejected ($status). If the repo is private, set `$env:GITHUB_TOKEN to a PAT with contents:read; otherwise you may be rate-limited (try again later or set `$env:GITHUB_TOKEN)."
+      Die "release API request was rejected ($status). If the repo is private, set `$env:$tokenVar to an access token with read access."
     } else {
       Die "could not resolve latest version: $($_.Exception.Message)"
     }
@@ -92,7 +103,7 @@ if ($Version -eq "latest") {
 
   $Version = $api.tag_name
   if (-not $Version) {
-    Die "could not resolve latest version: GitHub API returned no tag_name for $owner/$repo"
+    Die "could not resolve latest version: release API returned no tag_name for $owner/$repo"
   }
 }
 
@@ -102,11 +113,11 @@ $verNum = $Version.TrimStart("v")
 # ---- download + verify + extract ----
 
 $archive     = "${binary}_${verNum}_windows_${arch}.zip"
-$baseUrl     = "https://github.com/$owner/$repo/releases/download/$Version"
+$baseUrl     = "$gitHost/$owner/$repo/releases/download/$Version"
 $archiveUrl  = "$baseUrl/$archive"
 $checksumUrl = "$baseUrl/checksums.txt"
 
-$tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("zot-install-" + [System.Guid]::NewGuid().ToString("N").Substring(0,8)))
+$tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("terva-install-" + [System.Guid]::NewGuid().ToString("N").Substring(0,8)))
 
 try {
   Msg "downloading $archive"
@@ -140,6 +151,10 @@ try {
   New-Item -ItemType Directory -Path $Prefix -Force | Out-Null
   Copy-Item $exe (Join-Path $Prefix "$binary.exe") -Force
 
+  # rename compat: terva was formerly zot; keep old scripts working # rename:keep
+  # for a release cycle with a copy (windows has no easy symlinks). # rename:keep
+  Copy-Item $exe (Join-Path $Prefix "zot.exe") -Force # rename:keep
+
   # ---- PATH hint ----
 
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -152,7 +167,7 @@ try {
     Warn "  `$env:Path = `"$Prefix;`$env:Path`""
   }
 
-  Msg "installed. run:  zot --help"
+  Msg "installed. run:  terva --help"
 }
 finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

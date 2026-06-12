@@ -1,13 +1,16 @@
+# Public CI for github.com/terva-sh/terva. Ships on the curated
+# `release` branch (copied there by the release-cut, scripts/release.sh)
+# and replaces upstream's main-only workflow. Mirrors `just ci`:
+# vet + gofmt + race tests + the connector tag-matrix build.
 name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [release, "release/**"]
   pull_request:
-    branches: [main]
 
-# Cancel in-progress runs when a new commit lands on the same branch /
-# pr, so we don't waste minutes on stale SHAs.
+# Cancel in-progress runs when a new commit lands on the same ref so
+# we don't waste minutes on stale SHAs.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -26,23 +29,28 @@ jobs:
       - name: set up go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          # Current stable, matching the internal channel's builder
+          # image rather than go.mod's minimum directive.
+          go-version: stable
           cache: true
 
       - name: go vet
         run: go vet ./...
 
       - name: gofmt check
-        # Windows' bash is mingw; gofmt outputs paths with slashes so the
-        # diff check works there too. Skip on windows only if needed.
+        # Windows' bash is mingw; path separators in gofmt output make
+        # the diff check unreliable there.
         if: runner.os != 'Windows'
         run: |
           diff=$(gofmt -l .)
           if [ -n "$diff" ]; then
-            echo "gofmt issues:"
+            echo "gofmt issues in:"
             echo "$diff"
             exit 1
           fi
 
       - name: go test
         run: go test -race ./...
+
+      - name: tag-matrix build (no chat connectors)
+        run: go build -tags terva_no_telegram ./...

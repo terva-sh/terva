@@ -1,95 +1,50 @@
+# Public release pipeline for github.com/terva-sh/terva. This file
+# ships on the curated `release` branch (copied there by the
+# release-cut, scripts/release.sh) and REPLACES upstream's
+# auto-tagging workflow, which never fires in this repo.
+#
+# Tags are pushed by the maintainer's release-publish flow (the local
+# `pub/vX.Y.Z` tag arrives here as `vX.Y.Z`); this workflow only
+# packages. It never creates tags, never bumps versions — a tag that
+# wasn't deliberately pushed cannot release anything.
 name: release
 
-# Every push to main that passes CI cuts a new release. The workflow:
-#   1. waits for the ci workflow on the same commit to succeed
-#   2. looks up the latest existing vX.Y.Z tag
-#   3. bumps the patch number (vX.Y.Z+1) — or starts at v0.0.1 if none
-#   4. creates and pushes that tag
-#   5. runs goreleaser, which builds binaries for linux/darwin/windows
-#      (amd64 + arm64) and attaches them plus checksums.txt to a fresh
-#      GitHub Release page
-#
-# Skip a release by putting [release=skip] anywhere in the commit
-# message — useful for docs-only or ci-only commits. We use a rare
-# equals-sign form so commits that merely *mention* the feature
-# ("make the release step optional") don't accidentally opt out.
 on:
-  workflow_run:
-    workflows: [ci]
-    types: [completed]
-    branches: [main]
+  push:
+    tags:
+      - "v*"
 
+# goreleaser creates the release and uploads archives.
 permissions:
-  # Needed to create tags and to upload release archives.
   contents: write
 
-# Only one release job at a time. If two pushes land in quick
-# succession, queue them so they don't race on the tag.
+# Queue, never cancel: two tags racing should both ship.
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release:
-    # Only run when ci succeeded and we're on main, and when the head
-    # commit doesn't opt out via [skip-release].
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && !contains(github.event.workflow_run.head_commit.message, '[release=skip]') }}
+  goreleaser:
+    name: Build and Publish Release
+    # Pinned to the public repo so forks of the mirror can't publish
+    # releases from this workflow.
+    if: ${{ github.repository == 'terva-sh/terva' }}
     runs-on: ubuntu-latest
     steps:
       - name: checkout
         uses: actions/checkout@v4
         with:
-          # Full history so we can read existing tags.
+          # Full history so goreleaser can derive the changelog from
+          # git log between tags (changelog.use: git) — the curated
+          # release-branch commits ARE the public changelog.
           fetch-depth: 0
-          # Check out the exact sha that ci verified, not whatever the
-          # branch tip happens to be at this moment (which may have
-          # advanced since ci finished).
-          ref: ${{ github.event.workflow_run.head_sha }}
-
-      - name: compute next version
-        id: bump
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Find the newest vX.Y.Z tag. If the repo has none yet, start
-          # at v0.0.0 so the first release becomes v0.0.1.
-          latest=$(git tag --list 'v*.*.*' --sort=-v:refname | head -n1)
-          if [ -z "$latest" ]; then
-            latest="v0.0.0"
-          fi
-          echo "latest tag: $latest"
-
-          # Strip the v prefix, split on dots, bump the patch.
-          # After .99 roll over to the next minor (e.g. 0.0.99 -> 0.1.0,
-          # 0.1.99 -> 0.2.0). Keep major fixed at 0 for now.
-          ver="${latest#v}"
-          IFS=. read -r major minor patch <<<"$ver"
-          if [ "$patch" -ge 99 ]; then
-            minor=$((minor + 1))
-            patch=0
-          else
-            patch=$((patch + 1))
-          fi
-          next="v${major}.${minor}.${patch}"
-          echo "next tag:   $next"
-
-          echo "next=$next" >> "$GITHUB_OUTPUT"
-          echo "version=${next#v}" >> "$GITHUB_OUTPUT"
-
-      - name: create and push tag
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.bump.outputs.next }}" \
-            -m "release ${{ steps.bump.outputs.next }}"
-          git push origin "${{ steps.bump.outputs.next }}"
 
       - name: set up go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          # Current stable, matching the internal channel's builder
+          # image rather than go.mod's minimum directive.
+          go-version: stable
           cache: true
 
       - name: run goreleaser
@@ -99,6 +54,4 @@ jobs:
           version: latest
           args: release --clean
         env:
-          # goreleaser reads the tag we just pushed and builds binaries
-          # for every (goos, goarch) combination in .goreleaser.yaml.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
