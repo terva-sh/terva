@@ -20,9 +20,9 @@
 //
 // Install:
 //
-//	zot ext install .
+//	terva ext install .
 //
-// Try it — ask zot something like:
+// Try it — ask terva something like:
 //
 //	"Fetch https://internal.example.com/report — it needs a password."
 //
@@ -38,7 +38,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/patriceckhart/zot/packages/agent/ext"
+	"terva.sh/terva/packages/agent/ext"
 )
 
 const schema = `{

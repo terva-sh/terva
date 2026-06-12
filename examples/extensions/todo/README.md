@@ -1,8 +1,8 @@
-# todo — example zot extension (Go, interactive panel)
+# todo — example terva extension (Go, interactive panel)
 
 Demonstrates the interactive panel API plus a companion tool the model
 can call. The slash command opens a persistent todo panel; the tool lets
-zot read and update the same todo list.
+terva read and update the same todo list.
 
 ## Requirements
 
@@ -13,7 +13,7 @@ Go 1.22+.
 From this directory:
 
 ```bash
-zot ext install .
+terva ext install .
 ```
 
 The example is configured to run directly from source:
@@ -45,7 +45,7 @@ If you do build it, change `extension.json` back to:
 
 ## Use
 
-In zot:
+In terva:
 
 - `/todo` opens the panel
 

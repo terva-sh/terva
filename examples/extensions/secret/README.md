@@ -1,4 +1,4 @@
-# secret — example zot extension
+# secret — example terva extension
 
 Demonstrates **secret collection via a masked panel**: the model asks
 for a resource that needs a credential, the extension collects the
@@ -50,12 +50,12 @@ go build -o secret .
 ## Install
 
 ```bash
-zot ext install .
+terva ext install .
 ```
 
 ## Try it
 
-In zot, ask:
+In terva, ask:
 
 > Fetch https://internal.example.com/report — it needs a password.
 

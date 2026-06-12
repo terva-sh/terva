@@ -1,23 +1,23 @@
 ---
-name: write-zot-extension
-description: Help the user create a new zot extension (slash command, LLM tool, or guard) in any language.
+name: write-terva-extension
+description: Help the user create a new terva extension (slash command, LLM tool, or guard) in any language.
 ---
 
-# Writing a zot extension
+# Writing a terva extension
 
-Use this skill when the user asks for help building a zot extension —
+Use this skill when the user asks for help building a terva extension —
 a new slash command, a new tool the LLM can call, an audit hook, or
 a permission gate. Skim this whole skill first, then collaborate
 with the user on the specific extension they want.
 
 ## What an extension is
 
-A zot extension is **an external executable** that zot launches as a
+A terva extension is **an external executable** that terva launches as a
 subprocess and talks to over its stdin/stdout in newline-delimited
 JSON. It can be written in any language that can read/write JSON
 lines from stdio: Go, TypeScript (via tsx), Python, Rust, shell with
 jq, anything. Crash isolation is automatic; one bad extension never
-takes down zot.
+takes down terva.
 
 Three things an extension can do (any combination):
 
@@ -27,7 +27,7 @@ Three things an extension can do (any combination):
    (one-shot styled note in the chat), or a "noop".
 
 2. **Tools** — register tools the LLM itself calls. Schema is
-   JSON Schema; zot routes the model's `tool_call` to the
+   JSON Schema; terva routes the model's `tool_call` to the
    extension's `tool_result`. Same lifecycle as built-in tools
    (read/write/edit/bash/skill).
 
@@ -42,16 +42,16 @@ Three things an extension can do (any combination):
 Each extension lives in its own directory:
 
 ```
-~/Library/Application Support/zot/extensions/<name>/
+~/Library/Application Support/terva/extensions/<name>/
 ├── extension.json    # manifest (required)
 └── <executable>      # whatever exec points at
 ```
 
-Or project-local: `<project>/.zot/extensions/<name>/`. Project-local
+Or project-local: `<project>/.terva/extensions/<name>/`. Project-local
 wins on name conflict.
 
 For ad-hoc use during development, skip the install step entirely
-and run `zot --ext PATH` (repeatable: `-e PATH -e PATH`).
+and run `terva --ext PATH` (repeatable: `-e PATH -e PATH`).
 
 ### Manifest
 
@@ -68,7 +68,7 @@ and run `zot --ext PATH` (repeatable: `-e PATH -e PATH`).
 ```
 
 Field rules:
-- `name` (required, unique) — id zot uses internally; matches the
+- `name` (required, unique) — id terva uses internally; matches the
   hello frame. Slash commands & tools live in the same name space
   as built-ins; conflicts are silently shadowed by built-ins.
 - `exec` (required) — the executable path. Resolution:
@@ -99,17 +99,17 @@ The very first frame the extension sends is `hello`:
 Capabilities are advisory; current values are `commands`, `tools`,
 `events`. Send all that apply.
 
-zot replies with `hello_ack`:
+terva replies with `hello_ack`:
 
 ```json
-{"type":"hello_ack","protocol_version":1,"zot_version":"0.0.x",
+{"type":"hello_ack","protocol_version":1,"terva_version":"0.0.x",
  "provider":"anthropic","model":"claude-opus-4-7","cwd":"/path/to/project"}
 ```
 
 ### Registration (immediately after hello)
 
 Send registration frames in any order, then a single `ready`
-sentinel so zot can finalize the agent's tool registry:
+sentinel so terva can finalize the agent's tool registry:
 
 ```json
 {"type":"register_command","name":"weather","description":"current weather"}
@@ -119,13 +119,13 @@ sentinel so zot can finalize the agent's tool registry:
 {"type":"ready"}
 ```
 
-If you don't send `ready`, zot's idle watchdog auto-treats you as
+If you don't send `ready`, terva's idle watchdog auto-treats you as
 ready after 250ms of no frames, but always send it explicitly when
 you can — newer extensions on faster hosts shave that 250ms off.
 
 ### Runtime frames
 
-**zot → extension:**
+**terva → extension:**
 
 ```json
 {"type":"command_invoked","id":"abc","name":"weather","args":"berlin"}
@@ -136,7 +136,7 @@ you can — newer extensions on faster hosts shave that 250ms off.
 {"type":"shutdown"}
 ```
 
-**extension → zot (replies + spontaneous notifications):**
+**extension → terva (replies + spontaneous notifications):**
 
 ```json
 {"type":"command_response","id":"abc","action":"prompt",
@@ -159,7 +159,7 @@ without waiting for the next turn; other extensions' notes are kept.
 - `"insert"` — drop `insert` into the editor at the cursor
 - `"display"` — append `display` to chat as a one-shot note (no
   model call, not in transcript)
-- `"noop"` — handled internally; zot doesn't change the UI
+- `"noop"` — handled internally; terva doesn't change the UI
 
 `tool_result.content[]` blocks: `{"type":"text","text":"..."}` or
 `{"type":"image","mime_type":"image/png","data":"<base64>"}`.
@@ -172,8 +172,8 @@ never stalls the agent.
 
 - **stdout is reserved for the protocol.** Anything you print to
   stdout that isn't a JSON frame breaks the wire. Use stderr for
-  logs / debug output (zot captures stderr to
-  `$ZOT_HOME/logs/ext-<name>.log`).
+  logs / debug output (terva captures stderr to
+  `$TERVA_HOME/logs/ext-<name>.log`).
 - **One JSON object per line.** No multi-line JSON. Always end
   every frame with `\n`.
 - **Flush after writing.** Most stdout writes are line-buffered when
@@ -191,7 +191,7 @@ package main
 
 import (
     "encoding/json"
-    "github.com/patriceckhart/zot/packages/agent/ext"
+    "terva.sh/terva/packages/agent/ext"
 )
 
 func main() {
@@ -300,23 +300,23 @@ for line in sys.stdin:
 ## Install / dev workflow
 
 ```bash
-zot ext install ./weather       # copy into $ZOT_HOME/extensions/
-zot --ext ./weather             # run from disk for one zot session (no install)
-zot --ext .                     # cwd is the extension dir
-zot ext list                    # show installed extensions
-zot ext logs weather            # cat the extension's stderr
-zot ext logs weather -f         # tail it
-zot ext disable weather         # keep installed but skip on launch
-zot ext enable weather
-zot ext remove weather
+terva ext install ./weather       # copy into $TERVA_HOME/extensions/
+terva --ext ./weather             # run from disk for one terva session (no install)
+terva --ext .                     # cwd is the extension dir
+terva ext list                    # show installed extensions
+terva ext logs weather            # cat the extension's stderr
+terva ext logs weather -f         # tail it
+terva ext disable weather         # keep installed but skip on launch
+terva ext enable weather
+terva ext remove weather
 ```
 
 For TS / Python extensions, no build step is needed — edit the source
-in place and relaunch zot.
+in place and relaunch terva.
 
 For Go, run `go build -o <name> .` in the extension directory after
-edits, then `zot ext install` (which copies the manifest + binary)
-or `zot --ext .` to test from the working tree.
+edits, then `terva ext install` (which copies the manifest + binary)
+or `terva --ext .` to test from the working tree.
 
 ## Manual debug
 
@@ -325,7 +325,7 @@ to see exactly what's happening on the wire:
 
 ```bash
 {
-  printf '%s\n' '{"type":"hello_ack","protocol_version":1,"zot_version":"x","provider":"a","model":"o","cwd":"/tmp"}'
+  printf '%s\n' '{"type":"hello_ack","protocol_version":1,"terva_version":"x","provider":"a","model":"o","cwd":"/tmp"}'
   sleep 0.2
   printf '%s\n' '{"type":"command_invoked","id":"1","name":"weather","args":"Berlin"}'
   sleep 0.5
@@ -334,7 +334,7 @@ to see exactly what's happening on the wire:
 ```
 
 Compare what comes out of stdout to the expected wire format. If a
-frame doesn't match what zot expects, it's discarded silently and
+frame doesn't match what terva expects, it's discarded silently and
 logged to `ext-<name>.log`.
 
 ## Process to follow with the user
@@ -350,9 +350,9 @@ logged to `ext-<name>.log`.
    scripts.
 4. Write the extension dir (manifest + source).
 5. For Go, build it. For TS / Python, mark the script executable.
-6. Suggest `zot --ext <path>` for testing without committing to an
+6. Suggest `terva --ext <path>` for testing without committing to an
    install.
-7. When happy, `zot ext install <path>`.
+7. When happy, `terva ext install <path>`.
 
 Don't try to write a full SDK or framework on top of the protocol
 unless the user asked for one — the wire format is small enough

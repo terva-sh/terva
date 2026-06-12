@@ -1,4 +1,4 @@
-// scratchpad — a real .ts zot extension with no SDK and no build step.
+// scratchpad — a real .ts terva extension with no SDK and no build step.
 //
 // Runs via `npx --yes tsx index.ts` (declared in extension.json).
 // First invocation downloads tsx into npm's cache; every subsequent
@@ -47,7 +47,7 @@ interface ToolCall {
 interface HelloAck {
   type: "hello_ack";
   protocol_version: number;
-  zot_version: string;
+  terva_version: string;
   provider: string;
   model: string;
   cwd: string;
@@ -89,23 +89,23 @@ function send(frame: Frame): void {
 }
 
 function log(msg: string): void {
-  // stderr is captured by zot to $ZOT_HOME/logs/ext-<name>.log;
+  // stderr is captured by terva to $TERVA_HOME/logs/ext-<name>.log;
   // safe for debug output. stdout is reserved for the protocol.
   stderr.write(`[${NAME}] ${msg}\n`);
 }
 
 // ---- the scratchpad state itself ----
 //
-// Notes persist as JSONL under <cwd>/.zot/scratchpad-notes.jsonl so
-// they survive zot restarts and stay scoped to the project. The path
+// Notes persist as JSONL under <cwd>/.terva/scratchpad-notes.jsonl so
+// they survive terva restarts and stay scoped to the project. The path
 // is resolved once HelloAck arrives (which carries cwd); until then
 // notesPath is empty and reads/writes no-op safely.
 //
 // One note per line, format:  {"at":"<iso>","text":"<body>"}
 // Append-only on /note; full rewrite on /clear-notes.
 //
-// Single-writer assumption: only one zot session per cwd at a time.
-// Concurrent writes from two zot instances would interleave but not
+// Single-writer assumption: only one terva session per cwd at a time.
+// Concurrent writes from two terva instances would interleave but not
 // corrupt JSONL line boundaries on POSIX (writes ≤ PIPE_BUF are
 // atomic). Good enough for a demo.
 
@@ -115,7 +115,7 @@ let notes: Note[] = [];
 let notesPath = "";
 
 function setNotesPath(cwd: string): void {
-  notesPath = join(cwd, ".zot", "scratchpad-notes.jsonl");
+  notesPath = join(cwd, ".terva", "scratchpad-notes.jsonl");
   loadNotes();
 }
 
@@ -209,7 +209,7 @@ send({
   },
 });
 
-// Sentinel: tells zot all initial registrations are flushed so the
+// Sentinel: tells terva all initial registrations are flushed so the
 // agent's tool registry can be built without racing the read loop.
 send({ type: "ready" });
 
@@ -252,7 +252,7 @@ rl.on("close", () => {
 
 function handleHelloAck(ack: HelloAck): void {
   log(
-    `connected to zot ${ack.zot_version} ` +
+    `connected to terva ${ack.terva_version} ` +
       `(${ack.provider}/${ack.model}, cwd=${ack.cwd})`,
   );
   if (ack.cwd) setNotesPath(ack.cwd);

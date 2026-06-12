@@ -1,6 +1,6 @@
 {
   "name": "custom-spinner",
-  "description": "An alternative spinner for zot that only displays a single spinner text.",
+  "description": "An alternative spinner for terva that only displays a single spinner text.",
   "colors": {
     "dark": {
       "spinner_frames": [

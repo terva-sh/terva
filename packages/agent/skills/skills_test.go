@@ -47,7 +47,7 @@ permissions:
 
 func TestDiscoverProjectAndGlobalPriorityAndDedup(t *testing.T) {
 	tmp := t.TempDir()
-	zotHome := filepath.Join(tmp, "home")
+	tervaHome := filepath.Join(tmp, "home")
 	cwd := filepath.Join(tmp, "proj")
 
 	mk := func(dir, name, desc string) {
@@ -58,17 +58,17 @@ func TestDiscoverProjectAndGlobalPriorityAndDedup(t *testing.T) {
 	}
 
 	// Same skill name in BOTH project and global; project should win.
-	mk(filepath.Join(cwd, ".zot", "skills"), "shared", "project version")
-	mk(filepath.Join(zotHome, "skills"), "shared", "global version")
+	mk(filepath.Join(cwd, ".terva", "skills"), "shared", "project version")
+	mk(filepath.Join(tervaHome, "skills"), "shared", "global version")
 	// Unique skill in global only.
-	mk(filepath.Join(zotHome, "skills"), "global-only", "from global")
+	mk(filepath.Join(tervaHome, "skills"), "global-only", "from global")
 
-	skills, errs := Discover(zotHome, cwd, "", true /* includeUser */)
+	skills, errs := Discover(tervaHome, cwd, "", true /* includeUser */)
 	if len(errs) > 0 {
 		t.Fatalf("errs: %v", errs)
 	}
 	// Expect the two user skills + every built-in shipped with the
-	// binary (currently the write-zot-extension authoring guide).
+	// binary (currently the write-terva-extension authoring guide).
 	builtins := loadBuiltins()
 	want := 2 + len(builtins)
 	if len(skills) != want {

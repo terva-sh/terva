@@ -1,4 +1,4 @@
-# weather — example zot extension (Go, tool-providing)
+# weather — example terva extension (Go, tool-providing)
 
 Demonstrates the **tool registration** half of the extension protocol
 (phase 2). The extension exposes a `weather(city)` tool that the LLM
@@ -15,16 +15,16 @@ go build -o weather .
 ## Install
 
 ```bash
-zot ext install .
+terva ext install .
 ```
 
 Copies the directory (manifest + binary) into
-`$ZOT_HOME/extensions/weather/`. zot picks it up the next time you
+`$TERVA_HOME/extensions/weather/`. terva picks it up the next time you
 launch the TUI and registers the tool with the agent.
 
 ## Use
 
-In zot, ask:
+In terva, ask:
 
 - "What's the weather in Berlin?"
 - "Compare the weather in Tokyo and Reykjavik."
@@ -35,7 +35,7 @@ anything by hand.
 
 ## Add the leading slash to your /help table
 
-The tool also shows up in the system prompt's tool list because zot
+The tool also shows up in the system prompt's tool list because terva
 folds extension tools into the agent's registry at startup.
 
 ## See also

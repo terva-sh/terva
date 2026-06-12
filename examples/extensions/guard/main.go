@@ -15,8 +15,8 @@
 //	cd examples/extensions/guard
 //	go build -o guard .
 //
-// Drop it next to its extension.json under $ZOT_HOME/extensions/guard/
-// (or `zot ext install ./guard` from this directory) and the next zot
+// Drop it next to its extension.json under $TERVA_HOME/extensions/guard/
+// (or `terva ext install ./guard` from this directory) and the next terva
 // session will load it automatically.
 package main
 
@@ -29,7 +29,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/agent/ext"
+	"terva.sh/terva/packages/agent/ext"
 )
 
 var dangerPatterns = []*regexp.Regexp{
@@ -44,7 +44,7 @@ var dangerPatterns = []*regexp.Regexp{
 func main() {
 	e := ext.New("guard", "1.0.0")
 
-	auditPath := filepath.Join(os.TempDir(), "zot-guard-audit.log")
+	auditPath := filepath.Join(os.TempDir(), "terva-guard-audit.log")
 	auditFile, _ := os.OpenFile(auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if auditFile != nil {
 		defer auditFile.Close()

@@ -10,8 +10,8 @@
 //	go build -o weather .
 //
 // Then drop it next to its extension.json under
-// $ZOT_HOME/extensions/weather/, or run `zot ext install ./weather`
-// from this directory. After that, asking zot anything like
+// $TERVA_HOME/extensions/weather/, or run `terva ext install ./weather`
+// from this directory. After that, asking terva anything like
 // "what's the weather in Berlin?" makes the model call the tool.
 package main
 
@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/patriceckhart/zot/packages/agent/ext"
+	"terva.sh/terva/packages/agent/ext"
 )
 
 const weatherSchema = `{

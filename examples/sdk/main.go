@@ -1,5 +1,5 @@
-// In-process Go embedding of the zot agent runtime via the sdk package.
-// Compare to examples/rpc/go which spawns `zot rpc` as a subprocess.
+// In-process Go embedding of the terva agent runtime via the sdk package.
+// Compare to examples/rpc/go which spawns `terva rpc` as a subprocess.
 package main
 
 import (
@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/patriceckhart/zot/packages/agent/sdk"
+	"terva.sh/terva/packages/agent/sdk"
 )
 
 func main() {

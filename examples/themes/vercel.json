@@ -1,6 +1,6 @@
 {
   "name": "vercel",
-  "description": "Vercel-inspired zot theme based on gantoreno/vscode-vercel. Uses the same core palette as the VS Code theme: pink keywords, blue constants/links, purple functions, green strings/success, amber warnings, and neutral Vercel grays for chrome.",
+  "description": "Vercel-inspired terva theme based on gantoreno/vscode-vercel. Uses the same core palette as the VS Code theme: pink keywords, blue constants/links, purple functions, green strings/success, amber warnings, and neutral Vercel grays for chrome.",
   "color_descriptions": {
     "fg": "Default foreground text, based on Vercel editor.foreground / terminal.foreground.",
     "muted": "Secondary text, dividers, gutters, footers, inactive hints, based on Vercel foreground/sidebar/status gray.",
@@ -8,7 +8,7 @@
     "user": "User role label color; kept for compatibility with older UI surfaces.",
     "user_bubble_bg": "Background behind user message rows, based on Vercel editor.selectionBackground / lineHighlightBackground.",
     "user_bubble_fg": "Text foreground inside user message rows.",
-    "assistant": "Assistant/zot accent color and welcome label, mapped to Vercel blue.",
+    "assistant": "Assistant/terva accent color and welcome label, mapped to Vercel blue.",
     "tool": "Tool names, successful marks, additions in diffs, based on Vercel green.",
     "tool_out": "Plain tool output text.",
     "error": "Errors, refused tool calls, deletions in diffs, based on Vercel error/list error colors.",

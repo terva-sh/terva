@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// builtinFS holds the SKILL.md files zot ships with the binary.
+// builtinFS holds the SKILL.md files terva ships with the binary.
 // They appear in the catalogue as ordinary skills — same on-demand
 // load via the `skill` tool, same /skills picker — but never need
 // to be installed by the user. A user-installed skill with the same

@@ -16,9 +16,9 @@
 //
 // Install:
 //
-//	zot ext install .
+//	terva ext install .
 //
-// Try it — ask zot something like:
+// Try it — ask terva something like:
 //
 //	"Request approval to delete the temp directory."
 //
@@ -35,7 +35,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/patriceckhart/zot/packages/agent/ext"
+	"terva.sh/terva/packages/agent/ext"
 )
 
 const schema = `{

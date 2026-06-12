@@ -6,10 +6,10 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 .PHONY: build install test lint fmt clean release
 
 build:
-	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/zot ./cmd/zot
+	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/terva ./cmd/terva
 
 install:
-	go install -ldflags "$(LDFLAGS)" ./cmd/zot
+	go install -ldflags "$(LDFLAGS)" ./cmd/terva
 
 test:
 	go test -race ./...
@@ -26,8 +26,8 @@ clean:
 
 release:
 	@mkdir -p bin
-	GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/zot-linux-amd64   ./cmd/zot
-	GOOS=linux   GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/zot-linux-arm64   ./cmd/zot
-	GOOS=darwin  GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/zot-darwin-amd64  ./cmd/zot
-	GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/zot-darwin-arm64  ./cmd/zot
-	GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/zot-windows-amd64.exe ./cmd/zot
+	GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/terva-linux-amd64   ./cmd/terva
+	GOOS=linux   GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/terva-linux-arm64   ./cmd/terva
+	GOOS=darwin  GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/terva-darwin-amd64  ./cmd/terva
+	GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/terva-darwin-arm64  ./cmd/terva
+	GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/terva-windows-amd64.exe ./cmd/terva

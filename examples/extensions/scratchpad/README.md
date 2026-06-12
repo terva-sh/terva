@@ -1,4 +1,4 @@
-# scratchpad — example zot extension (TypeScript, source-run)
+# scratchpad — example terva extension (TypeScript, source-run)
 
 Real `.ts` (not `.js`), no build step, no SDK. Runs via `npx -y tsx
 ./index.ts`, which downloads `tsx` into npm's cache on first
@@ -20,14 +20,14 @@ Node 18+ and `npx` (bundled with npm).
 From this directory:
 
 ```bash
-zot ext install .
+terva ext install .
 ```
 
-This copies the manifest + source into `$ZOT_HOME/extensions/scratchpad/`.
+This copies the manifest + source into `$TERVA_HOME/extensions/scratchpad/`.
 
 ## Use
 
-In zot:
+In terva:
 
 - `/note remind me to update the changelog`  — appends to the scratchpad
 - `/notes`                                    — shows everything stored
@@ -41,8 +41,8 @@ The model also has a `read_notes` tool. Ask it:
 
 ## Storage
 
-Notes persist as JSONL at `<cwd>/.zot/scratchpad-notes.jsonl`. The
-file is created on first `/note` and survives zot restarts. Each line
+Notes persist as JSONL at `<cwd>/.terva/scratchpad-notes.jsonl`. The
+file is created on first `/note` and survives terva restarts. Each line
 is one note: `{"at":"2026-04-19T13:00:00.000Z","text":"..."}`.
 
 Scope is per-project: switching to a different cwd gives you a

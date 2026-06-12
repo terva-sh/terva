@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/patriceckhart/zot/packages/core"
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
 )
 
 // Tool implements core.Tool, exposing a `skill` tool the LLM can call
@@ -84,7 +84,7 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage, progress func(
 	if s == nil {
 		return core.ToolResult{
 			IsError: true,
-			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("skill: no skill named %q (run /skills in zot to see what's available)", in.Name)}},
+			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("skill: no skill named %q (run /skills in terva to see what's available)", in.Name)}},
 		}, nil
 	}
 

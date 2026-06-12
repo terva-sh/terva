@@ -1,9 +1,9 @@
-"""Minimal Python client for the `zot rpc` JSON protocol.
+"""Minimal Python client for the `terva rpc` JSON protocol.
 
 Usage:
-    python zot_client.py "fix the failing test"
+    python terva_client.py "fix the failing test"
 
-Spawns `zot rpc`, sends one prompt, prints assistant text as it streams,
+Spawns `terva rpc`, sends one prompt, prints assistant text as it streams,
 and exits when the turn finishes. No external dependencies — stdlib
 only. Implements just enough of the protocol to be useful as a
 starting point; see docs/rpc.md for the full schema.
@@ -18,9 +18,9 @@ import threading
 import uuid
 
 
-class ZotClient:
+class TervaClient:
     def __init__(self, *flags: str) -> None:
-        argv = ["zot", "rpc", *flags]
+        argv = ["terva", "rpc", *flags]
         env = os.environ.copy()
         self.proc = subprocess.Popen(
             argv,
@@ -67,13 +67,13 @@ class ZotClient:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("usage: zot_client.py <prompt>", file=sys.stderr)
+        print("usage: terva_client.py <prompt>", file=sys.stderr)
         return 2
     prompt = " ".join(sys.argv[1:])
 
-    client = ZotClient()
+    client = TervaClient()
     try:
-        token = os.environ.get("ZOTCORE_RPC_TOKEN")
+        token = os.environ.get("TERVACORE_RPC_TOKEN")
         if token:
             client.send(type="hello", token=token)
 

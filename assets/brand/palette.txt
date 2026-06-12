@@ -1,0 +1,12 @@
+Terva core palette
+Background: #0A0A09
+Harness shell: #F5F1E8
+Center wildcard: #F29100
+Footer block: #FDB515
+Tar Black (alt): #11100E
+Charcoal: #1B1D1E
+Resin Amber: #D9902F
+Hot Amber: #F2B84B
+Pine Green (optional): #1F4D3A
+Terminal Mint (optional): #6EE7B7
+Slate (optional): #2E343B

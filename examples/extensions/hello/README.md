@@ -1,4 +1,4 @@
-# hello — example zot extension (Go)
+# hello — example terva extension (Go)
 
 A minimal example showing how to register slash commands with the
 `ext` SDK.
@@ -14,16 +14,16 @@ go build -o hello .
 
 ```bash
 # from this directory
-zot ext install .
+terva ext install .
 ```
 
 This copies the directory (manifest + binary) into
-`$ZOT_HOME/extensions/hello/`. zot picks it up the next time you
+`$TERVA_HOME/extensions/hello/`. terva picks it up the next time you
 launch the TUI.
 
 ## Use
 
-In zot, type:
+In terva, type:
 
 - `/hello`           — agent greets you
 - `/hello <name>`    — agent greets `<name>`

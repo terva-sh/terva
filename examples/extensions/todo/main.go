@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/patriceckhart/zot/packages/agent/ext"
+	"terva.sh/terva/packages/agent/ext"
 )
 
 type todoItem struct {

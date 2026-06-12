@@ -1,4 +1,4 @@
-# guard — example zot extension (Go, phase 3)
+# guard — example terva extension (Go, phase 3)
 
 Demonstrates the **event subscription** and **tool-call interception**
 half of the extension protocol (phase 3).
@@ -6,7 +6,7 @@ half of the extension protocol (phase 3).
 What it does:
 
 - Subscribes to `session_start`, `turn_start`, `tool_call`, `turn_end`
-  and appends a line to `/tmp/zot-guard-audit.log` for each.
+  and appends a line to `/tmp/terva-guard-audit.log` for each.
 - Intercepts every `bash` tool call. If the command matches a danger
   regex (`rm -rf`, `sudo`, `dd of=/`, `mkfs`, the fork bomb, `chmod -R
   777`), the call is **refused**. The model sees the refusal as the
@@ -23,12 +23,12 @@ go build -o guard .
 ## Install
 
 ```bash
-zot ext install .
+terva ext install .
 ```
 
 ## Try it
 
-In zot, ask:
+In terva, ask:
 
 > Run `rm -rf /tmp/foo`
 
@@ -42,7 +42,7 @@ Allowed; the audit log records the call.
 Tail the audit log:
 
 ```bash
-tail -f /tmp/zot-guard-audit.log
+tail -f /tmp/terva-guard-audit.log
 ```
 
 ## Extending the danger list

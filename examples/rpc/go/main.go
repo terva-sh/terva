@@ -1,6 +1,6 @@
-// Tiny Go program that drives `zot rpc` as a subprocess.
+// Tiny Go program that drives `terva rpc` as a subprocess.
 //
-// For an in-process Go embedding, use github.com/patriceckhart/zot/packages/agent/sdk
+// For an in-process Go embedding, use terva.sh/terva/packages/agent/sdk
 // instead — this example exists to show what consumers in OTHER
 // languages have to do.
 package main
@@ -22,7 +22,7 @@ func main() {
 	}
 	prompt := strings.Join(os.Args[1:], " ")
 
-	cmd := exec.Command("zot", "rpc")
+	cmd := exec.Command("terva", "rpc")
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
 	must(err)
@@ -30,7 +30,7 @@ func main() {
 	must(err)
 	must(cmd.Start())
 
-	if tok := os.Getenv("ZOTCORE_RPC_TOKEN"); tok != "" {
+	if tok := os.Getenv("TERVACORE_RPC_TOKEN"); tok != "" {
 		send(stdin, map[string]any{"id": "0", "type": "hello", "token": tok})
 	}
 	send(stdin, map[string]any{

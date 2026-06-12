@@ -1,4 +1,4 @@
-// clock — a zot extension written in plain Node (no dependencies).
+// clock — a terva extension written in plain Node (no dependencies).
 //
 // Registers two slash commands:
 //   /now            — pushes the current local time into the chat as
@@ -15,9 +15,9 @@
 // stdout.
 //
 // Install:
-//   zot ext install /path/to/this/dir
+//   terva ext install /path/to/this/dir
 //
-// Then in zot:
+// Then in terva:
 //   /now
 //   /uptime
 
@@ -31,7 +31,7 @@ const STARTED_AT = Date.now();
 /** @typedef {{type: string, id?: string, [k: string]: unknown}} Frame */
 
 /**
- * Send a frame to zot. One JSON object per line; flush immediately
+ * Send a frame to terva. One JSON object per line; flush immediately
  * so the host doesn't sit waiting on a buffer.
  * @param {Frame} obj
  */
@@ -40,7 +40,7 @@ function send(obj) {
 }
 
 /**
- * stderr is captured by zot to $ZOT_HOME/logs/ext-clock.log; perfect
+ * stderr is captured by terva to $TERVA_HOME/logs/ext-clock.log; perfect
  * for debug output. Anything written to stdout would corrupt the
  * protocol stream.
  * @param {string} msg
@@ -69,7 +69,7 @@ send({
   description: "ask the agent to riff on how long the clock ext has run",
 });
 
-// 3. Read frames until stdin closes (zot shuts us down).
+// 3. Read frames until stdin closes (terva shuts us down).
 const rl = createInterface({ input: stdin, crlfDelay: Infinity });
 
 rl.on("line", (line) => {
@@ -85,7 +85,7 @@ rl.on("line", (line) => {
   switch (frame.type) {
     case "hello_ack":
       log(
-        `connected to zot ${frame.zot_version} (${frame.provider}/${frame.model})`,
+        `connected to terva ${frame.terva_version} (${frame.provider}/${frame.model})`,
       );
       break;
 
@@ -147,7 +147,7 @@ function handleCommand(frame) {
         id,
         action: "prompt",
         prompt:
-          `The clock extension has been running for ${seconds}s in this zot session. ` +
+          `The clock extension has been running for ${seconds}s in this terva session. ` +
           `Riff on that briefly in one short sentence — be a little dramatic. ${focus}`.trim(),
       });
       return;

@@ -1,4 +1,4 @@
-# clock — example zot extension (Node, no dependencies)
+# clock — example terva extension (Node, no dependencies)
 
 A minimal TypeScript-style extension showing the wire protocol from
 the Node side without any SDK. Pure stdlib (`readline`, `process`).
@@ -12,15 +12,15 @@ Node 18 or newer (uses ESM). No `npm install` step.
 From this directory:
 
 ```bash
-zot ext install .
+terva ext install .
 ```
 
-This copies the manifest + script into `$ZOT_HOME/extensions/clock/`.
-zot picks it up the next time you launch the TUI.
+This copies the manifest + script into `$TERVA_HOME/extensions/clock/`.
+terva picks it up the next time you launch the TUI.
 
 ## Use
 
-In zot:
+In terva:
 
 - `/now`              — extension pushes a styled note showing local
                         and ISO time (no model call)
@@ -44,7 +44,7 @@ authoring works too — rename `index.js` → `index.ts`, install
 }
 ```
 
-zot doesn't care which one you use; it just spawns whatever `exec`
+terva doesn't care which one you use; it just spawns whatever `exec`
 points at and reads/writes JSON lines on its stdio.
 
 ## See also

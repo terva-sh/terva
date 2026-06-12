@@ -1,16 +1,16 @@
-// Command zot is a lightweight terminal coding agent.
+// Command terva is a lightweight terminal coding agent.
 package main
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/patriceckhart/zot/packages/agent"
+	"terva.sh/terva/packages/agent"
 )
 
 // Injected at build time via -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
 // See .goreleaser.yaml for the release build and the Makefile for
-// local builds. Defaults make `zot --version` print something sensible
+// local builds. Defaults make `terva --version` print something sensible
 // when built without ldflags.
 var (
 	// 0.0.0 is the pre-release placeholder for local / untagged
@@ -35,7 +35,7 @@ func main() {
 		v = v + ")"
 	}
 	if err := agent.Run(os.Args[1:], v); err != nil {
-		fmt.Fprintln(os.Stderr, "zot:", err)
+		fmt.Fprintln(os.Stderr, "terva:", err)
 		os.Exit(1)
 	}
 }
