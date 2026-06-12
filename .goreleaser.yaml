@@ -102,7 +102,7 @@ release:
     one-liner install:
 
     ```bash
-    curl -fsSL https://www.terva.sh/install.sh | bash
+    curl -fsSL https://terva.sh/install.sh | bash
     ```
 
     or download a binary below, `chmod +x`, and drop it on your `$PATH`.

@@ -4,8 +4,8 @@
 # channel-identity block below; never from upstream).
 #
 # Usage:
-#   curl -fsSL https://www.terva.sh/install.sh | bash
-#   curl -fsSL https://www.terva.sh/install.sh | bash -s -- v0.0.1 ~/bin
+#   curl -fsSL https://terva.sh/install.sh | bash
+#   curl -fsSL https://terva.sh/install.sh | bash -s -- v0.0.1 ~/bin
 #
 # Positional arguments:
 #   $1  version    — release tag (e.g. v0.0.1). Defaults to "latest".

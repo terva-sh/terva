@@ -1,10 +1,10 @@
 <div align="center">
-  <a href="https://www.terva.sh">
+  <a href="https://terva.sh">
     <img src="assets/brand/exports/terva-logo-256.png" alt="terva coding agent harness" width="130" height="130" />
   </a>
 </div>
 <p align="center">
-  <a href="https://www.terva.sh">terva.sh</a>
+  <a href="https://terva.sh">terva.sh</a>
 </p>
 
 > **Formerly zot.** terva is a hard fork of <!-- rename:keep -->
@@ -50,19 +50,19 @@ on either harness. The full story, with specifics:
 ### One-liner (macOS, Linux)
 
 ```bash
-curl -fsSL https://www.terva.sh/install.sh | bash
+curl -fsSL https://terva.sh/install.sh | bash
 ```
 
 Detects your OS and architecture, downloads the latest release from GitHub, verifies the SHA-256 against the release's `checksums.txt`, extracts the binary, and drops it in `/usr/local/bin`, `~/.local/bin`, or `~/bin`, whichever is writable first. Pass a version or prefix to pin:
 
 ```bash
-curl -fsSL https://www.terva.sh/install.sh | bash -s -- v0.0.1 ~/bin
+curl -fsSL https://terva.sh/install.sh | bash -s -- v0.0.1 ~/bin
 ```
 
 ### One-liner (Windows, PowerShell)
 
 ```powershell
-iwr -useb https://www.terva.sh/install.ps1 | iex
+iwr -useb https://terva.sh/install.ps1 | iex
 ```
 
 Drops `terva.exe` into `$HOME\bin` and adds it to the user PATH if missing. Open a fresh terminal afterwards.

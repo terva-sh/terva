@@ -3,12 +3,12 @@
 # from upstream).
 #
 # Usage (in PowerShell):
-#   iwr -useb https://www.terva.sh/install.ps1 | iex
+#   iwr -useb https://terva.sh/install.ps1 | iex
 #
 # Or with arguments:
 #   $env:TERVA_VERSION = "v0.0.1"
 #   $env:TERVA_PREFIX  = "$HOME\bin"
-#   iwr -useb https://www.terva.sh/install.ps1 | iex
+#   iwr -useb https://terva.sh/install.ps1 | iex
 #
 # Detects architecture, downloads the matching .zip from the release,
 # verifies the sha256 against checksums.txt, extracts terva.exe,
