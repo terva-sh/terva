@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -185,6 +186,33 @@ func TestCopyUserDataNoClobber(t *testing.T) {
 	rep2 := CopyUserData(old, dest)
 	if !rep2.Clean() || rep2.FilesCopied != 0 || rep2.SymlinksCopied != 0 {
 		t.Errorf("re-run not idempotent: %+v", rep2)
+	}
+}
+
+func TestCopyUserDataSkipsIrregularFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix domain sockets")
+	}
+	old := t.TempDir()
+	dest := t.TempDir()
+	writeMigrateFile(t, filepath.Join(old, "agents", "a1", "meta.json"), "meta")
+	l, err := net.Listen("unix", filepath.Join(old, "agents", "a1", "in.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Leave the socket file behind, the way a finished swarm agent does.
+	l.(*net.UnixListener).SetUnlinkOnClose(false)
+	l.Close()
+
+	rep := CopyUserData(old, dest)
+	if !rep.Clean() {
+		t.Fatalf("a dead socket must not dirty the copy: %v", rep.Errors)
+	}
+	if rep.FilesCopied != 1 {
+		t.Errorf("FilesCopied = %d, want 1 (meta.json)", rep.FilesCopied)
+	}
+	if _, err := os.Lstat(filepath.Join(dest, "agents", "a1", "in.sock")); !os.IsNotExist(err) {
+		t.Errorf("socket must not be recreated at the destination: %v", err)
 	}
 }
 

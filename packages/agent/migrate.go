@@ -147,7 +147,9 @@ func (r MigrationCopyReport) Clean() bool { return len(r.Errors) == 0 }
 // file that already exists at the destination is skipped and reported.
 // Symlinks are recreated (connectors/ installs are symlinks); absolute
 // targets inside oldDir are rewritten to the new location so they
-// don't point back into a dir the user may delete next.
+// don't point back into a dir the user may delete next. Irregular
+// files (sockets, FIFOs, devices) are skipped silently — they're
+// runtime endpoints, not data.
 func CopyUserData(oldDir, newDir string) MigrationCopyReport {
 	var rep MigrationCopyReport
 	walkErr := filepath.WalkDir(oldDir, func(src string, d fs.DirEntry, err error) error {
@@ -209,6 +211,11 @@ func CopyUserData(oldDir, newDir string) MigrationCopyReport {
 				return nil
 			}
 			rep.SymlinksCopied++
+		case !d.Type().IsRegular():
+			// Sockets, FIFOs, devices — e.g. a dead swarm agent's
+			// in.sock inbox. There are no contents to copy (open(2)
+			// on a socket fails with ENXIO), so they must not dirty
+			// the report and block finalization.
 		default:
 			if err := copyFileNoClobber(src, dest, d); err != nil {
 				if os.IsExist(err) {
