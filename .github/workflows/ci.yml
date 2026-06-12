@@ -6,7 +6,9 @@ name: ci
 
 on:
   push:
-    branches: [release, "release/**"]
+    # release-* (flat) is the hotfix-line namespace: a branch named
+    # `release` rules out `release/*` siblings in git's ref store.
+    branches: [release, "release-*"]
   pull_request:
 
 # Cancel in-progress runs when a new commit lands on the same ref so

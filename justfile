@@ -153,7 +153,7 @@ mirror-init:
     fi
     @echo "mirror -> $(git remote get-url mirror)"
 
-# Only `release` and `release/*` ever leave the building (the
+# Only `release` and `release-*` ever leave the building (the
 # release-cut flow writes them — docs/plans/release-process.md);
 # day-to-day history stays on the Forgejo. Tags are pushed explicitly
 # (release-publish pushes pub/vX.Y.Z as the mirror's vX.Y.Z) — a
@@ -163,7 +163,7 @@ mirror-init:
 mirror-push: mirror-init
     @git push mirror 'refs/heads/release:refs/heads/release' 2>/dev/null \
         || echo "no local release branch yet — run the release-cut flow first"
-    @git push mirror 'refs/heads/release/*:refs/heads/release/*' 2>/dev/null || true
+    @git push mirror 'refs/heads/release-*:refs/heads/release-*' 2>/dev/null || true
 
 # Ensure the `upstream` remote points at upstream zot (idempotent). # rename:keep
 upstream-init:
