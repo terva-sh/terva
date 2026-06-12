@@ -1,39 +1,39 @@
-# zot RPC
+# terva RPC
 
-`zot rpc` runs the agent runtime as a subprocess that speaks newline-delimited JSON on stdin and stdout. Use it from any language that can spawn a process and read/write its pipes — Go, TypeScript, Python, Rust, shell, anything.
+`terva rpc` runs the agent runtime as a subprocess that speaks newline-delimited JSON on stdin and stdout. Use it from any language that can spawn a process and read/write its pipes — Go, TypeScript, Python, Rust, shell, anything.
 
-For a Go program embedding the runtime in-process, use the `packages/agent/sdk` SDK instead. The wire format below mirrors the SDK's types one-for-one so consumers can share parsing code.
+For a Go program embedding the runtime in-process, use the `packages/agent/sdk` SDK instead. The wire format below IS the SDK's type set: every surface (`terva --json`, this RPC stream, the SDK's `Event`, swarm event logs) is generated from one serializer (`core.WireEvent`), so consumers can share parsing code.
 
 ## Quick start
 
 ```bash
-# spawn zot rpc; talk to it from a shell
+# spawn terva rpc; talk to it from a shell
 ( echo '{"id":"1","type":"prompt","message":"hello"}'; sleep 5 ) \
-  | zot rpc --provider anthropic
+  | terva rpc --provider anthropic
 ```
 
 You'll see one JSON object per line on stdout: a response acknowledging the prompt, a stream of events (`text_delta`, `tool_call`, `tool_result`, `usage`), then `done`.
 
 ## Process model
 
-- One `zot rpc` process serves **one cwd, one model, one session**.
+- One `terva rpc` process serves **one cwd, one model, one session**.
 - For multiple projects, spawn multiple processes.
 - Concurrency: at most one prompt or compact in flight at a time. A second one queues until the first finishes; aborting fires immediately.
 - The process exits when stdin closes.
 
 ## Flags
 
-`zot rpc` accepts the same flags as the other modes: `--provider`, `--model`, `--cwd`, `--api-key`, `--base-url`, `--system-prompt`, `--append-system-prompt`, `--reasoning`, `--max-steps`, `--no-tools`, `--tools`. Sessions are disabled by default in RPC mode — the embedding application owns persistence.
+`terva rpc` accepts the same flags as the other modes: `--provider`, `--model`, `--cwd`, `--api-key`, `--base-url`, `--system-prompt`, `--append-system-prompt`, `--reasoning`, `--max-steps`, `--no-tools`, `--tools`. Sessions are disabled by default in RPC mode — the embedding application owns persistence.
 
 ## Auth
 
-If the environment variable `ZOTCORE_RPC_TOKEN` is set on the spawned process, the first line on stdin **must** be a `hello` command containing the matching token:
+If the environment variable `TERVACORE_RPC_TOKEN` is set on the spawned process, the first line on stdin **must** be a `hello` command containing the matching token (the pre-rename spelling `ZOTCORE_RPC_TOKEN` is still honored, so existing embedders keep working unchanged): <!-- rename:keep -->
 
 ```json
 {"id":"0","type":"hello","token":"shared-secret"}
 ```
 
-If absent or wrong, the response carries `success:false` and the process exits. Without `ZOTCORE_RPC_TOKEN` set, no auth is required (the spawning process is implicitly trusted; if it can spawn `zot` it can also read your `auth.json` directly).
+If absent or wrong, the response carries `success:false` and the process exits. Without `TERVACORE_RPC_TOKEN` set, no auth is required (the spawning process is implicitly trusted; if it can spawn `terva` it can also read your `auth.json` directly).
 
 ## Wire format
 
@@ -64,7 +64,7 @@ Response:
  "data":{"protocol_version":1,"version":"0.0.4","provider":"anthropic","model":"claude-opus-4-5"}}
 ```
 
-Required as the first message when `ZOTCORE_RPC_TOKEN` is set; optional otherwise.
+Required as the first message when `TERVACORE_RPC_TOKEN` is set; optional otherwise.
 
 ### `prompt`
 
@@ -118,7 +118,7 @@ Response data:
 {
   "provider": "anthropic",
   "model": "claude-opus-4-5",
-  "cwd": "/Users/pat/Developer/zot",
+  "cwd": "/Users/pat/Developer/terva",
   "message_count": 12,
   "busy": false,
   "usage": {"input": 1234, "output": 567, "cache_read": 890, "cache_write": 0, "cost_usd": 0.0123}
@@ -151,7 +151,7 @@ Switch model within the same provider.
 {"id":"7","type":"set_model","model":"claude-sonnet-4-5"}
 ```
 
-Cross-provider swaps require relaunching `zot rpc` with the new `--provider`.
+Cross-provider swaps require relaunching `terva rpc` with the new `--provider`.
 
 ### `get_models`
 
@@ -180,17 +180,20 @@ Stream notifications during a `prompt` or `compact`. None carry an `id`.
 | `type` | Fields | Meaning |
 |---|---|---|
 | `turn_start` | `step` | Beginning of one model call (max-steps loop iteration) |
-| `user_message` | `content`, `time` | The submitted prompt as it was added to the transcript |
+| `user_message` | `message` | The submitted prompt as it was added to the transcript (see Message shape) |
 | `assistant_start` | (none) | About to receive assistant streaming |
 | `text_delta` | `delta` | Partial assistant text. Concatenate to build the full reply |
+| `tool_use_start` | `id`, `name` | The model began streaming a tool call |
+| `tool_use_args` | `id`, `delta` | Partial tool-argument JSON |
+| `tool_use_end` | `id` | Tool-argument streaming finished |
 | `tool_call` | `id`, `name`, `args` | The model wants to call a tool |
 | `tool_progress` | `id`, `text` | Optional progress line from the tool while it runs |
 | `tool_result` | `id`, `is_error`, `content` | Tool finished |
-| `assistant_message` | `content`, `time` | Final assistant message after the model turn ends |
-| `usage` | `input`, `output`, `cache_read`, `cache_write`, `cost_usd`, `cumulative` | Per-turn + cumulative tokens / cost |
-| `turn_end` | `stop`, optional `error` | One model call finished. `stop` is `end_turn`, `tool_use`, `length`, `error`, or `aborted` |
+| `assistant_message` | `message` | Final assistant message after the model turn ends (see Message shape) |
+| `usage` | `usage`, `cumulative` | Per-turn + cumulative tokens / cost, each `{input, output, cache_read, cache_write, cost_usd}` |
+| `turn_end` | `stop`, optional `error` | One model call finished. `stop` is `end`, `tool_use`, `length`, `error`, or `aborted` |
 | `done` | (none) | The whole prompt/compact completed (success or error) |
-| `error` | `message` | Non-fatal error message |
+| `error` | `error` | Non-fatal error message |
 | `compact_done` | `summary` | Compaction finished, summary text included |
 
 ## Message shape

@@ -1,7 +1,7 @@
-# zot skills
+# terva skills
 
 A skill is a reusable instruction set written as a single
-`SKILL.md` file with a YAML frontmatter header. zot discovers skills
+`SKILL.md` file with a YAML frontmatter header. terva discovers skills
 at startup and surfaces them to the model in two ways:
 
 1. The system prompt gains a short manifest:
@@ -47,29 +47,29 @@ There's no template engine; the model sees what you write.
 
 ## Discovery
 
-zot looks in these directories, in priority order, and registers the
+terva looks in these directories, in priority order, and registers the
 first `SKILL.md` it finds for each unique name:
 
 | location | scope |
 |---|---|
-| `./.zot/skills/<name>/SKILL.md` | project (native) |
-| `$ZOT_HOME/skills/<name>/SKILL.md` | global (native) |
+| `./.terva/skills/<name>/SKILL.md` | project (native) |
+| `$TERVA_HOME/skills/<name>/SKILL.md` | global (native) |
 | `./.claude/skills/<name>/SKILL.md` | project (claude-compat) |
 | `~/.claude/skills/<name>/SKILL.md` | global (claude-compat) |
 | `./.agents/skills/<name>/SKILL.md` | project (agent-compat) |
 | `~/.agents/skills/<name>/SKILL.md` | global (agent-compat) |
 
 The compat paths are deliberate: a `SKILL.md` written for an existing
-skill ecosystem works in zot unchanged. Drop your existing
+skill ecosystem works in terva unchanged. Drop your existing
 `.claude/skills/` or `.agents/skills/` directories into a project and
-zot will pick them up.
+terva will pick them up.
 
-`$ZOT_HOME` defaults to `~/Library/Application Support/zot/` on macOS,
-`$XDG_STATE_HOME/zot` on Linux, `%LOCALAPPDATA%\zot` on Windows.
+`$TERVA_HOME` defaults to `~/Library/Application Support/terva/` on macOS,
+`$XDG_STATE_HOME/terva` on Linux, `%LOCALAPPDATA%\terva` on Windows.
 
 ## Inspecting installed skills
 
-In zot, run `/skills`. A picker lists every discovered skill with its
+In terva, run `/skills`. A picker lists every discovered skill with its
 description and source path. Press enter on a row to view the full
 body inline. Press esc to go back.
 
@@ -108,11 +108,11 @@ See `examples/skills/` for two starter skills:
 
 ## Comparison to other discovery layouts
 
-| ecosystem | path | zot reads it? |
+| ecosystem | path | terva reads it? |
 |---|---|---|
-| (native) | `.zot/skills/<name>/SKILL.md` | yes |
+| (native) | `.terva/skills/<name>/SKILL.md` | yes |
 | (claude-style) | `.claude/skills/<name>/SKILL.md` | yes |
 | (agent-style) | `.agents/skills/<name>/SKILL.md` | yes |
 
 Cross-pollination is intentional: pick whichever convention you're
-already using and zot tags along.
+already using and terva tags along.

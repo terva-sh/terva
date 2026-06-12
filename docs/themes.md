@@ -1,9 +1,9 @@
-# zot themes
+# terva themes
 
-zot themes are JSON files that override any subset of the built-in
+terva themes are JSON files that override any subset of the built-in
 light/dark TUI theme. Nothing is required: a theme can change one
 color, only the spinner, only syntax highlighting, or all of them.
-Missing values inherit from zot's built-in default for the detected
+Missing values inherit from terva's built-in default for the detected
 terminal background.
 
 ## Where themes live
@@ -11,25 +11,25 @@ terminal background.
 User themes are discovered from:
 
 ```text
-$ZOT_HOME/themes/*.json
+$TERVA_HOME/themes/*.json
 ```
 
 Open `/settings` and choose **color theme** to switch. Changes are
-saved in `$ZOT_HOME/config.json` and apply immediately. If the selected
-file is deleted later, zot resets the setting to the built-in auto
+saved in `$TERVA_HOME/config.json` and apply immediately. If the selected
+file is deleted later, terva resets the setting to the built-in auto
 (default) theme.
 
 Theme files bundled with extensions are discovered in-place from loaded
 extension directories:
 
 ```text
-$ZOT_HOME/extensions/<extension>/theme.json
-$ZOT_HOME/extensions/<extension>/themes/theme.json
-<project>/.zot/extensions/<extension>/theme.json
-<project>/.zot/extensions/<extension>/themes/theme.json
+$TERVA_HOME/extensions/<extension>/theme.json
+$TERVA_HOME/extensions/<extension>/themes/theme.json
+<project>/.terva/extensions/<extension>/theme.json
+<project>/.terva/extensions/<extension>/themes/theme.json
 ```
 
-zot does **not** copy extension themes into `$ZOT_HOME/themes`; extension
+terva does **not** copy extension themes into `$TERVA_HOME/themes`; extension
 owned themes stay in the extension directory. The settings picker shows
 source info such as `from extension my-theme-extension`.
 
@@ -42,7 +42,7 @@ Metadata only:
 ```json
 {
   "name": "my-theme",
-  "description": "Metadata only; all visuals inherit zot defaults."
+  "description": "Metadata only; all visuals inherit terva defaults."
 }
 ```
 
@@ -82,13 +82,13 @@ Spinner-only:
 ```
 
 Dark-only themes still work on light terminals. If `colors.light` is
-missing, zot applies `colors.dark` overrides on top of the built-in
+missing, terva applies `colors.dark` overrides on top of the built-in
 light default. The inverse also works.
 
 ```json
 {
   "name": "custom-spinner",
-  "description": "An alternative spinner for zot that only displays a single spinner text.",
+  "description": "An alternative spinner for terva that only displays a single spinner text.",
   "colors": {
     "dark": {
       "spinner_frames": ["◢", "◣", "◤", "◥"],
@@ -108,7 +108,7 @@ All fields are optional.
   "name": "my-theme",
   "description": "Shown in /settings → color theme.",
   "color_descriptions": {
-    "accent": "Optional documentation for humans. zot ignores this object."
+    "accent": "Optional documentation for humans. terva ignores this object."
   },
   "colors": {
     "dark": {
@@ -181,11 +181,11 @@ Most color fields are xterm-256 indexes (`0`–`255`).
 - `fg` — default foreground text.
 - `muted` — secondary text, dividers, gutters, inactive hints.
 - `accent` — prompt bar, bullets, links, headings, active markers.
-- `background` — optional full-row TUI background. If missing, zot uses the terminal's existing background. Experimental: terminal background colors can vary by emulator and scrollback behavior; for the most reliable result, change your terminal background color in your terminal settings instead.
+- `background` — optional full-row TUI background. If missing, terva uses the terminal's existing background. Experimental: terminal background colors can vary by emulator and scrollback behavior; for the most reliable result, change your terminal background color in your terminal settings instead.
 - `user` — user role label color; mostly compatibility.
 - `user_bubble_bg` — background behind user message rows.
 - `user_bubble_fg` — foreground inside user message rows.
-- `assistant` — assistant/zot accent and spinner text.
+- `assistant` — assistant/terva accent and spinner text.
 - `tool` — tool names, success marks, diff additions.
 - `tool_out` — plain tool-output text.
 - `error` — errors, refused calls, diff deletions.
@@ -211,7 +211,7 @@ Spinner settings can appear at top level, under `colors`, or under
 
 - `spinner_frames` — list of frame strings. Single-cell glyphs keep
   status-bar alignment clean.
-- `spinner_messages` — list of messages; zot picks one per turn.
+- `spinner_messages` — list of messages; terva picks one per turn.
 - `spinner_interval_ms` — frame interval in milliseconds. Missing or
   invalid falls back to 80ms.
 
@@ -254,7 +254,7 @@ subprocess, or executable is required when the extension contains a
 valid theme file.
 
 ```text
-$ZOT_HOME/extensions/my-theme-extension/
+$TERVA_HOME/extensions/my-theme-extension/
 ├── extension.json
 └── theme.json
 ```
@@ -265,17 +265,17 @@ $ZOT_HOME/extensions/my-theme-extension/
 {
   "name": "my-theme-extension",
   "version": "1.0.0",
-  "description": "Ships a zot color theme",
+  "description": "Ships a terva color theme",
   "enabled": true
 }
 ```
 
 No `exec` is needed when `theme.json` or `themes/theme.json` exists.
-If `exec` is present, zot treats it as a normal extension too.
+If `exec` is present, terva treats it as a normal extension too.
 
 ## Validate
 
-zot theme files are plain JSON, not JSONC. Validate before installing:
+terva theme files are plain JSON, not JSONC. Validate before installing:
 
 ```bash
 python3 -m json.tool theme.json >/dev/null

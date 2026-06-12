@@ -1,6 +1,6 @@
-# zot extensions
+# terva extensions
 
-zot can be extended with custom slash commands by running an external
+terva can be extended with custom slash commands by running an external
 program as a subprocess and exchanging newline-delimited JSON over
 its stdin/stdout. Extensions can be written in **any language** that
 can read and write JSON lines from stdio — Go, TypeScript, Python,
@@ -12,7 +12,7 @@ Four phases shipped so far:
 - **Phase 2**: tools the LLM can call.
 - **Phase 3**: lifecycle event subscriptions + tool-call interception
   for guardrail extensions.
-- **Phase 4**: interactive extension-owned panels rendered inside zot.
+- **Phase 4**: interactive extension-owned panels rendered inside terva.
 - **Theme-only extensions**: ship `theme.json` without launching a
   subprocess. See [themes.md](themes.md).
 
@@ -24,7 +24,7 @@ no SDK required:
 
 ```python
 #!/usr/bin/env python3
-# $ZOT_HOME/extensions/hello-py/hello.py
+# $TERVA_HOME/extensions/hello-py/hello.py
 import json, sys, threading
 
 def emit(obj):
@@ -57,46 +57,46 @@ Drop it in a directory with this `extension.json`:
 ```
 
 `exec` is required for protocol extensions. If an extension only ships
-`theme.json` or `themes/theme.json`, no `exec` is required and zot does
+`theme.json` or `themes/theme.json`, no `exec` is required and terva does
 not spawn a subprocess.
 
 `chmod +x hello.py`, install:
 
 ```bash
-zot ext install ./hello-py
+terva ext install ./hello-py
 ```
 
-Restart `zot`, type `/hellopy`, the agent greets you. Done.
+Restart `terva`, type `/hellopy`, the agent greets you. Done.
 
 ## Built-in extensions
 
-**zot ships with no extensions installed by default.** A fresh `zot install` (or `go install`) gives you a clean agent. Extensions are entirely opt-in: you install (or `--ext` for one run) only the ones you want.
+**terva ships with no extensions installed by default.** A fresh `terva install` (or `go install`) gives you a clean agent. Extensions are entirely opt-in: you install (or `--ext` for one run) only the ones you want.
 
 The `examples/extensions/` directory in the repo is reference code, not a default install set. To use any of those:
 
 ```bash
 # go-based examples need a build first
-cd path/to/zot/examples/extensions/hello && go build -o hello .
+cd path/to/terva/examples/extensions/hello && go build -o hello .
 
-# install (copies to $ZOT_HOME/extensions/hello/)
-zot ext install path/to/zot/examples/extensions/hello
+# install (copies to $TERVA_HOME/extensions/hello/)
+terva ext install path/to/terva/examples/extensions/hello
 
-# or load straight from the repo for one zot session
-zot --ext path/to/zot/examples/extensions/hello
+# or load straight from the repo for one terva session
+terva --ext path/to/terva/examples/extensions/hello
 ```
 
 Nothing is auto-installed and nothing reaches out to the network without your explicit action.
 
 ## Layout & discovery
 
-zot scans two directories on startup, in this order:
+terva scans two directories on startup, in this order:
 
-1. **Project-local**: `./.zot/extensions/<name>/extension.json`
-2. **Global**: `$ZOT_HOME/extensions/<name>/extension.json`
+1. **Project-local**: `./.terva/extensions/<name>/extension.json`
+2. **Global**: `$TERVA_HOME/extensions/<name>/extension.json`
 
 A project-local extension with the same name wins over a global one.
-On macOS `$ZOT_HOME` defaults to `~/Library/Application Support/zot/`;
-on Linux it's `$XDG_STATE_HOME/zot` or `~/.local/state/zot`.
+On macOS `$TERVA_HOME` defaults to `~/Library/Application Support/terva/`;
+on Linux it's `$XDG_STATE_HOME/terva` or `~/.local/state/terva`.
 
 Because each extension owns its own directory, the recommended place
 for extension state is inside that directory itself (for example
@@ -105,7 +105,7 @@ extension). The host also passes this path back in `hello_ack` as
 `extension_dir` / `data_dir` so runtime code does not need to guess it.
 
 Each extension owns its own subdirectory. The `extension.json`
-manifest tells zot how to launch it:
+manifest tells terva how to launch it:
 
 ```json
 {
@@ -121,21 +121,21 @@ manifest tells zot how to launch it:
 
 | field | meaning |
 |---|---|
-| `name` | required. how zot identifies the extension; must match what's sent in the `hello` frame. |
-| `version` | optional. shown in `zot ext list`. |
+| `name` | required. how terva identifies the extension; must match what's sent in the `hello` frame. |
+| `version` | optional. shown in `terva ext list`. |
 | `exec` | required. path to the executable (relative to the manifest). |
 | `args` | optional. extra argv passed to `exec`. |
 | `language` | optional. informational only (`go`, `python`, `typescript`, ...). |
-| `description` | optional. shown in `zot ext list`. |
+| `description` | optional. shown in `terva ext list`. |
 | `enabled` | optional, defaults to `true`. set to `false` to disable without removing. |
 
 ## Lifecycle
 
-1. **Discovery**: zot reads every `extension.json` in the search dirs.
+1. **Discovery**: terva reads every `extension.json` in the search dirs.
 2. **Spawn**: enabled extensions are launched as subprocesses. stderr
-   redirects to `$ZOT_HOME/logs/ext-<name>.log` (one file per
+   redirects to `$TERVA_HOME/logs/ext-<name>.log` (one file per
    extension, append-mode).
-3. **Hello handshake**: the extension sends a `hello` frame; zot
+3. **Hello handshake**: the extension sends a `hello` frame; terva
    replies with `hello_ack` containing the protocol version, the
    active provider/model/cwd, and the extension's own data directory
    so it can persist files beside its manifest.
@@ -143,17 +143,17 @@ manifest tells zot how to launch it:
    First-come-first-served: a name already taken by a built-in or by
    a previously-loaded extension is silently shadowed (logged in the
    extension's own log file).
-5. **Runtime**: zot dispatches `command_invoked` frames when the
+5. **Runtime**: terva dispatches `command_invoked` frames when the
    user runs a registered command; the extension responds with
    `command_response`. Extensions can also push `notify` frames at
    any time. Panel-capable extensions may open an interactive panel,
    receive key events, and push redraws while the panel is focused.
-6. **Shutdown**: when zot exits, it sends `shutdown` and waits up to
+6. **Shutdown**: when terva exits, it sends `shutdown` and waits up to
    2s for the extension to send `shutdown_ack`. Holdouts are
    SIGTERM'd, then SIGKILL'd.
 
-A crashing extension does not bring down zot. The slash command it
-owned simply stops working until the extension is fixed and zot is
+A crashing extension does not bring down terva. The slash command it
+owned simply stops working until the extension is fixed and terva is
 restarted.
 
 ## Wire format
@@ -199,7 +199,7 @@ the built-in.
 
 #### `ready`
 
-Sentinel telling zot "all initial registrations are flushed". Send it
+Sentinel telling terva "all initial registrations are flushed". Send it
 right after your last `register_*` frame so the host can build the
 agent's tool registry without racing the registration window.
 
@@ -290,9 +290,9 @@ subsequent interceptor sees the previous one's output.
 - `"display"` — appends `display` to the chat as a one-shot styled
   note. No model call, nothing written to the transcript.
 - `"open_panel"` — opens an extension-owned interactive panel inside
-  zot. The panel content lives in `open_panel`.
+  terva. The panel content lives in `open_panel`.
 - `"noop"` — the extension handled it itself (e.g. it pushed
-  `notify` frames or kicked off background work). zot doesn't change
+  `notify` frames or kicked off background work). terva doesn't change
   the UI in response.
 
 Example:
@@ -307,7 +307,7 @@ Example:
  }}
 ```
 
-If `error` is non-empty, zot renders it as a red status line
+If `error` is non-empty, terva renders it as a red status line
 regardless of `action`.
 
 #### `panel_render` (one-way, while a panel is open)
@@ -364,10 +364,10 @@ Sent in response to `shutdown`. Extension should exit promptly after.
 
 ```json
 {"type":"hello_ack","protocol_version":1,
- "zot_version":"0.0.7","provider":"anthropic",
- "model":"claude-opus-4-7","cwd":"/Users/pat/Developer/zot",
- "extension_dir":"/Users/pat/Developer/zot/.zot/extensions/todos",
- "data_dir":"/Users/pat/Developer/zot/.zot/extensions/todos"}
+ "terva_version":"0.0.7","provider":"anthropic",
+ "model":"claude-opus-4-7","cwd":"/Users/pat/Developer/terva",
+ "extension_dir":"/Users/pat/Developer/terva/.terva/extensions/todos",
+ "data_dir":"/Users/pat/Developer/terva/.terva/extensions/todos"}
 ```
 
 Sent immediately after `hello`. The extension can use these fields to
@@ -415,7 +415,7 @@ Lifecycle notification for events the extension subscribed to via
 
 #### `event_intercept`
 
-Sent when zot wants to give the extension a chance to block, modify,
+Sent when terva wants to give the extension a chance to block, modify,
 or annotate a lifecycle event before it happens. Reply with
 `event_intercept_response` within 5s; missing the deadline is
 treated as "allow".
@@ -451,7 +451,7 @@ name (`up`, `down`, `left`, `right`, `enter`, `esc`, `tab`, `pageup`,
 
 #### `panel_close`
 
-Sent when the user closes the focused panel from zot (for example with
+Sent when the user closes the focused panel from terva (for example with
 Esc or Ctrl+C). The extension should treat this as the panel lifetime
 ending and stop sending `panel_render` updates for that `panel_id`.
 
@@ -461,38 +461,38 @@ ending and stop sending `panel_render` updates for that `panel_id`.
 
 #### `shutdown`
 
-Sent during graceful zot exit (or `/reload-ext` once that lands).
+Sent during graceful terva exit (or `/reload-ext` once that lands).
 Reply with `shutdown_ack` and then exit.
 
 ## Managing extensions from the CLI
 
 ```
-zot ext list                    list installed extensions and their state
-zot ext install <path|git-url>  copy / clone into $ZOT_HOME/extensions/
-zot ext remove <name>           delete an extension directory
-zot ext enable <name>           re-enable a disabled extension
-zot ext disable <name>          disable without removing
-zot ext logs <name> [-f]        cat / tail the extension's stderr
+terva ext list                    list installed extensions and their state
+terva ext install <path|git-url>  copy / clone into $TERVA_HOME/extensions/
+terva ext remove <name>           delete an extension directory
+terva ext enable <name>           re-enable a disabled extension
+terva ext disable <name>          disable without removing
+terva ext logs <name> [-f]        cat / tail the extension's stderr
 ```
 
-`zot ext install <path>` does a recursive copy; `<git-url>` does a
+`terva ext install <path>` does a recursive copy; `<git-url>` does a
 shallow clone. Both validate that the destination contains an
 `extension.json` and roll back if not.
 
 ## Loading an extension for one run
 
 For iteration on a working copy, skip the install + reload cycle
-and load straight from disk for one zot session:
+and load straight from disk for one terva session:
 
 ```
-zot --ext ./my-extension        # short form: -e ./my-extension
-zot --ext ./a -e ./b            # repeatable
+terva --ext ./my-extension        # short form: -e ./my-extension
+terva --ext ./a -e ./b            # repeatable
 ```
 
 `--ext` paths take precedence over installed extensions of the same
 name, so you can shadow an installed copy with a work-in-progress
 version without uninstalling first. Nothing is copied or persisted;
-the extension dies with zot like any other subprocess.
+the extension dies with terva like any other subprocess.
 
 ## SDKs
 
@@ -506,7 +506,7 @@ package main
 
 import (
     "encoding/json"
-    "github.com/patriceckhart/zot/packages/agent/ext"
+    "terva.sh/terva/packages/agent/ext"
 )
 
 func main() {
@@ -531,7 +531,7 @@ func main() {
 ```
 
 Build with `go build -o hello .`, drop the binary + an `extension.json`
-into `$ZOT_HOME/extensions/hello/`.
+into `$TERVA_HOME/extensions/hello/`.
 
 The SDK has four interceptor hooks, all optional:
 
@@ -580,7 +580,7 @@ See:
 Type `/reload-ext` in the TUI to tear down every running extension
 subprocess, re-read the manifests from disk, and respawn the set.
 The agent's tool registry is rebuilt automatically, so freshly-
-registered extension tools become callable without restarting zot.
+registered extension tools become callable without restarting terva.
 Useful while developing an extension: edit, save, `/reload-ext`,
 done. Explicit `--ext` paths are remembered and reloaded alongside
 discovered extensions.
@@ -598,9 +598,9 @@ Extensions run with **the user's full filesystem and network
 permissions**. Treat installing an extension the same as installing
 any other binary on your machine.
 
-`zot ext install <git-url>` clones from any URL you give it. There's
+`terva ext install <git-url>` clones from any URL you give it. There's
 no sandbox in v1; if you need isolation, install only extensions you
-trust or run zot under your platform's sandboxing tool (`bwrap` /
+trust or run terva under your platform's sandboxing tool (`bwrap` /
 `sandbox-exec` / AppContainer).
 
 ## Roadmap
@@ -609,7 +609,7 @@ Phase 1 (shipped):
 - [x] subprocess lifecycle + hello handshake
 - [x] `register_command` + `command_invoked`
 - [x] `notify` + `clear_notes`
-- [x] `zot ext` CLI
+- [x] `terva ext` CLI
 
 Phase 2 (shipped):
 - [x] `register_tool` + `tool_call` + `tool_result`
@@ -626,10 +626,37 @@ Phase 4 (shipped):
       addition to `tool_call`)
 - [x] modify tool args mid-flight via `modified_args`
 - [x] rewrite user-visible assistant text via `replace_text`
-- [x] `/reload-ext` slash command (hot-reload without restarting zot)
+- [x] `/reload-ext` slash command (hot-reload without restarting terva)
 
 Future (no firm timeline):
 - [ ] TypeScript and Python SDK packages (currently the wire format
       is stable enough to hand-roll, see the Python quick-start)
 - [ ] HTTP / WebSocket transport variants (today: subprocess stdio)
 - [ ] per-extension permission scopes (today: full user privileges)
+
+## Installing and managing extensions
+
+```bash
+terva ext install <path|git-url>   # copy / clone into $TERVA_HOME/extensions/
+terva ext list                      # show installed extensions
+terva ext logs <name> [-f]          # cat or tail the extension's stderr log
+terva ext enable <name>             # re-enable a disabled extension
+terva ext disable <name>            # disable without removing
+terva ext remove <name>             # delete an extension directory
+```
+
+For development, point `terva --ext <path>` at a working directory and skip the install step entirely. Repeatable; takes precedence over installed extensions of the same name.
+
+### Updating extensions
+
+`terva update` refreshes the terva binary **and** every installed extension that lives in a git checkout. Per-extension behaviour:
+
+- Disabled extensions are skipped.
+- Extensions without a `.git/` directory (installed by `terva ext install ./local-path`) are skipped — there is no remote to pull from.
+- For the rest, terva stashes any dirty worktree state (including untracked runtime files like `todos.json` or `config.json`), runs `git pull --ff-only`, and pops the stash. If the pop produces conflicts, the conflict markers are left in place and you'll see a warning.
+- Diverged branches, offline pulls, or any other git failure are reported as `failed` and the next extension is processed. `terva update` itself never aborts because of an extension.
+- terva does **not** run any build step (`go build`, `npm install`, `make`) after the pull. Extension authors are expected to commit the runnable artifact (binary, transpiled JS, etc.). If you need a build, rebuild manually and use `/reload-ext`.
+
+### Theme-only extensions
+
+An extension may ship only a theme: `extension.json` plus `theme.json` (or `themes/theme.json`) and no executable. terva loads it without spawning a subprocess and shows it in `/settings` with source information. See [docs/themes.md](themes.md).

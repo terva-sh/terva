@@ -1,14 +1,14 @@
-# zot providers
+# terva providers
 
-zot ships with built-in providers and a model catalog. You can select models
-with `/model`, list them with `zot --list-models`, and add private models in
-`$ZOT_HOME/models.json`.
+terva ships with built-in providers and a model catalog. You can select models
+with `/model`, list them with `terva --list-models`, and add private models in
+`$TERVA_HOME/models.json`.
 
 ## Login methods
 
 Use `/login` in interactive mode.
 
-- `api key`: stores an API key in `$ZOT_HOME/auth.json` when the provider uses a normal key.
+- `api key`: stores an API key in `$TERVA_HOME/auth.json` when the provider uses a normal key.
 - `subscription`: stores OAuth credentials for subscription-backed providers.
 
 Use `/logout` to remove stored credentials.
@@ -37,7 +37,7 @@ These providers support subscription login:
 | Kimi | Kimi subscription login. |
 | GitHub Copilot | GitHub Copilot token flow. |
 
-OAuth tokens are stored in `$ZOT_HOME/auth.json` and refreshed when refresh is
+OAuth tokens are stored in `$TERVA_HOME/auth.json` and refreshed when refresh is
 available.
 
 ## API-key providers
@@ -78,19 +78,20 @@ show instructions and should be configured with environment variables.
 | Cloudflare Workers AI | `CLOUDFLARE_API_KEY` | `cloudflare-workers-ai` |
 | Cloudflare AI Gateway | `CLOUDFLARE_API_KEY` | `cloudflare-ai-gateway` |
 | Azure OpenAI Responses | `AZURE_OPENAI_API_KEY` | `azure-openai-responses` |
+| OpenAI Compatible (local/custom) | — (use `/login` or `--base-url`) | `openai-compatible` |
 
 Example:
 
 ```bash
 export OPENROUTER_API_KEY=...
-zot --provider openrouter
+terva --provider openrouter
 ```
 
 ## Cloud providers
 
 ### Amazon Bedrock
 
-Bedrock is configured with AWS credentials, not a generic zot API-key entry.
+Bedrock is configured with AWS credentials, not a generic terva API-key entry.
 Use one of these credential sources:
 
 ```bash
@@ -116,11 +117,11 @@ Example:
 
 ```bash
 AWS_BEARER_TOKEN_BEDROCK=bedrock-api-key-... AWS_REGION=us-east-1 \
-  zot --provider amazon-bedrock --model anthropic.claude-sonnet-4-5-20250929-v1:0
+  terva --provider amazon-bedrock --model anthropic.claude-sonnet-4-5-20250929-v1:0
 ```
 
 Some Bedrock models require regional inference-profile IDs for on-demand
-throughput, such as `us.` or `eu.` prefixed model IDs. zot rewrites known
+throughput, such as `us.` or `eu.` prefixed model IDs. terva rewrites known
 families automatically where possible. Explicit profile IDs and ARNs are left
 unchanged.
 
@@ -130,7 +131,7 @@ Vertex can use a Google API key when available:
 
 ```bash
 export GOOGLE_CLOUD_API_KEY=...
-zot --provider google-vertex
+terva --provider google-vertex
 ```
 
 For service-account or application-default credentials, set the standard
@@ -144,7 +145,7 @@ Cloudflare AI Gateway needs a Cloudflare token plus account and gateway IDs:
 export CLOUDFLARE_API_KEY=...
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_GATEWAY_ID=...
-zot --provider cloudflare-ai-gateway
+terva --provider cloudflare-ai-gateway
 ```
 
 ### Cloudflare Workers AI
@@ -154,7 +155,7 @@ Workers AI needs a Cloudflare token and account ID:
 ```bash
 export CLOUDFLARE_API_KEY=...
 export CLOUDFLARE_ACCOUNT_ID=...
-zot --provider cloudflare-workers-ai
+terva --provider cloudflare-workers-ai
 ```
 
 ### Azure OpenAI Responses
@@ -163,16 +164,136 @@ zot --provider cloudflare-workers-ai
 export AZURE_OPENAI_API_KEY=...
 export AZURE_OPENAI_BASE_URL=https://your-resource.openai.azure.com
 export AZURE_OPENAI_API_VERSION=2024-02-01 # optional
-zot --provider azure-openai-responses
+terva --provider azure-openai-responses
 ```
 
-If your Azure deployment names differ from zot model IDs, add model overrides
-in `$ZOT_HOME/models.json`.
+If your Azure deployment names differ from terva model IDs, add model overrides
+in `$TERVA_HOME/models.json`.
+
+## OpenAI-compatible endpoints (local and custom servers)
+
+The `openai-compatible` provider points terva at any server that speaks the
+OpenAI chat-completions protocol: LM Studio, vLLM, llama.cpp's server, LocalAI,
+Ollama's `/v1` endpoint, or a hosted gateway. Unlike the `ollama` provider it
+has no fixed base URL and is configured through `/login`.
+
+### Logging in
+
+Run `/login`, choose **OpenAI Compatible (local/custom)**, and the browser form
+collects three things (plus an optional API key):
+
+- **base url** — where requests go, e.g. `http://localhost:1234/v1`. terva lists
+  the endpoint's models once to confirm it's reachable.
+- **default model id** — the model selected after login, e.g. `qwen2.5-coder`.
+- **default context window** — applied to discovered models the server doesn't
+  describe a size for (optional; leave blank if unsure).
+
+These are stored in `$TERVA_HOME/auth.json` under `openai-compatible`. The API key
+is optional — most local servers ignore it.
+
+You can also configure it entirely from the CLI:
+
+```bash
+terva --provider openai-compatible \
+  --model qwen2.5-coder \
+  --base-url http://localhost:1234/v1 \
+  --api-key optional-token   # omit for keyless local servers
+```
+
+### Model discovery
+
+On every launch (and right after login) terva lists `GET {base-url}/models` and
+adds every model the server reports to the `/model` picker. This is deliberately
+**not** cache-gated, because a local server's loaded model set changes often.
+Embeddings, rerankers, and audio models are filtered out.
+
+The standard `/v1/models` response only carries model ids, so context sizes are
+best-effort: terva reads common non-standard hints (vLLM's `max_model_len`, some
+gateways' `context_length` / `context_window`) when present, and otherwise
+applies your **default context window**. For exact per-model sizing, pin the
+model in `models.json` (see below).
+
+### One endpoint per login; use models.json for several
+
+`/login` stores exactly **one** openai-compatible endpoint. The base URL,
+default model, optional key, and default context window live under a single
+`openai-compatible` entry in `auth.json`, so logging in to a second endpoint
+**overwrites the first** — there is no second slot and no per-endpoint naming.
+
+To use several endpoints at once, register them in `models.json` instead. Each
+model entry pins its own `baseUrl`, so many endpoints coexist in `/model`
+simultaneously and none clobbers another:
+
+```json
+{
+  "providers": {
+    "openai-compatible": {
+      "models": [
+        { "id": "qwen-local",   "baseUrl": "http://localhost:1234/v1", "contextWindow": 131072 },
+        { "id": "llama-server", "baseUrl": "http://localhost:8000/v1", "contextWindow": 8192 }
+      ]
+    }
+  }
+}
+```
+
+Don't hand-write that from scratch — run `terva models init` to drop a starter
+`models.json` (with two example endpoints) at `$TERVA_HOME/models.json`, edit the
+ids/URLs, then run `terva --list-models` to confirm the entries load (they show
+`source: user`). `terva models init` refuses to overwrite an existing file unless
+you pass `--force`. A per-launch `--base-url` override also works for a one-off
+without touching the stored login.
+
+## Context window and max response tokens
+
+Two fields control sizing for a model, and both matter most for local/custom
+models where terva has no built-in catalog entry:
+
+- **`contextWindow`** — the model's total token budget. Drives the status-bar
+  context gauge and the automatic-compaction trigger. If it's `0`/unknown,
+  auto-compaction is disabled and the gauge drops the percentage, falling back
+  to a plain token count (safe, but you lose the usage-versus-limit readout).
+- **`maxTokens`** — the maximum tokens terva requests for a single response (sent
+  as `max_tokens` / `max_completion_tokens`). Leave it out to let the server use
+  its own default.
+
+For the `openai-compatible` provider the login form sets only the *default*
+context window. To set precise per-model values — including `maxTokens`, which
+the form does not capture — add the model to `$TERVA_HOME/models.json`:
+
+```json
+{
+  "providers": {
+    "openai-compatible": {
+      "models": [
+        {
+          "id": "qwen2.5-coder-32b",
+          "name": "Qwen2.5 Coder 32B (local)",
+          "contextWindow": 131072,
+          "maxTokens": 8192,
+          "baseUrl": "http://localhost:1234/v1"
+        },
+        {
+          "id": "llama-3.1-8b",
+          "contextWindow": 8192,
+          "maxTokens": 2048,
+          "baseUrl": "http://localhost:1234/v1"
+        }
+      ]
+    }
+  }
+}
+```
+
+Entries in `models.json` take precedence over both the baked-in catalog and the
+values discovered from `/v1/models`, so they're the source of truth when a
+server under-reports (or misreports) its limits. `baseUrl` is optional here —
+when omitted, the model uses the base URL stored at login.
 
 ## Auth file
 
-Credentials are stored in `$ZOT_HOME/auth.json` with user-only permissions
-when zot creates the file.
+Credentials are stored in `$TERVA_HOME/auth.json` with user-only permissions
+when terva creates the file.
 
 Example:
 
@@ -190,21 +311,104 @@ Example:
 
 The top-level keys are used for providers with dedicated credential fields.
 Other API-key providers are stored under `additional_api_key_creds`. Prefer
-`/login` so zot writes the correct schema.
+`/login` so terva writes the correct schema.
 
 ## Custom providers and models
 
-Use `$ZOT_HOME/models.json` for private models, deployment aliases, local
+Use `$TERVA_HOME/models.json` for private models, deployment aliases, local
 servers, or OpenAI-compatible gateways that are not in the built-in catalog.
 User entries override built-in entries with the same provider and model ID.
 
+Supported fields per model: `id` (required), `name`, `reasoning`,
+`contextWindow`, `maxTokens`, `baseUrl`, `priceInput`, `priceOutput`,
+`priceCacheRead`, `priceCacheWrite`, `capabilities`. See
+[Context window and max response tokens](#context-window-and-max-response-tokens)
+for what `contextWindow` and `maxTokens` control and a full
+`openai-compatible` example.
+
+### Capability tags
+
+`capabilities` marks what a model can do, when terva can't know on its
+own. Keys it understands today: `image-input` (vision — defaults to
+**true** when unset), `image-output` (image generation — defaults to
+false; reserved, no consumer yet), and `reasoning` (an alias for the
+top-level `reasoning` field). Unknown keys load with a warning so a
+file written for a newer terva still works here.
+
+The one most people need: a local model served **without a vision
+projector**. Mark it text-only and terva drops image attachments at the
+request boundary (with a visible note) instead of letting the server
+400 on every turn after a screenshot enters the transcript:
+
+```json
+{
+  "providers": {
+    "openai-compatible": {
+      "models": [
+        {
+          "id": "qwen2.5-coder-32b",
+          "baseUrl": "http://localhost:1234/v1",
+          "capabilities": { "image-input": false }
+        }
+      ]
+    }
+  }
+}
+```
+
+The legacy spelling `"input": ["text"]` / `"input": ["text","image"]`
+means the same thing; an explicit `capabilities` key wins over it.
+Capability tags follow the same precedence as everything else in
+`models.json`: your entry beats the built-in catalog, which beats
+live discovery (OpenRouter's modality data is folded in
+automatically). In the `/model` picker, `◈` marks vision models and
+typing `:img` or `:reasoning` filters by capability;
+`terva --list-models` shows a `vision` column.
+
+```json
+{
+  "providers": {
+    "openai-compatible": {
+      "models": [
+        {
+          "id": "my-local-model",
+          "contextWindow": 32768,
+          "maxTokens": 4096,
+          "baseUrl": "http://localhost:1234/v1"
+        }
+      ]
+    }
+  }
+}
+```
+
 ## Credential resolution
 
-For each request, zot checks credentials in this order:
+For each request, terva checks credentials in this order:
 
 1. Explicit CLI key, such as `--api-key`.
 2. Provider-specific environment variables.
-3. `$ZOT_HOME/auth.json`.
-4. Custom provider credentials from `$ZOT_HOME/models.json`, when configured.
+3. `$TERVA_HOME/auth.json`.
+4. Custom provider credentials from `$TERVA_HOME/models.json`, when configured.
 
 Bedrock then uses the AWS SDK credential chain for the actual request.
+
+## The /login flow in detail
+
+- **API key**: a small local web server starts on `127.0.0.1:<free-port>`, your browser opens a form, you pick a provider from the full API-key provider list, paste the key, and terva saves it to `auth.json` if accepted. Providers with a lightweight model-list endpoint are probed before saving; provider backends that need extra project/account env vars are saved directly.
+- **Subscription**: use your Claude Pro/Max, ChatGPT Plus/Pro, Kimi Code, or GitHub Copilot subscription. DeepSeek and Google Gemini do **not** have a subscription login path. For those, use the API-key flow.
+  - Anthropic and OpenAI pin the browser callback to fixed provider-specific ports (`localhost:53692` for Anthropic, `localhost:1455` for OpenAI) because those are the only ports their auth servers will redirect to.
+  - Anthropic uses the Claude Code OAuth flow. Messages go to `api.anthropic.com` with a bearer token and the Claude Code identity headers.
+  - OpenAI uses the Codex CLI OAuth flow. Messages go to `chatgpt.com/backend-api/codex/responses` with the `chatgpt-account-id` extracted from the returned id_token.
+  - Kimi uses the Kimi Code device-code OAuth flow. terva opens the verification URL, polls until you approve it in the browser, then sends messages to `api.kimi.com/coding/v1` with the Kimi Code identity headers.
+  - GitHub Copilot uses GitHub's device-code login flow. terva stores the GitHub access token and exchanges it for short-lived Copilot inference tokens on demand.
+
+> **Note on subscription login.** The OAuth client IDs used are the ones published in Anthropic's Claude Code CLI, OpenAI's Codex CLI, Kimi Code CLI, and GitHub Copilot's device-code flow. Reusing them from a third-party tool may be against their terms of service and may be revoked at any time. Use it at your own risk; the API-key flow is the safe default.
+
+### Token refresh
+
+OAuth access tokens are short-lived (Anthropic ~8h, OpenAI ~30d; Kimi and GitHub Copilot also use refresh/exchange flows). terva refreshes or exchanges them automatically:
+
+- At every credential lookup, terva checks the stored `expiry` and, if past it (with a 60s safety margin), hits the provider's `oauth/token` endpoint with the stored `refresh_token`, persists the new `access_token`, `refresh_token`, and `expiry` back to `auth.json`, and hands the fresh token to the client.
+- The telegram bridge additionally refreshes once per turn so a bot that runs for days keeps working without manual intervention.
+- If the refresh itself fails (the `refresh_token` was revoked, or the account was logged out everywhere), the error bubbles up to the caller: the TUI shows it in the status line, the bot replies with it in your DM. Run `/login` to get a fresh token pair.
