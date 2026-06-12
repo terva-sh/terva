@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 // Compact summarizes the agent's transcript via the LLM and replaces
@@ -22,6 +22,15 @@ import (
 // events via sink are limited to text deltas from the summary call so
 // the UI can show progress.
 func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta string)) (summary string, err error) {
+	// Single-flight: Compact wholesale-replaces a.messages, so it must
+	// not run concurrently with a Prompt/Continue turn appending to the
+	// transcript (or another Compact). Return ErrBusy instead.
+	release, ok := a.acquire()
+	if !ok {
+		return "", ErrBusy
+	}
+	defer release()
+
 	a.mu.Lock()
 	msgs := append([]provider.Message(nil), a.messages...)
 	a.mu.Unlock()

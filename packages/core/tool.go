@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 // Tool is a capability the agent can invoke.

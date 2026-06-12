@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 // Session is a JSONL-backed conversation transcript tied to a cwd.
@@ -37,7 +37,26 @@ type Session struct {
 	// freshFile it tells Close() whether the session left any content
 	// worth keeping.
 	messagesAppended int
+
+	// LoadWarnings describes everything OpenSession had to skip or
+	// guess at while reading the file (corrupt rows, unknown block
+	// types, a newer format version). Empty for clean loads. Callers
+	// decide how to surface it; the data is never silently dropped.
+	LoadWarnings []string
 }
+
+// sessionFormatVersion is the version of the on-disk session schema
+// THIS build writes. History:
+//
+//	1 (implicit, format_version absent) — content blocks carry no
+//	  type discriminator; readers classify by field presence.
+//	2 — every content block is written with an explicit "type"
+//	  ("text", "image", "tool_call", "tool_result", "reasoning").
+//	  v1 files keep loading through the field-presence fallback.
+//
+// Readers warn (Session.LoadWarnings) when a file declares a NEWER
+// version than this and load best-effort.
+const sessionFormatVersion = 2
 
 // SessionMeta is written as the first line of every session file.
 type SessionMeta struct {
@@ -46,8 +65,13 @@ type SessionMeta struct {
 	Model    string    `json:"model"`
 	Provider string    `json:"provider"`
 	Started  time.Time `json:"started"`
-	Version  string    `json:"version"`
-	Title    string    `json:"title,omitempty"`
+	// Version is the app version that created the session —
+	// informational only. FormatVersion is the schema contract.
+	Version string `json:"version"`
+	// FormatVersion is the session-schema version (sessionFormatVersion
+	// at write time). 0 means a legacy v1 file.
+	FormatVersion int    `json:"format_version,omitempty"`
+	Title         string `json:"title,omitempty"`
 
 	// Parent is the ID of the session this one was forked from, or
 	// empty for top-level sessions. The tree picker walks parents
@@ -61,21 +85,100 @@ type SessionMeta struct {
 	ForkPoint int `json:"fork_point,omitempty"`
 }
 
-// sessionLine is the on-disk row type. Message is kept as a raw
-// JSON message on reads (because Content is an interface slice that
-// the default unmarshaler cannot reconstruct); it is written with a
-// regular provider.Message value.
+// sessionLine is the on-disk row type. Messages are written in the
+// typed wire form (wireMessage) so every content block carries a
+// "type" discriminator; reads go through hydrateMessageObject, which
+// prefers the discriminator and falls back to field presence for v1
+// files.
 type sessionLine struct {
-	Type       string             `json:"type"`
-	Meta       *SessionMeta       `json:"meta,omitempty"`
-	Message    *provider.Message  `json:"message,omitempty"`
-	Messages   []provider.Message `json:"messages,omitempty"`
-	Usage      *provider.Usage    `json:"usage,omitempty"`
-	Cumulative *provider.Usage    `json:"cumulative,omitempty"`
+	Type       string          `json:"type"`
+	Meta       *SessionMeta    `json:"meta,omitempty"`
+	Message    *wireMessage    `json:"message,omitempty"`
+	Messages   []wireMessage   `json:"messages,omitempty"`
+	Usage      *provider.Usage `json:"usage,omitempty"`
+	Cumulative *provider.Usage `json:"cumulative,omitempty"`
 }
 
 type sessionLineHead struct {
 	Type string `json:"type"`
+}
+
+// wireMessage is the typed on-disk form of provider.Message. The
+// outer shape (role/content/time/meta) is identical to v1; only the
+// blocks gain a "type" field, so v1 readers (field presence, unknown
+// fields ignored) read v2 files and vice versa.
+type wireMessage struct {
+	Role    provider.Role     `json:"role"`
+	Content []wireBlock       `json:"content"`
+	Time    time.Time         `json:"time"`
+	Meta    map[string]string `json:"meta,omitempty"`
+}
+
+// wireBlock is one typed content block. One flat struct (rather than
+// per-kind types) keeps encoding/decoding a single switch; omitempty
+// keeps each kind's row as small as v1's.
+type wireBlock struct {
+	Type string `json:"type"`
+	// text
+	Text string `json:"text,omitempty"`
+	// image
+	MimeType string `json:"mime_type,omitempty"`
+	Data     []byte `json:"data,omitempty"`
+	// tool_call
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+	// tool_result (Content nests text/image blocks)
+	CallID  string      `json:"call_id,omitempty"`
+	Content []wireBlock `json:"content,omitempty"`
+	IsError bool        `json:"is_error,omitempty"`
+	// reasoning
+	ReasoningID string `json:"reasoning_id,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	Encrypted   string `json:"encrypted_content,omitempty"`
+}
+
+// Block type discriminator values (wireBlock.Type).
+const (
+	blockText       = "text"
+	blockImage      = "image"
+	blockToolCall   = "tool_call"
+	blockToolResult = "tool_result"
+	blockReasoning  = "reasoning"
+)
+
+// encodeWireMessage converts a provider.Message to its typed on-disk
+// form. Unknown in-memory block kinds are impossible today (Content
+// is a closed set); if one appears it is dropped here at write time,
+// which is loud in tests rather than silent at read time.
+func encodeWireMessage(m provider.Message) wireMessage {
+	w := wireMessage{Role: m.Role, Time: m.Time, Meta: m.Meta}
+	w.Content = encodeWireBlocks(m.Content)
+	return w
+}
+
+func encodeWireBlocks(blocks []provider.Content) []wireBlock {
+	out := make([]wireBlock, 0, len(blocks))
+	for _, c := range blocks {
+		switch b := c.(type) {
+		case provider.TextBlock:
+			out = append(out, wireBlock{Type: blockText, Text: b.Text})
+		case provider.ImageBlock:
+			out = append(out, wireBlock{Type: blockImage, MimeType: b.MimeType, Data: b.Data})
+		case provider.ToolCallBlock:
+			out = append(out, wireBlock{Type: blockToolCall, ID: b.ID, Name: b.Name, Arguments: b.Arguments})
+		case provider.ToolResultBlock:
+			out = append(out, wireBlock{
+				Type:    blockToolResult,
+				CallID:  b.CallID,
+				Content: encodeWireBlocks(b.Content),
+				IsError: b.IsError,
+			})
+		case provider.ReasoningBlock:
+			out = append(out, wireBlock{Type: blockReasoning, ReasoningID: b.ID, Summary: b.Summary, Encrypted: b.Encrypted})
+		}
+	}
+	return out
 }
 
 // SessionsDir returns the per-cwd sessions directory under root.
@@ -122,7 +225,7 @@ func newSessionAt(p, cwd, providerName, model, version string) (*Session, error)
 	s := &Session{
 		ID:        id,
 		Path:      p,
-		Meta:      SessionMeta{ID: id, CWD: cwd, Provider: providerName, Model: model, Started: time.Now().UTC(), Version: version},
+		Meta:      SessionMeta{ID: id, CWD: cwd, Provider: providerName, Model: model, Started: time.Now().UTC(), Version: version, FormatVersion: sessionFormatVersion},
 		writer:    f,
 		buf:       bufio.NewWriter(f),
 		freshFile: true,
@@ -245,9 +348,11 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 
 	var meta SessionMeta
 	var messages []provider.Message
+	rep := &loadReport{}
 	if err := forEachJSONLLine(f, func(line []byte) error {
 		var head sessionLineHead
 		if err := json.Unmarshal(line, &head); err != nil {
+			rep.corruptLines++
 			return nil
 		}
 		switch head.Type {
@@ -257,26 +362,38 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 			}
 			if err := json.Unmarshal(line, &row); err == nil {
 				meta = row.Meta
+			} else {
+				rep.corruptLines++
 			}
 		case "message":
-			if msg, err := hydrateMessage(line); err == nil && len(msg.Content) > 0 {
+			msg, err := hydrateMessage(line, rep)
+			if err != nil {
+				rep.corruptLines++
+				return nil
+			}
+			if len(msg.Content) > 0 {
 				messages = append(messages, msg)
 			}
 		case "compaction":
-			if compacted, err := hydrateCompaction(line); err == nil {
+			if compacted, err := hydrateCompaction(line, rep); err == nil {
 				messages = compacted
+			} else {
+				rep.corruptLines++
 			}
 		}
 		return nil
 	}); err != nil {
 		return nil, nil, err
 	}
+	if meta.FormatVersion > sessionFormatVersion {
+		rep.newerFormat = meta.FormatVersion
+	}
 	messages = repairToolUseResultPairs(messages)
 	out, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, nil, err
 	}
-	s := &Session{ID: meta.ID, Path: path, Meta: meta, writer: out, buf: bufio.NewWriter(out)}
+	s := &Session{ID: meta.ID, Path: path, Meta: meta, writer: out, buf: bufio.NewWriter(out), LoadWarnings: rep.warnings(path)}
 	return s, messages, nil
 }
 
@@ -292,7 +409,7 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 //
 // Corruption gets into the transcript two ways we know of:
 //
-//   - Older zot builds that persisted the assistant tool_use row
+//   - Older terva builds that persisted the assistant tool_use row
 //     before the tool_result row, then crashed between the two.
 //   - Abort paths in older builds that didn't drop the mid-turn
 //     assistant message cleanly.
@@ -450,7 +567,7 @@ func describeSession(path string) SessionSummary {
 				s.FirstUserText = firstUserText(line)
 			}
 		case "compaction":
-			if compacted, err := hydrateCompaction(line); err == nil {
+			if compacted, err := hydrateCompaction(line, nil); err == nil {
 				s.MessageCount = len(compacted)
 				if s.FirstUserText == "" && len(compacted) > 0 {
 					s.FirstUserText = firstTextFromMessage(compacted[0])
@@ -510,7 +627,7 @@ func firstTextFromMessage(msg provider.Message) string {
 
 // PruneEmptySessions deletes session files in cwd's session directory
 // that contain only a meta line (no messages were ever appended).
-// Cleans up the backlog of empty stubs created by old zot versions
+// Cleans up the backlog of empty stubs created by old terva versions
 // that wrote a meta line at NewSession time and never followed up.
 // Errors are swallowed; the caller treats this as best-effort.
 func PruneEmptySessions(root, cwd string) {
@@ -602,7 +719,8 @@ func (s *Session) AppendMessage(m provider.Message) error {
 	if s == nil {
 		return nil
 	}
-	if err := s.writeLine(sessionLine{Type: "message", Message: &m}); err != nil {
+	w := encodeWireMessage(m)
+	if err := s.writeLine(sessionLine{Type: "message", Message: &w}); err != nil {
 		return err
 	}
 	s.messagesAppended++
@@ -617,7 +735,11 @@ func (s *Session) AppendCompaction(messages []provider.Message) error {
 	if s == nil {
 		return nil
 	}
-	if err := s.writeLine(sessionLine{Type: "compaction", Messages: messages}); err != nil {
+	wires := make([]wireMessage, 0, len(messages))
+	for _, m := range messages {
+		wires = append(wires, encodeWireMessage(m))
+	}
+	if err := s.writeLine(sessionLine{Type: "compaction", Messages: wires}); err != nil {
 		return err
 	}
 	s.messagesAppended = len(messages)
@@ -646,7 +768,7 @@ func (s *Session) AppendUsage(u, cum provider.Usage) error {
 
 // Close flushes and closes the session file. If the session was
 // freshly created in this process and never had any messages
-// appended (the user opened zot, looked around, and exited without
+// appended (the user opened terva, looked around, and exited without
 // prompting), the file is deleted on close so the sessions list
 // doesn't fill up with empty meta-only stubs.
 func (s *Session) Close() error {
@@ -683,11 +805,61 @@ func (s *Session) writeLine(row sessionLine) error {
 
 // ---- content (de)serialization ----
 //
-// provider.Content is an interface; encoding/json drops type information.
-// We persist messages by reading the raw "message" object back and
-// rebuilding Content from discriminated fields.
+// provider.Content is an interface; encoding/json drops type
+// information. v2 files carry an explicit "type" on every block
+// (wireBlock); v1 files are rebuilt from discriminated fields. Both
+// paths run through hydrateMessageObject, which reports (not
+// swallows) corrupt and unknown blocks via loadReport.
 
-func hydrateCompaction(lineBytes []byte) ([]provider.Message, error) {
+// loadReport accumulates everything OpenSession had to skip or guess
+// at, so callers can surface it instead of silently losing data.
+type loadReport struct {
+	corruptLines  int            // whole rows that failed to parse
+	corruptBlocks int            // content blocks that failed to parse
+	unknownBlocks map[string]int // typed blocks with an unrecognized type
+	newerFormat   int            // file's format_version when > ours
+}
+
+func (r *loadReport) noteUnknown(blockType string) {
+	if r == nil {
+		return
+	}
+	if r.unknownBlocks == nil {
+		r.unknownBlocks = make(map[string]int)
+	}
+	r.unknownBlocks[blockType]++
+}
+
+func (r *loadReport) noteCorruptBlock() {
+	if r != nil {
+		r.corruptBlocks++
+	}
+}
+
+// warnings renders the report as human-readable lines, empty when
+// nothing was skipped.
+func (r *loadReport) warnings(path string) []string {
+	if r == nil {
+		return nil
+	}
+	var out []string
+	base := filepath.Base(path)
+	if r.newerFormat > 0 {
+		out = append(out, fmt.Sprintf("session %s: written by a newer terva (format v%d, this build reads v%d); loaded best-effort", base, r.newerFormat, sessionFormatVersion))
+	}
+	if r.corruptLines > 0 {
+		out = append(out, fmt.Sprintf("session %s: %d corrupt line(s) skipped", base, r.corruptLines))
+	}
+	if r.corruptBlocks > 0 {
+		out = append(out, fmt.Sprintf("session %s: %d corrupt content block(s) skipped", base, r.corruptBlocks))
+	}
+	for typ, n := range r.unknownBlocks {
+		out = append(out, fmt.Sprintf("session %s: %d block(s) of unknown type %q skipped", base, n, typ))
+	}
+	return out
+}
+
+func hydrateCompaction(lineBytes []byte, rep *loadReport) ([]provider.Message, error) {
 	var row struct {
 		Messages []json.RawMessage `json:"messages"`
 	}
@@ -696,25 +868,54 @@ func hydrateCompaction(lineBytes []byte) ([]provider.Message, error) {
 	}
 	messages := make([]provider.Message, 0, len(row.Messages))
 	for _, raw := range row.Messages {
-		msg, err := hydrateMessageObject(raw)
-		if err == nil && len(msg.Content) > 0 {
+		msg, err := hydrateMessageObject(raw, rep)
+		if err != nil {
+			rep.noteCorruptBlock()
+			continue
+		}
+		if len(msg.Content) > 0 {
 			messages = append(messages, msg)
 		}
 	}
 	return messages, nil
 }
 
-func hydrateMessage(lineBytes []byte) (provider.Message, error) {
+func hydrateMessage(lineBytes []byte, rep *loadReport) (provider.Message, error) {
 	var row struct {
 		Message json.RawMessage `json:"message"`
 	}
 	if err := json.Unmarshal(lineBytes, &row); err != nil {
 		return provider.Message{}, err
 	}
-	return hydrateMessageObject(row.Message)
+	return hydrateMessageObject(row.Message, rep)
 }
 
-func hydrateMessageObject(rawMessage []byte) (provider.Message, error) {
+// decodeWireBlock rebuilds one v2 typed block. ok=false means the
+// type is unrecognized (written by a newer terva) — the caller records
+// it and skips, rather than degrading it to an empty text block.
+func decodeWireBlock(b wireBlock) (provider.Content, bool) {
+	switch b.Type {
+	case blockText:
+		return provider.TextBlock{Text: b.Text}, true
+	case blockImage:
+		return provider.ImageBlock{MimeType: b.MimeType, Data: b.Data}, true
+	case blockToolCall:
+		return provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: b.Arguments}, true
+	case blockToolResult:
+		block := provider.ToolResultBlock{CallID: b.CallID, IsError: b.IsError}
+		for _, inner := range b.Content {
+			if c, ok := decodeWireBlock(inner); ok {
+				block.Content = append(block.Content, c)
+			}
+		}
+		return block, true
+	case blockReasoning:
+		return provider.ReasoningBlock{ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted}, true
+	}
+	return nil, false
+}
+
+func hydrateMessageObject(rawMessage []byte, rep *loadReport) (provider.Message, error) {
 	var row struct {
 		Role    provider.Role     `json:"role"`
 		Content []json.RawMessage `json:"content"`
@@ -726,6 +927,19 @@ func hydrateMessageObject(rawMessage []byte) (provider.Message, error) {
 	}
 	msg := provider.Message{Role: row.Role, Time: row.Time, Meta: row.Meta}
 	for _, raw := range row.Content {
+		// v2 path: an explicit type discriminator decides the block.
+		var typed wireBlock
+		if err := json.Unmarshal(raw, &typed); err == nil && typed.Type != "" {
+			c, ok := decodeWireBlock(typed)
+			if !ok {
+				rep.noteUnknown(typed.Type)
+				continue
+			}
+			msg.Content = append(msg.Content, c)
+			continue
+		}
+
+		// v1 fallback: discriminate by field presence.
 		var head struct {
 			Text        string `json:"text"`
 			MimeType    string `json:"mime_type"`
@@ -739,9 +953,9 @@ func hydrateMessageObject(rawMessage []byte) (provider.Message, error) {
 			// ToolCallBlock also has Arguments, ToolResultBlock has Content + IsError
 		}
 		if err := json.Unmarshal(raw, &head); err != nil {
+			rep.noteCorruptBlock()
 			continue
 		}
-		// Discriminate by presence of fields.
 		switch {
 		case head.ReasoningID != "" || head.Encrypted != "":
 			msg.Content = append(msg.Content, provider.ReasoningBlock{

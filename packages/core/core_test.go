@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 func TestSessionRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	os.Setenv("ZOT_HOME", dir)
+	os.Setenv("TERVA_HOME", dir)
 
 	sess, err := NewSession(dir, "/tmp/project", "anthropic", "claude-sonnet-4-5", "test")
 	if err != nil {

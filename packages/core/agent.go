@@ -7,10 +7,19 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
+
+// ErrBusy is returned by Prompt, Continue, and Compact when the agent
+// is already running a turn (or compacting). The agent is single-
+// flight: only one of these may be in progress at a time, because they
+// all mutate the shared transcript and a second concurrent run would
+// interleave appends or let Compact wholesale-replace a.messages mid-
+// append, corrupting the transcript.
+var ErrBusy = errors.New("agent is busy")
 
 // Agent is a stateful conversation bound to a provider client, a model,
 // and a set of tools.
@@ -21,6 +30,14 @@ type Agent struct {
 	Tools     Registry
 	MaxSteps  int
 	Reasoning string
+
+	// MaxTokens caps the model's output tokens per turn. Zero leaves
+	// the field unset on the provider request, letting each provider
+	// apply its own default (which can be conservative, e.g. Bedrock
+	// defaults to 4096, truncating long writes/edits). Hosts populate
+	// this from the resolved model's MaxOutput so large single-turn
+	// responses aren't silently cut off with stopReason=length.
+	MaxTokens int
 
 	// BeforeToolExecute, if set, is called immediately before each
 	// tool runs. Returning (allowed=false, reason) short-circuits
@@ -80,6 +97,13 @@ type Agent struct {
 	// the session log; per-message append hooks do not fire for this
 	// wholesale transcript replacement.
 	OnTranscriptCompacted func(messages []provider.Message)
+
+	// running is the single-flight guard. It is set on entry to
+	// Prompt/Continue/Compact and cleared on exit; a second concurrent
+	// call sees it set and returns ErrBusy instead of interleaving its
+	// transcript mutations with the in-flight run. It is an atomic so
+	// the check-and-set needs no separate lock and never blocks.
+	running atomic.Bool
 
 	mu       sync.Mutex
 	messages []provider.Message
@@ -229,38 +253,32 @@ func (a *Agent) SetMessages(msgs []provider.Message) {
 	a.rev++
 }
 
-// Cost returns the cumulative usage.
+// Cost returns the cumulative usage. The CostTracker carries its own
+// lock so this is safe to call concurrently with a running turn, which
+// folds usage in from the stream goroutine.
 func (a *Agent) Cost() provider.Usage {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.cost.Total
+	return a.cost.CumulativeTotal()
 }
 
 // SeedCost sets the cumulative usage as a baseline before the first
 // turn runs. Used when transferring state from another agent (model
 // or provider switch) so the running cost meter doesn't reset to 0.
 func (a *Agent) SeedCost(u provider.Usage) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.cost.Total = u
+	a.cost.SetTotal(u)
 }
 
 // LastTurnUsage returns the per-turn usage of the most recent
 // completed turn. Drives the "context used" gauge in the status bar
 // without waiting for the next turn to land.
 func (a *Agent) LastTurnUsage() provider.Usage {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.cost.LastTurn
+	return a.cost.LastTurnUsage()
 }
 
 // SeedLastTurnUsage primes the per-turn snapshot. Used on resume so
 // the gauge reflects the prompt size of the last turn in the session
 // file instead of starting at zero.
 func (a *Agent) SeedLastTurnUsage(u provider.Usage) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.cost.LastTurn = u
+	a.cost.SetLastTurn(u)
 }
 
 // fireMessageAppended invokes OnMessageAppended without holding the
@@ -273,10 +291,27 @@ func (a *Agent) fireMessageAppended(m provider.Message) {
 	}
 }
 
+// acquire claims the single-flight guard. It returns a release func and
+// true on success, or nil and false if a run is already in progress.
+// Callers must defer release() once they hold the guard.
+func (a *Agent) acquire() (release func(), ok bool) {
+	if !a.running.CompareAndSwap(false, true) {
+		return nil, false
+	}
+	return func() { a.running.Store(false) }, true
+}
+
 // Prompt sends a user message and runs the agent loop until the model
 // stops or an error occurs. Events are delivered via sink in order.
-// sink must not block the caller for long; buffer as needed.
+// sink must not block the caller for long; buffer as needed. Prompt is
+// single-flight: it returns ErrBusy if another Prompt/Continue/Compact
+// is already in progress.
 func (a *Agent) Prompt(ctx context.Context, text string, images []provider.ImageBlock, sink func(AgentEvent)) error {
+	release, ok := a.acquire()
+	if !ok {
+		return ErrBusy
+	}
+	defer release()
 	if sink == nil {
 		sink = func(AgentEvent) {}
 	}
@@ -301,8 +336,14 @@ func (a *Agent) Prompt(ctx context.Context, text string, images []provider.Image
 }
 
 // Continue runs the agent loop against the existing transcript. Used
-// after appending tool results manually or to retry.
+// after appending tool results manually or to retry. Like Prompt it is
+// single-flight and returns ErrBusy if a run is already in progress.
 func (a *Agent) Continue(ctx context.Context, sink func(AgentEvent)) error {
+	release, ok := a.acquire()
+	if !ok {
+		return ErrBusy
+	}
+	defer release()
 	if sink == nil {
 		sink = func(AgentEvent) {}
 	}
@@ -350,18 +391,28 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		var (
 			stop         provider.StopReason
 			assistantMsg provider.Message
+			commit       func()
 			err          error
 		)
 		for attempt := 0; ; attempt++ {
-			stop, assistantMsg, err = a.oneTurn(ctx, sink)
+			stop, assistantMsg, commit, err = a.oneTurn(ctx, sink)
 			sink(EvTurnEnd{Stop: stop, Err: err})
 			if err == nil || !a.canRetryError(err, attempt) {
 				break
 			}
+			// This attempt is being retried: drop its (possibly partial)
+			// assistant message from memory and do NOT commit it, so the
+			// durable session never records the abandoned attempt.
 			a.dropLastAssistantMessage()
-			if sleepErr := sleepRetry(ctx, a.retryDelay(attempt)); sleepErr != nil {
+			if sleepErr := sleepRetry(ctx, a.retryDelay(attempt, err)); sleepErr != nil {
 				return sleepErr
 			}
+		}
+		// The turn is final (success or non-retryable error). Persist and
+		// emit the kept assistant message exactly once, before propagating
+		// any error, so a final-but-errored turn still records what landed.
+		if commit != nil {
+			commit()
 		}
 		if err != nil {
 			return err
@@ -373,21 +424,32 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			a.mu.Lock()
 			a.messages = append(a.messages, toolMsg)
 			a.rev++
-			// OpenAI's chat-completions tool message shape is text-centric.
-			// Vision models reliably consume images when they arrive as user
-			// content, so when a tool result contains images we mirror them
-			// into a synthetic user message immediately after the tool result.
-			// This keeps the transcript self-contained for providers that can
-			// see image blocks in tool messages while making OpenAI vision
-			// models actually receive the image bytes.
-			//
-			// The OpenAI Responses route ("openai-codex") has the same
-			// text-centric tool-output shape: a function_call_output only
-			// carries a string, so images in a tool result never reach the
-			// model. Both providers serialize images correctly when they
-			// arrive as user content, so the mirror covers them both.
+			// Some provider wire formats can't carry images inside a tool
+			// result: OpenAI chat-completions only accepts text in a `tool`
+			// message, and the OpenAI Responses route's function_call_output
+			// is a bare string. Those clients (every openai-wire provider —
+			// openai, openai-compatible, ollama, groq, xai, kimi, azure, … —
+			// plus openai-codex) report MirrorsToolImages() == true, so when a
+			// tool result contains images we mirror them into a synthetic user
+			// message immediately after the tool result, where they DO
+			// serialize correctly and reach vision models. Providers that
+			// carry tool-result images natively (Anthropic, Gemini) don't
+			// implement the capability and are left untouched.
 			var imageMirror provider.Message
-			if a.Client != nil && (a.Client.Name() == "openai" || a.Client.Name() == "openai-codex") {
+			// Use the unwrapping helper: openai-codex is wrapped in
+			// RefreshingClient and openai-responses in renamedClient, so a
+			// direct type assertion on a.Client would miss the capability.
+			// The mirror additionally requires the model to accept image
+			// input at all — mirroring screenshots to a vision-less model
+			// wastes tokens at best and 400s at worst. Unknown models keep
+			// the capability's default (true), preserving old behavior.
+			mirrorImages := provider.ClientMirrorsToolImages(a.Client)
+			if mirrorImages {
+				if m, err := provider.FindModel("", a.Model); err == nil && !m.Has(provider.CapImageInput) {
+					mirrorImages = false
+				}
+			}
+			if mirrorImages {
 				if mirror := mirrorToolImagesAsUser(toolMsg); len(mirror.Content) > 0 {
 					a.messages = append(a.messages, mirror)
 					a.rev++
@@ -427,6 +489,15 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 	return nil
 }
 
+// canRetryError decides whether a failed turn attempt is retried.
+// Classification is typed: in-tree clients return
+// *provider.ProviderError whose Transient field encodes the wire
+// protocol's own retry vocabulary (set where that knowledge lives),
+// and bare transport failures classify by error type via
+// provider.IsTransportError. The old substring-needle list is gone —
+// it retried "prompt is too long: 208500 tokens" because "500"
+// matched. Untyped errors from custom SDK clients no longer retry;
+// returning *provider.ProviderError is the documented opt-in.
 func (a *Agent) canRetryError(err error, attempt int) bool {
 	if err == nil || a.MaxRetries <= 0 || attempt >= a.MaxRetries {
 		return false
@@ -434,24 +505,17 @@ func (a *Agent) canRetryError(err error, attempt int) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
-	if msg == "" || isNonRetryableProviderLimit(msg) {
-		return false
-	}
-	needles := []string{
-		"overloaded", "provider returned error", "rate limit", "ratelimit", "too many requests",
-		"429", "http 429", "500", "http 500", "502", "http 502", "503", "http 503", "504", "http 504",
-		"service unavailable", "server error", "internal error", "network error", "connection error",
-		"connection refused", "connection lost", "fetch failed", "upstream connect", "reset before headers",
-		"socket hang up", "ended without", "stream ended before", "did not get a response", "timed out",
-		"timeout", "terminated", "unexpected eof", "transport failure",
-	}
-	for _, needle := range needles {
-		if strings.Contains(msg, needle) {
-			return true
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) {
+		// Quota/billing exhaustion can arrive as a 429 that is
+		// technically transient but never recovers within a retry
+		// window; don't burn attempts on it.
+		if isNonRetryableProviderLimit(strings.ToLower(pe.Msg)) {
+			return false
 		}
+		return pe.Transient
 	}
-	return false
+	return provider.IsTransportError(err)
 }
 
 func isNonRetryableProviderLimit(msg string) bool {
@@ -467,7 +531,18 @@ func isNonRetryableProviderLimit(msg string) bool {
 	return false
 }
 
-func (a *Agent) retryDelay(attempt int) time.Duration {
+// retryDelay returns the wait before retry attempt n. A server-stated
+// Retry-After wins over the default exponential backoff, capped so a
+// hostile or misconfigured header can't stall the turn for minutes.
+func (a *Agent) retryDelay(attempt int, err error) time.Duration {
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) && pe.RetryAfter > 0 {
+		const maxRetryAfter = 30 * time.Second
+		if pe.RetryAfter > maxRetryAfter {
+			return maxRetryAfter
+		}
+		return pe.RetryAfter
+	}
 	base := a.RetryBaseDelay
 	if base <= 0 {
 		base = 2 * time.Second
@@ -498,19 +573,49 @@ func (a *Agent) dropLastAssistantMessage() {
 	}
 }
 
-// oneTurn calls the LLM once, forwards events, returns the stop reason
-// and the assembled assistant message (already appended to the transcript).
-func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.StopReason, provider.Message, error) {
+// oneTurn calls the LLM once, forwards events, and returns the stop
+// reason, the assembled assistant message (already appended to the
+// in-memory transcript when kept), and a commit closure. The commit
+// closure persists the assistant message (OnMessageAppended) and emits
+// its visible events; it is nil when no message was kept. The caller
+// must invoke commit only once the turn is final — never before a
+// retry — so an abandoned partial attempt is not persisted durably.
+func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.StopReason, provider.Message, func(), error) {
+	// Snapshot the mutable request fields once under the lock. Hosts
+	// assign Model/System/Tools/Reasoning/MaxTokens at runtime (model
+	// swap, /reload-ext) on another goroutine; reading them piecemeal
+	// here would race those writes. Take a consistent picture for the
+	// whole turn and a copy of the transcript while we hold the lock.
+	a.mu.Lock()
+	model := a.Model
+	system := a.System
+	tools := a.Tools
+	reasoning := a.Reasoning
+	maxTokens := a.MaxTokens
+	client := a.Client
+	msgs := make([]provider.Message, len(a.messages))
+	copy(msgs, a.messages)
+	a.mu.Unlock()
+
 	req := provider.Request{
-		Model:     a.Model,
-		System:    a.System,
-		Messages:  a.Messages(),
-		Tools:     a.Tools.Specs(),
-		Reasoning: a.Reasoning,
+		Model:  model,
+		System: system,
+		// Repair any dangling tool_use blocks before sending. A turn
+		// aborted mid-flight (cancel, connection drop, ECONNREFUSED to a
+		// dev server, etc.) can leave an assistant tool_use with no
+		// matching tool_result in the live transcript. The load-time
+		// repair in OpenSession only runs on restart, so without this the
+		// next in-process request is rejected by providers like Anthropic
+		// with "tool_use ids were found without tool_result blocks". The
+		// repair is pure and a no-op on already-valid transcripts.
+		Messages:  repairToolUseResultPairs(msgs),
+		Tools:     tools.Specs(),
+		Reasoning: reasoning,
+		MaxTokens: maxTokens,
 	}
-	stream, err := a.Client.Stream(ctx, req)
+	stream, err := client.Stream(ctx, req)
 	if err != nil {
-		return provider.StopError, provider.Message{}, err
+		return provider.StopError, provider.Message{}, nil, err
 	}
 
 	sink(EvAssistantStart{})
@@ -586,24 +691,36 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 			}
 		}
 
+		// Append to the in-memory transcript now so a same-process
+		// retry can drop it via dropLastAssistantMessage and so the
+		// next request's tool_use repair sees consistent state. The
+		// durable persistence (OnMessageAppended) and the visible
+		// events are deferred to the returned commit closure: when the
+		// turn ends in a retryable error, runLoop drops the partial and
+		// never calls commit, so the JSONL is never tainted with the
+		// abandoned attempt. On a final turn runLoop calls commit once.
 		a.mu.Lock()
 		a.messages = append(a.messages, finalMsg)
 		a.rev++
 		a.mu.Unlock()
-		a.fireMessageAppended(finalMsg)
-		if !suppress {
-			sink(EvAssistantMessage{Message: emit})
-		}
-		// Now surface tool calls as EvToolCall events so UIs can render them
-		// in order before the tool results arrive.
-		for _, c := range finalMsg.Content {
-			if tc, ok := c.(provider.ToolCallBlock); ok {
-				sink(EvToolCall{ID: tc.ID, Name: tc.Name, Args: tc.Arguments})
+
+		commit := func() {
+			a.fireMessageAppended(finalMsg)
+			if !suppress {
+				sink(EvAssistantMessage{Message: emit})
+			}
+			// Surface tool calls as EvToolCall events so UIs can render
+			// them in order before the tool results arrive.
+			for _, c := range finalMsg.Content {
+				if tc, ok := c.(provider.ToolCallBlock); ok {
+					sink(EvToolCall{ID: tc.ID, Name: tc.Name, Args: tc.Arguments})
+				}
 			}
 		}
+		return stop, finalMsg, commit, finalErr
 	}
 
-	return stop, finalMsg, finalErr
+	return stop, finalMsg, nil, finalErr
 }
 
 // executeTools runs every tool call in the assistant message and returns

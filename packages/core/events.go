@@ -3,7 +3,7 @@ package core
 import (
 	"encoding/json"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 // AgentEvent is the superset of events emitted by an Agent run.

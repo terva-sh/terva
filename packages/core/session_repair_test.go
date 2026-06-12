@@ -3,7 +3,7 @@ package core
 import (
 	"testing"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 // TestRepairToolUseResultPairsAppendsStub covers the most common

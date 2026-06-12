@@ -15,15 +15,38 @@ import (
 	"github.com/google/uuid"
 )
 
-// PortableExt is the filesystem extension used for exported sessions.
-// A ".zotsession" is just a zot JSONL session file with the meta
-// header rewritten so the importing user gets fresh ownership.
-const PortableExt = ".zotsession"
+// PortableExt is the filesystem extension WRITTEN for exported
+// sessions. A ".tervasession" is just a terva JSONL session file with the
+// meta header rewritten so the importing user gets fresh ownership.
+//
+// Reads accept both this and the renamed ".tervasession" spelling —
+// dual-read is forever-cheap for user data (docs/plans/rename-terva.md).
+// Import never gated on the extension anyway (it validates the meta
+// header), so the read seam only affects export's "already has the
+// extension" checks below.
+const PortableExt = ".tervasession"
+
+// portableExts are the extensions recognized as portable sessions,
+// in either naming era.
+var portableExts = []string{".tervasession", ".zotsession"} // rename:keep — dual-read forever
+
+// hasPortableExt reports whether path already carries a recognized
+// portable-session extension (either era), so export doesn't stack
+// a second one onto an explicit destination name.
+func hasPortableExt(path string) bool {
+	lower := strings.ToLower(path)
+	for _, ext := range portableExts {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
+}
 
 // ExportSession writes the session at srcPath to dstPath as a
-// portable .zotsession file. If dstPath is an existing directory the
+// portable .tervasession file. If dstPath is an existing directory the
 // file is created inside it with a name derived from the session's
-// meta ("YYYYMMDD-HHMMSS-<first-prompt-excerpt>.zotsession"). The
+// meta ("YYYYMMDD-HHMMSS-<first-prompt-excerpt>.tervasession"). The
 // destination's directory is created if needed. Returns the final
 // resolved path so the caller can tell the user where it landed.
 //
@@ -63,9 +86,9 @@ func ExportSession(srcPath, dstPath string) (string, error) {
 
 	// Scan the rest of the file for the first user message so we can
 	// build a humane filename. Only reads if dstPath doesn't already
-	// end in .zotsession.
+	// end in .tervasession.
 	firstPrompt := ""
-	if !strings.HasSuffix(strings.ToLower(dstPath), PortableExt) {
+	if !hasPortableExt(dstPath) {
 		if fi, _ := os.Stat(dstPath); fi == nil || fi.IsDir() {
 			p, err := firstUserPrompt(src)
 			if err != nil {
@@ -80,7 +103,7 @@ func ExportSession(srcPath, dstPath string) (string, error) {
 	if fi, err := os.Stat(dstPath); err == nil && fi.IsDir() {
 		name := filenameFor(head.Meta.Started, head.Meta.ID, firstPrompt)
 		outPath = filepath.Join(dstPath, name)
-	} else if !strings.HasSuffix(strings.ToLower(outPath), PortableExt) {
+	} else if !hasPortableExt(outPath) {
 		outPath += PortableExt
 	}
 
@@ -147,13 +170,13 @@ func ExportSession(srcPath, dstPath string) (string, error) {
 	return outPath, nil
 }
 
-// ImportSession copies the .zotsession file at srcPath into the
+// ImportSession copies the .tervasession file at srcPath into the
 // running user's session store under the given root+cwd, rewriting
 // the meta's id / cwd / started fields so the imported session is
 // owned by the current user / directory / clock. Returns the path
 // of the created session file, ready to pass to OpenSession.
 //
-// The imported session is a first-class zot session: it'll show up
+// The imported session is a first-class terva session: it'll show up
 // in /sessions, /jump, and on-disk summaries just like any other.
 // Messages and usage rows are preserved verbatim.
 func ImportSession(srcPath, root, cwd, version string) (string, error) {
@@ -501,7 +524,7 @@ func firstUserPrompt(src io.Reader) (string, error) {
 	}
 }
 
-// filenameFor builds a descriptive .zotsession filename from the
+// filenameFor builds a descriptive .tervasession filename from the
 // session's start time and, when available, an excerpt of the
 // first user prompt.
 func filenameFor(started time.Time, id, firstPrompt string) string {

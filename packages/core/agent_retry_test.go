@@ -2,13 +2,13 @@ package core
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/patriceckhart/zot/packages/provider"
+	"terva.sh/terva/packages/provider"
 )
 
 type retryFakeClient struct {
@@ -24,7 +24,7 @@ func (c *retryFakeClient) Stream(ctx context.Context, req provider.Request) (<-c
 		defer close(out)
 		out <- provider.EventStart{Provider: "retry-fake", Model: req.Model}
 		if call == 1 {
-			out <- provider.EventDone{Stop: provider.StopError, Err: fmt.Errorf("anthropic overloaded_error: Overloaded")}
+			out <- provider.EventDone{Stop: provider.StopError, Err: provider.NewAPIError("anthropic", "overloaded_error: Overloaded", true)}
 			return
 		}
 		out <- provider.EventTextDelta{Delta: "ok"}
@@ -79,7 +79,7 @@ func (c *partialRetryFakeClient) Stream(ctx context.Context, req provider.Reques
 		out <- provider.EventStart{Provider: "partial-retry-fake", Model: req.Model}
 		if call == 1 {
 			out <- provider.EventTextDelta{Delta: "partial"}
-			out <- provider.EventDone{Stop: provider.StopError, Err: fmt.Errorf("provider returned error: 503"), Message: provider.Message{
+			out <- provider.EventDone{Stop: provider.StopError, Err: provider.NewHTTPError("retry-fake", 503, "", "service unavailable"), Message: provider.Message{
 				Role:    provider.RoleAssistant,
 				Content: []provider.Content{provider.TextBlock{Text: "partial"}},
 			}}
@@ -107,5 +107,159 @@ func TestAgentDropsPartialAssistantBeforeRetry(t *testing.T) {
 	}
 	if got := extractText(msgs[1]); got != "recovered" {
 		t.Fatalf("final assistant text = %q; want recovered", got)
+	}
+}
+
+// captureClient records the last Request it received so tests can
+// assert what the agent put on the wire.
+type captureClient struct {
+	lastReq provider.Request
+}
+
+func (c *captureClient) Name() string { return "capture" }
+
+func (c *captureClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	c.lastReq = req
+	out := make(chan provider.Event, 3)
+	go func() {
+		defer close(out)
+		out <- provider.EventStart{Provider: "capture", Model: req.Model}
+		out <- provider.EventDone{Stop: provider.StopEnd, Message: provider.Message{
+			Role:    provider.RoleAssistant,
+			Content: []provider.Content{provider.TextBlock{Text: "ok"}},
+		}}
+	}()
+	return out, nil
+}
+
+func TestAgentPropagatesMaxTokens(t *testing.T) {
+	client := &captureClient{}
+	a := NewAgent(client, "fake-model", "system", Registry{})
+	a.MaxTokens = 64000
+
+	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
+		t.Fatalf("Prompt returned %v", err)
+	}
+	if client.lastReq.MaxTokens != 64000 {
+		t.Fatalf("request MaxTokens = %d; want 64000 (Agent.MaxTokens not propagated)", client.lastReq.MaxTokens)
+	}
+}
+
+// untypedErrClient returns a prose-only error that LOOKS retryable
+// under the old substring needles ("http 500"). The typed contract
+// must NOT retry it: untyped errors retry only when they classify as
+// transport failures by type.
+type untypedErrClient struct {
+	calls int32
+}
+
+func (c *untypedErrClient) Name() string { return "untyped-fake" }
+
+func (c *untypedErrClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	atomic.AddInt32(&c.calls, 1)
+	out := make(chan provider.Event, 2)
+	go func() {
+		defer close(out)
+		out <- provider.EventDone{Stop: provider.StopError, Err: errors.New("prompt is too long: 208500 tokens (http 500 lookalike)")}
+	}()
+	return out, nil
+}
+
+// TestAgentDoesNotRetryUntypedProseError pins the contract change: a
+// plain error whose MESSAGE resembles a retryable failure is not
+// retried. (Under the old needle list, "500" in a token count was
+// enough to burn three retries.)
+func TestAgentDoesNotRetryUntypedProseError(t *testing.T) {
+	client := &untypedErrClient{}
+	a := NewAgent(client, "fake-model", "system", Registry{})
+	a.RetryBaseDelay = time.Millisecond
+
+	if err := a.Prompt(context.Background(), "hello", nil, nil); err == nil {
+		t.Fatalf("Prompt should surface the error")
+	}
+	if got := atomic.LoadInt32(&client.calls); got != 1 {
+		t.Fatalf("Stream calls = %d; want 1 (no retry for untyped prose)", got)
+	}
+}
+
+// TestAgentDoesNotRetryPermanentProviderError: typed, but not
+// transient (e.g. 400 validation) — no retry.
+type permanentErrClient struct {
+	calls int32
+}
+
+func (c *permanentErrClient) Name() string { return "perm-fake" }
+
+func (c *permanentErrClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	atomic.AddInt32(&c.calls, 1)
+	out := make(chan provider.Event, 2)
+	go func() {
+		defer close(out)
+		out <- provider.EventDone{Stop: provider.StopError, Err: provider.NewHTTPError("perm-fake", 400, "", "invalid request")}
+	}()
+	return out, nil
+}
+
+func TestAgentDoesNotRetryPermanentProviderError(t *testing.T) {
+	client := &permanentErrClient{}
+	a := NewAgent(client, "fake-model", "system", Registry{})
+	a.RetryBaseDelay = time.Millisecond
+
+	if err := a.Prompt(context.Background(), "hello", nil, nil); err == nil {
+		t.Fatalf("Prompt should surface the error")
+	}
+	if got := atomic.LoadInt32(&client.calls); got != 1 {
+		t.Fatalf("Stream calls = %d; want 1 (400 is permanent)", got)
+	}
+}
+
+// TestRetryDelayHonorsRetryAfter: a server-stated Retry-After wins
+// over exponential backoff, capped at 30s.
+func TestRetryDelayHonorsRetryAfter(t *testing.T) {
+	a := NewAgent(&retryFakeClient{}, "fake-model", "system", Registry{})
+	a.RetryBaseDelay = 2 * time.Second
+
+	with := provider.NewHTTPError("x", 429, "7", "slow down")
+	if got := a.retryDelay(0, with); got != 7*time.Second {
+		t.Errorf("retryDelay with Retry-After = %v, want 7s", got)
+	}
+	huge := provider.NewHTTPError("x", 429, "600", "slow down")
+	if got := a.retryDelay(0, huge); got != 30*time.Second {
+		t.Errorf("retryDelay with huge Retry-After = %v, want 30s cap", got)
+	}
+	without := provider.NewHTTPError("x", 503, "", "unavailable")
+	if got := a.retryDelay(1, without); got != 4*time.Second {
+		t.Errorf("retryDelay fallback = %v, want base*2 = 4s", got)
+	}
+}
+
+// TestAgentDoesNotRetryQuotaExhaustion: 429s that are really billing
+// exhaustion must not burn retry attempts.
+type quotaErrClient struct {
+	calls int32
+}
+
+func (c *quotaErrClient) Name() string { return "quota-fake" }
+
+func (c *quotaErrClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	atomic.AddInt32(&c.calls, 1)
+	out := make(chan provider.Event, 2)
+	go func() {
+		defer close(out)
+		out <- provider.EventDone{Stop: provider.StopError, Err: provider.NewHTTPError("quota-fake", 429, "", "monthly usage limit reached")}
+	}()
+	return out, nil
+}
+
+func TestAgentDoesNotRetryQuotaExhaustion(t *testing.T) {
+	client := &quotaErrClient{}
+	a := NewAgent(client, "fake-model", "system", Registry{})
+	a.RetryBaseDelay = time.Millisecond
+
+	if err := a.Prompt(context.Background(), "hello", nil, nil); err == nil {
+		t.Fatalf("Prompt should surface the error")
+	}
+	if got := atomic.LoadInt32(&client.calls); got != 1 {
+		t.Fatalf("Stream calls = %d; want 1 (quota exhaustion is not transient)", got)
 	}
 }
