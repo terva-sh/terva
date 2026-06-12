@@ -170,7 +170,9 @@ func TestCopyUserDataNoClobber(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dest, ".terva-migration-note-shown")); !os.IsNotExist(err) {
 		t.Error("legacy one-shot sentinel must not be copied")
 	}
-	if st, err := os.Stat(filepath.Join(dest, "sessions", "abc", "s1.jsonl")); err != nil || st.Mode().Perm() != 0o644 {
+	// Windows emulates unix permissions (0666/0444 only), so the
+	// preserved-mode assertion is meaningful elsewhere only.
+	if st, err := os.Stat(filepath.Join(dest, "sessions", "abc", "s1.jsonl")); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o644) {
 		t.Errorf("mode not preserved: %v %v", st, err)
 	}
 	// In-dir symlink target rewritten to the new location.
@@ -193,7 +195,13 @@ func TestCopyUserDataSkipsIrregularFiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix domain sockets")
 	}
-	old := t.TempDir()
+	// Not t.TempDir(): it embeds this test's long name, and sun_path
+	// tops out around 104 bytes on darwin — bind fails with EINVAL.
+	old, err := os.MkdirTemp("", "terva-sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(old) })
 	dest := t.TempDir()
 	writeMigrateFile(t, filepath.Join(old, "agents", "a1", "meta.json"), "meta")
 	l, err := net.Listen("unix", filepath.Join(old, "agents", "a1", "in.sock"))
