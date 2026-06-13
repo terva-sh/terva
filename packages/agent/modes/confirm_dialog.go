@@ -90,7 +90,7 @@ func (d *confirmDialog) AllowAllPending() {
 	}
 }
 
-// confirmOptions lists the four responses in vertical order. Keyed
+// confirmOptions lists the five responses in vertical order. Keyed
 // by index so HandleKey can send the right decision.
 var confirmOptions = []struct {
 	label    string
@@ -103,6 +103,10 @@ var confirmOptions = []struct {
 	{
 		label:    "yes, always this tool (skip prompts for this tool for the rest of the session)",
 		decision: core.ConfirmDecision{Allow: true, RememberTool: true},
+	},
+	{
+		label:    "yes, always this tool — save (adds a permanent allow rule to your config)",
+		decision: core.ConfirmDecision{Allow: true, PersistTool: true},
 	},
 	{
 		label:    "yes, always (skip all prompts for the rest of the session)",
@@ -163,8 +167,8 @@ func (d *confirmDialog) HandleKey(k tui.Key) bool {
 		return true
 	}
 
-	// Numeric shortcuts 1..4
-	if k.Kind == tui.KeyRune && k.Rune >= '1' && k.Rune <= '4' {
+	// Numeric shortcuts 1..5
+	if k.Kind == tui.KeyRune && k.Rune >= '1' && k.Rune <= '5' {
 		idx := int(k.Rune - '1')
 		if idx >= 0 && idx < len(confirmOptions) {
 			selected := confirmOptions[idx].decision
@@ -207,7 +211,7 @@ func (d *confirmDialog) Render(th tui.Theme, width int) []string {
 	}
 	lines = append(lines, toolLine)
 	lines = append(lines, "")
-	lines = append(lines, th.FG256(th.Muted, "choose (\u2191/\u2193 or 1-4, enter to pick, esc to refuse):"))
+	lines = append(lines, th.FG256(th.Muted, "choose (\u2191/\u2193 or 1-5, enter to pick, esc to refuse):"))
 
 	for i, opt := range confirmOptions {
 		label := opt.label

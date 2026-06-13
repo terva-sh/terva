@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -23,6 +24,11 @@ type ConfirmDecision struct {
 	// tool for the rest of the session without prompting.
 	// Effectively turns yolo back on for this session.
 	RememberAll bool
+	// PersistTool, when true, additionally asks the host to save an
+	// allow rule for this tool name beyond the session (the gate
+	// itself cannot write config; it reports through the OnPersist
+	// callback). Implies RememberTool for the current session.
+	PersistTool bool
 }
 
 // Confirmer asks the user to approve or refuse a single tool call.
@@ -48,61 +54,166 @@ type Confirmer interface {
 type ConfirmGate struct {
 	inner Confirmer
 
+	// policy, when non-nil, is the typed rule/mode ladder evaluated
+	// before any session memory or prompt (see PermissionPolicy).
+	// Mutated only by copy-on-write under mu (SetMode), so a reader
+	// that snapshots the pointer can use it lock-free afterward.
+	policy *PermissionPolicy
+
+	// onPersist, when set, is called with a tool name after the user
+	// asks for a durable allow grant (ConfirmDecision.PersistTool).
+	// The host wires this to its config store; the gate stays
+	// storage-agnostic.
+	onPersist func(toolName string)
+
 	mu          sync.Mutex
 	allowAll    bool
 	allowedTool map[string]bool
 }
 
-// NewConfirmGate returns a gate backed by inner. Inner can be nil;
+// NewConfirmGate returns a gate backed by inner with no policy (the
+// historical --no-yolo shape: everything prompts). Inner can be nil;
 // in that case every not-yet-allowed tool call is refused with a
 // fixed reason (the gate is effectively a blocker until AllowAll /
 // SetConfirmer is called).
 func NewConfirmGate(inner Confirmer) *ConfirmGate {
+	return NewPolicyGate(nil, inner)
+}
+
+// NewPolicyGate returns a gate that evaluates policy first, then
+// falls back to session memory and the inner Confirmer for calls the
+// policy says to ask about.
+func NewPolicyGate(policy *PermissionPolicy, inner Confirmer) *ConfirmGate {
 	return &ConfirmGate{
+		policy:      policy,
 		inner:       inner,
 		allowedTool: map[string]bool{},
 	}
+}
+
+// SetPersist installs the host callback for durable allow grants.
+func (g *ConfirmGate) SetPersist(fn func(toolName string)) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.onPersist = fn
+	g.mu.Unlock()
+}
+
+// Mode returns the gate's current approval mode (ApprovalYolo when the
+// gate has no policy). Nil-safe.
+func (g *ConfirmGate) Mode() ApprovalMode {
+	if g == nil {
+		return ApprovalYolo
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.policy == nil {
+		return ApprovalYolo
+	}
+	return g.policy.Mode
+}
+
+// SetMode switches the approval mode at runtime by copy-on-write: a
+// fresh policy with the new mode replaces the old pointer under the
+// lock, so Check's snapshot-then-evaluate stays race-free. No-op on a
+// gate with no policy (pure-yolo gates are never constructed in modes
+// that allow switching). Nil-safe.
+func (g *ConfirmGate) SetMode(m ApprovalMode) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	if g.policy != nil {
+		np := *g.policy
+		np.Mode = m
+		g.policy = &np
+	}
+	g.mu.Unlock()
+}
+
+// Rules returns a snapshot of the policy's ordered rules (for an
+// inspector UI). Nil when the gate has no policy. Nil-safe.
+func (g *ConfirmGate) Rules() []PermissionRule {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.policy == nil {
+		return nil
+	}
+	return append([]PermissionRule(nil), g.policy.Rules...)
+}
+
+// Grants returns this session's "always allow" state: allowAll (the
+// user picked "yes, always") and the sorted tool names granted "always
+// this tool". For an inspector UI. Nil-safe.
+func (g *ConfirmGate) Grants() (allowAll bool, tools []string) {
+	if g == nil {
+		return false, nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for name := range g.allowedTool {
+		tools = append(tools, name)
+	}
+	sort.Strings(tools)
+	return g.allowAll, tools
 }
 
 // Check is the BeforeToolExecute-style entry point. Returns
 // allowed, reason, modifiedArgs. modifiedArgs is always nil: the
 // gate never rewrites args; it only allows or denies.
 //
+// Order matters: the policy runs before the session cache so a deny
+// rule beats a remembered "always allow" — explicit config outranks
+// a session convenience.
+//
 // A nil ConfirmGate always allows (treat as yolo mode).
-func (g *ConfirmGate) Check(toolName, preview string) (bool, string, json.RawMessage) {
+func (g *ConfirmGate) Check(toolName string, args json.RawMessage, preview string) (bool, string, json.RawMessage) {
 	if g == nil {
 		return true, "", nil
 	}
-	g.mu.Lock()
-	if g.allowAll {
-		g.mu.Unlock()
-		return true, "", nil
-	}
-	if g.allowedTool[toolName] {
-		g.mu.Unlock()
-		return true, "", nil
-	}
-	g.mu.Unlock()
 
 	g.mu.Lock()
+	pol := g.policy
+	g.mu.Unlock()
+	switch verdict, reason := pol.Evaluate(toolName, args); verdict {
+	case VerdictAllow:
+		return true, "", nil
+	case VerdictDeny:
+		return false, reason, nil
+	}
+
+	g.mu.Lock()
+	if g.allowAll || g.allowedTool[toolName] {
+		g.mu.Unlock()
+		return true, "", nil
+	}
 	inner := g.inner
 	g.mu.Unlock()
 	if inner == nil {
-		return false, "tool call refused: --no-yolo is active and there is no interactive prompt in this mode; ask the user what to do instead", nil
+		return false, "tool call refused: confirmation is required (--no-yolo / approval mode) and there is no interactive prompt in this mode; ask the user what to do instead", nil
 	}
 
 	decision := inner.Confirm(toolName, preview)
 
 	g.mu.Lock()
+	persist := g.onPersist
 	if decision.Allow {
 		if decision.RememberAll {
 			g.allowAll = true
 		}
-		if decision.RememberTool {
+		if decision.RememberTool || decision.PersistTool {
 			g.allowedTool[toolName] = true
 		}
 	}
 	g.mu.Unlock()
+	if decision.Allow && decision.PersistTool && persist != nil {
+		persist(toolName)
+	}
 
 	reason := strings.TrimSpace(decision.Reason)
 	if !decision.Allow && reason == "" {
@@ -132,6 +243,34 @@ func (g *ConfirmGate) AllowAll() {
 	}
 	g.mu.Lock()
 	g.allowAll = true
+	g.mu.Unlock()
+}
+
+// Revoke takes back a single tool's session "always allow" grant. The
+// next call of that tool prompts again (or follows the mode default).
+// No-op if the tool was never granted. The session-wide allowAll flag
+// is left alone — clear that with ClearAllowAll. Nil-safe. Used by the
+// /permissions inspector so a grant given by accident can be undone
+// without ending the session.
+func (g *ConfirmGate) Revoke(toolName string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	delete(g.allowedTool, toolName)
+	g.mu.Unlock()
+}
+
+// ClearAllowAll cancels a session-wide "yes, always" grant while
+// leaving the per-tool grants in place — so dropping the blanket
+// allowance doesn't also forget the specific tools you meant to keep.
+// Nil-safe.
+func (g *ConfirmGate) ClearAllowAll() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.allowAll = false
 	g.mu.Unlock()
 }
 

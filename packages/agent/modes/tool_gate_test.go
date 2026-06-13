@@ -2,57 +2,49 @@ package modes
 
 import "testing"
 
-func newGateTestInteractive() *Interactive {
-	return &Interactive{
-		toolGate: map[string]int{},
-		dirty:    make(chan struct{}, 1),
-	}
-}
-
 // While paced text is still draining, a tool that arrives mid-stream
-// must stay gated until the streaming buffer reaches the position
+// must stay gated until the painted text reaches the position
 // captured when the tool started.
 func TestToolGateHoldsToolUntilTextDrains(t *testing.T) {
-	i := newGateTestInteractive()
+	s := newStreamState()
 
 	// Simulate a turn that streamed 10 runes already with 20 more
 	// queued in the pacer when the tool call arrives.
-	i.streamOn = true
-	i.streaming.WriteString("0123456789") // 10 painted
-	i.streamPending = []rune("01234567890123456789")
+	s.beginTurn()
+	s.painted.WriteString("0123456789") // 10 painted
+	s.pending = []rune("01234567890123456789")
 
-	i.gateToolLocked("t1")
-	if got := i.toolGate["t1"]; got != 30 {
+	s.gateTool("t1")
+	if got := s.gates["t1"]; got != 30 {
 		t.Fatalf("gate = %d, want 30 (10 painted + 20 pending)", got)
 	}
 
-	if i.toolGateOpenLocked("t1") {
+	if s.gateOpen("t1") {
 		t.Fatal("tool should be gated while only 10/30 runes painted")
 	}
 
 	// Drain halfway: still gated.
-	i.streaming.WriteString("0123456789") // 20 painted
-	if i.toolGateOpenLocked("t1") {
+	s.painted.WriteString("0123456789") // 20 painted
+	if s.gateOpen("t1") {
 		t.Fatal("tool should still be gated at 20/30")
 	}
 
 	// Reach the gate: now visible.
-	i.streaming.WriteString("0123456789") // 30 painted
-	if !i.toolGateOpenLocked("t1") {
-		t.Fatal("tool should be visible once streaming reaches the gate")
+	s.painted.WriteString("0123456789") // 30 painted
+	if !s.gateOpen("t1") {
+		t.Fatal("tool should be visible once painted text reaches the gate")
 	}
 }
 
 // A tool call on a turn with no active text stream shows immediately.
 func TestToolGateOpenWhenNoStream(t *testing.T) {
-	i := newGateTestInteractive()
-	i.streamOn = false
+	s := newStreamState()
 
-	i.gateToolLocked("t1")
-	if got := i.toolGate["t1"]; got != 0 {
+	s.gateTool("t1")
+	if got := s.gates["t1"]; got != 0 {
 		t.Fatalf("gate = %d, want 0 for non-streaming turn", got)
 	}
-	if !i.toolGateOpenLocked("t1") {
+	if !s.gateOpen("t1") {
 		t.Fatal("tool should be visible immediately when no text is streaming")
 	}
 }
@@ -60,42 +52,117 @@ func TestToolGateOpenWhenNoStream(t *testing.T) {
 // First registration wins: a later EvToolCall must not move an
 // existing gate (e.g. push it forward as more text arrives).
 func TestToolGateFirstRegistrationWins(t *testing.T) {
-	i := newGateTestInteractive()
-	i.streamOn = true
-	i.streaming.WriteString("01234") // 5
-	i.streamPending = []rune("01234")
+	s := newStreamState()
+	s.beginTurn()
+	s.painted.WriteString("01234") // 5
+	s.pending = []rune("01234")
 
-	i.gateToolLocked("t1") // gate 10
-	first := i.toolGate["t1"]
+	s.gateTool("t1") // gate 10
+	first := s.gates["t1"]
 
 	// More text queues up, then the same tool is re-registered.
-	i.streamPending = append(i.streamPending, []rune("567890")...)
-	i.gateToolLocked("t1")
+	s.pending = append(s.pending, []rune("567890")...)
+	s.gateTool("t1")
 
-	if i.toolGate["t1"] != first {
-		t.Fatalf("gate moved from %d to %d; first registration must win", first, i.toolGate["t1"])
+	if s.gates["t1"] != first {
+		t.Fatalf("gate moved from %d to %d; first registration must win", first, s.gates["t1"])
 	}
 }
 
-// Once streaming finalizes, the buffer resets to length 0; gates that
-// were already satisfied must not re-hide their tools.
+// Once streaming finalizes, the painted buffer resets to length 0;
+// gates that were already satisfied must not re-hide their tools.
 func TestOpenAllToolGatesSurvivesStreamReset(t *testing.T) {
-	i := newGateTestInteractive()
-	i.streamOn = true
-	i.streaming.WriteString("0123456789")
-	i.gateToolLocked("t1") // gate 10, satisfied
+	s := newStreamState()
+	s.beginTurn()
+	s.painted.WriteString("0123456789")
+	s.gateTool("t1") // gate 10, satisfied
 
-	if !i.toolGateOpenLocked("t1") {
+	if !s.gateOpen("t1") {
 		t.Fatal("precondition: tool should be open before reset")
 	}
 
-	// Finalize the stream (mirrors resetStreamingStateLocked / pacer
-	// flush): buffer resets to 0 but gates are opened first.
-	i.openAllToolGatesLocked()
-	i.streaming.Reset()
-	i.streamOn = false
+	// Finalize the stream: reset() opens gates before clearing the
+	// painted buffer.
+	s.reset()
 
-	if !i.toolGateOpenLocked("t1") {
+	if !s.gateOpen("t1") {
 		t.Fatal("tool re-hidden after stream reset; gate should have been opened")
+	}
+}
+
+// The full happy-path lifecycle: deltas arrive, the message
+// finalizes mid-drain (flushing latch), and the pacer finishes the
+// reveal.
+func TestStreamStateFlushLifecycle(t *testing.T) {
+	s := newStreamState()
+	s.beginAssistant()
+	s.appendDelta("hello world")
+
+	if !s.active() || s.flushing() {
+		t.Fatalf("after deltas: active=%v flushing=%v, want live", s.active(), s.flushing())
+	}
+
+	// Final message lands while 11 runes are still queued: deferred.
+	if !s.finishMessage() {
+		t.Fatal("finishMessage should defer while runes are pending")
+	}
+	if !s.flushing() || !s.active() {
+		t.Fatal("state should be flushing (and still active) after deferred finish")
+	}
+
+	// Pacer drains in batches of 6: 6, then 5.
+	if painted, finished := s.paceTick(6); !painted || finished {
+		t.Fatalf("tick1: painted=%v finished=%v", painted, finished)
+	}
+	if got := s.visible(); got != "hello " {
+		t.Fatalf("visible = %q after first tick", got)
+	}
+	if painted, finished := s.paceTick(6); !painted || finished {
+		t.Fatalf("tick2: painted=%v finished=%v", painted, finished)
+	}
+	// Buffer empty + flushing: the next tick completes the reveal.
+	if painted, finished := s.paceTick(6); painted || !finished {
+		t.Fatalf("tick3: painted=%v finished=%v, want finish", painted, finished)
+	}
+	if s.active() || s.visible() != "" {
+		t.Fatal("stream should be idle and empty after the flush completes")
+	}
+	// Idle ticks are no-ops.
+	if painted, finished := s.paceTick(6); painted || finished {
+		t.Fatal("idle tick should report nothing")
+	}
+}
+
+// finishMessage with nothing queued (full-replay sessions, abort
+// paths) resets synchronously instead of deferring.
+func TestStreamStateFinishWithoutBacklog(t *testing.T) {
+	s := newStreamState()
+	s.beginAssistant()
+	s.appendDelta("hi")
+	s.paceTick(10) // drain fully
+
+	if s.finishMessage() {
+		t.Fatal("finishMessage should not defer with an empty backlog")
+	}
+	if s.active() {
+		t.Fatal("stream should be idle after synchronous finish")
+	}
+}
+
+// promptReturned must leave a draining stream alone (the pacer owns
+// the shutdown) but retire an already-drained one.
+func TestStreamStatePromptReturned(t *testing.T) {
+	s := newStreamState()
+	s.beginAssistant()
+	s.appendDelta("queued")
+	s.promptReturned()
+	if !s.active() {
+		t.Fatal("promptReturned must not kill a stream with queued runes")
+	}
+
+	s.paceTick(100)
+	s.promptReturned()
+	if s.active() {
+		t.Fatal("promptReturned should retire a fully-drained stream")
 	}
 }

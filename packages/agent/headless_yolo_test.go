@@ -17,11 +17,12 @@ import (
 // behavior break — headless --no-yolo refuses tools instead of running
 // them unconfirmed.
 func TestHeadlessConfirmGateRefusesWhenNoYolo(t *testing.T) {
-	gate := headlessConfirmGate(Args{NoYolo: true}, "print")
+	withTempHome(t) // isolate from any real config / installed-extension rules
+	gate, _ := headlessConfirmGate(Args{NoYolo: true, CWD: t.TempDir()}, "print")
 	if gate == nil {
 		t.Fatal("headlessConfirmGate returned nil with NoYolo set; want a refusing gate")
 	}
-	ok, reason, _ := gate.Check("bash", "ls")
+	ok, reason, _ := gate.Check("bash", nil, "ls")
 	if ok {
 		t.Fatal("gate allowed a tool call under --no-yolo; want refusal")
 	}
@@ -33,7 +34,8 @@ func TestHeadlessConfirmGateRefusesWhenNoYolo(t *testing.T) {
 // TestHeadlessConfirmGateNilWhenYolo verifies that without --no-yolo
 // there is no gate (yolo mode runs tools unconfirmed, as before).
 func TestHeadlessConfirmGateNilWhenYolo(t *testing.T) {
-	if g := headlessConfirmGate(Args{NoYolo: false}, "json"); g != nil {
+	withTempHome(t) // a real installed extension's permission rules would otherwise force a gate
+	if g, _ := headlessConfirmGate(Args{NoYolo: false, CWD: t.TempDir()}, "json"); g != nil {
 		t.Fatalf("headlessConfirmGate returned non-nil with yolo on: %v", g)
 	}
 }
@@ -45,11 +47,12 @@ func TestHeadlessConfirmGateNilWhenYolo(t *testing.T) {
 // call with a model-readable reason, before the extension intercept
 // ever sees it.
 func TestWireNonInteractiveGateRefusesToolCall(t *testing.T) {
+	withTempHome(t)
 	ag := core.NewAgent(nil, "test", "", core.Registry{})
 	extMgr := extensions.New(t.TempDir(), t.TempDir(), "test", "openai", "gpt-5", nonInteractiveExtHooks{})
-	gate := headlessConfirmGate(Args{NoYolo: true}, "print")
+	gate, _ := headlessConfirmGate(Args{NoYolo: true, CWD: t.TempDir()}, "print")
 
-	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, gate)
+	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, gate, nil)
 
 	if ag.BeforeToolExecute == nil {
 		t.Fatal("BeforeToolExecute was not installed")
@@ -74,7 +77,7 @@ func TestWireNonInteractiveNoGateAllowsToolCall(t *testing.T) {
 	ag := core.NewAgent(nil, "test", "", core.Registry{})
 	extMgr := extensions.New(t.TempDir(), t.TempDir(), "test", "openai", "gpt-5", nonInteractiveExtHooks{})
 
-	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, nil)
+	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, nil, nil)
 
 	allowed, reason, _ := ag.BeforeToolExecute(provider.ToolCallBlock{
 		ID:        "T1",
