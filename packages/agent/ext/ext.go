@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sync"
 
 	"terva.sh/terva/packages/agent/extproto"
@@ -61,7 +62,7 @@ type EventHandler func(ev Event)
 // Event is a lifecycle notification from terva. The fields populated
 // depend on Name (the host's event_name string):
 //
-//	session_start    : (no extra fields)
+//	session_start    : SessionID, SessionPath, SessionTitle (protocol 2+)
 //	turn_start       : Step
 //	turn_end         : Stop, optional Error
 //	tool_call        : ToolID, ToolName, ToolArgs
@@ -78,6 +79,23 @@ type Event struct {
 	ToolArgs json.RawMessage
 
 	Text string
+
+	// SessionID / SessionPath / SessionTitle identify the active
+	// session on a session_start event (host protocol 2+). An empty
+	// SessionID means no active session (e.g. --no-session, or the
+	// session was closed). Use OnSession for the common re-keying case.
+	SessionID    string
+	SessionPath  string
+	SessionTitle string
+}
+
+// Session identifies the active terva session. It is delivered to an
+// OnSession handler whenever the active session changes (open, resume,
+// fork, /new, or close). A zero ID means no active session.
+type Session struct {
+	ID    string
+	Path  string
+	Title string
 }
 
 // InterceptHandler decides whether a tool call may proceed. Return
@@ -249,6 +267,7 @@ type Extension struct {
 	toolDefs      []toolDef // ordered so register frames arrive in registration order
 	eventHandlers map[string]EventHandler
 	eventNames    []string // declared subscription order
+	onSession     func(Session)
 
 	interceptTool      InterceptHandler
 	interceptToolRich  ToolCallHandler
@@ -260,6 +279,10 @@ type Extension struct {
 
 	// Caps reported in the hello frame.
 	caps []string
+
+	// minProtocol is the lowest host protocol version this extension
+	// can run against, reported in the hello frame. 0 = no minimum.
+	minProtocol int
 
 	// hostInfo is filled in once HelloAck arrives.
 	host HostInfo
@@ -277,6 +300,12 @@ type toolDef struct {
 
 // HostInfo is what the host (terva) tells us in HelloAck. Useful for
 // extensions that want to behave differently per provider.
+//
+// SessionID / SessionPath / SessionTitle are NOT part of the handshake
+// (the session opens after extensions spawn). They start empty and are
+// kept current as session_start events arrive — updated before the
+// matching OnSession handler runs, so reading Host().SessionID inside a
+// tool or panel handler always reflects the active session.
 type HostInfo struct {
 	ProtocolVersion int
 	ZotVersion      string // rename:keep — public SDK API
@@ -285,6 +314,10 @@ type HostInfo struct {
 	CWD             string
 	ExtensionDir    string
 	DataDir         string
+
+	SessionID    string
+	SessionPath  string
+	SessionTitle string
 }
 
 // New constructs an Extension with the given identifier. name should
@@ -308,6 +341,15 @@ func New(name, version string) *Extension {
 // Host returns the HostInfo received during the hello handshake.
 // Returns the zero value if Run hasn't started yet.
 func (e *Extension) Host() HostInfo { return e.host }
+
+// RequireProtocol declares the minimum host protocol version this
+// extension needs. A host that speaks a lower version refuses to load
+// the extension (with a clear message) instead of running it against
+// a wire it only half-understands. Call before Run. Use this when the
+// extension depends on a wire feature added in a specific protocol
+// version — e.g. tool_result fanout (protocol 1+) — so it fails
+// cleanly on an older host rather than silently missing events.
+func (e *Extension) RequireProtocol(version int) { e.minProtocol = version }
 
 // Logf writes a line to the extension's stderr, which terva captures to
 // $TERVA_HOME/logs/ext-<name>.log. Use this for debug output: anything
@@ -384,11 +426,33 @@ func (e *Extension) Tool(name, description string, schema json.RawMessage, fn To
 // assistant_message.
 func (e *Extension) On(name string, fn EventHandler) {
 	e.mu.Lock()
-	if _, exists := e.eventHandlers[name]; !exists {
-		e.eventNames = append(e.eventNames, name)
-	}
+	e.ensureSubscribed(name)
 	e.eventHandlers[name] = fn
 	e.mu.Unlock()
+}
+
+// OnSession registers a callback for changes to the active session. It
+// fires once after the session opens and again on every switch
+// (/sessions resume, fork, /new) and on close (with a zero-value
+// Session, i.e. empty ID). It is the convenient path for re-keying
+// per-session state. Sugar over On("session_start", …): Host() is
+// already updated when the callback runs, so an extension can also read
+// Host().SessionID directly from a tool or panel handler. Requires host
+// protocol 2+ (declare RequireProtocol(2)); call before Run.
+func (e *Extension) OnSession(fn func(Session)) {
+	e.mu.Lock()
+	e.onSession = fn
+	e.ensureSubscribed("session_start")
+	e.mu.Unlock()
+}
+
+// ensureSubscribed adds name to the event subscription list if it is
+// not already present, so On and OnSession can both request
+// session_start without subscribing twice. Caller holds e.mu.
+func (e *Extension) ensureSubscribed(name string) {
+	if !slices.Contains(e.eventNames, name) {
+		e.eventNames = append(e.eventNames, name)
+	}
 }
 
 // InterceptToolCall registers a guard that runs immediately before
@@ -459,6 +523,7 @@ func (e *Extension) Run() error {
 		Name:         e.name,
 		Version:      e.version,
 		Capabilities: e.caps,
+		MinProtocol:  e.minProtocol,
 	}); err != nil {
 		return err
 	}
@@ -587,8 +652,30 @@ func (e *Extension) Run() error {
 				continue
 			}
 			e.mu.Lock()
+			// Keep Host() current before any handler runs, so a tool or
+			// panel handler reading Host().SessionID sees the active
+			// session and OnSession observes the same value.
+			if ef.Event == "session_start" {
+				e.host.SessionID = ef.SessionID
+				e.host.SessionPath = ef.SessionPath
+				e.host.SessionTitle = ef.SessionTitle
+			}
 			handler := e.eventHandlers[ef.Event]
+			var onSession func(Session)
+			if ef.Event == "session_start" {
+				onSession = e.onSession
+			}
 			e.mu.Unlock()
+			if onSession != nil {
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							e.Logf("OnSession handler panicked: %v", r)
+						}
+					}()
+					onSession(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle})
+				}()
+			}
 			if handler != nil {
 				func() {
 					defer func() {
@@ -600,6 +687,7 @@ func (e *Extension) Run() error {
 						Name: ef.Event, Step: ef.Step, Stop: ef.Stop,
 						Error: ef.Error, ToolID: ef.ToolID, ToolName: ef.ToolName,
 						ToolArgs: ef.ToolArgs, Text: ef.Text,
+						SessionID: ef.SessionID, SessionPath: ef.SessionPath, SessionTitle: ef.SessionTitle,
 					})
 				}()
 			}

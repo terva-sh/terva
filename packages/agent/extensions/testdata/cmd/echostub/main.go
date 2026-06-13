@@ -11,12 +11,14 @@
 // buffering surprises, so a missing reply here means a genuine host-side
 // frame corruption — exactly what the test is meant to catch.
 //
-// Protocol: emit hello + register_tool(bigtool) + ready, then for each
-// tool_call reply with a tool_result whose text is the byte length of
-// args.payload. A line that fails to parse is an unrecoverable
-// (interleaved) frame whose id is unknown, so it cannot be answered; we
-// note it on stderr (captured to the extension log) so a real corruption
-// is diagnosable instead of a bare timeout.
+// Protocol: emit hello + register_tool(bigtool, envtool) + ready, then
+// for each tool_call reply with a tool_result: bigtool answers the byte
+// length of args.payload; envtool answers os.Getenv(args.key) (used by
+// TestSpawnSanitizesChildEnv to observe the env the host gave us). A
+// line that fails to parse is an unrecoverable (interleaved) frame
+// whose id is unknown, so it cannot be answered; we note it on stderr
+// (captured to the extension log) so a real corruption is diagnosable
+// instead of a bare timeout.
 package main
 
 import (
@@ -37,6 +39,7 @@ func emit(v any) {
 func main() {
 	emit(map[string]any{"type": "hello", "name": "echo", "version": "0.0.1", "capabilities": []string{"tools"}})
 	emit(map[string]any{"type": "register_tool", "name": "bigtool", "description": "echo length", "schema": map[string]any{}})
+	emit(map[string]any{"type": "register_tool", "name": "envtool", "description": "echo env var", "schema": map[string]any{}})
 	emit(map[string]any{"type": "ready"})
 
 	sc := bufio.NewScanner(os.Stdin)
@@ -58,12 +61,17 @@ func main() {
 		case "tool_call":
 			var a struct {
 				Payload string `json:"payload"`
+				Key     string `json:"key"`
 			}
 			_ = json.Unmarshal(f.Args, &a)
+			text := strconv.Itoa(len(a.Payload))
+			if a.Key != "" {
+				text = os.Getenv(a.Key)
+			}
 			emit(map[string]any{
 				"type":     "tool_result",
 				"id":       f.ID,
-				"content":  []map[string]any{{"type": "text", "text": strconv.Itoa(len(a.Payload))}},
+				"content":  []map[string]any{{"type": "text", "text": text}},
 				"is_error": false,
 			})
 		}

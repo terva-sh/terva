@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -291,6 +292,97 @@ func TestBlockingToolDenied(t *testing.T) {
 	}
 	if len(tr.Content) == 0 || !strings.Contains(tr.Content[0].Text, "denied") {
 		t.Errorf("expected 'denied' in content, got %+v", tr.Content)
+	}
+
+	h.hostW.Close()
+}
+
+// TestOnSessionReceivesSessionIdentity covers the protocol-2 session
+// surface: OnSession subscribes to session_start, fires with the
+// session id/path/title, keeps Host() current before the callback runs,
+// re-fires on a switch, and reports an empty id when the session closes.
+func TestOnSessionReceivesSessionIdentity(t *testing.T) {
+	h := newHarness("sess-ext")
+
+	got := make(chan Session, 4)
+	var hostAtCallback HostInfo
+	h.ext.OnSession(func(s Session) {
+		// Host() must already reflect the new session when OnSession runs.
+		hostAtCallback = h.ext.Host()
+		got <- s
+	})
+
+	go h.ext.Run()
+
+	// Drive the handshake by hand so we can assert the subscribe frame
+	// listed session_start (OnSession must subscribe, not just register).
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		TervaVersion: "0.0.0-test", Provider: "anthropic", Model: "claude-test",
+	})
+	var sawSubscribe bool
+	for {
+		f := h.next(t)
+		if f.hdr.Type == "subscribe" {
+			var sub extproto.SubscribeFromExt
+			if err := json.Unmarshal(f.raw, &sub); err == nil && slices.Contains(sub.Events, "session_start") {
+				sawSubscribe = true
+			}
+		}
+		if f.hdr.Type == "ready" {
+			break
+		}
+	}
+	if !sawSubscribe {
+		t.Fatal("OnSession did not subscribe to session_start")
+	}
+
+	waitSession := func() Session {
+		t.Helper()
+		select {
+		case s := <-got:
+			return s
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for OnSession callback")
+			return Session{}
+		}
+	}
+
+	// First session opens.
+	h.sendToExt(t, extproto.EventFromHost{
+		Type: "event", Event: "session_start",
+		SessionID: "sess-1", SessionPath: "/a.tervasession", SessionTitle: "First",
+	})
+	s := waitSession()
+	if s.ID != "sess-1" || s.Path != "/a.tervasession" || s.Title != "First" {
+		t.Errorf("first session: got %+v", s)
+	}
+	if hostAtCallback.SessionID != "sess-1" || hostAtCallback.SessionTitle != "First" {
+		t.Errorf("Host() not current inside callback: %+v", hostAtCallback)
+	}
+	if h.ext.Host().SessionID != "sess-1" {
+		t.Errorf("Host().SessionID after event: %q", h.ext.Host().SessionID)
+	}
+
+	// Switch to a different session (resume / fork / new).
+	h.sendToExt(t, extproto.EventFromHost{
+		Type: "event", Event: "session_start",
+		SessionID: "sess-2", SessionPath: "/b.tervasession", SessionTitle: "Second",
+	})
+	if s := waitSession(); s.ID != "sess-2" || s.Title != "Second" {
+		t.Errorf("switched session: got %+v", s)
+	}
+
+	// Session closes / --no-session: empty id.
+	h.sendToExt(t, extproto.EventFromHost{Type: "event", Event: "session_start"})
+	if s := waitSession(); s.ID != "" {
+		t.Errorf("closed session should have empty id, got %+v", s)
+	}
+	if h.ext.Host().SessionID != "" {
+		t.Errorf("Host().SessionID after close: %q", h.ext.Host().SessionID)
 	}
 
 	h.hostW.Close()

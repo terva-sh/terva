@@ -85,6 +85,15 @@ type Config struct {
 	// NoTools disables every tool. Useful for chat-only embeddings.
 	NoTools bool
 
+	// ExtraTools are embedder-supplied tools merged into the agent's
+	// registry on top of the built-ins, after the Tools/NoTools
+	// selection is applied. The model sees them in the system prompt
+	// and may call them like any other tool. An ExtraTool OVERRIDES a
+	// built-in of the same name — you compiled it in and injected it,
+	// so you own the conflict. A later tool wins a name collision
+	// within the slice.
+	ExtraTools []core.Tool
+
 	// Lock confines tools to CWD. Same effect as the /jail command.
 	Lock bool
 }
@@ -134,6 +143,7 @@ func New(cfg Config) (*Runtime, error) {
 	if cfg.Lock && r.Sandbox != nil {
 		r.Sandbox.Lock()
 	}
+	r.AddExtraTools(cfg.ExtraTools)
 	ag := r.NewAgent()
 	return &Runtime{
 		agent:    ag,

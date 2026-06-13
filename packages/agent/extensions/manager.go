@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/envcompat"
 	"terva.sh/terva/packages/tui"
 )
@@ -70,14 +71,43 @@ type Extension struct {
 	commands []extproto.RegisterCommandFromExt
 	tools    []extproto.RegisterToolFromExt
 
-	// stdinMu serialises every write to this extension's stdin pipe.
-	// Many goroutines (per-subscriber EmitEvent, InvokeTool, Invoke,
-	// askIntercept, panel frames, shutdown) target the same pipe; a
-	// frame larger than PIPE_BUF (4KiB — e.g. an intercepted `write`
-	// tool call carrying a whole file) can otherwise interleave with a
-	// concurrent write and corrupt the extension's stdin stream. All
-	// writes go through writeFrame, which holds this lock.
+	// stopping is set when the host initiates a clean teardown
+	// (Stop / reload). The read loop checks it on exit to tell a
+	// deliberate shutdown apart from an unexpected subprocess crash,
+	// so only real crashes surface a notice to the user.
+	stopping atomic.Bool
+
+	// stdinMu guards the stdin pipe against a write racing its Close in
+	// stopExtensions. The single writeLoop goroutine is now the only
+	// thing that writes to the pipe (see outbox), so this lock no longer
+	// guards against interleaving between writers — only against
+	// writing into a pipe Close just yanked out.
 	stdinMu sync.Mutex
+
+	// outbox is the per-extension ordered outbound queue. Every
+	// host->extension frame (lifecycle events, tool/command
+	// invocations, intercepts, panel frames, hello_ack, shutdown) is
+	// enqueued here and drained by a single writeLoop goroutine, so the
+	// order frames are enqueued is the order they reach the extension.
+	// That FIFO property is the contract a session-aware extension
+	// relies on: session_start is enqueued before the turn that can
+	// invoke its tools, so it always arrives before that session's
+	// first tool_call (extension protocol v2). Buffered so EmitEvent
+	// never stalls the agent loop on a slow extension; a wedged
+	// extension overflows the buffer and its *events* are dropped with
+	// a log (enqueueFrame non-blocking) rather than freezing terva.
+	// nil for an extension that never spawned (e.g. theme-only).
+	outbox chan []byte
+	// quit is closed by stopExtensions to tell writeLoop to flush
+	// whatever is already queued (the shutdown frame included) and
+	// exit. enqueueFrame also selects on it so producers don't block
+	// forever once teardown starts.
+	quit     chan struct{}
+	quitOnce sync.Once
+	// writerDone is closed when writeLoop returns, so stopExtensions can
+	// wait (bounded) for the queued frames to flush before closing the
+	// pipe.
+	writerDone chan struct{}
 
 	// readyCh is closed when the extension sends a ReadyFromExt
 	// frame, or when the host gives up waiting (registrationGrace).
@@ -106,23 +136,107 @@ type Extension struct {
 	interceptSubs map[string]struct{}
 }
 
-// writeFrame marshals v and writes it to the extension's stdin pipe
-// under stdinMu, so the bytes of one frame never interleave with
-// another goroutine's. Every host->extension write goes through here.
-// Returns the encode error or the write error; a nil stdin (extension
-// that never spawned, e.g. theme-only) is treated as a no-op error.
+// outboxCapacity is how many frames may queue for one extension before
+// EmitEvent starts dropping events. Generous: real extensions drain
+// their stdin continuously, so the buffer only fills if one is wedged,
+// in which case dropping beats stalling the agent loop.
+const outboxCapacity = 1024
+
+// errOutboxFull is returned by the non-blocking enqueue path when the
+// buffer is full (a wedged extension). errExtStopped is returned once
+// teardown has been signalled.
+var (
+	errOutboxFull = errors.New("extension outbox full")
+	errExtStopped = errors.New("extension stopped")
+)
+
+// writeFrame encodes v and enqueues it on the ordered outbox, blocking
+// for room if necessary (the request/reply, panel, hello_ack and
+// shutdown paths all want their frame delivered, and their callers are
+// already prepared to wait). A nil outbox (extension that never
+// spawned, e.g. theme-only) is treated as a no-op error.
 func (e *Extension) writeFrame(v any) error {
 	frame, err := extproto.Encode(v)
 	if err != nil {
 		return err
 	}
+	if e.outbox == nil {
+		return errors.New("extension stdin not available")
+	}
+	return e.enqueueFrame(frame, true)
+}
+
+// enqueueFrame appends a pre-encoded frame to the ordered outbox. When
+// block is false (lifecycle events via EmitEvent), a full outbox drops
+// the frame (errOutboxFull) so the agent loop never stalls on a wedged
+// extension. When block is true, it waits for room, bounded only by the
+// extension's liveness (quit). Either way it returns errExtStopped once
+// teardown has begun.
+func (e *Extension) enqueueFrame(frame []byte, block bool) error {
+	// Reject promptly once stop has been signalled, so a frame can't
+	// sneak past a closing extension.
+	select {
+	case <-e.quit:
+		return errExtStopped
+	default:
+	}
+	if block {
+		select {
+		case e.outbox <- frame:
+			return nil
+		case <-e.quit:
+			return errExtStopped
+		}
+	}
+	select {
+	case e.outbox <- frame:
+		return nil
+	case <-e.quit:
+		return errExtStopped
+	default:
+		return errOutboxFull
+	}
+}
+
+// writeLoop is the single goroutine that drains the outbox to the stdin
+// pipe, preserving enqueue order on the wire. It exits when a pipe
+// write fails (the extension is gone) or when quit is closed, in which
+// case it first flushes whatever is already queued so a shutdown frame
+// enqueued just before teardown still reaches the extension.
+func (e *Extension) writeLoop() {
+	defer close(e.writerDone)
+	for {
+		select {
+		case frame := <-e.outbox:
+			if !e.writeOne(frame) {
+				return
+			}
+		case <-e.quit:
+			for {
+				select {
+				case frame := <-e.outbox:
+					if !e.writeOne(frame) {
+						return
+					}
+				default:
+					return
+				}
+			}
+		}
+	}
+}
+
+// writeOne writes a single frame under stdinMu (which guards against a
+// concurrent stdin.Close in stopExtensions). Returns false if the pipe
+// is gone or the write failed, signalling writeLoop to stop.
+func (e *Extension) writeOne(frame []byte) bool {
 	e.stdinMu.Lock()
 	defer e.stdinMu.Unlock()
 	if e.stdin == nil {
-		return errors.New("extension stdin not available")
+		return false
 	}
-	_, err = e.stdin.Write(frame)
-	return err
+	_, err := e.stdin.Write(frame)
+	return err == nil
 }
 
 // HostHooks is the small interface the manager calls back into the
@@ -571,6 +685,9 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 	}
 	cmd := exec.CommandContext(ctx, execPath, ext.Manifest.Args...)
 	cmd.Dir = ext.Dir
+	// Loader/interpreter injection vars must not cross the trust
+	// boundary into extension processes (see procenv).
+	cmd.Env = procenv.Inherited()
 	cmd.Stderr = logFile
 
 	stdin, err := cmd.StdinPipe()
@@ -626,8 +743,31 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 	if hello.Type != "hello" || hello.Name == "" {
 		return fmt.Errorf("first frame must be hello (got %q)", hello.Type)
 	}
+	// Min-protocol negotiation: an extension that needs wire features
+	// this host doesn't speak declares the floor in its hello. Refuse
+	// it cleanly here rather than letting it run against a wire it
+	// half-understands. This is what lets a terva-only extension fail
+	// with a clear message on an upstream (pre-fork) or older terva
+	// of misbehaving silently.
+	if hello.MinProtocol > extproto.ProtocolVersion {
+		// scanned was already consumed by the success select above, so
+		// don't receive from it again; just kill the subprocess.
+		_ = cmd.Process.Kill()
+		fmt.Fprintf(logFile, "[terva] extension %s requires protocol >= %d; host speaks %d; skipped\n",
+			ext.Manifest.Name, hello.MinProtocol, extproto.ProtocolVersion)
+		return fmt.Errorf("extension %s requires protocol version %d but this host speaks %d; upgrade terva",
+			ext.Manifest.Name, hello.MinProtocol, extproto.ProtocolVersion)
+	}
 	// Trust the manifest's name; ignore mismatch from the hello.
 	ext.helloAck = true
+
+	// Start the ordered writer before the first host->extension write
+	// (hello_ack). From here on every frame to this extension goes
+	// through the outbox so delivery order matches enqueue order.
+	ext.outbox = make(chan []byte, outboxCapacity)
+	ext.quit = make(chan struct{})
+	ext.writerDone = make(chan struct{})
+	go ext.writeLoop()
 
 	hostVersion := m.tervaVersion
 	if err := ext.writeFrame(extproto.HelloAckFromHost{
@@ -641,6 +781,10 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 		ExtensionDir:    ext.Dir,
 		DataDir:         ext.Dir,
 	}); err != nil {
+		// Tear down the writer goroutine we just started so it doesn't
+		// leak on this failed spawn.
+		ext.quitOnce.Do(func() { close(ext.quit) })
+		_ = cmd.Process.Kill()
 		return fmt.Errorf("send hello_ack: %w", err)
 	}
 
@@ -719,6 +863,16 @@ func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
 		m.mu.Unlock()
 		ext.readyOnce.Do(func() { close(ext.readyCh) })
 		fmt.Fprintf(ext.logFile, "[terva] extension %s read loop exited at %s\n", ext.Manifest.Name, time.Now().Format(time.RFC3339))
+		// Crash surfacing: if the read loop ended without the host
+		// asking the extension to stop, the subprocess died on its own
+		// (crash, panic, killed externally). Its tools and commands
+		// were just dropped from the indexes above, so calls would now
+		// fail as "unknown" with no explanation. Tell the user once,
+		// and point them at the log (stderr is already tee'd there).
+		if !ext.stopping.Load() && m.hooks != nil {
+			m.hooks.Notify(ext.Manifest.Name, "error",
+				fmt.Sprintf("extension %q exited unexpectedly; its tools and commands are unavailable (see %s)", ext.Manifest.Name, ext.LogPath))
+		}
 	}()
 
 	for scanner.Scan() {
@@ -909,6 +1063,10 @@ type ToolInfo struct {
 	Name        string
 	Description string
 	Schema      json.RawMessage
+	// ReadOnly carries the extension's no-side-effects declaration
+	// (register_tool read_only) into the host's permission
+	// classification.
+	ReadOnly bool
 }
 
 // Tools returns a snapshot of every (extension, tool) pair currently
@@ -925,6 +1083,7 @@ func (m *Manager) Tools() []ToolInfo {
 				Name:        t.Name,
 				Description: t.Description,
 				Schema:      t.Schema,
+				ReadOnly:    t.ReadOnly,
 			})
 		}
 	}
@@ -1080,16 +1239,41 @@ func (m *Manager) Stop(gracePeriod time.Duration) {
 	stopExtensions(exts, gracePeriod)
 }
 
+// writerFlushGrace bounds how long stopExtensions waits for an
+// extension's writer goroutine to flush its queued frames (including
+// the shutdown frame) before the pipe is closed. A healthy extension
+// drains instantly; only a wedged one hits the timeout.
+const writerFlushGrace = 200 * time.Millisecond
+
 func stopExtensions(exts []*Extension, gracePeriod time.Duration) {
 	for _, ext := range exts {
-		if ext.stdin == nil {
+		// Mark this as a deliberate teardown so the read loop's exit
+		// isn't reported to the user as a crash.
+		ext.stopping.Store(true)
+		if ext.outbox == nil {
 			continue
 		}
-		_ = ext.writeFrame(extproto.ShutdownFromHost{Type: "shutdown"})
-		// Close under stdinMu so we don't yank the pipe out from under a
-		// concurrent writeFrame on another goroutine.
+		// Enqueue the shutdown frame (best-effort, non-blocking so a
+		// wedged writer can't hang teardown), then signal the writer to
+		// flush everything queued (shutdown included) and exit. Waiting
+		// on writerDone before closing the pipe is what lets the
+		// shutdown frame actually reach the extension instead of being
+		// cut off by the Close; a full outbox just falls back to the EOF
+		// the Close delivers.
+		if frame, err := extproto.Encode(extproto.ShutdownFromHost{Type: "shutdown"}); err == nil {
+			_ = ext.enqueueFrame(frame, false)
+		}
+		ext.quitOnce.Do(func() { close(ext.quit) })
+		select {
+		case <-ext.writerDone:
+		case <-time.After(writerFlushGrace):
+		}
+		// Close under stdinMu so we don't yank the pipe out from under
+		// the writer's in-flight Write.
 		ext.stdinMu.Lock()
-		_ = ext.stdin.Close()
+		if ext.stdin != nil {
+			_ = ext.stdin.Close()
+		}
 		ext.stdinMu.Unlock()
 	}
 

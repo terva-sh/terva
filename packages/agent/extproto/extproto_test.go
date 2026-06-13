@@ -50,6 +50,11 @@ func TestGoldenFrames(t *testing.T) {
 			`{"type":"register_tool","name":"lookup","schema":{"type":"object"}}`,
 		},
 		{
+			"register_tool read-only",
+			RegisterToolFromExt{Type: "register_tool", Name: "peek", Schema: json.RawMessage(`{"type":"object"}`), ReadOnly: true},
+			`{"type":"register_tool","name":"peek","schema":{"type":"object"},"read_only":true}`,
+		},
+		{
 			"ready",
 			ReadyFromExt{Type: "ready"},
 			`{"type":"ready"}`,
@@ -83,6 +88,12 @@ func TestGoldenFrames(t *testing.T) {
 			"event",
 			EventFromHost{Type: "event", Event: "tool_call", ToolID: "t1", ToolName: "bash", ToolArgs: json.RawMessage(`{}`)},
 			`{"type":"event","event":"tool_call","tool_id":"t1","tool_name":"bash","tool_args":{}}`,
+		},
+		{
+			// protocol 2: session identity rides on session_start.
+			"event session_start",
+			EventFromHost{Type: "event", Event: "session_start", SessionID: "s-1", SessionPath: "/p.tervasession", SessionTitle: "My Session"},
+			`{"type":"event","event":"session_start","session_id":"s-1","session_path":"/p.tervasession","session_title":"My Session"}`,
 		},
 		{
 			"event_intercept_response",

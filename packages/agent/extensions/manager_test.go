@@ -408,6 +408,50 @@ func TestConcurrentLargeFramesNoInterleave(t *testing.T) {
 	}
 }
 
+// TestSpawnSanitizesChildEnv proves the procenv trust boundary at the
+// process level: an LD_PRELOAD set in the host's environment must not
+// reach a spawned extension, while benign vars pass through. Asserted
+// through the live subprocess (envtool echoes os.Getenv) rather than
+// by unit-testing the filter, so a regression in the spawn wiring —
+// not just in procenv itself — fails the test.
+func TestSpawnSanitizesChildEnv(t *testing.T) {
+	t.Setenv("LD_PRELOAD", "/tmp/evil.so")
+	t.Setenv("TERVA_ENVTEST_CANARY", "alive")
+
+	stub := buildEchoStub(t)
+	tmp := t.TempDir()
+	extDir := filepath.Join(tmp, "extensions", "echo")
+	if err := os.MkdirAll(extDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mfb, _ := json.Marshal(map[string]any{"name": "echo", "exec": stub})
+	if err := os.WriteFile(filepath.Join(extDir, "extension.json"), mfb, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := New(tmp, "", "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
+	if errs := mgr.Discover(context.Background()); len(errs) > 0 {
+		t.Fatalf("discover errors: %v", errs)
+	}
+	defer mgr.Stop(2 * time.Second)
+	mgr.WaitForReady(3 * time.Second)
+
+	ask := func(key string) string {
+		args, _ := json.Marshal(map[string]string{"key": key})
+		res, err := mgr.InvokeTool(context.Background(), "envtool", json.RawMessage(args), 30*time.Second)
+		if err != nil {
+			t.Fatalf("envtool(%s): %v", key, err)
+		}
+		return toolText(res)
+	}
+	if got := ask("LD_PRELOAD"); got != "" {
+		t.Errorf("child saw LD_PRELOAD=%q, want stripped", got)
+	}
+	if got := ask("TERVA_ENVTEST_CANARY"); got != "alive" {
+		t.Errorf("child saw canary %q, want %q (sanitizer over-stripped)", got, "alive")
+	}
+}
+
 // toolText concatenates the text blocks of a tool result.
 func toolText(r extproto.ToolResultFromExt) string {
 	var b strings.Builder

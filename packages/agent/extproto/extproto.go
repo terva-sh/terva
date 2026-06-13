@@ -19,7 +19,16 @@ package extproto
 
 import "encoding/json"
 
-const ProtocolVersion = 1
+// ProtocolVersion is the wire revision this host/SDK speaks.
+//
+//	1 — baseline: tool_result fanout, crash surfacing, min-protocol
+//	    negotiation.
+//	2 — session identity: session_id / session_path / session_title on
+//	    the session_start event, re-fired on every session switch, and
+//	    a host guarantee that session_start reaches a subscriber before
+//	    that session's first tool invocation (ordered delivery). An
+//	    extension that needs per-session state declares RequireProtocol(2).
+const ProtocolVersion = 2
 
 type Frame struct {
 	Type string `json:"type"`
@@ -31,6 +40,16 @@ type HelloFromExt struct {
 	Name         string   `json:"name"`
 	Version      string   `json:"version"`
 	Capabilities []string `json:"capabilities,omitempty"`
+	// MinProtocol is the lowest host ProtocolVersion this extension
+	// can run against. Optional and additive: zero (the default, and
+	// what every pre-negotiation extension sends) means "no minimum",
+	// so old extensions and old hosts interoperate unchanged. When
+	// set, a host whose ProtocolVersion is lower refuses to load the
+	// extension with a clear message instead of letting it misbehave
+	// silently against a wire it doesn't fully speak — the mechanism
+	// that lets a terva-only extension fail cleanly on an upstream
+	// or an older terva.
+	MinProtocol int `json:"min_protocol,omitempty"`
 }
 
 type RegisterCommandFromExt struct {
@@ -44,6 +63,12 @@ type RegisterToolFromExt struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Schema      json.RawMessage `json:"schema"`
+	// ReadOnly declares the tool has no side effects (the MCP
+	// readOnlyHint analog). Hosts may use it to admit the tool in
+	// read-only approval modes; it is additive and optional, so old
+	// hosts and extensions interoperate unchanged. An extension that
+	// lies here only cheats its own user's policy.
+	ReadOnly bool `json:"read_only,omitempty"`
 }
 
 type ReadyFromExt struct {
@@ -189,6 +214,23 @@ type EventFromHost struct {
 	ToolName string          `json:"tool_name,omitempty"`
 	ToolArgs json.RawMessage `json:"tool_args,omitempty"`
 	Text     string          `json:"text,omitempty"`
+	// IsError is set on a "tool_result" event when the tool returned
+	// an error result. The result's text rides in Text. Additive:
+	// pre-fanout hosts never emit tool_result events at all, so older
+	// subscribers simply never see this field.
+	IsError bool `json:"is_error,omitempty"`
+	// SessionID / SessionPath / SessionTitle identify the active
+	// session on a "session_start" event (ProtocolVersion 2+). The
+	// host fires session_start AFTER the session opens and re-fires it
+	// on every switch (/sessions resume, fork, /new). An empty
+	// SessionID means there is no active session (e.g. --no-session, or
+	// a session was just closed). SessionTitle is presentation-only.
+	// Additive/omitempty — pre-v2 subscribers ignore the fields, and a
+	// session_start that carries no session info (older emitters)
+	// simply leaves them empty.
+	SessionID    string `json:"session_id,omitempty"`
+	SessionPath  string `json:"session_path,omitempty"`
+	SessionTitle string `json:"session_title,omitempty"`
 }
 
 type EventInterceptFromHost struct {

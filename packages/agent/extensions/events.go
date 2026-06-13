@@ -10,9 +10,15 @@ import (
 )
 
 // EmitEvent fires a one-way lifecycle event to every extension that
-// subscribed to it via SubscribeFromExt.events. Non-blocking: each
-// extension's pipe write happens on a per-call goroutine so a slow
-// extension can't stall the agent loop.
+// subscribed to it via SubscribeFromExt.events. It enqueues the frame
+// on each subscriber's ordered outbox synchronously, on the calling
+// goroutine, so the order events are emitted is the order they reach
+// the extension. That FIFO property is what guarantees session_start
+// (emitted when the session opens, before any turn) reaches a
+// subscriber before that session's first tool_call (the cross-path
+// race a per-call goroutine used to lose). The enqueue is non-blocking:
+// a wedged extension overflows its buffer and the event is dropped with
+// a log, never stalling the agent loop.
 //
 // Event names are documented on extproto.EventFromHost. Unknown event
 // names are still routed (subscribers can use any string they want).
@@ -29,16 +35,23 @@ func (m *Manager) EmitEvent(ev extproto.EventFromHost) {
 		}
 	}
 	m.mu.RUnlock()
+	if len(subs) == 0 {
+		return
+	}
 
+	// Encode once; the frame bytes are read-only, so every subscriber's
+	// writeLoop can share them.
+	frame, err := extproto.Encode(ev)
+	if err != nil {
+		return
+	}
 	for _, ext := range subs {
-		go func(ext *Extension) {
-			defer func() {
-				// A panicking write to a closed pipe shouldn't kill
-				// the calling goroutine.
-				_ = recover()
-			}()
-			_ = ext.writeFrame(ev)
-		}(ext)
+		if ext.outbox == nil {
+			continue
+		}
+		if err := ext.enqueueFrame(frame, false); err == errOutboxFull {
+			fmt.Fprintf(ext.logFile, "[terva] dropped %q event: outbox full (extension not keeping up)\n", ev.Event)
+		}
 	}
 }
 

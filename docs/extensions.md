@@ -128,13 +128,40 @@ manifest tells terva how to launch it:
 | `language` | optional. informational only (`go`, `python`, `typescript`, ...). |
 | `description` | optional. shown in `terva ext list`. |
 | `enabled` | optional, defaults to `true`. set to `false` to disable without removing. |
+| `permissions` | optional **bundle contribution**: suggested permission rules (see below). |
+
+## Bundle contributions
+
+An installed extension directory is also a declarative bundle — it can
+contribute data alongside its executable:
+
+- **Skills**: a `skills/` directory beside `extension.json` joins
+  skill discovery (`skills/<name>/SKILL.md`, same format as
+  [skills.md](skills.md)). Bundle skills rank after the user's own
+  skill directories, so they can never shadow a deliberately-authored
+  skill, and a disabled extension contributes nothing.
+- **Suggested permission rules**: a `permissions` array in the
+  manifest (same shape as [permissions.md](permissions.md) rules).
+  Like project rules, the extension layer may only *restrict*: `deny`
+  and `ask` are honored, `allow` is dropped with a warning — installing
+  a bundle can tighten the posture but never grant tool access the
+  user didn't. Evaluated after project rules, before user rules.
+
+Hooks and MCP server declarations are deliberately **not**
+bundle-contributable: both mean running additional programs, and that
+stays an explicit user-config decision (see [hooks.md](hooks.md),
+[mcp.md](mcp.md)).
 
 ## Lifecycle
 
 1. **Discovery**: terva reads every `extension.json` in the search dirs.
 2. **Spawn**: enabled extensions are launched as subprocesses. stderr
    redirects to `$TERVA_HOME/logs/ext-<name>.log` (one file per
-   extension, append-mode).
+   extension, append-mode). The child environment is the host's minus
+   loader/interpreter injection vars (`LD_*`, `DYLD_*`, `PYTHONPATH`,
+   `NODE_OPTIONS`, `JAVA_TOOL_OPTIONS`, `BASH_ENV`, …) — an extension
+   that needs one of those must set it itself for its own children.
+   `PATH`, `HOME`, API keys, and everything else pass through.
 3. **Hello handshake**: the extension sends a `hello` frame; terva
    replies with `hello_ack` containing the protocol version, the
    active provider/model/cwd, and the extension's own data directory
@@ -192,6 +219,13 @@ describing the tool's args (the same shape Anthropic and OpenAI accept).
    "required":["city"]
  }}
 ```
+
+The optional `"read_only": true` field declares the tool side-effect
+free (the MCP `readOnlyHint` analog). Annotated tools are admitted in
+the `plan` approval mode and auto-allowed in `auto-edit` (see
+[permissions.md](permissions.md)); unannotated tools are treated as
+mutating. Lying here only cheats your own user's policy. Old hosts
+ignore the field; old extensions never send it — fully additive.
 
 Tool names live in the same namespace as built-in tools (`read`,
 `write`, `edit`, `bash`, `skill`). Conflicts are silently shadowed by
