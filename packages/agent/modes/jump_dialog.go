@@ -126,19 +126,7 @@ func (d *jumpDialog) Render(th tui.Theme, width int) []string {
 	// Cap the visible window so a 200-turn session doesn't push the
 	// editor off screen. Center around the cursor.
 	const maxRows = 12
-	start := 0
-	end := len(d.visible)
-	if end > maxRows {
-		start = d.cursor - maxRows/2
-		if start < 0 {
-			start = 0
-		}
-		end = start + maxRows
-		if end > len(d.visible) {
-			end = len(d.visible)
-			start = end - maxRows
-		}
-	}
+	start, end := cursorWindow(d.cursor, len(d.visible), maxRows)
 	if start > 0 {
 		lines = append(lines, th.FG256(th.Muted, fmt.Sprintf("  \u2191 %d more above", start)))
 	}

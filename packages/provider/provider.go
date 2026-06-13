@@ -241,30 +241,56 @@ type unwrapper interface {
 	Unwrap() Client
 }
 
-// ClientMirrorsToolImages reports whether c (looking through any wrapper
-// layers) needs tool-result images mirrored into a following user
-// message by the agent loop. Some wire formats can't carry images inside
-// a tool result (OpenAI chat-completions, the Responses/codex
-// function_call_output), so those clients opt in via a
-// MirrorsToolImages() bool method.
-//
-// The agent loop MUST call this helper rather than type-asserting the
-// interface directly on the client it holds: codex always ships wrapped
-// in a RefreshingClient and openai-responses/google-vertex in a
-// renamedClient, neither of which is the concrete client that implements
-// the capability. The inline assertion silently returns false for those
-// providers, so the image bytes get stripped from the tool result with
-// nothing ever mirrored back in.
-func ClientMirrorsToolImages(c Client) bool {
+// ClientCapabilities is the explicit, compiler-checked set of
+// behaviors a Client can opt into. A new client capability is a field
+// here, set in the concrete client's Capabilities() method — never a
+// one-off optional interface (`interface{ Foo() bool }`) probed by a
+// bespoke chain-walking helper. That older pattern silently returned
+// the zero value whenever a wrapper sat in front of the concrete
+// client (the MirrorsToolImages bug class): codex ships wrapped in a
+// RefreshingClient and openai-responses/google-vertex in a
+// renamedClient, so an inline assertion on the outer client missed
+// the capability entirely.
+type ClientCapabilities struct {
+	// MirrorsToolImages is true for wire formats that can't carry
+	// images inside a tool result (OpenAI chat-completions; the
+	// Responses/codex function_call_output). The agent loop mirrors
+	// such images into a following synthetic user message. This is a
+	// WIRE-FORMAT fact; whether the current model can see images at
+	// all is the separate per-model image-input capability the loop
+	// checks alongside it.
+	MirrorsToolImages bool
+}
+
+// capabilityProvider is implemented by concrete clients that declare
+// capabilities. Wrappers must NOT implement it — they expose Unwrap()
+// and ClientCaps walks down to the concrete client.
+type capabilityProvider interface {
+	Capabilities() ClientCapabilities
+}
+
+// ClientCaps returns c's capabilities, looking through any wrapper
+// layers (RefreshingClient, renamedClient) via Unwrap(). The unwrap
+// walk lives here, once: adding a capability is a struct field, not a
+// new per-capability helper, and callers can never reintroduce the
+// silent-false wrapper gap because there is no per-cap assertion to
+// get wrong.
+func ClientCaps(c Client) ClientCapabilities {
 	for c != nil {
-		if m, ok := c.(interface{ MirrorsToolImages() bool }); ok {
-			return m.MirrorsToolImages()
+		if cp, ok := c.(capabilityProvider); ok {
+			return cp.Capabilities()
 		}
 		u, ok := c.(unwrapper)
 		if !ok {
-			return false
+			return ClientCapabilities{}
 		}
 		c = u.Unwrap()
 	}
-	return false
+	return ClientCapabilities{}
+}
+
+// ClientMirrorsToolImages is a named convenience over ClientCaps for
+// the agent loop's tool-image-mirror decision.
+func ClientMirrorsToolImages(c Client) bool {
+	return ClientCaps(c).MirrorsToolImages
 }

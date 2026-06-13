@@ -27,7 +27,7 @@ func newInteractiveForWatchTest(t *testing.T, run swarm.RunnerFunc) (*Interactiv
 			return run
 		},
 	})
-	iv := &Interactive{dirty: make(chan struct{}, 1)}
+	iv := &Interactive{dirty: make(chan struct{}, 1), turns: newTurnEngine()}
 	return iv, f
 }
 

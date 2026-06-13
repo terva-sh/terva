@@ -955,9 +955,9 @@ func TestSwarmDialogSpawnEditor_SlashModelOpensPicker(t *testing.T) {
 	}
 
 	// Inject a fake selection into the embedded modelDialog and confirm.
-	d.modelPicker.all = []provider.Model{{Provider: "acme", ID: "fake-1"}}
-	d.modelPicker.view = d.modelPicker.all
-	d.modelPicker.cursor = 0
+	d.modelPicker.p.all = []provider.Model{{Provider: "acme", ID: "fake-1"}}
+	d.modelPicker.p.view = d.modelPicker.p.all
+	d.modelPicker.p.cursor = 0
 	_, msg, _ := d.HandleKey(tui.Key{Kind: tui.KeyEnter})
 
 	if d.pickingModel {

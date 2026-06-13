@@ -18,6 +18,8 @@ import (
 	"terva.sh/terva/packages/agent/chat/external"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/hooks"
+	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/swarm"
@@ -108,6 +110,7 @@ func (a *extToolAdapter) Tools() []ExtensionToolInfo {
 			Name:        t.Name,
 			Description: t.Description,
 			Schema:      t.Schema,
+			ReadOnly:    t.ReadOnly,
 		}
 	}
 	return out
@@ -120,6 +123,73 @@ func (a *extToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {
 		Description: info.Description,
 		Schema:      info.Schema,
 	})
+}
+
+// mcpToolAdapter bridges *mcp.Manager to the same ExtensionToolSource
+// seam extension tools ride (the roadmap's "MCP adapter behind
+// ExtensionToolSource" bet). MCP tools therefore inherit every
+// downstream behavior for free: registry merge, system-prompt
+// re-render, the confirm-gate ladder, and plan mode's
+// side-effect rules (readOnlyHint-annotated tools are admitted,
+// the rest excluded).
+type mcpToolAdapter struct {
+	mgr *mcp.Manager
+}
+
+func (a *mcpToolAdapter) Tools() []ExtensionToolInfo {
+	infos := a.mgr.Tools()
+	out := make([]ExtensionToolInfo, len(infos))
+	for i, t := range infos {
+		out[i] = ExtensionToolInfo{
+			Extension:   "mcp:" + t.Server,
+			Name:        t.Name,
+			Description: t.Description,
+			Schema:      t.Schema,
+			ReadOnly:    t.ReadOnly,
+		}
+	}
+	return out
+}
+
+func (a *mcpToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {
+	for _, t := range a.mgr.Tools() {
+		if t.Name == info.Name {
+			return a.mgr.NewTool(t)
+		}
+	}
+	return nil
+}
+
+// setupMCP starts the user-configured MCP servers and merges their
+// tools into the resolved registry. Returns a stop func (never nil).
+// Startup problems are stderr notes, never fatal — one broken server
+// must not take the session down. Server stderr goes to
+// $TERVA_HOME/logs/mcp-<name>.log, like extensions.
+func setupMCP(ctx context.Context, args Args, r *Resolved) (*mcpToolAdapter, func()) {
+	if args.NoMCP {
+		return nil, func() {}
+	}
+	cfg, err := LoadConfig()
+	if err != nil || cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
+		return nil, func() {}
+	}
+	stderrFor := func(server string) io.Writer {
+		if mkErr := os.MkdirAll(LogsPath(), 0o755); mkErr != nil {
+			return nil
+		}
+		f, ferr := os.OpenFile(filepath.Join(LogsPath(), "mcp-"+server+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if ferr != nil {
+			return nil
+		}
+		return f
+	}
+	mgr := mcp.StartAll(ctx, cfg.MCP, stderrFor)
+	for _, w := range mgr.Warnings() {
+		fmt.Fprintln(os.Stderr, "note:", w)
+	}
+	adapter := &mcpToolAdapter{mgr: mgr}
+	r.MergeExtensionTools(adapter)
+	return adapter, mgr.StopAll
 }
 
 // fanoutAgentEvent translates a core.AgentEvent into the wire-format
@@ -169,6 +239,18 @@ func fanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 			}
 		}
 		mgr.EmitEvent(extproto.EventFromHost{Event: "assistant_message", Text: text})
+	case core.EvToolResult:
+		// Fan tool results out to subscribers so an extension can
+		// observe what a tool produced, not just that it was called
+		// (the tool_call event carries args; this carries the
+		// outcome). The result content is flattened to its text
+		// blocks — subscribers want a string they can grep/display.
+		mgr.EmitEvent(extproto.EventFromHost{
+			Event:   "tool_result",
+			ToolID:  e.ID,
+			Text:    toolResultText(e.Result),
+			IsError: e.Result.IsError,
+		})
 	case core.EvTurnEnd:
 		ev := extproto.EventFromHost{Event: "turn_end", Stop: string(e.Stop)}
 		if e.Err != nil {
@@ -176,6 +258,45 @@ func fanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 		}
 		mgr.EmitEvent(ev)
 	}
+}
+
+// emitSessionStart fires the session_start lifecycle event carrying the
+// active session's identity, so session-aware extensions (protocol 2+)
+// can key per-session state. It is the single point that announces the
+// active session: once after the session opens and again on every
+// switch (/sessions resume, fork, /new, /cd). sess may be nil — under
+// --no-session or just after a close — in which case the id/path/title
+// are empty, which the SDK surfaces as "no active session". The host
+// emits this before the turn that can invoke extension tools, so a
+// subscriber always sees session_start before that session's first
+// tool_call (the ordered-delivery guarantee).
+func emitSessionStart(mgr *extensions.Manager, sess *core.Session) {
+	if mgr == nil {
+		return
+	}
+	ev := extproto.EventFromHost{Event: "session_start"}
+	if sess != nil {
+		ev.SessionID = sess.ID
+		ev.SessionPath = sess.Path
+		ev.SessionTitle = sess.Meta.Title
+	}
+	mgr.EmitEvent(ev)
+}
+
+// toolResultText flattens a tool result's content blocks to their
+// concatenated text, for the tool_result fanout event. Non-text
+// blocks (images) are skipped — subscribers get the textual outcome.
+func toolResultText(r core.ToolResult) string {
+	var sb strings.Builder
+	for _, c := range r.Content {
+		if tb, ok := c.(provider.TextBlock); ok {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(tb.Text)
+		}
+	}
+	return sb.String()
 }
 
 // Run is the top-level entrypoint for the terva binary.
@@ -322,24 +443,50 @@ func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, 
 	}
 	extMgr.WaitForReady(3 * time.Second)
 	r.MergeExtensionTools(&extToolAdapter{mgr: extMgr})
+	// MCP servers ride the same seam, after extensions so an
+	// extension tool name wins a collision (first registration).
+	_, stopMCP := setupMCP(ctx, args, r)
 	extMgr.EmitEvent(extproto.EventFromHost{Event: "session_start"})
-	return extMgr, func() { extMgr.Stop(2 * time.Second) }
+	return extMgr, func() {
+		extMgr.Stop(2 * time.Second)
+		stopMCP()
+	}
 }
 
 // headlessConfirmGate returns the confirmation gate for a headless
-// mode (print / json / rpc / swarm-agent) when --no-yolo is set, or nil
-// otherwise. There is no interactive prompt in these modes, so the gate
-// is constructed with a nil inner Confirmer: every tool call is refused
-// with a model-readable reason (see core.ConfirmGate.Check) instead of
-// running unconfirmed. A one-line stderr note tells the human why the
-// tools are being refused; the actual gating happens in the
-// BeforeToolExecute closure that calls gate.Check first.
-func headlessConfirmGate(args Args, mode string) *core.ConfirmGate {
-	if !args.NoYolo {
-		return nil
+// mode (print / json / rpc / swarm-agent), or nil when the policy is
+// pure yolo (no rules, no mode override) — the historical no-gate fast
+// path. There is no interactive prompt in these modes, so the gate is
+// constructed with a nil inner Confirmer: a call the policy says to
+// *ask* about is refused with a model-readable reason (see
+// core.ConfirmGate.Check) instead of running unconfirmed — the
+// refuse-by-default posture. Policy allow/deny rules and the mode's
+// auto-allows still apply, so headless automation can run a curated
+// tool set (e.g. plan mode permits the read-only tools). A one-line
+// stderr note tells the human what stance is active; the actual gating
+// happens in the BeforeToolExecute closure that calls gate.Check first.
+// The second return is the policy's read-only registry, to hand to
+// Resolved.AdoptReadOnlySet so read_only-annotated extension/MCP
+// tools join the classification. Nil alongside a nil gate.
+func headlessConfirmGate(args Args, mode string) (*core.ConfirmGate, *core.ReadOnlySet) {
+	pol, warns := buildPermissionPolicy(args)
+	for _, w := range warns {
+		fmt.Fprintf(os.Stderr, "note: %s\n", w)
 	}
-	fmt.Fprintf(os.Stderr, "note: --no-yolo in %s mode refuses tool calls (no interactive prompt available to confirm them)\n", mode)
-	return core.NewConfirmGate(nil)
+	if pol == nil {
+		return nil, nil
+	}
+	switch pol.Mode {
+	case core.ApprovalPlan:
+		fmt.Fprintf(os.Stderr, "note: approval mode 'plan' in %s mode: read-only tools run, everything else is refused\n", mode)
+	case core.ApprovalYolo:
+		// Reachable only because rules exist; allow/deny apply
+		// silently. ask rules degrade to allow in yolo (yolo never
+		// prompts), so only a deny rule refuses here.
+	default:
+		fmt.Fprintf(os.Stderr, "note: approval mode %q in %s mode refuses tool calls that would need confirmation (no interactive prompt available)\n", pol.Mode, mode)
+	}
+	return core.NewPolicyGate(pol, nil), pol.ReadOnly
 }
 
 // wireNonInteractiveAgentExtHooks installs the same BeforeToolExecute
@@ -349,23 +496,94 @@ func headlessConfirmGate(args Args, mode string) *core.ConfirmGate {
 // is non-nil (--no-yolo) it runs FIRST in BeforeToolExecute, mirroring
 // interactive mode, so a refusal short-circuits before the extension
 // intercept sees the call.
-func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate) {
-	if ag == nil || extMgr == nil {
-		return
+// buildHookEngine loads the user config's hooks into an engine, or
+// nil when none are configured. Hook misbehavior (timeouts, bad JSON)
+// logs to $TERVA_HOME/logs/hooks.log — stderr would corrupt the TUI
+// and a broken hook must never break a turn.
+func buildHookEngine(args Args) *hooks.Engine {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.Hooks == nil {
+		return nil
 	}
-	ag.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
-		if gate != nil {
-			ok, reason, _ := gate.Check(call.Name, core.BuildPreview(call.Arguments, 120))
+	logf := func(string, ...any) {}
+	if err := os.MkdirAll(LogsPath(), 0o755); err == nil {
+		if f, ferr := os.OpenFile(filepath.Join(LogsPath(), "hooks.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr == nil {
+			logf = func(format string, a ...any) {
+				fmt.Fprintf(f, time.Now().Format(time.RFC3339)+" "+format+"\n", a...)
+			}
+		}
+	}
+	return hooks.NewEngine(*cfg.Hooks, args.CWD, logf)
+}
+
+// buildBeforeToolExecute composes the tool-call ladder in its
+// canonical order — pre-hooks (may rewrite args; allow/deny are
+// final), the confirm gate (sees post-rewrite args), then the
+// extension intercept. One implementation shared by every mode so
+// the ladders cannot drift apart. hookEng, gate, and extMgr may each
+// be nil.
+func buildBeforeToolExecute(ctx context.Context, hookEng *hooks.Engine, gate *core.ConfirmGate, extMgr *extensions.Manager) func(provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	return func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+		args := call.Arguments
+		hookModified := false
+		skipGate := false
+		if hookEng != nil {
+			hr := hookEng.RunPre(ctx, call.Name, args)
+			if hr.UpdatedArgs != nil {
+				args = hr.UpdatedArgs
+				hookModified = true
+			}
+			switch hr.Decision {
+			case hooks.DecisionDeny:
+				return false, hr.Reason, nil
+			case hooks.DecisionAllow:
+				skipGate = true
+			}
+			// DecisionAsk falls through to the gate; in a gateless
+			// (pure yolo) session that is a no-op by design — deny /
+			// exit 2 is the enforcement spelling.
+		}
+		if !skipGate && gate != nil {
+			ok, reason, _ := gate.Check(call.Name, args, core.BuildPreview(args, 120))
 			if !ok {
 				return false, reason, nil
 			}
 		}
-		res := extMgr.InterceptToolCall(ctx, call.ID, call.Name, call.Arguments)
-		if res.Block {
-			return false, res.Reason, nil
+		if extMgr != nil {
+			res := extMgr.InterceptToolCall(ctx, call.ID, call.Name, args)
+			if res.Block {
+				return false, res.Reason, nil
+			}
+			if res.ModifiedArgs != nil {
+				return true, "", res.ModifiedArgs
+			}
 		}
-		return true, "", res.ModifiedArgs
+		if hookModified {
+			return true, "", args
+		}
+		return true, "", nil
 	}
+}
+
+// observeAgentEventForHooks feeds the two tool events into the hook
+// engine's post-tool-use correlator. Nil-safe.
+func observeAgentEventForHooks(eng *hooks.Engine, ev core.AgentEvent) {
+	if eng == nil {
+		return
+	}
+	switch e := ev.(type) {
+	case core.EvToolCall:
+		eng.Observe("tool_call", e.ID, e.Name, e.Args, false)
+	case core.EvToolResult:
+		eng.Observe("tool_result", e.ID, "", nil, e.Result.IsError)
+	}
+}
+
+func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate, hookEng *hooks.Engine) {
+	if ag == nil || extMgr == nil {
+		return
+	}
+	ag.BeforeToolExecute = buildBeforeToolExecute(ctx, hookEng, gate, extMgr)
 	ag.BeforeTurn = func(step int) (bool, string) {
 		res := extMgr.InterceptTurnStart(ctx, step)
 		return !res.Block, res.Reason
@@ -377,20 +595,24 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 		}
 		return true, "", res.ReplaceText
 	}
-	ag.OnEvent = func(ev core.AgentEvent) { fanoutAgentEvent(extMgr, ev) }
+	ag.OnEvent = func(ev core.AgentEvent) {
+		fanoutAgentEvent(extMgr, ev)
+		observeAgentEventForHooks(hookEng, ev)
+	}
 }
 
 func runPrintMode(ctx context.Context, args Args, version string) error {
-	confirmGate := headlessConfirmGate(args, "print")
+	confirmGate, roSet := headlessConfirmGate(args, "print")
 	r, err := Resolve(args, true)
 	if err != nil {
 		return err
 	}
+	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 
@@ -410,16 +632,17 @@ func runPrintMode(ctx context.Context, args Args, version string) error {
 }
 
 func runJSONMode(ctx context.Context, args Args, version string) error {
-	confirmGate := headlessConfirmGate(args, "json")
+	confirmGate, roSet := headlessConfirmGate(args, "json")
 	r, err := Resolve(args, true)
 	if err != nil {
 		return err
 	}
+	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 
@@ -487,8 +710,36 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	extMgr.WaitForReady(3 * time.Second)
 	defer extMgr.Stop(2 * time.Second)
 
+	// Confirmation gate: built from the permission policy (approval
+	// mode + rules — see docs/permissions.md) BEFORE any tool merge,
+	// so read_only-annotated extension/MCP tools land in the policy's
+	// classification via AdoptReadOnlySet. The TUI is bound as the
+	// Confirmer below; "always, save to config" answers persist
+	// through AppendUserPermissionRule.
+	//
+	// Unlike the headless modes, interactive ALWAYS builds a gate —
+	// even in pure yolo (where buildPermissionPolicy returns nil) we
+	// synthesize a yolo policy — so the approval mode can be switched
+	// live from /settings (the gate is the thing SetMode mutates).
+	pol, polWarns := buildPermissionPolicy(args)
+	for _, w := range polWarns {
+		fmt.Fprintf(os.Stderr, "note: %s\n", w)
+	}
+	if pol == nil {
+		pol = &core.PermissionPolicy{Mode: core.ApprovalYolo, ReadOnly: builtinReadOnlySet(), EditTools: editTools}
+	}
+	confirmGate := core.NewPolicyGate(pol, nil) // Confirmer set below
+	confirmGate.SetPersist(func(tool string) {
+		if err := AppendUserPermissionRule(tool); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not persist allow rule for %s: %v\n", tool, err)
+		}
+	})
+	r.AdoptReadOnlySet(pol.ReadOnly)
+
 	extToolAdapter := &extToolAdapter{mgr: extMgr}
 	r.MergeExtensionTools(extToolAdapter)
+	mcpAdapter, stopMCP := setupMCP(ctx, args, &r)
+	defer stopMCP()
 
 	// Build the swarm supervisor BEFORE the agent so the auto-swarm
 	// tool can reference it during tool-registry construction. State
@@ -541,15 +792,26 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	}
 	injectSwarmSpawn(r.ToolRegistry)
 
-	// Confirmation gate: when --no-yolo is on, the agent must ask
-	// the user before every tool call. In interactive mode the TUI
-	// provides the Confirmer; in print/json/rpc modes there's no
-	// way to prompt, so the gate is constructed with a nil inner
-	// which auto-refuses every call with a helpful reason.
-	var confirmGate *core.ConfirmGate
-	if args.NoYolo {
-		confirmGate = core.NewConfirmGate(nil) // set below for interactive
+	// setApprovalMode switches the approval mode live (from /settings):
+	// it swaps enforcement on the gate and rebuilds the tool registry
+	// for the new mode (plan hides mutating + non-read-only extension
+	// tools; other modes restore them), returning the fresh registry
+	// for the TUI to install on the running agent. The registry is
+	// rebuilt from scratch and re-merged through the same
+	// MergeToolsForMode path the startup assembly uses, so the live and
+	// initial views cannot drift.
+	setApprovalMode := func(mode core.ApprovalMode) core.Registry {
+		confirmGate.SetMode(mode)
+		reg := buildToolRegistry(args, mode, r.CWD, sharedSandbox, r.Provider, r.AuthMethod)
+		MergeToolsForMode(reg, mode, pol.ReadOnly, extToolAdapter)
+		if mcpAdapter != nil {
+			MergeToolsForMode(reg, mode, pol.ReadOnly, mcpAdapter)
+		}
+		injectSwarmSpawn(reg)
+		return reg
 	}
+
+	hookEng := buildHookEngine(args)
 
 	// Capture current args in a closure so BuildAgent can re-resolve
 	// after a successful login (picks up the newly stored credential).
@@ -557,21 +819,10 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		if a == nil {
 			return a
 		}
-		a.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
-			// Confirm gate runs FIRST: if the user refused, we don't
-			// waste extension-intercept time or let guards see the call.
-			if confirmGate != nil {
-				ok, reason, _ := confirmGate.Check(call.Name, core.BuildPreview(call.Arguments, 120))
-				if !ok {
-					return false, reason, nil
-				}
-			}
-			r := extMgr.InterceptToolCall(ctx, call.ID, call.Name, call.Arguments)
-			if r.Block {
-				return false, r.Reason, nil
-			}
-			return true, "", r.ModifiedArgs
-		}
+		// Canonical tool-call ladder: pre-hooks, confirm gate,
+		// extension intercept — shared with the headless modes via
+		// buildBeforeToolExecute so the orders cannot drift.
+		a.BeforeToolExecute = buildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
 		a.BeforeTurn = func(step int) (bool, string) {
 			r := extMgr.InterceptTurnStart(ctx, step)
 			return !r.Block, r.Reason
@@ -583,7 +834,10 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			}
 			return true, "", r.ReplaceText
 		}
-		a.OnEvent = func(ev core.AgentEvent) { fanoutAgentEvent(extMgr, ev) }
+		a.OnEvent = func(ev core.AgentEvent) {
+			fanoutAgentEvent(extMgr, ev)
+			observeAgentEventForHooks(hookEng, ev)
+		}
 		return a
 	}
 
@@ -593,7 +847,13 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			return nil, "", "", err
 		}
 		resolved.UseSandbox(sharedSandbox)
+		if pol != nil {
+			resolved.AdoptReadOnlySet(pol.ReadOnly)
+		}
 		resolved.MergeExtensionTools(extToolAdapter)
+		if mcpAdapter != nil {
+			resolved.MergeExtensionTools(mcpAdapter)
+		}
 		injectSwarmSpawn(resolved.ToolRegistry)
 		return wireAgentExt(resolved.NewAgent()), resolved.Provider, resolved.Model, nil
 	}
@@ -612,7 +872,13 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			return nil, "", "", err
 		}
 		resolved.UseSandbox(sharedSandbox)
+		if pol != nil {
+			resolved.AdoptReadOnlySet(pol.ReadOnly)
+		}
 		resolved.MergeExtensionTools(extToolAdapter)
+		if mcpAdapter != nil {
+			resolved.MergeExtensionTools(mcpAdapter)
+		}
 		injectSwarmSpawn(resolved.ToolRegistry)
 		return wireAgentExt(resolved.NewAgent()), resolved.Provider, resolved.Model, nil
 	}
@@ -639,7 +905,13 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			return nil, "", "", err
 		}
 		resolved.UseSandbox(sharedSandbox)
+		if pol != nil {
+			resolved.AdoptReadOnlySet(pol.ReadOnly)
+		}
 		resolved.MergeExtensionTools(extToolAdapter)
+		if mcpAdapter != nil {
+			resolved.MergeExtensionTools(mcpAdapter)
+		}
 		injectSwarmSpawn(resolved.ToolRegistry)
 		return wireAgentExt(resolved.NewAgent()), resolved.Provider, resolved.Model, nil
 	}
@@ -665,13 +937,16 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			return
 		}
 		resolved.UseSandbox(sharedSandbox)
+		if pol != nil {
+			resolved.AdoptReadOnlySet(pol.ReadOnly)
+		}
 		resolved.MergeExtensionTools(extToolAdapter)
+		if mcpAdapter != nil {
+			resolved.MergeExtensionTools(mcpAdapter)
+		}
 		injectSwarmSpawn(resolved.ToolRegistry)
 		current.SetTools(resolved.ToolRegistry)
 	})
-
-	// Fire session_start once we know the manager's running.
-	extMgr.EmitEvent(extproto.EventFromHost{Event: "session_start"})
 
 	var sess *core.Session
 	var sessBaselineMsgs int // messages already on disk when current session opened
@@ -687,6 +962,12 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			sessBaselineMsgs = len(ag.Messages())
 		}
 	}
+	// Announce the active session now that it's open (or nil under
+	// --no-session). Moved here from before openOrCreateSession so the
+	// event carries the real session identity, and so it fires after the
+	// session exists but before the first turn — the ordering a
+	// session-aware extension relies on.
+	emitSessionStart(extMgr, sess)
 	defer func() {
 		persistMu.Lock()
 		defer persistMu.Unlock()
@@ -796,6 +1077,9 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		// the hydrated tail.
 		sessBaselineMsgs = fullMsgCount
 		persistMu.Unlock()
+		// Re-announce the active session to extensions: /sessions resume
+		// and fork both route through here, so this one emit covers both.
+		emitSessionStart(extMgr, newSess)
 		// Re-scope the swarm dashboard to the new session so /swarm
 		// only shows agents this session spawned. swarmMgr may be nil
 		// here if we haven't reached the construction site yet (it
@@ -924,6 +1208,8 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		if swarmMgr != nil && sess != nil {
 			swarmMgr.SetActiveSession(sess.ID)
 		}
+		// Announce the freshly-opened session (or nil under --no-session).
+		emitSessionStart(extMgr, sess)
 		return nil
 	}
 
@@ -978,6 +1264,9 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 				swarmMgr.SetActiveSession(ns.ID)
 			}
 		}
+		// Announce the new session (or nil under --no-session, where the
+		// transcript reset is the whole effect).
+		emitSessionStart(extMgr, sess)
 		return nil
 	}
 
@@ -1219,8 +1508,9 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			list, _ := skills.Discover(TervaHome(), r.CWD, userHome, args.WithSkills)
 			return skills.VisibleSkills(list)
 		},
-		NoYolo:      args.NoYolo,
-		ConfirmGate: confirmGate,
+		NoYolo:          args.NoYolo,
+		ConfirmGate:     confirmGate,
+		SetApprovalMode: setApprovalMode,
 		PersistModel: func(providerName, model string) {
 			// Update config.json so next launch uses the same pick.
 			cfg, _ := LoadConfig()

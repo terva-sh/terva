@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent"
+	"terva.sh/terva/packages/agent/procenv"
 )
 
 // Injected at build time via -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
@@ -47,6 +48,10 @@ func buildInfoVersion(bi *debug.BuildInfo) (v, c, d string) {
 }
 
 func main() {
+	// Before anything touches credentials: core dumps off (the
+	// process will hold auth.json contents in memory). Lives in main,
+	// not agent.Run, so SDK embedders keep their own rlimit policy.
+	procenv.Harden()
 	if version == "0.0.0" || commit == "" || date == "" {
 		if bi, ok := debug.ReadBuildInfo(); ok {
 			bv, bc, bd := buildInfoVersion(bi)

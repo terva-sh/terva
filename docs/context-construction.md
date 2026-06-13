@@ -268,7 +268,18 @@ All built-in file tools resolve paths the same way:
 - Each edit is an exact `oldText` -> `newText` replacement.
 - `oldText` must be non-empty.
 - `oldText` and `newText` must differ.
-- Each `oldText` must appear exactly once in the original file.
+- Each `oldText` must appear exactly once in the original file, unless
+  the edit sets `replaceAll: true` — then every occurrence is replaced.
+- When `oldText` has no exact match, a **whitespace-tolerant** pass
+  retries it: lines compare after right-trimming, shifted by one
+  uniform leading-whitespace delta, with blank lines matching under
+  any shift. A unique tolerant match applies (the indent delta is
+  re-applied to `newText` so the replacement lands at the file's real
+  indentation); an ambiguous one is an error.
+- A not-found error anchors on `oldText`'s first line when that line
+  exists in the file and quotes the file's actual block there, so the
+  model can correct itself without a re-read; an ambiguity error lists
+  the occurrence line numbers.
 - Multiple edits are validated against the original content before any write happens.
 - Overlapping edits are rejected.
 - UTF-8 BOM is preserved.
@@ -291,7 +302,10 @@ Rules:
 
 ## Jail / sandbox file rules
 
-The sandbox starts unlocked. In the TUI, `/jail` locks it and `/unjail` unlocks it.
+The sandbox starts **locked for an interactive session and unlocked for
+headless modes** (`--jail`/`--no-jail` override; see
+[permissions.md](permissions.md)). In the TUI, `/jail` locks it and
+`/unjail` unlocks it at runtime.
 
 When locked:
 

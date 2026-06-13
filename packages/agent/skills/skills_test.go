@@ -45,6 +45,49 @@ permissions:
 	}
 }
 
+// Real-YAML features the hand-rolled parser couldn't handle: a folded
+// multi-line description, a block-style list, the allowed_tools
+// underscore spelling, and a multi-key permissions block.
+func TestParseFrontmatterRealYAML(t *testing.T) {
+	front := `name: deep-skill
+description: >
+  A longer description that spans
+  multiple folded lines.
+allowed_tools:
+  - read
+  - "edit"
+  - bash
+permissions:
+  bash: ["git diff*"]
+  read: ["./*.go"]
+`
+	s := &Skill{}
+	parseFrontmatter(front, s)
+	if s.Name != "deep-skill" {
+		t.Errorf("name = %q", s.Name)
+	}
+	// Folded scalar joins the lines with spaces and ends with a newline.
+	if want := "A longer description that spans multiple folded lines.\n"; s.Description != want {
+		t.Errorf("description = %q, want %q", s.Description, want)
+	}
+	if got := s.AllowedTools; len(got) != 3 || got[0] != "read" || got[1] != "edit" || got[2] != "bash" {
+		t.Errorf("allowed_tools (block + underscore spelling) = %v", got)
+	}
+	if got := s.Permissions["read"]; len(got) != 1 || got[0] != "./*.go" {
+		t.Errorf("permissions[read] = %v", got)
+	}
+}
+
+// Malformed frontmatter must not break discovery: parse leaves fields
+// empty (the caller falls back to the directory basename for Name).
+func TestParseFrontmatterMalformedDegrades(t *testing.T) {
+	s := &Skill{}
+	parseFrontmatter("name: [unterminated\n  : : :", s)
+	if s.Name != "" || s.Description != "" {
+		t.Errorf("malformed frontmatter should yield empty fields, got name=%q desc=%q", s.Name, s.Description)
+	}
+}
+
 func TestDiscoverProjectAndGlobalPriorityAndDedup(t *testing.T) {
 	tmp := t.TempDir()
 	tervaHome := filepath.Join(tmp, "home")

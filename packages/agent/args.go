@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"golang.org/x/term"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -55,6 +56,17 @@ type Args struct {
 	Tools    []string
 	MaxSteps int
 
+	// Jail / NoJail force the sandbox on / off at startup. When
+	// neither is set the default is on for an interactive session and
+	// off for headless modes (see resolveJail). The TUI /jail and
+	// /unjail commands still toggle it at runtime.
+	Jail   bool
+	NoJail bool
+
+	// NoMCP skips MCP server startup for this run (config "mcp" key
+	// is otherwise honored in every mode).
+	NoMCP bool
+
 	// Exts is a list of directory paths the user passed via --ext.
 	// Each must contain an extension.json. Loaded for one session
 	// only; never persisted. Take precedence over installed exts of
@@ -97,7 +109,16 @@ type Args struct {
 	// interactive prompt. A warning is printed to stderr on startup
 	// so scripts know the flag is ignored, but tools still run
 	// freely so automated workflows keep working.
+	//
+	// NoYolo is the compatibility spelling of --approval ask; the
+	// approval-mode spectrum supersedes it.
 	NoYolo bool
+
+	// Approval selects the approval mode: plan, ask, auto-edit, or
+	// yolo. Empty means: ask if --no-yolo was given, else the user
+	// config's approval default, else yolo. Resolution lives in
+	// resolveApprovalMode (permissions.go).
+	Approval string
 
 	ListModels bool
 	Help       bool
@@ -145,6 +166,10 @@ func ParseArgs(in []string) (Args, error) {
 			a.NoSess = true
 		case "--no-tools":
 			a.NoTools = true
+		case "--jail":
+			a.Jail = true
+		case "--no-jail":
+			a.NoJail = true
 		case "--list-models":
 			a.ListModels = true
 		case "--experimental-oauth":
@@ -206,6 +231,8 @@ func ParseArgs(in []string) (Args, error) {
 			a.Exts = append(a.Exts, v)
 		case "--no-ext", "--no-extensions":
 			a.NoExt = true
+		case "--no-mcp":
+			a.NoMCP = true
 		case "--connector-manifest":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -219,6 +246,15 @@ func ParseArgs(in []string) (Args, error) {
 			a.WithSkills = true
 		case "--no-yolo":
 			a.NoYolo = true
+		case "--approval":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			if _, perr := core.ParseApprovalMode(strings.ToLower(v)); perr != nil {
+				return a, perr
+			}
+			a.Approval = strings.ToLower(v)
 		case "--reasoning":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -436,8 +472,11 @@ func PrintHelp(version string) {
 		row{"--cwd PATH", "treat PATH (an existing directory) as the working directory"},
 		row{"--no-tools", "disable all tools"},
 		row{"--tools csv", "only enable the listed tools"},
-		row{"--no-yolo", "ask before running every tool call"},
+		row{"--approval plan|ask|auto-edit|workspace|yolo", "approval mode: plan = read-only only, ask = confirm everything, auto-edit = confirm non-edit tools, workspace = run built-ins + reads, confirm foreign side-effects (interactive default), yolo = run freely. See docs/permissions.md"},
+		row{"--no-yolo", "alias for --approval ask"},
+		row{"--jail / --no-jail", "force the sandbox on / off at startup (default: on for interactive, off for headless)"},
 		row{"--no-ext", "skip extension discovery for this run"},
+		row{"--no-mcp", "skip MCP server startup for this run"},
 		row{"--no-skill", "skip all skill discovery for this run"},
 	)
 	section("misc",

@@ -5,17 +5,11 @@ import (
 )
 
 // sessionOpsDialog is the picker shown when the user runs `/session`
-// without an argument. Offers the two portable-file operations on
-// the current conversation: export (write the in-memory transcript
-// plus meta to a .tervasession file) and import (load a .tervasession
-// from another machine and swap it in as the active session).
-//
-// Shape mirrors connectDialog and logoutDialog: tiny list, arrow
-// keys to move, enter to pick, esc to cancel.
+// without an argument. Offers the portable-file operations on the
+// current conversation (export/import/fork/tree). A thin typed
+// wrapper over the shared listPicker core.
 type sessionOpsDialog struct {
-	active bool
-	items  []sessionOpsItem
-	cursor int
+	p listPicker
 }
 
 type sessionOpsItem struct {
@@ -36,45 +30,23 @@ func newSessionOpsDialog() *sessionOpsDialog { return &sessionOpsDialog{} }
 // "import" but the caller can suppress either (e.g. hide export
 // when the session is empty).
 func (d *sessionOpsDialog) Open(items []sessionOpsItem) bool {
-	if len(items) == 0 {
-		return false
+	rows := make([]pickerItem, len(items))
+	for i, it := range items {
+		rows[i] = pickerItem{label: it.label, hint: it.hint, value: it.action}
 	}
-	d.items = items
-	d.cursor = 0
-	d.active = true
-	return true
+	return d.p.open("session", "pick an action (↑/↓, enter, esc to cancel):", rows)
 }
 
 // Close hides the dialog.
-func (d *sessionOpsDialog) Close() { d.active = false }
+func (d *sessionOpsDialog) Close() { d.p.close() }
 
 // Active reports whether the dialog is consuming input.
-func (d *sessionOpsDialog) Active() bool { return d != nil && d.active }
+func (d *sessionOpsDialog) Active() bool { return d != nil && d.p.isActive() }
 
 // HandleKey advances the selection or resolves the dialog.
 func (d *sessionOpsDialog) HandleKey(k tui.Key) sessionOpsAction {
-	switch k.Kind {
-	case tui.KeyUp:
-		if d.cursor > 0 {
-			d.cursor--
-		}
-	case tui.KeyDown:
-		if d.cursor < len(d.items)-1 {
-			d.cursor++
-		}
-	case tui.KeyEsc:
-		d.Close()
-		return sessionOpsAction{Close: true}
-	case tui.KeyEnter:
-		if len(d.items) == 0 {
-			d.Close()
-			return sessionOpsAction{Close: true}
-		}
-		it := d.items[d.cursor]
-		d.Close()
-		return sessionOpsAction{Select: true, Action: it.action}
-	}
-	return sessionOpsAction{}
+	act := d.p.handleKey(k)
+	return sessionOpsAction{Select: act.Select, Action: act.Value, Close: act.Close}
 }
 
 // Render returns the dialog lines.
@@ -82,20 +54,5 @@ func (d *sessionOpsDialog) Render(th tui.Theme, width int) []string {
 	if !d.Active() {
 		return nil
 	}
-	var lines []string
-	lines = append(lines, frameHeader(th, "session", width))
-	lines = append(lines, th.FG256(th.Muted, "pick an action (\u2191/\u2193, enter, esc to cancel):"))
-	for i, it := range d.items {
-		text := "  " + it.label
-		if it.hint != "" {
-			text += "  (" + it.hint + ")"
-		}
-		if i == d.cursor {
-			lines = append(lines, th.PadHighlight(text, width))
-		} else {
-			lines = append(lines, th.FG256(th.Muted, text))
-		}
-	}
-	lines = append(lines, frameRule(th, width))
-	return lines
+	return d.p.render(th, width)
 }

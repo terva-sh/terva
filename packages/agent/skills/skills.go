@@ -24,11 +24,14 @@
 package skills
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"terva.sh/terva/packages/envcompat"
 )
@@ -242,6 +245,14 @@ func searchDirs(tervaHome, cwd, userHome string) []location {
 	if tervaHome != "" {
 		add(filepath.Join(tervaHome, "skills"), "global")
 	}
+	// Extension bundles: an installed, enabled extension may ship a
+	// skills/ directory beside its extension.json (data-only bundle
+	// contribution — see docs/extensions.md). Ranked after the user's
+	// own dirs so a bundle can never shadow a deliberately-authored
+	// skill, before the foreign-tool compat dirs.
+	for _, dir := range extensionSkillDirs(tervaHome, cwd) {
+		add(dir, "extension")
+	}
 	if cwd != "" {
 		add(filepath.Join(cwd, ".claude", "skills"), "project (claude)")
 	}
@@ -253,6 +264,54 @@ func searchDirs(tervaHome, cwd, userHome string) []location {
 	}
 	if userHome != "" {
 		add(filepath.Join(userHome, ".agents", "skills"), "global (agents)")
+	}
+	return out
+}
+
+// extensionSkillDirs lists <extension>/skills for every enabled
+// installed extension, global ($TERVA_HOME/extensions) before
+// project (.terva/extensions, rename-aware spellings). Enabled-ness
+// comes from a minimal read of each extension.json — a disabled
+// extension contributes nothing, skills included.
+func extensionSkillDirs(tervaHome, cwd string) []string {
+	var roots []string
+	if tervaHome != "" {
+		roots = append(roots, filepath.Join(tervaHome, "extensions"))
+	}
+	if cwd != "" {
+		for _, dirName := range envcompat.ProjectDirNames() {
+			roots = append(roots, filepath.Join(cwd, dirName, "extensions"))
+		}
+	}
+	var out []string
+	for _, root := range roots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			extDir := filepath.Join(root, e.Name())
+			mb, err := os.ReadFile(filepath.Join(extDir, "extension.json"))
+			if err != nil {
+				continue
+			}
+			var m struct {
+				Enabled *bool `json:"enabled"`
+			}
+			if json.Unmarshal(mb, &m) != nil {
+				continue
+			}
+			if m.Enabled != nil && !*m.Enabled {
+				continue
+			}
+			skillsDir := filepath.Join(extDir, "skills")
+			if st, err := os.Stat(skillsDir); err == nil && st.IsDir() {
+				out = append(out, skillsDir)
+			}
+		}
 	}
 	return out
 }
@@ -295,135 +354,34 @@ func splitFrontmatter(raw string) (string, string) {
 	return front, body
 }
 
-// parseFrontmatter handles the small subset of YAML terva recognizes:
-//   - simple `key: value` lines
-//   - `key: [a, b, c]` flow-style lists
-//   - `key:` followed by indented `- item` block lists
-//   - nested `key:` followed by indented `subkey: [...]` for permissions
-//
-// Anything more elaborate is ignored. We deliberately avoid a yaml
-// dependency to keep terva's binary lean.
+// frontmatter is the YAML head of a SKILL.md. terva recognises name,
+// description, an allowed-tools list (either spelling), and a
+// permissions map of tool -> patterns. AllowedTools and Permissions
+// are parsed for forward-compatibility but not yet enforced.
+type frontmatter struct {
+	Name            string              `yaml:"name"`
+	Description     string              `yaml:"description"`
+	AllowedTools    []string            `yaml:"allowed-tools"`
+	AllowedToolsAlt []string            `yaml:"allowed_tools"`
+	Permissions     map[string][]string `yaml:"permissions"`
+}
+
+// parseFrontmatter unmarshals the SKILL.md YAML head into s. Malformed
+// frontmatter degrades gracefully — the skill still loads (its name
+// falls back to the directory basename in scanUserSkills) rather than
+// vanishing from discovery — matching the prior hand-parser, which
+// silently ignored anything it couldn't read.
 func parseFrontmatter(front string, s *Skill) {
-	lines := strings.Split(front, "\n")
-	i := 0
-	for i < len(lines) {
-		line := lines[i]
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			i++
-			continue
-		}
-		// Top-level key: value or key:
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			colon := strings.IndexByte(trimmed, ':')
-			if colon < 0 {
-				i++
-				continue
-			}
-			key := strings.TrimSpace(trimmed[:colon])
-			value := strings.TrimSpace(trimmed[colon+1:])
-			switch key {
-			case "name":
-				s.Name = unquote(value)
-			case "description":
-				s.Description = unquote(value)
-			case "allowed-tools", "allowed_tools":
-				if value != "" {
-					s.AllowedTools = parseInlineList(value)
-				} else {
-					items, consumed := parseBlockList(lines[i+1:])
-					s.AllowedTools = items
-					i += consumed
-				}
-			case "permissions":
-				if value != "" {
-					// Unusual layout; ignore single-line for now.
-					i++
-					continue
-				}
-				perms, consumed := parsePermissionsBlock(lines[i+1:])
-				s.Permissions = perms
-				i += consumed
-			}
-		}
-		i++
+	var fm frontmatter
+	if err := yaml.Unmarshal([]byte(front), &fm); err != nil {
+		return
 	}
-}
-
-// unquote trims surrounding " or ' from a value.
-func unquote(v string) string {
-	if len(v) >= 2 {
-		if (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
-			return v[1 : len(v)-1]
-		}
+	s.Name = fm.Name
+	s.Description = fm.Description
+	if len(fm.AllowedTools) > 0 {
+		s.AllowedTools = fm.AllowedTools
+	} else {
+		s.AllowedTools = fm.AllowedToolsAlt
 	}
-	return v
-}
-
-// parseInlineList parses "[a, b, c]" or "[\"a\", \"b\"]".
-func parseInlineList(v string) []string {
-	v = strings.TrimSpace(v)
-	v = strings.TrimPrefix(v, "[")
-	v = strings.TrimSuffix(v, "]")
-	if v == "" {
-		return nil
-	}
-	parts := strings.Split(v, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		out = append(out, unquote(strings.TrimSpace(p)))
-	}
-	return out
-}
-
-// parseBlockList consumes indented "- item" lines until a less-
-// indented line. Returns the items + how many lines to skip.
-func parseBlockList(lines []string) ([]string, int) {
-	var out []string
-	consumed := 0
-	for _, line := range lines {
-		if strings.HasPrefix(line, "  - ") || strings.HasPrefix(line, "    - ") {
-			out = append(out, unquote(strings.TrimSpace(strings.TrimPrefix(strings.TrimLeft(line, " "), "-"))))
-			consumed++
-			continue
-		}
-		if strings.TrimSpace(line) == "" {
-			consumed++
-			continue
-		}
-		break
-	}
-	return out, consumed
-}
-
-// parsePermissionsBlock parses an indented map of tool->[patterns].
-//
-//	permissions:
-//	  bash: ["git diff*", "git log*"]
-//	  read: ["./*.go"]
-func parsePermissionsBlock(lines []string) (map[string][]string, int) {
-	out := map[string][]string{}
-	consumed := 0
-	for _, line := range lines {
-		if !strings.HasPrefix(line, "  ") {
-			break
-		}
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			consumed++
-			continue
-		}
-		colon := strings.IndexByte(trimmed, ':')
-		if colon < 0 {
-			break
-		}
-		key := strings.TrimSpace(trimmed[:colon])
-		val := strings.TrimSpace(trimmed[colon+1:])
-		if val == "" {
-			break // we don't support nested-block lists for permissions
-		}
-		out[key] = parseInlineList(val)
-		consumed++
-	}
-	return out, consumed
+	s.Permissions = fm.Permissions
 }

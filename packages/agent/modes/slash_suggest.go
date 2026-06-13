@@ -18,45 +18,6 @@ type slashCommand struct {
 	Header bool // true = visual divider, not selectable
 }
 
-// slashCancelsTurn reports whether the named slash command, when run
-// while a turn is in flight, requires the active turn to be cancelled
-// first. The destructive commands (those that mutate the transcript
-// or rebuild the agent) need a quiet state; the rest run alongside
-// the streaming response without trouble.
-func slashCancelsTurn(head string) bool {
-	switch head {
-	case "/new", "/clear", "/compact", "/logout", "/login", "/model", "/reload-ext", "/cd", "/migrate":
-		return true
-	}
-	return false
-}
-
-// slashCatalog lists every slash command the interactive mode handles.
-// Keep in sync with runSlash().
-var slashCatalog = []slashCommand{
-	{Name: "/help", Desc: "show key bindings and commands"},
-	{Name: "/login", Desc: "log in via api key or subscription"},
-	{Name: "/logout", Desc: "clear a provider's credentials"},
-	{Name: "/model", Desc: "pick a model (or /model <id>)"},
-	{Name: "/new", Desc: "start a fresh session (the current one stays on disk)"},
-	{Name: "/sessions", Desc: "resume a previous session for this directory"},
-	{Name: "/session", Desc: "export the current session to a .tervasession file, or import one"},
-	{Name: "/jump", Desc: "scroll the chat to a previous turn (or /jump <text>)"},
-	{Name: "/compact", Desc: "summarize and replace the transcript to free up context"},
-	{Name: "/study", Desc: "read every file in the cwd (or a passed file/dir) so the agent has full context"},
-	{Name: "/btw", Desc: "side-chat that doesn't add to the main thread (saves tokens)"},
-	{Name: "/jail", Desc: "confine tools to the current directory"},
-	{Name: "/unjail", Desc: "allow tools to touch paths outside this directory"},
-	{Name: "/skills", Desc: "list discovered skills (SKILL.md files)"},
-	{Name: "/swarm", Desc: "supervise background agents that share this working directory"},
-	{Name: "/reload-ext", Desc: "hot-reload all extensions (re-read manifests and respawn)"},
-	{Name: "/connect", Desc: "connect, disconnect, or show status of the chat bridge (telegram)"},
-	{Name: "/migrate", Desc: "move your zot data dir to the terva location"}, // rename:keep
-	{Name: "/settings", Desc: "open settings"},
-	{Name: "/clear", Desc: "clear the chat transcript"},
-	{Name: "/exit", Desc: "exit terva"},
-}
-
 // slashSuggester renders the popup that appears when the editor starts
 // with "/". It does not own any input state — the editor drives.
 const slashSuggestPageSize = 8
@@ -78,6 +39,13 @@ type slashSuggester struct {
 	// Up/Down read it so they know which indexes to skip across
 	// header rows.
 	lastMatches []slashCommand
+
+	// maxRows caps how many match rows Render shows at once; the
+	// window follows the cursor (cursorWindow). Set per-frame by the
+	// redraw pass from the live terminal height — without it the
+	// bare-"/" popup is taller than a 24-row terminal and its top
+	// commands clip off-screen. 0 = no cap.
+	maxRows int
 }
 
 // SetExtra updates the extension-contributed command list. Called
@@ -94,6 +62,9 @@ func (s *slashSuggester) SetExtra(cmds []slashCommand) {
 // SetJailed updates the current sandbox state. Called once per render
 // so state-dependent commands can appear/disappear immediately.
 func (s *slashSuggester) SetJailed(jailed bool) { s.jailed = jailed }
+
+// SetMaxRows caps the visible match window (0 = unlimited).
+func (s *slashSuggester) SetMaxRows(n int) { s.maxRows = n }
 
 // allCatalog returns slashCatalog plus the current extra commands
 // (extension-registered) with a header divider between the two
@@ -133,8 +104,9 @@ func (s *slashSuggester) baseCatalog() []slashCommand {
 	if s.jailed {
 		hide = "/jail"
 	}
-	out := make([]slashCommand, 0, len(slashCatalog)-1)
-	for _, c := range slashCatalog {
+	catalog := builtinSlashCatalog()
+	out := make([]slashCommand, 0, len(catalog)-1)
+	for _, c := range catalog {
 		if c.Name == hide {
 			continue
 		}
@@ -170,40 +142,6 @@ func looksLikeSlashCommand(text string) bool {
 		}
 	}
 	return true
-}
-
-// isKnownSlashCommand reports whether text's head matches a registered
-// slash command name in slashCatalog or hiddenSlashCommands. Built-in
-// only; extension commands are looked up separately by the dispatcher
-// (which consults the extension manager).
-func isKnownSlashCommand(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" || text[0] != '/' {
-		return false
-	}
-	head := text
-	if i := strings.IndexAny(text, " \t\n"); i >= 0 {
-		head = text[:i]
-	}
-	for _, c := range slashCatalog {
-		if c.Name == head {
-			return true
-		}
-	}
-	for _, h := range hiddenSlashCommands {
-		if h == head {
-			return true
-		}
-	}
-	return false
-}
-
-// hiddenSlashCommands are dispatchable but intentionally absent from
-// the autocomplete popup, /help, and the README. Used for commands
-// driven by extensions or by other internal flows where surfacing
-// the verb to humans would be confusing or premature.
-var hiddenSlashCommands = []string{
-	"/cd",
 }
 
 func newSlashSuggester() *slashSuggester { return &slashSuggester{} }
@@ -404,8 +342,14 @@ func (s *slashSuggester) Render(input string, th tui.Theme, width int) []string 
 			nameWidth = n
 		}
 	}
+	// Window the matches around the cursor so the popup fits short
+	// terminals and PageUp/PageDown visibly change what's shown.
+	start, end := cursorWindow(s.cursor, len(m), s.maxRows)
 	var lines []string
-	for i := 0; i < len(m); i++ {
+	if start > 0 {
+		lines = append(lines, windowMoreAbove(th, start))
+	}
+	for i := start; i < end; i++ {
 		c := m[i]
 		if c.Header {
 			// Breathing room around group dividers — a blank row
@@ -432,6 +376,9 @@ func (s *slashSuggester) Render(input string, th tui.Theme, width int) []string 
 		} else {
 			lines = append(lines, th.FG256(th.Muted, plain))
 		}
+	}
+	if end < len(m) {
+		lines = append(lines, windowMoreBelow(th, len(m), end))
 	}
 	// Blank row before the hint visually detaches it from the
 	// command list and groups it with its trailing blank.

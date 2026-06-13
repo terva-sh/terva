@@ -53,6 +53,13 @@ go.work.sum
 bin/
 dist/
 
+# Accidentally-committed Go build artifacts. Extension-less Go binaries
+# can't be globbed without risking real source, so list the known ones:
+# the swarm e2e stub (build it to a TempDir, never the tree) and the
+# todo example's compiled output (the example ships source only).
+/stubchild
+/examples/extensions/todo/terva-todo-extension
+
 node_modules/
 npm-debug.log*
 yarn-debug.log*

@@ -7,11 +7,9 @@ import (
 // logoutDialog is the picker shown when the user runs `/logout`
 // without an argument. Lists each provider the user is currently
 // logged into (apikey or oauth), plus an "all" entry and a cancel.
-// Up/down to move, enter to pick, esc to cancel.
+// A thin typed wrapper over the shared listPicker core.
 type logoutDialog struct {
-	active bool
-	items  []logoutItem
-	cursor int
+	p listPicker
 }
 
 // logoutItem is one row in the picker. target is what gets passed
@@ -38,45 +36,23 @@ func newLogoutDialog() *logoutDialog { return &logoutDialog{} }
 // should fall back to showing a status message instead of opening
 // an empty dialog.
 func (d *logoutDialog) Open(items []logoutItem) bool {
-	if len(items) == 0 {
-		return false
+	rows := make([]pickerItem, len(items))
+	for i, it := range items {
+		rows[i] = pickerItem{label: it.label, hint: it.method, value: it.target}
 	}
-	d.items = items
-	d.cursor = 0
-	d.active = true
-	return true
+	return d.p.open("logout", "choose what to log out of (↑/↓, enter, esc to cancel):", rows)
 }
 
 // Close hides the dialog.
-func (d *logoutDialog) Close() { d.active = false }
+func (d *logoutDialog) Close() { d.p.close() }
 
 // Active reports whether the dialog is consuming input.
-func (d *logoutDialog) Active() bool { return d != nil && d.active }
+func (d *logoutDialog) Active() bool { return d != nil && d.p.isActive() }
 
 // HandleKey advances the selection or resolves the dialog.
 func (d *logoutDialog) HandleKey(k tui.Key) logoutAction {
-	switch k.Kind {
-	case tui.KeyUp:
-		if d.cursor > 0 {
-			d.cursor--
-		}
-	case tui.KeyDown:
-		if d.cursor < len(d.items)-1 {
-			d.cursor++
-		}
-	case tui.KeyEsc:
-		d.Close()
-		return logoutAction{Close: true}
-	case tui.KeyEnter:
-		if len(d.items) == 0 {
-			d.Close()
-			return logoutAction{Close: true}
-		}
-		it := d.items[d.cursor]
-		d.Close()
-		return logoutAction{Select: true, Target: it.target}
-	}
-	return logoutAction{}
+	act := d.p.handleKey(k)
+	return logoutAction{Select: act.Select, Target: act.Value, Close: act.Close}
 }
 
 // Render returns the dialog lines.
@@ -84,20 +60,5 @@ func (d *logoutDialog) Render(th tui.Theme, width int) []string {
 	if !d.Active() {
 		return nil
 	}
-	var lines []string
-	lines = append(lines, frameHeader(th, "logout", width))
-	lines = append(lines, th.FG256(th.Muted, "choose what to log out of (\u2191/\u2193, enter, esc to cancel):"))
-	for i, it := range d.items {
-		plain := "  " + it.label
-		if it.method != "" {
-			plain += "  " + th.FG256(th.Muted, "("+it.method+")")
-		}
-		if i == d.cursor {
-			lines = append(lines, th.PadHighlight(plain, width))
-		} else {
-			lines = append(lines, th.FG256(th.Muted, plain))
-		}
-	}
-	lines = append(lines, frameRule(th, width))
-	return lines
+	return d.p.render(th, width)
 }

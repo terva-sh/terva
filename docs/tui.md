@@ -23,11 +23,12 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/skills` | List discovered skills (SKILL.md files) and preview their bodies. |
 | `/compact` | Summarize the transcript into one message to free up context. |
 | `/study` | Run the canned prompt "Read and understand everything in the current directory." so the agent has full project context before you start asking targeted questions. Pass a path — typed, drag-dropped, or selected via `@` — to target a specific file or directory instead: `/study [dir:packages/]`, `/study cmd/terva/main.go`. |
-| `/jail` | Confine tools to the current directory. |
+| `/jail` | Confine tools to the current directory. (On by default in interactive sessions; `--no-jail` starts unjailed.) |
 | `/unjail` | Allow tools to touch paths outside again. |
+| `/permissions` | Show the current approval mode and the active permission rules grouped by source (user/project/extension), and revoke this session's "always allow" grants: `↑`/`↓` select a grant, `r` or `del` takes it back, `R` clears them all, `esc` closes. Rules stay read-only (edit them in config). Alias: `/perms`. See [permissions.md](permissions.md). |
 | `/reload-ext` | Hot-reload all extensions (re-read manifests, respawn subprocesses, rebuild tool registry). |
 | `/connect` | Connect, disconnect, or show status of the chat bridge (takes `connect` / `disconnect` / `status` as an optional argument; opens a picker without one). When connected, DMs from the paired user become prompts in the running session and the assistant's replies are mirrored back to the chat. Telegram is the built-in connector today. Aliases: `/telegram`, `/tg`. |
-| `/settings` | Toggle persistent settings (inline images, auto-swarm) with `enter`/`space`. Saved to `$TERVA_HOME/config.json`; takes effect immediately. |
+| `/settings` | Toggle persistent settings (inline images, auto-swarm, reasoning, theme) with `enter`/`space` or the option picker — saved to `$TERVA_HOME/config.json`, effective immediately. The **approval mode** picker is the exception: it switches the mode live for the **current session only** (like `/jail`), and is *not* persisted — the startup default comes only from an explicit `approval` key in config or the `--approval` flag, so the picker can never silently pin a mode into your config. |
 | `/clear` | Clear the chat transcript. |
 | `/exit` | Exit terva. |
 

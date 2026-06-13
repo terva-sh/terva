@@ -32,7 +32,7 @@ func TestShellEscapeCommand(t *testing.T) {
 }
 
 func TestRenderShellBlockStylesFooterDimmed(t *testing.T) {
-	i := &Interactive{}
+	i := &Interactive{turns: newTurnEngine()}
 	i.cfg.Theme = tui.Theme{Tool: 2, Error: 1, Muted: 8}
 
 	ok := i.renderShellBlock("$ echo hi\n\nhi\n\n[exit 0]  Took 0.1s", false)

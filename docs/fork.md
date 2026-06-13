@@ -103,4 +103,7 @@ cadence — their direction may inform ours; it doesn't steer it.
 
 The full rename engineering record — phases, deviations, the
 enforcement tests — lives in
-[docs/plans/rename-terva.md](plans/rename-terva.md).
+[docs/plans/rename-terva.md](plans/rename-terva.md). A quantitative
+divergence measurement (commit/diff/test metrics against translated
+upstream, with the method to re-run it) lives in
+[docs/architecture/09-zot-divergence.md](architecture/09-zot-divergence.md).

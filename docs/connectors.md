@@ -153,6 +153,12 @@ Versioning is negotiated, not announce-only: hello carries
 error when its own version falls outside the range. terva kills a child
 that sends no hello within 3 seconds.
 
+Connector processes start from a sanitized environment: terva strips
+loader/interpreter injection vars (`LD_*`, `DYLD_*`, `PYTHONPATH`,
+`NODE_OPTIONS`, `BASH_ENV`, …) before the spawn, same as extensions.
+Everything else — `PATH`, `HOME`, tokens your connector reads — passes
+through.
+
 Session — host to connector:
 
 ```json

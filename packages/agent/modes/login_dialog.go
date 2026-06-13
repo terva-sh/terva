@@ -535,10 +535,3 @@ func (d *loginDialog) CursorPos(width int) (row, col int) {
 	baseOffset := 1 /*frameHeader*/ + 1 /*padDialogFrame blank*/ + 1 /*hint*/ + urlLines + 1 /*blank*/ + 1 /*prompt*/
 	return baseOffset + eRow, eCol
 }
-
-func max0(x int) int {
-	if x < 0 {
-		return 0
-	}
-	return x
-}

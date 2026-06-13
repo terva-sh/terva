@@ -59,11 +59,13 @@ func NewOpenAICodex(token, accountID, baseURL string) Client {
 
 func (c *codexClient) Name() string { return "openai-codex" }
 
-// MirrorsToolImages reports that tool-result images must be mirrored into
-// a following user message. The Responses API's function_call_output only
-// carries a string (see buildRequest), so image bytes can't ride along
-// with the tool result and are delivered via the mirror instead.
-func (c *codexClient) MirrorsToolImages() bool { return true }
+// Capabilities declares that tool-result images must be mirrored into
+// a following user message. The Responses API's function_call_output
+// only carries a string (see buildRequest), so image bytes can't ride
+// along with the tool result and are delivered via the mirror instead.
+func (c *codexClient) Capabilities() ClientCapabilities {
+	return ClientCapabilities{MirrorsToolImages: true}
+}
 
 // ---- Responses API wire types (subset needed for terva's surface) ----
 

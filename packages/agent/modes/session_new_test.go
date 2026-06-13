@@ -14,7 +14,7 @@ import (
 func newInteractiveForNewSessionTest() *Interactive {
 	iv := &Interactive{
 		view:  &tui.View{},
-		agent: &core.Agent{Model: "claude-sonnet-4-5"},
+		turns: newTurnEngine(),
 		// Pre-populate state that startNewSession must clear.
 		toolCalls:    map[string]*tui.ToolCallView{"x": {}},
 		cumUsage:     provider.Usage{InputTokens: 1234, OutputTokens: 56},
@@ -24,6 +24,7 @@ func newInteractiveForNewSessionTest() *Interactive {
 	}
 	iv.cfg.Provider = "anthropic"
 	iv.cfg.Model = "claude-sonnet-4-5"
+	iv.turns.SetAgent(&core.Agent{Model: "claude-sonnet-4-5"})
 	return iv
 }
 
@@ -36,7 +37,7 @@ func TestStartNewSessionResetsStateAndInvokesCallback(t *testing.T) {
 		called = true
 		gotProvider, gotModel = providerName, model
 		// Mimic the host: the live agent's transcript is reset.
-		iv.agent.SetMessages(nil)
+		iv.turns.Agent().SetMessages(nil)
 		return nil
 	}
 

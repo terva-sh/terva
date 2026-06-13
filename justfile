@@ -21,7 +21,9 @@ upstream_url := "https://github.com/patriceckhart/zot.git" # rename:keep — ups
 # whose origin is the real GitHub repo. release-publish lands releases in
 # the clone; going live is an explicit push from inside it, so every
 # release gets a local inspection step (docs/plans/release-process.md).
-mirror_url := "/Users/drewshort/Workspace/github.com/terva-sh/terva"
+# Per-machine: TERVA_MIRROR_DIR overrides; the default assumes the
+# conventional ~/workspace layout (set the env var where it differs).
+mirror_url := env_var_or_default("TERVA_MIRROR_DIR", env_var_or_default("HOME", "~") + "/workspace/github.com/terva-sh/terva")
 
 # Local/untagged builds ship as 0.0.0; release tags override this via goreleaser.
 version := "0.0.0"

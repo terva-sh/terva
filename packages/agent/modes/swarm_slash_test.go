@@ -26,6 +26,7 @@ func newInteractiveForSwarmTest(t *testing.T) (*Interactive, *swarm.Swarm) {
 		},
 	})
 	iv := &Interactive{
+		turns:       newTurnEngine(),
 		swarmDialog: newSwarmDialog(),
 		dirty:       make(chan struct{}, 1),
 	}
@@ -131,7 +132,7 @@ func TestRunSwarmSendDeliversToAgentInbox(t *testing.T) {
 		},
 	})
 	defer f.StopAll()
-	iv := &Interactive{swarmDialog: newSwarmDialog(), dirty: make(chan struct{}, 1)}
+	iv := &Interactive{swarmDialog: newSwarmDialog(), dirty: make(chan struct{}, 1), turns: newTurnEngine()}
 	iv.cfg.Swarm = f
 
 	a, err := f.Spawn(context.Background(), "do thing")
@@ -145,9 +146,11 @@ func TestRunSwarmSendDeliversToAgentInbox(t *testing.T) {
 
 	select {
 	case msg := <-recv:
-		want := "user please continue"
-		if msg != want {
-			t.Fatalf("agent received %q; want %q", msg, want)
+		// The wire is now a newline-safe JSON envelope; decode it
+		// rather than asserting the raw bytes.
+		kind, text := swarm.ParseInboxLine(msg)
+		if kind != "user" || text != "please continue" {
+			t.Fatalf("agent received %q → (%q, %q); want (user, please continue)", msg, kind, text)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for agent to receive the prompt")
@@ -210,6 +213,7 @@ func TestSplitIDAndRest(t *testing.T) {
 
 func TestRunSwarmWithoutSwarmIsNoop(t *testing.T) {
 	iv := &Interactive{
+		turns:       newTurnEngine(),
 		swarmDialog: newSwarmDialog(),
 		dirty:       make(chan struct{}, 1),
 	}

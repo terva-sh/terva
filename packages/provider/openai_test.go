@@ -5,44 +5,37 @@ import (
 	"testing"
 )
 
-// The agent loop decides whether to mirror tool-result images into a
-// following user message by asking the client for MirrorsToolImages().
-// Every OpenAI chat-completions provider (and the Responses/codex route)
-// must opt in — their wire formats can't carry images in a tool result.
-// MirrorsToolImages describes the wire format only: deepseek now opts
-// in like every other chat-completions client, and whether a given
-// MODEL can see images is the per-model image-input capability the
-// agent loop checks separately (docs/plans/model-capabilities.md).
-// Providers that carry tool images natively (Anthropic, Gemini) must
-// NOT implement it.
-func TestMirrorsToolImagesCapability(t *testing.T) {
-	mirrors := func(c Client) (implements, value bool) {
-		m, ok := c.(interface{ MirrorsToolImages() bool })
-		if !ok {
-			return false, false
-		}
-		return true, m.MirrorsToolImages()
-	}
-
+// Client capabilities are declared through one explicit struct
+// (ClientCapabilities) behind the named capabilityProvider interface,
+// not a per-capability anonymous interface. Every OpenAI
+// chat-completions provider (and the Responses/codex route) declares
+// MirrorsToolImages — their wire formats can't carry images in a tool
+// result. It's a WIRE-FORMAT fact; whether a given MODEL can see
+// images is the separate per-model capability the loop checks
+// (docs/plans/model-capabilities.md). Providers that carry tool
+// images natively (Anthropic, Gemini) must NOT declare it.
+func TestClientCapabilitiesDeclared(t *testing.T) {
 	cases := []struct {
 		name       string
 		client     Client
-		wantImpl   bool
+		wantImpl   bool // implements capabilityProvider
 		wantMirror bool
 	}{
 		{"openai", NewOpenAI("k", ""), true, true},
 		{"groq", NewGroq("k", ""), true, true},
 		{"openai-codex", NewOpenAICodex("k", "", ""), true, true},
 		{"deepseek", NewDeepSeek("k", ""), true, true},
+		// Anthropic carries tool images natively: declares nothing.
+		{"anthropic", NewAnthropic("k", ""), false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			impl, val := mirrors(tc.client)
+			_, impl := tc.client.(capabilityProvider)
 			if impl != tc.wantImpl {
-				t.Fatalf("implements MirrorsToolImages = %v, want %v", impl, tc.wantImpl)
+				t.Fatalf("implements capabilityProvider = %v, want %v", impl, tc.wantImpl)
 			}
-			if val != tc.wantMirror {
-				t.Errorf("MirrorsToolImages() = %v, want %v", val, tc.wantMirror)
+			if got := ClientCaps(tc.client).MirrorsToolImages; got != tc.wantMirror {
+				t.Errorf("ClientCaps().MirrorsToolImages = %v, want %v", got, tc.wantMirror)
 			}
 		})
 	}

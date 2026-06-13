@@ -50,6 +50,56 @@ type Resolved struct {
 	systemAppend     []string
 	systemCustom     string
 	toolDescriptions map[string]string
+
+	// approvalMode is the effective approval mode at resolve time.
+	// Plan mode shrinks the registry to read-only tools and keeps
+	// mutating extension tools out of the merge.
+	approvalMode core.ApprovalMode
+
+	// readOnlySet is the gate policy's dynamic read-only registry,
+	// adopted via AdoptReadOnlySet so tool merges can extend it with
+	// read_only-annotated extension/MCP tools. Nil when no gate
+	// exists (pure yolo).
+	readOnlySet *core.ReadOnlySet
+}
+
+// AdoptReadOnlySet hands the permission policy's read-only registry
+// to the resolver, so merged extension/MCP tools that declare
+// read_only join the classification the approval modes consult.
+func (r *Resolved) AdoptReadOnlySet(s *core.ReadOnlySet) { r.readOnlySet = s }
+
+// AddExtraTools folds embedder-supplied tools into r's ToolRegistry
+// and re-renders the system prompt so the model sees them. nil/empty
+// is a no-op.
+//
+// Conflict policy is the deliberate inverse of MergeExtensionTools:
+// there, auto-discovered subprocess extensions lose a name collision
+// so a built-in is never silently shadowed. Here the tools are
+// in-process, compiled into the embedding binary, and injected
+// explicitly through sdk.Config — maximally trusted — so an
+// embedder-supplied tool OVERRIDES a built-in of the same name,
+// letting an embedder swap, say, a custom bash.
+func (r *Resolved) AddExtraTools(extra []core.Tool) {
+	if len(extra) == 0 {
+		return
+	}
+	if r.ToolRegistry == nil {
+		r.ToolRegistry = core.Registry{}
+	}
+	for _, t := range extra {
+		if t == nil {
+			continue
+		}
+		r.ToolRegistry[t.Name()] = t
+	}
+	r.SystemPrompt = BuildSystemPrompt(SystemPromptOpts{
+		CWD:          r.CWD,
+		Tools:        toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
+		Custom:       r.systemCustom,
+		Append:       r.systemAppend,
+		TervaDocsDir: filepath.Join(TervaHome(), "docs"),
+		StatusTool:   r.ToolRegistry["terva_status"] != nil,
+	})
 }
 
 // HasCredential reports whether a credential was resolved.
@@ -63,35 +113,50 @@ func (r Resolved) HasCredential() bool { return r.Credential != "" }
 // effect on the second pass (existing names are preserved). Built-in
 // tools always win on conflict.
 func (r *Resolved) MergeExtensionTools(mgr ExtensionToolSource) {
-	if mgr == nil {
-		return
+	if MergeToolsForMode(r.ToolRegistry, r.approvalMode, r.readOnlySet, mgr) {
+		// Re-render the system prompt with the merged tool list. Skill
+		// addendum is preserved by walking the existing append slice.
+		r.SystemPrompt = BuildSystemPrompt(SystemPromptOpts{
+			CWD:          r.CWD,
+			Tools:        toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
+			Custom:       r.systemCustom,
+			Append:       r.systemAppend,
+			TervaDocsDir: filepath.Join(TervaHome(), "docs"),
+			StatusTool:   r.ToolRegistry["terva_status"] != nil,
+		})
 	}
-	infos := mgr.Tools()
-	if len(infos) == 0 {
-		return
+}
+
+// MergeToolsForMode folds an extension/MCP source's tools into reg for
+// the given approval mode, registering read_only-annotated tools into
+// roSet, and reports whether anything was added. Built-in tools (and
+// already-merged names) win on conflict. In plan mode only tools that
+// declare themselves side-effect-free join — the rest stay invisible
+// so the model doesn't try them, with the confirm gate as backstop.
+//
+// Shared by the startup merge and the live approval-mode switch so the
+// two cannot drift; the live switch rebuilds reg from scratch and
+// re-merges, which is why this is registry-only (no system-prompt
+// coupling).
+func MergeToolsForMode(reg core.Registry, mode core.ApprovalMode, roSet *core.ReadOnlySet, mgr ExtensionToolSource) bool {
+	if mgr == nil || reg == nil {
+		return false
 	}
 	changed := false
-	for _, info := range infos {
-		if _, exists := r.ToolRegistry[info.Name]; exists {
+	for _, info := range mgr.Tools() {
+		if mode == core.ApprovalPlan && !info.ReadOnly {
 			continue
 		}
-		r.ToolRegistry[info.Name] = mgr.NewExtensionTool(info)
+		if _, exists := reg[info.Name]; exists {
+			continue
+		}
+		reg[info.Name] = mgr.NewExtensionTool(info)
+		if info.ReadOnly {
+			roSet.Add(info.Name)
+		}
 		changed = true
 	}
-	if !changed {
-		return
-	}
-	// Re-render the system prompt with the merged tool list. Skill
-	// addendum is preserved by walking the existing append slice.
-	append_ := r.systemAppend
-	r.SystemPrompt = BuildSystemPrompt(SystemPromptOpts{
-		CWD:          r.CWD,
-		Tools:        toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
-		Custom:       r.systemCustom,
-		Append:       append_,
-		TervaDocsDir: filepath.Join(TervaHome(), "docs"),
-		StatusTool:   r.ToolRegistry["terva_status"] != nil,
-	})
+	return changed
 }
 
 // ExtensionToolSource is the slice of the extension manager that
@@ -111,6 +176,11 @@ type ExtensionToolInfo struct {
 	Name        string
 	Description string
 	Schema      []byte
+	// ReadOnly carries the source's no-side-effects declaration
+	// (extension register_tool read_only / MCP readOnlyHint). It
+	// admits the tool in plan mode and feeds the permission
+	// classification.
+	ReadOnly bool
 }
 
 // toolSummariesFromRegistry rebuilds the system-prompt tool list
@@ -129,127 +199,29 @@ func toolSummariesFromRegistry(reg core.Registry, cached map[string]string) []To
 }
 
 // defaultModelForProvider returns the model id terva prefers when the
-// caller didn't pick one. Mirrors the per-provider switch used at
-// multiple points in Resolve; centralised so the unknown-model
-// recovery path and the no-model-configured path can't drift.
+// caller didn't pick one. Reads the provider registry (provider_registry.go).
 //
-// Returns the empty string for "ollama", which has no built-in
-// default — the caller is expected to special-case ollama and
-// error or use whatever the user passed.
+// Returns the empty string for providers with no built-in default
+// (ollama, openai-compatible) — the caller special-cases those and
+// errors or uses whatever the user passed.
 func defaultModelForProvider(prov string) string {
-	switch prov {
-	case "openai":
-		return "gpt-5"
-	case "openai-codex":
-		return "gpt-5.5"
-	case "openai-responses":
-		return "gpt-5"
-	case "kimi":
-		return "kimi-for-coding"
-	case "deepseek":
-		return "deepseek-v4-pro"
-	case "google":
-		return "gemini-2.5-pro"
-	case "ollama", "openai-compatible":
-		return ""
-	case "moonshotai", "moonshotai-cn":
-		return "kimi-k2.6"
-	case "cerebras":
-		return "qwen-3-235b-a22b-instruct-2507"
-	case "groq":
-		return "llama-3.3-70b-versatile"
-	case "xai":
-		return "grok-code-fast-1"
-	case "together":
-		return "Qwen/Qwen3-Coder-480B-A35B-Instruct"
-	case "huggingface":
-		return "moonshotai/Kimi-K2-Instruct"
-	case "openrouter":
-		return "anthropic/claude-sonnet-4.5"
-	case "mistral":
-		return "mistral-large-latest"
-	case "zai":
-		return "glm-4.7"
-	case "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp":
-		return "mimo-v2.5"
-	case "minimax", "minimax-cn":
-		return "MiniMax-M2.7"
-	case "fireworks":
-		return "accounts/fireworks/models/kimi-k2p6"
-	case "vercel-ai-gateway":
-		return "anthropic/claude-sonnet-4.5"
-	case "opencode":
-		return "claude-sonnet-4-5"
-	case "opencode-go":
-		return "kimi-k2.6"
-	case "amazon-bedrock":
-		return "anthropic.claude-sonnet-4-5-20250929-v1:0"
-	case "google-vertex":
-		return "gemini-2.5-pro"
-	case "azure-openai-responses":
-		return "gpt-5"
-	case "github-copilot":
-		return "claude-sonnet-4.5"
-	default:
-		return provider.DefaultModel.ID
-	}
-}
-
-// knownProviders is the set of provider ids terva recognises. Used by
-// Resolve to validate args.Provider, by extension-callers, and by the
-// auto-fallback logic that picks any logged-in provider when the user's
-// preferred one has no credentials.
-var knownProviders = []string{
-	"anthropic", "openai", "openai-codex", "openai-responses", "kimi", "deepseek", "google", "ollama",
-	"moonshotai", "moonshotai-cn",
-	"cerebras", "groq", "xai", "together", "huggingface", "openrouter",
-	"mistral", "zai",
-	"xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp",
-	"minimax", "minimax-cn",
-	"fireworks", "vercel-ai-gateway",
-	"opencode", "opencode-go",
-	"amazon-bedrock", "google-vertex", "azure-openai-responses",
-	"github-copilot", "cloudflare-workers-ai", "cloudflare-ai-gateway",
-	"openai-compatible",
-}
-
-func isKnownProvider(name string) bool {
-	for _, p := range knownProviders {
-		if p == name {
-			return true
+	if spec, ok := providerByID[prov]; ok {
+		if spec.noDefaultModel {
+			return ""
+		}
+		if spec.defaultModel != "" {
+			return spec.defaultModel
 		}
 	}
-	return false
+	return provider.DefaultModel.ID
 }
 
-// providerAliases maps common short / alternate provider names to the
-// canonical id in knownProviders. Users (and other agents) reach for
-// "bedrock" or "vertex" far more naturally than the fully-qualified
-// "amazon-bedrock" / "google-vertex"; without this mapping an alias is
-// treated as an unknown provider and Resolve silently falls back to
-// anthropic, producing a misleading "no credential for anthropic" error
-// after the user explicitly picked, say, bedrock.
-var providerAliases = map[string]string{
-	"bedrock":      "amazon-bedrock",
-	"aws-bedrock":  "amazon-bedrock",
-	"amazon":       "amazon-bedrock",
-	"vertex":       "google-vertex",
-	"gcp-vertex":   "google-vertex",
-	"gemini":       "google",
-	"googleai":     "google",
-	"google-ai":    "google",
-	"azure":        "azure-openai-responses",
-	"azure-openai": "azure-openai-responses",
-	"copilot":      "github-copilot",
-	"github":       "github-copilot",
-	"codex":        "openai-codex",
-	"moonshot":     "moonshotai",
-	"kimi-code":    "kimi",
-	"ai-gateway":   "vercel-ai-gateway",
-	"vercel":       "vercel-ai-gateway",
-	"cloudflare":   "cloudflare-workers-ai",
-	"workers-ai":   "cloudflare-workers-ai",
-	"hf":           "huggingface",
+// isKnownProvider reports whether name is a canonical provider id in
+// the registry (provider_registry.go). knownProviders (the ordered id
+// list) and the providerAliases map are derived there too.
+func isKnownProvider(name string) bool {
+	_, ok := providerByID[name]
+	return ok
 }
 
 // canonicalProvider normalises a user-supplied provider name: trims
@@ -499,7 +471,11 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	}
 
 	sandbox := tools.NewSandbox(args.CWD)
-	reg := buildToolRegistry(args, args.CWD, sandbox, provName, method)
+	if resolveJail(args) {
+		sandbox.Lock()
+	}
+	approval := effectiveApprovalMode(args)
+	reg := buildToolRegistry(args, approval, args.CWD, sandbox, provName, method)
 
 	docsDir, _ := tervadocs.EnsureInstalled(TervaHome())
 
@@ -589,6 +565,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		systemAppend:     append_,
 		systemCustom:     custom,
 		toolDescriptions: descMapFromSummaries(summaries),
+		approvalMode:     approval,
 	}, nil
 }
 
@@ -696,97 +673,21 @@ func descMapFromSummaries(summaries []ToolSummary) map[string]string {
 	return out
 }
 
-// NewClient returns a provider.Client for r, choosing the auth mode
-// based on r.AuthMethod. Panics if no credential is present; callers
-// must check HasCredential() first.
+// NewClient returns a provider.Client for r via the provider registry
+// (provider_registry.go). Panics if no credential is present; callers
+// must check HasCredential() first. An unregistered provider falls
+// back to the anthropic client, matching the historical default.
 func (r Resolved) NewClient() provider.Client {
 	if !r.HasCredential() {
 		panic("NewClient called without credential; check HasCredential first")
 	}
-	switch r.Provider {
-	case "ollama", "openai-compatible":
-		return provider.NewOpenAI(r.Credential, r.BaseURL)
-	case "kimi":
-		// kimi-coding speaks anthropic-messages on api.kimi.com/coding.
-		// Subscription OAuth (refreshed) wraps the same Anthropic-shaped client.
-		inner := provider.NewKimiCodingWithHeaders(r.Credential, r.BaseURL, kimiCodeHeaders())
-		if r.AuthMethod == "oauth" {
-			return r.wrapWithRefresh(inner)
-		}
-		return inner
-	case "moonshotai":
-		return provider.NewMoonshot(r.Credential, r.BaseURL)
-	case "moonshotai-cn":
-		return provider.NewMoonshotCN(r.Credential, r.BaseURL)
-	case "deepseek":
-		return provider.NewDeepSeek(r.Credential, r.BaseURL)
-	case "openai":
-		return provider.NewOpenAI(r.Credential, r.BaseURL)
-	case "openai-codex":
-		inner := provider.NewOpenAICodex(r.Credential, r.AccountID, r.BaseURL)
-		return r.wrapWithRefresh(inner)
-	case "openai-responses":
-		// Public OpenAI Responses API (api.openai.com/v1/responses) via
-		// API key. Separate provider from `openai` (Chat Completions) and
-		// from `openai-codex` (ChatGPT subscription OAuth).
-		return provider.NewOpenAIResponses(r.Credential, r.BaseURL)
-	case "google":
-		return provider.NewGemini(r.Credential, r.BaseURL)
-	case "cerebras":
-		return provider.NewCerebras(r.Credential, r.BaseURL)
-	case "groq":
-		return provider.NewGroq(r.Credential, r.BaseURL)
-	case "xai":
-		return provider.NewXAI(r.Credential, r.BaseURL)
-	case "together":
-		return provider.NewTogether(r.Credential, r.BaseURL)
-	case "huggingface":
-		return provider.NewHuggingFace(r.Credential, r.BaseURL)
-	case "openrouter":
-		return provider.NewOpenRouter(r.Credential, r.BaseURL)
-	case "zai":
-		return provider.NewZAI(r.Credential, r.BaseURL)
-	case "xiaomi":
-		return provider.NewXiaomi(r.Credential, r.BaseURL)
-	case "xiaomi-token-plan-ams":
-		return provider.NewXiaomiTokenPlan("ams", r.Credential, r.BaseURL)
-	case "xiaomi-token-plan-cn":
-		return provider.NewXiaomiTokenPlan("cn", r.Credential, r.BaseURL)
-	case "xiaomi-token-plan-sgp":
-		return provider.NewXiaomiTokenPlan("sgp", r.Credential, r.BaseURL)
-	case "opencode":
-		return provider.NewOpenCode(r.Credential, r.BaseURL)
-	case "opencode-go":
-		return provider.NewOpenCodeGo(r.Credential, r.BaseURL)
-	case "minimax":
-		return provider.NewMinimaxAnthropic(r.Credential, r.BaseURL)
-	case "minimax-cn":
-		return provider.NewMinimaxCNAnthropic(r.Credential, r.BaseURL)
-	case "fireworks":
-		return provider.NewFireworksAnthropic(r.Credential, r.BaseURL)
-	case "vercel-ai-gateway":
-		return provider.NewVercelGatewayAnthropic(r.Credential, r.BaseURL)
-	case "mistral":
-		return provider.NewMistral(r.Credential, r.BaseURL)
-	case "amazon-bedrock":
-		return provider.NewBedrock(r.Credential, r.BaseURL)
-	case "google-vertex":
-		return provider.NewGoogleVertex(r.Credential, r.BaseURL)
-	case "azure-openai-responses":
-		return provider.NewAzureOpenAIResponses(r.Credential, r.BaseURL)
-	case "github-copilot":
-		return provider.NewGithubCopilot(r.Credential, r.BaseURL)
-	case "cloudflare-workers-ai":
-		return provider.NewCloudflareWorkersAI(r.Credential, r.BaseURL)
-	case "cloudflare-ai-gateway":
-		return provider.NewCloudflareAIGateway(r.Credential, r.BaseURL)
-	default:
-		if r.AuthMethod == "oauth" {
-			inner := provider.NewAnthropicOAuth(r.Credential, r.BaseURL)
-			return r.wrapWithRefresh(inner)
-		}
-		return provider.NewAnthropic(r.Credential, r.BaseURL)
+	if spec, ok := providerByID[r.Provider]; ok {
+		return spec.newClient(r)
 	}
+	if r.AuthMethod == "oauth" {
+		return r.wrapWithRefresh(provider.NewAnthropicOAuth(r.Credential, r.BaseURL))
+	}
+	return provider.NewAnthropic(r.Credential, r.BaseURL)
 }
 
 // wrapWithRefresh wraps an OAuth client so the access token is
@@ -862,7 +763,7 @@ func (r Resolved) NewAgent() *core.Agent {
 	return a
 }
 
-func buildToolRegistry(args Args, cwd string, sandbox *tools.Sandbox, provName, authMethod string) core.Registry {
+func buildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbox *tools.Sandbox, provName, authMethod string) core.Registry {
 	if args.NoTools {
 		return core.Registry{}
 	}
@@ -872,6 +773,16 @@ func buildToolRegistry(args Args, cwd string, sandbox *tools.Sandbox, provName, 
 		"edit":         &tools.EditTool{CWD: cwd, Sandbox: sandbox},
 		"bash":         &tools.BashTool{CWD: cwd, Sandbox: sandbox},
 		"terva_status": &tools.StatusTool{Provider: provName, CWD: cwd, AuthMethod: authMethod, BaseURL: args.BaseURL},
+	}
+	// Plan mode promises read-only: mutating tools don't enter the
+	// registry at all (the model shouldn't even see them), with the
+	// confirm gate as the backstop for anything that arrives later.
+	if approval == core.ApprovalPlan {
+		for name := range all {
+			if !readOnlyTools[name] {
+				delete(all, name)
+			}
+		}
 	}
 	reg := core.Registry{}
 	if len(args.Tools) == 0 {
@@ -933,65 +844,12 @@ func kimiCodeHeaders() map[string]string {
 	}
 }
 
-func envVarName(provider string) string {
-	switch provider {
-	case "openai", "openai-codex", "openai-responses":
-		return "OPENAI"
-	case "kimi":
-		return "KIMI"
-	case "deepseek":
-		return "DEEPSEEK"
-	case "google":
-		return "GEMINI"
-	case "ollama":
-		return "OLLAMA"
-	case "moonshotai", "moonshotai-cn":
-		return "MOONSHOT"
-	case "groq":
-		return "GROQ"
-	case "xai":
-		return "XAI"
-	case "cerebras":
-		return "CEREBRAS"
-	case "together":
-		return "TOGETHER"
-	case "huggingface":
-		return "HF"
-	case "openrouter":
-		return "OPENROUTER"
-	case "mistral":
-		return "MISTRAL"
-	case "zai":
-		return "ZAI"
-	case "xiaomi":
-		return "XIAOMI"
-	case "xiaomi-token-plan-ams":
-		return "XIAOMI_TOKEN_PLAN_AMS"
-	case "xiaomi-token-plan-cn":
-		return "XIAOMI_TOKEN_PLAN_CN"
-	case "xiaomi-token-plan-sgp":
-		return "XIAOMI_TOKEN_PLAN_SGP"
-	case "minimax":
-		return "MINIMAX"
-	case "minimax-cn":
-		return "MINIMAX_CN"
-	case "fireworks":
-		return "FIREWORKS"
-	case "vercel-ai-gateway":
-		return "AI_GATEWAY"
-	case "opencode", "opencode-go":
-		return "OPENCODE"
-	case "github-copilot":
-		return "COPILOT_GITHUB_TOKEN"
-	case "cloudflare-workers-ai", "cloudflare-ai-gateway":
-		return "CLOUDFLARE"
-	case "amazon-bedrock":
-		return "AWS"
-	case "google-vertex":
-		return "GOOGLE_CLOUD"
-	case "azure-openai-responses":
-		return "AZURE_OPENAI"
-	default:
-		return "ANTHROPIC"
+// envVarName returns the short token shown in "set <X>_API_KEY"
+// guidance when a provider has no credential. Reads the registry
+// (provider_registry.go); empty/unknown falls back to ANTHROPIC.
+func envVarName(prov string) string {
+	if spec, ok := providerByID[prov]; ok && spec.envHint != "" {
+		return spec.envHint
 	}
+	return "ANTHROPIC"
 }

@@ -22,7 +22,9 @@ A coding agent harness, lightweight and written in Go.
 - one static binary.
 - built-in providers for Anthropic, OpenAI/Codex/Responses, Kimi, DeepSeek, Google Gemini/Vertex, GitHub Copilot, Bedrock, Azure OpenAI, OpenRouter, Groq, Cerebras, xAI, Together, Hugging Face, Mistral, Moonshot, Z.AI, Xiaomi, MiniMax, Fireworks, Vercel AI Gateway, OpenCode, Cloudflare AI, Ollama, and any OpenAI-compatible local/custom endpoint.
 - four core tools (read, write, edit, bash), plus `terva_status` for agent self-introspection.
-- three run modes (interactive tui, print, json).
+- a permission system: approval modes (`plan`/`ask`/`auto-edit`/`workspace`/`yolo`) plus typed permission rules. Interactive sessions default to **`workspace`** (built-in tools and reads run; foreign extension/MCP tools that can have side effects ask) and are **sandboxed to the working directory** by default. See [docs/permissions.md](docs/permissions.md).
+- pre/post tool-use **hooks** (veto, rewrite, or observe tool calls with your own scripts; [docs/hooks.md](docs/hooks.md)) and an **MCP client** (attach Model Context Protocol servers as tools; [docs/mcp.md](docs/mcp.md)).
+- four run modes (interactive tui, print, json, and a JSON-RPC server for embedding).
 - chat connectors: a built-in telegram bridge, and **external connectors in
   any language** — separate executables speaking a small versioned JSON
   protocol, mirroring how extensions work. See [docs/connectors.md](docs/connectors.md).
@@ -117,6 +119,9 @@ terva --help
 | Doc | What's in it |
 |---|---|
 | [docs/cli.md](docs/cli.md) | Flags, tools (`read`/`write`/`edit`/`bash`/`terva_status`), run modes, the data directory |
+| [docs/permissions.md](docs/permissions.md) | Approval modes (`plan`/`ask`/`auto-edit`/`workspace`/`yolo`, with `workspace` the interactive default), permission rules, and the jail-by-default sandbox |
+| [docs/hooks.md](docs/hooks.md) | Pre/post tool-use hooks: veto, rewrite, or observe tool calls with your own scripts |
+| [docs/mcp.md](docs/mcp.md) | Attaching MCP servers as tool providers (stdio, namespaced, permission-gated) |
 | [docs/tui.md](docs/tui.md) | Slash commands, sessions, inline images, message queueing, key bindings |
 | [docs/models.md](docs/models.md) | Picking models, fallback/rescue, custom catalogs, per-provider notes (Kimi, DeepSeek, Gemini, ollama, OpenAI-compatible) |
 | [docs/providers.md](docs/providers.md) | Login flows, endpoints, `models.json` reference, capability tags |

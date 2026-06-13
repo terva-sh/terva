@@ -14,6 +14,14 @@ type settingsDialog struct {
 	cursor       int
 	selecting    bool
 	optionCursor int
+
+	// MaxRows caps the rendered body (item rows + wrapped
+	// descriptions); the window scrolls to keep the cursor item
+	// visible. Set by the overlay registry from the live terminal
+	// height — without the cap the full settings list is taller than
+	// a 24-row terminal and the header clips off the top. 0 = no cap.
+	MaxRows int
+	scroll  int
 }
 
 type settingsItem struct {
@@ -51,6 +59,7 @@ func (d *settingsDialog) Open(items []settingsItem) bool {
 	d.cursor = 0
 	d.selecting = false
 	d.optionCursor = 0
+	d.scroll = 0
 	d.active = true
 	return true
 }
@@ -158,10 +167,15 @@ func (d *settingsDialog) Render(th tui.Theme, width int) []string {
 	if d.selecting {
 		return d.renderOptions(th, width)
 	}
-	var lines []string
-	lines = append(lines, frameHeader(th, "settings", width))
-	lines = append(lines, th.FG256(th.Muted, "change with enter/space, esc to close:"))
+	// Build the body (item rows interleaved with wrapped description
+	// rows), tracking which body line the cursor item starts on so
+	// the scroll window can follow it.
+	var body []string
+	cursorLine := 0
 	for i, it := range d.items {
+		if i == d.cursor {
+			cursorLine = len(body)
+		}
 		box := "[ ]"
 		if it.value {
 			box = "[✓]"
@@ -178,17 +192,48 @@ func (d *settingsDialog) Render(th tui.Theme, width int) []string {
 			plain += "  " + th.FG256(th.Muted, "("+it.hint+")")
 		}
 		if it.disabled {
-			lines = append(lines, th.FG256(th.Muted, plain))
+			body = append(body, th.FG256(th.Muted, plain))
 		} else if i == d.cursor {
-			lines = append(lines, th.PadHighlight(plain, width))
+			body = append(body, th.PadHighlight(plain, width))
 		} else {
-			lines = append(lines, plain)
+			body = append(body, plain)
 		}
 		if it.desc != "" {
 			for _, desc := range wrapSettingDescription(it.desc, width, 6) {
-				lines = append(lines, th.FG256(th.Muted, desc))
+				body = append(body, th.FG256(th.Muted, desc))
 			}
 		}
+	}
+
+	// Window the body so the dialog fits short terminals, keeping the
+	// cursor item's first row in view.
+	maxRows := d.MaxRows
+	if maxRows <= 0 || maxRows > len(body) {
+		maxRows = len(body)
+	}
+	if cursorLine < d.scroll {
+		d.scroll = cursorLine
+	}
+	if cursorLine >= d.scroll+maxRows {
+		d.scroll = cursorLine - maxRows + 1
+	}
+	if d.scroll > len(body)-maxRows {
+		d.scroll = len(body) - maxRows
+	}
+	if d.scroll < 0 {
+		d.scroll = 0
+	}
+	end := d.scroll + maxRows
+
+	var lines []string
+	lines = append(lines, frameHeader(th, "settings", width))
+	lines = append(lines, th.FG256(th.Muted, "change with enter/space, esc to close:"))
+	if d.scroll > 0 {
+		lines = append(lines, windowMoreAbove(th, d.scroll))
+	}
+	lines = append(lines, body[d.scroll:end]...)
+	if end < len(body) {
+		lines = append(lines, windowMoreBelow(th, len(body), end))
 	}
 	lines = append(lines, frameRule(th, width))
 	return lines

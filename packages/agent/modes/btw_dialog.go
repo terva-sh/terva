@@ -438,12 +438,3 @@ func btwUserBubbleRows(th tui.Theme, text string, bubbleWidth int) []string {
 	out = append(out, row(""))
 	return out
 }
-
-// errMessage is a tiny helper for the future when we want to surface
-// retryable failures in a styled way.
-func errMessage(err error) string {
-	if err == nil {
-		return ""
-	}
-	return fmt.Sprintf("error: %s", err.Error())
-}

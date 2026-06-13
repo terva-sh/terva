@@ -104,6 +104,16 @@ Summarise the current transcript into one synthetic user message. Same lifecycle
 
 Final event: `{"type":"compact_done","summary":"<text>"}`.
 
+Compaction also happens automatically as part of `prompt` (the same
+core turn policy every run mode gets): before the model call when a
+transcript is already past ~85% of the context window, after a clean
+turn that pushed it past the threshold, and as a retry step when the
+provider rejects a request as too large (HTTP 413). These surface on
+the stream as `compact_start` / `compact_end` events inside the
+prompt's request lifecycle (before its `done`), so clients need no
+special handling — a failed automatic compaction is non-fatal and
+rides the `compact_end` event's `error` field.
+
 ### `get_state`
 
 Snapshot of the runtime.
@@ -195,6 +205,8 @@ Stream notifications during a `prompt` or `compact`. None carry an `id`.
 | `done` | (none) | The whole prompt/compact completed (success or error) |
 | `error` | `error` | Non-fatal error message |
 | `compact_done` | `summary` | Compaction finished, summary text included |
+| `compact_start` | `text` | A policy-driven compaction began (`text` carries the reason) |
+| `compact_end` | optional `error` | The policy-driven compaction finished; empty `error` means success |
 
 ## Message shape
 

@@ -14,8 +14,9 @@ func newInteractiveForSwapTest(curModel string) (*Interactive, *int) {
 	built := 0
 	iv := &Interactive{
 		view:  &tui.View{},
-		agent: &core.Agent{Model: curModel},
+		turns: newTurnEngine(),
 	}
+	iv.turns.SetAgent(&core.Agent{Model: curModel})
 	iv.cfg.Provider = "openai-compatible"
 	iv.cfg.Model = curModel
 	iv.cfg.BuildAgentFor = func(prov, model string) (*core.Agent, string, string, error) {
@@ -46,8 +47,8 @@ func TestSwapModelRebuildsWhenBaseURLChanges(t *testing.T) {
 	if iv.cfg.Model != "edge-b" {
 		t.Fatalf("cfg.Model = %q, want edge-b", iv.cfg.Model)
 	}
-	if iv.agent.Model != "edge-b" {
-		t.Fatalf("rebuilt agent Model = %q, want edge-b", iv.agent.Model)
+	if iv.turns.Agent().Model != "edge-b" {
+		t.Fatalf("rebuilt agent Model = %q, want edge-b", iv.turns.Agent().Model)
 	}
 }
 
@@ -62,16 +63,16 @@ func TestSwapModelReusesClientWhenBaseURLUnchanged(t *testing.T) {
 	t.Cleanup(func() { provider.SetUserModels(nil) })
 
 	iv, built := newInteractiveForSwapTest("same-a")
-	prevAgent := iv.agent
+	prevAgent := iv.turns.Agent()
 	iv.applyModelSelection("", "same-b")
 
 	if *built != 0 {
 		t.Fatalf("same-endpoint swap must not rebuild; builder calls = %d", *built)
 	}
-	if iv.agent != prevAgent {
+	if iv.turns.Agent() != prevAgent {
 		t.Fatal("same-endpoint swap replaced the agent; the client should be reused")
 	}
-	if iv.agent.Model != "same-b" {
-		t.Fatalf("in-place agent Model = %q, want same-b", iv.agent.Model)
+	if iv.turns.Agent().Model != "same-b" {
+		t.Fatalf("in-place agent Model = %q, want same-b", iv.turns.Agent().Model)
 	}
 }

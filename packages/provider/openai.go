@@ -92,18 +92,17 @@ func (c *openaiClient) Name() string {
 	return "openai"
 }
 
-// MirrorsToolImages reports that this client needs tool-result images
-// mirrored into a following user message by the agent loop, rather than
-// carried inside the `tool` message itself. The chat-completions wire
-// (which every openaiClient-backed provider speaks — openai,
-// openai-compatible, ollama, groq, xai, kimi, azure-openai-responses,
-// and the rest) only accepts text in a `tool` message; see
-// buildOAIToolContent. This describes the WIRE FORMAT only; whether
-// the current model can see images at all is the per-model
-// image-input capability, which the agent loop checks alongside this
-// (a former `!= "deepseek"` name check here — see
-// docs/plans/model-capabilities.md).
-func (c *openaiClient) MirrorsToolImages() bool { return true }
+// Capabilities declares that this client mirrors tool-result images.
+// The chat-completions wire (which every openaiClient-backed provider
+// speaks — openai, openai-compatible, ollama, groq, xai, kimi,
+// azure-openai-responses, and the rest) only accepts text in a `tool`
+// message (see buildOAIToolContent), so the agent loop mirrors images
+// into a following user message. WIRE FORMAT only; whether the model
+// can see images is the separate per-model capability the loop checks
+// alongside this.
+func (c *openaiClient) Capabilities() ClientCapabilities {
+	return ClientCapabilities{MirrorsToolImages: true}
+}
 
 // ---- wire types ----
 

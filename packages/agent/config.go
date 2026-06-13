@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/hooks"
+	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/envcompat"
 	"terva.sh/terva/packages/provider/auth"
 )
@@ -58,6 +60,45 @@ type Config struct {
 	// relative (resolved against the config file's directory) or
 	// absolute. See ResolveConfig / readStartupContextFiles.
 	ContextFiles []string `json:"context_files,omitempty"`
+
+	// Approval is the default approval mode (plan / ask / auto-edit /
+	// yolo) when no --approval / --no-yolo flag is given. Empty means
+	// yolo, the historical default. See docs/permissions.md.
+	Approval string `json:"approval,omitempty"`
+
+	// Permissions are ordered tool-permission rules, first match
+	// wins, evaluated after any project rules. The user layer is
+	// trusted: allow, deny, and ask are all valid decisions here.
+	Permissions []PermissionRuleConfig `json:"permissions,omitempty"`
+
+	// Hooks configures pre/post tool-use hook programs. User config
+	// only — a project must never be able to run code on session
+	// start (see packages/agent/hooks and docs/hooks.md).
+	Hooks *hooks.Config `json:"hooks,omitempty"`
+
+	// MCP configures Model Context Protocol servers (stdio). User
+	// config only, same trust posture as hooks: a project-scoped MCP
+	// server would be arbitrary code execution from a cloned repo
+	// (the trust-gating finding in docs/plans/harness-landscape-2026.md).
+	// See docs/mcp.md.
+	MCP *mcp.Config `json:"mcp,omitempty"`
+}
+
+// PermissionRuleConfig is the JSON shape of one permission rule. It
+// compiles into a core.PermissionRule at load time (compilePermissionRules);
+// invalid rules are dropped with a warning rather than failing startup.
+type PermissionRuleConfig struct {
+	// Tool is an exact tool name, or a prefix glob ending in '*'
+	// (e.g. "mcp_*").
+	Tool string `json:"tool"`
+	// Args is an optional RE2 regexp matched against each top-level
+	// string argument value and the raw args JSON (so "^git (status|diff)"
+	// matches bash commands without JSON escaping).
+	Args string `json:"args,omitempty"`
+	// Decision is allow, deny, or ask.
+	Decision string `json:"decision"`
+	// Reason is shown to the model when a deny rule refuses a call.
+	Reason string `json:"reason,omitempty"`
 }
 
 // ProjectConfig is the subset of configuration a project (.terva/config.json)
@@ -77,6 +118,14 @@ type ProjectConfig struct {
 	// absolute paths are retained. The trusted user layer (Config) has no
 	// such restriction.
 	ContextFiles []string `json:"context_files,omitempty"`
+
+	// Permissions are project-scoped permission rules. The project
+	// layer is UNTRUSTED, so it may only *restrict*: deny and ask are
+	// honored, allow is rejected at load time — a cloned repo must
+	// never be able to grant itself tool access the user didn't
+	// (the self-approval ban; see docs/permissions.md). Project rules
+	// are evaluated before user rules.
+	Permissions []PermissionRuleConfig `json:"permissions,omitempty"`
 }
 
 // Project-local config lives in the same per-project directory terva
@@ -361,153 +410,30 @@ func ResolveCredentialFull(provider, explicit string) (cred, method, accountID s
 	if explicit != "" {
 		return explicit, "apikey", "", nil
 	}
-	switch provider {
-	case "anthropic":
-		// ANTHROPIC_OAUTH_TOKEN takes precedence over ANTHROPIC_API_KEY.
-		// Useful when both are set and the user wants subscription auth
-		// without editing auth.json.
+	// Environment lookup, driven by the provider registry's apiKeyEnv
+	// list (provider_registry.go). Two providers need handling beyond
+	// a flat ordered key list:
+	//   - anthropic: ANTHROPIC_OAUTH_TOKEN yields subscription ("oauth")
+	//     auth and takes precedence over its API key.
+	//   - amazon-bedrock: credentials come from the AWS chain (profile,
+	//     IAM keys, container creds, bearer token); we surface a
+	//     sentinel so Resolve doesn't error on a "missing" key.
+	if provider == "anthropic" {
 		if v := os.Getenv("ANTHROPIC_OAUTH_TOKEN"); v != "" {
 			return v, "oauth", "", nil
 		}
-		if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
-			return v, "apikey", "", nil
+	}
+	if spec, ok := providerByID[provider]; ok {
+		for _, ev := range spec.apiKeyEnv {
+			if v := os.Getenv(ev); v != "" {
+				return v, "apikey", "", nil
+			}
 		}
-	case "openai":
-		if v := os.Getenv("OPENAI_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "openai-codex":
-		// ChatGPT/Codex subscription route. It intentionally ignores
-		// OPENAI_API_KEY so users can keep both OpenAI API and Codex
-		// subscription credentials configured and choose by provider.
-	case "openai-responses":
-		// Public OpenAI Responses API. Same env var as the chat-completions
-		// `openai` provider; users pick the wire format by provider id.
-		if v := os.Getenv("OPENAI_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "kimi":
-		if v := os.Getenv("KIMI_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-		if v := os.Getenv("MOONSHOT_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "google":
-		// Both env names are widely-used in the Google ecosystem;
-		// GEMINI_API_KEY is the AI Studio default, GOOGLE_API_KEY
-		// is the older / generic name. Either works.
-		if v := os.Getenv("GEMINI_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-		if v := os.Getenv("GOOGLE_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "deepseek":
-		if v := os.Getenv("DEEPSEEK_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "moonshotai", "moonshotai-cn":
-		// Moonshot direct API (separate from kimi-coding, which is the
-		// Anthropic-Messages-fronted /coding endpoint with subscription OAuth).
-		if v := os.Getenv("MOONSHOT_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "groq":
-		if v := os.Getenv("GROQ_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "xai":
-		if v := os.Getenv("XAI_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "cerebras":
-		if v := os.Getenv("CEREBRAS_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "together":
-		if v := os.Getenv("TOGETHER_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "huggingface":
-		if v := os.Getenv("HF_TOKEN"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "openrouter":
-		if v := os.Getenv("OPENROUTER_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "mistral":
-		if v := os.Getenv("MISTRAL_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "zai":
-		if v := os.Getenv("ZAI_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp":
-		envVar := "XIAOMI_API_KEY"
-		switch provider {
-		case "xiaomi-token-plan-ams":
-			envVar = "XIAOMI_TOKEN_PLAN_AMS_API_KEY"
-		case "xiaomi-token-plan-cn":
-			envVar = "XIAOMI_TOKEN_PLAN_CN_API_KEY"
-		case "xiaomi-token-plan-sgp":
-			envVar = "XIAOMI_TOKEN_PLAN_SGP_API_KEY"
-		}
-		if v := os.Getenv(envVar); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "minimax":
-		if v := os.Getenv("MINIMAX_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "minimax-cn":
-		if v := os.Getenv("MINIMAX_CN_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-		if v := os.Getenv("MINIMAX_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "fireworks":
-		if v := os.Getenv("FIREWORKS_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "vercel-ai-gateway":
-		if v := os.Getenv("AI_GATEWAY_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "opencode", "opencode-go":
-		if v := os.Getenv("OPENCODE_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "github-copilot":
-		if v := os.Getenv("COPILOT_GITHUB_TOKEN"); v != "" {
-			return v, "apikey", "", nil
-		}
-		if v := os.Getenv("GITHUB_COPILOT_TOKEN"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "cloudflare-workers-ai", "cloudflare-ai-gateway":
-		if v := os.Getenv("CLOUDFLARE_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "amazon-bedrock":
-		// Bedrock has many credential sources (AWS_PROFILE, IAM keys,
-		// container creds, IRSA, bearer token). We surface a sentinel so
-		// Resolve doesn't error on missing key; the real client (when
-		// implemented) will resolve credentials through aws-sdk-go-v2.
+	}
+	if provider == "amazon-bedrock" {
 		if os.Getenv("AWS_ACCESS_KEY_ID") != "" || os.Getenv("AWS_PROFILE") != "" ||
 			os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != "" {
 			return "<aws>", "apikey", "", nil
-		}
-	case "google-vertex":
-		if v := os.Getenv("GOOGLE_CLOUD_API_KEY"); v != "" {
-			return v, "apikey", "", nil
-		}
-	case "azure-openai-responses":
-		if v := os.Getenv("AZURE_OPENAI_API_KEY"); v != "" {
-			return v, "apikey", "", nil
 		}
 	}
 	c, err := AuthStoreFor().Load()

@@ -11,7 +11,7 @@ import (
 // (including ones still being typed) have no effect.
 func TestModelDialogCapabilityFilter(t *testing.T) {
 	d := newModelDialog()
-	d.all = sortedModels([]provider.Model{
+	d.p.all = sortedModels([]provider.Model{
 		{Provider: "p", ID: "seer", Reasoning: false},
 		{Provider: "p", ID: "blind", Reasoning: true,
 			Caps: map[provider.Capability]bool{provider.CapImageInput: false}},
@@ -22,14 +22,14 @@ func TestModelDialogCapabilityFilter(t *testing.T) {
 
 	ids := func() []string {
 		var out []string
-		for _, m := range d.view {
+		for _, m := range d.p.view {
 			out = append(out, m.ID)
 		}
 		return out
 	}
 	set := func(q string) {
-		d.query = q
-		d.refilter()
+		d.p.query = q
+		d.p.refilter()
 	}
 
 	set(":img")

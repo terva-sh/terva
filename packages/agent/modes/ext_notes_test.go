@@ -8,7 +8,7 @@ import (
 )
 
 func newNotesTestInteractive() *Interactive {
-	i := &Interactive{dirty: make(chan struct{}, 1)}
+	i := &Interactive{dirty: make(chan struct{}, 1), turns: newTurnEngine()}
 	i.cfg.Theme = tui.Theme{Muted: 8, Warning: 3, Error: 1, Tool: 2, Accent: 4}
 	return i
 }

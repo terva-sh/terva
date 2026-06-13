@@ -26,13 +26,18 @@ TUI's own surface (slash commands, keys) lives in [tui.md](tui.md).
 | `-e`, `--ext <path>` | Load an extension from `<path>` for this run (repeatable; wins against installed extensions of the same name). |
 | `--no-ext` | Skip extension discovery for this run. `--ext` still works on top, so `--no-ext --ext ./x` runs only `x`. |
 | `--no-skill` | Disable all skills, including built-ins. No `skill` tool is registered and the system prompt has no skill manifest. |
-| `--no-yolo` | Confirm every tool call before it runs. In the interactive TUI a dialog shows the tool name and a one-line preview of its args with four choices: yes, yes-always-this-tool-this-session, yes-always-this-session, no. In print / json / rpc modes there is no prompt to confirm at, so `--no-yolo` **refuses** every tool call with a model-readable message rather than running it unconfirmed — omit the flag for unattended automation that needs tools to run. |
+| `--approval MODE` | Approval mode: `plan` (read-only only), `ask` (confirm everything), `auto-edit` (read-only + file editors run freely, the rest asks), `workspace` (built-in tools + read-only tools run, foreign side-effecting tools ask — the interactive default), `yolo` (run freely — the headless default). Combines with permission rules in config — see [permissions.md](permissions.md). In print / json / rpc modes anything that would need a prompt is **refused** with a model-readable message; allow rules and the mode's auto-allows still run. |
+| `--jail` / `--no-jail` | Force the sandbox on / off at startup. Default: on for an interactive session (so the trusted built-in tools stay confined to the cwd), off for headless modes. `/jail` and `/unjail` toggle it at runtime in the TUI. |
+| `--no-yolo` | Alias for `--approval ask`. In the interactive TUI a dialog shows the tool name and a one-line preview of its args with five choices (yes, always-this-tool, always-this-tool-saved, always-this-session, no). In print / json / rpc modes there is no prompt to confirm at, so every not-pre-allowed tool call is **refused** rather than run unconfirmed — use permission rules or omit the flag for unattended automation. |
 
 ## Tools
 
 - `read`: read text files, or inline images (PNG, JPEG, GIF, WebP).
 - `write`: create or overwrite files, making parent directories as needed.
-- `edit`: one or more exact-match replacements in an existing file.
+- `edit`: one or more exact-match replacements in an existing file, with
+  an optional `replaceAll` per edit and a whitespace-tolerant fallback
+  when an exact match fails (see
+  [context-construction.md](context-construction.md)).
 - `bash`: run a shell command in the session cwd, with merged stdout/stderr and a timeout.
 - `terva_status`: report the agent's own runtime state — model, provider, working directory, reasoning effort, and how full the context window is. Takes no arguments.
 
