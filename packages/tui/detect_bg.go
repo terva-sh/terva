@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -151,12 +150,4 @@ func parseOSC11Reply(s string) (float64, float64, float64, bool) {
 		return 0, 0, 0, false
 	}
 	return r, g, b, true
-}
-
-// debugDetect is used only in development to help diagnose
-// detection issues; never invoked in production code paths.
-func debugDetect() {
-	fmt.Fprintf(os.Stderr, "terva theme detection: stdin tty=%v stdout tty=%v\n",
-		term.IsTerminal(int(os.Stdin.Fd())),
-		term.IsTerminal(int(os.Stdout.Fd())))
 }

@@ -284,9 +284,18 @@ func (r *Reader) dispatchCSI(params string, final byte) Key {
 }
 
 // readPaste reads until ESC [ 2 0 1 ~ and returns the pasted text.
+// maxPasteBytes caps how much of a bracketed paste is kept. Beyond
+// the cap the stream is still drained to the end marker (otherwise
+// the remainder would spill into the editor as garbage key events)
+// but discarded, and a visible truncation note is appended so the
+// user knows their data was cut rather than silently submitting an
+// incomplete paste. A var, not a const, so tests can lower it.
+var maxPasteBytes = 2 << 20 // 2 MiB
+
 func (r *Reader) readPaste() Key {
 	var sb strings.Builder
 	const end = "\x1b[201~"
+	truncated := false
 	tail := make([]byte, 0, len(end))
 	for {
 		b, err := r.src()
@@ -295,12 +304,20 @@ func (r *Reader) readPaste() Key {
 		}
 		tail = append(tail, b)
 		if len(tail) > len(end) {
-			sb.WriteByte(tail[0])
+			if sb.Len() < maxPasteBytes {
+				sb.WriteByte(tail[0])
+			} else {
+				truncated = true
+			}
 			tail = tail[1:]
 		}
 		if string(tail) == end {
 			break
 		}
 	}
-	return Key{Kind: KeyPaste, Paste: sb.String()}
+	paste := sb.String()
+	if truncated {
+		paste += "\n[paste truncated: exceeded the size limit]"
+	}
+	return Key{Kind: KeyPaste, Paste: paste}
 }

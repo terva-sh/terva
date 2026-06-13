@@ -834,17 +834,6 @@ func (v *View) wrapLiveBody(body []string, width int) []string {
 
 // toolResultBlock wraps text in thin horizontal rules (top + bottom),
 // indenting the body with four spaces. The rules span the content column.
-// toolBlockRule renders the muted horizontal separator drawn
-// above and below a tool call block. Spans the full content
-// width so it reads as a real section break in the chat
-// regardless of terminal size.
-func toolBlockRule(th Theme, width int) string {
-	w := width
-	if w < 8 {
-		w = 8
-	}
-	return th.FG256(th.Muted, strings.Repeat("─", w))
-}
 
 // toolBoxInnerPad is the number of blank cells kept between a box
 // edge (┌, │, └) and the content inside it. One cell of breathing
@@ -1923,27 +1912,6 @@ func toInt(v any) (int, bool) {
 	return 0, false
 }
 
-func collectText(blocks []provider.Content) string {
-	var sb strings.Builder
-	for _, b := range blocks {
-		if tb, ok := b.(provider.TextBlock); ok {
-			if sb.Len() > 0 {
-				sb.WriteString("\n")
-			}
-			sb.WriteString(tb.Text)
-		}
-	}
-	return sb.String()
-}
-
-func truncateLines(s string, n int) string {
-	lines := strings.Split(s, "\n")
-	if len(lines) <= n {
-		return s
-	}
-	return strings.Join(lines[:n], "\n") + "\n  ... (" + fmt.Sprintf("%d", len(lines)-n) + " more)"
-}
-
 // renderCompactionBlock renders a compaction summary as a distinct
 // visual block in the chat. When collapsed it shows a one-line label
 // with the pre-compaction token count; when expanded (ctrl+o) it
@@ -1996,7 +1964,11 @@ type StatusBarParams struct {
 	BusyPrefix string // spinner + funny line when busy
 	CWD        string
 	Locked     bool // sandbox on?
-	NoYolo     bool // confirmation mode enabled?
+	NoYolo     bool // confirmation mode enabled? (legacy; ApprovalMode supersedes)
+	// ApprovalMode is the live approval mode (plan/ask/auto-edit/yolo).
+	// When non-empty it drives the tag instead of NoYolo; "yolo" shows
+	// nothing (the default needs no badge).
+	ApprovalMode string
 
 	// Cumulative session usage and cost.
 	Usage provider.Usage
@@ -2131,7 +2103,10 @@ func StatusBar(p StatusBarParams) []string {
 
 	cwd := shortenHome(p.CWD)
 	tags := ""
-	if p.NoYolo {
+	switch {
+	case p.ApprovalMode != "" && p.ApprovalMode != "yolo":
+		tags += p.ApprovalMode + " mode "
+	case p.ApprovalMode == "" && p.NoYolo:
 		tags += "yolo mode disabled "
 	}
 	if p.Locked {

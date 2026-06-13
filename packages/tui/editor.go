@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 )
 
 // Editor is a simple multi-line text editor for the input area.
@@ -239,6 +240,21 @@ func quotePastedFilePaths(paste string) string {
 	// before a space is treated as part of the preceding token, since
 	// macOS Terminal escapes spaces in dropped paths that way.
 	tokens := splitPreservingSeparators(paste)
+	// Bound the os.Stat calls normalisePathToken makes: a drag-drop
+	// is a handful of paths, while prose or data can be ~100 tokens —
+	// and each stat can block the UI on a slow network mount. More
+	// path-shaped candidates than a plausible drop means this isn't
+	// one; insert verbatim.
+	const maxPathStatChecks = 16
+	candidates := 0
+	for _, tk := range tokens {
+		if !tk.isSpace && pathShapedToken(tk.text) {
+			candidates++
+		}
+	}
+	if candidates > maxPathStatChecks {
+		return paste
+	}
 	changed := false
 	for i, tk := range tokens {
 		if tk.isSpace {
@@ -473,8 +489,9 @@ func (e *Editor) backspace() {
 		return
 	}
 	line := e.Lines[e.CursorR]
-	e.Lines[e.CursorR] = substringBefore(line, e.CursorC-1) + substringAfter(line, e.CursorC)
-	e.CursorC--
+	start := graphemeLeft(line, e.CursorC)
+	e.Lines[e.CursorR] = substringBefore(line, start) + substringAfter(line, e.CursorC)
+	e.CursorC = start
 }
 
 func (e *Editor) delete() {
@@ -488,7 +505,7 @@ func (e *Editor) delete() {
 		e.Lines[e.CursorR] = line + next
 		return
 	}
-	e.Lines[e.CursorR] = substringBefore(line, e.CursorC) + substringAfter(line, e.CursorC+1)
+	e.Lines[e.CursorR] = substringBefore(line, e.CursorC) + substringAfter(line, graphemeRight(line, e.CursorC))
 }
 
 // moveWordLeft jumps the cursor to the start of the previous word,
@@ -537,7 +554,7 @@ func (e *Editor) moveWordRight() {
 
 func (e *Editor) moveLeft() {
 	if e.CursorC > 0 {
-		e.CursorC--
+		e.CursorC = graphemeLeft(e.Lines[e.CursorR], e.CursorC)
 		return
 	}
 	if e.CursorR > 0 {
@@ -548,7 +565,7 @@ func (e *Editor) moveLeft() {
 
 func (e *Editor) moveRight() {
 	if e.CursorC < runeLen(e.Lines[e.CursorR]) {
-		e.CursorC++
+		e.CursorC = graphemeRight(e.Lines[e.CursorR], e.CursorC)
 		return
 	}
 	if e.CursorR < len(e.Lines)-1 {
@@ -890,14 +907,6 @@ func normalizeEditorText(s string) string {
 	return strings.ReplaceAll(s, "\r", "\n")
 }
 
-func visualColumn(s string, runeCol int) int {
-	r := []rune(s)
-	if runeCol > len(r) {
-		runeCol = len(r)
-	}
-	return runewidth.StringWidth(string(r[:runeCol]))
-}
-
 func visibleWidth(s string) int {
 	return runewidth.StringWidth(stripANSI(s))
 }
@@ -1161,13 +1170,6 @@ func wrapLine(s string, width int, cont string) []string {
 	return out
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 // pasteCollapseLineThreshold and pasteCollapseCharThreshold govern
 // when a bracketed paste gets collapsed to a [pasted text #N ...]
 // placeholder instead of being inserted inline. Either trigger
@@ -1319,4 +1321,51 @@ func (e *Editor) collapseOrQuoteFilePaths(paste string) string {
 	e.fileSeq++
 	e.files[e.fileSeq] = singleQuote(p)
 	return fmt.Sprintf("[file:%d:%s]", e.fileSeq, base)
+}
+
+// graphemeLeft returns the rune index of the start of the grapheme
+// cluster immediately left of runeIdx — the unit Backspace and ←
+// operate on. Treating clusters (combining accents, emoji ZWJ
+// families, flag pairs) as single units keeps the cursor from
+// landing inside one and deletions from leaving broken halves.
+func graphemeLeft(line string, runeIdx int) int {
+	if runeIdx <= 0 {
+		return 0
+	}
+	count := 0
+	rest := line
+	for len(rest) > 0 {
+		cluster, tail, _, _ := uniseg.FirstGraphemeClusterInString(rest, -1)
+		n := runeLen(cluster)
+		if count+n >= runeIdx {
+			return count
+		}
+		count += n
+		rest = tail
+	}
+	return count
+}
+
+// graphemeRight returns the rune index just past the grapheme
+// cluster at runeIdx — the unit Delete and → operate on.
+func graphemeRight(line string, runeIdx int) int {
+	count := 0
+	rest := line
+	for len(rest) > 0 {
+		cluster, tail, _, _ := uniseg.FirstGraphemeClusterInString(rest, -1)
+		n := runeLen(cluster)
+		if count+n > runeIdx {
+			return count + n
+		}
+		count += n
+		rest = tail
+	}
+	return count
+}
+
+// pathShapedToken is the cheap (no syscall) pre-filter for tokens
+// that normalisePathToken would stat: absolute, tilde, or file://
+// spellings.
+func pathShapedToken(tok string) bool {
+	return strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "~") || strings.HasPrefix(tok, "file://")
 }

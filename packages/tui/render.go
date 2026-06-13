@@ -12,27 +12,18 @@ import (
 // here so the renderer does not depend on the editor's helper.
 func runewidthRune(r rune) int { return runewidth.RuneWidth(r) }
 
-// Renderer maintains a previous frame and writes only the lines that
-// changed on each Draw(). Callers pass a full target frame (slice of
-// styled lines, already wrapped to width).
+// Renderer paints terva's main-screen flow: chat lines are emitted
+// once into the terminal's scrollback and the live bottom band
+// (status + editor + dialogs) is diff-redrawn in place on each
+// DrawLog call. Callers pass styled lines already wrapped to width.
 type Renderer struct {
 	out  io.Writer
-	prev []string
 	rows int // terminal rows
 	cols int // terminal cols
 
 	// Cursor position after last draw (for placing input cursor).
 	cursorRow int
 	cursorCol int
-
-	// hideCursor when true prevents ShowCursor from being emitted.
-	hideCursor bool
-
-	// prevHadImage tracks whether the previous frame contained an
-	// inline-image escape so we can force a full clear+repaint whenever
-	// the image set changes. Only matters when inline images are
-	// enabled via TERVA_INLINE_IMAGES; defaults to false.
-	prevHadImage bool
 
 	// Main-screen flow renderer state. logLines is the full logical
 	// buffer (chat + live bottom band) from the previous DrawLog call.
@@ -101,8 +92,8 @@ func (r *Renderer) SetTheme(th Theme) {
 
 // Resize tells the renderer the current terminal size.
 //
-// On a real size change we also issue a clear-screen so the next Draw
-// starts from a blank slate. Without the clear, characters from the
+// On a real size change we also issue a clear-screen so the next
+// DrawLog starts from a blank slate. Without the clear, characters from the
 // old (wider) layout linger past the new right edge and rows from
 // before the new bottom hang around as garbage.
 func (r *Renderer) ResetScrollRegion() {
@@ -115,7 +106,6 @@ func (r *Renderer) Resize(cols, rows int) {
 	if cols != r.cols || rows != r.rows {
 		r.cols = cols
 		r.rows = rows
-		r.prev = nil
 		r.logChat = nil
 		r.logBottom = nil
 		r.logLines = nil
@@ -145,13 +135,12 @@ func (r *Renderer) Resize(cols, rows int) {
 	}
 }
 
-// Clear forces a full repaint on the next Draw and clears the screen
-// plus scrollback. In main-screen flow mode this is required whenever
+// Clear forces a full repaint on the next DrawLog and clears the
+// screen plus scrollback. In main-screen flow mode this is required whenever
 // already-emitted transcript layout changes (for example ctrl+o
 // expand/collapse), because terminal scrollback cannot be edited
 // reliably once printed.
 func (r *Renderer) Clear() {
-	r.prev = nil
 	r.logChat = nil
 	r.logBottom = nil
 	r.logLines = nil
@@ -197,18 +186,13 @@ func (r *Renderer) clearScrollbackSeq() string {
 // scrollback-clearing one (Clear) when redrawing overlays.
 func (r *Renderer) KeepsScrollback() bool { return r.keepScrollback }
 
-// Invalidate forces a full repaint on the next Draw without clearing the
-// whole terminal first. Useful when the cached diff is unreliable but a
-// visible full-screen flash would be too distracting.
+// Invalidate forces a full repaint on the next DrawLog without
+// clearing the whole terminal first. Useful when the cached diff is
+// unreliable but a visible full-screen flash would be too distracting.
 func (r *Renderer) Invalidate() {
-	r.prev = nil
 	r.logLines = nil
 }
 
-// Draw updates the terminal so that the visible frame ends with the
-// given lines (bottom-aligned). cursorRow/cursorCol are offsets within
-// the lines slice indicating where to place the terminal cursor; use
-// -1 to hide it.
 // containsImageEscape reports whether the line carries an inline-image
 // escape we must repaint rather than diff against the previous frame.
 func containsImageEscape(s string) bool {
@@ -297,119 +281,6 @@ func truncateToWidth(s string, cols int) string {
 		i++
 	}
 	return out.String()
-}
-
-func (r *Renderer) Draw(lines []string, cursorRow, cursorCol int) {
-	if r.cols == 0 || r.rows == 0 {
-		return
-	}
-	// Bottom-align: only the last r.rows lines are visible.
-	visible := lines
-	if len(visible) > r.rows {
-		visible = visible[len(visible)-r.rows:]
-		cursorRow -= len(lines) - len(visible)
-	}
-	// Pad to r.rows with empty lines at the top. Every line is also
-	// hard-truncated to cols so the terminal never soft-wraps our output
-	// (which would push the status bar out of its row).
-	frame := make([]string, r.rows)
-	top := r.rows - len(visible)
-	for i := 0; i < top; i++ {
-		frame[i] = ""
-	}
-	for i, line := range visible {
-		frame[top+i] = paintBackgroundRow(truncateToWidth(line, r.cols), r.cols, r.theme)
-	}
-	if r.theme.Background != nil {
-		for i := 0; i < top; i++ {
-			frame[i] = paintBackgroundRow("", r.cols, r.theme)
-		}
-	}
-
-	var w strings.Builder
-	w.WriteString(SeqSynchronizedOn)
-	w.WriteString(SeqHideCursor)
-
-	// When inline images are in play we always full-repaint (clear
-	// screen first, then rewrite every row). Terminals manage image
-	// pixels in a layer we cannot diff against, so the per-line cache
-	// is unreliable. Inline images are opt-in via TERVA_INLINE_IMAGES;
-	// the common code path below is the fast cached diff.
-	curHasImage := false
-	curHasKittyImage := false
-	for _, l := range frame {
-		if containsImageEscape(l) {
-			curHasImage = true
-			if strings.Contains(l, "\x1b_G") {
-				curHasKittyImage = true
-			}
-		}
-	}
-	forceAll := curHasImage || r.prevHadImage
-	if forceAll {
-		// No-home variant: the per-row MoveTo(i+1, 1) writes in the
-		// loop below position the cursor for every painted row, so
-		// the embedded \x1b[H would only serve to make VS Code snap
-		// its scrollbar to the top of the viewport on every image or
-		// selection-highlight frame.
-		w.WriteString(SeqClearScreenNoHome)
-		if curHasKittyImage {
-			// Delete previously placed kitty images once per frame,
-			// before rewriting all rows. Doing this inside each image
-			// escape makes only the last image in the frame survive.
-			w.WriteString("\x1b_Ga=d\x1b\\")
-		}
-	}
-
-	// Detect selection highlights: if the current OR previous frame
-	// has selection-background rows, force full repaint. VS Code's
-	// terminal doesn't reliably clear background colors on row
-	// overwrites, leaving ghost highlights behind.
-	hasSelection := false
-	if r.theme.Background == nil {
-		selectionBG := sgrBG(r.theme.SelectionBG)
-		for _, l := range frame {
-			if selectionBG != "" && strings.Contains(l, selectionBG) {
-				hasSelection = true
-				break
-			}
-		}
-		if !hasSelection && r.prev != nil {
-			for _, l := range r.prev {
-				if selectionBG != "" && strings.Contains(l, selectionBG) {
-					hasSelection = true
-					break
-				}
-			}
-		}
-	}
-
-	full := r.prev == nil || len(r.prev) != r.rows
-	for i := 0; i < r.rows; i++ {
-		if full || forceAll || hasSelection || r.prev[i] != frame[i] {
-			w.WriteString(MoveTo(i+1, 1))
-			w.WriteString("\x1b[0m") // reset all attributes first
-			w.WriteString(SeqClearLine)
-			w.WriteString(frame[i])
-		}
-	}
-
-	if cursorRow >= 0 {
-		absRow := top + cursorRow + 1
-		absCol := cursorCol + 1
-		if absRow >= 1 && absRow <= r.rows {
-			w.WriteString(MoveTo(absRow, absCol))
-			w.WriteString(SeqShowCursor)
-		}
-	}
-	w.WriteString(SeqSynchronizedOff)
-
-	_, _ = io.WriteString(r.out, w.String())
-
-	r.prev = frame
-	r.prevHadImage = curHasImage
-	r.cursorRow = cursorRow
-	r.cursorCol = cursorCol
 }
 
 // DrawLog renders terva in the terminal's main screen as normal terminal
@@ -782,29 +653,4 @@ func sameLines(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-func writeBlock(w *strings.Builder, lines []string) {
-	for i, line := range lines {
-		w.WriteString("\x1b[0m")
-		w.WriteString(SeqClearLine)
-		w.WriteString(line)
-		if i < len(lines)-1 {
-			w.WriteString("\r\n")
-		}
-	}
-}
-
-func tailTruncated(lines []string, maxRows, cols int) []string {
-	if maxRows <= 0 {
-		return nil
-	}
-	if len(lines) > maxRows {
-		lines = lines[len(lines)-maxRows:]
-	}
-	out := make([]string, len(lines))
-	for i, line := range lines {
-		out[i] = truncateToWidth(line, cols)
-	}
-	return out
 }
