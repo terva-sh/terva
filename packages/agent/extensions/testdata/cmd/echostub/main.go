@@ -26,6 +26,8 @@ import (
 	"encoding/json"
 	"os"
 	"strconv"
+
+	"terva.sh/terva/packages/agent/extproto"
 )
 
 func emit(v any) {
@@ -43,7 +45,7 @@ func main() {
 	emit(map[string]any{"type": "ready"})
 
 	sc := bufio.NewScanner(os.Stdin)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc.Buffer(make([]byte, 0, 64*1024), extproto.MaxFrameBytes)
 	for sc.Scan() {
 		var f struct {
 			Type string          `json:"type"`

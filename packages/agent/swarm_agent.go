@@ -51,6 +51,9 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
+	// Tell session-keyed extensions the real session id before any turn
+	// runs, so per-session state persists for swarm agents too.
+	emitSessionStart(extMgr, sess)
 
 	// Open the inbox listener BEFORE emitting agent_ready so the
 	// supervisor can dial through on the very first send. The
