@@ -342,6 +342,14 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 		}
 	}
 
+	// Ephemeral context: a trailing user message, request-scoped (never
+	// in req.Messages, never persisted). OpenAI prefix-caches
+	// automatically, so appending at the tail leaves the cached prefix
+	// (system + tools + history) intact and only this block is fresh.
+	if req.EphemeralContext != "" {
+		out.Messages = append(out.Messages, oaiMessage{Role: "user", Content: req.EphemeralContext})
+	}
+
 	for _, t := range req.Tools {
 		var tool oaiTool
 		tool.Type = "function"

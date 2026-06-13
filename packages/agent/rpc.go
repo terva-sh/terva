@@ -58,6 +58,7 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	// emit RPC events instead of TUI lines so any consumer can react.
 	extHooks := &rpcExtHooks{}
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
+	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
 	}
@@ -92,6 +93,10 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 		fanoutAgentEvent(extMgr, ev)
 		observeAgentEventForHooks(hookEng, ev)
 	}
+	// Inject extensions' live context cards into the model each turn.
+	ag.ContextProvider = extMgr.EphemeralContext
+	// Re-prompt once at close if an extension flags open work.
+	ag.ContinueOnStop = continueOnOpenWork(extMgr)
 
 	// /reload-ext hot-reload callback (also triggered via rpc
 	// `reload_ext` if/when added). Rebuilds the tool registry on the
@@ -163,6 +168,7 @@ func (h *rpcExtHooks) Insert(string)                                        {} /
 func (h *rpcExtHooks) OpenPanel(string, extproto.PanelSpec)                 {}
 func (h *rpcExtHooks) UpdatePanel(string, string, string, []string, string) {}
 func (h *rpcExtHooks) ClosePanel(string, string)                            {}
+func (h *rpcExtHooks) RefreshStatus()                                       {}
 
 type rpcServer struct {
 	ctx      context.Context

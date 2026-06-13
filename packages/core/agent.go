@@ -76,6 +76,24 @@ type Agent struct {
 	// without each caller having to compose sinks manually.
 	OnEvent func(AgentEvent)
 
+	// ContextProvider, if set, is called once per turn to obtain
+	// host-assembled ephemeral context (already wrapped/bounded) to
+	// inject into the model's context for that request only. The result
+	// rides provider.Request.EphemeralContext — a trailing block after
+	// the cache breakpoint, never written to the transcript. Hosts wire
+	// this to the extension manager's live context cards. Called outside
+	// the agent lock; keep it quick.
+	ContextProvider func() string
+
+	// ContinueOnStop, if set, is consulted when a turn ends with a
+	// natural stop (the model produced a final message, no tool calls).
+	// Returning (true, nudge) appends nudge as a user message and runs
+	// one more turn — the at-close gate hosts use to re-prompt the model
+	// when tracked work is still open ("you indicated you're finishing
+	// …"). The loop fires it at most ONCE per Prompt regardless of the
+	// return value, so a host that always returns true can't loop.
+	ContinueOnStop func(stop provider.StopReason) (cont bool, nudge string)
+
 	// OnMessageAppended, if set, fires every time a message is
 	// appended to the in-memory transcript by the agent loop — the
 	// initial user prompt, each finalised assistant message, and
@@ -397,6 +415,10 @@ func (a *Agent) wrapSink(sink func(AgentEvent)) func(AgentEvent) {
 }
 
 func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
+	// gateFired caps the at-close gate (ContinueOnStop) to one re-prompt
+	// per Prompt, so a host that always says "continue" can't loop the
+	// model forever.
+	gateFired := false
 	for step := 1; a.MaxSteps <= 0 || step <= a.MaxSteps; step++ {
 		// Messages queued while the agent was busy are delivered
 		// before the next model call. This is the safe boundary:
@@ -507,6 +529,18 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		// top-level prompt.
 		if ctx.Err() == nil && a.QueuedMessageCount() > 0 {
 			continue
+		}
+
+		// At-close gate: when the model finishes naturally but the host
+		// still has open work (a blocking context card), re-prompt it
+		// once with the host's nudge, appended as a user turn so the
+		// model can respond. Capped to one re-prompt per Prompt.
+		if ctx.Err() == nil && !gateFired && stop == provider.StopEnd && a.ContinueOnStop != nil {
+			if cont, nudge := a.ContinueOnStop(stop); cont && nudge != "" {
+				gateFired = true
+				a.appendQueuedAsUser([]string{nudge}, sink)
+				continue
+			}
 		}
 
 		// Terminal stop (end, length, error, aborted).
@@ -624,9 +658,17 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 	reasoning := a.Reasoning
 	maxTokens := a.MaxTokens
 	client := a.Client
+	contextProvider := a.ContextProvider
 	msgs := make([]provider.Message, len(a.messages))
 	copy(msgs, a.messages)
 	a.mu.Unlock()
+
+	// Pull host ephemeral context (e.g. an extension's live task card)
+	// outside the lock; it rides the request only, never the transcript.
+	var ephemeral string
+	if contextProvider != nil {
+		ephemeral = contextProvider()
+	}
 
 	req := provider.Request{
 		Model:  model,
@@ -639,10 +681,11 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 		// next in-process request is rejected by providers like Anthropic
 		// with "tool_use ids were found without tool_result blocks". The
 		// repair is pure and a no-op on already-valid transcripts.
-		Messages:  repairToolUseResultPairs(msgs),
-		Tools:     tools.Specs(),
-		Reasoning: reasoning,
-		MaxTokens: maxTokens,
+		Messages:         repairToolUseResultPairs(msgs),
+		Tools:            tools.Specs(),
+		Reasoning:        reasoning,
+		MaxTokens:        maxTokens,
+		EphemeralContext: ephemeral,
 	}
 	stream, err := client.Stream(ctx, req)
 	if err != nil {

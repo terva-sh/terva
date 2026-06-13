@@ -154,6 +154,11 @@ func init() {
 				i.runSwarm(ctx, parts[1:])
 				return false
 			}},
+		{name: "/context", desc: "show what extensions are injecting into the model's context",
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.slashContext()
+				return false
+			}},
 		{name: "/reload-ext", desc: "hot-reload all extensions (re-read manifests and respawn)", cancelsTurn: true,
 			run: func(i *Interactive, ctx context.Context, _ []string, _ string) bool {
 				i.runReloadExt(ctx)

@@ -376,6 +376,19 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	// minimum cacheable block size for Opus), no cache is written.
 	tagLastUserCache(out.Messages)
 
+	// Ephemeral context goes in a trailing user message AFTER the cache
+	// breakpoint and carries NO cache_control: the cached prefix (system
+	// + tools + history through the marked message) still hits, and only
+	// this small block is re-processed. It is request-scoped — never part
+	// of req.Messages, so it's never cached as a prefix that the next
+	// turn (with different/absent context) would fail to match.
+	if req.EphemeralContext != "" {
+		out.Messages = append(out.Messages, anthMessage{
+			Role:    "user",
+			Content: []interface{}{anthTextBlock{Type: "text", Text: req.EphemeralContext}},
+		})
+	}
+
 	return out, nil
 }
 

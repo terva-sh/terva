@@ -1993,6 +1993,10 @@ type StatusBarParams struct {
 	// mirrored into this session.
 	ChatConnected string
 
+	// ExtStatus are short status segments contributed by extensions
+	// (status_segment frames), shown as ambient tags on the cwd line.
+	ExtStatus []string
+
 	Cols int // terminal width; drives right-alignment of cwd
 }
 
@@ -2114,6 +2118,11 @@ func StatusBar(p StatusBarParams) []string {
 	}
 	if p.ChatConnected != "" {
 		tags += p.ChatConnected + " connected "
+	}
+	for _, seg := range p.ExtStatus {
+		if s := strings.TrimSpace(seg); s != "" {
+			tags += s + " "
+		}
 	}
 	if tags != "" && cwd != "" {
 		cwd = tags + "- " + cwd

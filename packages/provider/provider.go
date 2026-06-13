@@ -221,6 +221,15 @@ type Request struct {
 	// 1k/2k/8k/16k/32k thinking tokens; effort-based providers map them onto
 	// their closest supported reasoning_effort values.
 	Reasoning string
+
+	// EphemeralContext is host-assembled, host-wrapped text injected into
+	// the model's context for THIS request only — never part of Messages
+	// and never persisted to the transcript. Providers append it as a
+	// trailing message AFTER the cache breakpoint so the cached prefix
+	// (system + tools + history) still hits and only this block is
+	// re-processed. Used for standing context that changes between turns
+	// (e.g. an extension's live task card). Empty means inject nothing.
+	EphemeralContext string
 }
 
 // Client is an LLM streaming client.

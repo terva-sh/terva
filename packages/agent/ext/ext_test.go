@@ -387,3 +387,103 @@ func TestOnSessionReceivesSessionIdentity(t *testing.T) {
 
 	h.hostW.Close()
 }
+
+// An oversized inbound frame (larger than the read cap) must be skipped,
+// not fatal: Run keeps going and the next valid frame is still handled.
+func TestSDKRunSurvivesOversizedInboundFrame(t *testing.T) {
+	h := newHarness("survivor")
+	got := make(chan Session, 1)
+	h.ext.OnSession(func(s Session) { got <- s })
+
+	go h.ext.Run()
+	h.handshake(t)
+
+	// Write a single raw line larger than MaxFrameBytes directly (bypass
+	// the frame encoder). The old bufio.Scanner would die here.
+	oversized := append([]byte(strings.Repeat("x", extproto.MaxFrameBytes+10)), '\n')
+	if _, err := h.hostW.Write(oversized); err != nil {
+		t.Fatalf("write oversized: %v", err)
+	}
+
+	// A valid frame after it must still be handled — proof Run survived.
+	h.sendToExt(t, extproto.EventFromHost{
+		Type: "event", Event: "session_start", SessionID: "sess-after",
+	})
+	select {
+	case s := <-got:
+		if s.ID != "sess-after" {
+			t.Errorf("post-oversized session id = %q, want sess-after", s.ID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not process the frame after the oversized one — it likely died")
+	}
+
+	h.hostW.Close()
+}
+
+// TestContextContributionFrames covers the SDK context surface: a static
+// register_context frame is flushed during the register handshake, and
+// the dynamic card/status methods emit the right frames on demand.
+func TestContextContributionFrames(t *testing.T) {
+	h := newHarness("ctx-ext")
+	h.ext.ContributeContext("keep exactly one task active")
+
+	go h.ext.Run()
+
+	// hello → hello_ack, then drain to ready, capturing register_context.
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		TervaVersion: "0.0.0-test", Provider: "anthropic", Model: "claude-test",
+	})
+	var staticText string
+	for {
+		f := h.next(t)
+		if f.hdr.Type == "register_context" {
+			var rc extproto.RegisterContextFromExt
+			if err := json.Unmarshal(f.raw, &rc); err == nil {
+				staticText = rc.Text
+			}
+		}
+		if f.hdr.Type == "ready" {
+			break
+		}
+	}
+	if staticText != "keep exactly one task active" {
+		t.Fatalf("register_context not flushed during handshake, got %q", staticText)
+	}
+
+	// Dynamic card.
+	h.ext.SetContextCard("tasks", "Tasks", "active foo\npending bar")
+	f := h.drainUntil(t, "context_card")
+	var card extproto.ContextCardFromExt
+	if err := json.Unmarshal(f.raw, &card); err != nil {
+		t.Fatalf("unmarshal context_card: %v", err)
+	}
+	if card.ID != "tasks" || card.Label != "Tasks" || !strings.Contains(card.Text, "active foo") {
+		t.Errorf("context_card fields: %+v", card)
+	}
+
+	// Status segment.
+	h.ext.SetStatus("tasks", "▸ foo (0/2)")
+	fs := h.drainUntil(t, "status_segment")
+	var seg extproto.StatusSegmentFromExt
+	if err := json.Unmarshal(fs.raw, &seg); err != nil {
+		t.Fatalf("unmarshal status_segment: %v", err)
+	}
+	if seg.ID != "tasks" || seg.Text != "▸ foo (0/2)" {
+		t.Errorf("status_segment fields: %+v", seg)
+	}
+
+	// Clear.
+	h.ext.ClearContextCard("tasks")
+	fc := h.drainUntil(t, "context_card_clear")
+	var clr extproto.ContextCardClearFromExt
+	if err := json.Unmarshal(fc.raw, &clr); err != nil || clr.ID != "tasks" {
+		t.Fatalf("context_card_clear: %+v (err=%v)", clr, err)
+	}
+
+	h.hostW.Close()
+}

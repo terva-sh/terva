@@ -106,6 +106,36 @@ func TestGoldenFrames(t *testing.T) {
 			`{"type":"notify","level":"warn","message":"careful"}`,
 		},
 		{
+			"register_context",
+			RegisterContextFromExt{Type: "register_context", Text: "keep one task active"},
+			`{"type":"register_context","text":"keep one task active"}`,
+		},
+		{
+			"context_card",
+			ContextCardFromExt{Type: "context_card", ID: "tasks", Label: "Tasks", Text: "active foo", Priority: 1},
+			`{"type":"context_card","id":"tasks","label":"Tasks","text":"active foo","priority":1}`,
+		},
+		{
+			"context_card minimal",
+			ContextCardFromExt{Type: "context_card", ID: "tasks", Text: "active foo"},
+			`{"type":"context_card","id":"tasks","text":"active foo"}`,
+		},
+		{
+			"context_card blocking",
+			ContextCardFromExt{Type: "context_card", ID: "tasks", Text: "active foo", Blocking: true},
+			`{"type":"context_card","id":"tasks","text":"active foo","blocking":true}`,
+		},
+		{
+			"context_card_clear",
+			ContextCardClearFromExt{Type: "context_card_clear", ID: "tasks"},
+			`{"type":"context_card_clear","id":"tasks"}`,
+		},
+		{
+			"status_segment",
+			StatusSegmentFromExt{Type: "status_segment", ID: "tasks", Text: "▸ patch (1/4)"},
+			`{"type":"status_segment","id":"tasks","text":"▸ patch (1/4)"}`,
+		},
+		{
 			"shutdown",
 			ShutdownFromHost{Type: "shutdown"},
 			`{"type":"shutdown"}`,

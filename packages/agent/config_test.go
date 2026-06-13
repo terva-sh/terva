@@ -186,6 +186,33 @@ func TestResolveConfigProjectOverridesUser(t *testing.T) {
 	}
 }
 
+// disable_context_extensions is restrict-only: the project layer can
+// only ADD to the user's disabled set (union), never re-enable.
+func TestResolveConfigDisableContextExtensionsUnion(t *testing.T) {
+	t.Setenv("TERVA_HOME", t.TempDir())
+	if err := SaveConfig(Config{DisableContextExtensions: []string{"alpha"}}); err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	writeProjectConfig(t, repo, `{"disable_context_extensions":["beta"]}`)
+
+	eff := ResolveConfig(repo)
+	got := map[string]bool{}
+	for _, n := range eff.DisableContextExtensions {
+		got[n] = true
+	}
+	if !got["alpha"] || !got["beta"] {
+		t.Fatalf("union should contain both user (alpha) and project (beta): %v", eff.DisableContextExtensions)
+	}
+	if len(eff.DisableContextExtensions) != 2 {
+		t.Errorf("expected exactly the union of 2, got %v", eff.DisableContextExtensions)
+	}
+	// The project layer cannot remove the user's entry.
+	if !got["alpha"] {
+		t.Error("project must not be able to re-enable a user-disabled extension")
+	}
+}
+
 func TestResolveConfigFallsBackToUserWhenNoProject(t *testing.T) {
 	tervaHome := t.TempDir()
 	t.Setenv("TERVA_HOME", tervaHome)

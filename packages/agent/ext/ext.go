@@ -284,6 +284,10 @@ type Extension struct {
 	// can run against, reported in the hello frame. 0 = no minimum.
 	minProtocol int
 
+	// contextContribution is the static guidance sent via
+	// ContributeContext, flushed as a register_context frame in Run.
+	contextContribution string
+
 	// hostInfo is filled in once HelloAck arrives.
 	host HostInfo
 }
@@ -502,6 +506,63 @@ func (e *Extension) InterceptAssistantMessage(fn AssistantMessageHandler) {
 	e.mu.Unlock()
 }
 
+// ContributeContext declares static guidance the host folds into the
+// cached system-prompt addendum — standing policy the model should see
+// every turn that never changes (e.g. "keep exactly one task active;
+// finish and verify before declaring done"). The host wraps, bounds,
+// and attributes it. Call BEFORE Run; it is flushed during the register
+// handshake. Pair it with SetContextCard for the dynamic state. Requires
+// host protocol 2+; gate with RequireProtocol(2).
+func (e *Extension) ContributeContext(text string) {
+	e.mu.Lock()
+	e.contextContribution = text
+	e.mu.Unlock()
+}
+
+// Card is a dynamic context card. ID identifies it (re-pushing the same
+// ID replaces it). Label is an optional short header; Priority orders
+// multiple cards (lower first); Blocking marks open work so the host
+// appends a "review before declaring done" recommendation to the card's
+// injection.
+type Card struct {
+	ID       string
+	Label    string
+	Text     string
+	Priority int
+	Blocking bool
+}
+
+// PushContextCard sets (or replaces, by ID) a dynamic context card the
+// host injects into the model's context each turn — at the cache-free
+// tail, host-wrapped and attributed to this extension. Use it for live
+// state and call it whenever that state changes (the host owns cadence
+// and placement). Safe to call from any goroutine, including event
+// handlers.
+func (e *Extension) PushContextCard(c Card) {
+	_ = e.send(extproto.ContextCardFromExt{
+		Type: "context_card", ID: c.ID, Label: c.Label, Text: c.Text,
+		Priority: c.Priority, Blocking: c.Blocking,
+	})
+}
+
+// SetContextCard is sugar for a plain (non-blocking, default-priority)
+// card. For priority or the blocking nudge, use PushContextCard.
+func (e *Extension) SetContextCard(id, label, text string) {
+	e.PushContextCard(Card{ID: id, Label: label, Text: text})
+}
+
+// ClearContextCard removes a card previously set with SetContextCard.
+func (e *Extension) ClearContextCard(id string) {
+	_ = e.send(extproto.ContextCardClearFromExt{Type: "context_card_clear", ID: id})
+}
+
+// SetStatus sets (or replaces, by id) a short status-bar segment the
+// host renders in the TUI status line. Not model-facing. An empty text
+// clears the segment.
+func (e *Extension) SetStatus(id, text string) {
+	_ = e.send(extproto.StatusSegmentFromExt{Type: "status_segment", ID: id, Text: text})
+}
+
 // Notify pushes an info-level status note into terva's chat without
 // requiring a slash command from the user.
 func (e *Extension) Notify(level, message string) {
@@ -534,6 +595,7 @@ func (e *Extension) Run() error {
 	interceptTool := e.interceptOn
 	interceptTurn := e.interceptTurn != nil
 	interceptAsst := e.interceptAssistant != nil
+	contextContribution := e.contextContribution
 	e.mu.Unlock()
 	for _, d := range descs {
 		_ = e.send(extproto.RegisterCommandFromExt{
@@ -548,6 +610,12 @@ func (e *Extension) Run() error {
 			Name:        td.name,
 			Description: td.description,
 			Schema:      td.schema,
+		})
+	}
+	if contextContribution != "" {
+		_ = e.send(extproto.RegisterContextFromExt{
+			Type: "register_context",
+			Text: contextContribution,
 		})
 	}
 	var intercepts []string
@@ -573,10 +641,23 @@ func (e *Extension) Run() error {
 	// land in time for the typical use case.
 	_ = e.send(extproto.ReadyFromExt{Type: "ready"})
 
-	scanner := bufio.NewScanner(e.in)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	// Read frames with extproto.ReadFrame rather than bufio.Scanner: a
+	// single oversized inbound frame (e.g. a huge tool-call argument the
+	// host forwards) is logged and skipped instead of killing Run() and
+	// taking every tool and panel down with it.
+	reader := bufio.NewReaderSize(e.in, 64*1024)
+	for {
+		line, tooLong, rerr := extproto.ReadFrame(reader)
+		if tooLong {
+			e.Logf("dropped oversized inbound frame (>%d bytes); skipping", extproto.MaxFrameBytes)
+			continue
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				return nil
+			}
+			return rerr
+		}
 		var frame extproto.Frame
 		if err := json.Unmarshal(line, &frame); err != nil {
 			e.Logf("malformed frame from host: %v", err)
@@ -726,7 +807,6 @@ func (e *Extension) Run() error {
 			e.Logf("unknown frame type %q", frame.Type)
 		}
 	}
-	return scanner.Err()
 }
 
 // respond serialises a CommandResponseFromExt for the given id.

@@ -139,6 +139,56 @@ func (i *Interactive) appendExtensionNote(extName, msg, level string) {
 	}
 }
 
+// extStatusSegments returns the extensions' current status-bar segments
+// for the status line (nil-safe when extensions are disabled).
+func (i *Interactive) extStatusSegments() []string {
+	if i.cfg.Extensions == nil {
+		return nil
+	}
+	return i.cfg.Extensions.StatusSegments()
+}
+
+// RefreshStatus is the manager's hook to redraw after a status_segment
+// changes, so a status update appears even when nothing else triggers a
+// frame. (HostHooks.)
+func (i *Interactive) RefreshStatus() { i.invalidate() }
+
+// slashContext lists what each extension is contributing to the model
+// — static guidance and live cards — so the user can see exactly what
+// the context-card capability is injecting. The transparency half of
+// that capability's security story.
+func (i *Interactive) slashContext() {
+	if i.cfg.Extensions == nil {
+		i.appendExtensionNote("context", "extensions are not enabled", "info")
+		i.invalidate()
+		return
+	}
+	items := i.cfg.Extensions.ContextSnapshot()
+	if len(items) == 0 {
+		i.appendExtensionNote("context", "no extension is contributing context to the model", "info")
+		i.invalidate()
+		return
+	}
+	var b strings.Builder
+	b.WriteString("extension context injected into the model:")
+	for _, it := range items {
+		if it.Kind == "static" {
+			fmt.Fprintf(&b, "\n%s (system guidance):", it.Source)
+		} else {
+			label := it.Label
+			if label == "" {
+				label = it.ID
+			}
+			fmt.Fprintf(&b, "\n%s (card %q):", it.Source, label)
+		}
+		for _, line := range strings.Split(strings.TrimRight(it.Text, "\n"), "\n") {
+			fmt.Fprintf(&b, "\n  %s", line)
+		}
+	}
+	i.appendExtensionNote("context", b.String(), "info")
+	i.invalidate()
+}
+
 // HostHooks implementation for the extension manager. The manager
 // holds an interface, not a concrete *Interactive, so these methods
 // are the only thing the manager sees.

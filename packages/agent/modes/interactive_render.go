@@ -455,6 +455,7 @@ func (i *Interactive) redraw() {
 		ContextMax:     ctxMax,
 		AutoCompacting: ts.autoCompacting,
 		ChatConnected:  i.chatBridgeName(),
+		ExtStatus:      i.extStatusSegments(),
 		Cols:           cols,
 	})
 	edLines, curR, curC := i.ed.Render(cols)

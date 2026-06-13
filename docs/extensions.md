@@ -183,11 +183,49 @@ A crashing extension does not bring down terva. The slash command it
 owned simply stops working until the extension is fixed and terva is
 restarted.
 
+## Context contributions
+
+An extension can contribute to what the **model** sees, under host
+control (see [the design](plans/extension-context-cards.md)): static
+guidance folded into the system prompt (`register_context`), live
+per-turn cards (`context_card`), and a status-line segment
+(`status_segment`). Run `/context` to see exactly what's injected.
+
+Installing an extension is consent to run it, but you can opt one out of
+injecting into the model's context — per user **or** per project — with
+`disable_context_extensions` in `config.json`:
+
+```json
+{"disable_context_extensions": ["noisy-ext"]}
+```
+
+A project's `.terva/config.json` may add to this list but never remove
+from it (restrict-only union with the user layer), so a directory can
+run terva with a stricter context posture. The disabled extension's
+tools, commands, and panels keep working — only model-context injection
+is suppressed.
+
 ## Wire format
 
 All frames are one JSON object per line. Top-level `type` is the
 discriminator. Optional `id` correlates request frames with their
 responses.
+
+### Frame size limits
+
+There is a per-frame maximum of **4 MiB** (`extproto.MaxFrameBytes`) in
+both directions. Oversized frames are handled gracefully, never fatally:
+
+- A frame larger than the cap on the read side (either direction) is
+  **skipped and logged**, and reading continues — one oversized frame
+  never takes the extension or the host's reader down.
+- The host caps the args it puts in a single `tool_call` frame at
+  **1 MiB** (`extproto.MaxToolCallBytes`, comfortably below the read
+  cap). If the model produces a larger tool argument, the call comes
+  back to the model as a normal `is_error` tool result ("arguments are
+  N bytes; the limit is …") instead of being sent — so an oversized
+  argument can't kill an extension. Keep individual tool results and
+  context contributions well under these limits.
 
 ### Extension → host
 

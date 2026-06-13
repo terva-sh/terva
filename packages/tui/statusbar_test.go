@@ -43,6 +43,23 @@ func TestStatusBarAlwaysTwoLines(t *testing.T) {
 	}
 }
 
+// Extension status segments appear on the cwd line as ambient tags,
+// alongside mode/jail/connected.
+func TestStatusBarExtStatusSegments(t *testing.T) {
+	lines := StatusBar(StatusBarParams{
+		Theme:     Dark,
+		Provider:  "anthropic",
+		Model:     "claude-opus-4-7",
+		CWD:       "/tmp/x",
+		ExtStatus: []string{"▸ patch parser (1/4)", ""}, // empty is skipped
+		Cols:      500,
+	})
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "patch parser (1/4)") {
+		t.Errorf("ext status segment missing from status bar:\n%s", joined)
+	}
+}
+
 // TestStatusBarNoCWD verifies an empty cwd stays single-line.
 func TestStatusBarNoCWD(t *testing.T) {
 	lines := StatusBar(StatusBarParams{

@@ -17,7 +17,23 @@
 // correlate; events and notifications never carry an ID.
 package extproto
 
-import "encoding/json"
+import (
+	"bufio"
+	"encoding/json"
+)
+
+// MaxFrameBytes is the largest single wire frame the read side accepts.
+// A frame over this limit is skipped (logged), never fatal — both the
+// host and the SDK read through ReadFrame, which recovers instead of
+// dying the way bufio.Scanner does on ErrTooLong.
+const MaxFrameBytes = 4 << 20 // 4 MiB
+
+// MaxToolCallBytes caps the serialized args the host will put in one
+// tool_call frame sent to an extension. Kept comfortably below
+// MaxFrameBytes so the extension can always read what the host sends;
+// oversized args come back to the model as a tool error instead of
+// killing the extension mid-read.
+const MaxToolCallBytes = 1 << 20 // 1 MiB
 
 // ProtocolVersion is the wire revision this host/SDK speaks.
 //
@@ -172,6 +188,64 @@ type ShutdownAckFromExt struct {
 	Type string `json:"type"`
 }
 
+// --- Host context contributions (protocol 2, additive) -----------------
+//
+// These let an extension contribute to what the MODEL sees, under host
+// control. The host wraps, bounds, attributes, and places every
+// contribution; the extension only supplies content. Two channels with
+// different cache/authority profiles:
+//
+//   - register_context: a STATIC block folded into the cached system
+//     prompt addendum (set once, during the register phase). Use it for
+//     standing policy/guidance — the text that never changes.
+//   - context_card / context_card_clear: a DYNAMIC, per-turn block the
+//     host injects at the cache-free tail and never persists. Use it for
+//     live state (e.g. a task list) updated as it changes.
+//
+// status_segment is the adjacent status-bar channel (host-rendered, not
+// model-facing). All are additive: an older host treats them as unknown
+// frames and ignores them.
+
+// RegisterContextFromExt declares static guidance the host appends to
+// the system-prompt addendum (host-wrapped + bounded). Sent during the
+// register phase, like register_command / register_tool.
+type RegisterContextFromExt struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// ContextCardFromExt sets (or replaces, by ID) a dynamic context card
+// the host injects into the model's context each turn at the cache-free
+// tail. Label is an optional short header for the host's wrapper;
+// Priority orders multiple cards (lower first).
+type ContextCardFromExt struct {
+	Type     string `json:"type"`
+	ID       string `json:"id"`
+	Label    string `json:"label,omitempty"`
+	Text     string `json:"text"`
+	Priority int    `json:"priority,omitempty"`
+	// Blocking marks work that should be reviewed before the model
+	// declares the task done. The host appends a recommendation to the
+	// card's injection (a soft nudge, not a hard stop) so the model sees
+	// "review open work before closing" whenever this card is present.
+	Blocking bool `json:"blocking,omitempty"`
+}
+
+// ContextCardClearFromExt removes a previously-set card by ID.
+type ContextCardClearFromExt struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// StatusSegmentFromExt sets (or replaces, by ID) a short status-bar
+// segment. Host-rendered in the TUI status line; not model-facing. An
+// empty Text clears the segment.
+type StatusSegmentFromExt struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	Text string `json:"text,omitempty"`
+}
+
 // HelloAckFromHost carries the host's identity. ZotVersion and
 // TervaVersion are the SAME value under both naming eras: existing
 // extensions parse zot_version, so it is kept indefinitely —
@@ -273,4 +347,46 @@ func Encode(v any) ([]byte, error) {
 		return nil, err
 	}
 	return append(b, '\n'), nil
+}
+
+// ReadFrame reads one '\n'-terminated frame from r, bounding its length
+// at MaxFrameBytes. It is the read counterpart to Encode and the
+// recoverable replacement for bufio.Scanner on this wire: where Scanner
+// is permanently done after a token exceeds its buffer (ErrTooLong),
+// ReadFrame fully consumes an over-limit line through its newline and
+// returns tooLong=true with a nil line, so the caller can log it, skip
+// it, and keep reading subsequent frames. The returned line excludes
+// the trailing newline and is a fresh copy (safe to retain). err is
+// io.EOF (or another read error) only at the actual end of the stream;
+// a normal frame returns err == nil.
+func ReadFrame(r *bufio.Reader) (line []byte, tooLong bool, err error) {
+	for {
+		chunk, e := r.ReadSlice('\n')
+		// The terminating newline doesn't count toward the limit.
+		add := len(chunk)
+		if e == nil && add > 0 && chunk[add-1] == '\n' {
+			add--
+		}
+		if tooLong {
+			// Already over the limit: keep draining to the newline,
+			// discarding, so the next frame starts clean.
+		} else if len(line)+add > MaxFrameBytes {
+			tooLong = true
+			line = nil
+		} else {
+			// ReadSlice's buffer is reused on the next read, so copy now.
+			line = append(line, chunk...)
+		}
+		switch e {
+		case nil:
+			if !tooLong && len(line) > 0 && line[len(line)-1] == '\n' {
+				line = line[:len(line)-1]
+			}
+			return line, tooLong, nil
+		case bufio.ErrBufferFull:
+			continue // line longer than the bufio buffer; keep reading
+		default:
+			return line, tooLong, e // io.EOF or a real read error
+		}
+	}
 }

@@ -44,12 +44,21 @@ type Resolved struct {
 	// discovered. Exposed so the tui can list / preview skills.
 	SkillTool *skills.Tool
 
+	// DisableContextExtensions is the resolved (user ∪ project) set of
+	// extensions opted out of contributing model context. The host
+	// passes it to the extension manager via SetContextDisabled.
+	DisableContextExtensions []string
+
 	// Bookkeeping for MergeExtensionTools. Captured at Resolve time
 	// so the system prompt can be rebuilt later without re-running
 	// resolve.
 	systemAppend     []string
 	systemCustom     string
 	toolDescriptions map[string]string
+	// extensionContext is the extensions' aggregated static context
+	// contribution (register_context), folded into the cached system
+	// prompt addendum via SetExtensionContext after extensions register.
+	extensionContext string
 
 	// approvalMode is the effective approval mode at resolve time.
 	// Plan mode shrinks the registry to read-only tools and keeps
@@ -92,14 +101,40 @@ func (r *Resolved) AddExtraTools(extra []core.Tool) {
 		}
 		r.ToolRegistry[t.Name()] = t
 	}
+	r.rebuildSystemPrompt()
+}
+
+// rebuildSystemPrompt re-renders SystemPrompt from the captured
+// resolve-time materials plus the current tool registry and the
+// extensions' static context contribution. The single render path for
+// every post-resolve change (extra tools, extension-tool merge,
+// extension static context) so the inputs can't drift.
+func (r *Resolved) rebuildSystemPrompt() {
+	appendBlocks := r.systemAppend
+	if strings.TrimSpace(r.extensionContext) != "" {
+		appendBlocks = append(append([]string{}, r.systemAppend...), r.extensionContext)
+	}
 	r.SystemPrompt = BuildSystemPrompt(SystemPromptOpts{
 		CWD:          r.CWD,
 		Tools:        toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
 		Custom:       r.systemCustom,
-		Append:       r.systemAppend,
+		Append:       appendBlocks,
 		TervaDocsDir: filepath.Join(TervaHome(), "docs"),
 		StatusTool:   r.ToolRegistry["terva_status"] != nil,
 	})
+}
+
+// SetExtensionContext folds the extensions' aggregated static context
+// (extMgr.StaticContext()) into the cached system-prompt addendum and
+// re-renders. Called after extensions register (post-WaitForReady /
+// after MergeExtensionTools). No-op when the text is unchanged so it
+// won't needlessly bust the prompt cache.
+func (r *Resolved) SetExtensionContext(text string) {
+	if text == r.extensionContext {
+		return
+	}
+	r.extensionContext = text
+	r.rebuildSystemPrompt()
 }
 
 // HasCredential reports whether a credential was resolved.
@@ -113,17 +148,22 @@ func (r Resolved) HasCredential() bool { return r.Credential != "" }
 // effect on the second pass (existing names are preserved). Built-in
 // tools always win on conflict.
 func (r *Resolved) MergeExtensionTools(mgr ExtensionToolSource) {
-	if MergeToolsForMode(r.ToolRegistry, r.approvalMode, r.readOnlySet, mgr) {
+	changed := MergeToolsForMode(r.ToolRegistry, r.approvalMode, r.readOnlySet, mgr)
+	// Pull the source's static context contribution (register_context)
+	// into the cached addendum. Optional interface so MCP sources (which
+	// don't contribute context) are unaffected. Folding it here means
+	// every existing merge call site picks it up with no extra wiring.
+	if cs, ok := mgr.(interface{ StaticContext() string }); ok {
+		if text := cs.StaticContext(); text != r.extensionContext {
+			r.extensionContext = text
+			changed = true
+		}
+	}
+	if changed {
 		// Re-render the system prompt with the merged tool list. Skill
-		// addendum is preserved by walking the existing append slice.
-		r.SystemPrompt = BuildSystemPrompt(SystemPromptOpts{
-			CWD:          r.CWD,
-			Tools:        toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
-			Custom:       r.systemCustom,
-			Append:       r.systemAppend,
-			TervaDocsDir: filepath.Join(TervaHome(), "docs"),
-			StatusTool:   r.ToolRegistry["terva_status"] != nil,
-		})
+		// addendum + extension static context are preserved by the
+		// shared rebuild path.
+		r.rebuildSystemPrompt()
 	}
 }
 
@@ -547,25 +587,26 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	max := args.MaxSteps // 0 = unlimited
 
 	return Resolved{
-		Provider:         provName,
-		Model:            model,
-		Credential:       cred,
-		AuthMethod:       method,
-		AccountID:        accountID,
-		BaseURL:          args.BaseURL,
-		CWD:              args.CWD,
-		Reasoning:        reasoning,
-		ToolRegistry:     reg,
-		ToolSummary:      summaries,
-		SystemPrompt:     sys,
-		MaxSteps:         max,
-		MaxOutput:        resolvedModel.MaxOutput,
-		Sandbox:          sandbox,
-		SkillTool:        skillTool,
-		systemAppend:     append_,
-		systemCustom:     custom,
-		toolDescriptions: descMapFromSummaries(summaries),
-		approvalMode:     approval,
+		Provider:                 provName,
+		Model:                    model,
+		Credential:               cred,
+		AuthMethod:               method,
+		AccountID:                accountID,
+		BaseURL:                  args.BaseURL,
+		CWD:                      args.CWD,
+		Reasoning:                reasoning,
+		ToolRegistry:             reg,
+		ToolSummary:              summaries,
+		SystemPrompt:             sys,
+		MaxSteps:                 max,
+		MaxOutput:                resolvedModel.MaxOutput,
+		Sandbox:                  sandbox,
+		SkillTool:                skillTool,
+		DisableContextExtensions: eff.Config.DisableContextExtensions,
+		systemAppend:             append_,
+		systemCustom:             custom,
+		toolDescriptions:         descMapFromSummaries(summaries),
+		approvalMode:             approval,
 	}, nil
 }
 

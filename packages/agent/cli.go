@@ -91,6 +91,11 @@ func (h *interactiveExtHooks) ClosePanel(extName, panelID string) {
 		iv.ClosePanel(extName, panelID)
 	}
 }
+func (h *interactiveExtHooks) RefreshStatus() {
+	if iv := h.iv(); iv != nil {
+		iv.RefreshStatus()
+	}
+}
 
 // extToolAdapter bridges *extensions.Manager to the
 // ExtensionToolSource interface declared in build.go (kept narrow to
@@ -99,6 +104,13 @@ func (h *interactiveExtHooks) ClosePanel(extName, panelID string) {
 // same set of extension tools.
 type extToolAdapter struct {
 	mgr *extensions.Manager
+}
+
+// StaticContext exposes the extensions' aggregated static context
+// contribution to MergeExtensionTools (optional ExtensionToolSource
+// extension), which folds it into the cached system-prompt addendum.
+func (a *extToolAdapter) StaticContext() string {
+	return a.mgr.StaticContext()
 }
 
 func (a *extToolAdapter) Tools() []ExtensionToolInfo {
@@ -257,6 +269,25 @@ func fanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 			ev.Error = e.Err.Error()
 		}
 		mgr.EmitEvent(ev)
+	}
+}
+
+// openWorkGateMessage is the at-close re-prompt injected once when the
+// model tries to finish while an extension still has a blocking context
+// card (open work). A soft nudge — it grants one more turn, not a hard
+// stop — and core caps it to once per prompt.
+const openWorkGateMessage = "You indicated you're finishing, but tracked items are still open. Complete them, or confirm they're intentionally left incomplete."
+
+// continueOnOpenWork builds the ContinueOnStop gate for an agent: when a
+// turn ends naturally and the manager reports a blocking card, re-prompt
+// once with openWorkGateMessage. Shared by every host (interactive, rpc,
+// non-interactive).
+func continueOnOpenWork(extMgr *extensions.Manager) func(provider.StopReason) (bool, string) {
+	return func(stop provider.StopReason) (bool, string) {
+		if stop != provider.StopEnd || extMgr == nil || !extMgr.HasBlockingContext() {
+			return false, ""
+		}
+		return true, openWorkGateMessage
 	}
 }
 
@@ -426,6 +457,7 @@ func (nonInteractiveExtHooks) ClearNotes(string)                                
 func (nonInteractiveExtHooks) OpenPanel(string, extproto.PanelSpec)                 {}
 func (nonInteractiveExtHooks) UpdatePanel(string, string, string, []string, string) {}
 func (nonInteractiveExtHooks) ClosePanel(string, string)                            {}
+func (nonInteractiveExtHooks) RefreshStatus()                                       {}
 
 // setupNonInteractiveExtensions loads --ext paths and (unless
 // --no-ext) runs discovery. Returns the manager so the caller can
@@ -433,6 +465,7 @@ func (nonInteractiveExtHooks) ClosePanel(string, string)                        
 // defer. Mirrors the interactive-mode setup minus the TUI hooks.
 func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, version string) (*extensions.Manager, func()) {
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, nonInteractiveExtHooks{})
+	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
 	}
@@ -446,7 +479,11 @@ func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, 
 	// MCP servers ride the same seam, after extensions so an
 	// extension tool name wins a collision (first registration).
 	_, stopMCP := setupMCP(ctx, args, r)
-	extMgr.EmitEvent(extproto.EventFromHost{Event: "session_start"})
+	// NOTE: session_start is emitted by the caller via emitSessionStart
+	// AFTER it opens the session, so a session-keyed extension learns the
+	// real session id (print / json / swarm-agent all persist a session).
+	// Emitting a bare event here would (and did) leave those modes
+	// reporting "no active session" even though one exists.
 	return extMgr, func() {
 		extMgr.Stop(2 * time.Second)
 		stopMCP()
@@ -599,6 +636,10 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 		fanoutAgentEvent(extMgr, ev)
 		observeAgentEventForHooks(hookEng, ev)
 	}
+	// Inject extensions' live context cards into the model each turn.
+	ag.ContextProvider = extMgr.EphemeralContext
+	// Re-prompt once at close if an extension flags open work.
+	ag.ContinueOnStop = continueOnOpenWork(extMgr)
 }
 
 func runPrintMode(ctx context.Context, args Args, version string) error {
@@ -615,6 +656,9 @@ func runPrintMode(ctx context.Context, args Args, version string) error {
 	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
+	// Tell session-keyed extensions the real session id before any turn
+	// runs, so per-session state persists in headless modes too.
+	emitSessionStart(extMgr, sess)
 
 	prompt := args.Prompt
 	if prompt == "" {
@@ -645,6 +689,9 @@ func runJSONMode(ctx context.Context, args Args, version string) error {
 	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
+	// Tell session-keyed extensions the real session id before any turn
+	// runs, so per-session state persists in headless modes too.
+	emitSessionStart(extMgr, sess)
 
 	prompt := args.Prompt
 	if prompt == "" {
@@ -685,6 +732,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	var iv *modes.Interactive
 	extHooks := &interactiveExtHooks{ivPtr: &iv}
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
+	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	// --ext paths first so they win against installed extensions of
 	// the same name (loadOne's first-write-wins semantics).
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
@@ -838,6 +886,10 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			fanoutAgentEvent(extMgr, ev)
 			observeAgentEventForHooks(hookEng, ev)
 		}
+		// Inject extensions' live context cards into the model each turn.
+		a.ContextProvider = extMgr.EphemeralContext
+		// Re-prompt once at close if an extension flags open work.
+		a.ContinueOnStop = continueOnOpenWork(extMgr)
 		return a
 	}
 

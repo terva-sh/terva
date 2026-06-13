@@ -61,6 +61,16 @@ type Config struct {
 	// absolute. See ResolveConfig / readStartupContextFiles.
 	ContextFiles []string `json:"context_files,omitempty"`
 
+	// DisableContextExtensions lists extensions whose context
+	// contributions (register_context + context cards) the host ignores,
+	// even though their tools, commands, and panels keep working.
+	// Installing an extension is consent to run it; this opts a noisy or
+	// untrusted extension out of injecting into the MODEL's context. A
+	// project's .terva/config.json may add to this list (restrict-only,
+	// union with the user layer) so a directory can run terva with a
+	// different context posture. See docs/permissions.md.
+	DisableContextExtensions []string `json:"disable_context_extensions,omitempty"`
+
 	// Approval is the default approval mode (plan / ask / auto-edit /
 	// yolo) when no --approval / --no-yolo flag is given. Empty means
 	// yolo, the historical default. See docs/permissions.md.
@@ -126,6 +136,13 @@ type ProjectConfig struct {
 	// (the self-approval ban; see docs/permissions.md). Project rules
 	// are evaluated before user rules.
 	Permissions []PermissionRuleConfig `json:"permissions,omitempty"`
+
+	// DisableContextExtensions opts extensions out of contributing
+	// model context for this project. Restrict-only and union'd with the
+	// user layer: a project can only ADD to the disabled set, never
+	// re-enable an extension the user disabled — consistent with the
+	// untrusted project layer's "restrict, never escalate" rule.
+	DisableContextExtensions []string `json:"disable_context_extensions,omitempty"`
 }
 
 // Project-local config lives in the same per-project directory terva
@@ -383,7 +400,28 @@ func ResolveConfig(cwd string) EffectiveConfig {
 	} else {
 		eff.Config.ContextFiles = absolutizeContextFiles(TervaHome(), user.ContextFiles)
 	}
+	// Disabled-context list is restrict-only: union the user and project
+	// layers so a project can only add extensions to opt out of model
+	// context, never re-enable one the user disabled.
+	if pc != nil && len(pc.DisableContextExtensions) > 0 {
+		eff.Config.DisableContextExtensions = unionStrings(user.DisableContextExtensions, pc.DisableContextExtensions)
+	}
 	return eff
+}
+
+// unionStrings returns the de-duplicated union of a and b, preserving
+// a's order then b's new entries.
+func unionStrings(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range append(append([]string{}, a...), b...) {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // AuthStoreFor returns the auth.Store backed by AuthPath().

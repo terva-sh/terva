@@ -134,6 +134,17 @@ type Extension struct {
 	// EmitEvent / InterceptToolCall to filter recipients.
 	eventSubs     map[string]struct{}
 	interceptSubs map[string]struct{}
+
+	// Host context contributions (protocol 2), guarded by mu:
+	//   staticContext  — register_context: folded into the cached
+	//                    system-prompt addendum.
+	//   contextCards   — context_card: injected into the model's
+	//                    context each turn at the cache-free tail.
+	//   statusSegments — status_segment: rendered in the TUI status
+	//                    line (not model-facing).
+	staticContext  string
+	contextCards   map[string]contextCard
+	statusSegments map[string]string
 }
 
 // outboxCapacity is how many frames may queue for one extension before
@@ -271,6 +282,11 @@ type HostHooks interface {
 	OpenPanel(extName string, spec extproto.PanelSpec)
 	UpdatePanel(extName, panelID, title string, lines []string, footer string)
 	ClosePanel(extName, panelID string)
+
+	// RefreshStatus asks the host to redraw after an extension changed
+	// its status-bar segment (status_segment), so the update shows even
+	// when nothing else triggers a frame. No-op outside interactive mode.
+	RefreshStatus()
 }
 
 // Manager owns every extension subprocess for the lifetime of terva.
@@ -303,6 +319,13 @@ type Manager struct {
 	// by the host so it can rebuild the agent's tool registry with
 	// the freshly-registered extension tools.
 	onReload func()
+
+	// contextDisabled is the set of extension names whose MODEL context
+	// contributions (static + cards) the host ignores — their tools,
+	// commands, and status segments still work. Set once from the
+	// resolved config (user ∪ project) via SetContextDisabled; replaced
+	// wholesale, never mutated, so a captured reference stays immutable.
+	contextDisabled map[string]bool
 }
 
 // New constructs an empty Manager. Call Discover to populate it from
@@ -715,17 +738,24 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 	// against a timer. On timeout we kill the subprocess, which unblocks
 	// the goroutine's Scan() (stdout closes) so it can return and the
 	// channel send is consumed — no leaked reader goroutine.
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	scanned := make(chan bool, 1)
-	go func() { scanned <- scanner.Scan() }()
+	reader := bufio.NewReaderSize(stdout, 64*1024)
+	type helloRead struct {
+		line    []byte
+		tooLong bool
+		err     error
+	}
+	scanned := make(chan helloRead, 1)
+	go func() {
+		line, tooLong, err := extproto.ReadFrame(reader)
+		scanned <- helloRead{line, tooLong, err}
+	}()
 
-	var ok bool
+	var got helloRead
 	select {
-	case ok = <-scanned:
+	case got = <-scanned:
 	case <-time.After(helloTimeout):
 		_ = cmd.Process.Kill()
-		<-scanned // Scan() now returns false on the closed stdout.
+		<-scanned // ReadFrame returns once the killed process's stdout closes.
 		fmt.Fprintf(logFile, "[terva] extension %s failed to handshake within %s; killed and skipped\n", ext.Manifest.Name, helloTimeout)
 		return fmt.Errorf("extension %s failed to send hello within %s", ext.Manifest.Name, helloTimeout)
 	case <-ctx.Done():
@@ -733,11 +763,15 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 		<-scanned
 		return ctx.Err()
 	}
-	if !ok {
-		return fmt.Errorf("extension exited before hello: %w", scanner.Err())
+	if got.tooLong {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("extension %s hello frame exceeded %d bytes", ext.Manifest.Name, extproto.MaxFrameBytes)
+	}
+	if got.err != nil && len(got.line) == 0 {
+		return fmt.Errorf("extension exited before hello: %w", got.err)
 	}
 	var hello extproto.HelloFromExt
-	if err := json.Unmarshal(scanner.Bytes(), &hello); err != nil {
+	if err := json.Unmarshal(got.line, &hello); err != nil {
 		return fmt.Errorf("parse hello: %w", err)
 	}
 	if hello.Type != "hello" || hello.Name == "" {
@@ -789,7 +823,7 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 	}
 
 	// Spin up the read loop now that the handshake is done.
-	go m.readLoop(ext, scanner)
+	go m.readLoop(ext, reader)
 
 	// Compatibility shim: extensions built against the phase-1 SDK
 	// don't send a ready frame. Watch the read loop's frame arrival
@@ -844,7 +878,7 @@ func (m *Manager) assumeReadyAfterIdle(ext *Extension) {
 
 // readLoop processes every frame the extension sends after hello.
 // Returns when stdout closes.
-func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
+func (m *Manager) readLoop(ext *Extension, reader *bufio.Reader) {
 	defer func() {
 		// On close, drop every command + tool this extension owned so
 		// future invocations don't dangle. The subprocess is gone; we
@@ -875,8 +909,18 @@ func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
 		}
 	}()
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for {
+		line, tooLong, rerr := extproto.ReadFrame(reader)
+		if tooLong {
+			fmt.Fprintf(ext.logFile, "[terva] dropped oversized frame from extension %s (>%d bytes); skipping\n", ext.Manifest.Name, extproto.MaxFrameBytes)
+			continue
+		}
+		if rerr != nil {
+			// EOF or read error: the extension's stream ended. Exit the
+			// loop so the deferred teardown runs (crash surfacing fires
+			// unless the host asked it to stop).
+			break
+		}
 		ext.mu.Lock()
 		ext.lastFrameTime = time.Now()
 		ext.mu.Unlock()
@@ -1022,6 +1066,47 @@ func (m *Manager) readLoop(ext *Extension, scanner *bufio.Scanner) {
 			if err := json.Unmarshal(line, &pc); err == nil {
 				m.hooks.ClosePanel(ext.Manifest.Name, pc.PanelID)
 			}
+		case "register_context":
+			var rc extproto.RegisterContextFromExt
+			if err := json.Unmarshal(line, &rc); err == nil {
+				ext.mu.Lock()
+				ext.staticContext = rc.Text
+				ext.mu.Unlock()
+			}
+		case "context_card":
+			var cc extproto.ContextCardFromExt
+			if err := json.Unmarshal(line, &cc); err == nil && cc.ID != "" {
+				ext.mu.Lock()
+				if ext.contextCards == nil {
+					ext.contextCards = map[string]contextCard{}
+				}
+				ext.contextCards[cc.ID] = contextCard{label: cc.Label, text: cc.Text, priority: cc.Priority, blocking: cc.Blocking}
+				ext.mu.Unlock()
+			}
+		case "context_card_clear":
+			var cc extproto.ContextCardClearFromExt
+			if err := json.Unmarshal(line, &cc); err == nil {
+				ext.mu.Lock()
+				delete(ext.contextCards, cc.ID)
+				ext.mu.Unlock()
+			}
+		case "status_segment":
+			var ss extproto.StatusSegmentFromExt
+			if err := json.Unmarshal(line, &ss); err == nil && ss.ID != "" {
+				ext.mu.Lock()
+				if ext.statusSegments == nil {
+					ext.statusSegments = map[string]string{}
+				}
+				if ss.Text == "" {
+					delete(ext.statusSegments, ss.ID)
+				} else {
+					ext.statusSegments[ss.ID] = ss.Text
+				}
+				ext.mu.Unlock()
+				if m.hooks != nil {
+					m.hooks.RefreshStatus()
+				}
+			}
 		case "shutdown_ack":
 			// Caller of Stop is waiting on the process exit, not this frame.
 		default:
@@ -1107,6 +1192,21 @@ func (m *Manager) InvokeTool(ctx context.Context, name string, args json.RawMess
 	m.mu.RUnlock()
 	if !ok {
 		return extproto.ToolResultFromExt{}, fmt.Errorf("no extension registered for tool %q", name)
+	}
+
+	// Cap the outbound args. A frame larger than the extension's read
+	// limit would kill it mid-read (and InvokeTool would only find out
+	// when it timed out, ~60s later). Return a normal tool error the
+	// model can recover from instead, and never send the oversized frame.
+	if len(args) > extproto.MaxToolCallBytes {
+		return extproto.ToolResultFromExt{
+			IsError: true,
+			Content: []extproto.ContentBlock{{
+				Type: "text",
+				Text: fmt.Sprintf("tool %q arguments are %d bytes; the extension frame limit is %d bytes — send less data",
+					name, len(args), extproto.MaxToolCallBytes),
+			}},
+		}, nil
 	}
 
 	id := newCorrelationID()
