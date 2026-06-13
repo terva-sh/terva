@@ -19,8 +19,9 @@ type EditTool struct {
 }
 
 type editOp struct {
-	OldText string `json:"oldText"`
-	NewText string `json:"newText"`
+	OldText    string `json:"oldText"`
+	NewText    string `json:"newText"`
+	ReplaceAll bool   `json:"replaceAll,omitempty"`
 }
 
 type editArgs struct {
@@ -28,11 +29,11 @@ type editArgs struct {
 	Edits []editOp `json:"edits"`
 }
 
-const editSchema = `{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["oldText","newText"]}}},"required":["path","edits"]}`
+const editSchema = `{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"oldText":{"type":"string"},"newText":{"type":"string"},"replaceAll":{"type":"boolean","description":"replace every occurrence instead of requiring oldText to be unique"}},"required":["oldText","newText"]}}},"required":["path","edits"]}`
 
 func (t *EditTool) Name() string { return "edit" }
 func (t *EditTool) Description() string {
-	return "Edit a file via exact-match replacements. Each oldText must be unique in the file."
+	return "Edit a file via exact-match replacements. Each oldText must be unique in the file unless replaceAll is set. If nothing matches exactly, a whitespace-tolerant match (same lines, one uniform indent shift) is applied when unambiguous."
 }
 func (t *EditTool) Schema() json.RawMessage { return json.RawMessage(editSchema) }
 
@@ -77,12 +78,17 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	edits := make([]editOp, len(a.Edits))
 	for i, e := range a.Edits {
 		edits[i] = editOp{
-			OldText: normalizeNewlines(e.OldText),
-			NewText: normalizeNewlines(e.NewText),
+			OldText:    normalizeNewlines(e.OldText),
+			NewText:    normalizeNewlines(e.NewText),
+			ReplaceAll: e.ReplaceAll,
 		}
 	}
 
-	// Validate all edits first (against original content, not sequentially).
+	// Resolve every edit against the original content (not
+	// sequentially) so all-or-nothing semantics hold: any failure
+	// leaves the file untouched. resolveSpans owns the matching
+	// ladder — exact, whitespace-tolerant, did-you-mean error.
+	spans := make([]editSpan, 0, len(edits))
 	for i, e := range edits {
 		if e.OldText == "" {
 			return core.ToolResult{}, fmt.Errorf("edit %d: oldText must not be empty", i+1)
@@ -90,24 +96,11 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		if e.OldText == e.NewText {
 			return core.ToolResult{}, fmt.Errorf("edit %d: oldText equals newText", i+1)
 		}
-		count := strings.Count(body, e.OldText)
-		if count == 0 {
-			return core.ToolResult{}, fmt.Errorf("edit %d: oldText not found in %s", i+1, a.Path)
+		s, err := resolveSpans(body, e, i+1, a.Path)
+		if err != nil {
+			return core.ToolResult{}, err
 		}
-		if count > 1 {
-			return core.ToolResult{}, fmt.Errorf("edit %d: oldText matches %d times (must be unique) in %s", i+1, count, a.Path)
-		}
-	}
-
-	// Apply atomically (sorted by position so offsets stay valid as we splice).
-	type span struct {
-		start, end  int
-		replacement string
-	}
-	spans := make([]span, 0, len(edits))
-	for _, e := range edits {
-		idx := strings.Index(body, e.OldText)
-		spans = append(spans, span{start: idx, end: idx + len(e.OldText), replacement: e.NewText})
+		spans = append(spans, s...)
 	}
 	// Check for overlaps.
 	for i := 0; i < len(spans); i++ {
