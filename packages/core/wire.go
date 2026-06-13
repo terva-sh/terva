@@ -137,6 +137,10 @@ func EventToWire(ev AgentEvent) WireEvent {
 		if e.Err != nil {
 			out.Error = e.Err.Error()
 		}
+	case EvCompactStart:
+		out.Text = e.Reason
+	case EvCompactEnd:
+		out.Error = e.Err
 	case EvError:
 		if e.Err != nil {
 			out.Error = e.Err.Error()

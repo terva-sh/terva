@@ -150,3 +150,24 @@ func TestQueueMessageSnapshotPopAndDrain(t *testing.T) {
 		t.Fatalf("QueuedMessageCount = %d; want 0", got)
 	}
 }
+
+func TestQueueFrontOps(t *testing.T) {
+	a := NewAgent(nil, "fake", "", Registry{})
+	if a.RequeueFront("  ") {
+		t.Fatal("blank requeue accepted")
+	}
+	a.QueueMessage("later")
+	a.RequeueFront("first")
+	if got := a.PendingQueuedMessages(); len(got) != 2 || got[0] != "first" || got[1] != "later" {
+		t.Fatalf("PendingQueuedMessages = %v; want [first later]", got)
+	}
+	if text, ok := a.ShiftQueuedMessage(); !ok || text != "first" {
+		t.Fatalf("ShiftQueuedMessage = %q,%v; want first,true", text, ok)
+	}
+	if text, ok := a.ShiftQueuedMessage(); !ok || text != "later" {
+		t.Fatalf("ShiftQueuedMessage = %q,%v; want later,true", text, ok)
+	}
+	if _, ok := a.ShiftQueuedMessage(); ok {
+		t.Fatal("shift from empty queue reported ok")
+	}
+}

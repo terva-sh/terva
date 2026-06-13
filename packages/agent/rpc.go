@@ -46,11 +46,12 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	// core.ConfirmGate.Check). headlessConfirmGate also prints the
 	// one-line stderr note. nil when yolo is on (gate.Check on a nil
 	// *core.ConfirmGate always allows).
-	confirmGate := headlessConfirmGate(args, "rpc")
+	confirmGate, roSet := headlessConfirmGate(args, "rpc")
 	r, err := Resolve(args, true)
 	if err != nil {
 		return err
 	}
+	r.AdoptReadOnlySet(roSet)
 
 	// Extensions: same lifecycle as interactive mode, minus the
 	// host-hooks integration. Notify/Display calls from extensions
@@ -68,24 +69,14 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	extMgr.WaitForReady(3 * time.Second)
 	defer extMgr.Stop(2 * time.Second)
 	r.MergeExtensionTools(&extToolAdapter{mgr: extMgr})
+	_, stopMCP := setupMCP(ctx, args, &r)
+	defer stopMCP()
 
 	ag := r.NewAgent()
-	ag.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
-		// Confirm gate runs FIRST so a --no-yolo refusal short-circuits
-		// before the extension intercept sees the call, matching the
-		// interactive path.
-		if confirmGate != nil {
-			ok, reason, _ := confirmGate.Check(call.Name, core.BuildPreview(call.Arguments, 120))
-			if !ok {
-				return false, reason, nil
-			}
-		}
-		r := extMgr.InterceptToolCall(ctx, call.ID, call.Name, call.Arguments)
-		if r.Block {
-			return false, r.Reason, nil
-		}
-		return true, "", r.ModifiedArgs
-	}
+	hookEng := buildHookEngine(args)
+	// Canonical tool-call ladder (pre-hooks, confirm gate, extension
+	// intercept) — shared with every other mode.
+	ag.BeforeToolExecute = buildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
 	ag.BeforeTurn = func(step int) (bool, string) {
 		r := extMgr.InterceptTurnStart(ctx, step)
 		return !r.Block, r.Reason
@@ -97,7 +88,10 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 		}
 		return true, "", r.ReplaceText
 	}
-	ag.OnEvent = func(ev core.AgentEvent) { fanoutAgentEvent(extMgr, ev) }
+	ag.OnEvent = func(ev core.AgentEvent) {
+		fanoutAgentEvent(extMgr, ev)
+		observeAgentEventForHooks(hookEng, ev)
+	}
 
 	// /reload-ext hot-reload callback (also triggered via rpc
 	// `reload_ext` if/when added). Rebuilds the tool registry on the
@@ -367,7 +361,11 @@ func (s *rpcServer) runPrompt(id, message string, images []struct {
 		imgs = append(imgs, provider.ImageBlock{MimeType: im.MimeType, Data: im.Data})
 	}
 
-	err := s.agent.Prompt(subCtx, message, imgs, func(ev core.AgentEvent) {
+	// PromptWithPolicy adds the core turn policy: pre-turn compaction
+	// for an over-threshold transcript and one compact-and-retry on
+	// HTTP 413. Compaction surfaces on the stream as compact_start /
+	// compact_end events.
+	err := s.agent.PromptWithPolicy(subCtx, message, imgs, func(ev core.AgentEvent) {
 		// EvDone is emitted by the agent loop and we re-emit our own
 		// 'done' below; suppressing it here avoids duplicate frames.
 		if _, ok := ev.(core.EvDone); ok {
@@ -381,6 +379,21 @@ func (s *rpcServer) runPrompt(id, message string, images []struct {
 		// Canonical error-event shape (core.WireEvent): the message
 		// lives under "error", matching --json and the SDK.
 		s.writeEvent(map[string]any{"type": "error", "error": err.Error()})
+	}
+	// Post-turn housekeeping for this long-lived session: when the
+	// finished turn pushed context past the auto-compact threshold,
+	// condense now — inside the request lifecycle, before `done` — so
+	// the NEXT prompt doesn't pay the latency or bounce off the
+	// window. A failed auto-compact is non-fatal: the turn itself
+	// succeeded, so the failure rides the compact_end event and the
+	// client decides whether to /compact manually.
+	if err == nil && subCtx.Err() == nil && s.agent.ShouldAutoCompact(core.AutoCompactThreshold) {
+		s.writeEvent(modes.EventToJSON(core.EvCompactStart{Reason: "context near limit"}))
+		end := core.EvCompactEnd{}
+		if _, cerr := s.agent.Compact(subCtx, 4, nil); cerr != nil && !errors.Is(cerr, context.Canceled) {
+			end.Err = cerr.Error()
+		}
+		s.writeEvent(modes.EventToJSON(end))
 	}
 	s.writeEvent(map[string]any{"type": "done"})
 }

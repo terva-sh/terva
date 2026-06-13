@@ -19,6 +19,7 @@ import (
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/connproto"
+	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -243,6 +244,9 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 	argv := append(append([]string{}, p.manifest.Args...), "run")
 	cmd := exec.Command(resolveExec(p.manifest.Exec, p.dir), argv...)
 	cmd.Dir = p.dir
+	// Loader/interpreter injection vars must not cross the trust
+	// boundary into connector processes (see procenv).
+	cmd.Env = procenv.Inherited()
 	cmd.Stderr = logFile
 
 	stdin, err := cmd.StdinPipe()

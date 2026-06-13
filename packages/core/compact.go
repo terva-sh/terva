@@ -149,6 +149,14 @@ func repairOrphanedToolResults(msgs []provider.Message) []provider.Message {
 func serializeTranscript(msgs []provider.Message) string {
 	var sb strings.Builder
 	for _, m := range msgs {
+		// Skip tool-image mirror messages: they are a provider-wire
+		// artifact (a synthetic user turn that re-sends a tool result's
+		// images on providers that can't carry them inline). Their text
+		// is a fixed prefix and their images can't be summarized, so
+		// feeding them to the summarizer only adds a phantom user turn.
+		if IsToolImageMirror(m) {
+			continue
+		}
 		switch m.Role {
 		case provider.RoleUser:
 			sb.WriteString("\n--- user ---\n")

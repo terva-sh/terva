@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -14,8 +15,10 @@ import (
 // then finishes.
 type mirrorFakeClient struct{ calls int32 }
 
-func (c *mirrorFakeClient) Name() string            { return "mirror-fake" }
-func (c *mirrorFakeClient) MirrorsToolImages() bool { return true }
+func (c *mirrorFakeClient) Name() string { return "mirror-fake" }
+func (c *mirrorFakeClient) Capabilities() provider.ClientCapabilities {
+	return provider.ClientCapabilities{MirrorsToolImages: true}
+}
 
 func (c *mirrorFakeClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
 	call := atomic.AddInt32(&c.calls, 1)
@@ -92,5 +95,62 @@ func TestToolImageMirrorGatedOnModelCapability(t *testing.T) {
 	}
 	if mirrored("blind-model") {
 		t.Error("mirror ran for an image-input:false model")
+	}
+}
+
+// The synthetic mirror message carries a structural meta marker so
+// consumers (TUI display, compaction) identify it without matching the
+// prefix string. IsToolImageMirror checks the marker, with a fallback
+// to the prefix for mirrors persisted before the marker existed.
+func TestIsToolImageMirror(t *testing.T) {
+	a := NewAgent(&mirrorFakeClient{}, "vision-model", "sys", Registry{"shot": imageTool{}})
+	t.Cleanup(provider.ResetCatalogLayers)
+	provider.ResetCatalogLayers()
+	provider.RegisterExtraModel(provider.Model{Provider: "test", ID: "vision-model"})
+	if err := a.Prompt(context.Background(), "shot", nil, func(AgentEvent) {}); err != nil {
+		t.Fatal(err)
+	}
+	var marked bool
+	for _, m := range a.Messages() {
+		if m.Meta[toolImageMirrorMeta] == "true" {
+			marked = true
+			if !IsToolImageMirror(m) {
+				t.Error("marked message not recognized by IsToolImageMirror")
+			}
+		}
+	}
+	if !marked {
+		t.Fatal("mirror message was not stamped with the meta marker")
+	}
+
+	// Legacy fallback: a mirror from before the marker (no meta) is
+	// still recognized by its prefix.
+	legacy := provider.Message{Role: provider.RoleUser, Content: []provider.Content{
+		provider.TextBlock{Text: ToolImageMirrorPrefix},
+		provider.ImageBlock{MimeType: "image/png", Data: []byte("x")},
+	}}
+	if !IsToolImageMirror(legacy) {
+		t.Error("legacy prefix mirror not recognized")
+	}
+	// A real user message that merely starts with text is not a mirror.
+	if IsToolImageMirror(provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hello"}}}) {
+		t.Error("ordinary user message misidentified as a mirror")
+	}
+}
+
+func TestSerializeTranscriptSkipsMirror(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "real question"}}},
+		{Role: provider.RoleUser, Meta: map[string]string{toolImageMirrorMeta: "true"}, Content: []provider.Content{
+			provider.TextBlock{Text: ToolImageMirrorPrefix},
+			provider.ImageBlock{MimeType: "image/png", Data: []byte("x")},
+		}},
+	}
+	got := serializeTranscript(msgs)
+	if !strings.Contains(got, "real question") {
+		t.Error("real message lost from transcript")
+	}
+	if strings.Contains(got, ToolImageMirrorPrefix) {
+		t.Error("mirror message leaked into the summarization transcript")
 	}
 }

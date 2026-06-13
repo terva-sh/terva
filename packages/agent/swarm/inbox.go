@@ -2,28 +2,66 @@ package swarm
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
 
+// InboxMsg is one supervisor→agent control message. The wire form is
+// a single compact JSON object per line, so a Text body containing
+// newlines (a multi-line user prompt) survives intact — JSON escapes
+// the inner newline rather than ending the frame. This is the
+// newline-safe replacement for the old "user <text>" text protocol,
+// which split a multi-line prompt across frames and dropped every
+// line after the first.
+type InboxMsg struct {
+	Kind string `json:"kind"`           // "user" | "cancel" | "shutdown"
+	Text string `json:"text,omitempty"` // user-turn body (kind == "user")
+}
+
+// ParseInboxLine decodes one inbox line into (kind, text). It accepts
+// both the JSON envelope and the legacy text forms ("user <text>",
+// "cancel", "shutdown") so a child can be driven by an older parent
+// (or the transport tests) during a version-skew window. An
+// unrecognised line yields kind == "".
+func ParseInboxLine(line string) (kind, text string) {
+	if len(line) > 0 && line[0] == '{' {
+		var m InboxMsg
+		if err := json.Unmarshal([]byte(line), &m); err == nil && m.Kind != "" {
+			return m.Kind, m.Text
+		}
+	}
+	switch {
+	case line == "shutdown":
+		return "shutdown", ""
+	case line == "cancel":
+		return "cancel", ""
+	case strings.HasPrefix(line, "user "):
+		return "user", strings.TrimPrefix(line, "user ")
+	}
+	return "", ""
+}
+
 // Inbox is the supervisor-side handle on a per-agent unix socket
 // that the parent terva uses to send follow-up prompts (and other
 // control lines) to a running swarm agent.
 //
-// Protocol on the wire: one UTF-8 message per line, newline-
-// terminated. Three message kinds:
+// Protocol on the wire: one JSON InboxMsg per line, newline-
+// terminated (see InboxMsg / ParseInboxLine). Three kinds:
 //
-//	user <text>...  — append <text> as the next user turn
-//	cancel          — cancel the agent's in-flight turn
-//	shutdown        — graceful exit; child will write a final
-//	                  EvTurnEnd-equivalent JSON event and quit
+//	{"kind":"user","text":"..."}  — append text as the next user turn
+//	{"kind":"cancel"}             — cancel the agent's in-flight turn
+//	{"kind":"shutdown"}           — graceful drain: finish/abort the
+//	                                in-flight turn, emit a final
+//	                                task_end + agent_stopped, and quit
 //
 // The child listens on the same socket via Listener (below) and
 // translates the messages into core.Agent.Prompt calls. The
@@ -84,6 +122,17 @@ func (b *Inbox) SendInput(msg string) error {
 		return err
 	}
 	return nil
+}
+
+// Send encodes m as one JSON line and writes it. This is the
+// newline-safe path: a Text body with embedded newlines is escaped
+// inside the JSON string, so the frame stays a single line.
+func (b *Inbox) Send(m InboxMsg) error {
+	line, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return b.SendInput(string(line))
 }
 
 // Close drops any persistent connection. Safe to call repeatedly.

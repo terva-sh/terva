@@ -21,7 +21,9 @@ func RunJSON(ctx context.Context, ag *core.Agent, prompt string, images []provid
 		_ = enc.Encode(core.EventToWire(ev))
 	}
 
-	if err := ag.Prompt(ctx, prompt, images, sink); err != nil {
+	// Core turn policy (pre-turn compact, 413 compact-and-retry);
+	// compaction surfaces in the stream as compact_start/compact_end.
+	if err := ag.PromptWithPolicy(ctx, prompt, images, sink); err != nil {
 		runErr = err
 	}
 

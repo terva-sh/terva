@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"terva.sh/terva/packages/agent/procenv"
 )
 
 // execRunner spawns `terva --swarm-agent <inbox> --session <path>` in
@@ -170,7 +172,10 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = r.agent.Dir
-	cmd.Env = append(os.Environ(),
+	// Sanitized base env: swarm children are usually terva itself,
+	// but custom child argv is possible and either way loader
+	// injection vars stop here (see procenv).
+	cmd.Env = append(procenv.Inherited(),
 		"TERVA_SWARM_AGENT_ID="+r.agent.ID,
 		"TERVA_SWARM_EVENT_LOG="+logPath,
 	)
@@ -282,26 +287,33 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 	return nil
 }
 
-// taskLevelTurnEnd reports whether ev is the swarm wrapper's
-// task-level turn_end — the single event runSwarmAgentMode emits when
-// the child's ag.Prompt returns — as opposed to the core agent's
-// per-turn turn_end events fired after every internal turn of its
-// tool-calling loop.
+// taskLevelTurnEnd reports whether ev marks a swarm task completing —
+// one whole ag.Prompt round returning — as opposed to the core
+// agent's per-turn turn_end events fired after every internal turn of
+// its tool-calling loop. The distinction matters: treating a per-turn
+// turn_end as task completion made the auto-swarm watcher declare a
+// sub-agent "finished" right after its first tool call, flushing a
+// premature summary and dropping the watch before the real completion.
 //
-// The discriminator: only the wrapper stamps a "step" field (plus
-// "error"); the core agent's per-turn turn_ends carry "stop" instead
-// (see modes.EventToJSON for core.EvTurnEnd). Treating the per-turn
-// events as task completion made the auto-swarm watcher declare a
-// sub-agent "finished" right after its first tool call — flushing a
-// premature, misleading summary and dropping the watch before the real
-// completion arrived, so the supervisor believed the agent ran forever.
+// The child emits a dedicated "task_end" event (step + error) for
+// this. We also still recognise the legacy form — a "turn_end"
+// carrying a "step" field — so replaying an old events.jsonl written
+// before task_end existed keeps working. The core agent's per-turn
+// turn_ends carry "stop" instead of "step", so they're never mistaken
+// for task completion.
 //
-// Returns the wrapper's step and error string when ok is true.
+// Returns the step and error string when ok is true.
 func taskLevelTurnEnd(ev Event) (step int, errMsg string, ok bool) {
-	if ev.Type != "turn_end" {
-		return 0, "", false
-	}
-	if _, has := ev.Data["step"]; !has {
+	switch ev.Type {
+	case "task_end":
+		// Current form: explicit, unambiguous task completion.
+	case "turn_end":
+		// Legacy form: distinguished from a core per-turn turn_end
+		// only by the presence of "step".
+		if _, has := ev.Data["step"]; !has {
+			return 0, "", false
+		}
+	default:
 		return 0, "", false
 	}
 	s, _ := ev.Data["step"].(float64)
@@ -377,7 +389,7 @@ func applyEventToSink(ev Event, sink Sink) {
 		}
 	case "tool_result":
 		sink.Activity("idle")
-	case "turn_end":
+	case "turn_end", "task_end":
 		sink.Activity("idle")
 	case "agent_ready":
 		sink.Activity("idle")

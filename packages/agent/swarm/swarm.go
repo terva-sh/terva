@@ -65,7 +65,18 @@ type Config struct {
 
 	// Now is a clock seam for tests; defaults to time.Now.
 	Now func() time.Time
+
+	// StopGrace is how long Stop waits for a child to drain and exit
+	// cleanly (in response to the inbox shutdown message) before it
+	// hard-cancels the child's context as a backstop. Defaults to
+	// defaultStopGrace; tests set it short.
+	StopGrace time.Duration
 }
+
+// defaultStopGrace is the window a graceful Stop gives a child to
+// drain its in-flight turn and exit on its own before the context is
+// cancelled as a backstop.
+const defaultStopGrace = 5 * time.Second
 
 // Runner executes one agent task. Run blocks until the task finishes,
 // is cancelled via ctx, or hits an unrecoverable error.
@@ -115,6 +126,9 @@ type Swarm struct {
 func New(cfg Config) *Swarm {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.StopGrace <= 0 {
+		cfg.StopGrace = defaultStopGrace
 	}
 	if cfg.NewRunner == nil {
 		cfg.NewRunner = func(a *Agent) Runner { return &execRunner{agent: a} }
@@ -252,10 +266,10 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 	return a, nil
 }
 
-// SendInput delivers msg to the agent's inbox. msg should already
-// include the leading kind ("user " + text, "cancel", "shutdown").
-// Returns an error wrapping ErrNotReady if the child hasn't opened
-// its listener yet; the caller can retry or surface the wait.
+// SendInput delivers a raw line to the agent's inbox. Prefer the
+// typed SendMsg / SendUserTurn; this remains for the transport tests
+// and any caller holding a pre-formatted line. Returns an error
+// wrapping ErrNotReady if the child hasn't opened its listener yet.
 func (f *Swarm) SendInput(id, msg string) error {
 	a := f.Get(id)
 	if a == nil {
@@ -267,11 +281,24 @@ func (f *Swarm) SendInput(id, msg string) error {
 	return a.inbox.SendInput(msg)
 }
 
-// SendUserTurn is sugar for the common "send the next user turn"
-// case. It quotes nothing and forwards verbatim; callers are
-// expected to have already trimmed and expanded the text.
+// SendMsg delivers a typed control message to the agent's inbox as a
+// newline-safe JSON envelope (see InboxMsg).
+func (f *Swarm) SendMsg(id string, m InboxMsg) error {
+	a := f.Get(id)
+	if a == nil {
+		return fmt.Errorf("no such agent %q", id)
+	}
+	if a.inbox == nil {
+		return fmt.Errorf("agent %s has no inbox", a.ID)
+	}
+	return a.inbox.Send(m)
+}
+
+// SendUserTurn sends text as the agent's next user turn. The body is
+// carried in a JSON envelope, so multi-line prompts survive intact.
+// Callers are expected to have already trimmed and expanded the text.
 func (f *Swarm) SendUserTurn(id, text string) error {
-	return f.SendInput(id, "user "+text)
+	return f.SendMsg(id, InboxMsg{Kind: "user", Text: text})
 }
 
 func (f *Swarm) run(a *Agent) {
@@ -334,11 +361,17 @@ func (f *Swarm) Get(id string) *Agent {
 	return nil
 }
 
-// Stop cancels the agent's context. The Runner should observe the
-// cancellation and return promptly; the goroutine then finalises the
-// agent in StatusKilled. Also closes the supervisor-side inbox handle
-// so any pending SendInput retries fail fast instead of dialing a
-// socket about to be unlinked.
+// Stop gracefully stops the agent: it asks the child to drain via the
+// inbox shutdown message (the child aborts any in-flight turn, emits a
+// final task_end + agent_stopped, flushes its session, and exits),
+// then backstops with a context cancel if the child hasn't exited
+// within cfg.StopGrace. This is gentler than the old immediate
+// context-kill, which tore the child down mid-write and skipped its
+// clean teardown events.
+//
+// Stop returns immediately; the drain-or-backstop wait runs on a
+// background goroutine. Status flips to Killed right away so the
+// dashboard reflects the user's intent.
 //
 // Stop is a no-op for any agent that's not in a live runnable state
 // — Done / Failed / Killed (already finalised) and Detached (no
@@ -357,18 +390,38 @@ func (f *Swarm) Stop(id string) error {
 		return nil
 	}
 	a.status = StatusKilled
-	a.activity = "stopped"
+	a.activity = "stopping"
+	done := a.done
+	cancel := a.cancel
+	inbox := a.inbox
 	a.mu.Unlock()
-	// Belt-and-braces guard against the cancel-less case (detached
-	// agents skip this branch above, but a future code path that
-	// builds an Agent without a runner shouldn't crash the
-	// supervisor).
-	if a.cancel != nil {
-		a.cancel()
+
+	// Graceful request first: let the child drain and exit cleanly.
+	graceful := false
+	if inbox != nil {
+		graceful = inbox.Send(InboxMsg{Kind: "shutdown"}) == nil
 	}
-	if a.inbox != nil {
-		_ = a.inbox.Close()
-	}
+	grace := f.cfg.StopGrace
+
+	go func() {
+		if graceful && done != nil {
+			select {
+			case <-done:
+				// Child exited on its own — no hard cancel needed.
+			case <-time.After(grace):
+				if cancel != nil {
+					cancel()
+				}
+			}
+		} else if cancel != nil {
+			// No inbox / send failed: fall straight back to the
+			// context cancel (the old behaviour).
+			cancel()
+		}
+		if inbox != nil {
+			_ = inbox.Close()
+		}
+	}()
 	return nil
 }
 

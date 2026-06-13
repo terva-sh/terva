@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/chat"
+	"terva.sh/terva/packages/agent/procenv"
 )
 
 // verbTimeout bounds the non-interactive verbs (configured, status).
@@ -82,6 +83,9 @@ func verbCmd(ctx context.Context, m Manifest, dir, verb string) *exec.Cmd {
 	argv := append(append([]string{}, m.Args...), verb)
 	cmd := exec.CommandContext(ctx, resolveExec(m.Exec, dir), argv...)
 	cmd.Dir = dir
+	// Same trust boundary as the run proxy: connector binaries never
+	// inherit loader/interpreter injection vars (see procenv).
+	cmd.Env = procenv.Inherited()
 	return cmd
 }
 

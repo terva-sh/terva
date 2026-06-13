@@ -41,7 +41,10 @@ func RunPrint(ctx context.Context, ag *core.Agent, prompt string, images []provi
 		}
 	}
 
-	if err := ag.Prompt(ctx, prompt, images, sink); err != nil {
+	// PromptWithPolicy adds the core turn policy interactive users
+	// already get: pre-turn compaction for an over-threshold resumed
+	// transcript, and one compact-and-retry on HTTP 413.
+	if err := ag.PromptWithPolicy(ctx, prompt, images, sink); err != nil {
 		return err
 	}
 	if runErr != nil {

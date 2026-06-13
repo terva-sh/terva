@@ -15,6 +15,7 @@ import (
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/external"
+	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/core"
 )
 
@@ -312,6 +313,9 @@ func botStart(svc chat.Service, rawTail []string) error {
 	// --provider, --model, --cwd, etc.
 	args := append([]string{"bot", "run", "--connector=" + svc.Name}, rawTail...)
 	cmd := exec.Command(self, args...)
+	// The daemon child re-spawns connectors itself; start it from a
+	// sanitized env so injection vars don't ride along (see procenv).
+	cmd.Env = procenv.Inherited()
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Stdin = nil

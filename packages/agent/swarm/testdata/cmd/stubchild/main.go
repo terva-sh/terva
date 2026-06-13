@@ -27,6 +27,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"terva.sh/terva/packages/agent/swarm"
 )
 
 func main() {
@@ -80,16 +82,18 @@ func main() {
 		for {
 			line, err := br.ReadString('\n')
 			if line != "" {
-				msg := trimNL(line)
-				switch {
-				case msg == "shutdown":
+				// Share the real parser so the stub speaks the same
+				// (JSON-or-legacy) inbox protocol as a real child.
+				kind, text := swarm.ParseInboxLine(trimNL(line))
+				switch kind {
+				case "shutdown":
 					emit("agent_stopped", map[string]any{"reason": "shutdown"})
 					_ = c.Close()
 					return
-				case msg == "cancel":
+				case "cancel":
 					emit("turn_end", map[string]any{"stop": "cancelled"})
-				case len(msg) > 5 && msg[:5] == "user ":
-					runTurn(emit, msg[5:], turn)
+				case "user":
+					runTurn(emit, text, turn)
 					turn++
 				}
 			}

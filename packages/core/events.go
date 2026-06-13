@@ -120,3 +120,20 @@ type EvError struct {
 }
 
 func (EvError) Type() string { return "error" }
+
+// EvCompactStart announces a policy-driven transcript compaction
+// (context near the window limit, or a 413-oversize retry). Hosts
+// surface it so the pause before the next turn doesn't read as a
+// hang. Reason is short human-readable prose.
+type EvCompactStart struct {
+	Reason string
+}
+
+func (EvCompactStart) Type() string { return "compact_start" }
+
+// EvCompactEnd closes an EvCompactStart. Err is empty on success.
+type EvCompactEnd struct {
+	Err string
+}
+
+func (EvCompactEnd) Type() string { return "compact_end" }

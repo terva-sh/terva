@@ -151,6 +151,37 @@ func (a *Agent) QueueMessage(text string) bool {
 	return true
 }
 
+// RequeueFront puts text at the FRONT of the queue. Hosts use it to
+// re-arm a prompt that must run next — e.g. the message that
+// triggered an auto-compaction is requeued so it fires as soon as the
+// condensed transcript is ready, ahead of anything the user queued
+// while waiting. Empty/whitespace-only messages are ignored.
+func (a *Agent) RequeueFront(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	a.mu.Lock()
+	a.queued = append([]string{text}, a.queued...)
+	a.mu.Unlock()
+	return true
+}
+
+// ShiftQueuedMessage removes and returns the OLDEST queued message.
+// Hosts use it when no agent loop is running to consume the queue
+// in submission order: pop the head to start a fresh turn, and let
+// that turn's loop drain the rest at its safe boundaries.
+func (a *Agent) ShiftQueuedMessage() (string, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.queued) == 0 {
+		return "", false
+	}
+	text := a.queued[0]
+	a.queued = a.queued[1:]
+	return text, true
+}
+
 // PendingQueuedMessages returns a snapshot of user messages waiting
 // to be injected. Used by hosts to render the visible "sliding in"
 // chips without consuming them.
@@ -429,12 +460,12 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			// message, and the OpenAI Responses route's function_call_output
 			// is a bare string. Those clients (every openai-wire provider —
 			// openai, openai-compatible, ollama, groq, xai, kimi, azure, … —
-			// plus openai-codex) report MirrorsToolImages() == true, so when a
-			// tool result contains images we mirror them into a synthetic user
-			// message immediately after the tool result, where they DO
-			// serialize correctly and reach vision models. Providers that
-			// carry tool-result images natively (Anthropic, Gemini) don't
-			// implement the capability and are left untouched.
+			// plus openai-codex) declare ClientCapabilities.MirrorsToolImages,
+			// so when a tool result contains images we mirror them into a
+			// synthetic user message immediately after the tool result, where
+			// they DO serialize correctly and reach vision models. Providers
+			// that carry tool-result images natively (Anthropic, Gemini)
+			// declare nothing and are left untouched.
 			var imageMirror provider.Message
 			// Use the unwrapping helper: openai-codex is wrapped in
 			// RefreshingClient and openai-responses in renamedClient, so a
@@ -850,9 +881,42 @@ func mirrorToolImagesAsUser(msg provider.Message) provider.Message {
 	if len(content) == 0 {
 		return provider.Message{}
 	}
-	prefix := provider.TextBlock{Text: "Tool output included the following image content:"}
+	prefix := provider.TextBlock{Text: ToolImageMirrorPrefix}
 	content = append([]provider.Content{prefix}, content...)
-	return provider.Message{Role: provider.RoleUser, Content: content, Time: time.Now()}
+	// Mark the synthetic message structurally so consumers identify it
+	// without string-matching the prefix (see IsToolImageMirror). It is
+	// a provider-wire artifact — required in the model-facing history on
+	// mirroring providers, but display/summarization should skip it.
+	return provider.Message{
+		Role:    provider.RoleUser,
+		Content: content,
+		Time:    time.Now(),
+		Meta:    map[string]string{toolImageMirrorMeta: "true"},
+	}
+}
+
+// ToolImageMirrorPrefix is the leading text block of a tool-image
+// mirror message (see mirrorToolImagesAsUser). Exported as the single
+// source of truth for the legacy-session fallback in IsToolImageMirror;
+// new mirrors are identified by meta, not this string.
+const ToolImageMirrorPrefix = "Tool output included the following image content:"
+
+const toolImageMirrorMeta = "tool_image_mirror"
+
+// IsToolImageMirror reports whether msg is a synthetic tool-image
+// mirror (a provider-wire artifact, not something the user wrote).
+// Checks the structural meta marker first; falls back to the prefix
+// string so mirrors persisted before the marker existed are still
+// recognized on resume.
+func IsToolImageMirror(msg provider.Message) bool {
+	if msg.Meta[toolImageMirrorMeta] == "true" {
+		return true
+	}
+	if msg.Role != provider.RoleUser || len(msg.Content) == 0 {
+		return false
+	}
+	tb, ok := msg.Content[0].(provider.TextBlock)
+	return ok && strings.TrimSpace(tb.Text) == ToolImageMirrorPrefix
 }
 
 func extractText(msg provider.Message) string {

@@ -38,16 +38,17 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 		return fmt.Errorf("--swarm-agent requires a socket path")
 	}
 
-	confirmGate := headlessConfirmGate(args, "swarm-agent")
+	confirmGate, roSet := headlessConfirmGate(args, "swarm-agent")
 	r, err := Resolve(args, true)
 	if err != nil {
 		return err
 	}
+	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 
@@ -92,7 +93,10 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 		cancelFn context.CancelFunc
 		busyTurn bool
 		turnNo   int
-		shutdown = make(chan struct{})
+		// turnDone wakes the inbox loop when a turn finishes, so a
+		// pending graceful drain can re-check "is a turn still in
+		// flight?" without polling. Buffered + non-blocking send.
+		turnDone = make(chan struct{}, 1)
 	)
 
 	runOne := func(prompt string) {
@@ -123,7 +127,11 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 		err := ag.Prompt(c, prompt, nil, sink)
 		WriteNewTranscript(ag, sess, start)
 
-		em.emit("turn_end", map[string]any{
+		// task_end is the explicit task-completion event the
+		// supervisor watches for (one whole ag.Prompt round). It is
+		// distinct from the core agent's per-turn turn_end events
+		// (which carry "stop", not "step"); see swarm.taskLevelTurnEnd.
+		em.emit("task_end", map[string]any{
 			"step":  step,
 			"error": errString(err),
 		})
@@ -132,6 +140,11 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 		busyTurn = false
 		cancelFn = nil
 		mu.Unlock()
+		// Wake the inbox loop so a pending drain can finish.
+		select {
+		case turnDone <- struct{}{}:
+		default:
+		}
 	}
 
 	// Initial task: run before processing the inbox so the agent
@@ -145,31 +158,57 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 	// a goroutine per turn because runOne already serialises them
 	// via the busyTurn flag; doing the dispatch on the main
 	// goroutine keeps the daemon's lifecycle easy to follow.
+	//
+	// Graceful drain: on a shutdown message we stop accepting new
+	// turns and abort any in-flight one, then exit cleanly once it
+	// has finished (emitting its task_end). The parent backstops with
+	// a context cancel if we take too long (Swarm.Stop / cfg.StopGrace).
+	draining := false
 	for {
+		// If we're draining and no turn is in flight, we're done.
+		mu.Lock()
+		busy := busyTurn
+		mu.Unlock()
+		if draining && !busy {
+			em.emit("agent_stopped", map[string]any{"reason": "shutdown"})
+			return nil
+		}
+
 		select {
 		case <-ctx.Done():
 			em.emit("agent_stopped", map[string]any{"reason": "cancelled"})
 			return ctx.Err()
-		case <-shutdown:
-			em.emit("agent_stopped", map[string]any{"reason": "shutdown"})
-			return nil
+		case <-turnDone:
+			// A turn just finished; loop re-checks the drain condition.
+			continue
 		case msg, ok := <-ln.Lines():
 			if !ok {
 				em.emit("agent_stopped", map[string]any{"reason": "inbox-closed"})
 				return nil
 			}
-			switch {
-			case msg == "shutdown":
-				close(shutdown)
-			case msg == "cancel":
+			kind, text := swarm.ParseInboxLine(msg)
+			switch kind {
+			case "shutdown":
+				// Begin draining: refuse new turns and abort the
+				// in-flight one so we exit promptly with clean events.
+				draining = true
 				mu.Lock()
 				if cancelFn != nil {
 					cancelFn()
 				}
 				mu.Unlock()
-			case strings.HasPrefix(msg, "user "):
-				prompt := strings.TrimPrefix(msg, "user ")
-				go runOne(prompt)
+			case "cancel":
+				mu.Lock()
+				if cancelFn != nil {
+					cancelFn()
+				}
+				mu.Unlock()
+			case "user":
+				if draining {
+					em.emit("error", map[string]any{"error": "agent draining; ignoring new turn"})
+					continue
+				}
+				go runOne(text)
 			default:
 				em.emit("error", map[string]any{
 					"message": "unknown supervisor message: " + truncateForLog(msg, 200),

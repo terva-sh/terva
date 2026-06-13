@@ -199,8 +199,26 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 		}
 	}
 
-	if err := l.Agent.Prompt(ctx, m.Text, m.Images, sink); err != nil {
+	// PromptWithPolicy adds the core turn policy (pre-turn compaction
+	// for an over-threshold transcript, one compact-and-retry on HTTP
+	// 413). Surface compactions to the paired chat as a short notice
+	// so the longer-than-usual pause reads as work, not a hang.
+	if err := l.Agent.PromptWithPolicy(ctx, m.Text, m.Images, func(ev core.AgentEvent) {
+		if cs, ok := ev.(core.EvCompactStart); ok {
+			_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID,
+				Text: "note: condensing conversation history (" + cs.Reason + ") ..."})
+		}
+		sink(ev)
+	}); err != nil {
 		turnErr = err
+	}
+
+	// Post-turn housekeeping for this long-lived session: condense
+	// after a clean turn that pushed context past the threshold so the
+	// paired user's NEXT message doesn't pay the latency. Failures are
+	// non-fatal — the turn itself succeeded.
+	if turnErr == nil && ctx.Err() == nil && l.Agent.ShouldAutoCompact(core.AutoCompactThreshold) {
+		_, _ = l.Agent.Compact(ctx, 4, nil)
 	}
 
 	reply := strings.TrimSpace(lastAssistantText)
