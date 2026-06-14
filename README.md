@@ -143,7 +143,9 @@ make fmt       # gofmt -w .
 make release   # cross-compile linux/darwin/windows on amd64 and arm64
 ```
 
-Source layout (single Go module, four packages under `packages/`):
+Source layout (single Go module; the top-level packages are `provider`,
+`core`, `tui`, and `agent`, with `agent` further split into focused
+sub-packages):
 
 ```
 cmd/terva/                              main()

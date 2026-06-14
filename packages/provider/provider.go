@@ -1,8 +1,10 @@
 // Package provider defines the LLM client abstraction used by terva.
 //
-// It supports exactly two providers: Anthropic (Messages API) and
-// OpenAI (Chat Completions API). Everything above this package operates
-// on the types declared here and does not know about HTTP or SSE.
+// It supports several providers behind one Client interface — Anthropic
+// (Messages API), OpenAI (Chat Completions and the Codex/Responses
+// API), Google Gemini, Amazon Bedrock, Kimi, Ollama, and any
+// OpenAI-compatible endpoint. Everything above this package operates on
+// the types declared here and does not know about HTTP or SSE.
 package provider
 
 import (
