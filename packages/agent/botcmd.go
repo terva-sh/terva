@@ -458,8 +458,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 			if err != nil {
 				return err
 			}
-			agent.Client = next.NewClient()
-			agent.Model = next.Model
+			agent.SetClientAndModel(next.NewClient(), next.Model)
 			loop.UpdateStatusContext(next.Provider, next.AuthMethod, next.CWD)
 			return nil
 		},

@@ -79,6 +79,12 @@ func rebuildContent(blocks []ContentBlock) []provider.Content {
 				IsError: b.IsError,
 				Content: rebuildContent(b.Content),
 			})
+		case "reasoning":
+			out = append(out, provider.ReasoningBlock{
+				ID:        b.ReasoningID,
+				Summary:   b.Summary,
+				Encrypted: b.Encrypted,
+			})
 		}
 	}
 	return out

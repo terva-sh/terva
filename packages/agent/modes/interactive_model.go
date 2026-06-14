@@ -60,9 +60,9 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 		cur, curErr := provider.FindModel(i.cfg.Provider, i.cfg.Model)
 		endpointChanged := curErr != nil || cur.BaseURL != m.BaseURL
 		if !endpointChanged || builder == nil {
+			i.turns.Agent().SetModel(m.ID)
 			i.mu.Lock()
 			i.cfg.Model = m.ID
-			i.turns.Agent().Model = m.ID
 			i.statusOK = "model: " + m.ID
 			i.statusErr = ""
 			i.mu.Unlock()

@@ -302,6 +302,32 @@ func (a *Agent) SetMessages(msgs []provider.Message) {
 	a.rev++
 }
 
+// SetModel swaps the active model under the lock that oneTurn snapshots
+// request fields with, so a host can change models on another goroutine
+// without racing a starting turn. It only mutates the model id — the
+// caller is responsible for ensuring the current Client can serve the
+// new model (same provider AND same resolved endpoint). When the model
+// routes to a different base URL or needs a different client, rebuild
+// the agent (or use SetClientAndModel) instead; mutating the id alone
+// would keep firing requests at the previous endpoint.
+func (a *Agent) SetModel(model string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.Model = model
+}
+
+// SetClientAndModel atomically swaps both the provider client and the
+// model, for hosts that re-resolve a fresh client (a different endpoint,
+// rotated credentials) while keeping the same transcript. Both fields
+// move together under the lock so a turn can never observe the new
+// client paired with the old model or vice versa.
+func (a *Agent) SetClientAndModel(client provider.Client, model string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.Client = client
+	a.Model = model
+}
+
 // Cost returns the cumulative usage. The CostTracker carries its own
 // lock so this is safe to call concurrently with a running turn, which
 // folds usage in from the stream goroutine.

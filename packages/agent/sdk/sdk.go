@@ -1,7 +1,7 @@
 // Package sdk is the public Go SDK for embedding the terva agent
 // runtime in third-party programs. It is the only stable, importable
-// surface the project exposes; everything under internal/ is subject
-// to change without notice.
+// surface the project exposes; the other packages under packages/ are
+// implementation detail and subject to change without notice.
 //
 // Lifecycle:
 //
@@ -38,8 +38,10 @@ import (
 // defaults are read from $TERVA_HOME/config.json, env vars, and the
 // resolver chain (the same one the cli uses).
 type Config struct {
-	// Provider is "anthropic" or "openai". Empty = use the user's
-	// default from config.json or env.
+	// Provider is a registered provider id ("anthropic", "openai",
+	// "openai-codex", "google", "amazon-bedrock", "kimi", "ollama",
+	// "openai-compatible", ...). Empty = use the user's default from
+	// config.json or env.
 	Provider string
 
 	// Model is the model id. Empty = use the provider's default.
@@ -67,8 +69,12 @@ type Config struct {
 	// ("low", "medium", "high"). Empty = no reasoning.
 	Reasoning string
 
-	// MaxSteps caps the agent loop iterations per Prompt call.
-	// 0 uses the default (50).
+	// MaxSteps caps the agent loop iterations per Prompt call. 0 uses
+	// DefaultMaxSteps. NOTE: this deliberately differs from the CLI and
+	// core.Agent, where 0 means UNLIMITED — an embedded session has no
+	// interactive interrupt, so the SDK applies a finite default to keep
+	// a misbehaving loop from running away. Pass a large explicit value
+	// for effectively-unbounded runs.
 	MaxSteps int
 
 	// APIKey overrides the credential lookup chain.
@@ -114,6 +120,21 @@ type Runtime struct {
 	closed bool
 }
 
+// DefaultMaxSteps is the agent-loop iteration cap applied when
+// Config.MaxSteps is 0. The SDK uses a finite default (unlike the CLI /
+// core.Agent, where 0 is unlimited) because an embedded session has no
+// interactive interrupt to stop a runaway loop.
+const DefaultMaxSteps = 50
+
+// effectiveMaxSteps maps a Config.MaxSteps value to the loop cap passed
+// to core: 0 becomes DefaultMaxSteps, any explicit value passes through.
+func effectiveMaxSteps(n int) int {
+	if n == 0 {
+		return DefaultMaxSteps
+	}
+	return n
+}
+
 // New constructs a Runtime from cfg. Returns an error if no
 // credential is available for the requested provider.
 func New(cfg Config) (*Runtime, error) {
@@ -128,13 +149,10 @@ func New(cfg Config) (*Runtime, error) {
 		AppendSystemPrompt: cfg.AppendSystemPrompt,
 		ContextFiles:       cfg.ContextFiles,
 		Reasoning:          cfg.Reasoning,
-		MaxSteps:           cfg.MaxSteps,
+		MaxSteps:           effectiveMaxSteps(cfg.MaxSteps),
 		Tools:              cfg.Tools,
 		NoTools:            cfg.NoTools,
 		NoSess:             true, // SDK callers manage persistence themselves
-	}
-	if args.MaxSteps == 0 {
-		args.MaxSteps = 50
 	}
 	r, err := agent.Resolve(args, true)
 	if err != nil {
@@ -206,10 +224,15 @@ func (r *Runtime) Cost() Usage {
 	}
 }
 
-// Prompt sends a user message and runs the agent loop. Returns a
-// channel that emits one Event per agent action, closed when the
-// turn finishes (cleanly or with error). Only one Prompt may be
-// active at a time per Runtime; concurrent calls return ErrBusy.
+// Prompt sends a user message and runs the agent loop under the
+// standard turn policy (the same one `terva --json` and the rpc server
+// use): the transcript is auto-compacted before the turn when it is
+// near the context window, and a request rejected with HTTP 413 is
+// condensed and retried once. Returns a channel that emits one Event
+// per agent action, closed when the turn finishes (cleanly or with
+// error); compaction surfaces as compact_start/compact_end events.
+// Only one Prompt may be active at a time per Runtime; concurrent
+// calls return ErrBusy.
 func (r *Runtime) Prompt(ctx context.Context, text string, images []Image) (<-chan Event, error) {
 	r.mu.Lock()
 	if r.closed {
@@ -241,7 +264,12 @@ func (r *Runtime) Prompt(ctx context.Context, text string, images []Image) (<-ch
 			r.activeCancel = nil
 			r.mu.Unlock()
 		}()
-		err := r.agent.Prompt(subCtx, text, imgBlocks, func(ev core.AgentEvent) {
+		// PromptWithPolicy, not Prompt: SDK callers get the same turn
+		// policy as `terva --json` and the rpc server — pre-turn
+		// auto-compaction near the context window and a compact-and-retry
+		// on HTTP 413 — instead of a lower-level raw loop. Compaction
+		// surfaces as compact_start/compact_end events on the channel.
+		err := r.agent.PromptWithPolicy(subCtx, text, imgBlocks, func(ev core.AgentEvent) {
 			out <- core.EventToWire(ev)
 		})
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -297,10 +325,20 @@ func (r *Runtime) SetModel(model string) error {
 	if r.agent == nil {
 		return fmt.Errorf("sdk: no agent")
 	}
-	if _, err := provider.FindModel(r.provider, model); err != nil {
+	next, err := provider.FindModel(r.provider, model)
+	if err != nil {
 		return err
 	}
-	r.agent.Model = model
+	// The Runtime's client captured its base URL immutably at New. A
+	// per-model models.json baseUrl can route two models of the same
+	// provider to different endpoints; swapping the id alone would keep
+	// firing requests at the old one. The SDK has no in-place rebuild
+	// (cross-endpoint switches are a fresh Runtime), so reject it
+	// rather than silently mis-route.
+	if cur, curErr := provider.FindModel(r.provider, r.model); curErr == nil && cur.BaseURL != next.BaseURL {
+		return fmt.Errorf("sdk: model %q routes to a different endpoint; create a new Runtime to switch", model)
+	}
+	r.agent.SetModel(model)
 	r.model = model
 	return nil
 }

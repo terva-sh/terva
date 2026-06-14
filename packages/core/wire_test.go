@@ -59,6 +59,28 @@ func TestEventToWireGolden(t *testing.T) {
 	}
 }
 
+// TestContentToWireReasoning: reasoning blocks must survive the
+// canonical wire so providers that replay encrypted chain-of-thought
+// (OpenAI Codex with thinking) keep it across get_messages / SDK
+// round-trips instead of silently dropping it.
+func TestContentToWireReasoning(t *testing.T) {
+	blocks := ContentToWire([]provider.Content{
+		provider.ReasoningBlock{ID: "rs_1", Summary: "weighing options", Encrypted: "OPAQUE"},
+	})
+	if len(blocks) != 1 {
+		t.Fatalf("want 1 wire block, got %d", len(blocks))
+	}
+	b := blocks[0]
+	if b.Type != "reasoning" || b.ReasoningID != "rs_1" || b.Summary != "weighing options" || b.Encrypted != "OPAQUE" {
+		t.Fatalf("reasoning block did not round-trip to wire: %+v", b)
+	}
+	got, _ := json.Marshal(b)
+	want := `{"type":"reasoning","reasoning_id":"rs_1","summary":"weighing options","encrypted_content":"OPAQUE"}`
+	if string(got) != want {
+		t.Errorf("reasoning wire JSON:\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
 // TestWireEventMapMatchesStruct: the Map() view (used by emitters
 // that flatten into their own envelopes) must carry exactly the
 // struct's JSON fields.

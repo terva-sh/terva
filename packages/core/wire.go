@@ -70,6 +70,10 @@ type WireMessage struct {
 //     SDK SetMessages)
 //   - "tool_call"   → ID + Name + Args
 //   - "tool_result" → CallID + IsError + Content (recursive)
+//   - "reasoning"   → ReasoningID + Summary + Encrypted (assistant
+//     chain-of-thought metadata; some providers, e.g. OpenAI Codex with
+//     thinking enabled, require the encrypted payload replayed on
+//     follow-up requests, so it must survive a wire round-trip)
 type WireBlock struct {
 	Type string `json:"type"`
 
@@ -83,6 +87,11 @@ type WireBlock struct {
 	CallID   string          `json:"call_id,omitempty"`
 	IsError  bool            `json:"is_error,omitempty"`
 	Content  []WireBlock     `json:"content,omitempty"`
+
+	// reasoning
+	ReasoningID string `json:"reasoning_id,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	Encrypted   string `json:"encrypted_content,omitempty"`
 }
 
 // WireUsage is per-turn or cumulative token / cost counts.
@@ -192,6 +201,13 @@ func ContentToWire(blocks []provider.Content) []WireBlock {
 				CallID:  v.CallID,
 				IsError: v.IsError,
 				Content: ContentToWire(v.Content),
+			})
+		case provider.ReasoningBlock:
+			out = append(out, WireBlock{
+				Type:        "reasoning",
+				ReasoningID: v.ID,
+				Summary:     v.Summary,
+				Encrypted:   v.Encrypted,
 			})
 		}
 	}

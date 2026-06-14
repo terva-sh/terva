@@ -59,6 +59,7 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	extHooks := &rpcExtHooks{}
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
+	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
 	}
@@ -317,11 +318,22 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 			s.writeError(id, cmd, err.Error())
 			return
 		}
-		if _, err := provider.FindModel(s.provider, req.Model); err != nil {
+		next, err := provider.FindModel(s.provider, req.Model)
+		if err != nil {
 			s.writeError(id, cmd, err.Error())
 			return
 		}
-		s.agent.Model = req.Model
+		// In-place swap reuses the existing client, which captured its
+		// base URL immutably at construction. A per-model models.json
+		// baseUrl can route two models of the same provider to different
+		// backends; swapping the id alone would keep firing requests at
+		// the previous endpoint. The rpc server has no rebuild path, so
+		// reject the swap and tell the client to restart the session.
+		if cur, curErr := provider.FindModel(s.provider, s.model); curErr == nil && cur.BaseURL != next.BaseURL {
+			s.writeError(id, cmd, fmt.Sprintf("model %q routes to a different endpoint; restart the rpc session to switch", req.Model))
+			return
+		}
+		s.agent.SetModel(req.Model)
 		s.model = req.Model
 		s.writeResponse(id, cmd, map[string]any{"model": req.Model})
 

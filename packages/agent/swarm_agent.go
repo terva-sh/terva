@@ -127,7 +127,13 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 		}
 
 		start := len(ag.Messages())
-		err := ag.Prompt(c, prompt, nil, sink)
+		// PromptWithPolicy gives swarm subagents the same turn policy
+		// interactive/json/rpc users get: pre-turn auto-compact when a
+		// resumed transcript is near the window, and a compact-and-retry
+		// on HTTP 413. A long-running subagent would otherwise bounce off
+		// the context limit with no recovery. Compaction surfaces as
+		// compact_start/compact_end events the supervisor ignores.
+		err := ag.PromptWithPolicy(c, prompt, nil, sink)
 		WriteNewTranscript(ag, sess, start)
 
 		// task_end is the explicit task-completion event the
