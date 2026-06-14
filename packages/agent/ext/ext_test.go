@@ -388,6 +388,112 @@ func TestOnSessionReceivesSessionIdentity(t *testing.T) {
 	h.hostW.Close()
 }
 
+// TestSessionStartCarriesCWDAndProject: session_start refreshes the
+// working directory and its project key on the Session + Host(), so an
+// extension follows a /cd instead of going stale; a no-session start
+// (empty cwd) keeps the last known cwd rather than blanking it.
+func TestSessionStartCarriesCWDAndProject(t *testing.T) {
+	h := newHarness("cwd-ext")
+
+	got := make(chan Session, 4)
+	h.ext.OnSession(func(s Session) { got <- s })
+
+	go h.ext.Run()
+
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		TervaVersion: "0.0.0-test", Provider: "anthropic", Model: "claude-test",
+		CWD: "/launch/dir",
+	})
+	for {
+		if h.next(t).hdr.Type == "ready" {
+			break
+		}
+	}
+	waitSession := func() Session {
+		t.Helper()
+		select {
+		case s := <-got:
+			return s
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for OnSession")
+			return Session{}
+		}
+	}
+
+	// session_start with a cwd: Session + Host() reflect it.
+	h.sendToExt(t, extproto.EventFromHost{
+		Type: "event", Event: "session_start",
+		SessionID: "s1", CWD: "/work/repo", ProjectID: "work-repo-abc123",
+	})
+	s := waitSession()
+	if s.CWD != "/work/repo" || s.ProjectID != "work-repo-abc123" {
+		t.Fatalf("session cwd/project not delivered: %+v", s)
+	}
+	if h.ext.Host().CWD != "/work/repo" || h.ext.Host().ProjectID != "work-repo-abc123" {
+		t.Fatalf("Host() did not follow the cwd: %+v", h.ext.Host())
+	}
+
+	// A no-session start (empty cwd) must NOT blank the last known cwd —
+	// closing a session doesn't move the working directory.
+	h.sendToExt(t, extproto.EventFromHost{Type: "event", Event: "session_start"})
+	if s := waitSession(); s.ID != "" {
+		t.Fatalf("expected empty session id on close, got %+v", s)
+	}
+	if h.ext.Host().CWD != "/work/repo" {
+		t.Errorf("Host().CWD should persist across a no-session start, got %q", h.ext.Host().CWD)
+	}
+
+	h.hostW.Close()
+}
+
+// TestToolReadOnlyOption: a tool registered with ReadOnly() emits
+// read_only:true on its register_tool frame; a plain tool does not, so
+// the host can admit the read-only one without a permission prompt.
+func TestToolReadOnlyOption(t *testing.T) {
+	h := newHarness("ro-ext")
+	schema := json.RawMessage(`{"type":"object"}`)
+	h.ext.Tool("look", "read-only", schema, func(json.RawMessage) ToolResult { return ToolResult{} }, ReadOnly())
+	h.ext.Tool("touch", "side-effecting", schema, func(json.RawMessage) ToolResult { return ToolResult{} })
+
+	go h.ext.Run()
+
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		TervaVersion: "0.0.0-test", Provider: "anthropic", Model: "claude-test",
+	})
+
+	readOnly := map[string]bool{}
+	for {
+		f := h.next(t)
+		if f.hdr.Type == "register_tool" {
+			var rt extproto.RegisterToolFromExt
+			if err := json.Unmarshal(f.raw, &rt); err != nil {
+				t.Fatalf("unmarshal register_tool: %v", err)
+			}
+			readOnly[rt.Name] = rt.ReadOnly
+		}
+		if f.hdr.Type == "ready" {
+			break
+		}
+	}
+
+	if !readOnly["look"] {
+		t.Error("ReadOnly() tool should register with read_only:true")
+	}
+	if readOnly["touch"] {
+		t.Error("plain tool must not be read_only")
+	}
+
+	h.hostW.Close()
+}
+
 // An oversized inbound frame (larger than the read cap) must be skipped,
 // not fatal: Run keeps going and the next valid frame is still handled.
 func TestSDKRunSurvivesOversizedInboundFrame(t *testing.T) {

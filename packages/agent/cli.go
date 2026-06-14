@@ -310,6 +310,13 @@ func emitSessionStart(mgr *extensions.Manager, sess *core.Session) {
 		ev.SessionID = sess.ID
 		ev.SessionPath = sess.Path
 		ev.SessionTitle = sess.Meta.Title
+		// cwd + its stable project key ride session_start so an extension
+		// follows the working directory across a /cd (which re-fires this
+		// event with the new cwd) instead of staying on the launch cwd.
+		ev.CWD = sess.Meta.CWD
+		if sess.Meta.CWD != "" {
+			ev.ProjectID = core.ProjectKey(sess.Meta.CWD)
+		}
 	}
 	mgr.EmitEvent(ev)
 }
@@ -466,6 +473,7 @@ func (nonInteractiveExtHooks) RefreshStatus()                                   
 func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, version string) (*extensions.Manager, func()) {
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, nonInteractiveExtHooks{})
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
+	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
 	}
@@ -733,6 +741,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	extHooks := &interactiveExtHooks{ivPtr: &iv}
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
+	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	// --ext paths first so they win against installed extensions of
 	// the same name (loadOne's first-write-wins semantics).
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {

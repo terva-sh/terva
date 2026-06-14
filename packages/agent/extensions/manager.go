@@ -326,6 +326,12 @@ type Manager struct {
 	// resolved config (user ∪ project) via SetContextDisabled; replaced
 	// wholesale, never mutated, so a captured reference stays immutable.
 	contextDisabled map[string]bool
+
+	// disabledExtensions is the set of extension names that must not be
+	// loaded at all (resolved user ∪ project config). Consulted in
+	// loadOne, so it MUST be set via SetDisabledExtensions BEFORE
+	// Discover / LoadExplicit. Guarded by mu.
+	disabledExtensions map[string]bool
 }
 
 // New constructs an empty Manager. Call Discover to populate it from
@@ -412,6 +418,18 @@ func (m *Manager) searchDirs() []string {
 	return dirs
 }
 
+// extDataDir is an extension's writable, install-independent data
+// directory, under $TERVA_HOME/ext-data/<name>. Keyed by manifest name
+// so it's stable no matter which discovery root the extension loaded
+// from. Returns "" when there's no terva home, signalling the caller to
+// fall back to the install dir.
+func (m *Manager) extDataDir(name string) string {
+	if m.tervaHome == "" || name == "" {
+		return ""
+	}
+	return filepath.Join(m.tervaHome, "ext-data", name)
+}
+
 // loadOne reads a single extension's manifest and, if enabled,
 // spawns its subprocess + completes the hello handshake.
 func (m *Manager) loadOne(ctx context.Context, dir string) error {
@@ -433,6 +451,12 @@ func (m *Manager) loadOne(ctx context.Context, dir string) error {
 	}
 	if !mf.IsEnabled() {
 		// Quietly skip disabled extensions; terva ext list will show them.
+		return nil
+	}
+	if m.extensionLoadDisabled(mf.Name) {
+		// Disabled by user/project config (disable_extensions): never
+		// spawned, so its tools/commands/panels/context never appear.
+		fmt.Fprintf(os.Stderr, "extension %q not loaded (disabled by config)\n", mf.Name)
 		return nil
 	}
 
@@ -804,6 +828,18 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 	go ext.writeLoop()
 
 	hostVersion := m.tervaVersion
+	// DataDir is the extension's writable state directory, kept separate
+	// from ext.Dir (the read-only install dir) so a read-only / system
+	// install still works and code never mixes with data. Keyed by
+	// manifest name so it's stable across install location. Falls back to
+	// the install dir when there's no terva home or the dir can't be
+	// created — preserving the old colocated behavior rather than failing.
+	dataDir := ext.Dir
+	if d := m.extDataDir(ext.Manifest.Name); d != "" {
+		if err := os.MkdirAll(d, 0o755); err == nil {
+			dataDir = d
+		}
+	}
 	if err := ext.writeFrame(extproto.HelloAckFromHost{
 		Type:            "hello_ack",
 		ProtocolVersion: extproto.ProtocolVersion,
@@ -813,7 +849,7 @@ func (m *Manager) spawn(ctx context.Context, ext *Extension) error {
 		Model:           m.model,
 		CWD:             m.cwd,
 		ExtensionDir:    ext.Dir,
-		DataDir:         ext.Dir,
+		DataDir:         dataDir,
 	}); err != nil {
 		// Tear down the writer goroutine we just started so it doesn't
 		// leak on this failed spawn.

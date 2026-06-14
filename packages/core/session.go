@@ -181,11 +181,77 @@ func encodeWireBlocks(blocks []provider.Content) []wireBlock {
 	return out
 }
 
+// CWDHash is the stable short hash of a working directory used to key
+// per-cwd storage. It is exported so other per-project storage (e.g. an
+// extension's data dir) can reuse the exact value SessionsDir buckets
+// by, making the two correlate by eye. Pass an absolute cwd.
+func CWDHash(cwd string) string {
+	sum := sha256.Sum256([]byte(cwd))
+	return hex.EncodeToString(sum[:8])
+}
+
 // SessionsDir returns the per-cwd sessions directory under root.
 func SessionsDir(root, cwd string) string {
-	sum := sha256.Sum256([]byte(cwd))
-	short := hex.EncodeToString(sum[:8])
-	return filepath.Join(root, "sessions", short)
+	return filepath.Join(root, "sessions", CWDHash(cwd))
+}
+
+// ProjectKey is a human-readable, collision-proof identifier for a
+// working directory: the absolute path flattened for readability, plus
+// CWDHash as the disambiguator. The readable prefix is lossy on its own
+// (two distinct paths can flatten the same), so the trailing hash is
+// what guarantees uniqueness — which lets the prefix be freely collapsed
+// and truncated. The hash equals that cwd's SessionsDir bucket name, so
+// a project's ext-data dir and its session bucket correlate.
+//
+// Used to scope per-project extension storage. Callers should pass an
+// absolute cwd (the hash then matches SessionsDir exactly).
+func ProjectKey(cwd string) string {
+	if abs, err := filepath.Abs(cwd); err == nil && abs != "" {
+		cwd = abs
+	}
+	slug := projectSlug(cwd)
+	hash := CWDHash(cwd)
+	if slug == "" {
+		return hash
+	}
+	return slug + "-" + hash
+}
+
+// projectSlug flattens a path into a readable, filesystem-safe token:
+// path separators become '-', any other non-alphanumeric becomes '_',
+// and a run of separators collapses to the first one (so "a//b" -> "a-b",
+// "a__b" -> "a_b"). Leading/trailing separators are stripped — a
+// leading '-' would make the dir name look like a CLI flag — and the
+// result is capped, tail-biased so the most specific path components
+// survive (the hash in ProjectKey carries correctness, so truncation is
+// purely cosmetic).
+func projectSlug(p string) string {
+	var b strings.Builder
+	b.Grow(len(p))
+	prevSep := false
+	for _, r := range p {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevSep = false
+		case r == '/' || r == '\\':
+			if !prevSep {
+				b.WriteByte('-')
+				prevSep = true
+			}
+		default:
+			if !prevSep {
+				b.WriteByte('_')
+				prevSep = true
+			}
+		}
+	}
+	s := strings.Trim(b.String(), "-_")
+	const maxLen = 80
+	if len(s) > maxLen {
+		s = strings.TrimLeft(s[len(s)-maxLen:], "-_")
+	}
+	return s
 }
 
 // NewSession creates and opens a new session file under

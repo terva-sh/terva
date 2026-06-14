@@ -49,6 +49,11 @@ type Resolved struct {
 	// passes it to the extension manager via SetContextDisabled.
 	DisableContextExtensions []string
 
+	// DisableExtensions is the resolved (user ∪ project) set of
+	// extensions that must not be loaded at all. The host passes it to
+	// the extension manager via SetDisabledExtensions BEFORE discovery.
+	DisableExtensions []string
+
 	// Bookkeeping for MergeExtensionTools. Captured at Resolve time
 	// so the system prompt can be rebuilt later without re-running
 	// resolve.
@@ -603,6 +608,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		Sandbox:                  sandbox,
 		SkillTool:                skillTool,
 		DisableContextExtensions: eff.Config.DisableContextExtensions,
+		DisableExtensions:        eff.Config.DisableExtensions,
 		systemAppend:             append_,
 		systemCustom:             custom,
 		toolDescriptions:         descMapFromSummaries(summaries),

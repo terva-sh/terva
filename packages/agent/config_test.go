@@ -213,6 +213,26 @@ func TestResolveConfigDisableContextExtensionsUnion(t *testing.T) {
 	}
 }
 
+// disable_extensions is restrict-only too: the project layer unions
+// into the user's, never re-enabling.
+func TestResolveConfigDisableExtensionsUnion(t *testing.T) {
+	t.Setenv("TERVA_HOME", t.TempDir())
+	if err := SaveConfig(Config{DisableExtensions: []string{"alpha"}}); err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	writeProjectConfig(t, repo, `{"disable_extensions":["beta"]}`)
+
+	eff := ResolveConfig(repo)
+	got := map[string]bool{}
+	for _, n := range eff.DisableExtensions {
+		got[n] = true
+	}
+	if !got["alpha"] || !got["beta"] || len(eff.DisableExtensions) != 2 {
+		t.Fatalf("union should be {alpha (user), beta (project)}: %v", eff.DisableExtensions)
+	}
+}
+
 func TestResolveConfigFallsBackToUserWhenNoProject(t *testing.T) {
 	tervaHome := t.TempDir()
 	t.Setenv("TERVA_HOME", tervaHome)

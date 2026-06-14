@@ -52,6 +52,30 @@ func (m *Manager) SetContextDisabled(names []string) {
 	m.mu.Unlock()
 }
 
+// SetDisabledExtensions records which extensions must not be loaded at
+// all (from the resolved user ∪ project config). MUST be called before
+// Discover / LoadExplicit — loadOne consults it to skip spawning a
+// disabled extension entirely.
+func (m *Manager) SetDisabledExtensions(names []string) {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		if n != "" {
+			set[n] = true
+		}
+	}
+	m.mu.Lock()
+	m.disabledExtensions = set
+	m.mu.Unlock()
+}
+
+// extensionLoadDisabled reports whether an extension name is in the
+// load-disable set.
+func (m *Manager) extensionLoadDisabled(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.disabledExtensions[name]
+}
+
 // contextDisabledSet returns the current disabled set under the lock.
 // The returned map is never mutated after assignment, so the caller may
 // read it without holding the lock.

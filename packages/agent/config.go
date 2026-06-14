@@ -71,6 +71,17 @@ type Config struct {
 	// different context posture. See docs/permissions.md.
 	DisableContextExtensions []string `json:"disable_context_extensions,omitempty"`
 
+	// DisableExtensions lists extensions that must NOT be loaded at all
+	// (by manifest name) — they are never spawned, so their tools,
+	// commands, panels, and context never appear. Stronger than
+	// DisableContextExtensions (which loads the extension but suppresses
+	// only its model context). A project's .terva/config.json may add to
+	// this list (restrict-only, union with the user layer): a directory
+	// can reject an extension entirely (e.g. a repo that doesn't want
+	// terva-tasks running), but can never re-enable one the user
+	// disabled. See docs/extensions.md.
+	DisableExtensions []string `json:"disable_extensions,omitempty"`
+
 	// Approval is the default approval mode (plan / ask / auto-edit /
 	// yolo) when no --approval / --no-yolo flag is given. Empty means
 	// yolo, the historical default. See docs/permissions.md.
@@ -143,6 +154,12 @@ type ProjectConfig struct {
 	// re-enable an extension the user disabled — consistent with the
 	// untrusted project layer's "restrict, never escalate" rule.
 	DisableContextExtensions []string `json:"disable_context_extensions,omitempty"`
+
+	// DisableExtensions refuses to load specific extensions entirely for
+	// this project. Restrict-only and union'd with the user layer (adds,
+	// never re-enables) — a cloned repo can keep an extension from
+	// running here but can never make one run the user didn't install.
+	DisableExtensions []string `json:"disable_extensions,omitempty"`
 }
 
 // Project-local config lives in the same per-project directory terva
@@ -405,6 +422,11 @@ func ResolveConfig(cwd string) EffectiveConfig {
 	// context, never re-enable one the user disabled.
 	if pc != nil && len(pc.DisableContextExtensions) > 0 {
 		eff.Config.DisableContextExtensions = unionStrings(user.DisableContextExtensions, pc.DisableContextExtensions)
+	}
+	// Same restrict-only union for the load-disable list: a project can
+	// refuse to load an extension, never re-enable one the user disabled.
+	if pc != nil && len(pc.DisableExtensions) > 0 {
+		eff.Config.DisableExtensions = unionStrings(user.DisableExtensions, pc.DisableExtensions)
 	}
 	return eff
 }

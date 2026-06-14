@@ -305,6 +305,17 @@ type EventFromHost struct {
 	SessionID    string `json:"session_id,omitempty"`
 	SessionPath  string `json:"session_path,omitempty"`
 	SessionTitle string `json:"session_title,omitempty"`
+	// CWD / ProjectID ride a "session_start" event (ProtocolVersion 2+).
+	// Unlike HelloAck's CWD (frozen at the handshake), these refresh on
+	// every session_start — including after a /cd — so an extension can
+	// follow the working directory instead of going stale on the launch
+	// cwd. ProjectID is the host's stable, collision-proof key for the
+	// cwd (core.ProjectKey): an extension uses it to scope per-project
+	// state without reimplementing the keying. Additive/omitempty —
+	// pre-v2 subscribers ignore them, and a no-session start leaves them
+	// empty.
+	CWD       string `json:"cwd,omitempty"`
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 type EventInterceptFromHost struct {

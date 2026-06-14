@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -28,15 +27,17 @@ type toolArgs struct {
 }
 
 type app struct {
-	e    *ext.Extension
-	mu   sync.Mutex
-	path string
-	st   store
-	mode string
-	edit string
+	e      *ext.Extension
+	mu     sync.Mutex
+	loaded bool
+	fs     ext.DataFS
+	st     store
+	mode   string
+	edit   string
 }
 
 const panelID = "todos-main"
+const todoFile = "todos.json"
 
 func main() {
 	e := ext.New("todo-panel", "0.3.0")
@@ -69,21 +70,17 @@ func main() {
 func (a *app) ensureLoaded() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.path != "" {
+	if a.loaded {
 		return nil
 	}
-	dir := a.e.Host().DataDir
-	if dir == "" {
-		dir = a.e.Host().ExtensionDir
-	}
-	if dir == "" {
-		return fmt.Errorf("host did not provide extension_dir/data_dir")
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	a.path = filepath.Join(dir, "todos.json")
-	b, err := os.ReadFile(a.path)
+	// DataFS layers the writable DataDir over the read-only install dir:
+	// writes go to DataDir, and a read falls through to the install dir
+	// when DataDir has no copy yet — so a todos.json written under the
+	// old (install-dir) data dir is still picked up, then migrates to the
+	// new dir on the next save (copy-on-write).
+	a.fs = a.e.Host().DataFS()
+	a.loaded = true
+	b, err := a.fs.ReadFile(todoFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			a.st = store{Items: []todoItem{{Text: "Build something fun", Done: false}}}
@@ -108,7 +105,7 @@ func (a *app) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(a.path, b, 0o644)
+	return a.fs.WriteFile(todoFile, b, 0o644)
 }
 
 func (a *app) clampLocked() {

@@ -265,6 +265,13 @@ the `plan` approval mode and auto-allowed in `auto-edit` (see
 mutating. Lying here only cheats your own user's policy. Old hosts
 ignore the field; old extensions never send it — fully additive.
 
+From the Go SDK, pass `ext.ReadOnly()` as a trailing option to declare
+it:
+
+```go
+e.Tool("worktree_list", "List worktrees.", schema, handler, ext.ReadOnly())
+```
+
 Tool names live in the same namespace as built-in tools (`read`,
 `write`, `edit`, `bash`, `skill`). Conflicts are silently shadowed by
 the built-in.
@@ -304,6 +311,19 @@ which it wants to intercept. Send once after `hello`, before `ready`.
 
 Recognised event names: `session_start`, `turn_start`, `turn_end`,
 `tool_call`, `assistant_message`.
+
+`session_start` (protocol 2+) carries the active session's identity —
+`session_id`, `session_path`, `session_title` — plus `cwd` and
+`project_id`. Unlike the `cwd` in the hello handshake (frozen at launch),
+these refresh on **every** `session_start`, including after a `/cd`, so
+an extension follows the working directory instead of going stale.
+`project_id` is the host's stable, collision-proof key for the cwd (a
+readable, flattened path plus a short hash); use it to scope per-project
+state without reinventing the keying. The SDK refreshes `Host().CWD` /
+`Host().ProjectID` from these before any handler runs, and an `OnSession`
+handler receives them on the `Session`. A no-session start (session
+closed / `--no-session`) leaves `cwd`/`project_id` empty and the SDK
+keeps the last known value (closing a session doesn't move the cwd).
 
 Interceptable events:
 
@@ -435,19 +455,31 @@ Sent in response to `shutdown`. Extension should exit promptly after.
 #### `hello_ack`
 
 ```json
-{"type":"hello_ack","protocol_version":1,
+{"type":"hello_ack","protocol_version":2,
  "terva_version":"0.0.7","provider":"anthropic",
  "model":"claude-opus-4-7","cwd":"/Users/pat/Developer/terva",
  "extension_dir":"/Users/pat/Developer/terva/.terva/extensions/todos",
- "data_dir":"/Users/pat/Developer/terva/.terva/extensions/todos"}
+ "data_dir":"/Users/pat/.terva/ext-data/todos"}
 ```
 
 Sent immediately after `hello`. The extension can use these fields to
 decide which commands to register (e.g. only register a Python tool
 on macOS, only register a model-specific shortcut for opus, etc.).
-`extension_dir` / `data_dir` are where the extension should persist
-its own state (for example `todos.json`, cached metadata, or auth
-tokens scoped to that extension).
+
+`extension_dir` is the **read-only install dir** — the extension's code
+and any defaults/assets it ships. `data_dir` is the **writable state
+dir**, `$TERVA_HOME/ext-data/<name>`, kept separate so a read-only or
+system install still works and code never mixes with data. Persist your
+state (e.g. `todos.json`, caches, scoped auth tokens) under `data_dir`.
+
+> **Note:** `data_dir` used to alias the install dir. It now points at
+> the separate `ext-data` location. The Go SDK's `Host().DataFS()` layers
+> `data_dir` over `extension_dir` (read-through, copy-on-write), so a file
+> written under the old location is still read until it's next written —
+> a no-flag-day migration. Use `DataFS` for both "ship a default, let the
+> user override" and reading legacy state. For per-project state, use
+> `Host().ProjectDataDir()` (`data_dir/projects/<project_id>`, scoped by
+> the `project_id` on `session_start`).
 
 #### `command_invoked`
 
@@ -550,6 +582,33 @@ terva ext logs <name> [-f]        cat / tail the extension's stderr
 `terva ext install <path>` does a recursive copy; `<git-url>` does a
 shallow clone. Both validate that the destination contains an
 `extension.json` and roll back if not.
+
+### Disabling extensions by config (per user or project)
+
+`terva ext disable <name>` is a global toggle (it flips the manifest).
+For policy that travels with a directory, `config.json` has two
+restrict-only lists, by extension name:
+
+```json
+{
+  "disable_extensions": ["terva-tasks"],
+  "disable_context_extensions": ["noisy-ext"]
+}
+```
+
+- **`disable_extensions`** — the extension is **never loaded**: not
+  spawned, no tools/commands/panels/context. The strong "I don't want
+  this running here" switch.
+- **`disable_context_extensions`** — the extension loads normally, but
+  its **model-context** contributions (`register_context` / cards) are
+  suppressed; tools, commands, panels, and status still work.
+
+A project's `.terva/config.json` may **add** to either list but never
+remove from it (restrict-only union with the user layer): a cloned repo
+can keep an extension from running in its directory, but can never make
+one run that the user didn't install, nor re-enable one the user
+disabled. Both compose with the manifest toggle and with `--ext` — any
+one of them disabling wins.
 
 ## Loading an extension for one run
 

@@ -33,7 +33,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
 	"terva.sh/terva/packages/agent/extproto"
@@ -87,6 +89,10 @@ type Event struct {
 	SessionID    string
 	SessionPath  string
 	SessionTitle string
+	// CWD / ProjectID ride a session_start event (host protocol 2+) and
+	// refresh on a /cd. See Session / OnSession for the common case.
+	CWD       string
+	ProjectID string
 }
 
 // Session identifies the active terva session. It is delivered to an
@@ -96,6 +102,11 @@ type Session struct {
 	ID    string
 	Path  string
 	Title string
+	// CWD is the session's working directory and ProjectID its stable
+	// project key (core.ProjectKey). Both refresh on a /cd. Empty when
+	// the host predates protocol 2 or there is no active session.
+	CWD       string
+	ProjectID string
 }
 
 // InterceptHandler decides whether a tool call may proceed. Return
@@ -300,7 +311,20 @@ type toolDef struct {
 	name        string
 	description string
 	schema      json.RawMessage
+	readOnly    bool
 }
+
+// ToolOption configures a tool at registration time. Pass options as the
+// trailing args to Tool.
+type ToolOption func(*toolDef)
+
+// ReadOnly marks a tool as having no side effects (the MCP readOnlyHint
+// analog). A host that understands the hint may admit the tool in
+// read-only / workspace approval modes without prompting — use it for
+// tools that only inspect (a lister, a search, a status query) so they
+// don't ask on every call. Declaring it is a promise about behavior;
+// an extension that lies here only loosens its own user's policy.
+func ReadOnly() ToolOption { return func(t *toolDef) { t.readOnly = true } }
 
 // HostInfo is what the host (terva) tells us in HelloAck. Useful for
 // extensions that want to behave differently per provider.
@@ -315,13 +339,20 @@ type HostInfo struct {
 	ZotVersion      string // rename:keep — public SDK API
 	Provider        string
 	Model           string
-	CWD             string
-	ExtensionDir    string
-	DataDir         string
+	// CWD is the working directory. It is seeded at the handshake and
+	// then refreshed on every session_start that carries one, so it
+	// follows a /cd instead of staying on the launch cwd.
+	CWD          string
+	ExtensionDir string
+	DataDir      string
 
 	SessionID    string
 	SessionPath  string
 	SessionTitle string
+	// ProjectID is the host's stable, collision-proof key for CWD
+	// (core.ProjectKey). Use it to scope per-project state. Refreshes
+	// alongside CWD on session_start.
+	ProjectID string
 }
 
 // New constructs an Extension with the given identifier. name should
@@ -345,6 +376,122 @@ func New(name, version string) *Extension {
 // Host returns the HostInfo received during the hello handshake.
 // Returns the zero value if Run hasn't started yet.
 func (e *Extension) Host() HostInfo { return e.host }
+
+// ProjectDataDir returns the per-project writable directory for this
+// extension — DataDir/projects/<ProjectID> — creating it on call. Use
+// it for state that belongs to one project/working-tree (a task board,
+// a worktree registry). ProjectID refreshes on a /cd, so call this off a
+// fresh Host() (e.g. inside an OnSession handler) rather than caching the
+// result. Before the first session_start, or under --no-session, the
+// ProjectID is empty and state lands in a shared "_noproject" bucket.
+func (h HostInfo) ProjectDataDir() (string, error) {
+	if h.DataDir == "" {
+		return "", fmt.Errorf("ext: no data dir (host predates this field)")
+	}
+	proj := h.ProjectID
+	if proj == "" {
+		proj = "_noproject"
+	}
+	dir := filepath.Join(h.DataDir, "projects", proj)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// DataFS returns a read-through view that layers the writable DataDir
+// (upper) over the read-only ExtensionDir (lower). Reads prefer DataDir
+// and fall through to the install dir; writes always land in DataDir
+// (copy-on-write). This gives two things at once: ship default
+// assets/config in the install dir and let the user override them in
+// DataDir, and — because the install dir was the *old* DataDir — keep
+// data written before the data dir moved readable until it's rewritten.
+func (h HostInfo) DataFS() DataFS { return DataFS{upper: h.DataDir, lower: h.ExtensionDir} }
+
+// DataFS is a two-layer file view: a writable upper directory over a
+// read-only lower one. Construct it via HostInfo.DataFS. Names are
+// relative paths within the layers; absolute paths and paths escaping
+// the layer (via "..") are rejected.
+type DataFS struct {
+	upper string // DataDir — writable
+	lower string // ExtensionDir — read-only, never written
+}
+
+func cleanRel(name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("ext: empty path")
+	}
+	c := filepath.Clean(name)
+	if filepath.IsAbs(c) || c == ".." || strings.HasPrefix(c, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("ext: path %q escapes the data layer", name)
+	}
+	return c, nil
+}
+
+// ReadFile returns name from the writable layer if present, otherwise
+// from the read-only install layer. A genuine error on the upper layer
+// (e.g. permissions) surfaces rather than silently falling through.
+func (f DataFS) ReadFile(name string) ([]byte, error) {
+	rel, err := cleanRel(name)
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(filepath.Join(f.upper, rel))
+	if err == nil {
+		return b, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if f.lower == "" {
+		return nil, err
+	}
+	return os.ReadFile(filepath.Join(f.lower, rel))
+}
+
+// WriteFile writes name to the writable layer (copy-on-write), creating
+// parent directories. It never touches the read-only install layer.
+func (f DataFS) WriteFile(name string, data []byte, perm os.FileMode) error {
+	rel, err := cleanRel(name)
+	if err != nil {
+		return err
+	}
+	if f.upper == "" {
+		return fmt.Errorf("ext: no writable data dir")
+	}
+	p := filepath.Join(f.upper, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, data, perm)
+}
+
+// Exists reports whether name resolves in either layer.
+func (f DataFS) Exists(name string) bool {
+	rel, err := cleanRel(name)
+	if err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(f.upper, rel)); err == nil {
+		return true
+	}
+	if f.lower == "" {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(f.lower, rel))
+	return err == nil
+}
+
+// Path returns the writable path where a write to name would land,
+// without creating anything. Useful for handing a path to a child
+// process or another tool.
+func (f DataFS) Path(name string) (string, error) {
+	rel, err := cleanRel(name)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(f.upper, rel), nil
+}
 
 // RequireProtocol declares the minimum host protocol version this
 // extension needs. A host that speaks a lower version refuses to load
@@ -416,10 +563,17 @@ func (e *Extension) Command(name, description string, fn CommandHandler) {
 //
 // Naming conflicts with built-in tools (read, write, edit, bash,
 // skill) are silently shadowed by the built-in.
-func (e *Extension) Tool(name, description string, schema json.RawMessage, fn ToolHandler) {
+//
+// Pass ReadOnly() to declare the tool side-effect free so the host can
+// admit it without a permission prompt in read-only / workspace modes.
+func (e *Extension) Tool(name, description string, schema json.RawMessage, fn ToolHandler, opts ...ToolOption) {
+	td := toolDef{name: name, description: description, schema: schema}
+	for _, opt := range opts {
+		opt(&td)
+	}
 	e.mu.Lock()
 	e.tools[name] = fn
-	e.toolDefs = append(e.toolDefs, toolDef{name: name, description: description, schema: schema})
+	e.toolDefs = append(e.toolDefs, td)
 	e.mu.Unlock()
 }
 
@@ -610,6 +764,7 @@ func (e *Extension) Run() error {
 			Name:        td.name,
 			Description: td.description,
 			Schema:      td.schema,
+			ReadOnly:    td.readOnly,
 		})
 	}
 	if contextContribution != "" {
@@ -740,6 +895,13 @@ func (e *Extension) Run() error {
 				e.host.SessionID = ef.SessionID
 				e.host.SessionPath = ef.SessionPath
 				e.host.SessionTitle = ef.SessionTitle
+				// Refresh cwd/project only when the event carries one (a
+				// session close / no-session start leaves them empty but
+				// doesn't actually move the cwd, so keep the last value).
+				if ef.CWD != "" {
+					e.host.CWD = ef.CWD
+					e.host.ProjectID = ef.ProjectID
+				}
 			}
 			handler := e.eventHandlers[ef.Event]
 			var onSession func(Session)
@@ -754,7 +916,7 @@ func (e *Extension) Run() error {
 							e.Logf("OnSession handler panicked: %v", r)
 						}
 					}()
-					onSession(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle})
+					onSession(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle, CWD: ef.CWD, ProjectID: ef.ProjectID})
 				}()
 			}
 			if handler != nil {
@@ -769,6 +931,7 @@ func (e *Extension) Run() error {
 						Error: ef.Error, ToolID: ef.ToolID, ToolName: ef.ToolName,
 						ToolArgs: ef.ToolArgs, Text: ef.Text,
 						SessionID: ef.SessionID, SessionPath: ef.SessionPath, SessionTitle: ef.SessionTitle,
+						CWD: ef.CWD, ProjectID: ef.ProjectID,
 					})
 				}()
 			}
