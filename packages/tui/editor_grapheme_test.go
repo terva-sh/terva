@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -122,11 +123,17 @@ func TestPasteStatBound(t *testing.T) {
 	}
 
 	// Small drop: the real path (space escaped the way terminals
-	// deliver drags) is quoted.
-	escaped := strings.ReplaceAll(real, " ", "\\ ")
-	quoted := quotePastedFilePaths(escaped)
-	if !strings.Contains(quoted, "'") {
-		t.Fatalf("small drop not quoted: %q", quoted)
+	// deliver drags) is quoted. POSIX-only: the drag-drop heuristic
+	// recognizes "/", "~", and file:// paths and single-quotes them for
+	// a POSIX shell. A Windows drive-letter path (C:\…) is deliberately
+	// left alone — single quotes aren't Windows-shell syntax — so this
+	// assertion only holds where the path is POSIX-shaped.
+	if runtime.GOOS != "windows" {
+		escaped := strings.ReplaceAll(real, " ", "\\ ")
+		quoted := quotePastedFilePaths(escaped)
+		if !strings.Contains(quoted, "'") {
+			t.Fatalf("small drop not quoted: %q", quoted)
+		}
 	}
 
 	// 20 path-shaped tokens (including the real one): verbatim.

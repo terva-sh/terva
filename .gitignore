@@ -80,3 +80,10 @@ logs/
 .tmp/
 tmp/
 npm/
+
+# Harness-generated review/eval reports dropped at the repo root. They
+# are transient working artifacts; keeping them untracked stops one from
+# slipping into a commit and leaking into the public release tree (the
+# release overlay strips docs/plans/, not stray root files). Move a
+# report into docs/ deliberately if it's worth keeping.
+/*-report.md
