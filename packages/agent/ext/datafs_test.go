@@ -48,7 +48,10 @@ func TestDataFSReadThrough(t *testing.T) {
 // TestDataFSRejectsEscape: a name that escapes the layer must be refused.
 func TestDataFSRejectsEscape(t *testing.T) {
 	fs := HostInfo{DataDir: t.TempDir(), ExtensionDir: t.TempDir()}.DataFS()
-	for _, bad := range []string{"../escape", "/etc/passwd", ".."} {
+	// Rooted (slash and backslash), traversal, and bare-parent forms must
+	// all be refused on every OS — filepath.IsAbs alone misses a
+	// leading-slash path on Windows, so these pin the cross-platform guard.
+	for _, bad := range []string{"../escape", "/etc/passwd", `\windows\system32`, "..", "a/../../escape"} {
 		if _, err := fs.ReadFile(bad); err == nil {
 			t.Errorf("ReadFile(%q) should be rejected", bad)
 		}
