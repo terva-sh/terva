@@ -38,15 +38,6 @@ type ToolResult struct {
 // Registry is a name->Tool map.
 type Registry map[string]Tool
 
-// NewRegistry builds a Registry from a list of tools.
-func NewRegistry(tools ...Tool) Registry {
-	r := Registry{}
-	for _, t := range tools {
-		r[t.Name()] = t
-	}
-	return r
-}
-
 // Specs returns the tool definitions to advertise to the LLM.
 // Sorted by tool name so the order is stable across requests. This
 // is load-bearing for provider-side prompt caching: providers

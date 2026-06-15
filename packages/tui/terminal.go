@@ -126,14 +126,6 @@ const (
 	SeqEraseToEnd = "\x1b[J"
 )
 
-// SetScrollRegion returns the DECSTBM sequence to set the terminal's
-// scroll region (1-indexed, inclusive). Lines that scroll out of this
-// region still flow into the terminal's scrollback, but content above
-// or below the region is not affected by scroll-induced movement.
-func SetScrollRegion(top, bottom int) string {
-	return "\x1b[" + itoa(top) + ";" + itoa(bottom) + "r"
-}
-
 // MoveTo moves the cursor to 1-indexed (row, col).
 func MoveTo(row, col int) string {
 	return "\x1b[" + itoa(row) + ";" + itoa(col) + "H"

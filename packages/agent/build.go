@@ -62,7 +62,7 @@ type Resolved struct {
 	toolDescriptions map[string]string
 	// extensionContext is the extensions' aggregated static context
 	// contribution (register_context), folded into the cached system
-	// prompt addendum via SetExtensionContext after extensions register.
+	// prompt addendum by MergeExtensionTools after extensions register.
 	extensionContext string
 
 	// approvalMode is the effective approval mode at resolve time.
@@ -127,19 +127,6 @@ func (r *Resolved) rebuildSystemPrompt() {
 		TervaDocsDir: filepath.Join(TervaHome(), "docs"),
 		StatusTool:   r.ToolRegistry["terva_status"] != nil,
 	})
-}
-
-// SetExtensionContext folds the extensions' aggregated static context
-// (extMgr.StaticContext()) into the cached system-prompt addendum and
-// re-renders. Called after extensions register (post-WaitForReady /
-// after MergeExtensionTools). No-op when the text is unchanged so it
-// won't needlessly bust the prompt cache.
-func (r *Resolved) SetExtensionContext(text string) {
-	if text == r.extensionContext {
-		return
-	}
-	r.extensionContext = text
-	r.rebuildSystemPrompt()
 }
 
 // HasCredential reports whether a credential was resolved.

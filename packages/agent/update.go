@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"terva.sh/terva/packages/agent/identity"
@@ -217,10 +216,3 @@ func writeUpdateCache(path string, c updateCache) error {
 	}
 	return os.WriteFile(path, b, 0o600)
 }
-
-// cachedLatest, cachedLatestOnce: used elsewhere in the binary if we
-// want a synchronous read without triggering a network call.
-var (
-	cachedLatest     string
-	cachedLatestOnce sync.Once
-)

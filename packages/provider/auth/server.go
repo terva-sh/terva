@@ -6,7 +6,6 @@ import (
 	"html/template"
 	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -270,13 +269,6 @@ func decodeStateProvider(state string) string {
 // redirect to.
 func (s *Server) BuildRedirectURI() string {
 	return s.baseURL + "/callback"
-}
-
-// Redirect sends an HTTP redirect to u. Used by the TUI to tell the
-// browser to bounce through our local server. Not currently used; kept
-// for future flows.
-func Redirect(w http.ResponseWriter, r *http.Request, u *url.URL) {
-	http.Redirect(w, r, u.String(), http.StatusFound)
 }
 
 // ---- templates ----

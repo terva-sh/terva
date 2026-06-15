@@ -186,7 +186,7 @@ restarted.
 ## Context contributions
 
 An extension can contribute to what the **model** sees, under host
-control (see [the design](plans/extension-context-cards.md)): static
+control (see [the design](plans/archive/extension-context-cards.md)): static
 guidance folded into the system prompt (`register_context`), live
 per-turn cards (`context_card`), and a status-line segment
 (`status_segment`). Run `/context` to see exactly what's injected.

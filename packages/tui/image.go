@@ -89,16 +89,6 @@ func detectImageProtocolAuto() ImageProtocol {
 	return ImageProtocolNone
 }
 
-// RenderInlineImage returns a terminal escape sequence that draws data
-// inline. If the protocol is None, returns "" so the caller can fall
-// back to a text placeholder.
-//
-// maxCellsWide caps the rendered width in terminal cells (columns) for
-// protocols that honor it. 0 means "let the terminal decide".
-func RenderInlineImage(proto ImageProtocol, data []byte, mime string, maxCellsWide int) string {
-	return RenderInlineImageScaled(proto, data, mime, maxCellsWide, 0)
-}
-
 // RenderInlineImageScaled renders an image with both width and height
 // clamps (in terminal cells). Values <= 0 mean "let the terminal decide".
 func RenderInlineImageScaled(proto ImageProtocol, data []byte, mime string, maxCellsWide, maxCellsHigh int) string {

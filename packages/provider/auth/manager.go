@@ -4,14 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
-
-	"terva.sh/terva/packages/envcompat"
 )
 
 // Event is delivered on Manager.Events().
@@ -453,38 +450,6 @@ func parseManualCodeInput(s string) (code, state string) {
 		return s[:idx], s[idx+1:]
 	}
 	return s, ""
-}
-
-// HasBrowser reports whether the current environment probably has a
-// working interactive browser reachable from localhost. Used by the
-// login flow to auto-switch to paste-code mode on headless boxes
-// (containers, SSH without display forwarding, etc.) instead of
-// trying to bind a callback port the user can never reach.
-func HasBrowser() bool {
-	if envcompat.Get("NO_BROWSER") != "" {
-		return false
-	}
-	if envcompat.Get("FORCE_BROWSER") != "" {
-		return true
-	}
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return false
-	}
-	if b, err := os.ReadFile("/proc/1/cgroup"); err == nil {
-		txt := string(b)
-		if strings.Contains(txt, "docker") || strings.Contains(txt, "kubepods") || strings.Contains(txt, "containerd") {
-			return false
-		}
-	}
-	switch runtime.GOOS {
-	case "darwin", "windows":
-		return true
-	default:
-		if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
-			return false
-		}
-		return true
-	}
 }
 
 // CancelOAuth aborts any in-flight OAuth flow.

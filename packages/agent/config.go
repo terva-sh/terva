@@ -189,9 +189,6 @@ func KimiCLIFallbackDisabledPath() string {
 	return filepath.Join(TervaHome(), "kimi-cli-fallback-disabled")
 }
 
-// SessionsPath returns the directory holding session files.
-func SessionsPath() string { return filepath.Join(TervaHome(), "sessions") }
-
 // LogsPath returns the directory holding log files.
 func LogsPath() string { return filepath.Join(TervaHome(), "logs") }
 

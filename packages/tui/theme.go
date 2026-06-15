@@ -291,9 +291,6 @@ func (t Theme) UserBubbleRow(content string, width int) string {
 // Bold wraps s in bold SGR.
 func Bold(s string) string { return "\x1b[1m" + s + "\x1b[22m" }
 
-// Dim wraps s in dim SGR.
-func Dim(s string) string { return "\x1b[2m" + s + "\x1b[22m" }
-
 // Italic wraps s in italic SGR.
 func Italic(s string) string { return "\x1b[3m" + s + "\x1b[23m" }
 

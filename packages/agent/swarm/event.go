@@ -97,9 +97,6 @@ func OpenEventLog(path string) (*EventLog, error) {
 	return &EventLog{path: path, f: f}, nil
 }
 
-// Path returns the absolute log path.
-func (l *EventLog) Path() string { return l.path }
-
 // Append writes one event. The encoding is `<json>\n`. Concurrent
 // callers are serialised; small enough events never need partial
 // writes since unix guarantees atomicity for writes ≤ PIPE_BUF on

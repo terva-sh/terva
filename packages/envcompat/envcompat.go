@@ -36,14 +36,6 @@ var (
 	warned         = map[string]bool{}
 )
 
-// SetDeprecationWarnings toggles the old-spelling warning. Exposed
-// for the phase-2 cut (and tests); not user-facing configuration.
-func SetDeprecationWarnings(on bool) {
-	warnMu.Lock()
-	warnDeprecated = on
-	warnMu.Unlock()
-}
-
 // Lookup returns the value of the product env var with the given
 // suffix ("HOME", "INLINE_IMAGES", …): TERVA_<suffix> first, then
 // ZOT_<suffix>. The bool reports whether either spelling was set.

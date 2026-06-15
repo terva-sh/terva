@@ -87,3 +87,8 @@ npm/
 # release overlay strips docs/plans/, not stray root files). Move a
 # report into docs/ deliberately if it's worth keeping.
 /*-report.md
+
+# Agent worktrees: the coding-agent harness creates isolated git worktrees
+# here for background tasks and removes them when done. Ignore so an
+# in-progress agent run never dirties the tree (or the build's version stamp).
+.claude/worktrees/

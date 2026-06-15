@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Telegram Bot API types used by the bridge. Only the subset we need.
@@ -301,6 +300,3 @@ func openFile(path string) (io.ReadCloser, error) {
 
 // overridden in tests.
 var osOpen = defaultOpen
-
-// Sleep is a package-level hook so tests can stub it.
-var sleep = func(d time.Duration) { time.Sleep(d) }

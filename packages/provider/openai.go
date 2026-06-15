@@ -36,21 +36,6 @@ func NewOpenAI(apiKey, baseURL string) Client {
 	}
 }
 
-// NewOpenAIOAuth creates an OpenAI client using a subscription OAuth access token.
-// The token is sent as an HTTP Bearer credential on the standard chat/completions endpoint.
-func NewOpenAIOAuth(accessToken, baseURL string) Client {
-	if baseURL == "" {
-		baseURL = openaiDefaultBaseURL
-	}
-	return &openaiClient{
-		apiKey:  accessToken,
-		baseURL: strings.TrimRight(baseURL, "/"),
-		name:    "openai",
-		oauth:   true,
-		http:    &http.Client{Timeout: 0},
-	}
-}
-
 // NewKimi creates a Kimi/Moonshot client. Kimi's chat API is OpenAI-compatible.
 func NewKimi(apiKey, baseURL string) Client {
 	return NewKimiWithHeaders(apiKey, baseURL, nil)

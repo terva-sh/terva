@@ -12,19 +12,15 @@ import (
 	"github.com/alecthomas/chroma/v2/styles"
 )
 
-// HighlightCode syntax-colors src and returns the result split into lines,
-// ready for a line-based diff renderer. If no language is given or
-// chroma has no lexer for it, src is returned as-is (one entry per line).
-// Safe to call from multiple goroutines.
+// HighlightCode syntax-colors src using this theme's syntax palette and
+// returns the result split into lines, ready for a line-based diff
+// renderer. If no language is given or chroma has no lexer for it, src
+// is returned as-is (one entry per line). Safe to call from multiple
+// goroutines.
 //
 // Results are memoised by (lang, src) so repeated calls from the view
 // builder (which runs on every redraw) don't re-tokenise. Cache is
 // bounded and evicts oldest entries past its cap.
-func HighlightCode(src, lang string) []string {
-	return Dark.HighlightCode(src, lang)
-}
-
-// HighlightCode syntax-colors src using this theme's syntax palette.
 func (th Theme) HighlightCode(src, lang string) []string {
 	styleKey := th.syntaxKey()
 	if out, ok := highlightCache.lookup(styleKey, lang, src); ok {

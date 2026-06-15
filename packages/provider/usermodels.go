@@ -82,20 +82,8 @@ type UserOverride struct {
 	ReasoningSet bool
 }
 
-// LoadUserModels reads a models.json file and returns the models
-// converted to the internal Model type. Returns nil on any error
-// (missing file, bad JSON, etc.) so the caller can treat it as
-// optional without error handling.
-func LoadUserModels(path string) []Model {
-	overrides, _ := LoadUserModelsWithWarnings(path)
-	out := make([]Model, 0, len(overrides))
-	for _, o := range overrides {
-		out = append(out, o.Model)
-	}
-	return out
-}
-
-// LoadUserModelsWithWarnings is like LoadUserModels but also returns
+// LoadUserModelsWithWarnings reads a models.json file, returning the
+// models converted to the internal Model type plus
 // human-readable warnings about every recoverable issue it found in
 // the file (unknown provider id, empty model id, malformed JSON for a
 // single provider block, etc.). The caller is responsible for

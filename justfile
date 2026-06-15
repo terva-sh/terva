@@ -132,9 +132,17 @@ fmt:
 tidy:
     go mod tidy
 
-# fmt-check + vet + race tests + connector tag-matrix build + public
-# packaging drift check, as a pre-push gate.
-ci: lint test
+# ACP run mode (behind -tags terva_acp): build/vet/test it. The default
+# build only compiles the no-tag stub, so `test` can't cover the real
+# package — this guards it from silent breakage.
+ci-acp:
+    go build -tags terva_acp ./...
+    go vet -tags terva_acp ./packages/agent/...
+    go test -tags terva_acp -race ./packages/agent/acp/... ./packages/agent/
+
+# fmt-check + vet + race tests + connector tag-matrix build + acp tag
+# build/test + public packaging drift check, as a pre-push gate.
+ci: lint test ci-acp
     go build -tags terva_no_telegram ./...
     @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-overlay; fi
 

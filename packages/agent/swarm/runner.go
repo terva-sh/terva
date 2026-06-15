@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -415,22 +414,3 @@ func applyEventToSink(ev Event, sink Sink) {
 type RunnerFunc func(ctx context.Context, sink Sink) error
 
 func (f RunnerFunc) Run(ctx context.Context, sink Sink) error { return f(ctx, sink) }
-
-// streamLines kept around for any caller still using it directly.
-//
-// Deprecated: the runner now parses JSONL from stdout via
-// parseEventLine; this helper is unused inside the package but
-// remains exported via internal use by tests in the runner_test
-// suite that pre-date the daemon switch.
-func streamLines(r io.Reader, fn func(string)) {
-	br := bufio.NewReader(r)
-	for {
-		line, err := br.ReadString('\n')
-		if line != "" {
-			fn(strings.TrimRight(line, "\r\n"))
-		}
-		if err != nil {
-			return
-		}
-	}
-}

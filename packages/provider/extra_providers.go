@@ -128,31 +128,6 @@ func NewOpenCodeGo(apiKey, baseURL string) Client {
 	return newOpenAICompat("opencode-go", apiKey, baseURL, "https://opencode.ai/zen/go/v1")
 }
 
-// NewMinimaxOpenAI is the OpenAI-completions flavor of MiniMax, in case
-// downstream models switch from anthropic-messages. The main MiniMax route
-// uses anthropic-messages; see NewMinimaxAnthropic below.
-func NewMinimaxOpenAI(apiKey, baseURL string) Client {
-	return newOpenAICompat("minimax", apiKey, baseURL, "https://api.minimax.io/v1")
-}
-
-// NewMinimaxCNOpenAI is the CN-region MiniMax (openai-completions).
-func NewMinimaxCNOpenAI(apiKey, baseURL string) Client {
-	return newOpenAICompat("minimax-cn", apiKey, baseURL, "https://api.minimaxi.com/v1")
-}
-
-// NewFireworksOpenAI is the OpenAI-completions flavor of Fireworks.
-// The main route uses the anthropic-messages variant on
-// api.fireworks.ai/inference; see NewFireworksAnthropic.
-func NewFireworksOpenAI(apiKey, baseURL string) Client {
-	return newOpenAICompat("fireworks", apiKey, baseURL, "https://api.fireworks.ai/inference/v1")
-}
-
-// NewVercelGatewayOpenAI is Vercel AI Gateway's OpenAI-compat shim. The
-// main route uses anthropic-messages; see NewVercelGatewayAnthropic.
-func NewVercelGatewayOpenAI(apiKey, baseURL string) Client {
-	return newOpenAICompat("vercel-ai-gateway", apiKey, baseURL, "https://ai-gateway.vercel.sh/v1")
-}
-
 // ----------------------------------------------------------------------
 // Anthropic Messages–compatible providers. These speak Anthropic's wire
 // format but live behind a third party's base URL. They reuse
@@ -175,14 +150,9 @@ func NewAnthropicCompat(name, apiKey, baseURL string) Client {
 	}
 }
 
-// NewKimiCoding is the Kimi Code client: Kimi behind the Anthropic
-// Messages API at https://api.kimi.com/coding. Replaces the older
-// OpenAI-completions-on-/coding/v1 wiring.
-func NewKimiCoding(apiKey, baseURL string) Client {
-	return NewKimiCodingWithHeaders(apiKey, baseURL, nil)
-}
-
-// NewKimiCodingWithHeaders is the headered variant used by OAuth.
+// NewKimiCodingWithHeaders is the Kimi Code client: Kimi behind the
+// Anthropic Messages API at https://api.kimi.com/coding (replaces the
+// older OpenAI-completions-on-/coding/v1 wiring). Used by OAuth.
 func NewKimiCodingWithHeaders(apiKey, baseURL string, headers map[string]string) Client {
 	if baseURL == "" {
 		baseURL = "https://api.kimi.com/coding"
