@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"sync"
@@ -120,6 +121,10 @@ type Engine struct {
 	// exits) somewhere a human can see without breaking the turn.
 	logf func(format string, a ...any)
 
+	// closer, if set, owns the logf sink (e.g. the hooks.log file) and
+	// is released by Close. Optional — logf may write nowhere closeable.
+	closer io.Closer
+
 	// inflight correlates EvToolCall (name+args) with EvToolResult
 	// (result) so post hooks see the full call. Tool IDs are unique
 	// per turn; entries are popped on result.
@@ -143,6 +148,27 @@ func NewEngine(cfg Config, cwd string, logf func(string, ...any)) *Engine {
 		logf:     logf,
 		inflight: map[string]postEvent{},
 	}
+}
+
+// SetCloser attaches a resource (typically the log file backing logf)
+// for the engine to release on Close. Optional; pass nil for no-op.
+func (e *Engine) SetCloser(c io.Closer) {
+	if e != nil {
+		e.closer = c
+	}
+}
+
+// Close releases the engine's attached log resource. Nil-safe (a nil
+// *Engine is inert) and idempotent. Long-lived hosts may rely on process
+// exit instead; tests must call it so an open log file doesn't block
+// temp-dir cleanup on Windows.
+func (e *Engine) Close() error {
+	if e == nil || e.closer == nil {
+		return nil
+	}
+	c := e.closer
+	e.closer = nil
+	return c.Close()
 }
 
 const (

@@ -196,19 +196,18 @@ func SessionsDir(root, cwd string) string {
 }
 
 // ProjectKey is a human-readable, collision-proof identifier for a
-// working directory: the absolute path flattened for readability, plus
-// CWDHash as the disambiguator. The readable prefix is lossy on its own
-// (two distinct paths can flatten the same), so the trailing hash is
-// what guarantees uniqueness — which lets the prefix be freely collapsed
-// and truncated. The hash equals that cwd's SessionsDir bucket name, so
-// a project's ext-data dir and its session bucket correlate.
+// working directory: the path flattened for readability, plus CWDHash as
+// the disambiguator. The readable prefix is lossy on its own (two
+// distinct paths can flatten the same), so the trailing hash is what
+// guarantees uniqueness — which lets the prefix be freely collapsed and
+// truncated.
 //
-// Used to scope per-project extension storage. Callers should pass an
-// absolute cwd (the hash then matches SessionsDir exactly).
+// The key is computed from cwd verbatim (no absolutization), so its hash
+// is byte-for-byte the cwd's SessionsDir bucket name and the two
+// correlate. Pass the same absolute cwd you pass elsewhere (sessions
+// already do); absolutizing here would both diverge from SessionsDir and
+// graft the platform's volume (a Windows drive letter) into the key.
 func ProjectKey(cwd string) string {
-	if abs, err := filepath.Abs(cwd); err == nil && abs != "" {
-		cwd = abs
-	}
 	slug := projectSlug(cwd)
 	hash := CWDHash(cwd)
 	if slug == "" {

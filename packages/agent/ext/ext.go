@@ -421,9 +421,22 @@ func cleanRel(name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("ext: empty path")
 	}
-	c := filepath.Clean(name)
-	if filepath.IsAbs(c) || c == ".." || strings.HasPrefix(c, ".."+string(filepath.Separator)) {
+	escape := func() (string, error) {
 		return "", fmt.Errorf("ext: path %q escapes the data layer", name)
+	}
+	// Reject absolute, volume-qualified, and rooted paths up front, on
+	// every OS. filepath.IsAbs is not enough: on Windows a leading-slash
+	// path like "/etc/passwd" is NOT absolute (no drive), so it would slip
+	// through and be joined onto the layer root.
+	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" ||
+		strings.HasPrefix(name, "/") || strings.HasPrefix(name, `\`) {
+		return escape()
+	}
+	c := filepath.Clean(name)
+	if filepath.IsAbs(c) || c == "." || c == ".." ||
+		strings.HasPrefix(c, ".."+string(filepath.Separator)) ||
+		strings.HasPrefix(c, "/") || strings.HasPrefix(c, `\`) {
+		return escape()
 	}
 	return c, nil
 }

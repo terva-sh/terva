@@ -117,6 +117,10 @@ func TestBuildHookEngineFromConfig(t *testing.T) {
 	if eng == nil {
 		t.Fatal("engine should build from config")
 	}
+	// Release the hooks.log handle before the temp home is removed —
+	// Windows can't unlink a file that is still open, which fails the
+	// t.TempDir cleanup.
+	defer eng.Close()
 	if r := eng.RunPre(context.Background(), "bash", []byte(`{}`)); r.Decision != hooks.DecisionDeny {
 		t.Errorf("configured hook should deny, got %q", r.Decision)
 	}
