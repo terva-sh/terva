@@ -32,6 +32,14 @@ const (
 type ReadTool struct {
 	CWD     string
 	Sandbox *Sandbox // when jailed, confines reads to the sandbox root
+
+	// SupportsVision reports whether the active model can consume image
+	// pixels. When true, reading an image file returns an inline
+	// ImageBlock for the vision model. When false, the image branch
+	// returns a text result explaining the file is an image whose pixels
+	// were NOT sent (the provider would silently drop the block) and how
+	// to enable vision — rather than shipping a block that vanishes.
+	SupportsVision bool
 }
 
 type readArgs struct {
@@ -44,7 +52,7 @@ const readSchema = `{"type":"object","properties":{"path":{"type":"string"},"off
 
 func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return "Read a file. Images (png/jpg/gif/webp) return inline."
+	return "Read a file from disk. This is also THE way to inspect or analyze a LOCAL image: pass an image path (png/jpg/gif/webp) and its pixels are returned inline for a vision-capable model to see."
 }
 func (t *ReadTool) Schema() json.RawMessage { return json.RawMessage(readSchema) }
 
@@ -73,6 +81,27 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	if mime := imageMIME(path); mime != "" {
 		if info.Size() > maxImageBytes {
 			return core.ToolResult{}, fmt.Errorf("%s is %d bytes; image reads are capped at %d bytes", a.Path, info.Size(), maxImageBytes)
+		}
+		// Non-vision model: an ImageBlock would be silently dropped at
+		// serialization, so the model would "see" nothing and not know
+		// why. Return a successful TEXT result instead — it names the
+		// file as an image and tells the agent how to actually inspect
+		// it (switch models, or tag a vision-capable local model in
+		// models.json). Not an error: a text result lets the agent act.
+		if !t.SupportsVision {
+			return core.ToolResult{
+				Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf(
+					"%s is an image (%s, %d bytes). Its pixels were NOT sent: the active model isn't marked vision-capable, so an inline image block would be dropped and the model would see nothing.\n"+
+						"To inspect it: switch to a vision-capable model with /model, or — if this model DOES support images (e.g. a local one) — mark it in models.json with \"capabilities\": {\"image-input\": true} and re-run.",
+					a.Path, mime, info.Size())}},
+				Details: map[string]any{
+					"path":           path,
+					"image":          true,
+					"mime":           mime,
+					"bytes":          info.Size(),
+					"vision_dropped": true,
+				},
+			}, nil
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {

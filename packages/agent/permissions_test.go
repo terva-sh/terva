@@ -225,7 +225,7 @@ func TestAppendUserPermissionRulePersists(t *testing.T) {
 }
 
 func TestPlanModeFiltersToolRegistry(t *testing.T) {
-	reg := buildToolRegistry(Args{}, core.ApprovalPlan, t.TempDir(), nil, "anthropic", "apikey")
+	reg := buildToolRegistry(Args{}, core.ApprovalPlan, t.TempDir(), nil, "anthropic", "apikey", true)
 	for name := range reg {
 		if !readOnlyTools[name] {
 			t.Errorf("plan registry leaked mutating tool %s", name)

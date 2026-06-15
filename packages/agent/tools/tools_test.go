@@ -65,6 +65,59 @@ func TestReadBinaryRejected(t *testing.T) {
 	}
 }
 
+// TestReadImageVisionCapable: a vision-capable ReadTool returns the
+// image inline as an ImageBlock the model consumes (today's behavior).
+func TestReadImageVisionCapable(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "pic.png")
+	if err := os.WriteFile(p, []byte("\x89PNG\r\n\x1a\nfake-pixels"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &ReadTool{CWD: dir, SupportsVision: true}
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"path": "pic.png"}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, ok := res.Content[0].(provider.ImageBlock)
+	if !ok {
+		t.Fatalf("want ImageBlock, got %T", res.Content[0])
+	}
+	if img.MimeType != "image/png" {
+		t.Fatalf("mime = %q, want image/png", img.MimeType)
+	}
+}
+
+// TestReadImageNonVision: a non-vision ReadTool returns a successful
+// TEXT result (no ImageBlock) that names how to enable vision, instead
+// of an image block the provider would silently drop.
+func TestReadImageNonVision(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "pic.png")
+	if err := os.WriteFile(p, []byte("\x89PNG\r\n\x1a\nfake-pixels"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &ReadTool{CWD: dir, SupportsVision: false}
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"path": "pic.png"}), nil)
+	if err != nil {
+		t.Fatalf("non-vision read should not error: %v", err)
+	}
+	for _, c := range res.Content {
+		if _, isImage := c.(provider.ImageBlock); isImage {
+			t.Fatal("non-vision read must not return an ImageBlock")
+		}
+	}
+	txt, ok := res.Content[0].(provider.TextBlock)
+	if !ok {
+		t.Fatalf("want TextBlock, got %T", res.Content[0])
+	}
+	if !strings.Contains(txt.Text, "image-input") {
+		t.Errorf("text should name the models.json capabilities hint, got %q", txt.Text)
+	}
+	if !strings.Contains(txt.Text, "vision-capable") {
+		t.Errorf("text should mention switching to a vision-capable model, got %q", txt.Text)
+	}
+}
+
 func TestWriteCreatesDirs(t *testing.T) {
 	dir := t.TempDir()
 	tool := &WriteTool{CWD: dir}
