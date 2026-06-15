@@ -19,6 +19,13 @@ before:
     - go mod tidy
 
 builds:
+  # Two channel binaries from one source tree, differing only in build
+  # tags. `terva` is the FULL build — every optional feature compiled in:
+  # the ACP editor run mode (-tags terva_acp) plus the telegram connector
+  # (linked by default). It is what the install one-liner pulls. `terva-min`
+  # is the LEAN build (-tags terva_no_telegram): no chat connectors linked
+  # and ACP left as its no-op stub. Both archives unpack the same `terva`
+  # command; pick the one whose footprint you want.
   - id: terva
     main: ./cmd/terva
     binary: terva
@@ -33,6 +40,30 @@ builds:
         goarch: arm64
     flags:
       - -trimpath
+    # Full build: compile in the ACP run mode. Telegram is in by default,
+    # so no tag is needed to keep it.
+    tags:
+      - terva_acp
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+  - id: terva-min
+    main: ./cmd/terva
+    binary: terva
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    # Lean build: drop the telegram connector. ACP stays the no-tag stub.
+    tags:
+      - terva_no_telegram
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
@@ -41,8 +72,19 @@ builds:
 
 archives:
   - id: terva
-    # Human-friendly name: terva_0.1.0_darwin_arm64.tar.gz
+    ids: [terva]
+    # Human-friendly name: terva_0.1.0_darwin_arm64.tar.gz (the full build).
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+  - id: terva-min
+    ids: [terva-min]
+    # Lean build: terva-min_0.1.0_darwin_arm64.tar.gz
+    name_template: "{{ .ProjectName }}-min_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README.md
@@ -106,3 +148,6 @@ release:
     ```
 
     or download a binary below, `chmod +x`, and drop it on your `$PATH`.
+    Two builds ship: `terva_*` is the full binary (every feature compiled
+    in, including the `terva acp` editor mode); `terva-min_*` is the lean
+    build with the chat connectors left out. Both install the `terva` command.
