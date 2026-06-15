@@ -82,10 +82,14 @@ build-min:
     go build -trimpath -tags terva_no_telegram -ldflags "{{ldflags}}" -o bin/terva-min ./cmd/terva
     @echo "built bin/terva-min (no chat connectors)"
 
-# Build and install terva from source into your Go bin (GOBIN, else GOPATH/bin) via `go install`.
+# Build and install the FULL terva from source into your Go bin (GOBIN, else
+# GOPATH/bin) via `go install`. "Full" = every optional feature compiled in,
+# including the `terva acp` editor run mode (-tags terva_acp); telegram is in
+# by default. This is the binary to point an ACP editor (Zed) at. For the lean
+# variant, see `just build-min`.
 install:
-    go install -trimpath -ldflags "{{ldflags}}" ./cmd/terva
-    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva -> $dest/terva"
+    go install -trimpath -tags terva_acp -ldflags "{{ldflags}}" ./cmd/terva
+    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (full, terva_acp) -> $dest/terva"
 
 # goreleaser drives real packaging (cross-compiled archives + checksums;
 # CI snapshot job and the tag-triggered release workflow use the same

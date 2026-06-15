@@ -135,11 +135,13 @@ release:
   header: |
     ## terva {{ .Tag }}
 
-    > terva is the project formerly known as zot. Existing installs keep <!-- rename:keep -->
-    > working: the self-updater bridges the rename, `ZOT_*` env vars and <!-- rename:keep -->
-    > pre-rename data directories are still read (deprecation window: two <!-- rename:keep -->
-    > tagged releases for env vars; data dirs forever), and `.zotsession` <!-- rename:keep -->
-    > files import forever. Details: docs/fork.md.
+    > terva is a hard fork of zot, not a <!-- rename:keep -->
+    > replacement for it — zot continues upstream as its own project. terva is an <!-- rename:keep -->
+    > experiment in hardening a fast-moving agent harness, and weights priorities
+    > differently. Coming from zot, migration is smooth: the self-updater bridges <!-- rename:keep -->
+    > the rename, `ZOT_*` env vars and pre-rename data directories are still read <!-- rename:keep -->
+    > (deprecation window: two tagged releases for env vars; data dirs forever),
+    > and `.zotsession` files import forever. Details: docs/fork.md. <!-- rename:keep -->
 
     one-liner install:
 
