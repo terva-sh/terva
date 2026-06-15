@@ -377,6 +377,13 @@ func Run(rawArgs []string, version string) error {
 	if len(rawArgs) > 0 && rawArgs[0] == "rpc" {
 		rawArgs = append([]string{"--rpc"}, rawArgs[1:]...)
 	}
+	// `terva acp` is shorthand for `terva --acp` (the ACP run mode), routed
+	// like `terva rpc` so a spawning editor gets a clean argv. The mode
+	// itself is an opt-in build (-tags terva_acp); the no-tag binary still
+	// routes here and exits with "acp mode not built in".
+	if len(rawArgs) > 0 && rawArgs[0] == "acp" {
+		rawArgs = append([]string{"--acp"}, rawArgs[1:]...)
+	}
 
 	args, err := ParseArgs(rawArgs)
 	if err != nil {
@@ -438,6 +445,8 @@ func Run(rawArgs []string, version string) error {
 		return runJSONMode(ctx, args, version)
 	case ModeRPC:
 		return runRPCMode(ctx, args, version)
+	case ModeACP:
+		return runACPMode(ctx, args, version)
 	case ModeSwarmAgent:
 		return runSwarmAgentMode(ctx, args, version)
 	default:
@@ -551,14 +560,18 @@ func buildHookEngine(args Args) *hooks.Engine {
 		return nil
 	}
 	logf := func(string, ...any) {}
+	var logCloser io.Closer
 	if err := os.MkdirAll(LogsPath(), 0o755); err == nil {
 		if f, ferr := os.OpenFile(filepath.Join(LogsPath(), "hooks.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr == nil {
+			logCloser = f
 			logf = func(format string, a ...any) {
 				fmt.Fprintf(f, time.Now().Format(time.RFC3339)+" "+format+"\n", a...)
 			}
 		}
 	}
-	return hooks.NewEngine(*cfg.Hooks, args.CWD, logf)
+	eng := hooks.NewEngine(*cfg.Hooks, args.CWD, logf)
+	eng.SetCloser(logCloser)
+	return eng
 }
 
 // buildBeforeToolExecute composes the tool-call ladder in its

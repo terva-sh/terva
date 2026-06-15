@@ -19,6 +19,7 @@ func TestResolveApprovalModePrecedence(t *testing.T) {
 	}{
 		{"interactive default is workspace", Args{Mode: ModeInteractive}, Config{}, core.ApprovalWorkspace},
 		{"headless default is yolo", Args{Mode: ModePrint}, Config{}, core.ApprovalYolo},
+		{"acp default is workspace (interactive editor)", Args{Mode: ModeACP}, Config{}, core.ApprovalWorkspace},
 		{"no-yolo aliases ask", Args{Mode: ModeInteractive, NoYolo: true}, Config{}, core.ApprovalAsk},
 		{"flag beats no-yolo", Args{NoYolo: true, Approval: "plan"}, Config{}, core.ApprovalPlan},
 		{"config default applies (interactive)", Args{Mode: ModeInteractive}, Config{Approval: "auto-edit"}, core.ApprovalAutoEdit},
@@ -40,6 +41,7 @@ func TestResolveJail(t *testing.T) {
 		want bool
 	}{
 		{"interactive jails by default", Args{Mode: ModeInteractive}, true},
+		{"acp jails by default", Args{Mode: ModeACP}, true},
 		{"headless does not jail by default", Args{Mode: ModePrint}, false},
 		{"--no-jail forces off in interactive", Args{Mode: ModeInteractive, NoJail: true}, false},
 		{"--jail forces on in headless", Args{Mode: ModePrint, Jail: true}, true},

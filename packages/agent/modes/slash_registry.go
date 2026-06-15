@@ -25,6 +25,11 @@ type slashSpec struct {
 	name    string   // canonical name, with leading slash
 	aliases []string // alternate spellings that dispatch identically
 	desc    string   // autocomplete popup + /help description
+	// hint, when set, describes the argument a command accepts. It is the
+	// text a non-TUI frontend (e.g. the ACP slash catalog) shows in the
+	// command's input field before anything is typed. Empty for commands
+	// that take no argument.
+	hint string
 	// hidden commands dispatch but stay out of the popup and /help
 	// (internal verbs like /cd, driven by extensions).
 	hidden bool
@@ -51,7 +56,7 @@ func init() {
 				i.dialog.Open(i.cfg.TervaHome)
 				return false
 			}},
-		{name: "/logout", desc: "clear a provider's credentials", cancelsTurn: true,
+		{name: "/logout", desc: "clear a provider's credentials", hint: "provider (anthropic | openai | all)", cancelsTurn: true,
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				if len(parts) >= 2 {
 					// Explicit target: /logout anthropic | openai | all
@@ -64,7 +69,7 @@ func init() {
 				i.openLogoutDialog()
 				return false
 			}},
-		{name: "/model", desc: "pick a model (or /model <id>)", cancelsTurn: true,
+		{name: "/model", desc: "pick a model (or /model <id>)", hint: "model id (optional)", cancelsTurn: true,
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				if len(parts) >= 2 {
 					i.applyModelSelection("", parts[1])
@@ -87,7 +92,7 @@ func init() {
 				i.sessionDialog.Open(i.cfg.TervaHome, i.cfg.CWD)
 				return false
 			}},
-		{name: "/session", desc: "export the current session to a .tervasession file, or import one",
+		{name: "/session", desc: "export the current session to a .tervasession file, or import one", hint: "export | import [path]",
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				if len(parts) >= 2 {
 					action := parts[1]
@@ -101,7 +106,7 @@ func init() {
 				i.openSessionOpsDialog()
 				return false
 			}},
-		{name: "/jump", desc: "scroll the chat to a previous turn (or /jump <text>)",
+		{name: "/jump", desc: "scroll the chat to a previous turn (or /jump <text>)", hint: "text to jump to (optional)",
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				i.openJumpDialog(parts[1:])
 				return false
@@ -111,7 +116,7 @@ func init() {
 				i.runCompact(ctx, false)
 				return false
 			}},
-		{name: "/study", desc: "read every file in the cwd (or a passed file/dir) so the agent has full context",
+		{name: "/study", desc: "read every file in the cwd (or a passed file/dir) so the agent has full context", hint: "file or directory (optional)",
 			run: (*Interactive).slashStudy},
 		{name: "/btw", desc: "side-chat that doesn't add to the main thread (saves tokens)",
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
@@ -165,7 +170,7 @@ func init() {
 				return false
 			}},
 		{name: "/connect", aliases: []string{"/telegram", "/tg"},
-			desc: "connect, disconnect, or show status of the chat bridge (telegram)",
+			desc: "connect, disconnect, or show status of the chat bridge (telegram)", hint: "connect | disconnect | status",
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				if len(parts) >= 2 {
 					i.doConnector(parts[1])
@@ -221,6 +226,35 @@ func builtinSlashCatalog() []slashCommand {
 			continue
 		}
 		out = append(out, slashCommand{Name: s.name, Desc: s.desc})
+	}
+	return out
+}
+
+// SlashCommandInfo is the frontend-agnostic view of a built-in slash
+// command: its canonical name, its one-line description, and an optional
+// argument hint. It carries no handler and no reference to *Interactive,
+// so a non-TUI frontend (the ACP run mode advertising a command catalog)
+// can consume the registry without dragging in the interactive struct.
+type SlashCommandInfo struct {
+	Name string // canonical name, with leading "/"
+	Desc string // one-line description
+	Hint string // argument hint, empty when the command takes no argument
+}
+
+// BuiltinSlashCommands returns the advertisable built-in slash commands in
+// registry (display) order: every non-hidden command, with its description
+// and argument hint. It is the exported, decoupled accessor that lets a
+// non-TUI frontend publish a slash-command catalog — the ACP
+// available_commands_update is built from a curated subset of this list.
+// Hidden internal verbs (e.g. /cd) are excluded, exactly as the
+// autocomplete catalog excludes them.
+func BuiltinSlashCommands() []SlashCommandInfo {
+	out := make([]SlashCommandInfo, 0, len(slashRegistry))
+	for _, s := range slashRegistry {
+		if s.hidden {
+			continue
+		}
+		out = append(out, SlashCommandInfo{Name: s.name, Desc: s.desc, Hint: s.hint})
 	}
 	return out
 }

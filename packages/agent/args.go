@@ -19,6 +19,12 @@ const (
 	ModePrint       Mode = "print"
 	ModeJSON        Mode = "json"
 	ModeRPC         Mode = "rpc"
+	// ModeACP is the Agent Client Protocol mode (editor↔agent JSON-RPC 2.0
+	// on stdio — Zed and other ACP clients). Routed via the `terva acp`
+	// subcommand and selected by --acp. The wire implementation is an
+	// opt-in build (-tags terva_acp); the no-tag binary routes here too but
+	// exits with "acp mode not built in".
+	ModeACP Mode = "acp"
 	// ModeSwarmAgent is the long-lived, headless daemon mode used by
 	// swarm-spawned agents. The binary opens a unix-socket inbox at
 	// the path provided by --swarm-agent, reads supervisor messages
@@ -158,6 +164,8 @@ func ParseArgs(in []string) (Args, error) {
 			a.Mode = ModeJSON
 		case "--rpc":
 			a.Mode = ModeRPC
+		case "--acp":
+			a.Mode = ModeACP
 		case "-c", "--continue":
 			a.Continue = true
 		case "-r", "--resume":

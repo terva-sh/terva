@@ -75,17 +75,22 @@ func resolveApprovalMode(args Args, cfg Config) core.ApprovalMode {
 			return m
 		}
 	}
-	if args.Mode == ModeInteractive {
+	// Interactive (TUI) and ACP both have a real user to ask, so they default
+	// to workspace — the permission round-trip engages out of the box (in ACP,
+	// session/request_permission to the editor). Other headless modes (rpc/json/
+	// print/swarm) have no one to prompt, so they stay yolo.
+	if args.Mode == ModeInteractive || args.Mode == ModeACP {
 		return core.ApprovalWorkspace
 	}
 	return core.ApprovalYolo
 }
 
 // resolveJail decides the sandbox's startup lock state: --no-jail /
-// --jail win; otherwise the default is on for an interactive session
-// (pairing with workspace mode, so its trust-the-built-ins premise
-// holds — built-in tools are confined to the cwd) and off for headless
-// modes (so unattended automation isn't surprised by path confinement).
+// --jail win; otherwise the default is on for sessions with a real user —
+// interactive (TUI) and ACP — pairing with their workspace approval mode so
+// its trust-the-built-ins premise holds (built-in tools are confined to the
+// cwd); it's off for the other headless modes (rpc/json/print/swarm) so
+// unattended automation isn't surprised by path confinement.
 func resolveJail(args Args) bool {
 	switch {
 	case args.NoJail:
@@ -93,7 +98,7 @@ func resolveJail(args Args) bool {
 	case args.Jail:
 		return true
 	default:
-		return args.Mode == ModeInteractive
+		return args.Mode == ModeInteractive || args.Mode == ModeACP
 	}
 }
 

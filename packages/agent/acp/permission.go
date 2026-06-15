@@ -1,0 +1,144 @@
+//go:build terva_acp
+
+package acp
+
+import (
+	"encoding/json"
+
+	"terva.sh/terva/packages/core"
+)
+
+// acpConfirmer is the real ACP core.Confirmer (§8). When the permission
+// policy says "ask" about a tool call, the confirm gate calls Confirm; this
+// implementation drives the editor's approval UI by issuing a
+// session/request_permission request (agent -> client) over the same
+// hand-rolled wire that session/update rides, blocks the turn goroutine on
+// the editor's response, and maps the chosen optionId back to allow/deny.
+//
+// Correlation (§13): the pending `tool_call` (status pending) is already on
+// the wire — the translator emits it from EvToolCall before executeTools
+// reaches BeforeToolExecute — so we only need to reference the right
+// toolCallId. The session records the toolCallId BeforeToolExecute is
+// currently gating (setCurrentCall), and tools run one at a time per agent,
+// so permContext() returns the correct id.
+//
+// Cancellation (§13): the round-trip blocks on the turn's context, so
+// session/cancel (which cancels that ctx) unblocks the request with a
+// cancelled verdict — we stop waiting, the tool does not run, and the turn
+// winds down to stopReason "cancelled". Late editor responses are tolerated
+// because conn.request deletes its pending entry on return (wire.go) and the
+// reply channel is buffered, so a deliver after cancel is a no-op.
+//
+// Memory (§8, §14): allow_always / reject_always are cached on the session
+// for the rest of its life (session-scoped, not written back to terva's
+// config rules), so a remembered tool never re-prompts the editor.
+type acpConfirmer struct {
+	sess *session
+}
+
+var _ core.Confirmer = (*acpConfirmer)(nil)
+
+// newConfirmer returns a confirmer to wire into a ConfirmGate. It is bound
+// to its session in handleSessionNew via bind once the session exists.
+func newConfirmer() *acpConfirmer { return &acpConfirmer{} }
+
+func (c *acpConfirmer) bind(s *session) { c.sess = s }
+
+// recordCall is the BeforeToolExecute-side hook the host ladder calls with
+// the toolCallId it is about to gate, so a subsequent Confirm correlates
+// its session/request_permission with the right tool_call (§13). Tools run
+// one at a time per agent, so there is exactly one current call. No-op
+// until the confirmer is bound to a session.
+func (c *acpConfirmer) recordCall(toolCallID string) {
+	if c.sess != nil {
+		c.sess.setCurrentCall(toolCallID)
+	}
+}
+
+// Confirm implements core.Confirmer. It runs synchronously on the turn
+// goroutine inside ConfirmGate.Check, which is reached only for calls the
+// policy says to ask about (allow/deny rules and plan-mode read-only
+// auto-allows short-circuit before us).
+func (c *acpConfirmer) Confirm(toolName string, _ string) core.ConfirmDecision {
+	if c.sess == nil {
+		// No session bound (should not happen) — refuse rather than run
+		// an unconfirmed call.
+		return core.ConfirmDecision{Allow: false, Reason: "tool call refused: no ACP session for confirmation"}
+	}
+
+	// Session-scoped memory: a prior allow_always / reject_always wins
+	// without re-prompting the editor.
+	if allow, ok := c.sess.recallDecision(toolName); ok {
+		if allow {
+			return core.ConfirmDecision{Allow: true}
+		}
+		return core.ConfirmDecision{Allow: false, Reason: "tool call refused (remembered for this session)"}
+	}
+
+	turnCtx, callID := c.sess.permContext()
+
+	params := RequestPermissionParams{
+		SessionID: c.sess.id,
+		ToolCall:  PermissionToolCall{ToolCallID: callID},
+		Options:   permissionOptions(),
+	}
+
+	raw, err := c.sess.srv.conn.request(turnCtx, MethodSessionRequestPermission, params)
+	if err != nil {
+		// Cancellation (turn ctx cancelled) or a transport error both
+		// resolve as a refusal with a cancellation reason — the turn then
+		// winds down and the prompt resolves stopReason "cancelled" (the
+		// turnCtx.Err() check in handleSessionPrompt drives that).
+		if turnCtx.Err() != nil {
+			return core.ConfirmDecision{Allow: false, Reason: "tool call cancelled"}
+		}
+		return core.ConfirmDecision{Allow: false, Reason: "permission request failed: " + err.Error()}
+	}
+
+	var res RequestPermissionResult
+	if uerr := json.Unmarshal(raw, &res); uerr != nil {
+		return core.ConfirmDecision{Allow: false, Reason: "malformed permission response"}
+	}
+
+	switch res.Outcome.Outcome {
+	case PermOutcomeCancelled:
+		return core.ConfirmDecision{Allow: false, Reason: "tool call cancelled"}
+	case PermOutcomeSelected:
+		return c.decisionFor(toolName, res.Outcome.OptionID)
+	default:
+		// Unknown / empty outcome: refuse rather than run unconfirmed.
+		return core.ConfirmDecision{Allow: false, Reason: "permission denied"}
+	}
+}
+
+// decisionFor maps a selected optionId back to its kind and a
+// ConfirmDecision, remembering the *_always kinds on the session.
+func (c *acpConfirmer) decisionFor(toolName, optionID string) core.ConfirmDecision {
+	switch optionID {
+	case PermAllowOnce:
+		return core.ConfirmDecision{Allow: true}
+	case PermAllowAlways:
+		c.sess.rememberDecision(toolName, true)
+		return core.ConfirmDecision{Allow: true}
+	case PermRejectAlways:
+		c.sess.rememberDecision(toolName, false)
+		return core.ConfirmDecision{Allow: false, Reason: "tool call refused (remembered for this session)"}
+	case PermRejectOnce:
+		return core.ConfirmDecision{Allow: false, Reason: "tool call refused by user"}
+	default:
+		// An optionId we didn't offer: treat as a refusal.
+		return core.ConfirmDecision{Allow: false, Reason: "tool call refused by user"}
+	}
+}
+
+// permissionOptions builds the four standard options. optionId doubles as
+// the kind here (a stable, self-describing id); `name` is the required
+// human label (§13).
+func permissionOptions() []PermissionOption {
+	return []PermissionOption{
+		{OptionID: PermAllowOnce, Name: "Allow once", Kind: PermAllowOnce},
+		{OptionID: PermAllowAlways, Name: "Allow for this session", Kind: PermAllowAlways},
+		{OptionID: PermRejectOnce, Name: "Reject once", Kind: PermRejectOnce},
+		{OptionID: PermRejectAlways, Name: "Reject for this session", Kind: PermRejectAlways},
+	}
+}

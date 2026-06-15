@@ -66,6 +66,62 @@ func TestSlashCatalogDerivesFromRegistry(t *testing.T) {
 	}
 }
 
+// BuiltinSlashCommands is the exported, *Interactive-free accessor a
+// non-TUI frontend (the ACP run mode) consumes to build a slash-command
+// catalog. It must surface every visible command (in registry order),
+// drop hidden internal verbs, and carry the argument hint declared on the
+// spec.
+func TestBuiltinSlashCommandsAccessor(t *testing.T) {
+	cmds := BuiltinSlashCommands()
+	if len(cmds) == 0 {
+		t.Fatal("BuiltinSlashCommands returned nothing")
+	}
+
+	// Same shape as the internal catalog: visible commands in registry
+	// order, /help first, hidden /cd absent.
+	if cmds[0].Name != "/help" {
+		t.Errorf("accessor head = %q, want /help first", cmds[0].Name)
+	}
+	if len(cmds) != len(builtinSlashCatalog()) {
+		t.Errorf("accessor returned %d commands; internal catalog has %d (they must agree)",
+			len(cmds), len(builtinSlashCatalog()))
+	}
+
+	byName := map[string]SlashCommandInfo{}
+	for _, c := range cmds {
+		if c.Name == "/cd" {
+			t.Error("hidden /cd leaked into BuiltinSlashCommands")
+		}
+		if !strings.HasPrefix(c.Name, "/") {
+			t.Errorf("command %q must start with a slash", c.Name)
+		}
+		if c.Desc == "" {
+			t.Errorf("command %q has no description", c.Name)
+		}
+		byName[c.Name] = c
+	}
+
+	// The headless-safe agent-control commands the ACP catalog curates
+	// from must be present, with no spurious hint (they take no argument).
+	for _, name := range []string{"/clear", "/compact"} {
+		c, ok := byName[name]
+		if !ok {
+			t.Errorf("%q missing from BuiltinSlashCommands", name)
+			continue
+		}
+		if c.Hint != "" {
+			t.Errorf("%q hint = %q; want empty (it takes no argument)", name, c.Hint)
+		}
+	}
+
+	// An argument-taking command surfaces its hint, decoupled from the TUI.
+	if c, ok := byName["/model"]; !ok {
+		t.Error("/model missing from BuiltinSlashCommands")
+	} else if c.Hint == "" {
+		t.Error("/model should carry an argument hint")
+	}
+}
+
 // cancelsTurn flows from the spec, including via aliases.
 func TestSlashCancelsTurnFromSpec(t *testing.T) {
 	for cmd, want := range map[string]bool{
