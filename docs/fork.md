@@ -1,15 +1,22 @@
 # terva and zot
 
-terva is a hard fork of [zot](https://github.com/patriceckhart/zot),
-renamed once it diverged too far to carry upstream's name. *terva* is
-Finnish for pine tar — the traditional preservative and cure-all.
+terva is an **agent harness** — a permissioned loop where a model
+drives tools. It ships wired for coding but isn't bounded by it (point
+it at extensions or MCP servers and it operates anything they expose),
+and it projects one hardened core through many front ends: terminal,
+editor (over ACP), chat, and an embeddable RPC/SDK. It is a hard fork of
+[zot](https://github.com/patriceckhart/zot), renamed once it diverged
+too far to carry upstream's name. *terva* is Finnish for pine tar — the
+traditional preservative and cure-all.
 
-The goal of the fork is **not to replace zot**. It is an experiment:
-take a capable, fast-moving agent harness, harden the contract
-surfaces between its parts, grow the test suite until changes are
-safe, and see how far that posture carries. The two projects simply
-weight priorities differently — zot favors moving fast, terva favors
-locking down what already works.
+**terva is not a replacement for zot.** zot continues upstream as its
+own project; terva is its own project that weights priorities
+differently. zot favors moving fast; terva bets on the *seams* —
+hardening the contract surfaces and growing the test suite until the
+core is safe to change — then spends that safety on widening the
+surface: more front ends, more ways to plug in. The two share DNA, and
+terva still pulls worthwhile upstream changes (see *Upstream posture*
+below), but they are separate projects with separate goals.
 
 ## What's different
 
@@ -37,6 +44,18 @@ hand-maintained:
   chains — a bug class upstream hit (tool-image mirroring silently
   disabled by a wrapping client) that the convention exists to
   prevent.
+
+### Many front ends, one core
+
+The hardened core is projected through more surfaces than zot exposes,
+each a thin client of the same agent loop and event stream rather than
+a separate reimplementation: an **editor integration over ACP** (drive
+terva from Zed and other ACP editors), the **chat connectors** below,
+print/json for scripting, and an embeddable RPC/SDK. The tool surface
+is general, too — built-in coding tools (read/write/edit/run) alongside
+**MCP servers**, **pre/post tool-use hooks**, and **extensions in any
+language** — so terva operates services, hardware, or your own systems,
+not just files. All of it runs under one permission and policy model.
 
 ### Tests as the safety net
 

@@ -17,14 +17,18 @@
 
 ## What is it?
 
-A coding agent harness, lightweight and written in Go.
+An agent harness in a single static Go binary: a coding agent out of the box,
+open to anything you can wire a tool to. One hardened, test-backed core — the
+agent loop, event wire, permission policy, and two dozen model providers —
+projected through many front ends and extensible in any language.
 
 - one static binary.
 - built-in providers for Anthropic, OpenAI/Codex/Responses, Kimi, DeepSeek, Google Gemini/Vertex, GitHub Copilot, Bedrock, Azure OpenAI, OpenRouter, Groq, Cerebras, xAI, Together, Hugging Face, Mistral, Moonshot, Z.AI, Xiaomi, MiniMax, Fireworks, Vercel AI Gateway, OpenCode, Cloudflare AI, Ollama, and any OpenAI-compatible local/custom endpoint.
 - four core tools (read, write, edit, bash), plus `terva_status` for agent self-introspection.
 - a permission system: approval modes (`plan`/`ask`/`auto-edit`/`workspace`/`yolo`) plus typed permission rules. Interactive sessions default to **`workspace`** (built-in tools and reads run; foreign extension/MCP tools that can have side effects ask) and are **sandboxed to the working directory** by default. See [docs/permissions.md](docs/permissions.md).
 - pre/post tool-use **hooks** (veto, rewrite, or observe tool calls with your own scripts; [docs/hooks.md](docs/hooks.md)) and an **MCP client** (attach Model Context Protocol servers as tools; [docs/mcp.md](docs/mcp.md)).
-- four run modes (interactive tui, print, json, and a JSON-RPC server for embedding).
+- run modes for every front end: interactive tui, an **editor integration over ACP** (Agent Client Protocol — drive terva from Zed and other ACP editors), print, json, and a JSON-RPC server for embedding.
+- background subagents: fan work out to parallel **swarm** agents from within a session.
 - chat connectors: a built-in telegram bridge, and **external connectors in
   any language** — separate executables speaking a small versioned JSON
   protocol, mirroring how extensions work. See [docs/connectors.md](docs/connectors.md).
@@ -86,7 +90,7 @@ make install      # into $GOPATH/bin
 
 ### Prebuilt binaries
 
-Every release on the [releases page](https://github.com/terva-sh/terva/releases) ships archives for Linux, macOS, and Windows on amd64 and arm64 (except windows/arm64), plus a `checksums.txt` file. Download, verify, `chmod +x`, and drop on your `$PATH`.
+Every release on the [releases page](https://github.com/terva-sh/terva/releases) ships archives for Linux, macOS, and Windows on amd64 and arm64 (except windows/arm64), plus a `checksums.txt` file. Each platform comes in two builds: **`terva`** (full — every feature compiled in, including the ACP editor mode; what the one-liner installs) and **`terva-min`** (lean — chat connectors left out). Both unpack the same `terva` command. Download, verify, `chmod +x`, and drop on your `$PATH`.
 
 ## Authenticate
 
