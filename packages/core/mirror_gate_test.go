@@ -98,6 +98,48 @@ func TestToolImageMirrorGatedOnModelCapability(t *testing.T) {
 	}
 }
 
+// A mirror must be synthesized ONLY when the tool result actually carried an
+// image. A text-only result (the common case — bash/read/write/edit output)
+// must NOT produce one, else the model gets plain text wrongly prefixed
+// "Tool output included the following image content:" (the codex round-trip
+// the ACP/Zed capability probe surfaced).
+func TestMirrorToolImagesOnlyWhenImagePresent(t *testing.T) {
+	textOnly := provider.Message{
+		Role: provider.RoleUser,
+		Content: []provider.Content{provider.ToolResultBlock{
+			CallID:  "t1",
+			Content: []provider.Content{provider.TextBlock{Text: "ok\n--- short output ---"}},
+		}},
+	}
+	if m := mirrorToolImagesAsUser(textOnly); len(m.Content) != 0 {
+		t.Errorf("text-only tool result produced a mirror: %+v", m.Content)
+	}
+
+	withImage := provider.Message{
+		Role: provider.RoleUser,
+		Content: []provider.Content{provider.ToolResultBlock{
+			CallID: "t1",
+			Content: []provider.Content{
+				provider.TextBlock{Text: "screenshot"},
+				provider.ImageBlock{MimeType: "image/png", Data: []byte("bytes")},
+			},
+		}},
+	}
+	m := mirrorToolImagesAsUser(withImage)
+	if !IsToolImageMirror(m) {
+		t.Fatalf("image-bearing tool result did not produce a recognized mirror: %+v", m)
+	}
+	sawImage := false
+	for _, c := range m.Content {
+		if _, ok := c.(provider.ImageBlock); ok {
+			sawImage = true
+		}
+	}
+	if !sawImage {
+		t.Error("mirror is missing the image block")
+	}
+}
+
 // The synthetic mirror message carries a structural meta marker so
 // consumers (TUI display, compaction) identify it without matching the
 // prefix string. IsToolImageMirror checks the marker, with a fallback

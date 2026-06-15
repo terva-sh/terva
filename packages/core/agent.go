@@ -928,6 +928,7 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, sink 
 // having to walk provider.Content themselves.
 func mirrorToolImagesAsUser(msg provider.Message) provider.Message {
 	var content []provider.Content
+	hasImage := false
 	for _, c := range msg.Content {
 		tr, ok := c.(provider.ToolResultBlock)
 		if !ok {
@@ -944,10 +945,17 @@ func mirrorToolImagesAsUser(msg provider.Message) provider.Message {
 				}
 			case provider.ImageBlock:
 				content = append(content, v)
+				hasImage = true
 			}
 		}
 	}
-	if len(content) == 0 {
+	// Only synthesize a mirror when the tool result actually carried an
+	// image. The short text blocks above are context *for* the images;
+	// without an image they are not "image content", and mirroring a
+	// text-only result would feed the model a message wrongly prefixed
+	// "Tool output included the following image content:" — visible on
+	// codex, which round-trips that prefix back into the model's view.
+	if !hasImage {
 		return provider.Message{}
 	}
 	prefix := provider.TextBlock{Text: ToolImageMirrorPrefix}
