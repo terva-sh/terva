@@ -193,6 +193,15 @@ func setupMCP(ctx context.Context, args Args, r *Resolved) (*mcpToolAdapter, fun
 	if mcpCfg == nil || len(mcpCfg.Servers) == 0 {
 		return nil, func() {}
 	}
+	// Per-server stderr log files. We track every handle so the stop func
+	// can close them: an MCP server's log left open blocks the caller's
+	// temp-dir cleanup on Windows (the same class of bug as the hooks.log
+	// handle). StartAll may call stderrFor from several goroutines, so guard
+	// the slice.
+	var (
+		logMu    sync.Mutex
+		logFiles []*os.File
+	)
 	stderrFor := func(server string) io.Writer {
 		if mkErr := os.MkdirAll(LogsPath(), 0o755); mkErr != nil {
 			return nil
@@ -201,6 +210,9 @@ func setupMCP(ctx context.Context, args Args, r *Resolved) (*mcpToolAdapter, fun
 		if ferr != nil {
 			return nil
 		}
+		logMu.Lock()
+		logFiles = append(logFiles, f)
+		logMu.Unlock()
 		return f
 	}
 	mgr := mcp.StartAll(ctx, mcpCfg, stderrFor)
@@ -209,7 +221,18 @@ func setupMCP(ctx context.Context, args Args, r *Resolved) (*mcpToolAdapter, fun
 	}
 	adapter := &mcpToolAdapter{mgr: mgr}
 	r.MergeExtensionTools(adapter)
-	return adapter, mgr.StopAll
+	// StopAll first so the stderr pumps have finished writing, then release
+	// the log handles.
+	stop := func() {
+		mgr.StopAll()
+		logMu.Lock()
+		for _, f := range logFiles {
+			_ = f.Close()
+		}
+		logFiles = nil
+		logMu.Unlock()
+	}
+	return adapter, stop
 }
 
 // fanoutAgentEvent translates a core.AgentEvent into the wire-format
