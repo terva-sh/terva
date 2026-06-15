@@ -91,3 +91,44 @@ func TestParseArgsCWDRejectsFile(t *testing.T) {
 		t.Fatalf("error should say not a directory: %v", err)
 	}
 }
+
+func TestParseArgsSwarmWorktreesFlag(t *testing.T) {
+	// Absent: pointer stays nil so config decides.
+	a, err := ParseArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.SwarmWorktrees != nil {
+		t.Fatalf("SwarmWorktrees = %v; want nil when flag absent", *a.SwarmWorktrees)
+	}
+	// Present: pointer is non-nil and true.
+	a, err = ParseArgs([]string{"--swarm-worktrees"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.SwarmWorktrees == nil || !*a.SwarmWorktrees {
+		t.Fatalf("SwarmWorktrees = %v; want a non-nil true", a.SwarmWorktrees)
+	}
+}
+
+func TestResolveSwarmWorktrees(t *testing.T) {
+	tru := true
+	fls := false
+	cases := []struct {
+		name      string
+		flag, cfg *bool
+		want      bool
+	}{
+		{"both nil -> off", nil, nil, false},
+		{"config on, no flag", nil, &tru, true},
+		{"config off, no flag", nil, &fls, false},
+		{"flag on overrides config off", &tru, &fls, true},
+		{"flag off overrides config on", &fls, &tru, false},
+		{"flag on, no config", &tru, nil, true},
+	}
+	for _, c := range cases {
+		if got := resolveSwarmWorktrees(c.flag, c.cfg); got != c.want {
+			t.Errorf("%s: got %v; want %v", c.name, got, c.want)
+		}
+	}
+}

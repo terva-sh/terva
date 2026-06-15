@@ -6,11 +6,18 @@
 // dashboard dialog; non-TUI code can drive it directly through
 // this package.
 //
-// Every agent runs with cwd == the parent terva's RepoRoot — the
-// same files the user sees, the same files the main agent edits.
-// There is no git worktree, no per-agent branch, no isolation. If
-// you want parallel edits on a separate branch, use normal git
-// tooling (a real worktree, a different terminal) yourself.
+// By default every agent runs with cwd == the parent terva's RepoRoot
+// — the same files the user sees, the same files the main agent edits.
+// There is no git worktree, no per-agent branch, no isolation. If you
+// want parallel edits on a separate branch, use normal git tooling (a
+// real worktree, a different terminal) yourself.
+//
+// A host can opt agents into per-agent working directories by setting
+// Config.AcquireWorktree (e.g. wiring it to the terva-git-worktree
+// extension): each spawn then leases its own directory and releases it
+// exactly once on the agent's terminal transition. The swarm itself
+// stays generic — it only sees an opaque AcquireWorktree hook and the
+// WorktreeReq/WorktreeLease values; it knows nothing about git.
 //
 // Each Agent has:
 //   - a unique id (short slug + nanoseconds)
@@ -53,10 +60,26 @@ type Config struct {
 	// Typically <TervaHome>/swarm, but tests pass a tempdir.
 	Root string
 
-	// RepoRoot is the working directory every spawned agent runs
-	// in — the same cwd the parent terva is using. There is no
-	// per-agent isolation: agents edit the host's files directly.
+	// RepoRoot is the default working directory a spawned agent runs
+	// in — the same cwd the parent terva is using. When
+	// AcquireWorktree is nil (the default) there is no per-agent
+	// isolation: agents edit the host's files directly. When it is set
+	// and yields a non-empty Dir, that leased directory is used
+	// instead and RepoRoot is only the fallback.
 	RepoRoot string
+
+	// AcquireWorktree, when non-nil, supplies a dedicated working
+	// directory for each spawned agent (e.g. an isolated git worktree)
+	// instead of RepoRoot. Returning a Lease whose Dir is "" falls back
+	// to RepoRoot. Release is called exactly once when the agent reaches
+	// a terminal state (done/failed/killed) or the swarm is torn down.
+	// When nil, every agent uses RepoRoot (today's behavior). The swarm
+	// treats this as an opaque hook — it knows nothing about git or
+	// extensions; the host decides what a "worktree" is and how to
+	// create/release one. Returning a non-nil error fails the spawn
+	// loudly (used when isolation was explicitly requested but the
+	// backing mechanism is unavailable).
+	AcquireWorktree func(ctx context.Context, req WorktreeReq) (WorktreeLease, error)
 
 	// NewRunner produces the Runner for an Agent. If nil, the default
 	// `terva --swarm-agent ...` exec runner is used. Tests inject a fake
@@ -71,6 +94,25 @@ type Config struct {
 	// hard-cancels the child's context as a backstop. Defaults to
 	// defaultStopGrace; tests set it short.
 	StopGrace time.Duration
+}
+
+// WorktreeReq describes the agent that needs a working directory. It
+// carries just enough identity for the host's AcquireWorktree hook to
+// derive a stable, readable name; the swarm fills it in at spawn time.
+type WorktreeReq struct {
+	AgentID  string
+	Task     string
+	Model    string
+	Provider string
+}
+
+// WorktreeLease is a working directory plus a release hook, returned by
+// Config.AcquireWorktree. Dir == "" means "use RepoRoot". Release, when
+// non-nil, is invoked exactly once when the agent reaches a terminal
+// state or the swarm is torn down (see Agent.finish).
+type WorktreeLease struct {
+	Dir     string // "" => use RepoRoot
+	Release func()
 }
 
 // defaultStopGrace is the window a graceful Stop gives a child to
@@ -197,16 +239,38 @@ func (f *Swarm) Spawn(ctx context.Context, task string) (*Agent, error) {
 // SpawnRequest. Existing callers can keep using Spawn; new code that
 // wants to pin the child's model uses this.
 //
-// Every spawned agent runs with cwd == cfg.RepoRoot — the same
-// working directory as the host. No per-agent worktree, no branch,
-// no isolation. The user explicitly opted out of the worktree flow.
+// By default every spawned agent runs with cwd == cfg.RepoRoot — the
+// same working directory as the host, no per-agent worktree or branch.
+// When cfg.AcquireWorktree is set the agent instead leases its own
+// directory (e.g. an isolated git worktree); the lease's Release hook
+// is stored on the Agent and fired exactly once when the agent reaches
+// a terminal state (see Agent.finish). An AcquireWorktree error fails
+// the spawn — isolation was explicitly requested, so a missing backing
+// mechanism is a misconfiguration, not a silent fallback.
 func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) {
 	task := strings.TrimSpace(req.Task)
 	if task == "" {
 		return nil, errors.New("swarm: empty task")
 	}
 	id := newAgentID(task, f.cfg.Now())
+
 	dir := f.cfg.RepoRoot
+	var releaseWorktree func()
+	if f.cfg.AcquireWorktree != nil {
+		lease, err := f.cfg.AcquireWorktree(ctx, WorktreeReq{
+			AgentID:  id,
+			Task:     task,
+			Model:    strings.TrimSpace(req.Model),
+			Provider: strings.TrimSpace(req.Provider),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("swarm: acquire worktree: %w", err)
+		}
+		if lease.Dir != "" {
+			dir = lease.Dir
+		}
+		releaseWorktree = lease.Release
+	}
 
 	stateDir := f.agentStateDir(id)
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
@@ -247,6 +311,8 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		status:       StatusPending,
 		activity:     "queued",
 		done:         make(chan struct{}),
+
+		releaseWorktree: releaseWorktree,
 	}
 	a.ctx, a.cancel = context.WithCancel(ctx)
 	a.runner = f.cfg.NewRunner(a)
@@ -323,6 +389,13 @@ func (f *Swarm) run(a *Agent) {
 	}
 	a.mu.Unlock()
 	close(a.done)
+	// Every live agent's runner goroutine ends here — completion,
+	// failure, or a Stop/StopAll cancel that made Run return. This is
+	// the guaranteed terminal chokepoint, so release the leased
+	// worktree (if any) here. finish() is idempotent, so a belt-and-
+	// suspenders call from Stop (below) for a runner that's wedged and
+	// never returns can't double-release.
+	a.finish()
 }
 
 // List returns a snapshot of every agent in creation order. The
@@ -421,6 +494,14 @@ func (f *Swarm) Stop(id string) error {
 		if inbox != nil {
 			_ = inbox.Close()
 		}
+		// Backstop the worktree release. Normally f.run already fired
+		// finish() when the runner returned after our cancel; but a
+		// runner that ignores cancellation (or an agent with no live
+		// runner that somehow slipped past the status guard) would leak
+		// its lease. finish() is idempotent, so this never double-
+		// releases — it just guarantees the lease is freed even when
+		// the runner goroutine doesn't reach its terminal switch.
+		a.finish()
 	}()
 	return nil
 }
@@ -438,9 +519,10 @@ func (f *Swarm) StopAll() {
 // (reloaded from disk) remove cleanly because they have no live
 // runner racing for the same files.
 //
-// Agents share the host's working tree, so Remove never touches
-// any source file — it only deletes the agent's state directory
-// under <root>/agents/<id>/.
+// Remove never touches any source file — it only deletes the agent's
+// state directory under <root>/agents/<id>/. Even when worktree
+// isolation gave the agent its own checkout, the worktree's lifecycle
+// is the host's (via the AcquireWorktree lease), not Remove's.
 func (f *Swarm) Remove(id string) error {
 	a := f.Get(id)
 	if a == nil {
@@ -452,6 +534,12 @@ func (f *Swarm) Remove(id string) error {
 	if st == StatusRunning || st == StatusPending {
 		return fmt.Errorf("agent %s still %s", a.ID, st)
 	}
+	// Defensively release the worktree lease before dropping the agent.
+	// A terminal agent reached via f.run already released (and finish()
+	// is idempotent); this only matters for a path that terminated
+	// without the runner goroutine running its switch. No-op for the
+	// common case and for detached agents (which carry no lease).
+	a.finish()
 	// Best-effort cleanup of the per-agent state directory
 	// (meta.json, events.jsonl, session.json, in.sock if it's
 	// local). Failing here would leave the user with no recourse,

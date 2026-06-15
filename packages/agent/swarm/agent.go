@@ -12,9 +12,12 @@ import (
 // Spawn; mutable state (status, activity, transcript) lives behind
 // the embedded mutex.
 type Agent struct {
-	ID      string
-	Task    string
-	Dir     string // always the host's RepoRoot; agents share its cwd.
+	ID   string
+	Task string
+	// Dir is the agent's working directory. By default it's the host's
+	// RepoRoot (agents share its cwd); when the swarm was configured
+	// with an AcquireWorktree hook it's the leased per-agent directory.
+	Dir     string
 	Started time.Time
 
 	// Model and Provider, when non-empty, override the child
@@ -89,6 +92,34 @@ type Agent struct {
 	// status (done / failed / killed). Wait blocks on this so
 	// callers don't have to poll.
 	done chan struct{}
+
+	// releaseWorktree, when non-nil, releases the per-agent working
+	// directory leased at Spawn from Config.AcquireWorktree. It must
+	// run exactly once across every terminal path (done/failed/killed,
+	// Stop, StopAll, detached cleanup) — a leaked lease is an orphaned
+	// worktree. finish() enforces the at-most-once contract by clearing
+	// the field under the mutex before invoking it, so concurrent or
+	// repeated terminal transitions can never double-release. Guarded by
+	// mu (set once at Spawn, read+cleared in finish).
+	releaseWorktree func()
+}
+
+// finish runs the agent's worktree-release hook exactly once, no matter
+// how many terminal paths reach it (the run goroutine's done/failed/
+// killed finalisation, Stop, StopAll, or Remove on a detached agent).
+// It snapshots-and-clears releaseWorktree under the lock so a second
+// caller sees nil and does nothing, then invokes the hook outside the
+// lock (the host's release may do real I/O and must not block other
+// agent state reads). Safe to call on an agent that never leased a
+// worktree — the nil hook is simply a no-op.
+func (a *Agent) finish() {
+	a.mu.Lock()
+	rel := a.releaseWorktree
+	a.releaseWorktree = nil
+	a.mu.Unlock()
+	if rel != nil {
+		rel()
+	}
 }
 
 // Inbox exposes the supervisor-side socket handle. Returns nil for

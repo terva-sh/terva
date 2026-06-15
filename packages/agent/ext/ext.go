@@ -740,6 +740,19 @@ func (e *Extension) Notify(level, message string) {
 	})
 }
 
+// SubmitSlash submits a slash command to the host's TUI as if the user had
+// typed it — typically from a panel-key handler (e.g. Enter on a selected
+// row to run "/cd <path>"). text must start with '/'. Safe to call from any
+// goroutine. No-op on an empty or non-slash string. The host may ignore it
+// in non-interactive modes.
+func (e *Extension) SubmitSlash(text string) {
+	if text == "" || text[0] != '/' {
+		e.Logf("SubmitSlash ignored (must start with '/'): %q", text)
+		return
+	}
+	_ = e.send(extproto.SubmitSlashFromExt{Type: "submit_slash", Text: text})
+}
+
 // Run starts the protocol loop. Blocks until stdin closes (terva has
 // shut us down). Returns the first fatal error, or nil on clean exit.
 func (e *Extension) Run() error {

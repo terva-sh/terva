@@ -446,6 +446,22 @@ so they do not stack up; notes from other extensions are untouched.
 In `--mode rpc`, this surfaces to the host as an `ext_clear_notes`
 event (alongside `ext_notify` / `ext_display`).
 
+#### `submit_slash` (one-way, any time)
+
+Submits a slash command to the host's TUI as if the user had typed it.
+Typically emitted from a `panel_key` handler — e.g. Enter on a selected
+row to switch the host with `/cd <path>`. `text` must start with `/`.
+
+```json
+{"type":"submit_slash","text":"/cd /repo/.worktrees/feature-x"}
+```
+
+Interactive-mode only: the host ignores it in `-p` / `--json` / `rpc`
+(no TUI to submit into). Reserved for opt-in extensions that the user
+has installed and trusts — it lets an extension drive any host command,
+so it is not something a casual extension should reach for. From the Go
+SDK this is `e.SubmitSlash("/cd " + path)`.
+
 #### `shutdown_ack`
 
 Sent in response to `shutdown`. Extension should exit promptly after.

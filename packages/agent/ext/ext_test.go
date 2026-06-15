@@ -169,6 +169,49 @@ func TestOpenPanelEmitsCorrectFrame(t *testing.T) {
 	h.hostW.Close()
 }
 
+// TestSubmitSlashEmitsFrame checks that e.SubmitSlash sends a
+// submit_slash frame carrying the slash text verbatim, and that a
+// non-slash string emits nothing at all.
+func TestSubmitSlashEmitsFrame(t *testing.T) {
+	h := newHarness("test-ext")
+	go h.ext.Run()
+	h.handshake(t)
+
+	// A non-slash string is a no-op on the wire. Fire it first, then a
+	// real slash; the first frame that arrives must be the slash one —
+	// proving the non-slash call emitted nothing.
+	go func() {
+		h.ext.SubmitSlash("not a slash")
+		h.ext.SubmitSlash("/cd /tmp/x")
+	}()
+
+	f := h.drainUntil(t, "submit_slash")
+
+	var sub extproto.SubmitSlashFromExt
+	if err := json.Unmarshal(f.raw, &sub); err != nil {
+		t.Fatalf("unmarshal submit_slash: %v", err)
+	}
+	if sub.Type != "submit_slash" {
+		t.Errorf("type: want %q, got %q", "submit_slash", sub.Type)
+	}
+	if sub.Text != "/cd /tmp/x" {
+		t.Errorf("text: want %q, got %q", "/cd /tmp/x", sub.Text)
+	}
+
+	// No second submit_slash should be queued behind the first: the
+	// non-slash call must not have produced a frame.
+	select {
+	case f, ok := <-h.frames:
+		if ok && f.hdr.Type == "submit_slash" {
+			t.Fatalf("non-slash SubmitSlash emitted a frame: %s", f.raw)
+		}
+	case <-time.After(100 * time.Millisecond):
+		// No extra frame — expected.
+	}
+
+	h.hostW.Close()
+}
+
 // TestBlockingToolWaitsForPanelKey is the core integration test for
 // the human-in-the-loop pattern: the tool handler opens a panel,
 // blocks on a channel, and only returns a tool_result after a key
