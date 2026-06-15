@@ -76,6 +76,24 @@ func (m *Manager) extensionLoadDisabled(name string) bool {
 	return m.disabledExtensions[name]
 }
 
+// SetProjectTrusted records the Workspace Trust verdict for the
+// manager's cwd. When false (the default — a fresh Manager is
+// untrusted), searchDirs drops the project-local extension roots so a
+// cloned/untrusted repo's extensions are never discovered or spawned.
+// MUST be called before Discover. See docs/plans/workspace-trust.md.
+func (m *Manager) SetProjectTrusted(trusted bool) {
+	m.mu.Lock()
+	m.projectTrusted = trusted
+	m.mu.Unlock()
+}
+
+// projectTrustedLocked reports the current trust verdict under the lock.
+func (m *Manager) isProjectTrusted() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.projectTrusted
+}
+
 // contextDisabledSet returns the current disabled set under the lock.
 // The returned map is never mutated after assignment, so the caller may
 // read it without holding the lock.

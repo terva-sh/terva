@@ -26,6 +26,13 @@ type Resolved struct {
 	CWD        string
 	Reasoning  string
 
+	// VisionCapable is the resolved model's image-input verdict
+	// (model.Has(CapImageInput)). The live registry rebuild on a /model
+	// switch re-derives this, but the initial wiring threads it through
+	// here so cli.go's setApprovalMode rebuild can pass it to
+	// buildToolRegistry without re-resolving the model.
+	VisionCapable bool
+
 	ToolRegistry core.Registry
 	ToolSummary  []ToolSummary
 	SystemPrompt string
@@ -53,6 +60,16 @@ type Resolved struct {
 	// extensions that must not be loaded at all. The host passes it to
 	// the extension manager via SetDisabledExtensions BEFORE discovery.
 	DisableExtensions []string
+
+	// Trusted is the resolved Workspace Trust verdict for this launch's
+	// cwd (resolveTrust: --trust flag, then the store, else untrusted).
+	// When false the project is RESTRICTED: its project-local
+	// extensions, skills, and context_files were NOT loaded (the safe
+	// core still is). The host passes it to the extension manager via
+	// SetProjectTrusted BEFORE discovery; Resolve already used it to gate
+	// project skills + project context_files. See
+	// docs/plans/workspace-trust.md.
+	Trusted bool
 
 	// Bookkeeping for MergeExtensionTools. Captured at Resolve time
 	// so the system prompt can be rebuilt later without re-running
@@ -278,12 +295,21 @@ func canonicalProvider(name string) string {
 // login flow. requireCred controls whether missing credentials are a
 // hard error (used by print/json modes).
 func Resolve(args Args, requireCred bool) (Resolved, error) {
+	// Workspace Trust verdict for this launch's cwd: --trust (one-shot)
+	// or the persisted store, else untrusted (the default in every mode).
+	// Gates project-local content that auto-acts — project skills,
+	// project context_files, and (threaded onward to the extension
+	// manager) project extensions. The safe core loads regardless. See
+	// docs/plans/workspace-trust.md.
+	trusted := resolveTrustState(args).IsTrusted()
+
 	// eff is the layered (project-over-user) read view; cfg is the pristine,
 	// writable user layer. Every existing read/repair below stays on cfg so
 	// behaviour is unchanged and the model-repair paths only ever persist the
 	// user config. eff.ContextFiles (project-or-user, resolved absolute) feeds
-	// startup context-file injection.
-	eff := ResolveConfig(args.CWD)
+	// startup context-file injection; the project context_files layer is
+	// dropped when the workspace is untrusted (trusted=false).
+	eff := ResolveConfig(args.CWD, trusted)
 	cfg := eff.User
 
 	// User-requested provider (explicit > config > default).
@@ -507,7 +533,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		sandbox.Lock()
 	}
 	approval := effectiveApprovalMode(args)
-	reg := buildToolRegistry(args, approval, args.CWD, sandbox, provName, method)
+	visionCapable := resolvedModel.Has(provider.CapImageInput)
+	reg := buildToolRegistry(args, approval, args.CWD, sandbox, provName, method, visionCapable)
 
 	docsDir, _ := tervadocs.EnsureInstalled(TervaHome())
 
@@ -526,7 +553,11 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	)
 	if !args.NoSkill {
 		homeDir, _ := os.UserHomeDir()
-		discovered, _ = skills.Discover(TervaHome(), args.CWD, homeDir, args.WithSkills)
+		// trusted gates the PROJECT skill dirs: an untrusted workspace's
+		// .terva|.claude|.agents/skills are skipped so a cloned repo can't
+		// inject SKILL.md instructions. Built-in/user/global skills load
+		// regardless.
+		discovered, _ = skills.Discover(TervaHome(), args.CWD, homeDir, args.WithSkills, trusted)
 		if len(discovered) > 0 {
 			skillTool = skills.NewTool(discovered)
 			reg[skillTool.Name()] = skillTool
@@ -551,6 +582,12 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	}
 	if skillAddendum != "" {
 		append_ = append(append_, skillAddendum)
+	}
+	// Untrusted workspace with gated content: tell the model the project
+	// extensions/skills/context were withheld so it can explain their
+	// absence rather than hallucinate them (decision #2 / plan §5).
+	if note := restrictedSystemNote(args.CWD, trusted); note != "" {
+		append_ = append(append_, note)
 	}
 	if AutoSwarmEnabled() {
 		append_ = append(append_, AutoSwarmSystemAddendum)
@@ -587,6 +624,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		BaseURL:                  args.BaseURL,
 		CWD:                      args.CWD,
 		Reasoning:                reasoning,
+		VisionCapable:            visionCapable,
 		ToolRegistry:             reg,
 		ToolSummary:              summaries,
 		SystemPrompt:             sys,
@@ -596,6 +634,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		SkillTool:                skillTool,
 		DisableContextExtensions: eff.Config.DisableContextExtensions,
 		DisableExtensions:        eff.Config.DisableExtensions,
+		Trusted:                  trusted,
 		systemAppend:             append_,
 		systemCustom:             custom,
 		toolDescriptions:         descMapFromSummaries(summaries),
@@ -797,12 +836,17 @@ func (r Resolved) NewAgent() *core.Agent {
 	return a
 }
 
-func buildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbox *tools.Sandbox, provName, authMethod string) core.Registry {
+// buildToolRegistry assembles the built-in tool set. visionCapable is
+// the active model's image-input verdict (model.Has(CapImageInput)); it
+// flows into ReadTool so reading an image file returns inline pixels for
+// a vision model but an actionable text result otherwise. Called on
+// every agent rebuild, so a /model switch re-derives the verdict.
+func buildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbox *tools.Sandbox, provName, authMethod string, visionCapable bool) core.Registry {
 	if args.NoTools {
 		return core.Registry{}
 	}
 	all := map[string]core.Tool{
-		"read":         &tools.ReadTool{CWD: cwd, Sandbox: sandbox},
+		"read":         &tools.ReadTool{CWD: cwd, Sandbox: sandbox, SupportsVision: visionCapable},
 		"write":        &tools.WriteTool{CWD: cwd, Sandbox: sandbox},
 		"edit":         &tools.EditTool{CWD: cwd, Sandbox: sandbox},
 		"bash":         &tools.BashTool{CWD: cwd, Sandbox: sandbox},

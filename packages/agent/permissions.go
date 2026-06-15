@@ -185,7 +185,13 @@ func buildPermissionPolicy(args Args) (*core.PermissionPolicy, []string) {
 		rules = append(rules, pr...)
 		warns = append(warns, w...)
 	}
-	er, ew := extensionPermissionRules(args.CWD)
+	// Extension-suggested rules from PROJECT extension bundles are gated
+	// on Workspace Trust: an untrusted project's extensions don't load,
+	// so their suggested deny/ask rules must not apply either. User-ext
+	// (global) suggestions always apply. The project's own restrict-only
+	// rules above stay honored even when untrusted — they can only tighten
+	// (rows 4/5 of docs/plans/workspace-trust.md).
+	er, ew := extensionPermissionRules(args.CWD, resolveTrustState(args).IsTrusted())
 	rules = append(rules, er...)
 	warns = append(warns, ew...)
 
@@ -210,12 +216,15 @@ func buildPermissionPolicy(args Args) (*core.PermissionPolicy, []string) {
 // (after user and project): a bundle's ask/deny is a default the user
 // can always override with an explicit allow in their own config, and
 // a project rule wins over it where the user is silent.
-func extensionPermissionRules(cwd string) ([]core.PermissionRule, []string) {
+// trustProject gates the PROJECT extension roots: an untrusted workspace
+// contributes no project-ext-suggested rules (its extensions don't load).
+// The user-ext (global) root is always read.
+func extensionPermissionRules(cwd string, trustProject bool) ([]core.PermissionRule, []string) {
 	var roots []string
 	if home := TervaHome(); home != "" {
 		roots = append(roots, filepath.Join(home, "extensions"))
 	}
-	if cwd != "" {
+	if cwd != "" && trustProject {
 		for _, dirName := range envcompat.ProjectDirNames() {
 			roots = append(roots, filepath.Join(cwd, dirName, "extensions"))
 		}

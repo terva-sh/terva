@@ -61,6 +61,18 @@ type session struct {
 	extContext       func() []ContextItem
 	reloadExtensions func(ctx context.Context) ReloadStats
 
+	// trustWorkspace / untrustWorkspace persist the cwd's Workspace Trust
+	// verdict and re-apply it to the live session so the native /trust and
+	// /untrust commands work from inside an editor (the only in-editor way to
+	// trust a workspace over ACP). trustWorkspace records the cwd (parent marks
+	// "trust descendants too") and reloads the extension manager so project
+	// extensions go live this session; untrustWorkspace drops the cwd and reloads
+	// to remove them. Both come from the host (SessionAgent), which owns the
+	// trust store + extensions.Manager the acp package can't import. nil when the
+	// host didn't wire them — /trust and /untrust degrade to a graceful note.
+	trustWorkspace   func(parent bool) error
+	untrustWorkspace func() error
+
 	// modelMu guards the session's current provider/model, the seed for the
 	// model config option's currentValue and the source for a model switch's
 	// "from" side. session/set_config_option updates these after a successful

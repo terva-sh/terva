@@ -43,12 +43,13 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 	if err != nil {
 		return err
 	}
+	warnRestrictedWorkspace(args, r.Trusted)
 	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args))
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 	// Tell session-keyed extensions the real session id before any turn

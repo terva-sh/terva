@@ -101,6 +101,8 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 		InvokeExtCommand: acpInvokeExtCommand(extMgr),
 		ExtContext:       acpExtContext(extMgr),
 		ReloadExtensions: acpReloadExtensions(extMgr),
+		TrustWorkspace:   acpTrustWorkspace(ctx, r.CWD, extMgr),
+		UntrustWorkspace: acpUntrustWorkspace(ctx, r.CWD, extMgr),
 	}, nil
 }
 
@@ -150,6 +152,8 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 		InvokeExtCommand: acpInvokeExtCommand(extMgr),
 		ExtContext:       acpExtContext(extMgr),
 		ReloadExtensions: acpReloadExtensions(extMgr),
+		TrustWorkspace:   acpTrustWorkspace(ctx, r.CWD, extMgr),
+		UntrustWorkspace: acpUntrustWorkspace(ctx, r.CWD, extMgr),
 	}, msgs, nil
 }
 
@@ -318,11 +322,13 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 // merged onto the resolved registry BEFORE r.NewAgent(), exactly as setupMCP
 // does for the headless modes — so MCP tools sit in the registry the agent
 // receives and inherit the confirm-gate ladder + plan-mode filtering. The
-// returned stop func (never nil) tears those subprocesses down. ONLY the
-// editor-provided servers are launched here; the user's config-file MCP
-// (cfg.MCP) is deliberately NOT merged in, because under ACP the editor owns
-// the MCP server set (it manages the user's MCP config and sends it on the
-// wire), so honoring cfg.MCP too would double-spawn editor-managed servers.
+// returned stop func (never nil) tears those subprocesses down. The user's
+// config-file MCP (cfg.MCP) is deliberately NOT merged in, because under ACP the
+// editor owns the MCP server set (it manages the user's MCP config and sends it
+// on the wire), so honoring cfg.MCP too would double-spawn editor-managed
+// servers. A TRUSTED project's .terva/config.json MCP — a source the editor does
+// NOT manage — IS merged (trust-gated, editor wins on a collision); see
+// setupACPMCP.
 func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer, recordCall func(string)) (Resolved, *core.Agent, *core.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, error) {
 	// Each session resolves with its own cwd so tools, system prompt, and
 	// session dir bind to the editor-provided working directory.
@@ -367,6 +373,10 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	if err != nil {
 		return Resolved{}, nil, nil, nil, nil, nil, err
 	}
+	// ACP untrusted = restricted for now (Phase 4 — an editor
+	// session/request_permission trust prompt — is deferred). Log a
+	// warning naming how to enable; --trust still works over the wire.
+	warnRestrictedWorkspace(args, r.Trusted)
 	r.AdoptReadOnlySet(roSet)
 
 	// Wire this session's extensions (tools + read-only classification) BEFORE
@@ -393,7 +403,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	}
 
 	ag := r.NewAgent()
-	hookEng := buildHookEngine(args)
+	hookEng := buildHookEngine(args, r.Trusted)
 	// Canonical tool-call ladder (pre-hooks, confirm gate, extension
 	// intercept). Passing extMgr in activates BOTH the extension tool-call
 	// intercept AND — through the confirm gate built above — the manifest
@@ -591,6 +601,51 @@ func acpReloadExtensions(extMgr *extensions.Manager) func(context.Context) acp.R
 	}
 }
 
+// acpTrustWorkspace builds the SessionAgent.TrustWorkspace closure: it persists
+// cwd's Workspace Trust verdict (TrustPath, parent marking "trust descendants
+// too") and then makes the now-trusted project content go live for the session
+// by flipping the extension manager to trusted and reloading it — so project
+// extensions are discovered immediately, mirroring what the interactive /trust
+// does via the /cd rebuild + /reload-ext. Project skills/context are baked into
+// the system prompt at build time and can't be re-injected mid-session, so they
+// take effect on a new session (the ACP command's confirmation says so). The
+// extension reload reuses the same acpReloadGrace /reload-ext uses. Returns nil
+// when there is no extension manager so /trust degrades to a note (the trust
+// store would still be writable, but with nothing to load live there is no ACP
+// affordance to honor here — the host always wires a manager in production).
+func acpTrustWorkspace(ctx context.Context, cwd string, extMgr *extensions.Manager) func(parent bool) error {
+	if extMgr == nil {
+		return nil
+	}
+	return func(parent bool) error {
+		if err := TrustPath(cwd, parent); err != nil {
+			return err
+		}
+		extMgr.SetProjectTrusted(true)
+		extMgr.Reload(ctx, acpReloadGrace)
+		return nil
+	}
+}
+
+// acpUntrustWorkspace builds the SessionAgent.UntrustWorkspace closure: the
+// symmetric inverse of acpTrustWorkspace. It drops cwd from the trust store
+// (UntrustPath), flips the extension manager back to untrusted, and reloads it
+// so the project extensions are torn down this session. Returns nil with no
+// extension manager so /untrust degrades to a note.
+func acpUntrustWorkspace(ctx context.Context, cwd string, extMgr *extensions.Manager) func() error {
+	if extMgr == nil {
+		return nil
+	}
+	return func() error {
+		if err := UntrustPath(cwd); err != nil {
+			return err
+		}
+		extMgr.SetProjectTrusted(false)
+		extMgr.Reload(ctx, acpReloadGrace)
+		return nil
+	}
+}
+
 // renderPanelText flattens an extension's open_panel PanelSpec into plain text
 // for the ACP display degradation: title, then each line, then footer. ACP has
 // no interactive panel, so the panel's content is the most we can surface
@@ -631,11 +686,16 @@ func synthYoloPolicy() *core.PermissionPolicy {
 	}
 }
 
-// setupACPMCP starts the editor-provided MCP servers for one session and
-// merges their tools into the resolved registry, returning a stop func (never
-// nil). It is the ACP sibling of setupMCP (cli.go): same StartAll → adapter →
-// MergeExtensionTools shape, but the server set comes from the wire
-// (session/new|load mcpServers) instead of the user's config file. Startup
+// setupACPMCP starts the editor-provided MCP servers for one session — plus a
+// TRUSTED project's config-file MCP servers (editor wins on a name collision) —
+// and merges their tools into the resolved registry, returning a stop func
+// (never nil). It is the ACP sibling of setupMCP (cli.go): same StartAll →
+// adapter → MergeExtensionTools shape. The editor-supplied set comes from the
+// wire (session/new|load mcpServers); the USER's config-file MCP is still NOT
+// merged in (the editor owns the user's MCP set — see buildAgent's doc), but a
+// trusted project's .terva/config.json MCP IS a distinct source the editor does
+// not manage, so it loads when r.Trusted, gated exactly like the headless modes
+// (Workspace Trust Phase 6). An untrusted project contributes nothing. Startup
 // problems (skipped http/sse entries, a server that won't spawn) are
 // best-effort warnings, never fatal — one broken server must not take the
 // session down. Per-server stderr goes to $TERVA_HOME/logs/mcp-<name>.log, like
@@ -650,20 +710,30 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args Args, r *Resolved, mc
 	for _, w := range warns {
 		fmt.Fprintln(os.Stderr, "note:", w)
 	}
-	if len(servers) == 0 {
-		return noop
-	}
 
 	cfg := &mcp.Config{Servers: make(map[string]mcp.ServerConfig, len(servers))}
+	// A trusted project's config-file servers load first so the editor-provided
+	// entries below win on a name collision (the editor's set is authoritative
+	// under ACP). trustedProjectMCP returns nil unless r.Trusted, so an
+	// untrusted workspace adds nothing.
+	if proj := trustedProjectMCP(args.CWD, r.Trusted); proj != nil {
+		for name, sc := range proj.Servers {
+			cfg.Servers[name] = sc
+		}
+	}
 	for _, s := range servers {
 		// Last-wins on a duplicate name, matching a JSON object's de-dup; the
 		// editor shouldn't send duplicates, and StartAll already warns on
-		// namespaced-tool collisions across distinct servers.
+		// namespaced-tool collisions across distinct servers. Editor entries
+		// also win over a trusted project's same-named server (added above).
 		cfg.Servers[s.Name] = mcp.ServerConfig{
 			Command: s.Command,
 			Args:    s.Args,
 			Env:     s.Env,
 		}
+	}
+	if len(cfg.Servers) == 0 {
+		return noop
 	}
 
 	stderrFor := func(server string) io.Writer {
@@ -712,6 +782,7 @@ func (f *acpFactory) setupACPExtensions(ctx context.Context, args Args, r *Resol
 	extMgr := extensions.New(TervaHome(), r.CWD, f.version, r.Provider, r.Model, nonInteractiveExtHooks{})
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
+	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
 	// --ext paths first so they win against installed extensions of the same
 	// name (loadOne's first-write-wins semantics).
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
@@ -765,9 +836,14 @@ func (f *acpFactory) skillSnapshot(cwd string) func() []*skills.Skill {
 	if f.args.NoSkill {
 		return nil
 	}
+	// Resolve trust once for this cwd so the picker matches what was
+	// loaded for the model (project skills hidden while restricted).
+	trustArgs := f.args
+	trustArgs.CWD = cwd
+	trusted := resolveTrustState(trustArgs).IsTrusted()
 	return func() []*skills.Skill {
 		userHome, _ := os.UserHomeDir()
-		list, _ := skills.Discover(TervaHome(), cwd, userHome, f.args.WithSkills)
+		list, _ := skills.Discover(TervaHome(), cwd, userHome, f.args.WithSkills, trusted)
 		return skills.VisibleSkills(list)
 	}
 }

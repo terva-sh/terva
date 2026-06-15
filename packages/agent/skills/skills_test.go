@@ -106,7 +106,7 @@ func TestDiscoverProjectAndGlobalPriorityAndDedup(t *testing.T) {
 	// Unique skill in global only.
 	mk(filepath.Join(tervaHome, "skills"), "global-only", "from global")
 
-	skills, errs := Discover(tervaHome, cwd, "", true /* includeUser */)
+	skills, errs := Discover(tervaHome, cwd, "", true /* includeUser */, true /* trustProject */)
 	if len(errs) > 0 {
 		t.Fatalf("errs: %v", errs)
 	}
@@ -128,6 +128,58 @@ func TestDiscoverProjectAndGlobalPriorityAndDedup(t *testing.T) {
 	for _, b := range builtins {
 		if FindByName(skills, b.Name) == nil {
 			t.Errorf("built-in skill %q missing from Discover output", b.Name)
+		}
+	}
+}
+
+// Workspace Trust: an UNTRUSTED project's SKILL.md files must NOT be
+// discovered (no instruction injection from a cloned repo), while
+// user/global skills still load. Trusting the same dir loads them.
+func TestDiscoverUntrustedDropsProjectSkills(t *testing.T) {
+	tmp := t.TempDir()
+	tervaHome := filepath.Join(tmp, "home")
+	cwd := filepath.Join(tmp, "proj")
+
+	mk := func(dir, name, desc string) {
+		full := filepath.Join(dir, name)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + name + "\ndescription: " + desc + "\n---\n# " + name + "\n"
+		if err := os.WriteFile(filepath.Join(full, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A project-local skill (every project-dir spelling) and the
+	// claude/agents compat spellings, plus a user/global skill.
+	mk(filepath.Join(cwd, ".terva", "skills"), "evil-project", "from the repo")
+	mk(filepath.Join(cwd, ".claude", "skills"), "evil-claude", "from the repo (claude)")
+	mk(filepath.Join(cwd, ".agents", "skills"), "evil-agents", "from the repo (agents)")
+	mk(filepath.Join(tervaHome, "skills"), "user-global", "from the user home")
+
+	// Untrusted: none of the project skills, but the global one is present.
+	restricted, errs := Discover(tervaHome, cwd, "", true, false /* trustProject */)
+	if len(errs) > 0 {
+		t.Fatalf("errs: %v", errs)
+	}
+	for _, name := range []string{"evil-project", "evil-claude", "evil-agents"} {
+		if FindByName(restricted, name) != nil {
+			t.Errorf("untrusted workspace leaked project skill %q into discovery", name)
+		}
+	}
+	if FindByName(restricted, "user-global") == nil {
+		t.Error("user/global skill must load even when the workspace is untrusted")
+	}
+
+	// Trusted: the same project skills now load.
+	trusted, errs := Discover(tervaHome, cwd, "", true, true /* trustProject */)
+	if len(errs) > 0 {
+		t.Fatalf("errs: %v", errs)
+	}
+	for _, name := range []string{"evil-project", "evil-claude", "evil-agents", "user-global"} {
+		if FindByName(trusted, name) == nil {
+			t.Errorf("trusted workspace should load skill %q", name)
 		}
 	}
 }

@@ -143,6 +143,12 @@ func init() {
 				i.setStatusOK("unjailed")
 				return false
 			}},
+		{name: "/trust", desc: "trust this directory so its project extensions/skills/context load (/trust parent for descendants too)",
+			hint: "parent (optional)", cancelsTurn: true,
+			run: (*Interactive).slashTrust},
+		{name: "/untrust", desc: "remove this directory from the trust list (its project content stops loading)",
+			cancelsTurn: true,
+			run:         (*Interactive).slashUntrust},
 		{name: "/skills", desc: "list discovered skills (SKILL.md files)",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				i.openSkillsDialog()
@@ -376,6 +382,81 @@ func (i *Interactive) slashCD(_ context.Context, parts []string, raw string) boo
 	i.fileSuggest.Reset()
 	i.fileSuggest.SetCWD(i.cfg.CWD)
 	i.invalidate()
+	return false
+}
+
+// slashTrust persists Workspace Trust for the current cwd (with `parent`
+// it also trusts descendants), then re-applies project content for the
+// session by re-cd-ing into the same directory — which rebuilds the
+// agent with the now-trusted Resolve (project extensions/skills/context
+// load). If the host didn't wire a rebuild path, it persists and tells
+// the user a restart will apply it. See docs/plans/workspace-trust.md.
+func (i *Interactive) slashTrust(_ context.Context, parts []string, _ string) bool {
+	if i.cfg.TrustWorkspace == nil {
+		i.setStatusErr("/trust unavailable: host did not wire TrustWorkspace")
+		return false
+	}
+	parent := len(parts) >= 2 && strings.EqualFold(strings.TrimSpace(parts[1]), "parent")
+	if err := i.cfg.TrustWorkspace(parent); err != nil {
+		i.setStatusErr("/trust: " + err.Error())
+		return false
+	}
+	i.mu.Lock()
+	i.cfg.Trusted = true
+	cwd := i.cfg.CWD
+	i.mu.Unlock()
+
+	// Let the extension manager search the now-trusted project dir on its
+	// next (re)discovery, so /reload-ext picks up project extensions.
+	if i.cfg.Extensions != nil {
+		i.cfg.Extensions.SetProjectTrusted(true)
+	}
+
+	// Live re-apply: re-cd into the same dir rebuilds the agent with the
+	// now-trusted Resolve (project skills + context load immediately).
+	// Project EXTENSIONS need a /reload-ext (or restart) to spawn — the
+	// extension subprocesses aren't re-discovered by an agent rebuild.
+	// ChangeCWD already swaps agent + session and resets transient state.
+	if i.cfg.ChangeCWD != nil {
+		if err := i.cfg.ChangeCWD(cwd); err != nil {
+			i.setStatusOK("trusted " + cwd + " — restart terva to load its project extensions/skills/context")
+			return false
+		}
+		i.mu.Lock()
+		i.toolCalls = map[string]*tui.ToolCallView{}
+		i.toolOrder = nil
+		i.turns.ResetGates()
+		i.helpBlock = nil
+		i.parkedTurn = 0
+		i.statusOK = "trusted " + i.cfg.CWD + " — project skills/context loaded (/reload-ext for project extensions)"
+		i.statusErr = ""
+		i.mu.Unlock()
+		i.fileSuggest.Reset()
+		i.fileSuggest.SetCWD(i.cfg.CWD)
+		i.invalidate()
+		return false
+	}
+	i.setStatusOK("trusted " + cwd + " — restart terva to load its project extensions/skills/context")
+	return false
+}
+
+// slashUntrust removes the current cwd from the trust store. Already-
+// loaded project content stays for this session (a restart re-restricts);
+// the change takes full effect on the next launch / re-cd.
+func (i *Interactive) slashUntrust(_ context.Context, _ []string, _ string) bool {
+	if i.cfg.UntrustWorkspace == nil {
+		i.setStatusErr("/untrust unavailable: host did not wire UntrustWorkspace")
+		return false
+	}
+	if err := i.cfg.UntrustWorkspace(); err != nil {
+		i.setStatusErr("/untrust: " + err.Error())
+		return false
+	}
+	i.mu.Lock()
+	i.cfg.Trusted = false
+	cwd := i.cfg.CWD
+	i.mu.Unlock()
+	i.setStatusOK("untrusted " + cwd + " — its project content will not load on the next launch")
 	return false
 }
 

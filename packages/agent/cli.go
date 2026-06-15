@@ -172,17 +172,25 @@ func (a *mcpToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {
 	return nil
 }
 
-// setupMCP starts the user-configured MCP servers and merges their
-// tools into the resolved registry. Returns a stop func (never nil).
-// Startup problems are stderr notes, never fatal — one broken server
-// must not take the session down. Server stderr goes to
-// $TERVA_HOME/logs/mcp-<name>.log, like extensions.
+// setupMCP starts the user-configured MCP servers — plus a TRUSTED project's
+// servers (merged, user wins on a name collision) — and merges their tools into
+// the resolved registry. Returns a stop func (never nil). Startup problems are
+// stderr notes, never fatal — one broken server must not take the session down.
+// Server stderr goes to $TERVA_HOME/logs/mcp-<name>.log, like extensions.
+//
+// r.Trusted is the Workspace Trust verdict: when false the project's MCP
+// servers are NEVER started (only the user's), so a cloned repo cannot spawn
+// subprocesses until the user trusts it (Phase 6).
 func setupMCP(ctx context.Context, args Args, r *Resolved) (*mcpToolAdapter, func()) {
 	if args.NoMCP {
 		return nil, func() {}
 	}
-	cfg, err := LoadConfig()
-	if err != nil || cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
+	user, err := LoadConfig()
+	if err != nil {
+		return nil, func() {}
+	}
+	mcpCfg := mergeMCPConfigs(user.MCP, trustedProjectMCP(args.CWD, r.Trusted))
+	if mcpCfg == nil || len(mcpCfg.Servers) == 0 {
 		return nil, func() {}
 	}
 	stderrFor := func(server string) io.Writer {
@@ -195,7 +203,7 @@ func setupMCP(ctx context.Context, args Args, r *Resolved) (*mcpToolAdapter, fun
 		}
 		return f
 	}
-	mgr := mcp.StartAll(ctx, cfg.MCP, stderrFor)
+	mgr := mcp.StartAll(ctx, mcpCfg, stderrFor)
 	for _, w := range mgr.Warnings() {
 		fmt.Fprintln(os.Stderr, "note:", w)
 	}
@@ -371,6 +379,9 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runMigrateCommand(rawArgs); handled {
 		return err
 	}
+	if handled, err := runTrustCommand(rawArgs); handled {
+		return err
+	}
 	// `terva rpc` is shorthand for `terva --rpc` so third-party apps can
 	// spawn the binary with a clean argv. Strip the leading 'rpc'
 	// token and let the rest flow through the normal arg parser.
@@ -483,6 +494,7 @@ func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, 
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, nonInteractiveExtHooks{})
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
+	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
 	}
@@ -550,13 +562,24 @@ func headlessConfirmGate(args Args, mode string) (*core.ConfirmGate, *core.ReadO
 // is non-nil (--no-yolo) it runs FIRST in BeforeToolExecute, mirroring
 // interactive mode, so a refusal short-circuits before the extension
 // intercept sees the call.
-// buildHookEngine loads the user config's hooks into an engine, or
-// nil when none are configured. Hook misbehavior (timeouts, bad JSON)
-// logs to $TERVA_HOME/logs/hooks.log — stderr would corrupt the TUI
-// and a broken hook must never break a turn.
-func buildHookEngine(args Args) *hooks.Engine {
-	cfg, err := LoadConfig()
-	if err != nil || cfg.Hooks == nil {
+// buildHookEngine loads the user config's hooks into an engine, plus a
+// TRUSTED project's hooks (appended — both fire, user first), or nil when
+// none are configured. Hook misbehavior (timeouts, bad JSON) logs to
+// $TERVA_HOME/logs/hooks.log — stderr would corrupt the TUI and a broken
+// hook must never break a turn.
+//
+// trusted is the Workspace Trust verdict for this launch (r.Trusted). When
+// false the project's hooks are NEVER loaded — only the user's — so a cloned
+// repo cannot run code on tool calls until the user trusts it (Phase 6). Every
+// call site must thread the real verdict; defaulting to true would re-open the
+// RCE-on-clone gap this gate closes.
+func buildHookEngine(args Args, trusted bool) *hooks.Engine {
+	user, err := LoadConfig()
+	if err != nil {
+		return nil
+	}
+	cfg := mergeHookConfigs(user.Hooks, trustedProjectHooks(args.CWD, trusted))
+	if cfg == nil {
 		return nil
 	}
 	logf := func(string, ...any) {}
@@ -569,7 +592,7 @@ func buildHookEngine(args Args) *hooks.Engine {
 			}
 		}
 	}
-	eng := hooks.NewEngine(*cfg.Hooks, args.CWD, logf)
+	eng := hooks.NewEngine(*cfg, args.CWD, logf)
 	eng.SetCloser(logCloser)
 	return eng
 }
@@ -669,12 +692,13 @@ func runPrintMode(ctx context.Context, args Args, version string) error {
 	if err != nil {
 		return err
 	}
+	warnRestrictedWorkspace(args, r.Trusted)
 	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args))
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 	// Tell session-keyed extensions the real session id before any turn
@@ -702,12 +726,13 @@ func runJSONMode(ctx context.Context, args Args, version string) error {
 	if err != nil {
 		return err
 	}
+	warnRestrictedWorkspace(args, r.Trusted)
 	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args))
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 	// Tell session-keyed extensions the real session id before any turn
@@ -727,6 +752,119 @@ func runJSONMode(ctx context.Context, args Args, version string) error {
 	err = modes.RunJSON(ctx, ag, prompt, nil, os.Stdout)
 	WriteNewTranscript(ag, sess, start)
 	return err
+}
+
+// resolveSwarmWorktrees decides whether per-agent swarm worktree
+// isolation is on. The --swarm-worktrees flag (flagOverride, non-nil
+// when the flag was given) wins over the user config's swarm_worktrees
+// (cfg). nil/absent in both means off — today's behavior. Mirrors the
+// bool-pointer precedence used for the other swarm/picker settings.
+func resolveSwarmWorktrees(flagOverride, cfg *bool) bool {
+	if flagOverride != nil {
+		return *flagOverride
+	}
+	return cfg != nil && *cfg
+}
+
+// swarmWorktreeAcquirer builds the swarm.Config.AcquireWorktree hook
+// that leases a dedicated git worktree per sub-agent from the
+// terva-git-worktree extension. It is wired ONLY when the user opted in
+// (see resolveSwarmWorktrees) and the worktree_create tool is
+// registered, so any failure here is a real misconfiguration, not the
+// absence of the feature: the closure returns a non-nil error and the
+// spawn fails loudly rather than silently dropping back to the shared
+// tree. On the terminal release it calls worktree_release (NOT
+// worktree_remove) so the worktree + branch survive for review/merge
+// via the extension's `/worktree collect`.
+func swarmWorktreeAcquirer(extMgr *extensions.Manager) func(context.Context, swarm.WorktreeReq) (swarm.WorktreeLease, error) {
+	return func(ctx context.Context, req swarm.WorktreeReq) (swarm.WorktreeLease, error) {
+		name := slugAgent(req.AgentID, req.Task)
+		args, err := json.Marshal(map[string]any{"name": name}) // base defaults to HEAD
+		if err != nil {
+			return swarm.WorktreeLease{}, fmt.Errorf("marshal worktree_create args: %w", err)
+		}
+		res, err := extMgr.InvokeTool(ctx, "worktree_create", args, 30*time.Second)
+		if err != nil {
+			// Extension unregistered (`no extension registered for tool`)
+			// or a transport error. Worktree isolation was explicitly
+			// requested, so surface it instead of silently sharing the
+			// host tree.
+			return swarm.WorktreeLease{}, fmt.Errorf("swarm worktree isolation: worktree_create via terva-git-worktree failed (install the extension or drop --swarm-worktrees): %w", err)
+		}
+		if res.IsError {
+			return swarm.WorktreeLease{}, fmt.Errorf("swarm worktree isolation: worktree_create returned an error: %s", firstText(res))
+		}
+		var cr struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal([]byte(firstText(res)), &cr)
+		if cr.Path == "" {
+			return swarm.WorktreeLease{}, fmt.Errorf("swarm worktree isolation: worktree_create returned no path (result: %s)", firstText(res))
+		}
+		return swarm.WorktreeLease{
+			Dir: cr.Path,
+			Release: func() {
+				// Release, never remove: keep the worktree + branch for
+				// review/merge via `/worktree collect`. Best-effort and
+				// detached from ctx — the agent is already terminal, so a
+				// cancelled ctx must not block freeing the lease.
+				rel, _ := json.Marshal(map[string]any{"name": name})
+				_, _ = extMgr.InvokeTool(context.Background(), "worktree_release", rel, 10*time.Second)
+			},
+		}, nil
+	}
+}
+
+// firstText returns the first text content block of an extension tool
+// result, or "" when there is none. Used to parse worktree_create's
+// JSON payload (the extension returns it as a single text block).
+func firstText(res extproto.ToolResultFromExt) string {
+	for _, b := range res.Content {
+		if b.Type == "text" {
+			return b.Text
+		}
+	}
+	return ""
+}
+
+// slugAgent derives a stable, filesystem/branch-safe worktree name for
+// an agent. The agent id is already unique (slug-of-task + nanoseconds),
+// so we lead with it for collision-resistance and append a short,
+// readable task slug. The terva-git-worktree extension re-slugs the
+// name itself, but we hand it something already safe.
+func slugAgent(agentID, task string) string {
+	safe := func(s string, max int) string {
+		var b strings.Builder
+		dash := false
+		for _, r := range strings.ToLower(s) {
+			switch {
+			case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+				b.WriteRune(r)
+				dash = false
+			case r == '-' || r == '_':
+				b.WriteRune(r)
+				dash = false
+			default:
+				if !dash && b.Len() > 0 {
+					b.WriteByte('-')
+					dash = true
+				}
+			}
+			if b.Len() >= max {
+				break
+			}
+		}
+		return strings.Trim(b.String(), "-_")
+	}
+	id := safe(agentID, 48)
+	if id == "" {
+		id = "agent"
+	}
+	t := safe(task, 24)
+	if t == "" {
+		return id
+	}
+	return id + "-" + t
 }
 
 // ---- interactive mode: opens the TUI even without credentials ----
@@ -755,6 +893,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
+	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
 	// --ext paths first so they win against installed extensions of
 	// the same name (loadOne's first-write-wins semantics).
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
@@ -820,11 +959,28 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// swarmMgr is also captured by loadSession / changeCWD closures
 	// further down the function, which is why we keep the variable
 	// in this outer scope rather than scoping it tighter.
-	var swarmMgr *swarm.Swarm
-	swarmMgr = swarm.New(swarm.Config{
+	//
+	// Per-agent worktree isolation is opt-in: --swarm-worktrees (the
+	// flag) overrides the user config's swarm_worktrees. When on, each
+	// spawned agent leases its own git worktree from the
+	// terva-git-worktree extension instead of sharing r.CWD. Because
+	// this is an explicit opt-in, a missing extension is a
+	// misconfiguration — fail fast here rather than silently falling
+	// back to the shared tree (which would defeat the point) or erroring
+	// only on the first spawn.
+	swarmCfg := swarm.Config{
 		Root:     filepath.Join(TervaHome(), "swarm"),
 		RepoRoot: r.CWD,
-	})
+	}
+	swarmWTCfg, _ := LoadConfig()
+	if resolveSwarmWorktrees(args.SwarmWorktrees, swarmWTCfg.SwarmWorktrees) {
+		if !extMgr.HasTool("worktree_create") {
+			return fmt.Errorf("swarm worktree isolation requires the terva-git-worktree extension; install it or drop --swarm-worktrees")
+		}
+		swarmCfg.AcquireWorktree = swarmWorktreeAcquirer(extMgr)
+	}
+	var swarmMgr *swarm.Swarm
+	swarmMgr = swarm.New(swarmCfg)
 	// Pull any previously-spawned agents off disk so the dashboard
 	// shows them as detached and the user can resume / remove them.
 	_, _ = swarmMgr.Reload()
@@ -872,7 +1028,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// initial views cannot drift.
 	setApprovalMode := func(mode core.ApprovalMode) core.Registry {
 		confirmGate.SetMode(mode)
-		reg := buildToolRegistry(args, mode, r.CWD, sharedSandbox, r.Provider, r.AuthMethod)
+		reg := buildToolRegistry(args, mode, r.CWD, sharedSandbox, r.Provider, r.AuthMethod, r.VisionCapable)
 		MergeToolsForMode(reg, mode, pol.ReadOnly, extToolAdapter)
 		if mcpAdapter != nil {
 			MergeToolsForMode(reg, mode, pol.ReadOnly, mcpAdapter)
@@ -881,7 +1037,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		return reg
 	}
 
-	hookEng := buildHookEngine(args)
+	hookEng := buildHookEngine(args, r.Trusted)
 
 	// Capture current args in a closure so BuildAgent can re-resolve
 	// after a successful login (picks up the newly stored credential).
@@ -1522,9 +1678,18 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			}
 			return out
 		},
-		LoadSession: loadSession,
-		NewSession:  newSession,
-		ChangeCWD:   changeCWD,
+		LoadSession:         loadSession,
+		NewSession:          newSession,
+		ChangeCWD:           changeCWD,
+		Trusted:             r.Trusted,
+		GatedContentPresent: hasGatedProjectContent(r.CWD),
+		TrustWorkspace: func(parent bool) error {
+			// Persist trust for the live cwd (it may have moved via /cd).
+			return TrustPath(args.CWD, parent)
+		},
+		UntrustWorkspace: func() error {
+			return UntrustPath(args.CWD)
+		},
 		CurrentSessionPath: func() string {
 			if sess == nil {
 				return ""
@@ -1579,7 +1744,10 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			// model still sees them through the system-prompt
 			// manifest and the skill tool.
 			userHome, _ := os.UserHomeDir()
-			list, _ := skills.Discover(TervaHome(), r.CWD, userHome, args.WithSkills)
+			// Honor the launch trust verdict: project skills stay hidden
+			// from the picker while restricted (they aren't loaded for the
+			// model either).
+			list, _ := skills.Discover(TervaHome(), r.CWD, userHome, args.WithSkills, r.Trusted)
 			return skills.VisibleSkills(list)
 		},
 		NoYolo:          args.NoYolo,

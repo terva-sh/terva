@@ -163,6 +163,26 @@ type SessionAgent struct {
 	// command set reflects the reload automatically — /reload-ext re-advertises
 	// it afterwards. nil when the session has no extension manager.
 	ReloadExtensions func(ctx context.Context) ReloadStats
+
+	// TrustWorkspace persists the session cwd's Workspace Trust verdict and makes
+	// its project content go live for this session, so the native /trust command
+	// gives an editor user the only in-editor way to trust a workspace over ACP.
+	// The host (acp_mode.go) records the cwd via TrustPath (parent marks "trust
+	// descendants too"), then flips the extensions.Manager to trusted and reloads
+	// it so project extensions are discovered now — without the acp package
+	// importing the trust store or the extensions package. Project skills/context
+	// are baked into the session's system prompt at build time and can't be
+	// re-injected mid-session, so they apply on a NEW session; the confirmation
+	// the command emits says so. nil when the host didn't wire it — /trust then
+	// degrades to a note.
+	TrustWorkspace func(parent bool) error
+
+	// UntrustWorkspace is the symmetric inverse of TrustWorkspace: the host drops
+	// the session cwd from the trust store (UntrustPath), flips the
+	// extensions.Manager back to untrusted, and reloads it so project extensions
+	// are torn down, so the native /untrust command can revoke trust from inside
+	// the editor. nil when the host didn't wire it — /untrust degrades to a note.
+	UntrustWorkspace func() error
 }
 
 // ContextItem is one entry in the inspector view of what the session's
@@ -520,6 +540,8 @@ func (s *agentServer) bindSession(id, cwd string, sa SessionAgent, confirmer *ac
 	sess.invokeExtCommand = sa.InvokeExtCommand
 	sess.extContext = sa.ExtContext
 	sess.reloadExtensions = sa.ReloadExtensions
+	sess.trustWorkspace = sa.TrustWorkspace
+	sess.untrustWorkspace = sa.UntrustWorkspace
 	sess.setModel(sa.Provider, sa.Model)
 	// Seed the session's mode from the gate (ApprovalYolo when there is no
 	// gate), so the mode menu's currentModeId matches what the gate enforces.

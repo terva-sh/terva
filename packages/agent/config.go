@@ -35,6 +35,16 @@ type Config struct {
 	// default; nil/missing means disabled. Toggle from /settings.
 	AutoSwarmEnabled *bool `json:"auto_swarm_enabled,omitempty"`
 
+	// SwarmWorktrees opts swarm sub-agents into per-agent git worktrees
+	// instead of sharing the host's working tree. Off by default;
+	// nil/missing means disabled. When on, each spawned agent leases an
+	// isolated worktree via the terva-git-worktree extension (released
+	// — not removed — on completion so you can review/merge via the
+	// extension's `/worktree collect`). Requires that extension to be
+	// installed; without it, spawning a sub-agent fails loudly. The
+	// --swarm-worktrees flag overrides this for a single run.
+	SwarmWorktrees *bool `json:"swarm_worktrees,omitempty"`
+
 	// RecursiveFileSuggest controls the @-mention file picker. When true
 	// the picker fuzzy-searches the whole project tree below the working
 	// directory; nil/missing/false keeps the default directory-by-
@@ -97,11 +107,15 @@ type Config struct {
 	// start (see packages/agent/hooks and docs/hooks.md).
 	Hooks *hooks.Config `json:"hooks,omitempty"`
 
-	// MCP configures Model Context Protocol servers (stdio). User
-	// config only, same trust posture as hooks: a project-scoped MCP
-	// server would be arbitrary code execution from a cloned repo
-	// (the trust-gating finding in docs/plans/harness-landscape-2026.md).
-	// See docs/mcp.md.
+	// MCP configures Model Context Protocol servers (stdio). The user
+	// layer is trusted, so its servers always start. A project's
+	// .terva/config.json MAY also declare MCP servers, but ONLY when the
+	// workspace is trusted (Workspace Trust Phase 6): a project-scoped MCP
+	// server is a subprocess spawn, so an UNtrusted cloned repo's servers
+	// are never started. When trusted, the project's servers merge with
+	// the user's — the user wins on a name collision; a trusted project
+	// may only ADD servers, never replace a user-defined one (see
+	// mergeMCPConfigs and docs/plans/workspace-trust.md). See docs/mcp.md.
 	MCP *mcp.Config `json:"mcp,omitempty"`
 }
 
@@ -160,6 +174,24 @@ type ProjectConfig struct {
 	// never re-enables) — a cloned repo can keep an extension from
 	// running here but can never make one run the user didn't install.
 	DisableExtensions []string `json:"disable_extensions,omitempty"`
+
+	// Hooks lets a TRUSTED project define pre/post tool-use hook programs
+	// (Workspace Trust Phase 6). These run arbitrary commands, so they are
+	// honored ONLY when the workspace is trusted — an untrusted cloned
+	// repo's hooks are never loaded (the engine sees only the user's). When
+	// trusted, the project's hooks are appended to the user's: BOTH fire,
+	// user hooks first (a union, never a replacement). See buildHookEngine
+	// and docs/plans/workspace-trust.md.
+	Hooks *hooks.Config `json:"hooks,omitempty"`
+
+	// MCP lets a TRUSTED project declare Model Context Protocol servers
+	// (stdio) (Workspace Trust Phase 6). Starting a server is a subprocess
+	// spawn, so the project's servers are honored ONLY when the workspace
+	// is trusted — an untrusted cloned repo's servers are never started.
+	// When trusted, the project's servers merge with the user's: the user
+	// wins on a name collision, so a trusted project may only ADD servers
+	// (mergeMCPConfigs). See setupMCP and docs/plans/workspace-trust.md.
+	MCP *mcp.Config `json:"mcp,omitempty"`
 }
 
 // Project-local config lives in the same per-project directory terva
@@ -400,16 +432,23 @@ type EffectiveConfig struct {
 // resolve nearest-wins (the project's list if it set one, else the user's) and
 // are held as absolute paths.
 //
+// trustProject gates the project's context_files: a project's context_files
+// inject prose into the system prompt, so an untrusted workspace's list is
+// dropped and only the user layer injects (Workspace Trust, plan row 6). The
+// restrict-only project fields (disable_extensions / disable_context_extensions)
+// are NOT gated — they can only TIGHTEN, so honoring an untrusted repo's "don't
+// run this extension" is always safe.
+//
 // A malformed project config is surfaced on stderr and then ignored, so a
 // broken .terva/config.json can never strand the user with no way to launch.
-func ResolveConfig(cwd string) EffectiveConfig {
+func ResolveConfig(cwd string, trustProject bool) EffectiveConfig {
 	user, _ := LoadConfig()
 	eff := EffectiveConfig{Config: user, User: user}
 	pc, err := LoadProjectConfig(cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "terva: ignoring project config: %v\n", err)
 	}
-	if pc != nil && pc.ContextFiles != nil {
+	if pc != nil && pc.ContextFiles != nil && trustProject {
 		eff.Config.ContextFiles = pc.ContextFiles // already absolute
 	} else {
 		eff.Config.ContextFiles = absolutizeContextFiles(TervaHome(), user.ContextFiles)
@@ -426,6 +465,97 @@ func ResolveConfig(cwd string) EffectiveConfig {
 		eff.Config.DisableExtensions = unionStrings(user.DisableExtensions, pc.DisableExtensions)
 	}
 	return eff
+}
+
+// trustedProjectHooks returns the nearest project config's hooks ONLY when
+// the workspace is trusted; otherwise nil. Project hooks run arbitrary
+// commands, so an untrusted (default) cloned repo must never reach the hook
+// engine — this is the trust gate the historical "user-config only" ban was a
+// proxy for (Workspace Trust Phase 6). A malformed project config degrades to
+// nil with a stderr note rather than aborting launch, matching ResolveConfig.
+func trustedProjectHooks(cwd string, trustProject bool) *hooks.Config {
+	if !trustProject {
+		return nil
+	}
+	pc, err := LoadProjectConfig(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "terva: ignoring project config hooks: %v\n", err)
+		return nil
+	}
+	if pc == nil {
+		return nil
+	}
+	return pc.Hooks
+}
+
+// mergeHookConfigs unions user and project hooks (append, never replace): both
+// sets fire, user hooks first within each phase. Returns nil when both are
+// empty so callers can treat nil as "no hooks". The project argument is
+// expected to be nil unless the workspace is trusted (trustedProjectHooks).
+func mergeHookConfigs(user, project *hooks.Config) *hooks.Config {
+	if user == nil && project == nil {
+		return nil
+	}
+	merged := &hooks.Config{}
+	if user != nil {
+		merged.PreToolUse = append(merged.PreToolUse, user.PreToolUse...)
+		merged.PostToolUse = append(merged.PostToolUse, user.PostToolUse...)
+	}
+	if project != nil {
+		merged.PreToolUse = append(merged.PreToolUse, project.PreToolUse...)
+		merged.PostToolUse = append(merged.PostToolUse, project.PostToolUse...)
+	}
+	if len(merged.PreToolUse) == 0 && len(merged.PostToolUse) == 0 {
+		return nil
+	}
+	return merged
+}
+
+// trustedProjectMCP returns the nearest project config's MCP servers ONLY when
+// the workspace is trusted; otherwise nil. Starting an MCP server is a
+// subprocess spawn, so an untrusted (default) cloned repo's servers must never
+// start (Workspace Trust Phase 6). A malformed project config degrades to nil
+// with a stderr note rather than aborting launch.
+func trustedProjectMCP(cwd string, trustProject bool) *mcp.Config {
+	if !trustProject {
+		return nil
+	}
+	pc, err := LoadProjectConfig(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "terva: ignoring project config mcp: %v\n", err)
+		return nil
+	}
+	if pc == nil {
+		return nil
+	}
+	return pc.MCP
+}
+
+// mergeMCPConfigs merges user and project MCP server sets, USER WINS on a name
+// collision: a trusted project may ADD servers but never replace one the user
+// defined, so a repo can't shadow a user's server name with its own subprocess.
+// Returns nil when neither set has servers. The project argument is expected to
+// be nil unless the workspace is trusted (trustedProjectMCP).
+func mergeMCPConfigs(user, project *mcp.Config) *mcp.Config {
+	if (user == nil || len(user.Servers) == 0) && (project == nil || len(project.Servers) == 0) {
+		return nil
+	}
+	merged := &mcp.Config{Servers: map[string]mcp.ServerConfig{}}
+	// Project first so user entries overwrite on collision (user wins).
+	if project != nil {
+		for name, sc := range project.Servers {
+			merged.Servers[name] = sc
+		}
+	}
+	if user != nil {
+		for name, sc := range user.Servers {
+			merged.Servers[name] = sc
+		}
+	}
+	if len(merged.Servers) == 0 {
+		return nil
+	}
+	return merged
 }
 
 // unionStrings returns the de-duplicated union of a and b, preserving

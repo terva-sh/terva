@@ -73,6 +73,14 @@ type Args struct {
 	// is otherwise honored in every mode).
 	NoMCP bool
 
+	// Trust trusts the working directory for THIS invocation only —
+	// project-local extensions / skills / context load as if the dir
+	// were in the trust store, but nothing is persisted (the one-shot
+	// operator analog of answering the TUI trust prompt). The headless
+	// way to opt a single run into project content without a permanent
+	// `terva trust`. See resolveTrust / docs/plans/workspace-trust.md.
+	Trust bool
+
 	// Exts is a list of directory paths the user passed via --ext.
 	// Each must contain an extension.json. Loaded for one session
 	// only; never persisted. Take precedence over installed exts of
@@ -136,6 +144,15 @@ type Args struct {
 	// swarm-spawned agent. Empty in every other mode. Set by
 	// --swarm-agent <path>; presence flips Mode to ModeSwarmAgent.
 	SwarmAgent string
+
+	// SwarmWorktrees is the tri-state override for per-agent swarm
+	// worktree isolation. nil means "not set on the command line" (the
+	// user config's swarm_worktrees decides); a non-nil value is an
+	// explicit --swarm-worktrees (true) override that wins over config.
+	// When effectively on, each swarm sub-agent leases its own git
+	// worktree via the terva-git-worktree extension instead of sharing
+	// the host's tree. Mirrors the bool-pointer config fields.
+	SwarmWorktrees *bool
 }
 
 // ParseArgs parses the process arguments (excluding argv[0]).
@@ -241,6 +258,10 @@ func ParseArgs(in []string) (Args, error) {
 			a.NoExt = true
 		case "--no-mcp":
 			a.NoMCP = true
+		case "--trust":
+			// One-shot: trust the cwd for this run only, NOT persisted.
+			// Use `terva trust` to persist. See resolveTrust.
+			a.Trust = true
 		case "--connector-manifest":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -293,6 +314,11 @@ func ParseArgs(in []string) (Args, error) {
 			}
 			a.SwarmAgent = v
 			a.Mode = ModeSwarmAgent
+		case "--swarm-worktrees":
+			// Explicit opt-in for per-agent swarm worktree isolation;
+			// overrides the user config's swarm_worktrees for this run.
+			on := true
+			a.SwarmWorktrees = &on
 		case "--tools":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -410,11 +436,12 @@ func PrintHelp(version string) {
 	}
 
 	fmt.Fprintln(os.Stderr)
+	greeting := "i'm terva. " + th.Greeting()
 	var headline string
 	if useColor {
-		headline = th.AccentBar(th.Assistant) + assistant(tui.Bold("i'm terva. yet another coding agent harness."))
+		headline = th.AccentBar(th.Assistant) + assistant(tui.Bold(greeting))
 	} else {
-		headline = "i'm terva. yet another coding agent harness."
+		headline = greeting
 	}
 	fmt.Fprintln(os.Stderr, headline)
 	fmt.Fprintln(os.Stderr, muted("ask anything, or type /help inside the tui to see commands."))
@@ -486,8 +513,16 @@ func PrintHelp(version string) {
 		row{"--no-ext", "skip extension discovery for this run"},
 		row{"--no-mcp", "skip MCP server startup for this run"},
 		row{"--no-skill", "skip all skill discovery for this run"},
+		row{"--trust", "trust the cwd for this run only (load project extensions/skills/context; not persisted)"},
+	)
+	section("workspace trust",
+		row{"terva trust [path]", "trust a directory so its project extensions/skills/context load (default: cwd)"},
+		row{"terva trust --parent [path]", "trust the directory and everything under it"},
+		row{"terva trust --list", "show the trusted directories"},
+		row{"terva untrust [path]", "remove a directory from the trust list (default: cwd)"},
 	)
 	section("misc",
+		row{"--swarm-worktrees", "give each swarm sub-agent its own git worktree (needs the terva-git-worktree extension)"},
 		row{"--max-steps N", "agent loop iteration cap (default: unlimited)"},
 		row{"--list-models", "print known models and exit"},
 		row{"-h, --help", "show this help"},

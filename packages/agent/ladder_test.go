@@ -113,7 +113,9 @@ func TestBuildHookEngineFromConfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.json"), b, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	eng := buildHookEngine(Args{CWD: t.TempDir()})
+	// Untrusted (false): user-config hooks still build — only PROJECT hooks
+	// are trust-gated. Proves the user layer is unaffected by the trust gate.
+	eng := buildHookEngine(Args{CWD: t.TempDir()}, false)
 	if eng == nil {
 		t.Fatal("engine should build from config")
 	}

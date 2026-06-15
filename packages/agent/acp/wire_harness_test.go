@@ -275,6 +275,18 @@ type fakeFactory struct {
 	// reload closure was actually invoked (not just that a chunk was emitted).
 	extReloads int32
 
+	// trustCalls / untrustCalls count how many times the SessionAgent's
+	// TrustWorkspace / UntrustWorkspace closures ran, and trustParent records the
+	// parent flag the last /trust passed — the /trust and /untrust tests assert
+	// the closure was actually invoked (not just that a chunk was emitted) and
+	// that `/trust parent` threads the wider scope through. wireTrust turns the
+	// closures on; left off, SessionAgent.TrustWorkspace/UntrustWorkspace stay nil
+	// (the host-didn't-wire-it degradation path).
+	wireTrust    bool
+	trustCalls   int32
+	untrustCalls int32
+	trustParent  int32 // 1 if the last /trust requested parent scope, else 0
+
 	// emptyExtContext, when set on a non-ext factory, carries an ExtContext
 	// closure that returns no items — the "a manager is wired but nothing is
 	// being injected" path, so /context reports the no-context note rather than
@@ -301,6 +313,24 @@ func (f *fakeFactory) skillSnapshot() func() []*skills.Skill {
 		return nil
 	}
 	return func() []*skills.Skill { return f.skillList }
+}
+
+// trustWorkspaceFn / untrustWorkspaceFn return the SessionAgent trust closures:
+// nil unless wireTrust is set (the host-didn't-wire-it path), else a
+// counter-bumping closure mirroring the production acpTrustWorkspace /
+// acpUntrustWorkspace boundary.
+func (f *fakeFactory) trustWorkspaceFn() func(parent bool) error {
+	if !f.wireTrust {
+		return nil
+	}
+	return trustWorkspaceForTest(&f.trustCalls, &f.trustParent)
+}
+
+func (f *fakeFactory) untrustWorkspaceFn() func() error {
+	if !f.wireTrust {
+		return nil
+	}
+	return untrustWorkspaceForTest(&f.untrustCalls)
 }
 
 func (f *fakeFactory) lastLoadedAgent() *core.Agent {
@@ -560,6 +590,34 @@ func reloadExtensionsForTest(extMgr *extensions.Manager, ran *int32) func(contex
 	}
 }
 
+// trustWorkspaceForTest mirrors the production acpTrustWorkspace at the acp
+// boundary: it bumps a counter (and records the parent flag) so the /trust test
+// can assert the closure actually ran and that `/trust parent` threaded the
+// wider scope. It does not touch a real trust store — the production mapper's
+// TrustPath + extMgr.Reload are covered by the tagged build/vet; the wire test
+// only proves the command invokes the closure, emits the confirmation, ends the
+// turn, and re-advertises the catalog.
+func trustWorkspaceForTest(calls, parentFlag *int32) func(parent bool) error {
+	return func(parent bool) error {
+		atomic.AddInt32(calls, 1)
+		if parent {
+			atomic.StoreInt32(parentFlag, 1)
+		} else {
+			atomic.StoreInt32(parentFlag, 0)
+		}
+		return nil
+	}
+}
+
+// untrustWorkspaceForTest is the symmetric inverse of trustWorkspaceForTest: it
+// bumps a counter so the /untrust test can assert the closure ran.
+func untrustWorkspaceForTest(calls *int32) func() error {
+	return func() error {
+		atomic.AddInt32(calls, 1)
+		return nil
+	}
+}
+
 // renderPanelTextForTest flattens a PanelSpec to text, mirroring the host's
 // renderPanelText so the open_panel degradation surfaces the same content.
 func renderPanelTextForTest(p *extproto.PanelSpec) string {
@@ -728,6 +786,8 @@ func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServer
 			InvokeExtCommand: invokeExtCommandFor(extMgr),
 			ExtContext:       extContextFor(extMgr),
 			ReloadExtensions: reloadExtensionsForTest(extMgr, &f.extReloads),
+			TrustWorkspace:   f.trustWorkspaceFn(),
+			UntrustWorkspace: f.untrustWorkspaceFn(),
 		}, nil
 	}
 
@@ -744,15 +804,17 @@ func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServer
 	f.loadedMu.Unlock()
 	prov, model := f.sessionModel()
 	return SessionAgent{
-		Agent:      ag,
-		Session:    sess,
-		Cleanup:    cleanup,
-		Gate:       gate,
-		Provider:   prov,
-		Model:      model,
-		Sandbox:    f.sandbox,
-		Skills:     f.skillSnapshot(),
-		ExtContext: f.emptyExtContextFunc(),
+		Agent:            ag,
+		Session:          sess,
+		Cleanup:          cleanup,
+		Gate:             gate,
+		Provider:         prov,
+		Model:            model,
+		Sandbox:          f.sandbox,
+		Skills:           f.skillSnapshot(),
+		ExtContext:       f.emptyExtContextFunc(),
+		TrustWorkspace:   f.trustWorkspaceFn(),
+		UntrustWorkspace: f.untrustWorkspaceFn(),
 	}, nil
 }
 
@@ -799,6 +861,8 @@ func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd str
 			InvokeExtCommand: invokeExtCommandFor(extMgr),
 			ExtContext:       extContextFor(extMgr),
 			ReloadExtensions: reloadExtensionsForTest(extMgr, &f.extReloads),
+			TrustWorkspace:   f.trustWorkspaceFn(),
+			UntrustWorkspace: f.untrustWorkspaceFn(),
 		}, msgs, nil
 	}
 	reg, cleanup := f.startMCP(ctx, mcpServers)
@@ -817,14 +881,16 @@ func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd str
 		model = sess.Meta.Model
 	}
 	return SessionAgent{
-		Agent:    ag,
-		Session:  sess,
-		Cleanup:  cleanup,
-		Gate:     gate,
-		Provider: prov,
-		Model:    model,
-		Sandbox:  f.sandbox,
-		Skills:   f.skillSnapshot(),
+		Agent:            ag,
+		Session:          sess,
+		Cleanup:          cleanup,
+		Gate:             gate,
+		Provider:         prov,
+		Model:            model,
+		Sandbox:          f.sandbox,
+		Skills:           f.skillSnapshot(),
+		TrustWorkspace:   f.trustWorkspaceFn(),
+		UntrustWorkspace: f.untrustWorkspaceFn(),
 	}, msgs, nil
 }
 

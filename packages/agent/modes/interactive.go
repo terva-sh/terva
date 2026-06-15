@@ -148,6 +148,29 @@ type InteractiveConfig struct {
 	// command surfaces a clear error rather than no-oping.
 	ChangeCWD func(path string) error
 
+	// Trusted is the Workspace Trust verdict for the launch cwd. When
+	// false the workspace is RESTRICTED: its project extensions, skills,
+	// and context files were not loaded. Interactive surfaces a one-line
+	// reminder at launch (only when GatedContentPresent) telling the user
+	// they can run /trust. See docs/plans/workspace-trust.md.
+	Trusted bool
+
+	// GatedContentPresent reports whether the cwd actually ships project
+	// content that trust would unlock (a .terva/extensions|skills etc).
+	// The untrusted reminder fires only when this is true, so a plain
+	// repo never sees a trust nag.
+	GatedContentPresent bool
+
+	// TrustWorkspace persists trust for the current cwd (parent=true also
+	// trusts descendants), then ideally re-applies project content for
+	// the session. Wired by the cli to TrustPath + an agent rebuild. nil
+	// disables the /trust command (embedders/tests without the wiring).
+	TrustWorkspace func(parent bool) error
+
+	// UntrustWorkspace removes the current cwd from the trust store. nil
+	// disables /untrust.
+	UntrustWorkspace func() error
+
 	// CurrentSessionPath returns the path of the live session file
 	// on disk (the one every AppendMessage writes to). Used by
 	// /session export so the exporter ships the exact bytes on
@@ -404,6 +427,9 @@ type Interactive struct {
 	// banner shows the binary version for welcomeVersionDuration
 	// after this point and reverts to plain text after.
 	welcomeStart time.Time
+	// welcomeGreeting is the rotating tagline (Theme.Greeting), picked
+	// once at startup so it stays stable across re-renders.
+	welcomeGreeting string
 
 	// extNotes are one-shot styled lines pushed by extensions via
 	// Notify / Display. They live above the editor (just below the
@@ -587,6 +613,7 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// expiry so the version suffix disappears on its own even if the
 	// user hasn't typed anything yet.
 	i.welcomeStart = time.Now()
+	i.welcomeGreeting = i.cfg.Theme.Greeting()
 	time.AfterFunc(welcomeVersionDuration, i.invalidate)
 
 	// If the agent was constructed with a pre-loaded transcript
@@ -607,6 +634,12 @@ func (i *Interactive) Run(ctx context.Context) error {
 	if !i.turns.HasAgent() {
 		i.statusErr = "not logged in. pick a login method below or press esc to dismiss."
 		i.dialog.Open(i.cfg.TervaHome)
+	} else if !i.cfg.Trusted && i.cfg.GatedContentPresent {
+		// Workspace Trust reminder: the cwd ships project extensions/
+		// skills/context that were NOT loaded because the directory is
+		// untrusted. Tell the user once, on the status line, how to opt
+		// in. No prompt/dialog (inform-don't-prompt, decision #2).
+		i.statusOK = "restricted workspace: project extensions/skills/context not loaded — /trust to load them"
 	}
 
 	// Input goroutine. Buffered generously so a drag-drop that the

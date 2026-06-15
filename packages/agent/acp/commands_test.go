@@ -522,3 +522,147 @@ func TestACPSlashLikePathRunsAsPrompt(t *testing.T) {
 		t.Errorf("model called %d times for a path-looking prompt; want 1 (must run as a normal turn)", got)
 	}
 }
+
+// TestACPSlashTrustInvokesAndReadvertises proves the /trust verification: it
+// invokes the host's trustWorkspace closure (the counter increments), emits a
+// confirmation chunk, ends the turn without calling the model, AND re-emits
+// available_commands_update (the reload may bring project extension commands
+// online, so the catalog is re-advertised — the same lockstep /reload-ext keeps).
+func TestACPSlashTrustInvokesAndReadvertises(t *testing.T) {
+	client := &countingTextClient{}
+	factory := &fakeFactory{client: client, tools: core.Registry{}, wireTrust: true}
+	h, sid, teardown := commandSetup(t, factory)
+	defer teardown()
+	_ = h.drainUpdates() // the post-session/new catalog
+
+	res := h.call(MethodSessionPromptName, map[string]any{
+		"sessionId": sid,
+		"prompt":    []map[string]any{{"type": "text", "text": "/trust"}},
+	})
+	if sr, _ := res["stopReason"].(string); sr != StopEndTurn {
+		t.Errorf("/trust stopReason = %q; want end_turn", res["stopReason"])
+	}
+	if got := atomic.LoadInt32(&client.calls); got != 0 {
+		t.Errorf("model called %d times for /trust; want 0", got)
+	}
+	if got := atomic.LoadInt32(&factory.trustCalls); got != 1 {
+		t.Errorf("TrustWorkspace ran %d times; want 1 (the command must invoke the trust closure)", got)
+	}
+	if got := atomic.LoadInt32(&factory.trustParent); got != 0 {
+		t.Errorf("bare /trust requested parent scope (parentFlag=%d); want 0 (this directory only)", got)
+	}
+
+	updates := h.drainUpdates()
+	if text := drainChunkText(updates); !strings.Contains(text, "Trusted") {
+		t.Errorf("/trust did not emit a confirmation chunk: %q", text)
+	}
+	if _, found := findAvailableCommands(updates); !found {
+		t.Error("/trust did not re-emit an available_commands_update")
+	}
+}
+
+// TestACPSlashTrustParentThreadsScope proves `/trust parent` threads the wider
+// "trust descendants too" scope through to the host closure (parentFlag set),
+// and the confirmation names the wider scope.
+func TestACPSlashTrustParentThreadsScope(t *testing.T) {
+	client := &countingTextClient{}
+	factory := &fakeFactory{client: client, tools: core.Registry{}, wireTrust: true}
+	h, sid, teardown := commandSetup(t, factory)
+	defer teardown()
+	_ = h.drainUpdates()
+
+	res := h.call(MethodSessionPromptName, map[string]any{
+		"sessionId": sid,
+		"prompt":    []map[string]any{{"type": "text", "text": "/trust parent"}},
+	})
+	if sr, _ := res["stopReason"].(string); sr != StopEndTurn {
+		t.Errorf("/trust parent stopReason = %q; want end_turn", res["stopReason"])
+	}
+	if got := atomic.LoadInt32(&factory.trustCalls); got != 1 {
+		t.Errorf("TrustWorkspace ran %d times for /trust parent; want 1", got)
+	}
+	if got := atomic.LoadInt32(&factory.trustParent); got != 1 {
+		t.Errorf("/trust parent did not request parent scope (parentFlag=%d); want 1", got)
+	}
+	if text := drainChunkText(h.drainUpdates()); !strings.Contains(text, "descendants") {
+		t.Errorf("/trust parent confirmation did not name the wider scope: %q", text)
+	}
+}
+
+// TestACPSlashUntrustInvokesAndReadvertises proves the /untrust verification:
+// it invokes the host's untrustWorkspace closure, emits a confirmation chunk,
+// ends the turn without a model call, and re-emits available_commands_update.
+func TestACPSlashUntrustInvokesAndReadvertises(t *testing.T) {
+	client := &countingTextClient{}
+	factory := &fakeFactory{client: client, tools: core.Registry{}, wireTrust: true}
+	h, sid, teardown := commandSetup(t, factory)
+	defer teardown()
+	_ = h.drainUpdates()
+
+	res := h.call(MethodSessionPromptName, map[string]any{
+		"sessionId": sid,
+		"prompt":    []map[string]any{{"type": "text", "text": "/untrust"}},
+	})
+	if sr, _ := res["stopReason"].(string); sr != StopEndTurn {
+		t.Errorf("/untrust stopReason = %q; want end_turn", res["stopReason"])
+	}
+	if got := atomic.LoadInt32(&client.calls); got != 0 {
+		t.Errorf("model called %d times for /untrust; want 0", got)
+	}
+	if got := atomic.LoadInt32(&factory.untrustCalls); got != 1 {
+		t.Errorf("UntrustWorkspace ran %d times; want 1 (the command must invoke the untrust closure)", got)
+	}
+
+	updates := h.drainUpdates()
+	if text := drainChunkText(updates); !strings.Contains(text, "Untrusted") {
+		t.Errorf("/untrust did not emit a confirmation chunk: %q", text)
+	}
+	if _, found := findAvailableCommands(updates); !found {
+		t.Error("/untrust did not re-emit an available_commands_update")
+	}
+}
+
+// TestACPSlashTrustAdvertisedOnNew proves /trust and /untrust are in the
+// session/new command catalog so an editor's palette offers them.
+func TestACPSlashTrustAdvertisedOnNew(t *testing.T) {
+	factory := &fakeFactory{client: &countingTextClient{}, tools: core.Registry{}, wireTrust: true}
+	h, _, teardown := commandSetup(t, factory)
+	defer teardown()
+
+	names, found := findAvailableCommands([]map[string]any{h.expectUpdate()})
+	if !found {
+		t.Fatal("session/new did not emit an available_commands_update")
+	}
+	for _, want := range []string{"trust", "untrust"} {
+		if !names[want] {
+			t.Errorf("available_commands_update missing /%s (it is executed natively)", want)
+		}
+	}
+}
+
+// TestACPSlashTrustNoClosureDegrades proves the nil-closure path: with no
+// trustWorkspace wired (host didn't supply it), /trust degrades to a clear note
+// — a chunk, end_turn, no model call, no panic.
+func TestACPSlashTrustNoClosureDegrades(t *testing.T) {
+	client := &countingTextClient{}
+	factory := &fakeFactory{client: client, tools: core.Registry{}} // wireTrust false -> nil closures
+	h, sid, teardown := commandSetup(t, factory)
+	defer teardown()
+	_ = h.drainUpdates()
+
+	for _, cmd := range []string{"/trust", "/untrust"} {
+		res := h.call(MethodSessionPromptName, map[string]any{
+			"sessionId": sid,
+			"prompt":    []map[string]any{{"type": "text", "text": cmd}},
+		})
+		if sr, _ := res["stopReason"].(string); sr != StopEndTurn {
+			t.Errorf("%s (no closure) stopReason = %q; want end_turn", cmd, res["stopReason"])
+		}
+		if text := drainChunkText(h.drainUpdates()); !strings.Contains(text, "isn't available") {
+			t.Errorf("%s with no closure did not degrade gracefully: %q", cmd, text)
+		}
+	}
+	if got := atomic.LoadInt32(&client.calls); got != 0 {
+		t.Errorf("model called %d times for trust commands with no closures; want 0", got)
+	}
+}

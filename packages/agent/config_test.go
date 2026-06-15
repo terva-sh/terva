@@ -157,7 +157,7 @@ func TestResolveConfigUserLayerKeepsAbsolutePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	// cwd has no project config, so the user layer is used verbatim.
-	eff := ResolveConfig(t.TempDir())
+	eff := ResolveConfig(t.TempDir(), true)
 	if len(eff.ContextFiles) != 1 || eff.ContextFiles[0] != abs {
 		t.Fatalf("user-layer absolute path not preserved: got %v, want [%s]", eff.ContextFiles, abs)
 	}
@@ -171,7 +171,7 @@ func TestResolveConfigProjectOverridesUser(t *testing.T) {
 	repo := t.TempDir()
 	writeProjectConfig(t, repo, `{"context_files":["project.md"]}`)
 
-	eff := ResolveConfig(repo)
+	eff := ResolveConfig(repo, true) // trusted: project layer applies
 	want := filepath.Join(repo, "project.md")
 	if len(eff.ContextFiles) != 1 || eff.ContextFiles[0] != want {
 		t.Fatalf("project should override user: got %v, want [%s]", eff.ContextFiles, want)
@@ -186,6 +186,33 @@ func TestResolveConfigProjectOverridesUser(t *testing.T) {
 	}
 }
 
+// Workspace Trust: an UNTRUSTED project's context_files (system-prompt
+// injection from a possibly-cloned repo) are dropped; the user layer
+// still injects. The restrict-only disable fields are NOT gated (tested
+// separately) — they can only tighten.
+func TestResolveConfigUntrustedDropsProjectContextFiles(t *testing.T) {
+	t.Setenv("TERVA_HOME", t.TempDir())
+	if err := SaveConfig(Config{ContextFiles: []string{"user.md"}}); err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	writeProjectConfig(t, repo, `{"context_files":["project.md"]}`)
+
+	// Untrusted: the project's context_files must NOT win — only the user
+	// layer injects.
+	eff := ResolveConfig(repo, false)
+	wantUser := filepath.Join(TervaHome(), "user.md")
+	if len(eff.ContextFiles) != 1 || eff.ContextFiles[0] != wantUser {
+		t.Fatalf("untrusted project context_files leaked: got %v, want user layer [%s]", eff.ContextFiles, wantUser)
+	}
+	// Trusted: same dir, the project layer now applies.
+	effTrusted := ResolveConfig(repo, true)
+	wantProject := filepath.Join(repo, "project.md")
+	if len(effTrusted.ContextFiles) != 1 || effTrusted.ContextFiles[0] != wantProject {
+		t.Fatalf("trusted project context_files not applied: got %v, want [%s]", effTrusted.ContextFiles, wantProject)
+	}
+}
+
 // disable_context_extensions is restrict-only: the project layer can
 // only ADD to the user's disabled set (union), never re-enable.
 func TestResolveConfigDisableContextExtensionsUnion(t *testing.T) {
@@ -196,7 +223,7 @@ func TestResolveConfigDisableContextExtensionsUnion(t *testing.T) {
 	repo := t.TempDir()
 	writeProjectConfig(t, repo, `{"disable_context_extensions":["beta"]}`)
 
-	eff := ResolveConfig(repo)
+	eff := ResolveConfig(repo, true)
 	got := map[string]bool{}
 	for _, n := range eff.DisableContextExtensions {
 		got[n] = true
@@ -223,7 +250,7 @@ func TestResolveConfigDisableExtensionsUnion(t *testing.T) {
 	repo := t.TempDir()
 	writeProjectConfig(t, repo, `{"disable_extensions":["beta"]}`)
 
-	eff := ResolveConfig(repo)
+	eff := ResolveConfig(repo, true)
 	got := map[string]bool{}
 	for _, n := range eff.DisableExtensions {
 		got[n] = true
@@ -240,7 +267,7 @@ func TestResolveConfigFallsBackToUserWhenNoProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	// cwd has no project config anywhere up the tree.
-	eff := ResolveConfig(t.TempDir())
+	eff := ResolveConfig(t.TempDir(), true)
 	want := filepath.Join(tervaHome, "user.md")
 	if len(eff.ContextFiles) != 1 || eff.ContextFiles[0] != want {
 		t.Fatalf("user fallback failed: got %v, want [%s]", eff.ContextFiles, want)
@@ -251,4 +278,44 @@ func TestResolveConfigFallsBackToUserWhenNoProject(t *testing.T) {
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// TestConfigSwarmWorktreesRoundTrip verifies the swarm_worktrees key
+// survives a SaveConfig/LoadConfig round trip and parses from JSON.
+func TestConfigSwarmWorktreesRoundTrip(t *testing.T) {
+	t.Setenv("TERVA_HOME", t.TempDir())
+
+	// Absent in JSON => nil pointer (off).
+	if err := SaveConfig(Config{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SwarmWorktrees != nil {
+		t.Fatalf("SwarmWorktrees = %v; want nil when absent", *got.SwarmWorktrees)
+	}
+
+	// Explicit true survives the round trip.
+	on := true
+	if err := SaveConfig(Config{SwarmWorktrees: &on}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SwarmWorktrees == nil || !*got.SwarmWorktrees {
+		t.Fatalf("SwarmWorktrees = %v; want a non-nil true", got.SwarmWorktrees)
+	}
+
+	// And it parses from a raw JSON config using the snake_case key.
+	var c Config
+	if err := json.Unmarshal([]byte(`{"swarm_worktrees":true}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.SwarmWorktrees == nil || !*c.SwarmWorktrees {
+		t.Fatalf("parsed SwarmWorktrees = %v; want true", c.SwarmWorktrees)
+	}
 }

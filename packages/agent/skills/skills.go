@@ -93,6 +93,13 @@ func VisibleSkills(in []*Skill) []*Skill {
 // normally pass true; --no-skill skips discovery entirely before this
 // function is called.
 //
+// trustProject gates the PROJECT-local skill dirs (./.terva|.claude|
+// .agents/skills and extension-bundled skills under .terva/extensions).
+// When false (an untrusted workspace — the default), those project
+// dirs are dropped: a cloned repo cannot inject SKILL.md instructions
+// into the model's prompt. Built-in, user, and global skills load
+// regardless. See docs/plans/workspace-trust.md.
+//
 // First-match-wins per name; the order matches the priority list
 // in the package doc (project-local before global before claude-
 // compat before agents-compat, all before built-ins). That means a
@@ -101,11 +108,11 @@ func VisibleSkills(in []*Skill) []*Skill {
 //
 // Errors per skill are returned alongside the partial result so a
 // single broken file doesn't suppress the rest.
-func Discover(tervaHome, cwd, userHome string, includeUser bool) ([]*Skill, []error) {
+func Discover(tervaHome, cwd, userHome string, includeUser, trustProject bool) ([]*Skill, []error) {
 	var errs []error
 	seen := map[string]*Skill{}
 	if includeUser {
-		errs = append(errs, scanUserSkills(tervaHome, cwd, userHome, seen)...)
+		errs = append(errs, scanUserSkills(tervaHome, cwd, userHome, trustProject, seen)...)
 	}
 	// Built-ins fill in any name the user didn't already provide
 	// (or every name, when includeUser is false).
@@ -126,9 +133,9 @@ func Discover(tervaHome, cwd, userHome string, includeUser bool) ([]*Skill, []er
 // scanUserSkills walks the user-skill search dirs and populates
 // `seen` with first-match-wins per name. Split out so Discover's
 // includeUser=false path doesn't have to skip over a giant block.
-func scanUserSkills(tervaHome, cwd, userHome string, seen map[string]*Skill) []error {
+func scanUserSkills(tervaHome, cwd, userHome string, trustProject bool, seen map[string]*Skill) []error {
 	var errs []error
-	for _, loc := range searchDirs(tervaHome, cwd, userHome) {
+	for _, loc := range searchDirs(tervaHome, cwd, userHome, trustProject) {
 		entries, err := os.ReadDir(loc.dir)
 		if err != nil {
 			continue // missing dir is fine
@@ -227,7 +234,13 @@ type location struct {
 	label string
 }
 
-func searchDirs(tervaHome, cwd, userHome string) []location {
+// searchDirs lists the skill directories in priority order. trustProject
+// gates every PROJECT-local (cwd-anchored) dir: when false, an untrusted
+// workspace contributes no project SKILL.md and no extension-bundled
+// skills (a cloned repo can't inject instructions into the prompt). The
+// global/user dirs (tervaHome, ~/.claude, ~/.agents) are always
+// included. See docs/plans/workspace-trust.md.
+func searchDirs(tervaHome, cwd, userHome string, trustProject bool) []location {
 	var out []location
 	add := func(dir, label string) {
 		if dir == "" {
@@ -235,7 +248,7 @@ func searchDirs(tervaHome, cwd, userHome string) []location {
 		}
 		out = append(out, location{dir: dir, label: label})
 	}
-	if cwd != "" {
+	if cwd != "" && trustProject {
 		// Both project-dir spellings, new name first (the rename's
 		// dual-read seam; see envcompat.ProjectDirNames).
 		for _, dirName := range envcompat.ProjectDirNames() {
@@ -249,17 +262,20 @@ func searchDirs(tervaHome, cwd, userHome string) []location {
 	// skills/ directory beside its extension.json (data-only bundle
 	// contribution — see docs/extensions.md). Ranked after the user's
 	// own dirs so a bundle can never shadow a deliberately-authored
-	// skill, before the foreign-tool compat dirs.
-	for _, dir := range extensionSkillDirs(tervaHome, cwd) {
+	// skill, before the foreign-tool compat dirs. Project-ext bundles
+	// are gated on trust (extensionSkillDirs honors trustProject); the
+	// project extension wouldn't load untrusted anyway, so its skills
+	// can't either.
+	for _, dir := range extensionSkillDirs(tervaHome, cwd, trustProject) {
 		add(dir, "extension")
 	}
-	if cwd != "" {
+	if cwd != "" && trustProject {
 		add(filepath.Join(cwd, ".claude", "skills"), "project (claude)")
 	}
 	if userHome != "" {
 		add(filepath.Join(userHome, ".claude", "skills"), "global (claude)")
 	}
-	if cwd != "" {
+	if cwd != "" && trustProject {
 		add(filepath.Join(cwd, ".agents", "skills"), "project (agents)")
 	}
 	if userHome != "" {
@@ -273,12 +289,16 @@ func searchDirs(tervaHome, cwd, userHome string) []location {
 // project (.terva/extensions, rename-aware spellings). Enabled-ness
 // comes from a minimal read of each extension.json — a disabled
 // extension contributes nothing, skills included.
-func extensionSkillDirs(tervaHome, cwd string) []string {
+// trustProject gates the project extension roots: an untrusted workspace
+// contributes no project-ext-bundled skills (the project extension would
+// not load there either). Global ($TERVA_HOME/extensions) bundles always
+// contribute.
+func extensionSkillDirs(tervaHome, cwd string, trustProject bool) []string {
 	var roots []string
 	if tervaHome != "" {
 		roots = append(roots, filepath.Join(tervaHome, "extensions"))
 	}
-	if cwd != "" {
+	if cwd != "" && trustProject {
 		for _, dirName := range envcompat.ProjectDirNames() {
 			roots = append(roots, filepath.Join(cwd, dirName, "extensions"))
 		}

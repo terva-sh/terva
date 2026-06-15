@@ -40,6 +40,13 @@ import (
 //     /reload-ext — hot-reloads the session's extensions through the host and
 //     reports the reload stats; it then re-advertises the command catalog since
 //     the extension command set may have changed.
+//     /trust, /untrust — trust (or untrust) the session's workspace from inside
+//     the editor — the only in-editor way to trust a workspace over ACP. /trust
+//     persists the cwd's trust verdict (/trust parent trusts descendants too)
+//     and reloads the extension manager so project extensions go live now;
+//     project skills/context are baked into the prompt at build time, so they
+//     apply on a NEW session. /untrust is the inverse. Both re-advertise the
+//     command catalog (the reload may change the extension command set).
 //   - EXCLUDED (TUI-only pickers / dialogs the ACP frontend can't drive, or
 //     verbs already covered by an ACP-native mechanism): /model and
 //     /sessions in particular — the editor already has the model *config
@@ -60,10 +67,11 @@ import (
 // built-in handler runs).
 
 // nativeSlash describes a built-in command terva executes natively under
-// ACP. handle runs the command against the live session and returns the
-// stopReason the prompt turn resolves with.
+// ACP. handle runs the command against the live session — receiving the
+// trailing argument text (empty for the no-arg commands; /trust reads "parent"
+// from it) — and returns the stopReason the prompt turn resolves with.
 type nativeSlash struct {
-	handle func(ctx context.Context, sess *session) string
+	handle func(ctx context.Context, sess *session, arg string) string
 }
 
 // nativeSlashCommands is the curated allowlist: the built-in slash commands
@@ -89,6 +97,8 @@ func init() {
 		"/skills":      {handle: runSkillsCommand},
 		"/context":     {handle: runContextCommand},
 		"/reload-ext":  {handle: runReloadExtCommand},
+		"/trust":       {handle: runTrustCommand},
+		"/untrust":     {handle: runUntrustCommand},
 	}
 }
 
@@ -235,7 +245,7 @@ func (s *agentServer) handleSlashCommand(ctx context.Context, sess *session, tex
 	// Built-in wins a name collision: check the native allowlist first, so an
 	// extension can never shadow /clear, /help, etc.
 	if native, ok := nativeSlashCommands[head]; ok {
-		return true, native.handle(ctx, sess)
+		return true, native.handle(ctx, sess, arg)
 	}
 
 	// Extension-registered command? The bare name (no leading slash) is what
@@ -342,7 +352,7 @@ func (s *agentServer) handleExtCommand(ctx context.Context, sess *session, name,
 // slashClear (which also resets TUI-only state the ACP frontend doesn't
 // have). Narrated as an agent_message_chunk so the editor shows feedback,
 // then the turn ends.
-func runClearCommand(_ context.Context, sess *session) string {
+func runClearCommand(_ context.Context, sess *session, _ string) string {
 	sess.agent.SetMessages(nil)
 	sess.emit(map[string]any{
 		"sessionUpdate": UpdateAgentMessageChunk,
@@ -356,7 +366,7 @@ func runClearCommand(_ context.Context, sess *session) string {
 // rpc), streaming the summary deltas as agent_message_chunks so the editor
 // shows progress, then ends the turn. A compaction error (e.g. an empty
 // transcript) is surfaced as a chunk; the turn still resolves end_turn.
-func runCompactCommand(ctx context.Context, sess *session) string {
+func runCompactCommand(ctx context.Context, sess *session, _ string) string {
 	sink := func(delta string) {
 		if delta == "" {
 			return
@@ -394,7 +404,7 @@ func (s *session) chunk(text string) {
 // advertised + executed. No model call; resolves end_turn. The interactive
 // /help also lists TUI keybindings, which have no headless meaning, so those
 // are deliberately omitted.
-func runHelpCommand(_ context.Context, sess *session) string {
+func runHelpCommand(_ context.Context, sess *session, _ string) string {
 	var b strings.Builder
 	b.WriteString("terva is a coding agent. You're driving it over ACP from your editor; ")
 	b.WriteString("type a request and terva runs tools (read/edit files, run commands) to carry it out.\n\n")
@@ -424,7 +434,7 @@ func runHelpCommand(_ context.Context, sess *session) string {
 // reject_always grants the ACP confirmer has cached (§8). Mirrors the TUI's
 // buildPermissionsView in content, dropped of the theme/colour coupling. No
 // model call; resolves end_turn.
-func runPermissionsCommand(_ context.Context, sess *session) string {
+func runPermissionsCommand(_ context.Context, sess *session, _ string) string {
 	var b strings.Builder
 	gate := sess.gate
 
@@ -520,7 +530,7 @@ func runPermissionsCommand(_ context.Context, sess *session) string {
 // file/shell tool in the agent's registry, so the next tool call is gated by
 // it. Emits a confirmation chunk; resolves end_turn. With no sandbox in the
 // build it degrades to a note (capability honesty), never silently no-ops.
-func runJailCommand(_ context.Context, sess *session) string {
+func runJailCommand(_ context.Context, sess *session, _ string) string {
 	if sess.sandbox == nil {
 		sess.chunk("Sandbox not available in this build; /jail has no effect.")
 		return StopEndTurn
@@ -533,7 +543,7 @@ func runJailCommand(_ context.Context, sess *session) string {
 // runUnjailCommand executes /unjail natively: it releases the sandbox
 // confinement (Unlock), mirroring the TUI's /unjail. Emits a confirmation
 // chunk; resolves end_turn. Degrades to a note with no sandbox.
-func runUnjailCommand(_ context.Context, sess *session) string {
+func runUnjailCommand(_ context.Context, sess *session, _ string) string {
 	if sess.sandbox == nil {
 		sess.chunk("Sandbox not available in this build; /unjail has no effect.")
 		return StopEndTurn
@@ -549,7 +559,7 @@ func runUnjailCommand(_ context.Context, sess *session) string {
 // The list comes from the session's skills snapshot func (re-discovered each
 // call so edits made during the session show up). No model call; resolves
 // end_turn. With no skills source (or none discovered) it reports that.
-func runSkillsCommand(_ context.Context, sess *session) string {
+func runSkillsCommand(_ context.Context, sess *session, _ string) string {
 	if sess.skills == nil {
 		sess.chunk("Skills are not available in this session.")
 		return StopEndTurn
@@ -590,7 +600,7 @@ func runSkillsCommand(_ context.Context, sess *session) string {
 // manager), re-read each call. No model call; resolves end_turn. With no
 // extension manager it reports "extensions are not enabled"; with a manager but
 // nothing injected, "no extension is contributing context".
-func runContextCommand(_ context.Context, sess *session) string {
+func runContextCommand(_ context.Context, sess *session, _ string) string {
 	if sess.extContext == nil {
 		sess.chunk("Extensions are not enabled in this session.")
 		return StopEndTurn
@@ -634,7 +644,7 @@ func runContextCommand(_ context.Context, sess *session) string {
 // snapshot reflects the reload automatically), so the editor's palette stays in
 // lockstep. No model call; resolves end_turn. With no extension manager it
 // degrades to a note.
-func runReloadExtCommand(ctx context.Context, sess *session) string {
+func runReloadExtCommand(ctx context.Context, sess *session, _ string) string {
 	if sess.reloadExtensions == nil {
 		sess.chunk("No extension manager in this build; nothing to reload.")
 		return StopEndTurn
@@ -649,6 +659,66 @@ func runReloadExtCommand(ctx context.Context, sess *session) string {
 	// the editor only learns commands from available_commands_update. The
 	// session's ExtCommands closure reads the live manager, so the freshly
 	// reloaded command set is reflected automatically.
+	sess.srv.emitAvailableCommands(sess)
+	return StopEndTurn
+}
+
+// runTrustCommand executes /trust natively: it trusts the session's workspace
+// from inside the editor — the only in-editor way to trust a workspace over ACP
+// (until this, ACP only restricted + logged a warning). The optional argument
+// "parent" trusts the whole tree under the cwd (so every repo beneath it is
+// trusted), mirroring the TUI's `/trust parent`. The host's trustWorkspace
+// closure persists the verdict and makes project content go live for this
+// session by reloading the extension manager — so project extensions are
+// discovered now. Project skills and context, however, are baked into the
+// session's system prompt at build time and can't be re-injected mid-session,
+// so the confirmation says they take effect on a NEW session. Because the reload
+// may have added extension commands, we re-advertise the catalog afterwards (the
+// same lockstep /reload-ext keeps). No model call; resolves end_turn. With no
+// trustWorkspace closure (host didn't wire it) it degrades to a clear note.
+func runTrustCommand(_ context.Context, sess *session, arg string) string {
+	if sess.trustWorkspace == nil {
+		sess.chunk("Workspace trust isn't available over ACP in this build; nothing to trust.")
+		return StopEndTurn
+	}
+	// The single recognized argument is "parent" — trust descendants too. Any
+	// other trailing text is ignored (the TUI is equally lenient).
+	parent := strings.EqualFold(strings.TrimSpace(arg), "parent")
+	if err := sess.trustWorkspace(parent); err != nil {
+		sess.chunk("trust: " + err.Error())
+		return StopEndTurn
+	}
+	scope := "this directory"
+	if parent {
+		scope = "this directory and its descendants"
+	}
+	sess.chunk("Trusted " + scope + "; project extensions reloaded — skills and context apply to new sessions.")
+	// Re-advertise the command catalog: the reload may have brought project
+	// extensions (and their commands) online, and the editor only learns commands
+	// from available_commands_update.
+	sess.srv.emitAvailableCommands(sess)
+	return StopEndTurn
+}
+
+// runUntrustCommand executes /untrust natively: the symmetric inverse of
+// /trust. The host's untrustWorkspace closure drops the session cwd from the
+// trust store and reloads the extension manager with trust withdrawn, so project
+// extensions are torn down this session; project skills/context (prompt-baked)
+// stay until a new session. Re-advertises the catalog afterwards. No model call;
+// resolves end_turn. With no untrustWorkspace closure it degrades to a note.
+func runUntrustCommand(_ context.Context, sess *session, _ string) string {
+	if sess.untrustWorkspace == nil {
+		sess.chunk("Workspace trust isn't available over ACP in this build; nothing to untrust.")
+		return StopEndTurn
+	}
+	if err := sess.untrustWorkspace(); err != nil {
+		sess.chunk("untrust: " + err.Error())
+		return StopEndTurn
+	}
+	sess.chunk("Untrusted this directory; project extensions unloaded — skills and context stop on new sessions.")
+	// Re-advertise the command catalog: dropping the project extensions removes
+	// their commands, and the editor only learns the change from
+	// available_commands_update.
 	sess.srv.emitAvailableCommands(sess)
 	return StopEndTurn
 }

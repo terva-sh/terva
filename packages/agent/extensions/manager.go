@@ -332,6 +332,15 @@ type Manager struct {
 	// loadOne, so it MUST be set via SetDisabledExtensions BEFORE
 	// Discover / LoadExplicit. Guarded by mu.
 	disabledExtensions map[string]bool
+
+	// projectTrusted is the Workspace Trust verdict for m.cwd. When false
+	// (the SAFE DEFAULT — a fresh Manager is untrusted), searchDirs drops
+	// the project-local extension roots (the cwd/<project-dir>/extensions
+	// paths from ProjectDirNames) so a cloned/untrusted repo's extensions
+	// are never spawned. The global root ($TERVA_HOME/extensions) is
+	// always searched. Set via SetProjectTrusted BEFORE Discover. Guarded
+	// by mu. See docs/plans/workspace-trust.md.
+	projectTrusted bool
 }
 
 // New constructs an empty Manager. Call Discover to populate it from
@@ -405,9 +414,16 @@ func (m *Manager) Discover(ctx context.Context) []error {
 // global behavior), then global. Both project-dir spellings are
 // walked, new name first (the rename's dual-read seam; dedup by
 // extension basename makes .terva win over .terva for the same name).
+//
+// The project-local roots (every spelling from ProjectDirNames) are
+// GATED on Workspace Trust: when the cwd is untrusted (the default — see
+// SetProjectTrusted), they are omitted, so a cloned/untrusted repo's
+// project extensions are never discovered or spawned (the headline RCE
+// fix, plan Phase 1). The global root ($TERVA_HOME/extensions) — code
+// the user installed themselves — is always searched.
 func (m *Manager) searchDirs() []string {
 	var dirs []string
-	if m.cwd != "" {
+	if m.cwd != "" && m.isProjectTrusted() {
 		for _, dirName := range envcompat.ProjectDirNames() {
 			dirs = append(dirs, filepath.Join(m.cwd, dirName, "extensions"))
 		}

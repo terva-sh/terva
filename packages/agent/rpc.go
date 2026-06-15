@@ -51,6 +51,7 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	if err != nil {
 		return err
 	}
+	warnRestrictedWorkspace(args, r.Trusted)
 	r.AdoptReadOnlySet(roSet)
 
 	// Extensions: same lifecycle as interactive mode, minus the
@@ -60,6 +61,7 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
+	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
 	}
@@ -75,7 +77,7 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	defer stopMCP()
 
 	ag := r.NewAgent()
-	hookEng := buildHookEngine(args)
+	hookEng := buildHookEngine(args, r.Trusted)
 	// Canonical tool-call ladder (pre-hooks, confirm gate, extension
 	// intercept) — shared with every other mode.
 	ag.BeforeToolExecute = buildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)

@@ -6,11 +6,14 @@
 // and (for pre) one on stdout — sitting beside the richer extension
 // event-intercept protocol.
 //
-// Trust boundary: hooks load from the USER config only. A project
-// (.terva/config.json) cannot define hooks — that would hand a cloned
-// repo arbitrary code execution on session start. Revisit only with
-// real trust-gating (docs/plans/harness-landscape-2026.md, the
-// trust-gate finding).
+// Trust boundary: hooks always load from the USER config. A project
+// (.terva/config.json) MAY also define hooks, but ONLY when the workspace
+// is trusted (Workspace Trust Phase 6) — an UNtrusted cloned repo's hooks
+// are never loaded, so opening a repo can't hand it arbitrary code
+// execution on a tool call. When trusted, the project's hooks are appended
+// to the user's (both fire, user first); the gate is enforced by the host
+// in buildHookEngine (agent/cli.go), which threads the trust verdict and
+// merges trustedProjectHooks. See docs/plans/workspace-trust.md.
 package hooks
 
 import (

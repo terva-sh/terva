@@ -91,12 +91,42 @@ func TestResolveLoadsProjectConfigContextFiles(t *testing.T) {
 	}
 	writeProjectConfig(t, dir, `{"context_files":["playbook.md"]}`)
 
-	r, err := Resolve(Args{CWD: dir}, false)
+	// Project context_files are gated on Workspace Trust: trust the dir
+	// (one-shot --trust) so the project layer applies.
+	r, err := Resolve(Args{CWD: dir, Trust: true}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(r.SystemPrompt, "PLAYBOOK-X") {
 		t.Fatalf("project-config context file not injected:\n%s", r.SystemPrompt)
+	}
+}
+
+// Workspace Trust: an UNTRUSTED project's context_files are NOT injected
+// (a cloned repo can't steer the system prompt); the safe core still
+// resolves. The same dir trusted injects them (covered above).
+func TestResolveUntrustedDropsProjectContextFiles(t *testing.T) {
+	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5"}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "playbook.md"), []byte("PLAYBOOK-X"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectConfig(t, dir, `{"context_files":["playbook.md"]}`)
+
+	// No --trust, not in the store ⇒ untrusted by default.
+	r, err := Resolve(Args{CWD: dir}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(r.SystemPrompt, "PLAYBOOK-X") {
+		t.Fatalf("untrusted project context file leaked into the system prompt:\n%s", r.SystemPrompt)
+	}
+	if r.Trusted { // sanity: the verdict is recorded as restricted
+		t.Errorf("expected Resolved.Trusted=false for an untrusted dir")
 	}
 }
 
