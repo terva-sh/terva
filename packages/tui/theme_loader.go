@@ -97,6 +97,9 @@ type ThemeOverrides struct {
 	SpinnerFrames     []string             `json:"spinner_frames,omitempty"`
 	SpinnerMessages   []string             `json:"spinner_messages,omitempty"`
 	SpinnerIntervalMS *int                 `json:"spinner_interval_ms,omitempty"`
+	Greetings         []string             `json:"greetings,omitempty"`
+	FlavorVerbs       []string             `json:"flavor_verbs,omitempty"`
+	FlavorNouns       []string             `json:"flavor_nouns,omitempty"`
 	SyntaxBaseStyle   *string              `json:"syntax_base_style,omitempty"`
 	Syntax            SyntaxThemeOverrides `json:"syntax,omitempty"`
 }
@@ -397,6 +400,15 @@ func applyThemeOverrides(th Theme, o ThemeOverrides) Theme {
 	}
 	if o.SpinnerIntervalMS != nil && *o.SpinnerIntervalMS > 0 {
 		th.SpinnerIntervalMS = *o.SpinnerIntervalMS
+	}
+	if len(o.Greetings) > 0 {
+		th.Greetings = append([]string(nil), o.Greetings...)
+	}
+	if len(o.FlavorVerbs) > 0 {
+		th.FlavorVerbs = append([]string(nil), o.FlavorVerbs...)
+	}
+	if len(o.FlavorNouns) > 0 {
+		th.FlavorNouns = append([]string(nil), o.FlavorNouns...)
 	}
 	if o.SyntaxBaseStyle != nil {
 		th.SyntaxBaseStyle = *o.SyntaxBaseStyle

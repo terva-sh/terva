@@ -13,13 +13,20 @@ import (
 type spinner struct {
 	frames    []string
 	messages  []string
+	verbs     []string
+	nouns     []string
 	interval  time.Duration
 	startedAt time.Time
 	msgIdx    int
 
-	// fixedMsg overrides the rotating funnyWorkingLines message when
-	// set. Used for auto-compaction so the spinner clearly says what's
-	// happening instead of cycling jokes.
+	// rendered is the chosen message with any {verb}/{noun} placeholders
+	// filled, computed once at Start so it stays stable for the turn (the
+	// fill is random, so re-rolling it every frame would flicker).
+	rendered string
+
+	// fixedMsg overrides the rotating message when set. Used for
+	// auto-compaction so the spinner clearly says what's happening
+	// instead of cycling jokes.
 	fixedMsg string
 }
 
@@ -39,6 +46,8 @@ func (s *spinner) Configure(th tui.Theme) {
 	if len(s.messages) == 0 {
 		s.messages = []string{"thinking"}
 	}
+	s.verbs = append([]string(nil), th.FlavorVerbs...)
+	s.nouns = append([]string(nil), th.FlavorNouns...)
 	interval := th.SpinnerIntervalMS
 	if interval <= 0 {
 		interval = 80
@@ -63,6 +72,7 @@ func (s *spinner) Start() {
 		s.messages = []string{"thinking"}
 	}
 	s.msgIdx = rand.Intn(len(s.messages))
+	s.rendered = tui.FillFlavor(s.messages[s.msgIdx], s.verbs, s.nouns)
 	s.fixedMsg = ""
 }
 
@@ -97,6 +107,9 @@ func (s *spinner) Frame() string {
 func (s *spinner) Message() string {
 	if s.fixedMsg != "" {
 		return s.fixedMsg
+	}
+	if s.rendered != "" {
+		return s.rendered
 	}
 	if len(s.messages) == 0 {
 		return "thinking"

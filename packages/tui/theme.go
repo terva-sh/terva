@@ -56,6 +56,13 @@ type Theme struct {
 	SpinnerMessages   []string
 	SpinnerIntervalMS int
 
+	// Greetings are templated taglines for the startup headline (the text
+	// after "i'm terva."); FlavorVerbs/FlavorNouns fill their {verb}/{noun}
+	// slots and any templated spinner working lines. See flavor.go.
+	Greetings   []string
+	FlavorVerbs []string
+	FlavorNouns []string
+
 	SyntaxBaseStyle string
 	Syntax          SyntaxTheme
 }
@@ -139,6 +146,9 @@ var defaultSpinnerMessages = []string{
 	"arguing with a stack trace",
 	"googling the answer (not really)",
 	"rewriting history",
+	"wrangling the {noun}",
+	"negotiating with the {noun}",
+	"poking the {noun}",
 	"every draft is a stone in the work",
 	"bringing order to the unhewn",
 	"finding the load-bearing measure",
@@ -164,6 +174,9 @@ var Dark = Theme{
 	SpinnerFrames:     defaultSpinnerFrames,
 	SpinnerMessages:   defaultSpinnerMessages,
 	SpinnerIntervalMS: 80,
+	Greetings:         defaultGreetings,
+	FlavorVerbs:       defaultFlavorVerbs,
+	FlavorNouns:       defaultFlavorNouns,
 	SyntaxBaseStyle:   "monokai",
 	Syntax:            nordSyntax,
 }
@@ -186,6 +199,9 @@ var Light = Theme{
 	SpinnerFrames:     defaultSpinnerFrames,
 	SpinnerMessages:   defaultSpinnerMessages,
 	SpinnerIntervalMS: 80,
+	Greetings:         defaultGreetings,
+	FlavorVerbs:       defaultFlavorVerbs,
+	FlavorNouns:       defaultFlavorNouns,
 	SyntaxBaseStyle:   "monokai",
 	Syntax:            nordSyntax,
 }

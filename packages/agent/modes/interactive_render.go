@@ -210,7 +210,7 @@ func (i *Interactive) buildChat(cols int, snap frameSnapshot) []string {
 	// startup, then drops off automatically.
 	if len(i.view.Messages) == 0 && !ts.streamActive && len(snap.toolViews) == 0 {
 		showVer := !i.welcomeStart.IsZero() && time.Since(i.welcomeStart) < welcomeVersionDuration
-		chat = append(welcomeBanner(i.cfg.Theme, i.cfg.Version, showVer), chat...)
+		chat = append(welcomeBanner(i.cfg.Theme, i.cfg.Version, showVer, i.welcomeGreeting), chat...)
 	}
 
 	// Update-available banner: prepended above everything else so it's
