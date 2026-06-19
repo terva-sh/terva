@@ -312,6 +312,7 @@ type toolDef struct {
 	description string
 	schema      json.RawMessage
 	readOnly    bool
+	authority   string
 }
 
 // ToolOption configures a tool at registration time. Pass options as the
@@ -325,6 +326,26 @@ type ToolOption func(*toolDef)
 // don't ask on every call. Declaring it is a promise about behavior;
 // an extension that lies here only loosens its own user's policy.
 func ReadOnly() ToolOption { return func(t *toolDef) { t.readOnly = true } }
+
+// Authority effect-classes a tool can declare via WithAuthority. These
+// mirror core.Authority on the wire (kept as strings so this SDK stays
+// standalone, the same hand-mirroring extproto uses). Authority is the
+// richer successor to ReadOnly: a network-read tool reads nothing on the
+// local machine yet must not be auto-allowed as read-only.
+const (
+	AuthorityLocalRead       = "local-read"
+	AuthorityWorkspaceMutate = "workspace-mutation"
+	AuthorityProcessExec     = "process-execution"
+	AuthorityNetworkRead     = "network-read"
+	AuthorityExternalMutate  = "external-mutation"
+)
+
+// WithAuthority declares the tool's effect class (use the Authority*
+// constants). It supersedes ReadOnly for host classification: only
+// local-read is auto-allowable, so a tool declared network-read is
+// gated like a side-effecting tool rather than admitted as read-only.
+// When both are set, authority wins.
+func WithAuthority(class string) ToolOption { return func(t *toolDef) { t.authority = class } }
 
 // HostInfo is what the host (terva) tells us in HelloAck. Useful for
 // extensions that want to behave differently per provider.
@@ -791,6 +812,7 @@ func (e *Extension) Run() error {
 			Description: td.description,
 			Schema:      td.schema,
 			ReadOnly:    td.readOnly,
+			Authority:   td.authority,
 		})
 	}
 	if contextContribution != "" {

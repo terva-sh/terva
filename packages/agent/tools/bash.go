@@ -41,8 +41,10 @@ type bashArgs struct {
 
 const bashSchema = `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","description":"Maximum run time in seconds before the command is killed. Defaults to 120 if omitted."}},"required":["command"]}`
 
-func (t *BashTool) Name() string            { return "bash" }
-func (t *BashTool) Description() string     { return "Run a shell command. stdout+stderr merged." }
+func (t *BashTool) Name() string { return "bash" }
+func (t *BashTool) Description() string {
+	return "Run a shell command (stdout+stderr merged). Prefer the dedicated tools over shell equivalents: read/write/edit for files (not cat, sed -i, echo >file), grep/glob for search (not grep, find, ls) — they are safer, reviewable, and cheaper. Commands run in the agent's cwd; avoid `cd` (pass paths instead). Git safety: never force-push, `reset --hard`, amend, skip hooks, or `git add -A` unless the user explicitly asks. Do not print or export secrets (.env, tokens, credentials). Slow commands should set an explicit timeout; the default kill is 120s."
+}
 func (t *BashTool) Schema() json.RawMessage { return json.RawMessage(bashSchema) }
 
 func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {

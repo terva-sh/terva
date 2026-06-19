@@ -227,12 +227,18 @@ func TestAppendUserPermissionRulePersists(t *testing.T) {
 func TestPlanModeFiltersToolRegistry(t *testing.T) {
 	reg := buildToolRegistry(Args{}, core.ApprovalPlan, t.TempDir(), nil, "anthropic", "apikey", true)
 	for name := range reg {
-		if !readOnlyTools[name] {
+		// Plan keeps read-only tools plus interactive tools
+		// (ask_user_question) — asking the user is exactly what plan
+		// mode wants when requirements are unclear.
+		if !readOnlyTools[name] && !interactiveTools[name] {
 			t.Errorf("plan registry leaked mutating tool %s", name)
 		}
 	}
 	if _, ok := reg["read"]; !ok {
 		t.Error("plan registry should keep read")
+	}
+	if _, ok := reg["ask_user_question"]; !ok {
+		t.Error("plan registry should keep the interactive ask_user_question tool")
 	}
 	if _, ok := reg["bash"]; ok {
 		t.Error("plan registry must not contain bash")

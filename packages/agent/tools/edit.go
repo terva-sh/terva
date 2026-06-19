@@ -33,7 +33,7 @@ const editSchema = `{"type":"object","properties":{"path":{"type":"string"},"edi
 
 func (t *EditTool) Name() string { return "edit" }
 func (t *EditTool) Description() string {
-	return "Edit a file via exact-match replacements. Each oldText must be unique in the file unless replaceAll is set. If nothing matches exactly, a whitespace-tolerant match (same lines, one uniform indent shift) is applied when unambiguous."
+	return "Edit a file via exact-match replacements. Read the file first so each oldText matches the on-disk bytes exactly. Each oldText must be unique in the file unless replaceAll is set (use replaceAll to change every occurrence). If nothing matches exactly, a whitespace-tolerant match (same lines, one uniform indent shift) is applied when unambiguous."
 }
 func (t *EditTool) Schema() json.RawMessage { return json.RawMessage(editSchema) }
 

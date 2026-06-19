@@ -95,6 +95,50 @@ func ParseApprovalMode(s string) (ApprovalMode, error) {
 	return "", fmt.Errorf("unknown approval mode %q (valid: plan, ask, auto-edit, workspace, yolo)", s)
 }
 
+// Authority classifies what kind of effect a tool can have, a finer
+// distinction than the single read-only/mutating split. A tool's
+// authority is declared by the tool (extension/MCP) or known for a
+// built-in; it is advisory data the approval modes and UI consult, not
+// a capability grant.
+//
+// The crucial distinction the read-only bool cannot express is
+// network-read: a web fetch reads nothing on the local machine yet can
+// leak data, trigger remote logging, or reach a private network, so it
+// must NOT be folded into the local-read auto-allow. See
+// docs/standard-tools.md.
+type Authority string
+
+const (
+	// AuthLocalRead reads files/state under the jail with no process,
+	// network, or external side effect. The only class that is
+	// auto-allowable as "read-only" (plan-permitted, workspace/auto-edit
+	// auto-allowed). The legacy read_only=true bool maps here.
+	AuthLocalRead Authority = "local-read"
+	// AuthWorkspaceMutate writes files / edits workspace state.
+	AuthWorkspaceMutate Authority = "workspace-mutation"
+	// AuthProcessExec starts commands or long-running subprocesses.
+	AuthProcessExec Authority = "process-execution"
+	// AuthNetworkRead fetches URLs / search results. Not local-read:
+	// gated like a side-effecting tool until a host network policy
+	// (allowlist) opts it in.
+	AuthNetworkRead Authority = "network-read"
+	// AuthExternalMutate writes to third-party APIs, sends messages,
+	// opens PRs, changes remote resources.
+	AuthExternalMutate Authority = "external-mutation"
+	// AuthUserInteraction blocks to ask the user something (the
+	// ask_user_question tool) with no other side effect. Always
+	// permitted — gating a question behind an approval prompt, or
+	// refusing it in plan mode, is nonsensical.
+	AuthUserInteraction Authority = "user-interaction"
+)
+
+// IsReadOnlyAuthority reports whether a declared authority denotes a
+// side-effect-free local read — the only class auto-allowable as
+// "read-only". An empty/unknown value returns false so the caller falls
+// back to the legacy read_only bool (empty) or treats the tool as
+// side-effecting (unknown), both of which are the safe default.
+func IsReadOnlyAuthority(a string) bool { return Authority(a) == AuthLocalRead }
+
 // RuleDecision is what a matched permission rule does with a call.
 type RuleDecision string
 
@@ -210,6 +254,11 @@ type PermissionPolicy struct {
 	// tools. Static, set at construction; anything not listed is
 	// treated as foreign.
 	Builtin map[string]bool
+	// Interactive names tools whose only effect is asking the user
+	// (ask_user_question). They are permitted in every mode, plan
+	// included, and never prompt — gating a question behind approval is
+	// nonsensical. Static, set at construction.
+	Interactive map[string]bool
 }
 
 // Evaluate runs the decision ladder for one call:
@@ -226,6 +275,13 @@ func (p *PermissionPolicy) Evaluate(toolName string, args json.RawMessage) (Poli
 	// *gate* fast path, not here.
 	if p == nil {
 		return VerdictAsk, ""
+	}
+	// Interactive tools (ask the user) are permitted in every mode,
+	// before the plan-deny check and without prompting: blocking a
+	// clarifying question behind approval — or refusing it in plan —
+	// makes no sense. The tool has no side effect beyond the prompt.
+	if p.Interactive[toolName] {
+		return VerdictAllow, ""
 	}
 	if p.Mode == ApprovalPlan && !p.ReadOnly.Has(toolName) {
 		return VerdictDeny, "tool call refused: approval mode 'plan' permits read-only tools only; present the intended change to the user instead of making it"

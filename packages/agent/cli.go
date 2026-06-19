@@ -18,6 +18,7 @@ import (
 	"terva.sh/terva/packages/agent/chat/external"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/exttool"
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/agent/modes"
@@ -123,13 +124,14 @@ func (a *extToolAdapter) Tools() []ExtensionToolInfo {
 			Description: t.Description,
 			Schema:      t.Schema,
 			ReadOnly:    t.ReadOnly,
+			Authority:   t.Authority,
 		}
 	}
 	return out
 }
 
 func (a *extToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {
-	return extensions.NewTool(a.mgr, extensions.ToolInfo{
+	return exttool.New(a.mgr, exttool.Info{
 		Extension:   info.Extension,
 		Name:        info.Name,
 		Description: info.Description,
@@ -1041,6 +1043,12 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	}
 	injectSwarmSpawn(r.ToolRegistry)
 
+	// uiAsker holds the interactive question channel (the TUI, set once
+	// it exists below). Captured by setApprovalMode so the registry it
+	// rebuilds for a new approval mode keeps the ask_user_question
+	// channel instead of reverting to the headless "no channel" result.
+	var uiAsker core.Asker
+
 	// setApprovalMode switches the approval mode live (from /settings):
 	// it swaps enforcement on the gate and rebuilds the tool registry
 	// for the new mode (plan hides mutating + non-read-only extension
@@ -1057,6 +1065,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			MergeToolsForMode(reg, mode, pol.ReadOnly, mcpAdapter)
 		}
 		injectSwarmSpawn(reg)
+		bindAsker(reg, uiAsker)
 		return reg
 	}
 
@@ -1278,20 +1287,32 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// (login, /model swap to a different provider) also gets the
 	// persistence hooks. Without this, switching provider would
 	// silently revert to the old in-memory-only behaviour.
+	// withAsker re-binds the interactive question channel onto a freshly
+	// built agent's registry. Every rebuild path (login, /model swap)
+	// constructs a new registry with a fresh ask_user_question tool whose
+	// Asker is nil; without this it would silently fall back to the
+	// headless "no channel" result. uiAsker is set once the TUI exists,
+	// before any of these closures can run.
+	withAsker := func(a *core.Agent) *core.Agent {
+		if a != nil {
+			bindAsker(a.Tools, uiAsker)
+		}
+		return a
+	}
 	baseBuildAgent := buildAgent
 	buildAgent = func() (*core.Agent, string, string, error) {
 		a, p, m, err := baseBuildAgent()
-		return wireAgentPersist(a), p, m, err
+		return withAsker(wireAgentPersist(a)), p, m, err
 	}
 	baseBuildAgentFor := buildAgentFor
 	buildAgentFor = func(providerOverride, modelOverride string) (*core.Agent, string, string, error) {
 		a, p, m, err := baseBuildAgentFor(providerOverride, modelOverride)
-		return wireAgentPersist(a), p, m, err
+		return withAsker(wireAgentPersist(a)), p, m, err
 	}
 	baseBuildAgentForRescue := buildAgentForRescue
 	buildAgentForRescue = func(providerOverride, modelOverride string) (*core.Agent, string, string, error) {
 		a, p, m, err := baseBuildAgentForRescue(providerOverride, modelOverride)
-		return wireAgentPersist(a), p, m, err
+		return withAsker(wireAgentPersist(a)), p, m, err
 	}
 
 	// loadSession replaces the current session with the one at path and
@@ -1654,7 +1675,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		RecursiveFileSuggest:       initialCfg.RecursiveFileSuggest,
 		RespectGitignore:           initialCfg.RespectGitignore,
 		ThemeName:                  initialCfg.Theme,
-		ExtensionThemes:            extMgr.ThemeOptions,
+		ExtensionThemes:            func() []tui.ThemeOption { return extensionThemeOptions(extMgr) },
 		AutoSwarmSystemAddendum:    AutoSwarmSystemAddendum,
 		SettingsStore:              configSettingsStore{},
 		Model:                      r.Model,
@@ -1797,6 +1818,12 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	if confirmGate != nil {
 		confirmGate.SetConfirmer(iv)
 	}
+	// Bind the TUI as the ask_user_question channel, same deferred
+	// construction-order unknot as SetConfirmer. uiAsker feeds future
+	// approval-mode rebuilds (setApprovalMode); r.SetAsker covers the
+	// agent already running on the initial registry.
+	uiAsker = iv
+	r.SetAsker(iv)
 
 	// Signal-driven flush: a SIGTERM / SIGHUP to the terva process
 	// (closed terminal window, system shutdown, kill) used to lose

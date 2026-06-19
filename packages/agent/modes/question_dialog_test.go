@@ -1,0 +1,79 @@
+package modes
+
+import (
+	"testing"
+
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/tui"
+)
+
+func enqueue(d *questionDialog, q *questionRequest) chan core.UserAnswer {
+	q.resp = make(chan core.UserAnswer, 1)
+	d.Enqueue(q)
+	return q.resp
+}
+
+func TestQuestionDialogSelect(t *testing.T) {
+	d := newQuestionDialog()
+	resp := enqueue(d, &questionRequest{question: "Which DB?", options: []string{"Postgres", "SQLite"}})
+	if !d.Active() {
+		t.Fatal("dialog should be active")
+	}
+	d.HandleKey(tui.Key{Kind: tui.KeyDown}) // cursor -> SQLite
+	d.HandleKey(tui.Key{Kind: tui.KeyEnter})
+	ans := <-resp
+	if ans.Declined || ans.Answer != "SQLite" {
+		t.Fatalf("want SQLite, got %+v", ans)
+	}
+	if d.Active() {
+		t.Error("dialog should be empty after answering")
+	}
+}
+
+func TestQuestionDialogDecline(t *testing.T) {
+	d := newQuestionDialog()
+	resp := enqueue(d, &questionRequest{question: "x?", options: []string{"a"}})
+	d.HandleKey(tui.Key{Kind: tui.KeyEsc})
+	if ans := <-resp; !ans.Declined {
+		t.Fatalf("esc should decline, got %+v", ans)
+	}
+}
+
+func TestQuestionDialogFreeText(t *testing.T) {
+	d := newQuestionDialog()
+	resp := enqueue(d, &questionRequest{question: "Name?"}) // no options -> typing
+	for _, r := range "Ada" {
+		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
+	}
+	d.HandleKey(tui.Key{Kind: tui.KeyBackspace}) // -> "Ad"
+	d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: 'e'})
+	d.HandleKey(tui.Key{Kind: tui.KeyEnter})
+	if ans := <-resp; ans.Answer != "Ade" {
+		t.Fatalf("want Ade, got %+v", ans)
+	}
+}
+
+func TestQuestionDialogCustomRow(t *testing.T) {
+	d := newQuestionDialog()
+	resp := enqueue(d, &questionRequest{question: "Pick", options: []string{"a"}, allowCustom: true})
+	// Rows: ["a", "Type my own answer…"]. Move to the custom row, enter
+	// to switch to typing, then type an answer.
+	d.HandleKey(tui.Key{Kind: tui.KeyDown})
+	d.HandleKey(tui.Key{Kind: tui.KeyEnter})
+	for _, r := range "zed" {
+		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
+	}
+	d.HandleKey(tui.Key{Kind: tui.KeyEnter})
+	if ans := <-resp; ans.Answer != "zed" {
+		t.Fatalf("want zed, got %+v", ans)
+	}
+}
+
+func TestQuestionDialogEmptyFreeTextStaysOpen(t *testing.T) {
+	d := newQuestionDialog()
+	_ = enqueue(d, &questionRequest{question: "Name?"})
+	d.HandleKey(tui.Key{Kind: tui.KeyEnter}) // empty submit ignored
+	if !d.Active() {
+		t.Error("empty free-text submit should keep the dialog open")
+	}
+}

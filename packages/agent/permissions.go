@@ -26,6 +26,8 @@ import (
 // a new built-in must be added deliberately.
 var readOnlyTools = map[string]bool{
 	"read":         true,
+	"grep":         true,
+	"glob":         true,
 	"terva_status": true,
 	"skill":        true,
 }
@@ -38,21 +40,32 @@ var editTools = map[string]bool{
 	"edit":  true,
 }
 
+// interactiveTools names tools whose only effect is asking the user
+// (core.AuthUserInteraction). They are permitted in every mode, plan
+// included, and never prompt — and they are exempt from plan mode's
+// registry pruning so the model can still ask while planning.
+var interactiveTools = map[string]bool{
+	"ask_user_question": true,
+}
+
 // builtinTools names every first-party tool terva registers. Workspace
 // mode trusts these (and read-only tools) and asks only for foreign
 // extension/MCP tools. Lists names that may not be registered in a
 // given session (swarm_spawn, chat_send_*) so they classify correctly
 // whenever they are; anything not listed is treated as foreign.
 var builtinTools = map[string]bool{
-	"read":            true,
-	"write":           true,
-	"edit":            true,
-	"bash":            true,
-	"terva_status":    true,
-	"skill":           true,
-	"swarm_spawn":     true,
-	"chat_send_image": true,
-	"chat_send_file":  true,
+	"read":              true,
+	"write":             true,
+	"edit":              true,
+	"bash":              true,
+	"grep":              true,
+	"glob":              true,
+	"terva_status":      true,
+	"skill":             true,
+	"swarm_spawn":       true,
+	"chat_send_image":   true,
+	"chat_send_file":    true,
+	"ask_user_question": true,
 }
 
 // resolveApprovalMode picks the effective mode: flag beats the
@@ -199,11 +212,12 @@ func buildPermissionPolicy(args Args) (*core.PermissionPolicy, []string) {
 		return nil, warns
 	}
 	return &core.PermissionPolicy{
-		Mode:      mode,
-		Rules:     rules,
-		ReadOnly:  builtinReadOnlySet(),
-		EditTools: editTools,
-		Builtin:   builtinTools,
+		Mode:        mode,
+		Rules:       rules,
+		ReadOnly:    builtinReadOnlySet(),
+		EditTools:   editTools,
+		Builtin:     builtinTools,
+		Interactive: interactiveTools,
 	}, warns
 }
 

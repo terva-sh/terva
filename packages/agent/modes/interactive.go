@@ -368,6 +368,7 @@ type Interactive struct {
 	changelogDialog   *changelogDialog
 	permissionsDialog *permissionsDialog
 	confirmDialog     *confirmDialog
+	questionDialog    *questionDialog
 	logoutDialog      *logoutDialog
 	connectDialog     *connectDialog
 	settingsDialog    *settingsDialog
@@ -511,6 +512,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		changelogDialog:   newChangelogDialog(),
 		permissionsDialog: newPermissionsDialog(),
 		confirmDialog:     newConfirmDialog(),
+		questionDialog:    newQuestionDialog(),
 		logoutDialog:      newLogoutDialog(),
 		connectDialog:     newConnectDialog(),
 		settingsDialog:    newSettingsDialog(),

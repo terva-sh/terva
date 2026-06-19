@@ -193,14 +193,22 @@ func MergeToolsForMode(reg core.Registry, mode core.ApprovalMode, roSet *core.Re
 	}
 	changed := false
 	for _, info := range mgr.Tools() {
-		if mode == core.ApprovalPlan && !info.ReadOnly {
+		// Read-only classification: a declared authority wins (only
+		// local-read is auto-allowable), so a network-read tool is not
+		// mistaken for a local read even if it also set the legacy
+		// read_only bool. An empty authority falls back to that bool.
+		readOnly := info.ReadOnly
+		if info.Authority != "" {
+			readOnly = core.IsReadOnlyAuthority(info.Authority)
+		}
+		if mode == core.ApprovalPlan && !readOnly {
 			continue
 		}
 		if _, exists := reg[info.Name]; exists {
 			continue
 		}
 		reg[info.Name] = mgr.NewExtensionTool(info)
-		if info.ReadOnly {
+		if readOnly {
 			roSet.Add(info.Name)
 		}
 		changed = true
@@ -230,6 +238,13 @@ type ExtensionToolInfo struct {
 	// admits the tool in plan mode and feeds the permission
 	// classification.
 	ReadOnly bool
+	// Authority carries the source's effect-class declaration
+	// (extension register_tool authority; core.Authority). When set it
+	// overrides ReadOnly for classification: only local-read is treated
+	// as auto-allowable read-only, so a network-read tool is admitted
+	// neither in plan nor by the read-only auto-allow. Empty falls back
+	// to ReadOnly. MCP tools leave it empty (they have only readOnlyHint).
+	Authority string
 }
 
 // toolSummariesFromRegistry rebuilds the system-prompt tool list
@@ -816,8 +831,37 @@ func (r *Resolved) UseSandbox(s *tools.Sandbox) {
 			v.Sandbox = s
 		case *tools.BashTool:
 			v.Sandbox = s
+		case *tools.GrepTool:
+			v.Sandbox = s
+		case *tools.GlobTool:
+			v.Sandbox = s
 		}
 		_ = name
+	}
+}
+
+// SetAsker wires the front-end question channel into the registered
+// ask_user_question tool. The cli calls it once the interactive front
+// end (the Asker) exists — the same construction-order unknot as
+// ConfirmGate.SetConfirmer. Headless modes never call it, leaving the
+// tool's Asker nil so it returns a model-readable "no channel" result
+// instead of blocking. Nil-safe.
+func (r *Resolved) SetAsker(a core.Asker) {
+	if r == nil {
+		return
+	}
+	bindAsker(r.ToolRegistry, a)
+}
+
+// bindAsker wires the front-end question channel into the
+// ask_user_question tool of an arbitrary registry. Used both for the
+// initial registry and for the fresh registry a live approval-mode
+// switch builds, so the tool keeps its channel across that rebuild
+// (without it the rebuilt tool's Asker is nil and the tool falls back to
+// its "no channel" result). Nil-safe; no-op when the tool isn't present.
+func bindAsker(reg core.Registry, a core.Asker) {
+	if t, ok := reg["ask_user_question"].(*tools.AskUserTool); ok {
+		t.Asker = a
 	}
 }
 
@@ -846,18 +890,23 @@ func buildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 		return core.Registry{}
 	}
 	all := map[string]core.Tool{
-		"read":         &tools.ReadTool{CWD: cwd, Sandbox: sandbox, SupportsVision: visionCapable},
-		"write":        &tools.WriteTool{CWD: cwd, Sandbox: sandbox},
-		"edit":         &tools.EditTool{CWD: cwd, Sandbox: sandbox},
-		"bash":         &tools.BashTool{CWD: cwd, Sandbox: sandbox},
-		"terva_status": &tools.StatusTool{Provider: provName, CWD: cwd, AuthMethod: authMethod, BaseURL: args.BaseURL},
+		"read":              &tools.ReadTool{CWD: cwd, Sandbox: sandbox, SupportsVision: visionCapable},
+		"write":             &tools.WriteTool{CWD: cwd, Sandbox: sandbox},
+		"edit":              &tools.EditTool{CWD: cwd, Sandbox: sandbox},
+		"bash":              &tools.BashTool{CWD: cwd, Sandbox: sandbox},
+		"grep":              &tools.GrepTool{CWD: cwd, Sandbox: sandbox},
+		"glob":              &tools.GlobTool{CWD: cwd, Sandbox: sandbox},
+		"terva_status":      &tools.StatusTool{Provider: provName, CWD: cwd, AuthMethod: authMethod, BaseURL: args.BaseURL},
+		"ask_user_question": &tools.AskUserTool{},
 	}
 	// Plan mode promises read-only: mutating tools don't enter the
 	// registry at all (the model shouldn't even see them), with the
 	// confirm gate as the backstop for anything that arrives later.
+	// Interactive tools (ask_user_question) are kept: asking the user
+	// is exactly what plan mode wants when requirements are unclear.
 	if approval == core.ApprovalPlan {
 		for name := range all {
-			if !readOnlyTools[name] {
+			if !readOnlyTools[name] && !interactiveTools[name] {
 				delete(all, name)
 			}
 		}
@@ -878,7 +927,7 @@ func buildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 }
 
 func toolSummaries(reg core.Registry, args Args) []ToolSummary {
-	order := []string{"read", "write", "edit", "bash"}
+	order := []string{"read", "write", "edit", "bash", "grep", "glob", "ask_user_question"}
 	var out []ToolSummary
 	for _, name := range order {
 		if t, ok := reg[name]; ok {

@@ -91,3 +91,59 @@ func TestNonPlanModeMergeMarksReadOnly(t *testing.T) {
 		t.Error("auto-edit must not auto-allow an unannotated extension tool")
 	}
 }
+
+// TestAuthorityOverridesReadOnly pins the Phase A classification: a
+// declared authority decides read-only-ness, so a network-read tool is
+// gated like a side-effecting tool (not auto-allowed, refused in plan)
+// even if it also set the legacy read_only bool, while a local-read
+// authority is treated as read-only.
+func TestAuthorityOverridesReadOnly(t *testing.T) {
+	pol := &core.PermissionPolicy{
+		Mode:      core.ApprovalWorkspace,
+		ReadOnly:  builtinReadOnlySet(),
+		EditTools: editTools,
+		Builtin:   builtinTools,
+	}
+	gate := core.NewPolicyGate(pol, nil)
+	r := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalWorkspace}
+	r.AdoptReadOnlySet(pol.ReadOnly)
+	r.MergeExtensionTools(&fakeToolSource{infos: []ExtensionToolInfo{
+		// Declares network-read AND the legacy read_only bool: authority
+		// wins, so it must NOT be auto-allowed as read-only.
+		{Extension: "web", Name: "web_fetch", Schema: []byte(`{}`), ReadOnly: true, Authority: string(core.AuthNetworkRead)},
+		// Declares local-read: auto-allowable like a read-only tool.
+		{Extension: "x", Name: "peek_things", Schema: []byte(`{}`), Authority: string(core.AuthLocalRead)},
+	}})
+
+	if pol.ReadOnly.Has("web_fetch") {
+		t.Error("network-read tool must not join the read-only set despite read_only=true")
+	}
+	if ok, _, _ := gate.Check("web_fetch", nil, ""); ok {
+		t.Error("workspace must not auto-allow a network-read tool (it should prompt/refuse)")
+	}
+	if !pol.ReadOnly.Has("peek_things") {
+		t.Error("local-read authority should join the read-only set")
+	}
+	if ok, _, _ := gate.Check("peek_things", nil, ""); !ok {
+		t.Error("workspace should auto-allow a local-read tool")
+	}
+}
+
+// TestAuthorityNetworkReadExcludedFromPlan ensures a network-read tool
+// is not admitted to the plan-mode registry (plan permits local reads
+// only), even with read_only=true set.
+func TestAuthorityNetworkReadExcludedFromPlan(t *testing.T) {
+	pol := &core.PermissionPolicy{Mode: core.ApprovalPlan, ReadOnly: builtinReadOnlySet(), EditTools: editTools}
+	r := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalPlan}
+	r.AdoptReadOnlySet(pol.ReadOnly)
+	r.MergeExtensionTools(&fakeToolSource{infos: []ExtensionToolInfo{
+		{Extension: "web", Name: "web_fetch", Schema: []byte(`{}`), ReadOnly: true, Authority: string(core.AuthNetworkRead)},
+		{Extension: "x", Name: "peek_things", Schema: []byte(`{}`), Authority: string(core.AuthLocalRead)},
+	}})
+	if _, ok := r.ToolRegistry["web_fetch"]; ok {
+		t.Error("network-read tool must stay out of the plan-mode registry")
+	}
+	if _, ok := r.ToolRegistry["peek_things"]; !ok {
+		t.Error("local-read tool should join the plan-mode registry")
+	}
+}

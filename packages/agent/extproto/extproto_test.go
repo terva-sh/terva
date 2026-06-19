@@ -55,6 +55,11 @@ func TestGoldenFrames(t *testing.T) {
 			`{"type":"register_tool","name":"peek","schema":{"type":"object"},"read_only":true}`,
 		},
 		{
+			"register_tool authority",
+			RegisterToolFromExt{Type: "register_tool", Name: "web_fetch", Schema: json.RawMessage(`{"type":"object"}`), Authority: "network-read"},
+			`{"type":"register_tool","name":"web_fetch","schema":{"type":"object"},"authority":"network-read"}`,
+		},
+		{
 			"ready",
 			ReadyFromExt{Type: "ready"},
 			`{"type":"ready"}`,

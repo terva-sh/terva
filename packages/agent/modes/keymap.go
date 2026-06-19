@@ -182,10 +182,11 @@ func (i *Interactive) keyEsc(context.Context, tui.Key) keyOutcome {
 		return keyHandled
 	}
 	if i.turns.Busy() && i.turns.cancelActive() {
-		// If a confirm dialog is pending, refuse it so the agent
-		// goroutine unblocks and the context cancellation can
+		// If a confirm or question dialog is pending, resolve it so the
+		// agent goroutine unblocks and the context cancellation can
 		// actually take effect.
 		i.confirmDialog.CancelAll("turn cancelled")
+		i.questionDialog.CancelAll()
 		return keyHandled
 	}
 	// Idle with nothing to dismiss: the editor's own Esc handling

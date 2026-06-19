@@ -27,7 +27,7 @@ const writeSchema = `{"type":"object","properties":{"path":{"type":"string"},"co
 
 func (t *WriteTool) Name() string { return "write" }
 func (t *WriteTool) Description() string {
-	return "Write a file. Creates parent dirs. Overwrites."
+	return "Write a file, creating parent directories. OVERWRITES the entire file. For an existing file, prefer `edit` to change part of it; use `write` only to create a new file or when you intend to fully replace one."
 }
 func (t *WriteTool) Schema() json.RawMessage { return json.RawMessage(writeSchema) }
 

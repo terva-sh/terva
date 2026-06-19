@@ -4,6 +4,7 @@ package modes
 // the cli call to drive a running Interactive.
 
 import (
+	"context"
 	"strings"
 
 	"terva.sh/terva/packages/core"
@@ -109,6 +110,7 @@ func (i *Interactive) ChangelogVersion() string {
 func (i *Interactive) CancelTurn() {
 	if i.turns.cancelActive() {
 		i.confirmDialog.CancelAll("turn cancelled")
+		i.questionDialog.CancelAll()
 	}
 }
 
@@ -135,4 +137,26 @@ func (i *Interactive) Confirm(toolName string, preview string) core.ConfirmDecis
 	})
 	i.invalidate()
 	return <-resp
+}
+
+// Ask implements core.Asker. The ask_user_question tool calls this
+// synchronously; we enqueue the question on the dialog, redraw, and block
+// until the user answers or the turn is cancelled (CancelTurn declines
+// every pending question so the tool goroutine unblocks). ctx
+// cancellation is honored so a closing session doesn't deadlock the tool.
+func (i *Interactive) Ask(ctx context.Context, q core.UserQuestion) (core.UserAnswer, error) {
+	resp := make(chan core.UserAnswer, 1)
+	i.questionDialog.Enqueue(&questionRequest{
+		question:    q.Question,
+		options:     q.Options,
+		allowCustom: q.AllowCustom,
+		resp:        resp,
+	})
+	i.invalidate()
+	select {
+	case ans := <-resp:
+		return ans, nil
+	case <-ctx.Done():
+		return core.UserAnswer{}, ctx.Err()
+	}
 }

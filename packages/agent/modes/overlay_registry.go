@@ -115,6 +115,14 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			render: func(cols int) []string { return i.confirmDialog.Render(i.cfg.Theme, cols) },
 		},
+		{ // ask_user_question; agent goroutine blocked on the answer
+			active: i.questionDialog.Active,
+			handleKey: func(k tui.Key) bool {
+				i.questionDialog.HandleKey(k)
+				return false
+			},
+			render: func(cols int) []string { return i.questionDialog.Render(i.cfg.Theme, cols) },
+		},
 		{ // login
 			active: i.dialog.Active,
 			ctrlC: func() bool {

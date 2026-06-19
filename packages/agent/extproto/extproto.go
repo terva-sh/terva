@@ -85,6 +85,14 @@ type RegisterToolFromExt struct {
 	// hosts and extensions interoperate unchanged. An extension that
 	// lies here only cheats its own user's policy.
 	ReadOnly bool `json:"read_only,omitempty"`
+	// Authority is the tool's effect class (core.Authority:
+	// local-read / workspace-mutation / process-execution /
+	// network-read / external-mutation). It is the richer successor to
+	// ReadOnly: a network-read tool reads nothing locally yet must not
+	// be auto-allowed as read-only. Additive/optional — empty means the
+	// host falls back to the ReadOnly bool. An unknown value is treated
+	// as side-effecting (safe default). See docs/standard-tools.md.
+	Authority string `json:"authority,omitempty"`
 }
 
 type ReadyFromExt struct {
