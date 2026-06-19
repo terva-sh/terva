@@ -1,4 +1,4 @@
-package extensions
+package extdriver
 
 import (
 	"fmt"
@@ -16,7 +16,7 @@ import (
 // contextCard is one dynamic card an extension set via context_card.
 // blocking marks open work: the host's at-close gate re-prompts the
 // model once when it tries to finish while such a card is present (see
-// Manager.HasBlockingContext). The card text itself is injected
+// Driver.HasBlockingContext). The card text itself is injected
 // normally every turn — blocking adds the gate, nothing to the card.
 type contextCard struct {
 	label    string
@@ -40,76 +40,34 @@ const (
 // static contributions and cards are ignored. Replaces the set
 // wholesale so concurrent readers that captured the old reference are
 // unaffected.
-func (m *Manager) SetContextDisabled(names []string) {
+func (d *Driver) SetContextDisabled(names []string) {
 	set := make(map[string]bool, len(names))
 	for _, n := range names {
 		if n != "" {
 			set[n] = true
 		}
 	}
-	m.mu.Lock()
-	m.contextDisabled = set
-	m.mu.Unlock()
-}
-
-// SetDisabledExtensions records which extensions must not be loaded at
-// all (from the resolved user ∪ project config). MUST be called before
-// Discover / LoadExplicit — loadOne consults it to skip spawning a
-// disabled extension entirely.
-func (m *Manager) SetDisabledExtensions(names []string) {
-	set := make(map[string]bool, len(names))
-	for _, n := range names {
-		if n != "" {
-			set[n] = true
-		}
-	}
-	m.mu.Lock()
-	m.disabledExtensions = set
-	m.mu.Unlock()
-}
-
-// extensionLoadDisabled reports whether an extension name is in the
-// load-disable set.
-func (m *Manager) extensionLoadDisabled(name string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.disabledExtensions[name]
-}
-
-// SetProjectTrusted records the Workspace Trust verdict for the
-// manager's cwd. When false (the default — a fresh Manager is
-// untrusted), searchDirs drops the project-local extension roots so a
-// cloned/untrusted repo's extensions are never discovered or spawned.
-// MUST be called before Discover. See docs/plans/workspace-trust.md.
-func (m *Manager) SetProjectTrusted(trusted bool) {
-	m.mu.Lock()
-	m.projectTrusted = trusted
-	m.mu.Unlock()
-}
-
-// projectTrustedLocked reports the current trust verdict under the lock.
-func (m *Manager) isProjectTrusted() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.projectTrusted
+	d.mu.Lock()
+	d.contextDisabled = set
+	d.mu.Unlock()
 }
 
 // contextDisabledSet returns the current disabled set under the lock.
 // The returned map is never mutated after assignment, so the caller may
 // read it without holding the lock.
-func (m *Manager) contextDisabledSet() map[string]bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.contextDisabled
+func (d *Driver) contextDisabledSet() map[string]bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.contextDisabled
 }
 
 // StaticContext returns every (context-enabled) extension's static
 // contribution, each host-wrapped and attributed, joined for folding
 // into the cached system-prompt addendum. Deterministic (sorted by
 // extension name). Empty when no extension contributed.
-func (m *Manager) StaticContext() string {
-	exts := m.snapshotExts()
-	disabled := m.contextDisabledSet()
+func (d *Driver) StaticContext() string {
+	exts := d.snapshotExts()
+	disabled := d.contextDisabledSet()
 	var blocks []string
 	for _, ext := range exts {
 		if disabled[ext.Manifest.Name] {
@@ -131,15 +89,15 @@ func (m *Manager) StaticContext() string {
 // extension name, then card id), truncated to the total byte budget.
 // Pulled once per turn by the agent and injected at the cache-free tail;
 // never persisted. Empty when no cards are set.
-func (m *Manager) EphemeralContext() string {
+func (d *Driver) EphemeralContext() string {
 	type entry struct {
 		source   string
 		id       string
 		card     contextCard
 		priority int
 	}
-	exts := m.snapshotExts()
-	disabled := m.contextDisabledSet()
+	exts := d.snapshotExts()
+	disabled := d.contextDisabledSet()
 	var entries []entry
 	for _, ext := range exts {
 		if disabled[ext.Manifest.Name] {
@@ -183,9 +141,9 @@ func (m *Manager) EphemeralContext() string {
 // a card marked blocking — open work the model should review before
 // declaring done. The host's at-close gate uses it to decide whether to
 // re-prompt the model once when it tries to finish.
-func (m *Manager) HasBlockingContext() bool {
-	exts := m.snapshotExts()
-	disabled := m.contextDisabledSet()
+func (d *Driver) HasBlockingContext() bool {
+	exts := d.snapshotExts()
+	disabled := d.contextDisabledSet()
 	for _, ext := range exts {
 		if disabled[ext.Manifest.Name] {
 			continue
@@ -205,8 +163,8 @@ func (m *Manager) HasBlockingContext() bool {
 // StatusSegments returns every status-bar segment, source-prefixed and
 // ordered by extension name then id, for the TUI to render. Not
 // model-facing.
-func (m *Manager) StatusSegments() []string {
-	exts := m.snapshotExts()
+func (d *Driver) StatusSegments() []string {
+	exts := d.snapshotExts()
 	var out []string
 	for _, ext := range exts {
 		ext.mu.Lock()
@@ -238,9 +196,9 @@ type ContextItem struct {
 // inspector so the user can see exactly what is being injected into the
 // model. Static items first (by source), then cards by (priority,
 // source, id).
-func (m *Manager) ContextSnapshot() []ContextItem {
-	exts := m.snapshotExts()
-	disabled := m.contextDisabledSet()
+func (d *Driver) ContextSnapshot() []ContextItem {
+	exts := d.snapshotExts()
+	disabled := d.contextDisabledSet()
 	var statics []ContextItem
 	type cardEntry struct {
 		item     ContextItem
@@ -281,13 +239,13 @@ func (m *Manager) ContextSnapshot() []ContextItem {
 
 // snapshotExts returns the current extensions sorted by name, so every
 // aggregation is deterministic regardless of map iteration order.
-func (m *Manager) snapshotExts() []*Extension {
-	m.mu.RLock()
-	exts := make([]*Extension, 0, len(m.ext))
-	for _, e := range m.ext {
+func (d *Driver) snapshotExts() []*Extension {
+	d.mu.RLock()
+	exts := make([]*Extension, 0, len(d.ext))
+	for _, e := range d.ext {
 		exts = append(exts, e)
 	}
-	m.mu.RUnlock()
+	d.mu.RUnlock()
 	sort.Slice(exts, func(i, j int) bool { return exts[i].Manifest.Name < exts[j].Manifest.Name })
 	return exts
 }

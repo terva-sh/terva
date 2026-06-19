@@ -1,18 +1,50 @@
-package extensions
+// Package exttool wraps an extension-registered tool as a core.Tool for
+// the agent's tool registry. It is the one place the extproto tool-result
+// shape is converted into core.ToolResult / provider.Content, shared by
+// the live host (agent.extToolAdapter) and the acp wire harness so both
+// exercise the identical conversion.
+//
+// It depends only on core + provider + extproto and reaches the owning
+// extension through the small Invoker interface, so it never imports the
+// extensions host layer (keeping that layer free of core/provider and
+// avoiding an import cycle with packages that the agent package itself
+// imports, e.g. acp).
+package exttool
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
 
+	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
 
+// Invoker is the slice of the extension manager this wrapper needs: it
+// round-trips a tool call to the owning subprocess and returns the
+// extproto result. Both *extensions.Manager and *extdriver.Driver
+// satisfy it structurally.
+type Invoker interface {
+	InvokeTool(ctx context.Context, name string, args json.RawMessage, timeout time.Duration) (extproto.ToolResultFromExt, error)
+}
+
+// Info identifies the extension tool to wrap. It mirrors the
+// (extension, name, description, schema) slice of the manager's ToolInfo
+// the wrapper needs, declared here so this package depends on neither
+// the extensions host layer nor extdriver.
+type Info struct {
+	Extension   string
+	Name        string
+	Description string
+	Schema      json.RawMessage
+}
+
 // extensionTool wraps a single extension-registered tool as a
 // core.Tool. The agent's tool registry contains one of these per
-// extension tool; Execute round-trips through the manager to the
+// extension tool; Execute round-trips through the invoker to the
 // owning subprocess.
 //
 // One concrete type instead of a closure-driven anonymous tool
@@ -23,20 +55,20 @@ type extensionTool struct {
 	description string
 	schema      json.RawMessage
 	extension   string
-	manager     *Manager
+	invoker     Invoker
 	timeout     time.Duration
 }
 
-// NewTool returns a core.Tool that round-trips invocations through
-// mgr to the extension that registered (name, schema). The default
-// per-call timeout is 60 seconds; callers can override.
-func NewTool(mgr *Manager, info ToolInfo) core.Tool {
+// New returns a core.Tool that round-trips invocations through inv to
+// the extension that registered (name, schema). The default per-call
+// timeout is 60 seconds.
+func New(inv Invoker, info Info) core.Tool {
 	return &extensionTool{
 		name:        info.Name,
 		description: info.Description,
 		schema:      info.Schema,
 		extension:   info.Extension,
-		manager:     mgr,
+		invoker:     inv,
 		timeout:     60 * time.Second,
 	}
 }
@@ -53,7 +85,7 @@ func (t *extensionTool) Execute(ctx context.Context, args json.RawMessage, _ fun
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
-	resp, err := t.manager.InvokeTool(ctx, t.name, args, t.timeout)
+	resp, err := t.invoker.InvokeTool(ctx, t.name, args, t.timeout)
 	if err != nil {
 		return core.ToolResult{
 			IsError: true,
@@ -91,11 +123,11 @@ func (t *extensionTool) Execute(ctx context.Context, args json.RawMessage, _ fun
 	return out, nil
 }
 
-// decodeBase64 is a tiny wrapper around encoding/base64 so we can
-// validate the extension's image data in one place.
+// decodeBase64 validates the extension's image data in one place. An
+// empty string is treated as no data rather than an error.
 func decodeBase64(s string) ([]byte, error) {
 	if s == "" {
 		return nil, nil
 	}
-	return base64DecodeStd(s)
+	return base64.StdEncoding.DecodeString(s)
 }

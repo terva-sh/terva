@@ -18,6 +18,7 @@ import (
 
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/exttool"
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
@@ -429,7 +430,12 @@ func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confi
 	}
 	roSet := core.NewReadOnlySet()
 	for _, ti := range extMgr.Tools() {
-		reg[ti.Name] = extensions.NewTool(extMgr, ti)
+		reg[ti.Name] = exttool.New(extMgr, exttool.Info{
+			Extension:   ti.Extension,
+			Name:        ti.Name,
+			Description: ti.Description,
+			Schema:      ti.Schema,
+		})
 		if ti.ReadOnly {
 			roSet.Add(ti.Name)
 		}

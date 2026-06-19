@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extproto"
 	"testing"
 	"time"
@@ -127,15 +128,18 @@ func TestDiscoverLoadsThemeOnlyExtension(t *testing.T) {
 	}
 	defer mgr.Stop(10 * time.Millisecond)
 
-	opts := mgr.ThemeOptions()
-	if len(opts) != 1 {
-		t.Fatalf("theme options = %d, want 1", len(opts))
+	// A theme-only extension (no exec) still loads and is tracked, so the
+	// tui-aware host can discover its bundled theme. The ThemeOption
+	// conversion itself is asserted in the agent layer
+	// (TestExtensionThemeOptions), where the tui dependency lives.
+	var found bool
+	for _, e := range mgr.All() {
+		if e.Manifest.Name == "theme-only" {
+			found = true
+		}
 	}
-	if opts[0].Label != "Theme Only" || opts[0].Path != filepath.Join(extDir, "theme.json") {
-		t.Fatalf("unexpected theme option: %#v", opts[0])
-	}
-	if !strings.Contains(opts[0].Description, "from extension theme-only") {
-		t.Fatalf("description missing extension source: %q", opts[0].Description)
+	if !found {
+		t.Fatalf("theme-only extension was not loaded; All() = %v", mgr.All())
 	}
 }
 
@@ -269,7 +273,7 @@ done
 // TestHandshakeTimeoutSkipsExtension verifies that an extension binary
 // that opens but never prints a hello frame (a daemon, a REPL, a
 // typo'd path) does not hang terva startup. Discover must return inside
-// helloTimeout (plus slack), report the failure as an error, and leave
+// extdriver.HelloTimeout (plus slack), report the failure as an error, and leave
 // the manager usable with no extension registered.
 func TestHandshakeTimeoutSkipsExtension(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -301,13 +305,13 @@ func TestHandshakeTimeoutSkipsExtension(t *testing.T) {
 	elapsed := time.Since(start)
 
 	// Must return promptly after the handshake timeout, not hang.
-	if elapsed > helloTimeout+3*time.Second {
-		t.Fatalf("Discover took %s; expected to return near helloTimeout (%s)", elapsed, helloTimeout)
+	if elapsed > extdriver.HelloTimeout+3*time.Second {
+		t.Fatalf("Discover took %s; expected to return near extdriver.HelloTimeout (%s)", elapsed, extdriver.HelloTimeout)
 	}
 	// And it must actually have waited for the timeout, not bailed early
 	// for some other reason.
-	if elapsed < helloTimeout {
-		t.Fatalf("Discover returned in %s, before helloTimeout (%s)", elapsed, helloTimeout)
+	if elapsed < extdriver.HelloTimeout {
+		t.Fatalf("Discover returned in %s, before extdriver.HelloTimeout (%s)", elapsed, extdriver.HelloTimeout)
 	}
 	// The failure must be reported.
 	if len(errs) == 0 {
@@ -482,30 +486,4 @@ func buildEchoStub(t *testing.T) string {
 		t.Fatalf("build echostub: %v\n%s", err, b)
 	}
 	return out
-}
-
-// TestNewCorrelationIDUniqueUnderConcurrency pins the fix for the
-// wall-clock-microsecond collision: many IDs minted concurrently (the
-// shape of a concurrent InvokeTool burst) must all be distinct, or the
-// pending-map registration of one request clobbers another's reply
-// channel and a caller hangs.
-func TestNewCorrelationIDUniqueUnderConcurrency(t *testing.T) {
-	const n = 4000
-	ids := make([]string, n)
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			ids[i] = newCorrelationID()
-		}(i)
-	}
-	wg.Wait()
-	seen := make(map[string]struct{}, n)
-	for _, id := range ids {
-		if _, dup := seen[id]; dup {
-			t.Fatalf("duplicate correlation id %q minted concurrently", id)
-		}
-		seen[id] = struct{}{}
-	}
 }

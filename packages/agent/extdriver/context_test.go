@@ -1,4 +1,4 @@
-package extensions
+package extdriver
 
 import (
 	"strings"
@@ -11,7 +11,7 @@ func TestContextAggregationAndOrdering(t *testing.T) {
 	a.contextCards = map[string]contextCard{"c1": {label: "Tasks", text: "active foo", priority: 1}}
 	b := &Extension{Manifest: Manifest{Name: "beta"}}
 	b.contextCards = map[string]contextCard{"z": {text: "beta high", priority: 0}}
-	m := &Manager{ext: map[string]*Extension{"alpha": a, "beta": b}}
+	m := &Driver{ext: map[string]*Extension{"alpha": a, "beta": b}}
 
 	// Static: only the contributor appears, host-wrapped + attributed.
 	st := m.StaticContext()
@@ -49,7 +49,7 @@ func TestContextSnapshotOrdersStaticThenCards(t *testing.T) {
 	a.contextCards = map[string]contextCard{"c1": {label: "Tasks", text: "active foo", priority: 5}}
 	b := &Extension{Manifest: Manifest{Name: "beta"}}
 	b.contextCards = map[string]contextCard{"z": {text: "beta high", priority: 1}}
-	m := &Manager{ext: map[string]*Extension{"alpha": a, "beta": b}}
+	m := &Driver{ext: map[string]*Extension{"alpha": a, "beta": b}}
 
 	snap := m.ContextSnapshot()
 	if len(snap) != 3 {
@@ -76,7 +76,7 @@ func TestContextDisabledExtensionExcluded(t *testing.T) {
 	a.staticContext = "alpha policy"
 	a.contextCards = map[string]contextCard{"c": {text: "alpha card"}}
 	a.statusSegments = map[string]string{"s": "alpha status"}
-	m := &Manager{ext: map[string]*Extension{"alpha": a}}
+	m := &Driver{ext: map[string]*Extension{"alpha": a}}
 	m.SetContextDisabled([]string{"alpha"})
 
 	if got := m.StaticContext(); got != "" {
@@ -110,7 +110,7 @@ func TestHasBlockingContext(t *testing.T) {
 		"plain": {text: "plain card"},
 		"block": {text: "blocking card", blocking: true},
 	}
-	m := &Manager{ext: map[string]*Extension{"alpha": a}}
+	m := &Driver{ext: map[string]*Extension{"alpha": a}}
 
 	if !m.HasBlockingContext() {
 		t.Error("expected a blocking card to be detected")
@@ -133,7 +133,7 @@ func TestHasBlockingContext(t *testing.T) {
 	// No blocking cards at all → no gate.
 	b := &Extension{Manifest: Manifest{Name: "beta"}}
 	b.contextCards = map[string]contextCard{"x": {text: "just info"}}
-	m2 := &Manager{ext: map[string]*Extension{"beta": b}}
+	m2 := &Driver{ext: map[string]*Extension{"beta": b}}
 	if m2.HasBlockingContext() {
 		t.Error("a non-blocking card must not trigger the gate")
 	}
@@ -180,7 +180,7 @@ func TestEphemeralTotalBudget(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		e.contextCards[string(rune('a'+i))] = contextCard{text: strings.Repeat("y", maxCardBytes)}
 	}
-	m := &Manager{ext: map[string]*Extension{"big": e}}
+	m := &Driver{ext: map[string]*Extension{"big": e}}
 	out := m.EphemeralContext()
 	if len(out) > maxEphemeralBytes+512 { // wrapper + truncation note slack
 		t.Errorf("ephemeral exceeded total budget: len=%d", len(out))

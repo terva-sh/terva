@@ -1,4 +1,4 @@
-package extensions
+package extdriver
 
 import (
 	"path/filepath"

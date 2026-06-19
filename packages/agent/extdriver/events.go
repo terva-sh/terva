@@ -1,4 +1,4 @@
-package extensions
+package extdriver
 
 import (
 	"context"
@@ -22,11 +22,11 @@ import (
 //
 // Event names are documented on extproto.EventFromHost. Unknown event
 // names are still routed (subscribers can use any string they want).
-func (m *Manager) EmitEvent(ev extproto.EventFromHost) {
+func (d *Driver) EmitEvent(ev extproto.EventFromHost) {
 	ev.Type = "event"
-	m.mu.RLock()
-	subs := make([]*Extension, 0, len(m.ext))
-	for _, ext := range m.ext {
+	d.mu.RLock()
+	subs := make([]*Extension, 0, len(d.ext))
+	for _, ext := range d.ext {
 		ext.mu.Lock()
 		_, subscribed := ext.eventSubs[ev.Event]
 		ext.mu.Unlock()
@@ -34,7 +34,7 @@ func (m *Manager) EmitEvent(ev extproto.EventFromHost) {
 			subs = append(subs, ext)
 		}
 	}
-	m.mu.RUnlock()
+	d.mu.RUnlock()
 	if len(subs) == 0 {
 		return
 	}
@@ -74,14 +74,14 @@ const interceptTimeout = 5 * time.Second
 // Block=true wins. Rewrites (ModifiedArgs) from earlier subscribers
 // flow into later ones, so a chain of guards can successively redact
 // / patch the args.
-func (m *Manager) InterceptToolCall(ctx context.Context, toolID, toolName string, args json.RawMessage) InterceptResult {
-	subs := m.interceptSubsFor("tool_call")
+func (d *Driver) InterceptToolCall(ctx context.Context, toolID, toolName string, args json.RawMessage) InterceptResult {
+	subs := d.interceptSubsFor("tool_call")
 	if len(subs) == 0 {
 		return InterceptResult{}
 	}
 	current := args
 	for _, ext := range subs {
-		r := m.askIntercept(ctx, ext, extproto.EventInterceptFromHost{
+		r := d.askIntercept(ctx, ext, extproto.EventInterceptFromHost{
 			Event:    "tool_call",
 			ToolID:   toolID,
 			ToolName: toolName,
@@ -104,13 +104,13 @@ func (m *Manager) InterceptToolCall(ctx context.Context, toolID, toolName string
 // InterceptTurnStart asks every subscriber whether the upcoming turn
 // may run. Block=true aborts the turn with Reason shown to the user.
 // Rewrites are not supported for this event.
-func (m *Manager) InterceptTurnStart(ctx context.Context, step int) InterceptResult {
-	subs := m.interceptSubsFor("turn_start")
+func (d *Driver) InterceptTurnStart(ctx context.Context, step int) InterceptResult {
+	subs := d.interceptSubsFor("turn_start")
 	if len(subs) == 0 {
 		return InterceptResult{}
 	}
 	for _, ext := range subs {
-		r := m.askIntercept(ctx, ext, extproto.EventInterceptFromHost{
+		r := d.askIntercept(ctx, ext, extproto.EventInterceptFromHost{
 			Event: "turn_start",
 			Step:  step,
 		})
@@ -127,14 +127,14 @@ func (m *Manager) InterceptTurnStart(ctx context.Context, step int) InterceptRes
 // what the user sees while keeping the model's original text in the
 // transcript. Successive rewrites chain: each subscriber sees the
 // previous subscriber's output.
-func (m *Manager) InterceptAssistantMessage(ctx context.Context, text string) InterceptResult {
-	subs := m.interceptSubsFor("assistant_message")
+func (d *Driver) InterceptAssistantMessage(ctx context.Context, text string) InterceptResult {
+	subs := d.interceptSubsFor("assistant_message")
 	if len(subs) == 0 {
 		return InterceptResult{}
 	}
 	current := text
 	for _, ext := range subs {
-		r := m.askIntercept(ctx, ext, extproto.EventInterceptFromHost{
+		r := d.askIntercept(ctx, ext, extproto.EventInterceptFromHost{
 			Event: "assistant_message",
 			Text:  current,
 		})
@@ -154,11 +154,11 @@ func (m *Manager) InterceptAssistantMessage(ctx context.Context, text string) In
 
 // interceptSubsFor returns the snapshot of extensions that subscribed
 // to intercepting the named event.
-func (m *Manager) interceptSubsFor(event string) []*Extension {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	subs := make([]*Extension, 0, len(m.ext))
-	for _, ext := range m.ext {
+func (d *Driver) interceptSubsFor(event string) []*Extension {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	subs := make([]*Extension, 0, len(d.ext))
+	for _, ext := range d.ext {
 		ext.mu.Lock()
 		_, subscribed := ext.interceptSubs[event]
 		ext.mu.Unlock()
@@ -172,7 +172,7 @@ func (m *Manager) interceptSubsFor(event string) []*Extension {
 // askIntercept sends one EventInterceptFromHost to ext and waits for
 // the reply, a timeout, or context cancellation. Returns a typed
 // result. Never blocks for longer than interceptTimeout.
-func (m *Manager) askIntercept(ctx context.Context, ext *Extension, payload extproto.EventInterceptFromHost) InterceptResult {
+func (d *Driver) askIntercept(ctx context.Context, ext *Extension, payload extproto.EventInterceptFromHost) InterceptResult {
 	id := newCorrelationID()
 	ch := make(chan extproto.EventInterceptResponseFromExt, 1)
 	ext.mu.Lock()
