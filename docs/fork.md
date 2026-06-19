@@ -5,9 +5,10 @@ drives tools. It ships wired for coding but isn't bounded by it (point
 it at extensions or MCP servers and it operates anything they expose),
 and it projects one hardened core through many front ends: terminal,
 editor (over ACP), chat, and an embeddable RPC/SDK. It is a hard fork of
-[zot](https://github.com/patriceckhart/zot), renamed once it diverged
-too far to carry upstream's name. *terva* is Finnish for pine tar — the
-traditional preservative and cure-all.
+[zot](https://github.com/patriceckhart/zot) that took its own name once it
+diverged too far to carry upstream's — not a replacement or successor for
+zot, which lives on. *terva* is Finnish for pine tar — the traditional
+preservative and cure-all.
 
 **terva is not a replacement for zot.** zot continues upstream as its
 own project; terva is its own project that weights priorities

@@ -7,10 +7,10 @@
   <a href="https://terva.sh">terva.sh</a>
 </p>
 
-> **Formerly zot.** terva is a hard fork of <!-- rename:keep -->
-> [patriceckhart/zot](https://github.com/patriceckhart/zot) — renamed (it's <!-- rename:keep -->
+> **A hard fork of zot.** terva began as <!-- rename:keep -->
+> [patriceckhart/zot](https://github.com/patriceckhart/zot) and took its own name (it's <!-- rename:keep -->
 > Finnish for pine tar, the traditional preservative and cure-all) once it
-> diverged too far to carry upstream's name. Existing zot installs keep <!-- rename:keep -->
+> diverged too far to carry upstream's. It is **not** a replacement, successor, or rename of zot — zot lives on as its own project. Existing zot installs keep <!-- rename:keep -->
 > working unchanged — run `terva migrate` when you're ready to adopt the
 > new data location; see [docs/fork.md](docs/fork.md) for the compat story
 > and how the two projects relate.
@@ -24,7 +24,7 @@ projected through many front ends and extensible in any language.
 
 - one static binary.
 - built-in providers for Anthropic, OpenAI/Codex/Responses, Kimi, DeepSeek, Google Gemini/Vertex, GitHub Copilot, Bedrock, Azure OpenAI, OpenRouter, Groq, Cerebras, xAI, Together, Hugging Face, Mistral, Moonshot, Z.AI, Xiaomi, MiniMax, Fireworks, Vercel AI Gateway, OpenCode, Cloudflare AI, Ollama, and any OpenAI-compatible local/custom endpoint.
-- four core tools (read, write, edit, bash), plus `terva_status` for agent self-introspection.
+- six core tools (read, write, edit, bash, plus read-only grep/glob search), plus `terva_status` for agent self-introspection.
 - a permission system: approval modes (`plan`/`ask`/`auto-edit`/`workspace`/`yolo`) plus typed permission rules. Interactive sessions default to **`workspace`** (built-in tools and reads run; foreign extension/MCP tools that can have side effects ask) and are **sandboxed to the working directory** by default. See [docs/permissions.md](docs/permissions.md).
 - pre/post tool-use **hooks** (veto, rewrite, or observe tool calls with your own scripts; [docs/hooks.md](docs/hooks.md)) and an **MCP client** (attach Model Context Protocol servers as tools; [docs/mcp.md](docs/mcp.md)).
 - run modes for every front end: interactive tui, an **editor integration over ACP** (Agent Client Protocol — drive terva from Zed and other ACP editors), print, json, and a JSON-RPC server for embedding.
@@ -122,7 +122,8 @@ terva --help
 
 | Doc | What's in it |
 |---|---|
-| [docs/cli.md](docs/cli.md) | Flags, tools (`read`/`write`/`edit`/`bash`/`terva_status`), run modes, the data directory |
+| [docs/cli.md](docs/cli.md) | Flags, tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`terva_status`), run modes, the data directory |
+| [docs/standard-tools.md](docs/standard-tools.md) | The tool-surface strategy: core vs standard extension vs MCP preset, and the roadmap for new tools |
 | [docs/permissions.md](docs/permissions.md) | Approval modes (`plan`/`ask`/`auto-edit`/`workspace`/`yolo`, with `workspace` the interactive default), permission rules, and the jail-by-default sandbox |
 | [docs/hooks.md](docs/hooks.md) | Pre/post tool-use hooks: veto, rewrite, or observe tool calls with your own scripts |
 | [docs/mcp.md](docs/mcp.md) | Attaching MCP servers as tool providers (stdio, namespaced, permission-gated) |

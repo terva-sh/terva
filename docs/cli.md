@@ -39,9 +39,12 @@ TUI's own surface (slash commands, keys) lives in [tui.md](tui.md).
   when an exact match fails (see
   [context-construction.md](context-construction.md)).
 - `bash`: run a shell command in the session cwd, with merged stdout/stderr and a timeout.
+- `grep`: search file contents for an RE2 regular expression. Returns `path:line:text` in deterministic order, honors `.gitignore` (and always skips `.git`), skips binary files, and pages via `offset`/`max_results`. Read-only. Prefer it over `bash grep`/`rg`.
+- `glob`: list files whose path matches a glob pattern (`**` recurses, e.g. `**/*.go`). Returns paths relative to cwd in lexical order, honors `.gitignore`, and pages via `offset`/`max_results`. Read-only. Prefer it over `bash find`/`ls`.
+- `ask_user_question`: ask the user a structured clarifying question (with optional multiple-choice options and/or a free-text answer) and wait for the reply, instead of guessing when requirements are ambiguous. Permitted in every approval mode, plan included — asking has no side effect. Interactive (TUI) only: in print/json/rpc/ACP modes and swarm subagents there is no question channel — ACP has no native question primitive, only tool-permission requests — so it returns a "no channel — proceed on your best judgment" result rather than blocking.
 - `terva_status`: report the agent's own runtime state — model, provider, working directory, reasoning effort, and how full the context window is. Takes no arguments.
 
-When the sandbox is on (see `/jail` in [tui.md](tui.md)), the four file/command tools (`read`, `write`, `edit`, `bash`) refuse paths outside the session cwd. `terva_status` touches no paths.
+When the sandbox is on (see `/jail` in [tui.md](tui.md)), the file, command, and search tools (`read`, `write`, `edit`, `bash`, `grep`, `glob`) refuse paths outside the session cwd. `grep`/`glob` also skip symlinks so a walk can't follow a link out of the tree. `terva_status` touches no paths.
 
 ### terva_status
 

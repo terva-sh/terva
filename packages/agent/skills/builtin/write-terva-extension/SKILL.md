@@ -123,6 +123,16 @@ If you don't send `ready`, terva's idle watchdog auto-treats you as
 ready after 250ms of no frames, but always send it explicitly when
 you can — newer extensions on faster hosts shave that 250ms off.
 
+`register_tool` accepts two optional classification fields that shape
+how the host's approval modes gate your tool: `read_only: true` (the
+tool has no side effects, so the host may run it in read-only / plan
+modes without prompting) and `authority` (a finer effect class —
+`local-read`, `workspace-mutation`, `process-execution`,
+`network-read`, `external-mutation`; it supersedes `read_only`, so a
+fetch declares `network-read` rather than being mistaken for a local
+read). Both are additive — older hosts ignore them — and you should
+declare them honestly: lying only loosens your own user's policy.
+
 ### Runtime frames
 
 **terva → extension:**
@@ -167,6 +177,38 @@ without waiting for the next turn; other extensions' notes are kept.
 Per-tool timeout: 60s. Per-intercept timeout: 5s. Missing the
 intercept timeout is treated as "allow" so an unresponsive guard
 never stalls the agent.
+
+### Protocol version negotiation (adopt optimistically)
+
+`hello_ack` carries the host's `protocol_version`; your `hello` may
+declare a `min_protocol`. The wire is additive and backward-compatible
+by design, so the default posture is **optimistic adoption**: implement
+the newest frames and fields you can, use them when the host offers
+them, and degrade — never break — when it doesn't.
+
+- **Adopt the latest by handling it, not by announcing it.** An
+  extension declares no protocol version — `hello` carries only your
+  extension `version` and an optional `min_protocol`. You keep current
+  simply by handling the newest frames and fields you understand and
+  ignoring the rest; add handling the moment you rely on a feature.
+- **Gate on presence, not version math.** Detect a capability by a
+  field or event being present (`terva_version != ""`, a `session_id`
+  on `session_start`), not by comparing version strings — presence
+  survives renames and backports; version math rots.
+- **Degrade, don't demand.** Newer features must be optional: fall back
+  to prior behavior when the host omits them, ignore unknown fields,
+  tolerate missing ones.
+- **Reserve `min_protocol` for correctness floors.** It refuses to load
+  on an older host — pay that cost only when your extension is **wrong
+  or unsafe** without the feature, never merely less convenient.
+- **Send forward-compatible fields unconditionally when harmless.** If
+  an older host ignores an unknown field (e.g. `authority` on
+  `register_tool`), always send it instead of gating on host identity —
+  simpler, and a newer host still benefits.
+
+**Litmus test for `min_protocol`:** *if this feature is absent, is my
+extension merely degraded, or incorrect?* Degraded → adopt
+optimistically, no floor. Incorrect/unsafe → require it.
 
 ## Important rules
 

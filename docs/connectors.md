@@ -142,11 +142,11 @@ Handshake — the connector speaks first:
    "data_dir":"$TERVA_HOME/connectors/discord/data"}
 ```
 
-`terva_version` and `terva_version` carry the same host version string
-(the product is being renamed; see `docs/plans/rename-terva.md`).
-Read `terva_version` and fall back to `terva_version` — the old key is
-deprecated and will be dropped after the connector-SDK deprecation
-window; the Go SDK already handles this for you.
+`zot_version` and `terva_version` carry the same host version string <!-- rename:keep -->
+(terva kept zot's legacy key for compatibility when it forked; see
+`docs/plans/rename-terva.md`). Read `terva_version` and fall back to
+`zot_version` — the old key is deprecated and will be dropped after the <!-- rename:keep -->
+connector-SDK deprecation window; the Go SDK already handles this for you.
 
 Versioning is negotiated, not announce-only: hello carries
 `protocol_min`/`protocol_max`, and terva refuses the spawn with a clear

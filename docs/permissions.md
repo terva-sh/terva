@@ -55,6 +55,60 @@ tool — are treated as mutating. In headless modes (`-p`, `--json`,
 refuse-by-default posture while still letting `plan` mode and explicit
 allow rules drive useful headless automation.
 
+## Authority classes
+
+A tool's *authority* is a finer classification than the read-only/mutating
+split, because "side-effect-free" is not one thing. A web fetch reads
+nothing on the local machine yet can leak data, hit a remote server, or
+reach a private network — so folding it into the local-read auto-allow
+would be wrong. The classes (`core.Authority`):
+
+| Authority | Meaning | Example |
+|---|---|---|
+| `local-read` | reads files/state under the jail; no process/network/external effect | `read`, `grep`, `glob`, `terva_status` |
+| `workspace-mutation` | writes files / edits workspace state | `write`, `edit` |
+| `process-execution` | runs commands / subprocesses | `bash` |
+| `network-read` | fetches URLs / search results (can leak, log, reach private nets) | a web-fetch extension tool |
+| `external-mutation` | writes to third-party APIs, sends messages, changes remote resources | a chat-send / PR-open tool |
+| `user-interaction` | blocks to ask the user; no other effect | `ask_user_question` |
+
+How each mode treats a class:
+
+| Authority | `plan` | `auto-edit` | `workspace` | `ask` | `yolo` |
+|---|---|---|---|---|---|
+| `local-read` | run | run | run | ask | run |
+| `workspace-mutation` (built-in editors) | refuse | run | run (built-in) | ask | run |
+| `process-execution` (built-in `bash`) | refuse | ask | run (built-in) | ask | run |
+| `network-read` (foreign) | refuse | ask | ask | ask | run |
+| `external-mutation` (foreign) | refuse | ask | ask | ask | run |
+| `user-interaction` | run | run | run | run | run |
+
+Two things to note. First, `workspace` trusts *first-party built-ins* by
+origin (so built-in `bash`/`write`/`edit` run), but a **foreign**
+`network-read` or `external-mutation` tool asks — declaring `network-read`
+(rather than the legacy `read_only` bool) is what keeps a web tool from
+being mistaken for a local read. Second, `user-interaction` is permitted
+in every mode including `plan`: gating a clarifying question behind an
+approval prompt is nonsensical.
+
+Extensions and MCP tools declare their class via the `authority` field on
+`register_tool` (`ext.WithAuthority` in the Go SDK). A declared authority
+decides read-only classification; an empty value falls back to the
+`read_only` bool, and an unknown value is treated as side-effecting.
+
+### Outbound network safety (egress guard)
+
+Network-read / external-mutation tools that terva itself drives (the MCP
+HTTP transport, host-side web policy) run their connections through the
+shared egress guard (`packages/egress`): it blocks loopback, private,
+link-local (including the `169.254.169.254` cloud-metadata endpoint),
+unique-local, and multicast destinations by default — enforced at dial
+time so DNS rebinding can't slip past — and re-checks redirect hops while
+stripping credentials across a host change. Specific hosts or CIDRs can be
+allowlisted for an intentional local service. (Out-of-process extensions
+like `zot-web` keep their own SSRF guard; the host guard is defense in
+depth for terva-driven connections.)
+
 ## Permission rules
 
 Rules let you pre-answer the prompt for specific calls. They live in
