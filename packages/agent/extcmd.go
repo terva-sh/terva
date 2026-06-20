@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,8 @@ func runExtCommand(rawArgs []string) (handled bool, err error) {
 		return true, extRemove(rawArgs[2:])
 	case "install":
 		return true, extInstall(rawArgs[2:])
+	case "pack":
+		return true, extPackInstall(rawArgs[2:])
 	case "help", "-h", "--help":
 		printExtHelp()
 		return true, nil
@@ -56,6 +59,7 @@ usage:
   terva ext disable <name>          disable without removing
   terva ext remove <name>           delete an extension directory
   terva ext install <path|git-url>  copy / clone an extension into $TERVA_HOME/extensions/
+  terva ext pack install [pack]     bulk-install an extension pack (default: built-in "core")
 
 extensions live under:
   $TERVA_HOME/extensions/<name>/extension.json   (global)
@@ -168,21 +172,7 @@ func extToggle(args []string, enabled bool) error {
 	if err != nil {
 		return err
 	}
-	mfPath := filepath.Join(dir, "extension.json")
-	raw, err := os.ReadFile(mfPath)
-	if err != nil {
-		return err
-	}
-	var generic map[string]any
-	if err := json.Unmarshal(raw, &generic); err != nil {
-		return fmt.Errorf("parse manifest: %w", err)
-	}
-	generic["enabled"] = enabled
-	out, err := json.MarshalIndent(generic, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(mfPath, append(out, '\n'), 0o644); err != nil {
+	if err := setManifestEnabled(dir, enabled); err != nil {
 		return err
 	}
 	state := "enabled"
@@ -226,50 +216,75 @@ func extRemove(args []string) error {
 	return nil
 }
 
-// extInstall copies a local directory or shallow-clones a git URL
-// into $TERVA_HOME/extensions/. Validates the destination contains an
-// extension.json before reporting success.
-func extInstall(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: terva ext install <path|git-url>")
+// errExtAlreadyInstalled signals that installOne found an extension
+// already present at its destination. The single-install CLI treats it
+// as a hard error ("remove it first"); the pack installer treats it as a
+// graceful skip so a re-run, or a partially-present pack, completes.
+var errExtAlreadyInstalled = errors.New("extension already installed")
+
+// cloneArgs builds the argv for the shallow git clone. A non-empty ref
+// (branch OR tag) becomes --branch; absent, git checks out the remote's
+// default HEAD. Kept pure so the branch logic is unit-testable without
+// invoking git.
+func cloneArgs(src, out, ref string) []string {
+	args := []string{"clone", "--depth", "1"}
+	if ref != "" {
+		args = append(args, "--branch", ref)
 	}
-	src := args[0]
+	return append(args, src, out)
+}
+
+// installOne places a single extension under $TERVA_HOME/extensions/ and
+// returns the install path. src is a local directory or a git URL; ref
+// (branch or tag) applies to git sources only; nameOverride, when set,
+// names the install dir instead of deriving it from the source basename.
+// Validates that the destination contains an extension.json (rolling a
+// git clone back on failure). Returns errExtAlreadyInstalled (with the
+// destination path) when something is already installed there — callers
+// decide whether that's fatal or a skip. installOne does not print on
+// success; the caller reports the outcome.
+func installOne(src, ref, nameOverride string) (out string, err error) {
 	dest := filepath.Join(TervaHome(), "extensions")
 	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
+		return "", err
 	}
 
 	if strings.HasPrefix(src, "https://") || strings.HasPrefix(src, "git@") || strings.HasSuffix(src, ".git") {
-		// Git clone path. Pick the destination name from the repo basename.
-		name := strings.TrimSuffix(filepath.Base(src), ".git")
-		out := filepath.Join(dest, name)
-		if _, err := os.Stat(out); err == nil {
-			return fmt.Errorf("destination %s already exists; remove it first", out)
+		name := nameOverride
+		if name == "" {
+			name = strings.TrimSuffix(filepath.Base(src), ".git")
 		}
-		cmd := exec.Command("git", "clone", "--depth", "1", src, out)
+		out = filepath.Join(dest, name)
+		if _, err := os.Stat(out); err == nil {
+			return out, errExtAlreadyInstalled
+		}
+		cmd := exec.Command("git", cloneArgs(src, out, ref)...)
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("git clone: %w", err)
+			return out, fmt.Errorf("git clone: %w", err)
 		}
 		if _, err := os.Stat(filepath.Join(out, "extension.json")); err != nil {
 			_ = os.RemoveAll(out)
-			return fmt.Errorf("installed dir lacks extension.json; aborted and rolled back")
+			return out, fmt.Errorf("installed dir lacks extension.json; aborted and rolled back")
 		}
-		fmt.Fprintf(os.Stderr, "installed %s\n", out)
-		return nil
+		return out, nil
 	}
 
-	// Local path: must be a directory containing extension.json.
+	// Local path: must be a directory containing extension.json. A ref is
+	// meaningless here (there's nothing to check out), so warn and ignore.
+	if ref != "" {
+		fmt.Fprintf(os.Stderr, "note: ref %q ignored for local-path source %s\n", ref, src)
+	}
 	info, err := os.Stat(src)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("not a directory: %s", src)
+		return "", fmt.Errorf("not a directory: %s", src)
 	}
 	if _, err := os.Stat(filepath.Join(src, "extension.json")); err != nil {
-		return fmt.Errorf("source lacks extension.json")
+		return "", fmt.Errorf("source lacks extension.json")
 	}
 	// Resolve to an absolute, cleaned path before deriving the install
 	// name. Otherwise relative sources like "." or "./" collapse to a
@@ -278,17 +293,37 @@ func extInstall(args []string) error {
 	// triggering a false "already exists" failure.
 	absSrc, err := filepath.Abs(src)
 	if err != nil {
-		return err
+		return "", err
 	}
-	name := filepath.Base(absSrc)
+	name := nameOverride
+	if name == "" {
+		name = filepath.Base(absSrc)
+	}
 	if name == "." || name == ".." || name == string(filepath.Separator) || name == "" {
-		return fmt.Errorf("cannot derive extension name from %q", src)
+		return "", fmt.Errorf("cannot derive extension name from %q", src)
 	}
-	out := filepath.Join(dest, name)
+	out = filepath.Join(dest, name)
 	if _, err := os.Stat(out); err == nil {
-		return fmt.Errorf("destination %s already exists; remove it first", out)
+		return out, errExtAlreadyInstalled
 	}
 	if err := copyDir(absSrc, out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// extInstall copies a local directory or shallow-clones a git URL
+// into $TERVA_HOME/extensions/. Validates the destination contains an
+// extension.json before reporting success.
+func extInstall(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: terva ext install <path|git-url>")
+	}
+	out, err := installOne(args[0], "", "")
+	if errors.Is(err, errExtAlreadyInstalled) {
+		return fmt.Errorf("destination %s already exists; remove it first", out)
+	}
+	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "installed %s\n", out)

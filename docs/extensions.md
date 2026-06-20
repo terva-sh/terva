@@ -87,6 +87,68 @@ terva --ext path/to/terva/examples/extensions/hello
 
 Nothing is auto-installed and nothing reaches out to the network without your explicit action.
 
+## Extension packs
+
+A **pack** is a hosted manifest naming a set of extensions, so you can
+install a useful starting set in one step instead of N `ext install`
+calls:
+
+```bash
+terva ext pack install              # the built-in "core" pack (default)
+terva ext pack install core         # same, explicitly
+terva ext pack install https://example.com/team-pack.json
+terva ext pack install ./pack.json  # a local manifest
+```
+
+A pack is just a **list of sources** — terva clones each one and spawns
+it exactly as `ext install` does. It carries no binaries or checksums:
+each extension owns its own bring-up (the recommended
+[self-bootstrapping launcher](#recommended-a-self-bootstrapping-launcher)
+compiles on first run, or downloads a verified release binary when no
+compiler is present), so binary integrity is the extension's
+responsibility, not terva's. An already-installed entry is skipped, so
+re-running a pack is safe. Lifecycle afterwards is the normal per-extension tools
+(`terva ext list` / `enable` / `disable` / `remove`) — a pack is a
+starting point, not a managed set.
+
+Installing from a non-built-in pack (a URL or file) prints the entries
+and asks for confirmation first; `--yes` skips the prompt. The built-in
+core pack ships with terva and installs without prompting.
+
+A pack manifest is JSON:
+
+```json
+{
+  "schema": "terva-extension-pack/v1",
+  "name": "core",
+  "description": "The terva core extension set.",
+  "extensions": [
+    { "name": "index", "source": "https://github.com/terva-sh/terva-ext-index.git", "ref": "v0.2.0" }
+  ]
+}
+```
+
+Each entry needs a `source` (git URL or local path). `ref` is an
+optional branch or tag (absent → the repo's default branch); `name`
+defaults to the source basename. See
+`docs/plans/extension-packs.md` for the full schema.
+
+### First-run offer
+
+The very first time you start an interactive session with **no
+extensions installed**, terva offers to install the core pack. It asks
+at most once, only on an interactive terminal (never when input is
+piped or in CI), and going through `install.sh` never triggers it. Say
+no and it won't ask again; install later with
+`terva ext pack install core`.
+
+Suppress the offer entirely (e.g. for fleet provisioning) with user
+config:
+
+```json
+{ "disable_core_pack_offer": true }
+```
+
 ## Layout & discovery
 
 terva scans two directories on startup, in this order:
@@ -129,6 +191,123 @@ manifest tells terva how to launch it:
 | `description` | optional. shown in `terva ext list`. |
 | `enabled` | optional, defaults to `true`. set to `false` to disable without removing. |
 | `permissions` | optional **bundle contribution**: suggested permission rules (see below). |
+
+## Recommended: a self-bootstrapping launcher
+
+For a **compiled** extension (Go, Rust, …) the strongly recommended
+pattern is to point `exec` at a small launcher script — not at a binary
+you commit to the repo — and let that script own the entire
+build/download story. A fresh `terva ext install <git-url>` or an
+[extension pack](#extension-packs) clones source with no binary in it;
+the launcher is what turns that clone into something runnable.
+
+This keeps bring-up **inside the extension**, which is exactly where
+terva wants it. terva treats an extension as an opaque subprocess: it
+clones the directory and spawns `exec`, and deliberately knows nothing
+about toolchains, target platforms, or release URLs. The launcher is the
+one place with the context to do build-or-download well — so that
+responsibility lives there, not in the host.
+
+The launcher should try, in order:
+
+1. **Use the binary** if it's present and newer than the sources — just
+   `exec` it. The fast path; no rebuild on every launch.
+2. **Build** from source if a compiler is available (binary missing or
+   stale). This is also what makes `terva update` work: it pulls new
+   source, and the next launch rebuilds because the sources are now
+   newer than the binary.
+3. **Download** a prebuilt release binary for the host OS/arch when there
+   is no compiler — and **verify its checksum** before trusting it.
+   Binary integrity is the extension's job; terva does not verify it.
+4. **Fail clearly**: if none of the above worked, print how to build it
+   by hand, **disable itself** in the manifest so terva stops re-spawning
+   it every session, and exit non-zero. The user builds it and runs
+   `terva ext enable <name>`.
+
+Pair it with a manifest whose `exec` is the launcher. Ship `enabled`
+explicitly so step 4 has a field to flip:
+
+```json
+{ "name": "index", "exec": "./run.sh", "language": "go", "enabled": true }
+```
+
+A reference `run.sh` (POSIX sh — works on Linux and macOS; Windows is a
+second-class target, so ship a `run.cmd` alongside or document a manual
+build):
+
+```sh
+#!/usr/bin/env sh
+set -eu
+# Run from the extension's own directory so relative paths resolve no
+# matter what cwd terva spawned us from.
+cd "$(dirname "$0")"
+
+NAME=index          # must match extension.json "name"
+BIN=./index         # the built binary
+
+# Print build instructions, disable in the manifest, and give up.
+fail() {
+  echo "$NAME: $1" >&2
+  echo "Build it yourself:  (cd '$(pwd)' && go build -o '$BIN' .)" >&2
+  echo "Then re-enable:     terva ext enable $NAME" >&2
+  # Flip "enabled" to false so terva does not re-spawn this launcher on
+  # every session until the binary exists.
+  if command -v jq >/dev/null 2>&1; then
+    tmp=$(mktemp) && jq '.enabled=false' extension.json >"$tmp" && mv "$tmp" extension.json
+  else
+    sed -i.bak 's/"enabled"[[:space:]]*:[[:space:]]*true/"enabled": false/' extension.json && rm -f extension.json.bak
+  fi
+  exit 1
+}
+
+# Download + checksum-verify a release binary for this host. Returns
+# non-zero (so the caller falls through to fail) if anything is missing.
+download_release() {
+  command -v curl >/dev/null 2>&1 || return 1
+  os=$(uname -s | tr '[:upper:]' '[:lower:]')          # linux | darwin
+  arch=$(uname -m)
+  case "$arch" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *) return 1 ;; esac
+  base="https://github.com/OWNER/REPO/releases/latest/download"   # per-extension
+  asset="${NAME}_${os}_${arch}"
+  curl -fsSL "$base/$asset"        -o "$BIN"        || return 1
+  curl -fsSL "$base/$asset.sha256" -o "$BIN.sha256" || return 1
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -c "$BIN.sha256" >&2 || return 1
+  else
+    shasum -a 256 -c "$BIN.sha256" >&2 || return 1
+  fi
+  rm -f "$BIN.sha256"; chmod +x "$BIN"
+}
+
+# 1. Fast path: a fresh binary already exists -> hand off.
+if [ -x "$BIN" ] && [ -z "$(find . -name '*.go' -newer "$BIN" -print 2>/dev/null | head -n1)" ]; then
+  exec "$BIN" "$@"
+fi
+
+# 2. Build from source when a compiler is present.
+if command -v go >/dev/null 2>&1; then
+  if go build -o "$BIN" . >&2; then
+    exec "$BIN" "$@"
+  fi
+  fail "build failed — see the errors above"
+fi
+
+# 3. No compiler: download a verified release binary.
+if download_release; then
+  exec "$BIN" "$@"
+fi
+
+# 4. Nothing worked.
+fail "no Go compiler and no verified release download available"
+```
+
+`exec` matters: it **replaces** the shell with your binary, so terva's
+stdin/stdout pipes connect straight to it — the launcher must never sit
+between terva and the extension on the wire. Everything the launcher
+prints goes to **stderr**, which terva routes to
+`$TERVA_HOME/logs/ext-<name>.log`; stdout is reserved for the JSON
+protocol, so build chatter there would corrupt the wire (note the `>&2`
+on `go build` and the verify step).
 
 ## Bundle contributions
 
@@ -355,12 +534,60 @@ which it wants to intercept. Send once after `hello`, before `ready`.
 
 ```json
 {"type":"subscribe",
- "events":["session_start","turn_start","tool_call","turn_end","assistant_message"],
- "intercept":["tool_call","turn_start","assistant_message"]}
+ "events":["session_start","session_end","turn_start","tool_call","turn_end","user_message","assistant_message"],
+ "intercept":["tool_call","turn_start","user_message","assistant_message"]}
 ```
 
-Recognised event names: `session_start`, `turn_start`, `turn_end`,
-`tool_call`, `assistant_message`.
+Recognised event names: `session_start`, `session_end`, `turn_start`,
+`turn_end`, `run_end`, `tool_call`, `tool_result`, `user_message`,
+`assistant_message`, `workspace_changed`, `compact_start`,
+`transcript_compacted`. (The host advertises the exact set it emits in
+`hello_ack.supported_events`; subscribing to a name an older host doesn't
+emit is harmless — it simply never fires.)
+
+`run_end` fires once when the agent finishes a whole prompt — every step,
+tool loop, and the at-close gate done. It's the per-prompt bookend to
+`user_message`, distinct from the per-*step* `turn_end` (which fires
+repeatedly inside a tool loop). Use it to act when the agent goes idle:
+summarize the exchange, run a post-turn check, or flush state. The Go SDK
+exposes it as `OnRunEnd`.
+
+`compact_start` fires when the host is *about to* compact the transcript —
+the pre-event paired with `transcript_compacted` (post). The `text` field
+carries a short human-readable reason. Because compaction runs a slow LLM
+summarization, a handler has time to read the full session (`read_session`)
+and harvest detail before it's summarized away — the window the post-event
+misses. The Go SDK exposes it as `OnCompactStart`.
+
+`user_message` fires for every genuine user prompt — the initial submit
+and any queued follow-ups — the symmetric counterpart to
+`assistant_message`. Use it to harvest intent for a memory store or feed
+a session index. The host's synthetic at-close gate nudge is **not**
+delivered (it's a host re-prompt, not the user's words). The Go SDK
+exposes it as `OnUserMessage`.
+
+`workspace_changed` fires once at the end of each agent run with the net
+set of files the turn touched, in a `files` array of
+`{"path":"...","change":"added|modified|deleted"}` (workspace-relative,
+slash-separated paths, sorted). A run that changed nothing fires no event.
+The host derives it by diffing the workspace at run boundaries — honoring
+`.gitignore` and pruning `.git` — so it catches `bash` side effects and
+external edits, not just the agent's own write/edit tools. Scoped to the
+workspace root only; oversized trees disable it (it reports nothing rather
+than walk an unbounded tree each turn). Use it to keep a code index fresh
+or note edits in a memory store. Additive/opt-in; the Go SDK exposes it as
+`OnWorkspaceChanged`, and the change list also rides the generic `Event`
+as `Files`.
+
+`transcript_compacted` fires after the host compacts the conversation
+(auto, near the context limit, or via `/compact`), before the next model
+turn. It's the moment to re-snapshot a frozen context block: compaction
+summarizes away the tool-results that recorded mid-session writes, so a
+memory extension re-injects its notes here via `refresh_context` — the
+same thing it does on `session_start`. It's a fire-and-forget signal,
+purely additive and opt-in: subscribe to receive it, and a host too old
+to emit it simply never fires it (your extension keeps its
+session-boundary refresh). The Go SDK exposes it as `OnCompaction`.
 
 `session_start` (protocol 2+) carries the active session's identity —
 `session_id`, `session_path`, `session_title` — plus `cwd` and
@@ -375,6 +602,17 @@ handler receives them on the `Session`. A no-session start (session
 closed / `--no-session`) leaves `cwd`/`project_id` empty and the SDK
 keeps the last known value (closing a session doesn't move the cwd).
 
+`session_end` is the bookend to `session_start`, carrying the same
+identity fields for the session that is ending. It fires for the
+*outgoing* session just before a switch or close announces the next one,
+and once more for the active session at host shutdown (the session_end is
+queued ahead of the shutdown frame on the same FIFO outbox, so a healthy
+extension sees it before exiting). Use it to flush a memory store or index
+the just-finished session. It is **best-effort**: a hard kill (SIGKILL)
+skips it, so persist incrementally and treat it as a flush point, not a
+durability guarantee. Additive/opt-in; the Go SDK exposes it as
+`OnSessionEnd`.
+
 Interceptable events:
 
 - `tool_call`: block the call (model sees `reason` as the tool
@@ -382,6 +620,13 @@ Interceptable events:
 - `turn_start`: block the turn before the model is called. Useful
   for rate-limiting and business-hour gates. `reason` is shown to
   the user as a status line. No rewrite supported.
+- `user_message`: block a prompt via `block` (it's neither recorded
+  nor sent; `reason` is shown to the user), or rewrite the prompt the
+  model sees via `replace_text` (the rewrite IS what lands in the
+  transcript). Runs on the initial prompt and on queued follow-ups,
+  so a guard can't be bypassed by typing while the agent is busy.
+  Useful for input guardrails, secret redaction, and prompt
+  augmentation. The Go SDK exposes it as `InterceptUserMessage`.
 - `assistant_message`: suppress the message via `block`, or rewrite
   the user-visible text via `replace_text`. The model's original
   text stays in the transcript so the model sees what it actually
@@ -394,10 +639,10 @@ Reply to an `event_intercept` from the host. All fields default to
 
 | field | meaning |
 |---|---|
-| `block` | `true` refuses the action. For `tool_call`, `reason` is shown to the model; for `turn_start` / `assistant_message`, `reason` is shown to the user. |
+| `block` | `true` refuses the action. For `tool_call`, `reason` is shown to the model; for `turn_start` / `user_message` / `assistant_message`, `reason` is shown to the user. |
 | `reason` | refusal text (on block) or pass-through note. |
 | `modified_args` | for `tool_call`: rewritten JSON args the tool will actually see. Must be a valid JSON object. Ignored when `block` is true. |
-| `replace_text` | for `assistant_message`: replaces the user-visible text. The model's original output still lives in the transcript. Ignored when `block` is true. |
+| `replace_text` | for `user_message`: replaces the prompt the model receives (the rewrite also lands in the transcript). For `assistant_message`: replaces the user-visible text while the model's original output stays in the transcript. Ignored when `block` is true. |
 
 Missing the response within 5s is treated as "allow" (i.e. an
 unresponsive extension never stalls the agent). When multiple
@@ -525,12 +770,21 @@ Sent in response to `shutdown`. Extension should exit promptly after.
  "terva_version":"0.0.7","provider":"anthropic",
  "model":"claude-opus-4-7","cwd":"/Users/pat/Developer/terva",
  "extension_dir":"/Users/pat/Developer/terva/.terva/extensions/todos",
- "data_dir":"/Users/pat/.terva/ext-data/todos"}
+ "data_dir":"/Users/pat/.terva/ext-data/todos",
+ "supported_events":["session_start","turn_start","turn_end","tool_call",
+   "tool_result","assistant_message","transcript_compacted"]}
 ```
 
 Sent immediately after `hello`. The extension can use these fields to
 decide which commands to register (e.g. only register a Python tool
 on macOS, only register a model-specific shortcut for opus, etc.).
+
+`supported_events` lists the lifecycle events this host can emit — a
+finer-grained capability signal than `protocol_version`. Use it to adapt
+or warn (the Go SDK exposes `Host().Emits("transcript_compacted")`); it's
+**absent on an older host** that doesn't advertise, which you should read
+as "unknown" and handle by subscribing optimistically and degrading if
+the event never fires, rather than gating on it.
 
 `extension_dir` is the **read-only install dir** — the extension's code
 and any defaults/assets it ships. `data_dir` is the **writable state
@@ -852,7 +1106,7 @@ For development, point `terva --ext <path>` at a working directory and skip the 
 - Extensions without a `.git/` directory (installed by `terva ext install ./local-path`) are skipped — there is no remote to pull from.
 - For the rest, terva stashes any dirty worktree state (including untracked runtime files like `todos.json` or `config.json`), runs `git pull --ff-only`, and pops the stash. If the pop produces conflicts, the conflict markers are left in place and you'll see a warning.
 - Diverged branches, offline pulls, or any other git failure are reported as `failed` and the next extension is processed. `terva update` itself never aborts because of an extension.
-- terva does **not** run any build step (`go build`, `npm install`, `make`) after the pull. Extension authors are expected to commit the runnable artifact (binary, transpiled JS, etc.). If you need a build, rebuild manually and use `/reload-ext`.
+- terva does **not** run any build step (`go build`, `npm install`, `make`) after the pull — building stays the extension's job. The recommended way to handle this is a [self-bootstrapping launcher](#recommended-a-self-bootstrapping-launcher): `terva update` pulls new source, and the next launch (or `/reload-ext`) rebuilds automatically because the sources are now newer than the binary. An extension that instead commits a prebuilt artifact (binary, transpiled JS) just keeps working from the pulled copy. Either way, if you need to force a rebuild now, do it manually and `/reload-ext`.
 
 ### Theme-only extensions
 

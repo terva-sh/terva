@@ -92,6 +92,14 @@ type Config struct {
 	// disabled. See docs/extensions.md.
 	DisableExtensions []string `json:"disable_extensions,omitempty"`
 
+	// DisableCorePackOffer suppresses the one-time first-run prompt that
+	// offers to install the built-in core extension pack when no
+	// extensions are present. For fleet/automation provisioning that sets
+	// extensions up out of band; the prompt is also self-limiting (it
+	// asks at most once and never on a non-TTY). User layer only. See
+	// docs/plans/extension-packs.md.
+	DisableCorePackOffer bool `json:"disable_core_pack_offer,omitempty"`
+
 	// Approval is the default approval mode (plan / ask / auto-edit /
 	// yolo) when no --approval / --no-yolo flag is given. Empty means
 	// yolo, the historical default. See docs/permissions.md.
