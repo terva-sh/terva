@@ -45,6 +45,41 @@ func TestGoldenFrames(t *testing.T) {
 			`{"type":"register_command","name":"deploy","description":"ship it"}`,
 		},
 		{
+			"refresh_context",
+			RefreshContextFromExt{Type: "refresh_context", Text: "project notes"},
+			`{"type":"refresh_context","text":"project notes"}`,
+		},
+		{
+			"host_tool_call",
+			HostToolCallFromExt{Type: "host_tool_call", ID: "c1", Name: "read", Args: json.RawMessage(`{"path":"x"}`), Silent: true},
+			`{"type":"host_tool_call","id":"c1","name":"read","args":{"path":"x"},"silent":true}`,
+		},
+		{
+			"host_tool_result",
+			HostToolResultFromHost{Type: "host_tool_result", ID: "c1", Content: []ContentBlock{{Type: "text", Text: "ok"}}},
+			`{"type":"host_tool_result","id":"c1","content":[{"type":"text","text":"ok"}]}`,
+		},
+		{
+			"list_sessions",
+			ListSessionsFromExt{Type: "list_sessions", ID: "s1", ProjectID: "proj"},
+			`{"type":"list_sessions","id":"s1","project_id":"proj"}`,
+		},
+		{
+			"session_list",
+			SessionListFromHost{Type: "session_list", ID: "s1", Sessions: []SessionInfo{{SessionID: "abc", Title: "hi", Messages: 3, ModTime: 42}}},
+			`{"type":"session_list","id":"s1","sessions":[{"session_id":"abc","title":"hi","messages":3,"mtime":42}]}`,
+		},
+		{
+			"read_session",
+			ReadSessionFromExt{Type: "read_session", ID: "s2", SessionID: "abc"},
+			`{"type":"read_session","id":"s2","session_id":"abc"}`,
+		},
+		{
+			"session_data",
+			SessionDataFromHost{Type: "session_data", ID: "s2", Messages: []SessionMessage{{Role: "user", Text: "hi"}}},
+			`{"type":"session_data","id":"s2","messages":[{"role":"user","text":"hi"}]}`,
+		},
+		{
 			"register_tool",
 			RegisterToolFromExt{Type: "register_tool", Name: "lookup", Schema: json.RawMessage(`{"type":"object"}`)},
 			`{"type":"register_tool","name":"lookup","schema":{"type":"object"}}`,

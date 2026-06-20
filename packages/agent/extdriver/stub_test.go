@@ -16,3 +16,4 @@ func (stubHooks) OpenPanel(extName string, spec extproto.PanelSpec) {}
 func (stubHooks) UpdatePanel(a, b, c string, d []string, e string)  {}
 func (stubHooks) ClosePanel(extName, panelID string)                {}
 func (stubHooks) RefreshStatus()                                    {}
+func (stubHooks) RefreshContext()                                   {}

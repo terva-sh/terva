@@ -419,6 +419,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 		recordCall(call.ID)
 		return ladder(call)
 	}
+	wireHostToolDispatcher(ag, extMgr, confirmGate)
 	// Apply the subset of the non-interactive extension hooks that make sense
 	// under ACP: BeforeTurn / BeforeAssistantMessage (extension turn +
 	// assistant-message intercepts), ContextProvider (live context cards), and
@@ -782,7 +783,8 @@ func (f *acpFactory) setupACPExtensions(ctx context.Context, args Args, r *Resol
 	extMgr := extensions.New(TervaHome(), r.CWD, f.version, r.Provider, r.Model, nonInteractiveExtHooks{})
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
-	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
+	wireSessionReader(extMgr, TervaHome(), r.CWD)
+	extMgr.SetProjectTrusted(r.Trusted) // gate project ext dirs on Workspace Trust
 	// --ext paths first so they win against installed extensions of the same
 	// name (loadOne's first-write-wins semantics).
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {

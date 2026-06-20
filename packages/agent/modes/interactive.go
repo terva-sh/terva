@@ -63,6 +63,15 @@ type InteractiveConfig struct {
 	AutoSwarmSystemAddendum string
 	SettingsStore           SettingsStore
 
+	// RebuildExtensionContext re-folds the extensions' static context
+	// into the system prompt after one of them sent refresh_context
+	// (protocol 3), returning the rebuilt prompt and whether it changed.
+	// Plumbed in from the cli (which owns the Resolved + extension
+	// source) to avoid a modes->agent import cycle; nil when extensions
+	// aren't enabled. Interactive applies the result to the running
+	// agent's System on the main goroutine.
+	RebuildExtensionContext func() (string, bool)
+
 	// Agent is optional. If nil, terva opens without credentials; the
 	// user must /login before they can prompt.
 	Agent *core.Agent

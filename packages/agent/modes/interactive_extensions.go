@@ -153,6 +153,27 @@ func (i *Interactive) extStatusSegments() []string {
 // frame. (HostHooks.)
 func (i *Interactive) RefreshStatus() { i.invalidate() }
 
+// RefreshContext is the manager's hook for refresh_context (protocol 3):
+// an extension swapped its static context block, so re-fold it into the
+// system prompt and apply the result to the running agent. Marshalled
+// onto the main goroutine — it mutates agent.System, which the turn loop
+// reads — and a no-op when extensions aren't enabled or nothing changed.
+// (HostHooks.)
+func (i *Interactive) RefreshContext() {
+	if i.cfg.RebuildExtensionContext == nil {
+		return
+	}
+	i.runOnMain(func() {
+		sys, changed := i.cfg.RebuildExtensionContext()
+		if !changed {
+			return
+		}
+		if ag := i.turns.Agent(); ag != nil {
+			ag.System = sys
+		}
+	})
+}
+
 // slashContext lists what each extension is contributing to the model
 // — static guidance and live cards — so the user can see exactly what
 // the context-card capability is injecting. The transparency half of

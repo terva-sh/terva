@@ -126,6 +126,27 @@ func (r *Resolved) AddExtraTools(extra []core.Tool) {
 	r.rebuildSystemPrompt()
 }
 
+// RefreshExtensionContext re-pulls the source's static context
+// (register_context / refresh_context) and rebuilds the cached system
+// prompt if it changed, WITHOUT touching the tool registry — so a live
+// session can update its agent's prompt when an extension swaps its
+// context block mid-session (protocol 3) without re-merging tools. It
+// returns the (possibly rebuilt) system prompt and whether it changed,
+// so the caller updates the running agent only when there is something
+// to update. nil-safe on the source.
+func (r *Resolved) RefreshExtensionContext(mgr interface{ StaticContext() string }) (string, bool) {
+	if mgr == nil {
+		return r.SystemPrompt, false
+	}
+	text := mgr.StaticContext()
+	if text == r.extensionContext {
+		return r.SystemPrompt, false
+	}
+	r.extensionContext = text
+	r.rebuildSystemPrompt()
+	return r.SystemPrompt, true
+}
+
 // rebuildSystemPrompt re-renders SystemPrompt from the captured
 // resolve-time materials plus the current tool registry and the
 // extensions' static context contribution. The single render path for

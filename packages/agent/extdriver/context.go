@@ -29,7 +29,12 @@ type contextCard struct {
 // flooding the model; the total ephemeral cap bounds the uncached
 // per-turn tail across all extensions.
 const (
-	maxStaticContextBytes = 2048
+	// maxStaticContextBytes bounds one extension's static system-prompt
+	// block. Larger than the early limit so a memory-style extension can
+	// carry a few KB of standing notes (refresh_context, protocol 3)
+	// while the host still trims any one extension that floods the cached
+	// prefix.
+	maxStaticContextBytes = 8192
 	maxCardBytes          = 4096
 	maxEphemeralBytes     = 8192
 )

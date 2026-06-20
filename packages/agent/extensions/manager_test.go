@@ -55,6 +55,7 @@ func (s *stubHooks) OpenPanel(extName string, spec extproto.PanelSpec) {
 func (s *stubHooks) UpdatePanel(string, string, string, []string, string) {}
 func (s *stubHooks) ClosePanel(string, string)                            {}
 func (s *stubHooks) RefreshStatus()                                       {}
+func (s *stubHooks) RefreshContext()                                      {}
 
 // writeMockExtension creates a minimal extension on disk that uses a
 // shell script (or batch file on windows) to drive the protocol. The

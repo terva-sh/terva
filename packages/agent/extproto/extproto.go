@@ -44,7 +44,21 @@ const MaxToolCallBytes = 1 << 20 // 1 MiB
 //	    a host guarantee that session_start reaches a subscriber before
 //	    that session's first tool invocation (ordered delivery). An
 //	    extension that needs per-session state declares RequireProtocol(2).
-const ProtocolVersion = 2
+//	3 — refreshable context + host tool calls. refresh_context lets an
+//	    extension replace its static system-prompt block at any time (not
+//	    just the register phase), and the host rebuilds the cached system
+//	    prompt live; the per-extension static budget is also larger (see
+//	    context.go). host_tool_call lets an extension run one of the
+//	    HOST's tools (read/bash/an MCP tool…) under the host's own
+//	    permission gate and get the result back — the reverse of tool_call
+//	    — so a code-execution extension can call host tools from a
+//	    sandboxed script. list_sessions / read_session give an extension
+//	    read-only, project-scoped access to past session transcripts (for
+//	    a session-search index, say). An extension that needs any of these
+//	    declares RequireProtocol(3). Additive: a v2 host ignores the new
+//	    frames (an unanswered request simply never returns; the static
+//	    block stays at its register-phase value).
+const ProtocolVersion = 3
 
 type Frame struct {
 	Type string `json:"type"`
@@ -97,6 +111,94 @@ type RegisterToolFromExt struct {
 
 type ReadyFromExt struct {
 	Type string `json:"type"`
+}
+
+// HostToolCallFromExt asks the host to run one of ITS tools (read, bash,
+// grep, an MCP tool, …) on the extension's behalf and return the result
+// — the reverse of tool_call (where the host drives an extension tool).
+// Its purpose is an extension that orchestrates host tools without going
+// through the model: e.g. a code-execution extension whose sandboxed
+// script calls read/grep/bash as functions, so a multi-step pipeline
+// runs in one turn. The host runs the tool under the SAME permission
+// policy and approval gate as a model-issued call and may refuse on
+// trust grounds (an untrusted project's extension gets no host tools) —
+// the extension gains *reach*, never *authority*. ID is the extension's
+// correlation id, which the host echoes on the matching
+// host_tool_result. Silent asks the host to run the call without
+// surfacing it as a model-visible result (the "intermediate calls don't
+// pollute context" path). Protocol 3; declare RequireProtocol(3).
+type HostToolCallFromExt struct {
+	Type   string          `json:"type"`
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Args   json.RawMessage `json:"args"`
+	Silent bool            `json:"silent,omitempty"`
+}
+
+// HostToolResultFromHost carries a HostToolCallFromExt outcome back to
+// the extension, correlated by the extension's ID. Mirrors
+// ToolResultFromExt's content/error shape.
+type HostToolResultFromHost struct {
+	Type    string         `json:"type"`
+	ID      string         `json:"id"`
+	Content []ContentBlock `json:"content"`
+	IsError bool           `json:"is_error,omitempty"`
+}
+
+// ListSessionsFromExt asks the host for the past sessions of a project
+// (protocol 3), so an extension can index them — e.g. a session-search
+// store building an FTS index over prior conversations. Read-only and
+// project-scoped: the host returns only the active project's sessions
+// (ProjectID, if given, must match; cross-project reads are not granted
+// here). The host echoes ID on the matching session_list.
+type ListSessionsFromExt struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	ProjectID string `json:"project_id,omitempty"`
+}
+
+// SessionListFromHost answers ListSessionsFromExt with the project's
+// sessions, newest-first as the host stores them.
+type SessionListFromHost struct {
+	Type     string        `json:"type"`
+	ID       string        `json:"id"`
+	Sessions []SessionInfo `json:"sessions"`
+}
+
+// SessionInfo is one past session's metadata. SessionID is the stable id
+// (also what ReadSessionFromExt takes); ModTime is unix seconds.
+type SessionInfo struct {
+	SessionID string `json:"session_id"`
+	Title     string `json:"title,omitempty"`
+	Preview   string `json:"preview,omitempty"`
+	Messages  int    `json:"messages,omitempty"`
+	ModTime   int64  `json:"mtime,omitempty"`
+}
+
+// ReadSessionFromExt asks the host for the transcript of one session by
+// id (protocol 3). Read-only; the host serves it only if the session
+// belongs to the active project.
+type ReadSessionFromExt struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+}
+
+// SessionDataFromHost answers ReadSessionFromExt with a flattened
+// role+text view of the session's messages — the shape a text index
+// wants, not the full tool-call structure. NotFound is set when the id
+// is unknown or out of the active project.
+type SessionDataFromHost struct {
+	Type     string           `json:"type"`
+	ID       string           `json:"id"`
+	Messages []SessionMessage `json:"messages"`
+	NotFound bool             `json:"not_found,omitempty"`
+}
+
+// SessionMessage is one transcript entry flattened to role + text.
+type SessionMessage struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
 }
 
 type SubscribeFromExt struct {
@@ -218,6 +320,21 @@ type ShutdownAckFromExt struct {
 // the system-prompt addendum (host-wrapped + bounded). Sent during the
 // register phase, like register_command / register_tool.
 type RegisterContextFromExt struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// RefreshContextFromExt replaces the extension's static system-prompt
+// block at any time after the register phase (ProtocolVersion 3+). It is
+// register_context you can send mid-session: the host swaps the block,
+// rebuilds the cached system prompt, and the change takes effect on the
+// next turn. The block stays a *snapshot* — it changes only when the
+// extension sends this frame, not per turn — so an extension can
+// re-snapshot at a session boundary (new project → that project's notes)
+// without churning the prompt cache every turn. Same host wrapping,
+// attribution, and byte bound as register_context. Empty Text clears the
+// block.
+type RefreshContextFromExt struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }

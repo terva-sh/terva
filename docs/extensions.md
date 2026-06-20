@@ -191,6 +191,15 @@ guidance folded into the system prompt (`register_context`), live
 per-turn cards (`context_card`), and a status-line segment
 (`status_segment`). Run `/context` to see exactly what's injected.
 
+The static block is normally set once during registration. An extension
+that needs to **swap it mid-session** — a memory store loading this
+project's notes on `session_start`, say — sends `refresh_context`
+(protocol 3, declare `RequireProtocol(3)`): the host replaces the block
+and rebuilds the cached system prompt so it takes effect on the next
+turn. It stays a *snapshot* — it changes only when the extension sends
+the frame, not every turn — so the prompt cache survives. The per-block
+budget is a few KB; the host trims anything larger.
+
 Installing an extension is consent to run it, but you can opt one out of
 injecting into the model's context — per user **or** per project — with
 `disable_context_extensions` in `config.json`:
@@ -264,6 +273,47 @@ the `plan` approval mode and auto-allowed in `auto-edit` (see
 [permissions.md](permissions.md)); unannotated tools are treated as
 mutating. Lying here only cheats your own user's policy. Old hosts
 ignore the field; old extensions never send it — fully additive.
+
+#### `host_tool_call` (protocol 3)
+
+The reverse of `tool_call`: an extension asks the host to run one of the
+**host's own** tools (read, grep, bash, an MCP tool…) and sends back a
+`host_tool_result` correlated by the extension's `id`. It exists so an
+extension can orchestrate host tools without a model round-trip — e.g. a
+code-execution extension whose sandboxed script calls `read`/`grep`/`bash`
+as functions, collapsing a multi-step pipeline into one turn.
+
+```json
+{"type":"host_tool_call","id":"c1","name":"read","args":{"path":"README.md"},"silent":true}
+// → {"type":"host_tool_result","id":"c1","content":[{"type":"text","text":"…"}]}
+```
+
+The host runs the tool under the **same permission gate** a model call
+uses — an extension gains reach, never authority — and refuses
+extension-owned tools, so a `host_tool_call` cannot recurse back into an
+extension (only built-in and MCP tools are reachable). `silent` is a hint
+not to surface the call in the UI. Declare `RequireProtocol(3)`; a host
+that doesn't support it answers with an error result.
+
+#### `list_sessions` / `read_session` (protocol 3)
+
+Read-only, project-scoped access to past session transcripts, so an
+extension can index prior conversations — e.g. a session-search store
+building an FTS index. `list_sessions` returns the active project's
+sessions; `read_session` returns one transcript flattened to role+text
+(the shape a text index wants, not the full tool-call structure).
+
+```json
+{"type":"list_sessions","id":"l1"}
+// → {"type":"session_list","id":"l1","sessions":[{"session_id":"…","title":"…","messages":12,"mtime":…}]}
+{"type":"read_session","id":"r1","session_id":"…"}
+// → {"type":"session_data","id":"r1","messages":[{"role":"user","text":"…"},…]}
+```
+
+Cross-project reads are not granted here (a non-matching `project_id`
+returns nothing), and a `session_id` that tries to escape the project's
+session directory is refused. Declare `RequireProtocol(3)`; an
+unsupported host returns an empty list / `not_found`.
 
 From the Go SDK, pass `ext.ReadOnly()` as a trailing option to declare
 it:

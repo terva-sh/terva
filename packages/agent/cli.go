@@ -97,6 +97,11 @@ func (h *interactiveExtHooks) RefreshStatus() {
 		iv.RefreshStatus()
 	}
 }
+func (h *interactiveExtHooks) RefreshContext() {
+	if iv := h.iv(); iv != nil {
+		iv.RefreshContext()
+	}
+}
 
 // extToolAdapter bridges *extensions.Manager to the
 // ExtensionToolSource interface declared in build.go (kept narrow to
@@ -510,6 +515,7 @@ func (nonInteractiveExtHooks) OpenPanel(string, extproto.PanelSpec)             
 func (nonInteractiveExtHooks) UpdatePanel(string, string, string, []string, string) {}
 func (nonInteractiveExtHooks) ClosePanel(string, string)                            {}
 func (nonInteractiveExtHooks) RefreshStatus()                                       {}
+func (nonInteractiveExtHooks) RefreshContext()                                      {}
 
 // setupNonInteractiveExtensions loads --ext paths and (unless
 // --no-ext) runs discovery. Returns the manager so the caller can
@@ -520,6 +526,7 @@ func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, 
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
+	wireSessionReader(extMgr, TervaHome(), r.CWD)
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
 	}
@@ -690,6 +697,7 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 		return
 	}
 	ag.BeforeToolExecute = buildBeforeToolExecute(ctx, hookEng, gate, extMgr)
+	wireHostToolDispatcher(ag, extMgr, gate)
 	ag.BeforeTurn = func(step int) (bool, string) {
 		res := extMgr.InterceptTurnStart(ctx, step)
 		return !res.Block, res.Reason
@@ -919,6 +927,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
+	wireSessionReader(extMgr, TervaHome(), r.CWD)
 	// --ext paths first so they win against installed extensions of
 	// the same name (loadOne's first-write-wins semantics).
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
@@ -1035,9 +1044,11 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			return reg
 		}
 		reg["swarm_spawn"] = &tools.SwarmSpawnTool{
-			Swarm:     swarmMgr,
-			Enabled:   AutoSwarmEnabled,
-			OnSpawned: onSpawnedSwarm,
+			Swarm:        swarmMgr,
+			Enabled:      AutoSwarmEnabled,
+			OnSpawned:    onSpawnedSwarm,
+			HostProvider: r.Provider,
+			HostModel:    r.Model,
 		}
 		return reg
 	}
@@ -1081,6 +1092,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		// extension intercept — shared with the headless modes via
 		// buildBeforeToolExecute so the orders cannot drift.
 		a.BeforeToolExecute = buildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
+		wireHostToolDispatcher(a, extMgr, confirmGate)
 		a.BeforeTurn = func(step int) (bool, string) {
 			r := extMgr.InterceptTurnStart(ctx, step)
 			return !r.Block, r.Reason
@@ -1668,16 +1680,22 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	}
 
 	iv = modes.NewInteractive(modes.InteractiveConfig{
-		Terminal:                   term,
-		Theme:                      theme,
-		InlineImagesEnabled:        initialCfg.InlineImagesEnabled,
-		AutoSwarmEnabled:           initialCfg.AutoSwarmEnabled,
-		RecursiveFileSuggest:       initialCfg.RecursiveFileSuggest,
-		RespectGitignore:           initialCfg.RespectGitignore,
-		ThemeName:                  initialCfg.Theme,
-		ExtensionThemes:            func() []tui.ThemeOption { return extensionThemeOptions(extMgr) },
-		AutoSwarmSystemAddendum:    AutoSwarmSystemAddendum,
-		SettingsStore:              configSettingsStore{},
+		Terminal:                term,
+		Theme:                   theme,
+		InlineImagesEnabled:     initialCfg.InlineImagesEnabled,
+		AutoSwarmEnabled:        initialCfg.AutoSwarmEnabled,
+		RecursiveFileSuggest:    initialCfg.RecursiveFileSuggest,
+		RespectGitignore:        initialCfg.RespectGitignore,
+		ThemeName:               initialCfg.Theme,
+		ExtensionThemes:         func() []tui.ThemeOption { return extensionThemeOptions(extMgr) },
+		AutoSwarmSystemAddendum: AutoSwarmSystemAddendum,
+		SettingsStore:           configSettingsStore{},
+		RebuildExtensionContext: func() (string, bool) {
+			if extMgr == nil {
+				return r.SystemPrompt, false
+			}
+			return r.RefreshExtensionContext(extToolAdapter)
+		},
 		Model:                      r.Model,
 		Provider:                   r.Provider,
 		AuthMethod:                 r.AuthMethod,

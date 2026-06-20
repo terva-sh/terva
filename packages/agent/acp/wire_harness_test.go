@@ -661,6 +661,7 @@ func (nonInteractiveExtHooksStub) OpenPanel(string, extproto.PanelSpec)         
 func (nonInteractiveExtHooksStub) UpdatePanel(string, string, string, []string, string) {}
 func (nonInteractiveExtHooksStub) ClosePanel(string, string)                            {}
 func (nonInteractiveExtHooksStub) RefreshStatus()                                       {}
+func (nonInteractiveExtHooksStub) RefreshContext()                                      {}
 
 // manifestPermissionRules reads every installed extension's extension.json
 // under root/extensions and compiles its `permissions` array into

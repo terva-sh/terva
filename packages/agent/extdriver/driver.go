@@ -57,6 +57,14 @@ type HostHooks interface {
 	// its status-bar segment (status_segment), so the update shows even
 	// when nothing else triggers a frame. No-op outside interactive mode.
 	RefreshStatus()
+
+	// RefreshContext asks the host to rebuild the cached system prompt
+	// after an extension replaced its static context block
+	// (refresh_context, protocol 3), so the new block takes effect on the
+	// next turn. No-op where the prompt is fixed for the run
+	// (print/json/rpc build it once); the live interactive/ACP session
+	// re-folds it.
+	RefreshContext()
 }
 
 // Driver owns every extension subprocess's wire for the lifetime of
@@ -98,7 +106,43 @@ type Driver struct {
 	// frames are logged as ever; a conformance harness sets it to make
 	// the stdout-purity check a first-class assertion. Guarded by mu.
 	onMalformedFrame func(extName, raw, reason string)
+
+	// hostToolDispatch, if set, runs a host tool on behalf of an
+	// extension's host_tool_call (protocol 3). The driver is
+	// dependency-light and owns neither the tool registry nor the
+	// permission gate, so the agent layer injects this; nil means host
+	// tool calls are unsupported and every host_tool_call is answered
+	// with an error. Guarded by mu.
+	hostToolDispatch HostToolDispatcher
+
+	// sessionReader, if set, serves an extension's list_sessions /
+	// read_session (protocol 3). The driver does not own session
+	// storage, so the agent layer injects this; nil means session reads
+	// are unsupported (an empty list / not-found). Guarded by mu.
+	sessionReader SessionReader
 }
+
+// SessionReader gives an extension read-only, project-scoped access to
+// past session transcripts (protocol 3 list_sessions / read_session).
+// Injected by the host because the dependency-light driver does not own
+// session storage. extName is the calling extension (the host may scope
+// what it returns); ListSessions honors a project_id filter, ReadSession
+// returns found=false for an unknown or out-of-project id.
+type SessionReader interface {
+	ListSessions(extName, projectID string) []extproto.SessionInfo
+	ReadSession(extName, sessionID string) (msgs []extproto.SessionMessage, found bool)
+}
+
+// HostToolDispatcher runs a host tool for an extension's host_tool_call
+// and returns the result content. Injected by the host because the
+// dependency-light driver cannot import the tool registry or permission
+// policy. extName is the calling extension (for trust / authority
+// decisions); silent is the extension's hint to not surface the call in
+// the UI/transcript. Implementations must run the tool under the host's
+// normal permission gate — the extension gets reach, not authority — and
+// should bound their own runtime (the driver passes a background
+// context).
+type HostToolDispatcher func(ctx context.Context, extName, toolName string, args json.RawMessage, silent bool) (content []extproto.ContentBlock, isError bool)
 
 // New constructs an empty Driver. The host integration layer calls
 // Load for each discovered extension to populate it.
@@ -169,6 +213,24 @@ func (d *Driver) TervaHome() string { return d.tervaHome }
 func (d *Driver) SetOnMalformedFrame(fn func(extName, raw, reason string)) {
 	d.mu.Lock()
 	d.onMalformedFrame = fn
+	d.mu.Unlock()
+}
+
+// SetHostToolDispatcher installs the handler that runs host tools for
+// extension host_tool_call frames (protocol 3). nil (the default) leaves
+// host tool calls unsupported. Set before loading extensions.
+func (d *Driver) SetHostToolDispatcher(fn HostToolDispatcher) {
+	d.mu.Lock()
+	d.hostToolDispatch = fn
+	d.mu.Unlock()
+}
+
+// SetSessionReader installs the reader that serves extension
+// list_sessions / read_session frames (protocol 3). nil (the default)
+// leaves session reads unsupported. Set before loading extensions.
+func (d *Driver) SetSessionReader(r SessionReader) {
+	d.mu.Lock()
+	d.sessionReader = r
 	d.mu.Unlock()
 }
 
@@ -717,6 +779,39 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 				ext.mu.Lock()
 				ext.staticContext = rc.Text
 				ext.mu.Unlock()
+			}
+		case "refresh_context":
+			// register_context you can send mid-session (protocol 3):
+			// swap the static block and ask the host to rebuild the
+			// cached system prompt so it takes effect next turn.
+			var rc extproto.RefreshContextFromExt
+			if err := json.Unmarshal(line, &rc); err == nil {
+				ext.mu.Lock()
+				changed := ext.staticContext != rc.Text
+				ext.staticContext = rc.Text
+				ext.mu.Unlock()
+				if changed {
+					d.hooks.RefreshContext()
+				}
+			}
+		case "host_tool_call":
+			// The extension asks the host to run one of its tools
+			// (protocol 3). Dispatch off the read-loop goroutine so a
+			// blocking approval prompt doesn't stall reading; the reply
+			// is correlated by the extension's own id.
+			var htc extproto.HostToolCallFromExt
+			if err := json.Unmarshal(line, &htc); err == nil {
+				d.handleHostToolCall(ext, htc)
+			}
+		case "list_sessions":
+			var ls extproto.ListSessionsFromExt
+			if err := json.Unmarshal(line, &ls); err == nil {
+				d.handleListSessions(ext, ls)
+			}
+		case "read_session":
+			var rs extproto.ReadSessionFromExt
+			if err := json.Unmarshal(line, &rs); err == nil {
+				d.handleReadSession(ext, rs)
 			}
 		case "context_card":
 			var cc extproto.ContextCardFromExt

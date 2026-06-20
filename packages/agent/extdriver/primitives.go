@@ -147,6 +147,72 @@ func (d *Driver) InvokeTool(ctx context.Context, name string, args json.RawMessa
 	}
 }
 
+// handleHostToolCall runs an extension's host_tool_call through the
+// injected dispatcher and replies with a host_tool_result correlated by
+// the extension's own id. The dispatch runs on a fresh goroutine because
+// it may block on an approval prompt and the read loop must keep
+// reading; writeFrame is safe to call concurrently (it enqueues onto the
+// single-writer outbox). A nil dispatcher means host tool calls are
+// unsupported, answered with an error result so the extension's script
+// fails cleanly instead of hanging.
+func (d *Driver) handleHostToolCall(ext *Extension, htc extproto.HostToolCallFromExt) {
+	d.mu.RLock()
+	dispatch := d.hostToolDispatch
+	d.mu.RUnlock()
+
+	reply := func(content []extproto.ContentBlock, isErr bool) {
+		_ = ext.writeFrame(extproto.HostToolResultFromHost{
+			Type:    "host_tool_result",
+			ID:      htc.ID,
+			Content: content,
+			IsError: isErr,
+		})
+	}
+
+	if dispatch == nil {
+		reply([]extproto.ContentBlock{{Type: "text", Text: "host tool calls are not supported by this host"}}, true)
+		return
+	}
+	go func() {
+		content, isErr := dispatch(context.Background(), ext.Manifest.Name, htc.Name, htc.Args, htc.Silent)
+		reply(content, isErr)
+	}()
+}
+
+// handleListSessions serves an extension's list_sessions via the
+// injected reader and replies with session_list, correlated by the
+// extension's id. Off the read-loop goroutine in case the reader touches
+// disk. A nil reader yields an empty list (session reads unsupported).
+func (d *Driver) handleListSessions(ext *Extension, ls extproto.ListSessionsFromExt) {
+	d.mu.RLock()
+	reader := d.sessionReader
+	d.mu.RUnlock()
+	go func() {
+		var sessions []extproto.SessionInfo
+		if reader != nil {
+			sessions = reader.ListSessions(ext.Manifest.Name, ls.ProjectID)
+		}
+		_ = ext.writeFrame(extproto.SessionListFromHost{Type: "session_list", ID: ls.ID, Sessions: sessions})
+	}()
+}
+
+// handleReadSession serves an extension's read_session via the injected
+// reader and replies with session_data. A nil reader or an unknown /
+// out-of-project id yields not_found.
+func (d *Driver) handleReadSession(ext *Extension, rs extproto.ReadSessionFromExt) {
+	d.mu.RLock()
+	reader := d.sessionReader
+	d.mu.RUnlock()
+	go func() {
+		if reader == nil {
+			_ = ext.writeFrame(extproto.SessionDataFromHost{Type: "session_data", ID: rs.ID, NotFound: true})
+			return
+		}
+		msgs, found := reader.ReadSession(ext.Manifest.Name, rs.SessionID)
+		_ = ext.writeFrame(extproto.SessionDataFromHost{Type: "session_data", ID: rs.ID, Messages: msgs, NotFound: !found})
+	}()
+}
+
 // HasCommand reports whether name is registered by any extension.
 func (d *Driver) HasCommand(name string) bool {
 	d.mu.RLock()

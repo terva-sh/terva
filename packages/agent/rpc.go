@@ -61,7 +61,8 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
-	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
+	wireSessionReader(extMgr, TervaHome(), r.CWD)
+	extMgr.SetProjectTrusted(r.Trusted) // gate project ext dirs on Workspace Trust
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
 	}
@@ -81,6 +82,7 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	// Canonical tool-call ladder (pre-hooks, confirm gate, extension
 	// intercept) — shared with every other mode.
 	ag.BeforeToolExecute = buildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
+	wireHostToolDispatcher(ag, extMgr, confirmGate)
 	ag.BeforeTurn = func(step int) (bool, string) {
 		r := extMgr.InterceptTurnStart(ctx, step)
 		return !r.Block, r.Reason
@@ -171,7 +173,8 @@ func (h *rpcExtHooks) Insert(string)                                        {} /
 func (h *rpcExtHooks) OpenPanel(string, extproto.PanelSpec)                 {}
 func (h *rpcExtHooks) UpdatePanel(string, string, string, []string, string) {}
 func (h *rpcExtHooks) ClosePanel(string, string)                            {}
-func (h *rpcExtHooks) RefreshStatus()                                       {}
+func (h *rpcExtHooks) RefreshStatus()                                       {} // ignored in rpc mode
+func (h *rpcExtHooks) RefreshContext()                                      {} // prompt is fixed for the run
 
 type rpcServer struct {
 	ctx      context.Context

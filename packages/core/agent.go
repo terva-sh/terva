@@ -294,6 +294,17 @@ func (a *Agent) SetTools(reg Registry) {
 	a.mu.Unlock()
 }
 
+// LookupTool returns the tool registered under name in the live
+// registry. Race-free against SetTools, so it is safe to call from a
+// goroutine other than the turn loop (e.g. an extension's host_tool_call
+// dispatch).
+func (a *Agent) LookupTool(name string) (Tool, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	t, ok := a.Tools[name]
+	return t, ok
+}
+
 // SetMessages replaces the transcript (used when resuming a session).
 func (a *Agent) SetMessages(msgs []provider.Message) {
 	a.mu.Lock()
