@@ -35,8 +35,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
 )
@@ -301,6 +304,15 @@ type Extension struct {
 
 	// hostInfo is filled in once HelloAck arrives.
 	host HostInfo
+
+	// pending correlates an outbound ext→host request (host_tool_call,
+	// list_sessions, read_session — protocol 3) with its reply. The Run
+	// loop routes a reply frame to the waiting channel by id. seq mints
+	// the ids. These are the ONLY request/response calls the ext makes;
+	// every other inbound frame is host-initiated.
+	pendingMu sync.Mutex
+	pending   map[string]chan json.RawMessage
+	seq       atomic.Uint64
 }
 
 type descTuple struct {
@@ -390,13 +402,18 @@ func New(name, version string) *Extension {
 		eventHandlers: map[string]EventHandler{},
 		panelKeys:     map[string]func(key, text string){},
 		panelCloses:   map[string]func(){},
+		pending:       map[string]chan json.RawMessage{},
 		caps:          []string{"commands", "tools", "events", "panels"},
 	}
 }
 
 // Host returns the HostInfo received during the hello handshake.
 // Returns the zero value if Run hasn't started yet.
-func (e *Extension) Host() HostInfo { return e.host }
+func (e *Extension) Host() HostInfo {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.host
+}
 
 // ProjectDataDir returns the per-project writable directory for this
 // extension — DataDir/projects/<ProjectID> — creating it on call. Use
@@ -707,6 +724,203 @@ func (e *Extension) ContributeContext(text string) {
 	e.mu.Unlock()
 }
 
+// RefreshContext replaces this extension's static system-prompt block at
+// any time after the register handshake — register_context you can send
+// mid-session. Unlike ContributeContext (set once, flushed in Run), call
+// this whenever the block should change: typically from an OnSession
+// handler to swap in the active project's standing context (a memory
+// store's notes, say). The host rebuilds the cached system prompt, and
+// the block stays a *snapshot* — it changes only when you call this, not
+// per turn, so the prompt cache survives mid-session writes. An empty
+// string clears the block. Requires host protocol 3; gate with
+// RequireProtocol(3).
+func (e *Extension) RefreshContext(text string) {
+	e.mu.Lock()
+	e.contextContribution = text
+	e.mu.Unlock()
+	_ = e.send(extproto.RefreshContextFromExt{Type: "refresh_context", Text: text})
+}
+
+// --- ext→host requests (protocol 3) ----------------------------------
+//
+// host_tool_call, list_sessions, and read_session are the only calls the
+// extension *initiates* that expect a reply. nextID mints a correlation
+// id; request registers a reply slot, sends the frame, and blocks until
+// the matching reply lands (routed by the Run loop), the timeout fires,
+// or the wire is sent but never answered. Tool/command handlers already
+// run on their own goroutines, so blocking here blocks that handler, not
+// the read loop.
+
+const defaultRequestTimeout = 30 * time.Second
+
+func (e *Extension) nextID() string { return "req-" + strconv.FormatUint(e.seq.Add(1), 10) }
+
+// request sends frame (whose id field must equal id) and waits for the
+// reply line the Run loop delivers for that id.
+func (e *Extension) request(id string, frame any, timeout time.Duration) (json.RawMessage, error) {
+	ch := make(chan json.RawMessage, 1)
+	e.pendingMu.Lock()
+	e.pending[id] = ch
+	e.pendingMu.Unlock()
+	cancel := func() {
+		e.pendingMu.Lock()
+		delete(e.pending, id)
+		e.pendingMu.Unlock()
+	}
+	if err := e.send(frame); err != nil {
+		cancel()
+		return nil, err
+	}
+	select {
+	case line := <-ch:
+		return line, nil
+	case <-time.After(timeout):
+		cancel()
+		return nil, fmt.Errorf("timed out waiting for host reply")
+	}
+}
+
+// deliverReply routes a reply frame to the waiting request by id. Called
+// from the Run loop for host_tool_result / session_list / session_data.
+func (e *Extension) deliverReply(id string, line json.RawMessage) {
+	e.pendingMu.Lock()
+	ch := e.pending[id]
+	delete(e.pending, id)
+	e.pendingMu.Unlock()
+	if ch != nil {
+		ch <- line // buffered (cap 1); the sole waiter is registered
+	}
+}
+
+// HostCallOption tunes a HostToolCall.
+type HostCallOption func(*hostCallConfig)
+
+type hostCallConfig struct {
+	silent  bool
+	timeout time.Duration
+}
+
+// Silent controls whether the host surfaces the host tool call in the
+// UI/transcript. The default is true (the call is hidden — the point of
+// running tools from a script). Pass Silent(false) to make it visible.
+func Silent(on bool) HostCallOption { return func(c *hostCallConfig) { c.silent = on } }
+
+// WithCallTimeout overrides the default 30s wait for a host tool call (a
+// host tool can block on an approval prompt or a long command).
+func WithCallTimeout(d time.Duration) HostCallOption {
+	return func(c *hostCallConfig) { c.timeout = d }
+}
+
+// HostToolCall runs one of the HOST's own tools (read, grep, glob, bash,
+// an MCP tool, …) and returns its result. The host runs it under the
+// SAME permission gate a model call uses — the extension gains reach, not
+// authority — and refuses extension-owned tools, so a call cannot recurse
+// back into an extension. This is how a code-execution extension runs
+// host tools from a sandboxed script with the intermediate calls kept out
+// of the model's context (Silent, the default). Requires host protocol 3;
+// gate with RequireProtocol(3).
+func (e *Extension) HostToolCall(name string, args json.RawMessage, opts ...HostCallOption) (ToolResult, error) {
+	cfg := hostCallConfig{silent: true, timeout: defaultRequestTimeout}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	id := e.nextID()
+	line, err := e.request(id, extproto.HostToolCallFromExt{
+		Type:   "host_tool_call",
+		ID:     id,
+		Name:   name,
+		Args:   args,
+		Silent: cfg.silent,
+	}, cfg.timeout)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	var res extproto.HostToolResultFromHost
+	if err := json.Unmarshal(line, &res); err != nil {
+		return ToolResult{}, err
+	}
+	return toolResultFromBlocks(res.Content, res.IsError), nil
+}
+
+// SessionInfo describes one past session (ListSessions). ModTime is unix
+// seconds.
+type SessionInfo struct {
+	ID       string
+	Title    string
+	Preview  string
+	Messages int
+	ModTime  int64
+}
+
+// SessionMessage is one transcript entry flattened to role + text.
+type SessionMessage struct {
+	Role string
+	Text string
+}
+
+// ListSessions returns the active project's past sessions (newest-first
+// as the host stores them) so an extension can index them — e.g. a
+// session-search store. Read-only and project-scoped. Requires host
+// protocol 3; gate with RequireProtocol(3).
+func (e *Extension) ListSessions() ([]SessionInfo, error) {
+	id := e.nextID()
+	line, err := e.request(id, extproto.ListSessionsFromExt{
+		Type:      "list_sessions",
+		ID:        id,
+		ProjectID: e.Host().ProjectID,
+	}, defaultRequestTimeout)
+	if err != nil {
+		return nil, err
+	}
+	var resp extproto.SessionListFromHost
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]SessionInfo, len(resp.Sessions))
+	for i, s := range resp.Sessions {
+		out[i] = SessionInfo{ID: s.SessionID, Title: s.Title, Preview: s.Preview, Messages: s.Messages, ModTime: s.ModTime}
+	}
+	return out, nil
+}
+
+// ReadSession returns one session's transcript, flattened to role+text
+// (the shape a text index wants, not the full tool-call structure).
+// Returns an error when the id is unknown or outside the active project.
+// Requires host protocol 3; gate with RequireProtocol(3).
+func (e *Extension) ReadSession(sessionID string) ([]SessionMessage, error) {
+	id := e.nextID()
+	line, err := e.request(id, extproto.ReadSessionFromExt{
+		Type:      "read_session",
+		ID:        id,
+		SessionID: sessionID,
+	}, defaultRequestTimeout)
+	if err != nil {
+		return nil, err
+	}
+	var resp extproto.SessionDataFromHost
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return nil, err
+	}
+	if resp.NotFound {
+		return nil, fmt.Errorf("session %q not found (unknown id or outside the active project)", sessionID)
+	}
+	out := make([]SessionMessage, len(resp.Messages))
+	for i, m := range resp.Messages {
+		out[i] = SessionMessage{Role: m.Role, Text: m.Text}
+	}
+	return out, nil
+}
+
+// toolResultFromBlocks converts wire content blocks into the SDK's
+// ToolResult (the inverse of respondTool's mapping).
+func toolResultFromBlocks(blocks []extproto.ContentBlock, isError bool) ToolResult {
+	content := make([]ToolContent, 0, len(blocks))
+	for _, b := range blocks {
+		content = append(content, ToolContent{Type: b.Type, Text: b.Text, MimeType: b.MimeType, Data: b.Data})
+	}
+	return ToolResult{Content: content, IsError: isError}
+}
+
 // Card is a dynamic context card. ID identifies it (re-pushing the same
 // ID replaces it). Label is an optional short header; Priority orders
 // multiple cards (lower first); Blocking marks open work so the host
@@ -876,6 +1090,10 @@ func (e *Extension) Run() error {
 				if hostVersion == "" {
 					hostVersion = ack.ZotVersion // rename:keep — frozen wire field
 				}
+				// Under e.mu: Host() (and session_start) read/write e.host
+				// from other goroutines, and "ready" is sent before this
+				// ack is processed, so a handler can race the write.
+				e.mu.Lock()
 				e.host = HostInfo{
 					ProtocolVersion: ack.ProtocolVersion,
 					ZotVersion:      hostVersion, // rename:keep — public SDK API
@@ -885,6 +1103,7 @@ func (e *Extension) Run() error {
 					ExtensionDir:    ack.ExtensionDir,
 					DataDir:         ack.DataDir,
 				}
+				e.mu.Unlock()
 			}
 		case "command_invoked":
 			var ci extproto.CommandInvokedFromHost
@@ -1010,6 +1229,14 @@ func (e *Extension) Run() error {
 			e.mu.Unlock()
 			if h != nil {
 				go h()
+			}
+		case "host_tool_result", "session_list", "session_data":
+			// Replies to an ext-initiated request (protocol 3). Route to
+			// the waiting HostToolCall / ListSessions / ReadSession by id.
+			// ReadFrame returns a fresh copy, so the line is safe to hand off.
+			var f extproto.Frame
+			if err := json.Unmarshal(line, &f); err == nil && f.ID != "" {
+				e.deliverReply(f.ID, append(json.RawMessage(nil), line...))
 			}
 		case "shutdown":
 			_ = e.send(extproto.ShutdownAckFromExt{Type: "shutdown_ack"})
