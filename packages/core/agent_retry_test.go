@@ -145,6 +145,20 @@ func TestAgentPropagatesMaxTokens(t *testing.T) {
 	}
 }
 
+func TestAgentPropagatesTemperature(t *testing.T) {
+	client := &captureClient{}
+	a := NewAgent(client, "fake-model", "system", Registry{})
+	temp := float32(0)
+	a.Temperature = &temp
+
+	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
+		t.Fatalf("Prompt returned %v", err)
+	}
+	if client.lastReq.Temperature == nil || *client.lastReq.Temperature != temp {
+		t.Fatalf("request Temperature = %v; want %v", client.lastReq.Temperature, temp)
+	}
+}
+
 // untypedErrClient returns a prose-only error that LOOKS retryable
 // under the old substring needles ("http 500"). The typed contract
 // must NOT retry it: untyped errors retry only when they classify as

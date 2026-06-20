@@ -56,9 +56,10 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 	prompt := "<conversation>\n" + transcript + "\n</conversation>\n\n" + compactionPrompt
 
 	req := provider.Request{
-		Model:     a.Model,
-		System:    summarizationSystem,
-		MaxTokens: 4096,
+		Model:       a.Model,
+		System:      summarizationSystem,
+		MaxTokens:   4096,
+		Temperature: a.Temperature,
 		Messages: []provider.Message{
 			{
 				Role:    provider.RoleUser,

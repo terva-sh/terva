@@ -31,6 +31,11 @@ type Agent struct {
 	MaxSteps  int
 	Reasoning string
 
+	// Temperature sets the sampling temperature on each request. Nil
+	// leaves it unset so each provider applies its own default (terva's
+	// per-provider serialization guards still apply when it is set).
+	Temperature *float32
+
 	// MaxTokens caps the model's output tokens per turn. Zero leaves
 	// the field unset on the provider request, letting each provider
 	// apply its own default (which can be conservative, e.g. Bedrock
@@ -756,6 +761,7 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 	tools := a.Tools
 	reasoning := a.Reasoning
 	maxTokens := a.MaxTokens
+	temperature := a.Temperature
 	client := a.Client
 	contextProvider := a.ContextProvider
 	msgs := make([]provider.Message, len(a.messages))
@@ -784,6 +790,7 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 		Tools:            tools.Specs(),
 		Reasoning:        reasoning,
 		MaxTokens:        maxTokens,
+		Temperature:      temperature,
 		EphemeralContext: ephemeral,
 	}
 	stream, err := client.Stream(ctx, req)

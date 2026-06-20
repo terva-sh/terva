@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/term"
@@ -45,6 +46,7 @@ type Args struct {
 	SystemPrompt       string
 	AppendSystemPrompt []string
 	Reasoning          string
+	Temperature        *float32
 
 	// ContextFiles are paths passed via --context-file (repeatable). Each
 	// file's contents are injected into the system prompt at startup, in
@@ -295,6 +297,17 @@ func ParseArgs(in []string) (Args, error) {
 			default:
 				return a, fmt.Errorf("--reasoning must be off|minimum|low|medium|high|maximum")
 			}
+		case "--temperature":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			f, err := strconv.ParseFloat(v, 32)
+			if err != nil || f < 0 || f > 2 {
+				return a, fmt.Errorf("--temperature must be a number between 0 and 2")
+			}
+			t := float32(f)
+			a.Temperature = &t
 		case "--session":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -493,6 +506,7 @@ func PrintHelp(version string) {
 		row{"--api-key KEY", "api key for this run (env / auth.json fallback)"},
 		row{"--base-url URL", "override provider api base url"},
 		row{"--reasoning off|minimum|low|medium|high|maximum", "set thinking level on supported models"},
+		row{"--temperature N", "sampling temperature, 0 to 2 (omit for provider default)"},
 	)
 	section("prompt and session flags",
 		row{"--system-prompt TEXT", "replace the default system prompt"},

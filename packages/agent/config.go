@@ -19,10 +19,11 @@ import (
 
 // Config is the persisted user configuration.
 type Config struct {
-	Provider  string `json:"provider"`
-	Model     string `json:"model"`
-	Reasoning string `json:"reasoning"`
-	Theme     string `json:"theme"`
+	Provider    string   `json:"provider"`
+	Model       string   `json:"model"`
+	Reasoning   string   `json:"reasoning"`
+	Temperature *float32 `json:"temperature,omitempty"`
+	Theme       string   `json:"theme"`
 
 	// InlineImagesEnabled controls whether terva draws screenshots inline
 	// when the terminal supports an image protocol. nil/missing means

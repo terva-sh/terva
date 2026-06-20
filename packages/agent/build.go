@@ -17,14 +17,15 @@ import (
 
 // Resolved is the effective configuration after merging CLI, config, defaults.
 type Resolved struct {
-	Provider   string
-	Model      string
-	Credential string // api key or oauth access token
-	AuthMethod string // "apikey" | "oauth" | "" (no credential yet)
-	AccountID  string // ChatGPT account id (for openai oauth), "" otherwise
-	BaseURL    string
-	CWD        string
-	Reasoning  string
+	Provider    string
+	Model       string
+	Credential  string // api key or oauth access token
+	AuthMethod  string // "apikey" | "oauth" | "" (no credential yet)
+	AccountID   string // ChatGPT account id (for openai oauth), "" otherwise
+	BaseURL     string
+	CWD         string
+	Reasoning   string
+	Temperature *float32
 
 	// VisionCapable is the resolved model's image-input verdict
 	// (model.Has(CapImageInput)). The live registry rebuild on a /model
@@ -671,6 +672,10 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	})
 
 	reasoning := provider.NormalizeReasoning(firstNonEmpty(args.Reasoning, cfg.Reasoning))
+	temperature := args.Temperature
+	if temperature == nil {
+		temperature = cfg.Temperature
+	}
 
 	max := args.MaxSteps // 0 = unlimited
 
@@ -683,6 +688,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		BaseURL:                  args.BaseURL,
 		CWD:                      args.CWD,
 		Reasoning:                reasoning,
+		Temperature:              temperature,
 		VisionCapable:            visionCapable,
 		ToolRegistry:             reg,
 		ToolSummary:              summaries,
@@ -915,6 +921,7 @@ func (r Resolved) NewAgent() *core.Agent {
 	a.MaxSteps = r.MaxSteps
 	a.MaxTokens = r.MaxOutput
 	a.Reasoning = r.Reasoning
+	a.Temperature = r.Temperature
 	// Bind the live agent into terva_status so it can report current model,
 	// reasoning, and token usage (the registry — and thus the tool — is
 	// built before the agent exists).

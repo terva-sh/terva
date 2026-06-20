@@ -69,6 +69,9 @@ type Config struct {
 	// ("low", "medium", "high"). Empty = no reasoning.
 	Reasoning string
 
+	// Temperature sets the sampling temperature. Nil = provider default.
+	Temperature *float32
+
 	// MaxSteps caps the agent loop iterations per Prompt call. 0 uses
 	// DefaultMaxSteps. NOTE: this deliberately differs from the CLI and
 	// core.Agent, where 0 means UNLIMITED — an embedded session has no
@@ -149,6 +152,7 @@ func New(cfg Config) (*Runtime, error) {
 		AppendSystemPrompt: cfg.AppendSystemPrompt,
 		ContextFiles:       cfg.ContextFiles,
 		Reasoning:          cfg.Reasoning,
+		Temperature:        cfg.Temperature,
 		MaxSteps:           effectiveMaxSteps(cfg.MaxSteps),
 		Tools:              cfg.Tools,
 		NoTools:            cfg.NoTools,
