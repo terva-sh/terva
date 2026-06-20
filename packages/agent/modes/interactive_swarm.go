@@ -194,9 +194,11 @@ func (i *Interactive) applyAutoSwarmTool(active bool) {
 	}
 	if active && i.cfg.Swarm != nil {
 		next["swarm_spawn"] = &tools.SwarmSpawnTool{
-			Swarm:     i.cfg.Swarm,
-			Enabled:   func() bool { return true },
-			OnSpawned: i.trackSwarmAgent,
+			Swarm:        i.cfg.Swarm,
+			Enabled:      func() bool { return true },
+			OnSpawned:    i.trackSwarmAgent,
+			HostProvider: i.cfg.Provider,
+			HostModel:    i.cfg.Model,
 		}
 	}
 	ag.SetTools(next)

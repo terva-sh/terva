@@ -36,12 +36,22 @@ type SwarmSpawnTool struct {
 	// interactive host to track agents and surface a summary back
 	// in the main chat once they all finish.
 	OnSpawned func(agent *swarm.Agent, task string)
+
+	// HostProvider / HostModel are the host agent's current provider and
+	// model. They back the `tier` parameter: a weak/medium/strong tier
+	// resolves to a concrete model of that strength for HostProvider,
+	// capped so the sub-agent is never stronger than the host (see
+	// ResolveSwarmTier). Empty disables tier resolution (the sub-agent
+	// inherits the host model), so older construction sites still work.
+	HostProvider string
+	HostModel    string
 }
 
 type swarmSpawnArgs struct {
 	Task     string `json:"task"`
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
+	Tier     string `json:"tier,omitempty"`
 }
 
 const swarmSpawnSchema = `{
@@ -51,9 +61,14 @@ const swarmSpawnSchema = `{
       "type": "string",
       "description": "The full task description for the sub-agent. Be specific: the sub-agent has the same tools (read/write/edit/bash) and shares this working directory, but starts with NO context from this conversation."
     },
+    "tier": {
+      "type": "string",
+      "enum": ["weak", "medium", "strong"],
+      "description": "Optional model strength for the sub-agent: weak (cheap/fast, e.g. Haiku), medium (e.g. Sonnet), strong (e.g. Opus). Resolved for the host provider and never stronger than the host model. Use weak for routine sub-tasks to save cost. Ignored when 'model' is set or the provider has no tier mapping (then the host model is used)."
+    },
     "model": {
       "type": "string",
-      "description": "Optional model id to pin the sub-agent to (e.g. \"claude-sonnet-4-5\", \"gpt-5\"). Defaults to the host's current model."
+      "description": "Optional model id to pin the sub-agent to (e.g. \"claude-sonnet-4-5\", \"gpt-5\"). Overrides 'tier'. Defaults to the host's current model."
     },
     "provider": {
       "type": "string",
@@ -85,9 +100,19 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		return toolErr("swarm_spawn: task is required"), nil
 	}
 
+	// An explicit model wins; otherwise a tier resolves to a model for
+	// the host provider, capped at the host's own strength. An
+	// unresolvable tier (no provider mapping, no catalog match) leaves
+	// model empty so the sub-agent inherits the host model.
+	model := strings.TrimSpace(a.Model)
+	tier := strings.ToLower(strings.TrimSpace(a.Tier))
+	if model == "" && tier != "" {
+		model = ResolveSwarmTier(t.HostProvider, t.HostModel, tier)
+	}
+
 	agent, err := t.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
 		Task:     task,
-		Model:    strings.TrimSpace(a.Model),
+		Model:    model,
 		Provider: strings.TrimSpace(a.Provider),
 	})
 	if err != nil {
@@ -100,8 +125,14 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "spawned sub-agent %s\n", agent.ID)
 	fmt.Fprintf(&sb, "task: %s\n", truncateTask(task, 200))
-	if a.Model != "" {
-		fmt.Fprintf(&sb, "model: %s\n", a.Model)
+	if model != "" {
+		if tier != "" && a.Model == "" {
+			fmt.Fprintf(&sb, "model: %s (tier %s)\n", model, tier)
+		} else {
+			fmt.Fprintf(&sb, "model: %s\n", model)
+		}
+	} else if tier != "" {
+		fmt.Fprintf(&sb, "tier %s not available for this provider; using the host model\n", tier)
 	}
 	if a.Provider != "" {
 		fmt.Fprintf(&sb, "provider: %s\n", a.Provider)
@@ -113,7 +144,8 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		Details: map[string]any{
 			"agent_id": agent.ID,
 			"task":     task,
-			"model":    a.Model,
+			"model":    model,
+			"tier":     tier,
 			"provider": a.Provider,
 		},
 	}, nil
