@@ -259,6 +259,18 @@ type PermissionPolicy struct {
 	// included, and never prompt — gating a question behind approval is
 	// nonsensical. Static, set at construction.
 	Interactive map[string]bool
+	// DecomposeCommand, when set, splits a single tool call into the
+	// sequence of distinct command scopes it will run, returning one
+	// synthetic args object per scope. A compound shell command like
+	// `git diff && rm -rf /` becomes two args objects so each command
+	// is judged against the rules on its own — an allow rule scoped to
+	// `git *` cannot clear the `rm`, and an anchored deny (`^rm `)
+	// matches the second command even though the line starts with git.
+	// Core never parses a shell itself (it stays dependency-free); the
+	// agent layer injects an AST-based splitter. Returning fewer than
+	// two scopes (a simple command, a non-shell tool, an unparsable
+	// line) means "judge as one unit" — the historical behavior.
+	DecomposeCommand func(toolName string, args json.RawMessage) []json.RawMessage
 }
 
 // Evaluate runs the decision ladder for one call:
@@ -286,6 +298,41 @@ func (p *PermissionPolicy) Evaluate(toolName string, args json.RawMessage) (Poli
 	if p.Mode == ApprovalPlan && !p.ReadOnly.Has(toolName) {
 		return VerdictDeny, "tool call refused: approval mode 'plan' permits read-only tools only; present the intended change to the user instead of making it"
 	}
+	// Compound-command decomposition. A single shell call can run several
+	// commands; judging each independently stops an allow rule scoped to
+	// one program from clearing the others (and lets an anchored deny
+	// match a command that isn't first on the line). Only engaged when
+	// rules exist — with no rules every scope resolves to the same mode
+	// default, so the split would change nothing but cost a parse.
+	if p.DecomposeCommand != nil && len(p.Rules) > 0 {
+		if scopes := p.DecomposeCommand(toolName, args); len(scopes) >= 2 {
+			sawAsk := false
+			for _, sa := range scopes {
+				switch v, reason := p.evalRulesAndDefault(toolName, sa); v {
+				case VerdictDeny:
+					// Deny-first: any denied command denies the whole line.
+					return VerdictDeny, reason
+				case VerdictAsk:
+					sawAsk = true
+				}
+			}
+			// Auto-run only if every command would; otherwise prompt once
+			// for the line.
+			if sawAsk {
+				return VerdictAsk, ""
+			}
+			return VerdictAllow, ""
+		}
+	}
+	return p.evalRulesAndDefault(toolName, args)
+}
+
+// evalRulesAndDefault runs the ordered rule list (first match wins) then
+// the approval-mode default for one call. It is the single-unit core of
+// Evaluate, factored out so the compound-command path can reuse it per
+// scope. Assumes the plan-mode and interactive checks already ran (they
+// are properties of the tool, not of an individual command scope).
+func (p *PermissionPolicy) evalRulesAndDefault(toolName string, args json.RawMessage) (PolicyVerdict, string) {
 	for _, r := range p.Rules {
 		if !r.matches(toolName, args) {
 			continue

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/envcompat"
 )
@@ -212,13 +213,51 @@ func buildPermissionPolicy(args Args) (*core.PermissionPolicy, []string) {
 		return nil, warns
 	}
 	return &core.PermissionPolicy{
-		Mode:        mode,
-		Rules:       rules,
-		ReadOnly:    builtinReadOnlySet(),
-		EditTools:   editTools,
-		Builtin:     builtinTools,
-		Interactive: interactiveTools,
+		Mode:             mode,
+		Rules:            rules,
+		ReadOnly:         builtinReadOnlySet(),
+		EditTools:        editTools,
+		Builtin:          builtinTools,
+		Interactive:      interactiveTools,
+		DecomposeCommand: decomposeBashForPolicy,
 	}, warns
+}
+
+// decomposeBashForPolicy is the shell splitter the permission policy
+// injects (core.PermissionPolicy.DecomposeCommand). For a bash call that
+// runs more than one command it returns one synthetic `{"command": …}`
+// args object per command, so the policy judges each against the rules
+// independently; for anything else it returns nil and the call is judged
+// as a single unit. The shell parsing lives here in packages/agent/tools
+// so packages/core stays free of a shell grammar.
+func decomposeBashForPolicy(toolName string, args json.RawMessage) []json.RawMessage {
+	if toolName != "bash" {
+		return nil
+	}
+	var a struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil
+	}
+	scopes := tools.DecomposeBashCommand(a.Command)
+	if len(scopes) < 2 {
+		return nil
+	}
+	out := make([]json.RawMessage, 0, len(scopes))
+	for _, s := range scopes {
+		b, err := json.Marshal(struct {
+			Command string `json:"command"`
+		}{Command: s})
+		if err != nil {
+			continue
+		}
+		out = append(out, b)
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
 }
 
 // extensionPermissionRules collects suggested rules from installed

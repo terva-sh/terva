@@ -50,6 +50,88 @@ func TestPolicyPlanBeatsAllowRule(t *testing.T) {
 	}
 }
 
+// decompAnd is a test stand-in for the agent layer's AST splitter: it
+// splits a bash command on " && " into per-command args so the compound
+// path can be exercised without pulling a real shell parser into core.
+func decompAnd(toolName string, args json.RawMessage) []json.RawMessage {
+	if toolName != "bash" {
+		return nil
+	}
+	var a struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(args, &a) != nil {
+		return nil
+	}
+	parts := strings.Split(a.Command, " && ")
+	if len(parts) < 2 {
+		return nil
+	}
+	out := make([]json.RawMessage, 0, len(parts))
+	for _, p := range parts {
+		b, _ := json.Marshal(map[string]string{"command": strings.TrimSpace(p)})
+		out = append(out, b)
+	}
+	return out
+}
+
+func TestPolicyCompoundAllowRuleDoesNotClearOtherCommand(t *testing.T) {
+	// `git *` is allow-listed; `git diff && rm -rf /` must still prompt
+	// for the rm rather than ride the leading-command git allow.
+	p := &PermissionPolicy{
+		Mode:             ApprovalAsk,
+		Rules:            []PermissionRule{{Tool: "bash", Args: regexp.MustCompile(`^git `), Decision: RuleAllow, Source: "user"}},
+		ReadOnly:         ro(),
+		Builtin:          builtins(),
+		DecomposeCommand: decompAnd,
+	}
+	allow, _ := json.Marshal(map[string]string{"command": "git diff"})
+	if v, _ := p.Evaluate("bash", allow); v != VerdictAllow {
+		t.Errorf("plain `git diff` should be allowed, got %v", v)
+	}
+	compound, _ := json.Marshal(map[string]string{"command": "git diff && rm -rf /"})
+	if v, _ := p.Evaluate("bash", compound); v != VerdictAsk {
+		t.Errorf("compound with an un-allowed command should ask, got %v", v)
+	}
+}
+
+func TestPolicyCompoundDenyFirst(t *testing.T) {
+	// An anchored deny matches a command that isn't first on the line,
+	// and a single denied command denies the whole line — even in yolo.
+	p := &PermissionPolicy{
+		Mode: ApprovalYolo,
+		Rules: []PermissionRule{
+			{Tool: "bash", Args: regexp.MustCompile(`^rm `), Decision: RuleDeny, Reason: "no deleting", Source: "project"},
+		},
+		ReadOnly:         ro(),
+		Builtin:          builtins(),
+		DecomposeCommand: decompAnd,
+	}
+	compound, _ := json.Marshal(map[string]string{"command": "git diff && rm -rf /"})
+	v, reason := p.Evaluate("bash", compound)
+	if v != VerdictDeny {
+		t.Fatalf("anchored deny on a non-leading command should deny the line, got %v", v)
+	}
+	if !strings.Contains(reason, "no deleting") {
+		t.Errorf("denial reason should carry the rule reason: %s", reason)
+	}
+}
+
+func TestPolicyCompoundAllAllowedRuns(t *testing.T) {
+	// When every command on the line is allow-listed, the line auto-runs.
+	p := &PermissionPolicy{
+		Mode:             ApprovalAsk,
+		Rules:            []PermissionRule{{Tool: "bash", Args: regexp.MustCompile(`^(git|ls) `), Decision: RuleAllow, Source: "user"}},
+		ReadOnly:         ro(),
+		Builtin:          builtins(),
+		DecomposeCommand: decompAnd,
+	}
+	compound, _ := json.Marshal(map[string]string{"command": "git diff && ls -la"})
+	if v, _ := p.Evaluate("bash", compound); v != VerdictAllow {
+		t.Errorf("every command allow-listed should auto-run, got %v", v)
+	}
+}
+
 func TestPolicyRuleFirstMatchWins(t *testing.T) {
 	p := &PermissionPolicy{
 		Mode: ApprovalYolo,

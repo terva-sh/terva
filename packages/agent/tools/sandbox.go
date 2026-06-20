@@ -60,6 +60,13 @@ func (s *Sandbox) CheckPath(path string) error {
 // when jailed. We cannot fully sandbox a shell, but we can reject the
 // most obvious escapes so the model does not accidentally touch files
 // outside root via absolute paths.
+//
+// Each command in a compound line is checked independently
+// (DecomposeBashCommand), so a banned command or a sandbox-escaping `cd`
+// cannot hide behind a harmless leading one (`ls && cd /etc`). This is a
+// speed bump for the model, not a security boundary: a determined
+// adversary can still escape, and unparsable lines fall back to a single
+// whole-string check.
 func (s *Sandbox) CheckCommand(cmd string) error {
 	if !s.Locked() {
 		return nil
@@ -68,6 +75,21 @@ func (s *Sandbox) CheckCommand(cmd string) error {
 	if cmd == "" {
 		return nil
 	}
+	scopes := DecomposeBashCommand(cmd)
+	if len(scopes) == 0 {
+		scopes = []string{cmd}
+	}
+	for _, sc := range scopes {
+		if err := checkCommandScope(sc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkCommandScope runs the banned-pattern and cd-escape heuristics
+// against one simple command from a (possibly compound) line.
+func checkCommandScope(cmd string) error {
 	// Reject obvious destructive roots.
 	banned := []string{
 		"rm -rf /", "rm -rf ~", "rm -rf $HOME",
@@ -81,14 +103,11 @@ func (s *Sandbox) CheckCommand(cmd string) error {
 			return fmt.Errorf("jailed: command contains banned pattern %q (use /unjail to disable)", b)
 		}
 	}
-	// Heuristic: reject a leading `cd /` or `cd ~` that tries to move
-	// the shell out of the sandbox. Note this only catches simple cases;
-	// a determined adversary can still escape. This is a speed bump for
-	// the model, not a security boundary.
-	first := strings.TrimSpace(strings.SplitN(cmd, ";", 2)[0])
-	first = strings.TrimSpace(strings.SplitN(first, "&&", 2)[0])
-	if strings.HasPrefix(first, "cd /") || strings.HasPrefix(first, "cd ~") ||
-		strings.HasPrefix(first, "cd $HOME") || strings.HasPrefix(first, "cd ..") {
+	// Reject a `cd /`, `cd ~`, `cd $HOME`, or `cd ..` that tries to move
+	// the shell out of the sandbox root.
+	c := strings.TrimSpace(cmd)
+	if strings.HasPrefix(c, "cd /") || strings.HasPrefix(c, "cd ~") ||
+		strings.HasPrefix(c, "cd $HOME") || strings.HasPrefix(c, "cd ..") {
 		return fmt.Errorf("jailed: cd outside sandbox root is not allowed (use /unjail to disable)")
 	}
 	return nil

@@ -137,6 +137,14 @@ Rules let you pre-answer the prompt for specific calls. They live in
   to allow.** Use `deny` to block something even in yolo.
 - `reason` — appended to the refusal the model sees on `deny`.
 
+A `bash` command that runs **several commands** (`git diff && rm -rf /`,
+pipelines, `;`, command substitution) is parsed and judged **one command
+at a time**: a denied command anywhere on the line denies the whole call,
+and the line auto-runs only if every command would on its own. So an
+`allow` rule scoped to `^git ` cannot clear an `rm` that rides the same
+line, and an anchored `deny` (`^rm `) still matches a command that isn't
+first. An unparsable line falls back to matching the whole string.
+
 Rules come from three layers — your **user** config, a project's
 `.terva/config.json`, and installed **extension** bundles (the
 `permissions` key in `extension.json`). They are concatenated in that
