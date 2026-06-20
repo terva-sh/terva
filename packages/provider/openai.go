@@ -8,11 +8,31 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
 
 const openaiDefaultBaseURL = "https://api.openai.com"
+
+// versionSegmentSuffix matches a trailing API version segment such as
+// "/v1" or Z.AI's "/v4".
+var versionSegmentSuffix = regexp.MustCompile(`/v\d+$`)
+
+// chatCompletionsURL builds the chat-completions endpoint for an
+// OpenAI-compatible base URL. A base that already carries an API
+// version segment gets "/chat/completions" appended directly; a bare
+// host (e.g. api.openai.com) gets the conventional "/v1/chat/completions".
+//
+// Matching any "/vN" segment (not just "/v1") keeps Z.AI's coding-plan
+// base, which ends in "/paas/v4", from getting a spurious "/v1" that
+// yields ".../paas/v4/v1/chat/completions" and a 404.
+func chatCompletionsURL(baseURL string) string {
+	if versionSegmentSuffix.MatchString(baseURL) {
+		return baseURL + "/chat/completions"
+	}
+	return baseURL + "/v1/chat/completions"
+}
 
 type openaiClient struct {
 	apiKey  string
@@ -434,10 +454,7 @@ func buildOAIContentBlocks(blocks []Content, isError bool) []interface{} {
 // ---- streaming ----
 
 func (c *openaiClient) Stream(ctx context.Context, req Request) (<-chan Event, error) {
-	apiPath := "/v1/chat/completions"
-	if strings.HasSuffix(c.baseURL, "/v1") {
-		apiPath = "/chat/completions"
-	}
+	endpoint := chatCompletionsURL(c.baseURL)
 	wire, err := c.buildRequest(req)
 	if err != nil {
 		return nil, err
@@ -447,7 +464,7 @@ func (c *openaiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 		return nil, err
 	}
 	newReq := func() (*http.Request, error) {
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+apiPath, bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}

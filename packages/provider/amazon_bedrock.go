@@ -41,6 +41,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -361,11 +362,35 @@ func (c *bedrockClient) buildRequest(req Request) (*bedrockRequest, error) {
 						"toolUseId": v.ID, "name": v.Name, "input": input,
 					},
 				})
+			case ImageBlock:
+				data, mime := anthShrinkImageBytesIfTooBig(v.Data, v.MimeType)
+				// Bedrock Converse uses the bare format name (jpeg/png/gif/webp).
+				imgFmt := strings.TrimPrefix(mime, "image/")
+				bm.Content = append(bm.Content, map[string]interface{}{
+					"image": map[string]interface{}{
+						"format": imgFmt,
+						"source": map[string]interface{}{
+							"bytes": base64.StdEncoding.EncodeToString(data),
+						},
+					},
+				})
 			case ToolResultBlock:
 				var resultContent []map[string]interface{}
 				for _, inner := range v.Content {
-					if tb, ok := inner.(TextBlock); ok {
-						resultContent = append(resultContent, map[string]interface{}{"text": tb.Text})
+					switch iv := inner.(type) {
+					case TextBlock:
+						resultContent = append(resultContent, map[string]interface{}{"text": iv.Text})
+					case ImageBlock:
+						data, mime := anthShrinkImageBytesIfTooBig(iv.Data, iv.MimeType)
+						imgFmt := strings.TrimPrefix(mime, "image/")
+						resultContent = append(resultContent, map[string]interface{}{
+							"image": map[string]interface{}{
+								"format": imgFmt,
+								"source": map[string]interface{}{
+									"bytes": base64.StdEncoding.EncodeToString(data),
+								},
+							},
+						})
 					}
 				}
 				status := "success"

@@ -506,6 +506,136 @@ func TestBedrockEventPayloadHelpers(t *testing.T) {
 	}
 }
 
+// TestBedrockBuildRequestImageBlock is the regression test for the bug where
+// reading an image caused the Bedrock provider to return HTTP 500. The root
+// cause was a missing case ImageBlock in buildRequest's content-block switch,
+// which caused image content to be silently dropped and Bedrock to receive an
+// empty or malformed message.
+func TestBedrockBuildRequestImageBlock(t *testing.T) {
+	client := &bedrockClient{region: "us-east-1"}
+
+	// Minimal 1×1 red JPEG (smallest valid JPEG we can construct inline).
+	// This is 26 bytes: SOI + minimal APP0 marker + EOI.
+	// We use a real tiny JPEG to exercise the shrink path too.
+	jpegBytes := []byte{
+		0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
+		0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
+	}
+
+	req, err := client.buildRequest(Request{
+		Model: "amazon.nova-pro-v1:0",
+		Messages: []Message{
+			{
+				Role: RoleUser,
+				Content: []Content{
+					TextBlock{Text: "what's in this image?"},
+					ImageBlock{MimeType: "image/jpeg", Data: jpegBytes},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(req.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(req.Messages))
+	}
+	msg := req.Messages[0]
+	// Expect 2 content blocks: text + image (+ optional cachePoint for Nova which
+	// has no cachePoint, so exactly text + image).
+	var imageBlock map[string]interface{}
+	for _, block := range msg.Content {
+		if img, ok := block["image"]; ok {
+			imageBlock = img.(map[string]interface{})
+		}
+	}
+	if imageBlock == nil {
+		b, _ := json.Marshal(req)
+		t.Fatalf("image block missing from Bedrock request; full request: %s", b)
+	}
+	if imageBlock["format"] != "jpeg" {
+		t.Errorf("image format = %q, want \"jpeg\"", imageBlock["format"])
+	}
+	src, ok := imageBlock["source"].(map[string]interface{})
+	if !ok || src["bytes"] == "" {
+		t.Errorf("image source.bytes is missing or empty: %v", imageBlock["source"])
+	}
+}
+
+// TestBedrockBuildRequestImageInToolResult is the core regression for the
+// HTTP 500 crash: when the read tool returns an image it is wrapped inside a
+// ToolResultBlock. The previous serialiser only handled TextBlock inner
+// content, so the image was silently dropped, leaving Bedrock a toolResult
+// with empty content — which it rejects with HTTP 500.
+func TestBedrockBuildRequestImageInToolResult(t *testing.T) {
+	client := &bedrockClient{region: "us-east-1"}
+
+	pngHeader := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A} // PNG magic bytes
+
+	req, err := client.buildRequest(Request{
+		Model: "amazon.nova-pro-v1:0",
+		Messages: []Message{
+			{
+				Role: RoleAssistant,
+				Content: []Content{
+					ToolCallBlock{ID: "read-1", Name: "read", Arguments: json.RawMessage(`{"path":"/tmp/cat.jpg"}`)},
+				},
+			},
+			{
+				Role: RoleTool,
+				Content: []Content{
+					ToolResultBlock{
+						CallID: "read-1",
+						Content: []Content{
+							ImageBlock{MimeType: "image/png", Data: pngHeader},
+						},
+					},
+				},
+			},
+			{
+				Role:    RoleUser,
+				Content: []Content{TextBlock{Text: "what's in the image?"}},
+			},
+		},
+		Tools: []Tool{{Name: "read", Schema: json.RawMessage(`{"type":"object"}`)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Find the toolResult content block in the serialised messages.
+	var toolResultContent []map[string]interface{}
+	for _, m := range req.Messages {
+		for _, block := range m.Content {
+			if tr, ok := block["toolResult"]; ok {
+				trd := tr.(map[string]interface{})
+				toolResultContent = trd["content"].([]map[string]interface{})
+				break
+			}
+		}
+	}
+	if toolResultContent == nil {
+		b, _ := json.Marshal(req)
+		t.Fatalf("toolResult block not found in request: %s", b)
+	}
+	if len(toolResultContent) == 0 {
+		t.Fatal("toolResult content is empty — image was dropped (reproduces HTTP 500 bug)")
+	}
+	block := toolResultContent[0]
+	img, ok := block["image"]
+	if !ok {
+		t.Fatalf("expected image block inside toolResult content, got: %v", block)
+	}
+	imgMap := img.(map[string]interface{})
+	if imgMap["format"] != "png" {
+		t.Errorf("image format = %q, want \"png\"", imgMap["format"])
+	}
+	src, ok := imgMap["source"].(map[string]interface{})
+	if !ok || src["bytes"] == "" {
+		t.Errorf("image source.bytes missing or empty: %v", imgMap["source"])
+	}
+}
+
 func TestResolveBedrockInferenceProfileID(t *testing.T) {
 	cases := []struct {
 		model  string
