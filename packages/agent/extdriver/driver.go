@@ -168,30 +168,52 @@ func New(tervaHome, cwd, tervaVersion, provider, model string, hooks HostHooks) 
 // already loaded is a no-op (the higher-priority discovery location, or
 // the explicit --ext path, already won).
 func (d *Driver) Load(ctx context.Context, dir string, mf Manifest) error {
-	d.mu.RLock()
-	_, dup := d.ext[mf.Name]
-	d.mu.RUnlock()
-	if dup {
+	ext := newExtension(mf, dir)
+
+	// Claim the name atomically BEFORE spawning. The dup-check and the
+	// insert must happen under the same lock: the old split (RLock check,
+	// spawn, then Lock insert) let two concurrent loads of the same name
+	// both pass the check and both spawn — the second overwrote the map
+	// and orphaned the first subprocess (left running, untracked, so its
+	// eventual exit was mis-reported as "exited unexpectedly"). A
+	// claimed-but-not-yet-spawned entry simply reads as not-ready until
+	// spawn fills in ext.cmd/commands/tools below.
+	d.mu.Lock()
+	if _, dup := d.ext[mf.Name]; dup {
+		d.mu.Unlock()
 		// Project-local / explicit copy already won; ignore this one.
 		return nil
 	}
+	d.ext[mf.Name] = ext
+	d.mu.Unlock()
 
-	ext := newExtension(mf, dir)
-	if mf.Exec != "" {
-		if err := d.spawn(ctx, ext); err != nil {
-			return err
-		}
-	} else {
+	if mf.Exec == "" {
 		ext.readyOnce.Do(func() { close(ext.readyCh) })
+		return nil
 	}
 
-	d.mu.Lock()
-	d.ext[mf.Name] = ext
-	// Note: ext.commands and ext.tools may be empty here — they're
-	// populated by the read loop as register_* frames arrive after
-	// hello. Indexing happens in the read loop too. The caller can
-	// WaitForReady() before relying on the registries.
-	d.mu.Unlock()
+	if err := d.spawn(ctx, ext); err != nil {
+		// spawn started no read loop, so nothing else will clear the
+		// claim — roll it back (only if still ours; a concurrent
+		// Reset/Stop may already have removed or replaced it).
+		d.mu.Lock()
+		if d.ext[mf.Name] == ext {
+			delete(d.ext, mf.Name)
+		}
+		d.mu.Unlock()
+		return err
+	}
+
+	// A concurrent Reset/Stop could have dropped our claim while we were
+	// spawning (it saw a nil cmd and skipped the teardown). If so, the
+	// process we just started is an orphan — stop it cleanly rather than
+	// leak it.
+	d.mu.RLock()
+	stillOurs := d.ext[mf.Name] == ext
+	d.mu.RUnlock()
+	if !stillOurs {
+		stopExtensions([]*Extension{ext}, time.Second)
+	}
 	return nil
 }
 
@@ -277,6 +299,36 @@ func (d *Driver) Reset(gracePeriod time.Duration) int {
 	}
 	stopExtensions(oldExts, gracePeriod)
 	return len(oldExts)
+}
+
+// StopByName gracefully stops the single loaded extension `name` and
+// drops its commands/tools from the indexes, reporting whether it was
+// running. The teardown is marked deliberate (via stopExtensions), so
+// the read loop's exit is NOT surfaced to the user as a crash — this is
+// what lets a host toggle one extension off without the "exited
+// unexpectedly" notice. No-op (false) when `name` isn't loaded.
+func (d *Driver) StopByName(name string, gracePeriod time.Duration) bool {
+	d.mu.Lock()
+	ext, ok := d.ext[name]
+	if ok {
+		delete(d.ext, name)
+		for n, owner := range d.commandIndex {
+			if owner == ext {
+				delete(d.commandIndex, n)
+			}
+		}
+		for n, owner := range d.toolIndex {
+			if owner == ext {
+				delete(d.toolIndex, n)
+			}
+		}
+	}
+	d.mu.Unlock()
+	if !ok {
+		return false
+	}
+	stopExtensions([]*Extension{ext}, gracePeriod)
+	return true
 }
 
 // Count returns how many extensions are currently loaded.
@@ -519,6 +571,7 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 		CWD:             d.cwd,
 		ExtensionDir:    ext.Dir,
 		DataDir:         dataDir,
+		SupportedEvents: extproto.KnownEvents,
 	}); err != nil {
 		// Tear down the writer goroutine we just started so it doesn't
 		// leak on this failed spawn.
@@ -581,6 +634,77 @@ func (d *Driver) assumeReadyAfterIdle(ext *Extension) {
 	}
 }
 
+// Per-extension registration caps. Extensions run as trusted local code,
+// so these are defense-in-depth against a buggy (e.g. looping) extension
+// plus prompt/memory hygiene — not a security boundary. Generous: a real
+// extension registers a handful of each.
+const (
+	maxExtTools     = 64
+	maxExtCommands  = 64
+	maxExtEventSubs = 64 // bounds UNKNOWN event names; known events are always kept
+)
+
+// registerTool records a tool registration under the cap, indexing the
+// name on first registration. Drops (and logs) past maxExtTools so a
+// runaway extension can't bloat the model's tool schema or the registry.
+func (d *Driver) registerTool(ext *Extension, rt extproto.RegisterToolFromExt) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(ext.tools) >= maxExtTools {
+		fmt.Fprintf(ext.logFile, "[terva] dropping tool %q: extension at the %d-tool cap\n", rt.Name, maxExtTools)
+		return
+	}
+	ext.tools = append(ext.tools, rt)
+	if _, exists := d.toolIndex[rt.Name]; !exists {
+		d.toolIndex[rt.Name] = ext
+	}
+}
+
+// registerCommand records a command registration under the cap.
+func (d *Driver) registerCommand(ext *Extension, rc extproto.RegisterCommandFromExt) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(ext.commands) >= maxExtCommands {
+		fmt.Fprintf(ext.logFile, "[terva] dropping command %q: extension at the %d-command cap\n", rc.Name, maxExtCommands)
+		return
+	}
+	ext.commands = append(ext.commands, rc)
+	if _, exists := d.commandIndex[rc.Name]; !exists {
+		d.commandIndex[rc.Name] = ext
+	}
+}
+
+// subscribeEvents records event subscriptions under maxExtEventSubs,
+// dropping UNKNOWN names first so a runaway extension's garbage can't
+// crowd out real subscriptions. Known events (extproto.IsKnownEvent)
+// are always kept; an unknown name — including a newer event this host
+// can't yet emit — is kept only while under the cap, never rejected
+// outright, so optimistic opt-in still degrades gracefully. Caller must
+// NOT hold e.mu.
+func (e *Extension) subscribeEvents(names []string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	unknown := 0
+	for ev := range e.eventSubs {
+		if !extproto.IsKnownEvent(ev) {
+			unknown++
+		}
+	}
+	for _, ev := range names {
+		if _, ok := e.eventSubs[ev]; ok {
+			continue
+		}
+		if !extproto.IsKnownEvent(ev) {
+			if unknown >= maxExtEventSubs {
+				fmt.Fprintf(e.logFile, "[terva] dropping unknown event subscription %q: at the %d-subscription cap\n", ev, maxExtEventSubs)
+				continue
+			}
+			unknown++
+		}
+		e.eventSubs[ev] = struct{}{}
+	}
+}
+
 // readLoop processes every frame the extension sends after hello.
 // Returns when stdout closes.
 func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
@@ -640,16 +764,7 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 		case "register_command":
 			var rc extproto.RegisterCommandFromExt
 			if err := json.Unmarshal(line, &rc); err == nil {
-				// Both ext.commands and d.commandIndex are read by
-				// the public Commands() / HasCommand() helpers under
-				// d.mu, so the writes have to take the same lock to
-				// keep the race detector happy.
-				d.mu.Lock()
-				ext.commands = append(ext.commands, rc)
-				if _, exists := d.commandIndex[rc.Name]; !exists {
-					d.commandIndex[rc.Name] = ext
-				}
-				d.mu.Unlock()
+				d.registerCommand(ext, rc)
 			}
 		case "register_tool":
 			var rt extproto.RegisterToolFromExt
@@ -666,24 +781,17 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 					continue
 				}
 			}
-			d.mu.Lock()
-			ext.tools = append(ext.tools, rt)
-			if _, exists := d.toolIndex[rt.Name]; !exists {
-				d.toolIndex[rt.Name] = ext
-			}
-			d.mu.Unlock()
+			d.registerTool(ext, rt)
 		case "ready":
 			ext.readyOnce.Do(func() { close(ext.readyCh) })
 		case "subscribe":
 			var sub extproto.SubscribeFromExt
 			if err := json.Unmarshal(line, &sub); err == nil {
+				ext.subscribeEvents(sub.Events)
 				ext.mu.Lock()
-				for _, ev := range sub.Events {
-					ext.eventSubs[ev] = struct{}{}
-				}
 				for _, ev := range sub.Intercept {
 					switch ev {
-					case "tool_call", "turn_start", "assistant_message":
+					case "tool_call", "turn_start", "user_message", "assistant_message":
 						ext.interceptSubs[ev] = struct{}{}
 					}
 				}

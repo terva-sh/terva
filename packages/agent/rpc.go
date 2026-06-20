@@ -15,6 +15,7 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -94,7 +95,16 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 		}
 		return true, "", r.ReplaceText
 	}
+	ag.BeforeUserMessage = func(text string) (bool, string, string) {
+		r := extMgr.InterceptUserMessage(ctx, text)
+		if r.Block {
+			return false, r.Reason, ""
+		}
+		return true, "", r.ReplaceText
+	}
+	wsObserve := workspaceChangeObserver(tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), extMgr)
 	ag.OnEvent = func(ev core.AgentEvent) {
+		wsObserve(ev)
 		fanoutAgentEvent(extMgr, ev)
 		observeAgentEventForHooks(hookEng, ev)
 	}
@@ -117,7 +127,7 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 		ag.SetTools(resolved.ToolRegistry)
 	})
 
-	extMgr.EmitEvent(extproto.EventFromHost{Event: "session_start"})
+	extMgr.EmitEvent(extproto.EventFromHost{Event: extproto.EventSessionStart})
 
 	server := &rpcServer{
 		ctx:      ctx,
@@ -411,12 +421,15 @@ func (s *rpcServer) runPrompt(id, message string, images []struct {
 	// succeeded, so the failure rides the compact_end event and the
 	// client decides whether to /compact manually.
 	if err == nil && subCtx.Err() == nil && s.agent.ShouldAutoCompact(core.AutoCompactThreshold) {
-		s.writeEvent(modes.EventToJSON(core.EvCompactStart{Reason: "context near limit"}))
+		start := core.EvCompactStart{Reason: "context near limit"}
+		s.writeEvent(modes.EventToJSON(start))
+		s.agent.EmitLifecycle(start) // reach extensions, not just the RPC client
 		end := core.EvCompactEnd{}
 		if _, cerr := s.agent.Compact(subCtx, 4, nil); cerr != nil && !errors.Is(cerr, context.Canceled) {
 			end.Err = cerr.Error()
 		}
 		s.writeEvent(modes.EventToJSON(end))
+		s.agent.EmitLifecycle(end)
 	}
 	s.writeEvent(map[string]any{"type": "done"})
 }

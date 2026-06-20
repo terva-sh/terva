@@ -71,7 +71,9 @@ type EventHandler func(ev Event)
 //	turn_start       : Step
 //	turn_end         : Stop, optional Error
 //	tool_call        : ToolID, ToolName, ToolArgs
+//	user_message     : Text
 //	assistant_message: Text
+//	workspace_changed: Files
 type Event struct {
 	Name string
 
@@ -84,6 +86,11 @@ type Event struct {
 	ToolArgs json.RawMessage
 
 	Text string
+
+	// Files carries the per-turn workspace diff on a workspace_changed
+	// event. Empty on every other event. Use OnWorkspaceChanged for the
+	// typed convenience path.
+	Files []FileChange
 
 	// SessionID / SessionPath / SessionTitle identify the active
 	// session on a session_start event (host protocol 2+). An empty
@@ -173,6 +180,34 @@ type AssistantMessageDecision struct {
 // assembled but before it's shown. Use it to scrub secrets, expand
 // templates, enforce tone, or suppress responses entirely.
 type AssistantMessageHandler func(text string) AssistantMessageDecision
+
+// UserMessage carries the text of a genuine user prompt (the initial
+// submit or one drained from the queue). Delivered to OnUserMessage
+// handlers. The host's at-close gate nudge is NOT delivered here.
+type UserMessage struct {
+	Text string
+}
+
+// UserMessageDecision controls whether a user prompt reaches the model.
+// Zero value means "allow, pass through unchanged".
+type UserMessageDecision struct {
+	// Block rejects the prompt: it is neither recorded in the transcript
+	// nor sent to the model. The host surfaces Reason to the user.
+	Block bool
+	// Reason is shown to the user when blocking (optional).
+	Reason string
+	// ReplaceText, when non-empty and Block is false, rewrites the prompt
+	// the model actually receives — the rewrite IS what lands in the
+	// transcript. Use to redact secrets or inject standing context.
+	ReplaceText string
+}
+
+// UserMessageHandler is called just before a user prompt is appended to
+// the transcript and sent to the model. Return Block=true to reject it,
+// or ReplaceText to rewrite it. Useful for guardrails, redaction, and
+// prompt augmentation. Runs on both the initial prompt and queued
+// prompts, so a guard can't be bypassed by typing while the agent works.
+type UserMessageHandler func(text string) UserMessageDecision
 
 // ToolResult is the extension's reply to a tool invocation. Build
 // one with TextResult, ImageResult, or directly when you need to
@@ -274,20 +309,27 @@ type Extension struct {
 	stderr  io.Writer
 	writeMu sync.Mutex
 
-	mu            sync.Mutex
-	commands      map[string]CommandHandler
-	descriptions  []descTuple // ordered so register frames arrive in registration order
-	tools         map[string]ToolHandler
-	toolDefs      []toolDef // ordered so register frames arrive in registration order
-	eventHandlers map[string]EventHandler
-	eventNames    []string // declared subscription order
-	onSession     func(Session)
+	mu                 sync.Mutex
+	commands           map[string]CommandHandler
+	descriptions       []descTuple // ordered so register frames arrive in registration order
+	tools              map[string]ToolHandler
+	toolDefs           []toolDef // ordered so register frames arrive in registration order
+	eventHandlers      map[string]EventHandler
+	eventNames         []string // declared subscription order
+	onSession          func(Session)
+	onSessionEnd       func(Session)
+	onCompaction       func(Compaction)
+	onCompactStart     func(CompactStart)
+	onUserMessage      func(UserMessage)
+	onWorkspaceChanged func(WorkspaceChange)
+	onRunEnd           func(RunEnd)
 
 	interceptTool      InterceptHandler
 	interceptToolRich  ToolCallHandler
 	interceptOn        bool
 	interceptTurn      TurnStartHandler
 	interceptAssistant AssistantMessageHandler
+	interceptUser      UserMessageHandler
 	panelKeys          map[string]func(key, text string)
 	panelCloses        map[string]func()
 
@@ -345,7 +387,12 @@ func ReadOnly() ToolOption { return func(t *toolDef) { t.readOnly = true } }
 // richer successor to ReadOnly: a network-read tool reads nothing on the
 // local machine yet must not be auto-allowed as read-only.
 const (
-	AuthorityLocalRead       = "local-read"
+	AuthorityLocalRead = "local-read"
+	// AuthorityLocalData: reads AND writes only the extension's own
+	// host-managed data dir ($TERVA_HOME/ext-data/<name>) — never the
+	// user's workspace, network, or anything external. Auto-allowable like
+	// local-read, so a memory/notes/state tool needs no approval prompt.
+	AuthorityLocalData       = "local-data"
 	AuthorityWorkspaceMutate = "workspace-mutation"
 	AuthorityProcessExec     = "process-execution"
 	AuthorityNetworkRead     = "network-read"
@@ -353,9 +400,9 @@ const (
 )
 
 // WithAuthority declares the tool's effect class (use the Authority*
-// constants). It supersedes ReadOnly for host classification: only
-// local-read is auto-allowable, so a tool declared network-read is
-// gated like a side-effecting tool rather than admitted as read-only.
+// constants). It supersedes ReadOnly for host classification: local-read
+// and local-data are auto-allowable, while a tool declared network-read
+// is gated like a side-effecting tool rather than admitted as read-only.
 // When both are set, authority wins.
 func WithAuthority(class string) ToolOption { return func(t *toolDef) { t.authority = class } }
 
@@ -379,6 +426,11 @@ type HostInfo struct {
 	ExtensionDir string
 	DataDir      string
 
+	// SupportedEvents lists the lifecycle events this host advertised it
+	// can emit (from the hello_ack). Check one with Emits. Empty on an
+	// older host that doesn't advertise — treat that as "unknown".
+	SupportedEvents []string
+
 	SessionID    string
 	SessionPath  string
 	SessionTitle string
@@ -386,6 +438,15 @@ type HostInfo struct {
 	// (core.ProjectKey). Use it to scope per-project state. Refreshes
 	// alongside CWD on session_start.
 	ProjectID string
+}
+
+// Emits reports whether the host advertised (in the hello_ack) that it can
+// emit the named lifecycle event — e.g. Host().Emits("transcript_compacted").
+// Use it to adapt or warn. An older host that doesn't advertise returns
+// false, so an extension that simply wants the event should subscribe
+// optimistically (OnCompaction etc.) and degrade, not gate on this.
+func (h HostInfo) Emits(event string) bool {
+	return slices.Contains(h.SupportedEvents, event)
 }
 
 // New constructs an Extension with the given identifier. name should
@@ -655,6 +716,21 @@ func (e *Extension) OnSession(fn func(Session)) {
 	e.mu.Unlock()
 }
 
+// OnSessionEnd registers a callback fired when a session is ending — the
+// bookend to OnSession. It fires for the OUTGOING session just before a
+// switch or close announces the next one, and once more for the active
+// session at host shutdown. The Session carries the ending session's
+// identity. Use it to flush a memory store or index the just-finished
+// session. Best-effort: a hard kill (SIGKILL) skips it, so persist
+// incrementally and treat this as a flush point, not a guarantee. Sugar
+// over On("session_end", …).
+func (e *Extension) OnSessionEnd(fn func(Session)) {
+	e.mu.Lock()
+	e.onSessionEnd = fn
+	e.ensureSubscribed("session_end")
+	e.mu.Unlock()
+}
+
 // ensureSubscribed adds name to the event subscription list if it is
 // not already present, so On and OnSession can both request
 // session_start without subscribing twice. Caller holds e.mu.
@@ -662,6 +738,108 @@ func (e *Extension) ensureSubscribed(name string) {
 	if !slices.Contains(e.eventNames, name) {
 		e.eventNames = append(e.eventNames, name)
 	}
+}
+
+// Compaction carries the host's post-compaction signal to an OnCompaction
+// handler. It is currently empty — the event itself is the value
+// ("re-snapshot now") — but kept a struct so metadata (reason,
+// token/message counts) can be added later without breaking the handler
+// signature.
+type Compaction struct{}
+
+// CompactStart carries the host's pre-compaction signal to an
+// OnCompactStart handler. Reason is short human-readable prose (e.g.
+// "context near limit"). Fires BEFORE the transcript is squashed — the
+// window to harvest detail that the post-compaction summary drops.
+type CompactStart struct {
+	Reason string
+}
+
+// RunEnd signals the agent finished a whole prompt (all steps and the
+// at-close gate) — the per-prompt bookend to a user message, distinct
+// from the per-step turn_end. Empty for now (the event is the value);
+// kept a struct so fields can be added without breaking the handler.
+type RunEnd struct{}
+
+// FileChange is one entry in a workspace diff: a workspace-relative,
+// slash-separated path and what happened to it during the turn.
+type FileChange struct {
+	Path   string
+	Change string // "added" | "modified" | "deleted"
+}
+
+// WorkspaceChange carries the net set of file changes a turn made to the
+// workspace, delivered to an OnWorkspaceChanged handler. Files is sorted
+// by path and never empty (a turn that changed nothing fires no event).
+type WorkspaceChange struct {
+	Files []FileChange
+}
+
+// OnCompaction registers a handler that fires after the host compacts the
+// transcript, before the next model turn. Use it to re-snapshot
+// refreshable context (RefreshContext): e.g. a memory extension whose
+// frozen session-start snapshot no longer reflects mid-session writes that
+// compaction summarized out of the transcript.
+//
+// Purely additive and opt-in — a host that doesn't emit the event (an
+// older terva) simply never fires this, and the extension degrades to its
+// session-boundary refresh. No RequireProtocol is needed: the host records
+// the subscription either way and only emits when it can.
+func (e *Extension) OnCompaction(fn func(Compaction)) {
+	e.mu.Lock()
+	e.onCompaction = fn
+	e.ensureSubscribed("transcript_compacted")
+	e.mu.Unlock()
+}
+
+// OnCompactStart registers a handler that fires when the host is ABOUT to
+// compact the transcript — the pre-event paired with OnCompaction (post).
+// Because compaction runs a slow LLM summarization, the handler has time
+// to read the full session (read_session) and harvest detail before it's
+// summarized away. Purely additive and opt-in.
+func (e *Extension) OnCompactStart(fn func(CompactStart)) {
+	e.mu.Lock()
+	e.onCompactStart = fn
+	e.ensureSubscribed("compact_start")
+	e.mu.Unlock()
+}
+
+// OnRunEnd registers a handler that fires once when the agent finishes a
+// whole prompt — the per-prompt bookend to OnUserMessage, distinct from
+// the per-step turn lifecycle. Use it to act when the agent goes idle:
+// summarize the exchange, run a post-turn check, or flush state.
+func (e *Extension) OnRunEnd(fn func(RunEnd)) {
+	e.mu.Lock()
+	e.onRunEnd = fn
+	e.ensureSubscribed("run_end")
+	e.mu.Unlock()
+}
+
+// OnUserMessage registers a handler fired for every genuine user prompt
+// (the initial submit and queued follow-ups) — the symmetric counterpart
+// to observing assistant output. Use it to harvest intent for a memory
+// store or feed a session index. The host's synthetic at-close gate
+// nudge is not delivered. To rewrite or reject a prompt instead of just
+// observing it, use InterceptUserMessage.
+func (e *Extension) OnUserMessage(fn func(UserMessage)) {
+	e.mu.Lock()
+	e.onUserMessage = fn
+	e.ensureSubscribed("user_message")
+	e.mu.Unlock()
+}
+
+// OnWorkspaceChanged registers a handler fired once at the end of each
+// agent run with the net set of files added/modified/deleted in the
+// workspace during that run (honoring .gitignore, ignoring .git). A run
+// that changed nothing fires no event. Use it to keep a code index fresh
+// or note edits in a memory store. The host derives this by diffing the
+// workspace at run boundaries, so it catches bash side effects and
+// external edits too — not just the agent's own write/edit tools.
+func (e *Extension) OnWorkspaceChanged(fn func(WorkspaceChange)) {
+	e.mu.Lock()
+	e.onWorkspaceChanged = fn
+	e.ensureSubscribed("workspace_changed")
+	e.mu.Unlock()
 }
 
 // InterceptToolCall registers a guard that runs immediately before
@@ -708,6 +886,18 @@ func (e *Extension) InterceptTurnStart(fn TurnStartHandler) {
 func (e *Extension) InterceptAssistantMessage(fn AssistantMessageHandler) {
 	e.mu.Lock()
 	e.interceptAssistant = fn
+	e.mu.Unlock()
+}
+
+// InterceptUserMessage registers a guard that runs just before a user
+// prompt is appended to the transcript and sent to the model. Return
+// Block=true to reject it (the host surfaces Reason; no turn runs), or
+// ReplaceText to rewrite what the model sees. Runs on both the initial
+// prompt and queued follow-ups. Use for input guardrails, secret
+// redaction, or prompt augmentation.
+func (e *Extension) InterceptUserMessage(fn UserMessageHandler) {
+	e.mu.Lock()
+	e.interceptUser = fn
 	e.mu.Unlock()
 }
 
@@ -1010,6 +1200,7 @@ func (e *Extension) Run() error {
 	interceptTool := e.interceptOn
 	interceptTurn := e.interceptTurn != nil
 	interceptAsst := e.interceptAssistant != nil
+	interceptUser := e.interceptUser != nil
 	contextContribution := e.contextContribution
 	e.mu.Unlock()
 	for _, d := range descs {
@@ -1044,6 +1235,9 @@ func (e *Extension) Run() error {
 	}
 	if interceptAsst {
 		intercepts = append(intercepts, "assistant_message")
+	}
+	if interceptUser {
+		intercepts = append(intercepts, "user_message")
 	}
 	if len(eventNames) > 0 || len(intercepts) > 0 {
 		_ = e.send(extproto.SubscribeFromExt{
@@ -1102,6 +1296,7 @@ func (e *Extension) Run() error {
 					CWD:             ack.CWD,
 					ExtensionDir:    ack.ExtensionDir,
 					DataDir:         ack.DataDir,
+					SupportedEvents: ack.SupportedEvents,
 				}
 				e.mu.Unlock()
 			}
@@ -1172,8 +1367,27 @@ func (e *Extension) Run() error {
 			}
 			handler := e.eventHandlers[ef.Event]
 			var onSession func(Session)
-			if ef.Event == "session_start" {
+			var onSessionEnd func(Session)
+			var onCompaction func(Compaction)
+			var onCompactStart func(CompactStart)
+			var onUserMessage func(UserMessage)
+			var onWorkspaceChanged func(WorkspaceChange)
+			var onRunEnd func(RunEnd)
+			switch ef.Event {
+			case "session_start":
 				onSession = e.onSession
+			case "session_end":
+				onSessionEnd = e.onSessionEnd
+			case "transcript_compacted":
+				onCompaction = e.onCompaction
+			case "compact_start":
+				onCompactStart = e.onCompactStart
+			case "user_message":
+				onUserMessage = e.onUserMessage
+			case "workspace_changed":
+				onWorkspaceChanged = e.onWorkspaceChanged
+			case "run_end":
+				onRunEnd = e.onRunEnd
 			}
 			e.mu.Unlock()
 			if onSession != nil {
@@ -1186,6 +1400,70 @@ func (e *Extension) Run() error {
 					onSession(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle, CWD: ef.CWD, ProjectID: ef.ProjectID})
 				}()
 			}
+			if onSessionEnd != nil {
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							e.Logf("OnSessionEnd handler panicked: %v", r)
+						}
+					}()
+					onSessionEnd(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle, CWD: ef.CWD, ProjectID: ef.ProjectID})
+				}()
+			}
+			if onCompaction != nil {
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							e.Logf("OnCompaction handler panicked: %v", r)
+						}
+					}()
+					onCompaction(Compaction{})
+				}()
+			}
+			if onCompactStart != nil {
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							e.Logf("OnCompactStart handler panicked: %v", r)
+						}
+					}()
+					onCompactStart(CompactStart{Reason: ef.Text})
+				}()
+			}
+			if onRunEnd != nil {
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							e.Logf("OnRunEnd handler panicked: %v", r)
+						}
+					}()
+					onRunEnd(RunEnd{})
+				}()
+			}
+			if onUserMessage != nil {
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							e.Logf("OnUserMessage handler panicked: %v", r)
+						}
+					}()
+					onUserMessage(UserMessage{Text: ef.Text})
+				}()
+			}
+			if onWorkspaceChanged != nil {
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							e.Logf("OnWorkspaceChanged handler panicked: %v", r)
+						}
+					}()
+					files := make([]FileChange, len(ef.Files))
+					for i, fc := range ef.Files {
+						files[i] = FileChange{Path: fc.Path, Change: fc.Change}
+					}
+					onWorkspaceChanged(WorkspaceChange{Files: files})
+				}()
+			}
 			if handler != nil {
 				func() {
 					defer func() {
@@ -1193,12 +1471,17 @@ func (e *Extension) Run() error {
 							e.Logf("event %s handler panicked: %v", ef.Event, r)
 						}
 					}()
+					evFiles := make([]FileChange, len(ef.Files))
+					for i, fc := range ef.Files {
+						evFiles[i] = FileChange{Path: fc.Path, Change: fc.Change}
+					}
 					handler(Event{
 						Name: ef.Event, Step: ef.Step, Stop: ef.Stop,
 						Error: ef.Error, ToolID: ef.ToolID, ToolName: ef.ToolName,
 						ToolArgs: ef.ToolArgs, Text: ef.Text,
 						SessionID: ef.SessionID, SessionPath: ef.SessionPath, SessionTitle: ef.SessionTitle,
 						CWD: ef.CWD, ProjectID: ef.ProjectID,
+						Files: evFiles,
 					})
 				}()
 			}
@@ -1301,9 +1584,9 @@ func (e *Extension) send(v any) error {
 }
 
 // dispatchIntercept runs the per-event handler (tool_call / turn_start
-// / assistant_message) on its own goroutine, catches panics, and
-// always emits exactly one event_intercept_response. Called from the
-// Run loop.
+// / user_message / assistant_message) on its own goroutine, catches
+// panics, and always emits exactly one event_intercept_response. Called
+// from the Run loop.
 func (e *Extension) dispatchIntercept(ei extproto.EventInterceptFromHost) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1351,6 +1634,18 @@ func (e *Extension) dispatchIntercept(ei extproto.EventInterceptFromHost) {
 	case "assistant_message":
 		e.mu.Lock()
 		fn := e.interceptAssistant
+		e.mu.Unlock()
+		if fn != nil {
+			d := fn(ei.Text)
+			resp.Block = d.Block
+			resp.Reason = d.Reason
+			if !d.Block && d.ReplaceText != "" && d.ReplaceText != ei.Text {
+				resp.ReplaceText = d.ReplaceText
+			}
+		}
+	case "user_message":
+		e.mu.Lock()
+		fn := e.interceptUser
 		e.mu.Unlock()
 		if fn != nil {
 			d := fn(ei.Text)

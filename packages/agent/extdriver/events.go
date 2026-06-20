@@ -152,6 +152,36 @@ func (d *Driver) InterceptAssistantMessage(ctx context.Context, text string) Int
 	return out
 }
 
+// InterceptUserMessage asks every subscriber to approve, block, or
+// rewrite a genuine user prompt before it reaches the model. Block=true
+// rejects the prompt (the host surfaces Reason and runs no turn); a
+// non-empty ReplaceText rewrites the prompt the model sees. Successive
+// rewrites chain: each subscriber sees the previous subscriber's output.
+func (d *Driver) InterceptUserMessage(ctx context.Context, text string) InterceptResult {
+	subs := d.interceptSubsFor("user_message")
+	if len(subs) == 0 {
+		return InterceptResult{}
+	}
+	current := text
+	for _, ext := range subs {
+		r := d.askIntercept(ctx, ext, extproto.EventInterceptFromHost{
+			Event: "user_message",
+			Text:  current,
+		})
+		if r.Block {
+			return r
+		}
+		if r.ReplaceText != "" {
+			current = r.ReplaceText
+		}
+	}
+	out := InterceptResult{}
+	if current != text {
+		out.ReplaceText = current
+	}
+	return out
+}
+
 // interceptSubsFor returns the snapshot of extensions that subscribed
 // to intercepting the named event.
 func (d *Driver) interceptSubsFor(event string) []*Extension {

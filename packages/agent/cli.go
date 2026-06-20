@@ -273,11 +273,27 @@ func fanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 	}
 	switch e := ev.(type) {
 	case core.EvTurnStart:
-		mgr.EmitEvent(extproto.EventFromHost{Event: "turn_start", Step: e.Step})
+		mgr.EmitEvent(extproto.EventFromHost{Event: extproto.EventTurnStart, Step: e.Step})
 	case core.EvToolCall:
 		mgr.EmitEvent(extproto.EventFromHost{
-			Event: "tool_call", ToolID: e.ID, ToolName: e.Name, ToolArgs: e.Args,
+			Event: extproto.EventToolCall, ToolID: e.ID, ToolName: e.Name, ToolArgs: e.Args,
 		})
+	case core.EvUserMessage:
+		// Surface genuine user prompts (initial and queued) so an
+		// extension can observe what the human asked — the symmetric
+		// counterpart to assistant_message. The synthetic at-close gate
+		// nudge is suppressed: it's a host re-prompt, not the user's
+		// words, and a memory/index extension must not record it as such.
+		if e.Synthetic {
+			return
+		}
+		var text string
+		for _, c := range e.Message.Content {
+			if tb, ok := c.(provider.TextBlock); ok {
+				text += tb.Text
+			}
+		}
+		mgr.EmitEvent(extproto.EventFromHost{Event: extproto.EventUserMessage, Text: text})
 	case core.EvAssistantMessage:
 		// Concat the visible text portions of the message; binary
 		// blocks (tool_use, etc.) are skipped because subscribers
@@ -288,7 +304,7 @@ func fanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 				text += tb.Text
 			}
 		}
-		mgr.EmitEvent(extproto.EventFromHost{Event: "assistant_message", Text: text})
+		mgr.EmitEvent(extproto.EventFromHost{Event: extproto.EventAssistantMessage, Text: text})
 	case core.EvToolResult:
 		// Fan tool results out to subscribers so an extension can
 		// observe what a tool produced, not just that it was called
@@ -296,17 +312,44 @@ func fanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 		// outcome). The result content is flattened to its text
 		// blocks — subscribers want a string they can grep/display.
 		mgr.EmitEvent(extproto.EventFromHost{
-			Event:   "tool_result",
+			Event:   extproto.EventToolResult,
 			ToolID:  e.ID,
 			Text:    toolResultText(e.Result),
 			IsError: e.Result.IsError,
 		})
 	case core.EvTurnEnd:
-		ev := extproto.EventFromHost{Event: "turn_end", Stop: string(e.Stop)}
+		ev := extproto.EventFromHost{Event: extproto.EventTurnEnd, Stop: string(e.Stop)}
 		if e.Err != nil {
 			ev.Error = e.Err.Error()
 		}
 		mgr.EmitEvent(ev)
+	case core.EvDone:
+		// The agent finished the whole prompt (all steps, tool loops, and
+		// the at-close gate done) — the per-prompt bookend to user_message,
+		// distinct from the per-step turn_end. Lets an extension act when
+		// the agent goes idle (summarize the exchange, run a post-turn
+		// check, flush). Fires once per run, in every mode (EvDone rides
+		// the wrapped Prompt sink).
+		mgr.EmitEvent(extproto.EventFromHost{Event: extproto.EventRunEnd})
+	case core.EvCompactStart:
+		// Compaction is about to squash the transcript. Unlike the post
+		// event, this fires BEFORE detail is summarized away, so a memory
+		// extension can harvest salient facts from the about-to-be-dropped
+		// messages (read_session) while compaction's own LLM summarization
+		// runs. Reason is short human-readable prose.
+		mgr.EmitEvent(extproto.EventFromHost{Event: extproto.EventCompactStart, Text: e.Reason})
+	case core.EvCompactEnd:
+		// Tell subscribed extensions the transcript was compacted so they
+		// can re-snapshot refreshable context (e.g. a memory extension
+		// re-injecting its notes, which the frozen session-start snapshot
+		// no longer reflects). Fire only on success — a failed compaction
+		// left the transcript unchanged. The event is enqueued before the
+		// post-compaction turn's tool calls (the FIFO outbox), the same
+		// ordering session_start relies on. Additive + subscription-gated:
+		// an extension that didn't subscribe never sees it.
+		if e.Err == "" {
+			mgr.EmitEvent(extproto.EventFromHost{Event: extproto.EventTranscriptCompacted})
+		}
 	}
 }
 
@@ -343,7 +386,7 @@ func emitSessionStart(mgr *extensions.Manager, sess *core.Session) {
 	if mgr == nil {
 		return
 	}
-	ev := extproto.EventFromHost{Event: "session_start"}
+	ev := extproto.EventFromHost{Event: extproto.EventSessionStart}
 	if sess != nil {
 		ev.SessionID = sess.ID
 		ev.SessionPath = sess.Path
@@ -356,7 +399,73 @@ func emitSessionStart(mgr *extensions.Manager, sess *core.Session) {
 			ev.ProjectID = core.ProjectKey(sess.Meta.CWD)
 		}
 	}
+	// Bookend a switch: if a DIFFERENT session was last announced, tell
+	// subscribers it ended before the new one starts (FIFO: end old, then
+	// start new). A /cd re-announces the same id, so it ends nothing.
+	// Closing to no-session (empty id) still ends the outgoing session.
+	if prev, changed := mgr.SwapAnnouncedSession(extensions.SessionIdentity{
+		ID: ev.SessionID, Path: ev.SessionPath, Title: ev.SessionTitle,
+		CWD: ev.CWD, ProjectID: ev.ProjectID,
+	}); changed {
+		mgr.EmitSessionEnd(prev)
+	}
 	mgr.EmitEvent(ev)
+}
+
+// emitWorkspaceChanged fires the per-turn workspace diff to subscribed
+// extensions as a workspace_changed event. A no-op when nothing changed,
+// so a read-only turn stays silent. Paths are workspace-relative; the
+// change kind is added/modified/deleted.
+func emitWorkspaceChanged(mgr *extensions.Manager, changes []tools.FileChange) {
+	if mgr == nil || len(changes) == 0 {
+		return
+	}
+	files := make([]extproto.FileChange, len(changes))
+	for i, c := range changes {
+		files[i] = extproto.FileChange{Path: c.Path, Change: c.Kind}
+	}
+	mgr.EmitEvent(extproto.EventFromHost{Event: extproto.EventWorkspaceChanged, Files: files})
+}
+
+// workspaceRootFn resolves the agent's live workspace root for a
+// WorkspaceDiffer: the sandbox's writable root (which a /cd updates) when
+// jailed, else the resolved cwd. Reading it live lets the differ follow a
+// directory change without re-wiring.
+func workspaceRootFn(sandbox *tools.Sandbox, cwd string) func() string {
+	return func() string {
+		if sandbox != nil && sandbox.Root != "" {
+			return sandbox.Root
+		}
+		return cwd
+	}
+}
+
+// workspaceChangeObserver returns an OnEvent observer that snapshots the
+// workspace at the start of each run (EvTurnStart step 1, before any tool
+// touches the tree) and emits the net diff at the end (EvDone) as a
+// workspace_changed event. The armed flag suppresses a diff for a blocked
+// prompt (EvDone with no turn) so it can't report a stale baseline.
+// Compose it into a host's OnEvent. Touched only on the serial event
+// goroutine, so the closure bool needs no lock. A nil differ disables it.
+func workspaceChangeObserver(differ *tools.WorkspaceDiffer, extMgr *extensions.Manager) func(core.AgentEvent) {
+	if differ == nil {
+		return func(core.AgentEvent) {}
+	}
+	armed := false
+	return func(ev core.AgentEvent) {
+		switch e := ev.(type) {
+		case core.EvTurnStart:
+			if e.Step == 1 {
+				differ.Rebase()
+				armed = true
+			}
+		case core.EvDone:
+			if armed {
+				armed = false
+				emitWorkspaceChanged(extMgr, differ.Diff())
+			}
+		}
+	}
 }
 
 // toolResultText flattens a tool result's content blocks to their
@@ -692,10 +801,11 @@ func observeAgentEventForHooks(eng *hooks.Engine, ev core.AgentEvent) {
 	}
 }
 
-func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate, hookEng *hooks.Engine) {
+func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate, hookEng *hooks.Engine, differ *tools.WorkspaceDiffer) {
 	if ag == nil || extMgr == nil {
 		return
 	}
+	wsObserve := workspaceChangeObserver(differ, extMgr)
 	ag.BeforeToolExecute = buildBeforeToolExecute(ctx, hookEng, gate, extMgr)
 	wireHostToolDispatcher(ag, extMgr, gate)
 	ag.BeforeTurn = func(step int) (bool, string) {
@@ -709,7 +819,15 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 		}
 		return true, "", res.ReplaceText
 	}
+	ag.BeforeUserMessage = func(text string) (bool, string, string) {
+		res := extMgr.InterceptUserMessage(ctx, text)
+		if res.Block {
+			return false, res.Reason, ""
+		}
+		return true, "", res.ReplaceText
+	}
 	ag.OnEvent = func(ev core.AgentEvent) {
+		wsObserve(ev)
 		fanoutAgentEvent(extMgr, ev)
 		observeAgentEventForHooks(hookEng, ev)
 	}
@@ -731,7 +849,7 @@ func runPrintMode(ctx context.Context, args Args, version string) error {
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted))
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 	// Tell session-keyed extensions the real session id before any turn
@@ -765,7 +883,7 @@ func runJSONMode(ctx context.Context, args Args, version string) error {
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted))
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 	// Tell session-keyed extensions the real session id before any turn
@@ -933,6 +1051,10 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
 	}
+	// First-run offer: when nothing is installed yet, offer the built-in
+	// core pack (once, interactive TTY only) BEFORE discovery, so an
+	// accepted install is picked up by the scan below in this same session.
+	maybeOfferCorePack(args)
 	// --no-ext skips the global + project-local discovery scan;
 	// explicit --ext paths above are still honoured so you can run
 	// "only this extension" with --no-ext --ext ./x.
@@ -1082,6 +1204,14 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 
 	hookEng := buildHookEngine(args, r.Trusted)
 
+	// Per-turn workspace change reporting: snapshot the workspace at the
+	// start of each run and diff at the end, emitting a workspace_changed
+	// event so an index/memory extension learns what files moved. The root
+	// is read live (sandbox root, which a /cd updates; else the cwd) so the
+	// differ follows directory changes. Survives a login re-resolve (the
+	// agent is rebuilt, this isn't). See packages/agent/tools/workspace_diff.go.
+	workspaceDiffer := tools.NewWorkspaceDiffer(workspaceRootFn(sharedSandbox, r.CWD))
+
 	// Capture current args in a closure so BuildAgent can re-resolve
 	// after a successful login (picks up the newly stored credential).
 	wireAgentExt := func(a *core.Agent) *core.Agent {
@@ -1104,7 +1234,16 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			}
 			return true, "", r.ReplaceText
 		}
+		a.BeforeUserMessage = func(text string) (bool, string, string) {
+			r := extMgr.InterceptUserMessage(ctx, text)
+			if r.Block {
+				return false, r.Reason, ""
+			}
+			return true, "", r.ReplaceText
+		}
+		wsObserve := workspaceChangeObserver(workspaceDiffer, extMgr)
 		a.OnEvent = func(ev core.AgentEvent) {
+			wsObserve(ev)
 			fanoutAgentEvent(extMgr, ev)
 			observeAgentEventForHooks(hookEng, ev)
 		}
@@ -1706,6 +1845,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		MaxSteps:                   r.MaxSteps,
 		CWD:                        r.CWD,
 		TervaHome:                  TervaHome(),
+		UserModelsPath:             UserModelsPath(),
 		Version:                    version,
 		UpdateInfoChan:             updateCh,
 		Sandbox:                    sharedSandbox,
@@ -1779,7 +1919,24 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			writeNewTranscriptLocked(currentAg, sess, sessBaselineMsgs)
 			sessBaselineMsgs = len(currentAg.Messages())
 		},
-		Extensions:    extMgr,
+		Extensions: extMgr,
+		ListExtensions: func() []modes.ExtInfo {
+			return listInstalledExtensions(r.CWD, r.Trusted, extMgr)
+		},
+		SetExtensionGlobalEnabled: func(name string, on bool) error {
+			dir, err := findExtensionDirIn(r.CWD, name)
+			if err != nil {
+				return err
+			}
+			return setManifestEnabled(dir, on)
+		},
+		SetExtensionProjectEnabled: func(name string, on bool) error {
+			// on=true → ensure NOT in the project's disable list.
+			return setProjectExtensionDisabled(r.CWD, name, !on)
+		},
+		ApplyExtensionChange: func(name string) {
+			applyExtensionChangeLive(extMgr, r.CWD, r.Trusted, name)
+		},
 		Swarm:         swarmMgr,
 		ChangelogChan: changelogCh,
 		OnChangelogDismiss: func() {

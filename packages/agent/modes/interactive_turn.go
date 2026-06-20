@@ -126,8 +126,21 @@ func (i *Interactive) runClaimedCompact(ctx context.Context, ag *core.Agent, aut
 	go func() {
 		// Sink discards deltas — we don't stream the summary to the UI.
 		sink := func(delta string) {}
+		// Interactive compaction runs outside the Prompt loop, so emit the
+		// lifecycle events through OnEvent ourselves; without this an
+		// extension's OnCompaction / OnCompactStart never fires here.
+		reason := "compaction"
+		if auto {
+			reason = "context near limit"
+		}
+		ag.EmitLifecycle(core.EvCompactStart{Reason: reason})
 		summary, err := ag.Compact(ctx, 4, sink)
 		_ = summary
+		end := core.EvCompactEnd{}
+		if err != nil {
+			end.Err = err.Error()
+		}
+		ag.EmitLifecycle(end)
 		failed := err != nil || ctx.Err() != nil
 		next, hasNext := i.turns.release(failed)
 		i.turns.ResetStream()
@@ -507,6 +520,16 @@ func (i *Interactive) handleEvent(ev core.AgentEvent) {
 		if e.Usage.InputTokens > 0 {
 			i.lastCtxInput = e.Usage.InputTokens + e.Usage.CacheReadTokens + e.Usage.CacheWriteTokens
 		}
+	case core.EvUserMessageRejected:
+		// A user_message guard refused the prompt: it never reached the
+		// model. Surface the reason so the submit doesn't just vanish.
+		reason := e.Reason
+		if reason == "" {
+			reason = "message blocked by extension"
+		}
+		i.statusErr = reason
+		i.statusOK = ""
+		return
 	case core.EvTurnEnd:
 		if e.Stop == provider.StopAborted {
 			i.turns.ResetStream()

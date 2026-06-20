@@ -4,29 +4,35 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
-// TestInterceptAllThreeEvents exercises tool_call / turn_start /
-// assistant_message interception end-to-end via a bash extension that
-// blocks `rm -rf`, rewrites any other bash command to `echo GUARDED`,
-// suppresses nothing at turn_start, and rewrites SECRET → [redacted]
-// in assistant messages.
+// TestInterceptAllFourEvents exercises tool_call / turn_start /
+// user_message / assistant_message interception end-to-end via a bash
+// extension that blocks `rm -rf`, rewrites any other bash command to
+// `echo GUARDED`, suppresses nothing at turn_start, blocks prompts
+// containing DROP and rewrites the prompt "raw" → "polished", and
+// rewrites SECRET → [redacted] in assistant messages.
 //
-// Validates: block, modified_args, pass-through, and replace_text.
-func TestInterceptAllThreeEvents(t *testing.T) {
+// Validates: block, modified_args, pass-through, and replace_text across
+// the full intercept family.
+func TestInterceptAllFourEvents(t *testing.T) {
 	if _, err := os.Stat("/bin/bash"); err != nil {
 		t.Skip("no /bin/bash")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("no python3 (the intercept fixture parses JSON frames with it)")
 	}
 
 	extDir := t.TempDir()
 	script := `#!/bin/bash
 emit() { printf '%s\n' "$1"; }
 emit '{"type":"hello","name":"itest","version":"0.1.0","capabilities":["events"]}'
-emit '{"type":"subscribe","events":[],"intercept":["tool_call","turn_start","assistant_message"]}'
+emit '{"type":"subscribe","events":[],"intercept":["tool_call","turn_start","user_message","assistant_message"]}'
 emit '{"type":"ready"}'
 while IFS= read -r line; do
   t=$(printf '%s' "$line" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("type",""))')
@@ -49,6 +55,15 @@ while IFS= read -r line; do
       fi ;;
     turn_start)
       emit "{\"type\":\"event_intercept_response\",\"id\":\"$id\"}" ;;
+    user_message)
+      text=$(printf '%s' "$line" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("text",""))')
+      if [[ "$text" == *"DROP"* ]]; then
+        emit "{\"type\":\"event_intercept_response\",\"id\":\"$id\",\"block\":true,\"reason\":\"refused: DROP\"}"
+      elif [[ "$text" == "raw" ]]; then
+        emit "{\"type\":\"event_intercept_response\",\"id\":\"$id\",\"replace_text\":\"polished\"}"
+      else
+        emit "{\"type\":\"event_intercept_response\",\"id\":\"$id\"}"
+      fi ;;
     assistant_message)
       text=$(printf '%s' "$line" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("text",""))')
       if [[ "$text" == *"SECRET"* ]]; then
@@ -133,6 +148,30 @@ done
 	if r.ReplaceText != "" {
 		t.Errorf("clean: want no replace, got %q", r.ReplaceText)
 	}
+
+	// user_message: a prompt containing DROP is blocked
+	ur := m.InterceptUserMessage(ctx, "please DROP the table")
+	if !ur.Block || !strings.Contains(ur.Reason, "refused") {
+		t.Errorf("DROP prompt: want block+reason, got %+v", ur)
+	}
+
+	// user_message: "raw" is rewritten to "polished"
+	ur = m.InterceptUserMessage(ctx, "raw")
+	if ur.Block {
+		t.Errorf("raw prompt: want allow, got block %q", ur.Reason)
+	}
+	if ur.ReplaceText != "polished" {
+		t.Errorf("raw prompt: want replace=polished, got %q", ur.ReplaceText)
+	}
+
+	// user_message: an ordinary prompt passes through untouched
+	ur = m.InterceptUserMessage(ctx, "ordinary prompt")
+	if ur.Block {
+		t.Errorf("ordinary prompt: want allow, got block %q", ur.Reason)
+	}
+	if ur.ReplaceText != "" {
+		t.Errorf("ordinary prompt: want no replace, got %q", ur.ReplaceText)
+	}
 }
 
 // TestReloadRespawnsExtensions verifies Reload tears down and brings
@@ -140,6 +179,9 @@ done
 func TestReloadRespawnsExtensions(t *testing.T) {
 	if _, err := os.Stat("/bin/bash"); err != nil {
 		t.Skip("no /bin/bash")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("no python3 (the intercept fixture parses JSON frames with it)")
 	}
 
 	extDir := t.TempDir()

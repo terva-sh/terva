@@ -636,3 +636,408 @@ func TestContextContributionFrames(t *testing.T) {
 
 	h.hostW.Close()
 }
+
+// TestOnCompaction: OnCompaction subscribes to the additive
+// transcript_compacted event and fires its handler when the host emits it
+// — the post-compaction re-snapshot hook. Opt-in, no version bump.
+func TestOnCompaction(t *testing.T) {
+	h := newHarness("compact-ext")
+
+	fired := make(chan struct{}, 2)
+	h.ext.OnCompaction(func(Compaction) { fired <- struct{}{} })
+
+	go h.ext.Run()
+
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		TervaVersion: "0.0.0-test", Provider: "anthropic", Model: "claude-test",
+	})
+	var subscribed bool
+	for {
+		f := h.next(t)
+		if f.hdr.Type == "subscribe" {
+			var sub extproto.SubscribeFromExt
+			if err := json.Unmarshal(f.raw, &sub); err == nil && slices.Contains(sub.Events, "transcript_compacted") {
+				subscribed = true
+			}
+		}
+		if f.hdr.Type == "ready" {
+			break
+		}
+	}
+	if !subscribed {
+		t.Fatal("OnCompaction must subscribe to transcript_compacted")
+	}
+
+	h.sendToExt(t, extproto.EventFromHost{Type: "event", Event: "transcript_compacted"})
+	select {
+	case <-fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for OnCompaction callback")
+	}
+
+	h.hostW.Close()
+}
+
+// TestOnSessionEnd: registering OnSessionEnd subscribes to session_end,
+// and a host-emitted session_end reaches the handler with the ending
+// session's identity.
+func TestOnSessionEnd(t *testing.T) {
+	h := newHarness("end-ext")
+
+	got := make(chan Session, 1)
+	h.ext.OnSessionEnd(func(s Session) { got <- s })
+
+	go h.ext.Run()
+
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		TervaVersion: "0.0.0-test", Provider: "anthropic", Model: "claude-test",
+	})
+	var subscribed bool
+	for {
+		f := h.next(t)
+		if f.hdr.Type == "subscribe" {
+			var sub extproto.SubscribeFromExt
+			if err := json.Unmarshal(f.raw, &sub); err == nil && slices.Contains(sub.Events, extproto.EventSessionEnd) {
+				subscribed = true
+			}
+		}
+		if f.hdr.Type == "ready" {
+			break
+		}
+	}
+	if !subscribed {
+		t.Fatal("OnSessionEnd must subscribe to session_end")
+	}
+
+	h.sendToExt(t, extproto.EventFromHost{
+		Type: "event", Event: extproto.EventSessionEnd,
+		SessionID: "sX", SessionPath: "/path/sX", SessionTitle: "T",
+		CWD: "/cwd", ProjectID: "proj",
+	})
+	select {
+	case s := <-got:
+		if s.ID != "sX" || s.CWD != "/cwd" || s.ProjectID != "proj" {
+			t.Errorf("handler got %+v, want sX/cwd/proj", s)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for OnSessionEnd callback")
+	}
+
+	h.hostW.Close()
+}
+
+// TestOnCompactStart: OnCompactStart subscribes to compact_start and the
+// handler receives the reason.
+func TestOnCompactStart(t *testing.T) {
+	h := newHarness("cs-ext")
+
+	got := make(chan string, 1)
+	h.ext.OnCompactStart(func(cs CompactStart) { got <- cs.Reason })
+
+	go h.ext.Run()
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		TervaVersion: "0.0.0-test", Provider: "anthropic", Model: "claude-test",
+	})
+	var subscribed bool
+	for {
+		f := h.next(t)
+		if f.hdr.Type == "subscribe" {
+			var sub extproto.SubscribeFromExt
+			if err := json.Unmarshal(f.raw, &sub); err == nil && slices.Contains(sub.Events, extproto.EventCompactStart) {
+				subscribed = true
+			}
+		}
+		if f.hdr.Type == "ready" {
+			break
+		}
+	}
+	if !subscribed {
+		t.Fatal("OnCompactStart must subscribe to compact_start")
+	}
+
+	h.sendToExt(t, extproto.EventFromHost{Type: "event", Event: extproto.EventCompactStart, Text: "context near limit"})
+	select {
+	case reason := <-got:
+		if reason != "context near limit" {
+			t.Errorf("reason = %q, want %q", reason, "context near limit")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for OnCompactStart callback")
+	}
+	h.hostW.Close()
+}
+
+// TestOnRunEnd: OnRunEnd subscribes to run_end and the handler fires on a
+// host-emitted run_end.
+func TestOnRunEnd(t *testing.T) {
+	h := newHarness("re-ext")
+
+	fired := make(chan struct{}, 1)
+	h.ext.OnRunEnd(func(RunEnd) { fired <- struct{}{} })
+
+	go h.ext.Run()
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		TervaVersion: "0.0.0-test", Provider: "anthropic", Model: "claude-test",
+	})
+	var subscribed bool
+	for {
+		f := h.next(t)
+		if f.hdr.Type == "subscribe" {
+			var sub extproto.SubscribeFromExt
+			if err := json.Unmarshal(f.raw, &sub); err == nil && slices.Contains(sub.Events, extproto.EventRunEnd) {
+				subscribed = true
+			}
+		}
+		if f.hdr.Type == "ready" {
+			break
+		}
+	}
+	if !subscribed {
+		t.Fatal("OnRunEnd must subscribe to run_end")
+	}
+
+	h.sendToExt(t, extproto.EventFromHost{Type: "event", Event: extproto.EventRunEnd})
+	select {
+	case <-fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for OnRunEnd callback")
+	}
+	h.hostW.Close()
+}
+
+// TestOnWorkspaceChanged: registering OnWorkspaceChanged subscribes to
+// workspace_changed, and a host-emitted diff reaches the handler with its
+// file list intact (path + change kind).
+func TestOnWorkspaceChanged(t *testing.T) {
+	h := newHarness("ws-ext")
+
+	got := make(chan WorkspaceChange, 1)
+	h.ext.OnWorkspaceChanged(func(c WorkspaceChange) { got <- c })
+
+	go h.ext.Run()
+
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		TervaVersion: "0.0.0-test", Provider: "anthropic", Model: "claude-test",
+	})
+	var subscribed bool
+	for {
+		f := h.next(t)
+		if f.hdr.Type == "subscribe" {
+			var sub extproto.SubscribeFromExt
+			if err := json.Unmarshal(f.raw, &sub); err == nil && slices.Contains(sub.Events, extproto.EventWorkspaceChanged) {
+				subscribed = true
+			}
+		}
+		if f.hdr.Type == "ready" {
+			break
+		}
+	}
+	if !subscribed {
+		t.Fatal("OnWorkspaceChanged must subscribe to workspace_changed")
+	}
+
+	h.sendToExt(t, extproto.EventFromHost{
+		Type: "event", Event: extproto.EventWorkspaceChanged,
+		Files: []extproto.FileChange{
+			{Path: "pkg/a.go", Change: "added"},
+			{Path: "pkg/b.go", Change: "modified"},
+			{Path: "old.go", Change: "deleted"},
+		},
+	})
+	select {
+	case c := <-got:
+		if len(c.Files) != 3 {
+			t.Fatalf("got %d files, want 3: %+v", len(c.Files), c.Files)
+		}
+		if c.Files[0].Path != "pkg/a.go" || c.Files[0].Change != "added" {
+			t.Errorf("file[0] = %+v, want pkg/a.go/added", c.Files[0])
+		}
+		if c.Files[2].Path != "old.go" || c.Files[2].Change != "deleted" {
+			t.Errorf("file[2] = %+v, want old.go/deleted", c.Files[2])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for OnWorkspaceChanged callback")
+	}
+
+	h.hostW.Close()
+}
+
+// TestOnUserMessage: registering OnUserMessage subscribes to the
+// user_message event, and a host-emitted user_message reaches the handler
+// with its text.
+func TestOnUserMessage(t *testing.T) {
+	h := newHarness("user-ext")
+
+	got := make(chan string, 1)
+	h.ext.OnUserMessage(func(m UserMessage) { got <- m.Text })
+
+	go h.ext.Run()
+
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		TervaVersion: "0.0.0-test", Provider: "anthropic", Model: "claude-test",
+	})
+	var subscribed bool
+	for {
+		f := h.next(t)
+		if f.hdr.Type == "subscribe" {
+			var sub extproto.SubscribeFromExt
+			if err := json.Unmarshal(f.raw, &sub); err == nil && slices.Contains(sub.Events, extproto.EventUserMessage) {
+				subscribed = true
+			}
+		}
+		if f.hdr.Type == "ready" {
+			break
+		}
+	}
+	if !subscribed {
+		t.Fatal("OnUserMessage must subscribe to user_message")
+	}
+
+	h.sendToExt(t, extproto.EventFromHost{Type: "event", Event: extproto.EventUserMessage, Text: "remember the milk"})
+	select {
+	case text := <-got:
+		if text != "remember the milk" {
+			t.Errorf("handler got %q, want %q", text, "remember the milk")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for OnUserMessage callback")
+	}
+
+	h.hostW.Close()
+}
+
+// TestInterceptUserMessage: InterceptUserMessage subscribes to the
+// user_message intercept and its decision (block / rewrite) is carried
+// back in the event_intercept_response.
+func TestInterceptUserMessage(t *testing.T) {
+	h := newHarness("guard-ext")
+
+	// Block prompts containing "secret"; rewrite "noisy" → "tidy";
+	// otherwise pass through.
+	h.ext.InterceptUserMessage(func(text string) UserMessageDecision {
+		switch {
+		case strings.Contains(text, "secret"):
+			return UserMessageDecision{Block: true, Reason: "no secrets"}
+		case text == "noisy":
+			return UserMessageDecision{ReplaceText: "tidy"}
+		default:
+			return UserMessageDecision{}
+		}
+	})
+
+	go h.ext.Run()
+
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		TervaVersion: "0.0.0-test", Provider: "anthropic", Model: "claude-test",
+	})
+	var interceptSub bool
+	for {
+		f := h.next(t)
+		if f.hdr.Type == "subscribe" {
+			var sub extproto.SubscribeFromExt
+			if err := json.Unmarshal(f.raw, &sub); err == nil && slices.Contains(sub.Intercept, extproto.EventUserMessage) {
+				interceptSub = true
+			}
+		}
+		if f.hdr.Type == "ready" {
+			break
+		}
+	}
+	if !interceptSub {
+		t.Fatal("InterceptUserMessage must subscribe to the user_message intercept")
+	}
+
+	ask := func(id, text string) extproto.EventInterceptResponseFromExt {
+		h.sendToExt(t, extproto.EventInterceptFromHost{
+			Type: "event_intercept", ID: id, Event: extproto.EventUserMessage, Text: text,
+		})
+		f := h.drainUntil(t, "event_intercept_response")
+		var r extproto.EventInterceptResponseFromExt
+		if err := json.Unmarshal(f.raw, &r); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if r.ID != id {
+			t.Fatalf("response id = %q, want %q", r.ID, id)
+		}
+		return r
+	}
+
+	if r := ask("a", "tell me the secret"); !r.Block || r.Reason != "no secrets" {
+		t.Errorf("blocked case: block=%v reason=%q", r.Block, r.Reason)
+	}
+	if r := ask("b", "noisy"); r.Block || r.ReplaceText != "tidy" {
+		t.Errorf("rewrite case: block=%v replace=%q", r.Block, r.ReplaceText)
+	}
+	if r := ask("c", "ordinary prompt"); r.Block || r.ReplaceText != "" {
+		t.Errorf("passthrough case: block=%v replace=%q", r.Block, r.ReplaceText)
+	}
+
+	h.hostW.Close()
+}
+
+// TestHelloAckAdvertisesSupportedEvents: the host's hello_ack supported_events
+// reach Host(), and Host().Emits answers capability queries. A session_start
+// (processed after hello_ack, FIFO) is the synchronization point.
+func TestHelloAckAdvertisesSupportedEvents(t *testing.T) {
+	h := newHarness("adv-ext")
+
+	hostCh := make(chan HostInfo, 1)
+	h.ext.OnSession(func(Session) { hostCh <- h.ext.Host() })
+
+	go h.ext.Run()
+
+	if f := h.next(t); f.hdr.Type != "hello" {
+		t.Fatalf("expected hello, got %q", f.hdr.Type)
+	}
+	h.sendToExt(t, extproto.HelloAckFromHost{
+		Type: "hello_ack", ProtocolVersion: extproto.ProtocolVersion,
+		SupportedEvents: []string{extproto.EventSessionStart, extproto.EventTranscriptCompacted},
+	})
+	for h.next(t).hdr.Type != "ready" {
+	}
+
+	h.sendToExt(t, extproto.EventFromHost{Type: "event", Event: extproto.EventSessionStart})
+	var host HostInfo
+	select {
+	case host = <-hostCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for session callback")
+	}
+
+	if !host.Emits(extproto.EventTranscriptCompacted) {
+		t.Error("Host().Emits should report an advertised event")
+	}
+	if host.Emits("not_a_real_event") {
+		t.Error("Host().Emits should be false for an unadvertised event")
+	}
+
+	h.hostW.Close()
+}

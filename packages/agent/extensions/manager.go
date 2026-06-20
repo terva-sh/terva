@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/extdriver"
+	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/envcompat"
 )
 
@@ -80,6 +81,81 @@ type Manager struct {
 	// always searched. Set via SetProjectTrusted BEFORE Discover. Guarded
 	// by mu. See docs/plans/workspace-trust.md.
 	projectTrusted bool
+
+	// lastAnnounced is the identity of the session most recently passed to
+	// a session_start emit. The host bookends it with session_end when a
+	// DIFFERENT session is announced (a switch / close) or at shutdown, so
+	// session_start and session_end stay paired. Opaque strings — no core
+	// dependency (the deps test forbids it). Guarded by mu.
+	lastAnnounced SessionIdentity
+}
+
+// SessionIdentity is the core-free snapshot the Manager remembers so it
+// can bookend a session_start with a matching session_end. ProjectID is
+// precomputed by the caller (it needs core.ProjectKey) so the manager can
+// build the event without importing core.
+type SessionIdentity struct {
+	ID        string
+	Path      string
+	Title     string
+	CWD       string
+	ProjectID string
+}
+
+// SwapAnnouncedSession records next as the newly-announced session and
+// returns the previously-announced one when it was a different, non-empty
+// session — the one the host should now bookend with session_end before
+// announcing next. A repeat of the same id (e.g. a /cd that re-announces
+// the same session with a new cwd) returns changed=false.
+func (m *Manager) SwapAnnouncedSession(next SessionIdentity) (prev SessionIdentity, changed bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	prev = m.lastAnnounced
+	changed = prev.ID != "" && prev.ID != next.ID
+	m.lastAnnounced = next
+	return prev, changed
+}
+
+// TakeAnnouncedSession returns the last-announced session and clears it,
+// so a shutdown path emits its final session_end exactly once (a later
+// call, or a session already ended by a switch, returns ok=false).
+func (m *Manager) TakeAnnouncedSession() (prev SessionIdentity, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	prev = m.lastAnnounced
+	m.lastAnnounced = SessionIdentity{}
+	return prev, prev.ID != ""
+}
+
+// EmitSessionEnd fires a session_end lifecycle event for an ending
+// session — the bookend to session_start. Best-effort: a hard kill skips
+// it, so an extension must still persist incrementally and treat this as
+// a flush point, not a durability guarantee. A no-op for an empty id.
+func (m *Manager) EmitSessionEnd(s SessionIdentity) {
+	if s.ID == "" {
+		return
+	}
+	m.EmitEvent(extproto.EventFromHost{
+		Event:        extproto.EventSessionEnd,
+		SessionID:    s.ID,
+		SessionPath:  s.Path,
+		SessionTitle: s.Title,
+		CWD:          s.CWD,
+		ProjectID:    s.ProjectID,
+	})
+}
+
+// Stop emits a final session_end for the active session (the bookend to
+// session_start) and then tears down every extension. Overrides the
+// promoted Driver.Stop so every shutdown path gets the event without
+// touching each call site; the session_end is enqueued before the
+// shutdown frame on the same FIFO outbox, so a healthy extension sees it
+// before exiting.
+func (m *Manager) Stop(grace time.Duration) {
+	if s, ok := m.TakeAnnouncedSession(); ok {
+		m.EmitSessionEnd(s)
+	}
+	m.Driver.Stop(grace)
 }
 
 // New constructs an empty Manager wrapping a fresh wire Driver. Call
@@ -198,6 +274,40 @@ func (m *Manager) loadOne(ctx context.Context, dir string) error {
 		return nil
 	}
 	return m.Driver.Load(ctx, dir, mf)
+}
+
+// ApplyOne surgically brings extension `name` into the desired running
+// state WITHOUT touching any other extension: it loads the one (when want
+// and a matching, enabled, not-config-disabled manifest exists) or stops
+// it gracefully and silently. It then fires onReload so the host rebuilds
+// its tool registry. Used by the /extensions dialog so a single toggle
+// doesn't tear down and respawn the whole set (which both spends time and,
+// via overlapping reloads, can orphan instances into spurious "exited
+// unexpectedly" notices). Callers should SetDisabledExtensions with the
+// fresh config first so loadOne honors a just-changed disable.
+func (m *Manager) ApplyOne(ctx context.Context, name string, want bool, grace time.Duration) {
+	if want {
+		for _, root := range m.searchDirs() {
+			dir := filepath.Join(root, name)
+			if _, err := os.Stat(filepath.Join(dir, "extension.json")); err != nil {
+				continue
+			}
+			_ = m.loadOne(ctx, dir) // idempotent (Driver.Load skips a dup) and policy-checked
+			break                   // first match wins, mirroring searchDirs precedence
+		}
+		// Let a freshly spawned extension register before the host rebuilds
+		// its tool registry below.
+		m.Driver.WaitForReady(grace)
+	} else {
+		m.Driver.StopByName(name, grace)
+	}
+
+	m.mu.RLock()
+	cb := m.onReload
+	m.mu.RUnlock()
+	if cb != nil {
+		cb()
+	}
 }
 
 // LoadExplicit loads each path as an ad-hoc extension. Used for

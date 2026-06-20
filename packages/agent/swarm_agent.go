@@ -49,7 +49,10 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted))
+	// nil differ: swarm sub-agents run concurrently sharing one workspace,
+	// so per-sub-agent diffing would race and double-report; the parent
+	// run's workspace_changed captures the net effect of the whole swarm.
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted), nil)
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 	// Tell session-keyed extensions the real session id before any turn

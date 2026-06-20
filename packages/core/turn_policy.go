@@ -178,13 +178,16 @@ func (a *Agent) ShouldAutoCompact(threshold float64) bool {
 // EvCompactEnd so streaming consumers can surface it.
 func (a *Agent) PromptWithPolicy(ctx context.Context, prompt string, images []provider.ImageBlock, sink func(AgentEvent)) error {
 	compact := func(reason string) error {
-		sink(EvCompactStart{Reason: reason})
+		start := EvCompactStart{Reason: reason}
+		sink(start)
+		a.EmitLifecycle(start) // reach extensions: sink here is the host UI sink, not the OnEvent fanout
 		_, err := a.Compact(ctx, 4, func(string) {})
 		ev := EvCompactEnd{}
 		if err != nil {
 			ev.Err = err.Error()
 		}
 		sink(ev)
+		a.EmitLifecycle(ev)
 		return err
 	}
 	if a.ShouldAutoCompact(AutoCompactThreshold) {

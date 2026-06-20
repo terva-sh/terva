@@ -21,9 +21,29 @@ func (EvTurnStart) Type() string { return "turn_start" }
 
 type EvUserMessage struct {
 	Message provider.Message
+	// Synthetic marks a user-role message the host injected rather than
+	// one the human submitted — currently the at-close open-work gate
+	// nudge (ContinueOnStop). Observers that surface "the user said X"
+	// (a memory or session-index extension) skip these so a system
+	// re-prompt isn't mistaken for the user's words. Genuine prompts
+	// (initial and queued) leave it false.
+	Synthetic bool
 }
 
 func (EvUserMessage) Type() string { return "user_message" }
+
+// EvUserMessageRejected fires when a BeforeUserMessage guard refuses a
+// prompt: the message is neither appended to the transcript nor sent to
+// the model. Reason is the guard's explanation, surfaced to the user
+// (not the model — the model never sees the rejected prompt). The
+// initial-prompt path also emits EvDone after this so the run ends
+// cleanly; an in-loop queued rejection just skips that one message.
+type EvUserMessageRejected struct {
+	Text   string
+	Reason string
+}
+
+func (EvUserMessageRejected) Type() string { return "user_message_rejected" }
 
 type EvAssistantStart struct{}
 

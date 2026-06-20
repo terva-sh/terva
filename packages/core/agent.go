@@ -63,6 +63,18 @@ type Agent struct {
 	// model can still see what it said in subsequent turns).
 	BeforeAssistantMessage func(text string) (allowed bool, reason, replacement string)
 
+	// BeforeUserMessage, if set, is consulted just before a genuine
+	// user message — the initial prompt or one drained from the queue —
+	// is appended to the transcript and sent to the model. Returning
+	// (allowed=false, reason) rejects the prompt: it is neither recorded
+	// nor sent, and the host surfaces reason via EvUserMessageRejected.
+	// A non-empty replacement rewrites the prompt the model actually
+	// sees (the rewrite IS what lands in the transcript — unlike
+	// BeforeAssistantMessage, where the original is kept). The synthetic
+	// at-close gate nudge is never gated. Mirrors BeforeAssistantMessage
+	// and backs the extension user_message intercept.
+	BeforeUserMessage func(text string) (allowed bool, reason, replacement string)
+
 	// MaxRetries controls agent-level retries for transient provider
 	// failures that arrive after the HTTP stream opens (for example
 	// Anthropic overloaded_error). Zero disables this retry layer.
@@ -249,8 +261,28 @@ func (a *Agent) drainQueuedMessages() []string {
 	return out
 }
 
-func (a *Agent) appendQueuedAsUser(texts []string, sink func(AgentEvent)) {
+func (a *Agent) appendQueuedAsUser(texts []string, synthetic bool, sink func(AgentEvent)) {
 	for _, text := range texts {
+		// Genuine queued prompts pass through the same guard as the
+		// initial prompt, so a user_message intercept can't be bypassed
+		// by typing while a turn is mid-flight. A rejected one is skipped
+		// (not appended, no EvUserMessage); the synthetic gate nudge is
+		// never gated.
+		if !synthetic && a.BeforeUserMessage != nil && text != "" {
+			allowed, reason, replacement := a.BeforeUserMessage(text)
+			if !allowed {
+				if reason == "" {
+					reason = "message blocked by extension guard"
+				}
+				if sink != nil {
+					sink(EvUserMessageRejected{Text: text, Reason: reason})
+				}
+				continue
+			}
+			if replacement != "" && replacement != text {
+				text = replacement
+			}
+		}
 		msg := provider.Message{
 			Role:    provider.RoleUser,
 			Content: []provider.Content{provider.TextBlock{Text: text}},
@@ -262,7 +294,7 @@ func (a *Agent) appendQueuedAsUser(texts []string, sink func(AgentEvent)) {
 		a.mu.Unlock()
 		a.fireMessageAppended(msg)
 		if sink != nil {
-			sink(EvUserMessage{Message: msg})
+			sink(EvUserMessage{Message: msg, Synthetic: synthetic})
 		}
 	}
 }
@@ -402,6 +434,23 @@ func (a *Agent) Prompt(ctx context.Context, text string, images []provider.Image
 		sink = func(AgentEvent) {}
 	}
 	sink = a.wrapSink(sink)
+	// Consult the user-message guard before anything is recorded: a
+	// rejection must leave no trace in the transcript and start no turn.
+	// Skipped for an empty prompt (image-only submit — nothing to judge).
+	if a.BeforeUserMessage != nil && text != "" {
+		allowed, reason, replacement := a.BeforeUserMessage(text)
+		if !allowed {
+			if reason == "" {
+				reason = "message blocked by extension guard"
+			}
+			sink(EvUserMessageRejected{Text: text, Reason: reason})
+			sink(EvDone{})
+			return nil
+		}
+		if replacement != "" && replacement != text {
+			text = replacement
+		}
+	}
 	content := []provider.Content{}
 	if text != "" {
 		content = append(content, provider.TextBlock{Text: text})
@@ -437,6 +486,19 @@ func (a *Agent) Continue(ctx context.Context, sink func(AgentEvent)) error {
 	return a.runLoop(ctx, sink)
 }
 
+// EmitLifecycle delivers a host-lifecycle event to the OnEvent observer
+// (the extension fanout / hook engine) directly, independent of an active
+// Prompt. Compaction runs OUTSIDE the Prompt loop — callers invoke Compact
+// on their own — so its EvCompactStart/EvCompactEnd would otherwise never
+// reach OnEvent (the per-call sink that carries them is the host's own UI
+// sink, not the wrapped one). Compaction triggers call this so extensions
+// see compact_start / transcript_compacted. Nil-safe.
+func (a *Agent) EmitLifecycle(ev AgentEvent) {
+	if a.OnEvent != nil {
+		a.OnEvent(ev)
+	}
+}
+
 // wrapSink composes the per-call sink with a.OnEvent (if set) so the
 // extension manager (or any other observer) sees every AgentEvent
 // without having to thread itself through every Prompt callsite.
@@ -463,7 +525,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		// results have been appended, but no new provider request has
 		// started yet.
 		if pending := a.drainQueuedMessages(); len(pending) > 0 {
-			a.appendQueuedAsUser(pending, sink)
+			a.appendQueuedAsUser(pending, false, sink)
 		}
 
 		sink(EvTurnStart{Step: step})
@@ -575,7 +637,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		if ctx.Err() == nil && !gateFired && stop == provider.StopEnd && a.ContinueOnStop != nil {
 			if cont, nudge := a.ContinueOnStop(stop); cont && nudge != "" {
 				gateFired = true
-				a.appendQueuedAsUser([]string{nudge}, sink)
+				a.appendQueuedAsUser([]string{nudge}, true, sink)
 				continue
 			}
 		}

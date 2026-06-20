@@ -18,6 +18,7 @@ import (
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/agent/skills"
+	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -439,6 +440,13 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 			}
 			return true, "", res.ReplaceText
 		}
+		ag.BeforeUserMessage = func(text string) (bool, string, string) {
+			res := extMgr.InterceptUserMessage(ctx, text)
+			if res.Block {
+				return false, res.Reason, ""
+			}
+			return true, "", res.ReplaceText
+		}
 		ag.ContextProvider = extMgr.EphemeralContext
 		ag.ContinueOnStop = continueOnOpenWork(extMgr)
 	}
@@ -451,7 +459,18 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// translation-only OnEvent.
 	var observe func(core.AgentEvent)
 	if extMgr != nil || hookEng != nil {
+		// Per-session workspace differ rooted at this session's cwd (ACP
+		// has no interactive /cd, so the session cwd is the authoritative
+		// workspace), so workspace_changed fires under ACP too. nil when
+		// extensions are off (the observer no-ops on a nil differ).
+		var differ *tools.WorkspaceDiffer
+		if extMgr != nil {
+			sessionCWD := cwd
+			differ = tools.NewWorkspaceDiffer(func() string { return sessionCWD })
+		}
+		wsObserve := workspaceChangeObserver(differ, extMgr)
 		observe = func(ev core.AgentEvent) {
+			wsObserve(ev)
 			fanoutAgentEvent(extMgr, ev)
 			observeAgentEventForHooks(hookEng, ev)
 		}

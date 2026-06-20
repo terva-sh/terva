@@ -58,7 +58,66 @@ const MaxToolCallBytes = 1 << 20 // 1 MiB
 //	    declares RequireProtocol(3). Additive: a v2 host ignores the new
 //	    frames (an unanswered request simply never returns; the static
 //	    block stays at its register-phase value).
+//
+// Not every new message bumps this number. A fire-and-forget event an
+// extension *optionally* subscribes to — e.g. transcript_compacted, fired
+// after the host compacts the transcript so a memory extension can
+// re-snapshot its refreshable context — is purely additive and gracefully
+// degrading: an older host records the subscription and simply never
+// emits it. Such events need no version bump and no RequireProtocol. Only
+// request/response features (whose caller blocks for a host answer) gate
+// on the version.
 const ProtocolVersion = 3
+
+// Lifecycle event names the host emits to subscribed extensions. These
+// constants are the single source of truth: the emit sites use them, the
+// hello_ack supported_events advertisement carries KnownEvents, and the
+// subscription cap consults IsKnownEvent — so adding an event in one place
+// flows everywhere.
+const (
+	EventSessionStart        = "session_start"
+	EventSessionEnd          = "session_end"
+	EventTurnStart           = "turn_start"
+	EventTurnEnd             = "turn_end"
+	EventRunEnd              = "run_end"
+	EventToolCall            = "tool_call"
+	EventToolResult          = "tool_result"
+	EventUserMessage         = "user_message"
+	EventAssistantMessage    = "assistant_message"
+	EventWorkspaceChanged    = "workspace_changed"
+	EventCompactStart        = "compact_start"
+	EventTranscriptCompacted = "transcript_compacted"
+)
+
+// KnownEvents is the canonical, ordered list of those events. Advertised
+// to extensions in hello_ack (supported_events) so an author can discover
+// what this host emits without keying off the protocol version.
+var KnownEvents = []string{
+	EventSessionStart, EventSessionEnd, EventTurnStart, EventTurnEnd, EventRunEnd,
+	EventToolCall, EventToolResult, EventUserMessage, EventAssistantMessage,
+	EventWorkspaceChanged, EventCompactStart, EventTranscriptCompacted,
+}
+
+// FileChange is one entry in a workspace_changed event: a workspace-
+// relative, slash-separated path and what happened to it during the turn.
+type FileChange struct {
+	Path   string `json:"path"`
+	Change string `json:"change"` // "added" | "modified" | "deleted"
+}
+
+var knownEventSet = func() map[string]bool {
+	m := make(map[string]bool, len(KnownEvents))
+	for _, e := range KnownEvents {
+		m[e] = true
+	}
+	return m
+}()
+
+// IsKnownEvent reports whether name is a host-emitted lifecycle event. The
+// subscription cap uses it to drop unknown names first; it is NOT used to
+// reject a subscription — an extension may optimistically subscribe to a
+// newer event an older host doesn't emit (graceful degradation).
+func IsKnownEvent(name string) bool { return knownEventSet[name] }
 
 type Frame struct {
 	Type string `json:"type"`
@@ -387,6 +446,12 @@ type HelloAckFromHost struct {
 	CWD             string `json:"cwd"`
 	ExtensionDir    string `json:"extension_dir,omitempty"`
 	DataDir         string `json:"data_dir,omitempty"`
+	// SupportedEvents lists the lifecycle events this host can emit
+	// (extproto.KnownEvents). An extension reads it to discover what's
+	// available — finer-grained than the protocol version — and can adapt
+	// or warn. Absent (older host) means "unknown": the extension should
+	// just subscribe optimistically and degrade if the event never fires.
+	SupportedEvents []string `json:"supported_events,omitempty"`
 }
 
 type CommandInvokedFromHost struct {
@@ -441,6 +506,10 @@ type EventFromHost struct {
 	// empty.
 	CWD       string `json:"cwd,omitempty"`
 	ProjectID string `json:"project_id,omitempty"`
+	// Files carries the per-turn workspace diff on a "workspace_changed"
+	// event (added/modified/deleted, workspace-relative paths). Empty on
+	// every other event. Additive/omitempty — older subscribers ignore it.
+	Files []FileChange `json:"files,omitempty"`
 }
 
 type EventInterceptFromHost struct {

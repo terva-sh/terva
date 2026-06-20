@@ -52,7 +52,7 @@ func TestWireNonInteractiveGateRefusesToolCall(t *testing.T) {
 	extMgr := extensions.New(t.TempDir(), t.TempDir(), "test", "openai", "gpt-5", nonInteractiveExtHooks{})
 	gate, _ := headlessConfirmGate(Args{NoYolo: true, CWD: t.TempDir()}, "print")
 
-	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, gate, nil)
+	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, gate, nil, nil)
 
 	if ag.BeforeToolExecute == nil {
 		t.Fatal("BeforeToolExecute was not installed")
@@ -77,7 +77,7 @@ func TestWireNonInteractiveNoGateAllowsToolCall(t *testing.T) {
 	ag := core.NewAgent(nil, "test", "", core.Registry{})
 	extMgr := extensions.New(t.TempDir(), t.TempDir(), "test", "openai", "gpt-5", nonInteractiveExtHooks{})
 
-	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, nil, nil)
+	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, nil, nil, nil)
 
 	allowed, reason, _ := ag.BeforeToolExecute(provider.ToolCallBlock{
 		ID:        "T1",
