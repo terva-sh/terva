@@ -110,10 +110,21 @@ type Authority string
 
 const (
 	// AuthLocalRead reads files/state under the jail with no process,
-	// network, or external side effect. The only class that is
-	// auto-allowable as "read-only" (plan-permitted, workspace/auto-edit
-	// auto-allowed). The legacy read_only=true bool maps here.
+	// network, or external side effect. Auto-allowable as "read-only"
+	// (plan-permitted, workspace/auto-edit auto-allowed). The legacy
+	// read_only=true bool maps here.
 	AuthLocalRead Authority = "local-read"
+	// AuthLocalData reads AND writes the tool's own host-managed data
+	// store — for an extension, its $TERVA_HOME/ext-data/<name> directory —
+	// and nothing else: never the user's workspace, a process, the network,
+	// or an external service. Because the write is confined to private,
+	// host-controlled storage, it carries the same near-zero risk as
+	// local-read, so it is auto-allowable too (no approval prompt;
+	// permitted in plan mode). Use it for a memory/notes/state tool whose
+	// effects never leave its own data dir. (Authority is advisory — the
+	// host already controls where ext-data lives, so a tool can't widen
+	// its reach by declaring this.)
+	AuthLocalData Authority = "local-data"
 	// AuthWorkspaceMutate writes files / edits workspace state.
 	AuthWorkspaceMutate Authority = "workspace-mutation"
 	// AuthProcessExec starts commands or long-running subprocesses.
@@ -132,12 +143,17 @@ const (
 	AuthUserInteraction Authority = "user-interaction"
 )
 
-// IsReadOnlyAuthority reports whether a declared authority denotes a
-// side-effect-free local read — the only class auto-allowable as
-// "read-only". An empty/unknown value returns false so the caller falls
-// back to the legacy read_only bool (empty) or treats the tool as
-// side-effecting (unknown), both of which are the safe default.
-func IsReadOnlyAuthority(a string) bool { return Authority(a) == AuthLocalRead }
+// IsReadOnlyAuthority reports whether a declared authority is
+// auto-allowable as read-only-equivalent: a side-effect-free local read
+// (local-read) OR a write confined to the tool's own host-managed data
+// store (local-data). Both carry near-zero risk, so both run without an
+// approval prompt and stay available in plan mode. An empty/unknown value
+// returns false so the caller falls back to the legacy read_only bool
+// (empty) or treats the tool as side-effecting (unknown) — the safe
+// default.
+func IsReadOnlyAuthority(a string) bool {
+	return Authority(a) == AuthLocalRead || Authority(a) == AuthLocalData
+}
 
 // RuleDecision is what a matched permission rule does with a call.
 type RuleDecision string

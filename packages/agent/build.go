@@ -214,8 +214,8 @@ func MergeToolsForMode(reg core.Registry, mode core.ApprovalMode, roSet *core.Re
 	}
 	changed := false
 	for _, info := range mgr.Tools() {
-		// Read-only classification: a declared authority wins (only
-		// local-read is auto-allowable), so a network-read tool is not
+		// Read-only classification: a declared authority wins (local-read
+		// and local-data are auto-allowable), so a network-read tool is not
 		// mistaken for a local read even if it also set the legacy
 		// read_only bool. An empty authority falls back to that bool.
 		readOnly := info.ReadOnly
@@ -573,6 +573,29 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	reg := buildToolRegistry(args, approval, args.CWD, sandbox, provName, method, visionCapable)
 
 	docsDir, _ := tervadocs.EnsureInstalled(TervaHome())
+	// terva's own state lives under $TERVA_HOME, outside the cwd jail. A
+	// jailed agent still needs to read the non-sensitive, shared dirs —
+	// its docs (referenced in the system prompt), installed skills/themes,
+	// and installed extensions plus their data — so register them as
+	// read-only roots: readable by read/grep/glob, never writable.
+	//
+	// Deliberately EXCLUDED as sensitive: auth.json (credentials),
+	// config.json, sessions/ and swarm/ (transcripts), and logs/ — which
+	// aggregates stderr from MCP servers, the bot, connectors, and hooks
+	// and is a secret-leak sink. Only specific subdirs are added, never
+	// $TERVA_HOME itself.
+	home := TervaHome()
+	sandbox.AddReadOnlyRoot(
+		docsDir,
+		filepath.Join(home, "extensions"),
+		filepath.Join(home, "ext-data"),
+		filepath.Join(home, "skills"),
+		filepath.Join(home, "themes"),
+	)
+	// logs/ as a whole is a secret-leak sink (MCP/bot/connector/hooks
+	// stderr can carry tokens and chat content), so expose ONLY the
+	// extension logs the agent needs for debugging, by name — not the dir.
+	sandbox.AddReadOnlyGlob(filepath.Join(home, "logs"), "ext-*.log")
 
 	// Skill discovery: scan project + global locations + built-in
 	// skills shipped with the binary. If any are found, register

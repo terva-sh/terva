@@ -65,6 +65,11 @@ tool's authority explicitly, and do **not** collapse "read-only" and
 - **local read-only** — reads files/state under the jail; no process,
   network, or external side effects. (`read`, `grep`, `glob`,
   `terva_status`.)
+- **local data** — reads *and writes* only the tool's own host-managed
+  data dir (for an extension, its `$TERVA_HOME/ext-data/<name>`); no
+  user-workspace, process, network, or external effect. Auto-allowable
+  like local read-only because the write never leaves private,
+  host-controlled storage — for a memory/notes/state tool.
 - **workspace mutation** — writes files, edits tasks, creates worktrees.
   (`write`, `edit`.)
 - **process execution** — starts commands or long-running subprocesses.
@@ -81,8 +86,8 @@ tool's authority explicitly, and do **not** collapse "read-only" and
 The taxonomy now exists as `core.Authority` (`packages/core/policy.go`),
 and an extension/MCP tool can declare its class via the `authority` field
 on `register_tool` (`ext.WithAuthority` in the Go SDK). Declared authority
-decides read-only classification — only `local-read` is auto-allowable, so
-a `network-read` tool is gated like a side-effecting tool (it prompts in
+decides read-only classification — `local-read` and `local-data` are
+auto-allowable, so a `network-read` tool is gated like a side-effecting tool (it prompts in
 `workspace`/`auto-edit`, is refused in `plan`) even if it also set the
 legacy `read_only` bool. **Mark network tools `network-read`, not
 `read_only`.** Still to come (bucket-2 Phase A): the shared egress guard

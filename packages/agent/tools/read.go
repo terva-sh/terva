@@ -65,7 +65,9 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		return core.ToolResult{}, fmt.Errorf("path is required")
 	}
 	path := resolvePath(t.CWD, a.Path)
-	if err := t.Sandbox.CheckPath(path); err != nil {
+	// Read-side check: permits the jail root plus any read-only roots
+	// (e.g. $TERVA_HOME/docs) so a jailed agent can inspect them.
+	if err := t.Sandbox.CheckPathRead(path); err != nil {
 		return core.ToolResult{}, err
 	}
 

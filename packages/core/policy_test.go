@@ -375,3 +375,22 @@ func TestGateSetModeRaceSafe(t *testing.T) {
 type confirmFunc func(toolName, preview string) ConfirmDecision
 
 func (f confirmFunc) Confirm(toolName, preview string) ConfirmDecision { return f(toolName, preview) }
+
+// TestIsReadOnlyAuthority: only the two low-risk local classes (local-read
+// and the new local-data) are auto-allowable; everything else, and
+// empty/unknown, is gated.
+func TestIsReadOnlyAuthority(t *testing.T) {
+	for _, a := range []Authority{AuthLocalRead, AuthLocalData} {
+		if !IsReadOnlyAuthority(string(a)) {
+			t.Errorf("%q should be auto-allowable (read-only-equivalent)", a)
+		}
+	}
+	for _, a := range []Authority{
+		AuthWorkspaceMutate, AuthProcessExec, AuthNetworkRead,
+		AuthExternalMutate, AuthUserInteraction, "", "totally-unknown",
+	} {
+		if IsReadOnlyAuthority(string(a)) {
+			t.Errorf("%q must NOT be auto-allowable", a)
+		}
+	}
+}

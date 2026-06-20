@@ -147,3 +147,40 @@ func TestAuthorityNetworkReadExcludedFromPlan(t *testing.T) {
 		t.Error("local-read tool should join the plan-mode registry")
 	}
 }
+
+// TestAuthorityLocalDataAutoAllowed pins the local-data class: a tool that
+// reads+writes only its own host-managed data dir (a memory tool) is
+// auto-allowable like read-only — it joins the auto-allow set, runs with
+// no prompt in workspace mode, and stays available in plan mode.
+func TestAuthorityLocalDataAutoAllowed(t *testing.T) {
+	pol := &core.PermissionPolicy{
+		Mode:      core.ApprovalWorkspace,
+		ReadOnly:  builtinReadOnlySet(),
+		EditTools: editTools,
+		Builtin:   builtinTools,
+	}
+	gate := core.NewPolicyGate(pol, nil)
+	r := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalWorkspace}
+	r.AdoptReadOnlySet(pol.ReadOnly)
+	r.MergeExtensionTools(&fakeToolSource{infos: []ExtensionToolInfo{
+		{Extension: "memory", Name: "memory", Schema: []byte(`{}`), Authority: string(core.AuthLocalData)},
+	}})
+	if !pol.ReadOnly.Has("memory") {
+		t.Error("local-data authority should join the auto-allow set")
+	}
+	if ok, _, _ := gate.Check("memory", nil, ""); !ok {
+		t.Error("workspace should auto-allow a local-data tool (no prompt)")
+	}
+
+	// Plan mode: a local-data tool is read-only-equivalent, so it stays
+	// in the registry (unlike a network-read / mutating tool).
+	planPol := &core.PermissionPolicy{Mode: core.ApprovalPlan, ReadOnly: builtinReadOnlySet(), EditTools: editTools}
+	rp := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalPlan}
+	rp.AdoptReadOnlySet(planPol.ReadOnly)
+	rp.MergeExtensionTools(&fakeToolSource{infos: []ExtensionToolInfo{
+		{Extension: "memory", Name: "memory", Schema: []byte(`{}`), Authority: string(core.AuthLocalData)},
+	}})
+	if _, ok := rp.ToolRegistry["memory"]; !ok {
+		t.Error("local-data tool should be available in plan mode")
+	}
+}

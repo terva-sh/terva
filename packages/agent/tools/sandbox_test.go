@@ -73,6 +73,99 @@ func TestReadToolRejectsOutsideWhenLocked(t *testing.T) {
 	}
 }
 
+// A read-only root is readable by the read-side check but never
+// writable, and paths outside every root are still blocked for reads.
+func TestSandboxReadOnlyRoot(t *testing.T) {
+	root := t.TempDir()
+	docs := t.TempDir()
+	docFile := filepath.Join(docs, "tui.md")
+	os.WriteFile(docFile, []byte("# docs"), 0o644)
+	outside := t.TempDir()
+
+	sb := NewSandbox(root)
+	sb.AddReadOnlyRoot(docs)
+	sb.Lock()
+
+	if err := sb.CheckPathRead(docFile); err != nil {
+		t.Errorf("read-only root should be readable: %v", err)
+	}
+	if err := sb.CheckPath(docFile); err == nil {
+		t.Error("read-only root must NOT be writable")
+	}
+	if err := sb.CheckPathRead(filepath.Join(outside, "x")); err == nil {
+		t.Error("path outside all roots should be blocked even for reads")
+	}
+	inside := filepath.Join(root, "f.txt")
+	if err := sb.CheckPathRead(inside); err != nil {
+		t.Errorf("jail root should be readable: %v", err)
+	}
+	if err := sb.CheckPath(inside); err != nil {
+		t.Errorf("jail root should be writable: %v", err)
+	}
+}
+
+// End-to-end: the read tool can read a file in a read-only root while
+// jailed — the property that makes the shipped docs usable under /jail.
+func TestReadToolReadsReadOnlyRootWhenLocked(t *testing.T) {
+	root := t.TempDir()
+	docs := t.TempDir()
+	docFile := filepath.Join(docs, "rpc.md")
+	os.WriteFile(docFile, []byte("rpc docs body"), 0o644)
+
+	sb := NewSandbox(root)
+	sb.AddReadOnlyRoot(docs)
+	sb.Lock()
+	tool := &ReadTool{CWD: root, Sandbox: sb}
+
+	if _, err := tool.Execute(context.Background(),
+		mustJSONRaw(t, map[string]any{"path": docFile}), nil); err != nil {
+		t.Fatalf("jailed read of a read-only root should succeed: %v", err)
+	}
+}
+
+// A read-only glob exposes only matching files DIRECTLY inside its dir;
+// non-matching files, the dir itself, and nested matches stay blocked,
+// and matches are never writable.
+func TestSandboxReadOnlyGlob(t *testing.T) {
+	root := t.TempDir()
+	logs := t.TempDir()
+	mk := func(name string) string {
+		p := filepath.Join(logs, name)
+		os.WriteFile(p, []byte("x"), 0o644)
+		return p
+	}
+	extLog := mk("ext-memory.log")
+	botLog := mk("bot.log")
+	mcpLog := mk("mcp-foo.log")
+
+	sb := NewSandbox(root)
+	sb.AddReadOnlyGlob(logs, "ext-*.log")
+	sb.Lock()
+
+	if err := sb.CheckPathRead(extLog); err != nil {
+		t.Errorf("ext-*.log should be readable: %v", err)
+	}
+	for _, bad := range []string{botLog, mcpLog} {
+		if err := sb.CheckPathRead(bad); err == nil {
+			t.Errorf("%s should be blocked (not ext-*.log)", filepath.Base(bad))
+		}
+	}
+	// The dir itself isn't a root, so grep/glob across logs/ is denied.
+	if err := sb.CheckPathRead(logs); err == nil {
+		t.Error("the logs dir itself should not be readable (no grep across it)")
+	}
+	// Non-recursive: a matching name in a subdir doesn't qualify.
+	sub := filepath.Join(logs, "sub")
+	os.MkdirAll(sub, 0o755)
+	if err := sb.CheckPathRead(filepath.Join(sub, "ext-x.log")); err == nil {
+		t.Error("glob is non-recursive; nested file should be blocked")
+	}
+	// Read-only: a match is never writable.
+	if err := sb.CheckPath(extLog); err == nil {
+		t.Error("read-only glob match must not be writable")
+	}
+}
+
 func mustJSONRaw(t *testing.T, v any) []byte {
 	t.Helper()
 	return mustJSON(t, v)
