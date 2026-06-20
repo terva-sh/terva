@@ -283,6 +283,15 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 	// yanks the viewport. See autofollow_shrink_test.go.
 	i.prevChatLen = 0
 	i.prevChatCols = 0
+	// Lift the resume tail cap once the user starts interacting. The cap
+	// is purely a first-paint optimization; keeping it active during a
+	// turn makes the rendered chat a sliding window, so appended messages
+	// push older ones off the TOP and the renderer repaints fully,
+	// snapping the terminal's native scrollback to the bottom on every
+	// streamed chunk. A fresh session has no cap (append-only), which is
+	// why the jump only shows in resumed sessions; dropping the cap here
+	// makes resumed turns append-only too.
+	i.view.TailLimit = 0
 	i.parkedTurn = 0 // starting a turn clears the /jump parked state
 	i.parkedTotal = 0
 	i.helpBlock = nil // hide the help block once the user asks something

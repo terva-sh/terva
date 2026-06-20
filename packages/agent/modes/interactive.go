@@ -356,6 +356,7 @@ type Interactive struct {
 	// and off the top.
 	prevChatLen     int
 	prevChatCols    int
+	prevChatRows    int
 	prevOverlayOpen bool
 
 	// chatCache stores the built transcript/status-note rows for idle
@@ -605,8 +606,8 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// enter the alternate-screen buffer (CSI ?1049h). The renderer emits
 	// chat as normal terminal flow/scrollback and redraws only the live
 	// input/status block on normal typing.
-	_, _ = term.Write([]byte(tui.SeqBracketedPasteOn + tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqClearScreenNoHome + tui.SeqClearScrollback + tui.MoveTo(1, 1)))
-	defer term.Write([]byte(tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqBracketedPasteOff + tui.SeqShowCursor))
+	_, _ = term.Write([]byte(tui.SeqBracketedPasteOn + tui.SeqEnhancedKeyboardOn + tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqClearScreenNoHome + tui.SeqClearScrollback + tui.MoveTo(1, 1)))
+	defer term.Write([]byte(tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqEnhancedKeyboardOff + tui.SeqBracketedPasteOff + tui.SeqShowCursor))
 	// Erase the live status/input band on exit so the returning shell
 	// prompt lands on a clean line right after the conversation instead of
 	// underneath a stale frame. Runs before the resets above (defers are

@@ -251,6 +251,11 @@ func (i *Interactive) applySessionSelection(path string) {
 		i.parkedTurn = 0
 		i.parkedTotal = 0
 		i.scrollOffset = 0
+		// Fresh transcript swapped in: drop the auto-follow baseline so
+		// the next render's follow guard doesn't read the wholesale
+		// length change as a delta and jump the viewport.
+		i.prevChatLen = 0
+		i.prevChatCols = 0
 		i.extNotes = nil
 		i.view.InvalidateRenderCache()
 		if ag := i.turns.Agent(); ag != nil {

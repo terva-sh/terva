@@ -318,11 +318,39 @@ func (i *Interactive) scrollToBottom() {
 	i.scrollOffset = 0
 	i.parkedTurn = 0
 	i.parkedTotal = 0
+	// Reset the auto-follow baseline. scrollToBottom is the resume /
+	// session-swap snap point, where the chat buffer changes length
+	// wholesale; without zeroing these the next render's follow guard
+	// compares the fresh transcript against a stale baseline and nudges
+	// scrollOffset, which reads as a viewport jump right after resume.
+	i.prevChatLen = 0
+	i.prevChatCols = 0
 	if i.rend != nil {
 		i.rend.Invalidate()
 	}
 	i.mu.Unlock()
 	i.invalidate()
+}
+
+// anchorScrollOffset keeps the user's reading position pinned when the
+// chat buffer grows/shrinks or the viewport height changes between two
+// redraws while they're scrolled up.
+//
+// scrollOffset is measured from the bottom of the chat buffer, so the
+// top visible row is start = chatLen - scrollOffset - chatRows. To hold
+// `start` constant we adjust the offset by the buffer-length delta minus
+// the viewport-height delta, clamped to [0, newLen] so a shrinking
+// buffer can't push it negative.
+func anchorScrollOffset(offset, prevLen, newLen, prevRows, newRows int) int {
+	adj := (newLen - prevLen) - (newRows - prevRows)
+	offset += adj
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > newLen {
+		offset = newLen
+	}
+	return offset
 }
 
 func (i *Interactive) redraw() {
@@ -530,16 +558,22 @@ func (i *Interactive) redraw() {
 	// corresponds to appended content) and when scrollOffset is 0
 	// (the user is following the tail and wants new content to push
 	// the view down as usual).
+	//
+	// The window the user sees starts at row
+	//   start = len(chat) - scrollOffset - chatRows
+	// so to keep `start` fixed we compensate for both the buffer growth
+	// (len delta) AND the viewport-height change (chatRows delta — the
+	// status band or sliding-in queue appearing during a turn).
+	// Compensating only for the len delta let a shrinking chatRows pull
+	// the window toward the tail, which read as the viewport jumping to
+	// the bottom whenever the agent streamed text or a tool box grew.
 	if i.scrollOffset > 0 && i.prevChatCols == cols && i.prevChatLen > 0 {
-		if delta := len(chat) - i.prevChatLen; delta != 0 {
-			i.scrollOffset += delta
-			if i.scrollOffset < 0 {
-				i.scrollOffset = 0
-			}
-		}
+		i.scrollOffset = anchorScrollOffset(i.scrollOffset,
+			i.prevChatLen, len(chat), i.prevChatRows, chatRows)
 	}
 	i.prevChatLen = len(chat)
 	i.prevChatCols = cols
+	i.prevChatRows = chatRows
 
 	// Apply scroll offset to the chat slice.
 	maxOffset := len(chat) - chatRows
@@ -554,6 +588,7 @@ func (i *Interactive) redraw() {
 	// rebuild immediately so the same redraw shows the freshly-revealed
 	// rows; otherwise the user would have to scroll again to see them.
 	if i.scrollOffset >= maxOffset && i.view.TailLimit > 0 && i.view.TailLimit < len(i.view.Messages) {
+		prevLen := len(chat)
 		i.view.TailLimit += resumeTailExpandStep
 		if i.view.TailLimit >= len(i.view.Messages) {
 			i.view.TailLimit = 0 // unbounded
@@ -563,6 +598,16 @@ func (i *Interactive) redraw() {
 		for len(chat) > 0 && strings.TrimSpace(chat[len(chat)-1]) == "" {
 			chat = chat[:len(chat)-1]
 		}
+		// Newly-revealed rows are older messages prepended at the top.
+		// scrollOffset counts from the bottom, so shift it up by the rows
+		// added to keep the viewport anchored on the same content, and
+		// sync the follow-guard baseline so the next render doesn't read
+		// this growth as a synthetic delta and jump again.
+		if grew := len(chat) - prevLen; grew > 0 {
+			i.scrollOffset += grew
+		}
+		i.prevChatLen = len(chat)
+		i.prevChatCols = cols
 		maxOffset = len(chat) - chatRows
 		if maxOffset < 0 {
 			maxOffset = 0

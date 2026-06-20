@@ -11,7 +11,7 @@ import (
 // helpKeyRows is the list of keybindings shown by /help.
 var helpKeyRows = [][2]string{
 	{"enter", "submit the current input"},
-	{"alt+enter", "insert a newline"},
+	{"shift+enter / alt+enter", "insert a newline"},
 	{"tab", "complete the highlighted slash command"},
 	{"esc", "cancel the current turn (while busy) - clear the input (while idle)"},
 	{"ctrl+c", "exit (while idle) - cancel the current turn (while busy)"},

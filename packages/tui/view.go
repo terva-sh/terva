@@ -125,6 +125,14 @@ type View struct {
 	StatusLine      string
 	Err             string
 
+	// liveBodyHigh tracks the tallest live-preview body height seen per
+	// tool-call id, so a streaming edit/write/bash box never shrinks
+	// mid-stream (e.g. between edit 1 and the start of edit 2), which
+	// would yank the editor/status band upward and back. Keyed by
+	// ToolCallView.ID; entries are only consulted while a call has no
+	// Result. BuildWithAnchors prunes the map as calls finish.
+	liveBodyHigh map[string]int
+
 	// ExpandAll forces every long tool result to render in full.
 	// Toggled from the tui by ctrl+o. When false, results longer than
 	// ToolCollapseLines collapse to ToolCollapsePreview lines plus a
@@ -304,6 +312,24 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 	v.refreshToolPaths()
 	if v.renderCache == nil {
 		v.renderCache = make(map[msgCacheKey][]string)
+	}
+	if v.liveBodyHigh == nil {
+		v.liveBodyHigh = make(map[string]int)
+	}
+	// Drop high-water entries for calls that are gone or finalised so a
+	// reservation never leaks into a later, shorter tool box.
+	if len(v.liveBodyHigh) > 0 {
+		active := make(map[string]bool, len(v.ToolCalls))
+		for _, tc := range v.ToolCalls {
+			if tc.Result == "" {
+				active[tc.ID] = true
+			}
+		}
+		for id := range v.liveBodyHigh {
+			if !active[id] {
+				delete(v.liveBodyHigh, id)
+			}
+		}
 	}
 
 	// Pre-render every message (hits the cache for unchanged ones) so
@@ -737,6 +763,22 @@ func (v *View) renderToolCall(tc ToolCallView, width int) []string {
 	// EvToolUseEnd and EvToolResult.
 	if tc.Result == "" {
 		if body := v.renderLiveToolBody(tc, width); len(body) > 0 {
+			// Pad the live preview up to the call's high-water height so
+			// it never shrinks mid-stream (e.g. between edit 1 and the
+			// start of edit 2). Padding sits inside the box as real
+			// box-side rows so the surrounding layout stays put. The
+			// high-water mark is per call id and is dropped the moment a
+			// Result lands (this branch only runs while Result == "").
+			high := len(body)
+			if v.liveBodyHigh != nil {
+				if prev := v.liveBodyHigh[tc.ID]; prev > high {
+					high = prev
+				}
+				v.liveBodyHigh[tc.ID] = high
+			}
+			for len(body) < high {
+				body = append(body, toolBoxSide(v.Theme, "", width))
+			}
 			lines = append(lines, toolBoxTop(v.Theme, label, width))
 			lines = append(lines, toolBoxSide(v.Theme, "", width))
 			lines = append(lines, body...)

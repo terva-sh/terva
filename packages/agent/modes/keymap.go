@@ -35,10 +35,11 @@ const (
 
 // globalBinding maps one key chord to a named action.
 type globalBinding struct {
-	kind tui.KeyKind
-	alt  bool   // chord requires Alt held
-	name string // stable action name (docs, future rebind config)
-	run  func(ctx context.Context, k tui.Key) keyOutcome
+	kind  tui.KeyKind
+	alt   bool   // chord requires Alt held
+	shift bool   // chord requires Shift held
+	name  string // stable action name (docs, future rebind config)
+	run   func(ctx context.Context, k tui.Key) keyOutcome
 }
 
 // dispatchGlobalKey runs k through the keymap. Reports whether the
@@ -51,6 +52,9 @@ func (i *Interactive) dispatchGlobalKey(ctx context.Context, k tui.Key) (handled
 		if b.alt && !k.Alt {
 			continue
 		}
+		if b.shift && !k.Shift {
+			continue
+		}
 		switch b.run(ctx, k) {
 		case keyQuit:
 			return true, true
@@ -61,6 +65,14 @@ func (i *Interactive) dispatchGlobalKey(ctx context.Context, k tui.Key) (handled
 		}
 	}
 	return false, false
+}
+
+// keyInsertNewline inserts a newline for a modified Enter (Alt or Shift).
+// The real key is forwarded to the editor, whose KeyEnter handler turns a
+// modified Enter into a newline while a bare Enter still submits.
+func (i *Interactive) keyInsertNewline(_ context.Context, k tui.Key) keyOutcome {
+	i.ed.HandleKey(k)
+	return keyHandled
 }
 
 // buildGlobalKeymap assembles the table. Order matters only where two
@@ -92,10 +104,8 @@ func (i *Interactive) buildGlobalKeymap() []globalBinding {
 		{kind: tui.KeyUp, alt: true, name: "pop-queued-message", run: i.keyPopQueued},
 		{kind: tui.KeyUp, name: "cursor-up-or-scroll", run: i.keyUp},
 		{kind: tui.KeyDown, name: "cursor-down-or-scroll", run: i.keyDown},
-		{kind: tui.KeyEnter, alt: true, name: "insert-newline", run: func(context.Context, tui.Key) keyOutcome {
-			i.ed.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: '\n', Alt: true})
-			return keyHandled
-		}},
+		{kind: tui.KeyEnter, alt: true, name: "insert-newline", run: i.keyInsertNewline},
+		{kind: tui.KeyEnter, shift: true, name: "insert-newline-shift", run: i.keyInsertNewline},
 	}
 }
 
