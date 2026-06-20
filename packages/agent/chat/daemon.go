@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -79,42 +78,17 @@ func IsRunning(tervaHome, service string) (int, bool, error) {
 	if pid <= 0 {
 		return 0, false, nil
 	}
-	proc, err := os.FindProcess(pid)
+	alive, err := processAlive(pid)
 	if err != nil {
 		return pid, false, nil
 	}
-	// signal 0 is POSIX's "does the process exist?" probe. On Windows
-	// os.Process is always usable and Signal(0) returns nil, so we'd
-	// miss stale pids; acceptable for the macos/linux-first audience.
-	if err := proc.Signal(syscall.Signal(0)); err != nil {
-		if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
-			return pid, false, nil
-		}
-		// Other errors (EPERM) mean the process exists but we can't
-		// inspect it; treat as running.
-		return pid, true, nil
-	}
-	return pid, true, nil
+	return pid, alive, nil
 }
 
-// StopProcess sends SIGTERM to pid and waits up to graceful for it to
-// exit, then escalates to SIGKILL. Returns nil if the process is gone.
+// StopProcess asks pid to exit and waits up to graceful for it to stop,
+// then escalates to a forced kill. Returns nil if the process is gone.
+// The platform-specific signalling lives in stopProcess (unix sends
+// SIGTERM; Windows uses os.Interrupt).
 func StopProcess(pid int, graceful time.Duration) error {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	_ = proc.Signal(syscall.SIGTERM)
-
-	deadline := time.Now().Add(graceful)
-	for time.Now().Before(deadline) {
-		if err := proc.Signal(syscall.Signal(0)); err != nil {
-			if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
-				return nil
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	_ = proc.Kill()
-	return nil
+	return stopProcess(pid, graceful)
 }
