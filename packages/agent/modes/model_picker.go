@@ -188,6 +188,10 @@ func (p *modelPicker) renderRows(th tui.Theme, width int) []string {
 		switch {
 		case m.Speculative:
 			tag = "[speculative] "
+		case m.Source == "user":
+			// Carries a models.json override (applyUserOverrides stamps
+			// Source="user"). Flags which models have custom settings.
+			tag = "[edited] "
 		case m.Source == "live":
 			tag = "[live] "
 		}

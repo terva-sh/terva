@@ -23,6 +23,7 @@ type modelDialog struct {
 // modelDialogAction is returned by HandleKey.
 type modelDialogAction struct {
 	Select   bool
+	Edit     bool // open the config editor for Provider/Model
 	Provider string
 	Model    string
 	Close    bool
@@ -68,7 +69,7 @@ func (d *modelDialog) Render(th tui.Theme, width int) []string {
 	var lines []string
 	lines = append(lines, frameHeader(th, "model", width))
 
-	hint := d.p.hintLine("pick a model (↑/↓, enter, esc to cancel) - type to filter, :img/:reasoning by capability")
+	hint := d.p.hintLine("pick a model (↑/↓, enter, ctrl+e edit, esc) - type to filter, :img/:reasoning by capability")
 	lines = append(lines, th.FG256(th.Muted, hint))
 
 	if len(d.p.view) == 0 {
@@ -102,6 +103,16 @@ func (d *modelDialog) HandleKey(k tui.Key) modelDialogAction {
 			return modelDialogAction{Close: true}
 		}
 		return modelDialogAction{Select: true, Provider: m.Provider, Model: m.ID}
+	case tui.KeyCtrlE:
+		// Edit the selected model's config. Ctrl+E (not a bare "e",
+		// which the type-to-filter input would swallow) opens the
+		// editor; the picker closes so the edit overlay takes over.
+		m, ok := d.p.selected()
+		if !ok {
+			return modelDialogAction{}
+		}
+		d.Close()
+		return modelDialogAction{Edit: true, Provider: m.Provider, Model: m.ID}
 	}
 	return modelDialogAction{}
 }

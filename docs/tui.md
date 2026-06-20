@@ -13,7 +13,7 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/help` | Show key bindings and commands. |
 | `/login` | Log in via API key or subscription (opens a dialog). |
 | `/logout [provider]` | Clear credentials for any logged-in provider, or all when omitted. `/logout openai-codex` clears ChatGPT/Codex subscription auth while preserving a public OpenAI API key; `/logout kimi` also disables fallback to the official Kimi Code CLI token until you log in to Kimi through terva again. |
-| `/model` | Pick a model from a list (or `/model <id>` to set directly). |
+| `/model` | Pick a model from a list (or `/model <id>` to set directly). Press `ctrl+e` on a highlighted model to edit its config — changes save to `$TERVA_HOME/models.json` and override the defaults. |
 | `/new` | Start a fresh session in the current directory. The current session stays on disk (resume it later with `/sessions`); the transcript, context meter, and cost reset, while the provider/model stay put. |
 | `/sessions` | Resume a previous session for this directory. |
 | `/session` | Four ops on the current session: `export` to a portable `.tervasession` file, `import` one back in, `fork` from a past user message into a new branch, `tree` to switch between branches. Opens a picker without an argument; direct forms: `/session export [path]`, `/session import <path>`, `/session fork`, `/session tree`. Default export destination is `~/Downloads`. |
@@ -27,12 +27,32 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/unjail` | Allow tools to touch paths outside again. |
 | `/permissions` | Show the current approval mode and the active permission rules grouped by source (user/project/extension), and revoke this session's "always allow" grants: `↑`/`↓` select a grant, `r` or `del` takes it back, `R` clears them all, `esc` closes. Rules stay read-only (edit them in config). Alias: `/perms`. See [permissions.md](permissions.md). |
 | `/reload-ext` | Hot-reload all extensions (re-read manifests, respawn subprocesses, rebuild tool registry). |
+| `/extensions` | List installed extensions and their state; enable/disable each globally (`g`) or per-project (`p`). Alias `/ext`. |
 | `/connect` | Connect, disconnect, or show status of the chat bridge (takes `connect` / `disconnect` / `status` as an optional argument; opens a picker without one). When connected, DMs from the paired user become prompts in the running session and the assistant's replies are mirrored back to the chat. Telegram is the built-in connector today. Aliases: `/telegram`, `/tg`. |
 | `/settings` | Toggle persistent settings (inline images, auto-swarm, reasoning, theme) with `enter`/`space` or the option picker — saved to `$TERVA_HOME/config.json`, effective immediately. The **approval mode** picker is the exception: it switches the mode live for the **current session only** (like `/jail`), and is *not* persisted — the startup default comes only from an explicit `approval` key in config or the `--approval` flag, so the picker can never silently pin a mode into your config. |
 | `/clear` | Clear the chat transcript. |
 | `/exit` | Exit terva. |
 
 Extension-registered commands appear under a divider at the bottom of the popup, sorted by name.
+
+### Editing a model's config (`ctrl+e`)
+
+In the `/model` picker, press `ctrl+e` on the highlighted model to open its config editor (a bare `e` is taken by the type-to-filter input). Each field is tri-state: leave it **inherit** to keep the catalog/live default, or set an explicit value to override:
+
+- **base url** — point the model at a different endpoint (a local server, a gateway).
+- **context window** / **max tokens** — correct sizes terva doesn't know for a custom model.
+- **reasoning** / **image input** — capability flags (e.g. mark a local model text-only so images are dropped instead of bricking the request).
+
+`↑`/`↓` move between fields, `enter` edits a value (or cycles a flag through inherit → on → off), `s` saves, `esc` cancels. Saving writes a *minimal* entry to `$TERVA_HOME/models.json` — only the fields you set, so unset fields keep tracking the default — and applies immediately; models carrying an override are tagged `[edited]` in the picker. Press `r` to **reset**: after a `y`/`n` confirmation it removes the model's `models.json` entry, returning it to defaults. (The editor covers the operational fields above; per-model **prices** stay hand-editable in `models.json` and are preserved across edits.)
+
+### Extensions (`/extensions`)
+
+`/extensions` (alias `/ext`) lists every installed extension — global (`$TERVA_HOME/extensions`) and project (`.terva/extensions`) — with its version, language, what it provides (commands/tools), and current state. Two independent on/off controls:
+
+- **`g`** — enable/disable **globally** by writing the extension's manifest `enabled` flag (the same field `terva ext enable/disable` uses).
+- **`p`** — enable/disable **for this project** by adding/removing it in `.terva/config.json`'s `disable_extensions`. This is *restrict-only*: it can switch off a globally-enabled extension here, but can't force-enable one that's disabled globally.
+
+Toggling applies live and **surgically** — only that one extension is started or stopped (a stop is a graceful, silent shutdown), every other extension keeps running. A failed start shows as `off (not running)` (check `terva ext logs <name>`). `↑`/`↓` move between extensions, `esc` closes.
 
 ### Shell escape (`!command`)
 

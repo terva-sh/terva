@@ -159,9 +159,39 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				if act.Select {
 					i.applyModelSelection(act.Provider, act.Model)
 				}
+				if act.Edit {
+					i.openModelEdit(act.Provider, act.Model)
+				}
 				return false
 			},
 			render: func(cols int) []string { return i.modelDialog.Render(i.cfg.Theme, cols) },
+		},
+		{ // model config editor (opened with ctrl+e from the picker)
+			active: i.modelEditDialog.Active,
+			ctrlC:  func() bool { i.modelEditDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				act := i.modelEditDialog.HandleKey(k)
+				switch {
+				case act.Save:
+					i.applyModelEdit(act.Provider, act.ModelID, act.Entry)
+				case act.Reset:
+					i.applyModelReset(act.Provider, act.ModelID)
+				}
+				return false
+			},
+			render: func(cols int) []string { return i.modelEditDialog.Render(i.cfg.Theme, cols) },
+		},
+		{ // extensions manager (/extensions)
+			active: i.extensionsDialog.Active,
+			ctrlC:  func() bool { i.extensionsDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				act := i.extensionsDialog.HandleKey(k)
+				if act.ToggleGlobal || act.ToggleProject {
+					i.applyExtensionToggle(act)
+				}
+				return false
+			},
+			render: func(cols int) []string { return i.extensionsDialog.Render(i.cfg.Theme, cols) },
 		},
 		{ // rescue picker (after a recoverable provider failure)
 			active: i.rescueDialog.Active,

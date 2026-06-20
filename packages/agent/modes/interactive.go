@@ -198,6 +198,12 @@ type InteractiveConfig struct {
 	// file that only has the meta row.
 	FlushSession func()
 
+	// UserModelsPath is the absolute path to $TERVA_HOME/models.json, the
+	// user-override catalog layer. The /model editor (Ctrl+E) reads and
+	// writes it here; empty disables editing. Plumbed in from the cli so
+	// this package doesn't import agent (cycle).
+	UserModelsPath string
+
 	// PersistModel is called whenever the user switches model or provider.
 	// It should update config.json and (if there's an active session)
 	// write a new meta row so resume picks up the same model.
@@ -215,6 +221,19 @@ type InteractiveConfig struct {
 	// slash commands. Commands declared by extensions are looked up
 	// AFTER the built-in catalog so a built-in name always wins.
 	Extensions *extensions.Manager
+
+	// The /extensions dialog's host hooks, plumbed from the cli so this
+	// package never imports agent. ListExtensions returns the installed
+	// set + state; SetExtensionGlobalEnabled flips the manifest `enabled`
+	// flag; SetExtensionProjectEnabled adds/removes the name in this
+	// project's disable_extensions; ApplyExtensionChange surgically starts
+	// or stops just that one extension to match the new config (leaving
+	// every other extension running). All nil disables the /extensions
+	// command.
+	ListExtensions             func() []ExtInfo
+	SetExtensionGlobalEnabled  func(name string, on bool) error
+	SetExtensionProjectEnabled func(name string, on bool) error
+	ApplyExtensionChange       func(name string)
 
 	// Swarm, if non-nil, enables the /swarm slash command and the
 	// dashboard dialog. The cli constructs the Swarm once per
@@ -368,6 +387,8 @@ type Interactive struct {
 
 	dialog            *loginDialog
 	modelDialog       *modelDialog
+	modelEditDialog   *modelEditDialog
+	extensionsDialog  *extensionsDialog
 	rescueDialog      *rescueDialog
 	sessionDialog     *sessionDialog
 	swarmDialog       *swarmDialog
@@ -512,6 +533,8 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		actions:           make(chan func(), 64),
 		dialog:            newLoginDialog(),
 		modelDialog:       newModelDialog(),
+		modelEditDialog:   newModelEditDialog(),
+		extensionsDialog:  newExtensionsDialog(),
 		rescueDialog:      newRescueDialog(),
 		sessionDialog:     newSessionDialog(),
 		swarmDialog:       newSwarmDialog(),

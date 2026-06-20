@@ -175,6 +175,11 @@ func init() {
 				i.runReloadExt(ctx)
 				return false
 			}},
+		{name: "/extensions", aliases: []string{"/ext"}, desc: "list installed extensions; enable/disable globally or per-project",
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.openExtensionsDialog()
+				return false
+			}},
 		{name: "/connect", aliases: []string{"/telegram", "/tg"},
 			desc: "connect, disconnect, or show status of the chat bridge (telegram)", hint: "connect | disconnect | status",
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
