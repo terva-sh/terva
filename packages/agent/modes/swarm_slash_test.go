@@ -103,6 +103,7 @@ func TestRunSwarmNewSpawnsAgent(t *testing.T) {
 func TestRunSwarmSendDeliversToAgentInbox(t *testing.T) {
 	root := t.TempDir()
 	recv := make(chan string, 4)
+	ready := make(chan error, 1)
 	f := swarm.New(swarm.Config{
 		Root:     root,
 		RepoRoot: root,
@@ -113,6 +114,7 @@ func TestRunSwarmSendDeliversToAgentInbox(t *testing.T) {
 				// something to talk to. The runner-test stubs do the
 				// same; this is the minimum to exercise the wire.
 				ln, err := swarm.Listen(a.InboxPath)
+				ready <- err
 				if err != nil {
 					return err
 				}
@@ -138,6 +140,14 @@ func TestRunSwarmSendDeliversToAgentInbox(t *testing.T) {
 	a, err := f.Spawn(context.Background(), "do thing")
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
+	}
+	select {
+	case err := <-ready:
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for agent inbox listener")
 	}
 
 	// Run /swarm send <id> <text...>. The dispatcher would have
