@@ -3,10 +3,72 @@ package provider
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func boolPtr(b bool) *bool { return &b }
+
+// Temperature round-trips through models.json into Model.Temperature; an
+// out-of-range value is dropped with a warning (the registry-driven scalar
+// override + loader validation).
+func TestUserModelTemperature(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	body := `{"providers":{"anthropic":{"models":[
+		{"id":"claude-warm","temperature":0.7},
+		{"id":"claude-bad","temperature":5}
+	]}}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overrides, warnings := LoadUserModelsWithWarnings(path)
+
+	var warm, bad *float32
+	for _, o := range overrides {
+		switch o.Model.ID {
+		case "claude-warm":
+			warm = o.Model.Temperature
+		case "claude-bad":
+			bad = o.Model.Temperature
+		}
+	}
+	if warm == nil || *warm != float32(0.7) {
+		t.Errorf("temperature 0.7 not loaded: %v", warm)
+	}
+	if bad != nil {
+		t.Errorf("out-of-range temperature should be dropped, got %v", *bad)
+	}
+	foundWarn := false
+	for _, w := range warnings {
+		if strings.Contains(w, "temperature") && strings.Contains(w, "out of range") {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		t.Errorf("expected an out-of-range temperature warning, got %v", warnings)
+	}
+}
+
+// applyUserOverrides merges a per-model temperature onto the base catalog
+// entry, and a nil override must not clobber a base value.
+func TestApplyUserOverridesTemperature(t *testing.T) {
+	temp := float32(0.5)
+	base := []Model{{Provider: "anthropic", ID: "claude-x", ContextWindow: 200000}}
+	merged := applyUserOverrides(base, []UserOverride{
+		{Model: Model{Provider: "anthropic", ID: "claude-x", Temperature: &temp}},
+	})
+	if merged[0].Temperature == nil || *merged[0].Temperature != 0.5 {
+		t.Errorf("temperature not merged onto base model: %+v", merged[0])
+	}
+
+	base2 := []Model{{Provider: "anthropic", ID: "claude-y", Temperature: &temp}}
+	merged2 := applyUserOverrides(base2, []UserOverride{
+		{Model: Model{Provider: "anthropic", ID: "claude-y", ContextWindow: 100}},
+	})
+	if merged2[0].Temperature == nil || *merged2[0].Temperature != 0.5 {
+		t.Errorf("a nil override temperature must not clear the base value: %+v", merged2[0])
+	}
+}
 
 // TestUpsertInsertReplacePreserve: upsert inserts a new entry, replaces
 // an existing one by id, and never disturbs other providers' entries.

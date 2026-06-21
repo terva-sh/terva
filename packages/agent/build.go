@@ -689,9 +689,18 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	})
 
 	reasoning := provider.NormalizeReasoning(firstNonEmpty(args.Reasoning, cfg.Reasoning))
+	// Temperature fall-through: --temperature flag > per-model (models.json) >
+	// global config default. AdaptiveThinking models reject sampling params,
+	// so temperature is never sent for them regardless of the layers.
 	temperature := args.Temperature
 	if temperature == nil {
+		temperature = resolvedModel.Temperature
+	}
+	if temperature == nil {
 		temperature = cfg.Temperature
+	}
+	if resolvedModel.AdaptiveThinking {
+		temperature = nil
 	}
 
 	max := args.MaxSteps // 0 = unlimited

@@ -2,7 +2,6 @@ package modes
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"terva.sh/terva/packages/provider"
@@ -50,9 +49,10 @@ type modelEditDialog struct {
 type editFieldKind int
 
 const (
-	fieldText editFieldKind = iota // free string (base url)
-	fieldInt                       // non-negative integer (context, max tokens)
-	fieldBool                      // tri-state inherit/on/off (a capability)
+	fieldText  editFieldKind = iota // free string (base url)
+	fieldInt                        // non-negative integer (context, max tokens)
+	fieldFloat                      // bounded float (temperature)
+	fieldBool                       // tri-state inherit/on/off (a capability)
 )
 
 // editField is one row of the form. For text/int fields, value == ""
@@ -93,35 +93,58 @@ func (d *modelEditDialog) Open(m provider.Model, existing provider.UserModel, ha
 		return "off"
 	}
 
-	d.fields = []editField{
-		{
-			key: "baseUrl", label: "base url", kind: fieldText,
-			value:   pick(hasExisting && existing.BaseURL != "", existing.BaseURL, ""),
-			inherit: orDefault(m.BaseURL, "provider default"),
-		},
-		{
-			key: "contextWindow", label: "context window", kind: fieldInt,
-			value:   pick(hasExisting && existing.ContextWindow > 0, intStr(existing.ContextWindow), ""),
-			inherit: intStr(m.ContextWindow),
-		},
-		{
-			key: "maxTokens", label: "max tokens", kind: fieldInt,
-			value:   pick(hasExisting && existing.MaxTokens > 0, intStr(existing.MaxTokens), ""),
-			inherit: intStr(m.MaxOutput),
-		},
-		{
+	// Scalar fields come from the shared registry, so a new scalar parameter
+	// (temperature, top_p, …) appears here automatically. The tri-state
+	// capability/bool fields are a different shape and stay explicit.
+	d.fields = nil
+	for _, p := range provider.ScalarParams() {
+		value := ""
+		if hasExisting {
+			value = p.Override(existing)
+		}
+		d.fields = append(d.fields, editField{
+			key:     p.Key,
+			label:   p.Label,
+			kind:    scalarFieldKind(p.Kind),
+			value:   value,
+			inherit: p.Default(m),
+		})
+	}
+	d.fields = append(d.fields,
+		editField{
 			key: "reasoning", label: "reasoning", kind: fieldBool,
 			set:     hasExisting && existing.Reasoning != nil,
 			on:      existing.Reasoning != nil && *existing.Reasoning,
 			inherit: onOff(m.Has(provider.CapReasoning)),
 		},
-		{
+		editField{
 			key: "imageInput", label: "image input", kind: fieldBool,
 			set:     hasExisting && capKeySet(existing.Capabilities, "image-input"),
 			on:      hasExisting && existing.Capabilities["image-input"],
 			inherit: onOff(m.Has(provider.CapImageInput)),
 		},
+	)
+}
+
+// scalarFieldKind maps a provider scalar kind to the editor's field kind.
+func scalarFieldKind(k provider.ScalarKind) editFieldKind {
+	switch k {
+	case provider.ScalarInt:
+		return fieldInt
+	case provider.ScalarFloat:
+		return fieldFloat
+	default:
+		return fieldText
 	}
+}
+
+// scalarParamsByKey indexes the registry for save/validation lookups.
+func scalarParamsByKey() map[string]provider.ScalarParam {
+	out := make(map[string]provider.ScalarParam, len(provider.ScalarParams()))
+	for _, p := range provider.ScalarParams() {
+		out[p.Key] = p
+	}
+	return out
 }
 
 // Active reports whether the dialog is visible and consuming input.
@@ -213,13 +236,15 @@ func (d *modelEditDialog) handleEditKey(k tui.Key) modelEditAction {
 	switch k.Kind {
 	case tui.KeyEnter:
 		v := strings.TrimSpace(d.buf)
-		if f.kind == fieldInt && v != "" {
-			n, err := strconv.Atoi(v)
-			if err != nil || n < 0 {
-				d.status = "enter a non-negative number (blank = inherit)"
+		// Validate through the registry (the single validation authority) and
+		// read the value back canonicalized (trims, reformats a float).
+		if p, ok := scalarParamsByKey()[f.key]; ok {
+			var probe provider.UserModel
+			if err := p.SetOverride(&probe, v); err != nil {
+				d.status = err.Error()
 				return modelEditAction{}
 			}
-			v = strconv.Itoa(n)
+			v = p.Override(probe)
 		}
 		f.value = v
 		d.editing = false
@@ -237,7 +262,10 @@ func (d *modelEditDialog) handleEditKey(k tui.Key) modelEditAction {
 			break
 		}
 		if f.kind == fieldInt && (k.Rune < '0' || k.Rune > '9') {
-			break // digits only for numeric fields
+			break // digits only for integer fields
+		}
+		if f.kind == fieldFloat && !((k.Rune >= '0' && k.Rune <= '9') || k.Rune == '.') {
+			break // digits + a decimal point for float fields
 		}
 		if k.Rune >= 0x20 && k.Rune < 0x7f {
 			d.buf += string(k.Rune)
@@ -260,14 +288,15 @@ func (d *modelEditDialog) save() modelEditAction {
 		caps[k] = v
 	}
 
+	scalars := scalarParamsByKey()
 	for _, f := range d.fields {
+		if p, ok := scalars[f.key]; ok {
+			// Values were validated when the field was committed; a blank
+			// clears the override. Ignore the (already-vetted) error here.
+			_ = p.SetOverride(&um, f.value)
+			continue
+		}
 		switch f.key {
-		case "baseUrl":
-			um.BaseURL = f.value // "" clears the override
-		case "contextWindow":
-			um.ContextWindow = atoiOr0(f.value) // 0 clears
-		case "maxTokens":
-			um.MaxTokens = atoiOr0(f.value)
 		case "reasoning":
 			if f.set {
 				on := f.on
@@ -369,33 +398,4 @@ func cycleBool(f *editField) {
 func capKeySet(m map[string]bool, key string) bool {
 	_, ok := m[key]
 	return ok
-}
-
-func pick(cond bool, a, b string) string {
-	if cond {
-		return a
-	}
-	return b
-}
-
-func orDefault(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
-}
-
-func intStr(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strconv.Itoa(n)
-}
-
-func atoiOr0(s string) int {
-	n, err := strconv.Atoi(strings.TrimSpace(s))
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
 }

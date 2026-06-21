@@ -52,6 +52,13 @@ type Model struct {
 	// reads go through Has, never the map directly. See
 	// docs/plans/model-capabilities.md.
 	Caps map[Capability]bool
+
+	// Temperature is this model's default sampling temperature (0–2), set
+	// via models.json. nil leaves it to the global config / provider
+	// default. AdaptiveThinking models ignore it (they reject sampling
+	// params). Launch resolve order: --temperature flag > per-model > global
+	// config. One of the registry-driven scalar params (see ScalarParams).
+	Temperature *float32
 }
 
 // Capability names one per-model feature flag. Typed string, not

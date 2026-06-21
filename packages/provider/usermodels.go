@@ -23,6 +23,7 @@ import (
 //	          "reasoning": true,
 //	          "contextWindow": 400000,
 //	          "maxTokens": 128000,
+//	          "temperature": 0.7,
 //	          "priceInput": 2.50,
 //	          "priceOutput": 15.00,
 //	          "priceCacheRead": 0.25,
@@ -69,6 +70,7 @@ type UserModel struct {
 	PriceCacheRead  float64         `json:"priceCacheRead"`
 	PriceCacheWrite float64         `json:"priceCacheWrite"`
 	BaseURL         string          `json:"baseUrl,omitempty"`
+	Temperature     *float32        `json:"temperature,omitempty"` // default sampling temperature (0–2); nil = inherit
 	Capabilities    map[string]bool `json:"capabilities,omitempty"`
 	Input           []string        `json:"input"` // legacy capability spelling, see above
 	API             string          `json:"api"`   // informational only
@@ -134,6 +136,10 @@ func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
 					um.MaxTokens = 0
 				}
 			}
+			if um.Temperature != nil && (*um.Temperature < 0 || *um.Temperature > 2) {
+				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s temperature %g is out of range [0,2]; ignored", normalized, um.ID, *um.Temperature))
+				um.Temperature = nil
+			}
 			caps, reasoningFromCaps, capWarnings := userCaps(um)
 			for _, w := range capWarnings {
 				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s: %s", normalized, um.ID, w))
@@ -149,6 +155,7 @@ func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
 				PriceCacheRead:  um.PriceCacheRead,
 				PriceCacheWrite: um.PriceCacheWrite,
 				BaseURL:         um.BaseURL,
+				Temperature:     um.Temperature,
 				Source:          "user",
 				Caps:            caps,
 			}
@@ -279,11 +286,11 @@ func applyUserOverrides(base []Model, overrides []UserOverride) []Model {
 		if um.DisplayName != "" && um.DisplayName != um.ID {
 			existing.DisplayName = um.DisplayName
 		}
-		if um.ContextWindow > 0 {
-			existing.ContextWindow = um.ContextWindow
-		}
-		if um.MaxOutput > 0 {
-			existing.MaxOutput = um.MaxOutput
+		// Scalar overrides (base url, context window, max tokens,
+		// temperature) merge through the shared registry, so adding a scalar
+		// parameter needs no edit here — just a ScalarParam entry.
+		for _, p := range scalarParams {
+			p.Merge(&existing, um)
 		}
 		if o.ReasoningSet {
 			existing.Reasoning = um.Reasoning
@@ -293,9 +300,6 @@ func applyUserOverrides(base []Model, overrides []UserOverride) []Model {
 		// models.json `capabilities` map IS the explicit-set marker,
 		// so no ReasoningSet-style side flag is needed.
 		existing.Caps = mergeCaps(existing.Caps, um.Caps)
-		if um.BaseURL != "" {
-			existing.BaseURL = um.BaseURL
-		}
 		existing.Source = "user"
 		existing.Speculative = false
 		base[idx] = existing

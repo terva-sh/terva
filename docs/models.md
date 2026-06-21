@@ -51,7 +51,8 @@ Place a `models.json` in `$TERVA_HOME` (macOS: `~/Library/Application Support/te
           "name": "GPT-5.5",
           "reasoning": true,
           "contextWindow": 400000,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "temperature": 0.7
         }
       ]
     }
@@ -59,7 +60,7 @@ Place a `models.json` in `$TERVA_HOME` (macOS: `~/Library/Application Support/te
 }
 ```
 
-Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `maxTokens`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`. `contextWindow` is the model's total token budget (drives the context gauge and auto-compaction); `maxTokens` is the cap on a single response. Both are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog — see [Local models](#local-models-with-ollama).
+Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `maxTokens`, `temperature`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`. `contextWindow` is the model's total token budget (drives the context gauge and auto-compaction); `maxTokens` is the cap on a single response; `temperature` (0–2) is the model's default sampling temperature, used when no `--temperature` flag is given and ignored for adaptive-thinking models (which reject sampling params). These are editable in-app from the `/model` picker with `Ctrl+E`. Several are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog — see [Local models](#local-models-with-ollama).
 
 Provider keys are normalized: `openai-codex` and `openai-responses` map to `openai`, `anthropic-messages` maps to `anthropic`, `moonshot`, `moonshot-ai`, and `kimi-code` map to `kimi`, and `deepseek-chat` and `deepseek-ai` map to `deepseek`. Built-in provider ids such as `groq`, `openrouter`, `github-copilot`, `amazon-bedrock`, `google-vertex`, `azure-openai-responses`, `fireworks`, `vercel-ai-gateway`, `mistral`, and `xai` can also be used directly.
 

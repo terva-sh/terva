@@ -10,6 +10,26 @@ import (
 func rn(r rune) tui.Key          { return tui.Key{Kind: tui.KeyRune, Rune: r} }
 func kind(k tui.KeyKind) tui.Key { return tui.Key{Kind: k} }
 
+// fieldIdx finds a form row by key (robust to the registry's row order).
+func fieldIdx(d *modelEditDialog, key string) int {
+	for i, f := range d.fields {
+		if f.key == key {
+			return i
+		}
+	}
+	return -1
+}
+
+// moveTo walks the cursor to the named field.
+func moveTo(d *modelEditDialog, key string) {
+	for d.cursor < fieldIdx(d, key) {
+		d.HandleKey(kind(tui.KeyDown))
+	}
+	for d.cursor > fieldIdx(d, key) {
+		d.HandleKey(kind(tui.KeyUp))
+	}
+}
+
 // A bare save (no edits, no existing override) must write a minimal
 // entry — just the id — so every field keeps inheriting its default.
 func TestModelEditSaveNoEdits(t *testing.T) {
@@ -50,10 +70,8 @@ func TestModelEditNumericField(t *testing.T) {
 func TestModelEditReasoningTriState(t *testing.T) {
 	d := newModelEditDialog()
 	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{}, false)
-	for range 3 { // move cursor to reasoning (index 3)
-		d.HandleKey(kind(tui.KeyDown))
-	}
-	rf := func() editField { return d.fields[3] }
+	moveTo(d, "reasoning")
+	rf := func() editField { return d.fields[fieldIdx(d, "reasoning")] }
 
 	if rf().set {
 		t.Fatal("reasoning should start inheriting")
@@ -83,11 +101,11 @@ func TestModelEditPrefillPreserves(t *testing.T) {
 	d := newModelEditDialog()
 	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, existing, true)
 
-	if d.fields[0].value != "http://local:1234" {
-		t.Errorf("base url not pre-filled: %q", d.fields[0].value)
+	if d.fields[fieldIdx(d, "baseUrl")].value != "http://local:1234" {
+		t.Errorf("base url not pre-filled: %q", d.fields[fieldIdx(d, "baseUrl")].value)
 	}
-	if !d.fields[4].set || d.fields[4].on { // image-input pre-filled to explicit-off
-		t.Errorf("image-input prefill wrong: %+v", d.fields[4])
+	if ii := d.fields[fieldIdx(d, "imageInput")]; !ii.set || ii.on { // pre-filled explicit-off
+		t.Errorf("image-input prefill wrong: %+v", ii)
 	}
 	act := d.HandleKey(rn('s'))
 	if act.Entry.BaseURL != "http://local:1234" {
@@ -134,9 +152,7 @@ func TestModelEditClearsInheritedField(t *testing.T) {
 	d := newModelEditDialog()
 	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, existing, true)
 
-	for range 3 { // -> reasoning (pre-filled set+on)
-		d.HandleKey(kind(tui.KeyDown))
-	}
+	moveTo(d, "reasoning")          // pre-filled set+on
 	d.HandleKey(kind(tui.KeyEnter)) // on -> off
 	d.HandleKey(kind(tui.KeyEnter)) // off -> inherit
 
@@ -146,6 +162,46 @@ func TestModelEditClearsInheritedField(t *testing.T) {
 	}
 	if act.Entry.BaseURL != "http://x" {
 		t.Errorf("untouched base url should survive: %q", act.Entry.BaseURL)
+	}
+}
+
+// temperature is a registry-driven float field: it accepts a decimal in
+// [0,2], filters out letters, canonicalizes on commit, and rejects out-of-range.
+func TestModelEditTemperatureField(t *testing.T) {
+	d := newModelEditDialog()
+	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{}, false)
+	moveTo(d, "temperature")
+	d.HandleKey(kind(tui.KeyEnter)) // edit
+	for _, r := range "0.7" {
+		d.HandleKey(rn(r))
+	}
+	d.HandleKey(rn('a'))            // ignored: float allows digits + '.'
+	d.HandleKey(kind(tui.KeyEnter)) // commit
+	act := d.HandleKey(rn('s'))
+	if act.Entry.Temperature == nil || *act.Entry.Temperature != float32(0.7) {
+		t.Fatalf("want temperature=0.7, got %v", act.Entry.Temperature)
+	}
+
+	// Out-of-range (>2) is rejected: stays in edit mode with a status.
+	d2 := newModelEditDialog()
+	d2.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{}, false)
+	moveTo(d2, "temperature")
+	d2.HandleKey(kind(tui.KeyEnter))
+	d2.HandleKey(rn('3'))
+	d2.HandleKey(kind(tui.KeyEnter)) // try to commit 3
+	if !d2.editing || d2.status == "" {
+		t.Errorf("temperature 3 should be rejected (editing=%v status=%q)", d2.editing, d2.status)
+	}
+}
+
+// An AdaptiveThinking model shows temperature as inapplicable rather than a
+// blank inherit, so the user isn't misled into setting a value it ignores.
+func TestModelEditTemperatureAdaptiveThinking(t *testing.T) {
+	d := newModelEditDialog()
+	d.Open(provider.Model{Provider: "anthropic", ID: "opus", AdaptiveThinking: true}, provider.UserModel{}, false)
+	f := d.fields[fieldIdx(d, "temperature")]
+	if f.inherit != "n/a (adaptive thinking)" {
+		t.Errorf("adaptive-thinking temperature inherit hint = %q; want the n/a sentinel", f.inherit)
 	}
 }
 

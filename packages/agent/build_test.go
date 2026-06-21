@@ -272,6 +272,59 @@ func TestResolveOllamaFallsBackToDefaultBaseURL(t *testing.T) {
 	}
 }
 
+// Temperature fall-through: --temperature flag > per-model (models.json) >
+// global config; AdaptiveThinking models always omit it.
+func TestResolveTemperaturePrecedence(t *testing.T) {
+	t.Setenv("TERVA_HOME", t.TempDir())
+	provider.ResetCatalogLayers()
+	defer provider.ResetCatalogLayers()
+
+	temp := float32(0.4)
+	provider.SetUserModels([]provider.Model{
+		{Provider: "ollama", ID: "warm-local", MaxOutput: 8192, Temperature: &temp},
+	})
+
+	// No flag, no config: the per-model temperature applies.
+	r, err := Resolve(Args{Provider: "ollama", Model: "warm-local"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Temperature == nil || *r.Temperature != float32(0.4) {
+		t.Errorf("per-model temperature should apply, got %v", r.Temperature)
+	}
+
+	// The --temperature flag wins over the per-model value.
+	flag := float32(0.9)
+	r, err = Resolve(Args{Provider: "ollama", Model: "warm-local", Temperature: &flag}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Temperature == nil || *r.Temperature != float32(0.9) {
+		t.Errorf("--temperature flag should win, got %v", r.Temperature)
+	}
+}
+
+func TestResolveTemperatureOmittedForAdaptiveThinking(t *testing.T) {
+	t.Setenv("TERVA_HOME", t.TempDir())
+	provider.ResetCatalogLayers()
+	defer provider.ResetCatalogLayers()
+
+	temp := float32(0.5)
+	provider.SetUserModels([]provider.Model{
+		{Provider: "ollama", ID: "adaptive-local", MaxOutput: 8192, Temperature: &temp, AdaptiveThinking: true},
+	})
+	// Even with a per-model temperature AND an explicit flag, an
+	// adaptive-thinking model omits temperature (it would 400 the request).
+	flag := float32(0.9)
+	r, err := Resolve(Args{Provider: "ollama", Model: "adaptive-local", Temperature: &flag}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Temperature != nil {
+		t.Errorf("adaptive-thinking model must omit temperature, got %v", *r.Temperature)
+	}
+}
+
 func TestCanonicalProviderResolvesAliases(t *testing.T) {
 	cases := map[string]string{
 		"bedrock":         "amazon-bedrock",
