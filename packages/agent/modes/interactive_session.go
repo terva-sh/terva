@@ -209,7 +209,17 @@ func (i *Interactive) startNewSession() {
 	i.statusErr = ""
 	i.statusOK = "started a new session"
 	i.view.InvalidateRenderCache()
+	// Wipe the screen + scrollback so the previous session doesn't linger
+	// above the fresh one. terva renders in main-screen flow mode, so prior
+	// frames stay in the terminal's native scrollback; without this, /new
+	// looks like nothing happened ("did I start a new session?"). Clear() is
+	// VS Code-safe (the renderer's keepScrollback guard), and mirrors the
+	// theme/reasoning settings handlers.
+	if i.rend != nil {
+		i.rend.Clear()
+	}
 	i.mu.Unlock()
+	i.invalidate()
 }
 
 // applySessionSelection loads the given session via the cli-provided

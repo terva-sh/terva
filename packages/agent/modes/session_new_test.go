@@ -1,6 +1,9 @@
 package modes
 
 import (
+	"bytes"
+	"context"
+	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/core"
@@ -97,6 +100,38 @@ func TestStartNewSessionCallbackError(t *testing.T) {
 	}
 	if iv.statusOK != "" {
 		t.Errorf("statusOK should be empty on error, got %q", iv.statusOK)
+	}
+}
+
+// /new must wipe the screen + scrollback so the previous session doesn't
+// linger above the fresh one (terva renders in main-screen flow mode).
+func TestStartNewSessionClearsScreen(t *testing.T) {
+	iv := newInteractiveForNewSessionTest()
+	var buf bytes.Buffer
+	iv.rend = tui.NewRenderer(&buf)
+	iv.cfg.NewSession = func(string, string) error {
+		iv.turns.Agent().SetMessages(nil)
+		return nil
+	}
+
+	iv.startNewSession()
+
+	if !strings.Contains(buf.String(), tui.SeqClearScrollback) {
+		t.Errorf("startNewSession should clear screen + scrollback; renderer output = %q", buf.String())
+	}
+}
+
+// /clear likewise resets the visible frame so a cleared conversation actually
+// looks cleared.
+func TestSlashClearClearsScreen(t *testing.T) {
+	iv := newInteractiveForNewSessionTest()
+	var buf bytes.Buffer
+	iv.rend = tui.NewRenderer(&buf)
+
+	iv.slashClear(context.Background(), nil, "")
+
+	if !strings.Contains(buf.String(), tui.SeqClearScrollback) {
+		t.Errorf("/clear should clear screen + scrollback; renderer output = %q", buf.String())
 	}
 }
 

@@ -325,7 +325,14 @@ func (i *Interactive) slashClear(context.Context, []string, string) bool {
 	i.extNotes = nil
 	i.shellBlock = nil
 	i.view.InvalidateRenderCache()
+	// Clear the screen + scrollback too, so a cleared conversation actually
+	// looks cleared instead of leaving the old transcript in the terminal's
+	// scrollback above (same reasoning as /new; VS Code-safe via keepScrollback).
+	if i.rend != nil {
+		i.rend.Clear()
+	}
 	i.mu.Unlock()
+	i.invalidate()
 	return false
 }
 
