@@ -368,7 +368,11 @@ An extension can contribute to what the **model** sees, under host
 control (see [the design](plans/archive/extension-context-cards.md)): static
 guidance folded into the system prompt (`register_context`), live
 per-turn cards (`context_card`), and a status-line segment
-(`status_segment`). Run `/context` to see exactly what's injected.
+(`status_segment`). Run `/context` and switch to the **Extensions** tab
+to see exactly what's injected; the **Overview** tab shows a size
+breakdown of the whole context window (system prompt, tools, extension
+context, and the transcript per message) so you can trace a bloated
+context to its source.
 
 The static block is normally set once during registration. An extension
 that needs to **swap it mid-session** — a memory store loading this

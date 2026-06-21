@@ -165,7 +165,7 @@ func init() {
 				i.runSwarm(ctx, parts[1:])
 				return false
 			}},
-		{name: "/context", desc: "show what extensions are injecting into the model's context",
+		{name: "/context", desc: "context breakdown (token sizes) + what extensions inject",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				i.slashContext()
 				return false

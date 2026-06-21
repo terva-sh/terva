@@ -193,6 +193,15 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			render: func(cols int) []string { return i.extensionsDialog.Render(i.cfg.Theme, cols) },
 		},
+		{ // /context: size breakdown + per-extension injected text
+			active: i.contextDialog.Active,
+			ctrlC:  func() bool { i.contextDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				i.contextDialog.HandleKey(k)
+				return false
+			},
+			render: func(cols int) []string { return i.contextDialog.Render(i.cfg.Theme, cols) },
+		},
 		{ // rescue picker (after a recoverable provider failure)
 			active: i.rescueDialog.Active,
 			ctrlC:  func() bool { i.rescueDialog.Close(); return true },

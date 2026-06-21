@@ -390,6 +390,7 @@ type Interactive struct {
 	modelDialog       *modelDialog
 	modelEditDialog   *modelEditDialog
 	extensionsDialog  *extensionsDialog
+	contextDialog     *contextDialog
 	rescueDialog      *rescueDialog
 	sessionDialog     *sessionDialog
 	swarmDialog       *swarmDialog
@@ -536,6 +537,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		modelDialog:       newModelDialog(),
 		modelEditDialog:   newModelEditDialog(),
 		extensionsDialog:  newExtensionsDialog(),
+		contextDialog:     newContextDialog(),
 		rescueDialog:      newRescueDialog(),
 		sessionDialog:     newSessionDialog(),
 		swarmDialog:       newSwarmDialog(),

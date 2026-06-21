@@ -174,41 +174,9 @@ func (i *Interactive) RefreshContext() {
 	})
 }
 
-// slashContext lists what each extension is contributing to the model
-// — static guidance and live cards — so the user can see exactly what
-// the context-card capability is injecting. The transparency half of
-// that capability's security story.
-func (i *Interactive) slashContext() {
-	if i.cfg.Extensions == nil {
-		i.appendExtensionNote("context", "extensions are not enabled", "info")
-		i.invalidate()
-		return
-	}
-	items := i.cfg.Extensions.ContextSnapshot()
-	if len(items) == 0 {
-		i.appendExtensionNote("context", "no extension is contributing context to the model", "info")
-		i.invalidate()
-		return
-	}
-	var b strings.Builder
-	b.WriteString("extension context injected into the model:")
-	for _, it := range items {
-		if it.Kind == "static" {
-			fmt.Fprintf(&b, "\n%s (system guidance):", it.Source)
-		} else {
-			label := it.Label
-			if label == "" {
-				label = it.ID
-			}
-			fmt.Fprintf(&b, "\n%s (card %q):", it.Source, label)
-		}
-		for _, line := range strings.Split(strings.TrimRight(it.Text, "\n"), "\n") {
-			fmt.Fprintf(&b, "\n  %s", line)
-		}
-	}
-	i.appendExtensionNote("context", b.String(), "info")
-	i.invalidate()
-}
+// slashContext (the /context modal) lives in interactive_context.go — it
+// now opens a tabbed dialog with the size breakdown + the per-extension
+// injected text, instead of printing the text inline.
 
 // HostHooks implementation for the extension manager. The manager
 // holds an interface, not a concrete *Interactive, so these methods
