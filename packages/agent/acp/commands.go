@@ -4,12 +4,14 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 
 	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/core"
 )
 
 // Phase 4c: slash-command advertisement + native execution of the
@@ -364,8 +366,9 @@ func runClearCommand(_ context.Context, sess *session, _ string) string {
 // runCompactCommand executes /compact natively: it summarizes and replaces
 // the transcript via core.Agent.Compact (keepTail=4, matching the TUI and
 // rpc), streaming the summary deltas as agent_message_chunks so the editor
-// shows progress, then ends the turn. A compaction error (e.g. an empty
-// transcript) is surfaced as a chunk; the turn still resolves end_turn.
+// shows progress, then ends the turn. A real compaction error is surfaced
+// as a chunk; "nothing to compact" (an already-minimal transcript) is
+// reported as a benign note. Either way the turn still resolves end_turn.
 func runCompactCommand(ctx context.Context, sess *session, _ string) string {
 	sink := func(delta string) {
 		if delta == "" {
@@ -376,10 +379,15 @@ func runCompactCommand(ctx context.Context, sess *session, _ string) string {
 			"content":       textContentBlock(delta),
 		})
 	}
-	if _, err := sess.agent.Compact(ctx, 4, sink); err != nil {
+	if _, err := sess.agent.Compact(ctx, core.AutoCompactKeepTail, sink); err != nil {
+		msg := "Compaction failed: " + err.Error()
+		if errors.Is(err, core.ErrNothingToCompact) {
+			// Benign: the transcript is already entirely keep-tail.
+			msg = "Nothing to compact — the transcript is already minimal."
+		}
 		sess.emit(map[string]any{
 			"sessionUpdate": UpdateAgentMessageChunk,
-			"content":       textContentBlock("Compaction failed: " + err.Error()),
+			"content":       textContentBlock(msg),
 		})
 	}
 	return StopEndTurn

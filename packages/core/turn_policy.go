@@ -139,6 +139,12 @@ func ExtractFailedProvider(err error) string {
 // hard limit.
 const AutoCompactThreshold = 0.85
 
+// AutoCompactKeepTail is the number of most-recent messages auto-compact
+// preserves verbatim after the summary. It is also the floor below which
+// there is nothing to summarize (see CanCompact): a transcript of this
+// size or smaller is entirely keep-tail.
+const AutoCompactKeepTail = 4
+
 // ContextFraction reports the share of the model's context window
 // the last turn consumed (input + cache tokens over the catalog's
 // window). Returns 0 when the window is unknown or no turn has
@@ -165,6 +171,23 @@ func (a *Agent) ShouldAutoCompact(threshold float64) bool {
 	return a.ContextFraction() >= threshold
 }
 
+// CanCompact reports whether Compact(keepTail) would actually have
+// something to summarize — i.e. the transcript is longer than keepTail.
+// Auto-compact gates on this so it never fires a no-op compaction on a
+// transcript that is already entirely keep-tail (which is exactly the
+// state right after a successful compaction). Without the guard, the
+// post-compaction context fraction can still read high enough to
+// re-trigger, producing a spurious "nothing to compact" failure.
+func (a *Agent) CanCompact(keepTail int) bool {
+	if keepTail < 0 {
+		keepTail = 0
+	}
+	a.mu.Lock()
+	n := len(a.messages)
+	a.mu.Unlock()
+	return n > keepTail
+}
+
 // PromptWithPolicy runs Prompt with the standard turn policy that
 // interactive users already get, for one-shot hosts (print/json):
 //
@@ -181,7 +204,12 @@ func (a *Agent) PromptWithPolicy(ctx context.Context, prompt string, images []pr
 		start := EvCompactStart{Reason: reason}
 		sink(start)
 		a.EmitLifecycle(start) // reach extensions: sink here is the host UI sink, not the OnEvent fanout
-		_, err := a.Compact(ctx, 4, func(string) {})
+		_, err := a.Compact(ctx, AutoCompactKeepTail, func(string) {})
+		if errors.Is(err, ErrNothingToCompact) {
+			// Nothing left to summarize — not a failure. Report a clean
+			// compact_end so consumers don't surface a phantom error.
+			err = nil
+		}
 		ev := EvCompactEnd{}
 		if err != nil {
 			ev.Err = err.Error()
@@ -190,7 +218,7 @@ func (a *Agent) PromptWithPolicy(ctx context.Context, prompt string, images []pr
 		a.EmitLifecycle(ev)
 		return err
 	}
-	if a.ShouldAutoCompact(AutoCompactThreshold) {
+	if a.ShouldAutoCompact(AutoCompactThreshold) && a.CanCompact(AutoCompactKeepTail) {
 		if err := compact("context near limit"); err != nil {
 			return fmt.Errorf("auto-compact before prompt: %w", err)
 		}

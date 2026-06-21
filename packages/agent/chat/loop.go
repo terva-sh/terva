@@ -217,8 +217,8 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 	// after a clean turn that pushed context past the threshold so the
 	// paired user's NEXT message doesn't pay the latency. Failures are
 	// non-fatal — the turn itself succeeded.
-	if turnErr == nil && ctx.Err() == nil && l.Agent.ShouldAutoCompact(core.AutoCompactThreshold) {
-		_, _ = l.Agent.Compact(ctx, 4, nil)
+	if turnErr == nil && ctx.Err() == nil && l.Agent.ShouldAutoCompact(core.AutoCompactThreshold) && l.Agent.CanCompact(core.AutoCompactKeepTail) {
+		_, _ = l.Agent.Compact(ctx, core.AutoCompactKeepTail, nil)
 	}
 
 	reply := strings.TrimSpace(lastAssistantText)

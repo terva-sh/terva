@@ -129,6 +129,120 @@ func TestPromptWithPolicyCompactsAndRetriesOn413(t *testing.T) {
 	}
 }
 
+func TestCanCompact(t *testing.T) {
+	a := NewAgent(nil, "fake-model", "system", Registry{})
+	msg := func(text string) provider.Message {
+		return provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: text}}}
+	}
+	cases := []struct {
+		n, keepTail int
+		want        bool
+	}{
+		{0, 4, false}, // empty
+		{4, 4, false}, // entirely keep-tail
+		{3, 4, false}, // shorter than keep-tail
+		{5, 4, true},  // one message beyond keep-tail
+		{10, 4, true}, // comfortably compactable
+		{5, -1, true}, // negative keepTail clamps to 0
+		{0, 0, false}, // nothing at all
+	}
+	for _, c := range cases {
+		seed := make([]provider.Message, c.n)
+		for i := range seed {
+			seed[i] = msg("m")
+		}
+		a.SetMessages(seed)
+		if got := a.CanCompact(c.keepTail); got != c.want {
+			t.Errorf("CanCompact(n=%d, keepTail=%d) = %v; want %v", c.n, c.keepTail, got, c.want)
+		}
+	}
+}
+
+func TestCompactReturnsNothingToCompactSentinel(t *testing.T) {
+	// nil client is never reached: both paths return before any provider
+	// call, which is exactly the contract we want for an opportunistic
+	// auto-compact (no wasted model round-trip).
+	a := NewAgent(nil, "fake-model", "system", Registry{})
+
+	// Empty transcript.
+	if _, err := a.Compact(context.Background(), AutoCompactKeepTail, nil); !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("Compact(empty) err = %v; want ErrNothingToCompact", err)
+	}
+
+	// Transcript entirely covered by keep-tail.
+	seed := make([]provider.Message, AutoCompactKeepTail)
+	for i := range seed {
+		seed[i] = provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "m"}}}
+	}
+	a.SetMessages(seed)
+	if _, err := a.Compact(context.Background(), AutoCompactKeepTail, nil); !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("Compact(keepTail covers all) err = %v; want ErrNothingToCompact", err)
+	}
+}
+
+// okClient streams a trivial successful turn for every prompt.
+type okClient struct{ calls int32 }
+
+func (c *okClient) Name() string { return "ok-fake" }
+
+func (c *okClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	atomic.AddInt32(&c.calls, 1)
+	out := make(chan provider.Event, 4)
+	go func() {
+		defer close(out)
+		out <- provider.EventStart{Provider: "ok-fake", Model: req.Model}
+		out <- provider.EventTextDelta{Delta: "ok"}
+		out <- provider.EventDone{Stop: provider.StopEnd, Message: provider.Message{
+			Role:    provider.RoleAssistant,
+			Content: []provider.Content{provider.TextBlock{Text: "ok"}},
+		}}
+	}()
+	return out, nil
+}
+
+// TestAutoCompactGuardSkipsWhenNothingToCompact reproduces the spurious
+// "nothing to compact" trigger: usage is over the threshold (so
+// ShouldAutoCompact is true) but the transcript is already entirely
+// keep-tail. The CanCompact guard must skip the pre-turn compaction
+// entirely — no compact_start/compact_end events, no failure — and let
+// the prompt proceed normally.
+func TestAutoCompactGuardSkipsWhenNothingToCompact(t *testing.T) {
+	client := &okClient{}
+	// claude-sonnet-4-5 resolves to a 200k window; prime usage above 85%.
+	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{})
+	a.SeedLastTurnUsage(provider.Usage{InputTokens: 190_000})
+
+	// Tiny transcript: 3 messages, well under keep-tail of 4.
+	a.SetMessages([]provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "q"}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "a"}}},
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "q2"}}},
+	})
+
+	if !a.ShouldAutoCompact(AutoCompactThreshold) {
+		t.Fatal("precondition: ShouldAutoCompact should be true with primed usage")
+	}
+	if a.CanCompact(AutoCompactKeepTail) {
+		t.Fatal("precondition: CanCompact should be false for a sub-keep-tail transcript")
+	}
+
+	var events []string
+	err := a.PromptWithPolicy(context.Background(), "hello", nil, func(ev AgentEvent) {
+		events = append(events, ev.Type())
+	})
+	if err != nil {
+		t.Fatalf("PromptWithPolicy returned %v; want nil (guard should skip compaction)", err)
+	}
+	joined := strings.Join(events, ",")
+	if strings.Contains(joined, "compact_start") || strings.Contains(joined, "compact_end") {
+		t.Fatalf("guard failed: compaction was attempted on a sub-keep-tail transcript: %v", events)
+	}
+	// The transcript head must NOT be a synthetic compaction summary.
+	if msgs := a.Messages(); len(msgs) > 0 && msgs[0].Meta["compaction"] == "true" {
+		t.Fatal("transcript was compacted despite nothing to compact")
+	}
+}
+
 func TestContextFractionUnknownModelIsZero(t *testing.T) {
 	a := NewAgent(nil, "model-that-does-not-exist-xyz", "", Registry{})
 	if got := a.ContextFraction(); got != 0 {

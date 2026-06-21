@@ -420,12 +420,12 @@ func (s *rpcServer) runPrompt(id, message string, images []struct {
 	// window. A failed auto-compact is non-fatal: the turn itself
 	// succeeded, so the failure rides the compact_end event and the
 	// client decides whether to /compact manually.
-	if err == nil && subCtx.Err() == nil && s.agent.ShouldAutoCompact(core.AutoCompactThreshold) {
+	if err == nil && subCtx.Err() == nil && s.agent.ShouldAutoCompact(core.AutoCompactThreshold) && s.agent.CanCompact(core.AutoCompactKeepTail) {
 		start := core.EvCompactStart{Reason: "context near limit"}
 		s.writeEvent(modes.EventToJSON(start))
 		s.agent.EmitLifecycle(start) // reach extensions, not just the RPC client
 		end := core.EvCompactEnd{}
-		if _, cerr := s.agent.Compact(subCtx, 4, nil); cerr != nil && !errors.Is(cerr, context.Canceled) {
+		if _, cerr := s.agent.Compact(subCtx, core.AutoCompactKeepTail, nil); cerr != nil && !errors.Is(cerr, context.Canceled) && !errors.Is(cerr, core.ErrNothingToCompact) {
 			end.Err = cerr.Error()
 		}
 		s.writeEvent(modes.EventToJSON(end))
@@ -444,8 +444,14 @@ func (s *rpcServer) runCompact(id string) {
 	defer s.setCancel(nil)
 
 	s.writeResponse(id, "compact", map[string]any{"started": true})
-	summary, err := s.agent.Compact(subCtx, 4, nil)
+	summary, err := s.agent.Compact(subCtx, core.AutoCompactKeepTail, nil)
 	if err != nil {
+		if errors.Is(err, core.ErrNothingToCompact) {
+			// Explicit /compact with nothing to summarize — benign no-op,
+			// not an error.
+			s.writeEvent(map[string]any{"type": "compact_done", "summary": ""})
+			return
+		}
 		if !errors.Is(err, context.Canceled) {
 			s.writeEvent(map[string]any{"type": "error", "message": err.Error()})
 		}

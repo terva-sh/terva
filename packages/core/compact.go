@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,13 @@ import (
 
 	"terva.sh/terva/packages/provider"
 )
+
+// ErrNothingToCompact is returned by Compact when there is nothing
+// summarizable: the transcript is empty, or keepTail already covers the
+// whole thing. Callers that compact opportunistically (auto-compact
+// before a turn, the 413 retry) treat it as a benign no-op rather than
+// a failure — there is simply nothing to do.
+var ErrNothingToCompact = errors.New("nothing to compact: keep-tail covers the whole transcript")
 
 // Compact summarizes the agent's transcript via the LLM and replaces
 // it with a single synthetic user message carrying the summary. A
@@ -36,7 +44,7 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 	a.mu.Unlock()
 
 	if len(msgs) == 0 {
-		return "", fmt.Errorf("nothing to compact")
+		return "", ErrNothingToCompact
 	}
 	if keepTail < 0 {
 		keepTail = 0
@@ -46,7 +54,7 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 	}
 	summarizable := msgs[:len(msgs)-keepTail]
 	if len(summarizable) == 0 {
-		return "", fmt.Errorf("nothing to compact: keep-tail covers the whole transcript")
+		return "", ErrNothingToCompact
 	}
 
 	// Serialize the summarizable transcript to text and wrap it in tags

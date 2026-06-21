@@ -5,6 +5,7 @@ package modes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -134,8 +135,16 @@ func (i *Interactive) runClaimedCompact(ctx context.Context, ag *core.Agent, aut
 			reason = "context near limit"
 		}
 		ag.EmitLifecycle(core.EvCompactStart{Reason: reason})
-		summary, err := ag.Compact(ctx, 4, sink)
+		summary, err := ag.Compact(ctx, core.AutoCompactKeepTail, sink)
 		_ = summary
+		// "Nothing to compact" is benign, not a failure: the transcript is
+		// already entirely keep-tail (e.g. a manual /compact right after an
+		// auto-compact). Normalize it so we emit a clean compact_end and show
+		// a gentle note instead of a phantom "✖ compaction failed".
+		nothingToCompact := errors.Is(err, core.ErrNothingToCompact)
+		if nothingToCompact {
+			err = nil
+		}
 		end := core.EvCompactEnd{}
 		if err != nil {
 			end.Err = err.Error()
@@ -157,6 +166,10 @@ func (i *Interactive) runClaimedCompact(ctx context.Context, ag *core.Agent, aut
 		case err != nil:
 			i.statusErr = "compaction failed: " + err.Error()
 			i.statusOK = ""
+		case nothingToCompact:
+			i.statusErr = ""
+			i.statusOK = "nothing to compact — transcript already minimal"
+			i.pendingPostCompactNote = ""
 		default:
 			i.statusErr = ""
 			// Read token count from the compaction message meta.
@@ -418,7 +431,11 @@ func (i *Interactive) shouldAutoCompact() bool {
 	if ag == nil || i.turns.AutoCompacting() {
 		return false
 	}
-	return ag.ShouldAutoCompact(core.AutoCompactThreshold)
+	// CanCompact guards against re-triggering on an already-condensed
+	// transcript (whose post-compaction fraction can still read high):
+	// without it, auto-compact fires a no-op and reports "nothing to
+	// compact" as a failure.
+	return ag.ShouldAutoCompact(core.AutoCompactThreshold) && ag.CanCompact(core.AutoCompactKeepTail)
 }
 
 func (i *Interactive) handleEvent(ev core.AgentEvent) {
