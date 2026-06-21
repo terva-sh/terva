@@ -425,6 +425,11 @@ func btwUserBubbleRows(th tui.Theme, text string, bubbleWidth int) []string {
 	}
 	var bubble []string
 	for _, l := range strings.Split(text, "\n") {
+		// Plain WrapANSILine (not WrapANSILineKeepStyle) on purpose: each
+		// wrapped piece is re-wrapped by row() -> th.UserBubble, which applies
+		// the bubble FG+BG to the whole piece. The colour is re-established per
+		// row by the bubble, so keep-style's carry-forward would be redundant
+		// here — this caller frames each piece rather than emitting it directly.
 		for _, w := range tui.WrapANSILine(l, innerWidth) {
 			bubble = append(bubble, row(w))
 		}

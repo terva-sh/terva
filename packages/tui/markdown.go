@@ -342,7 +342,9 @@ func renderTableRow(row []string, widths []int, aligns []tableAlign, th Theme, h
 		if c < len(row) {
 			cell = row[c]
 		}
-		parts := wrapANSILine(cell, widths[c])
+		// keep-style: a coloured span (code/bold) wider than the column wraps
+		// without the tail dropping to the default colour under a bg theme.
+		parts := wrapANSILineKeepStyle(cell, widths[c])
 		if len(parts) == 0 {
 			parts = []string{""}
 		}

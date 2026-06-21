@@ -1053,6 +1053,74 @@ func wrapANSILine(s string, limit int) []string {
 	return out
 }
 
+// WrapANSILineKeepStyle is the exported form of wrapANSILineKeepStyle.
+func WrapANSILineKeepStyle(s string, limit int) []string { return wrapANSILineKeepStyle(s, limit) }
+
+// wrapANSILineKeepStyle wraps like wrapANSILine but keeps each physical line a
+// self-contained styled unit: the SGR state active at a wrap boundary is
+// re-emitted at the start of the next line, and a reset closes any line that
+// leaves styling open. Plain wrapANSILine keeps the opening colour escape only
+// on the first line, so under the per-row background repaint (paintBackgroundRow,
+// which terminates each row with a reset) a wrapped tail falls back to the
+// default colour.
+//
+// Use this when wrapping a PRE-STYLED line you emit directly — a coloured list
+// row, an extension-context line, a transcript line. When you instead wrap plain
+// text and colour each returned piece yourself (e.g. the login URL, the user
+// bubble), plain wrapANSILine is the right tool. Output is byte-identical to
+// wrapANSILine unless a styled span actually crosses a wrap boundary, so it's a
+// safe drop-in for the direct-emit callers.
+func wrapANSILineKeepStyle(s string, limit int) []string {
+	pieces := wrapANSILine(s, limit)
+	if len(pieces) <= 1 {
+		return pieces
+	}
+	out := make([]string, 0, len(pieces))
+	active := "" // SGR sequence in effect at the start of the current piece
+	for _, p := range pieces {
+		start := active
+		active = sgrStateAfter(active, p)
+		line := start + p
+		// Close the line only when it leaves styling open; a piece that
+		// already balances its own escapes stays byte-identical.
+		if active != "" && !strings.HasSuffix(line, reset) {
+			line += reset
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// sgrStateAfter replays the SGR escape sequences in piece onto a prior state and
+// returns the SGR string in effect at the end of piece. A full reset (ESC[0m /
+// ESC[m) clears the state; other SGR sequences (CSI … 'm') accumulate, since the
+// terminal applies them in order and a later code overrides an earlier one.
+// Non-SGR CSI escapes don't affect the state.
+func sgrStateAfter(state, piece string) string {
+	for i := 0; i < len(piece); {
+		if piece[i] != 0x1b || i+1 >= len(piece) || piece[i+1] != '[' {
+			i++
+			continue
+		}
+		j := i + 2
+		for j < len(piece) && (piece[j] < 0x40 || piece[j] > 0x7e) {
+			j++
+		}
+		if j >= len(piece) {
+			break // unterminated escape
+		}
+		seq := piece[i : j+1]
+		switch {
+		case seq == reset || seq == "\x1b[m":
+			state = ""
+		case piece[j] == 'm':
+			state += seq
+		}
+		i = j + 1
+	}
+	return state
+}
+
 func wrapLine(s string, width int, cont string) []string {
 	if width <= 0 {
 		return []string{s}

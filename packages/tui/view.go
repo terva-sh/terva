@@ -244,7 +244,7 @@ func (v *View) BuildLive(width int) []string {
 		inner := assistantBodyWidth(width - len(indent))
 		md := RenderMarkdown(v.Streaming, v.Theme, inner)
 		for _, l := range strings.Split(md, "\n") {
-			for _, w := range wrapANSILine(l, inner) {
+			for _, w := range wrapANSILineKeepStyle(l, inner) {
 				out = append(out, indent+w)
 			}
 		}
@@ -414,7 +414,7 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 		inner := assistantBodyWidth(width - len(indent))
 		md := RenderMarkdown(v.Streaming, v.Theme, inner)
 		for _, l := range strings.Split(md, "\n") {
-			for _, w := range wrapANSILine(l, inner) {
+			for _, w := range wrapANSILineKeepStyle(l, inner) {
 				out = append(out, indent+w)
 			}
 		}
@@ -668,7 +668,7 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 			case provider.TextBlock:
 				md := RenderMarkdown(strings.TrimLeft(b.Text, "\n"), v.Theme, inner)
 				for _, l := range strings.Split(md, "\n") {
-					for _, w := range wrapANSILine(l, inner) {
+					for _, w := range wrapANSILineKeepStyle(l, inner) {
 						lines = append(lines, indent+w)
 					}
 				}

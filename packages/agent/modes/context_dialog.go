@@ -75,7 +75,12 @@ func (d *contextDialog) wrappedBody(width int) []string {
 			out = append(out, "")
 			continue
 		}
-		out = append(out, tui.WrapANSILine(line, limit)...)
+		// WrapANSILineKeepStyle re-applies the line's colour to each wrapped
+		// row, so an extension-context line that folds stays one consistent
+		// colour (each rendered row resets SGR independently — see
+		// paintBackgroundRow). The body lines are pre-styled and emitted
+		// directly, which is exactly what keep-style is for.
+		out = append(out, tui.WrapANSILineKeepStyle(line, limit)...)
 	}
 	return out
 }

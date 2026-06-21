@@ -168,6 +168,11 @@ func (d *loginDialog) Render(th tui.Theme, width int) []string {
 		if wrapW < 20 {
 			wrapW = 20
 		}
+		// Future note (applies to both URL blocks in this dialog): these wrap a
+		// plain URL then colour each segment, which is correct. They could adopt
+		// tui.WrapANSILineKeepStyle (colour once, keep-style wrap) to match the
+		// direct-emit standard, but with no correctness gain — single-colour
+		// text already re-coloured per piece. Convert opportunistically.
 		for _, seg := range tui.WrapANSILine(d.url, wrapW) {
 			lines = append(lines, th.FG256(th.Accent, seg))
 		}

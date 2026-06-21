@@ -56,6 +56,28 @@ func TestContextDialogWrapsLongLines(t *testing.T) {
 	}
 }
 
+// A long colored line must keep its color on EVERY wrapped row, not just the
+// first — each rendered row resets SGR independently, so the continuation
+// pieces need the leading escape re-applied.
+func TestContextDialogWrapKeepsColor(t *testing.T) {
+	var th tui.Theme
+	colorOpen := strings.SplitN(th.FG256(244, "X"), "X", 2)[0] // the FG escape, no text
+	colored := th.FG256(244, strings.Repeat("word ", 40))      // one long grey logical line
+
+	d := newContextDialog()
+	d.Open("", "", []string{colored}, nil)
+	wrapped := d.wrappedBody(40)
+	if len(wrapped) < 2 {
+		t.Fatalf("expected the long line to wrap into multiple rows, got %d", len(wrapped))
+	}
+	// Every wrapped row must carry the colour, not just the first (keep-style).
+	for i, l := range wrapped {
+		if !strings.Contains(l, colorOpen) {
+			t.Errorf("wrapped row %d lost its colour (%q): %q", i, colorOpen, l)
+		}
+	}
+}
+
 func TestMessageKindCompaction(t *testing.T) {
 	m := provider.Message{
 		Role:    provider.RoleUser, // compaction summary is a synthetic user message

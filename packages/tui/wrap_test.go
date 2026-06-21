@@ -141,3 +141,60 @@ func TestEditorCursorAfterLongPathPaste(t *testing.T) {
 		t.Errorf("visual col %d != last-row width %d", col, visibleWidth(lines[len(lines)-1]))
 	}
 }
+
+// wrapANSILineKeepStyle keeps a single coloured span coloured on EVERY wrapped
+// row, not just the first — each rendered row resets SGR independently (see
+// paintBackgroundRow), so the carried style must be re-emitted per row.
+func TestWrapANSILineKeepStyleCarriesColor(t *testing.T) {
+	red := sgrFG(196)
+	rows := wrapANSILineKeepStyle(red+"aaaa bbbb cccc dddd"+reset, 9)
+	if len(rows) < 2 {
+		t.Fatalf("expected wrapping, got %d rows: %v", len(rows), rows)
+	}
+	for i, r := range rows {
+		if !strings.Contains(r, red) {
+			t.Errorf("row %d lost the colour: %q", i, r)
+		}
+		if !strings.HasSuffix(r, reset) {
+			t.Errorf("row %d should be reset-terminated: %q", i, r)
+		}
+	}
+}
+
+// When no styled span actually crosses a wrap boundary, keep-style must be
+// byte-identical to plain wrapANSILine — that's what makes it a safe drop-in
+// for the direct-emit callers (their golden tests stay green).
+func TestWrapANSILineKeepStyleByteIdenticalWhenNoSpanWraps(t *testing.T) {
+	red := sgrFG(196)
+	join := func(ss []string) string { return strings.Join(ss, "\n") }
+	cases := []struct {
+		name, in string
+		limit    int
+	}{
+		{"plain", "alpha beta gamma delta epsilon zeta", 11},
+		{"balanced per-token", "foo " + red + "x" + reset + " barbar bazbaz quux", 8},
+		{"short, no wrap", red + "hi" + reset, 40},
+	}
+	for _, c := range cases {
+		got, want := join(wrapANSILineKeepStyle(c.in, c.limit)), join(wrapANSILine(c.in, c.limit))
+		if got != want {
+			t.Errorf("%s: keep-style diverged from plain wrap\n got %q\nwant %q", c.name, got, want)
+		}
+	}
+}
+
+func TestSgrStateAfter(t *testing.T) {
+	red, blue := sgrFG(196), sgrFG(21)
+	if got := sgrStateAfter("", red+"x"); got != red {
+		t.Errorf("opening a colour: got %q want %q", got, red)
+	}
+	if got := sgrStateAfter(red, "y"+reset); got != "" {
+		t.Errorf("a reset should clear the state, got %q", got)
+	}
+	if got := sgrStateAfter("", red+"a"+blue+"b"); got != red+blue {
+		t.Errorf("colours accumulate until reset: got %q want %q", got, red+blue)
+	}
+	if got := sgrStateAfter("", "no escapes here"); got != "" {
+		t.Errorf("plain text leaves no state, got %q", got)
+	}
+}
