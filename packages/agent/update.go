@@ -145,8 +145,15 @@ func versionLess(a, b string) bool {
 
 func splitVersion(s string) []int {
 	s = strings.TrimPrefix(s, "v")
-	// Strip build-metadata suffix like "(abc1234, 2026-04-18)".
-	if i := strings.IndexAny(s, " ("); i > 0 {
+	// Keep only the numeric x.y.z core by dropping any suffix: a semver
+	// pre-release ("-..."), build metadata ("+..."), or the human
+	// "(abc1234, 2026-04-18)" form. Without this, a Go pseudo-version dev
+	// build like "0.108.3-0.20260620232809-089f7af04dc8" splits to
+	// ["0","108","3-0",...] and the "3-0" patch fails Atoi -> 0, so the
+	// build mis-compares as 0.108.0. Stripping at the first "-" leaves
+	// "0.108.3", so a dev/pre-release of 0.108.3 correctly reads as newer
+	// than a published 0.108.2 (semver compares the x.y.z core first).
+	if i := strings.IndexAny(s, " (-+"); i > 0 {
 		s = s[:i]
 	}
 	parts := strings.Split(s, ".")
