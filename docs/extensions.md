@@ -893,6 +893,7 @@ Reply with `shutdown_ack` and then exit.
 ```
 terva ext list                    list installed extensions and their state
 terva ext install <path|git-url>  copy / clone into $TERVA_HOME/extensions/
+terva ext upgrade <name>...       fast-forward-pull an installed extension's git checkout
 terva ext remove <name>           delete an extension directory
 terva ext enable <name>           re-enable a disabled extension
 terva ext disable <name>          disable without removing
@@ -1093,6 +1094,7 @@ terva ext list                      # show installed extensions
 terva ext logs <name> [-f]          # cat or tail the extension's stderr log
 terva ext enable <name>             # re-enable a disabled extension
 terva ext disable <name>            # disable without removing
+terva ext upgrade <name>...         # fast-forward-pull just these extensions
 terva ext remove <name>             # delete an extension directory
 ```
 
@@ -1100,7 +1102,11 @@ For development, point `terva --ext <path>` at a working directory and skip the 
 
 ### Updating extensions
 
-`terva update` refreshes the terva binary **and** every installed extension that lives in a git checkout. Per-extension behaviour:
+`terva ext upgrade <name>...` upgrades just the named extensions, and
+`terva update` refreshes the terva binary **and** every installed
+extension at once. Both run the same per-extension logic (below) — `ext
+upgrade` is the targeted form when you only want to bump one or two.
+Per-extension behaviour:
 
 - Disabled extensions are skipped.
 - Extensions without a `.git/` directory (installed by `terva ext install ./local-path`) are skipped — there is no remote to pull from.

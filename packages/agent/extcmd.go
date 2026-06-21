@@ -40,6 +40,8 @@ func runExtCommand(rawArgs []string) (handled bool, err error) {
 		return true, extInstall(rawArgs[2:])
 	case "pack":
 		return true, extPackInstall(rawArgs[2:])
+	case "upgrade", "update":
+		return true, extUpgrade(rawArgs[2:])
 	case "help", "-h", "--help":
 		printExtHelp()
 		return true, nil
@@ -58,6 +60,7 @@ usage:
   terva ext enable <name>           re-enable a disabled extension
   terva ext disable <name>          disable without removing
   terva ext remove <name>           delete an extension directory
+  terva ext upgrade <name>...       fast-forward-pull an installed extension's git checkout
   terva ext install <path|git-url>  copy / clone an extension into $TERVA_HOME/extensions/
   terva ext pack install [pack]     bulk-install an extension pack (default: built-in "core")
 
@@ -327,6 +330,41 @@ func extInstall(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "installed %s\n", out)
+	return nil
+}
+
+// extUpgrade updates one or more installed extensions in place by
+// fast-forward-pulling their git checkout — the same per-extension logic
+// `terva update` runs over the whole set, scoped to the names you pass.
+// Disabled extensions and non-git installs are reported and skipped. No
+// build step runs: a self-bootstrapping launcher (run.sh) rebuilds on the
+// next spawn (see docs/extensions.md). Use `terva update` to upgrade every
+// extension plus the terva binary at once.
+func extUpgrade(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: terva ext upgrade <name>... (use `terva update` for every extension + the binary)")
+	}
+	var failed, updated int
+	for _, name := range args {
+		dir, err := findExtensionDir(name)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			failed++
+			continue
+		}
+		switch updateOneExtension(dir, name) {
+		case "updated":
+			updated++
+		case "failed":
+			failed++
+		}
+	}
+	if updated > 0 {
+		fmt.Println("restart terva (or /reload-ext in a running session) to pick up the new version")
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d extension(s) failed to upgrade", failed)
+	}
 	return nil
 }
 
