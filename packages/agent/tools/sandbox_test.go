@@ -56,6 +56,73 @@ func TestSandboxCommandBanned(t *testing.T) {
 	}
 }
 
+// TestSandboxAllowsCDIntoSubdir is the regression for the false-positive
+// jail error: a `cd` into a subdirectory of the sandbox root, spelled as
+// an absolute path, must be allowed. The old guard rejected any `cd /...`
+// outright, which wasted turns and nudged the model toward breaking out.
+func TestSandboxAllowsCDIntoSubdir(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "packages", "provider")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sb := NewSandbox(root)
+	sb.Lock()
+
+	allowed := []string{
+		"cd " + sub + " && go build ./...",
+		"cd " + root + " && go build ./...",
+		"cd " + root, // bare cd to root
+		"cd packages/provider && go build",
+		"cd \"" + sub + "\" && ls", // quoted absolute path
+	}
+	for _, c := range allowed {
+		if err := sb.CheckCommand(c); err != nil {
+			t.Fatalf("expected %q to be allowed: %v", c, err)
+		}
+	}
+
+	blocked := []string{
+		"cd /etc",
+		"cd / && ls",
+		"cd ..",                    // parent of root escapes
+		"cd " + filepath.Dir(root), // explicit parent
+	}
+	for _, c := range blocked {
+		if err := sb.CheckCommand(c); err == nil {
+			t.Fatalf("expected %q to be blocked", c)
+		}
+	}
+}
+
+// TestSandboxDisplayPath: tool results / errors should present paths
+// relative to the sandbox root when jailed, so the model isn't biased
+// toward absolute paths.
+func TestSandboxDisplayPath(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "pkg", "foo.go")
+	outside := filepath.Join(t.TempDir(), "x.go")
+
+	sb := NewSandbox(root)
+
+	// Unlocked: returns the given form verbatim.
+	if got := sb.DisplayPath(sub, "pkg/foo.go"); got != "pkg/foo.go" {
+		t.Fatalf("unlocked DisplayPath = %q; want verbatim", got)
+	}
+
+	sb.Lock()
+	if got := sb.DisplayPath(sub, sub); got != "./pkg/foo.go" {
+		t.Fatalf("DisplayPath(abs inside) = %q; want ./pkg/foo.go", got)
+	}
+	if got := sb.DisplayPath(root, root); got != "." {
+		t.Fatalf("DisplayPath(root) = %q; want .", got)
+	}
+	// Outside root: fall back to the given form (don't fabricate a path).
+	if got := sb.DisplayPath(outside, "x.go"); got != "x.go" {
+		t.Fatalf("DisplayPath(outside) = %q; want given fallback", got)
+	}
+}
+
 func TestReadToolRejectsOutsideWhenLocked(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()

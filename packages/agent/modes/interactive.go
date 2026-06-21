@@ -607,6 +607,12 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// chat as normal terminal flow/scrollback and redraws only the live
 	// input/status block on normal typing.
 	_, _ = term.Write([]byte(tui.SeqBracketedPasteOn + tui.SeqEnhancedKeyboardOn + tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqClearScreenNoHome + tui.SeqClearScrollback + tui.MoveTo(1, 1)))
+	// Tell the terminal our working directory (OSC 7) so "new tab / split
+	// here" opens in the launch cwd instead of inheriting a stale directory
+	// from an extension subprocess. Harmless on terminals that ignore it.
+	if seq := tui.ReportCWD(i.cfg.CWD); seq != "" {
+		_, _ = term.Write([]byte(seq))
+	}
 	defer term.Write([]byte(tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqEnhancedKeyboardOff + tui.SeqBracketedPasteOff + tui.SeqShowCursor))
 	// Erase the live status/input band on exit so the returning shell
 	// prompt lands on a clean line right after the conversation instead of

@@ -3,6 +3,7 @@ package tui
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"golang.org/x/term"
@@ -132,6 +133,51 @@ const (
 	// SeqEraseToEnd erases from the cursor to the end of the screen.
 	SeqEraseToEnd = "\x1b[J"
 )
+
+// ReportCWD returns the OSC 7 sequence that tells the terminal the
+// current working directory, formatted as a file URL. Terminals such
+// as kitty, WezTerm, iTerm2, and GNOME Terminal use this to open new
+// tabs / splits in the same directory instead of inheriting a stale
+// directory from an extension subprocess. Returns "" for an empty path
+// so callers can write it unconditionally. The path is percent-encoded
+// per RFC 3986 (only unreserved characters and the path separator are
+// left bare) and prefixed with the local hostname.
+func ReportCWD(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	host, _ := os.Hostname()
+	return "\x1b]7;file://" + host + osc7EscapePath(abs) + "\x07"
+}
+
+// osc7EscapePath percent-encodes a filesystem path for an OSC 7 file
+// URL. Forward slashes (the URL path separator) and the unreserved set
+// (A-Z a-z 0-9 - _ . ~) pass through; everything else is %XX-encoded.
+// On Windows the backslash separators are normalised to forward slashes
+// and a leading slash is added so "C:\foo" becomes "/C:/foo".
+func osc7EscapePath(p string) string {
+	p = filepath.ToSlash(p)
+	if len(p) > 1 && p[1] == ':' {
+		p = "/" + p
+	}
+	const hex = "0123456789ABCDEF"
+	var b []byte
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		unreserved := (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~' || c == '/'
+		if unreserved {
+			b = append(b, c)
+			continue
+		}
+		b = append(b, '%', hex[c>>4], hex[c&0x0f])
+	}
+	return string(b)
+}
 
 // MoveTo moves the cursor to 1-indexed (row, col).
 func MoveTo(row, col int) string {

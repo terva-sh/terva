@@ -70,13 +70,16 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	if err := t.Sandbox.CheckPathRead(path); err != nil {
 		return core.ToolResult{}, err
 	}
+	// What the model sees in errors: relative to the sandbox root when
+	// jailed, so absolute paths stay out of the context window.
+	shown := t.Sandbox.DisplayPath(path, a.Path)
 
 	info, err := os.Stat(path)
 	if err != nil {
 		return core.ToolResult{}, err
 	}
 	if info.IsDir() {
-		return core.ToolResult{}, fmt.Errorf("%s is a directory", path)
+		return core.ToolResult{}, fmt.Errorf("%s is a directory", shown)
 	}
 
 	// Image handling.

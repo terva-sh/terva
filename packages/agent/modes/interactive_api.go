@@ -34,6 +34,13 @@ func (i *Interactive) ApplyChangedCWD(ag *core.Agent, provider, model, cwd strin
 	i.turns.SetAgent(ag)
 	i.mu.Lock()
 	i.cfg.CWD = cwd
+	// Re-report the working directory to the terminal so "new tab / split
+	// here" tracks the /cd change (OSC 7).
+	if i.cfg.Terminal != nil {
+		if seq := tui.ReportCWD(cwd); seq != "" {
+			_, _ = i.cfg.Terminal.Write([]byte(seq))
+		}
+	}
 	i.cfg.Provider = provider
 	i.cfg.Model = model
 	i.toolCalls = map[string]*tui.ToolCallView{}
