@@ -42,3 +42,29 @@ func TestExtUpgradeSkipsNonGit(t *testing.T) {
 		t.Fatalf("non-git extension should skip cleanly, got %v", err)
 	}
 }
+
+// The name shown in `ext list` is the manifest name, which can differ from
+// the install-directory basename (e.g. dir "terva-ext-index" for manifest
+// name "index" after a pack install). findExtensionDir must resolve BOTH
+// so `ext upgrade index` works exactly as the list shows it.
+func TestFindExtensionDirByManifestNameOrDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TERVA_HOME", home)
+	dir := filepath.Join(home, "extensions", "terva-ext-index")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "extension.json"), []byte(`{"name":"index"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"index", "terva-ext-index"} {
+		got, err := findExtensionDir(name)
+		if err != nil || got != dir {
+			t.Fatalf("findExtensionDir(%q) = %q, %v; want %q", name, got, err, dir)
+		}
+	}
+	if _, err := findExtensionDir("nope"); err == nil {
+		t.Fatal("expected a not-found error for an unknown name")
+	}
+}

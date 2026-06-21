@@ -379,11 +379,40 @@ func extensionDirs() map[string]string {
 	return out
 }
 
+// findExtensionDir resolves an extension by the name shown in
+// `terva ext list` — which is the manifest's declared name — OR by its
+// install-directory basename. The two differ when the install dir is the
+// source repo name (e.g. dir "terva-ext-index" for manifest name "index"),
+// so accepting both means `ext upgrade index` works just like the list
+// shows it. The directory-name match wins first (fast path, back-compat).
 func findExtensionDir(name string) (string, error) {
+	// 1. Direct install-directory match.
 	for _, dir := range extensionDirs() {
 		candidate := filepath.Join(dir, name)
 		if _, err := os.Stat(filepath.Join(candidate, "extension.json")); err == nil {
 			return candidate, nil
+		}
+	}
+	// 2. Manifest-name match (what `ext list` displays).
+	for _, dir := range extensionDirs() {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, e.Name(), "extension.json"))
+			if err != nil {
+				continue
+			}
+			var m struct {
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(raw, &m) == nil && m.Name == name {
+				return filepath.Join(dir, e.Name()), nil
+			}
 		}
 	}
 	return "", fmt.Errorf("extension %q not found", name)
