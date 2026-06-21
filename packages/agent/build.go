@@ -357,7 +357,10 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// before validation so an alias is never mistaken for an unknown
 	// provider and silently downgraded to anthropic.
 	argProvider := canonicalProvider(args.Provider)
-	provName := firstNonEmpty(argProvider, canonicalProvider(cfg.Provider), "anthropic")
+	// eff.Config is project-over-user (the project layer is trusted-gated in
+	// ResolveConfig), so this yields: --provider flag > project (trusted) >
+	// user config > anthropic. Repairs below stay on cfg (the user layer).
+	provName := firstNonEmpty(argProvider, canonicalProvider(eff.Config.Provider), "anthropic")
 	// Gate --insecure: it skips TLS verification for the inference client
 	// only, and only for a self-signed custom endpoint. Restrict it to the
 	// openai-compatible / ollama providers (plain http.Client clients, no
@@ -423,7 +426,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// args.BaseURL yet: a per-model `baseUrl` in models.json must be able
 		// to override it (applied after the model is resolved, below).
 		compatBaseURL = storedBaseURL
-		if args.Model == "" && cfg.Model == "" {
+		if args.Model == "" && eff.Config.Model == "" {
 			args.Model = storedModel
 		}
 		storedKey, _, _, _ := ResolveCredentialFull(provName, args.APIKey)
@@ -462,7 +465,9 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// whatever the local/custom server understands and has no baked-in
 	// catalog entry or default.
 	openCatalogue := provName == "ollama" || provName == "openai-compatible"
-	model := firstNonEmpty(args.Model, cfg.Model)
+	// --model flag > project (trusted) > user config (eff.Config is the
+	// project-over-user read view; cfg stays the user layer for repairs).
+	model := firstNonEmpty(args.Model, eff.Config.Model)
 	if model == "" {
 		switch provName {
 		case "ollama":

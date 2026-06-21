@@ -19,6 +19,36 @@ func writeProjectConfig(t *testing.T, dir, body string) {
 	}
 }
 
+// A project's default provider/model is behaviour-changing, so ResolveConfig
+// overlays it onto the read view only when the workspace is trusted; the
+// pristine user layer is never touched.
+func TestResolveConfigProjectModelTrustGated(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TERVA_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.json"),
+		[]byte(`{"provider":"anthropic","model":"opus"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+	writeProjectConfig(t, cwd, `{"provider":"openai","model":"gpt-5"}`)
+
+	// Untrusted: the project's model/provider are ignored; the user default wins.
+	eff := ResolveConfig(cwd, false)
+	if eff.Config.Provider != "anthropic" || eff.Config.Model != "opus" {
+		t.Errorf("untrusted should keep user default, got %q/%q", eff.Config.Provider, eff.Config.Model)
+	}
+
+	// Trusted: the project's model/provider overlay the user default.
+	eff = ResolveConfig(cwd, true)
+	if eff.Config.Provider != "openai" || eff.Config.Model != "gpt-5" {
+		t.Errorf("trusted should apply the project default, got %q/%q", eff.Config.Provider, eff.Config.Model)
+	}
+	// The writable user layer must stay pristine in both cases.
+	if eff.User.Provider != "anthropic" || eff.User.Model != "opus" {
+		t.Errorf("user layer must remain pristine, got %q/%q", eff.User.Provider, eff.User.Model)
+	}
+}
+
 func TestLoadProjectConfigNearestWins(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")

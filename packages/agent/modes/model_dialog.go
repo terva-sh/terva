@@ -18,12 +18,21 @@ import (
 type modelDialog struct {
 	active bool
 	p      modelPicker
+
+	// promoting is the transient "set as default" sub-prompt entered with
+	// Ctrl+D: the next key picks the scope ([p]roject / [g]lobal) or cancels
+	// (esc). The model to promote is captured when the prompt opens.
+	promoting       bool
+	promoteProvider string
+	promoteModel    string
 }
 
 // modelDialogAction is returned by HandleKey.
 type modelDialogAction struct {
 	Select   bool
-	Edit     bool // open the config editor for Provider/Model
+	Edit     bool   // open the config editor for Provider/Model
+	Promote  bool   // also persist the pick as a default (Scope set)
+	Scope    string // "project" | "global" when Promote
 	Provider string
 	Model    string
 	Close    bool
@@ -56,7 +65,7 @@ func (d *modelDialog) Open(current string, loggedInProviders []string) {
 }
 
 // Close hides the dialog.
-func (d *modelDialog) Close() { d.active = false }
+func (d *modelDialog) Close() { d.active = false; d.promoting = false }
 
 // Active reports whether the dialog is visible and consumes input.
 func (d *modelDialog) Active() bool { return d != nil && d.active }
@@ -69,7 +78,15 @@ func (d *modelDialog) Render(th tui.Theme, width int) []string {
 	var lines []string
 	lines = append(lines, frameHeader(th, "model", width))
 
-	hint := d.p.hintLine("pick a model (↑/↓, enter, ctrl+e edit, esc) - type to filter, :img/:reasoning by capability")
+	// Promote sub-prompt takes over the body: pick a scope or cancel.
+	if d.promoting {
+		lines = append(lines, th.FG256(th.Accent, fmt.Sprintf("  set %q as default:", d.promoteModel)))
+		lines = append(lines, th.FG256(th.Muted, "    [p] project (this repo, when trusted)   [g] global (everywhere)   esc cancel"))
+		lines = append(lines, frameRule(th, width))
+		return lines
+	}
+
+	hint := d.p.hintLine("pick a model (↑/↓, enter, ctrl+e edit, ctrl+d set-default, esc) - type to filter, :img/:reasoning by capability")
 	lines = append(lines, th.FG256(th.Muted, hint))
 
 	if len(d.p.view) == 0 {
@@ -89,6 +106,25 @@ func (d *modelDialog) Render(th tui.Theme, width int) []string {
 
 // HandleKey advances the dialog and returns an action to apply, if any.
 func (d *modelDialog) HandleKey(k tui.Key) modelDialogAction {
+	// Promote sub-prompt ("set as default"): the next key picks the scope or
+	// cancels. handleNavKey is bypassed so p/g aren't swallowed as filter
+	// input. Promote also switches to the model (Select), then persists it.
+	if d.promoting {
+		switch {
+		case k.Kind == tui.KeyEsc:
+			d.promoting = false
+			return modelDialogAction{}
+		case k.Kind == tui.KeyRune && (k.Rune == 'p' || k.Rune == 'P'):
+			prov, model := d.promoteProvider, d.promoteModel
+			d.Close()
+			return modelDialogAction{Select: true, Promote: true, Scope: "project", Provider: prov, Model: model}
+		case k.Kind == tui.KeyRune && (k.Rune == 'g' || k.Rune == 'G'):
+			prov, model := d.promoteProvider, d.promoteModel
+			d.Close()
+			return modelDialogAction{Select: true, Promote: true, Scope: "global", Provider: prov, Model: model}
+		}
+		return modelDialogAction{} // ignore other keys while the prompt is up
+	}
 	if d.p.handleNavKey(k) {
 		return modelDialogAction{}
 	}
@@ -103,6 +139,17 @@ func (d *modelDialog) HandleKey(k tui.Key) modelDialogAction {
 			return modelDialogAction{Close: true}
 		}
 		return modelDialogAction{Select: true, Provider: m.Provider, Model: m.ID}
+	case tui.KeyCtrlD:
+		// Ctrl+D (not a bare "d", which the filter would swallow) opens the
+		// "set as default" scope prompt for the highlighted model.
+		m, ok := d.p.selected()
+		if !ok {
+			return modelDialogAction{}
+		}
+		d.promoting = true
+		d.promoteProvider = m.Provider
+		d.promoteModel = m.ID
+		return modelDialogAction{}
 	case tui.KeyCtrlE:
 		// Edit the selected model's config. Ctrl+E (not a bare "e",
 		// which the type-to-filter input would swallow) opens the

@@ -158,6 +158,9 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				act := i.modelDialog.HandleKey(k)
 				if act.Select {
 					i.applyModelSelection(act.Provider, act.Model)
+					if act.Promote {
+						i.promoteModelDefault(act.Provider, act.Model, act.Scope)
+					}
 				}
 				if act.Edit {
 					i.openModelEdit(act.Provider, act.Model)

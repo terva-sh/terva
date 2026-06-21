@@ -1972,16 +1972,35 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		NoYolo:          args.NoYolo,
 		ConfirmGate:     confirmGate,
 		SetApprovalMode: setApprovalMode,
-		PersistModel: func(providerName, model string) {
-			// Update config.json so next launch uses the same pick.
-			cfg, _ := LoadConfig()
-			cfg.Provider = providerName
-			cfg.Model = model
-			_ = SaveConfig(cfg)
-			// Update the active session's meta so resume picks this up.
+		SetSessionModel: func(providerName, model string) {
+			// Session-only: resume picks up the model, but the global/project
+			// default is untouched. Promoting to a default is explicit
+			// (PromoteModelDefault / Ctrl+D in the picker).
 			if sess != nil {
 				_ = sess.UpdateModel(providerName, model)
 			}
+		},
+		PromoteModelDefault: func(providerName, model, scope string) error {
+			switch scope {
+			case "project":
+				if err := setProjectModel(r.CWD, providerName, model); err != nil {
+					return err
+				}
+			case "global":
+				cfg, _ := LoadConfig()
+				cfg.Provider = providerName
+				cfg.Model = model
+				if err := SaveConfig(cfg); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("unknown model-default scope %q", scope)
+			}
+			// Either way the running session adopts it for resume.
+			if sess != nil {
+				_ = sess.UpdateModel(providerName, model)
+			}
+			return nil
 		},
 		RefreshCompatModels: RefreshCompatModelsAsync,
 	})

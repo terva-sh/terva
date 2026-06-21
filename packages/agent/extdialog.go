@@ -95,6 +95,45 @@ func setProjectExtensionDisabled(cwd, name string, disabled bool) error {
 	return os.Rename(tmp, path)
 }
 
+// setProjectModel writes the project's default provider/model into
+// .terva/config.json, preserving unrelated fields; an empty value clears its
+// key. The write is unconditional, but the value is honored at launch only in
+// a trusted workspace (see ResolveConfig) — the trust gate lives at read time.
+func setProjectModel(cwd, provider, model string) error {
+	path := projectConfigPath(cwd)
+	generic := map[string]any{}
+	if raw, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(raw, &generic); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if provider != "" {
+		generic["provider"] = provider
+	} else {
+		delete(generic, "provider")
+	}
+	if model != "" {
+		generic["model"] = model
+	} else {
+		delete(generic, "model")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(generic, "", "  ")
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // findExtensionDirIn locates the named extension's directory under the
 // global root or the given project root.
 func findExtensionDirIn(cwd, name string) (string, error) {

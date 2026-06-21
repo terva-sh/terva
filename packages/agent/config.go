@@ -201,6 +201,15 @@ type ProjectConfig struct {
 	// wins on a name collision, so a trusted project may only ADD servers
 	// (mergeMCPConfigs). See setupMCP and docs/plans/workspace-trust.md.
 	MCP *mcp.Config `json:"mcp,omitempty"`
+
+	// Provider and Model set this project's default provider/model. UNLIKE
+	// the restrict-only fields above, these change runtime behaviour (which
+	// model runs, possibly using the user's credentials and budget), so —
+	// like Hooks and MCP — they are honored ONLY when the workspace is
+	// trusted; an untrusted/cloned repo's values are ignored. Resolve order:
+	// --provider/--model flag > project (trusted) > user config default.
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 // Project-local config lives in the same per-project directory terva
@@ -472,6 +481,18 @@ func ResolveConfig(cwd string, trustProject bool) EffectiveConfig {
 	// refuse to load an extension, never re-enable one the user disabled.
 	if pc != nil && len(pc.DisableExtensions) > 0 {
 		eff.Config.DisableExtensions = unionStrings(user.DisableExtensions, pc.DisableExtensions)
+	}
+	// Project default provider/model: trusted-only, because they change which
+	// model (and credentials/budget) a launch uses — same gate as Hooks/MCP.
+	// Layered onto the read view only; eff.User (the writable layer) is
+	// untouched, so config repairs and saves stay on the user config.
+	if pc != nil && trustProject {
+		if pc.Provider != "" {
+			eff.Config.Provider = pc.Provider
+		}
+		if pc.Model != "" {
+			eff.Config.Model = pc.Model
+		}
 	}
 	return eff
 }

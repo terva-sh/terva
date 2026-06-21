@@ -124,6 +124,51 @@ func TestSetManifestEnabled(t *testing.T) {
 	}
 }
 
+// setProjectModel writes provider/model into .terva/config.json, preserves
+// unrelated fields, and clears a key when given an empty value.
+func TestSetProjectModel(t *testing.T) {
+	cwd := t.TempDir()
+	path := filepath.Join(cwd, ".terva", "config.json")
+
+	if err := setProjectModel(cwd, "anthropic", "opus"); err != nil {
+		t.Fatal(err)
+	}
+	m := readJSON(t, path)
+	if m["provider"] != "anthropic" || m["model"] != "opus" {
+		t.Fatalf("project model not written: %v", m)
+	}
+
+	// Preserve an unrelated field while updating the model.
+	m["context_files"] = []any{"NOTES.md"}
+	b, _ := json.MarshalIndent(m, "", "  ")
+	os.WriteFile(path, b, 0o644)
+	if err := setProjectModel(cwd, "openai", "gpt-5"); err != nil {
+		t.Fatal(err)
+	}
+	m = readJSON(t, path)
+	if m["model"] != "gpt-5" || m["provider"] != "openai" {
+		t.Errorf("update failed: %v", m)
+	}
+	if _, ok := m["context_files"]; !ok {
+		t.Error("unrelated field context_files was dropped")
+	}
+
+	// Empty values clear the keys (without disturbing the rest).
+	if err := setProjectModel(cwd, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	m = readJSON(t, path)
+	if _, ok := m["model"]; ok {
+		t.Error("empty model should clear the key")
+	}
+	if _, ok := m["provider"]; ok {
+		t.Error("empty provider should clear the key")
+	}
+	if _, ok := m["context_files"]; !ok {
+		t.Error("clearing model/provider should not drop other fields")
+	}
+}
+
 // appendUnrootedExtensions surfaces explicit --ext loads (those the install-
 // root scan didn't already emit) as "session"-scoped rows, so a `terva --ext .`
 // dev extension appears in /extensions alongside installed ones.

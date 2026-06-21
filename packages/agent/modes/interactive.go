@@ -204,10 +204,18 @@ type InteractiveConfig struct {
 	// this package doesn't import agent (cycle).
 	UserModelsPath string
 
-	// PersistModel is called whenever the user switches model or provider.
-	// It should update config.json and (if there's an active session)
-	// write a new meta row so resume picks up the same model.
-	PersistModel func(providerName, model string)
+	// SetSessionModel is called on every /model switch. It is session-only:
+	// it should write a new session meta row so resume picks up the same
+	// model, but must NOT change the global/project default — a switch is
+	// for the current task. Promoting to a default is the explicit, separate
+	// PromoteModelDefault below.
+	SetSessionModel func(providerName, model string)
+
+	// PromoteModelDefault persists the model as a default in the given scope
+	// ("project" -> .terva/config.json, honored only in a trusted workspace;
+	// "global" -> the user config.json). It also updates the session meta.
+	// Wired to Ctrl+D in the /model picker and to the post-login flow.
+	PromoteModelDefault func(providerName, model, scope string) error
 
 	// RefreshCompatModels, if set, kicks a background /v1/models discovery
 	// for a configured openai-compatible endpoint so a fresh login surfaces

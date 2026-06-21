@@ -66,8 +66,8 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 			i.statusOK = "model: " + m.ID
 			i.statusErr = ""
 			i.mu.Unlock()
-			if i.cfg.PersistModel != nil {
-				i.cfg.PersistModel(i.cfg.Provider, m.ID)
+			if i.cfg.SetSessionModel != nil {
+				i.cfg.SetSessionModel(i.cfg.Provider, m.ID)
 			}
 			return
 		}
@@ -127,9 +127,27 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 	// reattached. applyChatTools is a no-op when the bridge is
 	// idle so the cross-provider path still works on a vanilla setup.
 	i.applyChatTools(i.chatBridge != nil && i.chatBridge.Active())
-	if i.cfg.PersistModel != nil {
-		i.cfg.PersistModel(p, md)
+	if i.cfg.SetSessionModel != nil {
+		i.cfg.SetSessionModel(p, md)
 	}
+}
+
+// promoteModelDefault persists the current pick as a default in the given
+// scope ("project" / "global") and surfaces the outcome on the status line.
+// Invoked from the /model picker's Ctrl+D promote prompt, after the switch.
+func (i *Interactive) promoteModelDefault(prov, model, scope string) {
+	if i.cfg.PromoteModelDefault == nil {
+		return
+	}
+	if err := i.cfg.PromoteModelDefault(prov, model, scope); err != nil {
+		i.setStatusErr("set " + scope + " default: " + err.Error())
+		return
+	}
+	where := "global default"
+	if scope == "project" {
+		where = "project default"
+	}
+	i.setStatusOK(model + " set as " + where)
 }
 
 // openRescueDialog surfaces the rescue model picker after a recoverable

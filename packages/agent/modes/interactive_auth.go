@@ -338,8 +338,10 @@ func (i *Interactive) handleAuthEvent(ev auth.Event) {
 						Source:        "openai-compatible",
 					})
 				}
-				if i.cfg.PersistModel != nil {
-					i.cfg.PersistModel("openai-compatible", mdl)
+				// Just configured this endpoint+model via /login: make it the
+				// global default (the prior behavior), not merely session-only.
+				if i.cfg.PromoteModelDefault != nil {
+					_ = i.cfg.PromoteModelDefault("openai-compatible", mdl, "global")
 				}
 				// Discover the rest of the endpoint's models in the
 				// background so they all appear in /model without a restart.
