@@ -86,6 +86,20 @@ func (i *Interactive) buildContextOverview(th tui.Theme) []string {
 	if ag.ContextProvider != nil {
 		ephBytes = len(ag.ContextProvider())
 	}
+	// Extensions contribute in two places: "static" guidance is folded into
+	// the system prompt (so it's already inside sysBytes), while "card"
+	// context rides the ephemeral block (ephBytes). Surface the static share
+	// separately so "ext context" reading a tiny number isn't mistaken for
+	// "extensions inject almost nothing" — the bulk is usually the guidance,
+	// counted under the system prompt.
+	extStaticBytes := 0
+	if i.cfg.Extensions != nil {
+		for _, it := range i.cfg.Extensions.ContextSnapshot() {
+			if it.Kind == "static" {
+				extStaticBytes += len(it.Text)
+			}
+		}
+	}
 
 	msgs := ag.Messages()
 	transcriptBytes := 0
@@ -112,9 +126,17 @@ func (i *Interactive) buildContextOverview(th tui.Theme) []string {
 	}
 
 	var out []string
-	out = append(out, row("system prompt", sysBytes, ""))
+	sysSuffix := ""
+	if extStaticBytes > 0 {
+		sysSuffix = "  (incl. ext guidance)"
+	}
+	out = append(out, row("system prompt", sysBytes, sysSuffix))
+	if extStaticBytes > 0 {
+		out = append(out, muted(fmt.Sprintf("    └ of which ext guidance: %s (%s)",
+			humanBytes(extStaticBytes), estTok(extStaticBytes))))
+	}
 	out = append(out, row("tool defs", toolBytes, fmt.Sprintf("  [%d tools]", toolCount)))
-	out = append(out, row("ext context", ephBytes, ""))
+	out = append(out, row("ext context", ephBytes, "  (cards, ephemeral)"))
 	out = append(out, row("transcript", transcriptBytes, fmt.Sprintf("  [%d msgs]", len(msgs))))
 	for idx, m := range msgs {
 		line := fmt.Sprintf("    [%d] %-13s %10s", idx, messageKind(m), humanBytes(perMsg[idx]))
@@ -153,8 +175,15 @@ func messageBytes(m provider.Message) int {
 }
 
 // messageKind labels a message by role, distinguishing tool results / calls
-// / images so an oversized tool result stands out in the breakdown.
+// / images so an oversized tool result stands out in the breakdown. A
+// compaction summary (a synthetic user message left by Compact) is labelled
+// "compaction" so it's visible that the stack restarts there: compaction
+// replaces the transcript with [summary + kept tail], so the breakdown shows
+// the post-compaction transcript, not the messages it folded away.
 func messageKind(m provider.Message) string {
+	if m.Meta["compaction"] == "true" {
+		return "compaction"
+	}
 	role := string(m.Role)
 	for _, c := range m.Content {
 		switch c.(type) {

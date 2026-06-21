@@ -62,6 +62,24 @@ func (d *contextDialog) body() []string {
 	return d.overview
 }
 
+// wrappedBody folds the active tab's lines to the dialog width so a long
+// line (e.g. an extension's injected text, which arrives as one logical
+// line) wraps and stays scrollable instead of running off the right edge.
+// Wrapping is width-aware and preserves the ANSI colour of each line.
+func (d *contextDialog) wrappedBody(width int) []string {
+	limit := max(width-2, 24)
+	src := d.body()
+	out := make([]string, 0, len(src))
+	for _, line := range src {
+		if line == "" {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, tui.WrapANSILine(line, limit)...)
+	}
+	return out
+}
+
 // HandleKey routes a key while the dialog owns the screen: Tab / ←→ switch
 // tabs, ↑/↓/PgUp/PgDn scroll, esc closes (closed=true).
 func (d *contextDialog) HandleKey(k tui.Key) (closed bool) {
@@ -110,7 +128,7 @@ func (d *contextDialog) Render(th tui.Theme, width int) []string {
 	}
 	lines = append(lines, "")
 
-	body := d.body()
+	body := d.wrappedBody(width)
 	maxScroll := len(body) - contextBodyRows
 	if maxScroll < 0 {
 		maxScroll = 0

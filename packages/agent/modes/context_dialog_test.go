@@ -1,6 +1,7 @@
 package modes
 
 import (
+	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/provider"
@@ -26,6 +27,43 @@ func TestContextDialogTabSwitchAndClose(t *testing.T) {
 	}
 	if closed := d.HandleKey(tui.Key{Kind: tui.KeyEsc}); !closed || d.Active() {
 		t.Fatal("esc should close the dialog")
+	}
+}
+
+func TestContextDialogWrapsLongLines(t *testing.T) {
+	long := strings.Repeat("alpha beta ", 30) // ~330 chars on one logical line
+	d := newContextDialog()
+	d.Open("", "", []string{long, "", "short"}, nil)
+
+	wrapped := d.wrappedBody(40) // limit = width-2 = 38
+	if len(wrapped) < 2 {
+		t.Fatalf("a %d-char line should wrap into multiple rows at width 40, got %d rows", len(long), len(wrapped))
+	}
+	for _, l := range wrapped {
+		if len(l) > 38 { // ASCII body: byte len == display width
+			t.Fatalf("wrapped row exceeds the 38-col limit: %d in %q", len(l), l)
+		}
+	}
+	// The blank separator line survives wrapping as a blank line.
+	blanks := 0
+	for _, l := range wrapped {
+		if l == "" {
+			blanks++
+		}
+	}
+	if blanks == 0 {
+		t.Error("blank separator line was dropped by wrapping")
+	}
+}
+
+func TestMessageKindCompaction(t *testing.T) {
+	m := provider.Message{
+		Role:    provider.RoleUser, // compaction summary is a synthetic user message
+		Meta:    map[string]string{"compaction": "true"},
+		Content: []provider.Content{provider.TextBlock{Text: "summary of earlier turns"}},
+	}
+	if got := messageKind(m); got != "compaction" {
+		t.Errorf("messageKind(compaction summary) = %q; want compaction", got)
 	}
 }
 
