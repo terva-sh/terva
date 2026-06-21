@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -28,6 +30,13 @@ const (
 	maxImageBytes = 5 * 1024 * 1024
 )
 
+// transcriptEpocher reports a counter that changes whenever the
+// transcript is wholesale replaced or compacted. Read-dedup uses it to
+// drop its "already read" fingerprints when the earlier read may have
+// fallen out of the context window — so a stub never points the model at
+// content that is no longer there. *core.Agent satisfies it.
+type transcriptEpocher interface{ TranscriptEpoch() uint64 }
+
 // ReadTool reads file contents from disk.
 type ReadTool struct {
 	CWD     string
@@ -40,6 +49,44 @@ type ReadTool struct {
 	// were NOT sent (the provider would silently drop the block) and how
 	// to enable vision — rather than shipping a block that vanishes.
 	SupportsVision bool
+
+	// Epoch, when set, enables read-dedup: a re-read of the same file and
+	// window that would return byte-identical content still present in the
+	// transcript is answered with a short stub instead of the full body,
+	// keeping duplicate file content out of the context window. Bound by
+	// NewAgent, since the agent is built after the tool registry. When nil,
+	// dedup is disabled and reads always return full content.
+	Epoch transcriptEpocher
+
+	dedupMu    sync.Mutex
+	dedupSeen  map[string]uint64 // (path,offset,limit) -> content hash
+	dedupEpoch uint64
+}
+
+// dedupHit records (key, hash) for the current transcript epoch and
+// reports whether this exact content was already returned within the same
+// epoch (so it's still in the model's context). A change of epoch — a
+// compaction or transcript reset that may have dropped the earlier read —
+// clears the table first, so the next read returns full content again.
+func (t *ReadTool) dedupHit(key string, hash uint64) bool {
+	ep := t.Epoch.TranscriptEpoch()
+	t.dedupMu.Lock()
+	defer t.dedupMu.Unlock()
+	if t.dedupSeen == nil || ep != t.dedupEpoch {
+		t.dedupSeen = map[string]uint64{}
+		t.dedupEpoch = ep
+	}
+	if prev, ok := t.dedupSeen[key]; ok && prev == hash {
+		return true
+	}
+	t.dedupSeen[key] = hash
+	return false
+}
+
+func fnv64(s string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(s))
+	return h.Sum64()
 }
 
 type readArgs struct {
@@ -210,8 +257,36 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		sb.WriteString(fmt.Sprintf("... [file exceeds %d bytes; tail not loaded — page with offset]\n", maxReadFileBytes))
 	}
 
+	out := sb.String()
+
+	// Read-dedup: if this exact (path, window) already returned these same
+	// bytes earlier in the current transcript epoch, the content is still in
+	// the model's context. Return a short stub instead of re-sending the
+	// whole file — this is what keeps a model that re-reads the same large
+	// file from ballooning the context window. A changed file hashes
+	// differently (so edits always return fresh content), and a different
+	// offset/limit is a different window (so paging is never falsely
+	// stubbed).
+	if t.Epoch != nil {
+		key := fmt.Sprintf("%s\x00%d\x00%d", path, a.Offset, a.Limit)
+		if t.dedupHit(key, fnv64(out)) {
+			return core.ToolResult{
+				Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf(
+					"%s — unchanged since you read it earlier this session; the copy above is still current, so it was not re-sent (saved %d bytes of context). To get a fresh copy, edit the file or read a different line range.",
+					shown, len(out))}},
+				Details: map[string]any{
+					"path":         path,
+					"start_line":   start + 1,
+					"total_lines":  len(lines),
+					"deduplicated": true,
+					"bytes_saved":  len(out),
+				},
+			}, nil
+		}
+	}
+
 	return core.ToolResult{
-		Content: []provider.Content{provider.TextBlock{Text: sb.String()}},
+		Content: []provider.Content{provider.TextBlock{Text: out}},
 		Details: map[string]any{
 			"path":            path,
 			"start_line":      start + 1, // 1-indexed; TUI draws the gutter

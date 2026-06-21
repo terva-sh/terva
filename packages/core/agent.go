@@ -146,8 +146,17 @@ type Agent struct {
 	// message is appended. The TUI uses it as a cheap redraw cache key
 	// so editor-only typing doesn't copy/rebuild a long transcript on
 	// every keypress.
-	rev  uint64
-	cost CostTracker
+	rev uint64
+
+	// transcriptEpoch increments only when the transcript is wholesale
+	// REPLACED or shrunk (SetMessages, Compact) — never on a plain
+	// append. Tools that cache per-transcript state (read-dedup) key on
+	// it: a compaction or /clear that may have dropped an earlier read
+	// from the context window bumps the epoch, transparently invalidating
+	// any "you already read this" fingerprint so the next read returns the
+	// full content again.
+	transcriptEpoch uint64
+	cost            CostTracker
 
 	// queued holds user messages submitted while the agent is busy.
 	// The loop appends them as normal user messages at safe
@@ -322,6 +331,16 @@ func (a *Agent) Revision() uint64 {
 	return a.rev
 }
 
+// TranscriptEpoch returns a counter that changes only when the transcript
+// is wholesale replaced or compacted — not on a plain append. Tools that
+// cache per-transcript state (read-dedup) use it to know when their cache
+// may reference content no longer in the context window.
+func (a *Agent) TranscriptEpoch() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.transcriptEpoch
+}
+
 // SetTools swaps the tool registry. Used by /reload-ext to hand
 // the agent a fresh registry after extension subprocesses have been
 // respawned (and their freshly-registered tools merged in).
@@ -348,6 +367,7 @@ func (a *Agent) SetMessages(msgs []provider.Message) {
 	defer a.mu.Unlock()
 	a.messages = append(a.messages[:0], msgs...)
 	a.rev++
+	a.transcriptEpoch++
 }
 
 // SetModel swaps the active model under the lock that oneTurn snapshots

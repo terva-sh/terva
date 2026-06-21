@@ -952,6 +952,12 @@ func (r Resolved) NewAgent() *core.Agent {
 	if st, ok := r.ToolRegistry["terva_status"].(*tools.StatusTool); ok {
 		st.Agent = a
 	}
+	// Bind the agent's transcript epoch into read so it can dedup re-reads
+	// of an unchanged file that is still in context (same late-binding
+	// reason as terva_status above).
+	if rt, ok := r.ToolRegistry["read"].(*tools.ReadTool); ok {
+		rt.Epoch = a
+	}
 	return a
 }
 
