@@ -26,6 +26,9 @@ type Resolved struct {
 	CWD         string
 	Reasoning   string
 	Temperature *float32
+	// Insecure skips TLS verification for the inference client only
+	// (gated to openai-compatible/ollama + explicit --base-url in Resolve).
+	Insecure bool
 
 	// VisionCapable is the resolved model's image-input verdict
 	// (model.Has(CapImageInput)). The live registry rebuild on a /model
@@ -355,6 +358,15 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// provider and silently downgraded to anthropic.
 	argProvider := canonicalProvider(args.Provider)
 	provName := firstNonEmpty(argProvider, canonicalProvider(cfg.Provider), "anthropic")
+	// Gate --insecure: it skips TLS verification for the inference client
+	// only, and only for a self-signed custom endpoint. Restrict it to the
+	// openai-compatible / ollama providers (plain http.Client clients, no
+	// wrapped transport) with an EXPLICIT --base-url, so it can never
+	// silently weaken a built-in provider's verification. args.BaseURL is
+	// still the raw flag here (model-default base URLs are applied later).
+	if args.Insecure && (strings.TrimSpace(args.BaseURL) == "" || (provName != "openai-compatible" && provName != "ollama")) {
+		return Resolved{}, fmt.Errorf("--insecure is only allowed for the openai-compatible or ollama provider with an explicit --base-url")
+	}
 	if !isKnownProvider(provName) {
 		// Unknown provider (maybe removed or renamed). Fall back to
 		// the first provider that has credentials, or anthropic.
@@ -689,6 +701,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		CWD:                      args.CWD,
 		Reasoning:                reasoning,
 		Temperature:              temperature,
+		Insecure:                 args.Insecure,
 		VisionCapable:            visionCapable,
 		ToolRegistry:             reg,
 		ToolSummary:              summaries,
@@ -819,6 +832,17 @@ func (r Resolved) NewClient() provider.Client {
 	if !r.HasCredential() {
 		panic("NewClient called without credential; check HasCredential first")
 	}
+	c := r.dispatchClient()
+	if r.Insecure {
+		// Scope the cert-skipping client to the inference client alone.
+		// Resolve already gated this to openai-compatible/ollama, whose
+		// client is a plain openaiClient that WithHTTPClient can reach.
+		c = provider.WithHTTPClient(c, provider.NewHTTPClient(true))
+	}
+	return c
+}
+
+func (r Resolved) dispatchClient() provider.Client {
 	if spec, ok := providerByID[r.Provider]; ok {
 		return spec.newClient(r)
 	}

@@ -94,6 +94,12 @@ type Args struct {
 	// can run "with only this one extension" via --no-ext --ext PATH.
 	NoExt bool
 
+	// Insecure skips TLS certificate verification for the inference
+	// client ONLY (a self-signed --base-url endpoint). Gated to the
+	// openai-compatible / ollama providers with an explicit --base-url;
+	// auth, discovery, and every other provider keep normal verification.
+	Insecure bool
+
 	// ConnectorManifests are connector.json paths passed via
 	// --connector-manifest (repeatable). Each loads ONE external chat
 	// connector as a dev service for this invocation only — nothing
@@ -258,6 +264,8 @@ func ParseArgs(in []string) (Args, error) {
 			a.Exts = append(a.Exts, v)
 		case "--no-ext", "--no-extensions":
 			a.NoExt = true
+		case "--insecure":
+			a.Insecure = true
 		case "--no-mcp":
 			a.NoMCP = true
 		case "--trust":
@@ -507,6 +515,7 @@ func PrintHelp(version string) {
 		row{"--base-url URL", "override provider api base url"},
 		row{"--reasoning off|minimum|low|medium|high|maximum", "set thinking level on supported models"},
 		row{"--temperature N", "sampling temperature, 0 to 2 (omit for provider default)"},
+		row{"--insecure", "skip TLS verification for the inference --base-url (openai-compatible/ollama only)"},
 	)
 	section("prompt and session flags",
 		row{"--system-prompt TEXT", "replace the default system prompt"},
