@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/agent/modes"
 )
 
 func readJSON(t *testing.T, path string) map[string]any {
@@ -119,5 +121,55 @@ func TestSetManifestEnabled(t *testing.T) {
 	}
 	if v, _ := readJSON(t, mf)["enabled"].(bool); !v {
 		t.Error("enabled should be true again")
+	}
+}
+
+// appendUnrootedExtensions surfaces explicit --ext loads (those the install-
+// root scan didn't already emit) as "session"-scoped rows, so a `terva --ext .`
+// dev extension appears in /extensions alongside installed ones.
+func TestAppendUnrootedExtensions(t *testing.T) {
+	// "installed" was already emitted by the root scan; the manager also has
+	// a dev extension loaded by path plus a not-yet-ready one.
+	seen := map[string]bool{"installed": true}
+	out := []modes.ExtInfo{{Name: "installed", Scope: "global"}}
+	live := []sessionExt{
+		{Name: "installed", Ready: true}, // already seen -> skipped
+		{Name: "devext", Language: "go", Version: "0.1.0", Ready: true},
+		{Name: "", Ready: true},         // no manifest name -> skipped
+		{Name: "warming", Ready: false}, // loaded but not ready yet
+	}
+	cmd := map[string]int{"devext": 2}
+	tool := map[string]int{"devext": 3}
+
+	out = appendUnrootedExtensions(out, seen, live, cmd, tool)
+
+	if len(out) != 3 { // installed (pre-existing) + devext + warming
+		t.Fatalf("want 3 rows, got %d: %+v", len(out), out)
+	}
+	// installed must not be duplicated.
+	n := 0
+	for _, it := range out {
+		if it.Name == "installed" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("installed should not be duplicated, found %d", n)
+	}
+
+	dev := out[1]
+	if dev.Name != "devext" || dev.Scope != "session" {
+		t.Fatalf("devext row wrong scope/name: %+v", dev)
+	}
+	if !dev.Running || !dev.Effective || !dev.GlobalEnabled {
+		t.Errorf("a ready session ext should read on/effective/enabled: %+v", dev)
+	}
+	if dev.Commands != 2 || dev.Tools != 3 || dev.Language != "go" || dev.Version != "0.1.0" {
+		t.Errorf("devext metadata/counts wrong: %+v", dev)
+	}
+
+	warming := out[2]
+	if warming.Name != "warming" || warming.Running || warming.Effective {
+		t.Errorf("a not-ready session ext should read as not running: %+v", warming)
 	}
 }

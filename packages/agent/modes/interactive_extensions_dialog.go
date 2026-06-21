@@ -21,6 +21,14 @@ func (i *Interactive) openExtensionsDialog() {
 // toggle is fast, and keeping it inline avoids racing the renderer on the
 // dialog's item slice.
 func (i *Interactive) applyExtensionToggle(act extensionsAction) {
+	// A session extension is loaded by path via --ext for this run only; it
+	// lives outside the install roots, so there's no manifest or project
+	// config to flip. Explain that instead of failing with a "not found".
+	if act.Scope == "session" {
+		i.setStatusOK(act.Name + ": loaded via --ext for this run only — no persistent enable/disable")
+		return
+	}
+
 	var err error
 	switch {
 	case act.ToggleGlobal:

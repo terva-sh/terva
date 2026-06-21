@@ -154,6 +154,7 @@ func listInstalledExtensions(cwd string, trusted bool, mgr *extensions.Manager) 
 	}
 
 	var out []modes.ExtInfo
+	seen := map[string]bool{}
 	for _, r := range roots {
 		entries, err := os.ReadDir(r.dir)
 		if err != nil {
@@ -197,8 +198,68 @@ func listInstalledExtensions(cwd string, trusted bool, mgr *extensions.Manager) 
 			if _, err := os.Stat(filepath.Join(TervaHome(), "logs", "ext-"+m.Name+".log")); err == nil {
 				info.HasLog = true
 			}
+			seen[m.Name] = true
 			out = append(out, info)
 		}
+	}
+
+	// Explicit --ext loads live outside the install roots, so the scan above
+	// never emits them. Surface any extension the manager is actually running
+	// that the roots didn't account for, so a `terva --ext .` dev extension
+	// shows up in /extensions alongside the installed ones.
+	if mgr != nil {
+		live := make([]sessionExt, 0)
+		for _, e := range mgr.All() {
+			live = append(live, sessionExt{
+				Name:        e.Manifest.Name,
+				Version:     e.Manifest.Version,
+				Language:    e.Manifest.Language,
+				Description: e.Manifest.Description,
+				LogPath:     e.LogPath,
+				Ready:       e.Ready(),
+			})
+		}
+		out = appendUnrootedExtensions(out, seen, live, cmdCount, toolCount)
+	}
+	return out
+}
+
+// sessionExt is the minimal view of a live extension that
+// appendUnrootedExtensions needs — decoupled from extdriver.Extension (whose
+// readiness lives behind unexported state) so the dedup logic is unit-testable.
+type sessionExt struct {
+	Name, Version, Language, Description, LogPath string
+	Ready                                         bool
+}
+
+// appendUnrootedExtensions adds a "session"-scoped row for each live extension
+// whose name the install-root scan didn't already emit (tracked in seen). These
+// are the explicit --ext loads: loaded by path for this run only, not installed,
+// so they carry no persistent enable/disable state to toggle.
+func appendUnrootedExtensions(out []modes.ExtInfo, seen map[string]bool, live []sessionExt, cmdCount, toolCount map[string]int) []modes.ExtInfo {
+	for _, e := range live {
+		if e.Name == "" || seen[e.Name] {
+			continue
+		}
+		seen[e.Name] = true
+		info := modes.ExtInfo{
+			Name:          e.Name,
+			Version:       e.Version,
+			Language:      e.Language,
+			Description:   e.Description,
+			Scope:         "session",
+			GlobalEnabled: true, // loaded explicitly for this run
+			Effective:     e.Ready,
+			Running:       e.Ready,
+			Commands:      cmdCount[e.Name],
+			Tools:         toolCount[e.Name],
+		}
+		if e.LogPath != "" {
+			if _, err := os.Stat(e.LogPath); err == nil {
+				info.HasLog = true
+			}
+		}
+		out = append(out, info)
 	}
 	return out
 }
