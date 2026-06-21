@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
@@ -457,6 +456,9 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 	// boundary into extension processes (see procenv).
 	cmd.Env = procenv.Inherited()
 	cmd.Stderr = logFile
+	// Isolate into its own process group (kitty-cwd fix). Paired with the
+	// group-targeted teardown below so background children are reaped.
+	isolateExtensionProcess(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -499,17 +501,17 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 	select {
 	case got = <-scanned:
 	case <-time.After(HelloTimeout):
-		_ = cmd.Process.Kill()
+		killExtensionGroup(cmd.Process)
 		<-scanned // ReadFrame returns once the killed process's stdout closes.
 		fmt.Fprintf(logFile, "[terva] extension %s failed to handshake within %s; killed and skipped\n", ext.Manifest.Name, HelloTimeout)
 		return fmt.Errorf("extension %s failed to send hello within %s", ext.Manifest.Name, HelloTimeout)
 	case <-ctx.Done():
-		_ = cmd.Process.Kill()
+		killExtensionGroup(cmd.Process)
 		<-scanned
 		return ctx.Err()
 	}
 	if got.tooLong {
-		_ = cmd.Process.Kill()
+		killExtensionGroup(cmd.Process)
 		return fmt.Errorf("extension %s hello frame exceeded %d bytes", ext.Manifest.Name, extproto.MaxFrameBytes)
 	}
 	if got.err != nil && len(got.line) == 0 {
@@ -531,7 +533,7 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 	if hello.MinProtocol > extproto.ProtocolVersion {
 		// scanned was already consumed by the success select above, so
 		// don't receive from it again; just kill the subprocess.
-		_ = cmd.Process.Kill()
+		killExtensionGroup(cmd.Process)
 		fmt.Fprintf(logFile, "[terva] extension %s requires protocol >= %d; host speaks %d; skipped\n",
 			ext.Manifest.Name, hello.MinProtocol, extproto.ProtocolVersion)
 		return fmt.Errorf("extension %s requires protocol version %d but this host speaks %d; upgrade terva",
@@ -576,7 +578,7 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 		// Tear down the writer goroutine we just started so it doesn't
 		// leak on this failed spawn.
 		ext.quitOnce.Do(func() { close(ext.quit) })
-		_ = cmd.Process.Kill()
+		killExtensionGroup(cmd.Process)
 		return fmt.Errorf("send hello_ack: %w", err)
 	}
 
@@ -1054,11 +1056,11 @@ func stopExtensions(exts []*Extension, gracePeriod time.Duration) {
 		select {
 		case <-done:
 		case <-time.After(remaining):
-			_ = ext.cmd.Process.Signal(syscall.SIGTERM)
+			terminateExtensionGroup(ext.cmd.Process)
 			select {
 			case <-done:
 			case <-time.After(time.Second):
-				_ = ext.cmd.Process.Kill()
+				killExtensionGroup(ext.cmd.Process)
 				<-done
 			}
 		}
