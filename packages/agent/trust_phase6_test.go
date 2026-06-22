@@ -178,12 +178,14 @@ func TestUntrustedProjectMCPNotStarted(t *testing.T) {
 	body := `{"mcp":{"servers":{"repo":{"command":` + jsonString(stub) + `}}}}`
 	writeProjectConfig(t, proj, body)
 
-	// Untrusted: trustedProjectMCP returns nil, merge yields nil → nothing.
+	// Untrusted: trustedProjectMCP returns nil, merge yields nothing. The
+	// adapter is now always non-nil (so /mcp can live-enable a server later),
+	// but an untrusted project's server must contribute NO tools.
 	r := &Resolved{Trusted: false, CWD: proj}
 	adapter, stop := setupMCP(context.Background(), Args{CWD: proj}, r)
 	defer stop()
-	if adapter != nil {
-		t.Fatalf("untrusted project MCP must NOT start; got adapter with tools %+v", adapter.Tools())
+	if adapter != nil && len(adapter.Tools()) != 0 {
+		t.Fatalf("untrusted project MCP must NOT start; got tools %+v", adapter.Tools())
 	}
 }
 

@@ -63,6 +63,38 @@ commands at session start. Same posture as hooks.
 - In `plan` approval mode MCP tools (unknown side effects) are not
   offered at all.
 
+## Enabling and disabling servers (`/mcp`)
+
+Run `/mcp` in the interactive TUI to see every configured server, its
+scope (`global` for a user-config server, `project` for a trusted
+project's), whether it's connected, its tool count, and any startup
+error. Two toggles, mirroring `/extensions`:
+
+- `g` — enable/disable **globally** (user config). Disabling adds the
+  server name to `disable_mcp` in `$TERVA_HOME/config.json`; enabling
+  removes it. There is no per-server manifest, so "enabled" simply means
+  the name is absent from `disable_mcp`. Only meaningful for a
+  user-defined server (a project-defined one has nothing to toggle here —
+  use `p`).
+- `p` — enable/disable **for this project** (`.terva/config.json`
+  `disable_mcp`). Restrict-only: it can stop a server from running in
+  this directory, but can never start one the user disabled. Honored even
+  in an untrusted workspace — refusing to spawn is always safe.
+- `l` — open a scrollable view of that server's log
+  (`$TERVA_HOME/logs/mcp-<name>.log`) without leaving the TUI. A server
+  that failed to start also shows a one-line reason inline.
+
+Toggles apply **live**: enabling spawns the server and its `mcp_*` tools
+appear on the next turn; disabling stops the subprocess and removes its
+tools — no restart. `disable_mcp` is also honored headlessly and under
+ACP (gating only; no dialog there).
+
+```json
+{
+  "disable_mcp": ["github"]
+}
+```
+
 ## Permissions example
 
 Auto-allow one read-only MCP tool, force prompts for the rest:

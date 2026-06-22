@@ -100,21 +100,128 @@ func StartAll(ctx context.Context, cfg *Config, stderrFor func(server string) io
 	// Index tools after all servers are up, in sorted-server order so
 	// collisions resolve deterministically (first registration wins,
 	// same convention as extensions).
+	m.mu.Lock()
 	for _, name := range names {
-		cl := m.clients[name]
-		if cl == nil {
-			continue
-		}
-		for _, t := range cl.Tools() {
-			ns := NamespaceTool(name, t.Name)
-			if _, taken := m.routes[ns]; taken {
-				m.warns = append(m.warns, fmt.Sprintf("mcp server %s: tool %s shadowed (name %s already registered)", name, t.Name, ns))
-				continue
-			}
-			m.routes[ns] = route{server: name, tool: t.Name}
+		if cl := m.clients[name]; cl != nil {
+			m.indexRoutesLocked(name, cl)
 		}
 	}
+	m.mu.Unlock()
 	return m
+}
+
+// indexRoutesLocked registers (or re-registers) the namespaced routes
+// for one already-started client. The caller holds m.mu. First
+// registration wins on collision with a *different* server — the same
+// convention StartAll's sorted pass uses — and a tool whose namespace is
+// already taken is recorded as shadowed. Re-indexing the same server is
+// harmless (its own routes overwrite themselves).
+func (m *Manager) indexRoutesLocked(name string, cl *Client) {
+	for _, t := range cl.Tools() {
+		ns := NamespaceTool(name, t.Name)
+		if r, taken := m.routes[ns]; taken && r.server != name {
+			m.warns = append(m.warns, fmt.Sprintf("mcp server %s: tool %s shadowed (name %s already registered)", name, t.Name, ns))
+			continue
+		}
+		m.routes[ns] = route{server: name, tool: t.Name}
+	}
+}
+
+// clearServerWarnsLocked drops any accumulated warnings for one server so
+// a repeated StartOne/StopOne cycle doesn't pile up stale messages. The
+// caller holds m.mu.
+func (m *Manager) clearServerWarnsLocked(name string) {
+	prefix := "mcp server " + name + ":"
+	kept := m.warns[:0]
+	for _, w := range m.warns {
+		if !strings.HasPrefix(w, prefix) {
+			kept = append(kept, w)
+		}
+	}
+	m.warns = kept
+}
+
+// StartOne spawns a single configured server mid-session and indexes its
+// tools. Idempotent: a server already running is left untouched. On
+// failure the error is recorded as a warning *and* returned, so the
+// caller (the /mcp dialog) can surface "failed to start" while the
+// session carries on. stderr supplies the per-server log sink (nil means
+// discard). Intended for single-threaded callers (the TUI loop).
+func (m *Manager) StartOne(ctx context.Context, name string, sc ServerConfig, stderr io.Writer) error {
+	if m == nil {
+		return fmt.Errorf("mcp manager is nil")
+	}
+	m.mu.Lock()
+	_, running := m.clients[name]
+	m.mu.Unlock()
+	if running {
+		return nil
+	}
+	cl, err := Start(ctx, name, sc, stderr)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clearServerWarnsLocked(name)
+	if err != nil {
+		m.warns = append(m.warns, fmt.Sprintf("mcp server %s: %v", name, err))
+		return err
+	}
+	m.clients[name] = cl
+	m.indexRoutesLocked(name, cl)
+	return nil
+}
+
+// StopOne stops a single running server and removes its routes. No-op if
+// the server isn't running. Client.Stop (which can block up to 2s) runs
+// off-lock, matching StopAll.
+func (m *Manager) StopOne(name string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	cl := m.clients[name]
+	delete(m.clients, name)
+	for ns, r := range m.routes {
+		if r.server == name {
+			delete(m.routes, ns)
+		}
+	}
+	m.clearServerWarnsLocked(name)
+	m.mu.Unlock()
+	if cl != nil {
+		cl.Stop()
+	}
+}
+
+// ServerStatus is one server's live state for the /mcp dialog.
+type ServerStatus struct {
+	Name      string
+	Connected bool   // a live client is held (spawned + handshook + listed)
+	ToolCount int    // routed (non-shadowed) tools currently exposed
+	Info      string // serverInfo name reported at initialize, if any
+}
+
+// Status reports the live state of every server the manager currently
+// holds a client for. Configured-but-disabled or failed-to-start servers
+// have no client and are absent here, so the dialog overlays this on the
+// authoritative config-driven row set rather than treating it as the row
+// set itself.
+func (m *Manager) Status() []ServerStatus {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ServerStatus, 0, len(m.clients))
+	for _, name := range sortedKeys(m.clients) {
+		count := 0
+		for _, r := range m.routes {
+			if r.server == name {
+				count++
+			}
+		}
+		out = append(out, ServerStatus{Name: name, Connected: true, ToolCount: count, Info: m.clients[name].serverInfo})
+	}
+	return out
 }
 
 // Warnings returns startup problems for the host to surface.
