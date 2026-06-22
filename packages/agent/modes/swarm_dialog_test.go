@@ -955,6 +955,10 @@ func TestSwarmDialogSpawnEditor_SlashModelOpensPicker(t *testing.T) {
 	}
 
 	// Inject a fake selection into the embedded modelDialog and confirm.
+	// Force the model stage + single (the test builds the picker's internal
+	// state directly instead of going through provider selection).
+	d.modelPicker.stage = stageModel
+	d.modelPicker.single = true
 	d.modelPicker.p.all = []provider.Model{{Provider: "acme", ID: "fake-1"}}
 	d.modelPicker.p.view = d.modelPicker.p.all
 	d.modelPicker.p.cursor = 0

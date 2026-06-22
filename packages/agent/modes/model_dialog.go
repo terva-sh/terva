@@ -2,66 +2,197 @@ package modes
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
 
-// modelDialog is an inline picker for choosing the active model.
-// It lists all models known to the provider package (baked-in catalog
-// + any live entries discovered via /v1/models) sorted by provider
-// then model id, and lets the user pick one with arrow keys + enter.
-// Typing characters narrows the list via a fuzzy substring match that
-// ignores punctuation (e.g. "opus46" matches "claude-opus-4-6").
-// Filtering, scrolling, and row rendering live in the shared
-// modelPicker core.
-type modelDialog struct {
-	active bool
-	p      modelPicker
+// modelDialog is a two-level picker for choosing the active model. Stage 1 is a
+// short provider list (the user's logged-in providers, plus a synthetic ★
+// favorites view that spans providers); stage 2 is the scoped model list, which
+// rides the shared modelPicker core (fuzzy filter, :img/:reasoning capability
+// tokens, scroll). Splitting by provider keeps a huge catalogue — an OpenRouter
+// or LiteLLM endpoint with hundreds of models — navigable, and favorites pin the
+// handful you actually use to the top.
+//
+// stageModel is the iota zero value on purpose: a dialog built without Open()
+// (tests that drive the picker core directly) defaults to the model stage.
+const (
+	stageModel = iota
+	stageProvider
+)
 
-	// promoting is the transient "set as default" sub-prompt entered with
-	// Ctrl+D: the next key picks the scope ([p]roject / [g]lobal) or cancels
-	// (esc). The model to promote is captured when the prompt opens.
+// providerRow is one entry in the stage-1 provider list.
+type providerRow struct {
+	name  string // provider name; "" for the synthetic favorites entry
+	label string // display text
+	count int    // models in scope
+	fav   bool   // the cross-provider ★ favorites entry
+}
+
+type modelDialog struct {
+	active  bool
+	stage   int
+	current string // active model id, threaded into the scoped picker
+
+	p modelPicker // stage-2 model list
+
+	// stage-1 provider list state.
+	providers  []providerRow
+	provCursor int
+	provQuery  string
+
+	provSet    map[string]bool  // logged-in providers, for re-reading Active()
+	allModels  []provider.Model // full logged-in catalogue, scoped per provider
+	favorites  map[string]bool  // "provider/id" -> favorited
+	scope      providerRow      // the current stage-2 scope (for re-scoping)
+	scopeLabel string           // stage-2 breadcrumb ("openrouter" / "★ favorites")
+	single     bool             // opened straight into one provider -> esc closes
+	catalogRev uint64           // provider.CatalogRevision() at last read
+
+	// promote sub-prompt (Ctrl+D "set as default").
 	promoting       bool
 	promoteProvider string
 	promoteModel    string
 }
 
-// modelDialogAction is returned by HandleKey.
+// modelDialogAction is returned by HandleKey for the overlay host to apply.
 type modelDialogAction struct {
 	Select   bool
 	Edit     bool   // open the config editor for Provider/Model
 	Promote  bool   // also persist the pick as a default (Scope set)
 	Scope    string // "project" | "global" when Promote
+	Favorite bool   // toggle the favorite flag for Provider/Model
+	FavOn    bool   // the new favorite state when Favorite
 	Provider string
 	Model    string
 	Close    bool
 }
 
-func newModelDialog() *modelDialog {
-	return &modelDialog{}
+func newModelDialog() *modelDialog { return &modelDialog{} }
+
+// Open shows the dialog. current is the active model id (for the ● marker);
+// loggedInProviders gates which providers/models are reachable; favorites are
+// the "provider/id" keys to pin and star.
+func (d *modelDialog) Open(current string, loggedInProviders, favorites []string) {
+	d.active = true
+	d.promoting = false
+	d.provQuery = ""
+	d.provCursor = 0
+	d.current = current
+	d.catalogRev = provider.CatalogRevision()
+
+	d.favorites = make(map[string]bool, len(favorites))
+	for _, k := range favorites {
+		d.favorites[k] = true
+	}
+	d.p.favorites = d.favorites // shared map: toggles in the picker reflect here
+
+	d.provSet = map[string]bool{}
+	for _, p := range loggedInProviders {
+		d.provSet[p] = true
+	}
+	d.reloadModels()
+	d.rebuildProviderList()
+
+	// Single provider and nothing favorited: skip the provider step entirely.
+	if len(d.providers) == 1 && !d.providers[0].fav {
+		d.single = true
+		d.enterProvider(d.providers[0])
+		return
+	}
+	d.single = false
+	d.stage = stageProvider
 }
 
-// Open shows the dialog. current is the currently active model id so
-// it can be pre-selected.
-func (d *modelDialog) Open(current string, loggedInProviders []string) {
-	d.active = true
-	// Only surface models the user can actually reach: a provider is
-	// shown only when it has a resolvable credential (api key, oauth
-	// subscription, or the always-available ollama). An empty
-	// loggedInProviders list therefore yields an empty picker rather
-	// than dumping the entire ~900-model catalog.
-	provSet := map[string]bool{}
-	for _, p := range loggedInProviders {
-		provSet[p] = true
-	}
-	var filtered []provider.Model
+// reloadModels re-reads the live catalog (Active() can grow as background
+// /v1/models discovery completes) filtered to the logged-in providers.
+func (d *modelDialog) reloadModels() {
+	d.allModels = nil
 	for _, m := range provider.Active() {
-		if provSet[m.Provider] {
-			filtered = append(filtered, m)
+		if d.provSet[m.Provider] {
+			d.allModels = append(d.allModels, m)
 		}
 	}
-	d.p.setCatalog(filtered, current, 14)
+}
+
+// rebuildProviderList recomputes the stage-1 list (counts + the synthetic ★
+// favorites entry) from allModels and the current favorites. Called on Open,
+// after a favorite toggle, and on a catalog refresh.
+func (d *modelDialog) rebuildProviderList() {
+	counts := map[string]int{}
+	favCount := 0
+	for _, m := range d.allModels {
+		counts[m.Provider]++
+		if d.favorites[modelKey(m)] {
+			favCount++
+		}
+	}
+	d.providers = nil
+	if favCount > 0 {
+		d.providers = append(d.providers, providerRow{label: "★ favorites", count: favCount, fav: true})
+	}
+	names := make([]string, 0, len(counts))
+	for n := range counts {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		d.providers = append(d.providers, providerRow{name: n, label: n, count: counts[n]})
+	}
+}
+
+// scopeModelsFor returns the models in a provider row's scope (a real
+// provider's models, or every favorited model for the ★ favorites row).
+func (d *modelDialog) scopeModelsFor(row providerRow) []provider.Model {
+	var models []provider.Model
+	for _, m := range d.allModels {
+		if (row.fav && d.favorites[modelKey(m)]) || (!row.fav && m.Provider == row.name) {
+			models = append(models, m)
+		}
+	}
+	return models
+}
+
+// enterProvider scopes the model list to row and switches to stage 2.
+func (d *modelDialog) enterProvider(row providerRow) {
+	d.scope = row
+	d.scopeLabel = row.label
+	d.p.favorites = d.favorites
+	d.p.setCatalog(d.scopeModelsFor(row), d.current, 14)
+	d.stage = stageModel
+}
+
+// reloadCatalog re-reads a grown catalog and rebuilds the provider list; in the
+// model stage it re-scopes while preserving the live filter and the
+// highlighted model, so late-arriving discovery doesn't yank the user around.
+func (d *modelDialog) reloadCatalog() {
+	d.reloadModels()
+	d.rebuildProviderList()
+	if d.provCursor >= len(d.providers) && len(d.providers) > 0 {
+		d.provCursor = len(d.providers) - 1
+	}
+	if d.stage == stageModel {
+		// reload preserves the live filter and the highlighted model.
+		d.p.reload(d.scopeModelsFor(d.scope))
+	}
+}
+
+// filteredProviders applies the stage-1 type-to-filter to the provider list.
+func (d *modelDialog) filteredProviders() []providerRow {
+	if d.provQuery == "" {
+		return d.providers
+	}
+	q := strings.ToLower(d.provQuery)
+	var out []providerRow
+	for _, r := range d.providers {
+		if strings.Contains(strings.ToLower(r.label), q) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // Close hides the dialog.
@@ -70,68 +201,81 @@ func (d *modelDialog) Close() { d.active = false; d.promoting = false }
 // Active reports whether the dialog is visible and consumes input.
 func (d *modelDialog) Active() bool { return d != nil && d.active }
 
-// Render returns the dialog lines.
-func (d *modelDialog) Render(th tui.Theme, width int) []string {
-	if !d.Active() {
-		return nil
-	}
-	var lines []string
-	lines = append(lines, frameHeader(th, "model", width))
-
-	// Promote sub-prompt takes over the body: pick a scope or cancel.
-	if d.promoting {
-		lines = append(lines, th.FG256(th.Accent, fmt.Sprintf("  set %q as default:", d.promoteModel)))
-		lines = append(lines, th.FG256(th.Muted, "    [p] project (this repo, when trusted)   [g] global (everywhere)   esc cancel"))
-		lines = append(lines, frameRule(th, width))
-		return lines
-	}
-
-	hint := d.p.hintLine("pick a model (↑/↓, enter, ctrl+e edit, ctrl+d set-default, esc) - type to filter, :img/:reasoning by capability")
-	lines = append(lines, th.FG256(th.Muted, hint))
-
-	if len(d.p.view) == 0 {
-		msg := "  no models match " + fmt.Sprintf("%q", d.p.query)
-		if len(d.p.all) == 0 {
-			msg = "  no credentials found - run /login to add an api key or subscription"
-		}
-		lines = append(lines, th.FG256(th.Muted, msg))
-		lines = append(lines, frameRule(th, width))
-		return lines
-	}
-
-	lines = append(lines, d.p.renderRows(th, width)...)
-	lines = append(lines, frameRule(th, width))
-	return lines
-}
-
 // HandleKey advances the dialog and returns an action to apply, if any.
 func (d *modelDialog) HandleKey(k tui.Key) modelDialogAction {
-	// Promote sub-prompt ("set as default"): the next key picks the scope or
-	// cancels. handleNavKey is bypassed so p/g aren't swallowed as filter
-	// input. Promote also switches to the model (Select), then persists it.
 	if d.promoting {
-		switch {
-		case k.Kind == tui.KeyEsc:
-			d.promoting = false
-			return modelDialogAction{}
-		case k.Kind == tui.KeyRune && (k.Rune == 'p' || k.Rune == 'P'):
-			prov, model := d.promoteProvider, d.promoteModel
-			d.Close()
-			return modelDialogAction{Select: true, Promote: true, Scope: "project", Provider: prov, Model: model}
-		case k.Kind == tui.KeyRune && (k.Rune == 'g' || k.Rune == 'G'):
-			prov, model := d.promoteProvider, d.promoteModel
-			d.Close()
-			return modelDialogAction{Select: true, Promote: true, Scope: "global", Provider: prov, Model: model}
-		}
-		return modelDialogAction{} // ignore other keys while the prompt is up
+		return d.handlePromoteKey(k)
 	}
+	if d.stage == stageProvider {
+		return d.handleProviderKey(k)
+	}
+	return d.handleModelKey(k)
+}
+
+// handlePromoteKey runs the Ctrl+D "set as default" scope sub-prompt: the next
+// key picks the scope or cancels. handleNavKey is bypassed so p/g aren't
+// swallowed as filter input. Promote also switches to the model, then persists.
+func (d *modelDialog) handlePromoteKey(k tui.Key) modelDialogAction {
+	switch {
+	case k.Kind == tui.KeyEsc:
+		d.promoting = false
+		return modelDialogAction{}
+	case k.Kind == tui.KeyRune && (k.Rune == 'p' || k.Rune == 'P'):
+		prov, model := d.promoteProvider, d.promoteModel
+		d.Close()
+		return modelDialogAction{Select: true, Promote: true, Scope: "project", Provider: prov, Model: model}
+	case k.Kind == tui.KeyRune && (k.Rune == 'g' || k.Rune == 'G'):
+		prov, model := d.promoteProvider, d.promoteModel
+		d.Close()
+		return modelDialogAction{Select: true, Promote: true, Scope: "global", Provider: prov, Model: model}
+	}
+	return modelDialogAction{} // ignore other keys while the prompt is up
+}
+
+func (d *modelDialog) handleProviderKey(k tui.Key) modelDialogAction {
+	rows := d.filteredProviders()
+	switch k.Kind {
+	case tui.KeyEsc:
+		d.Close()
+		return modelDialogAction{Close: true}
+	case tui.KeyUp:
+		if d.provCursor > 0 {
+			d.provCursor--
+		}
+	case tui.KeyDown:
+		if d.provCursor < len(rows)-1 {
+			d.provCursor++
+		}
+	case tui.KeyEnter:
+		if d.provCursor >= 0 && d.provCursor < len(rows) {
+			d.enterProvider(rows[d.provCursor])
+		}
+	case tui.KeyBackspace:
+		if r := []rune(d.provQuery); len(r) > 0 {
+			d.provQuery = string(r[:len(r)-1])
+			d.provCursor = 0
+		}
+	case tui.KeyRune:
+		if !k.Alt && !k.Ctrl && k.Rune >= 0x20 && k.Rune < 0x7f {
+			d.provQuery += string(k.Rune)
+			d.provCursor = 0
+		}
+	}
+	return modelDialogAction{}
+}
+
+func (d *modelDialog) handleModelKey(k tui.Key) modelDialogAction {
 	if d.p.handleNavKey(k) {
 		return modelDialogAction{}
 	}
 	switch k.Kind {
 	case tui.KeyEsc:
-		d.Close()
-		return modelDialogAction{Close: true}
+		if d.single {
+			d.Close()
+			return modelDialogAction{Close: true}
+		}
+		d.stage = stageProvider // back to the provider list
+		return modelDialogAction{}
 	case tui.KeyEnter:
 		m, ok := d.p.selected()
 		d.Close()
@@ -139,9 +283,17 @@ func (d *modelDialog) HandleKey(k tui.Key) modelDialogAction {
 			return modelDialogAction{Close: true}
 		}
 		return modelDialogAction{Select: true, Provider: m.Provider, Model: m.ID}
+	case tui.KeyCtrlF:
+		// Toggle favorite for the highlighted model (Ctrl+F, not a bare "f"
+		// which the type-to-filter would swallow). The picker re-sorts and
+		// keeps the cursor on the model; the host persists the change.
+		m, on, ok := d.p.toggleFavorite()
+		if !ok {
+			return modelDialogAction{}
+		}
+		d.rebuildProviderList() // reflect the new ★ favorites entry/count when we back out
+		return modelDialogAction{Favorite: true, FavOn: on, Provider: m.Provider, Model: m.ID}
 	case tui.KeyCtrlD:
-		// Ctrl+D (not a bare "d", which the filter would swallow) opens the
-		// "set as default" scope prompt for the highlighted model.
 		m, ok := d.p.selected()
 		if !ok {
 			return modelDialogAction{}
@@ -151,9 +303,6 @@ func (d *modelDialog) HandleKey(k tui.Key) modelDialogAction {
 		d.promoteModel = m.ID
 		return modelDialogAction{}
 	case tui.KeyCtrlE:
-		// Edit the selected model's config. Ctrl+E (not a bare "e",
-		// which the type-to-filter input would swallow) opens the
-		// editor; the picker closes so the edit overlay takes over.
 		m, ok := d.p.selected()
 		if !ok {
 			return modelDialogAction{}
@@ -162,4 +311,85 @@ func (d *modelDialog) HandleKey(k tui.Key) modelDialogAction {
 		return modelDialogAction{Edit: true, Provider: m.Provider, Model: m.ID}
 	}
 	return modelDialogAction{}
+}
+
+// Render returns the dialog lines for the active stage.
+func (d *modelDialog) Render(th tui.Theme, width int) []string {
+	if !d.Active() {
+		return nil
+	}
+	// Pick up models that arrived via background /v1/models discovery after
+	// the picker opened (e.g. logging into OpenRouter, then opening /model
+	// before its ~340 models finished loading).
+	if r := provider.CatalogRevision(); r != d.catalogRev {
+		d.catalogRev = r
+		d.reloadCatalog()
+	}
+	if d.promoting {
+		lines := []string{frameHeader(th, "model", width)}
+		lines = append(lines, th.FG256(th.Accent, fmt.Sprintf("  set %q as default:", d.promoteModel)))
+		lines = append(lines, th.FG256(th.Muted, "    [p] project (this repo, when trusted)   [g] global (everywhere)   esc cancel"))
+		return append(lines, frameRule(th, width))
+	}
+	if d.stage == stageProvider {
+		return d.renderProviders(th, width)
+	}
+	return d.renderModels(th, width)
+}
+
+func (d *modelDialog) renderProviders(th tui.Theme, width int) []string {
+	lines := []string{frameHeader(th, "model · provider", width)}
+	hint := "pick a provider (↑/↓, enter, esc) - type to filter"
+	if d.provQuery != "" {
+		hint = fmt.Sprintf("filter: %s", d.provQuery)
+	}
+	lines = append(lines, th.FG256(th.Muted, hint))
+
+	rows := d.filteredProviders()
+	if len(rows) == 0 {
+		msg := "  no providers match " + fmt.Sprintf("%q", d.provQuery)
+		if len(d.providers) == 0 {
+			msg = "  no credentials found - run /login to add an api key or subscription"
+		}
+		lines = append(lines, th.FG256(th.Muted, msg))
+		return append(lines, frameRule(th, width))
+	}
+	if d.provCursor >= len(rows) {
+		d.provCursor = len(rows) - 1
+	}
+	for i, r := range rows {
+		plain := fmt.Sprintf("  %-22s %4d", r.label, r.count)
+		if i == d.provCursor {
+			lines = append(lines, th.PadHighlight(plain, width))
+		} else {
+			lines = append(lines, th.FG256(th.Muted, plain))
+		}
+	}
+	return append(lines, frameRule(th, width))
+}
+
+func (d *modelDialog) renderModels(th tui.Theme, width int) []string {
+	header := "model"
+	if d.scopeLabel != "" {
+		header = "model · " + d.scopeLabel
+	}
+	lines := []string{frameHeader(th, header, width)}
+
+	back := "esc"
+	if !d.single {
+		back = "esc back"
+	}
+	base := "↑/↓, enter, ctrl+f favorite, ctrl+e edit, ctrl+d set-default, " + back + " - type to filter, :img/:reasoning"
+	lines = append(lines, th.FG256(th.Muted, d.p.hintLine(base)))
+
+	if len(d.p.view) == 0 {
+		msg := "  no models match " + fmt.Sprintf("%q", d.p.query)
+		if len(d.p.all) == 0 {
+			msg = "  (no models in this scope)"
+		}
+		lines = append(lines, th.FG256(th.Muted, msg))
+		return append(lines, frameRule(th, width))
+	}
+	lines = append(lines, d.p.renderRows(th, width)...)
+	return append(lines, frameRule(th, width))
 }

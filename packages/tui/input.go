@@ -41,6 +41,7 @@ const (
 	KeyCtrlK
 	KeyCtrlA
 	KeyCtrlE
+	KeyCtrlF
 	KeyCtrlW
 	KeyCtrlO
 	KeyPaste
@@ -86,6 +87,8 @@ func (r *Reader) Read() (Key, error) {
 		return Key{Kind: KeyCtrlA}, nil
 	case b == 0x05:
 		return Key{Kind: KeyCtrlE}, nil
+	case b == 0x06:
+		return Key{Kind: KeyCtrlF}, nil
 	case b == 0x17:
 		return Key{Kind: KeyCtrlW}, nil
 	case b == 0x0f:
@@ -381,6 +384,8 @@ func keyFromModifiedCode(code, mod int) (Key, bool) {
 			return Key{Kind: KeyCtrlA, Shift: shift, Alt: alt, Ctrl: true}, true
 		case 'e', 'E':
 			return Key{Kind: KeyCtrlE, Shift: shift, Alt: alt, Ctrl: true}, true
+		case 'f', 'F':
+			return Key{Kind: KeyCtrlF, Shift: shift, Alt: alt, Ctrl: true}, true
 		case 'w', 'W':
 			return Key{Kind: KeyCtrlW, Shift: shift, Alt: alt, Ctrl: true}, true
 		case 'o', 'O':

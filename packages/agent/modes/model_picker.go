@@ -18,12 +18,17 @@ import (
 )
 
 type modelPicker struct {
-	all     []provider.Model // full catalog, sorted
+	all     []provider.Model // full catalog, sorted (favorites first)
 	view    []provider.Model // filtered view shown to the user
 	cursor  int
 	current string // currently active model id ("" = no you-are-here marker)
 	query   string // live filter text typed by the user
 	maxRows int    // scroll window height
+
+	// favorites are "provider/id" keys pinned to the top of the list and
+	// flagged with a ★. Set before setCatalog (nil = no favorites, e.g. the
+	// rescue picker), so setCatalog's signature stays unchanged.
+	favorites map[string]bool
 
 	// Column widths are computed once in setCatalog across the entire
 	// catalog so the layout stays stable while the user scrolls or
@@ -37,7 +42,7 @@ type modelPicker struct {
 // the current model id for the ● marker and cursor snap, and resets
 // the filter.
 func (p *modelPicker) setCatalog(models []provider.Model, current string, maxRows int) {
-	p.all = sortedModels(models)
+	p.all = sortModelsFavFirst(models, p.favorites)
 	p.current = current
 	p.query = ""
 	p.maxRows = maxRows
@@ -93,6 +98,39 @@ func (p *modelPicker) refilter() {
 			break
 		}
 	}
+}
+
+// cursorToKey moves the cursor to the first view row whose modelKey matches
+// key; a no-op when key is empty or not in the current view. The shared way to
+// keep a selection on the same model across a re-sort or catalog refresh
+// (setCatalog/refilter otherwise snap to the active model or row 0).
+func (p *modelPicker) cursorToKey(key string) {
+	if key == "" {
+		return
+	}
+	for i, m := range p.view {
+		if modelKey(m) == key {
+			p.cursor = i
+			return
+		}
+	}
+}
+
+// reload re-installs the catalog (re-sorting for the current favorites) while
+// preserving the live filter and the highlighted model — for a favorite-toggle
+// re-sort or a background-discovery refresh. Plain setCatalog drops both.
+func (p *modelPicker) reload(models []provider.Model) {
+	q := p.query
+	sel := ""
+	if m, ok := p.selected(); ok {
+		sel = modelKey(m)
+	}
+	p.setCatalog(models, p.current, p.maxRows)
+	if q != "" {
+		p.query = q
+		p.refilter()
+	}
+	p.cursorToKey(sel)
 }
 
 // handleNavKey consumes cursor movement and filter editing, and
@@ -199,8 +237,12 @@ func (p *modelPicker) renderRows(th tui.Theme, width int) []string {
 		if p.current != "" && m.ID == p.current {
 			curMark = "● "
 		}
-		plain := fmt.Sprintf(" %s%s   %s %s%s  %s%s",
-			curMark,
+		favMark := "  "
+		if p.favorites[modelKey(m)] {
+			favMark = "★ "
+		}
+		plain := fmt.Sprintf(" %s%s%s   %s %s%s  %s%s",
+			curMark, favMark,
 			padRight(m.Provider, p.provW),
 			padRight(m.ID, p.idW),
 			reason, vision, tag, m.DisplayName)
@@ -248,6 +290,52 @@ func sortedModels(in []provider.Model) []provider.Model {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// modelKey is the "provider/id" identity used for favorites (ids can collide
+// across providers, so the provider must be part of the key).
+func modelKey(m provider.Model) string { return m.Provider + "/" + m.ID }
+
+// sortModelsFavFirst sorts like sortedModels but floats favorited models to
+// the top (in their natural order among themselves). A nil/empty fav map gives
+// exactly sortedModels' order, so non-favorite callers are unaffected.
+func sortModelsFavFirst(in []provider.Model, fav map[string]bool) []provider.Model {
+	out := append([]provider.Model(nil), in...)
+	sort.SliceStable(out, func(i, j int) bool {
+		fi, fj := fav[modelKey(out[i])], fav[modelKey(out[j])]
+		if fi != fj {
+			return fi // favorites first
+		}
+		if out[i].Provider != out[j].Provider {
+			return out[i].Provider < out[j].Provider
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+// toggleFavorite flips the selected model's favorite flag in the local set,
+// re-sorts so it floats to/from the top, and keeps the cursor on it. Returns
+// the model, its new state, and whether anything was toggled (false when the
+// list is empty). The caller persists the change.
+func (p *modelPicker) toggleFavorite() (provider.Model, bool, bool) {
+	m, ok := p.selected()
+	if !ok {
+		return provider.Model{}, false, false
+	}
+	if p.favorites == nil {
+		p.favorites = map[string]bool{}
+	}
+	key := modelKey(m)
+	on := !p.favorites[key]
+	if on {
+		p.favorites[key] = true
+	} else {
+		delete(p.favorites, key)
+	}
+	// reload re-sorts for the changed favorites and keeps the cursor on m.
+	p.reload(p.all)
+	return m, on, true
 }
 
 // normalizeModelQuery lowercases and strips punctuation so fuzzy

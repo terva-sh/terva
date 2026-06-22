@@ -79,7 +79,11 @@ func init() {
 				if i.cfg.LoggedInProviders != nil {
 					loggedIn = i.cfg.LoggedInProviders()
 				}
-				i.modelDialog.Open(i.cfg.Model, loggedIn)
+				var favs []string
+				if i.cfg.FavoriteModels != nil {
+					favs = i.cfg.FavoriteModels()
+				}
+				i.modelDialog.Open(i.cfg.Model, loggedIn, favs)
 				return false
 			}},
 		{name: "/new", desc: "start a fresh session (the current one stays on disk)", cancelsTurn: true,

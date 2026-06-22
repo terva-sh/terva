@@ -165,6 +165,9 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				if act.Edit {
 					i.openModelEdit(act.Provider, act.Model)
 				}
+				if act.Favorite {
+					i.persistFavoriteModel(act.Provider, act.Model, act.FavOn)
+				}
 				return false
 			},
 			render: func(cols int) []string { return i.modelDialog.Render(i.cfg.Theme, cols) },

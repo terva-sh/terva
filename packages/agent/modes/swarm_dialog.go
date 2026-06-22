@@ -643,7 +643,9 @@ func (d *swarmDialog) openModelPicker() {
 	d.fileSuggest = nil
 	d.pickingModel = true
 	d.modelPicker = newModelDialog()
-	d.modelPicker.Open(d.pendingModel, d.modelPickerLoggedIn)
+	// Favorites aren't threaded into the swarm sub-picker; two-level
+	// provider navigation still applies.
+	d.modelPicker.Open(d.pendingModel, d.modelPickerLoggedIn, nil)
 }
 
 // handleModelPickerKey forwards one keystroke to the embedded model
