@@ -45,6 +45,12 @@ type SwarmSpawnTool struct {
 	// inherits the host model), so older construction sites still work.
 	HostProvider string
 	HostModel    string
+
+	// Tiers is the user's per-provider tier→model override (Config.SwarmTiers).
+	// It composes over the built-in family table, so a provider terva can't
+	// guess (a gateway) still resolves a tier when the user configures it. Nil
+	// is fine — resolution falls back to the built-in table then the host model.
+	Tiers SwarmTierMap
 }
 
 type swarmSpawnArgs struct {
@@ -107,7 +113,7 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	model := strings.TrimSpace(a.Model)
 	tier := strings.ToLower(strings.TrimSpace(a.Tier))
 	if model == "" && tier != "" {
-		model = ResolveSwarmTier(t.HostProvider, t.HostModel, tier)
+		model = ResolveSwarmTier(t.HostProvider, t.HostModel, tier, t.Tiers)
 	}
 
 	agent, err := t.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
