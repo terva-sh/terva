@@ -207,7 +207,15 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		text := strings.TrimRight(i.ed.SubmitValue(), "\n")
 		// Expand [file:name] and [dir:name/] chips to full paths.
 		text = expandFileChips(text, i.cfg.CWD)
-		if text == "" {
+		// Reconcile any clipboard images pasted this turn: markers still in
+		// the text attach their image, deleted markers drop theirs. Only
+		// rewrites the text when something was actually pasted.
+		var clipImages []provider.ImageBlock
+		if len(i.clipboardImages) > 0 {
+			text, clipImages = preparePromptWithClipboardImages(text, i.clipboardImages)
+			i.clipboardImages = nil
+		}
+		if text == "" && len(clipImages) == 0 {
 			return false
 		}
 		i.ed.Clear()
@@ -269,7 +277,11 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		// startTurn claims-or-queues atomically inside the turn
 		// engine: if a turn is already in flight the prompt queues
 		// for the agent loop's next safe model-call boundary.
-		i.startTurn(ctx, text)
+		if len(clipImages) > 0 {
+			i.startTurnWithImages(ctx, text, clipImages)
+		} else {
+			i.startTurn(ctx, text)
+		}
 	}
 	return false
 }

@@ -22,6 +22,7 @@ var helpKeyRows = [][2]string{
 	{"alt+← / alt+→", "jump one word back / forward"},
 	{"ctrl+l", "redraw the screen"},
 	{"ctrl+o", "expand / collapse long tool results"},
+	{"ctrl+v", "paste a clipboard image into the prompt (also /paste)"},
 	{"pgup / pgdn", "scroll the chat one page up / down"},
 	{"up / down", "move within multi-line input - scroll chat at input edge"},
 }

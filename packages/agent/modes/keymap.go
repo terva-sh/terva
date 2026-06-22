@@ -84,6 +84,7 @@ func (i *Interactive) buildGlobalKeymap() []globalBinding {
 		{kind: tui.KeyCtrlD, name: "quit-when-idle", run: i.keyCtrlD},
 		{kind: tui.KeyCtrlL, name: "repaint", run: i.keyRepaint},
 		{kind: tui.KeyCtrlO, name: "toggle-tool-expand", run: i.keyToggleExpand},
+		{kind: tui.KeyCtrlV, name: "paste-clipboard-image", run: i.keyPasteClipboard},
 		{kind: tui.KeyPageUp, name: "scroll-page-up", run: func(context.Context, tui.Key) keyOutcome {
 			// The slash popup pages its own catalog; only it gets the
 			// key (the @-file popup has no pagination, so chat
@@ -209,6 +210,14 @@ func (i *Interactive) keyCtrlD(context.Context, tui.Key) keyOutcome {
 		return keyQuit
 	}
 	return keyPass
+}
+
+// keyPasteClipboard (ctrl+v) pastes an image from the system clipboard into
+// the prompt as a "[clipboard image #N]" marker. Text paste is unaffected:
+// it arrives as a bracketed-paste event, not this key. See pasteClipboard.
+func (i *Interactive) keyPasteClipboard(context.Context, tui.Key) keyOutcome {
+	i.pasteClipboard()
+	return keyHandled
 }
 
 func (i *Interactive) keyRepaint(context.Context, tui.Key) keyOutcome {
