@@ -244,6 +244,17 @@ ids/URLs, then run `terva --list-models` to confirm the entries load (they show
 you pass `--force`. A per-launch `--base-url` override also works for a one-off
 without touching the stored login.
 
+**Prefer named endpoints when a server should list its own models.** The
+`models.json` pattern above only shows the entries you hand-list; a *named
+endpoint* (defined in `config.json` under `endpoints`) becomes its own provider
+that runs `/v1/models` discovery, so you don't pre-register each model. The two
+coexist, so there's no forced migration. To convert an existing multi-`baseUrl`
+`models.json`, run `terva models endpoints` — it prints a ready-to-paste
+`endpoints` block (or `--apply` writes it to `config.json`) and flags the
+now-redundant `models.json` entries for you to trim. See
+[models.md](models.md#openai-compatible-endpoints-lm-studio-vllm-llamacpp-gateways)
+for the named-endpoints reference and the full lift-and-trim path.
+
 ## Context window and max response tokens
 
 Two fields control sizing for a model, and both matter most for local/custom
@@ -334,6 +345,18 @@ own. Keys it understands today: `image-input` (vision — defaults to
 false; reserved, no consumer yet), and `reasoning` (an alias for the
 top-level `reasoning` field). Unknown keys load with a warning so a
 file written for a newer terva still works here.
+
+The **true** default applies to the built-in catalog (its models are
+known vision-capable). Models found by **discovery** are different: a
+standard `/v1/models` list carries no modality data, so terva infers
+`image-input` from the model id — known vision families (Claude 3+,
+GPT‑4o/5, Gemini, and local names like `llava`/`*-vl`/`pixtral`) keep
+vision; anything unrecognized is treated as **text-only**. That's
+deliberately conservative: handing an image to a text-only model is a
+hard `400` ("does not support image inputs", common on gateways like
+opencode‑go), while a vision model given text-only input just proceeds.
+If discovery guesses wrong for a model you know takes images, assert it
+explicitly (below) — your `models.json` entry wins.
 
 The one most people need: a local model served **without a vision
 projector**. Mark it text-only and terva drops image attachments at the

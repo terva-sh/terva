@@ -413,6 +413,16 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	if provName == "ollama" {
 		cred = firstNonEmpty(args.APIKey, "ollama")
 		method = "apikey"
+	} else if ep, ok := cfg.Endpoints[provName]; ok {
+		// A user-defined named OpenAI-compatible endpoint: like
+		// openai-compatible, but its base URL + default context come from the
+		// config entry, and its key (if any) resolves from APIKeyEnv/auth.json.
+		// Keyless local servers fall back to the harmless sentinel bearer.
+		compatCtx = ep.ContextWindow
+		compatBaseURL = ep.BaseURL
+		storedKey, _, _, _ := ResolveCredentialFull(provName, args.APIKey)
+		cred = firstNonEmpty(storedKey, "openai-compatible")
+		method = "apikey"
 	} else if provName == "openai-compatible" {
 		// A user-configured OpenAI-compatible endpoint (local model
 		// server, gateway, ...). The base URL and model id were captured
@@ -464,7 +474,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// ollama and openai-compatible are open-catalogue: the model id is
 	// whatever the local/custom server understands and has no baked-in
 	// catalog entry or default.
-	openCatalogue := provName == "ollama" || provName == "openai-compatible"
+	openCatalogue := provName == "ollama" || provName == "openai-compatible" || isEndpointProvider(provName, cfg)
 	// --model flag > project (trusted) > user config (eff.Config is the
 	// project-over-user read view; cfg stays the user layer for repairs).
 	model := firstNonEmpty(args.Model, eff.Config.Model)
@@ -614,6 +624,10 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// stderr can carry tokens and chat content), so expose ONLY the
 	// extension logs the agent needs for debugging, by name — not the dir.
 	sandbox.AddReadOnlyGlob(filepath.Join(home, "logs"), "ext-*.log")
+	// The bash tool spills over-long output to $TMPDIR/terva-bash-*.log and
+	// points the model at it; allow reading those (the agent's own output)
+	// so a jailed agent can page the spill via `read` without /unjail.
+	sandbox.AddReadOnlyGlob(os.TempDir(), "terva-bash-*.log")
 
 	// Skill discovery: scan project + global locations + built-in
 	// skills shipped with the binary. If any are found, register
@@ -988,7 +1002,7 @@ func buildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 		"read":              &tools.ReadTool{CWD: cwd, Sandbox: sandbox, SupportsVision: visionCapable},
 		"write":             &tools.WriteTool{CWD: cwd, Sandbox: sandbox},
 		"edit":              &tools.EditTool{CWD: cwd, Sandbox: sandbox},
-		"bash":              &tools.BashTool{CWD: cwd, Sandbox: sandbox},
+		"bash":              &tools.BashTool{CWD: cwd, Sandbox: sandbox, Env: map[string]string{"TERVA_HOME": TervaHome()}},
 		"grep":              &tools.GrepTool{CWD: cwd, Sandbox: sandbox},
 		"glob":              &tools.GlobTool{CWD: cwd, Sandbox: sandbox},
 		"terva_status":      &tools.StatusTool{Provider: provName, CWD: cwd, AuthMethod: authMethod, BaseURL: args.BaseURL},

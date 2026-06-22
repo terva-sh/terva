@@ -49,6 +49,28 @@ func TestResolveConfigProjectModelTrustGated(t *testing.T) {
 	}
 }
 
+// toggleStringMember backs FavoriteModels: add is idempotent (deduped),
+// remove drops the key, and emptying returns nil.
+func TestToggleStringMember(t *testing.T) {
+	var list []string
+	list = toggleStringMember(list, "a", true)
+	if len(list) != 1 || list[0] != "a" {
+		t.Fatalf("add to empty: %v", list)
+	}
+	list = toggleStringMember(list, "b", true)
+	list = toggleStringMember(list, "a", true) // idempotent add
+	if len(list) != 2 {
+		t.Fatalf("idempotent add should keep 2: %v", list)
+	}
+	list = toggleStringMember(list, "a", false) // remove
+	if len(list) != 1 || list[0] != "b" {
+		t.Fatalf("remove a: %v", list)
+	}
+	if list = toggleStringMember(list, "b", false); list != nil {
+		t.Fatalf("emptying should return nil, got %v", list)
+	}
+}
+
 func TestLoadProjectConfigNearestWins(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")

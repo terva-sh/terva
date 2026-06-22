@@ -208,7 +208,28 @@ For local servers that aren't Ollama — or any hosted OpenAI-compatible gateway
 
 Run `/login`, pick **OpenAI Compatible (local/custom)**, and enter the base URL, a default model id, and (optionally) a default context window. The API key is optional — most local servers ignore it. terva then lists `GET {base-url}/models` on every launch and adds every model the server serves to the `/model` picker, so you don't pre-register them.
 
-**One endpoint per login.** `/login` stores a single `openai-compatible` endpoint, so logging in to a second one overwrites the first. To use several endpoints at once, register them in `models.json` instead — each entry pins its own `baseUrl` and they all coexist in `/model`. Run `terva models init` to scaffold a starter `models.json` (with two example endpoints) you can edit, then `terva --list-models` to verify. See [providers.md](providers.md#one-endpoint-per-login-use-modelsjson-for-several).
+**One endpoint per login.** `/login` stores a single `openai-compatible` endpoint, so logging in to a second one overwrites the first.
+
+**Several backends at once — named endpoints.** Define them in `config.json` under `endpoints`; each becomes its **own provider** (the key is the provider id) with its own `/v1/models` discovery and its own row in the `/model` picker — so models from different machines don't pile into one `openai-compatible` list:
+
+```json
+{
+  "endpoints": {
+    "box-a": { "baseUrl": "http://box-a:8000/v1", "contextWindow": 32768 },
+    "gw":    { "baseUrl": "https://gw.internal/v1", "apiKeyEnv": "GW_KEY" }
+  }
+}
+```
+
+The key is **optional** (most local servers need none). It is **never** stored in `config.json`: set `apiKeyEnv` to read it from the environment, or store it in `auth.json` under the endpoint name. Endpoints are a user-config concept — a project's `.terva/config.json` can't define one (it could otherwise point the agent at an arbitrary server). Adding or editing an endpoint re-runs discovery on the next launch. (The older `models.json` per-model `baseUrl` override still works for pinning an individual model to a one-off URL.)
+
+**Migrating from the `models.json` `baseUrl` pattern.** Named endpoints and the per-model `baseUrl` override coexist — nothing breaks if you keep both, so there's no forced cutover. The difference is that a named endpoint **discovers** its models (`/v1/models`), where `models.json` only shows the entries you hand-list. The lift-and-trim path:
+
+1. `terva models endpoints` scans your `models.json` for distinct `openai-compatible` base URLs and prints a ready-to-paste `endpoints` block (one named endpoint per URL, naming each from its host), plus the `models.json` entries that become redundant once discovery covers them. It changes nothing.
+2. `terva models endpoints --apply` writes those endpoints into `config.json` for you (additive — it never clobbers an endpoint you already defined, and never touches `models.json`).
+3. Relaunch so each endpoint discovers its models, then **trim** `models.json` by hand: delete the entries now covered by discovery, but keep any you rely on for exact `contextWindow` / `maxTokens` / capability overrides (discovery can't infer those). Anything you keep still wins over the catalog and the endpoint's `/v1/models`.
+
+If you set a key via `apiKeyEnv` for a migrated endpoint, point it at the variable holding that endpoint's token — `models.json` had no key field, so a previously keyless local server needs nothing.
 
 CLI equivalent:
 
@@ -239,3 +260,34 @@ terva --provider openai-compatible \
 ```
 
 `contextWindow` is the total token budget (drives the context gauge and auto-compaction); `maxTokens` is the cap on a single response (`max_tokens`). `models.json` values win over both the catalog and whatever `/v1/models` reports, so they're the fix when a server under-reports its limits. A `"capabilities"` map tags what the model can do — most usefully `{"image-input": false}` for a local model without vision, so terva drops image attachments with a note instead of letting the server reject every turn (see [providers.md](providers.md#capability-tags)). See [providers.md](providers.md#openai-compatible-endpoints-local-and-custom-servers) for the full reference.
+
+## Swarm sub-agent tiers (weak / medium / strong)
+
+When auto-swarm is on, the agent can pick a model *strength* for each background sub-agent it spawns via a `tier` of `weak`, `medium`, or `strong` — so routine sub-tasks run on a cheap model and only the hard ones use a strong one. A tier always resolves **for the host's own provider** (a sub-agent stays on the provider you're using) and is **capped at the host model's tier**: a weak host can't spawn a strong child. Tiers are a per-provider concept — each provider maps `weak`/`medium`/`strong` to its own models.
+
+terva ships a built-in mapping for **Anthropic only** (`weak`→haiku, `medium`→sonnet, `strong`→opus — these family names are unambiguous, so they survive version bumps). **Every other provider — including gateways like opencode-go, OpenRouter, and LiteLLM — has no built-in mapping**, so `tier` is ignored there and sub-agents fall back to the full host model (which is why a `tier: weak` spawn on opencode-go still costs host-model price). To get cheap tiers on those providers, configure them yourself.
+
+**See what resolves today, and what to set:**
+
+```bash
+terva models tiers          # per logged-in provider: the weak/medium/strong model each resolves to
+terva models tiers --all    # include providers you're not logged into
+```
+
+Providers with no mapping are flagged, with a ready-to-paste config block and candidate model ids from that provider's catalog.
+
+**Configure** per provider in `$TERVA_HOME/config.json` under `swarm_tiers` (user config only — a project's `.terva/config.json` cannot redirect sub-agent model selection):
+
+```json
+{
+  "swarm_tiers": {
+    "opencode-go": {
+      "weak":   "minimax-m3",
+      "medium": "glm-5.2",
+      "strong": "kimi-k2.7-code"
+    }
+  }
+}
+```
+
+The ids must be real models in that provider's catalog (`terva models tiers` flags ones that aren't). Your entries **override** the built-in guesses; a **partial** map is fine — any tier you leave out falls back to the built-in guess for that provider, then to the host model. The host-cap rule still applies: when terva can identify the host model's own tier (by your configured ids or the built-in families), it never resolves a *stronger* tier than the host.

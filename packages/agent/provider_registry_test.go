@@ -22,13 +22,15 @@ func TestProviderRegistryWellFormed(t *testing.T) {
 			t.Errorf("%q missing from the id index", spec.id)
 		}
 	}
-	// knownProviders is the registry's id list, in order.
-	if len(knownProviders) != len(providerSpecs) {
-		t.Fatalf("knownProviders has %d ids, registry has %d specs", len(knownProviders), len(providerSpecs))
+	// knownProviders is the registry's id list: the static specs come first, in
+	// order, followed by any dynamically-registered endpoints (registerEndpoint
+	// appends — and other tests in this process may have added some).
+	if len(knownProviders) < len(providerSpecs) {
+		t.Fatalf("knownProviders has %d ids, fewer than the %d static specs", len(knownProviders), len(providerSpecs))
 	}
 	for i, spec := range providerSpecs {
 		if knownProviders[i] != spec.id {
-			t.Errorf("knownProviders[%d] = %q, want %q (order must match registry)", i, knownProviders[i], spec.id)
+			t.Errorf("knownProviders[%d] = %q, want %q (static order must match registry)", i, knownProviders[i], spec.id)
 		}
 	}
 }

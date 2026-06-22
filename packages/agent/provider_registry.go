@@ -2,6 +2,9 @@ package agent
 
 import (
 	"fmt"
+	"os"
+	"strings"
+	"sync"
 
 	"terva.sh/terva/packages/provider"
 )
@@ -362,4 +365,66 @@ func init() {
 			providerAliases[a] = spec.id
 		}
 	}
+}
+
+var registerEndpointsOnce sync.Once
+
+// RegisterEndpointsFromConfig registers each user-defined OpenAI-compatible
+// endpoint (Config.Endpoints) as its own provider, so Resolve, the discoverer,
+// and the picker treat it like any other provider id. Idempotent (runs once);
+// call it early in startup, before the first Resolve. Endpoints are a USER-
+// layer concept (LoadConfig, not the project layer), so a cloned repo can't
+// redirect the agent to an arbitrary backend.
+func RegisterEndpointsFromConfig() {
+	registerEndpointsOnce.Do(func() {
+		cfg, err := LoadConfig()
+		if err != nil {
+			return
+		}
+		for id, ep := range cfg.Endpoints {
+			if err := registerEndpoint(id, ep); err != nil {
+				fmt.Fprintf(os.Stderr, "terva: endpoint %q ignored: %v\n", id, err)
+			}
+		}
+	})
+}
+
+// registerEndpoint adds one OpenAI-compatible endpoint as a dynamic provider.
+// The spec is heap-allocated (not appended to providerSpecs) so the pointers
+// init() stored in providerByID stay valid. Its credential resolves from the
+// endpoint's APIKeyEnv (set as apiKeyEnv) or auth.json — never inline config.
+func registerEndpoint(id string, ep EndpointConfig) error {
+	id = strings.TrimSpace(id)
+	if id == "" || strings.TrimSpace(ep.BaseURL) == "" {
+		return fmt.Errorf("needs a name and baseUrl")
+	}
+	if _, exists := providerByID[id]; exists {
+		return fmt.Errorf("name collides with an existing provider id")
+	}
+	if _, alias := providerAliases[id]; alias {
+		return fmt.Errorf("name collides with a provider alias")
+	}
+	var apiKeyEnv []string
+	if ep.APIKeyEnv != "" {
+		apiKeyEnv = []string{ep.APIKeyEnv}
+	}
+	baseURL := ep.BaseURL
+	s := &providerSpec{
+		id:             id,
+		noDefaultModel: true,
+		apiKeyEnv:      apiKeyEnv,
+		newClient: func(r Resolved) provider.Client {
+			return provider.NewOpenAI(r.Credential, firstNonEmpty(r.BaseURL, baseURL))
+		},
+	}
+	providerByID[id] = s
+	knownProviders = append(knownProviders, id)
+	return nil
+}
+
+// isEndpointProvider reports whether id is a user-defined endpoint (vs a
+// built-in provider). Used by Resolve to give it openai-compatible treatment.
+func isEndpointProvider(id string, cfg Config) bool {
+	_, ok := cfg.Endpoints[id]
+	return ok
 }

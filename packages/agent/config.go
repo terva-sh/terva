@@ -23,7 +23,20 @@ type Config struct {
 	Model       string   `json:"model"`
 	Reasoning   string   `json:"reasoning"`
 	Temperature *float32 `json:"temperature,omitempty"`
-	Theme       string   `json:"theme"`
+	// FavoriteModels are "provider/id" keys pinned to the top of the /model
+	// picker (and surfaced as a cross-provider ★ Favorites view). Order is
+	// not significant; membership is.
+	FavoriteModels []string `json:"favorite_models,omitempty"`
+
+	// Endpoints are user-defined OpenAI-compatible backends, each registered
+	// as its own provider (the map key is the provider id) with its own
+	// /v1/models discovery and row in the /model picker — the way to use
+	// several local/remote OpenAI-compatible servers at once instead of the
+	// single shared `openai-compatible` slot. User layer only: a project's
+	// .terva/config.json must never redirect the agent to an arbitrary
+	// endpoint. Keys are NEVER stored here — use APIKeyEnv or auth.json.
+	Endpoints map[string]EndpointConfig `json:"endpoints,omitempty"`
+	Theme     string                    `json:"theme"`
 
 	// InlineImagesEnabled controls whether terva draws screenshots inline
 	// when the terminal supports an image protocol. nil/missing means
@@ -35,6 +48,17 @@ type Config struct {
 	// for parallel sub-tasks via a built-in swarm_spawn tool. Off by
 	// default; nil/missing means disabled. Toggle from /settings.
 	AutoSwarmEnabled *bool `json:"auto_swarm_enabled,omitempty"`
+
+	// SwarmTiers maps a provider id to the concrete model ids used for the
+	// swarm_spawn `tier` parameter (weak / medium / strong). It overrides the
+	// built-in family guesses and, crucially, supplies tiers for providers
+	// terva can't guess on its own (gateways like opencode-go, litellm,
+	// openrouter), so `tier: weak` spawns a cheap sub-agent instead of falling
+	// back to the full host model. User layer only — a project's config must
+	// not redirect sub-agent model selection. Partial maps are fine: an unset
+	// tier falls back to the built-in guess, then to the host model. Configure
+	// and validate with `terva models tiers`.
+	SwarmTiers map[string]TierConfig `json:"swarm_tiers,omitempty"`
 
 	// SwarmWorktrees opts swarm sub-agents into per-agent git worktrees
 	// instead of sharing the host's working tree. Off by default;
@@ -126,6 +150,28 @@ type Config struct {
 	// may only ADD servers, never replace a user-defined one (see
 	// mergeMCPConfigs and docs/plans/workspace-trust.md). See docs/mcp.md.
 	MCP *mcp.Config `json:"mcp,omitempty"`
+}
+
+// EndpointConfig defines one user-supplied OpenAI-compatible backend. The
+// provider id is the map key in Config.Endpoints. The API key is NEVER stored
+// here: leave it unset for keyless local servers, set APIKeyEnv to read it from
+// the environment, or store it in auth.json under the endpoint name.
+type EndpointConfig struct {
+	BaseURL       string `json:"baseUrl"`                 // required, e.g. http://box:8000/v1
+	APIKeyEnv     string `json:"apiKeyEnv,omitempty"`     // env var holding the key (optional)
+	ContextWindow int    `json:"contextWindow,omitempty"` // default ctx for models lacking a hint
+}
+
+// TierConfig pins the weak/medium/strong swarm sub-agent models for one
+// provider (the provider id is the map key in Config.SwarmTiers). Any field
+// may be empty, in which case that tier falls back to terva's built-in
+// family guess for the provider, then to the host model. The ids should be
+// real models in that provider's catalog; `terva models tiers` validates
+// them and shows what each tier currently resolves to.
+type TierConfig struct {
+	Weak   string `json:"weak,omitempty"`
+	Medium string `json:"medium,omitempty"`
+	Strong string `json:"strong,omitempty"`
 }
 
 // PermissionRuleConfig is the JSON shape of one permission rule. It
@@ -268,6 +314,24 @@ func SaveConfig(c Config) error {
 		return err
 	}
 	return os.WriteFile(ConfigPath(), b, 0o644)
+}
+
+// toggleStringMember returns list with key present (on) or absent (off), with
+// any duplicates collapsed. Used for membership lists like FavoriteModels.
+func toggleStringMember(list []string, key string, on bool) []string {
+	out := make([]string, 0, len(list)+1)
+	for _, s := range list {
+		if s != key {
+			out = append(out, s)
+		}
+	}
+	if on {
+		out = append(out, key)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // absolutizeContextFiles resolves each non-absolute entry against baseDir and
