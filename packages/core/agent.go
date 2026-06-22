@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -132,6 +134,13 @@ type Agent struct {
 	// the session log; per-message append hooks do not fire for this
 	// wholesale transcript replacement.
 	OnTranscriptCompacted func(messages []provider.Message)
+
+	// OnImageExcluded, if set, fires when image-rejection recovery drops an
+	// image (a provider 400'd on it) from the transcript, carrying the image's
+	// sha256. Hosts wire this to append an exclude_image directive to the
+	// session, so the fix persists: a resumed session re-applies it instead of
+	// re-sending the bad image and re-failing. The recovery is paid once.
+	OnImageExcluded func(sha256Hex string)
 
 	// running is the single-flight guard. It is set on entry to
 	// Prompt/Continue/Compact and cleared on exit; a second concurrent
@@ -571,10 +580,38 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			commit       func()
 			err          error
 		)
+		imageRounds := 0
 		for attempt := 0; ; attempt++ {
 			stop, assistantMsg, commit, err = a.oneTurn(ctx, sink)
 			sink(EvTurnEnd{Stop: stop, Err: err})
-			if err == nil || !a.canRetryError(err, attempt) {
+			if err == nil {
+				break
+			}
+			// Image-rejection recovery: the provider refused an image in the
+			// transcript (a 400 about invalid/unreadable image data — e.g. a
+			// degenerate 1x1 or corrupt screenshot). Replace the *most recent*
+			// image with a short text note and retry, peeling images off
+			// newest-first across rounds until the turn succeeds. This is
+			// surgical and cache-friendly: only the offending image (plus any
+			// newer than it) is dropped, never one before it, so the cached
+			// prefix up to the culprit survives — everything after it is dead
+			// cache once the culprit is replaced anyway. Bounded by the image
+			// count and a hard cap so a non-image 400 can't loop. Runs before
+			// the transient-retry check because a 400 is otherwise terminal.
+			if isImageRejectionError(err) && imageRounds < maxImageRecoveryRounds {
+				if sha, ok := a.neutralizeLastTranscriptImage(); ok {
+					imageRounds++
+					a.dropLastAssistantMessage()
+					// Persist the drop so a resumed session re-applies it instead
+					// of re-sending the bad image (fired outside the agent lock).
+					if a.OnImageExcluded != nil {
+						a.OnImageExcluded(sha)
+					}
+					attempt-- // recovery rounds don't consume the transient-retry budget
+					continue
+				}
+			}
+			if !a.canRetryError(err, attempt) {
 				break
 			}
 			// This attempt is being retried: drop its (possibly partial)
@@ -737,6 +774,95 @@ func (a *Agent) retryDelay(attempt int, err error) time.Duration {
 		base = 2 * time.Second
 	}
 	return base * time.Duration(1<<attempt)
+}
+
+// imageRejectedNote replaces an image the provider refused to accept. It tells
+// the model (and, on resume, the reader) why the picture is gone, in place of
+// the bytes that broke the turn.
+const imageRejectedNote = "[image omitted: the model's provider rejected it as an invalid or unreadable image]"
+
+// isImageRejectionError reports whether a failed turn was the provider refusing
+// an image we sent (a 400 about invalid/unreadable image data) rather than a
+// transient fault. Matched on the message text so it works across providers and
+// whether or not the error is a typed ProviderError — e.g. OpenAI's "does not
+// represent a valid image" / "the image data you provided". Only consulted on a
+// non-nil error, so a positive phrase in a success path can't false-trigger.
+func isImageRejectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "image") {
+		return false
+	}
+	for _, p := range []string{
+		"valid image", // "does not represent a valid image"
+		"invalid image",
+		"image data",        // "the image data you provided"
+		"process the image", // "unable to process the image"
+		"process image",
+		"image you provided",
+		"unsupported image",
+		"corrupt image",
+		"decode the image",
+	} {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// maxImageRecoveryRounds caps how many images a single turn will peel off
+// chasing an image-rejection 400, so a misclassified non-image error (or a
+// pathological transcript) can't turn into an unbounded run of round-trips.
+// Real transcripts carry far fewer live images than this.
+const maxImageRecoveryRounds = 16
+
+// imageSHA256 is the content address of an image's raw bytes — the key an
+// exclude_image directive matches on, so one directive drops every copy of the
+// image (tool result + codex mirror) regardless of position.
+func imageSHA256(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// neutralizeLastTranscriptImage replaces the single most-recent ImageBlock in
+// the transcript — scanning from the end, including an image nested in a tool
+// result — with a short text note, returning its content sha256 and whether one
+// was found. The retry loop calls it repeatedly to peel images off newest-first
+// until a turn that 400'd on an image succeeds, so only the offending image
+// (and any newer than it) is dropped and the cached prefix before it is
+// preserved. Bumps rev + transcriptEpoch when it changes anything; the returned
+// hash lets the caller persist the drop as a session directive.
+func (a *Agent) neutralizeLastTranscriptImage() (sha string, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for mi := len(a.messages) - 1; mi >= 0; mi-- {
+		content := a.messages[mi].Content
+		for ci := len(content) - 1; ci >= 0; ci-- {
+			switch v := content[ci].(type) {
+			case provider.ImageBlock:
+				h := imageSHA256(v.Data)
+				content[ci] = provider.TextBlock{Text: imageRejectedNote}
+				a.rev++
+				a.transcriptEpoch++
+				return h, true
+			case provider.ToolResultBlock:
+				for ii := len(v.Content) - 1; ii >= 0; ii-- {
+					if ib, isImg := v.Content[ii].(provider.ImageBlock); isImg {
+						h := imageSHA256(ib.Data)
+						v.Content[ii] = provider.TextBlock{Text: imageRejectedNote}
+						content[ci] = v
+						a.rev++
+						a.transcriptEpoch++
+						return h, true
+					}
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 func sleepRetry(ctx context.Context, d time.Duration) error {

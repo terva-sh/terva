@@ -91,13 +91,30 @@ type SessionMeta struct {
 // prefers the discriminator and falls back to field presence for v1
 // files.
 type sessionLine struct {
-	Type       string          `json:"type"`
-	Meta       *SessionMeta    `json:"meta,omitempty"`
-	Message    *wireMessage    `json:"message,omitempty"`
-	Messages   []wireMessage   `json:"messages,omitempty"`
-	Usage      *provider.Usage `json:"usage,omitempty"`
-	Cumulative *provider.Usage `json:"cumulative,omitempty"`
+	Type       string            `json:"type"`
+	Meta       *SessionMeta      `json:"meta,omitempty"`
+	Message    *wireMessage      `json:"message,omitempty"`
+	Messages   []wireMessage     `json:"messages,omitempty"`
+	Usage      *provider.Usage   `json:"usage,omitempty"`
+	Cumulative *provider.Usage   `json:"cumulative,omitempty"`
+	Directive  *sessionDirective `json:"directive,omitempty"`
 }
+
+// sessionDirective is an append-only mutation instruction: a JSONL line that
+// tells a loader to transform the reconstructed transcript without rewriting
+// earlier rows (which the append-only log can't do). The only op today is
+// exclude_image — drop an image the provider rejected (content-addressed by
+// sha256) so a resumed session doesn't re-send it and re-fail.
+type sessionDirective struct {
+	Op     string `json:"op"`               // e.g. "exclude_image"
+	SHA256 string `json:"sha256,omitempty"` // content hash of the image to drop
+	Reason string `json:"reason,omitempty"`
+}
+
+const (
+	recordDirective       = "directive"
+	directiveExcludeImage = "exclude_image"
+)
 
 type sessionLineHead struct {
 	Type string `json:"type"`
@@ -413,6 +430,7 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 
 	var meta SessionMeta
 	var messages []provider.Message
+	excludeImages := map[string]bool{}
 	rep := &loadReport{}
 	if err := forEachJSONLLine(f, func(line []byte) error {
 		var head sessionLineHead
@@ -445,6 +463,14 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 			} else {
 				rep.corruptLines++
 			}
+		case recordDirective:
+			var row struct {
+				Directive sessionDirective `json:"directive"`
+			}
+			if err := json.Unmarshal(line, &row); err == nil &&
+				row.Directive.Op == directiveExcludeImage && row.Directive.SHA256 != "" {
+				excludeImages[strings.ToLower(row.Directive.SHA256)] = true
+			}
 		}
 		return nil
 	}); err != nil {
@@ -453,6 +479,12 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 	if meta.FormatVersion > sessionFormatVersion {
 		rep.newerFormat = meta.FormatVersion
 	}
+	// Apply append-only directives before repair so the rebuilt transcript
+	// already reflects them (e.g. a provider-rejected image is gone, so a
+	// resume can't re-send it and re-fail).
+	if len(excludeImages) > 0 {
+		messages = applyImageExclusions(messages, excludeImages)
+	}
 	messages = repairToolUseResultPairs(messages)
 	out, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -460,6 +492,38 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 	}
 	s := &Session{ID: meta.ID, Path: path, Meta: meta, writer: out, buf: bufio.NewWriter(out), LoadWarnings: rep.warnings(path)}
 	return s, messages, nil
+}
+
+// applyImageExclusions replaces every ImageBlock whose content sha256 is in the
+// excluded set with the standard rejected-image note — directly in a message
+// and nested in a tool result. Content-addressed, so one exclude_image
+// directive covers every copy of the image (tool result + codex mirror) and
+// survives reordering. Mutates and returns msgs.
+func applyImageExclusions(msgs []provider.Message, excluded map[string]bool) []provider.Message {
+	isExcluded := func(b provider.ImageBlock) bool { return excluded[imageSHA256(b.Data)] }
+	for mi := range msgs {
+		content := msgs[mi].Content
+		for ci := range content {
+			switch v := content[ci].(type) {
+			case provider.ImageBlock:
+				if isExcluded(v) {
+					content[ci] = provider.TextBlock{Text: imageRejectedNote}
+				}
+			case provider.ToolResultBlock:
+				changed := false
+				for ii := range v.Content {
+					if ib, ok := v.Content[ii].(provider.ImageBlock); ok && isExcluded(ib) {
+						v.Content[ii] = provider.TextBlock{Text: imageRejectedNote}
+						changed = true
+					}
+				}
+				if changed {
+					content[ci] = v
+				}
+			}
+		}
+	}
+	return msgs
 }
 
 // repairToolUseResultPairs walks a restored transcript and
@@ -821,6 +885,21 @@ func (s *Session) UpdateModel(providerName, model string) error {
 	s.Meta.Provider = providerName
 	s.Meta.Model = model
 	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+}
+
+// AppendImageExclusion writes a directive telling future loads to drop the
+// image whose raw bytes hash to sha256Hex — every copy of it (the tool result
+// and the codex mirror both match) — replacing it with a short note. Append
+// only: the original image rows stay in the file for audit, but the loader
+// applies the exclusion when it rebuilds the transcript, so a resumed session
+// never re-sends a provider-rejected image and pays the recovery only once.
+func (s *Session) AppendImageExclusion(sha256Hex, reason string) error {
+	if s == nil || sha256Hex == "" {
+		return nil
+	}
+	return s.writeLine(sessionLine{Type: recordDirective, Directive: &sessionDirective{
+		Op: directiveExcludeImage, SHA256: sha256Hex, Reason: reason,
+	}})
 }
 
 // AppendUsage writes a usage row to the session.
