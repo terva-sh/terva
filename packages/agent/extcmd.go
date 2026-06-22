@@ -40,6 +40,8 @@ func runExtCommand(rawArgs []string) (handled bool, err error) {
 		return true, extInstall(rawArgs[2:])
 	case "pack":
 		return true, extPackInstall(rawArgs[2:])
+	case "migrate":
+		return true, extMigrate(rawArgs[2:])
 	case "upgrade", "update":
 		return true, extUpgrade(rawArgs[2:])
 	case "help", "-h", "--help":
@@ -63,6 +65,7 @@ usage:
   terva ext upgrade <name>...       fast-forward-pull an installed extension's git checkout
   terva ext install <path|git-url>  copy / clone an extension into $TERVA_HOME/extensions/
   terva ext pack install [pack]     bulk-install an extension pack (default: built-in "core")
+  terva ext migrate [pack]          rename look-alike manual installs to a pack's canonical names
 
 extensions live under:
   $TERVA_HOME/extensions/<name>/extension.json   (global)
@@ -257,6 +260,9 @@ func installOne(src, ref, nameOverride string) (out string, err error) {
 		if name == "" {
 			name = strings.TrimSuffix(filepath.Base(src), ".git")
 		}
+		if !safeInstallName(name) {
+			return "", fmt.Errorf("cannot derive a safe extension name from %q", src)
+		}
 		out = filepath.Join(dest, name)
 		if _, err := os.Stat(out); err == nil {
 			return out, errExtAlreadyInstalled
@@ -270,6 +276,24 @@ func installOne(src, ref, nameOverride string) (out string, err error) {
 		if _, err := os.Stat(filepath.Join(out, "extension.json")); err != nil {
 			_ = os.RemoveAll(out)
 			return out, fmt.Errorf("installed dir lacks extension.json; aborted and rolled back")
+		}
+		// The clone target was the repo basename; canonicalize to the
+		// manifest name (only known after cloning) so terva-ext-foo lands at
+		// foo. An explicit override or an already-correct dir is left alone.
+		if nameOverride == "" {
+			if mn := manifestName(out); mn != "" && mn != filepath.Base(out) {
+				canonical := filepath.Join(dest, mn)
+				if _, err := os.Stat(canonical); err == nil {
+					_ = os.RemoveAll(out) // already installed under the canonical name
+					return canonical, errExtAlreadyInstalled
+				}
+				if err := os.Rename(out, canonical); err != nil {
+					// The basename install works; keep it rather than lose it.
+					fmt.Fprintf(os.Stderr, "note: installed at %s; could not rename to canonical %s: %v\n", out, canonical, err)
+					return out, nil
+				}
+				out = canonical
+			}
 		}
 		return out, nil
 	}
@@ -298,12 +322,19 @@ func installOne(src, ref, nameOverride string) (out string, err error) {
 	if err != nil {
 		return "", err
 	}
+	// terva keys an extension by its manifest `name`, so install under that
+	// (when no explicit override) instead of the source basename — a repo
+	// named terva-ext-foo with manifest name "foo" installs to foo. Fall
+	// back to the basename when the manifest name is missing or unsafe.
 	name := nameOverride
+	if name == "" {
+		name = manifestName(absSrc)
+	}
 	if name == "" {
 		name = filepath.Base(absSrc)
 	}
-	if name == "." || name == ".." || name == string(filepath.Separator) || name == "" {
-		return "", fmt.Errorf("cannot derive extension name from %q", src)
+	if !safeInstallName(name) {
+		return "", fmt.Errorf("cannot derive a safe extension name from %q", src)
 	}
 	out = filepath.Join(dest, name)
 	if _, err := os.Stat(out); err == nil {
@@ -313,6 +344,38 @@ func installOne(src, ref, nameOverride string) (out string, err error) {
 		return out, err
 	}
 	return out, nil
+}
+
+// safeInstallName reports whether name is a single, safe path component to
+// install under extensions/. An extension's name can come from an
+// untrusted source (a cloned repo's extension.json, a third-party pack
+// entry), so it must not contain a path separator or be a dot-dir — else
+// filepath.Join could escape the extensions dir.
+func safeInstallName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, `/\`)
+}
+
+// manifestName returns the sanitized extension name declared in
+// <dir>/extension.json, or "" when it can't be read, is unset, or is not a
+// safe single path component — in which case the caller falls back to the
+// (already-safe) source basename. Reads only the name field, like
+// findExtensionDir, to avoid importing extdriver here.
+func manifestName(dir string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, "extension.json"))
+	if err != nil {
+		return ""
+	}
+	var m struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return ""
+	}
+	name := strings.TrimSpace(m.Name)
+	if !safeInstallName(name) {
+		return ""
+	}
+	return name
 }
 
 // extInstall copies a local directory or shallow-clones a git URL

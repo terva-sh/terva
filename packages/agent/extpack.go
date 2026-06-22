@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -93,14 +94,18 @@ func extPackInstall(args []string) error {
 		args = args[1:]
 	}
 
-	yes := false
+	yes, dryRun, noMigrate := false, false, false
 	packArg := ""
 	for _, a := range args {
 		switch {
 		case a == "--yes" || a == "-y":
 			yes = true
+		case a == "--dry-run" || a == "-n":
+			dryRun = true
+		case a == "--no-migrate":
+			noMigrate = true
 		case a == "help" || a == "-h" || a == "--help":
-			fmt.Fprintln(os.Stderr, "usage: terva ext pack install [core | https://… | path.json] [--yes]")
+			fmt.Fprintln(os.Stderr, "usage: terva ext pack install [core | https://… | path.json] [--yes] [--dry-run] [--no-migrate]")
 			return nil
 		case strings.HasPrefix(a, "-"):
 			return fmt.Errorf("unknown flag %q", a)
@@ -121,7 +126,7 @@ func extPackInstall(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "pack: %s (%s)\n", dashIfEmpty(p.Name), source)
 	// A built-in pack ships with terva and is trusted; skip its prompt.
-	return p.install(yes || builtin)
+	return p.installWith(packInstallOpts{yes: yes || builtin, migrate: !noMigrate, dryRun: dryRun})
 }
 
 func isBuiltinPackArg(arg string) bool {
@@ -208,26 +213,65 @@ func readPackFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// install fans out over the pack's entries, one clone/copy each, and
+// packInstallOpts threads the install flags (and migration behavior) from
+// extPackInstall through to the per-entry loop.
+type packInstallOpts struct {
+	yes     bool // skip the install + migration confirmations
+	migrate bool // reconcile look-alike manual installs before each install
+	dryRun  bool // report only; no clones, copies, renames, or removes
+}
+
+// install is the simple entry point used by callers that don't thread
+// flags (the first-run offer, the core-pack offer): confirm-gated unless
+// yes, migration on, no dry run.
+func (p Pack) install(yes bool) error {
+	return p.installWith(packInstallOpts{yes: yes, migrate: true})
+}
+
+// installWith fans out over the pack's entries, one clone/copy each, and
 // reports a per-entry + summary result. A single failed entry does not
 // abort the rest (mirroring Discover's per-extension error model); an
-// already-present extension is skipped, not failed. yes skips the
-// confirmation prompt (set for a built-in pack, the first-run offer, or
-// --yes).
-func (p Pack) install(yes bool) error {
+// already-present extension is skipped, not failed. When migrate is set,
+// each entry first reconciles any look-alike manual install (a different
+// dir name for the same extension) by renaming it to the canonical name,
+// so the subsequent install skips rather than leaving a duplicate.
+func (p Pack) installWith(opts packInstallOpts) error {
+	in := bufio.NewReader(os.Stdin)
 	fmt.Fprint(os.Stderr, p.summary())
-	if !yes {
-		fmt.Fprintf(os.Stderr, "install these %d extension(s)? [y/N] ", len(p.Extensions))
-		var resp string
-		_, _ = fmt.Scanln(&resp)
-		if !strings.EqualFold(strings.TrimSpace(resp), "y") {
+	if !opts.yes && !opts.dryRun {
+		if !promptYesNo(in, fmt.Sprintf("install these %d extension(s)?", len(p.Extensions)), false) {
 			fmt.Fprintln(os.Stderr, "aborted")
 			return nil
 		}
 	}
 
-	var installed, skipped, failed int
+	insts := scanInstalledExtensions()
+	var installed, migrated, skipped, failed int
 	for _, e := range p.Extensions {
+		if opts.migrate {
+			for _, c := range detectDuplicates(e, insts) {
+				if !migrateConfirmed(in, c, opts) {
+					continue
+				}
+				out, err := migrateDuplicate(c, opts.dryRun)
+				if err != nil {
+					failed++
+					fmt.Fprintf(os.Stderr, "  FAIL   migrate %s: %v\n", c.Inst.DirBase, err)
+					continue
+				}
+				migrated++
+				fmt.Fprintf(os.Stderr, "  migrate %s -> %s (%s)\n", c.Inst.DirBase, e.entryName(), out)
+			}
+			if !opts.dryRun {
+				insts = scanInstalledExtensions() // reflect the rename for later entries
+			}
+		}
+
+		if opts.dryRun {
+			fmt.Fprintf(os.Stderr, "  (dry-run) would install %s from %s\n", e.entryName(), e.Source)
+			continue
+		}
+
 		out, err := installOne(e.Source, e.Ref, e.Name)
 		switch {
 		case errors.Is(err, errExtAlreadyInstalled):
@@ -241,7 +285,7 @@ func (p Pack) install(yes bool) error {
 			fmt.Fprintf(os.Stderr, "  ok     %s -> %s\n", e.entryName(), out)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\n%d installed, %d skipped, %d failed\n", installed, skipped, failed)
+	fmt.Fprintf(os.Stderr, "\n%d installed, %d migrated, %d skipped, %d failed\n", installed, migrated, skipped, failed)
 	if failed > 0 {
 		return fmt.Errorf("%d extension(s) failed to install", failed)
 	}
