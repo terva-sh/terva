@@ -35,7 +35,32 @@ type Manifest struct {
 	Language    string   `json:"language,omitempty"` // informational ("go", "python", "typescript", ...)
 	Enabled     *bool    `json:"enabled,omitempty"`  // nil = enabled
 	Description string   `json:"description,omitempty"`
+	// Config declares the settings this extension accepts. The host reads
+	// it WITHOUT spawning the extension (so /extensions can offer a config
+	// dialog for a stopped or disabled extension), stores the user's values
+	// under config.json `extensions.<name>`, and delivers the resolved
+	// values back in the hello_ack handshake (and a config_update event on
+	// change). Empty means the extension takes no host-supplied config.
+	Config []ConfigField `json:"config,omitempty"`
 }
+
+// ConfigField is one declared setting in an extension's manifest. The host
+// renders it in the /extensions config dialog and validates input against
+// it. Keep this minimal but extensible — new optional fields are additive.
+type ConfigField struct {
+	Key         string   `json:"key"`                // config key (the map key under extensions.<name>)
+	Label       string   `json:"label,omitempty"`    // human label for the dialog (falls back to Key)
+	Type        string   `json:"type,omitempty"`     // "string" (default) | "bool" | "int" | "select" | "secret"
+	Default     any      `json:"default,omitempty"`  // default value when the user hasn't set one
+	Required    bool     `json:"required,omitempty"` // dialog rejects save while empty
+	Secret      bool     `json:"secret,omitempty"`   // mask in the dialog and never log (implied by type "secret")
+	Description string   `json:"description,omitempty"`
+	Options     []string `json:"options,omitempty"` // allowed values for type "select"
+}
+
+// IsSecret reports whether the field's value must be masked. Either an
+// explicit Secret flag or the "secret" type marks it.
+func (f ConfigField) IsSecret() bool { return f.Secret || f.Type == "secret" }
 
 // IsEnabled returns the manifest's effective enabled state. Default
 // is true so adding a new extension folder Just Works without an

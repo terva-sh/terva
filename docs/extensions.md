@@ -115,6 +115,23 @@ Installing from a non-built-in pack (a URL or file) prints the entries
 and asks for confirmation first; `--yes` skips the prompt. The built-in
 core pack ships with terva and installs without prompting.
 
+**Migrating earlier manual installs.** If you installed an extension by
+hand before adopting a pack, your copy may live under a different
+directory name than the pack's canonical one (e.g. `zot-web/` vs the
+pack's `web/`) — terva would then see two near-identical extensions. Pack
+install detects these look-alikes (by git origin, manifest name, and
+directory name) and offers to **rename** each to the canonical name,
+which preserves its enabled-state, config, and any local edits. A
+confident match (the git origin matches the pack source) auto-confirms
+under `--yes`; an uncertain, name-only match always asks and is skipped
+under `--yes`. Use `--no-migrate` to disable it, `--dry-run` to preview:
+
+```bash
+terva ext pack install core --dry-run    # show what would install + migrate
+terva ext migrate                        # reconcile look-alikes without (re)installing
+terva ext migrate --dry-run              # preview migrations only
+```
+
 A pack manifest is JSON:
 
 ```json
@@ -191,6 +208,83 @@ manifest tells terva how to launch it:
 | `description` | optional. shown in `terva ext list`. |
 | `enabled` | optional, defaults to `true`. set to `false` to disable without removing. |
 | `permissions` | optional **bundle contribution**: suggested permission rules (see below). |
+| `config` | optional. a schema of settings the user fills in via `/extensions` (see below). |
+
+## Inspecting & toggling (`/extensions`)
+
+Run `/extensions` (alias `/ext`) in an interactive session to see every
+installed extension and its state. Per-row keys:
+
+- `g` — enable/disable globally (the manifest `enabled` flag).
+- `p` — disable/enable for this project (`.terva/config.json`
+  `disable_extensions`, restrict-only).
+- `c` — open the [config form](#configuration) (when the extension
+  declares a `config` schema).
+- `l` — open a scrollable view of the extension's log
+  (`$TERVA_HOME/logs/ext-<name>.log`) without leaving the TUI.
+
+When an extension is enabled but **not running** (it crashed on spawn),
+the row shows `off (not running)` and a one-line reason pulled from the
+log — press `l` for the full output (or `terva ext logs <name>` from the
+shell).
+
+## Configuration
+
+An extension can declare a `config` schema in its manifest. terva renders
+it as a form in the `/extensions` dialog (highlight the row and press
+`c`), stores the user's values, and delivers the resolved values to the
+extension — so an extension that needs an API key or a path gets guided
+setup instead of asking the user to hand-edit JSON.
+
+```json
+{
+  "name": "weather",
+  "exec": "./weather",
+  "config": [
+    { "key": "api_key", "label": "API key", "type": "secret", "required": true,
+      "description": "API key for the weather provider." },
+    { "key": "units", "label": "Units", "type": "select",
+      "options": ["celsius", "fahrenheit"], "default": "celsius" }
+  ]
+}
+```
+
+Each field: `key` (required, the map key), `label`, `type` (`string`
+default, `bool`, `int`, `select`, `secret`), `default`, `required`,
+`description`, and `options` (for `select`). `secret` fields are masked in
+the dialog and never logged.
+
+**Where values live.** In the user config at `$TERVA_HOME/config.json`
+under `extensions.<name>`, **user layer only** — a project's
+`.terva/config.json` may *disable* an extension but never set its values
+(a value is an escalation, not a restriction). Secret values are stored
+**plaintext** there (user-scoped); the UI masks them and the host never
+logs them, but treat the file as you would any credential store.
+
+**Delivery.** The resolved values (manifest defaults overlaid with the
+user's) arrive in the `hello_ack` handshake, and again on every change as
+a `config_update` event — so a live edit takes effect without a restart.
+With the Go SDK:
+
+```go
+e := ext.New("weather", "1.0.0")
+e.OnConfig(func(c ext.Config) {       // fired on every change (optional)
+    e.Logf("config updated: api_key %v", c.Has("api_key")) // never log the value
+})
+e.Tool("weather", "...", schema, func(args json.RawMessage) ext.ToolResult {
+    cfg := e.Config()                  // current values, always fresh
+    if cfg.String("api_key") == "" {
+        return ext.TextErrorResult("not configured — set an API key in /extensions (press c)")
+    }
+    // cfg.String(key) / cfg.Bool(key) / cfg.Int(key) / cfg.Has(key)
+    ...
+})
+```
+
+Backward compatible both ways: an extension with no `config` schema gets
+no config form; an older host simply never sends config (the extension
+keeps whatever it read at the handshake). See
+`examples/extensions/weather` for a complete example.
 
 ## Recommended: a self-bootstrapping launcher
 

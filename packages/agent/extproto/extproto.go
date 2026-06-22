@@ -87,6 +87,13 @@ const (
 	EventWorkspaceChanged    = "workspace_changed"
 	EventCompactStart        = "compact_start"
 	EventTranscriptCompacted = "transcript_compacted"
+	// EventConfigUpdate fires when the user changes this extension's config
+	// (via the /extensions config dialog). The new resolved values ride the
+	// event's Config field. Fire-and-forget and gracefully degrading (an
+	// older host never emits it), so — like transcript_compacted — it needs
+	// no protocol bump; the extension's initial values still arrive in
+	// hello_ack regardless.
+	EventConfigUpdate = "config_update"
 )
 
 // KnownEvents is the canonical, ordered list of those events. Advertised
@@ -96,6 +103,7 @@ var KnownEvents = []string{
 	EventSessionStart, EventSessionEnd, EventTurnStart, EventTurnEnd, EventRunEnd,
 	EventToolCall, EventToolResult, EventUserMessage, EventAssistantMessage,
 	EventWorkspaceChanged, EventCompactStart, EventTranscriptCompacted,
+	EventConfigUpdate,
 }
 
 // FileChange is one entry in a workspace_changed event: a workspace-
@@ -452,6 +460,14 @@ type HelloAckFromHost struct {
 	// or warn. Absent (older host) means "unknown": the extension should
 	// just subscribe optimistically and degrade if the event never fires.
 	SupportedEvents []string `json:"supported_events,omitempty"`
+	// Config carries the resolved values for THIS extension (the manifest's
+	// declared defaults overlaid with what the user saved under config.json
+	// `extensions.<name>`), keyed by config field key. Absent/empty when the
+	// extension declares no config or the user set nothing. Live changes
+	// arrive afterward on a config_update event. Additive — older SDKs
+	// ignore it. Secret values are PLAINTEXT here (user-scoped config),
+	// never logged by the host.
+	Config map[string]json.RawMessage `json:"config,omitempty"`
 }
 
 type CommandInvokedFromHost struct {
@@ -510,6 +526,10 @@ type EventFromHost struct {
 	// event (added/modified/deleted, workspace-relative paths). Empty on
 	// every other event. Additive/omitempty — older subscribers ignore it.
 	Files []FileChange `json:"files,omitempty"`
+	// Config carries this extension's new resolved values on a
+	// "config_update" event (same shape as HelloAck.Config). Empty on every
+	// other event. Additive/omitempty — older subscribers ignore it.
+	Config map[string]json.RawMessage `json:"config,omitempty"`
 }
 
 type EventInterceptFromHost struct {

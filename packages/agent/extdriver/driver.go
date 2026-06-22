@@ -119,6 +119,13 @@ type Driver struct {
 	// storage, so the agent layer injects this; nil means session reads
 	// are unsupported (an empty list / not-found). Guarded by mu.
 	sessionReader SessionReader
+
+	// configResolver, if set, resolves an extension's host-supplied config
+	// (manifest defaults overlaid with the user's saved values) at spawn
+	// time, for the hello_ack Config field. The driver is dependency-light
+	// and does not read config.json, so the agent layer injects this; nil
+	// means extensions receive no host config. Guarded by mu.
+	configResolver ConfigResolver
 }
 
 // SessionReader gives an extension read-only, project-scoped access to
@@ -574,6 +581,7 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 		ExtensionDir:    ext.Dir,
 		DataDir:         dataDir,
 		SupportedEvents: extproto.KnownEvents,
+		Config:          d.resolvedConfigFor(ext.Manifest.Name, ext.Manifest.Config),
 	}); err != nil {
 		// Tear down the writer goroutine we just started so it doesn't
 		// leak on this failed spawn.

@@ -3,6 +3,23 @@
   "version": "1.0.0",
   "exec": "./weather",
   "language": "go",
-  "description": "registers a `weather` tool the LLM can call",
-  "enabled": true
+  "description": "registers a `weather` tool the LLM can call; demonstrates host-supplied config",
+  "enabled": true,
+  "config": [
+    {
+      "key": "api_key",
+      "label": "API key",
+      "type": "secret",
+      "required": true,
+      "description": "API key for the weather provider (demo: any non-empty value works)."
+    },
+    {
+      "key": "units",
+      "label": "Units",
+      "type": "select",
+      "options": ["celsius", "fahrenheit"],
+      "default": "celsius",
+      "description": "Temperature units to report."
+    }
+  ]
 }

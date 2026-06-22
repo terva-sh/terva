@@ -92,6 +92,11 @@ type Event struct {
 	// typed convenience path.
 	Files []FileChange
 
+	// Config carries this extension's new resolved values on a
+	// config_update event. Empty on every other event. Use OnConfig for the
+	// typed convenience path.
+	Config Config
+
 	// SessionID / SessionPath / SessionTitle identify the active
 	// session on a session_start event (host protocol 2+). An empty
 	// SessionID means no active session (e.g. --no-session, or the
@@ -323,6 +328,7 @@ type Extension struct {
 	onUserMessage      func(UserMessage)
 	onWorkspaceChanged func(WorkspaceChange)
 	onRunEnd           func(RunEnd)
+	onConfig           func(Config)
 
 	interceptTool      InterceptHandler
 	interceptToolRich  ToolCallHandler
@@ -438,6 +444,46 @@ type HostInfo struct {
 	// (core.ProjectKey). Use it to scope per-project state. Refreshes
 	// alongside CWD on session_start.
 	ProjectID string
+
+	// Config is this extension's host-supplied configuration: the resolved
+	// values for the fields declared in extension.json's `config`, keyed by
+	// field key. Seeded at the handshake and refreshed on every
+	// config_update event (use OnConfig). Empty when the extension declares
+	// no config or the user set nothing. Read values with the typed getters
+	// (Config.String/Bool/Int) or Raw for the JSON.
+	Config Config
+}
+
+// Config is an extension's host-supplied configuration map: resolved
+// values keyed by the field keys declared in extension.json's `config`.
+// Each value is the raw JSON the user saved (or the manifest default).
+type Config map[string]json.RawMessage
+
+// Has reports whether key has a value.
+func (c Config) Has(key string) bool { _, ok := c[key]; return ok }
+
+// Raw returns the raw JSON for key (and whether it was present).
+func (c Config) Raw(key string) (json.RawMessage, bool) { v, ok := c[key]; return v, ok }
+
+// String returns key decoded as a string, or "" if absent / not a string.
+func (c Config) String(key string) string {
+	var s string
+	_ = json.Unmarshal(c[key], &s)
+	return s
+}
+
+// Bool returns key decoded as a bool, or false if absent / not a bool.
+func (c Config) Bool(key string) bool {
+	var b bool
+	_ = json.Unmarshal(c[key], &b)
+	return b
+}
+
+// Int returns key decoded as an int, or 0 if absent / not a number.
+func (c Config) Int(key string) int {
+	var n int
+	_ = json.Unmarshal(c[key], &n)
+	return n
 }
 
 // Emits reports whether the host advertised (in the hello_ack) that it can
@@ -825,6 +871,30 @@ func (e *Extension) OnUserMessage(fn func(UserMessage)) {
 	e.mu.Lock()
 	e.onUserMessage = fn
 	e.ensureSubscribed("user_message")
+	e.mu.Unlock()
+}
+
+// Config returns this extension's host-supplied configuration (the same
+// map as Host().Config). Sugar for the common read path. It reflects the
+// latest config_update, so calling it inside a tool handler always sees
+// the user's current settings.
+func (e *Extension) Config() Config {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.host.Config
+}
+
+// OnConfig registers a handler fired whenever the user changes this
+// extension's configuration (via the /extensions config dialog). The
+// handler receives the new resolved values; Host().Config is already
+// updated when it runs. The initial values arrive in the handshake, not
+// here — read Config() at startup. No RequireProtocol is needed: an older
+// host simply never emits config_update (the extension keeps its handshake
+// values). Secret values are plaintext in the map — never log them.
+func (e *Extension) OnConfig(fn func(Config)) {
+	e.mu.Lock()
+	e.onConfig = fn
+	e.ensureSubscribed("config_update")
 	e.mu.Unlock()
 }
 
@@ -1297,6 +1367,7 @@ func (e *Extension) Run() error {
 					ExtensionDir:    ack.ExtensionDir,
 					DataDir:         ack.DataDir,
 					SupportedEvents: ack.SupportedEvents,
+					Config:          Config(ack.Config),
 				}
 				e.mu.Unlock()
 			}
@@ -1365,6 +1436,12 @@ func (e *Extension) Run() error {
 					e.host.ProjectID = ef.ProjectID
 				}
 			}
+			// Keep Host().Config current before any handler runs, so a tool
+			// or panel handler reading it sees the freshly-saved values and
+			// OnConfig observes the same map.
+			if ef.Event == "config_update" {
+				e.host.Config = Config(ef.Config)
+			}
 			handler := e.eventHandlers[ef.Event]
 			var onSession func(Session)
 			var onSessionEnd func(Session)
@@ -1373,6 +1450,7 @@ func (e *Extension) Run() error {
 			var onUserMessage func(UserMessage)
 			var onWorkspaceChanged func(WorkspaceChange)
 			var onRunEnd func(RunEnd)
+			var onConfig func(Config)
 			switch ef.Event {
 			case "session_start":
 				onSession = e.onSession
@@ -1388,6 +1466,8 @@ func (e *Extension) Run() error {
 				onWorkspaceChanged = e.onWorkspaceChanged
 			case "run_end":
 				onRunEnd = e.onRunEnd
+			case "config_update":
+				onConfig = e.onConfig
 			}
 			e.mu.Unlock()
 			if onSession != nil {
@@ -1464,6 +1544,16 @@ func (e *Extension) Run() error {
 					onWorkspaceChanged(WorkspaceChange{Files: files})
 				}()
 			}
+			if onConfig != nil {
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							e.Logf("OnConfig handler panicked: %v", r)
+						}
+					}()
+					onConfig(Config(ef.Config))
+				}()
+			}
 			if handler != nil {
 				func() {
 					defer func() {
@@ -1481,7 +1571,8 @@ func (e *Extension) Run() error {
 						ToolArgs: ef.ToolArgs, Text: ef.Text,
 						SessionID: ef.SessionID, SessionPath: ef.SessionPath, SessionTitle: ef.SessionTitle,
 						CWD: ef.CWD, ProjectID: ef.ProjectID,
-						Files: evFiles,
+						Files:  evFiles,
+						Config: Config(ef.Config),
 					})
 				}()
 			}
