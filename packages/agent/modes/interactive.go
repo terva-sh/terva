@@ -114,6 +114,13 @@ type InteractiveConfig struct {
 	// picker to only show reachable models.
 	LoggedInProviders func() []string
 
+	// FavoriteModels returns the user's favorited model keys ("provider/id"),
+	// pinned and starred at the top of the /model picker. Nil-safe.
+	FavoriteModels func() []string
+
+	// SetFavoriteModel persists a favorite toggle for a "provider/id" key.
+	SetFavoriteModel func(key string, on bool) error
+
 	// TervaHome is the root directory for sessions/, used by /sessions
 	// and the update-check cache.
 	TervaHome string

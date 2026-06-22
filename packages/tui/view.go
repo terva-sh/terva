@@ -332,22 +332,31 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 		}
 	}
 
+	// Snapshot the transcript once. v.Messages can be replaced on another
+	// goroutine mid-build (a turn appending, a session load), and this
+	// function reads it repeatedly — sizing `rendered` from its length, then
+	// re-ranging it for the anchor pass. When it grew between those reads the
+	// anchor loop indexed past `rendered` and panicked ("index out of range").
+	// A single local snapshot makes the whole build internally consistent (the
+	// frame may be one redraw stale; the next redraw catches up).
+	msgs := v.Messages
+
 	// Pre-render every message (hits the cache for unchanged ones) so
 	// we can allocate `out` in a single shot with the exact capacity.
 	// Growing via append on a long transcript copies the backing array
 	// log2(N) times; for a 2000-line scrollback that's enough memcpy
 	// to visibly stutter while typing.
-	rendered := make([][]string, len(v.Messages))
+	rendered := make([][]string, len(msgs))
 	total := 0
 	// renderFrom is the first index we actually render. Anything
 	// below it emits a zero-row placeholder; the message still gets
 	// an anchor entry so /jump and scroll math keep working, and a
 	// later Build with a higher TailLimit fills the gap.
 	renderFrom := 0
-	if v.TailLimit > 0 && len(v.Messages) > v.TailLimit {
-		renderFrom = len(v.Messages) - v.TailLimit
+	if v.TailLimit > 0 && len(msgs) > v.TailLimit {
+		renderFrom = len(msgs) - v.TailLimit
 	}
-	for idx, m := range v.Messages {
+	for idx, m := range msgs {
 		if idx < renderFrom {
 			rendered[idx] = nil
 			continue
@@ -360,7 +369,7 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 		turnOpen := false
 		if m.Role == provider.RoleAssistant {
 			for j := idx - 1; j >= 0; j-- {
-				prev := v.Messages[j]
+				prev := msgs[j]
 				// Skip compaction summary messages — they're
 				// rendered as a muted footer line (or hidden
 				// entirely when collapsed) and don't open a turn.
@@ -379,8 +388,8 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 	}
 
 	out := make([]string, 0, total+16)
-	anchors := make([]MessageAnchor, 0, len(v.Messages))
-	for idx := range v.Messages {
+	anchors := make([]MessageAnchor, 0, len(msgs))
+	for idx := range msgs {
 		anchors = append(anchors, MessageAnchor{MessageIdx: idx, Row: len(out)})
 		out = append(out, rendered[idx]...)
 		// Skip the inter-message blank for messages that rendered
@@ -426,7 +435,7 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 	// blocks render no rows of their own, so suppressing the overlay
 	// at that point makes the box disappear while the tool is running.
 	finalised := map[string]bool{}
-	for _, m := range v.Messages {
+	for _, m := range msgs {
 		for _, c := range m.Content {
 			if b, ok := c.(provider.ToolResultBlock); ok {
 				finalised[b.CallID] = true

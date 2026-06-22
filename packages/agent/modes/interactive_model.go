@@ -132,6 +132,24 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 	}
 }
 
+// persistFavoriteModel saves a favorite toggle for "provider/model". The
+// picker has already re-sorted and kept the cursor on the model; this just
+// persists the membership change (Ctrl+F in the /model picker).
+func (i *Interactive) persistFavoriteModel(prov, model string, on bool) {
+	if i.cfg.SetFavoriteModel == nil {
+		return
+	}
+	if err := i.cfg.SetFavoriteModel(prov+"/"+model, on); err != nil {
+		i.setStatusErr("favorite: " + err.Error())
+		return
+	}
+	verb := "favorited"
+	if !on {
+		verb = "unfavorited"
+	}
+	i.setStatusOK(model + " " + verb)
+}
+
 // promoteModelDefault persists the current pick as a default in the given
 // scope ("project" / "global") and surfaces the outcome on the status line.
 // Invoked from the /model picker's Ctrl+D promote prompt, after the switch.

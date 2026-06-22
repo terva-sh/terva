@@ -501,6 +501,15 @@ func Run(rawArgs []string, version string) error {
 		fmt.Fprintln(os.Stderr, "connector load:", err)
 	}
 
+	// Register user-defined OpenAI-compatible endpoints (config.json
+	// "endpoints") as providers before any Resolve / discovery sees them.
+	RegisterEndpointsFromConfig()
+
+	// Open the tool-call audit log for this process (lazily backed, so a
+	// no-tool run never touches disk). Every mode's BeforeToolExecute records
+	// through this shared sink — see buildBeforeToolExecute.
+	auditSink = newAuditLog(TervaHome())
+
 	// Subcommand router: `terva bot ...` is handled separately so the
 	// generic flag parser doesn't reject "bot" as a positional arg.
 	if handled, err := runBotCommand(rawArgs, version); handled {
@@ -745,8 +754,21 @@ func buildHookEngine(args Args, trusted bool) *hooks.Engine {
 // the ladders cannot drift apart. hookEng, gate, and extMgr may each
 // be nil.
 func buildBeforeToolExecute(ctx context.Context, hookEng *hooks.Engine, gate *core.ConfirmGate, extMgr *extensions.Manager) func(provider.ToolCallBlock) (bool, string, json.RawMessage) {
-	return func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	return func(call provider.ToolCallBlock) (allowed bool, reason string, modArgs json.RawMessage) {
 		args := call.Arguments
+		// Audit every call with the gate's decision and the mode in force, so
+		// even a yolo session leaves a durable record of what ran and why it
+		// was permitted. Recorded once on the way out: args tracks hook/ext
+		// rewrites, and the named returns carry the final verdict. auditSink is
+		// nil (no-op) outside a real run, e.g. in tests.
+		defer func() {
+			mode := ""
+			if gate != nil {
+				mode = string(gate.Mode())
+			}
+			auditSink.Record(time.Now(), call.Name, args, mode, allowed, reason)
+		}()
+
 		hookModified := false
 		skipGate := false
 		if hookEng != nil {
@@ -766,9 +788,9 @@ func buildBeforeToolExecute(ctx context.Context, hookEng *hooks.Engine, gate *co
 			// exit 2 is the enforcement spelling.
 		}
 		if !skipGate && gate != nil {
-			ok, reason, _ := gate.Check(call.Name, args, core.BuildPreview(args, 120))
+			ok, denyReason, _ := gate.Check(call.Name, args, core.BuildPreview(args, 120))
 			if !ok {
-				return false, reason, nil
+				return false, denyReason, nil
 			}
 		}
 		if extMgr != nil {
@@ -777,7 +799,8 @@ func buildBeforeToolExecute(ctx context.Context, hookEng *hooks.Engine, gate *co
 				return false, res.Reason, nil
 			}
 			if res.ModifiedArgs != nil {
-				return true, "", res.ModifiedArgs
+				args = res.ModifiedArgs // reflect the rewrite in the audit line
+				return true, "", args
 			}
 		}
 		if hookModified {
@@ -915,6 +938,32 @@ func resolveSwarmWorktrees(flagOverride, cfg *bool) bool {
 		return *flagOverride
 	}
 	return cfg != nil && *cfg
+}
+
+// swarmTierMap converts the user config's per-provider tier pins into the
+// tools-layer override map (provider -> {tier -> model id}). Empty tier fields
+// are dropped so they fall back to the built-in family guess; an all-empty
+// result is nil so resolution is a clean no-op.
+func swarmTierMap(tiers map[string]TierConfig) tools.SwarmTierMap {
+	if len(tiers) == 0 {
+		return nil
+	}
+	out := make(tools.SwarmTierMap, len(tiers))
+	for prov, tc := range tiers {
+		m := map[string]string{}
+		for tier, id := range map[string]string{"weak": tc.Weak, "medium": tc.Medium, "strong": tc.Strong} {
+			if strings.TrimSpace(id) != "" {
+				m[tier] = strings.TrimSpace(id)
+			}
+		}
+		if len(m) > 0 {
+			out[prov] = m
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // swarmWorktreeAcquirer builds the swarm.Config.AcquireWorktree hook
@@ -1158,6 +1207,11 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// even when the user has switched the feature off. The /settings
 	// toggle live-mutates the running agent's registry separately so
 	// flipping the flag mid-session takes effect on the next turn.
+	// Per-provider tier→model overrides for swarm_spawn's `tier` param, from
+	// the user config (never project — sub-agent model selection must not be
+	// redirectable by a cloned repo). Captured once so every registry-rebuild
+	// path that re-injects swarm_spawn carries the same overrides.
+	hostTiers := swarmTierMap(swarmWTCfg.SwarmTiers)
 	injectSwarmSpawn := func(reg core.Registry) core.Registry {
 		if reg == nil {
 			return reg
@@ -1171,6 +1225,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			OnSpawned:    onSpawnedSwarm,
 			HostProvider: r.Provider,
 			HostModel:    r.Model,
+			Tiers:        hostTiers,
 		}
 		return reg
 	}
@@ -1334,14 +1389,31 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		ag = wireAgentExt(r.NewAgent())
 	}
 
+	// liveAgent returns the agent the TUI is actually running. A
+	// cross-provider /model swap or a login rebuilds the agent and installs
+	// it via i.turns.SetAgent without updating this function's `ag` variable,
+	// so `ag` goes stale; iv.Agent() is the authoritative handle (the same one
+	// the exit-time flush uses). Every callback that mutates "the current
+	// agent" (extension reload, /cd, /new, /sessions) must resolve through
+	// here, or it silently operates on an orphaned pre-swap agent — which is
+	// how /new left the live transcript intact and seeded the new session with
+	// the old conversation. Falls back to `ag` before the TUI exists.
+	liveAgent := func() *core.Agent {
+		if iv != nil {
+			if a := iv.Agent(); a != nil {
+				return a
+			}
+		}
+		return ag
+	}
+
 	// /reload-ext callback: after the manager has respawned every
 	// extension, re-resolve the tool registry (built-ins + freshly-
 	// registered extension tools) and swap it onto the current
 	// agent in-place. The current agent may have been replaced by a
-	// /model swap since spawn, so re-read the live `ag` on each
-	// invocation.
+	// /model swap since spawn, so re-read the live agent each invocation.
 	extMgr.SetOnReload(func() {
-		current := ag
+		current := liveAgent()
 		if current == nil {
 			return
 		}
@@ -1423,6 +1495,16 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			sessBaselineMsgs = len(messages)
 		}
 	}
+	persistImageExclusion := func(sha string) {
+		persistMu.Lock()
+		defer persistMu.Unlock()
+		if sess == nil {
+			return
+		}
+		// Append-only directive: a resume re-applies it instead of re-sending
+		// the image the provider rejected, so recovery is paid once.
+		_ = sess.AppendImageExclusion(sha, "provider rejected the image as invalid/unreadable")
+	}
 	wireAgentPersist := func(a *core.Agent) *core.Agent {
 		if a == nil {
 			return a
@@ -1430,6 +1512,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		a.OnMessageAppended = persistMessage
 		a.OnUsage = persistUsage
 		a.OnTranscriptCompacted = persistCompaction
+		a.OnImageExcluded = persistImageExclusion
 		return a
 	}
 	wireAgentPersist(ag)
@@ -1469,7 +1552,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// loadSession replaces the current session with the one at path and
 	// hands its messages to the agent. Used by the /sessions picker.
 	loadSession := func(path string) error {
-		currentAg := ag // captured
+		currentAg := liveAgent() // the agent the TUI runs, not a stale capture
 		if currentAg == nil {
 			return fmt.Errorf("no agent running; log in first")
 		}
@@ -1569,7 +1652,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			return fmt.Errorf("not a directory: %s", absPath)
 		}
 
-		currentAg := ag
+		currentAg := liveAgent()
 		if currentAg == nil {
 			return fmt.Errorf("no agent running; log in first")
 		}
@@ -1646,7 +1729,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// (PruneEmptySessions reclaims it only if it was empty). Wired into
 	// InteractiveConfig.NewSession and invoked by /new.
 	newSession := func(providerName, model string) error {
-		currentAg := ag
+		currentAg := liveAgent() // reset the agent the TUI runs (see liveAgent)
 		if currentAg == nil {
 			return fmt.Errorf("no agent running; log in first")
 		}
@@ -1878,6 +1961,16 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 					out = append(out, "openai-compatible")
 				}
 			}
+			// User-defined endpoints are reachable once configured (base URL
+			// set; key optional), so surface each like openai-compatible.
+			if uc, err := LoadConfig(); err == nil {
+				for id, ep := range uc.Endpoints {
+					if ep.BaseURL != "" && !seen[id] {
+						out = append(out, id)
+						seen[id] = true
+					}
+				}
+			}
 			return out
 		},
 		LoadSession:         loadSession,
@@ -2001,6 +2094,15 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 				_ = sess.UpdateModel(providerName, model)
 			}
 			return nil
+		},
+		FavoriteModels: func() []string {
+			cfg, _ := LoadConfig()
+			return cfg.FavoriteModels
+		},
+		SetFavoriteModel: func(key string, on bool) error {
+			cfg, _ := LoadConfig()
+			cfg.FavoriteModels = toggleStringMember(cfg.FavoriteModels, key, on)
+			return SaveConfig(cfg)
 		},
 		RefreshCompatModels: RefreshCompatModelsAsync,
 	})

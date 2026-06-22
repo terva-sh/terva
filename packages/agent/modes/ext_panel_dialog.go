@@ -59,6 +59,7 @@ func (d *extPanelDialog) Render(th tui.Theme, width int) []string {
 		title = d.ext
 	}
 	out := []string{frameHeaderColor(th, title, width, th.Accent)}
+	limit := max(width, 8)
 	for _, l := range d.lines {
 		plain := stripANSIBytes(l)
 		trimmed := strings.TrimLeft(plain, " ")
@@ -70,7 +71,14 @@ func (d *extPanelDialog) Render(th tui.Theme, width int) []string {
 		selected := strings.HasPrefix(trimmed, "▸ ") ||
 			strings.HasPrefix(trimmed, "● ") ||
 			strings.HasPrefix(trimmed, "\u200b")
-		out = append(out, styleExtPanelLine(th, l, plain, width, selected))
+		// Fold a long row to the panel width so it wraps instead of running
+		// off the right edge (e.g. /memory's entries). Keep-style wrapping
+		// re-applies a pre-styled line's colour to each continuation row; the
+		// selection highlight is re-derived per segment, so every wrapped row
+		// of a selected entry stays highlighted full-width.
+		for _, seg := range tui.WrapANSILineKeepStyle(l, limit) {
+			out = append(out, styleExtPanelLine(th, seg, stripANSIBytes(seg), width, selected))
+		}
 	}
 	if strings.TrimSpace(d.footer) != "" {
 		out = append(out, "")

@@ -245,8 +245,14 @@ func (i *Interactive) buildChat(cols int, snap frameSnapshot) []string {
 
 	// Extension notes (notify / display) live just under the
 	// transcript, above the dialog/editor band. Cleared by /clear.
+	// Each note is pre-styled (accent prefix + coloured body); wrap to
+	// the terminal width with keep-style so a long one (e.g. /memory
+	// list) folds across rows instead of running off the right edge.
 	if len(snap.extNotes) > 0 {
-		chat = append(chat, snap.extNotes...)
+		limit := max(cols-1, 8)
+		for _, line := range snap.extNotes {
+			chat = append(chat, tui.WrapANSILineKeepStyle(line, limit)...)
+		}
 		chat = append(chat, "")
 	}
 
