@@ -197,8 +197,9 @@ func (i *Interactive) applyAutoSwarmTool(active bool) {
 			Swarm:        i.cfg.Swarm,
 			Enabled:      func() bool { return true },
 			OnSpawned:    i.trackSwarmAgent,
-			HostProvider: i.cfg.Provider,
+			HostProvider: i.cfg.Provider, // updated on /model swap (interactive_model.go)
 			HostModel:    i.cfg.Model,
+			Tiers:        tools.SwarmTierMap(i.cfg.SwarmTiers),
 		}
 	}
 	ag.SetTools(next)

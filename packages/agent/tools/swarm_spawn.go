@@ -70,15 +70,15 @@ const swarmSpawnSchema = `{
     "tier": {
       "type": "string",
       "enum": ["weak", "medium", "strong"],
-      "description": "Optional model strength for the sub-agent: weak (cheap/fast, e.g. Haiku), medium (e.g. Sonnet), strong (e.g. Opus). Resolved for the host provider and never stronger than the host model. Use weak for routine sub-tasks to save cost. Ignored when 'model' is set or the provider has no tier mapping (then the host model is used)."
+      "description": "Optional model strength for the sub-agent: weak (cheap/fast, e.g. Haiku), medium (e.g. Sonnet), strong (e.g. Opus). Resolved for the host provider and PINNED to it (the sub-agent runs on the host provider at this strength), never stronger than the host model. Use weak for routine sub-tasks to save cost. Only valid when model+provider are omitted; if the provider has no tier mapping the host model is used."
     },
     "model": {
       "type": "string",
-      "description": "Optional model id to pin the sub-agent to (e.g. \"claude-sonnet-4-5\", \"gpt-5\"). Overrides 'tier'. Defaults to the host's current model."
+      "description": "Optional model id to pin the sub-agent to. Normally OMIT both model and provider so the sub-agent inherits the host session's resolved provider/model/auth route. A model id is only valid for its provider, so if you set this you must also set provider. Do not infer the provider from the model name."
     },
     "provider": {
       "type": "string",
-      "description": "Optional provider id (e.g. \"anthropic\", \"openai\"). Usually paired with model."
+      "description": "Optional provider id. Normally OMIT both model and provider so the sub-agent inherits the host session. If you set this you must also set model."
     }
   },
   "required": ["task"]
@@ -106,20 +106,15 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		return toolErr("swarm_spawn: task is required"), nil
 	}
 
-	// An explicit model wins; otherwise a tier resolves to a model for
-	// the host provider, capped at the host's own strength. An
-	// unresolvable tier (no provider mapping, no catalog match) leaves
-	// model empty so the sub-agent inherits the host model.
-	model := strings.TrimSpace(a.Model)
-	tier := strings.ToLower(strings.TrimSpace(a.Tier))
-	if model == "" && tier != "" {
-		model = ResolveSwarmTier(t.HostProvider, t.HostModel, tier, t.Tiers)
+	route, errMsg := resolveSpawnRoute(a, t.HostProvider, t.HostModel, t.Tiers)
+	if errMsg != "" {
+		return toolErr("swarm_spawn: " + errMsg), nil
 	}
 
 	agent, err := t.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
 		Task:     task,
-		Model:    model,
-		Provider: strings.TrimSpace(a.Provider),
+		Model:    route.Model,
+		Provider: route.Provider,
 	})
 	if err != nil {
 		return core.ToolResult{}, fmt.Errorf("swarm_spawn: %w", err)
@@ -128,20 +123,26 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		t.OnSpawned(agent, task)
 	}
 
+	tier := strings.ToLower(strings.TrimSpace(a.Tier))
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "spawned sub-agent %s\n", agent.ID)
 	fmt.Fprintf(&sb, "task: %s\n", truncateTask(task, 200))
-	if model != "" {
-		if tier != "" && a.Model == "" {
-			fmt.Fprintf(&sb, "model: %s (tier %s)\n", model, tier)
-		} else {
-			fmt.Fprintf(&sb, "model: %s\n", model)
-		}
-	} else if tier != "" {
-		fmt.Fprintf(&sb, "tier %s not available for this provider; using the host model\n", tier)
+	switch {
+	case route.TierModel != "":
+		fmt.Fprintf(&sb, "model: %s (tier %s)\n", route.Model, tier)
+	case tier != "" && route.Inherited:
+		fmt.Fprintf(&sb, "model: %s (tier %s unavailable for %s; host model)\n", route.Model, tier, route.Provider)
+	case route.Inherited && route.Model != "":
+		fmt.Fprintf(&sb, "model: %s (inherited from host)\n", route.Model)
+	case route.Model != "":
+		fmt.Fprintf(&sb, "model: %s\n", route.Model)
 	}
-	if a.Provider != "" {
-		fmt.Fprintf(&sb, "provider: %s\n", a.Provider)
+	if route.Provider != "" {
+		if route.Inherited {
+			fmt.Fprintf(&sb, "provider: %s (inherited from host)\n", route.Provider)
+		} else {
+			fmt.Fprintf(&sb, "provider: %s\n", route.Provider)
+		}
 	}
 	sb.WriteString("\nThe sub-agent is running in the background. Use /swarm in the TUI to monitor it. ")
 	sb.WriteString("This conversation continues immediately; do not wait for the sub-agent to finish before working on the next thing.")
@@ -150,11 +151,52 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		Details: map[string]any{
 			"agent_id": agent.ID,
 			"task":     task,
-			"model":    model,
+			"model":    route.Model,
 			"tier":     tier,
-			"provider": a.Provider,
+			"provider": route.Provider,
 		},
 	}, nil
+}
+
+// spawnRoute is the resolved (provider, model) the sub-agent runs on. The
+// two fields are a pair: a model id is only meaningful with its provider.
+type spawnRoute struct {
+	Model     string
+	Provider  string
+	Inherited bool   // both model+provider were omitted → inherits the host route
+	TierModel string // the tier-resolved model, when a tier produced one
+}
+
+// resolveSpawnRoute pins the sub-agent's (model, provider) pair. An explicit
+// model+provider passes through; omitting both inherits the host's resolved
+// route so the sub-agent shares the parent session's provider/model/auth,
+// with an optional tier picking a cheaper model FOR the host provider and
+// the provider pinned to match (an unresolved tier falls back to the host
+// model, still on the host provider). A lone model or provider is rejected:
+// the sub-agent must not guess the missing partner or infer a provider from
+// a model id. Pure (no I/O) so it is unit-testable.
+func resolveSpawnRoute(a swarmSpawnArgs, hostProvider, hostModel string, tiers SwarmTierMap) (route spawnRoute, errMsg string) {
+	model := strings.TrimSpace(a.Model)
+	providerID := strings.TrimSpace(a.Provider)
+	tier := strings.ToLower(strings.TrimSpace(a.Tier))
+
+	if (model == "") != (providerID == "") {
+		return spawnRoute{}, "set model and provider together, or omit both (optionally with a tier) to inherit the host session"
+	}
+	if model == "" && providerID == "" {
+		route.Inherited = true
+		providerID = strings.TrimSpace(hostProvider)
+		if tier != "" {
+			route.TierModel = ResolveSwarmTier(hostProvider, hostModel, tier, tiers)
+			model = route.TierModel
+		}
+		if model == "" {
+			model = strings.TrimSpace(hostModel)
+		}
+	}
+	route.Model = model
+	route.Provider = providerID
+	return route, ""
 }
 
 func toolErr(msg string) core.ToolResult {
