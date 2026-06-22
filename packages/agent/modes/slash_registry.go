@@ -184,6 +184,11 @@ func init() {
 				i.openExtensionsDialog()
 				return false
 			}},
+		{name: "/mcp", desc: "list MCP servers; enable/disable globally or per-project",
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.openMCPDialog()
+				return false
+			}},
 		{name: "/connect", aliases: []string{"/telegram", "/tg"},
 			desc: "connect, disconnect, or show status of the chat bridge (telegram)", hint: "connect | disconnect | status",
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
@@ -202,6 +207,11 @@ func init() {
 		{name: "/settings", desc: "open settings",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				i.openSettingsDialog()
+				return false
+			}},
+		{name: "/paste", desc: "paste an image from the system clipboard into the prompt",
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.pasteClipboard()
 				return false
 			}},
 		{name: "/clear", desc: "clear the chat transcript", cancelsTurn: true,

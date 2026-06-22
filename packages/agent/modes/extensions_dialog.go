@@ -42,6 +42,15 @@ type ExtInfo struct {
 	Tools    int
 
 	HasLog bool
+
+	// LastLog is a one-line "why it's off" reason pulled from the tail of
+	// the extension's log (its own stderr — usually the crash), shown in the
+	// detail when the extension is off. Empty when running or no log.
+	LastLog string
+
+	// HasConfig is true when the extension declares a `config` schema in
+	// its manifest — the 'c' key then opens the per-extension config form.
+	HasConfig bool
 }
 
 // extensionsDialog lists installed extensions and toggles them on/off
@@ -91,6 +100,8 @@ func (d *extensionsDialog) current() (ExtInfo, bool) {
 type extensionsAction struct {
 	ToggleGlobal  bool
 	ToggleProject bool
+	OpenConfig    bool
+	OpenLog       bool
 	Close         bool
 	Name          string
 	Scope         string
@@ -127,6 +138,18 @@ func (d *extensionsDialog) HandleKey(k tui.Key) extensionsAction {
 			// Flip this project's disable. ProjectDisabled==true means
 			// currently off-here, so toggling enables it (On=true).
 			return extensionsAction{ToggleProject: true, Name: it.Name, Scope: it.Scope, On: it.ProjectDisabled}
+		case 'c':
+			// Open the per-extension config form, if it declares a schema.
+			if it.HasConfig {
+				return extensionsAction{OpenConfig: true, Name: it.Name}
+			}
+			d.status = it.Name + " has no configurable settings"
+		case 'l':
+			// View the extension's log (the crash reason lives there).
+			if it.HasLog {
+				return extensionsAction{OpenLog: true, Name: it.Name}
+			}
+			d.status = it.Name + " has no log yet"
 		}
 	}
 	return extensionsAction{}
@@ -167,7 +190,7 @@ func (d *extensionsDialog) Render(th tui.Theme, width int) []string {
 		return lines
 	}
 
-	lines = append(lines, th.FG256(th.Muted, "↑/↓ · g enable/disable (global) · p project on/off · esc"))
+	lines = append(lines, th.FG256(th.Muted, "↑/↓ · g enable/disable (global) · p project on/off · c config · l log · esc"))
 
 	const maxRows = 12
 	start, end := cursorWindow(d.cursor, len(d.items), maxRows)
@@ -205,6 +228,11 @@ func (d *extensionsDialog) Render(th tui.Theme, width int) []string {
 		}
 		if detail != "" {
 			lines = append(lines, th.FG256(th.Muted, "  "+truncate(detail, width-4)))
+		}
+		// When the extension is off, surface the last log line as the reason,
+		// and point at the full log ('l').
+		if it.LastLog != "" {
+			lines = append(lines, th.FG256(th.Warning, "  "+truncate(it.LastLog+"  (l for log)", width-4)))
 		}
 	}
 	if d.status != "" {

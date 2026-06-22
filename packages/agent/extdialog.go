@@ -208,11 +208,12 @@ func listInstalledExtensions(cwd string, trusted bool, mgr *extensions.Manager) 
 				continue
 			}
 			var m struct {
-				Name        string `json:"name"`
-				Version     string `json:"version"`
-				Language    string `json:"language"`
-				Description string `json:"description"`
-				Enabled     *bool  `json:"enabled"`
+				Name        string            `json:"name"`
+				Version     string            `json:"version"`
+				Language    string            `json:"language"`
+				Description string            `json:"description"`
+				Enabled     *bool             `json:"enabled"`
+				Config      []json.RawMessage `json:"config"`
 			}
 			if err := json.Unmarshal(raw, &m); err != nil || m.Name == "" {
 				continue
@@ -233,9 +234,15 @@ func listInstalledExtensions(cwd string, trusted bool, mgr *extensions.Manager) 
 				Running:            ready[m.Name],
 				Commands:           cmdCount[m.Name],
 				Tools:              toolCount[m.Name],
+				HasConfig:          len(m.Config) > 0,
 			}
 			if _, err := os.Stat(filepath.Join(TervaHome(), "logs", "ext-"+m.Name+".log")); err == nil {
 				info.HasLog = true
+			}
+			// Only when it SHOULD be running but isn't (crashed) — not for a
+			// deliberately-disabled extension, whose state label says so.
+			if info.Effective && !info.Running && info.HasLog {
+				info.LastLog = lastLogReason("ext", m.Name)
 			}
 			seen[m.Name] = true
 			out = append(out, info)

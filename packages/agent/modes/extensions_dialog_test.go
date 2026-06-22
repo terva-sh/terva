@@ -82,3 +82,16 @@ func TestExtensionsDialogSetItemsClampsCursor(t *testing.T) {
 		t.Errorf("cursor should clamp into range, got %d", d.cursor)
 	}
 }
+
+// 'l' opens the log for a row that has one; otherwise it's a no-op note.
+func TestExtensionsDialogLogKey(t *testing.T) {
+	d := newExtensionsDialog()
+	d.Open([]ExtInfo{{Name: "a", HasLog: true}, {Name: "b", HasLog: false}})
+	if act := d.HandleKey(rn('l')); !act.OpenLog || act.Name != "a" {
+		t.Errorf("l on a row with a log should open it, got %+v", act)
+	}
+	d.HandleKey(kind(tui.KeyDown))
+	if act := d.HandleKey(rn('l')); act.OpenLog {
+		t.Error("l on a row without a log should not open the viewer")
+	}
+}

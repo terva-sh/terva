@@ -752,6 +752,11 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args Args, r *Resolved, mc
 			Env:     s.Env,
 		}
 	}
+	// Honor disable_mcp (user ∪ restrict-only project) here too. ACP has no
+	// /mcp dialog, so this is gating only: a disabled server never spawns.
+	for name := range resolvedDisableMCP(args.CWD, r.Trusted) {
+		delete(cfg.Servers, name)
+	}
 	if len(cfg.Servers) == 0 {
 		return noop
 	}
@@ -802,6 +807,7 @@ func (f *acpFactory) setupACPExtensions(ctx context.Context, args Args, r *Resol
 	extMgr := extensions.New(TervaHome(), r.CWD, f.version, r.Provider, r.Model, nonInteractiveExtHooks{})
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
+	extMgr.SetConfigResolver(resolveExtensionConfig)  // hello_ack config delivery
 	wireSessionReader(extMgr, TervaHome(), r.CWD)
 	extMgr.SetProjectTrusted(r.Trusted) // gate project ext dirs on Workspace Trust
 	// --ext paths first so they win against installed extensions of the same

@@ -153,6 +153,38 @@ func (a *extToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {
 // the rest excluded).
 type mcpToolAdapter struct {
 	mgr *mcp.Manager
+
+	// Per-server stderr log handles are tracked here (not in a setupMCP
+	// closure) so a server started LIVE via the /mcp dialog — long after
+	// setupMCP returned — gets its log handle closed by the same stop func.
+	// An MCP server's log left open blocks temp-dir cleanup on Windows.
+	logMu    sync.Mutex
+	logFiles []*os.File
+}
+
+// stderrFor opens (append) and tracks the per-server log sink. Safe for
+// the several goroutines StartAll spawns, and reused by live StartOne.
+func (a *mcpToolAdapter) stderrFor(server string) io.Writer {
+	if mkErr := os.MkdirAll(LogsPath(), 0o755); mkErr != nil {
+		return nil
+	}
+	f, ferr := os.OpenFile(filepath.Join(LogsPath(), "mcp-"+server+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if ferr != nil {
+		return nil
+	}
+	a.logMu.Lock()
+	a.logFiles = append(a.logFiles, f)
+	a.logMu.Unlock()
+	return f
+}
+
+func (a *mcpToolAdapter) closeLogs() {
+	a.logMu.Lock()
+	for _, f := range a.logFiles {
+		_ = f.Close()
+	}
+	a.logFiles = nil
+	a.logMu.Unlock()
 }
 
 func (a *mcpToolAdapter) Tools() []ExtensionToolInfo {
@@ -197,47 +229,32 @@ func setupMCP(ctx context.Context, args Args, r *Resolved) (*mcpToolAdapter, fun
 		return nil, func() {}
 	}
 	mcpCfg := mergeMCPConfigs(user.MCP, trustedProjectMCP(args.CWD, r.Trusted))
-	if mcpCfg == nil || len(mcpCfg.Servers) == 0 {
-		return nil, func() {}
-	}
-	// Per-server stderr log files. We track every handle so the stop func
-	// can close them: an MCP server's log left open blocks the caller's
-	// temp-dir cleanup on Windows (the same class of bug as the hooks.log
-	// handle). StartAll may call stderrFor from several goroutines, so guard
-	// the slice.
-	var (
-		logMu    sync.Mutex
-		logFiles []*os.File
-	)
-	stderrFor := func(server string) io.Writer {
-		if mkErr := os.MkdirAll(LogsPath(), 0o755); mkErr != nil {
-			return nil
+	// Drop servers the user or (restrict-only) project has disabled before
+	// they ever spawn. This is the same list the /mcp dialog writes.
+	if mcpCfg != nil {
+		disabled := resolvedDisableMCP(args.CWD, r.Trusted)
+		for name := range mcpCfg.Servers {
+			if disabled[name] {
+				delete(mcpCfg.Servers, name)
+			}
 		}
-		f, ferr := os.OpenFile(filepath.Join(LogsPath(), "mcp-"+server+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if ferr != nil {
-			return nil
-		}
-		logMu.Lock()
-		logFiles = append(logFiles, f)
-		logMu.Unlock()
-		return f
 	}
-	mgr := mcp.StartAll(ctx, mcpCfg, stderrFor)
+	// Build a Manager even when nothing is configured or everything is
+	// disabled: the /mcp dialog can live-enable a server later via
+	// StartOne, and an empty Manager is a valid no-op (no subprocesses).
+	// Only --no-mcp (handled above) skips the Manager entirely.
+	adapter := &mcpToolAdapter{}
+	mgr := mcp.StartAll(ctx, mcpCfg, adapter.stderrFor)
+	adapter.mgr = mgr
 	for _, w := range mgr.Warnings() {
 		fmt.Fprintln(os.Stderr, "note:", w)
 	}
-	adapter := &mcpToolAdapter{mgr: mgr}
 	r.MergeExtensionTools(adapter)
 	// StopAll first so the stderr pumps have finished writing, then release
-	// the log handles.
+	// the log handles (including any opened by a live StartOne).
 	stop := func() {
 		mgr.StopAll()
-		logMu.Lock()
-		for _, f := range logFiles {
-			_ = f.Close()
-		}
-		logFiles = nil
-		logMu.Unlock()
+		adapter.closeLogs()
 	}
 	return adapter, stop
 }
@@ -644,6 +661,7 @@ func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, 
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
+	extMgr.SetConfigResolver(resolveExtensionConfig)  // hello_ack config delivery
 	wireSessionReader(extMgr, TervaHome(), r.CWD)
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
@@ -1094,6 +1112,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
+	extMgr.SetConfigResolver(resolveExtensionConfig)  // hello_ack config delivery
 	wireSessionReader(extMgr, TervaHome(), r.CWD)
 	// --ext paths first so they win against installed extensions of
 	// the same name (loadOne's first-write-wins semantics).
@@ -1212,6 +1231,12 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// redirectable by a cloned repo). Captured once so every registry-rebuild
 	// path that re-injects swarm_spawn carries the same overrides.
 	hostTiers := swarmTierMap(swarmWTCfg.SwarmTiers)
+	// swarm_spawn's host provider/model must track the agent's CURRENT
+	// resolved route so an auto-spawned sub-agent follows the same auth
+	// route the user is on — including after a /model swap. The build
+	// closures below refresh these before re-injecting the tool; the launch
+	// values seed them. (All writes/reads happen on the TUI goroutine.)
+	swarmHostProvider, swarmHostModel := r.Provider, r.Model
 	injectSwarmSpawn := func(reg core.Registry) core.Registry {
 		if reg == nil {
 			return reg
@@ -1223,8 +1248,8 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			Swarm:        swarmMgr,
 			Enabled:      AutoSwarmEnabled,
 			OnSpawned:    onSpawnedSwarm,
-			HostProvider: r.Provider,
-			HostModel:    r.Model,
+			HostProvider: swarmHostProvider,
+			HostModel:    swarmHostModel,
 			Tiers:        hostTiers,
 		}
 		return reg
@@ -1322,6 +1347,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		if mcpAdapter != nil {
 			resolved.MergeExtensionTools(mcpAdapter)
 		}
+		swarmHostProvider, swarmHostModel = resolved.Provider, resolved.Model
 		injectSwarmSpawn(resolved.ToolRegistry)
 		return wireAgentExt(resolved.NewAgent()), resolved.Provider, resolved.Model, nil
 	}
@@ -1347,6 +1373,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		if mcpAdapter != nil {
 			resolved.MergeExtensionTools(mcpAdapter)
 		}
+		swarmHostProvider, swarmHostModel = resolved.Provider, resolved.Model
 		injectSwarmSpawn(resolved.ToolRegistry)
 		return wireAgentExt(resolved.NewAgent()), resolved.Provider, resolved.Model, nil
 	}
@@ -1380,6 +1407,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		if mcpAdapter != nil {
 			resolved.MergeExtensionTools(mcpAdapter)
 		}
+		swarmHostProvider, swarmHostModel = resolved.Provider, resolved.Model
 		injectSwarmSpawn(resolved.ToolRegistry)
 		return wireAgentExt(resolved.NewAgent()), resolved.Provider, resolved.Model, nil
 	}
@@ -1407,12 +1435,15 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		return ag
 	}
 
-	// /reload-ext callback: after the manager has respawned every
-	// extension, re-resolve the tool registry (built-ins + freshly-
-	// registered extension tools) and swap it onto the current
-	// agent in-place. The current agent may have been replaced by a
-	// /model swap since spawn, so re-read the live agent each invocation.
-	extMgr.SetOnReload(func() {
+	// triggerReload re-resolves the tool registry (built-ins + freshly-
+	// registered extension tools + MCP tools) and swaps it onto the current
+	// agent in-place. Used by BOTH the extension reload (/reload-ext, a
+	// single /extensions toggle) and a live /mcp toggle — because the
+	// registry is rebuilt from scratch each time, a server or extension
+	// whose tools disappeared is genuinely removed. The current agent may
+	// have been replaced by a /model swap since spawn, so re-read the live
+	// agent each invocation.
+	triggerReload := func() {
 		current := liveAgent()
 		if current == nil {
 			return
@@ -1431,7 +1462,8 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		}
 		injectSwarmSpawn(resolved.ToolRegistry)
 		current.SetTools(resolved.ToolRegistry)
-	})
+	}
+	extMgr.SetOnReload(triggerReload)
 
 	var sess *core.Session
 	var sessBaselineMsgs int // messages already on disk when current session opened
@@ -1909,8 +1941,11 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		RecursiveFileSuggest:    initialCfg.RecursiveFileSuggest,
 		RespectGitignore:        initialCfg.RespectGitignore,
 		ThemeName:               initialCfg.Theme,
+		PersonaName:             PersonaName(),
+		PersonaPhonetic:         personaPhonetic(),
 		ExtensionThemes:         func() []tui.ThemeOption { return extensionThemeOptions(extMgr) },
 		AutoSwarmSystemAddendum: AutoSwarmSystemAddendum,
+		SwarmTiers:              hostTiers,
 		SettingsStore:           configSettingsStore{},
 		RebuildExtensionContext: func() (string, bool) {
 			if extMgr == nil {
@@ -2030,6 +2065,34 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		ApplyExtensionChange: func(name string) {
 			applyExtensionChangeLive(extMgr, r.CWD, r.Trusted, name)
 		},
+		ExtensionConfigFields: func(name string) []modes.ConfigField {
+			return extensionConfigFields(r.CWD, name)
+		},
+		SetExtensionConfig: func(name string, values map[string]string) error {
+			return setExtensionConfigFromForm(r.CWD, name, values)
+		},
+		ApplyExtensionConfig: func(name string) {
+			applyExtensionConfigLive(extMgr, r.CWD, name)
+		},
+		ListMCP: func() []modes.MCPInfo {
+			var mgr *mcp.Manager
+			if mcpAdapter != nil {
+				mgr = mcpAdapter.mgr
+			}
+			return listMCPServers(r.CWD, r.Trusted, mgr)
+		},
+		SetMCPGlobalEnabled: func(name string, on bool) error {
+			// on=true → ensure NOT in the user's disable_mcp list.
+			return setUserMCPDisabled(name, !on)
+		},
+		SetMCPProjectEnabled: func(name string, on bool) error {
+			// on=true → ensure NOT in the project's disable_mcp list.
+			return setProjectMCPDisabled(r.CWD, name, !on)
+		},
+		ApplyMCPChange: func(name string) {
+			applyMCPChangeLive(mcpAdapter, r.CWD, r.Trusted, name, triggerReload)
+		},
+		ReadLogTail:   readLogTail,
 		Swarm:         swarmMgr,
 		ChangelogChan: changelogCh,
 		OnChangelogDismiss: func() {
@@ -2105,6 +2168,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			return SaveConfig(cfg)
 		},
 		RefreshCompatModels: RefreshCompatModelsAsync,
+		RefreshModels:       RefreshModelsForceAsync,
 	})
 
 	// Bind the interactive TUI as the Confirmer. We deferred this

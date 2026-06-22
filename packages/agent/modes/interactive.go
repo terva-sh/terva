@@ -53,6 +53,14 @@ type InteractiveConfig struct {
 
 	// ThemeName mirrors the persisted config theme value. Empty means auto.
 	ThemeName string
+
+	// PersonaName is the agent's persona name shown in the welcome banner
+	// (e.g. "Mieli"). PersonaPhonetic is its pronunciation hint, shown after
+	// the name once the transient version suffix drops (e.g. "MYEH-lee");
+	// empty for a custom persona whose pronunciation we can't guess. Both are
+	// plumbed in from the cli so this package doesn't import agent (cycle).
+	PersonaName     string
+	PersonaPhonetic string
 	// ExtensionThemes returns themes bundled with loaded extensions.
 	ExtensionThemes func() []tui.ThemeOption
 
@@ -61,7 +69,12 @@ type InteractiveConfig struct {
 	// Plumbed in from the cli so this package doesn't have to import
 	// agent (cycle).
 	AutoSwarmSystemAddendum string
-	SettingsStore           SettingsStore
+	// SwarmTiers carries the user's per-provider tier→model overrides so the
+	// swarm_spawn tool re-attached on a /settings toggle resolves `tier` the
+	// same way the base registry does. The underlying type of
+	// tools.SwarmTierMap, to avoid importing tools here.
+	SwarmTiers    map[string]map[string]string
+	SettingsStore SettingsStore
 
 	// RebuildExtensionContext re-folds the extensions' static context
 	// into the system prompt after one of them sent refresh_context
@@ -229,6 +242,14 @@ type InteractiveConfig struct {
 	// all of the server's models in the picker without a restart.
 	RefreshCompatModels func()
 
+	// RefreshModels, if set, forces a background live-model re-discovery for
+	// every provider we hold credentials for, ignoring the model cache's
+	// freshness gate. Called after a successful runtime login so a newly-
+	// connected provider (opencode-go, openrouter, …) shows its full model
+	// list in /model without a restart. Distinct from RefreshCompatModels,
+	// which covers only the openai-compatible endpoint.
+	RefreshModels func()
+
 	OnAssistant  func(m provider.Message)
 	OnToolResult func(id string, r core.ToolResult)
 
@@ -249,6 +270,34 @@ type InteractiveConfig struct {
 	SetExtensionGlobalEnabled  func(name string, on bool) error
 	SetExtensionProjectEnabled func(name string, on bool) error
 	ApplyExtensionChange       func(name string)
+
+	// The per-extension config form's host hooks (the 'c' key in the
+	// /extensions dialog). ExtensionConfigFields builds the form for one
+	// extension from its manifest schema + saved values;
+	// SetExtensionConfig types and persists the user's values under
+	// config.json extensions.<name>; ApplyExtensionConfig pushes the new
+	// values to the running extension (config_update). All nil disables the
+	// config form.
+	ExtensionConfigFields func(name string) []ConfigField
+	SetExtensionConfig    func(name string, values map[string]string) error
+	ApplyExtensionConfig  func(name string)
+
+	// The /mcp dialog's host hooks, plumbed from the cli the same way.
+	// ListMCP returns the configured servers + live state;
+	// SetMCPGlobalEnabled adds/removes the name in the user config's
+	// disable_mcp; SetMCPProjectEnabled does the same in this project's
+	// disable_mcp; ApplyMCPChange starts or stops just that one server to
+	// match the new config (and refreshes the tool registry). All nil
+	// disables the /mcp command.
+	ListMCP              func() []MCPInfo
+	SetMCPGlobalEnabled  func(name string, on bool) error
+	SetMCPProjectEnabled func(name string, on bool) error
+	ApplyMCPChange       func(name string)
+
+	// ReadLogTail returns the tail of a log file for the in-TUI log viewer
+	// (the 'l' key in /extensions and /mcp). kind is "ext" or "mcp". nil
+	// disables the viewer.
+	ReadLogTail func(kind, name string) []string
 
 	// Swarm, if non-nil, enables the /swarm slash command and the
 	// dashboard dialog. The cli constructs the Swarm once per
@@ -405,6 +454,9 @@ type Interactive struct {
 	modelDialog       *modelDialog
 	modelEditDialog   *modelEditDialog
 	extensionsDialog  *extensionsDialog
+	extConfigDialog   *extConfigDialog
+	mcpDialog         *mcpDialog
+	logDialog         *logDialog
 	contextDialog     *contextDialog
 	rescueDialog      *rescueDialog
 	sessionDialog     *sessionDialog
@@ -504,6 +556,13 @@ type Interactive struct {
 	// them (or when the dialog is dismissed via esc).
 	pendingRescuePrompt string
 	pendingRescueImages []provider.ImageBlock
+
+	// clipboardImages holds images pasted via ctrl+v / the /paste command
+	// this turn, each tied to a visible "[clipboard image #N]" marker in the
+	// editor. On submit, preparePromptWithClipboardImages attaches the ones
+	// whose marker survived and drops the rest; cleared after every submit.
+	// UI-goroutine only (key/slash handlers and submit), so no mutex.
+	clipboardImages []clipboardImageAttachment
 }
 
 // welcomeVersionDuration is how long the welcome banner shows the
@@ -552,6 +611,9 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		modelDialog:       newModelDialog(),
 		modelEditDialog:   newModelEditDialog(),
 		extensionsDialog:  newExtensionsDialog(),
+		extConfigDialog:   newExtConfigDialog(),
+		mcpDialog:         newMCPDialog(),
+		logDialog:         newLogDialog(),
 		contextDialog:     newContextDialog(),
 		rescueDialog:      newRescueDialog(),
 		sessionDialog:     newSessionDialog(),

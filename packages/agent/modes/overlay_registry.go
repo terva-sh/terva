@@ -187,17 +187,60 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			render: func(cols int) []string { return i.modelEditDialog.Render(i.cfg.Theme, cols) },
 		},
+		{ // log viewer (/extensions or /mcp → l) — top of the cluster so it
+			// captures keys while open over either manager.
+			active: i.logDialog.Active,
+			ctrlC:  func() bool { i.logDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				i.logDialog.HandleKey(k)
+				return false
+			},
+			render: func(cols int) []string { return i.logDialog.Render(i.cfg.Theme, cols) },
+		},
+		{ // per-extension config form (/extensions → c) — above the manager
+			// so it captures keys while open (it opens on top of it).
+			active: i.extConfigDialog.Active,
+			ctrlC:  func() bool { i.extConfigDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				act := i.extConfigDialog.HandleKey(k)
+				if act.Save {
+					i.applyExtConfig(act)
+				}
+				return false
+			},
+			render: func(cols int) []string { return i.extConfigDialog.Render(i.cfg.Theme, cols) },
+		},
 		{ // extensions manager (/extensions)
 			active: i.extensionsDialog.Active,
 			ctrlC:  func() bool { i.extensionsDialog.Close(); return true },
 			handleKey: func(k tui.Key) bool {
 				act := i.extensionsDialog.HandleKey(k)
-				if act.ToggleGlobal || act.ToggleProject {
+				switch {
+				case act.OpenConfig:
+					i.openExtConfigDialog(act.Name)
+				case act.OpenLog:
+					i.openLogDialog("ext", act.Name)
+				case act.ToggleGlobal || act.ToggleProject:
 					i.applyExtensionToggle(act)
 				}
 				return false
 			},
 			render: func(cols int) []string { return i.extensionsDialog.Render(i.cfg.Theme, cols) },
+		},
+		{ // mcp manager (/mcp)
+			active: i.mcpDialog.Active,
+			ctrlC:  func() bool { i.mcpDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				act := i.mcpDialog.HandleKey(k)
+				switch {
+				case act.OpenLog:
+					i.openLogDialog("mcp", act.Name)
+				case act.ToggleGlobal || act.ToggleProject:
+					i.applyMCPToggle(act)
+				}
+				return false
+			},
+			render: func(cols int) []string { return i.mcpDialog.Render(i.cfg.Theme, cols) },
 		},
 		{ // /context: size breakdown + per-extension injected text
 			active: i.contextDialog.Active,

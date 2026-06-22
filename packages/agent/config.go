@@ -38,6 +38,15 @@ type Config struct {
 	Endpoints map[string]EndpointConfig `json:"endpoints,omitempty"`
 	Theme     string                    `json:"theme"`
 
+	// PersonaName overrides the agent's persona name — the name it
+	// introduces itself by and the name shown in the welcome banner. Empty
+	// means the default (DefaultPersonaName, "Mieli"). The TERVA_PERSONA_NAME
+	// env var takes precedence over this. Setting it swaps only the identity
+	// line; the rest of the system prompt (what terva means, the behaviour
+	// guidance) is unchanged. For a fully custom identity, drop a SYSTEM.md
+	// in $TERVA_HOME instead. User layer only.
+	PersonaName string `json:"persona_name,omitempty"`
+
 	// InlineImagesEnabled controls whether terva draws screenshots inline
 	// when the terminal supports an image protocol. nil/missing means
 	// auto (enabled when supported); false disables; true forces the
@@ -117,6 +126,17 @@ type Config struct {
 	// disabled. See docs/extensions.md.
 	DisableExtensions []string `json:"disable_extensions,omitempty"`
 
+	// Extensions holds per-extension configuration values, keyed by
+	// extension name and then by the config field keys the extension
+	// declares in its manifest `config` schema. The /extensions config
+	// dialog writes here; the resolved values (manifest defaults overlaid
+	// with these) are delivered to the extension over the wire. User layer
+	// ONLY — a project's .terva/config.json may disable an extension but
+	// never SET its values (a value is an escalation, not a restriction).
+	// Secret values are stored PLAINTEXT here (user-scoped); the UI masks
+	// them, the host never logs them. See extdialog.go / docs/extensions.md.
+	Extensions map[string]map[string]json.RawMessage `json:"extensions,omitempty"`
+
 	// DisableCorePackOffer suppresses the one-time first-run prompt that
 	// offers to install the built-in core extension pack when no
 	// extensions are present. For fleet/automation provisioning that sets
@@ -150,6 +170,15 @@ type Config struct {
 	// may only ADD servers, never replace a user-defined one (see
 	// mergeMCPConfigs and docs/plans/workspace-trust.md). See docs/mcp.md.
 	MCP *mcp.Config `json:"mcp,omitempty"`
+
+	// DisableMCP lists MCP server names that must NOT be started, by the
+	// name they carry under mcp.servers. It is the enable/disable surface
+	// the /mcp dialog writes to: there is no per-server manifest, so
+	// "enabled" simply means "absent from this list". A project's
+	// .terva/config.json may add to this list (restrict-only, union with
+	// the user layer) — honored even when the workspace is untrusted,
+	// since refusing to spawn a server is always safe. See mcpdialog.go.
+	DisableMCP []string `json:"disable_mcp,omitempty"`
 }
 
 // EndpointConfig defines one user-supplied OpenAI-compatible backend. The
@@ -230,6 +259,13 @@ type ProjectConfig struct {
 	// running here but can never make one run the user didn't install.
 	DisableExtensions []string `json:"disable_extensions,omitempty"`
 
+	// DisableMCP refuses to start specific MCP servers for this project.
+	// Restrict-only and union'd with the user layer (adds, never
+	// re-enables). UNLIKE the MCP field below it carries no trust gate:
+	// "don't spawn this server" is always safe to honor, so an untrusted
+	// repo can still disable a user-defined server for this directory.
+	DisableMCP []string `json:"disable_mcp,omitempty"`
+
 	// Hooks lets a TRUSTED project define pre/post tool-use hook programs
 	// (Workspace Trust Phase 6). These run arbitrary commands, so they are
 	// honored ONLY when the workspace is trusted — an untrusted cloned
@@ -275,6 +311,51 @@ func TervaHome() string {
 
 // ConfigPath returns the path to config.json.
 func ConfigPath() string { return filepath.Join(TervaHome(), "config.json") }
+
+// DefaultPersonaName is the agent's out-of-the-box persona name. "Mieli" is
+// Finnish for "mind" — the mind housed inside terva (Finnish for pine tar, the
+// preservative that sealed boats and kept them seaworthy): a mind in a
+// preserved vessel. Override per install with the TERVA_PERSONA_NAME env var
+// or the persona_name field in config.json.
+const DefaultPersonaName = "Mieli"
+
+// defaultPersonaPhonetic is the English-speaker pronunciation hint shown
+// after the default name in greetings. Emitted only for DefaultPersonaName:
+// a user-supplied name has no pronunciation we can guess.
+const defaultPersonaPhonetic = "MYEH-lee"
+
+// PersonaName resolves the agent's persona name: the TERVA_PERSONA_NAME env
+// var wins, then the persona_name config field, then DefaultPersonaName.
+func PersonaName() string {
+	if v := strings.TrimSpace(envcompat.Get("PERSONA_NAME")); v != "" {
+		return v
+	}
+	if cfg, err := LoadConfig(); err == nil {
+		if v := strings.TrimSpace(cfg.PersonaName); v != "" {
+			return v
+		}
+	}
+	return DefaultPersonaName
+}
+
+// personaPhonetic returns the pronunciation hint for the resolved persona, or
+// "" for a custom name (whose pronunciation we can't guess).
+func personaPhonetic() string {
+	if PersonaName() == DefaultPersonaName {
+		return defaultPersonaPhonetic
+	}
+	return ""
+}
+
+// personaLabel is the self-introduction label for greetings: the persona
+// name with its pronunciation hint when known ("Mieli (MYEH-lee)"), else the
+// bare name.
+func personaLabel() string {
+	if ph := personaPhonetic(); ph != "" {
+		return PersonaName() + " (" + ph + ")"
+	}
+	return PersonaName()
+}
 
 // AuthPath returns the path to auth.json.
 func AuthPath() string { return filepath.Join(TervaHome(), "auth.json") }
@@ -545,6 +626,12 @@ func ResolveConfig(cwd string, trustProject bool) EffectiveConfig {
 	// refuse to load an extension, never re-enable one the user disabled.
 	if pc != nil && len(pc.DisableExtensions) > 0 {
 		eff.Config.DisableExtensions = unionStrings(user.DisableExtensions, pc.DisableExtensions)
+	}
+	// And for the MCP disable list — restrict-only, NOT trust-gated: a
+	// project may refuse to start a server (its own or a user's) here, but
+	// can never make one start that the user disabled.
+	if pc != nil && len(pc.DisableMCP) > 0 {
+		eff.Config.DisableMCP = unionStrings(user.DisableMCP, pc.DisableMCP)
 	}
 	// Project default provider/model: trusted-only, because they change which
 	// model (and credentials/budget) a launch uses — same gate as Hooks/MCP.
