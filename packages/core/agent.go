@@ -782,11 +782,14 @@ func (a *Agent) retryDelay(attempt int, err error) time.Duration {
 const imageRejectedNote = "[image omitted: the model's provider rejected it as an invalid or unreadable image]"
 
 // isImageRejectionError reports whether a failed turn was the provider refusing
-// an image we sent (a 400 about invalid/unreadable image data) rather than a
-// transient fault. Matched on the message text so it works across providers and
-// whether or not the error is a typed ProviderError — e.g. OpenAI's "does not
-// represent a valid image" / "the image data you provided". Only consulted on a
-// non-nil error, so a positive phrase in a success path can't false-trigger.
+// an image we sent — either bad image data, or a content schema that doesn't
+// accept images at all — rather than a transient fault. Matched on the message
+// text so it works across providers and whether or not the error is a typed
+// ProviderError: OpenAI's "does not represent a valid image", or DeepSeek's
+// "unknown variant `image_url`, expected `text`" (a multimodal-less API). Only
+// consulted on a non-nil error, so a positive phrase in a success path can't
+// false-trigger. The catalog's CapImageInput should stop these from being sent
+// in the first place; this is the safety net for a model mis-marked as vision.
 func isImageRejectionError(err error) bool {
 	if err == nil {
 		return false
@@ -805,6 +808,7 @@ func isImageRejectionError(err error) bool {
 		"unsupported image",
 		"corrupt image",
 		"decode the image",
+		"image_url", // DeepSeek "unknown variant `image_url`, expected `text`"
 	} {
 		if strings.Contains(msg, p) {
 			return true

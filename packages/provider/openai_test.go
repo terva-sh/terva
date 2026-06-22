@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -125,6 +126,41 @@ func TestOpenAIToolImageContentIsString(t *testing.T) {
 	// Image-only result: the note tells the model the image is coming next.
 	if s == "" {
 		t.Error("image-only tool result produced empty content; want a short note")
+	}
+}
+
+// DeepSeek V4 is marked text-only (its API rejects image_url), so a user
+// message carrying an image must serialize as a plain string — the image
+// dropped from the wire (it stays in the transcript for a vision model).
+func TestDeepSeekDropsUserImage(t *testing.T) {
+	c := NewDeepSeek("k", "").(*openaiClient)
+	req, err := c.buildRequest(Request{
+		Model: "deepseek-v4-pro",
+		Messages: []Message{
+			{Role: RoleUser, Content: []Content{
+				TextBlock{Text: "what's in this picture"},
+				ImageBlock{MimeType: "image/png", Data: []byte("bytes")},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var userMsg *oaiMessage
+	for i := range req.Messages {
+		if req.Messages[i].Role == "user" {
+			userMsg = &req.Messages[i]
+		}
+	}
+	if userMsg == nil {
+		t.Fatal("no user message produced")
+	}
+	s, ok := userMsg.Content.(string)
+	if !ok {
+		t.Fatalf("deepseek user content = %T, want string (image must be dropped; the API rejects image_url)", userMsg.Content)
+	}
+	if !strings.Contains(s, "what's in this picture") {
+		t.Errorf("text content lost: %q", s)
 	}
 }
 

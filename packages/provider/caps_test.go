@@ -64,18 +64,19 @@ func TestCapabilityLayerPrecedence(t *testing.T) {
 	t.Cleanup(ResetCatalogLayers)
 	ResetCatalogLayers()
 
-	// deepseek-v4-pro asserts image-input:true in the static catalog.
-	// A live entry claiming image-input:false must NOT override it,
-	// but its other keys fill gaps the catalog left absent.
+	// deepseek-v4-pro asserts image-input:false in the static catalog (the
+	// V4 API has no vision endpoint yet). A live entry claiming
+	// image-input:true must NOT override that explicit catalog value, but
+	// its other keys fill gaps the catalog left absent.
 	SetLiveModels([]Model{{
 		Provider: "deepseek", ID: "deepseek-v4-pro",
-		Caps: map[Capability]bool{CapImageInput: false, CapImageOutput: true},
+		Caps: map[Capability]bool{CapImageInput: true, CapImageOutput: true},
 	}})
 	m, err := FindModel("deepseek", "deepseek-v4-pro")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !m.Has(CapImageInput) {
+	if m.Has(CapImageInput) {
 		t.Error("live discovery overrode the catalog's explicit image-input")
 	}
 	if !m.Has(CapImageOutput) {
@@ -85,13 +86,13 @@ func TestCapabilityLayerPrecedence(t *testing.T) {
 	// models.json outranks everything.
 	SetUserOverrides([]UserOverride{{
 		Model: Model{Provider: "deepseek", ID: "deepseek-v4-pro",
-			Caps: map[Capability]bool{CapImageInput: false}},
+			Caps: map[Capability]bool{CapImageInput: true}},
 	}})
 	m, err = FindModel("deepseek", "deepseek-v4-pro")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Has(CapImageInput) {
+	if !m.Has(CapImageInput) {
 		t.Error("user override must win over the catalog")
 	}
 	if !m.Has(CapImageOutput) {
@@ -101,7 +102,7 @@ func TestCapabilityLayerPrecedence(t *testing.T) {
 	// The catalog literal itself must be untouched by all the merging.
 	for _, cm := range Catalog {
 		if cm.Provider == "deepseek" && cm.ID == "deepseek-v4-pro" {
-			if v, ok := cm.Caps[CapImageInput]; !ok || !v {
+			if v, ok := cm.Caps[CapImageInput]; !ok || v {
 				t.Error("catalog literal was mutated by the layer merge")
 			}
 			if _, ok := cm.Caps[CapImageOutput]; ok {
@@ -169,7 +170,10 @@ func TestOpenAIImageDropPerModelCapability(t *testing.T) {
 		t.Error("text part was lost along with the image")
 	}
 
-	for _, id := range []string{"deepseek-v4-pro", "unknown-model-xyz"} {
+	// gpt-5 is vision-capable (catalog), unknown-model-xyz defaults to vision:
+	// both keep the image as multimodal parts. (deepseek-v4-pro is NOT here —
+	// its API has no vision endpoint, so it's marked text-only.)
+	for _, id := range []string{"gpt-5", "unknown-model-xyz"} {
 		req, err = c.buildRequest(Request{Model: id, Messages: msgs})
 		if err != nil {
 			t.Fatal(err)

@@ -17,6 +17,7 @@ func TestIsImageRejectionError(t *testing.T) {
 		"http 400: invalid image",
 		"unable to process the image you provided",
 		"could not decode the image",
+		"deepseek: http 400: messages[19]: unknown variant `image_url`, expected `text`",
 	}
 	for _, s := range reject {
 		if !isImageRejectionError(provider.NewAPIError("p", s, false)) {

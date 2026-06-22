@@ -186,27 +186,35 @@ var Catalog = []Model{
 
 	// ---- DeepSeek ----
 	// The current public DeepSeek API exposes the V4 family on
-	// api.deepseek.com/v1. Pro is the flagship reasoning model;
-	// Flash is the cheaper/faster sibling. Both accept image inputs
-	// (multimodal parts: image_url) in addition to text.
+	// api.deepseek.com/v1: Pro (1.6T/49B, reasoning-heavy) and Flash
+	// (284B/13B, cheaper), both 1M context, dual thinking/non-thinking
+	// modes. (deepseek-chat / deepseek-reasoner retire 2026-07-24, mapping
+	// to Flash's non-thinking / thinking modes.)
+	//
+	// CapImageInput is asserted FALSE on purpose. The V4 models are
+	// natively multimodal, but the DeepSeek *API* does not expose image
+	// input yet — the chat-completions endpoint has no image content type
+	// and rejects multimodal parts ("unknown variant `image_url`, expected
+	// `text`"). CapImageInput governs the wire, so it must track what the
+	// API accepts, not the model's latent ability: terva keeps images in
+	// the transcript but drops them from outgoing DeepSeek requests (switch
+	// to a vision model to send them). Flip to true when DeepSeek ships a
+	// vision endpoint. An earlier row optimistically marked V4 vision-
+	// capable and conflated those two things (see
+	// docs/plans/model-capabilities.md).
 	{
 		Provider: "deepseek", ID: "deepseek-v4-pro", DisplayName: "DeepSeek V4 Pro",
 		ContextWindow: 1000000, MaxOutput: 384000, Reasoning: true,
 		PriceInput: 0.435, PriceOutput: 0.87, PriceCacheRead: 0.003625,
 		BaseURL: "https://api.deepseek.com",
-		// Explicit assertion, not just the default: the V3-era API
-		// rejected image parts and terva hardcoded deepseek as text-only;
-		// this row is what deleted that name check (see
-		// docs/plans/model-capabilities.md). A future deepseek model
-		// without vision gets image-input:false on its own row.
-		Caps: map[Capability]bool{CapImageInput: true},
+		Caps:    map[Capability]bool{CapImageInput: false},
 	},
 	{
 		Provider: "deepseek", ID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash",
 		ContextWindow: 1000000, MaxOutput: 384000, Reasoning: true,
 		PriceInput: 0.14, PriceOutput: 0.28, PriceCacheRead: 0.0028,
 		BaseURL: "https://api.deepseek.com",
-		Caps:    map[Capability]bool{CapImageInput: true},
+		Caps:    map[Capability]bool{CapImageInput: false},
 	},
 
 	// ---- Kimi / Kimi Code ----
