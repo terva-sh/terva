@@ -291,9 +291,65 @@ func DiscoverOpenAICompatible(ctx context.Context, baseURL, key string, defaultC
 			ContextWindow: ctxWin,
 			BaseURL:       baseURL,
 			Source:        "live",
+			Caps:          visionCapsFromID(d.ID),
 		})
 	}
 	return out, nil
+}
+
+// visionCapsFromID makes an explicit image-input assertion for a model
+// discovered through the standard /v1/models list, which carries no
+// modality data (unlike OpenRouter's richer schema). Without it the
+// catalog's optimistic image-input:true default applies to every
+// discovered model — so a text-only gateway model (e.g. opencode-go's
+// minimax/kimi/qwen) is handed an image and the backend 400s ("does not
+// support image inputs") instead of terva dropping the image with a note.
+//
+// The assertion biases toward text-only: an unrecognized id is marked
+// non-vision, because sending an image to a text-only model is a hard
+// error while sending text-only input to a vision model just proceeds
+// without the image. Known vision families (hosted Claude/GPT/Gemini that
+// flow through gateways, plus common local vision model names) are marked
+// vision so they keep working. Users override per-model in models.json
+// ("capabilities": {"image-input": true}), which wins as the last layer.
+func visionCapsFromID(id string) map[Capability]bool {
+	return map[Capability]bool{CapImageInput: looksVisionCapable(id)}
+}
+
+// looksVisionCapable reports whether a model id belongs to a known
+// vision-capable family. Conservative by design — only high-confidence
+// patterns return true, so the cost of a miss is a gracefully-dropped
+// image (recoverable, overridable) rather than a turn-breaking 400.
+func looksVisionCapable(id string) bool {
+	l := strings.ToLower(strings.TrimSpace(id))
+	// Local/open vision model families (substring match — ids embed these).
+	for _, v := range []string{
+		"llava", "bakllava", "moondream", "pixtral", "idefics",
+		"vision", "-vl", "vl-", "minicpm-v", "internvl", "cogvlm", "smolvlm",
+	} {
+		if strings.Contains(l, v) {
+			return true
+		}
+	}
+	// Hosted families served through gateways (opencode Zen, litellm, …).
+	// Claude 3 and newer are all vision; claude-2/instant are not.
+	if strings.HasPrefix(l, "claude-") && !strings.Contains(l, "claude-2") && !strings.Contains(l, "instant") {
+		return true
+	}
+	if strings.HasPrefix(l, "gemini-") {
+		return true
+	}
+	if strings.HasPrefix(l, "gpt-4o") || strings.HasPrefix(l, "gpt-4.1") ||
+		strings.HasPrefix(l, "gpt-5") || strings.HasPrefix(l, "chatgpt-4o") {
+		return true
+	}
+	// OpenAI o-series reasoning models (o1/o3/o4) are vision-capable.
+	for _, p := range []string{"o1", "o3", "o4"} {
+		if l == p || strings.HasPrefix(l, p+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // looksLikeLocalChatModel errs heavily toward inclusion — local model

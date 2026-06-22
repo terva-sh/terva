@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"terva.sh/terva/packages/provider"
@@ -182,7 +184,10 @@ func RefreshModelsAsync() {
 
 func refreshModels() {
 	cached, _ := provider.LoadCache(ModelCachePath())
-	if cached.IsFresh() {
+	// Re-discover when the cache is stale (time/version) OR the user changed
+	// their configured endpoints since it was written — so a newly-added
+	// endpoint shows up immediately instead of waiting out the TTL.
+	if cached.IsCurrent() && cached.Endpoints == endpointsFingerprint() {
 		return
 	}
 
@@ -225,6 +230,57 @@ func refreshModels() {
 			all = append(all, live...)
 		}
 	}
+	// opencode.ai Zen gateways are openai-compatible; their model lists are
+	// upstream-controlled (opencode-go is a subscription tier with its own
+	// set), so discover from /v1/models rather than trusting the baked
+	// catalog. opencode's Anthropic-protocol Claude models live at a
+	// different endpoint and aren't enumerated here — they stay baked.
+	for _, oc := range []struct{ id, baseURL string }{
+		{"opencode", "https://opencode.ai/zen/v1"},
+		{"opencode-go", "https://opencode.ai/zen/go/v1"},
+	} {
+		// /models is public; gate only on the user having connected this
+		// provider (any credential/method), like the openrouter block.
+		cred, _, err := ResolveCredential(oc.id, "")
+		if err != nil {
+			continue
+		}
+		live, err := provider.DiscoverOpenAICompatible(ctx, oc.baseURL, cred, compatDefaultContext())
+		if err != nil {
+			continue
+		}
+		for i := range live {
+			live[i].Provider = oc.id
+			live[i].Source = "live"
+			live[i].BaseURL = oc.baseURL
+		}
+		all = append(all, live...)
+	}
+	// User-defined OpenAI-compatible endpoints (config.json "endpoints"): each
+	// is its own provider; discover its /v1/models list. The key is optional
+	// (most local servers need none) and resolves via APIKeyEnv/auth.json.
+	if uc, err := LoadConfig(); err == nil {
+		for id, ep := range uc.Endpoints {
+			if strings.TrimSpace(ep.BaseURL) == "" {
+				continue
+			}
+			cred, _, _ := ResolveCredential(id, "")
+			defCtx := compatDefaultContext()
+			if ep.ContextWindow > 0 {
+				defCtx = ep.ContextWindow
+			}
+			live, derr := provider.DiscoverOpenAICompatible(ctx, ep.BaseURL, cred, defCtx)
+			if derr != nil {
+				continue
+			}
+			for i := range live {
+				live[i].Provider = id
+				live[i].Source = "live"
+				live[i].BaseURL = ep.BaseURL
+			}
+			all = append(all, live...)
+		}
+	}
 	if len(all) == 0 {
 		return
 	}
@@ -235,6 +291,32 @@ func refreshModels() {
 	provider.SetLiveModels(all)
 	_ = provider.SaveCache(ModelCachePath(), provider.ModelCache{
 		FetchedAt: time.Now().UTC(),
+		Version:   provider.ModelCacheVersion,
+		Endpoints: endpointsFingerprint(),
 		Models:    all,
 	})
+}
+
+// endpointsFingerprint is a stable signature of the user's configured
+// OpenAI-compatible endpoints (id + base URL). It rides the model cache so a
+// change to the endpoint set forces a re-discovery on the next launch instead
+// of waiting out CacheTTL.
+func endpointsFingerprint() string {
+	cfg, err := LoadConfig()
+	if err != nil || len(cfg.Endpoints) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(cfg.Endpoints))
+	for id := range cfg.Endpoints {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var sb strings.Builder
+	for _, id := range ids {
+		sb.WriteString(id)
+		sb.WriteByte('=')
+		sb.WriteString(cfg.Endpoints[id].BaseURL)
+		sb.WriteByte(';')
+	}
+	return sb.String()
 }

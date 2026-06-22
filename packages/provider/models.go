@@ -458,6 +458,10 @@ var (
 	// write (writes are rare; reads are hot). nil means no layer has
 	// ever been set and Active() serves the baked-in Catalog.
 	merged []Model
+	// catalogRev bumps on every remerge so live UIs (the /model picker)
+	// can detect when background /v1/models discovery has grown the
+	// catalog and re-read it, instead of holding a stale snapshot.
+	catalogRev uint64
 )
 
 // remergeLocked recomputes the merged catalog. Callers hold activeMu.
@@ -466,6 +470,16 @@ func remergeLocked() {
 	out = upsertModels(out, layerExtra)
 	out = applyUserOverrides(out, layerUser)
 	merged = out
+	catalogRev++
+}
+
+// CatalogRevision returns a counter that increments whenever the active
+// catalog is recomputed (a layer write — e.g. live discovery completing).
+// A long-lived view can poll it to know when to re-read Active().
+func CatalogRevision() uint64 {
+	activeMu.RLock()
+	defer activeMu.RUnlock()
+	return catalogRev
 }
 
 // upsertModels overlays layer onto base: same provider/id replaces in

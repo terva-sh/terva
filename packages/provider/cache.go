@@ -11,11 +11,29 @@ import (
 // ModelCache is the on-disk shape for discovered models.
 type ModelCache struct {
 	FetchedAt time.Time `json:"fetched_at"`
-	Models    []Model   `json:"models"`
+	Version   int       `json:"version,omitempty"`
+	// Endpoints is an opaque signature of the user's configured
+	// OpenAI-compatible endpoints at write time. The discoverer re-runs when
+	// it changes, so adding/removing an endpoint refreshes without waiting out
+	// CacheTTL. (Computed by the agent layer; the cache just carries it.)
+	Endpoints string  `json:"endpoints,omitempty"`
+	Models    []Model `json:"models"`
 }
 
 // CacheTTL is how long a discovered list is considered fresh.
 const CacheTTL = 6 * time.Hour
+
+// ModelCacheVersion is bumped whenever the discovery LOGIC changes — a new
+// provider or endpoint is added to refreshModels. A cache written by an older
+// binary carries a lower version and is treated as stale even within CacheTTL,
+// so a newly-added source (e.g. opencode-go) is picked up on the next launch
+// instead of waiting out the time-based TTL.
+//
+//	v2: added opencode / opencode-go /v1/models discovery.
+//	v3: added user-defined endpoint (config.json "endpoints") discovery.
+//	v4: openai-compatible discovery asserts image-input per model id
+//	    (text-only by default), so cached entries re-resolve their caps.
+const ModelCacheVersion = 4
 
 // LoadCache reads the model cache from path. Returns an empty ModelCache
 // (no error) if the file does not exist.
@@ -61,4 +79,11 @@ func (c ModelCache) IsFresh() bool {
 		return false
 	}
 	return time.Since(c.FetchedAt) < CacheTTL
+}
+
+// IsCurrent reports whether the cache is fresh AND written by a binary with the
+// same discovery set (ModelCacheVersion). A version mismatch forces
+// re-discovery so newly-added providers appear without waiting out CacheTTL.
+func (c ModelCache) IsCurrent() bool {
+	return c.IsFresh() && c.Version == ModelCacheVersion
 }
