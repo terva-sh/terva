@@ -199,3 +199,30 @@ them all. The next call of a revoked tool prompts again (or follows the
 mode default). Revoking the blanket "yes, always" grant leaves any
 per-tool grants in place. Only session grants are revocable here — the
 permission *rules* are read-only in the TUI and edited in config.
+
+## Audit log
+
+Every tool call is appended to `$TERVA_HOME/logs/audit.log` — the tool,
+the approval mode in force, the gate's allow/deny decision (and the deny
+reason), and a capped copy of the arguments. The session transcript
+already records *what* ran, but not *why it was allowed*; the audit log
+adds that, which matters most in **yolo**, where nothing prompts: it's the
+durable, after-the-fact record that a command was auto-approved rather
+than refused.
+
+It's one JSON object per line (JSONL), so it's greppable and `jq`-able:
+
+```bash
+# every bash command this machine's terva has run, and how it was permitted
+jq 'select(.tool=="bash") | {time, mode, decision, cmd: .args.command}' \
+  ~/.terva/logs/audit.log
+```
+
+Fields: `time` (UTC), `pid`, `tool`, `mode`, `decision` (`allow`/`deny`),
+`reason` (on deny), `args` (truncated past ~2 KB). **Every** call is
+recorded — reads included — so there are no blind spots; filter at read
+time. The file is created `0600` and, like the rest of `logs/`, is
+excluded from the read jail, because tool arguments (bash commands, file
+writes) can carry secrets. It's append-only and lazily created, so a run
+that calls no tools never writes one; rotate or delete it yourself if it
+grows.

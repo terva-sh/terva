@@ -237,6 +237,52 @@ func TestReadImageCap(t *testing.T) {
 
 // TestBashDefaultTimeout: with no timeout passed, a command that sleeps
 // past the default is killed and the result says so.
+// TestBashEnvExported: vars in BashTool.Env reach the command's
+// environment and win over an inherited duplicate.
+func TestBashEnvExported(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix shell only")
+	}
+	t.Setenv("TERVA_HOME", "/inherited/should/lose")
+	tool := &BashTool{CWD: t.TempDir(), Env: map[string]string{"TERVA_HOME": "/resolved/home"}}
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"command": `printf '%s' "$TERVA_HOME"`,
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.Content[0].(provider.TextBlock).Text
+	if !strings.Contains(got, "/resolved/home") {
+		t.Fatalf("TERVA_HOME not exported (or inherited value won): %q", got)
+	}
+	if strings.Contains(got, "/inherited/should/lose") {
+		t.Fatalf("inherited TERVA_HOME leaked through: %q", got)
+	}
+}
+
+// TestBashSpillFooterIsActionable: a truncated run points the model at the
+// spill file with a read-it-don't-rerun hint, not a bare path.
+func TestBashSpillFooterIsActionable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix shell only")
+	}
+	tool := &BashTool{CWD: t.TempDir()}
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"command": fmt.Sprintf("yes | head -n %d", (maxBashBytes/2)+5000),
+		"timeout": 30,
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := res.Details.(map[string]any)["full_output_path"].(string); p != "" {
+		defer os.Remove(p)
+	}
+	got := res.Content[0].(provider.TextBlock).Text
+	if !strings.Contains(got, "read this file") || !strings.Contains(got, "offset/limit") {
+		t.Fatalf("spill footer not actionable: %q", got)
+	}
+}
+
 func TestBashDefaultTimeout(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell only")

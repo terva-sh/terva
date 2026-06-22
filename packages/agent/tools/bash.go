@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -32,6 +33,14 @@ const (
 type BashTool struct {
 	CWD     string
 	Sandbox *Sandbox
+
+	// Env carries extra environment variables exported into every command,
+	// on top of the inherited process environment. Used for terva runtime
+	// facts the model otherwise can't see from inside a shell (TERVA_HOME,
+	// so `cp x $TERVA_HOME/extensions/` works without a prior tool call).
+	// Keys here win over inherited duplicates (appended last). NEVER put
+	// secrets here — bash is an unguarded egress channel.
+	Env map[string]string
 }
 
 type bashArgs struct {
@@ -43,7 +52,7 @@ const bashSchema = `{"type":"object","properties":{"command":{"type":"string"},"
 
 func (t *BashTool) Name() string { return "bash" }
 func (t *BashTool) Description() string {
-	return "Run a shell command (stdout+stderr merged). Prefer the dedicated tools over shell equivalents: read/write/edit for files (not cat, sed -i, echo >file), grep/glob for search (not grep, find, ls) — they are safer, reviewable, and cheaper. Commands run in the agent's cwd; avoid `cd` (pass paths instead). Git safety: never force-push, `reset --hard`, amend, skip hooks, or `git add -A` unless the user explicitly asks. Do not print or export secrets (.env, tokens, credentials). Slow commands should set an explicit timeout; the default kill is 120s."
+	return "Run a shell command (stdout+stderr merged). Prefer the dedicated tools over shell equivalents: read/write/edit for files (not cat, sed -i, echo >file), grep/glob for search (not grep, find, ls) — they are safer, reviewable, and cheaper. Commands run in the agent's cwd; avoid `cd` (pass paths instead). Git safety: never force-push, `reset --hard`, amend, skip hooks, or `git add -A` unless the user explicitly asks. Do not print or export secrets (.env, tokens, credentials). Slow commands should set an explicit timeout; the default kill is 120s. In exploratory multi-step scripts avoid `set -e` (one failing probe aborts the whole script and hides the rest); check exit codes explicitly instead. $TERVA_HOME is exported into the environment."
 }
 func (t *BashTool) Schema() json.RawMessage { return json.RawMessage(bashSchema) }
 
@@ -76,7 +85,12 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	start := time.Now()
 	cmd := newShellCmd(runCtx, a.Command)
 	cmd.Dir = cwd
+	// Inherit the process environment, then append terva facts so they win
+	// over any inherited duplicate (Go uses the last value for a repeated key).
 	cmd.Env = os.Environ()
+	for _, k := range sortedKeys(t.Env) {
+		cmd.Env = append(cmd.Env, k+"="+t.Env[k])
+	}
 	setProcessGroup(cmd)
 
 	// Capture merged stdout+stderr with line-by-line streaming.
@@ -208,7 +222,10 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	if truncBytes || truncLines {
 		fullPath = spill.Path()
 		if fullPath != "" {
-			fmt.Fprintf(&sb, " (full output: %s)", fullPath)
+			// Point the model at the spill explicitly: it's a readable file,
+			// so `read` (with offset/limit to page) reaches the dropped tail
+			// without re-running the command and re-truncating.
+			fmt.Fprintf(&sb, " (full output: %s — read this file, paging with offset/limit, instead of re-running)", fullPath)
 		}
 	} else {
 		spill.Discard()
@@ -313,6 +330,20 @@ func (w *spillWriter) Discard() {
 		_ = os.Remove(w.path)
 		w.path = ""
 	}
+}
+
+// sortedKeys returns m's keys in deterministic order so the exported env
+// is stable across runs (the values are appended last either way).
+func sortedKeys(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func newShellCmd(ctx context.Context, command string) *exec.Cmd {
