@@ -45,6 +45,8 @@ func startInteractive(t *testing.T, mutate func(*InteractiveConfig)) *harness {
 		CWD:                 t.TempDir(),
 		TervaHome:           t.TempDir(),
 		Version:             "v0.0.0-test",
+		PersonaName:         "Mieli",
+		PersonaPhonetic:     "MYEH-lee",
 		InlineImagesEnabled: &noImages,
 	}
 	if mutate != nil {
@@ -107,7 +109,7 @@ func (h *harness) dismissLoginDialog() {
 
 func TestInteractiveStartupShowsWelcomeAndLogin(t *testing.T) {
 	h := startInteractive(t, nil)
-	h.waitText("i'm terva")
+	h.waitText("i'm Mieli")
 	h.waitText("── login")
 	// Not logged in: the status line must say so.
 	h.waitText("not logged in")
@@ -221,13 +223,13 @@ func TestInteractiveCtrlLRepaints(t *testing.T) {
 	h.waitText("draft survives repaint")
 	h.term.Type("\x0c") // Ctrl+L
 	h.waitText("draft survives repaint")
-	h.waitText("i'm terva")
+	h.waitText("i'm Mieli")
 }
 
 func TestInteractiveCtrlDExitsCleanly(t *testing.T) {
 	h := startInteractive(t, nil)
 	h.dismissLoginDialog()
-	h.waitText("i'm terva")
+	h.waitText("i'm Mieli")
 	// The status bar (provider/model line of the bottom band) is on
 	// screen while running.
 	h.waitText("(test) test-model")
@@ -248,7 +250,7 @@ func TestInteractiveCtrlDExitsCleanly(t *testing.T) {
 	// (welcome banner, status notes) stays, the input/status chrome
 	// does not.
 	txt := h.term.Screen().Text()
-	if !strings.Contains(txt, "i'm terva") {
+	if !strings.Contains(txt, "i'm Mieli") {
 		t.Fatalf("transcript should survive teardown; screen:\n%s", txt)
 	}
 	if strings.Contains(txt, "(test) test-model") {
@@ -265,7 +267,7 @@ func TestInteractiveResizeRepaints(t *testing.T) {
 	// After SIGWINCH the frame repaints at the new size with the
 	// draft intact.
 	h.waitText("resize draft")
-	h.waitText("i'm terva")
+	h.waitText("i'm Mieli")
 }
 
 // TestInteractiveResizeWhileTypingStress interleaves resize callbacks
@@ -283,5 +285,5 @@ func TestInteractiveResizeWhileTypingStress(t *testing.T) {
 		h.term.Resize(s[0], s[1])
 		h.term.Type("\x1b") // clear the draft again
 	}
-	h.waitText("i'm terva")
+	h.waitText("i'm Mieli")
 }

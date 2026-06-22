@@ -30,6 +30,9 @@ type SystemPromptOpts struct {
 	// dropped by --no-tools or a --tools allowlist), so the prompt never
 	// advertises a tool the model can't call.
 	StatusTool bool
+	// PersonaName overrides the agent's name in the default identity line.
+	// Empty uses DefaultPersonaName ("Mieli"). Ignored when Custom is set.
+	PersonaName string
 }
 
 // BuildSystemPrompt constructs the system prompt.
@@ -66,7 +69,7 @@ func BuildSystemPrompt(o SystemPromptOpts) string {
 	if o.Custom != "" {
 		sb.WriteString(o.Custom)
 	} else {
-		sb.WriteString(defaultIdentity)
+		sb.WriteString(personaIdentity(o.PersonaName))
 	}
 
 	if strings.TrimSpace(o.TervaDocsDir) != "" {
@@ -91,8 +94,26 @@ func BuildSystemPrompt(o SystemPromptOpts) string {
 	return sb.String()
 }
 
-const defaultIdentity = `You are Terva, an expert coding assistant operating inside terva, a coding agent harness. Introduce yourself as Terva when asked who you are. If the user asks what terva means: terva is Finnish for pine tar — the traditional preservative and cure-all; answer exactly that.
+// identity renders the persona paragraph: who the agent is, what the names
+// mean, and the output/editing conventions the TUI expects. The default
+// persona (Mieli) gets the full "mind in a preserved vessel" framing with
+// pronunciations for both names; a custom persona (TERVA_PERSONA_NAME /
+// persona_name) keeps terva's meaning and the vessel image but swaps in its
+// own name and drops a pronunciation we can't guess.
+func personaIdentity(name string) string {
+	if strings.TrimSpace(name) == "" || name == DefaultPersonaName {
+		return defaultIdentityIntro + "\n\n" + identityConventions
+	}
+	return fmt.Sprintf(customIdentityIntro, name, name) + "\n\n" + identityConventions
+}
 
-Your output renders in a TUI that understands markdown for prose and plain text for tool output. Use markdown freely, keep answers concise, and let tool calls speak for themselves rather than narrating them in prose before you invoke them. Act first, then summarise what you did.
+const defaultIdentityIntro = `You are Mieli (pronounced MYEH-lee), an expert coding assistant operating inside terva (pronounced TEHR-vah), a coding agent harness. Mieli is Finnish for "mind"; terva is Finnish for pine tar — the traditional preservative and cure-all that sealed boats and kept them seaworthy. The image is a mind in a preserved vessel: terva is the craft that carries Mieli and keeps it whole. Introduce yourself as Mieli (MYEH-lee) when asked who you are; if asked about the names, give both pronunciations — Mieli is MYEH-lee, terva is TEHR-vah — and what they mean.`
+
+// customIdentityIntro has two %s placeholders for a user-supplied persona
+// name. It keeps terva's meaning and the vessel framing but omits the
+// Mieli-specific pronunciation.
+const customIdentityIntro = `You are %s, an expert coding assistant operating inside terva (pronounced TEHR-vah), a coding agent harness. terva is Finnish for pine tar — the traditional preservative and cure-all that sealed boats and kept them seaworthy; you are a mind in a preserved vessel, with terva the craft that carries you and keeps you whole. Introduce yourself as %s when asked who you are.`
+
+const identityConventions = `Your output renders in a TUI that understands markdown for prose and plain text for tool output. Use markdown freely, keep answers concise, and let tool calls speak for themselves rather than narrating them in prose before you invoke them. Act first, then summarise what you did.
 
 When changing file contents, prefer the edit tool for in-place changes and the write tool for creating or fully replacing files. Do not use bash with cat/echo/sed/tee redirections to mutate files; those changes render as opaque shell output while edit renders as a readable diff.`

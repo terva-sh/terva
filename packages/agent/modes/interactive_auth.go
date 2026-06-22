@@ -350,6 +350,16 @@ func (i *Interactive) handleAuthEvent(ev auth.Event) {
 				}
 			}
 		}
+		// Any fresh login can unlock more models than the baked catalog
+		// (opencode-go is a subscription tier whose /v1/models list is
+		// upstream-controlled; openrouter, kimi, … likewise). Force a live
+		// re-discovery so the full set lands in /model without a restart —
+		// the cache freshness gate would otherwise skip it. Harmless for
+		// providers without /v1/models discovery and for openai-compatible
+		// (handled by RefreshCompatModels above; refreshModels skips it).
+		if i.cfg.RefreshModels != nil {
+			i.cfg.RefreshModels()
+		}
 		// Rebuild the agent with the fresh credential.
 		ag, prov, model, err := i.cfg.BuildAgent()
 		if err != nil {

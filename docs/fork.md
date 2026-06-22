@@ -8,7 +8,9 @@ editor (over ACP), chat, and an embeddable RPC/SDK. It is a hard fork of
 [zot](https://github.com/patriceckhart/zot) that took its own name once it
 diverged too far to carry upstream's — not a replacement or successor for
 zot, which lives on. *terva* is Finnish for pine tar — the traditional
-preservative and cure-all.
+preservative and cure-all that sealed boats and kept them seaworthy; its
+default agent persona is *Mieli*, Finnish for "mind" (a mind in a preserved
+vessel).
 
 **terva is not a replacement for zot.** zot continues upstream as its
 own project; terva is its own project that weights priorities

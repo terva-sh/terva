@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +65,9 @@ func TestAuditLogRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows has no Unix permission bits (Go reports 0666 regardless), so the
+	// 0600 we pass to OpenFile is only verifiable on POSIX.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("audit.log mode = %v, want 0600 (it can carry secrets)", info.Mode().Perm())
 	}
 }

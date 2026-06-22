@@ -55,10 +55,14 @@ above all — trust enough to build on.
 
 ## Flavor (use sparingly)
 
-*terva* is Finnish for **pine tar**, the traditional preservative and
-cure-all. It maps onto the thesis almost too neatly: preserve and harden what
-works, with a broad toolkit on top. A light touch on the site is plenty; keep
-it out of the core statement.
+*terva* is Finnish for **pine tar** — the traditional preservative and
+cure-all, and the sealant that made wooden boats seaworthy. It maps onto the
+thesis almost too neatly: preserve and harden what works, then carry a broad
+toolkit on top. The default agent persona leans on the same image: it is
+**Mieli** (*MYEH-lee*), Finnish for "mind" — a mind in a preserved vessel,
+with terva the craft that carries it and keeps it whole. A light touch is
+plenty; keep it out of the core statement, and never let the metaphor crowd
+out the engineering.
 
 ## Voice guardrails (what NOT to say)
 
@@ -69,3 +73,6 @@ it out of the core statement.
   ceiling. The harness operates whatever tools you give it.
 - **Not a zot replacement, successor, or rename.** A hard fork; zot lives on.
 - **Never "Terva AI."** The brand is "terva".
+- **Persona ≠ brand.** The default agent persona is *Mieli* (the mind); the
+  product and binary are *terva* (the vessel). Don't rename the product to
+  Mieli, and never "Mieli AI" either.

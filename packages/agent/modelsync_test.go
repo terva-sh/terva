@@ -5,7 +5,39 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"terva.sh/terva/packages/provider"
 )
+
+// TestRefreshGated_ForceBypassesFreshCache guards the opencode-go symptom: a
+// credential added mid-session must re-discover the provider's /v1/models list
+// even when a still-fresh cache (written for some other provider) would
+// normally short-circuit discovery. A forced refresh ignores the gate; an
+// unforced one still honors a current cache.
+func TestRefreshGated_ForceBypassesFreshCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TERVA_HOME", home)
+
+	// No config.json endpoints, so the live fingerprint is "" — match it.
+	current := provider.ModelCache{
+		FetchedAt: time.Now().UTC(),
+		Version:   provider.ModelCacheVersion,
+		Endpoints: endpointsFingerprint(),
+	}
+
+	if !refreshGated(current, false) {
+		t.Fatal("a current cache should gate an unforced refresh")
+	}
+	if refreshGated(current, true) {
+		t.Fatal("force must bypass the cache gate so a fresh login re-discovers")
+	}
+
+	// A stale (zero FetchedAt) or absent cache never gates, forced or not.
+	if refreshGated(provider.ModelCache{}, false) {
+		t.Fatal("a stale/absent cache should never gate a refresh")
+	}
+}
 
 // TestValidateAndRepairConfig_MismatchedPair simulates the bug from a
 // stale /model switch: provider=anthropic but model=kimi-for-coding

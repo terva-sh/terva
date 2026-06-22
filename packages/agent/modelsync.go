@@ -179,15 +179,24 @@ func ValidateAndRepairConfig() {
 // Silent on error: discovery is a nice-to-have. Callers can still use
 // the baked-in catalog if this fails.
 func RefreshModelsAsync() {
-	go refreshModels()
+	go refreshModels(false)
 }
 
-func refreshModels() {
+// RefreshModelsForceAsync runs a discovery that ignores the on-disk cache
+// freshness gate. It's the runtime counterpart to RefreshModelsAsync: when a
+// credential is added mid-session (e.g. /login to opencode-go), the just-
+// connected provider's /v1/models list must land without a restart — even
+// when a still-fresh cache written for some OTHER provider would normally
+// short-circuit discovery. The cache fingerprint tracks user-defined
+// endpoints, not which built-in providers have credentials, so a new login
+// alone doesn't invalidate it; forcing does.
+func RefreshModelsForceAsync() {
+	go refreshModels(true)
+}
+
+func refreshModels(force bool) {
 	cached, _ := provider.LoadCache(ModelCachePath())
-	// Re-discover when the cache is stale (time/version) OR the user changed
-	// their configured endpoints since it was written — so a newly-added
-	// endpoint shows up immediately instead of waiting out the TTL.
-	if cached.IsCurrent() && cached.Endpoints == endpointsFingerprint() {
+	if refreshGated(cached, force) {
 		return
 	}
 
@@ -295,6 +304,17 @@ func refreshModels() {
 		Endpoints: endpointsFingerprint(),
 		Models:    all,
 	})
+}
+
+// refreshGated reports whether a discovery run should be skipped because the
+// on-disk cache is still authoritative. A forced run (a credential just
+// changed mid-session) never skips: the cache fingerprint tracks user-defined
+// endpoints, not which built-in providers have credentials, so a fresh login
+// alone wouldn't otherwise invalidate it. An unforced run skips a cache that
+// is current (fresh + matching discovery version) AND whose endpoint
+// fingerprint is unchanged.
+func refreshGated(cached provider.ModelCache, force bool) bool {
+	return !force && cached.IsCurrent() && cached.Endpoints == endpointsFingerprint()
 }
 
 // endpointsFingerprint is a stable signature of the user's configured

@@ -46,10 +46,13 @@ func TestImageExclusionDirectiveRoundTrip(t *testing.T) {
 	must(s.AppendImageExclusion(badHash, "rejected"))
 	must(s.Close())
 
-	_, msgs, err := OpenSession(path)
+	reopened, msgs, err := OpenSession(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// OpenSession reopens the file for appending; Windows can't remove the
+	// TempDir while that handle is live.
+	defer reopened.Close()
 
 	badImages, goodImages, notes := 0, 0, 0
 	for _, m := range msgs {

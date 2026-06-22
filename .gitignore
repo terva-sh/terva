@@ -55,8 +55,10 @@ dist/
 
 # Accidentally-committed Go build artifacts. Extension-less Go binaries
 # can't be globbed without risking real source, so list the known ones:
-# the swarm e2e stub (build it to a TempDir, never the tree) and the
-# todo example's compiled output (the example ships source only).
+# the main binary (`go build ./cmd/terva` without -o drops it at the root;
+# prefer `just install` or `-o`), the swarm e2e stub (build it to a TempDir,
+# never the tree), and the todo example's compiled output (source only).
+/terva
 /stubchild
 /examples/extensions/todo/terva-todo-extension
 

@@ -457,7 +457,7 @@ func PrintHelp(version string) {
 	}
 
 	fmt.Fprintln(os.Stderr)
-	greeting := "i'm terva. " + th.Greeting()
+	greeting := "i'm " + personaLabel() + ". " + th.Greeting()
 	var headline string
 	if useColor {
 		headline = th.AccentBar(th.Assistant) + assistant(tui.Bold(greeting))

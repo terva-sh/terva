@@ -168,6 +168,7 @@ func (r *Resolved) rebuildSystemPrompt() {
 		Append:       appendBlocks,
 		TervaDocsDir: filepath.Join(TervaHome(), "docs"),
 		StatusTool:   r.ToolRegistry["terva_status"] != nil,
+		PersonaName:  PersonaName(),
 	})
 }
 
