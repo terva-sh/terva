@@ -11,6 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -174,7 +175,7 @@ func TestSwarmDialogSpawnFlow(t *testing.T) {
 }
 
 func TestSwarmDialogSpawnFilePickerFlow(t *testing.T) {
-	cwd := t.TempDir()
+	cwd := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(cwd, "README.md"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}

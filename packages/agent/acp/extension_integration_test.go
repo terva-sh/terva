@@ -18,6 +18,7 @@ import (
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // The extstub lives in this package's testdata; build it once per test binary,
@@ -68,7 +69,7 @@ func buildExtStub(t *testing.T) string {
 func installFakeExtension(t *testing.T) string {
 	t.Helper()
 	stub := buildExtStub(t)
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	extDir := filepath.Join(root, "extensions", "webext")
 	if err := os.MkdirAll(extDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -135,7 +136,7 @@ func TestACPExtensionReadOnlyToolNoPrompt(t *testing.T) {
 	h, drain, teardown := serveExt(t, factory)
 	defer teardown()
 
-	newRes := h.call(MethodSessionNew, map[string]any{"cwd": t.TempDir()})
+	newRes := h.call(MethodSessionNew, map[string]any{"cwd": testsupport.TempDir(t)})
 	sid, _ := newRes["sessionId"].(string)
 	if sid == "" {
 		t.Fatal("session/new returned empty sessionId")
@@ -227,7 +228,7 @@ func TestACPExtensionWriterToolAsksPermission(t *testing.T) {
 			h, drain, teardown := serveExt(t, factory)
 			defer teardown()
 
-			newRes := h.call(MethodSessionNew, map[string]any{"cwd": t.TempDir()})
+			newRes := h.call(MethodSessionNew, map[string]any{"cwd": testsupport.TempDir(t)})
 			sid, _ := newRes["sessionId"].(string)
 			drain()
 
@@ -309,8 +310,8 @@ func TestACPExtensionWriterToolAsksPermission(t *testing.T) {
 // ran), so no extension subprocess leaks across a rebind.
 func TestACPExtensionCleanupOnRebind(t *testing.T) {
 	root := installFakeExtension(t)
-	sessRoot := t.TempDir()
-	cwd := t.TempDir()
+	sessRoot := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
 	factory := &fakeFactory{
 		client:  &textTurnClient{reply: "ok"},
 		tools:   core.Registry{},
@@ -372,7 +373,7 @@ func extCommandSetup(t *testing.T, client provider.Client) (*harness, string, ma
 
 	h := newHarness(t, caW, acR)
 	h.call(MethodInitialize, map[string]any{"protocolVersion": 1})
-	newRes := h.call(MethodSessionNew, map[string]any{"cwd": t.TempDir()})
+	newRes := h.call(MethodSessionNew, map[string]any{"cwd": testsupport.TempDir(t)})
 	sid, _ := newRes["sessionId"].(string)
 	if sid == "" {
 		t.Fatal("session/new returned empty sessionId")
@@ -720,7 +721,7 @@ func TestACPSlashReloadExtReloadsAndReadvertises(t *testing.T) {
 	h, drain, teardown := serveExt(t, factory)
 	defer teardown()
 
-	newRes := h.call(MethodSessionNew, map[string]any{"cwd": t.TempDir()})
+	newRes := h.call(MethodSessionNew, map[string]any{"cwd": testsupport.TempDir(t)})
 	sid, _ := newRes["sessionId"].(string)
 	if sid == "" {
 		t.Fatal("session/new returned empty sessionId")

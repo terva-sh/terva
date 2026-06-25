@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -13,7 +15,7 @@ func boolPtr(b bool) *bool { return &b }
 // out-of-range value is dropped with a warning (the registry-driven scalar
 // override + loader validation).
 func TestUserModelTemperature(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "models.json")
+	path := filepath.Join(testsupport.TempDir(t), "models.json")
 	body := `{"providers":{"anthropic":{"models":[
 		{"id":"claude-warm","temperature":0.7},
 		{"id":"claude-bad","temperature":5}
@@ -73,7 +75,7 @@ func TestApplyUserOverridesTemperature(t *testing.T) {
 // TestUpsertInsertReplacePreserve: upsert inserts a new entry, replaces
 // an existing one by id, and never disturbs other providers' entries.
 func TestUpsertInsertReplacePreserve(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "models.json")
+	path := filepath.Join(testsupport.TempDir(t), "models.json")
 
 	// Seed an unrelated entry that must survive every later write.
 	if err := UpsertUserModel(path, "openai", UserModel{ID: "gpt-x", ContextWindow: 1000}); err != nil {
@@ -107,7 +109,7 @@ func TestUpsertInsertReplacePreserve(t *testing.T) {
 // TestRemovePrunesEmptyProvider: removing a provider's only model drops
 // the whole provider block, and a no-match remove reports false.
 func TestRemovePrunesEmptyProvider(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "models.json")
+	path := filepath.Join(testsupport.TempDir(t), "models.json")
 	if err := UpsertUserModel(path, "anthropic", UserModel{ID: "claude-x", MaxTokens: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +139,7 @@ func TestRemovePrunesEmptyProvider(t *testing.T) {
 // TestWriteRoundTripsThroughLoader: an upserted entry comes back through
 // the real catalog loader as a UserOverride with the expected fields.
 func TestWriteRoundTripsThroughLoader(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "models.json")
+	path := filepath.Join(testsupport.TempDir(t), "models.json")
 	um := UserModel{
 		ID:            "claude-x",
 		ContextWindow: 200000,
@@ -178,7 +180,7 @@ func TestWriteRoundTripsThroughLoader(t *testing.T) {
 // TestFindUserModel returns the raw entry (distinguishing set from
 // unset) and reports absence cleanly.
 func TestFindUserModel(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "models.json")
+	path := filepath.Join(testsupport.TempDir(t), "models.json")
 	if err := UpsertUserModel(path, "anthropic", UserModel{ID: "claude-x", BaseURL: "http://local"}); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +195,7 @@ func TestFindUserModel(t *testing.T) {
 		t.Error("missing id should report not found")
 	}
 	// Missing file: not found, no error.
-	if _, ok, err := FindUserModel(filepath.Join(t.TempDir(), "none.json"), "anthropic", "x"); ok || err != nil {
+	if _, ok, err := FindUserModel(filepath.Join(testsupport.TempDir(t), "none.json"), "anthropic", "x"); ok || err != nil {
 		t.Errorf("missing file: want (false,nil), got (%v,%v)", ok, err)
 	}
 }
@@ -201,7 +203,7 @@ func TestFindUserModel(t *testing.T) {
 // TestReadMalformedIsError guards the never-clobber invariant: a file
 // we can't parse is surfaced as an error, not silently treated as empty.
 func TestReadMalformedIsError(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "models.json")
+	path := filepath.Join(testsupport.TempDir(t), "models.json")
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}

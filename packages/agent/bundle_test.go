@@ -9,6 +9,7 @@ import (
 
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // writeExtension lays down a minimal installed extension bundle under
@@ -47,7 +48,7 @@ func TestBundleSkillsDiscovered(t *testing.T) {
 	writeExtension(t, home, "researcher", map[string]any{}, map[string]string{
 		"web-research": "Chain search into fetch.",
 	})
-	found, errs := skills.Discover(home, t.TempDir(), "", true, true)
+	found, errs := skills.Discover(home, testsupport.TempDir(t), "", true, true)
 	if len(errs) > 0 {
 		t.Fatalf("discover errors: %v", errs)
 	}
@@ -67,7 +68,7 @@ func TestBundleSkillsSkipDisabledExtension(t *testing.T) {
 	writeExtension(t, home, "off", map[string]any{"enabled": false}, map[string]string{
 		"ghost-skill": "should not load",
 	})
-	found, _ := skills.Discover(home, t.TempDir(), "", true, true)
+	found, _ := skills.Discover(home, testsupport.TempDir(t), "", true, true)
 	for _, s := range found {
 		if s.Name == "ghost-skill" {
 			t.Fatal("disabled extension's bundle skill was discovered")
@@ -89,7 +90,7 @@ func TestBundleSkillsNeverShadowUserSkills(t *testing.T) {
 	writeExtension(t, home, "researcher", map[string]any{}, map[string]string{
 		"web-research": "bundle body",
 	})
-	found, _ := skills.Discover(home, t.TempDir(), "", true, true)
+	found, _ := skills.Discover(home, testsupport.TempDir(t), "", true, true)
 	for _, s := range found {
 		if s.Name == "web-research" {
 			if strings.Contains(s.Source, "extension") {
@@ -111,7 +112,7 @@ func TestBundlePermissionRulesRestrictOnly(t *testing.T) {
 		},
 	}, nil)
 
-	pol, warns := buildPermissionPolicy(Args{CWD: t.TempDir()})
+	pol, warns := buildPermissionPolicy(Args{CWD: testsupport.TempDir(t)})
 	if pol == nil {
 		t.Fatal("bundle rules exist; policy must be non-nil")
 	}
@@ -149,7 +150,7 @@ func TestBundleRulesOrderedBetweenProjectAndUser(t *testing.T) {
 	writeExtension(t, home, "e", map[string]any{
 		"permissions": []map[string]any{{"tool": "x", "decision": "ask"}},
 	}, nil)
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(proj, ".terva"), 0o755); err != nil {
 		t.Fatal(err)
 	}

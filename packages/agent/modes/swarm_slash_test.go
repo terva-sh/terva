@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // newInteractiveForSwarmTest builds the minimal Interactive scaffolding
@@ -14,7 +15,7 @@ import (
 // status mutex, and the swarm dialog, so we hand-build those.
 func newInteractiveForSwarmTest(t *testing.T) (*Interactive, *swarm.Swarm) {
 	t.Helper()
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := swarm.New(swarm.Config{
 		Root:     root,
 		RepoRoot: root,
@@ -101,7 +102,7 @@ func TestRunSwarmNewSpawnsAgent(t *testing.T) {
 // then asserts the /swarm send <id> <text...> path routes through
 // Swarm.SendUserTurn and lands at the agent verbatim.
 func TestRunSwarmSendDeliversToAgentInbox(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	recv := make(chan string, 4)
 	ready := make(chan error, 1)
 	f := swarm.New(swarm.Config{

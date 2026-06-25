@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestExpandFileChipsAtPickerShape(t *testing.T) {
@@ -35,7 +37,7 @@ func TestExpandFileChipsLeavesEditorPlaceholderShapeAlone(t *testing.T) {
 // any explicit invalidation call. The cache is keyed on the dir's
 // mtime, which the OS bumps on every entry add/remove/rename.
 func TestFileSuggesterPicksUpNewEntries(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(tmp, "existing.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ func TestFileSuggesterPicksUpNewEntries(t *testing.T) {
 // found. The walk must prune the nested-ignored tree and surface the
 // deep file.
 func TestFileSuggesterRecursiveHonorsNestedGitignore(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	// Root .gitignore knows nothing about node_modules.
 	if err := os.WriteFile(filepath.Join(tmp, ".gitignore"), []byte("dist/\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -158,7 +160,7 @@ func (b byDirsFirst) Less(i, j int) bool {
 // a fuzzy subsequence match rather than a plain substring, so a
 // non-contiguous pattern like "fsg" still finds "file_suggest.go".
 func TestFileSuggesterFuzzyMatch(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	for _, name := range []string{"file_suggest.go", "interactive.go", "README.md"} {
 		if err := os.WriteFile(filepath.Join(tmp, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
@@ -184,7 +186,7 @@ func TestFileSuggesterFuzzyMatch(t *testing.T) {
 // so here we model that by browsing with Right and then matching an
 // empty query against the new level.
 func TestFileSuggesterFlatBrowseIntoDirIgnoresStaleFilter(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	// eda/rjg/enk-1150 with a file inside, plus a sibling so the filter
 	// is meaningful at the top level.
 	if err := os.MkdirAll(filepath.Join(tmp, "eda", "rjg", "enk-1150"), 0o755); err != nil {
@@ -228,7 +230,7 @@ func TestFileSuggesterFlatBrowseIntoDirIgnoresStaleFilter(t *testing.T) {
 // tree and matches against the cwd-relative path, so a pattern can
 // span directory boundaries.
 func TestFileSuggesterRecursiveMatch(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(tmp, "src", "foo"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +251,7 @@ func TestFileSuggesterRecursiveMatch(t *testing.T) {
 // TestFileSuggesterRecursiveSkipsHeavyDirs ensures the walk prunes
 // directories like .git that would otherwise dominate the budget.
 func TestFileSuggesterRecursiveSkipsHeavyDirs(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(tmp, ".git", "objects"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +281,7 @@ func TestFileSuggesterRecursiveSkipsHeavyDirs(t *testing.T) {
 // outputs, dependency dirs, and IaC tool caches like
 // .terraform/.terragrunt-cache — while still surfacing tracked files.
 func TestFileSuggesterRecursiveHonorsGitignore(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(tmp, ".gitignore"),
 		[]byte(".terraform/\n.terragrunt-cache/\nnode_modules/\n*.log\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -324,7 +326,7 @@ func TestFileSuggesterRecursiveHonorsGitignore(t *testing.T) {
 // directory-by-directory browse also hides gitignored entries and
 // always hides .git.
 func TestFileSuggesterFlatModeHonorsGitignore(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(tmp, ".gitignore"), []byte("node_modules/\n*.log\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +368,7 @@ func TestFileSuggesterFlatModeHonorsGitignore(t *testing.T) {
 // setting surfaces gitignored entries in both modes (while .git stays
 // hidden in recursive mode to protect the entry budget).
 func TestFileSuggesterRespectGitignoreToggle(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(tmp, ".gitignore"), []byte("dist/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +397,7 @@ func TestFileSuggesterRespectGitignoreToggle(t *testing.T) {
 // TestFileSuggesterToggleResetsCache verifies SetRecursive drops the
 // cached scan so the next matches() reflects the new mode.
 func TestFileSuggesterToggleResetsCache(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(tmp, "pkg"), 0o755); err != nil {
 		t.Fatal(err)
 	}

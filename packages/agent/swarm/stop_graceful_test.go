@@ -5,6 +5,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // Stop drives a graceful shutdown through the inbox: the child
@@ -21,8 +23,8 @@ func TestStopGracefulViaInbox(t *testing.T) {
 
 	exe := buildStubChild(t)
 	f := New(Config{
-		Root:      t.TempDir(),
-		RepoRoot:  t.TempDir(),
+		Root:      testsupport.TempDir(t),
+		RepoRoot:  testsupport.TempDir(t),
 		StopGrace: 3 * time.Second,
 		NewRunner: func(a *Agent) Runner {
 			return &execRunner{

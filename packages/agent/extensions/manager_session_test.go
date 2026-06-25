@@ -1,10 +1,14 @@
 package extensions
 
-import "testing"
+import (
+	"testing"
+
+	"terva.sh/terva/packages/testsupport"
+)
 
 func newSessTestManager(t *testing.T) *Manager {
 	t.Helper()
-	return New(t.TempDir(), "", "0.0.0-test", "anthropic", "claude-test", nil)
+	return New(testsupport.TempDir(t), "", "0.0.0-test", "anthropic", "claude-test", nil)
 }
 
 // SwapAnnouncedSession bookends a session_start with session_end only on a

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestRunMigrateCommandDispatch(t *testing.T) {
@@ -24,7 +25,7 @@ func TestRunMigrateCommandDispatch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Even the error paths must never touch real data dirs.
 			pinMigrateEnv(t)
-			t.Setenv("TERVA_HOME", t.TempDir())
+			t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 			handled, err := runMigrateCommand(tc.args)
 			if handled != tc.wantHandled {
 				t.Errorf("handled = %v, want %v", handled, tc.wantHandled)

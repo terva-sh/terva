@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestParseArgsCWDDefaultsToGetwd(t *testing.T) {
@@ -19,7 +21,7 @@ func TestParseArgsCWDDefaultsToGetwd(t *testing.T) {
 }
 
 func TestParseArgsCWDAbsolutizesExistingDir(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	// Drive a relative path through to confirm it's resolved to absolute.
 	parent := filepath.Dir(dir)
 	rel := filepath.Base(dir)
@@ -51,7 +53,7 @@ func TestParseArgsCWDAbsolutizesExistingDir(t *testing.T) {
 }
 
 func TestParseArgsCWDRejectsMissingDir(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	missing := filepath.Join(testsupport.TempDir(t), "does-not-exist")
 	_, err := ParseArgs([]string{"--cwd", missing})
 	if err == nil {
 		t.Fatal("expected error for missing --cwd dir, got nil")
@@ -79,7 +81,7 @@ func TestParseArgsContextFileRequiresValue(t *testing.T) {
 }
 
 func TestParseArgsCWDRejectsFile(t *testing.T) {
-	f := filepath.Join(t.TempDir(), "afile")
+	f := filepath.Join(testsupport.TempDir(t), "afile")
 	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}

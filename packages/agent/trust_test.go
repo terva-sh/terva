@@ -6,12 +6,14 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // --- store round-trip + idempotence ---
 
 func TestTrustStoreRoundTrip(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	// Missing file ⇒ empty store, no error.
@@ -23,7 +25,7 @@ func TestTrustStoreRoundTrip(t *testing.T) {
 		t.Fatalf("fresh store should be empty, got %v", s.Trusted)
 	}
 
-	repo := t.TempDir()
+	repo := testsupport.TempDir(t)
 	if err := TrustPath(repo, false); err != nil {
 		t.Fatalf("trust: %v", err)
 	}
@@ -48,8 +50,8 @@ func TestTrustStoreRoundTrip(t *testing.T) {
 }
 
 func TestTrustPathIdempotent(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
-	repo := t.TempDir()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	repo := testsupport.TempDir(t)
 
 	if err := TrustPath(repo, false); err != nil {
 		t.Fatal(err)
@@ -76,8 +78,8 @@ func TestTrustPathIdempotent(t *testing.T) {
 }
 
 func TestTrustPromoteToParent(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
-	repo := t.TempDir()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	repo := testsupport.TempDir(t)
 	if err := TrustPath(repo, false); err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +98,8 @@ func TestTrustPromoteToParent(t *testing.T) {
 // --- identity: canonicalization + parent-prefix + symlink ---
 
 func TestIsTrustedCanonicalization(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
-	repo := t.TempDir()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	repo := testsupport.TempDir(t)
 	if err := TrustPath(repo, false); err != nil {
 		t.Fatal(err)
 	}
@@ -130,8 +132,8 @@ func TestIsTrustedCanonicalization(t *testing.T) {
 }
 
 func TestIsTrustedChildNotTrustedWithoutParent(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
-	repo := t.TempDir()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	repo := testsupport.TempDir(t)
 	child := filepath.Join(repo, "nested")
 	if err := os.MkdirAll(child, 0o755); err != nil {
 		t.Fatal(err)
@@ -148,8 +150,8 @@ func TestIsTrustedChildNotTrustedWithoutParent(t *testing.T) {
 }
 
 func TestIsTrustedParentTrustsChildren(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
-	parent := t.TempDir()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	parent := testsupport.TempDir(t)
 	child := filepath.Join(parent, "repo")
 	grandchild := filepath.Join(child, "deeper")
 	if err := os.MkdirAll(grandchild, 0o755); err != nil {
@@ -165,7 +167,7 @@ func TestIsTrustedParentTrustsChildren(t *testing.T) {
 		}
 	}
 	// A directory OUTSIDE the trusted parent stays untrusted.
-	outside := t.TempDir()
+	outside := testsupport.TempDir(t)
 	if ok, _ := s.IsTrusted(outside); ok {
 		t.Errorf("unrelated dir %q must not be trusted", outside)
 	}
@@ -175,11 +177,11 @@ func TestIsTrustedSymlinkedDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation is privileged on Windows CI")
 	}
-	t.Setenv("TERVA_HOME", t.TempDir())
-	real := t.TempDir()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	real := testsupport.TempDir(t)
 	// A symlink pointing at the real trusted dir resolves to the same
 	// canonical path, so it is trusted too.
-	link := filepath.Join(t.TempDir(), "link")
+	link := filepath.Join(testsupport.TempDir(t), "link")
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +195,7 @@ func TestIsTrustedSymlinkedDir(t *testing.T) {
 
 	// And trusting via the symlink also trusts the real path (both
 	// canonicalize identically).
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	if err := TrustPath(link, false); err != nil {
 		t.Fatal(err)
 	}
@@ -204,8 +206,8 @@ func TestIsTrustedSymlinkedDir(t *testing.T) {
 }
 
 func TestMovedDirNotTrusted(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
-	base := t.TempDir()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	base := testsupport.TempDir(t)
 	orig := filepath.Join(base, "before")
 	moved := filepath.Join(base, "after")
 	if err := os.MkdirAll(orig, 0o755); err != nil {
@@ -228,9 +230,9 @@ func TestMovedDirNotTrusted(t *testing.T) {
 // --- resolveTrust precedence ---
 
 func TestResolveTrustPrecedence(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
-	repo := t.TempDir()
-	other := t.TempDir()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	repo := testsupport.TempDir(t)
+	other := testsupport.TempDir(t)
 
 	empty := TrustStore{Version: trustStoreVersion}
 	withRepo := TrustStore{Version: trustStoreVersion}
@@ -259,8 +261,8 @@ func TestResolveTrustPrecedence(t *testing.T) {
 
 // --trust must NOT persist anything to the store.
 func TestTrustFlagDoesNotPersist(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
-	repo := t.TempDir()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	repo := testsupport.TempDir(t)
 
 	if got := resolveTrustState(Args{CWD: repo, Trust: true}); got != TrustGranted {
 		t.Fatalf("--trust should grant for the run, got %v", got)
@@ -280,8 +282,8 @@ func TestIsTrustedCaseInsensitiveOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("case-insensitive matching is a Windows behavior")
 	}
-	t.Setenv("TERVA_HOME", t.TempDir())
-	repo := t.TempDir()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	repo := testsupport.TempDir(t)
 	if err := TrustPath(repo, false); err != nil {
 		t.Fatal(err)
 	}
@@ -294,18 +296,18 @@ func TestIsTrustedCaseInsensitiveOnWindows(t *testing.T) {
 // hasGatedProjectContent only fires when the dir actually ships gated
 // content (so a plain repo never sees a trust notice).
 func TestHasGatedProjectContent(t *testing.T) {
-	plain := t.TempDir()
+	plain := testsupport.TempDir(t)
 	if hasGatedProjectContent(plain) {
 		t.Errorf("plain dir %q should have no gated content", plain)
 	}
-	withSkills := t.TempDir()
+	withSkills := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(withSkills, ".terva", "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if !hasGatedProjectContent(withSkills) {
 		t.Errorf("dir with .terva/skills should have gated content")
 	}
-	withExt := t.TempDir()
+	withExt := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(withExt, ".terva", "extensions"), 0o755); err != nil {
 		t.Fatal(err)
 	}

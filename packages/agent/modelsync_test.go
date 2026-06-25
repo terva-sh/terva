@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestRefreshGated_ForceBypassesFreshCache guards the opencode-go symptom: a
@@ -16,7 +17,7 @@ import (
 // normally short-circuit discovery. A forced refresh ignores the gate; an
 // unforced one still honors a current cache.
 func TestRefreshGated_ForceBypassesFreshCache(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	// No config.json endpoints, so the live fingerprint is "" — match it.
@@ -44,7 +45,7 @@ func TestRefreshGated_ForceBypassesFreshCache(t *testing.T) {
 // (which belongs to provider=kimi). The validator should rewrite the
 // model to anthropic's default and persist.
 func TestValidateAndRepairConfig_MismatchedPair(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	must := func(c Config) {
@@ -77,7 +78,7 @@ func TestValidateAndRepairConfig_MismatchedPair(t *testing.T) {
 // clears the model when the saved provider id isn't recognised
 // (e.g. user removed it from a previous build).
 func TestValidateAndRepairConfig_UnknownProvider(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	b, _ := json.Marshal(Config{Provider: "made-up-provider", Model: "some-model"})
@@ -98,7 +99,7 @@ func TestValidateAndRepairConfig_UnknownProvider(t *testing.T) {
 // snaps the model to that provider's default when the saved id is no
 // longer in the catalog.
 func TestValidateAndRepairConfig_UnknownModel(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	b, _ := json.Marshal(Config{Provider: "anthropic", Model: "claude-deleted-model"})
@@ -116,7 +117,7 @@ func TestValidateAndRepairConfig_UnknownModel(t *testing.T) {
 }
 
 func TestValidateAndRepairConfig_DuplicateModelIDValidForConfiguredProvider(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	b, _ := json.Marshal(Config{Provider: "openai-codex", Model: "gpt-5.5"})
@@ -135,7 +136,7 @@ func TestValidateAndRepairConfig_DuplicateModelIDValidForConfiguredProvider(t *t
 
 // TestValidateAndRepairConfig_HappyPath leaves a valid config alone.
 func TestValidateAndRepairConfig_HappyPath(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	b, _ := json.Marshal(Config{Provider: "anthropic", Model: "claude-sonnet-4-5"})

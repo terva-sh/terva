@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestStartOneStopOneLifecycle proves the live per-server lifecycle the
@@ -65,7 +67,7 @@ func TestStartOneIdempotent(t *testing.T) {
 func TestStartOneFailedIsWarningAndError(t *testing.T) {
 	m := StartAll(context.Background(), nil, nil)
 	defer m.StopAll()
-	err := m.StartOne(context.Background(), "bad", ServerConfig{Command: filepath.Join(t.TempDir(), "nope")}, nil)
+	err := m.StartOne(context.Background(), "bad", ServerConfig{Command: filepath.Join(testsupport.TempDir(t), "nope")}, nil)
 	if err == nil {
 		t.Fatal("StartOne on a missing command should return an error")
 	}
@@ -89,7 +91,7 @@ func TestStartOneFailedIsWarningAndError(t *testing.T) {
 func TestStartOneFailureWarningsDoNotAccumulate(t *testing.T) {
 	m := StartAll(context.Background(), nil, nil)
 	defer m.StopAll()
-	bad := ServerConfig{Command: filepath.Join(t.TempDir(), "nope")}
+	bad := ServerConfig{Command: filepath.Join(testsupport.TempDir(t), "nope")}
 	_ = m.StartOne(context.Background(), "bad", bad, nil)
 	_ = m.StartOne(context.Background(), "bad", bad, nil)
 	if len(m.Warnings()) != 1 {

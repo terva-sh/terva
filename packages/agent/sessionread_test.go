@@ -5,11 +5,12 @@ import (
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestSessionHistoryReader(t *testing.T) {
-	home := t.TempDir()
-	cwd := t.TempDir()
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
 
 	// Write a real session to disk.
 	s, err := core.NewSession(home, cwd, "anthropic", "claude-opus-4-5", "test")

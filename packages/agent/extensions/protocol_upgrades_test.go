@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // writeShellExt drops a shell-script extension with the given hello
@@ -21,7 +22,7 @@ func writeShellExt(t *testing.T, name, helloJSON, body string) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script extension; skip on windows")
 	}
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	dir := filepath.Join(tmp, "extensions", name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -173,7 +174,7 @@ while IFS= read -r line; do
   esac
 done
 `)
-	out := filepath.Join(t.TempDir(), "tr.jsonl")
+	out := filepath.Join(testsupport.TempDir(t), "tr.jsonl")
 	t.Setenv("TR_OUT", out)
 
 	hooks := &stubHooks{}
@@ -235,8 +236,8 @@ while IFS= read -r line; do
 done
 `
 	tmp := writeShellExt(t, "orderer", hello, body)
-	orderOut := filepath.Join(t.TempDir(), "order.txt")
-	sessOut := filepath.Join(t.TempDir(), "sess.json")
+	orderOut := filepath.Join(testsupport.TempDir(t), "order.txt")
+	sessOut := filepath.Join(testsupport.TempDir(t), "sess.json")
 	t.Setenv("ORDER_OUT", orderOut)
 	t.Setenv("SESS_OUT", sessOut)
 

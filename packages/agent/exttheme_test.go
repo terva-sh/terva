@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestExtensionThemeOptions covers the theme-option conversion that moved
@@ -17,7 +18,7 @@ import (
 // extension. (The wire layer stays theme-agnostic; it only exposes the
 // extension's dir + name.)
 func TestExtensionThemeOptions(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	extDir := filepath.Join(tmp, "extensions", "theme-only")
 	if err := os.MkdirAll(extDir, 0o755); err != nil {
 		t.Fatal(err)

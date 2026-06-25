@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // pinMigrateEnv points the envcompat resolvers at temp dirs (XDG for
@@ -17,11 +18,11 @@ import (
 // under.
 func pinMigrateEnv(t *testing.T) string {
 	t.Helper()
-	base := t.TempDir()
+	base := testsupport.TempDir(t)
 	t.Setenv("XDG_STATE_HOME", base)
 	switch runtime.GOOS {
 	case "darwin":
-		home := t.TempDir()
+		home := testsupport.TempDir(t)
 		t.Setenv("HOME", home)
 		base = filepath.Join(home, "Library", "Application Support")
 	case "windows":
@@ -53,7 +54,7 @@ func TestPlanMigration(t *testing.T) {
 	t.Run("zot dir only", func(t *testing.T) {
 		base := pinMigrateEnv(t)
 		mkdirAll(t, filepath.Join(base, "zot"))
-		p := PlanMigration(t.TempDir())
+		p := PlanMigration(testsupport.TempDir(t))
 		if p.OldDir != filepath.Join(base, "zot") || p.NewDir != filepath.Join(base, "terva") {
 			t.Errorf("plan = %q → %q, want zot → terva under %q", p.OldDir, p.NewDir, base)
 		}
@@ -64,7 +65,7 @@ func TestPlanMigration(t *testing.T) {
 
 	t.Run("no legacy dir", func(t *testing.T) {
 		pinMigrateEnv(t)
-		p := PlanMigration(t.TempDir())
+		p := PlanMigration(testsupport.TempDir(t))
 		if p.UserDirApplicable() {
 			t.Errorf("no zot dir, but OldDir = %q", p.OldDir)
 		}
@@ -75,7 +76,7 @@ func TestPlanMigration(t *testing.T) {
 		src := filepath.Join(base, "custom-zot")
 		mkdirAll(t, src)
 		t.Setenv("ZOT_HOME", src)
-		p := PlanMigration(t.TempDir())
+		p := PlanMigration(testsupport.TempDir(t))
 		if p.OldDir != src || !p.OldFromEnv || p.EnvNote == "" {
 			t.Errorf("want ZOT_HOME source with env note, got %+v", p)
 		}
@@ -86,7 +87,7 @@ func TestPlanMigration(t *testing.T) {
 		zot := filepath.Join(base, "zot")
 		mkdirAll(t, zot)
 		t.Setenv("TERVA_HOME", zot)
-		p := PlanMigration(t.TempDir())
+		p := PlanMigration(testsupport.TempDir(t))
 		if p.UserDirApplicable() {
 			t.Errorf("old == new must skip the user-dir step, got OldDir=%q", p.OldDir)
 		}
@@ -94,7 +95,7 @@ func TestPlanMigration(t *testing.T) {
 
 	t.Run("project dirs", func(t *testing.T) {
 		pinMigrateEnv(t)
-		root := t.TempDir()
+		root := testsupport.TempDir(t)
 		sub := filepath.Join(root, "a", "b")
 		mkdirAll(t, filepath.Join(root, ".zot"))
 		mkdirAll(t, sub)
@@ -116,7 +117,7 @@ func TestPlanMigration(t *testing.T) {
 		if err := envcompat.SetZotFallbackDisabled(true); err != nil {
 			t.Fatal(err)
 		}
-		p := PlanMigration(t.TempDir())
+		p := PlanMigration(testsupport.TempDir(t))
 		if !p.AlreadyMigrated || !p.NothingToDo() {
 			t.Errorf("want NothingToDo, got %+v", p)
 		}
@@ -124,8 +125,8 @@ func TestPlanMigration(t *testing.T) {
 }
 
 func TestCopyUserDataNoClobber(t *testing.T) {
-	old := t.TempDir()
-	dest := t.TempDir()
+	old := testsupport.TempDir(t)
+	dest := testsupport.TempDir(t)
 
 	writeMigrateFile(t, filepath.Join(old, "config.json"), "old-config")
 	writeMigrateFile(t, filepath.Join(old, "sessions", "abc", "s1.jsonl"), "session")
@@ -139,7 +140,7 @@ func TestCopyUserDataNoClobber(t *testing.T) {
 	if err := os.Symlink(filepath.Join(old, "connectors", "real.json"), filepath.Join(old, "connectors", "link.json")); err != nil {
 		t.Fatal(err)
 	}
-	outside := filepath.Join(t.TempDir(), "outside.json")
+	outside := filepath.Join(testsupport.TempDir(t), "outside.json")
 	writeMigrateFile(t, outside, "outside")
 	if err := os.Symlink(outside, filepath.Join(old, "connectors", "ext.json")); err != nil {
 		t.Fatal(err)
@@ -202,7 +203,7 @@ func TestCopyUserDataSkipsIrregularFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(old) })
-	dest := t.TempDir()
+	dest := testsupport.TempDir(t)
 	writeMigrateFile(t, filepath.Join(old, "agents", "a1", "meta.json"), "meta")
 	l, err := net.Listen("unix", filepath.Join(old, "agents", "a1", "in.sock"))
 	if err != nil {
@@ -228,8 +229,8 @@ func TestCopyUserDataReportsErrors(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Getuid() == 0 {
 		t.Skip("chmod-based unreadable file needs non-root unix")
 	}
-	old := t.TempDir()
-	dest := t.TempDir()
+	old := testsupport.TempDir(t)
+	dest := testsupport.TempDir(t)
 	writeMigrateFile(t, filepath.Join(old, "ok.json"), "ok")
 	writeMigrateFile(t, filepath.Join(old, "locked.json"), "secret")
 	if err := os.Chmod(filepath.Join(old, "locked.json"), 0o000); err != nil {
@@ -254,8 +255,8 @@ func TestCopyUserDataReportsErrors(t *testing.T) {
 }
 
 func TestRemoveOldUserDir(t *testing.T) {
-	old := t.TempDir()
-	dest := t.TempDir()
+	old := testsupport.TempDir(t)
+	dest := testsupport.TempDir(t)
 	writeMigrateFile(t, filepath.Join(old, "config.json"), "x")
 	rep := CopyUserData(old, dest)
 	p := MigrationPlan{OldDir: old, NewDir: dest}
@@ -267,14 +268,14 @@ func TestRemoveOldUserDir(t *testing.T) {
 	}
 
 	// Identity refusal: never delete the migration target.
-	same := t.TempDir()
+	same := testsupport.TempDir(t)
 	if err := RemoveOldUserDir(MigrationPlan{OldDir: same, NewDir: same}, MigrationCopyReport{}); err == nil {
 		t.Error("must refuse when old == new")
 	}
 }
 
 func TestRenameProjectDir(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	mkdirAll(t, filepath.Join(root, ".zot"))
 	writeMigrateFile(t, filepath.Join(root, ".zot", "config.json"), "{}")
 	p := PlanMigration(root)
@@ -301,7 +302,7 @@ func TestFinalizeMigration(t *testing.T) {
 	if !envcompat.ZotFallbackDisabled() {
 		t.Error("marker not visible after FinalizeMigration")
 	}
-	if p := PlanMigration(t.TempDir()); !p.AlreadyMigrated {
+	if p := PlanMigration(testsupport.TempDir(t)); !p.AlreadyMigrated {
 		t.Error("next PlanMigration must see AlreadyMigrated")
 	}
 }

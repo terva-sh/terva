@@ -7,10 +7,11 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestReadAgentsContextLoadsGlobalAndAncestors(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	tervaHome := filepath.Join(root, "terva-home")
 	project := filepath.Join(root, "repo")
 	nested := filepath.Join(project, "packages", "app")
@@ -42,19 +43,19 @@ func TestReadAgentsContextLoadsGlobalAndAncestors(t *testing.T) {
 }
 
 func TestReadAgentsContextMissingFilesIsEmpty(t *testing.T) {
-	got := readAgentsContext(t.TempDir(), t.TempDir())
+	got := readAgentsContext(testsupport.TempDir(t), testsupport.TempDir(t))
 	if got != "" {
 		t.Fatalf("expected no context, got %q", got)
 	}
 }
 
 func TestResolveInjectsContextFilesBeforeAgents(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5"}); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "brief.md"), []byte("CONTEXT-BRIEF"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -80,12 +81,12 @@ func TestResolveInjectsContextFilesBeforeAgents(t *testing.T) {
 }
 
 func TestResolveLoadsProjectConfigContextFiles(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5"}); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "playbook.md"), []byte("PLAYBOOK-X"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -106,12 +107,12 @@ func TestResolveLoadsProjectConfigContextFiles(t *testing.T) {
 // (a cloned repo can't steer the system prompt); the safe core still
 // resolves. The same dir trusted injects them (covered above).
 func TestResolveUntrustedDropsProjectContextFiles(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5"}); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "playbook.md"), []byte("PLAYBOOK-X"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -131,12 +132,12 @@ func TestResolveUntrustedDropsProjectContextFiles(t *testing.T) {
 }
 
 func TestResolveMissingContextFileErrors(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Resolve(Args{CWD: t.TempDir(), ContextFiles: []string{"missing.md"}}, false)
+	_, err := Resolve(Args{CWD: testsupport.TempDir(t), ContextFiles: []string{"missing.md"}}, false)
 	if err == nil {
 		t.Fatal("expected Resolve to fail fast on a missing --context-file")
 	}
@@ -150,7 +151,7 @@ func TestResolveMissingContextFileErrors(t *testing.T) {
 // with no way to fix it from the TUI — and should repair the config
 // so the next launch is silent.
 func TestResolveFallsBackWhenConfiguredModelIsGone(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	// Persist a stale model id.
 	stale := "gpt-5.5-pro-not-real"
@@ -185,7 +186,7 @@ func TestResolveFallsBackWhenConfiguredModelIsGone(t *testing.T) {
 // persisted config. If the user passed --model X explicitly and X is
 // unknown, we still fall back, but we don't touch their config.
 func TestResolveExplicitFlagStaleDoesNotRepairConfig(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	good := "gpt-5"
 	if err := SaveConfig(Config{Provider: "openai", Model: good}); err != nil {
@@ -211,7 +212,7 @@ func TestResolveExplicitFlagStaleDoesNotRepairConfig(t *testing.T) {
 // still discover bedrock from the AWS env vars instead of falling back
 // to anthropic and reporting "not logged in".
 func TestResolveEnvOnlyBedrockDiscoveredWithoutConfig(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir()) // fresh home: no config.json
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t)) // fresh home: no config.json
 	// Disable the Kimi CLI token fallback so a developer machine with a
 	// real Kimi CLI login doesn't pre-empt bedrock in the scan.
 	if err := SetKimiCLIFallbackDisabled(true); err != nil {
@@ -237,7 +238,7 @@ func TestResolveEnvOnlyBedrockDiscoveredWithoutConfig(t *testing.T) {
 }
 
 func TestResolveOllamaUsesModelBaseURLBeforeDefault(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	provider.ResetCatalogLayers()
 	defer provider.ResetCatalogLayers()
 	provider.SetUserModels([]provider.Model{{
@@ -259,7 +260,7 @@ func TestResolveOllamaUsesModelBaseURLBeforeDefault(t *testing.T) {
 }
 
 func TestResolveOllamaFallsBackToDefaultBaseURL(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	provider.ResetCatalogLayers()
 	defer provider.ResetCatalogLayers()
 
@@ -275,7 +276,7 @@ func TestResolveOllamaFallsBackToDefaultBaseURL(t *testing.T) {
 // Temperature fall-through: --temperature flag > per-model (models.json) >
 // global config; AdaptiveThinking models always omit it.
 func TestResolveTemperaturePrecedence(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	provider.ResetCatalogLayers()
 	defer provider.ResetCatalogLayers()
 
@@ -305,7 +306,7 @@ func TestResolveTemperaturePrecedence(t *testing.T) {
 }
 
 func TestResolveTemperatureOmittedForAdaptiveThinking(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	provider.ResetCatalogLayers()
 	defer provider.ResetCatalogLayers()
 

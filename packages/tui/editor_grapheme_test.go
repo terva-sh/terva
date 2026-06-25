@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // Backspace, Delete, and ←/→ operate on grapheme clusters, not
@@ -116,7 +118,7 @@ func TestReaderPasteSizeCap(t *testing.T) {
 // inserted verbatim — no os.Stat storm on slow mounts — while a real
 // small drop still gets quoted.
 func TestPasteStatBound(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	real := filepath.Join(dir, "with space.txt")
 	if err := os.WriteFile(real, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)

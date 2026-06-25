@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // --- Issue 1: edit diff must not build an O(m*n) LCS over the whole file ---
@@ -20,7 +21,7 @@ import (
 // took minutes. With prefix/suffix trimming it must finish near-instantly
 // and emit a compact, correct diff.
 func TestEditLargeFileDiffFast(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "big.txt")
 
 	const n = 60000
@@ -102,7 +103,7 @@ func TestEditDiffMatchesUnchangedCases(t *testing.T) {
 // TestEditCRLFOldText: a model that copied \r\n bytes out of a read of a
 // CRLF file passes \r\n inside oldText. The match must still succeed.
 func TestEditCRLFOldText(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "a.txt")
 	os.WriteFile(p, []byte("alpha\r\nbeta\r\ngamma\r\n"), 0o644)
 	tool := &EditTool{CWD: dir}
@@ -124,7 +125,7 @@ func TestEditCRLFOldText(t *testing.T) {
 // TestEditCRLFNewTextNoDouble: newText that already contains \r\n must
 // not be turned into \r\r\n by the CRLF re-application step.
 func TestEditCRLFNewTextNoDouble(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "a.txt")
 	os.WriteFile(p, []byte("one\r\ntwo\r\n"), 0o644)
 	tool := &EditTool{CWD: dir}
@@ -151,7 +152,7 @@ func TestEditCRLFNewTextNoDouble(t *testing.T) {
 // applied the byte cap before offset and returned empty content; now the
 // selected slice must contain the real lines at that offset.
 func TestReadOffsetPastByteCap(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "big.txt")
 
 	// Each line "line NNNNN" is ~11 bytes; 20000 lines ~= 220KB, well past
@@ -185,7 +186,7 @@ func TestReadOffsetPastByteCap(t *testing.T) {
 // TestReadByteCapAppliesToSelection verifies the 50KiB cap still trims a
 // large selected window (so we did not just remove the cap).
 func TestReadByteCapAppliesToSelection(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "big.txt")
 	// Use long lines so the 50KiB byte cap engages well before the 2000
 	// line cap: ~200 bytes/line * 2000 lines = ~400KB, but the byte cap
@@ -201,7 +202,7 @@ func TestReadByteCapAppliesToSelection(t *testing.T) {
 	// No offset: selection is the whole file; the byte cap must engage.
 	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]any{"path": "big.txt"}), nil)
 	got := res.Content[0].(provider.TextBlock).Text
-	if !strings.Contains(got, fmt.Sprintf("truncated at %d bytes", maxReadBytes)) {
+	if !strings.Contains(got, fmt.Sprintf("truncated at %d KiB", maxReadBytes/1024)) {
 		tail := got
 		if len(tail) > 120 {
 			tail = tail[len(tail)-120:]
@@ -213,9 +214,88 @@ func TestReadByteCapAppliesToSelection(t *testing.T) {
 	}
 }
 
+// TestReadOffsetPastEOFExplains: an offset beyond the file's line count must
+// return a clear "past the end" message (offset counts LINES, not bytes), not
+// a silent empty result. This is the trap an agent hits when it feeds the
+// byte-cap figure (51200) back as an offset.
+func TestReadOffsetPastEOFExplains(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "small.md")
+	os.WriteFile(p, []byte("alpha\nbravo\ncharlie\n"), 0o644) // 3 lines
+	tool := &ReadTool{CWD: dir}
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"path": "small.md", "offset": 51200,
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.Content[0].(provider.TextBlock).Text
+	if !strings.Contains(got, "past the end") || !strings.Contains(got, "3 line(s)") {
+		t.Fatalf("expected a past-EOF explanation naming the line count, got %q", got)
+	}
+	d := res.Details.(map[string]any)
+	if d["past_eof"] != true || d["total_lines"] != 3 {
+		t.Errorf("details past_eof/total_lines wrong: %+v", d)
+	}
+}
+
+// TestReadByteCapHintPagesCorrectly: the offset in the byte-cap note must be a
+// LINE number that actually continues the read. Regression for the bug where
+// the note reported the byte cap (51200), so paging on it landed past EOF and
+// returned nothing.
+func TestReadByteCapHintPagesCorrectly(t *testing.T) {
+	tail := func(s string) string {
+		if len(s) > 120 {
+			return s[len(s)-120:]
+		}
+		return s
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "big.txt")
+	// ~201 bytes/line with a unique prefix, so the 50KiB byte cap engages
+	// (after ~254 lines) well before the 2000-line cap, and each line is
+	// identifiable for the continuity check.
+	long := strings.Repeat("x", 190)
+	var b strings.Builder
+	for i := 0; i < 2000; i++ {
+		fmt.Fprintf(&b, "line %05d %s\n", i, long)
+	}
+	os.WriteFile(p, []byte(b.String()), 0o644)
+	tool := &ReadTool{CWD: dir}
+
+	// Read from the top: the byte cap engages and emits a continue hint.
+	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]any{"path": "big.txt"}), nil)
+	got := res.Content[0].(provider.TextBlock).Text
+	if !strings.Contains(got, fmt.Sprintf("truncated at %d KiB", maxReadBytes/1024)) {
+		t.Fatalf("expected a byte-cap note, got tail %q", tail(got))
+	}
+	i := strings.Index(got, "offset=")
+	if i < 0 {
+		t.Fatalf("no continue-offset hint in note: %q", tail(got))
+	}
+	var next int
+	if _, err := fmt.Sscanf(got[i:], "offset=%d", &next); err != nil {
+		t.Fatalf("could not parse offset from hint %q: %v", got[i:], err)
+	}
+	if dn := res.Details.(map[string]any)["next_offset"]; dn != next {
+		t.Errorf("details next_offset %v != hint offset %d", dn, next)
+	}
+
+	// Paging at the hinted offset continues exactly where we left off — not an
+	// empty result (the bug was the hint being a byte count, landing past EOF).
+	res2, _ := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"path": "big.txt", "offset": next, "limit": 1,
+	}), nil)
+	got2 := res2.Content[0].(provider.TextBlock).Text
+	want := fmt.Sprintf("line %05d %s\n", next-1, long)
+	if got2 != want {
+		t.Fatalf("paging at hinted offset=%d did not continue: got %q want %q", next, got2, want)
+	}
+}
+
 // TestReadImageCap rejects an oversized image with a clear error.
 func TestReadImageCap(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "huge.png")
 	// A buffer larger than maxImageBytes; contents irrelevant (size is
 	// checked via Stat before reading).
@@ -244,7 +324,7 @@ func TestBashEnvExported(t *testing.T) {
 		t.Skip("posix shell only")
 	}
 	t.Setenv("TERVA_HOME", "/inherited/should/lose")
-	tool := &BashTool{CWD: t.TempDir(), Env: map[string]string{"TERVA_HOME": "/resolved/home"}}
+	tool := &BashTool{CWD: testsupport.TempDir(t), Env: map[string]string{"TERVA_HOME": "/resolved/home"}}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": `printf '%s' "$TERVA_HOME"`,
 	}), nil)
@@ -266,7 +346,7 @@ func TestBashSpillFooterIsActionable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell only")
 	}
-	tool := &BashTool{CWD: t.TempDir()}
+	tool := &BashTool{CWD: testsupport.TempDir(t)}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": fmt.Sprintf("yes | head -n %d", (maxBashBytes/2)+5000),
 		"timeout": 30,
@@ -293,7 +373,7 @@ func TestBashDefaultTimeout(t *testing.T) {
 	// timeout terminates via the default. To keep the test fast we rely on
 	// the explicit-timeout path producing the same "timed out" hint, and
 	// separately assert the default constant is wired in.
-	tool := &BashTool{CWD: t.TempDir()}
+	tool := &BashTool{CWD: testsupport.TempDir(t)}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": "sleep 5", "timeout": 1,
 	}), nil)
@@ -323,7 +403,7 @@ func TestBashDefaultTimeoutApplied(t *testing.T) {
 	if defaultBashTimeout <= 0 {
 		t.Fatal("defaultBashTimeout must be positive")
 	}
-	tool := &BashTool{CWD: t.TempDir()}
+	tool := &BashTool{CWD: testsupport.TempDir(t)}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": "echo ok", // no timeout field
 	}), nil)
@@ -345,7 +425,7 @@ func TestBashSpillFileIsGenuinelyFull(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell only")
 	}
-	tool := &BashTool{CWD: t.TempDir()}
+	tool := &BashTool{CWD: testsupport.TempDir(t)}
 	// Emit well past maxBashBytes (50KiB). yes|head gives deterministic,
 	// large output cheaply.
 	totalLines := (maxBashBytes / 2) + 5000 // each "y\n" is 2 bytes
@@ -381,7 +461,7 @@ func TestBashSpillDiscardedWhenComplete(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell only")
 	}
-	tool := &BashTool{CWD: t.TempDir()}
+	tool := &BashTool{CWD: testsupport.TempDir(t)}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "echo small"}), nil)
 	if err != nil {
 		t.Fatal(err)

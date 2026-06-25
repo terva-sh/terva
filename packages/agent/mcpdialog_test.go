@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/mcp"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func writeUserConfig(t *testing.T, home string, c Config) {
@@ -54,7 +55,7 @@ func TestSetUserMCPDisabledRoundTrip(t *testing.T) {
 // preserving unrelated project fields, and removes it cleanly.
 func TestSetProjectMCPDisabledRoundTrip(t *testing.T) {
 	withTempHome(t)
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	writeProjectConfig(t, proj, `{"context_files":["AGENTS.md"]}`)
 
 	if err := setProjectMCPDisabled(proj, "repo", true); err != nil {
@@ -85,7 +86,7 @@ func TestSetProjectMCPDisabledRoundTrip(t *testing.T) {
 func TestResolvedDisableMCPUnionHonoredUntrusted(t *testing.T) {
 	home := withTempHome(t)
 	writeUserConfig(t, home, Config{DisableMCP: []string{"a"}})
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	writeProjectConfig(t, proj, `{"disable_mcp":["b"]}`)
 
 	for _, trusted := range []bool{true, false} {
@@ -103,7 +104,7 @@ func TestListMCPServersScopesAndState(t *testing.T) {
 	writeUserConfig(t, home, Config{
 		MCP: &mcp.Config{Servers: map[string]mcp.ServerConfig{"u": {Command: "ucmd"}}},
 	})
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	// Project defines "p" and disables the user's "u" here.
 	writeProjectConfig(t, proj, `{"mcp":{"servers":{"p":{"command":"pcmd"}}},"disable_mcp":["u"]}`)
 
@@ -143,7 +144,7 @@ func TestMCPServerShouldRun(t *testing.T) {
 		MCP:        &mcp.Config{Servers: map[string]mcp.ServerConfig{"u": {Command: "x"}, "d": {Command: "y"}}},
 		DisableMCP: []string{"d"},
 	})
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	if !mcpServerShouldRun(proj, true, "u") {
 		t.Error("u is defined and enabled — should run")
 	}

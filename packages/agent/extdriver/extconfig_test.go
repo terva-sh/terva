@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestConfigDeliveryHandshakeAndUpdate proves the resolver's values ride
@@ -13,7 +15,7 @@ import (
 // config_update event. The shell extension echoes a marker when it sees
 // the handshake token, and another when a config_update arrives.
 func TestConfigDeliveryHandshakeAndUpdate(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	dir := filepath.Join(tmp, "cfg")
 	hello := `{"type":"hello","name":"cfg","version":"1.0","capabilities":["events"]}`
 	body := `printf '%s\n' '{"type":"ready"}'
@@ -64,6 +66,6 @@ done
 // TestPushConfigUpdateUnknownExtensionNoop: pushing to an extension that
 // isn't loaded must not panic.
 func TestPushConfigUpdateUnknownExtensionNoop(t *testing.T) {
-	d := New(t.TempDir(), "", "0.0.0-test", "anthropic", "opus", &recordingHooks{})
+	d := New(testsupport.TempDir(t), "", "0.0.0-test", "anthropic", "opus", &recordingHooks{})
 	d.PushConfigUpdate("nope", map[string]json.RawMessage{"a": json.RawMessage(`1`)})
 }

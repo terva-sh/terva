@@ -4,13 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // extUpgrade for a missing name is an error. (The git-pull mechanics are
 // covered by updateOneExtension's tests in extupdate_test.go; here we
 // exercise the name-resolution wrapper.)
 func TestExtUpgradeNotFound(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	if err := os.MkdirAll(filepath.Join(home, "extensions"), 0o755); err != nil {
 		t.Fatal(err)
@@ -29,7 +31,7 @@ func TestExtUpgradeNoArgs(t *testing.T) {
 // A non-git install resolves but reports "skipped: not a git checkout",
 // which is not a failure — extUpgrade returns nil.
 func TestExtUpgradeSkipsNonGit(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	ext := filepath.Join(home, "extensions", "localext")
 	if err := os.MkdirAll(ext, 0o755); err != nil {
@@ -48,7 +50,7 @@ func TestExtUpgradeSkipsNonGit(t *testing.T) {
 // name "index" after a pack install). findExtensionDir must resolve BOTH
 // so `ext upgrade index` works exactly as the list shows it.
 func TestFindExtensionDirByManifestNameOrDir(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	dir := filepath.Join(home, "extensions", "terva-ext-index")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -65,6 +67,46 @@ func TestFindExtensionDirByManifestNameOrDir(t *testing.T) {
 		}
 	}
 	if _, err := findExtensionDir("nope"); err == nil {
+		t.Fatal("expected a not-found error for an unknown name")
+	}
+}
+
+// findExtensionDirIn backs the /extensions config dialog and must resolve by
+// manifest name too, not just the install-dir basename — otherwise an
+// extension installed under its source repo name (dir "terva-ext-obsidian",
+// manifest "obsidian") reports "no configurable settings" though its schema is
+// right there. It shares matchExtensionDir with findExtensionDir.
+func TestFindExtensionDirInResolvesManifestName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TERVA_HOME", home)
+	gdir := filepath.Join(home, "extensions", "terva-ext-obsidian")
+	if err := os.MkdirAll(gdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gdir, "extension.json"), []byte(`{"name":"obsidian"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"obsidian", "terva-ext-obsidian"} {
+		got, err := findExtensionDirIn("", name)
+		if err != nil || got != gdir {
+			t.Fatalf("findExtensionDirIn(%q) = %q, %v; want %q", name, got, err, gdir)
+		}
+	}
+
+	// Same resolution for a project-scoped install under cwd/.terva/extensions.
+	cwd := t.TempDir()
+	pdir := filepath.Join(cwd, ".terva", "extensions", "terva-tasks")
+	if err := os.MkdirAll(pdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pdir, "extension.json"), []byte(`{"name":"tasks"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := findExtensionDirIn(cwd, "tasks"); err != nil || got != pdir {
+		t.Fatalf(`findExtensionDirIn(cwd, "tasks") = %q, %v; want %q`, got, err, pdir)
+	}
+
+	if _, err := findExtensionDirIn("", "nope"); err == nil {
 		t.Fatal("expected a not-found error for an unknown name")
 	}
 }

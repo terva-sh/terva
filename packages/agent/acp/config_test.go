@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // ---- Phase 4b: model selection (config options) + approval modes ----
@@ -54,7 +55,7 @@ func TestACPSessionNewAdvertisesModelAndModes(t *testing.T) {
 
 	// permSetup already ran session/new; re-run it here to read the result
 	// directly (permSetup discards it).
-	newRes := h.call(MethodSessionNew, map[string]any{"cwd": t.TempDir()})
+	newRes := h.call(MethodSessionNew, map[string]any{"cwd": testsupport.TempDir(t)})
 
 	// ---- model config option ----
 	configOptions, _ := newRes["configOptions"].([]any)
@@ -126,7 +127,7 @@ func TestACPSessionNewNoMenusWhenEmpty(t *testing.T) {
 	h, _, teardown := permSetup(t, factory)
 	defer teardown()
 
-	newRes := h.call(MethodSessionNew, map[string]any{"cwd": t.TempDir()})
+	newRes := h.call(MethodSessionNew, map[string]any{"cwd": testsupport.TempDir(t)})
 	if _, ok := newRes["configOptions"]; ok {
 		t.Errorf("configOptions advertised with no authenticated models: %v", newRes["configOptions"])
 	}
@@ -229,8 +230,8 @@ func TestACPSetConfigOptionSwitchesModelCrossProvider(t *testing.T) {
 // TestACPSetConfigOptionPersistsModel proves the model change is written to the
 // durable session, so a later session/load restores it.
 func TestACPSetConfigOptionPersistsModel(t *testing.T) {
-	root := t.TempDir()
-	cwd := t.TempDir()
+	root := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
 	factory := &fakeFactory{
 		client: &textTurnClient{reply: "hi"},
 		tools:  core.Registry{},

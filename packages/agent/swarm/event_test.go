@@ -4,13 +4,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestEventLogAppendAndRead is the simplest possible invariant:
 // what we write goes back through ReadEventLog exactly, including
 // the flat field shape and the timestamp.
 func TestEventLogAppendAndRead(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "events.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "events.jsonl")
 	log, err := OpenEventLog(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -49,7 +51,7 @@ func TestEventLogAppendAndRead(t *testing.T) {
 // a half-written line; we don't want that to prevent the dashboard
 // from showing the rest.
 func TestReadEventLogIgnoresGarbage(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "events.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "events.jsonl")
 	log, err := OpenEventLog(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -88,7 +90,7 @@ func TestReadEventLogIgnoresGarbage(t *testing.T) {
 // now folds back-to-back same-type identical-payload events whose
 // timestamps are within ~250ms of each other.
 func TestReadEventLogDeduplicatesDoubleWrites(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "events.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "events.jsonl")
 	log, err := OpenEventLog(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -136,7 +138,7 @@ func TestReadEventLogDeduplicatesDoubleWrites(t *testing.T) {
 // agent legitimately can emit identical adjacent events (think: a
 // retry running the same tool seconds apart).
 func TestReadEventLogKeepsLegitimateAdjacentEvents(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "events.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "events.jsonl")
 	log, err := OpenEventLog(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -163,7 +165,7 @@ func TestReadEventLogKeepsLegitimateAdjacentEvents(t *testing.T) {
 // TestFollowerEmitsNewEvents follows a live file and ensures events
 // appended after the follower starts make it to the channel.
 func TestFollowerEmitsNewEvents(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "events.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "events.jsonl")
 	// Pre-seed one event so the file exists. The follower's
 	// contract is "emit events appended AFTER it starts", so this
 	// first event is not expected on the channel.

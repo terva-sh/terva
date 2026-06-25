@@ -11,6 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/mcp"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // Workspace Trust Phase 6: a TRUSTED project may define hooks and MCP
@@ -36,7 +37,7 @@ func writeUserHooks(t *testing.T, home, stub, mode string) {
 // agent-level integration tests.
 func buildPhase6MCPStub(t *testing.T) string {
 	t.Helper()
-	out := filepath.Join(t.TempDir(), "mcpstub")
+	out := filepath.Join(testsupport.TempDir(t), "mcpstub")
 	if runtime.GOOS == "windows" {
 		out += ".exe"
 	}
@@ -61,7 +62,7 @@ func jsonHooksConfig(stub, mode string) string {
 func TestUntrustedProjectHooksDoNotFire(t *testing.T) {
 	withTempHome(t)
 	stub := buildLadderHookStub(t)
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	// Project declares a DENY hook — if it leaked it would block every call.
 	writeProjectConfig(t, proj, jsonHooksConfig(stub, "deny"))
 
@@ -80,7 +81,7 @@ func TestUntrustedProjectHooksDoNotFire(t *testing.T) {
 func TestTrustedProjectHooksFire(t *testing.T) {
 	withTempHome(t)
 	stub := buildLadderHookStub(t)
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	writeProjectConfig(t, proj, jsonHooksConfig(stub, "deny"))
 
 	run := func(t *testing.T, trusted bool) {
@@ -122,7 +123,7 @@ func TestHookMergeUnionUserAndProject(t *testing.T) {
 	home := os.Getenv("TERVA_HOME")
 	stub := buildLadderHookStub(t)
 	writeUserHooks(t, home, stub, "allow")
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	writeProjectConfig(t, proj, jsonHooksConfig(stub, "deny"))
 
 	// Trusted: merged engine has user(allow) THEN project(deny).
@@ -154,7 +155,7 @@ func TestUserHooksUnaffectedByTrust(t *testing.T) {
 	home := os.Getenv("TERVA_HOME")
 	stub := buildLadderHookStub(t)
 	writeUserHooks(t, home, stub, "deny")
-	proj := t.TempDir() // no project config at all
+	proj := testsupport.TempDir(t) // no project config at all
 
 	for _, trusted := range []bool{false, true} {
 		eng := buildHookEngine(Args{CWD: proj}, trusted)
@@ -174,7 +175,7 @@ func TestUserHooksUnaffectedByTrust(t *testing.T) {
 func TestUntrustedProjectMCPNotStarted(t *testing.T) {
 	withTempHome(t)
 	stub := buildPhase6MCPStub(t)
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	body := `{"mcp":{"servers":{"repo":{"command":` + jsonString(stub) + `}}}}`
 	writeProjectConfig(t, proj, body)
 
@@ -195,7 +196,7 @@ func TestUntrustedProjectMCPNotStarted(t *testing.T) {
 func TestTrustedProjectMCPStarts(t *testing.T) {
 	home := withTempHome(t)
 	stub := buildPhase6MCPStub(t)
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 
 	// User config defines a server "shared"; project defines "repo" AND a
 	// colliding "shared" — the user's "shared" must win.
@@ -209,7 +210,7 @@ func TestTrustedProjectMCPStarts(t *testing.T) {
 	// Project server "repo" plus a colliding "shared" pointing at a bogus
 	// command: if the project's "shared" won, that bogus server would replace
 	// the working user one. The user must win, so "shared" tools still appear.
-	bogus := filepath.Join(t.TempDir(), "does-not-exist")
+	bogus := filepath.Join(testsupport.TempDir(t), "does-not-exist")
 	body := `{"mcp":{"servers":{` +
 		`"repo":{"command":` + jsonString(stub) + `},` +
 		`"shared":{"command":` + jsonString(bogus) + `}}}}`
@@ -248,7 +249,7 @@ func TestUserMCPUnaffectedByUntrustedProject(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.json"), ub, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	body := `{"mcp":{"servers":{"repo":{"command":` + jsonString(stub) + `}}}}`
 	writeProjectConfig(t, proj, body)
 
@@ -311,7 +312,7 @@ func TestMergeMCPConfigsUserWinsCollision(t *testing.T) {
 func TestTrustedProjectHooksFlowThroughResolveVerdict(t *testing.T) {
 	withTempHome(t)
 	stub := buildLadderHookStub(t)
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	writeProjectConfig(t, proj, jsonHooksConfig(stub, "deny"))
 
 	args := Args{CWD: proj, Trust: true}

@@ -4,12 +4,13 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/testsupport"
 	"terva.sh/terva/packages/tui"
 )
 
 func TestLoginDialogCursorPosMatchesPaddedInputRow(t *testing.T) {
 	d := newLoginDialog()
-	d.Open(t.TempDir())
+	d.Open(testsupport.TempDir(t))
 	d.method = "oauth"
 	d.provider = "anthropic"
 	d.ShowWaiting("https://example.com/oauth/authorize?code_challenge=abc&state=xyz")

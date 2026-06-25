@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 var (
@@ -160,7 +161,7 @@ func TestManagerNamespacingAndRouting(t *testing.T) {
 func TestManagerBrokenServerIsWarningNotFatal(t *testing.T) {
 	cfg := &Config{Servers: map[string]ServerConfig{
 		"good": {Command: buildStub(t)},
-		"bad":  {Command: filepath.Join(t.TempDir(), "does-not-exist")},
+		"bad":  {Command: filepath.Join(testsupport.TempDir(t), "does-not-exist")},
 	}}
 	m := StartAll(context.Background(), cfg, nil)
 	defer m.StopAll()

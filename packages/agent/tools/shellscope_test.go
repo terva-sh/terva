@@ -3,6 +3,8 @@ package tools
 import (
 	"slices"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestDecomposeBashCommand(t *testing.T) {
@@ -40,7 +42,7 @@ func TestDecomposeBashCommandCapturesNested(t *testing.T) {
 }
 
 func TestCheckCommandCompoundScopes(t *testing.T) {
-	sb := NewSandbox(t.TempDir())
+	sb := NewSandbox(testsupport.TempDir(t))
 	sb.Lock()
 
 	// A banned or escaping command must be caught even when it is not

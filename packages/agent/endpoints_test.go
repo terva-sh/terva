@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // registerEndpoint adds a dynamic provider; collisions with a built-in id and
@@ -34,7 +36,7 @@ func TestRegisterEndpoint(t *testing.T) {
 // Resolve treats a registered endpoint like openai-compatible: its base URL
 // flows through, and a keyless endpoint still resolves (sentinel bearer).
 func TestResolveEndpointProvider(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	if err := os.WriteFile(filepath.Join(home, "config.json"),
 		[]byte(`{"endpoints":{"box-resolve":{"baseUrl":"http://box-resolve:9000/v1"}}}`), 0o644); err != nil {
@@ -81,7 +83,7 @@ func TestEndpointNameFor(t *testing.T) {
 
 // mergeEndpointsIntoConfig adds new endpoints and never clobbers an existing one.
 func TestMergeEndpointsIntoConfig(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	if err := os.WriteFile(filepath.Join(home, "config.json"),
 		[]byte(`{"endpoints":{"box-a":{"baseUrl":"http://box-a:8000/v1"}}}`), 0o644); err != nil {
@@ -110,7 +112,7 @@ func TestMergeEndpointsIntoConfig(t *testing.T) {
 // newly-added or edited endpoint forces a re-discovery instead of waiting out
 // the cache TTL.
 func TestEndpointsFingerprint(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	write := func(body string) {
 		if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(body), 0o644); err != nil {

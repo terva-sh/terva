@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func crashNoticed(hooks *stubHooks) bool {
@@ -23,7 +25,7 @@ func crashNoticed(hooks *stubHooks) bool {
 // and — crucially — does NOT surface a crash notice (the fix: a
 // deliberate stop is silent). Unknown names report false.
 func TestStopByNameSilentAndSurgical(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	writeMockExtension(t, filepath.Join(tmp, "extensions"))
 	hooks := &stubHooks{}
 	mgr := New(tmp, "", "0.0.0-test", "anthropic", "claude-test", hooks)
@@ -53,7 +55,7 @@ func TestStopByNameSilentAndSurgical(t *testing.T) {
 // ApplyOne starts or stops a single extension to match `want` and fires
 // onReload each time, leaving the crash channel quiet on a stop.
 func TestApplyOneStartsAndStops(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	writeMockExtension(t, filepath.Join(tmp, "extensions"))
 	hooks := &stubHooks{}
 	mgr := New(tmp, "", "0.0.0-test", "anthropic", "claude-test", hooks)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/connproto"
+	"terva.sh/terva/packages/testsupport"
 )
 
 type stubTransport struct {
@@ -143,7 +144,7 @@ func TestServeHappyPath(t *testing.T) {
 		t.Errorf("capabilities = %v", caps)
 	}
 
-	h.send(connproto.HelloAckFromHost{Type: "hello_ack", Protocol: 1, DataDir: t.TempDir()})
+	h.send(connproto.HelloAckFromHost{Type: "hello_ack", Protocol: 1, DataDir: testsupport.TempDir(t)})
 
 	// A send before connect fails politely instead of crashing.
 	h.send(connproto.SendFromHost{Type: "send", ID: "0", ChatID: "c", Text: "early"})

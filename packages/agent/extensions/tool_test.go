@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func writeMockToolExtension(t *testing.T, root string) {
@@ -49,7 +51,7 @@ done
 }
 
 func TestManagerToolRegistrationAndInvoke(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	writeMockToolExtension(t, filepath.Join(tmp, "extensions"))
 
 	mgr := New(tmp, "", "0.0.0", "anthropic", "opus", &stubHooks{})

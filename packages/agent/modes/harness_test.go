@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/testsupport"
 	"terva.sh/terva/packages/tui"
 	"terva.sh/terva/packages/tui/tuitest"
 )
@@ -42,8 +43,8 @@ func startInteractive(t *testing.T, mutate func(*InteractiveConfig)) *harness {
 		Theme:               tui.Dark,
 		Model:               "test-model",
 		Provider:            "test",
-		CWD:                 t.TempDir(),
-		TervaHome:           t.TempDir(),
+		CWD:                 testsupport.TempDir(t),
+		TervaHome:           testsupport.TempDir(t),
 		Version:             "v0.0.0-test",
 		PersonaName:         "Mieli",
 		PersonaPhonetic:     "MYEH-lee",

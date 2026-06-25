@@ -5,11 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestSandboxLockedBlocksOutside(t *testing.T) {
-	root := t.TempDir()
-	outside := t.TempDir()
+	root := testsupport.TempDir(t)
+	outside := testsupport.TempDir(t)
 	outsideFile := filepath.Join(outside, "a.txt")
 	os.WriteFile(outsideFile, []byte("secret"), 0o644)
 
@@ -26,8 +28,8 @@ func TestSandboxLockedBlocksOutside(t *testing.T) {
 }
 
 func TestSandboxUnlockedAllows(t *testing.T) {
-	root := t.TempDir()
-	outside := t.TempDir()
+	root := testsupport.TempDir(t)
+	outside := testsupport.TempDir(t)
 	sb := NewSandbox(root)
 	if err := sb.CheckPath(filepath.Join(outside, "a.txt")); err != nil {
 		t.Fatalf("unlocked should allow: %v", err)
@@ -35,7 +37,7 @@ func TestSandboxUnlockedAllows(t *testing.T) {
 }
 
 func TestSandboxCommandBanned(t *testing.T) {
-	sb := NewSandbox(t.TempDir())
+	sb := NewSandbox(testsupport.TempDir(t))
 	sb.Lock()
 	cases := []string{
 		"sudo apt-get install foo",
@@ -61,7 +63,7 @@ func TestSandboxCommandBanned(t *testing.T) {
 // an absolute path, must be allowed. The old guard rejected any `cd /...`
 // outright, which wasted turns and nudged the model toward breaking out.
 func TestSandboxAllowsCDIntoSubdir(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	sub := filepath.Join(root, "packages", "provider")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
@@ -99,9 +101,9 @@ func TestSandboxAllowsCDIntoSubdir(t *testing.T) {
 // relative to the sandbox root when jailed, so the model isn't biased
 // toward absolute paths.
 func TestSandboxDisplayPath(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	sub := filepath.Join(root, "pkg", "foo.go")
-	outside := filepath.Join(t.TempDir(), "x.go")
+	outside := filepath.Join(testsupport.TempDir(t), "x.go")
 
 	sb := NewSandbox(root)
 
@@ -124,8 +126,8 @@ func TestSandboxDisplayPath(t *testing.T) {
 }
 
 func TestReadToolRejectsOutsideWhenLocked(t *testing.T) {
-	root := t.TempDir()
-	outside := t.TempDir()
+	root := testsupport.TempDir(t)
+	outside := testsupport.TempDir(t)
 	outsideFile := filepath.Join(outside, "a.txt")
 	os.WriteFile(outsideFile, []byte("x"), 0o644)
 
@@ -143,11 +145,11 @@ func TestReadToolRejectsOutsideWhenLocked(t *testing.T) {
 // A read-only root is readable by the read-side check but never
 // writable, and paths outside every root are still blocked for reads.
 func TestSandboxReadOnlyRoot(t *testing.T) {
-	root := t.TempDir()
-	docs := t.TempDir()
+	root := testsupport.TempDir(t)
+	docs := testsupport.TempDir(t)
 	docFile := filepath.Join(docs, "tui.md")
 	os.WriteFile(docFile, []byte("# docs"), 0o644)
-	outside := t.TempDir()
+	outside := testsupport.TempDir(t)
 
 	sb := NewSandbox(root)
 	sb.AddReadOnlyRoot(docs)
@@ -174,8 +176,8 @@ func TestSandboxReadOnlyRoot(t *testing.T) {
 // End-to-end: the read tool can read a file in a read-only root while
 // jailed — the property that makes the shipped docs usable under /jail.
 func TestReadToolReadsReadOnlyRootWhenLocked(t *testing.T) {
-	root := t.TempDir()
-	docs := t.TempDir()
+	root := testsupport.TempDir(t)
+	docs := testsupport.TempDir(t)
 	docFile := filepath.Join(docs, "rpc.md")
 	os.WriteFile(docFile, []byte("rpc docs body"), 0o644)
 
@@ -194,8 +196,8 @@ func TestReadToolReadsReadOnlyRootWhenLocked(t *testing.T) {
 // non-matching files, the dir itself, and nested matches stay blocked,
 // and matches are never writable.
 func TestSandboxReadOnlyGlob(t *testing.T) {
-	root := t.TempDir()
-	logs := t.TempDir()
+	root := testsupport.TempDir(t)
+	logs := testsupport.TempDir(t)
 	mk := func(name string) string {
 		p := filepath.Join(logs, name)
 		os.WriteFile(p, []byte("x"), 0o644)

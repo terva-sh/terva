@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestSpawnWritesMetaJSON asserts the durability contract: every
@@ -17,7 +19,7 @@ import (
 // identity bits. Without this, Reload on the next terva launch can't
 // find the agent and the user loses access to the worktree.
 func TestSpawnWritesMetaJSON(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := New(Config{
 		Root:     root,
 		RepoRoot: root,
@@ -67,7 +69,7 @@ func TestSpawnWritesMetaJSON(t *testing.T) {
 // task, branch, dir — must come back, and status must be Detached so
 // the dashboard can offer resume.
 func TestReloadRebuildsDetachedAgents(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 
 	// First incarnation: spawn two agents, then drop the supervisor.
 	first := New(Config{
@@ -134,7 +136,7 @@ func TestReloadRebuildsDetachedAgents(t *testing.T) {
 // TestReloadIsIdempotent calls Reload twice in a row and asserts the
 // second call neither duplicates rows nor errors.
 func TestReloadIsIdempotent(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	first := New(Config{
 		Root: root, RepoRoot: root,
 		NewRunner: func(a *Agent) Runner {
@@ -165,7 +167,7 @@ func TestReloadIsIdempotent(t *testing.T) {
 // reloaded agent. This is the user-facing payoff of Reload: opening
 // /swarm logs <id> after a restart shows what the agent said before.
 func TestReloadReplaysTranscriptFromEventLog(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	id := "alpha-9"
 	stateDir := filepath.Join(root, "agents", id)
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
@@ -225,7 +227,7 @@ func TestReloadReplaysTranscriptFromEventLog(t *testing.T) {
 // these); corrupt meta files are reported as errors but don't stop
 // the rest of the load.
 func TestReloadSkipsBareDirsAndCorruptMeta(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	agentsDir := filepath.Join(root, "agents")
 	// Bare directory, no meta.json.
 	if err := os.MkdirAll(filepath.Join(agentsDir, "leftover"), 0o755); err != nil {
@@ -264,7 +266,7 @@ func TestReloadSkipsBareDirsAndCorruptMeta(t *testing.T) {
 //  4. Assert Run was called twice — once for spawn, once for resume —
 //     against the same SessionPath / InboxPath / Dir.
 func TestResumeRestartsRunnerOnSameSession(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	var (
 		mu       sync.Mutex
 		runs     []*Agent
@@ -350,7 +352,7 @@ func TestResumeRestartsRunnerOnSameSession(t *testing.T) {
 // resume and surfaces "agent busy; send 'cancel' first" between
 // assistant messages.
 func TestResumeSetsResumingFlag(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := New(Config{
 		Root: root, RepoRoot: root,
 		NewRunner: func(a *Agent) Runner {
@@ -383,7 +385,7 @@ func TestResumeSetsResumingFlag(t *testing.T) {
 // TestResumeRejectsRunningAgent prevents the user from double-running
 // an agent: two runners on the same session.json would race.
 func TestResumeRejectsRunningAgent(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := New(Config{
 		Root: root, RepoRoot: root,
 		NewRunner: func(a *Agent) Runner {
@@ -419,7 +421,7 @@ func TestResumeRejectsRunningAgent(t *testing.T) {
 // have TestReloadReplaysTranscriptFromEventLog covering the
 // log-replay path with a curated events.jsonl.
 func TestResumeAfterReload(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	// Process A
 	a := New(Config{
 		Root: root, RepoRoot: root,
@@ -495,7 +497,7 @@ func TestResumeAfterReload(t *testing.T) {
 // override is captured at Spawn time, surfaced via Snapshot, and
 // written to meta.json so a later Reload + Resume reuses it.
 func TestSpawnReqPersistsModel(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := New(Config{
 		Root: root, RepoRoot: root,
 		NewRunner: func(a *Agent) Runner {
@@ -586,7 +588,7 @@ func TestSwarmAgentArgsIncludesModelFlags(t *testing.T) {
 // no in-process runner to cancel. The fix is to short-circuit Stop
 // for StatusDetached and — belt-and-braces — nil-check a.cancel.
 func TestStopOnDetachedAgentIsNoopAndDoesNotPanic(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	// Build a detached agent the same way Reload does: drop a
 	// meta.json on disk, then ask a fresh Swarm to pick it up.
 	id := "alpha-1"
@@ -641,7 +643,7 @@ func TestStopOnDetachedAgentIsNoopAndDoesNotPanic(t *testing.T) {
 // state directory in addition to the worktree, so a removed agent
 // doesn't reappear on the next Reload.
 func TestRemoveAlsoCleansStateDir(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := New(Config{
 		Root: root, RepoRoot: root,
 		NewRunner: func(a *Agent) Runner {
@@ -680,7 +682,7 @@ func TestRemoveAlsoCleansStateDir(t *testing.T) {
 // currently-active session via SnapshotAll. Switching the active
 // session re-narrows the view without touching agent state.
 func TestActiveSessionScopesSnapshotAll(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := New(Config{
 		Root: root, RepoRoot: root,
 		NewRunner: func(a *Agent) Runner {
@@ -743,7 +745,7 @@ func TestActiveSessionScopesSnapshotAll(t *testing.T) {
 // scope filter would forget which session owned each agent after
 // a terva restart and the dashboard would leak everything again.
 func TestSessionIDPersistsAcrossReload(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	mkSwarm := func() *Swarm {
 		return New(Config{
 			Root: root, RepoRoot: root,
@@ -787,7 +789,7 @@ func TestSessionIDPersistsAcrossReload(t *testing.T) {
 // every scope. Otherwise the schema bump would orphan every
 // pre-existing agent the moment a user upgraded terva.
 func TestEmptySessionIDIsVisibleFromAnyScope(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := New(Config{
 		Root: root, RepoRoot: root,
 		NewRunner: func(a *Agent) Runner {
@@ -822,7 +824,7 @@ func TestEmptySessionIDIsVisibleFromAnyScope(t *testing.T) {
 // Resume, and assert both the in-memory field and the on-disk
 // meta.json still carry the original session_id.
 func TestResumePreservesSessionID(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := New(Config{
 		Root: root, RepoRoot: root,
 		NewRunner: func(a *Agent) Runner {

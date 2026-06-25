@@ -14,13 +14,14 @@ import (
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // buildLadderHookStub compiles the hooks package's stub for ladder
 // integration tests.
 func buildLadderHookStub(t *testing.T) string {
 	t.Helper()
-	out := filepath.Join(t.TempDir(), "hookstub")
+	out := filepath.Join(testsupport.TempDir(t), "hookstub")
 	if runtime.GOOS == "windows" {
 		out += ".exe"
 	}
@@ -34,7 +35,7 @@ func buildLadderHookStub(t *testing.T) string {
 func ladderEngine(t *testing.T, mode string) *hooks.Engine {
 	t.Helper()
 	stub := buildLadderHookStub(t)
-	e := hooks.NewEngine(hooks.Config{PreToolUse: []hooks.Spec{{Command: stub, Args: []string{mode}}}}, t.TempDir(), t.Logf)
+	e := hooks.NewEngine(hooks.Config{PreToolUse: []hooks.Spec{{Command: stub, Args: []string{mode}}}}, testsupport.TempDir(t), t.Logf)
 	if e == nil {
 		t.Fatal("nil engine")
 	}
@@ -115,7 +116,7 @@ func TestBuildHookEngineFromConfig(t *testing.T) {
 	}
 	// Untrusted (false): user-config hooks still build — only PROJECT hooks
 	// are trust-gated. Proves the user layer is unaffected by the trust gate.
-	eng := buildHookEngine(Args{CWD: t.TempDir()}, false)
+	eng := buildHookEngine(Args{CWD: testsupport.TempDir(t)}, false)
 	if eng == nil {
 		t.Fatal("engine should build from config")
 	}

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestSplitFrontmatter(t *testing.T) {
@@ -89,7 +91,7 @@ func TestParseFrontmatterMalformedDegrades(t *testing.T) {
 }
 
 func TestDiscoverProjectAndGlobalPriorityAndDedup(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	tervaHome := filepath.Join(tmp, "home")
 	cwd := filepath.Join(tmp, "proj")
 
@@ -136,7 +138,7 @@ func TestDiscoverProjectAndGlobalPriorityAndDedup(t *testing.T) {
 // discovered (no instruction injection from a cloned repo), while
 // user/global skills still load. Trusting the same dir loads them.
 func TestDiscoverUntrustedDropsProjectSkills(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	tervaHome := filepath.Join(tmp, "home")
 	cwd := filepath.Join(tmp, "proj")
 

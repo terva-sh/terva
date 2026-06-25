@@ -5,13 +5,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // writeSource makes a local extension source dir <parent>/<dirName> with the
 // given extension.json body and returns its path.
 func writeSource(t *testing.T, dirName, manifestBody string) string {
 	t.Helper()
-	src := filepath.Join(t.TempDir(), dirName)
+	src := filepath.Join(testsupport.TempDir(t), dirName)
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}

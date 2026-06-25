@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestResolveApprovalModePrecedence(t *testing.T) {
@@ -101,14 +102,14 @@ func TestCompileRulesDropsBrokenNotStartup(t *testing.T) {
 // withTempHome points TERVA_HOME at a temp dir for config isolation.
 func withTempHome(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	return home
 }
 
 func TestBuildPermissionPolicyNilOnPureYolo(t *testing.T) {
 	withTempHome(t)
-	pol, warns := buildPermissionPolicy(Args{CWD: t.TempDir()})
+	pol, warns := buildPermissionPolicy(Args{CWD: testsupport.TempDir(t)})
 	if pol != nil {
 		t.Fatalf("pure yolo should produce a nil policy (no-gate fast path), got %+v", pol)
 	}
@@ -123,7 +124,7 @@ func TestBuildPermissionPolicyUserIsSovereign(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(cfgJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(proj, ".terva"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestBuildPermissionPolicyProjectBeatsExtensionWhereUserSilent(t *testing.T)
 	writeExtension(t, home, "e", map[string]any{
 		"permissions": []map[string]any{{"tool": "web_fetch_raw", "decision": "ask"}},
 	}, nil)
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(proj, ".terva"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +171,7 @@ func TestBuildPermissionPolicyProjectBeatsExtensionWhereUserSilent(t *testing.T)
 
 func TestHeadlessGatePlanModeAllowsReadOnly(t *testing.T) {
 	withTempHome(t)
-	gate, _ := headlessConfirmGate(Args{Approval: "plan", CWD: t.TempDir()}, "print")
+	gate, _ := headlessConfirmGate(Args{Approval: "plan", CWD: testsupport.TempDir(t)}, "print")
 	if gate == nil {
 		t.Fatal("plan mode must build a gate")
 	}
@@ -192,7 +193,7 @@ func TestHeadlessGateAllowRuleRunsWithoutPrompt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(cfgJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gate, _ := headlessConfirmGate(Args{CWD: t.TempDir()}, "json")
+	gate, _ := headlessConfirmGate(Args{CWD: testsupport.TempDir(t)}, "json")
 	if gate == nil {
 		t.Fatal("ask mode must build a gate")
 	}
@@ -225,7 +226,7 @@ func TestAppendUserPermissionRulePersists(t *testing.T) {
 }
 
 func TestPlanModeFiltersToolRegistry(t *testing.T) {
-	reg := buildToolRegistry(Args{}, core.ApprovalPlan, t.TempDir(), nil, "anthropic", "apikey", true)
+	reg := buildToolRegistry(Args{}, core.ApprovalPlan, testsupport.TempDir(t), nil, "anthropic", "apikey", true)
 	for name := range reg {
 		// Plan keeps read-only tools plus interactive tools
 		// (ask_user_question) — asking the user is exactly what plan

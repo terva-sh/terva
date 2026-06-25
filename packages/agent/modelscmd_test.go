@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // The scaffold must be valid, loadable JSON with no warnings, and must
@@ -12,7 +13,7 @@ import (
 // If someone edits modelsScaffold into something the loader rejects,
 // `terva models init` would happily write a broken file — this guards it.
 func TestModelsInitWritesLoadableScaffold(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
 	if err := runModelsInit(false); err != nil {
 		t.Fatalf("runModelsInit: %v", err)
@@ -46,7 +47,7 @@ func TestModelsInitWritesLoadableScaffold(t *testing.T) {
 }
 
 func TestModelsInitRefusesExistingWithoutForce(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	path := UserModelsPath()
 	if err := os.MkdirAll(TervaHome(), 0o755); err != nil {
 		t.Fatal(err)
@@ -97,7 +98,7 @@ func TestRunModelsCommandDispatch(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// init paths touch the filesystem; point them somewhere safe.
-			t.Setenv("TERVA_HOME", t.TempDir())
+			t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 			handled, err := runModelsCommand(tc.args)
 			if handled != tc.wantHandled {
 				t.Errorf("handled = %v, want %v", handled, tc.wantHandled)

@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestLoadThemeAllowsPartialColorOverrides(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(home, "themes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +37,7 @@ func TestLoadThemeAllowsPartialColorOverrides(t *testing.T) {
 }
 
 func TestLoadThemeAllowsSpinnerOnlyTopLevelOverrides(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(home, "themes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +62,7 @@ func TestLoadThemeAllowsSpinnerOnlyTopLevelOverrides(t *testing.T) {
 }
 
 func TestLoadThemeFallsBackToDarkWhenLightModeMissing(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(home, "themes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ func TestLoadThemeFallsBackToDarkWhenLightModeMissing(t *testing.T) {
 }
 
 func TestLoadThemeAllowsSharedColorsOverrides(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(home, "themes"), 0o755); err != nil {
 		t.Fatal(err)
 	}

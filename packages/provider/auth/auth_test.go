@@ -9,10 +9,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestStoreRoundTrip(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	s := NewStore(filepath.Join(dir, "auth.json"))
 
 	if err := s.SetAPIKey("anthropic", "sk-ant-xyz"); err != nil {
@@ -260,7 +262,7 @@ func TestCallbackServerStateMismatch(t *testing.T) {
 // callback server expects, otherwise opening the displayed URL redirects
 // back with a state the server rejects ("state mismatch").
 func TestStartManualOAuthAdoptsLoopbackFlow(t *testing.T) {
-	m := NewManager(NewStore(filepath.Join(t.TempDir(), "auth.json")))
+	m := NewManager(NewStore(filepath.Join(testsupport.TempDir(t), "auth.json")))
 	m.openBrowser = false
 
 	loopURL, err := m.StartOAuth("openai-codex")

@@ -3,10 +3,12 @@ package auth
 import (
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestStoreAdditionalAPIKeyClear(t *testing.T) {
-	store := NewStore(filepath.Join(t.TempDir(), "auth.json"))
+	store := NewStore(filepath.Join(testsupport.TempDir(t), "auth.json"))
 	if err := store.SetAPIKey("groq", "gsk_test"); err != nil {
 		t.Fatal(err)
 	}

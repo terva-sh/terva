@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // recordingHooks captures Notify messages so a test can prove the read
@@ -60,7 +62,7 @@ func writeShellExt(t *testing.T, dir, helloJSON, body string) {
 // valid notify emitted afterwards must still arrive — proving the loop
 // kept reading rather than wedging on the bad frames.
 func TestOnMalformedFrameFiresAndReadLoopSurvives(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	dir := filepath.Join(tmp, "noisy")
 	hello := `{"type":"hello","name":"noisy","version":"1.0","capabilities":["events"]}`
 	body := `printf '%s\n' '{"type":"ready"}'
@@ -133,7 +135,7 @@ done
 // no observer — leaves the read loop logging-and-swallowing as before:
 // the malformed frames don't wedge it and a later notify still arrives.
 func TestOnMalformedFrameUnsetIsNoop(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	dir := filepath.Join(tmp, "quiet")
 	hello := `{"type":"hello","name":"quiet","version":"1.0","capabilities":["events"]}`
 	body := `printf '%s\n' '{"type":"ready"}'

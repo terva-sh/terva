@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestSessionExportImportRoundTrip writes a few messages to a live
@@ -15,7 +16,7 @@ import (
 // and verifies OpenSession on the imported file yields the same
 // message payloads.
 func TestSessionExportImportRoundTrip(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	originalCWD := "/path/to/project"
 	sess, err := NewSession(root, originalCWD, "anthropic", "claude-opus-4-7", "0.0.0-test")
 	if err != nil {
@@ -32,7 +33,7 @@ func TestSessionExportImportRoundTrip(t *testing.T) {
 	_ = sess.Close()
 
 	// Export to a directory — helper should build a name inside it.
-	exportDir := t.TempDir()
+	exportDir := testsupport.TempDir(t)
 	exportPath, err := ExportSession(sess.Path, exportDir)
 	if err != nil {
 		t.Fatalf("ExportSession: %v", err)
@@ -45,7 +46,7 @@ func TestSessionExportImportRoundTrip(t *testing.T) {
 	}
 
 	// Import into a different root + cwd.
-	root2 := t.TempDir()
+	root2 := testsupport.TempDir(t)
 	cwd2 := "/some/other/project"
 	importedPath, err := ImportSession(exportPath, root2, cwd2, "0.0.0-test")
 	if err != nil {
@@ -86,7 +87,7 @@ func TestSessionExportImportRoundTrip(t *testing.T) {
 // directory guessing) and checks the .tervasession extension is
 // appended when missing.
 func TestExportToFilePath(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	sess, err := NewSession(root, "/cwd", "anthropic", "claude-opus-4-7", "0.0.0-test")
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +99,7 @@ func TestExportToFilePath(t *testing.T) {
 	_ = sess.Close()
 
 	// No extension — should add .tervasession.
-	dst := filepath.Join(t.TempDir(), "mysession")
+	dst := filepath.Join(testsupport.TempDir(t), "mysession")
 	out, err := ExportSession(sess.Path, dst)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +112,7 @@ func TestExportToFilePath(t *testing.T) {
 // TestExportStripsCWDFromMeta verifies the exported meta no longer
 // carries the source user's cwd (not useful to the recipient).
 func TestExportSessionHandlesHugeJSONLRows(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	sess, err := NewSession(root, "/cwd", "anthropic", "claude-opus-4-7", "0.0.0-test")
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +127,7 @@ func TestExportSessionHandlesHugeJSONLRows(t *testing.T) {
 	})
 	_ = sess.Close()
 
-	exportDir := t.TempDir()
+	exportDir := testsupport.TempDir(t)
 	out, err := ExportSession(sess.Path, exportDir)
 	if err != nil {
 		t.Fatalf("ExportSession with huge row: %v", err)
@@ -160,7 +161,7 @@ func TestExportSessionHandlesHugeJSONLRows(t *testing.T) {
 }
 
 func TestExportStripsCWDFromMeta(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	sess, err := NewSession(root, "/original/cwd", "anthropic", "claude-opus-4-7", "0.0.0-test")
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +172,7 @@ func TestExportStripsCWDFromMeta(t *testing.T) {
 	})
 	_ = sess.Close()
 
-	out, err := ExportSession(sess.Path, filepath.Join(t.TempDir(), "x"+PortableExt))
+	out, err := ExportSession(sess.Path, filepath.Join(testsupport.TempDir(t), "x"+PortableExt))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +187,7 @@ func TestExportStripsCWDFromMeta(t *testing.T) {
 // assistant), and verifies the new session has exactly those two
 // messages with parent + fork_point meta set.
 func TestBranchSessionCopiesPrefix(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	cwd := "/project"
 	parent, err := NewSession(root, cwd, "anthropic", "claude-opus-4-7", "0.0.0-test")
 	if err != nil {
@@ -234,7 +235,7 @@ func TestBranchSessionCopiesPrefix(t *testing.T) {
 // TestBuildSessionTree verifies parent/child edges are rebuilt
 // from meta + sibling-scan.
 func TestBuildSessionTree(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	cwd := "/project"
 	parent, _ := NewSession(root, cwd, "anthropic", "claude-opus-4-7", "0.0.0-test")
 	_ = parent.AppendMessage(provider.Message{

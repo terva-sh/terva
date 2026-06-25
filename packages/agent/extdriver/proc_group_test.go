@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // isolateExtensionProcess must put the command in its own process group so
@@ -31,7 +33,7 @@ func TestIsolateExtensionProcessSetsProcessGroup(t *testing.T) {
 // reparented to init and survives — the orphan regression Setpgid would
 // otherwise introduce.
 func TestStopReapsExtensionChildProcessGroup(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	dir := filepath.Join(tmp, "daemon")
 	hello := `{"type":"hello","name":"daemon","version":"1.0"}`
 	// Announce ready, spawn a background child recording its pid into the

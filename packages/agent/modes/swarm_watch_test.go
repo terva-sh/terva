@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // newInteractiveForWatchTest builds the minimal Interactive scaffolding
@@ -19,7 +20,7 @@ import (
 // the case that used to wedge the watcher forever.
 func newInteractiveForWatchTest(t *testing.T, run swarm.RunnerFunc) (*Interactive, *swarm.Swarm) {
 	t.Helper()
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := swarm.New(swarm.Config{
 		Root:     root,
 		RepoRoot: root,

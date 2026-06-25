@@ -8,12 +8,13 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // seedTree writes a small fixture tree under a temp dir and returns it.
 func seedTree(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	files := map[string]string{
 		"main.go":            "package main\nfunc main() { hello() }\n",
 		"pkg/util.go":        "package pkg\nfunc hello() {}\n// TODO: tidy\n",
@@ -168,7 +169,7 @@ func TestGrepSingleFile(t *testing.T) {
 }
 
 func TestGrepBinarySkipped(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "bin"), []byte("hel\x00lo"), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // The mcpstub lives in the mcp package's testdata; build it once per test
@@ -89,7 +90,7 @@ func TestACPSessionNewWiresMCPTool(t *testing.T) {
 
 	// session/new carrying one stdio MCP server (the stub), named "calc".
 	newRes := h.call(MethodSessionNew, map[string]any{
-		"cwd": t.TempDir(),
+		"cwd": testsupport.TempDir(t),
 		"mcpServers": []map[string]any{
 			{"name": "calc", "command": stub, "args": []string{}},
 		},

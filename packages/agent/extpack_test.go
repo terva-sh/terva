@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // cloneArgs adds --branch only when a ref is supplied; otherwise the
@@ -61,7 +63,7 @@ func TestResolvePackRejectsHTTP(t *testing.T) {
 
 // A local .json file resolves and parses.
 func TestResolvePackFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	path := filepath.Join(dir, "pack.json")
 	body := `{"schema":"terva-extension-pack/v1","name":"demo","extensions":[{"source":"https://example.com/a.git"}]}`
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -145,11 +147,11 @@ func TestEntryName(t *testing.T) {
 // The install loop lands a local-dir source under TERVA_HOME, and a
 // second run skips the already-present extension rather than failing.
 func TestPackInstallLoopLocalSource(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	// A local extension source the loop will copy in.
-	src := filepath.Join(t.TempDir(), "demoext")
+	src := filepath.Join(testsupport.TempDir(t), "demoext")
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -180,10 +182,10 @@ func TestPackInstallLoopLocalSource(t *testing.T) {
 // installOne reports errExtAlreadyInstalled (not a generic error) when the
 // destination exists, so the pack loop can distinguish a skip.
 func TestInstallOneAlreadyInstalled(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
-	src := filepath.Join(t.TempDir(), "dup")
+	src := filepath.Join(testsupport.TempDir(t), "dup")
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}

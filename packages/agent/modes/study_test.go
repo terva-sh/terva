@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestBuildStudyPrompt(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	subdir := filepath.Join(tmp, "internal")
 	if err := os.Mkdir(subdir, 0o755); err != nil {
 		t.Fatal(err)

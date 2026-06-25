@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestHostToolCallRoundTrip drives a host_tool_call frame from a shell
@@ -18,7 +19,7 @@ import (
 // notify once it reads the result, so the test can observe the full
 // ext → host → ext round trip.
 func TestHostToolCallRoundTrip(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	dir := filepath.Join(tmp, "caller")
 	hello := `{"type":"hello","name":"caller","version":"1.0","capabilities":["events"]}`
 	// Emit a host_tool_call, then watch stdin for the host_tool_result
@@ -79,7 +80,7 @@ done
 // TestHostToolCallNoDispatcher proves a host_tool_call with no dispatcher
 // wired gets an error result rather than hanging the extension.
 func TestHostToolCallNoDispatcher(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	dir := filepath.Join(tmp, "caller2")
 	hello := `{"type":"hello","name":"caller2","version":"1.0","capabilities":["events"]}`
 	body := `printf '%s\n' '{"type":"ready"}'

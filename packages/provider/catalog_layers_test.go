@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestExtraModelsSurviveLiveRefresh is the regression for the overlay
@@ -124,7 +126,7 @@ func TestPriceOnlyOverrideKeepsReasoning(t *testing.T) {
 		Reasoning: true, MaxOutput: 100000, Source: "live",
 	}})
 
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	path := filepath.Join(dir, "models.json")
 	if err := os.WriteFile(path, []byte(`{
 		"providers": {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // staticCtxSource is a tool source that also contributes static context
@@ -19,7 +20,7 @@ func (s *staticCtxSource) StaticContext() string { return s.static }
 // MergeExtensionTools folds an extension's static context contribution
 // into the cached system prompt, idempotently, and reflects updates.
 func TestMergeFoldsStaticContextIntoSystemPrompt(t *testing.T) {
-	r := &Resolved{ToolRegistry: core.Registry{}, CWD: t.TempDir()}
+	r := &Resolved{ToolRegistry: core.Registry{}, CWD: testsupport.TempDir(t)}
 
 	const marker = "TASKS-POLICY-keep-one-active"
 	r.MergeExtensionTools(&staticCtxSource{static: marker})
@@ -47,7 +48,7 @@ func TestMergeFoldsStaticContextIntoSystemPrompt(t *testing.T) {
 // A source with no static context (e.g. an MCP source) leaves the
 // prompt's addendum untouched.
 func TestMergeWithoutStaticContextIsClean(t *testing.T) {
-	r := &Resolved{ToolRegistry: core.Registry{}, CWD: t.TempDir()}
+	r := &Resolved{ToolRegistry: core.Registry{}, CWD: testsupport.TempDir(t)}
 	r.MergeExtensionTools(&fakeToolSource{infos: []ExtensionToolInfo{
 		{Extension: "x", Name: "plain_tool", Schema: []byte(`{}`)},
 	}})

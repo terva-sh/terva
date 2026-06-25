@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestConcurrentLoadSameNameClaimsOnce: many concurrent loads of the same
@@ -13,7 +15,7 @@ import (
 // name-claim in Driver.Load), with no orphaned process that later reports
 // a crash. Run under -race this also guards the d.ext access.
 func TestConcurrentLoadSameNameClaimsOnce(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	writeMockExtension(t, filepath.Join(tmp, "extensions"))
 	hooks := &stubHooks{}
 	mgr := New(tmp, "", "0.0.0-test", "anthropic", "claude-test", hooks)

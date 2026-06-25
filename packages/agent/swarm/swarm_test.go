@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // newTestSwarm builds a Swarm rooted in t.TempDir with the in-memory
@@ -15,7 +17,7 @@ import (
 // were actually invoked.
 func newTestSwarm(t *testing.T, mk func(a *Agent) Runner) *Swarm {
 	t.Helper()
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	return New(Config{
 		Root:      root,
 		RepoRoot:  root,

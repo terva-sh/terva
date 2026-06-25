@@ -5,10 +5,11 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestResolveRegistersAndBindsStatusTool(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
@@ -38,7 +39,7 @@ func TestResolveRegistersAndBindsStatusTool(t *testing.T) {
 }
 
 func TestResolveStatusToolRespectsToolGating(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	// --no-tools strips everything, including terva_status.

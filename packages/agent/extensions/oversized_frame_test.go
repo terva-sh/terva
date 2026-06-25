@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // An over-cap tool-call argument must come back as a prompt is_error
@@ -18,7 +19,7 @@ import (
 // subsequent call still works.
 func TestInvokeToolOversizedArgsReturnsErrorNotKill(t *testing.T) {
 	stub := buildEchoStub(t)
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	extDir := filepath.Join(tmp, "extensions", "echo")
 	if err := os.MkdirAll(extDir, 0o755); err != nil {
 		t.Fatal(err)

@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestSessionRoundTripAllBlockKinds pins format v2: every content
 // block kind survives append → close → open unchanged, and the file
 // carries explicit type discriminators plus the format version.
 func TestSessionRoundTripAllBlockKinds(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "s.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
 	s, err := NewSessionAtPath(path, "/ws", "openai-compatible", "test-model", "0.0.0")
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +95,7 @@ func TestSessionRoundTripAllBlockKinds(t *testing.T) {
 // TestSessionCompactionRoundTrip: compaction rows use the same typed
 // encoding and replace earlier rows on load.
 func TestSessionCompactionRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "s.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
 	s, err := NewSessionAtPath(path, "/ws", "p", "m", "0.0.0")
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +130,7 @@ func TestSessionCompactionRoundTrip(t *testing.T) {
 // writeRawSession writes a session file from raw JSONL lines.
 func writeRawSession(t *testing.T, lines ...string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "s.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

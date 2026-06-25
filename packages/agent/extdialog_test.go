@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func readJSON(t *testing.T, path string) map[string]any {
@@ -39,7 +40,7 @@ func disableList(t *testing.T, m map[string]any) []string {
 // name in disable_extensions, preserves unrelated fields, and drops the
 // key when the list empties.
 func TestSetProjectExtensionDisabled(t *testing.T) {
-	cwd := t.TempDir()
+	cwd := testsupport.TempDir(t)
 	path := filepath.Join(cwd, ".terva", "config.json")
 
 	// Disable "foo" from scratch — file + key created.
@@ -86,7 +87,7 @@ func TestSetProjectExtensionDisabled(t *testing.T) {
 
 // Re-disabling an already-disabled name is idempotent (no duplicate).
 func TestSetProjectExtensionDisabledIdempotent(t *testing.T) {
-	cwd := t.TempDir()
+	cwd := testsupport.TempDir(t)
 	path := filepath.Join(cwd, ".terva", "config.json")
 	for range 3 {
 		if err := setProjectExtensionDisabled(cwd, "foo", true); err != nil {
@@ -101,7 +102,7 @@ func TestSetProjectExtensionDisabledIdempotent(t *testing.T) {
 // setManifestEnabled flips the enabled flag and preserves other manifest
 // fields.
 func TestSetManifestEnabled(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	mf := filepath.Join(dir, "extension.json")
 	os.WriteFile(mf, []byte(`{"name":"x","exec":"./run.sh","enabled":true,"description":"keep me"}`), 0o644)
 
@@ -127,7 +128,7 @@ func TestSetManifestEnabled(t *testing.T) {
 // setProjectModel writes provider/model into .terva/config.json, preserves
 // unrelated fields, and clears a key when given an empty value.
 func TestSetProjectModel(t *testing.T) {
-	cwd := t.TempDir()
+	cwd := testsupport.TempDir(t)
 	path := filepath.Join(cwd, ".terva", "config.json")
 
 	if err := setProjectModel(cwd, "anthropic", "opus"); err != nil {

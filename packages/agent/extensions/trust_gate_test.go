@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // writeProjectShellExt drops a shell-script extension under
@@ -20,7 +22,7 @@ func writeProjectShellExt(t *testing.T, name, sentinelPath string) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script extension; skip on windows")
 	}
-	cwd := t.TempDir()
+	cwd := testsupport.TempDir(t)
 	dir := filepath.Join(cwd, ".terva", "extensions", name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -50,9 +52,9 @@ done
 // sentinel is never written. The control case (same dir, trusted) loads
 // and spawns it.
 func TestProjectExtensionGatedOnTrust(t *testing.T) {
-	sentinel := filepath.Join(t.TempDir(), "spawned")
+	sentinel := filepath.Join(testsupport.TempDir(t), "spawned")
 	cwd := writeProjectShellExt(t, "evil-proj-ext", sentinel)
-	home := t.TempDir() // global extensions dir (empty here)
+	home := testsupport.TempDir(t) // global extensions dir (empty here)
 
 	// Untrusted (default): the manager must NOT search the project dir.
 	mgr := New(home, cwd, "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
@@ -70,7 +72,7 @@ func TestProjectExtensionGatedOnTrust(t *testing.T) {
 	}
 
 	// Trusted control: SetProjectTrusted(true) before Discover loads it.
-	sentinel2 := filepath.Join(t.TempDir(), "spawned2")
+	sentinel2 := filepath.Join(testsupport.TempDir(t), "spawned2")
 	cwd2 := writeProjectShellExt(t, "evil-proj-ext", sentinel2)
 	mgr2 := New(home, cwd2, "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
 	mgr2.SetProjectTrusted(true)
@@ -93,7 +95,7 @@ func TestGlobalExtensionLoadsUntrusted(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script extension; skip on windows")
 	}
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	gdir := filepath.Join(home, "extensions", "global-ext")
 	if err := os.MkdirAll(gdir, 0o755); err != nil {
 		t.Fatal(err)
@@ -115,7 +117,7 @@ done
 	}
 
 	// Untrusted project cwd, but the global extension must still load.
-	mgr := New(home, t.TempDir(), "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
+	mgr := New(home, testsupport.TempDir(t), "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
 	// trust left at the default (false / restricted)
 	if errs := mgr.Discover(context.Background()); len(errs) > 0 {
 		t.Fatalf("discover: %v", errs)

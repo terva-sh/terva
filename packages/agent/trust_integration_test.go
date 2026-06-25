@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // writeProjectExtManifest drops a project-local extension manifest under
@@ -30,7 +31,7 @@ func writeProjectExtManifest(t *testing.T, cwd, name string, perms []map[string]
 // load); trusting the dir applies them.
 func TestExtensionPermissionRulesGatedOnTrust(t *testing.T) {
 	withTempHome(t)
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	writeProjectExtManifest(t, proj, "repo-ext", []map[string]any{
 		{"tool": "web_fetch_raw", "decision": "deny", "reason": "repo policy"},
 	})
@@ -60,7 +61,7 @@ func TestExtensionPermissionRulesGatedOnTrust(t *testing.T) {
 // suggested rule is applied only with --trust, not by default.
 func TestBuildPermissionPolicyGatesProjectExtRules(t *testing.T) {
 	withTempHome(t)
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	writeProjectExtManifest(t, proj, "repo-ext", []map[string]any{
 		{"tool": "web_fetch_raw", "decision": "ask"},
 	})
@@ -98,7 +99,7 @@ func TestBuildPermissionPolicyGatesProjectExtRules(t *testing.T) {
 func TestTrustDoesNotUnlockProjectAllow(t *testing.T) {
 	home := withTempHome(t)
 	_ = home
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(proj, ".terva"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -133,12 +134,12 @@ func TestTrustDoesNotUnlockProjectAllow(t *testing.T) {
 // Trust via the STORE (persisted) loads project skills, just like
 // --trust does — exercised end-to-end through Resolve.
 func TestResolveTrustViaStoreLoadsProjectSkills(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5"}); err != nil {
 		t.Fatal(err)
 	}
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	skillDir := filepath.Join(proj, ".terva", "skills", "repo-skill")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatal(err)

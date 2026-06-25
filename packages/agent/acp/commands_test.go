@@ -14,6 +14,7 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // countingTextClient streams one text turn (like textTurnClient) but counts
@@ -59,7 +60,7 @@ func commandSetup(t *testing.T, factory AgentFactory) (*harness, string, func())
 
 	h := newHarness(t, caW, acR)
 	h.call(MethodInitialize, map[string]any{"protocolVersion": 1})
-	newRes := h.call(MethodSessionNew, map[string]any{"cwd": t.TempDir()})
+	newRes := h.call(MethodSessionNew, map[string]any{"cwd": testsupport.TempDir(t)})
 	sid, _ := newRes["sessionId"].(string)
 	if sid == "" {
 		t.Fatal("session/new returned empty sessionId")
@@ -291,7 +292,7 @@ func TestACPSlashPermissionsExecutesNatively(t *testing.T) {
 // effect — without calling the model, each resolving end_turn.
 func TestACPSlashJailUnjailFlipsSandbox(t *testing.T) {
 	client := &countingTextClient{}
-	sb := tools.NewSandbox(t.TempDir())
+	sb := tools.NewSandbox(testsupport.TempDir(t))
 	factory := &fakeFactory{client: client, tools: core.Registry{}, sandbox: sb}
 	h, sid, teardown := commandSetup(t, factory)
 	defer teardown()
@@ -360,8 +361,8 @@ func TestACPSlashJailNoSandboxDegrades(t *testing.T) {
 // TestACPAvailableCommandsAdvertisedOnLoad proves the catalog is re-advertised
 // on session/load so a resumed session's command palette is repopulated.
 func TestACPAvailableCommandsAdvertisedOnLoad(t *testing.T) {
-	root := t.TempDir()
-	cwd := t.TempDir()
+	root := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
 	factory := &fakeFactory{client: &countingTextClient{reply: "answer"}, tools: core.Registry{}, root: root}
 
 	caR, caW := io.Pipe()

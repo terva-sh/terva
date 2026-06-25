@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // Regression: an openai-compatible model with its own baseUrl in
@@ -12,7 +13,7 @@ import (
 // before the model was resolved, so the per-model override never applied
 // and every model hit the login endpoint regardless of models.json.
 func TestResolveModelBaseURLBeatsLoginBaseURL(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
 	// Login-captured openai-compatible endpoint (the default/fallback).
 	if err := AuthStoreFor().SetCompatAPIKey("openai-compatible", "", "https://login.example/v1", "login-default", 32768); err != nil {
@@ -47,7 +48,7 @@ func TestResolveModelBaseURLBeatsLoginBaseURL(t *testing.T) {
 // unregistered model left them all seeing 0, so auto-compaction never
 // fired and the configured compat context window was silently dropped.
 func TestResolveRegistersOpenCatalogueModel(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	if err := AuthStoreFor().SetCompatAPIKey("openai-compatible", "", "https://login.example/v1", "login-default", 192000); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +71,7 @@ func TestResolveRegistersOpenCatalogueModel(t *testing.T) {
 // (open-catalogue) has no baseUrl of its own, so it correctly falls back
 // to the login endpoint.
 func TestResolveUnregisteredModelFallsBackToLoginBaseURL(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	if err := AuthStoreFor().SetCompatAPIKey("openai-compatible", "", "https://login.example/v1", "login-default", 32768); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +89,7 @@ func TestResolveUnregisteredModelFallsBackToLoginBaseURL(t *testing.T) {
 
 // An explicit --base-url flag still wins over both.
 func TestResolveBaseURLFlagBeatsEverything(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	if err := AuthStoreFor().SetCompatAPIKey("openai-compatible", "", "https://login.example/v1", "login-default", 32768); err != nil {
 		t.Fatal(err)
 	}

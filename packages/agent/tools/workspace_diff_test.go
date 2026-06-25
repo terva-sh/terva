@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -28,7 +30,7 @@ func changeIndex(changes []FileChange) map[string]string {
 // A full add/modify/delete cycle is reported with the right kinds, and an
 // untouched file is omitted.
 func TestWorkspaceDifferAddModifyDelete(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	writeFile(t, filepath.Join(dir, "keep.txt"), "stable")
 	writeFile(t, filepath.Join(dir, "edit.txt"), "before")
 	writeFile(t, filepath.Join(dir, "gone.txt"), "doomed")
@@ -65,7 +67,7 @@ func TestWorkspaceDifferAddModifyDelete(t *testing.T) {
 
 // No mutation between Rebase and Diff yields no changes.
 func TestWorkspaceDifferNoChanges(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	writeFile(t, filepath.Join(dir, "a.txt"), "a")
 
 	d := NewWorkspaceDiffer(func() string { return dir })
@@ -77,7 +79,7 @@ func TestWorkspaceDifferNoChanges(t *testing.T) {
 
 // Diff before any Rebase reports nothing (no baseline to measure against).
 func TestWorkspaceDifferNoBaseline(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	writeFile(t, filepath.Join(dir, "a.txt"), "a")
 	d := NewWorkspaceDiffer(func() string { return dir })
 	if changes := d.Diff(); changes != nil {
@@ -88,7 +90,7 @@ func TestWorkspaceDifferNoBaseline(t *testing.T) {
 // .gitignore'd paths and .git/ are excluded from the diff, so build output
 // and repo metadata never show up as changes.
 func TestWorkspaceDifferHonorsGitignoreAndGit(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	writeFile(t, filepath.Join(dir, ".gitignore"), "ignored.log\nbuild/\n")
 	writeFile(t, filepath.Join(dir, "src.go"), "package x")
 
@@ -115,7 +117,7 @@ func TestWorkspaceDifferHonorsGitignoreAndGit(t *testing.T) {
 
 // A re-Rebase resets the baseline: changes already reported don't resurface.
 func TestWorkspaceDifferRebaseResets(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	writeFile(t, filepath.Join(dir, "a.txt"), "a")
 
 	d := NewWorkspaceDiffer(func() string { return dir })

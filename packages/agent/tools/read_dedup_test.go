@@ -9,6 +9,7 @@ import (
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // fakeEpoch is a settable transcript epoch for read-dedup tests: bumping
@@ -48,7 +49,7 @@ func bodyText(t *testing.T, res core.ToolResult) string {
 // TestReadDedupRepeatedReadIsStubbed: re-reading an unchanged file in the
 // same transcript epoch returns a stub instead of the full body.
 func TestReadDedupRepeatedReadIsStubbed(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +79,7 @@ func TestReadDedupRepeatedReadIsStubbed(t *testing.T) {
 // TestReadDedupEpochChangeReturnsFull: a compaction / transcript reset
 // (epoch bump) invalidates the dedup cache so the next read is full again.
 func TestReadDedupEpochChangeReturnsFull(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("content here\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestReadDedupEpochChangeReturnsFull(t *testing.T) {
 // TestReadDedupChangedFileReturnsFull: the dedup is content-addressed, so
 // an edited file always returns fresh content even within the same epoch.
 func TestReadDedupChangedFileReturnsFull(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "f.txt")
 	if err := os.WriteFile(p, []byte("v1\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -130,7 +131,7 @@ func TestReadDedupChangedFileReturnsFull(t *testing.T) {
 // TestReadDedupDisabledWhenEpochNil: with no epoch bound, dedup is off and
 // every read returns full content (the pre-feature behavior).
 func TestReadDedupDisabledWhenEpochNil(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("body\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +151,7 @@ func TestReadDedupDisabledWhenEpochNil(t *testing.T) {
 // TestReadDedupDifferentWindowReturnsFull: a different offset/limit is a
 // distinct window and must never be falsely stubbed.
 func TestReadDedupDifferentWindowReturnsFull(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("1\n2\n3\n4\n5\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestParseAndMatch(t *testing.T) {
@@ -50,7 +52,7 @@ func TestEmptyIgnoresNothing(t *testing.T) {
 // must prune that subdirectory's node_modules even though the root
 // .gitignore says nothing about it.
 func TestStackHonorsNestedGitignore(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	// Root .gitignore: only build/ at root, nothing about node_modules.
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("build/\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -95,7 +97,7 @@ func TestStackHonorsNestedGitignore(t *testing.T) {
 // TestStackNestedNegationReincludes verifies a nested !pattern can
 // re-include a path a parent .gitignore excluded.
 func TestStackNestedNegationReincludes(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

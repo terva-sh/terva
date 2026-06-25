@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // readAuditLines parses every JSONL record from home/logs/audit.log.
@@ -37,7 +38,7 @@ func readAuditLines(t *testing.T, home string) []auditRecord {
 // Record writes one allow and one deny line with the expected fields, and the
 // file is created 0600 (it can hold secret-bearing args).
 func TestAuditLogRecord(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	a := newAuditLog(home)
 	now := time.Unix(1_700_000_000, 0)
 	a.Record(now, "bash", json.RawMessage(`{"command":"ls -la"}`), "yolo", true, "")
@@ -78,7 +79,7 @@ func TestAuditLogEdgeCases(t *testing.T) {
 	var nilLog *auditLog
 	nilLog.Record(time.Unix(0, 0), "bash", nil, "yolo", true, "") // must not panic
 
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	a := newAuditLog(home)
 	a.Close() // closing before any record must not create the file
 	if _, err := os.Stat(filepath.Join(home, "logs", "audit.log")); !os.IsNotExist(err) {
@@ -101,7 +102,7 @@ func TestAuditLogEdgeCases(t *testing.T) {
 // The real BeforeToolExecute ladder records through the process sink: an
 // allowed bash call lands in the audit log with its command.
 func TestBeforeToolExecuteAudits(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	prev := auditSink
 	auditSink = newAuditLog(home)
 	t.Cleanup(func() { auditSink.Close(); auditSink = prev })

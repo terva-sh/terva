@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func mustJSON(t *testing.T, v any) json.RawMessage {
@@ -22,7 +23,7 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 }
 
 func TestReadText(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "a.txt")
 	if err := os.WriteFile(p, []byte("hello\nworld\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -39,7 +40,7 @@ func TestReadText(t *testing.T) {
 }
 
 func TestReadOffsetLimit(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "a.txt")
 	os.WriteFile(p, []byte("1\n2\n3\n4\n5\n"), 0o644)
 	tool := &ReadTool{CWD: dir}
@@ -56,7 +57,7 @@ func TestReadOffsetLimit(t *testing.T) {
 }
 
 func TestReadBinaryRejected(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "b.bin")
 	os.WriteFile(p, []byte{0x00, 0x01, 0x02}, 0o644)
 	tool := &ReadTool{CWD: dir}
@@ -68,7 +69,7 @@ func TestReadBinaryRejected(t *testing.T) {
 // TestReadImageVisionCapable: a vision-capable ReadTool returns the
 // image inline as an ImageBlock the model consumes (today's behavior).
 func TestReadImageVisionCapable(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "pic.png")
 	if err := os.WriteFile(p, []byte("\x89PNG\r\n\x1a\nfake-pixels"), 0o644); err != nil {
 		t.Fatal(err)
@@ -91,7 +92,7 @@ func TestReadImageVisionCapable(t *testing.T) {
 // TEXT result (no ImageBlock) that names how to enable vision, instead
 // of an image block the provider would silently drop.
 func TestReadImageNonVision(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "pic.png")
 	if err := os.WriteFile(p, []byte("\x89PNG\r\n\x1a\nfake-pixels"), 0o644); err != nil {
 		t.Fatal(err)
@@ -119,7 +120,7 @@ func TestReadImageNonVision(t *testing.T) {
 }
 
 func TestWriteCreatesDirs(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	tool := &WriteTool{CWD: dir}
 	_, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"path": "sub/a.txt", "content": "hi"}), nil)
 	if err != nil {
@@ -135,7 +136,7 @@ func TestWriteCreatesDirs(t *testing.T) {
 }
 
 func TestEditSingle(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "a.txt")
 	os.WriteFile(p, []byte("hello world\n"), 0o644)
 	tool := &EditTool{CWD: dir}
@@ -153,7 +154,7 @@ func TestEditSingle(t *testing.T) {
 }
 
 func TestEditMultiple(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "a.txt")
 	os.WriteFile(p, []byte("a\nb\nc\n"), 0o644)
 	tool := &EditTool{CWD: dir}
@@ -174,7 +175,7 @@ func TestEditMultiple(t *testing.T) {
 }
 
 func TestEditAmbiguous(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "a.txt")
 	os.WriteFile(p, []byte("x\nx\n"), 0o644)
 	tool := &EditTool{CWD: dir}
@@ -188,7 +189,7 @@ func TestEditAmbiguous(t *testing.T) {
 }
 
 func TestEditPreservesCRLF(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "a.txt")
 	os.WriteFile(p, []byte("hello\r\nworld\r\n"), 0o644)
 	tool := &EditTool{CWD: dir}
@@ -209,7 +210,7 @@ func TestBashSuccess(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell only")
 	}
-	tool := &BashTool{CWD: t.TempDir()}
+	tool := &BashTool{CWD: testsupport.TempDir(t)}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "echo hi"}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +228,7 @@ func TestBashFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell only")
 	}
-	tool := &BashTool{CWD: t.TempDir()}
+	tool := &BashTool{CWD: testsupport.TempDir(t)}
 	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "false"}), nil)
 	if !res.IsError {
 		t.Fatal("want error")

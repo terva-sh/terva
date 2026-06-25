@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // pinStateBase points osDefaultDir at a temp location and returns the
@@ -15,11 +17,11 @@ import (
 // developer's (or CI runner's) real data dirs.
 func pinStateBase(t *testing.T) string {
 	t.Helper()
-	base := t.TempDir()
+	base := testsupport.TempDir(t)
 	t.Setenv("XDG_STATE_HOME", base)
 	switch runtime.GOOS {
 	case "darwin":
-		home := t.TempDir()
+		home := testsupport.TempDir(t)
 		t.Setenv("HOME", home)
 		base = filepath.Join(home, "Library", "Application Support")
 	case "windows":
@@ -157,9 +159,9 @@ func TestZotFallbackDisabled(t *testing.T) {
 }
 
 func TestZotFallbackMarkerHonorsTervaHome(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", dir)
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", testsupport.TempDir(t))
 
 	if err := SetZotFallbackDisabled(true); err != nil {
 		t.Fatal(err)

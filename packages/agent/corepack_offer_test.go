@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // installDummyExt drops a minimal installed extension into the global dir.
@@ -19,7 +21,7 @@ func installDummyExt(t *testing.T, home, name string) {
 }
 
 func TestGlobalExtensionsEmpty(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	if !globalExtensionsEmpty() {
@@ -38,7 +40,7 @@ func TestGlobalExtensionsEmpty(t *testing.T) {
 }
 
 func TestCorePackOfferSentinel(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	if corePackAlreadyOffered() {
@@ -53,7 +55,7 @@ func TestCorePackOfferSentinel(t *testing.T) {
 }
 
 func TestCorePackOfferDisabledByConfig(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	if corePackOfferDisabled() {
@@ -70,7 +72,7 @@ func TestCorePackOfferDisabledByConfig(t *testing.T) {
 // corePackOfferAllowed is the gate minus the TTY check. Exercise each
 // short-circuit.
 func TestCorePackOfferAllowed(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	// Fresh, empty home, no flags -> allowed.
@@ -93,7 +95,7 @@ func TestCorePackOfferAllowed(t *testing.T) {
 }
 
 func TestCorePackOfferAllowedWhenInstalled(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	installDummyExt(t, home, "demoext")
 
@@ -105,7 +107,7 @@ func TestCorePackOfferAllowedWhenInstalled(t *testing.T) {
 // maybeOfferCorePack must be a no-op under a non-TTY stdin (the test
 // harness): no prompt, no install, no sentinel written.
 func TestMaybeOfferCorePackNonTTYNoop(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	maybeOfferCorePack(Args{})

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // An exclude_image directive persists across a reload: every copy of the
@@ -14,7 +15,7 @@ import (
 // never re-sends a provider-rejected image. Append-only: the raw rows stay on
 // disk, the loader applies the directive when rebuilding the transcript.
 func TestImageExclusionDirectiveRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "s.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
 	s, err := NewSessionAtPath(path, "/ws", "openai-codex", "gpt-5.5", "0.0.0")
 	if err != nil {
 		t.Fatal(err)

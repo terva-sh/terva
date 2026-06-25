@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // acquirerSpy is a fake Config.AcquireWorktree: it hands out a fixed
@@ -36,7 +38,7 @@ func (s *acquirerSpy) releaseCount() int { return int(atomic.LoadInt32(&s.releas
 // newWorktreeSwarm wires a Swarm whose AcquireWorktree is spy.acquire.
 func newWorktreeSwarm(t *testing.T, spy *acquirerSpy, mk func(a *Agent) Runner) *Swarm {
 	t.Helper()
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	return New(Config{
 		Root:            root,
 		RepoRoot:        root,
@@ -48,7 +50,7 @@ func newWorktreeSwarm(t *testing.T, spy *acquirerSpy, mk func(a *Agent) Runner) 
 // TestWorktreeLeaseUsedAsDir asserts the leased directory becomes the
 // agent's Dir (and therefore the child's --cwd) instead of RepoRoot.
 func TestWorktreeLeaseUsedAsDir(t *testing.T) {
-	leased := t.TempDir()
+	leased := testsupport.TempDir(t)
 	spy := &acquirerSpy{dir: leased}
 	f := newWorktreeSwarm(t, spy, func(a *Agent) Runner {
 		return RunnerFunc(func(ctx context.Context, sink Sink) error { return nil })
@@ -79,7 +81,7 @@ func TestWorktreeLeaseUsedAsDir(t *testing.T) {
 // TestWorktreeReleasedOnceOnCompletion: a normal completion releases
 // the lease exactly once.
 func TestWorktreeReleasedOnceOnCompletion(t *testing.T) {
-	spy := &acquirerSpy{dir: t.TempDir()}
+	spy := &acquirerSpy{dir: testsupport.TempDir(t)}
 	f := newWorktreeSwarm(t, spy, func(a *Agent) Runner {
 		return RunnerFunc(func(ctx context.Context, sink Sink) error { return nil })
 	})
@@ -98,7 +100,7 @@ func TestWorktreeReleasedOnceOnCompletion(t *testing.T) {
 // TestWorktreeReleasedOnceOnFailure: a runner error is still a terminal
 // transition and must release exactly once.
 func TestWorktreeReleasedOnceOnFailure(t *testing.T) {
-	spy := &acquirerSpy{dir: t.TempDir()}
+	spy := &acquirerSpy{dir: testsupport.TempDir(t)}
 	f := newWorktreeSwarm(t, spy, func(a *Agent) Runner {
 		return RunnerFunc(func(ctx context.Context, sink Sink) error { return errors.New("boom") })
 	})
@@ -121,7 +123,7 @@ func TestWorktreeReleasedOnceOnFailure(t *testing.T) {
 // finalisation.
 func TestWorktreeReleasedOnceOnStop(t *testing.T) {
 	started := make(chan struct{})
-	spy := &acquirerSpy{dir: t.TempDir()}
+	spy := &acquirerSpy{dir: testsupport.TempDir(t)}
 	f := newWorktreeSwarm(t, spy, func(a *Agent) Runner {
 		return RunnerFunc(func(ctx context.Context, sink Sink) error {
 			close(started)
@@ -161,7 +163,7 @@ func TestWorktreeReleasedOnceOnStopAll(t *testing.T) {
 	var idx int32
 	byDir := map[string]*acquirerSpy{}
 	for i := range spies {
-		spies[i] = &acquirerSpy{dir: t.TempDir()}
+		spies[i] = &acquirerSpy{dir: testsupport.TempDir(t)}
 		byDir[spies[i].dir] = spies[i]
 	}
 	acquire := func(ctx context.Context, req WorktreeReq) (WorktreeLease, error) {
@@ -173,7 +175,7 @@ func TestWorktreeReleasedOnceOnStopAll(t *testing.T) {
 		}, nil
 	}
 
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := New(Config{
 		Root:            root,
 		RepoRoot:        root,
@@ -214,7 +216,7 @@ func TestWorktreeReleasedOnceOnStopAll(t *testing.T) {
 // TestNilAcquirePreservesRepoRoot: with no AcquireWorktree hook (the
 // default), every agent keeps RepoRoot as its Dir — today's behavior.
 func TestNilAcquirePreservesRepoRoot(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	f := New(Config{
 		Root:     root,
 		RepoRoot: root,

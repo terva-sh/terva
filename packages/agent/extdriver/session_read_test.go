@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // stubSessionReader is a fixed in-memory SessionReader for driver tests.
@@ -25,7 +26,7 @@ func (s stubSessionReader) ReadSession(_, id string) ([]extproto.SessionMessage,
 // shell extension and proves the injected reader's data comes back
 // correlated. The extension announces what it saw via notify.
 func TestSessionReadRoundTrip(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	dir := filepath.Join(tmp, "search")
 	hello := `{"type":"hello","name":"search","version":"1.0","capabilities":["events"]}`
 	body := `printf '%s\n' '{"type":"ready"}'
@@ -74,7 +75,7 @@ done
 // TestSessionReadNoReader proves read_session with no reader wired
 // returns not_found instead of hanging.
 func TestSessionReadNoReader(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	dir := filepath.Join(tmp, "search2")
 	hello := `{"type":"hello","name":"search2","version":"1.0","capabilities":["events"]}`
 	body := `printf '%s\n' '{"type":"ready"}'

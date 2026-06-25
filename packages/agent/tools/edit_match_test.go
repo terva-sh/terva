@@ -6,13 +6,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // runEdit applies one edit op via the real tool and returns the
 // resulting file content (or the error).
 func runEdit(t *testing.T, content string, edit map[string]any) (string, error) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "f.txt")
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -227,7 +229,7 @@ func TestEditTolerantMultiEditMixed(t *testing.T) {
 	// One exact edit and one tolerant edit in a single call still
 	// resolve against the original body and apply atomically.
 	content := "alpha\n\tbeta\n"
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "f.txt")
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatal(err)

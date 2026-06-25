@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // makeFiles creates files (and intermediate dirs) under base for each
@@ -35,7 +37,7 @@ func TestQuotePastedFilePaths(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("path-quoting heuristics are unix-shaped")
 	}
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	makeFiles(t, dir,
 		"foo bar.png",
 		"file.png",
@@ -119,7 +121,7 @@ func TestTildePathExists(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("path-quoting heuristics are unix-shaped")
 	}
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	makeFiles(t, tmp, "tilde-test.png")
 	t.Setenv("HOME", tmp)
 

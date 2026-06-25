@@ -15,6 +15,7 @@ import (
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/connsdk"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestHelperConnector is not a test: it is the connector executable
@@ -167,9 +168,9 @@ func helperManifest(t *testing.T, mode string) Manifest {
 
 func newTestProxy(t *testing.T, mode string) (*Proxy, string, *warnLog) {
 	t.Helper()
-	tervaHome := t.TempDir()
+	tervaHome := testsupport.TempDir(t)
 	warns := &warnLog{}
-	p := NewProxy(helperManifest(t, mode), t.TempDir(), tervaHome, warns.add)
+	p := NewProxy(helperManifest(t, mode), testsupport.TempDir(t), tervaHome, warns.add)
 	p.restartDelay = 5 * time.Millisecond
 	return p, tervaHome, warns
 }

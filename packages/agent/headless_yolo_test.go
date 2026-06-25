@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestHeadlessConfirmGateRefusesWhenNoYolo verifies that headless
@@ -18,7 +19,7 @@ import (
 // them unconfirmed.
 func TestHeadlessConfirmGateRefusesWhenNoYolo(t *testing.T) {
 	withTempHome(t) // isolate from any real config / installed-extension rules
-	gate, _ := headlessConfirmGate(Args{NoYolo: true, CWD: t.TempDir()}, "print")
+	gate, _ := headlessConfirmGate(Args{NoYolo: true, CWD: testsupport.TempDir(t)}, "print")
 	if gate == nil {
 		t.Fatal("headlessConfirmGate returned nil with NoYolo set; want a refusing gate")
 	}
@@ -35,7 +36,7 @@ func TestHeadlessConfirmGateRefusesWhenNoYolo(t *testing.T) {
 // there is no gate (yolo mode runs tools unconfirmed, as before).
 func TestHeadlessConfirmGateNilWhenYolo(t *testing.T) {
 	withTempHome(t) // a real installed extension's permission rules would otherwise force a gate
-	if g, _ := headlessConfirmGate(Args{NoYolo: false, CWD: t.TempDir()}, "json"); g != nil {
+	if g, _ := headlessConfirmGate(Args{NoYolo: false, CWD: testsupport.TempDir(t)}, "json"); g != nil {
 		t.Fatalf("headlessConfirmGate returned non-nil with yolo on: %v", g)
 	}
 }
@@ -49,8 +50,8 @@ func TestHeadlessConfirmGateNilWhenYolo(t *testing.T) {
 func TestWireNonInteractiveGateRefusesToolCall(t *testing.T) {
 	withTempHome(t)
 	ag := core.NewAgent(nil, "test", "", core.Registry{})
-	extMgr := extensions.New(t.TempDir(), t.TempDir(), "test", "openai", "gpt-5", nonInteractiveExtHooks{})
-	gate, _ := headlessConfirmGate(Args{NoYolo: true, CWD: t.TempDir()}, "print")
+	extMgr := extensions.New(testsupport.TempDir(t), testsupport.TempDir(t), "test", "openai", "gpt-5", nonInteractiveExtHooks{})
+	gate, _ := headlessConfirmGate(Args{NoYolo: true, CWD: testsupport.TempDir(t)}, "print")
 
 	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, gate, nil, nil)
 
@@ -75,7 +76,7 @@ func TestWireNonInteractiveGateRefusesToolCall(t *testing.T) {
 // a bare extension manager (no subscribers) lets the call through.
 func TestWireNonInteractiveNoGateAllowsToolCall(t *testing.T) {
 	ag := core.NewAgent(nil, "test", "", core.Registry{})
-	extMgr := extensions.New(t.TempDir(), t.TempDir(), "test", "openai", "gpt-5", nonInteractiveExtHooks{})
+	extMgr := extensions.New(testsupport.TempDir(t), testsupport.TempDir(t), "test", "openai", "gpt-5", nonInteractiveExtHooks{})
 
 	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, nil, nil, nil)
 

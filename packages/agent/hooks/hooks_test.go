@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 var (
@@ -48,7 +50,7 @@ func buildStub(t *testing.T) string {
 
 func engineWith(t *testing.T, pre []Spec, post []Spec) *Engine {
 	t.Helper()
-	e := NewEngine(Config{PreToolUse: pre, PostToolUse: post}, t.TempDir(), t.Logf)
+	e := NewEngine(Config{PreToolUse: pre, PostToolUse: post}, testsupport.TempDir(t), t.Logf)
 	if e == nil {
 		t.Fatal("engine should not be nil with hooks configured")
 	}
@@ -164,7 +166,7 @@ func TestRunPreTimeoutIsNoOpinion(t *testing.T) {
 
 func TestObserveFiresPostHookWithCorrelatedCall(t *testing.T) {
 	stub := buildStub(t)
-	outFile := filepath.Join(t.TempDir(), "post.jsonl")
+	outFile := filepath.Join(testsupport.TempDir(t), "post.jsonl")
 	e := engineWith(t, nil, []Spec{{Command: stub, Args: []string{"echo", outFile}}})
 
 	args := bashArgs("ls -la")
@@ -202,6 +204,6 @@ func TestObserveFiresPostHookWithCorrelatedCall(t *testing.T) {
 
 func TestObserveUnknownResultIsIgnored(t *testing.T) {
 	stub := buildStub(t)
-	e := engineWith(t, nil, []Spec{{Command: stub, Args: []string{"echo", filepath.Join(t.TempDir(), "x")}}})
+	e := engineWith(t, nil, []Spec{{Command: stub, Args: []string{"echo", filepath.Join(testsupport.TempDir(t), "x")}}})
 	e.Observe("tool_result", "never_seen", "", nil, false) // must not panic or spawn
 }

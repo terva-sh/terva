@@ -4,11 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestVertexConfigParsesAuthorizedUser(t *testing.T) {
 	// Write a fake ADC user-OAuth file and point GOOGLE_APPLICATION_CREDENTIALS at it.
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	path := filepath.Join(tmp, "adc.json")
 	body := `{
 	  "type": "authorized_user",
@@ -41,7 +43,7 @@ func TestVertexConfigParsesAuthorizedUser(t *testing.T) {
 }
 
 func TestVertexConfigRejectsBadType(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	path := filepath.Join(tmp, "adc.json")
 	body := `{"type": "something_else"}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {

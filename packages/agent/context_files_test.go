@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func writeCtxFile(t *testing.T, path, body string) {
@@ -18,7 +20,7 @@ func writeCtxFile(t *testing.T, path, body string) {
 }
 
 func TestReadStartupContextFilesOrderAndDedup(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	writeCtxFile(t, filepath.Join(dir, "a.md"), "AAA")
 	writeCtxFile(t, filepath.Join(dir, "b.md"), "BBB")
 
@@ -42,7 +44,7 @@ func TestReadStartupContextFilesOrderAndDedup(t *testing.T) {
 }
 
 func TestReadStartupContextFilesRelativeFlagResolvesAgainstCwd(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	writeCtxFile(t, filepath.Join(dir, "sub", "c.md"), "CCC")
 	out, err := readStartupContextFiles(dir, nil, []string{"sub/c.md"})
 	if err != nil {
@@ -57,7 +59,7 @@ func TestReadStartupContextFilesRelativeFlagResolvesAgainstCwd(t *testing.T) {
 }
 
 func TestReadStartupContextFilesMissingErrors(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	_, err := readStartupContextFiles(dir, nil, []string{"nope.md"})
 	if err == nil {
 		t.Fatal("expected error for missing context file")
@@ -65,7 +67,7 @@ func TestReadStartupContextFilesMissingErrors(t *testing.T) {
 }
 
 func TestReadStartupContextFilesDirectoryErrors(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	sub := filepath.Join(dir, "adir")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
@@ -77,7 +79,7 @@ func TestReadStartupContextFilesDirectoryErrors(t *testing.T) {
 }
 
 func TestReadStartupContextFilesEmptySkipped(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	writeCtxFile(t, filepath.Join(dir, "blank.md"), "   \n\t  ")
 	out, err := readStartupContextFiles(dir, []string{filepath.Join(dir, "blank.md")}, nil)
 	if err != nil {
@@ -89,7 +91,7 @@ func TestReadStartupContextFilesEmptySkipped(t *testing.T) {
 }
 
 func TestReadStartupContextFilesOversizeErrors(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	big := filepath.Join(dir, "big.md")
 	writeCtxFile(t, big, strings.Repeat("x", maxContextFileBytes+1))
 	_, err := readStartupContextFiles(dir, []string{big}, nil)
@@ -102,8 +104,8 @@ func TestReadStartupContextFilesOversizeErrors(t *testing.T) {
 // is user-supplied and TRUSTED, so an absolute path passed via flagFiles is
 // loaded normally — the project-layer containment check does not touch it.
 func TestReadStartupContextFilesFlagAbsolutePathAccepted(t *testing.T) {
-	cwd := t.TempDir()
-	outside := filepath.Join(t.TempDir(), "team-rules.md")
+	cwd := testsupport.TempDir(t)
+	outside := filepath.Join(testsupport.TempDir(t), "team-rules.md")
 	writeCtxFile(t, outside, "RULES")
 
 	out, err := readStartupContextFiles(cwd, nil, []string{outside})
@@ -119,7 +121,7 @@ func TestReadStartupContextFilesFlagAbsolutePathAccepted(t *testing.T) {
 }
 
 func TestReadStartupContextFilesNoneReturnsEmpty(t *testing.T) {
-	out, err := readStartupContextFiles(t.TempDir(), nil, nil)
+	out, err := readStartupContextFiles(testsupport.TempDir(t), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

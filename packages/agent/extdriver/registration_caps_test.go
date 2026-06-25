@@ -7,11 +7,12 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func capTestExt(t *testing.T) *Extension {
 	t.Helper()
-	f, err := os.Create(filepath.Join(t.TempDir(), "ext.log"))
+	f, err := os.Create(filepath.Join(testsupport.TempDir(t), "ext.log"))
 	if err != nil {
 		t.Fatal(err)
 	}

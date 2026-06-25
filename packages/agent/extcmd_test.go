@@ -4,13 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestExtInstallDotSource verifies that `terva ext install .` derives the
 // extension name from the resolved directory name rather than collapsing
 // to the extensions/ parent directory (the false "already exists" bug).
 func TestExtInstallDotSource(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	// Pre-create extensions/ to mimic a normal first run.
@@ -18,7 +20,7 @@ func TestExtInstallDotSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srcParent := t.TempDir()
+	srcParent := testsupport.TempDir(t)
 	src := filepath.Join(srcParent, "kagi")
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
@@ -51,10 +53,10 @@ func TestExtInstallDotSource(t *testing.T) {
 // directory always yields a real basename, so this just ensures the
 // guard logic does not crash for well-formed input.
 func TestExtInstallNamedDir(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
-	src := filepath.Join(t.TempDir(), "myext")
+	src := filepath.Join(testsupport.TempDir(t), "myext")
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +76,8 @@ func TestExtInstallNamedDir(t *testing.T) {
 // listed in the source .gitignore (e.g. .venv, node_modules) are not
 // copied during install, while tracked files are.
 func TestCopyDirRespectsGitignore(t *testing.T) {
-	src := t.TempDir()
-	dst := filepath.Join(t.TempDir(), "out")
+	src := testsupport.TempDir(t)
+	dst := filepath.Join(testsupport.TempDir(t), "out")
 
 	mustWrite := func(rel, content string) {
 		p := filepath.Join(src, filepath.FromSlash(rel))

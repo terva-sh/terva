@@ -3,12 +3,14 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestPersonaName_Resolution checks the precedence: TERVA_PERSONA_NAME env >
 // persona_name config field > DefaultPersonaName.
 func TestPersonaName_Resolution(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("TERVA_PERSONA_NAME", "")
 
 	if got := PersonaName(); got != DefaultPersonaName {
@@ -32,7 +34,7 @@ func TestPersonaName_Resolution(t *testing.T) {
 // that carries it) appear only for the default persona — a custom name has no
 // pronunciation we can guess.
 func TestPersonaPhonetic_OnlyForDefault(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("TERVA_PERSONA_NAME", "")
 
 	if got := personaPhonetic(); got != defaultPersonaPhonetic {

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestRunnerEndToEndWithStubChild is the integration test for the
@@ -41,8 +43,8 @@ func TestRunnerEndToEndWithStubChild(t *testing.T) {
 
 	exe := buildStubChild(t)
 
-	root := t.TempDir()
-	repo := t.TempDir()
+	root := testsupport.TempDir(t)
+	repo := testsupport.TempDir(t)
 	f := New(Config{
 		Root:     root,
 		RepoRoot: repo,
@@ -180,7 +182,7 @@ func formatEvents(evs []Event) string {
 
 func buildStubChild(t *testing.T) string {
 	t.Helper()
-	out := filepath.Join(t.TempDir(), "stubchild")
+	out := filepath.Join(testsupport.TempDir(t), "stubchild")
 	cmd := exec.Command("go", "build", "-o", out, "./testdata/cmd/stubchild")
 	// Pass through the test runner's env so `go build` can find
 	// HOME, PATH, GOCACHE, etc. CGO is disabled to keep the build

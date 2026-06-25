@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // Has is the only sanctioned read path for capability tags: explicit
@@ -115,7 +117,7 @@ func TestCapabilityLayerPrecedence(t *testing.T) {
 // Caps survive the on-disk model cache round trip (the cache marshals
 // Model directly).
 func TestCapabilityCacheRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "models.json")
+	path := filepath.Join(testsupport.TempDir(t), "models.json")
 	in := ModelCache{Models: []Model{{
 		Provider: "openai-compatible", ID: "local-vlm",
 		Caps: map[Capability]bool{CapImageInput: false},
@@ -190,7 +192,7 @@ func TestOpenAIImageDropPerModelCapability(t *testing.T) {
 func TestUserModelCapabilities(t *testing.T) {
 	load := func(t *testing.T, entry string) ([]UserOverride, []string) {
 		t.Helper()
-		path := filepath.Join(t.TempDir(), "models.json")
+		path := filepath.Join(testsupport.TempDir(t), "models.json")
 		blob := `{"providers":{"openai-compatible":{"models":[` + entry + `]}}}`
 		if err := os.WriteFile(path, []byte(blob), 0o644); err != nil {
 			t.Fatal(err)

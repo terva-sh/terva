@@ -4,14 +4,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestDataFSReadThrough: reads prefer the writable upper layer and fall
 // through to the read-only install layer; writes always land upper
 // (copy-on-write), shadowing the lower copy without mutating it.
 func TestDataFSReadThrough(t *testing.T) {
-	upper := t.TempDir()
-	lower := t.TempDir()
+	upper := testsupport.TempDir(t)
+	lower := testsupport.TempDir(t)
 	// A default shipped in the install dir, and a user override in DataDir.
 	if err := os.WriteFile(filepath.Join(lower, "config.json"), []byte("default"), 0o644); err != nil {
 		t.Fatal(err)
@@ -47,7 +49,7 @@ func TestDataFSReadThrough(t *testing.T) {
 
 // TestDataFSRejectsEscape: a name that escapes the layer must be refused.
 func TestDataFSRejectsEscape(t *testing.T) {
-	fs := HostInfo{DataDir: t.TempDir(), ExtensionDir: t.TempDir()}.DataFS()
+	fs := HostInfo{DataDir: testsupport.TempDir(t), ExtensionDir: testsupport.TempDir(t)}.DataFS()
 	// Rooted (slash and backslash), traversal, and bare-parent forms must
 	// all be refused on every OS — filepath.IsAbs alone misses a
 	// leading-slash path on Windows, so these pin the cross-platform guard.
@@ -64,7 +66,7 @@ func TestDataFSRejectsEscape(t *testing.T) {
 // TestProjectDataDir: scopes under projects/<ProjectID>, creates the dir,
 // and uses a shared bucket when there's no active project.
 func TestProjectDataDir(t *testing.T) {
-	data := t.TempDir()
+	data := testsupport.TempDir(t)
 
 	dir, err := HostInfo{DataDir: data, ProjectID: "myrepo-abc123"}.ProjectDataDir()
 	if err != nil {

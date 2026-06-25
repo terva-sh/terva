@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestInterceptAllFourEvents exercises tool_call / turn_start /
@@ -28,7 +30,7 @@ func TestInterceptAllFourEvents(t *testing.T) {
 		t.Skip("no python3 (the intercept fixture parses JSON frames with it)")
 	}
 
-	extDir := t.TempDir()
+	extDir := testsupport.TempDir(t)
 	script := `#!/bin/bash
 emit() { printf '%s\n' "$1"; }
 emit '{"type":"hello","name":"itest","version":"0.1.0","capabilities":["events"]}'
@@ -85,7 +87,7 @@ done
 	}
 
 	// TervaHome is unused here; we load the extension explicitly.
-	m := New(t.TempDir(), "", "0.0.0-test", "anthropic", "claude-test", nil)
+	m := New(testsupport.TempDir(t), "", "0.0.0-test", "anthropic", "claude-test", nil)
 	t.Cleanup(func() { m.Stop(2 * time.Second) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -184,7 +186,7 @@ func TestReloadRespawnsExtensions(t *testing.T) {
 		t.Skip("no python3 (the intercept fixture parses JSON frames with it)")
 	}
 
-	extDir := t.TempDir()
+	extDir := testsupport.TempDir(t)
 	script := `#!/bin/bash
 emit() { printf '%s\n' "$1"; }
 emit '{"type":"hello","name":"rtest","version":"0.1.0","capabilities":["commands"]}'
@@ -203,7 +205,7 @@ done
 		t.Fatal(err)
 	}
 
-	m := New(t.TempDir(), "", "0.0.0-test", "anthropic", "claude-test", nil)
+	m := New(testsupport.TempDir(t), "", "0.0.0-test", "anthropic", "claude-test", nil)
 	t.Cleanup(func() { m.Stop(2 * time.Second) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

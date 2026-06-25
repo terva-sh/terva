@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // writeProjectConfig writes a .terva/config.json under dir with the given JSON body.
@@ -23,13 +25,13 @@ func writeProjectConfig(t *testing.T, dir, body string) {
 // overlays it onto the read view only when the workspace is trusted; the
 // pristine user layer is never touched.
 func TestResolveConfigProjectModelTrustGated(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	if err := os.WriteFile(filepath.Join(home, "config.json"),
 		[]byte(`{"provider":"anthropic","model":"opus"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cwd := t.TempDir()
+	cwd := testsupport.TempDir(t)
 	writeProjectConfig(t, cwd, `{"provider":"openai","model":"gpt-5"}`)
 
 	// Untrusted: the project's model/provider are ignored; the user default wins.
@@ -72,7 +74,7 @@ func TestToggleStringMember(t *testing.T) {
 }
 
 func TestLoadProjectConfigNearestWins(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	repo := filepath.Join(root, "repo")
 	sub := filepath.Join(repo, "packages", "app")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
@@ -96,7 +98,7 @@ func TestLoadProjectConfigNearestWins(t *testing.T) {
 }
 
 func TestLoadProjectConfigInheritsFromAncestorWhenAbsent(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	sub := filepath.Join(root, "repo", "packages", "app")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
@@ -118,7 +120,7 @@ func TestLoadProjectConfigInheritsFromAncestorWhenAbsent(t *testing.T) {
 }
 
 func TestLoadProjectConfigNoneReturnsNil(t *testing.T) {
-	pc, err := LoadProjectConfig(t.TempDir())
+	pc, err := LoadProjectConfig(testsupport.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +130,7 @@ func TestLoadProjectConfigNoneReturnsNil(t *testing.T) {
 }
 
 func TestLoadProjectConfigMalformedErrors(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	writeProjectConfig(t, dir, `{not valid json`)
 	_, err := LoadProjectConfig(dir)
 	if err == nil {
@@ -137,7 +139,7 @@ func TestLoadProjectConfigMalformedErrors(t *testing.T) {
 }
 
 func TestLoadProjectConfigAbsolutizesInRepoRelativeAgainstProjectRoot(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	// A legit in-repo relative entry resolves against the project root (the
 	// dir containing .terva/), not against .terva/ itself, and is retained.
 	writeProjectConfig(t, root, `{"context_files":["docs/playbook.md"]}`)
@@ -157,7 +159,7 @@ func TestLoadProjectConfigAbsolutizesInRepoRelativeAgainstProjectRoot(t *testing
 // dropped, never injected. The trusted user layer keeps absolute paths; only
 // the project layer is restricted.
 func TestLoadProjectConfigRejectsAbsolutePath(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	secret := filepath.Join(root, "elsewhere", "id_ed25519")
 	writeProjectConfig(t, root, `{"context_files":["docs/playbook.md",`+jsonString(secret)+`]}`)
 
@@ -179,7 +181,7 @@ func TestLoadProjectConfigRejectsAbsolutePath(t *testing.T) {
 // TestLoadProjectConfigRejectsRootEscape: a ../../etc/passwd-style entry
 // resolves outside the project root and must be dropped.
 func TestLoadProjectConfigRejectsRootEscape(t *testing.T) {
-	root := t.TempDir()
+	root := testsupport.TempDir(t)
 	repo := filepath.Join(root, "repo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
@@ -202,25 +204,25 @@ func TestLoadProjectConfigRejectsRootEscape(t *testing.T) {
 // an absolute path in $TERVA_HOME/config.json must still be accepted — the
 // containment check applies to the project layer only.
 func TestResolveConfigUserLayerKeepsAbsolutePath(t *testing.T) {
-	tervaHome := t.TempDir()
+	tervaHome := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", tervaHome)
-	abs := filepath.Join(t.TempDir(), "outside", "notes.md")
+	abs := filepath.Join(testsupport.TempDir(t), "outside", "notes.md")
 	if err := SaveConfig(Config{ContextFiles: []string{abs}}); err != nil {
 		t.Fatal(err)
 	}
 	// cwd has no project config, so the user layer is used verbatim.
-	eff := ResolveConfig(t.TempDir(), true)
+	eff := ResolveConfig(testsupport.TempDir(t), true)
 	if len(eff.ContextFiles) != 1 || eff.ContextFiles[0] != abs {
 		t.Fatalf("user-layer absolute path not preserved: got %v, want [%s]", eff.ContextFiles, abs)
 	}
 }
 
 func TestResolveConfigProjectOverridesUser(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5", ContextFiles: []string{"user.md"}}); err != nil {
 		t.Fatal(err)
 	}
-	repo := t.TempDir()
+	repo := testsupport.TempDir(t)
 	writeProjectConfig(t, repo, `{"context_files":["project.md"]}`)
 
 	eff := ResolveConfig(repo, true) // trusted: project layer applies
@@ -243,11 +245,11 @@ func TestResolveConfigProjectOverridesUser(t *testing.T) {
 // still injects. The restrict-only disable fields are NOT gated (tested
 // separately) — they can only tighten.
 func TestResolveConfigUntrustedDropsProjectContextFiles(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	if err := SaveConfig(Config{ContextFiles: []string{"user.md"}}); err != nil {
 		t.Fatal(err)
 	}
-	repo := t.TempDir()
+	repo := testsupport.TempDir(t)
 	writeProjectConfig(t, repo, `{"context_files":["project.md"]}`)
 
 	// Untrusted: the project's context_files must NOT win — only the user
@@ -268,11 +270,11 @@ func TestResolveConfigUntrustedDropsProjectContextFiles(t *testing.T) {
 // disable_context_extensions is restrict-only: the project layer can
 // only ADD to the user's disabled set (union), never re-enable.
 func TestResolveConfigDisableContextExtensionsUnion(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	if err := SaveConfig(Config{DisableContextExtensions: []string{"alpha"}}); err != nil {
 		t.Fatal(err)
 	}
-	repo := t.TempDir()
+	repo := testsupport.TempDir(t)
 	writeProjectConfig(t, repo, `{"disable_context_extensions":["beta"]}`)
 
 	eff := ResolveConfig(repo, true)
@@ -295,11 +297,11 @@ func TestResolveConfigDisableContextExtensionsUnion(t *testing.T) {
 // disable_extensions is restrict-only too: the project layer unions
 // into the user's, never re-enabling.
 func TestResolveConfigDisableExtensionsUnion(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	if err := SaveConfig(Config{DisableExtensions: []string{"alpha"}}); err != nil {
 		t.Fatal(err)
 	}
-	repo := t.TempDir()
+	repo := testsupport.TempDir(t)
 	writeProjectConfig(t, repo, `{"disable_extensions":["beta"]}`)
 
 	eff := ResolveConfig(repo, true)
@@ -313,13 +315,13 @@ func TestResolveConfigDisableExtensionsUnion(t *testing.T) {
 }
 
 func TestResolveConfigFallsBackToUserWhenNoProject(t *testing.T) {
-	tervaHome := t.TempDir()
+	tervaHome := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", tervaHome)
 	if err := SaveConfig(Config{ContextFiles: []string{"user.md"}}); err != nil {
 		t.Fatal(err)
 	}
 	// cwd has no project config anywhere up the tree.
-	eff := ResolveConfig(t.TempDir(), true)
+	eff := ResolveConfig(testsupport.TempDir(t), true)
 	want := filepath.Join(tervaHome, "user.md")
 	if len(eff.ContextFiles) != 1 || eff.ContextFiles[0] != want {
 		t.Fatalf("user fallback failed: got %v, want [%s]", eff.ContextFiles, want)
@@ -335,7 +337,7 @@ func jsonString(s string) string {
 // TestConfigSwarmWorktreesRoundTrip verifies the swarm_worktrees key
 // survives a SaveConfig/LoadConfig round trip and parses from JSON.
 func TestConfigSwarmWorktreesRoundTrip(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
 	// Absent in JSON => nil pointer (off).
 	if err := SaveConfig(Config{}); err != nil {

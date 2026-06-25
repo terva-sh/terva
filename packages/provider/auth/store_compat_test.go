@@ -3,10 +3,12 @@ package auth
 import (
 	"path/filepath"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestStoreCompatWithKey(t *testing.T) {
-	store := NewStore(filepath.Join(t.TempDir(), "auth.json"))
+	store := NewStore(filepath.Join(testsupport.TempDir(t), "auth.json"))
 	if err := store.SetCompatAPIKey("openai-compatible", "sk-local", "http://localhost:1234/v1", "qwen2.5-coder", 131072); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +31,7 @@ func TestStoreCompatWithKey(t *testing.T) {
 // A keyless local endpoint (base URL only) must still persist and read
 // back as a configured api-key login — many local servers need no token.
 func TestStoreCompatKeyless(t *testing.T) {
-	store := NewStore(filepath.Join(t.TempDir(), "auth.json"))
+	store := NewStore(filepath.Join(testsupport.TempDir(t), "auth.json"))
 	if err := store.SetCompatAPIKey("openai-compatible", "", "http://localhost:8080/v1", "llama3", 0); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +54,7 @@ func TestStoreCompatKeyless(t *testing.T) {
 // TestStoreCompatContextDefault confirms a keyless endpoint can still
 // carry a default context window for discovered models.
 func TestStoreCompatContextDefault(t *testing.T) {
-	store := NewStore(filepath.Join(t.TempDir(), "auth.json"))
+	store := NewStore(filepath.Join(testsupport.TempDir(t), "auth.json"))
 	if err := store.SetCompatAPIKey("openai-compatible", "", "http://localhost:8080/v1", "llama3", 8192); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +64,7 @@ func TestStoreCompatContextDefault(t *testing.T) {
 }
 
 func TestStoreCompatClear(t *testing.T) {
-	store := NewStore(filepath.Join(t.TempDir(), "auth.json"))
+	store := NewStore(filepath.Join(testsupport.TempDir(t), "auth.json"))
 	if err := store.SetCompatAPIKey("openai-compatible", "", "http://localhost:8080/v1", "llama3", 0); err != nil {
 		t.Fatal(err)
 	}

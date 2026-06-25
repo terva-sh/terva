@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestSwarmEmitterMirrorDormantUntilStdoutBreaks regresses the
@@ -26,7 +27,7 @@ import (
 func TestSwarmEmitterMirrorDormantUntilStdoutBreaks(t *testing.T) {
 	// Real *os.File for the emitter's stdout-equivalent so the
 	// emitter's write() path (which expects *os.File) actually runs.
-	stdoutPath := filepath.Join(t.TempDir(), "stdout.fifo")
+	stdoutPath := filepath.Join(testsupport.TempDir(t), "stdout.fifo")
 	stdoutFile, err := os.Create(stdoutPath)
 	if err != nil {
 		t.Fatalf("create stdout file: %v", err)
@@ -35,7 +36,7 @@ func TestSwarmEmitterMirrorDormantUntilStdoutBreaks(t *testing.T) {
 
 	// Mirror writes go to a separate events.jsonl that we can read
 	// at the end to assert how many events the mirror emitted.
-	mirrorPath := filepath.Join(t.TempDir(), "events.jsonl")
+	mirrorPath := filepath.Join(testsupport.TempDir(t), "events.jsonl")
 	mirror, err := swarm.OpenEventLog(mirrorPath)
 	if err != nil {
 		t.Fatalf("open mirror: %v", err)

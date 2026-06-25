@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/chat"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // writeHelperManifest writes a connector.json whose exec is the test
@@ -43,9 +44,9 @@ func writeManifestJSON(t *testing.T, dir string, m map[string]any) string {
 }
 
 func TestServiceConfiguredProbe(t *testing.T) {
-	tervaHome := t.TempDir()
+	tervaHome := testsupport.TempDir(t)
 
-	yes := writeHelperManifest(t, t.TempDir(), "fake", "happy")
+	yes := writeHelperManifest(t, testsupport.TempDir(t), "fake", "happy")
 	svc, err := NewService(yes, false)
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +55,7 @@ func TestServiceConfiguredProbe(t *testing.T) {
 		t.Error("configured probe exit 0 should report configured")
 	}
 
-	no := writeHelperManifest(t, t.TempDir(), "fake", "configured-no")
+	no := writeHelperManifest(t, testsupport.TempDir(t), "fake", "configured-no")
 	svc, err = NewService(no, false)
 	if err != nil {
 		t.Fatal(err)
@@ -65,8 +66,8 @@ func TestServiceConfiguredProbe(t *testing.T) {
 }
 
 func TestServiceStatusText(t *testing.T) {
-	tervaHome := t.TempDir()
-	path := writeHelperManifest(t, t.TempDir(), "fake", "happy")
+	tervaHome := testsupport.TempDir(t)
+	path := writeHelperManifest(t, testsupport.TempDir(t), "fake", "happy")
 	svc, err := NewService(path, true)
 	if err != nil {
 		t.Fatal(err)
@@ -91,8 +92,8 @@ func TestServiceStatusText(t *testing.T) {
 }
 
 func TestServicePairingRoundTrip(t *testing.T) {
-	tervaHome := t.TempDir()
-	path := writeHelperManifest(t, t.TempDir(), "fake", "happy")
+	tervaHome := testsupport.TempDir(t)
+	path := writeHelperManifest(t, testsupport.TempDir(t), "fake", "happy")
 	svc, err := NewService(path, false)
 	if err != nil {
 		t.Fatal(err)
@@ -117,8 +118,8 @@ func TestServicePairingRoundTrip(t *testing.T) {
 }
 
 func TestLinkAndReset(t *testing.T) {
-	tervaHome := t.TempDir()
-	devPath := writeHelperManifest(t, t.TempDir(), "fake", "happy")
+	tervaHome := testsupport.TempDir(t)
+	devPath := writeHelperManifest(t, testsupport.TempDir(t), "fake", "happy")
 
 	linked, err := Link(tervaHome, devPath)
 	if err != nil {
@@ -161,7 +162,7 @@ func TestLinkAndReset(t *testing.T) {
 }
 
 func TestResetKeepsInstalledManifest(t *testing.T) {
-	tervaHome := t.TempDir()
+	tervaHome := testsupport.TempDir(t)
 	// A real (non-symlink) install under $TERVA_HOME/connectors.
 	dir := filepath.Join(ConnectorsDir(tervaHome), "fake")
 	path := writeHelperManifest(t, dir, "fake", "happy")
@@ -188,7 +189,7 @@ func TestResetKeepsInstalledManifest(t *testing.T) {
 }
 
 func TestDiscover(t *testing.T) {
-	tervaHome := t.TempDir()
+	tervaHome := testsupport.TempDir(t)
 	exe, _ := os.Executable()
 
 	// Good connector.
@@ -214,7 +215,7 @@ func TestDiscover(t *testing.T) {
 }
 
 func TestRegisterDiscoveredKeepsCompiledIn(t *testing.T) {
-	tervaHome := t.TempDir()
+	tervaHome := testsupport.TempDir(t)
 	chat.Register(chat.Service{Name: "conflict-x", Configured: func(string) bool { return false }})
 	writeHelperManifest(t, filepath.Join(ConnectorsDir(tervaHome), "conflict-x"), "conflict-x", "happy")
 
@@ -235,7 +236,7 @@ func TestRegisterDiscoveredKeepsCompiledIn(t *testing.T) {
 }
 
 func TestRegisterManifestDev(t *testing.T) {
-	path := writeHelperManifest(t, t.TempDir(), "devconn-x", "happy")
+	path := writeHelperManifest(t, testsupport.TempDir(t), "devconn-x", "happy")
 	name, err := RegisterManifest(path)
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +256,7 @@ func TestRegisterManifestDev(t *testing.T) {
 }
 
 func TestManifestValidation(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	for name, m := range map[string]map[string]any{
 		"missing name": {"exec": "/bin/true"},
 		"missing exec": {"name": "x"},

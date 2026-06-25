@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // refreshRecorder records Notify (to sequence the test) and RefreshContext
@@ -52,7 +54,7 @@ func (r *refreshRecorder) refreshCount() int {
 // what StaticContext() now returns, and the host's RefreshContext hook
 // must have fired so a live session can rebuild its prompt.
 func TestRefreshContextUpdatesStaticAndFiresHook(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	dir := filepath.Join(tmp, "memory")
 	hello := `{"type":"hello","name":"memory","version":"1.0","capabilities":["context","events"]}`
 	body := `printf '%s\n' '{"type":"ready"}'

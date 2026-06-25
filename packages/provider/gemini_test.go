@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestGeminiStreamHappyPath drives the gemini client end-to-end against
@@ -69,7 +71,7 @@ func TestGeminiStreamHappyPath(t *testing.T) {
 }
 
 func TestGeminiStreamInlineImage(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	prev, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)

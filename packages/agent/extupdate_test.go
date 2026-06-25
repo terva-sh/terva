@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // gitAvailable lets the whole suite no-op on machines without git
@@ -69,7 +71,7 @@ func mustRun(t *testing.T, dir, name string, args ...string) {
 // makeFakeTervaHome scaffolds $TERVA_HOME/extensions/ and returns the path.
 func makeFakeTervaHome(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(home, "extensions"), 0o755); err != nil {
 		t.Fatalf("mkdir extensions: %v", err)
 	}
@@ -97,7 +99,7 @@ func extWithManifest(t *testing.T, root, name, content string) string {
 func TestUpdateAllExtensions_NoExtensionsDirectory(t *testing.T) {
 	// Brand new $TERVA_HOME with no extensions/ directory at all.
 	// Must not panic and must print nothing alarming.
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	updateAllExtensions(home) // no-op
 }
 
@@ -137,7 +139,7 @@ func TestUpdateOneExtension_NotAGitCheckout(t *testing.T) {
 
 func TestUpdateOneExtension_UpToDate(t *testing.T) {
 	gitAvailable(t)
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	home := makeFakeTervaHome(t)
 
 	// Set up a remote and clone it as the "installed" extension.
@@ -164,7 +166,7 @@ func TestUpdateOneExtension_UpToDate(t *testing.T) {
 
 func TestUpdateOneExtension_PullsNewCommit(t *testing.T) {
 	gitAvailable(t)
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	home := makeFakeTervaHome(t)
 
 	remote := filepath.Join(tmp, "remote.git")
@@ -200,7 +202,7 @@ func TestUpdateOneExtension_PullsNewCommit(t *testing.T) {
 
 func TestUpdateOneExtension_StashesDirtyWorktree(t *testing.T) {
 	gitAvailable(t)
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	home := makeFakeTervaHome(t)
 
 	remote := filepath.Join(tmp, "remote.git")
@@ -243,7 +245,7 @@ func TestUpdateOneExtension_StashesDirtyWorktree(t *testing.T) {
 
 func TestUpdateOneExtension_DivergedFails(t *testing.T) {
 	gitAvailable(t)
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	home := makeFakeTervaHome(t)
 
 	remote := filepath.Join(tmp, "remote.git")
@@ -280,7 +282,7 @@ func TestUpdateOneExtension_DivergedFails(t *testing.T) {
 
 func TestUpdateOneExtension_BadRemoteFails(t *testing.T) {
 	gitAvailable(t)
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	home := makeFakeTervaHome(t)
 
 	// Init a repo with an "origin" that points at a non-existent path.
@@ -311,7 +313,7 @@ func TestUpdateOneExtension_BadRemoteFails(t *testing.T) {
 
 func TestUpdateAllExtensions_MixedSet(t *testing.T) {
 	gitAvailable(t)
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	home := makeFakeTervaHome(t)
 
 	// 1 plain non-git extension (skipped)
@@ -352,5 +354,5 @@ func TestRunGit_HonoursContextTimeout(t *testing.T) {
 	defer cancel()
 	// `git rev-parse HEAD` in a non-repo errors quickly; we just want
 	// to confirm we don't hang.
-	_, _ = runGit(ctx, t.TempDir(), "rev-parse", "HEAD")
+	_, _ = runGit(ctx, testsupport.TempDir(t), "rev-parse", "HEAD")
 }
