@@ -180,3 +180,37 @@ func TestExtensionConfigFieldsMasksSecret(t *testing.T) {
 		t.Fatalf("missing fields: api=%v units=%v", api, units)
 	}
 }
+
+// extensionConfigFields (and thus the /extensions config dialog) must surface
+// an extension's schema even when its install-dir basename differs from the
+// manifest name — the exact case that made obsidian (dir "terva-ext-obsidian",
+// manifest "obsidian") report "no configurable settings" despite declaring
+// one. Resolution routes through matchExtensionDir's manifest-name fallback,
+// shared with the CLI's findExtensionDir.
+func TestExtensionConfigFieldsResolvesManifestNamedDir(t *testing.T) {
+	home := withTempHome(t)
+	// Install dir keeps the source repo name; the manifest declares a
+	// different name (what `ext list` and the dialog key on).
+	dir := filepath.Join(home, "extensions", "terva-ext-obsidian")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mf := extdriver.Manifest{
+		Name:    "obsidian",
+		Exec:    "./run.sh",
+		Enabled: boolPtr(true),
+		Config:  []extdriver.ConfigField{{Key: "roots", Label: "Vault roots", Type: "string"}},
+	}
+	b, err := json.MarshalIndent(mf, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "extension.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fields := extensionConfigFields("", "obsidian")
+	if len(fields) != 1 || fields[0].Key != "roots" {
+		t.Fatalf(`extensionConfigFields("", "obsidian") = %+v; want one field keyed "roots"`, fields)
+	}
+}

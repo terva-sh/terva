@@ -449,16 +449,41 @@ func extensionDirs() map[string]string {
 // so accepting both means `ext upgrade index` works just like the list
 // shows it. The directory-name match wins first (fast path, back-compat).
 func findExtensionDir(name string) (string, error) {
-	// 1. Direct install-directory match.
-	for _, dir := range extensionDirs() {
-		candidate := filepath.Join(dir, name)
-		if _, err := os.Stat(filepath.Join(candidate, "extension.json")); err == nil {
-			return candidate, nil
+	// Search global before project so a name present in both resolves
+	// deterministically — extensionDirs is a map, and ranging it is unordered.
+	dirs := extensionDirs()
+	roots := make([]string, 0, 2)
+	if d, ok := dirs["global"]; ok {
+		roots = append(roots, d)
+	}
+	if d, ok := dirs["project"]; ok {
+		roots = append(roots, d)
+	}
+	if dir, ok := matchExtensionDir(roots, name); ok {
+		return dir, nil
+	}
+	return "", fmt.Errorf("extension %q not found", name)
+}
+
+// matchExtensionDir resolves an extension to its install directory within the
+// given roots (searched in order), preferring a directory whose basename is
+// name, then a directory whose manifest declares that name. The two differ
+// when the install dir keeps the source repo name (dir "terva-ext-index" for
+// manifest name "index"); `ext list` shows the manifest name, so every
+// name-keyed lookup must accept both. findExtensionDir and findExtensionDirIn
+// both route through here so their resolution can't drift apart — the drift
+// that once let the /extensions config dialog miss a manifest-named install.
+func matchExtensionDir(roots []string, name string) (string, bool) {
+	// 1. Direct install-directory match (fast path, back-compat).
+	for _, d := range roots {
+		cand := filepath.Join(d, name)
+		if _, err := os.Stat(filepath.Join(cand, "extension.json")); err == nil {
+			return cand, true
 		}
 	}
 	// 2. Manifest-name match (what `ext list` displays).
-	for _, dir := range extensionDirs() {
-		entries, err := os.ReadDir(dir)
+	for _, d := range roots {
+		entries, err := os.ReadDir(d)
 		if err != nil {
 			continue
 		}
@@ -466,7 +491,7 @@ func findExtensionDir(name string) (string, error) {
 			if !e.IsDir() {
 				continue
 			}
-			raw, err := os.ReadFile(filepath.Join(dir, e.Name(), "extension.json"))
+			raw, err := os.ReadFile(filepath.Join(d, e.Name(), "extension.json"))
 			if err != nil {
 				continue
 			}
@@ -474,11 +499,11 @@ func findExtensionDir(name string) (string, error) {
 				Name string `json:"name"`
 			}
 			if json.Unmarshal(raw, &m) == nil && m.Name == name {
-				return filepath.Join(dir, e.Name()), nil
+				return filepath.Join(d, e.Name()), true
 			}
 		}
 	}
-	return "", fmt.Errorf("extension %q not found", name)
+	return "", false
 }
 
 func dashIfEmpty(s string) string {

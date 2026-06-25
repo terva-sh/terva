@@ -13,7 +13,14 @@ func (i *Interactive) openExtConfigDialog(name string) {
 	}
 	fields := i.cfg.ExtensionConfigFields(name)
 	if len(fields) == 0 {
-		i.setStatusOK(name + " has no configurable settings")
+		// This dialog only opens from the /extensions list's config action,
+		// which is gated on the manifest declaring a schema. An empty form
+		// therefore means the schema was seen when the list was built but the
+		// install dir can't be resolved or its manifest can't be read now — a
+		// real failure, not "nothing to configure". Surface it instead of a
+		// reassuring OK. (A genuinely schema-less extension is handled in the
+		// list itself, where HasConfig is false.)
+		i.setStatusErr(name + ": couldn't load its configuration (the installed files may be missing or unreadable)")
 		return
 	}
 	i.extConfigDialog.Open(name, fields)

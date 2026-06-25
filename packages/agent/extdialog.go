@@ -137,15 +137,17 @@ func setProjectModel(cwd, provider, model string) error {
 // findExtensionDirIn locates the named extension's directory under the
 // global root or the given project root.
 func findExtensionDirIn(cwd, name string) (string, error) {
-	dirs := []string{filepath.Join(TervaHome(), "extensions")}
+	roots := []string{filepath.Join(TervaHome(), "extensions")}
 	if cwd != "" {
-		dirs = append(dirs, filepath.Join(cwd, ".terva", "extensions"))
+		roots = append(roots, filepath.Join(cwd, ".terva", "extensions"))
 	}
-	for _, d := range dirs {
-		cand := filepath.Join(d, name)
-		if _, err := os.Stat(filepath.Join(cand, "extension.json")); err == nil {
-			return cand, nil
-		}
+	// Resolve by manifest name as well as dir basename (shared with
+	// findExtensionDir). Without the manifest-name fallback an extension
+	// installed under its source repo name (dir "terva-ext-obsidian", manifest
+	// "obsidian") is invisible here, and the /extensions config dialog reports
+	// "no configurable settings" even though the schema is right there.
+	if dir, ok := matchExtensionDir(roots, name); ok {
+		return dir, nil
 	}
 	return "", fmt.Errorf("extension %q not found", name)
 }
