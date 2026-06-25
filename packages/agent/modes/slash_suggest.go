@@ -13,9 +13,21 @@ import (
 // (group dividers like "── extensions ───") are real entries
 // flagged with header=true; they render but aren't navigable.
 type slashCommand struct {
-	Name   string // with leading "/"
+	Name   string // with leading "/" — also the text inserted/run on select
 	Desc   string
 	Header bool // true = visual divider, not selectable
+	// Display, when set, is the popup label shown instead of Name — e.g. a
+	// bare skill name for a `/skill <name>` argument suggestion, whose Name is
+	// the full "/skill <name>" replacement. Selection still returns Name.
+	Display string
+}
+
+// label is the text shown in the popup row for this entry.
+func (c slashCommand) label() string {
+	if c.Display != "" {
+		return c.Display
+	}
+	return c.Name
 }
 
 // slashSuggester renders the popup that appears when the editor starts
@@ -34,6 +46,11 @@ type slashSuggester struct {
 	// have registered any. Sorted by name in SetExtra so map
 	// iteration order doesn't reshuffle the popup between frames.
 	extra []slashCommand
+
+	// skills are the live skill names offered as `/skill <name>` argument
+	// completions. Refreshed per render (cheap, in-memory) so a reload shows
+	// up immediately. Sorted by name in SetSkills for stable popup order.
+	skills []SkillCompletion
 
 	// lastMatches is the list shown in the most recent Render call.
 	// Up/Down read it so they know which indexes to skip across
@@ -57,6 +74,22 @@ func (s *slashSuggester) SetExtra(cmds []slashCommand) {
 	sorted := append([]slashCommand(nil), cmds...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	s.extra = sorted
+}
+
+// SkillCompletion is one `/skill <name>` argument suggestion: a bare skill
+// name and its one-line description. The suggester turns it into a
+// "/skill <name>" replacement entry while the command's argument is typed.
+type SkillCompletion struct {
+	Name string
+	Desc string
+}
+
+// SetSkills updates the skill names offered as `/skill <name>` argument
+// completions. Sorted by name so the popup order is stable across redraws.
+func (s *slashSuggester) SetSkills(sk []SkillCompletion) {
+	sorted := append([]SkillCompletion(nil), sk...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	s.skills = sorted
 }
 
 // SetJailed updates the current sandbox state. Called once per render
@@ -149,6 +182,12 @@ func newSlashSuggester() *slashSuggester { return &slashSuggester{} }
 // matches returns the commands whose name has input as a prefix.
 // If input is just "/", everything is shown.
 func (s *slashSuggester) matches(input string) []slashCommand {
+	// Argument completion for `/skill <name>`: detected on the RAW input (the
+	// trailing space matters — "/skill " means "offer every name") before the
+	// command-name path below trims and rejects anything past the first space.
+	if arg, ok := skillArgPrefix(input); ok {
+		return s.skillMatches(arg)
+	}
 	input = strings.TrimRight(input, " ")
 	if input == "" || !strings.HasPrefix(input, "/") {
 		return nil
@@ -171,6 +210,45 @@ func (s *slashSuggester) matches(input string) []slashCommand {
 		}
 	}
 	return pruneOrphanHeaders(out)
+}
+
+// skillArgPrefix reports whether input is the `/skill` command followed by a
+// space and a name fragment still being typed, returning that fragment.
+// It is NOT active for `/skills`, for `/skill` alone (command-name mode), or
+// once a space follows the name (the user has moved on to the request).
+func skillArgPrefix(input string) (arg string, ok bool) {
+	const cmd = "/skill"
+	if !strings.HasPrefix(input, cmd) {
+		return "", false
+	}
+	rest := input[len(cmd):]
+	if rest == "" || (rest[0] != ' ' && rest[0] != '\t') {
+		return "", false // "/skill" alone, or "/skills…" — complete the command name
+	}
+	arg = strings.TrimLeft(rest, " \t")
+	if strings.ContainsAny(arg, " \t") {
+		return "", false // name finished; user is typing the request now
+	}
+	return arg, true
+}
+
+// skillMatches builds the `/skill <name>` argument suggestions whose name has
+// arg as a case-insensitive prefix. Each entry's Name is the full
+// "/skill <name>" replacement (what Tab inserts / Enter runs); Display is the
+// bare name shown in the popup.
+func (s *slashSuggester) skillMatches(arg string) []slashCommand {
+	arg = strings.ToLower(arg)
+	out := make([]slashCommand, 0, len(s.skills))
+	for _, sk := range s.skills {
+		if arg == "" || strings.HasPrefix(strings.ToLower(sk.Name), arg) {
+			out = append(out, slashCommand{
+				Name:    "/skill " + sk.Name,
+				Display: sk.Name,
+				Desc:    sk.Desc,
+			})
+		}
+	}
+	return out
 }
 
 // pruneOrphanHeaders removes header rows that have no commands
@@ -338,7 +416,7 @@ func (s *slashSuggester) Render(input string, th tui.Theme, width int) []string 
 		if c.Header {
 			continue
 		}
-		if n := len(c.Name); n > nameWidth {
+		if n := len(c.label()); n > nameWidth {
 			nameWidth = n
 		}
 	}
@@ -366,7 +444,7 @@ func (s *slashSuggester) Render(input string, th tui.Theme, width int) []string 
 			lines = append(lines, "")
 			continue
 		}
-		name := c.Name
+		name := c.label()
 		if len(name) < nameWidth {
 			name = name + strings.Repeat(" ", nameWidth-len(name))
 		}

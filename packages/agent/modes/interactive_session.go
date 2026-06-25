@@ -5,6 +5,7 @@ package modes
 // /migrate entry point.
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -68,16 +69,82 @@ func (i *Interactive) openBtwDialog(args []string) {
 	i.invalidate()
 }
 
-// openSkillsDialog opens the skill inspector. The picker reflects
-// whatever SkillSnapshot returns at call time, so edits to a
-// SKILL.md made during a session show up on the next /skills.
+// openSkillsDialog opens the skill inspector. Opening it reloads: the
+// picker reflects edits/adds made during the session, AND the live skill
+// tool's catalog is refreshed so a newly-added skill is loadable by name.
+// Neither touches the system prompt, so the prompt cache survives.
 func (i *Interactive) openSkillsDialog() {
 	var list []*skills.Skill
-	if i.cfg.SkillSnapshot != nil {
+	switch {
+	case i.cfg.ReloadSkills != nil:
+		list = i.cfg.ReloadSkills()
+	case i.cfg.SkillSnapshot != nil:
 		list = i.cfg.SkillSnapshot()
 	}
 	i.skillsDialog.Open(list)
 	i.invalidate()
+}
+
+// reloadSkillsDialog re-discovers skills (refreshing the live skill tool's
+// catalog) and re-seeds the open picker, without rebuilding the system
+// prompt. Bound to `r` in the skills dialog.
+func (i *Interactive) reloadSkillsDialog() {
+	if i.cfg.ReloadSkills == nil {
+		return
+	}
+	list := i.cfg.ReloadSkills()
+	i.skillsDialog.Open(list)
+	i.setStatusOK(fmt.Sprintf("skills reloaded — %d available", len(list)))
+	i.invalidate()
+}
+
+// slashSkill (/skill <name> [request]) primes the editor with a directive to
+// use a specific skill, so the user completes and submits it. It refreshes
+// the catalog first (cache-safe — see ReloadSkills) so a skill written this
+// session resolves, validates the name, then fills the editor. The model
+// loads the named skill via the `skill` tool when the request is sent.
+//
+// It deliberately PRIMES rather than submits: filling the editor never
+// rebuilds the system prompt nor starts a turn from inside slash dispatch,
+// and lets the user add/adjust the request before it runs.
+func (i *Interactive) slashSkill(_ context.Context, parts []string, _ string) bool {
+	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+		i.setStatusErr("usage: /skill <name> [request]  —  /skills to list")
+		return false
+	}
+	name := parts[1]
+
+	var list []*skills.Skill
+	switch {
+	case i.cfg.ReloadSkills != nil:
+		list = i.cfg.ReloadSkills()
+	case i.cfg.SkillSnapshot != nil:
+		list = i.cfg.SkillSnapshot()
+	}
+	// Case-insensitive for typing convenience; echo the canonical name.
+	var match *skills.Skill
+	for _, s := range list {
+		if strings.EqualFold(s.Name, name) {
+			match = s
+			break
+		}
+	}
+	if match == nil {
+		i.setStatusErr(fmt.Sprintf("no skill named %q — /skills to list", name))
+		return false
+	}
+
+	i.ed.SetValue(skillDirective(match.Name, strings.TrimSpace(strings.Join(parts[2:], " "))))
+	i.invalidate()
+	return false
+}
+
+// skillDirective builds the editor preamble that points the model at a skill.
+// A trailing task is appended inline; otherwise the cursor is left after the
+// colon for the user to type their request.
+func skillDirective(name, task string) string {
+	d := fmt.Sprintf("Use the %q skill for: ", name)
+	return d + task
 }
 
 // openJumpDialog builds a /jump picker from the current transcript.

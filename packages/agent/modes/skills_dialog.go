@@ -36,6 +36,10 @@ func (d *skillsDialog) Close() { d.active = false }
 // Active reports whether the dialog is visible.
 func (d *skillsDialog) Active() bool { return d != nil && d.active }
 
+// inList reports whether the picker (not the body view) is showing, so
+// the overlay binds the reload key only there.
+func (d *skillsDialog) inList() bool { return d.Active() && d.viewing == nil }
+
 // HandleKey advances the dialog state.
 func (d *skillsDialog) HandleKey(k tui.Key) (closed bool) {
 	if !d.Active() {
@@ -97,7 +101,7 @@ func (d *skillsDialog) Render(th tui.Theme, width int) []string {
 		return d.renderBody(th, width)
 	}
 
-	out := []string{frameHeader(th, "skills (enter to view, esc to close)", width)}
+	out := []string{frameHeader(th, "skills (enter to view, r to reload, esc to close)", width)}
 	if len(d.skills) == 0 {
 		out = append(out, "  "+th.FG256(th.Muted, "no user skills loaded"))
 		out = append(out, "  "+th.FG256(th.Muted, "add SKILL.md under $TERVA_HOME/skills, .terva/skills, .claude/skills, or .agents/skills"))
