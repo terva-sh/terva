@@ -22,8 +22,24 @@
 // Build it, drop the binary + an extension.json next to it under
 // `$TERVA_HOME/extensions/hello/`, and terva picks it up on next launch.
 //
-// The same wire format also has reference clients in TypeScript and
-// Python under examples/extensions/. Use whichever language fits.
+// The same wire format is spoken directly (no SDK) by the TypeScript,
+// JavaScript, and Python examples under examples/extensions/ — scratchpad and
+// clock, plus the repo-aware-ts / repo-aware-py twins of the Go repo-aware.
+// Use whichever language fits.
+//
+// # Responsible use of the model-facing surface
+//
+// An extension's static context block (ContributeContext / RefreshContext)
+// and its tool set (Tool / WithdrawTools) live in the model request's cached
+// prompt prefix. Changing the prefix invalidates that cache, so treat it as a
+// snapshot you replace at a session boundary — not a per-turn signal. Decide
+// once per session and assert it from OnSession, using the boundary-scoped
+// Session handle (Session.RefreshContext, Session.WithdrawAllTools, …), which
+// is cache-safe by construction; the identically-named *Extension methods are
+// an escape hatch that warn when used off a boundary. The host pins the prefix
+// per turn (a mistimed change applies on the next turn, never mid-turn) and
+// no-ops an unchanged set, so re-asserting your decision on every session is
+// free. See docs/extensions.md "Responsible use: context & tools".
 package ext
 
 import (
@@ -113,6 +129,16 @@ type Event struct {
 // Session identifies the active terva session. It is delivered to an
 // OnSession handler whenever the active session changes (open, resume,
 // fork, /new, or close). A zero ID means no active session.
+//
+// Session also carries the cache-affecting mutators — RefreshContext,
+// WithdrawTools / WithdrawAllTools, RestoreTools / RestoreAllTools. These
+// change the cached prompt prefix, which is only safe to do at a session
+// boundary, so calling them on the Session value handed to your OnSession
+// handler is the recommended path: the call site is, by construction, at a
+// boundary. The same methods exist on *Extension for advanced use, but they
+// warn (to the ext log) when invoked off a boundary; the Session handle does
+// not, because it IS one. Don't stash the handle and call it later from a
+// tool/event handler — that warns too (it's no longer at a boundary).
 type Session struct {
 	ID    string
 	Path  string
@@ -122,6 +148,65 @@ type Session struct {
 	// the host predates protocol 2 or there is no active session.
 	CWD       string
 	ProjectID string
+
+	// e back-references the owning extension so the boundary-scoped
+	// mutators can route through it. Populated by the OnSession /
+	// OnSessionEnd dispatch; nil on a Session a caller built itself (its
+	// mutators then no-op).
+	e *Extension
+}
+
+// RefreshContext replaces this extension's static system-prompt block,
+// from the safety of a session boundary. The cache-safe twin of
+// Extension.RefreshContext (see it for full semantics); calling it here, on
+// the handle OnSession gave you, never trips the off-boundary warning.
+func (s Session) RefreshContext(text string) {
+	if s.e != nil {
+		s.e.RefreshContext(text)
+	}
+}
+
+// WithdrawTools hides the named tools this extension registered from the
+// model for the session; RestoreTools brings them back. WithdrawAllTools /
+// RestoreAllTools do the lot. These are the boundary-scoped, cache-safe twins
+// of the same-named Extension methods (see Extension.WithdrawTools for full
+// semantics); calling them on the handle OnSession gave you is the
+// recommended path.
+func (s Session) WithdrawTools(names ...string) {
+	if s.e != nil {
+		s.e.WithdrawTools(names...)
+	}
+}
+
+// WithdrawAllTools hides every tool this extension registered. See WithdrawTools.
+func (s Session) WithdrawAllTools() {
+	if s.e != nil {
+		s.e.WithdrawAllTools()
+	}
+}
+
+// RestoreTools un-hides the named tools. See WithdrawTools.
+func (s Session) RestoreTools(names ...string) {
+	if s.e != nil {
+		s.e.RestoreTools(names...)
+	}
+}
+
+// RestoreAllTools brings back every tool this extension hid. See WithdrawTools.
+func (s Session) RestoreAllTools() {
+	if s.e != nil {
+		s.e.RestoreAllTools()
+	}
+}
+
+// ProtocolVersion is the host's wire protocol version (Host().ProtocolVersion),
+// for feature-gating boundary-scoped calls — e.g. the withdrawal methods need
+// >= 4. Zero on a Session with no owning extension.
+func (s Session) ProtocolVersion() int {
+	if s.e == nil {
+		return 0
+	}
+	return s.e.Host().ProtocolVersion
 }
 
 // InterceptHandler decides whether a tool call may proceed. Return
@@ -350,6 +435,21 @@ type Extension struct {
 	// ContributeContext, flushed as a register_context frame in Run.
 	contextContribution string
 
+	// withdrawn / withdrawnAll track this extension's tool-withdrawal state
+	// (set_withdrawn_tools, protocol 4). Withdraw*/Restore* mutate them and
+	// re-send the full snapshot; the wire is always wholesale. withdrawnAll
+	// hides every registered tool (withdrawn is then moot on the wire).
+	// Guarded by mu.
+	withdrawn    map[string]bool
+	withdrawnAll bool
+
+	// inSessionBoundary is true only while an OnSession / OnSessionEnd
+	// handler is running. Withdraw*/Restore* consult it to warn when a
+	// tool-set change is made off a session boundary — the one place those
+	// changes are cache-safe (tools live in the cached prompt prefix).
+	// Guarded by mu.
+	inSessionBoundary bool
+
 	// hostInfo is filled in once HelloAck arrives.
 	host HostInfo
 
@@ -510,6 +610,7 @@ func New(name, version string) *Extension {
 		panelKeys:     map[string]func(key, text string){},
 		panelCloses:   map[string]func(){},
 		pending:       map[string]chan json.RawMessage{},
+		withdrawn:     map[string]bool{},
 		caps:          []string{"commands", "tools", "events", "panels"},
 	}
 }
@@ -994,11 +1095,128 @@ func (e *Extension) ContributeContext(text string) {
 // per turn, so the prompt cache survives mid-session writes. An empty
 // string clears the block. Requires host protocol 3; gate with
 // RequireProtocol(3).
+//
+// Prefer Session.RefreshContext, the boundary-scoped twin handed to your
+// OnSession handler — it's the cache-safe call site. This *Extension form
+// is the advanced escape hatch: it works anywhere but logs an advisory
+// note when called off a session boundary.
 func (e *Extension) RefreshContext(text string) {
+	e.warnIfOffBoundary("RefreshContext")
 	e.mu.Lock()
 	e.contextContribution = text
 	e.mu.Unlock()
 	_ = e.send(extproto.RefreshContextFromExt{Type: "refresh_context", Text: text})
+}
+
+// WithdrawTools hides the named tools THIS extension registered from the
+// model for the rest of the session; RestoreTools brings them back.
+// WithdrawAllTools / RestoreAllTools do the lot. Names that aren't this
+// extension's own tools are ignored by the host (you can never hide a
+// built-in or another extension's tool).
+//
+// Prefer the boundary-scoped Session.WithdrawTools handed to your OnSession
+// handler — that's the cache-safe call site. These *Extension forms are the
+// advanced escape hatch (callable from anywhere) and log an advisory note
+// when used off a session boundary.
+//
+// Tools are part of the cached prompt prefix, so call these ONLY at a
+// session boundary (e.g. from OnSession) — never mid-turn, or you evict the
+// prompt cache. The host no-ops when the effective set is unchanged, so a
+// redundant re-assert (the same decision on every session_start, including
+// the re-fire a /cd produces) is free. As a guardrail, the SDK logs a
+// warning to the ext log if you call these from outside an OnSession /
+// OnSessionEnd handler; it still sends the frame (the check is advisory).
+//
+// Requires host protocol 4; feature-detect with Host().ProtocolVersion >= 4
+// (there is no RequireProtocol bump, so older hosts keep loading the
+// extension — they simply ignore the frame and the tools stay visible).
+func (e *Extension) WithdrawTools(names ...string) {
+	e.mu.Lock()
+	for _, n := range names {
+		e.withdrawn[n] = true
+	}
+	e.mu.Unlock()
+	e.sendWithdrawn()
+}
+
+// WithdrawAllTools hides every tool this extension registered. See
+// WithdrawTools for the session-boundary caveat.
+func (e *Extension) WithdrawAllTools() {
+	e.mu.Lock()
+	e.withdrawnAll = true
+	e.mu.Unlock()
+	e.sendWithdrawn()
+}
+
+// RestoreTools un-hides the named tools. While WithdrawAllTools is in
+// effect it has no selective effect (the SDK doesn't enumerate the host's
+// view); call RestoreAllTools first, then WithdrawTools for any remainder.
+func (e *Extension) RestoreTools(names ...string) {
+	e.mu.Lock()
+	for _, n := range names {
+		delete(e.withdrawn, n)
+	}
+	e.mu.Unlock()
+	e.sendWithdrawn()
+}
+
+// RestoreAllTools brings back every tool this extension hid (clears both
+// the all-flag and the explicit set).
+func (e *Extension) RestoreAllTools() {
+	e.mu.Lock()
+	e.withdrawnAll = false
+	e.withdrawn = map[string]bool{}
+	e.mu.Unlock()
+	e.sendWithdrawn()
+}
+
+// warnIfOffBoundary logs an advisory note when a cache-affecting mutator
+// (op) runs outside an OnSession / OnSessionEnd handler. The cached prompt
+// prefix is only cheap to change at a session boundary; calling from a tool
+// or event handler still works and is safe for the in-flight turn (the host
+// pins the prefix per turn), but a genuinely changed prefix evicts the cache
+// at the next turn. The boundary-scoped Session methods never trip this,
+// since they run inside the handler window. A stashed Session handle reused
+// later does trip it (it has escaped its boundary).
+func (e *Extension) warnIfOffBoundary(op string) {
+	e.mu.Lock()
+	atBoundary := e.inSessionBoundary
+	e.mu.Unlock()
+	if !atBoundary {
+		e.Logf("%s called outside a session boundary; prefer the Session handle "+
+			"passed to OnSession so the host changes the cached prompt prefix "+
+			"without evicting the prompt cache at the next turn", op)
+	}
+}
+
+// sendWithdrawn ships the current withdrawal state as a wholesale
+// set_withdrawn_tools snapshot. Names are sorted for a deterministic wire.
+func (e *Extension) sendWithdrawn() {
+	e.warnIfOffBoundary("Withdraw/RestoreTools")
+	e.mu.Lock()
+	all := e.withdrawnAll
+	names := make([]string, 0, len(e.withdrawn))
+	for n := range e.withdrawn {
+		names = append(names, n)
+	}
+	e.mu.Unlock()
+	slices.Sort(names)
+	_ = e.send(extproto.SetWithdrawnToolsFromExt{Type: "set_withdrawn_tools", Tools: names, All: all})
+}
+
+// withSessionBoundary marks the inSessionBoundary window around fn, so a
+// Withdraw*/Restore* call made from within an OnSession / OnSessionEnd
+// handler is recognized as cache-safe and does not warn.
+func (e *Extension) withSessionBoundary(fn func()) {
+	e.mu.Lock()
+	e.inSessionBoundary = true
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		e.inSessionBoundary = false
+		e.mu.Unlock()
+	}()
+	fn()
 }
 
 // --- ext→host requests (protocol 3) ----------------------------------
@@ -1471,24 +1689,24 @@ func (e *Extension) Run() error {
 			}
 			e.mu.Unlock()
 			if onSession != nil {
-				func() {
+				e.withSessionBoundary(func() {
 					defer func() {
 						if r := recover(); r != nil {
 							e.Logf("OnSession handler panicked: %v", r)
 						}
 					}()
-					onSession(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle, CWD: ef.CWD, ProjectID: ef.ProjectID})
-				}()
+					onSession(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle, CWD: ef.CWD, ProjectID: ef.ProjectID, e: e})
+				})
 			}
 			if onSessionEnd != nil {
-				func() {
+				e.withSessionBoundary(func() {
 					defer func() {
 						if r := recover(); r != nil {
 							e.Logf("OnSessionEnd handler panicked: %v", r)
 						}
 					}()
-					onSessionEnd(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle, CWD: ef.CWD, ProjectID: ef.ProjectID})
-				}()
+					onSessionEnd(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle, CWD: ef.CWD, ProjectID: ef.ProjectID, e: e})
+				})
 			}
 			if onCompaction != nil {
 				func() {

@@ -85,6 +85,14 @@ type InteractiveConfig struct {
 	// agent's System on the main goroutine.
 	RebuildExtensionContext func() (string, bool)
 
+	// RebuildExtensionTools rebuilds the tool registry for the current
+	// approval mode after an extension withdrew or restored some of its
+	// own tools (set_withdrawn_tools, protocol 4), returning the rebuilt
+	// registry and whether it changed. Twin of RebuildExtensionContext;
+	// nil when extensions aren't enabled. Interactive installs the result
+	// on the running agent's Tools on the main goroutine.
+	RebuildExtensionTools func() (core.Registry, bool)
+
 	// Agent is optional. If nil, terva opens without credentials; the
 	// user must /login before they can prompt.
 	Agent *core.Agent
@@ -318,6 +326,23 @@ type InteractiveConfig struct {
 	// so the picker reflects edits made during the session.
 	SkillSnapshot func() []*skills.Skill
 
+	// ReloadSkills re-discovers skills and refreshes the live `skill`
+	// tool's catalog so a SKILL.md added or edited mid-session becomes
+	// loadable by name. It returns the visible set for the picker.
+	//
+	// Cache-safe by design: it swaps only the tool's internal list — it
+	// does NOT rebuild the system prompt or change the tool registry, so
+	// the prompt cache survives a reload. The trade: the model's
+	// system-prompt manifest of skill names goes stale until the next
+	// session, but any skill is still loadable by name (e.g. via /skill).
+	ReloadSkills func() []*skills.Skill
+
+	// SkillCompletions, if non-nil, returns the skill names + descriptions
+	// offered as `/skill <name>` argument completions. It must be CHEAP — it
+	// is called every render — so it reads the live in-memory skill catalog
+	// (which reloads keep current), not a disk rescan.
+	SkillCompletions func() []SkillCompletion
+
 	// ChangelogChan, if non-nil, delivers release-notes for the
 	// current binary version once at startup. Interactive opens a
 	// dismissible overlay when the channel produces a non-empty
@@ -458,6 +483,7 @@ type Interactive struct {
 	mcpDialog         *mcpDialog
 	logDialog         *logDialog
 	contextDialog     *contextDialog
+	usageDialog       *usageDialog
 	rescueDialog      *rescueDialog
 	sessionDialog     *sessionDialog
 	swarmDialog       *swarmDialog
@@ -615,6 +641,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		mcpDialog:         newMCPDialog(),
 		logDialog:         newLogDialog(),
 		contextDialog:     newContextDialog(),
+		usageDialog:       newUsageDialog(),
 		rescueDialog:      newRescueDialog(),
 		sessionDialog:     newSessionDialog(),
 		swarmDialog:       newSwarmDialog(),

@@ -102,6 +102,11 @@ func (h *interactiveExtHooks) RefreshContext() {
 		iv.RefreshContext()
 	}
 }
+func (h *interactiveExtHooks) RefreshTools() {
+	if iv := h.iv(); iv != nil {
+		iv.RefreshTools()
+	}
+}
 
 // extToolAdapter bridges *extensions.Manager to the
 // ExtensionToolSource interface declared in build.go (kept narrow to
@@ -121,16 +126,24 @@ func (a *extToolAdapter) StaticContext() string {
 
 func (a *extToolAdapter) Tools() []ExtensionToolInfo {
 	infos := a.mgr.Tools()
-	out := make([]ExtensionToolInfo, len(infos))
-	for i, t := range infos {
-		out[i] = ExtensionToolInfo{
+	out := make([]ExtensionToolInfo, 0, len(infos))
+	for _, t := range infos {
+		// This is the single model-facing feed into MergeToolsForMode, so
+		// skipping a withdrawn tool here drops it from the registry AND the
+		// system-prompt tool list (set_withdrawn_tools, protocol 4). The
+		// /extensions dialog reads the driver's unfiltered Tools() directly,
+		// so its registered count is unaffected.
+		if t.Withdrawn {
+			continue
+		}
+		out = append(out, ExtensionToolInfo{
 			Extension:   t.Extension,
 			Name:        t.Name,
 			Description: t.Description,
 			Schema:      t.Schema,
 			ReadOnly:    t.ReadOnly,
 			Authority:   t.Authority,
-		}
+		})
 	}
 	return out
 }
@@ -651,6 +664,7 @@ func (nonInteractiveExtHooks) UpdatePanel(string, string, string, []string, stri
 func (nonInteractiveExtHooks) ClosePanel(string, string)                            {}
 func (nonInteractiveExtHooks) RefreshStatus()                                       {}
 func (nonInteractiveExtHooks) RefreshContext()                                      {}
+func (nonInteractiveExtHooks) RefreshTools()                                        {}
 
 // setupNonInteractiveExtensions loads --ext paths and (unless
 // --no-ext) runs discovery. Returns the manager so the caller can
@@ -1953,6 +1967,17 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			}
 			return r.RefreshExtensionContext(extToolAdapter)
 		},
+		RebuildExtensionTools: func() (core.Registry, bool) {
+			if extMgr == nil {
+				return r.ToolRegistry, false
+			}
+			// Reuse the live approval-mode rebuild verbatim, pinned to the
+			// current mode, so the mode-switch and tool-withdrawal paths
+			// share one registry-build and cannot drift. The driver's
+			// sameSet guard already ensures the withdrawn set really changed
+			// before this fires, so report changed=true.
+			return setApprovalMode(confirmGate.Mode()), true
+		},
 		Model:                      r.Model,
 		Provider:                   r.Provider,
 		AuthMethod:                 r.AuthMethod,
@@ -2124,6 +2149,38 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			// model either).
 			list, _ := skills.Discover(TervaHome(), r.CWD, userHome, args.WithSkills, r.Trusted)
 			return skills.VisibleSkills(list)
+		},
+		ReloadSkills: func() []*skills.Skill {
+			if args.NoSkill {
+				return nil
+			}
+			userHome, _ := os.UserHomeDir()
+			full, _ := skills.Discover(TervaHome(), r.CWD, userHome, args.WithSkills, r.Trusted)
+			// Cache-safe refresh: swap the existing skill tool's catalog so a
+			// newly added/edited SKILL.md is loadable by name. We deliberately
+			// do NOT register a new tool or rebuild the system prompt — either
+			// would change the cached request prefix and discard the whole
+			// context for the sake of one skill. (If no skill tool exists —
+			// --no-skill, or zero skills at launch — there's nothing to
+			// refresh; a restart is needed to activate it.)
+			if r.SkillTool != nil {
+				r.SkillTool.SetSkills(full)
+			}
+			return skills.VisibleSkills(full)
+		},
+		SkillCompletions: func() []modes.SkillCompletion {
+			// Cheap, per-render: read the live in-memory catalog (kept current
+			// by ReloadSkills), never a disk rescan. Built-ins are hidden, like
+			// the picker. nil when skills are off.
+			if args.NoSkill || r.SkillTool == nil {
+				return nil
+			}
+			vis := skills.VisibleSkills(r.SkillTool.Skills())
+			out := make([]modes.SkillCompletion, 0, len(vis))
+			for _, s := range vis {
+				out = append(out, modes.SkillCompletion{Name: s.Name, Desc: s.Description})
+			}
+			return out
 		},
 		NoYolo:          args.NoYolo,
 		ConfirmGate:     confirmGate,

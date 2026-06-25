@@ -55,6 +55,13 @@ type ToolInfo struct {
 	// auto-allowable), so a network-read tool is not mistaken for a
 	// local read. Empty falls back to ReadOnly.
 	Authority string
+	// Withdrawn is set when the owning extension hid this tool for the
+	// session (set_withdrawn_tools, protocol 4). The model-facing merge
+	// feed skips withdrawn tools so they leave the registry and the system
+	// prompt; the /extensions dialog ignores the flag and keeps showing the
+	// full registered count. The tool stays indexed (HasTool), so a later
+	// restore needs no re-registration.
+	Withdrawn bool
 }
 
 // Tools returns a snapshot of every (extension, tool) pair currently
@@ -73,6 +80,7 @@ func (d *Driver) Tools() []ToolInfo {
 				Schema:      t.Schema,
 				ReadOnly:    t.ReadOnly,
 				Authority:   t.Authority,
+				Withdrawn:   ext.withdrawnTools[t.Name], // nil-map read is false
 			})
 		}
 	}

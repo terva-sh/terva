@@ -64,6 +64,14 @@ type HostHooks interface {
 	// (print/json/rpc build it once); the live interactive/ACP session
 	// re-folds it.
 	RefreshContext()
+
+	// RefreshTools asks the host to rebuild the tool registry after an
+	// extension withdrew or restored some of its own tools
+	// (set_withdrawn_tools, protocol 4), so the change to what the model
+	// sees takes effect on the next turn. Like RefreshContext, a no-op
+	// where the registry is fixed for the run; the live interactive session
+	// rebuilds and swaps the running agent's tools.
+	RefreshTools()
 }
 
 // Driver owns every extension subprocess's wire for the lifetime of
@@ -670,6 +678,57 @@ func (d *Driver) registerTool(ext *Extension, rt extproto.RegisterToolFromExt) {
 	}
 }
 
+// resolveWithdrawn turns a set_withdrawn_tools snapshot into the concrete
+// set of THIS extension's tool names to hide, intersected with its own
+// registered tools so it can never hide a built-in or another extension's
+// tool. All:true expands to every registered name. An empty result is
+// returned as nil so restore-all is a clean zero value. Caller holds d.mu
+// (it reads ext.tools).
+func resolveWithdrawn(ext *Extension, sw extproto.SetWithdrawnToolsFromExt) map[string]bool {
+	if sw.All {
+		if len(ext.tools) == 0 {
+			return nil
+		}
+		out := make(map[string]bool, len(ext.tools))
+		for _, t := range ext.tools {
+			out[t.Name] = true
+		}
+		return out
+	}
+	if len(sw.Tools) == 0 {
+		return nil
+	}
+	owned := make(map[string]bool, len(ext.tools))
+	for _, t := range ext.tools {
+		owned[t.Name] = true
+	}
+	var out map[string]bool
+	for _, n := range sw.Tools {
+		if owned[n] {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[n] = true
+		}
+	}
+	return out
+}
+
+// sameSet reports whether two name sets are equal, treating nil and an
+// empty map as equal. The cache-safety no-op guard: a redundant re-assert
+// of the same withdrawn set must not fire RefreshTools.
+func sameSet(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return true
+}
+
 // registerCommand records a command registration under the cap.
 func (d *Driver) registerCommand(ext *Extension, rc extproto.RegisterCommandFromExt) {
 	d.mu.Lock()
@@ -910,6 +969,25 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 				ext.mu.Unlock()
 				if changed {
 					d.hooks.RefreshContext()
+				}
+			}
+		case "set_withdrawn_tools":
+			// The tool analog of refresh_context (protocol 4): a wholesale
+			// snapshot of this extension's own tools to hide from the model.
+			// Unlike staticContext (ext.mu), tools/withdrawnTools are guarded
+			// by d.mu — resolveWithdrawn reads ext.tools — so resolve, diff,
+			// and store under d.mu, then fire the hook lock-free.
+			var sw extproto.SetWithdrawnToolsFromExt
+			if err := json.Unmarshal(line, &sw); err == nil {
+				d.mu.Lock()
+				next := resolveWithdrawn(ext, sw)
+				changed := !sameSet(ext.withdrawnTools, next)
+				if changed {
+					ext.withdrawnTools = next
+				}
+				d.mu.Unlock()
+				if changed {
+					d.hooks.RefreshTools()
 				}
 			}
 		case "host_tool_call":

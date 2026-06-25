@@ -58,6 +58,21 @@ const MaxToolCallBytes = 1 << 20 // 1 MiB
 //	    declares RequireProtocol(3). Additive: a v2 host ignores the new
 //	    frames (an unanswered request simply never returns; the static
 //	    block stays at its register-phase value).
+//	4 — per-session tool withdrawal. set_withdrawn_tools lets an extension
+//	    hide (and later restore) its OWN already-registered tools for the
+//	    session, so a git extension outside a repo — or a cloud extension
+//	    with no credentials — stops paying tokens and inviting misfires for
+//	    tools that can only refuse. It is the tool analog of refresh_context:
+//	    a wholesale withdrawn-set snapshot, host-diffed so an unchanged set
+//	    costs nothing, applied at the single ext.tools enumeration so the
+//	    tool drops from both the callable registry and the system prompt.
+//	    NOTE: the frame is itself fire-and-forget (no blocking reply) and so
+//	    by the rule below needs no bump on its own — a protocol-3 host
+//	    silently ignores it and the tools simply stay visible (today's
+//	    behavior). The bump exists ONLY so an extension can feature-detect
+//	    (Host().ProtocolVersion >= 4) and not believe it hid tools an older
+//	    host ignored. There is no RequireProtocol(4): older hosts keep
+//	    loading the extension.
 //
 // Not every new message bumps this number. A fire-and-forget event an
 // extension *optionally* subscribes to — e.g. transcript_compacted, fired
@@ -67,7 +82,7 @@ const MaxToolCallBytes = 1 << 20 // 1 MiB
 // emits it. Such events need no version bump and no RequireProtocol. Only
 // request/response features (whose caller blocks for a host answer) gate
 // on the version.
-const ProtocolVersion = 3
+const ProtocolVersion = 4
 
 // Lifecycle event names the host emits to subscribed extensions. These
 // constants are the single source of truth: the emit sites use them, the
@@ -404,6 +419,24 @@ type RegisterContextFromExt struct {
 type RefreshContextFromExt struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+// SetWithdrawnToolsFromExt is the tool analog of refresh_context (protocol
+// 4): a wholesale snapshot of THIS extension's tools to hide from the model
+// for the session. Wholesale-replace, so the single payload doubles as the
+// restore path and gives the host idempotency for free. Fire-and-forget.
+//
+//	All:true              hide every tool this extension registered (Tools ignored).
+//	All:false, len>0      hide exactly the named tools that this extension owns.
+//	All:false, Tools:[]   the empty set — restore everything to visible.
+//
+// Names that aren't this extension's own registered tools are ignored: an
+// extension can never hide a built-in or another extension's tool. A
+// protocol-3 host ignores the unknown frame, so the tools stay visible.
+type SetWithdrawnToolsFromExt struct {
+	Type  string   `json:"type"`  // "set_withdrawn_tools"
+	Tools []string `json:"tools"` // this ext's tool names to hide; ignored when All
+	All   bool     `json:"all"`   // hide every tool this extension registered
 }
 
 // ContextCardFromExt sets (or replaces, by ID) a dynamic context card

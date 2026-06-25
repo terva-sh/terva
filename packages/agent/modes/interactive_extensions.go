@@ -174,6 +174,29 @@ func (i *Interactive) RefreshContext() {
 	})
 }
 
+// RefreshTools is the manager's hook for set_withdrawn_tools (protocol 4):
+// an extension hid or restored some of its own tools, so rebuild the tool
+// registry for the current mode and install it on the running agent.
+// Marshalled onto the main goroutine — it swaps the agent's tools, which the
+// turn loop reads — and a no-op when extensions aren't enabled or nothing
+// changed. Unlike System (a bare field), the registry goes through the
+// locked SetTools setter, exactly as the live approval-mode switch does.
+// (HostHooks.)
+func (i *Interactive) RefreshTools() {
+	if i.cfg.RebuildExtensionTools == nil {
+		return
+	}
+	i.runOnMain(func() {
+		reg, changed := i.cfg.RebuildExtensionTools()
+		if !changed || reg == nil {
+			return
+		}
+		if ag := i.turns.Agent(); ag != nil {
+			ag.SetTools(reg)
+		}
+	})
+}
+
 // slashContext (the /context modal) lives in interactive_context.go — it
 // now opens a tabbed dialog with the size breakdown + the per-extension
 // injected text, instead of printing the text inline.

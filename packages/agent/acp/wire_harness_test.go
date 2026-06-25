@@ -24,6 +24,7 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // ---- fake provider client (mirrors the *_test.go fake-client pattern) ----
@@ -662,6 +663,7 @@ func (nonInteractiveExtHooksStub) UpdatePanel(string, string, string, []string, 
 func (nonInteractiveExtHooksStub) ClosePanel(string, string)                            {}
 func (nonInteractiveExtHooksStub) RefreshStatus()                                       {}
 func (nonInteractiveExtHooksStub) RefreshContext()                                      {}
+func (nonInteractiveExtHooksStub) RefreshTools()                                        {}
 
 // manifestPermissionRules reads every installed extension's extension.json
 // under root/extensions and compiles its `permissions` array into
@@ -1250,7 +1252,7 @@ func (h *harness) expectUpdate() map[string]any {
 }
 
 func TestACPWireHandshakeAndToolTurn(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	target := filepath.Join(dir, "hello.txt")
 	if err := os.WriteFile(target, []byte("old contents\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1398,7 +1400,7 @@ func TestACPInitializeMustBeFirst(t *testing.T) {
 	enc := json.NewEncoder(caW)
 	dec := json.NewDecoder(acR)
 	if err := enc.Encode(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": MethodSessionNew, "params": map[string]any{"cwd": t.TempDir()},
+		"jsonrpc": "2.0", "id": 1, "method": MethodSessionNew, "params": map[string]any{"cwd": testsupport.TempDir(t)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1475,7 +1477,7 @@ func permSetup(t *testing.T, factory acpFactoryIface) (*harness, string, func())
 
 	h := newHarness(t, caW, acR)
 	h.call(MethodInitialize, map[string]any{"protocolVersion": 1})
-	newRes := h.call(MethodSessionNew, map[string]any{"cwd": t.TempDir()})
+	newRes := h.call(MethodSessionNew, map[string]any{"cwd": testsupport.TempDir(t)})
 	sid, _ := newRes["sessionId"].(string)
 	if sid == "" {
 		t.Fatal("session/new returned empty sessionId")
@@ -1830,8 +1832,8 @@ func (c *textTurnClient) Stream(_ context.Context, req provider.Request) (<-chan
 // session/list then returns it with the right sessionId (the durable file
 // path) and cwd.
 func TestACPSessionPersistsAndLists(t *testing.T) {
-	root := t.TempDir()
-	cwd := t.TempDir()
+	root := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
 
 	factory := &fakeFactory{
 		client: &textTurnClient{reply: "hello from the assistant"},
@@ -1918,8 +1920,8 @@ func TestACPSessionPersistsAndLists(t *testing.T) {
 // MUST), and the reloaded agent's Messages() reflect the restored transcript
 // (model context rehydrated, not just the UI).
 func TestACPSessionLoadReplaysThenResponds(t *testing.T) {
-	root := t.TempDir()
-	cwd := t.TempDir()
+	root := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
 
 	factory := &fakeFactory{
 		client: &textTurnClient{reply: "the assistant answer"},
@@ -2045,7 +2047,7 @@ func TestACPSessionLoadReplaysThenResponds(t *testing.T) {
 // TestACPSessionLoadUnknownIsNotFound proves a session/load on a non-existent
 // sessionId returns the resource_not_found error rather than crashing.
 func TestACPSessionLoadUnknownIsNotFound(t *testing.T) {
-	factory := &fakeFactory{client: &textTurnClient{}, tools: core.Registry{}, root: t.TempDir()}
+	factory := &fakeFactory{client: &textTurnClient{}, tools: core.Registry{}, root: testsupport.TempDir(t)}
 	caR, caW := io.Pipe()
 	acR, acW := io.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2055,10 +2057,10 @@ func TestACPSessionLoadUnknownIsNotFound(t *testing.T) {
 	h := newHarness(t, caW, acR)
 	h.call(MethodInitialize, map[string]any{"protocolVersion": 1})
 
-	missing := filepath.Join(t.TempDir(), "does-not-exist.jsonl")
+	missing := filepath.Join(testsupport.TempDir(t), "does-not-exist.jsonl")
 	loadID := h.send(MethodSessionLoad, map[string]any{
 		"sessionId":  missing,
-		"cwd":        t.TempDir(),
+		"cwd":        testsupport.TempDir(t),
 		"mcpServers": []any{},
 	})
 	deadline := time.Now().Add(5 * time.Second)

@@ -12,10 +12,12 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"terva.sh/terva/packages/agent/extdriver"
-	"terva.sh/terva/packages/agent/extproto"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/agent/extdriver"
+	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // stubHooks records every callback so the test can assert on them.
@@ -56,6 +58,7 @@ func (s *stubHooks) UpdatePanel(string, string, string, []string, string) {}
 func (s *stubHooks) ClosePanel(string, string)                            {}
 func (s *stubHooks) RefreshStatus()                                       {}
 func (s *stubHooks) RefreshContext()                                      {}
+func (s *stubHooks) RefreshTools()                                        {}
 
 // writeMockExtension creates a minimal extension on disk that uses a
 // shell script (or batch file on windows) to drive the protocol. The
@@ -109,7 +112,7 @@ done
 }
 
 func TestDiscoverLoadsThemeOnlyExtension(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	extDir := filepath.Join(tmp, "extensions", "theme-only")
 	if err := os.MkdirAll(extDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -145,7 +148,7 @@ func TestDiscoverLoadsThemeOnlyExtension(t *testing.T) {
 }
 
 func TestManagerSpawnAndInvoke(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	extRoot := filepath.Join(tmp, "extensions")
 	if err := os.MkdirAll(extRoot, 0o755); err != nil {
 		t.Fatal(err)
@@ -199,7 +202,7 @@ func TestSpontaneousOpenPanel(t *testing.T) {
 		t.Skip("mock extension uses /bin/sh; skip on windows")
 	}
 
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	extDir := filepath.Join(tmp, "extensions", "panel-mock")
 	if err := os.MkdirAll(extDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -281,7 +284,7 @@ func TestHandshakeTimeoutSkipsExtension(t *testing.T) {
 		t.Skip("stub extension uses /bin/sh; skip on windows")
 	}
 
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	extDir := filepath.Join(tmp, "extensions", "silent")
 	if err := os.MkdirAll(extDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -350,7 +353,7 @@ func TestConcurrentLargeFramesNoInterleave(t *testing.T) {
 	// frame corruption — exactly what this test guards against.
 	stub := buildEchoStub(t)
 
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	extDir := filepath.Join(tmp, "extensions", "echo")
 	if err := os.MkdirAll(extDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -425,7 +428,7 @@ func TestSpawnSanitizesChildEnv(t *testing.T) {
 	t.Setenv("TERVA_ENVTEST_CANARY", "alive")
 
 	stub := buildEchoStub(t)
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	extDir := filepath.Join(tmp, "extensions", "echo")
 	if err := os.MkdirAll(extDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -475,7 +478,7 @@ func toolText(r extproto.ToolResultFromExt) string {
 // interpreter/stdin-buffering variance.
 func buildEchoStub(t *testing.T) string {
 	t.Helper()
-	out := filepath.Join(t.TempDir(), "echostub")
+	out := filepath.Join(testsupport.TempDir(t), "echostub")
 	if runtime.GOOS == "windows" {
 		out += ".exe"
 	}

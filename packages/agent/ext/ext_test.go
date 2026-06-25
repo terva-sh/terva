@@ -6,6 +6,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -172,6 +173,188 @@ func TestOpenPanelEmitsCorrectFrame(t *testing.T) {
 // TestSubmitSlashEmitsFrame checks that e.SubmitSlash sends a
 // submit_slash frame carrying the slash text verbatim, and that a
 // non-slash string emits nothing at all.
+// decodeWithdrawn runs a withdrawal action that emits nFrames
+// set_withdrawn_tools snapshots and returns the LAST one (the settled
+// state), so a subtractive sequence can be asserted on its final wire.
+func decodeWithdrawn(t *testing.T, nFrames int, action func(*Extension)) extproto.SetWithdrawnToolsFromExt {
+	t.Helper()
+	h := newHarness("git")
+	go h.ext.Run()
+	h.handshake(t)
+
+	go action(h.ext)
+
+	var sw extproto.SetWithdrawnToolsFromExt
+	for range nFrames {
+		f := h.drainUntil(t, "set_withdrawn_tools")
+		if err := json.Unmarshal(f.raw, &sw); err != nil {
+			t.Fatalf("unmarshal set_withdrawn_tools: %v", err)
+		}
+	}
+	h.hostW.Close()
+	return sw
+}
+
+// TestWithdrawAndRestoreToolsFrames checks each SDK sugar emits the right
+// wholesale snapshot: explicit names sorted, All for the lot, and the empty
+// (All:false, Tools:[]) restore snapshot.
+func TestWithdrawAndRestoreToolsFrames(t *testing.T) {
+	// WithdrawTools: explicit names, sorted for a deterministic wire.
+	sw := decodeWithdrawn(t, 1, func(e *Extension) { e.WithdrawTools("gitstatus", "gitlog") })
+	if sw.All {
+		t.Error("WithdrawTools should not set All")
+	}
+	if !slices.Equal(sw.Tools, []string{"gitlog", "gitstatus"}) {
+		t.Errorf("WithdrawTools wire = %v; want sorted [gitlog gitstatus]", sw.Tools)
+	}
+
+	// WithdrawAllTools: the All flag, names irrelevant.
+	sw = decodeWithdrawn(t, 1, func(e *Extension) { e.WithdrawAllTools() })
+	if !sw.All {
+		t.Error("WithdrawAllTools should set All:true")
+	}
+
+	// RestoreAllTools: the empty snapshot — All:false and no names.
+	sw = decodeWithdrawn(t, 1, func(e *Extension) { e.RestoreAllTools() })
+	if sw.All || len(sw.Tools) != 0 {
+		t.Errorf("RestoreAllTools wire = %+v; want All:false, empty Tools", sw)
+	}
+
+	// RestoreTools is subtractive: assert the SECOND (settled) snapshot.
+	sw = decodeWithdrawn(t, 2, func(e *Extension) {
+		e.WithdrawTools("a", "b", "c")
+		e.RestoreTools("b")
+	})
+	if sw.All || !slices.Equal(sw.Tools, []string{"a", "c"}) {
+		t.Errorf("Withdraw(a,b,c)+Restore(b) wire = %+v; want Tools [a c]", sw)
+	}
+}
+
+// syncBuffer is a tiny io.Writer over a buffer, safe for the Run goroutine
+// to write (via Logf) while the test goroutine reads.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// TestWithdrawSessionBoundaryWarning checks the off-boundary guardrail: a
+// Withdraw call made outside a session boundary warns to the ext log, while
+// the same call from inside an OnSession handler does not.
+func TestWithdrawSessionBoundaryWarning(t *testing.T) {
+	const marker = "outside a session boundary"
+
+	t.Run("off boundary warns", func(t *testing.T) {
+		h := newHarness("git")
+		var log syncBuffer
+		h.ext.stderr = &log
+
+		// Called directly (no session boundary in scope).
+		h.ext.WithdrawAllTools()
+		h.drainUntil(t, "set_withdrawn_tools") // frame still sent
+		if !strings.Contains(log.String(), marker) {
+			t.Errorf("expected off-boundary warning in ext log; got %q", log.String())
+		}
+	})
+
+	t.Run("inside OnSession is silent", func(t *testing.T) {
+		h := newHarness("git")
+		var log syncBuffer
+		h.ext.stderr = &log
+
+		done := make(chan struct{})
+		h.ext.OnSession(func(Session) {
+			h.ext.WithdrawAllTools() // cache-safe: at a session boundary
+			close(done)
+		})
+
+		go h.ext.Run()
+		h.handshake(t)
+		h.sendToExt(t, extproto.EventFromHost{Type: "event", Event: "session_start", SessionID: "s1"})
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("OnSession never fired")
+		}
+		h.drainUntil(t, "set_withdrawn_tools") // frame still sent
+		if strings.Contains(log.String(), marker) {
+			t.Errorf("withdrawal from OnSession should not warn; got %q", log.String())
+		}
+		h.hostW.Close()
+	})
+}
+
+// TestSessionHandleMutators covers the recommended boundary-scoped path: a
+// mutator called on the Session handle from inside OnSession sends its frame
+// and stays silent, while the same handle reused outside its boundary
+// (e.g. stashed and called later) warns — exactly like an off-boundary
+// *Extension call.
+func TestSessionHandleMutators(t *testing.T) {
+	const marker = "outside a session boundary"
+
+	t.Run("Session handle inside OnSession is silent", func(t *testing.T) {
+		h := newHarness("git")
+		var log syncBuffer
+		h.ext.stderr = &log
+
+		done := make(chan struct{})
+		h.ext.OnSession(func(s Session) {
+			s.WithdrawAllTools()  // cache-safe: we're at the boundary
+			s.RefreshContext("x") // ditto
+			close(done)
+		})
+
+		go h.ext.Run()
+		h.handshake(t)
+		h.sendToExt(t, extproto.EventFromHost{Type: "event", Event: "session_start", SessionID: "s1"})
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("OnSession never fired")
+		}
+		h.drainUntil(t, "set_withdrawn_tools") // frames still sent
+		if strings.Contains(log.String(), marker) {
+			t.Errorf("Session-scoped mutators should not warn; got %q", log.String())
+		}
+		h.hostW.Close()
+	})
+
+	t.Run("escaped Session handle warns", func(t *testing.T) {
+		h := newHarness("git")
+		var log syncBuffer
+		h.ext.stderr = &log
+
+		// A handle whose boundary window is not active — the shape of a
+		// Session stashed during OnSession and reused later from a tool or
+		// event handler. inSessionBoundary is false here.
+		s := Session{e: h.ext}
+		s.WithdrawAllTools()
+		h.drainUntil(t, "set_withdrawn_tools") // still sends (advisory)
+		if !strings.Contains(log.String(), marker) {
+			t.Errorf("a Session handle used off its boundary should warn; got %q", log.String())
+		}
+	})
+
+	t.Run("nil-e Session is a no-op", func(t *testing.T) {
+		// A Session a caller built itself (no owning extension) must not panic.
+		(Session{}).WithdrawAllTools()
+		(Session{}).RefreshContext("x")
+	})
+}
+
 func TestSubmitSlashEmitsFrame(t *testing.T) {
 	h := newHarness("test-ext")
 	go h.ext.Run()

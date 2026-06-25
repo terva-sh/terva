@@ -185,6 +185,7 @@ func (h *rpcExtHooks) UpdatePanel(string, string, string, []string, string) {}
 func (h *rpcExtHooks) ClosePanel(string, string)                            {}
 func (h *rpcExtHooks) RefreshStatus()                                       {} // ignored in rpc mode
 func (h *rpcExtHooks) RefreshContext()                                      {} // prompt is fixed for the run
+func (h *rpcExtHooks) RefreshTools()                                        {} // tool set is fixed for the run
 
 type rpcServer struct {
 	ctx      context.Context

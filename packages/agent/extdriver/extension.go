@@ -83,6 +83,11 @@ type Extension struct {
 	helloAck bool
 	commands []extproto.RegisterCommandFromExt
 	tools    []extproto.RegisterToolFromExt
+	// withdrawnTools is the set of this extension's own tool names hidden
+	// from the model for the session (set_withdrawn_tools, protocol 4).
+	// Guarded by the Driver's mu (same as tools), since Driver.Tools reads
+	// the two together. nil/empty = nothing withdrawn (all visible).
+	withdrawnTools map[string]bool
 
 	// stopping is set when the host initiates a clean teardown
 	// (Stop / reload). The read loop checks it on exit to tell a
