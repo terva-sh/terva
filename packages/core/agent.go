@@ -405,6 +405,39 @@ func (a *Agent) SetClientAndModel(client provider.Client, model string) {
 	a.Model = model
 }
 
+// Usage returns the current provider client's subscription usage
+// snapshot (5h/weekly windows, credits), with ok=false when the
+// provider reports none. It probes the live a.Client through any
+// wrapper layers, so a SetClientAndModel swap to a different provider
+// transparently surfaces the new provider's reporter (or none).
+func (a *Agent) Usage() (provider.UsageSnapshot, bool) {
+	a.mu.Lock()
+	c := a.Client
+	a.mu.Unlock()
+	return provider.ClientUsage(c)
+}
+
+// RefreshUsage pulls a fresh usage snapshot, fetching from the provider's
+// usage/balance endpoint when it has one (OpenRouter, DeepSeek) and otherwise
+// returning the passively-observed snapshot (codex). It BLOCKS on the fetch,
+// so callers must run it off the UI goroutine.
+func (a *Agent) RefreshUsage(ctx context.Context) (provider.UsageSnapshot, bool) {
+	a.mu.Lock()
+	c := a.Client
+	a.mu.Unlock()
+	return provider.ClientRefreshUsage(ctx, c)
+}
+
+// UsageRefreshable reports whether the current provider fetches its usage from
+// an endpoint — i.e. /usage should refresh in the background and show a
+// loading state rather than rendering instantly from headers.
+func (a *Agent) UsageRefreshable() bool {
+	a.mu.Lock()
+	c := a.Client
+	a.mu.Unlock()
+	return provider.ClientNeedsUsageFetch(c)
+}
+
 // Cost returns the cumulative usage. The CostTracker carries its own
 // lock so this is safe to call concurrently with a running turn, which
 // folds usage in from the stream goroutine.
@@ -552,6 +585,23 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 	// per Prompt, so a host that always says "continue" can't loop the
 	// model forever.
 	gateFired := false
+
+	// Pin the cached prompt prefix — the system prompt and the tool set —
+	// for the WHOLE user turn, not per step. A host may swap these on
+	// another goroutine mid-turn: an extension's refresh_context /
+	// set_withdrawn_tools, or /reload-ext. Re-reading them between the
+	// model→tool→model steps of one agentic turn would evict the prompt
+	// cache and change the tools the model is mid-way through using — very
+	// disruptive. By snapshotting once here and threading the pair through
+	// every step, a mid-turn swap updates the agent fields but cannot
+	// affect the in-flight turn; the next Prompt re-reads them. (The
+	// cache-free ephemeral tail and the growing transcript still update per
+	// step — only the cached prefix is frozen.)
+	a.mu.Lock()
+	pinnedSystem := a.System
+	pinnedTools := a.Tools
+	a.mu.Unlock()
+
 	for step := 1; a.MaxSteps <= 0 || step <= a.MaxSteps; step++ {
 		// Messages queued while the agent was busy are delivered
 		// before the next model call. This is the safe boundary:
@@ -582,7 +632,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		)
 		imageRounds := 0
 		for attempt := 0; ; attempt++ {
-			stop, assistantMsg, commit, err = a.oneTurn(ctx, sink)
+			stop, assistantMsg, commit, err = a.oneTurn(ctx, pinnedSystem, pinnedTools, sink)
 			sink(EvTurnEnd{Stop: stop, Err: err})
 			if err == nil {
 				break
@@ -634,7 +684,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 
 		if stop == provider.StopToolUse {
 			// Execute each tool call, append a single tool-results message, continue.
-			toolMsg, hadError := a.executeTools(ctx, assistantMsg, sink)
+			toolMsg, hadError := a.executeTools(ctx, assistantMsg, pinnedTools, sink)
 			a.mu.Lock()
 			a.messages = append(a.messages, toolMsg)
 			a.rev++
@@ -899,16 +949,16 @@ func (a *Agent) dropLastAssistantMessage() {
 // its visible events; it is nil when no message was kept. The caller
 // must invoke commit only once the turn is final — never before a
 // retry — so an abandoned partial attempt is not persisted durably.
-func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.StopReason, provider.Message, func(), error) {
-	// Snapshot the mutable request fields once under the lock. Hosts
-	// assign Model/System/Tools/Reasoning/MaxTokens at runtime (model
-	// swap, /reload-ext) on another goroutine; reading them piecemeal
-	// here would race those writes. Take a consistent picture for the
-	// whole turn and a copy of the transcript while we hold the lock.
+func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, sink func(AgentEvent)) (provider.StopReason, provider.Message, func(), error) {
+	// system and tools are PINNED by runLoop for the whole user turn (see
+	// the snapshot there) so a mid-turn host swap can't evict the prompt
+	// cache between steps. The remaining request fields are read per step
+	// under the lock: hosts assign Model/Reasoning/MaxTokens at runtime
+	// (model swap) on another goroutine, and reading them piecemeal here
+	// would race those writes. Take a consistent picture of those plus a
+	// copy of the transcript while we hold the lock.
 	a.mu.Lock()
 	model := a.Model
-	system := a.System
-	tools := a.Tools
 	reasoning := a.Reasoning
 	maxTokens := a.MaxTokens
 	temperature := a.Temperature
@@ -1055,7 +1105,7 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 
 // executeTools runs every tool call in the assistant message and returns
 // a single tool-role message carrying all results.
-func (a *Agent) executeTools(ctx context.Context, msg provider.Message, sink func(AgentEvent)) (provider.Message, bool) {
+func (a *Agent) executeTools(ctx context.Context, msg provider.Message, tools Registry, sink func(AgentEvent)) (provider.Message, bool) {
 	var results []provider.Content
 	hadError := false
 
@@ -1064,7 +1114,7 @@ func (a *Agent) executeTools(ctx context.Context, msg provider.Message, sink fun
 		if !ok {
 			continue
 		}
-		res := a.runOneTool(ctx, tc, sink)
+		res := a.runOneTool(ctx, tc, tools, sink)
 		if res.IsError {
 			hadError = true
 		}
@@ -1083,11 +1133,19 @@ func (a *Agent) executeTools(ctx context.Context, msg provider.Message, sink fun
 	}, hadError
 }
 
-func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, sink func(AgentEvent)) ToolResult {
-	tool, err := a.Tools.Get(tc.Name)
-	if err != nil {
+func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools Registry, sink func(AgentEvent)) ToolResult {
+	// Dispatch against the registry PINNED for this turn (passed down from
+	// runLoop), not a live read of a.Tools: the turn runs on its own
+	// goroutine while the host may swap the registry from another (model
+	// swap, /reload-ext, an extension's set_withdrawn_tools). Using the
+	// pinned set both avoids that data race and keeps dispatch consistent
+	// with the tool specs the model was actually offered this turn. An
+	// absent tool yields the same "unknown tool" result the model already
+	// knows how to handle.
+	tool, ok := tools[tc.Name]
+	if !ok {
 		return ToolResult{
-			Content: []provider.Content{provider.TextBlock{Text: err.Error()}},
+			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("unknown tool %q", tc.Name)}},
 			IsError: true,
 		}
 	}

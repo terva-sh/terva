@@ -43,7 +43,7 @@ func TestBeforeToolExecuteModifiesArgs(t *testing.T) {
 		ID:        "T1",
 		Name:      "echo",
 		Arguments: json.RawMessage(`{"command":"ls"}`),
-	}, func(AgentEvent) {})
+	}, a.Tools, func(AgentEvent) {})
 	if res.IsError {
 		t.Fatalf("unexpected error result: %v", res.Content)
 	}
@@ -70,7 +70,7 @@ func TestBeforeToolExecuteInvalidJSONIgnored(t *testing.T) {
 		ID:        "T1",
 		Name:      "echo",
 		Arguments: orig,
-	}, func(AgentEvent) {})
+	}, a.Tools, func(AgentEvent) {})
 	if string(rec.lastArgs) != string(orig) {
 		t.Errorf("tool saw %s, want original %s", string(rec.lastArgs), string(orig))
 	}
@@ -92,7 +92,7 @@ func TestBeforeToolExecuteBlockSurfacesReason(t *testing.T) {
 		ID:        "T1",
 		Name:      "echo",
 		Arguments: json.RawMessage(`{"command":"ls"}`),
-	}, func(AgentEvent) {})
+	}, a.Tools, func(AgentEvent) {})
 	if !res.IsError {
 		t.Fatal("want error result, got success")
 	}
