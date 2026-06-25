@@ -195,6 +195,23 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		lines = lines[:n-1]
 	}
 
+	// offset and limit count LINES (1-indexed), not bytes. An offset past the
+	// last line would select nothing and return a confusing empty result —
+	// the trap an agent falls into when it mistakes the byte-cap note
+	// ("truncated at 51200 bytes") for a byte offset and pages on it. Say so
+	// plainly instead of handing back silence.
+	if a.Offset > len(lines) && len(lines) > 0 {
+		msg := fmt.Sprintf("%s has %d line(s); offset %d is past the end of the file. Note: offset and limit count LINES (1-indexed), not bytes — page from a line within range (e.g. offset=1).\n", shown, len(lines), a.Offset)
+		return core.ToolResult{
+			Content: []provider.Content{provider.TextBlock{Text: msg}},
+			Details: map[string]any{
+				"path":        path,
+				"total_lines": len(lines),
+				"past_eof":    true,
+			},
+		}, nil
+	}
+
 	start := 0
 	if a.Offset > 0 {
 		start = a.Offset - 1
@@ -244,17 +261,25 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		sb.WriteString(line)
 		sb.WriteByte('\n')
 	}
+	// nextOffset is the 1-indexed line AFTER the last one returned — what to
+	// pass as `offset` to continue. offset/limit count LINES, so a paging hint
+	// MUST be a line number; reporting the byte cap (51200) as if it were an
+	// offset is exactly what sends an agent past EOF to an empty result.
+	nextOffset := 0
+	if truncLines || truncBytes {
+		nextOffset = start + len(selected) + 1
+	}
 	if truncLines || truncBytes || truncFile {
 		sb.WriteString("\n")
 	}
-	if truncLines {
-		sb.WriteString(fmt.Sprintf("... [truncated at %d lines]\n", maxReadLines))
-	}
-	if truncBytes {
-		sb.WriteString(fmt.Sprintf("... [truncated at %d bytes]\n", maxReadBytes))
+	switch {
+	case truncBytes:
+		sb.WriteString(fmt.Sprintf("... [output truncated at %d KiB — continue with offset=%d]\n", maxReadBytes/1024, nextOffset))
+	case truncLines:
+		sb.WriteString(fmt.Sprintf("... [output truncated at %d lines — continue with offset=%d]\n", maxReadLines, nextOffset))
 	}
 	if truncFile {
-		sb.WriteString(fmt.Sprintf("... [file exceeds %d bytes; tail not loaded — page with offset]\n", maxReadFileBytes))
+		sb.WriteString(fmt.Sprintf("... [file exceeds %d MiB; tail beyond that is not loaded]\n", maxReadFileBytes/(1024*1024)))
 	}
 
 	out := sb.String()
@@ -294,6 +319,7 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			"bytes_truncated": truncBytes,
 			"file_truncated":  truncFile,
 			"total_lines":     len(lines),
+			"next_offset":     nextOffset, // 0 when not truncated
 		},
 	}, nil
 }
