@@ -111,8 +111,15 @@ func NewXiaomiTokenPlan(region, apiKey, baseURL string) Client {
 
 // NewOpenRouter: OpenRouter aggregator. Unlocks dozens of upstream
 // models with one key.
+//
+// Usage (/usage): wrapped in a pollingUsageClient that lazily fetches
+// GET /api/v1/key (works with the normal inference key) for the key's
+// credit limit/remaining + lifetime spend. The dialog renders it as
+// `Credits`; no subscription windows.
 func NewOpenRouter(apiKey, baseURL string) Client {
-	return newOpenAICompat("openrouter", apiKey, baseURL, openrouterDefaultBaseURL)
+	base := firstNonEmptyString(baseURL, openrouterDefaultBaseURL)
+	inner := newOpenAICompat("openrouter", apiKey, base, openrouterDefaultBaseURL)
+	return newPollingUsageClient(inner, usagePollTTL, fetchOpenRouterUsage(&http.Client{Timeout: 0}, apiKey, base))
 }
 
 // NewOpenCode is the opencode.ai Zen endpoint. Mixed APIs upstream; this
@@ -124,6 +131,14 @@ func NewOpenCode(apiKey, baseURL string) Client {
 }
 
 // NewOpenCodeGo is the opencode-go variant.
+//
+// Usage windows (/usage): the OpenCode Go plan has no usage/balance
+// endpoint yet, and the Zen gateway does not return subscription-window
+// headers, so this client implements no UsageReporter and /usage shows
+// "doesn't report usage limits" for it. When OpenCode ships the endpoint
+// (anomalyco/opencode#16017 — rolling/weekly/monthly windows), light it
+// up by wrapping this client in a UsageReporter that fetches it; the
+// dialog and status hint then work with no further changes.
 func NewOpenCodeGo(apiKey, baseURL string) Client {
 	return newOpenAICompat("opencode-go", apiKey, baseURL, "https://opencode.ai/zen/go/v1")
 }

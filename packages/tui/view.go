@@ -2048,6 +2048,12 @@ type StatusBarParams struct {
 	// (status_segment frames), shown as ambient tags on the cwd line.
 	ExtStatus []string
 
+	// UsageWindows are the current provider's subscription usage windows
+	// (e.g. codex's 5h + weekly). When the busiest is high enough to be
+	// worth a glance, the bar shows a compact "<label> <pct>%" hint;
+	// otherwise the bar is unchanged. Full detail lives in /usage.
+	UsageWindows []provider.UsageWindow
+
 	Cols int // terminal width; drives right-alignment of cwd
 }
 
@@ -2107,6 +2113,13 @@ func StatusBar(p StatusBarParams) []string {
 			ctx += " (auto)"
 		}
 		stats = append(stats, th.FG256(ctxColor, ctx))
+	}
+
+	// Subscription usage hint: a compact "<label> <pct>%" for the
+	// busiest window, only when it's high enough to matter. Appended
+	// last so it stays at the right edge of the stats; empty otherwise.
+	if hint := usageHint(th, p.UsageWindows); hint != "" {
+		stats = append(stats, hint)
 	}
 
 	// Layout uses exactly 2 spaces of horizontal padding everywhere:
@@ -2283,6 +2296,34 @@ func contextUsage(th Theme, used, max int) (string, int) {
 		return text, th.Warning
 	}
 	return text, th.Muted
+}
+
+// usageHintThreshold is the busiest-window percentage at or above which
+// the status bar surfaces the compact usage hint. Below it the bar is
+// unchanged; the full breakdown is always in /usage.
+const usageHintThreshold = 80
+
+// usageHint returns a color-coded "<label> <pct>%" segment for the
+// busiest subscription window, or "" when none is high enough to be
+// worth a glance. Coloring follows the context gauge: warning to 90,
+// error above.
+func usageHint(th Theme, windows []provider.UsageWindow) string {
+	busiest := -1.0
+	label := ""
+	for _, w := range windows {
+		if w.UsedPercent > busiest {
+			busiest = w.UsedPercent
+			label = w.Label
+		}
+	}
+	if busiest < usageHintThreshold {
+		return ""
+	}
+	color := th.Warning
+	if busiest >= 90 {
+		color = th.Error
+	}
+	return th.FG256(color, fmt.Sprintf("%s %.0f%%", label, busiest))
 }
 
 // formatTokens footer formatter:

@@ -31,7 +31,9 @@ func TestClientCapabilitiesDeclared(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, impl := tc.client.(capabilityProvider)
+			// Probe through wrapper layers the way ClientCaps does — some
+			// providers (deepseek, openrouter) sit behind a pollingUsageClient.
+			_, impl := clientAs[capabilityProvider](tc.client)
 			if impl != tc.wantImpl {
 				t.Fatalf("implements capabilityProvider = %v, want %v", impl, tc.wantImpl)
 			}
@@ -133,7 +135,7 @@ func TestOpenAIToolImageContentIsString(t *testing.T) {
 // message carrying an image must serialize as a plain string — the image
 // dropped from the wire (it stays in the transcript for a vision model).
 func TestDeepSeekDropsUserImage(t *testing.T) {
-	c := NewDeepSeek("k", "").(*openaiClient)
+	c := innerOpenAI(NewDeepSeek("k", "")) // unwrap the usage-polling layer
 	req, err := c.buildRequest(Request{
 		Model: "deepseek-v4-pro",
 		Messages: []Message{

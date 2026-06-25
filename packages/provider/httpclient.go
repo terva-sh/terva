@@ -41,8 +41,28 @@ func WithHTTPClient(c Client, httpClient *http.Client) Client {
 	if httpClient == nil {
 		return c
 	}
-	if v, ok := c.(*openaiClient); ok {
+	// Reach the concrete openai-compatible client through any wrapper layers
+	// (e.g. pollingUsageClient around openrouter/deepseek) and point its
+	// transport at the scoped --insecure client. The wrapper itself keeps a
+	// normal TLS-verifying client for its own usage fetch (the safe default).
+	if v := innerOpenAI(c); v != nil {
 		v.http = httpClient
 	}
 	return c
+}
+
+// innerOpenAI returns the *openaiClient at the core of c, looking through any
+// wrapper layers (pollingUsageClient, …). nil when c is not backed by one.
+func innerOpenAI(c Client) *openaiClient {
+	for cur := c; cur != nil; {
+		if v, ok := cur.(*openaiClient); ok {
+			return v
+		}
+		u, ok := cur.(unwrapper)
+		if !ok {
+			break
+		}
+		cur = u.Unwrap()
+	}
+	return nil
 }

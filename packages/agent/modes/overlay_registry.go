@@ -251,6 +251,15 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			render: func(cols int) []string { return i.contextDialog.Render(i.cfg.Theme, cols) },
 		},
+		{ // /usage: subscription usage windows (read-only)
+			active: i.usageDialog.Active,
+			ctrlC:  func() bool { i.usageDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				i.usageDialog.HandleKey(k)
+				return false
+			},
+			render: func(cols int) []string { return i.usageDialog.Render(i.cfg.Theme, cols) },
+		},
 		{ // rescue picker (after a recoverable provider failure)
 			active: i.rescueDialog.Active,
 			ctrlC:  func() bool { i.rescueDialog.Close(); return true },
@@ -489,6 +498,12 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			active: i.skillsDialog.Active,
 			ctrlC:  func() bool { i.skillsDialog.Close(); return true },
 			handleKey: func(k tui.Key) bool {
+				// `r` in the list view reloads (cache-safe): refresh the skill
+				// tool's catalog + re-seed the picker. Body view passes through.
+				if k.Kind == tui.KeyRune && (k.Rune == 'r' || k.Rune == 'R') && i.skillsDialog.inList() {
+					i.reloadSkillsDialog()
+					return false
+				}
 				i.skillsDialog.HandleKey(k)
 				return false
 			},

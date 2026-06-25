@@ -280,22 +280,36 @@ type capabilityProvider interface {
 	Capabilities() ClientCapabilities
 }
 
-// ClientCaps returns c's capabilities, looking through any wrapper
-// layers (RefreshingClient, renamedClient) via Unwrap(). The unwrap
-// walk lives here, once: adding a capability is a struct field, not a
-// new per-capability helper, and callers can never reintroduce the
-// silent-false wrapper gap because there is no per-cap assertion to
-// get wrong.
-func ClientCaps(c Client) ClientCapabilities {
+// clientAs walks the unwrap chain (RefreshingClient, renamedClient, …)
+// and returns the first client in it that implements T, plus ok. The
+// wrapper walk lives here, once: every capability/reporter probe goes
+// through it, so none can reintroduce the silent-zero wrapper gap (the
+// MirrorsToolImages bug) by hand-rolling a type assertion on the outer
+// client. c must be an interface value (Client), so the c.(T) assertion
+// is legal for any T.
+func clientAs[T any](c Client) (T, bool) {
 	for c != nil {
-		if cp, ok := c.(capabilityProvider); ok {
-			return cp.Capabilities()
+		if v, ok := c.(T); ok {
+			return v, true
 		}
 		u, ok := c.(unwrapper)
 		if !ok {
-			return ClientCapabilities{}
+			break
 		}
 		c = u.Unwrap()
+	}
+	var zero T
+	return zero, false
+}
+
+// ClientCaps returns c's capabilities, looking through any wrapper
+// layers (RefreshingClient, renamedClient) via Unwrap(). Adding a
+// capability is a struct field, not a new per-capability helper, and
+// callers can never reintroduce the silent-false wrapper gap because
+// there is no per-cap assertion to get wrong.
+func ClientCaps(c Client) ClientCapabilities {
+	if cp, ok := clientAs[capabilityProvider](c); ok {
+		return cp.Capabilities()
 	}
 	return ClientCapabilities{}
 }

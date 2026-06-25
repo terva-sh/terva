@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -40,6 +42,13 @@ type codexClient struct {
 	accountID string
 	baseURL   string
 	http      *http.Client
+
+	// Latest usage snapshot parsed from response headers (see
+	// recordUsageHeaders). Guarded by mu because Stream runs
+	// concurrently with UsageSnapshot reads from the TUI.
+	mu        sync.Mutex
+	lastUsage UsageSnapshot
+	hasUsage  bool
 }
 
 // NewOpenAICodex creates a client that talks to ChatGPT's Codex endpoint
@@ -355,9 +364,158 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 		return nil, NewHTTPError("openai-codex", resp.StatusCode, resp.Header.Get("Retry-After"), string(b))
 	}
 
+	// Codex returns the subscription usage windows as response headers
+	// on every successful call — capture them for /usage at no extra
+	// request cost.
+	c.recordUsageHeaders(resp.Header)
+
 	out := make(chan Event, 16)
 	go c.runStream(ctx, resp, req, out)
 	return out, nil
+}
+
+// UsageSnapshot returns the most recent usage picture parsed from a
+// Codex response. It is empty (ok=false) until the first turn populates
+// it, and resets when a token refresh rebuilds the client (the next
+// turn repopulates from fresh headers).
+func (c *codexClient) UsageSnapshot() (UsageSnapshot, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastUsage, c.hasUsage
+}
+
+func (c *codexClient) recordUsageHeaders(h http.Header) {
+	snap, ok := parseCodexUsageHeaders(h)
+	if !ok {
+		return
+	}
+	snap.Provider = "openai-codex"
+	snap.CapturedAt = time.Now()
+	c.mu.Lock()
+	c.lastUsage = snap
+	c.hasUsage = true
+	c.mu.Unlock()
+}
+
+// parseCodexUsageHeaders reads the x-codex-* usage headers Codex returns
+// on every /responses call into a snapshot. It is pure (no clock, no
+// Provider/CapturedAt) so it is fully table-testable; recordUsageHeaders
+// stamps those. ok is false when no window and no credits are present.
+//
+// The header set mirrors the Codex CLI's parser
+// (codex-rs/codex-api/src/rate_limits.rs):
+//
+//	x-codex-{primary,secondary}-{used-percent,window-minutes,reset-at}
+//	x-codex-credits-{has-credits,unlimited,balance}
+//
+// "primary" is the short (~5h) rolling window, "secondary" the ~weekly
+// one; labels are derived from window-minutes so they stay correct if
+// OpenAI changes the durations.
+func parseCodexUsageHeaders(h http.Header) (UsageSnapshot, bool) {
+	var snap UsageSnapshot
+	if w, ok := parseCodexWindow(h, "primary", "5h"); ok {
+		snap.Windows = append(snap.Windows, w)
+	}
+	if w, ok := parseCodexWindow(h, "secondary", "weekly"); ok {
+		snap.Windows = append(snap.Windows, w)
+	}
+	snap.Credits = parseCodexCredits(h)
+	return snap, len(snap.Windows) > 0 || snap.Credits != nil
+}
+
+func parseCodexWindow(h http.Header, key, fallbackLabel string) (UsageWindow, bool) {
+	pct := strings.TrimSpace(h.Get("x-codex-" + key + "-used-percent"))
+	mins := strings.TrimSpace(h.Get("x-codex-" + key + "-window-minutes"))
+	reset := h.Get("x-codex-" + key + "-reset-at")
+	if pct == "" && mins == "" && strings.TrimSpace(reset) == "" {
+		return UsageWindow{}, false
+	}
+	// UsedPercent starts negative: "reported but unparseable" reads as
+	// unknown, not a misleading 0%.
+	w := UsageWindow{UsedPercent: -1}
+	if v, err := strconv.ParseFloat(pct, 64); err == nil {
+		w.UsedPercent = v
+	}
+	if v, err := strconv.Atoi(mins); err == nil {
+		w.WindowMinutes = v
+	}
+	w.ResetsAt = parseCodexResetAt(reset)
+	w.Label = windowLabel(w.WindowMinutes, fallbackLabel)
+	return w, true
+}
+
+func parseCodexCredits(h http.Header) *Credits {
+	has := strings.TrimSpace(h.Get("x-codex-credits-has-credits"))
+	unl := strings.TrimSpace(h.Get("x-codex-credits-unlimited"))
+	bal := strings.TrimSpace(h.Get("x-codex-credits-balance"))
+	if has == "" && unl == "" && bal == "" {
+		return nil
+	}
+	cr := &Credits{
+		HasCredits: parseCodexBool(has),
+		Unlimited:  parseCodexBool(unl),
+	}
+	if v, err := strconv.ParseFloat(bal, 64); err == nil {
+		cr.Balance = v
+	}
+	return cr
+}
+
+func parseCodexBool(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
+// parseCodexResetAt interprets the x-codex-*-reset-at header. The header
+// carries an absolute unix timestamp in seconds (the Codex CLI shows an
+// absolute reset time); an RFC3339 string is accepted as a fallback.
+// Anything else — including a small int that would be a relative offset
+// rather than an epoch — yields the zero time (reset shown as unknown)
+// rather than a wrong absolute time. (Encoding to be reconfirmed against
+// a live response; see docs/plans/usage-windows.md §7.)
+func parseCodexResetAt(s string) time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}
+	}
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		if n < 1_000_000_000 { // < 2001-09; not a usable epoch
+			return time.Time{}
+		}
+		return time.Unix(n, 0).UTC()
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC()
+	}
+	return time.Time{}
+}
+
+// windowLabel humanizes a window length for display, falling back to the
+// provided label when the duration is unknown.
+func windowLabel(minutes int, fallback string) string {
+	switch {
+	case minutes <= 0:
+		return fallback
+	case minutes%10080 == 0:
+		if n := minutes / 10080; n == 1 {
+			return "weekly"
+		} else {
+			return fmt.Sprintf("%dw", n)
+		}
+	case minutes%1440 == 0:
+		if n := minutes / 1440; n == 1 {
+			return "daily"
+		} else {
+			return fmt.Sprintf("%dd", n)
+		}
+	case minutes%60 == 0:
+		return fmt.Sprintf("%dh", minutes/60)
+	default:
+		return fmt.Sprintf("%dm", minutes)
+	}
 }
 
 func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {

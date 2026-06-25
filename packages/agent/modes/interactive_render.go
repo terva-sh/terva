@@ -412,6 +412,12 @@ func (i *Interactive) redraw() {
 		}
 		i.suggest.SetExtra(extra)
 	}
+	// Feed the live skill names so `/skill <name>` completes its argument.
+	// SkillCompletions reads the in-memory catalog (cheap), so this is safe
+	// per-render and reflects a reload immediately.
+	if i.cfg.SkillCompletions != nil {
+		i.suggest.SetSkills(i.cfg.SkillCompletions())
+	}
 	var suggest []string
 	currentInput := i.ed.Value()
 	// Slash popup renders even while the agent is busy so the user
@@ -490,6 +496,7 @@ func (i *Interactive) redraw() {
 		AutoCompacting: ts.autoCompacting,
 		ChatConnected:  i.chatBridgeName(),
 		ExtStatus:      i.extStatusSegments(),
+		UsageWindows:   i.statusUsageWindows(),
 		Cols:           cols,
 	})
 	edLines, curR, curC := i.ed.Render(cols)

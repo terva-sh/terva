@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,6 +42,12 @@ type openaiClient struct {
 	oauth   bool // when true, apiKey actually holds an OAuth access token
 	headers map[string]string
 	http    *http.Client
+
+	// usageMu guards the rate-limit snapshot parsed from response headers in
+	// Stream and read by UsageSnapshot from the TUI goroutine.
+	usageMu   sync.Mutex
+	lastUsage UsageSnapshot
+	hasUsage  bool
 }
 
 // NewOpenAI creates an OpenAI client using an API key. baseURL may be empty.
@@ -67,12 +74,16 @@ func NewDeepSeek(apiKey, baseURL string) Client {
 	if baseURL == "" {
 		baseURL = "https://api.deepseek.com/v1"
 	}
-	return &openaiClient{
+	base := strings.TrimRight(baseURL, "/")
+	inner := &openaiClient{
 		apiKey:  apiKey,
-		baseURL: strings.TrimRight(baseURL, "/"),
+		baseURL: base,
 		name:    "deepseek",
 		http:    &http.Client{Timeout: 0},
 	}
+	// Usage (/usage): lazily fetch GET {host}/user/balance for the account
+	// balance, rendered as `Credits`. No subscription windows.
+	return newPollingUsageClient(inner, usagePollTTL, fetchDeepSeekBalance(&http.Client{Timeout: 0}, apiKey, base))
 }
 
 // NewKimiWithHeaders creates a Kimi/Moonshot client with extra headers.
@@ -487,9 +498,40 @@ func (c *openaiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 		return nil, NewHTTPError(c.Name(), resp.StatusCode, resp.Header.Get("Retry-After"), string(b))
 	}
 
+	// Capture x-ratelimit-* off every successful response (free, passive —
+	// the UsageReporter half of the merged /usage view).
+	c.recordRateLimitHeaders(resp.Header)
+
 	out := make(chan Event, 16)
 	go c.runStream(ctx, resp, req, out)
 	return out, nil
+}
+
+// recordRateLimitHeaders parses x-ratelimit-* from a successful response into
+// the cached usage snapshot, when this provider has a (non-disabled) spec.
+func (c *openaiClient) recordRateLimitHeaders(h http.Header) {
+	spec, ok := rateLimitSpecFor(c.name)
+	if !ok {
+		return
+	}
+	snap, ok := parseRateLimitHeaders(h, spec)
+	if !ok {
+		return
+	}
+	snap.Provider = c.name
+	c.usageMu.Lock()
+	c.lastUsage = snap
+	c.hasUsage = true
+	c.usageMu.Unlock()
+}
+
+// UsageSnapshot returns the rate-limit windows parsed from the most recent
+// response (the UsageReporter contract). ok=false until the first response
+// that carried usable x-ratelimit-* headers.
+func (c *openaiClient) UsageSnapshot() (UsageSnapshot, bool) {
+	c.usageMu.Lock()
+	defer c.usageMu.Unlock()
+	return c.lastUsage, c.hasUsage
 }
 
 func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {

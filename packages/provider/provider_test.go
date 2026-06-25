@@ -219,7 +219,7 @@ func TestAnthropicStreamHappyPath(t *testing.T) {
 }
 
 func TestOpenAICompatAnthropicReasoningEffort(t *testing.T) {
-	c := NewOpenRouter("token", "").(*openaiClient)
+	c := innerOpenAI(NewOpenRouter("token", "")) // unwrap the usage-polling layer
 	wire, err := c.buildRequest(Request{
 		Model:     "anthropic/claude-opus-4.8",
 		Reasoning: "maximum",

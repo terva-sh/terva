@@ -153,6 +153,8 @@ func init() {
 		{name: "/untrust", desc: "remove this directory from the trust list (its project content stops loading)",
 			cancelsTurn: true,
 			run:         (*Interactive).slashUntrust},
+		{name: "/skill", desc: "prime your next request with a specific skill", hint: "name [request]",
+			run: (*Interactive).slashSkill},
 		{name: "/skills", desc: "list discovered skills (SKILL.md files)",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				i.openSkillsDialog()
@@ -172,6 +174,11 @@ func init() {
 		{name: "/context", desc: "context breakdown (token sizes) + what extensions inject",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				i.slashContext()
+				return false
+			}},
+		{name: "/usage", desc: "subscription usage limits and reset windows",
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.openUsageDialog()
 				return false
 			}},
 		{name: "/reload-ext", desc: "hot-reload all extensions (re-read manifests and respawn)", cancelsTurn: true,
