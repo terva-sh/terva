@@ -40,6 +40,26 @@ These providers support subscription login:
 OAuth tokens are stored in `$TERVA_HOME/auth.json` and refreshed when refresh is
 available.
 
+### Usage limits (`/usage`)
+
+`/usage` shows where you stand against a subscription's usage windows — the
+5-hour and weekly budgets, with how much is consumed and when each resets — plus
+any pay-as-you-go credits. The status bar also shows a compact `weekly 88%` hint
+for the busiest window once it crosses 80%, colored yellow (≥80) then red (≥90);
+below that it stays out of the way.
+
+This works wherever the provider puts usage data on the wire terva already talks
+to. Today that is **OpenAI Codex**, which returns its window state as response
+headers on every request — so `/usage` is accurate and costs no extra calls. The
+data refreshes each turn.
+
+Providers that don't expose usage data show `<provider> doesn't report usage
+limits` in `/usage`, and no status-bar hint. This includes OpenCode Go for now:
+it has no usage/balance endpoint yet ([anomalyco/opencode#16017](https://github.com/anomalyco/opencode/issues/16017)).
+The mechanism is a generic `provider.UsageReporter` capability — any provider
+lights up `/usage` automatically once its client implements it, with no harness
+changes. See [docs/plans/usage-windows.md](plans/usage-windows.md).
+
 ## API-key providers
 
 These providers can use environment variables. Simple API-key providers can

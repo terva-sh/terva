@@ -491,6 +491,109 @@ run terva with a stricter context posture. The disabled extension's
 tools, commands, and panels keep working — only model-context injection
 is suppressed.
 
+## Responsible use: context & tools
+
+Two of the things an extension can change — its **static context block**
+(`register_context` / `refresh_context`) and the **set of tools it exposes**
+(`register_tool` / `set_withdrawn_tools`) — live in the model request's
+**cached prompt prefix**. Providers cache that prefix and bill/process only
+the delta on the next turn; changing it invalidates the cache for everything
+after it. In a long session that is potentially hundreds of thousands of
+tokens re-sent and re-billed. So the prefix is a **snapshot you replace at a
+boundary**, not a per-turn signal. (For genuinely per-turn information, use a
+context **card** — the cache-free tail — not the static block.)
+
+**The rule:** decide once per session and assert it from `OnSession`, never
+per turn and never from a tool or event handler. The host helps two ways so a
+slip is not catastrophic:
+
+- **Per-turn pinning.** The host freezes the system prompt and tool set for the
+  whole of a turn. A change that lands mid-turn — even mid agentic loop — can
+  neither evict that turn's cache nor pull a tool the model is mid-way through
+  using; it takes effect on the *next* turn. So a mistimed change is safe, just
+  wasteful.
+- **No-op on unchanged.** Re-asserting the *same* context or withdrawn set
+  costs nothing — the host diffs and does nothing. Re-declaring your decision on
+  every `session_start` (including the re-fire a `/cd` produces) is therefore
+  free; you don't need to remember whether you already said it.
+
+**Use the boundary-scoped `Session` handle.** The value passed to your
+`OnSession` / `OnSessionEnd` handler carries `RefreshContext`, `WithdrawTools`,
+`WithdrawAllTools`, `RestoreTools`, `RestoreAllTools`, and `ProtocolVersion()`.
+Calling them there is cache-safe *by construction* — the call site is a
+boundary — so they never warn. The identically-named `*Extension` methods are
+an advanced escape hatch: they work from anywhere but log an advisory note to
+the ext log when used off a boundary (and a `Session` you stash and reuse later
+trips the same warning, since its boundary has closed).
+
+```go
+e.OnSession(func(s ext.Session) {
+    // Decide ONCE per session, from the boundary. Re-asserting the same
+    // result on the next session_start / a /cd is a free no-op.
+    if usable(s.CWD) {
+        s.RefreshContext(standingNotes)        // swap the context block
+        if s.ProtocolVersion() >= 4 {
+            s.RestoreAllTools()                 // tools are meaningful here
+        }
+    } else {
+        s.RefreshContext("")                    // clear the block
+        if s.ProtocolVersion() >= 4 {
+            s.WithdrawAllTools()                // hide tools that can't work here
+        }
+    }
+})
+```
+
+**Withdraw tools that can't do their job here.** If your tools are useless in
+the current workspace — a git extension outside a repo, a cloud tool with no
+credentials, a DB tool with no connection — withdraw them with
+`WithdrawAllTools` (or `WithdrawTools(names…)` for a subset) so they stop
+spending tokens in the model's tool schema and stop tempting the model into
+calls that can only refuse. Restore them when they become useful again. You can
+only hide your **own** registered tools; names that aren't yours are ignored,
+so you can never hide a built-in or another extension's tool. This needs host
+protocol 4 — feature-detect with `s.ProtocolVersion() >= 4` (or
+`Host().ProtocolVersion`); an older host ignores the frame and your tools simply
+stay visible (the pre-4 behavior), so there's no `RequireProtocol(4)` and old
+hosts keep loading you.
+
+## Being a good extension citizen
+
+Beyond the cached prefix, an extension shares the model's context window, the
+user's trust, and the host's event loop. A few habits keep it a good neighbor:
+
+- **Declare your effect honestly.** Set `read_only` / `authority` truthfully on
+  `register_tool` — the host uses them to decide what auto-allows vs. prompts vs.
+  is refused in `plan` mode. A side-effecting or network tool mislabeled
+  `read_only` bypasses your own user's policy; **lying here only cheats your
+  user**. Mark network tools `network-read`, not `read_only`. See the
+  [authority classification](standard-tools.md#authority-classification) for the
+  taxonomy and `ext.ReadOnly()` / `ext.WithAuthority(...)` in the Go SDK.
+- **Keep your model-facing footprint small.** Every registered tool's schema and
+  description, and every context block, occupies the cached prefix and adds noise
+  to the model's choices. Register only the tools the model actually needs, write
+  tight schemas and one-line descriptions, and keep context blocks to a few KB
+  (the host trims larger). Trace a bloated window with `/context` — the
+  **Extensions** tab shows what you inject, the **Overview** tab attributes size
+  across system prompt, tools, and transcript.
+- **Feature-detect, and degrade gracefully.** Gate a protocol-N feature on
+  `Host().ProtocolVersion`. Declare `RequireProtocol(n)` *only* when your
+  extension genuinely can't function without it — it makes an older host refuse
+  to load you. Additive frames degrade silently on old hosts; design so the
+  extension still does something useful there.
+- **Log to stderr, never stdout.** stdout is the JSON wire — a stray `print` /
+  `fmt.Println` corrupts the protocol and can desync the host. Use the SDK's
+  `Logf` (captured to `$TERVA_HOME/logs/ext-<name>.log`) or write to stderr
+  directly.
+- **Don't wedge the event loop.** Event delivery is best-effort and buffered: a
+  handler that blocks backs the queue up until the host **drops your events**
+  (with a log) rather than freezing terva. Keep tool/command/event handlers
+  responsive; push slow or long-running work onto your own goroutine.
+- **Remember you run with the user's full permissions.** Extensions have the
+  user's filesystem and network access (see [Security](#security)); the host's
+  permission gate is a backstop, not a license. Be conservative with side
+  effects and surface what you're doing.
+
 ## Wire format
 
 All frames are one JSON object per line. Top-level `type` is the
@@ -550,6 +653,32 @@ the `plan` approval mode and auto-allowed in `auto-edit` (see
 [permissions.md](permissions.md)); unannotated tools are treated as
 mutating. Lying here only cheats your own user's policy. Old hosts
 ignore the field; old extensions never send it — fully additive.
+
+#### `set_withdrawn_tools` (protocol 4)
+
+Hides (and later restores) tools **this extension registered** from the
+model for the session — the tool analog of `refresh_context`. It is a
+wholesale snapshot of the names to hide, so the same frame doubles as the
+restore path and re-sending an unchanged set is a free host-side no-op.
+
+```json
+{"type":"set_withdrawn_tools","all":true}              // hide all my tools
+{"type":"set_withdrawn_tools","tools":["gitlog"]}      // hide just these
+{"type":"set_withdrawn_tools","tools":[],"all":false}  // restore everything
+```
+
+`all:true` hides every tool the extension registered (`tools` ignored);
+otherwise the listed tools are hidden and any name that isn't one of this
+extension's own is ignored — you can't hide a built-in or another
+extension's tool. A withdrawn tool leaves both the callable registry and the
+system-prompt tool list but stays registered, so restoring needs no
+re-registration (and the `/extensions` dialog still shows it in the count).
+Send this only at a session boundary (see
+[Responsible use](#responsible-use-context--tools)): the host pins the tool
+set per turn, so a mid-turn change applies on the next turn. Additive — a
+protocol-3 host ignores the frame and the tools stay visible — so
+feature-detect with `Host().ProtocolVersion >= 4` rather than declaring
+`RequireProtocol(4)`.
 
 #### `host_tool_call` (protocol 3)
 
@@ -1116,12 +1245,35 @@ e.InterceptAssistantMessage(func(text string) ext.AssistantMessageDecision {
 })
 ```
 
+`OnSession` is the safe place to change the cached prefix — the `Session`
+handle carries the cache-affecting mutators (see
+[Responsible use](#responsible-use-context--tools)):
+
+```go
+e.OnSession(func(s ext.Session) {
+    if gitRepo(s.CWD) {
+        s.RefreshContext(standingNotes)
+        if s.ProtocolVersion() >= 4 { s.RestoreAllTools() }
+    } else {
+        s.RefreshContext("")                                 // clear the block
+        if s.ProtocolVersion() >= 4 { s.WithdrawAllTools() } // hide useless tools
+    }
+})
+```
+
 See:
 - `examples/extensions/hello/` — slash commands
 - `examples/extensions/clock/` — slash commands in plain Node, no SDK
 - `examples/extensions/weather/` — LLM-callable tool
 - `examples/extensions/guard/` — event subscriptions + tool-call
   interception (refuses dangerous bash patterns)
+- `examples/extensions/repo-aware/` — per-session context + tool
+  withdrawal via the `Session` handle (the responsible cache-safe pattern)
+- `examples/extensions/repo-aware-ts/` — the same pattern on the raw wire
+  (TypeScript, no SDK): `subscribe` to `session_start`, then
+  `refresh_context` + `set_withdrawn_tools`
+- `examples/extensions/repo-aware-py/` — the raw-wire pattern in Python
+  (stdlib only), the twin of the TS one
 - `examples/extensions/todo/` — interactive persistent panel + tool
 - `examples/extensions/scratchpad/` — source-run TypeScript commands + tool
 

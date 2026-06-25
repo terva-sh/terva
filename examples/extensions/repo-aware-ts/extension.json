@@ -1,0 +1,9 @@
+{
+  "name": "repo-aware-ts",
+  "version": "1.0.0",
+  "exec": "npx",
+  "args": ["-y", "tsx", "./index.ts"],
+  "language": "typescript",
+  "description": "TypeScript twin of repo-aware: adapts its context block and tool visibility to whether the workspace is a git repo, the cache-safe way (raw protocol, no SDK)",
+  "enabled": true
+}

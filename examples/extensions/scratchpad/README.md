@@ -58,6 +58,8 @@ without any infrastructure beyond `tsx`. If you want richer ergonomics
 
 ## See also
 
+- `examples/extensions/repo-aware-ts` — TypeScript sibling showing the
+  per-session context + tool-withdrawal pattern on the raw wire
 - `examples/extensions/clock` — JavaScript sibling (no build step)
 - `examples/extensions/hello` — Go SDK slash commands
 - `examples/extensions/weather` — Go SDK tool example

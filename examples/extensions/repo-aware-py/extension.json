@@ -1,0 +1,8 @@
+{
+  "name": "repo-aware-py",
+  "version": "1.0.0",
+  "exec": "./main.py",
+  "language": "python",
+  "description": "Python twin of repo-aware: adapts its context block and tool visibility to whether the workspace is a git repo, the cache-safe way (raw protocol, no SDK)",
+  "enabled": true
+}

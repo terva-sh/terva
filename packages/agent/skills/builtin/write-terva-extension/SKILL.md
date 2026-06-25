@@ -1,6 +1,6 @@
 ---
 name: write-terva-extension
-description: Help the user create a new terva extension (slash command, LLM tool, or guard) in any language.
+description: Help the user create a new terva extension — an executable plugin (any language) that adds a slash command, an LLM tool, or a guard hook. Not for authoring a SKILL.md skill (use write-terva-skill for that).
 ---
 
 # Writing a terva extension
@@ -36,6 +36,13 @@ Three things an extension can do (any combination):
    assistant_message) for telemetry / audit / custom UI, or
    intercept tool calls before execution to refuse dangerous
    patterns.
+
+4. **Model context & tool visibility** — fold standing guidance into the
+   system prompt (`register_context` / `refresh_context`) and hide tools
+   that can't do anything useful in the current workspace
+   (`set_withdrawn_tools`). These touch the model's *cached* prefix, so
+   they carry a discipline — see "Being responsible with context & tools"
+   below before reaching for them.
 
 ## On-disk layout
 
@@ -102,8 +109,8 @@ Capabilities are advisory; current values are `commands`, `tools`,
 terva replies with `hello_ack`:
 
 ```json
-{"type":"hello_ack","protocol_version":1,"terva_version":"0.0.x",
- "provider":"anthropic","model":"claude-opus-4-7","cwd":"/path/to/project"}
+{"type":"hello_ack","protocol_version":4,"terva_version":"0.0.x",
+ "provider":"anthropic","model":"claude-opus-4-8","cwd":"/path/to/project"}
 ```
 
 ### Registration (immediately after hello)
@@ -210,6 +217,63 @@ them, and degrade — never break — when it doesn't.
 extension merely degraded, or incorrect?* Degraded → adopt
 optimistically, no floor. Incorrect/unsafe → require it.
 
+## Being responsible with context & tools
+
+Two capabilities touch the model's **cached prompt prefix**: the static
+context block (`register_context`, plus `refresh_context` to swap it
+mid-life) and the visible tool set (`register_tool`, plus
+`set_withdrawn_tools` to hide/restore your own tools). Providers cache that
+prefix, so changing it re-bills and re-processes everything after it — in a
+long session, a great deal. Treat the prefix as a **snapshot you replace at a
+session boundary**, never per turn and never from a tool/event handler. (For
+genuinely per-turn information, that's a context *card*, not the static
+block.)
+
+The host softens a mistimed change — it pins the prefix for the duration of a
+turn (a mid-turn change can't disrupt the in-flight turn or evict its cache;
+it lands on the next turn) and no-ops an unchanged set (re-asserting the same
+decision on every `session_start`, including a `/cd` re-fire, is free) — but
+the discipline is yours: **decide once per session and assert it from
+`session_start` / `OnSession`.**
+
+The two frames (both additive; feature-detect, don't demand):
+
+- `refresh_context` (protocol 3) — replace your system-prompt block; an empty
+  string clears it. `{"type":"refresh_context","text":"…"}`
+- `set_withdrawn_tools` (protocol 4) — hide/restore your **own** registered
+  tools. Wholesale snapshot: `{"type":"set_withdrawn_tools","all":true}` hides
+  them all, `{"type":"set_withdrawn_tools","tools":[]}` restores. Names that
+  aren't yours are ignored (you can't touch a built-in or another extension's
+  tool). A withdrawn tool stays registered, so restoring needs no
+  re-registration. An older host ignores the frame and the tools stay visible,
+  so gate on `protocol_version >= 4` rather than declaring `min_protocol`.
+
+Withdraw tools that can't do their job in the current workspace — a git
+extension outside a repo, a cloud tool with no credentials — so they stop
+spending tokens in the model's schema and stop tempting calls that only
+refuse; restore them when they become useful again.
+
+In the Go SDK these live on the `Session` handed to `OnSession`, which is the
+cache-safe call site (the same methods exist on `*Extension` for off-boundary
+use but warn to the ext log):
+
+```go
+e.OnSession(func(s ext.Session) {
+    if usableHere(s.CWD) {
+        s.RefreshContext(standingNotes)
+        if s.ProtocolVersion() >= 4 { s.RestoreAllTools() }
+    } else {
+        s.RefreshContext("")                                  // clear context
+        if s.ProtocolVersion() >= 4 { s.WithdrawAllTools() }  // hide useless tools
+    }
+})
+```
+
+Raw-protocol extensions (TS/Python) send the two frames directly from their
+`session_start` handler, gating `set_withdrawn_tools` on the `protocol_version`
+they saw in `hello_ack`. Fuller guidance and rationale:
+`docs/extensions.md` → "Responsible use: context & tools".
+
 ## Important rules
 
 - **stdout is reserved for the protocol.** Anything you print to
@@ -223,6 +287,10 @@ optimistically, no floor. Incorrect/unsafe → require it.
   buffering on slow handlers.
 - Extension processes inherit the user's permissions. A bad
   extension can do anything the user can.
+- **Change the model's cached prefix only at a session boundary.** The
+  context block and tool set are cached; swap them from `session_start` /
+  `OnSession`, never mid-turn or from a tool handler (see "Being responsible
+  with context & tools").
 
 ## Recommended layout per language
 
@@ -367,7 +435,7 @@ to see exactly what's happening on the wire:
 
 ```bash
 {
-  printf '%s\n' '{"type":"hello_ack","protocol_version":1,"terva_version":"x","provider":"a","model":"o","cwd":"/tmp"}'
+  printf '%s\n' '{"type":"hello_ack","protocol_version":4,"terva_version":"x","provider":"a","model":"o","cwd":"/tmp"}'
   sleep 0.2
   printf '%s\n' '{"type":"command_invoked","id":"1","name":"weather","args":"Berlin"}'
   sleep 0.5
@@ -386,6 +454,10 @@ logged to `ext-<name>.log`.
    - "I want a slash command that triggers a prompt" → `command` only
    - "I want the model to be able to do X" → `tool`
    - "I want to gate / log every bash command" → `event` + `intercept`
+   - "I want to add standing context, or show/hide my tools per
+     workspace" → `register_context`/`refresh_context` +
+     `set_withdrawn_tools`, driven from `OnSession` (read "Being
+     responsible with context & tools" first)
 3. Pick a language. Default to **Go via packages/agent/ext** for new
    extensions if the user has Go installed; **TypeScript via tsx**
    if they prefer JS-flavored ergonomics; **Python** for one-off
