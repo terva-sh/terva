@@ -403,7 +403,9 @@ type Extension struct {
 	commands           map[string]CommandHandler
 	descriptions       []descTuple // ordered so register frames arrive in registration order
 	tools              map[string]ToolHandler
-	toolDefs           []toolDef // ordered so register frames arrive in registration order
+	toolDefs           []toolDef       // ordered so register frames arrive in registration order
+	orderedTools       map[string]bool // tools marked Sequential() — run through the serial lane
+	serial             *serialLane     // single FIFO lane for Sequential tools; nil until Run if none
 	eventHandlers      map[string]EventHandler
 	eventNames         []string // declared subscription order
 	onSession          func(Session)
@@ -473,11 +475,85 @@ type toolDef struct {
 	schema      json.RawMessage
 	readOnly    bool
 	authority   string
+	ordered     bool
 }
 
 // ToolOption configures a tool at registration time. Pass options as the
 // trailing args to Tool.
 type ToolOption func(*toolDef)
+
+// Sequential marks a tool whose calls must execute in the order they
+// arrived, one at a time — even when the model emits several tool calls in a
+// single turn and the host would otherwise dispatch them concurrently.
+//
+// Every tool marked Sequential shares ONE first-in-first-out lane, so order
+// is preserved ACROSS tools too: if the model asks to "raise shields" and
+// then "fire", the raise runs to completion before the fire starts. Tools
+// that are not marked Sequential keep running concurrently and never wait on
+// the lane.
+//
+// This does NOT reorder anything — the model is still responsible for issuing
+// calls in a sensible order. It only guarantees the SDK preserves that order
+// for the tools where order matters (stateful effectors with preconditions),
+// instead of racing them across goroutines. Use it for the handful of tools
+// that mutate shared state with ordering constraints; leave read-only or
+// independent tools concurrent.
+func Sequential() ToolOption { return func(t *toolDef) { t.ordered = true } }
+
+// serialLane runs submitted jobs one at a time, in submission order, on a
+// single goroutine. It is the execution lane for Sequential tools: the read
+// loop submits jobs in arrival order and never blocks (the queue is unbounded
+// in memory), and the worker drains them FIFO. Closing it lets the worker
+// finish any queued jobs, then exit.
+type serialLane struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	queue  []func()
+	closed bool
+}
+
+func newSerialLane() *serialLane {
+	l := &serialLane{}
+	l.cond = sync.NewCond(&l.mu)
+	go l.run()
+	return l
+}
+
+func (l *serialLane) submit(job func()) {
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		go job() // lane is shutting down; run it rather than drop the result
+		return
+	}
+	l.queue = append(l.queue, job)
+	l.cond.Signal()
+	l.mu.Unlock()
+}
+
+func (l *serialLane) run() {
+	for {
+		l.mu.Lock()
+		for len(l.queue) == 0 && !l.closed {
+			l.cond.Wait()
+		}
+		if len(l.queue) == 0 && l.closed {
+			l.mu.Unlock()
+			return
+		}
+		job := l.queue[0]
+		l.queue = l.queue[1:]
+		l.mu.Unlock()
+		job()
+	}
+}
+
+func (l *serialLane) close() {
+	l.mu.Lock()
+	l.closed = true
+	l.cond.Broadcast()
+	l.mu.Unlock()
+}
 
 // ReadOnly marks a tool as having no side effects (the MCP readOnlyHint
 // analog). A host that understands the hint may admit the tool in
@@ -606,6 +682,7 @@ func New(name, version string) *Extension {
 		stderr:        os.Stderr,
 		commands:      map[string]CommandHandler{},
 		tools:         map[string]ToolHandler{},
+		orderedTools:  map[string]bool{},
 		eventHandlers: map[string]EventHandler{},
 		panelKeys:     map[string]func(key, text string){},
 		panelCloses:   map[string]func(){},
@@ -833,6 +910,9 @@ func (e *Extension) Tool(name, description string, schema json.RawMessage, fn To
 	e.mu.Lock()
 	e.tools[name] = fn
 	e.toolDefs = append(e.toolDefs, td)
+	if td.ordered {
+		e.orderedTools[name] = true
+	}
 	e.mu.Unlock()
 }
 
@@ -1490,7 +1570,15 @@ func (e *Extension) Run() error {
 	interceptAsst := e.interceptAssistant != nil
 	interceptUser := e.interceptUser != nil
 	contextContribution := e.contextContribution
+	// Spin up the serial lane only if some tool opted into Sequential().
+	if len(e.orderedTools) > 0 && e.serial == nil {
+		e.serial = newSerialLane()
+	}
+	serial := e.serial
 	e.mu.Unlock()
+	if serial != nil {
+		defer serial.close()
+	}
 	for _, d := range descs {
 		_ = e.send(extproto.RegisterCommandFromExt{
 			Type:        "register_command",
@@ -1619,20 +1707,31 @@ func (e *Extension) Run() error {
 			}
 			e.mu.Lock()
 			fn := e.tools[tc.Name]
+			ordered := e.orderedTools[tc.Name]
+			lane := e.serial
 			e.mu.Unlock()
 			if fn == nil {
 				e.respondTool(tc.ID, TextErrorResult(fmt.Sprintf("no handler for tool %q", tc.Name)))
 				continue
 			}
-			go func(id string, fn ToolHandler, args json.RawMessage) {
-				defer func() {
-					if r := recover(); r != nil {
-						e.respondTool(id, TextErrorResult(fmt.Sprintf("panic: %v", r)))
-					}
-				}()
-				res := fn(args)
-				e.respondTool(id, res)
+			run := func(id string, fn ToolHandler, args json.RawMessage) func() {
+				return func() {
+					defer func() {
+						if r := recover(); r != nil {
+							e.respondTool(id, TextErrorResult(fmt.Sprintf("panic: %v", r)))
+						}
+					}()
+					res := fn(args)
+					e.respondTool(id, res)
+				}
 			}(tc.ID, fn, tc.Args)
+			// Sequential tools go through the single FIFO lane (preserving
+			// arrival order across them); everything else runs concurrently.
+			if ordered && lane != nil {
+				lane.submit(run)
+			} else {
+				go run()
+			}
 		case "event":
 			var ef extproto.EventFromHost
 			if err := json.Unmarshal(line, &ef); err != nil {
