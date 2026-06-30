@@ -413,6 +413,17 @@ contribute data alongside its executable:
   [skills.md](skills.md)). Bundle skills rank after the user's own
   skill directories, so they can never shadow a deliberately-authored
   skill, and a disabled extension contributes nothing.
+- **Personas**: a `personas/` directory beside `extension.json` joins
+  persona discovery (`personas/<name>.md`, same format as
+  [personas.md](personas.md)). Each persona is namespaced by the
+  extension name (`<ext>:<name>`) and ranks after the user's own
+  personas, so it can't shadow a hand-authored one — and the user can
+  override it by mirroring the namespace
+  (`$TERVA_HOME/personas/<ext>/<name>.md`). A disabled extension —
+  whether by manifest `enabled` or the user's `disable_extensions` —
+  contributes no personas. A persona shipped with `good_for` tags
+  becomes dispatchable to swarm sub-agents, so an extension can pair a
+  capability (its tools) with the identity for using it.
 - **Suggested permission rules**: a `permissions` array in the
   manifest (same shape as [permissions.md](permissions.md) rules).
   Like project rules, the extension layer may only *restrict*: `deny`

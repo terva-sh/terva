@@ -98,8 +98,9 @@ func (t Theme) FillFlavor(s string) string {
 }
 
 // Greeting returns a random rendered tagline for the startup headline (the
-// text shown after "i'm terva."). Falls back to a plain line when no
-// templates are configured.
+// text shown after the "i'm …" prefix — "i'm terva." on the help/usage
+// screen, "i'm <persona>." in the interactive welcome banner). Falls back to a
+// plain line when no templates are configured.
 func (t Theme) Greeting() string {
 	if len(t.Greetings) == 0 {
 		return "an agent harness; ask anything."

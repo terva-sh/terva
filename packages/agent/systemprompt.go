@@ -33,6 +33,11 @@ type SystemPromptOpts struct {
 	// PersonaName overrides the agent's name in the default identity line.
 	// Empty uses DefaultPersonaName ("Mieli"). Ignored when Custom is set.
 	PersonaName string
+	// Charter is a persona's behavioral charter, inserted additively between
+	// the identity intro and the harness conventions (which stay last so they
+	// remain the final framing and a charter can't erode them). Empty adds
+	// nothing. Ignored when Custom is set.
+	Charter string
 }
 
 // BuildSystemPrompt constructs the system prompt.
@@ -69,7 +74,7 @@ func BuildSystemPrompt(o SystemPromptOpts) string {
 	if o.Custom != "" {
 		sb.WriteString(o.Custom)
 	} else {
-		sb.WriteString(personaIdentity(o.PersonaName))
+		sb.WriteString(personaIdentity(o.PersonaName, o.Charter))
 	}
 
 	if strings.TrimSpace(o.TervaDocsDir) != "" {
@@ -100,11 +105,17 @@ func BuildSystemPrompt(o SystemPromptOpts) string {
 // pronunciations for both names; a custom persona (TERVA_PERSONA_NAME /
 // persona_name) keeps terva's meaning and the vessel image but swaps in its
 // own name and drops a pronunciation we can't guess.
-func personaIdentity(name string) string {
-	if strings.TrimSpace(name) == "" || name == DefaultPersonaName {
-		return defaultIdentityIntro + "\n\n" + identityConventions
+func personaIdentity(name, charter string) string {
+	intro := defaultIdentityIntro
+	if n := strings.TrimSpace(name); n != "" && n != DefaultPersonaName {
+		intro = fmt.Sprintf(customIdentityIntro, n, n)
 	}
-	return fmt.Sprintf(customIdentityIntro, name, name) + "\n\n" + identityConventions
+	// The charter is additive and sits between the intro and the conventions,
+	// so terva's harness conventions stay the final framing.
+	if c := strings.TrimSpace(charter); c != "" {
+		return intro + "\n\n" + c + "\n\n" + identityConventions
+	}
+	return intro + "\n\n" + identityConventions
 }
 
 const defaultIdentityIntro = `You are Mieli (pronounced MYEH-lee), an expert coding assistant operating inside terva (pronounced TEHR-vah), a coding agent harness. Mieli is Finnish for "mind"; terva is Finnish for pine tar — the traditional preservative and cure-all that sealed boats and kept them seaworthy. The image is a mind in a preserved vessel: terva is the craft that carries Mieli and keeps it whole. Introduce yourself as Mieli (MYEH-lee) when asked who you are; if asked about the names, give both pronunciations — Mieli is MYEH-lee, terva is TEHR-vah — and what they mean.`

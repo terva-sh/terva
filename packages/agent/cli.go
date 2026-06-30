@@ -548,6 +548,9 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runExtCommand(rawArgs); handled {
 		return err
 	}
+	if handled, err := runPersonaCommand(rawArgs); handled {
+		return err
+	}
 	if handled, err := runUpdateCommand(rawArgs, version); handled {
 		return err
 	}
@@ -1259,12 +1262,13 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			return reg
 		}
 		reg["swarm_spawn"] = &tools.SwarmSpawnTool{
-			Swarm:        swarmMgr,
-			Enabled:      AutoSwarmEnabled,
-			OnSpawned:    onSpawnedSwarm,
-			HostProvider: swarmHostProvider,
-			HostModel:    swarmHostModel,
-			Tiers:        hostTiers,
+			Swarm:           swarmMgr,
+			Enabled:         AutoSwarmEnabled,
+			OnSpawned:       onSpawnedSwarm,
+			HostProvider:    swarmHostProvider,
+			HostModel:       swarmHostModel,
+			Tiers:           hostTiers,
+			PersonaResolver: resolveDispatchPersona,
 		}
 		return reg
 	}
@@ -1955,11 +1959,12 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		RecursiveFileSuggest:    initialCfg.RecursiveFileSuggest,
 		RespectGitignore:        initialCfg.RespectGitignore,
 		ThemeName:               initialCfg.Theme,
-		PersonaName:             PersonaName(),
-		PersonaPhonetic:         personaPhonetic(),
+		PersonaName:             r.persona.Name,
+		PersonaPhonetic:         r.persona.Phonetic(),
 		ExtensionThemes:         func() []tui.ThemeOption { return extensionThemeOptions(extMgr) },
-		AutoSwarmSystemAddendum: AutoSwarmSystemAddendum,
+		AutoSwarmSystemAddendum: autoSwarmAddendum(),
 		SwarmTiers:              hostTiers,
+		DispatchPersonaResolver: resolveDispatchPersona,
 		SettingsStore:           configSettingsStore{},
 		RebuildExtensionContext: func() (string, bool) {
 			if extMgr == nil {

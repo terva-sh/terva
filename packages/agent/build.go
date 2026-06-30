@@ -78,8 +78,11 @@ type Resolved struct {
 	// Bookkeeping for MergeExtensionTools. Captured at Resolve time
 	// so the system prompt can be rebuilt later without re-running
 	// resolve.
-	systemAppend     []string
-	systemCustom     string
+	systemAppend []string
+	systemCustom string
+	// persona is the resolved active persona, captured so rebuildSystemPrompt
+	// re-renders with the same identity + charter rather than re-resolving.
+	persona          Persona
 	toolDescriptions map[string]string
 	// extensionContext is the extensions' aggregated static context
 	// contribution (register_context), folded into the cached system
@@ -168,7 +171,8 @@ func (r *Resolved) rebuildSystemPrompt() {
 		Append:       appendBlocks,
 		TervaDocsDir: filepath.Join(TervaHome(), "docs"),
 		StatusTool:   r.ToolRegistry["terva_status"] != nil,
-		PersonaName:  PersonaName(),
+		PersonaName:  r.persona.Name,
+		Charter:      r.persona.Charter,
 	})
 }
 
@@ -682,7 +686,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		append_ = append(append_, note)
 	}
 	if AutoSwarmEnabled() {
-		append_ = append(append_, AutoSwarmSystemAddendum)
+		logPersonaRosterTripwire()
+		append_ = append(append_, autoSwarmAddendum())
 	}
 
 	// Custom system prompt resolution order:
@@ -694,6 +699,15 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		custom = readUserSystemPrompt(TervaHome())
 	}
 
+	// Resolve the active persona (--persona flag → $TERVA_HOME/persona.md →
+	// default_persona config → embedded Mieli). Its name + charter shape the
+	// default identity; a --system-prompt/SYSTEM.md Custom prompt still wins
+	// (BuildSystemPrompt ignores PersonaName/Charter when Custom is set).
+	persona, err := ResolvePersona(args.Persona)
+	if err != nil {
+		return Resolved{}, err
+	}
+
 	sys := BuildSystemPrompt(SystemPromptOpts{
 		CWD:          args.CWD,
 		Tools:        summaries,
@@ -701,6 +715,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		Append:       append_,
 		TervaDocsDir: docsDir,
 		StatusTool:   reg["terva_status"] != nil,
+		PersonaName:  persona.Name,
+		Charter:      persona.Charter,
 	})
 
 	reasoning := provider.NormalizeReasoning(firstNonEmpty(args.Reasoning, cfg.Reasoning))
@@ -744,6 +760,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		Trusted:                  trusted,
 		systemAppend:             append_,
 		systemCustom:             custom,
+		persona:                  persona,
 		toolDescriptions:         descMapFromSummaries(summaries),
 		approvalMode:             approval,
 	}, nil

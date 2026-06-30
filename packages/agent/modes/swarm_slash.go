@@ -97,21 +97,24 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		// --model foo do a thing` and `/swarm new do --model thing`
 		// (where --model is part of the task) unambiguous — only
 		// leading flags are consumed.
-		model, provider, task := parseSpawnFlags(rest)
+		model, provider, persona, task := parseSpawnFlags(rest)
 		if task == "" {
-			i.swarmStatus("", "/swarm new: missing task (after any --model/--provider flags)")
+			i.swarmStatus("", "/swarm new: missing task (after any --model/--provider/--persona flags)")
 			return
 		}
 		a, err := i.cfg.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
-			Task: task, Model: model, Provider: provider,
+			Task: task, Model: model, Provider: provider, Persona: persona,
 		})
 		if err != nil {
 			i.swarmStatus("", "spawn: "+err.Error())
 			return
 		}
-		if model != "" {
+		switch {
+		case persona != "":
+			i.swarmStatus("spawned "+a.ID+" (persona "+persona+")", "")
+		case model != "":
 			i.swarmStatus("spawned "+a.ID+" (model "+model+")", "")
-		} else {
+		default:
 			i.swarmStatus("spawned "+a.ID, "")
 		}
 	case "kill", "stop":
@@ -217,11 +220,11 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 	}
 }
 
-// parseSpawnFlags consumes any leading `--model X` / `--provider Y`
-// flags from s and returns them along with the remaining task body.
-// We deliberately only honour LEADING flags so a task like "check
-// --model lookup" doesn't accidentally swallow part of its prose as
-// the model name.
+// parseSpawnFlags consumes any leading `--model X` / `--provider Y` /
+// `--persona Z` flags from s and returns them along with the remaining
+// task body. We deliberately only honour LEADING flags so a task like
+// "check --model lookup" doesn't accidentally swallow part of its prose
+// as the model name.
 //
 // Recognised forms:
 //
@@ -229,7 +232,9 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 //	--model=X            single-token form
 //	--provider X         two-token form
 //	--provider=X         single-token form
-func parseSpawnFlags(s string) (model, provider, task string) {
+//	--persona X          two-token form (built-in/installed name, or .md path)
+//	--persona=X          single-token form
+func parseSpawnFlags(s string) (model, provider, persona, task string) {
 	fields := strings.Fields(s)
 	i := 0
 	for i < len(fields) {
@@ -260,6 +265,18 @@ func parseSpawnFlags(s string) (model, provider, task string) {
 			continue
 		case strings.HasPrefix(f, "--provider="):
 			provider = strings.TrimPrefix(f, "--provider=")
+			i++
+			continue
+		case f == "--persona":
+			if i+1 < len(fields) {
+				persona = fields[i+1]
+				i += 2
+			} else {
+				i++
+			}
+			continue
+		case strings.HasPrefix(f, "--persona="):
+			persona = strings.TrimPrefix(f, "--persona=")
 			i++
 			continue
 		}

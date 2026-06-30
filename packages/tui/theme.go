@@ -57,8 +57,10 @@ type Theme struct {
 	SpinnerIntervalMS int
 
 	// Greetings are templated taglines for the startup headline (the text
-	// after "i'm terva."); FlavorVerbs/FlavorNouns fill their {verb}/{noun}
-	// slots and any templated spinner working lines. See flavor.go.
+	// after the "i'm …" prefix — "i'm terva." on the help/usage screen, or
+	// "i'm <persona>." in the interactive welcome banner); FlavorVerbs/
+	// FlavorNouns fill their {verb}/{noun} slots and any templated spinner
+	// working lines. See flavor.go.
 	Greetings   []string
 	FlavorVerbs []string
 	FlavorNouns []string

@@ -28,6 +28,11 @@ type Agent struct {
 	Model    string
 	Provider string
 
+	// Persona, when non-empty, is baked into the child's --persona flag so
+	// the sub-agent boots as that persona. Persisted in meta.json so Resume
+	// keeps the same identity across terva restarts. Empty = host default.
+	Persona string
+
 	// SessionID, when non-empty, scopes the agent to a particular
 	// host terva session: the dashboard only surfaces agents whose
 	// SessionID matches the active session. Empty means "unscoped"

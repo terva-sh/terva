@@ -45,8 +45,12 @@ type Args struct {
 	BaseURL            string // override provider base URL (for tests/self-hosted)
 	SystemPrompt       string
 	AppendSystemPrompt []string
-	Reasoning          string
-	Temperature        *float32
+	// Persona selects the active persona (--persona): a built-in/on-disk name
+	// or a path to a .md file. Empty resolves via persona.md / default_persona /
+	// the embedded Mieli default.
+	Persona     string
+	Reasoning   string
+	Temperature *float32
 
 	// ContextFiles are paths passed via --context-file (repeatable). Each
 	// file's contents are injected into the system prompt at startup, in
@@ -244,6 +248,12 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.AppendSystemPrompt = append(a.AppendSystemPrompt, v)
+		case "--persona":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.Persona = v
 		case "--context-file":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -457,7 +467,10 @@ func PrintHelp(version string) {
 	}
 
 	fmt.Fprintln(os.Stderr)
-	greeting := "i'm " + personaLabel() + ". " + th.Greeting()
+	// The help / usage screen interrogates the harness, not a session, so it
+	// speaks as terva (the vessel) — not as a persona (the mind), which greets
+	// you in the interactive welcome banner instead.
+	greeting := "i'm terva. " + th.Greeting()
 	var headline string
 	if useColor {
 		headline = th.AccentBar(th.Assistant) + assistant(tui.Bold(greeting))
@@ -520,6 +533,7 @@ func PrintHelp(version string) {
 	section("prompt and session flags",
 		row{"--system-prompt TEXT", "replace the default system prompt"},
 		row{"--append-system-prompt TEXT", "append to the system prompt (repeatable)"},
+		row{"--persona NAME|FILE", "load a persona (built-in/on-disk name or .md path) as the identity"},
 		row{"--context-file PATH", "inject a file's contents into the system prompt (repeatable)"},
 		row{"-c, --continue", "continue the most recent session for this cwd"},
 		row{"-r, --resume", "pick a session to resume"},

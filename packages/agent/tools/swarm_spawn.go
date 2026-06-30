@@ -51,10 +51,17 @@ type SwarmSpawnTool struct {
 	// guess (a gateway) still resolves a tier when the user configures it. Nil
 	// is fine — resolution falls back to the built-in table then the host model.
 	Tiers SwarmTierMap
+
+	// PersonaResolver, when set, validates a model-supplied persona NAME
+	// against the trusted library and returns its canonical name (error if
+	// unknown). Nil skips the existence check; the inline path-rejection in
+	// Execute still applies regardless, so the model can never name a path.
+	PersonaResolver func(name string) (string, error)
 }
 
 type swarmSpawnArgs struct {
 	Task     string `json:"task"`
+	Persona  string `json:"persona,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	Tier     string `json:"tier,omitempty"`
@@ -66,6 +73,10 @@ const swarmSpawnSchema = `{
     "task": {
       "type": "string",
       "description": "The full task description for the sub-agent. Be specific: the sub-agent has the same tools (read/write/edit/bash) and shares this working directory, but starts with NO context from this conversation."
+    },
+    "persona": {
+      "type": "string",
+      "description": "Optional persona NAME to boot the sub-agent as a specialist (e.g. a security or test reviewer). Must be one of the dispatchable persona names listed in your instructions — a NAME, never a path. Pick the persona whose focus matches the sub-task; omit for a general-purpose sub-agent."
     },
     "tier": {
       "type": "string",
@@ -106,6 +117,22 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		return toolErr("swarm_spawn: task is required"), nil
 	}
 
+	persona := strings.TrimSpace(a.Persona)
+	if persona != "" {
+		// Security: a model-supplied persona may only NAME a trusted persona,
+		// never a path — it must not point a sub-agent at an arbitrary file.
+		if strings.ContainsAny(persona, `/\`) || strings.HasSuffix(persona, ".md") {
+			return toolErr("swarm_spawn: persona must be a built-in/installed persona NAME, not a path"), nil
+		}
+		if t.PersonaResolver != nil {
+			resolved, err := t.PersonaResolver(persona)
+			if err != nil {
+				return toolErr("swarm_spawn: " + err.Error()), nil
+			}
+			persona = resolved
+		}
+	}
+
 	route, errMsg := resolveSpawnRoute(a, t.HostProvider, t.HostModel, t.Tiers)
 	if errMsg != "" {
 		return toolErr("swarm_spawn: " + errMsg), nil
@@ -115,6 +142,7 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		Task:     task,
 		Model:    route.Model,
 		Provider: route.Provider,
+		Persona:  persona,
 	})
 	if err != nil {
 		return core.ToolResult{}, fmt.Errorf("swarm_spawn: %w", err)
@@ -127,6 +155,9 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "spawned sub-agent %s\n", agent.ID)
 	fmt.Fprintf(&sb, "task: %s\n", truncateTask(task, 200))
+	if persona != "" {
+		fmt.Fprintf(&sb, "persona: %s\n", persona)
+	}
 	switch {
 	case route.TierModel != "":
 		fmt.Fprintf(&sb, "model: %s (tier %s)\n", route.Model, tier)
@@ -151,6 +182,7 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		Details: map[string]any{
 			"agent_id": agent.ID,
 			"task":     task,
+			"persona":  persona,
 			"model":    route.Model,
 			"tier":     tier,
 			"provider": route.Provider,

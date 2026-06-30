@@ -30,29 +30,6 @@ func TestPersonaName_Resolution(t *testing.T) {
 	}
 }
 
-// TestPersonaPhonetic_OnlyForDefault: the pronunciation hint (and the label
-// that carries it) appear only for the default persona — a custom name has no
-// pronunciation we can guess.
-func TestPersonaPhonetic_OnlyForDefault(t *testing.T) {
-	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	t.Setenv("TERVA_PERSONA_NAME", "")
-
-	if got := personaPhonetic(); got != defaultPersonaPhonetic {
-		t.Fatalf("default phonetic: got %q, want %q", got, defaultPersonaPhonetic)
-	}
-	if got := personaLabel(); got != "Mieli (MYEH-lee)" {
-		t.Fatalf("default label: got %q", got)
-	}
-
-	t.Setenv("TERVA_PERSONA_NAME", "Aria")
-	if got := personaPhonetic(); got != "" {
-		t.Fatalf("custom phonetic should be empty, got %q", got)
-	}
-	if got := personaLabel(); got != "Aria" {
-		t.Fatalf("custom label: got %q", got)
-	}
-}
-
 // TestBuildSystemPrompt_DefaultPersona: the default identity carries both
 // pronunciations, the "mind" meaning, and the mind-in-a-vessel image.
 func TestBuildSystemPrompt_DefaultPersona(t *testing.T) {

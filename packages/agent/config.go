@@ -47,6 +47,14 @@ type Config struct {
 	// in $TERVA_HOME instead. User layer only.
 	PersonaName string `json:"persona_name,omitempty"`
 
+	// DefaultPersona names a persona — from $TERVA_HOME/personas/** or the
+	// built-in crew — to load as the default identity when no --persona flag and
+	// no $TERVA_HOME/persona.md are present. Empty means the built-in Mieli. This
+	// is a name pointer, not prose: the persona's charter lives in its .md file,
+	// so this does not bloat config.json. When both this and a $TERVA_HOME/
+	// persona.md exist, the file wins (with a warning). User layer only.
+	DefaultPersona string `json:"default_persona,omitempty"`
+
 	// InlineImagesEnabled controls whether terva draws screenshots inline
 	// when the terminal supports an image protocol. nil/missing means
 	// auto (enabled when supported); false disables; true forces the
@@ -319,11 +327,6 @@ func ConfigPath() string { return filepath.Join(TervaHome(), "config.json") }
 // or the persona_name field in config.json.
 const DefaultPersonaName = "Mieli"
 
-// defaultPersonaPhonetic is the English-speaker pronunciation hint shown
-// after the default name in greetings. Emitted only for DefaultPersonaName:
-// a user-supplied name has no pronunciation we can guess.
-const defaultPersonaPhonetic = "MYEH-lee"
-
 // PersonaName resolves the agent's persona name: the TERVA_PERSONA_NAME env
 // var wins, then the persona_name config field, then DefaultPersonaName.
 func PersonaName() string {
@@ -336,25 +339,6 @@ func PersonaName() string {
 		}
 	}
 	return DefaultPersonaName
-}
-
-// personaPhonetic returns the pronunciation hint for the resolved persona, or
-// "" for a custom name (whose pronunciation we can't guess).
-func personaPhonetic() string {
-	if PersonaName() == DefaultPersonaName {
-		return defaultPersonaPhonetic
-	}
-	return ""
-}
-
-// personaLabel is the self-introduction label for greetings: the persona
-// name with its pronunciation hint when known ("Mieli (MYEH-lee)"), else the
-// bare name.
-func personaLabel() string {
-	if ph := personaPhonetic(); ph != "" {
-		return PersonaName() + " (" + ph + ")"
-	}
-	return PersonaName()
 }
 
 // AuthPath returns the path to auth.json.

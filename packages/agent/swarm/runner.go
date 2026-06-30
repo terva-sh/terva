@@ -66,6 +66,7 @@ type swarmAgentArgsOpts struct {
 	Task        string
 	Model       string
 	Provider    string
+	Persona     string
 }
 
 // defaultChildArgs builds the argv execRunner uses when its Command
@@ -95,6 +96,7 @@ func defaultChildArgs(exe string, a *Agent, sessionPath, inboxPath string) []str
 		Task:        task,
 		Model:       a.Model,
 		Provider:    a.Provider,
+		Persona:     a.Persona,
 	})
 }
 
@@ -113,6 +115,10 @@ func swarmAgentArgs(opts swarmAgentArgsOpts) []string {
 	}
 	if opts.Provider != "" {
 		args = append(args, "--provider", opts.Provider)
+	}
+	if opts.Persona != "" {
+		// Flag, so it must precede the positional task below.
+		args = append(args, "--persona", opts.Persona)
 	}
 	if opts.Task != "" {
 		// First task is positional so the child treats it as the

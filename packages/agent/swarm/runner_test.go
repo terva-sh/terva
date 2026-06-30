@@ -69,6 +69,32 @@ func TestSwarmAgentArgs(t *testing.T) {
 	}
 }
 
+// TestSwarmAgentArgsPersona pins persona dispatch: a non-empty Persona
+// becomes a --persona flag BEFORE the positional task; an empty one omits
+// the flag so the child falls back to its default identity.
+func TestSwarmAgentArgsPersona(t *testing.T) {
+	args := swarmAgentArgs(swarmAgentArgsOpts{
+		Exe: "/terva", Dir: "/wt", SessionPath: "/s.json", InboxPath: "/in.sock",
+		Persona: "vartija", Task: "audit the auth path",
+	})
+	pi := indexOf(args, "--persona")
+	if pi < 0 || safeAt(args, pi+1) != "vartija" {
+		t.Fatalf("argv missing --persona vartija: %v", args)
+	}
+	if args[len(args)-1] != "audit the auth path" {
+		t.Fatalf("task should be the last positional; got %v", args)
+	}
+	if pi+1 >= len(args)-1 {
+		t.Fatalf("--persona must precede the positional task: %v", args)
+	}
+	none := swarmAgentArgs(swarmAgentArgsOpts{
+		Exe: "/terva", Dir: "/wt", SessionPath: "/s.json", InboxPath: "/in.sock", Task: "t",
+	})
+	if indexOf(none, "--persona") >= 0 {
+		t.Fatalf("empty persona should omit --persona: %v", none)
+	}
+}
+
 // TestSwarmAgentArgsEmptyTaskOmitsPositional makes sure that when the
 // agent is being adopted (no fresh task) we don't pass an empty
 // positional which the arg parser would treat as a real prompt.

@@ -124,6 +124,9 @@ func (i *Interactive) flushSwarmSummary(batch []*swarmWatchEntry) {
 			task = e.task
 		}
 		fmt.Fprintf(&sb, "%d. agent %s \u2014 status: %s\n", idx+1, snap.ID, status)
+		if snap.Persona != "" {
+			fmt.Fprintf(&sb, "   persona: %s\n", snap.Persona)
+		}
 		fmt.Fprintf(&sb, "   task: %s\n", truncateForSummary(task, 240))
 		if snap.Err != "" {
 			fmt.Fprintf(&sb, "   error: %s\n", truncateForSummary(snap.Err, 240))
@@ -194,12 +197,13 @@ func (i *Interactive) applyAutoSwarmTool(active bool) {
 	}
 	if active && i.cfg.Swarm != nil {
 		next["swarm_spawn"] = &tools.SwarmSpawnTool{
-			Swarm:        i.cfg.Swarm,
-			Enabled:      func() bool { return true },
-			OnSpawned:    i.trackSwarmAgent,
-			HostProvider: i.cfg.Provider, // updated on /model swap (interactive_model.go)
-			HostModel:    i.cfg.Model,
-			Tiers:        tools.SwarmTierMap(i.cfg.SwarmTiers),
+			Swarm:           i.cfg.Swarm,
+			Enabled:         func() bool { return true },
+			OnSpawned:       i.trackSwarmAgent,
+			HostProvider:    i.cfg.Provider, // updated on /model swap (interactive_model.go)
+			HostModel:       i.cfg.Model,
+			Tiers:           tools.SwarmTierMap(i.cfg.SwarmTiers),
+			PersonaResolver: i.cfg.DispatchPersonaResolver,
 		}
 	}
 	ag.SetTools(next)

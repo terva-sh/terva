@@ -44,6 +44,7 @@ type agentMeta struct {
 	Started      time.Time `json:"started"`
 	Model        string    `json:"model,omitempty"`
 	Provider     string    `json:"provider,omitempty"`
+	Persona      string    `json:"persona,omitempty"`
 	InboxPath    string    `json:"inbox_path"`
 	EventLogPath string    `json:"event_log_path"`
 	SessionPath  string    `json:"session_path"`
@@ -71,6 +72,7 @@ func writeAgentMeta(stateDir string, a *Agent) error {
 		Started:      a.Started,
 		Model:        a.Model,
 		Provider:     a.Provider,
+		Persona:      a.Persona,
 		InboxPath:    a.InboxPath,
 		EventLogPath: a.EventLogPath,
 		SessionPath:  a.SessionPath,
@@ -205,6 +207,7 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 		Started:      m.Started,
 		Model:        m.Model,
 		Provider:     m.Provider,
+		Persona:      m.Persona,
 		InboxPath:    m.InboxPath,
 		EventLogPath: m.EventLogPath,
 		SessionPath:  m.SessionPath,
@@ -346,7 +349,7 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 	m := agentMeta{
 		ID: existing.ID, Task: existing.Task,
 		Dir: existing.Dir, Started: existing.Started,
-		Model: existing.Model, Provider: existing.Provider,
+		Model: existing.Model, Provider: existing.Provider, Persona: existing.Persona,
 		InboxPath: existing.InboxPath, EventLogPath: existing.EventLogPath,
 		SessionPath: existing.SessionPath,
 		// SessionID is spawn-time scoping; it must survive Resume or
@@ -362,6 +365,7 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Started:      m.Started,
 		Model:        m.Model,
 		Provider:     m.Provider,
+		Persona:      m.Persona,
 		SessionID:    m.SessionID,
 		InboxPath:    m.InboxPath,
 		EventLogPath: m.EventLogPath,

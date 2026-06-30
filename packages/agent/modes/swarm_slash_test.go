@@ -177,26 +177,30 @@ func TestRunSwarmSendDeliversToAgentInbox(t *testing.T) {
 
 func TestParseSpawnFlags(t *testing.T) {
 	cases := []struct {
-		in                  string
-		wantModel, wantProv string
-		wantTask            string
+		in                               string
+		wantModel, wantProv, wantPersona string
+		wantTask                         string
 	}{
-		{"do x", "", "", "do x"},
-		{"--model claude do x", "claude", "", "do x"},
-		{"--model=claude do x", "claude", "", "do x"},
-		{"--provider openai --model gpt-5 do x", "gpt-5", "openai", "do x"},
-		{"--provider=openai --model=gpt-5 do x", "gpt-5", "openai", "do x"},
+		{"do x", "", "", "", "do x"},
+		{"--model claude do x", "claude", "", "", "do x"},
+		{"--model=claude do x", "claude", "", "", "do x"},
+		{"--provider openai --model gpt-5 do x", "gpt-5", "openai", "", "do x"},
+		{"--provider=openai --model=gpt-5 do x", "gpt-5", "openai", "", "do x"},
+		{"--persona vartija review x", "", "", "vartija", "review x"},
+		{"--persona=vartija review x", "", "", "vartija", "review x"},
+		{"--persona ./d.md --model=gpt-5 t", "gpt-5", "", "./d.md", "t"},
 		// Only LEADING flags are consumed.
-		{"do --model x", "", "", "do --model x"},
+		{"do --model x", "", "", "", "do --model x"},
+		{"do --persona x", "", "", "", "do --persona x"},
 		// Missing value: --model with no follow-up token leaves model empty
 		// and the next field starts the task.
-		{"--model", "", "", ""},
+		{"--model", "", "", "", ""},
 	}
 	for _, c := range cases {
-		m, p, task := parseSpawnFlags(c.in)
-		if m != c.wantModel || p != c.wantProv || task != c.wantTask {
-			t.Errorf("parseSpawnFlags(%q) = (%q,%q,%q); want (%q,%q,%q)",
-				c.in, m, p, task, c.wantModel, c.wantProv, c.wantTask)
+		m, p, persona, task := parseSpawnFlags(c.in)
+		if m != c.wantModel || p != c.wantProv || persona != c.wantPersona || task != c.wantTask {
+			t.Errorf("parseSpawnFlags(%q) = (%q,%q,%q,%q); want (%q,%q,%q,%q)",
+				c.in, m, p, persona, task, c.wantModel, c.wantProv, c.wantPersona, c.wantTask)
 		}
 	}
 }
