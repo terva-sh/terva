@@ -234,6 +234,16 @@ type PermissionRuleConfig struct {
 // it cannot redirect base_url, swap providers, change the user's theme, etc.
 // Widen this deliberately (see docs/plans/startup-context-files.md).
 type ProjectConfig struct {
+	// ProjectScoped, when true, marks this directory a self-contained agent:
+	// terva redirects all DATA (sessions, ext-data, logs, config, extensions,
+	// personas) to a project-local home (.terva/home) and does NOT load global
+	// system extensions — only the project's own (still trust-gated). Login and
+	// the trust store stay global (inherited). It is read BEFORE trust is
+	// resolved (the redirect itself is harmless — extensions remain trust-gated)
+	// and is overridable per run with --project / --no-project. A nil pointer
+	// means "unset" (no opinion); only an explicit true enables it.
+	ProjectScoped *bool `json:"project_scoped,omitempty"`
+
 	// ContextFiles are startup context files to inject, in order. The
 	// project layer is UNTRUSTED for path targets: a cloned repo's
 	// .terva/config.json could otherwise point at ~/.ssh/id_ed25519 and
@@ -266,6 +276,16 @@ type ProjectConfig struct {
 	// never re-enables) — a cloned repo can keep an extension from
 	// running here but can never make one run the user didn't install.
 	DisableExtensions []string `json:"disable_extensions,omitempty"`
+
+	// AdoptExtensions re-admits specific GLOBAL extensions into a
+	// project-scoped agent (where upstream extensions are otherwise off). Each
+	// name is loaded from the user's own global install — no copy, shared
+	// binary, project-local data — and ONLY when the project is trusted, so it
+	// can never run code the user didn't already install globally (a subset of
+	// upstream, never wider). A name not installed globally is gracefully
+	// absent. Inert outside project-scoped mode (upstream already loads). Manage
+	// with `terva project ext adopt/drop/list`.
+	AdoptExtensions []string `json:"adopt_extensions,omitempty"`
 
 	// DisableMCP refuses to start specific MCP servers for this project.
 	// Restrict-only and union'd with the user layer (adds, never
@@ -341,8 +361,28 @@ func PersonaName() string {
 	return DefaultPersonaName
 }
 
-// AuthPath returns the path to auth.json.
-func AuthPath() string { return filepath.Join(TervaHome(), "auth.json") }
+// pinnedGlobalHome, when non-empty, is the user's global data home that
+// credentials (auth.json) and the trust store (trusted.json) resolve against
+// even after project-scoped mode has redirected TERVA_HOME to a project-local
+// data dir. Set once at startup by EnableProjectScope; empty in normal
+// operation, so CredentialHome() == TervaHome() and nothing changes.
+var pinnedGlobalHome string
+
+// CredentialHome is the home that auth + trust resolve against: the pinned
+// global home when project-scoped mode is active, else the normal data home.
+// Keeping credentials and trust verdicts global is what lets a project-scoped
+// agent inherit your login instead of re-authenticating per project, and keeps
+// the trust store out of the project (a repo still can't trust itself).
+func CredentialHome() string {
+	if pinnedGlobalHome != "" {
+		return pinnedGlobalHome
+	}
+	return TervaHome()
+}
+
+// AuthPath returns the path to auth.json (the global home, even when
+// project-scoped — see CredentialHome).
+func AuthPath() string { return filepath.Join(CredentialHome(), "auth.json") }
 
 // KimiCLIFallbackDisabledPath returns a sentinel that disables falling
 // back to the official Kimi Code CLI token after `terva /logout kimi`.

@@ -48,3 +48,42 @@ func (m *Manager) isProjectTrusted() bool {
 	defer m.mu.RUnlock()
 	return m.projectTrusted
 }
+
+// SetAdopt configures the global extensions a project-scoped agent re-adopts:
+// root is the user's global extensions dir, names are the ones to pull from it.
+// Discover loads them only when the project is trusted (they're project-declared
+// content) and only for names the project doesn't already provide. MUST be
+// called before Discover. Empty names disables adoption.
+func (m *Manager) SetAdopt(root string, names []string) {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		// adopt_extensions is project-supplied (untrusted) config. Reject any
+		// entry that isn't a bare extension name, so a crafted "../../evil" or
+		// absolute path can't escape the global extensions root in Discover.
+		// This is the authoritative guard (Discover re-checks defensively).
+		if isPlainExtensionName(n) {
+			set[n] = true
+		}
+	}
+	m.mu.Lock()
+	m.adoptRoot = root
+	m.adoptNames = set
+	m.mu.Unlock()
+}
+
+// adoptTargets returns the global extensions-root and the names to adopt from
+// it, but ONLY when the project is trusted (adopted extensions are
+// project-declared, so they obey the same trust gate). Returns ("", nil) when
+// adoption is off or untrusted.
+func (m *Manager) adoptTargets() (root string, names []string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if !m.projectTrusted || m.adoptRoot == "" || len(m.adoptNames) == 0 {
+		return "", nil
+	}
+	names = make([]string, 0, len(m.adoptNames))
+	for name := range m.adoptNames {
+		names = append(names, name)
+	}
+	return m.adoptRoot, names
+}

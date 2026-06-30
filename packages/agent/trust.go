@@ -83,8 +83,10 @@ type TrustStore struct {
 	Trusted []TrustEntry `json:"trusted,omitempty"`
 }
 
-// TrustStorePath returns the path to trusted.json under $TERVA_HOME.
-func TrustStorePath() string { return filepath.Join(TervaHome(), trustFileName) }
+// TrustStorePath returns the path to trusted.json. It lives under the global
+// home (CredentialHome) — even in project-scoped mode — so trust verdicts are
+// inherited and a project still can't trust itself by shipping a trusted.json.
+func TrustStorePath() string { return filepath.Join(CredentialHome(), trustFileName) }
 
 // LoadTrustStore reads trusted.json. A missing file is an empty store
 // (no error) — the untrusted-by-default world starts with no entries.

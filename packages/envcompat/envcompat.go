@@ -102,6 +102,12 @@ func Home() string {
 	return "." + newDirName
 }
 
+// SetHome overrides the data home for THIS process (and any children it
+// spawns) by setting the TERVA_HOME env var — the same var Home() reads first.
+// Used by project-scoped mode to redirect all terva data into a project-local
+// dir. It does not touch the old ZOT_HOME spelling.
+func SetHome(dir string) error { return os.Setenv(newPrefix+"HOME", dir) }
+
 // DefaultHome is the OS-default terva data dir ("" when the platform
 // gives us nothing to go on). Exported for the migration engine so it
 // shares this resolver instead of duplicating it.

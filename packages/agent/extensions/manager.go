@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,6 +82,16 @@ type Manager struct {
 	// always searched. Set via SetProjectTrusted BEFORE Discover. Guarded
 	// by mu. See docs/plans/workspace-trust.md.
 	projectTrusted bool
+
+	// adoptRoot + adoptNames re-admit specific GLOBAL extensions into a
+	// project-scoped agent. adoptRoot is the user's global extensions dir;
+	// adoptNames is the set the project's adopt_extensions selects. Discover
+	// loads those names from adoptRoot — but only when projectTrusted (adopted
+	// extensions are project-declared, so they obey the same trust gate) and
+	// only for names the project itself didn't already provide. Set via
+	// SetAdopt BEFORE Discover. Guarded by mu.
+	adoptRoot  string
+	adoptNames map[string]bool
 
 	// lastAnnounced is the identity of the session most recently passed to
 	// a session_start emit. The host bookends it with session_end when a
@@ -196,6 +207,28 @@ func (m *Manager) Discover(ctx context.Context) []error {
 		}
 	}
 
+	// Project-scoped adoption: pull specific extensions from the user's GLOBAL
+	// install into this project. Trust-gated (adoptTargets returns nothing when
+	// untrusted) and lower priority than the project's own — a name the project
+	// already provides wins, and a name not installed globally is skipped
+	// (gracefully absent rather than an error).
+	if adoptRoot, adoptNames := m.adoptTargets(); adoptRoot != "" {
+		for _, name := range adoptNames {
+			// Defense in depth: SetAdopt already drops non-plain names, but
+			// re-check before the Join so a traversal name can never escape
+			// adoptRoot even if a future caller populates adoptNames directly.
+			if seenDirs[name] || !isPlainExtensionName(name) {
+				continue
+			}
+			dir := filepath.Join(adoptRoot, name)
+			if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+				continue
+			}
+			seenDirs[name] = true
+			jobs = append(jobs, loadJob{dir: dir})
+		}
+	}
+
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(jobs))
 	for _, j := range jobs {
@@ -240,6 +273,22 @@ func (m *Manager) searchDirs() []string {
 		dirs = append(dirs, filepath.Join(home, "extensions"))
 	}
 	return dirs
+}
+
+// isPlainExtensionName reports whether name is a single, safe path element to
+// join under the global extensions root. adopt_extensions comes from the
+// project's (untrusted) config, so a crafted "../../evil" or "/abs/path" must
+// never resolve outside adoptRoot when filepath.Join'd in Discover. Accepts
+// only a bare directory name: non-empty, not "."/"..", no separators, not
+// absolute.
+func isPlainExtensionName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if filepath.IsAbs(name) || strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	return filepath.Base(name) == name
 }
 
 // loadOne reads a single extension's manifest, applies the host policy
