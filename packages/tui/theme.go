@@ -228,6 +228,13 @@ func (t Theme) BG(c TerminalColor, s string) string {
 	return sgrBGColor(c) + s + reset
 }
 
+// FGColor wraps s in a terminal foreground colour. Unlike FG256, this can
+// target ANSI theme slots or truecolor RGB — used so a persona's
+// accent_color (#RRGGBB) can tint the welcome banner.
+func (t Theme) FGColor(c TerminalColor, s string) string {
+	return sgrFGColor(c) + s + reset
+}
+
 // AccentBar returns a 2-cell-wide leader: a coloured half-block
 // glyph followed by a plain space gutter. Used as the speaker-label
 // prefix in the chat ("▌ you", "▌ terva") and as the editor prompt so
@@ -324,6 +331,17 @@ func sgrBGColor(c TerminalColor) string {
 		return "\x1b[48;2;" + itoa(c.R) + ";" + itoa(c.G) + ";" + itoa(c.B) + "m"
 	default:
 		return sgrBG(c.Index)
+	}
+}
+
+func sgrFGColor(c TerminalColor) string {
+	switch c.Mode {
+	case terminalColorANSI:
+		return "\x1b[" + itoa(c.Index) + "m"
+	case terminalColorRGB:
+		return "\x1b[38;2;" + itoa(c.R) + ";" + itoa(c.G) + ";" + itoa(c.B) + "m"
+	default:
+		return sgrFG(c.Index)
 	}
 }
 

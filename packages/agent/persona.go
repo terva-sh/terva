@@ -23,10 +23,13 @@ var builtinPersonasFS embed.FS
 
 const builtinPersonasRoot = "personas/builtin"
 
-// Persona is a resolved persona: identity + display metadata + an additive
-// behavioral charter. The charter is layered on top of terva's invariant
-// harness identity (it never replaces it); a persona only shapes the default
-// identity path, never the --system-prompt/SYSTEM.md raw-replace path.
+// Persona is a resolved persona: identity + display metadata + a behavioral
+// charter. By default the charter is layered *additively* on top of terva's
+// invariant harness identity. A persona that sets `immersive: true` instead has
+// its charter *replace* the default coding-assistant identity (routed through
+// the same path as --system-prompt/SYSTEM.md) — for roleplay and chat-companion
+// personas that need to own the identity, not just flavor it. An explicit
+// --system-prompt/SYSTEM.md still wins over an immersive persona.
 type Persona struct {
 	Name              string
 	Pronunciation     string
@@ -37,7 +40,12 @@ type Persona struct {
 	RecommendedSkills []string
 	GoodFor           []string
 	AvoidFor          []string
-	Charter           string // the markdown body, trimmed
+	// Immersive, when true, makes Charter the whole system-prompt identity
+	// (replacing terva's "expert coding assistant" intro + conventions) rather
+	// than an additive layer. Stock hosts that don't know the field treat the
+	// persona as additive, so a file degrades gracefully.
+	Immersive bool
+	Charter   string // the markdown body, trimmed
 	// Namespace groups the persona: a team subdirectory under personas/, or the
 	// extension name for an extension-shipped persona. "" = top-level. The
 	// qualified name is "<namespace>:<name>".
@@ -46,6 +54,17 @@ type Persona struct {
 	// extension bundle, an absolute/relative path for a user file, or "" for the
 	// legacy name-only swap (no charter).
 	Source string
+}
+
+// immersiveCustom returns the charter to use as the entire system-prompt
+// identity when an immersive persona should own it, or "" to keep the additive
+// path. An explicit custom prompt (--system-prompt / SYSTEM.md) always wins, so
+// a non-empty custom short-circuits to "".
+func immersiveCustom(custom string, p Persona) string {
+	if custom == "" && p.Immersive && strings.TrimSpace(p.Charter) != "" {
+		return p.Charter
+	}
+	return ""
 }
 
 // Label is the self-introduction label for greetings/banners: the name with
@@ -74,6 +93,7 @@ type personaFrontmatter struct {
 	RecommendedSkills []string `yaml:"recommended_skills"`
 	GoodFor           []string `yaml:"good_for"`
 	AvoidFor          []string `yaml:"avoid_for"`
+	Immersive         bool     `yaml:"immersive"`
 }
 
 // parsePersona parses a persona .md (YAML frontmatter + charter body). A
@@ -97,6 +117,7 @@ func parsePersona(raw, source string) (Persona, error) {
 		RecommendedSkills: fm.RecommendedSkills,
 		GoodFor:           fm.GoodFor,
 		AvoidFor:          fm.AvoidFor,
+		Immersive:         fm.Immersive,
 		Charter:           strings.TrimSpace(body),
 		Source:            source,
 	}

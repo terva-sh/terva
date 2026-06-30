@@ -481,6 +481,12 @@ func IsLightTheme(th Theme) bool {
 
 func isLightTheme(th Theme) bool { return IsLightTheme(th) }
 
+// ParseHexColor parses a "#RRGGBB" string into a truecolor TerminalColor,
+// reporting whether it was well-formed. Exported so callers outside this
+// package (e.g. tinting the welcome banner with a persona's accent_color) can
+// turn a hex string into a renderable colour.
+func ParseHexColor(s string) (TerminalColor, bool) { return parseHexColor(s) }
+
 func parseHexColor(s string) (TerminalColor, bool) {
 	s = strings.TrimPrefix(strings.TrimSpace(s), "#")
 	if len(s) != 6 {

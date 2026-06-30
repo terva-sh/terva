@@ -145,7 +145,10 @@ func validateOnePersona(path string) (ok bool) {
 		if p.AccentColor != "" && !personaAccentRe.MatchString(p.AccentColor) {
 			problems = append(problems, fmt.Sprintf("accent_color %q is not a #RRGGBB hex value", p.AccentColor))
 		}
-		if n := len(p.Charter); n > personaCharterBudget {
+		// The static-block budget only applies to an ADDITIVE charter, which the
+		// host injects as a bounded block. An immersive charter becomes the whole
+		// system prompt (the --system-prompt path), so the budget does not bind.
+		if n := len(p.Charter); n > personaCharterBudget && !p.Immersive {
 			warns = append(warns, fmt.Sprintf("charter is %d chars (over the %d static-block budget)", n, personaCharterBudget))
 		}
 	}
