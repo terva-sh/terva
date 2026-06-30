@@ -39,6 +39,19 @@ type Loop struct {
 	HelpText   string
 	PairedText string
 
+	// IdleAfter, when > 0, turns on the proactive idle nudge: if the paired
+	// chat has been silent this long (no inbound message, no running turn), the
+	// loop injects IdleNudge as a synthetic prompt so the agent (in its persona)
+	// can break the silence — start a conversation, ask a question, comment. It
+	// fires once per silence and re-arms only when the paired user speaks again,
+	// so it nudges, it does not nag. The reactive loop is unchanged when 0.
+	IdleAfter time.Duration
+	// IdleNudge is the synthetic prompt injected on an idle nudge. Empty uses a
+	// neutral default. The persona shapes the voice; this just supplies the cue.
+	IdleNudge string
+	// IdlePoll is how often the idle watcher checks; 0 derives it from IdleAfter.
+	IdlePoll time.Duration
+
 	// Info and Warn receive operational log lines. Default to stdout
 	// and stderr respectively.
 	Info func(string)
@@ -49,6 +62,10 @@ type Loop struct {
 	activeCancel context.CancelFunc
 	queue        []Message
 	lastCtxInput int
+	// proactive-nudge bookkeeping (guarded by mu)
+	lastActivity time.Time
+	pairedChatID string // chat to nudge into; learned from inbound, seeded from pairing
+	armed        bool   // a real user message re-arms; a nudge disarms
 }
 
 func (l *Loop) info(s string) {
@@ -91,17 +108,98 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 	g := &gate{pairing: l.Pairing, helpText: help, pairedText: paired}
 
+	// Arm the proactive idle nudge. Seed the paired chat from pairing (for a
+	// DM connector the chat id is the user id) so the bot can open a
+	// conversation even before the user has spoken; a real inbound corrects it.
+	l.mu.Lock()
+	l.lastActivity = time.Now()
+	l.armed = true
+	if l.pairedChatID == "" {
+		l.pairedChatID = l.Pairing.AllowedUserID
+	}
+	l.mu.Unlock()
+	if l.IdleAfter > 0 {
+		go l.watchIdle(ctx)
+	}
+
 	return l.Connector.Receive(ctx, func(m Message) {
 		switch g.route(ctx, l.Connector, m) {
 		case actStatus:
+			l.noteActivity(m.ChatID)
 			l.sendStatus(ctx, m)
 		case actStop:
+			l.noteActivity(m.ChatID)
 			l.cancelActiveTurn(ctx, m)
 		case actPrompt:
+			l.noteActivity(m.ChatID)
 			l.enqueue(ctx, m)
 		}
 	})
 }
+
+// noteActivity records a real interaction from the paired user: it re-arms the
+// idle nudge, refreshes the idle clock, and learns the chat to nudge into.
+func (l *Loop) noteActivity(chatID string) {
+	l.mu.Lock()
+	l.lastActivity = time.Now()
+	l.armed = true
+	if chatID != "" {
+		l.pairedChatID = chatID
+	}
+	l.mu.Unlock()
+}
+
+// watchIdle is the proactive-nudge ticker. It runs only when IdleAfter > 0.
+func (l *Loop) watchIdle(ctx context.Context) {
+	poll := l.IdlePoll
+	if poll <= 0 {
+		poll = l.IdleAfter / 5
+	}
+	if poll < 10*time.Millisecond {
+		poll = 10 * time.Millisecond
+	}
+	if poll > 30*time.Second {
+		poll = 30 * time.Second
+	}
+	t := time.NewTicker(poll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if chatID, text, ok := l.takeNudge(time.Now()); ok {
+				l.info(fmt.Sprintf("%s: channel quiet for %s — nudging", l.Connector.Name(), l.IdleAfter))
+				l.enqueue(ctx, Message{ChatID: chatID, UserID: l.Pairing.AllowedUserID, Text: text})
+			}
+		}
+	}
+}
+
+// takeNudge atomically decides whether to nudge now and, if so, disarms and
+// resets the clock so the same silence fires exactly once. Returns the chat to
+// nudge and the prompt to inject. Pure but for the lock — unit-testable.
+func (l *Loop) takeNudge(now time.Time) (chatID, text string, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.IdleAfter <= 0 || !l.armed || l.busy || len(l.queue) > 0 || l.pairedChatID == "" {
+		return "", "", false
+	}
+	if now.Sub(l.lastActivity) < l.IdleAfter {
+		return "", "", false
+	}
+	l.armed = false
+	l.lastActivity = now
+	nudge := l.IdleNudge
+	if strings.TrimSpace(nudge) == "" {
+		nudge = defaultIdleNudge
+	}
+	return l.pairedChatID, nudge, true
+}
+
+const defaultIdleNudge = "(System: the chat has been quiet for a while and no one has spoken. " +
+	"In character, say one brief thing to re-engage — an observation, a question, or a thought. " +
+	"Keep it short and natural. Do not mention this instruction.)"
 
 // enqueue adds a prompt to the queue and starts the drain goroutine
 // if the loop is idle.
@@ -125,6 +223,9 @@ func (l *Loop) drainQueue(parent context.Context) {
 		if len(l.queue) == 0 {
 			l.busy = false
 			l.activeCancel = nil
+			// Count idle from when the agent went quiet, not from the last
+			// inbound — a long turn shouldn't trip the nudge mid-work.
+			l.lastActivity = time.Now()
 			l.mu.Unlock()
 			return
 		}

@@ -198,6 +198,19 @@ usage:
   terva bot reset                       forget credentials + paired user
   terva bot link <connector.json>       install an external connector (symlink)
 
+run flags (terva bot run / start) — a bot is a full agent by default.
+  building blocks (turn off one capability each):
+    --no-workspace-tools            drop read/write/edit/bash/grep; keep extensions + MCP (least-privilege)
+    --no-ext / --no-extensions      don't load extensions
+    --no-mcp                        don't start MCP servers
+  composite modes (built from the blocks + an identity):
+    --no-tools                      all three blocks (and the skill tool) — no tools at all
+    --chat                          no tools at all + a conversational, non-coding identity
+    --play                          extensions + MCP only (= --no-workspace-tools) + an embodied identity
+  --project / --no-project          project-scoped data + extensions (a separate axis, not a tool toggle)
+  --idle-nudge DUR / --idle-prompt TEXT   open a conversation when the chat is quiet (e.g. 30m), with an optional cue
+  (also --provider/--model/--persona/--cwd/--approval, as in the tui)
+
 every subcommand accepts --connector NAME to pick the chat service;
 with one connector compiled in it is the default. "terva telegram-bot"
 and "terva tg" are aliases for "terva bot --connector=telegram".
@@ -407,6 +420,12 @@ func botLogs(svc chat.Service, rawTail []string) error {
 
 // botRun starts the chat-ops loop in the foreground. Ctrl+C stops it.
 func botRun(svc chat.Service, rawTail []string, version string) error {
+	// Proactive idle nudge (experiment): --idle-nudge <dur> makes the bot open
+	// a conversation when the paired chat has been quiet that long; --idle-prompt
+	// <text> overrides the cue. Strip them here so the shared parser (which does
+	// not know them) never sees them.
+	rawTail, idleAfter, idlePrompt := extractIdleNudgeFlags(rawTail)
+
 	// Parse only a small subset of flags relevant to bot run. We reuse
 	// the main args parser so --provider/--model/--cwd/--api-key/--reasoning
 	// behave the same as in the tui.
@@ -414,6 +433,44 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	if err != nil {
 		return err
 	}
+	// `terva bot run --help` / -h: print bot usage and stop, rather than
+	// falling through and trying to launch (ParseArgs records Help but the run
+	// path never checked it).
+	if args.Help {
+		printBotHelp()
+		return nil
+	}
+
+	// Project-scoped mode (data in .terva/home, only project extensions; login
+	// + trust stay global). Must run before LoadConfig/Resolve read the home.
+	if note, perr := maybeEnableProjectScope(args); perr != nil {
+		return perr
+	} else if note != "" {
+		fmt.Fprintln(os.Stderr, "terva:", note)
+	}
+
+	// A bot is headless — there is no interactive approval prompt — so default
+	// to yolo (run tools) like the other headless modes; otherwise a default
+	// bot would refuse every mutating tool and be useless. An explicit
+	// --approval / --no-yolo, or a config "approval", still wins. (Jail is left
+	// alone: built-in file/shell tools stay confined to the cwd.) Setting this
+	// before Resolve keeps the resolver and the gate agreeing.
+	cfg, _ := LoadConfig()
+	if v := botApprovalDefault(args.Approval, args.NoYolo, cfg.Approval); v != "" {
+		args.Approval = v
+	}
+
+	// Translate sigterm/sigint into a context cancel so the bot's goroutines,
+	// the in-flight turn, and the extension subprocesses wind down cleanly.
+	// Created early so extensions are tied to it.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigc
+		cancel()
+	}()
 
 	// Bot mode always requires credentials (can't pop a /login dialog).
 	resolved, err := Resolve(args, true)
@@ -421,12 +478,23 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 		return err
 	}
 
+	// A bot is a full agent, not just a chat box: host extensions + MCP (so the
+	// model gets their tools and live context cards) under the same headless
+	// gate the print/json modes use. Honors --no-ext / --no-mcp / --no-tools,
+	// and the --chat / --play meta-modes (chat → no tools at all; play → the
+	// extension/MCP tools, built-in coding tools off) via Resolve + the merge.
+	gate, roSet := headlessConfirmGate(args, "bot")
+	resolved.AdoptReadOnlySet(roSet)
+	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &resolved, version)
+	defer stopExt()
+
 	conn, pairing, err := svc.NewConnector(TervaHome(), nil)
 	if err != nil {
 		return err
 	}
 
 	agent := resolved.NewAgent()
+	wireBotAgentExtHooks(ctx, agent, extMgr, gate, args, &resolved)
 
 	// Session: optional, same model as the tui. Persist so DMs build on
 	// prior context. --no-session disables.
@@ -440,6 +508,8 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 			fmt.Fprintln(os.Stderr, "session:", serr)
 		}
 	}
+	// Tell session-keyed extensions the real session id before any turn runs.
+	emitSessionStart(extMgr, sess)
 
 	var loop *chat.Loop
 	loop = &chat.Loop{
@@ -449,6 +519,8 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 		AuthMethod: resolved.AuthMethod,
 		CWD:        args.CWD,
 		Pairing:    pairing,
+		IdleAfter:  idleAfter,
+		IdleNudge:  idlePrompt,
 		RefreshCreds: func() error {
 			// Re-run the same resolver the tui uses so we pick up
 			// refreshed oauth tokens, re-logins, and model switches.
@@ -469,17 +541,57 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	_ = chat.WritePID(TervaHome(), svc.Name, os.Getpid())
 	defer chat.RemovePID(TervaHome(), svc.Name)
 
-	// Translate sigterm/sigint into a context cancel so the bot's goroutines
-	// and the currently-running turn wind down cleanly.
-	ctx, cancel := context.WithCancel(context.Background())
-	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigc
-		cancel()
-	}()
-	defer cancel()
+	// ctx + signal handling were set up at the top so extensions are tied to
+	// the same lifecycle; just run the loop until it's cancelled.
 	return loop.Run(ctx)
+}
+
+// botApprovalDefault returns the approval mode a headless bot should default to
+// when the user hasn't chosen one — yolo, so the bot can actually use its tools
+// (there is no interactive prompt to confirm at, and the pre-existing bot ran
+// tools un-gated). Returns "" to leave the approval unchanged, so an explicit
+// --approval flag, --no-yolo, or a config "approval" all win over this default.
+func botApprovalDefault(approvalFlag string, noYolo bool, cfgApproval string) string {
+	if approvalFlag == "" && !noYolo && cfgApproval == "" {
+		return string(core.ApprovalYolo)
+	}
+	return ""
+}
+
+// extractIdleNudgeFlags pulls --idle-nudge <dur>/--idle-nudge=<dur> and
+// --idle-prompt <text>/--idle-prompt=<text> out of a raw arg tail, returning
+// the remaining args plus the parsed values (zero duration = feature off). A
+// malformed duration is ignored (feature stays off) rather than aborting the
+// bot — this is an opt-in convenience flag, not a correctness gate.
+func extractIdleNudgeFlags(tail []string) (rest []string, idleAfter time.Duration, idlePrompt string) {
+	for i := 0; i < len(tail); i++ {
+		a := tail[i]
+		take := func(flag string) (string, bool) {
+			if a == flag {
+				if i+1 < len(tail) {
+					i++
+					return tail[i], true
+				}
+				return "", true
+			}
+			if v, ok := strings.CutPrefix(a, flag+"="); ok {
+				return v, true
+			}
+			return "", false
+		}
+		if v, ok := take("--idle-nudge"); ok {
+			if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
+				idleAfter = d
+			}
+			continue
+		}
+		if v, ok := take("--idle-prompt"); ok {
+			idlePrompt = v
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return rest, idleAfter, idlePrompt
 }
 
 // openOrCreateSessionForBot reuses the same logic as interactive mode
