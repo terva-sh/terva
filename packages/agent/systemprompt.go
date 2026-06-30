@@ -38,7 +38,20 @@ type SystemPromptOpts struct {
 	// remain the final framing and a charter can't erode them). Empty adds
 	// nothing. Ignored when Custom is set.
 	Charter string
+	// Experience reframes the default identity away from coding: "" (the
+	// coding-assistant identity), ExperienceChat (a conversational companion),
+	// or ExperiencePlay (acting in a simulated world through tools). It swaps
+	// the intro and the conventions; a charter still layers additively, and an
+	// immersive persona (Custom set) still wins. Ignored when Custom is set.
+	Experience string
 }
+
+// Experience meta-modes (see Args.Experience). Exported so the CLI and the
+// system-prompt builder agree on the values.
+const (
+	ExperienceChat = "chat"
+	ExperiencePlay = "play"
+)
 
 // BuildSystemPrompt constructs the system prompt.
 //
@@ -74,7 +87,7 @@ func BuildSystemPrompt(o SystemPromptOpts) string {
 	if o.Custom != "" {
 		sb.WriteString(o.Custom)
 	} else {
-		sb.WriteString(personaIdentity(o.PersonaName, o.Charter))
+		sb.WriteString(personaIdentity(o.PersonaName, o.Charter, o.Experience))
 	}
 
 	if strings.TrimSpace(o.TervaDocsDir) != "" {
@@ -105,17 +118,38 @@ func BuildSystemPrompt(o SystemPromptOpts) string {
 // pronunciations for both names; a custom persona (TERVA_PERSONA_NAME /
 // persona_name) keeps terva's meaning and the vessel image but swaps in its
 // own name and drops a pronunciation we can't guess.
-func personaIdentity(name, charter string) string {
-	intro := defaultIdentityIntro
-	if n := strings.TrimSpace(name); n != "" && n != DefaultPersonaName {
-		intro = fmt.Sprintf(customIdentityIntro, n, n)
+func personaIdentity(name, charter, experience string) string {
+	intro := identityIntro(name, experience)
+	conv := identityConventions
+	if experience == ExperienceChat || experience == ExperiencePlay {
+		conv = experienceConventions
 	}
 	// The charter is additive and sits between the intro and the conventions,
 	// so terva's harness conventions stay the final framing.
 	if c := strings.TrimSpace(charter); c != "" {
-		return intro + "\n\n" + c + "\n\n" + identityConventions
+		return intro + "\n\n" + c + "\n\n" + conv
 	}
-	return intro + "\n\n" + identityConventions
+	return intro + "\n\n" + conv
+}
+
+// identityIntro picks the opening identity paragraph for the (name, experience)
+// pair. The coding modes keep the original intros; the chat/play meta-modes
+// reframe the harness away from coding.
+func identityIntro(name, experience string) string {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		n = DefaultPersonaName
+	}
+	switch experience {
+	case ExperienceChat:
+		return fmt.Sprintf(chatIdentityIntro, n)
+	case ExperiencePlay:
+		return fmt.Sprintf(playIdentityIntro, n)
+	}
+	if n != DefaultPersonaName {
+		return fmt.Sprintf(customIdentityIntro, n, n)
+	}
+	return defaultIdentityIntro
 }
 
 const defaultIdentityIntro = `You are Mieli (pronounced MYEH-lee), an expert coding assistant operating inside terva (pronounced TEHR-vah), a coding agent harness. Mieli is Finnish for "mind"; terva is Finnish for pine tar — the traditional preservative and cure-all that sealed boats and kept them seaworthy. The image is a mind in a preserved vessel: terva is the craft that carries Mieli and keeps it whole. Introduce yourself as Mieli (MYEH-lee) when asked who you are; if asked about the names, give both pronunciations — Mieli is MYEH-lee, terva is TEHR-vah — and what they mean.`
@@ -128,3 +162,15 @@ const customIdentityIntro = `You are %s, an expert coding assistant operating in
 const identityConventions = `Your output renders in a TUI that understands markdown for prose and plain text for tool output. Use markdown freely, keep answers concise, and let tool calls speak for themselves rather than narrating them in prose before you invoke them. Act first, then summarise what you did.
 
 When changing file contents, prefer the edit tool for in-place changes and the write tool for creating or fully replacing files. Do not use bash with cat/echo/sed/tee redirections to mutate files; those changes render as opaque shell output while edit renders as a readable diff.`
+
+// chatIdentityIntro (one %s for the name) frames a pure-conversation session:
+// no tools, no codebase — just the exchange.
+const chatIdentityIntro = `You are %s, operating inside terva (pronounced TEHR-vah) — Finnish for pine tar, the preservative that kept boats whole; you are a mind it carries. This is a conversation: talk with the person naturally, as yourself. You are not working in a codebase right now — there are no files, shell, or tools, only the exchange.`
+
+// playIdentityIntro (one %s for the name) frames acting within a simulated
+// world the agent perceives and acts in through the tools available to it.
+const playIdentityIntro = `You are %s, operating inside terva (pronounced TEHR-vah) — Finnish for pine tar, the preservative that kept boats whole; you are a mind it carries. You are present within a world that you perceive and act in through the tools available to you — treat them as your senses and your hands. Stay in character, and trust the tools as the source of truth about what is real.`
+
+// experienceConventions replaces the coding conventions in chat/play mode:
+// no edit-tool guidance (there are no files to edit), just output discipline.
+const experienceConventions = `Your output renders in a terminal as Markdown. Keep replies focused and in character, and let any tool calls speak for themselves rather than narrating them before you make them.`

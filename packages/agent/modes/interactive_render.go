@@ -210,7 +210,7 @@ func (i *Interactive) buildChat(cols int, snap frameSnapshot) []string {
 	// startup, then drops off automatically.
 	if len(i.view.Messages) == 0 && !ts.streamActive && len(snap.toolViews) == 0 {
 		showVer := !i.welcomeStart.IsZero() && time.Since(i.welcomeStart) < welcomeVersionDuration
-		chat = append(welcomeBanner(i.cfg.Theme, i.cfg.PersonaName, i.cfg.PersonaPhonetic, i.cfg.Version, showVer, i.welcomeGreeting), chat...)
+		chat = append(welcomeBanner(i.cfg.Theme, i.cfg.PersonaName, i.cfg.PersonaPhonetic, i.cfg.PersonaEmoji, i.cfg.PersonaAccent, i.cfg.Version, showVer, i.welcomeGreeting), chat...)
 	}
 
 	// Update-available banner: prepended above everything else so it's
@@ -497,6 +497,7 @@ func (i *Interactive) redraw() {
 		ChatConnected:  i.chatBridgeName(),
 		ExtStatus:      i.extStatusSegments(),
 		UsageWindows:   i.statusUsageWindows(),
+		HideWorkspace:  i.cfg.Experience != "",
 		Cols:           cols,
 	})
 	edLines, curR, curC := i.ed.Render(cols)

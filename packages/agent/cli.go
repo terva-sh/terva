@@ -545,6 +545,9 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runBotCommand(rawArgs, version); handled {
 		return err
 	}
+	if handled, err := runProjectCommand(rawArgs); handled {
+		return err
+	}
 	if handled, err := runExtCommand(rawArgs); handled {
 		return err
 	}
@@ -589,6 +592,16 @@ func Run(rawArgs []string, version string) error {
 	if args.Version {
 		fmt.Println("terva", version)
 		return nil
+	}
+
+	// Project-scoped mode: redirect data into a project-local home (and load
+	// only this project's extensions) BEFORE anything reads the home. Login +
+	// trust stay global. Off unless --project / a .terva/config.json
+	// project_scoped field asks for it.
+	if note, perr := maybeEnableProjectScope(args); perr != nil {
+		return perr
+	} else if note != "" {
+		fmt.Fprintln(os.Stderr, "terva:", note)
 	}
 	// Dev connectors load loudly, exactly as named, for exactly this
 	// invocation — there is deliberately no discovery-based dev mode
@@ -678,7 +691,10 @@ func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, 
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
-	extMgr.SetConfigResolver(resolveExtensionConfig)  // hello_ack config delivery
+	if ProjectScoped() {                              // re-adopt named globals into a scoped project (trust-gated)
+		extMgr.SetAdopt(GlobalExtensionsDir(), resolveAdoptExtensions(args.CWD))
+	}
+	extMgr.SetConfigResolver(resolveExtensionConfig) // hello_ack config delivery
 	wireSessionReader(extMgr, TervaHome(), r.CWD)
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
@@ -893,6 +909,15 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 	ag.ContextProvider = extMgr.EphemeralContext
 	// Re-prompt once at close if an extension flags open work.
 	ag.ContinueOnStop = continueOnOpenWork(extMgr)
+}
+
+// wireBotAgentExtHooks wires a long-lived chat-bot agent to its extension
+// manager — the same hooks the headless print/json modes use (tool gate +
+// extension interception + live context cards + event fanout) — bundled so
+// botcmd.go needs no extra imports. The bot loop runs turns one at a time, so
+// the per-turn hooks fire exactly as they do in a headless single-shot run.
+func wireBotAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate, args Args, r *Resolved) {
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, gate, buildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)))
 }
 
 func runPrintMode(ctx context.Context, args Args, version string) error {
@@ -1129,7 +1154,10 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
-	extMgr.SetConfigResolver(resolveExtensionConfig)  // hello_ack config delivery
+	if ProjectScoped() {                              // re-adopt named globals into a scoped project (trust-gated)
+		extMgr.SetAdopt(GlobalExtensionsDir(), resolveAdoptExtensions(args.CWD))
+	}
+	extMgr.SetConfigResolver(resolveExtensionConfig) // hello_ack config delivery
 	wireSessionReader(extMgr, TervaHome(), r.CWD)
 	// --ext paths first so they win against installed extensions of
 	// the same name (loadOne's first-write-wins semantics).
@@ -1953,7 +1981,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 
 	iv = modes.NewInteractive(modes.InteractiveConfig{
 		Terminal:                term,
-		Theme:                   theme,
+		Theme:                   experienceTheme(theme, r.experience),
 		InlineImagesEnabled:     initialCfg.InlineImagesEnabled,
 		AutoSwarmEnabled:        initialCfg.AutoSwarmEnabled,
 		RecursiveFileSuggest:    initialCfg.RecursiveFileSuggest,
@@ -1961,6 +1989,9 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		ThemeName:               initialCfg.Theme,
 		PersonaName:             r.persona.Name,
 		PersonaPhonetic:         r.persona.Phonetic(),
+		PersonaEmoji:            r.persona.Emoji,
+		PersonaAccent:           r.persona.AccentColor,
+		Experience:              r.experience,
 		ExtensionThemes:         func() []tui.ThemeOption { return extensionThemeOptions(extMgr) },
 		AutoSwarmSystemAddendum: autoSwarmAddendum(),
 		SwarmTiers:              hostTiers,

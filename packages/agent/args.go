@@ -63,10 +63,30 @@ type Args struct {
 	Session  string
 	NoSess   bool
 
-	CWD      string
-	NoTools  bool
-	Tools    []string
-	MaxSteps int
+	CWD     string
+	NoTools bool
+	// NoWorkspaceTools drops only the built-in workspace tools (read/write/
+	// edit/bash/grep/glob/status/ask) while KEEPING extension + MCP + skill
+	// tools and the normal identity. The least-privilege middle ground between
+	// the default full agent and --no-tools: an agent (often a bot) that should
+	// use its curated integrations but never reach the host filesystem/shell.
+	NoWorkspaceTools bool
+	Tools            []string
+	// Experience is a meta-mode that reframes the harness away from coding:
+	// "" (normal), "chat" (pure conversation — no tools), or "play" (act in a
+	// simulated world — built-in coding tools off, extension/MCP tools kept).
+	// Both drop the coding identity + conventions, skip AGENTS.md, and suppress
+	// coding chrome. Set by --chat / --play.
+	Experience string
+	MaxSteps   int
+
+	// Project / NoProject force project-scoped mode on / off for this run,
+	// overriding the `project_scoped` field in .terva/config.json. In
+	// project-scoped mode all data lives in a project-local home and only the
+	// project's own extensions load; login + trust stay global. See
+	// projectscope.go.
+	Project   bool
+	NoProject bool
 
 	// Jail / NoJail force the sandbox on / off at startup. When
 	// neither is set the default is on for an interactive session and
@@ -203,6 +223,22 @@ func ParseArgs(in []string) (Args, error) {
 			a.NoSess = true
 		case "--no-tools":
 			a.NoTools = true
+		case "--no-workspace-tools":
+			a.NoWorkspaceTools = true
+		case "--chat":
+			if a.Experience == ExperiencePlay {
+				return a, fmt.Errorf("--chat and --play are mutually exclusive")
+			}
+			a.Experience = ExperienceChat
+		case "--play":
+			if a.Experience == ExperienceChat {
+				return a, fmt.Errorf("--chat and --play are mutually exclusive")
+			}
+			a.Experience = ExperiencePlay
+		case "--project":
+			a.Project = true
+		case "--no-project":
+			a.NoProject = true
 		case "--jail":
 			a.Jail = true
 		case "--no-jail":
@@ -542,21 +578,34 @@ func PrintHelp(version string) {
 	)
 	section("workspace, tools, skills",
 		row{"--cwd PATH", "treat PATH (an existing directory) as the working directory"},
-		row{"--no-tools", "disable all tools"},
-		row{"--tools csv", "only enable the listed tools"},
+		// building blocks — each turns off one capability, independently:
+		row{"--no-workspace-tools", "turn off the built-in read/write/edit/bash/grep tools; keep extensions + MCP (least-privilege for bots)"},
+		row{"--no-ext / --no-extensions", "turn off extension discovery for this run"},
+		row{"--no-mcp", "turn off MCP server startup for this run"},
+		// composite modes built from the blocks (+ an identity change):
+		row{"--no-tools", "all three blocks above together (and the skill tool) — no tools at all"},
+		row{"--chat", "no tools at all + a conversational, non-coding identity (pairs with --persona)"},
+		row{"--play", "extensions + MCP only (= --no-workspace-tools) + an embodied identity"},
+		row{"--tools csv", "only enable the listed (built-in) tools"},
+		row{"--no-skill", "skip all skill discovery for this run"},
 		row{"--approval plan|ask|auto-edit|workspace|yolo", "approval mode: plan = read-only only, ask = confirm everything, auto-edit = confirm non-edit tools, workspace = run built-ins + reads, confirm foreign side-effects (interactive default), yolo = run freely. See docs/permissions.md"},
 		row{"--no-yolo", "alias for --approval ask"},
 		row{"--jail / --no-jail", "force the sandbox on / off at startup (default: on for interactive, off for headless)"},
-		row{"--no-ext", "skip extension discovery for this run"},
-		row{"--no-mcp", "skip MCP server startup for this run"},
-		row{"--no-skill", "skip all skill discovery for this run"},
 		row{"--trust", "trust the cwd for this run only (load project extensions/skills/context; not persisted)"},
+		row{"--project / --no-project", "force project-scoped mode on/off (data in .terva/home, only project extensions; login+trust stay global)"},
 	)
 	section("workspace trust",
 		row{"terva trust [path]", "trust a directory so its project extensions/skills/context load (default: cwd)"},
 		row{"terva trust --parent [path]", "trust the directory and everything under it"},
 		row{"terva trust --list", "show the trusted directories"},
 		row{"terva untrust [path]", "remove a directory from the trust list (default: cwd)"},
+	)
+	section("project-scoped agents (terva project ...)",
+		row{"terva project init [--persona NAME]", "scaffold a self-contained agent here (config + dirs + data home)"},
+		row{"terva project status", "show what this directory will run: scope, trust, extensions, model"},
+		row{"terva project trust / untrust", "trust this directory (required to run it scoped) / revoke"},
+		row{"terva project ext adopt/drop/list/disable/enable", "manage this project's extensions"},
+		row{"terva project model|provider [VALUE]", "show or set this project's model / provider"},
 	)
 	section("misc",
 		row{"--swarm-worktrees", "give each swarm sub-agent its own git worktree (needs the terva-git-worktree extension)"},

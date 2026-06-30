@@ -2132,6 +2132,12 @@ type StatusBarParams struct {
 	// (status_segment frames), shown as ambient tags on the cwd line.
 	ExtStatus []string
 
+	// HideWorkspace suppresses the coding-context chrome — the working
+	// directory path, the sandbox "jailed" badge, and the approval-mode tag —
+	// for the --chat / --play meta-modes, where there is no workspace to speak
+	// of. Extension status segments and the chat-connected tag still show.
+	HideWorkspace bool
+
 	// UsageWindows are the current provider's subscription usage windows
 	// (e.g. codex's 5h + weekly). When the busiest is high enough to be
 	// worth a glance, the bar shows a compact "<label> <pct>%" hint;
@@ -2255,14 +2261,21 @@ func StatusBar(p StatusBarParams) []string {
 
 	cwd := shortenHome(p.CWD)
 	tags := ""
-	switch {
-	case p.ApprovalMode != "" && p.ApprovalMode != "yolo":
-		tags += p.ApprovalMode + " mode "
-	case p.ApprovalMode == "" && p.NoYolo:
-		tags += "yolo mode disabled "
-	}
-	if p.Locked {
-		tags += "jailed "
+	// Coding-context chrome (approval mode, sandbox, cwd path) is meaningless
+	// in chat/play mode and is suppressed there; ambient extension status and
+	// the chat-connected tag still show.
+	if !p.HideWorkspace {
+		switch {
+		case p.ApprovalMode != "" && p.ApprovalMode != "yolo":
+			tags += p.ApprovalMode + " mode "
+		case p.ApprovalMode == "" && p.NoYolo:
+			tags += "yolo mode disabled "
+		}
+		if p.Locked {
+			tags += "jailed "
+		}
+	} else {
+		cwd = ""
 	}
 	if p.ChatConnected != "" {
 		tags += p.ChatConnected + " connected "
@@ -2272,8 +2285,12 @@ func StatusBar(p StatusBarParams) []string {
 			tags += s + " "
 		}
 	}
-	if tags != "" && cwd != "" {
+	switch {
+	case tags != "" && cwd != "":
 		cwd = tags + "- " + cwd
+	case tags != "" && cwd == "":
+		// No cwd to show (hidden), but ambient tags (ext status / chat) remain.
+		cwd = strings.TrimSpace(tags)
 	}
 
 	primary := leftBuilder.String()

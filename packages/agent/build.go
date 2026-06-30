@@ -94,6 +94,18 @@ type Resolved struct {
 	// mutating extension tools out of the merge.
 	approvalMode core.ApprovalMode
 
+	// experience is the meta-mode ("", chat, play). chat additionally keeps
+	// extension tools out of the merge (pure conversation); play keeps them.
+	experience string
+
+	// noTools mirrors args.NoTools. Like chat it suppresses ALL tools — but
+	// the tools only: built-ins are dropped in buildToolRegistry, and the
+	// skill tool + extension/MCP merges are skipped (MergeExtensionTools),
+	// WITHOUT chat's identity/intro changes. Without this gate the now-full-
+	// agent bot's `--no-tools` would still expose every extension/MCP/skill
+	// tool — it only dropped the built-ins.
+	noTools bool
+
 	// readOnlySet is the gate policy's dynamic read-only registry,
 	// adopted via AdoptReadOnlySet so tool merges can extend it with
 	// read_only-annotated extension/MCP tools. Nil when no gate
@@ -173,6 +185,7 @@ func (r *Resolved) rebuildSystemPrompt() {
 		StatusTool:   r.ToolRegistry["terva_status"] != nil,
 		PersonaName:  r.persona.Name,
 		Charter:      r.persona.Charter,
+		Experience:   r.experience,
 	})
 }
 
@@ -187,7 +200,16 @@ func (r Resolved) HasCredential() bool { return r.Credential != "" }
 // effect on the second pass (existing names are preserved). Built-in
 // tools always win on conflict.
 func (r *Resolved) MergeExtensionTools(mgr ExtensionToolSource) {
-	changed := MergeToolsForMode(r.ToolRegistry, r.approvalMode, r.readOnlySet, mgr)
+	// chat mode is pure conversation: no tools from anywhere, so extension
+	// tools don't merge (their commands/panels/context still work). play keeps
+	// extension tools — that's the simulated world the agent acts through.
+	// --no-tools suppresses the merge for the same reason (every source off);
+	// it also covers MCP, which routes through this same merge. Either way the
+	// extension's commands/panels/static context below still register.
+	var changed bool
+	if r.experience != ExperienceChat && !r.noTools {
+		changed = MergeToolsForMode(r.ToolRegistry, r.approvalMode, r.readOnlySet, mgr)
+	}
 	// Pull the source's static context contribution (register_context)
 	// into the cached addendum. Optional interface so MCP sources (which
 	// don't contribute context) are unaffected. Folding it here means
@@ -647,7 +669,10 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		skillTool     *skills.Tool
 		skillAddendum string
 	)
-	if !args.NoSkill {
+	// Skills are a coding-workflow concept; chat/play modes drop them along
+	// with the built-in tools. --no-tools likewise drops the skill tool (it's
+	// a tool the model can call), so `--no-tools` means no tools, full stop.
+	if !args.NoSkill && !args.NoTools && args.Experience == "" {
 		homeDir, _ := os.UserHomeDir()
 		// trusted gates the PROJECT skill dirs: an untrusted workspace's
 		// .terva|.claude|.agents/skills are skipped so a cloned repo can't
@@ -673,8 +698,12 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	} else if ctxBlock != "" {
 		append_ = append(append_, ctxBlock)
 	}
-	if agentsAddendum := readAgentsContext(args.CWD, TervaHome()); agentsAddendum != "" {
-		append_ = append(append_, agentsAddendum)
+	// AGENTS.md is repo coding policy; chat/play sessions aren't working in the
+	// repo, so don't let a stray AGENTS.md steer a conversation or a roleplay.
+	if args.Experience == "" {
+		if agentsAddendum := readAgentsContext(args.CWD, TervaHome()); agentsAddendum != "" {
+			append_ = append(append_, agentsAddendum)
+		}
 	}
 	if skillAddendum != "" {
 		append_ = append(append_, skillAddendum)
@@ -708,6 +737,15 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		return Resolved{}, err
 	}
 
+	// An immersive persona owns the identity: its charter REPLACES the default
+	// coding-assistant intro + conventions, routed through the same Custom path
+	// as --system-prompt. An explicit --system-prompt / SYSTEM.md still wins (we
+	// only fill an empty custom), so the precedence stays
+	// flag > SYSTEM.md > immersive-persona > additive-persona > default.
+	if c := immersiveCustom(custom, persona); c != "" {
+		custom = c
+	}
+
 	sys := BuildSystemPrompt(SystemPromptOpts{
 		CWD:          args.CWD,
 		Tools:        summaries,
@@ -717,6 +755,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		StatusTool:   reg["terva_status"] != nil,
 		PersonaName:  persona.Name,
 		Charter:      persona.Charter,
+		Experience:   args.Experience,
 	})
 
 	reasoning := provider.NormalizeReasoning(firstNonEmpty(args.Reasoning, cfg.Reasoning))
@@ -763,6 +802,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		persona:                  persona,
 		toolDescriptions:         descMapFromSummaries(summaries),
 		approvalMode:             approval,
+		experience:               args.Experience,
+		noTools:                  args.NoTools,
 	}, nil
 }
 
@@ -1013,7 +1054,12 @@ func (r Resolved) NewAgent() *core.Agent {
 // a vision model but an actionable text result otherwise. Called on
 // every agent rebuild, so a /model switch re-derives the verdict.
 func buildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbox *tools.Sandbox, provName, authMethod string, visionCapable bool) core.Registry {
-	if args.NoTools {
+	// chat and play both drop the built-in coding tools (read/write/edit/bash/
+	// …): chat is pure conversation, play acts only through a world extension's
+	// tools. --no-tools does the same. --no-workspace-tools also drops them, but
+	// (unlike the above) leaves extension/MCP/skill tools and the normal identity
+	// in place — an agent with its integrations but no host filesystem/shell.
+	if args.NoTools || args.NoWorkspaceTools || args.Experience != "" {
 		return core.Registry{}
 	}
 	all := map[string]core.Tool{

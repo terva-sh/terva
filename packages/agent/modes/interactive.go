@@ -63,6 +63,15 @@ type InteractiveConfig struct {
 	// plumbed in from the cli so this package doesn't import agent (cycle).
 	PersonaName     string
 	PersonaPhonetic string
+	// PersonaEmoji and PersonaAccent (a #RRGGBB) are the persona's display
+	// metadata; when set they lead and tint the welcome banner. Empty falls
+	// back to the theme's defaults, so a non-persona session is unchanged.
+	PersonaEmoji  string
+	PersonaAccent string
+	// Experience is the meta-mode ("", "chat", "play"). When non-empty the TUI
+	// suppresses coding chrome (the cwd path + jail/approval tags in the status
+	// bar) and uses non-coding spinner/greeting flavor.
+	Experience string
 	// ExtensionThemes returns themes bundled with loaded extensions.
 	ExtensionThemes func() []tui.ThemeOption
 
