@@ -252,3 +252,69 @@ Setup flow:
 From then on, any DM you send is forwarded to the agent as a user prompt. Attached photos or `image/*` documents are downloaded and passed to vision-capable models. In-bot telegram commands: `/help`, `/status`, `/stop` (cancel the current turn). Config lives in `$TERVA_HOME/bot.json` (mode 0600).
 
 Bot mode respects the usual terva flags: `--provider`, `--model`, `--cwd`, `--reasoning`, `--continue`, `--no-session`, `--no-tools`, and so on. Run `terva tg run -c --model claude-opus-4-1` to resume the latest session on Opus, for example.
+
+### Tools, extensions, and MCP
+
+A bot is a **full agent**, not just a chat box. `terva bot run` hosts the same
+capabilities the TUI does:
+
+- **built-in tools** (read/write/edit/bash/grep/glob) — sandboxed to the cwd, as
+  in the TUI;
+- **extensions** — discovered and spawned, so their tools and live context
+  cards reach the model (run `terva bot run` in/with the extensions you want);
+- **MCP servers** — started per your config.
+
+Because a bot has no interactive prompt, it defaults to **yolo** approval (it
+runs its tools) — an explicit `--approval`, `--no-yolo`, or a config `approval`
+still wins. A bot's capabilities are three independent **building blocks** —
+turn off any combination per run:
+
+| flag | turns off |
+|---|---|
+| `--no-workspace-tools` | the built-in tools (read/write/edit/bash/grep/glob) — its integrations stay, but it can't touch the host filesystem/shell (least-privilege) |
+| `--no-ext` / `--no-extensions` | extension discovery (your `--ext` paths still load on top) |
+| `--no-mcp` | MCP servers |
+
+The **mode flags** are shorthands built from those blocks, plus an identity change:
+
+| flag | tools (in block terms) | identity |
+|---|---|---|
+| `--no-tools` | all three blocks together (and the `skill` tool) — nothing | unchanged |
+| `--chat` | nothing (like `--no-tools`) | conversational, non-coding (see [personas](personas.md#chat-and-play-modes)) |
+| `--play` | `--no-workspace-tools` — extensions + MCP only | embodied/roleplay |
+
+`--project` is a separate axis: it scopes data + extensions to the project
+(`.terva/home`; login/trust stay global — see
+[extensions](extensions.md#project-scoped-agents)), not a tool toggle.
+
+```bash
+terva bot run --no-workspace-tools                # integrations only — no host fs/shell
+terva bot run --no-mcp --no-ext                   # built-in tools only
+terva bot run --persona kaiku --chat              # a pure conversation bot
+terva bot run --persona wayfarer --play --ext ./world   # a world/roleplay bot
+terva bot run --project                           # a self-contained project bot
+```
+
+### Proactive idle nudge
+
+By default the bot is purely reactive — it only speaks in reply to a message.
+`--idle-nudge <duration>` lets it **open a conversation when the chat goes
+quiet**: a companion that comments, a watcher that checks in, a persona that
+breaks the silence.
+
+```bash
+terva bot run --persona kaiku --idle-nudge 30m
+terva bot run --persona kaiku --idle-nudge 45m \
+  --idle-prompt "(It's quiet — open with a small question.)"
+```
+
+When the paired chat has been silent for `--idle-nudge` (no inbound message and
+no turn running), the loop injects a cue as a synthetic prompt and the agent
+replies in its persona's voice. `--idle-prompt` overrides the default cue.
+
+It nudges, it doesn't nag: it fires **once per silence** and re-arms only when
+the paired user speaks again. The paired chat is seeded from pairing (for a DM
+connector the chat is the user) so it can open a conversation cold. Pair this
+with a `--persona` so the nudge has a voice — see [personas](personas.md). The
+flag works with any connector (`--connector matrix`, …) since the nudge lives in
+the transport-agnostic loop.

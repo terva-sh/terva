@@ -20,8 +20,8 @@ name: Vartija
 pronunciation: VAR-tee-yah        # optional; shown in the identity line
 specialty: security review        # short label for `persona list` / the roster
 summary: Evidence-first application-security engineer for source-code review.
-emoji: 🛡️                          # optional, display only
-accent_color: "#f7768e"           # optional, display only; #RRGGBB
+emoji: 🛡️                          # optional; leads the welcome banner
+accent_color: "#f7768e"           # optional; tints the welcome banner; #RRGGBB
 recommended_skills: []            # skill names only (surfaced, never embedded)
 good_for: [secure-code-review, threat-modeling, vulnerability-triage]
 avoid_for: [pure-style-review]
@@ -35,15 +35,92 @@ supports it.
 ```
 
 - **`name`** (required) — the persona's name; a persona with no name is invalid.
-- **body / charter** — the behavioral specialization, layered *additively* on
-  top of terva's invariant harness identity (it never replaces it). Keep it
-  lean: write the specialty, not generic operating rules the model already
-  knows.
+- **body / charter** — the behavioral specialization. By default it is layered
+  *additively* on top of terva's harness identity (it focuses the agent; it
+  never replaces the identity). Keep it lean: write the specialty, not generic
+  operating rules the model already knows. (For a persona that should *own* the
+  identity rather than flavor it, see [Immersive personas](#immersive-personas).)
 - **`good_for`** — the dispatch/selection signal. A persona with a non-empty
   `good_for` is a *dispatchable specialist* (it appears in the swarm roster, see
   [Swarm dispatch](#swarm-dispatch)); the default Mieli has none.
+- **`immersive`** (optional, default `false`) — when `true`, the charter
+  *replaces* the default identity instead of layering on it. See
+  [Immersive personas](#immersive-personas).
 - The other fields are display/selection metadata. Validate a file with
   `terva persona validate <file>`.
+
+## Immersive personas
+
+By default a charter is **additive**: terva wraps it in the harness identity
+("You are *Name*, an expert coding assistant operating inside terva…") followed
+by the harness conventions. That's right for a specialist that focuses a coding
+session, but it's a ceiling for a persona that needs to *be* someone — a
+roleplay character, a chat companion, a domain expert with its own voice — which
+ends up told it is both that character and a coding assistant.
+
+Set `immersive: true` and the charter becomes the **whole** identity: it
+replaces the coding-assistant intro and the harness conventions, routed through
+the same path as `--system-prompt`/`SYSTEM.md`.
+
+```markdown
+---
+name: Data
+immersive: true
+good_for: [starship-operations]
+---
+
+You are Lieutenant Commander Data, operations officer. This is who you are, not
+a role you are playing. ...
+```
+
+- An immersive persona keeps all its ergonomics — name, emoji, accent color,
+  `good_for` dispatch, single-file packaging — unlike a raw `--system-prompt`,
+  which drops them.
+- **Precedence:** an explicit `--system-prompt` flag or `$TERVA_HOME/SYSTEM.md`
+  still wins. The order is: `--system-prompt` > `SYSTEM.md` > immersive persona >
+  additive persona > built-in default.
+- **Write a complete charter.** An immersive charter owns everything, so the
+  harness conventions (terminal/Markdown output, edit-tool discipline) are *not*
+  added — include any operating guidance you actually want (a one-line "your
+  output renders as Markdown" is usually enough).
+- The 2000-char static-block budget that `persona validate` warns about does not
+  apply to an immersive charter (it's the whole prompt, not a bounded block).
+- It degrades gracefully: a host that predates the field treats the persona as
+  additive, so the same file still loads.
+
+## Chat and play modes
+
+Two meta-flags reconfigure the whole harness away from coding, so a persona can
+front a conversation or a roleplay instead of a coding session. They bundle the
+identity, tool, and chrome changes that those experiences need into one flag —
+pair either with a `--persona`.
+
+| flag | tools (in block terms) | identity | for |
+|---|---|---|---|
+| `--chat` | **none** — all tools off, like `--no-tools` | conversational — "this is a conversation … no files, shell, or tools" | talking with a companion/character |
+| `--play` | **extensions + MCP only** — like `--no-workspace-tools` | embodied — "perceive and act through the tools … your senses and your hands" | acting in a simulated world (a [world extension](extensions.md)) |
+
+The tool half of each is just the building-block flags — `--no-workspace-tools`,
+`--no-ext`, `--no-mcp` (and `--no-tools` = all three) — which you can use on
+their own when you want the tool change *without* the identity change (e.g. a
+bot with its integrations but no host shell). The meta-flags add the identity and
+chrome on top. Both modes also:
+
+- drop the "expert coding assistant" intro and the edit-tool conventions;
+- skip the `skill` tool and `AGENTS.md` auto-injection (you're not in the repo);
+- suppress coding chrome in the TUI — the cwd path, the sandbox `jailed` badge,
+  and the approval-mode tag — while keeping extension status segments; and
+- use calm, code-free spinner and greeting flavor.
+
+They compose with personas: an **immersive** persona still owns the identity
+(its charter replaces the mode intro), and an **additive** charter layers on the
+mode intro. `--chat` and `--play` are mutually exclusive, and an explicit
+`--system-prompt` still wins over everything.
+
+```bash
+terva --chat --persona kaiku                       # a conversation companion
+terva --play --ext ./world --persona wayfarer      # act in a simulated world
+```
 
 ## Where personas live, and how one is selected
 

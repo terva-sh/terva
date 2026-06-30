@@ -177,6 +177,10 @@ A project-local extension with the same name wins over a global one.
 On macOS `$TERVA_HOME` defaults to `~/Library/Application Support/terva/`;
 on Linux it's `$XDG_STATE_HOME/terva` or `~/.local/state/terva`.
 
+> **Project-scoped agents.** To run a directory as a *self-contained* agent —
+> only its own extensions, none of your global/system ones, and all data kept in
+> the project — see [Project-scoped agents](#project-scoped-agents) below.
+
 Because each extension owns its own directory, the recommended place
 for extension state is inside that directory itself (for example
 `todos.json`, `settings.json`, or an auth/cache file used only by that
@@ -209,6 +213,92 @@ manifest tells terva how to launch it:
 | `enabled` | optional, defaults to `true`. set to `false` to disable without removing. |
 | `permissions` | optional **bundle contribution**: suggested permission rules (see below). |
 | `config` | optional. a schema of settings the user fills in via `/extensions` (see below). |
+
+## Project-scoped agents
+
+Sometimes you want a directory to be a **self-contained agent** — its own
+persona and extensions, none of your global/system ones, with all of its data
+kept inside the project. Useful for a project built around a specific persona +
+extension set, for sharing a ready-to-run agent, or just to keep something out
+of your global setup. Turn it on per directory:
+
+```jsonc
+// ./.terva/config.json
+{ "project_scoped": true }
+```
+
+or per run with `--project` (and `--no-project` to force it off):
+
+```bash
+terva --project          # this run is project-scoped
+terva                     # auto-scoped if .terva/config.json says so (once trusted)
+```
+
+The `terva project` commands set this up and keep it legible:
+
+```bash
+terva project init [--persona NAME]   # scaffold a scoped project (config + dirs + gitignored data home)
+terva project status                  # what will run here: scope, trust, extensions, model
+terva project trust / untrust         # trust this project (required to run scoped) / revoke
+terva project model <id>              # pin this project's model (it doesn't inherit your global one)
+terva project ext adopt/drop/disable/enable <name>
+```
+
+When project-scoped, terva:
+
+- **Stores all data in the project** — sessions, `ext-data/`, logs, and
+  `config.json` — under `./.terva/home/` (created for you, with a `.gitignore`
+  so the runtime state is never committed). Mechanically, `$TERVA_HOME` is
+  pointed at that directory for the run.
+- **Loads only the project's own extensions** (`./.terva/extensions/`, still
+  trust-gated) — your global `$TERVA_HOME/extensions` are not loaded.
+- **Inherits your login and trust, globally.** Credentials (`auth.json`) and the
+  trust store (`trusted.json`) stay in your real global home, so you don't
+  re-authenticate per project, no secrets are ever written into the project, and
+  a cloned repo still can't trust itself.
+
+Authored **project personas** live in `./.terva/personas/` (committed, not
+gitignored) and load **by path** — `terva --persona ./.terva/personas/NAME.md`,
+which is what `terva project init --persona` scaffolds and prints for you.
+
+Because a scoped project runs **its own** config, extensions, hooks, and system
+prompt as the agent — that is the whole point — terva requires you to **trust the
+directory first**. Running a `project_scoped` directory you haven't trusted
+stops with an error pointing you at `terva trust` (one-time; `terva project
+trust` is the alias, and `--trust` grants a single run). It's the same
+[Workspace Trust](#security) boundary that gates project extensions, applied to
+the entire scoped setup — so a cloned repo can't turn itself into a
+self-configured agent on a plain `terva`. Once trusted, the project is safe to
+commit and share: credentials stay global, so it carries its
+extensions/persona/config, never your secrets.
+
+This also works for a [chat bot](connectors.md): `terva bot run --project`
+gives you a bot backed entirely by one project's persona + extensions + data.
+
+### Adopting global extensions
+
+A scoped project starts with upstream extensions off, but you often want a few
+of your global ones back without copying binaries around. Adopt them by name:
+
+```bash
+terva project ext list             # what this project adopts + what's available globally
+terva project ext adopt weather    # re-admit your global "weather" here
+terva project ext drop weather
+```
+
+This records the name in `.terva/config.json`:
+
+```jsonc
+{ "project_scoped": true, "adopt_extensions": ["weather"] }
+```
+
+An adopted extension loads **from your global install** — no copy, shared
+binary, with its data kept project-local — and only when the project is scoped
+**and trusted** (same gate as the project's own extensions). It can only select
+from extensions you already installed globally, so a scoped project is always a
+*subset* of your upstream, never wider. The list travels with the project: on a
+machine that doesn't have that global extension, it's simply absent rather than
+an error.
 
 ## Inspecting & toggling (`/extensions`)
 
@@ -604,6 +694,34 @@ user's trust, and the host's event loop. A few habits keep it a good neighbor:
   user's filesystem and network access (see [Security](#security)); the host's
   permission gate is a backstop, not a license. Be conservative with side
   effects and surface what you're doing.
+
+### Tool-call ordering (`ext.Sequential()`)
+
+A model can emit several tool calls in a single turn, and the SDK runs each
+`tool_call` on its **own goroutine** — so two calls that arrive together race.
+For independent tools that is exactly what you want (they finish as fast as the
+slowest, not the sum). But for **stateful tools with ordering constraints** — a
+"raise shields" that must complete before a "fire", a "begin transaction" before
+the writes inside it — a race can apply them out of order or interleave them.
+
+Mark such tools `Sequential()`:
+
+```go
+e.Tool("raise_shields", "...", schema, raiseHandler, ext.Sequential())
+e.Tool("fire",          "...", schema, fireHandler,  ext.Sequential())
+```
+
+Every tool marked `Sequential()` shares **one first-in-first-out lane**, so order
+is preserved *across* them: the calls execute one at a time, in the order they
+arrived. Tools that aren't marked stay fully concurrent and never wait on the
+lane.
+
+This does **not** reorder anything — the model is still responsible for issuing
+the calls in a sensible order. `Sequential()` only guarantees the SDK *preserves*
+that order for the tools where it matters, instead of dropping it on the floor by
+racing goroutines. Mark the handful of order-sensitive effectors; leave
+read-only and independent tools concurrent. A guarding mutex protects your state
+either way — `Sequential()` is about *logical* ordering, not data races.
 
 ## Wire format
 
@@ -1287,6 +1405,10 @@ See:
   (stdlib only), the twin of the TS one
 - `examples/extensions/todo/` — interactive persistent panel + tool
 - `examples/extensions/scratchpad/` — source-run TypeScript commands + tool
+- `examples/extensions/world/` — the "extension as a world" pattern: a
+  procedural place the agent explores through tools (senses + effectors), with
+  persisted state, a live context card, a map panel, `ext.Sequential()`
+  effectors, and a bundled persona
 
 ### Hot reload
 

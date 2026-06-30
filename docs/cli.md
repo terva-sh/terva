@@ -20,12 +20,14 @@ TUI's own surface (slash commands, keys) lives in [tui.md](tui.md).
 | `--session <path>` | Resume a specific session file. |
 | `--no-session` | Don't read or write session files. |
 | `--cwd <path>` | Use `<path>` as the working directory. |
-| `--no-tools` | Disable all tools. |
-| `--tools <csv>` | Only enable the listed tools. |
-| `--max-steps <n>` | Cap agent loop iterations (default: unlimited; pass `0` for unlimited). |
 | `-e`, `--ext <path>` | Load an extension from `<path>` for this run (repeatable; wins against installed extensions of the same name). |
-| `--no-ext` | Skip extension discovery for this run. `--ext` still works on top, so `--no-ext --ext ./x` runs only `x`. |
+| `--no-workspace-tools` | Turn off the built-in workspace tools (read/write/edit/bash/grep/glob); extensions, MCP, and skills stay — an agent with its integrations but no host filesystem/shell. |
+| `--no-ext` | Turn off extension discovery for this run. `--ext` still works on top, so `--no-ext --ext ./x` runs only `x`. |
+| `--no-mcp` | Turn off MCP servers for this run. |
+| `--no-tools` | All three building blocks above together (plus the `skill` tool) — no tools at all. |
 | `--no-skill` | Disable all skills, including built-ins. No `skill` tool is registered and the system prompt has no skill manifest. |
+| `--tools <csv>` | Only enable the listed (built-in) tools. |
+| `--max-steps <n>` | Cap agent loop iterations (default: unlimited; pass `0` for unlimited). |
 | `--approval MODE` | Approval mode: `plan` (read-only only), `ask` (confirm everything), `auto-edit` (read-only + file editors run freely, the rest asks), `workspace` (built-in tools + read-only tools run, foreign side-effecting tools ask — the interactive default), `yolo` (run freely — the headless default). Combines with permission rules in config — see [permissions.md](permissions.md). In print / json / rpc modes anything that would need a prompt is **refused** with a model-readable message; allow rules and the mode's auto-allows still run. |
 | `--jail` / `--no-jail` | Force the sandbox on / off at startup. Default: on for an interactive session (so the trusted built-in tools stay confined to the cwd), off for headless modes. `/jail` and `/unjail` toggle it at runtime in the TUI. |
 | `--no-yolo` | Alias for `--approval ask`. In the interactive TUI a dialog shows the tool name and a one-line preview of its args with five choices (yes, always-this-tool, always-this-tool-saved, always-this-session, no). In print / json / rpc modes there is no prompt to confirm at, so every not-pre-allowed tool call is **refused** rather than run unconfirmed — use permission rules or omit the flag for unattended automation. |
