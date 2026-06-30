@@ -52,16 +52,15 @@ func sanitizeUserBubbleLine(s string) string {
 	return b.String()
 }
 
-// pathFromToolArgs returns the "path" argument from a tool_call's
-// JSON arguments, or "" if the args aren't a JSON object or don't
-// include one. Used to pick a syntax language for rendering the
-// corresponding tool_result.
-func pathFromToolArgs(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
+// pathFromParsed returns the "path"/"file_path" argument from a tool
+// call's already-unmarshalled JSON arguments, or "" if they aren't a
+// JSON object or don't include one. Used to pick a syntax language for
+// rendering the corresponding tool_result. Operating on a pre-decoded
+// value lets refreshToolPaths derive path/offset/label from a single
+// json.Unmarshal (see parseToolArgInfo) rather than one per field.
+func pathFromParsed(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
 		return ""
 	}
 	for _, k := range []string{"path", "file_path"} {
@@ -72,25 +71,22 @@ func pathFromToolArgs(raw json.RawMessage) string {
 	return ""
 }
 
-// offsetFromToolArgs returns the read tool's 1-indexed `offset`
-// arg (the first line of the slice the tool was asked to return),
-// or 0 when the call didn't specify one. Used by the tui to draw
-// the line-number gutter aligned to the right starting row, even
-// though the tool's text content itself no longer carries line
+// offsetFromParsed returns the read tool's 1-indexed `offset` arg (the
+// first line of the slice the tool was asked to return) from already-
+// unmarshalled args, or 0 when the call didn't specify one. Used by the
+// tui to draw the line-number gutter aligned to the right starting row,
+// even though the tool's text content itself no longer carries line
 // numbers.
-func offsetFromToolArgs(raw json.RawMessage) int {
-	if len(raw) == 0 {
+func offsetFromParsed(v any) int {
+	m, ok := v.(map[string]any)
+	if !ok {
 		return 0
 	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return 0
-	}
-	switch v := m["offset"].(type) {
+	switch n := m["offset"].(type) {
 	case float64:
-		return int(v)
+		return int(n)
 	case int:
-		return v
+		return n
 	}
 	return 0
 }
@@ -118,7 +114,12 @@ type View struct {
 	// short args) for the call, so a tool_result message can render
 	// the box top edge without having to look back at the assistant
 	// message that originated the call. Rebuilt on each Build().
-	toolCallLabels  map[string]string
+	toolCallLabels map[string]string
+	// toolArgCache memoises the parsed path/offset/label for each tool
+	// call by tool_use_id, so refreshToolPaths re-parses a call's JSON
+	// arguments only when it first appears or while it's still streaming
+	// (its args are still growing). See refreshToolPaths.
+	toolArgCache    map[string]toolArgInfo
 	Streaming       string // current assistant text delta
 	StreamingActive bool
 	ToolCalls       []ToolCallView // tool calls in flight or completed
@@ -456,28 +457,77 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 	return out, anchors
 }
 
-// refreshToolPaths rebuilds the tool_use_id -> path map from the
-// current transcript. Called once per Build() so tool result blocks
-// (which may be cached) can look up their syntax language when they
-// were originally rendered. Walking the transcript here is O(N) but
-// cheap compared to markdown/chroma work it enables.
+// toolArgInfo is the per-call data refreshToolPaths derives from a tool
+// call's JSON arguments: the path (tool_result syntax language), the
+// read offset (line-number gutter), and the box label. Memoised by
+// tool_use_id in View.toolArgCache.
+type toolArgInfo struct {
+	// argsLen is the length of the arguments this was parsed from. A
+	// streaming call's args only grow, so a length change is enough to
+	// know the cached parse is stale; a finished call's args never change.
+	argsLen int
+	path    string
+	offset  int
+	label   string
+}
+
+// parseToolArgInfo decodes a tool call's arguments ONCE and derives the
+// path, offset, and label together. It replaces three separate
+// json.Unmarshal passes (pathFromToolArgs + offsetFromToolArgs +
+// ShortArgs) — individually cheap, but they ran for every tool call on
+// every redraw before refreshToolPaths began caching.
+func parseToolArgInfo(name string, raw json.RawMessage) toolArgInfo {
+	info := toolArgInfo{argsLen: len(raw), label: name + " "}
+	var v any
+	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+		return info
+	}
+	info.path = pathFromParsed(v)
+	info.offset = offsetFromParsed(v)
+	info.label = name + " " + shortArgsFromParsed(name, v)
+	return info
+}
+
+// refreshToolPaths rebuilds the tool_use_id -> path/offset/label maps
+// from the current transcript. Called once per Build() so tool result
+// blocks (which may be cached) can look up their syntax language when
+// they were originally rendered.
+//
+// The derived data for a given tool_use_id is immutable once the call's
+// arguments stop streaming, so results are memoised in toolArgCache and
+// a call's JSON is re-parsed only when it first appears or while its
+// args are still growing (argsLen changes). Before this cache, every
+// redraw re-unmarshalled every tool call's args three times — O(N) JSON
+// work per frame that climbed as a session accumulated tool calls. The
+// transcript walk itself stays O(N) but only touches maps.
 func (v *View) refreshToolPaths() {
 	v.toolPaths = map[string]string{}
 	v.toolStartLines = map[string]int{}
 	v.toolCallLabels = map[string]string{}
+	// next is rebuilt each call so the cache stays pruned to the tool
+	// calls currently in the transcript (compaction/fork can drop some).
+	next := make(map[string]toolArgInfo, len(v.toolArgCache))
 	for _, m := range v.Messages {
 		for _, c := range m.Content {
-			if tc, ok := c.(provider.ToolCallBlock); ok {
-				if p := pathFromToolArgs(tc.Arguments); p != "" {
-					v.toolPaths[tc.ID] = p
-				}
-				if off := offsetFromToolArgs(tc.Arguments); off >= 1 {
-					v.toolStartLines[tc.ID] = off
-				}
-				v.toolCallLabels[tc.ID] = tc.Name + " " + ShortArgs(tc.Name, tc.Arguments)
+			tc, ok := c.(provider.ToolCallBlock)
+			if !ok {
+				continue
 			}
+			info, cached := v.toolArgCache[tc.ID]
+			if !cached || info.argsLen != len(tc.Arguments) {
+				info = parseToolArgInfo(tc.Name, tc.Arguments)
+			}
+			next[tc.ID] = info
+			if info.path != "" {
+				v.toolPaths[tc.ID] = info.path
+			}
+			if info.offset >= 1 {
+				v.toolStartLines[tc.ID] = info.offset
+			}
+			v.toolCallLabels[tc.ID] = info.label
 		}
 	}
+	v.toolArgCache = next
 }
 
 // renderMessageCached returns the rendered line slice for m, using the
@@ -525,8 +575,12 @@ func (v *View) renderMessageCached(m provider.Message, width int, turnOpen bool)
 }
 
 // hashMessage returns a 64-bit FNV-1a over the role + content blocks
-// of m. Serialising each block to its salient bytes is enough: two
-// messages with the same role and same content render identically.
+// of m, used as the renderCache key: two messages with the same role
+// and content render identically. Prose and tool-call args are hashed in
+// full (their content is their identity), but tool-result bodies — which
+// are immutable and CallID-identified — are fingerprinted by length
+// rather than hashed, since re-hashing large tool output on every redraw
+// dominated render CPU. See the ToolResultBlock case for the trade-off.
 func hashMessage(m provider.Message) uint64 {
 	h := fnv64aInit
 	h = fnv64aWrite(h, []byte(m.Role))
@@ -546,6 +600,16 @@ func hashMessage(m provider.Message) uint64 {
 			h = fnv64aWrite(h, []byte(b.Name))
 			h = fnv64aWrite(h, []byte(b.Arguments))
 		case provider.ToolResultBlock:
+			// A tool result is immutable once produced and uniquely
+			// identified by CallID, so its (often large) body never needs
+			// hashing: CallID + IsError + a per-inner-block (type, length)
+			// signature distinguishes every distinct result and still
+			// detects a streaming result growing (its length changes),
+			// without re-hashing megabytes of output on every redraw.
+			// Trade-off: a same-length, different-content swap of a
+			// finished result would not invalidate — which real tool
+			// output (regenerated wholesale, monotonic while streaming)
+			// doesn't do.
 			h = fnv64aWriteByte(h, 'r')
 			h = fnv64aWrite(h, []byte(b.CallID))
 			if b.IsError {
@@ -554,10 +618,12 @@ func hashMessage(m provider.Message) uint64 {
 			for _, inner := range b.Content {
 				switch ib := inner.(type) {
 				case provider.TextBlock:
-					h = fnv64aWrite(h, []byte(ib.Text))
+					h = fnv64aWriteByte(h, 't')
+					h = fnv64aWriteUint(h, uint64(len(ib.Text)))
 				case provider.ImageBlock:
+					h = fnv64aWriteByte(h, 'i')
 					h = fnv64aWrite(h, []byte(ib.MimeType))
-					h = fnv64aWrite(h, ib.Data)
+					h = fnv64aWriteUint(h, uint64(len(ib.Data)))
 				}
 			}
 		}
@@ -601,6 +667,17 @@ func fnv64aWrite(h uint64, p []byte) uint64 {
 	for _, b := range p {
 		h ^= uint64(b)
 		h *= fnv64aPrime
+	}
+	return h
+}
+
+// fnv64aWriteUint mixes an integer (e.g. a content length) into the hash
+// without allocating. Used by hashMessage to fingerprint immutable tool
+// output by length instead of re-hashing the whole body.
+func fnv64aWriteUint(h uint64, n uint64) uint64 {
+	for range 8 {
+		h = fnv64aWriteByte(h, byte(n))
+		n >>= 8
 	}
 	return h
 }
@@ -1888,6 +1965,13 @@ func ShortArgs(tool string, raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return ""
 	}
+	return shortArgsFromParsed(tool, v)
+}
+
+// shortArgsFromParsed is ShortArgs over an already-unmarshalled args
+// value, so refreshToolPaths can share a single decode across the
+// path, offset, and label it derives (see parseToolArgInfo).
+func shortArgsFromParsed(tool string, v any) string {
 	x, ok := v.(map[string]any)
 	if !ok {
 		b, _ := json.Marshal(v)

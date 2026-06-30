@@ -185,6 +185,20 @@ When a tool returns an image (for example `read` on a PNG), terva renders it inl
 
 Frames containing images are full-repainted (no differential diff) to prevent stale image pixels from lingering through scroll. That costs one terminal flash per image-containing frame; set `TERVA_INLINE_IMAGES=off` if that bothers you.
 
+## Redraw rate
+
+While a turn is streaming, terva repaints as text arrives. Each repaint costs CPU here, CPU in your terminal emulator (often more), and — over SSH — bytes on the wire. Model output reveals at reading speed, so terva caps **streaming** repaints at **30fps** by default: visually identical to painting every frame, but roughly half the frequency-bound cost. Keystroke echo at an idle prompt is unaffected (it uses a tighter interval); the cap applies only while a turn is busy.
+
+Override with `TERVA_REDRAW_FPS`:
+
+| Value | Effect |
+|---|---|
+| unset | 30fps cap (default). |
+| `60`, `120`, … | Higher cap — smoother, more CPU/bandwidth. Around 60+ is effectively uncapped (the streaming pacer tops out near there). |
+| `0` | Uncapped — paint every frame. |
+
+When the variable is set, terva prints a one-line `note:` at startup so the value shows up in a bug report. Profiling builds (`-tags terva_pprof`; see [profiling.md](profiling.md)) default to **uncapped** so a CPU profile shows every redundant draw — set `TERVA_REDRAW_FPS` there to study the capped behaviour.
+
 ## Queued messages
 
 You can keep typing while the agent is working. Pressing `enter` during a turn queues the message instead of interrupting: it shows up above the status bar as `sliding in: <text>` and is delivered as the next user turn the moment the current one finishes. Queue as many as you want; they run in order. `esc` cancels the active turn and drops the queue so a runaway turn doesn't flood you with stale follow-ups; `ctrl+c` while busy arms the exit hint instead of interrupting, a second `ctrl+c` within two seconds exits terva.

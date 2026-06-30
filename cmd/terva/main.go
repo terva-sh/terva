@@ -54,6 +54,11 @@ func main() {
 	// process will hold auth.json contents in memory). Lives in main,
 	// not agent.Run, so SDK embedders keep their own rlimit policy.
 	procenv.Harden()
+	// Optional pprof endpoint, compiled in only under the `terva_pprof`
+	// build tag (see pprof.go / `just install-dev`); a no-op in every
+	// other build, so release binaries never carry the profiling
+	// handlers. Even when present it stays off until TERVA_PPROF is set.
+	maybeStartPprof()
 	if version == "0.0.0" || commit == "" || date == "" {
 		if bi, ok := debug.ReadBuildInfo(); ok {
 			bv, bc, bd := buildInfoVersion(bi)

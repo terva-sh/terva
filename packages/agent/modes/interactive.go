@@ -2,6 +2,8 @@ package modes
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -73,8 +75,13 @@ type InteractiveConfig struct {
 	// swarm_spawn tool re-attached on a /settings toggle resolves `tier` the
 	// same way the base registry does. The underlying type of
 	// tools.SwarmTierMap, to avoid importing tools here.
-	SwarmTiers    map[string]map[string]string
-	SettingsStore SettingsStore
+	SwarmTiers map[string]map[string]string
+	// DispatchPersonaResolver validates a model-supplied persona NAME for the
+	// swarm_spawn tool re-attached on a /settings toggle (the same check the
+	// base registry uses). Plumbed from the cli to avoid importing agent; nil
+	// is fine — the tool still rejects path-like personas inline.
+	DispatchPersonaResolver func(string) (string, error)
+	SettingsStore           SettingsStore
 
 	// RebuildExtensionContext re-folds the extensions' static context
 	// into the system prompt after one of them sent refresh_context
@@ -691,6 +698,16 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 // Run blocks until the user quits.
 func (i *Interactive) Run(ctx context.Context) error {
 	i.runCtx = ctx
+
+	// Streaming-repaint cap (see resolveBusyRedrawInterval). The note is
+	// emitted to stderr only when overridden, so a bug report from a user
+	// running a non-default rate shows it; it lands before raw mode so it
+	// doesn't disturb the TUI.
+	busyRedrawInterval, redrawNote := resolveBusyRedrawInterval()
+	if redrawNote != "" {
+		fmt.Fprintln(os.Stderr, "note:", redrawNote)
+	}
+
 	term := i.cfg.Terminal
 	restore, err := term.EnterRaw()
 	if err != nil {
@@ -818,10 +835,15 @@ func (i *Interactive) Run(ctx context.Context) error {
 	defer tick.Stop()
 
 	// Redraw throttle: coalesce bursts of invalidate() calls so we paint
-	// at most once every redrawMinInterval. Huge tool-result dumps can
-	// fire hundreds of invalidations while the user is typing; without
-	// this, the input goroutine never gets CPU and keystrokes lag.
-	const redrawMinInterval = 16 * time.Millisecond
+	// at most once per interval. Huge tool-result dumps can fire hundreds
+	// of invalidations while the user is typing; without this, the input
+	// goroutine never gets CPU and keystrokes lag.
+	//
+	// The interval is idleRedrawInterval normally, but widens to
+	// busyRedrawInterval (the streaming-repaint cap, default 30fps) while a
+	// turn is busy — the only time paints fire at high frequency. Capping
+	// there cuts terminal-emulator load and SSH traffic and bounds
+	// worst-case CPU, without slowing keystroke echo at an idle prompt.
 	var lastRedraw time.Time
 	var pendingRedraw bool
 	var pendingTimer *time.Timer
@@ -839,8 +861,12 @@ func (i *Interactive) Run(ctx context.Context) error {
 	}
 
 	requestRedraw := func() {
+		minInterval := idleRedrawInterval
+		if i.turns.Busy() {
+			minInterval = busyRedrawInterval
+		}
 		since := time.Since(lastRedraw)
-		if since >= redrawMinInterval {
+		if since >= minInterval {
 			// Redrawing right now subsumes any pending redraw, so clear
 			// the throttle state. Without this, a pending flag stays
 			// stuck at true and subsequent invalidate() calls within
@@ -859,7 +885,7 @@ func (i *Interactive) Run(ctx context.Context) error {
 			return // already scheduled
 		}
 		pendingRedraw = true
-		wait := redrawMinInterval - since
+		wait := minInterval - since
 		if pendingTimer == nil {
 			pendingTimer = time.AfterFunc(wait, func() {
 				// Poke the dirty channel so the main loop wakes and

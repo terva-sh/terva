@@ -91,6 +91,18 @@ install:
     go install -trimpath -tags terva_acp -ldflags "{{ldflags}}" ./cmd/terva
     @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (full, terva_acp) -> $dest/terva"
 
+# Like `just install` (full features, terva_acp, into GOBIN/GOPATH bin)
+# but NON-STRIPPED: no `-s -w`, no `-trimpath`, so symbols and source
+# paths survive for `sample`, pprof, and friends. Optimizations stay ON
+# (unlike `just debug`, which adds -N -l for breakpoints) so a CPU
+# profile reflects a real build. Reports as 0.0.0-debug so `--version`
+# tells it apart from a release install. Adds -tags terva_pprof, which
+# links the /debug/pprof endpoint (kept out of every other build); even
+# here it stays off until you set TERVA_PPROF=localhost:6060.
+install-dev:
+    go install -tags terva_acp,terva_pprof -ldflags "{{debug_ldflags}}" ./cmd/terva
+    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (dev, non-stripped, terva_acp,terva_pprof) -> $dest/terva"
+
 # goreleaser drives real packaging (cross-compiled archives + checksums;
 # CI snapshot job and the tag-triggered release workflow use the same
 # config). These targets install goreleaser on first use.
@@ -145,9 +157,14 @@ ci-acp:
     go test -tags terva_acp -race ./packages/agent/acp/... ./packages/agent/
 
 # fmt-check + vet + race tests + connector tag-matrix build + acp tag
-# build/test + public packaging drift check, as a pre-push gate.
+# build/test + terva_pprof tag build + public packaging drift check, as
+# a pre-push gate.
 ci: lint test ci-acp
     go build -tags terva_no_telegram ./...
+    # terva_pprof guard: the profiling endpoint (cmd/terva/pprof.go) only
+    # compiles under this tag, so the default build can't catch a break in
+    # it — same reason ci-acp exists. install-dev is the only shipping use.
+    go build -tags terva_pprof ./cmd/terva
     @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-overlay; fi
 
 # Print the version string the binary would report, built from source.

@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mattn/go-runewidth"
 )
@@ -67,6 +68,15 @@ type Renderer struct {
 	// as a full-width row background without making every View renderer
 	// know about terminal padding and reset semantics.
 	theme Theme
+
+	// truncCache memoises truncateToWidth output by line, so a redraw that
+	// re-emits the (unchanged) transcript doesn't re-run width math on
+	// every line — the dominant render cost in long, busy transcripts.
+	// Keyed by the line string; truncCols records the width it was built
+	// for, so a resize drops the whole cache. Only chat lines are cached
+	// (the large, stable set); the small bottom band is truncated directly.
+	truncCache map[string]string
+	truncCols  int
 }
 
 // NewRenderer returns a renderer that writes to out.
@@ -235,17 +245,20 @@ func truncateToWidth(s string, cols int) string {
 	var out strings.Builder
 	out.Grow(len(s))
 	seen := 0
-	runes := []rune(s)
-	for i := 0; i < len(runes); {
-		r := runes[i]
+	// Walk by byte index with utf8.DecodeRuneInString instead of
+	// materialising []rune(s): the rune-slice allocation was a measurable
+	// share of redraw CPU, and only the width of each rune is needed, not
+	// random access. ANSI escapes are pure ASCII, so they're matched and
+	// copied by byte without decoding.
+	for i := 0; i < len(s); {
 		// CSI escape sequence (ESC [ ... final): zero-width.
-		if r == 0x1b && i+1 < len(runes) && runes[i+1] == '[' {
-			out.WriteRune(r)
-			out.WriteRune(runes[i+1])
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			out.WriteByte(s[i])
+			out.WriteByte(s[i+1])
 			i += 2
-			for i < len(runes) {
-				c := runes[i]
-				out.WriteRune(c)
+			for i < len(s) {
+				c := s[i]
+				out.WriteByte(c)
 				i++
 				if c >= 0x40 && c <= 0x7e {
 					break
@@ -253,18 +266,19 @@ func truncateToWidth(s string, cols int) string {
 			}
 			continue
 		}
+		r, size := utf8.DecodeRuneInString(s[i:])
 		rw := runewidthRune(r)
 		if seen+rw > cols {
 			// Flush any trailing ANSI escapes (resets, erase-to-EOL)
 			// so background colors and cleanup sequences survive.
-			for i < len(runes) {
-				if runes[i] == 0x1b && i+1 < len(runes) && runes[i+1] == '[' {
-					out.WriteRune(runes[i])
-					out.WriteRune(runes[i+1])
+			for i < len(s) {
+				if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+					out.WriteByte(s[i])
+					out.WriteByte(s[i+1])
 					i += 2
-					for i < len(runes) {
-						c := runes[i]
-						out.WriteRune(c)
+					for i < len(s) {
+						c := s[i]
+						out.WriteByte(c)
 						i++
 						if c >= 0x40 && c <= 0x7e {
 							break
@@ -276,11 +290,44 @@ func truncateToWidth(s string, cols int) string {
 			}
 			break
 		}
-		out.WriteRune(r)
+		if r == utf8.RuneError && size == 1 {
+			// Invalid byte: emit U+FFFD, matching the old []rune(s) path
+			// (which mapped each bad byte to the replacement rune).
+			out.WriteRune(utf8.RuneError)
+		} else {
+			out.WriteString(s[i : i+size])
+		}
 		seen += rw
-		i++
+		i += size
 	}
 	return out.String()
+}
+
+// truncCacheMax bounds truncCache. A transcript can present more distinct
+// long lines than we want to retain; past the cap we drop and rebuild,
+// which at worst recomputes — the pre-cache behaviour.
+const truncCacheMax = 8192
+
+// truncateCached is truncateToWidth with a per-line memo (truncCache).
+// The cheap exits mirror truncateToWidth so short lines — which the byte
+// fast path already returns for free — never pay a map probe.
+func (r *Renderer) truncateCached(line string) string {
+	if r.cols <= 0 || len(line) <= r.cols {
+		return line
+	}
+	if r.truncCache == nil || r.truncCols != r.cols {
+		r.truncCache = make(map[string]string)
+		r.truncCols = r.cols
+	}
+	if t, ok := r.truncCache[line]; ok {
+		return t
+	}
+	if len(r.truncCache) >= truncCacheMax {
+		r.truncCache = make(map[string]string)
+	}
+	t := truncateToWidth(line, r.cols)
+	r.truncCache[line] = t
+	return t
 }
 
 // DrawLog renders terva in the terminal's main screen as normal terminal
@@ -298,7 +345,7 @@ func (r *Renderer) DrawLog(chat, bottom []string, cursorBottomRow, cursorCol int
 	}
 	chatFrame := make([]string, len(chat))
 	for i, line := range chat {
-		chatFrame[i] = paintBackgroundRow(truncateToWidth(line, r.cols), r.cols, r.theme)
+		chatFrame[i] = paintBackgroundRow(r.truncateCached(line), r.cols, r.theme)
 	}
 	bottomFrame := make([]string, len(bottom))
 	for i, line := range bottom {

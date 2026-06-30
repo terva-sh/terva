@@ -135,6 +135,7 @@ terva --help
 | [docs/skills.md](docs/skills.md) | `SKILL.md` reusable instructions: anatomy, discovery, authoring |
 | [docs/themes.md](docs/themes.md) | User and extension themes |
 | [docs/rpc.md](docs/rpc.md) | Embedding terva: the RPC wire schema and the JSON event stream (Go SDK: `packages/agent/sdk`, examples under `examples/`) |
+| [docs/profiling.md](docs/profiling.md) | Performance-profiling the harness: the `terva_pprof` dev build, pprof/`GODEBUG` capture, and reading a TUI CPU profile |
 | [docs/fork.md](docs/fork.md) | How terva relates to zot, and the compatibility promises | <!-- rename:keep -->
 | [docs/architecture/](docs/architecture/) | Subsystem-by-subsystem internals |
 
@@ -147,6 +148,10 @@ make lint      # go vet + gofmt check
 make fmt       # gofmt -w .
 make release   # cross-compile linux/darwin/windows on amd64 and arm64
 ```
+
+The `justfile` wraps the same toolchain with more recipes (`just --list`). To
+performance-profile the harness, `just install-dev` builds a non-stripped,
+pprof-enabled binary; see [docs/profiling.md](docs/profiling.md).
 
 Source layout (single Go module; the top-level packages are `provider`,
 `core`, `tui`, and `agent`, with `agent` further split into focused
