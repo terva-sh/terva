@@ -52,6 +52,24 @@ type Theme struct {
 	SelectionBG  int // background for highlighted rows
 	SelectionFG  int // foreground for highlighted rows
 
+	// MeterLow/Mid/High color the status bar's consumption meters
+	// (context window, subscription usage) by stage: <70%, 70-90%,
+	// >=90%. Staged whole-meter colors rather than per-cell gradients:
+	// at 4-5 cells a gradient quantized to 256 colors reads as mud,
+	// while a hue jump at the threshold survives color-impaired
+	// vision. Zero values fall back to Muted/Warning/Error.
+	MeterLow  int
+	MeterMid  int
+	MeterHigh int
+
+	// StatusColors optionally recolors individual status-bar segments,
+	// keyed by segment ID ("cwd", "git", "model", ...). Missing keys
+	// keep the default muted rendering. Presentation only — which
+	// segments render, and in what order, is status_line config, so an
+	// extension-bundled theme can restyle the bar but never restructure
+	// it.
+	StatusColors map[string]int
+
 	SpinnerFrames     []string
 	SpinnerMessages   []string
 	SpinnerIntervalMS int
@@ -173,6 +191,9 @@ var Dark = Theme{
 	Spinner:           183, // soft purple
 	SelectionBG:       24,  // deep blue background
 	SelectionFG:       231, // near-white foreground
+	MeterLow:          244, // muted
+	MeterMid:          214, // amber
+	MeterHigh:         203, // red
 	SpinnerFrames:     defaultSpinnerFrames,
 	SpinnerMessages:   defaultSpinnerMessages,
 	SpinnerIntervalMS: 80,
@@ -182,6 +203,42 @@ var Dark = Theme{
 	SyntaxBaseStyle:   "monokai",
 	Syntax:            nordSyntax,
 }
+
+// DarkDaltonized is the built-in color-vision-friendly dark theme. It
+// re-bases every red/green semantic distinction on a blue/orange axis
+// (the deuteranopia-safe standard): additions/success read blue, errors
+// read vermillion-orange, and the status-bar meters climb a
+// cyan -> amber -> magenta ramp whose stages differ in brightness as
+// well as hue. Everything not carrying red/green semantics inherits
+// the regular dark theme. (Syntax highlighting still carries some
+// green/red string/escape tones — a fully daltonized syntax palette is
+// a follow-up.)
+var DarkDaltonized = func() Theme {
+	t := Dark
+	t.Tool = 39   // additions/success: vivid blue (was green)
+	t.Error = 166 // errors/removals: vermillion orange (was red)
+	t.Warning = 214
+	t.MeterLow = 44   // cyan
+	t.MeterMid = 214  // amber
+	t.MeterHigh = 201 // magenta
+	return t
+}()
+
+// LightDaltonized mirrors DarkDaltonized for light terminals: the same
+// blue/orange re-basing of every red/green semantic slot, with shades
+// dark enough to read on a pale background. The bare "daltonized"
+// theme name resolves to whichever variant matches the detected
+// terminal background.
+var LightDaltonized = func() Theme {
+	t := Light
+	t.Tool = 26     // additions/success: deep blue (was green)
+	t.Error = 166   // errors/removals: vermillion (was red)
+	t.Warning = 130 // dark amber — moved off 166 so it stays distinct from Error
+	t.MeterLow = 31 // deep teal
+	t.MeterMid = 130
+	t.MeterHigh = 127 // dark magenta
+	return t
+}()
 
 var Light = Theme{
 	FG:                236,
@@ -198,6 +255,9 @@ var Light = Theme{
 	Spinner:           91,  // purple
 	SelectionBG:       153, // light blue
 	SelectionFG:       232, // near-black
+	MeterLow:          244, // muted
+	MeterMid:          166, // amber
+	MeterHigh:         160, // red
 	SpinnerFrames:     defaultSpinnerFrames,
 	SpinnerMessages:   defaultSpinnerMessages,
 	SpinnerIntervalMS: 80,
@@ -211,6 +271,40 @@ var Light = Theme{
 // FG256 wraps s in foreground color c using ANSI 256-color SGR.
 func (t Theme) FG256(c int, s string) string {
 	return sgrFG(c) + s + reset
+}
+
+// MeterColor returns the staged meter color for pct consumed: MeterLow
+// below 70, MeterMid to 90, MeterHigh at or above. Zero slots fall
+// back to Muted/Warning/Error so a bare Theme literal keeps the
+// classic semantics.
+func (t Theme) MeterColor(pct float64) int {
+	low, mid, high := t.MeterLow, t.MeterMid, t.MeterHigh
+	if low == 0 {
+		low = t.Muted
+	}
+	if mid == 0 {
+		mid = t.Warning
+	}
+	if high == 0 {
+		high = t.Error
+	}
+	switch {
+	case pct >= 90:
+		return high
+	case pct >= 70:
+		return mid
+	default:
+		return low
+	}
+}
+
+// StatusColor returns the theme's color for a status-bar segment, or
+// fallback when the theme doesn't recolor that segment.
+func (t Theme) StatusColor(id SegmentID, fallback int) int {
+	if c, ok := t.StatusColors[string(id)]; ok {
+		return c
+	}
+	return fallback
 }
 
 // BG256 wraps s in background color c using ANSI 256-color SGR.

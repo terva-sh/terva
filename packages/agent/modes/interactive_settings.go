@@ -163,6 +163,7 @@ func (i *Interactive) openSettingsDialog() {
 	if hasApproval {
 		items = append(items, approvalItem)
 	}
+	items = append(items, i.statusLineSettingsItems()...)
 	i.settingsDialog.Open(items)
 }
 
@@ -298,6 +299,8 @@ func (i *Interactive) applySettingChange(act settingsAction) {
 		i.applyThemeSetting(act.StringValue)
 	case "approval_mode":
 		i.applyApprovalModeSetting(act.StringValue)
+	case "status_line":
+		i.applyStatusLinePreset(act.StringValue)
 	default:
 		i.applySettingToggle(act.Key, act.Value)
 	}
@@ -339,6 +342,9 @@ func (i *Interactive) applySettingToggle(key string, value bool) {
 		}
 		i.invalidate()
 	}()
+	if i.dispatchStatusSegmentToggle(key, value) {
+		return
+	}
 	switch key {
 	case "inline_images_enabled":
 		val := value

@@ -17,6 +17,7 @@ func (f *fakeSettingsStore) SetRecursiveFileSuggest(bool) error { return nil }
 func (f *fakeSettingsStore) SetRespectGitignore(bool) error     { return nil }
 func (f *fakeSettingsStore) SetReasoning(string) error          { return nil }
 func (f *fakeSettingsStore) SetTheme(string) error              { return nil }
+func (f *fakeSettingsStore) SetStatusLineRows([][]string) error { return nil }
 
 func newApprovalTestInteractive(gate *core.ConfirmGate, store SettingsStore, rebuilt *core.ApprovalMode) *Interactive {
 	return &Interactive{

@@ -52,6 +52,10 @@ func (i *Interactive) ApplyChangedCWD(ag *core.Agent, provider, model, cwd strin
 	i.mu.Unlock()
 	i.fileSuggest.Reset()
 	i.fileSuggest.SetCWD(cwd)
+	// New working directory, possibly a different repo (or none):
+	// refresh the status bar's git segment and scripts right away.
+	i.pokeGitProber()
+	i.pokeStatusScripts()
 	i.invalidate()
 }
 

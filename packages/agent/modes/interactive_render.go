@@ -29,6 +29,7 @@ type chatCacheKey struct {
 	updateURL       string
 	welcomeShowVer  bool
 	expandAll       bool
+	toolDisplay     tui.ToolDisplayMode
 	tailLimit       int
 }
 
@@ -56,6 +57,12 @@ type frameSnapshot struct {
 	updateInfo   UpdateInfo
 	cumUsage     provider.Usage
 	lastCtxInput int
+	costBaseAt   time.Time
+	costBase     float64
+	git          tui.GitInfo
+	editsAdded   int
+	editsRemoved int
+	scriptSegs   map[string]string
 
 	// busyPrefix is the pre-rendered spinner segment of the status
 	// bar; the spinner's state is mutated by turn goroutines under
@@ -76,6 +83,19 @@ func (i *Interactive) snapshotFrameLocked(ts turnRenderState) frameSnapshot {
 		updateInfo:   i.updateInfo,
 		cumUsage:     i.cumUsage,
 		lastCtxInput: i.lastCtxInput,
+		costBaseAt:   i.costBaseAt,
+		costBase:     i.costBase,
+		git:          i.gitInfo,
+		editsAdded:   i.editsAdded,
+		editsRemoved: i.editsRemoved,
+	}
+	if len(i.scriptSegs) > 0 {
+		// Value copy: the script runner mutates the live map under
+		// i.mu while the render runs unlocked.
+		snap.scriptSegs = make(map[string]string, len(i.scriptSegs))
+		for k, v := range i.scriptSegs {
+			snap.scriptSegs[k] = v
+		}
 	}
 	if ts.busy {
 		snap.busyPrefix = fmt.Sprintf("%s %s %s %s",
@@ -144,6 +164,7 @@ func (i *Interactive) chatCacheKey2(cols int, snap frameSnapshot) (chatCacheKey,
 		updateURL:       snap.updateInfo.URL,
 		welcomeShowVer:  showVer,
 		expandAll:       i.view.ExpandAll,
+		toolDisplay:     i.view.ToolDisplay,
 		tailLimit:       i.view.TailLimit,
 	}, true
 }
@@ -479,26 +500,39 @@ func (i *Interactive) redraw() {
 		ctxMax = m.ContextWindow
 	}
 	statusLines := tui.StatusBar(tui.StatusBarParams{
-		Theme:          i.cfg.Theme,
-		Provider:       i.cfg.Provider,
-		Model:          i.cfg.Model,
-		Reasoning:      i.cfg.Reasoning,
-		Busy:           ts.busy,
-		BusyPrefix:     snap.busyPrefix,
-		CWD:            i.cfg.CWD,
-		Locked:         i.cfg.Sandbox.Locked(),
-		NoYolo:         i.cfg.NoYolo,
-		ApprovalMode:   i.approvalModeLabel(),
-		Usage:          snap.cumUsage,
-		Subscription:   i.cfg.AuthMethod == "oauth",
-		ContextUsed:    snap.lastCtxInput,
-		ContextMax:     ctxMax,
-		AutoCompacting: ts.autoCompacting,
-		ChatConnected:  i.chatBridgeName(),
-		ExtStatus:      i.extStatusSegments(),
-		UsageWindows:   i.statusUsageWindows(),
-		HideWorkspace:  i.cfg.Experience != "",
-		Cols:           cols,
+		Theme:            i.cfg.Theme,
+		Provider:         i.cfg.Provider,
+		Model:            i.cfg.Model,
+		Reasoning:        i.cfg.Reasoning,
+		Busy:             ts.busy,
+		BusyPrefix:       snap.busyPrefix,
+		CWD:              i.cfg.CWD,
+		Locked:           i.cfg.Sandbox.Locked(),
+		NoYolo:           i.cfg.NoYolo,
+		ApprovalMode:     i.approvalModeLabel(),
+		Usage:            snap.cumUsage,
+		Subscription:     i.cfg.AuthMethod == "oauth",
+		ContextUsed:      snap.lastCtxInput,
+		ContextMax:       ctxMax,
+		AutoCompacting:   ts.autoCompacting,
+		ChatConnected:    i.chatBridgeName(),
+		ExtStatus:        i.extStatusSegments(),
+		UsageWindows:     i.statusUsageWindows(),
+		HideWorkspace:    i.cfg.Experience != "",
+		Git:              snap.git,
+		SwarmAgents:      i.swarmAgentCount(),
+		SessionName:      i.sessionShortName(),
+		PersonaName:      i.cfg.PersonaName,
+		PersonaEmoji:     i.cfg.PersonaEmoji,
+		PersonaAccentRGB: i.personaAccentRGB,
+		EditsAdded:       snap.editsAdded,
+		EditsRemoved:     snap.editsRemoved,
+		ScriptSegments:   snap.scriptSegs,
+		Rows:             i.cfg.StatusLineRows,
+		Now:              time.Now(),
+		SessionStart:     snap.costBaseAt,
+		SessionCostBase:  snap.costBase,
+		Cols:             cols,
 	})
 	edLines, curR, curC := i.ed.Render(cols)
 

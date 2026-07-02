@@ -43,7 +43,9 @@ func TestStatusBarShowsWorkspaceByDefault(t *testing.T) {
 		CWD: "/tmp/work", Locked: true, Cols: 500,
 	})
 	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "/tmp/work") {
+	// The cwd renders abbreviated (/tmp/work -> /t/work); the contract
+	// here is visibility, so assert on the kept-whole last component.
+	if !strings.Contains(joined, "/t/work") {
 		t.Errorf("cwd should show by default: %q", joined)
 	}
 	if !strings.Contains(joined, "jailed") {

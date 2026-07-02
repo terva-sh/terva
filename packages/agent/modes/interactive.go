@@ -10,6 +10,7 @@ import (
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/tools"
@@ -52,6 +53,17 @@ type InteractiveConfig struct {
 	// startup. nil means the default (on); when false the @-mention
 	// picker shows files matched by the project's root .gitignore.
 	RespectGitignore *bool
+
+	// StatusLineRows mirrors the persisted status_line.rows layout: the
+	// user's segment-ID rows for the status bar. nil means the per-mode
+	// defaults. User-config only (never project-supplied).
+	StatusLineRows [][]string
+
+	// StatusScripts are the user's status_line.scripts, keyed by
+	// (lowercased) segment name. Code execution from config: the cli
+	// only populates this from the trusted user layer — same rule as
+	// Hooks.
+	StatusScripts map[string]StatusScript
 
 	// ThemeName mirrors the persisted config theme value. Empty means auto.
 	ThemeName string
@@ -353,6 +365,25 @@ type InteractiveConfig struct {
 	// session, but any skill is still loadable by name (e.g. via /skill).
 	ReloadSkills func() []*skills.Skill
 
+	// LoreList, if non-nil, returns this run's active lore entries (file +
+	// card, constant + triggered) for the /lore command. nil when lore is
+	// off. Re-invoked each time /lore runs.
+	LoreList func() []lore.Entry
+
+	// LoreFired, if non-nil, returns the lore entry sources that fired on the
+	// most recent turn — shown by /lore as "fired last turn".
+	LoreFired func() []string
+
+	// LoreDropped, if non-nil, returns the lore entry sources the token
+	// budget dropped on the most recent turn — shown by /lore so budget
+	// overflow never truncates silently.
+	LoreDropped func() []string
+
+	// LoreFiredReset, if non-nil, clears the fired/dropped record. Called
+	// when the transcript is reset (/clear, /new) so /lore never reports
+	// lore that fired against a conversation that no longer exists.
+	LoreFiredReset func()
+
 	// SkillCompletions, if non-nil, returns the skill names + descriptions
 	// offered as `/skill <name>` argument completions. It must be CHEAP — it
 	// is called every render — so it reads the live in-memory skill catalog
@@ -402,6 +433,10 @@ type SettingsStore interface {
 	SetRespectGitignore(enabled bool) error
 	SetReasoning(level string) error
 	SetTheme(name string) error
+	// SetStatusLineRows persists the status-bar segment layout; nil
+	// clears it back to the built-in per-mode defaults (preserving any
+	// configured status scripts).
+	SetStatusLineRows(rows [][]string) error
 }
 
 type Interactive struct {
@@ -569,6 +604,46 @@ type Interactive struct {
 	// banner shows the binary version for welcomeVersionDuration
 	// after this point and reverts to plain text after.
 	welcomeStart time.Time
+
+	// costBaseAt / costBase anchor the status bar's burn rate: the
+	// instant this run's cost-meter epoch began and the cumulative
+	// cost already accrued at that instant. A resumed session preloads
+	// its whole history's cost into cumUsage, which must not count
+	// toward the live $/hr. Guarded by i.mu (snapshotted per frame);
+	// reset on /new and on session load.
+	costBaseAt time.Time
+	costBase   float64
+
+	// lastStatusMinute throttles the idle minute-boundary repaint that
+	// keeps the status bar's minute-granular text (↻ countdowns, burn
+	// rate) fresh. Main-goroutine only.
+	lastStatusMinute time.Time
+
+	// gitInfo is the async prober's latest snapshot of the working
+	// directory's repository state (status-bar git segment). Guarded
+	// by i.mu. gitPoke requests an out-of-band probe (turn end, /cd);
+	// buffered-1 so pokes coalesce like the resize channel.
+	gitInfo tui.GitInfo
+	gitPoke chan struct{}
+
+	// editsAdded/editsRemoved tally lines the agent's edit/write tools
+	// changed this session (status-bar edits segment). Guarded by
+	// i.mu; reset on the same epochs as the burn rate.
+	editsAdded   int
+	editsRemoved int
+
+	// scriptSegs holds each status script's latest output (guarded by
+	// i.mu); scriptFailing tracks failure streaks so a broken script
+	// notes once, not per run. scriptPoke coalesces runner triggers;
+	// scriptExec is the exec seam (nil = real shell execution).
+	scriptSegs    map[string]string
+	scriptFailing map[string]bool
+	scriptPoke    chan struct{}
+	scriptExec    scriptExec
+
+	// personaAccentRGB is cfg.PersonaAccent parsed once at
+	// construction; nil when the persona has no accent color.
+	personaAccentRGB *tui.TerminalColor
 	// welcomeGreeting is the rotating tagline (Theme.Greeting), picked
 	// once at startup so it stays stable across re-renders.
 	welcomeGreeting string
@@ -648,6 +723,10 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		turns:             newTurnEngine(),
 		dirty:             make(chan struct{}, 8),
 		resize:            make(chan struct{}, 1),
+		gitPoke:           make(chan struct{}, 1),
+		scriptPoke:        make(chan struct{}, 1),
+		scriptSegs:        map[string]string{},
+		scriptFailing:     map[string]bool{},
 		actions:           make(chan func(), 64),
 		dialog:            newLoginDialog(),
 		modelDialog:       newModelDialog(),
@@ -682,6 +761,18 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 	}
 	i.overlays = i.buildOverlays()
 	i.keymap = i.buildGlobalKeymap()
+	if cfg.PersonaAccent != "" {
+		if rgb, ok := tui.ParseHexColor(cfg.PersonaAccent); ok {
+			i.personaAccentRGB = &rgb
+		}
+	}
+	// Immersive experiences default to minimal tool display: the
+	// conversation is the product there, and boxed tool mechanics read
+	// as stage machinery. ctrl+t cycles back to boxes (or to hidden),
+	// and ctrl+o still force-expands everything.
+	if cfg.Experience != "" {
+		i.view.ToolDisplay = tui.ToolDisplayMinimal
+	}
 	i.fileSuggest.SetRecursive(cfg.RecursiveFileSuggest != nil && *cfg.RecursiveFileSuggest)
 	i.fileSuggest.SetRespectGitignore(cfg.RespectGitignore == nil || *cfg.RespectGitignore)
 	if cfg.Agent != nil {
@@ -760,6 +851,8 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// upstream chunk size. Starts here so it lives for the whole
 	// session and exits with ctx.
 	go i.turns.runPacer(ctx, i.invalidate)
+	go i.runGitProber(ctx)
+	go i.runStatusScripts(ctx)
 
 	cols, rows := term.Size()
 	i.rend.Resize(cols, rows)
@@ -788,6 +881,14 @@ func (i *Interactive) Run(ctx context.Context) error {
 	i.welcomeStart = time.Now()
 	i.welcomeGreeting = i.cfg.Theme.Greeting()
 	time.AfterFunc(welcomeVersionDuration, i.invalidate)
+
+	// Anchor the burn-rate epoch: cost accrued before this run (a
+	// resumed session's history, preloaded into cumUsage) belongs to
+	// the base, not to the live $/hr.
+	i.mu.Lock()
+	i.costBaseAt = time.Now()
+	i.costBase = i.cumUsage.CostUSD
+	i.mu.Unlock()
 
 	// If the agent was constructed with a pre-loaded transcript
 	// (--continue, --resume, --session) pin the viewport at the
@@ -1001,6 +1102,17 @@ func (i *Interactive) Run(ctx context.Context) error {
 			// the live swarm dashboard) is declared per-entry in the
 			// overlay registry via the animating hook.
 			if i.turns.Busy() || i.overlayAnimating() {
+				requestRedraw()
+			}
+			// Minute-boundary refresh: the status bar renders minute-
+			// granular text (↻ reset countdowns, the burn rate) that
+			// otherwise goes stale while idle — nothing else invalidates
+			// the frame. One redraw per minute; when no rendered text
+			// actually changed, DrawLog's idle no-op fast path makes it
+			// free (and keeps the cursor-blink behavior intact).
+			if m := time.Now().Truncate(time.Minute); m != i.lastStatusMinute {
+				i.lastStatusMinute = m
+				i.pokeStatusScripts()
 				requestRedraw()
 			}
 		}

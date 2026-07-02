@@ -6,6 +6,15 @@ color, only the spinner, only syntax highlighting, or all of them.
 Missing values inherit from terva's built-in default for the detected
 terminal background.
 
+## Built-in themes
+
+| name | what it is |
+|---|---|
+| `auto` | detect the terminal background, use the matching default (this is the default) |
+| `dark` / `light` | the built-in defaults, pinned regardless of detection |
+| `dark-daltonized` / `light-daltonized` | the defaults with every red/green semantic distinction re-based on a blue/orange axis (deuteranopia-friendly): diff additions and git `+` read blue, errors and `-` read vermillion, and the status-bar meters climb a cyan → amber → magenta ramp |
+| `daltonized` | picks `dark-daltonized` or `light-daltonized` by the detected background, like `auto` |
+
 ## Where themes live
 
 User themes are discovered from:
@@ -193,6 +202,31 @@ Most color fields are xterm-256 indexes (`0`–`255`).
 - `spinner` — reserved spinner color slot.
 - `selection_bg` — highlighted row background.
 - `selection_fg` — highlighted row foreground.
+- `meter_low`, `meter_mid`, `meter_high` — the status bar's staged
+  meter ramp (context window, subscription usage): the whole meter
+  takes `meter_low` below 70% consumed, `meter_mid` from 70, and
+  `meter_high` from 90. Stages rather than gradients on purpose — the
+  hue jump at a threshold is the signal. Missing values fall back to
+  `muted`/`warning`/`error`.
+- `status_colors` — per-segment recoloring for the status bar, an
+  object keyed by segment ID (`cwd`, `git`, `edits`, `model`,
+  `persona`, `thinking`, `tokens`, `cost`, `context`, `usage`,
+  `swarm`, `session`, `clock`, `tags`, `bridge`, `ext`). Segments not
+  named keep the muted default. Themes only restyle the bar — which
+  segments render, and in what order, is `status_line` in
+  `config.json`, never the theme.
+
+```json
+{
+  "name": "colorful-bar",
+  "colors": {
+    "dark": {
+      "meter_low": 44, "meter_mid": 214, "meter_high": 201,
+      "status_colors": { "cwd": 81, "git": 179, "cost": 114 }
+    }
+  }
+}
+```
 
 `background` and `user_bubble_bg` support richer terminal color forms:
 

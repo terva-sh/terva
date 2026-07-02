@@ -94,6 +94,10 @@ type ThemeOverrides struct {
 	Spinner           *int                 `json:"spinner,omitempty"`
 	SelectionBG       *int                 `json:"selection_bg,omitempty"`
 	SelectionFG       *int                 `json:"selection_fg,omitempty"`
+	MeterLow          *int                 `json:"meter_low,omitempty"`
+	MeterMid          *int                 `json:"meter_mid,omitempty"`
+	MeterHigh         *int                 `json:"meter_high,omitempty"`
+	StatusColors      map[string]int       `json:"status_colors,omitempty"`
 	SpinnerFrames     []string             `json:"spinner_frames,omitempty"`
 	SpinnerMessages   []string             `json:"spinner_messages,omitempty"`
 	SpinnerIntervalMS *int                 `json:"spinner_interval_ms,omitempty"`
@@ -192,6 +196,17 @@ func LoadThemeFromHome(tervaHome, preferred string, detected Theme) (Theme, stri
 		return Dark, "dark", nil
 	case "builtin:light":
 		return Light, "light", nil
+	case "builtin:dark-daltonized":
+		return DarkDaltonized, "dark-daltonized", nil
+	case "builtin:light-daltonized":
+		return LightDaltonized, "light-daltonized", nil
+	case "builtin:daltonized":
+		// Bare "daltonized" follows the detected background, the same
+		// way "auto" picks between the regular dark/light defaults.
+		if isLightTheme(detected) {
+			return LightDaltonized, "light-daltonized", nil
+		}
+		return DarkDaltonized, "dark-daltonized", nil
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -229,8 +244,11 @@ func AvailableThemes(tervaHome string) []ThemeOption {
 		{Value: "auto", Label: "auto", Description: "detect terminal background and use terva defaults", Builtin: true},
 		{Value: "dark", Label: "dark", Description: "built-in dark theme", Builtin: true},
 		{Value: "light", Label: "light", Description: "built-in light theme", Builtin: true},
+		{Value: "dark-daltonized", Label: "dark-daltonized", Description: "built-in dark theme on a color-vision-friendly blue/orange axis", Builtin: true},
+		{Value: "light-daltonized", Label: "light-daltonized", Description: "built-in light theme on a color-vision-friendly blue/orange axis", Builtin: true},
+		{Value: "daltonized", Label: "daltonized", Description: "color-vision-friendly variant matching the detected terminal background", Builtin: true},
 	}
-	seen := map[string]bool{"auto": true, "dark": true, "light": true}
+	seen := map[string]bool{"auto": true, "dark": true, "light": true, "dark-daltonized": true, "light-daltonized": true, "daltonized": true}
 	paths, _ := themeFilesIn(filepath.Join(tervaHome, "themes"))
 	sort.Strings(paths)
 	for _, path := range paths {
@@ -304,6 +322,12 @@ func resolveThemePath(tervaHome, preferred string) (string, error) {
 		return "builtin:dark", nil
 	case "light":
 		return "builtin:light", nil
+	case "dark-daltonized":
+		return "builtin:dark-daltonized", nil
+	case "light-daltonized":
+		return "builtin:light-daltonized", nil
+	case "daltonized":
+		return "builtin:daltonized", nil
 	}
 	if preferred != "" && !strings.HasPrefix(preferred, "builtin:") {
 		candidates := []string{preferred}
@@ -391,6 +415,27 @@ func applyThemeOverrides(th Theme, o ThemeOverrides) Theme {
 	}
 	if o.SelectionFG != nil {
 		th.SelectionFG = *o.SelectionFG
+	}
+	if o.MeterLow != nil {
+		th.MeterLow = *o.MeterLow
+	}
+	if o.MeterMid != nil {
+		th.MeterMid = *o.MeterMid
+	}
+	if o.MeterHigh != nil {
+		th.MeterHigh = *o.MeterHigh
+	}
+	if len(o.StatusColors) > 0 {
+		// Merge per-segment colors over whatever the base theme set,
+		// copying so layered applications never share a map.
+		merged := make(map[string]int, len(th.StatusColors)+len(o.StatusColors))
+		for k, v := range th.StatusColors {
+			merged[k] = v
+		}
+		for k, v := range o.StatusColors {
+			merged[k] = v
+		}
+		th.StatusColors = merged
 	}
 	if len(o.SpinnerFrames) > 0 {
 		th.SpinnerFrames = append([]string(nil), o.SpinnerFrames...)

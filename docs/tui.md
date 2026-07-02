@@ -21,6 +21,8 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/btw` | Side chat with full context that doesn't add to the main thread. |
 | `/swarm` | Spawn, monitor, and chat with background subagents. Each runs in parallel with your main session and shares its working directory. |
 | `/skills` | List discovered skills (SKILL.md files) and preview their bodies. |
+| `/context` | Token breakdown of the assembled context and what each extension injects. Read-only. |
+| `/lore` | List this run's active lore (keyed-context) entries — name, trigger, and source — and which fired last turn. Read-only. See [debugging-prompts.md](debugging-prompts.md). |
 | `/usage` | Show subscription usage limits — the 5h/weekly windows, how much is used, and when they reset — for providers that report them (OpenAI Codex today). Read-only; `esc` closes. See [providers.md](providers.md#usage-limits-usage). |
 | `/compact` | Summarize the transcript into one message to free up context. |
 | `/study` | Run the canned prompt "Read and understand everything in the current directory." so the agent has full project context before you start asking targeted questions. Pass a path — typed, drag-dropped, or selected via `@` — to target a specific file or directory instead: `/study [dir:packages/]`, `/study cmd/terva/main.go`. |
@@ -150,7 +152,9 @@ Opens a dialog with every persistent setting. `up`/`down` to navigate, `enter` o
 - **render images when supported** — draw screenshots / `read`-returned images inline using the terminal's image protocol, or fall back to a text placeholder. Auto-detected from `TERM_PROGRAM`; the toggle overrides the detection. The row is greyed out and forced off on terminals that don't speak any image protocol.
 - **auto-swarm** — let the main agent spawn background sub-agents in parallel via a built-in `swarm_spawn` tool. Off by default. When on, the tool is registered with the running agent, the system prompt gains a short addendum telling the model to delegate independent sub-tasks proactively, and terva watches every sub-agent the main agent spawns. As soon as the last sub-agent in a batch finishes its initial task, an `[auto-swarm update]` message is injected back into the chat with each agent's status / task / transcript tail, so the main agent can summarise the collective outcome. Flipping off mid-session removes the tool from the live agent and strips the addendum on the next turn — the model stops trying to delegate. See `/swarm` for the dashboard that lets you monitor, message, kill, or remove the spawned agents.
 - **thinking level** — choose reasoning for supported models: off (default; no reasoning), minimum (~1k tokens), low (~2k), medium (~8k), high (~16k), maximum (~32k). The change is persisted to `config.json` and applied to the running agent's next model call.
-- **color theme** — choose the built-in auto/dark/light theme or any JSON theme discovered under `$TERVA_HOME/themes` or a loaded extension. Theme files can override any subset of UI colors, syntax colors, and spinner frames/messages. Changes apply immediately; if a selected theme file is deleted, terva resets to auto. See [docs/themes.md](themes.md).
+- **color theme** — choose the built-in auto/dark/light theme (including the color-vision-friendly `daltonized` variants) or any JSON theme discovered under `$TERVA_HOME/themes` or a loaded extension. Theme files can override any subset of UI colors, syntax colors, and spinner frames/messages. Changes apply immediately; if a selected theme file is deleted, terva resets to auto. See [docs/themes.md](themes.md).
+- **status line** — pick a layout preset for the status bar: `default` (the built-in three-row layout), `compact` (one row), or `detailed` (everything, including session + clock). A hand-edited `status_line.rows` in config shows up as `custom` and is never clobbered unless you pick a different preset. See the Status bar section below.
+- **status: git / edits / thinking / swarm / session / clock** — show/hide individual status-bar segments on top of the current layout. Toggling writes the resulting rows to `status_line.rows`, so the config file stays the single source of truth.
 
 ### `/skills`
 
@@ -167,6 +171,76 @@ terva also auto-compacts in the background: after any turn that leaves context u
 Enforces a sandbox rooted at the cwd shown in the status bar. `read`, `write`, and `edit` resolve their target path (including through symlinks) and refuse anything outside the sandbox. `bash` refuses obvious escape patterns: `sudo`, `rm -rf /`, leading `cd /`, `cd ..`, `cd ~`, `chmod -R`, `dd of=/`, and similar. The status bar shows `jailed, ~/your/cwd` while active.
 
 This is a guardrail against accidents, not a hard security boundary. If you need real isolation, run terva under docker or a proper sandbox.
+
+## Status bar
+
+The block above the editor is built from named **segments** laid out in rows. The default is three semantic rows — identity + spend, meters, ambient state — and rows with nothing to show vanish (an idle session with no tags is two rows):
+
+```text
+  ~/W/g/t/terva · ⎇ main* +499 -109 · Δ +120 -45 · (openai-codex) gpt-5.5 · thinking: high · ↑94k ↓1.8k · $0.529 ~$0.71/hr (sub)
+  ctx 202k/272k ▓▓▓▓░ 74% · 5h ▓░░░ 15% ↻4h33m · wk ▓░░░ 8% ↻3d17h · ⛭ 2 agents
+  ask mode · jailed · telegram connected
+```
+
+| segment | shows | notes |
+|---|---|---|
+| `cwd` | the working directory, abbreviated (`~/W/g/t/terva`) | |
+| `git` | branch, dirty `*`, `+added -removed` vs HEAD | fed by a background prober (10s + refresh at turn end and `/cd`); absent outside a repo |
+| `edits` | `Δ +N -M` — lines the agent's own edit/write tools changed this session | resets on `/new` and session load |
+| `model` | `(provider) model` | |
+| `persona` | the persona's emoji + name, tinted with its accent color | leads the rows in `--chat`/`--play` instead of `model` |
+| `thinking` | reasoning level | |
+| `tokens` | `↑in ↓out R…cache-read W…cache-write` | |
+| `cost` | session cost, `~$/hr` burn rate (after 10 min), `(sub)` on subscription | burn counts only spend since this run started — resumed history doesn't inflate it |
+| `context` | context-window meter with percentage | `(auto)` while auto-compacting |
+| `usage` | one meter per subscription window with `↻` reset countdown | provider-defined windows (e.g. 5h + weekly) |
+| `swarm` | `⛭ N agents` while background agents run | |
+| `session` | the session file's short name | config-only (not in the defaults) |
+| `clock` | 24h wall clock | config-only |
+| `tags` | approval mode, `jailed` | |
+| `bridge` | connected chat bridge | |
+| `ext` | extension `status_segment` frames | |
+
+Meters change color in stages as they fill (70% / 90%); the stage colors and per-segment colors are theme-controlled — see [themes.md](themes.md), including the color-vision-friendly `daltonized` built-ins.
+
+Rearrange, drop, or re-row segments in `$TERVA_HOME/config.json` (unknown IDs are ignored; rows are open-ended):
+
+```json
+"status_line": {
+  "rows": [
+    ["cwd", "git", "edits", "model", "cost"],
+    ["context", "usage", "swarm"],
+    ["session", "clock"]
+  ]
+}
+```
+
+A row wider than the terminal wraps at segment boundaries rather than truncating; segments never migrate between rows on resize. In `--chat`/`--play` the workspace segments (`cwd`, `git`, `edits`, `swarm`, `tags`) stay hidden even if a config names them.
+
+### Script segments
+
+Define your own segments as shell commands:
+
+```json
+"status_line": {
+  "rows": [["cwd", "git", "weather", "cost"], ["context", "usage"]],
+  "scripts": {
+    "weather": { "command": "~/bin/weather-segment.sh", "timeout_ms": 2000 }
+  }
+}
+```
+
+Each script runs through the platform shell (`sh -c` / `cmd /C`) with a JSON session snapshot on **stdin**; its first stdout line renders wherever `rows` names it (with no `rows` config, scripts append to the last default row). SGR colors in the output pass through; tabs, extra lines, and cursor-moving escapes are stripped. Name collisions with built-in segments lose to the built-in.
+
+Scripts re-run on a coalesced trigger — turn end, `/cd`, and once a minute — never a free-running poll, with one child process at a time and a hard per-run timeout (`timeout_ms`, default 2000, clamped 100–10000). A timed-out run keeps the previous output; a failing script goes blank and notes `status script <name> failed` once per failure streak. Empty output hides the segment.
+
+The stdin payload (`"schema": 1`, additive — fields get added, never renamed): `cwd`, `provider`, `model`, `reasoning`, `experience`, `session_path`/`session_name`, `persona_name`, `subscription`, `cost_usd`, `run_cost_usd` (spend since this run started), `tokens` (`input`/`output`/`cache_read`/`cache_write`), `context_used`/`context_max`, `usage_windows` (`label`/`used_percent`/`resets_at` RFC 3339), `git` (`branch`/`dirty`/`added`/`removed`, absent outside a repo), `swarm_agents`, `edits_added`/`edits_removed`, `cols`, `version`.
+
+**Trust:** scripts are code execution from config, so they follow the same rule as hooks — only the user-layer `config.json` defines them (a project's `.terva/config.json` cannot), and a project-scoped home only activates after you trust the workspace.
+
+## Tool display (`ctrl+t`)
+
+Tool calls render as bordered boxes by default. `ctrl+t` cycles the transcript through three densities: **boxes** → **minimal** (one muted line per call, `· bash go test ./... — 42 lines`) → **hidden** (nothing at all). Failed calls stay visible as a `×` line even when hidden, and `ctrl+o` always force-expands everything back to full boxes, so nothing is more than a keystroke from recoverable. `--chat`/`--play` default to minimal.
 
 ## Sessions
 
@@ -205,7 +279,7 @@ You can keep typing while the agent is working. Pressing `enter` during a turn q
 
 To recover the most recently queued message back into the editor (to tweak it before it runs), press `Option+↑`. In VS Code's integrated terminal that chord doesn't survive xterm.js's macOS key handling — use `Option+Shift+↑` there. terva's hint line under the sliding-in queue adapts automatically based on `$TERM_PROGRAM`.
 
-Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jump`, `/btw`, `/sessions`, `/skills`, `/usage`, `/settings`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`) cancel the active turn first and then run.
+Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jump`, `/btw`, `/sessions`, `/skills`, `/context`, `/lore`, `/usage`, `/settings`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`) cancel the active turn first and then run.
 
 
 ## Keys (interactive mode)
@@ -221,7 +295,8 @@ Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jum
 | `ctrl+c` | Clear the input and queue (while idle) or arm the exit hint (while busy). Press again within 2s to exit. Use `esc` to cancel a running turn. |
 | `ctrl+d` | Exit on empty input. |
 | `ctrl+l` | Redraw the screen. |
-| `ctrl+o` | Expand or collapse long tool results (read, write, edit, bash outputs over ~12 lines). |
+| `ctrl+o` | Expand or collapse long tool results (read, write, edit, bash outputs over ~12 lines). Also overrides `ctrl+t`'s minimal/hidden modes with full boxes. |
+| `ctrl+t` | Cycle tool display: boxes → minimal one-liners → hidden. Errors stay visible; `ctrl+o` recovers everything. |
 | `@` | Open the file picker. Browse files and directories in the working directory. |
 
 ### File picker (`@`)

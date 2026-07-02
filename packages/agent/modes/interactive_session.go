@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/core"
@@ -258,6 +259,7 @@ func (i *Interactive) startNewSession() {
 		i.mu.Unlock()
 		return
 	}
+	i.resetLoreFired()
 	i.mu.Lock()
 	// The callback reset the agent's transcript and cost; mirror that in
 	// the view and the status-bar meters.
@@ -267,6 +269,9 @@ func (i *Interactive) startNewSession() {
 	i.toolCalls = map[string]*tui.ToolCallView{}
 	i.toolOrder = nil
 	i.cumUsage = provider.Usage{}
+	i.costBase = 0
+	i.costBaseAt = time.Now()
+	i.editsAdded, i.editsRemoved = 0, 0
 	i.lastCtxInput = 0
 	i.parkedTurn = 0
 	i.parkedTotal = 0
@@ -338,6 +343,12 @@ func (i *Interactive) applySessionSelection(path string) {
 		if ag := i.turns.Agent(); ag != nil {
 			i.view.Messages = ag.Messages()
 			i.cumUsage = ag.Cost()
+			// The loaded session's historical cost is the new burn-rate
+			// base; only spend from this instant counts toward $/hr.
+			// The edits tally starts over with the swap too.
+			i.costBase = i.cumUsage.CostUSD
+			i.costBaseAt = time.Now()
+			i.editsAdded, i.editsRemoved = 0, 0
 			if last := ag.LastTurnUsage(); last.InputTokens > 0 || last.CacheReadTokens > 0 || last.CacheWriteTokens > 0 {
 				i.lastCtxInput = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
 			} else {
