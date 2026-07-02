@@ -537,9 +537,20 @@ func (i *Interactive) handleEvent(ev core.AgentEvent) {
 				}
 			}
 			tc.Result = text.String()
+			// Tally the agent's own line changes for the status bar's
+			// edits segment (Δ +N -M).
+			a, r := editStats(tc.Name, e.Result)
+			i.editsAdded += a
+			i.editsRemoved += r
 		}
 		if i.cfg.OnToolResult != nil {
 			i.cfg.OnToolResult(e.ID, e.Result)
+		}
+	case core.EvToolProgress:
+		// A long-running tool reported live status (e.g. actor_spawn: "aava
+		// responds (remembers the scene)…"). Show it until the result lands.
+		if tc, ok := i.toolCalls[e.ID]; ok {
+			tc.Progress = e.Text
 		}
 	case core.EvUsage:
 		i.cumUsage = e.Cumulative
@@ -557,6 +568,13 @@ func (i *Interactive) handleEvent(ev core.AgentEvent) {
 		i.statusOK = ""
 		return
 	case core.EvTurnEnd:
+		// The agent likely just touched the tree; refresh the status
+		// bar's git segment without waiting for the slow poll. Fires
+		// per step in a multi-step tool loop, which is fine — pokes
+		// coalesce on the buffered channel and a probe is a few ms.
+		// Status scripts re-run on the same signal (debounced).
+		i.pokeGitProber()
+		i.pokeStatusScripts()
 		if e.Stop == provider.StopAborted {
 			i.turns.ResetStream()
 			i.statusErr = ""

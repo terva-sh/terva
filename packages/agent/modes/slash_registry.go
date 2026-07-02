@@ -25,6 +25,11 @@ type slashSpec struct {
 	name    string   // canonical name, with leading slash
 	aliases []string // alternate spellings that dispatch identically
 	desc    string   // autocomplete popup + /help description
+	// group is the display section this command belongs to. Consecutive
+	// registry entries sharing a group render under one divider row in
+	// the popup (and one section label in /help). Empty = ungrouped
+	// (used for /help itself, which leads the list without a divider).
+	group string
 	// hint, when set, describes the argument a command accepts. It is the
 	// text a non-TUI frontend (e.g. the ACP slash catalog) shows in the
 	// command's input field before anything is typed. Empty for commands
@@ -41,6 +46,17 @@ type slashSpec struct {
 	run         func(i *Interactive, ctx context.Context, parts []string, raw string) (done bool)
 }
 
+// Display groups, in the order they appear in the popup and /help.
+// The names double as the divider/section labels the user sees.
+const (
+	groupSession = "session"
+	groupContext = "context & skills"
+	groupModel   = "model & account"
+	groupSafety  = "permissions & trust"
+	groupAgents  = "agents & integrations"
+	groupSystem  = "system"
+)
+
 // slashRegistry is the table, in popup/help display order. Assigned
 // in init() rather than a var initializer: handler bodies may
 // (transitively) reference the registry — /help renders the catalog,
@@ -49,27 +65,77 @@ type slashSpec struct {
 var slashRegistry []slashSpec
 
 func init() {
+	// Display order: /help leads ungrouped, then commands cluster into
+	// labelled groups (rendered as divider rows in the popup and section
+	// labels in /help), ordered roughly by how often a session reaches
+	// for them: conversation management first, context/capability next,
+	// model + account, safety, integrations, and system verbs last.
 	slashRegistry = []slashSpec{
 		{name: "/help", desc: "show key bindings and commands", run: (*Interactive).slashHelp},
-		{name: "/login", desc: "log in via api key or subscription", cancelsTurn: true,
+
+		{name: "/new", group: groupSession, desc: "start a fresh session (the current one stays on disk)", cancelsTurn: true,
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.dialog.Open(i.cfg.TervaHome)
+				i.startNewSession()
 				return false
 			}},
-		{name: "/logout", desc: "clear a provider's credentials", hint: "provider (anthropic | openai | all)", cancelsTurn: true,
+		{name: "/sessions", group: groupSession, desc: "resume a previous session for this directory",
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.sessionDialog.Open(i.cfg.TervaHome, i.cfg.CWD)
+				return false
+			}},
+		{name: "/session", group: groupSession, desc: "export the current session to a .tervasession file, or import one", hint: "export | import [path]",
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				if len(parts) >= 2 {
-					// Explicit target: /logout anthropic | openai | all
-					i.doLogout(parts[1])
+					action := parts[1]
+					arg := ""
+					if len(parts) >= 3 {
+						arg = strings.Join(parts[2:], " ")
+					}
+					i.doSessionOp(action, arg)
 					return false
 				}
-				// No arg: open the picker over whichever providers are
-				// currently logged in. If nothing's logged in, bail with
-				// a status line.
-				i.openLogoutDialog()
+				i.openSessionOpsDialog()
 				return false
 			}},
-		{name: "/model", desc: "pick a model (or /model <id>)", hint: "model id (optional)", cancelsTurn: true,
+		{name: "/jump", group: groupSession, desc: "scroll the chat to a previous turn (or /jump <text>)", hint: "text to jump to (optional)",
+			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
+				i.openJumpDialog(parts[1:])
+				return false
+			}},
+		{name: "/compact", group: groupSession, desc: "summarize and replace the transcript to free up context", cancelsTurn: true,
+			run: func(i *Interactive, ctx context.Context, _ []string, _ string) bool {
+				i.runCompact(ctx, false)
+				return false
+			}},
+		{name: "/clear", group: groupSession, desc: "clear the chat transcript", cancelsTurn: true,
+			run: (*Interactive).slashClear},
+
+		{name: "/study", group: groupContext, desc: "read every file in the cwd (or a passed file/dir) so the agent has full context", hint: "file or directory (optional)",
+			run: (*Interactive).slashStudy},
+		{name: "/btw", group: groupContext, desc: "side-chat that doesn't add to the main thread (saves tokens)",
+			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
+				i.openBtwDialog(parts[1:])
+				return false
+			}},
+		{name: "/skill", group: groupContext, desc: "prime your next request with a specific skill", hint: "name [request]",
+			run: (*Interactive).slashSkill},
+		{name: "/skills", group: groupContext, desc: "list discovered skills (SKILL.md files)",
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.openSkillsDialog()
+				return false
+			}},
+		{name: "/context", group: groupContext, desc: "context breakdown (token sizes) + what extensions inject",
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.slashContext()
+				return false
+			}},
+		{name: "/lore", group: groupContext, desc: "list this run's active lore (keyed-context) entries",
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.slashLore()
+				return false
+			}},
+
+		{name: "/model", group: groupModel, desc: "pick a model (or /model <id>)", hint: "model id (optional)", cancelsTurn: true,
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				if len(parts) >= 2 {
 					i.applyModelSelection("", parts[1])
@@ -86,48 +152,37 @@ func init() {
 				i.modelDialog.Open(i.cfg.Model, loggedIn, favs)
 				return false
 			}},
-		{name: "/new", desc: "start a fresh session (the current one stays on disk)", cancelsTurn: true,
+		{name: "/login", group: groupModel, desc: "log in via api key or subscription", cancelsTurn: true,
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.startNewSession()
+				i.dialog.Open(i.cfg.TervaHome)
 				return false
 			}},
-		{name: "/sessions", desc: "resume a previous session for this directory",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.sessionDialog.Open(i.cfg.TervaHome, i.cfg.CWD)
-				return false
-			}},
-		{name: "/session", desc: "export the current session to a .tervasession file, or import one", hint: "export | import [path]",
+		{name: "/logout", group: groupModel, desc: "clear a provider's credentials", hint: "provider (anthropic | openai | all)", cancelsTurn: true,
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				if len(parts) >= 2 {
-					action := parts[1]
-					arg := ""
-					if len(parts) >= 3 {
-						arg = strings.Join(parts[2:], " ")
-					}
-					i.doSessionOp(action, arg)
+					// Explicit target: /logout anthropic | openai | all
+					i.doLogout(parts[1])
 					return false
 				}
-				i.openSessionOpsDialog()
+				// No arg: open the picker over whichever providers are
+				// currently logged in. If nothing's logged in, bail with
+				// a status line.
+				i.openLogoutDialog()
 				return false
 			}},
-		{name: "/jump", desc: "scroll the chat to a previous turn (or /jump <text>)", hint: "text to jump to (optional)",
-			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
-				i.openJumpDialog(parts[1:])
+		{name: "/usage", group: groupModel, desc: "subscription usage limits and reset windows",
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.openUsageDialog()
 				return false
 			}},
-		{name: "/compact", desc: "summarize and replace the transcript to free up context", cancelsTurn: true,
-			run: func(i *Interactive, ctx context.Context, _ []string, _ string) bool {
-				i.runCompact(ctx, false)
+
+		{name: "/permissions", group: groupSafety, aliases: []string{"/perms"},
+			desc: "show the approval mode, permission rules, and session grants",
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.openPermissionsDialog()
 				return false
 			}},
-		{name: "/study", desc: "read every file in the cwd (or a passed file/dir) so the agent has full context", hint: "file or directory (optional)",
-			run: (*Interactive).slashStudy},
-		{name: "/btw", desc: "side-chat that doesn't add to the main thread (saves tokens)",
-			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
-				i.openBtwDialog(parts[1:])
-				return false
-			}},
-		{name: "/jail", desc: "confine tools to the current directory",
+		{name: "/jail", group: groupSafety, desc: "confine tools to the current directory",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				if i.cfg.Sandbox == nil {
 					i.setStatusErr("sandbox not available in this build")
@@ -137,7 +192,7 @@ func init() {
 				i.setStatusOK("jailed to " + i.cfg.CWD + " (tools cannot touch paths outside this directory)")
 				return false
 			}},
-		{name: "/unjail", desc: "allow tools to touch paths outside this directory",
+		{name: "/unjail", group: groupSafety, desc: "allow tools to touch paths outside this directory",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				if i.cfg.Sandbox == nil {
 					i.setStatusErr("sandbox not available in this build")
@@ -147,56 +202,34 @@ func init() {
 				i.setStatusOK("unjailed")
 				return false
 			}},
-		{name: "/trust", desc: "trust this directory so its project extensions/skills/context load (/trust parent for descendants too)",
+		{name: "/trust", group: groupSafety, desc: "trust this directory so its project extensions/skills/context load (/trust parent for descendants too)",
 			hint: "parent (optional)", cancelsTurn: true,
 			run: (*Interactive).slashTrust},
-		{name: "/untrust", desc: "remove this directory from the trust list (its project content stops loading)",
+		{name: "/untrust", group: groupSafety, desc: "remove this directory from the trust list (its project content stops loading)",
 			cancelsTurn: true,
 			run:         (*Interactive).slashUntrust},
-		{name: "/skill", desc: "prime your next request with a specific skill", hint: "name [request]",
-			run: (*Interactive).slashSkill},
-		{name: "/skills", desc: "list discovered skills (SKILL.md files)",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.openSkillsDialog()
-				return false
-			}},
-		{name: "/permissions", aliases: []string{"/perms"},
-			desc: "show the approval mode, permission rules, and session grants",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.openPermissionsDialog()
-				return false
-			}},
-		{name: "/swarm", desc: "supervise background agents that share this working directory",
+
+		{name: "/swarm", group: groupAgents, desc: "supervise background agents that share this working directory",
 			run: func(i *Interactive, ctx context.Context, parts []string, _ string) bool {
 				i.runSwarm(ctx, parts[1:])
 				return false
 			}},
-		{name: "/context", desc: "context breakdown (token sizes) + what extensions inject",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.slashContext()
-				return false
-			}},
-		{name: "/usage", desc: "subscription usage limits and reset windows",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.openUsageDialog()
-				return false
-			}},
-		{name: "/reload-ext", desc: "hot-reload all extensions (re-read manifests and respawn)", cancelsTurn: true,
-			run: func(i *Interactive, ctx context.Context, _ []string, _ string) bool {
-				i.runReloadExt(ctx)
-				return false
-			}},
-		{name: "/extensions", aliases: []string{"/ext"}, desc: "list installed extensions; enable/disable globally or per-project",
+		{name: "/extensions", group: groupAgents, aliases: []string{"/ext"}, desc: "list installed extensions; enable/disable globally or per-project",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				i.openExtensionsDialog()
 				return false
 			}},
-		{name: "/mcp", desc: "list MCP servers; enable/disable globally or per-project",
+		{name: "/reload-ext", group: groupAgents, desc: "hot-reload all extensions (re-read manifests and respawn)", cancelsTurn: true,
+			run: func(i *Interactive, ctx context.Context, _ []string, _ string) bool {
+				i.runReloadExt(ctx)
+				return false
+			}},
+		{name: "/mcp", group: groupAgents, desc: "list MCP servers; enable/disable globally or per-project",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				i.openMCPDialog()
 				return false
 			}},
-		{name: "/connect", aliases: []string{"/telegram", "/tg"},
+		{name: "/connect", group: groupAgents, aliases: []string{"/telegram", "/tg"},
 			desc: "connect, disconnect, or show status of the chat bridge (telegram)", hint: "connect | disconnect | status",
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				if len(parts) >= 2 {
@@ -206,24 +239,23 @@ func init() {
 				i.openConnectDialog()
 				return false
 			}},
-		{name: "/migrate", desc: "move your zot data dir to the terva location", cancelsTurn: true, // rename:keep
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.openMigrateDialog()
-				return false
-			}},
-		{name: "/settings", desc: "open settings",
+
+		{name: "/settings", group: groupSystem, desc: "open settings",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				i.openSettingsDialog()
 				return false
 			}},
-		{name: "/paste", desc: "paste an image from the system clipboard into the prompt",
+		{name: "/paste", group: groupSystem, desc: "paste an image from the system clipboard into the prompt",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				i.pasteClipboard()
 				return false
 			}},
-		{name: "/clear", desc: "clear the chat transcript", cancelsTurn: true,
-			run: (*Interactive).slashClear},
-		{name: "/exit", desc: "exit terva",
+		{name: "/migrate", group: groupSystem, desc: "move your zot data dir to the terva location", cancelsTurn: true, // rename:keep
+			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.openMigrateDialog()
+				return false
+			}},
+		{name: "/exit", group: groupSystem, desc: "exit terva",
 			run: func(*Interactive, context.Context, []string, string) bool { return true }},
 		{name: "/cd", hidden: true, cancelsTurn: true, run: (*Interactive).slashCD},
 	}
@@ -247,16 +279,22 @@ func lookupSlash(head string) (*slashSpec, bool) {
 }
 
 // builtinSlashCatalog is the autocomplete/help view of the registry:
-// every non-hidden command, in registry order. A function rather than
+// every non-hidden command, in registry order, with a header row
+// inserted where the display group changes. A function rather than
 // a package var so the registry's handler bodies may reference
 // catalog consumers (e.g. /help renders it) without an
 // initialization cycle.
 func builtinSlashCatalog() []slashCommand {
 	out := make([]slashCommand, 0, len(slashRegistry))
+	prevGroup := ""
 	for _, s := range slashRegistry {
 		if s.hidden {
 			continue
 		}
+		if s.group != "" && s.group != prevGroup {
+			out = append(out, slashCommand{Header: true, Name: s.group})
+		}
+		prevGroup = s.group
 		out = append(out, slashCommand{Name: s.name, Desc: s.desc})
 	}
 	return out
@@ -333,6 +371,7 @@ func (i *Interactive) slashClear(context.Context, []string, string) bool {
 	if ag := i.turns.Agent(); ag != nil {
 		ag.SetMessages(nil)
 	}
+	i.resetLoreFired()
 	i.mu.Lock()
 	i.toolCalls = map[string]*tui.ToolCallView{}
 	i.toolOrder = nil

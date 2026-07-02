@@ -148,14 +148,17 @@ func TestInteractiveSlashPopupPagination(t *testing.T) {
 	h := startInteractive(t, nil)
 	h.dismissLoginDialog()
 	h.term.Type("/")
-	h.waitText("/login")   // page 1
-	h.term.Type("\x1b[6~") // PageDown
-	h.waitText("/compact") // page 2 content
-	h.waitGone("/login")
-	h.term.Type("\x1b[5~") // PageUp back
-	h.waitText("/login")
+	h.waitText("/new") // page 1 (session group, top of the catalog)
+	// The window is centered on the cursor, so with the grouped
+	// catalog it takes two page-steps to move a full window past the
+	// session group into model & account.
+	h.term.Type("\x1b[6~\x1b[6~") // PageDown x2
+	h.waitText("/model")          // model & account group content
+	h.waitGone("/new")
+	h.term.Type("\x1b[5~\x1b[5~") // PageUp back
+	h.waitText("/new")
 	h.term.Type("\x1b") // Esc closes the popup and clears the editor
-	h.waitGone("/login")
+	h.waitGone("/new")
 }
 
 func TestInteractiveHelpBlock(t *testing.T) {

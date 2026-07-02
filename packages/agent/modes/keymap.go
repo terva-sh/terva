@@ -84,6 +84,7 @@ func (i *Interactive) buildGlobalKeymap() []globalBinding {
 		{kind: tui.KeyCtrlD, name: "quit-when-idle", run: i.keyCtrlD},
 		{kind: tui.KeyCtrlL, name: "repaint", run: i.keyRepaint},
 		{kind: tui.KeyCtrlO, name: "toggle-tool-expand", run: i.keyToggleExpand},
+		{kind: tui.KeyCtrlT, name: "cycle-tool-display", run: i.keyCycleToolDisplay},
 		{kind: tui.KeyCtrlV, name: "paste-clipboard-image", run: i.keyPasteClipboard},
 		{kind: tui.KeyPageUp, name: "scroll-page-up", run: func(context.Context, tui.Key) keyOutcome {
 			// The slash popup pages its own catalog; only it gets the
@@ -234,6 +235,30 @@ func (i *Interactive) keyRepaint(context.Context, tui.Key) keyOutcome {
 func (i *Interactive) keyToggleExpand(context.Context, tui.Key) keyOutcome {
 	i.mu.Lock()
 	i.view.ExpandAll = !i.view.ExpandAll
+	if i.rend != nil {
+		i.rend.Clear()
+	}
+	i.mu.Unlock()
+	i.invalidate()
+	return keyHandled
+}
+
+// keyCycleToolDisplay (ctrl+t) cycles how tool calls render: full
+// bordered boxes → one-line minimal summaries → hidden → back to
+// boxes. Like ctrl+o this rewrites already-emitted transcript rows,
+// so it forces a full clear+replay rather than editing scrollback.
+func (i *Interactive) keyCycleToolDisplay(context.Context, tui.Key) keyOutcome {
+	i.mu.Lock()
+	switch i.view.ToolDisplay {
+	case tui.ToolDisplayFull:
+		i.view.ToolDisplay = tui.ToolDisplayMinimal
+	case tui.ToolDisplayMinimal:
+		i.view.ToolDisplay = tui.ToolDisplayHidden
+	default:
+		i.view.ToolDisplay = tui.ToolDisplayFull
+	}
+	i.statusOK = "tool display: " + i.view.ToolDisplay.String()
+	i.statusErr = ""
 	if i.rend != nil {
 		i.rend.Clear()
 	}

@@ -82,9 +82,17 @@ func TestBuiltinSlashCommandsAccessor(t *testing.T) {
 	if cmds[0].Name != "/help" {
 		t.Errorf("accessor head = %q, want /help first", cmds[0].Name)
 	}
-	if len(cmds) != len(builtinSlashCatalog()) {
-		t.Errorf("accessor returned %d commands; internal catalog has %d (they must agree)",
-			len(cmds), len(builtinSlashCatalog()))
+	// The internal catalog additionally carries group-divider header
+	// rows for the popup; the ACP accessor must expose only commands.
+	catalogCmds := 0
+	for _, c := range builtinSlashCatalog() {
+		if !c.Header {
+			catalogCmds++
+		}
+	}
+	if len(cmds) != catalogCmds {
+		t.Errorf("accessor returned %d commands; internal catalog has %d non-header entries (they must agree)",
+			len(cmds), catalogCmds)
 	}
 
 	byName := map[string]SlashCommandInfo{}
@@ -119,6 +127,77 @@ func TestBuiltinSlashCommandsAccessor(t *testing.T) {
 		t.Error("/model missing from BuiltinSlashCommands")
 	} else if c.Hint == "" {
 		t.Error("/model should carry an argument hint")
+	}
+}
+
+// The catalog groups related commands under divider headers, in a
+// deliberate display order: /help leads ungrouped, then session,
+// context, model, safety, integrations, and system. Guards against
+// new commands being appended at the end of the registry instead of
+// slotted into their group.
+func TestSlashCatalogGroupOrder(t *testing.T) {
+	wantHeaders := []string{
+		groupSession, groupContext, groupModel, groupSafety, groupAgents, groupSystem,
+	}
+	cat := builtinSlashCatalog()
+	if len(cat) == 0 || cat[0].Header || cat[0].Name != "/help" {
+		t.Fatalf("catalog must open with the ungrouped /help, got %+v", cat[0])
+	}
+	var headers []string
+	for _, c := range cat {
+		if c.Header {
+			headers = append(headers, c.Name)
+		}
+	}
+	if len(headers) != len(wantHeaders) {
+		t.Fatalf("group headers = %v, want %v", headers, wantHeaders)
+	}
+	for i := range headers {
+		if headers[i] != wantHeaders[i] {
+			t.Fatalf("group header %d = %q, want %q (full: %v)", i, headers[i], wantHeaders[i], headers)
+		}
+	}
+	// Every visible command after /help belongs to a group; a groupless
+	// spec would visually attach to whatever group precedes it.
+	for _, s := range slashRegistry {
+		if s.hidden || s.name == "/help" {
+			continue
+		}
+		if s.group == "" {
+			t.Errorf("%s has no display group", s.name)
+		}
+	}
+}
+
+// Filtering the popup keeps group dividers only for groups that still
+// have matches, so a narrow prefix like "/se" doesn't strand empty
+// headers in the list.
+func TestSlashMenuFilterPrunesEmptyGroups(t *testing.T) {
+	s := newSlashSuggester()
+	got := s.matches("/se")
+	if len(got) == 0 {
+		t.Fatal("expected matches for /se")
+	}
+	for i, c := range got {
+		if !c.Header {
+			continue
+		}
+		if i+1 >= len(got) || got[i+1].Header {
+			t.Fatalf("orphan group header %q in filtered popup: %+v", c.Name, got)
+		}
+	}
+	// /sessions and /session live in the session group; /settings in
+	// system. Both groups must surface with their headers when browsing.
+	names := map[string]bool{}
+	for _, c := range got {
+		if !c.Header {
+			names[c.Name] = true
+		}
+	}
+	for _, want := range []string{"/sessions", "/session", "/settings"} {
+		if !names[want] {
+			t.Errorf("%s missing from /se matches: %+v", want, got)
+		}
 	}
 }
 

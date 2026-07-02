@@ -259,14 +259,13 @@ func pruneOrphanHeaders(in []slashCommand) []slashCommand {
 	out := make([]slashCommand, 0, len(in))
 	for i, c := range in {
 		if c.Header {
-			nextReal := false
-			for j := i + 1; j < len(in); j++ {
-				if !in[j].Header {
-					nextReal = true
-					break
-				}
-			}
-			if !nextReal {
+			// A header owns only the run of commands up to the next
+			// header. Keep it exactly when the entry right after it is
+			// a command: scanning further ahead would let a header
+			// whose whole group was filtered out ride on a later
+			// group's matches (visible once the builtin catalog grew
+			// multiple group dividers).
+			if i+1 >= len(in) || in[i+1].Header {
 				continue
 			}
 		}

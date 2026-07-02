@@ -22,6 +22,7 @@ var helpKeyRows = [][2]string{
 	{"alt+← / alt+→", "jump one word back / forward"},
 	{"ctrl+l", "redraw the screen"},
 	{"ctrl+o", "expand / collapse long tool results"},
+	{"ctrl+t", "cycle tool display (boxes - minimal - hidden)"},
 	{"ctrl+v", "paste a clipboard image into the prompt (also /paste)"},
 	{"pgup / pgdn", "scroll the chat one page up / down"},
 	{"up / down", "move within multi-line input - scroll chat at input edge"},
@@ -51,6 +52,9 @@ func renderHelpBlock(th tui.Theme, width int) []string {
 	// already, leaving its description mis-aligned).
 	labelWidth := 14
 	for _, c := range builtinSlashCatalog() {
+		if c.Header {
+			continue // section labels don't participate in column sizing
+		}
 		if n := runewidth.StringWidth(c.Name); n > labelWidth {
 			labelWidth = n
 		}
@@ -72,9 +76,15 @@ func renderHelpBlock(th tui.Theme, width int) []string {
 	var out []string
 	out = append(out, frameHeader(th, "terva help", width), "")
 
-	// commands section
+	// commands section. Group headers from the catalog become muted
+	// section labels with a blank row above, mirroring the divider rows
+	// the autocomplete popup draws for the same groups.
 	out = append(out, tui.Bold("slash commands:"))
 	for _, c := range builtinSlashCatalog() {
+		if c.Header {
+			out = append(out, "", "  "+th.FG256(th.Muted, c.Name+":"))
+			continue
+		}
 		out = append(out, fmt.Sprintf("  %s  %s",
 			th.FG256(th.Accent, pad(c.Name)),
 			th.FG256(th.Muted, c.Desc)))
