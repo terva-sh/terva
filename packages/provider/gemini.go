@@ -191,6 +191,9 @@ func (c *geminiClient) buildRequest(req Request) (*gemRequest, string, error) {
 	if functionsEnabled {
 		msgs = RepairOrphanedToolResults(req.Messages)
 	}
+	// A card's seeded greeting is a leading assistant turn; Gemini rejects a
+	// leading role:"model" content, so prepend a request-scoped user turn.
+	msgs = EnsureLeadingUserTurn(msgs)
 	for _, msg := range msgs {
 		switch msg.Role {
 		case RoleUser:

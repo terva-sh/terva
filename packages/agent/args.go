@@ -48,7 +48,43 @@ type Args struct {
 	// Persona selects the active persona (--persona): a built-in/on-disk name
 	// or a path to a .md file. Empty resolves via persona.md / default_persona /
 	// the embedded Mieli default.
-	Persona     string
+	Persona string
+
+	// Card loads a SillyTavern Character Card V2 (.json or .png) as the
+	// immersive identity for a chat/play session (--card <path>). It implies
+	// --chat when no experience mode is set and is not valid in regular coding
+	// mode (a card can't be a working charter). Separate from --persona: a
+	// card is foreign roleplay content gated to chat/play.
+	Card string
+
+	// Substrate is an opaque, scheme-qualified reference to a shared
+	// authoritative state surface a dispatched actor binds to
+	// (--substrate <scheme>:<ref>) — e.g. a world instance or a task board.
+	// RESERVED: empty means the substrate is projected by the parent (the
+	// near-term director model), so nothing resolves it yet. It is threaded
+	// through the swarm boot spec so a future dispatch skin can attach a child
+	// to a substrate without changing the argv contract. See
+	// docs/proposals/agent-dispatch.md.
+	Substrate string
+
+	// Cast declares the named actors a --play director can voice via the
+	// actor_spawn tool: --cast NAME=REF (repeatable), where REF is a persona
+	// name or a character-card path. The model dispatches a cast member by NAME
+	// only (never a path), so a session's cast is a closed, user-declared set —
+	// not the global persona roster. See docs/proposals/agent-dispatch.md.
+	Cast map[string]string
+
+	// Greeting selects which opening line a --card seeds: 0 = first_mes
+	// (default), 1..N = the Nth alternate_greetings entry. Out of range is an
+	// error; ignored without --card.
+	Greeting int
+
+	// DumpPrompt, when non-empty ("text"|"json"|"raw"), assembles the prompt
+	// for the pending turn, prints the manifest, and exits before any model
+	// call (--dump-prompt / --dump-prompt=<format>). A debugging + assertion
+	// tool; needs no credential.
+	DumpPrompt string
+
 	Reasoning   string
 	Temperature *float32
 
@@ -79,6 +115,11 @@ type Args struct {
 	// coding chrome. Set by --chat / --play.
 	Experience string
 	MaxSteps   int
+
+	// As sets what a character card's {{user}} macro resolves to for this run
+	// (the name the character addresses the user by), overriding the persisted
+	// user_name config. Empty falls back to config then the literal "User".
+	As string
 
 	// Project / NoProject force project-scoped mode on / off for this run,
 	// overriding the `project_scoped` field in .terva/config.json. In
@@ -143,6 +184,13 @@ type Args struct {
 	// .agents/skills/. It defaults to true; --no-skill disables all
 	// skill discovery, including built-ins.
 	WithSkills bool
+
+	// NoLore disables the lore keyed-context primitive for this run: no
+	// discovery from any tier and no injection (cached prefix or per-turn
+	// tail), including a loaded card's character_book. Sibling of
+	// --no-skill / --no-ext / --no-mcp. Lore is on by default (config
+	// `lore`, default true); the `terva lore` CLI is unaffected.
+	NoLore bool
 
 	// NoYolo turns on per-tool confirmation. Before each tool
 	// invocation the TUI prompts the user with the tool name + args
@@ -290,6 +338,49 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.Persona = v
+		case "--card":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.Card = v
+		case "--substrate":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.Substrate = v
+		case "--cast":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			name, ref, ok := strings.Cut(v, "=")
+			name = strings.TrimSpace(name)
+			ref = strings.TrimSpace(ref)
+			if !ok || name == "" || ref == "" {
+				return a, fmt.Errorf("--cast expects NAME=REF (a persona name or card path), got %q", v)
+			}
+			if a.Cast == nil {
+				a.Cast = map[string]string{}
+			}
+			a.Cast[name] = ref
+		case "--greeting":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			n, perr := strconv.Atoi(strings.TrimSpace(v))
+			if perr != nil || n < 0 {
+				return a, fmt.Errorf("--greeting must be a non-negative integer")
+			}
+			a.Greeting = n
+		case "--as":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.As = strings.TrimSpace(v)
 		case "--context-file":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -326,6 +417,10 @@ func ParseArgs(in []string) (Args, error) {
 			a.ConnectorManifests = append(a.ConnectorManifests, v)
 		case "--no-skill", "--no-skills":
 			a.NoSkill = true
+		case "--no-lore":
+			a.NoLore = true
+		case "--dump-prompt":
+			a.DumpPrompt = "text"
 		case "--with-skills", "--with-skill":
 			// Deprecated no-op: user skills are loaded by default.
 			a.WithSkills = true
@@ -408,11 +503,42 @@ func ParseArgs(in []string) (Args, error) {
 			}
 			a.MaxSteps = n
 		default:
+			if strings.HasPrefix(arg, "--dump-prompt=") {
+				v := strings.TrimPrefix(arg, "--dump-prompt=")
+				switch v {
+				case "text", "json", "raw":
+					a.DumpPrompt = v
+				default:
+					return a, fmt.Errorf("--dump-prompt must be text|json|raw")
+				}
+				continue
+			}
 			if strings.HasPrefix(arg, "-") && arg != "-" {
 				return a, fmt.Errorf("unknown flag %q", arg)
 			}
 			positional = append(positional, arg)
 		}
+	}
+
+	// A cast is meaningful only under --play (both consumers — the addendum
+	// and actor_spawn — gate on it): imply --play when no experience mode was
+	// chosen, and reject --chat --cast loudly rather than silently ignoring
+	// the cast. Runs before the --card implication so --card --cast lands in
+	// --play (the card then shapes the director's identity there).
+	if len(a.Cast) > 0 {
+		switch a.Experience {
+		case "":
+			a.Experience = ExperiencePlay
+		case ExperienceChat:
+			return a, fmt.Errorf("--cast requires --play (--chat has no director to voice a cast)")
+		}
+	}
+
+	// A character card runs as an immersive chat identity: imply --chat when no
+	// experience mode was chosen. (A card is not a working charter, so it is
+	// not valid in regular coding mode.)
+	if a.Card != "" && a.Experience == "" {
+		a.Experience = ExperienceChat
 	}
 
 	if len(positional) > 0 {
@@ -570,6 +696,9 @@ func PrintHelp(version string) {
 		row{"--system-prompt TEXT", "replace the default system prompt"},
 		row{"--append-system-prompt TEXT", "append to the system prompt (repeatable)"},
 		row{"--persona NAME|FILE", "load a persona (built-in/on-disk name or .md path) as the identity"},
+		row{"--card PATH", "load a character card (.json/.png) as a chat/play identity (implies --chat)"},
+		row{"--greeting N", "with --card: pick the opening line (0 = first_mes, 1..N = alternate greetings)"},
+		row{"--as NAME", "what a card's {{user}} resolves to (defaults to the saved name, else \"User\")"},
 		row{"--context-file PATH", "inject a file's contents into the system prompt (repeatable)"},
 		row{"-c, --continue", "continue the most recent session for this cwd"},
 		row{"-r, --resume", "pick a session to resume"},
@@ -586,8 +715,10 @@ func PrintHelp(version string) {
 		row{"--no-tools", "all three blocks above together (and the skill tool) — no tools at all"},
 		row{"--chat", "no tools at all + a conversational, non-coding identity (pairs with --persona)"},
 		row{"--play", "extensions + MCP only (= --no-workspace-tools) + an embodied identity"},
+		row{"--cast NAME=REF", "declare an actor the director can voice (REF = persona name or card path); repeatable, implies --play. A trusted project's .terva/cast.json declares a cast too"},
 		row{"--tools csv", "only enable the listed (built-in) tools"},
 		row{"--no-skill", "skip all skill discovery for this run"},
+		row{"--no-lore", "skip all lore (keyed-context) discovery + injection for this run"},
 		row{"--approval plan|ask|auto-edit|workspace|yolo", "approval mode: plan = read-only only, ask = confirm everything, auto-edit = confirm non-edit tools, workspace = run built-ins + reads, confirm foreign side-effects (interactive default), yolo = run freely. See docs/permissions.md"},
 		row{"--no-yolo", "alias for --approval ask"},
 		row{"--jail / --no-jail", "force the sandbox on / off at startup (default: on for interactive, off for headless)"},
@@ -610,6 +741,7 @@ func PrintHelp(version string) {
 	section("misc",
 		row{"--swarm-worktrees", "give each swarm sub-agent its own git worktree (needs the terva-git-worktree extension)"},
 		row{"--max-steps N", "agent loop iteration cap (default: unlimited)"},
+		row{"--dump-prompt[=text|json|raw]", "print the assembled prompt for the pending turn and exit (no model call)"},
 		row{"--list-models", "print known models and exit"},
 		row{"-h, --help", "show this help"},
 		row{"-v, --version", "show version info"},

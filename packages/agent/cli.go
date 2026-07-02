@@ -20,6 +20,7 @@ import (
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/exttool"
 	"terva.sh/terva/packages/agent/hooks"
+	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/skills"
@@ -554,6 +555,12 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runPersonaCommand(rawArgs); handled {
 		return err
 	}
+	if handled, err := runLoreCommand(rawArgs); handled {
+		return err
+	}
+	if handled, err := runCardCommand(rawArgs); handled {
+		return err
+	}
 	if handled, err := runUpdateCommand(rawArgs, version); handled {
 		return err
 	}
@@ -643,6 +650,9 @@ func Run(rawArgs []string, version string) error {
 	// gated): a local server's loaded models change frequently.
 	RefreshCompatModelsAsync()
 
+	if args.DumpPrompt != "" {
+		return runPromptDump(args)
+	}
 	switch args.Mode {
 	case ModePrint:
 		return runPrintMode(ctx, args, version)
@@ -905,8 +915,9 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 		fanoutAgentEvent(extMgr, ev)
 		observeAgentEventForHooks(hookEng, ev)
 	}
-	// Inject extensions' live context cards into the model each turn.
-	ag.ContextProvider = extMgr.EphemeralContext
+	// Inject extensions' live context cards into the model each turn (live
+	// provider + sizing twin; ext context before the tail so PHI stays last).
+	wireExtEphemeral(ag, extMgr.EphemeralContext)
 	// Re-prompt once at close if an extension flags open work.
 	ag.ContinueOnStop = continueOnOpenWork(extMgr)
 }
@@ -1127,9 +1138,76 @@ func slugAgent(agentID, task string) string {
 	return id + "-" + t
 }
 
+// userNameResolved reports whether a character card's {{user}} name is already
+// determined without asking — via --as, a trusted project's user_name, or the
+// global user_name. It mirrors the resolution Resolve performs (resolveTrustState
+// + ResolveConfig), so the prompt honors the documented precedence
+// --as > trusted-project > global > "User" instead of consulting only the global
+// preference — which would let the prompt clobber a trusted project's user_name.
+func userNameResolved(args Args) bool {
+	if strings.TrimSpace(args.As) != "" {
+		return true
+	}
+	trusted := resolveTrustState(args).IsTrusted()
+	return strings.TrimSpace(ResolveConfig(args.CWD, trusted).UserName) != ""
+}
+
+// maybePromptUserName asks, once, what a character card should call the user —
+// but only when a card is loaded, the name isn't already resolvable (see
+// userNameResolved), and stdin is an interactive terminal. The answer is used
+// this run and persisted globally for later. Non-interactive runs are left
+// untouched so Resolve can fall back to --as / config / "User". It reads a full
+// line (unbuffered, so it can't swallow input the TUI needs and preserves spaces).
+func maybePromptUserName(args Args) Args {
+	if args.Card == "" || userNameResolved(args) {
+		return args
+	}
+	if !stdinIsTTY() {
+		return args
+	}
+	fmt.Fprint(os.Stderr, "What should the character call you? [User] ")
+	name := strings.TrimSpace(readLineRaw(os.Stdin))
+	if name == "" {
+		name = "User"
+	}
+	args.As = name
+	// Persist to the GLOBAL config so it's remembered across projects, not
+	// written into a project-scoped run's redirected home.
+	if err := SetGlobalUserName(name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not save your name (%v); using it for this session only\n", err)
+	}
+	return args
+}
+
+// readLineRaw reads a single line from r one byte at a time (no buffering), so
+// it never reads past the newline into a discarded buffer — safe to call right
+// before the TUI takes over stdin. Any trailing CR is stripped.
+func readLineRaw(r io.Reader) string {
+	var b []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if buf[0] == '\n' {
+				break
+			}
+			b = append(b, buf[0])
+		}
+		if err != nil {
+			break
+		}
+	}
+	return strings.TrimRight(string(b), "\r")
+}
+
 // ---- interactive mode: opens the TUI even without credentials ----
 
 func runInteractive(ctx context.Context, args Args, version string) error {
+	// A character card's {{user}} needs a name. If none is set and we're on an
+	// interactive terminal, ask once and remember it; piped/-p runs fall back to
+	// --as / the persisted name / "User" inside Resolve.
+	args = maybePromptUserName(args)
+
 	// Resolve WITHOUT requiring credentials.
 	r, err := Resolve(args, false)
 	if err != nil {
@@ -1282,11 +1360,55 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// closures below refresh these before re-injecting the tool; the launch
 	// values seed them. (All writes/reads happen on the TUI goroutine.)
 	swarmHostProvider, swarmHostModel := r.Provider, r.Model
-	injectSwarmSpawn := func(reg core.Registry) core.Registry {
+	// actor_spawn is the --play director's dispatch skin (Stage 2 of the
+	// agent-dispatch plan): it voices a member of the declared cast, synchronously
+	// (spawn a tool-less --chat actor, await its line, return it). Gated by
+	// castSkinActive (--play with a non-empty cast, never --no-tools); folded into
+	// injectHostTools so it survives every registry rebuild the same way
+	// swarm_spawn does. The cast (and its warm cache) is only built when the skin
+	// can actually inject.
+	var actorCast map[string]tools.CastMember
+	if castSkinActive(args) {
+		cast, cerr := buildActorCast(mergedCastRefs(args, r.CWD, r.Trusted), r.CWD)
+		if cerr != nil {
+			return cerr
+		}
+		actorCast = cast
+	}
+	// Warm-actor cache: a live actor is kept across turns so it remembers the
+	// scene (and only its first line pays spawn latency). Shared across registry
+	// rebuilds; retired (stop + delete state) on scene teardown.
+	var actorWarm *tools.WarmActors
+	if len(actorCast) > 0 {
+		actorWarm = tools.NewWarmActors(tools.DefaultWarmActorCap)
+		defer actorWarm.Shutdown(func(id string) {
+			_ = swarmMgr.Stop(id)
+			_ = swarmMgr.Remove(id)
+		})
+	}
+	injectActorSpawn := func(reg core.Registry) core.Registry {
+		if reg == nil || !castSkinActive(args) || len(actorCast) == 0 {
+			return reg
+		}
+		reg["actor_spawn"] = &tools.ActorSpawnTool{
+			Swarm:        swarmMgr,
+			Warm:         actorWarm,
+			Cast:         actorCast,
+			HostProvider: swarmHostProvider,
+			HostModel:    swarmHostModel,
+			Tiers:        hostTiers,
+		}
+		return reg
+	}
+	injectHostTools := func(reg core.Registry) core.Registry {
 		if reg == nil {
 			return reg
 		}
-		if !AutoSwarmEnabled() {
+		injectActorSpawn(reg)
+		// Auto-swarm is a coding-workflow skin: never inject swarm_spawn into an
+		// immersive (--chat/--play) or tool-suppressed session, which has no
+		// workspace for the sub-agents to act on. See hasBaseWorkspaceTools.
+		if !hasBaseWorkspaceTools(args) || !AutoSwarmEnabled() {
 			return reg
 		}
 		reg["swarm_spawn"] = &tools.SwarmSpawnTool{
@@ -1300,7 +1422,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		}
 		return reg
 	}
-	injectSwarmSpawn(r.ToolRegistry)
+	injectHostTools(r.ToolRegistry)
 
 	// uiAsker holds the interactive question channel (the TUI, set once
 	// it exists below). Captured by setApprovalMode so the registry it
@@ -1323,7 +1445,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		if mcpAdapter != nil {
 			MergeToolsForMode(reg, mode, pol.ReadOnly, mcpAdapter)
 		}
-		injectSwarmSpawn(reg)
+		injectHostTools(reg)
 		bindAsker(reg, uiAsker)
 		return reg
 	}
@@ -1373,8 +1495,9 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			fanoutAgentEvent(extMgr, ev)
 			observeAgentEventForHooks(hookEng, ev)
 		}
-		// Inject extensions' live context cards into the model each turn.
-		a.ContextProvider = extMgr.EphemeralContext
+		// Inject extensions' live context cards into the model each turn (live
+		// provider + sizing twin; ext context before the tail so PHI stays last).
+		wireExtEphemeral(a, extMgr.EphemeralContext)
 		// Re-prompt once at close if an extension flags open work.
 		a.ContinueOnStop = continueOnOpenWork(extMgr)
 		return a
@@ -1394,7 +1517,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			resolved.MergeExtensionTools(mcpAdapter)
 		}
 		swarmHostProvider, swarmHostModel = resolved.Provider, resolved.Model
-		injectSwarmSpawn(resolved.ToolRegistry)
+		injectHostTools(resolved.ToolRegistry)
 		return wireAgentExt(resolved.NewAgent()), resolved.Provider, resolved.Model, nil
 	}
 
@@ -1420,7 +1543,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			resolved.MergeExtensionTools(mcpAdapter)
 		}
 		swarmHostProvider, swarmHostModel = resolved.Provider, resolved.Model
-		injectSwarmSpawn(resolved.ToolRegistry)
+		injectHostTools(resolved.ToolRegistry)
 		return wireAgentExt(resolved.NewAgent()), resolved.Provider, resolved.Model, nil
 	}
 
@@ -1454,7 +1577,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			resolved.MergeExtensionTools(mcpAdapter)
 		}
 		swarmHostProvider, swarmHostModel = resolved.Provider, resolved.Model
-		injectSwarmSpawn(resolved.ToolRegistry)
+		injectHostTools(resolved.ToolRegistry)
 		return wireAgentExt(resolved.NewAgent()), resolved.Provider, resolved.Model, nil
 	}
 
@@ -1506,7 +1629,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		if mcpAdapter != nil {
 			resolved.MergeExtensionTools(mcpAdapter)
 		}
-		injectSwarmSpawn(resolved.ToolRegistry)
+		injectHostTools(resolved.ToolRegistry)
 		current.SetTools(resolved.ToolRegistry)
 	}
 	extMgr.SetOnReload(triggerReload)
@@ -1979,6 +2102,16 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		RenameProject: func() error { return RenameProjectDir(migPlan) },
 	}
 
+	// The coding auto-swarm skin also surfaces in the TUI as the /swarm dashboard
+	// and the /settings auto-swarm toggle (which re-attaches swarm_spawn live).
+	// Withhold the supervisor from the TUI in immersive/no-tools sessions so those
+	// can't re-inject the coding tool; the engine (swarmMgr) stays live for
+	// internal session tracking and a future play dispatch skin.
+	tuiSwarm := swarmMgr
+	if !hasBaseWorkspaceTools(args) {
+		tuiSwarm = nil
+	}
+
 	iv = modes.NewInteractive(modes.InteractiveConfig{
 		Terminal:                term,
 		Theme:                   experienceTheme(theme, r.experience),
@@ -1986,6 +2119,8 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		AutoSwarmEnabled:        initialCfg.AutoSwarmEnabled,
 		RecursiveFileSuggest:    initialCfg.RecursiveFileSuggest,
 		RespectGitignore:        initialCfg.RespectGitignore,
+		StatusLineRows:          initialCfg.StatusLineRows(),
+		StatusScripts:           statusScriptsForTUI(initialCfg),
 		ThemeName:               initialCfg.Theme,
 		PersonaName:             r.persona.Name,
 		PersonaPhonetic:         r.persona.Phonetic(),
@@ -2154,7 +2289,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			applyMCPChangeLive(mcpAdapter, r.CWD, r.Trusted, name, triggerReload)
 		},
 		ReadLogTail:   readLogTail,
-		Swarm:         swarmMgr,
+		Swarm:         tuiSwarm,
 		ChangelogChan: changelogCh,
 		OnChangelogDismiss: func() {
 			// For dev builds (0.0.0) store the actual release version
@@ -2167,6 +2302,26 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 				}
 			}
 			_ = MarkChangelogShown(v)
+		},
+		LoreList: func() []lore.Entry {
+			return r.loreActive
+		},
+		LoreFired: func() []string {
+			if r.loreFired == nil {
+				return nil
+			}
+			return r.loreFired.get()
+		},
+		LoreDropped: func() []string {
+			if r.loreFired == nil {
+				return nil
+			}
+			return r.loreFired.getDropped()
+		},
+		LoreFiredReset: func() {
+			if r.loreFired != nil {
+				r.loreFired.set(nil, nil)
+			}
 		},
 		SkillSnapshot: func() []*skills.Skill {
 			if args.NoSkill {
@@ -2351,6 +2506,10 @@ func openOrCreateSession(args Args, r Resolved, ag *core.Agent, version string) 
 		s    *core.Session
 		msgs []provider.Message
 		err  error
+		// seedFresh marks a brand-new session created at an explicit
+		// --session path: as fresh as the no-flag path at the bottom, so it
+		// seeds the card greeting the same way.
+		seedFresh bool
 	)
 	switch {
 	case args.Session != "":
@@ -2366,6 +2525,7 @@ func openOrCreateSession(args Args, r Resolved, ag *core.Agent, version string) 
 		if err != nil && errors.Is(err, os.ErrNotExist) {
 			s, err = core.NewSessionAtPath(args.Session, args.CWD, r.Provider, r.Model, version)
 			msgs = nil
+			seedFresh = err == nil
 		}
 	case args.Continue:
 		latest := core.LatestSession(TervaHome(), args.CWD)
@@ -2391,13 +2551,49 @@ func openOrCreateSession(args Args, r Resolved, ag *core.Agent, version string) 
 			fmt.Fprintln(os.Stderr, "terva:", w)
 		}
 		ag.SetMessages(msgs)
+		// A brand-new session at an explicit --session path seeds the card
+		// greeting exactly like the fresh path below (after SetMessages, which
+		// would otherwise clobber it). This deliberately includes a dispatched
+		// actor child (the runner passes a fixed --session): a card actor's
+		// first_mes is the character's canonical opening voice, part of the
+		// actor's own context — the same rule as a user-run --chat --card.
+		if seedFresh {
+			seedCardGreeting(s, ag, r.cardGreeting)
+		}
 		if cum, last, uerr := core.SessionUsageDetail(s.Path); uerr == nil {
 			ag.SeedCost(cum)
 			ag.SeedLastTurnUsage(last)
 		}
 		return s, nil
 	}
-	return core.NewSession(TervaHome(), args.CWD, r.Provider, r.Model, version)
+	fresh, err := core.NewSession(TervaHome(), args.CWD, r.Provider, r.Model, version)
+	if err != nil {
+		return nil, err
+	}
+	seedCardGreeting(fresh, ag, r.cardGreeting)
+	return fresh, nil
+}
+
+// seedCardGreeting seeds a --card's opening line (first_mes) as the first
+// assistant message of a fresh session, so the character "speaks first": it
+// renders in the transcript, persists across resume, and gives the model
+// continuity. A request-scoped guard in the provider converters keeps a
+// leading assistant turn valid for APIs (Anthropic) that require the first
+// message to be a user turn.
+func seedCardGreeting(s *core.Session, ag *core.Agent, greeting string) {
+	if greeting == "" {
+		return
+	}
+	msg := provider.Message{
+		Role:    provider.RoleAssistant,
+		Content: []provider.Content{provider.TextBlock{Text: greeting}},
+		Time:    time.Now(),
+		Meta:    map[string]string{"source": "card:greeting"},
+	}
+	ag.SetMessages([]provider.Message{msg})
+	if s != nil {
+		_ = s.AppendMessage(msg)
+	}
 }
 
 func pickSession(cwd string) (string, error) {

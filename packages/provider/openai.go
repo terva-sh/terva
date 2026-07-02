@@ -285,6 +285,11 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 	textOnly := !m.Has(CapImageInput)
 
 	req.Messages = RepairOrphanedToolResults(req.Messages)
+	// OpenAI proper tolerates a leading assistant turn (a card's seeded
+	// greeting), but this builder also serves every OpenAI-compatible clone
+	// (Moonshot/Kimi, local templates with strict alternation) via
+	// newOpenAICompat — the guard is a no-cost safety net there.
+	req.Messages = EnsureLeadingUserTurn(req.Messages)
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case RoleUser:

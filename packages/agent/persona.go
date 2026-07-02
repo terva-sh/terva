@@ -45,7 +45,14 @@ type Persona struct {
 	// than an additive layer. Stock hosts that don't know the field treat the
 	// persona as additive, so a file degrades gracefully.
 	Immersive bool
-	Charter   string // the markdown body, trimmed
+	// Introduction, when set, replaces terva's generated identity intro (the
+	// branded "expert coding assistant operating inside terva…" opening) with
+	// the persona's own verbatim text, while KEEPING terva's conventions
+	// bracketing — the middle ground between an additive persona (terva's intro)
+	// and an immersive one (Charter owns the whole prompt). From the
+	// agent_introduction frontmatter field. Ignored when Immersive is set.
+	Introduction string
+	Charter      string // the markdown body, trimmed
 	// Namespace groups the persona: a team subdirectory under personas/, or the
 	// extension name for an extension-shipped persona. "" = top-level. The
 	// qualified name is "<namespace>:<name>".
@@ -94,6 +101,7 @@ type personaFrontmatter struct {
 	GoodFor           []string `yaml:"good_for"`
 	AvoidFor          []string `yaml:"avoid_for"`
 	Immersive         bool     `yaml:"immersive"`
+	AgentIntroduction string   `yaml:"agent_introduction"`
 }
 
 // parsePersona parses a persona .md (YAML frontmatter + charter body). A
@@ -118,6 +126,7 @@ func parsePersona(raw, source string) (Persona, error) {
 		GoodFor:           fm.GoodFor,
 		AvoidFor:          fm.AvoidFor,
 		Immersive:         fm.Immersive,
+		Introduction:      strings.TrimSpace(fm.AgentIntroduction),
 		Charter:           strings.TrimSpace(body),
 		Source:            source,
 	}

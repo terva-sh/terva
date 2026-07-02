@@ -341,7 +341,7 @@ func (c *bedrockClient) buildRequest(req Request) (*bedrockRequest, error) {
 	if out.InferenceConfig.MaxTokens == 0 {
 		out.InferenceConfig.MaxTokens = 4096
 	}
-	for _, m := range normalizeBedrockToolResults(req.Messages) {
+	for _, m := range EnsureLeadingUserTurn(normalizeBedrockToolResults(req.Messages)) {
 		role := string(m.Role)
 		if role == "tool" {
 			role = "user"

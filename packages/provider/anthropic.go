@@ -349,7 +349,10 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	// emitting them separately keeps each message bit-stable across
 	// turns, so the cache prefix matches for the entire history up
 	// to the newest block.
-	req.Messages = RepairOrphanedToolResults(req.Messages)
+	// Repair orphaned tool results, then make a leading assistant turn (a
+	// card's seeded greeting) valid by prepending a request-scoped user turn.
+	// Both operate on the generic message list and never mutate history.
+	req.Messages = EnsureLeadingUserTurn(RepairOrphanedToolResults(req.Messages))
 	for _, msg := range req.Messages {
 		renameTools := c.oauthTok != ""
 		switch msg.Role {

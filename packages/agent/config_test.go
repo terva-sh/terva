@@ -373,3 +373,103 @@ func TestConfigSwarmWorktreesRoundTrip(t *testing.T) {
 		t.Fatalf("parsed SwarmWorktrees = %v; want true", c.SwarmWorktrees)
 	}
 }
+
+// TestGlobalUserName_SurvivesProjectScope: the preferred user name reads from
+// and writes to the user's real GLOBAL home even when project-scoped mode has
+// redirected TERVA_HOME into a repo — so a character card's {{user}} is stable
+// across projects and the answer is never saved into the repo.
+func TestGlobalUserName_SurvivesProjectScope(t *testing.T) {
+	globalDir := testsupport.TempDir(t)
+	scopedDir := testsupport.TempDir(t)
+	t.Setenv("TERVA_HOME", scopedDir) // the redirected (project-local) home
+
+	// Different names in the scoped home and the real global home.
+	if err := SaveConfig(Config{UserName: "ScopedName"}); err != nil { // -> TERVA_HOME (scoped)
+		t.Fatal(err)
+	}
+	if err := saveConfigAt(globalDir, Config{UserName: "GlobalName"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate project-scoped mode pinning the real global home.
+	prev := pinnedGlobalHome
+	pinnedGlobalHome = globalDir
+	t.Cleanup(func() { pinnedGlobalHome = prev })
+
+	// Reads come from the global home, not the redirected one.
+	if got := GlobalUserPreferences().UserName; got != "GlobalName" {
+		t.Errorf("global pref under scoping = %q, want GlobalName", got)
+	}
+	// Writes go to the global home; the scoped home is left untouched.
+	if err := SetGlobalUserName("Updated"); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := loadConfigAt(globalDir); c.UserName != "Updated" {
+		t.Errorf("global config not updated: %q", c.UserName)
+	}
+	if c, _ := loadConfigAt(scopedDir); c.UserName != "ScopedName" {
+		t.Errorf("scoped home should be untouched: %q", c.UserName)
+	}
+}
+
+// TestResolveConfigUserName_GlobalAndTrustedOverride: user_name resolves from
+// the global config, and a TRUSTED project may override it (an untrusted one
+// cannot — same gate as provider/model).
+func TestResolveConfigUserName_GlobalAndTrustedOverride(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	if err := SaveConfig(Config{UserName: "GlobalName"}); err != nil {
+		t.Fatal(err)
+	}
+	repo := testsupport.TempDir(t)
+	writeProjectConfig(t, repo, `{"user_name":"ProjectName"}`)
+
+	if got := ResolveConfig(repo, true).UserName; got != "ProjectName" {
+		t.Errorf("trusted project should override: got %q, want ProjectName", got)
+	}
+	if got := ResolveConfig(repo, false).UserName; got != "GlobalName" {
+		t.Errorf("untrusted project override should be dropped: got %q, want GlobalName", got)
+	}
+
+	// A project that sets no user_name leaves the global preference standing.
+	repo2 := testsupport.TempDir(t)
+	writeProjectConfig(t, repo2, `{"context_files":["x.md"]}`)
+	if got := ResolveConfig(repo2, true).UserName; got != "GlobalName" {
+		t.Errorf("no project user_name: global should stand, got %q", got)
+	}
+}
+
+// The interactive name prompt must honor the same precedence Resolve uses, so it
+// never fires (and clobbers) when a trusted project's user_name is set.
+func TestUserNameResolved_HonorsTrustedProjectAndGlobal(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t)) // fresh home: no global user_name
+	repo := testsupport.TempDir(t)
+	writeProjectConfig(t, repo, `{"user_name":"ProjectName"}`)
+
+	// A trusted project's user_name makes the name resolvable (no prompt).
+	if !userNameResolved(Args{CWD: repo, Trust: true}) {
+		t.Error("trusted project user_name should count as resolved")
+	}
+	// Untrusted + no global: the project override is dropped, nothing resolves.
+	if userNameResolved(Args{CWD: repo, Trust: false}) {
+		t.Error("untrusted project user_name must NOT count as resolved")
+	}
+	// --as always resolves, regardless of trust/config.
+	if !userNameResolved(Args{CWD: repo, As: "Ravi"}) {
+		t.Error("--as should count as resolved")
+	}
+
+	// With a global user_name set, even an untrusted project resolves to it.
+	if err := SaveConfig(Config{UserName: "GlobalName"}); err != nil {
+		t.Fatal(err)
+	}
+	if !userNameResolved(Args{CWD: repo, Trust: false}) {
+		t.Error("global user_name should count as resolved even when untrusted")
+	}
+
+	// No --as, no project user_name, no global → unresolved (would prompt).
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	bare := testsupport.TempDir(t)
+	if userNameResolved(Args{CWD: bare, Trust: true}) {
+		t.Error("no --as, no project, no global → must be unresolved (prompt)")
+	}
+}

@@ -208,6 +208,9 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 
 	msgIdx := 0
 	req.Messages = RepairOrphanedToolResults(req.Messages)
+	// Same guard as the chat-completions builder: keep a card's seeded
+	// leading-assistant greeting valid for backends that require user-first.
+	req.Messages = EnsureLeadingUserTurn(req.Messages)
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case RoleUser:

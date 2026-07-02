@@ -17,17 +17,17 @@ func freshHome(t *testing.T) string {
 	return home
 }
 
-// The embedded crew is the 8 personas (Mieli + 7 review specialists); the
-// team README is not a persona.
+// The embedded crew is the 9 personas (Mieli + 7 review specialists + Kertoja
+// the play director); the team README is not a persona.
 func TestEmbeddedCrew(t *testing.T) {
 	freshHome(t)
 	got := listEmbeddedPersonas()
-	if len(got) != 8 {
+	if len(got) != 9 {
 		names := make([]string, len(got))
 		for i, p := range got {
 			names[i] = p.Name
 		}
-		t.Fatalf("embedded crew: got %d personas %v, want 8", len(got), names)
+		t.Fatalf("embedded crew: got %d personas %v, want 9", len(got), names)
 	}
 	by := map[string]Persona{}
 	for _, p := range got {
@@ -43,6 +43,11 @@ func TestEmbeddedCrew(t *testing.T) {
 		t.Error("Vartija missing from embedded crew")
 	} else if v.Specialty == "" || v.Pronunciation == "" {
 		t.Errorf("Vartija missing metadata: %+v", v)
+	}
+	if k, ok := by["Kertoja"]; !ok {
+		t.Error("Kertoja (the play director) missing from embedded crew")
+	} else if !k.Immersive {
+		t.Error("Kertoja should be immersive")
 	}
 }
 

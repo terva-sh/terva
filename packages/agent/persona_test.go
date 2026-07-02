@@ -72,3 +72,42 @@ func TestBuildSystemPrompt_CustomReplacesEntirely(t *testing.T) {
 		t.Errorf("Custom text missing:\n%s", got)
 	}
 }
+
+// TestBuildSystemPrompt_IntroOverride: an intro override (a native persona's
+// agent_introduction, or a card's system_prompt) replaces the branded intro but
+// KEEPS terva's conventions bracketing — the additive-with-custom-intro middle
+// ground — and carries its provenance label.
+func TestBuildSystemPrompt_IntroOverride(t *testing.T) {
+	opts := SystemPromptOpts{
+		PersonaName:   "Aria",
+		IntroOverride: "I am Aria of the deep.",
+		IntroSource:   "persona:introduction",
+	}
+	got := BuildSystemPrompt(opts)
+	if !strings.Contains(got, "I am Aria of the deep.") {
+		t.Errorf("intro override text missing:\n%s", got)
+	}
+	if strings.Contains(got, "operating inside terva") {
+		t.Errorf("branded intro should be replaced by the override:\n%s", got)
+	}
+	if !strings.Contains(got, "Your output renders") {
+		t.Errorf("terva conventions should still bracket the end:\n%s", got)
+	}
+	segs := SystemSegments(opts)
+	if len(segs) == 0 || segs[0].Source != "persona:introduction" {
+		t.Errorf("first segment should be the labeled intro override, got %+v", segs)
+	}
+}
+
+// TestParsePersona_AgentIntroduction: the agent_introduction frontmatter field
+// lands on Persona.Introduction (trimmed).
+func TestParsePersona_AgentIntroduction(t *testing.T) {
+	raw := "---\nname: Kaisa\nagent_introduction: You are Kaisa, a deep-sea cartographer.\n---\nCharter body here."
+	p, err := parsePersona(raw, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Introduction != "You are Kaisa, a deep-sea cartographer." {
+		t.Errorf("Introduction = %q", p.Introduction)
+	}
+}

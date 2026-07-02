@@ -111,6 +111,33 @@ func RepairOrphanedToolResults(msgs []Message) []Message {
 	return out
 }
 
+// EnsureLeadingUserTurn prepends a minimal, request-scoped user turn when the
+// first message is an assistant turn. A character card seeds its opening
+// greeting as an assistant message[0]; the Anthropic, Bedrock Converse, and
+// Gemini APIs all reject a conversation that does not begin with a user turn,
+// and the OpenAI-family builders apply it too as a safety net for strict
+// OpenAI-compatible backends (Moonshot/Kimi, local alternation-enforcing
+// templates) that share the wire format. Prepending keeps the greeting in the
+// transcript while the request stays well-formed. It returns a new slice and
+// never mutates the input, so the added turn is request-scoped and is never
+// cached as part of the history prefix. Dormant for normal conversations,
+// which always open with a user turn.
+//
+// The placeholder is a bracketed stage cue, not an utterance: a greeting like
+// "Hello." would recast a character-initiated opening (an ambush, a monologue)
+// as a reply to the user, distorting the scene on every request for the whole
+// session. It must carry visible text — these APIs also reject empty or
+// whitespace-only blocks.
+func EnsureLeadingUserTurn(msgs []Message) []Message {
+	if len(msgs) == 0 || msgs[0].Role != RoleAssistant {
+		return msgs
+	}
+	return append([]Message{{
+		Role:    RoleUser,
+		Content: []Content{TextBlock{Text: "[Begin.]"}},
+	}}, msgs...)
+}
+
 // Message is a single turn in the conversation.
 type Message struct {
 	Role    Role              `json:"role"`

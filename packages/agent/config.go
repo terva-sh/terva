@@ -99,6 +99,33 @@ type Config struct {
 	// which is on; false shows ignored entries. Toggle from /settings.
 	RespectGitignore *bool `json:"respect_gitignore,omitempty"`
 
+	// StatusLine customizes the TUI status bar's segment layout. Rows is
+	// an ordered list of rows, each an ordered list of segment IDs (cwd,
+	// git, model, thinking, tokens, cost, context, usage, tags, bridge,
+	// ext); unknown IDs are skipped, and nil/empty falls back to the
+	// per-mode defaults. User layer only — deliberately absent from
+	// ProjectConfig, same rule as Hooks: a cloned repo must never steer
+	// what the status bar shows (or, later, run a status-line script).
+	StatusLine *StatusLineConfig `json:"status_line,omitempty"`
+
+	// Lore enables the lore keyed-context primitive: authored, file-backed
+	// entries injected into the model's context when they are
+	// keyword-relevant (the general form of a character-card lorebook).
+	// nil/missing means the default, which is on; false disables all lore
+	// discovery + injection for this user. The --no-lore flag disables it
+	// for a single run. User layer only.
+	Lore *bool `json:"lore,omitempty"`
+
+	// UserName is what a character card's {{user}} macro resolves to — the name
+	// the user would like the character to address them by in chat/play. It is a
+	// GLOBAL user-identity preference: it resolves from the user's global config
+	// even under project-scoping (see GlobalUserPreferences) and is written there
+	// (SetGlobalUserName), so it is set once and reused across projects rather
+	// than saved into a repo. The --as flag overrides it for a single run; a
+	// trusted project may override it via ProjectConfig.UserName; the ultimate
+	// fallback is the literal "User".
+	UserName string `json:"user_name,omitempty"`
+
 	// LastChangelogShown is the version whose release-notes
 	// dialog the user has already seen. When the running binary's
 	// version differs, the next interactive run shows the
@@ -211,6 +238,58 @@ type TierConfig struct {
 	Strong string `json:"strong,omitempty"`
 }
 
+// StatusLineConfig is the JSON shape of the status-bar layout override
+// (Config.StatusLine). A struct rather than a bare [][]string so
+// additions like Scripts extend it without a breaking config migration.
+type StatusLineConfig struct {
+	// Rows lists the status rows top to bottom, each an ordered list
+	// of segment IDs. See the SegmentID constants in packages/tui.
+	Rows [][]string `json:"rows,omitempty"`
+
+	// Scripts defines user-supplied status segments: each named script
+	// runs on a coalesced trigger (turn end, /cd, once a minute),
+	// receives a JSON session snapshot on stdin, and its first stdout
+	// line renders as a segment wherever Rows names it (or appended to
+	// the last default row when Rows is unset). Names colliding with a
+	// built-in segment lose to the built-in.
+	//
+	// TRUST: this is code execution from config, the same class as
+	// Hooks, and it leans on the same guarantee — config.json is only
+	// ever read from $TERVA_HOME, and a project-scoped home refuses to
+	// activate until the workspace is trusted (EnableProjectScope). Do
+	// not add scripts to ProjectConfig, and do not weaken the scoped-
+	// home trust gate without revisiting this field.
+	Scripts map[string]StatusLineScript `json:"scripts,omitempty"`
+}
+
+// StatusLineScript is one user-defined status segment command.
+type StatusLineScript struct {
+	// Command is run through the platform shell (sh -c / cmd /C).
+	Command string `json:"command"`
+	// TimeoutMS bounds one run; 0 means the 2000ms default. Clamped
+	// to [100, 10000] — the status bar must never own a long-running
+	// child.
+	TimeoutMS int `json:"timeout_ms,omitempty"`
+}
+
+// StatusLineRows returns the configured status-bar row layout, or nil
+// when unset (nil-safe on the optional StatusLine block).
+func (c Config) StatusLineRows() [][]string {
+	if c.StatusLine == nil {
+		return nil
+	}
+	return c.StatusLine.Rows
+}
+
+// StatusLineScripts returns the configured status-bar scripts, or nil
+// when unset (nil-safe on the optional StatusLine block).
+func (c Config) StatusLineScripts() map[string]StatusLineScript {
+	if c.StatusLine == nil {
+		return nil
+	}
+	return c.StatusLine.Scripts
+}
+
 // PermissionRuleConfig is the JSON shape of one permission rule. It
 // compiles into a core.PermissionRule at load time (compilePermissionRules);
 // invalid rules are dropped with a warning rather than failing startup.
@@ -320,6 +399,13 @@ type ProjectConfig struct {
 	// --provider/--model flag > project (trusted) > user config default.
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
+
+	// UserName lets a trusted project override what a character card's {{user}}
+	// macro resolves to. Like Provider/Model it's honored ONLY when the
+	// workspace is trusted; otherwise the user's global preference stands. It's
+	// benign (a name in the prompt, no capability), trust-gated for consistency.
+	// Resolve order: --as flag > project (trusted) > global user_name > "User".
+	UserName string `json:"user_name,omitempty"`
 }
 
 // Project-local config lives in the same per-project directory terva
@@ -368,17 +454,26 @@ func PersonaName() string {
 // operation, so CredentialHome() == TervaHome() and nothing changes.
 var pinnedGlobalHome string
 
-// CredentialHome is the home that auth + trust resolve against: the pinned
-// global home when project-scoped mode is active, else the normal data home.
-// Keeping credentials and trust verdicts global is what lets a project-scoped
-// agent inherit your login instead of re-authenticating per project, and keeps
-// the trust store out of the project (a repo still can't trust itself).
-func CredentialHome() string {
+// globalHome is the user's real global data home regardless of project-scoping:
+// the pinned global home when a project-scoped run has redirected TERVA_HOME
+// into a repo, else the normal home. It's the single source of truth for "where
+// does the user's OWN home live". Two DISTINCT concepts resolve against it —
+// CredentialHome (auth + trust, kept global for security) and the global
+// user-preference reader (benign identity prefs, kept global for convenience);
+// they share this path but must not share policy.
+func globalHome() string {
 	if pinnedGlobalHome != "" {
 		return pinnedGlobalHome
 	}
 	return TervaHome()
 }
+
+// CredentialHome is the home that auth + trust resolve against: the pinned
+// global home when project-scoped mode is active, else the normal data home.
+// Keeping credentials and trust verdicts global is what lets a project-scoped
+// agent inherit your login instead of re-authenticating per project, and keeps
+// the trust store out of the project (a repo still can't trust itself).
+func CredentialHome() string { return globalHome() }
 
 // AuthPath returns the path to auth.json (the global home, even when
 // project-scoped — see CredentialHome).
@@ -393,10 +488,14 @@ func KimiCLIFallbackDisabledPath() string {
 // LogsPath returns the directory holding log files.
 func LogsPath() string { return filepath.Join(TervaHome(), "logs") }
 
-// LoadConfig reads the config file, returning defaults if missing.
-func LoadConfig() (Config, error) {
+// LoadConfig reads the config file for the active home, returning defaults if
+// missing. In project-scoped mode this is the redirected project home.
+func LoadConfig() (Config, error) { return loadConfigAt(TervaHome()) }
+
+// loadConfigAt reads home/config.json, returning defaults if missing.
+func loadConfigAt(home string) (Config, error) {
 	var c Config
-	b, err := os.ReadFile(ConfigPath())
+	b, err := os.ReadFile(filepath.Join(home, "config.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return c, nil
 	}
@@ -409,16 +508,58 @@ func LoadConfig() (Config, error) {
 	return c, nil
 }
 
-// SaveConfig writes the config file, creating parent dirs.
-func SaveConfig(c Config) error {
-	if err := os.MkdirAll(TervaHome(), 0o755); err != nil {
+// SaveConfig writes the config file for the active home, creating parent dirs.
+func SaveConfig(c Config) error { return saveConfigAt(TervaHome(), c) }
+
+// saveConfigAt writes home/config.json, creating parent dirs.
+func saveConfigAt(home string, c Config) error {
+	if err := os.MkdirAll(home, 0o755); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(ConfigPath(), b, 0o644)
+	return os.WriteFile(filepath.Join(home, "config.json"), b, 0o644)
+}
+
+// GlobalUserPrefs is the small, explicit allowlist of user-identity preferences
+// that resolve from the user's GLOBAL config even when terva is project-scoped
+// (TERVA_HOME redirected into a repo). These are benign, human-scoped defaults
+// that should follow the user across projects — NOT credentials or trust
+// verdicts (those go through CredentialHome, for security) and NOT the project's
+// own data. Only fields named here cross the project-scope boundary, so a scoped
+// run can never inherit arbitrary global config (provider, model, theme, …).
+// Add a field ONLY when it is a user-identity preference with no capability or
+// trust weight.
+type GlobalUserPrefs struct {
+	UserName string // what a character card's {{user}} macro resolves to
+}
+
+// GlobalUserPreferences reads the allowlisted preferences from the user's global
+// config (the pinned global home under project-scoping, else the normal home).
+// A missing or unreadable config yields the zero value.
+func GlobalUserPreferences() GlobalUserPrefs {
+	c, err := loadConfigAt(globalHome())
+	if err != nil {
+		return GlobalUserPrefs{}
+	}
+	return GlobalUserPrefs{
+		UserName: strings.TrimSpace(c.UserName),
+	}
+}
+
+// SetGlobalUserName persists the user's preferred name to the GLOBAL config
+// (surviving project-scoping), preserving every other global field. This is
+// where the interactive "what should the character call you?" answer is saved,
+// so it is set once and reused across projects rather than written into a repo.
+func SetGlobalUserName(name string) error {
+	c, err := loadConfigAt(globalHome())
+	if err != nil {
+		return err
+	}
+	c.UserName = strings.TrimSpace(name)
+	return saveConfigAt(globalHome(), c)
 }
 
 // toggleStringMember returns list with key present (on) or absent (off), with
@@ -668,6 +809,15 @@ func ResolveConfig(cwd string, trustProject bool) EffectiveConfig {
 		if pc.Model != "" {
 			eff.Config.Model = pc.Model
 		}
+	}
+	// user_name is a global user-identity preference: it resolves from the
+	// user's GLOBAL config even under project-scoping (the limited global-prefs
+	// reader), so a card's {{user}} stays stable across projects. A TRUSTED
+	// project may override it, like Provider/Model. eff.User stays untouched
+	// (writes go to the global home via SetGlobalUserName, not this layer).
+	eff.Config.UserName = GlobalUserPreferences().UserName
+	if pc != nil && trustProject && strings.TrimSpace(pc.UserName) != "" {
+		eff.Config.UserName = strings.TrimSpace(pc.UserName)
 	}
 	return eff
 }
