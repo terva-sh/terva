@@ -1,7 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="150 207 1364 510">
   <title>Terva</title>
   <desc>Terva lockup: hexagonal harness mark, Terva wordmark, and the tagline "Harness the wildcard".</desc>
-  <rect x="150" y="207" width="1364" height="510" fill="#11100E"/>
+  <!-- Transparent background on purpose: the on-page hero must let the site's
+       amber hero glow show through. The opaque #11100E backplate lives only in
+       the PNG (og:image / social cards), which need a solid ground. -->
   <g transform="translate(100 190) scale(0.54)">
     <g fill="#F5F1E8">
       <path d="M492 161.14L212 322.79L212 477L288 477L288 366.67L492 248.89Z"/>

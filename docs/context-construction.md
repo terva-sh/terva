@@ -339,7 +339,7 @@ At startup, terva auto-loads only these file-based instruction sources:
 - discovered `SKILL.md` manifests, with skill bodies loaded on demand through the `skill` tool;
 - terva's own embedded docs installed under `$TERVA_HOME/docs`, referenced by path but not injected wholesale.
 
-For arbitrary files there is an explicit startup mechanism: the repeatable `--context-file PATH` flag (resolved against the working directory) and `context_files` lists in user/project `.terva/config.json`. Entries load fail-fast (a missing or unreadable file is an error, not a silent skip), config entries are injected before flag entries, and the untrusted project layer is contained to the project root so a cloned repo's config cannot point at files outside it. See `docs/plans/startup-context-files.md` for the design.
+For arbitrary files there is an explicit startup mechanism: the repeatable `--context-file PATH` flag (resolved against the working directory) and `context_files` lists in user/project `.terva/config.json`. Entries load fail-fast (a missing or unreadable file is an error, not a silent skip), config entries are injected before flag entries, and the untrusted project layer is contained to the project root so a cloned repo's config cannot point at files outside it. In the immersive modes (`--chat`/`--play`) the config layers are ambient coding context and are gated out exactly like AGENTS.md — only an explicit per-run `--context-file` injects there. See `docs/plans/startup-context-files.md` for the design.
 
 Beyond those, arbitrary project files become model context only when:
 

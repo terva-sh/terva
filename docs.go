@@ -16,17 +16,19 @@ import (
 var embeddedDocs embed.FS
 
 var docFiles = map[string]string{
-	"README.md":     "README.md",
-	"cli.md":        "docs/cli.md",
-	"connectors.md": "docs/connectors.md",
-	"fork.md":       "docs/fork.md",
-	"extensions.md": "docs/extensions.md",
-	"models.md":     "docs/models.md",
-	"providers.md":  "docs/providers.md",
-	"rpc.md":        "docs/rpc.md",
-	"skills.md":     "docs/skills.md",
-	"themes.md":     "docs/themes.md",
-	"tui.md":        "docs/tui.md",
+	"README.md":            "README.md",
+	"cli.md":               "docs/cli.md",
+	"connectors.md":        "docs/connectors.md",
+	"debugging-prompts.md": "docs/debugging-prompts.md",
+	"fork.md":              "docs/fork.md",
+	"extensions.md":        "docs/extensions.md",
+	"models.md":            "docs/models.md",
+	"personas.md":          "docs/personas.md",
+	"providers.md":         "docs/providers.md",
+	"rpc.md":               "docs/rpc.md",
+	"skills.md":            "docs/skills.md",
+	"themes.md":            "docs/themes.md",
+	"tui.md":               "docs/tui.md",
 }
 
 // EnsureInstalled writes the embedded docs into $TERVA_HOME/docs and

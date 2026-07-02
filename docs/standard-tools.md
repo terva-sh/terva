@@ -113,6 +113,25 @@ network hosts. See [plans/standard-tools-bucket2.md](plans/standard-tools-bucket
 symlink skip) and survive `plan` mode because they are classified
 read-only.
 
+### Host-injected skins (conditional)
+
+Two model-visible tools are **not** always-on: the host injects them only when a
+session opts in, and both are thin **skins over one dispatch engine**
+(`packages/agent/swarm/`) rather than new primitives.
+
+| Tool | Injected when | Authority | Skin |
+|---|---|---|---|
+| `swarm_spawn` | auto-swarm on (coding sessions only) | process execution | fire-and-forget parallel coding sub-agents; a `tier` picks a cheaper model, never stronger than the host. See [tui.md](tui.md) (auto-swarm). |
+| `actor_spawn` | `--play` with a declared cast | process execution | synchronous "director voices an actor" — hands the actor a situation, waits, returns its line. Cast is closed and named; the model dispatches by name, never a path. See [personas.md](personas.md#cast-and-actor-dispatch). |
+
+Because they wrap the same engine they share its lifecycle, session
+persistence, and tier resolution, and differ only in the *skin* (fire-and-forget
+vs. synchronous director-pull) and the gate that injects them (the auto-swarm
+setting vs. `--play` + a cast). New dispatch front-ends should follow this
+pattern — another skin over the one engine — rather than adding a parallel
+engine. Both are gated out of the wrong context: `actor_spawn` never appears in a
+coding session, and `swarm_spawn` never appears in an immersive one.
+
 ### Standard extensions (opt-in, terva-blessed)
 
 These are the designated official standard extensions. They run as trusted
@@ -226,6 +245,7 @@ For each proposed tool, answer:
 - Policy ladder: `packages/core/policy.go`, `packages/agent/permissions.go`
 - Tools: `packages/agent/tools/`
 - Swarm/worktree: `packages/agent/swarm/`, `--swarm-worktrees`
+- Dispatch skins: `swarm_spawn`/`actor_spawn` in `packages/agent/tools/`, over `packages/agent/swarm/`; cast wiring in `packages/agent/actorcast.go`
 - MCP: `packages/agent/mcp/`, [mcp.md](mcp.md)
 - Extensions: [extensions.md](extensions.md)
 - Permissions/jail: [permissions.md](permissions.md), [tui.md](tui.md)

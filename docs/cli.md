@@ -27,6 +27,13 @@ TUI's own surface (slash commands, keys) lives in [tui.md](tui.md).
 | `--no-tools` | All three building blocks above together (plus the `skill` tool) — no tools at all. |
 | `--no-skill` | Disable all skills, including built-ins. No `skill` tool is registered and the system prompt has no skill manifest. |
 | `--tools <csv>` | Only enable the listed (built-in) tools. |
+| `--chat` | Conversational meta-mode: all tools off + a talk-naturally, non-coding identity, for fronting a conversation with a persona or card. Mutually exclusive with `--play`. See [personas.md](personas.md#chat-and-play-modes). |
+| `--play` | Roleplay/simulation meta-mode: extensions + MCP only (like `--no-workspace-tools`) + an embodied identity, for acting in a [world extension](extensions.md). Mutually exclusive with `--chat`. |
+| `--card <path>` | Load a SillyTavern Character Card V2 (`.json` or `.png`) as the immersive chat/play identity. Implies `--chat` when no mode is set; not valid in regular coding mode. See [personas.md](personas.md#character-cards) and [debugging-prompts.md](debugging-prompts.md). |
+| `--greeting <n>` | With `--card`: which opening line to seed — `0` = `first_mes`, `1..N` = alternate greetings. |
+| `--as <name>` | What a card's `{{user}}` macro resolves to (defaults to the saved name, else `"User"`). |
+| `--cast NAME=REF` | Declare an actor a `--play` director can voice via the `actor_spawn` tool (`REF` = a persona name or a card path); repeatable. Implies `--play`; rejected with `--chat`. A trusted project's `.terva/cast.json` can declare a cast too. See [personas.md](personas.md#cast-and-actor-dispatch). |
+| `--no-lore` | Disable the lore keyed-context primitive for this run — no discovery, no injection. See [debugging-prompts.md](debugging-prompts.md). |
 | `--max-steps <n>` | Cap agent loop iterations (default: unlimited; pass `0` for unlimited). |
 | `--approval MODE` | Approval mode: `plan` (read-only only), `ask` (confirm everything), `auto-edit` (read-only + file editors run freely, the rest asks), `workspace` (built-in tools + read-only tools run, foreign side-effecting tools ask — the interactive default), `yolo` (run freely — the headless default). Combines with permission rules in config — see [permissions.md](permissions.md). In print / json / rpc modes anything that would need a prompt is **refused** with a model-readable message; allow rules and the mode's auto-allows still run. |
 | `--jail` / `--no-jail` | Force the sandbox on / off at startup. Default: on for an interactive session (so the trusted built-in tools stay confined to the cwd), off for headless modes. `/jail` and `/unjail` toggle it at runtime in the TUI. |
@@ -62,6 +69,8 @@ The model is nudged toward the tool by a one-line hint in the default system pro
 - **Print**: `terva -p "prompt"` runs the agent to completion and writes only the final assistant text to stdout.
 - **JSON**: `terva --json "prompt"` emits one JSON object per agent event to stdout, newline-delimited. The schema is documented in [docs/rpc.md](rpc.md).
 - **RPC**: `terva rpc` runs as a long-lived child process; commands in on stdin, events and responses out on stdout, both as NDJSON. Designed for embedding terva in third-party apps written in any language. See [docs/rpc.md](rpc.md) for the wire schema and `examples/rpc/{python,node,shell,go}` for working clients.
+
+Orthogonal to the output modes above are the **experience meta-modes** (`--chat`, `--play`) that reframe the harness away from coding — identity, tools, and TUI chrome — so a persona or [character card](personas.md#character-cards) can front a conversation or a roleplay. Any output mode can pair with either. See [personas.md](personas.md#chat-and-play-modes).
 
 ## Embedding
 

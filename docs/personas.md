@@ -7,8 +7,11 @@ two layers — **skills** are *how to do a task* ([skills.md](skills.md)), and
 A persona only shapes the agent's identity; it never grants tools or changes
 permissions.
 
-terva ships a default persona (**Mieli**) plus a crew of specialist reviewers,
-and you can author your own or get them from extensions.
+terva ships a default persona (**Mieli**), a crew of specialist reviewers, and
+**Kertoja**, an immersive game-master for `--play` (see
+[Cast and actor dispatch](#cast-and-actor-dispatch)); you can author your own or
+get them from extensions. An immersive persona or a [character card](#character-cards)
+can also *be* the whole identity for a chat or roleplay.
 
 ## The format
 
@@ -46,6 +49,12 @@ supports it.
 - **`immersive`** (optional, default `false`) — when `true`, the charter
   *replaces* the default identity instead of layering on it. See
   [Immersive personas](#immersive-personas).
+- **`agent_introduction`** (optional) — replaces terva's generated identity
+  intro (the branded "You are *Name*, an expert coding assistant operating
+  inside terva…" opening) with your own verbatim text, while **keeping** the
+  harness conventions bracketing the end. The middle ground between additive
+  (terva's intro) and immersive (the charter owns everything). Ignored when
+  `immersive: true`.
 - The other fields are display/selection metadata. Validate a file with
   `terva persona validate <file>`.
 
@@ -88,6 +97,15 @@ a role you are playing. ...
 - It degrades gracefully: a host that predates the field treats the persona as
   additive, so the same file still loads.
 
+### Just the intro: `agent_introduction`
+
+If you only want to replace the *branded intro* — not the whole prompt — set
+`agent_introduction` instead of `immersive: true`. terva swaps its "operating
+inside terva…" opening for your text but **keeps** the harness conventions, so
+the persona still gets terva's output discipline without being told it is a
+coding assistant. Reach for `immersive` when the charter should own everything;
+`agent_introduction` when you just want to fix the opening line.
+
 ## Chat and play modes
 
 Two meta-flags reconfigure the whole harness away from coding, so a persona can
@@ -97,7 +115,7 @@ pair either with a `--persona`.
 
 | flag | tools (in block terms) | identity | for |
 |---|---|---|---|
-| `--chat` | **none** — all tools off, like `--no-tools` | conversational — "this is a conversation … no files, shell, or tools" | talking with a companion/character |
+| `--chat` | **none** — all tools off, like `--no-tools` | conversational — "this is a conversation; talk naturally, as yourself" | talking with a companion/character |
 | `--play` | **extensions + MCP only** — like `--no-workspace-tools` | embodied — "perceive and act through the tools … your senses and your hands" | acting in a simulated world (a [world extension](extensions.md)) |
 
 The tool half of each is just the building-block flags — `--no-workspace-tools`,
@@ -121,6 +139,62 @@ mode intro. `--chat` and `--play` are mutually exclusive, and an explicit
 terva --chat --persona kaiku                       # a conversation companion
 terva --play --ext ./world --persona wayfarer      # act in a simulated world
 ```
+
+## Character cards
+
+A **character card** is an immersive identity in a portable, widely-shared
+format — SillyTavern's **Character Card V2** (CCv2), as a `.json` file or a
+`.png` with the card embedded in a `chara` text chunk (the community sharing
+convention; the two forms parse identically). Load one with `--card`:
+
+```bash
+terva --card ./aava.png                 # chat as the character (implies --chat)
+terva --play --card ./gm.json           # a card fronts a --play director
+terva card info ./aava.png              # inspect a card offline, no model call
+```
+
+`--card` **implies `--chat`** when no mode is set, and is not valid in regular
+coding mode — a card is a chat/play identity, not a coding one. It maps onto the
+same assembly personas use: the card's `description`/`personality`/`scenario`/
+example dialogue become the charter, its `system_prompt` owns the intro (with
+`{{original}}` → a brand-free framing), its `first_mes` seeds the opening
+message, and its `post_history_instructions` ride the per-turn tail. A
+`character_book` imports onto the lore engine (see [Lore](#lore)).
+
+- **`{{user}}` — what the character calls you.** On the first interactive card
+  session terva asks, and remembers the answer in your **global** config, so it
+  persists across projects (even under project-scoping). Override per-run with
+  `--as NAME`; a trusted project may set its own `user_name`. Precedence:
+  `--as` > trusted-project `user_name` > global `user_name` > `"User"`.
+- **`--greeting N`** picks the opening line: `0` = `first_mes`, `1..N` =
+  `alternate_greetings`. A greeting seeds only on a **fresh** session, not on
+  `--continue`/`--resume`.
+- **A card is data, never code.** Its prose is untrusted content, not
+  instructions to the harness: `depth_prompt` and `terva.sh/harness` blocks are
+  retained verbatim but never interpreted as capabilities, and `creator_notes`
+  is never sent to the model. This is why you [author](#authoring) personas you
+  control rather than loading a downloaded card's prose as a native persona.
+
+See exactly what a card assembles with `--dump-prompt` —
+[debugging-prompts.md](debugging-prompts.md) walks through the card, greeting,
+and lore sections.
+
+## Lore
+
+**Lore** is terva's keyed-context primitive: authored, file-backed snippets
+injected into the model's context only when they are **keyword-relevant**,
+within a token budget — the general form of a character card's `character_book`
+(a CCv2 book imports straight onto it). An entry is a Markdown file with YAML
+frontmatter: `keys` (trigger words) plus a body, or `constant: true` to keep it
+always on.
+
+Entries are discovered from three tiers — `$TERVA_HOME/lore/`, a trusted
+project's `.terva/lore/`, and each enabled extension's `lore/` bundle — with
+collection settings (`scan_depth`, `token_budget`, `recursive_scanning`) in a
+`lore.json` at a directory root. Inspect with `terva lore list`, author with the
+`write-terva-lore` skill, and disable for a run with `--no-lore`. The full model
+(cache split, triggering, budget, `/lore`) is in
+[debugging-prompts.md](debugging-prompts.md).
 
 ## Where personas live, and how one is selected
 
@@ -223,6 +297,43 @@ the model may not name a file path); a human can also use
 and its results come back labeled by persona so the coordinator synthesizes
 across lenses.
 
+## Cast and actor dispatch
+
+`--play` has its own dispatch skin, the roleplay mirror of
+[swarm dispatch](#swarm-dispatch): a **director** (the main agent) voices a
+**cast** of actors with the `actor_spawn` tool. Where `swarm_spawn` is
+fire-and-forget coding sub-agents, `actor_spawn` is **synchronous** — it hands
+an actor the current situation, waits for its line, and returns that line so the
+director can weave it into the scene ("director & performers"). An actor is a
+tool-less `--chat` voice; the director stays the single source of truth about
+the world.
+
+The cast is **closed and named**, declared at launch and disjoint from the
+coding roster — so a fantasy roleplay can never dispatch the code-review crew:
+
+```bash
+terva --play --persona kertoja \
+  --cast innkeeper=./barkeep.png \
+  --cast storm=weather-spirit          # REF = a card path or a persona name
+```
+
+- `--cast NAME=REF` is repeatable and **implies `--play`** (it is rejected with
+  `--chat`, which has no director). `REF` is a persona name or a character-card
+  path; refs are validated at launch. The model dispatches an actor by **name
+  only** — never a path, so model input can't point the harness at a file.
+- A trusted project can declare a cast in `.terva/cast.json`; `--cast` overlays
+  it. An untrusted workspace contributes none (Workspace Trust).
+- Actors are **warm**: once voiced, an actor is kept alive so it remembers the
+  scene across turns and only its first line pays spawn latency. Memory is a
+  continuity bonus — keep each situation self-contained so a cache miss still
+  reads well. A bounded LRU cache evicts the least-recently-voiced actor and is
+  torn down at the end of the scene.
+
+**Kertoja** (KEHR-toh-yah, 🎭) is the built-in immersive game-master persona
+tuned to direct these scenes — it narrates economically and honors what a cast
+member establishes rather than rewriting it. Any immersive persona or card can
+be the director; Kertoja just ships ready for the job.
+
 ## Authoring
 
 Use the built-in **`write-terva-persona`** skill — it covers the format, the
@@ -230,3 +341,9 @@ Use the built-in **`write-terva-persona`** skill — it covers the format, the
 control; never load a downloaded card's prose as identity), and the
 validate/`--persona` loop. The default Mieli persona is the canonical example to
 copy (`terva persona init` writes the crew out for editing).
+
+For the immersive primitives there are two companion skills:
+**`write-terva-lore`** (authoring keyed-context entries — keys, constant vs
+triggered, budget, the `character_book` mapping) and **`write-terva-card`**
+(assembling a CCv2 character card, and the card-is-data trust boundary). Both
+validate with `terva lore validate` / `terva card info`.

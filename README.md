@@ -35,6 +35,7 @@ projected through many front ends and extensible in any language.
 - extensions in any language via subprocess + json-rpc. None installed by default; opt in with `terva ext install` or `terva --ext`. See [docs/extensions.md](docs/extensions.md).
 - user and extension themes via JSON; see [docs/themes.md](docs/themes.md).
 - reusable instructions via `SKILL.md` files; see [docs/skills.md](docs/skills.md).
+- **chat & play modes**: reframe the harness away from coding — a conversation (`--chat`) or a roleplay/simulation (`--play`), fronted by a persona or a SillyTavern **character card** (`--card`), with a keyword-triggered **lore** context engine and a director that can voice a declared **cast** of actors. See [docs/personas.md](docs/personas.md).
 - no community atm.
 
 ## How terva differs from zot <!-- rename:keep -->
@@ -112,6 +113,9 @@ terva --json "refactor main.go"    # newline-delimited json events, exit
 terva --continue                   # resume the most recent session for this cwd
 terva --resume                     # pick a session to resume
 terva --list-models                # show supported models
+terva --chat --persona kaiku       # talk with a companion persona (no tools)
+terva --card ./aava.png            # chat as a SillyTavern character card
+terva --play --ext ./world         # act in a simulated world extension
 terva --help
 ```
 
@@ -133,6 +137,8 @@ terva --help
 | [docs/connectors.md](docs/connectors.md) | Chat connectors: using the telegram bridge, writing external connectors in any language |
 | [docs/extensions.md](docs/extensions.md) | Extensions: installing, managing, and the full wire protocol |
 | [docs/skills.md](docs/skills.md) | `SKILL.md` reusable instructions: anatomy, discovery, authoring |
+| [docs/personas.md](docs/personas.md) | Personas and immersive chat/play: charters, immersive identities, character cards, the cast + `actor_spawn`, and the mode flags |
+| [docs/debugging-prompts.md](docs/debugging-prompts.md) | Inspecting the assembled prompt (`--dump-prompt`), the lore engine, and card/lore/greeting troubleshooting |
 | [docs/themes.md](docs/themes.md) | User and extension themes |
 | [docs/rpc.md](docs/rpc.md) | Embedding terva: the RPC wire schema and the JSON event stream (Go SDK: `packages/agent/sdk`, examples under `examples/`) |
 | [docs/profiling.md](docs/profiling.md) | Performance-profiling the harness: the `terva_pprof` dev build, pprof/`GODEBUG` capture, and reading a TUI CPU profile |
@@ -169,6 +175,8 @@ packages/agent/extproto/              extension wire-format types
 packages/agent/modes/                 interactive tui, print, json, dialogs
 packages/agent/tools/                 read, write, edit, bash, terva_status, sandbox
 packages/agent/skills/                skill discovery, frontmatter parser, skill tool
+packages/agent/card/                  SillyTavern Character Card V2 parser (json + png)
+packages/agent/lore/                  keyed-context (lore) engine: selection, budget, recursion
 packages/agent/swarm/                 background subagent runtime
 packages/agent/sdk/                   public Go SDK for embedding terva in-process (package sdk)
 packages/agent/ext/                   public Go SDK for writing extensions (package ext)
