@@ -129,3 +129,51 @@ func TestReadStartupContextFilesNoneReturnsEmpty(t *testing.T) {
 		t.Fatalf("expected empty, got:\n%s", out)
 	}
 }
+
+// Config-layer context_files are ambient coding context: like AGENTS.md
+// (whose gate drops its user-global layer too), they must stay out of
+// chat/play. Only an explicit per-run --context-file injects there — running
+// a roleplay inside a repo must not narrate the repo's architecture notes
+// into the scene.
+func TestResolve_ConfigContextFilesGatedInImmersive(t *testing.T) {
+	home := testsupport.TempDir(t)
+	t.Setenv("TERVA_HOME", home)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	writeCtxFile(t, filepath.Join(home, "preamble.md"), "Coding house rules.")
+	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5", ContextFiles: []string{"preamble.md"}}); err != nil {
+		t.Fatal(err)
+	}
+	dir := testsupport.TempDir(t)
+
+	hasCtx := func(t *testing.T, args Args) bool {
+		t.Helper()
+		args.CWD = dir
+		r, err := Resolve(args, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range r.systemSegments {
+			if s.Source == "context-files" {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !hasCtx(t, Args{}) {
+		t.Error("coding mode should inject config context_files")
+	}
+	if hasCtx(t, Args{Experience: ExperienceChat}) {
+		t.Error("--chat must not inject config context_files (ambient coding context)")
+	}
+	if hasCtx(t, Args{Experience: ExperiencePlay}) {
+		t.Error("--play must not inject config context_files")
+	}
+
+	// An explicit per-run file is deliberate and injects in every mode.
+	note := filepath.Join(dir, "notes.md")
+	writeCtxFile(t, note, "Meeting notes to talk through.")
+	if !hasCtx(t, Args{Experience: ExperienceChat, ContextFiles: []string{note}}) {
+		t.Error("--chat --context-file should still inject the explicit file")
+	}
+}

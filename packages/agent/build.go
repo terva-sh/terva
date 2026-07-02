@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tervadocs "terva.sh/terva"
+	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
@@ -78,7 +79,7 @@ type Resolved struct {
 	// Bookkeeping for MergeExtensionTools. Captured at Resolve time
 	// so the system prompt can be rebuilt later without re-running
 	// resolve.
-	systemAppend []string
+	systemAppend []PromptSegment
 	systemCustom string
 	// persona is the resolved active persona, captured so rebuildSystemPrompt
 	// re-renders with the same identity + charter rather than re-resolving.
@@ -111,6 +112,45 @@ type Resolved struct {
 	// read_only-annotated extension/MCP tools. Nil when no gate
 	// exists (pure yolo).
 	readOnlySet *core.ReadOnlySet
+
+	// loreTriggered holds this run's keyword-triggered lore entries (the
+	// non-constant ones); loreConfig carries the collection scan/budget
+	// settings. Constant entries are already baked into the cached prefix
+	// (systemAppend); loreEphemeral scans these against recent messages each
+	// turn. Empty when lore is off (--no-lore or config `lore: false`).
+	loreTriggered []lore.Entry
+	loreConfig    lore.Config
+	// loreActive is every lore entry loaded for this run (file + card,
+	// constant + triggered), captured so /lore can list what's active.
+	loreActive []lore.Entry
+	// loreFired records which triggered entries matched on the most recent
+	// turn (a shared pointer so value-copies of Resolved agree); /lore reads
+	// it via LoreFired. Allocated in Resolve.
+	loreFired *loreFiredRecord
+
+	// cardGreeting is a --card's first_mes (macros substituted), seeded as the
+	// opening assistant message of a fresh session. Empty when no card.
+	cardGreeting string
+
+	// introOverride is the fully-resolved intro-slot override — a --card's
+	// system_prompt/framing ({{original}} + macros resolved) or, for a native
+	// additive persona, its agent_introduction — captured so rebuildSystemPrompt
+	// reproduces the SAME intro on a mid-session re-render (e.g. after an
+	// extension merges tools). introSource is its provenance label. Empty when
+	// nothing overrides the default intro; both are ignored when systemCustom is
+	// set (an immersive persona / --system-prompt owns the whole prompt).
+	introOverride string
+	introSource   string
+
+	// postHistory is a --card's post_history_instructions (macros + {{original}}
+	// resolved), injected by perTurnContext into the uncached per-turn tail
+	// after the lore block. Empty when no card / no PHI.
+	postHistory string
+
+	// systemSegments is the labeled provenance of the current system prompt
+	// (the source SystemSegments produced), captured for the prompt-dump
+	// manifest. Kept in sync by rebuildSystemPrompt.
+	systemSegments []PromptSegment
 }
 
 // AdoptReadOnlySet hands the permission policy's read-only registry
@@ -174,19 +214,22 @@ func (r *Resolved) RefreshExtensionContext(mgr interface{ StaticContext() string
 func (r *Resolved) rebuildSystemPrompt() {
 	appendBlocks := r.systemAppend
 	if strings.TrimSpace(r.extensionContext) != "" {
-		appendBlocks = append(append([]string{}, r.systemAppend...), r.extensionContext)
+		appendBlocks = append(append([]PromptSegment{}, r.systemAppend...), PromptSegment{Source: "extension-context", Text: r.extensionContext})
 	}
-	r.SystemPrompt = BuildSystemPrompt(SystemPromptOpts{
-		CWD:          r.CWD,
-		Tools:        toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
-		Custom:       r.systemCustom,
-		Append:       appendBlocks,
-		TervaDocsDir: filepath.Join(TervaHome(), "docs"),
-		StatusTool:   r.ToolRegistry["terva_status"] != nil,
-		PersonaName:  r.persona.Name,
-		Charter:      r.persona.Charter,
-		Experience:   r.experience,
+	r.systemSegments = SystemSegments(SystemPromptOpts{
+		CWD:           r.CWD,
+		Tools:         toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
+		Custom:        r.systemCustom,
+		Append:        appendBlocks,
+		TervaDocsDir:  filepath.Join(TervaHome(), "docs"),
+		StatusTool:    r.ToolRegistry["terva_status"] != nil,
+		PersonaName:   r.persona.Name,
+		Charter:       r.persona.Charter,
+		Experience:    r.experience,
+		IntroOverride: r.introOverride,
+		IntroSource:   r.introSource,
 	})
+	r.SystemPrompt = joinSegmentTexts(r.systemSegments)
 }
 
 // HasCredential reports whether a credential was resolved.
@@ -689,34 +732,79 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 
 	summaries := toolSummaries(reg, args)
 
-	append_ := append([]string(nil), args.AppendSystemPrompt...)
+	var append_ []PromptSegment
+	for _, a := range args.AppendSystemPrompt {
+		append_ = append(append_, PromptSegment{Source: "user-append", Text: a})
+	}
 	// Startup context files (project/user config_files, then --context-file
 	// flags) inject just before AGENTS.md so repo policy stays the most
 	// specific layer. Fail-fast: an explicitly-named missing file is a typo.
-	if ctxBlock, err := readStartupContextFiles(args.CWD, eff.ContextFiles, args.ContextFiles); err != nil {
+	// Config-layer files are ambient coding context: like AGENTS.md below
+	// (whose gate drops its user-global layer too), they stay out of
+	// chat/play — only an explicit per-run --context-file injects there. A
+	// project that wants immersive context ships .terva/lore/ (or a cast),
+	// the channels built for it.
+	cfgCtxFiles := eff.ContextFiles
+	if args.Experience != "" {
+		cfgCtxFiles = nil
+	}
+	if ctxBlock, err := readStartupContextFiles(args.CWD, cfgCtxFiles, args.ContextFiles); err != nil {
 		return Resolved{}, err
 	} else if ctxBlock != "" {
-		append_ = append(append_, ctxBlock)
+		append_ = append(append_, PromptSegment{Source: "context-files", Text: ctxBlock})
 	}
 	// AGENTS.md is repo coding policy; chat/play sessions aren't working in the
 	// repo, so don't let a stray AGENTS.md steer a conversation or a roleplay.
 	if args.Experience == "" {
 		if agentsAddendum := readAgentsContext(args.CWD, TervaHome()); agentsAddendum != "" {
-			append_ = append(append_, agentsAddendum)
+			append_ = append(append_, PromptSegment{Source: "agents-md", Text: agentsAddendum})
 		}
 	}
 	if skillAddendum != "" {
-		append_ = append(append_, skillAddendum)
+		append_ = append(append_, PromptSegment{Source: "skills", Text: skillAddendum})
+	}
+	// Lore: authored keyed-context entries. Always-on (constant) entries are
+	// baked into the cached prefix here, alongside skills + context files;
+	// keyword-triggered entries ride Resolved and are injected into the
+	// per-turn tail by loreEphemeral. Lore is context, not a tool, so
+	// --no-tools does not disable it; --no-lore / config `lore: false` do.
+	var loreTriggered []lore.Entry
+	var loreConfig lore.Config
+	var loreActive []lore.Entry
+	if !args.NoLore && (cfg.Lore == nil || *cfg.Lore) {
+		loreEntries, lc, _ := lore.Discover(TervaHome(), args.CWD, trusted)
+		loreConfig = lc
+		var constant []lore.Entry
+		constant, loreTriggered = lore.Partition(loreEntries)
+		loreActive = loreEntries
+		if block := lore.PlaceConstant(constant); block != "" {
+			append_ = append(append_, PromptSegment{Source: "lore:constant", Text: block})
+		}
 	}
 	// Untrusted workspace with gated content: tell the model the project
-	// extensions/skills/context were withheld so it can explain their
-	// absence rather than hallucinate them (decision #2 / plan §5).
-	if note := restrictedSystemNote(args.CWD, trusted); note != "" {
-		append_ = append(append_, note)
+	// extensions/skills/context were withheld so it can explain their absence
+	// rather than hallucinate them (decision #2 / plan §5). This is a workspace
+	// signal — drop it in chat/play, where it's immersion-breaking OOC chrome
+	// with no purpose (the agent isn't referencing project files, and the
+	// interactive TUI already nudges the user to /trust when content is gated).
+	if args.Experience == "" {
+		if note := restrictedSystemNote(args.CWD, trusted); note != "" {
+			append_ = append(append_, PromptSegment{Source: "restricted-workspace", Text: note})
+		}
 	}
-	if AutoSwarmEnabled() {
+	// Auto-swarm is a coding-workflow skin: only in a session with base
+	// workspace tools (never chat/play/--no-tools). See hasBaseWorkspaceTools.
+	if hasBaseWorkspaceTools(args) && AutoSwarmEnabled() {
 		logPersonaRosterTripwire()
-		append_ = append(append_, autoSwarmAddendum())
+		append_ = append(append_, PromptSegment{Source: "auto-swarm", Text: autoSwarmAddendum()})
+	}
+	// The play director's cast: advertise the declared actors + how to voice them
+	// (actor_spawn). Only in --play with a cast (--cast and/or a trusted project's
+	// .terva/cast.json) and never under --no-tools; the twin of the coding roster.
+	if castSkinActive(args) {
+		if refs := mergedCastRefs(args, args.CWD, trusted); len(refs) > 0 {
+			append_ = append(append_, PromptSegment{Source: "cast", Text: castAddendum(refs)})
+		}
 	}
 
 	// Custom system prompt resolution order:
@@ -737,6 +825,35 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		return Resolved{}, err
 	}
 
+	// --card overrides the resolved persona with an immersive identity built
+	// from a Character Card, seeds the opening greeting, and merges the card's
+	// character_book onto this run's lore (constant -> prefix, triggered ->
+	// tail — the same seam as file lore). ParseArgs already implied --chat.
+	var cardGreeting, cardIntroOverride, cardIntroSource, cardPostHistory string
+	if args.Card != "" {
+		ci, cerr := loadCardIdentity(args.Card, args.Experience, args.Greeting, resolveCardUserName(args, eff.Config))
+		if cerr != nil {
+			return Resolved{}, cerr
+		}
+		persona = ci.persona
+		cardGreeting = ci.greeting
+		cardIntroOverride = ci.introOverride
+		cardIntroSource = ci.introSource
+		cardPostHistory = ci.postHistory
+		if !args.NoLore && (cfg.Lore == nil || *cfg.Lore) {
+			cc, ct := lore.Partition(ci.lore)
+			if blk := lore.PlaceConstant(cc); blk != "" {
+				append_ = append(append_, PromptSegment{Source: "card:character_book", Text: blk})
+			}
+			loreTriggered = append(loreTriggered, ct...)
+			loreActive = append(loreActive, ci.lore...)
+			// The card's book-level config is primary (the proposal's
+			// card-budget-primary rule); a lore.json from another tier fills
+			// only the fields the card leaves unset.
+			loreConfig = mergeCardLoreConfig(loreConfig, ci.loreCfg)
+		}
+	}
+
 	// An immersive persona owns the identity: its charter REPLACES the default
 	// coding-assistant intro + conventions, routed through the same Custom path
 	// as --system-prompt. An explicit --system-prompt / SYSTEM.md still wins (we
@@ -746,17 +863,30 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		custom = c
 	}
 
-	sys := BuildSystemPrompt(SystemPromptOpts{
-		CWD:          args.CWD,
-		Tools:        summaries,
-		Custom:       custom,
-		Append:       append_,
-		TervaDocsDir: docsDir,
-		StatusTool:   reg["terva_status"] != nil,
-		PersonaName:  persona.Name,
-		Charter:      persona.Charter,
-		Experience:   args.Experience,
+	// Intro-slot override (ignored when Custom is set). A card supplies it via
+	// its system_prompt/framing; a native additive persona supplies it verbatim
+	// via agent_introduction. A run is one or the other, so a non-card persona's
+	// field only applies when there's no card override.
+	introOverride, introSource := cardIntroOverride, cardIntroSource
+	if introOverride == "" && strings.TrimSpace(persona.Introduction) != "" {
+		introOverride = strings.TrimSpace(persona.Introduction)
+		introSource = "persona:introduction"
+	}
+
+	sysSegs := SystemSegments(SystemPromptOpts{
+		CWD:           args.CWD,
+		Tools:         summaries,
+		Custom:        custom,
+		Append:        append_,
+		TervaDocsDir:  docsDir,
+		StatusTool:    reg["terva_status"] != nil,
+		PersonaName:   persona.Name,
+		Charter:       persona.Charter,
+		Experience:    args.Experience,
+		IntroOverride: introOverride,
+		IntroSource:   introSource,
 	})
+	sys := joinSegmentTexts(sysSegs)
 
 	reasoning := provider.NormalizeReasoning(firstNonEmpty(args.Reasoning, cfg.Reasoning))
 	// Temperature fall-through: --temperature flag > per-model (models.json) >
@@ -798,12 +928,21 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		DisableExtensions:        eff.Config.DisableExtensions,
 		Trusted:                  trusted,
 		systemAppend:             append_,
+		systemSegments:           sysSegs,
 		systemCustom:             custom,
 		persona:                  persona,
 		toolDescriptions:         descMapFromSummaries(summaries),
 		approvalMode:             approval,
 		experience:               args.Experience,
 		noTools:                  args.NoTools,
+		loreTriggered:            loreTriggered,
+		loreConfig:               loreConfig,
+		loreActive:               loreActive,
+		loreFired:                &loreFiredRecord{},
+		cardGreeting:             cardGreeting,
+		introOverride:            introOverride,
+		introSource:              introSource,
+		postHistory:              cardPostHistory,
 	}, nil
 }
 
@@ -1045,6 +1184,13 @@ func (r Resolved) NewAgent() *core.Agent {
 	if rt, ok := r.ToolRegistry["read"].(*tools.ReadTool); ok {
 		rt.Epoch = a
 	}
+	// Lore's per-turn provider scans this run's triggered lore entries
+	// against recent messages each turn (nil when lore is off / has no
+	// triggered entries). Every agent funnels through NewAgent, so lore is
+	// universal; the ext-hook wiring composes extension ephemeral context
+	// on top of this.
+	a.ContextProvider = r.perTurnContext(a)
+	a.ContextProviderPeek = r.perTurnContextPeek(a)
 	return a
 }
 
@@ -1053,13 +1199,25 @@ func (r Resolved) NewAgent() *core.Agent {
 // flows into ReadTool so reading an image file returns inline pixels for
 // a vision model but an actionable text result otherwise. Called on
 // every agent rebuild, so a /model switch re-derives the verdict.
+// hasBaseWorkspaceTools reports whether this session ships the built-in coding
+// tool registry (read/write/edit/bash/…). Chat and play (Experience != "") start
+// pure — chat is conversation, play acts only through a world extension's tools —
+// and --no-tools / --no-workspace-tools drop them too. Auto-swarm keys off this:
+// its sub-agents exist to orchestrate that workspace, so the coding skin (the
+// swarm_spawn tool + its coding-framed addendum) must not appear when there is no
+// workspace to act on. Play gets its own dispatch skin later
+// (docs/proposals/agent-dispatch.md); it must NOT inherit the coding one.
+func hasBaseWorkspaceTools(args Args) bool {
+	return args.Experience == "" && !args.NoTools && !args.NoWorkspaceTools
+}
+
 func buildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbox *tools.Sandbox, provName, authMethod string, visionCapable bool) core.Registry {
 	// chat and play both drop the built-in coding tools (read/write/edit/bash/
 	// …): chat is pure conversation, play acts only through a world extension's
 	// tools. --no-tools does the same. --no-workspace-tools also drops them, but
 	// (unlike the above) leaves extension/MCP/skill tools and the normal identity
 	// in place — an agent with its integrations but no host filesystem/shell.
-	if args.NoTools || args.NoWorkspaceTools || args.Experience != "" {
+	if !hasBaseWorkspaceTools(args) {
 		return core.Registry{}
 	}
 	all := map[string]core.Tool{

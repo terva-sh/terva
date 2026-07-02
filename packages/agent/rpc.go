@@ -108,8 +108,9 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 		fanoutAgentEvent(extMgr, ev)
 		observeAgentEventForHooks(hookEng, ev)
 	}
-	// Inject extensions' live context cards into the model each turn.
-	ag.ContextProvider = extMgr.EphemeralContext
+	// Inject extensions' live context cards into the model each turn (live
+	// provider + sizing twin; ext context before the tail so PHI stays last).
+	wireExtEphemeral(ag, extMgr.EphemeralContext)
 	// Re-prompt once at close if an extension flags open work.
 	ag.ContinueOnStop = continueOnOpenWork(extMgr)
 

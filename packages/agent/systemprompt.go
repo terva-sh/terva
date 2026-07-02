@@ -21,8 +21,8 @@ type ToolSummary struct {
 type SystemPromptOpts struct {
 	CWD          string
 	Tools        []ToolSummary
-	Custom       string   // if set, replaces the default identity entirely
-	Append       []string // extra text appended at the end
+	Custom       string          // if set, replaces the default identity entirely
+	Append       []PromptSegment // extra labeled blocks appended after the identity
 	Now          time.Time
 	TervaDocsDir string
 	// StatusTool adds a one-line hint that the terva_status tool exists.
@@ -44,6 +44,18 @@ type SystemPromptOpts struct {
 	// the intro and the conventions; a charter still layers additively, and an
 	// immersive persona (Custom set) still wins. Ignored when Custom is set.
 	Experience string
+
+	// IntroOverride replaces the identity intro paragraph (the "who you are"
+	// opening) while keeping the charter and conventions. Filled by a character
+	// card's system_prompt (with {{original}} resolved to a brand-free framing)
+	// or by a native persona's agent_introduction field — so the persona owns
+	// the lead instruction but terva's conventions still bracket the end.
+	// Ignored when Custom is set.
+	IntroOverride string
+	// IntroSource is the provenance label for IntroOverride (e.g.
+	// "card:system_prompt", "card:framing", "persona:introduction"). Only used
+	// when IntroOverride is non-empty; defaults to a generic label if empty.
+	IntroSource string
 }
 
 // Experience meta-modes (see Args.Experience). Exported so the CLI and the
@@ -72,64 +84,104 @@ const (
 // Users who want extra biasing can use --system-prompt (replace),
 // --append-system-prompt (additive, repeatable), or drop a
 // SYSTEM.md in $TERVA_HOME that overrides the default identity.
+//
+// The returned string is the join of the labeled SystemSegments, so the
+// prompt-dump manifest and the flat string share one source and can't drift.
 func BuildSystemPrompt(o SystemPromptOpts) string {
+	return joinSegmentTexts(SystemSegments(o))
+}
+
+// joinSegmentTexts renders segments to the flat system-prompt string
+// (blank-line separated) — the one place both BuildSystemPrompt and the
+// resolver derive the string from segments, so they can't diverge.
+func joinSegmentTexts(segs []PromptSegment) string {
+	parts := make([]string, len(segs))
+	for i, s := range segs {
+		parts[i] = s.Text
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// SystemSegments builds the ordered, labeled segments of the system prompt:
+// the identity block (a persona intro, or a card's system_prompt, or a raw
+// Custom replace), the additive charter, terva's conventions, the optional
+// docs/status hints, the caller's labeled Append blocks, and the date/cwd
+// footer. Only non-empty segments are emitted, and they are joined with blank
+// lines — matching the prompt exactly. This is the provenance source for the
+// prompt-dump manifest.
+func SystemSegments(o SystemPromptOpts) []PromptSegment {
 	if o.Now.IsZero() {
 		o.Now = time.Now()
 	}
-	date := o.Now.Format("2006-01-02")
-	cwd := o.CWD
-	if cwd == "" {
-		cwd = "."
+	var segs []PromptSegment
+	add := func(source, text string) {
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		segs = append(segs, PromptSegment{Source: source, Text: text})
 	}
-
-	var sb strings.Builder
 
 	if o.Custom != "" {
-		sb.WriteString(o.Custom)
+		// --system-prompt / SYSTEM.md / immersive persona: a raw replace.
+		add("custom", o.Custom)
 	} else {
-		sb.WriteString(personaIdentity(o.PersonaName, o.Charter, o.Experience))
-	}
-
-	if strings.TrimSpace(o.TervaDocsDir) != "" {
-		sb.WriteString("\n\nTerva's own docs are installed under ")
-		sb.WriteString(o.TervaDocsDir)
-		sb.WriteString("; use the read tool there when you need details about terva RPC, extensions, skills, or built-in behaviour.")
-	}
-
-	if o.StatusTool {
-		sb.WriteString("\n\nCall the terva_status tool (no arguments) to check your own runtime state — current model, provider, working directory, reasoning effort, and how full your context window is — for example to decide whether to summarise before the context fills. Its tool description lists every field it returns.")
-	}
-
-	for _, a := range o.Append {
-		if strings.TrimSpace(a) == "" {
-			continue
+		intro := identityIntro(o.PersonaName, o.Experience)
+		introSrc := "identity-intro"
+		if ov := strings.TrimSpace(o.IntroOverride); ov != "" {
+			intro = ov // a card or native persona owns the intro
+			introSrc = o.IntroSource
+			if introSrc == "" {
+				introSrc = "intro-override"
+			}
 		}
-		sb.WriteString("\n\n")
-		sb.WriteString(a)
+		add(introSrc, intro)
+		// The charter is additive, between the intro and the conventions, so
+		// terva's harness conventions stay the final framing.
+		add("charter", strings.TrimSpace(o.Charter))
+		conv := identityConventions
+		if o.Experience == ExperienceChat || o.Experience == ExperiencePlay {
+			conv = experienceConventions
+		}
+		add("conventions", conv)
 	}
 
-	fmt.Fprintf(&sb, "\n\nCurrent date: %s\nCurrent working directory: %s\n", date, cwd)
-	return sb.String()
+	// The docs hint points the model at terva's own docs via the read tool; it
+	// only makes sense when a read tool is actually present (coding mode). In
+	// chat/play (and any --no-tools run) there's nothing to read it with, so the
+	// hint would just be a dead instruction — drop it.
+	if d := strings.TrimSpace(o.TervaDocsDir); d != "" && hasTool(o.Tools, "read") {
+		add("terva-docs-hint", "Terva's own docs are installed under "+d+"; use the read tool there when you need details about terva RPC, extensions, skills, or built-in behaviour.")
+	}
+	if o.StatusTool {
+		add("status-tool-hint", "Call the terva_status tool (no arguments) to check your own runtime state — current model, provider, working directory, reasoning effort, and how full your context window is — for example to decide whether to summarise before the context fills. Its tool description lists every field it returns.")
+	}
+	for _, a := range o.Append {
+		add(a.Source, a.Text)
+	}
+
+	// The date + cwd footer anchors a coding assistant in the real world and
+	// its workspace. In the chat/play experience modes that's noise at best and
+	// immersion-breaking at worst — a character may live in a different era or
+	// reckon time differently, and there's no workspace to name — so drop it.
+	if o.Experience == "" {
+		cwd := o.CWD
+		if cwd == "" {
+			cwd = "."
+		}
+		add("footer", fmt.Sprintf("Current date: %s\nCurrent working directory: %s\n", o.Now.Format("2006-01-02"), cwd))
+	}
+	return segs
 }
 
-// identity renders the persona paragraph: who the agent is, what the names
-// mean, and the output/editing conventions the TUI expects. The default
-// persona (Mieli) gets the full "mind in a preserved vessel" framing with
-// pronunciations for both names; a custom persona (TERVA_PERSONA_NAME /
-// persona_name) keeps terva's meaning and the vessel image but swaps in its
-// own name and drops a pronunciation we can't guess.
-func personaIdentity(name, charter, experience string) string {
-	intro := identityIntro(name, experience)
-	conv := identityConventions
-	if experience == ExperienceChat || experience == ExperiencePlay {
-		conv = experienceConventions
+// hasTool reports whether a tool with the given name is present in the summary
+// list (used to gate hints that reference a specific tool).
+func hasTool(tools []ToolSummary, name string) bool {
+	for _, t := range tools {
+		if t.Name == name {
+			return true
+		}
 	}
-	// The charter is additive and sits between the intro and the conventions,
-	// so terva's harness conventions stay the final framing.
-	if c := strings.TrimSpace(charter); c != "" {
-		return intro + "\n\n" + c + "\n\n" + conv
-	}
-	return intro + "\n\n" + conv
+	return false
 }
 
 // identityIntro picks the opening identity paragraph for the (name, experience)
@@ -165,7 +217,22 @@ When changing file contents, prefer the edit tool for in-place changes and the w
 
 // chatIdentityIntro (one %s for the name) frames a pure-conversation session:
 // no tools, no codebase — just the exchange.
-const chatIdentityIntro = `You are %s, operating inside terva (pronounced TEHR-vah) — Finnish for pine tar, the preservative that kept boats whole; you are a mind it carries. This is a conversation: talk with the person naturally, as yourself. You are not working in a codebase right now — there are no files, shell, or tools, only the exchange.`
+const chatIdentityIntro = `You are %s, operating inside terva (pronounced TEHR-vah) — Finnish for pine tar, the preservative that kept boats whole; you are a mind it carries. This is a conversation: talk with the person naturally, as yourself.`
+
+// immersiveOriginal is what a character card's {{original}} macro expands to
+// (and the intro for a card that supplies no system_prompt): a short, brand-free
+// framing for the current experience. terva's own identity and pronunciation
+// never leak onto a card this way — the card owns its identity.
+func immersiveOriginal(experience string) string {
+	if experience == ExperiencePlay {
+		return immersivePlayFraming
+	}
+	return immersiveChatFraming
+}
+
+const immersiveChatFraming = `This is a conversation: speak and act naturally and in character, as yourself.`
+
+const immersivePlayFraming = `You are present within a world you perceive and act in through the tools available to you — treat them as your senses and your hands. Stay in character, and trust the tools as the source of truth about what is real.`
 
 // playIdentityIntro (one %s for the name) frames acting within a simulated
 // world the agent perceives and acts in through the tools available to it.

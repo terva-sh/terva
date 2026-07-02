@@ -447,7 +447,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 			}
 			return true, "", res.ReplaceText
 		}
-		ag.ContextProvider = extMgr.EphemeralContext
+		wireExtEphemeral(ag, extMgr.EphemeralContext)
 		ag.ContinueOnStop = continueOnOpenWork(extMgr)
 	}
 	// observe is the extension-side event sink: it fans every event out to the
