@@ -226,6 +226,13 @@ type SpawnRequest struct {
 	// sub-agent boots as that persona (a name resolved against the trusted
 	// library, or a path for human-initiated spawns). Empty = host default.
 	Persona string
+	// Experience ("chat"/"play"), Substrate (an opaque scheme-qualified ref,
+	// reserved), and Card (a card path) bake into the child's --chat/--play,
+	// --substrate, and --card flags so the sub-agent boots embodied. All empty
+	// = a plain coding sub-agent. See docs/proposals/agent-dispatch.md.
+	Experience string
+	Substrate  string
+	Card       string
 }
 
 // Spawn creates a new Agent for the given task, allocates its
@@ -308,6 +315,9 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		Model:        strings.TrimSpace(req.Model),
 		Provider:     strings.TrimSpace(req.Provider),
 		Persona:      strings.TrimSpace(req.Persona),
+		Experience:   strings.TrimSpace(req.Experience),
+		Substrate:    strings.TrimSpace(req.Substrate),
+		Card:         strings.TrimSpace(req.Card),
 		SessionID:    sessionID,
 		InboxPath:    inboxPath,
 		EventLogPath: logPath,
@@ -588,6 +598,14 @@ type AgentSnapshot struct {
 	// label each sub-agent by the specialist that ran it.
 	Persona string
 
+	// Experience, Substrate, and Card are Persona's boot-spec siblings
+	// (see SpawnRequest), carried so a snapshot reader can identify a
+	// card-based immersive actor — which has an empty Persona — instead
+	// of showing it identity-less.
+	Experience string
+	Substrate  string
+	Card       string
+
 	// Paths to the agent's durable state. Surface them in the
 	// snapshot so the dashboard / /swarm open can read events.jsonl
 	// or resume the session without going back through the Agent.
@@ -616,6 +634,9 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		Model:        a.Model,
 		Provider:     a.Provider,
 		Persona:      a.Persona,
+		Experience:   a.Experience,
+		Substrate:    a.Substrate,
+		Card:         a.Card,
 		InboxPath:    a.InboxPath,
 		EventLogPath: a.EventLogPath,
 		SessionPath:  a.SessionPath,

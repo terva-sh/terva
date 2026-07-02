@@ -33,6 +33,17 @@ type Agent struct {
 	// keeps the same identity across terva restarts. Empty = host default.
 	Persona string
 
+	// Experience ("chat"/"play"), Substrate (an opaque scheme-qualified ref,
+	// reserved), and Card (a card path) are the immersive boot-spec fields:
+	// baked into the child's --chat/--play, --substrate, and --card flags so a
+	// dispatched actor boots embodied instead of as the default coding agent.
+	// Persisted in meta.json so Resume keeps the same boot across restarts. All
+	// empty = a plain coding sub-agent (the historical behaviour). See
+	// docs/proposals/agent-dispatch.md.
+	Experience string
+	Substrate  string
+	Card       string
+
 	// SessionID, when non-empty, scopes the agent to a particular
 	// host terva session: the dashboard only surfaces agents whose
 	// SessionID matches the active session. Empty means "unscoped"

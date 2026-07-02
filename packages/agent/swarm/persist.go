@@ -45,6 +45,9 @@ type agentMeta struct {
 	Model        string    `json:"model,omitempty"`
 	Provider     string    `json:"provider,omitempty"`
 	Persona      string    `json:"persona,omitempty"`
+	Experience   string    `json:"experience,omitempty"`
+	Substrate    string    `json:"substrate,omitempty"`
+	Card         string    `json:"card,omitempty"`
 	InboxPath    string    `json:"inbox_path"`
 	EventLogPath string    `json:"event_log_path"`
 	SessionPath  string    `json:"session_path"`
@@ -73,6 +76,9 @@ func writeAgentMeta(stateDir string, a *Agent) error {
 		Model:        a.Model,
 		Provider:     a.Provider,
 		Persona:      a.Persona,
+		Experience:   a.Experience,
+		Substrate:    a.Substrate,
+		Card:         a.Card,
 		InboxPath:    a.InboxPath,
 		EventLogPath: a.EventLogPath,
 		SessionPath:  a.SessionPath,
@@ -208,6 +214,9 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 		Model:        m.Model,
 		Provider:     m.Provider,
 		Persona:      m.Persona,
+		Experience:   m.Experience,
+		Substrate:    m.Substrate,
+		Card:         m.Card,
 		InboxPath:    m.InboxPath,
 		EventLogPath: m.EventLogPath,
 		SessionPath:  m.SessionPath,
@@ -350,6 +359,7 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		ID: existing.ID, Task: existing.Task,
 		Dir: existing.Dir, Started: existing.Started,
 		Model: existing.Model, Provider: existing.Provider, Persona: existing.Persona,
+		Experience: existing.Experience, Substrate: existing.Substrate, Card: existing.Card,
 		InboxPath: existing.InboxPath, EventLogPath: existing.EventLogPath,
 		SessionPath: existing.SessionPath,
 		// SessionID is spawn-time scoping; it must survive Resume or
@@ -366,6 +376,9 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Model:        m.Model,
 		Provider:     m.Provider,
 		Persona:      m.Persona,
+		Experience:   m.Experience,
+		Substrate:    m.Substrate,
+		Card:         m.Card,
 		SessionID:    m.SessionID,
 		InboxPath:    m.InboxPath,
 		EventLogPath: m.EventLogPath,

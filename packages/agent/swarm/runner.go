@@ -67,6 +67,9 @@ type swarmAgentArgsOpts struct {
 	Model       string
 	Provider    string
 	Persona     string
+	Experience  string
+	Substrate   string
+	Card        string
 }
 
 // defaultChildArgs builds the argv execRunner uses when its Command
@@ -97,6 +100,9 @@ func defaultChildArgs(exe string, a *Agent, sessionPath, inboxPath string) []str
 		Model:       a.Model,
 		Provider:    a.Provider,
 		Persona:     a.Persona,
+		Experience:  a.Experience,
+		Substrate:   a.Substrate,
+		Card:        a.Card,
 	})
 }
 
@@ -119,6 +125,21 @@ func swarmAgentArgs(opts swarmAgentArgsOpts) []string {
 	if opts.Persona != "" {
 		// Flag, so it must precede the positional task below.
 		args = append(args, "--persona", opts.Persona)
+	}
+	// Immersive boot-spec flags (all must precede the positional task). The
+	// experience values mirror agent.ExperienceChat/Play; the swarm package
+	// stays free of an import cycle by matching the wire strings directly.
+	switch opts.Experience {
+	case "chat":
+		args = append(args, "--chat")
+	case "play":
+		args = append(args, "--play")
+	}
+	if opts.Substrate != "" {
+		args = append(args, "--substrate", opts.Substrate)
+	}
+	if opts.Card != "" {
+		args = append(args, "--card", opts.Card)
 	}
 	if opts.Task != "" {
 		// First task is positional so the child treats it as the
