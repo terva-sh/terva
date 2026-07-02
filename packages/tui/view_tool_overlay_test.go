@@ -31,6 +31,89 @@ func TestLiveToolOverlayRemainsAfterAssistantToolUse(t *testing.T) {
 	}
 }
 
+func TestToolProgressShownWhileInFlight(t *testing.T) {
+	args := json.RawMessage(`{"actor":"aava","situation":"the traveler arrives"}`)
+	mk := func() View {
+		return View{
+			Theme: Dark,
+			Messages: []provider.Message{{
+				Role:    provider.RoleAssistant,
+				Content: []provider.Content{provider.ToolCallBlock{ID: "toolu_1", Name: "actor_spawn", Arguments: args}},
+			}},
+			ToolCalls: []ToolCallView{{ID: "toolu_1", Name: "actor_spawn", Args: ShortArgs("actor_spawn", args)}},
+		}
+	}
+
+	// In flight: the live progress is shown.
+	v := mk()
+	v.ToolCalls[0].Progress = "aava responds (remembers the scene)…"
+	plain := stripANSI(strings.Join(v.Build(80), "\n"))
+	if !strings.Contains(plain, "aava responds (remembers the scene)") {
+		t.Fatalf("tool progress not shown while in flight:\n%s", plain)
+	}
+
+	// Once the result lands it supersedes the progress.
+	done := mk()
+	done.ToolCalls[0].Progress = "aava responds (remembers the scene)…"
+	done.ToolCalls[0].Done = true
+	done.ToolCalls[0].Result = "Mind the last step."
+	plain2 := stripANSI(strings.Join(done.Build(80), "\n"))
+	if strings.Contains(plain2, "remembers the scene") {
+		t.Errorf("progress should be superseded by the result:\n%s", plain2)
+	}
+	if !strings.Contains(plain2, "Mind the last step.") {
+		t.Errorf("result should show once done:\n%s", plain2)
+	}
+}
+
+// The in-flight progress body is collapsed like every other tool body: bash
+// reports progress in chunks of up to 4KB, which uncollapsed would balloon
+// the box to dozens of lines and re-render (flicker) on every read.
+func TestToolProgressBodyIsCollapsed(t *testing.T) {
+	args := json.RawMessage(`{"command":"go test ./..."}`)
+	var chunk strings.Builder
+	for i := 0; i < 40; i++ {
+		chunk.WriteString("ok  \tsome/package/path\t0.01s\n")
+	}
+	v := View{
+		Theme: Dark,
+		Messages: []provider.Message{{
+			Role:    provider.RoleAssistant,
+			Content: []provider.Content{provider.ToolCallBlock{ID: "toolu_1", Name: "bash", Arguments: args}},
+		}},
+		ToolCalls: []ToolCallView{{ID: "toolu_1", Name: "bash", Args: ShortArgs("bash", args), Progress: chunk.String()}},
+	}
+	plain := stripANSI(strings.Join(v.Build(80), "\n"))
+	if !strings.Contains(plain, "more lines") {
+		t.Fatalf("a long progress chunk should collapse with the standard footer:\n%s", plain)
+	}
+	if got := strings.Count(plain, "some/package/path"); got > ToolCollapseLines {
+		t.Errorf("progress body renders %d lines uncollapsed (cap %d)", got, ToolCollapseLines)
+	}
+}
+
+// A tool that finishes with empty result text after emitting progress must
+// not keep showing the stale progress as if still in flight — the render
+// keys off Result=="" and EvToolResult never clears Progress.
+func TestToolProgressHiddenOnceDone(t *testing.T) {
+	args := json.RawMessage(`{"actor":"aava","situation":"the traveler arrives"}`)
+	v := View{
+		Theme: Dark,
+		Messages: []provider.Message{{
+			Role:    provider.RoleAssistant,
+			Content: []provider.Content{provider.ToolCallBlock{ID: "toolu_1", Name: "actor_spawn", Arguments: args}},
+		}},
+		ToolCalls: []ToolCallView{{
+			ID: "toolu_1", Name: "actor_spawn", Args: ShortArgs("actor_spawn", args),
+			Progress: "aava responds (remembers the scene)…", Done: true, // finished, empty Result
+		}},
+	}
+	plain := stripANSI(strings.Join(v.Build(80), "\n"))
+	if strings.Contains(plain, "remembers the scene") {
+		t.Errorf("stale progress rendered for a finished tool:\n%s", plain)
+	}
+}
+
 func TestLiveToolOverlayKeepsWritePreviewAfterArgsEnd(t *testing.T) {
 	args := json.RawMessage(`{"path":"/tmp/sample.ts","content":"export const n = 1\n"}`)
 	v := View{

@@ -140,6 +140,16 @@ type View struct {
 	// "... (N more lines, M total, ctrl+o to expand)" footer.
 	ExpandAll bool
 
+	// ToolDisplay selects how tool calls render in the transcript and
+	// live overlay: full bordered boxes, a one-line muted summary per
+	// call, or nothing at all. Cycled from the tui by ctrl+t; immersive
+	// experiences (--chat/--play) default to the minimal form so tool
+	// mechanics stay out of the conversation. ExpandAll (ctrl+o)
+	// overrides any reduced mode with full expanded boxes, which is
+	// also the escape hatch that makes minimal/hidden output
+	// recoverable without changing modes.
+	ToolDisplay ToolDisplayMode
+
 	// renderCache holds the per-message rendered line slices so Build
 	// doesn't re-markdown every message on every frame. Keyed by a
 	// struct of (content hash, width, expandAll) — any of those
@@ -165,9 +175,10 @@ type View struct {
 // unambiguous enough for the cache (collisions produce a stale frame,
 // not wrong data, and we recompute on invalidation anyway).
 type msgCacheKey struct {
-	hash      uint64
-	width     int
-	expandAll bool
+	hash        uint64
+	width       int
+	expandAll   bool
+	toolDisplay ToolDisplayMode
 	// turnOpen is true when the previous rendered message belongs to
 	// the same agent turn (assistant tool_use, or tool result). The
 	// header ("▍ terva") is suppressed in that case so a single turn
@@ -193,6 +204,104 @@ const (
 	ToolCollapseLines   = 12
 )
 
+// ToolDisplayMode selects the transcript treatment of tool calls.
+type ToolDisplayMode int
+
+const (
+	// ToolDisplayFull renders each call as a bordered box with its
+	// (collapsible) result body — the classic agent-mode view.
+	ToolDisplayFull ToolDisplayMode = iota
+	// ToolDisplayMinimal renders each call as one muted, borderless
+	// summary line ("· bash go test ./... — 42 lines"); ctrl+o
+	// expands everything back to full boxes.
+	ToolDisplayMinimal
+	// ToolDisplayHidden renders nothing for tool calls until the user
+	// expands with ctrl+o.
+	ToolDisplayHidden
+)
+
+// String returns the label shown in status messages and settings.
+func (m ToolDisplayMode) String() string {
+	switch m {
+	case ToolDisplayMinimal:
+		return "minimal"
+	case ToolDisplayHidden:
+		return "hidden"
+	default:
+		return "boxes"
+	}
+}
+
+// effectiveToolDisplay resolves the display mode for the current
+// frame: ctrl+o's expand-all wins over any reduced mode, so minimal
+// and hidden tool output is always one keystroke from recoverable.
+func (v *View) effectiveToolDisplay() ToolDisplayMode {
+	if v.ExpandAll {
+		return ToolDisplayFull
+	}
+	return v.ToolDisplay
+}
+
+// minimalToolLine renders the ToolDisplayMinimal form of a tool call:
+// one muted line, aligned with the tool boxes' outer margin, carrying
+// the call label and an optional summary suffix. Errors keep the "×"
+// marker in the error colour so failures stay noticeable even with
+// the mechanics tucked away.
+//
+//	· bash go test ./... — 42 lines
+//	× edit packages/tui/view.go — error
+func minimalToolLine(th Theme, label string, suffix string, isErr bool, width int) string {
+	mark := th.FG256(th.Muted, "·")
+	if isErr {
+		mark = th.FG256(th.Error, "×")
+		if suffix == "" {
+			suffix = "error"
+		}
+	}
+	text := oneLineToolLabel(label)
+	if suffix != "" {
+		text += " — " + suffix
+	}
+	line := strings.Repeat(" ", toolBoxOuterMargin) + mark + " " + th.FG256(th.Muted, text)
+	return truncateToWidth(line, width)
+}
+
+// toolResultSummary sizes a tool result's content for the minimal
+// display line: total text lines plus a note for image blocks.
+func toolResultSummary(blocks []provider.Content) string {
+	lines, images := 0, 0
+	for _, b := range blocks {
+		switch bb := b.(type) {
+		case provider.TextBlock:
+			if bb.Text != "" {
+				lines += strings.Count(bb.Text, "\n") + 1
+			}
+		case provider.ImageBlock:
+			images++
+		}
+	}
+	return countLinesSummary(lines, images)
+}
+
+// countLinesSummary renders "N lines", "image", or a combination for
+// the minimal line's suffix; empty when there is nothing to size.
+func countLinesSummary(lines, images int) string {
+	var parts []string
+	switch {
+	case lines == 1:
+		parts = append(parts, "1 line")
+	case lines > 1:
+		parts = append(parts, fmt.Sprintf("%d lines", lines))
+	}
+	switch {
+	case images == 1:
+		parts = append(parts, "image")
+	case images > 1:
+		parts = append(parts, fmt.Sprintf("%d images", images))
+	}
+	return strings.Join(parts, " + ")
+}
+
 // ToolCallView is a pending tool invocation plus optional result.
 type ToolCallView struct {
 	ID     string
@@ -201,6 +310,11 @@ type ToolCallView struct {
 	Result string // rendered result preview (truncated)
 	Error  bool
 	Done   bool
+
+	// Progress is the latest transient status a long-running tool reported via
+	// its progress callback (EvToolProgress). Shown as a muted body while the
+	// call is in flight (Result == ""); superseded by the result.
+	Progress string
 
 	// Streaming is true while the model is still typing the tool
 	// call's JSON arguments. The TUI renders a live preview of any
@@ -537,10 +651,11 @@ func (v *View) refreshToolPaths() {
 // shared slice is safe.
 func (v *View) renderMessageCached(m provider.Message, width int, turnOpen bool) []string {
 	key := msgCacheKey{
-		hash:      hashMessage(m),
-		width:     width,
-		expandAll: v.ExpandAll,
-		turnOpen:  turnOpen,
+		hash:        hashMessage(m),
+		width:       width,
+		expandAll:   v.ExpandAll,
+		toolDisplay: v.ToolDisplay,
+		turnOpen:    turnOpen,
 	}
 	if v.renderCache != nil {
 		if lines, ok := v.renderCache[key]; ok {
@@ -770,6 +885,25 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 	case provider.RoleTool:
 		for _, c := range m.Content {
 			if tr, ok := c.(provider.ToolResultBlock); ok {
+				// Reduced tool display: swap the whole box for a one-line
+				// muted summary, or for nothing at all. ctrl+o (ExpandAll)
+				// restores full boxes via effectiveToolDisplay. Failures
+				// surface as a minimal line even in hidden mode — tucking
+				// mechanics away must never hide that something went wrong.
+				switch v.effectiveToolDisplay() {
+				case ToolDisplayHidden:
+					if !tr.IsError {
+						continue
+					}
+					fallthrough
+				case ToolDisplayMinimal:
+					label := ""
+					if v.toolCallLabels != nil {
+						label = v.toolCallLabels[tr.CallID]
+					}
+					lines = append(lines, minimalToolLine(v.Theme, label, toolResultSummary(tr.Content), tr.IsError, width))
+					continue
+				}
 				color := v.Theme.ToolOut
 				if tr.IsError {
 					color = v.Theme.Error
@@ -835,6 +969,26 @@ func (v *View) renderToolCall(tc ToolCallView, width int) []string {
 	}
 	label := tc.Name + " " + arg
 
+	// Reduced tool display applies to the live overlay too: hidden
+	// shows nothing (the status-bar spinner already signals activity)
+	// unless the call failed, minimal shows one muted line that tracks
+	// the call's state.
+	switch v.effectiveToolDisplay() {
+	case ToolDisplayHidden:
+		if !tc.Error {
+			return nil
+		}
+		fallthrough
+	case ToolDisplayMinimal:
+		suffix := ""
+		if tc.Result == "" && !tc.Done {
+			suffix = "running…"
+		} else if tc.Result != "" {
+			suffix = countLinesSummary(strings.Count(tc.Result, "\n")+1, 0)
+		}
+		return []string{minimalToolLine(v.Theme, label, suffix, tc.Error, width)}
+	}
+
 	// No leading blank: Build()'s inter-message separator already
 	// places one blank row between the previous transcript content
 	// and the live overlay, matching the spacing the same call has
@@ -874,11 +1028,24 @@ func (v *View) renderToolCall(tc ToolCallView, width int) []string {
 		}
 	}
 
-	// Finished tool call with no body: just the labelled top edge
-	// directly closed by the bottom. Avoids a blank interior row
-	// for no-output tools.
+	// Running / finished tool call with no streamed body. While in flight, a
+	// long-running tool can report live progress (EvToolProgress) — show it as a
+	// muted body until the result lands. Otherwise just the labelled top edge
+	// directly closed by the bottom (no blank interior row for no-output tools).
+	// The progress body is gated on !Done (EvToolResult never clears Progress,
+	// so a tool finishing with empty text must not keep showing stale progress)
+	// and collapsed like every other body — bash streams up to 4KB per chunk,
+	// which would otherwise balloon and flicker the box on every read.
 	if tc.Result == "" {
 		lines = append(lines, toolBoxTop(v.Theme, label, width))
+		if !tc.Done && strings.TrimSpace(tc.Progress) != "" {
+			lines = append(lines, toolBoxSide(v.Theme, "", width))
+			body := toolResultBlock(v.Theme, tc.Progress, toolBoxBodyRenderWidth(width), v.Theme.Muted)
+			for _, l := range v.collapseToolBody(body, false) {
+				lines = append(lines, toolBoxSide(v.Theme, l, width))
+			}
+			lines = append(lines, toolBoxSide(v.Theme, "", width))
+		}
 		lines = append(lines, toolBoxBottom(v.Theme, width))
 		return lines
 	}
@@ -1307,7 +1474,14 @@ func (v *View) renderToolText(text string, width, defaultColor int, sourcePath s
 
 	// No truncation — the full tool output is rendered into chat and
 	// becomes part of the scrollback you can page back through.
-	lines := strings.Split(text, "\n")
+	//
+	// Normalize before wrapping: this branch also serves non-bash tools
+	// (grep, MCP servers, extensions) whose output can carry tabs and
+	// control bytes just like a subprocess. Left un-expanded, a tab in a
+	// box row draws wider than visibleWidth counted and breaks the frame.
+	// The special-cased paths above keep the raw text (the numbered-file
+	// detector needs literal tabs); each expands tabs itself.
+	lines := normalizeBashOutputLines(strings.Split(text, "\n"))
 
 	// Bash-result styling: when the first row looks like a shell
 	// prompt line ("$ ...") emitted by the bash tool, style the
@@ -1940,7 +2114,13 @@ func (v *View) renderRawFile(text, sourcePath string, startLine int) []string {
 // the turn ends.
 func toolResultBlock(th Theme, text string, width int, color int) []string {
 	var out []string
-	for _, l := range strings.Split(text, "\n") {
+	// The live overlay renders provider/tool text verbatim — including
+	// bash progress chunks, which arrive as raw subprocess output. Tabs,
+	// carriage returns, and escape sequences in a box row make the
+	// terminal draw more (or different) cells than visibleWidth counted,
+	// which desyncs the renderer's cursor tracking and corrupts the whole
+	// frame. Normalize exactly like the finalised bash path does.
+	for _, l := range normalizeBashOutputLines(strings.Split(text, "\n")) {
 		for _, w := range wrapLine(l, width-4, "    ") {
 			out = append(out, "    "+th.FG256(color, w))
 		}
@@ -2086,345 +2266,6 @@ func (v *View) renderCompactionBlock(m provider.Message, width int) []string {
 	// Collapsed: single line, no banner.
 	line := th.FG256(th.Muted, fmt.Sprintf("compacted from ~%s tokens (ctrl+o to expand)", tokens))
 	return []string{indent + line}
-}
-
-// StatusBarParams groups the many bits of state the status bar needs.
-// Grew from a flat argument list once we settled on the layout.
-type StatusBarParams struct {
-	Theme      Theme
-	Provider   string
-	Model      string
-	Reasoning  string // "" means thinking off
-	Busy       bool
-	BusyPrefix string // spinner + funny line when busy
-	CWD        string
-	Locked     bool // sandbox on?
-	NoYolo     bool // confirmation mode enabled? (legacy; ApprovalMode supersedes)
-	// ApprovalMode is the live approval mode (plan/ask/auto-edit/yolo).
-	// When non-empty it drives the tag instead of NoYolo; "yolo" shows
-	// nothing (the default needs no badge).
-	ApprovalMode string
-
-	// Cumulative session usage and cost.
-	Usage provider.Usage
-	// Subscription is true when the credential is an OAuth token (claude
-	// pro/max, chatgpt plus/pro) rather than a paid api key. We still
-	// compute a cost for visibility and append "(sub)" so the user
-	// knows no real money moved.
-	Subscription bool
-
-	// Last turn's input+cache tokens (approximates current live context).
-	ContextUsed int
-	ContextMax  int // model's context window; 0 disables the percentage
-
-	// AutoCompacting is true when the agent is currently running a
-	// model-triggered condense pass. Surfaces as "(auto)" after the
-	// context percentage so it's clear where the spinner is coming from.
-	AutoCompacting bool
-
-	// ChatConnected names the connected chat bridge ("telegram",
-	// "discord", ...), or "" when none. Adds a small tag to the cwd
-	// line so the user can tell at a glance that messages are being
-	// mirrored into this session.
-	ChatConnected string
-
-	// ExtStatus are short status segments contributed by extensions
-	// (status_segment frames), shown as ambient tags on the cwd line.
-	ExtStatus []string
-
-	// HideWorkspace suppresses the coding-context chrome — the working
-	// directory path, the sandbox "jailed" badge, and the approval-mode tag —
-	// for the --chat / --play meta-modes, where there is no workspace to speak
-	// of. Extension status segments and the chat-connected tag still show.
-	HideWorkspace bool
-
-	// UsageWindows are the current provider's subscription usage windows
-	// (e.g. codex's 5h + weekly). When the busiest is high enough to be
-	// worth a glance, the bar shows a compact "<label> <pct>%" hint;
-	// otherwise the bar is unchanged. Full detail lives in /usage.
-	UsageWindows []provider.UsageWindow
-
-	Cols int // terminal width; drives right-alignment of cwd
-}
-
-// StatusBar builds the status shown above the editor. Always returns
-// two lines when a cwd is provided: the stats on the first line, the
-// cwd on its own line below, indented to match the stats column. This
-// keeps the status bar stable across terminal resizes (the cwd never
-// jumps from right-aligned-on-line-1 to flush-left-on-line-2) and
-// makes a long cwd safe at any width.
-//
-// Layout:
-//
-//	<busyPrefix>  (provider) model  stats   <- line 1
-//	  cwd                                   <- line 2 (2-space indent)
-//
-// The old "ctrl+c exit - /help" / "esc cancel" hint is gone entirely.
-// The slash-command popup and the queued/sliding-in chips already
-// cover the discoverability of those keybindings.
-func StatusBar(p StatusBarParams) []string {
-	th := p.Theme
-
-	// Token stats: only include each segment when non-zero. Keeps
-	// the bar compact on brand-new sessions.
-	var stats []string
-	if p.Usage.InputTokens > 0 {
-		stats = append(stats, fmt.Sprintf("↑%s", formatTokens(p.Usage.InputTokens)))
-	}
-	if p.Usage.OutputTokens > 0 {
-		stats = append(stats, fmt.Sprintf("↓%s", formatTokens(p.Usage.OutputTokens)))
-	}
-	if p.Usage.CacheReadTokens > 0 {
-		stats = append(stats, fmt.Sprintf("R%s", formatTokens(p.Usage.CacheReadTokens)))
-	}
-	if p.Usage.CacheWriteTokens > 0 {
-		stats = append(stats, fmt.Sprintf("W%s", formatTokens(p.Usage.CacheWriteTokens)))
-	}
-
-	// Cost: always show the dollar value computed from token counts,
-	// even on subscription. Lets you see what the equivalent api cost
-	// would be (handy for gauging subscription value). Append "(sub)"
-	// only as a hint that no real money moved.
-	var costStr string
-	if p.Usage.CostUSD > 0 || p.Subscription {
-		costStr = fmt.Sprintf("$%.3f", p.Usage.CostUSD)
-		if p.Subscription {
-			costStr += " (sub)"
-		}
-	}
-	if costStr != "" {
-		stats = append(stats, costStr)
-	}
-
-	// Context %. Color-coded: yellow >70, red >90.
-	ctx, ctxColor := contextUsage(th, p.ContextUsed, p.ContextMax)
-	if ctx != "" {
-		if p.AutoCompacting {
-			ctx += " (auto)"
-		}
-		stats = append(stats, th.FG256(ctxColor, ctx))
-	}
-
-	// Subscription usage hint: a compact "<label> <pct>%" for the
-	// busiest window, only when it's high enough to matter. Appended
-	// last so it stays at the right edge of the stats; empty otherwise.
-	if hint := usageHint(th, p.UsageWindows); hint != "" {
-		stats = append(stats, hint)
-	}
-
-	// Layout uses exactly 2 spaces of horizontal padding everywhere:
-	//   2 spaces  (openai) gpt-5.4  $0.000 (sub) 0.0%/400k  ~/Sites/terva
-	// matches the editor prompt's left inset so the bar lines up
-	// vertically with the conversation column.
-	const pad = "  " // 2 spaces
-
-	left := fmt.Sprintf("(%s) %s", p.Provider, p.Model)
-	thinking := thinkingLevelLabel(p.Reasoning)
-	thinkingText := ""
-	if thinking != "" {
-		thinkingText = "thinking: " + thinking
-	}
-	statsText := strings.Join(stats, " ")
-	middleParts := make([]string, 0, 2)
-	if thinkingText != "" {
-		middleParts = append(middleParts, thinkingText)
-	}
-	if statsText != "" {
-		middleParts = append(middleParts, statsText)
-	}
-	middle := strings.Join(middleParts, "  ")
-
-	var leftBuilder strings.Builder
-	if p.BusyPrefix != "" {
-		// Don't re-color the payload itself — the caller already set
-		// fg colors on the spinner glyph, message, and elapsed
-		// segments. Wrapping the whole thing here would override
-		// those choices. The pad itself needs no color (it's spaces).
-		leftBuilder.WriteString(pad + p.BusyPrefix)
-		// Exactly one pad (2 spaces) between the busy segment and
-		// the provider/model block. The leading pad above covers
-		// the left indent.
-		leftBuilder.WriteString(pad)
-	} else {
-		// Idle path: a single pad of left inset so the line
-		// aligns with the conversation column on its left edge
-		// ("  you" / "  terva" message markers). Without the busy
-		// prefix there's no trailing separator to double-pad.
-		leftBuilder.WriteString(pad)
-	}
-	leftBuilder.WriteString(th.FG256(th.Muted, left))
-	if middle != "" {
-		leftBuilder.WriteString(pad)
-		// `middle` already has colorized context segments; wrap the rest in muted.
-		leftBuilder.WriteString(th.FG256(th.Muted, middle))
-	}
-
-	cwd := shortenHome(p.CWD)
-	tags := ""
-	// Coding-context chrome (approval mode, sandbox, cwd path) is meaningless
-	// in chat/play mode and is suppressed there; ambient extension status and
-	// the chat-connected tag still show.
-	if !p.HideWorkspace {
-		switch {
-		case p.ApprovalMode != "" && p.ApprovalMode != "yolo":
-			tags += p.ApprovalMode + " mode "
-		case p.ApprovalMode == "" && p.NoYolo:
-			tags += "yolo mode disabled "
-		}
-		if p.Locked {
-			tags += "jailed "
-		}
-	} else {
-		cwd = ""
-	}
-	if p.ChatConnected != "" {
-		tags += p.ChatConnected + " connected "
-	}
-	for _, seg := range p.ExtStatus {
-		if s := strings.TrimSpace(seg); s != "" {
-			tags += s + " "
-		}
-	}
-	switch {
-	case tags != "" && cwd != "":
-		cwd = tags + "- " + cwd
-	case tags != "" && cwd == "":
-		// No cwd to show (hidden), but ambient tags (ext status / chat) remain.
-		cwd = strings.TrimSpace(tags)
-	}
-
-	primary := leftBuilder.String()
-
-	// On narrow terminals the single line wraps badly. If the visible
-	// width exceeds cols and we have a busy prefix, split: keep the
-	// busy prefix on line 1, then put model and (if still needed)
-	// stats on their own rows. This mirrors the idle split below.
-	if p.Cols > 0 && p.BusyPrefix != "" && visibleWidth(primary) > p.Cols {
-		busyLine := pad + p.BusyPrefix
-		modelLine := pad + th.FG256(th.Muted, left)
-		lines := []string{busyLine}
-		if middle != "" && visibleWidth(modelLine+pad+th.FG256(th.Muted, middle)) > p.Cols {
-			lines = appendWrappedStatusLines(lines, th, pad, left, thinkingText, statsText, p.Cols)
-		} else {
-			var infoBuilder strings.Builder
-			infoBuilder.WriteString(modelLine)
-			if middle != "" {
-				infoBuilder.WriteString(pad)
-				infoBuilder.WriteString(th.FG256(th.Muted, middle))
-			}
-			lines = append(lines, infoBuilder.String())
-		}
-		if cwd != "" {
-			lines = append(lines, pad+th.FG256(th.Muted, cwd))
-		}
-		return lines
-	}
-
-	// Idle narrow split: keep provider/model on the first status line,
-	// move usage/cost/context stats to the next, then cwd below. This
-	// avoids the terminal's hard wrap cutting the stats or pushing cwd
-	// into an awkward position on small widths.
-	if p.Cols > 0 && p.BusyPrefix == "" && middle != "" && visibleWidth(primary) > p.Cols {
-		var lines []string
-		lines = appendWrappedStatusLines(lines, th, pad, left, thinkingText, statsText, p.Cols)
-		if cwd != "" {
-			lines = append(lines, pad+th.FG256(th.Muted, cwd))
-		}
-		return lines
-	}
-
-	if cwd == "" {
-		return []string{primary}
-	}
-
-	// Second line: indent with the same 2-space pad so the cwd lines
-	// up under the "(provider)" column on line 1.
-	cwdRendered := pad + th.FG256(th.Muted, cwd)
-	return []string{primary, cwdRendered}
-}
-
-func appendWrappedStatusLines(lines []string, th Theme, pad, modelText, thinkingText, statsText string, cols int) []string {
-	modelLine := pad + th.FG256(th.Muted, modelText)
-	if thinkingText == "" {
-		lines = append(lines, modelLine)
-		if statsText != "" {
-			lines = append(lines, pad+th.FG256(th.Muted, statsText))
-		}
-		return lines
-	}
-
-	modelThinkingPlain := pad + modelText + pad + thinkingText
-	if cols <= 0 || visibleWidth(modelThinkingPlain) <= cols {
-		lines = append(lines, pad+th.FG256(th.Muted, modelText+pad+thinkingText))
-	} else {
-		lines = append(lines, modelLine)
-		lines = append(lines, pad+th.FG256(th.Muted, thinkingText))
-	}
-	if statsText != "" {
-		lines = append(lines, pad+th.FG256(th.Muted, statsText))
-	}
-	return lines
-}
-
-func thinkingLevelLabel(level string) string {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "", "off", "none", "no", "false", "disabled":
-		return ""
-	case "minimum", "minimal", "min":
-		return "minimal"
-	case "maximum", "max", "xhigh":
-		return "maximum"
-	default:
-		return strings.ToLower(strings.TrimSpace(level))
-	}
-}
-
-// contextUsage renders the "N%/ctxMax" fragment, returning the
-// rendered string plus the colour to wrap it in.
-func contextUsage(th Theme, used, max int) (string, int) {
-	if max <= 0 {
-		if used <= 0 {
-			return "", th.Muted
-		}
-		return formatTokens(used), th.Muted
-	}
-	pct := float64(used) / float64(max) * 100
-	text := fmt.Sprintf("%.1f%%/%s", pct, formatTokens(max))
-	switch {
-	case pct > 90:
-		return text, th.Error
-	case pct > 70:
-		return text, th.Warning
-	}
-	return text, th.Muted
-}
-
-// usageHintThreshold is the busiest-window percentage at or above which
-// the status bar surfaces the compact usage hint. Below it the bar is
-// unchanged; the full breakdown is always in /usage.
-const usageHintThreshold = 80
-
-// usageHint returns a color-coded "<label> <pct>%" segment for the
-// busiest subscription window, or "" when none is high enough to be
-// worth a glance. Coloring follows the context gauge: warning to 90,
-// error above.
-func usageHint(th Theme, windows []provider.UsageWindow) string {
-	busiest := -1.0
-	label := ""
-	for _, w := range windows {
-		if w.UsedPercent > busiest {
-			busiest = w.UsedPercent
-			label = w.Label
-		}
-	}
-	if busiest < usageHintThreshold {
-		return ""
-	}
-	color := th.Warning
-	if busiest >= 90 {
-		color = th.Error
-	}
-	return th.FG256(color, fmt.Sprintf("%s %.0f%%", label, busiest))
 }
 
 // formatTokens footer formatter:

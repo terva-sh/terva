@@ -175,7 +175,11 @@ func (r *Renderer) Clear() {
 		}
 		return
 	}
-	_, _ = io.WriteString(r.out, SeqDeleteKittyImages+SeqClearScreenNoHome+r.clearScrollbackSeq()+MoveTo(1, 1))
+	// nil out = headless (tests, print modes): state reset alone is the
+	// whole job, same guard the other emit paths keep.
+	if r.out != nil {
+		_, _ = io.WriteString(r.out, SeqDeleteKittyImages+SeqClearScreenNoHome+r.clearScrollbackSeq()+MoveTo(1, 1))
+	}
 }
 
 // clearScrollbackSeq returns the scrollback-clear escape, or the
