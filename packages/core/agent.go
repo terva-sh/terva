@@ -104,6 +104,13 @@ type Agent struct {
 	// the agent lock; keep it quick.
 	ContextProvider func() string
 
+	// ContextProviderPeek, if set, is a side-effect-free twin of
+	// ContextProvider: it renders the same ephemeral block but performs
+	// none of ContextProvider's per-turn side effects (e.g. recording which
+	// lore fired). The core never calls it — it exists so the UI can SIZE
+	// the ephemeral tail (e.g. /context) without corrupting that state.
+	ContextProviderPeek func() string
+
 	// ContinueOnStop, if set, is consulted when a turn ends with a
 	// natural stop (the model produced a final message, no tool calls).
 	// Returning (true, nudge) appends nudge as a user message and runs

@@ -82,8 +82,13 @@ func (i *Interactive) buildContextOverview(th tui.Theme) []string {
 		}
 	}
 	toolCount := len(ag.Tools)
+	// Size the per-turn tail with the side-effect-free twin when present, so
+	// opening /context never overwrites the "fired last turn" lore record (a
+	// re-scan of the now-longer transcript would report lore that never fired).
 	ephBytes := 0
-	if ag.ContextProvider != nil {
+	if sizer := ag.ContextProviderPeek; sizer != nil {
+		ephBytes = len(sizer())
+	} else if ag.ContextProvider != nil {
 		ephBytes = len(ag.ContextProvider())
 	}
 	// Extensions contribute in two places: "static" guidance is folded into
