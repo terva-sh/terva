@@ -76,10 +76,10 @@ build:
     @echo "built bin/terva ({{version}}, {{commit}})"
 
 # Build a lean binary with every chat connector tagged out
-# (-tags terva_no_telegram): no telegram transport linked in.
+# (-tags terva_no_telegram,terva_no_discord): no chat transports or SDKs linked in.
 build-min:
     @mkdir -p bin
-    go build -trimpath -tags terva_no_telegram -ldflags "{{ldflags}}" -o bin/terva-min ./cmd/terva
+    go build -trimpath -tags terva_no_telegram,terva_no_discord -ldflags "{{ldflags}}" -o bin/terva-min ./cmd/terva
     @echo "built bin/terva-min (no chat connectors)"
 
 # Build and install the FULL terva from source into your Go bin (GOBIN, else
@@ -160,7 +160,7 @@ ci-acp:
 # build/test + terva_pprof tag build + public packaging drift check, as
 # a pre-push gate.
 ci: lint test ci-acp
-    go build -tags terva_no_telegram ./...
+    go build -tags terva_no_telegram,terva_no_discord ./...
     # terva_pprof guard: the profiling endpoint (cmd/terva/pprof.go) only
     # compiles under this tag, so the default build can't catch a break in
     # it — same reason ci-acp exists. install-dev is the only shipping use.
