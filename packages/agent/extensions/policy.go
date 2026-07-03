@@ -31,6 +31,38 @@ func (m *Manager) extensionLoadDisabled(name string) bool {
 	return m.disabledExtensions[name]
 }
 
+// SetAllowedExtensions records a per-run allowlist (the --extensions
+// flag): when non-empty, only DISCOVERED extensions whose manifest name
+// is in the set are loaded. Explicit --ext paths bypass it (pointing at
+// a directory is already explicit consent — the flow used when
+// developing an extension), and the disable list still subtracts, so
+// the allowlist is restrict-only: it can narrow a run, never resurrect
+// something config or trust has turned off. Empty or nil means no
+// allowlist (everything installed loads, as before). MUST be called
+// before Discover.
+func (m *Manager) SetAllowedExtensions(names []string) {
+	var set map[string]bool
+	if len(names) > 0 {
+		set = make(map[string]bool, len(names))
+		for _, n := range names {
+			if n != "" {
+				set[n] = true
+			}
+		}
+	}
+	m.mu.Lock()
+	m.allowedExtensions = set
+	m.mu.Unlock()
+}
+
+// extensionAllowlisted reports whether an extension name passes the
+// per-run allowlist (vacuously true when no allowlist is set).
+func (m *Manager) extensionAllowlisted(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.allowedExtensions == nil || m.allowedExtensions[name]
+}
+
 // SetProjectTrusted records the Workspace Trust verdict for the
 // manager's cwd. When false (the default — a fresh Manager is
 // untrusted), searchDirs drops the project-local extension roots so a

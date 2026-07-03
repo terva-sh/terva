@@ -159,6 +159,22 @@ type Args struct {
 	// can run "with only this one extension" via --no-ext --ext PATH.
 	NoExt bool
 
+	// WithExtensions is the per-run extension allowlist (--extensions,
+	// comma-separated manifest names, repeatable). When non-empty, only
+	// the named INSTALLED extensions load; --ext paths bypass it and the
+	// config disable list still subtracts (restrict-only — it narrows a
+	// run, never resurrects). The least-privilege composition flag for
+	// exposed agents: a Discord bot in a group room gets `--extensions
+	// calendar`, not your mail extension.
+	WithExtensions []string
+
+	// WithMCP is the per-run MCP-server allowlist (--mcp, comma-
+	// separated server names, repeatable). Same semantics as
+	// WithExtensions, applied to the merged user+project MCP config
+	// before any server spawns; per-server config disables still
+	// subtract.
+	WithMCP []string
+
 	// Insecure skips TLS certificate verification for the inference
 	// client ONLY (a self-signed --base-url endpoint). Gated to the
 	// openai-compatible / ollama providers with an explicit --base-url;
@@ -215,8 +231,17 @@ type Args struct {
 	Approval string
 
 	ListModels bool
-	Help       bool
-	Version    bool
+	// ListModelsFilter narrows --list-models output (the `=FILTER`
+	// form): a comma list of source terms (user | live | catalog |
+	// speculative — `live` folds in `cache`, which is just the last
+	// live listing loaded from disk), tier thresholds like `live+`
+	// ("this tier and above": user > live/cache > catalog >
+	// speculative), and `available` (only providers whose credentials
+	// resolve right now — the set a --provider/--model pin could
+	// actually use). Terms AND together. Empty = everything.
+	ListModelsFilter string
+	Help             bool
+	Version          bool
 
 	Prompt string // concatenated positional args
 
@@ -401,6 +426,26 @@ func ParseArgs(in []string) (Args, error) {
 			a.Exts = append(a.Exts, v)
 		case "--no-ext", "--no-extensions":
 			a.NoExt = true
+		case "--extensions":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			for _, n := range strings.Split(v, ",") {
+				if n = strings.TrimSpace(n); n != "" {
+					a.WithExtensions = append(a.WithExtensions, n)
+				}
+			}
+		case "--mcp":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			for _, n := range strings.Split(v, ",") {
+				if n = strings.TrimSpace(n); n != "" {
+					a.WithMCP = append(a.WithMCP, n)
+				}
+			}
 		case "--insecure":
 			a.Insecure = true
 		case "--no-mcp":
@@ -503,6 +548,11 @@ func ParseArgs(in []string) (Args, error) {
 			}
 			a.MaxSteps = n
 		default:
+			if strings.HasPrefix(arg, "--list-models=") {
+				a.ListModels = true
+				a.ListModelsFilter = strings.TrimPrefix(arg, "--list-models=")
+				continue
+			}
 			if strings.HasPrefix(arg, "--dump-prompt=") {
 				v := strings.TrimPrefix(arg, "--dump-prompt=")
 				switch v {
@@ -711,6 +761,9 @@ func PrintHelp(version string) {
 		row{"--no-workspace-tools", "turn off the built-in read/write/edit/bash/grep tools; keep extensions + MCP (least-privilege for bots)"},
 		row{"--no-ext / --no-extensions", "turn off extension discovery for this run"},
 		row{"--no-mcp", "turn off MCP server startup for this run"},
+		// narrowing variants — allowlists instead of all-off:
+		row{"--extensions csv", "only load the listed installed extensions (by name); --ext paths bypass, config disables still subtract"},
+		row{"--mcp csv", "only start the listed MCP servers (by name)"},
 		// composite modes built from the blocks (+ an identity change):
 		row{"--no-tools", "all three blocks above together (and the skill tool) — no tools at all"},
 		row{"--chat", "no tools at all + a conversational, non-coding identity (pairs with --persona)"},
@@ -742,7 +795,7 @@ func PrintHelp(version string) {
 		row{"--swarm-worktrees", "give each swarm sub-agent its own git worktree (needs the terva-git-worktree extension)"},
 		row{"--max-steps N", "agent loop iteration cap (default: unlimited)"},
 		row{"--dump-prompt[=text|json|raw]", "print the assembled prompt for the pending turn and exit (no model call)"},
-		row{"--list-models", "print known models and exit"},
+		row{"--list-models[=FILTER]", "print known models and exit. FILTER: comma list of user|live|catalog|speculative, a tier threshold like live+ (that tier and above), or available (only providers your credentials can use right now)"},
 		row{"-h, --help", "show this help"},
 		row{"-v, --version", "show version info"},
 	)

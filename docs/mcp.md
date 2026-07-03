@@ -44,7 +44,12 @@ commands at session start. Same posture as hooks.
   config `env` cannot re-introduce those keys or override `PATH`.
 - `timeout_ms` — per `tools/call` (default 60s).
 
-`--no-mcp` skips all servers for one run.
+`--no-mcp` skips all servers for one run. `--mcp git,jira` is the
+narrowing form: only the listed servers start (restrict-only — config
+disables still subtract, and the `/mcp` dialog cannot live-enable an
+excluded server for the run). Scope headless agents to what they need:
+a chat bot exposed to a group room shouldn't carry every server your
+TUI sessions use.
 
 ## Behavior
 

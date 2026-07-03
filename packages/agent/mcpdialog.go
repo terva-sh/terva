@@ -250,7 +250,11 @@ func applyMCPChangeLive(adapter *mcpToolAdapter, cwd string, trusted bool, name 
 	if adapter == nil || adapter.mgr == nil {
 		return
 	}
-	if mcpServerShouldRun(cwd, trusted, name) {
+	// The run's --mcp allowlist gates live enables too: the dialog still
+	// persists the config change, but an excluded server won't spawn
+	// until a run without the allowlist (mirrors how the extension
+	// manager's load policy treats --extensions).
+	if mcpServerShouldRun(cwd, trusted, name) && adapter.allowsThisRun(name) {
 		if sc, ok := serverConfigFor(cwd, trusted, name); ok {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()

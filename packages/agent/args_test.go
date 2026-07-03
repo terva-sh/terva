@@ -150,3 +150,28 @@ func TestParseArgsTemperatureRejectsOutOfRange(t *testing.T) {
 		t.Fatal("ParseArgs accepted out-of-range temperature")
 	}
 }
+
+func TestParseArgsExtensionsAndMCPAllowlists(t *testing.T) {
+	a, err := ParseArgs([]string{
+		"--extensions", "calendar, index",
+		"--extensions", "memory",
+		"--mcp", "git,jira ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.WithExtensions) != 3 || a.WithExtensions[0] != "calendar" ||
+		a.WithExtensions[1] != "index" || a.WithExtensions[2] != "memory" {
+		t.Fatalf("WithExtensions = %v, want [calendar index memory]", a.WithExtensions)
+	}
+	if len(a.WithMCP) != 2 || a.WithMCP[0] != "git" || a.WithMCP[1] != "jira" {
+		t.Fatalf("WithMCP = %v, want [git jira]", a.WithMCP)
+	}
+	// Both flags require a value.
+	if _, err := ParseArgs([]string{"--extensions"}); err == nil {
+		t.Error("--extensions without a value should error")
+	}
+	if _, err := ParseArgs([]string{"--mcp"}); err == nil {
+		t.Error("--mcp without a value should error")
+	}
+}

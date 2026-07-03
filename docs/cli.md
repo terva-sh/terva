@@ -8,7 +8,7 @@ TUI's own surface (slash commands, keys) lives in [tui.md](tui.md).
 | Flag | Description |
 |---|---|
 | `--provider <id>` | Pick the provider (for example `anthropic`, `openai`, `openai-codex`, `kimi`, `google`, `github-copilot`, `groq`, `openrouter`, `amazon-bedrock`, `ollama`, `openai-compatible`; see [models.md](models.md)). |
-| `--model <id>` | Pick the model (see `--list-models`). |
+| `--model <id>` | Pick the model (see `--list-models`; `--list-models=available` shows only what your credentials can use right now, `--list-models=live+` hides unconfigured catalog noise — see [models.md](models.md)). |
 | `--api-key <key>` | Override the API key. |
 | `--base-url <url>` | Override the provider base URL (tests, self-hosted). |
 | `--system-prompt <text>` | Replace the default system prompt for this run (also overrides `$TERVA_HOME/SYSTEM.md`). |
@@ -24,6 +24,8 @@ TUI's own surface (slash commands, keys) lives in [tui.md](tui.md).
 | `--no-workspace-tools` | Turn off the built-in workspace tools (read/write/edit/bash/grep/glob); extensions, MCP, and skills stay — an agent with its integrations but no host filesystem/shell. |
 | `--no-ext` | Turn off extension discovery for this run. `--ext` still works on top, so `--no-ext --ext ./x` runs only `x`. |
 | `--no-mcp` | Turn off MCP servers for this run. |
+| `--extensions <csv>` | Only load the listed installed extensions, by manifest name (repeatable). Restrict-only: `--ext` paths bypass it, config disables still subtract. The least-privilege flag for exposed agents — a group-room Discord bot gets `--extensions calendar`, not your mail extension. |
+| `--mcp <csv>` | Only start the listed MCP servers, by name (repeatable). Same restrict-only semantics; the `/mcp` dialog can't live-enable an excluded server for the run. |
 | `--no-tools` | All three building blocks above together (plus the `skill` tool) — no tools at all. |
 | `--no-skill` | Disable all skills, including built-ins. No `skill` tool is registered and the system prompt has no skill manifest. |
 | `--tools <csv>` | Only enable the listed (built-in) tools. |
@@ -51,7 +53,7 @@ TUI's own surface (slash commands, keys) lives in [tui.md](tui.md).
 - `grep`: search file contents for an RE2 regular expression. Returns `path:line:text` in deterministic order, honors `.gitignore` (and always skips `.git`), skips binary files, and pages via `offset`/`max_results`. Read-only. Prefer it over `bash grep`/`rg`.
 - `glob`: list files whose path matches a glob pattern (`**` recurses, e.g. `**/*.go`). Returns paths relative to cwd in lexical order, honors `.gitignore`, and pages via `offset`/`max_results`. Read-only. Prefer it over `bash find`/`ls`.
 - `ask_user_question`: ask the user a structured clarifying question (with optional multiple-choice options and/or a free-text answer) and wait for the reply, instead of guessing when requirements are ambiguous. Permitted in every approval mode, plan included — asking has no side effect. Interactive (TUI) only: in print/json/rpc/ACP modes and swarm subagents there is no question channel — ACP has no native question primitive, only tool-permission requests — so it returns a "no channel — proceed on your best judgment" result rather than blocking.
-- `terva_status`: report the agent's own runtime state — model, provider, working directory, reasoning effort, and how full the context window is. Takes no arguments.
+- `terva_status`: report the agent's own runtime state — model, provider, working directory, session id and transcript file, reasoning effort, and how full the context window is. Takes no arguments.
 
 When the sandbox is on (see `/jail` in [tui.md](tui.md)), the file, command, and search tools (`read`, `write`, `edit`, `bash`, `grep`, `glob`) refuse paths outside the session cwd. `grep`/`glob` also skip symlinks so a walk can't follow a link out of the tree. `terva_status` touches no paths.
 
@@ -59,7 +61,9 @@ When the sandbox is on (see `/jail` in [tui.md](tui.md)), the file, command, and
 
 `terva_status` lets the model introspect its own session. None of this is otherwise visible to it: the system prompt carries only the date and cwd, and context usage is computed by the harness after each turn and never surfaced. With the tool, the model can check how full its context is — and decide to summarize or wrap up — or report which model and provider it's actually running as.
 
-A call returns the provider, model, auth method, working directory, reasoning effort, the context window and how much of it the last turn used (as a percentage), and the cumulative session token/cost totals. Context usage reflects the **most recent completed turn**, so it approximates the current size rather than giving an exact mid-turn count.
+A call returns the provider, model, auth method, working directory, session identity, reasoning effort, the context window and how much of it the last turn used (as a percentage), and the cumulative session token/cost totals. Context usage reflects the **most recent completed turn**, so it approximates the current size rather than giving an exact mid-turn count.
+
+The session identity is the transcript file the conversation persists to: the id is the file basename `--resume` accepts, plus the absolute path. This is the ground truth for debugging headless runs (bot daemons, print/json) where nothing else surfaces it — ask the agent for its session id and you can `terva --resume <id>` from that cwd or read the `.jsonl` directly. Conversations that don't persist (`--no-session`, bot-mode group chats) say so explicitly rather than inventing an id.
 
 The model is nudged toward the tool by a one-line hint in the default system prompt; the hint (and the tool) are omitted when `--no-tools`, or a `--tools` allowlist that excludes `terva_status`, is in effect.
 

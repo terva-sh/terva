@@ -17,11 +17,30 @@ Use `/login` to store API keys or subscription credentials. `/model` only shows 
 
 ## Models
 
-`--list-models` or the `/model` picker shows the full catalog across all built-in providers. Three sources:
+`--list-models` or the `/model` picker shows the full catalog across all built-in providers. The sources:
 
+- **User**: your `models.json` entries — they take precedence over everything below.
+- **Live**: IDs discovered from `GET /v1/models` using your stored API key (cached for 6h in `$TERVA_HOME/models-cache.json`, refreshed in the background on startup; entries loaded from that cache show `cache`).
 - **Catalog**: models baked into terva, covering Claude, GPT/Codex, Gemini/Gemma, Kimi/Moonshot, DeepSeek, Groq-hosted Llama/Gemma/Compound, OpenRouter-routed models, Bedrock model ids, Vertex model ids, Azure OpenAI deployments, Copilot models, and other provider-specific catalog entries.
-- **Live**: IDs discovered from `GET /v1/models` using your stored API key (cached for 6h in `$TERVA_HOME/models-cache.json`, refreshed in the background on startup).
 - **Speculative**: IDs that appear in the upstream generator but aren't live on the public API yet. They'll 404 today and start working the moment the provider ships them.
+
+The full list is long, so `--list-models=FILTER` narrows it — the flow
+for finding the `--provider`/`--model` pair to pin a bot to:
+
+```bash
+terva --list-models=available        # only providers your credentials can use right now
+terva --list-models=live+            # provider-reported + your own entries; no catalog noise
+terva --list-models=user             # just your models.json entries
+terva --list-models=available,live+  # terms AND together
+```
+
+A bare source name matches exactly (`live` deliberately folds in
+`cache` — it's the same listing, one run removed); `source+` means
+"that tier and above" in the order user > live/cache > catalog >
+speculative; `available` keeps only providers whose credentials
+resolve right now (keyless providers like ollama count). Note that
+`available` is about the PROVIDER: an authenticated provider's catalog
+and speculative entries stay visible, because you can pin them.
 
 The context meter in the status line uses the model's advertised context window to show how much of it your last turn consumed.
 
