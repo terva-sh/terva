@@ -55,6 +55,17 @@ tool — are treated as mutating. In headless modes (`-p`, `--json`,
 refuse-by-default posture while still letting `plan` mode and explicit
 allow rules drive useful headless automation.
 
+**Bot mode is the exception**: `terva bot run` still defaults to
+`yolo`, but a prompting mode (`--approval ask`, `workspace`, …) WORKS
+there — a tool call that needs confirmation is posed as a question in
+the paired chat (buttons where the connector supports interactive
+asks, a numbered plain-text question everywhere else) and the turn
+blocks on the answer. Only the paired owner may answer; an unanswered
+question denies after two minutes (fail closed); and "always (this
+tool)" — a durable session grant — requires a platform-attested answer
+(a button click, not parsed text; a text "always" allows once and says
+so). See docs/connectors.md for the wire side.
+
 ## Authority classes
 
 A tool's *authority* is a finer classification than the read-only/mutating

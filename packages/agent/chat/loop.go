@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,12 +29,32 @@ type Loop struct {
 	AuthMethod string
 	CWD        string
 
+	// Service names the chat service ("telegram", "discord", an
+	// extension connector's name) for the one-time chat-context line
+	// each conversation's first prompt carries. Empty reads as "chat".
+	Service string
+
 	// RefreshCreds is called before every turn to pick up newly
 	// refreshed OAuth tokens. Optional.
 	RefreshCreds func() error
 
 	// Pairing is the first-user-claims policy state.
 	Pairing Pairing
+
+	// Admissions is the approved-group store (gate v2). nil keeps
+	// every non-DM chat silent.
+	Admissions *Admissions
+
+	// NewChatAgent, when set, turns on per-chat sessions (v2 stage C):
+	// DM conversations keep Agent (and its persisted session); every
+	// other chat gets its own lazily-created agent — same model and
+	// system prompt, separate transcript — so a busy group cannot
+	// pollute your DM's context or vice versa. nil = the v1 behavior,
+	// every chat sharing Agent.
+	NewChatAgent func() *core.Agent
+	// MaxChatAgents bounds the live per-chat agents (LRU; least
+	// recently used is dropped, transcript and all). 0 means 8.
+	MaxChatAgents int
 
 	// HelpText answers /help; PairedText (with %s = username)
 	// acknowledges a claim. Both have service-neutral defaults.
@@ -66,6 +88,41 @@ type Loop struct {
 	lastActivity time.Time
 	pairedChatID string // chat to nudge into; learned from inbound, seeded from pairing
 	armed        bool   // a real user message re-arms; a nudge disarms
+	// ask bookkeeping (guarded by mu)
+	ownerID        string          // current paired user; tracks runtime claims
+	activeChatID   string          // chat of the running turn ("" between turns)
+	activeChatKind string          // its kind; owner asks avoid non-DM origins
+	activeMsgID    string          // message that started the running turn
+	textAsk        *pendingTextAsk // outstanding text-fallback ask, one at a time
+	admissionAsked map[string]bool // membership asks fired, per chat (never nag)
+	chatAgents     map[string]*chatAgentState
+	clientSwap     func(*core.Agent)   // applied to every live + future agent on cred refresh
+	pendingNotes   map[string][]string // per-chat stage-D notes, ridden by the next prompt
+	introduced     map[string]bool     // chats whose first prompt carried the [chat context] line
+	// recentTexts remembers the last text seen per consumed message
+	// (bounded ring), so edit events that change nothing — Discord
+	// fires MESSAGE_UPDATE when an embed unfurls, with the content
+	// untouched — don't become "the user edited a message" notes.
+	recentTexts    map[string]string
+	recentTextsSeq []string
+}
+
+// maxPendingNotes caps the per-chat note backlog; the oldest note
+// drops first (they are courtesy context, not a ledger).
+const maxPendingNotes = 5
+
+// chatAgentState is one non-DM chat's private conversation.
+type chatAgentState struct {
+	agent    *core.Agent
+	lastUsed time.Time
+	ctxInput int // last observed context size, for per-chat /status
+}
+
+// pendingTextAsk is one text-fallback ask waiting for the next
+// matching message from an allowed responder.
+type pendingTextAsk struct {
+	ask     Ask
+	answers chan Answer // buffered(1); first valid answer wins
 }
 
 func (l *Loop) info(s string) {
@@ -87,6 +144,29 @@ func (l *Loop) warn(s string) {
 // Run drives the loop. Blocks until ctx cancels or the connector
 // fails permanently.
 func (l *Loop) Run(ctx context.Context) error {
+	// Admission events (stage B): install before Connect so nothing is
+	// missed; each event runs on its own goroutine because the
+	// handler contract forbids blocking the delivery path and the
+	// admission ask blocks by design.
+	if ms, ok := l.Connector.(MembershipHandlerSetter); ok {
+		ms.SetMembershipHandler(func(mb Membership) {
+			go l.onMembership(ctx, mb)
+		})
+	}
+	// Stage-D inbound events, with the tabled host defaults: edits
+	// rewrite still-queued prompts in place, deletions withdraw them,
+	// and everything that arrives too late becomes a short note the
+	// chat's NEXT prompt carries (a deviation from the sketch's
+	// "inject a system note", recorded in the proposal: a note that
+	// starts its own turn would let edit spam drive the agent).
+	if es, ok := l.Connector.(ChatEventsSetter); ok {
+		es.SetChatEventHandlers(ChatEventHandlers{
+			Edited:   l.onMessageEdited,
+			Deleted:  l.onMessageDeleted,
+			Reaction: l.onReaction,
+		})
+	}
+
 	id, err := l.Connector.Connect(ctx)
 	if err != nil {
 		return fmt.Errorf("%s: connect: %w", l.Connector.Name(), err)
@@ -106,7 +186,15 @@ func (l *Loop) Run(ctx context.Context) error {
 	if paired == "" {
 		paired = "paired with @%s. send any message and i'll forward it to terva."
 	}
-	g := &gate{pairing: l.Pairing, helpText: help, pairedText: paired}
+	g := &gate{pairing: l.Pairing, admissions: l.Admissions,
+		botUsername: id.Username, helpText: help, pairedText: paired}
+	// Track runtime claims so asks restrict to the CURRENT owner, not
+	// the pre-Run snapshot.
+	g.onPaired = func(m Message) {
+		l.mu.Lock()
+		l.ownerID = m.UserID
+		l.mu.Unlock()
+	}
 
 	// Arm the proactive idle nudge. Seed the paired chat from pairing (for a
 	// DM connector the chat id is the user id) so the bot can open a
@@ -114,6 +202,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	l.mu.Lock()
 	l.lastActivity = time.Now()
 	l.armed = true
+	l.ownerID = l.Pairing.AllowedUserID
 	if l.pairedChatID == "" {
 		l.pairedChatID = l.Pairing.AllowedUserID
 	}
@@ -125,26 +214,34 @@ func (l *Loop) Run(ctx context.Context) error {
 	return l.Connector.Receive(ctx, func(m Message) {
 		switch g.route(ctx, l.Connector, m) {
 		case actStatus:
-			l.noteActivity(m.ChatID)
+			l.noteActivity(m)
 			l.sendStatus(ctx, m)
 		case actStop:
-			l.noteActivity(m.ChatID)
+			l.noteActivity(m)
 			l.cancelActiveTurn(ctx, m)
 		case actPrompt:
-			l.noteActivity(m.ChatID)
+			l.noteActivity(m)
+			// A pending text-fallback ask gets first claim on the
+			// message; anything that isn't an answer flows on as a
+			// prompt (asks must not eat conversation).
+			if l.takeTextAnswer(m) {
+				return
+			}
 			l.enqueue(ctx, m)
 		}
 	})
 }
 
 // noteActivity records a real interaction from the paired user: it re-arms the
-// idle nudge, refreshes the idle clock, and learns the chat to nudge into.
-func (l *Loop) noteActivity(chatID string) {
+// idle nudge, refreshes the idle clock, and learns the owner's DM.
+// Only DM chats are adopted — the idle nudge and owner-directed asks
+// must never wander into a group the owner happened to speak in.
+func (l *Loop) noteActivity(m Message) {
 	l.mu.Lock()
 	l.lastActivity = time.Now()
 	l.armed = true
-	if chatID != "" {
-		l.pairedChatID = chatID
+	if m.ChatID != "" && isDM(m.ChatKind) {
+		l.pairedChatID = m.ChatID
 	}
 	l.mu.Unlock()
 }
@@ -223,6 +320,7 @@ func (l *Loop) drainQueue(parent context.Context) {
 		if len(l.queue) == 0 {
 			l.busy = false
 			l.activeCancel = nil
+			l.activeChatID, l.activeMsgID, l.activeChatKind = "", "", ""
 			// Count idle from when the agent went quiet, not from the last
 			// inbound — a long turn shouldn't trip the nudge mid-work.
 			l.lastActivity = time.Now()
@@ -234,6 +332,10 @@ func (l *Loop) drainQueue(parent context.Context) {
 		l.busy = true
 		turnCtx, cancel := context.WithCancel(parent)
 		l.activeCancel = cancel
+		l.activeChatID, l.activeMsgID, l.activeChatKind = m.ChatID, m.ID, m.ChatKind
+		// Remember the consumed text so a later edit event that changes
+		// nothing (embed unfurls) isn't narrated as a user edit.
+		l.recordMsgTextLocked(m.ChatID, m.ID, m.Text)
 		l.mu.Unlock()
 
 		if l.RefreshCreds != nil {
@@ -246,11 +348,14 @@ func (l *Loop) drainQueue(parent context.Context) {
 	}
 }
 
-// runTurn sends the queued prompt to the agent and replies with the
-// final assistant text.
+// runTurn sends the queued prompt to the chat's agent and replies
+// with the final assistant text. (The active-turn bookkeeping that
+// approval asks read lives in drainQueue, with no gap after dequeue.)
 func (l *Loop) runTurn(ctx context.Context, m Message) {
 	stopTyping := l.startTyping(ctx, m.ChatID)
 	defer stopTyping()
+
+	agent := l.agentFor(m)
 
 	// The paired user sent a photo a text-only model will never see
 	// (the provider layer drops it rather than 400-bricking the
@@ -259,9 +364,9 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 		l.mu.Lock()
 		provName := l.Provider
 		l.mu.Unlock()
-		if mdl, err := provider.FindModel(provName, l.Agent.Model); err == nil && !mdl.Has(provider.CapImageInput) {
-			_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ReplyTo,
-				Text: fmt.Sprintf("note: %s can't see images; only your text reaches it.", l.Agent.Model)})
+		if mdl, err := provider.FindModel(provName, agent.Model); err == nil && !mdl.Has(provider.CapImageInput) {
+			_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID,
+				Text: fmt.Sprintf("note: %s can't see images; only your text reaches it.", agent.Model)})
 		}
 	}
 
@@ -274,11 +379,9 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 		case core.EvTextDelta:
 			replyBuilder.WriteString(e.Delta)
 		case core.EvUsage:
-			l.mu.Lock()
 			if e.Usage.InputTokens > 0 {
-				l.lastCtxInput = e.Usage.InputTokens + e.Usage.CacheReadTokens + e.Usage.CacheWriteTokens
+				l.recordCtx(m, e.Usage.InputTokens+e.Usage.CacheReadTokens+e.Usage.CacheWriteTokens)
 			}
-			l.mu.Unlock()
 		case core.EvAssistantMessage:
 			var sb strings.Builder
 			for _, c := range e.Message.Content {
@@ -304,7 +407,8 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 	// for an over-threshold transcript, one compact-and-retry on HTTP
 	// 413). Surface compactions to the paired chat as a short notice
 	// so the longer-than-usual pause reads as work, not a hang.
-	if err := l.Agent.PromptWithPolicy(ctx, m.Text, m.Images, func(ev core.AgentEvent) {
+	defer cleanupFiles(m)
+	if err := agent.PromptWithPolicy(ctx, l.promptText(m), m.Images, func(ev core.AgentEvent) {
 		if cs, ok := ev.(core.EvCompactStart); ok {
 			_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID,
 				Text: "note: condensing conversation history (" + cs.Reason + ") ..."})
@@ -318,8 +422,8 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 	// after a clean turn that pushed context past the threshold so the
 	// paired user's NEXT message doesn't pay the latency. Failures are
 	// non-fatal — the turn itself succeeded.
-	if turnErr == nil && ctx.Err() == nil && l.Agent.ShouldAutoCompact(core.AutoCompactThreshold) && l.Agent.CanCompact(core.AutoCompactKeepTail) {
-		_, _ = l.Agent.Compact(ctx, core.AutoCompactKeepTail, nil)
+	if turnErr == nil && ctx.Err() == nil && agent.ShouldAutoCompact(core.AutoCompactThreshold) && agent.CanCompact(core.AutoCompactKeepTail) {
+		_, _ = agent.Compact(ctx, core.AutoCompactKeepTail, nil)
 	}
 
 	reply := strings.TrimSpace(lastAssistantText)
@@ -374,43 +478,633 @@ func (l *Loop) UpdateStatusContext(provider, authMethod, cwd string) {
 	l.mu.Unlock()
 }
 
+// cancelActiveTurn is per-chat (stage C): /stop cancels the running
+// turn only when it belongs to the chat it was said in, and drops that
+// chat's queued prompts either way. Other chats' work is untouchable
+// from here — one chat must not be able to kill another's turn.
 func (l *Loop) cancelActiveTurn(ctx context.Context, m Message) {
 	l.mu.Lock()
-	cancel := l.activeCancel
+	var cancel context.CancelFunc
+	if l.activeCancel != nil && l.activeChatID == m.ChatID {
+		cancel = l.activeCancel
+	}
+	kept := l.queue[:0]
+	var purgedMsgs []Message
+	for _, qm := range l.queue {
+		if qm.ChatID == m.ChatID {
+			purgedMsgs = append(purgedMsgs, qm)
+			continue
+		}
+		kept = append(kept, qm)
+	}
+	l.queue = kept
 	l.mu.Unlock()
-	if cancel != nil {
+	purged := len(purgedMsgs)
+	for _, qm := range purgedMsgs {
+		cleanupFiles(qm)
+	}
+
+	switch {
+	case cancel != nil:
 		cancel()
-		_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ReplyTo, Text: "cancelled the current turn."})
-	} else {
-		_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ReplyTo, Text: "nothing running."})
+		_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID, Text: "cancelled the current turn."})
+	case purged > 0:
+		_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID,
+			Text: fmt.Sprintf("dropped %d queued message(s); nothing was running here.", purged)})
+	default:
+		_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID, Text: "nothing running in this chat."})
 	}
 }
 
-// sendStatus describes agent state to the paired user.
+// sendStatus describes THIS chat's state to the paired user: its own
+// agent's context and cost, whether the running turn is its own, and
+// how many of the queued prompts are its own (stage C).
 func (l *Loop) sendStatus(ctx context.Context, m Message) {
 	l.mu.Lock()
-	busy := l.busy
-	queued := len(l.queue)
+	busy := l.busy && l.activeChatID == m.ChatID
+	queued := 0
+	for _, qm := range l.queue {
+		if qm.ChatID == m.ChatID {
+			queued++
+		}
+	}
 	ctxUsed := l.lastCtxInput
+	agent := l.Agent
+	if st, ok := l.chatAgents[m.ChatID]; ok {
+		ctxUsed = st.ctxInput
+		agent = st.agent
+	}
 	providerName := l.Provider
 	authMethod := l.AuthMethod
 	cwd := l.CWD
 	l.mu.Unlock()
 
-	model := l.Agent.Model
+	model := agent.Model
 	ctxMax := 0
 	if mdl, err := provider.FindModel(providerName, model); err == nil {
 		ctxMax = mdl.ContextWindow
 	}
-	_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ReplyTo, Text: FormatStatus(StatusSnapshot{
+	_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID, Text: FormatStatus(StatusSnapshot{
 		Provider:     providerName,
 		Model:        model,
 		CWD:          cwd,
-		Usage:        l.Agent.Cost(),
+		Usage:        agent.Cost(),
 		Subscription: authMethod == "oauth",
 		ContextUsed:  ctxUsed,
 		ContextMax:   ctxMax,
 		Busy:         busy,
 		Queued:       queued,
 	})})
+}
+
+// Ask poses one constrained question in a chat and returns the first
+// valid answer, fail-closed on timeout. Connectors that render asks
+// natively (Capabilities().Asks) get the real widget — buttons, inline
+// keyboards — with the platform's identity attestation; everything
+// else falls back to a numbered plain-text question answered by the
+// next matching message, best-effort by definition. Approvals over
+// chat therefore work with EVERY connector; capability only upgrades
+// the UX and the attestation.
+func (l *Loop) Ask(ctx context.Context, a Ask) (Answer, error) {
+	if asker, ok := l.Connector.(Asker); ok && l.Connector.Capabilities().Asks {
+		return asker.Ask(ctx, a)
+	}
+	return l.textFallbackAsk(ctx, a)
+}
+
+// AskTarget returns where an owner-directed ask should go: the chat
+// that started the running turn when that chat is the owner's DM
+// (threaded to its message), else the owner's DM — a group-originated
+// turn must not surface approval questions (and their tool previews)
+// to the whole group. Empty when nothing is paired yet.
+func (l *Loop) AskTarget() (chatID, replyTo string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.activeChatID != "" && isDM(l.activeChatKind) {
+		return l.activeChatID, l.activeMsgID
+	}
+	return l.pairedChatID, ""
+}
+
+// OwnerID returns the currently paired user id, tracking runtime
+// claims. Empty while unpaired.
+func (l *Loop) OwnerID() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ownerID
+}
+
+// textFallbackAsk renders the ask as a numbered plain-text question
+// and waits for takeTextAnswer to consume a matching reply. One at a
+// time: approvals serialize at the caller, and a second concurrent
+// ask would make the reply ambiguous.
+func (l *Loop) textFallbackAsk(ctx context.Context, a Ask) (Answer, error) {
+	timeout := a.Timeout
+	if timeout <= 0 {
+		timeout = DefaultAskTimeout
+	}
+	p := &pendingTextAsk{ask: a, answers: make(chan Answer, 1)}
+	l.mu.Lock()
+	if l.textAsk != nil {
+		l.mu.Unlock()
+		return Answer{}, fmt.Errorf("another ask is already waiting for an answer")
+	}
+	l.textAsk = p
+	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		if l.textAsk == p {
+			l.textAsk = nil
+		}
+		l.mu.Unlock()
+	}()
+
+	var b strings.Builder
+	b.WriteString(a.Text)
+	b.WriteString("\n")
+	for i, o := range a.Options {
+		fmt.Fprintf(&b, "\n%d — %s", i+1, o.Label)
+	}
+	b.WriteString("\n\nreply with a number to answer.")
+	if err := l.Connector.Send(ctx, Outgoing{ChatID: a.ChatID, ReplyTo: a.ReplyTo, Text: b.String()}); err != nil {
+		return Answer{}, err
+	}
+
+	select {
+	case ans := <-p.answers:
+		return ans, nil
+	case <-time.After(timeout):
+		outcome := a.TimeoutOutcome
+		if outcome == "" {
+			outcome = "expired (no answer)"
+		}
+		// The withdrawal must be visible even when the turn is being
+		// torn down — same posture as the reply sender.
+		_ = l.Connector.Send(context.Background(), Outgoing{ChatID: a.ChatID, Text: outcome})
+		return Answer{}, ErrAskTimeout
+	case <-ctx.Done():
+		return Answer{}, ctx.Err()
+	}
+}
+
+// takeTextAnswer consumes m as the answer to the pending text ask
+// when it is one: same chat, allowed responder, and text matching an
+// option by number, key, or label. Anything else returns false and
+// the message flows on as a normal prompt.
+func (l *Loop) takeTextAnswer(m Message) bool {
+	l.mu.Lock()
+	p := l.textAsk
+	l.mu.Unlock()
+	if p == nil || m.ChatID != p.ask.ChatID {
+		return false
+	}
+	if len(p.ask.RestrictTo) > 0 && !containsUserID(p.ask.RestrictTo, m.UserID) {
+		return false
+	}
+	key, ok := matchAskOption(p.ask.Options, m.Text)
+	if !ok {
+		return false
+	}
+	select {
+	case p.answers <- Answer{Key: key, UserID: m.UserID, Username: m.Username,
+		Attestation: AttestationBestEffort}:
+	default:
+	}
+	return true
+}
+
+// matchAskOption resolves a reply against the options: the 1-based
+// number, the key, or the label, case-insensitively.
+func matchAskOption(opts []AskOption, text string) (string, bool) {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return "", false
+	}
+	if n, err := strconv.Atoi(t); err == nil && n >= 1 && n <= len(opts) {
+		return opts[n-1].Key, true
+	}
+	for _, o := range opts {
+		if t == strings.ToLower(o.Key) || t == strings.ToLower(o.Label) {
+			return o.Key, true
+		}
+	}
+	return "", false
+}
+
+func containsUserID(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// onMembership reacts to the bot's own admission changing. Being
+// added to an unapproved chat fires ONE ask in the owner's DM — the
+// trust hook that replaces a command the owner has to know; being
+// removed revokes any standing approval (a chat we were kicked from
+// must not stay approved for a future re-add).
+func (l *Loop) onMembership(ctx context.Context, mb Membership) {
+	if l.Admissions == nil {
+		return
+	}
+	switch mb.Change {
+	case "removed":
+		if _, approved := l.Admissions.Mode(mb.ChatID); approved {
+			_ = l.Admissions.Revoke(mb.ChatID)
+			l.info(fmt.Sprintf("%s: removed from %s — approval revoked", l.Connector.Name(), describeChat(mb)))
+		}
+		return
+	case "added":
+	default:
+		return
+	}
+	if _, approved := l.Admissions.Mode(mb.ChatID); approved {
+		return
+	}
+
+	l.mu.Lock()
+	owner := l.ownerID
+	ownerDM := l.pairedChatID
+	if l.admissionAsked == nil {
+		l.admissionAsked = map[string]bool{}
+	}
+	asked := l.admissionAsked[mb.ChatID]
+	l.admissionAsked[mb.ChatID] = true
+	l.mu.Unlock()
+	if owner == "" || ownerDM == "" || asked {
+		return
+	}
+
+	by := mb.ByUsername
+	if by == "" {
+		by = mb.ByUserID
+	}
+	if by == "" {
+		by = "someone"
+	}
+	ans, err := l.Ask(ctx, Ask{
+		ChatID: ownerDM,
+		Text:   fmt.Sprintf("i was added to %s by @%s. approve it?", describeChat(mb), by),
+		Options: []AskOption{
+			{Key: "approve", Label: "Approve (mention-only)", Style: "affirm"},
+			{Key: "approve_all", Label: "Approve (all messages)"},
+			{Key: "ignore", Label: "Ignore", Style: "deny"},
+		},
+		RestrictTo:     []string{owner},
+		TimeoutOutcome: "ignored — the chat stays silent",
+	})
+	if err != nil {
+		return // fail closed: the chat stays silent; /approve still works
+	}
+	switch ans.Key {
+	case "approve", "approve_all":
+		mode := ModeMention
+		how := "when mentioned"
+		if ans.Key == "approve_all" {
+			mode, how = ModeAll, "on every message"
+		}
+		if err := l.Admissions.Approve(mb.ChatID, mode); err != nil {
+			_ = l.Connector.Send(ctx, Outgoing{ChatID: ownerDM,
+				Text: "couldn't save the approval: " + err.Error()})
+			return
+		}
+		_ = l.Connector.Send(ctx, Outgoing{ChatID: ownerDM,
+			Text: fmt.Sprintf("approved — i'll respond in %s %s.", describeChat(mb), how)})
+	default:
+		// Ignored: stays silent, and the dedupe map keeps us from
+		// asking again this run. /approve in the chat still works.
+	}
+}
+
+// describeChat renders a membership event's chat for humans.
+func describeChat(mb Membership) string {
+	kind := mb.ChatKind
+	if kind == "" {
+		kind = "chat"
+	}
+	if mb.ChatTitle != "" {
+		return fmt.Sprintf("the %s %q", kind, mb.ChatTitle)
+	}
+	return fmt.Sprintf("%s %s", kind, mb.ChatID)
+}
+
+// agentFor resolves the agent that owns m's conversation: the primary
+// Agent for DMs (and for everything, when per-chat sessions are off),
+// a lazily-minted per-chat agent otherwise. Minting past the cap
+// drops the least recently used chat's agent, transcript and all — a
+// returning chat starts fresh (recorded deviation from the proposal's
+// "compacts and drops": nothing persists, so compaction buys nothing).
+func (l *Loop) agentFor(m Message) *core.Agent {
+	if l.NewChatAgent == nil || isDM(m.ChatKind) {
+		return l.Agent
+	}
+	l.mu.Lock()
+	if l.chatAgents == nil {
+		l.chatAgents = map[string]*chatAgentState{}
+	}
+	if st, ok := l.chatAgents[m.ChatID]; ok {
+		st.lastUsed = time.Now()
+		l.mu.Unlock()
+		return st.agent
+	}
+	max := l.MaxChatAgents
+	if max <= 0 {
+		max = 8
+	}
+	var evicted []string
+	for len(l.chatAgents) >= max {
+		lruID, lruT := "", time.Time{}
+		for id, st := range l.chatAgents {
+			if lruID == "" || st.lastUsed.Before(lruT) {
+				lruID, lruT = id, st.lastUsed
+			}
+		}
+		delete(l.chatAgents, lruID)
+		evicted = append(evicted, lruID)
+	}
+	agent := l.NewChatAgent()
+	if l.clientSwap != nil {
+		l.clientSwap(agent)
+	}
+	l.chatAgents[m.ChatID] = &chatAgentState{agent: agent, lastUsed: time.Now()}
+	l.mu.Unlock()
+	for _, id := range evicted {
+		l.info(fmt.Sprintf("%s: chat %s idle longest — dropped its context to make room", l.Connector.Name(), id))
+	}
+	return agent
+}
+
+// recordCtx notes a turn's observed context size where the chat's
+// /status will find it.
+func (l *Loop) recordCtx(m Message, total int) {
+	l.mu.Lock()
+	if st, ok := l.chatAgents[m.ChatID]; ok {
+		st.ctxInput = total
+	} else {
+		l.lastCtxInput = total
+	}
+	l.mu.Unlock()
+}
+
+// SetClientAndModel swaps the provider client and model on the
+// primary agent and every live per-chat agent, and remembers the swap
+// for agents minted later — a credential refresh must reach every
+// conversation, including ones that don't exist yet.
+func (l *Loop) SetClientAndModel(client provider.Client, model string) {
+	l.mu.Lock()
+	l.clientSwap = func(a *core.Agent) { a.SetClientAndModel(client, model) }
+	agents := make([]*core.Agent, 0, len(l.chatAgents))
+	for _, st := range l.chatAgents {
+		agents = append(agents, st.agent)
+	}
+	l.mu.Unlock()
+	l.Agent.SetClientAndModel(client, model)
+	for _, a := range agents {
+		a.SetClientAndModel(client, model)
+	}
+}
+
+// onMessageEdited applies the stage-D host default: a still-queued
+// message is replaced in place (the agent never saw the old text); an
+// already-consumed one becomes a note on the chat's next prompt —
+// unless the "edit" changed nothing (Discord fires MESSAGE_UPDATE when
+// an embed unfurls, content untouched) or repeats a text already
+// noted, which would only spam near-identical notes.
+func (l *Loop) onMessageEdited(ev MessageEdited) {
+	l.mu.Lock()
+	for i := range l.queue {
+		if l.queue[i].ChatID == ev.ChatID && l.queue[i].ID == ev.ID && ev.ID != "" {
+			l.queue[i].Text = ev.Text
+			l.queue[i].Entities = ev.Entities
+			l.mu.Unlock()
+			return
+		}
+	}
+	unchanged := ev.ID != "" && l.lastMsgTextLocked(ev.ChatID, ev.ID) == ev.Text
+	if !unchanged {
+		l.recordMsgTextLocked(ev.ChatID, ev.ID, ev.Text)
+	}
+	l.mu.Unlock()
+	if unchanged {
+		return
+	}
+	l.addNote(ev.ChatID, "message_edited", fmt.Sprintf("the user edited an earlier message; its text is now: %s", truncateNote(ev.Text)))
+}
+
+// onMessageDeleted withdraws a still-queued message (and its staged
+// files); anything already consumed is left alone — no retroactive
+// transcript surgery.
+func (l *Loop) onMessageDeleted(ev MessageDeleted) {
+	l.mu.Lock()
+	kept := l.queue[:0]
+	var dropped []Message
+	for _, qm := range l.queue {
+		if qm.ChatID == ev.ChatID && qm.ID == ev.ID && ev.ID != "" {
+			dropped = append(dropped, qm)
+			continue
+		}
+		kept = append(kept, qm)
+	}
+	l.queue = kept
+	l.mu.Unlock()
+	for _, qm := range dropped {
+		cleanupFiles(qm)
+	}
+}
+
+// onReaction notes reactions on the bot's own messages; everything
+// else is ignored (v2 default). Reactions are LOSSY — this is
+// context, never authority.
+func (l *Loop) onReaction(ev Reaction) {
+	if !ev.OwnMessage || ev.ChatID == "" {
+		return
+	}
+	who := ev.Username
+	if who == "" {
+		who = ev.UserID
+	}
+	verb := "reacted with"
+	if ev.Removed {
+		verb = "removed their reaction"
+	}
+	l.addNote(ev.ChatID, "reaction", fmt.Sprintf("@%s %s %s on my earlier message", who, verb, ev.Key))
+}
+
+// addNote queues a short observation for the chat's next prompt,
+// typed and bracketed ("[chat event: message_edited] ...") so the
+// model reads it as connector state, never as something the user just
+// said — the confusion the first live agent reported.
+func (l *Loop) addNote(chatID, kind, note string) {
+	l.mu.Lock()
+	if l.pendingNotes == nil {
+		l.pendingNotes = map[string][]string{}
+	}
+	notes := append(l.pendingNotes[chatID], fmt.Sprintf("[chat event: %s] %s", kind, note))
+	if len(notes) > maxPendingNotes {
+		notes = notes[len(notes)-maxPendingNotes:]
+	}
+	l.pendingNotes[chatID] = notes
+	l.mu.Unlock()
+}
+
+// activeTurnChat returns the chat of the currently running turn (""
+// between turns). Approval notes ride the chat whose turn asked.
+func (l *Loop) activeTurnChat() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.activeChatID
+}
+
+// recordMsgTextLocked / lastMsgTextLocked track the last text seen per
+// message (bounded ring) for the edit-note dedup. Callers hold l.mu.
+func (l *Loop) recordMsgTextLocked(chatID, id, text string) {
+	if id == "" {
+		return
+	}
+	key := chatID + "\x00" + id
+	if l.recentTexts == nil {
+		l.recentTexts = map[string]string{}
+	}
+	if _, seen := l.recentTexts[key]; !seen {
+		l.recentTextsSeq = append(l.recentTextsSeq, key)
+		for len(l.recentTextsSeq) > recentTextsCap {
+			delete(l.recentTexts, l.recentTextsSeq[0])
+			l.recentTextsSeq = l.recentTextsSeq[1:]
+		}
+	}
+	l.recentTexts[key] = text
+}
+
+func (l *Loop) lastMsgTextLocked(chatID, id string) string {
+	return l.recentTexts[chatID+"\x00"+id]
+}
+
+// recentTextsCap bounds the edit-dedup record; edits of messages older
+// than the newest ~128 read as real edits, which only costs one note.
+const recentTextsCap = 128
+
+// takeNotes drains the chat's pending notes.
+func (l *Loop) takeNotes(chatID string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	notes := l.pendingNotes[chatID]
+	delete(l.pendingNotes, chatID)
+	return notes
+}
+
+func truncateNote(s string) string {
+	if r := []rune(s); len(r) > 200 {
+		return string(r[:200]) + "…"
+	}
+	return s
+}
+
+// promptText assembles the turn's prompt: the one-time chat-context
+// line, pending stage-D notes, the stage-E file manifest, then the
+// user's text — attributed to its sender in multi-user chats.
+func (l *Loop) promptText(m Message) string {
+	var b strings.Builder
+	if intro := l.takeChatIntro(m); intro != "" {
+		b.WriteString(intro + "\n")
+	}
+	for _, n := range l.takeNotes(m.ChatID) {
+		b.WriteString(n + "\n")
+	}
+	if len(m.Files) > 0 {
+		b.WriteString("(the user attached files, saved locally — read them with your tools if relevant:\n")
+		for _, f := range m.Files {
+			fmt.Fprintf(&b, "  %s — %s", f.Path, f.Kind)
+			if f.MimeType != "" {
+				fmt.Fprintf(&b, ", %s", f.MimeType)
+			}
+			if f.Size > 0 {
+				fmt.Fprintf(&b, ", %d bytes", f.Size)
+			}
+			if f.Duration > 0 {
+				fmt.Fprintf(&b, ", %s", f.Duration.Round(100*time.Millisecond))
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString(")\n")
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n")
+	}
+	// In multi-user chats every prompt says who is speaking; the DM has
+	// exactly one human, so its text stays untouched.
+	if !isDM(m.ChatKind) && (m.Username != "" || m.UserID != "") {
+		who := m.Username
+		if who == "" {
+			who = m.UserID
+		}
+		fmt.Fprintf(&b, "@%s: ", who)
+	}
+	b.WriteString(m.Text)
+	return b.String()
+}
+
+// takeChatIntro returns the [chat context] line exactly once per chat:
+// where the conversation lives, who can be speaking, and how to format
+// for it — chat services render only simple markdown (no tables), which
+// the model can't otherwise know.
+func (l *Loop) takeChatIntro(m Message) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.introduced[m.ChatID] {
+		return ""
+	}
+	if l.introduced == nil {
+		l.introduced = map[string]bool{}
+	}
+	l.introduced[m.ChatID] = true
+
+	service := l.Service
+	if service == "" {
+		service = "chat"
+	}
+	var b strings.Builder
+	b.WriteString("[chat context] ")
+	if isDM(m.ChatKind) {
+		fmt.Fprintf(&b, "You are replying over %s in a direct chat with your paired user.", service)
+	} else {
+		title := m.ChatTitle
+		if title == "" {
+			title = m.ChatID
+		}
+		fmt.Fprintf(&b, "You are replying over %s in the %s %q; multiple people can speak here, so each message is attributed (@name: …).", service, chatKindWord(m.ChatKind), title)
+	}
+	b.WriteString(" Replies render in the chat app: plain text and simple markdown only — tables and other heavy markdown don't render there.")
+	return b.String()
+}
+
+// chatKindWord renders a chat kind for the intro line.
+func chatKindWord(kind string) string {
+	switch kind {
+	case "thread":
+		return "thread"
+	case "channel":
+		return "channel"
+	default:
+		return "group chat"
+	}
+}
+
+// cleanupFiles removes a message's staged attachment files and their
+// per-message directories — after its turn, or when it is withdrawn
+// from the queue.
+func cleanupFiles(m Message) {
+	dirs := map[string]bool{}
+	for _, f := range m.Files {
+		if f.Path == "" {
+			continue
+		}
+		_ = os.Remove(f.Path)
+		dirs[filepath.Dir(f.Path)] = true
+	}
+	for d := range dirs {
+		// Only removes when empty — shared dirs survive siblings.
+		_ = os.Remove(d)
+	}
 }

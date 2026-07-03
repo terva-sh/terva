@@ -44,6 +44,9 @@ type Bridge struct {
 	Pairing    Pairing
 	HelpText   string
 	PairedText string
+	// Admissions is the approved-group store shared with the daemon
+	// loop; nil keeps every non-DM chat silent on this surface.
+	Admissions *Admissions
 
 	mu       sync.Mutex
 	running  bool
@@ -131,9 +134,11 @@ func (b *Bridge) Start(parent context.Context) error {
 		b.chatID = b.Pairing.AllowedUserID
 	}
 	b.gate = &gate{
-		pairing:    b.Pairing,
-		helpText:   help,
-		pairedText: paired,
+		pairing:     b.Pairing,
+		admissions:  b.Admissions,
+		botUsername: id.Username,
+		helpText:    help,
+		pairedText:  paired,
 		onPaired: func(m Message) {
 			b.mu.Lock()
 			b.chatID = m.ChatID
@@ -177,11 +182,11 @@ func (b *Bridge) handle(m Message) {
 	switch g.route(ctx, b.Connector, m) {
 	case actStatus:
 		b.rememberChat(m.ChatID)
-		_ = b.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ReplyTo, Text: b.Host.Status()})
+		_ = b.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID, Text: b.Host.Status()})
 	case actStop:
 		b.rememberChat(m.ChatID)
 		b.Host.CancelTurn()
-		_ = b.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ReplyTo, Text: "cancelled the current turn."})
+		_ = b.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID, Text: "cancelled the current turn."})
 	case actPrompt:
 		b.rememberChat(m.ChatID)
 		b.mu.Lock()

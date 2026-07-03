@@ -14,6 +14,11 @@ import (
 type Service struct {
 	Name string
 
+	// Kind names the service's provenance for status and picker
+	// surfaces: "" for a compiled-in connector, "extension" for a
+	// connector-role extension (chat/extconn). Display-only.
+	Kind string
+
 	// Configured reports whether persisted credentials exist under
 	// tervaHome (e.g. a bot token in bot.json).
 	Configured func(tervaHome string) bool
