@@ -230,10 +230,10 @@ func init() {
 				return false
 			}},
 		{name: "/connect", group: groupAgents, aliases: []string{"/telegram", "/tg"},
-			desc: "connect, disconnect, or show status of the chat bridge (telegram)", hint: "connect | disconnect | status",
+			desc: "connect, disconnect, or show status of a chat bridge (compiled-in or connector extension)", hint: "connect [name] | disconnect | status",
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				if len(parts) >= 2 {
-					i.doConnector(parts[1])
+					i.doConnector(strings.Join(parts[1:], " "))
 					return false
 				}
 				i.openConnectDialog()

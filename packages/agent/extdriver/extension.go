@@ -42,6 +42,17 @@ type Manifest struct {
 	// values back in the hello_ack handshake (and a config_update event on
 	// change). Empty means the extension takes no host-supplied config.
 	Config []ConfigField `json:"config,omitempty"`
+	// Connector declares this extension is ALSO a chat connector
+	// (extension protocol 5, experimental): it may register_connector and
+	// stream chat messages that start agent turns. This flag is the
+	// install-time consent surface — the driver refuses the role at the
+	// wire when it is absent, so a tool extension can never quietly grow
+	// into a message source after install. Activation is a further,
+	// separate step: a chat consumer must select the extension by name
+	// (e.g. `terva bot run --connector <name>`). Only globally-installed
+	// extensions are offered as chat services (never project-local ones);
+	// see docs/proposals/connector-extensions.md.
+	Connector bool `json:"connector,omitempty"`
 }
 
 // ConfigField is one declared setting in an extension's manifest. The host
@@ -163,6 +174,18 @@ type Extension struct {
 	staticContext  string
 	contextCards   map[string]contextCard
 	statusSegments map[string]string
+
+	// Chat-connector state (protocol 5, register_connector). All guarded
+	// by mu. connectorRole is true once the role is registered (and the
+	// manifest consented via Connector: true). chatTun is the CURRENT
+	// tunnel session, nil when no chat consumer is attached; the driver
+	// never parses what rides it — the inner connector protocol belongs
+	// to chat/connhost on the host side. dataDir is the writable state
+	// dir announced in hello_ack, kept here so the chat adapter can
+	// containment-check attachments against the same value.
+	connectorRole bool
+	chatTun       *ChatTunnel
+	dataDir       string
 }
 
 // newExtension allocates an Extension with its maps and the ready

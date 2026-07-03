@@ -7,6 +7,7 @@ package modes
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/tools"
@@ -52,14 +53,40 @@ func (i *Interactive) chatBridgeName() string {
 	return ""
 }
 
-// connectMenuItems builds the dialog entries for the current bridge
-// state. Returns empty when the service isn't configured so the
-// caller can show a helpful status line instead of an empty menu.
-func (i *Interactive) connectMenuItems() []connectItem {
-	svc, ok := chat.Lookup(chat.DefaultServiceName())
-	if !ok || !svc.Configured(i.cfg.TervaHome) {
-		return nil
+// serviceNames lists every registered chat service with its provenance
+// tag, for error messages and the status line.
+func serviceNames() string {
+	var names []string
+	for _, svc := range chat.Services() {
+		name := svc.Name
+		if tag := serviceTag(svc); tag != "" {
+			name += " (" + tag + ")"
+		}
+		names = append(names, name)
 	}
+	return strings.Join(names, ", ")
+}
+
+// serviceTag renders a service's provenance for hints and lists:
+// "extension", "dev", both, or "" for a plain compiled-in connector.
+func serviceTag(svc chat.Service) string {
+	var tags []string
+	if svc.Kind != "" {
+		tags = append(tags, svc.Kind)
+	}
+	if svc.Dev {
+		tags = append(tags, "dev")
+	}
+	return strings.Join(tags, ", ")
+}
+
+// connectMenuItems builds the dialog entries for the current bridge
+// state: when connected, actions on the live bridge; when idle, one
+// row per configured service (compiled-in connectors, connector
+// extensions, dev manifests) so any of them can be selected. Returns
+// empty when nothing is configured so the caller can show a helpful
+// status line instead of an empty menu.
+func (i *Interactive) connectMenuItems() []connectItem {
 	var items []connectItem
 	if i.chatBridge != nil && i.chatBridge.Active() {
 		items = append(items, connectItem{label: "disconnect", action: "disconnect", hint: "stop mirroring"})
@@ -69,50 +96,86 @@ func (i *Interactive) connectMenuItems() []connectItem {
 			hint += " as @" + st.Username
 		}
 		items = append(items, connectItem{label: "status", action: "status", hint: hint})
-	} else {
+		return items
+	}
+	for _, svc := range chat.Services() {
+		if !svc.Configured(i.cfg.TervaHome) {
+			continue
+		}
 		hint := "start mirroring dms into this session"
 		if _, pairing, err := svc.NewConnector(i.cfg.TervaHome, nil); err == nil && pairing.AllowedUserID == "" {
 			hint = "awaiting pairing (send /start to the bot once connected)"
 		}
-		items = append(items, connectItem{label: "connect", action: "connect", hint: hint})
+		if tag := serviceTag(svc); tag != "" {
+			hint = tag + " — " + hint
+		}
+		items = append(items, connectItem{label: "connect " + svc.Name, action: "connect " + svc.Name, hint: hint})
+	}
+	if len(items) > 0 {
 		items = append(items, connectItem{label: "status", action: "status", hint: "disconnected"})
 	}
 	return items
 }
 
-// doConnector dispatches one of the three explicit actions. Called
-// from /connect <action> or after the picker selects a row.
+// doConnector dispatches one action: "connect" (default service),
+// "connect <name>", a bare service name (implicit connect),
+// "disconnect", or "status". Called from /connect <args> or after the
+// picker selects a row.
 func (i *Interactive) doConnector(action string) {
-	switch action {
+	fields := strings.Fields(action)
+	if len(fields) == 0 {
+		i.openConnectDialog()
+		return
+	}
+	switch fields[0] {
 	case "connect":
-		i.connectorConnect()
+		name := ""
+		if len(fields) > 1 {
+			name = fields[1]
+		}
+		i.connectorConnect(name)
 	case "disconnect":
 		i.connectorDisconnect()
 	case "status":
 		i.connectorStatus()
 	default:
+		if _, ok := chat.Lookup(fields[0]); ok {
+			i.connectorConnect(fields[0])
+			return
+		}
 		i.mu.Lock()
-		i.statusErr = "unknown /connect action: " + action + " (use connect, disconnect, or status)"
+		i.statusErr = "unknown /connect action: " + action + " (use connect [name], disconnect, status, or a connector name)"
 		i.mu.Unlock()
 		i.invalidate()
 	}
 }
 
-// connectorConnect starts the bridge for the default chat service.
-// Refuses if it's already running or the service isn't configured.
-func (i *Interactive) connectorConnect() {
+// connectorConnect starts the bridge for the named chat service ("" =
+// the registry default). Refuses if a bridge is already running or the
+// service isn't configured.
+func (i *Interactive) connectorConnect(name string) {
 	if i.chatBridge != nil && i.chatBridge.Active() {
 		i.mu.Lock()
-		i.statusOK = i.connectorName() + " already connected"
+		i.statusOK = i.connectorName() + " already connected (disconnect first to switch)"
 		i.statusErr = ""
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
-	svc, ok := chat.Lookup(chat.DefaultServiceName())
+	if name == "" {
+		name = chat.DefaultServiceName()
+	}
+	svc, ok := chat.Lookup(name)
 	if !ok {
+		msg := "no chat connectors compiled in"
+		if name != "" {
+			msg = "unknown chat connector " + name
+			if names := serviceNames(); names != "" {
+				msg += " (available: " + names + ")"
+			}
+		}
 		i.mu.Lock()
-		i.statusErr = "no chat connectors compiled in"
+		i.statusErr = msg
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -144,7 +207,10 @@ func (i *Interactive) connectorConnect() {
 		i.invalidate()
 		return
 	}
-	i.chatBridge = &chat.Bridge{Connector: conn, Host: host, Pairing: pairing}
+	i.chatBridge = &chat.Bridge{Connector: conn, Host: host, Pairing: pairing,
+		// Same approved-group store the bot daemon uses, so an
+		// admission granted in either surface holds in both.
+		Admissions: chat.LoadAdmissions(chat.AdmissionsPath(i.cfg.TervaHome, svc.Name))}
 	if err := i.chatBridge.Start(i.runCtx); err != nil {
 		i.chatBridge = nil
 		i.mu.Lock()
@@ -156,8 +222,8 @@ func (i *Interactive) connectorConnect() {
 	i.applyChatTools(true)
 	state := i.chatBridge.State()
 	label := svc.Name + " connected"
-	if svc.Dev {
-		label = svc.Name + " (dev) connected"
+	if tag := serviceTag(svc); tag != "" {
+		label = svc.Name + " (" + tag + ") connected"
 	}
 	if state.Username != "" {
 		label += " as @" + state.Username
@@ -267,19 +333,23 @@ func (i *Interactive) connectorStatus() {
 		i.invalidate()
 		return
 	}
-	// Dev connectors (--connector-manifest) are tagged so they are
-	// never mistaken for installed ones.
+	// Provenance tags (extension services, --connector-manifest dev
+	// connectors) so they are never mistaken for compiled-in ones.
 	label := name
-	if svc, ok := chat.Lookup(name); ok && svc.Dev {
-		label = name + " (dev)"
+	if svc, ok := chat.Lookup(name); ok {
+		if tag := serviceTag(svc); tag != "" {
+			label = name + " (" + tag + ")"
+		}
 	}
 	var msg string
 	if i.chatBridge != nil && i.chatBridge.Active() {
 		s := i.chatBridge.State()
 		name = i.chatBridge.Connector.Name()
 		label = name
-		if svc, ok := chat.Lookup(name); ok && svc.Dev {
-			label = name + " (dev)"
+		if svc, ok := chat.Lookup(name); ok {
+			if tag := serviceTag(svc); tag != "" {
+				label = name + " (" + tag + ")"
+			}
 		}
 		msg = label + ": connected (tui bridge)"
 		if s.Username != "" {
@@ -296,6 +366,11 @@ func (i *Interactive) connectorStatus() {
 		msg = label + ": not configured. run `terva bot setup` first."
 	} else {
 		msg = label + ": disconnected (ready to connect)"
+	}
+	// With several services registered, the default alone under-tells;
+	// list what /connect <name> can reach.
+	if (i.chatBridge == nil || !i.chatBridge.Active()) && len(chat.Services()) > 1 {
+		msg += " - connectors: " + serviceNames()
 	}
 	i.mu.Lock()
 	i.statusOK = msg

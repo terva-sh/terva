@@ -87,6 +87,14 @@ terva --ext path/to/terva/examples/extensions/hello
 
 Nothing is auto-installed and nothing reaches out to the network without your explicit action.
 
+Per-run scoping: `--extensions calendar,index` loads ONLY the named
+installed extensions for that run (restrict-only — explicit `--ext`
+paths bypass it, and a config `disable_extensions` entry still
+subtracts). This is the least-privilege composition flag for exposed
+agents: a Discord bot admitted to a group room can run with
+`--extensions calendar` and your mail extension simply never spawns.
+`--no-ext` remains the all-off form.
+
 ## Extension packs
 
 A **pack** is a hosted manifest naming a set of extensions, so you can
@@ -213,6 +221,7 @@ manifest tells terva how to launch it:
 | `enabled` | optional, defaults to `true`. set to `false` to disable without removing. |
 | `permissions` | optional **bundle contribution**: suggested permission rules (see below). |
 | `config` | optional. a schema of settings the user fills in via `/extensions` (see below). |
+| `connector` | optional, experimental. declares the extension is ALSO a chat connector (see [connector role](#connector-role-experimental)); without it the host refuses the role at the wire. Global installs only. |
 
 ## Project-scoped agents
 
@@ -1113,6 +1122,32 @@ has installed and trusts — it lets an extension drive any host command,
 so it is not something a casual extension should reach for. From the Go
 SDK this is `e.SubmitSlash("/cd " + path)`.
 
+#### `register_connector` (protocol 5, experimental)
+
+Declares the [connector role](#connector-role-experimental) during the
+register phase. No payload — capabilities travel in the inner hello at
+session-open time. Refused (logged, ignored) unless the manifest
+declares `"connector": true`.
+
+```json
+{"type":"register_connector"}
+```
+
+#### `chat` / `chat_down` (protocol 5, experimental)
+
+The extension side of the connector tunnel. `chat` carries one frame of
+the CONNECTOR protocol verbatim (see the frame reference in
+[connectors.md](connectors.md) — this wire never mirrors that
+vocabulary); `chat_down` ends the session from the extension side, with
+`error` set when the connector engine died (the process and its tools
+live on) or without for an orderly teardown. `id` on both is the
+session id from the host's `chat_open`.
+
+```json
+{"type":"chat","id":"s1","frame":{"type":"message","chat_id":"c1","user_id":"u1","text":"hi"}}
+{"type":"chat_down","id":"s1","error":"auth revoked"}
+```
+
 #### `shutdown_ack`
 
 Sent in response to `shutdown`. Extension should exit promptly after.
@@ -1237,6 +1272,24 @@ ending and stop sending `panel_render` updates for that `panel_id`.
 
 ```json
 {"type":"panel_close","panel_id":"todos-main"}
+```
+
+#### `chat_open` / `chat` / `chat_close` (protocol 5, experimental)
+
+The host side of the connector tunnel, sent only after this extension
+registered the [connector role](#connector-role-experimental) AND a
+chat consumer selected it by name. `chat_open` starts a session (the
+extension answers by starting its connector engine, whose first output
+is the inner connproto `hello` wrapped in a `chat` frame); `chat`
+carries one connector-protocol frame verbatim; `chat_close` ends the
+session host-side — tear the engine down and confirm with `chat_down`;
+the process keeps serving tools. Frames whose `id` isn't the live
+session's are stale stragglers: drop them.
+
+```json
+{"type":"chat_open","id":"s1"}
+{"type":"chat","id":"s1","frame":{"type":"connect"}}
+{"type":"chat_close","id":"s1"}
 ```
 
 #### `shutdown`
@@ -1405,6 +1458,9 @@ See:
   (stdlib only), the twin of the TS one
 - `examples/extensions/todo/` — interactive persistent panel + tool
 - `examples/extensions/scratchpad/` — source-run TypeScript commands + tool
+- `examples/extensions/chat-loopback/` — the connector role (experimental):
+  one process that is BOTH an extension and a chat connector, with a tool
+  reading the live chat session's state (see below)
 - `examples/extensions/world/` — the "extension as a world" pattern: a
   procedural place the agent explores through tools (senses + effectors), with
   persisted state, a live context card, a map panel, `ext.Sequential()`
@@ -1426,6 +1482,89 @@ These SDKs aren't in the main repo yet; the wire format is small
 enough that a `~30 line` raw script gets you started in either
 language. See the [Quick start](#quick-start) Python example for the
 shape. SDK packages will land in follow-up commits.
+
+## Connector role (experimental)
+
+An extension can ALSO be a **chat connector** — the thing that delivers
+inbound messages that start agent turns and carries replies back out
+(normally a standalone `terva bot` executable, see
+[connectors.md](connectors.md)). One process, both roles: your tools
+and your message stream share state, credentials, and a live service
+connection. The loopback demo's `loopback_stats` tool reads the very
+chat session that delivered the message it's asked about.
+
+**Why "experimental", and what graduates it:** the role is fully
+implemented and tested, and the envelope has already survived the
+entire connector-protocol-2 build-out without a single frame change.
+But the only connector that has shipped over the tunnel is the
+loopback demo — it proves the wire, not the packaging (the built-in
+Discord connector dogfoods the connector protocol over an in-process
+carrier, deliberately not this envelope). The label drops when the
+first real connector ships as an extension. Until then the envelope
+frames sit outside the wire's usual compatibility promise: a protocol
+bump may reshape them without a migration path, so don't build
+production extensions on them yet.
+
+Declare the role in the manifest (without this the host refuses it at
+the wire):
+
+```json
+{ "name": "chatterbox", "exec": "./chatterbox", "connector": true }
+```
+
+and in code, next to your tools — the transport is a plain
+`connsdk.Transport`, the SAME interface a standalone connector
+implements, built lazily once per chat session:
+
+```go
+e := ext.New("chatterbox", "0.1.0")
+e.Tool("history_search", ..., handler)          // extension half, unchanged
+e.Connector(connsdk.Capabilities{MaxTextLen: 4096},
+	func(s connsdk.Session) (connsdk.Transport, error) {
+		return newTransport(s.DataDir), nil // s.DataDir: inbound attachment dir
+	})
+e.Run()
+```
+
+There is no second protocol to learn: the extension wire carries the
+connector protocol **verbatim** through a small envelope (protocol 5:
+`register_connector` + `chat_open`/`chat`/`chat_close`/`chat_down`), so
+the [connectors.md](connectors.md) frame reference is the reference
+here too, and a transport moves between standalone and
+extension-bundled packaging by swapping a few lines of `main`. That
+verbatim carry is why the whole protocol-2 surface — asks with
+buttons, speakers, threads, group admission, edits/reactions,
+attachment kinds — reaches extension-bundled connectors with zero
+extension-wire changes: implement the optional `connsdk` interfaces
+and declare the matching feature strings, exactly as a standalone
+connector would.
+
+What activates it — consent is layered, and every layer is deliberate:
+
+1. the manifest's `"connector": true` (install-time visibility);
+2. **global installs only** — project-local extensions are never
+   offered as chat services, so a cloned repo cannot declare itself a
+   message source;
+3. explicit selection by name: `terva bot run --connector <name>`, or
+   `/connect <name>` in the TUI (connector extensions appear in the
+   `/connect` picker tagged "extension"). Merely being installed never
+   makes an extension a message source;
+4. inbound messages still pass the host-owned pairing/allowlist gate
+   before any turn runs.
+
+Operational notes: transports should reconnect through blips
+internally — a fatal transport error ends the chat session while the
+process and its tools live on, and the host redials it under the same
+crash budget standalone connectors get (a few reopens per minute, then
+permanently broken; a process crash is respawned the same way, with
+your tools re-registered by the fresh process). Echo-loop hygiene is
+your job — never deliver a message the bot itself sent, and never
+report the bot's own reaction toggles back inbound.
+
+Reference implementation: `examples/extensions/chat-loopback/` (a
+filesystem-backed chat: drop a file in `inbox/`, the agent's reply
+appends to `outbox.txt`). Design and trade-offs:
+`docs/proposals/connector-extensions.md`.
 
 ## Security
 
@@ -1462,6 +1601,20 @@ Phase 4 (shipped):
 - [x] modify tool args mid-flight via `modified_args`
 - [x] rewrite user-visible assistant text via `replace_text`
 - [x] `/reload-ext` slash command (hot-reload without restarting terva)
+
+Phase 5 (shipped; experimental until the tunnel has a real consumer —
+see [connector role](#connector-role-experimental)):
+- [x] connector role (protocol 5): one extension process that is ALSO a
+      chat connector — `"connector": true` in the manifest, a
+      `register_connector` role declaration plus a `chat_open`/`chat`/
+      `chat_close`/`chat_down` envelope that tunnels the CONNECTOR
+      protocol (connproto) through this wire verbatim, so the two
+      protocols evolve independently and the transport is plain
+      `connsdk.Transport`. Activated only by explicit selection —
+      `terva bot run --connector <name>` or `/connect <name>` in the
+      TUI. Demo: `examples/extensions/chat-loopback`; design:
+      `docs/proposals/connector-extensions.md`; connector side:
+      [connectors.md](connectors.md).
 
 Future (no firm timeline):
 - [ ] TypeScript and Python SDK packages (currently the wire format

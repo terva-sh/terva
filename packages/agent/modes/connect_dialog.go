@@ -6,16 +6,18 @@ import (
 
 // connectDialog is the picker shown when the user runs `/connect`
 // (alias `/telegram`) without an argument. Lists the available
-// actions (connect, disconnect, status) and routes the choice back
-// to the Interactive via connectAction. A thin typed wrapper over
-// the shared listPicker core.
+// actions — one "connect <name>" row per configured chat service
+// (compiled-in connectors and connector extensions alike), plus
+// disconnect/status — and routes the choice back to the Interactive
+// via connectAction. A thin typed wrapper over the shared listPicker
+// core.
 type connectDialog struct {
 	p listPicker
 }
 
 type connectItem struct {
 	label  string
-	action string // "connect" | "disconnect" | "status"
+	action string // "connect <name>" | "disconnect" | "status"
 	hint   string // muted text shown after the label (e.g. "not configured", "active")
 }
 
@@ -35,7 +37,7 @@ func (d *connectDialog) Open(items []connectItem) bool {
 	for i, it := range items {
 		rows[i] = pickerItem{label: it.label, hint: it.hint, value: it.action}
 	}
-	return d.p.open("telegram", "pick an action (↑/↓, enter, esc to cancel):", rows)
+	return d.p.open("chat bridge", "pick an action (↑/↓, enter, esc to cancel):", rows)
 }
 
 // Close hides the dialog.

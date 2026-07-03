@@ -345,6 +345,17 @@ func (d *Driver) StopByName(name string, gracePeriod time.Duration) bool {
 	return true
 }
 
+// ExtensionByName returns the loaded extension `name`, if any. Note a
+// crashed extension stays in the loaded set (its tools and commands are
+// dropped, the entry is not) until StopByName reaps it — check Ready()
+// or the indexes for liveness-sensitive callers.
+func (d *Driver) ExtensionByName(name string) (*Extension, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	ext, ok := d.ext[name]
+	return ext, ok
+}
+
 // Count returns how many extensions are currently loaded.
 func (d *Driver) Count() int {
 	d.mu.RLock()
@@ -578,6 +589,9 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 			dataDir = dd
 		}
 	}
+	ext.mu.Lock()
+	ext.dataDir = dataDir // kept for chat-attachment containment (chatconn.go)
+	ext.mu.Unlock()
 	if err := ext.writeFrame(extproto.HelloAckFromHost{
 		Type:            "hello_ack",
 		ProtocolVersion: extproto.ProtocolVersion,
@@ -793,6 +807,9 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 			}
 		}
 		d.mu.Unlock()
+		// End any live chat-tunnel session so a chat consumer's
+		// Receive learns the process died instead of waiting forever.
+		ext.closeChatOnExit()
 		ext.readyOnce.Do(func() { close(ext.readyCh) })
 		fmt.Fprintf(ext.logFile, "[terva] extension %s read loop exited at %s\n", ext.Manifest.Name, time.Now().Format(time.RFC3339))
 		// Crash surfacing: if the read loop ended without the host
@@ -1042,6 +1059,26 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 				if d.hooks != nil {
 					d.hooks.RefreshStatus()
 				}
+			}
+		case "register_connector":
+			// The connector role (protocol 5): gated on the manifest's
+			// Connector consent flag inside registerConnector.
+			d.registerConnector(ext)
+		case "chat":
+			// One opaque connector-protocol frame for the live tunnel
+			// session. The driver only routes it; chat/connhost parses.
+			var cf extproto.ChatFrame
+			if err := json.Unmarshal(line, &cf); err == nil {
+				ext.deliverChatFrame(cf.ID, cf.Frame)
+			}
+		case "chat_down":
+			// The extension's connector engine exited — with a reason
+			// (its receive stream died permanently) or without (orderly
+			// teardown after chat_close). The process and its tools live
+			// on; connproto's analog is process exit + restart budget.
+			var cd extproto.ChatDownFromExt
+			if err := json.Unmarshal(line, &cd); err == nil {
+				ext.deliverChatDown(cd.ID, cd.Error)
 			}
 		case "shutdown_ack":
 			// Caller of Stop is waiting on the process exit, not this frame.

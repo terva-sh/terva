@@ -73,6 +73,24 @@ const MaxToolCallBytes = 1 << 20 // 1 MiB
 //	    (Host().ProtocolVersion >= 4) and not believe it hid tools an older
 //	    host ignored. There is no RequireProtocol(4): older hosts keep
 //	    loading the extension.
+//	5 — connector role (experimental). register_connector declares that
+//	    ONE extension process is also a chat connector, and the chat_open /
+//	    chat / chat_close / chat_down envelope frames then TUNNEL the
+//	    connector protocol (packages/agent/connproto) through this wire
+//	    verbatim — the extension/connector unification
+//	    (docs/proposals/connector-extensions.md). This protocol never
+//	    mirrors connproto's vocabulary: the inner frames (hello, connect,
+//	    message, send, result, …) ride opaquely inside `chat` envelopes,
+//	    including connproto's own hello/hello_ack version negotiation, so
+//	    connproto can grow — and renegotiate its version — without this
+//	    protocol changing at all. Every envelope frame degrades gracefully
+//	    on an older host (unknown frames are logged and ignored; the tools
+//	    keep working — the connector role just never activates), so by the
+//	    rule below the bump exists ONLY for feature detection
+//	    (Host().ProtocolVersion >= 5): an extension must not sit waiting
+//	    for a chat_open an older host will never send. A connector-only
+//	    extension MAY RequireProtocol(5) to refuse loading where its whole
+//	    purpose is unavailable.
 //
 // Not every new message bumps this number. A fire-and-forget event an
 // extension *optionally* subscribes to — e.g. transcript_compacted, fired
@@ -82,7 +100,7 @@ const MaxToolCallBytes = 1 << 20 // 1 MiB
 // emits it. Such events need no version bump and no RequireProtocol. Only
 // request/response features (whose caller blocks for a host answer) gate
 // on the version.
-const ProtocolVersion = 4
+const ProtocolVersion = 5
 
 // Lifecycle event names the host emits to subscribed extensions. These
 // constants are the single source of truth: the emit sites use them, the
@@ -469,6 +487,83 @@ type StatusSegmentFromExt struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
 	Text string `json:"text,omitempty"`
+}
+
+// --- Connector role (protocol 5, additive, experimental) ---------------
+//
+// These frames let ONE extension process also be a chat connector — the
+// extension/connector unification (docs/proposals/connector-extensions.md).
+// The extension declares the role with register_connector during the
+// register phase; the host REFUSES the role unless the extension's
+// manifest also declares "connector": true, so an installed tool
+// extension can never quietly grow into a message source.
+//
+// The chat session itself is NOT expressed in this protocol. When a chat
+// consumer selects the extension (`terva bot run --connector <name>`, the
+// TUI's /connect), the host opens a tunnel (chat_open) and the two sides
+// run the CONNECTOR protocol (packages/agent/connproto) through it: each
+// `chat` envelope carries one connproto frame verbatim, starting with the
+// extension's hello and the host's hello_ack — so connproto's own
+// negotiated versioning applies inside the tunnel, and connproto can grow
+// new frames or bump its version without this protocol changing. Exactly
+// one implementation of the connector wire exists on each side
+// (host: packages/agent/chat/connhost; author: connsdk.Serve); this
+// envelope only moves its bytes.
+//
+// Envelope frames carry a host-minted session ID so a close/reopen can
+// never interleave: frames for a stale session are dropped by both sides.
+// Sessions are serial — one live session per extension.
+
+// RegisterConnectorFromExt declares this extension is also a chat
+// connector (register phase, alongside register_tool). Refused — logged
+// and ignored — when the manifest lacks "connector": true. Carries no
+// payload: capabilities, identity, and protocol range all travel in the
+// inner connproto hello at chat_open time.
+type RegisterConnectorFromExt struct {
+	Type string `json:"type"` // "register_connector"
+}
+
+// ChatOpenFromHost opens a chat tunnel session. The extension answers by
+// starting its connector engine, whose first output is the inner
+// connproto hello (wrapped in a `chat` envelope). Sent when a chat
+// consumer selects this extension, never as a side effect of loading.
+type ChatOpenFromHost struct {
+	Type string `json:"type"` // "chat_open"
+	ID   string `json:"id"`   // session id; echoed on every session frame
+}
+
+// ChatFrame carries one connproto frame verbatim, either direction.
+// Frame is opaque to this protocol: neither the extension driver nor the
+// SDK run loop parses it — the connproto endpoints on each side do.
+type ChatFrame struct {
+	Type  string          `json:"type"` // "chat"
+	ID    string          `json:"id"`   // session id from chat_open
+	Frame json.RawMessage `json:"frame"`
+}
+
+// ChatCloseFromHost ends the session from the host side (the chat
+// consumer left: daemon shutdown, /connect disconnect). The extension
+// tears down its connector engine — the transport disconnects from its
+// service — and confirms with chat_down; the PROCESS stays alive and its
+// tools keep working (unlike connproto's shutdown, which ends the
+// process). A later chat_open starts a fresh session.
+type ChatCloseFromHost struct {
+	Type string `json:"type"` // "chat_close"
+	ID   string `json:"id"`   // session id from chat_open
+}
+
+// ChatDownFromExt ends the session from the extension side: the
+// connector engine exited. With Error set, the engine died (auth revoked
+// mid-run, unrecoverable gateway loss) and the host ends the chat
+// consumer with that reason — the connproto analog is process exit +
+// restart budget, but a dual-role process must not die (or be blindly
+// restarted, which would desync the tool registry) just because its
+// connector half failed, so the failure gets a frame and the tools keep
+// working. Without Error it confirms an orderly teardown (chat_close).
+type ChatDownFromExt struct {
+	Type  string `json:"type"` // "chat_down"
+	ID    string `json:"id"`   // session id from chat_open
+	Error string `json:"error,omitempty"`
 }
 
 // HelloAckFromHost carries the host's identity. ZotVersion and

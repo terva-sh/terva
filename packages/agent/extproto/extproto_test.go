@@ -185,6 +185,39 @@ func TestGoldenFrames(t *testing.T) {
 			ShutdownAckFromExt{Type: "shutdown_ack"},
 			`{"type":"shutdown_ack"}`,
 		},
+		// --- connector role (protocol 5) — the envelope only. The chat
+		// session inside it is connproto, pinned by connproto's own
+		// golden frames; nothing here mirrors that vocabulary.
+		{
+			"register_connector",
+			RegisterConnectorFromExt{Type: "register_connector"},
+			`{"type":"register_connector"}`,
+		},
+		{
+			"chat_open",
+			ChatOpenFromHost{Type: "chat_open", ID: "s1"},
+			`{"type":"chat_open","id":"s1"}`,
+		},
+		{
+			"chat envelope",
+			ChatFrame{Type: "chat", ID: "s1", Frame: json.RawMessage(`{"type":"connect"}`)},
+			`{"type":"chat","id":"s1","frame":{"type":"connect"}}`,
+		},
+		{
+			"chat_close",
+			ChatCloseFromHost{Type: "chat_close", ID: "s1"},
+			`{"type":"chat_close","id":"s1"}`,
+		},
+		{
+			"chat_down clean",
+			ChatDownFromExt{Type: "chat_down", ID: "s1"},
+			`{"type":"chat_down","id":"s1"}`,
+		},
+		{
+			"chat_down error",
+			ChatDownFromExt{Type: "chat_down", ID: "s1", Error: "auth revoked"},
+			`{"type":"chat_down","id":"s1","error":"auth revoked"}`,
+		},
 	}
 
 	for _, tc := range cases {

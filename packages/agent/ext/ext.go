@@ -463,6 +463,14 @@ type Extension struct {
 	pendingMu sync.Mutex
 	pending   map[string]chan json.RawMessage
 	seq       atomic.Uint64
+
+	// Connector role (protocol 5, Connector()): the declared config
+	// rides mu like the other registrations; the live session's engine
+	// rides chatMu because it is mutated from the read loop AND the
+	// engine's own exit goroutine (connector.go).
+	connectorCfg *connectorConfig
+	chatMu       sync.Mutex
+	chatEngine   *chatEngine
 }
 
 type descTuple struct {
@@ -1570,6 +1578,7 @@ func (e *Extension) Run() error {
 	interceptAsst := e.interceptAssistant != nil
 	interceptUser := e.interceptUser != nil
 	contextContribution := e.contextContribution
+	connector := e.connectorCfg != nil
 	// Spin up the serial lane only if some tool opted into Sequential().
 	if len(e.orderedTools) > 0 && e.serial == nil {
 		e.serial = newSerialLane()
@@ -1579,6 +1588,10 @@ func (e *Extension) Run() error {
 	if serial != nil {
 		defer serial.close()
 	}
+	// End any live chat session when Run returns (host shutdown, stream
+	// close) so the transport's Receive goroutine doesn't outlive the
+	// wire it delivers into.
+	defer e.teardownChat()
 	for _, d := range descs {
 		_ = e.send(extproto.RegisterCommandFromExt{
 			Type:        "register_command",
@@ -1601,6 +1614,11 @@ func (e *Extension) Run() error {
 			Type: "register_context",
 			Text: contextContribution,
 		})
+	}
+	if connector {
+		// The role only; capabilities travel in the inner connproto
+		// hello when a chat consumer opens a session (connector.go).
+		_ = e.send(extproto.RegisterConnectorFromExt{Type: "register_connector"})
 	}
 	var intercepts []string
 	if interceptTool {
@@ -1929,6 +1947,27 @@ func (e *Extension) Run() error {
 			if err := json.Unmarshal(line, &f); err == nil && f.ID != "" {
 				e.deliverReply(f.ID, append(json.RawMessage(nil), line...))
 			}
+		case "chat_open":
+			// Connector role (protocol 5): start the connector engine
+			// for a new tunnel session — see connector.go.
+			var f extproto.ChatOpenFromHost
+			if err := json.Unmarshal(line, &f); err != nil {
+				continue
+			}
+			e.handleChatOpen(f.ID)
+		case "chat":
+			// One opaque connproto frame for the live session's engine.
+			var f extproto.ChatFrame
+			if err := json.Unmarshal(line, &f); err != nil {
+				continue
+			}
+			e.handleChatFrame(f.ID, f.Frame)
+		case "chat_close":
+			var f extproto.ChatCloseFromHost
+			if err := json.Unmarshal(line, &f); err != nil {
+				continue
+			}
+			e.handleChatClose(f.ID)
 		case "shutdown":
 			_ = e.send(extproto.ShutdownAckFromExt{Type: "shutdown_ack"})
 			return nil

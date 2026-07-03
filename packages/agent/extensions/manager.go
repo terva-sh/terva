@@ -74,6 +74,13 @@ type Manager struct {
 	// Discover / LoadExplicit. Guarded by mu.
 	disabledExtensions map[string]bool
 
+	// allowedExtensions is the per-run allowlist (--extensions): nil =
+	// no allowlist, otherwise only DISCOVERED extensions named here
+	// load; explicit --ext paths bypass it and disabledExtensions
+	// still subtracts. Set via SetAllowedExtensions BEFORE Discover.
+	// Guarded by mu.
+	allowedExtensions map[string]bool
+
 	// projectTrusted is the Workspace Trust verdict for m.cwd. When false
 	// (the SAFE DEFAULT — a fresh Manager is untrusted), searchDirs drops
 	// the project-local extension roots (the cwd/<project-dir>/extensions
@@ -235,7 +242,7 @@ func (m *Manager) Discover(ctx context.Context) []error {
 		wg.Add(1)
 		go func(extDir string) {
 			defer wg.Done()
-			if err := m.loadOne(ctx, extDir); err != nil {
+			if err := m.loadOne(ctx, extDir, false); err != nil {
 				errCh <- fmt.Errorf("%s: %w", extDir, err)
 			}
 		}(j.dir)
@@ -292,10 +299,13 @@ func isPlainExtensionName(name string) bool {
 }
 
 // loadOne reads a single extension's manifest, applies the host policy
-// (enabled, not load-disabled), and hands an enabled extension to the
-// driver to spawn + handshake. Trust gating already happened in
-// searchDirs (project roots are dropped for an untrusted cwd).
-func (m *Manager) loadOne(ctx context.Context, dir string) error {
+// (enabled, not load-disabled, allowlisted unless explicitly pathed),
+// and hands an enabled extension to the driver to spawn + handshake.
+// Trust gating already happened in searchDirs (project roots are
+// dropped for an untrusted cwd). explicit marks a --ext path load,
+// which bypasses the --extensions allowlist: pointing at a directory
+// is already explicit consent.
+func (m *Manager) loadOne(ctx context.Context, dir string, explicit bool) error {
 	manifestPath := filepath.Join(dir, "extension.json")
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -322,6 +332,13 @@ func (m *Manager) loadOne(ctx context.Context, dir string) error {
 		fmt.Fprintf(os.Stderr, "extension %q not loaded (disabled by config)\n", mf.Name)
 		return nil
 	}
+	if !explicit && !m.extensionAllowlisted(mf.Name) {
+		// Outside this run's --extensions allowlist: never spawned. One
+		// line per skip so a scoped bot's startup log doubles as an
+		// audit of what was kept out.
+		fmt.Fprintf(os.Stderr, "extension %q not loaded (not in the --extensions allowlist)\n", mf.Name)
+		return nil
+	}
 	return m.Driver.Load(ctx, dir, mf)
 }
 
@@ -341,8 +358,8 @@ func (m *Manager) ApplyOne(ctx context.Context, name string, want bool, grace ti
 			if _, err := os.Stat(filepath.Join(dir, "extension.json")); err != nil {
 				continue
 			}
-			_ = m.loadOne(ctx, dir) // idempotent (Driver.Load skips a dup) and policy-checked
-			break                   // first match wins, mirroring searchDirs precedence
+			_ = m.loadOne(ctx, dir, false) // idempotent (Driver.Load skips a dup) and policy-checked
+			break                          // first match wins, mirroring searchDirs precedence
 		}
 		// Let a freshly spawned extension register before the host rebuilds
 		// its tool registry below.
@@ -357,6 +374,34 @@ func (m *Manager) ApplyOne(ctx context.Context, name string, want bool, grace ti
 	if cb != nil {
 		cb()
 	}
+}
+
+// RestartExtension stops (or reaps, when it already crashed) extension
+// `name` and respawns it from its installed manifest — the crash-
+// recovery primitive behind chat/extconn's restart budget for connector
+// extensions, whose Receive respawns a dead dual-role process instead
+// of ending the bot loop. Safe for the agent's tool registry: extension
+// tools dispatch BY NAME through the driver's live index at call time
+// (exttool → InvokeTool), so a respawn of the same binary re-binds the
+// existing wrappers with no registry surgery; onReload still fires (via
+// ApplyOne) so an interactive host also picks up any registration
+// drift. Returns an error when the extension isn't installed in a
+// search dir anymore or never comes back ready.
+func (m *Manager) RestartExtension(ctx context.Context, name string) error {
+	// A crashed extension stays in the loaded set (only its tools and
+	// commands were dropped), and Load dup-skips a claimed name — so the
+	// stop is what makes the respawn possible. Deliberate teardown: no
+	// "exited unexpectedly" notice for a process we're about to revive.
+	m.Driver.StopByName(name, 2*time.Second)
+	m.ApplyOne(ctx, name, true, 3*time.Second)
+	ext, ok := m.Driver.ExtensionByName(name)
+	if !ok {
+		return fmt.Errorf("extension %q did not respawn (uninstalled, disabled, or failed to load — see its log)", name)
+	}
+	if !ext.Ready() {
+		return fmt.Errorf("extension %q respawned but never signalled ready (see its log)", name)
+	}
+	return nil
 }
 
 // LoadExplicit loads each path as an ad-hoc extension. Used for
@@ -384,7 +429,7 @@ func (m *Manager) LoadExplicit(ctx context.Context, paths []string) []error {
 		wg.Add(1)
 		go func(extDir string) {
 			defer wg.Done()
-			if err := m.loadOne(ctx, extDir); err != nil {
+			if err := m.loadOne(ctx, extDir, true); err != nil {
 				errCh <- fmt.Errorf("%s: %w", extDir, err)
 			}
 		}(abs)
