@@ -95,8 +95,12 @@ func (t *transport) Connect(ctx context.Context) (connsdk.Identity, error) {
 
 func (t *transport) Receive(ctx context.Context, deliver func(connsdk.Message)) error {
 	return t.conn.Receive(ctx, func(m chat.Message) {
+		// chat.Message carries stage-A identity semantics (the in-tree
+		// telegram connector fills ID/TS/ChatKind); pass them through —
+		// the SDK downgrades to the v1 shape for older hosts on its own.
 		out := connsdk.Message{
-			ChatID: m.ChatID, UserID: m.UserID, Username: m.Username,
+			ID: m.ID, TS: m.TS, ChatID: m.ChatID, ChatKind: m.ChatKind, ChatTitle: m.ChatTitle,
+			UserID: m.UserID, Username: m.Username,
 			ReplyTo: m.ReplyTo, Text: m.Text,
 		}
 		for _, img := range m.Images {

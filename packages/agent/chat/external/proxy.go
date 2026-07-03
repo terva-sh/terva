@@ -3,24 +3,18 @@ package external
 import (
 	"bufio"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
 	"terva.sh/terva/packages/agent/chat"
-	"terva.sh/terva/packages/agent/connproto"
+	"terva.sh/terva/packages/agent/chat/connhost"
 	"terva.sh/terva/packages/agent/procenv"
-	"terva.sh/terva/packages/provider"
 )
 
 // Tunables. Fields on the Proxy (not consts) so tests can shrink them.
@@ -34,17 +28,21 @@ const (
 )
 
 // inboundBuffer bounds how many normalized messages can queue between
-// the read loop and Receive. The read loop must never block on it —
-// it also delivers send results — so overflow drops with a warn.
+// the protocol session and Receive. The session's dispatcher must never
+// block on it — it also delivers send results — so overflow drops with
+// a warn.
 const inboundBuffer = 256
 
 // Proxy adapts one external connector executable to chat.Connector.
-// It spawns `<exec> <args...> run`, completes the hello handshake
-// (with negotiated protocol versioning), and translates between
-// connproto frames and the chat contract. Crashes are loud: the
-// child is restarted with backoff and every attempt is surfaced via
-// Warn; past RestartMax crashes in RestartWindow, Receive returns an
-// error — permanently broken, no silent deregistration.
+// It spawns `<exec> <args...> run` and owns everything process-shaped
+// about it: spawning, the crash/restart budget, logs, and reaping. The
+// connector protocol itself — handshake, version negotiation, frame
+// dispatch, attachment containment — is a connhost.Session over the
+// child's stdio (the same session core the extension tunnel uses, so
+// the wire has one host implementation). Crashes are loud: the child
+// is restarted with backoff and every attempt is surfaced via Warn;
+// past RestartMax crashes in RestartWindow, Receive returns an error —
+// permanently broken, no silent deregistration.
 //
 // Construction is cheap and spawns nothing (status surfaces build
 // connectors just to inspect pairing); the child starts at Connect
@@ -65,21 +63,17 @@ type Proxy struct {
 	restartWindow  time.Duration
 	restartDelay   time.Duration
 
-	mu             sync.Mutex
-	child          *child
-	caps           chat.Capabilities
-	identity       chat.Identity
-	pending        map[string]chan connproto.ResultFromConn
-	connectPending chan connectOutcome
-
-	inbound   chan chat.Message
-	childExit chan error
-	restarts  []time.Time
-}
-
-type connectOutcome struct {
+	mu       sync.Mutex
+	child    *child
+	session  *connhost.Session
+	caps     chat.Capabilities // last-known; survives a dead child for status surfaces
 	identity chat.Identity
-	err      error
+
+	inbound    chan chat.Message
+	childExit  chan error
+	restarts   []time.Time
+	membership func(chat.Membership)
+	events     chat.ChatEventHandlers
 }
 
 // child is one spawned connector process and its pipes.
@@ -89,8 +83,9 @@ type child struct {
 	stdinMu sync.Mutex // serializes frame writes, the extension pattern
 	logFile *os.File
 	// waited closes once cmd.Wait returned. Wait is called exactly
-	// once, by the goroutine the read loop starts when stdout closes
-	// (calling it earlier would close the pipe under the scanner).
+	// once, by the reaping goroutine that runs when the child's
+	// session ends (calling it earlier would close the pipe under the
+	// session's reader).
 	waited chan struct{}
 }
 
@@ -108,7 +103,6 @@ func NewProxy(m Manifest, manifestDir, tervaHome string, warn func(string)) *Pro
 		restartMax:     defaultRestartMax,
 		restartWindow:  defaultRestartWindow,
 		restartDelay:   defaultRestartDelay,
-		pending:        map[string]chan connproto.ResultFromConn{},
 		inbound:        make(chan chat.Message, inboundBuffer),
 		childExit:      make(chan error, 4),
 	}
@@ -219,10 +213,10 @@ func (p *Proxy) restart(ctx context.Context, exitErr error) error {
 	return nil
 }
 
-// spawnAndConnect launches the child, runs hello/hello_ack with
-// version negotiation, starts the read loop, and completes the
-// connect round-trip. On any failure the process is killed and the
-// error explains itself at /connect time.
+// spawnAndConnect launches the child, runs the protocol session's
+// handshake over its stdio, and completes the connect round-trip. On
+// any failure the process is killed and the error explains itself at
+// /connect time.
 func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 	logPath := p.logPath()
 	_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
@@ -265,340 +259,238 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 	}
 	c := &child{cmd: cmd, stdin: stdin, logFile: logFile, waited: make(chan struct{})}
 
-	abort := func(err error) error {
-		_ = cmd.Process.Kill()
-		go func() { _ = cmd.Wait(); close(c.waited); logFile.Close() }()
-		return err
-	}
-
-	// Hello handshake with a deadline, the extension pattern: a child
-	// that never prints hello must not hang /connect with no
-	// diagnostic. The blocking Scan races a timer; killing the child
-	// closes stdout, so the scan goroutine always finishes.
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	scanned := make(chan bool, 1)
-	go func() { scanned <- scanner.Scan() }()
-	var ok bool
-	select {
-	case ok = <-scanned:
-	case <-time.After(p.helloTimeout):
-		return abort(fmt.Errorf("connector %q sent no hello within %s (see %s)", p.manifest.Name, p.helloTimeout, logPath))
-	case <-ctx.Done():
-		return abort(ctx.Err())
-	}
-	if !ok {
-		return abort(fmt.Errorf("connector %q exited before hello: %v (see %s)", p.manifest.Name, scanner.Err(), logPath))
-	}
-	var hello connproto.HelloFromConn
-	if err := json.Unmarshal(scanner.Bytes(), &hello); err != nil {
-		return abort(fmt.Errorf("connector %q: malformed hello: %v", p.manifest.Name, err))
-	}
-	if hello.Type != "hello" {
-		return abort(fmt.Errorf("connector %q: first frame must be hello, got %q", p.manifest.Name, hello.Type))
-	}
-	if hello.Name != "" && hello.Name != p.manifest.Name {
-		// Trust the manifest (it names the state dirs); just leave a trace.
-		fmt.Fprintf(logFile, "[terva] hello name %q != manifest name %q; using the manifest's\n", hello.Name, p.manifest.Name)
-	}
-	// Negotiated versioning, not announce-only: refuse a mismatch
-	// with a clear error instead of failing on a weird frame later.
-	if hello.ProtocolMin > connproto.ProtocolVersion || hello.ProtocolMax < connproto.ProtocolVersion {
-		return abort(fmt.Errorf("connector %q speaks protocol %d..%d; this terva speaks %d — upgrade %s",
-			p.manifest.Name, hello.ProtocolMin, hello.ProtocolMax, connproto.ProtocolVersion,
-			map[bool]string{true: "terva", false: "the connector"}[hello.ProtocolMin > connproto.ProtocolVersion]))
+
+	session := connhost.New(connhost.Config{
+		Name:              p.manifest.Name,
+		DataDir:           p.dataDir(),
+		HostVersion:       getTervaVersion(),
+		Conn:              &childConn{c: c, scanner: scanner},
+		Deliver:           p.deliverInbound,
+		DeliverMembership: p.deliverMembership,
+		Events: chat.ChatEventHandlers{
+			Edited: func(ev chat.MessageEdited) {
+				if h := p.chatEvents().Edited; h != nil {
+					h(ev)
+				}
+			},
+			Deleted: func(ev chat.MessageDeleted) {
+				if h := p.chatEvents().Deleted; h != nil {
+					h(ev)
+				}
+			},
+			Reaction: func(ev chat.Reaction) {
+				if h := p.chatEvents().Reaction; h != nil {
+					h(ev)
+				}
+			},
+		},
+		Warn:        func(msg string) { p.warnf("%s", msg) },
+		Log:         func(msg string) { fmt.Fprintf(logFile, "[terva] %s\n", msg) },
+		SendTimeout: p.sendTimeout,
+	})
+
+	// The handshake has its own deadline (a child that never prints
+	// hello must not hang /connect with no diagnostic); killing the
+	// child on failure closes stdout, which unblocks the session's
+	// reader. Before the session starts, this abort owns the reap.
+	if err := session.Start(p.helloTimeout); err != nil {
+		_ = cmd.Process.Kill()
+		go func() { _ = cmd.Wait(); close(c.waited); logFile.Close() }()
+		return fmt.Errorf("%w (see %s)", err, logPath)
 	}
 
-	hostVersion := getTervaVersion()
-	if err := c.writeFrame(connproto.HelloAckFromHost{
-		Type:         "hello_ack",
-		Protocol:     connproto.ProtocolVersion,
-		ZotVersion:   hostVersion, // rename:keep — frozen wire field
-		TervaVersion: hostVersion,
-		DataDir:      p.dataDir(),
-	}); err != nil {
-		return abort(fmt.Errorf("send hello_ack: %w", err))
-	}
-
-	connectCh := make(chan connectOutcome, 1)
 	p.mu.Lock()
 	p.child = c
-	p.caps = chat.Capabilities{
-		MaxTextLen:    hello.Capabilities.MaxTextLen,
-		TypingRefresh: time.Duration(hello.Capabilities.TypingRefreshMS) * time.Millisecond,
-		SendsImages:   hello.Capabilities.SendsImages,
-		SendsFiles:    hello.Capabilities.SendsFiles,
-	}
-	p.connectPending = connectCh
+	p.session = session
+	p.caps = session.Capabilities()
 	p.mu.Unlock()
 
-	go p.readLoop(c, scanner)
+	// From here the session-end watcher owns the reap. Only an organic
+	// exit of the CURRENT child counts as a crash: shutdownChild
+	// detaches the child before stdin closes, so deliberate shutdowns
+	// and failed-connect cleanups don't burn restart budget.
+	go func() {
+		<-session.Done()
+		fmt.Fprintf(logFile, "[terva] connector session ended at %s (err=%v)\n", time.Now().Format(time.RFC3339), session.Err())
+		go func() { _ = cmd.Wait(); close(c.waited); logFile.Close() }()
 
-	if err := c.writeFrame(connproto.ConnectFromHost{Type: "connect"}); err != nil {
-		p.shutdownChild()
-		return fmt.Errorf("send connect: %w", err)
-	}
-	select {
-	case out := <-connectCh:
-		if out.err != nil {
-			p.shutdownChild()
-			return fmt.Errorf("connector %q: connect: %w", p.manifest.Name, out.err)
-		}
 		p.mu.Lock()
-		p.identity = out.identity
-		p.connectPending = nil
+		wasCurrent := p.child == c
+		if wasCurrent {
+			p.child = nil
+			p.session = nil
+		}
 		p.mu.Unlock()
-		return nil
-	case <-time.After(p.connectTimeout):
-		p.shutdownChild()
-		return fmt.Errorf("connector %q: no connected/connect_error within %s (see %s)", p.manifest.Name, p.connectTimeout, logPath)
-	case <-ctx.Done():
-		p.shutdownChild()
-		return ctx.Err()
-	}
-}
-
-// readLoop processes every frame after hello until stdout closes,
-// then reaps the process and reports the exit on childExit.
-func (p *Proxy) readLoop(c *child, scanner *bufio.Scanner) {
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		var frame connproto.Frame
-		if err := json.Unmarshal(line, &frame); err != nil {
-			fmt.Fprintf(c.logFile, "[terva] malformed frame from connector: %v\n", err)
-			continue
+		if !wasCurrent {
+			return
 		}
-		switch frame.Type {
-		case "connected":
-			var conn connproto.ConnectedFromConn
-			if err := json.Unmarshal(line, &conn); err == nil {
-				p.deliverConnect(connectOutcome{identity: chat.Identity{ID: conn.ID, Username: conn.Username}})
-			}
-		case "connect_error":
-			var ce connproto.ConnectErrorFromConn
-			if err := json.Unmarshal(line, &ce); err == nil {
-				p.deliverConnect(connectOutcome{err: errors.New(ce.Error)})
-			}
-		case "message":
-			var msg connproto.MessageFromConn
-			if err := json.Unmarshal(line, &msg); err != nil {
-				fmt.Fprintf(c.logFile, "[terva] bad message frame: %v\n", err)
-				continue
-			}
-			m := chat.Message{
-				ChatID:   msg.ChatID,
-				UserID:   msg.UserID,
-				Username: msg.Username,
-				ReplyTo:  msg.ReplyTo,
-				Text:     msg.Text,
-				Images:   p.ingestAttachments(msg.Attachments),
-			}
-			select {
-			case p.inbound <- m:
-			default:
-				p.warnf("connector %q: inbound queue full; dropping a message", p.manifest.Name)
-			}
-		case "result":
-			var res connproto.ResultFromConn
-			if err := json.Unmarshal(line, &res); err == nil {
-				p.mu.Lock()
-				ch, ok := p.pending[res.ID]
-				if ok {
-					delete(p.pending, res.ID)
-				}
-				p.mu.Unlock()
-				if ok {
-					ch <- res // buffered(1); never blocks
-				}
-			}
-		case "warn":
-			var w connproto.WarnFromConn
-			if err := json.Unmarshal(line, &w); err == nil {
-				p.warnf("connector %q: %s", p.manifest.Name, w.Message)
-			}
-		case "hello":
-			// Duplicate hello after handshake; harmless, note it.
-			fmt.Fprintf(c.logFile, "[terva] unexpected extra hello frame\n")
+		exitErr := session.Err()
+		if exitErr == nil {
+			exitErr = fmt.Errorf("stdout closed")
+		}
+		select {
+		case p.childExit <- exitErr:
 		default:
-			fmt.Fprintf(c.logFile, "[terva] unknown frame type %q\n", frame.Type)
 		}
-	}
+	}()
 
-	scanErr := scanner.Err()
-	fmt.Fprintf(c.logFile, "[terva] connector read loop ended at %s (err=%v)\n", time.Now().Format(time.RFC3339), scanErr)
-
-	// Reap. Wait must come after all pipe reads (it closes them).
-	go func() { _ = c.cmd.Wait(); close(c.waited); c.logFile.Close() }()
-
-	// Only an organic exit of the CURRENT child counts as a crash.
-	// shutdownChild detaches the child before stdin closes, so
-	// deliberate shutdowns and failed-connect cleanups don't burn
-	// restart budget.
-	p.mu.Lock()
-	wasCurrent := p.child == c
-	if wasCurrent {
-		p.child = nil
-	}
-	p.mu.Unlock()
-
-	// Unblock a connect waiter; its child just died.
-	p.deliverConnect(connectOutcome{err: errors.New("connector process exited during connect")})
-
-	if !wasCurrent {
-		return
-	}
-	exitErr := scanErr
-	if exitErr == nil {
-		exitErr = errors.New("stdout closed")
-	}
-	select {
-	case p.childExit <- exitErr:
-	default:
-	}
-}
-
-// deliverConnect resolves the in-flight connect round-trip, if any.
-func (p *Proxy) deliverConnect(out connectOutcome) {
-	p.mu.Lock()
-	ch := p.connectPending
-	p.connectPending = nil
-	p.mu.Unlock()
-	if ch != nil {
-		ch <- out // buffered(1)
-	}
-}
-
-// ingestAttachments turns by-path attachments into in-memory image
-// blocks: read, then delete. Paths must resolve inside the child's
-// data dir — a connector must not be able to point the host at
-// arbitrary files (and certainly not get them deleted).
-func (p *Proxy) ingestAttachments(atts []connproto.Attachment) []provider.ImageBlock {
-	if len(atts) == 0 {
-		return nil
-	}
-	dataReal, err := filepath.EvalSymlinks(p.dataDir())
+	id, err := session.Connect(ctx, p.connectTimeout)
 	if err != nil {
-		p.warnf("connector %q: resolve data dir: %v", p.manifest.Name, err)
-		return nil
+		p.shutdownChild()
+		return fmt.Errorf("%w (see %s)", err, logPath)
 	}
-	var images []provider.ImageBlock
-	for _, a := range atts {
-		real, err := filepath.EvalSymlinks(a.Path)
-		if err != nil {
-			p.warnf("connector %q: attachment %s: %v", p.manifest.Name, a.Path, err)
-			continue
-		}
-		rel, err := filepath.Rel(dataReal, real)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			p.warnf("connector %q: attachment outside data dir ignored: %s", p.manifest.Name, a.Path)
-			continue
-		}
-		data, err := os.ReadFile(real)
-		if err != nil {
-			p.warnf("connector %q: read attachment: %v", p.manifest.Name, err)
-			continue
-		}
-		_ = os.Remove(real)
-		images = append(images, provider.ImageBlock{MimeType: a.MimeType, Data: data})
+	p.mu.Lock()
+	p.identity = id
+	p.mu.Unlock()
+	return nil
+}
+
+// SetMembershipHandler installs the admission-event consumer
+// (chat.MembershipHandlerSetter). Call before Connect.
+func (p *Proxy) SetMembershipHandler(fn func(chat.Membership)) {
+	p.mu.Lock()
+	p.membership = fn
+	p.mu.Unlock()
+}
+
+func (p *Proxy) deliverMembership(mb chat.Membership) {
+	p.mu.Lock()
+	fn := p.membership
+	p.mu.Unlock()
+	if fn != nil {
+		fn(mb)
 	}
-	return images
+}
+
+// deliverInbound buffers one message for Receive without ever blocking
+// the session's dispatcher (which also delivers send results).
+func (p *Proxy) deliverInbound(m chat.Message) {
+	select {
+	case p.inbound <- m:
+	default:
+		p.warnf("connector %q: inbound queue full; dropping a message", p.manifest.Name)
+	}
+}
+
+// currentSession returns the live protocol session, or a clear error
+// when no child is running.
+func (p *Proxy) currentSession() (*connhost.Session, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.session == nil {
+		return nil, fmt.Errorf("connector %q: process not running", p.manifest.Name)
+	}
+	return p.session, nil
 }
 
 func (p *Proxy) Send(ctx context.Context, out chat.Outgoing) error {
-	id := newFrameID()
-	return p.roundTrip(ctx, id, connproto.SendFromHost{
-		Type: "send", ID: id, ChatID: out.ChatID, ReplyTo: out.ReplyTo, Text: out.Text,
-	})
-}
-
-func (p *Proxy) SendImage(ctx context.Context, chatID, path, caption string) error {
-	id := newFrameID()
-	return p.roundTrip(ctx, id, connproto.SendImageFromHost{
-		Type: "send_image", ID: id, ChatID: chatID, Path: path, Caption: caption,
-	})
-}
-
-func (p *Proxy) SendFile(ctx context.Context, chatID, path, caption string) error {
-	id := newFrameID()
-	return p.roundTrip(ctx, id, connproto.SendFileFromHost{
-		Type: "send_file", ID: id, ChatID: chatID, Path: path, Caption: caption,
-	})
-}
-
-func (p *Proxy) Typing(ctx context.Context, chatID string) error {
-	return p.writeFrame(connproto.TypingFromHost{Type: "typing", ChatID: chatID})
-}
-
-// roundTrip writes one command frame and waits for its result. The
-// loop sends replies under context.Background(), so the send timeout
-// is what protects against a wedged child.
-func (p *Proxy) roundTrip(ctx context.Context, id string, frame any) error {
-	ch := make(chan connproto.ResultFromConn, 1)
-	p.mu.Lock()
-	p.pending[id] = ch
-	p.mu.Unlock()
-	cleanup := func() {
-		p.mu.Lock()
-		delete(p.pending, id)
-		p.mu.Unlock()
-	}
-	if err := p.writeFrame(frame); err != nil {
-		cleanup()
-		return err
-	}
-	select {
-	case res := <-ch:
-		if res.Error != "" {
-			return errors.New(res.Error)
-		}
-		return nil
-	case <-time.After(p.sendTimeout):
-		cleanup()
-		return fmt.Errorf("connector %q: no result within %s", p.manifest.Name, p.sendTimeout)
-	case <-ctx.Done():
-		cleanup()
-		return ctx.Err()
-	}
-}
-
-// writeFrame sends one frame to the current child, if any.
-func (p *Proxy) writeFrame(v any) error {
-	p.mu.Lock()
-	c := p.child
-	p.mu.Unlock()
-	if c == nil {
-		return fmt.Errorf("connector %q: process not running", p.manifest.Name)
-	}
-	return c.writeFrame(v)
-}
-
-func (c *child) writeFrame(v any) error {
-	frame, err := connproto.Encode(v)
+	s, err := p.currentSession()
 	if err != nil {
 		return err
 	}
+	return s.Send(ctx, out)
+}
+
+func (p *Proxy) SendImage(ctx context.Context, chatID, path, caption string) error {
+	s, err := p.currentSession()
+	if err != nil {
+		return err
+	}
+	return s.SendImage(ctx, chatID, path, caption)
+}
+
+func (p *Proxy) SendFile(ctx context.Context, chatID, path, caption string) error {
+	s, err := p.currentSession()
+	if err != nil {
+		return err
+	}
+	return s.SendFile(ctx, chatID, path, caption)
+}
+
+func (p *Proxy) Typing(ctx context.Context, chatID string) error {
+	s, err := p.currentSession()
+	if err != nil {
+		return err
+	}
+	return s.Typing(chatID)
+}
+
+// Ask runs one interactive question through the wire (chat.Asker).
+// Callers gate on Capabilities().Asks, as everywhere. An ask does not
+// survive a child restart — the respawn fails the in-flight Ask via
+// the session's death and the caller's fail-closed posture takes it
+// from there.
+func (p *Proxy) Ask(ctx context.Context, a chat.Ask) (chat.Answer, error) {
+	s, err := p.currentSession()
+	if err != nil {
+		return chat.Answer{}, err
+	}
+	return s.Ask(ctx, a)
+}
+
+// StartThread opens a work-stream thread (chat.Threader). Callers
+// gate on Capabilities().ThreadsOut.
+func (p *Proxy) StartThread(ctx context.Context, chatID, fromMessageID, name string) (string, error) {
+	s, err := p.currentSession()
+	if err != nil {
+		return "", err
+	}
+	return s.StartThread(ctx, chatID, fromMessageID, name)
+}
+
+// childConn carries connproto frames over the child's stdio: one JSON
+// object per LF-terminated line. The session core neither knows nor
+// cares that a process is on the other end.
+type childConn struct {
+	c       *child
+	scanner *bufio.Scanner
+}
+
+func (cc *childConn) ReadFrame() ([]byte, error) {
+	if !cc.scanner.Scan() {
+		if err := cc.scanner.Err(); err != nil {
+			return nil, err
+		}
+		return nil, io.EOF
+	}
+	return append([]byte(nil), cc.scanner.Bytes()...), nil
+}
+
+func (cc *childConn) WriteFrame(b []byte) error {
+	return cc.c.writeRaw(append(b, '\n'))
+}
+
+// writeRaw sends pre-framed bytes to the child, serialized against
+// concurrent writers.
+func (c *child) writeRaw(frame []byte) error {
 	c.stdinMu.Lock()
 	defer c.stdinMu.Unlock()
 	if c.stdin == nil {
-		return errors.New("connector stdin closed")
+		return fmt.Errorf("connector stdin closed")
 	}
-	_, err = c.stdin.Write(frame)
+	_, err := c.stdin.Write(frame)
 	return err
 }
 
 // shutdownChild gracefully stops the current child: shutdown frame,
 // stdin close, then SIGTERM/SIGKILL on a deadline. Safe to call when
-// no child is running, and safe against a concurrent read-loop exit
-// (the reaping goroutine owns cmd.Wait; we only watch c.waited).
+// no child is running, and safe against a concurrent session end (the
+// reaping goroutine owns cmd.Wait; we only watch c.waited).
 func (p *Proxy) shutdownChild() {
 	p.mu.Lock()
 	c := p.child
+	s := p.session
 	p.child = nil
+	p.session = nil
 	p.mu.Unlock()
 	if c == nil {
 		return
 	}
-	_ = c.writeFrame(connproto.ShutdownFromHost{Type: "shutdown"})
+	if s != nil {
+		s.Shutdown()
+	}
 	c.stdinMu.Lock()
 	if c.stdin != nil {
 		_ = c.stdin.Close()
@@ -621,12 +513,43 @@ func (p *Proxy) shutdownChild() {
 	<-c.waited
 }
 
-// frameSeq + newFrameID mint process-unique correlation ids, the
-// extension manager's scheme: timestamp for log readability, counter
-// for uniqueness within a burst.
-var frameSeq atomic.Uint64
+// SetChatEventHandlers installs the stage-D inbound event consumers
+// (chat.ChatEventsSetter). Call before Connect.
+func (p *Proxy) SetChatEventHandlers(h chat.ChatEventHandlers) {
+	p.mu.Lock()
+	p.events = h
+	p.mu.Unlock()
+}
 
-func newFrameID() string {
-	ts := strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "")
-	return ts + "-" + strconv.FormatUint(frameSeq.Add(1), 10)
+func (p *Proxy) chatEvents() chat.ChatEventHandlers {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.events
+}
+
+// EditMessage / React / DeleteMessage delegate the stage-D outbound
+// commands (chat.Editor / chat.Reactor / chat.Deleter). Gate on the
+// matching Capabilities field, as everywhere.
+func (p *Proxy) EditMessage(ctx context.Context, chatID, messageID, text string) error {
+	sess, err := p.currentSession()
+	if err != nil {
+		return err
+	}
+	return sess.EditMessage(ctx, chatID, messageID, text)
+}
+
+func (p *Proxy) React(ctx context.Context, chatID, messageID, key string, remove bool) error {
+	sess, err := p.currentSession()
+	if err != nil {
+		return err
+	}
+	return sess.React(ctx, chatID, messageID, key, remove)
+}
+
+func (p *Proxy) DeleteMessage(ctx context.Context, chatID, messageID string) error {
+	sess, err := p.currentSession()
+	if err != nil {
+		return err
+	}
+	return sess.DeleteMessage(ctx, chatID, messageID)
 }

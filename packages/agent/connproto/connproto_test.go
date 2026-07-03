@@ -50,9 +50,96 @@ func TestGoldenFrames(t *testing.T) {
 			`{"type":"message","chat_id":"c1","user_id":"u1"}`,
 		},
 		{
+			// Protocol 2 (stage A): identity fields are additive —
+			// id/ts own the message's identity, reply_to is truly
+			// in-reply-to, chat_kind/chat_title describe the chat.
+			"message v2 identity",
+			MessageFromConn{Type: "message", ID: "m10", TS: 1751469000123, ChatID: "c1",
+				ChatKind: "group", ChatTitle: "ops", UserID: "u1", Username: "drew",
+				ReplyTo: "m9", Text: "hi"},
+			`{"type":"message","id":"m10","ts":1751469000123,"chat_id":"c1","chat_kind":"group","chat_title":"ops","user_id":"u1","username":"drew","reply_to":"m9","text":"hi"}`,
+		},
+		{
+			// Stage B: minimum-viable markup; bot_mention drives group
+			// mention-gating.
+			"message with entities",
+			MessageFromConn{Type: "message", ID: "m1", ChatID: "c1", ChatKind: "group",
+				UserID: "u1", Text: "hey @tervabot look",
+				Entities: []Entity{
+					{Kind: "bot_mention", Offset: 4, Length: 9},
+					{Kind: "mention", Offset: 20, Length: 5, UserID: "u9"},
+				}},
+			`{"type":"message","id":"m1","chat_id":"c1","chat_kind":"group","user_id":"u1","text":"hey @tervabot look","entities":[{"kind":"bot_mention","offset":4,"length":9},{"kind":"mention","offset":20,"length":5,"user_id":"u9"}]}`,
+		},
+		{
+			"chat_membership added",
+			ChatMembershipFromConn{Type: "chat_membership",
+				Chat:   MembershipChat{ID: "c9", Kind: "group", Title: "ops"},
+				Change: "added", ByUserID: "u1", ByUsername: "drew"},
+			`{"type":"chat_membership","chat":{"id":"c9","kind":"group","title":"ops"},"change":"added","by_user_id":"u1","by_username":"drew"}`,
+		},
+		{
+			"chat_membership removed minimal",
+			ChatMembershipFromConn{Type: "chat_membership",
+				Chat: MembershipChat{ID: "c9"}, Change: "removed"},
+			`{"type":"chat_membership","chat":{"id":"c9"},"change":"removed"}`,
+		},
+		{
+			// Stage D inbound: edits reference the ORIGINAL id.
+			"message_edited",
+			MessageEditedFromConn{Type: "message_edited", ChatID: "c1", ID: "m10",
+				TS: 1751469000123, Text: "fixed typo",
+				Entities: []Entity{{Kind: "bot_mention", Offset: 0, Length: 4}}},
+			`{"type":"message_edited","chat_id":"c1","id":"m10","ts":1751469000123,"text":"fixed typo","entities":[{"kind":"bot_mention","offset":0,"length":4}]}`,
+		},
+		{
+			"message_deleted",
+			MessageDeletedFromConn{Type: "message_deleted", ChatID: "c1", ID: "m10"},
+			`{"type":"message_deleted","chat_id":"c1","id":"m10"}`,
+		},
+		{
+			"reaction added",
+			ReactionFromConn{Type: "reaction", ChatID: "c1", MessageID: "m-90",
+				UserID: "u1", Username: "drew", Key: "👍"},
+			`{"type":"reaction","chat_id":"c1","message_id":"m-90","user_id":"u1","username":"drew","key":"👍"}`,
+		},
+		{
+			"reaction removed",
+			ReactionFromConn{Type: "reaction", ChatID: "c1", MessageID: "m-90",
+				UserID: "u1", Key: "👍", Removed: true},
+			`{"type":"reaction","chat_id":"c1","message_id":"m-90","user_id":"u1","key":"👍","removed":true}`,
+		},
+		{
+			// Stage E: attachments grow kinds; the v1 pair stays first.
+			"message with attachment kinds",
+			MessageFromConn{Type: "message", ID: "m1", ChatID: "c1", UserID: "u1",
+				Attachments: []Attachment{{MimeType: "audio/ogg", Path: "/d/v.ogg",
+					Kind: "voice", Name: "voice.ogg", Size: 38112, DurationMS: 4200,
+					Caption: "listen to this"}}},
+			`{"type":"message","id":"m1","chat_id":"c1","user_id":"u1","attachments":[{"mime_type":"audio/ogg","path":"/d/v.ogg","kind":"voice","name":"voice.ogg","size":38112,"duration_ms":4200,"caption":"listen to this"}]}`,
+		},
+		{
+			// Stage D capability: how fast the host may stream edits.
+			"hello with min_edit_interval",
+			HelloFromConn{Type: "hello", Name: "discord", ProtocolMin: 1, ProtocolMax: 2,
+				Capabilities: Capabilities{Features: []string{"edits_out"}, MinEditIntervalMS: 1000}},
+			`{"type":"hello","name":"discord","protocol_min":1,"protocol_max":2,"capabilities":{"features":["edits_out"],"min_edit_interval_ms":1000}}`,
+		},
+		{
 			"result ok",
 			ResultFromConn{Type: "result", ID: "42"},
 			`{"type":"result","id":"42"}`,
+		},
+		{
+			"result v2 message id",
+			ResultFromConn{Type: "result", ID: "42", MessageID: "m77"},
+			`{"type":"result","id":"42","message_id":"m77"}`,
+		},
+		{
+			// Stage I: thread_start's result carries the new chat.
+			"result thread chat id",
+			ResultFromConn{Type: "result", ID: "t1", ChatID: "c1.t-99"},
+			`{"type":"result","id":"t1","chat_id":"c1.t-99"}`,
 		},
 		{
 			"result error",
@@ -65,6 +152,19 @@ func TestGoldenFrames(t *testing.T) {
 			`{"type":"warn","message":"gateway reconnecting"}`,
 		},
 		{
+			// Stage G: answers are not command results — they arrive
+			// whenever users interact, keyed to the ask by ask_id.
+			"answer attested",
+			AnswerFromConn{Type: "answer", AskID: "a1", Key: "approve", UserID: "u1",
+				Username: "drew", Attestation: AttestationAttested},
+			`{"type":"answer","ask_id":"a1","key":"approve","user_id":"u1","username":"drew","attestation":"attested"}`,
+		},
+		{
+			"answer minimal",
+			AnswerFromConn{Type: "answer", AskID: "a1", Key: "deny", UserID: "u2"},
+			`{"type":"answer","ask_id":"a1","key":"deny","user_id":"u2"}`,
+		},
+		{
 			"hello_ack",
 			HelloAckFromHost{Type: "hello_ack", Protocol: 1, ZotVersion: "1.2.3", DataDir: "/home/u/.zot/connectors/discord/data"},
 			`{"type":"hello_ack","protocol":1,"zot_version":"1.2.3","data_dir":"/home/u/.zot/connectors/discord/data"}`,
@@ -75,6 +175,14 @@ func TestGoldenFrames(t *testing.T) {
 			"hello_ack both naming eras",
 			HelloAckFromHost{Type: "hello_ack", Protocol: 1, ZotVersion: "1.2.3", TervaVersion: "1.2.3"},
 			`{"type":"hello_ack","protocol":1,"zot_version":"1.2.3","terva_version":"1.2.3"}`,
+		},
+		{
+			// Protocol 2: the host advertises what it consumes; hello's
+			// capabilities gain the same features list on the way in.
+			"hello_ack v2 features",
+			HelloAckFromHost{Type: "hello_ack", Protocol: 2, TervaVersion: "1.2.3",
+				Capabilities: &Capabilities{Features: []string{"message_ids", "chat_kinds"}}},
+			`{"type":"hello_ack","protocol":2,"terva_version":"1.2.3","capabilities":{"features":["message_ids","chat_kinds"]}}`,
 		},
 		{
 			"connect",
@@ -92,6 +200,19 @@ func TestGoldenFrames(t *testing.T) {
 			`{"type":"send","id":"42","chat_id":"c1","text":""}`,
 		},
 		{
+			// Stage H: an alternate outbound identity for the cast.
+			"send with speaker",
+			SendFromHost{Type: "send", ID: "s1", ChatID: "c1", Text: "The airlock hisses open.",
+				Speaker: &Speaker{Key: "kaiku", Name: "Kaiku", AvatarPath: "/data/av/kaiku.png"}},
+			`{"type":"send","id":"s1","chat_id":"c1","text":"The airlock hisses open.","speaker":{"key":"kaiku","name":"Kaiku","avatar_path":"/data/av/kaiku.png"}}`,
+		},
+		{
+			"send with name-only speaker",
+			SendFromHost{Type: "send", ID: "s2", ChatID: "c1", Text: "hello",
+				Speaker: &Speaker{Key: "aava", Name: "Aava"}},
+			`{"type":"send","id":"s2","chat_id":"c1","text":"hello","speaker":{"key":"aava","name":"Aava"}}`,
+		},
+		{
 			"send_image",
 			SendImageFromHost{Type: "send_image", ID: "43", ChatID: "c1", Path: "/tmp/shot.png", Caption: "the bug"},
 			`{"type":"send_image","id":"43","chat_id":"c1","path":"/tmp/shot.png","caption":"the bug"}`,
@@ -105,6 +226,67 @@ func TestGoldenFrames(t *testing.T) {
 			"typing",
 			TypingFromHost{Type: "typing", ChatID: "c1"},
 			`{"type":"typing","chat_id":"c1"}`,
+		},
+		{
+			// Stage G: option keys ride the wire, never widgets — the
+			// connector picks buttons / keyboards / reactions / text.
+			"ask",
+			AskFromHost{Type: "ask", ID: "a1", ChatID: "c1", ReplyTo: "m12",
+				Text: "terva wants to run `rm -rf build/` — approve?",
+				Options: []AskOption{
+					{Key: "approve", Label: "Approve", Style: "affirm", Hint: "👍"},
+					{Key: "deny", Label: "Deny", Style: "deny", Hint: "👎"},
+				},
+				RestrictTo: []string{"u1"}, ExpiresMS: 120000},
+			`{"type":"ask","id":"a1","chat_id":"c1","reply_to":"m12","text":"terva wants to run ` + "`rm -rf build/`" + ` — approve?","options":[{"key":"approve","label":"Approve","style":"affirm","hint":"👍"},{"key":"deny","label":"Deny","style":"deny","hint":"👎"}],"restrict_to":["u1"],"expires_ms":120000}`,
+		},
+		{
+			"ask minimal",
+			AskFromHost{Type: "ask", ID: "a1", ChatID: "c1", Text: "pick one",
+				Options: []AskOption{{Key: "a", Label: "A"}, {Key: "b", Label: "B"}}},
+			`{"type":"ask","id":"a1","chat_id":"c1","text":"pick one","options":[{"key":"a","label":"A"},{"key":"b","label":"B"}]}`,
+		},
+		{
+			"ask_close",
+			AskCloseFromHost{Type: "ask_close", ID: "a2", AskID: "a1", Outcome: "Approve — @drew"},
+			`{"type":"ask_close","id":"a2","ask_id":"a1","outcome":"Approve — @drew"}`,
+		},
+		{
+			"ask_close bare withdrawal",
+			AskCloseFromHost{Type: "ask_close", ID: "a2", AskID: "a1"},
+			`{"type":"ask_close","id":"a2","ask_id":"a1"}`,
+		},
+		{
+			"thread_start",
+			ThreadStartFromHost{Type: "thread_start", ID: "t1", ChatID: "c1",
+				FromMessageID: "m-12", Name: "refactor: extract session core"},
+			`{"type":"thread_start","id":"t1","chat_id":"c1","from_message_id":"m-12","name":"refactor: extract session core"}`,
+		},
+		{
+			"thread_start anchorless",
+			ThreadStartFromHost{Type: "thread_start", ID: "t2", ChatID: "c1", Name: "sidebar"},
+			`{"type":"thread_start","id":"t2","chat_id":"c1","name":"sidebar"}`,
+		},
+		{
+			// Stage D outbound: the streaming-reply primitive.
+			"edit",
+			EditFromHost{Type: "edit", ID: "e1", ChatID: "c1", MessageID: "m-90", Text: "updated"},
+			`{"type":"edit","id":"e1","chat_id":"c1","message_id":"m-90","text":"updated"}`,
+		},
+		{
+			"react",
+			ReactFromHost{Type: "react", ID: "r1", ChatID: "c1", MessageID: "m-12", Key: "👀"},
+			`{"type":"react","id":"r1","chat_id":"c1","message_id":"m-12","key":"👀"}`,
+		},
+		{
+			"react remove",
+			ReactFromHost{Type: "react", ID: "r2", ChatID: "c1", MessageID: "m-12", Key: "👀", Remove: true},
+			`{"type":"react","id":"r2","chat_id":"c1","message_id":"m-12","key":"👀","remove":true}`,
+		},
+		{
+			"delete",
+			DeleteFromHost{Type: "delete", ID: "d1", ChatID: "c1", MessageID: "m-90"},
+			`{"type":"delete","id":"d1","chat_id":"c1","message_id":"m-90"}`,
 		},
 		{
 			"shutdown",

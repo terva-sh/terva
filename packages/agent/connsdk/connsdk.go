@@ -43,31 +43,178 @@ type Capabilities struct {
 	TypingRefresh time.Duration
 	SendsImages   bool
 	SendsFiles    bool
+	// Features declares protocol-2 feature strings this connector
+	// produces ("message_ids", "chat_kinds", …). Declare only what the
+	// transport actually implements; inbound identity fields are
+	// presence-evident, so an empty list is fine for stage A.
+	Features []string
+	// MinEditInterval (with "edits_out") tells the host how fast it
+	// may stream edits to one message; 0 = no declared limit.
+	MinEditInterval time.Duration
 }
 
 // Attachment is one inbound file. Write the bytes under the DataDir
-// terva assigns (see Session.DataDir) and pass the path; terva reads and
-// deletes the file.
+// terva assigns (see Session.DataDir) and pass the path; terva takes
+// ownership (images are read and deleted; other kinds are moved).
+//
+// Stage E fields (declare "attachment_kinds"): Kind is image | audio |
+// voice | video | document | sticker ("" reads as image); Name the
+// original filename; Size in bytes; Duration for audio/voice/video;
+// Caption joins the message text host-side when it isn't already
+// there.
 type Attachment struct {
 	MimeType string
 	Path     string
+	Kind     string
+	Name     string
+	Size     int64
+	Duration time.Duration
+	Caption  string
 }
 
 // Message is one normalized inbound chat message.
+//
+// Protocol-2 identity (stage A, docs/proposals/connector-protocol-v2.md):
+// ID is the message's own service id (stable within its chat — mint one
+// if the service has none), TS is when it happened (unix milliseconds),
+// and ReplyTo is the id of the message this one replies TO. ChatKind
+// ("dm", "group", "thread", "channel"; "" reads as dm) and ChatTitle
+// describe the chat. A transport that fills ID gets true reply
+// threading; one that leaves it empty behaves like a v1 connector.
 type Message struct {
+	ID          string
+	TS          int64
 	ChatID      string
+	ChatKind    string
+	ChatTitle   string
 	UserID      string
 	Username    string
 	ReplyTo     string
 	Text        string
+	Entities    []Entity
 	Attachments []Attachment
 }
 
+// Entity is one span of markup on Text (stage B; declare "entities" in
+// Capabilities.Features when the transport emits them). Offsets in
+// Unicode code points. Kind "bot_mention" is the load-bearing one —
+// it drives the host's group mention-gating; "mention" (with UserID),
+// "code", and "link" are the cheap rest. Offset and Length both zero
+// means "present but not locatable in the text".
+type Entity struct {
+	Kind   string
+	Offset int
+	Length int
+	UserID string
+}
+
+// Membership is the bot's OWN admission changing in a chat (stage B;
+// declare "chat_membership" when the transport emits it): Change is
+// "added" or "removed", By* says who did it where the service reports
+// that.
+type Membership struct {
+	ChatID     string
+	ChatKind   string
+	ChatTitle  string
+	Change     string
+	ByUserID   string
+	ByUsername string
+}
+
+// MembershipSource is the optional Transport upgrade for admission
+// events: ReceiveMembership mirrors Receive (block, deliver until ctx
+// ends) on its own goroutine. Its death is logged but non-fatal — a
+// connector losing membership enrichment must not take the message
+// stream down with it.
+type MembershipSource interface {
+	ReceiveMembership(ctx context.Context, deliver func(Membership)) error
+}
+
+// MessageEdited reports a user editing an earlier message (stage D;
+// declare "edits_in"). ID references the ORIGINAL message — collapse
+// edit chains latest-wins before delivering.
+type MessageEdited struct {
+	ChatID   string
+	ID       string
+	TS       int64
+	Text     string
+	Entities []Entity
+}
+
+// MessageDeleted reports a user deleting a message (stage D; declare
+// "deletes_in").
+type MessageDeleted struct {
+	ChatID string
+	ID     string
+}
+
+// Reaction is one reaction toggling on a message (stage D; declare
+// "reactions_in"). Key is opaque — unicode emoji is the interoperable
+// subset; key custom emoji on their platform ID, not their name.
+// Removal is first-class; reactions are LOSSY, so never build
+// security on them.
+type Reaction struct {
+	ChatID    string
+	MessageID string
+	UserID    string
+	Username  string
+	Key       string
+	Removed   bool
+}
+
+// ChatEventSink receives the stage-D inbound streams; any handler may
+// be nil (the SDK drops what the sink doesn't take).
+type ChatEventSink struct {
+	Edited   func(MessageEdited)
+	Deleted  func(MessageDeleted)
+	Reaction func(Reaction)
+}
+
+// ChatEventSource is the optional Transport upgrade for the stage-D
+// inbound streams: ReceiveChatEvents mirrors Receive (block, deliver
+// until ctx ends) on its own goroutine; its death is logged but
+// non-fatal, like MembershipSource.
+type ChatEventSource interface {
+	ReceiveChatEvents(ctx context.Context, sink ChatEventSink) error
+}
+
+// MessageEditor / MessageReactor / MessageDeleter are the optional
+// Transport upgrades for the stage-D outbound commands (declare
+// "edits_out" — with Capabilities.MinEditInterval — "reactions_out",
+// "deletes_out" respectively).
+type MessageEditor interface {
+	EditMessage(ctx context.Context, chatID, messageID, text string) error
+}
+
+type MessageReactor interface {
+	React(ctx context.Context, chatID, messageID, key string, remove bool) error
+}
+
+type MessageDeleter interface {
+	DeleteMessage(ctx context.Context, chatID, messageID string) error
+}
+
+// Speaker is an alternate outbound identity (stage H, features
+// "speaker:full" / "speaker:name_only"): the host's personas and
+// --play cast speaking as different characters in one chat. Key is
+// stable across the session and keys whatever per-speaker state the
+// transport maintains (a managed webhook, a per-message profile);
+// AvatarPath is a local image file, only sent to "speaker:full"
+// transports.
+type Speaker struct {
+	Key        string
+	Name       string
+	AvatarPath string
+}
+
 // Outgoing is one outbound text message, pre-chunked by terva.
+// Speaker is only ever set when this connector declared a speaker
+// feature — the host renders its own prefix fallback otherwise.
 type Outgoing struct {
 	ChatID  string
 	ReplyTo string
 	Text    string
+	Speaker *Speaker
 }
 
 // Transport is the service-specific half a connector author
@@ -99,6 +246,107 @@ type Session struct {
 	DataDir string
 	// TervaVersion is the host's version string (informational).
 	ZotVersion string // rename:keep — public SDK API
+	// Protocol is the negotiated wire version (1 against older hosts;
+	// see connproto). At ≥2, fill Message.ID and treat ReplyTo as
+	// in-reply-to; at 1 the host expects the v1 shape (own id in
+	// ReplyTo), and the SDK downgrades outbound frames accordingly.
+	Protocol int
+	// HostFeatures is what the host declared it consumes (protocol 2);
+	// optional constructs outside this set are wasted bytes at best.
+	HostFeatures []string
+}
+
+// MessageIDSender is the optional Transport upgrade for protocol 2:
+// Send variants that return the created message's id, which the SDK
+// reports in the command's result (the prerequisite for outbound
+// edits, reactions, and ask resolution). Implement it alongside Send —
+// the SDK prefers it when present.
+type MessageIDSender interface {
+	SendWithID(ctx context.Context, out Outgoing) (messageID string, err error)
+}
+
+// AskOption is one choice on an Ask. Key is the semantic identity the
+// answer carries back; Label is the human text. Style ("affirm",
+// "deny", "") and Hint (an emoji, for reaction-rendered options) are
+// rendering hints. The transport picks the widget — buttons, an inline
+// keyboard, pre-seeded reactions, numbered text — never the host.
+type AskOption struct {
+	Key   string
+	Label string
+	Style string
+	Hint  string
+}
+
+// Ask is one constrained question the host wants rendered in a chat.
+// ID identifies the ask for answer routing and CloseAsk (embed it in
+// button custom_ids and the like — it is opaque and unique). Expires
+// is advisory; the host owns the real timeout and always closes
+// explicitly.
+type Ask struct {
+	ID         string
+	ChatID     string
+	ReplyTo    string
+	Text       string
+	Options    []AskOption
+	RestrictTo []string
+	Expires    time.Duration
+}
+
+// Answer is one user's response to an Ask. Attestation says how sure
+// the PLATFORM is about who answered: AttestationAttested for
+// server-proven identity (button interactions, callback queries),
+// AttestationBestEffort for parsed text or reaction streams.
+type Answer struct {
+	AskID       string
+	Key         string
+	UserID      string
+	Username    string
+	Attestation string
+}
+
+// Attestation grades for Answer.
+const (
+	AttestationAttested   = "attested"
+	AttestationBestEffort = "best_effort"
+)
+
+// SpeakerSender is the optional Transport upgrade for alternate
+// outbound identities (declare "speaker:full" or "speaker:name_only"
+// in Capabilities.Features alongside implementing this). Called
+// instead of Send/SendWithID when the outgoing message carries a
+// Speaker; returns the created message's id. Platform constraints are
+// the transport's to absorb (Discord webhook messages can't be real
+// replies — drop or quote the ReplyTo), except one that is
+// structural: asks never carry a speaker.
+type SpeakerSender interface {
+	SendAsSpeaker(ctx context.Context, out Outgoing) (messageID string, err error)
+}
+
+// Threader is the optional Transport upgrade for work-stream threads
+// (declare "threads_out" in Capabilities.Features alongside
+// implementing this). StartThread opens a thread and returns its NEW
+// chat id — messages inside it arrive as ordinary Messages with that
+// chat id (kind "thread"); sends target it like any chat.
+// fromMessageID anchors the thread where the service supports it and
+// may be empty; a transport with no anchorless mode returns an error.
+type Threader interface {
+	StartThread(ctx context.Context, chatID, fromMessageID, name string) (threadChatID string, err error)
+}
+
+// Asker is the optional Transport upgrade for interactive asks
+// (protocol 2, feature "asks" — declare it in Capabilities.Features
+// alongside implementing this). Ask renders the question with the best
+// widget the service has and returns the rendered message's id; it
+// must NOT wait for a human. Answers are pushed to deliver — from any
+// goroutine, zero or more times — until CloseAsk for the same ask id,
+// after which the transport stops delivering and withdraws the
+// controls, rendering outcome into the question message. Where the
+// platform allows, the transport also filters RestrictTo service-side
+// (an ephemeral "not for you" beats silence); the SDK and the host
+// both re-filter regardless.
+type Asker interface {
+	Ask(ctx context.Context, a Ask, deliver func(Answer)) (messageID string, err error)
+	CloseAsk(ctx context.Context, askID, outcome string) error
 }
 
 // Config describes the connector to Main.
@@ -131,7 +379,7 @@ func Main(cfg Config) {
 	}
 	switch verb := os.Args[len(os.Args)-1]; verb {
 	case "run":
-		err := serve(cfg, os.Stdin, os.Stdout, os.Stderr)
+		err := Serve(cfg, os.Stdin, os.Stdout, os.Stderr)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, cfg.Name+":", err)
 			os.Exit(1)
@@ -179,9 +427,19 @@ func usage(name string) {
 	fmt.Fprintf(os.Stderr, "%s — terva chat connector\nusage: %s {run|setup|status|reset|configured}\n(`run` speaks the terva connector protocol on stdio; the rest are for `terva bot`)\n", name, name)
 }
 
-// serve runs the protocol loop: hello/hello_ack, then frames until
-// stdin closes or the host says shutdown. Split from Main for tests.
-func serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
+// Serve runs the protocol loop: hello/hello_ack, then frames until
+// `in` closes or the host says shutdown. Main runs it over stdio; the
+// extension SDK (packages/agent/ext) runs the SAME engine over an
+// in-process pipe pair when an extension also plays the connector role
+// (the connproto frames then ride the extension wire inside `chat`
+// envelope frames — docs/proposals/connector-extensions.md). Only the
+// carrier differs; there is exactly one implementation of the
+// connector protocol's author side.
+//
+// Config's lifecycle verbs (Setup/Status/Reset/Configured) are Main's
+// business; Serve only uses Name, Version, Capabilities, and
+// NewTransport.
+func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 	if cfg.NewTransport == nil {
 		return fmt.Errorf("connsdk: Config.NewTransport is required")
 	}
@@ -192,12 +450,14 @@ func serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		Name:        cfg.Name,
 		Version:     cfg.Version,
 		ProtocolMin: connproto.ProtocolVersion,
-		ProtocolMax: connproto.ProtocolVersion,
+		ProtocolMax: connproto.ProtocolMax,
 		Capabilities: connproto.Capabilities{
-			MaxTextLen:      cfg.Capabilities.MaxTextLen,
-			TypingRefreshMS: int(cfg.Capabilities.TypingRefresh / time.Millisecond),
-			SendsImages:     cfg.Capabilities.SendsImages,
-			SendsFiles:      cfg.Capabilities.SendsFiles,
+			MaxTextLen:        cfg.Capabilities.MaxTextLen,
+			TypingRefreshMS:   int(cfg.Capabilities.TypingRefresh / time.Millisecond),
+			SendsImages:       cfg.Capabilities.SendsImages,
+			SendsFiles:        cfg.Capabilities.SendsFiles,
+			Features:          cfg.Capabilities.Features,
+			MinEditIntervalMS: int(cfg.Capabilities.MinEditInterval / time.Millisecond),
 		},
 	}); err != nil {
 		return err
@@ -213,8 +473,8 @@ func serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 	if err := json.Unmarshal(scanner.Bytes(), &ack); err != nil || ack.Type != "hello_ack" {
 		return fmt.Errorf("expected hello_ack, got %q", scanner.Text())
 	}
-	if ack.Protocol != connproto.ProtocolVersion {
-		return fmt.Errorf("host negotiated protocol %d; this SDK speaks %d", ack.Protocol, connproto.ProtocolVersion)
+	if ack.Protocol < connproto.ProtocolVersion || ack.Protocol > connproto.ProtocolMax {
+		return fmt.Errorf("host negotiated protocol %d; this SDK speaks %d..%d", ack.Protocol, connproto.ProtocolVersion, connproto.ProtocolMax)
 	}
 	// Renamed hosts send terva_version (and keep terva_version for the
 	// deprecation window); either spelling fills the same field.
@@ -222,7 +482,10 @@ func serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 	if hostVersion == "" {
 		hostVersion = ack.ZotVersion // rename:keep — frozen wire field
 	}
-	session := Session{DataDir: ack.DataDir, ZotVersion: hostVersion} // rename:keep — public SDK API
+	session := Session{DataDir: ack.DataDir, ZotVersion: hostVersion, Protocol: ack.Protocol} // rename:keep — public SDK API
+	if ack.Capabilities != nil {
+		session.HostFeatures = ack.Capabilities.Features
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -236,21 +499,56 @@ func serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 	var identity Identity
 	connected := false
 
-	for scanner.Scan() {
-		line := append([]byte(nil), scanner.Bytes()...)
+	// The frame reader runs on its own goroutine so a fatal transport
+	// failure ends the session IMMEDIATELY — the serve loop must not sit
+	// blocked on a read while its transport is dead (the host may have
+	// nothing to say for hours; a prompt exit is what triggers its
+	// restart budget, or the extension tunnel's chat_down). done stops
+	// the reader's hand-off on early return so it never leaks mid-send.
+	lines := make(chan []byte)
+	scanErr := make(chan error, 1)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		defer close(lines)
+		for scanner.Scan() {
+			line := append([]byte(nil), scanner.Bytes()...)
+			select {
+			case lines <- line:
+			case <-done:
+				return
+			}
+		}
+		select {
+		case scanErr <- scanner.Err():
+		default:
+		}
+	}()
+
+	for {
+		var line []byte
+		select {
+		case err := <-receiveErr:
+			// Fatal transport failure: report it and end the session.
+			_ = w.write(connproto.WarnFromConn{Type: "warn", Message: "receive failed: " + err.Error()})
+			return err
+		case l, ok := <-lines:
+			if !ok {
+				// stdin closed: the host is gone; stop receiving and exit.
+				select {
+				case err := <-scanErr:
+					return err
+				default:
+					return nil
+				}
+			}
+			line = l
+		}
+
 		var frame connproto.Frame
 		if err := json.Unmarshal(line, &frame); err != nil {
 			fmt.Fprintf(errlog, "malformed frame from host: %v\n", err)
 			continue
-		}
-
-		// A fatal receive error ends the session regardless of what
-		// the host just asked for.
-		select {
-		case err := <-receiveErr:
-			_ = w.write(connproto.WarnFromConn{Type: "warn", Message: "receive failed: " + err.Error()})
-			return err
-		default:
 		}
 
 		switch frame.Type {
@@ -277,21 +575,92 @@ func serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 				err := t.Receive(ctx, func(m Message) {
 					atts := make([]connproto.Attachment, 0, len(m.Attachments))
 					for _, a := range m.Attachments {
-						atts = append(atts, connproto.Attachment{MimeType: a.MimeType, Path: a.Path})
+						atts = append(atts, connproto.Attachment{
+							MimeType: a.MimeType, Path: a.Path,
+							Kind: a.Kind, Name: a.Name, Size: a.Size,
+							DurationMS: int(a.Duration / time.Millisecond),
+							Caption:    a.Caption,
+						})
 					}
-					_ = w.write(connproto.MessageFromConn{
+					frame := connproto.MessageFromConn{
 						Type: "message", ChatID: m.ChatID, UserID: m.UserID, Username: m.Username,
 						ReplyTo: m.ReplyTo, Text: m.Text, Attachments: atts,
-					})
+					}
+					if session.Protocol >= 2 {
+						frame.ID = m.ID
+						frame.TS = m.TS
+						frame.ChatKind = m.ChatKind
+						frame.ChatTitle = m.ChatTitle
+						for _, e := range m.Entities {
+							frame.Entities = append(frame.Entities, connproto.Entity{
+								Kind: e.Kind, Offset: e.Offset, Length: e.Length, UserID: e.UserID,
+							})
+						}
+					} else if m.ID != "" {
+						// Protocol-1 downgrade: the old shape carries the
+						// message's OWN id in reply_to (the reply token
+						// v1 hosts echo back); the true in-reply-to has
+						// no v1 home and is dropped.
+						frame.ReplyTo = m.ID
+					}
+					_ = w.write(frame)
 				})
 				if err != nil && ctx.Err() == nil {
-					receiveErr <- err
-					// Wake the serve loop? It is blocked on stdin; the
-					// warn below at least reaches the host's log right
-					// away, and the next host frame surfaces the error.
-					_ = w.write(connproto.WarnFromConn{Type: "warn", Message: "receive failed: " + err.Error()})
+					receiveErr <- err // buffered(1); the serve loop selects on it
 				}
 			}()
+			if es, has := t.(ChatEventSource); has && session.Protocol >= 2 {
+				go func() {
+					err := es.ReceiveChatEvents(ctx, ChatEventSink{
+						Edited: func(ev MessageEdited) {
+							frame := connproto.MessageEditedFromConn{
+								Type: "message_edited", ChatID: ev.ChatID, ID: ev.ID, TS: ev.TS, Text: ev.Text,
+							}
+							for _, e := range ev.Entities {
+								frame.Entities = append(frame.Entities, connproto.Entity{
+									Kind: e.Kind, Offset: e.Offset, Length: e.Length, UserID: e.UserID,
+								})
+							}
+							_ = w.write(frame)
+						},
+						Deleted: func(ev MessageDeleted) {
+							_ = w.write(connproto.MessageDeletedFromConn{
+								Type: "message_deleted", ChatID: ev.ChatID, ID: ev.ID,
+							})
+						},
+						Reaction: func(ev Reaction) {
+							_ = w.write(connproto.ReactionFromConn{
+								Type: "reaction", ChatID: ev.ChatID, MessageID: ev.MessageID,
+								UserID: ev.UserID, Username: ev.Username, Key: ev.Key, Removed: ev.Removed,
+							})
+						},
+					})
+					if err != nil && ctx.Err() == nil {
+						_ = w.write(connproto.WarnFromConn{Type: "warn",
+							Message: "chat-event stream ended: " + err.Error()})
+					}
+				}()
+			}
+			if ms, has := t.(MembershipSource); has && session.Protocol >= 2 {
+				go func() {
+					err := ms.ReceiveMembership(ctx, func(mb Membership) {
+						_ = w.write(connproto.ChatMembershipFromConn{
+							Type: "chat_membership",
+							Chat: connproto.MembershipChat{
+								ID: mb.ChatID, Kind: mb.ChatKind, Title: mb.ChatTitle,
+							},
+							Change: mb.Change, ByUserID: mb.ByUserID, ByUsername: mb.ByUsername,
+						})
+					})
+					if err != nil && ctx.Err() == nil {
+						// Non-fatal: the message stream is the session's
+						// heartbeat; losing membership enrichment only
+						// costs the owner the early admission ping.
+						_ = w.write(connproto.WarnFromConn{Type: "warn",
+							Message: "membership stream ended: " + err.Error()})
+					}
+				}()
+			}
 
 		case "send":
 			var f connproto.SendFromHost
@@ -304,9 +673,39 @@ func serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 			// this loop mutates them.
 			t, ok := transport, connected
 			go func() {
-				w.result(f.ID, doSend(ctx, t, ok, func(t Transport) error {
-					return t.Send(ctx, Outgoing{ChatID: f.ChatID, ReplyTo: f.ReplyTo, Text: f.Text})
-				}))
+				out := Outgoing{ChatID: f.ChatID, ReplyTo: f.ReplyTo, Text: f.Text}
+				if f.Speaker != nil {
+					out.Speaker = &Speaker{Key: f.Speaker.Key, Name: f.Speaker.Name, AvatarPath: f.Speaker.AvatarPath}
+				}
+				var msgID string
+				err := doSend(ctx, t, ok, func(t Transport) error {
+					// A speaker send goes to the speaker surface; a
+					// transport that declared the feature but lost the
+					// interface (author bug) degrades to the same
+					// prefix fallback the host would have rendered.
+					if out.Speaker != nil {
+						if sp, has := t.(SpeakerSender); has {
+							var err error
+							msgID, err = sp.SendAsSpeaker(ctx, out)
+							return err
+						}
+						name := out.Speaker.Name
+						if name == "" {
+							name = out.Speaker.Key
+						}
+						out.Text = "**" + name + ":** " + out.Text
+						out.Speaker = nil
+					}
+					// Prefer the id-returning variant (protocol 2's
+					// result.message_id) when the transport has one.
+					if ids, has := t.(MessageIDSender); has {
+						var err error
+						msgID, err = ids.SendWithID(ctx, out)
+						return err
+					}
+					return t.Send(ctx, out)
+				})
+				w.result(f.ID, msgID, err)
 			}()
 		case "send_image":
 			var f connproto.SendImageFromHost
@@ -315,7 +714,7 @@ func serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 			}
 			t, ok := transport, connected
 			go func() {
-				w.result(f.ID, doSend(ctx, t, ok, func(t Transport) error {
+				w.result(f.ID, "", doSend(ctx, t, ok, func(t Transport) error {
 					return t.SendImage(ctx, f.ChatID, f.Path, f.Caption)
 				}))
 			}()
@@ -326,7 +725,7 @@ func serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 			}
 			t, ok := transport, connected
 			go func() {
-				w.result(f.ID, doSend(ctx, t, ok, func(t Transport) error {
+				w.result(f.ID, "", doSend(ctx, t, ok, func(t Transport) error {
 					return t.SendFile(ctx, f.ChatID, f.Path, f.Caption)
 				}))
 			}()
@@ -337,14 +736,145 @@ func serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 			}
 			t := transport
 			go func() { _ = t.Typing(ctx, f.ChatID) }()
+		case "ask":
+			var f connproto.AskFromHost
+			if err := json.Unmarshal(line, &f); err != nil {
+				continue
+			}
+			t, ok := transport, connected
+			go func() {
+				var msgID string
+				err := doSend(ctx, t, ok, func(t Transport) error {
+					asker, has := t.(Asker)
+					if !has {
+						return fmt.Errorf("connector does not support asks")
+					}
+					opts := make([]AskOption, 0, len(f.Options))
+					for _, o := range f.Options {
+						opts = append(opts, AskOption{Key: o.Key, Label: o.Label, Style: o.Style, Hint: o.Hint})
+					}
+					a := Ask{
+						ID: f.ID, ChatID: f.ChatID, ReplyTo: f.ReplyTo, Text: f.Text,
+						Options: opts, RestrictTo: f.RestrictTo,
+						Expires: time.Duration(f.ExpiresMS) * time.Millisecond,
+					}
+					var err error
+					msgID, err = asker.Ask(ctx, a, func(ans Answer) {
+						// Defense in depth before the frame leaves the
+						// process: pin the ask id (a transport cannot
+						// misroute) and re-check restrict_to (the host
+						// filters again regardless).
+						if len(f.RestrictTo) > 0 && !containsStr(f.RestrictTo, ans.UserID) {
+							return
+						}
+						_ = w.write(connproto.AnswerFromConn{
+							Type: "answer", AskID: f.ID, Key: ans.Key,
+							UserID: ans.UserID, Username: ans.Username,
+							Attestation: ans.Attestation,
+						})
+					})
+					return err
+				})
+				w.result(f.ID, msgID, err)
+			}()
+		case "edit":
+			var f connproto.EditFromHost
+			if err := json.Unmarshal(line, &f); err != nil {
+				continue
+			}
+			t, ok := transport, connected
+			go func() {
+				w.result(f.ID, "", doSend(ctx, t, ok, func(t Transport) error {
+					ed, has := t.(MessageEditor)
+					if !has {
+						return fmt.Errorf("connector does not support edits")
+					}
+					return ed.EditMessage(ctx, f.ChatID, f.MessageID, f.Text)
+				}))
+			}()
+		case "react":
+			var f connproto.ReactFromHost
+			if err := json.Unmarshal(line, &f); err != nil {
+				continue
+			}
+			t, ok := transport, connected
+			go func() {
+				w.result(f.ID, "", doSend(ctx, t, ok, func(t Transport) error {
+					re, has := t.(MessageReactor)
+					if !has {
+						return fmt.Errorf("connector does not support reactions")
+					}
+					return re.React(ctx, f.ChatID, f.MessageID, f.Key, f.Remove)
+				}))
+			}()
+		case "delete":
+			var f connproto.DeleteFromHost
+			if err := json.Unmarshal(line, &f); err != nil {
+				continue
+			}
+			t, ok := transport, connected
+			go func() {
+				w.result(f.ID, "", doSend(ctx, t, ok, func(t Transport) error {
+					del, has := t.(MessageDeleter)
+					if !has {
+						return fmt.Errorf("connector does not support deletes")
+					}
+					return del.DeleteMessage(ctx, f.ChatID, f.MessageID)
+				}))
+			}()
+		case "thread_start":
+			var f connproto.ThreadStartFromHost
+			if err := json.Unmarshal(line, &f); err != nil {
+				continue
+			}
+			t, ok := transport, connected
+			go func() {
+				var threadChatID string
+				err := doSend(ctx, t, ok, func(t Transport) error {
+					th, has := t.(Threader)
+					if !has {
+						return fmt.Errorf("connector does not support threads")
+					}
+					var err error
+					threadChatID, err = th.StartThread(ctx, f.ChatID, f.FromMessageID, f.Name)
+					return err
+				})
+				res := connproto.ResultFromConn{Type: "result", ID: f.ID, ChatID: threadChatID}
+				if err != nil {
+					res.Error = err.Error()
+				}
+				_ = w.write(res)
+			}()
+		case "ask_close":
+			var f connproto.AskCloseFromHost
+			if err := json.Unmarshal(line, &f); err != nil {
+				continue
+			}
+			t, ok := transport, connected
+			go func() {
+				w.result(f.ID, "", doSend(ctx, t, ok, func(t Transport) error {
+					asker, has := t.(Asker)
+					if !has {
+						return fmt.Errorf("connector does not support asks")
+					}
+					return asker.CloseAsk(ctx, f.AskID, f.Outcome)
+				}))
+			}()
 		case "shutdown":
 			return nil
 		default:
 			fmt.Fprintf(errlog, "unknown frame type %q from host\n", frame.Type)
 		}
 	}
-	// stdin closed: the host is gone; stop receiving and exit.
-	return scanner.Err()
+}
+
+func containsStr(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
 }
 
 // doSend runs one outbound command against the transport, mapping
@@ -378,8 +908,8 @@ func (fw *frameWriter) write(v any) error {
 	return err
 }
 
-func (fw *frameWriter) result(id string, err error) {
-	res := connproto.ResultFromConn{Type: "result", ID: id}
+func (fw *frameWriter) result(id, messageID string, err error) {
+	res := connproto.ResultFromConn{Type: "result", ID: id, MessageID: messageID}
 	if err != nil {
 		res.Error = err.Error()
 	}

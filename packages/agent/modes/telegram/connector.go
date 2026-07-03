@@ -189,10 +189,12 @@ func (c *Connector) normalize(ctx context.Context, u Update) (chat.Message, bool
 	}
 
 	return chat.Message{
+		ID:       strconv.Itoa(msg.MessageID),
+		TS:       msg.Date * 1000,
 		ChatID:   strconv.FormatInt(msg.Chat.ID, 10),
+		ChatKind: chatKind(msg.Chat.Type),
 		UserID:   strconv.FormatInt(msg.From.ID, 10),
 		Username: msg.From.Username,
-		ReplyTo:  strconv.Itoa(msg.MessageID),
 		Text:     text,
 		Images:   images,
 	}, true
@@ -276,4 +278,17 @@ func guessImageMIME(path string) string {
 		return "image/webp"
 	}
 	return "image/jpeg"
+}
+
+// chatKind maps telegram chat types onto the wire vocabulary.
+func chatKind(t string) string {
+	switch t {
+	case "private", "":
+		return "dm"
+	case "group", "supergroup":
+		return "group"
+	case "channel":
+		return "channel"
+	}
+	return "group"
 }
