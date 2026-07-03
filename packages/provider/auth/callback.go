@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -91,7 +92,7 @@ func (cs *CallbackServer) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(oauthErrorHTML(msg)))
-		cs.deliver(CallbackResult{Err: fmt.Errorf(msg), RawPath: r.URL.RequestURI()})
+		cs.deliver(CallbackResult{Err: errors.New(msg), RawPath: r.URL.RequestURI()})
 		return
 	}
 	code := q.Get("code")

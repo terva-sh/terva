@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"net"
@@ -219,7 +220,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 			msg += ": " + d
 		}
 		s.errorPage(w, msg)
-		s.results <- LoginResult{Provider: provider, Method: "oauth", Err: fmt.Errorf(msg)}
+		s.results <- LoginResult{Provider: provider, Method: "oauth", Err: errors.New(msg)}
 		return
 	}
 	code := q.Get("code")

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os/exec"
@@ -91,7 +92,7 @@ func (m *Manager) Close() {
 // StartAPIKey launches the API-key login flow.
 func (m *Manager) StartAPIKey(provider string) (string, error) {
 	if !isKnownAPIKeyProvider(provider) {
-		return "", fmt.Errorf(apiKeyProviderMessage())
+		return "", errors.New(apiKeyProviderMessage())
 	}
 	if err := m.ensureKeyServer(); err != nil {
 		return "", err
