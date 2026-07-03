@@ -3,6 +3,7 @@ package connlocal
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -89,6 +90,30 @@ func testConn(t *testing.T, st *stubTransport) *Conn {
 	}, t.TempDir(), func(string) {})
 }
 
+// drainReceive runs Receive for the test's lifetime and JOINS it at
+// cleanup. The engine's log file only closes when Receive unwinds
+// (stopEngine), and Windows cannot delete a TempDir that still holds
+// an open file — a test that Connects without Receiving, or cancels
+// without waiting, fails its cleanup there. Registered after the
+// test's TempDir, so LIFO ordering runs this join first.
+func drainReceive(t *testing.T, conn *Conn, handle func(chat.Message)) {
+	t.Helper()
+	if handle == nil {
+		handle = func(chat.Message) {}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = conn.Receive(ctx, handle) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("Receive never returned after cancel")
+		}
+	})
+}
+
 // TestConnLocalEndToEnd drives the whole chat.Connector surface through
 // the in-process wire: Connect (identity + caps from the inner hello),
 // Receive (inbound delivery), Send, and an orderly ctx-cancel shutdown
@@ -110,7 +135,7 @@ func TestConnLocalEndToEnd(t *testing.T) {
 	st.mu.Lock()
 	dataDir := st.session.DataDir
 	st.mu.Unlock()
-	if !strings.Contains(dataDir, "connectors/localstub/data") {
+	if !strings.Contains(filepath.ToSlash(dataDir), "connectors/localstub/data") {
 		t.Errorf("transport DataDir = %q, want the connectors convention", dataDir)
 	}
 
@@ -230,6 +255,7 @@ func TestConnLocalAsk(t *testing.T) {
 	if _, err := conn.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+	drainReceive(t, conn, nil)
 	if !conn.Capabilities().Asks {
 		t.Fatal("Capabilities().Asks should be true when the transport declares the feature")
 	}
@@ -303,6 +329,7 @@ func TestConnLocalSpeaker(t *testing.T) {
 	if _, err := conn.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+	drainReceive(t, conn, nil)
 	if got := conn.Capabilities().Speaker; got != chat.SpeakerNameOnly {
 		t.Fatalf("Speaker grade = %q, want name_only", got)
 	}
@@ -360,6 +387,7 @@ func TestConnLocalStartThread(t *testing.T) {
 	if _, err := conn.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+	drainReceive(t, conn, nil)
 	if !conn.Capabilities().ThreadsOut {
 		t.Fatal("ThreadsOut should be true when the transport declares the feature")
 	}
@@ -431,10 +459,8 @@ func TestConnLocalEntitiesAndMembership(t *testing.T) {
 	if _, err := conn.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	gotMsg := make(chan chat.Message, 1)
-	go func() { _ = conn.Receive(ctx, func(m chat.Message) { gotMsg <- m }) }()
+	drainReceive(t, conn, func(m chat.Message) { gotMsg <- m })
 
 	select {
 	case m := <-gotMsg:
