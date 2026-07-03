@@ -1,0 +1,7 @@
+# Card fixtures pair a JSON file with a PNG that embeds the SAME bytes
+# in its chara chunk (TestSyntheticCard asserts byte-level equivalence
+# through Card.Extensions, which is retained verbatim). CRLF checkout
+# conversion — the default on Windows CI runners — would desync the
+# pair, so pin the JSON to LF and mark the PNGs binary explicitly.
+examples/cards/*.json text eol=lf
+examples/cards/*.png binary
