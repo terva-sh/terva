@@ -124,6 +124,34 @@ changelog:
 
 # --- end shared packaging ---
 
+# Container images — PUBLIC channel only, deliberately outside the
+# shared-packaging region: the internal Forgejo config has no dockers
+# block, so images publish exactly once, from the GitHub release
+# workflow (whose runners have docker; the release.yml overlay sets up
+# buildx + qemu and logs into ghcr). One multi-arch manifest per tag,
+# built from the prebuilt linux binaries — the Dockerfile copies
+# $TARGETPLATFORM/terva out of the goreleaser-arranged context.
+dockers_v2:
+  - id: terva
+    ids: [terva]
+    dockerfile: Dockerfile
+    images:
+      - "ghcr.io/terva-sh/terva"
+    tags:
+      - "{{ .Version }}"
+      - "latest"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      "org.opencontainers.image.title": "terva"
+      "org.opencontainers.image.description": "agent harness in a single static binary"
+      "org.opencontainers.image.source": "https://github.com/terva-sh/terva"
+      "org.opencontainers.image.url": "https://terva.sh"
+      "org.opencontainers.image.version": "{{ .Version }}"
+      "org.opencontainers.image.revision": "{{ .FullCommit }}"
+      "org.opencontainers.image.licenses": "MIT"
+
 release:
   github:
     owner: terva-sh

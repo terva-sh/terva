@@ -29,9 +29,12 @@ projected through many front ends and extensible in any language.
 - pre/post tool-use **hooks** (veto, rewrite, or observe tool calls with your own scripts; [docs/hooks.md](docs/hooks.md)) and an **MCP client** (attach Model Context Protocol servers as tools; [docs/mcp.md](docs/mcp.md)).
 - run modes for every front end: interactive tui, an **editor integration over ACP** (Agent Client Protocol — drive terva from Zed and other ACP editors), print, json, and a JSON-RPC server for embedding.
 - background subagents: fan work out to parallel **swarm** agents from within a session.
-- chat connectors: a built-in telegram bridge, and **external connectors in
-  any language** — separate executables speaking a small versioned JSON
-  protocol, mirroring how extensions work. See [docs/connectors.md](docs/connectors.md).
+- chat connectors: built-in telegram and discord bridges, **external
+  connectors in any language** (separate executables speaking a small
+  versioned JSON protocol), and connectors bundled inside extensions —
+  one wire for all three, with group admission, interactive approvals
+  over chat (buttons on Discord), per-chat sessions, speakers, and
+  threads. See [docs/connectors.md](docs/connectors.md).
 - extensions in any language via subprocess + json-rpc. None installed by default; opt in with `terva ext install` or `terva --ext`. See [docs/extensions.md](docs/extensions.md).
 - user and extension themes via JSON; see [docs/themes.md](docs/themes.md).
 - reusable instructions via `SKILL.md` files; see [docs/skills.md](docs/skills.md).
@@ -73,6 +76,18 @@ iwr -useb https://terva.sh/install.ps1 | iex
 ```
 
 Drops `terva.exe` into `$HOME\bin` and adds it to the user PATH if missing. Open a fresh terminal afterwards.
+
+### Container
+
+```bash
+docker run -it --rm -v terva-data:/data ghcr.io/terva-sh/terva --help
+```
+
+Multi-arch images (linux amd64/arm64) publish with each release,
+tagged per version and `latest`. All state lives on the `/data` volume
+(`TERVA_HOME`); the agent's workspace is `/work`. Running connector
+bots this way — and under systemd — is covered in
+[docs/deploy.md](docs/deploy.md).
 
 ### go install
 
@@ -134,7 +149,8 @@ terva --help
 | [docs/tui.md](docs/tui.md) | Slash commands, sessions, inline images, message queueing, key bindings |
 | [docs/models.md](docs/models.md) | Picking models, fallback/rescue, custom catalogs, per-provider notes (Kimi, DeepSeek, Gemini, ollama, OpenAI-compatible) |
 | [docs/providers.md](docs/providers.md) | Login flows, endpoints, `models.json` reference, capability tags |
-| [docs/connectors.md](docs/connectors.md) | Chat connectors: using the telegram bridge, writing external connectors in any language |
+| [docs/connectors.md](docs/connectors.md) | Chat connectors: the telegram and discord bridges, external connectors in any language, group admission, approvals over chat |
+| [docs/deploy.md](docs/deploy.md) | Running bots as services: systemd units and the container image, for persistent, resuming, capability-scoped connector agents |
 | [docs/extensions.md](docs/extensions.md) | Extensions: installing, managing, and the full wire protocol |
 | [docs/skills.md](docs/skills.md) | `SKILL.md` reusable instructions: anatomy, discovery, authoring |
 | [docs/personas.md](docs/personas.md) | Personas and immersive chat/play: charters, immersive identities, character cards, the cast + `actor_spawn`, and the mode flags |
