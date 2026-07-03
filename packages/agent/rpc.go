@@ -62,6 +62,7 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
+	extMgr.SetAllowedExtensions(args.WithExtensions)  // --extensions allowlist; --ext paths bypass
 	wireSessionReader(extMgr, TervaHome(), r.CWD)
 	extMgr.SetProjectTrusted(r.Trusted) // gate project ext dirs on Workspace Trust
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {

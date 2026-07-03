@@ -82,3 +82,96 @@ func TestFmtTokens(t *testing.T) {
 		}
 	}
 }
+
+// TestStatusReportsCallingAgentFromContext: several live agents can
+// share one StatusTool through a shared registry (bot mode mints an
+// agent per chat); the bound Agent field then points at whichever was
+// built LAST. The dispatch context must win, so each conversation gets
+// its own numbers.
+func TestStatusReportsCallingAgentFromContext(t *testing.T) {
+	stale := &core.Agent{Model: "stale-model"}
+	caller := &core.Agent{Model: "caller-model", Reasoning: "low"}
+
+	st := &StatusTool{Provider: "anthropic", Agent: stale}
+
+	res, err := st.Execute(core.ContextWithAgent(context.Background(), caller), nil, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	text := statusText(res)
+	if !strings.Contains(text, "model: caller-model") {
+		t.Errorf("status should report the CALLING agent's model\n--- output ---\n%s", text)
+	}
+	if strings.Contains(text, "stale-model") {
+		t.Errorf("status leaked the stale bound agent's model\n--- output ---\n%s", text)
+	}
+
+	// Without a dispatch context the bound field is the fallback.
+	res, err = st.Execute(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if text := statusText(res); !strings.Contains(text, "model: stale-model") {
+		t.Errorf("direct call should fall back to the bound agent\n--- output ---\n%s", text)
+	}
+}
+
+// TestStatusReportsSessionIdentity: a persisted conversation reports its
+// session id (the --resume key) and transcript path; a live-only agent
+// says so explicitly instead of staying silent.
+func TestStatusReportsSessionIdentity(t *testing.T) {
+	dir := t.TempDir()
+	sess, err := core.NewSession(dir, dir, "prov", "m", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	ag := core.NewAgent(nil, "m", "", nil)
+	ag.AdoptSessionIdentity(sess)
+	st := &StatusTool{Provider: "anthropic", Agent: ag}
+
+	res, err := st.Execute(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	text := statusText(res)
+	wantID, _ := ag.SessionIdentity()
+	if !strings.Contains(text, "session: "+wantID) {
+		t.Errorf("missing session id line\n--- output ---\n%s", text)
+	}
+	if !strings.Contains(text, "session file: "+sess.Path) {
+		t.Errorf("missing session file line\n--- output ---\n%s", text)
+	}
+	d, ok := res.Details.(map[string]any)
+	if !ok || d["session_id"] != wantID || d["session_path"] != sess.Path {
+		t.Errorf("details missing session identity: %#v", res.Details)
+	}
+
+	// Live-only agent (bot-mode group chats, --no-session).
+	res, err = (&StatusTool{Provider: "anthropic", Agent: core.NewAgent(nil, "m", "", nil)}).Execute(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if text := statusText(res); !strings.Contains(text, "session: none (live-only conversation; not persisted)") {
+		t.Errorf("live-only agent should say the conversation is not persisted\n--- output ---\n%s", text)
+	}
+}
+
+// TestStatusReportsProjectKey: the project id (what project-scoped
+// extension state and swarm coordination key on) rides the report.
+func TestStatusReportsProjectKey(t *testing.T) {
+	st := &StatusTool{Provider: "anthropic", CWD: "/tmp/proj"}
+	res, err := st.Execute(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	want := "project: " + core.ProjectKey("/tmp/proj")
+	if text := statusText(res); !strings.Contains(text, want) {
+		t.Errorf("status output missing %q\n--- output ---\n%s", want, text)
+	}
+	d, ok := res.Details.(map[string]any)
+	if !ok || d["project_id"] != core.ProjectKey("/tmp/proj") {
+		t.Errorf("details missing project_id: %#v", res.Details)
+	}
+}

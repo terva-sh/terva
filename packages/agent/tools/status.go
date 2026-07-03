@@ -21,27 +21,36 @@ import (
 // wrap up or summarize before it gets force-compacted.
 //
 // Static facts (Provider, CWD, AuthMethod, BaseURL) are captured when
-// the tool is built. Live facts (current model, reasoning, token usage)
-// are read from the bound *core.Agent at call time, so they stay correct
-// across both same-provider /model swaps (which mutate the agent in
-// place) and cross-provider swaps (which rebuild the agent and this
-// tool). Provider can only change via a rebuild, so capturing it is safe.
+// the tool is built. Live facts (current model, reasoning, token usage,
+// session identity) are read from the CALLING *core.Agent at call time
+// — resolved from the dispatch context first (core.AgentFromContext),
+// so the report is correct even when several live agents share this
+// tool through one registry (bot mode mints an agent per chat) — and
+// they stay correct across both same-provider /model swaps (which
+// mutate the agent in place) and cross-provider swaps (which rebuild
+// the agent and this tool). Provider can only change via a rebuild, so
+// capturing it is safe.
 type StatusTool struct {
 	Provider   string
 	CWD        string
 	AuthMethod string // "apikey" | "oauth" | ""
 	BaseURL    string // non-empty only for custom / self-hosted endpoints
 
-	// Agent is the live conversation this tool reports on, bound after
-	// the agent is constructed (see Resolved.NewAgent). When nil, the
-	// tool reports the static facts and marks live usage unavailable.
+	// Agent is the fallback conversation this tool reports on when the
+	// dispatch context carries no agent (direct Execute calls, tests).
+	// Bound after the agent is constructed (see Resolved.NewAgent) and
+	// REBOUND by every subsequent construction from the same registry,
+	// so under multiple live agents it points at the most recently
+	// minted one — which is why the context lookup wins. When both are
+	// nil, the tool reports the static facts and marks live usage
+	// unavailable.
 	Agent *core.Agent
 }
 
 func (t *StatusTool) Name() string { return "terva_status" }
 
 func (t *StatusTool) Description() string {
-	return "Report your own runtime status: model, provider, working directory, reasoning effort, and how full your context window is. Takes no arguments. Useful for deciding whether to summarize or wrap up before the context fills."
+	return "Report your own runtime status: model, provider, working directory, session id and transcript file, reasoning effort, and how full your context window is. Takes no arguments. Useful for deciding whether to summarize or wrap up before the context fills."
 }
 
 // No arguments. Providers that require an object schema accept an
@@ -50,17 +59,25 @@ func (t *StatusTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 }
 
-func (t *StatusTool) Execute(_ context.Context, _ json.RawMessage, _ func(string)) (core.ToolResult, error) {
+func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(string)) (core.ToolResult, error) {
+	// The dispatching agent (from ctx) is authoritative; the bound
+	// field is the fallback for direct calls — see the struct comment.
+	agent := core.AgentFromContext(ctx)
+	if agent == nil {
+		agent = t.Agent
+	}
 	var (
 		model, reasoning string
+		sessID, sessPath string
 		cum, last        provider.Usage
-		haveAgent        = t.Agent != nil
+		haveAgent        = agent != nil
 	)
 	if haveAgent {
-		model = t.Agent.Model
-		reasoning = t.Agent.Reasoning
-		cum = t.Agent.Cost()
-		last = t.Agent.LastTurnUsage()
+		model = agent.Model
+		reasoning = agent.Reasoning
+		sessID, sessPath = agent.SessionIdentity()
+		cum = agent.Cost()
+		last = agent.LastTurnUsage()
 	}
 
 	var sb strings.Builder
@@ -90,6 +107,21 @@ func (t *StatusTool) Execute(_ context.Context, _ json.RawMessage, _ func(string
 		cwd = "."
 	}
 	fmt.Fprintf(&sb, "cwd: %s\n", cwd)
+	// The project key: what project-scoped extension state and swarm
+	// coordination key on for this cwd.
+	projectID := core.ProjectKey(cwd)
+	fmt.Fprintf(&sb, "project: %s\n", projectID)
+
+	// Session identity: which transcript file this conversation
+	// persists to (the id is what --resume accepts). Key for debugging
+	// headless runs, where nothing else surfaces it.
+	switch {
+	case sessID != "":
+		fmt.Fprintf(&sb, "session: %s\n", sessID)
+		fmt.Fprintf(&sb, "session file: %s\n", sessPath)
+	case haveAgent:
+		sb.WriteString("session: none (live-only conversation; not persisted)\n")
+	}
 
 	// Context-window usage. The window comes from the live catalog
 	// (so models.json overrides are reflected); usage is the most
@@ -103,7 +135,7 @@ func (t *StatusTool) Execute(_ context.Context, _ json.RawMessage, _ func(string
 	used := last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
 	switch {
 	case !haveAgent:
-		sb.WriteString("context: live usage unavailable (no active session)\n")
+		sb.WriteString("context: live usage unavailable (no live agent)\n")
 	case ctxWindow > 0 && used > 0:
 		fmt.Fprintf(&sb, "context: %s / %s tokens (%.1f%% of window), as of the last turn\n",
 			fmtTokens(used), fmtTokens(ctxWindow), float64(used)/float64(ctxWindow)*100)
@@ -133,6 +165,9 @@ func (t *StatusTool) Execute(_ context.Context, _ json.RawMessage, _ func(string
 			"provider":       t.Provider,
 			"model":          model,
 			"cwd":            cwd,
+			"project_id":     projectID,
+			"session_id":     sessID,
+			"session_path":   sessPath,
 			"reasoning":      reasoning,
 			"context_window": ctxWindow,
 			"context_used":   used,

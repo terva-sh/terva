@@ -449,26 +449,31 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 		fmt.Fprintln(os.Stderr, "terva:", note)
 	}
 
-	// A bot is headless — there is no interactive approval prompt — so default
-	// to yolo (run tools) like the other headless modes; otherwise a default
-	// bot would refuse every mutating tool and be useless. An explicit
-	// --approval / --no-yolo, or a config "approval", still wins. (Jail is left
-	// alone: built-in file/shell tools stay confined to the cwd.) Setting this
+	// A bot defaults to yolo (run tools): the pre-existing bot ran tools
+	// un-gated, and prompting-by-default would surprise every deployment.
+	// Unlike the other headless modes, though, non-yolo approval modes WORK
+	// here — the ChatConfirmer wired below renders confirmation prompts as
+	// asks in the paired chat (buttons where the connector has them, numbered
+	// text everywhere else), so --approval ask/workspace is a real choice
+	// instead of refuse-everything. An explicit --approval / --no-yolo, or a
+	// config "approval", still wins over the default. (Jail is left alone:
+	// built-in file/shell tools stay confined to the cwd.) Setting this
 	// before Resolve keeps the resolver and the gate agreeing.
 	cfg, _ := LoadConfig()
 	if v := botApprovalDefault(args.Approval, args.NoYolo, cfg.Approval); v != "" {
 		args.Approval = v
 	}
 
-	// Translate sigterm/sigint into a context cancel so the bot's goroutines,
-	// the in-flight turn, and the extension subprocesses wind down cleanly.
-	// Created early so extensions are tied to it.
+	// Translate sigterm/sigint into a context cancel so the bot's goroutines
+	// and the in-flight turn wind down cleanly. Extension subprocesses are
+	// deliberately NOT tied to this context — see extCtx below.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sigc := make(chan os.Signal, 1)
 	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigc
+		fmt.Fprintln(os.Stderr, "\nbot: shutting down…")
 		cancel()
 	}()
 
@@ -485,7 +490,17 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	// extension/MCP tools, built-in coding tools off) via Resolve + the merge.
 	gate, roSet := headlessConfirmGate(args, "bot")
 	resolved.AdoptReadOnlySet(roSet)
-	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &resolved, version)
+	// Extensions (and the MCP servers wired inside the same setup) get
+	// their OWN lifetime context, not the signal-cancelled one: the
+	// driver spawns subprocesses with exec.CommandContext, so a ^C on
+	// the shared context killed every extension mid-flight BEFORE the
+	// deferred graceful stop ran — each was then reported as "exited
+	// unexpectedly". Now the signal ends the LOOP; the deferred stopExt
+	// tears extensions down gracefully afterwards (shutdown frames,
+	// stopping mark, then reap), and extCancel is the backstop behind it.
+	extCtx, extCancel := context.WithCancel(context.Background())
+	defer extCancel()
+	extMgr, stopExt := setupNonInteractiveExtensions(extCtx, args, &resolved, version)
 	defer stopExt()
 
 	conn, pairing, err := svc.NewConnector(TervaHome(), nil)
@@ -496,14 +511,20 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	agent := resolved.NewAgent()
 	wireBotAgentExtHooks(ctx, agent, extMgr, gate, args, &resolved)
 
-	// Session: optional, same model as the tui. Persist so DMs build on
-	// prior context. --no-session disables.
+	// Session: optional, same model as the tui; --no-session disables.
+	// The paired DM's agent persists per-message (the same durable hooks
+	// ACP sessions use), so a daemon crash costs at most the in-flight
+	// turn and a restart with --continue picks the conversation back up.
+	// Per-chat group agents stay live-only: their transcripts are
+	// bounded working state (LRU-dropped), not conversations the owner
+	// asked to keep.
 	var sess *core.Session
 	if !args.NoSess {
 		s, _, serr := openOrCreateSessionForBot(args, resolved, agent, version)
 		if serr == nil {
 			sess = s
 			defer sess.Close()
+			wireHeadlessSessionPersist(agent, sess)
 		} else {
 			fmt.Fprintln(os.Stderr, "session:", serr)
 		}
@@ -518,32 +539,58 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 		Provider:   resolved.Provider,
 		AuthMethod: resolved.AuthMethod,
 		CWD:        args.CWD,
+		Service:    svc.Name,
 		Pairing:    pairing,
-		IdleAfter:  idleAfter,
-		IdleNudge:  idlePrompt,
+		// Gate v2: the owner admits groups (/approve, or the admission
+		// ask when the connector reports being added); everything
+		// non-DM stays silent until then.
+		Admissions: chat.LoadAdmissions(chat.AdmissionsPath(TervaHome(), svc.Name)),
+		// Per-chat sessions (stage C): the owner's DM keeps `agent`
+		// (and its persisted session); each approved group gets its
+		// own transcript, minted here with the same extension/gate
+		// hooks the primary got.
+		NewChatAgent: func() *core.Agent {
+			a := resolved.NewAgent()
+			wireBotAgentExtHooks(ctx, a, extMgr, gate, args, &resolved)
+			return a
+		},
+		IdleAfter: idleAfter,
+		IdleNudge: idlePrompt,
 		RefreshCreds: func() error {
 			// Re-run the same resolver the tui uses so we pick up
 			// refreshed oauth tokens, re-logins, and model switches.
 			// Only the provider client is swapped — tools, sandbox,
-			// system prompt, and transcript stay with the existing agent.
+			// system prompt, and transcripts stay with the existing
+			// agents (the loop fans the swap out to every chat's).
 			next, err := Resolve(args, true)
 			if err != nil {
 				return err
 			}
-			agent.SetClientAndModel(next.NewClient(), next.Model)
+			loop.SetClientAndModel(next.NewClient(), next.Model)
 			loop.UpdateStatusContext(next.Provider, next.AuthMethod, next.CWD)
 			return nil
 		},
 	}
+
+	// Approvals over chat (connproto v2 stage G): tool calls the policy says
+	// to confirm become asks to the paired owner instead of flat refusals.
+	// Yolo (the default) never consults the confirmer, so this is inert
+	// unless the user chose a prompting mode. Fail-closed throughout: an
+	// unanswered or unanswerable question denies the call.
+	gate.SetConfirmer(chat.NewChatConfirmer(ctx, loop))
 
 	// Record our pid so `terva bot status` / `terva bot stop` can find us,
 	// regardless of whether we were started directly or via `bot start`.
 	_ = chat.WritePID(TervaHome(), svc.Name, os.Getpid())
 	defer chat.RemovePID(TervaHome(), svc.Name)
 
-	// ctx + signal handling were set up at the top so extensions are tied to
-	// the same lifecycle; just run the loop until it's cancelled.
-	return loop.Run(ctx)
+	// Run the loop until it ends or the signal handler cancels it. A
+	// ^C / SIGTERM shutdown is CLEAN — the connector's receive loop
+	// returns the context error, which must not surface as a failure.
+	if err := loop.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
 }
 
 // botApprovalDefault returns the approval mode a headless bot should default to

@@ -166,3 +166,43 @@ func TestReadDedupDifferentWindowReturnsFull(t *testing.T) {
 		t.Fatalf("windowed read wrong content: %q", got)
 	}
 }
+
+// TestReadDedupNeverCrossesAgents: two agents share one ReadTool (the
+// bot-mode shape: one registry, an agent per chat). A file agent A has
+// read must NOT be stubbed for agent B — B's context has never seen the
+// content. Guarded by two mechanisms under test: the dispatch context
+// identifies the calling agent (over the stale bound Epoch), and
+// transcript epochs are salted per agent so they can never compare
+// equal across agents.
+func TestReadDedupNeverCrossesAgents(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a1 := core.NewAgent(nil, "m", "", nil)
+	a2 := core.NewAgent(nil, "m", "", nil)
+	// Bound epoch points at a1 — the "most recently built" stale bind.
+	tool := &ReadTool{CWD: dir, Epoch: a1}
+
+	read := func(ag *core.Agent) core.ToolResult {
+		t.Helper()
+		res, err := tool.Execute(core.ContextWithAgent(context.Background(), ag),
+			mustJSON(t, map[string]any{"path": "shared.txt"}), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	if isDedup(read(a1)) {
+		t.Fatal("a1's first read should be full content")
+	}
+	if isDedup(read(a1)) == false {
+		t.Fatal("a1's re-read should be a dedup stub")
+	}
+	// The regression: a2 has never read this file — a stub here would
+	// point its model at content missing from its context.
+	if isDedup(read(a2)) {
+		t.Fatal("a2's FIRST read was stubbed against a1's transcript state")
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -170,9 +171,26 @@ type Agent struct {
 	// it: a compaction or /clear that may have dropped an earlier read
 	// from the context window bumps the epoch, transparently invalidating
 	// any "you already read this" fingerprint so the next read returns the
-	// full content again.
+	// full content again. Seeded per agent from agentEpochSeq so epochs
+	// NEVER collide across agents: several live agents can share one tool
+	// registry (bot mode mints an agent per chat), and a numerically
+	// equal epoch from a different agent would otherwise let one
+	// conversation's read dedup against another's — telling a model its
+	// context holds content it never saw. Per-agent bumps stay in the
+	// low 32 bits; the base occupies the high 32.
 	transcriptEpoch uint64
 	cost            CostTracker
+
+	// sessionID / sessionPath identify the transcript file this
+	// conversation persists to: sessionID is the file basename without
+	// .jsonl (the id --resume accepts), sessionPath the absolute path.
+	// The front end that owns the session records them via
+	// AdoptSessionIdentity when it opens or swaps the session; empty
+	// means live-only (no persistence), e.g. --no-session or bot-mode
+	// group chats. Guarded by mu: a /sessions swap can land while a
+	// turn's terva_status call reads them.
+	sessionID   string
+	sessionPath string
 
 	// queued holds user messages submitted while the agent is busy.
 	// The loop appends them as normal user messages at safe
@@ -182,17 +200,46 @@ type Agent struct {
 	queued []string
 }
 
+// agentEpochSeq hands each new agent a distinct transcript-epoch base
+// (see the transcriptEpoch field comment for why collisions matter).
+var agentEpochSeq atomic.Uint64
+
 // NewAgent returns an Agent with sensible defaults.
 func NewAgent(client provider.Client, model, system string, tools Registry) *Agent {
 	return &Agent{
-		Client:         client,
-		Model:          model,
-		System:         system,
-		Tools:          tools,
-		MaxSteps:       0, // 0 = unlimited
-		MaxRetries:     3,
-		RetryBaseDelay: 2 * time.Second,
+		Client:          client,
+		Model:           model,
+		System:          system,
+		Tools:           tools,
+		MaxSteps:        0, // 0 = unlimited
+		MaxRetries:      3,
+		RetryBaseDelay:  2 * time.Second,
+		transcriptEpoch: agentEpochSeq.Add(1) << 32,
 	}
+}
+
+// AdoptSessionIdentity records which transcript file this agent's
+// conversation persists to; terva_status surfaces it to the model.
+// Call it when binding or swapping the agent's session. Nil clears
+// both fields — the conversation is live-only from here.
+func (a *Agent) AdoptSessionIdentity(s *Session) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if s == nil {
+		a.sessionID, a.sessionPath = "", ""
+		return
+	}
+	a.sessionPath = s.Path
+	a.sessionID = strings.TrimSuffix(filepath.Base(s.Path), ".jsonl")
+}
+
+// SessionIdentity returns the transcript file this agent persists to:
+// the id (file basename, what --resume accepts) and the absolute path.
+// Both empty when the conversation is live-only.
+func (a *Agent) SessionIdentity() (id, path string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.sessionID, a.sessionPath
 }
 
 // QueueMessage queues text to be injected as a user message at the
@@ -1140,7 +1187,31 @@ func (a *Agent) executeTools(ctx context.Context, msg provider.Message, tools Re
 	}, hadError
 }
 
+// agentCtxKey carries the executing *Agent through the context passed
+// to tool Execute calls. Several live agents can share one tool
+// registry (bot mode mints an agent per chat; the map stays shared so
+// live extension re-registration reaches every agent), so agent-aware
+// tools (terva_status, read's re-read dedup) must identify the CALLING
+// agent per dispatch — a field bound at construction time is clobbered
+// by the next agent built from the same registry.
+type agentCtxKey struct{}
+
+// ContextWithAgent returns ctx tagged with the executing agent. The
+// agent loop applies it on every tool dispatch; exported for tests and
+// custom dispatchers that invoke tools directly.
+func ContextWithAgent(ctx context.Context, a *Agent) context.Context {
+	return context.WithValue(ctx, agentCtxKey{}, a)
+}
+
+// AgentFromContext returns the agent executing the current tool call,
+// or nil when ctx did not come from an agent dispatch.
+func AgentFromContext(ctx context.Context) *Agent {
+	a, _ := ctx.Value(agentCtxKey{}).(*Agent)
+	return a
+}
+
 func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools Registry, sink func(AgentEvent)) ToolResult {
+	ctx = ContextWithAgent(ctx, a)
 	// Dispatch against the registry PINNED for this turn (passed down from
 	// runLoop), not a live read of a.Tools: the turn runs on its own
 	// goroutine while the host may swap the registry from another (model

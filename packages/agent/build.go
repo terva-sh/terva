@@ -1174,13 +1174,17 @@ func (r Resolved) NewAgent() *core.Agent {
 	a.Temperature = r.Temperature
 	// Bind the live agent into terva_status so it can report current model,
 	// reasoning, and token usage (the registry — and thus the tool — is
-	// built before the agent exists).
+	// built before the agent exists). This is only the FALLBACK for direct
+	// Execute calls: real dispatches resolve the calling agent from ctx
+	// (core.AgentFromContext), so a later NewAgent from the same Resolved
+	// (bot mode mints an agent per chat over one shared registry) rebinding
+	// this field cannot misattribute another conversation's status.
 	if st, ok := r.ToolRegistry["terva_status"].(*tools.StatusTool); ok {
 		st.Agent = a
 	}
 	// Bind the agent's transcript epoch into read so it can dedup re-reads
-	// of an unchanged file that is still in context (same late-binding
-	// reason as terva_status above).
+	// of an unchanged file that is still in context (same late-binding —
+	// and same ctx-wins fallback semantics — as terva_status above).
 	if rt, ok := r.ToolRegistry["read"].(*tools.ReadTool); ok {
 		rt.Epoch = a
 	}

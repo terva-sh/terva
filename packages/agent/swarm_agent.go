@@ -55,6 +55,7 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted), nil)
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
+	ag.AdoptSessionIdentity(sess)
 	// Tell session-keyed extensions the real session id before any turn
 	// runs, so per-session state persists for swarm agents too.
 	emitSessionStart(extMgr, sess)

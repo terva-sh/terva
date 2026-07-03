@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"terva.sh/terva/packages/agent/acp"
@@ -87,7 +86,7 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 		cleanup()
 		return acp.SessionAgent{}, err
 	}
-	wireACPSessionPersist(ag, sess)
+	wireHeadlessSessionPersist(ag, sess)
 	return acp.SessionAgent{
 		Agent:            ag,
 		Session:          sess,
@@ -128,7 +127,7 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 		_ = sess.Close()
 		return acp.SessionAgent{}, nil, err
 	}
-	wireACPSessionPersist(ag, sess)
+	wireHeadlessSessionPersist(ag, sess)
 	// Seed the menus from the session's persisted provider/model when present
 	// (a prior /set_config_option model switch was recorded), else the
 	// resolved defaults.
@@ -807,6 +806,7 @@ func (f *acpFactory) setupACPExtensions(ctx context.Context, args Args, r *Resol
 	extMgr := extensions.New(TervaHome(), r.CWD, f.version, r.Provider, r.Model, nonInteractiveExtHooks{})
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
+	extMgr.SetAllowedExtensions(args.WithExtensions)  // --extensions allowlist; --ext paths bypass
 	extMgr.SetConfigResolver(resolveExtensionConfig)  // hello_ack config delivery
 	wireSessionReader(extMgr, TervaHome(), r.CWD)
 	extMgr.SetProjectTrusted(r.Trusted) // gate project ext dirs on Workspace Trust
@@ -825,31 +825,6 @@ func (f *acpFactory) setupACPExtensions(ctx context.Context, args Args, r *Resol
 	extMgr.WaitForReady(3 * time.Second)
 	r.MergeExtensionTools(&extToolAdapter{mgr: extMgr})
 	return extMgr, func() { extMgr.Stop(2 * time.Second) }
-}
-
-// wireACPSessionPersist wires the agent's durable-persistence hooks to the
-// on-disk session (§3): every appended message, usage row, and post-compaction
-// transcript flows to disk as it happens, so the real terva session IS the
-// transcript and a crash costs at most the in-flight turn. Mirrors the TUI's
-// wireAgentPersist (cli.go). A per-session mutex serialises writes; within a
-// session one prompt runs at a time, so this is belt-and-suspenders.
-func wireACPSessionPersist(ag *core.Agent, sess *core.Session) {
-	var mu sync.Mutex
-	ag.OnMessageAppended = func(m provider.Message) {
-		mu.Lock()
-		defer mu.Unlock()
-		_ = sess.AppendMessage(m)
-	}
-	ag.OnUsage = func(cum provider.Usage) {
-		mu.Lock()
-		defer mu.Unlock()
-		_ = sess.AppendUsage(cum, cum)
-	}
-	ag.OnTranscriptCompacted = func(messages []provider.Message) {
-		mu.Lock()
-		defer mu.Unlock()
-		_ = sess.AppendCompaction(messages)
-	}
 }
 
 // skillSnapshot returns a closure that re-discovers the visible SKILL.md skills

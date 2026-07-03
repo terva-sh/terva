@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"terva.sh/terva/packages/agent/chat/connlocal"
+	"terva.sh/terva/packages/agent/chat/extconn"
 	"terva.sh/terva/packages/agent/chat/external"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
@@ -168,6 +170,12 @@ func (a *extToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {
 type mcpToolAdapter struct {
 	mgr *mcp.Manager
 
+	// allowed is the run's --mcp allowlist (nil = no allowlist). Kept on
+	// the adapter so the /mcp dialog's LIVE enable path is gated by the
+	// same rule as startup — a run scoped with --mcp cannot have an
+	// excluded server resurrected mid-session.
+	allowed map[string]bool
+
 	// Per-server stderr log handles are tracked here (not in a setupMCP
 	// closure) so a server started LIVE via the /mcp dialog — long after
 	// setupMCP returned — gets its log handle closed by the same stop func.
@@ -253,11 +261,16 @@ func setupMCP(ctx context.Context, args Args, r *Resolved) (*mcpToolAdapter, fun
 			}
 		}
 	}
+	// The --mcp allowlist narrows further (restrict-only, like the
+	// --extensions sibling): when set, only the named servers survive to
+	// spawn. The same set rides the adapter so the /mcp dialog's live
+	// enable path can't resurrect a server this run excluded.
+	applyMCPAllowlist(mcpCfg, args.WithMCP)
 	// Build a Manager even when nothing is configured or everything is
 	// disabled: the /mcp dialog can live-enable a server later via
 	// StartOne, and an empty Manager is a valid no-op (no subprocesses).
 	// Only --no-mcp (handled above) skips the Manager entirely.
-	adapter := &mcpToolAdapter{}
+	adapter := &mcpToolAdapter{allowed: mcpAllowSet(args.WithMCP)}
 	mgr := mcp.StartAll(ctx, mcpCfg, adapter.stderrFor)
 	adapter.mgr = mgr
 	for _, w := range mgr.Warnings() {
@@ -271,6 +284,43 @@ func setupMCP(ctx context.Context, args Args, r *Resolved) (*mcpToolAdapter, fun
 		adapter.closeLogs()
 	}
 	return adapter, stop
+}
+
+// mcpAllowSet folds the --mcp names into a set; nil when no allowlist.
+func mcpAllowSet(names []string) map[string]bool {
+	if len(names) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		if n != "" {
+			set[n] = true
+		}
+	}
+	return set
+}
+
+// applyMCPAllowlist deletes every server the --mcp allowlist does not
+// name from the merged config, before anything spawns. A nil or empty
+// allowlist changes nothing; the config disable list has already been
+// subtracted, so this only ever narrows (restrict-only).
+func applyMCPAllowlist(cfg *mcp.Config, allow []string) {
+	set := mcpAllowSet(allow)
+	if cfg == nil || set == nil {
+		return
+	}
+	for name := range cfg.Servers {
+		if !set[name] {
+			delete(cfg.Servers, name)
+		}
+	}
+}
+
+// allowsThisRun reports whether the --mcp allowlist admits the named
+// server (vacuously true without an allowlist). Consulted by the /mcp
+// dialog's live-enable path so a scoped run stays scoped.
+func (a *mcpToolAdapter) allowsThisRun(name string) bool {
+	return a.allowed == nil || a.allowed[name]
 }
 
 // fanoutAgentEvent translates a core.AgentEvent into the wire-format
@@ -532,6 +582,17 @@ func Run(rawArgs []string, version string) error {
 		fmt.Fprintln(os.Stderr, "connector load:", err)
 	}
 
+	// Connector extensions (extensions whose manifest declares
+	// "connector": true — global only, never project-local) register as
+	// chat services from manifests alone, so `terva bot --connector
+	// <name>` resolves them before any extension spawns. The live
+	// process binds later, at Connect time, through extconn.BindHost.
+	extconn.SetTervaVersion(version)
+	connlocal.SetTervaVersion(version)
+	for _, err := range extconn.RegisterDiscovered(TervaHome(), GlobalExtensionsDir()) {
+		fmt.Fprintln(os.Stderr, "connector extension:", err)
+	}
+
 	// Register user-defined OpenAI-compatible endpoints (config.json
 	// "endpoints") as providers before any Resolve / discovery sees them.
 	RegisterEndpointsFromConfig()
@@ -637,8 +698,7 @@ func Run(rawArgs []string, version string) error {
 	ValidateAndRepairConfig()
 
 	if args.ListModels {
-		printModels()
-		return nil
+		return printModels(args.ListModelsFilter)
 	}
 
 	ctx := context.Background()
@@ -700,6 +760,7 @@ func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, 
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, nonInteractiveExtHooks{})
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
+	extMgr.SetAllowedExtensions(args.WithExtensions)  // --extensions allowlist; --ext paths bypass
 	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
 	if ProjectScoped() {                              // re-adopt named globals into a scoped project (trust-gated)
 		extMgr.SetAdopt(GlobalExtensionsDir(), resolveAdoptExtensions(args.CWD))
@@ -716,6 +777,10 @@ func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, 
 	}
 	extMgr.WaitForReady(3 * time.Second)
 	r.MergeExtensionTools(&extToolAdapter{mgr: extMgr})
+	// Connector extensions: point the chat adapters at this manager so a
+	// service registered at CLI startup can bind its live process when a
+	// chat consumer connects (`terva bot run --connector <ext>`).
+	extconn.BindHost(extMgr)
 	// MCP servers ride the same seam, after extensions so an
 	// extension tool name wins a collision (first registration).
 	_, stopMCP := setupMCP(ctx, args, r)
@@ -725,6 +790,7 @@ func setupNonInteractiveExtensions(ctx context.Context, args Args, r *Resolved, 
 	// Emitting a bare event here would (and did) leave those modes
 	// reporting "no active session" even though one exists.
 	return extMgr, func() {
+		extconn.BindHost(nil)
 		extMgr.Stop(2 * time.Second)
 		stopMCP()
 	}
@@ -761,7 +827,14 @@ func headlessConfirmGate(args Args, mode string) (*core.ConfirmGate, *core.ReadO
 		// silently. ask rules degrade to allow in yolo (yolo never
 		// prompts), so only a deny rule refuses here.
 	default:
-		fmt.Fprintf(os.Stderr, "note: approval mode %q in %s mode refuses tool calls that would need confirmation (no interactive prompt available)\n", pol.Mode, mode)
+		if mode == "bot" {
+			// The bot wires a ChatConfirmer after its loop exists, so
+			// confirmation prompts reach the paired chat instead of
+			// being refused (see botRun).
+			fmt.Fprintf(os.Stderr, "note: approval mode %q in bot mode: tool calls that need confirmation ask the paired user over chat, fail-closed on timeout\n", pol.Mode)
+		} else {
+			fmt.Fprintf(os.Stderr, "note: approval mode %q in %s mode refuses tool calls that would need confirmation (no interactive prompt available)\n", pol.Mode, mode)
+		}
 	}
 	return core.NewPolicyGate(pol, nil), pol.ReadOnly
 }
@@ -946,6 +1019,7 @@ func runPrintMode(ctx context.Context, args Args, version string) error {
 	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
+	ag.AdoptSessionIdentity(sess)
 	// Tell session-keyed extensions the real session id before any turn
 	// runs, so per-session state persists in headless modes too.
 	emitSessionStart(extMgr, sess)
@@ -980,6 +1054,7 @@ func runJSONMode(ctx context.Context, args Args, version string) error {
 	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)))
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
+	ag.AdoptSessionIdentity(sess)
 	// Tell session-keyed extensions the real session id before any turn
 	// runs, so per-session state persists in headless modes too.
 	emitSessionStart(extMgr, sess)
@@ -1231,6 +1306,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
+	extMgr.SetAllowedExtensions(args.WithExtensions)  // --extensions allowlist; --ext paths bypass
 	extMgr.SetProjectTrusted(r.Trusted)               // gate project ext dirs on Workspace Trust
 	if ProjectScoped() {                              // re-adopt named globals into a scoped project (trust-gated)
 		extMgr.SetAdopt(GlobalExtensionsDir(), resolveAdoptExtensions(args.CWD))
@@ -1265,6 +1341,12 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// the wait immediately.
 	extMgr.WaitForReady(3 * time.Second)
 	defer extMgr.Stop(2 * time.Second)
+
+	// Connector extensions: bind the live manager so a future TUI chat
+	// consumer (or anything resolving chat services in-process) can
+	// attach; harmless when nothing connects.
+	extconn.BindHost(extMgr)
+	defer extconn.BindHost(nil)
 
 	// Confirmation gate: built from the permission policy (approval
 	// mode + rules — see docs/permissions.md) BEFORE any tool merge,
@@ -1714,6 +1796,13 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		a.OnUsage = persistUsage
 		a.OnTranscriptCompacted = persistCompaction
 		a.OnImageExcluded = persistImageExclusion
+		// Record which transcript file this agent persists to (surfaced
+		// by terva_status). Rebuilt agents (login, /model swap) continue
+		// the live session, so they adopt it here; session swaps re-adopt
+		// at their swap sites.
+		persistMu.Lock()
+		a.AdoptSessionIdentity(sess)
+		persistMu.Unlock()
 		return a
 	}
 	wireAgentPersist(ag)
@@ -1774,6 +1863,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			_ = sess.Close()
 		}
 		sess = newSess
+		currentAg.AdoptSessionIdentity(newSess)
 		currentAg.SetMessages(msgs)
 		if cum, last, uerr := core.SessionUsageDetail(path); uerr == nil {
 			currentAg.SeedCost(cum)
@@ -1906,6 +1996,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			sess = newSess
 			sessBaselineMsgs = 0
 			persistMu.Unlock()
+			newAg.AdoptSessionIdentity(newSess)
 		}
 
 		// Push the new state into the running Interactive.
@@ -1952,10 +2043,12 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		sessBaselineMsgs = 0
 		persistMu.Unlock()
 
-		// Reset the live conversation: empty transcript, zeroed meters.
+		// Reset the live conversation: empty transcript, zeroed meters,
+		// no session identity until the fresh session (if any) is open.
 		currentAg.SetMessages(nil)
 		currentAg.SeedCost(provider.Usage{})
 		currentAg.SeedLastTurnUsage(provider.Usage{})
+		currentAg.AdoptSessionIdentity(nil)
 
 		// Fresh session in the same cwd's bucket. With --no-session the
 		// transcript reset above is the whole effect.
@@ -1969,6 +2062,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			sess = ns
 			sessBaselineMsgs = 0
 			persistMu.Unlock()
+			currentAg.AdoptSessionIdentity(ns)
 			if swarmMgr != nil {
 				swarmMgr.SetActiveSession(ns.ID)
 			}
@@ -2616,6 +2710,36 @@ func pickSession(cwd string) (string, error) {
 	return files[n-1], nil
 }
 
+// wireHeadlessSessionPersist wires the agent's durable-persistence hooks
+// to the on-disk session: every appended message, usage row, and
+// post-compaction transcript flows to disk as it happens, so the real
+// terva session IS the transcript and a crash costs at most the
+// in-flight turn. Mirrors the TUI's wireAgentPersist closure; used by
+// the long-lived headless front ends — ACP sessions and the bot
+// daemon's paired-DM agent. Also records the session identity on the
+// agent so terva_status can report it. A per-session mutex serialises
+// writes; each of these front ends runs one turn at a time per agent,
+// so this is belt-and-suspenders.
+func wireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
+	ag.AdoptSessionIdentity(sess)
+	var mu sync.Mutex
+	ag.OnMessageAppended = func(m provider.Message) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = sess.AppendMessage(m)
+	}
+	ag.OnUsage = func(cum provider.Usage) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = sess.AppendUsage(cum, cum)
+	}
+	ag.OnTranscriptCompacted = func(messages []provider.Message) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = sess.AppendCompaction(messages)
+	}
+}
+
 // WriteNewTranscript appends only messages after index `from` from the
 // agent's transcript to the session. Used by callers that don't hold
 // the persistMu (non-interactive print/json modes which run a single
@@ -2652,8 +2776,115 @@ func readAllStdin() (string, error) {
 	return string(b), err
 }
 
-func printModels() {
-	models := provider.Active()
+// modelSourceLabel normalizes a model's provenance the way the table
+// renders it: "user" (models.json), "live" (this run's discovery),
+// "cache" (the last live listing, loaded from disk), "catalog" (baked
+// in), or "speculative" (upstream-announced, unconfirmed).
+func modelSourceLabel(m provider.Model) string {
+	if m.Speculative {
+		return "speculative"
+	}
+	if m.Source == "" {
+		return "catalog"
+	}
+	return m.Source
+}
+
+// modelSourceTier ranks provenance by how actionable it is, for the
+// `<source>+` ("this tier and above") filter form. live and cache
+// share a tier: cache IS live, one run removed.
+var modelSourceTier = map[string]int{
+	"speculative": 1,
+	"catalog":     2,
+	"cache":       3,
+	"live":        3,
+	"user":        4,
+}
+
+// modelListFilter compiles a --list-models FILTER into a predicate.
+// Terms (comma-separated) AND together: an exact source label (where
+// `live` deliberately folds in `cache` — otherwise the filter goes
+// mysteriously empty once the discovery cache takes over between
+// runs), a tier threshold like `live+`, or `available` — only models
+// whose provider `selectable` says yes to, i.e. the (provider, model)
+// pairs a --provider/--model pin could use right now.
+func modelListFilter(filter string, selectable func(providerName string) bool) (func(provider.Model) bool, error) {
+	var preds []func(provider.Model) bool
+	for _, term := range strings.Split(filter, ",") {
+		term = strings.TrimSpace(term)
+		if term == "" {
+			continue
+		}
+		switch {
+		case term == "available":
+			preds = append(preds, func(m provider.Model) bool { return selectable(m.Provider) })
+		case strings.HasSuffix(term, "+"):
+			base := strings.TrimSuffix(term, "+")
+			tier, ok := modelSourceTier[base]
+			if !ok {
+				return nil, fmt.Errorf("--list-models: unknown source %q in %q (sources: user, live, cache, catalog, speculative)", base, term)
+			}
+			preds = append(preds, func(m provider.Model) bool {
+				return modelSourceTier[modelSourceLabel(m)] >= tier
+			})
+		default:
+			if _, ok := modelSourceTier[term]; !ok {
+				return nil, fmt.Errorf("--list-models: unknown filter term %q (sources: user, live, cache, catalog, speculative; add + for \"and above\"; or: available)", term)
+			}
+			want := term
+			preds = append(preds, func(m provider.Model) bool {
+				l := modelSourceLabel(m)
+				if want == "live" {
+					return l == "live" || l == "cache"
+				}
+				return l == want
+			})
+		}
+	}
+	return func(m provider.Model) bool {
+		for _, p := range preds {
+			if !p(m) {
+				return false
+			}
+		}
+		return true
+	}, nil
+}
+
+// providerSelectable reports whether --provider <name> would resolve a
+// usable credential right now — the probe behind --list-models=available.
+// Keyless providers count: ollama needs no key (Resolve substitutes a
+// placeholder), and openai-compatible models only appear in the list
+// when an endpoint is configured. Results are memoized per provider in
+// cache (the auth store hits disk).
+func providerSelectable(name string, cache map[string]bool) bool {
+	if v, ok := cache[name]; ok {
+		return v
+	}
+	var ok bool
+	switch name {
+	case "ollama", "openai-compatible":
+		ok = true
+	default:
+		_, _, err := ResolveCredential(name, "")
+		ok = err == nil
+	}
+	cache[name] = ok
+	return ok
+}
+
+func printModels(filter string) error {
+	credCache := map[string]bool{}
+	keep, err := modelListFilter(filter, func(p string) bool { return providerSelectable(p, credCache) })
+	if err != nil {
+		return err
+	}
+	var models []provider.Model
+	for _, m := range provider.Active() {
+		if keep(m) {
+			models = append(models, m)
+		}
+	}
 
 	// Compute column widths from actual data so wide providers (e.g.
 	// xiaomi-token-plan-sgp) and long bedrock model ids don't force the
@@ -2667,14 +2898,7 @@ func printModels() {
 		if w := len(m.ID); w > idW {
 			idW = w
 		}
-		source := m.Source
-		if source == "" {
-			source = "catalog"
-		}
-		if m.Speculative {
-			source = "speculative"
-		}
-		if w := len(source); w > srcW {
+		if w := len(modelSourceLabel(m)); w > srcW {
 			srcW = w
 		}
 	}
@@ -2696,19 +2920,16 @@ func printModels() {
 		if m.Has(provider.CapImageInput) {
 			vision = "✓"
 		}
-		source := m.Source
-		if source == "" {
-			source = "catalog"
-		}
-		if m.Speculative {
-			source = "speculative"
-		}
 		fmt.Printf("%-*s  %-*s  %8d  %8d     %s         %s     %-*s  %s\n",
 			provW, m.Provider,
 			idW, m.ID,
 			m.ContextWindow, m.MaxOutput,
 			reason, vision,
-			srcW, source,
+			srcW, modelSourceLabel(m),
 			m.DisplayName)
 	}
+	if len(models) == 0 && filter != "" {
+		fmt.Fprintf(os.Stderr, "no models match --list-models=%s\n", filter)
+	}
+	return nil
 }
