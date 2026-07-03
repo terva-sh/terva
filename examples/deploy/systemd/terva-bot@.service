@@ -1,0 +1,48 @@
+# terva chat bot — per-connector USER unit template.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp terva-bot@.service ~/.config/systemd/user/
+#   mkdir -p ~/agents/discord            # the agent's workspace (WorkingDirectory below)
+#   terva bot setup --connector discord  # one-time, interactive (token prompt)
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now terva-bot@discord
+#   loginctl enable-linger $USER         # keep it running after logout
+#
+# The instance name (%i) is the connector: terva-bot@discord,
+# terva-bot@telegram, or an extension connector's name.
+#
+# `bot run` (the FOREGROUND form) on purpose: systemd owns detaching,
+# restarts, and logs. `terva bot start` is the self-daemonizing form
+# for ad-hoc shells — never stack it with a supervisor.
+
+[Unit]
+Description=terva chat bot (%i connector)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Adjust to where terva is installed (`command -v terva`): the
+# install script drops it in /usr/local/bin, ~/.local/bin, or ~/bin.
+ExecStart=%h/.local/bin/terva bot run --connector %i --continue --approval ask
+# The agent's working directory IS its workspace: what the built-in
+# tools see, where sessions bucket. Must exist before first start.
+WorkingDirectory=%h/agents/%i
+# TERVA_HOME defaults to the user's config dir; uncomment to pin one.
+#Environment=TERVA_HOME=%h/.config/terva
+
+# Scope an exposed bot to what it needs (docs/connectors.md — the
+# group-chat posture): swap the ExecStart above for something like
+#ExecStart=%h/.local/bin/terva bot run --connector %i --continue --approval ask --no-workspace-tools --extensions calendar --no-mcp
+
+# The connector already retries transient network trouble internally
+# and exits only when PERMANENTLY broken (bad token, revoked bot) or
+# when its crash budget is exhausted — so restart on failure, but
+# don't hot-loop on a dead credential.
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target

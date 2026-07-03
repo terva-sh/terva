@@ -1,0 +1,21 @@
+# Derived terva image with interpreters for script extensions and the
+# common npx/uvx-launched MCP servers. The base image is deliberately
+# lean (bash/git/curl only); this is the intended way to run
+# Python/TypeScript extensions or MCP servers in a container — derive,
+# don't fatten the base. See docs/deploy.md.
+#
+#   docker build -f Dockerfile.tools -t my-terva .
+#   docker run -d --name terva-bot --restart unless-stopped \
+#       -v terva-data:/data -v "$HOME/agents/discord":/work \
+#       my-terva bot run --connector discord --continue --approval ask
+#
+# Trim the package list to what your extensions actually need — this
+# is a starting point, not a recommendation to ship every runtime.
+FROM ghcr.io/terva-sh/terva
+
+USER root
+RUN apk add --no-cache \
+	python3 py3-pip \
+	nodejs npm \
+	uv
+USER terva

@@ -1,0 +1,41 @@
+# terva chat bot — SYSTEM unit for a dedicated service user.
+# The user-level template (terva-bot@.service) is the recommended
+# starting point; use this when the bot should survive independent of
+# any login session on a shared host.
+#
+# Install:
+#   useradd --system --home-dir /var/lib/terva --create-home terva
+#   install -d -o terva -g terva /var/lib/terva/workspace
+#   sudo -u terva TERVA_HOME=/var/lib/terva terva bot setup --connector discord
+#   cp terva-bot-system.service /etc/systemd/system/terva-bot.service
+#   systemctl daemon-reload && systemctl enable --now terva-bot
+
+[Unit]
+Description=terva chat bot (discord)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=terva
+Group=terva
+Environment=TERVA_HOME=/var/lib/terva
+ExecStart=/usr/local/bin/terva bot run --connector discord --continue --approval ask
+WorkingDirectory=/var/lib/terva/workspace
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Hardening, sized honestly: the agent RUNS COMMANDS, so the sandbox
+# posture comes from terva's own flags (--jail, --no-workspace-tools,
+# --extensions/--mcp allowlists), not from locking the unit down until
+# the tools break. These keep the process off the system dirs while
+# leaving its own state writable.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/terva
+
+[Install]
+WantedBy=multi-user.target
