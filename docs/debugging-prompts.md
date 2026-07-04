@@ -82,6 +82,12 @@ their absence here is expected, not a bug.
 | `card:post_history` | tail | a card's `post_history_instructions` |
 | `extension-context` | system/tail | an extension's static/`register_context` block |
 
+The wording of the generated segments themselves — `identity-intro`,
+`conventions`, the docs/status hints, the footer — is overridable per key
+without a persona or `--system-prompt`, via the prompt overlay
+(`$TERVA_HOME/locales/prompts/en.json`, works in English). See
+[localization](localization.md#customizing-tervas-prompts).
+
 ## In-session
 
 - **`/lore`** — lists the run's active lore (name · trigger · source) and shows

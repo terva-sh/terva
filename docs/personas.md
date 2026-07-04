@@ -5,7 +5,9 @@ A **persona** is *who is helping*: a named identity with a short behavioral
 two layers — **skills** are *how to do a task* ([skills.md](skills.md)), and
 **tools / extensions** are *what can be done* ([extensions.md](extensions.md)).
 A persona only shapes the agent's identity; it never grants tools or changes
-permissions.
+permissions. To reword the *default* identity or terva's other canned prompts
+key-by-key (rather than swap in a whole persona), use the prompt overlay — see
+[localization](localization.md#customizing-tervas-prompts).
 
 terva ships a default persona (**Mieli**), a crew of specialist reviewers, and
 **Kertoja**, an immersive game-master for `--play` (see
