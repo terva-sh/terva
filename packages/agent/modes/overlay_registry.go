@@ -14,6 +14,7 @@ package modes
 // at the right priority position.
 
 import (
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -362,7 +363,7 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				case act.RemoveAndExit:
 					if err := i.cfg.Migration.RemoveOldDir(); err != nil {
 						i.mu.Lock()
-						i.statusErr = "remove old dir: " + err.Error()
+						i.statusErr = i18n.T("remove old dir: %s", err.Error())
 						i.mu.Unlock()
 						i.migrateDialog.Close()
 						return false
@@ -373,7 +374,7 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 					return true
 				case act.KeepOld:
 					i.mu.Lock()
-					i.statusOK = "migrated — old dir kept; restart terva to fully switch over"
+					i.statusOK = i18n.T("migrated — old dir kept; restart terva to fully switch over")
 					i.mu.Unlock()
 				}
 				return false

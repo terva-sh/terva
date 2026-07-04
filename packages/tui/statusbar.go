@@ -20,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -538,11 +539,7 @@ func segSwarm(p StatusBarParams) []string {
 		return nil
 	}
 	th := p.Theme
-	noun := "agents"
-	if p.SwarmAgents == 1 {
-		noun = "agent"
-	}
-	return []string{th.FG256(th.StatusColor(SegSwarm, th.Muted), fmt.Sprintf("⛭ %d %s", p.SwarmAgents, noun))}
+	return []string{th.FG256(th.StatusColor(SegSwarm, th.Muted), i18n.TN(p.SwarmAgents, "⛭ %d agent", "⛭ %d agents"))}
 }
 
 // segSession names the live session file, for telling parallel
@@ -552,7 +549,7 @@ func segSession(p StatusBarParams) []string {
 		return nil
 	}
 	th := p.Theme
-	return []string{th.FG256(th.StatusColor(SegSession, th.Muted), "sess "+p.SessionName)}
+	return []string{th.FG256(th.StatusColor(SegSession, th.Muted), i18n.T("sess %s", p.SessionName))}
 }
 
 // segClock is a 24h wall clock. Config-only (not in the default rows);
@@ -577,7 +574,7 @@ func segThinking(p StatusBarParams) []string {
 		return nil
 	}
 	th := p.Theme
-	return []string{th.FG256(th.StatusColor(SegThinking, th.Muted), "thinking: "+label)}
+	return []string{th.FG256(th.StatusColor(SegThinking, th.Muted), i18n.T("thinking: %s", label))}
 }
 
 func segTokens(p StatusBarParams) []string {
@@ -615,7 +612,7 @@ func segCost(p StatusBarParams) []string {
 		text += fmt.Sprintf(" ~$%.2f/hr", rate)
 	}
 	if p.Subscription {
-		text += " (sub)"
+		text += " " + i18n.T("(sub)")
 	}
 	th := p.Theme
 	return []string{th.FG256(th.StatusColor(SegCost, th.Muted), text)}
@@ -647,13 +644,13 @@ func segContext(p StatusBarParams) []string {
 		return nil
 	}
 	if max <= 0 {
-		return []string{th.FG256(th.MeterColor(0), "ctx "+formatTokens(used))}
+		return []string{th.FG256(th.MeterColor(0), i18n.T("ctx %s", formatTokens(used)))}
 	}
 	pct := float64(used) / float64(max) * 100
-	text := fmt.Sprintf("ctx %s/%s %s %d%%",
+	text := i18n.T("ctx %s/%s %s %d%%",
 		formatTokens(used), formatTokens(max), meterBar(pct, 5), int(pct+0.5))
 	if p.AutoCompacting {
-		text += " (auto)"
+		text += " " + i18n.T("(auto)")
 	}
 	return []string{th.FG256(th.MeterColor(pct), text)}
 }
@@ -693,12 +690,12 @@ func segTags(p StatusBarParams) []string {
 	var atoms []string
 	switch {
 	case p.ApprovalMode != "" && p.ApprovalMode != "yolo":
-		atoms = append(atoms, th.FG256(color, p.ApprovalMode+" mode"))
+		atoms = append(atoms, th.FG256(color, i18n.T("%s mode", p.ApprovalMode)))
 	case p.ApprovalMode == "" && p.NoYolo:
-		atoms = append(atoms, th.FG256(color, "yolo mode disabled"))
+		atoms = append(atoms, th.FG256(color, i18n.T("yolo mode disabled")))
 	}
 	if p.Locked {
-		atoms = append(atoms, th.FG256(color, "jailed"))
+		atoms = append(atoms, th.FG256(color, i18n.T("jailed")))
 	}
 	return atoms
 }
@@ -708,7 +705,7 @@ func segBridge(p StatusBarParams) []string {
 		return nil
 	}
 	th := p.Theme
-	return []string{th.FG256(th.StatusColor(SegBridge, th.Muted), p.ChatConnected+" connected")}
+	return []string{th.FG256(th.StatusColor(SegBridge, th.Muted), i18n.T("%s connected", p.ChatConnected))}
 }
 
 func segExt(p StatusBarParams) []string {

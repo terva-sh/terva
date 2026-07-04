@@ -1,5 +1,7 @@
 package modes
 
+import "terva.sh/terva/packages/i18n"
+
 // Hooks the /mcp dialog to the host callbacks: open with the current
 // configured-server set, apply a global/project toggle via the injected
 // persisters, start/stop the server live, then refresh the list in place
@@ -9,7 +11,7 @@ package modes
 // openMCPDialog populates and shows the /mcp dialog.
 func (i *Interactive) openMCPDialog() {
 	if i.mcpDialog == nil || i.cfg.ListMCP == nil {
-		i.setStatusErr("MCP management is not available in this build")
+		i.setStatusErr(i18n.T("MCP management is not available in this build"))
 		return
 	}
 	i.mcpDialog.Open(i.cfg.ListMCP())

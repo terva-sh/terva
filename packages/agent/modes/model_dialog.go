@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -132,7 +133,7 @@ func (d *modelDialog) rebuildProviderList() {
 	}
 	d.providers = nil
 	if favCount > 0 {
-		d.providers = append(d.providers, providerRow{label: "★ favorites", count: favCount, fav: true})
+		d.providers = append(d.providers, providerRow{label: i18n.T("★ favorites"), count: favCount, fav: true})
 	}
 	names := make([]string, 0, len(counts))
 	for n := range counts {
@@ -326,9 +327,9 @@ func (d *modelDialog) Render(th tui.Theme, width int) []string {
 		d.reloadCatalog()
 	}
 	if d.promoting {
-		lines := []string{frameHeader(th, "model", width)}
-		lines = append(lines, th.FG256(th.Accent, fmt.Sprintf("  set %q as default:", d.promoteModel)))
-		lines = append(lines, th.FG256(th.Muted, "    [p] project (this repo, when trusted)   [g] global (everywhere)   esc cancel"))
+		lines := []string{frameHeader(th, i18n.T("model"), width)}
+		lines = append(lines, th.FG256(th.Accent, "  "+i18n.T("set %q as default:", d.promoteModel)))
+		lines = append(lines, th.FG256(th.Muted, "    "+i18n.T("[p] project (this repo, when trusted)   [g] global (everywhere)   esc cancel")))
 		return append(lines, frameRule(th, width))
 	}
 	if d.stage == stageProvider {
@@ -338,18 +339,18 @@ func (d *modelDialog) Render(th tui.Theme, width int) []string {
 }
 
 func (d *modelDialog) renderProviders(th tui.Theme, width int) []string {
-	lines := []string{frameHeader(th, "model · provider", width)}
-	hint := "pick a provider (↑/↓, enter, esc) - type to filter"
+	lines := []string{frameHeader(th, i18n.T("model · provider"), width)}
+	hint := i18n.T("pick a provider (↑/↓, enter, esc) - type to filter")
 	if d.provQuery != "" {
-		hint = fmt.Sprintf("filter: %s", d.provQuery)
+		hint = i18n.T("filter: %s", d.provQuery)
 	}
 	lines = append(lines, th.FG256(th.Muted, hint))
 
 	rows := d.filteredProviders()
 	if len(rows) == 0 {
-		msg := "  no providers match " + fmt.Sprintf("%q", d.provQuery)
+		msg := "  " + i18n.T("no providers match %q", d.provQuery)
 		if len(d.providers) == 0 {
-			msg = "  no credentials found - run /login to add an api key or subscription"
+			msg = "  " + i18n.T("no credentials found - run /login to add an api key or subscription")
 		}
 		lines = append(lines, th.FG256(th.Muted, msg))
 		return append(lines, frameRule(th, width))
@@ -369,23 +370,23 @@ func (d *modelDialog) renderProviders(th tui.Theme, width int) []string {
 }
 
 func (d *modelDialog) renderModels(th tui.Theme, width int) []string {
-	header := "model"
+	header := i18n.T("model")
 	if d.scopeLabel != "" {
-		header = "model · " + d.scopeLabel
+		header = i18n.T("model · %s", d.scopeLabel)
 	}
 	lines := []string{frameHeader(th, header, width)}
 
-	back := "esc"
+	back := i18n.T("esc")
 	if !d.single {
-		back = "esc back"
+		back = i18n.T("esc back")
 	}
-	base := "↑/↓, enter, ctrl+f favorite, ctrl+e edit, ctrl+d set-default, " + back + " - type to filter, :img/:reasoning"
+	base := i18n.T("↑/↓, enter, ctrl+f favorite, ctrl+e edit, ctrl+d set-default, %s - type to filter, :img/:reasoning", back)
 	lines = append(lines, th.FG256(th.Muted, d.p.hintLine(base)))
 
 	if len(d.p.view) == 0 {
-		msg := "  no models match " + fmt.Sprintf("%q", d.p.query)
+		msg := "  " + i18n.T("no models match %q", d.p.query)
 		if len(d.p.all) == 0 {
-			msg = "  (no models in this scope)"
+			msg = "  " + i18n.T("(no models in this scope)")
 		}
 		lines = append(lines, th.FG256(th.Muted, msg))
 		return append(lines, frameRule(th, width))

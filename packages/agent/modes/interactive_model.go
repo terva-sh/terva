@@ -8,6 +8,7 @@ import (
 	"context"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -63,7 +64,7 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 			i.turns.Agent().SetModel(m.ID)
 			i.mu.Lock()
 			i.cfg.Model = m.ID
-			i.statusOK = "model: " + m.ID
+			i.statusOK = i18n.T("model: %s", m.ID)
 			i.statusErr = ""
 			i.mu.Unlock()
 			if i.cfg.SetSessionModel != nil {
@@ -74,7 +75,7 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 	}
 	if builder == nil {
 		i.mu.Lock()
-		i.statusErr = "cannot switch provider: no builder configured"
+		i.statusErr = i18n.T("cannot switch provider: no builder configured")
 		i.mu.Unlock()
 		return
 	}
@@ -113,9 +114,9 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 	i.cfg.Provider = p
 	i.cfg.Model = md
 	if rescue {
-		i.statusOK = "rescue retry: switched to " + p + " / " + md + " (ignored --api-key / --base-url)"
+		i.statusOK = i18n.T("rescue retry: switched to %s / %s (ignored --api-key / --base-url)", p, md)
 	} else {
-		i.statusOK = "switched to " + p + " / " + md
+		i.statusOK = i18n.T("switched to %s / %s", p, md)
 	}
 	i.statusErr = ""
 	// Render cache keys are width+content based, so the new agent's
@@ -140,7 +141,7 @@ func (i *Interactive) persistFavoriteModel(prov, model string, on bool) {
 		return
 	}
 	if err := i.cfg.SetFavoriteModel(prov+"/"+model, on); err != nil {
-		i.setStatusErr("favorite: " + err.Error())
+		i.setStatusErr(i18n.T("favorite: %s", err))
 		return
 	}
 	verb := "favorited"
@@ -158,7 +159,7 @@ func (i *Interactive) promoteModelDefault(prov, model, scope string) {
 		return
 	}
 	if err := i.cfg.PromoteModelDefault(prov, model, scope); err != nil {
-		i.setStatusErr("set " + scope + " default: " + err.Error())
+		i.setStatusErr(i18n.T("set %s default: %s", scope, err))
 		return
 	}
 	where := "global default"

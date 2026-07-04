@@ -5,6 +5,7 @@ package modes
 // re-resolve the active model when it's the one that changed.
 
 import (
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -26,7 +27,7 @@ func (i *Interactive) openModelEdit(prov, modelID string) {
 		if um, ok, err := provider.FindUserModel(path, prov, modelID); err == nil {
 			existing, has = um, ok
 		} else {
-			i.setStatusErr("read models.json: " + err.Error())
+			i.setStatusErr(i18n.T("read models.json: %s", err))
 			return
 		}
 	}
@@ -40,11 +41,11 @@ func (i *Interactive) openModelEdit(prov, modelID string) {
 func (i *Interactive) applyModelEdit(prov, modelID string, entry provider.UserModel) {
 	path := i.cfg.UserModelsPath
 	if path == "" {
-		i.setStatusErr("models.json path not configured")
+		i.setStatusErr(i18n.T("models.json path not configured"))
 		return
 	}
 	if err := provider.UpsertUserModel(path, prov, entry); err != nil {
-		i.setStatusErr("save models.json: " + err.Error())
+		i.setStatusErr(i18n.T("save models.json: %s", err))
 		return
 	}
 	i.reapplyUserModels()
@@ -59,12 +60,12 @@ func (i *Interactive) applyModelEdit(prov, modelID string, entry provider.UserMo
 func (i *Interactive) applyModelReset(prov, modelID string) {
 	path := i.cfg.UserModelsPath
 	if path == "" {
-		i.setStatusErr("models.json path not configured")
+		i.setStatusErr(i18n.T("models.json path not configured"))
 		return
 	}
 	removed, err := provider.RemoveUserModel(path, prov, modelID)
 	if err != nil {
-		i.setStatusErr("update models.json: " + err.Error())
+		i.setStatusErr(i18n.T("update models.json: %s", err))
 		return
 	}
 	i.reapplyUserModels()

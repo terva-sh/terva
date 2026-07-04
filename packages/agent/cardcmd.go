@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/card"
+	"terva.sh/terva/packages/i18n"
 )
 
 // runCardCommand dispatches `terva card ...` subcommands.
@@ -25,24 +26,24 @@ func runCardCommand(rawArgs []string) (handled bool, err error) {
 		return true, nil
 	default:
 		printCardHelp()
-		return true, fmt.Errorf("unknown card subcommand: %s", rawArgs[1])
+		return true, i18n.Errorf("unknown card subcommand: %s", rawArgs[1])
 	}
 }
 
 func printCardHelp() {
-	fmt.Fprintln(os.Stderr, `terva card — inspect SillyTavern character cards
+	fmt.Fprintln(os.Stderr, i18n.H("help.card", `terva card — inspect SillyTavern character cards
 
 usage:
   terva card info <path>...   summarize a card (.json or .png)
 
 Load a card as a chat/play identity with --card <path> (implies --chat). A card
 is data, never code: its extensions are never interpreted as capabilities, and
-creator_notes is never sent to the model.`)
+creator_notes is never sent to the model.`))
 }
 
 func cardInfo(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: terva card info <path>...")
+		return i18n.Errorf("usage: terva card info <path>...")
 	}
 	failed := false
 	for _, path := range args {

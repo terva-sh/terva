@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -238,7 +239,7 @@ func (i *Interactive) probeScriptsOnce(ctx context.Context) {
 		i.mu.Lock()
 		if err != nil && !i.scriptFailing[name] {
 			i.scriptFailing[name] = true
-			i.statusOK = "status script " + name + " failed"
+			i.statusOK = i18n.T("status script %s failed", name)
 			changed = true
 		} else if err == nil && i.scriptFailing[name] {
 			i.scriptFailing[name] = false

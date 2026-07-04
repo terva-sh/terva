@@ -1,6 +1,9 @@
 package modes
 
-import "terva.sh/terva/packages/tui"
+import (
+	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/tui"
+)
 
 // welcomeBanner returns the intro text shown at the top of an empty chat.
 //
@@ -41,7 +44,7 @@ func welcomeBanner(th tui.Theme, persona, phonetic, emoji, accentHex, version st
 	headline := th.FGColor(accent, "▌ ") + th.FGColor(accent, tui.Bold(text))
 	return []string{
 		headline,
-		th.FG256(th.Muted, "  ask anything, or type /help to see commands."),
+		th.FG256(th.Muted, "  "+i18n.T("ask anything, or type /help to see commands.")),
 		"",
 	}
 }

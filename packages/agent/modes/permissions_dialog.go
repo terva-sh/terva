@@ -1,8 +1,7 @@
 package modes
 
 import (
-	"fmt"
-
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -141,7 +140,7 @@ func (d *permissionsDialog) Render(th tui.Theme, width int) []string {
 	}
 	grantStart := len(body)
 	if len(d.grants) > 0 {
-		body = append(body, "  "+th.FG256(th.Muted, "↑/↓ select · r/del revoke · R clear all"))
+		body = append(body, "  "+th.FG256(th.Muted, i18n.T("↑/↓ select · r/del revoke · R clear all")))
 		grantStart = len(body)
 		for i, g := range d.grants {
 			text := "  " + grantLabel(g)
@@ -155,7 +154,7 @@ func (d *permissionsDialog) Render(th tui.Theme, width int) []string {
 
 	title := "permissions (esc to close)"
 	if len(d.grants) > 0 {
-		title = "permissions (r/del revoke · R clear all · esc close)"
+		title = i18n.T("permissions (r/del revoke · R clear all · esc close)")
 	}
 
 	// Keep the cursor's line inside the scroll window.
@@ -181,7 +180,7 @@ func (d *permissionsDialog) Render(th tui.Theme, width int) []string {
 	out := []string{frameHeaderColor(th, title, width, th.Accent)}
 	out = append(out, body[d.scroll:end]...)
 	if end < len(body) {
-		out = append(out, "  "+th.FG256(th.Muted, fmt.Sprintf("↓ %d more (down/pgdn)", len(body)-end)))
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("↓ %d more (down/pgdn)", len(body)-end)))
 	}
 	out = append(out, frameRuleColor(th, width, th.Accent))
 	return out

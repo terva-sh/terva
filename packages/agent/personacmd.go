@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // personaCharterBudget is the soft size ceiling for a charter: it targets the
@@ -43,12 +45,12 @@ func runPersonaCommand(rawArgs []string) (handled bool, err error) {
 		return true, nil
 	default:
 		printPersonaHelp()
-		return true, fmt.Errorf("unknown persona subcommand: %s", rawArgs[1])
+		return true, i18n.Errorf("unknown persona subcommand: %s", rawArgs[1])
 	}
 }
 
 func printPersonaHelp() {
-	fmt.Fprintln(os.Stderr, `terva persona — inspect and manage personas
+	fmt.Fprintln(os.Stderr, i18n.H("help.persona", `terva persona — inspect and manage personas
 
 usage:
   terva persona list                list available personas (on-disk ∪ built-in)
@@ -58,7 +60,7 @@ usage:
 A persona is a Markdown file: YAML frontmatter (name, pronunciation, specialty,
 summary, emoji, accent_color, good_for/avoid_for) + a behavioral charter body.
 Select one at launch with --persona <name|file>, or set a default with
-default_persona in config.json or a $TERVA_HOME/persona.md file.`)
+default_persona in config.json or a $TERVA_HOME/persona.md file.`))
 }
 
 // personaList prints the merged roster: qualified names + visible provenance
@@ -112,7 +114,7 @@ func personaList() error {
 // returning an error if any file is invalid.
 func personaValidate(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: terva persona validate <file.md> [more.md ...]")
+		return i18n.Errorf("usage: terva persona validate <file.md> [more.md ...]")
 	}
 	failed := false
 	for _, path := range args {

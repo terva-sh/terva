@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -80,7 +81,7 @@ func runModelsCommand(rawArgs []string) (handled bool, err error) {
 				return true, nil
 			default:
 				printModelsHelp()
-				return true, fmt.Errorf("unknown flag for `models init`: %s", a)
+				return true, i18n.Errorf("unknown flag for `models init`: %s", a)
 			}
 		}
 		return true, runModelsInit(force)
@@ -95,7 +96,7 @@ func runModelsCommand(rawArgs []string) (handled bool, err error) {
 				return true, nil
 			default:
 				printModelsHelp()
-				return true, fmt.Errorf("unknown flag for `models endpoints`: %s", a)
+				return true, i18n.Errorf("unknown flag for `models endpoints`: %s", a)
 			}
 		}
 		return true, runModelsEndpoints(apply)
@@ -110,18 +111,18 @@ func runModelsCommand(rawArgs []string) (handled bool, err error) {
 				return true, nil
 			default:
 				printModelsHelp()
-				return true, fmt.Errorf("unknown flag for `models tiers`: %s", a)
+				return true, i18n.Errorf("unknown flag for `models tiers`: %s", a)
 			}
 		}
 		return true, runModelsTiers(all)
 	default:
 		printModelsHelp()
-		return true, fmt.Errorf("unknown models subcommand: %s", rest[0])
+		return true, i18n.Errorf("unknown models subcommand: %s", rest[0])
 	}
 }
 
 func printModelsHelp() {
-	fmt.Fprintln(os.Stderr, `terva models — manage your custom model catalog ($TERVA_HOME/models.json)
+	fmt.Fprintln(os.Stderr, i18n.H("help.models", `terva models — manage your custom model catalog ($TERVA_HOME/models.json)
 
 usage:
   terva models init            scaffold a models.json you can edit
@@ -142,7 +143,7 @@ notes:
     single models.json can point at several servers at once — unlike
     '/login', which stores only one openai-compatible endpoint.
   * After editing, run 'terva --list-models' to confirm your entries load
-    (they show source: user).`)
+    (they show source: user).`))
 }
 
 // runModelsInit writes the starter scaffold to $TERVA_HOME/models.json.

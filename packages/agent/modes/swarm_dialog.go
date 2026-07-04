@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -404,9 +405,9 @@ func isResumable(s swarm.Status) bool {
 // states Swarm.Resume accepts; nothing useful otherwise.
 func promptDisabledHint(s swarm.Status) string {
 	if isResumable(s) {
-		return "prompt: agent is " + string(s) + "; press R to resume first"
+		return i18n.T("prompt: agent is %s; press R to resume first", string(s))
 	}
-	return "prompt: agent is " + string(s) + " and can't receive input"
+	return i18n.T("prompt: agent is %s and can't receive input", string(s))
 }
 
 // killDisabledHint mirrors promptDisabledHint for the 'k' shortcut.
@@ -414,7 +415,7 @@ func promptDisabledHint(s swarm.Status) string {
 // terminal ones it's a no-op and the user usually wants 'r' (remove)
 // to clear out the agent's state instead.
 func killDisabledHint(s swarm.Status) string {
-	return "kill: agent is " + string(s) + "; nothing to stop (press r to remove)"
+	return i18n.T("kill: agent is %s; nothing to stop (press r to remove)", string(s))
 }
 
 // friendlySendErr turns a raw send error into a status-bar message
@@ -425,9 +426,9 @@ func killDisabledHint(s swarm.Status) string {
 // because they're rare and almost always indicate a real bug.
 func friendlySendErr(id string, err error) string {
 	if errors.Is(err, swarm.ErrNotReady) {
-		return "send: agent " + id + " isn't accepting input (press R to resume)"
+		return i18n.T("send: agent %s isn't accepting input (press R to resume)", id)
 	}
-	return "send: " + err.Error()
+	return i18n.T("send: %s", err)
 }
 
 func (d *swarmDialog) refresh() {
@@ -532,9 +533,9 @@ func (d *swarmDialog) HandleKey(k tui.Key) (closed bool, msg, errMsg string) {
 			// dance lowercase r has historically warranted).
 			if a := d.selected(); a != nil && d.resume != nil {
 				if err := d.resume(a.ID); err != nil {
-					return false, "", "resume: " + err.Error()
+					return false, "", i18n.T("resume: %s", err)
 				}
-				return false, "resumed " + a.ID, ""
+				return false, i18n.T("resumed %s", a.ID), ""
 			}
 		case 'k':
 			if a := d.selected(); a != nil && d.stop != nil {
@@ -547,16 +548,16 @@ func (d *swarmDialog) HandleKey(k tui.Key) (closed bool, msg, errMsg string) {
 					return false, "", killDisabledHint(a.Status)
 				}
 				if err := d.stop(a.ID); err != nil {
-					return false, "", "stop: " + err.Error()
+					return false, "", i18n.T("stop: %s", err)
 				}
-				return false, "stopped " + a.ID, ""
+				return false, i18n.T("stopped %s", a.ID), ""
 			}
 		case 'r':
 			if a := d.selected(); a != nil && d.remove != nil {
 				if err := d.remove(a.ID); err != nil {
-					return false, "", "remove: " + err.Error()
+					return false, "", i18n.T("remove: %s", err)
 				}
-				return false, "removed " + a.ID, ""
+				return false, i18n.T("removed %s", a.ID), ""
 			}
 		}
 	}
@@ -666,7 +667,7 @@ func (d *swarmDialog) handleModelPickerKey(k tui.Key) (closed bool, msg, errMsg 
 		d.pickingModel = false
 		d.modelPicker = nil
 		d.openSpawnEditor(tui.Theme{})
-		return false, "model: " + act.Model, ""
+		return false, i18n.T("model: %s", act.Model), ""
 	case act.Close:
 		d.pickingModel = false
 		d.modelPicker = nil
@@ -810,13 +811,13 @@ func (d *swarmDialog) handlePromptKey(k tui.Key) (closed bool, msg, errMsg strin
 			if !d.viewing {
 				d.closePromptEditor()
 			}
-			return false, "", "send not wired"
+			return false, "", i18n.T("send not wired")
 		}
 		if targetID == "" {
 			if !d.viewing {
 				d.closePromptEditor()
 			}
-			return false, "", "send: no target agent"
+			return false, "", i18n.T("send: no target agent")
 		}
 		if err := d.send(targetID, text); err != nil {
 			if !d.viewing {
@@ -835,7 +836,7 @@ func (d *swarmDialog) handlePromptKey(k tui.Key) (closed bool, msg, errMsg strin
 		} else {
 			d.closePromptEditor()
 		}
-		return false, "sent to " + targetID, ""
+		return false, i18n.T("sent to %s", targetID), ""
 	}
 	return false, "", ""
 }
@@ -947,15 +948,15 @@ func (d *swarmDialog) handleSpawnKey(k tui.Key) (closed bool, msg, errMsg string
 			return false, "", ""
 		}
 		if d.spawn == nil {
-			return false, "", "spawn not wired"
+			return false, "", i18n.T("spawn not wired")
 		}
 		if err := d.spawn(task, model, provider); err != nil {
-			return false, "", "spawn: " + err.Error()
+			return false, "", i18n.T("spawn: %s", err)
 		}
 		if model != "" {
-			return false, "spawned (model " + model + ")", ""
+			return false, i18n.T("spawned (model %s)", model), ""
 		}
-		return false, "spawned", ""
+		return false, i18n.T("spawned"), ""
 	}
 	return false, "", ""
 }
@@ -980,7 +981,7 @@ func (d *swarmDialog) Render(th tui.Theme, width int) []string {
 		return d.renderTranscript(th, width)
 	}
 
-	out := []string{frameHeader(th, "swarm (n new, p prompt, R resume, ↑/↓ move, enter view, k kill, r remove, esc close)", width)}
+	out := []string{frameHeader(th, i18n.T("swarm (n new, p prompt, R resume, ↑/↓ move, enter view, k kill, r remove, esc close)"), width)}
 	if d.prompting {
 		return d.renderPromptEditor(th, width, out)
 	}
@@ -992,7 +993,7 @@ func (d *swarmDialog) Render(th tui.Theme, width int) []string {
 			d.openModelPicker()
 		}
 		out = d.modelPicker.Render(th, width)
-		out = append(out, "  "+th.FG256(th.Muted, "select model for next spawn, esc to cancel"))
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("select model for next spawn, esc to cancel")))
 		return out
 	}
 	if d.spawning {
@@ -1006,7 +1007,7 @@ func (d *swarmDialog) Render(th tui.Theme, width int) []string {
 		// agent-to-be will run against. Skipped when no model was
 		// picked so the layout matches the historical look.
 		if d.pendingModel != "" {
-			label := "model: " + d.pendingModel
+			label := i18n.T("model: %s", d.pendingModel)
 			if d.pendingProvider != "" {
 				label += " (" + d.pendingProvider + ")"
 			}
@@ -1030,18 +1031,18 @@ func (d *swarmDialog) Render(th tui.Theme, width int) []string {
 		// Matching blank row below before the hint, mirroring the
 		// main input's editor breathing room.
 		out = append(out, "")
-		out = append(out, "  "+th.FG256(th.Muted, "enter spawn, /model pick model, @ file/dir picker, paste/drop paths become [file:] / [dir:] chips, esc cancel"))
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("enter spawn, /model pick model, @ file/dir picker, paste/drop paths become [file:] / [dir:] chips, esc cancel")))
 		out = append(out, frameRule(th, width))
 		return out
 	}
 	if len(d.rows) == 0 {
-		out = append(out, "  "+th.FG256(th.Muted, "no agents — press n to spawn one (or /swarm new <task>)"))
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("no agents — press n to spawn one (or /swarm new <task>)")))
 		out = append(out, frameRule(th, width))
 		return out
 	}
 
 	// Column header for readability.
-	header := fmt.Sprintf("  %-9s  %-26s  %-8s  %s", "STATUS", "ID", "AGE", "ACTIVITY")
+	header := fmt.Sprintf("  %-9s  %-26s  %-8s  %s", i18n.T("STATUS"), i18n.T("ID"), i18n.T("AGE"), i18n.T("ACTIVITY"))
 	out = append(out, th.FG256(th.Muted, header))
 
 	for i, r := range d.rows {
@@ -1063,24 +1064,24 @@ func (d *swarmDialog) renderTranscript(th tui.Theme, width int) []string {
 		return d.Render(th, width)
 	}
 	header := []string{
-		frameHeader(th, "swarm: "+a.ID+"  (type to send, esc back)", width),
-		"  " + th.FG256(th.Muted, "task:   "+a.Task),
-		"  " + th.FG256(th.Muted, "dir:    "+a.Dir),
-		"  " + th.FG256(th.Muted, fmt.Sprintf("status: %s, %s", a.Status, a.Activity)),
+		frameHeader(th, i18n.T("swarm: %s  (type to send, esc back)", a.ID), width),
+		"  " + th.FG256(th.Muted, i18n.T("task: %s", a.Task)),
+		"  " + th.FG256(th.Muted, i18n.T("dir: %s", a.Dir)),
+		"  " + th.FG256(th.Muted, i18n.T("status: %s, %s", a.Status, a.Activity)),
 	}
 	if a.Model != "" {
-		modelLine := "model:  " + a.Model
+		modelLine := i18n.T("model: %s", a.Model)
 		if a.Provider != "" {
 			modelLine += " (" + a.Provider + ")"
 		}
 		header = append(header, "  "+th.FG256(th.Muted, modelLine))
 	}
 	if a.Err != "" {
-		header = append(header, "  "+th.FG256(th.Muted, "error:  "+a.Err))
+		header = append(header, "  "+th.FG256(th.Muted, i18n.T("error: %s", a.Err)))
 	}
 	header = append(header,
 		"",
-		"  "+th.FG256(th.Muted, "── transcript ──"),
+		"  "+th.FG256(th.Muted, i18n.T("── transcript ──")),
 		"",
 	)
 
@@ -1091,7 +1092,7 @@ func (d *swarmDialog) renderTranscript(th tui.Theme, width int) []string {
 		raw = strings.Split(a.Tail, "\n")
 	}
 	if len(raw) == 0 {
-		header = append(header, "  "+th.FG256(th.Muted, "(no transcript yet)"))
+		header = append(header, "  "+th.FG256(th.Muted, i18n.T("(no transcript yet)")))
 		header = d.appendTranscriptEditor(header, th, width, a)
 		header = append(header, frameRule(th, width))
 		return header
@@ -1186,7 +1187,7 @@ func (d *swarmDialog) appendTranscriptEditor(out []string, th tui.Theme, width i
 		out = append(out, "  "+l)
 	}
 	out = append(out, "")
-	out = append(out, "  "+th.FG256(th.Muted, "enter send, @ file/dir picker, esc back"))
+	out = append(out, "  "+th.FG256(th.Muted, i18n.T("enter send, @ file/dir picker, esc back")))
 	return out
 }
 
@@ -1303,7 +1304,7 @@ func renderSwarmTranscriptBlocks(lines []string, th tui.Theme, width int) []stri
 			}
 		case kindStderr:
 			for _, line := range b.body {
-				out = append(out, "    "+th.FG256(th.Muted, "stderr  "+line))
+				out = append(out, "    "+th.FG256(th.Muted, i18n.T("stderr %s", line)))
 			}
 		case kindError:
 			for _, line := range b.body {
@@ -1331,7 +1332,7 @@ func (d *swarmDialog) renderPromptEditor(th tui.Theme, width int, out []string) 
 	if target == "" {
 		target = "<unknown>"
 	}
-	out = append(out, "  "+th.FG256(th.Muted, "send to "+target+":"))
+	out = append(out, "  "+th.FG256(th.Muted, i18n.T("send to %s:", target)))
 	if d.promptSuggest != nil {
 		d.promptSuggest.SetCWD(d.cwd)
 		if popup := d.promptSuggest.Render(d.promptEd.Value(), th, width); len(popup) > 0 {
@@ -1348,7 +1349,7 @@ func (d *swarmDialog) renderPromptEditor(th tui.Theme, width int, out []string) 
 	}
 	// Matching blank row below before the hint.
 	out = append(out, "")
-	out = append(out, "  "+th.FG256(th.Muted, "enter send, @ file/dir picker, esc cancel"))
+	out = append(out, "  "+th.FG256(th.Muted, i18n.T("enter send, @ file/dir picker, esc cancel")))
 	out = append(out, frameRule(th, width))
 	return out
 }
@@ -1392,17 +1393,17 @@ func formatSwarmRow(r swarm.AgentSnapshot, maxWidth int) string {
 func statusLabel(s swarm.Status) string {
 	switch s {
 	case swarm.StatusPending:
-		return "● pend"
+		return i18n.T("● pend")
 	case swarm.StatusRunning:
-		return "● run"
+		return i18n.T("● run")
 	case swarm.StatusDone:
-		return "✓ done"
+		return i18n.T("✓ done")
 	case swarm.StatusFailed:
-		return "✗ fail"
+		return i18n.T("✗ fail")
 	case swarm.StatusKilled:
-		return "■ kill"
+		return i18n.T("■ kill")
 	case swarm.StatusDetached:
-		return "○ detach"
+		return i18n.T("○ detach")
 	}
 	return string(s)
 }

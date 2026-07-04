@@ -7,13 +7,15 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // ProbeAPIKey verifies that key is valid for provider by making a
 // lightweight authenticated request. Returns nil on success.
 func ProbeAPIKey(ctx context.Context, provider, key string) error {
 	if key == "" {
-		return fmt.Errorf("empty key")
+		return i18n.Errorf("empty key")
 	}
 	c := &http.Client{Timeout: 15 * time.Second}
 	var req *http.Request
@@ -188,7 +190,7 @@ func ProbeAPIKey(ctx context.Context, provider, key string) error {
 	case "github-copilot":
 		return nil
 	default:
-		return fmt.Errorf("unknown provider %q", provider)
+		return i18n.Errorf("unknown provider %q", provider)
 	}
 
 	if strings.Contains(req.URL.String(), "{CLOUDFLARE_ACCOUNT_ID}") {
@@ -203,7 +205,7 @@ func ProbeAPIKey(ctx context.Context, provider, key string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("%s rejected the key (http %d)", provider, resp.StatusCode)
+		return i18n.Errorf("%s rejected the key (http %d)", provider, resp.StatusCode)
 	}
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("%s http %d", provider, resp.StatusCode)
@@ -221,7 +223,7 @@ func ProbeAPIKey(ctx context.Context, provider, key string) error {
 func ProbeOpenAICompatible(ctx context.Context, baseURL, key string) error {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
-		return fmt.Errorf("empty base url")
+		return i18n.Errorf("empty base url")
 	}
 	u := baseURL + "/models"
 	if !strings.HasSuffix(baseURL, "/v1") {
@@ -237,11 +239,11 @@ func ProbeOpenAICompatible(ctx context.Context, baseURL, key string) error {
 	c := &http.Client{Timeout: 15 * time.Second}
 	resp, err := c.Do(req)
 	if err != nil {
-		return fmt.Errorf("could not reach %s: %w", u, err)
+		return fmt.Errorf("%s: %w", i18n.T("could not reach %s", u), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("endpoint rejected the key (http %d)", resp.StatusCode)
+		return i18n.Errorf("endpoint rejected the key (http %d)", resp.StatusCode)
 	}
 	return nil
 }

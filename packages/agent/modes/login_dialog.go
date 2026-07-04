@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/tui"
@@ -128,7 +129,7 @@ func (d *loginDialog) Render(th tui.Theme, width int) []string {
 		for _, l := range d.renderStatusLines(th) {
 			lines = append(lines, l)
 		}
-		lines = append(lines, th.FG256(th.Muted, "choose login method (↑/↓, enter, esc to cancel):"))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("choose login method (↑/↓, enter, esc to cancel):")))
 		for i, o := range opts {
 			plain := "  " + o
 			if i == d.cursor {
@@ -144,7 +145,7 @@ func (d *loginDialog) Render(th tui.Theme, width int) []string {
 		for _, l := range d.renderStatusLines(th) {
 			lines = append(lines, l)
 		}
-		lines = append(lines, th.FG256(th.Muted, "pick a provider (↑/↓, enter, esc to cancel)"))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("pick a provider (↑/↓, enter, esc to cancel)")))
 		start, end := d.providerPage(len(opts))
 		for i := start; i < end; i++ {
 			o := opts[i]
@@ -177,7 +178,7 @@ func (d *loginDialog) Render(th tui.Theme, width int) []string {
 			lines = append(lines, th.FG256(th.Accent, seg))
 		}
 		lines = append(lines, "")
-		lines = append(lines, th.FG256(th.Muted, "paste the authorization code (or full redirect URL / code#state):"))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("paste the authorization code (or full redirect URL / code#state):")))
 		if d.codeEd == nil {
 			d.codeEd = tui.NewEditor(th.AccentBar(th.Accent))
 		}
@@ -199,7 +200,7 @@ func (d *loginDialog) Render(th tui.Theme, width int) []string {
 			lines = append(lines, th.FG256(th.Accent, seg))
 		}
 		lines = append(lines, "")
-		lines = append(lines, th.FG256(th.Muted, "paste the authorization code (or full redirect URL / code#state):"))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("paste the authorization code (or full redirect URL / code#state):")))
 		if d.codeEd == nil {
 			d.codeEd = tui.NewEditor(th.AccentBar(th.Accent))
 		}

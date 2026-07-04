@@ -3,6 +3,8 @@ package agent
 import (
 	"fmt"
 	"os"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // runTrustCommand dispatches `terva trust ...` and `terva untrust ...`.
@@ -46,7 +48,7 @@ func runTrust(args []string) error {
 		default:
 			if len(a) > 0 && a[0] == '-' {
 				printTrustHelp()
-				return fmt.Errorf("unknown flag for `trust`: %s", a)
+				return i18n.Errorf("unknown flag for `trust`: %s", a)
 			}
 			if path != "" {
 				return fmt.Errorf("trust takes at most one path (got %q and %q)", path, a)
@@ -88,7 +90,7 @@ func runUntrust(args []string) error {
 		default:
 			if len(a) > 0 && a[0] == '-' {
 				printTrustHelp()
-				return fmt.Errorf("unknown flag for `untrust`: %s", a)
+				return i18n.Errorf("unknown flag for `untrust`: %s", a)
 			}
 			if path != "" {
 				return fmt.Errorf("untrust takes at most one path (got %q and %q)", path, a)
@@ -131,7 +133,7 @@ func printTrustList() error {
 }
 
 func printTrustHelp() {
-	fmt.Fprintln(os.Stderr, `terva trust — control which directories may load project-supplied code/instructions
+	fmt.Fprintln(os.Stderr, i18n.H("help.trust", `terva trust — control which directories may load project-supplied code/instructions
 
 By default terva treats project folders as UNTRUSTED: a cloned repo's
 .terva/extensions/* are not spawned and its .terva/skills/* and
@@ -146,9 +148,9 @@ usage:
   terva untrust [path]          remove a directory from the trust list
 
 notes:
-  * The trust list lives in `+TrustStorePath()+` (mode 0600), outside
+  * The trust list lives in %s (mode 0600), outside
     any project — a repo can never trust itself.
   * For a single run without persisting, pass --trust to terva instead.
   * Trust loads project code/skills; it does NOT let a project grant
-    itself tool permissions (the self-approval ban stays).`)
+    itself tool permissions (the self-approval ban stays).`, TrustStorePath()))
 }

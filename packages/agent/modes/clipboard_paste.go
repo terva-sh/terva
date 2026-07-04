@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -58,11 +59,11 @@ func preparePromptWithClipboardImages(text string, pending []clipboardImageAttac
 func (i *Interactive) pasteClipboard() {
 	data, ok, err := tui.ReadClipboardImagePNG()
 	if err != nil {
-		i.setStatusErr("clipboard paste failed: " + err.Error())
+		i.setStatusErr(i18n.T("clipboard paste failed: %s", err))
 		return
 	}
 	if !ok {
-		i.setStatusErr("clipboard has no image to paste")
+		i.setStatusErr(i18n.T("clipboard has no image to paste"))
 		return
 	}
 	marker := fmt.Sprintf("[clipboard image #%d]", len(i.clipboardImages)+1)

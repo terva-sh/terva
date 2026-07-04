@@ -1,5 +1,7 @@
 package modes
 
+import "terva.sh/terva/packages/i18n"
+
 // Hooks the /extensions dialog to the host callbacks: open with the
 // current installed set, apply a global/project toggle via the injected
 // persisters, reload live, then refresh the list in place so the new
@@ -8,7 +10,7 @@ package modes
 // openExtensionsDialog populates and shows the /extensions dialog.
 func (i *Interactive) openExtensionsDialog() {
 	if i.extensionsDialog == nil || i.cfg.ListExtensions == nil {
-		i.setStatusErr("extension management is not available in this build")
+		i.setStatusErr(i18n.T("extension management is not available in this build"))
 		return
 	}
 	i.extensionsDialog.Open(i.cfg.ListExtensions())

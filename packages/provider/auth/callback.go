@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider/auth/assets"
 )
 
@@ -40,7 +41,7 @@ func NewCallbackServer(p OAuthProvider, expectedState string) (*CallbackServer, 
 	addr := fmt.Sprintf("%s:%d", p.RedirectHost, p.RedirectPort)
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("bind %s: %w (is another terva/claude-code/codex login already running?)", addr, err)
+		return nil, fmt.Errorf("bind %s: %w %s", addr, err, i18n.T("(is another terva/claude-code/codex login already running?)"))
 	}
 	cs := &CallbackServer{
 		l:        l,
@@ -99,13 +100,13 @@ func (cs *CallbackServer) handle(w http.ResponseWriter, r *http.Request) {
 	state := q.Get("state")
 	if code == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(oauthErrorHTML("missing authorization code")))
+		_, _ = w.Write([]byte(oauthErrorHTML(i18n.T("missing authorization code"))))
 		cs.deliver(CallbackResult{Err: fmt.Errorf("missing code"), RawPath: r.URL.RequestURI()})
 		return
 	}
 	if cs.state != "" && state != cs.state {
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(oauthErrorHTML("state mismatch")))
+		_, _ = w.Write([]byte(oauthErrorHTML(i18n.T("state mismatch"))))
 		cs.deliver(CallbackResult{Err: fmt.Errorf("state mismatch"), RawPath: r.URL.RequestURI()})
 		return
 	}

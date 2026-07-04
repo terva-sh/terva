@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -92,28 +93,31 @@ func (d *confirmDialog) AllowAllPending() {
 
 // confirmOptions lists the five responses in vertical order. Keyed
 // by index so HandleKey can send the right decision.
+// confirmOptions labels are marked with i18n.M (declared at init) and
+// translated at render time. The Reason strings are NOT translated — they
+// are sent to the model as the refusal reason, not shown to the user.
 var confirmOptions = []struct {
 	label    string
 	decision core.ConfirmDecision
 }{
 	{
-		label:    "yes (run this call)",
+		label:    i18n.M("yes (run this call)"),
 		decision: core.ConfirmDecision{Allow: true},
 	},
 	{
-		label:    "yes, always this tool (skip prompts for this tool for the rest of the session)",
+		label:    i18n.M("yes, always this tool (skip prompts for this tool for the rest of the session)"),
 		decision: core.ConfirmDecision{Allow: true, RememberTool: true},
 	},
 	{
-		label:    "yes, always this tool — save (adds a permanent allow rule to your config)",
+		label:    i18n.M("yes, always this tool — save (adds a permanent allow rule to your config)"),
 		decision: core.ConfirmDecision{Allow: true, PersistTool: true},
 	},
 	{
-		label:    "yes, always (skip all prompts for the rest of the session)",
+		label:    i18n.M("yes, always (skip all prompts for the rest of the session)"),
 		decision: core.ConfirmDecision{Allow: true, RememberAll: true},
 	},
 	{
-		label:    "no (refuse and let the model try something else)",
+		label:    i18n.M("no (refuse and let the model try something else)"),
 		decision: core.ConfirmDecision{Allow: false, Reason: "user declined"},
 	},
 }
@@ -199,9 +203,9 @@ func (d *confirmDialog) Render(th tui.Theme, width int) []string {
 	queued := len(d.pending) - 1
 
 	var lines []string
-	title := "confirm tool call"
+	title := i18n.T("confirm tool call")
 	if queued > 0 {
-		title = fmt.Sprintf("confirm tool call  (%d more queued)", queued)
+		title = i18n.T("confirm tool call  (%d more queued)", queued)
 	}
 	lines = append(lines, frameHeader(th, title, width))
 
@@ -211,10 +215,10 @@ func (d *confirmDialog) Render(th tui.Theme, width int) []string {
 	}
 	lines = append(lines, toolLine)
 	lines = append(lines, "")
-	lines = append(lines, th.FG256(th.Muted, "choose (\u2191/\u2193 or 1-5, enter to pick, esc to refuse):"))
+	lines = append(lines, th.FG256(th.Muted, i18n.T("choose (\u2191/\u2193 or 1-5, enter to pick, esc to refuse):")))
 
 	for i, opt := range confirmOptions {
-		label := opt.label
+		label := i18n.T(opt.label)
 		prefix := fmt.Sprintf("  %d. ", i+1)
 		plain := prefix + label
 		// Truncate the tail if the line would exceed width; keeps

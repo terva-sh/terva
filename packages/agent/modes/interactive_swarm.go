@@ -5,12 +5,12 @@ package modes
 // toggles.
 
 import (
-	"fmt"
 	"strings"
 
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 )
 
 // swarmWatchEntry is one tracked auto-swarm sub-agent. Filled in at
@@ -114,8 +114,13 @@ func (i *Interactive) flushSwarmSummary(batch []*swarmWatchEntry) {
 	if len(batch) == 0 {
 		return
 	}
+	// Each line is its own i18n.P template so an operator translating
+	// terva's prompts gets an all-<lang> summary \u2014 no English glue. P
+	// does the Sprintf itself (we WriteString the result rather than
+	// Fprintf a P format, which would be a non-constant format vet flags).
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "[auto-swarm update] %d sub-agent(s) finished:\n\n", len(batch))
+	sb.WriteString(i18n.P("swarm.summary.header", "[auto-swarm update] %d sub-agent(s) finished:", len(batch)))
+	sb.WriteString("\n\n")
 	for idx, e := range batch {
 		snap := e.agent.Snapshot()
 		status := string(snap.Status)
@@ -123,22 +128,28 @@ func (i *Interactive) flushSwarmSummary(batch []*swarmWatchEntry) {
 		if task == "" {
 			task = e.task
 		}
-		fmt.Fprintf(&sb, "%d. agent %s \u2014 status: %s\n", idx+1, snap.ID, status)
+		sb.WriteString(i18n.P("swarm.summary.agent_line", "%d. agent %s \u2014 status: %s", idx+1, snap.ID, status))
+		sb.WriteByte('\n')
 		if snap.Persona != "" {
-			fmt.Fprintf(&sb, "   persona: %s\n", snap.Persona)
+			sb.WriteString(i18n.P("swarm.summary.persona", "   persona: %s", snap.Persona))
+			sb.WriteByte('\n')
 		}
-		fmt.Fprintf(&sb, "   task: %s\n", truncateForSummary(task, 240))
+		sb.WriteString(i18n.P("swarm.summary.task", "   task: %s", truncateForSummary(task, 240)))
+		sb.WriteByte('\n')
 		if snap.Err != "" {
-			fmt.Fprintf(&sb, "   error: %s\n", truncateForSummary(snap.Err, 240))
+			sb.WriteString(i18n.P("swarm.summary.error", "   error: %s", truncateForSummary(snap.Err, 240)))
+			sb.WriteByte('\n')
 		} else if e.err != "" {
-			fmt.Fprintf(&sb, "   turn error: %s\n", truncateForSummary(e.err, 240))
+			sb.WriteString(i18n.P("swarm.summary.turn_error", "   turn error: %s", truncateForSummary(e.err, 240)))
+			sb.WriteByte('\n')
 		}
 		if tail := strings.TrimSpace(snap.Tail); tail != "" {
-			fmt.Fprintf(&sb, "   tail: %s\n", truncateForSummary(tail, 600))
+			sb.WriteString(i18n.P("swarm.summary.tail", "   tail: %s", truncateForSummary(tail, 600)))
+			sb.WriteByte('\n')
 		}
 		sb.WriteString("\n")
 	}
-	sb.WriteString("Briefly summarise the collective outcome for the user. Reference the agents by id. If any failed, suggest a follow-up; otherwise confirm completion. Do not spawn new sub-agents unless the user asks.")
+	sb.WriteString(i18n.P("swarm.summary.instruction", "This is observed state from sub-agents you spawned, not a new user request. Briefly summarise the collective outcome for the user, referencing the agents by id. If any failed, suggest a follow-up; otherwise confirm completion. Do not spawn new sub-agents unless the user asks."))
 	i.SubmitOrQueue(sb.String(), nil)
 }
 

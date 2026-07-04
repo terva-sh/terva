@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -94,13 +95,13 @@ func (d *sessionTreeDialog) Render(th tui.Theme, width int) []string {
 		return nil
 	}
 	var lines []string
-	lines = append(lines, frameHeader(th, "session tree", width))
-	lines = append(lines, th.FG256(th.Muted, "pick a branch to switch to (\u2191/\u2193, enter, esc to cancel):"))
+	lines = append(lines, frameHeader(th, i18n.T("session tree"), width))
+	lines = append(lines, th.FG256(th.Muted, i18n.T("pick a branch to switch to (\u2191/\u2193, enter, esc to cancel):")))
 	for i, it := range d.items {
 		indent := strings.Repeat("  ", it.depth)
 		label := "  " + indent + it.label
 		if it.isCur {
-			label += "  " + th.FG256(th.Muted, "[current]")
+			label += "  " + th.FG256(th.Muted, i18n.T("[current]"))
 		}
 		if i == d.cursor {
 			lines = append(lines, th.PadHighlight(label, width))
@@ -145,7 +146,7 @@ func formatTreeRow(n *core.TreeNode) string {
 		if n.Meta.ID != "" && len(n.Meta.ID) >= 8 {
 			preview = "(" + n.Meta.ID[:8] + ")"
 		} else {
-			preview = "(empty)"
+			preview = i18n.T("(empty)")
 		}
 	}
 	if len(preview) > 50 {

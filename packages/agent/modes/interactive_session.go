@@ -14,6 +14,7 @@ import (
 
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -29,7 +30,7 @@ import (
 func (i *Interactive) openMigrateDialog() {
 	if i.cfg.Migration == nil || i.cfg.Migration.Plan == nil {
 		i.mu.Lock()
-		i.statusErr = "/migrate unavailable: host did not wire Migration"
+		i.statusErr = i18n.T("/migrate unavailable: host did not wire Migration")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -37,7 +38,7 @@ func (i *Interactive) openMigrateDialog() {
 	st := i.cfg.Migration.Plan()
 	if st.NothingToDo {
 		i.mu.Lock()
-		i.statusOK = "nothing to migrate — already on the terva data dir"
+		i.statusOK = i18n.T("nothing to migrate — already on the terva data dir")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -45,7 +46,7 @@ func (i *Interactive) openMigrateDialog() {
 	if !st.UserDirApplicable && !st.AlreadyMigrated && i.cfg.Migration.Finalize != nil {
 		if err := i.cfg.Migration.Finalize(); err != nil {
 			i.mu.Lock()
-			i.statusErr = "write the no-fallback marker: " + err.Error()
+			i.statusErr = i18n.T("write the no-fallback marker: %s", err.Error())
 			i.mu.Unlock()
 			i.invalidate()
 			return
@@ -62,7 +63,7 @@ func (i *Interactive) openMigrateDialog() {
 func (i *Interactive) openBtwDialog(args []string) {
 	ag := i.turns.Agent()
 	if ag == nil {
-		i.setStatusErr("not logged in. type /login first.")
+		i.setStatusErr(i18n.T("not logged in. type /login first."))
 		return
 	}
 	seed := strings.TrimSpace(strings.Join(args, " "))
@@ -110,7 +111,7 @@ func (i *Interactive) reloadSkillsDialog() {
 // and lets the user add/adjust the request before it runs.
 func (i *Interactive) slashSkill(_ context.Context, parts []string, _ string) bool {
 	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
-		i.setStatusErr("usage: /skill <name> [request]  —  /skills to list")
+		i.setStatusErr(i18n.T("usage: /skill <name> [request]  —  /skills to list"))
 		return false
 	}
 	name := parts[1]
@@ -131,7 +132,7 @@ func (i *Interactive) slashSkill(_ context.Context, parts []string, _ string) bo
 		}
 	}
 	if match == nil {
-		i.setStatusErr(fmt.Sprintf("no skill named %q — /skills to list", name))
+		i.setStatusErr(i18n.T("no skill named %q — /skills to list", name))
 		return false
 	}
 
@@ -144,8 +145,7 @@ func (i *Interactive) slashSkill(_ context.Context, parts []string, _ string) bo
 // A trailing task is appended inline; otherwise the cursor is left after the
 // colon for the user to type their request.
 func skillDirective(name, task string) string {
-	d := fmt.Sprintf("Use the %q skill for: ", name)
-	return d + task
+	return i18n.P("skill.directive", "Use the %q skill for: %s", name, task)
 }
 
 // openJumpDialog builds a /jump picker from the current transcript.
@@ -154,7 +154,7 @@ func skillDirective(name, task string) string {
 func (i *Interactive) openJumpDialog(args []string) {
 	if i.view == nil || len(i.view.Messages) == 0 {
 		i.mu.Lock()
-		i.statusErr = "nothing to jump to \u2014 the session is empty"
+		i.statusErr = i18n.T("nothing to jump to \u2014 the session is empty")
 		i.mu.Unlock()
 		return
 	}
@@ -190,7 +190,7 @@ func (i *Interactive) applyJumpSelection(msgIdx, turnNo int) {
 	}
 	if !found {
 		i.mu.Lock()
-		i.statusErr = "could not resolve jump target"
+		i.statusErr = i18n.T("could not resolve jump target")
 		i.mu.Unlock()
 		return
 	}
@@ -247,7 +247,7 @@ func totalTurnsLocked(msgs []provider.Message) int {
 func (i *Interactive) startNewSession() {
 	if i.cfg.NewSession == nil {
 		i.mu.Lock()
-		i.statusErr = "starting a new session is not wired in this build"
+		i.statusErr = i18n.T("starting a new session is not wired in this build")
 		i.statusOK = ""
 		i.mu.Unlock()
 		return
@@ -279,7 +279,7 @@ func (i *Interactive) startNewSession() {
 	i.extNotes = nil
 	i.helpBlock = nil
 	i.statusErr = ""
-	i.statusOK = "started a new session"
+	i.statusOK = i18n.T("started a new session")
 	i.view.InvalidateRenderCache()
 	// Wipe the screen + scrollback so the previous session doesn't linger
 	// above the fresh one. terva renders in main-screen flow mode, so prior
@@ -300,19 +300,19 @@ func (i *Interactive) startNewSession() {
 func (i *Interactive) applySessionSelection(path string) {
 	if i.cfg.LoadSession == nil {
 		i.mu.Lock()
-		i.statusErr = "session loading is not wired in this build"
+		i.statusErr = i18n.T("session loading is not wired in this build")
 		i.mu.Unlock()
 		return
 	}
 	i.mu.Lock()
 	if i.sessionLoading {
-		i.statusErr = "already resuming a session"
+		i.statusErr = i18n.T("already resuming a session")
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
 	i.sessionLoading = true
-	i.statusOK = "resuming session: " + path
+	i.statusOK = i18n.T("resuming session: %s", path)
 	i.statusErr = ""
 	i.mu.Unlock()
 	i.invalidate()
@@ -328,7 +328,7 @@ func (i *Interactive) applySessionSelection(path string) {
 			i.invalidate()
 			return
 		}
-		i.statusOK = "resumed session: " + path
+		i.statusOK = i18n.T("resumed session: %s", path)
 		i.statusErr = ""
 		i.parkedTurn = 0
 		i.parkedTotal = 0
@@ -397,7 +397,7 @@ func (i *Interactive) doSessionOp(action, arg string) {
 		i.doSessionTree()
 	default:
 		i.mu.Lock()
-		i.statusErr = "unknown /session action: " + action + " (use export, import, fork, or tree)"
+		i.statusErr = i18n.T("unknown /session action: %s (use export, import, fork, or tree)", action)
 		i.mu.Unlock()
 		i.invalidate()
 	}
@@ -410,7 +410,7 @@ func (i *Interactive) doSessionOp(action, arg string) {
 func (i *Interactive) doSessionExport(dst string) {
 	if i.cfg.CurrentSessionPath == nil {
 		i.mu.Lock()
-		i.statusErr = "export: no session is active (running with --no-session?)"
+		i.statusErr = i18n.T("export: no session is active (running with --no-session?)")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -418,7 +418,7 @@ func (i *Interactive) doSessionExport(dst string) {
 	src := i.cfg.CurrentSessionPath()
 	if src == "" {
 		i.mu.Lock()
-		i.statusErr = "export: no session is active (running with --no-session?)"
+		i.statusErr = i18n.T("export: no session is active (running with --no-session?)")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -439,13 +439,13 @@ func (i *Interactive) doSessionExport(dst string) {
 	out, err := core.ExportSession(src, dst)
 	if err != nil {
 		i.mu.Lock()
-		i.statusErr = "export: " + err.Error()
+		i.statusErr = i18n.T("export: %s", err.Error())
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
 	i.mu.Lock()
-	i.statusOK = "exported session to " + friendlyPath(out)
+	i.statusOK = i18n.T("exported session to %s", friendlyPath(out))
 	i.statusErr = ""
 	i.mu.Unlock()
 	i.invalidate()
@@ -459,7 +459,7 @@ func (i *Interactive) doSessionImport(src string) {
 	src = unquotePath(src)
 	if src == "" {
 		i.mu.Lock()
-		i.statusErr = "import: pass a path — e.g. /session import ~/Downloads/work.tervasession"
+		i.statusErr = i18n.T("import: pass a path — e.g. /session import ~/Downloads/work.tervasession")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -467,7 +467,7 @@ func (i *Interactive) doSessionImport(src string) {
 	src = expandTilde(src)
 	if _, err := os.Stat(src); err != nil {
 		i.mu.Lock()
-		i.statusErr = "import: " + err.Error()
+		i.statusErr = i18n.T("import: %s", err.Error())
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -475,14 +475,14 @@ func (i *Interactive) doSessionImport(src string) {
 	newPath, err := core.ImportSession(src, i.cfg.TervaHome, i.cfg.CWD, i.cfg.Version)
 	if err != nil {
 		i.mu.Lock()
-		i.statusErr = "import: " + err.Error()
+		i.statusErr = i18n.T("import: %s", err.Error())
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
 	if i.cfg.LoadSession == nil {
 		i.mu.Lock()
-		i.statusOK = "imported session at " + friendlyPath(newPath) + " (run /sessions to resume it)"
+		i.statusOK = i18n.T("imported session at %s (run /sessions to resume it)", friendlyPath(newPath))
 		i.statusErr = ""
 		i.mu.Unlock()
 		i.invalidate()
@@ -490,13 +490,13 @@ func (i *Interactive) doSessionImport(src string) {
 	}
 	if err := i.cfg.LoadSession(newPath); err != nil {
 		i.mu.Lock()
-		i.statusErr = "import: load failed: " + err.Error()
+		i.statusErr = i18n.T("import: load failed: %s", err.Error())
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
 	i.mu.Lock()
-	i.statusOK = "imported and switched to session " + friendlyPath(newPath)
+	i.statusOK = i18n.T("imported and switched to session %s", friendlyPath(newPath))
 	i.statusErr = ""
 	i.mu.Unlock()
 	i.invalidate()
@@ -572,7 +572,7 @@ func friendlyPath(p string) string {
 func (i *Interactive) doSessionFork() {
 	if i.cfg.CurrentSessionPath == nil || i.cfg.CurrentSessionPath() == "" {
 		i.mu.Lock()
-		i.statusErr = "fork: no session is active (running with --no-session?)"
+		i.statusErr = i18n.T("fork: no session is active (running with --no-session?)")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -583,7 +583,7 @@ func (i *Interactive) doSessionFork() {
 	}
 	if len(msgs) == 0 {
 		i.mu.Lock()
-		i.statusErr = "fork: transcript is empty; nothing to fork from"
+		i.statusErr = i18n.T("fork: transcript is empty; nothing to fork from")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -599,7 +599,7 @@ func (i *Interactive) doSessionFork() {
 func (i *Interactive) doSessionTree() {
 	if i.cfg.TervaHome == "" || i.cfg.CWD == "" {
 		i.mu.Lock()
-		i.statusErr = "tree: session storage not configured"
+		i.statusErr = i18n.T("tree: session storage not configured")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -612,7 +612,7 @@ func (i *Interactive) doSessionTree() {
 	roots := core.BuildSessionTree(i.cfg.TervaHome, i.cfg.CWD)
 	if len(roots) == 0 {
 		i.mu.Lock()
-		i.statusErr = "tree: no sessions in this directory yet"
+		i.statusErr = i18n.T("tree: no sessions in this directory yet")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -623,7 +623,7 @@ func (i *Interactive) doSessionTree() {
 	}
 	if !i.sessionTreeDialog.Open(roots, current) {
 		i.mu.Lock()
-		i.statusErr = "tree: no branches to show"
+		i.statusErr = i18n.T("tree: no branches to show")
 		i.mu.Unlock()
 	}
 	i.invalidate()
@@ -635,20 +635,20 @@ func (i *Interactive) doSessionTree() {
 func (i *Interactive) applySessionTreeSelection(path string) {
 	if i.cfg.LoadSession == nil {
 		i.mu.Lock()
-		i.statusErr = "tree: session swap not available in this build"
+		i.statusErr = i18n.T("tree: session swap not available in this build")
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
 	if err := i.cfg.LoadSession(path); err != nil {
 		i.mu.Lock()
-		i.statusErr = "tree: load failed: " + err.Error()
+		i.statusErr = i18n.T("tree: load failed: %s", err.Error())
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
 	i.mu.Lock()
-	i.statusOK = "switched to branch " + friendlyPath(path)
+	i.statusOK = i18n.T("switched to branch %s", friendlyPath(path))
 	i.statusErr = ""
 	i.mu.Unlock()
 	i.invalidate()
@@ -662,7 +662,7 @@ func (i *Interactive) applyForkSelection(msgIdx int) {
 	i.pendingFork = false
 	if i.cfg.CurrentSessionPath == nil {
 		i.mu.Lock()
-		i.statusErr = "fork: no session is active"
+		i.statusErr = i18n.T("fork: no session is active")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -670,7 +670,7 @@ func (i *Interactive) applyForkSelection(msgIdx int) {
 	src := i.cfg.CurrentSessionPath()
 	if src == "" {
 		i.mu.Lock()
-		i.statusErr = "fork: no session is active"
+		i.statusErr = i18n.T("fork: no session is active")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -684,14 +684,14 @@ func (i *Interactive) applyForkSelection(msgIdx int) {
 	newPath, err := core.BranchSession(src, i.cfg.TervaHome, i.cfg.CWD, i.cfg.Version, upTo)
 	if err != nil {
 		i.mu.Lock()
-		i.statusErr = "fork: " + err.Error()
+		i.statusErr = i18n.T("fork: %s", err.Error())
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
 	if i.cfg.LoadSession == nil {
 		i.mu.Lock()
-		i.statusOK = "forked at message " + formatInt(upTo) + " (run /sessions to resume)"
+		i.statusOK = i18n.T("forked at message %s (run /sessions to resume)", formatInt(upTo))
 		i.statusErr = ""
 		i.mu.Unlock()
 		i.invalidate()
@@ -699,13 +699,13 @@ func (i *Interactive) applyForkSelection(msgIdx int) {
 	}
 	if err := i.cfg.LoadSession(newPath); err != nil {
 		i.mu.Lock()
-		i.statusErr = "fork: switch failed: " + err.Error()
+		i.statusErr = i18n.T("fork: switch failed: %s", err.Error())
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
 	i.mu.Lock()
-	i.statusOK = "forked and switched to new branch at " + friendlyPath(newPath)
+	i.statusOK = i18n.T("forked and switched to new branch at %s", friendlyPath(newPath))
 	i.statusErr = ""
 	i.mu.Unlock()
 	i.invalidate()

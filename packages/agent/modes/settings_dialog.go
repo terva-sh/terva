@@ -5,6 +5,7 @@ import (
 
 	"github.com/mattn/go-runewidth"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -226,8 +227,8 @@ func (d *settingsDialog) Render(th tui.Theme, width int) []string {
 	end := d.scroll + maxRows
 
 	var lines []string
-	lines = append(lines, frameHeader(th, "settings", width))
-	lines = append(lines, th.FG256(th.Muted, "change with enter/space, esc to close:"))
+	lines = append(lines, frameHeader(th, i18n.T("settings"), width))
+	lines = append(lines, th.FG256(th.Muted, i18n.T("change with enter/space, esc to close:")))
 	if d.scroll > 0 {
 		lines = append(lines, windowMoreAbove(th, d.scroll))
 	}
@@ -245,11 +246,11 @@ func (d *settingsDialog) renderOptions(th tui.Theme, width int) []string {
 		return d.Render(th, width)
 	}
 	it := d.items[d.cursor]
-	lines := []string{frameHeader(th, "settings: "+it.label, width)}
+	lines := []string{frameHeader(th, i18n.T("settings: %s", it.label), width)}
 	if it.desc != "" {
 		lines = append(lines, th.FG256(th.Muted, it.desc))
 	}
-	lines = append(lines, th.FG256(th.Muted, "select with enter/space, esc to go back:"))
+	lines = append(lines, th.FG256(th.Muted, i18n.T("select with enter/space, esc to go back:")))
 	for idx, opt := range it.options {
 		marker := "  "
 		if idx == it.choice {

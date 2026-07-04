@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -41,7 +42,7 @@ func newQuestionDialog() *questionDialog { return &questionDialog{} }
 func (d *questionDialog) rows(req *questionRequest) []string {
 	rows := append([]string(nil), req.options...)
 	if req.allowCustom {
-		rows = append(rows, "Type my own answer…")
+		rows = append(rows, i18n.T("Type my own answer…"))
 	}
 	return rows
 }
@@ -179,20 +180,20 @@ func (d *questionDialog) Render(th tui.Theme, width int) []string {
 	req := d.pending[0]
 
 	var lines []string
-	lines = append(lines, frameHeader(th, "question", width))
+	lines = append(lines, frameHeader(th, i18n.T("question"), width))
 	for _, wl := range wrapPlain(req.question, width-2) {
 		lines = append(lines, "  "+th.FG256(th.Tool, wl))
 	}
 	lines = append(lines, "")
 
 	if d.typing {
-		lines = append(lines, th.FG256(th.Muted, "type your answer, enter to submit, esc to skip:"))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("type your answer, enter to submit, esc to skip:")))
 		lines = append(lines, "  "+string(d.input)+th.FG256(th.Accent, "█"))
 		lines = append(lines, frameRule(th, width))
 		return lines
 	}
 
-	lines = append(lines, th.FG256(th.Muted, "choose (↑/↓, enter to pick, esc to skip):"))
+	lines = append(lines, th.FG256(th.Muted, i18n.T("choose (↑/↓, enter to pick, esc to skip):")))
 	for i, row := range d.rows(req) {
 		plain := "  " + row
 		if visibleLen(plain) > width-2 && width > 5 {

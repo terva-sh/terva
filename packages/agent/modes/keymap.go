@@ -17,6 +17,7 @@ package modes
 import (
 	"context"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -130,7 +131,7 @@ func (i *Interactive) keyCtrlC(context.Context, tui.Key) keyOutcome {
 			return keyQuit
 		}
 		i.mu.Lock()
-		i.statusOK = "press ctrl+c again to exit, esc to cancel the turn"
+		i.statusOK = i18n.T("press ctrl+c again to exit, esc to cancel the turn")
 		i.statusErr = ""
 		i.mu.Unlock()
 		i.armCtrlCExit()
@@ -146,7 +147,7 @@ func (i *Interactive) keyCtrlC(context.Context, tui.Key) keyOutcome {
 		i.suggest.Reset()
 		i.turns.DrainQueued()
 		i.mu.Lock()
-		i.statusOK = "input cleared"
+		i.statusOK = i18n.T("input cleared")
 		i.statusErr = ""
 		i.mu.Unlock()
 		i.armCtrlCExit()
@@ -156,7 +157,7 @@ func (i *Interactive) keyCtrlC(context.Context, tui.Key) keyOutcome {
 		return keyQuit
 	}
 	i.mu.Lock()
-	i.statusOK = "press ctrl+c again to exit"
+	i.statusOK = i18n.T("press ctrl+c again to exit")
 	i.statusErr = ""
 	i.mu.Unlock()
 	i.armCtrlCExit()
@@ -257,7 +258,7 @@ func (i *Interactive) keyCycleToolDisplay(context.Context, tui.Key) keyOutcome {
 	default:
 		i.view.ToolDisplay = tui.ToolDisplayFull
 	}
-	i.statusOK = "tool display: " + i.view.ToolDisplay.String()
+	i.statusOK = i18n.T("tool display: %s", i.view.ToolDisplay.String())
 	i.statusErr = ""
 	if i.rend != nil {
 		i.rend.Clear()

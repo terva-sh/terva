@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -182,15 +183,15 @@ func (d *extensionsDialog) Render(th tui.Theme, width int) []string {
 		return nil
 	}
 	var lines []string
-	lines = append(lines, frameHeader(th, "extensions", width))
+	lines = append(lines, frameHeader(th, i18n.T("extensions"), width))
 
 	if len(d.items) == 0 {
-		lines = append(lines, th.FG256(th.Muted, "  no extensions installed — `terva ext install <path|url>`"))
+		lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("no extensions installed — `terva ext install <path|url>`")))
 		lines = append(lines, frameRule(th, width))
 		return lines
 	}
 
-	lines = append(lines, th.FG256(th.Muted, "↑/↓ · g enable/disable (global) · p project on/off · c config · l log · esc"))
+	lines = append(lines, th.FG256(th.Muted, i18n.T("↑/↓ · g enable/disable (global) · p project on/off · c config · l log · esc")))
 
 	const maxRows = 12
 	start, end := cursorWindow(d.cursor, len(d.items), maxRows)
@@ -217,7 +218,7 @@ func (d *extensionsDialog) Render(th tui.Theme, width int) []string {
 			parts = append(parts, it.Language)
 		}
 		if it.Running {
-			parts = append(parts, fmt.Sprintf("%d cmds · %d tools", it.Commands, it.Tools))
+			parts = append(parts, i18n.T("%d cmds · %d tools", it.Commands, it.Tools))
 		}
 		detail := strings.Join(parts, " · ")
 		if it.Description != "" {

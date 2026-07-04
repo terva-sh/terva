@@ -89,11 +89,12 @@ func resolveApprovalMode(args Args, cfg Config) core.ApprovalMode {
 			return m
 		}
 	}
-	// Interactive (TUI) and ACP both have a real user to ask, so they default
-	// to workspace — the permission round-trip engages out of the box (in ACP,
-	// session/request_permission to the editor). Other headless modes (rpc/json/
-	// print/swarm) have no one to prompt, so they stay yolo.
-	if args.Mode == ModeInteractive || args.Mode == ModeACP {
+	// Interactive (TUI), ACP, and web all have a real user to ask, so they
+	// default to workspace — the permission round-trip engages out of the box
+	// (in ACP, session/request_permission to the editor; in web, a broadcast
+	// approval dialog to the browser). Other headless modes (rpc/json/print/
+	// swarm) have no one to prompt, so they stay yolo.
+	if args.Mode == ModeInteractive || args.Mode == ModeACP || args.Mode == ModeWeb {
 		return core.ApprovalWorkspace
 	}
 	return core.ApprovalYolo

@@ -30,6 +30,8 @@ import (
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/connsdk"
 	"terva.sh/terva/packages/agent/modes/telegram"
+	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -38,6 +40,10 @@ const name = "telegram-ext"
 var version = "0.0.0" // -ldflags "-X main.version=..."
 
 func main() {
+	// A connector is its own process, so it configures i18n itself from
+	// the environment (TERVA_LANG + the operator's $TERVA_HOME/locales
+	// overlay) — the host can't inject it across the process boundary.
+	_ = i18n.Configure(envcompat.Get("LANG"), envcompat.Home())
 	connsdk.Main(connsdk.Config{
 		Name:    name,
 		Version: version,
@@ -71,7 +77,7 @@ func newTransport(s connsdk.Session) (connsdk.Transport, error) {
 		return nil, err
 	}
 	if cfg.BotToken == "" {
-		return nil, fmt.Errorf("no bot token configured — run `terva bot setup --connector %s`", name)
+		return nil, i18n.Errorf("no bot token configured — run `terva bot setup --connector %s`", name)
 	}
 	conn := telegram.NewConnector(telegram.NewClient(cfg.BotToken), cfg, func(next telegram.Config) error {
 		return telegram.SaveConfig(stateDir(), next)
@@ -106,7 +112,7 @@ func (t *transport) Receive(ctx context.Context, deliver func(connsdk.Message)) 
 		for _, img := range m.Images {
 			path, err := t.writeAttachment(img)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, "attachment dropped:", err)
+				fmt.Fprintln(os.Stderr, i18n.T("attachment dropped: %s", err))
 				continue
 			}
 			out.Attachments = append(out.Attachments, connsdk.Attachment{MimeType: img.MimeType, Path: path})
@@ -160,18 +166,18 @@ func setup() error {
 	if err != nil {
 		return err
 	}
-	fmt.Print("telegram bot token (from @BotFather): ")
+	fmt.Print(i18n.T("telegram bot token (from @BotFather): "))
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil {
 		return err
 	}
 	token := strings.TrimSpace(line)
 	if token == "" {
-		return fmt.Errorf("no token provided")
+		return i18n.Errorf("no token provided")
 	}
 	me, err := telegram.NewClient(token).GetMe(context.Background())
 	if err != nil {
-		return fmt.Errorf("token rejected by telegram: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T("token rejected by telegram"), err)
 	}
 	cfg.BotToken = token
 	cfg.BotUsername = me.Username
@@ -182,8 +188,8 @@ func setup() error {
 	if err := telegram.SaveConfig(stateDir(), cfg); err != nil {
 		return err
 	}
-	fmt.Printf("\nsaved: @%s (id=%d) to %s\n", me.Username, me.ID, telegram.ConfigPath(stateDir()))
-	fmt.Printf("next: run `terva bot run --connector %s`, then send /start to your bot.\n", name)
+	fmt.Print("\n" + i18n.T("saved: @%s (id=%d) to %s", me.Username, me.ID, telegram.ConfigPath(stateDir())) + "\n")
+	fmt.Println(i18n.T("next: run `terva bot run --connector %s`, then send /start to your bot.", name))
 	return nil
 }
 
@@ -193,12 +199,12 @@ func status() (string, error) {
 		return "", err
 	}
 	if cfg.BotToken == "" {
-		return fmt.Sprintf("not configured (run `terva bot setup --connector %s`)", name), nil
+		return i18n.T("not configured (run `terva bot setup --connector %s`)", name), nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "telegram bot:  @%s (id=%d)\n", cfg.BotUsername, cfg.BotID)
-	fmt.Fprintf(&b, "token:         %s\n", maskToken(cfg.BotToken))
-	fmt.Fprintf(&b, "config file:   %s", telegram.ConfigPath(stateDir()))
+	b.WriteString(i18n.T("telegram bot: @%s (id=%d)", cfg.BotUsername, cfg.BotID) + "\n")
+	b.WriteString(i18n.T("token: %s", maskToken(cfg.BotToken)) + "\n")
+	b.WriteString(i18n.T("config file: %s", telegram.ConfigPath(stateDir())))
 	return b.String(), nil
 }
 
@@ -206,11 +212,11 @@ func reset() error {
 	p := telegram.ConfigPath(stateDir())
 	err := os.Remove(p)
 	if errors.Is(err, os.ErrNotExist) {
-		fmt.Println("no bot config to remove")
+		fmt.Println(i18n.T("no bot config to remove"))
 		return nil
 	}
 	if err == nil {
-		fmt.Println("removed", p)
+		fmt.Println(i18n.T("removed %s", p))
 	}
 	return err
 }

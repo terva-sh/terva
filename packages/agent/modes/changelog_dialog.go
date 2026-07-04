@@ -1,9 +1,9 @@
 package modes
 
 import (
-	"fmt"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -76,7 +76,7 @@ func (d *changelogDialog) Render(th tui.Theme, width int) []string {
 	if !d.Active() {
 		return nil
 	}
-	title := fmt.Sprintf("terva %s \u2014 release notes (any key to dismiss)", d.version)
+	title := i18n.T("terva %s \u2014 release notes (any key to dismiss)", d.version)
 	out := []string{frameHeaderColor(th, title, width, th.Accent)}
 	if d.url != "" {
 		out = append(out, "  "+th.FG256(th.Muted, d.url))
@@ -116,7 +116,7 @@ func (d *changelogDialog) Render(th tui.Theme, width int) []string {
 		out = append(out, "    "+line)
 	}
 	if end < len(bodyLines) {
-		out = append(out, "  "+th.FG256(th.Muted, fmt.Sprintf("\u2193 %d more lines (down/pgdn)", len(bodyLines)-end)))
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("\u2193 %d more lines (down/pgdn)", len(bodyLines)-end)))
 	}
 	out = append(out, frameRuleColor(th, width, th.Accent))
 	return out

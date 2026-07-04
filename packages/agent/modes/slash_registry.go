@@ -17,6 +17,7 @@ import (
 	"context"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -46,15 +47,17 @@ type slashSpec struct {
 	run         func(i *Interactive, ctx context.Context, parts []string, raw string) (done bool)
 }
 
-// Display groups, in the order they appear in the popup and /help.
-// The names double as the divider/section labels the user sees.
-const (
-	groupSession = "session"
-	groupContext = "context & skills"
-	groupModel   = "model & account"
-	groupSafety  = "permissions & trust"
-	groupAgents  = "agents & integrations"
-	groupSystem  = "system"
+// Display groups, in the order they appear in the popup and /help. The
+// names double as the divider/section labels the user sees, so they are
+// marked with i18n.M (extractor-visible, English value) and translated at
+// render time — never frozen at init.
+var (
+	groupSession = i18n.M("session")
+	groupContext = i18n.M("context & skills")
+	groupModel   = i18n.M("model & account")
+	groupSafety  = i18n.M("permissions & trust")
+	groupAgents  = i18n.M("agents & integrations")
+	groupSystem  = i18n.M("system")
 )
 
 // slashRegistry is the table, in popup/help display order. Assigned
@@ -71,19 +74,19 @@ func init() {
 	// for them: conversation management first, context/capability next,
 	// model + account, safety, integrations, and system verbs last.
 	slashRegistry = []slashSpec{
-		{name: "/help", desc: "show key bindings and commands", run: (*Interactive).slashHelp},
+		{name: "/help", desc: i18n.M("show key bindings and commands"), run: (*Interactive).slashHelp},
 
-		{name: "/new", group: groupSession, desc: "start a fresh session (the current one stays on disk)", cancelsTurn: true,
+		{name: "/new", group: groupSession, desc: i18n.M("start a fresh session (the current one stays on disk)"), cancelsTurn: true,
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				i.startNewSession()
 				return false
 			}},
-		{name: "/sessions", group: groupSession, desc: "resume a previous session for this directory",
+		{name: "/sessions", group: groupSession, desc: i18n.M("resume a previous session for this directory"),
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				i.sessionDialog.Open(i.cfg.TervaHome, i.cfg.CWD)
 				return false
 			}},
-		{name: "/session", group: groupSession, desc: "export the current session to a .tervasession file, or import one", hint: "export | import [path]",
+		{name: "/session", group: groupSession, desc: i18n.M("export the current session to a .tervasession file, or import one"), hint: "export | import [path]",
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				if len(parts) >= 2 {
 					action := parts[1]
@@ -97,17 +100,17 @@ func init() {
 				i.openSessionOpsDialog()
 				return false
 			}},
-		{name: "/jump", group: groupSession, desc: "scroll the chat to a previous turn (or /jump <text>)", hint: "text to jump to (optional)",
+		{name: "/jump", group: groupSession, desc: i18n.M("scroll the chat to a previous turn (or /jump <text>)"), hint: "text to jump to (optional)",
 			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 				i.openJumpDialog(parts[1:])
 				return false
 			}},
-		{name: "/compact", group: groupSession, desc: "summarize and replace the transcript to free up context", cancelsTurn: true,
+		{name: "/compact", group: groupSession, desc: i18n.M("summarize and replace the transcript to free up context"), cancelsTurn: true,
 			run: func(i *Interactive, ctx context.Context, _ []string, _ string) bool {
 				i.runCompact(ctx, false)
 				return false
 			}},
-		{name: "/clear", group: groupSession, desc: "clear the chat transcript", cancelsTurn: true,
+		{name: "/clear", group: groupSession, desc: i18n.M("clear the chat transcript"), cancelsTurn: true,
 			run: (*Interactive).slashClear},
 
 		{name: "/study", group: groupContext, desc: "read every file in the cwd (or a passed file/dir) so the agent has full context", hint: "file or directory (optional)",
@@ -185,7 +188,7 @@ func init() {
 		{name: "/jail", group: groupSafety, desc: "confine tools to the current directory",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				if i.cfg.Sandbox == nil {
-					i.setStatusErr("sandbox not available in this build")
+					i.setStatusErr(i18n.T("sandbox not available in this build"))
 					return false
 				}
 				i.cfg.Sandbox.Lock()
@@ -195,7 +198,7 @@ func init() {
 		{name: "/unjail", group: groupSafety, desc: "allow tools to touch paths outside this directory",
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 				if i.cfg.Sandbox == nil {
-					i.setStatusErr("sandbox not available in this build")
+					i.setStatusErr(i18n.T("sandbox not available in this build"))
 					return false
 				}
 				i.cfg.Sandbox.Unlock()
@@ -292,10 +295,10 @@ func builtinSlashCatalog() []slashCommand {
 			continue
 		}
 		if s.group != "" && s.group != prevGroup {
-			out = append(out, slashCommand{Header: true, Name: s.group})
+			out = append(out, slashCommand{Header: true, Name: i18n.T(s.group)})
 		}
 		prevGroup = s.group
-		out = append(out, slashCommand{Name: s.name, Desc: s.desc})
+		out = append(out, slashCommand{Name: s.name, Desc: i18n.T(s.desc)})
 	}
 	return out
 }
@@ -324,7 +327,7 @@ func BuiltinSlashCommands() []SlashCommandInfo {
 		if s.hidden {
 			continue
 		}
-		out = append(out, SlashCommandInfo{Name: s.name, Desc: s.desc, Hint: s.hint})
+		out = append(out, SlashCommandInfo{Name: s.name, Desc: i18n.T(s.desc), Hint: s.hint})
 	}
 	return out
 }
@@ -424,17 +427,17 @@ func (i *Interactive) slashStudy(ctx context.Context, parts []string, raw string
 // rebuild, sandbox re-rooting, and re-jail-if-jailed semantics.
 func (i *Interactive) slashCD(_ context.Context, parts []string, raw string) bool {
 	if i.cfg.ChangeCWD == nil {
-		i.setStatusErr("/cd unavailable: host did not wire ChangeCWD")
+		i.setStatusErr(i18n.T("/cd unavailable: host did not wire ChangeCWD"))
 		return false
 	}
 	path := strings.TrimSpace(strings.TrimPrefix(raw, parts[0]))
 	if path == "" {
-		i.setStatusErr("/cd: missing path")
+		i.setStatusErr(i18n.T("/cd: missing path"))
 		return false
 	}
 	if err := i.cfg.ChangeCWD(path); err != nil {
 		i.mu.Lock()
-		i.statusErr = "/cd: " + err.Error()
+		i.statusErr = i18n.T("/cd: %s", err.Error())
 		i.statusOK = ""
 		i.mu.Unlock()
 		return false
@@ -448,7 +451,7 @@ func (i *Interactive) slashCD(_ context.Context, parts []string, raw string) boo
 	i.turns.ResetGates()
 	i.helpBlock = nil
 	i.parkedTurn = 0
-	i.statusOK = "cwd " + i.cfg.CWD
+	i.statusOK = i18n.T("cwd %s", i.cfg.CWD)
 	i.statusErr = ""
 	i.mu.Unlock()
 	i.fileSuggest.Reset()
@@ -465,12 +468,12 @@ func (i *Interactive) slashCD(_ context.Context, parts []string, raw string) boo
 // the user a restart will apply it. See docs/plans/workspace-trust.md.
 func (i *Interactive) slashTrust(_ context.Context, parts []string, _ string) bool {
 	if i.cfg.TrustWorkspace == nil {
-		i.setStatusErr("/trust unavailable: host did not wire TrustWorkspace")
+		i.setStatusErr(i18n.T("/trust unavailable: host did not wire TrustWorkspace"))
 		return false
 	}
 	parent := len(parts) >= 2 && strings.EqualFold(strings.TrimSpace(parts[1]), "parent")
 	if err := i.cfg.TrustWorkspace(parent); err != nil {
-		i.setStatusErr("/trust: " + err.Error())
+		i.setStatusErr(i18n.T("/trust: %s", err))
 		return false
 	}
 	i.mu.Lock()
@@ -500,7 +503,7 @@ func (i *Interactive) slashTrust(_ context.Context, parts []string, _ string) bo
 		i.turns.ResetGates()
 		i.helpBlock = nil
 		i.parkedTurn = 0
-		i.statusOK = "trusted " + i.cfg.CWD + " — project skills/context loaded (/reload-ext for project extensions)"
+		i.statusOK = i18n.T("trusted %s — project skills/context loaded (/reload-ext for project extensions)", i.cfg.CWD)
 		i.statusErr = ""
 		i.mu.Unlock()
 		i.fileSuggest.Reset()
@@ -517,11 +520,11 @@ func (i *Interactive) slashTrust(_ context.Context, parts []string, _ string) bo
 // the change takes full effect on the next launch / re-cd.
 func (i *Interactive) slashUntrust(_ context.Context, _ []string, _ string) bool {
 	if i.cfg.UntrustWorkspace == nil {
-		i.setStatusErr("/untrust unavailable: host did not wire UntrustWorkspace")
+		i.setStatusErr(i18n.T("/untrust unavailable: host did not wire UntrustWorkspace"))
 		return false
 	}
 	if err := i.cfg.UntrustWorkspace(); err != nil {
-		i.setStatusErr("/untrust: " + err.Error())
+		i.setStatusErr(i18n.T("/untrust: %s", err))
 		return false
 	}
 	i.mu.Lock()

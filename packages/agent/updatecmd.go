@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/identity"
+	"terva.sh/terva/packages/i18n"
 )
 
 // runUpdateCommand dispatches `terva update`. Returns (handled=true, err)
@@ -53,14 +54,14 @@ func runUpdateCommand(rawArgs []string, version string) (handled bool, err error
 			return true, runUpdateCheck(version)
 		default:
 			printUpdateHelp()
-			return true, fmt.Errorf("unknown update flag: %s", a)
+			return true, i18n.Errorf("unknown update flag: %s", a)
 		}
 	}
 	return true, runUpdate(version)
 }
 
 func printUpdateHelp() {
-	fmt.Fprintln(os.Stderr, `terva update — replace the current terva binary with the latest release
+	fmt.Fprintln(os.Stderr, i18n.H("help.update", `terva update — replace the current terva binary with the latest release
 
 usage:
   terva update           download and install the newest release
@@ -83,7 +84,7 @@ notes:
     skipped per-extension and never abort the overall update. terva
     does NOT run any build step after pulling — authors are expected
     to commit a working binary, or you can rebuild manually and
-    /reload-ext.`)
+    /reload-ext.`))
 }
 
 // runUpdateCheck just prints what would happen without doing the
@@ -367,7 +368,7 @@ func extractArchive(archive, format, dst string) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("unknown archive format: %s", format)
+		return i18n.Errorf("unknown archive format: %s", format)
 	}
 }
 

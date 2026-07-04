@@ -12,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -144,7 +145,7 @@ func (i *Interactive) doConnector(action string) {
 			return
 		}
 		i.mu.Lock()
-		i.statusErr = "unknown /connect action: " + action + " (use connect [name], disconnect, status, or a connector name)"
+		i.statusErr = i18n.T("unknown /connect action: %s (use connect [name], disconnect, status, or a connector name)", action)
 		i.mu.Unlock()
 		i.invalidate()
 	}
@@ -327,7 +328,7 @@ func (i *Interactive) connectorStatus() {
 	name := chat.DefaultServiceName()
 	if name == "" && (i.chatBridge == nil || !i.chatBridge.Active()) {
 		i.mu.Lock()
-		i.statusOK = "no chat connectors compiled into this binary"
+		i.statusOK = i18n.T("no chat connectors compiled into this binary")
 		i.statusErr = ""
 		i.mu.Unlock()
 		i.invalidate()

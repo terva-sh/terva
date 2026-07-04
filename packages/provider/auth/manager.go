@@ -3,13 +3,14 @@ package auth
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // Event is delivered on Manager.Events().
@@ -164,11 +165,11 @@ func (m *Manager) StartOAuth(provider string) (string, error) {
 		op = OpenAIOAuth
 		storeProvider = "openai"
 	case "google":
-		return "", fmt.Errorf("google login is api-key only; use api key login for gemini")
+		return "", i18n.Errorf("google login is api-key only; use api key login for gemini")
 	case "deepseek":
-		return "", fmt.Errorf("deepseek login is api-key only; use api key login")
+		return "", i18n.Errorf("deepseek login is api-key only; use api key login")
 	default:
-		return "", fmt.Errorf("provider must be anthropic, openai, openai-codex, kimi, github-copilot, deepseek, or google")
+		return "", i18n.Errorf("provider must be anthropic, openai, openai-codex, kimi, github-copilot, deepseek, or google")
 	}
 
 	m.mu.Lock()
@@ -340,11 +341,11 @@ func (m *Manager) StartManualOAuth(provider string) (string, error) {
 		op = OpenAIOAuth
 		storeProvider = "openai"
 	case "google":
-		return "", fmt.Errorf("google login is api-key only; use api key login for gemini")
+		return "", i18n.Errorf("google login is api-key only; use api key login for gemini")
 	case "deepseek":
-		return "", fmt.Errorf("deepseek login is api-key only; use api key login")
+		return "", i18n.Errorf("deepseek login is api-key only; use api key login")
 	default:
-		return "", fmt.Errorf("provider must be anthropic, openai, openai-codex, kimi, github-copilot, deepseek, or google")
+		return "", i18n.Errorf("provider must be anthropic, openai, openai-codex, kimi, github-copilot, deepseek, or google")
 	}
 
 	// If a loopback OAuth flow is already in progress for a provider that
@@ -403,14 +404,14 @@ func (m *Manager) CompleteManualOAuth(ctx context.Context, input string) error {
 	state := m.manualState
 	m.mu.Unlock()
 	if op == nil {
-		return fmt.Errorf("no manual oauth flow in progress")
+		return i18n.Errorf("no manual oauth flow in progress")
 	}
 	code, pastedState := parseManualCodeInput(strings.TrimSpace(input))
 	if pastedState != "" {
 		state = pastedState
 	}
 	if code == "" {
-		return fmt.Errorf("empty code")
+		return i18n.Errorf("empty code")
 	}
 	exCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -503,19 +504,19 @@ func (m *Manager) RefreshIfNeeded(ctx context.Context, provider string) (string,
 	}
 	p := creds.get(provider)
 	if p == nil {
-		return "", "", fmt.Errorf("unknown provider %q", provider)
+		return "", "", i18n.Errorf("unknown provider %q", provider)
 	}
 	if p.APIKey != "" {
 		return p.APIKey, "apikey", nil
 	}
 	if p.OAuth == nil {
-		return "", "", fmt.Errorf("no credentials for %s", provider)
+		return "", "", i18n.Errorf("no credentials for %s", provider)
 	}
 	if !p.OAuth.Expired() {
 		return p.OAuth.AccessToken, "oauth", nil
 	}
 	if p.OAuth.RefreshToken == "" {
-		return "", "", fmt.Errorf("%s access token expired and no refresh token is available; please /login again", provider)
+		return "", "", i18n.Errorf("%s access token expired and no refresh token is available; please /login again", provider)
 	}
 	var op OAuthProvider
 	switch provider {

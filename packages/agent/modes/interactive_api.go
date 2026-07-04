@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -95,7 +96,7 @@ func (i *Interactive) SubmitOrQueue(text string, images []provider.ImageBlock) {
 		return
 	}
 	if !i.turns.HasAgent() {
-		i.setStatusErr("not logged in. type /login first.")
+		i.setStatusErr(i18n.T("not logged in. type /login first."))
 		i.invalidate()
 		return
 	}

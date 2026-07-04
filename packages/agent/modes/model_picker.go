@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/mattn/go-runewidth"
+
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -197,9 +199,9 @@ func (p *modelPicker) hintLine(base string) string {
 		return base
 	}
 	if len(p.view) == 1 {
-		return fmt.Sprintf("filter: %s (%d match)", p.query, len(p.view))
+		return i18n.T("filter: %s (%d match)", p.query, len(p.view))
 	}
-	return fmt.Sprintf("filter: %s (%d matches)", p.query, len(p.view))
+	return i18n.T("filter: %s (%d matches)", p.query, len(p.view))
 }
 
 // renderRows returns the model rows in the scroll window (cursor row
@@ -225,13 +227,13 @@ func (p *modelPicker) renderRows(th tui.Theme, width int) []string {
 		tag := ""
 		switch {
 		case m.Speculative:
-			tag = "[speculative] "
+			tag = i18n.T("[speculative] ")
 		case m.Source == "user":
 			// Carries a models.json override (applyUserOverrides stamps
 			// Source="user"). Flags which models have custom settings.
-			tag = "[edited] "
+			tag = i18n.T("[edited] ")
 		case m.Source == "live":
-			tag = "[live] "
+			tag = i18n.T("[live] ")
 		}
 		curMark := "  "
 		if p.current != "" && m.ID == p.current {

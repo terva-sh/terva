@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -38,23 +39,23 @@ func (i *Interactive) slashContext() {
 // transparency view) as styled body lines for the Extensions tab.
 func (i *Interactive) buildContextExtensions(th tui.Theme) []string {
 	if i.cfg.Extensions == nil {
-		return []string{th.FG256(th.Muted, "  extensions are not enabled")}
+		return []string{th.FG256(th.Muted, "  "+i18n.T("extensions are not enabled"))}
 	}
 	items := i.cfg.Extensions.ContextSnapshot()
 	if len(items) == 0 {
-		return []string{th.FG256(th.Muted, "  no extension is contributing context to the model")}
+		return []string{th.FG256(th.Muted, "  "+i18n.T("no extension is contributing context to the model"))}
 	}
 	var out []string
 	for _, it := range items {
 		head := it.Source
 		if it.Kind == "static" {
-			head += " (system guidance)"
+			head = i18n.T("%s (system guidance)", head)
 		} else {
 			label := it.Label
 			if label == "" {
 				label = it.ID
 			}
-			head += fmt.Sprintf(" (card %q)", label)
+			head = i18n.T("%s (card %q)", head, label)
 		}
 		out = append(out, th.FG256(th.Accent, "  "+head))
 		for _, line := range strings.Split(strings.TrimRight(it.Text, "\n"), "\n") {
@@ -70,7 +71,7 @@ func (i *Interactive) buildContextExtensions(th tui.Theme) []string {
 func (i *Interactive) buildContextOverview(th tui.Theme) []string {
 	ag := i.turns.Agent()
 	if ag == nil {
-		return []string{th.FG256(th.Muted, "  no agent running")}
+		return []string{th.FG256(th.Muted, "  "+i18n.T("no agent running"))}
 	}
 	muted := func(s string) string { return th.FG256(th.Muted, s) }
 
@@ -133,20 +134,20 @@ func (i *Interactive) buildContextOverview(th tui.Theme) []string {
 	var out []string
 	sysSuffix := ""
 	if extStaticBytes > 0 {
-		sysSuffix = "  (incl. ext guidance)"
+		sysSuffix = "  " + i18n.T("(incl. ext guidance)")
 	}
-	out = append(out, row("system prompt", sysBytes, sysSuffix))
+	out = append(out, row(i18n.T("system prompt"), sysBytes, sysSuffix))
 	if extStaticBytes > 0 {
-		out = append(out, muted(fmt.Sprintf("    └ of which ext guidance: %s (%s)",
+		out = append(out, muted("    "+i18n.T("└ of which ext guidance: %s (%s)",
 			humanBytes(extStaticBytes), estTok(extStaticBytes))))
 	}
-	out = append(out, row("tool defs", toolBytes, fmt.Sprintf("  [%d tools]", toolCount)))
-	out = append(out, row("ext context", ephBytes, "  (cards, ephemeral)"))
-	out = append(out, row("transcript", transcriptBytes, fmt.Sprintf("  [%d msgs]", len(msgs))))
+	out = append(out, row(i18n.T("tool defs"), toolBytes, "  "+i18n.T("[%d tools]", toolCount)))
+	out = append(out, row(i18n.T("ext context"), ephBytes, "  "+i18n.T("(cards, ephemeral)")))
+	out = append(out, row(i18n.T("transcript"), transcriptBytes, "  "+i18n.T("[%d msgs]", len(msgs))))
 	for idx, m := range msgs {
 		line := fmt.Sprintf("    [%d] %-13s %10s", idx, messageKind(m), humanBytes(perMsg[idx]))
 		if idx == largestIdx && len(msgs) > 1 {
-			out = append(out, th.FG256(th.Warning, line+"  ← largest"))
+			out = append(out, th.FG256(th.Warning, line+"  "+i18n.T("← largest")))
 		} else {
 			out = append(out, muted(line))
 		}
@@ -155,11 +156,11 @@ func (i *Interactive) buildContextOverview(th tui.Theme) []string {
 	pctSuffix := ""
 	if window > 0 {
 		pct := float64(total) / float64(window*4) * 100 // total/4 ~ tokens; window in tokens
-		pctSuffix = fmt.Sprintf("  (%.0f%% of %s window)", pct, humanCount(window))
+		pctSuffix = "  " + i18n.T("(%.0f%% of %s window)", pct, humanCount(window))
 	}
-	out = append(out, row("TOTAL", total, pctSuffix))
+	out = append(out, row(i18n.T("TOTAL"), total, pctSuffix))
 	out = append(out, "")
-	out = append(out, muted("  sizes are bytes; token counts are ~bytes/4 estimates"))
+	out = append(out, muted("  "+i18n.T("sizes are bytes; token counts are ~bytes/4 estimates")))
 	return out
 }
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -244,7 +245,7 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 					return false
 				}
 				i.mu.Lock()
-				i.statusErr = "unknown command " + head + " — type /help to see the list"
+				i.statusErr = i18n.T("unknown command %s — type /help to see the list", head)
 				i.statusOK = ""
 				i.mu.Unlock()
 				return false

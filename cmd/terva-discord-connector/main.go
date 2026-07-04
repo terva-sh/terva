@@ -27,6 +27,8 @@ import (
 
 	"terva.sh/terva/packages/agent/connsdk"
 	"terva.sh/terva/packages/agent/modes/discord"
+	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/i18n"
 )
 
 const name = "discord-ext"
@@ -68,6 +70,10 @@ func saveToken(token string) error {
 }
 
 func main() {
+	// A connector is its own process, so it configures i18n itself from
+	// the environment (TERVA_LANG + the operator's $TERVA_HOME/locales
+	// overlay) — the host can't inject it across the process boundary.
+	_ = i18n.Configure(envcompat.Get("LANG"), envcompat.Home())
 	connsdk.Main(connsdk.Config{
 		Name:         name,
 		Version:      version,
@@ -80,19 +86,19 @@ func main() {
 			return discord.NewTransport(token, s.DataDir)
 		},
 		Setup: func() error {
-			fmt.Print("discord bot token (from the developer portal's Bot page): ")
+			fmt.Print(i18n.T("discord bot token (from the developer portal's Bot page): "))
 			line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 			if err != nil {
 				return err
 			}
 			token := strings.TrimSpace(line)
 			if token == "" {
-				return fmt.Errorf("no token provided")
+				return i18n.Errorf("no token provided")
 			}
 			if err := saveToken(token); err != nil {
 				return err
 			}
-			fmt.Println("saved to", configPath())
+			fmt.Println(i18n.T("saved to %s", configPath()))
 			return nil
 		},
 		Status: func() (string, error) {
@@ -101,9 +107,9 @@ func main() {
 				return "", err
 			}
 			if token == "" {
-				return name + ": not configured (run setup)", nil
+				return i18n.T("%s: not configured (run setup)", name), nil
 			}
-			return name + ": token configured (" + configPath() + ")", nil
+			return i18n.T("%s: token configured (%s)", name, configPath()), nil
 		},
 		Reset: func() error {
 			err := os.Remove(configPath())

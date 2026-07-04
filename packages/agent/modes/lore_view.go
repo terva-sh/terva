@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/i18n"
 )
 
 // resetLoreFired clears the "fired last turn" record — invoked wherever the
@@ -25,9 +26,9 @@ func (i *Interactive) slashLore() {
 		entries = i.cfg.LoreList()
 	}
 
-	rows := []string{th.FG256(th.Accent, "  lore — active entries (this run)")}
+	rows := []string{th.FG256(th.Accent, "  "+i18n.T("lore — active entries (this run)"))}
 	if len(entries) == 0 {
-		rows = append(rows, th.FG256(th.Muted, "    (none — author under .terva/lore or $TERVA_HOME/lore; --no-lore disables)"))
+		rows = append(rows, th.FG256(th.Muted, "    "+i18n.T("(none — author under .terva/lore or $TERVA_HOME/lore; --no-lore disables)")))
 	} else {
 		for _, e := range entries {
 			name := e.Name
@@ -36,7 +37,7 @@ func (i *Interactive) slashLore() {
 			}
 			trigger := "always"
 			if !e.Constant {
-				trigger = "keys: " + strings.Join(e.Keys, ", ")
+				trigger = i18n.T("keys: %s", strings.Join(e.Keys, ", "))
 			}
 			meta := "  ·  " + trigger
 			if e.Source != "" {
@@ -47,13 +48,13 @@ func (i *Interactive) slashLore() {
 	}
 	if i.cfg.LoreFired != nil {
 		if fired := i.cfg.LoreFired(); len(fired) > 0 {
-			rows = append(rows, "", th.FG256(th.Accent, "  fired last turn"))
+			rows = append(rows, "", th.FG256(th.Accent, "  "+i18n.T("fired last turn")))
 			rows = append(rows, th.FG256(th.Muted, "    "+strings.Join(fired, ", ")))
 		}
 	}
 	if i.cfg.LoreDropped != nil {
 		if dropped := i.cfg.LoreDropped(); len(dropped) > 0 {
-			rows = append(rows, "", th.FG256(th.Accent, "  dropped by token budget last turn"))
+			rows = append(rows, "", th.FG256(th.Accent, "  "+i18n.T("dropped by token budget last turn")))
 			rows = append(rows, th.FG256(th.Muted, "    "+strings.Join(dropped, ", ")))
 		}
 	}

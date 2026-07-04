@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -192,7 +193,7 @@ func (d *extConfigDialog) save() extConfigAction {
 		if d.working[f.Key] != "" || f.Default != "" || (f.isSecret() && f.HasSaved) {
 			continue
 		}
-		d.status = "required: " + fieldLabel(f)
+		d.status = i18n.T("required: %s", fieldLabel(f))
 		return extConfigAction{}
 	}
 	values := make(map[string]string, len(d.working))
@@ -209,13 +210,13 @@ func (d *extConfigDialog) Render(th tui.Theme, width int) []string {
 		return nil
 	}
 	var lines []string
-	lines = append(lines, frameHeader(th, "config · "+d.name, width))
+	lines = append(lines, frameHeader(th, i18n.T("config · %s", d.name), width))
 	if len(d.fields) == 0 {
-		lines = append(lines, th.FG256(th.Muted, "  no configurable settings"))
+		lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("no configurable settings")))
 		lines = append(lines, frameRule(th, width))
 		return lines
 	}
-	lines = append(lines, th.FG256(th.Muted, "↑/↓ field · enter edit/toggle · s save · esc cancel"))
+	lines = append(lines, th.FG256(th.Muted, i18n.T("↑/↓ field · enter edit/toggle · s save · esc cancel")))
 
 	for i, f := range d.fields {
 		shown := d.fieldDisplay(f)

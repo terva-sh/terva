@@ -1,8 +1,7 @@
 package modes
 
 import (
-	"fmt"
-
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -32,13 +31,13 @@ func renderUpdateBanner(th tui.Theme, info UpdateInfo, width int) []string {
 	}
 	out = append(out, "")
 
-	title := fmt.Sprintf("terva %s is available (you're on %s).", info.Latest, info.Current)
+	title := i18n.T("terva %s is available (you're on %s).", info.Latest, info.Current)
 	out = append(out, "  "+th.FG256(color, tui.Bold(title)))
 	out = append(out, "")
-	out = append(out, "  "+th.FG256(th.Muted, "run: ")+th.FG256(color, "terva update"))
+	out = append(out, "  "+th.FG256(th.Muted, i18n.T("run: "))+th.FG256(color, "terva update"))
 
 	if info.URL != "" {
-		out = append(out, "  "+th.FG256(th.Muted, "changelog: ")+th.FG256(color, info.URL))
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("changelog: "))+th.FG256(color, info.URL))
 	}
 
 	out = append(out, "")

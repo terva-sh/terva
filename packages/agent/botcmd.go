@@ -17,6 +17,7 @@ import (
 	"terva.sh/terva/packages/agent/chat/external"
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 )
 
 // detachChild configures cmd to run in its own process group so tty
@@ -79,7 +80,7 @@ func runBotCommand(rawArgs []string, version string) (handled bool, err error) {
 	}
 	svc, ok := chat.Lookup(connectorName)
 	if !ok {
-		return true, fmt.Errorf("unknown connector %q (available: %s)", connectorName, serviceNames())
+		return true, i18n.Errorf("unknown connector %q (available: %s)", connectorName, serviceNames())
 	}
 
 	switch sub {
@@ -105,7 +106,7 @@ func runBotCommand(rawArgs []string, version string) (handled bool, err error) {
 		return true, botLogs(svc, tail)
 	default:
 		printBotHelp()
-		return true, fmt.Errorf("unknown bot subcommand %q", sub)
+		return true, i18n.Errorf("unknown bot subcommand %q", sub)
 	}
 }
 
@@ -142,7 +143,7 @@ func registerDevManifests(args []string) ([]string, error) {
 // link target; `terva bot reset` removes it).
 func botLink(tail []string) error {
 	if len(tail) != 1 {
-		return fmt.Errorf("usage: terva bot link <path/to/connector.json>")
+		return i18n.Errorf("usage: terva bot link <path/to/connector.json>")
 	}
 	dst, err := external.Link(TervaHome(), tail[0])
 	if err != nil {
@@ -186,7 +187,7 @@ func serviceNames() string {
 
 // printBotHelp prints usage for `terva bot`.
 func printBotHelp() {
-	fmt.Fprintf(os.Stderr, `terva bot — chat-service bridge (connectors: %s)
+	fmt.Fprint(os.Stderr, i18n.H("help.bot", `terva bot — chat-service bridge (connectors: %s)
 
 usage:
   terva bot setup                       provision credentials for the connector
@@ -235,7 +236,7 @@ config & state (telegram):
   $TERVA_HOME/bot.json       # bot token + paired user (mode 0600)
   $TERVA_HOME/bot.pid        # pid of the running bot (written by run/start)
   $TERVA_HOME/logs/bot.log   # stdout+stderr from "terva bot start"
-`, serviceNames())
+`, serviceNames()))
 }
 
 // botStatus prints the connector's config block plus daemon liveness.

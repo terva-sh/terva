@@ -1,9 +1,9 @@
 package modes
 
 import (
-	"fmt"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -81,7 +81,7 @@ func (d *rescueDialog) Render(th tui.Theme, width int) []string {
 	var lines []string
 	header := "rescue turn"
 	if d.failedAt != "" && d.failedAt != "/" {
-		header = "rescue turn — " + d.failedAt + " failed"
+		header = i18n.T("rescue turn — %s failed", d.failedAt)
 	}
 	lines = append(lines, frameHeader(th, header, width))
 
@@ -94,9 +94,9 @@ func (d *rescueDialog) Render(th tui.Theme, width int) []string {
 
 	if len(d.p.view) == 0 {
 		if len(d.p.all) == 0 {
-			lines = append(lines, th.FG256(th.Muted, "  no other models available — log in to another provider with /login"))
+			lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("no other models available — log in to another provider with /login")))
 		} else {
-			lines = append(lines, th.FG256(th.Muted, "  no models match "+fmt.Sprintf("%q", d.p.query)))
+			lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("no models match %q", d.p.query)))
 		}
 		lines = append(lines, frameRule(th, width))
 		return lines

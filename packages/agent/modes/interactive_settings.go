@@ -5,6 +5,7 @@ package modes
 
 import (
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -33,9 +34,9 @@ func imageProtocolName(p tui.ImageProtocol) string {
 
 func onOff(v bool) string {
 	if v {
-		return "enabled"
+		return i18n.T("enabled")
 	}
-	return "disabled"
+	return i18n.T("disabled")
 }
 
 func (i *Interactive) openSettingsDialog() {
@@ -48,9 +49,9 @@ func (i *Interactive) openSettingsDialog() {
 	imgHint := ""
 	if imgDisabled {
 		imgEnabled = false
-		imgHint = "this terminal does not support inline images"
+		imgHint = i18n.T("this terminal does not support inline images")
 	} else {
-		imgHint = "terminal supports " + imageProtocolName(detected)
+		imgHint = i18n.T("terminal supports %s", imageProtocolName(detected))
 	}
 
 	autoSwarm := false
@@ -61,19 +62,19 @@ func (i *Interactive) openSettingsDialog() {
 	autoSwarmHint := ""
 	if autoSwarmDisabled {
 		autoSwarm = false
-		autoSwarmHint = "swarm supervisor not available in this mode"
+		autoSwarmHint = i18n.T("swarm supervisor not available in this mode")
 	}
 
 	recursiveFiles := i.cfg.RecursiveFileSuggest != nil && *i.cfg.RecursiveFileSuggest
 	respectGitignore := i.cfg.RespectGitignore == nil || *i.cfg.RespectGitignore
 
 	reasoningOptions := []settingsOption{
-		{value: "", label: "off", desc: "no reasoning"},
-		{value: "minimum", label: "minimum", desc: "very brief (~1k tokens)"},
-		{value: "low", label: "low", desc: "light (~2k tokens)"},
-		{value: "medium", label: "medium", desc: "moderate (~8k tokens)"},
-		{value: "high", label: "high", desc: "deep (~16k tokens)"},
-		{value: "maximum", label: "maximum", desc: "highest (~32k tokens)"},
+		{value: "", label: i18n.T("off"), desc: i18n.T("no reasoning")},
+		{value: "minimum", label: i18n.T("minimum"), desc: i18n.T("very brief (~1k tokens)")},
+		{value: "low", label: i18n.T("low"), desc: i18n.T("light (~2k tokens)")},
+		{value: "medium", label: i18n.T("medium"), desc: i18n.T("moderate (~8k tokens)")},
+		{value: "high", label: i18n.T("high"), desc: i18n.T("deep (~16k tokens)")},
+		{value: "maximum", label: i18n.T("maximum"), desc: i18n.T("highest (~32k tokens)")},
 	}
 	reasoning := provider.NormalizeReasoning(i.cfg.Reasoning)
 	reasoningChoice := 0
@@ -85,7 +86,7 @@ func (i *Interactive) openSettingsDialog() {
 	}
 	reasoningHint := ""
 	if m, err := provider.FindModel(i.cfg.Provider, i.cfg.Model); err == nil && !m.Reasoning {
-		reasoningHint = "current model does not support thinking"
+		reasoningHint = i18n.T("current model does not support thinking")
 	}
 
 	themeName := i.cfg.ThemeName
@@ -118,44 +119,44 @@ func (i *Interactive) openSettingsDialog() {
 	items := []settingsItem{
 		{
 			key:      "inline_images_enabled",
-			label:    "render images when supported",
-			desc:     "draw screenshots inline instead of showing a text placeholder",
+			label:    i18n.T("render images when supported"),
+			desc:     i18n.T("draw screenshots inline instead of showing a text placeholder"),
 			value:    imgEnabled,
 			disabled: imgDisabled,
 			hint:     imgHint,
 		},
 		{
 			key:      "auto_swarm_enabled",
-			label:    "auto-swarm",
-			desc:     "let the agent spawn background sub-agents in parallel via the swarm_spawn tool",
+			label:    i18n.T("auto-swarm"),
+			desc:     i18n.T("let the agent spawn background sub-agents in parallel via the swarm_spawn tool"),
 			value:    autoSwarm,
 			disabled: autoSwarmDisabled,
 			hint:     autoSwarmHint,
 		},
 		{
 			key:   "recursive_file_suggest",
-			label: "recursive @-file search",
-			desc:  "fuzzy-search the whole project tree when picking files with @ instead of browsing one directory at a time",
+			label: i18n.T("recursive @-file search"),
+			desc:  i18n.T("fuzzy-search the whole project tree when picking files with @ instead of browsing one directory at a time"),
 			value: recursiveFiles,
 		},
 		{
 			key:   "respect_gitignore",
-			label: "hide gitignored files in @-picker",
-			desc:  "skip files and directories matched by the project's root .gitignore (and .git) when picking files with @",
+			label: i18n.T("hide gitignored files in @-picker"),
+			desc:  i18n.T("skip files and directories matched by the project's root .gitignore (and .git) when picking files with @"),
 			value: respectGitignore,
 		},
 		{
 			key:     "reasoning",
-			label:   "thinking level",
-			desc:    "reasoning depth for thinking-capable models",
+			label:   i18n.T("thinking level"),
+			desc:    i18n.T("reasoning depth for thinking-capable models"),
 			options: reasoningOptions,
 			choice:  reasoningChoice,
 			hint:    reasoningHint,
 		},
 		{
 			key:     "theme",
-			label:   "color theme",
-			desc:    "choose a theme from $TERVA_HOME/themes or a loaded extension",
+			label:   i18n.T("color theme"),
+			desc:    i18n.T("choose a theme from $TERVA_HOME/themes or a loaded extension"),
 			options: themeOptions,
 			choice:  themeChoice,
 		},
@@ -192,12 +193,12 @@ func (i *Interactive) buildPermissionsView() (info []string, grants []permGrant)
 	th := i.cfg.Theme
 	gate := i.cfg.ConfirmGate
 	if gate == nil {
-		return []string{th.FG256(th.Muted, "no permission gate (yolo): every tool runs without asking.")}, nil
+		return []string{th.FG256(th.Muted, i18n.T("no permission gate (yolo): every tool runs without asking."))}, nil
 	}
 
 	var out []string
-	out = append(out, th.FG256(th.Accent, tui.Bold("approval mode"))+"  "+string(gate.Mode()))
-	out = append(out, th.FG256(th.Muted, "  change it in /settings; flags --approval / --no-yolo set the startup default."))
+	out = append(out, th.FG256(th.Accent, tui.Bold(i18n.T("approval mode")))+"  "+string(gate.Mode()))
+	out = append(out, th.FG256(th.Muted, "  "+i18n.T("change it in /settings; flags --approval / --no-yolo set the startup default.")))
 	out = append(out, "")
 
 	decColor := func(d core.RuleDecision) string {
@@ -213,9 +214,9 @@ func (i *Interactive) buildPermissionsView() (info []string, grants []permGrant)
 
 	rules := gate.Rules()
 	if len(rules) == 0 {
-		out = append(out, th.FG256(th.Muted, "no permission rules in effect."))
+		out = append(out, th.FG256(th.Muted, i18n.T("no permission rules in effect.")))
 	} else {
-		out = append(out, th.FG256(th.Accent, tui.Bold("rules"))+th.FG256(th.Muted, "  (first match wins; user → project → extension)"))
+		out = append(out, th.FG256(th.Accent, tui.Bold(i18n.T("rules")))+th.FG256(th.Muted, "  "+i18n.T("(first match wins; user → project → extension)")))
 		lastSrc := ""
 		for _, r := range rules {
 			if r.Source != lastSrc {
@@ -234,7 +235,7 @@ func (i *Interactive) buildPermissionsView() (info []string, grants []permGrant)
 	}
 	out = append(out, "")
 
-	out = append(out, th.FG256(th.Accent, tui.Bold("this session")))
+	out = append(out, th.FG256(th.Accent, tui.Bold(i18n.T("this session"))))
 	allowAll, tools := gate.Grants()
 	if allowAll {
 		grants = append(grants, permGrant{allowAll: true})
@@ -243,7 +244,7 @@ func (i *Interactive) buildPermissionsView() (info []string, grants []permGrant)
 		grants = append(grants, permGrant{tool: t})
 	}
 	if len(grants) == 0 {
-		out = append(out, "  "+th.FG256(th.Muted, "no session grants yet."))
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("no session grants yet.")))
 	}
 	return out, grants
 }
@@ -268,11 +269,11 @@ func (i *Interactive) approvalSettingItem() (settingsItem, bool) {
 		return settingsItem{}, false
 	}
 	opts := []settingsOption{
-		{value: string(core.ApprovalPlan), label: "plan", desc: "read-only tools only; mutating tools are withheld"},
-		{value: string(core.ApprovalAsk), label: "ask", desc: "confirm every tool call"},
-		{value: string(core.ApprovalAutoEdit), label: "auto-edit", desc: "run reads + file edits; confirm everything else"},
-		{value: string(core.ApprovalWorkspace), label: "workspace", desc: "run built-in tools + read-only tools; confirm side-effecting extension/MCP tools"},
-		{value: string(core.ApprovalYolo), label: "yolo", desc: "run every tool without asking"},
+		{value: string(core.ApprovalPlan), label: i18n.T("plan"), desc: i18n.T("read-only tools only; mutating tools are withheld")},
+		{value: string(core.ApprovalAsk), label: i18n.T("ask"), desc: i18n.T("confirm every tool call")},
+		{value: string(core.ApprovalAutoEdit), label: i18n.T("auto-edit"), desc: i18n.T("run reads + file edits; confirm everything else")},
+		{value: string(core.ApprovalWorkspace), label: i18n.T("workspace"), desc: i18n.T("run built-in tools + read-only tools; confirm side-effecting extension/MCP tools")},
+		{value: string(core.ApprovalYolo), label: i18n.T("yolo"), desc: i18n.T("run every tool without asking")},
 	}
 	cur := string(i.cfg.ConfirmGate.Mode())
 	choice := 0
@@ -284,8 +285,8 @@ func (i *Interactive) approvalSettingItem() (settingsItem, bool) {
 	}
 	return settingsItem{
 		key:     "approval_mode",
-		label:   "approval mode",
-		desc:    "how much the agent may do without asking (see /permissions)",
+		label:   i18n.T("approval mode"),
+		desc:    i18n.T("how much the agent may do without asking (see /permissions)"),
 		options: opts,
 		choice:  choice,
 	}, true
@@ -326,7 +327,7 @@ func (i *Interactive) applyApprovalModeSetting(value string) {
 	if ag := i.turns.Agent(); ag != nil && reg != nil {
 		ag.SetTools(reg)
 	}
-	i.statusOK = "approval mode " + value + " (this session)"
+	i.statusOK = i18n.T("approval mode %s (this session)", value)
 	i.statusErr = ""
 	i.mu.Unlock()
 }
@@ -352,7 +353,7 @@ func (i *Interactive) applySettingToggle(key string, value bool) {
 		if i.cfg.SettingsStore != nil {
 			if err := i.cfg.SettingsStore.SetInlineImages(value); err != nil {
 				i.mu.Lock()
-				i.statusErr = "settings: " + err.Error()
+				i.statusErr = i18n.T("settings: %s", err)
 				i.mu.Unlock()
 				return
 			}
@@ -360,7 +361,7 @@ func (i *Interactive) applySettingToggle(key string, value bool) {
 		i.mu.Lock()
 		i.view.ImageProto = effectiveImageProtocol(i.cfg.InlineImagesEnabled)
 		i.view.InvalidateRenderCache()
-		i.statusOK = "inline image rendering " + onOff(value)
+		i.statusOK = i18n.T("inline image rendering %s", onOff(value))
 		i.statusErr = ""
 		i.mu.Unlock()
 	case "auto_swarm_enabled":
@@ -369,7 +370,7 @@ func (i *Interactive) applySettingToggle(key string, value bool) {
 		if i.cfg.SettingsStore != nil {
 			if err := i.cfg.SettingsStore.SetAutoSwarm(value); err != nil {
 				i.mu.Lock()
-				i.statusErr = "settings: " + err.Error()
+				i.statusErr = i18n.T("settings: %s", err)
 				i.mu.Unlock()
 				return
 			}
@@ -384,7 +385,7 @@ func (i *Interactive) applySettingToggle(key string, value bool) {
 		// after a disable).
 		i.applyAutoSwarmSystemPrompt(value)
 		i.mu.Lock()
-		i.statusOK = "auto-swarm " + onOff(value)
+		i.statusOK = i18n.T("auto-swarm %s", onOff(value))
 		i.statusErr = ""
 		i.mu.Unlock()
 	case "recursive_file_suggest":
@@ -393,7 +394,7 @@ func (i *Interactive) applySettingToggle(key string, value bool) {
 		if i.cfg.SettingsStore != nil {
 			if err := i.cfg.SettingsStore.SetRecursiveFileSuggest(value); err != nil {
 				i.mu.Lock()
-				i.statusErr = "settings: " + err.Error()
+				i.statusErr = i18n.T("settings: %s", err)
 				i.mu.Unlock()
 				return
 			}
@@ -402,7 +403,7 @@ func (i *Interactive) applySettingToggle(key string, value bool) {
 		// without restarting terva. SetRecursive drops its cache.
 		i.fileSuggest.SetRecursive(value)
 		i.mu.Lock()
-		i.statusOK = "recursive @-file search " + onOff(value)
+		i.statusOK = i18n.T("recursive @-file search %s", onOff(value))
 		i.statusErr = ""
 		i.mu.Unlock()
 	case "respect_gitignore":
@@ -411,14 +412,14 @@ func (i *Interactive) applySettingToggle(key string, value bool) {
 		if i.cfg.SettingsStore != nil {
 			if err := i.cfg.SettingsStore.SetRespectGitignore(value); err != nil {
 				i.mu.Lock()
-				i.statusErr = "settings: " + err.Error()
+				i.statusErr = i18n.T("settings: %s", err)
 				i.mu.Unlock()
 				return
 			}
 		}
 		i.fileSuggest.SetRespectGitignore(value)
 		i.mu.Lock()
-		i.statusOK = "hide gitignored files in @-picker " + onOff(value)
+		i.statusOK = i18n.T("hide gitignored files in @-picker %s", onOff(value))
 		i.statusErr = ""
 		i.mu.Unlock()
 	}
@@ -428,7 +429,7 @@ func (i *Interactive) applyThemeSetting(name string) {
 	if i.cfg.SettingsStore != nil {
 		if err := i.cfg.SettingsStore.SetTheme(name); err != nil {
 			i.mu.Lock()
-			i.statusErr = "settings: " + err.Error()
+			i.statusErr = i18n.T("settings: %s", err)
 			i.mu.Unlock()
 			return
 		}
@@ -456,7 +457,7 @@ func (i *Interactive) applyThemeNow(name string) {
 		i.cfg.ThemeName = ""
 		th, applied, _ = tui.LoadThemeFromHome(i.cfg.TervaHome, "auto", detected)
 		i.mu.Lock()
-		i.statusErr = "theme missing; reset to default"
+		i.statusErr = i18n.T("theme missing; reset to default")
 		i.mu.Unlock()
 	} else {
 		i.mu.Lock()
@@ -464,7 +465,7 @@ func (i *Interactive) applyThemeNow(name string) {
 		if label == "" {
 			label = "auto"
 		}
-		i.statusOK = "theme " + label
+		i.statusOK = i18n.T("theme %s", label)
 		i.statusErr = ""
 		i.mu.Unlock()
 	}
@@ -497,7 +498,7 @@ func (i *Interactive) applyReasoningSetting(level string) {
 	if i.cfg.SettingsStore != nil {
 		if err := i.cfg.SettingsStore.SetReasoning(level); err != nil {
 			i.mu.Lock()
-			i.statusErr = "settings: " + err.Error()
+			i.statusErr = i18n.T("settings: %s", err)
 			i.mu.Unlock()
 			return
 		}
@@ -510,7 +511,7 @@ func (i *Interactive) applyReasoningSetting(level string) {
 	if label == "" {
 		label = "off"
 	}
-	i.statusOK = "thinking level " + label
+	i.statusOK = i18n.T("thinking level %s", label)
 	i.statusErr = ""
 	i.mu.Unlock()
 }

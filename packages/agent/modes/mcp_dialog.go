@@ -3,6 +3,7 @@ package modes
 import (
 	"fmt"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -162,15 +163,15 @@ func (d *mcpDialog) Render(th tui.Theme, width int) []string {
 		return nil
 	}
 	var lines []string
-	lines = append(lines, frameHeader(th, "mcp servers", width))
+	lines = append(lines, frameHeader(th, i18n.T("mcp servers"), width))
 
 	if len(d.items) == 0 {
-		lines = append(lines, th.FG256(th.Muted, "  no MCP servers configured — add them under \"mcp\" in config.json (docs/mcp.md)"))
+		lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("no MCP servers configured — add them under \"mcp\" in config.json (docs/mcp.md)")))
 		lines = append(lines, frameRule(th, width))
 		return lines
 	}
 
-	lines = append(lines, th.FG256(th.Muted, "↑/↓ · g enable/disable (global) · p project on/off · l log · esc"))
+	lines = append(lines, th.FG256(th.Muted, i18n.T("↑/↓ · g enable/disable (global) · p project on/off · l log · esc")))
 
 	const maxRows = 12
 	start, end := cursorWindow(d.cursor, len(d.items), maxRows)
@@ -178,7 +179,7 @@ func (d *mcpDialog) Render(th tui.Theme, width int) []string {
 		it := d.items[i]
 		tools := "-"
 		if it.Connected {
-			tools = fmt.Sprintf("%d tools", it.Tools)
+			tools = i18n.T("%d tools", it.Tools)
 		}
 		plain := fmt.Sprintf("  %-8s %-22s %-9s %s",
 			it.Scope, padRight(it.Name, 22), padRight(tools, 9), mcpStateLabel(it))

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -85,20 +86,20 @@ func (d *sessionDialog) Render(th tui.Theme, width int) []string {
 		return nil
 	}
 	var lines []string
-	lines = append(lines, frameHeader(th, "sessions", width))
+	lines = append(lines, frameHeader(th, i18n.T("sessions"), width))
 	if len(d.sessions) == 0 {
-		lines = append(lines, th.FG256(th.Muted, "no previous sessions for this directory"))
-		lines = append(lines, th.FG256(th.Muted, "press esc to close"))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("no previous sessions for this directory")))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("press esc to close")))
 		lines = append(lines, frameRule(th, width))
 		return lines
 	}
 	if d.renaming {
-		lines = append(lines, th.FG256(th.Muted, "rename session (enter to save, esc to cancel):"))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("rename session (enter to save, esc to cancel):")))
 		lines = append(lines, "  "+th.FG256(th.FG, d.rename))
 		lines = append(lines, frameRule(th, width))
 		return lines
 	}
-	lines = append(lines, th.FG256(th.Muted, "pick a session (↑/↓, pgup/pgdn, enter resume, r rename, esc cancel)"))
+	lines = append(lines, th.FG256(th.Muted, i18n.T("pick a session (↑/↓, pgup/pgdn, enter resume, r rename, esc cancel)")))
 
 	// Viewport: windowed slice of d.sessions around d.cursor so a
 	// list taller than the terminal still scrolls. Caller sets
@@ -118,8 +119,7 @@ func (d *sessionDialog) Render(th tui.Theme, width int) []string {
 
 	// Top indicator: how many rows are above the viewport.
 	if d.viewTop > 0 {
-		hidden := d.viewTop
-		lines = append(lines, th.FG256(th.Muted, fmt.Sprintf("  ↑ %d more above", hidden)))
+		lines = append(lines, windowMoreAbove(th, d.viewTop))
 	}
 	for i := d.viewTop; i < viewBot; i++ {
 		s := d.sessions[i]
@@ -132,8 +132,7 @@ func (d *sessionDialog) Render(th tui.Theme, width int) []string {
 	}
 	// Bottom indicator: how many rows are below the viewport.
 	if viewBot < total {
-		hidden := total - viewBot
-		lines = append(lines, th.FG256(th.Muted, fmt.Sprintf("  ↓ %d more below", hidden)))
+		lines = append(lines, windowMoreBelow(th, total, viewBot))
 	}
 	lines = append(lines, frameRule(th, width))
 	return lines
@@ -182,7 +181,7 @@ func formatSessionRowPlain(s core.SessionSummary, maxWidth int) string {
 		summary = strings.TrimSpace(s.FirstUserText)
 	}
 	if summary == "" {
-		summary = "(empty)"
+		summary = i18n.T("(empty)")
 	}
 	summary = strings.ReplaceAll(summary, "\n", " ")
 	left := fmt.Sprintf("%-14s  %s/%s  %d msgs  $%.4f  ",
@@ -210,18 +209,18 @@ func formatSessionRowPlain(s core.SessionSummary, maxWidth int) string {
 
 func formatRelative(t time.Time) string {
 	if t.IsZero() {
-		return "unknown"
+		return i18n.T("unknown")
 	}
 	d := time.Since(t)
 	switch {
 	case d < time.Minute:
-		return "just now"
+		return i18n.T("just now")
 	case d < time.Hour:
-		return fmt.Sprintf("%d min ago", int(d.Minutes()))
+		return i18n.T("%d min ago", int(d.Minutes()))
 	case d < 24*time.Hour:
-		return fmt.Sprintf("%d h ago", int(d.Hours()))
+		return i18n.T("%d h ago", int(d.Hours()))
 	case d < 7*24*time.Hour:
-		return fmt.Sprintf("%d d ago", int(d.Hours()/24))
+		return i18n.T("%d d ago", int(d.Hours()/24))
 	default:
 		return t.Local().Format("2006-01-02")
 	}

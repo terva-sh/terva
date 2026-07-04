@@ -13,8 +13,7 @@ package modes
 // per dialog again.
 
 import (
-	"fmt"
-
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -128,12 +127,14 @@ func cursorWindow(cursor, total, maxRows int) (start, end int) {
 	return start, start + maxRows
 }
 
-// windowMoreAbove / windowMoreBelow are the standard muted
-// "... N more" indicator rows around a windowed list render.
+// windowMoreAbove / windowMoreBelow are the standard muted "N more
+// above/below" indicator rows around a windowed list render. Every
+// scrolling dialog routes through these so the wording, styling, and
+// translation live in exactly one place.
 func windowMoreAbove(th tui.Theme, start int) string {
-	return th.FG256(th.Muted, fmt.Sprintf("   ... %d more above", start))
+	return th.FG256(th.Muted, "  "+i18n.T("↑ %d more above", start))
 }
 
 func windowMoreBelow(th tui.Theme, total, end int) string {
-	return th.FG256(th.Muted, fmt.Sprintf("   ... %d more below", total-end))
+	return th.FG256(th.Muted, "  "+i18n.T("↓ %d more below", total-end))
 }

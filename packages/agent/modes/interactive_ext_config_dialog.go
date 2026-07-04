@@ -1,5 +1,7 @@
 package modes
 
+import "terva.sh/terva/packages/i18n"
+
 // Hooks the per-extension config form to the host callbacks: open with the
 // extension's schema + saved values, then on save type+persist the values
 // and push them to the running extension, refreshing the /extensions list
@@ -8,7 +10,7 @@ package modes
 // openExtConfigDialog populates and shows the config form for one extension.
 func (i *Interactive) openExtConfigDialog(name string) {
 	if i.extConfigDialog == nil || i.cfg.ExtensionConfigFields == nil {
-		i.setStatusErr("extension config is not available in this build")
+		i.setStatusErr(i18n.T("extension config is not available in this build"))
 		return
 	}
 	fields := i.cfg.ExtensionConfigFields(name)
@@ -33,7 +35,7 @@ func (i *Interactive) applyExtConfig(act extConfigAction) {
 		return
 	}
 	if i.cfg.SetExtensionConfig == nil {
-		i.setStatusErr("extension config is not available in this build")
+		i.setStatusErr(i18n.T("extension config is not available in this build"))
 		return
 	}
 	if err := i.cfg.SetExtensionConfig(act.Name, act.Values); err != nil {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/ignore"
 )
 
@@ -49,12 +50,12 @@ func runExtCommand(rawArgs []string) (handled bool, err error) {
 		return true, nil
 	default:
 		printExtHelp()
-		return true, fmt.Errorf("unknown ext subcommand: %s", rawArgs[1])
+		return true, i18n.Errorf("unknown ext subcommand: %s", rawArgs[1])
 	}
 }
 
 func printExtHelp() {
-	fmt.Fprintln(os.Stderr, `terva ext — manage extensions
+	fmt.Fprintln(os.Stderr, i18n.H("help.ext", `terva ext — manage extensions
 
 usage:
   terva ext list                    list installed extensions and their state
@@ -69,7 +70,7 @@ usage:
 
 extensions live under:
   $TERVA_HOME/extensions/<name>/extension.json   (global)
-  ./.terva/extensions/<name>/extension.json      (project-local)`)
+  ./.terva/extensions/<name>/extension.json      (project-local)`))
 }
 
 // extList walks both the global and project-local extension dirs and
@@ -136,7 +137,7 @@ func extList() error {
 // tails it (-f).
 func extLogs(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: terva ext logs <name> [-f]")
+		return i18n.Errorf("usage: terva ext logs <name> [-f]")
 	}
 	name := args[0]
 	follow := false
@@ -171,7 +172,7 @@ func extToggle(args []string, enabled bool) error {
 		if !enabled {
 			verb = "disable"
 		}
-		return fmt.Errorf("usage: terva ext %s <name>", verb)
+		return i18n.Errorf("usage: terva ext %s <name>", verb)
 	}
 	name := args[0]
 	dir, err := findExtensionDir(name)
@@ -193,7 +194,7 @@ func extToggle(args []string, enabled bool) error {
 // prompt (skip with --yes).
 func extRemove(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: terva ext remove <name> [--yes]")
+		return i18n.Errorf("usage: terva ext remove <name> [--yes]")
 	}
 	name := args[0]
 	yes := false
@@ -383,7 +384,7 @@ func manifestName(dir string) string {
 // extension.json before reporting success.
 func extInstall(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: terva ext install <path|git-url>")
+		return i18n.Errorf("usage: terva ext install <path|git-url>")
 	}
 	out, err := installOne(args[0], "", "")
 	if errors.Is(err, errExtAlreadyInstalled) {
@@ -405,7 +406,7 @@ func extInstall(args []string) error {
 // extension plus the terva binary at once.
 func extUpgrade(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: terva ext upgrade <name>... (use `terva update` for every extension + the binary)")
+		return i18n.Errorf("usage: terva ext upgrade <name>... (use `terva update` for every extension + the binary)")
 	}
 	var failed, updated int
 	for _, name := range args {

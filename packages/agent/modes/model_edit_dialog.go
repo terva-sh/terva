@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -209,7 +210,7 @@ func (d *modelEditDialog) HandleKey(k tui.Key) modelEditAction {
 			if d.hasOverride {
 				d.confirmingReset = true
 			} else {
-				d.status = "no custom settings to reset"
+				d.status = i18n.T("no custom settings to reset")
 			}
 		case ' ':
 			if f := &d.fields[d.cursor]; f.kind == fieldBool {
@@ -327,18 +328,18 @@ func (d *modelEditDialog) Render(th tui.Theme, width int) []string {
 		return nil
 	}
 	var lines []string
-	lines = append(lines, frameHeader(th, "edit · "+d.header, width))
+	lines = append(lines, frameHeader(th, i18n.T("edit · %s", d.header), width))
 
 	if d.confirmingReset {
-		lines = append(lines, th.FG256(th.Warning, "  reset all custom settings for "+d.header+"?"))
-		lines = append(lines, th.FG256(th.Muted, "  removes its models.json entry · y = reset · n/esc = keep"))
+		lines = append(lines, th.FG256(th.Warning, "  "+i18n.T("reset all custom settings for %s?", d.header)))
+		lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("removes its models.json entry · y = reset · n/esc = keep")))
 		lines = append(lines, frameRule(th, width))
 		return lines
 	}
 
-	hint := "↑/↓ field · enter edit/toggle · s save · esc cancel"
+	hint := i18n.T("↑/↓ field · enter edit/toggle · s save · esc cancel")
 	if d.hasOverride {
-		hint += " · r reset"
+		hint += " · " + i18n.T("r reset")
 	}
 	lines = append(lines, th.FG256(th.Muted, hint))
 

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -148,7 +149,7 @@ func (i *Interactive) persistStatusRows(rows [][]string, note string) {
 	if i.cfg.SettingsStore != nil {
 		if err := i.cfg.SettingsStore.SetStatusLineRows(rows); err != nil {
 			i.mu.Lock()
-			i.statusErr = "settings: " + err.Error()
+			i.statusErr = i18n.T("settings: %s", err.Error())
 			i.mu.Unlock()
 			return
 		}

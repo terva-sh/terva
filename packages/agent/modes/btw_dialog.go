@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -314,7 +315,7 @@ func (d *btwDialog) Render(th tui.Theme, width int) []string {
 	out = append(out, frameHeaderColor(th, "btw - side chat (esc closes; nothing is added to the main thread)", width, th.Accent))
 
 	if len(d.turns) == 0 && !d.loading {
-		out = append(out, "  "+th.FG256(th.Muted, "ask anything; replies stay private to this side chat."))
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("ask anything; replies stay private to this side chat.")))
 	}
 
 	for _, t := range d.turns {
@@ -345,7 +346,7 @@ func (d *btwDialog) Render(th tui.Theme, width int) []string {
 			th.FG256(th.Assistant, d.spin.Message()),
 			th.FG256(th.Muted, d.spin.Elapsed().String()),
 		)
-		out = append(out, "  "+prefix+"  "+th.FG256(th.Muted, "(esc cancels)"))
+		out = append(out, "  "+prefix+"  "+th.FG256(th.Muted, i18n.T("(esc cancels)")))
 	}
 
 	out = append(out, "")

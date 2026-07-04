@@ -5,27 +5,31 @@ import (
 	"strings"
 
 	"github.com/mattn/go-runewidth"
+
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
-// helpKeyRows is the list of keybindings shown by /help.
+// helpKeyRows is the list of keybindings shown by /help. The key names are
+// literal; the descriptions are marked with i18n.M (declared here at init,
+// translated at render time by renderHelpBlock).
 var helpKeyRows = [][2]string{
-	{"enter", "submit the current input"},
-	{"shift+enter / alt+enter", "insert a newline"},
-	{"tab", "complete the highlighted slash command"},
-	{"esc", "cancel the current turn (while busy) - clear the input (while idle)"},
-	{"ctrl+c", "exit (while idle) - cancel the current turn (while busy)"},
-	{"ctrl+w", "delete previous word"},
-	{"alt+backspace", "delete previous word (same as ctrl+w)"},
-	{"ctrl+u / ctrl+k", "delete to start / end of line"},
-	{"ctrl+a / ctrl+e", "jump to start / end of line"},
-	{"alt+← / alt+→", "jump one word back / forward"},
-	{"ctrl+l", "redraw the screen"},
-	{"ctrl+o", "expand / collapse long tool results"},
-	{"ctrl+t", "cycle tool display (boxes - minimal - hidden)"},
-	{"ctrl+v", "paste a clipboard image into the prompt (also /paste)"},
-	{"pgup / pgdn", "scroll the chat one page up / down"},
-	{"up / down", "move within multi-line input - scroll chat at input edge"},
+	{"enter", i18n.M("submit the current input")},
+	{"shift+enter / alt+enter", i18n.M("insert a newline")},
+	{"tab", i18n.M("complete the highlighted slash command")},
+	{"esc", i18n.M("cancel the current turn (while busy) - clear the input (while idle)")},
+	{"ctrl+c", i18n.M("exit (while idle) - cancel the current turn (while busy)")},
+	{"ctrl+w", i18n.M("delete previous word")},
+	{"alt+backspace", i18n.M("delete previous word (same as ctrl+w)")},
+	{"ctrl+u / ctrl+k", i18n.M("delete to start / end of line")},
+	{"ctrl+a / ctrl+e", i18n.M("jump to start / end of line")},
+	{"alt+← / alt+→", i18n.M("jump one word back / forward")},
+	{"ctrl+l", i18n.M("redraw the screen")},
+	{"ctrl+o", i18n.M("expand / collapse long tool results")},
+	{"ctrl+t", i18n.M("cycle tool display (boxes - minimal - hidden)")},
+	{"ctrl+v", i18n.M("paste a clipboard image into the prompt (also /paste)")},
+	{"pgup / pgdn", i18n.M("scroll the chat one page up / down")},
+	{"up / down", i18n.M("move within multi-line input - scroll chat at input edge")},
 }
 
 // renderHelpBlock builds the friendly /help view. Uses the shared
@@ -74,12 +78,12 @@ func renderHelpBlock(th tui.Theme, width int) []string {
 	}
 
 	var out []string
-	out = append(out, frameHeader(th, "terva help", width), "")
+	out = append(out, frameHeader(th, i18n.T("terva help"), width), "")
 
 	// commands section. Group headers from the catalog become muted
 	// section labels with a blank row above, mirroring the divider rows
 	// the autocomplete popup draws for the same groups.
-	out = append(out, tui.Bold("slash commands:"))
+	out = append(out, tui.Bold(i18n.T("slash commands:")))
 	for _, c := range builtinSlashCatalog() {
 		if c.Header {
 			out = append(out, "", "  "+th.FG256(th.Muted, c.Name+":"))
@@ -91,11 +95,11 @@ func renderHelpBlock(th tui.Theme, width int) []string {
 	}
 
 	// keys section
-	out = append(out, "", tui.Bold("keys:"))
+	out = append(out, "", tui.Bold(i18n.T("keys:")))
 	for _, k := range helpKeyRows {
 		out = append(out, fmt.Sprintf("  %s  %s",
 			th.FG256(th.Accent, pad(k[0])),
-			th.FG256(th.Muted, k[1])))
+			th.FG256(th.Muted, i18n.T(k[1]))))
 	}
 
 	out = append(out, "", frameRule(th, width), "")

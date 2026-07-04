@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -46,7 +47,7 @@ func (i *Interactive) startShellEscape(parent context.Context, cmd string) {
 	ctx, cancel := context.WithCancel(parent)
 	if !i.turns.claimSlot(cancel) {
 		cancel()
-		i.setStatusErr("busy — wait for the current turn to finish before running a shell command")
+		i.setStatusErr(i18n.T("busy — wait for the current turn to finish before running a shell command"))
 		i.invalidate()
 		return
 	}
@@ -102,13 +103,13 @@ func (i *Interactive) startShellEscape(parent context.Context, cmd string) {
 		i.shellBlock = block
 		if failed {
 			if cancelled {
-				i.statusErr = "shell command cancelled"
+				i.statusErr = i18n.T("shell command cancelled")
 			} else {
-				i.statusErr = "shell command failed"
+				i.statusErr = i18n.T("shell command failed")
 			}
 			i.statusOK = ""
 		} else {
-			i.statusOK = "shell command finished"
+			i.statusOK = i18n.T("shell command finished")
 			i.statusErr = ""
 		}
 		i.mu.Unlock()

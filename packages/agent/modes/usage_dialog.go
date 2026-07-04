@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -81,13 +82,13 @@ func (d *usageDialog) Render(th tui.Theme, width int) []string {
 	if !d.Active() {
 		return nil
 	}
-	lines := []string{frameHeader(th, "usage", width), ""}
+	lines := []string{frameHeader(th, i18n.T("usage"), width), ""}
 
 	if d.loading && !d.hasData {
 		lines = append(lines,
-			th.FG256(th.Muted, "  fetching usage…"),
+			th.FG256(th.Muted, "  "+i18n.T("fetching usage…")),
 			"",
-			th.FG256(th.Muted, "  esc"),
+			th.FG256(th.Muted, "  "+i18n.T("esc")),
 			frameRule(th, width),
 		)
 		return lines
@@ -95,9 +96,9 @@ func (d *usageDialog) Render(th tui.Theme, width int) []string {
 
 	if !d.hasData || (len(d.snapshot.Windows) == 0 && d.snapshot.Credits == nil) {
 		lines = append(lines,
-			th.FG256(th.Muted, "  "+d.providerLabel()+" doesn't report usage limits."),
+			th.FG256(th.Muted, "  "+i18n.T("%s doesn't report usage limits.", d.providerLabel())),
 			"",
-			th.FG256(th.Muted, "  esc"),
+			th.FG256(th.Muted, "  "+i18n.T("esc")),
 			frameRule(th, width),
 		)
 		return lines
@@ -110,7 +111,7 @@ func (d *usageDialog) Render(th tui.Theme, width int) []string {
 		// Windows arrive ordered plan/credit before rate-limit (mergeUsage);
 		// label the rate-limit group once so the two kinds read apart.
 		if w.Kind == provider.WindowRateLimit && !rateHeaderShown {
-			lines = append(lines, "", th.FG256(th.Muted, "  rate limits"))
+			lines = append(lines, "", th.FG256(th.Muted, "  "+i18n.T("rate limits")))
 			rateHeaderShown = true
 		}
 		lines = append(lines, renderUsageWindow(th, w, now))
@@ -201,18 +202,18 @@ func humanizeDuration(d time.Duration) string {
 func formatCredits(th tui.Theme, c *provider.Credits) string {
 	switch {
 	case c.Unlimited:
-		return th.FG256(th.Muted, "credits: unlimited")
+		return th.FG256(th.Muted, i18n.T("credits: unlimited"))
 	case c.HasCredits || c.Balance > 0:
 		// Remaining is the headline; append spend when the provider reports it.
-		s := fmt.Sprintf("credits: %.2f remaining", c.Balance)
+		s := i18n.T("credits: %.2f remaining", c.Balance)
 		if c.Used > 0 {
-			s += fmt.Sprintf("  (%.2f used)", c.Used)
+			s += "  " + i18n.T("(%.2f used)", c.Used)
 		}
 		return th.FG256(th.Muted, s)
 	case c.Used > 0:
 		// No remaining figure (e.g. an uncapped OpenRouter key) — show spend.
-		return th.FG256(th.Muted, fmt.Sprintf("credits: %.2f used", c.Used))
+		return th.FG256(th.Muted, i18n.T("credits: %.2f used", c.Used))
 	default:
-		return th.FG256(th.Muted, "credits: none")
+		return th.FG256(th.Muted, i18n.T("credits: none"))
 	}
 }

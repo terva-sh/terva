@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -102,10 +103,10 @@ func (d *jumpDialog) Render(th tui.Theme, width int) []string {
 		return nil
 	}
 	var lines []string
-	lines = append(lines, frameHeader(th, "jump to turn", width))
+	lines = append(lines, frameHeader(th, i18n.T("jump to turn"), width))
 	if len(d.all) == 0 {
-		lines = append(lines, th.FG256(th.Muted, "no turns in this session yet"))
-		lines = append(lines, th.FG256(th.Muted, "press esc to close"))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("no turns in this session yet")))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("press esc to close")))
 		lines = append(lines, frameRule(th, width))
 		return lines
 	}
@@ -113,12 +114,12 @@ func (d *jumpDialog) Render(th tui.Theme, width int) []string {
 	// Status line: shows the active filter, visible count, and hints.
 	hint := "↑/↓ pick - enter jump - esc cancel - type to filter"
 	if d.filter != "" {
-		hint = fmt.Sprintf("filter: %q - %d match - ", d.filter, len(d.visible)) + hint
+		hint = i18n.T("filter: %q - %d match - ", d.filter, len(d.visible)) + hint
 	}
 	lines = append(lines, th.FG256(th.Muted, hint))
 
 	if len(d.visible) == 0 {
-		lines = append(lines, th.FG256(th.Muted, "  (nothing matches; backspace to widen)"))
+		lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("(nothing matches; backspace to widen)")))
 		lines = append(lines, frameRule(th, width))
 		return lines
 	}
@@ -128,7 +129,7 @@ func (d *jumpDialog) Render(th tui.Theme, width int) []string {
 	const maxRows = 12
 	start, end := cursorWindow(d.cursor, len(d.visible), maxRows)
 	if start > 0 {
-		lines = append(lines, th.FG256(th.Muted, fmt.Sprintf("  \u2191 %d more above", start)))
+		lines = append(lines, windowMoreAbove(th, start))
 	}
 	for i := start; i < end; i++ {
 		t := d.visible[i]
@@ -140,7 +141,7 @@ func (d *jumpDialog) Render(th tui.Theme, width int) []string {
 		}
 	}
 	if end < len(d.visible) {
-		lines = append(lines, th.FG256(th.Muted, fmt.Sprintf("  \u2193 %d more below", len(d.visible)-end)))
+		lines = append(lines, windowMoreBelow(th, len(d.visible), end))
 	}
 
 	lines = append(lines, frameRule(th, width))
@@ -258,7 +259,7 @@ func firstLineOfUserMessage(m provider.Message) string {
 				}
 			}
 		case provider.ImageBlock:
-			return fmt.Sprintf("[image - %s - %d bytes]", b.MimeType, len(b.Data))
+			return i18n.T("[image - %s - %d bytes]", b.MimeType, len(b.Data))
 		}
 	}
 	return "(empty)"

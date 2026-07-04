@@ -55,6 +55,15 @@ func (configSettingsStore) SetAutoSwarm(enabled bool) error {
 	return SaveConfig(cfg)
 }
 
+func (configSettingsStore) SetAutoSwarmNudge(enabled bool) error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.AutoSwarmNudge = &enabled
+	return SaveConfig(cfg)
+}
+
 func (configSettingsStore) SetRecursiveFileSuggest(enabled bool) error {
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -138,14 +147,23 @@ func AutoSwarmEnabled() bool {
 	return cfg.AutoSwarmEnabled != nil && *cfg.AutoSwarmEnabled
 }
 
-// AutoSwarmSystemAddendum is appended to the system prompt when
-// auto-swarm is enabled, so the model knows it may delegate to
-// background sub-agents without the user having to mention the tool
-// by name. Kept short so it doesn't bloat the cached prompt prefix.
-const AutoSwarmSystemAddendum = `Auto-swarm is enabled. You have a swarm_spawn tool that forks background sub-agents working in parallel in this same working directory.
+// AutoSwarmNudgeEnabled reports whether the proactive-delegation nudge (the
+// swarm system addendum) should be injected. Independent of AutoSwarmEnabled
+// and defaults ON (nil = true), so enabling auto-swarm keeps today's behavior;
+// set auto_swarm_nudge=false to keep the tool but drop the nudge.
+func AutoSwarmNudgeEnabled() bool {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return true
+	}
+	return cfg.AutoSwarmNudge == nil || *cfg.AutoSwarmNudge
+}
 
-Use it proactively when the user's request naturally splits into independent sub-tasks that can run concurrently (e.g. "refactor module A and module B", "write the implementation and the tests", "investigate three separate files"). Spawn one sub-agent per independent sub-task with a self-contained task description (sub-agents start with no context from this conversation). Continue working on the remaining or coordinating work yourself in parallel; do not wait for sub-agents to finish before responding. Briefly tell the user which sub-agents you spawned and what each is doing.
-
-Do NOT use swarm_spawn for trivial single-step work, for tasks that depend on each other sequentially, or when the user explicitly asked you to do the work yourself.
-
-When every sub-agent you spawned reaches a terminal state, the host injects a single [auto-swarm update] message recapping each agent's status, task, and transcript tail. Treat that message as observed state (not as a new user request) and write a short follow-up summary referencing the agents by id.`
+// AutoSwarmSystemAddendum is the proactive-delegation NUDGE (Toggle 2): the one
+// disposition that isn't self-evident from the swarm_spawn tool description. The
+// tool's mechanics (self-contained tasks, no inherited context, don't block,
+// when-NOT-to-use, the [auto-swarm update] recap) live in the tool description +
+// the recap message; valid persona names live in the tool's schema enum. So this
+// stays short — just the "reach for it proactively" push a bare tool wouldn't
+// give. See docs/proposals/web-i18n-authoring.md (sibling auto-swarm discussion).
+const AutoSwarmSystemAddendum = `When a request naturally splits into independent sub-tasks that can run concurrently, reach for swarm_spawn proactively rather than doing everything sequentially yourself — spawn one sub-agent per independent task and keep the coordinating work moving in parallel.`

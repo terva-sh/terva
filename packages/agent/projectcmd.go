@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // runProjectCommand handles `terva project ...` — per-project settings that edit
@@ -43,12 +45,12 @@ func runProjectCommand(rawArgs []string) (handled bool, err error) {
 		return true, nil
 	default:
 		printProjectHelp()
-		return true, fmt.Errorf("unknown 'terva project' subcommand %q (try: terva project help)", sub)
+		return true, i18n.Errorf("unknown 'terva project' subcommand %q (try: terva project help)", sub)
 	}
 }
 
 func printProjectHelp() {
-	fmt.Fprint(os.Stderr, `terva project — per-project settings (edits ./.terva/config.json)
+	fmt.Fprint(os.Stderr, i18n.H("help.project", `terva project — per-project settings (edits ./.terva/config.json)
 
   terva project init [--persona NAME]   scaffold a self-contained (project-scoped) agent here
   terva project status                  show what this project will run (scope, trust, extensions, model)
@@ -67,7 +69,7 @@ A scoped project keeps all data in .terva/home, loads only its own (+ adopted)
 extensions, and inherits only your login + trust. Because it runs the project's
 own config/extensions/hooks, you must "terva project trust" it before it will
 run scoped. See docs/extensions.md#project-scoped-agents.
-`)
+`))
 }
 
 func runProjectExt(args []string) error {
@@ -80,26 +82,26 @@ func runProjectExt(args []string) error {
 		return projectExtList()
 	case "adopt":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: terva project ext adopt <name>")
+			return i18n.Errorf("usage: terva project ext adopt <name>")
 		}
 		return projectExtAdopt(args[1])
 	case "drop":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: terva project ext drop <name>")
+			return i18n.Errorf("usage: terva project ext drop <name>")
 		}
 		return projectExtDrop(args[1])
 	case "disable":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: terva project ext disable <name>")
+			return i18n.Errorf("usage: terva project ext disable <name>")
 		}
 		return projectExtSetDisabled(args[1], true)
 	case "enable":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: terva project ext enable <name>")
+			return i18n.Errorf("usage: terva project ext enable <name>")
 		}
 		return projectExtSetDisabled(args[1], false)
 	default:
-		return fmt.Errorf("usage: terva project ext <list|adopt|drop|disable|enable> [name]")
+		return i18n.Errorf("usage: terva project ext <list|adopt|drop|disable|enable> [name]")
 	}
 }
 

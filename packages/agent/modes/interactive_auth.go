@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/identity"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
 )
@@ -14,7 +15,7 @@ import (
 func (i *Interactive) openLogoutDialog() {
 	if i.cfg.AuthManager == nil {
 		i.mu.Lock()
-		i.statusErr = "no auth manager configured"
+		i.statusErr = i18n.T("no auth manager configured")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -22,7 +23,7 @@ func (i *Interactive) openLogoutDialog() {
 	store := i.cfg.AuthManager.Store()
 	if store == nil {
 		i.mu.Lock()
-		i.statusErr = "auth store is not available"
+		i.statusErr = i18n.T("auth store is not available")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -30,7 +31,7 @@ func (i *Interactive) openLogoutDialog() {
 	creds, err := store.Load()
 	if err != nil {
 		i.mu.Lock()
-		i.statusErr = "read auth store: " + err.Error()
+		i.statusErr = i18n.T("read auth store: %s", err.Error())
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -63,7 +64,7 @@ func (i *Interactive) openLogoutDialog() {
 	}
 	if len(items) == 0 {
 		i.mu.Lock()
-		i.statusOK = "no credentials stored; already logged out"
+		i.statusOK = i18n.T("no credentials stored; already logged out")
 		i.statusErr = ""
 		i.mu.Unlock()
 		i.invalidate()
@@ -86,14 +87,14 @@ func (i *Interactive) openLogoutDialog() {
 func (i *Interactive) doLogout(target string) {
 	if i.cfg.AuthManager == nil {
 		i.mu.Lock()
-		i.statusErr = "no auth manager configured"
+		i.statusErr = i18n.T("no auth manager configured")
 		i.mu.Unlock()
 		return
 	}
 	store := i.cfg.AuthManager.Store()
 	if store == nil {
 		i.mu.Lock()
-		i.statusErr = "auth store is not available"
+		i.statusErr = i18n.T("auth store is not available")
 		i.mu.Unlock()
 		return
 	}
@@ -114,7 +115,7 @@ func (i *Interactive) doLogout(target string) {
 		}
 		if !known {
 			i.mu.Lock()
-			i.statusErr = "unknown provider: " + target
+			i.statusErr = i18n.T("unknown provider: %s", target)
 			i.mu.Unlock()
 			return
 		}
@@ -151,7 +152,7 @@ func (i *Interactive) doLogout(target string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if len(errs) > 0 {
-		i.statusErr = "logout errors: " + strings.Join(errs, "; ")
+		i.statusErr = i18n.T("logout errors: %s", strings.Join(errs, "; "))
 		return
 	}
 	i.statusErr = ""
@@ -160,9 +161,9 @@ func (i *Interactive) doLogout(target string) {
 		// it so prompts can't go out with the stale client, and hint at
 		// /login.
 		i.turns.SetAgent(nil)
-		i.statusOK = "logged out of " + strings.Join(providers, ", ") + ". type /login to sign back in."
+		i.statusOK = i18n.T("logged out of %s. type /login to sign back in.", strings.Join(providers, ", "))
 	} else {
-		i.statusOK = "logged out of " + strings.Join(providers, ", ")
+		i.statusOK = i18n.T("logged out of %s", strings.Join(providers, ", "))
 	}
 }
 
@@ -371,7 +372,7 @@ func (i *Interactive) handleAuthEvent(ev auth.Event) {
 		i.cfg.Provider = prov
 		i.cfg.Model = model
 		i.statusErr = ""
-		i.statusOK = "logged in to " + ev.Provider + " via " + ev.Method
+		i.statusOK = i18n.T("logged in to %s via %s", ev.Provider, ev.Method)
 		i.mu.Unlock()
 		i.applyChatTools(i.chatBridge != nil && i.chatBridge.Active())
 		i.dialog.ShowResult(true, "")

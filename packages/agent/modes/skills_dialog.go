@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/skills"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -101,10 +102,10 @@ func (d *skillsDialog) Render(th tui.Theme, width int) []string {
 		return d.renderBody(th, width)
 	}
 
-	out := []string{frameHeader(th, "skills (enter to view, r to reload, esc to close)", width)}
+	out := []string{frameHeader(th, i18n.T("skills (enter to view, r to reload, esc to close)"), width)}
 	if len(d.skills) == 0 {
-		out = append(out, "  "+th.FG256(th.Muted, "no user skills loaded"))
-		out = append(out, "  "+th.FG256(th.Muted, "add SKILL.md under $TERVA_HOME/skills, .terva/skills, .claude/skills, or .agents/skills"))
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("no user skills loaded")))
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("add SKILL.md under $TERVA_HOME/skills, .terva/skills, .claude/skills, or .agents/skills")))
 		out = append(out, frameRule(th, width))
 		return out
 	}
@@ -112,7 +113,7 @@ func (d *skillsDialog) Render(th tui.Theme, width int) []string {
 	const maxRows = 12
 	start, end := visibleWindow(d.cursor, len(d.skills), maxRows)
 	if start > 0 {
-		out = append(out, "  "+th.FG256(th.Muted, fmt.Sprintf("\u2191 %d more above", start)))
+		out = append(out, windowMoreAbove(th, start))
 	}
 	for i := start; i < end; i++ {
 		s := d.skills[i]
@@ -124,7 +125,7 @@ func (d *skillsDialog) Render(th tui.Theme, width int) []string {
 		}
 	}
 	if end < len(d.skills) {
-		out = append(out, "  "+th.FG256(th.Muted, fmt.Sprintf("\u2193 %d more below", len(d.skills)-end)))
+		out = append(out, windowMoreBelow(th, len(d.skills), end))
 	}
 	out = append(out, frameRule(th, width))
 	return out
@@ -133,9 +134,9 @@ func (d *skillsDialog) Render(th tui.Theme, width int) []string {
 func (d *skillsDialog) renderBody(th tui.Theme, width int) []string {
 	s := d.viewing
 	out := []string{
-		frameHeader(th, "skill: "+s.Name+"  (esc / enter to go back)", width),
+		frameHeader(th, i18n.T("skill: %s  (esc / enter to go back)", s.Name), width),
 		"  " + th.FG256(th.Muted, s.Description),
-		"  " + th.FG256(th.Muted, "source: "+s.Source+"  ("+s.Path+")"),
+		"  " + th.FG256(th.Muted, i18n.T("source: %s  (%s)", s.Source, s.Path)),
 		"",
 	}
 
@@ -162,7 +163,7 @@ func (d *skillsDialog) renderBody(th tui.Theme, width int) []string {
 		out = append(out, "    "+line)
 	}
 	if end < len(bodyLines) {
-		out = append(out, "  "+th.FG256(th.Muted, fmt.Sprintf("\u2193 %d more lines (down/pgdn)", len(bodyLines)-end)))
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("\u2193 %d more lines (down/pgdn)", len(bodyLines)-end)))
 	}
 	out = append(out, frameRule(th, width))
 	return out

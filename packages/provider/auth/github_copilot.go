@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 const githubCopilotClientID = "Iv1.b507a08c87ecfe98"
@@ -68,7 +70,7 @@ func PollGitHubCopilotDeviceToken(ctx context.Context, auth GitHubCopilotDeviceA
 	deadline := time.Now().Add(time.Duration(auth.ExpiresIn) * time.Second)
 	for {
 		if auth.ExpiresIn > 0 && time.Now().After(deadline) {
-			return nil, fmt.Errorf("github copilot device login expired")
+			return nil, i18n.Errorf("github copilot device login expired")
 		}
 		tok, retry, err := pollGitHubCopilotDeviceTokenOnce(ctx, auth.DeviceCode, interval)
 		if err != nil {

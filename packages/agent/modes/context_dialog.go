@@ -3,6 +3,7 @@ package modes
 import (
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -123,10 +124,10 @@ func (d *contextDialog) Render(th tui.Theme, width int) []string {
 		return nil
 	}
 	var lines []string
-	lines = append(lines, frameHeader(th, "context", width))
+	lines = append(lines, frameHeader(th, i18n.T("context"), width))
 	lines = append(lines, d.tabBar(th))
 	if d.sessionID != "" {
-		lines = append(lines, th.FG256(th.Muted, "  session "+d.sessionID))
+		lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("session %s", d.sessionID)))
 	}
 	if d.sessionPath != "" {
 		lines = append(lines, th.FG256(th.Muted, "  "+truncate(d.sessionPath, width-4)))
@@ -155,7 +156,7 @@ func (d *contextDialog) Render(th tui.Theme, width int) []string {
 	if end < len(body) {
 		lines = append(lines, windowMoreBelow(th, len(body), end))
 	}
-	lines = append(lines, th.FG256(th.Muted, "  ←→/tab switch · ↑/↓ scroll · esc"))
+	lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("←→/tab switch · ↑/↓ scroll · esc")))
 	lines = append(lines, frameRule(th, width))
 	return lines
 }

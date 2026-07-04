@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // runMigrateCommand dispatches `terva migrate ...`. Returns
@@ -32,7 +34,7 @@ func runMigrateCommand(rawArgs []string) (handled bool, err error) {
 			opts.dryRun = true
 		default:
 			printMigrateHelp()
-			return true, fmt.Errorf("unknown flag for `migrate`: %s", a)
+			return true, i18n.Errorf("unknown flag for `migrate`: %s", a)
 		}
 	}
 	if opts.removeOld && opts.keepOld {
@@ -49,7 +51,7 @@ type migrateOptions struct {
 }
 
 func printMigrateHelp() {
-	fmt.Fprintln(os.Stderr, `terva migrate — adopt the terva locations for data that zot left behind
+	fmt.Fprintln(os.Stderr, i18n.H("help.migrate", `terva migrate — adopt the terva locations for data that zot left behind
 
 usage:
   terva migrate                   interactive: copy the zot data dir, then ask
@@ -68,7 +70,7 @@ notes:
     project dirs. Delete that file to re-enable the fallback.
   * ZOT_* environment variables keep working (with a deprecation
     warning), and .zotsession files import forever — migration changes
-    neither.`)
+    neither.`))
 }
 
 func runMigrate(opts migrateOptions) error {

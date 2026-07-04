@@ -2,10 +2,10 @@ package modes
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/i18n"
 )
 
 // runSwarm dispatches /swarm subcommands. Layout:
@@ -26,7 +26,7 @@ import (
 func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 	if i.cfg.Swarm == nil {
 		i.mu.Lock()
-		i.statusErr = "swarm is disabled in this build"
+		i.statusErr = i18n.T("swarm is disabled in this build")
 		i.statusOK = ""
 		i.mu.Unlock()
 		return
@@ -87,7 +87,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		)
 	case "new", "spawn":
 		if rest == "" {
-			i.swarmStatus("", "/swarm new <task>: missing task")
+			i.swarmStatus("", i18n.T("/swarm new <task>: missing task"))
 			return
 		}
 		// Permit `--model X --provider Y` flags before the task so
@@ -99,47 +99,47 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		// leading flags are consumed.
 		model, provider, persona, task := parseSpawnFlags(rest)
 		if task == "" {
-			i.swarmStatus("", "/swarm new: missing task (after any --model/--provider/--persona flags)")
+			i.swarmStatus("", i18n.T("/swarm new: missing task (after any --model/--provider/--persona flags)"))
 			return
 		}
 		a, err := i.cfg.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
 			Task: task, Model: model, Provider: provider, Persona: persona,
 		})
 		if err != nil {
-			i.swarmStatus("", "spawn: "+err.Error())
+			i.swarmStatus("", i18n.T("spawn: %s", err.Error()))
 			return
 		}
 		switch {
 		case persona != "":
-			i.swarmStatus("spawned "+a.ID+" (persona "+persona+")", "")
+			i.swarmStatus(i18n.T("spawned %s (persona %s)", a.ID, persona), "")
 		case model != "":
-			i.swarmStatus("spawned "+a.ID+" (model "+model+")", "")
+			i.swarmStatus(i18n.T("spawned %s (model %s)", a.ID, model), "")
 		default:
-			i.swarmStatus("spawned "+a.ID, "")
+			i.swarmStatus(i18n.T("spawned %s", a.ID), "")
 		}
 	case "kill", "stop":
 		if rest == "" {
-			i.swarmStatus("", "/swarm kill <id>: missing id")
+			i.swarmStatus("", i18n.T("/swarm kill <id>: missing id"))
 			return
 		}
 		if err := i.cfg.Swarm.Stop(rest); err != nil {
-			i.swarmStatus("", "kill: "+err.Error())
+			i.swarmStatus("", i18n.T("kill: %s", err.Error()))
 			return
 		}
-		i.swarmStatus("stopped "+rest, "")
+		i.swarmStatus(i18n.T("stopped %s", rest), "")
 	case "remove", "rm":
 		if rest == "" {
-			i.swarmStatus("", "/swarm remove <id>: missing id")
+			i.swarmStatus("", i18n.T("/swarm remove <id>: missing id"))
 			return
 		}
 		if err := i.cfg.Swarm.Remove(rest); err != nil {
-			i.swarmStatus("", "remove: "+err.Error())
+			i.swarmStatus("", i18n.T("remove: %s", err.Error()))
 			return
 		}
-		i.swarmStatus("removed "+rest, "")
+		i.swarmStatus(i18n.T("removed %s", rest), "")
 	case "logs", "log", "view":
 		if rest == "" {
-			i.swarmStatus("", "/swarm logs <id>: missing id")
+			i.swarmStatus("", i18n.T("/swarm logs <id>: missing id"))
 			return
 		}
 		ok := i.swarmDialog.OpenViewing(
@@ -153,7 +153,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 			i.cfg.CWD,
 		)
 		if !ok {
-			i.swarmStatus("", "/swarm logs: no agent matching "+rest)
+			i.swarmStatus("", i18n.T("/swarm logs: no agent matching %s", rest))
 		}
 	case "resume", "reattach", "reopen":
 		if rest == "" {
@@ -173,20 +173,20 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 			)
 			switch count {
 			case 0:
-				i.swarmStatus("", "/swarm resume: no resumable agents (none detached or terminated)")
+				i.swarmStatus("", i18n.T("/swarm resume: no resumable agents (none detached or terminated)"))
 			case 1:
-				i.swarmStatus("1 resumable agent, press R to resume", "")
+				i.swarmStatus(i18n.T("1 resumable agent, press R to resume"), "")
 			default:
-				i.swarmStatus(fmt.Sprintf("%d resumable agents, ↑/↓ to pick, R to resume", count), "")
+				i.swarmStatus(i18n.T("%d resumable agents, ↑/↓ to pick, R to resume", count), "")
 			}
 			return
 		}
 		a, err := i.cfg.Swarm.Resume(ctx, rest)
 		if err != nil {
-			i.swarmStatus("", "resume: "+err.Error())
+			i.swarmStatus("", i18n.T("resume: %s", err.Error()))
 			return
 		}
-		i.swarmStatus("resumed "+a.ID, "")
+		i.swarmStatus(i18n.T("resumed %s", a.ID), "")
 	case "send", "prompt", "msg":
 		// /swarm send <id> <text...> is the non-interactive
 		// counterpart of pressing 'p' in the dashboard. We split the
@@ -195,18 +195,18 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		// the user expects to be preserved verbatim.
 		id, text := splitIDAndRest(rest)
 		if id == "" {
-			i.swarmStatus("", "/swarm send <id> <text>: missing id")
+			i.swarmStatus("", i18n.T("/swarm send <id> <text>: missing id"))
 			return
 		}
 		if text == "" {
-			i.swarmStatus("", "/swarm send <id> <text>: missing text")
+			i.swarmStatus("", i18n.T("/swarm send <id> <text>: missing text"))
 			return
 		}
 		if err := i.cfg.Swarm.SendUserTurn(id, text); err != nil {
 			i.swarmStatus("", friendlySendErr(id, err))
 			return
 		}
-		i.swarmStatus("sent to "+id, "")
+		i.swarmStatus(i18n.T("sent to %s", id), "")
 	case "attach":
 		// PTY-reparenting is a significant chunk of work I haven't
 		// landed yet (see the design sketch). Recognise the name so
@@ -214,9 +214,9 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		// subcommand" path — that error message is misleading because
 		// it makes attach sound like a typo instead of a planned
 		// feature. Point the user at /swarm logs in the meantime.
-		i.swarmStatus("", "/swarm attach: not implemented yet (needs PTY reparenting). Use /swarm logs "+firstWord(rest)+" to watch its transcript.")
+		i.swarmStatus("", i18n.T("/swarm attach: not implemented yet (needs PTY reparenting). Use /swarm logs %s to watch its transcript.", firstWord(rest)))
 	default:
-		i.swarmStatus("", "/swarm: unknown subcommand "+sub+" (try list / new / kill / remove / logs / send / resume)")
+		i.swarmStatus("", i18n.T("/swarm: unknown subcommand %s (try list / new / kill / remove / logs / send / resume)", sub))
 	}
 }
 

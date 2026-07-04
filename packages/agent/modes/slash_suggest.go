@@ -6,6 +6,7 @@ import (
 
 	"github.com/mattn/go-runewidth"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -460,7 +461,7 @@ func (s *slashSuggester) Render(input string, th tui.Theme, width int) []string 
 	// Blank row before the hint visually detaches it from the
 	// command list and groups it with its trailing blank.
 	lines = append(lines, "")
-	lines = append(lines, th.FG256(th.Muted, "  ↑/↓ navigate - tab complete - enter run"))
+	lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("↑/↓ navigate - tab complete - enter run")))
 	// Blank row after the hint separates the popup from the status
 	// bar / editor below it.
 	lines = append(lines, "")

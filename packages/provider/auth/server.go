@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // LoginResult is delivered on the channel returned by Server.Result().
@@ -115,7 +117,7 @@ func isKnownAPIKeyProvider(p string) bool {
 }
 
 func apiKeyProviderMessage() string {
-	return "provider must be one of: " + strings.Join(APIKeyProviders(), ", ")
+	return i18n.T("provider must be one of: %s", strings.Join(APIKeyProviders(), ", "))
 }
 
 // APIKeyProviders is the ordered list shown by /login -> api key.
@@ -173,18 +175,18 @@ func (s *Server) handleAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 		compat := provider == "openai-compatible"
 		if provider == "" {
-			s.errorPage(w, "missing provider")
+			s.errorPage(w, i18n.T("missing provider"))
 			return
 		}
 		if compat {
 			// The key is optional for local endpoints, but we need
 			// somewhere to send requests and a model id to send them with.
 			if baseURL == "" || model == "" {
-				s.errorPage(w, "base url and model are required for an openai-compatible endpoint")
+				s.errorPage(w, i18n.T("base url and model are required for an openai-compatible endpoint"))
 				return
 			}
 		} else if key == "" {
-			s.errorPage(w, "missing provider or api key")
+			s.errorPage(w, i18n.T("missing provider or api key"))
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -226,7 +228,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	code := q.Get("code")
 	state := q.Get("state")
 	if code == "" {
-		s.errorPage(w, "missing authorization code")
+		s.errorPage(w, i18n.T("missing authorization code"))
 		s.results <- LoginResult{Provider: provider, Method: "oauth", Err: fmt.Errorf("missing code")}
 		return
 	}

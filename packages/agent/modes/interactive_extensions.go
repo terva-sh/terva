@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -62,7 +63,7 @@ func (i *Interactive) invokeExtensionCommand(ctx context.Context, name, args str
 	resp, err := i.cfg.Extensions.Invoke(ctx, name, args, 30*time.Second)
 	if err != nil {
 		i.mu.Lock()
-		i.statusErr = "extension /" + name + ": " + err.Error()
+		i.statusErr = i18n.T("extension /%s: %s", name, err.Error())
 		i.statusOK = ""
 		i.mu.Unlock()
 		i.invalidate()
@@ -70,7 +71,7 @@ func (i *Interactive) invokeExtensionCommand(ctx context.Context, name, args str
 	}
 	if resp.Error != "" {
 		i.mu.Lock()
-		i.statusErr = "extension /" + name + ": " + resp.Error
+		i.statusErr = i18n.T("extension /%s: %s", name, resp.Error)
 		i.statusOK = ""
 		i.mu.Unlock()
 		i.invalidate()
@@ -107,7 +108,7 @@ func (i *Interactive) invokeExtensionCommand(ctx context.Context, name, args str
 		// nothing
 	default:
 		i.mu.Lock()
-		i.statusErr = "extension /" + name + ": unknown action " + resp.Action
+		i.statusErr = i18n.T("extension /%s: unknown action %s", name, resp.Action)
 		i.mu.Unlock()
 		i.invalidate()
 	}
@@ -296,13 +297,13 @@ func (i *Interactive) ClosePanel(extName, panelID string) {
 func (i *Interactive) runReloadExt(ctx context.Context) {
 	if i.cfg.Extensions == nil {
 		i.mu.Lock()
-		i.statusErr = "no extension manager in this build"
+		i.statusErr = i18n.T("no extension manager in this build")
 		i.mu.Unlock()
 		i.invalidate()
 		return
 	}
 	i.mu.Lock()
-	i.statusOK = "reloading extensions..."
+	i.statusOK = i18n.T("reloading extensions...")
 	i.statusErr = ""
 	i.mu.Unlock()
 	i.invalidate()

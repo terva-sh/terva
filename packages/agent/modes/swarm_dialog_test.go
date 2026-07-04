@@ -402,7 +402,7 @@ func TestSwarmDialogPromptFromTranscriptView(t *testing.T) {
 		t.Fatal("transcript view did not auto-open inline editor for running agent")
 	}
 	out := strings.Join(d.Render(tui.Theme{}, 80), "\n")
-	if !strings.Contains(out, "task:   do thing") {
+	if !strings.Contains(out, "task: do thing") {
 		t.Fatalf("transcript metadata not visible:\n%s", out)
 	}
 	if !strings.Contains(out, "swarm: beta-2") {

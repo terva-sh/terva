@@ -6,13 +6,13 @@ package modes
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -38,7 +38,7 @@ import (
 func buildStudyPrompt(arg, cwd string) string {
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
-		return "Read and understand everything in the current directory."
+		return i18n.P("study.dir.current", "Read and understand everything in the current directory.")
 	}
 	abs := arg
 	if !filepath.IsAbs(abs) {
@@ -49,9 +49,9 @@ func buildStudyPrompt(arg, cwd string) string {
 		display = rel
 	}
 	if info, err := os.Stat(abs); err == nil && !info.IsDir() {
-		return "Read and understand the file " + display + "."
+		return i18n.P("study.file", "Read and understand the file %s.", display)
 	}
-	return "Read and understand everything in the directory " + display + "."
+	return i18n.P("study.dir", "Read and understand everything in the directory %s.", display)
 }
 
 // applyModelSelection switches the active model (and provider, if the
@@ -90,7 +90,7 @@ func (i *Interactive) cancelAndWaitForIdle() {
 func (i *Interactive) runCompact(parent context.Context, auto bool) {
 	ag := i.turns.Agent()
 	if ag == nil {
-		i.setStatusErr("not logged in. type /login first.")
+		i.setStatusErr(i18n.T("not logged in. type /login first."))
 		return
 	}
 	ctx, cancel := context.WithCancel(parent)
@@ -103,9 +103,9 @@ func (i *Interactive) runCompact(parent context.Context, auto bool) {
 	}
 	i.mu.Lock()
 	if auto {
-		i.spin.StartFixed("condensing history")
+		i.spin.StartFixed(i18n.T("condensing history"))
 	} else {
-		i.spin.StartFixed("compacting")
+		i.spin.StartFixed(i18n.T("compacting"))
 	}
 	i.statusErr = ""
 	i.statusOK = ""
@@ -159,16 +159,16 @@ func (i *Interactive) runClaimedCompact(ctx context.Context, ag *core.Agent, aut
 		case err != nil && ctx.Err() != nil:
 			i.statusErr = ""
 			if auto {
-				i.statusOK = "auto-condense cancelled"
+				i.statusOK = i18n.T("auto-condense cancelled")
 			} else {
-				i.statusOK = "compaction cancelled"
+				i.statusOK = i18n.T("compaction cancelled")
 			}
 		case err != nil:
-			i.statusErr = "compaction failed: " + err.Error()
+			i.statusErr = i18n.T("compaction failed: %s", err.Error())
 			i.statusOK = ""
 		case nothingToCompact:
 			i.statusErr = ""
-			i.statusOK = "nothing to compact — transcript already minimal"
+			i.statusOK = i18n.T("nothing to compact — transcript already minimal")
 			i.pendingPostCompactNote = ""
 		default:
 			i.statusErr = ""
@@ -182,9 +182,9 @@ func (i *Interactive) runClaimedCompact(ctx context.Context, ag *core.Agent, aut
 			case i.pendingPostCompactNote != "":
 				i.statusOK = i.pendingPostCompactNote
 			case tokens != "":
-				i.statusOK = fmt.Sprintf("compacted from ~%s tokens (ctrl+o to expand)", tokens)
+				i.statusOK = i18n.T("compacted from ~%s tokens (ctrl+o to expand)", tokens)
 			default:
-				i.statusOK = "compacted (ctrl+o to expand)"
+				i.statusOK = i18n.T("compacted (ctrl+o to expand)")
 			}
 			i.pendingPostCompactNote = ""
 			i.extNotes = stripAutoCompactNotes(i.extNotes)
@@ -227,7 +227,7 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 		i.mu.Unlock()
 		if m, err := provider.FindModel(provName, modelID); err == nil && !m.Has(provider.CapImageInput) {
 			i.mu.Lock()
-			i.statusErr = fmt.Sprintf("note: %s can't see images — %d attachment(s) will be dropped", modelID, len(images))
+			i.statusErr = i18n.T("note: %s can't see images — %d attachment(s) will be dropped", modelID, len(images))
 			i.mu.Unlock()
 			i.invalidate()
 		}
@@ -251,9 +251,9 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 			}
 			i.mu.Lock()
 			i.statusErr = ""
-			i.extNotes = append(i.extNotes, autoCompactNoteLine(i.cfg.Theme, "context near limit — condensing history before sending..."))
-			i.pendingPostCompactNote = "context auto-compacted; sending your last message"
-			i.spin.StartFixed("condensing history")
+			i.extNotes = append(i.extNotes, autoCompactNoteLine(i.cfg.Theme, i18n.T(noteCondensingBeforeSend)))
+			i.pendingPostCompactNote = i18n.T("context auto-compacted; sending your last message")
+			i.spin.StartFixed(i18n.T("condensing history"))
 			i.scrollOffset = 0
 			i.helpBlock = nil
 			i.mu.Unlock()
@@ -365,8 +365,8 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 		if payloadTooLarge {
 			i.statusErr = ""
 			i.turns.RequeueFront(prompt)
-			i.extNotes = append(i.extNotes, autoCompactNoteLine(i.cfg.Theme, "request was too large. condensing history before retrying ..."))
-			i.pendingPostCompactNote = "context auto-compacted; retrying your last message"
+			i.extNotes = append(i.extNotes, autoCompactNoteLine(i.cfg.Theme, i18n.T(noteCondensingBeforeRetry)))
+			i.pendingPostCompactNote = i18n.T("context auto-compacted; retrying your last message")
 		}
 		// Persist the assistant's reply (and every tool row before
 		// it) to the session file while the turn memory is hot.
@@ -401,13 +401,25 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 	}()
 }
 
+// noteCondensingBeforeSend / noteCondensingBeforeRetry are the two
+// auto-compact heads-up notes, marked once so the render site and
+// stripAutoCompactNotes translate the SAME source. Matching on the
+// English literal "condensing history" would silently stop stripping
+// the note once it's translated, leaving a stale banner in the chat.
+var (
+	noteCondensingBeforeSend  = i18n.M("context near limit — condensing history before sending...")
+	noteCondensingBeforeRetry = i18n.M("request was too large. condensing history before retrying ...")
+)
+
 func stripAutoCompactNotes(notes []string) []string {
 	if len(notes) == 0 {
 		return notes
 	}
+	sendNote := i18n.T(noteCondensingBeforeSend)
+	retryNote := i18n.T(noteCondensingBeforeRetry)
 	out := notes[:0]
 	for _, n := range notes {
-		if strings.Contains(n, "condensing history") {
+		if strings.Contains(n, sendNote) || strings.Contains(n, retryNote) {
 			continue
 		}
 		out = append(out, n)
@@ -562,7 +574,7 @@ func (i *Interactive) handleEvent(ev core.AgentEvent) {
 		// model. Surface the reason so the submit doesn't just vanish.
 		reason := e.Reason
 		if reason == "" {
-			reason = "message blocked by extension"
+			reason = i18n.T("message blocked by extension")
 		}
 		i.statusErr = reason
 		i.statusOK = ""
@@ -578,7 +590,7 @@ func (i *Interactive) handleEvent(ev core.AgentEvent) {
 		if e.Stop == provider.StopAborted {
 			i.turns.ResetStream()
 			i.statusErr = ""
-			i.statusOK = "cancelled"
+			i.statusOK = i18n.T("cancelled")
 			return
 		}
 		if e.Stop == provider.StopLength {
@@ -588,7 +600,7 @@ func (i *Interactive) handleEvent(ev core.AgentEvent) {
 			// the UI gave up. The agent already requests the model's
 			// full MaxOutput budget, so this means the response genuinely
 			// exceeded that ceiling; ask the user to continue.
-			i.statusErr = "response hit the model's output-token limit and was cut off, ask it to continue"
+			i.statusErr = i18n.T("response hit the model's output-token limit and was cut off, ask it to continue")
 			i.statusOK = ""
 			return
 		}

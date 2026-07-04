@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/i18n"
 )
 
 // loreSoftBudget is the per-entry content size (bytes) above which `terva
@@ -37,12 +38,12 @@ func runLoreCommand(rawArgs []string) (handled bool, err error) {
 		return true, nil
 	default:
 		printLoreHelp()
-		return true, fmt.Errorf("unknown lore subcommand: %s", rawArgs[1])
+		return true, i18n.Errorf("unknown lore subcommand: %s", rawArgs[1])
 	}
 }
 
 func printLoreHelp() {
-	fmt.Fprintln(os.Stderr, `terva lore — inspect keyed-context (lore) entries
+	fmt.Fprintln(os.Stderr, i18n.H("help.lore", `terva lore — inspect keyed-context (lore) entries
 
 usage:
   terva lore list                 list active lore entries across all tiers
@@ -53,7 +54,7 @@ an always-on (constant) entry, or one triggered by keys, plus a Markdown body.
 Entries live in $TERVA_HOME/lore/, .terva/lore/ (trust-gated), and extension
 lore/ bundles; collection settings (scan_depth, token_budget, recursive_
 scanning) live in a lore.json at the directory root. Disable for a run with
---no-lore.`)
+--no-lore.`))
 }
 
 // loreList prints the active lore entries (what the current directory would
@@ -96,7 +97,7 @@ func loreList() error {
 // error if any is invalid.
 func loreValidate(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: terva lore validate <file.md | dir> ...")
+		return i18n.Errorf("usage: terva lore validate <file.md | dir> ...")
 	}
 	var files []string
 	for _, p := range args {

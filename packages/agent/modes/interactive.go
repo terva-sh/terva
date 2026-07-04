@@ -15,6 +15,7 @@ import (
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/tui"
@@ -906,14 +907,14 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// the status line. The user can Esc out of the dialog if they
 	// want to dismiss it (e.g. to check /help or /exit first).
 	if !i.turns.HasAgent() {
-		i.statusErr = "not logged in. pick a login method below or press esc to dismiss."
+		i.statusErr = i18n.T("not logged in. pick a login method below or press esc to dismiss.")
 		i.dialog.Open(i.cfg.TervaHome)
 	} else if !i.cfg.Trusted && i.cfg.GatedContentPresent {
 		// Workspace Trust reminder: the cwd ships project extensions/
 		// skills/context that were NOT loaded because the directory is
 		// untrusted. Tell the user once, on the status line, how to opt
 		// in. No prompt/dialog (inform-don't-prompt, decision #2).
-		i.statusOK = "restricted workspace: project extensions/skills/context not loaded — /trust to load them"
+		i.statusOK = i18n.T("restricted workspace: project extensions/skills/context not loaded — /trust to load them")
 	}
 
 	// Input goroutine. Buffered generously so a drag-drop that the
@@ -1166,7 +1167,7 @@ func (i *Interactive) runSlash(ctx context.Context, cmd string) (done bool) {
 		return false
 	}
 	i.mu.Lock()
-	i.statusErr = "unknown command: " + parts[0]
+	i.statusErr = i18n.T("unknown command: %s", parts[0])
 	i.mu.Unlock()
 	return false
 }
