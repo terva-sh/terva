@@ -1,0 +1,9 @@
+{
+  "kind": "cmd",
+  "id": 5,
+  "sess": "s2",
+  "method": "sessions.rename",
+  "params": {
+    "title": "refactor spike"
+  }
+}

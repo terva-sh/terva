@@ -151,6 +151,22 @@ func TestQueueMessageSnapshotPopAndDrain(t *testing.T) {
 	}
 }
 
+func TestSetQueuedMessages(t *testing.T) {
+	a := NewAgent(nil, "fake", "", Registry{})
+	a.QueueMessage("one")
+	a.QueueMessage("two")
+	// Replace wholesale (edit/cancel), trimming blanks and dropping empties.
+	a.SetQueuedMessages([]string{" edited ", "", "   ", "kept"})
+	if got := a.PendingQueuedMessages(); len(got) != 2 || got[0] != "edited" || got[1] != "kept" {
+		t.Fatalf("PendingQueuedMessages = %v; want [edited kept]", got)
+	}
+	// An empty slice clears the queue.
+	a.SetQueuedMessages(nil)
+	if got := a.QueuedMessageCount(); got != 0 {
+		t.Fatalf("QueuedMessageCount = %d; want 0", got)
+	}
+}
+
 func TestQueueFrontOps(t *testing.T) {
 	a := NewAgent(nil, "fake", "", Registry{})
 	if a.RequeueFront("  ") {

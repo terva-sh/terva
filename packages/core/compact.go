@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -61,11 +62,11 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 	// so the model treats it as material to summarize, not to continue.
 	transcript := serializeTranscript(summarizable)
 
-	prompt := "<conversation>\n" + transcript + "\n</conversation>\n\n" + compactionPrompt
+	prompt := "<conversation>\n" + transcript + "\n</conversation>\n\n" + i18n.P("compact.instruction", compactionPrompt)
 
 	req := provider.Request{
 		Model:       a.Model,
-		System:      summarizationSystem,
+		System:      i18n.P("compact.system", summarizationSystem),
 		MaxTokens:   4096,
 		Temperature: a.Temperature,
 		Messages: []provider.Message{
@@ -98,7 +99,7 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 	}
 	summary = strings.TrimSpace(sb.String())
 	if summary == "" {
-		return "", fmt.Errorf("empty summary from model")
+		return "", i18n.Errorf("empty summary from model")
 	}
 
 	// Estimate token count before compaction (rough: 1 token ~ 4 chars).

@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/term"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -33,6 +34,12 @@ const (
 	// against a persistent session, and streams JSONL events on
 	// stdout. See packages/agent/swarm/inbox.go for the wire protocol.
 	ModeSwarmAgent Mode = "swarm-agent"
+	// ModeWeb is the browser control-panel mode: a local HTTP server that
+	// speaks ctrlproto over a WebSocket to a self-hosted terva workspace
+	// (chat + sessions + models). Routed via `terva web` / --web. The server
+	// is an opt-in build (-tags terva_web); the no-tag binary routes here too
+	// but exits with "web mode not built in".
+	ModeWeb Mode = "web"
 )
 
 // Args holds parsed command-line options.
@@ -42,7 +49,16 @@ type Args struct {
 	Model    string
 	APIKey   string
 
-	BaseURL            string // override provider base URL (for tests/self-hosted)
+	BaseURL string // override provider base URL (for tests/self-hosted)
+
+	// Web control-panel mode (--web / `terva web`, build tag terva_web).
+	WebAddr           string   // listen address (default 127.0.0.1:8730)
+	WebAuthHeader     string   // trust this forward-auth header as the authenticated user (e.g. X-Forwarded-User)
+	WebTrustedProxies []string // IPs/CIDRs (besides loopback) allowed to assert the forward-auth header
+	WebToken          string   // bearer token required on requests when no forward-auth is used
+	WebInsecure       bool     // allow binding a non-loopback address with no auth mode (dangerous)
+	WebAllowRestart   bool     // enable Tier-1 self-restart (control.restart + the terva_restart tool); off by default
+
 	SystemPrompt       string
 	AppendSystemPrompt []string
 	// Persona selects the active persona (--persona): a built-in/on-disk name
@@ -268,7 +284,7 @@ func ParseArgs(in []string) (Args, error) {
 	want := func(i *int, flag string) (string, error) {
 		*i++
 		if *i >= len(in) {
-			return "", fmt.Errorf("%s requires a value", flag)
+			return "", i18n.Errorf("%s requires a value", flag)
 		}
 		return in[*i], nil
 	}
@@ -288,6 +304,40 @@ func ParseArgs(in []string) (Args, error) {
 			a.Mode = ModeRPC
 		case "--acp":
 			a.Mode = ModeACP
+		case "--web":
+			a.Mode = ModeWeb
+		case "--web-addr":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.WebAddr = v
+		case "--web-auth-header":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.WebAuthHeader = v
+		case "--web-trusted-proxy":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			for _, p := range strings.Split(v, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					a.WebTrustedProxies = append(a.WebTrustedProxies, p)
+				}
+			}
+		case "--web-token":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.WebToken = v
+		case "--web-insecure":
+			a.WebInsecure = true
+		case "--web-allow-restart":
+			a.WebAllowRestart = true
 		case "-c", "--continue":
 			a.Continue = true
 		case "-r", "--resume":
@@ -300,12 +350,12 @@ func ParseArgs(in []string) (Args, error) {
 			a.NoWorkspaceTools = true
 		case "--chat":
 			if a.Experience == ExperiencePlay {
-				return a, fmt.Errorf("--chat and --play are mutually exclusive")
+				return a, i18n.Errorf("--chat and --play are mutually exclusive")
 			}
 			a.Experience = ExperienceChat
 		case "--play":
 			if a.Experience == ExperienceChat {
-				return a, fmt.Errorf("--chat and --play are mutually exclusive")
+				return a, i18n.Errorf("--chat and --play are mutually exclusive")
 			}
 			a.Experience = ExperiencePlay
 		case "--project":
@@ -384,7 +434,7 @@ func ParseArgs(in []string) (Args, error) {
 			name = strings.TrimSpace(name)
 			ref = strings.TrimSpace(ref)
 			if !ok || name == "" || ref == "" {
-				return a, fmt.Errorf("--cast expects NAME=REF (a persona name or card path), got %q", v)
+				return a, i18n.Errorf("--cast expects NAME=REF (a persona name or card path), got %q", v)
 			}
 			if a.Cast == nil {
 				a.Cast = map[string]string{}
@@ -397,7 +447,7 @@ func ParseArgs(in []string) (Args, error) {
 			}
 			n, perr := strconv.Atoi(strings.TrimSpace(v))
 			if perr != nil || n < 0 {
-				return a, fmt.Errorf("--greeting must be a non-negative integer")
+				return a, i18n.Errorf("--greeting must be a non-negative integer")
 			}
 			a.Greeting = n
 		case "--as":
@@ -489,7 +539,7 @@ func ParseArgs(in []string) (Args, error) {
 			case "", "off", "minimum", "minimal", "low", "medium", "high", "maximum", "max":
 				a.Reasoning = strings.ToLower(v)
 			default:
-				return a, fmt.Errorf("--reasoning must be off|minimum|low|medium|high|maximum")
+				return a, i18n.Errorf("--reasoning must be off|minimum|low|medium|high|maximum")
 			}
 		case "--temperature":
 			v, err := want(&i, arg)
@@ -498,7 +548,7 @@ func ParseArgs(in []string) (Args, error) {
 			}
 			f, err := strconv.ParseFloat(v, 32)
 			if err != nil || f < 0 || f > 2 {
-				return a, fmt.Errorf("--temperature must be a number between 0 and 2")
+				return a, i18n.Errorf("--temperature must be a number between 0 and 2")
 			}
 			t := float32(f)
 			a.Temperature = &t
@@ -544,7 +594,7 @@ func ParseArgs(in []string) (Args, error) {
 			}
 			var n int
 			if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n <= 0 {
-				return a, fmt.Errorf("--max-steps must be a positive integer")
+				return a, i18n.Errorf("--max-steps must be a positive integer")
 			}
 			a.MaxSteps = n
 		default:
@@ -559,12 +609,12 @@ func ParseArgs(in []string) (Args, error) {
 				case "text", "json", "raw":
 					a.DumpPrompt = v
 				default:
-					return a, fmt.Errorf("--dump-prompt must be text|json|raw")
+					return a, i18n.Errorf("--dump-prompt must be text|json|raw")
 				}
 				continue
 			}
 			if strings.HasPrefix(arg, "-") && arg != "-" {
-				return a, fmt.Errorf("unknown flag %q", arg)
+				return a, i18n.Errorf("unknown flag %q", arg)
 			}
 			positional = append(positional, arg)
 		}
@@ -580,7 +630,7 @@ func ParseArgs(in []string) (Args, error) {
 		case "":
 			a.Experience = ExperiencePlay
 		case ExperienceChat:
-			return a, fmt.Errorf("--cast requires --play (--chat has no director to voice a cast)")
+			return a, i18n.Errorf("--cast requires --play (--chat has no director to voice a cast)")
 		}
 	}
 
@@ -606,14 +656,14 @@ func ParseArgs(in []string) (Args, error) {
 		// path, and per-cwd session keys diverge from the absolute form).
 		abs, err := filepath.Abs(a.CWD)
 		if err != nil {
-			return a, fmt.Errorf("--cwd %q: %w", a.CWD, err)
+			return a, fmt.Errorf("%s: %w", i18n.T("--cwd %q", a.CWD), err)
 		}
 		info, err := os.Stat(abs)
 		if err != nil {
-			return a, fmt.Errorf("--cwd %q: %w", a.CWD, err)
+			return a, fmt.Errorf("%s: %w", i18n.T("--cwd %q", a.CWD), err)
 		}
 		if !info.IsDir() {
-			return a, fmt.Errorf("--cwd %q is not a directory", a.CWD)
+			return a, i18n.Errorf("--cwd %q is not a directory", a.CWD)
 		}
 		a.CWD = abs
 	}
@@ -690,116 +740,128 @@ func PrintHelp(version string) {
 		headline = greeting
 	}
 	fmt.Fprintln(os.Stderr, headline)
-	fmt.Fprintln(os.Stderr, muted("ask anything, or type /help inside the tui to see commands."))
-	fmt.Fprintf(os.Stderr, "%s %s\n", muted("version:"), fg(version))
+	fmt.Fprintln(os.Stderr, muted(i18n.T("ask anything, or type /help inside the tui to see commands.")))
+	fmt.Fprintf(os.Stderr, "%s %s\n", muted(i18n.T("version:")), fg(version))
 
-	section("modes",
-		row{"terva", "interactive tui"},
-		row{"terva \"prompt\"", "interactive, pre-filled prompt"},
-		row{"terva -p \"prompt\"", "print final text, exit"},
-		row{"terva --json \"prompt\"", "newline-delimited json events, exit"},
-		row{"terva rpc", "json-rpc loop on stdin/stdout (see docs/rpc.md)"},
+	section(i18n.T("modes"),
+		row{"terva", i18n.T("interactive tui")},
+		row{"terva \"prompt\"", i18n.T("interactive, pre-filled prompt")},
+		row{"terva -p \"prompt\"", i18n.T("print final text, exit")},
+		row{"terva --json \"prompt\"", i18n.T("newline-delimited json events, exit")},
+		row{"terva rpc", i18n.T("json-rpc loop on stdin/stdout (see docs/rpc.md)")},
 	)
-	section("extensions",
-		row{"terva ext list", "list installed extensions"},
-		row{"terva ext install <path|url>", "install into $TERVA_HOME/extensions/"},
-		row{"terva --ext ./path/to/ext", "load an extension for this run only"},
-		row{"terva ext help", "show all extension subcommands"},
+	// Subcommands are listed one line each; each has its own detailed screen —
+	// run `terva <command> --help`. This keeps the top-level help scannable as
+	// the surface grew (the per-command detail used to be inlined here).
+	section(i18n.T("commands — run `terva <command> --help` for detail"),
+		row{"terva ext ...", i18n.T("install and manage extensions (also --ext PATH for one run)")},
+		row{"terva models ...", i18n.T("scaffold and edit custom model definitions")},
+		row{"terva locale ...", i18n.T("ui languages & translations (or TERVA_LANG=<tag> to run in one)")},
+		row{"terva persona ...", i18n.T("manage personas (agent identities)")},
+		row{"terva lore ...", i18n.T("manage lore (keyed-context) entries")},
+		row{"terva card ...", i18n.T("inspect character cards")},
+		row{"terva bot ...", i18n.T("run a chat-bridge bot (telegram and others)")},
+		row{"terva web", i18n.T("browser control panel (self-hosted web ui)")},
+		row{"terva trust / untrust", i18n.T("manage which directories load project extensions/skills/context")},
+		row{"terva project ...", i18n.T("project-scoped agents (data + extensions pinned to a directory)")},
+		row{"terva migrate", i18n.T("migrate a legacy install's data to the terva location")},
+		row{"terva update", i18n.T("download and install the latest release")},
 	)
-	section("custom models",
-		row{"terva models init", "scaffold $TERVA_HOME/models.json to edit"},
-		row{"terva models init --force", "overwrite an existing models.json"},
+	section(i18n.T("provider and model flags"),
+		row{"--provider", i18n.T("provider to use (anthropic|openai|openai-codex|kimi|deepseek|google|ollama|openai-compatible)")},
+		row{"--model ID", i18n.T("model id (see --list-models)")},
+		row{"--api-key KEY", i18n.T("api key for this run (env / auth.json fallback)")},
+		row{"--base-url URL", i18n.T("override provider api base url")},
+		row{"--reasoning off|minimum|low|medium|high|maximum", i18n.T("set thinking level on supported models")},
+		row{"--temperature N", i18n.T("sampling temperature, 0 to 2 (omit for provider default)")},
+		row{"--insecure", i18n.T("skip TLS verification for the inference --base-url (openai-compatible/ollama only)")},
 	)
-	section("self-update",
-		row{"terva update", "download and install the latest release"},
-		row{"terva update --check", "show whether a new release is available"},
+	section(i18n.T("prompt and session flags"),
+		row{"--system-prompt TEXT", i18n.T("replace the default system prompt")},
+		row{"--append-system-prompt TEXT", i18n.T("append to the system prompt (repeatable)")},
+		row{"--persona NAME|FILE", i18n.T("load a persona (built-in/on-disk name or .md path) as the identity")},
+		row{"--card PATH", i18n.T("load a character card (.json/.png) as a chat/play identity (implies --chat)")},
+		row{"--greeting N", i18n.T("with --card: pick the opening line (0 = first_mes, 1..N = alternate greetings)")},
+		row{"--as NAME", i18n.T("what a card's {{user}} resolves to (defaults to the saved name, else \"User\")")},
+		row{"--context-file PATH", i18n.T("inject a file's contents into the system prompt (repeatable)")},
+		row{"-c, --continue", i18n.T("continue the most recent session for this cwd")},
+		row{"-r, --resume", i18n.T("pick a session to resume")},
+		row{"--session PATH", i18n.T("resume a specific session file")},
+		row{"--no-session", i18n.T("do not read or write a session file")},
 	)
-	section("migrate from zot", // rename:keep
-		row{"terva migrate", "copy the legacy zot data dir to the terva location (interactive)"}, // rename:keep
-		row{"terva migrate --dry-run", "show what would be migrated; change nothing"},
-		row{"terva migrate --yes --keep-old", "migrate without prompts; keep the old dir"},
-		row{"terva migrate --yes --remove-old", "migrate without prompts; delete the old dir"},
-	)
-	section("chat bot",
-		row{"terva bot setup", "configure a chat connector (telegram via BotFather)"},
-		row{"terva bot run", "foreground bridge (ctrl+c to stop)"},
-		row{"terva bot start", "background bridge (detached)"},
-		row{"terva bot stop", "stop the background bridge"},
-		row{"terva bot logs [-f]", "tail the background bridge log"},
-		row{"terva bot status", "config + running state"},
-		row{"terva bot reset", "forget saved credentials"},
-		row{"terva bot ... --connector NAME", "pick the chat service (default: telegram)"},
-		row{"terva bot link <connector.json>", "install an external connector by symlink"},
-		row{"--connector-manifest PATH", "load an external connector for this run only (dev)"},
-		row{"terva telegram-bot / terva tg ...", "aliases for bot --connector=telegram"},
-	)
-	section("provider and model flags",
-		row{"--provider", "provider to use (anthropic|openai|openai-codex|kimi|deepseek|google|ollama|openai-compatible)"},
-		row{"--model ID", "model id (see --list-models)"},
-		row{"--api-key KEY", "api key for this run (env / auth.json fallback)"},
-		row{"--base-url URL", "override provider api base url"},
-		row{"--reasoning off|minimum|low|medium|high|maximum", "set thinking level on supported models"},
-		row{"--temperature N", "sampling temperature, 0 to 2 (omit for provider default)"},
-		row{"--insecure", "skip TLS verification for the inference --base-url (openai-compatible/ollama only)"},
-	)
-	section("prompt and session flags",
-		row{"--system-prompt TEXT", "replace the default system prompt"},
-		row{"--append-system-prompt TEXT", "append to the system prompt (repeatable)"},
-		row{"--persona NAME|FILE", "load a persona (built-in/on-disk name or .md path) as the identity"},
-		row{"--card PATH", "load a character card (.json/.png) as a chat/play identity (implies --chat)"},
-		row{"--greeting N", "with --card: pick the opening line (0 = first_mes, 1..N = alternate greetings)"},
-		row{"--as NAME", "what a card's {{user}} resolves to (defaults to the saved name, else \"User\")"},
-		row{"--context-file PATH", "inject a file's contents into the system prompt (repeatable)"},
-		row{"-c, --continue", "continue the most recent session for this cwd"},
-		row{"-r, --resume", "pick a session to resume"},
-		row{"--session PATH", "resume a specific session file"},
-		row{"--no-session", "do not read or write a session file"},
-	)
-	section("workspace, tools, skills",
-		row{"--cwd PATH", "treat PATH (an existing directory) as the working directory"},
+	section(i18n.T("workspace, tools, skills"),
+		row{"--cwd PATH", i18n.T("treat PATH (an existing directory) as the working directory")},
 		// building blocks — each turns off one capability, independently:
-		row{"--no-workspace-tools", "turn off the built-in read/write/edit/bash/grep tools; keep extensions + MCP (least-privilege for bots)"},
-		row{"--no-ext / --no-extensions", "turn off extension discovery for this run"},
-		row{"--no-mcp", "turn off MCP server startup for this run"},
+		row{"--no-workspace-tools", i18n.T("turn off the built-in read/write/edit/bash/grep tools; keep extensions + MCP (least-privilege for bots)")},
+		row{"--ext PATH", i18n.T("load an extension from PATH for this run only (repeatable; bypasses config)")},
+		row{"--no-ext / --no-extensions", i18n.T("turn off extension discovery for this run")},
+		row{"--no-mcp", i18n.T("turn off MCP server startup for this run")},
 		// narrowing variants — allowlists instead of all-off:
-		row{"--extensions csv", "only load the listed installed extensions (by name); --ext paths bypass, config disables still subtract"},
-		row{"--mcp csv", "only start the listed MCP servers (by name)"},
+		row{"--extensions csv", i18n.T("only load the listed installed extensions (by name); --ext paths bypass, config disables still subtract")},
+		row{"--mcp csv", i18n.T("only start the listed MCP servers (by name)")},
 		// composite modes built from the blocks (+ an identity change):
-		row{"--no-tools", "all three blocks above together (and the skill tool) — no tools at all"},
-		row{"--chat", "no tools at all + a conversational, non-coding identity (pairs with --persona)"},
-		row{"--play", "extensions + MCP only (= --no-workspace-tools) + an embodied identity"},
-		row{"--cast NAME=REF", "declare an actor the director can voice (REF = persona name or card path); repeatable, implies --play. A trusted project's .terva/cast.json declares a cast too"},
-		row{"--tools csv", "only enable the listed (built-in) tools"},
-		row{"--no-skill", "skip all skill discovery for this run"},
-		row{"--no-lore", "skip all lore (keyed-context) discovery + injection for this run"},
-		row{"--approval plan|ask|auto-edit|workspace|yolo", "approval mode: plan = read-only only, ask = confirm everything, auto-edit = confirm non-edit tools, workspace = run built-ins + reads, confirm foreign side-effects (interactive default), yolo = run freely. See docs/permissions.md"},
-		row{"--no-yolo", "alias for --approval ask"},
-		row{"--jail / --no-jail", "force the sandbox on / off at startup (default: on for interactive, off for headless)"},
-		row{"--trust", "trust the cwd for this run only (load project extensions/skills/context; not persisted)"},
-		row{"--project / --no-project", "force project-scoped mode on/off (data in .terva/home, only project extensions; login+trust stay global)"},
+		row{"--no-tools", i18n.T("all three blocks above together (and the skill tool) — no tools at all")},
+		row{"--chat", i18n.T("no tools at all + a conversational, non-coding identity (pairs with --persona)")},
+		row{"--play", i18n.T("extensions + MCP only (= --no-workspace-tools) + an embodied identity")},
+		row{"--cast NAME=REF", i18n.T("declare an actor the director can voice (REF = persona name or card path); repeatable, implies --play. A trusted project's .terva/cast.json declares a cast too")},
+		row{"--tools csv", i18n.T("only enable the listed (built-in) tools")},
+		row{"--no-skill", i18n.T("skip all skill discovery for this run")},
+		row{"--no-lore", i18n.T("skip all lore (keyed-context) discovery + injection for this run")},
+		row{"--approval plan|ask|auto-edit|workspace|yolo", i18n.T("approval mode: plan = read-only only, ask = confirm everything, auto-edit = confirm non-edit tools, workspace = run built-ins + reads, confirm foreign side-effects (interactive default), yolo = run freely. See docs/permissions.md")},
+		row{"--no-yolo", i18n.T("alias for --approval ask")},
+		row{"--jail / --no-jail", i18n.T("force the sandbox on / off at startup (default: on for interactive, off for headless)")},
+		row{"--trust", i18n.T("trust the cwd for this run only (load project extensions/skills/context; not persisted)")},
+		row{"--project / --no-project", i18n.T("force project-scoped mode on/off (data in .terva/home, only project extensions; login+trust stay global)")},
 	)
-	section("workspace trust",
-		row{"terva trust [path]", "trust a directory so its project extensions/skills/context load (default: cwd)"},
-		row{"terva trust --parent [path]", "trust the directory and everything under it"},
-		row{"terva trust --list", "show the trusted directories"},
-		row{"terva untrust [path]", "remove a directory from the trust list (default: cwd)"},
-	)
-	section("project-scoped agents (terva project ...)",
-		row{"terva project init [--persona NAME]", "scaffold a self-contained agent here (config + dirs + data home)"},
-		row{"terva project status", "show what this directory will run: scope, trust, extensions, model"},
-		row{"terva project trust / untrust", "trust this directory (required to run it scoped) / revoke"},
-		row{"terva project ext adopt/drop/list/disable/enable", "manage this project's extensions"},
-		row{"terva project model|provider [VALUE]", "show or set this project's model / provider"},
-	)
-	section("misc",
-		row{"--swarm-worktrees", "give each swarm sub-agent its own git worktree (needs the terva-git-worktree extension)"},
-		row{"--max-steps N", "agent loop iteration cap (default: unlimited)"},
-		row{"--dump-prompt[=text|json|raw]", "print the assembled prompt for the pending turn and exit (no model call)"},
-		row{"--list-models[=FILTER]", "print known models and exit. FILTER: comma list of user|live|catalog|speculative, a tier threshold like live+ (that tier and above), or available (only providers your credentials can use right now)"},
-		row{"-h, --help", "show this help"},
-		row{"-v, --version", "show version info"},
+	section(i18n.T("misc"),
+		row{"--swarm-worktrees", i18n.T("give each swarm sub-agent its own git worktree (needs the terva-git-worktree extension)")},
+		row{"--max-steps N", i18n.T("agent loop iteration cap (default: unlimited)")},
+		row{"--dump-prompt[=text|json|raw]", i18n.T("print the assembled prompt for the pending turn and exit (no model call)")},
+		row{"--list-models[=FILTER]", i18n.T("print known models and exit. FILTER: comma list of user|live|catalog|speculative, a tier threshold like live+ (that tier and above), or available (only providers your credentials can use right now)")},
+		row{"-h, --help", i18n.T("show this help")},
+		row{"-v, --version", i18n.T("show version info")},
 	)
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, assistant("see also: docs/extensions.md, docs/rpc.md, docs/skills.md"))
+	fmt.Fprintln(os.Stderr, assistant(i18n.T("see also: docs/extensions.md, docs/rpc.md, docs/skills.md")))
 	fmt.Fprintln(os.Stderr)
+}
+
+// printWebHelp renders the `terva web --help` screen: the web control panel's
+// own flags + the session flags that shape it. `terva web` is a build-tag mode
+// routed through an argv shim, so its --help would otherwise fall through to the
+// top-level screen (which no longer inlines web detail). Always built (help must
+// work even in a binary without -tags terva_web — it documents what web offers).
+func printWebHelp() {
+	fmt.Fprint(os.Stderr, i18n.H("help.web", `terva web — browser control panel (self-hosted web UI)
+
+  terva web                     serve on 127.0.0.1:8730 (open http://127.0.0.1:8730)
+  terva web --web-addr :8730    listen on all interfaces (needs an auth mode; see below)
+
+Web-specific flags:
+  --web-addr ADDR               listen address:port (default 127.0.0.1:8730)
+  --web-token TOKEN             require this bearer token (Authorization: Bearer, or ?token= for the browser)
+  --web-auth-header NAME        trust a forward-auth proxy header as the authenticated user
+  --web-trusted-proxy CIDR      IP/CIDR(s) allowed to assert --web-auth-header (comma-separated; loopback always allowed)
+  --web-allow-restart           enable Tier-1 self-restart (control.restart + the terva_restart tool)
+  --web-insecure                allow binding a non-loopback address with NO auth (dangerous)
+
+Security: the server binds loopback by default and REFUSES a non-loopback bind
+unless you set an auth mode or --web-insecure. The forward-auth header is honored
+ONLY from loopback (a same-host proxy) or a --web-trusted-proxy CIDR — otherwise
+it is forgeable by anyone who reaches the port, so a non-loopback bind under
+header auth needs --web-trusted-proxy. Prefer a token from a native client over
+?token= in a URL (it can leak into proxy logs / history). Put an OAuth/forward-
+auth proxy (e.g. Authentik) in front for real deployments.
+
+A web session honors the usual session flags — the directory, model, and posture
+it runs with (per-session model is switchable in-app):
+  --cwd PATH                    pin the workspace directory
+  --model ID / --provider NAME  default model for new sessions
+  --approval MODE               approval posture (default: workspace)
+  --project                     project-scoped mode (data + extensions pinned here)
+  --persona NAME|FILE           default persona/identity
+
+Requires a build with -tags terva_web (the release binaries include it).
+See docs/web.md for deployment (systemd, LXC/VM, reverse proxy).
+`))
 }

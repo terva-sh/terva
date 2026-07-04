@@ -1,0 +1,12 @@
+{
+  "kind": "event",
+  "sess": "s1",
+  "event": {
+    "type": "tool_call",
+    "id": "call_1",
+    "name": "bash",
+    "args": {
+      "cmd": "ls -la"
+    }
+  }
+}

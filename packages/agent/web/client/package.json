@@ -1,0 +1,26 @@
+{
+  "name": "terva-web-client",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The terva web control-panel PWA (ctrlproto over WebSocket).",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "i18n-extract": "node scripts/i18n-extract.mjs",
+    "i18n-check": "node scripts/i18n-extract.mjs --check"
+  },
+  "dependencies": {
+    "markdown-it": "^14.3.0",
+    "preact": "^10.25.4"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.1",
+    "@types/markdown-it": "^14.1.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.11",
+    "vite-plugin-pwa": "^0.21.1"
+  }
+}

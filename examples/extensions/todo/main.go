@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -48,7 +49,11 @@ func main() {
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return ext.OpenPanel(panelID, a.title(), a.renderLines(), a.footer())
+		// Open with a rich widget tree (rendered natively on the web control
+		// panel) AND text lines (the TUI fallback) — the same panel, both
+		// frontends. See RenderPanelWidgets in rerenderLocked.
+		a.e.OpenPanelWidgets(panelID, a.title(), a.renderWidgets(), a.renderLines(), a.footer())
+		return ext.Noop()
 	})
 	schema, _ := json.Marshal(map[string]any{
 		"type": "object",
@@ -175,7 +180,39 @@ func (a *app) footer() string {
 }
 
 func (a *app) rerenderLocked() {
-	a.e.RenderPanel(panelID, a.title(), a.renderLines(), a.footer())
+	a.e.RenderPanelWidgets(panelID, a.title(), a.renderWidgets(), a.renderLines(), a.footer())
+}
+
+// renderWidgets builds the panel's rich (web) view: a completion meter and the
+// todos as a clickable list (each item's action toggles it). The TUI keeps the
+// text lines from renderLines; add/edit is a TUI-only text-entry flow.
+func (a *app) renderWidgets() []ext.Widget {
+	done := 0
+	for _, it := range a.st.Items {
+		if it.Done {
+			done++
+		}
+	}
+	ws := []ext.Widget{{
+		Type: "meter", Label: "completed",
+		Value: float64(done), Max: float64(len(a.st.Items)), Unit: "done",
+	}}
+	if len(a.st.Items) == 0 {
+		return append(ws, ext.Widget{Type: "note", Tone: ext.ToneMuted,
+			Text: "No todos yet — add one from the TUI panel (press a) or ask the agent."})
+	}
+	items := make([]ext.WidgetItem, 0, len(a.st.Items))
+	for i, it := range a.st.Items {
+		item := ext.WidgetItem{Text: "□ " + it.Text, ActionID: fmt.Sprintf("toggle:%d", i)}
+		if it.Done {
+			item.Text = "✓ " + it.Text
+			item.Note = "done"
+			item.Tone = ext.ToneMuted
+		}
+		items = append(items, item)
+	}
+	ws = append(ws, ext.Widget{Type: "list", Items: items})
+	return append(ws, ext.Widget{Type: "note", Tone: ext.ToneMuted, Text: "Click a todo to toggle it."})
 }
 
 func (a *app) handleKey(key, text string) {
@@ -187,6 +224,17 @@ func (a *app) handleKey(key, text string) {
 	defer a.mu.Unlock()
 	if a.mode == "add" || a.mode == "edit" {
 		a.handleEditModeLocked(key, text)
+		return
+	}
+	// A widget-list action from the web panel: "toggle:<i>" flips that todo.
+	if idx, ok := strings.CutPrefix(key, "toggle:"); ok {
+		if i, err := strconv.Atoi(idx); err == nil && i >= 0 && i < len(a.st.Items) {
+			a.st.Items[i].Done = !a.st.Items[i].Done
+			if err := a.saveLocked(); err != nil {
+				a.e.Notify("error", fmt.Sprintf("save todos: %v", err))
+			}
+			a.rerenderLocked()
+		}
 		return
 	}
 	switch key {

@@ -1,0 +1,44 @@
+{
+  "kind": "event",
+  "sess": "s1",
+  "event": {
+    "type": "snapshot",
+    "snapshot": {
+      "session": {
+        "id": "s1",
+        "title": "main",
+        "provider": "anthropic",
+        "model": "claude-opus-4-8",
+        "messages": 2,
+        "usage": {
+          "input": 0,
+          "output": 0,
+          "cache_read": 0,
+          "cache_write": 0,
+          "cost_usd": 0
+        }
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "hi"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "busy": false
+    }
+  }
+}

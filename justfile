@@ -84,12 +84,15 @@ build-min:
 
 # Build and install the FULL terva from source into your Go bin (GOBIN, else
 # GOPATH/bin) via `go install`. "Full" = every optional feature compiled in,
-# including the `terva acp` editor run mode (-tags terva_acp); telegram is in
-# by default. This is the binary to point an ACP editor (Zed) at. For the lean
-# variant, see `just build-min`.
+# including the `terva acp` editor run mode (-tags terva_acp) and the
+# `terva web` browser control panel (-tags terva_web); telegram is in by
+# default. This is the binary to point an ACP editor (Zed) at. For the lean
+# variant, see `just build-min`. The web panel embeds the prebuilt client from
+# packages/agent/web/client/dist (committed); run `just web-build` after
+# changing the client.
 install:
-    go install -trimpath -tags terva_acp -ldflags "{{ldflags}}" ./cmd/terva
-    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (full, terva_acp) -> $dest/terva"
+    go install -trimpath -tags terva_acp,terva_web -ldflags "{{ldflags}}" ./cmd/terva
+    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (full, terva_acp,terva_web) -> $dest/terva"
 
 # Like `just install` (full features, terva_acp, into GOBIN/GOPATH bin)
 # but NON-STRIPPED: no `-s -w`, no `-trimpath`, so symbols and source
@@ -100,8 +103,25 @@ install:
 # links the /debug/pprof endpoint (kept out of every other build); even
 # here it stays off until you set TERVA_PPROF=localhost:6060.
 install-dev:
-    go install -tags terva_acp,terva_pprof -ldflags "{{debug_ldflags}}" ./cmd/terva
-    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (dev, non-stripped, terva_acp,terva_pprof) -> $dest/terva"
+    go install -tags terva_acp,terva_pprof,terva_web -ldflags "{{debug_ldflags}}" ./cmd/terva
+    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (dev, non-stripped, terva_acp,terva_pprof,terva_web) -> $dest/terva"
+
+# Build the web control-panel client (Preact/Vite → packages/agent/web/client/dist),
+# which the terva_web build embeds via go:embed. Commit the regenerated dist so
+# a plain `go build -tags terva_web` (and CI) needs no JS toolchain. Requires
+# Node.js; run after changing anything under packages/agent/web/client/src.
+web-build:
+    npm --prefix packages/agent/web/client ci
+    # Extract the client's translatable strings into the reference catalog
+    # (packages/i18n/locales/web/en.json), then mirror the canonical web
+    # catalogs into the client bundle for offline/first-paint (the daemon serves
+    # the overlay-merged copy at runtime). Regenerated here, like dist — commit
+    # the result; there is no Node in `just ci` to gate it.
+    npm --prefix packages/agent/web/client run i18n-extract
+    @mkdir -p packages/agent/web/client/src/locales
+    @for f in packages/i18n/locales/web/*.json; do case "$f" in */en.json) ;; *) cp "$f" packages/agent/web/client/src/locales/;; esac; done
+    npm --prefix packages/agent/web/client run build
+    @echo "built web client -> packages/agent/web/client/dist (commit it)"
 
 # goreleaser drives real packaging (cross-compiled archives + checksums;
 # CI snapshot job and the tag-triggered release workflow use the same
@@ -139,6 +159,10 @@ test-e2e *ARGS:
 lint:
     go vet ./...
     @test -z "$(gofmt -l . | tee /dev/stderr)" || { echo "gofmt issues (run \`just fmt\`)"; exit 1; }
+    # The i18n reference catalogs (locales/en.json + locales/prompts/en.json)
+    # must match the wrapped T/P calls in packages/ and cmd/. Regenerate with
+    # `go run ./cmd/terva-i18n-lint` and commit the result if this fails.
+    go run ./cmd/terva-i18n-lint -check
 
 # Format all Go sources in place.
 fmt:
@@ -156,10 +180,19 @@ ci-acp:
     go vet -tags terva_acp ./packages/agent/...
     go test -tags terva_acp -race ./packages/agent/acp/... ./packages/agent/
 
-# fmt-check + vet + race tests + connector tag-matrix build + acp tag
+# Web control panel (behind -tags terva_web): build/vet/test it. The default
+# build only compiles the no-tag stub, so `test` can't cover the WS carrier —
+# this guards it, same discipline as ci-acp. Uses the committed client dist
+# (no Node.js needed); rebuild that with `just web-build`.
+ci-web:
+    go build -tags terva_web ./...
+    go vet -tags terva_web ./packages/agent/web/
+    go test -tags terva_web -race ./packages/agent/web/ ./packages/agent/
+
+# fmt-check + vet + race tests + connector tag-matrix build + acp + web tag
 # build/test + terva_pprof tag build + public packaging drift check, as
 # a pre-push gate.
-ci: lint test ci-acp
+ci: lint test ci-acp ci-web
     go build -tags terva_no_telegram,terva_no_discord ./...
     # terva_pprof guard: the profiling endpoint (cmd/terva/pprof.go) only
     # compiles under this tag, so the default build can't catch a break in

@@ -1,0 +1,12 @@
+{
+  "kind": "cmd",
+  "id": 4,
+  "sess": "s1",
+  "method": "answer",
+  "params": {
+    "ask_id": "ask_1",
+    "answer": {
+      "answer": "the second one"
+    }
+  }
+}

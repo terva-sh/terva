@@ -1,0 +1,6 @@
+node_modules/
+# dist/ is committed: it is embedded into the binary via go:embed so a plain
+# `go build -tags terva_web` works without a JS toolchain. Rebuild with
+# `npm run build` (or `just web-build`) and commit the result.
+*.local
+.vite/

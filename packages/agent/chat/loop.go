@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -289,7 +290,7 @@ func (l *Loop) takeNudge(now time.Time) (chatID, text string, ok bool) {
 	l.lastActivity = now
 	nudge := l.IdleNudge
 	if strings.TrimSpace(nudge) == "" {
-		nudge = defaultIdleNudge
+		nudge = i18n.P("chat.idle_nudge", defaultIdleNudge)
 	}
 	return l.pairedChatID, nudge, true
 }
@@ -1013,7 +1014,8 @@ func (l *Loop) promptText(m Message) string {
 		b.WriteString(n + "\n")
 	}
 	if len(m.Files) > 0 {
-		b.WriteString("(the user attached files, saved locally — read them with your tools if relevant:\n")
+		b.WriteString(i18n.P("chat.attachment_preamble", "(the user attached files, saved locally — read them with your tools if relevant:"))
+		b.WriteByte('\n')
 		for _, f := range m.Files {
 			fmt.Fprintf(&b, "  %s — %s", f.Path, f.Kind)
 			if f.MimeType != "" {
@@ -1064,19 +1066,17 @@ func (l *Loop) takeChatIntro(m Message) string {
 	if service == "" {
 		service = "chat"
 	}
-	var b strings.Builder
-	b.WriteString("[chat context] ")
+	// Each variant is one whole template so a prompt translation reads as
+	// coherent <lang> — the shared "how to format" tail is repeated in
+	// both rather than glued on in English.
 	if isDM(m.ChatKind) {
-		fmt.Fprintf(&b, "You are replying over %s in a direct chat with your paired user.", service)
-	} else {
-		title := m.ChatTitle
-		if title == "" {
-			title = m.ChatID
-		}
-		fmt.Fprintf(&b, "You are replying over %s in the %s %q; multiple people can speak here, so each message is attributed (@name: …).", service, chatKindWord(m.ChatKind), title)
+		return i18n.P("chat.intro.dm", "[chat context] You are replying over %s in a direct chat with your paired user. Replies render in the chat app: plain text and simple markdown only — tables and other heavy markdown don't render there.", service)
 	}
-	b.WriteString(" Replies render in the chat app: plain text and simple markdown only — tables and other heavy markdown don't render there.")
-	return b.String()
+	title := m.ChatTitle
+	if title == "" {
+		title = m.ChatID
+	}
+	return i18n.P("chat.intro.group", "[chat context] You are replying over %s in the %s %q; multiple people can speak here, so each message is attributed (@name: …). Replies render in the chat app: plain text and simple markdown only — tables and other heavy markdown don't render there.", service, chatKindWord(m.ChatKind), title)
 }
 
 // chatKindWord renders a chat kind for the intro line.

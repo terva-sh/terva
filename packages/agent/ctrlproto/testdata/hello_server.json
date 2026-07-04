@@ -1,0 +1,18 @@
+{
+  "kind": "hello",
+  "hello": {
+    "role": "server",
+    "protocol": 1,
+    "agent": "terva web",
+    "version": "1.2.3",
+    "groups": [
+      "conversation",
+      "session",
+      "control"
+    ],
+    "features": [
+      "images",
+      "resolve-events"
+    ]
+  }
+}

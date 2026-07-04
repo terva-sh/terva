@@ -140,3 +140,20 @@ func TestNoContextProviderMeansEmptyEphemeral(t *testing.T) {
 		t.Errorf("expected empty EphemeralContext, got %q", client.ephemeral)
 	}
 }
+
+// TestSetContextProviderLive covers the live setter used to re-wire lore after an
+// edit: SetContextProvider swaps the per-turn provider, and the next read sees it.
+func TestSetContextProviderLive(t *testing.T) {
+	a := NewAgent(nil, "m", "", Registry{})
+	if a.ContextProvider != nil {
+		t.Fatal("fresh agent should have no context provider")
+	}
+	a.SetContextProvider(func() string { return "LORE_MARKER" })
+	if a.ContextProvider == nil || a.ContextProvider() != "LORE_MARKER" {
+		t.Fatal("provider not set")
+	}
+	a.SetContextProvider(func() string { return "UPDATED" })
+	if a.ContextProvider() != "UPDATED" {
+		t.Errorf("provider not swapped: got %q", a.ContextProvider())
+	}
+}

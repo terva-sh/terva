@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="terva-logo-title terva-logo-desc">
+  <title id="terva-logo-title">Terva logo</title>
+  <desc id="terva-logo-desc">A geometric hexagonal harness containing an orange wildcard above an amber base.</desc>
+  <!-- Terva logo - source of truth. Geometry: regular pointy-top hexagon shell
+       (outer apothem 300, stroke 76) centered at (512,496), split into four
+       brackets by gaps at the top vertex (40), mid-sides (38), and end-cuts
+       parallel to the trapezoid sides; 6-spoke asterisk = three 48x218 bars
+       at 0/60/-60 deg; footer trapezoid sides slope exactly 2:1. -->
+  <rect width="1024" height="1024" fill="#0A0A09"/>
+  <g fill="#F5F1E8">
+    <path d="M492 161.14L212 322.79L212 477L288 477L288 366.67L492 248.89Z"/>
+    <path d="M532 161.14L812 322.79L812 477L736 477L736 366.67L532 248.89Z"/>
+    <path d="M212 515L212 669.21L373.71 762.57L407.76 694.47L288 625.33L288 515Z"/>
+    <path d="M812 515L812 669.21L650.29 762.57L616.24 694.47L736 625.33L736 515Z"/>
+  </g>
+  <g fill="#F29100">
+    <rect x="488" y="387" width="48" height="218"/>
+    <rect x="488" y="387" width="48" height="218" transform="rotate(60 512 496)"/>
+    <rect x="488" y="387" width="48" height="218" transform="rotate(-60 512 496)"/>
+  </g>
+  <path d="M442.47 702L581.53 702A4 4 0 0 1 585.11 704.21L636.76 807.53A10 10 0 0 1 627.82 822L396.18 822A10 10 0 0 1 387.24 807.53L438.89 704.21A4 4 0 0 1 442.47 702Z" fill="#FDB515"/>
+</svg>

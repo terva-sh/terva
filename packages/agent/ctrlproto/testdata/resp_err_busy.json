@@ -1,0 +1,8 @@
+{
+  "kind": "resp",
+  "id": 7,
+  "error": {
+    "code": "busy",
+    "message": "a turn is already running"
+  }
+}

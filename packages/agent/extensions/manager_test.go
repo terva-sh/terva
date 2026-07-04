@@ -54,11 +54,11 @@ func (s *stubHooks) OpenPanel(extName string, spec extproto.PanelSpec) {
 	s.panelExts = append(s.panelExts, extName)
 	s.panels = append(s.panels, spec)
 }
-func (s *stubHooks) UpdatePanel(string, string, string, []string, string) {}
-func (s *stubHooks) ClosePanel(string, string)                            {}
-func (s *stubHooks) RefreshStatus()                                       {}
-func (s *stubHooks) RefreshContext()                                      {}
-func (s *stubHooks) RefreshTools()                                        {}
+func (s *stubHooks) UpdatePanel(string, string, string, []string, string, []extproto.Widget) {}
+func (s *stubHooks) ClosePanel(string, string)                                               {}
+func (s *stubHooks) RefreshStatus()                                                          {}
+func (s *stubHooks) RefreshContext()                                                         {}
+func (s *stubHooks) RefreshTools()                                                           {}
 
 // writeMockExtension creates a minimal extension on disk that uses a
 // shell script (or batch file on windows) to drive the protocol. The

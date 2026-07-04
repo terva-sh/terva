@@ -1,0 +1,13 @@
+{
+  "kind": "cmd",
+  "id": 3,
+  "sess": "s1",
+  "method": "approve",
+  "params": {
+    "call_id": "call_1",
+    "decision": {
+      "allow": true,
+      "remember_tool": true
+    }
+  }
+}

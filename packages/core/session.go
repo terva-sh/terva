@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,6 +26,13 @@ type Session struct {
 	Meta   SessionMeta
 	writer *os.File
 	buf    *bufio.Writer
+	// writeMu serializes every durable write (writeLine) and the messagesAppended
+	// counter. A session's transcript can have concurrent writers — e.g. a web
+	// client's clear/compact writing a checkpoint while a turn on another
+	// connection is persisting messages — and the bufio.Writer is not
+	// goroutine-safe, so unsynchronized writers would interleave bytes / corrupt
+	// the JSONL. All Append*/Update*/writeLine paths take this lock.
+	writeMu sync.Mutex
 
 	// freshFile is true when the file was created by NewSession (this
 	// process owns it) and false when OpenSession reopened an existing
@@ -849,7 +857,9 @@ func (s *Session) AppendMessage(m provider.Message) error {
 		return nil
 	}
 	w := encodeWireMessage(m)
-	if err := s.writeLine(sessionLine{Type: "message", Message: &w}); err != nil {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.writeLineLocked(sessionLine{Type: "message", Message: &w}); err != nil {
 		return err
 	}
 	s.messagesAppended++
@@ -868,7 +878,9 @@ func (s *Session) AppendCompaction(messages []provider.Message) error {
 	for _, m := range messages {
 		wires = append(wires, encodeWireMessage(m))
 	}
-	if err := s.writeLine(sessionLine{Type: "compaction", Messages: wires}); err != nil {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.writeLineLocked(sessionLine{Type: "compaction", Messages: wires}); err != nil {
 		return err
 	}
 	s.messagesAppended = len(messages)
@@ -919,6 +931,10 @@ func (s *Session) Close() error {
 	if s == nil {
 		return nil
 	}
+	// Hold writeMu so a Close racing a late Append (multi-connection web) neither
+	// flushes a half-written line nor reads messagesAppended mid-update.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	flushErr := s.buf.Flush()
 	closeErr := s.writer.Close()
 	if s.freshFile && s.messagesAppended == 0 {
@@ -934,6 +950,15 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) writeLine(row sessionLine) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.writeLineLocked(row)
+}
+
+// writeLineLocked is writeLine's body; the caller must hold writeMu. Used by the
+// Append* methods that also mutate messagesAppended under the same lock, so the
+// buffer write and the counter update are one atomic critical section.
+func (s *Session) writeLineLocked(row sessionLine) error {
 	b, err := json.Marshal(row)
 	if err != nil {
 		return err

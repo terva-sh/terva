@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -338,6 +339,21 @@ func (a *Agent) drainQueuedMessages() []string {
 	return out
 }
 
+// SetQueuedMessages atomically replaces the pending queue, preserving order and
+// dropping empty/whitespace-only entries. Hosts use it to edit or cancel queued
+// messages before they inject (the queue.set control-plane command).
+func (a *Agent) SetQueuedMessages(texts []string) {
+	var cleaned []string
+	for _, t := range texts {
+		if t = strings.TrimSpace(t); t != "" {
+			cleaned = append(cleaned, t)
+		}
+	}
+	a.mu.Lock()
+	a.queued = cleaned
+	a.mu.Unlock()
+}
+
 func (a *Agent) appendQueuedAsUser(texts []string, synthetic bool, sink func(AgentEvent)) {
 	for _, text := range texts {
 		// Genuine queued prompts pass through the same guard as the
@@ -364,6 +380,13 @@ func (a *Agent) appendQueuedAsUser(texts []string, synthetic bool, sink func(Age
 			Role:    provider.RoleUser,
 			Content: []provider.Content{provider.TextBlock{Text: text}},
 			Time:    time.Now(),
+		}
+		// Mark host-injected nudges (the at-close ContinueOnStop re-prompt) so
+		// display surfaces can distinguish them from the user's own words — both
+		// live (the event carries the message) and durably (the snapshot rebuilds
+		// from the transcript). See WireMessage.Synthetic.
+		if synthetic {
+			msg.Meta = map[string]string{MetaSynthetic: "true"}
 		}
 		a.mu.Lock()
 		a.messages = append(a.messages, msg)
@@ -413,6 +436,54 @@ func (a *Agent) SetTools(reg Registry) {
 	a.mu.Unlock()
 }
 
+// SetContextProvider swaps the per-turn context provider live (the turn loop
+// reads it under a.mu). Used to re-wire lore after an edit so the next turn sees
+// the change without a new session.
+func (a *Agent) SetContextProvider(fn func() string) {
+	a.mu.Lock()
+	a.ContextProvider = fn
+	a.mu.Unlock()
+}
+
+// SetContextProviderPeek swaps the side-effect-free context preview (the twin of
+// ContextProvider used by the /context size view) live, so a host reloading lore
+// keeps the preview in sync with the provider — otherwise /context would size
+// stale lore after an edit.
+func (a *Agent) SetContextProviderPeek(fn func() string) {
+	a.mu.Lock()
+	a.ContextProviderPeek = fn
+	a.mu.Unlock()
+}
+
+// ToolsSnapshot returns the live tool registry under the lock SetTools writes
+// with, so a reader on another goroutine (e.g. the web /context view, which can
+// run while an extension/MCP toggle calls SetTools) never races the swap.
+// SetTools always installs a fresh map rather than mutating in place, so the
+// returned Registry is safe to range read-only.
+func (a *Agent) ToolsSnapshot() Registry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.Tools
+}
+
+// ContextPreview renders the per-turn ephemeral context for a size/inspection
+// view WITHOUT side effects. It snapshots the provider function under the lock
+// SetContextProvider writes with (avoiding a race with a live lore/trust reload),
+// then calls it OUTSIDE the lock since the closure may touch the agent. Prefers
+// the side-effect-free Peek twin; empty when neither is set.
+func (a *Agent) ContextPreview() string {
+	a.mu.Lock()
+	fn := a.ContextProviderPeek
+	if fn == nil {
+		fn = a.ContextProvider
+	}
+	a.mu.Unlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
+}
+
 // LookupTool returns the tool registered under name in the live
 // registry. Race-free against SetTools, so it is safe to call from a
 // goroutine other than the turn loop (e.g. an extension's host_tool_call
@@ -445,6 +516,16 @@ func (a *Agent) SetModel(model string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.Model = model
+}
+
+// SetReasoning swaps the reasoning/thinking level under the same lock oneTurn
+// snapshots request fields with, so a host can change it on another goroutine
+// without racing a starting turn (Reasoning is read at turn start). Empty
+// disables thinking. The caller normalizes the level.
+func (a *Agent) SetReasoning(level string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.Reasoning = level
 }
 
 // SetClientAndModel atomically swaps both the provider client and the
@@ -670,7 +751,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		if a.BeforeTurn != nil {
 			if allowed, reason := a.BeforeTurn(step); !allowed {
 				if reason == "" {
-					reason = "turn blocked by extension guard"
+					reason = i18n.T("turn blocked by extension guard")
 				}
 				sink(EvTurnEnd{Stop: provider.StopError, Err: fmt.Errorf("%s", reason)})
 				sink(EvDone{})
@@ -814,7 +895,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 	}
 	if a.MaxSteps > 0 {
 		sink(EvDone{})
-		return fmt.Errorf("max steps (%d) exceeded", a.MaxSteps)
+		return i18n.Errorf("max steps (%d) exceeded", a.MaxSteps)
 	}
 	return nil
 }

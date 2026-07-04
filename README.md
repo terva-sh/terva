@@ -37,6 +37,7 @@ projected through many front ends and extensible in any language.
   threads. See [docs/connectors.md](docs/connectors.md).
 - extensions in any language via subprocess + json-rpc. None installed by default; opt in with `terva ext install` or `terva --ext`. See [docs/extensions.md](docs/extensions.md).
 - user and extension themes via JSON; see [docs/themes.md](docs/themes.md).
+- localization: translate the UI into your language, or override terva's wording and even its model-facing prompts in place (works in English too) via per-key `$TERVA_HOME/locales` overlays. See [docs/localization.md](docs/localization.md).
 - reusable instructions via `SKILL.md` files; see [docs/skills.md](docs/skills.md).
 - **chat & play modes**: reframe the harness away from coding — a conversation (`--chat`) or a roleplay/simulation (`--play`), fronted by a persona or a SillyTavern **character card** (`--card`), with a keyword-triggered **lore** context engine and a director that can voice a declared **cast** of actors. See [docs/personas.md](docs/personas.md).
 - no community atm.
@@ -156,6 +157,7 @@ terva --help
 | [docs/personas.md](docs/personas.md) | Personas and immersive chat/play: charters, immersive identities, character cards, the cast + `actor_spawn`, and the mode flags |
 | [docs/debugging-prompts.md](docs/debugging-prompts.md) | Inspecting the assembled prompt (`--dump-prompt`), the lore engine, and card/lore/greeting troubleshooting |
 | [docs/themes.md](docs/themes.md) | User and extension themes |
+| [docs/localization.md](docs/localization.md) | Translating the UI into another language, and overriding terva's wording or model-facing prompts in place (even in English) |
 | [docs/rpc.md](docs/rpc.md) | Embedding terva: the RPC wire schema and the JSON event stream (Go SDK: `packages/agent/sdk`, examples under `examples/`) |
 | [docs/profiling.md](docs/profiling.md) | Performance-profiling the harness: the `terva_pprof` dev build, pprof/`GODEBUG` capture, and reading a TUI CPU profile |
 | [docs/fork.md](docs/fork.md) | How terva relates to zot, and the compatibility promises | <!-- rename:keep -->

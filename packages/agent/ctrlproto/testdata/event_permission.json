@@ -1,0 +1,12 @@
+{
+  "kind": "event",
+  "sess": "s1",
+  "event": {
+    "type": "permission_request",
+    "permission": {
+      "call_id": "call_1",
+      "tool": "bash",
+      "preview": "ls -la"
+    }
+  }
+}

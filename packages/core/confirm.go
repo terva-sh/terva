@@ -133,6 +133,23 @@ func (g *ConfirmGate) SetMode(m ApprovalMode) {
 	g.mu.Unlock()
 }
 
+// SetRules replaces the policy's rule list live (copy-on-write, like SetMode) —
+// the next Check sees the new rules. The current Mode is preserved (a live mode
+// change is not clobbered). Nil-safe; a no-op when the gate has no policy (the
+// pure-yolo fast path), where rule edits are new-session-only.
+func (g *ConfirmGate) SetRules(rules []PermissionRule) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	if g.policy != nil {
+		np := *g.policy
+		np.Rules = rules
+		g.policy = &np
+	}
+	g.mu.Unlock()
+}
+
 // Rules returns a snapshot of the policy's ordered rules (for an
 // inspector UI). Nil when the gate has no policy. Nil-safe.
 func (g *ConfirmGate) Rules() []PermissionRule {

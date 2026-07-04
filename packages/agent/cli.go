@@ -30,6 +30,7 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/tui"
@@ -85,7 +86,9 @@ func (h *interactiveExtHooks) OpenPanel(extName string, spec extproto.PanelSpec)
 		iv.OpenPanel(extName, spec)
 	}
 }
-func (h *interactiveExtHooks) UpdatePanel(extName, panelID, title string, lines []string, footer string) {
+func (h *interactiveExtHooks) UpdatePanel(extName, panelID, title string, lines []string, footer string, _ []extproto.Widget) {
+	// The TUI renders text panels; widgets are a web-frontend concern, so the
+	// interactive host uses the lines fallback and ignores the widget tree.
 	if iv := h.iv(); iv != nil {
 		iv.UpdatePanel(extName, panelID, title, lines, footer)
 	}
@@ -567,6 +570,26 @@ func toolResultText(r core.ToolResult) string {
 
 // Run is the top-level entrypoint for the terva binary.
 func Run(rawArgs []string, version string) error {
+	// Resolve the operator's UI language and load its message catalog
+	// before any user-facing output. English/unset is a no-op — i18n.T then
+	// returns each source string verbatim. A malformed tag is a warning, not
+	// a fatal error: terva stays in English rather than refusing to start.
+	if err := i18n.Configure(Language(), TervaHome()); err != nil {
+		fmt.Fprintln(os.Stderr, "note:", err)
+	}
+	// TERVA_CAPTURE_LOCALE records every untranslated string shown this run
+	// into $TERVA_HOME/locales/<lang>.todo.json on exit, so an operator can
+	// fill the gaps as they use terva and PR them back.
+	if envcompat.Get("CAPTURE_LOCALE") != "" {
+		i18n.Capture(true)
+		defer func() {
+			if n, err := i18n.Flush(TervaHome()); err == nil && n > 0 {
+				fmt.Fprintf(os.Stderr, "i18n: captured %d untranslated string(s) to %s\n",
+					n, filepath.Join(TervaHome(), "locales", i18n.ActiveLang()+".todo.json"))
+			}
+		}()
+	}
+
 	// One-shot migration hint when the data dir resolved to the
 	// legacy pre-rename location (which keeps working forever).
 	if note, ok := envcompat.HomeMigrationNote(); ok {
@@ -634,6 +657,9 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runTrustCommand(rawArgs); handled {
 		return err
 	}
+	if handled, err := runLocaleCommand(rawArgs); handled {
+		return err
+	}
 	// `terva rpc` is shorthand for `terva --rpc` so third-party apps can
 	// spawn the binary with a clean argv. Strip the leading 'rpc'
 	// token and let the rest flow through the normal arg parser.
@@ -647,6 +673,13 @@ func Run(rawArgs []string, version string) error {
 	if len(rawArgs) > 0 && rawArgs[0] == "acp" {
 		rawArgs = append([]string{"--acp"}, rawArgs[1:]...)
 	}
+	// `terva web` is shorthand for `terva --web` (the browser control-panel
+	// mode), routed like `terva acp`. The server is an opt-in build
+	// (-tags terva_web); the no-tag binary routes here and exits with
+	// "web mode not built in".
+	if len(rawArgs) > 0 && rawArgs[0] == "web" {
+		rawArgs = append([]string{"--web"}, rawArgs[1:]...)
+	}
 
 	args, err := ParseArgs(rawArgs)
 	if err != nil {
@@ -654,7 +687,15 @@ func Run(rawArgs []string, version string) error {
 		return err
 	}
 	if args.Help {
-		PrintHelp(version)
+		// Mode-scoped help: `terva web --help` documents the web flags rather
+		// than falling through to the generic top-level screen (web/acp are
+		// build-tag modes routed via an argv shim, so their --help lands here).
+		switch args.Mode {
+		case ModeWeb:
+			printWebHelp()
+		default:
+			PrintHelp(version)
+		}
 		return nil
 	}
 	if args.Version {
@@ -722,6 +763,8 @@ func Run(rawArgs []string, version string) error {
 		return runRPCMode(ctx, args, version)
 	case ModeACP:
 		return runACPMode(ctx, args, version)
+	case ModeWeb:
+		return runWebMode(ctx, args, version)
 	case ModeSwarmAgent:
 		return runSwarmAgentMode(ctx, args, version)
 	default:
@@ -740,17 +783,18 @@ type nonInteractiveExtHooks struct{}
 func (nonInteractiveExtHooks) Notify(ext, level, message string) {
 	fmt.Fprintf(os.Stderr, "[%s] %s: %s\n", ext, level, message)
 }
-func (nonInteractiveExtHooks) Submit(string)                                        {}
-func (nonInteractiveExtHooks) SubmitSlash(string)                                   {}
-func (nonInteractiveExtHooks) Insert(string)                                        {}
-func (nonInteractiveExtHooks) Display(string, string)                               {}
-func (nonInteractiveExtHooks) ClearNotes(string)                                    {}
-func (nonInteractiveExtHooks) OpenPanel(string, extproto.PanelSpec)                 {}
-func (nonInteractiveExtHooks) UpdatePanel(string, string, string, []string, string) {}
-func (nonInteractiveExtHooks) ClosePanel(string, string)                            {}
-func (nonInteractiveExtHooks) RefreshStatus()                                       {}
-func (nonInteractiveExtHooks) RefreshContext()                                      {}
-func (nonInteractiveExtHooks) RefreshTools()                                        {}
+func (nonInteractiveExtHooks) Submit(string)                        {}
+func (nonInteractiveExtHooks) SubmitSlash(string)                   {}
+func (nonInteractiveExtHooks) Insert(string)                        {}
+func (nonInteractiveExtHooks) Display(string, string)               {}
+func (nonInteractiveExtHooks) ClearNotes(string)                    {}
+func (nonInteractiveExtHooks) OpenPanel(string, extproto.PanelSpec) {}
+func (nonInteractiveExtHooks) UpdatePanel(string, string, string, []string, string, []extproto.Widget) {
+}
+func (nonInteractiveExtHooks) ClosePanel(string, string) {}
+func (nonInteractiveExtHooks) RefreshStatus()            {}
+func (nonInteractiveExtHooks) RefreshContext()           {}
+func (nonInteractiveExtHooks) RefreshTools()             {}
 
 // setupNonInteractiveExtensions loads --ext paths and (unless
 // --no-ext) runs discovery. Returns the manager so the caller can
@@ -1501,6 +1545,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 			HostModel:       swarmHostModel,
 			Tiers:           hostTiers,
 			PersonaResolver: resolveDispatchPersona,
+			Personas:        dispatchablePersonaNames(),
 		}
 		return reg
 	}
@@ -2222,7 +2267,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		PersonaAccent:           r.persona.AccentColor,
 		Experience:              r.experience,
 		ExtensionThemes:         func() []tui.ThemeOption { return extensionThemeOptions(extMgr) },
-		AutoSwarmSystemAddendum: autoSwarmAddendum(),
+		AutoSwarmSystemAddendum: nudgedSwarmAddendum(),
 		SwarmTiers:              hostTiers,
 		DispatchPersonaResolver: resolveDispatchPersona,
 		SettingsStore:           configSettingsStore{},

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"strings"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -42,16 +43,16 @@ func ClassifyRecoverable(err error) (bool, string) {
 	if errors.As(err, &pe) {
 		switch {
 		case pe.Status == 401:
-			return true, "authentication failed: " + shortErrorText(msg)
+			return true, i18n.T("authentication failed: %s", shortErrorText(msg))
 		case pe.Status == 403:
-			return true, "permission denied: " + shortErrorText(msg)
+			return true, i18n.T("permission denied: %s", shortErrorText(msg))
 		case pe.Status == 429:
-			return true, "rate limited: " + shortErrorText(msg)
+			return true, i18n.T("rate limited: %s", shortErrorText(msg))
 		case pe.Status >= 500:
-			return true, "provider unavailable: " + shortErrorText(msg)
+			return true, i18n.T("provider unavailable: %s", shortErrorText(msg))
 		case pe.Status == 0 && pe.Transient:
 			// Stream death / transient in-stream errors.
-			return true, "network failure: " + shortErrorText(msg)
+			return true, i18n.T("network failure: %s", shortErrorText(msg))
 		case pe.Status == 0:
 			// In-stream API errors without a status: fall through to
 			// the prose heuristics below — the provider's own error
@@ -63,7 +64,7 @@ func ClassifyRecoverable(err error) (bool, string) {
 			return false, ""
 		}
 	} else if provider.IsTransportError(err) {
-		return true, "network failure: " + shortErrorText(msg)
+		return true, i18n.T("network failure: %s", shortErrorText(msg))
 	}
 
 	// Prose fallback for untyped errors (custom SDK clients, auth
@@ -76,17 +77,17 @@ func ClassifyRecoverable(err error) (bool, string) {
 		strings.Contains(low, "no such host") ||
 		strings.Contains(low, "tls handshake") ||
 		strings.Contains(low, "eof") {
-		return true, "network failure: " + shortErrorText(msg)
+		return true, i18n.T("network failure: %s", shortErrorText(msg))
 	}
 	switch {
 	case containsAnyText(low, "http 401", " 401:", "invalid_authentication", "token expired", "api key appears to be invalid"):
-		return true, "authentication failed: " + shortErrorText(msg)
+		return true, i18n.T("authentication failed: %s", shortErrorText(msg))
 	case containsAnyText(low, "http 403", " 403:", "permission denied", "forbidden"):
-		return true, "permission denied: " + shortErrorText(msg)
+		return true, i18n.T("permission denied: %s", shortErrorText(msg))
 	case containsAnyText(low, "http 429", " 429:", "rate limit", "rate_limit", "too many requests", "quota"):
-		return true, "rate limited: " + shortErrorText(msg)
+		return true, i18n.T("rate limited: %s", shortErrorText(msg))
 	case containsAnyText(low, "http 500", "http 502", "http 503", "http 504", " 500:", " 502:", " 503:", " 504:", "upstream connect error", "service unavailable", "internal server error", "bad gateway", "gateway timeout"):
-		return true, "provider unavailable: " + shortErrorText(msg)
+		return true, i18n.T("provider unavailable: %s", shortErrorText(msg))
 	}
 
 	// Anything else (400 bad request, validation errors, etc.) is

@@ -652,18 +652,19 @@ func renderPanelTextForTest(p *extproto.PanelSpec) string {
 // production nonInteractiveExtHooks.
 type nonInteractiveExtHooksStub struct{}
 
-func (nonInteractiveExtHooksStub) Notify(string, string, string)                        {}
-func (nonInteractiveExtHooksStub) Submit(string)                                        {}
-func (nonInteractiveExtHooksStub) SubmitSlash(string)                                   {}
-func (nonInteractiveExtHooksStub) Insert(string)                                        {}
-func (nonInteractiveExtHooksStub) Display(string, string)                               {}
-func (nonInteractiveExtHooksStub) ClearNotes(string)                                    {}
-func (nonInteractiveExtHooksStub) OpenPanel(string, extproto.PanelSpec)                 {}
-func (nonInteractiveExtHooksStub) UpdatePanel(string, string, string, []string, string) {}
-func (nonInteractiveExtHooksStub) ClosePanel(string, string)                            {}
-func (nonInteractiveExtHooksStub) RefreshStatus()                                       {}
-func (nonInteractiveExtHooksStub) RefreshContext()                                      {}
-func (nonInteractiveExtHooksStub) RefreshTools()                                        {}
+func (nonInteractiveExtHooksStub) Notify(string, string, string)        {}
+func (nonInteractiveExtHooksStub) Submit(string)                        {}
+func (nonInteractiveExtHooksStub) SubmitSlash(string)                   {}
+func (nonInteractiveExtHooksStub) Insert(string)                        {}
+func (nonInteractiveExtHooksStub) Display(string, string)               {}
+func (nonInteractiveExtHooksStub) ClearNotes(string)                    {}
+func (nonInteractiveExtHooksStub) OpenPanel(string, extproto.PanelSpec) {}
+func (nonInteractiveExtHooksStub) UpdatePanel(string, string, string, []string, string, []extproto.Widget) {
+}
+func (nonInteractiveExtHooksStub) ClosePanel(string, string) {}
+func (nonInteractiveExtHooksStub) RefreshStatus()            {}
+func (nonInteractiveExtHooksStub) RefreshContext()           {}
+func (nonInteractiveExtHooksStub) RefreshTools()             {}
 
 // manifestPermissionRules reads every installed extension's extension.json
 // under root/extensions and compiles its `permissions` array into

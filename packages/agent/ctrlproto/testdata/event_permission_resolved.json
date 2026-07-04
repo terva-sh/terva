@@ -1,0 +1,10 @@
+{
+  "kind": "event",
+  "sess": "s1",
+  "event": {
+    "type": "permission_resolved",
+    "resolved": {
+      "call_id": "call_1"
+    }
+  }
+}

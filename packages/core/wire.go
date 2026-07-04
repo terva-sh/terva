@@ -56,11 +56,19 @@ type WireEvent struct {
 	Error string `json:"error,omitempty"`
 }
 
+// MetaSynthetic marks a user-role message the host injected (the at-close
+// ContinueOnStop nudge) rather than one the user typed. Display surfaces
+// de-emphasize it; extension observers already skip it (EvUserMessage.Synthetic).
+const MetaSynthetic = "synthetic"
+
 // WireMessage is one transcript entry on the wire.
 type WireMessage struct {
 	Role    string      `json:"role"`
 	Content []WireBlock `json:"content"`
 	Time    string      `json:"time,omitempty"` // RFC 3339
+	// Synthetic is true for a host-injected message (not the user's words), so a
+	// client can render it as a system note instead of a user bubble.
+	Synthetic bool `json:"synthetic,omitempty"`
 }
 
 // WireBlock is one piece of message content. Discriminate on Type:
@@ -178,6 +186,9 @@ func MessageToWire(m provider.Message) WireMessage {
 	w := WireMessage{Role: string(m.Role), Content: ContentToWire(m.Content)}
 	if !m.Time.IsZero() {
 		w.Time = m.Time.Format(time.RFC3339Nano)
+	}
+	if m.Meta[MetaSynthetic] == "true" {
+		w.Synthetic = true
 	}
 	return w
 }

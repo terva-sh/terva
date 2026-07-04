@@ -1,0 +1,9 @@
+{
+  "kind": "cmd",
+  "id": 6,
+  "sess": "s1",
+  "method": "models.switch",
+  "params": {
+    "model": "claude-opus-4-8"
+  }
+}

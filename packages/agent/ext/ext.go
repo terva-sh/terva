@@ -881,6 +881,42 @@ func (e *Extension) RenderPanel(panelID, title string, lines []string, footer st
 	_ = e.send(extproto.PanelRenderFromExt{Type: "panel_render", PanelID: panelID, Title: title, Lines: lines, Footer: footer})
 }
 
+// Widget is one node of a rich pane tree (heading/text/meter/keyvalue/table/
+// list/group/note/action/divider). Build a tree and pass it to
+// OpenPanelWidgets / RenderPanelWidgets: a rich frontend (the web control panel)
+// renders it natively, while a text frontend (the TUI) falls back to the Lines
+// you supply alongside. The vocabulary is re-exported from extproto.
+type (
+	Widget     = extproto.Widget
+	WidgetKV   = extproto.WidgetKV
+	WidgetItem = extproto.WidgetItem
+)
+
+// Widget tone values (WidgetItem/Widget.Tone).
+const (
+	ToneDefault = "default"
+	ToneMuted   = "muted"
+	ToneDanger  = "danger"
+	ToneOK      = "ok"
+	ToneWarn    = "warn"
+)
+
+// OpenPanelWidgets opens a panel with a generic widget tree for rich frontends,
+// plus lines as the text fallback for the TUI (pass what you'd give OpenPanel).
+// Like OpenPanel, it can be called spontaneously and receives panel_key events.
+func (e *Extension) OpenPanelWidgets(id, title string, widgets []Widget, lines []string, footer string) {
+	_ = e.send(extproto.OpenPanelFromExt{
+		Type:  "open_panel",
+		Panel: extproto.PanelSpec{ID: id, Title: title, Lines: lines, Footer: footer, Widgets: widgets},
+	})
+}
+
+// RenderPanelWidgets re-renders an open panel with a widget tree (+ text
+// fallback lines). The widget twin of RenderPanel.
+func (e *Extension) RenderPanelWidgets(panelID, title string, widgets []Widget, lines []string, footer string) {
+	_ = e.send(extproto.PanelRenderFromExt{Type: "panel_render", PanelID: panelID, Title: title, Lines: lines, Footer: footer, Widgets: widgets})
+}
+
 // ClosePanel tells terva to close panelID.
 func (e *Extension) ClosePanel(panelID string) {
 	_ = e.send(extproto.PanelCloseFromExt{Type: "panel_close", PanelID: panelID})

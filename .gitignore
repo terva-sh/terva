@@ -52,6 +52,11 @@ go.work.sum
 
 bin/
 dist/
+# ...but the web control panel's built client IS committed: it is embedded into
+# the terva_web binary via go:embed, so a plain `go build -tags terva_web` (and
+# CI / the release) needs no Node.js. Re-include it despite the blanket dist/.
+!packages/agent/web/client/dist/
+!packages/agent/web/client/dist/**
 
 # Accidentally-committed Go build artifacts. Extension-less Go binaries
 # can't be globbed without risking real source, so list the known ones:
@@ -61,6 +66,10 @@ dist/
 /terva
 /stubchild
 /examples/extensions/todo/terva-todo-extension
+# Other cmd/* binaries built without -o also land at the root.
+/terva-i18n-lint
+/terva-telegram-connector
+/terva-discord-connector
 
 node_modules/
 npm-debug.log*

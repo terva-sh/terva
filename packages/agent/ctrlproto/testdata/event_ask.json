@@ -1,0 +1,16 @@
+{
+  "kind": "event",
+  "sess": "s1",
+  "event": {
+    "type": "ask_request",
+    "ask": {
+      "ask_id": "ask_1",
+      "question": "Which approach?",
+      "options": [
+        "rewrite",
+        "patch"
+      ],
+      "allow_custom": true
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "kind": "event",
+  "sess": "s1",
+  "event": {
+    "type": "text_delta",
+    "delta": "Hello"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "kind": "resp",
+  "id": 2,
+  "result": {
+    "sessions": [
+      {
+        "id": "s1",
+        "title": "main",
+        "provider": "anthropic",
+        "model": "claude-opus-4-8",
+        "messages": 12,
+        "usage": {
+          "input": 100,
+          "output": 50,
+          "cache_read": 0,
+          "cache_write": 0,
+          "cost_usd": 0.01
+        },
+        "current": true
+      }
+    ]
+  }
+}

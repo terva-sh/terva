@@ -346,6 +346,49 @@ type PanelSpec struct {
 	Title  string   `json:"title,omitempty"`
 	Lines  []string `json:"lines,omitempty"`
 	Footer string   `json:"footer,omitempty"`
+	// Widgets is an optional generic widget tree. A rich frontend (the web
+	// control panel) renders it natively; text frontends (the TUI) fall back to
+	// Lines, so an extension targeting both sends both. Mapped to the
+	// control-plane Widget vocabulary at the web boundary.
+	Widgets []Widget `json:"widgets,omitempty"`
+}
+
+// Widget is one node of a generic pane tree an extension can send instead of (or
+// alongside) flat panel Lines — the extensible content model for rich frontends.
+// Type discriminates; the other fields are per-type. The vocabulary is semantic
+// (a meter is a bar, not a styled div) so each frontend renders it natively.
+type Widget struct {
+	Type     string       `json:"type"` // heading|text|meter|keyvalue|table|list|group|note|action|divider
+	Text     string       `json:"text,omitempty"`
+	Tone     string       `json:"tone,omitempty"` // default|muted|danger|ok|warn
+	Level    int          `json:"level,omitempty"`
+	Label    string       `json:"label,omitempty"`
+	Value    float64      `json:"value,omitempty"`
+	Max      float64      `json:"max,omitempty"`
+	Unit     string       `json:"unit,omitempty"`
+	Rows     []WidgetKV   `json:"rows,omitempty"`
+	Columns  []string     `json:"columns,omitempty"`
+	Cells    [][]string   `json:"cells,omitempty"`
+	Items    []WidgetItem `json:"items,omitempty"`
+	Children []Widget     `json:"children,omitempty"`
+	ActionID string       `json:"action_id,omitempty"`
+}
+
+// WidgetKV is one row of a keyvalue widget.
+type WidgetKV struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+	Note  string `json:"note,omitempty"`
+	Mono  bool   `json:"mono,omitempty"`
+}
+
+// WidgetItem is one entry of a list widget; ActionID makes it a button that
+// invokes a panel key/action back on the extension.
+type WidgetItem struct {
+	Text     string `json:"text"`
+	Note     string `json:"note,omitempty"`
+	Tone     string `json:"tone,omitempty"`
+	ActionID string `json:"action_id,omitempty"`
 }
 
 // OpenPanelFromExt is a spontaneous one-way frame an extension can send at
@@ -363,6 +406,7 @@ type PanelRenderFromExt struct {
 	Title   string   `json:"title,omitempty"`
 	Lines   []string `json:"lines,omitempty"`
 	Footer  string   `json:"footer,omitempty"`
+	Widgets []Widget `json:"widgets,omitempty"`
 }
 
 type PanelCloseFromExt struct {

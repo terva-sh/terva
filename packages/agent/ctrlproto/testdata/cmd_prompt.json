@@ -1,0 +1,15 @@
+{
+  "kind": "cmd",
+  "id": 1,
+  "sess": "s1",
+  "method": "prompt",
+  "params": {
+    "text": "fix the failing test",
+    "images": [
+      {
+        "mime_type": "image/png",
+        "data": "UE5H"
+      }
+    ]
+  }
+}

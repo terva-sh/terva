@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // ReadOnlySet is the registry of side-effect-free tool names the
@@ -92,7 +94,7 @@ func ParseApprovalMode(s string) (ApprovalMode, error) {
 	case ApprovalPlan, ApprovalAsk, ApprovalAutoEdit, ApprovalWorkspace, ApprovalYolo:
 		return ApprovalMode(s), nil
 	}
-	return "", fmt.Errorf("unknown approval mode %q (valid: plan, ask, auto-edit, workspace, yolo)", s)
+	return "", i18n.Errorf("unknown approval mode %q (valid: plan, ask, auto-edit, workspace, yolo)", s)
 }
 
 // Authority classifies what kind of effect a tool can have, a finer

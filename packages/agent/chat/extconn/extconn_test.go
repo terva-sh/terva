@@ -19,18 +19,18 @@ import (
 // noopHooks satisfies extdriver.HostHooks for adapter tests.
 type noopHooks struct{}
 
-func (noopHooks) Notify(extName, level, message string)             {}
-func (noopHooks) Submit(text string)                                {}
-func (noopHooks) SubmitSlash(text string)                           {}
-func (noopHooks) Insert(text string)                                {}
-func (noopHooks) Display(extName, text string)                      {}
-func (noopHooks) ClearNotes(extName string)                         {}
-func (noopHooks) OpenPanel(extName string, spec extproto.PanelSpec) {}
-func (noopHooks) UpdatePanel(a, b, c string, d []string, e string)  {}
-func (noopHooks) ClosePanel(extName, panelID string)                {}
-func (noopHooks) RefreshStatus()                                    {}
-func (noopHooks) RefreshContext()                                   {}
-func (noopHooks) RefreshTools()                                     {}
+func (noopHooks) Notify(extName, level, message string)                                 {}
+func (noopHooks) Submit(text string)                                                    {}
+func (noopHooks) SubmitSlash(text string)                                               {}
+func (noopHooks) Insert(text string)                                                    {}
+func (noopHooks) Display(extName, text string)                                          {}
+func (noopHooks) ClearNotes(extName string)                                             {}
+func (noopHooks) OpenPanel(extName string, spec extproto.PanelSpec)                     {}
+func (noopHooks) UpdatePanel(a, b, c string, d []string, e string, f []extproto.Widget) {}
+func (noopHooks) ClosePanel(extName, panelID string)                                    {}
+func (noopHooks) RefreshStatus()                                                        {}
+func (noopHooks) RefreshContext()                                                       {}
+func (noopHooks) RefreshTools()                                                         {}
 
 // writeShellExt mirrors extdriver's test helper (package-internal there):
 // a /bin/sh extension printing helloJSON then running body.

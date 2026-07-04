@@ -49,7 +49,7 @@ type HostHooks interface {
 	ClearNotes(extName string)
 
 	OpenPanel(extName string, spec extproto.PanelSpec)
-	UpdatePanel(extName, panelID, title string, lines []string, footer string)
+	UpdatePanel(extName, panelID, title string, lines []string, footer string, widgets []extproto.Widget)
 	ClosePanel(extName, panelID string)
 
 	// RefreshStatus asks the host to redraw after an extension changed
@@ -960,7 +960,7 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 		case "panel_render":
 			var pr extproto.PanelRenderFromExt
 			if err := json.Unmarshal(line, &pr); err == nil {
-				d.hooks.UpdatePanel(ext.Manifest.Name, pr.PanelID, pr.Title, pr.Lines, pr.Footer)
+				d.hooks.UpdatePanel(ext.Manifest.Name, pr.PanelID, pr.Title, pr.Lines, pr.Footer, pr.Widgets)
 			}
 		case "panel_close":
 			var pc extproto.PanelCloseFromExt

@@ -101,3 +101,21 @@ func TestWireEventMapMatchesStruct(t *testing.T) {
 		}
 	}
 }
+
+// TestMessageToWireSynthetic: a host-injected (synthetic-meta) user message maps
+// to WireMessage.Synthetic so display surfaces can de-emphasize it; a plain
+// message does not.
+func TestMessageToWireSynthetic(t *testing.T) {
+	nudge := provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.Content{provider.TextBlock{Text: "finish the open items"}},
+		Meta:    map[string]string{MetaSynthetic: "true"},
+	}
+	if !MessageToWire(nudge).Synthetic {
+		t.Error("synthetic meta should set WireMessage.Synthetic")
+	}
+	plain := provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hi"}}}
+	if MessageToWire(plain).Synthetic {
+		t.Error("a plain user message must not be marked synthetic")
+	}
+}
