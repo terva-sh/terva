@@ -11,6 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -72,7 +73,7 @@ type actorSpawnArgs struct {
 const actorFramingNote = "[Director's note: you are voicing a character in a scene another narrator is running. Respond only as your character, in the moment — your dialogue and your immediate action, kept concise. Don't narrate the wider scene, describe the setting at length, or speak for anyone but yourself; the narrator owns the world and the framing.]"
 
 func composeActorTask(situation string) string {
-	return actorFramingNote + "\n\n" + situation
+	return i18n.P("play.actor.framing", actorFramingNote) + "\n\n" + situation
 }
 
 func (t *ActorSpawnTool) Name() string { return "actor_spawn" }

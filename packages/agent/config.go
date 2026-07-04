@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"terva.sh/terva/packages/agent/hooks"
@@ -28,6 +29,14 @@ type Config struct {
 	// not significant; membership is.
 	FavoriteModels []string `json:"favorite_models,omitempty"`
 
+	// AutoTitle, when true, has the web workspace generate a short session
+	// title from the first exchange via a small one-shot model call, instead
+	// of using the first line of the opening message. Off by default (nil/
+	// false) so no extra tokens are spent unless asked. AutoTitleModel picks
+	// the model for it ("provider/id"); empty means the session's own model.
+	AutoTitle      *bool  `json:"auto_title,omitempty"`
+	AutoTitleModel string `json:"auto_title_model,omitempty"`
+
 	// Endpoints are user-defined OpenAI-compatible backends, each registered
 	// as its own provider (the map key is the provider id) with its own
 	// /v1/models discovery and row in the /model picker — the way to use
@@ -37,6 +46,15 @@ type Config struct {
 	// endpoint. Keys are NEVER stored here — use APIKeyEnv or auth.json.
 	Endpoints map[string]EndpointConfig `json:"endpoints,omitempty"`
 	Theme     string                    `json:"theme"`
+
+	// Language selects the operator's UI language as a BCP-47 tag
+	// ("fi", "pt-BR"). Empty or an "en"/"en-*" tag keeps the built-in
+	// English. The TERVA_LANG env var takes precedence over this.
+	// Translations load from terva's embedded catalog, overlaid by
+	// $TERVA_HOME/locales/<lang>.json so an operator can tweak or complete
+	// strings and contribute them back. User layer only — a cloned project
+	// must never switch the UI language out from under the user.
+	Language string `json:"language,omitempty"`
 
 	// PersonaName overrides the agent's persona name — the name it
 	// introduces itself by and the name shown in the welcome banner. Empty
@@ -65,6 +83,14 @@ type Config struct {
 	// for parallel sub-tasks via a built-in swarm_spawn tool. Off by
 	// default; nil/missing means disabled. Toggle from /settings.
 	AutoSwarmEnabled *bool `json:"auto_swarm_enabled,omitempty"`
+
+	// AutoSwarmNudge controls whether, when auto-swarm is enabled, the system
+	// prompt carries the proactive-delegation guidance (the swarm addendum).
+	// Independent of AutoSwarmEnabled: the tool availability is one toggle, the
+	// nudge is another. Defaults ON (nil/missing = true) so enabling auto-swarm
+	// behaves as before; set false to keep the tool but drop the nudge, letting
+	// the model reach for it on its own. Applies to new sessions.
+	AutoSwarmNudge *bool `json:"auto_swarm_nudge,omitempty"`
 
 	// SwarmTiers maps a provider id to the concrete model ids used for the
 	// swarm_spawn `tier` parameter (weak / medium / strong). It overrides the
@@ -447,6 +473,22 @@ func PersonaName() string {
 	return DefaultPersonaName
 }
 
+// Language resolves the operator's UI language as a BCP-47 tag: the
+// TERVA_LANG env var wins, then the language config field, then "en"
+// (English, the built-in source language). Mirrors PersonaName's
+// env-then-config resolution.
+func Language() string {
+	if v := strings.TrimSpace(envcompat.Get("LANG")); v != "" {
+		return v
+	}
+	if cfg, err := LoadConfig(); err == nil {
+		if v := strings.TrimSpace(cfg.Language); v != "" {
+			return v
+		}
+	}
+	return "en"
+}
+
 // pinnedGlobalHome, when non-empty, is the user's global data home that
 // credentials (auth.json) and the trust store (trusted.json) resolve against
 // even after project-scoped mode has redirected TERVA_HOME to a project-local
@@ -510,6 +552,25 @@ func loadConfigAt(home string) (Config, error) {
 
 // SaveConfig writes the config file for the active home, creating parent dirs.
 func SaveConfig(c Config) error { return saveConfigAt(TervaHome(), c) }
+
+// configMu serializes read-modify-write config mutations. SaveConfig is a plain
+// file overwrite, so concurrent setters (the web has N sessions) would lose
+// updates without this. Use MutateConfig for any load-mutate-save cycle.
+var configMu sync.Mutex
+
+// MutateConfig applies fn to the current config and saves it, atomically with
+// respect to other MutateConfig callers. The single safe path for toggling a
+// config field at runtime.
+func MutateConfig(fn func(*Config)) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	c, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	fn(&c)
+	return SaveConfig(c)
+}
 
 // saveConfigAt writes home/config.json, creating parent dirs.
 func saveConfigAt(home string, c Config) error {

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // personaRosterTripwire is the number of dispatchable personas past which an
@@ -28,6 +30,19 @@ func dispatchablePersonas() []Persona {
 	return out
 }
 
+// dispatchablePersonaNames is the canonical names of the dispatchable personas,
+// for the swarm_spawn `persona` schema enum (validation + the model only sees
+// real specialists). The human-readable roster (what each is good for) rides the
+// nudge; this is just the value set.
+func dispatchablePersonaNames() []string {
+	ps := dispatchablePersonas()
+	names := make([]string, 0, len(ps))
+	for _, p := range ps {
+		names = append(names, p.Ref())
+	}
+	return names
+}
+
 // personaRoster renders the dispatchable personas as a compact block the
 // coordinator reads to pick a specialist. Tier 1 of progressive disclosure:
 // name + specialty + good_for only — the charter resolves in the sub-agent.
@@ -37,7 +52,8 @@ func personaRoster(ps []Persona) string {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("Specialist personas you can dispatch — pass the name as swarm_spawn's `persona` parameter to boot a sub-agent as that specialist:\n")
+	sb.WriteString(i18n.P("swarm.roster.intro", "Specialist personas you can dispatch — pass the name as swarm_spawn's `persona` parameter to boot a sub-agent as that specialist:"))
+	sb.WriteByte('\n')
 	for _, p := range ps {
 		fmt.Fprintf(&sb, "- %s", p.Ref())
 		if spec := strings.TrimSpace(p.Specialty); spec != "" {
@@ -51,7 +67,7 @@ func personaRoster(ps []Persona) string {
 		}
 		sb.WriteByte('\n')
 	}
-	sb.WriteString("Dispatch a persona only by a name from this list, picking the one whose focus matches the sub-task; omit `persona` for a general-purpose sub-agent.")
+	sb.WriteString(i18n.P("swarm.roster.footer", "Dispatch a persona only by a name from this list, picking the one whose focus matches the sub-task; omit `persona` for a general-purpose sub-agent."))
 	return sb.String()
 }
 
@@ -60,11 +76,23 @@ func personaRoster(ps []Persona) string {
 // system prompt in Resolve, and the interactive config) so the live /settings
 // toggle strips/re-adds the exact same string.
 func autoSwarmAddendum() string {
+	addendum := i18n.P("swarm.addendum", AutoSwarmSystemAddendum)
 	roster := personaRoster(dispatchablePersonas())
 	if roster == "" {
-		return AutoSwarmSystemAddendum
+		return addendum
 	}
-	return AutoSwarmSystemAddendum + "\n\n" + roster
+	return addendum + "\n\n" + roster
+}
+
+// nudgedSwarmAddendum is the swarm addendum gated by the separate nudge toggle:
+// the empty string when auto_swarm_nudge is off, so a session keeps the
+// swarm_spawn tool (Toggle 1) but not the proactive-delegation guidance
+// (Toggle 2). Injection sites append it only when non-empty.
+func nudgedSwarmAddendum() string {
+	if !AutoSwarmNudgeEnabled() {
+		return ""
+	}
+	return autoSwarmAddendum()
 }
 
 // resolveDispatchPersona validates a model-supplied persona NAME against the

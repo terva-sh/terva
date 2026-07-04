@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/i18n"
 )
 
 // loadProjectCast reads a project-declared cast from <cwd>/.terva/cast.json — a
@@ -63,27 +63,15 @@ func castSkinActive(args Args) bool {
 	return args.Experience == ExperiencePlay && !args.NoTools
 }
 
-// castAddendum is the play director's system-prompt block: it advertises the
-// declared cast to the model — so dispatch doesn't depend on the model noticing
-// the actor_spawn tool in its list — and gives pacing guidance (the soft
-// interaction budget). Emitted only in --play with a non-empty cast.
-func castAddendum(cast map[string]string) string {
-	names := make([]string, 0, len(cast))
-	for n := range cast {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-
-	var sb strings.Builder
-	sb.WriteString("You have a CAST you can give voice to with the actor_spawn tool. ")
-	sb.WriteString("Call actor_spawn(actor, situation) to have a cast member respond in character to a situation you describe; it returns their line for you to weave into the scene as the narrator. ")
-	sb.WriteString("Dispatch by NAME only, from this cast:\n")
-	for _, n := range names {
-		sb.WriteString("  - " + n + "\n")
-	}
-	sb.WriteString("You remain the narrator and the source of truth about the world — the cast lends voices, not authority. ")
-	sb.WriteString("Bring an actor in for beats that matter (a greeting, a confrontation, a revelation), not for every line — a scene needs only a voice or two per exchange.")
-	return sb.String()
+// castAddendum is the play director's proactive-use NUDGE (Toggle 2, shared with
+// auto-swarm): the pacing disposition a bare tool wouldn't give. The mechanics
+// (how actor_spawn works) live in its Description, and the cast roster lives in
+// its `actor` schema enum, so this no longer advertises the list — it only
+// nudges pacing + keeps the narrator's authority. Emitted only in --play with a
+// non-empty cast AND when the nudge is on (see Resolve).
+func castAddendum() string {
+	return i18n.P("play.cast.addendum",
+		"You can give voice to your cast with the actor_spawn tool — its `actor` options are the members you can call. Bring an actor in for beats that matter (a greeting, a confrontation, a revelation), not for every line — a scene needs only a voice or two per exchange. You remain the narrator and the source of truth about the world; the cast lends voices, not authority.")
 }
 
 // buildActorCast resolves the --cast declaration (NAME=REF) into the actor_spawn

@@ -57,6 +57,13 @@ type SwarmSpawnTool struct {
 	// unknown). Nil skips the existence check; the inline path-rejection in
 	// Execute still applies regardless, so the model can never name a path.
 	PersonaResolver func(name string) (string, error)
+
+	// Personas is the dispatchable persona names, injected as the `persona`
+	// argument's schema enum so the model can only pick a real specialist (and
+	// gets validation for free). Empty leaves `persona` a free string. The
+	// human-readable roster (what each persona is good for) rides the system
+	// prompt when the proactive nudge is on; this is just the value set.
+	Personas []string
 }
 
 type swarmSpawnArgs struct {
@@ -76,7 +83,7 @@ const swarmSpawnSchema = `{
     },
     "persona": {
       "type": "string",
-      "description": "Optional persona NAME to boot the sub-agent as a specialist (e.g. a security or test reviewer). Must be one of the dispatchable persona names listed in your instructions — a NAME, never a path. Pick the persona whose focus matches the sub-task; omit for a general-purpose sub-agent."
+      "description": "Optional persona to boot the sub-agent as a specialist. Pick the one whose focus matches the sub-task (your instructions list what each is good for when there are any); omit for a general-purpose sub-agent."
     },
     "tier": {
       "type": "string",
@@ -97,9 +104,30 @@ const swarmSpawnSchema = `{
 
 func (t *SwarmSpawnTool) Name() string { return "swarm_spawn" }
 func (t *SwarmSpawnTool) Description() string {
-	return "Spawn a background sub-agent to work on a parallel sub-task. Returns the sub-agent id immediately; the sub-agent keeps running while this conversation continues. Useful for splitting independent work (write tests while implementing a feature, refactor module A while drafting module B). The sub-agent shares this working directory and has the same tools."
+	return "Spawn a background sub-agent to work on an independent sub-task in parallel. Returns the sub-agent's id immediately and keeps running while this conversation continues — do NOT wait for it before moving on to your next piece of work. The sub-agent shares this working directory and has the same tools, but starts with NO context from this conversation, so give it a self-contained task description. Good for splitting genuinely independent work (write the tests while implementing the feature; investigate three files at once); not for trivial single-step work, for steps that depend on each other in sequence, or when the user asked you to do the work yourself. When every sub-agent you spawned finishes, you'll receive a single [auto-swarm update] recapping each one's outcome to summarize."
 }
-func (t *SwarmSpawnTool) Schema() json.RawMessage { return json.RawMessage(swarmSpawnSchema) }
+
+// Schema injects the dispatchable persona names as the `persona` enum when the
+// host supplies them, so the model can only pick a real specialist and gets
+// validation for free; with none it stays a free string.
+func (t *SwarmSpawnTool) Schema() json.RawMessage {
+	if len(t.Personas) == 0 {
+		return json.RawMessage(swarmSpawnSchema)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(swarmSpawnSchema), &m); err != nil {
+		return json.RawMessage(swarmSpawnSchema)
+	}
+	if props, ok := m["properties"].(map[string]any); ok {
+		if p, ok := props["persona"].(map[string]any); ok {
+			p["enum"] = t.Personas
+		}
+	}
+	if out, err := json.Marshal(m); err == nil {
+		return out
+	}
+	return json.RawMessage(swarmSpawnSchema)
+}
 
 func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {
 	if t.Swarm == nil {

@@ -69,3 +69,44 @@ func TestResolve_AutoSwarmAddendumGatedByMode(t *testing.T) {
 		t.Error("--no-workspace-tools must not carry the auto-swarm addendum")
 	}
 }
+
+// The two toggles are independent: the swarm_spawn tool (AutoSwarmEnabled) and
+// the proactive-delegation nudge (AutoSwarmNudge). The addendum rides only when
+// both are on; nudge defaults ON so enabling auto-swarm keeps prior behavior.
+func TestResolve_AutoSwarmNudgeGate(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	dir := testsupport.TempDir(t)
+
+	hasAddendum := func() bool {
+		r, err := Resolve(Args{CWD: dir}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range r.systemSegments {
+			if s.Source == "auto-swarm" {
+				return true
+			}
+		}
+		return false
+	}
+	save := func(enabled, nudge *bool) {
+		if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5", AutoSwarmEnabled: enabled, AutoSwarmNudge: nudge}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tp, fp := true, false
+
+	save(&tp, nil) // enabled, nudge default
+	if !hasAddendum() {
+		t.Error("enabled + default nudge should carry the addendum")
+	}
+	save(&tp, &fp) // enabled tool, nudge off → tool stays, addendum gone
+	if hasAddendum() {
+		t.Error("nudge=false should drop the addendum (the tool stays, gated separately)")
+	}
+	save(&fp, &tp) // tool off → no addendum regardless of nudge
+	if hasAddendum() {
+		t.Error("disabled auto-swarm should carry no addendum")
+	}
+}

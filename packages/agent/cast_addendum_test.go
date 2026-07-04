@@ -8,19 +8,17 @@ import (
 )
 
 func TestCastAddendum(t *testing.T) {
-	got := castAddendum(map[string]string{"innkeeper": "x", "aava": "y"})
+	got := castAddendum()
 	if !strings.Contains(got, "actor_spawn") {
 		t.Error("addendum should name the actor_spawn tool")
 	}
-	// Cast members listed, sorted.
-	ai := strings.Index(got, "aava")
-	ii := strings.Index(got, "innkeeper")
-	if ai < 0 || ii < 0 || ai > ii {
-		t.Errorf("cast should list both names, sorted (aava before innkeeper): %q", got)
-	}
-	// Pacing guidance (the soft interaction budget) is present.
+	// The cast roster now lives in the tool's `actor` schema enum, not the
+	// addendum — the addendum is pacing disposition only.
 	if !strings.Contains(got, "not for every line") {
 		t.Error("addendum should include pacing guidance")
+	}
+	if !strings.Contains(got, "narrator") {
+		t.Error("addendum should keep the narrator's authority")
 	}
 }
 
@@ -50,6 +48,20 @@ func TestResolve_CastAddendumGatedByPlayAndCast(t *testing.T) {
 	cast := map[string]string{"aava": "examples/cards/aava-v2.png"}
 	if !hasCast(t, ExperiencePlay, cast) {
 		t.Error("--play with a cast should carry the cast addendum")
+	}
+
+	// The pacing nudge is gated by the shared auto_swarm_nudge toggle: off keeps
+	// the actor_spawn tool + cast, but drops the addendum.
+	off := false
+	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5", AutoSwarmNudge: &off}); err != nil {
+		t.Fatal(err)
+	}
+	if hasCast(t, ExperiencePlay, cast) {
+		t.Error("nudge off should drop the cast addendum (tool stays, gated separately)")
+	}
+	on := true
+	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5", AutoSwarmNudge: &on}); err != nil {
+		t.Fatal(err)
 	}
 	if hasCast(t, ExperiencePlay, nil) {
 		t.Error("--play without a cast should NOT carry the cast addendum")

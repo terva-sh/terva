@@ -794,16 +794,21 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	}
 	// Auto-swarm is a coding-workflow skin: only in a session with base
 	// workspace tools (never chat/play/--no-tools). See hasBaseWorkspaceTools.
-	if hasBaseWorkspaceTools(args) && AutoSwarmEnabled() {
+	// The swarm_spawn tool (Toggle 1: AutoSwarmEnabled) and the proactive nudge
+	// (Toggle 2: AutoSwarmNudge) are separate — the addendum rides only when
+	// both are on, so a session can keep the tool without the nudge.
+	if hasBaseWorkspaceTools(args) && AutoSwarmEnabled() && AutoSwarmNudgeEnabled() {
 		logPersonaRosterTripwire()
 		append_ = append(append_, PromptSegment{Source: "auto-swarm", Text: autoSwarmAddendum()})
 	}
-	// The play director's cast: advertise the declared actors + how to voice them
-	// (actor_spawn). Only in --play with a cast (--cast and/or a trusted project's
-	// .terva/cast.json) and never under --no-tools; the twin of the coding roster.
-	if castSkinActive(args) {
+	// The play director's cast pacing nudge — the twin of the coding proactive
+	// nudge, gated by the same AutoSwarmNudge toggle. Only in --play with a cast
+	// (--cast and/or a trusted project's .terva/cast.json) and never under
+	// --no-tools. The actor_spawn tool itself (and its `actor` enum) is registered
+	// regardless; this is just the disposition.
+	if castSkinActive(args) && AutoSwarmNudgeEnabled() {
 		if refs := mergedCastRefs(args, args.CWD, trusted); len(refs) > 0 {
-			append_ = append(append_, PromptSegment{Source: "cast", Text: castAddendum(refs)})
+			append_ = append(append_, PromptSegment{Source: "cast", Text: castAddendum()})
 		}
 	}
 

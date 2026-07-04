@@ -1,9 +1,10 @@
 package agent
 
 import (
-	"fmt"
 	"strings"
 	"time"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // ToolSummary is a name+one-line description. Kept as part of the
@@ -138,9 +139,9 @@ func SystemSegments(o SystemPromptOpts) []PromptSegment {
 		// The charter is additive, between the intro and the conventions, so
 		// terva's harness conventions stay the final framing.
 		add("charter", strings.TrimSpace(o.Charter))
-		conv := identityConventions
+		conv := i18n.P("system.conventions.coding", identityConventions)
 		if o.Experience == ExperienceChat || o.Experience == ExperiencePlay {
-			conv = experienceConventions
+			conv = i18n.P("system.conventions.experience", experienceConventions)
 		}
 		add("conventions", conv)
 	}
@@ -150,10 +151,10 @@ func SystemSegments(o SystemPromptOpts) []PromptSegment {
 	// chat/play (and any --no-tools run) there's nothing to read it with, so the
 	// hint would just be a dead instruction — drop it.
 	if d := strings.TrimSpace(o.TervaDocsDir); d != "" && hasTool(o.Tools, "read") {
-		add("terva-docs-hint", "Terva's own docs are installed under "+d+"; use the read tool there when you need details about terva RPC, extensions, skills, or built-in behaviour.")
+		add("terva-docs-hint", i18n.P("system.docs_hint", "Terva's own docs are installed under %s; use the read tool there when you need details about terva RPC, extensions, skills, or built-in behaviour.", d))
 	}
 	if o.StatusTool {
-		add("status-tool-hint", "Call the terva_status tool (no arguments) to check your own runtime state — current model, provider, working directory, reasoning effort, and how full your context window is — for example to decide whether to summarise before the context fills. Its tool description lists every field it returns.")
+		add("status-tool-hint", i18n.P("system.status_tool_hint", "Call the terva_status tool (no arguments) to check your own runtime state — current model, provider, working directory, reasoning effort, and how full your context window is — for example to decide whether to summarise before the context fills. Its tool description lists every field it returns."))
 	}
 	for _, a := range o.Append {
 		add(a.Source, a.Text)
@@ -168,7 +169,7 @@ func SystemSegments(o SystemPromptOpts) []PromptSegment {
 		if cwd == "" {
 			cwd = "."
 		}
-		add("footer", fmt.Sprintf("Current date: %s\nCurrent working directory: %s\n", o.Now.Format("2006-01-02"), cwd))
+		add("footer", i18n.P("system.footer", "Current date: %s\nCurrent working directory: %s\n", o.Now.Format("2006-01-02"), cwd))
 	}
 	return segs
 }
@@ -194,14 +195,14 @@ func identityIntro(name, experience string) string {
 	}
 	switch experience {
 	case ExperienceChat:
-		return fmt.Sprintf(chatIdentityIntro, n)
+		return i18n.P("system.identity.chat", chatIdentityIntro, n)
 	case ExperiencePlay:
-		return fmt.Sprintf(playIdentityIntro, n)
+		return i18n.P("system.identity.play", playIdentityIntro, n)
 	}
 	if n != DefaultPersonaName {
-		return fmt.Sprintf(customIdentityIntro, n, n)
+		return i18n.P("system.identity.custom", customIdentityIntro, n, n)
 	}
-	return defaultIdentityIntro
+	return i18n.P("system.identity.default", defaultIdentityIntro)
 }
 
 const defaultIdentityIntro = `You are Mieli (pronounced MYEH-lee), an expert coding assistant operating inside terva (pronounced TEHR-vah), a coding agent harness. Mieli is Finnish for "mind"; terva is Finnish for pine tar — the traditional preservative and cure-all that sealed boats and kept them seaworthy. The image is a mind in a preserved vessel: terva is the craft that carries Mieli and keeps it whole. Introduce yourself as Mieli (MYEH-lee) when asked who you are; if asked about the names, give both pronunciations — Mieli is MYEH-lee, terva is TEHR-vah — and what they mean.`
@@ -225,9 +226,9 @@ const chatIdentityIntro = `You are %s, operating inside terva (pronounced TEHR-v
 // never leak onto a card this way — the card owns its identity.
 func immersiveOriginal(experience string) string {
 	if experience == ExperiencePlay {
-		return immersivePlayFraming
+		return i18n.P("system.immersive.play_framing", immersivePlayFraming)
 	}
-	return immersiveChatFraming
+	return i18n.P("system.immersive.chat_framing", immersiveChatFraming)
 }
 
 const immersiveChatFraming = `This is a conversation: speak and act naturally and in character, as yourself.`
