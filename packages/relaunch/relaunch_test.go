@@ -1,3 +1,9 @@
+//go:build unix
+
+// These tests exercise the unix syscall.Exec relaunch path (execImage/afterFunc
+// seams, go-run path detection). On non-unix (the Windows CI runner) relaunch is
+// unsupported (relaunch_other.go returns ErrUnsupported and go-run paths differ),
+// so the tests don't apply there — gate them to unix like relaunch_unix.go.
 package relaunch
 
 import (

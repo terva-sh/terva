@@ -910,6 +910,7 @@ func TestWorkspaceClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	defer sess.Close() // release the file handle so TempDir cleanup works on Windows
 	ag := core.NewAgent(nil, "fake", "", core.Registry{})
 	ag.SetMessages([]provider.Message{{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hello"}}}})
 	s := &wsSession{id: "x", hub: newWSHub(), agent: ag, sess: sess}
@@ -947,6 +948,7 @@ func TestWorkspaceTrust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	defer sess.Close() // release the file handle so TempDir cleanup works on Windows
 	// A real agent so setTrusted's rebuildTools is safe even if Resolve succeeds;
 	// nil extMgr takes the rebuildTools branch.
 	s := &wsSession{id: "x", hub: newWSHub(), sess: sess, agent: core.NewAgent(nil, "fake", "", core.Registry{})}

@@ -5,3 +5,8 @@
 # pair, so pin the JSON to LF and mark the PNGs binary explicitly.
 examples/cards/*.json text eol=lf
 examples/cards/*.png binary
+
+# ctrlproto golden frames are byte-compared against LF-encoded wire output
+# (TestGoldenFrames); a CRLF checkout (the Windows CI default) desyncs every
+# frame. Pin the goldens to LF.
+packages/agent/ctrlproto/testdata/*.json text eol=lf
