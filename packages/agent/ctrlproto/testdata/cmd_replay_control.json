@@ -1,0 +1,10 @@
+{
+  "kind": "cmd",
+  "id": 9,
+  "sess": "r1",
+  "method": "replay.control",
+  "params": {
+    "action": "seek",
+    "position": 42
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "kind": "event",
+  "sess": "r1",
+  "event": {
+    "type": "replay_state",
+    "replay": {
+      "playing": true,
+      "position": 42,
+      "total": 128,
+      "speed": 2,
+      "mode": "effective"
+    }
+  }
+}
