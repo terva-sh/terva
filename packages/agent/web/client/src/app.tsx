@@ -6,6 +6,7 @@ import type {
   CatalogView,
   CommandsView,
   ContextBreakdown,
+  ContextNode,
   Decision,
   ExtensionsView,
   LoreEntry,
@@ -28,7 +29,7 @@ import type {
   WireEvent,
   WireUsage,
 } from './ctrlproto'
-import { applyEvent, itemsFromMessages, type Item } from './store'
+import { applyEvent, itemsFromMessages, type Item, type ImageAttachment } from './store'
 import { renderMarkdown } from './markdown'
 import { applyServerCatalog, setLocale, t, tn } from './i18n'
 
@@ -76,6 +77,32 @@ async function copyToClipboard(text: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+// maxImageBytes caps a single pasted/dropped image's raw size. The WS carrier
+// bounds one frame at 16 MiB (packages/agent/web/conn.go); base64 inflates ~4/3
+// and the frame also carries JSON + prompt text, so 10 MiB of raw image keeps a
+// comfortable margin — exceeding the frame cap would drop the connection.
+const maxImageBytes = 10 * 1024 * 1024
+
+// fileToAttachment reads an image File into a base64 ImageAttachment, or null if
+// it isn't an image or is over the size cap (the caller toasts the reason).
+function fileToAttachment(f: File): Promise<ImageAttachment | { error: string } | null> {
+  if (!f.type.startsWith('image/')) return Promise.resolve(null)
+  if (f.size > maxImageBytes) {
+    return Promise.resolve({ error: t('%s is too large (max 10 MB)', f.name || t('image')) })
+  }
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      // readAsDataURL yields "data:<mime>;base64,<payload>"; keep the payload.
+      const url = String(reader.result)
+      const comma = url.indexOf(',')
+      resolve(comma < 0 ? null : { mime: f.type, data: url.slice(comma + 1) })
+    }
+    reader.onerror = () => resolve(null)
+    reader.readAsDataURL(f)
+  })
 }
 
 export function App() {
@@ -417,16 +444,27 @@ export function App() {
     )
   }, [])
 
-  const sendPrompt = useCallback((text: string) => {
+  // sendPrompt dispatches a turn, optionally with pasted image attachments.
+  // Returns true when it consumed the input (so the composer can clear). Images
+  // ride only the prompt path — the queue verb is text-only server-side — so a
+  // send with images while busy is refused rather than silently dropping them.
+  const sendPrompt = useCallback((text: string, images?: ImageAttachment[]): boolean => {
     const c = clientRef.current
-    if (!c || !text.trim() || !curRef.current) return
+    const hasImages = !!images && images.length > 0
+    if (!c || !curRef.current || (!text.trim() && !hasImages)) return false
     if (busyRef.current) {
+      if (hasImages) {
+        setToast(t('Finish the current turn before attaching images (the queue is text-only).'))
+        return false
+      }
       setQueued((q) => [...q, text])
       c.fire('queue', { text }, curRef.current)
-      return
+      return true
     }
     setBusy(true)
-    c.fire('prompt', { text }, curRef.current)
+    const wireImages = hasImages ? images!.map((im) => ({ mime_type: im.mime, data: im.data })) : undefined
+    c.fire('prompt', wireImages ? { text, images: wireImages } : { text }, curRef.current)
+    return true
   }, [])
 
   const decide = useCallback((callID: string, d: Decision) => {
@@ -439,8 +477,10 @@ export function App() {
     setAsk(null)
   }, [])
 
-  const switchModel = useCallback((id: string) => {
-    clientRef.current?.fire('models.switch', { model: id }, curRef.current)
+  const switchModel = useCallback((id: string, provider?: string) => {
+    // provider qualifies the id: model ids are not globally unique across
+    // providers, and the daemon may hold a credential for only one of them.
+    clientRef.current?.fire('models.switch', provider ? { model: id, provider } : { model: id }, curRef.current)
     setModels((ms) => ms.map((m) => ({ ...m, current: m.id === id })))
   }, [])
 
@@ -471,6 +511,15 @@ export function App() {
     clientRef.current?.fire('surface.action', { id, action, args }, curRef.current)
   }, [])
 
+  // Lazily fetch a context node's content/children on expand (context.node).
+  const fetchNode = useCallback(
+    (id: string, op?: string): Promise<ContextNode> =>
+      clientRef.current
+        ? clientRef.current.send<{ node: ContextNode }>('context.node', { id, op }, curRef.current).then((r) => r.node)
+        : Promise.reject(new Error('not connected')),
+    [],
+  )
+
   // Client-side ephemeral note (help / usage hints) — an in-stream notice that
   // isn't sent anywhere and is dropped on the next snapshot, like server notices.
   const localNotice = useCallback((text: string) => {
@@ -486,8 +535,15 @@ export function App() {
       name: 'compact',
       desc: t('Summarize the conversation to reclaim context'),
       run: () => {
-        setToast(t('Compacting…'))
-        clientRef.current?.send('compact', null, curRef.current).catch((e) => setToast(String(e)))
+        const label = t('Compacting…')
+        setToast(label)
+        clientRef.current
+          ?.send('compact', null, curRef.current)
+          // Compact is synchronous server-side, so the resp lands after the
+          // transcript is replaced: clear the sticky progress toast on ack.
+          // Guard on the label so a newer toast set meanwhile isn't clobbered.
+          .then(() => setToast((cur) => (cur === label ? '' : cur)))
+          .catch((e) => setToast(String(e)))
       },
     },
     {
@@ -545,19 +601,21 @@ export function App() {
 
   // onSubmit is the composer's send path: a leading "/<known command>" is
   // intercepted and run; anything else (including a message that merely starts
-  // with "/") is sent as a normal prompt.
-  const onSubmit = (text: string) => {
+  // with "/") is sent as a normal prompt. Returns true when the input was
+  // consumed so the composer clears its text + attachments. Slash commands are
+  // only recognized when no image is attached (an image send is always a prompt).
+  const onSubmit = (text: string, images?: ImageAttachment[]): boolean => {
     const trimmed = text.trim()
-    if (trimmed.startsWith('/')) {
+    if (trimmed.startsWith('/') && !(images && images.length)) {
       const sp = trimmed.indexOf(' ')
       const head = (sp === -1 ? trimmed.slice(1) : trimmed.slice(1, sp)).toLowerCase()
       const cmd = slashCommands.find((c) => c.name === head)
       if (cmd) {
         cmd.run(sp === -1 ? '' : trimmed.slice(sp + 1))
-        return
+        return true
       }
     }
-    sendPrompt(text)
+    return sendPrompt(text, images)
   }
 
   // Refresh the pane when it opens, the active surface changes, or the session
@@ -670,8 +728,8 @@ export function App() {
           groups={modelGroups}
           favorites={favorites}
           current={curModel?.id}
-          onSwitch={(id) => {
-            switchModel(id)
+          onSwitch={(id, provider) => {
+            switchModel(id, provider)
             setPickerOpen(false)
           }}
           onToggleFavorite={favoriteModel}
@@ -705,7 +763,7 @@ export function App() {
           {permission && <PermissionCard req={permission} onDecide={decide} />}
           {ask && <AskCard req={ask} onAnswer={answer} />}
 
-          <Composer busy={busy} onSend={onSubmit} commands={slashCommands} skills={skills} onCancel={() => clientRef.current?.fire('cancel', null, curRef.current)} />
+          <Composer busy={busy} onSend={onSubmit} onToast={setToast} commands={slashCommands} skills={skills} onCancel={() => clientRef.current?.fire('cancel', null, curRef.current)} />
         </div>
 
         {paneOpen && (
@@ -716,6 +774,7 @@ export function App() {
             err={surfaceErr}
             onActivate={setActiveSurface}
             onAction={surfaceAction}
+            onFetchNode={fetchNode}
             onClose={() => setPaneOpen(false)}
             onRestart={canRestart ? restart : undefined}
             trusted={!!curInfo?.trusted}
@@ -962,13 +1021,34 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   )
 }
 
+// ImageGallery renders a message's image attachments as inline thumbnails that
+// open full-size in a new tab. Data is base64 already on the item, so the src is
+// a self-contained data: URL — no extra fetch.
+function ImageGallery({ images }: { images: ImageAttachment[] }) {
+  return (
+    <div class="msg-images">
+      {images.map((im, i) => {
+        const src = `data:${im.mime};base64,${im.data}`
+        return (
+          <a key={i} class="msg-image-link" href={src} target="_blank" rel="noreferrer">
+            <img class="msg-image" src={src} alt={t('attached image')} loading="lazy" />
+          </a>
+        )
+      })}
+    </div>
+  )
+}
+
 function Bubble({ item, toolView }: { item: Item; toolView: ToolView }) {
   switch (item.kind) {
     case 'user':
       return (
         <div class="msg-wrap user-wrap">
-          <div class="msg user">{item.text}</div>
-          <CopyButton text={item.text} />
+          <div class="msg user">
+            {item.text}
+            {item.images && <ImageGallery images={item.images} />}
+          </div>
+          {item.text && <CopyButton text={item.text} />}
         </div>
       )
     case 'assistant':
@@ -979,8 +1059,11 @@ function Bubble({ item, toolView }: { item: Item; toolView: ToolView }) {
       }
       return (
         <div class="msg-wrap assistant-wrap">
-          <div class="msg assistant md" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
-          <CopyButton text={item.text} />
+          <div class="msg assistant md">
+            <div dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
+            {item.images && <ImageGallery images={item.images} />}
+          </div>
+          {item.text && <CopyButton text={item.text} />}
         </div>
       )
     case 'error':
@@ -1020,6 +1103,7 @@ function Bubble({ item, toolView }: { item: Item; toolView: ToolView }) {
             {item.args != null && <span class="tool-args">{compact(item.args)}</span>}
           </div>
           {item.result && <pre class={`tool-result${item.error ? ' err' : ''}`}>{truncate(item.result, 2000)}</pre>}
+          {item.images && <ImageGallery images={item.images} />}
         </div>
       )
   }
@@ -1123,17 +1207,20 @@ function AskCard({ req, onAnswer }: { req: AskRequest; onAnswer: (id: string, te
 function Composer({
   busy,
   onSend,
+  onToast,
   commands,
   skills,
   onCancel,
 }: {
   busy: boolean
-  onSend: (t: string) => void
+  onSend: (t: string, images: ImageAttachment[]) => boolean
+  onToast: (msg: string) => void
   commands: SlashCommand[]
   skills: SkillInfo[]
   onCancel: () => void
 }) {
   const [text, setText] = useState('')
+  const [images, setImages] = useState<ImageAttachment[]>([])
   const [sel, setSel] = useState(0)
   const [dismissed, setDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -1146,11 +1233,27 @@ function Composer({
     el.style.height = Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4)) + 'px'
   }, [text])
 
+  // addFiles reads image files (from paste or drop) into attachments, toasting
+  // any that are the wrong type or too big rather than silently dropping them.
+  const addFiles = async (files: File[]) => {
+    const results = await Promise.all(files.map(fileToAttachment))
+    const ok: ImageAttachment[] = []
+    for (const r of results) {
+      if (r && 'error' in r) onToast(r.error)
+      else if (r) ok.push(r)
+    }
+    if (ok.length) setImages((cur) => [...cur, ...ok])
+  }
+
   const submit = () => {
-    if (!text.trim()) return
-    onSend(text)
-    setText('')
-    setDismissed(false)
+    if (!text.trim() && images.length === 0) return
+    // Clear only if the send was accepted (a busy image send is refused so the
+    // attachments aren't lost).
+    if (onSend(text, images)) {
+      setText('')
+      setImages([])
+      setDismissed(false)
+    }
   }
   // Choose a command from the menu: argless commands run immediately; commands
   // that take an argument prime "/name " and keep focus for the argument.
@@ -1159,7 +1262,7 @@ function Composer({
       setText('/' + c.name + ' ')
       ref.current?.focus()
     } else {
-      onSend('/' + c.name)
+      onSend('/' + c.name, [])
       setText('')
     }
     setDismissed(false)
@@ -1201,7 +1304,17 @@ function Composer({
   const clampedSel = Math.min(sel, Math.max(0, menu.length - 1))
 
   return (
-    <footer class="composer">
+    <footer
+      class="composer"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        const files = [...(e.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith('image/'))
+        if (files.length) {
+          e.preventDefault()
+          void addFiles(files)
+        }
+      }}
+    >
       {menuOpen && (
         <div class="slash-menu" role="listbox">
           {menu.map((it, i) => (
@@ -1221,11 +1334,38 @@ function Composer({
           ))}
         </div>
       )}
+      {images.length > 0 && (
+        <div class="composer-chips">
+          {images.map((im, i) => (
+            <div key={i} class="composer-chip">
+              <img src={`data:${im.mime};base64,${im.data}`} alt={t('attached image')} />
+              <button
+                class="chip-x"
+                title={t('Remove')}
+                aria-label={t('Remove')}
+                onClick={() => setImages((cur) => cur.filter((_, j) => j !== i))}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <textarea
         ref={ref}
         rows={1}
         value={text}
         placeholder={t('Message terva…')}
+        onPaste={(e) => {
+          const files = [...(e.clipboardData?.items ?? [])]
+            .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+            .map((it) => it.getAsFile())
+            .filter((f): f is File => f != null)
+          if (files.length) {
+            e.preventDefault()
+            void addFiles(files)
+          }
+        }}
         onInput={(e) => {
           setText((e.target as HTMLTextAreaElement).value)
           setSel(0)
@@ -1369,7 +1509,7 @@ function ModelPicker({
   groups: [string, ModelInfo[]][]
   favorites: ModelInfo[]
   current?: string
-  onSwitch: (id: string) => void
+  onSwitch: (id: string, provider?: string) => void
   onToggleFavorite: (provider: string, id: string, on: boolean) => void
   onClose: () => void
 }) {
@@ -1388,7 +1528,7 @@ function ModelPicker({
     <div
       key={keyPrefix + m.provider + '/' + m.id}
       class={`pick-row${m.id === current ? ' current' : ''}`}
-      onClick={() => onSwitch(m.id)}
+      onClick={() => onSwitch(m.id, m.provider)}
     >
       <button
         class="pick-star"
@@ -1447,6 +1587,7 @@ function PaneHost({
   err,
   onActivate,
   onAction,
+  onFetchNode,
   onClose,
   onRestart,
   trusted,
@@ -1458,6 +1599,7 @@ function PaneHost({
   err: string
   onActivate: (id: string) => void
   onAction: (id: string, action: string, args?: Record<string, string>) => void
+  onFetchNode: (id: string, op?: string) => Promise<ContextNode>
   onClose: () => void
   onRestart?: () => void
   trusted?: boolean
@@ -1494,7 +1636,16 @@ function PaneHost({
       <div class="pane-body">
         {err && <div class="pick-empty">{err}</div>}
         {!data && !err && <div class="pick-empty">{t('loading…')}</div>}
-        {data && <SurfaceView surface={data} onAction={onAction} onRestart={onRestart} trusted={trusted} onTrust={onTrust} />}
+        {data && (
+          <SurfaceView
+            surface={data}
+            onAction={onAction}
+            onFetchNode={onFetchNode}
+            onRestart={onRestart}
+            trusted={trusted}
+            onTrust={onTrust}
+          />
+        )}
       </div>
     </aside>
   )
@@ -1503,19 +1654,21 @@ function PaneHost({
 function SurfaceView({
   surface,
   onAction,
+  onFetchNode,
   onRestart,
   trusted,
   onTrust,
 }: {
   surface: Surface
   onAction: (id: string, action: string, args?: Record<string, string>) => void
+  onFetchNode: (id: string, op?: string) => Promise<ContextNode>
   onRestart?: () => void
   trusted?: boolean
   onTrust?: (trust: boolean) => void
 }) {
   switch (surface.kind) {
     case 'context':
-      return surface.context ? <ContextBody d={surface.context} /> : null
+      return surface.context ? <ContextBody d={surface.context} onFetchNode={onFetchNode} /> : null
     case 'tasks':
       return surface.tasks ? <TasksBody list={surface.tasks} onAction={onAction} /> : null
     case 'settings':
@@ -2411,12 +2564,22 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '')
 }
 
-function ContextBody({ d }: { d: ContextBreakdown }) {
+function ContextBody({
+  d,
+  onFetchNode,
+}: {
+  d: ContextBreakdown
+  onFetchNode: (id: string, op?: string) => Promise<ContextNode>
+}) {
   const realTok = d.context_tokens ?? 0
   const estTok = Math.round(d.total_bytes / 4)
   const gaugeTok = realTok > 0 ? realTok : estTok
   let largest = 0
   for (let i = 1; i < d.messages.length; i++) if (d.messages[i].bytes > d.messages[largest].bytes) largest = i
+  // Prefer the context-tree outline (turns → messages, collapsible); fall back to
+  // the flat message list when talking to a server without the context-tree feature.
+  const transcriptNode = d.tree?.children?.find((c) => c.id === 'tr')
+  const useTree = !!transcriptNode && (transcriptNode.children?.length ?? 0) > 0
   return (
     <div class="ctx-body">
       {(d.provider || d.model) && (
@@ -2449,19 +2612,127 @@ function ContextBody({ d }: { d: ContextBreakdown }) {
           <CtxRow label={t('TOTAL')} bytes={d.total_bytes} note="" />
         </div>
       </div>
-      {d.messages.length > 0 && (
-        <div class="ctx-msgs">
-          {d.messages.map((m) => (
-            <div key={m.index} class={`ctx-msg${m.index === largest && d.messages.length > 1 ? ' largest' : ''}`}>
-              <span class="ctx-msg-i">[{m.index}]</span>
-              <span class="ctx-msg-kind">{m.kind}</span>
-              <span class="ctx-msg-b">{humanBytes(m.bytes)}</span>
-              {m.index === largest && d.messages.length > 1 && <span class="ctx-msg-tag">← {t('largest')}</span>}
-            </div>
+      {useTree ? (
+        <>
+          <div class="ctx-section-label">{t('transcript — by turn')}</div>
+          <ContextTree node={transcriptNode!} onFetchNode={onFetchNode} />
+        </>
+      ) : (
+        d.messages.length > 0 && (
+          <div class="ctx-msgs">
+            {d.messages.map((m) => (
+              <div key={m.index} class={`ctx-msg${m.index === largest && d.messages.length > 1 ? ' largest' : ''}`}>
+                <span class="ctx-msg-i">[{m.index}]</span>
+                <span class="ctx-msg-kind">{m.kind}</span>
+                <span class="ctx-msg-b">{humanBytes(m.bytes)}</span>
+                {m.index === largest && d.messages.length > 1 && <span class="ctx-msg-tag">← {t('largest')}</span>}
+              </div>
+            ))}
+          </div>
+        )
+      )}
+      <div class="ctx-note">{t('sizes are bytes; token counts are ~bytes/4 estimates')}</div>
+    </div>
+  )
+}
+
+// ContextTree renders the transcript section's turns as a collapsible tree.
+// Turns start collapsed — you browse turn headers and drill into one — and the
+// single largest message across the transcript is flagged. Stage 1 has no lazy
+// content fetch: every node is already inline (pre-expanded stubs), so expanding
+// only toggles visibility. See docs/proposals/context-inspector.md.
+function ContextTree({
+  node,
+  onFetchNode,
+}: {
+  node: ContextNode
+  onFetchNode: (id: string, op?: string) => Promise<ContextNode>
+}) {
+  const turns = node.children ?? []
+  let largestId = ''
+  let largestBytes = -1
+  for (const turn of turns)
+    for (const m of turn.children ?? [])
+      if (m.bytes > largestBytes) {
+        largestBytes = m.bytes
+        largestId = m.id
+      }
+  return (
+    <div class="ctx-tree">
+      {turns.map((turn) => (
+        <TreeNode key={turn.id} node={turn} largestId={largestId} onFetchNode={onFetchNode} />
+      ))}
+    </div>
+  )
+}
+
+// TreeNode renders one context node. A node with inline children (turns) toggles
+// visibility; an `expandable` node with no inline children fetches its content
+// via context.node on first open; a node carrying `content` shows it in a
+// scrollable body. Every level is collapsed by default — you drill in.
+function TreeNode({
+  node,
+  largestId,
+  onFetchNode,
+}: {
+  node: ContextNode
+  largestId: string
+  onFetchNode: (id: string, op?: string) => Promise<ContextNode>
+}) {
+  const inlineKids = node.children ?? []
+  const fetchable = !!node.expandable || !!node.reveal
+  const canOpen = inlineKids.length > 0 || fetchable || !!node.content
+  const [open, setOpen] = useState(false)
+  const [fetched, setFetched] = useState<ContextNode | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState('')
+  const isLargest = node.id === largestId
+  const isMsg = node.kind === 'message'
+
+  const eff = fetched ?? node
+  const kids = eff.children ?? []
+  const content = eff.content
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    // Fetch on first open: expand (content/children) or reveal (a compaction's
+    // replaced span). The node names its own reveal op; expand passes none.
+    if (next && fetchable && !fetched && inlineKids.length === 0) {
+      setLoading(true)
+      setErr('')
+      onFetchNode(node.id, node.reveal || undefined)
+        .then((n) => setFetched(n))
+        .catch((e) => setErr(String(e)))
+        .finally(() => setLoading(false))
+    }
+  }
+
+  return (
+    <div class="ctx-tnode">
+      <div
+        class={`ctx-trow${canOpen ? ' has-kids' : ''}${isLargest ? ' largest' : ''}${node.kind === 'event' ? ' ctx-event' : ''}`}
+        onClick={canOpen ? toggle : undefined}
+      >
+        <span class="ctx-tchev">{canOpen ? (open ? '▾' : '▸') : ''}</span>
+        {isMsg && node.meta?.index != null && <span class="ctx-msg-i">[{node.meta.index}]</span>}
+        <span class="ctx-tlabel">{node.label}</span>
+        {node.summary && <span class="ctx-tsummary">{node.summary}</span>}
+        {node.reveal && <span class="ctx-treveal">⤢ {t('reveal')}</span>}
+        {node.meta?.msgs && <span class="ctx-tcount">{tn(Number(node.meta.msgs), '%d msg', '%d msgs')}</span>}
+        <span class="ctx-tbytes">{humanBytes(node.bytes)}</span>
+        {isLargest && <span class="ctx-msg-tag">← {t('largest')}</span>}
+      </div>
+      {open && (
+        <div class="ctx-tkids">
+          {loading && <div class="ctx-tmuted">{t('loading…')}</div>}
+          {err && <div class="ctx-terr">{err}</div>}
+          {content && <pre class="ctx-tcontent">{content}</pre>}
+          {kids.map((c) => (
+            <TreeNode key={c.id} node={c} largestId={largestId} onFetchNode={onFetchNode} />
           ))}
         </div>
       )}
-      <div class="ctx-note">{t('sizes are bytes; token counts are ~bytes/4 estimates')}</div>
     </div>
   )
 }

@@ -19,6 +19,19 @@ export interface WireBlock {
   is_error?: boolean
   content?: WireBlock[]
   mime_type?: string
+  // data is the base64 image payload (Go []byte → base64 string), present on
+  // image blocks only when the "image-data" feature is negotiated; bytes is
+  // the size, always present. See docs/controllers.md.
+  data?: string
+  bytes?: number
+}
+
+// PromptImage is one inbound attachment on a prompt (the "images" feature).
+// data is base64 — the JSON shape of ctrlproto.Image (Go []byte marshals to a
+// base64 string).
+export interface PromptImage {
+  mime_type: string
+  data: string
 }
 
 export interface WireMessage {
@@ -89,6 +102,23 @@ export interface ContextMessage {
   bytes: number
 }
 
+// ContextNode is one node of the context-tree outline (ContextBreakdown.tree).
+// The kind vocabulary is open — render an unknown kind by its label + bytes. ids
+// are opaque, passed back to context.node (later stages). Mirrors ctrlproto.ContextNode.
+export interface ContextNode {
+  id: string
+  kind: string // section | turn | message | block | event
+  label: string
+  bytes: number
+  tokens?: number
+  summary?: string
+  content?: string // full leaf body, populated on a context.node expand
+  expandable?: boolean
+  reveal?: string
+  meta?: Record<string, string>
+  children?: ContextNode[]
+}
+
 export interface UsageWindow {
   label: string
   used_percent: number
@@ -113,6 +143,11 @@ export interface ContextBreakdown {
   cumulative: WireUsage
   subscription?: boolean
   usage_windows?: UsageWindow[]
+  // Hierarchical outline (context-tree feature): sections → transcript turns →
+  // message stubs. A superset of `messages`; render this when present, else the
+  // flat list. `rev` is the transcript epoch the ids were minted at.
+  tree?: ContextNode
+  rev?: number
 }
 
 // Surfaces: the auxiliary panes (context, usage, extension panels) the pane host
@@ -433,7 +468,10 @@ export class Client {
             agent: 'terva-web',
             version: '1',
             groups: ['conversation', 'session', 'control'],
-            features: ['images', 'resolve-events'],
+            // images = inbound attachments on prompt; image-data = outbound
+            // image payloads in the transcript (agent-generated images, echoed
+            // attachments, tool-result screenshots) render as real pixels.
+            features: ['images', 'image-data', 'resolve-events'],
           },
         }),
       )

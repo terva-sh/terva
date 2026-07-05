@@ -219,6 +219,10 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .tool-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .tool-name { font-family: ui-monospace, SFMono-Regular, monospace; font-weight: 600; }
 .tool-args { font-family: ui-monospace, monospace; color: var(--muted); overflow-wrap: anywhere; }
+/* inline image attachments in a message/tool bubble */
+.msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.msg-image-link { display: block; line-height: 0; }
+.msg-image { max-width: min(320px, 100%); max-height: 320px; border-radius: 8px; border: 1px solid var(--line); }
 .tool-result { margin: 4px 0 0; padding: 6px 8px; background: var(--panel); border-radius: 8px; white-space: pre-wrap; overflow-x: auto; font-size: 12px; max-height: 240px; overflow-y: auto; }
 .tool-result.err { color: var(--danger); }
 /* minimal tool line: greyed + non-interactive-looking (TUI's minimal mode) */
@@ -245,7 +249,12 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .ask-custom input { flex: 1; font: inherit; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 
 /* composer */
-.composer { position: relative; display: flex; gap: 8px; padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
+.composer { position: relative; display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
+/* pasted/dropped image attachments, on their own row above the textarea */
+.composer-chips { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+.composer-chip { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+.composer-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.chip-x { position: absolute; top: 1px; right: 1px; width: 18px; height: 18px; line-height: 16px; padding: 0; border: 0; border-radius: 50%; background: #000a; color: #fff; font-size: 14px; cursor: pointer; }
 /* slash-command autocomplete, anchored above the composer */
 .slash-menu { position: absolute; left: 12px; right: 12px; bottom: calc(100% - 2px); max-height: 45vh; overflow-y: auto; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 -4px 16px rgba(0,0,0,.18); padding: 4px; z-index: 20; }
 .slash-item { display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left; padding: 6px 10px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; cursor: pointer; }
@@ -370,6 +379,23 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .ctx-msg-kind { flex: 1; min-width: 0; }
 .ctx-msg-b { flex: none; text-align: right; font-variant-numeric: tabular-nums; }
 .ctx-msg-tag { flex: none; }
+/* context-tree outline: collapsible turns → messages */
+.ctx-tree { border: 1px solid var(--line); border-radius: 8px; max-height: 42vh; overflow-y: auto; padding: 2px 0; }
+.ctx-trow { display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; font-size: 12px; font-family: ui-monospace, monospace; border-radius: 4px; }
+.ctx-trow.has-kids { cursor: pointer; }
+.ctx-trow.has-kids:hover { background: color-mix(in srgb, var(--muted) 10%, transparent); }
+.ctx-trow.largest { color: var(--warning, #d1901f); }
+.ctx-tchev { flex: none; width: 12px; color: var(--muted); }
+.ctx-tlabel { flex: none; white-space: nowrap; }
+.ctx-tsummary { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-tcount { flex: none; color: var(--muted); }
+.ctx-tbytes { flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+.ctx-tkids { margin-left: 10px; border-left: 1px solid var(--line); }
+.ctx-tcontent { margin: 2px 8px 6px; padding: 6px 8px; background: color-mix(in srgb, var(--muted) 8%, transparent); border-radius: 6px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; max-height: 30vh; overflow: auto; }
+.ctx-tmuted { padding: 2px 8px; font-size: 12px; color: var(--muted); }
+.ctx-terr { padding: 2px 8px; font-size: 12px; color: var(--danger, #d1495b); }
+.ctx-trow.ctx-event .ctx-tlabel { color: var(--accent, #6ea8fe); font-weight: 600; }
+.ctx-treveal { flex: none; font-size: 11px; color: var(--accent, #6ea8fe); border: 1px solid color-mix(in srgb, var(--accent, #6ea8fe) 40%, transparent); border-radius: 4px; padding: 0 4px; }
 .ctx-note { font-size: 12px; color: var(--muted); }
 .info-actions { display: flex; justify-content: flex-end; padding-top: 4px; }
 
