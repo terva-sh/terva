@@ -278,12 +278,16 @@ type ModelOption struct {
 // the current provider client can serve the new model (same provider, same
 // endpoint), so the acp package calls SetModel(Model). Otherwise Client is the
 // freshly built provider client for the target model and the acp package calls
-// SetClientAndModel(Client, Model), preserving the transcript.
+// SetClientAndModel(Client, Model), preserving the transcript — and, since that
+// keeps the tool registry, re-binds terva_status to AuthMethod/BaseURL so the
+// status report doesn't keep naming the previous provider.
 type ModelSwitch struct {
-	Provider string
-	Model    string
-	Client   provider.Client // non-nil only when Reuse is false
-	Reuse    bool
+	Provider   string
+	Model      string
+	Client     provider.Client // non-nil only when Reuse is false
+	Reuse      bool
+	AuthMethod string // "apikey" | "oauth" | "" — the target's, for Reuse==false
+	BaseURL    string // target endpoint, for Reuse==false
 }
 
 // AgentInfo is the {name, version} terva reports in initialize.

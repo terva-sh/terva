@@ -5,6 +5,7 @@ package acp
 import (
 	"encoding/json"
 
+	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 )
 
@@ -104,6 +105,16 @@ func (s *agentServer) handleSetConfigOption(params json.RawMessage) (any, error)
 		sess.agent.SetModel(sw.Model)
 	} else {
 		sess.agent.SetClientAndModel(sw.Client, sw.Model)
+		// The client swap keeps the tool registry, so terva_status still
+		// carries the previous provider identity — re-bind it, or the tool
+		// reports the old provider and loses the context-window size
+		// (FindModel(oldProvider, newModel) misses). Mirrors
+		// Workspace.switchModel in the web/ctrlproto path.
+		if st, ok := sess.agent.LookupTool("terva_status"); ok {
+			if stt, ok := st.(*tools.StatusTool); ok {
+				stt.SetProvider(sw.Provider, sw.AuthMethod, sw.BaseURL)
+			}
+		}
 	}
 	sess.setModel(sw.Provider, sw.Model)
 

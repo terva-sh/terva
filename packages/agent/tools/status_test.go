@@ -74,6 +74,58 @@ func TestStatusToolNilAgentDegradesGracefully(t *testing.T) {
 	}
 }
 
+// TestStatusSetProviderRebindsAfterCrossProviderSwap reproduces the web /
+// ctrlproto bug: a cross-provider model swap (SetClientAndModel) updates
+// the live agent's model but keeps the registry, so terva_status kept
+// naming the OLD provider — and because FindModel(oldProvider, newModel)
+// misses, the context window read as unknown. SetProvider re-binds the
+// identity so both are correct again.
+func TestStatusSetProviderRebindsAfterCrossProviderSwap(t *testing.T) {
+	// Live agent now runs a real anthropic model (post-swap), but the tool
+	// was built for the previous provider ("openai" + oauth) and never
+	// rebuilt — the stale state the bug leaves behind.
+	ag := &core.Agent{Model: "claude-sonnet-4-5"}
+	ag.SeedLastTurnUsage(provider.Usage{InputTokens: 10000})
+	st := &StatusTool{Provider: "openai", AuthMethod: "oauth", Agent: ag}
+
+	before := statusText(mustExec(t, st))
+	if !strings.Contains(before, "provider: openai") {
+		t.Errorf("precondition: expected the stale provider; got:\n%s", before)
+	}
+	if !strings.Contains(before, "window size unknown") {
+		t.Errorf("precondition: stale provider should break the window lookup; got:\n%s", before)
+	}
+
+	// The swap re-binds the identity to the model's real provider.
+	st.SetProvider("anthropic", "apikey", "")
+
+	after := statusText(mustExec(t, st))
+	for _, want := range []string{
+		"provider: anthropic",
+		"auth: api key",
+		"% of window", // window now resolves for anthropic/claude-sonnet-4-5
+	} {
+		if !strings.Contains(after, want) {
+			t.Errorf("after SetProvider, output missing %q\n--- output ---\n%s", want, after)
+		}
+	}
+	if strings.Contains(after, "provider: openai") {
+		t.Errorf("SetProvider did not clear the stale provider\n--- output ---\n%s", after)
+	}
+	if d, ok := mustExec(t, st).Details.(map[string]any); ok && d["provider"] != "anthropic" {
+		t.Errorf("Details provider still stale: %v", d["provider"])
+	}
+}
+
+func mustExec(t *testing.T, st *StatusTool) core.ToolResult {
+	t.Helper()
+	res, err := st.Execute(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	return res
+}
+
 func TestFmtTokens(t *testing.T) {
 	cases := map[int]string{0: "0", 850: "850", 12300: "12.3k", 1_500_000: "1.5M"}
 	for in, want := range cases {

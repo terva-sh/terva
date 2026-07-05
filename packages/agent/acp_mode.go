@@ -305,10 +305,12 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 		return acp.ModelSwitch{}, fmt.Errorf("no credential resolved for provider %q", target.Provider)
 	}
 	return acp.ModelSwitch{
-		Provider: r.Provider,
-		Model:    r.Model,
-		Client:   r.NewClient(),
-		Reuse:    false,
+		Provider:   r.Provider,
+		Model:      r.Model,
+		Client:     r.NewClient(),
+		Reuse:      false,
+		AuthMethod: r.AuthMethod,
+		BaseURL:    r.BaseURL,
 	}, nil
 }
 

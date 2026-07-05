@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -20,17 +21,28 @@ import (
 // lets the model check "how full is my context?" and decide whether to
 // wrap up or summarize before it gets force-compacted.
 //
-// Static facts (Provider, CWD, AuthMethod, BaseURL) are captured when
-// the tool is built. Live facts (current model, reasoning, token usage,
-// session identity) are read from the CALLING *core.Agent at call time
-// — resolved from the dispatch context first (core.AgentFromContext),
-// so the report is correct even when several live agents share this
-// tool through one registry (bot mode mints an agent per chat) — and
-// they stay correct across both same-provider /model swaps (which
-// mutate the agent in place) and cross-provider swaps (which rebuild
-// the agent and this tool). Provider can only change via a rebuild, so
-// capturing it is safe.
+// CWD is captured when the tool is built. The provider-identity facts
+// (Provider, AuthMethod, BaseURL) start captured too but are also
+// re-bound by SetProvider: a cross-provider model swap that keeps the
+// same agent + registry rather than rebuilding them (the web/ctrlproto
+// path — Workspace.switchModel — and any other SetClientAndModel host)
+// must push the new provider in, or the report would keep naming the
+// launch-time provider and the stale name would break the
+// context-window lookup below. The TUI/RPC /model path instead rebuilds
+// the whole registry, minting a fresh tool with the new facts.
+//
+// Live facts (current model, reasoning, token usage, session identity)
+// are read from the CALLING *core.Agent at call time — resolved from
+// the dispatch context first (core.AgentFromContext), so the report is
+// correct even when several live agents share this tool through one
+// registry (bot mode mints an agent per chat) — and they stay correct
+// across same-provider /model swaps (which mutate the agent in place).
 type StatusTool struct {
+	// mu guards the provider-identity fields against a concurrent
+	// SetProvider (a swap can land mid-turn, while Execute is reading
+	// them on the turn goroutine). CWD/Agent are set at construction and
+	// not re-bound at runtime, so they sit outside the lock.
+	mu         sync.RWMutex
 	Provider   string
 	CWD        string
 	AuthMethod string // "apikey" | "oauth" | ""
@@ -45,6 +57,21 @@ type StatusTool struct {
 	// nil, the tool reports the static facts and marks live usage
 	// unavailable.
 	Agent *core.Agent
+}
+
+// SetProvider re-binds the provider-identity facts after a live
+// cross-provider model swap that keeps this tool's agent and registry
+// (SetClientAndModel) rather than rebuilding them. Without it,
+// terva_status keeps reporting the launch-time provider, auth method,
+// and endpoint after such a swap — and the stale provider name silently
+// breaks the context-window lookup, because FindModel(oldProvider,
+// newModel) misses and the window reads as unknown.
+func (t *StatusTool) SetProvider(provider, authMethod, baseURL string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Provider = provider
+	t.AuthMethod = authMethod
+	t.BaseURL = baseURL
 }
 
 func (t *StatusTool) Name() string { return "terva_status" }
@@ -80,9 +107,16 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 		last = agent.LastTurnUsage()
 	}
 
+	// Snapshot the provider-identity facts under the lock SetProvider
+	// writes with: a web/ctrlproto cross-provider swap can re-bind them
+	// mid-turn, concurrent with this Execute.
+	t.mu.RLock()
+	provName, authMethod, baseURL := t.Provider, t.AuthMethod, t.BaseURL
+	t.mu.RUnlock()
+
 	var sb strings.Builder
 
-	prov := t.Provider
+	prov := provName
 	if prov == "" {
 		prov = "(unknown)"
 	}
@@ -90,14 +124,14 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 	if model != "" {
 		fmt.Fprintf(&sb, "model: %s\n", model)
 	}
-	switch t.AuthMethod {
+	switch authMethod {
 	case "oauth":
 		sb.WriteString("auth: subscription (oauth)\n")
 	case "apikey":
 		sb.WriteString("auth: api key\n")
 	}
-	if t.BaseURL != "" {
-		fmt.Fprintf(&sb, "base url: %s\n", t.BaseURL)
+	if baseURL != "" {
+		fmt.Fprintf(&sb, "base url: %s\n", baseURL)
 	}
 	if reasoning != "" {
 		fmt.Fprintf(&sb, "reasoning effort: %s\n", reasoning)
@@ -128,7 +162,7 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 	// recent completed turn's input, matching the status-bar gauge.
 	ctxWindow := 0
 	if model != "" {
-		if m, err := provider.FindModel(t.Provider, model); err == nil {
+		if m, err := provider.FindModel(provName, model); err == nil {
 			ctxWindow = m.ContextWindow
 		}
 	}
@@ -162,7 +196,7 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: sb.String()}},
 		Details: map[string]any{
-			"provider":       t.Provider,
+			"provider":       provName,
 			"model":          model,
 			"cwd":            cwd,
 			"project_id":     projectID,

@@ -16,6 +16,7 @@ import (
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/external"
 	"terva.sh/terva/packages/agent/procenv"
+	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 )
@@ -569,6 +570,19 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 			}
 			loop.SetClientAndModel(next.NewClient(), next.Model)
 			loop.UpdateStatusContext(next.Provider, next.AuthMethod, next.CWD)
+			// UpdateStatusContext refreshes the /status connector command;
+			// terva_status (what the MODEL sees) reads a separate tool that
+			// SetClientAndModel doesn't touch. Rebind it too, or a
+			// cross-provider config change leaves the model reporting the old
+			// provider and losing the context-window size. The tool is shared
+			// across every per-chat agent (one resolved.ToolRegistry), so one
+			// call covers them all. Mirrors Workspace.switchModel (web) and the
+			// ACP path.
+			if st, ok := loop.Agent.LookupTool("terva_status"); ok {
+				if stt, ok := st.(*tools.StatusTool); ok {
+					stt.SetProvider(next.Provider, next.AuthMethod, next.BaseURL)
+				}
+			}
 			return nil
 		},
 	}
