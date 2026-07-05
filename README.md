@@ -153,6 +153,7 @@ terva --help
 | [docs/connectors.md](docs/connectors.md) | Chat connectors: the telegram and discord bridges, external connectors in any language, group admission, approvals over chat |
 | [docs/deploy.md](docs/deploy.md) | Running bots as services: systemd units and the container image, for persistent, resuming, capability-scoped connector agents |
 | [docs/extensions.md](docs/extensions.md) | Extensions: installing, managing, and the full wire protocol |
+| [docs/controllers.md](docs/controllers.md) | The control-plane protocol (`ctrlproto`): frames, method groups, events, carriers, and the management-plane horizon |
 | [docs/skills.md](docs/skills.md) | `SKILL.md` reusable instructions: anatomy, discovery, authoring |
 | [docs/personas.md](docs/personas.md) | Personas and immersive chat/play: charters, immersive identities, character cards, the cast + `actor_spawn`, and the mode flags |
 | [docs/debugging-prompts.md](docs/debugging-prompts.md) | Inspecting the assembled prompt (`--dump-prompt`), the lore engine, and card/lore/greeting troubleshooting |

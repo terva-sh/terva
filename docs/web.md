@@ -10,7 +10,7 @@ binary exactly like the `terva acp` mode and the chat connectors. The full
 install one-liner and `just install` include it.
 
 - Design: [docs/proposals/terva-web.md](proposals/terva-web.md)
-- Protocol: [docs/proposals/control-plane-protocol.md](proposals/control-plane-protocol.md) (`ctrlproto`)
+- Protocol: [docs/controllers.md](controllers.md) (`ctrlproto` reference) · [design rationale](proposals/control-plane-protocol.md)
 - Horizon: [docs/proposals/terva-platform.md](proposals/terva-platform.md)
 
 ## Running it

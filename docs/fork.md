@@ -91,13 +91,15 @@ makes a minimal connector ~50 lines. See
 
 ## Upstream posture
 
-We watch zot and pull changes when they're worth pulling. A
-translation workflow exists exactly for that:
-`scripts/rename-upstream.sh` maps upstream's naming (and module path)
-onto terva's, and `just upstream-merge` rebuilds an
-`upstream-translated` branch from `upstream/main`, translates it, and
-merges the translation. Upstream consumption is occasional, not a
-cadence — their direction may inform ours; it doesn't steer it.
+Upstream tracking was retired in July 2026: the fork has diverged past
+the point where pulling upstream commits is meaningful (most
+fundamentally, every terva frontend now drives the agent through the
+ctrlproto control plane, a seam upstream doesn't have). There is no
+`upstream` remote, no sync mirror, and no drift cadence. Should a
+specific upstream change ever be worth a one-off manual port,
+`scripts/rename-upstream.sh` still translates their naming (and module
+path) onto terva's — run it over a copy of their tree and cherry-pick
+by hand. Their direction may inform ours; it doesn't steer it.
 
 ## Compatibility promises
 
