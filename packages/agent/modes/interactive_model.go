@@ -35,6 +35,13 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 	if model == "" {
 		return
 	}
+	// ctrlproto mode: the workspace owns the swap (in-place for the same
+	// provider+endpoint, a fresh client otherwise — which drops launch-time
+	// key/URL overrides, exactly the rescue semantics).
+	if i.cfg.Carrier != nil {
+		i.swapModelCarrier(prov, model, rescue)
+		return
+	}
 	m, err := provider.FindModel(prov, model)
 	if err != nil {
 		i.mu.Lock()

@@ -17,13 +17,21 @@ import (
 
 // swarmAgentCount is the live (running or pending) background-agent
 // count for the status bar's swarm segment. Swarm keeps its own
-// locking; called per frame outside i.mu like statusUsageWindows.
+// locking; called per frame outside i.mu like statusUsageWindows. On
+// the carrier path the count reads the cached tasks surface, which
+// only re-fetches when the daemon signalled a change.
 func (i *Interactive) swarmAgentCount() int {
-	if i.cfg.Swarm == nil {
+	var rows []swarm.AgentSnapshot
+	switch {
+	case i.cfg.Carrier != nil && i.cfg.CarrierTasks:
+		rows = i.carrierTaskSnapshot()
+	case i.cfg.Swarm != nil:
+		rows = i.cfg.Swarm.SnapshotAll()
+	default:
 		return 0
 	}
 	n := 0
-	for _, a := range i.cfg.Swarm.SnapshotAll() {
+	for _, a := range rows {
 		if a.Status == swarm.StatusRunning || a.Status == swarm.StatusPending {
 			n++
 		}
@@ -47,6 +55,12 @@ func (i *Interactive) sessionShortName() string {
 func editStats(tool string, res core.ToolResult) (added, removed int) {
 	if res.IsError {
 		return 0, 0
+	}
+	// First-class counts (set by the in-tree edit/write tools; they also ride
+	// the event wire). The Details parse below stays as the fallback for
+	// tools that only ship the map.
+	if res.LinesAdded > 0 || res.LinesRemoved > 0 {
+		return res.LinesAdded, res.LinesRemoved
 	}
 	details, ok := res.Details.(map[string]any)
 	if !ok {

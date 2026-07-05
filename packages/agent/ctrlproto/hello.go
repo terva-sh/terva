@@ -17,6 +17,12 @@ const (
 	// extensions, prompt overrides, templates, jail. Categorically higher
 	// authority than the other two (see the protocol proposal's security note).
 	GroupControl Group = "control"
+	// GroupReplay carries a recorded session's transport (replay.control /
+	// replay.state) and its replay_state broadcast. Optional and off the base
+	// ServerHello — only a carrier backing a ReplayController advertises it, so a
+	// client that negotiates it is guaranteed the group is served. See
+	// docs/proposals/session-player.md.
+	GroupReplay Group = "replay"
 )
 
 // Feature strings name additive capabilities negotiated on top of the groups.
@@ -32,6 +38,20 @@ const (
 	// (Tier-1 self-restart), so a client can show a restart control. Set by the
 	// composition root only when --web-allow-restart is passed.
 	FeatureRestart = "restart"
+	// FeatureContextTree advertises that context.get carries the hierarchical
+	// ContextBreakdown.Tree (section/turn/message outline). A client that sees it
+	// renders the collapsible tree; one that doesn't falls back to the flat
+	// Messages list. See docs/proposals/context-inspector.md.
+	FeatureContextTree = "context-tree"
+	// FeatureImageData advertises OUTBOUND image payloads: when negotiated,
+	// image blocks in snapshots and message/tool-result events keep their
+	// raw Data alongside MimeType+Bytes, so the client can render real
+	// pixels. Without it a serialized carrier strips Data at the connection
+	// boundary (size-only blocks; the lean wire shape) — inlined payloads
+	// are opt-in bloat, not a default. In-process carriers bypass
+	// serialization entirely and always see the full form. The inbound
+	// direction (attachments on prompt) is FeatureImages, unchanged.
+	FeatureImageData = "image-data"
 )
 
 // Hello is the handshake frame each side sends once at connect time. The
@@ -131,6 +151,6 @@ func ServerHello(agent, version string) Hello {
 		Agent:    agent,
 		Version:  version,
 		Groups:   []Group{GroupConversation, GroupSession, GroupControl},
-		Features: []string{FeatureImages, FeatureResolveEvents},
+		Features: []string{FeatureImages, FeatureResolveEvents, FeatureContextTree, FeatureImageData},
 	}
 }

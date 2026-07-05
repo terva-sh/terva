@@ -21,10 +21,64 @@ import (
 //	/swarm resume [id]           -> resume an agent (omit id to pick from a list)
 //	/swarm attach <id>           -> (planned) drop into the agent's TUI
 //
-// When cfg.Swarm is nil the command tells the user the feature is
-// disabled instead of pretending to work.
+// When neither backend is available the command tells the user the
+// feature is disabled instead of pretending to work.
 func (i *Interactive) runSwarm(ctx context.Context, args []string) {
-	if i.cfg.Swarm == nil {
+	// One callback set serves the whole dispatch: the legacy path drives the
+	// in-process *swarm.Swarm, the carrier path drives the tasks surface
+	// (spawn/stop/remove/send/resume verbs + the cached snapshot). spawn and
+	// resume return the affected agent's id when the backend can know it —
+	// surface actions carry no result payload, so the carrier's spawn returns
+	// "" and the status message omits the id (it shows up in the dashboard).
+	var (
+		snapshotFn func() []swarm.AgentSnapshot
+		stopFn     func(id string) error
+		removeFn   func(id string) error
+		spawnFn    func(task, model, provider, persona string) (string, error)
+		sendFn     func(id, text string) error
+		resumeFn   func(id string) (string, error)
+	)
+	switch {
+	case i.cfg.Carrier != nil && i.cfg.CarrierTasks:
+		snapshotFn = i.carrierTaskSnapshot
+		stopFn = func(id string) error { return i.carrierTaskAction("stop", map[string]string{"id": id}) }
+		removeFn = func(id string) error { return i.carrierTaskAction("remove", map[string]string{"id": id}) }
+		spawnFn = func(task, model, provider, persona string) (string, error) {
+			return "", i.carrierTaskAction("spawn", map[string]string{
+				"task": task, "model": model, "provider": provider, "persona": persona,
+			})
+		}
+		sendFn = func(id, text string) error {
+			return i.carrierTaskAction("send", map[string]string{"id": id, "text": text})
+		}
+		resumeFn = func(id string) (string, error) {
+			return id, i.carrierTaskAction("resume", map[string]string{"id": id})
+		}
+		// Open with a fresh snapshot even if no change signal arrived since
+		// the last fetch (the poller's signature can lag a just-issued verb).
+		i.invalidateCarrierTasks()
+	case i.cfg.Swarm != nil:
+		snapshotFn = i.cfg.Swarm.SnapshotAll
+		stopFn = i.cfg.Swarm.Stop
+		removeFn = i.cfg.Swarm.Remove
+		spawnFn = func(task, model, provider, persona string) (string, error) {
+			a, err := i.cfg.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
+				Task: task, Model: model, Provider: provider, Persona: persona,
+			})
+			if err != nil {
+				return "", err
+			}
+			return a.ID, nil
+		}
+		sendFn = i.cfg.Swarm.SendUserTurn
+		resumeFn = func(id string) (string, error) {
+			a, err := i.cfg.Swarm.Resume(ctx, id)
+			if err != nil {
+				return "", err
+			}
+			return a.ID, nil
+		}
+	default:
 		i.mu.Lock()
 		i.statusErr = i18n.T("swarm is disabled in this build")
 		i.statusOK = ""
@@ -46,21 +100,16 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		}
 	}
 
-	// spawnAdapter, sendAdapter, resumeAdapter wrap the Swarm methods
-	// in the signatures the dialog expects. Defined once here so the
-	// three Open()-shaped entry points (list, logs/view-jump, resume)
-	// feed the dialog identical callbacks.
+	// spawnAdapter / resumeAdapter narrow the backend fns to the signatures
+	// the dialog expects. Defined once here so the three Open()-shaped entry
+	// points (list, logs/view-jump, resume) feed the dialog identical
+	// callbacks.
 	spawnAdapter := func(task, model, provider string) error {
-		_, err := i.cfg.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
-			Task: task, Model: model, Provider: provider,
-		})
+		_, err := spawnFn(task, model, provider, "")
 		return err
 	}
-	sendAdapter := func(id, text string) error {
-		return i.cfg.Swarm.SendUserTurn(id, text)
-	}
 	resumeAdapter := func(id string) error {
-		_, err := i.cfg.Swarm.Resume(ctx, id)
+		_, err := resumeFn(id)
 		return err
 	}
 
@@ -77,11 +126,11 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 	switch sub {
 	case "", "list", "ls", "ps":
 		i.swarmDialog.Open(
-			i.cfg.Swarm.SnapshotAll,
-			i.cfg.Swarm.Stop,
-			i.cfg.Swarm.Remove,
+			snapshotFn,
+			stopFn,
+			removeFn,
 			spawnAdapter,
-			sendAdapter,
+			sendFn,
 			resumeAdapter,
 			i.cfg.CWD,
 		)
@@ -102,27 +151,31 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 			i.swarmStatus("", i18n.T("/swarm new: missing task (after any --model/--provider/--persona flags)"))
 			return
 		}
-		a, err := i.cfg.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
-			Task: task, Model: model, Provider: provider, Persona: persona,
-		})
+		id, err := spawnFn(task, model, provider, persona)
 		if err != nil {
 			i.swarmStatus("", i18n.T("spawn: %s", err.Error()))
 			return
 		}
 		switch {
+		case persona != "" && id != "":
+			i.swarmStatus(i18n.T("spawned %s (persona %s)", id, persona), "")
 		case persona != "":
-			i.swarmStatus(i18n.T("spawned %s (persona %s)", a.ID, persona), "")
+			i.swarmStatus(i18n.T("spawned (persona %s)", persona), "")
+		case model != "" && id != "":
+			i.swarmStatus(i18n.T("spawned %s (model %s)", id, model), "")
 		case model != "":
-			i.swarmStatus(i18n.T("spawned %s (model %s)", a.ID, model), "")
+			i.swarmStatus(i18n.T("spawned (model %s)", model), "")
+		case id != "":
+			i.swarmStatus(i18n.T("spawned %s", id), "")
 		default:
-			i.swarmStatus(i18n.T("spawned %s", a.ID), "")
+			i.swarmStatus(i18n.T("spawned"), "")
 		}
 	case "kill", "stop":
 		if rest == "" {
 			i.swarmStatus("", i18n.T("/swarm kill <id>: missing id"))
 			return
 		}
-		if err := i.cfg.Swarm.Stop(rest); err != nil {
+		if err := stopFn(rest); err != nil {
 			i.swarmStatus("", i18n.T("kill: %s", err.Error()))
 			return
 		}
@@ -132,7 +185,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 			i.swarmStatus("", i18n.T("/swarm remove <id>: missing id"))
 			return
 		}
-		if err := i.cfg.Swarm.Remove(rest); err != nil {
+		if err := removeFn(rest); err != nil {
 			i.swarmStatus("", i18n.T("remove: %s", err.Error()))
 			return
 		}
@@ -144,11 +197,11 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		}
 		ok := i.swarmDialog.OpenViewing(
 			rest,
-			i.cfg.Swarm.SnapshotAll,
-			i.cfg.Swarm.Stop,
-			i.cfg.Swarm.Remove,
+			snapshotFn,
+			stopFn,
+			removeFn,
 			spawnAdapter,
-			sendAdapter,
+			sendFn,
 			resumeAdapter,
 			i.cfg.CWD,
 		)
@@ -163,11 +216,11 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 			// to expect. Pressing R confirms; ↑/↓ to pick a
 			// different row first.
 			count := i.swarmDialog.OpenForResume(
-				i.cfg.Swarm.SnapshotAll,
-				i.cfg.Swarm.Stop,
-				i.cfg.Swarm.Remove,
+				snapshotFn,
+				stopFn,
+				removeFn,
 				spawnAdapter,
-				sendAdapter,
+				sendFn,
 				resumeAdapter,
 				i.cfg.CWD,
 			)
@@ -181,12 +234,12 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 			}
 			return
 		}
-		a, err := i.cfg.Swarm.Resume(ctx, rest)
+		id, err := resumeFn(rest)
 		if err != nil {
 			i.swarmStatus("", i18n.T("resume: %s", err.Error()))
 			return
 		}
-		i.swarmStatus(i18n.T("resumed %s", a.ID), "")
+		i.swarmStatus(i18n.T("resumed %s", id), "")
 	case "send", "prompt", "msg":
 		// /swarm send <id> <text...> is the non-interactive
 		// counterpart of pressing 'p' in the dashboard. We split the
@@ -202,7 +255,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 			i.swarmStatus("", i18n.T("/swarm send <id> <text>: missing text"))
 			return
 		}
-		if err := i.cfg.Swarm.SendUserTurn(id, text); err != nil {
+		if err := sendFn(id, text); err != nil {
 			i.swarmStatus("", friendlySendErr(id, err))
 			return
 		}

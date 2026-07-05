@@ -146,7 +146,11 @@ func (i *Interactive) chatCacheKey2(cols int, snap frameSnapshot) (chatCacheKey,
 		return chatCacheKey{}, false
 	}
 	var rev uint64
-	if snap.ts.agent != nil {
+	if i.cfg.Carrier != nil {
+		// The pump-owned transcript is the render source in carrier mode; its
+		// revision plays the role agent.Revision() plays on the legacy path.
+		rev = uint64(i.carrierTranscriptRev())
+	} else if snap.ts.agent != nil {
 		rev = snap.ts.agent.Revision()
 	}
 	showVer := len(i.view.Messages) == 0 && !snap.ts.streamActive && len(snap.toolViews) == 0 && !i.welcomeStart.IsZero() && time.Since(i.welcomeStart) < welcomeVersionDuration
@@ -171,9 +175,15 @@ func (i *Interactive) chatCacheKey2(cols int, snap frameSnapshot) (chatCacheKey,
 
 func (i *Interactive) buildChat(cols int, snap frameSnapshot) []string {
 	ts := snap.ts
-	if ts.agent != nil {
+	switch {
+	case i.cfg.Carrier != nil:
+		// Carrier mode renders the pump-owned transcript, reconstructed from
+		// the wire (snapshots + message events) — the Stage-4 cutover off the
+		// in-process crutch agent (tui-on-ctrlproto.md).
+		i.view.Messages = filterHiddenTranscriptMessages(i.carrierTranscript())
+	case ts.agent != nil:
 		i.view.Messages = filterHiddenTranscriptMessages(ts.agent.Messages())
-	} else {
+	default:
 		i.view.Messages = nil
 	}
 	// Pacer flush: while the streaming pacer is still draining the
@@ -522,6 +532,7 @@ func (i *Interactive) redraw() {
 		Git:              snap.git,
 		SwarmAgents:      i.swarmAgentCount(),
 		SessionName:      i.sessionShortName(),
+		Replay:           i.replayScrubber(),
 		PersonaName:      i.cfg.PersonaName,
 		PersonaEmoji:     i.cfg.PersonaEmoji,
 		PersonaAccentRGB: i.personaAccentRGB,

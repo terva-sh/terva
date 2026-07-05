@@ -83,6 +83,8 @@ func init() {
 			}},
 		{name: "/sessions", group: groupSession, desc: i18n.M("resume a previous session for this directory"),
 			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+				i.sessionDialog.Rename = i.cfg.RenameSessionFile
+				i.sessionDialog.List = i.cfg.ListSessions
 				i.sessionDialog.Open(i.cfg.TervaHome, i.cfg.CWD)
 				return false
 			}},
@@ -371,7 +373,16 @@ func (i *Interactive) slashHelp(context.Context, []string, string) bool {
 }
 
 func (i *Interactive) slashClear(context.Context, []string, string) bool {
-	if ag := i.turns.Agent(); ag != nil {
+	if c := i.cfg.Carrier; c != nil {
+		// The service owns the transcript in carrier mode: Clear wipes the
+		// live agent AND writes the durable empty checkpoint (so a resume
+		// starts fresh too). A still-busy session lands on the status line.
+		if err := c.Clear(context.Background(), i.carrierSession()); err != nil {
+			i.setStatusErr(err.Error())
+			i.invalidate()
+			return false
+		}
+	} else if ag := i.turns.Agent(); ag != nil {
 		ag.SetMessages(nil)
 	}
 	i.resetLoreFired()

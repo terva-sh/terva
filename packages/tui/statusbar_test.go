@@ -70,6 +70,24 @@ func TestStatusBarMinimalSession(t *testing.T) {
 	}
 }
 
+// TestStatusBarReplaySegment: the session-player scrubber leads row 1 when set
+// and vanishes otherwise.
+func TestStatusBarReplaySegment(t *testing.T) {
+	lines := StatusBar(StatusBarParams{
+		Theme:  Dark,
+		Model:  "gpt-5.5",
+		Replay: "▶ 38%  2×",
+		Cols:   200,
+	})
+	if got := stripANSI(strings.Join(lines, "\n")); !strings.Contains(got, "▶ 38%  2×") {
+		t.Errorf("status bar should carry the replay scrubber, got %q", got)
+	}
+	bare := StatusBar(StatusBarParams{Theme: Dark, Model: "gpt-5.5", Cols: 200})
+	if strings.Contains(stripANSI(strings.Join(bare, "\n")), "▶") {
+		t.Error("replay segment must vanish when Replay is empty")
+	}
+}
+
 func TestStatusBarThinkingLevelBetweenModelAndStats(t *testing.T) {
 	lines := StatusBar(StatusBarParams{
 		Theme:     Dark,

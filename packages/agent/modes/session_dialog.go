@@ -31,6 +31,18 @@ type sessionDialog struct {
 	// viewTop is the index of the first session currently drawn.
 	// Adjusted to follow the cursor on up/down moves.
 	viewTop int
+
+	// Rename, when set, persists a rename instead of the default direct
+	// core.RenameSession write. The ctrlproto path routes it through the
+	// service so a live session's in-memory title stays in sync and other
+	// clients get the session_updated broadcast.
+	Rename func(path, title string) error
+
+	// List, when set, supplies the summaries instead of the default disk
+	// scan. The ctrlproto path routes it through the service's session
+	// group, which overlays live state (current model, settled title,
+	// usage) the file's meta line can lag behind.
+	List func() []core.SessionSummary
 }
 
 // sessionDialogAction is returned by HandleKey.
@@ -49,7 +61,12 @@ func newSessionDialog() *sessionDialog { return &sessionDialog{} }
 // and any stale empties that haven't been pruned yet all stay out
 // of the picker. Resuming an empty session is a no-op anyway.
 func (d *sessionDialog) Open(root, cwd string) {
-	all := core.DescribeSessions(root, cwd)
+	var all []core.SessionSummary
+	if d.List != nil {
+		all = d.List()
+	} else {
+		all = core.DescribeSessions(root, cwd)
+	}
 	filtered := make([]core.SessionSummary, 0, len(all))
 	for _, s := range all {
 		if s.MessageCount == 0 {
@@ -235,8 +252,13 @@ func (d *sessionDialog) HandleKey(k tui.Key) sessionDialogAction {
 			title := strings.TrimSpace(d.rename)
 			if title != "" && d.cursor < len(d.sessions) {
 				path := d.sessions[d.cursor].Path
-				_ = core.RenameSession(path, title)
-				d.sessions[d.cursor].Title = title
+				rename := d.Rename
+				if rename == nil {
+					rename = core.RenameSession
+				}
+				if rename(path, title) == nil {
+					d.sessions[d.cursor].Title = title
+				}
 			}
 			d.renaming = false
 			d.rename = ""

@@ -45,6 +45,7 @@ func goldenCases(t *testing.T) []goldenCase {
 		})},
 		{"cmd_rename", mustCmd(t, 5, "s2", MethodSessionRename, RenameParams{Title: "refactor spike"})},
 		{"cmd_model_switch", mustCmd(t, 6, "s1", MethodModelSwitch, ModelSwitchParams{Model: "claude-opus-4-8"})},
+		{"cmd_context_node", mustCmd(t, 8, "s1", MethodContextNode, ContextNodeParams{ID: "tr/m5"})},
 		{"resp_sessions", mustOK(t, 2, SessionsResult{Sessions: []SessionInfo{{
 			ID: "s1", Title: "main", Provider: "anthropic", Model: "claude-opus-4-8",
 			Messages: 12, Usage: core.WireUsage{Input: 100, Output: 50, CostUSD: 0.01}, Current: true,
@@ -67,6 +68,10 @@ func goldenCases(t *testing.T) []goldenCase {
 				{Role: "user", Content: []core.WireBlock{{Type: "text", Text: "hi"}}},
 				{Role: "assistant", Content: []core.WireBlock{{Type: "text", Text: "hello"}}},
 			},
+		}))},
+		{"cmd_replay_control", mustCmd(t, 9, "r1", MethodReplayControl, ReplayControlParams{Action: "seek", Position: 42})},
+		{"event_replay_state", EventFrame("r1", ReplayStateEvent(ReplayState{
+			Playing: true, Position: 42, Total: 128, Speed: 2, Mode: "effective",
 		}))},
 	}
 }
@@ -293,6 +298,88 @@ func TestServeConnRejectsNonHelloFirst(t *testing.T) {
 	}
 }
 
+// fakeReplaySvc is a WorkspaceService that also serves the replay group.
+type fakeReplaySvc struct {
+	*fakeSvc
+	mu    sync.Mutex
+	state ReplayState
+}
+
+func (f *fakeReplaySvc) ReplayControl(ctx context.Context, sess string, p ReplayControlParams) (ReplayState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch p.Action {
+	case "seek":
+		f.state.Position = p.Position
+	case "play":
+		f.state.Playing = true
+	case "pause":
+		f.state.Playing = false
+	}
+	return f.state, nil
+}
+
+func (f *fakeReplaySvc) ReplayState(ctx context.Context, sess string) (ReplayState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.state, nil
+}
+
+// TestServeConnReplayGroup drives replay.control over the wire against a
+// ReplayController-backed service and reads back the new transport state.
+func TestServeConnReplayGroup(t *testing.T) {
+	svc := &fakeReplaySvc{fakeSvc: newFakeSvc()}
+	client, server := newMemPair()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hello := ServerHello("terva-test", "0")
+	hello.Groups = append(hello.Groups, GroupReplay)
+	go ServeConn(ctx, server, svc, hello)
+
+	push(t, client, HelloFrame(Hello{
+		Role: RoleClient, Protocol: Protocol,
+		Groups: []Group{GroupConversation, GroupReplay},
+	}))
+	if sh := pull(t, client); sh.Kind != KindHello || sh.Hello == nil {
+		t.Fatalf("expected server hello, got %+v", sh)
+	}
+
+	push(t, client, mustCmd(t, 1, "r1", MethodReplayControl, ReplayControlParams{Action: "seek", Position: 7}))
+	r := pull(t, client)
+	if r.Kind != KindResp || r.ID != 1 || r.Error != nil {
+		t.Fatalf("replay.control resp: %+v", r)
+	}
+	var res ReplayStateResult
+	if err := r.BindResult(&res); err != nil {
+		t.Fatalf("BindResult: %v", err)
+	}
+	if res.State.Position != 7 {
+		t.Errorf("state position = %d, want 7", res.State.Position)
+	}
+}
+
+// TestServeConnReplayUnsupported verifies a service that is not a
+// ReplayController rejects replay.* with CodeUnsupported even when the group is
+// negotiated (the type-assert fallback).
+func TestServeConnReplayUnsupported(t *testing.T) {
+	svc := newFakeSvc() // not a ReplayController
+	client, server := newMemPair()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hello := ServerHello("terva-test", "0")
+	hello.Groups = append(hello.Groups, GroupReplay)
+	go ServeConn(ctx, server, svc, hello)
+
+	push(t, client, HelloFrame(Hello{Role: RoleClient, Protocol: Protocol, Groups: []Group{GroupReplay}}))
+	pull(t, client) // server hello
+	push(t, client, mustCmd(t, 1, "r1", MethodReplayControl, ReplayControlParams{Action: "play"}))
+	if r := pull(t, client); r.Error == nil || r.Error.Code != CodeUnsupported {
+		t.Fatalf("expected CodeUnsupported, got %+v", r)
+	}
+}
+
 // --- helpers ---
 
 func mustCmd(t *testing.T, id uint64, sess string, m Method, params any) Frame {
@@ -483,6 +570,10 @@ func (f *fakeSvc) Context(ctx context.Context, sess string) (ContextBreakdown, e
 	return ContextBreakdown{}, nil
 }
 
+func (f *fakeSvc) Node(ctx context.Context, sess, id, op string) (ContextNode, error) {
+	return ContextNode{ID: id}, nil
+}
+
 func (f *fakeSvc) Surfaces(ctx context.Context, sess string) ([]SurfaceMeta, error) {
 	return []SurfaceMeta{{ID: "context", Title: "Context", Kind: "context"}}, nil
 }
@@ -497,7 +588,9 @@ func (f *fakeSvc) Models(ctx context.Context) ([]ModelInfo, error) {
 	return []ModelInfo{{ID: "claude-opus-4-8", Provider: "anthropic", Current: true}}, nil
 }
 
-func (f *fakeSvc) SwitchModel(ctx context.Context, sess, modelID string) error { return nil }
+func (f *fakeSvc) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {
+	return nil
+}
 func (f *fakeSvc) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {
 	return nil
 }

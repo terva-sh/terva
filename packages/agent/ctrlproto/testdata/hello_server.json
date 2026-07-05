@@ -12,7 +12,9 @@
     ],
     "features": [
       "images",
-      "resolve-events"
+      "resolve-events",
+      "context-tree",
+      "image-data"
     ]
   }
 }

@@ -33,6 +33,12 @@ type ToolResult struct {
 	IsError bool
 	// Details is arbitrary data for UIs and logs; not sent to the LLM.
 	Details any
+	// LinesAdded/LinesRemoved are the line-change counts of a file-mutating
+	// tool (edit ships its diff's +/- tallies, write its written line count).
+	// First-class rather than buried in Details so they survive the event
+	// wire (status-bar Δ segment on remote clients); zero for everything else.
+	LinesAdded   int
+	LinesRemoved int
 }
 
 // Registry is a name->Tool map.

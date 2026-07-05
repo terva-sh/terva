@@ -96,6 +96,24 @@ func (d *questionDialog) advance() {
 	}
 }
 
+// Remove drops a specific pending request without answering it — the carrier
+// path's dismissal when the daemon reports the ask already resolved. Mirrors
+// confirmDialog.Remove; a no-op when the request isn't pending.
+func (d *questionDialog) Remove(req *questionRequest) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for idx, p := range d.pending {
+		if p != req {
+			continue
+		}
+		d.pending = append(d.pending[:idx], d.pending[idx+1:]...)
+		if idx == 0 && len(d.pending) > 0 {
+			d.reset(d.pending[0])
+		}
+		return
+	}
+}
+
 // HandleKey advances selection / edits the free-text buffer / resolves
 // the dialog. Returns true when an answer was sent back to the agent.
 func (d *questionDialog) HandleKey(k tui.Key) bool {

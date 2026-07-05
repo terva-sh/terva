@@ -99,6 +99,13 @@ type WorkspaceService interface {
 	// model's window, the /context view for debugging context bloat.
 	Context(ctx context.Context, sess string) (ContextBreakdown, error)
 
+	// Node resolves one context node by the opaque id from [Context]'s tree,
+	// filling in its content/children for a lazy expand (message → content
+	// blocks, tool defs → per-tool, system prompt / ext context → their text).
+	// op selects the operation: empty (or "expand") expands; a node-named op is a
+	// reveal (stage 3). Returns a CodeNotFound error for a stale or unknown id.
+	Node(ctx context.Context, sess, id, op string) (ContextNode, error)
+
 	// Surfaces lists the auxiliary panes available for sess (context, usage,
 	// extension panels, …) for the client's surface switcher.
 	Surfaces(ctx context.Context, sess string) ([]SurfaceMeta, error)
@@ -123,7 +130,11 @@ type WorkspaceService interface {
 	Models(ctx context.Context) ([]ModelInfo, error)
 
 	// SwitchModel changes the model backing sess, live, for the next turn.
-	SwitchModel(ctx context.Context, sess, modelID string) error
+	// providerName qualifies modelID — model ids are not globally unique
+	// across providers (a subscription and an api-key route can serve the
+	// same id), and an unqualified lookup may land on a provider the
+	// workspace holds no credential for. Empty = resolve across all.
+	SwitchModel(ctx context.Context, sess, providerName, modelID string) error
 
 	// SetFavoriteModel pins or unpins a model in the user's favorites (the ★
 	// favorites view), persisted to config.
@@ -184,7 +195,12 @@ type SessionInfo struct {
 // optional; empty values fall back to the workspace defaults. Template and
 // persona are shaped now but honored as the control group lands.
 type CreateOpts struct {
-	Title    string `json:"title,omitempty"`
+	Title string `json:"title,omitempty"`
+	// Provider disambiguates Model: some model ids exist under several
+	// providers (e.g. a subscription and an api-key route to the same model),
+	// and an unqualified lookup may land on one the workspace holds no
+	// credential for. Empty = resolve Model across all providers.
+	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Persona  string `json:"persona,omitempty"`
 	Template string `json:"template,omitempty"`
@@ -216,6 +232,19 @@ type ContextBreakdown struct {
 	Cumulative    core.WireUsage    `json:"cumulative"`
 	Subscription  bool              `json:"subscription,omitempty"`
 	UsageWindows  []UsageWindowInfo `json:"usage_windows,omitempty"`
+
+	// Tree is the hierarchical outline of the same context the scalar fields
+	// above summarize: sections (system / tool defs / ext context / transcript)
+	// → transcript turns → message stubs, with sizes, labels, and kinds but no
+	// message bodies. It is a superset of Messages, kept additive: a client that
+	// negotiated the context-tree feature renders this; older ones ignore it and
+	// use the flat Messages list. Message bodies and deeper content are fetched
+	// lazily via context.node (later stages). See docs/proposals/context-inspector.md.
+	Tree *ContextNode `json:"tree,omitempty"`
+	// Rev is the transcript epoch the tree was built at (the agent's
+	// transcriptEpoch). A client can compare it before a context.node call to
+	// tell whether its opaque node ids have gone stale (the transcript grew).
+	Rev int `json:"rev,omitempty"`
 }
 
 // ContextMessage is one transcript entry's size in a [ContextBreakdown].
@@ -223,6 +252,25 @@ type ContextMessage struct {
 	Index int    `json:"index"`
 	Kind  string `json:"kind"` // role, or tool_result / role+tool / role+image / compaction
 	Bytes int    `json:"bytes"`
+}
+
+// ContextNode is one node of the assembled-context tree (see [ContextBreakdown.Tree]).
+// The Kind vocabulary is deliberately OPEN — a client renders an unknown kind by
+// its Label and Bytes — so new inspectable facets need no wire change. ids are
+// opaque and server-minted, valid within one tree snapshot; a client passes them
+// back to context.node (later stages) and never parses them.
+type ContextNode struct {
+	ID         string            `json:"id"`
+	Kind       string            `json:"kind"` // section | turn | message | block | event
+	Label      string            `json:"label"`
+	Bytes      int               `json:"bytes"`
+	Tokens     int               `json:"tokens,omitempty"`     // when known; else the client estimates bytes/4
+	Summary    string            `json:"summary,omitempty"`    // one-line preview for the collapsed row
+	Content    string            `json:"content,omitempty"`    // full leaf body, populated on a context.node expand (stage 2+)
+	Expandable bool              `json:"expandable,omitempty"` // has deeper content to fetch via context.node (stage 2+)
+	Reveal     string            `json:"reveal,omitempty"`     // names a reveal op (e.g. "compaction") — stage 3
+	Meta       map[string]string `json:"meta,omitempty"`       // kind-specific hints (role, index, count, …)
+	Children   []ContextNode     `json:"children,omitempty"`
 }
 
 // UsageWindowInfo is one provider-reported usage budget (a rolling 5h window, a
@@ -310,6 +358,12 @@ type MCPServerInfo struct {
 	Enabled     bool   `json:"enabled"` // config says it should run (toggle state)
 	Tools       int    `json:"tools,omitempty"`
 	Note        string `json:"note,omitempty"` // startup error, when failed
+	// The per-scope toggle detail behind the Enabled/Status rollup (Status
+	// collapses user- and project-disabled into one "disabled"), plus the
+	// live connection ground truth a masked status can't carry.
+	UserDisabled    bool `json:"user_disabled,omitempty"`
+	ProjectDisabled bool `json:"project_disabled,omitempty"`
+	Connected       bool `json:"connected,omitempty"`
 }
 
 // LoreView is the lore inspector pane: the session's authored keyword-triggered
@@ -351,6 +405,12 @@ type ExtensionInfo struct {
 	Tools       int    `json:"tools,omitempty"`
 	Commands    int    `json:"commands,omitempty"`
 	Note        string `json:"note,omitempty"` // e.g. crash reason (log tail) when off
+	// The per-scope toggle detail behind the Enabled rollup, so a client can
+	// offer the same global (manifest) vs project (config) toggles the TUI
+	// does — Status alone can't say WHICH scope disabled an extension.
+	GlobalEnabled      bool `json:"global_enabled,omitempty"`
+	ProjectDisabled    bool `json:"project_disabled,omitempty"`
+	UserConfigDisabled bool `json:"user_config_disabled,omitempty"`
 }
 
 // CommandsView is the extension-command pane: every slash command an extension
@@ -409,10 +469,16 @@ type TaskInfo struct {
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	Persona  string `json:"persona,omitempty"`
+	Dir      string `json:"dir,omitempty"`      // agent working directory
 	Started  string `json:"started,omitempty"`  // RFC 3339
 	Finished string `json:"finished,omitempty"` // RFC 3339
 	Err      string `json:"error,omitempty"`
 	Tail     string `json:"tail,omitempty"` // last few transcript lines
+	// Lines is the full in-memory transcript (capped daemon-side at 2000
+	// lines per agent) — what a transcript viewer scrolls. The list pane
+	// only needs Tail; a serialized carrier pays for Lines only when the
+	// swarm state actually changed (fetches ride surface_updated).
+	Lines []string `json:"lines,omitempty"`
 }
 
 // UsageView is the usage/budget pane: the TUI status bar's live usage picture as

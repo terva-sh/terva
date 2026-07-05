@@ -70,5 +70,9 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 			"total_lines": totalLines,
 			"start_line":  1,
 		},
+		// A whole-file write counts as added lines (overwrites don't subtract
+		// the old content — unknown here, and "wrote N lines" is the honest
+		// claim either way).
+		LinesAdded: totalLines,
 	}, nil
 }

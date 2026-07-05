@@ -1,6 +1,7 @@
 package modes
 
 import (
+	"context"
 	"strings"
 
 	"terva.sh/terva/packages/agent/lore"
@@ -22,7 +23,17 @@ func (i *Interactive) resetLoreFired() {
 func (i *Interactive) slashLore() {
 	th := i.cfg.Theme
 	var entries []lore.Entry
-	if i.cfg.LoreList != nil {
+	switch {
+	case i.cfg.Carrier != nil:
+		// ctrlproto mode: the authored entries ride the lore surface. The
+		// fired/dropped last-turn detail below stays absent (its closures are
+		// nil) — the wire view doesn't carry per-turn firing yet.
+		if sf, err := i.cfg.Carrier.Surface(context.Background(), i.carrierSession(), "lore"); err == nil && sf.Lore != nil {
+			for _, e := range sf.Lore.Entries {
+				entries = append(entries, lore.Entry{Name: e.Name, Keys: e.Keys, Constant: e.Constant, Source: e.Source})
+			}
+		}
+	case i.cfg.LoreList != nil:
 		entries = i.cfg.LoreList()
 	}
 

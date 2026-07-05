@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -103,7 +102,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 
 	pol, warns := buildPermissionPolicy(args)
 	for _, wn := range warns {
-		fmt.Fprintf(os.Stderr, "note: %s\n", wn)
+		s.diag(fmt.Sprintf("note: %s", wn))
 	}
 
 	r, err := Resolve(args, true)
@@ -204,7 +203,12 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	sessCWD := r.CWD
 	wsObserve := workspaceChangeObserver(tools.NewWorkspaceDiffer(func() string { return sessCWD }), extMgr)
 	ag.OnEvent = func(ev core.AgentEvent) {
-		s.broadcast(ctrlproto.ConversationEvent(core.EventToWire(ev)))
+		// Full form: image blocks keep their raw Data. In-process subscribers
+		// (the TUI carrier) render real pixels at zero cost — the slices are
+		// shared, never serialized — and serialized carriers strip at their
+		// connection boundary unless the client negotiated "image-data"
+		// (ctrlproto serve loop).
+		s.broadcast(ctrlproto.ConversationEvent(core.EventToWireFull(ev)))
 		wsObserve(ev)
 		fanoutAgentEvent(extMgr, ev)
 		observeAgentEventForHooks(hookEng, ev)
@@ -274,11 +278,11 @@ func setupWebExtensions(ctx context.Context, args Args, r *Resolved, version str
 	wireSessionReader(extMgr, TervaHome(), r.CWD)
 	extMgr.SetProjectTrusted(r.Trusted)
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
-		fmt.Fprintln(os.Stderr, "extension load:", e)
+		s.diag(fmt.Sprintf("extension load: %v", e))
 	}
 	if !args.NoExt {
 		for _, e := range extMgr.Discover(ctx) {
-			fmt.Fprintln(os.Stderr, "extension load:", e)
+			s.diag(fmt.Sprintf("extension load: %v", e))
 		}
 	}
 	extMgr.WaitForReady(3 * time.Second)
@@ -301,22 +305,65 @@ func (s *wsSession) prompt(text string, images []ctrlproto.Image) error {
 
 	imgs := toImageBlocks(images)
 	go func() {
-		defer func() {
-			s.mu.Lock()
-			s.turnCtx, s.turnCancel = nil, nil
-			s.mu.Unlock()
-		}()
 		// sink is nil: the agent's OnEvent (set in buildSession) fans every event
 		// out, so Continue() and any internal re-prompt stream too.
-		if err := s.agent.PromptWithPolicy(turnCtx, text, imgs, nil); err != nil && !errors.Is(err, context.Canceled) {
+		err := s.agent.PromptWithPolicy(turnCtx, text, imgs, nil)
+		if err != nil && !errors.Is(err, context.Canceled) {
 			s.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "error", Error: err.Error()}))
 		}
+		if err != nil {
+			// The agent's own "done" does not fire on error returns (a
+			// non-retryable provider failure, a cancel mid-stream or during a
+			// retry sleep) — without a definitive completion event a stream
+			// consumer's busy state would stick forever. Emitted after the
+			// error event, so consumers see error → done. Clients must treat
+			// "done" idempotently: the cancel-during-tools path emits the
+			// agent's own done AND returns an error, producing two.
+			s.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "done"}))
+		}
+		next, restart := s.endTurn(turnCtx, err)
 		// After the turn, settle an untitled session's title and push it live, so
 		// the header/list stop reading "new chat" without a page refresh. Uses the
 		// workspace context (not the turn's) so it survives turn teardown.
 		s.settleTitle(s.ws.ctx)
+		if restart {
+			if perr := s.prompt(next, nil); perr != nil {
+				// Raced a client Prompt that claimed the slot between endTurn
+				// and here: re-arm at the front so the new turn's first safe
+				// boundary delivers it instead of losing it.
+				s.agent.RequeueFront(next)
+				s.broadcastQueue()
+			}
+		}
 	}()
 	return nil
+}
+
+// endTurn atomically closes out a finished turn: it releases the busy slot and
+// settles the pending queue under the same s.mu hold, mirroring the TUI turn
+// engine's release semantics. A failed turn (error or cancel) drops the queue —
+// stale follow-ups must not fire after an interrupt — while a clean turn shifts
+// the queue's head for the caller to restart with. The agent drains its queue
+// at safe boundaries within a turn, but a message queued after the last
+// boundary check would otherwise strand until the next user prompt (a gap the
+// web client had too). Holding s.mu across the release AND the shift means a
+// concurrent queue() lands either before the shift (delivered by the restart)
+// or after the release (sees idle and starts its own turn) — never in between.
+func (s *wsSession) endTurn(turnCtx context.Context, err error) (next string, restart bool) {
+	failed := err != nil || turnCtx.Err() != nil
+	s.mu.Lock()
+	s.turnCtx, s.turnCancel = nil, nil
+	var dropped []string
+	if failed {
+		dropped = s.agent.DrainQueuedMessages()
+	} else {
+		next, restart = s.agent.ShiftQueuedMessage()
+	}
+	s.mu.Unlock()
+	if restart || len(dropped) > 0 {
+		s.broadcastQueue()
+	}
+	return next, restart
 }
 
 // rebuildTools re-resolves and swaps the agent's model-facing tool set: a fresh
@@ -477,11 +524,29 @@ func firstUserText(msgs []provider.Message) string {
 }
 
 // queue injects text at the next safe boundary of the running turn (the
-// multi-device interject story). If idle, it is delivered on the next turn.
-// Broadcasts the new queue so every client's queued view converges.
+// multi-device interject story), broadcasting the new queue so every client's
+// queued view converges. When the session is idle, a queue is a deferred
+// Prompt (the interface contract's discretion) and starts a turn immediately —
+// previously it stranded until the next user prompt. The enqueue happens under
+// s.mu so it can't slip between a finishing turn's last boundary check and its
+// endTurn queue shift (which holds the same lock).
 func (s *wsSession) queue(text string) {
-	if s.agent.QueueMessage(text) {
-		s.broadcastQueue()
+	s.mu.Lock()
+	if s.turnCancel != nil {
+		queued := s.agent.QueueMessage(text)
+		s.mu.Unlock()
+		if queued {
+			s.broadcastQueue()
+		}
+		return
+	}
+	s.mu.Unlock()
+	if err := s.prompt(text, nil); err != nil {
+		// Raced a concurrent Prompt that claimed the slot first: queue onto the
+		// turn that beat us (its boundaries / endTurn shift deliver it).
+		if s.agent.QueueMessage(text) {
+			s.broadcastQueue()
+		}
 	}
 }
 
@@ -515,11 +580,24 @@ func (s *wsSession) recordCall(id string) {
 
 func (s *wsSession) broadcast(ev ctrlproto.Event) { s.hub.broadcast(ev) }
 
+// diag emits a host-side session-build diagnostic through the workspace's sink
+// (os.Stderr by default; redirected by the in-process TUI carrier so it can't
+// corrupt the full-screen UI). Nil-safe for sessions built outside a Workspace
+// (tests). Callers hold w.mu (buildSession runs locked), so the field read is
+// synchronized with SetDiag's write under the same lock.
+func (s *wsSession) diag(msg string) {
+	if s.ws != nil && s.ws.diag != nil {
+		s.ws.diag(msg)
+	}
+}
+
 // subscribe registers a new client. It receives a snapshot of the current
 // transcript first (atomically, before any live event), then the live stream.
-// Cancelling ctx unsubscribes and closes the channel.
-func (s *wsSession) subscribe(ctx context.Context) <-chan ctrlproto.Event {
-	ch := s.hub.add(func() ctrlproto.Event { return ctrlproto.SnapshotEvent(s.snapshot()) })
+// Cancelling ctx unsubscribes and closes the channel. reliable selects the
+// no-drop delivery discipline (see wsHub) — the in-process TUI carrier must
+// never miss a text delta; networked carriers stay lossy.
+func (s *wsSession) subscribe(ctx context.Context, reliable bool) <-chan ctrlproto.Event {
+	ch := s.hub.add(func() ctrlproto.Event { return ctrlproto.SnapshotEvent(s.snapshot()) }, reliable)
 	go func() {
 		<-ctx.Done()
 		s.hub.remove(ch)
@@ -531,7 +609,9 @@ func (s *wsSession) snapshot() ctrlproto.Snapshot {
 	msgs := s.agent.Messages()
 	wm := make([]core.WireMessage, len(msgs))
 	for i, m := range msgs {
-		wm[i] = core.MessageToWire(m)
+		// Full form (image Data included) — same contract as the event
+		// broadcast above; serialized carriers strip per negotiation.
+		wm[i] = core.MessageToWireFull(m)
 	}
 	s.mu.Lock()
 	busy := s.turnCancel != nil
@@ -647,29 +727,36 @@ func toImageBlocks(imgs []ctrlproto.Image) []provider.ImageBlock {
 	return out
 }
 
-// wsHub fans one session's events out to N subscribers.
+// wsHub fans one session's events out to N subscribers. A subscriber is either
+// lossy (a networked carrier: drops under backpressure to keep the turn moving —
+// it can re-subscribe to resync from a fresh snapshot) or reliable (the
+// in-process TUI carrier: never drops, because a lost text delta corrupts the
+// rendered transcript). Sends happen under h.mu so a concurrent remove/closeAll
+// can never close a channel mid-send. A reliable send blocks until the consumer
+// drains — the same backpressure the TUI's old synchronous sink already applied,
+// contained to this one session's hub (each session has its own).
 type wsHub struct {
 	mu   sync.Mutex
-	subs map[chan ctrlproto.Event]struct{}
+	subs map[chan ctrlproto.Event]bool // value: reliable
 }
 
-// hubBuffer is the per-subscriber channel depth. A subscriber that falls this
-// far behind drops events (see broadcast) and can re-subscribe to resync from a
-// fresh snapshot rather than block the turn for everyone.
+// hubBuffer is the per-subscriber channel depth. A lossy subscriber that falls
+// this far behind drops events (see broadcast); a reliable one blocks the
+// broadcaster instead of losing an event.
 const hubBuffer = 256
 
-func newWSHub() *wsHub { return &wsHub{subs: map[chan ctrlproto.Event]struct{}{}} }
+func newWSHub() *wsHub { return &wsHub{subs: map[chan ctrlproto.Event]bool{}} }
 
 // add creates a subscriber channel. If first is non-nil its result is enqueued
 // before the channel joins the broadcast set, so a snapshot is guaranteed to
-// precede any live event without a race.
-func (h *wsHub) add(first func() ctrlproto.Event) chan ctrlproto.Event {
+// precede any live event without a race. reliable picks the no-drop discipline.
+func (h *wsHub) add(first func() ctrlproto.Event, reliable bool) chan ctrlproto.Event {
 	ch := make(chan ctrlproto.Event, hubBuffer)
 	h.mu.Lock()
 	if first != nil {
 		ch <- first()
 	}
-	h.subs[ch] = struct{}{}
+	h.subs[ch] = reliable
 	h.mu.Unlock()
 	return ch
 }
@@ -685,10 +772,14 @@ func (h *wsHub) remove(ch chan ctrlproto.Event) {
 
 func (h *wsHub) broadcast(ev ctrlproto.Event) {
 	h.mu.Lock()
-	for ch := range h.subs {
+	for ch, reliable := range h.subs {
+		if reliable {
+			ch <- ev // no-drop: block until the consumer drains
+			continue
+		}
 		select {
 		case ch <- ev:
-		default: // slow subscriber: drop rather than stall the turn
+		default: // slow lossy subscriber: drop rather than stall the turn
 		}
 	}
 	h.mu.Unlock()

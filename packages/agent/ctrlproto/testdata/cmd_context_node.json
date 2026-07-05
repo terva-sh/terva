@@ -1,0 +1,9 @@
+{
+  "kind": "cmd",
+  "id": 8,
+  "sess": "s1",
+  "method": "context.node",
+  "params": {
+    "id": "tr/m5"
+  }
+}

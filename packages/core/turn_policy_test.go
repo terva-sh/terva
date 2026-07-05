@@ -243,6 +243,57 @@ func TestAutoCompactGuardSkipsWhenNothingToCompact(t *testing.T) {
 	}
 }
 
+// TestPromptWithPolicyNilSinkAutoCompact guards a latent panic: the
+// Workspace (web carrier) calls PromptWithPolicy with a nil sink, relying on
+// the agent's OnEvent fan-out instead. But the compact closure invoked the raw
+// sink directly, so when pre-turn auto-compact (or the 413 retry) fired with a
+// nil sink it was a nil-function call — a panic that crashed the turn goroutine
+// on any resume of a large session. PromptWithPolicy must normalize a nil sink
+// exactly like Prompt does, and still deliver the compact lifecycle events to
+// OnEvent so subscribers see "compacting…".
+func TestPromptWithPolicyNilSinkAutoCompact(t *testing.T) {
+	client := &okClient{}
+	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{})
+	// Prime usage above the 85% auto-compact threshold (200k window).
+	a.SeedLastTurnUsage(provider.Usage{InputTokens: 190_000})
+	// A transcript comfortably longer than keep-tail so CanCompact is true.
+	seed := make([]provider.Message, 0, 8)
+	for range 4 {
+		seed = append(seed,
+			provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "q"}}},
+			provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "a"}}},
+		)
+	}
+	a.SetMessages(seed)
+
+	if !a.ShouldAutoCompact(AutoCompactThreshold) || !a.CanCompact(AutoCompactKeepTail) {
+		t.Fatal("precondition: pre-turn auto-compact should fire")
+	}
+
+	// The fan-out path a nil-sink caller relies on.
+	var lifecycle []string
+	a.OnEvent = func(ev AgentEvent) {
+		switch ev.(type) {
+		case EvCompactStart, EvCompactEnd:
+			lifecycle = append(lifecycle, ev.Type())
+		}
+	}
+
+	// Nil sink: must not panic.
+	if err := a.PromptWithPolicy(context.Background(), "hello", nil, nil); err != nil {
+		t.Fatalf("PromptWithPolicy(nil sink) returned %v", err)
+	}
+
+	// Auto-compact happened (transcript head is a summary) and its lifecycle
+	// reached OnEvent so a subscriber could render it.
+	if msgs := a.Messages(); len(msgs) == 0 || msgs[0].Meta["compaction"] != "true" {
+		t.Fatal("pre-turn auto-compact did not run with a nil sink")
+	}
+	if strings.Join(lifecycle, ",") != "compact_start,compact_end" {
+		t.Fatalf("compact lifecycle did not reach OnEvent: %v", lifecycle)
+	}
+}
+
 func TestContextFractionUnknownModelIsZero(t *testing.T) {
 	a := NewAgent(nil, "model-that-does-not-exist-xyz", "", Registry{})
 	if got := a.ContextFraction(); got != 0 {

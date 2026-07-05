@@ -201,6 +201,13 @@ func (a *Agent) CanCompact(keepTail int) bool {
 // Compaction progress is reported through sink as EvCompactStart /
 // EvCompactEnd so streaming consumers can surface it.
 func (a *Agent) PromptWithPolicy(ctx context.Context, prompt string, images []provider.ImageBlock, sink func(AgentEvent)) error {
+	// A nil sink is legal — the Workspace/web carrier passes nil and relies on
+	// the agent's OnEvent fan-out (via EmitLifecycle below). Prompt normalizes
+	// its own nil sink, but the compact closure calls sink directly, so without
+	// this a firing auto-compact (or 413 retry) would panic the turn goroutine.
+	if sink == nil {
+		sink = func(AgentEvent) {}
+	}
 	compact := func(reason string) error {
 		start := EvCompactStart{Reason: reason}
 		sink(start)

@@ -37,6 +37,12 @@ import (
 )
 
 // interactiveExtHooks is a tiny adapter that lets the extension
+// *Workspace is the in-process ctrlproto carrier the interactive TUI drives
+// under --tui-ctrlproto. Asserted here (not in workspace.go) so the lower-level
+// workspace need not import modes; cli.go is the composition root that already
+// bridges the two. See docs/proposals/tui-on-ctrlproto.md.
+var _ modes.Carrier = (*Workspace)(nil)
+
 // manager call back into the Interactive instance built later in
 // runInteractive. The forward-declared *modes.Interactive is filled
 // in immediately after manager construction.
@@ -680,6 +686,12 @@ func Run(rawArgs []string, version string) error {
 	if len(rawArgs) > 0 && rawArgs[0] == "web" {
 		rawArgs = append([]string{"--web"}, rawArgs[1:]...)
 	}
+	// `terva replay <file>` is shorthand for `terva --replay <file>` (the
+	// session-player mode), routed like `terva web`. The leading path becomes
+	// the flag value; ParseArgs errors cleanly if it is missing.
+	if len(rawArgs) > 0 && rawArgs[0] == "replay" {
+		rawArgs = append([]string{"--replay"}, rawArgs[1:]...)
+	}
 
 	args, err := ParseArgs(rawArgs)
 	if err != nil {
@@ -765,9 +777,14 @@ func Run(rawArgs []string, version string) error {
 		return runACPMode(ctx, args, version)
 	case ModeWeb:
 		return runWebMode(ctx, args, version)
+	case ModeReplay:
+		return runReplayMode(ctx, args, version)
 	case ModeSwarmAgent:
 		return runSwarmAgentMode(ctx, args, version)
 	default:
+		if args.TUICtrlproto {
+			return runInteractiveCtrlproto(ctx, args, version)
+		}
 		return runInteractive(ctx, args, version)
 	}
 }
@@ -1320,6 +1337,44 @@ func readLineRaw(r io.Reader) string {
 }
 
 // ---- interactive mode: opens the TUI even without credentials ----
+
+// loggedInProviderList returns the providers a picker can offer: every
+// provider with a resolvable credential, plus the always-available ollama,
+// plus configured keyless endpoints (openai-compatible and user-defined).
+// Shared by the legacy and ctrlproto interactive entry points.
+func loggedInProviderList() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range knownProviders {
+		if _, _, err := ResolveCredential(p, ""); err == nil && !seen[p] {
+			out = append(out, p)
+			seen[p] = true
+		}
+	}
+	// Ollama models are always available (no auth needed).
+	if !seen["ollama"] {
+		out = append(out, "ollama")
+	}
+	// openai-compatible is reachable once configured (base URL set; the API
+	// key is optional, so a keyless endpoint won't have surfaced via
+	// ResolveCredential above).
+	if !seen["openai-compatible"] {
+		if bu, _, _ := AuthStoreFor().Extras("openai-compatible"); bu != "" {
+			out = append(out, "openai-compatible")
+		}
+	}
+	// User-defined endpoints are reachable once configured (base URL set;
+	// key optional), so surface each like openai-compatible.
+	if uc, err := LoadConfig(); err == nil {
+		for id, ep := range uc.Endpoints {
+			if ep.BaseURL != "" && !seen[id] {
+				out = append(out, id)
+				seen[id] = true
+			}
+		}
+	}
+	return out
+}
 
 func runInteractive(ctx context.Context, args Args, version string) error {
 	// A character card's {{user}} needs a name. If none is set and we're on an
@@ -2310,44 +2365,12 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 		Migration:                  migration,
 		BuildAgentFor:              buildAgentFor,
 		BuildAgentForRescue:        buildAgentForRescue,
-		LoggedInProviders: func() []string {
-			var out []string
-			seen := map[string]bool{}
-			for _, p := range knownProviders {
-				if _, _, err := ResolveCredential(p, ""); err == nil && !seen[p] {
-					out = append(out, p)
-					seen[p] = true
-				}
-			}
-			// Ollama models are always available (no auth needed).
-			if !seen["ollama"] {
-				out = append(out, "ollama")
-			}
-			// openai-compatible is reachable once configured (base URL
-			// set; the API key is optional, so a keyless endpoint won't
-			// have surfaced via ResolveCredential above).
-			if !seen["openai-compatible"] {
-				if bu, _, _ := AuthStoreFor().Extras("openai-compatible"); bu != "" {
-					out = append(out, "openai-compatible")
-				}
-			}
-			// User-defined endpoints are reachable once configured (base URL
-			// set; key optional), so surface each like openai-compatible.
-			if uc, err := LoadConfig(); err == nil {
-				for id, ep := range uc.Endpoints {
-					if ep.BaseURL != "" && !seen[id] {
-						out = append(out, id)
-						seen[id] = true
-					}
-				}
-			}
-			return out
-		},
-		LoadSession:         loadSession,
-		NewSession:          newSession,
-		ChangeCWD:           changeCWD,
-		Trusted:             r.Trusted,
-		GatedContentPresent: hasGatedProjectContent(r.CWD),
+		LoggedInProviders:          loggedInProviderList,
+		LoadSession:                loadSession,
+		NewSession:                 newSession,
+		ChangeCWD:                  changeCWD,
+		Trusted:                    r.Trusted,
+		GatedContentPresent:        hasGatedProjectContent(r.CWD),
 		TrustWorkspace: func(parent bool) error {
 			// Persist trust for the live cwd (it may have moved via /cd).
 			return TrustPath(args.CWD, parent)

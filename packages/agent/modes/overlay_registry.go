@@ -533,14 +533,22 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				act := i.permissionsDialog.HandleKey(k)
 				switch {
 				case act.Revoke:
-					if act.Grant.allowAll {
+					// ctrlproto mode: the gate lives daemon-side; revokes ride
+					// the permissions surface's action vocabulary.
+					if i.cfg.Carrier != nil {
+						i.carrierPermissionRevoke(act.Grant)
+					} else if act.Grant.allowAll {
 						i.cfg.ConfirmGate.ClearAllowAll()
 					} else {
 						i.cfg.ConfirmGate.Revoke(act.Grant.tool)
 					}
 					i.refreshPermissionsDialog()
 				case act.ClearAll:
-					i.cfg.ConfirmGate.Reset()
+					if i.cfg.Carrier != nil {
+						i.carrierPermissionsReset()
+					} else {
+						i.cfg.ConfirmGate.Reset()
+					}
 					i.refreshPermissionsDialog()
 				}
 				return false

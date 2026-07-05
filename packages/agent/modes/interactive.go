@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/chat"
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/skills"
@@ -126,6 +127,19 @@ type InteractiveConfig struct {
 	// user must /login before they can prompt.
 	Agent *core.Agent
 
+	// Carrier, when non-nil, routes the TUI's hot path through the in-process
+	// ctrlproto WorkspaceService instead of driving Agent directly
+	// (--tui-ctrlproto; docs/proposals/tui-on-ctrlproto.md). CarrierSession is
+	// the resolved session id the TUI operates on. Experimental; the legacy
+	// Agent path runs when Carrier is nil.
+	Carrier        Carrier
+	CarrierSession string
+	// CarrierTasks enables /swarm on the carrier path (the tasks surface).
+	// The entry point sets it with the same gate the legacy path uses for
+	// cfg.Swarm — withheld from immersive/no-tools sessions so the dashboard
+	// can't re-inject the coding skin there.
+	CarrierTasks bool
+
 	InitialInput string
 
 	// Auth is required. When the user runs /login, Interactive talks to
@@ -193,6 +207,18 @@ type InteractiveConfig struct {
 	// LoadSession swaps the current session for the one at path. The
 	// callback returns the new agent message slice so the TUI can invalidate.
 	LoadSession func(path string) error
+
+	// RenameSessionFile persists a session rename from the /sessions picker.
+	// Optional: when nil the picker writes the title straight to the session
+	// file (core.RenameSession). The ctrlproto entry point routes it through
+	// the service so a live session's title stays in sync everywhere.
+	RenameSessionFile func(path, title string) error
+
+	// ListSessions supplies the /sessions picker's rows. Optional: when nil
+	// the picker scans the session store itself (core.DescribeSessions). The
+	// ctrlproto entry point routes it through the service's session group,
+	// which overlays live state the file's meta line can lag behind.
+	ListSessions func() []core.SessionSummary
 
 	// NewSession closes the current session and starts a fresh one in
 	// the same cwd: the agent keeps its provider/model/tools but its
@@ -681,6 +707,61 @@ type Interactive struct {
 	// whose marker survived and drops the rest; cleared after every submit.
 	// UI-goroutine only (key/slash handlers and submit), so no mutex.
 	clipboardImages []clipboardImageAttachment
+
+	// carrierPerm / carrierAsk track the ctrlproto path's pending
+	// permission/ask round-trips by wire id, so an EventPermissionResolved /
+	// EventAskResolved (another client answered; the turn cancelled) can
+	// dismiss the matching dialog entry instead of leaving it up to
+	// double-answer. Guarded by mu; carrier mode only.
+	carrierPerm map[string]*confirmRequest
+	carrierAsk  map[string]*questionRequest
+
+	// carrierPumpCancel cancels the pump's CURRENT subscription (not the
+	// whole pump): SwitchCarrierSession re-points cfg.CarrierSession and then
+	// fires this, and the supervisor loop re-subscribes to the new session.
+	// Guarded by mu; carrier mode only.
+	carrierPumpCancel context.CancelFunc
+
+	// carrierLastPrompt/Images track the running turn's user prompt for the
+	// rescue picker (the wire "error" event carries no prompt). Set at
+	// dispatch; the prompt also refreshes from user_message events so turns
+	// this client didn't dispatch (daemon queue restarts) stay rescuable —
+	// images only survive for locally-dispatched turns (raw bytes don't ride
+	// the event wire). Guarded by mu; carrier mode only.
+	carrierLastPrompt string
+	carrierLastImages []provider.ImageBlock
+
+	// carrierApprovalMode caches the daemon-side gate's approval mode for the
+	// status-bar badge (fetching a surface per frame would be absurd).
+	// Refreshed on snapshot (every (re)subscribe) and on the daemon's
+	// surface_updated("settings") broadcast. Guarded by mu.
+	carrierApprovalMode string
+
+	// carrierTaskRows caches the tasks surface for the /swarm dashboard,
+	// which re-reads its snapshot every frame while open. The cache serves
+	// those reads; a fetch happens only when carrierTasksStale is set — on
+	// the daemon's surface_updated("tasks") broadcast (≤1 per poll tick,
+	// change-driven) and when the dashboard opens. Guarded by mu.
+	carrierTaskRows   []swarm.AgentSnapshot
+	carrierTasksStale bool
+
+	// carrierMessages is the pump-owned transcript on the carrier path —
+	// the wire twin of the crutch agent's Messages(), and what buildChat
+	// renders in carrier mode. Snapshots replace it wholesale (they ride
+	// every subscribe and the daemon re-broadcasts one after compact,
+	// auto-compact, and clear); user_message/assistant_message events
+	// append; tool_result events fold into a trailing RoleTool message,
+	// mirroring core.Agent's per-step batching in executeTools.
+	// carrierMessagesRev bumps on every mutation and keys the chat render
+	// cache where the legacy path uses agent.Revision(). Guarded by mu.
+	carrierMessages    []provider.Message
+	carrierMessagesRev int
+
+	// replayState is the latest transport state of a replay session (position,
+	// total, playing, speed), stashed from EventReplayState broadcasts and read
+	// by the transport keys and the status-bar scrubber. Zero until the first
+	// replay_state arrives (the carrier autoplays on subscribe). Guarded by mu.
+	replayState ctrlproto.ReplayState
 }
 
 // welcomeVersionDuration is how long the welcome banner shows the
@@ -759,6 +840,8 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		fileSuggest:       newFileSuggester(),
 		spin:              newSpinner(cfg.Theme),
 		inputHistoryIndex: -1,
+		carrierPerm:       map[string]*confirmRequest{},
+		carrierAsk:        map[string]*questionRequest{},
 	}
 	i.overlays = i.buildOverlays()
 	i.keymap = i.buildGlobalKeymap()
@@ -854,6 +937,11 @@ func (i *Interactive) Run(ctx context.Context) error {
 	go i.turns.runPacer(ctx, i.invalidate)
 	go i.runGitProber(ctx)
 	go i.runStatusScripts(ctx)
+	// ctrlproto mode: the event pump replaces the synchronous per-turn sink —
+	// one reliable subscription for the whole session (tui-on-ctrlproto.md).
+	if i.cfg.Carrier != nil {
+		go i.runCarrierLoop(ctx)
+	}
 
 	cols, rows := term.Size()
 	i.rend.Resize(cols, rows)
@@ -905,8 +993,10 @@ func (i *Interactive) Run(ctx context.Context) error {
 
 	// No credential at startup? Auto-open the login dialog, and mark
 	// the status line. The user can Esc out of the dialog if they
-	// want to dismiss it (e.g. to check /help or /exit first).
-	if !i.turns.HasAgent() {
+	// want to dismiss it (e.g. to check /help or /exit first). A
+	// carrier-backed TUI never logs in here — the daemon/carrier owns
+	// credentials (and a replay carrier has no agent at all), so skip it.
+	if i.cfg.Carrier == nil && !i.turns.HasAgent() {
 		i.statusErr = i18n.T("not logged in. pick a login method below or press esc to dismiss.")
 		i.dialog.Open(i.cfg.TervaHome)
 	} else if !i.cfg.Trusted && i.cfg.GatedContentPresent {

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/modes"
@@ -44,8 +46,8 @@ func recvEvent(t *testing.T, ch <-chan ctrlproto.Event) ctrlproto.Event {
 func TestWSHubFanoutAndSnapshotFirst(t *testing.T) {
 	h := newWSHub()
 	snap := ctrlproto.SnapshotEvent(ctrlproto.Snapshot{Session: ctrlproto.SessionInfo{ID: "s1"}})
-	a := h.add(func() ctrlproto.Event { return snap })
-	b := h.add(nil)
+	a := h.add(func() ctrlproto.Event { return snap }, false)
+	b := h.add(nil, false)
 
 	// The snapshot must be the very first event the new subscriber sees.
 	if ev := <-a; ev.Type != ctrlproto.EventSnapshot {
@@ -66,9 +68,89 @@ func TestWSHubFanoutAndSnapshotFirst(t *testing.T) {
 	}
 }
 
+// TestWSHubReliableDeliversAllUnderBackpressure: a reliable subscriber (the
+// in-process TUI carrier) must receive every event in order even when the
+// broadcaster far outruns it — a dropped text delta corrupts the transcript.
+// Broadcasting far more than the buffer forces the no-drop send to block until
+// the consumer drains, which is exactly the backpressure we want.
+func TestWSHubReliableDeliversAllUnderBackpressure(t *testing.T) {
+	h := newWSHub()
+	reliable := h.add(nil, true)
+	const n = hubBuffer * 3 // far exceeds the buffer
+
+	go func() {
+		for i := range n {
+			h.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "text_delta", Delta: strconv.Itoa(i)}))
+		}
+	}()
+
+	for i := range n {
+		ev := recvEvent(t, reliable)
+		if ev.Delta != strconv.Itoa(i) {
+			t.Fatalf("event %d dropped or reordered: got delta %q", i, ev.Delta)
+		}
+	}
+}
+
+// TestWSHubLossyDropsUnderBackpressure: a lossy subscriber (a networked carrier)
+// never blocks the broadcaster — past the buffer it drops, so the turn keeps
+// moving for everyone else. This is the behavior the reliable path deliberately
+// diverges from.
+func TestWSHubLossyDropsUnderBackpressure(t *testing.T) {
+	h := newWSHub()
+	lossy := h.add(nil, false)
+	const n = hubBuffer * 2
+
+	// No draining: a lossy broadcast must not block despite the full buffer.
+	for i := range n {
+		h.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "text_delta", Delta: strconv.Itoa(i)}))
+	}
+
+	got := 0
+	for draining := true; draining; {
+		select {
+		case <-lossy:
+			got++
+		default:
+			draining = false
+		}
+	}
+	if got == 0 {
+		t.Fatal("lossy subscriber kept nothing")
+	}
+	if got >= n {
+		t.Fatalf("lossy subscriber kept all %d events; expected drops past the %d buffer", n, hubBuffer)
+	}
+}
+
+// TestWorkspaceDiagRedirect guards the invariant that host session-build
+// diagnostics can be steered off os.Stderr — a stray write corrupts the
+// in-process TUI's full-screen UI. SetDiag redirects; SetDiag(nil) silences;
+// a session with no workspace never panics.
+func TestWorkspaceDiagRedirect(t *testing.T) {
+	var got []string
+	w := &Workspace{diag: func(string) {}}
+	w.SetDiag(func(m string) { got = append(got, m) })
+	s := &wsSession{ws: w}
+
+	s.diag("extension load: boom")
+	if len(got) != 1 || got[0] != "extension load: boom" {
+		t.Fatalf("diag not redirected: %v", got)
+	}
+
+	w.SetDiag(nil) // silence
+	s.diag("should vanish")
+	if len(got) != 1 {
+		t.Fatalf("SetDiag(nil) should silence, got %v", got)
+	}
+
+	// A session built outside a Workspace (test fixtures) must not panic.
+	(&wsSession{}).diag("no workspace")
+}
+
 func TestWebConfirmerApproveWins(t *testing.T) {
 	s := newTestSession()
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 	s.mu.Lock()
 	s.turnCtx = t.Context()
 	s.curCallID = "call_42"
@@ -101,6 +183,37 @@ func TestWebConfirmerApproveWins(t *testing.T) {
 
 // TestPendingPermissionRecordedForSnapshot guards the reconnect-durability fix:
 // while a Confirm is parked, the request is recorded (so a fresh snapshot can
+// TestSnapshotCarriesImageData: the snapshot builder uses the FULL wire
+// form, so a client rendering from snapshots (the TUI carrier, a
+// reconnecting web tab) gets real pixels, not just sizes. Serialized
+// carriers strip at their connection boundary per negotiation (covered in
+// ctrlproto's strip tests).
+func TestSnapshotCarriesImageData(t *testing.T) {
+	tmp := t.TempDir()
+	sess, err := core.NewSession(tmp, tmp, "p", "m", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newTestSession()
+	s.sess = sess
+	s.agent = core.NewAgent(nil, "m", "", core.Registry{})
+	s.agent.SetMessages([]provider.Message{{
+		Role: provider.RoleUser,
+		Content: []provider.Content{
+			provider.TextBlock{Text: "look at this"},
+			provider.ImageBlock{MimeType: "image/png", Data: []byte{1, 2, 3}},
+		},
+	}})
+	snap := s.snapshot()
+	if len(snap.Messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(snap.Messages))
+	}
+	img := snap.Messages[0].Content[1]
+	if string(img.Data) != "\x01\x02\x03" || img.Bytes != 3 || img.MimeType != "image/png" {
+		t.Fatalf("snapshot image block = %+v, want the full form", img)
+	}
+}
+
 // re-surface the dialog) and cleared once resolved.
 func TestPendingPermissionRecordedForSnapshot(t *testing.T) {
 	s := newTestSession()
@@ -108,7 +221,7 @@ func TestPendingPermissionRecordedForSnapshot(t *testing.T) {
 	s.turnCtx = t.Context()
 	s.curCallID = "c9"
 	s.mu.Unlock()
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 
 	go (&webConfirmer{s: s}).Confirm("bash", "ls -la")
 
@@ -159,7 +272,7 @@ func TestWebConfirmerCancelFailsClosed(t *testing.T) {
 
 func TestWebAskerAnswerWins(t *testing.T) {
 	s := newTestSession()
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 
 	result := make(chan core.UserAnswer, 1)
 	go func() {
@@ -332,7 +445,7 @@ func TestSettleTitleFallbackBroadcasts(t *testing.T) {
 	_ = sess.AppendMessage(provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "help me refactor the parser"}}})
 	s := &wsSession{id: sessionIDFromPath(sess.Path), ws: w, sess: sess, hub: newWSHub()}
 
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 	s.applyTitle("help me refactor the parser")
 
 	ev := recvEvent(t, sub)
@@ -351,7 +464,7 @@ func TestSettleTitleFallbackBroadcasts(t *testing.T) {
 // (user rename or a prior turn) neither regenerates nor broadcasts.
 func TestSettleTitleSkipsWhenTitled(t *testing.T) {
 	s := &wsSession{id: "x", hub: newWSHub(), title: "already named"}
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 	s.settleTitle(context.Background())
 	select {
 	case ev := <-sub:
@@ -364,7 +477,7 @@ func TestSettleTitleSkipsWhenTitled(t *testing.T) {
 // queued messages: it replaces the agent queue and broadcasts the new list.
 func TestSetQueueBroadcasts(t *testing.T) {
 	s := &wsSession{id: "x", hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{})}
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 
 	s.setQueue([]string{"a", "b"})
 	ev := recvEvent(t, sub)
@@ -381,6 +494,184 @@ func TestSetQueueBroadcasts(t *testing.T) {
 	if len(ev2.Queued) != 1 || ev2.Queued[0] != "b" {
 		t.Fatalf("after cancel queued = %v, want [b]", ev2.Queued)
 	}
+}
+
+// gatedTurnClient is a provider.Client whose stream parks until the test
+// releases it, so a test can act (queue, cancel) at a known point mid-turn.
+// started signals each Stream call; fail ends the turn with a non-retryable
+// error instead of a reply.
+type gatedTurnClient struct {
+	started chan struct{}
+	release chan struct{}
+	fail    bool
+}
+
+func (c *gatedTurnClient) Name() string { return "gated-fake" }
+
+func (c *gatedTurnClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	select {
+	case c.started <- struct{}{}:
+	default:
+	}
+	out := make(chan provider.Event, 4)
+	go func() {
+		defer close(out)
+		<-c.release
+		if c.fail {
+			out <- provider.EventDone{Stop: provider.StopError, Err: errors.New("boom: bad request")}
+			return
+		}
+		out <- provider.EventDone{Stop: provider.StopEnd, Message: provider.Message{
+			Role:    provider.RoleAssistant,
+			Content: []provider.Content{provider.TextBlock{Text: "ok"}},
+		}}
+	}()
+	return out, nil
+}
+
+// newTurnTestSession builds the minimal wsSession that can run real turns:
+// a live agent with the buildSession OnEvent fan-out, inside a workspace shell
+// with a background context. Title pre-set so settleTitle short-circuits (no
+// session file to rename).
+func newTurnTestSession(cl provider.Client) *wsSession {
+	s := &wsSession{
+		id:    "turns",
+		ws:    &Workspace{ctx: context.Background(), diag: func(string) {}},
+		hub:   newWSHub(),
+		agent: core.NewAgent(cl, "fake-model", "", core.Registry{}),
+		title: "titled",
+	}
+	s.agent.OnEvent = func(ev core.AgentEvent) {
+		s.broadcast(ctrlproto.ConversationEvent(core.EventToWire(ev)))
+	}
+	return s
+}
+
+// drainUntil consumes events until one of the wanted types arrives, returning
+// it plus every event seen on the way (for ordering assertions).
+func drainUntil(t *testing.T, ch <-chan ctrlproto.Event, want ...string) (ctrlproto.Event, []ctrlproto.Event) {
+	t.Helper()
+	var seen []ctrlproto.Event
+	for {
+		ev := recvEvent(t, ch)
+		seen = append(seen, ev)
+		if slices.Contains(want, ev.Type) {
+			return ev, seen
+		}
+	}
+}
+
+// TestWorkspaceTurnErrorEmitsErrorThenDone: the agent's own "done" does not
+// fire when the run loop returns an error, so the workspace must synthesize a
+// definitive completion — error first (status/rescue payload), then done (the
+// busy-clearing signal) — or every stream consumer's busy state sticks.
+func TestWorkspaceTurnErrorEmitsErrorThenDone(t *testing.T) {
+	cl := &gatedTurnClient{started: make(chan struct{}, 1), release: make(chan struct{}), fail: true}
+	s := newTurnTestSession(cl)
+	sub := s.hub.add(nil, true)
+
+	if err := s.prompt("hi", nil); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	<-cl.started
+	// Queue a follow-up mid-turn: the failed turn must drop it (stale
+	// follow-ups must not fire after a failure), broadcasting the empty queue.
+	s.queue("stale follow-up")
+	close(cl.release)
+
+	done, seen := drainUntil(t, sub, "done")
+	_ = done
+	var errAt, doneAt = -1, -1
+	for i, ev := range seen {
+		switch ev.Type {
+		case "error":
+			errAt = i
+		case "done":
+			doneAt = i
+		}
+	}
+	if errAt < 0 || doneAt < 0 || errAt > doneAt {
+		t.Fatalf("want error before done, got order %v", eventTypes(seen))
+	}
+	// The dropped queue converges every client on empty.
+	qe, _ := drainUntil(t, sub, ctrlproto.EventQueueUpdated)
+	if len(qe.Queued) != 0 {
+		t.Fatalf("failed turn should drop the queue, got %v", qe.Queued)
+	}
+	if n := s.agent.QueuedMessageCount(); n != 0 {
+		t.Fatalf("queued count after failed turn = %d, want 0", n)
+	}
+}
+
+// TestWorkspaceQueueRestartsAfterTurn: a message queued in the turn's final
+// instants (after the run loop's last boundary check) must not strand — the
+// workspace shifts the queue head and starts the next turn itself, the
+// daemon-side mirror of the TUI turn engine's release semantics.
+func TestWorkspaceQueueRestartsAfterTurn(t *testing.T) {
+	cl := &gatedTurnClient{started: make(chan struct{}, 2), release: make(chan struct{}, 2)}
+	s := newTurnTestSession(cl)
+	sub := s.hub.add(nil, true)
+
+	cl.release <- struct{}{}
+	if err := s.prompt("first", nil); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	// The agent's "done" means the run loop is past its final queued-message
+	// check; whichever side of endTurn this lands on, the message must still
+	// run as its own turn.
+	drainUntil(t, sub, "done")
+	s.queue("second")
+	cl.release <- struct{}{}
+
+	ev, _ := drainUntil(t, sub, "user_message")
+	if got := wireMessageText(ev.Message); got != "second" {
+		t.Fatalf("restarted turn user message = %q, want %q", got, "second")
+	}
+	drainUntil(t, sub, "done")
+	if n := s.agent.QueuedMessageCount(); n != 0 {
+		t.Fatalf("queued count after restart = %d, want 0", n)
+	}
+}
+
+// TestWorkspaceQueueWhileIdlePrompts: queueing with no turn running is a
+// deferred Prompt (the interface contract's discretion) — it starts a turn
+// instead of stranding until the next user prompt.
+func TestWorkspaceQueueWhileIdlePrompts(t *testing.T) {
+	cl := &gatedTurnClient{started: make(chan struct{}, 1), release: make(chan struct{}, 1)}
+	s := newTurnTestSession(cl)
+	sub := s.hub.add(nil, true)
+
+	cl.release <- struct{}{}
+	s.queue("go")
+	ev, _ := drainUntil(t, sub, "user_message")
+	if got := wireMessageText(ev.Message); got != "go" {
+		t.Fatalf("idle queue user message = %q, want %q", got, "go")
+	}
+	drainUntil(t, sub, "done")
+	if n := s.agent.QueuedMessageCount(); n != 0 {
+		t.Fatalf("queued count = %d, want 0", n)
+	}
+}
+
+func eventTypes(evs []ctrlproto.Event) []string {
+	out := make([]string, len(evs))
+	for i, ev := range evs {
+		out[i] = ev.Type
+	}
+	return out
+}
+
+func wireMessageText(m *core.WireMessage) string {
+	if m == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, b := range m.Content {
+		if b.Type == "text" {
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
 }
 
 // TestContextBreakdown covers the /context size accounting: system + transcript
@@ -409,6 +700,188 @@ func TestContextBreakdown(t *testing.T) {
 	}
 	if b.Messages[1].Bytes <= b.Messages[0].Bytes {
 		t.Errorf("expected message 1 (the long one) to be largest: %+v", b.Messages)
+	}
+}
+
+// TestContextTree covers the context-tree outline: sections at the root, the
+// transcript grouped into turns by user-prompt boundary, with a leading
+// compaction summary + preserved tail collected under "preserved context"
+// rather than masquerading as turn #1. Message ids carry the global index.
+func TestContextTree(t *testing.T) {
+	ag := core.NewAgent(nil, "fake", "", core.Registry{})
+	ag.System = "sys"
+	ag.SetMessages([]provider.Message{
+		{Role: provider.RoleUser, Meta: map[string]string{"compaction": "true"},
+			Content: []provider.Content{provider.TextBlock{Text: "## Context Summary (compacted)"}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "kept tail"}}},
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "refactor the parser"}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "done"}}},
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "now add tests"}}},
+	})
+	s := &wsSession{id: "x", hub: newWSHub(), agent: ag}
+
+	b := s.contextBreakdown()
+	if b.Tree == nil {
+		t.Fatal("tree is nil")
+	}
+	if b.Rev == 0 {
+		t.Error("rev should be non-zero after SetMessages")
+	}
+	if b.Tree.ID != "root" || len(b.Tree.Children) != 4 {
+		t.Fatalf("root = %+v (want id=root with 4 sections)", b.Tree)
+	}
+	tr := b.Tree.Children[3]
+	if tr.ID != "tr" || tr.Kind != "section" {
+		t.Fatalf("4th section should be transcript, got %+v", tr)
+	}
+	if len(tr.Children) != 3 {
+		t.Fatalf("transcript turns = %d, want 3 (preserved + 2 prompts)\n%+v", len(tr.Children), tr.Children)
+	}
+	pre, t1, t2 := tr.Children[0], tr.Children[1], tr.Children[2]
+	if pre.Label != "preserved context" || len(pre.Children) != 2 {
+		t.Errorf("leading group = %q with %d msgs, want 'preserved context' with 2", pre.Label, len(pre.Children))
+	}
+	if t1.Label != "turn #1" || t1.Summary != "refactor the parser" || len(t1.Children) != 2 {
+		t.Errorf("turn 1 = %+v", t1)
+	}
+	if t1.Children[0].ID != "tr/m2" {
+		t.Errorf("turn 1 first message id = %q, want tr/m2 (global index)", t1.Children[0].ID)
+	}
+	if t2.Label != "turn #2" || t2.Summary != "now add tests" || len(t2.Children) != 1 {
+		t.Errorf("turn 2 = %+v", t2)
+	}
+}
+
+// TestContextNode covers the lazy expand: a message id resolves to its content
+// blocks (with bodies), the tools section to per-tool specs, and a stale/unknown
+// id fails with not_found. Reveal ops are not served yet.
+func TestContextNode(t *testing.T) {
+	ag := core.NewAgent(nil, "fake", "SYSTEM PROMPT", core.Registry{})
+	ag.SetMessages([]provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hello there"}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{
+			provider.TextBlock{Text: "on it"},
+			provider.ToolCallBlock{ID: "c1", Name: "bash", Arguments: []byte(`{"cmd":"ls"}`)},
+		}},
+	})
+	s := &wsSession{id: "x", hub: newWSHub(), agent: ag}
+
+	// A message expands to its content blocks, each carrying its body.
+	n, err := s.contextNode("tr/m1", "")
+	if err != nil {
+		t.Fatalf("contextNode(tr/m1): %v", err)
+	}
+	if n.Kind != "message" || len(n.Children) != 2 {
+		t.Fatalf("message node = %+v, want 2 block children", n)
+	}
+	if n.Children[0].Content != "on it" {
+		t.Errorf("first block content = %q, want %q", n.Children[0].Content, "on it")
+	}
+	if n.Children[1].Kind != "block" || !strings.Contains(n.Children[1].Content, "bash") {
+		t.Errorf("tool-call block = %+v, want content mentioning bash", n.Children[1])
+	}
+
+	// The system prompt expands to its text.
+	if sys, err := s.contextNode("sys", ""); err != nil || sys.Content != "SYSTEM PROMPT" {
+		t.Errorf("sys node = %+v err=%v", sys, err)
+	}
+
+	// A stale/unknown id is not_found; an unknown op is unsupported.
+	if _, err := s.contextNode("tr/m9", ""); err == nil {
+		t.Error("out-of-range message id should error")
+	}
+	if _, err := s.contextNode("tr/m0", "bogus"); err == nil {
+		t.Error("unknown op should be unsupported")
+	}
+}
+
+// TestRevealCompactionNode drives the reveal op end-to-end over a persisted,
+// twice-compacted session: the live summary is marked revealable, revealing it
+// returns the span it replaced with the prior summary as a nested revealable
+// node, and revealing that walks one epoch further back.
+func TestRevealCompactionNode(t *testing.T) {
+	dir := t.TempDir()
+	sess, err := core.NewSession(dir, dir, "fake", "model", "v")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	um := func(s string) provider.Message {
+		return provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: s}}}
+	}
+	sm := func(s string) provider.Message {
+		m := um(s)
+		m.Meta = map[string]string{"compaction": "true"}
+		return m
+	}
+	for _, s := range []string{"m0", "m1", "m2", "m3"} {
+		_ = sess.AppendMessage(um(s))
+	}
+	_ = sess.AppendCompaction([]provider.Message{sm("summary1"), um("m2"), um("m3")})
+	_ = sess.AppendMessage(um("m4"))
+	_ = sess.AppendMessage(um("m5"))
+	_ = sess.AppendCompaction([]provider.Message{sm("summary2"), um("m4"), um("m5")})
+
+	// The live agent after compaction holds the latest summary + its kept tail.
+	ag := core.NewAgent(nil, "fake", "", core.Registry{})
+	ag.SetMessages([]provider.Message{
+		sm("summary2"),
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "m4"}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "m5"}}},
+	})
+	s := &wsSession{id: "x", hub: newWSHub(), agent: ag, sess: sess}
+
+	// Outline: the live summary (index 0) reads as a revealable event.
+	tr := s.contextBreakdown().Tree.Children[3]
+	summaryNode := tr.Children[0].Children[0]
+	if summaryNode.Kind != "event" || summaryNode.Reveal != "compaction" {
+		t.Fatalf("live summary node = %+v, want kind=event reveal=compaction", summaryNode)
+	}
+
+	// Reveal it → [summary1, m2, m3]; summary1 is a nested reveal to the prior epoch.
+	n, err := s.contextNode("tr/m0", "compaction")
+	if err != nil {
+		t.Fatalf("reveal(tr/m0): %v", err)
+	}
+	if n.Kind != "event" || len(n.Children) != 3 {
+		t.Fatalf("reveal node = %+v, want 3 replaced children", n)
+	}
+	if n.Children[0].ID != "ev/c0" || n.Children[0].Reveal != "compaction" {
+		t.Errorf("first revealed child should be the prior summary reveal: %+v", n.Children[0])
+	}
+
+	// Reveal the prior epoch → [m0, m1].
+	prev, err := s.contextNode("ev/c0", "compaction")
+	if err != nil {
+		t.Fatalf("reveal(ev/c0): %v", err)
+	}
+	if len(prev.Children) != 2 {
+		t.Errorf("prior reveal = %d children, want 2 (m0, m1)", len(prev.Children))
+	}
+
+	// A live-only session (no durable file) can't reveal.
+	nolog := &wsSession{id: "y", hub: newWSHub(), agent: ag}
+	if _, err := nolog.contextNode("tr/m0", "compaction"); err == nil {
+		t.Error("reveal without a persisted session should error")
+	}
+}
+
+// TestExtContextItems covers the stage-4 facet: an extension's structured
+// context snapshot maps to per-source leaf nodes, split by kind (static guidance
+// vs ephemeral cards) with ids namespaced under the section.
+func TestExtContextItems(t *testing.T) {
+	items := []extensions.ContextItem{
+		{Source: "git-worktree", Kind: "static", Text: "worktree guidance"},
+		{Source: "memory", Kind: "static", Text: "memory guidance"},
+		{Source: "world", Kind: "card", ID: "scene1", Label: "Tavern", Text: "a cozy tavern"},
+	}
+	statics := ctxExtItems(items, "static", "sys/xg")
+	if len(statics) != 2 || statics[0].ID != "sys/xg/git-worktree" || statics[0].Content != "worktree guidance" {
+		t.Fatalf("static items = %+v", statics)
+	}
+	cards := ctxExtItems(items, "card", "xt/card")
+	if len(cards) != 1 || cards[0].ID != "xt/card/world/scene1" || cards[0].Label != "world: Tavern" {
+		t.Errorf("cards = %+v", cards)
 	}
 }
 
@@ -526,7 +999,7 @@ func TestExtWidgetSurface(t *testing.T) {
 // a command-level error becomes an error notice, and noop broadcasts nothing.
 func TestCommandResponseActions(t *testing.T) {
 	s := &wsSession{id: "x", hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 
 	// open_panel opens a pane through the existing panel machinery.
 	s.applyCommandResponse("todo", extproto.CommandResponseFromExt{
@@ -592,7 +1065,7 @@ func TestWorkspaceRestartGated(t *testing.T) {
 // it's exercised by core's own compaction tests.
 func TestWorkspaceCompact(t *testing.T) {
 	s := &wsSession{id: "x", hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{})}
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 
 	// Empty transcript → benign "nothing to compact" notice, no error.
 	if err := s.compact(context.Background()); err != nil {
@@ -608,6 +1081,52 @@ func TestWorkspaceCompact(t *testing.T) {
 	s.mu.Unlock()
 	if err := s.compact(context.Background()); !errors.Is(err, ctrlproto.ErrBusy) {
 		t.Fatalf("compact while busy should be ErrBusy, got %v", err)
+	}
+}
+
+// TestExtensionsActionGlobalScope: the new manifest-scope toggle resolves the
+// extension's install dir; an unknown name is a clean not-found, not an
+// internal error (and never reaches the live-apply step).
+func TestExtensionsActionGlobalScope(t *testing.T) {
+	s := &wsSession{id: "x", cwd: t.TempDir(), hub: newWSHub()}
+	err := s.extensionsAction("toggle", map[string]string{"name": "no-such-ext", "enabled": "true", "scope": "global"})
+	var ce *ctrlproto.Error
+	if !errors.As(err, &ce) || ce.Code != ctrlproto.CodeNotFound {
+		t.Fatalf("global toggle of unknown ext = %v, want CodeNotFound", err)
+	}
+}
+
+// TestSessionSummariesFromInfos: the wire→picker mapping keeps every field the
+// /sessions picker renders; Title arrives pre-derived by the service
+// (titleFromFirstText), so FirstUserText staying empty loses nothing.
+func TestSessionSummariesFromInfos(t *testing.T) {
+	got := sessionSummariesFromInfos([]ctrlproto.SessionInfo{{
+		ID: "ab12", Title: "fix the parser", Provider: "openai", Model: "gpt-5.5",
+		Path: "/s/ab12.jsonl", Created: "2026-07-04T10:00:00Z", Messages: 7,
+		Usage: core.WireUsage{CostUSD: 1.25},
+	}})
+	if len(got) != 1 {
+		t.Fatalf("got %d summaries, want 1", len(got))
+	}
+	s := got[0]
+	if s.Path != "/s/ab12.jsonl" || s.Title != "fix the parser" || s.Provider != "openai" ||
+		s.Model != "gpt-5.5" || s.MessageCount != 7 || s.TotalCost != 1.25 || s.Started.IsZero() {
+		t.Fatalf("summary = %+v", s)
+	}
+}
+
+// TestTaskActionSpawnValidation: the tasks surface's spawn verb requires a
+// swarm and a non-blank task, each a clean typed error — validation runs
+// before the swarm is touched (a real spawn launches a child process).
+func TestTaskActionSpawnValidation(t *testing.T) {
+	w := &Workspace{}
+	var ce *ctrlproto.Error
+	if err := w.taskAction("spawn", map[string]string{"task": "x"}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeUnsupported {
+		t.Fatalf("spawn without swarm = %v, want CodeUnsupported", err)
+	}
+	w.swarm = swarm.New(swarm.Config{Root: t.TempDir(), RepoRoot: t.TempDir()})
+	if err := w.taskAction("spawn", map[string]string{"task": "   "}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeBadRequest {
+		t.Fatalf("spawn with blank task = %v, want CodeBadRequest", err)
 	}
 }
 
@@ -667,7 +1186,7 @@ func TestPermissionsSurface(t *testing.T) {
 	if got := s.permissionsView(); !got.AllowAll {
 		t.Error("allowAll should be true after AllowAll()")
 	}
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 	if err := s.permissionsAction("revoke_all", nil); err != nil {
 		t.Fatalf("revoke_all: %v", err)
 	}
@@ -703,7 +1222,7 @@ func TestExtensionsToggleAction(t *testing.T) {
 		t.Error("missing name should error")
 	}
 
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 	// Disable → foo lands in the project disable list.
 	if err := s.extensionsAction("toggle", map[string]string{"name": "foo", "enabled": "false"}); err != nil {
 		t.Fatalf("toggle off: %v", err)
@@ -914,7 +1433,7 @@ func TestWorkspaceClear(t *testing.T) {
 	ag := core.NewAgent(nil, "fake", "", core.Registry{})
 	ag.SetMessages([]provider.Message{{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hello"}}}})
 	s := &wsSession{id: "x", hub: newWSHub(), agent: ag, sess: sess}
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 
 	if err := s.clear(); err != nil {
 		t.Fatalf("clear: %v", err)
@@ -953,7 +1472,7 @@ func TestWorkspaceTrust(t *testing.T) {
 	// nil extMgr takes the rebuildTools branch.
 	s := &wsSession{id: "x", hub: newWSHub(), sess: sess, agent: core.NewAgent(nil, "fake", "", core.Registry{})}
 	w := &Workspace{cwd: dir, args: Args{CWD: dir}, sessions: map[string]*wsSession{"x": s}}
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 
 	if err := w.Trust(context.Background(), false); err != nil {
 		t.Fatalf("Trust: %v", err)
@@ -1116,7 +1635,7 @@ func TestSettingsLanguage(t *testing.T) {
 // the registry, broadcasts, is fetchable, and leaves on close.
 func TestExtPanelSurface(t *testing.T) {
 	s := &wsSession{id: "x", hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
-	sub := s.hub.add(nil)
+	sub := s.hub.add(nil, false)
 
 	s.paneOpen("memory", extproto.PanelSpec{ID: "main", Title: "Memory", Lines: []string{"a", "b"}})
 	if ev := recvEvent(t, sub); ev.Type != ctrlproto.EventSurfacesChanged {

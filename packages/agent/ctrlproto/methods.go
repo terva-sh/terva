@@ -30,6 +30,7 @@ const (
 	MethodSessionDelete Method = "sessions.delete" // no params (sess in frame)
 	MethodUsageGet      Method = "usage.get"       // result UsageResult (sess in frame)
 	MethodContextGet    Method = "context.get"     // result ContextResult (sess in frame)
+	MethodContextNode   Method = "context.node"    // params ContextNodeParams, result ContextNodeResult (sess in frame)
 	MethodSurfacesList  Method = "surfaces.list"   // result SurfacesResult (sess in frame)
 	MethodSurfaceGet    Method = "surface.get"     // params SurfaceGetParams, result SurfaceResult
 	MethodSurfaceAction Method = "surface.action"  // params SurfaceActionParams (sess in frame)
@@ -43,6 +44,11 @@ const (
 	MethodTrust         Method = "control.trust"   // params TrustParams; grant Workspace Trust to cwd
 	MethodUntrust       Method = "control.untrust" // no params; revoke Workspace Trust for cwd
 	MethodRestart       Method = "control.restart" // no params; re-execs the daemon (Tier-1 self-restart)
+
+	// --- replay group (optional; served only by a ReplayController) ---
+
+	MethodReplayControl Method = "replay.control" // params ReplayControlParams, result ReplayStateResult (sess in frame)
+	MethodReplayState   Method = "replay.state"   // result ReplayStateResult (sess in frame)
 )
 
 // Group returns the method group m belongs to, or "" if unknown.
@@ -53,11 +59,13 @@ func (m Method) Group() Group {
 		return GroupConversation
 	case MethodSessionsList, MethodSessionCreate, MethodSessionResume,
 		MethodSessionRename, MethodSessionDelete, MethodUsageGet, MethodContextGet,
-		MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog:
+		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite,
 		MethodTrust, MethodUntrust, MethodRestart:
 		return GroupControl
+	case MethodReplayControl, MethodReplayState:
+		return GroupReplay
 	}
 	return ""
 }
@@ -99,9 +107,12 @@ type RenameParams struct {
 	Title string `json:"title"`
 }
 
-// ModelSwitchParams is the payload of [MethodModelSwitch].
+// ModelSwitchParams is the payload of [MethodModelSwitch]. Provider qualifies
+// Model (ids are not globally unique across providers); empty resolves across
+// all providers, preserving the old wire behavior.
 type ModelSwitchParams struct {
-	Model string `json:"model"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model"`
 }
 
 // SurfaceGetParams is the payload of [MethodSurfaceGet].
@@ -164,6 +175,21 @@ type ModelsResult struct {
 // ContextResult is the payload of a [MethodContextGet] response.
 type ContextResult struct {
 	Breakdown ContextBreakdown `json:"breakdown"`
+}
+
+// ContextNodeParams is the payload of [MethodContextNode]: resolve one context
+// node by its opaque id (minted by context.get). Op selects the operation —
+// empty (or "expand") returns the node with its content/children populated one
+// level deep; a non-empty op is a node-named reveal (e.g. "compaction", stage 3).
+type ContextNodeParams struct {
+	ID string `json:"id"`
+	Op string `json:"op,omitempty"`
+}
+
+// ContextNodeResult is the payload of a [MethodContextNode] response: the
+// requested node with its lazily-fetched content/children filled in.
+type ContextNodeResult struct {
+	Node ContextNode `json:"node"`
 }
 
 // SurfacesResult is the payload of a [MethodSurfacesList] response: the panes

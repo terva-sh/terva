@@ -40,6 +40,13 @@ const (
 	// is an opt-in build (-tags terva_web); the no-tag binary routes here too
 	// but exits with "web mode not built in".
 	ModeWeb Mode = "web"
+	// ModeReplay plays a recorded session transcript back through the
+	// interactive TUI as a deterministic, transport-controlled scene (the
+	// session player). Routed via `terva replay <file>` / --replay. It backs
+	// the TUI with a read-only replay carrier instead of a live Workspace, so
+	// it needs no credential and rejects prompts. See
+	// docs/proposals/session-player.md.
+	ModeReplay Mode = "replay"
 )
 
 // Args holds parsed command-line options.
@@ -51,6 +58,10 @@ type Args struct {
 
 	BaseURL string // override provider base URL (for tests/self-hosted)
 
+	// ReplayPath is the recorded session transcript to play back (--replay /
+	// `terva replay <file>`, Mode == ModeReplay).
+	ReplayPath string
+
 	// Web control-panel mode (--web / `terva web`, build tag terva_web).
 	WebAddr           string   // listen address (default 127.0.0.1:8730)
 	WebAuthHeader     string   // trust this forward-auth header as the authenticated user (e.g. X-Forwarded-User)
@@ -58,6 +69,13 @@ type Args struct {
 	WebToken          string   // bearer token required on requests when no forward-auth is used
 	WebInsecure       bool     // allow binding a non-loopback address with no auth mode (dangerous)
 	WebAllowRestart   bool     // enable Tier-1 self-restart (control.restart + the terva_restart tool); off by default
+
+	// TUICtrlproto routes the interactive TUI through the in-process ctrlproto
+	// carrier (WorkspaceService) instead of driving a *core.Agent directly — the
+	// TUI-on-ctrlproto migration (docs/proposals/tui-on-ctrlproto.md).
+	// Experimental, default-off; the legacy path stays the default until the
+	// migration reaches feature parity.
+	TUICtrlproto bool
 
 	SystemPrompt       string
 	AppendSystemPrompt []string
@@ -306,6 +324,13 @@ func ParseArgs(in []string) (Args, error) {
 			a.Mode = ModeACP
 		case "--web":
 			a.Mode = ModeWeb
+		case "--replay":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.Mode = ModeReplay
+			a.ReplayPath = v
 		case "--web-addr":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -476,6 +501,10 @@ func ParseArgs(in []string) (Args, error) {
 			a.Exts = append(a.Exts, v)
 		case "--no-ext", "--no-extensions":
 			a.NoExt = true
+		case "--tui-ctrlproto":
+			// Experimental: drive the interactive TUI through the in-process
+			// ctrlproto carrier (docs/proposals/tui-on-ctrlproto.md).
+			a.TUICtrlproto = true
 		case "--extensions":
 			v, err := want(&i, arg)
 			if err != nil {

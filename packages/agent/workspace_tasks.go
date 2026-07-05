@@ -95,10 +95,12 @@ func (w *Workspace) taskList() *ctrlproto.TaskList {
 			Model:    s.Model,
 			Provider: s.Provider,
 			Persona:  s.Persona,
+			Dir:      s.Dir,
 			Started:  ctrlTimeString(s.Started),
 			Finished: ctrlTimeString(s.Finished),
 			Err:      s.Err,
 			Tail:     s.Tail,
+			Lines:    s.Lines,
 		})
 	}
 	return &ctrlproto.TaskList{Tasks: out}
@@ -130,6 +132,15 @@ func (w *Workspace) taskAction(action string, args map[string]string) error {
 		_, err = w.swarm.Resume(w.ctx, id)
 	case "send":
 		err = w.swarm.SendUserTurn(id, args["text"])
+	case "spawn":
+		// Actions carry no result payload, so the new agent's id doesn't ride
+		// back — the caller sees it appear on the next tasks fetch instead.
+		if strings.TrimSpace(args["task"]) == "" {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "spawn: missing task")
+		}
+		_, err = w.swarm.SpawnReq(w.ctx, swarm.SpawnRequest{
+			Task: args["task"], Model: args["model"], Provider: args["provider"], Persona: args["persona"],
+		})
 	default:
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown tasks action %q", action)
 	}

@@ -19,13 +19,16 @@ func (s *wsSession) mcpView() *ctrlproto.MCPView {
 	}
 	for _, m := range listMCPServers(s.cwd, s.trusted.Load(), s.ws.mcpAdapter.mgr) {
 		v.Servers = append(v.Servers, ctrlproto.MCPServerInfo{
-			Name:        m.Name,
-			Scope:       m.Scope,
-			Description: m.Description,
-			Status:      mcpStatus(m),
-			Enabled:     m.Effective,
-			Tools:       m.Tools,
-			Note:        m.StartupError,
+			Name:            m.Name,
+			Scope:           m.Scope,
+			Description:     m.Description,
+			Status:          mcpStatus(m),
+			Enabled:         m.Effective,
+			Tools:           m.Tools,
+			Note:            m.StartupError,
+			UserDisabled:    m.UserDisabled,
+			ProjectDisabled: m.ProjectDisabled,
+			Connected:       m.Connected,
 		})
 	}
 	return v

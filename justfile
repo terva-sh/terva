@@ -11,12 +11,13 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # justfile still works there.
 import? 'release.just'
 
-# This is a hard fork (renamed terva). The flow is mostly OUTBOUND now:
+# This is a hard fork (renamed terva). The flow is OUTBOUND only:
 # `just mirror-*` pushes the curated release branches to the public
-# GitHub mirror. Upstream zot is occasional inspiration, consumed # rename:keep
-# through `just upstream-merge`'s translation workflow when wanted —
-# we are not hooking our cart to that horse.
-upstream_url := "https://github.com/patriceckhart/zot.git" # rename:keep — upstream really is zot
+# GitHub mirror. Upstream tracking was retired in July 2026 (the
+# control-plane rearchitecture made the codebases fundamentally
+# different); should a specific upstream change ever be worth a manual
+# port, scripts/rename-upstream.sh still translates their naming and
+# module path onto ours.
 # The mirror is a STAGING GATE: a local clone of github.com/terva-sh/terva
 # whose origin is the real GitHub repo. release-publish lands releases in
 # the clone; going live is an explicit push from inside it, so every
@@ -123,6 +124,13 @@ web-build:
     npm --prefix packages/agent/web/client run build
     @echo "built web client -> packages/agent/web/client/dist (commit it)"
 
+# Run the web client's unit tests (vitest over the pure store/transform logic).
+# Local-only, like web-build: there is no Node in `just ci`, so this is a
+# developer gate you run after changing packages/agent/web/client/src.
+web-test:
+    npm --prefix packages/agent/web/client ci
+    npm --prefix packages/agent/web/client test
+
 # goreleaser drives real packaging (cross-compiled archives + checksums;
 # CI snapshot job and the tag-triggered release workflow use the same
 # config). These targets install goreleaser on first use.
@@ -228,48 +236,3 @@ mirror-push: mirror-init
     @git push mirror 'refs/heads/release:refs/heads/release' 2>/dev/null \
         || echo "no local release branch yet — run the release-cut flow first"
     @git push mirror 'refs/heads/release-*:refs/heads/release-*' 2>/dev/null || true
-
-# Ensure the `upstream` remote points at upstream zot (idempotent). # rename:keep
-upstream-init:
-    @if git remote get-url upstream >/dev/null 2>&1; then \
-        git remote set-url upstream "{{upstream_url}}"; \
-    else \
-        git remote add upstream "{{upstream_url}}"; \
-    fi
-    @echo "upstream -> $(git remote get-url upstream)"
-
-# Fetch upstream and show how far this branch sits from upstream/main.
-# Informational; consuming upstream is occasional, not a cadence.
-upstream-status: upstream-init
-    # --no-tags: fetching upstream's tags is how zot's v0.103.1 leaked # rename:keep
-    # into this repo (and fired a bogus Forgejo release). terva's own
-    # versions live in upstream's future number space (0.104+,
-    # docs/plans/release-process.md), so their tags must never land here.
-    git fetch upstream --prune --no-tags
-    @counts=$(git rev-list --left-right --count HEAD...upstream/main); \
-        echo "ahead $(echo "$counts" | cut -f1) / behind $(echo "$counts" | cut -f2) vs upstream/main"
-    @echo "--- upstream commits not yet merged ---"
-    @git log --oneline --no-decorate HEAD..upstream/main || true
-
-# Rebuilds the `upstream-translated` branch from upstream/main in a
-# throwaway worktree, runs scripts/rename-upstream.sh over it (full
-# naming map + module path), commits the translation, and merges THAT.
-# Earlier translations merged the same way auto-resolve (both sides
-# identical); real conflicts are yours, then `just ci` before pushing.
-# Merge upstream/main through the rename translation (occasional).
-upstream-merge: upstream-status
-    #!/usr/bin/env bash
-    set -euo pipefail
-    test -z "$(git status --porcelain)" || { echo "working tree not clean; commit or stash first"; exit 1; }
-    wt="$(mktemp -d)"
-    trap 'git worktree remove --force "$wt" 2>/dev/null || true' EXIT
-    git worktree add --force -B upstream-translated "$wt" upstream/main
-    ./scripts/rename-upstream.sh --module-path terva.sh/terva "$wt"
-    git -C "$wt" add -A
-    if git -C "$wt" diff --cached --quiet; then
-        echo "upstream tree needed no translation"
-    else
-        git -C "$wt" commit -m "chore: translate upstream@$(git rev-parse --short upstream/main) to the terva naming"
-    fi
-    git worktree remove --force "$wt"
-    git merge --no-ff upstream-translated -m "Merge translated upstream/main into $(git rev-parse --abbrev-ref HEAD)"

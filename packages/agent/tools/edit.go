@@ -146,10 +146,30 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	// prose prefix. The Details map carries the edit count for
 	// programmatic consumers (json mode, rpc clients) that might
 	// want it.
+	added, removed := countDiffLines(diff)
 	return core.ToolResult{
-		Content: []provider.Content{provider.TextBlock{Text: diff}},
-		Details: map[string]any{"path": path, "edits": len(a.Edits), "diff": diff},
+		Content:      []provider.Content{provider.TextBlock{Text: diff}},
+		Details:      map[string]any{"path": path, "edits": len(a.Edits), "diff": diff},
+		LinesAdded:   added,
+		LinesRemoved: removed,
 	}, nil
+}
+
+// countDiffLines tallies a unified diff's content changes (+/- lines, file
+// headers excluded) — the first-class line counts UIs show without having to
+// re-parse the diff out of Details.
+func countDiffLines(diff string) (added, removed int) {
+	for _, l := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(l, "+++"), strings.HasPrefix(l, "---"):
+			// file headers, not content
+		case strings.HasPrefix(l, "+"):
+			added++
+		case strings.HasPrefix(l, "-"):
+			removed++
+		}
+	}
+	return added, removed
 }
 
 func detectLineEnding(b []byte) string {

@@ -93,6 +93,15 @@ func (i *Interactive) runCompact(parent context.Context, auto bool) {
 		i.setStatusErr(i18n.T("not logged in. type /login first."))
 		return
 	}
+	// Carrier mode: /compact routes through the service (auto-compact never
+	// reaches here — turn policy is daemon-side). Branching before the agent
+	// is touched keeps the wire's compact_start/compact_end vocabulary
+	// exclusively for policy compactions, so the pump's "(auto)" labeling
+	// stays truthful.
+	if i.cfg.Carrier != nil {
+		i.runCarrierCompact(parent)
+		return
+	}
 	ctx, cancel := context.WithCancel(parent)
 	if !i.turns.claimCompact(cancel, auto) {
 		// A turn is already in flight (raced a concurrent producer).
@@ -233,6 +242,14 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 		}
 	}
 
+	// ctrlproto mode: dispatch through the WorkspaceService. Everything below
+	// (pre-turn auto-compact, the claim-or-queue slot dance, the post-Prompt
+	// policy block) is daemon-side there.
+	if i.cfg.Carrier != nil {
+		i.startTurnCarrier(parent, prompt, images)
+		return
+	}
+
 	// Pre-turn safety: if the most recent context measurement is
 	// already past the auto-compact threshold, condense before
 	// sending so the next outbound request stays under the limit.
@@ -278,38 +295,7 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 		i.invalidate()
 		return
 	}
-	i.mu.Lock()
-	i.spin.Start()
-	i.statusErr = ""
-	i.statusOK = ""
-	i.toolCalls = map[string]*tui.ToolCallView{}
-	i.toolOrder = nil
-	i.shellBlock = nil // sending a prompt clears any parked shell-escape log
-	i.extNotes = nil   // ext notes are one-shot; a new prompt clears them
-	i.scrollOffset = 0 // jump back to the bottom on new turn
-	// Reset the auto-follow baseline so the very next render doesn't
-	// see a synthetic shrink between "last frame had the previous
-	// turn's tool overlay" and "this frame had it cleared above".
-	// Without this, the guard reads delta = -(rows in cleared
-	// overlay) and decrements scrollOffset, which on terminals that
-	// mirror terva's pane scroll into the host scrollbar visibly
-	// yanks the viewport. See autofollow_shrink_test.go.
-	i.prevChatLen = 0
-	i.prevChatCols = 0
-	// Lift the resume tail cap once the user starts interacting. The cap
-	// is purely a first-paint optimization; keeping it active during a
-	// turn makes the rendered chat a sliding window, so appended messages
-	// push older ones off the TOP and the renderer repaints fully,
-	// snapping the terminal's native scrollback to the bottom on every
-	// streamed chunk. A fresh session has no cap (append-only), which is
-	// why the jump only shows in resumed sessions; dropping the cap here
-	// makes resumed turns append-only too.
-	i.view.TailLimit = 0
-	i.parkedTurn = 0 // starting a turn clears the /jump parked state
-	i.parkedTotal = 0
-	i.helpBlock = nil // hide the help block once the user asks something
-	i.mu.Unlock()
-	i.invalidate()
+	i.resetTurnUI()
 
 	sink := func(ev core.AgentEvent) {
 		i.handleEvent(ev)
@@ -399,6 +385,43 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 			i.runCompact(parent, true)
 		}
 	}()
+}
+
+// resetTurnUI clears the per-turn UI state right after the turn slot is
+// claimed — shared by the legacy and carrier dispatch paths.
+func (i *Interactive) resetTurnUI() {
+	i.mu.Lock()
+	i.spin.Start()
+	i.statusErr = ""
+	i.statusOK = ""
+	i.toolCalls = map[string]*tui.ToolCallView{}
+	i.toolOrder = nil
+	i.shellBlock = nil // sending a prompt clears any parked shell-escape log
+	i.extNotes = nil   // ext notes are one-shot; a new prompt clears them
+	i.scrollOffset = 0 // jump back to the bottom on new turn
+	// Reset the auto-follow baseline so the very next render doesn't
+	// see a synthetic shrink between "last frame had the previous
+	// turn's tool overlay" and "this frame had it cleared above".
+	// Without this, the guard reads delta = -(rows in cleared
+	// overlay) and decrements scrollOffset, which on terminals that
+	// mirror terva's pane scroll into the host scrollbar visibly
+	// yanks the viewport. See autofollow_shrink_test.go.
+	i.prevChatLen = 0
+	i.prevChatCols = 0
+	// Lift the resume tail cap once the user starts interacting. The cap
+	// is purely a first-paint optimization; keeping it active during a
+	// turn makes the rendered chat a sliding window, so appended messages
+	// push older ones off the TOP and the renderer repaints fully,
+	// snapping the terminal's native scrollback to the bottom on every
+	// streamed chunk. A fresh session has no cap (append-only), which is
+	// why the jump only shows in resumed sessions; dropping the cap here
+	// makes resumed turns append-only too.
+	i.view.TailLimit = 0
+	i.parkedTurn = 0 // starting a turn clears the /jump parked state
+	i.parkedTotal = 0
+	i.helpBlock = nil // hide the help block once the user asks something
+	i.mu.Unlock()
+	i.invalidate()
 }
 
 // noteCondensingBeforeSend / noteCondensingBeforeRetry are the two

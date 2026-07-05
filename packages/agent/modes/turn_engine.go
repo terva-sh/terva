@@ -158,6 +158,73 @@ func (t *turnEngine) release(dropQueue bool) (next string, hasNext bool) {
 	return t.agent.ShiftQueuedMessage()
 }
 
+// ---- carrier slot transitions (--tui-ctrlproto) ----
+//
+// In carrier mode the wsSession is the busy ARBITER (its Prompt returns
+// CodeBusy) and the Workspace owns post-turn queue policy; the engine's slot
+// is the local UI reflection of that state — spinner, input gating, stream
+// arming — driven by the event stream instead of a synchronous Prompt return.
+
+// claimCarrier claims the turn slot for a carrier-dispatched turn: the same
+// stream arming as claimOrQueue, but no queue fallback — carrier mode queues
+// through the WorkspaceService so every client's queued view converges — and
+// cancel routes the esc/ctrl+c plumbing to the service's Cancel instead of a
+// local turn context.
+func (t *turnEngine) claimCarrier(cancel context.CancelFunc) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.busy {
+		return false
+	}
+	t.busy = true
+	t.cancel = cancel
+	t.stream.beginTurn()
+	t.stream.resetGates()
+	return true
+}
+
+// reclaimCarrier re-arms the busy slot for a turn observed on the stream that
+// this client didn't dispatch (a daemon queue restart, another device's
+// prompt). Busy + cancel only — the turn's own assistant_start arms the
+// stream. Reports whether it claimed; false when the slot is already held
+// (our own dispatch claimed it, or turn_start fired for a later step).
+func (t *turnEngine) reclaimCarrier(cancel context.CancelFunc) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.busy {
+		return false
+	}
+	t.busy = true
+	t.cancel = cancel
+	return true
+}
+
+// releaseCarrier ends carrier-mode in-flight work on the stream's definitive
+// "done": flips busy off and retires the drained stream. No queue shift — the
+// Workspace owns post-turn queue restart in carrier mode. Reports whether the
+// slot was actually held, so a duplicate "done" (the cancel-during-tools path
+// produces two) is a no-op.
+func (t *turnEngine) releaseCarrier() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.busy {
+		return false
+	}
+	t.busy = false
+	t.autoCompacting = false
+	t.cancel = nil
+	t.stream.promptReturned()
+	return true
+}
+
+// markCompacting flags carrier-mode in-flight work as a policy compaction
+// (wire compact_start/compact_end) so the status bar shows the auto note.
+func (t *turnEngine) markCompacting(on bool) {
+	t.mu.Lock()
+	t.autoCompacting = on
+	t.mu.Unlock()
+}
+
 // cancelActive cancels the in-flight turn's context, if any.
 // The cancel func runs outside the lock.
 func (t *turnEngine) cancelActive() bool {

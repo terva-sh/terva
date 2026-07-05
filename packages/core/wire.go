@@ -41,6 +41,9 @@ type WireEvent struct {
 	// tool_result
 	IsError bool        `json:"is_error,omitempty"`
 	Result  []WireBlock `json:"content,omitempty"`
+	// tool_result line-change counts (the status bar's Δ segment)
+	LinesAdded   int `json:"lines_added,omitempty"`
+	LinesRemoved int `json:"lines_removed,omitempty"`
 
 	// usage
 	Usage      *WireUsage `json:"usage,omitempty"`
@@ -72,10 +75,16 @@ type WireMessage struct {
 }
 
 // WireBlock is one piece of message content. Discriminate on Type:
+//   - "image"       → MimeType + Bytes, and — only on the Full
+//     conversions — Data. The lean conversions (EventToWire,
+//     MessageToWire) carry size only: they feed --json output, swarm
+//     event logs, and the legacy RPC, where inlined payloads are
+//     bloat. The control plane broadcasts the Full form (free
+//     in-process; the TUI carrier renders real pixels) and serialized
+//     carriers strip Data at the connection boundary unless the
+//     client negotiated the "image-data" feature. Data also serves
+//     INBOUND payloads (SDK SetMessages).
 //   - "text"        → Text
-//   - "image"       → MimeType + Bytes (size only; raw data does not
-//     cross the event wire — Data exists for INBOUND payloads like
-//     SDK SetMessages)
 //   - "tool_call"   → ID + Name + Args
 //   - "tool_result" → CallID + IsError + Content (recursive)
 //   - "reasoning"   → ReasoningID + Summary + Encrypted (assistant
@@ -111,17 +120,30 @@ type WireUsage struct {
 	CostUSD    float64 `json:"cost_usd"`
 }
 
-// EventToWire converts an AgentEvent to its canonical wire form.
-func EventToWire(ev AgentEvent) WireEvent {
+// EventToWire converts an AgentEvent to its canonical wire form. Image
+// blocks carry size only — right for --json output, swarm event logs, and
+// the legacy RPC, where inlined payloads are bloat. The control plane
+// broadcasts EventToWireFull instead.
+func EventToWire(ev AgentEvent) WireEvent { return eventToWire(ev, false) }
+
+// EventToWireFull is EventToWire with image payloads included (Data
+// alongside the usual MimeType+Bytes). The workspace hub broadcasts this
+// form: an in-process subscriber (the TUI carrier) gets real pixels for
+// free — the Data slices are shared, not copied — and serialized carriers
+// strip Data at the connection boundary unless the client negotiated the
+// "image-data" feature.
+func EventToWireFull(ev AgentEvent) WireEvent { return eventToWire(ev, true) }
+
+func eventToWire(ev AgentEvent, imageData bool) WireEvent {
 	out := WireEvent{Type: ev.Type()}
 	switch e := ev.(type) {
 	case EvTurnStart:
 		out.Step = e.Step
 	case EvUserMessage:
-		m := MessageToWire(e.Message)
+		m := messageToWire(e.Message, imageData)
 		out.Message = &m
 	case EvAssistantMessage:
-		m := MessageToWire(e.Message)
+		m := messageToWire(e.Message, imageData)
 		out.Message = &m
 	case EvTextDelta:
 		out.Delta = e.Delta
@@ -143,12 +165,21 @@ func EventToWire(ev AgentEvent) WireEvent {
 	case EvToolResult:
 		out.ID = e.ID
 		out.IsError = e.Result.IsError
-		out.Result = ContentToWire(e.Result.Content)
+		out.Result = contentToWire(e.Result.Content, imageData)
+		out.LinesAdded = e.Result.LinesAdded
+		out.LinesRemoved = e.Result.LinesRemoved
 	case EvUsage:
 		u := usageToWire(e.Usage)
 		c := usageToWire(e.Cumulative)
 		out.Usage = &u
 		out.Cumulative = &c
+	case EvUserMessageRejected:
+		// A BeforeUserMessage guard refused the prompt before it reached the
+		// model. The reason is the human-facing "why", so it rides Text (the
+		// same field EvCompactStart's reason uses); a wire client shows it in
+		// the conversation area. Without this the rejection vanished on every
+		// non-in-process surface (web, --json).
+		out.Text = e.Reason
 	case EvTurnEnd:
 		out.Stop = string(e.Stop)
 		if e.Err != nil {
@@ -181,9 +212,16 @@ func (e WireEvent) Map() map[string]any {
 	return out
 }
 
-// MessageToWire converts one transcript message to its wire form.
-func MessageToWire(m provider.Message) WireMessage {
-	w := WireMessage{Role: string(m.Role), Content: ContentToWire(m.Content)}
+// MessageToWire converts one transcript message to its wire form (image
+// blocks size-only; see EventToWire).
+func MessageToWire(m provider.Message) WireMessage { return messageToWire(m, false) }
+
+// MessageToWireFull is MessageToWire with image payloads included — the
+// form control-plane snapshots carry (see EventToWireFull).
+func MessageToWireFull(m provider.Message) WireMessage { return messageToWire(m, true) }
+
+func messageToWire(m provider.Message, imageData bool) WireMessage {
+	w := WireMessage{Role: string(m.Role), Content: contentToWire(m.Content, imageData)}
 	if !m.Time.IsZero() {
 		w.Time = m.Time.Format(time.RFC3339Nano)
 	}
@@ -193,17 +231,28 @@ func MessageToWire(m provider.Message) WireMessage {
 	return w
 }
 
-// ContentToWire converts transcript content blocks to wire form.
-// Image blocks carry size only — events are not a transport for raw
-// image bytes.
-func ContentToWire(blocks []provider.Content) []WireBlock {
+// ContentToWire converts transcript content blocks to wire form (image
+// blocks size-only; see EventToWire).
+func ContentToWire(blocks []provider.Content) []WireBlock { return contentToWire(blocks, false) }
+
+// ContentToWireFull is ContentToWire with image payloads included (see
+// EventToWireFull).
+func ContentToWireFull(blocks []provider.Content) []WireBlock { return contentToWire(blocks, true) }
+
+func contentToWire(blocks []provider.Content, imageData bool) []WireBlock {
 	out := make([]WireBlock, 0, len(blocks))
 	for _, b := range blocks {
 		switch v := b.(type) {
 		case provider.TextBlock:
 			out = append(out, WireBlock{Type: "text", Text: v.Text})
 		case provider.ImageBlock:
-			out = append(out, WireBlock{Type: "image", MimeType: v.MimeType, Bytes: len(v.Data)})
+			// The full form keeps Bytes too, so stripping Data at a carrier
+			// boundary yields exactly the lean shape.
+			w := WireBlock{Type: "image", MimeType: v.MimeType, Bytes: len(v.Data)}
+			if imageData {
+				w.Data = v.Data
+			}
+			out = append(out, w)
 		case provider.ToolCallBlock:
 			out = append(out, WireBlock{Type: "tool_call", ID: v.ID, Name: v.Name, Args: v.Arguments})
 		case provider.ToolResultBlock:
@@ -211,7 +260,7 @@ func ContentToWire(blocks []provider.Content) []WireBlock {
 				Type:    "tool_result",
 				CallID:  v.CallID,
 				IsError: v.IsError,
-				Content: ContentToWire(v.Content),
+				Content: contentToWire(v.Content, imageData),
 			})
 		case provider.ReasoningBlock:
 			out = append(out, WireBlock{
@@ -220,6 +269,52 @@ func ContentToWire(blocks []provider.Content) []WireBlock {
 				Summary:     v.Summary,
 				Encrypted:   v.Encrypted,
 			})
+		}
+	}
+	return out
+}
+
+// MessageFromWire rebuilds a transcript message from its wire form — the
+// inverse of MessageToWire, for clients that render a transcript received
+// over the control plane (ctrlproto snapshots + message events). Image
+// blocks keep whatever Data the carrier delivered: real pixels from the
+// full form (in-process, or a serialized carrier that negotiated
+// "image-data"), or none from the lean form — renderers then fall back to
+// their metadata line.
+func MessageFromWire(w WireMessage) provider.Message {
+	m := provider.Message{Role: provider.Role(w.Role), Content: ContentFromWire(w.Content)}
+	if w.Time != "" {
+		if t, err := time.Parse(time.RFC3339Nano, w.Time); err == nil {
+			m.Time = t
+		}
+	}
+	if w.Synthetic {
+		m.Meta = map[string]string{MetaSynthetic: "true"}
+	}
+	return m
+}
+
+// ContentFromWire rebuilds transcript content blocks from wire form. Unknown
+// block types (written by a newer terva) are skipped, mirroring the session
+// loader's forward-compatibility rule.
+func ContentFromWire(blocks []WireBlock) []provider.Content {
+	out := make([]provider.Content, 0, len(blocks))
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			out = append(out, provider.TextBlock{Text: b.Text})
+		case "image":
+			out = append(out, provider.ImageBlock{MimeType: b.MimeType, Data: b.Data})
+		case "tool_call":
+			out = append(out, provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: b.Args})
+		case "tool_result":
+			out = append(out, provider.ToolResultBlock{
+				CallID:  b.CallID,
+				IsError: b.IsError,
+				Content: ContentFromWire(b.Content),
+			})
+		case "reasoning":
+			out = append(out, provider.ReasoningBlock{ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted})
 		}
 	}
 	return out

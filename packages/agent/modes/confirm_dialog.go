@@ -75,6 +75,27 @@ func (d *confirmDialog) CancelAll(reason string) {
 	}
 }
 
+// Remove drops a specific pending request without answering it. The carrier
+// path uses it when the daemon reports the request already resolved (another
+// client answered, or the turn's cancellation failed it closed) — the dialog
+// must not stay up for, or double-answer, a settled request. A no-op when the
+// request isn't pending (already answered locally).
+func (d *confirmDialog) Remove(req *confirmRequest) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for idx, p := range d.pending {
+		if p != req {
+			continue
+		}
+		d.pending = append(d.pending[:idx], d.pending[idx+1:]...)
+		if idx == 0 && len(d.pending) > 0 {
+			d.cursor = 0
+			d.activeSince = time.Now()
+		}
+		return
+	}
+}
+
 // AllowAllPending approves every pending request and drains the
 // queue. Used by /yolo so any confirmation dialog already on screen
 // resolves immediately as "yes".

@@ -4,6 +4,8 @@ package modes
 // plumbing, and the appliers each toggle dispatches to.
 
 import (
+	"context"
+
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -191,6 +193,19 @@ func (i *Interactive) refreshPermissionsDialog() {
 // gate so it always reflects the current state.
 func (i *Interactive) buildPermissionsView() (info []string, grants []permGrant) {
 	th := i.cfg.Theme
+	// ctrlproto mode: the gate lives daemon-side; read the permissions
+	// surface and feed the same renderer shapes.
+	if c := i.cfg.Carrier; c != nil {
+		sf, err := c.Surface(context.Background(), i.carrierSession(), "permissions")
+		if err != nil || sf.Permissions == nil {
+			msg := i18n.T("permissions surface unavailable")
+			if err != nil {
+				msg = err.Error()
+			}
+			return []string{th.FG256(th.Muted, msg)}, nil
+		}
+		return renderPermissionsWireView(th, *sf.Permissions)
+	}
 	gate := i.cfg.ConfirmGate
 	if gate == nil {
 		return []string{th.FG256(th.Muted, i18n.T("no permission gate (yolo): every tool runs without asking."))}, nil
@@ -253,6 +268,11 @@ func (i *Interactive) buildPermissionsView() (info []string, grants []permGrant)
 // or "" when there's no gate (so the bar falls back to its legacy
 // NoYolo tag). "yolo" renders no badge.
 func (i *Interactive) approvalModeLabel() string {
+	if i.cfg.Carrier != nil {
+		i.mu.Lock()
+		defer i.mu.Unlock()
+		return i.carrierApprovalMode
+	}
 	if i.cfg.ConfirmGate == nil {
 		return ""
 	}
@@ -265,7 +285,7 @@ func (i *Interactive) approvalModeLabel() string {
 // read from the gate so reopening /settings always reflects the
 // current mode.
 func (i *Interactive) approvalSettingItem() (settingsItem, bool) {
-	if i.cfg.ConfirmGate == nil || i.cfg.SetApprovalMode == nil {
+	if i.cfg.Carrier == nil && (i.cfg.ConfirmGate == nil || i.cfg.SetApprovalMode == nil) {
 		return settingsItem{}, false
 	}
 	opts := []settingsOption{
@@ -275,7 +295,26 @@ func (i *Interactive) approvalSettingItem() (settingsItem, bool) {
 		{value: string(core.ApprovalWorkspace), label: i18n.T("workspace"), desc: i18n.T("run built-in tools + read-only tools; confirm side-effecting extension/MCP tools")},
 		{value: string(core.ApprovalYolo), label: i18n.T("yolo"), desc: i18n.T("run every tool without asking")},
 	}
-	cur := string(i.cfg.ConfirmGate.Mode())
+	cur := ""
+	if i.cfg.Carrier != nil {
+		// ctrlproto mode: the gate lives daemon-side; the settings surface
+		// carries the live per-session mode.
+		sf, err := i.cfg.Carrier.Surface(context.Background(), i.carrierSession(), "settings")
+		if err != nil || sf.Settings == nil {
+			return settingsItem{}, false
+		}
+		for _, it := range sf.Settings.Items {
+			if it.Key == "approval" {
+				cur = it.Value
+				break
+			}
+		}
+		if cur == "" {
+			return settingsItem{}, false
+		}
+	} else {
+		cur = string(i.cfg.ConfirmGate.Mode())
+	}
 	choice := 0
 	for idx, o := range opts {
 		if o.value == cur {
@@ -319,7 +358,25 @@ func (i *Interactive) applySettingChange(act settingsAction) {
 func (i *Interactive) applyApprovalModeSetting(value string) {
 	defer i.invalidate()
 	mode, err := core.ParseApprovalMode(value)
-	if err != nil || i.cfg.SetApprovalMode == nil {
+	if err != nil {
+		return
+	}
+	// ctrlproto mode: the settings surface flips the daemon-side gate live
+	// (per-session, not persisted — same posture semantics). The plan-mode
+	// tool withholding is a known daemon gap shared with the web client.
+	if c := i.cfg.Carrier; c != nil {
+		if aerr := c.SurfaceAction(context.Background(), i.carrierSession(), "settings", "set",
+			map[string]string{"key": "approval", "value": value}); aerr != nil {
+			i.setStatusErr(aerr.Error())
+			return
+		}
+		i.mu.Lock()
+		i.statusOK = i18n.T("approval mode %s (this session)", value)
+		i.statusErr = ""
+		i.mu.Unlock()
+		return
+	}
+	if i.cfg.SetApprovalMode == nil {
 		return
 	}
 	reg := i.cfg.SetApprovalMode(mode)

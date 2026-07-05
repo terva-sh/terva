@@ -76,6 +76,13 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		return done
 	}
 
+	// Replay transport: in `terva replay` mode the playback keys
+	// (space / arrows / speed) drive the recording's playhead and take
+	// priority over the editor. Non-transport keys fall through.
+	if i.handleReplayKey(ctx, k) {
+		return false
+	}
+
 	// Global keys: one named binding per chord in keymap.go. A
 	// binding may decline (keyPass) — e.g. Esc while a popup is open,
 	// Alt+Up with an empty queue — and the key continues to the

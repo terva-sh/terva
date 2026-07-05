@@ -43,6 +43,9 @@ type Event struct {
 	// Notice is set on an [EventNotice] event: a one-shot host-originated message
 	// to show in the conversation area without adding it to the transcript.
 	Notice *Notice `json:"notice,omitempty"`
+	// Replay is set on an [EventReplayState] event: a replay session's transport
+	// changed (play/pause/seek/speed), so every client's scrubber converges.
+	Replay *ReplayState `json:"replay,omitempty"`
 }
 
 // Control-plane event types. These extend the [core.WireEvent] type space; the
@@ -87,6 +90,9 @@ const (
 	// command run from the commands pane. Ephemeral: not persisted to the
 	// transcript, not replayed in a snapshot.
 	EventNotice = "notice"
+	// EventReplayState carries a replay session's transport state (Replay) after
+	// a play/pause/seek/speed change, so every client's scrubber stays in sync.
+	EventReplayState = "replay_state"
 )
 
 // Notice is a transient host-originated message shown in the conversation area
@@ -174,6 +180,12 @@ func AskResolvedEvent(askID string) Event {
 // SnapshotEvent builds an [EventSnapshot] event.
 func SnapshotEvent(s Snapshot) Event {
 	return Event{WireEvent: core.WireEvent{Type: EventSnapshot}, Snapshot: &s}
+}
+
+// ReplayStateEvent builds an [EventReplayState] event carrying a replay
+// session's fresh transport state.
+func ReplayStateEvent(s ReplayState) Event {
+	return Event{WireEvent: core.WireEvent{Type: EventReplayState}, Replay: &s}
 }
 
 // SessionUpdatedEvent builds an [EventSessionUpdated] event carrying the

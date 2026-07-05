@@ -6,12 +6,15 @@ package modes
 // plenty to finger the culprit (usually one oversized tool result).
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
@@ -39,6 +42,11 @@ func (i *Interactive) slashContext() {
 // transparency view) as styled body lines for the Extensions tab.
 func (i *Interactive) buildContextExtensions(th tui.Theme) []string {
 	if i.cfg.Extensions == nil {
+		if i.cfg.Carrier != nil {
+			// Extensions run daemon-side in ctrlproto mode; their injected-text
+			// detail has no surface yet (the byte totals are in the Overview).
+			return []string{th.FG256(th.Muted, "  "+i18n.T("extension context detail is not available over the control plane yet"))}
+		}
 		return []string{th.FG256(th.Muted, "  "+i18n.T("extensions are not enabled"))}
 	}
 	items := i.cfg.Extensions.ContextSnapshot()
@@ -69,84 +77,102 @@ func (i *Interactive) buildContextExtensions(th tui.Theme) []string {
 // the next request: system prompt, tool defs, extension ephemeral context,
 // and the transcript per message (with the largest flagged).
 func (i *Interactive) buildContextOverview(th tui.Theme) []string {
+	// ctrlproto mode: the daemon computes the breakdown (Context is a
+	// first-class service verb); the renderer below is shared.
+	if i.cfg.Carrier != nil {
+		bd, err := i.cfg.Carrier.Context(context.Background(), i.carrierSession())
+		if err != nil {
+			return []string{th.FG256(th.Muted, "  "+err.Error())}
+		}
+		return renderContextOverview(th, bd)
+	}
 	ag := i.turns.Agent()
 	if ag == nil {
 		return []string{th.FG256(th.Muted, "  "+i18n.T("no agent running"))}
 	}
-	muted := func(s string) string { return th.FG256(th.Muted, s) }
+	return renderContextOverview(th, i.assembleContextBreakdown(ag))
+}
 
-	sysBytes := len(ag.System)
-	toolBytes := 0
+// assembleContextBreakdown builds the /context numbers from the in-process
+// agent — the legacy twin of the Workspace's contextBreakdown, feeding the
+// same renderer so both paths paint identically.
+func (i *Interactive) assembleContextBreakdown(ag *core.Agent) ctrlproto.ContextBreakdown {
+	var b ctrlproto.ContextBreakdown
+	b.SystemBytes = len(ag.System)
 	if specs := ag.Tools.Specs(); len(specs) > 0 {
-		if b, err := json.Marshal(specs); err == nil {
-			toolBytes = len(b)
+		if raw, err := json.Marshal(specs); err == nil {
+			b.ToolBytes = len(raw)
 		}
 	}
-	toolCount := len(ag.Tools)
+	b.ToolCount = len(ag.Tools)
 	// Size the per-turn tail with the side-effect-free twin when present, so
 	// opening /context never overwrites the "fired last turn" lore record (a
 	// re-scan of the now-longer transcript would report lore that never fired).
-	ephBytes := 0
 	if sizer := ag.ContextProviderPeek; sizer != nil {
-		ephBytes = len(sizer())
+		b.ExtBytes = len(sizer())
 	} else if ag.ContextProvider != nil {
-		ephBytes = len(ag.ContextProvider())
+		b.ExtBytes = len(ag.ContextProvider())
 	}
 	// Extensions contribute in two places: "static" guidance is folded into
-	// the system prompt (so it's already inside sysBytes), while "card"
-	// context rides the ephemeral block (ephBytes). Surface the static share
-	// separately so "ext context" reading a tiny number isn't mistaken for
+	// the system prompt (so it is already inside SystemBytes), while "card"
+	// context rides the ephemeral block (ExtBytes). Surface the static share
+	// separately so "ext context" reading a tiny number is not mistaken for
 	// "extensions inject almost nothing" — the bulk is usually the guidance,
 	// counted under the system prompt.
-	extStaticBytes := 0
 	if i.cfg.Extensions != nil {
 		for _, it := range i.cfg.Extensions.ContextSnapshot() {
 			if it.Kind == "static" {
-				extStaticBytes += len(it.Text)
+				b.ExtGuidanceBytes += len(it.Text)
 			}
 		}
 	}
-
 	msgs := ag.Messages()
-	transcriptBytes := 0
-	largestIdx, largestBytes := -1, 0
-	perMsg := make([]int, len(msgs))
+	b.Messages = make([]ctrlproto.ContextMessage, len(msgs))
 	for idx, m := range msgs {
-		b := messageBytes(m)
-		perMsg[idx] = b
-		transcriptBytes += b
-		if b > largestBytes {
-			largestBytes = b
-			largestIdx = idx
-		}
+		n := messageBytes(m)
+		b.Messages[idx] = ctrlproto.ContextMessage{Index: idx, Kind: messageKind(m), Bytes: n}
+		b.TranscriptBytes += n
 	}
-	total := sysBytes + toolBytes + ephBytes + transcriptBytes
-
-	window := 0
+	b.TotalBytes = b.SystemBytes + b.ToolBytes + b.ExtBytes + b.TranscriptBytes
 	if mdl, err := provider.FindModel("", ag.Model); err == nil {
-		window = mdl.ContextWindow
+		b.Window = mdl.ContextWindow
 	}
+	return b
+}
 
+// renderContextOverview paints the Overview tab from a wire-shaped breakdown —
+// the one renderer both the legacy (local agent) and ctrlproto (service) data
+// sources feed.
+func renderContextOverview(th tui.Theme, b ctrlproto.ContextBreakdown) []string {
+	muted := func(s string) string { return th.FG256(th.Muted, s) }
 	row := func(label string, bytes int, suffix string) string {
 		return muted(fmt.Sprintf("  %-15s %10s  %-9s%s", label, humanBytes(bytes), estTok(bytes), suffix))
 	}
 
+	largestIdx, largestBytes := -1, 0
+	for _, m := range b.Messages {
+		if m.Bytes > largestBytes {
+			largestBytes = m.Bytes
+			largestIdx = m.Index
+		}
+	}
+
 	var out []string
 	sysSuffix := ""
-	if extStaticBytes > 0 {
+	if b.ExtGuidanceBytes > 0 {
 		sysSuffix = "  " + i18n.T("(incl. ext guidance)")
 	}
-	out = append(out, row(i18n.T("system prompt"), sysBytes, sysSuffix))
-	if extStaticBytes > 0 {
+	out = append(out, row(i18n.T("system prompt"), b.SystemBytes, sysSuffix))
+	if b.ExtGuidanceBytes > 0 {
 		out = append(out, muted("    "+i18n.T("└ of which ext guidance: %s (%s)",
-			humanBytes(extStaticBytes), estTok(extStaticBytes))))
+			humanBytes(b.ExtGuidanceBytes), estTok(b.ExtGuidanceBytes))))
 	}
-	out = append(out, row(i18n.T("tool defs"), toolBytes, "  "+i18n.T("[%d tools]", toolCount)))
-	out = append(out, row(i18n.T("ext context"), ephBytes, "  "+i18n.T("(cards, ephemeral)")))
-	out = append(out, row(i18n.T("transcript"), transcriptBytes, "  "+i18n.T("[%d msgs]", len(msgs))))
-	for idx, m := range msgs {
-		line := fmt.Sprintf("    [%d] %-13s %10s", idx, messageKind(m), humanBytes(perMsg[idx]))
-		if idx == largestIdx && len(msgs) > 1 {
+	out = append(out, row(i18n.T("tool defs"), b.ToolBytes, "  "+i18n.T("[%d tools]", b.ToolCount)))
+	out = append(out, row(i18n.T("ext context"), b.ExtBytes, "  "+i18n.T("(cards, ephemeral)")))
+	out = append(out, row(i18n.T("transcript"), b.TranscriptBytes, "  "+i18n.T("[%d msgs]", len(b.Messages))))
+	for _, m := range b.Messages {
+		line := fmt.Sprintf("    [%d] %-13s %10s", m.Index, m.Kind, humanBytes(m.Bytes))
+		if m.Index == largestIdx && len(b.Messages) > 1 {
 			out = append(out, th.FG256(th.Warning, line+"  "+i18n.T("← largest")))
 		} else {
 			out = append(out, muted(line))
@@ -154,11 +180,11 @@ func (i *Interactive) buildContextOverview(th tui.Theme) []string {
 	}
 	out = append(out, muted("  "+strings.Repeat("─", 38)))
 	pctSuffix := ""
-	if window > 0 {
-		pct := float64(total) / float64(window*4) * 100 // total/4 ~ tokens; window in tokens
-		pctSuffix = "  " + i18n.T("(%.0f%% of %s window)", pct, humanCount(window))
+	if b.Window > 0 {
+		pct := float64(b.TotalBytes) / float64(b.Window*4) * 100 // total/4 ~ tokens; window in tokens
+		pctSuffix = "  " + i18n.T("(%.0f%% of %s window)", pct, humanCount(b.Window))
 	}
-	out = append(out, row(i18n.T("TOTAL"), total, pctSuffix))
+	out = append(out, row(i18n.T("TOTAL"), b.TotalBytes, pctSuffix))
 	out = append(out, "")
 	out = append(out, muted("  "+i18n.T("sizes are bytes; token counts are ~bytes/4 estimates")))
 	return out

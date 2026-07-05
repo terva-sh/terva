@@ -108,6 +108,11 @@ type StatusBarParams struct {
 	// renders the segment absent.
 	SessionName string
 
+	// Replay is a pre-formatted session-player scrubber (e.g. "▶ 38%  2×"),
+	// set only when the TUI is playing back a recording (`terva replay`);
+	// empty renders the segment absent.
+	Replay string
+
 	// PersonaName/Emoji identify the active persona for the persona
 	// segment; PersonaAccentRGB is its accent_color already parsed
 	// (nil = no accent, render muted/themed). Immersive sessions use
@@ -177,6 +182,7 @@ const (
 	SegTags     SegmentID = "tags"
 	SegBridge   SegmentID = "bridge"
 	SegExt      SegmentID = "ext"
+	SegReplay   SegmentID = "replay"
 )
 
 // segmentFunc renders one segment into zero or more pre-styled atoms.
@@ -202,6 +208,7 @@ var statusSegments = map[SegmentID]segmentFunc{
 	SegTags:     segTags,
 	SegBridge:   segBridge,
 	SegExt:      segExt,
+	SegReplay:   segReplay,
 }
 
 // defaultStatusRows is the built-in layout: identity + spend on row 1
@@ -219,13 +226,13 @@ var statusSegments = map[SegmentID]segmentFunc{
 func defaultStatusRows(hideWorkspace bool) [][]SegmentID {
 	if hideWorkspace {
 		return [][]SegmentID{
-			{SegPersona, SegThinking, SegTokens, SegCost},
+			{SegReplay, SegPersona, SegThinking, SegTokens, SegCost},
 			{SegContext, SegUsage},
 			{SegBridge, SegExt},
 		}
 	}
 	return [][]SegmentID{
-		{SegCWD, SegGit, SegEdits, SegModel, SegThinking, SegTokens, SegCost},
+		{SegReplay, SegCWD, SegGit, SegEdits, SegModel, SegThinking, SegTokens, SegCost},
 		{SegContext, SegUsage, SegSwarm},
 		{SegTags, SegBridge, SegExt},
 	}
@@ -540,6 +547,17 @@ func segSwarm(p StatusBarParams) []string {
 	}
 	th := p.Theme
 	return []string{th.FG256(th.StatusColor(SegSwarm, th.Muted), i18n.TN(p.SwarmAgents, "⛭ %d agent", "⛭ %d agents"))}
+}
+
+// segReplay renders the session-player scrubber (Replay is pre-formatted by
+// the caller). Absent outside `terva replay`. Leads the first row so the
+// playback state reads first, in the accent colour to mark the distinct mode.
+func segReplay(p StatusBarParams) []string {
+	if p.Replay == "" {
+		return nil
+	}
+	th := p.Theme
+	return []string{th.FG256(th.StatusColor(SegReplay, th.Accent), p.Replay)}
 }
 
 // segSession names the live session file, for telling parallel

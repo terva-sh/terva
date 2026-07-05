@@ -40,10 +40,15 @@ func TestEventToWireGolden(t *testing.T) {
 			`{"type":"tool_call","id":"t1","name":"read","args":{"path":"a"}}`},
 		{"tool_result", EvToolResult{ID: "t1", Result: ToolResult{IsError: true, Content: []provider.Content{provider.TextBlock{Text: "boom"}}}},
 			`{"type":"tool_result","id":"t1","is_error":true,"content":[{"type":"text","text":"boom"}]}`},
+		{"tool_result edit stats", EvToolResult{ID: "t2", Result: ToolResult{
+			Content: []provider.Content{provider.TextBlock{Text: "diff"}}, LinesAdded: 4, LinesRemoved: 2,
+		}}, `{"type":"tool_result","id":"t2","content":[{"type":"text","text":"diff"}],"lines_added":4,"lines_removed":2}`},
 		{"usage", EvUsage{
 			Usage:      provider.Usage{InputTokens: 10, OutputTokens: 2, CostUSD: 0.01},
 			Cumulative: provider.Usage{InputTokens: 100, OutputTokens: 20, CostUSD: 0.1},
 		}, `{"type":"usage","usage":{"input":10,"output":2,"cache_read":0,"cache_write":0,"cost_usd":0.01},"cumulative":{"input":100,"output":20,"cache_read":0,"cache_write":0,"cost_usd":0.1}}`},
+		{"user_message_rejected", EvUserMessageRejected{Text: "do the bad thing", Reason: "blocked by extension guard"},
+			`{"type":"user_message_rejected","text":"blocked by extension guard"}`},
 		{"turn_end clean", EvTurnEnd{Stop: provider.StopEnd}, `{"type":"turn_end","stop":"end"}`},
 		{"turn_end error", EvTurnEnd{Stop: provider.StopError, Err: errors.New("boom")},
 			`{"type":"turn_end","stop":"error","error":"boom"}`},
@@ -78,6 +83,96 @@ func TestContentToWireReasoning(t *testing.T) {
 	want := `{"type":"reasoning","reasoning_id":"rs_1","summary":"weighing options","encrypted_content":"OPAQUE"}`
 	if string(got) != want {
 		t.Errorf("reasoning wire JSON:\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
+// TestMessageWireRoundTrip: MessageFromWire must invert MessageToWire for
+// everything a transcript renderer needs — a control-plane client rebuilds
+// its whole transcript through this pair (ctrlproto snapshots + message
+// events). Images are the one deliberate loss: data-less, mime kept.
+func TestMessageWireRoundTrip(t *testing.T) {
+	when := time.Date(2026, 7, 4, 9, 30, 0, 0, time.UTC)
+	orig := provider.Message{
+		Role: provider.RoleAssistant,
+		Time: when,
+		Meta: map[string]string{MetaSynthetic: "true"},
+		Content: []provider.Content{
+			provider.TextBlock{Text: "plan"},
+			provider.ToolCallBlock{ID: "t1", Name: "edit", Arguments: []byte(`{"path":"a.go"}`)},
+			provider.ReasoningBlock{ID: "rs_1", Summary: "weighing", Encrypted: "OPAQUE"},
+			provider.ImageBlock{MimeType: "image/png", Data: []byte{1, 2, 3}},
+		},
+	}
+	got := MessageFromWire(MessageToWire(orig))
+	if got.Role != orig.Role || !got.Time.Equal(when) || got.Meta[MetaSynthetic] != "true" {
+		t.Fatalf("envelope did not round-trip: %+v", got)
+	}
+	if len(got.Content) != 4 {
+		t.Fatalf("blocks = %d, want 4", len(got.Content))
+	}
+	if tb := got.Content[0].(provider.TextBlock); tb.Text != "plan" {
+		t.Errorf("text = %+v", tb)
+	}
+	if tc := got.Content[1].(provider.ToolCallBlock); tc.ID != "t1" || tc.Name != "edit" || string(tc.Arguments) != `{"path":"a.go"}` {
+		t.Errorf("tool_call = %+v", tc)
+	}
+	if rb := got.Content[2].(provider.ReasoningBlock); rb.ID != "rs_1" || rb.Summary != "weighing" || rb.Encrypted != "OPAQUE" {
+		t.Errorf("reasoning = %+v", rb)
+	}
+	if ib := got.Content[3].(provider.ImageBlock); ib.MimeType != "image/png" || len(ib.Data) != 0 {
+		t.Errorf("image = mime %q data %d bytes, want data-less with mime kept", ib.MimeType, len(ib.Data))
+	}
+
+	// Nested tool results (the per-step RoleTool message) round-trip too.
+	tools := provider.Message{Role: provider.RoleTool, Content: []provider.Content{
+		provider.ToolResultBlock{CallID: "t1", IsError: true, Content: []provider.Content{provider.TextBlock{Text: "boom"}}},
+	}}
+	back := MessageFromWire(MessageToWire(tools))
+	tr := back.Content[0].(provider.ToolResultBlock)
+	if back.Role != provider.RoleTool || tr.CallID != "t1" || !tr.IsError ||
+		tr.Content[0].(provider.TextBlock).Text != "boom" {
+		t.Fatalf("tool-result message did not round-trip: %+v", back)
+	}
+	// A plain message must not grow synthetic meta.
+	if m := MessageFromWire(MessageToWire(provider.Message{Role: provider.RoleUser})); m.Meta != nil {
+		t.Fatalf("plain message grew meta: %+v", m.Meta)
+	}
+}
+
+// TestEventToWireFullImageData: the Full conversions carry image payloads
+// (Data alongside the usual size metadata) where the lean ones stay
+// size-only — the split the control plane relies on: broadcast full, strip
+// at serialized carrier boundaries unless "image-data" was negotiated.
+func TestEventToWireFullImageData(t *testing.T) {
+	msg := provider.Message{Role: provider.RoleUser, Content: []provider.Content{
+		provider.TextBlock{Text: "look"},
+		provider.ImageBlock{MimeType: "image/png", Data: []byte{1, 2, 3}},
+	}}
+	full := EventToWireFull(EvUserMessage{Message: msg})
+	if b := full.Message.Content[1]; string(b.Data) != "\x01\x02\x03" || b.Bytes != 3 || b.MimeType != "image/png" {
+		t.Fatalf("full form = %+v, want data plus size metadata", b)
+	}
+	lean := EventToWire(EvUserMessage{Message: msg})
+	if b := lean.Message.Content[1]; b.Data != nil || b.Bytes != 3 {
+		t.Fatalf("lean form = %+v, want size-only", b)
+	}
+
+	// Tool results carry their screenshots the same way (nested content).
+	res := EvToolResult{ID: "t1", Result: ToolResult{Content: []provider.Content{
+		provider.ImageBlock{MimeType: "image/png", Data: []byte{9}},
+	}}}
+	if b := EventToWireFull(res).Result[0]; len(b.Data) != 1 {
+		t.Fatalf("full tool result = %+v, want data", b)
+	}
+	if b := EventToWire(res).Result[0]; b.Data != nil {
+		t.Fatalf("lean tool result = %+v, want size-only", b)
+	}
+
+	// The full form round-trips to real pixels client-side.
+	back := MessageFromWire(MessageToWireFull(msg))
+	ib := back.Content[1].(provider.ImageBlock)
+	if string(ib.Data) != "\x01\x02\x03" || ib.MimeType != "image/png" {
+		t.Fatalf("round-trip lost pixels: %+v", ib)
 	}
 }
 

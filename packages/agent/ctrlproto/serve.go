@@ -170,6 +170,14 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 	case MethodContextGet:
 		b, err := s.svc.Context(ctx, f.Sess)
 		s.respond(f.ID, ContextResult{Breakdown: b}, err)
+	case MethodContextNode:
+		var p ContextNodeParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		n, err := s.svc.Node(ctx, f.Sess, p.ID, p.Op)
+		s.respond(f.ID, ContextNodeResult{Node: n}, err)
 	case MethodSurfacesList:
 		list, err := s.svc.Surfaces(ctx, f.Sess)
 		s.respond(f.ID, SurfacesResult{Surfaces: list}, err)
@@ -207,7 +215,7 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			s.badReq(f.ID, err)
 			return
 		}
-		s.respond(f.ID, nil, s.svc.SwitchModel(ctx, f.Sess, p.Model))
+		s.respond(f.ID, nil, s.svc.SwitchModel(ctx, f.Sess, p.Provider, p.Model))
 	case MethodModelFavorite:
 		var p FavoriteParams
 		if err := f.Bind(&p); err != nil {
@@ -226,6 +234,29 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		s.respond(f.ID, nil, s.svc.Untrust(ctx))
 	case MethodRestart:
 		s.respond(f.ID, nil, s.svc.Restart(ctx))
+
+	// --- replay (optional; served only by a ReplayController) ---
+	case MethodReplayControl:
+		rc, ok := s.svc.(ReplayController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "replay not supported"))
+			return
+		}
+		var p ReplayControlParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		st, err := rc.ReplayControl(ctx, f.Sess, p)
+		s.respond(f.ID, ReplayStateResult{State: st}, err)
+	case MethodReplayState:
+		rc, ok := s.svc.(ReplayController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "replay not supported"))
+			return
+		}
+		st, err := rc.ReplayState(ctx, f.Sess)
+		s.respond(f.ID, ReplayStateResult{State: st}, err)
 
 	default:
 		s.write(ErrFrame(f.ID, CodeBadRequest, "unknown method: "+string(f.Method)))
@@ -284,6 +315,12 @@ func (s *serveState) subscribe(ctx context.Context, f Frame) {
 	s.mu.Unlock()
 	s.respond(f.ID, nil, nil)
 
+	// The hub broadcasts the full wire form (image blocks with raw Data —
+	// free in-process). This is the serialization boundary: strip payloads
+	// unless this client negotiated them, so a non-negotiating client sees
+	// exactly the lean wire shape.
+	strip := !s.contract.HasFeature(FeatureImageData)
+
 	go func() {
 		defer func() {
 			s.mu.Lock()
@@ -300,6 +337,9 @@ func (s *serveState) subscribe(ctx context.Context, f Frame) {
 			case ev, ok := <-ch:
 				if !ok {
 					return
+				}
+				if strip {
+					ev = stripImageData(ev)
 				}
 				if err := s.write(EventFrame(sess, ev)); err != nil {
 					return

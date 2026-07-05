@@ -20,16 +20,19 @@ func (s *wsSession) extensionsView() *ctrlproto.ExtensionsView {
 	}
 	for _, e := range listInstalledExtensions(s.cwd, s.trusted.Load(), s.extMgr) {
 		v.Extensions = append(v.Extensions, ctrlproto.ExtensionInfo{
-			Name:        e.Name,
-			Version:     e.Version,
-			Language:    e.Language,
-			Description: e.Description,
-			Scope:       e.Scope,
-			Status:      extensionStatus(e),
-			Enabled:     e.Effective,
-			Tools:       e.Tools,
-			Commands:    e.Commands,
-			Note:        extensionNote(e),
+			Name:               e.Name,
+			Version:            e.Version,
+			Language:           e.Language,
+			Description:        e.Description,
+			Scope:              e.Scope,
+			Status:             extensionStatus(e),
+			Enabled:            e.Effective,
+			Tools:              e.Tools,
+			Commands:           e.Commands,
+			Note:               extensionNote(e),
+			GlobalEnabled:      e.GlobalEnabled,
+			ProjectDisabled:    e.ProjectDisabled,
+			UserConfigDisabled: e.UserConfigDisabled,
 		})
 	}
 	return v
@@ -47,7 +50,19 @@ func (s *wsSession) extensionsAction(action string, args map[string]string) erro
 	switch action {
 	case "toggle":
 		on := args["enabled"] == "true"
-		if err := setProjectExtensionDisabled(s.cwd, name, !on); err != nil {
+		// scope "global" flips the extension's manifest (its install-wide
+		// enabled flag, the TUI dialog's 'g' toggle); the default/"project"
+		// scope keeps the original wire behavior — the project config's
+		// disable list.
+		if args["scope"] == "global" {
+			dir, err := findExtensionDirIn(s.cwd, name)
+			if err != nil {
+				return ctrlproto.Errorf(ctrlproto.CodeNotFound, "toggle %s: %v", name, err)
+			}
+			if err := setManifestEnabled(dir, on); err != nil {
+				return ctrlproto.Errorf(ctrlproto.CodeInternal, "toggle %s: %v", name, err)
+			}
+		} else if err := setProjectExtensionDisabled(s.cwd, name, !on); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "toggle %s: %v", name, err)
 		}
 		// Reads the fresh disable union, then ApplyOne (start/stop) → onReload

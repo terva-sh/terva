@@ -9,6 +9,12 @@ import "terva.sh/terva/packages/i18n"
 
 // openExtensionsDialog populates and shows the /extensions dialog.
 func (i *Interactive) openExtensionsDialog() {
+	if i.cfg.Carrier != nil && i.extensionsDialog != nil {
+		// ctrlproto mode: the inventory rides the extensions surface.
+		i.extensionsDialog.Open(i.carrierListExtensions())
+		i.invalidate()
+		return
+	}
 	if i.extensionsDialog == nil || i.cfg.ListExtensions == nil {
 		i.setStatusErr(i18n.T("extension management is not available in this build"))
 		return
@@ -28,6 +34,10 @@ func (i *Interactive) applyExtensionToggle(act extensionsAction) {
 	// config to flip. Explain that instead of failing with a "not found".
 	if act.Scope == "session" {
 		i.setStatusOK(act.Name + ": loaded via --ext for this run only — no persistent enable/disable")
+		return
+	}
+	if i.cfg.Carrier != nil {
+		i.applyCarrierExtensionToggle(act)
 		return
 	}
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/relaunch"
@@ -53,6 +55,13 @@ type Workspace struct {
 
 	mu       sync.Mutex
 	sessions map[string]*wsSession
+
+	// diag receives host-side session-build diagnostics (permission-policy
+	// warnings, extension-load results). It defaults to a line on os.Stderr,
+	// which is right for the web/ACP daemons, but the in-process TUI carrier
+	// overrides it via SetDiag — a stray stderr write would corrupt the
+	// full-screen alternate-screen UI. Always non-nil after NewWorkspace.
+	diag func(string)
 }
 
 var _ ctrlproto.WorkspaceService = (*Workspace)(nil)
@@ -77,6 +86,7 @@ func NewWorkspace(args Args, version string) (*Workspace, error) {
 		ctx:      ctx,
 		cancel:   cancel,
 		sessions: map[string]*wsSession{},
+		diag:     func(m string) { fmt.Fprintln(os.Stderr, m) },
 	}
 	// Workspace-global swarm for the tasks pane. Construction does no I/O;
 	// Reload pulls previously-spawned agents off disk (shown as detached, like
@@ -91,6 +101,18 @@ func NewWorkspace(args Args, version string) (*Workspace, error) {
 	w.mcpAdapter, w.mcpStop = setupMCP(w.ctx, args, &r)
 
 	return w, nil
+}
+
+// SetDiag redirects host-side session-build diagnostics away from os.Stderr —
+// the in-process TUI carrier sets a sink that swallows or surfaces them, since a
+// stray stderr write corrupts the full-screen UI. A nil fn restores silence.
+func (w *Workspace) SetDiag(fn func(string)) {
+	if fn == nil {
+		fn = func(string) {}
+	}
+	w.mu.Lock()
+	w.diag = fn
+	w.mu.Unlock()
 }
 
 // Close cancels in-flight turns, closes open session files, and releases the
@@ -196,6 +218,12 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "open session: %v", err)
 	}
+	// Resume with the same compact window the legacy TUI uses: the live agent
+	// gets the recent tail (plus any compaction summary), not the whole
+	// multi-thousand-message history — which would otherwise ride every
+	// subsequent request. The session FILE stays intact, and the per-message
+	// persistence hooks only append new rows, so nothing is lost on disk.
+	msgs = trimMessagesForResume(msgs, 100)
 	s, err := w.buildSession(id, sess, msgs, "")
 	if err != nil {
 		return nil, err
@@ -207,7 +235,11 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) {
 	prov, model := w.provider, w.model
 	if opts.Model != "" {
-		if m, e := provider.FindModel("", opts.Model); e == nil {
+		// Honor an explicit provider: model ids can exist under several
+		// providers (subscription vs api-key), and the unqualified lookup may
+		// pick one the workspace holds no credential for — the created
+		// session would then fail its deferred Resolve.
+		if m, e := provider.FindModel(opts.Provider, opts.Model); e == nil {
 			prov, model = m.Provider, m.ID
 		}
 	}
@@ -302,7 +334,39 @@ func (w *Workspace) Subscribe(ctx context.Context, sess string) (<-chan ctrlprot
 	if err != nil {
 		return nil, err
 	}
-	return s.subscribe(ctx), nil
+	return s.subscribe(ctx, false), nil
+}
+
+// SubscribeReliable is Subscribe with no-drop delivery, for the in-process
+// carrier (the TUI). It is deliberately NOT part of ctrlproto.WorkspaceService:
+// a networked carrier can never promise unbounded delivery, so reliability is an
+// in-process-only affordance the TUI reaches for on the concrete *Workspace. The
+// events are identical to Subscribe's — only the backpressure discipline differs
+// (the consumer must keep draining; a stall applies contained same-session
+// backpressure rather than silently dropping a text delta).
+func (w *Workspace) SubscribeReliable(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return nil, err
+	}
+	return s.subscribe(ctx, true), nil
+}
+
+// AgentFor returns the in-process *core.Agent backing a session — a
+// TRANSITIONAL affordance for the in-process TUI carrier during the
+// TUI-on-ctrlproto migration. The migrating TUI drives its hot path through the
+// wire (Prompt + the Subscribe stream), but still reads the agent directly for
+// rendering the finalized transcript and for management dialogs not yet moved
+// onto surfaces. It is deliberately NOT on ctrlproto.WorkspaceService: it has no
+// wire form and disappears as those readers migrate to snapshots/surfaces (a
+// networked carrier never gets a *core.Agent). Materializes the session if
+// needed and resolves an empty id to the default session.
+func (w *Workspace) AgentFor(sess string) (*core.Agent, string, error) {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return nil, "", err
+	}
+	return s.agent, s.id, nil
 }
 
 // --- session group (WorkspaceService) ---
@@ -551,20 +615,21 @@ func webLoggedInProviders() map[string]bool {
 	return out
 }
 
-func (w *Workspace) SwitchModel(ctx context.Context, sess, modelID string) error {
+func (w *Workspace) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {
 	s, err := w.resolve(sess)
 	if err != nil {
 		return err
 	}
-	return w.switchModel(s, modelID)
+	return w.switchModel(s, providerName, modelID)
 }
 
 // switchModel mirrors acpFactory.SwitchModel: same provider+endpoint swaps the
 // id in place; anything else builds a fresh client (dropping launch-time key/URL
 // overrides that pin the old endpoint) and hot-swaps client+model, keeping the
 // transcript. The new default becomes the workspace default for future sessions.
-func (w *Workspace) switchModel(s *wsSession, modelID string) error {
-	target, err := provider.FindModel("", modelID)
+// providerName qualifies the id (same rationale as CreateOpts.Provider).
+func (w *Workspace) switchModel(s *wsSession, providerName, modelID string) error {
+	target, err := provider.FindModel(providerName, modelID)
 	if err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "unknown model %q", modelID)
 	}
@@ -588,6 +653,16 @@ func (w *Workspace) switchModel(s *wsSession, modelID string) error {
 		}
 		s.agent.SetClientAndModel(r.NewClient(), r.Model)
 		s.setModel(r.Provider, r.Model)
+		// SetClientAndModel keeps the agent's registry, so terva_status
+		// still carries the OLD provider identity: re-bind it to the target
+		// provider/auth/endpoint. Without this the tool reports the prior
+		// provider and — because FindModel(oldProvider, newModel) misses —
+		// loses the context-window size after the swap.
+		if st, ok := s.agent.LookupTool("terva_status"); ok {
+			if stt, ok := st.(*tools.StatusTool); ok {
+				stt.SetProvider(r.Provider, r.AuthMethod, r.BaseURL)
+			}
+		}
 	}
 	prov, model := s.currentModel()
 	_ = s.sess.UpdateModel(prov, model)

@@ -328,6 +328,9 @@ func (f *fakeWS) Usage(ctx context.Context, sess string) (core.WireUsage, error)
 func (f *fakeWS) Context(ctx context.Context, sess string) (ctrlproto.ContextBreakdown, error) {
 	return ctrlproto.ContextBreakdown{}, nil
 }
+func (f *fakeWS) Node(ctx context.Context, sess, id, op string) (ctrlproto.ContextNode, error) {
+	return ctrlproto.ContextNode{ID: id}, nil
+}
 func (f *fakeWS) Surfaces(ctx context.Context, sess string) ([]ctrlproto.SurfaceMeta, error) {
 	return nil, nil
 }
@@ -341,7 +344,7 @@ func (f *fakeWS) Catalog(ctx context.Context, lang string) (ctrlproto.CatalogVie
 	return ctrlproto.CatalogView{Lang: lang}, nil
 }
 func (f *fakeWS) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) { return nil, nil }
-func (f *fakeWS) SwitchModel(ctx context.Context, sess, modelID string) error {
+func (f *fakeWS) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {
 	return nil
 }
 func (f *fakeWS) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {

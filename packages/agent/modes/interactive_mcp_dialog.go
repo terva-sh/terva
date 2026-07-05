@@ -10,6 +10,12 @@ import "terva.sh/terva/packages/i18n"
 
 // openMCPDialog populates and shows the /mcp dialog.
 func (i *Interactive) openMCPDialog() {
+	if i.cfg.Carrier != nil && i.mcpDialog != nil {
+		// ctrlproto mode: the server list rides the mcp surface.
+		i.mcpDialog.Open(i.carrierListMCP())
+		i.invalidate()
+		return
+	}
 	if i.mcpDialog == nil || i.cfg.ListMCP == nil {
 		i.setStatusErr(i18n.T("MCP management is not available in this build"))
 		return
@@ -28,6 +34,10 @@ func (i *Interactive) applyMCPToggle(act mcpAction) {
 	// user config to disable there. Explain instead of writing a no-op.
 	if act.ToggleGlobal && act.Scope == "project" {
 		i.setStatusOK(act.Name + ": project-defined server — toggle it for this project with p")
+		return
+	}
+	if i.cfg.Carrier != nil {
+		i.applyCarrierMCPToggle(act)
 		return
 	}
 
