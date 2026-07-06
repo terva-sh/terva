@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/web"
@@ -26,16 +27,24 @@ import (
 func runWebMode(ctx context.Context, args Args, version string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Workspace prep below (credential resolve, MCP server spawn + tool listing)
+	// runs BEFORE the listener binds, so a refreshing browser sees
+	// connection-refused until it finishes — announce it, and time it so a slow
+	// start is attributable at a glance.
+	fmt.Fprintln(os.Stderr, "terva web: starting — the control panel will be available shortly")
+	begin := time.Now()
 	ws, err := NewWorkspace(args, version)
 	if err != nil {
 		return err
 	}
 	defer ws.Close()
 	// The web daemon has no login flow, so a credential-less Workspace (fine
-	// for the TUI, which opens /login) is a hard startup error here.
+	// for the TUI, which opens /login) is a hard startup error here — checked
+	// before the ready announcement, which must never precede a failure.
 	if err := ws.CredentialErr(); err != nil {
 		return err
 	}
+	fmt.Fprintf(os.Stderr, "terva web: workspace ready (took %s)\n", time.Since(begin).Round(10*time.Millisecond))
 	cfg, _ := LoadConfig()
 	fmt.Fprintf(os.Stderr, "terva web: approval mode %q (tool calls that need approval prompt in the browser)\n", resolveApprovalMode(args, cfg))
 

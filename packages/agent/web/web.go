@@ -72,7 +72,7 @@ func ParseTrustedProxies(cidrs []string) ([]*net.IPNet, error) {
 	return out, nil
 }
 
-// Serve runs the HTTP server until ctx is cancelled or ListenAndServe fails.
+// Serve runs the HTTP server until ctx is cancelled or serving fails.
 // It fails closed: binding a non-loopback address with no auth mode is refused
 // unless AllowInsecure is set, because the endpoint can run tools as the user.
 func Serve(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) error {
@@ -96,10 +96,19 @@ func Serve(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) er
 		_ = srv.Shutdown(sc)
 	}()
 
-	fmt.Fprintf(os.Stderr, "terva web: listening on http://%s\n", opts.Addr)
+	// Bind before announcing: once Listen returns the kernel is accepting
+	// connections, so the ready line is truthful — with ListenAndServe it would
+	// print before the socket exists. Print the requested address, not
+	// ln.Addr(): a dual-stack wildcard bind reports itself as "[::]", which
+	// reads as a regression to someone who asked for 0.0.0.0.
+	ln, err := net.Listen("tcp", opts.Addr)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "terva web: ready — serving on http://%s\n", opts.Addr)
 	describeAuth(opts)
 
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
