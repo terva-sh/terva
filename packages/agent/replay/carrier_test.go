@@ -20,6 +20,7 @@ func writeFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer sess.Close()
 	msgs := []provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hello"}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "hi there"}}},
@@ -116,6 +117,7 @@ func TestCarrierEffectiveCompactionCollapses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer sess.Close()
 	um := func(s string) provider.Message {
 		return provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: s}}}
 	}
@@ -192,12 +194,65 @@ func TestCarrierAutoplayOnSubscribe(t *testing.T) {
 	}
 }
 
+// TestCarrierAutoplayBroadcastsScrubberState is the regression for the frozen
+// scrubber (audit m1): under autoplay the carrier used to broadcast exactly one
+// replay_state (position 0, playing) and never again, so a client scrubber sat
+// at 0% for the whole scene and past its end. onFrame now broadcasts replay_state
+// as frames emit (throttled) and always announces the terminal state.
+func TestCarrierAutoplayBroadcastsScrubberState(t *testing.T) {
+	fast := Pace{TextRunes: 2, TextInterval: 15 * time.Millisecond, Think: 15 * time.Millisecond, Tool: time.Millisecond, Compact: time.Millisecond}
+	c, err := Open(writeFixture(t), Options{Autoplay: true, Pace: fast})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ch, _ := c.Subscribe(t.Context(), "")
+	total := c.Transport().Total
+
+	var states []ctrlproto.ReplayState
+	collect := func(ev ctrlproto.Event) {
+		if ev.Type == ctrlproto.EventReplayState && ev.Replay != nil {
+			states = append(states, *ev.Replay)
+		}
+	}
+	deadline := time.After(3 * time.Second)
+	for done := false; !done; {
+		select {
+		case <-deadline:
+			t.Fatalf("autoplay did not reach done; replay_state count=%d", len(states))
+		case ev := <-ch:
+			collect(ev)
+			if ev.Type == "done" {
+				done = true
+			}
+		}
+	}
+	// The terminal replay_state follows the final "done" frame — drain briefly.
+	for drained := false; !drained; {
+		select {
+		case ev := <-ch:
+			collect(ev)
+		case <-time.After(150 * time.Millisecond):
+			drained = true
+		}
+	}
+
+	if len(states) < 2 {
+		t.Fatalf("autoplay broadcast %d replay_state events, want the scrubber to track (>1): %+v", len(states), states)
+	}
+	if last := states[len(states)-1]; last.Position != total || last.Playing {
+		t.Fatalf("final replay_state = %+v, want position=%d and paused (end-of-scene announced)", last, total)
+	}
+}
+
 func TestCarrierSeekByTurn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	sess, err := core.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer sess.Close()
 	um := func(s string) provider.Message {
 		return provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: s}}}
 	}

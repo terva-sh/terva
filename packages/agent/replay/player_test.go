@@ -103,6 +103,60 @@ func TestPlayerPlayEmitsAllInOrder(t *testing.T) {
 	}
 }
 
+// TestPlayerConcurrentStepStaysOrdered reproduces the emit-ordering race: a
+// Play() run loop racing repeated Step()s over zero-delay frames. Every frame
+// must reach the sink exactly once, in strictly increasing index order — never a
+// lower index after a higher one. Before the emitMu serialization, a Step could
+// call the sink while a timer-driven emit sat between its guard and its own sink,
+// producing sequences like [7 8 9 10 5 11].
+func TestPlayerConcurrentStepStaysOrdered(t *testing.T) {
+	const (
+		iters  = 300
+		n      = 50
+		nsteps = 10
+	)
+	for iter := range iters {
+		var mu sync.Mutex
+		var got []int
+		p := NewPlayer(zeroFrames(n), func(idx int, f Frame) {
+			mu.Lock()
+			got = append(got, idx)
+			mu.Unlock()
+		})
+
+		p.Play()
+		for range nsteps {
+			p.Step()
+		}
+
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			mu.Lock()
+			done := len(got) >= n
+			mu.Unlock()
+			if done || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		p.Close()
+
+		mu.Lock()
+		seq := append([]int(nil), got...)
+		mu.Unlock()
+		if len(seq) != n {
+			t.Fatalf("iter %d: emitted %d frames, want %d: %v", iter, len(seq), n, seq)
+		}
+		prev := -1
+		for _, idx := range seq {
+			if idx <= prev {
+				t.Fatalf("iter %d: out-of-order or duplicate emission (idx %d after %d): %v", iter, idx, prev, seq)
+			}
+			prev = idx
+		}
+	}
+}
+
 // TestPlayerPauseHolds verifies pause prevents further emission without
 // asserting an exact pre-pause count (timing-robust for -race/CI).
 func TestPlayerPauseHolds(t *testing.T) {

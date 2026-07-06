@@ -33,6 +33,7 @@ func writeReplayFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer sess.Close()
 	for _, m := range []provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hi"}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "hello there"}}},

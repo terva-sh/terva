@@ -13,6 +13,7 @@ func TestReadReplayRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer sess.Close()
 	msgs := []provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hi"}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{
@@ -62,6 +63,7 @@ func TestReadReplayRowsKeepsCompactedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer sess.Close()
 	msg := func(text string) provider.Message {
 		return provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: text}}}
 	}

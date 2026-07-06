@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
@@ -14,6 +15,12 @@ import (
 // hubBuffer bounds a subscriber's event backlog before a lossy client drops
 // (a reliable one blocks instead), mirroring the live workspace hub.
 const hubBuffer = 256
+
+// replayStateInterval throttles the replay_state broadcast during autoplay so a
+// multi-thousand-frame scene doesn't flood subscribers. The scrubber still moves
+// smoothly at ~12 Hz, and the final frame always broadcasts regardless so the
+// position lands on 100%/paused when a scene ends on its own.
+const replayStateInterval = 80 * time.Millisecond
 
 // Carrier plays a recorded session as a ctrlproto.WorkspaceService. A subscriber
 // receives a snapshot of the transcript up to the playhead, then the same
@@ -42,6 +49,7 @@ type Carrier struct {
 	autoStarted bool
 	cumUsage    core.WireUsage
 	ctxTokens   int
+	lastState   time.Time // last onFrame replay_state broadcast; throttle gate
 }
 
 var (
@@ -164,11 +172,17 @@ func (c *Carrier) Transport() State { return c.player.State() }
 // the new position without racing an in-flight frame. Play to resume.
 func (c *Carrier) Seek(pos int) {
 	c.player.Pause()
-	c.player.Seek(pos)
-	c.mu.Lock()
-	c.broadcastLocked(ctrlproto.SnapshotEvent(c.snapshotLocked()))
-	c.broadcastLocked(ctrlproto.ReplayStateEvent(c.wireState()))
-	c.mu.Unlock()
+	// Pause stops the run loop from starting a new emit; UnderEmitLock then waits
+	// for any in-flight one to finish. Only inside it is it safe to move the
+	// playhead and resync — otherwise a stale in-flight frame could broadcast
+	// after the fresh snapshot and corrupt every subscriber's transcript.
+	c.player.UnderEmitLock(func() {
+		c.player.Seek(pos)
+		c.mu.Lock()
+		c.broadcastLocked(ctrlproto.SnapshotEvent(c.snapshotLocked()))
+		c.broadcastLocked(ctrlproto.ReplayStateEvent(c.wireState()))
+		c.mu.Unlock()
+	})
 }
 
 // --- ctrlproto.ReplayController: transport over the wire ---
@@ -202,7 +216,10 @@ func (c *Carrier) ReplayState(ctx context.Context, sess string) (ctrlproto.Repla
 }
 
 func (c *Carrier) wireState() ctrlproto.ReplayState {
-	s := c.player.State()
+	return c.wireStateFrom(c.player.State())
+}
+
+func (c *Carrier) wireStateFrom(s State) ctrlproto.ReplayState {
 	return ctrlproto.ReplayState{
 		Playing:  s.Playing,
 		Position: s.Pos,
@@ -222,6 +239,7 @@ func (c *Carrier) broadcastState() {
 
 func (c *Carrier) onFrame(idx int, f Frame) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if u, ok := f.Event.(core.EvUsage); ok {
 		c.cumUsage = toWireUsage(u.Cumulative)
 		c.ctxTokens = u.Usage.InputTokens + u.Usage.CacheReadTokens
@@ -233,7 +251,15 @@ func (c *Carrier) onFrame(idx int, f Frame) {
 		// client collapses its transcript to the compacted state.
 		c.broadcastLocked(ctrlproto.SnapshotEvent(c.snapshotLocked()))
 	}
-	c.mu.Unlock()
+	// Keep scrubbers moving during autoplay: broadcast replay_state as frames
+	// emit (throttled so a huge scene doesn't flood the wire), and always on the
+	// final frame so the position lands on 100%/paused when playback ends on its
+	// own — the transport verbs only broadcast on an explicit action.
+	s := c.player.State()
+	if s.Pos >= s.Total || time.Since(c.lastState) >= replayStateInterval {
+		c.lastState = time.Now()
+		c.broadcastLocked(ctrlproto.ReplayStateEvent(c.wireStateFrom(s)))
+	}
 }
 
 func (c *Carrier) broadcastLocked(ev ctrlproto.Event) {

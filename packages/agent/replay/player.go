@@ -28,6 +28,14 @@ type Player struct {
 	frames []Frame
 	sink   func(idx int, f Frame)
 
+	// emitMu serializes the guard→advance→sink sequence so exactly one frame is
+	// ever in flight to the sink, in emission order. Both run() and Step() hold
+	// it across the whole sequence; without it a Step (or a Seek's resync) could
+	// call the sink while a timer-driven emit sits between its own guard and its
+	// sink call, delivering frames out of order. Acquired before mu; the sink
+	// runs with mu released but emitMu held (a blocking sink still paces).
+	emitMu sync.Mutex
+
 	mu      sync.Mutex
 	pos     int
 	playing bool
@@ -100,6 +108,8 @@ func (p *Player) Seek(pos int) {
 // Step emits exactly one frame immediately and advances. Returns false when the
 // playhead is already at the end. Independent of play/pause.
 func (p *Player) Step() bool {
+	p.emitMu.Lock()
+	defer p.emitMu.Unlock()
 	p.mu.Lock()
 	if p.pos >= len(p.frames) {
 		p.mu.Unlock()
@@ -112,6 +122,16 @@ func (p *Player) Step() bool {
 	p.mu.Unlock()
 	sink(idx, f)
 	return true
+}
+
+// UnderEmitLock runs fn with frame emission blocked: no frame is in flight while
+// fn runs, and — provided the caller has paused — none starts until fn returns.
+// A carrier uses it so Seek can resync (snapshot at the new position) without
+// racing an in-flight frame, making pause+seek a true emission barrier.
+func (p *Player) UnderEmitLock(fn func()) {
+	p.emitMu.Lock()
+	defer p.emitMu.Unlock()
+	fn()
 }
 
 // State returns the current transport snapshot.
@@ -171,11 +191,16 @@ func (p *Player) run() {
 		timer := time.NewTimer(d)
 		select {
 		case <-timer.C:
+			// Hold emitMu across the guard, advance, and sink so a concurrent
+			// Step (or a Seek's UnderEmitLock resync) can't interleave its own
+			// sink with this one — that is the frame-ordering guarantee.
+			p.emitMu.Lock()
 			p.mu.Lock()
 			// A concurrent Pause/Seek/Step/Close may have moved on; only emit
 			// if we're still playing this exact frame.
 			if p.closed || !p.playing || p.pos != idx {
 				p.mu.Unlock()
+				p.emitMu.Unlock()
 				continue
 			}
 			p.pos++
@@ -189,6 +214,7 @@ func (p *Player) run() {
 			sink := p.sink
 			p.mu.Unlock()
 			sink(idx, f)
+			p.emitMu.Unlock()
 		case <-p.wake:
 			timer.Stop()
 		case <-p.done:
