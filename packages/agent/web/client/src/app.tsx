@@ -418,8 +418,20 @@ export function App() {
         /* control group optional */
       }
       const list = await refreshSessions(c)
-      if (list.length) selectSession((list.find((s) => s.current) ?? list[0]).id)
-      else await newSession(c)
+      if (!list.length) {
+        await newSession(c)
+        return
+      }
+      const target = (list.find((s) => s.current) ?? list[0]).id
+      if (target === curRef.current) {
+        // Reconnect to the same session: selectSession would short-circuit on the
+        // unchanged id and never re-subscribe, leaving the panel connected but
+        // frozen (no snapshot, no live events). Fire the subscribe explicitly —
+        // the server is idempotent and replies with a fresh snapshot that resyncs.
+        c.fire('subscribe', null, target)
+      } else {
+        selectSession(target)
+      }
     }
     c.connect()
     return () => c.close()
