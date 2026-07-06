@@ -11,6 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/connproto"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // startEventSession is startAskSession plus stage-D event consumers.
@@ -59,7 +60,7 @@ type eventRec struct {
 func TestSessionInboundEvents(t *testing.T) {
 	s, sc, rec := startEventSession(t,
 		[]string{"edits_in", "deletes_in", "reactions_in", "edits_out", "reactions_out", "deletes_out"},
-		t.TempDir())
+		testsupport.TempDir(t))
 	caps := s.Capabilities()
 	if !caps.EditsOut || !caps.ReactionsOut || !caps.DeletesOut || caps.MinEditInterval != time.Second {
 		t.Fatalf("caps = %+v", caps)
@@ -105,7 +106,7 @@ func TestSessionInboundEvents(t *testing.T) {
 // TestSessionOutboundEvents drives edit/react/delete round trips and
 // the local refusal without the features.
 func TestSessionOutboundEvents(t *testing.T) {
-	s, sc, _ := startEventSession(t, []string{"edits_out", "reactions_out", "deletes_out"}, t.TempDir())
+	s, sc, _ := startEventSession(t, []string{"edits_out", "reactions_out", "deletes_out"}, testsupport.TempDir(t))
 
 	check := func(call func() error, wantType string, verify func(raw []byte)) {
 		t.Helper()
@@ -143,7 +144,7 @@ func TestSessionOutboundEvents(t *testing.T) {
 	})
 
 	// Without the features: refused locally, nothing written.
-	s2, sc2, _ := startEventSession(t, nil, t.TempDir())
+	s2, sc2, _ := startEventSession(t, nil, testsupport.TempDir(t))
 	for _, call := range []func() error{
 		func() error { return s2.EditMessage(context.Background(), "c1", "m", "x") },
 		func() error { return s2.React(context.Background(), "c1", "m", "👍", false) },
@@ -164,7 +165,7 @@ func TestSessionOutboundEvents(t *testing.T) {
 // into a contained per-message dir; captions join the text; escapes
 // are refused.
 func TestSessionAttachmentKinds(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := testsupport.TempDir(t)
 	_, sc, rec := startEventSession(t, []string{"attachment_kinds"}, dataDir)
 
 	img := filepath.Join(dataDir, "in.png")
@@ -175,7 +176,7 @@ func TestSessionAttachmentKinds(t *testing.T) {
 	if err := os.WriteFile(voice, []byte("OGG"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	outside := filepath.Join(t.TempDir(), "secret.txt")
+	outside := filepath.Join(testsupport.TempDir(t), "secret.txt")
 	if err := os.WriteFile(outside, []byte("nope"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +225,7 @@ func TestSessionAttachmentKinds(t *testing.T) {
 // (Only a message's author can edit it, so an own-id edit is always
 // the session's own write-back.)
 func TestOwnMessageEventEchoesDropped(t *testing.T) {
-	s, sc, rec := startEventSession(t, []string{"edits_in", "deletes_in"}, t.TempDir())
+	s, sc, rec := startEventSession(t, []string{"edits_in", "deletes_in"}, testsupport.TempDir(t))
 
 	// A send whose result carries message_id marks m-77 as ours.
 	done := make(chan error, 1)

@@ -124,7 +124,7 @@ func TestNoUpstreamURLsInGoSources(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "bin", "node_modules":
+			case ".git", ".claude", "bin", "node_modules":
 				return filepath.SkipDir
 			}
 			return nil
@@ -192,7 +192,7 @@ func TestNoStrayOldNameInGoSources(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "bin", "dist", "node_modules":
+			case ".git", ".claude", "bin", "dist", "node_modules":
 				return filepath.SkipDir
 			}
 			return nil
@@ -252,7 +252,7 @@ func TestInternalHostOnlyInIdentityDefaults(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "bin", "dist", "node_modules":
+			case ".git", ".claude", "bin", "dist", "node_modules":
 				return filepath.SkipDir
 			}
 			return nil

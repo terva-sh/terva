@@ -12,6 +12,7 @@ import (
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/connproto"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // scriptConn is a FrameConn the test drives by hand: frames pushed
@@ -76,7 +77,7 @@ func startAskSession(t *testing.T, features []string) (*Session, *scriptConn) {
 	t.Helper()
 	sc := newScriptConn()
 	s := New(Config{
-		Name: "stub", DataDir: t.TempDir(),
+		Name: "stub", DataDir: testsupport.TempDir(t),
 		Conn:        sc,
 		Deliver:     func(chat.Message) {},
 		Warn:        func(string) {},
