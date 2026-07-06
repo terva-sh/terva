@@ -158,7 +158,7 @@ func (t *turnEngine) release(dropQueue bool) (next string, hasNext bool) {
 	return t.agent.ShiftQueuedMessage()
 }
 
-// ---- carrier slot transitions (--tui-ctrlproto) ----
+// ---- carrier slot transitions (the default ctrlproto TUI path) ----
 //
 // In carrier mode the wsSession is the busy ARBITER (its Prompt returns
 // CodeBusy) and the Workspace owns post-turn queue policy; the engine's slot

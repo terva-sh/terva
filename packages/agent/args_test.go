@@ -113,6 +113,41 @@ func TestParseArgsSwarmWorktreesFlag(t *testing.T) {
 	}
 }
 
+func TestParseArgsTUIBackendFlags(t *testing.T) {
+	// Default: the ctrlproto carrier drives the TUI.
+	a, err := ParseArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.TUILegacy {
+		t.Fatal("TUILegacy = true with no flags; ctrlproto should be the default")
+	}
+	// --tui-legacy opts into the legacy direct driver.
+	a, err = ParseArgs([]string{"--tui-legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.TUILegacy {
+		t.Fatal("TUILegacy = false after --tui-legacy")
+	}
+	// --tui-ctrlproto stays accepted as the explicit now-default override;
+	// the last flag wins.
+	a, err = ParseArgs([]string{"--tui-legacy", "--tui-ctrlproto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.TUILegacy {
+		t.Fatal("TUILegacy = true after --tui-legacy --tui-ctrlproto; the later flag should win")
+	}
+	a, err = ParseArgs([]string{"--tui-ctrlproto", "--tui-legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.TUILegacy {
+		t.Fatal("TUILegacy = false after --tui-ctrlproto --tui-legacy; the later flag should win")
+	}
+}
+
 func TestResolveSwarmWorktrees(t *testing.T) {
 	tru := true
 	fls := false

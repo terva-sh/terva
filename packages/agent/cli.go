@@ -38,9 +38,10 @@ import (
 
 // interactiveExtHooks is a tiny adapter that lets the extension
 // *Workspace is the in-process ctrlproto carrier the interactive TUI drives
-// under --tui-ctrlproto. Asserted here (not in workspace.go) so the lower-level
-// workspace need not import modes; cli.go is the composition root that already
-// bridges the two. See docs/proposals/tui-on-ctrlproto.md.
+// by default (the legacy direct driver hides behind --tui-legacy). Asserted
+// here (not in workspace.go) so the lower-level workspace need not import
+// modes; cli.go is the composition root that already bridges the two. See
+// docs/proposals/tui-on-ctrlproto.md.
 var _ modes.Carrier = (*Workspace)(nil)
 
 // manager call back into the Interactive instance built later in
@@ -782,10 +783,10 @@ func Run(rawArgs []string, version string) error {
 	case ModeSwarmAgent:
 		return runSwarmAgentMode(ctx, args, version)
 	default:
-		if args.TUICtrlproto {
-			return runInteractiveCtrlproto(ctx, args, version)
+		if args.TUILegacy {
+			return runInteractive(ctx, args, version)
 		}
-		return runInteractive(ctx, args, version)
+		return runInteractiveCtrlproto(ctx, args, version)
 	}
 }
 

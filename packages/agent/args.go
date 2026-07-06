@@ -71,12 +71,12 @@ type Args struct {
 	WebInsecureCIDRs  []string // IPs/CIDRs granted no-auth access (besides loopback) — the scoped, safer form of --web-insecure (e.g. a tailnet range)
 	WebAllowRestart   bool     // enable Tier-1 self-restart (control.restart + the terva_restart tool); off by default
 
-	// TUICtrlproto routes the interactive TUI through the in-process ctrlproto
-	// carrier (WorkspaceService) instead of driving a *core.Agent directly — the
-	// TUI-on-ctrlproto migration (docs/proposals/tui-on-ctrlproto.md).
-	// Experimental, default-off; the legacy path stays the default until the
-	// migration reaches feature parity.
-	TUICtrlproto bool
+	// TUILegacy routes the interactive TUI through the legacy in-process
+	// *core.Agent driver instead of the ctrlproto carrier (WorkspaceService),
+	// which is the default since the TUI-on-ctrlproto migration reached parity
+	// (docs/proposals/tui-on-ctrlproto.md). Escape hatch while the residual
+	// gaps close; slated for removal with the legacy driver.
+	TUILegacy bool
 
 	SystemPrompt       string
 	AppendSystemPrompt []string
@@ -512,10 +512,16 @@ func ParseArgs(in []string) (Args, error) {
 			a.Exts = append(a.Exts, v)
 		case "--no-ext", "--no-extensions":
 			a.NoExt = true
+		case "--tui-legacy":
+			// Drive the interactive TUI with the legacy direct *core.Agent
+			// driver instead of the default ctrlproto carrier
+			// (docs/proposals/tui-on-ctrlproto.md).
+			a.TUILegacy = true
 		case "--tui-ctrlproto":
-			// Experimental: drive the interactive TUI through the in-process
-			// ctrlproto carrier (docs/proposals/tui-on-ctrlproto.md).
-			a.TUICtrlproto = true
+			// Former opt-in for the ctrlproto carrier, now the default.
+			// Kept as an explicit override (last flag wins vs --tui-legacy)
+			// so existing invocations keep working.
+			a.TUILegacy = false
 		case "--extensions":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -854,6 +860,7 @@ func PrintHelp(version string) {
 		row{"--project / --no-project", i18n.T("force project-scoped mode on/off (data in .terva/home, only project extensions; login+trust stay global)")},
 	)
 	section(i18n.T("misc"),
+		row{"--tui-legacy", i18n.T("drive the tui with the legacy direct agent driver instead of the default ctrlproto carrier")},
 		row{"--swarm-worktrees", i18n.T("give each swarm sub-agent its own git worktree (needs the terva-git-worktree extension)")},
 		row{"--max-steps N", i18n.T("agent loop iteration cap (default: unlimited)")},
 		row{"--dump-prompt[=text|json|raw]", i18n.T("print the assembled prompt for the pending turn and exit (no model call)")},

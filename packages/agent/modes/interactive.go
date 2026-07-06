@@ -128,10 +128,10 @@ type InteractiveConfig struct {
 	Agent *core.Agent
 
 	// Carrier, when non-nil, routes the TUI's hot path through the in-process
-	// ctrlproto WorkspaceService instead of driving Agent directly
-	// (--tui-ctrlproto; docs/proposals/tui-on-ctrlproto.md). CarrierSession is
-	// the resolved session id the TUI operates on. Experimental; the legacy
-	// Agent path runs when Carrier is nil.
+	// ctrlproto WorkspaceService instead of driving Agent directly — the
+	// default entry point (docs/proposals/tui-on-ctrlproto.md). CarrierSession
+	// is the resolved session id the TUI operates on. The legacy Agent path
+	// runs when Carrier is nil (--tui-legacy).
 	Carrier        Carrier
 	CarrierSession string
 	// CarrierTasks enables /swarm on the carrier path (the tasks surface).
@@ -139,6 +139,15 @@ type InteractiveConfig struct {
 	// cfg.Swarm — withheld from immersive/no-tools sessions so the dashboard
 	// can't re-inject the coding skin there.
 	CarrierTasks bool
+	// CarrierLogin finalizes a successful in-TUI login on the carrier path —
+	// the carrier twin of BuildAgent+SetAgent. It refreshes the workspace's
+	// credential/defaults, then ensures a current session: creating the first
+	// one on a credential-less boot (current == ""), or rebuilding the live
+	// session's provider client on a re-login. Returns the session the TUI
+	// should be bound to. Only an in-process carrier host sets it — its
+	// presence is also what marks the carrier as login-capable (a remote or
+	// replay carrier leaves it nil: the daemon owns credentials there).
+	CarrierLogin func(current string) (ctrlproto.SessionInfo, error)
 
 	InitialInput string
 
@@ -993,10 +1002,12 @@ func (i *Interactive) Run(ctx context.Context) error {
 
 	// No credential at startup? Auto-open the login dialog, and mark
 	// the status line. The user can Esc out of the dialog if they
-	// want to dismiss it (e.g. to check /help or /exit first). A
-	// carrier-backed TUI never logs in here — the daemon/carrier owns
-	// credentials (and a replay carrier has no agent at all), so skip it.
-	if i.cfg.Carrier == nil && !i.turns.HasAgent() {
+	// want to dismiss it (e.g. to check /help or /exit first). On a
+	// carrier, only a login-capable host (in-process carrier, marked by
+	// CarrierLogin) logs in here — a remote or replay carrier leaves it
+	// nil because the daemon owns credentials (and a replay carrier has
+	// no agent at all), so skip it there.
+	if !i.turns.HasAgent() && (i.cfg.Carrier == nil || i.cfg.CarrierLogin != nil) {
 		i.statusErr = i18n.T("not logged in. pick a login method below or press esc to dismiss.")
 		i.dialog.Open(i.cfg.TervaHome)
 	} else if !i.cfg.Trusted && i.cfg.GatedContentPresent {

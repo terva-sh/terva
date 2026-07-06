@@ -19,15 +19,21 @@ import (
 
 // Resolved is the effective configuration after merging CLI, config, defaults.
 type Resolved struct {
-	Provider    string
-	Model       string
-	Credential  string // api key or oauth access token
-	AuthMethod  string // "apikey" | "oauth" | "" (no credential yet)
-	AccountID   string // ChatGPT account id (for openai oauth), "" otherwise
-	BaseURL     string
-	CWD         string
-	Reasoning   string
-	Temperature *float32
+	Provider   string
+	Model      string
+	Credential string // api key or oauth access token
+	AuthMethod string // "apikey" | "oauth" | "" (no credential yet)
+	// CredentialErr is the credential-resolution failure a
+	// Resolve(requireCred=false) call swallowed (a *CredentialError with the
+	// full user-facing message), nil when a credential resolved. Lets a host
+	// that boots credential-less (the TUI's Workspace) report or defer the
+	// failure without a second Resolve.
+	CredentialErr error
+	AccountID     string // ChatGPT account id (for openai oauth), "" otherwise
+	BaseURL       string
+	CWD           string
+	Reasoning     string
+	Temperature   *float32
 	// Insecure skips TLS verification for the inference client only
 	// (gated to openai-compatible/ollama + explicit --base-url in Resolve).
 	Insecure bool
@@ -404,6 +410,15 @@ func canonicalProvider(name string) string {
 	return n
 }
 
+// CredentialError marks a credential-resolution failure: returned by
+// Resolve(requireCred=true), and carried on Resolved.CredentialErr by a
+// requireCred=false call. Hosts with a login flow (the interactive TUI) defer
+// it and open /login; hosts without one (the web daemon) fail fast on it.
+type CredentialError struct{ Err error }
+
+func (e *CredentialError) Error() string { return e.Err.Error() }
+func (e *CredentialError) Unwrap() error { return e.Err }
+
 // Resolve merges args, config, and env into a Resolved set.
 //
 // Unlike the earlier version, Resolve NEVER returns an error for
@@ -663,9 +678,13 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		requireCred = false
 	}
 
-	if credErr != nil && requireCred {
-		return Resolved{}, fmt.Errorf("%w; set %s_API_KEY, pass --api-key, or run `terva` and /login",
-			credErr, envVarName(provName))
+	var credFailure error
+	if credErr != nil {
+		credFailure = &CredentialError{fmt.Errorf("%w; set %s_API_KEY, pass --api-key, or run `terva` and /login",
+			credErr, envVarName(provName))}
+		if requireCred {
+			return Resolved{}, credFailure
+		}
 	}
 
 	sandbox := tools.NewSandbox(args.CWD)
@@ -926,6 +945,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		Model:                    model,
 		Credential:               cred,
 		AuthMethod:               method,
+		CredentialErr:            credFailure,
 		AccountID:                accountID,
 		BaseURL:                  args.BaseURL,
 		CWD:                      args.CWD,

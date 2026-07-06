@@ -56,6 +56,22 @@ type Workspace struct {
 	mu       sync.Mutex
 	sessions map[string]*wsSession
 
+	// credErr is the boot-time credential-resolution failure (nil once a
+	// credential resolves — RefreshDefaults clears it after an in-TUI login).
+	// A credential-less Workspace constructs fine: only sessions hard-require
+	// a credential (buildSession's own Resolve). Guarded by mu.
+	credErr error
+
+	// trusted is the launch cwd's Workspace Trust verdict, captured at
+	// construction for hosts that need it before any session exists (the
+	// TUI's credential-less login boot). Immutable after NewWorkspace —
+	// live trust flips ride Trust/Untrust, which reload sessions directly.
+	trusted bool
+
+	// personaName labels the default persona for hosts that need it before
+	// any session exists (same audience as trusted). Immutable.
+	personaName string
+
 	// diag receives host-side session-build diagnostics (permission-policy
 	// warnings, extension-load results). It defaults to a line on os.Stderr,
 	// which is right for the web/ACP daemons, but the in-process TUI carrier
@@ -66,11 +82,14 @@ type Workspace struct {
 
 var _ ctrlproto.WorkspaceService = (*Workspace)(nil)
 
-// NewWorkspace builds a Workspace from resolved args. It requires a credential
-// (a daemon cannot run turns without one) and captures the default
-// provider/model for new sessions.
+// NewWorkspace builds a Workspace from resolved args and captures the default
+// provider/model for new sessions. It does NOT require a credential: sessions
+// hard-require one at build time (buildSession's own Resolve), so a
+// credential-less Workspace can boot for a host with a login flow — the TUI
+// opens /login and calls RefreshDefaults once a credential lands. Hosts that
+// cannot log in (the web daemon) fail fast on CredentialErr instead.
 func NewWorkspace(args Args, version string) (*Workspace, error) {
-	r, err := Resolve(args, true)
+	r, err := Resolve(args, false)
 	if err != nil {
 		return nil, err
 	}
@@ -86,8 +105,11 @@ func NewWorkspace(args Args, version string) (*Workspace, error) {
 		ctx:      ctx,
 		cancel:   cancel,
 		sessions: map[string]*wsSession{},
+		credErr:  r.CredentialErr,
+		trusted:  r.Trusted,
 		diag:     func(m string) { fmt.Fprintln(os.Stderr, m) },
 	}
+	w.personaName = r.persona.Name
 	// Workspace-global swarm for the tasks pane. Construction does no I/O;
 	// Reload pulls previously-spawned agents off disk (shown as detached, like
 	// the TUI). Daemons persist across restarts, so Close does not stop them.
@@ -113,6 +135,46 @@ func (w *Workspace) SetDiag(fn func(string)) {
 	w.mu.Lock()
 	w.diag = fn
 	w.mu.Unlock()
+}
+
+// CredentialErr reports the boot-time credential-resolution failure, nil once
+// a credential resolves. The TUI carrier boots session-less on it and opens
+// /login; the web daemon (no login flow) fails fast on it.
+func (w *Workspace) CredentialErr() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.credErr
+}
+
+// Defaults returns the workspace's default provider and model for new
+// sessions — resolvable even credential-less (they come from flags/config/
+// catalog), so the TUI's login boot can label the status line before the
+// first session exists.
+func (w *Workspace) Defaults() (provider, model string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.provider, w.model
+}
+
+// Trusted reports the launch cwd's Workspace Trust verdict captured at
+// construction (see the field note; live flips ride Trust/Untrust).
+func (w *Workspace) Trusted() bool { return w.trusted }
+
+// RefreshDefaults re-resolves the workspace's default provider/model and
+// credential state from args + the config/auth stores. The TUI calls it
+// after an in-TUI login stores a fresh credential — the login flow may also
+// have promoted a new default provider/model — so sessions created from here
+// on resolve against the new state.
+func (w *Workspace) RefreshDefaults() error {
+	r, err := Resolve(w.args, true)
+	if err != nil {
+		return err
+	}
+	w.mu.Lock()
+	w.provider, w.model = r.Provider, r.Model
+	w.credErr = r.CredentialErr
+	w.mu.Unlock()
+	return nil
 }
 
 // Close cancels in-flight turns, closes open session files, and releases the
@@ -620,7 +682,21 @@ func (w *Workspace) SwitchModel(ctx context.Context, sess, providerName, modelID
 	if err != nil {
 		return err
 	}
-	return w.switchModel(s, providerName, modelID)
+	return w.switchModel(s, providerName, modelID, false)
+}
+
+// RefreshSessionCredential rebuilds a live session's provider client from a
+// freshly-resolved credential, keeping its provider/model/transcript — the
+// carrier twin of the legacy login rebuild (BuildAgent + SetAgent). Without
+// it a re-login (expired token) leaves the session's agent holding the dead
+// client until a cross-provider /model swap happens to rebuild it.
+func (w *Workspace) RefreshSessionCredential(ctx context.Context, sess string) error {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return err
+	}
+	prov, model := s.currentModel()
+	return w.switchModel(s, prov, model, true)
 }
 
 // switchModel mirrors acpFactory.SwitchModel: same provider+endpoint swaps the
@@ -628,14 +704,16 @@ func (w *Workspace) SwitchModel(ctx context.Context, sess, providerName, modelID
 // overrides that pin the old endpoint) and hot-swaps client+model, keeping the
 // transcript. The new default becomes the workspace default for future sessions.
 // providerName qualifies the id (same rationale as CreateOpts.Provider).
-func (w *Workspace) switchModel(s *wsSession, providerName, modelID string) error {
+// forceRebuild skips the same-endpoint id-swap shortcut so a re-login can
+// replace the client even when nothing else changed.
+func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forceRebuild bool) error {
 	target, err := provider.FindModel(providerName, modelID)
 	if err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "unknown model %q", modelID)
 	}
 	curProv, curModel := s.currentModel()
 	cur, curErr := provider.FindModel(curProv, curModel)
-	if curErr == nil && curProv == target.Provider && cur.BaseURL == target.BaseURL {
+	if !forceRebuild && curErr == nil && curProv == target.Provider && cur.BaseURL == target.BaseURL {
 		s.agent.SetModel(target.ID)
 		s.setModel(target.Provider, target.ID)
 	} else {

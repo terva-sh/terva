@@ -361,7 +361,15 @@ func (i *Interactive) handleAuthEvent(ev auth.Event) {
 		if i.cfg.RefreshModels != nil {
 			i.cfg.RefreshModels()
 		}
-		// Rebuild the agent with the fresh credential.
+		// Apply the fresh credential. On the carrier path the workspace owns
+		// the agents: CarrierLogin refreshes its credential/defaults and
+		// ensures a session (creating the first one on a credential-less
+		// boot, rebuilding the live session's client on a re-login); the
+		// legacy path rebuilds the in-TUI agent directly.
+		if i.cfg.Carrier != nil {
+			i.finishCarrierLogin(ev)
+			return
+		}
 		ag, prov, model, err := i.cfg.BuildAgent()
 		if err != nil {
 			i.dialog.ShowResult(false, err.Error())
@@ -377,4 +385,50 @@ func (i *Interactive) handleAuthEvent(ev auth.Event) {
 		i.applyChatTools(i.chatBridge != nil && i.chatBridge.Active())
 		i.dialog.ShowResult(true, "")
 	}
+}
+
+// finishCarrierLogin is the carrier half of the login-success handler: the
+// host's CarrierLogin closure does the workspace-side work, then the TUI
+// binds onto the returned session. A first login (credential-less boot) comes
+// back with a fresh session to switch onto; a re-login returns the current
+// binding rebuilt in place (its client was hot-swapped, the crutch agent
+// handle is unchanged), so only the labels need refreshing.
+func (i *Interactive) finishCarrierLogin(ev auth.Event) {
+	if i.cfg.CarrierLogin == nil {
+		// A remote/replay carrier: credentials belong to the daemon, and the
+		// login dialog should not have been reachable (the auto-open and
+		// /login both key off CarrierLogin). Fail soft if it was.
+		i.dialog.ShowResult(false, i18n.T("this session's credentials are owned by the daemon"))
+		return
+	}
+	info, err := i.cfg.CarrierLogin(i.carrierSession())
+	if err != nil {
+		i.dialog.ShowResult(false, err.Error())
+		return
+	}
+	if i.carrierSession() != info.ID {
+		if err := i.SwitchCarrierSession(info.ID); err != nil {
+			i.dialog.ShowResult(false, err.Error())
+			return
+		}
+	} else if !i.turns.HasAgent() {
+		// Same session, but the crutch agent was dropped (a /logout of the
+		// current provider nils it to block prompting) — re-grab it so the
+		// prompt gate reopens.
+		if ag, _, err := i.cfg.Carrier.AgentFor(info.ID); err == nil {
+			i.turns.SetAgent(ag)
+		}
+	}
+	i.mu.Lock()
+	if info.Provider != "" {
+		i.cfg.Provider = info.Provider
+	}
+	if info.Model != "" {
+		i.cfg.Model = info.Model
+	}
+	i.statusErr = ""
+	i.statusOK = i18n.T("logged in to %s via %s", ev.Provider, ev.Method)
+	i.mu.Unlock()
+	i.applyChatTools(i.chatBridge != nil && i.chatBridge.Active())
+	i.dialog.ShowResult(true, "")
 }

@@ -1,10 +1,11 @@
 package agent
 
-// The --tui-ctrlproto entry point: the interactive TUI driving an in-process
+// The default interactive entry point: the TUI driving an in-process
 // Workspace through the ctrlproto WorkspaceService instead of a directly-owned
-// core.Agent (docs/proposals/tui-on-ctrlproto.md). This is the protocol's
-// completeness test — the same TUI should later drive a remote daemon over a
-// serialized carrier, which is why the hot path consumes the wire vocabulary.
+// core.Agent (docs/proposals/tui-on-ctrlproto.md; the legacy direct driver
+// remains available under --tui-legacy). This is the protocol's completeness
+// test — the same TUI should later drive a remote daemon over a serialized
+// carrier, which is why the hot path consumes the wire vocabulary.
 
 import (
 	"context"
@@ -17,26 +18,40 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/tui"
 )
 
 // runInteractiveCtrlproto builds a Workspace, creates a session, and runs the
-// interactive TUI against it through the carrier seam. Stage 1 wires the hot
+// interactive TUI against it through the carrier seam. Everything on the hot
 // path — prompt dispatch, the event stream, approvals/asks, queue, cancel,
-// daemon-side turn policy — through the service; session ops and management
-// dialogs remain legacy features until Stages 2–3, so this lean entry omits
-// their closures rather than double-building the legacy agent stack next to
-// the workspace's own (which would spawn every extension subprocess twice).
-// The session agent is still handed to the TUI as the transitional crutch:
-// it renders the finalized transcript and feeds the not-yet-migrated dialogs.
+// daemon-side turn policy, session ops, management dialogs, transcript
+// rendering — rides the service; the session agent is still handed to the
+// TUI as the transitional crutch for the residual readers (/usage,
+// fork/tree/export file helpers, startup scroll, queue chips).
 func runInteractiveCtrlproto(ctx context.Context, args Args, version string) error {
-	// The Workspace requires a credential up front (a daemon cannot run turns
-	// without one) — there is no in-TUI login flow on this path yet.
+	// Pre-TUI terminal prompts, same order as the legacy entry: a character
+	// card's {{user}} needs a name (it feeds Resolve inside NewWorkspace),
+	// and the first interactive run offers the core extension pack before the
+	// Workspace's discovery scan so an accepted install is picked up by this
+	// same session. Both are TTY-gated, ask-once no-ops otherwise.
+	args = maybePromptUserName(args)
+	maybeOfferCorePack(args)
+
+	// A credential-less Workspace boots fine (only sessions hard-require a
+	// credential), so a first run lands in the TUI with the login dialog
+	// auto-opened; CarrierLogin below finishes the flow.
 	w, err := NewWorkspace(args, version)
 	if err != nil {
 		return err
 	}
 	defer w.Close()
+
+	// In-TUI login support: the auth manager drives /login (browser OAuth or
+	// the api-key form); handleAuthEvent's success path hands the stored
+	// credential to CarrierLogin below.
+	authMgr := auth.NewManager(AuthStoreFor())
+	defer authMgr.Close()
 
 	// Session-build diagnostics (permission-policy warnings, extension-load
 	// errors) fire before the TUI exists: buffer them, then emit to stderr
@@ -53,29 +68,56 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 	// latest session for this cwd (the Workspace's empty-id resolution is
 	// exactly that, falling back to a fresh session when none exists);
 	// --resume runs the pre-TUI terminal picker; default is a fresh session.
+	//
+	// On a credential-less boot the first session is DEFERRED until /login
+	// succeeds (sessions hard-require a credential). --resume's picker still
+	// runs now — it is a disk scan needing no credential and cannot run once
+	// the TUI owns the terminal — and the pick materializes post-login.
+	needLogin := w.CredentialErr() != nil
 	var info ctrlproto.SessionInfo
-	switch {
-	case args.Continue:
-		info, err = w.ResumeSession(ctx, "")
-	case args.Resume:
-		picked, perr := pickSession(args.CWD)
-		if perr != nil {
-			return perr
+	var ag *core.Agent
+	var sessID, pendingResume string
+	if needLogin {
+		if args.Resume {
+			picked, perr := pickSession(args.CWD)
+			if perr != nil {
+				return perr
+			}
+			pendingResume = sessionIDFromPath(picked)
 		}
-		if picked == "" {
+	} else {
+		switch {
+		case args.Continue:
+			info, err = w.ResumeSession(ctx, "")
+		case args.Resume:
+			picked, perr := pickSession(args.CWD)
+			if perr != nil {
+				return perr
+			}
+			if picked == "" {
+				info, err = w.CreateSession(ctx, ctrlproto.CreateOpts{})
+			} else {
+				info, err = w.ResumeSession(ctx, sessionIDFromPath(picked))
+			}
+		default:
 			info, err = w.CreateSession(ctx, ctrlproto.CreateOpts{})
-		} else {
-			info, err = w.ResumeSession(ctx, sessionIDFromPath(picked))
 		}
-	default:
-		info, err = w.CreateSession(ctx, ctrlproto.CreateOpts{})
+		if err != nil {
+			return err
+		}
+		ag, sessID, err = w.AgentFor(info.ID)
+		if err != nil {
+			return err
+		}
 	}
-	if err != nil {
-		return err
-	}
-	ag, sessID, err := w.AgentFor(info.ID)
-	if err != nil {
-		return err
+
+	// Status-line / banner labels before the first session exists: the
+	// workspace's defaults resolve fine without a credential.
+	bootProvider, bootModel := info.Provider, info.Model
+	bootPersona, bootTrusted := info.Persona, info.Trusted
+	if needLogin {
+		bootProvider, bootModel = w.Defaults()
+		bootPersona, bootTrusted = w.personaName, w.Trusted()
 	}
 
 	diagMu.Lock()
@@ -102,13 +144,14 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 		StatusLineRows:      initialCfg.StatusLineRows(),
 		StatusScripts:       statusScriptsForTUI(initialCfg),
 		SettingsStore:       configSettingsStore{},
-		Model:               info.Model,
-		Provider:            info.Provider,
-		PersonaName:         info.Persona,
+		Model:               bootModel,
+		Provider:            bootProvider,
+		PersonaName:         bootPersona,
+		AutoSwarmEnabled:    initialCfg.AutoSwarmEnabled,
 		CWD:                 w.cwd,
 		TervaHome:           TervaHome(),
 		Version:             version,
-		Agent:               ag, // transitional crutch: transcript render + unmigrated dialogs
+		Agent:               ag, // transitional crutch: residual readers only (usage, fork/tree/export, startup scroll); nil until login on a credential-less boot
 		Carrier:             w,
 		CarrierSession:      sessID,
 		// /swarm drives the workspace's tasks surface; same gate as the
@@ -116,8 +159,42 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 		// so the dashboard can't re-inject the coding skin there).
 		CarrierTasks:        hasBaseWorkspaceTools(args),
 		InitialInput:        args.Prompt,
-		Trusted:             info.Trusted,
+		Trusted:             bootTrusted,
 		GatedContentPresent: hasGatedProjectContent(w.cwd),
+
+		// --- in-TUI login (the carrier flavor) ---
+		// The auth manager runs the OAuth/api-key flows in this process; on
+		// success the TUI calls CarrierLogin, which refreshes the workspace's
+		// credential/defaults and ensures a session to bind to. Its presence
+		// also marks this carrier as login-capable (a remote daemon's client
+		// would leave it nil — credentials live server-side there).
+		AuthManager:         authMgr,
+		RefreshModels:       RefreshModelsForceAsync,
+		RefreshCompatModels: RefreshCompatModelsAsync,
+		CarrierLogin: func(current string) (ctrlproto.SessionInfo, error) {
+			if err := w.RefreshDefaults(); err != nil {
+				return ctrlproto.SessionInfo{}, err
+			}
+			if current != "" {
+				// Re-login: hot-swap the live session's provider client so
+				// the fresh credential applies now, not at the next
+				// cross-provider /model swap.
+				if err := w.RefreshSessionCredential(ctx, current); err != nil {
+					return ctrlproto.SessionInfo{}, err
+				}
+				return w.ResumeSession(ctx, current)
+			}
+			// First login on a credential-less boot: honor the launch-time
+			// session selection that was deferred until a credential existed.
+			switch {
+			case pendingResume != "":
+				return w.ResumeSession(ctx, pendingResume)
+			case args.Continue:
+				return w.ResumeSession(ctx, "")
+			default:
+				return w.CreateSession(ctx, ctrlproto.CreateOpts{})
+			}
+		},
 
 		// --- session group (tui-on-ctrlproto.md Stage 2) ---
 		// Every legacy session flow (/sessions pick, /new, fork, import,
@@ -200,6 +277,25 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 		},
 		UntrustWorkspace: func() error {
 			return w.Untrust(ctx)
+		},
+
+		// --- extension log viewer + config form ---
+		// In-process affordances the wire only flags (ExtensionInfo.HasLog/
+		// HasConfig): the log tail and the form schema/values are local disk
+		// reads, and the persist half writes the project config — same
+		// helpers the legacy entry wires. Only APPLYING a saved config to the
+		// running extension is daemon work, so that rides the extensions
+		// surface's "config" action (which the web client shares).
+		ReadLogTail: readLogTail,
+		ExtensionConfigFields: func(name string) []modes.ConfigField {
+			return extensionConfigFields(w.cwd, name)
+		},
+		SetExtensionConfig: func(name string, values map[string]string) error {
+			return setExtensionConfigFromForm(w.cwd, name, values)
+		},
+		ApplyExtensionConfig: func(name string) {
+			_ = w.SurfaceAction(ctx, iv.CarrierSessionID(), "extensions", "config",
+				map[string]string{"name": name})
 		},
 	})
 

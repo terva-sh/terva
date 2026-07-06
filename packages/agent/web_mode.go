@@ -31,6 +31,11 @@ func runWebMode(ctx context.Context, args Args, version string) error {
 		return err
 	}
 	defer ws.Close()
+	// The web daemon has no login flow, so a credential-less Workspace (fine
+	// for the TUI, which opens /login) is a hard startup error here.
+	if err := ws.CredentialErr(); err != nil {
+		return err
+	}
 	cfg, _ := LoadConfig()
 	fmt.Fprintf(os.Stderr, "terva web: approval mode %q (tool calls that need approval prompt in the browser)\n", resolveApprovalMode(args, cfg))
 

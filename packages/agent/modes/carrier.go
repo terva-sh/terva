@@ -7,9 +7,10 @@ import (
 	"terva.sh/terva/packages/core"
 )
 
-// Carrier is the in-process ctrlproto surface the interactive TUI drives when
-// --tui-ctrlproto is set: the full [ctrlproto.WorkspaceService], plus a reliable
-// (no-drop) Subscribe and a transitional [core.Agent] accessor.
+// Carrier is the in-process ctrlproto surface the interactive TUI drives by
+// default (the legacy direct driver hides behind --tui-legacy): the full
+// [ctrlproto.WorkspaceService], plus a reliable (no-drop) Subscribe and a
+// transitional [core.Agent] accessor.
 //
 // It is the seam of the TUI-on-ctrlproto migration
 // (docs/proposals/tui-on-ctrlproto.md). The concrete implementation is
