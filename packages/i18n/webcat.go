@@ -16,8 +16,9 @@ const WebCatalogName = "web"
 // uiCatalogs are English-as-key singular+plural catalogs that live in their own
 // subdirectory (like the keyed catalogs' file layout, but Doc-shaped contents),
 // beyond the root UI catalog. `terva locale` iterates these for init/coverage/
-// merge/export.
-var uiCatalogs = []string{WebCatalogName}
+// merge/export. TUICatalogName is ALSO merged into the Go T lookup at runtime
+// (see mergedUICatalogs); WebCatalogName is served to the browser instead.
+var uiCatalogs = []string{TUICatalogName, WebCatalogName}
 
 // UICatalogs returns the named English-as-key catalogs (currently just "web"),
 // for the command/lint layers that iterate them.

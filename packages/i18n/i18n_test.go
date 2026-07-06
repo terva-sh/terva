@@ -81,6 +81,38 @@ func TestEmbeddedTranslation(t *testing.T) {
 	}
 }
 
+// TestTUICatalogMerges proves the split-out tui catalog (locales/tui/) is
+// merged into the same Go T lookup as the root catalog: a string routed to tui
+// by the //i18n:catalog directive resolves in the active language, and an
+// operator's $TERVA_HOME/locales/tui/<lang>.json overlay wins over it.
+func TestTUICatalogMerges(t *testing.T) {
+	resetState(t)
+	if err := Configure("fi", ""); err != nil {
+		t.Fatalf("Configure(fi): %v", err)
+	}
+	// "clear the chat transcript" lives in the tui catalog (a modes slash-cmd
+	// description); it must resolve just like a root-catalog string.
+	if got := T("clear the chat transcript"); got != "tyhjennä keskusteluloki" {
+		t.Errorf("tui embedded fi = %q, want tyhjennä keskusteluloki", got)
+	}
+
+	resetState(t)
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "locales", "tui"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	overlay := `{"clear the chat transcript": "OPERAATTORIN TYHJENNYS"}`
+	if err := os.WriteFile(filepath.Join(home, "locales", "tui", "fi.json"), []byte(overlay), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Configure("fi", home); err != nil {
+		t.Fatalf("Configure(fi, home): %v", err)
+	}
+	if got := T("clear the chat transcript"); got != "OPERAATTORIN TYHJENNYS" {
+		t.Errorf("tui overlay should win, got %q", got)
+	}
+}
+
 func TestOverlayOverridesEmbedded(t *testing.T) {
 	resetState(t)
 	home := t.TempDir()

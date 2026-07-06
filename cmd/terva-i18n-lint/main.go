@@ -27,11 +27,68 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"terva.sh/terva/packages/i18n"
 )
+
+// catalogDirectiveRe matches a `//i18n:catalog <name>` directive comment. The
+// directive routes the UI strings of the file's DIRECTORY (non-recursive) to
+// the named merged UI catalog instead of core. See MergedUICatalogs.
+var catalogDirectiveRe = regexp.MustCompile(`(?m)^\s*//i18n:catalog\s+(\S+)\s*$`)
+
+// catalogDirs walks the roots and returns dir -> catalog name for every
+// directory holding a file with a `//i18n:catalog <name>` directive. It is a
+// pre-pass so extract() can route each file by its directory regardless of walk
+// order, and it validates the name against MergedUICatalogs (a typo like
+// `//i18n:catalog tiu` is a hard error, not a silently-dropped catalog).
+func catalogDirs(roots []string) (map[string]string, error) {
+	known := map[string]bool{}
+	for _, c := range i18n.MergedUICatalogs() {
+		known[c] = true
+	}
+	dirs := map[string]string{}
+	walk := func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" || d.Name() == "vendor" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		m := catalogDirectiveRe.FindSubmatch(data)
+		if m == nil {
+			return nil
+		}
+		cat := string(m[1])
+		if !known[cat] {
+			return fmt.Errorf("%s: //i18n:catalog %q names an unknown catalog (known: %v)", path, cat, i18n.MergedUICatalogs())
+		}
+		dir := filepath.Dir(path)
+		if prev, ok := dirs[dir]; ok && prev != cat {
+			return fmt.Errorf("%s: directory declares conflicting catalogs %q and %q", dir, prev, cat)
+		}
+		dirs[dir] = cat
+		return nil
+	}
+	for _, root := range roots {
+		if err := filepath.WalkDir(root, walk); err != nil {
+			return nil, err
+		}
+	}
+	return dirs, nil
+}
 
 // unresolvedKeyed counts i18n.P/H calls whose English default the extractor
 // couldn't resolve to a literal/const (a concatenation); a non-zero count is
@@ -59,7 +116,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "terva-i18n-lint:", err)
 		os.Exit(2)
 	}
-	entries, keyed, err := extract(roots, consts)
+	dirCat, err := catalogDirs(roots)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "terva-i18n-lint:", err)
+		os.Exit(2)
+	}
+	ui, keyed, err := extract(roots, consts, dirCat)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "terva-i18n-lint:", err)
 		os.Exit(2)
@@ -69,15 +131,23 @@ func main() {
 		os.Exit(2)
 	}
 
-	// One reference file per catalog: the UI en.json, then each keyed
-	// catalog (prompts, help) under locales/<cat>/en.json.
+	// One reference file per catalog: the root UI en.json, then each merged UI
+	// subcatalog (tui) under locales/<cat>/en.json (English-as-key, like the
+	// root), then each keyed catalog (prompts, help) under locales/<cat>/en.json.
 	type refFile struct {
 		path  string
 		label string
 		count int
 		data  []byte
 	}
-	refs := []refFile{{*out, "strings", len(entries), mustMarshal(entries)}}
+	refs := []refFile{{*out, "strings", len(ui[""]), mustMarshal(ui[""])}}
+	for _, cat := range i18n.MergedUICatalogs() {
+		m := ui[cat]
+		refs = append(refs, refFile{
+			path:  filepath.Join("packages", "i18n", "locales", cat, "en.json"),
+			label: cat + " strings", count: len(m), data: mustMarshal(m),
+		})
+	}
 	for _, cat := range i18n.KeyedCatalogs() {
 		m := keyed[cat]
 		refs = append(refs, refFile{
@@ -104,6 +174,10 @@ func main() {
 	}
 
 	for _, r := range refs {
+		if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
+			fmt.Fprintln(os.Stderr, "terva-i18n-lint:", err)
+			os.Exit(2)
+		}
 		if err := os.WriteFile(r.path, r.data, 0o644); err != nil {
 			fmt.Fprintln(os.Stderr, "terva-i18n-lint:", err)
 			os.Exit(2)
@@ -126,9 +200,16 @@ func mustMarshal(m map[string]json.RawMessage) []byte {
 // context+source maps to the source; a TN pair maps to an object of its
 // English one/other forms. keyed[catalog] (i18n.P → "prompts", i18n.H →
 // "help"): each dotted key maps to its English default template.
-func extract(roots []string, consts map[string]string) (entries map[string]json.RawMessage, keyed map[string]map[string]json.RawMessage, err error) {
+// extract returns ui (the English-as-key UI references, keyed by catalog name —
+// "" is the root/core catalog, other keys are the merged UI subcatalogs a
+// //i18n:catalog directive routed to) and keyed (the dotted-key prompts/help
+// catalogs). dirCat maps a directory to its UI catalog (from catalogDirs).
+func extract(roots []string, consts map[string]string, dirCat map[string]string) (ui map[string]map[string]json.RawMessage, keyed map[string]map[string]json.RawMessage, err error) {
 	fset := token.NewFileSet()
-	entries = map[string]json.RawMessage{}
+	ui = map[string]map[string]json.RawMessage{"": {}}
+	for _, cat := range i18n.MergedUICatalogs() {
+		ui[cat] = map[string]json.RawMessage{}
+	}
 	keyed = map[string]map[string]json.RawMessage{
 		"prompts": {},
 		"help":    {},
@@ -150,6 +231,10 @@ func extract(roots []string, consts map[string]string) (entries map[string]json.
 		if perr != nil {
 			return fmt.Errorf("%s: %w", path, perr)
 		}
+		// A file's UI strings route to its directory's catalog (core when
+		// unmarked). A string shared with a core directory naturally lands in
+		// both references (each records its own occurrence).
+		entries := ui[dirCat[filepath.Dir(path)]]
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -206,10 +291,10 @@ func extract(roots []string, consts map[string]string) (entries map[string]json.
 	}
 	for _, root := range roots {
 		if err := filepath.WalkDir(root, walk); err != nil {
-			return entries, keyed, err
+			return ui, keyed, err
 		}
 	}
-	return entries, keyed, nil
+	return ui, keyed, nil
 }
 
 // stringConsts collects package-level `const/var NAME = "literal"` string

@@ -1,0 +1,21 @@
+{
+  "agents & integrations": "agentit & integraatiot",
+  "choose login method (↑/↓, enter, esc to cancel):": "valitse kirjautumistapa (↑/↓, enter, esc peruuttaa):",
+  "clear the chat transcript": "tyhjennä keskusteluloki",
+  "context & skills": "konteksti & taidot",
+  "extensions": "laajennukset",
+  "high": "korkea",
+  "low": "matala",
+  "maximum": "enimmäis",
+  "medium": "keskitaso",
+  "minimum": "vähimmäis",
+  "model & account": "malli & tili",
+  "off": "pois",
+  "permissions & trust": "oikeudet & luottamus",
+  "pick a provider (↑/↓, enter, esc to cancel)": "valitse palveluntarjoaja (↑/↓, enter, esc peruuttaa)",
+  "resume a previous session for this directory": "jatka aiempaa istuntoa tässä hakemistossa",
+  "session": "istunto",
+  "show key bindings and commands": "näytä pikanäppäimet ja komennot",
+  "start a fresh session (the current one stays on disk)": "aloita uusi istunto (nykyinen säilyy levyllä)",
+  "system": "järjestelmä"
+}

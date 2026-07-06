@@ -212,6 +212,9 @@ func Configure(lang, home string) error {
 				return fmt.Errorf("i18n: parse %s: %w", p, err)
 			}
 		}
+		if err := c.mergeUISubdirs(home); err != nil {
+			return err
+		}
 		if err := c.loadKeyed(home); err != nil {
 			return err
 		}
@@ -242,6 +245,10 @@ func Configure(lang, home string) error {
 			}
 		}
 	}
+	// The Go-merged UI subcatalogs (tui) layer into the same UI lookup.
+	if err := c.mergeUISubdirs(home); err != nil {
+		return err
+	}
 	// The dotted-key catalogs (keyed.go: prompts, help) are separate file
 	// sets layered the same way (embedded < overlay).
 	if err := c.loadKeyed(home); err != nil {
@@ -259,6 +266,11 @@ func Configure(lang, home string) error {
 func englishOverlayPresent(home string) bool {
 	if _, err := os.Stat(filepath.Join(home, "locales", "en.json")); err == nil {
 		return true
+	}
+	for _, cat := range mergedUICatalogs {
+		if _, err := os.Stat(filepath.Join(home, "locales", cat, "en.json")); err == nil {
+			return true
+		}
 	}
 	for _, cat := range keyedCatalogs {
 		if _, err := os.Stat(filepath.Join(home, "locales", cat, "en.json")); err == nil {
@@ -285,5 +297,49 @@ func (c *catalog) merge(data []byte) error {
 		}
 	}
 	maps.Copy(c.plural, doc.Plural)
+	return nil
+}
+
+// TUICatalogName is the interactive terminal-UI catalog. Like the root UI
+// catalog it is English-as-key, but it lives in its own file set
+// (locales/tui/<lang>.json) so the terminal surface can be translated
+// independently of core. Unlike the web UI catalog (served to the browser) it
+// is MERGED into the Go T lookup at Configure, because the TUI is Go code
+// calling i18n.T. The terva-i18n-lint extractor routes a directory's UI strings
+// here via a `//i18n:catalog tui` directive.
+const TUICatalogName = "tui"
+
+// mergedUICatalogs are the English-as-key UI file sets Configure merges into the
+// active Go catalog alongside the root (locales/). The split is authoring-only:
+// at runtime every UI string resolves against one merged lookup, so a
+// translator can finish the surface they use (e.g. the TUI) without touching
+// core. Adding one here + a `//i18n:catalog <name>` directive on its source
+// directory carves out a new Go UI surface.
+var mergedUICatalogs = []string{TUICatalogName}
+
+// MergedUICatalogs returns the Go-runtime-merged UI subcatalogs, for the
+// extractor (which writes their references and validates directives against it).
+func MergedUICatalogs() []string { return append([]string(nil), mergedUICatalogs...) }
+
+// mergeUISubdirs folds each Go-merged UI subcatalog (embedded default, then the
+// operator overlay) into c, alongside the root UI catalog. English-as-key, so
+// the lookup is one flat map; a string shared by two surfaces is duplicated in
+// their reference files with the same translation and merges idempotently.
+func (c *catalog) mergeUISubdirs(home string) error {
+	for _, sub := range mergedUICatalogs {
+		if data, err := localesFS.ReadFile("locales/" + sub + "/" + c.langName + ".json"); err == nil {
+			if err := c.merge(data); err != nil {
+				return fmt.Errorf("i18n: parse embedded %s %s: %w", sub, c.langName, err)
+			}
+		}
+		if home != "" {
+			p := filepath.Join(home, "locales", sub, c.langName+".json")
+			if data, err := os.ReadFile(p); err == nil {
+				if err := c.merge(data); err != nil {
+					return fmt.Errorf("i18n: parse %s: %w", p, err)
+				}
+			}
+		}
+	}
 	return nil
 }

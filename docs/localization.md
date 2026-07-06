@@ -17,22 +17,30 @@ whole language.
 
 ## The catalogs
 
-terva splits its text into three catalogs — separate files for separate
-audiences and sizes:
+terva splits its text into catalogs — separate files per **surface**, so you can
+translate the part you actually use first (the interactive TUI alone is about
+two-thirds of all UI text):
 
 | catalog | what it is | keyed by | lives in |
 |---|---|---|---|
-| **UI strings** | the short text you read: dialogs, the status bar, menu labels, prompts you answer | the **English text itself** (`"start a fresh session"`) | `locales/<lang>.json` |
+| **UI — core** | short CLI / engine / connector text: errors, status lines, prompts you answer outside the terminal UI | the **English text itself** (`"start a fresh session"`) | `locales/<lang>.json` |
+| **UI — tui** | the interactive terminal UI: dialogs, the status bar, the slash menu, transcript chrome | the **English text itself** | `locales/tui/<lang>.json` |
+| **UI — web** | the browser control panel (`terva web`) | the **English text itself** | `locales/web/<lang>.json` |
 | **Prompts** | canned English terva sends *to the model*: the `/study` task, the auto-swarm result summary, the base system-prompt segments, the compaction instructions | a stable **dotted id** (`study.file`, `system.identity.default`) | `locales/prompts/<lang>.json` |
 | **Help** | the large `terva <cmd> --help` screens (`terva bot`, `terva models`, …) | a stable **dotted id** (`help.bot`, `help.models`) | `locales/help/<lang>.json` |
 
 Short UI text uses English-as-key so a translator sees the sentence, not an
-invented id. The other two are **large, few, and stable**, so English-as-key
-would mean paragraph-length JSON keys — they use short dotted keys instead. The
-split between *prompts* (model-facing) and *help* (operator-facing) keeps the
-two apart because a prompt author and a UI translator are usually different
-people. Each dotted entry is one translatable template, never English glue
-around fragments, so a translation reads as coherent `<lang>`.
+invented id, and the UI catalog is split by surface (core / tui / web) purely so
+each can be finished on its own — at runtime every UI string resolves against one
+merged lookup, so nothing changes about how the code calls `i18n.T`. A source
+directory routes its UI strings to a non-core catalog with a `//i18n:catalog`
+directive (e.g. `//i18n:catalog tui` on `packages/agent/modes` and
+`packages/tui`); the web catalog is authored in the separate web client and
+served to the browser. Prompts and Help are **large, few, and stable**, so
+English-as-key would mean paragraph-length JSON keys — they use short dotted keys
+instead, kept apart because a prompt author and a UI translator are usually
+different people. Each dotted entry is one translatable template, never English
+glue around fragments, so a translation reads as coherent `<lang>`.
 
 ## The overlay model
 
@@ -42,6 +50,11 @@ For any language `<lang>`, terva reads two layers and merges them per key:
 embedded default            (shipped in the binary)
   └─ $TERVA_HOME/locales/<lang>.json          ← your overlay wins, per key
 ```
+
+Each non-core catalog overlays the same way under its own subdirectory —
+`$TERVA_HOME/locales/tui/<lang>.json`, `.../web/<lang>.json`,
+`.../prompts/<lang>.json`, `.../help/<lang>.json` — so you can drop in just the
+surface you want to translate.
 
 - **Per-key, not whole-file.** Override `"quit"` alone; every other string
   still resolves.
