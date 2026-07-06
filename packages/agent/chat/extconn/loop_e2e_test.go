@@ -11,6 +11,7 @@ import (
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // scriptedClient is a provider.Client whose every turn replies with
@@ -39,7 +40,7 @@ func (c *scriptedClient) Stream(ctx context.Context, req provider.Request) (<-ch
 // that same subprocess as an inner send frame. Extension → turn →
 // extension, one process on the far side of the wire.
 func TestLoopEndToEnd(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	sends := filepath.Join(tmp, "sends.log")
 
 	body := `printf '%s\n' '{"type":"register_connector"}'

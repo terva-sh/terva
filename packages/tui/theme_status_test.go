@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 )
 
@@ -46,7 +47,7 @@ func TestContextMeterUsesThemeRamp(t *testing.T) {
 // A theme file can set the meter ramp and per-segment colors, and the
 // dark-daltonized built-in resolves by name.
 func TestThemeLoaderStatusColors(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	dir := filepath.Join(home, "themes")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -76,7 +77,7 @@ func TestThemeLoaderStatusColors(t *testing.T) {
 }
 
 func TestDarkDaltonizedBuiltin(t *testing.T) {
-	th, name, err := LoadThemeFromHome(t.TempDir(), "dark-daltonized", Dark)
+	th, name, err := LoadThemeFromHome(testsupport.TempDir(t), "dark-daltonized", Dark)
 	if err != nil || name != "dark-daltonized" {
 		t.Fatalf("load: name=%q err=%v", name, err)
 	}
@@ -88,7 +89,7 @@ func TestDarkDaltonizedBuiltin(t *testing.T) {
 	}
 	// And it shows up in the picker as a builtin.
 	found := false
-	for _, opt := range AvailableThemes(t.TempDir()) {
+	for _, opt := range AvailableThemes(testsupport.TempDir(t)) {
 		if opt.Value == "dark-daltonized" && opt.Builtin {
 			found = true
 		}
@@ -99,7 +100,7 @@ func TestDarkDaltonizedBuiltin(t *testing.T) {
 }
 
 func TestLightDaltonizedBuiltin(t *testing.T) {
-	th, name, err := LoadThemeFromHome(t.TempDir(), "light-daltonized", Light)
+	th, name, err := LoadThemeFromHome(testsupport.TempDir(t), "light-daltonized", Light)
 	if err != nil || name != "light-daltonized" {
 		t.Fatalf("load: name=%q err=%v", name, err)
 	}
@@ -114,7 +115,7 @@ func TestLightDaltonizedBuiltin(t *testing.T) {
 // The bare "daltonized" name follows the detected terminal background,
 // like "auto" does for the regular defaults.
 func TestDaltonizedFollowsDetectedBackground(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	th, name, err := LoadThemeFromHome(home, "daltonized", Dark)
 	if err != nil || name != "dark-daltonized" || th.Tool != DarkDaltonized.Tool {
 		t.Fatalf("dark terminal: got %q err=%v", name, err)

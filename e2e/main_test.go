@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 	"time"
 )
@@ -70,7 +71,7 @@ type tervaResult struct {
 func runTerva(t *testing.T, baseURL, workspace string, args ...string) tervaResult {
 	t.Helper()
 
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	full := append([]string{
 		"--provider", "openai-compatible",
 		"--model", "test-model",

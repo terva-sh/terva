@@ -3,11 +3,12 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 )
 
 func TestValidateOnePersona(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	cases := []struct {
 		name string
 		body string

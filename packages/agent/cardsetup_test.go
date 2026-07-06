@@ -7,10 +7,11 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestLoadCardIdentity(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	path := filepath.Join(dir, "mara.json")
 	body := `{"spec":"chara_card_v2","spec_version":"2.0","data":{
 		"name":"Mara","description":"{{char}} is a meticulous archivist.",
@@ -107,7 +108,7 @@ func TestCardBookToLore_SelectiveGatesSecondaryKeys(t *testing.T) {
 	// a selective:false entry must fire on its primary key alone — importing
 	// its secondary_keys would silently suppress it (the engine treats any
 	// non-empty SecondaryKeys as a mandatory gate).
-	path := filepath.Join(t.TempDir(), "s.json")
+	path := filepath.Join(testsupport.TempDir(t), "s.json")
 	body := `{"spec":"chara_card_v2","spec_version":"2.0","data":{
 		"name":"Ada","first_mes":"Hello.",
 		"character_book":{"entries":[
@@ -141,13 +142,13 @@ func TestCardBookToLore_SelectiveGatesSecondaryKeys(t *testing.T) {
 }
 
 func TestLoadCardIdentity_BadPath(t *testing.T) {
-	if _, err := loadCardIdentity(filepath.Join(t.TempDir(), "nope.json"), ExperienceChat, 0, "User"); err == nil {
+	if _, err := loadCardIdentity(filepath.Join(testsupport.TempDir(t), "nope.json"), ExperienceChat, 0, "User"); err == nil {
 		t.Error("expected error for a missing card file")
 	}
 }
 
 func TestLoadCardIdentity_GreetingSelection(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "g.json")
+	path := filepath.Join(testsupport.TempDir(t), "g.json")
 	body := `{"spec":"chara_card_v2","spec_version":"2.0","data":{
 		"name":"Ada","first_mes":"Hello there.","alternate_greetings":["Hey!","Yo."]}}`
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -170,7 +171,7 @@ func TestLoadCardIdentity_GreetingSelection(t *testing.T) {
 func TestLoadCardIdentity_NoSystemPrompt(t *testing.T) {
 	// A card that supplies no system_prompt must still never inherit terva's
 	// branded intro: its intro slot is the short brand-free framing.
-	path := filepath.Join(t.TempDir(), "n.json")
+	path := filepath.Join(testsupport.TempDir(t), "n.json")
 	body := `{"spec":"chara_card_v2","spec_version":"2.0","data":{
 		"name":"Ada","first_mes":"Hello.","description":"a quiet archivist"}}`
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {

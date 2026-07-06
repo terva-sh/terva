@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/sdk"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestSDKSmoke is the first test of the embedding SDK: construct a
@@ -19,10 +20,10 @@ func TestSDKSmoke(t *testing.T) {
 		chunks:   []map[string]any{textChunk("hello "), textChunk("sdk"), finishChunk("stop", 8, 2)},
 		sendDone: true,
 	})
-	ws := t.TempDir()
+	ws := testsupport.TempDir(t)
 	// Isolate from the developer's real config/credentials: the SDK
 	// resolves through TervaHome() like every other mode.
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
 	rt, err := sdk.New(sdk.Config{
 		Provider: "openai-compatible",
@@ -127,7 +128,7 @@ func TestSDKExtraTools(t *testing.T) {
 			sendDone: true,
 		},
 	)
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
 	ran := false
 	rt, err := sdk.New(sdk.Config{
@@ -135,7 +136,7 @@ func TestSDKExtraTools(t *testing.T) {
 		Model:      "test-model",
 		APIKey:     "e2e-test-key",
 		BaseURL:    fp.url(),
-		CWD:        t.TempDir(),
+		CWD:        testsupport.TempDir(t),
 		ExtraTools: []core.Tool{recordingTool{ran: &ran}},
 	})
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // noopHooks satisfies extdriver.HostHooks for adapter tests.
@@ -100,7 +101,7 @@ done
 // attachment ingestion + containment), Send (acked) — against a real
 // driver and a scriptable shell extension.
 func TestConnEndToEnd(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 
 	// The extension's data dir is tervaHome/ext-data/<name> (driver
 	// convention), announced through the inner hello_ack. Pre-place one
@@ -202,7 +203,7 @@ func TestConnEndToEnd(t *testing.T) {
 // reason. The process was alive throughout, so no RestartHost is
 // needed for the attempts.
 func TestConnStreamDown(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	body := `printf '%s\n' '{"type":"register_connector"}'
 printf '%s\n' '{"type":"ready"}'
 while IFS= read -r line; do
@@ -237,7 +238,7 @@ done
 // a fresh transport) and messages keep flowing, including any buffered
 // when the old session died.
 func TestConnReopenAfterChatDown(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	body := `printf '%s\n' '{"type":"register_connector"}'
 printf '%s\n' '{"type":"ready"}'
 n=0
@@ -352,7 +353,7 @@ done
 // respawn the extension, then reopens the session — the bot loop rides
 // through the crash, and the respawned process's messages flow.
 func TestConnRespawnAfterProcessExit(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	d := bindDriver(t, tmp, "mortal", mortalBody)
 	host := &fakeRestartHost{d: d, dir: filepath.Join(tmp, "mortal"), name: "mortal"}
 	BindHost(host)
@@ -392,7 +393,7 @@ func TestConnRespawnAfterProcessExit(t *testing.T) {
 // TestConnRespawnBudgetExhausted: a process that crashes on every boot
 // consumes the budget and Receive returns the permanent error.
 func TestConnRespawnBudgetExhausted(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	body := `printf '%s\n' '{"type":"register_connector"}'
 printf '%s\n' '{"type":"ready"}'
 while IFS= read -r line; do
@@ -429,7 +430,7 @@ done
 // binding (no respawn primitive) a process death is immediately
 // permanent, with an error saying why recovery didn't happen.
 func TestConnProcessExitPermanentWithoutRestartHost(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	body := `printf '%s\n' '{"type":"register_connector"}'
 printf '%s\n' '{"type":"ready"}'
 while IFS= read -r line; do
@@ -461,7 +462,7 @@ done
 // TestConnectRefusedWithoutRole: an extension that never registered the
 // role (or isn't loaded) fails Connect with a clear error.
 func TestConnectRefusedWithoutRole(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	d := extdriver.New(tmp, "", "0.0.0-test", "anthropic", "opus", noopHooks{})
 	BindHost(d)
 	t.Cleanup(func() { BindHost(nil) })
@@ -488,7 +489,7 @@ func TestConnectRefusedWithoutHost(t *testing.T) {
 // TestRegisterDiscovered scans a fake global extensions dir: only
 // enabled, connector-flagged manifests become chat services.
 func TestRegisterDiscovered(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	extsDir := filepath.Join(tmp, "extensions")
 	write := func(name, manifest string) {
 		dir := filepath.Join(extsDir, name)

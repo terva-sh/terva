@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/connsdk"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // fakeAPI is a scriptable seam so transport logic runs with zero
@@ -205,7 +206,7 @@ func withFakeAPI(t *testing.T, f *fakeAPI) {
 func connectedTransport(t *testing.T, f *fakeAPI) (*Transport, chan connsdk.Message, context.CancelFunc) {
 	t.Helper()
 	withFakeAPI(t, f)
-	tr, err := NewTransport("tok", t.TempDir())
+	tr, err := NewTransport("tok", testsupport.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +236,7 @@ func connectedTransport(t *testing.T, f *fakeAPI) (*Transport, chan connsdk.Mess
 func TestConnectIdentity(t *testing.T) {
 	f := &fakeAPI{}
 	withFakeAPI(t, f)
-	tr, err := NewTransport("tok", t.TempDir())
+	tr, err := NewTransport("tok", testsupport.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,14 +250,14 @@ func TestConnectIdentity(t *testing.T) {
 
 	f2 := &fakeAPI{meErr: errors.New("401")}
 	withFakeAPI(t, f2)
-	tr2, _ := NewTransport("bad", t.TempDir())
+	tr2, _ := NewTransport("bad", testsupport.TempDir(t))
 	if _, err := tr2.Connect(context.Background()); err == nil || !strings.Contains(err.Error(), "rejected") {
 		t.Errorf("bad-token Connect = %v, want rejection", err)
 	}
 }
 
 func TestNoTokenRefused(t *testing.T) {
-	if _, err := NewTransport("", t.TempDir()); err == nil {
+	if _, err := NewTransport("", testsupport.TempDir(t)); err == nil {
 		t.Error("empty token must be refused at construction")
 	}
 }
@@ -309,7 +310,7 @@ func TestAttachmentIngest(t *testing.T) {
 
 	f := &fakeAPI{}
 	withFakeAPI(t, f)
-	dataDir := t.TempDir()
+	dataDir := testsupport.TempDir(t)
 	tr, err := NewTransport("tok", dataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -353,7 +354,7 @@ func TestOutbound(t *testing.T) {
 	if err := tr.Typing(context.Background(), "c1"); err != nil {
 		t.Fatal(err)
 	}
-	img := filepath.Join(t.TempDir(), "x.png")
+	img := filepath.Join(testsupport.TempDir(t), "x.png")
 	if err := os.WriteFile(img, []byte("img"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -848,7 +849,7 @@ func TestAttachmentKindsIngest(t *testing.T) {
 
 	f := &fakeAPI{}
 	withFakeAPI(t, f)
-	tr, err := NewTransport("tok", t.TempDir())
+	tr, err := NewTransport("tok", testsupport.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}

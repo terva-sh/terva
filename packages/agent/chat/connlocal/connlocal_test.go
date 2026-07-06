@@ -11,6 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/connsdk"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // stubTransport is a scriptable connsdk.Transport — the same contract
@@ -87,7 +88,7 @@ func testConn(t *testing.T, st *stubTransport) *Conn {
 		Version:      "0.0.0-test",
 		Capabilities: connsdk.Capabilities{MaxTextLen: 321, TypingRefresh: 2 * time.Second},
 		NewTransport: st.factory,
-	}, t.TempDir(), func(string) {})
+	}, testsupport.TempDir(t), func(string) {})
 }
 
 // drainReceive runs Receive for the test's lifetime and JOINS it at
@@ -250,7 +251,7 @@ func TestConnLocalAsk(t *testing.T) {
 			Features: []string{"message_ids", "asks"},
 		},
 		NewTransport: func(connsdk.Session) (connsdk.Transport, error) { return st, nil },
-	}, t.TempDir(), func(string) {})
+	}, testsupport.TempDir(t), func(string) {})
 
 	if _, err := conn.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -324,7 +325,7 @@ func TestConnLocalSpeaker(t *testing.T) {
 			Features: []string{"message_ids", "speaker:name_only"},
 		},
 		NewTransport: func(connsdk.Session) (connsdk.Transport, error) { return st, nil },
-	}, t.TempDir(), func(string) {})
+	}, testsupport.TempDir(t), func(string) {})
 
 	if _, err := conn.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -382,7 +383,7 @@ func TestConnLocalStartThread(t *testing.T) {
 			Features: []string{"threads_out"},
 		},
 		NewTransport: func(connsdk.Session) (connsdk.Transport, error) { return st, nil },
-	}, t.TempDir(), func(string) {})
+	}, testsupport.TempDir(t), func(string) {})
 
 	if _, err := conn.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -450,7 +451,7 @@ func TestConnLocalEntitiesAndMembership(t *testing.T) {
 			Features: []string{"entities", "chat_membership"},
 		},
 		NewTransport: func(connsdk.Session) (connsdk.Transport, error) { return st, nil },
-	}, t.TempDir(), func(string) {})
+	}, testsupport.TempDir(t), func(string) {})
 
 	gotMembership := make(chan chat.Membership, 1)
 	var setter chat.MembershipHandlerSetter = conn

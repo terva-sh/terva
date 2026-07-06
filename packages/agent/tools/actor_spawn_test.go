@@ -9,6 +9,7 @@ import (
 
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // fakeActor drives the turn coordination without a live subprocess. When
@@ -283,7 +284,7 @@ func TestActorSpawn_Validation(t *testing.T) {
 		t.Error("empty tool should error")
 	}
 
-	sw := swarm.New(swarm.Config{Root: t.TempDir(), RepoRoot: t.TempDir()})
+	sw := swarm.New(swarm.Config{Root: testsupport.TempDir(t), RepoRoot: testsupport.TempDir(t)})
 	defer sw.StopAll()
 	tool := &ActorSpawnTool{Swarm: sw, Warm: NewWarmActors(5), Cast: map[string]CastMember{"innkeeper": {Persona: "innkeeper"}}}
 

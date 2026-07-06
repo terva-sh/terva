@@ -9,6 +9,7 @@ import (
 
 	"terva.sh/terva/packages/agent/imagegen"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // fakeBackend returns n identical PNG stubs without any network.
@@ -36,7 +37,7 @@ func (f fakeBackend) Generate(_ context.Context, req imagegen.Request) (imagegen
 
 func newGenTool(t *testing.T) (*GenerateImageTool, string) {
 	t.Helper()
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	reg := imagegen.NewRegistry()
 	reg.Add(fakeBackend{id: "fake"})
 	return &GenerateImageTool{CWD: tmp, Sandbox: NewSandbox(tmp), Registry: reg}, tmp

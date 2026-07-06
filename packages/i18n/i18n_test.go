@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 
 	"golang.org/x/text/language"
@@ -97,7 +98,7 @@ func TestTUICatalogMerges(t *testing.T) {
 	}
 
 	resetState(t)
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(home, "locales", "tui"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestTUICatalogMerges(t *testing.T) {
 
 func TestOverlayOverridesEmbedded(t *testing.T) {
 	resetState(t)
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(home, "locales"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +174,7 @@ func TestFormsFor(t *testing.T) {
 
 func TestTNTranslated(t *testing.T) {
 	resetState(t)
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	_ = os.MkdirAll(filepath.Join(home, "locales"), 0o755)
 	// Polish plural entry with the three non-"other" forms it needs.
 	doc := `{"%d agent|%d agents": {"one": "%d agent", "few": "%d agenty", "many": "%d agentów", "other": "%d agenta"}}`
@@ -208,7 +209,7 @@ func TestVerbs(t *testing.T) {
 
 func TestCaptureFlush(t *testing.T) {
 	resetState(t)
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := Configure("fi", home); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +261,7 @@ func TestPromptEnglishIdentity(t *testing.T) {
 // english default at the call site.
 func TestPromptOverlay(t *testing.T) {
 	resetState(t)
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(home, "locales", "prompts"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +285,7 @@ func TestPromptOverlay(t *testing.T) {
 // prompts todo file pre-filled with its english default (not blank).
 func TestPromptCaptureFlush(t *testing.T) {
 	resetState(t)
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := Configure("fi", home); err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +317,7 @@ func TestPromptCaptureFlush(t *testing.T) {
 // no overlay present English stays the byte-identical fast path.
 func TestEnglishOverlayOptIn(t *testing.T) {
 	resetState(t)
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(home, "locales", "prompts"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +359,7 @@ func TestEnglishOverlayOptIn(t *testing.T) {
 // byte-identical fast path even when a home is passed.
 func TestEnglishNoOverlayIsFastPath(t *testing.T) {
 	resetState(t)
-	home := t.TempDir() // exists but has no locales/ overlay
+	home := testsupport.TempDir(t) // exists but has no locales/ overlay
 	if err := Configure("en", home); err != nil {
 		t.Fatalf("Configure(en, home): %v", err)
 	}
@@ -412,7 +413,7 @@ func TestWebCatalog(t *testing.T) {
 	}
 
 	// A $TERVA_HOME/locales/web/<lang>.json overlay overrides per key, read fresh.
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	if err := os.MkdirAll(filepath.Join(home, "locales", "web"), 0o755); err != nil {
 		t.Fatal(err)
 	}

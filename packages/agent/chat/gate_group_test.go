@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 )
 
@@ -11,7 +12,7 @@ import (
 // owner and a disk-backed admissions store.
 func groupGate(t *testing.T, conn *fakeConnector) (*gate, *Admissions) {
 	t.Helper()
-	adm := LoadAdmissions(filepath.Join(t.TempDir(), "admissions.json"))
+	adm := LoadAdmissions(filepath.Join(testsupport.TempDir(t), "admissions.json"))
 	g := &gate{
 		pairing:     Pairing{AllowedUserID: "7"},
 		admissions:  adm,
@@ -213,7 +214,7 @@ func TestGateDMApproveByID(t *testing.T) {
 
 // TestAdmissionsPersistence: approvals survive a reload.
 func TestAdmissionsPersistence(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "admissions.json")
+	path := filepath.Join(testsupport.TempDir(t), "admissions.json")
 	a := LoadAdmissions(path)
 	if err := a.Approve("g1", ModeAll); err != nil {
 		t.Fatal(err)

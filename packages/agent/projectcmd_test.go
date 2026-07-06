@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 )
 
@@ -22,7 +23,7 @@ func chdirTemp(t *testing.T, dir string) {
 }
 
 func TestAdoptListRoundTripPreservesFields(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	chdirTemp(t, dir)
 	// A pre-existing project config with unrelated fields.
 	mustWrite(t, filepath.Join(dir, ".terva", "config.json"),
@@ -63,9 +64,9 @@ func TestAdoptListRoundTripPreservesFields(t *testing.T) {
 }
 
 func TestProjectExtAdoptValidatesGlobal(t *testing.T) {
-	proj := t.TempDir()
+	proj := testsupport.TempDir(t)
 	chdirTemp(t, proj)
-	global := t.TempDir()
+	global := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", global) // GlobalExtensionsDir resolves here (not scoped)
 
 	// Refuse to adopt an extension that isn't installed globally.
@@ -92,7 +93,7 @@ func TestProjectExtAdoptValidatesGlobal(t *testing.T) {
 }
 
 func TestProjectInitScaffolds(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	chdirTemp(t, dir)
 	if err := runProjectInit([]string{"--persona", "Data"}); err != nil {
 		t.Fatal(err)
@@ -118,7 +119,7 @@ func TestProjectInitScaffolds(t *testing.T) {
 }
 
 func TestProjectExtDisableEnable(t *testing.T) {
-	chdirTemp(t, t.TempDir())
+	chdirTemp(t, testsupport.TempDir(t))
 	if err := projectExtSetDisabled("noisy", true); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +135,7 @@ func TestProjectExtDisableEnable(t *testing.T) {
 }
 
 func TestProjectScalarSetAndClear(t *testing.T) {
-	chdirTemp(t, t.TempDir())
+	chdirTemp(t, testsupport.TempDir(t))
 	if err := runProjectScalar("model", []string{"opus-x"}); err != nil {
 		t.Fatal(err)
 	}

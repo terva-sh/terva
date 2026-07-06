@@ -77,7 +77,7 @@ func TestFindExtensionDirByManifestNameOrDir(t *testing.T) {
 // manifest "obsidian") reports "no configurable settings" though its schema is
 // right there. It shares matchExtensionDir with findExtensionDir.
 func TestFindExtensionDirInResolvesManifestName(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	gdir := filepath.Join(home, "extensions", "terva-ext-obsidian")
 	if err := os.MkdirAll(gdir, 0o755); err != nil {
@@ -94,7 +94,7 @@ func TestFindExtensionDirInResolvesManifestName(t *testing.T) {
 	}
 
 	// Same resolution for a project-scoped install under cwd/.terva/extensions.
-	cwd := t.TempDir()
+	cwd := testsupport.TempDir(t)
 	pdir := filepath.Join(cwd, ".terva", "extensions", "terva-tasks")
 	if err := os.MkdirAll(pdir, 0o755); err != nil {
 		t.Fatal(err)

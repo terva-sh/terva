@@ -4,11 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 )
 
 func TestAdmissionsScopedApproveAndRevokeScope(t *testing.T) {
-	a := LoadAdmissions(filepath.Join(t.TempDir(), "adm.json"))
+	a := LoadAdmissions(filepath.Join(testsupport.TempDir(t), "adm.json"))
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -46,7 +47,7 @@ func TestAdmissionsScopedApproveAndRevokeScope(t *testing.T) {
 }
 
 func TestAdmissionsLegacyFormatLoadsAndUpgrades(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "adm.json")
+	path := filepath.Join(testsupport.TempDir(t), "adm.json")
 	// A pre-scope store is a bare {chatID: mode} map; it must still load.
 	if err := os.WriteFile(path, []byte(`{"c1":"mention","c2":"all"}`), 0o600); err != nil {
 		t.Fatal(err)

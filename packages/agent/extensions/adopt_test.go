@@ -1,13 +1,16 @@
 package extensions
 
-import "testing"
+import (
+	"terva.sh/terva/packages/testsupport"
+	"testing"
+)
 
 // TestAdoptRejectsTraversalNames pins the path-traversal guard: adopt_extensions
 // is untrusted project config, so a crafted "../../evil", a separator, or an
 // absolute path must never become an adopt target (it would escape the global
 // extensions root when filepath.Join'd in Discover). Only bare names survive.
 func TestAdoptRejectsTraversalNames(t *testing.T) {
-	mgr := New(t.TempDir(), t.TempDir(), "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
+	mgr := New(testsupport.TempDir(t), testsupport.TempDir(t), "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
 	mgr.SetProjectTrusted(true)
 	mgr.SetAdopt("/global/extensions", []string{
 		"weather",      // ok — bare name
@@ -44,7 +47,7 @@ func TestIsPlainExtensionName(t *testing.T) {
 // extensions are project-declared, so they obey the SAME trust gate as the
 // project's own — nothing is adopted until the project is trusted.
 func TestAdoptTargetsTrustGated(t *testing.T) {
-	mgr := New(t.TempDir(), t.TempDir(), "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
+	mgr := New(testsupport.TempDir(t), testsupport.TempDir(t), "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
 	mgr.SetAdopt("/global/extensions", []string{"weather", "", "weather"}) // empty + dup tolerated
 
 	// Untrusted (the default): adopt nothing, even with names configured.

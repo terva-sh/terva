@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 	"time"
 )
@@ -45,7 +46,7 @@ func TestLoopEditedReplacesQueued(t *testing.T) {
 // TestLoopDeletedDropsQueued: deletion withdraws a queued prompt and
 // its staged files; consumed messages are left alone.
 func TestLoopDeletedDropsQueued(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	staged := filepath.Join(dir, "doc.pdf")
 	if err := os.WriteFile(staged, []byte("PDF"), 0o600); err != nil {
 		t.Fatal(err)
@@ -100,7 +101,7 @@ func TestLoopFileManifestAndCleanup(t *testing.T) {
 	conn := newFakeConnector(Capabilities{})
 	l := startLoop(t, conn, &scriptedClient{reply: "ok"}, pairedWith("7"))
 
-	dir := filepath.Join(t.TempDir(), "incoming", "m5")
+	dir := filepath.Join(testsupport.TempDir(t), "incoming", "m5")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

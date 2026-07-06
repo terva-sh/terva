@@ -11,11 +11,12 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func writeFixture(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "s.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
 	sess, err := core.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +113,7 @@ func TestCarrierSeekResyncs(t *testing.T) {
 // effective honors the checkpoint (the transcript collapses to the summary),
 // raw plays the full uncompacted history.
 func TestCarrierEffectiveCompactionCollapses(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "s.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
 	sess, err := core.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +248,7 @@ func TestCarrierAutoplayBroadcastsScrubberState(t *testing.T) {
 }
 
 func TestCarrierSeekByTurn(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "s.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
 	sess, err := core.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
 	if err != nil {
 		t.Fatal(err)

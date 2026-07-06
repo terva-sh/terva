@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 )
 
@@ -33,7 +34,7 @@ func TestProjectScopedDecision(t *testing.T) {
 }
 
 func TestResolveProjectScopedReadsConfig(t *testing.T) {
-	cwd := t.TempDir()
+	cwd := testsupport.TempDir(t)
 	mustWrite(t, filepath.Join(cwd, ".terva", "config.json"), `{"project_scoped": true}`)
 
 	if !resolveProjectScoped(Args{}, cwd) {
@@ -44,7 +45,7 @@ func TestResolveProjectScopedReadsConfig(t *testing.T) {
 		t.Error("--no-project should override the config field")
 	}
 	// A directory with no config is off.
-	if resolveProjectScoped(Args{}, t.TempDir()) {
+	if resolveProjectScoped(Args{}, testsupport.TempDir(t)) {
 		t.Error("no config ⇒ project-scoped off")
 	}
 }
@@ -52,7 +53,7 @@ func TestResolveProjectScopedReadsConfig(t *testing.T) {
 // TestEnableProjectScope is the integration check: data follows the redirect,
 // credentials + trust stay pinned to the captured global home.
 func TestEnableProjectScope(t *testing.T) {
-	global := t.TempDir()
+	global := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", global) // fake global home; restored at cleanup
 	defer func() { pinnedGlobalHome = "" }()
 
@@ -61,7 +62,7 @@ func TestEnableProjectScope(t *testing.T) {
 		t.Fatalf("precondition: home should be the global temp dir")
 	}
 
-	cwd := t.TempDir()
+	cwd := testsupport.TempDir(t)
 	dataHome, gotGlobal, err := EnableProjectScope(cwd)
 	if err != nil {
 		t.Fatal(err)
@@ -104,11 +105,11 @@ func TestEnableProjectScope(t *testing.T) {
 // and NO data home created, until the user trusts it (here: a persisted entry;
 // --trust grants it for one run via resolveTrustState).
 func TestMaybeEnableProjectScopeRequiresTrust(t *testing.T) {
-	global := t.TempDir()
+	global := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", global)
 	defer func() { pinnedGlobalHome = "" }()
 
-	cwd := t.TempDir()
+	cwd := testsupport.TempDir(t)
 	mustWrite(t, filepath.Join(cwd, ".terva", "config.json"), `{"project_scoped": true}`)
 
 	// Untrusted (the default): refuse with an error; the redirect must not run.

@@ -196,7 +196,7 @@ func TestCopyUserDataSkipsIrregularFiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix domain sockets")
 	}
-	// Not t.TempDir(): it embeds this test's long name, and sun_path
+	// Not testsupport.TempDir(t): it embeds this test's long name, and sun_path
 	// tops out around 104 bytes on darwin — bind fails with EINVAL.
 	old, err := os.MkdirTemp("", "terva-sock")
 	if err != nil {

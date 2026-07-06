@@ -7,10 +7,11 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestLocaleInitScaffoldsAndValidates(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	// A language with no embedded catalog scaffolds every source string blank.
@@ -48,7 +49,7 @@ func TestLocaleInitScaffoldsAndValidates(t *testing.T) {
 // reword strings or override prompts without switching language. Other "en*"
 // tags don't map to a loaded overlay and are steered to `en`.
 func TestLocaleInitEnglishScaffoldsOverride(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	if err := localeInit([]string{"en"}); err != nil {
 		t.Fatalf("localeInit(en): %v", err)
@@ -72,7 +73,7 @@ func TestLocaleInitEnglishScaffoldsOverride(t *testing.T) {
 }
 
 func TestLocaleValidateCatchesArgMismatch(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	dir := filepath.Join(home, "locales")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -90,7 +91,7 @@ func TestLocaleValidateCatchesArgMismatch(t *testing.T) {
 }
 
 func TestLocaleMergeRoundTrip(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 	dir := filepath.Join(home, "locales")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

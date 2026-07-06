@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 	"time"
 )
@@ -25,8 +26,8 @@ func TestPrintMode_DeliversSessionIdentityToExtension(t *testing.T) {
 		chunks:   []map[string]any{textChunk("ok"), finishChunk("stop", 5, 1)},
 		sendDone: true,
 	})
-	ws := t.TempDir()
-	home := t.TempDir()
+	ws := testsupport.TempDir(t)
+	home := testsupport.TempDir(t)
 
 	// A session-keyed recorder extension: subscribe to session_start and
 	// write the frame it receives into its own dir (cmd.Dir == ext dir,

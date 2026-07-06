@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/connsdk"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestLiveSmoke exercises the real Discord API — gateway handshake and
@@ -19,7 +20,7 @@ func TestLiveSmoke(t *testing.T) {
 	if token == "" {
 		t.Skip("set TERVA_DISCORD_TEST_TOKEN to run the live smoke")
 	}
-	tr, err := NewTransport(token, t.TempDir())
+	tr, err := NewTransport(token, testsupport.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}

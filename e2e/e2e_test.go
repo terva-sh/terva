@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 	"time"
 )
@@ -67,7 +68,7 @@ func TestPrintMode_FinalText(t *testing.T) {
 		chunks:   []map[string]any{textChunk("4"), finishChunk("stop", 12, 1)},
 		sendDone: true,
 	})
-	ws := t.TempDir()
+	ws := testsupport.TempDir(t)
 
 	res := runTerva(t, fp.url(), ws, "-p", "what is 2+2?")
 
@@ -108,7 +109,7 @@ func TestJSONMode_EventStream(t *testing.T) {
 		chunks:   []map[string]any{textChunk("hello "), textChunk("world"), finishChunk("stop", 8, 2)},
 		sendDone: true,
 	})
-	ws := t.TempDir()
+	ws := testsupport.TempDir(t)
 
 	res := runTerva(t, fp.url(), ws, "--json", "say hi")
 
@@ -183,7 +184,7 @@ func TestJSONMode_WriteToolRoundTrip(t *testing.T) {
 			sendDone: true,
 		},
 	)
-	ws := t.TempDir()
+	ws := testsupport.TempDir(t)
 
 	res := runTerva(t, fp.url(), ws, "--json", "create hello.txt")
 
@@ -255,7 +256,7 @@ func TestJSONMode_MidStreamDeathSurfacesError(t *testing.T) {
 		chunks:   []map[string]any{textChunk("partial answ")},
 		sendDone: false,
 	})
-	ws := t.TempDir()
+	ws := testsupport.TempDir(t)
 
 	res := runTerva(t, fp.url(), ws, "--json", "say something")
 
@@ -286,7 +287,7 @@ func TestJSONMode_RateLimitRetriesAndSucceeds(t *testing.T) {
 			sendDone: true,
 		},
 	)
-	ws := t.TempDir()
+	ws := testsupport.TempDir(t)
 
 	start := time.Now()
 	res := runTerva(t, fp.url(), ws, "--json", "say hi")

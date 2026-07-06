@@ -3,6 +3,7 @@ package lore
 import (
 	"os"
 	"path/filepath"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 )
 
@@ -26,8 +27,8 @@ func entryByName(entries []Entry, name string) bool {
 }
 
 func TestDiscover_TiersAndTrustGating(t *testing.T) {
-	home := t.TempDir()
-	cwd := t.TempDir()
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
 
 	writeFile(t, filepath.Join(home, "lore", "auth.md"), "---\nname: Auth\nkeys: [auth]\n---\nauth body")
 	writeFile(t, filepath.Join(home, "lore", "lore.json"), `{"scan_depth": 5, "token_budget": 999, "recursive_scanning": true}`)
@@ -68,8 +69,8 @@ func TestDiscover_TiersAndTrustGating(t *testing.T) {
 }
 
 func TestDiscover_ProjectConfigWins(t *testing.T) {
-	home := t.TempDir()
-	cwd := t.TempDir()
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
 	writeFile(t, filepath.Join(home, "lore", "lore.json"), `{"token_budget": 100}`)
 	writeFile(t, filepath.Join(home, "lore", "a.md"), "---\nname: A\nconstant: true\n---\nx")
 	writeFile(t, filepath.Join(cwd, ".terva", "lore", "lore.json"), `{"token_budget": 200}`)
@@ -82,7 +83,7 @@ func TestDiscover_ProjectConfigWins(t *testing.T) {
 }
 
 func TestDiscover_BadEntryReportedNotFatal(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	writeFile(t, filepath.Join(home, "lore", "good.md"), "---\nname: Good\nkeys: [g]\n---\nok")
 	writeFile(t, filepath.Join(home, "lore", "bad.md"), "---\nname: Bad\n---\nno keys, not constant")
 	entries, _, errs := Discover(home, "", false)

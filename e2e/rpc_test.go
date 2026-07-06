@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"terva.sh/terva/packages/testsupport"
 	"testing"
 	"time"
 )
@@ -23,7 +24,7 @@ type rpcSession struct {
 
 func startRPC(t *testing.T, baseURL, workspace string) *rpcSession {
 	t.Helper()
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
@@ -129,7 +130,7 @@ func TestRPCGoldenStream(t *testing.T) {
 		chunks:   []map[string]any{textChunk("hello "), textChunk("rpc"), finishChunk("stop", 10, 2)},
 		sendDone: true,
 	})
-	ws := t.TempDir()
+	ws := testsupport.TempDir(t)
 	s := startRPC(t, fp.url(), ws)
 
 	// ping

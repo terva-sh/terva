@@ -219,7 +219,7 @@ func TestReadByteCapAppliesToSelection(t *testing.T) {
 // a silent empty result. This is the trap an agent hits when it feeds the
 // byte-cap figure (51200) back as an offset.
 func TestReadOffsetPastEOFExplains(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "small.md")
 	os.WriteFile(p, []byte("alpha\nbravo\ncharlie\n"), 0o644) // 3 lines
 	tool := &ReadTool{CWD: dir}
@@ -250,7 +250,7 @@ func TestReadByteCapHintPagesCorrectly(t *testing.T) {
 		}
 		return s
 	}
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "big.txt")
 	// ~201 bytes/line with a unique prefix, so the 50KiB byte cap engages
 	// (after ~254 lines) well before the 2000-line cap, and each line is
