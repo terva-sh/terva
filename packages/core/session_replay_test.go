@@ -5,10 +5,11 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestReadReplayRows(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "s.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
 	sess, err := NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +59,7 @@ func TestReadReplayRows(t *testing.T) {
 // TestReadReplayRowsKeepsCompactedHistory is the whole point of the reader: it
 // preserves the rows a compaction folded away, where OpenSession collapses them.
 func TestReadReplayRowsKeepsCompactedHistory(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "s.jsonl")
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
 	sess, err := NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
 	if err != nil {
 		t.Fatal(err)

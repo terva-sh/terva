@@ -8,6 +8,7 @@ import (
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // onePassClient is a minimal provider.Client whose every turn streams a
@@ -36,7 +37,7 @@ func (c *onePassClient) Stream(ctx context.Context, req provider.Request) (<-cha
 // helper under test is what botcmd (and ACP) now wire: per-message
 // durable persistence plus the session identity terva_status reports.
 func TestWireHeadlessSessionPersistWritesTurns(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	sess, err := core.NewSession(dir, dir, "prov", "fake-model", "test")
 	if err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@ import (
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func statusText(r core.ToolResult) string {
@@ -172,7 +173,7 @@ func TestStatusReportsCallingAgentFromContext(t *testing.T) {
 // session id (the --resume key) and transcript path; a live-only agent
 // says so explicitly instead of staying silent.
 func TestStatusReportsSessionIdentity(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	sess, err := core.NewSession(dir, dir, "prov", "m", "test")
 	if err != nil {
 		t.Fatal(err)

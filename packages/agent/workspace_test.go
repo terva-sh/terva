@@ -19,6 +19,7 @@ import (
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func newTestSession() *wsSession {
@@ -189,7 +190,7 @@ func TestWebConfirmerApproveWins(t *testing.T) {
 // carriers strip at their connection boundary per negotiation (covered in
 // ctrlproto's strip tests).
 func TestSnapshotCarriesImageData(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	sess, err := core.NewSession(tmp, tmp, "p", "m", "test")
 	if err != nil {
 		t.Fatal(err)
@@ -307,7 +308,7 @@ func TestWebAskerAnswerWins(t *testing.T) {
 // files without a live agent (no credentials needed): list, rename, delete,
 // usage, and the not-found path.
 func TestWorkspaceSessionGroup(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	w := &Workspace{root: tmp, cwd: tmp, version: "test", sessions: map[string]*wsSession{}}
 	ctx := context.Background()
 
@@ -374,7 +375,7 @@ func TestWorkspaceSessionGroup(t *testing.T) {
 // materialized-but-empty session failed: close() prunes the empty fresh file,
 // so the follow-up os.Remove sees nothing and must not report "no session".
 func TestDeleteEmptyLiveSession(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	w := &Workspace{root: tmp, cwd: tmp, version: "test", sessions: map[string]*wsSession{}}
 	ctx := context.Background()
 
@@ -436,7 +437,7 @@ func TestCleanTitle(t *testing.T) {
 // off): applyTitle persists the name to the session file and pushes a
 // session_updated event so open clients update without a refresh.
 func TestSettleTitleFallbackBroadcasts(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	w := &Workspace{root: tmp, cwd: tmp, version: "test", sessions: map[string]*wsSession{}}
 	sess, err := core.NewSession(tmp, tmp, "p", "m", "test")
 	if err != nil {
@@ -800,7 +801,7 @@ func TestContextNode(t *testing.T) {
 // returns the span it replaced with the prior summary as a nested revealable
 // node, and revealing that walks one epoch further back.
 func TestRevealCompactionNode(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	sess, err := core.NewSession(dir, dir, "fake", "model", "v")
 	if err != nil {
 		t.Fatal(err)
@@ -1088,7 +1089,7 @@ func TestWorkspaceCompact(t *testing.T) {
 // extension's install dir; an unknown name is a clean not-found, not an
 // internal error (and never reaches the live-apply step).
 func TestExtensionsActionGlobalScope(t *testing.T) {
-	s := &wsSession{id: "x", cwd: t.TempDir(), hub: newWSHub()}
+	s := &wsSession{id: "x", cwd: testsupport.TempDir(t), hub: newWSHub()}
 	err := s.extensionsAction("toggle", map[string]string{"name": "no-such-ext", "enabled": "true", "scope": "global"})
 	var ce *ctrlproto.Error
 	if !errors.As(err, &ce) || ce.Code != ctrlproto.CodeNotFound {
@@ -1124,7 +1125,7 @@ func TestTaskActionSpawnValidation(t *testing.T) {
 	if err := w.taskAction("spawn", map[string]string{"task": "x"}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeUnsupported {
 		t.Fatalf("spawn without swarm = %v, want CodeUnsupported", err)
 	}
-	w.swarm = swarm.New(swarm.Config{Root: t.TempDir(), RepoRoot: t.TempDir()})
+	w.swarm = swarm.New(swarm.Config{Root: testsupport.TempDir(t), RepoRoot: testsupport.TempDir(t)})
 	if err := w.taskAction("spawn", map[string]string{"task": "   "}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeBadRequest {
 		t.Fatalf("spawn with blank task = %v, want CodeBadRequest", err)
 	}
@@ -1212,7 +1213,7 @@ func TestPermissionsSurface(t *testing.T) {
 // live-apply half (ApplyOne + tool rebuild) needs a real subprocess, so extMgr
 // is nil here (applyExtensionChangeLive no-ops), isolating the persist path.
 func TestExtensionsToggleAction(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	s := &wsSession{id: "x", hub: newWSHub(), cwd: dir}
 
 	if err := s.extensionsAction("bogus", map[string]string{"name": "foo"}); err == nil {
@@ -1267,7 +1268,7 @@ func TestLoreView(t *testing.T) {
 // user lore file (re-discovered on load) and marks it editable; delete removes
 // it; validation rejects a keyless non-constant entry.
 func TestLoreEditing(t *testing.T) {
-	home := t.TempDir()
+	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
 	if err := saveLoreEntry(home, "user", "Deploy Steps", []string{"deploy", "release"}, false, "Run just release-cut."); err != nil {
@@ -1327,7 +1328,7 @@ func TestMCPStatus(t *testing.T) {
 // the next Check — verified without a model). Bad decisions error; removing it
 // restores the tool.
 func TestPermissionsRuleAction(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	w := &Workspace{sessions: map[string]*wsSession{}}
 	// Gate with an explicit policy (so SetRules isn't a no-op) + an allow-all
 	// confirmer, so a tool is allowed unless a deny RULE blocks it — isolating
@@ -1376,7 +1377,7 @@ func (allowConfirmer) Confirm(tool, preview string) core.ConfirmDecision {
 // rule round-trips through .terva/config.json (idempotent add, remove), and a
 // project lore entry writes under .terva/lore.
 func TestProjectScopeEditing(t *testing.T) {
-	cwd := t.TempDir()
+	cwd := testsupport.TempDir(t)
 	rule := PermissionRuleConfig{Tool: "bash", Decision: "deny", Reason: "no"}
 	if err := setProjectPermissionRule(cwd, rule, true); err != nil {
 		t.Fatalf("add project rule: %v", err)
@@ -1423,7 +1424,7 @@ func TestLoreScopeTrust(t *testing.T) {
 // writes a durable empty checkpoint, and broadcasts a fresh snapshot + notice; a
 // running turn blocks it (ErrBusy).
 func TestWorkspaceClear(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", dir)
 	sess, err := core.NewSession(dir, dir, "fake", "model", "v")
 	if err != nil {
@@ -1461,7 +1462,7 @@ func TestWorkspaceClear(t *testing.T) {
 // (temp-home) trust store, flips every open session's trust flag live, reflects
 // it on SessionInfo, and broadcasts a session_updated; Untrust is the inverse.
 func TestWorkspaceTrust(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", dir)
 	sess, err := core.NewSession(dir, dir, "fake", "model", "v")
 	if err != nil {
@@ -1505,7 +1506,7 @@ func TestWorkspaceTrust(t *testing.T) {
 // an unknown persona is rejected up front with CodeBadRequest rather than being
 // silently dropped (or surfacing as a CodeInternal from the deferred Resolve).
 func TestCreateSessionPersonaValidation(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	w := &Workspace{}
 	_, err := w.CreateSession(context.Background(), ctrlproto.CreateOpts{Persona: "no-such-persona-zzz"})
 	if err == nil {
@@ -1588,7 +1589,7 @@ func TestWorkspaceCatalog(t *testing.T) {
 // locale live and persists it. Mutates global i18n + config, so it uses a temp
 // home and restores English on return.
 func TestSettingsLanguage(t *testing.T) {
-	t.Setenv("TERVA_HOME", t.TempDir())
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	defer i18n.Configure("en", "")
 
 	s := newTestSession()
@@ -1662,7 +1663,7 @@ func TestExtPanelSurface(t *testing.T) {
 // TestTasksSurface covers the tasks pane against an empty workspace-global
 // swarm: an empty list, a well-formed surface, and action validation.
 func TestTasksSurface(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testsupport.TempDir(t)
 	w := &Workspace{root: tmp, cwd: tmp, sessions: map[string]*wsSession{}, swarm: swarm.New(swarm.Config{Root: tmp, RepoRoot: tmp})}
 	if tl := w.taskList(); tl == nil || len(tl.Tasks) != 0 {
 		t.Fatalf("empty swarm should yield empty task list, got %+v", tl)

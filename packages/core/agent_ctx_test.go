@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // agentCaptureTool records the agent the dispatch context carried, so
@@ -83,7 +84,7 @@ func TestTranscriptEpochsNeverCollideAcrossAgents(t *testing.T) {
 // TestAdoptSessionIdentity: the agent records the transcript file's
 // basename (what --resume accepts) and path; nil clears both.
 func TestAdoptSessionIdentity(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	s, err := NewSession(dir, dir, "prov", "model", "test")
 	if err != nil {
 		t.Fatal(err)

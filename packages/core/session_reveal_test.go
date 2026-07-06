@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func revUser(text string) provider.Message {
@@ -23,7 +24,7 @@ func revSummary(text string) provider.Message {
 // compaction that folded in the first summary. The originals are never rewritten,
 // so this is a pure read; the reveal is positional (input minus the kept tail).
 func TestRevealCompaction(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	s, err := NewSession(dir, dir, "fake", "model", "v")
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestSessionConcurrentWrites exercises the write-serialization fix: a session
@@ -16,7 +17,7 @@ import (
 // not goroutine-safe. Without writeMu these interleave and corrupt the JSONL.
 // Run under -race; also asserts every line is valid JSON (no torn writes).
 func TestSessionConcurrentWrites(t *testing.T) {
-	dir := t.TempDir()
+	dir := testsupport.TempDir(t)
 	s, err := NewSession(dir, dir, "prov", "model", "test")
 	if err != nil {
 		t.Fatal(err)
