@@ -39,6 +39,7 @@ projected through many front ends and extensible in any language.
 - user and extension themes via JSON; see [docs/themes.md](docs/themes.md).
 - localization: translate the UI into your language, or override terva's wording and even its model-facing prompts in place (works in English too) via per-key `$TERVA_HOME/locales` overlays. See [docs/localization.md](docs/localization.md).
 - reusable instructions via `SKILL.md` files; see [docs/skills.md](docs/skills.md).
+- optional **image generation**: an opt-in `generate_image` tool over a registry of hosted or self-hosted backends (OpenAI/LocalAI, AUTOMATIC1111/Forge, ComfyUI), rendered inline and optionally saved into the workspace. See [docs/image-generation.md](docs/image-generation.md).
 - **chat & play modes**: reframe the harness away from coding — a conversation (`--chat`) or a roleplay/simulation (`--play`), fronted by a persona or a SillyTavern **character card** (`--card`), with a keyword-triggered **lore** context engine and a director that can voice a declared **cast** of actors. See [docs/personas.md](docs/personas.md).
 - no community atm.
 

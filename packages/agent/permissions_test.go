@@ -226,7 +226,7 @@ func TestAppendUserPermissionRulePersists(t *testing.T) {
 }
 
 func TestPlanModeFiltersToolRegistry(t *testing.T) {
-	reg := buildToolRegistry(Args{}, core.ApprovalPlan, testsupport.TempDir(t), nil, "anthropic", "apikey", true)
+	reg := buildToolRegistry(Args{}, core.ApprovalPlan, testsupport.TempDir(t), nil, "anthropic", "apikey", true, nil)
 	for name := range reg {
 		// Plan keeps read-only tools plus interactive tools
 		// (ask_user_question) — asking the user is exactly what plan

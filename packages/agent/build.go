@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tervadocs "terva.sh/terva"
+	"terva.sh/terva/packages/agent/imagegen"
 	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
@@ -37,6 +38,11 @@ type Resolved struct {
 	// here so cli.go's setApprovalMode rebuild can pass it to
 	// buildToolRegistry without re-resolving the model.
 	VisionCapable bool
+
+	// ImageRegistry holds the resolved image-generation backends (empty when
+	// image generation is off). Threaded through like VisionCapable so the
+	// live registry rebuild (cli.go setApprovalMode) keeps generate_image.
+	ImageRegistry *imagegen.Registry
 
 	ToolRegistry core.Registry
 	ToolSummary  []ToolSummary
@@ -668,7 +674,12 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	}
 	approval := effectiveApprovalMode(args)
 	visionCapable := resolvedModel.Has(provider.CapImageInput)
-	reg := buildToolRegistry(args, approval, args.CWD, sandbox, provName, method, visionCapable)
+	// Image generation is opt-in (an `image` config block); the generate_image
+	// tool is registered only when a backend resolves. Separate from the chat
+	// model's CapImageOutput — this is a tool calling an image backend, gated on
+	// backend availability, not on the model emitting images natively.
+	imageReg, _ := buildImageRegistry(eff.Config)
+	reg := buildToolRegistry(args, approval, args.CWD, sandbox, provName, method, visionCapable, imageReg)
 
 	docsDir, _ := tervadocs.EnsureInstalled(TervaHome())
 	// terva's own state lives under $TERVA_HOME, outside the cwd jail. A
@@ -922,6 +933,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		Temperature:              temperature,
 		Insecure:                 args.Insecure,
 		VisionCapable:            visionCapable,
+		ImageRegistry:            imageReg,
 		ToolRegistry:             reg,
 		ToolSummary:              summaries,
 		SystemPrompt:             sys,
@@ -1220,7 +1232,7 @@ func hasBaseWorkspaceTools(args Args) bool {
 	return args.Experience == "" && !args.NoTools && !args.NoWorkspaceTools
 }
 
-func buildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbox *tools.Sandbox, provName, authMethod string, visionCapable bool) core.Registry {
+func buildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbox *tools.Sandbox, provName, authMethod string, visionCapable bool, imageReg *imagegen.Registry) core.Registry {
 	// chat and play both drop the built-in coding tools (read/write/edit/bash/
 	// …): chat is pure conversation, play acts only through a world extension's
 	// tools. --no-tools does the same. --no-workspace-tools also drops them, but
@@ -1238,6 +1250,12 @@ func buildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 		"glob":              &tools.GlobTool{CWD: cwd, Sandbox: sandbox},
 		"terva_status":      &tools.StatusTool{Provider: provName, CWD: cwd, AuthMethod: authMethod, BaseURL: args.BaseURL},
 		"ask_user_question": &tools.AskUserTool{},
+	}
+	// generate_image is opt-in and only useful with a backend, so it enters
+	// the set only when one is configured. It's mutating (not read-only), so
+	// it's approval-gated and dropped in plan mode like write/bash.
+	if imageReg != nil && imageReg.Len() > 0 {
+		all["generate_image"] = &tools.GenerateImageTool{CWD: cwd, Sandbox: sandbox, Registry: imageReg}
 	}
 	// Plan mode promises read-only: mutating tools don't enter the
 	// registry at all (the model shouldn't even see them), with the

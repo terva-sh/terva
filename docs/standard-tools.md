@@ -132,6 +132,14 @@ pattern — another skin over the one engine — rather than adding a parallel
 engine. Both are gated out of the wrong context: `actor_spawn` never appears in a
 coding session, and `swarm_spawn` never appears in an immersive one.
 
+`generate_image` is likewise conditional — injected only when an `image` config
+block resolves a backend (opt-in, off by default). It turns a prompt into an
+image via a registry of backends (hosted or self-hosted, adapter-per-protocol —
+separate from the model catalog), returns it inline, and optionally writes it
+into the workspace through the sandbox. Workspace-mutating and it spends money on
+hosted backends, so it is approval-gated and absent in plan mode. See
+[image-generation.md](image-generation.md).
+
 ### Standard extensions (opt-in, terva-blessed)
 
 These are the designated official standard extensions. They run as trusted

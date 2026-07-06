@@ -128,12 +128,12 @@ func TestSystemPromptImmersiveWinsOverExperience(t *testing.T) {
 }
 
 func TestBuildToolRegistryDropsBuiltinsInExperienceModes(t *testing.T) {
-	normal := buildToolRegistry(Args{}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false)
+	normal := buildToolRegistry(Args{}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil)
 	if len(normal) == 0 {
 		t.Fatal("normal mode should have built-in tools")
 	}
 	for _, exp := range []string{ExperienceChat, ExperiencePlay} {
-		reg := buildToolRegistry(Args{Experience: exp}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false)
+		reg := buildToolRegistry(Args{Experience: exp}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil)
 		if len(reg) != 0 {
 			t.Errorf("%s mode should drop built-in tools, got %d", exp, len(reg))
 		}
@@ -146,7 +146,7 @@ func TestBuildToolRegistryDropsBuiltinsInExperienceModes(t *testing.T) {
 // gated on the same !args.NoTools in buildResolved.
 func TestNoToolsSuppressesEveryToolSource(t *testing.T) {
 	// Built-ins: --no-tools empties the registry, like the experience modes.
-	if reg := buildToolRegistry(Args{NoTools: true}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false); len(reg) != 0 {
+	if reg := buildToolRegistry(Args{NoTools: true}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil); len(reg) != 0 {
 		t.Errorf("--no-tools should drop built-in tools, got %d", len(reg))
 	}
 

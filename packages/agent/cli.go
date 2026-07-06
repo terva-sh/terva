@@ -1622,7 +1622,7 @@ func runInteractive(ctx context.Context, args Args, version string) error {
 	// initial views cannot drift.
 	setApprovalMode := func(mode core.ApprovalMode) core.Registry {
 		confirmGate.SetMode(mode)
-		reg := buildToolRegistry(args, mode, r.CWD, sharedSandbox, r.Provider, r.AuthMethod, r.VisionCapable)
+		reg := buildToolRegistry(args, mode, r.CWD, sharedSandbox, r.Provider, r.AuthMethod, r.VisionCapable, r.ImageRegistry)
 		MergeToolsForMode(reg, mode, pol.ReadOnly, extToolAdapter)
 		if mcpAdapter != nil {
 			MergeToolsForMode(reg, mode, pol.ReadOnly, mcpAdapter)

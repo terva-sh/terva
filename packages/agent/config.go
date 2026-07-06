@@ -79,6 +79,11 @@ type Config struct {
 	// detected protocol when available.
 	InlineImagesEnabled *bool `json:"inline_images_enabled,omitempty"`
 
+	// Image configures image GENERATION (the generate_image tool) via a
+	// registry of backends kept separate from the model catalog. Opt-in:
+	// absent means off (no tool). See docs/proposals/image-generation.md.
+	Image *ImageConfig `json:"image,omitempty"`
+
 	// AutoSwarmEnabled lets the main agent spawn background sub-agents
 	// for parallel sub-tasks via a built-in swarm_spawn tool. Off by
 	// default; nil/missing means disabled. Toggle from /settings.
