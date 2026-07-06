@@ -32,6 +32,7 @@ type Message struct {
 	ChatID    string // conversation to reply into
 	ChatKind  string // "dm" (also ""), "group", "thread", "channel"
 	ChatTitle string // display-only; "" for DMs
+	ScopeID   string // container the chat belongs to (e.g. Discord guild); "" = scopeless
 	UserID    string // sender, for pairing/allowlist
 	Username  string // sender's handle, for pairing acknowledgments
 	ReplyTo   string // id of the message THIS one replies to; "" = none
@@ -150,6 +151,7 @@ type Membership struct {
 	ChatID     string
 	ChatKind   string
 	ChatTitle  string
+	ScopeID    string // container the chat belongs to (e.g. Discord guild); "" = scopeless
 	Change     string
 	ByUserID   string
 	ByUsername string

@@ -63,6 +63,7 @@ type inboundMessage struct {
 // system channel (the closest thing a Discord SERVER has to "the
 // chat the bot landed in"). Discord does not say who added the bot.
 type inboundMembership struct {
+	GuildID   string // the guild (scope) the change concerns
 	ChannelID string // system channel; "" when the guild has none
 	Title     string // guild name
 	Added     bool
@@ -281,7 +282,7 @@ func emojiKey(e discord.PartialEmoji) string {
 }
 
 func normalizeGuildMembership(g discord.Guild, added bool) inboundMembership {
-	mb := inboundMembership{Title: g.Name, Added: added}
+	mb := inboundMembership{GuildID: g.ID.String(), Title: g.Name, Added: added}
 	if g.SystemChannelID != nil {
 		mb.ChannelID = g.SystemChannelID.String()
 	}

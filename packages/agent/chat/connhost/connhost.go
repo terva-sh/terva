@@ -409,6 +409,7 @@ func (s *Session) handleFrame(line []byte) {
 			ChatID:    msg.ChatID,
 			ChatKind:  msg.ChatKind,
 			ChatTitle: msg.ChatTitle,
+			ScopeID:   msg.ScopeID,
 			UserID:    msg.UserID,
 			Username:  msg.Username,
 			ReplyTo:   msg.ReplyTo,
@@ -516,7 +517,8 @@ func (s *Session) handleFrame(line []byte) {
 		}
 		s.cfg.DeliverMembership(chat.Membership{
 			ChatID: mb.Chat.ID, ChatKind: mb.Chat.Kind, ChatTitle: mb.Chat.Title,
-			Change: mb.Change, ByUserID: mb.ByUserID, ByUsername: mb.ByUsername,
+			ScopeID: mb.ScopeID,
+			Change:  mb.Change, ByUserID: mb.ByUserID, ByUsername: mb.ByUsername,
 		})
 	case "answer":
 		var ans connproto.AnswerFromConn

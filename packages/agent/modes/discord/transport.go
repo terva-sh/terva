@@ -107,8 +107,11 @@ func (t *Transport) ReceiveMembership(ctx context.Context, deliver func(connsdk.
 }
 
 func (t *Transport) onMembership(mb inboundMembership) {
-	if mb.ChannelID == "" {
-		return // no system channel — nothing admittable to point at
+	// An addition with no system channel has nothing admittable to point at.
+	// A removal with a guild scope must still be delivered even without one, so
+	// the host can revoke every channel approved under that departing guild.
+	if mb.ChannelID == "" && (mb.Added || mb.GuildID == "") {
+		return
 	}
 	t.mu.Lock()
 	deliver := t.membership
@@ -121,7 +124,8 @@ func (t *Transport) onMembership(mb inboundMembership) {
 		change = "added"
 	}
 	deliver(connsdk.Membership{
-		ChatID: mb.ChannelID, ChatKind: "group", ChatTitle: mb.Title, Change: change,
+		ChatID: mb.ChannelID, ChatKind: "group", ChatTitle: mb.Title,
+		ScopeID: mb.GuildID, Change: change,
 	})
 }
 
@@ -155,6 +159,7 @@ func (t *Transport) normalize(im inboundMessage) (connsdk.Message, bool) {
 		TS:          im.TS,
 		ChatID:      im.ChannelID,
 		ChatKind:    kind,
+		ScopeID:     im.GuildID,
 		UserID:      im.AuthorID,
 		Username:    im.AuthorName,
 		ReplyTo:     im.ReplyToID,

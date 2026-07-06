@@ -87,6 +87,7 @@ type Message struct {
 	ChatID      string
 	ChatKind    string
 	ChatTitle   string
+	ScopeID     string // container the chat belongs to (e.g. Discord guild); "" = scopeless
 	UserID      string
 	Username    string
 	ReplyTo     string
@@ -116,6 +117,7 @@ type Membership struct {
 	ChatID     string
 	ChatKind   string
 	ChatTitle  string
+	ScopeID    string // container the chat belongs to (e.g. Discord guild); "" = scopeless
 	Change     string
 	ByUserID   string
 	ByUsername string
@@ -591,6 +593,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 						frame.TS = m.TS
 						frame.ChatKind = m.ChatKind
 						frame.ChatTitle = m.ChatTitle
+						frame.ScopeID = m.ScopeID
 						for _, e := range m.Entities {
 							frame.Entities = append(frame.Entities, connproto.Entity{
 								Kind: e.Kind, Offset: e.Offset, Length: e.Length, UserID: e.UserID,
@@ -649,7 +652,8 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 							Chat: connproto.MembershipChat{
 								ID: mb.ChatID, Kind: mb.ChatKind, Title: mb.ChatTitle,
 							},
-							Change: mb.Change, ByUserID: mb.ByUserID, ByUsername: mb.ByUsername,
+							ScopeID: mb.ScopeID,
+							Change:  mb.Change, ByUserID: mb.ByUserID, ByUsername: mb.ByUsername,
 						})
 					})
 					if err != nil && ctx.Err() == nil {

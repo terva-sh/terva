@@ -712,9 +712,16 @@ func (l *Loop) onMembership(ctx context.Context, mb Membership) {
 	}
 	switch mb.Change {
 	case "removed":
+		// Revoke the whole container first — a guild kick must drop every channel
+		// approved under it, not just the one this event names — then the named
+		// chat if it survived (scopeless approvals aren't caught by scope).
+		revoked, _ := l.Admissions.RevokeScope(mb.ScopeID)
 		if _, approved := l.Admissions.Mode(mb.ChatID); approved {
 			_ = l.Admissions.Revoke(mb.ChatID)
-			l.info(fmt.Sprintf("%s: removed from %s — approval revoked", l.Connector.Name(), describeChat(mb)))
+			revoked++
+		}
+		if revoked > 0 {
+			l.info(fmt.Sprintf("%s: removed from %s — revoked %d approval(s)", l.Connector.Name(), describeChat(mb), revoked))
 		}
 		return
 	case "added":
@@ -766,7 +773,7 @@ func (l *Loop) onMembership(ctx context.Context, mb Membership) {
 		if ans.Key == "approve_all" {
 			mode, how = ModeAll, "on every message"
 		}
-		if err := l.Admissions.Approve(mb.ChatID, mode); err != nil {
+		if err := l.Admissions.ApproveScoped(mb.ChatID, mode, mb.ScopeID); err != nil {
 			_ = l.Connector.Send(ctx, Outgoing{ChatID: ownerDM,
 				Text: "couldn't save the approval: " + err.Error()})
 			return

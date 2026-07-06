@@ -126,7 +126,9 @@ func (g *gate) routeDM(ctx context.Context, conn Connector, m Message, paired st
 				Text: "usage: /approve <chat-id> [all] — or say /approve inside the chat itself."})
 			return actHandled
 		}
-		g.approve(ctx, conn, m, args[0], modeFromArgs(args[1:]))
+		// Owner approving a remote chat by id from the DM: no container
+		// context, so it records no scope (not guild-tracked).
+		g.approve(ctx, conn, m, args[0], modeFromArgs(args[1:]), "")
 		return actHandled
 	}
 	if _, args, ok := splitCommand(text, "/revoke"); ok {
@@ -177,7 +179,9 @@ func (g *gate) routeGroup(ctx context.Context, conn Connector, m Message, paired
 		if !isOwner {
 			return g.ownerOnly(ctx, conn, m)
 		}
-		g.approve(ctx, conn, m, m.ChatID, modeFromArgs(args))
+		// Approved in the chat itself: record the container it belongs to so a
+		// later removal from that container revokes this chat with its siblings.
+		g.approve(ctx, conn, m, m.ChatID, modeFromArgs(args), m.ScopeID)
 		return actHandled
 	}
 	if _, _, ok := splitCommand(text, "/revoke"); ok {
@@ -231,7 +235,7 @@ func (g *gate) ownerOnly(ctx context.Context, conn Connector, m Message) action 
 	return actHandled
 }
 
-func (g *gate) approve(ctx context.Context, conn Connector, m Message, chatID, mode string) {
+func (g *gate) approve(ctx context.Context, conn Connector, m Message, chatID, mode, scope string) {
 	g.mu.Lock()
 	adm := g.admissions
 	g.mu.Unlock()
@@ -240,7 +244,7 @@ func (g *gate) approve(ctx context.Context, conn Connector, m Message, chatID, m
 			Text: "group admission isn't available on this surface."})
 		return
 	}
-	if err := adm.Approve(chatID, mode); err != nil {
+	if err := adm.ApproveScoped(chatID, mode, scope); err != nil {
 		_ = conn.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID,
 			Text: "couldn't save the approval: " + err.Error()})
 		return

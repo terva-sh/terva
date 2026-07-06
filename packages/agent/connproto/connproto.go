@@ -162,6 +162,7 @@ type MembershipChat struct {
 type ChatMembershipFromConn struct {
 	Type       string         `json:"type"` // "chat_membership"
 	Chat       MembershipChat `json:"chat"`
+	ScopeID    string         `json:"scope_id,omitempty"`
 	Change     string         `json:"change"` // "added" | "removed"
 	ByUserID   string         `json:"by_user_id,omitempty"`
 	ByUsername string         `json:"by_username,omitempty"`
@@ -185,6 +186,7 @@ type MessageFromConn struct {
 	ChatID      string       `json:"chat_id"`
 	ChatKind    string       `json:"chat_kind,omitempty"`
 	ChatTitle   string       `json:"chat_title,omitempty"`
+	ScopeID     string       `json:"scope_id,omitempty"`
 	UserID      string       `json:"user_id"`
 	Username    string       `json:"username,omitempty"`
 	ReplyTo     string       `json:"reply_to,omitempty"`
