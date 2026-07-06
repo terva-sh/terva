@@ -38,7 +38,8 @@ type Options struct {
 	AuthHeader     string       // trusted forward-auth header (proxy asserts identity)
 	TrustedProxies []*net.IPNet // peers (besides loopback) allowed to assert AuthHeader
 	Token          string       // bearer token required when no forward-auth is used
-	AllowInsecure  bool         // permit a non-loopback bind with no auth mode
+	AllowInsecure  bool         // permit a non-loopback bind with no auth mode (blanket: any source)
+	InsecureCIDRs  []*net.IPNet // source networks granted no-auth access (scoped insecure); permits a non-loopback bind
 	Version        string       // reported in the ctrlproto hello
 	Locale         string       // active UI language (BCP-47), advertised to clients
 	AllowRestart   bool         // advertise the restart feature so clients show a restart control
@@ -66,7 +67,7 @@ func ParseTrustedProxies(cidrs []string) ([]*net.IPNet, error) {
 			out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
 			continue
 		}
-		return nil, fmt.Errorf("invalid trusted-proxy %q: want an IP or CIDR", c)
+		return nil, fmt.Errorf("invalid %q: want an IP or CIDR", c)
 	}
 	return out, nil
 }
@@ -197,7 +198,10 @@ func clientDesc(opts Options, r *http.Request) string {
 // endpoint effectively unreachable-auth), so we fail closed at startup with a
 // clear message rather than silently.
 func checkBindSafety(opts Options) error {
-	if isLoopbackAddr(opts.Addr) || opts.AllowInsecure {
+	// A scoped insecure listener (--web-insecure-cidr) is a deliberate no-auth
+	// bind whose boundary is the source-IP allowlist, so it may bind non-loopback
+	// just like the blanket --web-insecure — authorized() enforces the scope.
+	if isLoopbackAddr(opts.Addr) || opts.AllowInsecure || len(opts.InsecureCIDRs) > 0 {
 		return nil
 	}
 	if opts.Token != "" {

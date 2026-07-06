@@ -68,6 +68,7 @@ type Args struct {
 	WebTrustedProxies []string // IPs/CIDRs (besides loopback) allowed to assert the forward-auth header
 	WebToken          string   // bearer token required on requests when no forward-auth is used
 	WebInsecure       bool     // allow binding a non-loopback address with no auth mode (dangerous)
+	WebInsecureCIDRs  []string // IPs/CIDRs granted no-auth access (besides loopback) — the scoped, safer form of --web-insecure (e.g. a tailnet range)
 	WebAllowRestart   bool     // enable Tier-1 self-restart (control.restart + the terva_restart tool); off by default
 
 	// TUICtrlproto routes the interactive TUI through the in-process ctrlproto
@@ -361,6 +362,16 @@ func ParseArgs(in []string) (Args, error) {
 			a.WebToken = v
 		case "--web-insecure":
 			a.WebInsecure = true
+		case "--web-insecure-cidr":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			for _, p := range strings.Split(v, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					a.WebInsecureCIDRs = append(a.WebInsecureCIDRs, p)
+				}
+			}
 		case "--web-allow-restart":
 			a.WebAllowRestart = true
 		case "-c", "--continue":
@@ -863,8 +874,8 @@ func PrintHelp(version string) {
 func printWebHelp() {
 	fmt.Fprint(os.Stderr, i18n.H("help.web", `terva web — browser control panel (self-hosted web UI)
 
-  terva web                     serve on 127.0.0.1:8730 (open http://127.0.0.1:8730)
-  terva web --web-addr :8730    listen on all interfaces (needs an auth mode; see below)
+  terva web                          serve on 127.0.0.1:8730 (open http://127.0.0.1:8730)
+  terva web --web-addr 0.0.0.0:8730  bind all IPv4 interfaces (needs an auth mode or --web-insecure-cidr; see below)
 
 Web-specific flags:
   --web-addr ADDR               listen address:port (default 127.0.0.1:8730)
@@ -873,6 +884,9 @@ Web-specific flags:
   --web-trusted-proxy CIDR      IP/CIDR(s) allowed to assert --web-auth-header (comma-separated; loopback always allowed)
   --web-allow-restart           enable Tier-1 self-restart (control.restart + the terva_restart tool)
   --web-insecure                allow binding a non-loopback address with NO auth (dangerous)
+  --web-insecure-cidr CIDR      grant NO-auth access to these source IP/CIDR(s) only (comma-separated; loopback always
+                                allowed) — the scoped, safer form of --web-insecure for a trusted overlay (e.g. a tailnet
+                                range like 100.64.0.0/10); permits a non-loopback bind and self-restart
 
 Security: the server binds loopback by default and REFUSES a non-loopback bind
 unless you set an auth mode or --web-insecure. The forward-auth header is honored
@@ -880,7 +894,10 @@ ONLY from loopback (a same-host proxy) or a --web-trusted-proxy CIDR — otherwi
 it is forgeable by anyone who reaches the port, so a non-loopback bind under
 header auth needs --web-trusted-proxy. Prefer a token from a native client over
 ?token= in a URL (it can leak into proxy logs / history). Put an OAuth/forward-
-auth proxy (e.g. Authentik) in front for real deployments.
+auth proxy (e.g. Authentik) in front for real deployments. To expose over a
+trusted overlay network (tailscale/WireGuard/VPN) with no per-request auth, scope
+it with --web-insecure-cidr <range> instead of the blanket --web-insecure — access
+is then limited to source IPs in that range and the network is your boundary.
 
 A web session honors the usual session flags — the directory, model, and posture
 it runs with (per-session model is switchable in-app):

@@ -31,12 +31,20 @@ Flags:
 | `--web-token` | — | require `Authorization: Bearer <token>` (or `?token=` on the socket) |
 | `--web-auth-header` | — | trust this forward-auth header as the authenticated user (only from loopback / a trusted proxy — see [Auth](#auth)) |
 | `--web-trusted-proxy` | — | IP/CIDR(s) allowed to assert `--web-auth-header` (comma-separated; loopback is always allowed) |
-| `--web-insecure` | off | permit a non-loopback bind with **no** auth mode (dangerous) |
+| `--web-insecure` | off | permit a non-loopback bind with **no** auth mode (dangerous — open to any source) |
+| `--web-insecure-cidr` | — | grant **no**-auth access to these source IP/CIDR(s) only (comma-separated; loopback always allowed) — the scoped, safer form of `--web-insecure` for a trusted overlay network (see [Auth](#auth)) |
 | `--web-allow-restart` | off | enable Tier-1 self-restart (see [Self-restart](#self-restart)) |
 
 Standard flags apply too: `--cwd` pins the workspace, `--model` / `--provider`
 pick the default, `--yolo` runs without approval prompts, `--jail` / `--no-jail`
 set the sandbox default.
+
+> **Bind address.** `--web-addr 0.0.0.0:8730` binds all IPv4 interfaces — the
+> reliable form for reaching the panel over an IPv4 overlay (tailscale, most
+> LANs). A bare `--web-addr :8730` binds the IPv6 wildcard (`[::]`), which is
+> dual-stack on a typical host but will NOT accept IPv4 on a host configured
+> `net.inet6.ip6.v6only=1`; prefer `0.0.0.0:PORT` unless you specifically want
+> IPv6. Either way a non-loopback bind needs an auth mode or `--web-insecure-cidr`.
 
 ## Auth
 
@@ -79,10 +87,31 @@ address with no auth mode is refused unless you pass `--web-insecure`.
   only). For a hardened setup prefer forward-auth (no token in the URL) or a
   native client sending the `Authorization` header.
 
-**DNS-rebinding defense.** In no-auth mode (always a loopback bind) terva also
-requires the request's `Host` to be a loopback name, so a malicious web page
-can't rebind its own hostname to `127.0.0.1` and drive your local panel through
-your browser. Authenticated modes don't restrict `Host` (proxy hostnames vary).
+- **Trusted network, no per-request auth.** To expose the panel over a private
+  overlay (Tailscale/WireGuard/VPN) and let the *network* be the boundary — no
+  token, no proxy — scope no-auth access to the overlay's source range with
+  `--web-insecure-cidr` instead of the blanket `--web-insecure`:
+
+  ```bash
+  # reachable only from tailnet peers (100.64.0.0/10); everyone else gets 403
+  terva web --web-addr 0.0.0.0:8730 --web-insecure-cidr 100.64.0.0/10
+  ```
+
+  Requests are admitted only when the **source IP** is loopback or inside a named
+  range; the `Host` check is relaxed for those peers so reaching the panel by its
+  real overlay IP/name works, and [self-restart](#self-restart) is permitted
+  (the range bounds who can trigger it). This is strictly narrower than
+  `--web-insecure`, which admits *any* source. There is still **no per-user auth
+  inside the range** — anyone who can source-spoof into it, or any device on the
+  overlay, has full owner access — so use it only where you trust the network;
+  layer a token or forward-auth on top for anything shared.
+
+**DNS-rebinding defense.** In no-auth mode terva also requires the request's
+`Host` to be a loopback name, so a malicious web page can't rebind its own
+hostname to `127.0.0.1` and drive your local panel through your browser.
+Authenticated modes don't restrict `Host` (proxy hostnames vary); a
+`--web-insecure-cidr` peer inside the range is likewise unrestricted (a loopback
+*source* still gets the check, so your local browser stays protected).
 
 > **The auth gate is the whole application-layer boundary.** Once reachable, this
 > endpoint can run `bash` as you. Prefer Tailscale/WireGuard + forward-auth over
@@ -117,9 +146,11 @@ image is replaced in place. Because install is atomic (`go install` /
 `just install-dev` rename over the same path), the next restart runs the new
 code.
 
-It is **off by default** and refused outright on an insecure listener — if you
-pass `--web-insecure` with no `--web-token` / `--web-auth-header`, restart stays
-disabled (a stranger must never be able to re-exec the daemon). It is unix-only
+It is **off by default** and refused outright on a *blanket* insecure listener —
+if you pass `--web-insecure` (open to any source) with no `--web-token` /
+`--web-auth-header`, restart stays disabled (a stranger must never be able to
+re-exec the daemon). A `--web-insecure-cidr` listener bounds who can reach it to
+a trusted source range, so restart **is** permitted there. It is unix-only
 (`exec(2)`); running from a `go run` temp binary is rejected with a clear error.
 
 Two ways to trigger it, both funneling through the same path:

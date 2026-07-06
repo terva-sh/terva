@@ -35,11 +35,15 @@ func runWebMode(ctx context.Context, args Args, version string) error {
 	fmt.Fprintf(os.Stderr, "terva web: approval mode %q (tool calls that need approval prompt in the browser)\n", resolveApprovalMode(args, cfg))
 
 	// Self-restart is opt-in and must never ride on an unauthenticated,
-	// non-loopback listener — the one place a stranger could re-exec the daemon.
-	// --web-insecure with no auth mode is exactly that, so refuse there.
+	// non-loopback listener open to ANY peer — the one place a stranger could
+	// re-exec the daemon. The blanket --web-insecure with no auth is exactly that,
+	// so refuse there. A scoped --web-insecure-cidr listener is bounded to a
+	// trusted source range (the operator's overlay network), so restart is allowed
+	// alongside it.
 	allowRestart := args.WebAllowRestart
-	if allowRestart && args.WebInsecure && args.WebToken == "" && args.WebAuthHeader == "" {
-		fmt.Fprintln(os.Stderr, "terva web: refusing self-restart on an insecure (no-auth) listener — add --web-token or --web-auth-header")
+	unscopedInsecure := args.WebInsecure && len(args.WebInsecureCIDRs) == 0
+	if allowRestart && unscopedInsecure && args.WebToken == "" && args.WebAuthHeader == "" {
+		fmt.Fprintln(os.Stderr, "terva web: refusing self-restart on an insecure (no-auth) listener — add --web-token, --web-auth-header, or scope it with --web-insecure-cidr")
 		allowRestart = false
 	}
 	if allowRestart {
@@ -56,6 +60,10 @@ func runWebMode(ctx context.Context, args Args, version string) error {
 	if err != nil {
 		return err
 	}
+	insecureCIDRs, err := web.ParseTrustedProxies(args.WebInsecureCIDRs)
+	if err != nil {
+		return fmt.Errorf("--web-insecure-cidr: %w", err)
+	}
 
 	return web.Serve(ctx, ws, web.Options{
 		Addr:           args.WebAddr,
@@ -63,6 +71,7 @@ func runWebMode(ctx context.Context, args Args, version string) error {
 		TrustedProxies: trustedProxies,
 		Token:          args.WebToken,
 		AllowInsecure:  args.WebInsecure,
+		InsecureCIDRs:  insecureCIDRs,
 		Version:        version,
 		Locale:         i18n.ActiveLang(),
 		AllowRestart:   allowRestart,

@@ -112,6 +112,49 @@ func TestAuthTokenGate(t *testing.T) {
 	}
 }
 
+func TestAuthTokenCookieBootstrap(t *testing.T) {
+	srv := httptest.NewServer(newMux(context.Background(), newFakeWS(), Options{Token: "secret"}))
+	defer srv.Close()
+
+	// A browser presents the token in the URL once; the response hands back a
+	// cookie so the asset subresources it then fetches (no header, no query)
+	// authenticate — otherwise index.html loads but every /assets/* 401s.
+	req, _ := http.NewRequest("GET", srv.URL+"/?token=secret", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("token in query: status %d, want 200", resp.StatusCode)
+	}
+	var cookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "terva_token" {
+			cookie = c
+		}
+	}
+	if cookie == nil || cookie.Value != "secret" {
+		t.Fatalf("expected a terva_token cookie carrying the token, got %v", resp.Cookies())
+	}
+	if !cookie.HttpOnly {
+		t.Error("token cookie must be HttpOnly")
+	}
+
+	// A follow-up carrying only that cookie — no header, no query, as a
+	// fingerprinted asset fetch would — authenticates.
+	req2, _ := http.NewRequest("GET", srv.URL+"/", nil)
+	req2.AddCookie(cookie)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("cookie-only request: status %d, want 200", resp2.StatusCode)
+	}
+}
+
 func TestStaticServed(t *testing.T) {
 	srv := httptest.NewServer(newMux(context.Background(), newFakeWS(), Options{}))
 	defer srv.Close()
@@ -154,6 +197,7 @@ func TestCheckBindSafety(t *testing.T) {
 		{"public header only", Options{Addr: "0.0.0.0:8730", AuthHeader: "X-User"}, false},
 		{"public header + trusted proxy", Options{Addr: "0.0.0.0:8730", AuthHeader: "X-User", TrustedProxies: trusted}, true},
 		{"public insecure override", Options{Addr: "0.0.0.0:8730", AllowInsecure: true}, true},
+		{"public insecure-cidr scoped", Options{Addr: "0.0.0.0:8730", InsecureCIDRs: trusted}, true},
 	}
 	for _, c := range cases {
 		err := checkBindSafety(c.opts)
@@ -214,6 +258,55 @@ func TestHostAllowedRebind(t *testing.T) {
 	}
 	if !hostAllowed(Options{Token: "x"}, mk("panel.example.com")) {
 		t.Error("an auth mode should not restrict the Host (proxy hostnames vary)")
+	}
+}
+
+// TestInsecureCIDR covers --web-insecure-cidr: no-auth access scoped to a source
+// range (e.g. a tailnet), with the Host check relaxed for in-range peers but the
+// loopback-source rebind defense preserved. Also checks blanket --web-insecure.
+func TestInsecureCIDR(t *testing.T) {
+	cidrs, err := ParseTrustedProxies([]string{"100.64.0.0/10"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoped := Options{InsecureCIDRs: cidrs}
+	req := func(remote, host string) *http.Request {
+		r := httptest.NewRequest("GET", "/ws", nil)
+		r.RemoteAddr = remote
+		r.Host = host
+		return r
+	}
+
+	// authorized: no-auth, but only loopback + the named CIDR.
+	if !authorized(scoped, req("100.71.8.29:5555", "100.91.97.14:8730")) {
+		t.Error("in-CIDR source should be authorized (no-auth scoped)")
+	}
+	if !authorized(scoped, req("127.0.0.1:5555", "127.0.0.1:8730")) {
+		t.Error("loopback source should be authorized on a scoped listener")
+	}
+	if authorized(scoped, req("192.168.1.5:5555", "192.168.1.5:8730")) {
+		t.Error("out-of-CIDR source must be rejected even though bound public")
+	}
+
+	// hostAllowed: an in-CIDR peer may use the listener's real Host (the point);
+	// a loopback source still gets the loopback-Host rebind check.
+	if !hostAllowed(scoped, req("100.71.8.29:5555", "100.91.97.14:8730")) {
+		t.Error("in-CIDR peer must be allowed to use the listener's real Host")
+	}
+	if hostAllowed(scoped, req("127.0.0.1:5555", "attacker.example:8730")) {
+		t.Error("loopback source must still be Host-checked on a scoped listener (rebind)")
+	}
+	if !hostAllowed(scoped, req("127.0.0.1:5555", "127.0.0.1:8730")) {
+		t.Error("loopback source with a loopback Host must be allowed")
+	}
+
+	// Blanket --web-insecure: any source authorized, Host unrestricted.
+	blanket := Options{AllowInsecure: true}
+	if !authorized(blanket, req("203.0.113.7:5555", "example.com:8730")) {
+		t.Error("blanket insecure authorizes any source")
+	}
+	if !hostAllowed(blanket, req("203.0.113.7:5555", "example.com:8730")) {
+		t.Error("blanket insecure must not restrict the Host")
 	}
 }
 
