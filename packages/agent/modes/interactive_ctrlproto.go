@@ -15,10 +15,10 @@ import (
 	"terva.sh/terva/packages/tui"
 )
 
-// This file is the TUI's ctrlproto carrier path (--tui-ctrlproto;
-// docs/proposals/tui-on-ctrlproto.md). Where the legacy path drives a
-// *core.Agent directly and consumes typed core.AgentEvent through a synchronous
-// sink, this path drives the in-process ctrlproto WorkspaceService and consumes
+// This file is the TUI's ctrlproto carrier path — the default
+// (docs/proposals/tui-on-ctrlproto.md). Where the legacy path (--tui-legacy)
+// drives a *core.Agent directly and consumes typed core.AgentEvent through a
+// synchronous sink, this path drives the in-process ctrlproto WorkspaceService and consumes
 // the wire event stream (core.WireEvent + control events) off a reliable
 // subscription. handleWireEvent is the wire twin of handleEvent: it makes the
 // same rendering-state mutations, keyed on the string WireEvent.Type instead of
@@ -55,6 +55,14 @@ func (i *Interactive) runCarrierLoop(ctx context.Context) {
 		i.carrierPumpCancel = cancel
 		sess := i.cfg.CarrierSession
 		i.mu.Unlock()
+		if sess == "" {
+			// Credential-less boot: no session to subscribe to yet. Idle
+			// until the post-login switch commits a binding and kicks the
+			// pump (finishCarrierLogin → SwitchCarrierSession).
+			<-subCtx.Done()
+			cancel()
+			continue
+		}
 		ch, err := i.cfg.Carrier.SubscribeReliable(subCtx, sess)
 		if err != nil {
 			cancel()
@@ -627,8 +635,9 @@ func (i *Interactive) carrierPermissionsReset() {
 // carrierListExtensions fetches the extensions surface and inverts the wire
 // rollup back into the dialog's ExtInfo shape. Running/gated derive from
 // Status (the rollup is exact: running wins, so status "running" ⇔ Running);
-// the log/config affordances are off — the wire carries neither a log path
-// nor a config schema yet.
+// the log/config affordance flags ride the wire, and their dialogs work when
+// the host wired the closures (the in-process entry does — logs and the form
+// are local reads; applying a saved config rides the surface's config action).
 func (i *Interactive) carrierListExtensions() []ExtInfo {
 	sf, err := i.cfg.Carrier.Surface(context.Background(), i.carrierSession(), "extensions")
 	if err != nil || sf.Extensions == nil {
@@ -651,6 +660,8 @@ func (i *Interactive) carrierListExtensions() []ExtInfo {
 			Tools:              e.Tools,
 			Commands:           e.Commands,
 			LastLog:            e.Note,
+			HasConfig:          e.HasConfig,
+			HasLog:             e.HasLog,
 		})
 	}
 	return out

@@ -209,7 +209,7 @@ func (w *Workspace) refreshAllPolicies() {
 		// A nil policy (yolo + no rules) means "no rules" — clear them, or a
 		// just-removed rule would linger on the gate.
 		var rules []core.PermissionRule
-		if pol, _ := buildPermissionPolicy(s.args); pol != nil {
+		if pol, _ := buildPermissionPolicy(s.argsSnapshot()); pol != nil {
 			rules = pol.Rules
 		}
 		s.gate.SetRules(rules)

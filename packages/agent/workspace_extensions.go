@@ -33,6 +33,8 @@ func (s *wsSession) extensionsView() *ctrlproto.ExtensionsView {
 			GlobalEnabled:      e.GlobalEnabled,
 			ProjectDisabled:    e.ProjectDisabled,
 			UserConfigDisabled: e.UserConfigDisabled,
+			HasConfig:          e.HasConfig,
+			HasLog:             e.HasLog,
 		})
 	}
 	return v
@@ -68,6 +70,14 @@ func (s *wsSession) extensionsAction(action string, args map[string]string) erro
 		// Reads the fresh disable union, then ApplyOne (start/stop) → onReload
 		// rebuilds the model-facing tool set. Synchronous.
 		applyExtensionChangeLive(s.extMgr, s.cwd, s.trusted.Load(), name)
+		s.broadcast(ctrlproto.SurfaceUpdatedEvent("extensions"))
+		return nil
+	case "config":
+		// Push an already-persisted config change to the running extension
+		// (config_update) and restart/rebuild as needed — the live half of the
+		// config form (the host persists the values; see setExtensionConfig-
+		// FromForm). Same pattern as toggle: persist first, then apply live.
+		applyExtensionConfigLive(s.extMgr, s.cwd, name)
 		s.broadcast(ctrlproto.SurfaceUpdatedEvent("extensions"))
 		return nil
 	default:

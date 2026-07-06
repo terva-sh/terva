@@ -5,6 +5,7 @@ package modes
 
 import (
 	"context"
+	"strconv"
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
@@ -60,7 +61,13 @@ func (i *Interactive) openSettingsDialog() {
 	if i.cfg.AutoSwarmEnabled != nil {
 		autoSwarm = *i.cfg.AutoSwarmEnabled
 	}
+	// On the carrier the swarm supervisor lives daemon-side, so the local
+	// Swarm handle is nil by design — the tasks-surface gate (CarrierTasks,
+	// same withholding as legacy cfg.Swarm) decides availability instead.
 	autoSwarmDisabled := i.cfg.Swarm == nil
+	if i.cfg.Carrier != nil {
+		autoSwarmDisabled = !i.cfg.CarrierTasks
+	}
 	autoSwarmHint := ""
 	if autoSwarmDisabled {
 		autoSwarm = false
@@ -362,8 +369,9 @@ func (i *Interactive) applyApprovalModeSetting(value string) {
 		return
 	}
 	// ctrlproto mode: the settings surface flips the daemon-side gate live
-	// (per-session, not persisted — same posture semantics). The plan-mode
-	// tool withholding is a known daemon gap shared with the web client.
+	// (per-session, not persisted — same posture semantics) and rebuilds the
+	// session's tool set in the new mode, so plan withholds mutating tools
+	// from the model's view exactly like the legacy callback below.
 	if c := i.cfg.Carrier; c != nil {
 		if aerr := c.SurfaceAction(context.Background(), i.carrierSession(), "settings", "set",
 			map[string]string{"key": "approval", "value": value}); aerr != nil {
@@ -424,6 +432,23 @@ func (i *Interactive) applySettingToggle(key string, value bool) {
 	case "auto_swarm_enabled":
 		val := value
 		i.cfg.AutoSwarmEnabled = &val
+		// Carrier path: the daemon owns persistence AND the live apply (it
+		// rebuilds every session's tool set + system prompt); the local
+		// pointer above just keeps this dialog's checkbox current.
+		if c := i.cfg.Carrier; c != nil {
+			if err := c.SurfaceAction(context.Background(), i.carrierSession(), "settings", "set",
+				map[string]string{"key": "auto_swarm", "value": strconv.FormatBool(value)}); err != nil {
+				i.mu.Lock()
+				i.statusErr = i18n.T("settings: %s", err)
+				i.mu.Unlock()
+				return
+			}
+			i.mu.Lock()
+			i.statusOK = i18n.T("auto-swarm %s", onOff(value))
+			i.statusErr = ""
+			i.mu.Unlock()
+			return
+		}
 		if i.cfg.SettingsStore != nil {
 			if err := i.cfg.SettingsStore.SetAutoSwarm(value); err != nil {
 				i.mu.Lock()

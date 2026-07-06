@@ -76,7 +76,8 @@ func (s *wsSession) mcpAction(action string, args map[string]string) error {
 		// Serialize toggles (StartOne/StopOne want a single caller); the live
 		// apply rebuilds every session's tools since the manager is shared.
 		s.ws.mcpMu.Lock()
-		applyMCPChangeLive(s.ws.mcpAdapter, s.cwd, s.trusted.Load(), name, s.ws.rebuildAllSessions)
+		applyMCPChangeLive(s.ws.mcpAdapter, s.cwd, s.trusted.Load(), name,
+			func() { s.ws.rebuildAllSessions("mcp-toggle") })
 		s.ws.mcpMu.Unlock()
 		s.ws.broadcastAll(ctrlproto.SurfaceUpdatedEvent("mcp"))
 		return nil
@@ -85,10 +86,12 @@ func (s *wsSession) mcpAction(action string, args map[string]string) error {
 	}
 }
 
-// rebuildAllSessions refreshes every live session's model-facing tool set — used
-// after a live MCP toggle, since the MCP manager is workspace-global and one
-// toggle changes the shared server set for all sessions.
-func (w *Workspace) rebuildAllSessions() {
+// rebuildAllSessions refreshes every live session's model-facing view — used
+// after a live MCP toggle (the MCP manager is workspace-global, so one toggle
+// changes the shared server set for all sessions) and an auto-swarm toggle
+// (workspace-global config read at rebuild time). reason labels the
+// prompt_rebuilt notice each changed session broadcasts.
+func (w *Workspace) rebuildAllSessions(reason string) {
 	w.mu.Lock()
 	sess := make([]*wsSession, 0, len(w.sessions))
 	for _, s := range w.sessions {
@@ -96,6 +99,6 @@ func (w *Workspace) rebuildAllSessions() {
 	}
 	w.mu.Unlock()
 	for _, s := range sess {
-		s.rebuildTools()
+		s.rebuildTools(reason)
 	}
 }

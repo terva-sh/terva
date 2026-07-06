@@ -47,9 +47,15 @@ func (i *Interactive) applyExtConfig(act extConfigAction) {
 		i.setStatusOK(act.Name + " config saved")
 	}
 	// The extension may have just become runnable (a required value filled),
-	// so refresh the /extensions list underneath.
-	if i.extensionsDialog != nil && i.extensionsDialog.Active() && i.cfg.ListExtensions != nil {
-		i.extensionsDialog.SetItems(i.cfg.ListExtensions())
+	// so refresh the /extensions list underneath — from the surface on the
+	// carrier path (same source the toggle refresh uses), locally otherwise.
+	if i.extensionsDialog != nil && i.extensionsDialog.Active() {
+		switch {
+		case i.cfg.Carrier != nil:
+			i.extensionsDialog.SetItems(i.carrierListExtensions())
+		case i.cfg.ListExtensions != nil:
+			i.extensionsDialog.SetItems(i.cfg.ListExtensions())
+		}
 	}
 	i.invalidate()
 }

@@ -411,6 +411,13 @@ type ExtensionInfo struct {
 	GlobalEnabled      bool `json:"global_enabled,omitempty"`
 	ProjectDisabled    bool `json:"project_disabled,omitempty"`
 	UserConfigDisabled bool `json:"user_config_disabled,omitempty"`
+	// Affordance flags for the config form and log viewer: the manifest
+	// declares a config schema / a log file exists. The verbs themselves are
+	// host-side (the in-process TUI reads logs and builds the form locally;
+	// applying a saved config live is the extensions surface's "config"
+	// action), but a client needs these to know when to offer the keys.
+	HasConfig bool `json:"has_config,omitempty"`
+	HasLog    bool `json:"has_log,omitempty"`
 }
 
 // CommandsView is the extension-command pane: every slash command an extension

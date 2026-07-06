@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -154,7 +155,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 
 	// Rebuild the agent's model-facing tool set whenever extensions reload (a
 	// live enable/disable) — and also, via rebuildTools, after a live MCP toggle.
-	extMgr.SetOnReload(s.rebuildTools)
+	extMgr.SetOnReload(func() { s.rebuildTools("extension-reload") })
 	s.subscription = r.AuthMethod == "oauth"
 	if s.provider == "" {
 		s.provider = r.Provider
@@ -322,6 +323,14 @@ func (s *wsSession) prompt(text string, images []ctrlproto.Image) error {
 			s.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "done"}))
 		}
 		next, restart := s.endTurn(turnCtx, err)
+		// Snapshot-on-done: the transcript now contains the sealed final step,
+		// so re-broadcast the authoritative snapshot the way compact/clear do.
+		// This converges any subscriber that attached mid-step — its initial
+		// snapshot predates the step's seal (agent.Messages() lags the
+		// per-tool result events), and the hub cannot replay events from
+		// before it existed. Cost: one full-transcript frame per turn end to
+		// every subscriber (image bytes ride by reference in-process).
+		s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 		// After the turn, settle an untitled session's title and push it live, so
 		// the header/list stop reading "new chat" without a page refresh. Uses the
 		// workspace context (not the turn's) so it survives turn teardown.
@@ -366,22 +375,81 @@ func (s *wsSession) endTurn(turnCtx context.Context, err error) (next string, re
 	return next, restart
 }
 
+// argsSnapshot copies the session's resolved args under s.mu. Args is
+// immutable after buildSession EXCEPT Approval (a live settings switch), so
+// every Resolve-time reader must snapshot instead of touching s.args bare.
+func (s *wsSession) argsSnapshot() Args {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.args
+}
+
 // rebuildTools re-resolves and swaps the agent's model-facing tool set: a fresh
 // base registry + live extension tools + the workspace MCP tools + web built-ins.
-// Fired on an extension reload (SetOnReload) and after a live MCP toggle — a
-// fresh Resolve carries neither ext nor MCP tools, so both are re-merged or a
-// reload would silently drop them from the model.
-func (s *wsSession) rebuildTools() {
-	rr, err := Resolve(s.args, true)
+// Fired on an extension reload (SetOnReload), after a live MCP toggle, and on a
+// live approval-mode switch — a fresh Resolve carries neither ext nor MCP
+// tools, so both are re-merged or a reload would silently drop them from the
+// model; the approval mode rides args.Approval into buildToolRegistry and the
+// merges, so plan mode withholds mutating tools from the rebuilt view.
+//
+// reason labels the trigger for the prompt_rebuilt notice (one of the values
+// documented on ctrlproto.NoticePromptRebuilt); the notice is broadcast only
+// when the pinned prefix actually changed — an identical re-install (the
+// common case for e.g. a trust flip that added nothing) stays silent, since
+// a byte-identical prefix breaks no cache.
+func (s *wsSession) rebuildTools(reason string) {
+	if s.agent == nil {
+		return
+	}
+	args := s.argsSnapshot()
+	rr, err := Resolve(args, true)
 	if err != nil {
 		return
 	}
-	rr.MergeExtensionTools(&extToolAdapter{mgr: s.extMgr})
+	// extMgr is always non-nil for a buildSession session; the guard keeps
+	// the settings verbs (approval / auto-swarm) safe on bare fixtures, same
+	// stance as the nil-tolerant apply helpers.
+	if s.extMgr != nil {
+		rr.MergeExtensionTools(&extToolAdapter{mgr: s.extMgr})
+	}
 	if s.ws.mcpAdapter != nil {
 		rr.MergeExtensionTools(s.ws.mcpAdapter)
 	}
-	s.ws.injectExtraTools(&rr, s.args)
-	s.agent.SetTools(rr.ToolRegistry)
+	s.ws.injectExtraTools(&rr, args)
+	toolsChanged := s.agent.SetTools(rr.ToolRegistry)
+	// The system prompt carries view state too — the prompt's tool list, the
+	// auto-swarm nudge, an extension's static context — so install the
+	// freshly-resolved render alongside the tools (same fidelity as
+	// buildSession: both run the identical Resolve+merge pipeline). Pinned
+	// per-turn like the tools, so it lands on the next turn.
+	systemChanged := s.agent.SetSystem(rr.SystemPrompt)
+	if toolsChanged || systemChanged {
+		s.notifyPromptRebuilt(toolsChanged, systemChanged, reason)
+	}
+}
+
+// notifyPromptRebuilt broadcasts the kinded notice that this session's pinned
+// prompt prefix changed: the provider's prompt cache is invalidated, so the
+// next turn re-reads the transcript uncached. Purely informational — the
+// rebuild has already been applied (and lands at the next turn anyway, per
+// the run loop's per-turn pin), so nothing blocks; a kind-aware client can
+// filter or badge it, a plain one shows the text.
+func (s *wsSession) notifyPromptRebuilt(toolsChanged, systemChanged bool, reason string) {
+	scope := "both"
+	switch {
+	case toolsChanged && !systemChanged:
+		scope = "tools"
+	case systemChanged && !toolsChanged:
+		scope = "system"
+	}
+	data := map[string]string{"scope": scope, "reason": reason}
+	text := i18n.T("prompt rebuilt (%s) — the next turn starts uncached", reason)
+	u := s.agent.LastTurnUsage()
+	if tokens := u.InputTokens + u.CacheReadTokens + u.CacheWriteTokens; tokens > 0 {
+		data["context_tokens"] = strconv.Itoa(tokens)
+		text = i18n.T("prompt rebuilt (%s) — the next turn re-reads ~%d context tokens uncached", reason, tokens)
+	}
+	s.broadcast(ctrlproto.KindedNoticeEvent("info", ctrlproto.NoticePromptRebuilt, text, data))
 }
 
 // compact runs user-driven compaction: summarize + replace the transcript, then
@@ -446,7 +514,7 @@ func (s *wsSession) setTrusted(ctx context.Context, trusted bool) {
 		s.extMgr.SetProjectTrusted(trusted)
 		s.extMgr.Reload(ctx, webReloadGrace) // fires rebuildTools via SetOnReload
 	} else {
-		s.rebuildTools()
+		s.rebuildTools("trust")
 	}
 	s.reloadLore()
 	s.broadcast(ctrlproto.SessionUpdatedEvent(s.info()))

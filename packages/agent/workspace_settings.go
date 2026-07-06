@@ -158,6 +158,16 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		if s.gate != nil {
 			s.gate.SetMode(mode) // per-session, live; not persisted
 		}
+		// The gate blocks mutating calls, but the mode must also reshape the
+		// model's tool VIEW — plan withholds mutating built-ins and non-read-
+		// only extension/MCP tools (legacy parity: cli.go setApprovalMode
+		// rebuilds the registry). Record the mode on the session's args so
+		// this rebuild — and every later one (ext reload, MCP toggle, trust
+		// flip) — resolves in it, then swap the tool set live.
+		s.mu.Lock()
+		s.args.Approval = val
+		s.mu.Unlock()
+		s.rebuildTools("approval-mode")
 	case "reasoning":
 		if err := MutateConfig(func(c *Config) { c.Reasoning = val }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
@@ -169,19 +179,24 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
 	case "auto_swarm":
-		// Tool availability (Toggle 1). Persisted only — applies at the next
-		// session's construction, not live (the tool set + prompt are baked at
-		// NewAgent; see docs/proposals/web-i18n-authoring.md sibling discussion).
+		// Tool availability (Toggle 1). Persist, then re-derive every live
+		// session's view: rebuildTools re-runs injectExtraTools (which reads
+		// the fresh AutoSwarmEnabled — the tool half) and re-resolves the
+		// system prompt (the nudge half), so the model's tools[] and prompt
+		// reflect the toggle on each session's next turn.
 		on := val == "true"
 		if err := MutateConfig(func(c *Config) { c.AutoSwarmEnabled = &on }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
+		s.ws.applyAutoSwarm()
 	case "auto_swarm_nudge":
-		// Proactive-delegation nudge (Toggle 2). Persisted only, new sessions.
+		// Proactive-delegation nudge (Toggle 2). Same live re-derivation: the
+		// nudge addendum is composed at Resolve time, so a rebuild applies it.
 		on := val == "true"
 		if err := MutateConfig(func(c *Config) { c.AutoSwarmNudge = &on }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
+		s.ws.applyAutoSwarm()
 	case "language":
 		// Switch the daemon's active UI language live: swap the process-global
 		// i18n, persist as the default, and tell every tab to re-fetch its string
@@ -205,6 +220,13 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 	// every client to re-fetch so config changes converge across sessions.
 	s.ws.broadcastAll(ctrlproto.SurfaceUpdatedEvent("settings"))
 	return nil
+}
+
+// applyAutoSwarm rebuilds every live session's model-facing view (tool set +
+// system prompt) after an auto-swarm toggle — both halves read the persisted
+// config fresh inside rebuildTools' Resolve/inject pipeline.
+func (w *Workspace) applyAutoSwarm() {
+	w.rebuildAllSessions("auto-swarm")
 }
 
 // applyReasoning sets the reasoning level live on every session's agent (a

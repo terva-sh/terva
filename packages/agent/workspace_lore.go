@@ -102,8 +102,9 @@ func (s *wsSession) loreAction(action string, args map[string]string) error {
 // next turn (live). CONSTANT lore is baked into the system prompt at build, so it
 // stays new-session — deliberately, to keep the provider's prompt cache warm.
 func (s *wsSession) reloadLore() {
+	args := s.argsSnapshot()
 	var entries []lore.Entry
-	if !s.args.NoLore {
+	if !args.NoLore {
 		if cfg, _ := LoadConfig(); cfg.Lore == nil || *cfg.Lore {
 			entries, _, _ = lore.Discover(TervaHome(), s.cwd, s.trusted.Load())
 		}
@@ -118,7 +119,7 @@ func (s *wsSession) reloadLore() {
 	// lore too (not the stale pre-edit set). Best-effort — skipped if Resolve
 	// fails (e.g. no credential in a test).
 	if s.agent != nil {
-		if rr, err := Resolve(s.args, true); err == nil {
+		if rr, err := Resolve(args, true); err == nil {
 			s.agent.SetContextProvider(rr.perTurnContext(s.agent))
 			s.agent.SetContextProviderPeek(rr.perTurnContextPeek(s.agent))
 		}

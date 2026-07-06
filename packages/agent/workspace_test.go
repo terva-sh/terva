@@ -534,11 +534,22 @@ func (c *gatedTurnClient) Stream(ctx context.Context, req provider.Request) (<-c
 // a live agent with the buildSession OnEvent fan-out, inside a workspace shell
 // with a background context. Title pre-set so settleTitle short-circuits (no
 // session file to rename).
-func newTurnTestSession(cl provider.Client) *wsSession {
+func newTurnTestSession(t *testing.T, cl provider.Client) *wsSession {
+	t.Helper()
+	tmp := testsupport.TempDir(t)
+	// A real session file backs the harness: production sessions always have
+	// one, and the turn path's snapshot-on-done re-broadcast reads its
+	// path/meta through info().
+	sess, err := core.NewSession(tmp, tmp, "p", "fake-model", "test")
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	t.Cleanup(func() { sess.Close() })
 	s := &wsSession{
 		id:    "turns",
 		ws:    &Workspace{ctx: context.Background(), diag: func(string) {}},
 		hub:   newWSHub(),
+		sess:  sess,
 		agent: core.NewAgent(cl, "fake-model", "", core.Registry{}),
 		title: "titled",
 	}
@@ -546,6 +557,104 @@ func newTurnTestSession(cl provider.Client) *wsSession {
 		s.broadcast(ctrlproto.ConversationEvent(core.EventToWire(ev)))
 	}
 	return s
+}
+
+// TestWorkspaceSnapshotRebroadcastOnTurnEnd: a subscriber that attaches
+// mid-turn gets a snapshot that predates the turn's seal (agent.Messages()
+// lags the live per-tool events, and the hub cannot replay events from before
+// the subscriber existed), so the daemon must re-broadcast the authoritative
+// snapshot at turn end — the compact/clear resync mechanism extended to done.
+func TestWorkspaceSnapshotRebroadcastOnTurnEnd(t *testing.T) {
+	cl := &gatedTurnClient{started: make(chan struct{}, 1), release: make(chan struct{})}
+	s := newTurnTestSession(t, cl)
+
+	if err := s.prompt("hi", nil); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	<-cl.started
+	// Attach mid-turn the way s.subscribe does: snapshot enqueued first.
+	sub := s.hub.add(func() ctrlproto.Event { return ctrlproto.SnapshotEvent(s.snapshot()) }, true)
+	first := recvEvent(t, sub)
+	if first.Type != ctrlproto.EventSnapshot || first.Snapshot == nil {
+		t.Fatalf("want initial snapshot first, got %q", first.Type)
+	}
+	if got := len(first.Snapshot.Messages); got != 1 {
+		t.Fatalf("mid-turn snapshot should hold just the user message, got %d", got)
+	}
+	close(cl.release)
+	drainUntil(t, sub, "done")
+	resync, _ := drainUntil(t, sub, ctrlproto.EventSnapshot)
+	if resync.Snapshot == nil || len(resync.Snapshot.Messages) != 2 {
+		t.Fatalf("turn-end snapshot should carry the sealed transcript, got %+v", resync.Snapshot)
+	}
+	if txt := wireMessageText(&resync.Snapshot.Messages[1]); txt != "ok" {
+		t.Fatalf("sealed assistant message = %q, want %q", txt, "ok")
+	}
+}
+
+// TestWorkspaceSetApprovalPlanWithholdsTools: the daemon settings surface's
+// approval switch must reshape the model's tool VIEW, not just the confirm
+// gate — plan mode withholds mutating built-ins from the live agent, and
+// switching back restores them (parity with the legacy /permissions switch,
+// cli.go setApprovalMode). The web client rides the same verb.
+func TestWorkspaceSetApprovalPlanWithholdsTools(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	args := Args{Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t), NoExt: true, NoMCP: true}
+	r, err := Resolve(args, true)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
+	s := &wsSession{id: "approval", ws: w, hub: newWSHub(), args: args}
+	w.sessions[s.id] = s // settingsAction's surface refresh rides broadcastAll
+	extMgr, stopExt := setupWebExtensions(w.ctx, args, &r, "test", s)
+	s.extMgr = extMgr
+	defer stopExt()
+	s.agent = core.NewAgent(&gatedTurnClient{}, r.Model, r.SystemPrompt, r.ToolRegistry)
+
+	if _, ok := s.agent.LookupTool("write"); !ok {
+		t.Fatal("baseline registry should include the write tool")
+	}
+	sub := s.hub.add(nil, true)
+	if err := s.settingsAction("set", map[string]string{"key": "approval", "value": "plan"}); err != nil {
+		t.Fatalf("set approval plan: %v", err)
+	}
+	if _, ok := s.agent.LookupTool("write"); ok {
+		t.Error("plan mode must withhold the write tool from the model's view")
+	}
+	if _, ok := s.agent.LookupTool("read"); !ok {
+		t.Error("plan mode must keep read-only tools")
+	}
+	// The cache-breaking rebuild announces itself: a kinded notice with the
+	// trigger and scope, before the settings surface refresh.
+	ev, _ := drainUntil(t, sub, ctrlproto.EventNotice)
+	if ev.Notice == nil || ev.Notice.Kind != ctrlproto.NoticePromptRebuilt {
+		t.Fatalf("want a %s notice, got %+v", ctrlproto.NoticePromptRebuilt, ev.Notice)
+	}
+	if ev.Notice.Data["reason"] != "approval-mode" || ev.Notice.Data["scope"] == "" {
+		t.Errorf("notice data = %+v; want reason approval-mode with a scope", ev.Notice.Data)
+	}
+	drainUntil(t, sub, ctrlproto.EventSurfaceUpdated)
+
+	// Re-applying the same mode rebuilds an identical view — no cache break,
+	// so no notice: only the surface refresh goes out.
+	if err := s.settingsAction("set", map[string]string{"key": "approval", "value": "plan"}); err != nil {
+		t.Fatalf("re-set approval plan: %v", err)
+	}
+	_, seen := drainUntil(t, sub, ctrlproto.EventSurfaceUpdated)
+	for _, e := range seen {
+		if e.Type == ctrlproto.EventNotice {
+			t.Errorf("identical rebuild must not emit a notice, got %+v", e.Notice)
+		}
+	}
+
+	if err := s.settingsAction("set", map[string]string{"key": "approval", "value": "workspace"}); err != nil {
+		t.Fatalf("set approval workspace: %v", err)
+	}
+	if _, ok := s.agent.LookupTool("write"); !ok {
+		t.Error("leaving plan mode must restore mutating tools")
+	}
 }
 
 // drainUntil consumes events until one of the wanted types arrives, returning
@@ -568,7 +677,7 @@ func drainUntil(t *testing.T, ch <-chan ctrlproto.Event, want ...string) (ctrlpr
 // busy-clearing signal) — or every stream consumer's busy state sticks.
 func TestWorkspaceTurnErrorEmitsErrorThenDone(t *testing.T) {
 	cl := &gatedTurnClient{started: make(chan struct{}, 1), release: make(chan struct{}), fail: true}
-	s := newTurnTestSession(cl)
+	s := newTurnTestSession(t, cl)
 	sub := s.hub.add(nil, true)
 
 	if err := s.prompt("hi", nil); err != nil {
@@ -610,7 +719,7 @@ func TestWorkspaceTurnErrorEmitsErrorThenDone(t *testing.T) {
 // daemon-side mirror of the TUI turn engine's release semantics.
 func TestWorkspaceQueueRestartsAfterTurn(t *testing.T) {
 	cl := &gatedTurnClient{started: make(chan struct{}, 2), release: make(chan struct{}, 2)}
-	s := newTurnTestSession(cl)
+	s := newTurnTestSession(t, cl)
 	sub := s.hub.add(nil, true)
 
 	cl.release <- struct{}{}
@@ -639,7 +748,7 @@ func TestWorkspaceQueueRestartsAfterTurn(t *testing.T) {
 // instead of stranding until the next user prompt.
 func TestWorkspaceQueueWhileIdlePrompts(t *testing.T) {
 	cl := &gatedTurnClient{started: make(chan struct{}, 1), release: make(chan struct{}, 1)}
-	s := newTurnTestSession(cl)
+	s := newTurnTestSession(t, cl)
 	sub := s.hub.add(nil, true)
 
 	cl.release <- struct{}{}
@@ -1245,6 +1354,72 @@ func TestExtensionsToggleAction(t *testing.T) {
 	}
 }
 
+// TestWorkspaceAutoSwarmToggleAppliesLive: the daemon settings surface's
+// auto_swarm toggle must persist AND re-derive every live session's view —
+// swarm_spawn joins/leaves the model's tools and the proactive-delegation
+// nudge joins/leaves the system prompt on the toggle, not at the next
+// session's construction. Both the carrier TUI and the web client ride this.
+func TestWorkspaceAutoSwarmToggleAppliesLive(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	args := Args{Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t), NoExt: true, NoMCP: true}
+	r, err := Resolve(args, true)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
+	s := &wsSession{id: "swarm", ws: w, hub: newWSHub(), args: args}
+	s.agent = core.NewAgent(&gatedTurnClient{}, r.Model, r.SystemPrompt, r.ToolRegistry)
+	w.sessions[s.id] = s
+
+	if _, ok := s.agent.LookupTool("swarm_spawn"); ok {
+		t.Fatal("swarm_spawn should be absent while auto-swarm is off")
+	}
+	sub := s.hub.add(nil, true)
+	if err := s.settingsAction("set", map[string]string{"key": "auto_swarm", "value": "true"}); err != nil {
+		t.Fatalf("enable auto_swarm: %v", err)
+	}
+	if _, ok := s.agent.LookupTool("swarm_spawn"); !ok {
+		t.Error("enabling auto-swarm must add swarm_spawn to the live tool set")
+	}
+	// The rebuild breaks the prompt cache and says so.
+	if ev, _ := drainUntil(t, sub, ctrlproto.EventNotice); ev.Notice == nil ||
+		ev.Notice.Kind != ctrlproto.NoticePromptRebuilt || ev.Notice.Data["reason"] != "auto-swarm" {
+		t.Errorf("want a prompt_rebuilt notice with reason auto-swarm, got %+v", ev.Notice)
+	}
+	if !strings.Contains(s.agent.System, "swarm_spawn") {
+		t.Error("enabling auto-swarm must add the nudge to the live system prompt")
+	}
+	if err := s.settingsAction("set", map[string]string{"key": "auto_swarm", "value": "false"}); err != nil {
+		t.Fatalf("disable auto_swarm: %v", err)
+	}
+	if _, ok := s.agent.LookupTool("swarm_spawn"); ok {
+		t.Error("disabling auto-swarm must remove swarm_spawn from the live tool set")
+	}
+	if strings.Contains(s.agent.System, "swarm_spawn") {
+		t.Error("disabling auto-swarm must drop the nudge from the live system prompt")
+	}
+}
+
+// TestExtensionsConfigAction: the extensions surface's "config" action is the
+// daemon half of the config form (push the just-saved values to the running
+// extension); it must be a valid verb that answers with a surface refresh.
+// The live push itself needs a real subprocess, so extMgr is nil here
+// (applyExtensionConfigLive no-ops), isolating the verb + broadcast.
+func TestExtensionsConfigAction(t *testing.T) {
+	s := &wsSession{id: "x", hub: newWSHub(), cwd: testsupport.TempDir(t)}
+	sub := s.hub.add(nil, false)
+	if err := s.extensionsAction("config", map[string]string{}); err == nil {
+		t.Error("missing name should error")
+	}
+	if err := s.extensionsAction("config", map[string]string{"name": "foo"}); err != nil {
+		t.Fatalf("config action: %v", err)
+	}
+	if ev := recvEvent(t, sub); ev.Type != ctrlproto.EventSurfaceUpdated || ev.SurfaceID != "extensions" {
+		t.Errorf("want surface_updated(extensions), got %+v", ev)
+	}
+}
+
 // TestLoreView covers the lore inspector mapping: entries carry name/keys/
 // constant/source + full content (client truncates for display).
 func TestLoreView(t *testing.T) {
@@ -1685,6 +1860,9 @@ func TestTasksSurface(t *testing.T) {
 // approval mode, and a "set approval" action swaps it live (per-session, no
 // config write). Reasoning/auto_title write real config, so are not exercised.
 func TestSettingsSurface(t *testing.T) {
+	// Isolate the home: the approval/auto-swarm verbs now trigger a live
+	// rebuild whose Resolve must not read (or repair) the real user config.
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	pol, _ := buildPermissionPolicy(Args{Mode: ModeWeb})
 	if pol == nil {
 		t.Skip("no policy for web mode")
