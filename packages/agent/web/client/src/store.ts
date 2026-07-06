@@ -22,7 +22,10 @@ export type Item =
   | { kind: 'system'; id: string; text: string }
   // one-shot host-originated notice (an extension command's display/error/insert
   // result), shown in-stream but never persisted — dropped on the next snapshot.
-  | { kind: 'notice'; id: string; level: string; ext?: string; text: string }
+  // noticeKind is the wire Notice.kind (the item's own `kind` is the row
+  // discriminator): typed notices like prompt_rebuilt can be filtered/styled;
+  // unknown kinds fall back to the plain text.
+  | { kind: 'notice'; id: string; level: string; ext?: string; text: string; noticeKind?: string }
 
 let seq = 0
 const nextID = () => `i${++seq}`
@@ -124,7 +127,7 @@ export function applyEvent(items: Item[], ev: WireEvent): Item[] {
     case 'notice': {
       const n = ev.notice
       if (!n?.text) return items
-      return [...items, { kind: 'notice', id: nextID(), level: n.level, ext: n.ext, text: n.text }]
+      return [...items, { kind: 'notice', id: nextID(), level: n.level, ext: n.ext, text: n.text, noticeKind: n.kind }]
     }
     default:
       return items

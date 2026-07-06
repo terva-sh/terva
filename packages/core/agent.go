@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -429,11 +430,51 @@ func (a *Agent) TranscriptEpoch() uint64 {
 
 // SetTools swaps the tool registry. Used by /reload-ext to hand
 // the agent a fresh registry after extension subprocesses have been
-// respawned (and their freshly-registered tools merged in).
-func (a *Agent) SetTools(reg Registry) {
+// respawned (and their freshly-registered tools merged in). Reports whether
+// the model-facing surface actually changed (name, description, or schema of
+// any tool) — the cached prompt prefix serializes exactly that surface, so
+// callers use the verdict to notify about a cache-breaking rebuild without
+// false alarms from identical re-installs.
+func (a *Agent) SetTools(reg Registry) (changed bool) {
 	a.mu.Lock()
+	changed = !registryEqual(a.Tools, reg)
 	a.Tools = reg
 	a.mu.Unlock()
+	return changed
+}
+
+// registryEqual compares the model-facing surface of two registries: the same
+// tool names each with equal description and schema bytes. Execute behavior is
+// deliberately out of scope — the model (and the prompt cache) only sees the
+// serialized name/description/schema triple.
+func registryEqual(a, b Registry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, at := range a {
+		bt, ok := b[name]
+		if !ok {
+			return false
+		}
+		if at.Description() != bt.Description() || !bytes.Equal(at.Schema(), bt.Schema()) {
+			return false
+		}
+	}
+	return true
+}
+
+// SetSystem swaps the system prompt under the agent's lock — the live twin of
+// SetTools for view rebuilds (an approval-mode or auto-swarm toggle, a
+// reloaded extension's context). The run loop pins both at turn start, so a
+// mid-turn swap affects the next turn only (same contract as SetTools).
+// Reports whether the prompt actually changed, for the same cache-breaking
+// notification purpose as SetTools.
+func (a *Agent) SetSystem(system string) (changed bool) {
+	a.mu.Lock()
+	changed = a.System != system
+	a.System = system
+	a.mu.Unlock()
+	return changed
 }
 
 // SetContextProvider swaps the per-turn context provider live (the turn loop

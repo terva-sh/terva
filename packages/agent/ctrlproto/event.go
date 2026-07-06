@@ -98,11 +98,39 @@ const (
 // Notice is a transient host-originated message shown in the conversation area
 // without joining the transcript. Level is "info" or "error"; Ext, when set,
 // attributes it to the extension that produced it.
+//
+// Kind, when set, is the machine-readable notice type (one of the Notice*
+// kind constants below) with its structured payload in Data. Text always
+// carries a self-sufficient human rendering, so a client that doesn't know a
+// kind just shows the text — while a kind-aware client can filter, route, or
+// re-render: a single-user TUI shows a prompt-rebuild inline, a fleet control
+// plane might aggregate the same notices across a hundred daemons instead.
+// New kinds are additive protocol surface: document the kind's Data keys on
+// its constant.
 type Notice struct {
 	Level string `json:"level"` // info | error
 	Text  string `json:"text"`
 	Ext   string `json:"ext,omitempty"`
+	Kind  string `json:"kind,omitempty"`
+	// Data is the kind's structured payload (keys documented per kind).
+	// String-valued deliberately: notices are transient hints, not state —
+	// anything a client must track lives on a real event/surface instead.
+	Data map[string]string `json:"data,omitempty"`
 }
+
+// Notice kinds. A kind names a recurring, machine-actionable situation; plain
+// one-off messages leave Kind empty.
+const (
+	// NoticePromptRebuilt: the session's pinned prompt prefix — the system
+	// prompt and/or the model-facing tool set — changed, so the provider's
+	// prompt cache is invalidated and the next turn re-reads the transcript
+	// uncached. Emitted only on a real diff (an identical rebuild is silent).
+	// Data keys: "scope" (system | tools | both), "reason" (approval-mode |
+	// auto-swarm | extension-reload | mcp-toggle | trust), and
+	// "context_tokens" (the approximate token count the next turn re-reads,
+	// from the last turn's usage; omitted when no turn has run yet).
+	NoticePromptRebuilt = "prompt_rebuilt"
+)
 
 // Snapshot is a session's current state, delivered as the first event on a new
 // subscription so the client can render existing history atomically before the
@@ -221,4 +249,11 @@ func LocaleChangedEvent(locale string) Event {
 // extension command's display/error result) for the conversation area.
 func NoticeEvent(level, ext, text string) Event {
 	return Event{WireEvent: core.WireEvent{Type: EventNotice}, Notice: &Notice{Level: level, Ext: ext, Text: text}}
+}
+
+// KindedNoticeEvent builds an [EventNotice] event with a machine-readable Kind
+// and its structured Data payload. Text must still stand alone — it is what a
+// kind-unaware client renders.
+func KindedNoticeEvent(level, kind, text string, data map[string]string) Event {
+	return Event{WireEvent: core.WireEvent{Type: EventNotice}, Notice: &Notice{Level: level, Kind: kind, Text: text, Data: data}}
 }

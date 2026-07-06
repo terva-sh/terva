@@ -347,11 +347,16 @@ export interface PermissionsView {
 
 // Notice is a one-shot host-originated message shown in the conversation area
 // without joining the transcript — e.g. an extension command's display/error
-// result. Mirrors ctrlproto.Notice.
+// result. Mirrors ctrlproto.Notice. kind, when set, is the machine-readable
+// notice type (e.g. "prompt_rebuilt") with its structured payload in data;
+// text always stands alone, so rendering it verbatim is a complete fallback —
+// a kind-aware client may filter or re-render instead.
 export interface Notice {
   level: string // info | error
   text: string
   ext?: string
+  kind?: string
+  data?: Record<string, string>
 }
 
 export interface Surface {

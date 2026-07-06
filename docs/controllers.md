@@ -213,7 +213,19 @@ must render and answer:
 | `surface_updated` | `surface_id` | a pane's content changed — re-fetch with `surface.get` |
 | `surfaces_changed` | — | the set of panes changed — re-list |
 | `locale_changed` | `locale` | the daemon's UI language changed — re-fetch catalogs & re-render |
-| `notice` | `notice:{level, text, ext?}` | a one-shot, ephemeral message (not persisted, not replayed) |
+| `notice` | `notice:{level, text, ext?, kind?, data?}` | a one-shot, ephemeral message (not persisted, not replayed) |
+
+**Kinded notices.** A notice may carry a machine-readable `kind` plus a
+string-map `data` payload. `text` always stands alone, so a client that
+doesn't recognize a kind renders the text and loses nothing; a kind-aware
+client can filter, route, or re-render — a single-user surface shows the
+notice inline, a fleet control plane might aggregate the same kind across
+many daemons. Kinds are additive protocol surface, documented on their
+constants in `ctrlproto/event.go`. Current kinds:
+
+| kind | data keys | meaning |
+|---|---|---|
+| `prompt_rebuilt` | `scope` (system \| tools \| both), `reason` (approval-mode \| auto-swarm \| extension-reload \| mcp-toggle \| trust), `context_tokens?` | the session's pinned prompt prefix changed, so the provider prompt cache is invalidated and the next turn re-reads ~`context_tokens` tokens uncached. Emitted only on a real diff — an identical rebuild is silent. Informational, never blocking: the run loop pins the prefix per turn, so the change lands at the next turn regardless. |
 
 Example — a tool-approval round-trip:
 
