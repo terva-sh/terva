@@ -353,6 +353,7 @@
   "thinking level %s": "thinking level %s",
   "thinking: %s": "thinking: %s",
   "this session": "this session",
+  "this session's credentials are owned by the daemon": "this session's credentials are owned by the daemon",
   "this terminal does not support inline images": "this terminal does not support inline images",
   "tool defs": "tool defs",
   "tool display: %s": "tool display: %s",
