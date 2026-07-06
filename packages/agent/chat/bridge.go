@@ -31,10 +31,18 @@ type Host interface {
 	Notify(level, message string)
 }
 
-// Bridge mirrors a chat conversation into a running TUI session:
-// inbound messages forward to the Host's agent, and the TUI's turns
-// mirror back out to the paired chat. One bridge per Interactive
-// instance.
+// Bridge mirrors the paired owner's DM conversation into a running TUI
+// session: the owner's direct messages forward to the Host's agent, and
+// the TUI's turns mirror back out to that DM. One bridge per Interactive
+// instance, one conversation.
+//
+// It is deliberately DM-only. Unlike the daemon Loop, the bridge has a
+// single Host/agent/transcript, so it cannot isolate multiple approved
+// group chats the way per-chat agents do: a group message would inject
+// (unattributed) into the owner's session and, via rememberChat, retarget
+// where the owner's own replies are sent. Group admission is the daemon
+// Loop's job — run `terva bot` for that. The gate is therefore built with
+// a nil admissions store, which keeps every non-DM chat silent.
 type Bridge struct {
 	Connector Connector
 	Host      Host
@@ -44,9 +52,6 @@ type Bridge struct {
 	Pairing    Pairing
 	HelpText   string
 	PairedText string
-	// Admissions is the approved-group store shared with the daemon
-	// loop; nil keeps every non-DM chat silent on this surface.
-	Admissions *Admissions
 
 	mu       sync.Mutex
 	running  bool
@@ -134,8 +139,10 @@ func (b *Bridge) Start(parent context.Context) error {
 		b.chatID = b.Pairing.AllowedUserID
 	}
 	b.gate = &gate{
-		pairing:     b.Pairing,
-		admissions:  b.Admissions,
+		pairing: b.Pairing,
+		// DM-only: a nil admissions store keeps every non-DM chat
+		// silent. See the Bridge doc for why groups can't be mirrored.
+		admissions:  nil,
 		botUsername: id.Username,
 		helpText:    help,
 		pairedText:  paired,

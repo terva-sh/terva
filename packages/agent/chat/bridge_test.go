@@ -121,6 +121,61 @@ func TestBridgeMirrorsTUITraffic(t *testing.T) {
 	}
 }
 
+// TestBridgeIgnoresGroupChats pins the DM-only invariant. Two guards:
+//
+//   - Structural: the bridge builds its gate with a nil admissions store.
+//     That is what closes the original leak — the bridge used to share the
+//     bot daemon's on-disk admissions, so an approved group would route
+//     into the single TUI session. With no store wired, no on-disk
+//     approval can reach the bridge (and the Admissions field is gone, so
+//     it can't be re-supplied without a deliberate change here).
+//   - Behavioral: a group message — even from the paired owner, even
+//     mentioning the bot — never injects a prompt into the session and
+//     never retargets (via rememberChat) where the owner's replies go.
+func TestBridgeIgnoresGroupChats(t *testing.T) {
+	conn := newFakeConnector(Capabilities{})
+	host := &fakeHost{}
+	b := startBridge(t, conn, host, pairedWith("7"))
+
+	// Structural guard: no admissions store means no group can ever be
+	// admitted on this surface.
+	b.mu.Lock()
+	adm := b.gate.admissions
+	b.mu.Unlock()
+	if adm != nil {
+		t.Fatalf("bridge gate has a non-nil admissions store; DM-only invariant broken")
+	}
+
+	// Owner DM establishes the reply destination (ChatID "100").
+	conn.inbound <- msgFrom("7", "hi from dm")
+	host.waitSubmitted(t, 1)
+
+	// Group traffic that must be ignored: a non-owner mentioning the
+	// bot, and even the owner speaking in the group.
+	conn.inbound <- groupMsg("9", "@tervabot leak into the tui")
+	conn.inbound <- groupMsg("7", "owner talking in the group")
+
+	// A second owner DM. Because the connector delivers inbound serially,
+	// once this one is submitted the two group messages have already been
+	// routed — so asserting on the submissions is race-free.
+	conn.inbound <- msgFrom("7", "second dm")
+	got := host.waitSubmitted(t, 2)
+	if len(got) != 2 || got[0] != "hi from dm" || got[1] != "second dm" {
+		t.Fatalf("submissions = %v, want only the two DM prompts (no group text)", got)
+	}
+
+	// The reply destination must still be the owner's DM, not the group:
+	// the group messages must not have retargeted it via rememberChat.
+	b.OnAssistantText("reply to owner")
+	s := conn.waitSends(t, 1)
+	if s[0].ChatID != "100" {
+		t.Fatalf("assistant reply routed to %q, want the owner DM %q (group retargeted the mirror)", s[0].ChatID, "100")
+	}
+	if s[0].Text != "reply to owner" {
+		t.Fatalf("assistant reply text = %q", s[0].Text)
+	}
+}
+
 func TestBridgePairingNotifiesHost(t *testing.T) {
 	conn := newFakeConnector(Capabilities{})
 	host := &fakeHost{}

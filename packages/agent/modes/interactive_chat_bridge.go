@@ -208,10 +208,12 @@ func (i *Interactive) connectorConnect(name string) {
 		i.invalidate()
 		return
 	}
-	i.chatBridge = &chat.Bridge{Connector: conn, Host: host, Pairing: pairing,
-		// Same approved-group store the bot daemon uses, so an
-		// admission granted in either surface holds in both.
-		Admissions: chat.LoadAdmissions(chat.AdmissionsPath(i.cfg.TervaHome, svc.Name))}
+	// DM-only mirror: no admissions store. The bridge has a single
+	// TUI session, so it can't isolate approved group chats the way the
+	// bot daemon's per-chat agents do (mirroring a group would leak the
+	// owner's turns into it — see chat.Bridge). Group serving is the
+	// daemon's job: `terva bot`.
+	i.chatBridge = &chat.Bridge{Connector: conn, Host: host, Pairing: pairing}
 	if err := i.chatBridge.Start(i.runCtx); err != nil {
 		i.chatBridge = nil
 		i.mu.Lock()
