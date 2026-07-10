@@ -23,7 +23,6 @@
 package connlocal
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -34,6 +33,7 @@ import (
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/connhost"
+	"terva.sh/terva/packages/agent/connproto"
 	"terva.sh/terva/packages/agent/connsdk"
 )
 
@@ -119,21 +119,17 @@ type engine struct {
 
 // pipeFrames carries connproto frames over the pipe pair with LF
 // framing — byte-identical to the child-process carrier, minus the
-// process.
+// process. Reads go through connproto.FrameReader, so one over-limit
+// frame is skipped (with a warning) instead of killing the stream the
+// way the old bufio.Scanner did.
 type pipeFrames struct {
-	scanner *bufio.Scanner
-	mu      sync.Mutex
-	w       *io.PipeWriter
+	fr *connproto.FrameReader
+	mu sync.Mutex
+	w  *io.PipeWriter
 }
 
 func (p *pipeFrames) ReadFrame() ([]byte, error) {
-	if !p.scanner.Scan() {
-		if err := p.scanner.Err(); err != nil {
-			return nil, err
-		}
-		return nil, io.EOF
-	}
-	return append([]byte(nil), p.scanner.Bytes()...), nil
+	return p.fr.Read()
 }
 
 func (p *pipeFrames) WriteFrame(b []byte) error {
@@ -171,15 +167,16 @@ func (c *Conn) Connect(ctx context.Context) (chat.Identity, error) {
 		engineIn.CloseWithError(io.ErrClosedPipe)
 	}()
 
-	scanner := bufio.NewScanner(hostIn)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	fr := connproto.NewFrameReader(hostIn, func(msg string) {
+		c.warnf("connector %q: %s", c.name, msg)
+	})
 
 	inbound := make(chan chat.Message, inboundBuffer)
 	sess := connhost.New(connhost.Config{
 		Name:        c.name,
 		DataDir:     c.dataDir(),
 		HostVersion: hostVersion(),
-		Conn:        &pipeFrames{scanner: scanner, w: hostOut},
+		Conn:        &pipeFrames{fr: fr, w: hostOut},
 		Deliver: func(m chat.Message) {
 			select {
 			case inbound <- m:

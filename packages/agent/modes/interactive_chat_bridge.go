@@ -1,34 +1,95 @@
 package modes
 
-// The chat-connector bridge (/connect): connector lifecycle, message
-// mirroring, the chat tools toggle, and the host adapter the bridge
-// drives.
+// The `/connect` client.
+//
+// The bridge itself lives in the workspace now (workspace_chat.go). The TUI
+// keeps a picker, a status-bar segment, and a cached copy of the daemon's chat
+// surface — the same mirror shape the usage gauge uses: seed on bind, refresh on
+// surface_updated, render from the cache.
+//
+// What used to live here: a *chat.Bridge, a chat.Host implementation that fed
+// prompts through Interactive.SubmitOrQueue (and therefore through the shell
+// escape), a chatSenderAdapter, and applyChatTools — which reached into
+// turns.Agent() to patch the live tool registry. The tools are derived daemon-
+// side now, so there is nothing left to patch, and no agent to reach for.
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
-	"terva.sh/terva/packages/agent/chat"
-	"terva.sh/terva/packages/agent/tools"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider"
 )
 
-// openConnectDialog shows the picker for `/connect` with no arg.
-// Items depend on current state: disconnect + status when running,
-// connect + status when stopped.
+// --- the chat-surface mirror --------------------------------------------
+
+// seedCarrierChat fetches the chat pane once per session binding, so a bridge
+// the daemon already had running (it survives a TUI detach now) shows up in the
+// status bar on the first paint rather than after the next event.
+func (i *Interactive) seedCarrierChat() {
+	i.mu.Lock()
+	armed := i.carrierChatArmed
+	i.carrierChatArmed = false
+	i.mu.Unlock()
+	if armed {
+		go i.fetchCarrierChat()
+	}
+}
+
+// fetchCarrierChat refreshes the cached chat view from the daemon.
+func (i *Interactive) fetchCarrierChat() {
+	c := i.cfg.Carrier
+	if c == nil {
+		return
+	}
+	sf, err := c.Surface(context.Background(), i.carrierSession(), "chat")
+	if err != nil || sf.Chat == nil {
+		return
+	}
+	i.mu.Lock()
+	i.carrierChat = *sf.Chat
+	i.mu.Unlock()
+	i.invalidate()
+}
+
+// carrierChatView returns the cached chat pane.
+func (i *Interactive) carrierChatView() ctrlproto.ChatView {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.carrierChat
+}
+
+// chatBridgeName names the connected bridge for the status bar, "" when
+// disconnected — or when the bridge is bound to a DIFFERENT session. The mirror
+// no longer follows whichever session this TUI is showing, so a status bar that
+// claimed otherwise would lie.
+func (i *Interactive) chatBridgeName() string {
+	v := i.carrierChatView()
+	if v.Bridge.State != "connected" {
+		return ""
+	}
+	if v.Bridge.Session != "" && v.Bridge.Session != i.carrierSession() {
+		return ""
+	}
+	return v.Bridge.Connector
+}
+
+// --- the picker ---------------------------------------------------------
+
+// openConnectDialog shows the picker for `/connect` with no arg. Items depend on
+// the daemon's current bridge state, so the view is fetched fresh: a connect
+// from another client — or a bridge that outlived a previous TUI — must show.
 func (i *Interactive) openConnectDialog() {
-	items := i.connectMenuItems()
+	i.fetchCarrierChat()
+	v := i.carrierChatView()
+	items := connectMenuItems(v, i.carrierSession())
 	if len(items) == 0 {
-		msg := i.connectorName() + " not configured. run `terva bot setup` first."
-		if chat.DefaultServiceName() == "" {
-			msg = "no chat connectors compiled into this binary"
+		msg := i18n.T("no chat connectors compiled into this binary")
+		if len(v.Services) > 0 {
+			msg = i18n.T("no chat connector is configured. run `terva bot setup` first.")
 		}
-		i.mu.Lock()
-		i.statusErr = msg
-		i.mu.Unlock()
+		i.setStatusErr(msg)
 		i.invalidate()
 		return
 	}
@@ -36,41 +97,53 @@ func (i *Interactive) openConnectDialog() {
 	i.invalidate()
 }
 
-// connectorName returns the active chat service's name: the running
-// bridge's connector when connected, otherwise the registry default.
-func (i *Interactive) connectorName() string {
-	if i.chatBridge != nil && i.chatBridge.Active() {
-		return i.chatBridge.Connector.Name()
-	}
-	return chat.DefaultServiceName()
-}
-
-// chatBridgeName names the connected bridge for the status bar, ""
-// when disconnected.
-func (i *Interactive) chatBridgeName() string {
-	if i.chatBridge != nil && i.chatBridge.Active() {
-		return i.chatBridge.Connector.Name()
-	}
-	return ""
-}
-
-// serviceNames lists every registered chat service with its provenance
-// tag, for error messages and the status line.
-func serviceNames() string {
-	var names []string
-	for _, svc := range chat.Services() {
-		name := svc.Name
-		if tag := serviceTag(svc); tag != "" {
-			name += " (" + tag + ")"
+// connectMenuItems builds the picker rows from the daemon's chat view: actions
+// on the live bridge when connected, otherwise one row per configured service.
+// A pure function of the view — the TUI holds no bridge state to consult.
+func connectMenuItems(v ctrlproto.ChatView, sess string) []dialogs.ConnectItem {
+	var items []dialogs.ConnectItem
+	if v.Bridge.State == "connected" {
+		hint := i18n.T("active")
+		if v.Bridge.Username != "" {
+			hint += " as @" + v.Bridge.Username
 		}
-		names = append(names, name)
+		items = append(items,
+			dialogs.ConnectItem{Label: "disconnect", Action: "disconnect", Hint: i18n.T("stop mirroring")},
+			dialogs.ConnectItem{Label: "status", Action: "status", Hint: hint},
+		)
+		// The mirror is pinned to the session it was connected from. Offer to
+		// move it here rather than silently retargeting on a session switch.
+		if v.Bridge.Session != "" && v.Bridge.Session != sess {
+			items = append(items, dialogs.ConnectItem{
+				Label: "rebind", Action: "rebind",
+				Hint: i18n.T("mirror this session instead"),
+			})
+		}
+		return items
 	}
-	return strings.Join(names, ", ")
+	for _, svc := range v.Services {
+		if !svc.Configured {
+			continue
+		}
+		hint := i18n.T("start mirroring dms into this session")
+		if !svc.Paired {
+			hint = i18n.T("awaiting pairing (send /start to the bot once connected)")
+		}
+		if tag := chatServiceTag(svc); tag != "" {
+			hint = tag + " — " + hint
+		}
+		items = append(items, dialogs.ConnectItem{
+			Label: "connect " + svc.Name, Action: "connect " + svc.Name, Hint: hint,
+		})
+	}
+	if len(items) > 0 {
+		items = append(items, dialogs.ConnectItem{Label: "status", Action: "status", Hint: i18n.T("disconnected")})
+	}
+	return items
 }
 
-// serviceTag renders a service's provenance for hints and lists:
-// "extension", "dev", both, or "" for a plain compiled-in connector.
-func serviceTag(svc chat.Service) string {
+// chatServiceTag renders a service's provenance: "extension", "dev", or both.
+func chatServiceTag(svc ctrlproto.ChatServiceInfo) string {
 	var tags []string
 	if svc.Kind != "" {
 		tags = append(tags, svc.Kind)
@@ -81,47 +154,19 @@ func serviceTag(svc chat.Service) string {
 	return strings.Join(tags, ", ")
 }
 
-// connectMenuItems builds the dialog entries for the current bridge
-// state: when connected, actions on the live bridge; when idle, one
-// row per configured service (compiled-in connectors, connector
-// extensions, dev manifests) so any of them can be selected. Returns
-// empty when nothing is configured so the caller can show a helpful
-// status line instead of an empty menu.
-func (i *Interactive) connectMenuItems() []connectItem {
-	var items []connectItem
-	if i.chatBridge != nil && i.chatBridge.Active() {
-		items = append(items, connectItem{label: "disconnect", action: "disconnect", hint: "stop mirroring"})
-		st := i.chatBridge.State()
-		hint := "active"
-		if st.Username != "" {
-			hint += " as @" + st.Username
-		}
-		items = append(items, connectItem{label: "status", action: "status", hint: hint})
-		return items
+func shortSession(id string) string {
+	if len(id) > 8 {
+		return id[:8]
 	}
-	for _, svc := range chat.Services() {
-		if !svc.Configured(i.cfg.TervaHome) {
-			continue
-		}
-		hint := "start mirroring dms into this session"
-		if _, pairing, err := svc.NewConnector(i.cfg.TervaHome, nil); err == nil && pairing.AllowedUserID == "" {
-			hint = "awaiting pairing (send /start to the bot once connected)"
-		}
-		if tag := serviceTag(svc); tag != "" {
-			hint = tag + " — " + hint
-		}
-		items = append(items, connectItem{label: "connect " + svc.Name, action: "connect " + svc.Name, hint: hint})
-	}
-	if len(items) > 0 {
-		items = append(items, connectItem{label: "status", action: "status", hint: "disconnected"})
-	}
-	return items
+	return id
 }
 
-// doConnector dispatches one action: "connect" (default service),
-// "connect <name>", a bare service name (implicit connect),
-// "disconnect", or "status". Called from /connect <args> or after the
-// picker selects a row.
+// --- actions ------------------------------------------------------------
+
+// doConnector dispatches one `/connect` action onto the daemon's chat surface:
+// "connect [name]", a bare service name, "disconnect", "rebind", or "status".
+// Every one of these is a surface action — the TUI adds no ctrlproto verb and
+// owns no bridge.
 func (i *Interactive) doConnector(action string) {
 	fields := strings.Fields(action)
 	if len(fields) == 0 {
@@ -134,303 +179,124 @@ func (i *Interactive) doConnector(action string) {
 		if len(fields) > 1 {
 			name = fields[1]
 		}
-		i.connectorConnect(name)
+		i.chatSurfaceAction("connect", map[string]string{"name": name})
 	case "disconnect":
-		i.connectorDisconnect()
+		i.chatSurfaceAction("disconnect", nil)
+	case "rebind":
+		i.chatSurfaceAction("rebind", map[string]string{"session": i.carrierSession()})
 	case "status":
 		i.connectorStatus()
 	default:
-		if _, ok := chat.Lookup(fields[0]); ok {
-			i.connectorConnect(fields[0])
+		// A bare service name is an implicit connect. Resolve it against the
+		// daemon's list, fetched now: the TUI has no chat registry of its own,
+		// and a stale mirror would reject a service that exists.
+		i.fetchCarrierChat()
+		if i.knownChatService(fields[0]) {
+			i.chatSurfaceAction("connect", map[string]string{"name": fields[0]})
 			return
 		}
-		i.mu.Lock()
-		i.statusErr = i18n.T("unknown /connect action: %s (use connect [name], disconnect, status, or a connector name)", action)
-		i.mu.Unlock()
+		i.setStatusErr(i18n.T("unknown /connect action: %s (use connect [name], disconnect, rebind, status, or a connector name)", action))
 		i.invalidate()
 	}
 }
 
-// connectorConnect starts the bridge for the named chat service ("" =
-// the registry default). Refuses if a bridge is already running or the
-// service isn't configured.
-func (i *Interactive) connectorConnect(name string) {
-	if i.chatBridge != nil && i.chatBridge.Active() {
-		i.mu.Lock()
-		i.statusOK = i.connectorName() + " already connected (disconnect first to switch)"
-		i.statusErr = ""
-		i.mu.Unlock()
+// chatSurfaceAction sends one action and refreshes the mirror. Connect is async
+// daemon-side: it returns once the dial is armed, and the outcome arrives as a
+// notice plus a surface_updated. A nil error here means "accepted", not
+// "connected" — the status line is fed by those events, not by this call.
+func (i *Interactive) chatSurfaceAction(action string, args map[string]string) {
+	c := i.cfg.Carrier
+	if c == nil {
+		return
+	}
+	if err := c.SurfaceAction(context.Background(), i.carrierSession(), "chat", action, args); err != nil {
+		i.setStatusErr(err.Error())
 		i.invalidate()
 		return
 	}
-	if name == "" {
-		name = chat.DefaultServiceName()
-	}
-	svc, ok := chat.Lookup(name)
-	if !ok {
-		msg := "no chat connectors compiled in"
-		if name != "" {
-			msg = "unknown chat connector " + name
-			if names := serviceNames(); names != "" {
-				msg += " (available: " + names + ")"
-			}
-		}
-		i.mu.Lock()
-		i.statusErr = msg
-		i.mu.Unlock()
-		i.invalidate()
-		return
-	}
-	if !svc.Configured(i.cfg.TervaHome) {
-		i.mu.Lock()
-		i.statusErr = svc.Name + ": not configured. run `terva bot setup` first."
-		i.mu.Unlock()
-		i.invalidate()
-		return
-	}
-	// Refuse to start when a background daemon is already polling
-	// the same service. Two concurrent consumers race each update
-	// and one always loses, so messages get half-delivered. The user
-	// can `terva bot stop` first, then /connect.
-	if pid, alive, _ := chat.IsRunning(i.cfg.TervaHome, svc.Name); alive && pid > 0 {
-		i.mu.Lock()
-		i.statusErr = fmt.Sprintf("%s: bot daemon already running (pid %d). stop it with `terva bot stop` first.", svc.Name, pid)
-		i.mu.Unlock()
-		i.invalidate()
-		return
-	}
-	host := &chatHost{iv: i}
-	conn, pairing, err := svc.NewConnector(i.cfg.TervaHome, func(msg string) { host.Notify("warn", msg) })
-	if err != nil {
-		i.mu.Lock()
-		i.statusErr = svc.Name + ": " + err.Error()
-		i.mu.Unlock()
-		i.invalidate()
-		return
-	}
-	// DM-only mirror: no admissions store. The bridge has a single
-	// TUI session, so it can't isolate approved group chats the way the
-	// bot daemon's per-chat agents do (mirroring a group would leak the
-	// owner's turns into it — see chat.Bridge). Group serving is the
-	// daemon's job: `terva bot`.
-	i.chatBridge = &chat.Bridge{Connector: conn, Host: host, Pairing: pairing}
-	if err := i.chatBridge.Start(i.runCtx); err != nil {
-		i.chatBridge = nil
-		i.mu.Lock()
-		i.statusErr = svc.Name + " connect failed: " + err.Error()
-		i.mu.Unlock()
-		i.invalidate()
-		return
-	}
-	i.applyChatTools(true)
-	state := i.chatBridge.State()
-	label := svc.Name + " connected"
-	if tag := serviceTag(svc); tag != "" {
-		label = svc.Name + " (" + tag + ") connected"
-	}
-	if state.Username != "" {
-		label += " as @" + state.Username
-	}
-	if state.PairedID == "" {
-		label += " — send /start to the bot from your phone to claim it"
-	}
-	i.mu.Lock()
-	i.statusOK = label
-	i.statusErr = ""
-	i.mu.Unlock()
-	i.invalidate()
+	go i.fetchCarrierChat()
 }
 
-// connectorDisconnect stops the bridge. No-op when already stopped.
-func (i *Interactive) connectorDisconnect() {
-	name := i.connectorName()
-	if i.chatBridge == nil || !i.chatBridge.Active() {
-		i.mu.Lock()
-		i.statusOK = name + " already disconnected"
-		i.statusErr = ""
-		i.mu.Unlock()
-		i.invalidate()
-		return
-	}
-	i.chatBridge.Stop()
-	i.applyChatTools(false)
-	i.mu.Lock()
-	i.statusOK = name + " disconnected"
-	i.statusErr = ""
-	i.mu.Unlock()
-	i.invalidate()
-}
-
-// chatSenderAdapter wraps the bridge so the tools package can drive
-// it without importing chat directly. The Active() check is forwarded
-// to the bridge so the tool can fail clearly with a model-readable
-// error when the user disconnected mid-turn.
-type chatSenderAdapter struct {
-	bridge *chat.Bridge
-}
-
-func (a chatSenderAdapter) SendImage(ctx context.Context, path, caption string) error {
-	if a.bridge == nil {
-		return fmt.Errorf("chat bridge is not connected")
-	}
-	return a.bridge.SendImage(ctx, path, caption)
-}
-
-func (a chatSenderAdapter) SendDocument(ctx context.Context, path, caption string) error {
-	if a.bridge == nil {
-		return fmt.Errorf("chat bridge is not connected")
-	}
-	return a.bridge.SendDocument(ctx, path, caption)
-}
-
-func (a chatSenderAdapter) Active() bool {
-	return a.bridge != nil && a.bridge.Active()
-}
-
-// applyChatTools registers (active=true) or removes (active=false)
-// the chat_send_image and chat_send_file tools on the running agent
-// so the model only sees them while a bridge is connected. Snapshots
-// and mutates the live tool registry so any extension or /reload-ext
-// additions made while connected survive a later disconnect (we only
-// add or strip the two chat entries, never the rest).
-func (i *Interactive) applyChatTools(active bool) {
-	ag := i.turns.Agent()
-	if ag == nil {
-		return
-	}
-	current := ag.Tools
-	next := core.Registry{}
-	for name, t := range current {
-		if name == "chat_send_image" || name == "chat_send_file" {
-			continue
-		}
-		next[name] = t
-	}
-	if active && i.chatBridge != nil {
-		caps := i.chatBridge.Connector.Capabilities()
-		sender := chatSenderAdapter{bridge: i.chatBridge}
-		if caps.SendsImages {
-			next["chat_send_image"] = &tools.ChatSendImageTool{
-				CWD: i.cfg.CWD, Sandbox: i.cfg.Sandbox, Sender: sender,
-			}
-		}
-		if caps.SendsFiles {
-			next["chat_send_file"] = &tools.ChatSendFileTool{
-				CWD: i.cfg.CWD, Sandbox: i.cfg.Sandbox, Sender: sender,
-			}
+func (i *Interactive) knownChatService(name string) bool {
+	for _, svc := range i.carrierChatView().Services {
+		if svc.Name == name {
+			return true
 		}
 	}
-	ag.SetTools(next)
+	return false
 }
 
-// connectorStatus writes a one-liner describing the bridge state.
-// Reports on both the in-tui bridge and the background daemon so
-// the user isn't confused when the daemon owns the poll loop.
+// connectorStatus writes a one-liner describing the bridge, rendered from the
+// mirror. It reports the daemon's view — including a `terva bot` daemon holding
+// the poll loop, which is why /connect would be refused.
 func (i *Interactive) connectorStatus() {
-	name := chat.DefaultServiceName()
-	if name == "" && (i.chatBridge == nil || !i.chatBridge.Active()) {
-		i.mu.Lock()
-		i.statusOK = i18n.T("no chat connectors compiled into this binary")
-		i.statusErr = ""
-		i.mu.Unlock()
+	i.fetchCarrierChat()
+	v := i.carrierChatView()
+
+	if len(v.Services) == 0 {
+		i.setStatusOK(i18n.T("no chat connectors compiled into this binary"))
 		i.invalidate()
 		return
 	}
-	// Provenance tags (extension services, --connector-manifest dev
-	// connectors) so they are never mistaken for compiled-in ones.
-	label := name
-	if svc, ok := chat.Lookup(name); ok {
-		if tag := serviceTag(svc); tag != "" {
-			label = name + " (" + tag + ")"
-		}
-	}
+
 	var msg string
-	if i.chatBridge != nil && i.chatBridge.Active() {
-		s := i.chatBridge.State()
-		name = i.chatBridge.Connector.Name()
-		label = name
-		if svc, ok := chat.Lookup(name); ok {
-			if tag := serviceTag(svc); tag != "" {
-				label = name + " (" + tag + ")"
-			}
+	switch v.Bridge.State {
+	case "connected":
+		msg = v.Bridge.Connector + ": " + i18n.T("connected")
+		if v.Bridge.Username != "" {
+			msg += " as @" + v.Bridge.Username
 		}
-		msg = label + ": connected (tui bridge)"
-		if s.Username != "" {
-			msg += " as @" + s.Username
-		}
-		if s.PairedID != "" {
-			msg += " - paired with user " + s.PairedID
+		if v.Bridge.PairedID != "" {
+			msg += " - " + i18n.T("paired with user %s", v.Bridge.PairedID)
 		} else {
-			msg += " - awaiting pairing"
+			msg += " - " + i18n.T("awaiting pairing")
 		}
-	} else if pid, alive, _ := chat.IsRunning(i.cfg.TervaHome, name); alive && pid > 0 {
-		msg = fmt.Sprintf("%s: background daemon running (pid %d) - /connect won't work until you stop it", label, pid)
-	} else if svc, ok := chat.Lookup(name); !ok || !svc.Configured(i.cfg.TervaHome) {
-		msg = label + ": not configured. run `terva bot setup` first."
-	} else {
-		msg = label + ": disconnected (ready to connect)"
+		if v.Bridge.Session != "" && v.Bridge.Session != i.carrierSession() {
+			msg += " - " + i18n.T("mirroring session %s", shortSession(v.Bridge.Session))
+		}
+	case "connecting":
+		msg = v.Bridge.Connector + ": " + i18n.T("connecting…")
+	case "error":
+		i.setStatusErr(v.Bridge.Connector + ": " + v.Bridge.Error)
+		i.invalidate()
+		return
+	default:
+		if v.DaemonPID > 0 {
+			msg = i18n.T("background bot daemon running (pid %d) - /connect won't work until you stop it", v.DaemonPID)
+			break
+		}
+		if !anyConfigured(v) {
+			i.setStatusErr(i18n.T("not configured. run `terva bot setup` first."))
+			i.invalidate()
+			return
+		}
+		msg = i18n.T("disconnected (ready to connect)")
+		if len(v.Services) > 1 {
+			msg += " - " + i18n.T("connectors: %s", chatServiceNames(v))
+		}
 	}
-	// With several services registered, the default alone under-tells;
-	// list what /connect <name> can reach.
-	if (i.chatBridge == nil || !i.chatBridge.Active()) && len(chat.Services()) > 1 {
-		msg += " - connectors: " + serviceNames()
-	}
-	i.mu.Lock()
-	i.statusOK = msg
-	i.statusErr = ""
-	i.mu.Unlock()
+	i.setStatusOK(msg)
 	i.invalidate()
 }
 
-// chatHost adapts *Interactive to chat.Host so the bridge can call
-// back into the TUI without importing modes directly.
-type chatHost struct{ iv *Interactive }
-
-func (h *chatHost) SubmitOrQueue(prompt string, images []provider.ImageBlock) {
-	h.iv.SubmitOrQueue(prompt, images)
+func anyConfigured(v ctrlproto.ChatView) bool {
+	for _, svc := range v.Services {
+		if svc.Configured {
+			return true
+		}
+	}
+	return false
 }
 
-func (h *chatHost) CancelTurn() { h.iv.CancelTurn() }
-
-func (h *chatHost) Status() string {
-	h.iv.mu.Lock()
-	providerName := h.iv.cfg.Provider
-	model := h.iv.cfg.Model
-	cwd := h.iv.cfg.CWD
-	usage := h.iv.cumUsage
-	subscription := h.iv.cfg.AuthMethod == "oauth"
-	ctxUsed := h.iv.lastCtxInput
-	h.iv.mu.Unlock()
-	busy := h.iv.turns.Busy()
-	queued := h.iv.turns.QueuedCount()
-
-	ctxMax := 0
-	if m, err := provider.FindModel(providerName, model); err == nil {
-		ctxMax = m.ContextWindow
+// chatServiceNames lists every registered service with its provenance tag.
+func chatServiceNames(v ctrlproto.ChatView) string {
+	var names []string
+	for _, svc := range v.Services {
+		name := svc.Name
+		if tag := chatServiceTag(svc); tag != "" {
+			name += " (" + tag + ")"
+		}
+		names = append(names, name)
 	}
-	return chat.FormatStatus(chat.StatusSnapshot{
-		Provider:     providerName,
-		Model:        model,
-		CWD:          cwd,
-		Usage:        usage,
-		Subscription: subscription,
-		ContextUsed:  ctxUsed,
-		ContextMax:   ctxMax,
-		Busy:         busy,
-		Queued:       queued,
-	})
-}
-
-func (h *chatHost) Notify(level, message string) {
-	h.iv.mu.Lock()
-	switch level {
-	case "error", "warn":
-		h.iv.statusErr = message
-		h.iv.statusOK = ""
-	default:
-		h.iv.statusOK = message
-		h.iv.statusErr = ""
-	}
-	h.iv.mu.Unlock()
-	h.iv.invalidate()
+	return strings.Join(names, ", ")
 }

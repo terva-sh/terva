@@ -92,6 +92,15 @@ func BindHost(h Host) {
 	hostMu.Unlock()
 }
 
+// BoundHost returns the currently bound Host, nil when the slot is free. The
+// slot is process-global, so whoever binds it owns releasing it — this getter
+// exists so that owner (and its tests) can assert the release actually
+// happened, not to let a second consumer probe for a free slot and race the
+// first.
+func BoundHost() Host {
+	return currentHost()
+}
+
 func currentHost() Host {
 	hostMu.Lock()
 	defer hostMu.Unlock()

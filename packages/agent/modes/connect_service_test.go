@@ -1,103 +1,177 @@
 package modes
 
-// /connect service-awareness: any registered chat service — a
-// compiled-in connector, a connector extension, a dev manifest — is
-// reachable by name, with provenance tags on the status surfaces. The
-// fake service below stands in for a connector extension (Kind =
-// "extension"); its Configured gate is flipped per-test so the shared
-// registry never leaks picker rows into unrelated tests (the alias
-// test asserts the nothing-configured message).
+// /connect is a client of the daemon's chat surface. The TUI owns no bridge, no
+// chat.Host and no connector — it sends surface actions and renders the pane it
+// gets back. These tests drive the real event loop and assert on the wire, which
+// is the only thing left to assert on.
 
 import (
-	"context"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 
-	"terva.sh/terva/packages/agent/chat"
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/tui/tuitest"
 )
 
-// fakeChatConn is a minimal chat.Connector: connects instantly with a
-// fixed identity and receives until the consumer leaves.
-type fakeChatConn struct{}
-
-func (fakeChatConn) Name() string { return "fakechat" }
-
-func (fakeChatConn) Connect(ctx context.Context) (chat.Identity, error) {
-	return chat.Identity{ID: "b1", Username: "fakebot"}, nil
-}
-
-func (fakeChatConn) Receive(ctx context.Context, handle func(chat.Message)) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func (fakeChatConn) Send(ctx context.Context, out chat.Outgoing) error { return nil }
-func (fakeChatConn) SendImage(ctx context.Context, chatID, path, caption string) error {
-	return nil
-}
-func (fakeChatConn) SendFile(ctx context.Context, chatID, path, caption string) error {
-	return nil
-}
-func (fakeChatConn) Typing(ctx context.Context, chatID string) error { return nil }
-func (fakeChatConn) Capabilities() chat.Capabilities                 { return chat.Capabilities{} }
-
-var (
-	fakeChatOnce    sync.Once
-	fakeChatEnabled atomic.Bool
-)
-
-// enableFakeChatService registers the fake service (once, globally)
-// and turns its Configured gate on for the duration of one test.
-func enableFakeChatService(t *testing.T) {
+func startWithChat(t *testing.T, v ctrlproto.ChatView) (*harness, *fakeCarrier) {
 	t.Helper()
-	fakeChatOnce.Do(func() {
-		chat.Register(chat.Service{
-			Name:       "fakechat",
-			Kind:       "extension",
-			Configured: func(string) bool { return fakeChatEnabled.Load() },
-			NewConnector: func(tervaHome string, warn func(string)) (chat.Connector, chat.Pairing, error) {
-				return fakeChatConn{}, chat.Pairing{Save: func(string) error { return nil }}, nil
-			},
-		})
+	fc := newFakeCarrier()
+	fc.chat = v
+	h := startInteractive(t, func(c *InteractiveConfig) {
+		c.Carrier = fc
+		c.Ready = true
 	})
-	fakeChatEnabled.Store(true)
-	t.Cleanup(func() { fakeChatEnabled.Store(false) })
+	return h, fc
 }
 
-// TestInteractiveConnectNamedService drives the whole named-service
-// path on the real event loop: /connect <name> starts the bridge on
-// that service (provenance-tagged), /connect status reports it, and
-// /connect disconnect stops it.
-func TestInteractiveConnectNamedService(t *testing.T) {
-	enableFakeChatService(t)
-	h := startInteractive(t, nil)
-	h.dismissLoginDialog()
+// A named connect becomes surface.action{id:"chat", action:"connect", name}.
+// The TUI does not dial; the daemon does, asynchronously.
+func TestConnectNamedServiceIssuesASurfaceAction(t *testing.T) {
+	h, fc := startWithChat(t, ctrlproto.ChatView{
+		Services: []ctrlproto.ChatServiceInfo{{Name: "fakechat", Kind: "extension", Configured: true, Paired: true}},
+		Bridge:   ctrlproto.ChatBridgeState{State: "idle"},
+	})
 
 	h.term.Type("/connect fakechat\r")
-	h.waitText("fakechat (extension) connected as @fakebot")
 
-	h.term.Type("/connect status\r")
-	h.waitText("fakechat (extension): connected (tui bridge) as @fakebot")
-
-	h.term.Type("/connect disconnect\r")
-	h.waitText("fakechat disconnected")
+	act := recv(t, fc.surfActs, "chat surface action")
+	if act.id != "chat" || act.action != "connect" {
+		t.Fatalf("got surface action %+v, want chat/connect", act)
+	}
+	if act.args["name"] != "fakechat" {
+		t.Fatalf("connect named %q, want fakechat", act.args["name"])
+	}
 }
 
-// TestInteractiveConnectUnknownService: a name that resolves to no
-// registered service fails with the explanatory error, listing what
-// IS available.
-func TestInteractiveConnectUnknownService(t *testing.T) {
-	enableFakeChatService(t)
-	h := startInteractive(t, nil)
-	h.dismissLoginDialog()
+func TestDisconnectIssuesASurfaceAction(t *testing.T) {
+	h, fc := startWithChat(t, ctrlproto.ChatView{
+		Services: []ctrlproto.ChatServiceInfo{{Name: "fakechat", Configured: true}},
+		Bridge:   ctrlproto.ChatBridgeState{State: "connected", Connector: "fakechat", Username: "fakebot"},
+	})
+
+	h.term.Type("/connect disconnect\r")
+
+	act := recv(t, fc.surfActs, "chat surface action")
+	if act.id != "chat" || act.action != "disconnect" {
+		t.Fatalf("got %+v, want chat/disconnect", act)
+	}
+}
+
+// An unknown name never reaches the daemon: the TUI resolves it against the
+// surface's service list, since it no longer has a chat registry to consult.
+func TestUnknownServiceNeverReachesTheDaemon(t *testing.T) {
+	h, fc := startWithChat(t, ctrlproto.ChatView{
+		Services: []ctrlproto.ChatServiceInfo{{Name: "fakechat", Kind: "extension", Configured: true}},
+		Bridge:   ctrlproto.ChatBridgeState{State: "idle"},
+	})
 
 	h.term.Type("/connect nosuch\r")
-	h.waitScreen("unknown-connector error naming the alternatives", func(s *tuitest.Screen) bool {
-		txt := s.Text()
-		return strings.Contains(txt, "unknown /connect action: nosuch") &&
-			strings.Contains(txt, "connector name")
+	h.waitScreen("unknown-connector error", func(s *tuitest.Screen) bool {
+		return strings.Contains(s.Text(), "unknown /connect action: nosuch")
 	})
+
+	select {
+	case act := <-fc.surfActs:
+		t.Fatalf("an unknown connector was forwarded to the daemon: %+v", act)
+	default:
+	}
+}
+
+// /connect status renders the daemon's view.
+func TestConnectStatusRendersTheDaemonView(t *testing.T) {
+	h, _ := startWithChat(t, ctrlproto.ChatView{
+		Services: []ctrlproto.ChatServiceInfo{{Name: "fakechat", Configured: true}},
+		Bridge: ctrlproto.ChatBridgeState{
+			State: "connected", Connector: "fakechat", Username: "fakebot", PairedID: "u1",
+		},
+	})
+
+	h.term.Type("/connect status\r")
+	h.waitText("fakechat: connected as @fakebot")
+}
+
+// The bot-daemon conflict is the daemon's to report; the TUI just shows it.
+func TestConnectStatusReportsTheBotDaemonConflict(t *testing.T) {
+	h, _ := startWithChat(t, ctrlproto.ChatView{
+		Services:  []ctrlproto.ChatServiceInfo{{Name: "fakechat", Configured: true}},
+		Bridge:    ctrlproto.ChatBridgeState{State: "idle"},
+		DaemonPID: 4242,
+	})
+
+	h.term.Type("/connect status\r")
+	h.waitScreen("bot-daemon conflict", func(s *tuitest.Screen) bool {
+		return strings.Contains(s.Text(), "4242")
+	})
+}
+
+// --- the status bar reads the mirror, and does not lie -------------------
+
+// The bridge binds to the session it was connected from. A status bar naming a
+// bridge that mirrors some OTHER session would be claiming this session's turns
+// reach the phone. They don't.
+func TestStatusBarNamesTheBridgeOnlyForTheBoundSession(t *testing.T) {
+	i := &Interactive{}
+
+	i.carrierChat = ctrlproto.ChatView{Bridge: ctrlproto.ChatBridgeState{
+		State: "connected", Connector: "fakechat", Session: "other-session",
+	}}
+	i.cfg.CarrierSession = "this-session"
+	if got := i.chatBridgeName(); got != "" {
+		t.Fatalf("status bar named %q for a bridge bound elsewhere", got)
+	}
+
+	i.carrierChat.Bridge.Session = "this-session"
+	if got := i.chatBridgeName(); got != "fakechat" {
+		t.Fatalf("status bar = %q, want fakechat for the bound session", got)
+	}
+
+	// A dial in flight is not a connection.
+	i.carrierChat.Bridge.State = "connecting"
+	if got := i.chatBridgeName(); got != "" {
+		t.Fatalf("status bar named %q while still connecting", got)
+	}
+}
+
+// The picker is a pure function of the daemon's view.
+func TestConnectMenuItemsRenderFromTheSurface(t *testing.T) {
+	idle := ctrlproto.ChatView{Services: []ctrlproto.ChatServiceInfo{
+		{Name: "configured", Configured: true, Paired: true},
+		{Name: "unconfigured", Configured: false},
+	}}
+	var labels []string
+	for _, it := range connectMenuItems(idle, "s1") {
+		labels = append(labels, it.Label)
+	}
+	joined := strings.Join(labels, ",")
+	if !strings.Contains(joined, "connect configured") {
+		t.Fatalf("configured service missing from the picker: %v", labels)
+	}
+	if strings.Contains(joined, "unconfigured") {
+		t.Fatalf("an unconfigured service was offered: %v", labels)
+	}
+
+	connected := ctrlproto.ChatView{Bridge: ctrlproto.ChatBridgeState{
+		State: "connected", Connector: "fakechat", Session: "s1",
+	}}
+	items := connectMenuItems(connected, "s1")
+	if len(items) == 0 || items[0].Action != "disconnect" {
+		t.Fatalf("connected picker does not lead with disconnect: %+v", items)
+	}
+	for _, it := range items {
+		if it.Action == "rebind" {
+			t.Fatal("rebind offered for a bridge already bound to this session")
+		}
+	}
+
+	// Bound elsewhere: offer to move it, explicitly. Never move it silently.
+	connected.Bridge.Session = "s2"
+	found := false
+	for _, it := range connectMenuItems(connected, "s1") {
+		if it.Action == "rebind" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no rebind offered for a bridge bound to another session")
+	}
 }

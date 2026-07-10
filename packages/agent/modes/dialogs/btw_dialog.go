@@ -1,17 +1,33 @@
-package modes
+package dialogs
 
 import (
 	"context"
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/agent/modes/widgets"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
+
+// SideChatExchange is one completed question/answer pair the dialog has
+// accumulated, replayed to the asker so the side chat remembers its own thread.
+type SideChatExchange struct {
+	User      string
+	Assistant string
+}
+
+// SideChatAsker runs the side chat's completions. It owns the frozen snapshot
+// (opened before the dialog, closed by Close); the dialog owns the visible
+// conversation and hands back its prior exchanges on every ask. Ask blocks on
+// the model and honours ctx cancellation — the dialog runs it on a goroutine
+// and cancels on esc. This keeps the dialog free of the carrier and the wire:
+// it drives an ephemeral completion without knowing a *core.Agent ever existed.
+type SideChatAsker interface {
+	Ask(ctx context.Context, prior []SideChatExchange, question string) (string, error)
+	Close()
+}
 
 // btwTurn is one user/assistant pair within a side chat. Kept
 // separate from the main transcript so closing the dialog leaves
@@ -22,7 +38,7 @@ type btwTurn struct {
 	Err       string
 }
 
-// btwDialog is the side-chat overlay opened by /btw. It shows the
+// BtwDialog is the side-chat overlay opened by /btw. It shows the
 // user's question, runs a one-off model call against the live
 // snapshot of the main session plus any prior side-chat turns,
 // renders the assistant reply through the markdown pipeline, and
@@ -30,7 +46,7 @@ type btwTurn struct {
 //
 // Cancellation: esc cancels an in-flight call when one is running,
 // otherwise closes the dialog.
-type btwDialog struct {
+type BtwDialog struct {
 	mu      sync.Mutex
 	active  bool
 	turns   []btwTurn
@@ -43,18 +59,12 @@ type btwDialog struct {
 	// is independent of the main spinner (so re-opening the dialog
 	// always starts fresh and the message doesn't carry over from a
 	// completed main turn).
-	spin *spinner
+	spin *widgets.Spinner
 
-	// Frozen at Open() time so the side-chat keeps a stable view of
-	// the main thread even if a turn happens to land on the main
-	// agent while the dialog is open (rare but possible).
-	frozenSystem string
-	frozenMsgs   []provider.Message
-
-	// Provider details captured at open time; used by send() to
-	// build the request without going back through the agent.
-	client provider.Client
-	model  string
+	// asker runs the completions against a snapshot frozen daemon-side at open
+	// time, so a turn landing on the session while the dialog is up cannot shift
+	// the ground under it. The dialog never sees the transcript or the client.
+	asker SideChatAsker
 
 	// Theme cached so render() doesn't need it threaded through.
 	theme tui.Theme
@@ -67,12 +77,12 @@ type btwDialog struct {
 	cwd string
 }
 
-func newBtwDialog() *btwDialog {
-	return &btwDialog{}
+func NewBtwDialog() *BtwDialog {
+	return &BtwDialog{}
 }
 
 // Active reports whether the dialog is visible and consuming keys.
-func (d *btwDialog) Active() bool {
+func (d *BtwDialog) Active() bool {
 	if d == nil {
 		return false
 	}
@@ -86,7 +96,7 @@ func (d *btwDialog) Active() bool {
 // Used by the host to decide whether a periodic redraw is worth
 // triggering; when false and the user is just typing, we can
 // skip the tick and let the terminal drive the cursor blink.
-func (d *btwDialog) Loading() bool {
+func (d *BtwDialog) Loading() bool {
 	if d == nil {
 		return false
 	}
@@ -95,13 +105,16 @@ func (d *btwDialog) Loading() bool {
 	return d.active && d.loading
 }
 
-// Open enters the side chat. agent supplies the live transcript and
-// system prompt, plus the underlying provider client to use for the
-// one-off completion. seed is an optional first question that gets
-// auto-submitted (so /btw <text> starts a conversation right away).
-// invalidate, if non-nil, is called after each state change so the
-// host redraw loop can pick up the update without polling.
-func (d *btwDialog) Open(th tui.Theme, agent *core.Agent, system, model, cwd, seed string, invalidate func()) {
+// Open enters the side chat. asker runs the completions against a snapshot the
+// caller has already frozen daemon-side; cwd resolves path-completion in the
+// editor; seed, if non-empty, is auto-submitted so `/btw <text>` starts a
+// conversation right away. invalidate, if non-nil, is called after each state
+// change so the host redraw loop picks up the update without polling.
+//
+// The dialog holds an asker, not a client or a transcript: it builds no
+// requests and never reaches for a *core.Agent. That was the last thing the TUI
+// read one for.
+func (d *BtwDialog) Open(th tui.Theme, asker SideChatAsker, cwd, seed string, invalidate func()) {
 	d.mu.Lock()
 	d.active = true
 	d.theme = th
@@ -109,10 +122,7 @@ func (d *btwDialog) Open(th tui.Theme, agent *core.Agent, system, model, cwd, se
 	d.loading = false
 	d.cancel = nil
 	d.editor = tui.NewEditor(th.AccentBar(th.Accent))
-	d.frozenSystem = system
-	d.frozenMsgs = agent.Messages()
-	d.client = agent.Client
-	d.model = model
+	d.asker = asker
 	d.cwd = cwd
 	d.mu.Unlock()
 
@@ -122,8 +132,9 @@ func (d *btwDialog) Open(th tui.Theme, agent *core.Agent, system, model, cwd, se
 	}
 }
 
-// Close hides the dialog. Cancels any in-flight request.
-func (d *btwDialog) Close() {
+// Close hides the dialog, cancels any in-flight request, and releases the
+// asker's frozen snapshot.
+func (d *BtwDialog) Close() {
 	d.mu.Lock()
 	d.active = false
 	d.turns = nil
@@ -131,11 +142,14 @@ func (d *btwDialog) Close() {
 	d.loading = false
 	cancel := d.cancel
 	d.cancel = nil
-	d.frozenMsgs = nil
-	d.client = nil
+	asker := d.asker
+	d.asker = nil
 	d.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if asker != nil {
+		asker.Close()
 	}
 }
 
@@ -143,7 +157,7 @@ func (d *btwDialog) Close() {
 // dialog wants the event consumed (always true while active, except
 // for the special closing case where the caller may want to signal
 // the parent).
-func (d *btwDialog) HandleKey(k tui.Key, invalidate func()) (closed bool) {
+func (d *BtwDialog) HandleKey(k tui.Key, invalidate func()) (closed bool) {
 	if !d.Active() {
 		return false
 	}
@@ -174,7 +188,7 @@ func (d *btwDialog) HandleKey(k tui.Key, invalidate func()) (closed bool) {
 	// Tab-complete a path-like token before the editor sees the key,
 	// matching the main editor's behaviour.
 	if k.Kind == tui.KeyTab {
-		if tryPathTabCompleteEditor(editor, cwd) {
+		if widgets.TryPathTabCompleteEditor(editor, cwd) {
 			invalidate()
 			return false
 		}
@@ -195,7 +209,7 @@ func (d *btwDialog) HandleKey(k tui.Key, invalidate func()) (closed bool) {
 // the turn's visible state changes (text delta, error, complete)
 // so the host redraw loop picks up the update without relying on
 // a periodic tick.
-func (d *btwDialog) submit(invalidate func()) {
+func (d *BtwDialog) submit(invalidate func()) {
 	d.mu.Lock()
 	if d.editor == nil || d.loading {
 		d.mu.Unlock()
@@ -209,7 +223,7 @@ func (d *btwDialog) submit(invalidate func()) {
 	d.editor.Clear()
 	d.loading = true
 	if d.spin == nil {
-		d.spin = newSpinner(d.theme)
+		d.spin = widgets.NewSpinner(d.theme)
 	} else {
 		d.spin.Configure(d.theme)
 	}
@@ -217,71 +231,28 @@ func (d *btwDialog) submit(invalidate func()) {
 	d.turns = append(d.turns, btwTurn{User: question})
 	turnIdx := len(d.turns) - 1
 
-	// Build the request: system + frozen main transcript + every
-	// prior side-chat turn (user + assistant) + this question.
-	msgs := append([]provider.Message(nil), d.frozenMsgs...)
-	for i, t := range d.turns {
-		msgs = append(msgs, provider.Message{
-			Role: provider.RoleUser,
-			Content: []provider.Content{
-				provider.TextBlock{Text: t.User},
-			},
-			Time: time.Now(),
-		})
-		// Only completed turns contribute an assistant reply; the
-		// in-flight one (turnIdx) hasn't got one yet.
-		if i < turnIdx && t.Assistant != "" {
-			msgs = append(msgs, provider.Message{
-				Role: provider.RoleAssistant,
-				Content: []provider.Content{
-					provider.TextBlock{Text: t.Assistant},
-				},
-				Time: time.Now(),
-			})
+	// The side chat's own prior exchanges (completed turns only; the in-flight
+	// one at turnIdx has no reply yet). The frozen main transcript lives with
+	// the asker's snapshot — the dialog only carries what happened here.
+	prior := make([]SideChatExchange, 0, turnIdx)
+	for i := range turnIdx {
+		if t := d.turns[i]; t.Assistant != "" {
+			prior = append(prior, SideChatExchange{User: t.User, Assistant: t.Assistant})
 		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
-	client := d.client
-	model := d.model
-	system := d.frozenSystem
+	asker := d.asker
 	d.mu.Unlock()
 
 	go func() {
-		req := provider.Request{
-			Model:    model,
-			System:   system,
-			Messages: msgs,
-			// No tools: side chat is conversational, not agentic.
-		}
-		stream, err := client.Stream(ctx, req)
-		if err != nil {
-			d.completeTurn(turnIdx, "", err.Error())
-			if invalidate != nil {
-				invalidate()
-			}
-			return
-		}
-
-		var reply strings.Builder
-		var finalErr error
-		for ev := range stream {
-			switch e := ev.(type) {
-			case provider.EventTextDelta:
-				reply.WriteString(e.Delta)
-			case provider.EventDone:
-				if e.Err != nil {
-					finalErr = e.Err
-				}
-			}
-		}
-
+		reply, err := asker.Ask(ctx, prior, question)
 		errMsg := ""
-		if finalErr != nil && ctx.Err() == nil {
-			errMsg = finalErr.Error()
+		if err != nil && ctx.Err() == nil {
+			errMsg = err.Error()
 		}
-		d.completeTurn(turnIdx, reply.String(), errMsg)
+		d.completeTurn(turnIdx, reply, errMsg)
 		if invalidate != nil {
 			invalidate()
 		}
@@ -290,7 +261,7 @@ func (d *btwDialog) submit(invalidate func()) {
 
 // completeTurn fills in the assistant text or error for the turn at
 // idx and clears the loading state.
-func (d *btwDialog) completeTurn(idx int, assistant, errMsg string) {
+func (d *BtwDialog) completeTurn(idx int, assistant, errMsg string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if idx < 0 || idx >= len(d.turns) {
@@ -304,7 +275,7 @@ func (d *btwDialog) completeTurn(idx int, assistant, errMsg string) {
 
 // Render returns the side-chat panel lines. Called every frame
 // while active.
-func (d *btwDialog) Render(th tui.Theme, width int) []string {
+func (d *BtwDialog) Render(th tui.Theme, width int) []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if !d.active {
@@ -312,7 +283,7 @@ func (d *btwDialog) Render(th tui.Theme, width int) []string {
 	}
 
 	var out []string
-	out = append(out, frameHeaderColor(th, "btw - side chat (esc closes; nothing is added to the main thread)", width, th.Accent))
+	out = append(out, FrameHeaderColor(th, "btw - side chat (esc closes; nothing is added to the main thread)", width, th.Accent))
 
 	if len(d.turns) == 0 && !d.loading {
 		out = append(out, "  "+th.FG256(th.Muted, i18n.T("ask anything; replies stay private to this side chat.")))
@@ -363,7 +334,7 @@ func (d *btwDialog) Render(th tui.Theme, width int) []string {
 		}
 		out = append(out, "") // breathing room between editor and frame rule
 	}
-	out = append(out, frameRuleColor(th, width, th.Accent))
+	out = append(out, FrameRuleColor(th, width, th.Accent))
 	return out
 }
 
@@ -371,7 +342,7 @@ func (d *btwDialog) Render(th tui.Theme, width int) []string {
 // cursor placed within its render output, so the parent can position
 // the actual terminal cursor on the editor input. Returns (-1, -1)
 // when the dialog isn't active or has no editor.
-func (d *btwDialog) CursorPos(width int) (row, col int) {
+func (d *BtwDialog) CursorPos(width int) (row, col int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if !d.active || d.editor == nil {

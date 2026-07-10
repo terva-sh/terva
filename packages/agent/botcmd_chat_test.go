@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/chat"
 )
 
@@ -25,10 +26,10 @@ func TestBotRunHelpReturnsEarly(t *testing.T) {
 // (it does NOT set noTools). That's the gap the --no-tools fix opened — a bot
 // with its integrations but no host filesystem/shell.
 func TestNoWorkspaceToolsKeepsIntegrationsAndIdentity(t *testing.T) {
-	if a, _ := ParseArgs([]string{"--no-workspace-tools"}); !a.NoWorkspaceTools {
+	if a, _ := build.ParseArgs([]string{"--no-workspace-tools"}); !a.NoWorkspaceTools {
 		t.Fatal("--no-workspace-tools should set NoWorkspaceTools")
 	}
-	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5", NoWorkspaceTools: true}, false)
+	r, err := build.Resolve(build.Args{Provider: "openai", Model: "gpt-5", NoWorkspaceTools: true}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,14 +38,14 @@ func TestNoWorkspaceToolsKeepsIntegrationsAndIdentity(t *testing.T) {
 			t.Errorf("--no-workspace-tools should drop the built-in %q tool", name)
 		}
 	}
-	if r.experience != "" {
-		t.Errorf("--no-workspace-tools must not change identity, got experience %q", r.experience)
+	if r.Experience != "" {
+		t.Errorf("--no-workspace-tools must not change identity, got experience %q", r.Experience)
 	}
-	if r.noTools {
+	if r.NoTools {
 		t.Error("--no-workspace-tools must not set noTools (extensions/MCP still merge)")
 	}
 	// Extension/MCP tools still merge through the normal path.
-	src := &fakeToolSource{infos: []ExtensionToolInfo{{Extension: "world", Name: "travel", Schema: []byte(`{}`)}}}
+	src := &fakeToolSource{infos: []build.ExtensionToolInfo{{Extension: "world", Name: "travel", Schema: []byte(`{}`)}}}
 	r.MergeExtensionTools(src)
 	if _, ok := r.ToolRegistry["travel"]; !ok {
 		t.Error("--no-workspace-tools must keep extension/MCP tools")
@@ -57,7 +58,7 @@ func TestNoWorkspaceToolsKeepsIntegrationsAndIdentity(t *testing.T) {
 // identical to the credentialed path bot mode uses.)
 
 func TestChatBotHasNoToolsAndChatIdentity(t *testing.T) {
-	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5", Experience: ExperienceChat}, false)
+	r, err := build.Resolve(build.Args{Provider: "openai", Model: "gpt-5", Experience: build.ExperienceChat}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestChatBotHasNoToolsAndChatIdentity(t *testing.T) {
 }
 
 func TestPlayBotDropsBuiltinsKeepsIdentity(t *testing.T) {
-	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5", Experience: ExperiencePlay}, false)
+	r, err := build.Resolve(build.Args{Provider: "openai", Model: "gpt-5", Experience: build.ExperiencePlay}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func TestPlayBotDropsBuiltinsKeepsIdentity(t *testing.T) {
 func TestDefaultBotIsAFullAgent(t *testing.T) {
 	// No experience flag: the default bot keeps the built-in tools (and botRun
 	// additionally hosts extensions + MCP), so it is not "just a chat bot".
-	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	r, err := build.Resolve(build.Args{Provider: "openai", Model: "gpt-5"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,12 +104,12 @@ func TestDefaultBotIsAFullAgent(t *testing.T) {
 
 func TestNoExtensionsAlias(t *testing.T) {
 	for _, flag := range []string{"--no-ext", "--no-extensions"} {
-		a, err := ParseArgs([]string{flag})
+		a, err := build.ParseArgs([]string{flag})
 		if err != nil || !a.NoExt {
 			t.Errorf("%s should set NoExt (got NoExt=%v err=%v)", flag, a.NoExt, err)
 		}
 	}
-	m, err := ParseArgs([]string{"--no-mcp"})
+	m, err := build.ParseArgs([]string{"--no-mcp"})
 	if err != nil || !m.NoMCP {
 		t.Errorf("--no-mcp should set NoMCP (got %v err=%v)", m.NoMCP, err)
 	}
@@ -131,7 +132,7 @@ func TestBotApprovalDefault(t *testing.T) {
 	}
 }
 
-func toolNames(r Resolved) []string {
+func toolNames(r build.Resolved) []string {
 	var n []string
 	for name := range r.ToolRegistry {
 		n = append(n, name)

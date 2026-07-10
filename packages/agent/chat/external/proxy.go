@@ -1,7 +1,6 @@
 package external
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/connhost"
+	"terva.sh/terva/packages/agent/connproto"
 	"terva.sh/terva/packages/agent/procenv"
 )
 
@@ -259,14 +259,15 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 	}
 	c := &child{cmd: cmd, stdin: stdin, logFile: logFile, waited: make(chan struct{})}
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	fr := connproto.NewFrameReader(stdout, func(msg string) {
+		p.warnf("connector %q: %s", p.manifest.Name, msg)
+	})
 
 	session := connhost.New(connhost.Config{
 		Name:              p.manifest.Name,
 		DataDir:           p.dataDir(),
 		HostVersion:       getTervaVersion(),
-		Conn:              &childConn{c: c, scanner: scanner},
+		Conn:              &childConn{c: c, fr: fr},
 		Deliver:           p.deliverInbound,
 		DeliverMembership: p.deliverMembership,
 		Events: chat.ChatEventHandlers{
@@ -442,20 +443,17 @@ func (p *Proxy) StartThread(ctx context.Context, chatID, fromMessageID, name str
 
 // childConn carries connproto frames over the child's stdio: one JSON
 // object per LF-terminated line. The session core neither knows nor
-// cares that a process is on the other end.
+// cares that a process is on the other end. Reads go through
+// connproto.FrameReader, so one over-limit frame is skipped (with a
+// warning) instead of killing the stream the way the old bufio.Scanner
+// did.
 type childConn struct {
-	c       *child
-	scanner *bufio.Scanner
+	c  *child
+	fr *connproto.FrameReader
 }
 
 func (cc *childConn) ReadFrame() ([]byte, error) {
-	if !cc.scanner.Scan() {
-		if err := cc.scanner.Err(); err != nil {
-			return nil, err
-		}
-		return nil, io.EOF
-	}
-	return append([]byte(nil), cc.scanner.Bytes()...), nil
+	return cc.fr.Read()
 }
 
 func (cc *childConn) WriteFrame(b []byte) error {
