@@ -270,6 +270,19 @@ docs/proposals/web-surfaces.md). Today's panes:
   detached from a prior run) and appears when auto-swarm is on or any agents
   exist. Live-updated by a poller (the swarm has no push). The agent can spawn
   tasks via `swarm_spawn` when auto-swarm is enabled in `/settings`.
+- **Raati** — the deliberation board (`/raati`,
+  docs/raati.md): convene a three-unit panel on a
+  question and watch it deliberate live — blind round, cross-examination,
+  then the verdict landing as kanji before settling into your language, with
+  the tally and the minority report. Workspace-global; the convene form picks
+  a convening profile (built-ins: `triage`, `counsel`, `code-review`,
+  `ethics`), the decision class and the rigor level (0 *kaiku*: the workspace binding;
+  1 *kuoro*: the provider's tier ladder; 2 *käräjät*: cross-provider seats
+  from the user config's `raati.level2`); each block shows its seat's
+  binding. The record persists under `$TERVA_HOME/raati/`. Pushed live (the
+  coordinator has a real event feed — no poller). With `raati.convene_tool`
+  enabled, the **agent** can convene a panel too (`raati_convene`, always
+  behind the approval gate) — its deliberation renders on this same board.
 - **Settings** — approval mode (per-session, live, not saved — a security
   posture), thinking/reasoning effort (applies live and saved as the default),
   auto-title (saved), **language** (switches live for all tabs + saved — see

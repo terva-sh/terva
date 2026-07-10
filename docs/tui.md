@@ -101,9 +101,18 @@ Inside the overlay: `enter` sends, `esc` cancels an in-flight call (or closes th
 
 ### `/swarm`
 
-Background subagents that run alongside your main session. Each one is a separate `terva` subprocess with its own model loop, its own persistent session file, and its own chat in the dashboard — but they all run in **the same working directory as the host**, so they see and edit the same files you do. Spawn one for a side task (“draft the migration”, “investigate this stack trace”, “write the test harness for module X”), keep going in the main thread, check in on it whenever you want.
+Background subagents that run alongside your main session. Each one is a separate `terva` subprocess with its own model loop, its own persistent session file, and its own chat in the dashboard — by default they all run in **the same working directory as the host**, so they see and edit the same files you do. Spawn one for a side task (“draft the migration”, “investigate this stack trace”, “write the test harness for module X”), keep going in the main thread, check in on it whenever you want.
 
-> **Agents edit the same files you do.** They use the same `read` / `write` / `edit` / `bash` tools as the main agent against the host's working directory. There's no per-agent worktree or branch. If you need parallel edits on isolated checkouts, set that up yourself with `git worktree` outside terva.
+> **Agents edit the same files you do — unless you opt into worktree
+> isolation.** By default they use the same `read` / `write` / `edit` /
+> `bash` tools as the main agent against the host's working directory.
+> Start terva with `--swarm-worktrees` (config: `swarm_worktrees`) to give
+> each sub-agent its own git worktree and branch instead. Isolation is
+> leased through the `terva-git-worktree` extension (`worktree_create` /
+> `worktree_release`), so that extension must be installed — if it isn't,
+> spawns fail loudly rather than silently sharing the host tree. Finished
+> worktrees and branches are kept for review/merge via the extension's
+> `/worktree collect`.
 
 ```
 /swarm                            # open the dashboard

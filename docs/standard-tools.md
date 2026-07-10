@@ -154,12 +154,13 @@ plan).
 - **Worktrees** — `terva-git-worktree` (`worktree_list`/`_create`/
   `_claim`/`_release`/`_remove`), integrating with swarm isolation via
   `--swarm-worktrees`. Mutates git state, so it is never marked read-only.
-- **Web** (adoption pending — bucket-2 Phase C) — `web_search`/`web_fetch`/
-  `web_images` are already implemented by the hardened `zot-web` extension
+- **Web** (adopted; niceties pending — bucket-2 Phase C) — `web_search`/`web_fetch`/
+  `web_images` are implemented by the hardened `zot-web` extension
   (`github.com/terva-sh/zot-web`), which loads under terva via the preserved
-  zot wire protocol. The plan is to **adopt and adapt** it (network-read
-  authority, host egress policy, a `terva_version` handshake adapter), not
-  reimplement it. See [plans/standard-tools-bucket2.md](plans/standard-tools-bucket2.md).
+  zot wire protocol and now **ships in the blessed core pack as `web`**. The
+  remaining niceties (network-read authority declaration, host egress policy, a
+  `terva_version` handshake adapter) are tracked in
+  [plans/standard-tools-bucket2.md](plans/standard-tools-bucket2.md).
 
 ### Recommended MCP presets (docs + starter config only)
 

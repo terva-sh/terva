@@ -58,7 +58,7 @@ limits` in `/usage`, and no status-bar hint. This includes OpenCode Go for now:
 it has no usage/balance endpoint yet ([anomalyco/opencode#16017](https://github.com/anomalyco/opencode/issues/16017)).
 The mechanism is a generic `provider.UsageReporter` capability — any provider
 lights up `/usage` automatically once its client implements it, with no harness
-changes. See [docs/plans/usage-windows.md](plans/usage-windows.md).
+changes. See [docs/plans/archive/usage-windows.md](plans/archive/usage-windows.md).
 
 ## API-key providers
 

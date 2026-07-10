@@ -47,7 +47,7 @@ Stdin:
 Respond on stdout (or stay silent for "no opinion"):
 
 ```json
-{"decision":"deny","reason":"use make clean instead"}
+{"decision":"deny","reason":"use just clean instead"}
 ```
 
 - `decision: "deny"` — refuse the call; `reason` is shown to the

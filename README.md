@@ -102,8 +102,8 @@ go install terva.sh/terva/cmd/terva@latest
 ```bash
 git clone https://github.com/terva-sh/terva   # public mirror; development happens on the maintainer's Forgejo
 cd terva
-make build        # produces ./bin/terva
-make install      # into $GOPATH/bin
+just build        # produces ./bin/terva
+just install      # into $GOBIN (else $GOPATH/bin)
 ```
 
 ### Prebuilt binaries
@@ -167,17 +167,22 @@ terva --help
 
 ## Development
 
+`just` is the canonical local toolchain (`just --list` shows every recipe). The
+command that matters before you push is the full gate — the same checks CI runs:
+
 ```bash
-make build     # build ./bin/terva
-make test      # go test -race ./...
-make lint      # go vet + gofmt check
-make fmt       # gofmt -w .
-make release   # cross-compile linux/darwin/windows on amd64 and arm64
+just ci        # gofmt + vet, the i18n catalog check, race tests, the
+               # terva_acp / terva_web tagged build+test, the terva_pprof and
+               # no-connector builds, and the release-overlay sync check
+just lint      # gofmt + vet + i18n check (no tests)
+just test      # race tests
+just build     # ./bin/terva
+just install-dev   # non-stripped, pprof-enabled build (see docs/profiling.md)
 ```
 
-The `justfile` wraps the same toolchain with more recipes (`just --list`). To
-performance-profile the harness, `just install-dev` builds a non-stripped,
-pprof-enabled binary; see [docs/profiling.md](docs/profiling.md).
+`just ci` is the full gate CI enforces — reproduce it before you push. A bare
+`go test ./...` skips the tagged builds, the i18n check, and the overlay check,
+so a green partial run is not a green CI.
 
 Source layout (single Go module; the top-level packages are `provider`,
 `core`, `tui`, and `agent`, with `agent` further split into focused

@@ -119,3 +119,40 @@ Common hot spots in a TUI CPU profile and what they implicate:
   `gctrace` log above.
 
 See [tui.md](tui.md) for the render loop these point into.
+
+## Benchmarks
+
+A small set of checked-in Go benchmarks guards the hot paths that scale with
+session size. Run them before a release, or when touching the agent turn loop,
+session scanning, or the replay tooling, and compare against your last numbers.
+
+```bash
+# Everything (each is fast; -benchmem reports allocations):
+go test -run '^$' -bench . -benchmem ./packages/core/ ./packages/agent/replay/
+
+# One path, more samples + a CPU/mem profile to dig into a regression:
+go test -run '^$' -bench BenchmarkDeepSessionTurn -benchmem -count 6 \
+  -cpuprofile /tmp/deep.cpu -memprofile /tmp/deep.mem ./packages/core/
+go tool pprof -top /tmp/deep.cpu
+```
+
+What they cover:
+
+- `BenchmarkDeepSessionTurn` (`packages/core`) — one turn's critical path
+  (assembling the provider request from the full history, the loop, appending
+  the reply) on an already-deep (~1000-message) session, driven by a fake
+  agent standing in for the model. This is the path that churned on long
+  sessions; watch ns/op and allocs/op as a function of depth.
+- `BenchmarkDescribeSessions` (`packages/core`) — the session-listing scan (the
+  `/sessions` picker and the startup scan) over many sessions on disk.
+- `BenchmarkSynthesizeDeepSession` (`packages/agent/replay`) — the replay
+  tooling reconstructing a deep session into its ordered frame stream.
+
+`go test -race ./...` (hence `just ci`) compiles the benchmarks but does not run
+them: they can't bitrot silently, and they never slow the gate. There is no
+committed baseline file — benchmark numbers are only comparable on the same
+host, so capture `-count 6` numbers on your machine and compare like-for-like.
+
+Candidate additions as those surfaces grow: ctrlproto snapshot/event
+serialization for long transcripts, swarm event-log replay, and grep/glob over
+large trees.

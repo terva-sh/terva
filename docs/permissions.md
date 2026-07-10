@@ -107,18 +107,20 @@ Extensions and MCP tools declare their class via the `authority` field on
 decides read-only classification; an empty value falls back to the
 `read_only` bool, and an unknown value is treated as side-effecting.
 
-### Outbound network safety (egress guard)
+### Outbound network safety (egress guard) — staged, not yet wired
 
-Network-read / external-mutation tools that terva itself drives (the MCP
-HTTP transport, host-side web policy) run their connections through the
-shared egress guard (`packages/egress`): it blocks loopback, private,
-link-local (including the `169.254.169.254` cloud-metadata endpoint),
-unique-local, and multicast destinations by default — enforced at dial
-time so DNS rebinding can't slip past — and re-checks redirect hops while
-stripping credentials across a host change. Specific hosts or CIDRs can be
-allowlisted for an intentional local service. (Out-of-process extensions
-like `zot-web` keep their own SSRF guard; the host guard is defense in
-depth for terva-driven connections.)
+`packages/egress` implements terva's shared SSRF / private-network guard,
+but **no terva-driven network feature consumes it yet**: the MCP transport
+is stdio-only today and there is no built-in web-fetch tool. It is staged
+for the MCP HTTP transport (`docs/plans/mcp-http-transport.md`) and
+host-side web policy. Once wired, it blocks loopback, private, link-local
+(including the `169.254.169.254` cloud-metadata endpoint), unique-local,
+and multicast destinations by default — enforced at dial time so DNS
+rebinding can't slip past — and re-checks redirect hops while stripping
+credentials across a host change, with specific hosts or CIDRs
+allowlistable for an intentional local service. Until then, outbound
+safety belongs to whatever makes the connection: out-of-process
+extensions (e.g. the web extension) keep their own SSRF guards.
 
 ## Permission rules
 

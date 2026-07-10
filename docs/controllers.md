@@ -50,7 +50,7 @@ The same `WorkspaceService` is bound to different transports:
 
 | Carrier | Client | Status |
 |---|---|---|
-| **in-process** | the TUI / any embedding host — direct interface calls, no serialization | `Workspace` (the in-process implementation) **shipped**; TUI still on its own path (migration is the completeness test, not yet done) |
+| **in-process** | the TUI / any embedding host — direct interface calls, no serialization | **shipped, the only TUI backend**: the TUI binds `Workspace` through the `modes.Carrier` seam (PR #14; the legacy direct driver has since been removed, `--tui-legacy` is a deprecated no-op). Honest caveat: it is a ctrlproto-*backed* in-process client, not transport-pure — the nil-Carrier direct-agent fallback is gone, but ~22 residual management readers still use the `AgentFor` crutch (see `modes/carrier.go`); retiring them needs protocol widening and is the remote-carrier milestone (remediation plan 4.1) |
 | **WebSocket** | [`terva web`](web.md) — bidirectional, streaming, browser-native | **shipped** |
 | **stdio** | a CLI, scripts, or a fleet controller (one agent per child) | designed, **not built** |
 | **ext-tunnel** | extensions, over extproto (the `chat_open`/`chat`/`chat_close` envelope trick connproto already uses) | designed, **not built** |

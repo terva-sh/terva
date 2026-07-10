@@ -11,19 +11,36 @@ Each model call is built by `packages/core.Agent.oneTurn` from four main pieces:
 3. **Tool specs** — JSON schemas from the currently registered tools (`a.Tools.Specs()`).
 4. **Reasoning setting** — the normalized reasoning/thinking level, if any.
 
+Two request fields ride alongside those pieces without ever entering the transcript:
+
+- **EphemeralContext** — host-assembled text injected for this request only (an
+  extension's live task card, the context-pressure note). Providers append it as a
+  trailing message *after* the cache breakpoint, so the cached prefix (system +
+  tools + history) still hits and only this block is re-processed each turn.
+- **PromptCacheKey** — a stable per-conversation identifier (the session's meta
+  UUID) forwarded to providers that use it for prefix-cache routing (OpenAI's
+  `prompt_cache_key`). Without it, concurrent conversations on one account — a
+  coordinator plus its swarm children — hash into overlapping cache shards and
+  evict each other's prefixes.
+
 Conceptually:
 
 ```go
 provider.Request{
-    Model:     a.Model,
-    System:    a.System,
-    Messages:  a.Messages(),
-    Tools:     a.Tools.Specs(),
-    Reasoning: a.Reasoning,
+    Model:            a.Model,
+    System:           a.System,
+    Messages:         a.Messages(),
+    Tools:            a.Tools.Specs(),
+    Reasoning:        a.Reasoning,
+    EphemeralContext: contextProvider(), // per-request tail, never persisted
+    PromptCacheKey:   cacheKey,          // session meta UUID, cache routing
 }
 ```
 
 Tool descriptions are not duplicated in the default system prompt. The provider request carries tool schemas separately.
+
+See the provider prompt-caching notes in `packages/provider/provider.go` (the
+`Request` field docs) for the cache-behavior contract these two fields carry.
 
 ## Startup resolution
 
@@ -183,6 +200,32 @@ On resume, terva reads the JSONL session file for the cwd/session and hydrates m
 ## Compaction
 
 When transcript context grows too large, terva can compact it. Compaction replaces the in-memory transcript with a synthetic summary plus a kept tail of recent messages. A compaction checkpoint is appended to the session file so future resumes use the compacted transcript.
+
+Automatic compaction fires when the last request's context use crosses 85% of the model's window, at up to three places:
+
+- **pre-turn** — before sending a prompt whose transcript is already past the threshold (covers resumes);
+- **post-turn** — while idle after a turn ends, so the next prompt doesn't pay the summarization latency;
+- **mid-turn** — at the safe boundary between a turn's tool-loop steps, so a long agentic turn (one prompt driving many tool calls) can't grow past the window with no boundary check ever running. Mid-turn compaction uses an extended summarization prompt that demands an explicit ledger of already-executed actions (files written, commands run, messages sent), so the resuming agent never repeats a side effect.
+
+A context-limit rejection from the provider (HTTP 413, or a 400 naming the context window) additionally triggers one compact-and-retry.
+
+The `auto_compact` config knob selects how much of this runs — read live, so an edit applies to the running session:
+
+```json
+{ "auto_compact": "steps" }
+```
+
+- `steps` (default) — all of the above;
+- `turns` — turn boundaries and error recovery only (the pre-mid-turn behavior);
+- `off` — no automatic compaction at all; context-limit errors surface and you compact by hand.
+
+Manual `/compact` works in every mode. From 70% of the window the model itself is warned each step (an ephemeral note riding the request tail) so it can wrap up, economize, or delegate remaining large reads to sub-agents before the 85% valve fires.
+
+## Provider prompt caching
+
+terva keeps the serialized transcript byte-stable across a turn's steps — the system prompt and tool set are pinned for the whole turn, tool results append, and nothing rewrites earlier messages — so provider-side prefix caches stay hot through long agentic tool loops.
+
+One provider behavior is worth knowing when watching costs on OpenAI reasoning models (`openai-codex`, `openai-responses`): the Responses backend **discards prior-turn reasoning items at prompt assembly**. Every user message — typed, queued, or harness-injected (the open-work finalize guard, the auto-swarm recap) — reclassifies all reasoning items behind it at once, so the canonicalized prompt diverges from the cache at the *first* reasoning item and the next call re-reads essentially the whole conversation uncached. This is inherent to encrypted-reasoning replay (terva re-sends the items; the server drops the stale ones), not something the client can serialize around. Practical upshot: on these providers each user-message boundary in a large session costs roughly one full-context read, so injected-message frequency is a real cost knob. Anthropic models don't share this mechanic.
 
 ## User prompt file references
 

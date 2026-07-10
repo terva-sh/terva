@@ -428,7 +428,7 @@ Connectors are compiled in via build tags: telegram and discord ship by default,
 
 The background flavor writes the child's PID to `$TERVA_HOME/bot.pid` and redirects stdout and stderr to `$TERVA_HOME/logs/bot.log`. `terva bot stop` reads that PID, sends SIGTERM, waits up to five seconds, then escalates to SIGKILL if the child is still alive. Running two instances at once is refused at startup.
 
-> **Use the installed binary for `start`.** `go run ./cmd/terva bot start` won't work. `go run` builds a binary in a temp directory and deletes it when it exits, which kills the detached child. Run `make install` (or `go build`) first and invoke the installed binary.
+> **Use the installed binary for `start`.** `go run ./cmd/terva bot start` won't work. `go run` builds a binary in a temp directory and deletes it when it exits, which kills the detached child. Run `just install` (or `go build`) first and invoke the installed binary.
 
 For a bot that should survive reboots — a persistent, resuming,
 capability-scoped service — run `bot run` under systemd instead of
