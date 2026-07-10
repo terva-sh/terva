@@ -141,11 +141,42 @@ type Sink interface {
 	// Transcript appends a chunk of agent output (typically a final
 	// assistant message) to the agent's running transcript.
 	Transcript(chunk string)
+	// Result records the child's latest complete assistant message —
+	// the sub-agent's current answer. Distinct from Transcript, which
+	// keeps the line-oriented running log; Result lets the auto-swarm
+	// recap surface the actual findings instead of a truncated tail.
+	Result(text string)
+	// GuardNudge marks that the child was re-prompted by the finalize
+	// guard (OpenWorkGateMessage) AFTER it tried to finish. The answer
+	// recorded so far is the child's intended deliverable; whatever it
+	// says next may be mere housekeeping ("all tasks complete"), and
+	// Findings must not let that clobber the real result.
+	GuardNudge()
 }
+
+// OpenWorkGateMessage is the at-close re-prompt injected once when the
+// model tries to finish while tracked work is still open. A soft nudge —
+// it grants one more turn, not a hard stop — and core caps it to once
+// per prompt. It lives in this package (not the agent host that injects
+// it) because the swarm supervisor must ALSO recognize it in a child's
+// event stream: the child's literal answer to this nudge is usually task
+// housekeeping, which must not displace its findings in the recap.
+const OpenWorkGateMessage = "You indicated you're finishing, but tracked items are still open. Complete them, or confirm they're intentionally left incomplete."
 
 // Swarm supervises a set of Agents.
 type Swarm struct {
 	cfg Config
+
+	// ctx is the swarm's own lifecycle root: every spawned/resumed
+	// agent's context derives from it, NOT from the caller's context.
+	// The spawning call is usually a tool dispatch inside a live turn,
+	// and a sub-agent must outlive that turn — an Esc-cancel, a turn
+	// error, or the turn simply ending must not tear down background
+	// workers mid-task (they once died to exec.CommandContext through
+	// exactly that chain). cancelAll is the last-resort teardown used
+	// by StopAllAndWait after the graceful drain window.
+	ctx       context.Context
+	cancelAll context.CancelFunc
 
 	mu     sync.Mutex
 	agents map[string]*Agent
@@ -175,10 +206,12 @@ func New(cfg Config) *Swarm {
 	if cfg.NewRunner == nil {
 		cfg.NewRunner = func(a *Agent) Runner { return &execRunner{agent: a} }
 	}
-	return &Swarm{
+	s := &Swarm{
 		cfg:    cfg,
 		agents: map[string]*Agent{},
 	}
+	s.ctx, s.cancelAll = context.WithCancel(context.Background())
+	return s
 }
 
 // SetActiveSession scopes the dashboard view (and Spawn stamping)
@@ -249,6 +282,10 @@ func (f *Swarm) Spawn(ctx context.Context, task string) (*Agent, error) {
 // SpawnReq is the full-fat variant of Spawn that accepts a
 // SpawnRequest. Existing callers can keep using Spawn; new code that
 // wants to pin the child's model uses this.
+//
+// ctx governs only the call-scoped setup (AcquireWorktree). The spawned
+// agent's lifetime is swarm-scoped — it survives the caller's turn and
+// ends only via Stop/StopAllAndWait (see the Swarm.ctx field note).
 //
 // By default every spawned agent runs with cwd == cfg.RepoRoot — the
 // same working directory as the host, no per-agent worktree or branch.
@@ -329,7 +366,12 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 
 		releaseWorktree: releaseWorktree,
 	}
-	a.ctx, a.cancel = context.WithCancel(ctx)
+	// The agent's lifetime is swarm-scoped, deliberately NOT the
+	// caller's ctx: a spawn arrives on a turn's tool-dispatch context,
+	// and the sub-agent must survive that turn ending, erroring, or
+	// being cancelled. The caller ctx still governs the call-scoped
+	// setup above (AcquireWorktree).
+	a.ctx, a.cancel = context.WithCancel(f.ctx)
 	a.runner = f.cfg.NewRunner(a)
 
 	f.mu.Lock()
@@ -521,11 +563,54 @@ func (f *Swarm) Stop(id string) error {
 	return nil
 }
 
-// StopAll cancels every running agent. Used on shutdown.
+// StopAll requests a graceful stop of every running agent and returns
+// immediately. The drain-or-backstop for each agent runs on background
+// goroutines — callers that are about to exit the process should use
+// StopAllAndWait instead, or the process dies before the children get
+// to flush their terminal events and the logs end mid-sentence.
 func (f *Swarm) StopAll() {
 	for _, a := range f.List() {
 		_ = f.Stop(a.ID)
 	}
+}
+
+// StopAllAndWait gracefully stops every running agent and waits — up
+// to bound (0 means cfg.StopGrace plus a scheduling margin) — for the
+// children to drain, write their agent_stopped terminators, and exit.
+// It then cancels the swarm's root context as a final backstop so no
+// child process can outlive the supervisor's pipes. This is the
+// shutdown path for hosts: a child killed silently mid-write shows up
+// on the next launch as a mystery truncation; one drained here shows
+// up as "shutdown (offline)", resumable.
+func (f *Swarm) StopAllAndWait(bound time.Duration) {
+	agents := f.List()
+	var waits []<-chan struct{}
+	for _, a := range agents {
+		a.mu.Lock()
+		running := a.status == StatusRunning || a.status == StatusPending
+		done := a.done
+		a.mu.Unlock()
+		if !running {
+			continue
+		}
+		_ = f.Stop(a.ID)
+		if done != nil {
+			waits = append(waits, done)
+		}
+	}
+	if bound <= 0 {
+		bound = f.cfg.StopGrace + time.Second
+	}
+	deadline := time.After(bound)
+	for _, done := range waits {
+		select {
+		case <-done:
+		case <-deadline:
+			f.cancelAll()
+			return
+		}
+	}
+	f.cancelAll()
 }
 
 // Remove tears down the per-agent state for a terminated agent. It
@@ -586,6 +671,19 @@ type AgentSnapshot struct {
 	Tail     string   // last few transcript lines, joined with "\n"
 	Lines    []string // full transcript (already capped by Agent.appendTranscript)
 
+	// LastAssistant is the child's most recent complete assistant
+	// message — its current answer / findings. Empty until the child
+	// emits its first assistant_message. The auto-swarm recap prefers
+	// this over Tail so a coordinator sees the actual result rather
+	// than a truncated slice of interleaved tool output.
+	LastAssistant string
+
+	// PreGuardAssistant is the answer the child had ALREADY delivered
+	// when the finalize guard (OpenWorkGateMessage) re-prompted it.
+	// Empty unless the guard fired. See Findings for how the two
+	// candidates are arbitrated.
+	PreGuardAssistant string
+
 	// Model and Provider expose the per-agent overrides set at
 	// Spawn time (empty when the agent inherits the child's default
 	// resolution). The dashboard surfaces these so the user can
@@ -614,6 +712,53 @@ type AgentSnapshot struct {
 	SessionPath  string
 }
 
+// RecapStatus reports the sub-agent's outcome in task terms for the
+// auto-swarm recap. A dispatched sub-agent is a long-lived daemon: it
+// keeps status=running after its task's turn_end fires, so the raw
+// Status reads "running" even though the task is done — which misleads
+// a coordinator into thinking the crew is still working. The recap only
+// ever describes agents whose task has finished (or that terminated), so
+// collapse the non-terminal states to "completed" and pass real failures
+// through.
+func (s AgentSnapshot) RecapStatus() string {
+	switch s.Status {
+	case StatusFailed:
+		return "failed"
+	case StatusKilled:
+		return "killed"
+	default:
+		// running / done / detached / pending: the task reached the
+		// recap, so from the coordinator's view it completed.
+		return "completed"
+	}
+}
+
+// Findings returns the sub-agent's answer for the recap: its last
+// complete assistant message when captured, else the transcript tail as
+// a fallback (older/detached agents, or a task that ended before
+// emitting assistant text). Prefer this over Tail directly so a
+// coordinator sees the actual result rather than a slice of interleaved
+// tool output.
+//
+// Guard interaction: a child that delivers its report and THEN gets the
+// finalize-guard nudge (open tracked items) often answers the nudge with
+// pure housekeeping — "confirmed, all tasks complete" — making that the
+// last assistant message. The pre-nudge answer was the deliverable, so
+// when it is the more substantive of the two it wins. A child that
+// re-states (or extends) its report after the nudge still wins on
+// length, so the newer text is preferred whenever it plausibly carries
+// the findings.
+func (s AgentSnapshot) Findings() string {
+	last := strings.TrimSpace(s.LastAssistant)
+	if pre := strings.TrimSpace(s.PreGuardAssistant); len(pre) > len(last) {
+		return pre
+	}
+	if last != "" {
+		return last
+	}
+	return strings.TrimSpace(s.Tail)
+}
+
 // Snapshot copies the live agent state into a value the caller can
 // inspect at leisure.
 func (a *Agent) Snapshot() AgentSnapshot {
@@ -631,15 +776,17 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		Status: a.status, Activity: a.activity,
 		Started: a.Started, Finished: a.finished,
 		Err: errStr, Tail: tail, Lines: lines,
-		Model:        a.Model,
-		Provider:     a.Provider,
-		Persona:      a.Persona,
-		Experience:   a.Experience,
-		Substrate:    a.Substrate,
-		Card:         a.Card,
-		InboxPath:    a.InboxPath,
-		EventLogPath: a.EventLogPath,
-		SessionPath:  a.SessionPath,
+		LastAssistant:     a.lastAssistant,
+		PreGuardAssistant: a.preGuardAssistant,
+		Model:             a.Model,
+		Provider:          a.Provider,
+		Persona:           a.Persona,
+		Experience:        a.Experience,
+		Substrate:         a.Substrate,
+		Card:              a.Card,
+		InboxPath:         a.InboxPath,
+		EventLogPath:      a.EventLogPath,
+		SessionPath:       a.SessionPath,
 	}
 }
 
@@ -677,6 +824,8 @@ type agentSink struct{ a *Agent }
 
 func (s agentSink) Activity(msg string)     { s.a.setActivity(msg) }
 func (s agentSink) Transcript(chunk string) { s.a.appendTranscript(chunk) }
+func (s agentSink) Result(text string)      { s.a.setLastAssistant(text) }
+func (s agentSink) GuardNudge()             { s.a.noteGuardNudge() }
 
 func truncate(s string, n int) string {
 	if len(s) <= n {

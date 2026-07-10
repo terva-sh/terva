@@ -255,15 +255,23 @@ func replayEventsIntoAgent(a *Agent, evs []Event) {
 	for _, ev := range evs {
 		switch ev.Type {
 		case "assistant_message":
+			var parts []string
 			if c, ok := ev.Data["content"].([]any); ok {
 				for _, blk := range c {
 					m, _ := blk.(map[string]any)
 					if t, _ := m["type"].(string); t == "text" {
 						if txt, _ := m["text"].(string); txt != "" {
 							a.appendTranscript(txt)
+							parts = append(parts, txt)
 						}
 					}
 				}
+			}
+			// Recover the last answer too (mirrors applyEventToSink), so a
+			// snapshot of a reloaded agent carries its findings, not just a
+			// transcript tail.
+			if len(parts) > 0 {
+				a.setLastAssistant(strings.Join(parts, "\n"))
 			}
 		case "user_message":
 			if c, ok := ev.Data["content"].([]any); ok {
@@ -272,6 +280,12 @@ func replayEventsIntoAgent(a *Agent, evs []Event) {
 					if t, _ := m["type"].(string); t == "text" {
 						if txt, _ := m["text"].(string); txt != "" {
 							a.appendTranscript("user: " + txt)
+							// Mirror applyEventToSink: a reloaded agent's
+							// snapshot must arbitrate findings the same
+							// way as a live one.
+							if txt == OpenWorkGateMessage {
+								a.noteGuardNudge()
+							}
 						}
 					}
 				}
@@ -338,6 +352,9 @@ func replayEventsIntoAgent(a *Agent, evs []Event) {
 // The agent must be in a non-running state (Detached, Done, Failed,
 // Killed). Resuming a still-running agent returns an error so two
 // runners don't race for the same session.
+//
+// ctx is reserved for call-scoped setup; the resumed agent's lifetime
+// is swarm-scoped (see SpawnReq) and ends only via Stop/StopAllAndWait.
 func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 	existing := f.Get(id)
 	if existing == nil {
@@ -395,7 +412,9 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 	if len(prev) > 0 {
 		a.appendTranscript(strings.Join(prev, "\n"))
 	}
-	a.ctx, a.cancel = context.WithCancel(ctx)
+	// Swarm-scoped lifetime, same as SpawnReq: the resumed agent must
+	// outlive the caller's (turn-scoped) context.
+	a.ctx, a.cancel = context.WithCancel(f.ctx)
 	a.runner = f.cfg.NewRunner(a)
 
 	f.mu.Lock()

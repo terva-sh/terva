@@ -90,6 +90,23 @@ type Agent struct {
 	finished   time.Time
 	lastErr    error
 
+	// lastAssistant is the text of the most recent assistant_message
+	// the child emitted — i.e. the sub-agent's latest answer, which for
+	// a task-scoped dispatch (e.g. a review specialist) is its findings.
+	// Kept distinct from the line-oriented transcript so the auto-swarm
+	// recap can surface the actual answer instead of a truncated tail of
+	// interleaved tool/test output. Set from applyEventToSink via the
+	// Sink.Result seam; guarded by mu.
+	lastAssistant string
+
+	// preGuardAssistant snapshots lastAssistant at the moment the
+	// finalize guard re-prompted the child (see Sink.GuardNudge). The
+	// child had just tried to finish, so this is its intended
+	// deliverable; its literal answer to the nudge is often task
+	// housekeeping that would otherwise clobber the findings in the
+	// recap. Guarded by mu.
+	preGuardAssistant string
+
 	// OnTurnEnd, if set, fires once per TASK-level turn_end the runner
 	// observes from the child daemon — i.e. once each time the child's
 	// ag.Prompt returns, not after every internal turn of its
@@ -196,6 +213,30 @@ func (a *Agent) setStatus(s Status) {
 func (a *Agent) setActivity(msg string) {
 	a.mu.Lock()
 	a.activity = strings.TrimSpace(msg)
+	a.mu.Unlock()
+}
+
+// setLastAssistant records the child's latest assistant answer. A
+// blank message is ignored so a stray empty assistant turn never
+// clobbers real findings.
+func (a *Agent) setLastAssistant(txt string) {
+	txt = strings.TrimSpace(txt)
+	if txt == "" {
+		return
+	}
+	a.mu.Lock()
+	a.lastAssistant = txt
+	a.mu.Unlock()
+}
+
+// noteGuardNudge snapshots the child's current answer when the finalize
+// guard re-prompts it. Keeps the newest pre-guard answer if the guard
+// somehow fires more than once; ignores the no-answer-yet case.
+func (a *Agent) noteGuardNudge() {
+	a.mu.Lock()
+	if a.lastAssistant != "" {
+		a.preGuardAssistant = a.lastAssistant
+	}
 	a.mu.Unlock()
 }
 

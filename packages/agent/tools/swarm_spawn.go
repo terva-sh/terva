@@ -64,14 +64,24 @@ type SwarmSpawnTool struct {
 	// human-readable roster (what each persona is good for) rides the system
 	// prompt when the proactive nudge is on; this is just the value set.
 	Personas []string
+
+	// Trusted reads the live Workspace Trust verdict for the cwd the
+	// sub-agents would run in. An untrusted workspace degrades children
+	// silently — they boot without project extensions, skills, or context
+	// files, and only a stderr line in their own event log says so — so
+	// Execute refuses the spawn with guidance to have the user run
+	// `terva trust` (or pass allow_untrusted to proceed degraded). Nil
+	// means the host doesn't track trust; the gate is skipped.
+	Trusted func() bool
 }
 
 type swarmSpawnArgs struct {
-	Task     string `json:"task"`
-	Persona  string `json:"persona,omitempty"`
-	Model    string `json:"model,omitempty"`
-	Provider string `json:"provider,omitempty"`
-	Tier     string `json:"tier,omitempty"`
+	Task           string `json:"task"`
+	Persona        string `json:"persona,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Provider       string `json:"provider,omitempty"`
+	Tier           string `json:"tier,omitempty"`
+	AllowUntrusted bool   `json:"allow_untrusted,omitempty"`
 }
 
 const swarmSpawnSchema = `{
@@ -97,6 +107,10 @@ const swarmSpawnSchema = `{
     "provider": {
       "type": "string",
       "description": "Optional provider id. Normally OMIT both model and provider so the sub-agent inherits the host session. If you set this you must also set model."
+    },
+    "allow_untrusted": {
+      "type": "boolean",
+      "description": "Set true ONLY after the user has explicitly declined to trust this workspace but still wants sub-agents: spawns them degraded (no project extensions, skills, or context files). Normally leave unset — if the workspace is untrusted, ask the user to run 'terva trust' first."
     }
   },
   "required": ["task"]
@@ -143,6 +157,15 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	task := strings.TrimSpace(a.Task)
 	if task == "" {
 		return toolErr("swarm_spawn: task is required"), nil
+	}
+
+	// Untrusted workspaces degrade sub-agents silently (no project
+	// extensions/skills/context files), so surface it HERE, where the
+	// calling agent can relay it and the user can fix it — not as a
+	// stderr line buried in the child's own event log.
+	untrusted := t.Trusted != nil && !t.Trusted()
+	if untrusted && !a.AllowUntrusted {
+		return toolErr("swarm_spawn: this workspace is untrusted, so sub-agents would run WITHOUT its project extensions, skills, and context files. Ask the user to trust it (run `terva trust`, or restart and accept the trust prompt), then retry. If the user explicitly wants degraded sub-agents instead, retry with allow_untrusted: true."), nil
 	}
 
 	persona := strings.TrimSpace(a.Persona)
@@ -202,6 +225,9 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		} else {
 			fmt.Fprintf(&sb, "provider: %s\n", route.Provider)
 		}
+	}
+	if untrusted {
+		sb.WriteString("note: UNTRUSTED workspace — the sub-agent runs without project extensions, skills, or context files.\n")
 	}
 	sb.WriteString("\nThe sub-agent is running in the background. Use /swarm in the TUI to monitor it. ")
 	sb.WriteString("This conversation continues immediately; do not wait for the sub-agent to finish before working on the next thing.")

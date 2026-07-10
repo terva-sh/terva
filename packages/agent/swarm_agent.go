@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
@@ -33,17 +34,17 @@ import (
 // production; tests use the stubchild binary under
 // packages/agent/swarm/testdata/cmd/stubchild instead of the real model
 // loop.
-func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
+func runSwarmAgentMode(ctx context.Context, args build.Args, version string) error {
 	if args.SwarmAgent == "" {
 		return fmt.Errorf("--swarm-agent requires a socket path")
 	}
 
-	confirmGate, roSet := headlessConfirmGate(args, "swarm-agent")
-	r, err := Resolve(args, true)
+	confirmGate, roSet := build.HeadlessConfirmGate(args, "swarm-agent")
+	r, err := build.Resolve(args, true)
 	if err != nil {
 		return err
 	}
-	warnRestrictedWorkspace(args, r.Trusted)
+	build.WarnRestrictedWorkspace(args, r.Trusted)
 	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
@@ -52,13 +53,13 @@ func runSwarmAgentMode(ctx context.Context, args Args, version string) error {
 	// nil differ: swarm sub-agents run concurrently sharing one workspace,
 	// so per-sub-agent diffing would race and double-report; the parent
 	// run's workspace_changed captures the net effect of the whole swarm.
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, buildHookEngine(args, r.Trusted), nil)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, build.BuildHookEngine(args, r.Trusted), nil)
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 	ag.AdoptSessionIdentity(sess)
 	// Tell session-keyed extensions the real session id before any turn
 	// runs, so per-session state persists for swarm agents too.
-	emitSessionStart(extMgr, sess)
+	build.EmitSessionStart(extMgr, sess)
 
 	// Open the inbox listener BEFORE emitting agent_ready so the
 	// supervisor can dial through on the very first send. The

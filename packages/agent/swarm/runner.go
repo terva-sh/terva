@@ -385,15 +385,23 @@ func applyEventToSink(ev Event, sink Sink) {
 	}
 	switch ev.Type {
 	case "assistant_message":
+		var parts []string
 		if c, ok := eventMessageContent(ev.Data); ok {
 			for _, blk := range c {
 				m, _ := blk.(map[string]any)
 				if t, _ := m["type"].(string); t == "text" {
 					if txt, _ := m["text"].(string); txt != "" {
 						sink.Transcript(txt)
+						parts = append(parts, txt)
 					}
 				}
 			}
+		}
+		// Record the whole message as this agent's latest answer, so the
+		// auto-swarm recap can surface real findings rather than a tail of
+		// interleaved tool output. Skip empty (tool-only) turns.
+		if len(parts) > 0 {
+			sink.Result(strings.Join(parts, "\n"))
 		}
 		sink.Activity("idle")
 	case "user_message":
@@ -403,6 +411,13 @@ func applyEventToSink(ev Event, sink Sink) {
 				if t, _ := m["type"].(string); t == "text" {
 					if txt, _ := m["text"].(string); txt != "" {
 						sink.Transcript("user: " + txt)
+						// The finalize guard re-prompting the child: the
+						// answer it already gave is its deliverable — pin
+						// it so a housekeeping reply can't clobber the
+						// recap findings.
+						if txt == OpenWorkGateMessage {
+							sink.GuardNudge()
+						}
 					}
 				}
 			}
