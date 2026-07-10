@@ -2,6 +2,8 @@ package provider
 
 import (
 	"bytes"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -112,5 +114,65 @@ func TestAnthShrinkImage_BadDataReturnsOriginal(t *testing.T) {
 	}
 	if mime != "image/png" {
 		t.Errorf("mime was changed on bad input: %s", mime)
+	}
+}
+
+// pngHeaderClaiming builds the smallest byte sequence image.DecodeConfig
+// accepts as a PNG with the given dimensions: signature + a CRC-valid
+// IHDR chunk (RGBA, 8-bit) and nothing else. The body is absent on
+// purpose — a decode bomb is exactly a tiny file with a huge header, and
+// the cap must reject it from the header alone, before image.Decode ever
+// runs (a full decode of the claimed size would be the vulnerability).
+func pngHeaderClaiming(t *testing.T, width, height uint32) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	buf.Write([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	ihdr := make([]byte, 13)
+	binary.BigEndian.PutUint32(ihdr[0:4], width)
+	binary.BigEndian.PutUint32(ihdr[4:8], height)
+	ihdr[8] = 8  // bit depth
+	ihdr[9] = 6  // color type RGBA
+	ihdr[10] = 0 // compression
+	ihdr[11] = 0 // filter
+	ihdr[12] = 0 // interlace
+	var length [4]byte
+	binary.BigEndian.PutUint32(length[:], 13)
+	buf.Write(length[:])
+	chunk := append([]byte("IHDR"), ihdr...)
+	buf.Write(chunk)
+	var crc [4]byte
+	binary.BigEndian.PutUint32(crc[:], crc32.ChecksumIEEE(chunk))
+	buf.Write(crc[:])
+	return buf.Bytes()
+}
+
+// TestAnthShrinkImage_MegapixelCapRejectsDecodeBomb: an image whose
+// header claims an area over maxInputPixels must come back untouched —
+// and fast, because the full decode (which for 50000×50000 RGBA would
+// be a ~10 GB allocation) must never be attempted.
+func TestAnthShrinkImage_MegapixelCapRejectsDecodeBomb(t *testing.T) {
+	src := pngHeaderClaiming(t, 50000, 50000)
+	// Precondition: the header alone parses to the claimed dimensions.
+	cfg := decodeConfig(t, src)
+	if cfg.Width != 50000 || cfg.Height != 50000 {
+		t.Fatalf("synthetic header parsed as %dx%d", cfg.Width, cfg.Height)
+	}
+	out, mime := anthShrinkImageBytesIfTooBig(src, "image/png")
+	if !bytes.Equal(out, src) {
+		t.Error("over-cap image was not returned unchanged")
+	}
+	if mime != "image/png" {
+		t.Errorf("mime changed on over-cap image: %s", mime)
+	}
+}
+
+// TestAnthShrinkImage_UnderCapStillShrinks: the cap must not catch the
+// legitimate oversize-but-decodable case the shrinker exists for.
+func TestAnthShrinkImage_UnderCapStillShrinks(t *testing.T) {
+	src := encodePNG(t, makeRect(3000, 100)) // 0.3 MP, over the side cap
+	out, _ := anthShrinkImageBytesIfTooBig(src, "image/png")
+	cfg := decodeConfig(t, out)
+	if cfg.Width != anthMaxImageSide {
+		t.Errorf("width: got %d want %d", cfg.Width, anthMaxImageSide)
 	}
 }

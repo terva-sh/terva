@@ -56,7 +56,7 @@ func NewOpenAIResponses(apiKey, baseURL string) Client {
 		Timeout:   0,
 	}
 	inner := &codexClient{
-		token:     apiKey,
+		cred:      StaticCredential(apiKey),
 		accountID: "", // unused; transport strips the header
 		baseURL:   strings.TrimRight(baseURL, "/"),
 		http:      httpClient,

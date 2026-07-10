@@ -98,6 +98,40 @@ func NewStreamDeathError(provider, terminal string) *ProviderError {
 	}
 }
 
+// ErrStreamLimit is the sentinel behind NewStreamLimitError, so callers
+// can errors.Is a limit abort apart from a plain truncation.
+var ErrStreamLimit = errors.New("event stream line exceeded its size limit")
+
+// NewStreamLimitError marks a stream aborted because a single wire line
+// exceeded the reader's ceiling.
+//
+// Unlike stream death this is *permanent*, and the distinction is the
+// whole point. A truncated stream is a transport accident: retrying
+// re-runs the request and probably succeeds. An over-limit line is
+// deterministic — the server re-sends the identical oversized event on
+// every attempt — so marking it transient burns the entire retry budget,
+// paying full input tokens per attempt, to fail in exactly the same place
+// and then blame the network. Transient stays false.
+func NewStreamLimitError(provider string, max int) *ProviderError {
+	return &ProviderError{
+		Provider:  provider,
+		Transient: false,
+		Msg:       fmt.Sprintf("stream aborted: a single event exceeded the %d MiB line limit", max>>20),
+		err:       ErrStreamLimit,
+	}
+}
+
+// NewStreamReadError wraps a transport failure that killed an event
+// stream mid-read. Transient: the read failed, not the payload.
+func NewStreamReadError(provider string, err error) *ProviderError {
+	return &ProviderError{
+		Provider:  provider,
+		Transient: true,
+		Msg:       "event stream read failed",
+		err:       err,
+	}
+}
+
 // NewAPIError wraps an error event delivered inside an otherwise-OK
 // stream. transient comes from the constructing client's knowledge of
 // its protocol's error vocabulary.

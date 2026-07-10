@@ -24,6 +24,17 @@ import (
 // kinds of screenshots / charts the model usually consumes.
 const anthMaxImageSide = 2000
 
+// maxInputPixels bounds the SOURCE image area we are willing to fully
+// decode for resizing: 64 megapixels (an 8000×8000 — Anthropic's own
+// single-image dimension cap — decodes to ~256 MB of RGBA, the most we
+// will ever spend on one attachment). DecodeConfig reads only the
+// header, so a highly compressed bomb — a tiny file claiming
+// 50000×50000 — could otherwise force a multi-gigabyte allocation in
+// image.Decode before the resize even starts. Over-cap images return
+// unchanged, per this file's best-effort contract: the provider's own
+// oversize rejection is clearer than anything we could synthesise here.
+const maxInputPixels = 64 * 1000 * 1000
+
 // anthShrinkImageBytesIfTooBig returns data unchanged when the image
 // already fits within Anthropic's per-image dimension cap. When it
 // doesn't, the image is decoded, resampled with Catmull-Rom (a good
@@ -48,6 +59,12 @@ func anthShrinkImageBytesIfTooBig(data []byte, mime string) ([]byte, string) {
 		return data, mime
 	}
 	if cfg.Width <= anthMaxImageSide && cfg.Height <= anthMaxImageSide {
+		return data, mime
+	}
+	// Area check in int64: the per-axis values from a decoder fit in 32
+	// bits, but their product does not have to fit in an int on every
+	// platform.
+	if int64(cfg.Width)*int64(cfg.Height) > maxInputPixels {
 		return data, mime
 	}
 	// Compute target dimensions preserving aspect ratio, longest side

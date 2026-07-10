@@ -59,6 +59,48 @@ func TestAnthropicNoEphemeralWhenEmpty(t *testing.T) {
 	}
 }
 
+// OpenAI Responses (codex): the ephemeral block is appended as a trailing
+// user input message. The builder used to drop EphemeralContext entirely,
+// so on openai-codex / openai-responses the model never saw extension
+// context cards or the context-pressure note.
+func TestOpenAICodexEphemeralTrailingMessage(t *testing.T) {
+	c := NewOpenAICodex("token", "acct", "https://example.test").(*codexClient)
+	wire, err := c.buildRequest(Request{
+		Model:            "gpt-5.5",
+		Messages:         []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+		EphemeralContext: "<extension-context source=\"x\">live</extension-context>",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Input) != 2 {
+		t.Fatalf("want 2 input items (real + ephemeral), got %d", len(wire.Input))
+	}
+	msg, ok := wire.Input[len(wire.Input)-1].(codexInputMessage)
+	if !ok || msg.Role != "user" {
+		t.Fatalf("ephemeral item not a trailing user input message: %T %+v", wire.Input[len(wire.Input)-1], wire.Input[len(wire.Input)-1])
+	}
+	txt, ok := msg.Content[0].(codexInputText)
+	if !ok || !strings.Contains(txt.Text, "live") {
+		t.Fatalf("ephemeral block missing text: %+v", msg.Content)
+	}
+}
+
+// With no ephemeral context, the codex builder appends nothing.
+func TestOpenAICodexNoEphemeralWhenEmpty(t *testing.T) {
+	c := NewOpenAICodex("token", "acct", "https://example.test").(*codexClient)
+	wire, err := c.buildRequest(Request{
+		Model:    "gpt-5.5",
+		Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Input) != 1 {
+		t.Fatalf("want 1 input item, got %d", len(wire.Input))
+	}
+}
+
 // OpenAI: the ephemeral block is appended as a trailing user message.
 func TestOpenAIEphemeralTrailingMessage(t *testing.T) {
 	c := NewOpenAI("token", "https://example.test").(*openaiClient)
