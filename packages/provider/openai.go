@@ -36,10 +36,9 @@ func chatCompletionsURL(baseURL string) string {
 }
 
 type openaiClient struct {
-	apiKey  string
+	cred    CredentialSource
 	baseURL string
 	name    string
-	oauth   bool // when true, apiKey actually holds an OAuth access token
 	headers map[string]string
 	http    *http.Client
 
@@ -56,7 +55,7 @@ func NewOpenAI(apiKey, baseURL string) Client {
 		baseURL = openaiDefaultBaseURL
 	}
 	return &openaiClient{
-		apiKey:  apiKey,
+		cred:    StaticCredential(apiKey),
 		baseURL: strings.TrimRight(baseURL, "/"),
 		name:    "openai",
 		http:    &http.Client{Timeout: 0},
@@ -76,7 +75,7 @@ func NewDeepSeek(apiKey, baseURL string) Client {
 	}
 	base := strings.TrimRight(baseURL, "/")
 	inner := &openaiClient{
-		apiKey:  apiKey,
+		cred:    StaticCredential(apiKey),
 		baseURL: base,
 		name:    "deepseek",
 		http:    &http.Client{Timeout: 0},
@@ -93,7 +92,7 @@ func NewKimiWithHeaders(apiKey, baseURL string, headers map[string]string) Clien
 		baseURL = "https://api.kimi.com/coding/v1"
 	}
 	return &openaiClient{
-		apiKey:  apiKey,
+		cred:    StaticCredential(apiKey),
 		baseURL: strings.TrimRight(baseURL, "/"),
 		name:    "kimi",
 		headers: headers,
@@ -182,6 +181,10 @@ type oaiRequest struct {
 	MaxTokens        *int              `json:"max_tokens,omitempty"`
 	MaxCompletionTok *int              `json:"max_completion_tokens,omitempty"`
 	ReasoningEffort  string            `json:"reasoning_effort,omitempty"`
+	// PromptCacheKey pins prefix-cache routing per conversation. Only sent
+	// to the real OpenAI backend (see buildRequest) — this client also
+	// serves OpenAI-compatible endpoints that may reject unknown fields.
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 }
 
 // ---- request building ----
@@ -205,6 +208,12 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 		Stream:        true,
 		StreamOptions: &oaiStreamOptions{IncludeUsage: true},
 		Temperature:   req.Temperature,
+	}
+	// Forward the cache-routing key only to the real OpenAI backend. The
+	// same client serves kimi/ollama/azure/copilot and other
+	// OpenAI-compatible endpoints, where an unknown parameter risks a 400.
+	if c.name == "openai" {
+		out.PromptCacheKey = req.PromptCacheKey
 	}
 
 	maxTok := req.MaxTokens
@@ -479,6 +488,10 @@ func (c *openaiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 	if err != nil {
 		return nil, err
 	}
+	key, err := c.cred(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", c.name, err)
+	}
 	newReq := func() (*http.Request, error) {
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 		if err != nil {
@@ -486,7 +499,7 @@ func (c *openaiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 		}
 		httpReq.Header.Set("content-type", "application/json")
 		httpReq.Header.Set("accept", "text/event-stream")
-		httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
+		httpReq.Header.Set("authorization", "Bearer "+key)
 		for k, v := range c.headers {
 			httpReq.Header.Set(k, v)
 		}
@@ -541,13 +554,13 @@ func (c *openaiClient) UsageSnapshot() (UsageSnapshot, bool) {
 
 func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {
 	defer close(out)
-	defer resp.Body.Close()
 
 	model, _ := FindModel("", req.Model)
 	out <- EventStart{Model: req.Model, Provider: c.Name()}
 
-	raw := make(chan sseEvent, 16)
-	go readSSE(resp.Body, raw)
+	stream := newSSEStream(resp.Body, c.Name())
+	defer stream.Close() // owns resp.Body: closes it, then unparks the reader
+	raw := stream.Events()
 
 	// Interleaved block tracking: text and tool_calls preserve their
 	// emission order so the assistant message renders in the same order
@@ -637,7 +650,15 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 			return
 		case ev, ok := <-raw:
 			if !ok {
-				if !sawDone {
+				switch {
+				case sawDone:
+					// Terminal frame already seen: the message is whole, so a
+					// stumble on the trailing bytes is not worth failing over.
+				case stream.Err() != nil:
+					// Over-limit line (permanent) or a transport read error.
+					stop = StopError
+					finalErr = stream.Err()
+				default:
 					stop = StopError
 					finalErr = NewStreamDeathError(c.Name(), "[DONE]")
 				}

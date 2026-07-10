@@ -85,9 +85,9 @@ type UsageReporter interface {
 }
 
 // ClientUsage returns c's latest usage snapshot, looking through any
-// wrapper layers (RefreshingClient, renamedClient) via the shared
-// clientAs walk — codex ships wrapped in a RefreshingClient, so a
-// direct assertion on the outer client would always miss it.
+// wrapper layers (renamedClient, pollingUsageClient) via the shared
+// clientAs walk — openai-responses ships wrapped in a renamedClient, so
+// a direct assertion on the outer client would miss it.
 func ClientUsage(c Client) (UsageSnapshot, bool) {
 	if r, ok := clientAs[UsageReporter](c); ok {
 		return r.UsageSnapshot()

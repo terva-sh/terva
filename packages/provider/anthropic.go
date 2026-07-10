@@ -58,10 +58,16 @@ func fromClaudeCodeToolName(name string, tools []Tool) string {
 
 // anthropicClient implements Client against the Anthropic Messages API.
 type anthropicClient struct {
-	apiKey   string
-	baseURL  string
-	oauthTok string // when non-empty, send Bearer auth instead of x-api-key
-	http     *http.Client
+	cred    CredentialSource
+	baseURL string
+	// oauth selects the Claude-subscription auth MODE: Bearer auth plus the
+	// Claude Code identity system prompt and tool renaming the subscription
+	// endpoint requires. API-key clients (and Anthropic-compatible third
+	// parties like kimi-coding) leave it false and send x-api-key. The mode
+	// is fixed at construction; the credential VALUE it presents rotates
+	// through cred (an OAuth refresh) without rebuilding the client.
+	oauth bool
+	http  *http.Client
 
 	// name overrides the default "anthropic" identity. Anthropic-Messages-
 	// compatible third-party endpoints (kimi-coding, fireworks, minimax,
@@ -79,7 +85,7 @@ func NewAnthropic(apiKey, baseURL string) Client {
 		baseURL = anthropicDefaultBaseURL
 	}
 	return &anthropicClient{
-		apiKey:  apiKey,
+		cred:    StaticCredential(apiKey),
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{Timeout: 0},
 	}
@@ -87,13 +93,21 @@ func NewAnthropic(apiKey, baseURL string) Client {
 
 // NewAnthropicOAuth creates an Anthropic client using a subscription OAuth access token.
 func NewAnthropicOAuth(accessToken, baseURL string) Client {
+	return NewAnthropicOAuthSource(StaticCredential(accessToken), baseURL)
+}
+
+// NewAnthropicOAuthSource is NewAnthropicOAuth with a CredentialSource instead
+// of a fixed token, so the subscription access token can rotate (refresh)
+// without rebuilding the client — resolved once per Stream.
+func NewAnthropicOAuthSource(cred CredentialSource, baseURL string) Client {
 	if baseURL == "" {
 		baseURL = anthropicDefaultBaseURL
 	}
 	return &anthropicClient{
-		oauthTok: accessToken,
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		http:     &http.Client{Timeout: 0},
+		cred:    cred,
+		oauth:   true,
+		baseURL: strings.TrimRight(baseURL, "/"),
+		http:    &http.Client{Timeout: 0},
 	}
 }
 
@@ -264,7 +278,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	// line flipping at midnight) invalidates everything, including
 	// the 17 identity tokens we have to re-send every request
 	// forever.
-	if c.oauthTok != "" {
+	if c.oauth {
 		out.System = []anthSystemBlock{{
 			Type:         "text",
 			Text:         claudeCodeIdentity,
@@ -316,7 +330,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 
 	for _, t := range req.Tools {
 		name := t.Name
-		if c.oauthTok != "" {
+		if c.oauth {
 			name = toClaudeCodeToolName(name)
 		}
 		out.Tools = append(out.Tools, anthTool{
@@ -354,7 +368,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	// Both operate on the generic message list and never mutate history.
 	req.Messages = EnsureLeadingUserTurn(RepairOrphanedToolResults(req.Messages))
 	for _, msg := range req.Messages {
-		renameTools := c.oauthTok != ""
+		renameTools := c.oauth
 		switch msg.Role {
 		case RoleUser:
 			out.Messages = append(out.Messages, anthMessage{
@@ -558,6 +572,13 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 		}
 	}
 
+	// Resolve the credential once per turn (may refresh an expired OAuth
+	// token); retries within this Stream reuse it.
+	cred, err := c.cred(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", c.Name(), err)
+	}
+
 	newReq := func() (*http.Request, error) {
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/messages", bytes.NewReader(body))
 		if err != nil {
@@ -565,12 +586,12 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 		}
 		httpReq.Header.Set("content-type", "application/json")
 		httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
-		if c.oauthTok != "" {
+		if c.oauth {
 			// Claude-Code-shaped request: identical headers and values as the
 			// official CLI. Any drift triggers Anthropic's anti-abuse check and
 			// rate-limits (or outright blocks) the request.
 			httpReq.Header.Set("accept", "application/json")
-			httpReq.Header.Set("authorization", "Bearer "+c.oauthTok)
+			httpReq.Header.Set("authorization", "Bearer "+cred)
 			httpReq.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14")
 			httpReq.Header.Set("anthropic-dangerous-direct-browser-access", "true")
 			httpReq.Header.Set("user-agent", "claude-cli/"+claudeCodeVersion)
@@ -578,7 +599,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 			// Remove x-api-key entirely by NOT setting it.
 		} else {
 			httpReq.Header.Set("accept", "text/event-stream")
-			httpReq.Header.Set("x-api-key", c.apiKey)
+			httpReq.Header.Set("x-api-key", cred)
 		}
 		// Extra headers (set by anthropic-messages-compatible third parties
 		// — kimi-coding's X-Msh-*, copilot's Editor-Plugin-Version, etc.).
@@ -606,7 +627,6 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 
 func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {
 	defer close(out)
-	defer resp.Body.Close()
 
 	// Same lookup-by-actual-provider-id pattern as buildRequest, so cost
 	// calculation works for third-party Anthropic-Messages endpoints.
@@ -616,8 +636,9 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 	}
 	out <- EventStart{Model: req.Model, Provider: c.Name()}
 
-	raw := make(chan sseEvent, 16)
-	go readSSE(resp.Body, raw)
+	stream := newSSEStream(resp.Body, "anthropic")
+	defer stream.Close() // owns resp.Body: closes it, then unparks the reader
+	raw := stream.Events()
 
 	// State for assembling the assistant message. Blocks are indexed
 	// by their `index` field from Anthropic so we can preserve the
@@ -691,7 +712,15 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 			return
 		case ev, ok := <-raw:
 			if !ok {
-				if !sawStop {
+				switch {
+				case sawStop:
+					// Terminal frame already seen: the message is whole, so a
+					// stumble on the trailing bytes is not worth failing over.
+				case stream.Err() != nil:
+					// Over-limit line (permanent) or a transport read error.
+					stop = StopError
+					finalErr = stream.Err()
+				default:
 					stop = StopError
 					finalErr = NewStreamDeathError("anthropic", "message_stop")
 				}
@@ -723,7 +752,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 				switch block.Type {
 				case "tool_use":
 					name := block.Name
-					if c.oauthTok != "" {
+					if c.oauth {
 						name = fromClaudeCodeToolName(name, req.Tools)
 					}
 					be := registerBlock(idx, "tool_use")

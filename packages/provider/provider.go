@@ -259,6 +259,18 @@ type Request struct {
 	// re-processed. Used for standing context that changes between turns
 	// (e.g. an extension's live task card). Empty means inject nothing.
 	EphemeralContext string
+
+	// PromptCacheKey is a stable per-conversation identifier forwarded to
+	// providers whose prefix cache uses it for routing (OpenAI's
+	// prompt_cache_key, on both Responses and Chat Completions). Without
+	// it, concurrent conversations on one account — a coordinator plus its
+	// swarm children — hash into overlapping cache shards and evict each
+	// other's prefixes. The agent loop sets it from the session's meta
+	// UUID (globally unique where the file basename is not — every swarm
+	// child's transcript is named session.json); empty sends nothing.
+	// Only clients known to accept the field forward it
+	// (OpenAI-compatible backends may reject unknown parameters).
+	PromptCacheKey string
 }
 
 // Client is an LLM streaming client.
@@ -272,7 +284,7 @@ type Client interface {
 }
 
 // unwrapper is implemented by clients that wrap another Client (e.g.
-// RefreshingClient, renamedClient). Capability probes use it to see
+// renamedClient, pollingUsageClient). Capability probes use it to see
 // through wrappers instead of type-asserting directly on the outermost
 // client, which silently fails whenever a wrapper sits in front.
 type unwrapper interface {
@@ -285,10 +297,10 @@ type unwrapper interface {
 // one-off optional interface (`interface{ Foo() bool }`) probed by a
 // bespoke chain-walking helper. That older pattern silently returned
 // the zero value whenever a wrapper sat in front of the concrete
-// client (the MirrorsToolImages bug class): codex ships wrapped in a
-// RefreshingClient and openai-responses/google-vertex in a
-// renamedClient, so an inline assertion on the outer client missed
-// the capability entirely.
+// client (the MirrorsToolImages bug class): openai-responses and google-vertex ship
+// wrapped in a renamedClient (and deepseek in a pollingUsageClient),
+// so an inline assertion on the outer client missed the capability
+// entirely.
 type ClientCapabilities struct {
 	// MirrorsToolImages is true for wire formats that can't carry
 	// images inside a tool result (OpenAI chat-completions; the
@@ -307,7 +319,7 @@ type capabilityProvider interface {
 	Capabilities() ClientCapabilities
 }
 
-// clientAs walks the unwrap chain (RefreshingClient, renamedClient, …)
+// clientAs walks the unwrap chain (renamedClient, pollingUsageClient, …)
 // and returns the first client in it that implements T, plus ok. The
 // wrapper walk lives here, once: every capability/reporter probe goes
 // through it, so none can reintroduce the silent-zero wrapper gap (the
@@ -330,7 +342,7 @@ func clientAs[T any](c Client) (T, bool) {
 }
 
 // ClientCaps returns c's capabilities, looking through any wrapper
-// layers (RefreshingClient, renamedClient) via Unwrap(). Adding a
+// layers (renamedClient, pollingUsageClient) via Unwrap(). Adding a
 // capability is a struct field, not a new per-capability helper, and
 // callers can never reintroduce the silent-false wrapper gap because
 // there is no per-cap assertion to get wrong.

@@ -409,28 +409,44 @@ var Catalog = []Model{
 	// Same model ids as the OpenAI family, but routed through the
 	// ChatGPT Codex OAuth backend rather than api.openai.com.
 	{
+		// Text-only research preview, ChatGPT Pro entitlement; 128k
+		// window (not the 272k of its mainline siblings).
 		Provider: "openai-codex", ID: "gpt-5.3-codex-spark", DisplayName: "GPT-5.3 Codex Spark",
-		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
+		ContextWindow: 128000, MaxOutput: 32000, Reasoning: true,
 		PriceInput: 1.75, PriceOutput: 14, PriceCacheRead: 0.175,
-		Speculative: true,
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.4", DisplayName: "GPT-5.4",
 		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 2.5, PriceOutput: 15, PriceCacheRead: 0.25,
-		Speculative: true,
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 mini",
 		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 0.75, PriceOutput: 4.5, PriceCacheRead: 0.075,
-		Speculative: true,
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.5", DisplayName: "GPT-5.5",
 		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 5, PriceOutput: 30, PriceCacheRead: 0.5,
-		Speculative: true,
+	},
+
+	// GPT-5.6 tiers (Sol/Terra/Luna), GA 2026-07-09 on both the API and
+	// the Codex subscription backend. `gpt-5.6` upstream aliases Sol.
+	{
+		Provider: "openai-codex", ID: "gpt-5.6-sol", DisplayName: "GPT-5.6 Sol",
+		ContextWindow: 1050000, MaxOutput: 128000, Reasoning: true,
+		PriceInput: 5, PriceOutput: 30, PriceCacheRead: 0.5,
+	},
+	{
+		Provider: "openai-codex", ID: "gpt-5.6-terra", DisplayName: "GPT-5.6 Terra",
+		ContextWindow: 1050000, MaxOutput: 128000, Reasoning: true,
+		PriceInput: 2.5, PriceOutput: 15, PriceCacheRead: 0.25,
+	},
+	{
+		Provider: "openai-codex", ID: "gpt-5.6-luna", DisplayName: "GPT-5.6 Luna",
+		ContextWindow: 1050000, MaxOutput: 128000, Reasoning: true,
+		PriceInput: 1, PriceOutput: 6, PriceCacheRead: 0.1,
 	},
 }
 

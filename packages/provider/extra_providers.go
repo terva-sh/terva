@@ -33,7 +33,7 @@ func newOpenAICompat(name, apiKey, baseURL, fallbackBaseURL string) Client {
 		baseURL = fallbackBaseURL
 	}
 	return &openaiClient{
-		apiKey:  apiKey,
+		cred:    StaticCredential(apiKey),
 		baseURL: strings.TrimRight(baseURL, "/"),
 		name:    name,
 		http:    &http.Client{Timeout: 0},
@@ -158,7 +158,7 @@ func NewAnthropicCompat(name, apiKey, baseURL string) Client {
 		baseURL = anthropicDefaultBaseURL
 	}
 	return &anthropicClient{
-		apiKey:  apiKey,
+		cred:    StaticCredential(apiKey),
 		baseURL: strings.TrimRight(baseURL, "/"),
 		name:    name,
 		http:    &http.Client{Timeout: 0},
@@ -167,13 +167,21 @@ func NewAnthropicCompat(name, apiKey, baseURL string) Client {
 
 // NewKimiCodingWithHeaders is the Kimi Code client: Kimi behind the
 // Anthropic Messages API at https://api.kimi.com/coding (replaces the
-// older OpenAI-completions-on-/coding/v1 wiring). Used by OAuth.
+// older OpenAI-completions-on-/coding/v1 wiring).
 func NewKimiCodingWithHeaders(apiKey, baseURL string, headers map[string]string) Client {
+	return NewKimiCodingSourceWithHeaders(StaticCredential(apiKey), baseURL, headers)
+}
+
+// NewKimiCodingSourceWithHeaders is NewKimiCodingWithHeaders with a
+// CredentialSource, so the subscription OAuth token can rotate without
+// rebuilding the client. Kimi authenticates via x-api-key (not Bearer), so the
+// client stays in non-oauth mode; only the credential value rotates.
+func NewKimiCodingSourceWithHeaders(cred CredentialSource, baseURL string, headers map[string]string) Client {
 	if baseURL == "" {
 		baseURL = "https://api.kimi.com/coding"
 	}
 	return &anthropicClient{
-		apiKey:  apiKey,
+		cred:    cred,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		name:    "kimi",
 		headers: headers,
@@ -307,7 +315,7 @@ func NewCloudflareAIGateway(apiKey, baseURL string) Client {
 		return &unimplementedClient{name: "cloudflare-ai-gateway", hint: err.Error()}
 	}
 	return &openaiClient{
-		apiKey:  apiKey,
+		cred:    StaticCredential(apiKey),
 		baseURL: strings.TrimRight(resolved, "/"),
 		name:    "cloudflare-ai-gateway",
 		headers: map[string]string{"cf-aig-authorization": "Bearer " + apiKey},

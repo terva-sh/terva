@@ -38,7 +38,7 @@ import (
 const codexDefaultBaseURL = "https://chatgpt.com/backend-api/codex/responses"
 
 type codexClient struct {
-	token     string
+	cred      CredentialSource
 	accountID string
 	baseURL   string
 	http      *http.Client
@@ -55,11 +55,18 @@ type codexClient struct {
 // using a subscription OAuth access token and the user's ChatGPT
 // account id. baseURL may be empty to use the default.
 func NewOpenAICodex(token, accountID, baseURL string) Client {
+	return NewOpenAICodexSource(StaticCredential(token), accountID, baseURL)
+}
+
+// NewOpenAICodexSource is NewOpenAICodex with a CredentialSource instead of a
+// fixed token, so the OAuth access token can rotate (refresh) without
+// rebuilding the client — the client resolves it once per Stream.
+func NewOpenAICodexSource(cred CredentialSource, accountID, baseURL string) Client {
 	if baseURL == "" {
 		baseURL = codexDefaultBaseURL
 	}
 	return &codexClient{
-		token:     token,
+		cred:      cred,
 		accountID: accountID,
 		baseURL:   strings.TrimRight(baseURL, "/"),
 		http:      &http.Client{Timeout: 0},
@@ -163,6 +170,10 @@ type codexRequest struct {
 	ParallelToolCalls bool                  `json:"parallel_tool_calls"`
 	Include           []string              `json:"include,omitempty"`
 	Reasoning         *codexReasoningConfig `json:"reasoning,omitempty"`
+	// PromptCacheKey pins this conversation's prefix-cache routing so
+	// concurrent sessions on one account stop evicting each other
+	// (Codex CLI sends the same field to this endpoint).
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 }
 
 // ---- Request building ----
@@ -184,6 +195,7 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 		Instructions:      req.System,
 		ParallelToolCalls: true,
 		Include:           []string{"reasoning.encrypted_content"},
+		PromptCacheKey:    req.PromptCacheKey,
 	}
 	if m.Reasoning {
 		if effort := OpenAICodexReasoningEffort(req.Reasoning); effort != "" {
@@ -320,6 +332,18 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 		}
 	}
 
+	// The host-assembled ephemeral tail (extension context cards, the
+	// context-pressure note) rides as a trailing user input message,
+	// mirroring the chat-completions and Anthropic builders. Trailing
+	// placement keeps the cached transcript prefix stable — only this
+	// block re-processes each step.
+	if req.EphemeralContext != "" {
+		body.Input = append(body.Input, codexInputMessage{
+			Role:    "user",
+			Content: []any{codexInputText{Type: "input_text", Text: req.EphemeralContext}},
+		})
+	}
+
 	return body, nil
 }
 
@@ -342,6 +366,13 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 		return nil, err
 	}
 
+	// Resolve the credential once per turn (may refresh an expired OAuth
+	// token); retries within this Stream reuse it.
+	token, err := c.cred(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("openai-codex: %w", err)
+	}
+
 	newReq := func() (*http.Request, error) {
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL, bytes.NewReader(body))
 		if err != nil {
@@ -349,7 +380,7 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 		}
 		httpReq.Header.Set("content-type", "application/json")
 		httpReq.Header.Set("accept", "text/event-stream")
-		httpReq.Header.Set("authorization", "Bearer "+c.token)
+		httpReq.Header.Set("authorization", "Bearer "+token)
 		httpReq.Header.Set("chatgpt-account-id", c.accountID)
 		httpReq.Header.Set("openai-beta", "responses=experimental")
 		httpReq.Header.Set("originator", "terva")
@@ -523,7 +554,6 @@ func windowLabel(minutes int, fallback string) string {
 
 func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {
 	defer close(out)
-	defer resp.Body.Close()
 
 	model, _ := FindModel("openai-codex", req.Model)
 	if model.ID == "" {
@@ -531,8 +561,9 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 	}
 	out <- EventStart{Model: req.Model, Provider: "openai-codex"}
 
-	raw := make(chan sseEvent, 16)
-	go readSSE(resp.Body, raw)
+	stream := newSSEStream(resp.Body, "openai-codex")
+	defer stream.Close() // owns resp.Body: closes it, then unparks the reader
+	raw := stream.Events()
 
 	// Accumulators. The Responses API emits output_items in order; each
 	// item is either a "message" (text) or a "function_call". We track
@@ -608,7 +639,15 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 			return
 		case ev, ok := <-raw:
 			if !ok {
-				if !sawTerminal {
+				switch {
+				case sawTerminal:
+					// Terminal frame already seen: the message is whole, so a
+					// stumble on the trailing bytes is not worth failing over.
+				case stream.Err() != nil:
+					// Over-limit line (permanent) or a transport read error.
+					stop = StopError
+					finalErr = stream.Err()
+				default:
 					stop = StopError
 					finalErr = NewStreamDeathError("openai-codex", "response.completed")
 				}

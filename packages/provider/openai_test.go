@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"context"
 	"strings"
 	"testing"
 )
@@ -45,17 +44,14 @@ func TestClientCapabilitiesDeclared(t *testing.T) {
 }
 
 // The capability MUST survive through the wrappers the build layer
-// actually ships: openai-codex is always wrapped in RefreshingClient,
-// and openai-responses / google-vertex in renamedClient. A direct type
-// assertion on the outermost client returns false for these, so the
-// agent loop uses ClientMirrorsToolImages, which unwraps recursively.
-// This is the regression test for the inert-mirroring bug (deep-review
-// Part B #7): the raw constructors opt in, but the wrapped clients that
-// ship silently didn't.
+// actually ships: openai-responses / google-vertex ride in renamedClient,
+// and deepseek in pollingUsageClient. A direct type assertion on the
+// outermost client returns false for these, so the agent loop uses
+// ClientMirrorsToolImages, which unwraps recursively. This is the
+// regression test for the inert-mirroring bug (deep-review Part B #7):
+// the raw constructors opt in, but the wrapped clients that ship silently
+// didn't.
 func TestClientMirrorsToolImagesThroughWrappers(t *testing.T) {
-	noopRefresh := func(context.Context) (string, error) { return "", nil }
-	noopFactory := func(token string) Client { return NewOpenAICodex(token, "", "") }
-
 	cases := []struct {
 		name string
 		c    Client
@@ -70,12 +66,9 @@ func TestClientMirrorsToolImagesThroughWrappers(t *testing.T) {
 		// Anthropic carries tool images natively: must NOT opt in.
 		{"raw-anthropic", NewAnthropic("k", ""), false},
 
-		// Codex behind RefreshingClient — the wrapping build.go applies.
-		{"refreshing-codex", NewRefreshingClient(NewOpenAICodex("k", "", ""), noopRefresh, noopFactory), true},
-		// openai-responses is a codexClient behind renamedClient.
+		// openai-responses is a codexClient behind renamedClient — the
+		// unwrap walk must still reach the codex capability.
 		{"openai-responses", NewOpenAIResponses("k", ""), true},
-		// Defense in depth: renamedClient nested in RefreshingClient.
-		{"refreshing-renamed-codex", NewRefreshingClient(NewOpenAIResponses("k", ""), noopRefresh, noopFactory), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

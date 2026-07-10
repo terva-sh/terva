@@ -498,13 +498,13 @@ func (c *geminiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 
 func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {
 	defer close(out)
-	defer resp.Body.Close()
 
 	model, _ := FindModel("google", req.Model)
 	out <- EventStart{Model: req.Model, Provider: "google"}
 
-	raw := make(chan sseEvent, 16)
-	go readSSE(resp.Body, raw)
+	stream := newSSEStream(resp.Body, "google")
+	defer stream.Close() // owns resp.Body: closes it, then unparks the reader
+	raw := stream.Events()
 
 	// Gemini's SSE stream is a sequence of complete JSON
 	// GenerateContentResponse objects, one per data: line. Each
@@ -618,7 +618,18 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 			return
 		case ev, ok := <-raw:
 			if !ok {
-				if !sawFinish {
+				switch {
+				case sawFinish:
+					// Terminal frame already seen: the message is whole, so a
+					// stumble on the trailing bytes is not worth failing over.
+				case stream.Err() != nil:
+					// Over-limit line (permanent) or a transport read error.
+					// Gemini streams whole responses per line, inline image
+					// bytes included, so this is the client most likely to
+					// meet the ceiling.
+					stop = StopError
+					finalErr = stream.Err()
+				default:
 					stop = StopError
 					finalErr = NewStreamDeathError("google", "a finishReason")
 				}

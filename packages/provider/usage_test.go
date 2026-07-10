@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -171,9 +170,9 @@ func TestWindowLabel(t *testing.T) {
 
 // TestClientUsageThroughWrappers mirrors TestClientMirrorsToolImagesThroughWrappers:
 // usage MUST survive the wrappers the build layer actually ships —
-// openai-codex is always behind a RefreshingClient, openai-responses
-// behind a renamedClient. A direct assertion on the outer client would
-// silently report "no usage", so ClientUsage unwraps recursively.
+// openai-responses rides behind a renamedClient. A direct assertion on the
+// outer client would silently report "no usage", so ClientUsage unwraps
+// recursively.
 func TestClientUsageThroughWrappers(t *testing.T) {
 	// A fresh codex client has seen no response yet → nothing to report.
 	raw := NewOpenAICodex("k", "", "")
@@ -188,17 +187,12 @@ func TestClientUsageThroughWrappers(t *testing.T) {
 	h.Set("x-codex-primary-window-minutes", "300")
 	cx.recordUsageHeaders(h)
 
-	noopRefresh := func(context.Context) (string, error) { return "", nil }
-	noopFactory := func(string) Client { return raw }
-
 	cases := []struct {
 		name string
 		c    Client
 	}{
 		{"raw", raw},
-		{"refreshing", NewRefreshingClient(raw, noopRefresh, noopFactory)},
 		{"renamed", &renamedClient{inner: raw, name: "openai-responses"}},
-		{"refreshing-renamed", NewRefreshingClient(&renamedClient{inner: raw, name: "openai-responses"}, noopRefresh, noopFactory)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

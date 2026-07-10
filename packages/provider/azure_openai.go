@@ -127,7 +127,7 @@ func NewAzureOpenAI(apiKey, baseURL string) Client {
 		Timeout: 0,
 	}
 	return &openaiClient{
-		apiKey:  apiKey,
+		cred:    StaticCredential(apiKey),
 		baseURL: clean,
 		name:    "azure-openai-responses",
 		headers: map[string]string{"api-key": apiKey},

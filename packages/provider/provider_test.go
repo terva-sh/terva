@@ -8,12 +8,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSSEParse(t *testing.T) {
 	r := strings.NewReader("event: foo\ndata: {\"a\":1}\n\ndata: hello\ndata: world\n\n")
-	ch := make(chan sseEvent, 4)
-	go readSSE(r, ch)
+	s := newSSEStream(io.NopCloser(r), "test")
+	ch := s.Events()
 
 	e := <-ch
 	if e.Event != "foo" || e.Data != `{"a":1}` {
@@ -26,6 +27,127 @@ func TestSSEParse(t *testing.T) {
 	if _, ok := <-ch; ok {
 		t.Fatalf("channel not closed")
 	}
+	if err := s.Err(); err != nil {
+		t.Fatalf("clean stream reported err=%v", err)
+	}
+}
+
+// A stream whose last event lacks its trailing blank line still delivers that
+// event, and a CRLF-framed stream parses — both bufio.Scanner behaviors the
+// lineframe migration had to preserve.
+func TestSSEParseTrailingEventAndCRLF(t *testing.T) {
+	s := newSSEStream(io.NopCloser(strings.NewReader("event: a\r\ndata: one\r\n\r\ndata: two")), "test")
+	ch := s.Events()
+
+	if e := <-ch; e.Event != "a" || e.Data != "one" {
+		t.Fatalf("crlf event: %+v", e)
+	}
+	if e := <-ch; e.Data != "two" {
+		t.Fatalf("unterminated final event: %+v", e)
+	}
+	if _, ok := <-ch; ok {
+		t.Fatalf("channel not closed")
+	}
+	if err := s.Err(); err != nil {
+		t.Fatalf("clean stream reported err=%v", err)
+	}
+}
+
+// An over-limit line aborts the stream with a PERMANENT error. Retrying it
+// would re-read the identical oversized line and re-pay the input tokens, so
+// Transient must be false — the regression this guards is a silent flip back
+// to the transient stream-death path.
+func TestSSEOverLimitLineIsPermanent(t *testing.T) {
+	body := "data: ok\n\ndata: " + strings.Repeat("x", maxSSELineBytes+1) + "\n\n"
+	s := newSSEStream(io.NopCloser(strings.NewReader(body)), "test")
+	ch := s.Events()
+
+	if e := <-ch; e.Data != "ok" {
+		t.Fatalf("first event: %+v", e)
+	}
+	if e, ok := <-ch; ok {
+		t.Fatalf("oversized line was delivered, not rejected: %+v", e)
+	}
+	err := s.Err()
+	if err == nil {
+		t.Fatal("oversized line ended the stream silently")
+	}
+	if !errors.Is(err, ErrStreamLimit) {
+		t.Fatalf("want ErrStreamLimit, got %v", err)
+	}
+	var pe *ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *ProviderError, got %T", err)
+	}
+	if pe.Transient {
+		t.Fatal("over-limit line marked transient: the retry loop will burn its budget re-reading it")
+	}
+	if !strings.Contains(pe.Msg, "10 MiB") {
+		t.Fatalf("error should name the limit, got %q", pe.Msg)
+	}
+}
+
+// A transport failure mid-stream is transient and carries its cause, rather
+// than being laundered into a generic stream-death by a discarded Scanner err.
+func TestSSEReadErrorIsTransientAndWrapped(t *testing.T) {
+	boom := errors.New("connection reset by peer")
+	r := io.MultiReader(strings.NewReader("data: one\n\ndata: par"), errReader{boom})
+	s := newSSEStream(io.NopCloser(r), "test")
+	ch := s.Events()
+
+	if e := <-ch; e.Data != "one" {
+		t.Fatalf("first event: %+v", e)
+	}
+	if e, ok := <-ch; ok {
+		t.Fatalf("half-read event was flushed: %+v", e)
+	}
+	err := s.Err()
+	if !errors.Is(err, boom) {
+		t.Fatalf("read error not wrapped, got %v", err)
+	}
+	var pe *ProviderError
+	if !errors.As(err, &pe) || !pe.Transient {
+		t.Fatalf("transport failure should be transient, got %v", err)
+	}
+}
+
+type errReader struct{ err error }
+
+func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+// closeUnblocks asserts that Close returns promptly, i.e. that the reader
+// goroutine was freed rather than stranded for the life of the process.
+func closeUnblocks(t *testing.T, s *sseStream) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { s.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return: the reader goroutine is stranded")
+	}
+}
+
+// Parking spot 1: the reader blocks on the buffered send once the client stops
+// draining — which is what every cancelled turn does. Closing the body cannot
+// free a goroutine blocked on a channel send; only a receiver can.
+func TestSSEStreamCloseUnblocksParkedSend(t *testing.T) {
+	// Far more events than the 16-slot buffer, and we read only one.
+	body := strings.Repeat("data: x\n\n", 200)
+	s := newSSEStream(io.NopCloser(strings.NewReader(body)), "test")
+	if e := <-s.Events(); e.Data != "x" {
+		t.Fatalf("first event: %+v", e)
+	}
+	closeUnblocks(t, s)
+}
+
+// Parking spot 2: the reader blocks in Read on a connection that never
+// delivers. Draining cannot free it; closing the body must.
+func TestSSEStreamCloseUnblocksParkedRead(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	s := newSSEStream(pr, "test") // nothing is ever written: the reader parks in Read
+	closeUnblocks(t, s)
 }
 
 func TestModelCatalog(t *testing.T) {
