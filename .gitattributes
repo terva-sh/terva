@@ -15,3 +15,10 @@ packages/agent/ctrlproto/testdata/*.json text eol=lf
 # output (`terva-i18n-lint -check`, the CI gate); a CRLF checkout (the
 # Windows CI default) marks every catalog stale. Pin them to LF.
 packages/i18n/locales/**/*.json text eol=lf
+
+# Builtin personas are go:embed'ed at build time with whatever line
+# endings the checkout produced, so a CRLF checkout (the Windows CI
+# default) poisons the embedded bytes: charter tests match multi-line
+# markers, and shipped prompt text should not vary by build host. Pin
+# every embedded persona to LF.
+packages/agent/build/personas/**/*.md text eol=lf
