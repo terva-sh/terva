@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/i18n"
 )
@@ -256,7 +257,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 			return
 		}
 		if err := sendFn(id, text); err != nil {
-			i.swarmStatus("", friendlySendErr(id, err))
+			i.swarmStatus("", dialogs.FriendlySendErr(id, err))
 			return
 		}
 		i.swarmStatus(i18n.T("sent to %s", id), "")

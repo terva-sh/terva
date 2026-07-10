@@ -1,6 +1,9 @@
 package modes
 
-import "terva.sh/terva/packages/i18n"
+import (
+	"terva.sh/terva/packages/agent/modes/dialogs"
+	"terva.sh/terva/packages/i18n"
+)
 
 // Hooks the /mcp dialog to the host callbacks: open with the current
 // configured-server set, apply a global/project toggle via the injected
@@ -29,7 +32,7 @@ func (i *Interactive) openMCPDialog() {
 // the dialog. Runs on the UI goroutine: a single server start/stop is
 // quick, and keeping it inline avoids racing the renderer on the item
 // slice.
-func (i *Interactive) applyMCPToggle(act mcpAction) {
+func (i *Interactive) applyMCPToggle(act dialogs.MCPAction) {
 	// A project-defined server has no user-scope toggle: it isn't in the
 	// user config to disable there. Explain instead of writing a no-op.
 	if act.ToggleGlobal && act.Scope == "project" {

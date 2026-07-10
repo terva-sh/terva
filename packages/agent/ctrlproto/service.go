@@ -94,6 +94,47 @@ type WorkspaceService interface {
 	// Usage returns the cumulative token/cost totals for sess.
 	Usage(ctx context.Context, sess string) (core.WireUsage, error)
 
+	// UsageSnapshot returns the provider's subscription/credit picture for
+	// sess: the plan and rate-limit windows, any credit balance, and when the
+	// provider last reported them. Distinct from [Usage], which is this
+	// session's own token and cost accounting.
+	//
+	// refresh=false reads the provider client's cached snapshot and is cheap
+	// enough to call once per turn. refresh=true pulls from the provider's
+	// usage endpoint for the providers that have one (OpenRouter, DeepSeek)
+	// and BLOCKS on that fetch; callers must keep it off a UI goroutine.
+	// [UsageInfo.Refreshable] reports which kind of provider this is, so a
+	// client knows whether to show a loading state.
+	//
+	// A session with no agent, or a provider that reports nothing, yields a
+	// zero UsageInfo with HasData false — not an error.
+	UsageSnapshot(ctx context.Context, sess string, refresh bool) (UsageInfo, error)
+
+	// SideChatOpen freezes sess's system prompt and transcript and returns an id
+	// naming that snapshot. The side chat is an ephemeral, tool-less completion
+	// alongside a session — the /btw overlay — and it never appends to, reads
+	// forward from, or otherwise disturbs the transcript it was opened against.
+	//
+	// The snapshot is frozen so a turn landing mid-dialogue (a queued prompt, a
+	// paired chat DM, another device) cannot shift the ground under a
+	// conversation already in progress. Implementations bound how many a session
+	// may hold open; callers pair every open with a [SideChatClose].
+	SideChatOpen(ctx context.Context, sess string) (string, error)
+
+	// SideChatAsk runs one question against the snapshot named by id, preceded
+	// by prior (the side chat's own completed exchanges, oldest first), and
+	// returns the assistant's reply. It blocks on the model, honours ctx
+	// cancellation, and records nothing anywhere: the reply comes back to the
+	// caller and dies with the dialog.
+	//
+	// A stale or unknown id is a [CodeNotFound] error.
+	SideChatAsk(ctx context.Context, sess, id string, prior []SideChatTurn, question string) (string, error)
+
+	// SideChatClose releases the snapshot named by id. Closing an unknown id is
+	// a no-op, not an error. Implementations also release every snapshot a
+	// session holds when that session closes.
+	SideChatClose(ctx context.Context, sess, id string) error
+
 	// Context returns a size breakdown of everything riding sess's next
 	// request — system prompt, tool defs, ext context, transcript — versus the
 	// model's window, the /context view for debugging context bloat.
@@ -283,6 +324,36 @@ type UsageWindowInfo struct {
 	Kind          string  `json:"kind,omitempty"`           // plan | credit | rate_limit
 }
 
+// CreditsInfo is a provider's credit balance, mirroring [provider.Credits] for
+// the wire. Unlimited and HasCredits give Balance its meaning: some providers
+// report what is left, some what has been spent, some neither.
+type CreditsInfo struct {
+	Unlimited  bool    `json:"unlimited,omitempty"`
+	HasCredits bool    `json:"has_credits,omitempty"`
+	Balance    float64 `json:"balance,omitempty"` // remaining, provider-defined units
+	Used       float64 `json:"used,omitempty"`    // spent, provider-defined units
+}
+
+// UsageInfo is the provider's subscription/credit picture for one session — the
+// payload of [WorkspaceService.UsageSnapshot], and the wire form of
+// [provider.UsageSnapshot].
+//
+// Unlike [ContextBreakdown.UsageWindows], which carries only the plan and
+// credit budgets a status bar should show, Windows here carries EVERY window
+// the provider reports, rate-limit ones included. Filtering is the client's
+// business: a status bar drops the ephemeral rate-limit windows because they
+// would churn an always-visible meter, and a modal usage view shows them.
+type UsageInfo struct {
+	Provider string `json:"provider,omitempty"`
+	// HasData is false when the session has no agent, or the provider reports
+	// no usage at all. The zero UsageInfo is a valid "nothing to show".
+	HasData     bool              `json:"has_data,omitempty"`
+	Windows     []UsageWindowInfo `json:"windows,omitempty"`
+	Credits     *CreditsInfo      `json:"credits,omitempty"`
+	CapturedAt  string            `json:"captured_at,omitempty"` // RFC 3339; empty unknown
+	Refreshable bool              `json:"refreshable,omitempty"` // provider fetches usage from an endpoint
+}
+
 // SurfaceMeta describes one available pane for the client's surface switcher.
 // The set is dynamic (extension panels open/close), so a client re-lists on an
 // [EventSurfacesChanged].
@@ -290,7 +361,7 @@ type SurfaceMeta struct {
 	ID      string `json:"id"`              // "context", "usage", "status", "ext:<name>:<panel>"
 	Title   string `json:"title"`           // switcher label
 	Icon    string `json:"icon,omitempty"`  // glyph/emoji hint
-	Kind    string `json:"kind"`            // context | usage | panel | widgets | settings | tasks | commands | extensions | permissions | lore | mcp
+	Kind    string `json:"kind"`            // context | usage | panel | widgets | settings | tasks | commands | extensions | permissions | lore | mcp | raati
 	Scope   string `json:"scope,omitempty"` // session | workspace
 	Live    bool   `json:"live,omitempty"`  // pushes EventSurfaceUpdated
 	Actions bool   `json:"actions,omitempty"`
@@ -315,6 +386,42 @@ type Surface struct {
 	Permissions *PermissionsView  `json:"permissions,omitempty"` // kind=permissions
 	Lore        *LoreView         `json:"lore,omitempty"`        // kind=lore
 	MCP         *MCPView          `json:"mcp,omitempty"`         // kind=mcp
+	Raati       *RaatiView        `json:"raati,omitempty"`       // kind=raati
+	Chat        *ChatView         `json:"chat,omitempty"`        // kind=chat
+}
+
+// ChatView is the chat-connector pane: every registered chat service and the
+// live bridge. Workspace-scoped like the MCP pane — the bridge belongs to the
+// workspace and is bound to one of its sessions.
+type ChatView struct {
+	Services []ChatServiceInfo `json:"services,omitempty"`
+	Bridge   ChatBridgeState   `json:"bridge"`
+	// DaemonPID is the `terva bot` daemon already polling this service, 0 when
+	// none. Nonzero disables connect: two consumers race each update and one
+	// always loses, so messages arrive half-delivered.
+	DaemonPID int `json:"daemon_pid,omitempty"`
+}
+
+// ChatServiceInfo is one registered chat service, with the provenance a picker
+// shows so an extension or dev connector is never mistaken for a compiled-in one.
+type ChatServiceInfo struct {
+	Name       string `json:"name"`
+	Kind       string `json:"kind,omitempty"` // "" | "extension"
+	Dev        bool   `json:"dev,omitempty"`
+	Configured bool   `json:"configured"`
+	Paired     bool   `json:"paired"` // a user already claimed the bot
+}
+
+// ChatBridgeState is the live bridge, or the zero value when idle. Session names
+// the session the mirror is bound to: the bridge does NOT follow whichever
+// session a client happens to be showing.
+type ChatBridgeState struct {
+	State     string `json:"state"` // idle | connecting | connected | error
+	Connector string `json:"connector,omitempty"`
+	Username  string `json:"username,omitempty"`
+	PairedID  string `json:"paired_id,omitempty"` // "" until a user sends /start
+	Session   string `json:"session,omitempty"`
+	Error     string `json:"error,omitempty"` // set when State == "error"
 }
 
 // PermissionsView is the permissions inspector pane: the session's approval
@@ -486,6 +593,97 @@ type TaskInfo struct {
 	// only needs Tail; a serialized carrier pays for Lines only when the
 	// swarm state actually changed (fetches ride surface_updated).
 	Lines []string `json:"lines,omitempty"`
+}
+
+// RaatiView is the deliberation board pane: the workspace's current (or
+// last) RAATI deliberation — three unit blocks plus the tallied verdict
+// (docs/proposals/raati-deliberation.md). An idle board (no units, no
+// decision) renders the convene form.
+type RaatiView struct {
+	Running   bool   `json:"running"`
+	Question  string `json:"question,omitempty"`
+	Class     string `json:"class,omitempty"`      // advisory | gate | veto
+	Round     int    `json:"round,omitempty"`      // 0 none, 1 blind, 2 cross-examination, 3 convergence
+	SeatOrder string `json:"seat_order,omitempty"` // fixed | convene | turn — how the pool was dealt
+	// Phase marks pre-deliberation work: "briefing" while the clerk
+	// summarizes the attached conversation, before any unit is seated.
+	Phase string `json:"phase,omitempty"`
+	// Archived + When mark a persisted past record being viewed rather
+	// than a live run; History is the archive list (newest first).
+	Archived bool               `json:"archived,omitempty"`
+	When     string             `json:"when,omitempty"` // RFC 3339
+	History  []RaatiHistoryItem `json:"history,omitempty"`
+	Binding  string             `json:"binding,omitempty"`
+	Units    []RaatiUnit        `json:"units,omitempty"`
+	Decision string             `json:"decision,omitempty"` // approved | rejected | escalated
+	Degraded bool               `json:"degraded,omitempty"`
+	Tally    *RaatiTally        `json:"tally,omitempty"`
+	Minority []RaatiVoice       `json:"minority,omitempty"`
+	// Inquiries is the panel's between-round Q&A docket (the inquiry
+	// protocol): what each unit asked, what came back, and from where —
+	// "unanswered" entries mark decisions made with open questions.
+	Inquiries []RaatiInquiry `json:"inquiries,omitempty"`
+	// Profiles lists the user's configured convening profiles for the
+	// form's picker: names and what-each-is-for only — a profile's
+	// contents (seats, defaults) stay server-side, applied when the
+	// convene action names one.
+	Profiles []RaatiProfileInfo `json:"profiles,omitempty"`
+	Err      string             `json:"error,omitempty"` // operational failure of the run
+}
+
+// RaatiInquiry is one entry of the panel's between-round Q&A docket.
+type RaatiInquiry struct {
+	Unit     string `json:"unit"`
+	Question string `json:"question"`
+	Answer   string `json:"answer,omitempty"`
+	Source   string `json:"source,omitempty"` // record | convener | unanswered
+	Round    int    `json:"round,omitempty"`
+}
+
+// RaatiProfileInfo names one configured convening profile for pickers.
+type RaatiProfileInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// RaatiUnit is one panelist block on the board.
+type RaatiUnit struct {
+	Name       string  `json:"name"`
+	Accent     string  `json:"accent,omitempty"`  // #RRGGBB from the persona charter
+	Binding    string  `json:"binding,omitempty"` // this seat's "provider/model"
+	Status     string  `json:"status"`            // deliberating | voted | absent
+	Verdict    string  `json:"verdict,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
+	Rationale  string  `json:"rationale,omitempty"`
+	Why        string  `json:"why,omitempty"`   // absence cause
+	Blind      string  `json:"blind,omitempty"` // round-1 verdict, so revisions are visible
+}
+
+// RaatiTally is the head count behind the verdict.
+type RaatiTally struct {
+	Approve int `json:"approve"`
+	Reject  int `json:"reject"`
+	Abstain int `json:"abstain"`
+	Absent  int `json:"absent"`
+}
+
+// RaatiVoice is one minority-report entry — the dissent is the product.
+type RaatiVoice struct {
+	Unit      string `json:"unit"`
+	Rationale string `json:"rationale,omitempty"`
+}
+
+// RaatiHistoryItem is one past deliberation in the board's archive
+// list, loadable via the "show" action.
+type RaatiHistoryItem struct {
+	ID       string      `json:"id"`
+	When     string      `json:"when,omitempty"` // RFC 3339
+	Question string      `json:"question"`
+	Class    string      `json:"class,omitempty"`
+	Decision string      `json:"decision"`
+	Degraded bool        `json:"degraded,omitempty"`
+	Tally    *RaatiTally `json:"tally,omitempty"`
+	Minority []string    `json:"minority,omitempty"` // dissenting unit names
 }
 
 // UsageView is the usage/budget pane: the TUI status bar's live usage picture as

@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
 
 // newInteractiveForNewSessionTest builds the minimal Interactive that
-// startNewSession touches: a view, an agent, and pre-dirtied TUI state
-// so the reset is observable.
+// startNewSession touches: a view, a turn engine, and pre-dirtied TUI state
+// so the reset is observable. No agent — the TUI holds none (plan 4.1); the
+// NewSession callback stands in for the host's carrier session switch.
 func newInteractiveForNewSessionTest() *Interactive {
 	iv := &Interactive{
 		view:  &tui.View{},
@@ -27,7 +27,6 @@ func newInteractiveForNewSessionTest() *Interactive {
 	}
 	iv.cfg.Provider = "anthropic"
 	iv.cfg.Model = "claude-sonnet-4-5"
-	iv.turns.SetAgent(&core.Agent{Model: "claude-sonnet-4-5"})
 	return iv
 }
 
@@ -39,8 +38,7 @@ func TestStartNewSessionResetsStateAndInvokesCallback(t *testing.T) {
 	iv.cfg.NewSession = func(providerName, model string) error {
 		called = true
 		gotProvider, gotModel = providerName, model
-		// Mimic the host: the live agent's transcript is reset.
-		iv.turns.Agent().SetMessages(nil)
+		// The host switches the carrier session here; nothing local to reset.
 		return nil
 	}
 
@@ -109,10 +107,7 @@ func TestStartNewSessionClearsScreen(t *testing.T) {
 	iv := newInteractiveForNewSessionTest()
 	var buf bytes.Buffer
 	iv.rend = tui.NewRenderer(&buf)
-	iv.cfg.NewSession = func(string, string) error {
-		iv.turns.Agent().SetMessages(nil)
-		return nil
-	}
+	iv.cfg.NewSession = func(string, string) error { return nil }
 
 	iv.startNewSession()
 

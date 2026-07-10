@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/swarm"
-	"terva.sh/terva/packages/agent/tools"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -123,7 +121,7 @@ func (i *Interactive) flushSwarmSummary(batch []*swarmWatchEntry) {
 	sb.WriteString("\n\n")
 	for idx, e := range batch {
 		snap := e.agent.Snapshot()
-		status := string(snap.Status)
+		status := snap.RecapStatus()
 		task := snap.Task
 		if task == "" {
 			task = e.task
@@ -143,8 +141,11 @@ func (i *Interactive) flushSwarmSummary(batch []*swarmWatchEntry) {
 			sb.WriteString(i18n.P("swarm.summary.turn_error", "   turn error: %s", truncateForSummary(e.err, 240)))
 			sb.WriteByte('\n')
 		}
-		if tail := strings.TrimSpace(snap.Tail); tail != "" {
-			sb.WriteString(i18n.P("swarm.summary.tail", "   tail: %s", truncateForSummary(tail, 600)))
+		// The sub-agent's own answer — its findings — not a tail of tool
+		// output. Generous budget: for a review specialist this IS the
+		// deliverable the coordinator must fold into its report.
+		if findings := snap.Findings(); findings != "" {
+			sb.WriteString(i18n.P("swarm.summary.findings", "   findings: %s", truncateForSummary(findings, 1500)))
 			sb.WriteByte('\n')
 		}
 		sb.WriteString("\n")
@@ -159,63 +160,4 @@ func truncateForSummary(s string, n int) string {
 		return s
 	}
 	return s[:n-3] + "..."
-}
-
-// applyAutoSwarmSystemPrompt appends (active=true) or strips
-// (active=false) the auto-swarm system-prompt block on the running
-// agent so the model proactively considers swarm_spawn when the user
-// flips the toggle. The block lives at the tail of agent.System so
-// stripping is a plain suffix-trim; idempotent in both directions.
-func (i *Interactive) applyAutoSwarmSystemPrompt(active bool) {
-	ag := i.turns.Agent()
-	if ag == nil {
-		return
-	}
-	addendum := i.cfg.AutoSwarmSystemAddendum
-	if addendum == "" {
-		return
-	}
-	sys := ag.System
-	has := strings.Contains(sys, addendum)
-	switch {
-	case active && !has:
-		if sys != "" && !strings.HasSuffix(sys, "\n\n") {
-			sys += "\n\n"
-		}
-		ag.System = sys + addendum
-	case !active && has:
-		ag.System = strings.TrimRight(strings.ReplaceAll(sys, addendum, ""), "\n") + "\n"
-	}
-}
-
-// applyAutoSwarmTool registers (active=true) or removes (active=false)
-// the swarm_spawn tool on the running agent so the model only sees it
-// when /settings -> auto-swarm is enabled. Mirrors applyChatTools'
-// snapshot+mutate pattern so extension tools and /reload-ext additions
-// survive a toggle.
-func (i *Interactive) applyAutoSwarmTool(active bool) {
-	ag := i.turns.Agent()
-	if ag == nil {
-		return
-	}
-	current := ag.Tools
-	next := core.Registry{}
-	for name, t := range current {
-		if name == "swarm_spawn" {
-			continue
-		}
-		next[name] = t
-	}
-	if active && i.cfg.Swarm != nil {
-		next["swarm_spawn"] = &tools.SwarmSpawnTool{
-			Swarm:           i.cfg.Swarm,
-			Enabled:         func() bool { return true },
-			OnSpawned:       i.trackSwarmAgent,
-			HostProvider:    i.cfg.Provider, // updated on /model swap (interactive_model.go)
-			HostModel:       i.cfg.Model,
-			Tiers:           tools.SwarmTierMap(i.cfg.SwarmTiers),
-			PersonaResolver: i.cfg.DispatchPersonaResolver,
-		}
-	}
-	ag.SetTools(next)
 }

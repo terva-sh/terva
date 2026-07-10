@@ -1,11 +1,12 @@
 package agent
 
-// The default interactive entry point: the TUI driving an in-process
-// Workspace through the ctrlproto WorkspaceService instead of a directly-owned
+// The interactive entry point: the TUI driving an in-process Workspace
+// through the ctrlproto WorkspaceService instead of a directly-owned
 // core.Agent (docs/proposals/tui-on-ctrlproto.md; the legacy direct driver
-// remains available under --tui-legacy). This is the protocol's completeness
-// test — the same TUI should later drive a remote daemon over a serialized
-// carrier, which is why the hot path consumes the wire vocabulary.
+// has been removed — --tui-legacy is accepted as a deprecated no-op). This is
+// the protocol's completeness test — the same TUI should later drive a remote
+// daemon over a serialized carrier, which is why the hot path consumes the
+// wire vocabulary.
 
 import (
 	"context"
@@ -15,8 +16,12 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/agent/skills"
+	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/tui"
@@ -29,7 +34,7 @@ import (
 // rendering — rides the service; the session agent is still handed to the
 // TUI as the transitional crutch for the residual readers (/usage,
 // fork/tree/export file helpers, startup scroll, queue chips).
-func runInteractiveCtrlproto(ctx context.Context, args Args, version string) error {
+func runInteractiveCtrlproto(ctx context.Context, args build.Args, version string) error {
 	// Pre-TUI terminal prompts, same order as the legacy entry: a character
 	// card's {{user}} needs a name (it feeds Resolve inside NewWorkspace),
 	// and the first interactive run offers the core extension pack before the
@@ -41,16 +46,27 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 	// A credential-less Workspace boots fine (only sessions hard-require a
 	// credential), so a first run lands in the TUI with the login dialog
 	// auto-opened; CarrierLogin below finishes the flow.
-	w, err := NewWorkspace(args, version)
+	w, err := workspace.NewWorkspace(args, version)
 	if err != nil {
 		return err
 	}
 	defer w.Close()
 
+	// Resolve display metadata WITHOUT requiring a credential — mirrors the
+	// pre-TUI resolve the legacy entry did. It supplies the persona banner
+	// (name/phonetic/emoji/accent), the meta-mode chrome (experience), and the
+	// startup auth-method / reasoning labels; a credential-less boot still gets
+	// the right banner and chrome. The Workspace builds the session agents
+	// separately, so this is display-only and never touches a session.
+	r, rerr := build.Resolve(args, false)
+	if rerr != nil {
+		return rerr
+	}
+
 	// In-TUI login support: the auth manager drives /login (browser OAuth or
 	// the api-key form); handleAuthEvent's success path hands the stored
 	// credential to CarrierLogin below.
-	authMgr := auth.NewManager(AuthStoreFor())
+	authMgr := auth.NewManager(config.AuthStoreFor())
 	defer authMgr.Close()
 
 	// Session-build diagnostics (permission-policy warnings, extension-load
@@ -75,7 +91,6 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 	// the TUI owns the terminal — and the pick materializes post-login.
 	needLogin := w.CredentialErr() != nil
 	var info ctrlproto.SessionInfo
-	var ag *core.Agent
 	var sessID, pendingResume string
 	if needLogin {
 		if args.Resume {
@@ -83,7 +98,7 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 			if perr != nil {
 				return perr
 			}
-			pendingResume = sessionIDFromPath(picked)
+			pendingResume = build.SessionIDFromPath(picked)
 		}
 	} else {
 		switch {
@@ -97,7 +112,7 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 			if picked == "" {
 				info, err = w.CreateSession(ctx, ctrlproto.CreateOpts{})
 			} else {
-				info, err = w.ResumeSession(ctx, sessionIDFromPath(picked))
+				info, err = w.ResumeSession(ctx, build.SessionIDFromPath(picked))
 			}
 		default:
 			info, err = w.CreateSession(ctx, ctrlproto.CreateOpts{})
@@ -105,10 +120,7 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 		if err != nil {
 			return err
 		}
-		ag, sessID, err = w.AgentFor(info.ID)
-		if err != nil {
-			return err
-		}
+		sessID = info.ID
 	}
 
 	// Status-line / banner labels before the first session exists: the
@@ -117,7 +129,7 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 	bootPersona, bootTrusted := info.Persona, info.Trusted
 	if needLogin {
 		bootProvider, bootModel = w.Defaults()
-		bootPersona, bootTrusted = w.personaName, w.Trusted()
+		bootPersona, bootTrusted = w.PersonaName(), w.Trusted()
 	}
 
 	diagMu.Lock()
@@ -126,11 +138,56 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 	}
 	diagMu.Unlock()
 
-	initialCfg, _ := LoadConfig()
-	theme, _, themeErr := tui.DetectThemeWithCustom(TervaHome(), initialCfg.Theme, 80*time.Millisecond)
+	initialCfg, _ := config.LoadConfig()
+	theme, _, themeErr := tui.DetectThemeWithCustom(config.TervaHome(), initialCfg.Theme, 80*time.Millisecond)
 	if themeErr != nil {
 		fmt.Fprintln(os.Stderr, "theme load:", themeErr)
 	}
+
+	// Update-available banner: check GitHub releases off the UI goroutine and
+	// deliver at most one result. agent.UpdateInfo → modes.UpdateInfo here to
+	// avoid a cyclic import. Mirrors the legacy entry.
+	updateCh := make(chan modes.UpdateInfo, 1)
+	go func() {
+		defer close(updateCh)
+		src := <-CheckForUpdateAsync(config.TervaHome(), version)
+		updateCh <- modes.UpdateInfo{
+			Current:   src.Current,
+			Latest:    src.Latest,
+			Available: src.Available,
+			URL:       src.URL,
+		}
+	}()
+
+	// Changelog: when the running version differs from the last version whose
+	// release notes the user dismissed, fetch the release body and have the TUI
+	// show it once. First-ever launch seeds the stored version silently — don't
+	// dump release notes at someone who just installed. Mirrors the legacy entry.
+	changelogCh := make(chan modes.ChangelogPayload, 1)
+	go func() {
+		defer close(changelogCh)
+		cfg, _ := config.LoadConfig()
+		if cfg.LastChangelogShown == "" {
+			SeedChangelogVersion(version)
+			return
+		}
+		if !ShouldShowChangelog(version, cfg) {
+			return
+		}
+		info := <-FetchChangelogAsync(version)
+		if info.Body == "" {
+			return
+		}
+		// For dev builds (0.0.0), skip if the latest release was already shown.
+		if version == "0.0.0" && info.Version == cfg.LastChangelogShown {
+			return
+		}
+		changelogCh <- modes.ChangelogPayload{
+			Version: info.Version,
+			Body:    info.Body,
+			URL:     info.URL,
+		}
+	}()
 
 	term := tui.NewProcTerm()
 	// Forward-declared so the session-group closures below can re-point the
@@ -138,7 +195,7 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 	var iv *modes.Interactive
 	iv = modes.NewInteractive(modes.InteractiveConfig{
 		Terminal:            term,
-		Theme:               theme,
+		Theme:               experienceTheme(theme, r.Experience),
 		ThemeName:           initialCfg.Theme,
 		InlineImagesEnabled: initialCfg.InlineImagesEnabled,
 		StatusLineRows:      initialCfg.StatusLineRows(),
@@ -146,21 +203,79 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 		SettingsStore:       configSettingsStore{},
 		Model:               bootModel,
 		Provider:            bootProvider,
-		PersonaName:         bootPersona,
-		AutoSwarmEnabled:    initialCfg.AutoSwarmEnabled,
-		CWD:                 w.cwd,
-		TervaHome:           TervaHome(),
-		Version:             version,
-		Agent:               ag, // transitional crutch: residual readers only (usage, fork/tree/export, startup scroll); nil until login on a credential-less boot
-		Carrier:             w,
-		CarrierSession:      sessID,
+		Reasoning:           r.Reasoning,
+		AuthMethod:          r.AuthMethod,
+		// $TERVA_HOME/models.json path for the Ctrl+E model editor — a local
+		// file the editor reads/writes directly, no wire round-trip.
+		UserModelsPath: UserModelsPath(),
+		// Persona banner + meta-mode chrome (display-only; resolved above
+		// without a credential). Experience drives the --chat/--play chrome
+		// suppression + spinner flavor; the emoji/accent/phonetic lead and tint
+		// the welcome banner.
+		PersonaName:     bootPersona,
+		PersonaPhonetic: r.Persona.Phonetic(),
+		PersonaEmoji:    r.Persona.Emoji,
+		PersonaAccent:   r.Persona.AccentColor,
+		Experience:      r.Experience,
+		// @-mention picker startup prefs (runtime /settings toggles already
+		// route through the settings dialog; these honor the persisted values).
+		RecursiveFileSuggest: initialCfg.RecursiveFileSuggest,
+		RespectGitignore:     initialCfg.RespectGitignore,
+		// The workspace-shared sandbox: /jail + /unjail toggle it, the status
+		// bar reads its lock, and the local `!`-shell escape enforces it. Every
+		// session's file tools already point at this same object.
+		Sandbox: w.Sandbox(),
+		// Extension-bundled themes in the /settings theme picker (reads the
+		// current session's extension manager; nil pre-login).
+		ExtensionThemes: func() []tui.ThemeOption { return w.ExtensionThemes(iv.CarrierSessionID()) },
+		// Extension slash-commands, status segments, /context detail, panel
+		// input, and /reload-ext — resolved against whichever session the TUI
+		// is currently bound to (see carrierExtHost). Extension TOOLS already
+		// run daemon-side; this restores the interactive/command surface.
+		Extensions: workspace.NewCarrierExtHost(w, func() string { return iv.CarrierSessionID() }),
+		// /skills picker + /skill <name> priming + completions, resolved
+		// against the current session's skill tool. Skill EXECUTION is the
+		// model's daemon-side `skill` tool; these are the discovery/refresh
+		// reads the picker + autocomplete need.
+		SkillSnapshot: func() []*skills.Skill { return w.SkillSnapshot(iv.CarrierSessionID()) },
+		ReloadSkills:  func() []*skills.Skill { return w.ReloadSkills(iv.CarrierSessionID()) },
+		SkillCompletions: func() []modes.SkillCompletion {
+			vis := w.SessionSkills(iv.CarrierSessionID())
+			out := make([]modes.SkillCompletion, 0, len(vis))
+			for _, sk := range vis {
+				out = append(out, modes.SkillCompletion{Name: sk.Name, Desc: sk.Description})
+			}
+			return out
+		},
+		// Update-available banner + changelog-on-upgrade overlay.
+		UpdateInfoChan: updateCh,
+		ChangelogChan:  changelogCh,
+		OnChangelogDismiss: func() {
+			// Dev builds (0.0.0) store the actual release version so the same
+			// changelog doesn't reappear; real builds store the binary version.
+			v := version
+			if v == "0.0.0" && iv != nil && iv.ChangelogVersion() != "" {
+				v = iv.ChangelogVersion()
+			}
+			_ = MarkChangelogShown(v)
+		},
+		AutoSwarmEnabled: initialCfg.AutoSwarmEnabled,
+		CWD:              w.CWD(),
+		TervaHome:        config.TervaHome(),
+		Version:          version,
+		// A credential-less boot defers the first session until /login, so the
+		// prompt gate opens iff a credential resolved. This was `ag != nil`
+		// before the agent crutch went away; it means the same thing.
+		Ready:          !needLogin,
+		Carrier:        w,
+		CarrierSession: sessID,
 		// /swarm drives the workspace's tasks surface; same gate as the
 		// legacy path's cfg.Swarm (withheld from immersive/no-tools sessions
 		// so the dashboard can't re-inject the coding skin there).
-		CarrierTasks:        hasBaseWorkspaceTools(args),
+		CarrierTasks:        build.HasBaseWorkspaceTools(args),
 		InitialInput:        args.Prompt,
 		Trusted:             bootTrusted,
-		GatedContentPresent: hasGatedProjectContent(w.cwd),
+		GatedContentPresent: config.HasGatedProjectContent(w.CWD()),
 
 		// --- in-TUI login (the carrier flavor) ---
 		// The auth manager runs the OAuth/api-key flows in this process; on
@@ -171,6 +286,9 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 		AuthManager:         authMgr,
 		RefreshModels:       RefreshModelsForceAsync,
 		RefreshCompatModels: RefreshCompatModelsAsync,
+		// Logging in/out of Kimi toggles whether terva may fall back to the
+		// official Kimi Code CLI token — so a logout actually stops using it.
+		SetKimiCLIFallbackDisabled: config.SetKimiCLIFallbackDisabled,
 		CarrierLogin: func(current string) (ctrlproto.SessionInfo, error) {
 			if err := w.RefreshDefaults(); err != nil {
 				return ctrlproto.SessionInfo{}, err
@@ -204,7 +322,7 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 		// local-disk core helpers with no wire verbs (v1 scope) — but every
 		// resulting SWITCH goes through the service.
 		LoadSession: func(path string) error {
-			return iv.SwitchCarrierSession(sessionIDFromPath(path))
+			return iv.SwitchCarrierSession(build.SessionIDFromPath(path))
 		},
 		NewSession: func(providerName, model string) error {
 			// Provider qualifies the model id: some ids exist under several
@@ -217,7 +335,7 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 			return iv.SwitchCarrierSession(created.ID)
 		},
 		RenameSessionFile: func(path, title string) error {
-			return w.RenameSession(ctx, sessionIDFromPath(path), title)
+			return w.RenameSession(ctx, build.SessionIDFromPath(path), title)
 		},
 		// The /sessions picker lists via the session group instead of its own
 		// disk scan — same store, but the service overlays live state (current
@@ -227,7 +345,7 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 			if err != nil {
 				return nil
 			}
-			return sessionSummariesFromInfos(infos)
+			return workspace.SessionSummariesFromInfos(infos)
 		},
 		CurrentSessionPath: func() string {
 			cur, err := w.ResumeSession(ctx, iv.CarrierSessionID())
@@ -249,7 +367,7 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 		// every open session — more complete than the legacy closure).
 		LoggedInProviders: loggedInProviderList,
 		FavoriteModels: func() []string {
-			cfg, _ := LoadConfig()
+			cfg, _ := config.LoadConfig()
 			return cfg.FavoriteModels
 		},
 		SetFavoriteModel: func(key string, on bool) error {
@@ -262,12 +380,12 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 		PromoteModelDefault: func(providerName, model, scope string) error {
 			switch scope {
 			case "project":
-				return setProjectModel(w.cwd, providerName, model)
+				return config.SetProjectModel(w.CWD(), providerName, model)
 			case "global":
-				cfg, _ := LoadConfig()
+				cfg, _ := config.LoadConfig()
 				cfg.Provider = providerName
 				cfg.Model = model
-				return SaveConfig(cfg)
+				return config.SaveConfig(cfg)
 			default:
 				return fmt.Errorf("unknown model-default scope %q", scope)
 			}
@@ -286,12 +404,12 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 		// helpers the legacy entry wires. Only APPLYING a saved config to the
 		// running extension is daemon work, so that rides the extensions
 		// surface's "config" action (which the web client shares).
-		ReadLogTail: readLogTail,
+		ReadLogTail: build.ReadLogTail,
 		ExtensionConfigFields: func(name string) []modes.ConfigField {
-			return extensionConfigFields(w.cwd, name)
+			return extensionConfigFields(w.CWD(), name)
 		},
 		SetExtensionConfig: func(name string, values map[string]string) error {
-			return setExtensionConfigFromForm(w.cwd, name, values)
+			return setExtensionConfigFromForm(w.CWD(), name, values)
 		},
 		ApplyExtensionConfig: func(name string) {
 			_ = w.SurfaceAction(ctx, iv.CarrierSessionID(), "extensions", "config",
@@ -306,23 +424,8 @@ func runInteractiveCtrlproto(ctx context.Context, args Args, version string) err
 	return iv.Run(ctx)
 }
 
-// sessionSummariesFromInfos maps the session group's wire view back onto the
-// picker's native row type. FirstUserText stays empty deliberately: the
-// service already folds it into Title (titleFromFirstText), which is the only
-// thing the picker uses it for.
-func sessionSummariesFromInfos(infos []ctrlproto.SessionInfo) []core.SessionSummary {
-	out := make([]core.SessionSummary, 0, len(infos))
-	for _, in := range infos {
-		started, _ := time.Parse(time.RFC3339, in.Created)
-		out = append(out, core.SessionSummary{
-			Path:         in.Path,
-			Started:      started,
-			Model:        in.Model,
-			Provider:     in.Provider,
-			MessageCount: in.Messages,
-			TotalCost:    in.Usage.CostUSD,
-			Title:        in.Title,
-		})
-	}
-	return out
-}
+// carrierExtHost satisfies modes.ExtensionHost. Asserted here, not in the
+// workspace package: the assertion is what would force workspace to import
+// modes, and cli_ctrlproto.go is the composition root that bridges the two —
+// the same reason cli.go holds the modes.Carrier assertion.
+var _ modes.ExtensionHost = workspace.CarrierExtHost{}

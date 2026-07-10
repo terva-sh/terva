@@ -361,6 +361,15 @@ func (c *Carrier) Usage(ctx context.Context, sess string) (core.WireUsage, error
 	return c.cumUsage, nil
 }
 
+// UsageSnapshot has nothing to report: a replay has no provider client, so
+// there is no subscription or credit picture behind it. HasData=false is the
+// same answer a live session on a provider that reports no usage gives, and
+// the TUI renders it the same way — "doesn't report usage limits" — rather
+// than an error banner on every turn.
+func (c *Carrier) UsageSnapshot(ctx context.Context, sess string, refresh bool) (ctrlproto.UsageInfo, error) {
+	return ctrlproto.UsageInfo{}, nil
+}
+
 // Surfaces reports no auxiliary panes for a replay (nothing to act on).
 func (c *Carrier) Surfaces(ctx context.Context, sess string) ([]ctrlproto.SurfaceMeta, error) {
 	return nil, nil
@@ -387,6 +396,15 @@ func (c *Carrier) SetQueue(ctx context.Context, sess string, texts []string) err
 }
 func (c *Carrier) Compact(ctx context.Context, sess string) error { return unsupported("compact") }
 func (c *Carrier) Clear(ctx context.Context, sess string) error   { return unsupported("clear") }
+
+// A replay has no provider client, so there is nothing to complete against.
+func (c *Carrier) SideChatOpen(ctx context.Context, sess string) (string, error) {
+	return "", unsupported("side chat")
+}
+func (c *Carrier) SideChatAsk(ctx context.Context, sess, id string, prior []ctrlproto.SideChatTurn, question string) (string, error) {
+	return "", unsupported("side chat")
+}
+func (c *Carrier) SideChatClose(ctx context.Context, sess, id string) error { return nil }
 func (c *Carrier) CreateSession(ctx context.Context, opts ctrlproto.CreateOpts) (ctrlproto.SessionInfo, error) {
 	return ctrlproto.SessionInfo{}, unsupported("create session")
 }
@@ -423,12 +441,6 @@ func (c *Carrier) SetFavoriteModel(ctx context.Context, provider, model string, 
 func (c *Carrier) Trust(ctx context.Context, parent bool) error { return unsupported("trust") }
 func (c *Carrier) Untrust(ctx context.Context) error            { return unsupported("untrust") }
 func (c *Carrier) Restart(ctx context.Context) error            { return unsupported("restart") }
-
-// AgentFor satisfies modes.Carrier. A replay has no live *core.Agent; the TUI
-// replay surface (a later stage) seeds a display crutch or tolerates the miss.
-func (c *Carrier) AgentFor(sess string) (*core.Agent, string, error) {
-	return nil, c.id, unsupported("live agent")
-}
 
 func unsupported(what string) error {
 	return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "replay session: %s not supported", what)

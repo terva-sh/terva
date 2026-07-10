@@ -3,6 +3,8 @@ package modes
 import (
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/agent/slash"
 )
 
 // Aliases dispatch identically to their canonical command — the exact
@@ -66,67 +68,28 @@ func TestSlashCatalogDerivesFromRegistry(t *testing.T) {
 	}
 }
 
-// BuiltinSlashCommands is the exported, *Interactive-free accessor a
-// non-TUI frontend (the ACP run mode) consumes to build a slash-command
-// catalog. It must surface every visible command (in registry order),
-// drop hidden internal verbs, and carry the argument hint declared on the
-// spec.
-func TestBuiltinSlashCommandsAccessor(t *testing.T) {
-	cmds := BuiltinSlashCommands()
-	if len(cmds) == 0 {
-		t.Fatal("BuiltinSlashCommands returned nothing")
-	}
-
-	// Same shape as the internal catalog: visible commands in registry
-	// order, /help first, hidden /cd absent.
-	if cmds[0].Name != "/help" {
-		t.Errorf("accessor head = %q, want /help first", cmds[0].Name)
-	}
-	// The internal catalog additionally carries group-divider header
-	// rows for the popup; the ACP accessor must expose only commands.
-	catalogCmds := 0
-	for _, c := range builtinSlashCatalog() {
-		if !c.Header {
-			catalogCmds++
+// The registry is the JOIN of the neutral catalog (packages/agent/slash)
+// and this package's handler map. The two tables must not drift: every
+// spec needs a handler, every handler needs a spec, and the join must
+// leave no dispatchable row without a run func.
+func TestSlashHandlersMatchCatalog(t *testing.T) {
+	specs := slash.Registry()
+	byName := map[string]bool{}
+	for _, s := range specs {
+		byName[s.Name] = true
+		if slashHandlers[s.Name] == nil {
+			t.Errorf("catalog entry %s has no handler in slashHandlers", s.Name)
 		}
 	}
-	if len(cmds) != catalogCmds {
-		t.Errorf("accessor returned %d commands; internal catalog has %d non-header entries (they must agree)",
-			len(cmds), catalogCmds)
-	}
-
-	byName := map[string]SlashCommandInfo{}
-	for _, c := range cmds {
-		if c.Name == "/cd" {
-			t.Error("hidden /cd leaked into BuiltinSlashCommands")
-		}
-		if !strings.HasPrefix(c.Name, "/") {
-			t.Errorf("command %q must start with a slash", c.Name)
-		}
-		if c.Desc == "" {
-			t.Errorf("command %q has no description", c.Name)
-		}
-		byName[c.Name] = c
-	}
-
-	// The headless-safe agent-control commands the ACP catalog curates
-	// from must be present, with no spurious hint (they take no argument).
-	for _, name := range []string{"/clear", "/compact"} {
-		c, ok := byName[name]
-		if !ok {
-			t.Errorf("%q missing from BuiltinSlashCommands", name)
-			continue
-		}
-		if c.Hint != "" {
-			t.Errorf("%q hint = %q; want empty (it takes no argument)", name, c.Hint)
+	for name := range slashHandlers {
+		if !byName[name] {
+			t.Errorf("handler %s has no catalog entry in slash.Registry()", name)
 		}
 	}
-
-	// An argument-taking command surfaces its hint, decoupled from the TUI.
-	if c, ok := byName["/model"]; !ok {
-		t.Error("/model missing from BuiltinSlashCommands")
-	} else if c.Hint == "" {
-		t.Error("/model should carry an argument hint")
+	for _, s := range slashRegistry {
+		if s.run == nil {
+			t.Errorf("joined registry row %s has nil run", s.name)
+		}
 	}
 }
 
@@ -137,7 +100,8 @@ func TestBuiltinSlashCommandsAccessor(t *testing.T) {
 // slotted into their group.
 func TestSlashCatalogGroupOrder(t *testing.T) {
 	wantHeaders := []string{
-		groupSession, groupContext, groupModel, groupSafety, groupAgents, groupSystem,
+		"session", "context & skills", "model & account",
+		"permissions & trust", "agents & integrations", "system",
 	}
 	cat := builtinSlashCatalog()
 	if len(cat) == 0 || cat[0].Header || cat[0].Name != "/help" {

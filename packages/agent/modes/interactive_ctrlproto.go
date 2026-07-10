@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
@@ -15,10 +16,11 @@ import (
 	"terva.sh/terva/packages/tui"
 )
 
-// This file is the TUI's ctrlproto carrier path — the default
-// (docs/proposals/tui-on-ctrlproto.md). Where the legacy path (--tui-legacy)
-// drives a *core.Agent directly and consumes typed core.AgentEvent through a
-// synchronous sink, this path drives the in-process ctrlproto WorkspaceService and consumes
+// This file is the TUI's ctrlproto carrier path — the only shipping
+// backend (docs/proposals/tui-on-ctrlproto.md; --tui-legacy is a
+// deprecated no-op). Where the removed legacy path drove a *core.Agent
+// directly and consumed typed core.AgentEvent through a synchronous
+// sink, this path drives the in-process ctrlproto WorkspaceService and consumes
 // the wire event stream (core.WireEvent + control events) off a reliable
 // subscription. handleWireEvent is the wire twin of handleEvent: it makes the
 // same rendering-state mutations, keyed on the string WireEvent.Type instead of
@@ -96,12 +98,13 @@ func (i *Interactive) carrierCancel() context.CancelFunc {
 
 // SwitchCarrierSession re-points the TUI at another workspace session: the
 // session-group half of the migration (tui-on-ctrlproto.md Stage 2). It
-// materializes the target through the service, swaps the crutch agent, drops
-// state owned by the old session (pending dialog round-trips, the local turn
-// slot — the old session's turn keeps running daemon-side; this TUI just
-// stops watching it), commits the new binding, and kicks the pump so it
-// re-subscribes. The caller (startNewSession / applySessionSelection) resets
-// the per-session view state afterwards by reading the swapped-in agent.
+// materializes the target through the service, drops state owned by the old
+// session (pending dialog round-trips, the local turn slot — the old session's
+// turn keeps running daemon-side; this TUI just stops watching it), commits the
+// new binding, and kicks the pump so it re-subscribes. The new binding's FIRST
+// snapshot then refills the transcript and the queue, decides the first-paint
+// tail cap, and seeds the cost and context gauges. Nothing is read off an agent
+// — the TUI holds none (plan 4.1).
 func (i *Interactive) SwitchCarrierSession(id string) error {
 	c := i.cfg.Carrier
 	if c == nil {
@@ -111,10 +114,10 @@ func (i *Interactive) SwitchCarrierSession(id string) error {
 	if err != nil {
 		return err
 	}
-	ag, id, err := c.AgentFor(id)
-	if err != nil {
-		return err
-	}
+	// info.ID is the canonical resolved session id (ResumeSession materialized
+	// it). The TUI holds no agent to swap — the daemon owns it — so binding to
+	// the session is committing the id and re-subscribing the pump.
+	id = info.ID
 	// Old-session teardown: refuse pending dialogs (their forward goroutines
 	// answer the OLD session — captured at enqueue — where first-answer-wins
 	// makes a late refusal harmless) and release the local slot.
@@ -122,13 +125,18 @@ func (i *Interactive) SwitchCarrierSession(id string) error {
 	i.questionDialog.CancelAll()
 	i.turns.releaseCarrier()
 	i.mu.Lock()
-	i.carrierPerm = map[string]*confirmRequest{}
-	i.carrierAsk = map[string]*questionRequest{}
+	i.carrierPerm = map[string]*dialogs.ConfirmRequest{}
+	i.carrierAsk = map[string]*dialogs.QuestionRequest{}
 	i.cfg.CarrierSession = id
-	// Drop the old session's transcript now; the new binding's snapshot
-	// refills it (a beat of empty beats a beat of foreign history).
+	// Drop the old session's transcript and queue now; the new binding's
+	// snapshot refills both (a beat of empty beats a beat of foreign
+	// history), and decides that snapshot's first-paint tail cap.
 	i.carrierMessages = nil
 	i.carrierMessagesRev++
+	i.carrierQueued = nil
+	i.carrierUsage = ctrlproto.UsageInfo{}
+	i.carrierChat = ctrlproto.ChatView{}
+	i.armCarrierBind()
 	if info.Provider != "" {
 		i.cfg.Provider = info.Provider
 	}
@@ -136,8 +144,10 @@ func (i *Interactive) SwitchCarrierSession(id string) error {
 		i.cfg.Model = info.Model
 	}
 	kick := i.carrierPumpCancel
+	// Binding to a session that resolved means prompting is possible again,
+	// even if a /logout had closed the gate on the old one.
+	i.setReadyLocked(true)
 	i.mu.Unlock()
-	i.turns.SetAgent(ag)
 	if kick != nil {
 		kick() // the supervisor re-subscribes to the new binding
 	}
@@ -153,9 +163,13 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		// A turn this client didn't dispatch (a daemon queue restart, another
 		// device): claim the local slot and reset the per-turn UI, the same
 		// state our own dispatch path arms. Per-step turn_starts of a running
-		// turn no-op inside reclaimCarrier.
+		// turn no-op inside reclaimCarrier. The claim happens here (the engine
+		// has its own lock) but the UI reset is marshalled: this handler runs
+		// on the pump goroutine, and resetTurnUI clears main-loop-only render
+		// state (view.TailLimit, scroll offsets) the render path reads
+		// without i.mu.
 		if i.turns.reclaimCarrier(i.carrierCancel()) {
-			i.resetTurnUI()
+			i.runOnMain(i.resetTurnUI)
 		}
 	case "done":
 		// The workspace's guaranteed turn-over signal (every path, including
@@ -163,6 +177,9 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		// idempotent). Status/queue/persistence are daemon-side or handled by
 		// the accompanying error/turn_end events.
 		i.turns.releaseCarrier()
+		// A turn may have moved the provider's plan windows (codex reports them
+		// in response headers). Cached read, no network.
+		i.refreshUsageAsync(false)
 	case "user_message":
 		// The daemon transcript grew: mirror it into the pump transcript
 		// (synthetic host injections included — they're transcript rows too).
@@ -237,7 +254,11 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 			i.toolCalls = map[string]*tui.ToolCallView{}
 			i.toolOrder = nil
 			i.turns.ResetGates()
-			i.view.InvalidateRenderCache()
+			// Marshalled: this handler runs on the pump goroutine and the
+			// render cache is main-loop-only. A one-frame delay is safe —
+			// entries are keyed by content hash, so the drop is memory
+			// hygiene after the transcript swap, not a correctness barrier.
+			i.runOnMain(i.view.InvalidateRenderCache)
 		}
 		i.pendingPostCompactNote = ""
 		i.spin.Start() // back to the normal spinner for the turn that follows
@@ -278,6 +299,12 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 			return
 		}
 		i.setCarrierTranscript(ev.Snapshot.Messages)
+		i.setCarrierQueue(ev.Snapshot.Queued)
+		i.seedSessionMeters(ev.Snapshot.Session)
+		i.seedCarrierChat()
+		// The usage picture belongs to the provider client, not the session, so
+		// it does not ride the snapshot. Pull the cached one for this binding.
+		i.refreshUsageAsync(false)
 		if ev.Snapshot.Busy {
 			i.turns.reclaimCarrier(i.carrierCancel())
 		}
@@ -320,18 +347,33 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		// surface backs the /swarm dashboard's cached snapshot (and the
 		// status bar's swarm segment); other panes re-fetch on open (no
 		// pinned pane in the TUI yet).
-		switch ev.SurfaceID {
-		case "settings":
+		switch {
+		case ev.SurfaceID == "settings":
 			i.refreshCarrierApprovalMode()
-		case "tasks":
+		case ev.SurfaceID == "tasks":
 			i.invalidateCarrierTasks()
+		case ev.SurfaceID == "chat":
+			// connect/disconnect/rebind, from this client or another.
+			go i.fetchCarrierChat()
+		case strings.HasPrefix(ev.SurfaceID, carrierExtPanelPrefix):
+			// An extension opened/updated a panel proactively (host-hook, not a
+			// command result): mirror it into the TUI overlay — the carrier twin
+			// of the legacy interactiveExtHooks OpenPanel/UpdatePanel path.
+			i.syncCarrierExtPanel(ev.SurfaceID)
 		}
-	case ctrlproto.EventQueueUpdated,
-		ctrlproto.EventSurfacesChanged,
-		ctrlproto.EventLocaleChanged:
-		// Queue chips render from the in-process agent for now (the crutch);
-		// surfaces/locale are Stage-3 consumers. The pump's invalidate
-		// already repaints.
+	case ctrlproto.EventSurfacesChanged:
+		// A surface appeared or disappeared. If a proactively-opened extension
+		// panel is mirrored in the overlay, it may have been the one removed
+		// (paneClose broadcasts only this event) — re-check and close if so.
+		i.checkCarrierExtPanelClosed()
+	case ctrlproto.EventQueueUpdated:
+		// The daemon broadcasts the whole list after every mutation — its own
+		// enqueue at a turn boundary, the post-turn shift, a drop on failure,
+		// and any client's SetQueue. Mirror it; the pump's invalidate repaints
+		// the "sliding in" chips.
+		i.setCarrierQueue(ev.Queued)
+	case ctrlproto.EventLocaleChanged:
+		// A Stage-3 consumer. The pump's invalidate already repaints.
 	default:
 		i.handleWireEvent(ev)
 	}
@@ -412,7 +454,10 @@ func (i *Interactive) runCarrierCompact(parent context.Context) {
 			i.toolCalls = map[string]*tui.ToolCallView{}
 			i.toolOrder = nil
 			i.turns.ResetGates()
-			i.view.InvalidateRenderCache()
+			// Marshalled: this completion closure is the compact's own
+			// goroutine and the render cache is main-loop-only (see the
+			// pump's compact_end twin for why the delay is safe).
+			i.runOnMain(i.view.InvalidateRenderCache)
 		}
 		i.mu.Unlock()
 		i.invalidate()
@@ -420,11 +465,11 @@ func (i *Interactive) runCarrierCompact(parent context.Context) {
 }
 
 // swapModelCarrier routes a /model (or rescue) selection through the
-// service's SwitchModel. The workspace hot-swaps the session agent in place
-// (same pointer — the crutch stays valid), persists the session meta, and
-// broadcasts session_updated. Synchronous like the legacy swapModel — the
-// rescue path re-fires the failed prompt right after, which must not race the
-// swap (the in-process call does the same Resolve work legacy did here).
+// service's SwitchModel. The workspace hot-swaps the session agent in place,
+// persists the session meta, and broadcasts session_updated. Synchronous like
+// the legacy swapModel — the rescue path re-fires the failed prompt right
+// after, which must not race the swap (the in-process call does the same
+// Resolve work legacy did here).
 func (i *Interactive) swapModelCarrier(prov, model string, rescue bool) {
 	c, sess := i.cfg.Carrier, i.carrierSession()
 	if err := c.SwitchModel(context.Background(), sess, prov, model); err != nil {
@@ -462,7 +507,7 @@ func (i *Interactive) swapModelCarrier(prov, model string, rescue bool) {
 func (i *Interactive) enqueueCarrierPermission(req ctrlproto.PermissionRequest) {
 	sess := i.carrierSession() // capture: the answer must reach the session that asked
 	resp := make(chan core.ConfirmDecision, 1)
-	cr := &confirmRequest{toolName: req.Tool, preview: req.Preview, resp: resp}
+	cr := &dialogs.ConfirmRequest{ToolName: req.Tool, Preview: req.Preview, Resp: resp}
 	i.mu.Lock()
 	i.carrierPerm[req.CallID] = cr
 	i.mu.Unlock()
@@ -495,7 +540,7 @@ func (i *Interactive) dismissCarrierPermission(callID string) {
 func (i *Interactive) enqueueCarrierAsk(req ctrlproto.AskRequest) {
 	sess := i.carrierSession() // capture: the answer must reach the session that asked
 	resp := make(chan core.UserAnswer, 1)
-	qr := &questionRequest{question: req.Question, options: req.Options, allowCustom: req.AllowCustom, resp: resp}
+	qr := &dialogs.QuestionRequest{Question: req.Question, Options: req.Options, AllowCustom: req.AllowCustom, Resp: resp}
 	i.mu.Lock()
 	i.carrierAsk[req.AskID] = qr
 	i.mu.Unlock()
@@ -551,7 +596,7 @@ func (i *Interactive) refreshCarrierApprovalMode() {
 // renderPermissionsWireView paints the /permissions inspector from the wire
 // PermissionsView — the ctrlproto twin of the legacy gate-reading renderer,
 // producing the same info lines + selectable grants.
-func renderPermissionsWireView(th tui.Theme, pv ctrlproto.PermissionsView) (info []string, grants []permGrant) {
+func renderPermissionsWireView(th tui.Theme, pv ctrlproto.PermissionsView) (info []string, grants []dialogs.PermGrant) {
 	if pv.Mode == "yolo" && len(pv.Rules) == 0 && !pv.AllowAll && len(pv.Grants) == 0 {
 		return []string{th.FG256(th.Muted, i18n.T("no permission gate (yolo): every tool runs without asking."))}, nil
 	}
@@ -594,10 +639,10 @@ func renderPermissionsWireView(th tui.Theme, pv ctrlproto.PermissionsView) (info
 
 	out = append(out, th.FG256(th.Accent, tui.Bold(i18n.T("this session"))))
 	if pv.AllowAll {
-		grants = append(grants, permGrant{allowAll: true})
+		grants = append(grants, dialogs.PermGrant{AllowAll: true})
 	}
 	for _, t := range pv.Grants {
-		grants = append(grants, permGrant{tool: t})
+		grants = append(grants, dialogs.PermGrant{Tool: t})
 	}
 	if len(grants) == 0 {
 		out = append(out, "  "+th.FG256(th.Muted, i18n.T("no session grants yet.")))
@@ -607,19 +652,25 @@ func renderPermissionsWireView(th tui.Theme, pv ctrlproto.PermissionsView) (info
 
 // carrierPermissionRevoke resolves one inspector revoke through the surface
 // action vocabulary.
-func (i *Interactive) carrierPermissionRevoke(g permGrant) {
+func (i *Interactive) carrierPermissionRevoke(g dialogs.PermGrant) {
 	c, sess := i.cfg.Carrier, i.carrierSession()
-	if g.allowAll {
+	if c == nil {
+		return
+	}
+	if g.AllowAll {
 		_ = c.SurfaceAction(context.Background(), sess, "permissions", "revoke_all", nil)
 		return
 	}
-	_ = c.SurfaceAction(context.Background(), sess, "permissions", "revoke", map[string]string{"tool": g.tool})
+	_ = c.SurfaceAction(context.Background(), sess, "permissions", "revoke", map[string]string{"tool": g.Tool})
 }
 
 // carrierPermissionsReset composes the inspector's clear-all (legacy
 // gate.Reset: blanket allow + every per-tool grant) from the wire verbs.
 func (i *Interactive) carrierPermissionsReset() {
 	c, sess := i.cfg.Carrier, i.carrierSession()
+	if c == nil {
+		return
+	}
 	sf, err := c.Surface(context.Background(), sess, "permissions")
 	if err != nil || sf.Permissions == nil {
 		return
@@ -670,7 +721,7 @@ func (i *Interactive) carrierListExtensions() []ExtInfo {
 // applyCarrierExtensionToggle persists + applies an extension toggle through
 // the extensions surface (scope global = manifest, project = config disable
 // list; the daemon starts/stops the subprocess and rebuilds the tool set).
-func (i *Interactive) applyCarrierExtensionToggle(act extensionsAction) {
+func (i *Interactive) applyCarrierExtensionToggle(act dialogs.ExtensionsAction) {
 	scope := "project"
 	if act.ToggleGlobal {
 		scope = "global"
@@ -723,7 +774,7 @@ func (i *Interactive) carrierListMCP() []MCPInfo {
 // applyCarrierMCPToggle persists + applies an MCP toggle through the mcp
 // surface (the daemon serializes StartOne/StopOne and rebuilds every live
 // session's tools — servers are workspace-global).
-func (i *Interactive) applyCarrierMCPToggle(act mcpAction) {
+func (i *Interactive) applyCarrierMCPToggle(act dialogs.MCPAction) {
 	scope := "global"
 	if act.ToggleProject {
 		scope = "project"
@@ -823,6 +874,72 @@ func (i *Interactive) carrierTaskAction(action string, args map[string]string) e
 	return err
 }
 
+// carrierExtPanelPrefix is the surface-id namespace the daemon uses for
+// extension-opened panels (workspace_surfaces.go panelSurfaceID: "ext:<ext>:<id>").
+const carrierExtPanelPrefix = "ext:"
+
+// syncCarrierExtPanel mirrors a daemon-side extension panel surface into the
+// TUI's single panel overlay. Async (called off the pump) because it fetches
+// the panel content; opens the overlay, or updates it in place when it is
+// already the active panel so a fast-updating panel doesn't reset scroll.
+// carrierPanelSurface records the mirrored surface id so the close check knows
+// this overlay is daemon-backed (vs a command-result panel, which has none).
+func (i *Interactive) syncCarrierExtPanel(sid string) {
+	c, sess := i.cfg.Carrier, i.carrierSession()
+	go func() {
+		sf, err := c.Surface(context.Background(), sess, sid)
+		if err != nil || sf.Panel == nil {
+			return
+		}
+		ext := sf.Panel.Ext
+		id := strings.TrimPrefix(sid, carrierExtPanelPrefix+ext+":")
+		i.mu.Lock()
+		if i.extPanel.Active() && i.extPanel.Ext() == ext && i.extPanel.ID() == id {
+			i.extPanel.Update(sf.Title, sf.Panel.Lines, sf.Panel.Footer)
+		} else {
+			i.extPanel.Open(ext, id, sf.Title, sf.Panel.Lines, sf.Panel.Footer)
+		}
+		i.carrierPanelSurface = sid
+		i.mu.Unlock()
+		i.invalidate()
+	}()
+}
+
+// checkCarrierExtPanelClosed closes the overlay when the daemon removed the
+// extension panel it mirrors — paneClose broadcasts only surfaces_changed, no
+// per-panel event. A no-op unless the overlay is showing a daemon-backed panel
+// (carrierPanelSurface set); command-result panels have no surface and are left
+// alone. Async (re-lists surfaces).
+func (i *Interactive) checkCarrierExtPanelClosed() {
+	i.mu.Lock()
+	sid := i.carrierPanelSurface
+	i.mu.Unlock()
+	if sid == "" {
+		return
+	}
+	c, sess := i.cfg.Carrier, i.carrierSession()
+	go func() {
+		metas, err := c.Surfaces(context.Background(), sess)
+		if err != nil {
+			return
+		}
+		for _, m := range metas {
+			if m.ID == sid {
+				return // still open
+			}
+		}
+		// The extension closed it daemon-side; drop the overlay (no SendPanelClose
+		// — the ext already closed it). Guard against a racing re-open.
+		i.mu.Lock()
+		if i.carrierPanelSurface == sid {
+			i.extPanel.Close()
+			i.carrierPanelSurface = ""
+		}
+		i.mu.Unlock()
+		i.invalidate()
+	}()
+}
+
 // --- pump-owned transcript (Stage 4: rendering without the crutch) ---
 
 // setCarrierTranscript replaces the pump transcript from a snapshot — the
@@ -836,7 +953,142 @@ func (i *Interactive) setCarrierTranscript(msgs []core.WireMessage) {
 	i.mu.Lock()
 	i.carrierMessages = out
 	i.carrierMessagesRev++
+	// This binding's first snapshot resolves the tail cap: a resumed
+	// multi-thousand-message session must not block the first paint on
+	// rendering every prior turn. Only the first — a later snapshot
+	// (compact, clear, a reconnect's resubscribe) must not re-cap a
+	// transcript the user has since scrolled open.
+	if i.carrierTailArmed {
+		i.carrierTailArmed = false
+		i.carrierTailPending = 0
+		if len(out) > initialResumeTailLimit {
+			i.carrierTailPending = initialResumeTailLimit
+		}
+	}
 	i.mu.Unlock()
+}
+
+// armCarrierBind arms everything a fresh binding's FIRST snapshot must decide:
+// the first-paint tail cap, and the seed for the cost/context meters. Later
+// snapshots (compact, clear, a reconnect's resubscribe) must do neither — one
+// would collapse a transcript the user scrolled open, the other would re-anchor
+// the $/hr epoch mid-session. Caller holds i.mu.
+func (i *Interactive) armCarrierBind() {
+	i.carrierTailArmed = true
+	i.carrierTailPending = -1
+	i.carrierSeedArmed = true
+	i.carrierChatArmed = true
+}
+
+// seedSessionMeters hydrates the cumulative-cost and context-token gauges from
+// the binding's first snapshot. Both used to be read off the crutch agent
+// (Cost(), LastTurnUsage()) at construction and on session load; the wire has
+// carried them on SessionInfo all along, and the TUI discarded it. Per-turn
+// updates already ride the usage events.
+func (i *Interactive) seedSessionMeters(info ctrlproto.SessionInfo) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if !i.carrierSeedArmed {
+		return
+	}
+	i.carrierSeedArmed = false
+	i.cumUsage = usageFromWire(&info.Usage)
+	i.lastCtxInput = info.ContextTokens
+	// The bound session's historical cost is the new burn-rate base; only
+	// spend from this instant counts toward $/hr.
+	i.costBase = i.cumUsage.CostUSD
+	i.costBaseAt = time.Now()
+}
+
+// ---- prompt-readiness gate ----
+
+// ready reports whether the bound session can accept a prompt.
+func (i *Interactive) ready() bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.carrierReady
+}
+
+// setReady opens or closes the prompt gate (login, logout, session switch).
+func (i *Interactive) setReady(v bool) {
+	i.mu.Lock()
+	i.carrierReady = v
+	i.mu.Unlock()
+}
+
+// setReadyLocked is setReady for callers already holding i.mu.
+func (i *Interactive) setReadyLocked(v bool) { i.carrierReady = v }
+
+// ---- queue mirror ----
+//
+// The daemon owns the pending queue and broadcasts the whole list on every
+// mutation (queue_updated) and in every snapshot, so the TUI mirrors rather
+// than tracks. Mutations go back through SetQueue and return as a broadcast.
+
+// setCarrierQueue replaces the mirrored queue from a snapshot or a
+// queue_updated event.
+func (i *Interactive) setCarrierQueue(texts []string) {
+	i.mu.Lock()
+	i.carrierQueued = append([]string(nil), texts...)
+	i.mu.Unlock()
+}
+
+// carrierQueuedList copies the mirrored queue for the render pass.
+func (i *Interactive) carrierQueuedList() []string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return append([]string(nil), i.carrierQueued...)
+}
+
+// carrierQueuedCount reports how many prompts wait for a turn slot.
+func (i *Interactive) carrierQueuedCount() int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return len(i.carrierQueued)
+}
+
+// clearCarrierQueue drops every queued prompt (ctrl+c on an idle session).
+// The daemon's broadcast is what updates the mirror.
+func (i *Interactive) clearCarrierQueue() {
+	if i.carrierQueuedCount() == 0 {
+		return
+	}
+	if err := i.cfg.Carrier.SetQueue(context.Background(), i.carrierSession(), nil); err != nil {
+		i.setStatusErr(err.Error())
+	}
+}
+
+// popCarrierQueue peels the most recently queued prompt off the tail and
+// returns it, so alt+up can put it back in the editor. The mirror gives the
+// text; SetQueue commits the shortened list, and its broadcast reconciles.
+func (i *Interactive) popCarrierQueue() (string, bool) {
+	i.mu.Lock()
+	n := len(i.carrierQueued)
+	if n == 0 {
+		i.mu.Unlock()
+		return "", false
+	}
+	text := i.carrierQueued[n-1]
+	rest := append([]string(nil), i.carrierQueued[:n-1]...)
+	i.mu.Unlock()
+
+	if err := i.cfg.Carrier.SetQueue(context.Background(), i.carrierSession(), rest); err != nil {
+		i.setStatusErr(err.Error())
+		return "", false
+	}
+	return text, true
+}
+
+// takeCarrierTailLimit hands the resolved tail cap to the render pass, once.
+// i.view belongs to the main goroutine; the pump only ever computes the value.
+func (i *Interactive) takeCarrierTailLimit() (limit int, ok bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.carrierTailPending < 0 {
+		return 0, false
+	}
+	limit, i.carrierTailPending = i.carrierTailPending, -1
+	return limit, true
 }
 
 // appendCarrierMessage appends one full transcript message (the user_message
@@ -889,6 +1141,13 @@ func (i *Interactive) appendCarrierToolResultLocked(ev ctrlproto.Event) {
 func (i *Interactive) carrierTranscript() []provider.Message {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	return i.carrierTranscriptLocked()
+}
+
+// carrierTranscriptLocked is carrierTranscript for callers already holding
+// i.mu — the session-swap paths mirror the transcript into the view under the
+// same hold that resets the rest of the per-session state.
+func (i *Interactive) carrierTranscriptLocked() []provider.Message {
 	return append([]provider.Message(nil), i.carrierMessages...)
 }
 
@@ -934,12 +1193,10 @@ func (i *Interactive) handleWireEvent(ev ctrlproto.Event) {
 		// The daemon transcript gained the finalized reply (with its tool_use
 		// and reasoning blocks): mirror it into the pump transcript — the
 		// same instant the legacy path's agent promotes it, so the pacer's
-		// hide-the-last-message logic keeps its semantics. Persistence stays
-		// Workspace-owned; side effects drain the pacer and mirror text to an
-		// active chat bridge.
+		// hide-the-last-message logic keeps its semantics. Persistence and the
+		// chat mirror are both Workspace-owned.
 		if ev.Message != nil {
 			i.appendCarrierMessageLocked(core.MessageFromWire(*ev.Message))
-			i.assistantWireSideEffects(ev.Message)
 		}
 		if i.turns.FinishMessage() {
 			return
@@ -1019,18 +1276,6 @@ func (i *Interactive) handleWireEvent(ev ctrlproto.Event) {
 			i.statusErr = i18n.T("response hit the model's output-token limit and was cut off, ask it to continue")
 			i.statusOK = ""
 		}
-	}
-}
-
-// assistantWireSideEffects mirrors an assistant message's non-persistence side
-// effects for the wire path: text mirroring to an active chat bridge. Persistence
-// (cfg.OnAssistant in the legacy path) is Workspace-owned here. Called under i.mu.
-func (i *Interactive) assistantWireSideEffects(m *core.WireMessage) {
-	if i.chatBridge == nil || !i.chatBridge.Active() {
-		return
-	}
-	if text := strings.TrimSpace(wireBlocksText(m.Content)); text != "" {
-		go i.chatBridge.OnAssistantText(text)
 	}
 }
 

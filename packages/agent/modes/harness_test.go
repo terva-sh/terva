@@ -5,10 +5,16 @@ package modes
 // would, and asserts on the VT-emulated screen — the first tests that
 // exercise interactive.go's event loop end-to-end.
 //
-// The harness is deliberately agent-less: cfg.Agent is nil, which is
-// the real "not logged in" startup state. The login dialog that
-// auto-opens is part of that contract and the tests script their way
-// out of it with Esc.
+// The harness is deliberately not-ready: cfg.Ready is false, the real
+// "not logged in" startup state (the TUI holds no agent at all — plan
+// 4.1). The login dialog that auto-opens is part of that contract and
+// the tests script their way out of it with Esc.
+//
+// It is NOT carrier-less. Both production constructors of an Interactive
+// (cli_ctrlproto.go, replay_mode.go) bind a Carrier, so a carrier-less
+// harness would exercise a path that ships to nobody — which is exactly
+// how the non-carrier transcript branch in buildChat survived long after
+// its driver was deleted.
 
 import (
 	"context"
@@ -16,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/testsupport"
 	"terva.sh/terva/packages/tui"
 	"terva.sh/terva/packages/tui/tuitest"
@@ -31,6 +38,14 @@ type harness struct {
 
 // startInteractive boots a real Interactive on a fake 80x24 terminal.
 // mutate, if non-nil, adjusts the config before construction.
+//
+// The default config mirrors a production credential-less boot on the
+// in-process carrier: a Carrier, a non-nil CarrierLogin (which is what
+// marks the carrier login-capable), no CarrierSession, and not Ready. Both
+// production constructors of an Interactive set a Carrier, so a
+// carrier-less harness would exercise a path that ships to nobody.
+// CarrierSession == "" parks runCarrierLoop before it ever subscribes,
+// so the pump stays quiet for terminal-level tests.
 func startInteractive(t *testing.T, mutate func(*InteractiveConfig)) *harness {
 	t.Helper()
 	// Pin host-environment detection so tests behave the same in any
@@ -49,6 +64,10 @@ func startInteractive(t *testing.T, mutate func(*InteractiveConfig)) *harness {
 		PersonaName:         "Mieli",
 		PersonaPhonetic:     "MYEH-lee",
 		InlineImagesEnabled: &noImages,
+		Carrier:             newFakeCarrier(),
+		CarrierLogin: func(current string) (ctrlproto.SessionInfo, error) {
+			return ctrlproto.SessionInfo{ID: current}, nil
+		},
 	}
 	if mutate != nil {
 		mutate(&cfg)

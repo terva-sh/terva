@@ -451,7 +451,7 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 					return false
 				}
 				if i.cfg.Extensions != nil {
-					_ = i.cfg.Extensions.SendPanelKey(i.extPanel.ext, i.extPanel.id, panelKeyName(k), panelKeyText(k))
+					_ = i.cfg.Extensions.SendPanelKey(i.extPanel.Ext(), i.extPanel.ID(), panelKeyName(k), panelKeyText(k))
 				}
 				return false
 			},
@@ -501,7 +501,7 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			handleKey: func(k tui.Key) bool {
 				// `r` in the list view reloads (cache-safe): refresh the skill
 				// tool's catalog + re-seed the picker. Body view passes through.
-				if k.Kind == tui.KeyRune && (k.Rune == 'r' || k.Rune == 'R') && i.skillsDialog.inList() {
+				if k.Kind == tui.KeyRune && (k.Rune == 'r' || k.Rune == 'R') && i.skillsDialog.InList() {
 					i.reloadSkillsDialog()
 					return false
 				}
@@ -533,22 +533,12 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				act := i.permissionsDialog.HandleKey(k)
 				switch {
 				case act.Revoke:
-					// ctrlproto mode: the gate lives daemon-side; revokes ride
-					// the permissions surface's action vocabulary.
-					if i.cfg.Carrier != nil {
-						i.carrierPermissionRevoke(act.Grant)
-					} else if act.Grant.allowAll {
-						i.cfg.ConfirmGate.ClearAllowAll()
-					} else {
-						i.cfg.ConfirmGate.Revoke(act.Grant.tool)
-					}
+					// The gate lives daemon-side; revokes ride the permissions
+					// surface's action vocabulary.
+					i.carrierPermissionRevoke(act.Grant)
 					i.refreshPermissionsDialog()
 				case act.ClearAll:
-					if i.cfg.Carrier != nil {
-						i.carrierPermissionsReset()
-					} else {
-						i.cfg.ConfirmGate.Reset()
-					}
+					i.carrierPermissionsReset()
 					i.refreshPermissionsDialog()
 				}
 				return false
@@ -559,10 +549,16 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 }
 
 // closeExtPanel notifies the owning extension and closes the panel.
-// Shared by the Ctrl+C and Esc paths.
+// Shared by the Ctrl+C and Esc paths. Locked because the carrier pump may
+// mirror/close the same overlay from its own goroutine; SendPanelClose runs
+// outside the lock (it may block on the extension).
 func (i *Interactive) closeExtPanel() {
-	if i.cfg.Extensions != nil {
-		_ = i.cfg.Extensions.SendPanelClose(i.extPanel.ext, i.extPanel.id)
-	}
+	i.mu.Lock()
+	ext, id := i.extPanel.Ext(), i.extPanel.ID()
 	i.extPanel.Close()
+	i.carrierPanelSurface = ""
+	i.mu.Unlock()
+	if i.cfg.Extensions != nil {
+		_ = i.cfg.Extensions.SendPanelClose(ext, id)
+	}
 }

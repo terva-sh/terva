@@ -92,7 +92,13 @@ func (i *Interactive) invokeExtensionCommand(ctx context.Context, name, args str
 		if strings.TrimSpace(resp.Prompt) == "" {
 			return
 		}
-		i.startTurn(i.runCtx, resp.Prompt)
+		// Same background-goroutine story as the insert case below:
+		// turn start clears main-loop-only render state (resetTurnUI),
+		// so it has to land on the main goroutine too.
+		prompt := resp.Prompt
+		i.runOnMain(func() {
+			i.startTurn(i.runCtx, prompt)
+		})
 	case "insert":
 		// invokeExtensionCommand runs on a background goroutine, but
 		// tui.Editor has no locking and is otherwise mutated only from
@@ -153,50 +159,6 @@ func (i *Interactive) extStatusSegments() []string {
 // changes, so a status update appears even when nothing else triggers a
 // frame. (HostHooks.)
 func (i *Interactive) RefreshStatus() { i.invalidate() }
-
-// RefreshContext is the manager's hook for refresh_context (protocol 3):
-// an extension swapped its static context block, so re-fold it into the
-// system prompt and apply the result to the running agent. Marshalled
-// onto the main goroutine — it mutates agent.System, which the turn loop
-// reads — and a no-op when extensions aren't enabled or nothing changed.
-// (HostHooks.)
-func (i *Interactive) RefreshContext() {
-	if i.cfg.RebuildExtensionContext == nil {
-		return
-	}
-	i.runOnMain(func() {
-		sys, changed := i.cfg.RebuildExtensionContext()
-		if !changed {
-			return
-		}
-		if ag := i.turns.Agent(); ag != nil {
-			ag.System = sys
-		}
-	})
-}
-
-// RefreshTools is the manager's hook for set_withdrawn_tools (protocol 4):
-// an extension hid or restored some of its own tools, so rebuild the tool
-// registry for the current mode and install it on the running agent.
-// Marshalled onto the main goroutine — it swaps the agent's tools, which the
-// turn loop reads — and a no-op when extensions aren't enabled or nothing
-// changed. Unlike System (a bare field), the registry goes through the
-// locked SetTools setter, exactly as the live approval-mode switch does.
-// (HostHooks.)
-func (i *Interactive) RefreshTools() {
-	if i.cfg.RebuildExtensionTools == nil {
-		return
-	}
-	i.runOnMain(func() {
-		reg, changed := i.cfg.RebuildExtensionTools()
-		if !changed || reg == nil {
-			return
-		}
-		if ag := i.turns.Agent(); ag != nil {
-			ag.SetTools(reg)
-		}
-	})
-}
 
 // slashContext (the /context modal) lives in interactive_context.go — it
 // now opens a tabbed dialog with the size breakdown + the per-extension
@@ -264,18 +226,16 @@ func (i *Interactive) OpenPanel(extName string, spec extproto.PanelSpec) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.extPanel.Open(extName, spec.ID, spec.Title, spec.Lines, spec.Footer)
-	if i.cfg.Extensions != nil {
-		cols, rows := i.cfg.Terminal.Size()
-		_ = cols
-		_ = rows
-	}
+	// A command-result / legacy host-hook panel has no daemon surface backing
+	// it; clear the mirror id so the carrier close check leaves it alone.
+	i.carrierPanelSurface = ""
 	i.invalidate()
 }
 
 func (i *Interactive) UpdatePanel(extName, panelID, title string, lines []string, footer string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.extPanel.Active() && i.extPanel.ext == extName && i.extPanel.id == panelID {
+	if i.extPanel.Active() && i.extPanel.Ext() == extName && i.extPanel.ID() == panelID {
 		i.extPanel.Update(title, lines, footer)
 		i.invalidate()
 	}
@@ -284,8 +244,9 @@ func (i *Interactive) UpdatePanel(extName, panelID, title string, lines []string
 func (i *Interactive) ClosePanel(extName, panelID string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.extPanel.Active() && i.extPanel.ext == extName && i.extPanel.id == panelID {
+	if i.extPanel.Active() && i.extPanel.Ext() == extName && i.extPanel.ID() == panelID {
 		i.extPanel.Close()
+		i.carrierPanelSurface = ""
 		i.invalidate()
 	}
 }

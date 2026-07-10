@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/agent/modes/dialogs"
+	"terva.sh/terva/packages/agent/modes/widgets"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/tools"
@@ -89,58 +89,34 @@ type InteractiveConfig struct {
 	// ExtensionThemes returns themes bundled with loaded extensions.
 	ExtensionThemes func() []tui.ThemeOption
 
-	// AutoSwarmSystemAddendum is the system-prompt block that gets
-	// appended/stripped when the user toggles auto-swarm at runtime.
-	// Plumbed in from the cli so this package doesn't have to import
-	// agent (cycle).
-	AutoSwarmSystemAddendum string
-	// SwarmTiers carries the user's per-provider tier→model overrides so the
-	// swarm_spawn tool re-attached on a /settings toggle resolves `tier` the
-	// same way the base registry does. The underlying type of
-	// tools.SwarmTierMap, to avoid importing tools here.
-	SwarmTiers map[string]map[string]string
-	// DispatchPersonaResolver validates a model-supplied persona NAME for the
-	// swarm_spawn tool re-attached on a /settings toggle (the same check the
-	// base registry uses). Plumbed from the cli to avoid importing agent; nil
-	// is fine — the tool still rejects path-like personas inline.
-	DispatchPersonaResolver func(string) (string, error)
-	SettingsStore           SettingsStore
+	SettingsStore SettingsStore
 
-	// RebuildExtensionContext re-folds the extensions' static context
-	// into the system prompt after one of them sent refresh_context
-	// (protocol 3), returning the rebuilt prompt and whether it changed.
-	// Plumbed in from the cli (which owns the Resolved + extension
-	// source) to avoid a modes->agent import cycle; nil when extensions
-	// aren't enabled. Interactive applies the result to the running
-	// agent's System on the main goroutine.
-	RebuildExtensionContext func() (string, bool)
+	// Ready reports whether the bound session can accept prompts at
+	// startup. The TUI keeps its own copy from here on: /login sets it,
+	// /logout of the current provider clears it, a session switch sets it.
+	//
+	// The host declares it rather than the TUI inferring it. A session id
+	// resolving is not the signal — a credential-less boot has one before
+	// /login, and a replay carrier binds a CarrierSession that can never
+	// prompt at all. cli_ctrlproto sets it from whether a credential resolved.
+	Ready bool
 
-	// RebuildExtensionTools rebuilds the tool registry for the current
-	// approval mode after an extension withdrew or restored some of its
-	// own tools (set_withdrawn_tools, protocol 4), returning the rebuilt
-	// registry and whether it changed. Twin of RebuildExtensionContext;
-	// nil when extensions aren't enabled. Interactive installs the result
-	// on the running agent's Tools on the main goroutine.
-	RebuildExtensionTools func() (core.Registry, bool)
-
-	// Agent is optional. If nil, terva opens without credentials; the
-	// user must /login before they can prompt.
-	Agent *core.Agent
-
-	// Carrier, when non-nil, routes the TUI's hot path through the in-process
-	// ctrlproto WorkspaceService instead of driving Agent directly — the
-	// default entry point (docs/proposals/tui-on-ctrlproto.md). CarrierSession
-	// is the resolved session id the TUI operates on. The legacy Agent path
-	// runs when Carrier is nil (--tui-legacy).
+	// Carrier routes the TUI's control operations through the in-process
+	// ctrlproto WorkspaceService (docs/proposals/tui-on-ctrlproto.md).
+	// CarrierSession is the resolved session id the TUI operates on. Every
+	// shipping entry point sets it (cli_ctrlproto.go, replay_mode.go). The
+	// nil-Carrier branches that drove Agent directly are GONE: without a Carrier
+	// the control surfaces degrade (no approval picker, "unavailable"), they
+	// never reach for a local gate or a *core.Agent. Do not add such a fallback
+	// back — see the no-new-seam rule in carrier.go.
 	Carrier        Carrier
 	CarrierSession string
 	// CarrierTasks enables /swarm on the carrier path (the tasks surface).
-	// The entry point sets it with the same gate the legacy path uses for
-	// cfg.Swarm — withheld from immersive/no-tools sessions so the dashboard
-	// can't re-inject the coding skin there.
+	// The entry point sets it with the same gate as cfg.Swarm — withheld
+	// from immersive/no-tools sessions so the dashboard can't re-inject the
+	// coding skin there.
 	CarrierTasks bool
-	// CarrierLogin finalizes a successful in-TUI login on the carrier path —
-	// the carrier twin of BuildAgent+SetAgent. It refreshes the workspace's
+	// CarrierLogin finalizes a successful in-TUI login. It refreshes the workspace's
 	// credential/defaults, then ensures a current session: creating the first
 	// one on a credential-less boot (current == ""), or rebuilding the live
 	// session's provider client on a re-login. Returns the session the TUI
@@ -154,10 +130,6 @@ type InteractiveConfig struct {
 	// Auth is required. When the user runs /login, Interactive talks to
 	// AuthManager to open a browser and wait for the callback.
 	AuthManager *auth.Manager
-	// BuildAgent is called after a successful login to (re)construct the
-	// agent with the fresh credential. It returns the new agent and
-	// the concrete provider/model in use.
-	BuildAgent func() (*core.Agent, string, string, error)
 
 	// SetKimiCLIFallbackDisabled controls whether terva may fall back to
 	// the official Kimi Code CLI token when terva has no stored Kimi token.
@@ -166,21 +138,7 @@ type InteractiveConfig struct {
 	// Migration wires /migrate to the zot→terva migration engine. // rename:keep
 	// Optional: when nil, /migrate reports that the host didn't
 	// enable it.
-	Migration *MigrationHooks
-
-	// BuildAgentFor rebuilds the agent with an explicit provider/model
-	// override (used by the /model picker when switching providers).
-	// If providerOverride is empty, the current provider is kept.
-	BuildAgentFor func(providerOverride, modelOverride string) (*core.Agent, string, string, error)
-
-	// BuildAgentForRescue rebuilds the agent for the rescue picker that
-	// opens after a recoverable provider failure. Unlike BuildAgentFor,
-	// this builder drops launch-time --api-key and --base-url overrides
-	// because those are usually the reason rescue triggered. Re-resolves
-	// credentials from env vars / auth.json / provider defaults so the
-	// retry has a real chance of succeeding. Falls back to BuildAgentFor
-	// when nil so embedders that don't wire it keep working.
-	BuildAgentForRescue func(providerOverride, modelOverride string) (*core.Agent, string, string, error)
+	Migration *dialogs.MigrationHooks
 
 	// LoggedInProviders returns the list of provider names that
 	// currently have credentials. Used by /model to filter the
@@ -296,13 +254,6 @@ type InteractiveConfig struct {
 	// this package doesn't import agent (cycle).
 	UserModelsPath string
 
-	// SetSessionModel is called on every /model switch. It is session-only:
-	// it should write a new session meta row so resume picks up the same
-	// model, but must NOT change the global/project default — a switch is
-	// for the current task. Promoting to a default is the explicit, separate
-	// PromoteModelDefault below.
-	SetSessionModel func(providerName, model string)
-
 	// PromoteModelDefault persists the model as a default in the given scope
 	// ("project" -> .terva/config.json, honored only in a trusted workspace;
 	// "global" -> the user config.json). It also updates the session meta.
@@ -326,9 +277,12 @@ type InteractiveConfig struct {
 	OnToolResult func(id string, r core.ToolResult)
 
 	// Extensions, if non-nil, lets users invoke extension-registered
-	// slash commands. Commands declared by extensions are looked up
-	// AFTER the built-in catalog so a built-in name always wins.
-	Extensions *extensions.Manager
+	// slash commands (plus status segments, /context injection, panels,
+	// /reload-ext). Commands declared by extensions are looked up AFTER the
+	// built-in catalog so a built-in name always wins. The legacy path passes
+	// its *extensions.Manager directly; the carrier path passes a
+	// session-resolving adapter (see ExtensionHost).
+	Extensions ExtensionHost
 
 	// The /extensions dialog's host hooks, plumbed from the cli so this
 	// package never imports agent. ListExtensions returns the installed
@@ -377,13 +331,6 @@ type InteractiveConfig struct {
 	// feature entirely (used by embedders / tests that don't want
 	// subprocesses).
 	Swarm *swarm.Swarm
-
-	// SetApprovalMode switches the approval mode live: it swaps
-	// enforcement on the gate (ConfirmGate, below) and returns the
-	// tool registry rebuilt for the new mode, which the TUI installs
-	// on the running agent. nil disables the /settings approval-mode
-	// picker (embedders / tests without a rebuild path).
-	SetApprovalMode func(core.ApprovalMode) core.Registry
 
 	// SkillSnapshot, if non-nil, returns the current list of
 	// discovered SKILL.md files. Re-invoked each time /skills opens
@@ -443,13 +390,6 @@ type InteractiveConfig struct {
 	// tool until the user picks yes / always-this-tool /
 	// always-all / no. When false (default), tools run freely.
 	NoYolo bool
-
-	// ConfirmGate is the session-scoped gate wrapping this
-	// interactive's Confirmer. When non-nil, /yolo can call
-	// AllowAll() on it to disable confirmation for the rest of the
-	// session. When nil (yolo mode), /yolo reports that there's
-	// nothing to disable.
-	ConfirmGate *core.ConfirmGate
 }
 
 // ChangelogPayload mirrors agent.ChangelogInfo without the import
@@ -464,10 +404,8 @@ type ChangelogPayload struct {
 // SettingsStore persists user-toggleable settings surfaced by /settings.
 type SettingsStore interface {
 	SetInlineImages(enabled bool) error
-	SetAutoSwarm(enabled bool) error
 	SetRecursiveFileSuggest(enabled bool) error
 	SetRespectGitignore(enabled bool) error
-	SetReasoning(level string) error
 	SetTheme(name string) error
 	// SetStatusLineRows persists the status-bar segment layout; nil
 	// clears it back to the built-in per-mode defaults (preserving any
@@ -562,33 +500,32 @@ type Interactive struct {
 	// while the check hasn't completed or nothing is available.
 	updateInfo UpdateInfo
 
-	dialog            *loginDialog
-	modelDialog       *modelDialog
-	modelEditDialog   *modelEditDialog
-	extensionsDialog  *extensionsDialog
-	extConfigDialog   *extConfigDialog
-	mcpDialog         *mcpDialog
-	logDialog         *logDialog
-	contextDialog     *contextDialog
-	usageDialog       *usageDialog
-	rescueDialog      *rescueDialog
-	sessionDialog     *sessionDialog
-	swarmDialog       *swarmDialog
-	jumpDialog        *jumpDialog
-	btwDialog         *btwDialog
-	skillsDialog      *skillsDialog
-	changelogDialog   *changelogDialog
-	permissionsDialog *permissionsDialog
-	confirmDialog     *confirmDialog
-	questionDialog    *questionDialog
-	logoutDialog      *logoutDialog
-	connectDialog     *connectDialog
-	settingsDialog    *settingsDialog
-	chatBridge        *chat.Bridge
-	sessionOpsDialog  *sessionOpsDialog
-	sessionTreeDialog *sessionTreeDialog
-	extPanel          *extPanelDialog
-	migrateDialog     *migrateDialog
+	dialog            *dialogs.LoginDialog
+	modelDialog       *dialogs.ModelDialog
+	modelEditDialog   *dialogs.ModelEditDialog
+	extensionsDialog  *dialogs.ExtensionsDialog
+	extConfigDialog   *dialogs.ExtConfigDialog
+	mcpDialog         *dialogs.MCPDialog
+	logDialog         *dialogs.LogDialog
+	contextDialog     *dialogs.ContextDialog
+	usageDialog       *dialogs.UsageDialog
+	rescueDialog      *dialogs.RescueDialog
+	sessionDialog     *dialogs.SessionDialog
+	swarmDialog       *dialogs.SwarmDialog
+	jumpDialog        *dialogs.JumpDialog
+	btwDialog         *dialogs.BtwDialog
+	skillsDialog      *dialogs.SkillsDialog
+	changelogDialog   *dialogs.ChangelogDialog
+	permissionsDialog *dialogs.PermissionsDialog
+	confirmDialog     *dialogs.ConfirmDialog
+	questionDialog    *dialogs.QuestionDialog
+	logoutDialog      *dialogs.LogoutDialog
+	connectDialog     *dialogs.ConnectDialog
+	settingsDialog    *dialogs.SettingsDialog
+	sessionOpsDialog  *dialogs.SessionOpsDialog
+	sessionTreeDialog *dialogs.SessionTreeDialog
+	extPanel          *dialogs.ExtPanelDialog
+	migrateDialog     *dialogs.MigrateDialog
 
 	// overlays is the priority-ordered modal registry: key routing,
 	// rendering, cursor ownership, and tick animation for every
@@ -615,8 +552,8 @@ type Interactive struct {
 	// is dismissed, so repeated /jump calls don't turn into forks.
 	pendingFork bool
 	suggest     *slashSuggester
-	fileSuggest *fileSuggester
-	spin        *spinner
+	fileSuggest *widgets.FileSuggester
+	spin        *widgets.Spinner
 
 	// parkedTurn is the 1-based turn number the viewport is currently
 	// scrolled to by /jump. 0 = not parked, showing the tail as usual.
@@ -722,8 +659,8 @@ type Interactive struct {
 	// EventAskResolved (another client answered; the turn cancelled) can
 	// dismiss the matching dialog entry instead of leaving it up to
 	// double-answer. Guarded by mu; carrier mode only.
-	carrierPerm map[string]*confirmRequest
-	carrierAsk  map[string]*questionRequest
+	carrierPerm map[string]*dialogs.ConfirmRequest
+	carrierAsk  map[string]*dialogs.QuestionRequest
 
 	// carrierPumpCancel cancels the pump's CURRENT subscription (not the
 	// whole pump): SwitchCarrierSession re-points cfg.CarrierSession and then
@@ -746,6 +683,12 @@ type Interactive struct {
 	// surface_updated("settings") broadcast. Guarded by mu.
 	carrierApprovalMode string
 
+	// carrierPanelSurface is the surface id of the daemon-backed extension
+	// panel currently mirrored in the overlay ("" when the overlay is empty or
+	// shows a command-result panel, which has no surface). Lets the
+	// surfaces_changed close check tell the two apart. Guarded by mu.
+	carrierPanelSurface string
+
 	// carrierTaskRows caches the tasks surface for the /swarm dashboard,
 	// which re-reads its snapshot every frame while open. The cache serves
 	// those reads; a fetch happens only when carrierTasksStale is set — on
@@ -765,6 +708,51 @@ type Interactive struct {
 	// cache where the legacy path uses agent.Revision(). Guarded by mu.
 	carrierMessages    []provider.Message
 	carrierMessagesRev int
+
+	// The first-paint tail cap, in three steps, because the transcript now
+	// arrives from the pump instead of off a crutch agent at construction:
+	//
+	//   armed    — on every session bind (construction, SwitchCarrierSession)
+	//   resolved — when the bind's first snapshot replaces the transcript,
+	//              setCarrierTranscript decides the limit from its length
+	//   applied  — by buildChat, on the main goroutine, because i.view is
+	//              the renderer's and must not be written from the pump
+	//
+	// carrierTailPending is -1 when there is nothing to apply. Guarded by mu.
+	carrierTailArmed   bool
+	carrierTailPending int
+
+	// carrierSeedArmed is the same one-shot, for the cost/context meters that
+	// the binding's first snapshot hydrates from SessionInfo. Guarded by mu.
+	carrierSeedArmed bool
+
+	// carrierUsage mirrors the provider's subscription picture (plan and
+	// rate-limit windows, credits) from the usage.snapshot verb — the wire twin
+	// of the crutch agent's Usage(). Refreshed once per turn, once per binding,
+	// and when /usage opens. The status bar reads it every frame. Guarded by mu.
+	carrierUsage ctrlproto.UsageInfo
+
+	// carrierChat mirrors the daemon's chat pane (the bridge state + the
+	// registered services). The status bar reads it every frame; /connect
+	// renders its picker from it. Seeded once per binding (carrierChatArmed)
+	// and refreshed on surface_updated("chat"), so a bridge connected from
+	// another client — or one that outlived a previous TUI — shows up here.
+	// The TUI owns no bridge: the workspace does. Guarded by mu.
+	carrierChat      ctrlproto.ChatView
+	carrierChatArmed bool
+
+	// carrierQueued mirrors the session's pending message queue — the wire
+	// twin of the crutch agent's PendingQueuedMessages(). The daemon owns
+	// the queue and broadcasts it on every mutation (queue_updated), plus on
+	// every snapshot, so this is a complete mirror rather than a guess.
+	// Guarded by mu.
+	carrierQueued []string
+
+	// carrierReady gates prompting: true when the bound session can accept a
+	// turn. It replaced "is the crutch agent installed?", which was never
+	// about the agent — the TUI nilled it on /logout and re-grabbed it on
+	// /login, purely to open and close this gate. Guarded by mu.
+	carrierReady bool
 
 	// replayState is the latest transport state of a replay session (position,
 	// total, playing, speed), stashed from EventReplayState broadcasts and read
@@ -819,38 +807,38 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		scriptSegs:        map[string]string{},
 		scriptFailing:     map[string]bool{},
 		actions:           make(chan func(), 64),
-		dialog:            newLoginDialog(),
-		modelDialog:       newModelDialog(),
-		modelEditDialog:   newModelEditDialog(),
-		extensionsDialog:  newExtensionsDialog(),
-		extConfigDialog:   newExtConfigDialog(),
-		mcpDialog:         newMCPDialog(),
-		logDialog:         newLogDialog(),
-		contextDialog:     newContextDialog(),
-		usageDialog:       newUsageDialog(),
-		rescueDialog:      newRescueDialog(),
-		sessionDialog:     newSessionDialog(),
-		swarmDialog:       newSwarmDialog(),
-		jumpDialog:        newJumpDialog(),
-		btwDialog:         newBtwDialog(),
-		skillsDialog:      newSkillsDialog(),
-		changelogDialog:   newChangelogDialog(),
-		permissionsDialog: newPermissionsDialog(),
-		confirmDialog:     newConfirmDialog(),
-		questionDialog:    newQuestionDialog(),
-		logoutDialog:      newLogoutDialog(),
-		connectDialog:     newConnectDialog(),
-		settingsDialog:    newSettingsDialog(),
-		sessionOpsDialog:  newSessionOpsDialog(),
-		sessionTreeDialog: newSessionTreeDialog(),
-		extPanel:          newExtPanelDialog(),
-		migrateDialog:     newMigrateDialog(),
+		dialog:            dialogs.NewLoginDialog(),
+		modelDialog:       dialogs.NewModelDialog(),
+		modelEditDialog:   dialogs.NewModelEditDialog(),
+		extensionsDialog:  dialogs.NewExtensionsDialog(),
+		extConfigDialog:   dialogs.NewExtConfigDialog(),
+		mcpDialog:         dialogs.NewMCPDialog(),
+		logDialog:         dialogs.NewLogDialog(),
+		contextDialog:     dialogs.NewContextDialog(),
+		usageDialog:       dialogs.NewUsageDialog(),
+		rescueDialog:      dialogs.NewRescueDialog(),
+		sessionDialog:     dialogs.NewSessionDialog(),
+		swarmDialog:       dialogs.NewSwarmDialog(),
+		jumpDialog:        dialogs.NewJumpDialog(),
+		btwDialog:         dialogs.NewBtwDialog(),
+		skillsDialog:      dialogs.NewSkillsDialog(),
+		changelogDialog:   dialogs.NewChangelogDialog(),
+		permissionsDialog: dialogs.NewPermissionsDialog(),
+		confirmDialog:     dialogs.NewConfirmDialog(),
+		questionDialog:    dialogs.NewQuestionDialog(),
+		logoutDialog:      dialogs.NewLogoutDialog(),
+		connectDialog:     dialogs.NewConnectDialog(),
+		settingsDialog:    dialogs.NewSettingsDialog(),
+		sessionOpsDialog:  dialogs.NewSessionOpsDialog(),
+		sessionTreeDialog: dialogs.NewSessionTreeDialog(),
+		extPanel:          dialogs.NewExtPanelDialog(),
+		migrateDialog:     dialogs.NewMigrateDialog(),
 		suggest:           newSlashSuggester(),
-		fileSuggest:       newFileSuggester(),
-		spin:              newSpinner(cfg.Theme),
+		fileSuggest:       widgets.NewFileSuggester(),
+		spin:              widgets.NewSpinner(cfg.Theme),
 		inputHistoryIndex: -1,
-		carrierPerm:       map[string]*confirmRequest{},
-		carrierAsk:        map[string]*questionRequest{},
+		carrierPerm:       map[string]*dialogs.ConfirmRequest{},
+		carrierAsk:        map[string]*dialogs.QuestionRequest{},
 	}
 	i.overlays = i.buildOverlays()
 	i.keymap = i.buildGlobalKeymap()
@@ -868,23 +856,12 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 	}
 	i.fileSuggest.SetRecursive(cfg.RecursiveFileSuggest != nil && *cfg.RecursiveFileSuggest)
 	i.fileSuggest.SetRespectGitignore(cfg.RespectGitignore == nil || *cfg.RespectGitignore)
-	if cfg.Agent != nil {
-		i.turns.SetAgent(cfg.Agent)
-		i.view.Messages = cfg.Agent.Messages()
-		i.cumUsage = cfg.Agent.Cost()
-		// Rehydrate the "context used" gauge from the last persisted
-		// turn. Without this the status bar reads 0.0% after a resume
-		// until the next turn lands a usage event.
-		if last := cfg.Agent.LastTurnUsage(); last.InputTokens > 0 || last.CacheReadTokens > 0 || last.CacheWriteTokens > 0 {
-			i.lastCtxInput = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
-		}
-		// Cap the first paint at the tail of the transcript so
-		// resuming a multi-thousand-message session doesn't block
-		// on rendering every prior turn before showing anything.
-		if len(i.view.Messages) > initialResumeTailLimit {
-			i.view.TailLimit = initialResumeTailLimit
-		}
-	}
+	// Arm the initial binding: its first snapshot decides the first-paint
+	// tail cap and seeds the cost/context meters. Neither the transcript nor
+	// the meters are known yet — both arrive from the pump.
+	i.carrierTailPending = -1
+	i.armCarrierBind()
+	i.carrierReady = cfg.Ready
 	return i
 }
 
@@ -907,11 +884,6 @@ func (i *Interactive) Run(ctx context.Context) error {
 		return err
 	}
 	defer restore()
-	defer func() {
-		if i.chatBridge != nil {
-			i.chatBridge.Stop()
-		}
-	}()
 
 	// Enabling mouse reporting steals click-drag selection from the
 	// host terminal (VS Code, Ghostty, iTerm). The user prefers native
@@ -988,17 +960,16 @@ func (i *Interactive) Run(ctx context.Context) error {
 	i.costBase = i.cumUsage.CostUSD
 	i.mu.Unlock()
 
-	// If the agent was constructed with a pre-loaded transcript
-	// (--continue, --resume, --session) pin the viewport at the
-	// bottom so the most recent reply (and any prompt the user just
-	// typed) is fully visible. Earlier behaviour parked the view at
-	// the last user turn, which could leave the latest message clipped
-	// off the bottom of the page on long sessions.
-	if ag := i.turns.Agent(); ag != nil {
-		if msgs := ag.Messages(); len(msgs) > 0 {
-			i.scrollToBottom()
-		}
-	}
+	// The resume pin (--continue, --resume, --session) used to live here,
+	// calling scrollToBottom off the crutch agent's transcript. It was a
+	// no-op: everything scrollToBottom zeroes — scrollOffset, parkedTurn,
+	// parkedTotal, prevChatLen, prevChatCols — is still zero this early in
+	// Run, and the invalidate it also does is redundant before the first
+	// paint. Verified by probe: the block ran and found every field zero.
+	//
+	// A real resume pin has to hang off the first snapshot, because the
+	// transcript now arrives from the pump after Run has started. Nothing
+	// currently needs it — the viewport starts pinned to the bottom.
 
 	// No credential at startup? Auto-open the login dialog, and mark
 	// the status line. The user can Esc out of the dialog if they
@@ -1007,7 +978,7 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// CarrierLogin) logs in here — a remote or replay carrier leaves it
 	// nil because the daemon owns credentials (and a replay carrier has
 	// no agent at all), so skip it there.
-	if !i.turns.HasAgent() && (i.cfg.Carrier == nil || i.cfg.CarrierLogin != nil) {
+	if !i.ready() && (i.cfg.Carrier == nil || i.cfg.CarrierLogin != nil) {
 		i.statusErr = i18n.T("not logged in. pick a login method below or press esc to dismiss.")
 		i.dialog.Open(i.cfg.TervaHome)
 	} else if !i.cfg.Trusted && i.cfg.GatedContentPresent {

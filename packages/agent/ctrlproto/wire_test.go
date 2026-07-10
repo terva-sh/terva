@@ -527,6 +527,13 @@ func (f *fakeSvc) SetQueue(ctx context.Context, sess string, t []string) error {
 func (f *fakeSvc) Cancel(ctx context.Context, sess string) error               { return nil }
 func (f *fakeSvc) Compact(ctx context.Context, sess string) error              { return nil }
 func (f *fakeSvc) Clear(ctx context.Context, sess string) error                { return nil }
+func (f *fakeSvc) SideChatOpen(ctx context.Context, sess string) (string, error) {
+	return "sc1", nil
+}
+func (f *fakeSvc) SideChatAsk(ctx context.Context, sess, id string, prior []SideChatTurn, q string) (string, error) {
+	return "reply to " + q, nil
+}
+func (f *fakeSvc) SideChatClose(ctx context.Context, sess, id string) error { return nil }
 func (f *fakeSvc) Catalog(ctx context.Context, lang string) (CatalogView, error) {
 	return CatalogView{Lang: lang, Singular: map[string]string{"Send": "TX"}}, nil
 }
@@ -564,6 +571,10 @@ func (f *fakeSvc) DeleteSession(ctx context.Context, sess string) error        {
 
 func (f *fakeSvc) Usage(ctx context.Context, sess string) (core.WireUsage, error) {
 	return core.WireUsage{}, nil
+}
+
+func (f *fakeSvc) UsageSnapshot(ctx context.Context, sess string, refresh bool) (UsageInfo, error) {
+	return UsageInfo{Provider: "fake", HasData: true, Refreshable: refresh}, nil
 }
 
 func (f *fakeSvc) Context(ctx context.Context, sess string) (ContextBreakdown, error) {

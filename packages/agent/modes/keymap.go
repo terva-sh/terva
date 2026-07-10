@@ -17,6 +17,7 @@ package modes
 import (
 	"context"
 
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
@@ -87,6 +88,7 @@ func (i *Interactive) buildGlobalKeymap() []globalBinding {
 		{kind: tui.KeyCtrlO, name: "toggle-tool-expand", run: i.keyToggleExpand},
 		{kind: tui.KeyCtrlT, name: "cycle-tool-display", run: i.keyCycleToolDisplay},
 		{kind: tui.KeyCtrlV, name: "paste-clipboard-image", run: i.keyPasteClipboard},
+		{kind: tui.KeyShiftTab, name: "cycle-approval-mode", run: i.keyCycleApprovalMode},
 		{kind: tui.KeyPageUp, name: "scroll-page-up", run: func(context.Context, tui.Key) keyOutcome {
 			// The slash popup pages its own catalog; only it gets the
 			// key (the @-file popup has no pagination, so chat
@@ -141,11 +143,11 @@ func (i *Interactive) keyCtrlC(context.Context, tui.Key) keyOutcome {
 	// messages); a second press within ctrlCExitWindow exits. With
 	// both an empty editor and no queue the first press still just
 	// arms — require a deliberate double-tap.
-	hadInput := !i.ed.IsEmpty() || i.turns.QueuedCount() > 0
+	hadInput := !i.ed.IsEmpty() || i.carrierQueuedCount() > 0
 	if hadInput {
 		i.ed.Clear()
 		i.suggest.Reset()
-		i.turns.DrainQueued()
+		i.clearCarrierQueue()
 		i.mu.Lock()
 		i.statusOK = i18n.T("input cleared")
 		i.statusErr = ""
@@ -268,14 +270,55 @@ func (i *Interactive) keyCycleToolDisplay(context.Context, tui.Key) keyOutcome {
 	return keyHandled
 }
 
+// approvalWheel is the shift+tab cycle of approval modes: the three
+// everyday postures in increasing autonomy, wrapping back to the start.
+// `ask` (confirm every call) and `yolo` (confirm nothing, foreign tools
+// included) are deliberately OFF the wheel — reach them through /settings
+// or the --approval flag, so a stray keypress can't drop you into the
+// strictest testing posture or the most dangerous one.
+var approvalWheel = []core.ApprovalMode{core.ApprovalPlan, core.ApprovalWorkspace, core.ApprovalAutoEdit}
+
+// nextApprovalMode returns the wheel entry after cur. A mode that isn't on
+// the wheel (ask, yolo, or unset) resolves to the workspace default, so
+// shift+tab from any starting posture lands somewhere sensible.
+func nextApprovalMode(cur core.ApprovalMode) core.ApprovalMode {
+	for idx, m := range approvalWheel {
+		if m == cur {
+			return approvalWheel[(idx+1)%len(approvalWheel)]
+		}
+	}
+	return core.ApprovalWorkspace
+}
+
+// keyCycleApprovalMode (shift+tab) advances the approval mode one step along
+// approvalWheel for THIS SESSION only — same posture semantics as the
+// /settings picker (SetMode on the daemon-side gate + a tool-set rebuild so
+// plan withholds mutating tools), never persisted. Declines (keyPass) when no
+// carrier is bound, leaving shift+tab free for its old no-op.
+func (i *Interactive) keyCycleApprovalMode(_ context.Context, _ tui.Key) keyOutcome {
+	if i.cfg.Carrier == nil {
+		return keyPass
+	}
+	next := nextApprovalMode(core.ApprovalMode(i.approvalModeLabel()))
+	i.applyApprovalModeSetting(string(next))
+	// Optimistically advance the cached mode so a rapid second shift+tab
+	// computes from the value we just set, not a stale one: the carrier's
+	// surface_updated round-trip that normally refreshes the cache is async.
+	// refreshCarrierApprovalMode confirms (and no-ops if unchanged).
+	i.mu.Lock()
+	i.carrierApprovalMode = string(next)
+	i.mu.Unlock()
+	return keyHandled
+}
+
 // keyPopQueued (Alt/Option+Up) pops the most recently queued
 // ("sliding in") message back into the editor so the user can edit
 // and resend it. Repeated presses keep peeling messages off the tail
 // of the queue; each press *replaces* the editor contents. When the
 // queue is empty the key passes through to the normal Up behavior.
 func (i *Interactive) keyPopQueued(context.Context, tui.Key) keyOutcome {
-	text, _ := i.turns.PopQueued()
-	if text == "" {
+	text, ok := i.popCarrierQueue()
+	if !ok || text == "" {
 		return keyPass
 	}
 	i.ed.SetValue(text)

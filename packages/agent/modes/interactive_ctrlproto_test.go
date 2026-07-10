@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modes/dialogs"
+	"terva.sh/terva/packages/agent/modes/widgets"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
@@ -24,12 +26,12 @@ func newCtrlprotoTestInteractive() *Interactive {
 		turns:          newTurnEngine(),
 		toolCalls:      map[string]*tui.ToolCallView{},
 		view:           &tui.View{Theme: th},
-		spin:           newSpinner(th),
-		confirmDialog:  newConfirmDialog(),
-		questionDialog: newQuestionDialog(),
-		rescueDialog:   newRescueDialog(),
-		carrierPerm:    map[string]*confirmRequest{},
-		carrierAsk:     map[string]*questionRequest{},
+		spin:           widgets.NewSpinner(th),
+		confirmDialog:  dialogs.NewConfirmDialog(),
+		questionDialog: dialogs.NewQuestionDialog(),
+		rescueDialog:   dialogs.NewRescueDialog(),
+		carrierPerm:    map[string]*dialogs.ConfirmRequest{},
+		carrierAsk:     map[string]*dialogs.QuestionRequest{},
 	}
 }
 
@@ -41,7 +43,6 @@ func conv(w core.WireEvent) ctrlproto.Event { return ctrlproto.ConversationEvent
 type fakeCarrier struct {
 	ctrlproto.WorkspaceService
 	mu        sync.Mutex
-	agents    map[string]*core.Agent
 	infos     map[string]ctrlproto.SessionInfo
 	prompts   chan string
 	queued    chan string
@@ -56,9 +57,12 @@ type fakeCarrier struct {
 	promptErr error
 	// tasks is the tasks-surface fixture (mutable so cache-invalidation tests
 	// can move the daemon state under the TUI). surfActErr, when non-nil, is
-	// returned by every SurfaceAction after recording it.
+	// returned by every SurfaceAction after recording it; surfErr, when
+	// non-nil, makes every Surface read fail (a daemon that went away).
+	chat       ctrlproto.ChatView // the chat pane the TUI mirrors
 	tasks      []ctrlproto.TaskInfo
 	surfActErr error
+	surfErr    error
 	// compactGate, when non-nil, parks Compact until closed — so a test can
 	// observe the busy slot held across the round-trip.
 	compactGate chan struct{}
@@ -66,6 +70,17 @@ type fakeCarrier struct {
 	// plays the daemon by feeding events into it. When nil, each subscribe
 	// gets its own channel, closed when its ctx cancels (like the real hub).
 	stream chan ctrlproto.Event
+	// panels / metas back the extension-panel surface fixtures (guarded by mu):
+	// Surface serves panels by id, Surfaces returns metas.
+	panels map[string]ctrlproto.Surface
+	metas  []ctrlproto.SurfaceMeta
+	// setQueues records every SetQueue call, in order (guarded by mu).
+	setQueues [][]string
+	// usage is the usage.snapshot fixture; usageCalls records each call's
+	// refresh flag, usageErr fails every call (all guarded by mu).
+	usage      ctrlproto.UsageInfo
+	usageCalls []bool
+	usageErr   error
 }
 
 type approvedCall struct {
@@ -105,6 +120,29 @@ func (f *fakeCarrier) Prompt(ctx context.Context, sess, text string, images []ct
 func (f *fakeCarrier) Queue(ctx context.Context, sess, text string) error {
 	f.queued <- text
 	return nil
+}
+
+// SetQueue records the list the TUI committed. The real daemon answers with a
+// queue_updated broadcast; tests that care feed one back through the stream.
+func (f *fakeCarrier) SetQueue(ctx context.Context, sess string, texts []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setQueues = append(f.setQueues, append([]string(nil), texts...))
+	return nil
+}
+
+// UsageSnapshot records each call and serves the fixture. The TUI refreshes
+// the usage mirror on every `done` event and every snapshot, so a fake that
+// left this to the embedded nil WorkspaceService would panic, not fail to
+// compile.
+func (f *fakeCarrier) UsageSnapshot(ctx context.Context, sess string, refresh bool) (ctrlproto.UsageInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.usageCalls = append(f.usageCalls, refresh)
+	if f.usageErr != nil {
+		return ctrlproto.UsageInfo{}, f.usageErr
+	}
+	return f.usage, nil
 }
 
 func (f *fakeCarrier) Cancel(ctx context.Context, sess string) error {
@@ -157,7 +195,15 @@ func (f *fakeCarrier) SwitchModel(ctx context.Context, sess, providerName, model
 }
 
 func (f *fakeCarrier) Surface(ctx context.Context, sess, id string) (ctrlproto.Surface, error) {
+	if f.surfErr != nil {
+		return ctrlproto.Surface{}, f.surfErr
+	}
 	switch id {
+	case "chat":
+		f.mu.Lock()
+		cv := f.chat
+		f.mu.Unlock()
+		return ctrlproto.Surface{ID: id, Kind: "chat", Chat: &cv}, nil
 	case "permissions":
 		return ctrlproto.Surface{ID: id, Kind: "permissions", Permissions: &ctrlproto.PermissionsView{
 			Mode: "safe",
@@ -199,7 +245,19 @@ func (f *fakeCarrier) Surface(ctx context.Context, sess, id string) (ctrlproto.S
 		f.mu.Unlock()
 		return ctrlproto.Surface{ID: id, Kind: "tasks", Tasks: &ctrlproto.TaskList{Tasks: ts}}, nil
 	}
+	f.mu.Lock()
+	p, ok := f.panels[id]
+	f.mu.Unlock()
+	if ok {
+		return p, nil
+	}
 	return ctrlproto.Surface{}, ctrlproto.ErrNotFound
+}
+
+func (f *fakeCarrier) Surfaces(ctx context.Context, sess string) ([]ctrlproto.SurfaceMeta, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]ctrlproto.SurfaceMeta(nil), f.metas...), nil
 }
 
 func (f *fakeCarrier) SurfaceAction(ctx context.Context, sess, id, action string, args map[string]string) error {
@@ -231,20 +289,6 @@ func (f *fakeCarrier) ResumeSession(ctx context.Context, sess string) (ctrlproto
 		return info, nil
 	}
 	return ctrlproto.SessionInfo{ID: sess}, nil
-}
-
-func (f *fakeCarrier) AgentFor(sess string) (*core.Agent, string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.agents == nil {
-		f.agents = map[string]*core.Agent{}
-	}
-	ag, ok := f.agents[sess]
-	if !ok {
-		ag = core.NewAgent(nil, "fake", "", core.Registry{})
-		f.agents[sess] = ag
-	}
-	return ag, sess, nil
 }
 
 func recv[T any](t *testing.T, ch <-chan T, what string) T {
@@ -494,7 +538,8 @@ func TestCarrierRescueTracksForeignTurn(t *testing.T) {
 }
 
 // TestCarrierContextOverview: /context's Overview renders from the service's
-// ContextBreakdown in carrier mode — same renderer the legacy assembly feeds.
+// ContextBreakdown. There is no longer a second, in-process assembly to keep in
+// parity with — the daemon computes the breakdown and the TUI only paints it.
 func TestCarrierContextOverview(t *testing.T) {
 	i := newCtrlprotoTestInteractive()
 	i.cfg.Carrier = newFakeCarrier()
@@ -508,19 +553,6 @@ func TestCarrierContextOverview(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("overview missing %q:\n%s", want, joined)
 		}
-	}
-
-	// The legacy assembly feeds the same renderer: identical shape from a
-	// local agent with one message.
-	j := newCtrlprotoTestInteractive()
-	ag := core.NewAgent(nil, "fake-model", "you are terse", core.Registry{})
-	ag.SetMessages([]provider.Message{
-		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hi"}}},
-	})
-	j.turns.SetAgent(ag)
-	legacy := strings.Join(j.buildContextOverview(j.cfg.Theme), "\n")
-	if !strings.Contains(legacy, i18n.T("system prompt")) || !strings.Contains(legacy, i18n.T("TOTAL")) {
-		t.Fatalf("legacy overview shape changed:\n%s", legacy)
 	}
 }
 
@@ -539,15 +571,15 @@ func TestCarrierPermissionsInspector(t *testing.T) {
 			t.Fatalf("inspector missing %q:\n%s", want, joined)
 		}
 	}
-	if len(grants) != 2 || !grants[0].allowAll || grants[1].tool != "write" {
+	if len(grants) != 2 || !grants[0].AllowAll || grants[1].Tool != "write" {
 		t.Fatalf("grants = %+v", grants)
 	}
 
-	i.carrierPermissionRevoke(permGrant{tool: "write"})
+	i.carrierPermissionRevoke(dialogs.PermGrant{Tool: "write"})
 	if act := recv(t, fc.surfActs, "revoke"); act.action != "revoke" || act.args["tool"] != "write" {
 		t.Fatalf("revoke action = %+v", act)
 	}
-	i.carrierPermissionRevoke(permGrant{allowAll: true})
+	i.carrierPermissionRevoke(dialogs.PermGrant{AllowAll: true})
 	if act := recv(t, fc.surfActs, "revoke_all"); act.action != "revoke_all" {
 		t.Fatalf("revoke_all action = %+v", act)
 	}
@@ -582,7 +614,7 @@ func TestCarrierExtensionsAndMCP(t *testing.T) {
 		t.Fatalf("disabled ext flags = %+v", exts[2])
 	}
 
-	i.applyCarrierExtensionToggle(extensionsAction{Name: "linter", On: true, ToggleGlobal: true})
+	i.applyCarrierExtensionToggle(dialogs.ExtensionsAction{Name: "linter", On: true, ToggleGlobal: true})
 	if act := recv(t, fc.surfActs, "ext toggle"); act.id != "extensions" || act.action != "toggle" ||
 		act.args["name"] != "linter" || act.args["enabled"] != "true" || act.args["scope"] != "global" {
 		t.Fatalf("ext toggle action = %+v", act)
@@ -599,7 +631,7 @@ func TestCarrierExtensionsAndMCP(t *testing.T) {
 		t.Fatalf("failed server flags = %+v", servers[1])
 	}
 
-	i.applyCarrierMCPToggle(mcpAction{Name: "files", On: false, ToggleProject: true})
+	i.applyCarrierMCPToggle(dialogs.MCPAction{Name: "files", On: false, ToggleProject: true})
 	if act := recv(t, fc.surfActs, "mcp toggle"); act.id != "mcp" || act.action != "toggle" ||
 		act.args["name"] != "files" || act.args["enabled"] != "false" || act.args["scope"] != "project" {
 		t.Fatalf("mcp toggle action = %+v", act)
@@ -617,7 +649,7 @@ func TestCarrierSwarmDashboard(t *testing.T) {
 	fc := newFakeCarrier()
 	i.cfg.Carrier = fc
 	i.cfg.CarrierTasks = true
-	i.swarmDialog = newSwarmDialog()
+	i.swarmDialog = dialogs.NewSwarmDialog()
 	fc.tasks = []ctrlproto.TaskInfo{
 		{ID: "a1", Task: "audit the parser", Status: "running", Activity: "editing",
 			Model: "m1", Provider: "p1", Dir: "/repo", Started: "2026-07-04T10:00:00Z",
@@ -630,7 +662,7 @@ func TestCarrierSwarmDashboard(t *testing.T) {
 	if !i.swarmDialog.Active() {
 		t.Fatal("dashboard should be open")
 	}
-	rows := i.swarmDialog.rows
+	rows := i.swarmDialog.Rows()
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want 2", len(rows))
 	}
@@ -696,7 +728,7 @@ func TestCarrierSwarmDashboard(t *testing.T) {
 func TestCarrierSwarmDisabled(t *testing.T) {
 	i := newCtrlprotoTestInteractive()
 	i.cfg.Carrier = newFakeCarrier()
-	i.swarmDialog = newSwarmDialog()
+	i.swarmDialog = dialogs.NewSwarmDialog()
 	i.runSwarm(context.Background(), nil)
 	if i.swarmDialog.Active() {
 		t.Fatal("dashboard must not open when swarm is unavailable")
@@ -795,23 +827,6 @@ func TestCarrierTranscriptKeepsImagePixels(t *testing.T) {
 	}
 }
 
-// TestSessionDialogListSeam: the /sessions picker consumes an injected lister
-// (the carrier path wires the service's session group here) instead of
-// scanning disk, and the empty-session filter still applies to wire rows.
-func TestSessionDialogListSeam(t *testing.T) {
-	d := newSessionDialog()
-	d.List = func() []core.SessionSummary {
-		return []core.SessionSummary{
-			{Path: "/s/a.jsonl", Title: "first", MessageCount: 3},
-			{Path: "/s/empty.jsonl", MessageCount: 0},
-		}
-	}
-	d.Open("/nonexistent-root", "/nonexistent-cwd")
-	if len(d.sessions) != 1 || d.sessions[0].Path != "/s/a.jsonl" {
-		t.Fatalf("sessions = %+v, want just the non-empty wire row", d.sessions)
-	}
-}
-
 // TestCarrierApprovalSetting: the /settings approval item reads the daemon's
 // live mode from the settings surface and applies changes through it; the
 // status-bar badge follows via the cached refresh.
@@ -824,8 +839,8 @@ func TestCarrierApprovalSetting(t *testing.T) {
 	if !ok {
 		t.Fatal("approval item should exist in carrier mode")
 	}
-	if item.options[item.choice].value != "workspace" {
-		t.Fatalf("current mode = %q, want workspace", item.options[item.choice].value)
+	if item.Options[item.Choice].Value != "workspace" {
+		t.Fatalf("current mode = %q, want workspace", item.Options[item.Choice].Value)
 	}
 
 	i.applyApprovalModeSetting("ask")
@@ -872,10 +887,10 @@ func TestCarrierCompactAndClearRouteToService(t *testing.T) {
 }
 
 // TestSwitchCarrierSession is Stage 2's core proof: re-pointing the TUI at
-// another workspace session swaps the crutch agent, updates the status-bar
-// provider/model, drops the old session's pending dialogs (refusing them TO
-// the old session), releases the old local turn slot, and kicks the pump into
-// a fresh subscription on the new binding.
+// another workspace session updates the status-bar provider/model, drops the
+// old session's pending dialogs (refusing them TO the old session), releases
+// the old local turn slot, and kicks the pump into a fresh subscription on the
+// new binding. (No agent is swapped any more — the TUI holds none.)
 func TestSwitchCarrierSession(t *testing.T) {
 	i := newCtrlprotoTestInteractive()
 	fc := newFakeCarrier()
@@ -906,10 +921,6 @@ func TestSwitchCarrierSession(t *testing.T) {
 	}
 	if got := i.carrierSession(); got != "s2" {
 		t.Fatalf("carrierSession = %q, want s2", got)
-	}
-	ag2, _, _ := fc.AgentFor("s2")
-	if i.turns.Agent() != ag2 {
-		t.Fatal("switch should install the new session's crutch agent")
 	}
 	i.mu.Lock()
 	prov, model := i.cfg.Provider, i.cfg.Model
@@ -959,12 +970,12 @@ func TestCarrierSnapshotRestoresPendingRoundTrips(t *testing.T) {
 func TestCarrierEndToEndVT(t *testing.T) {
 	fc := newFakeCarrier()
 	fc.stream = make(chan ctrlproto.Event, 64)
-	// The crutch agent stays EMPTY throughout: since the Stage-4 cutover the
-	// transcript renders from the pump-owned wire reconstruction, and this
-	// test proves it — every rendered row below arrives as a wire event.
-	ag := core.NewAgent(nil, "test-model", "", core.Registry{})
+	// There is no agent in the TUI at all (plan 4.1). The transcript renders
+	// entirely from the pump-owned wire reconstruction, and this test proves it:
+	// every rendered row below arrives as a wire event, with nothing local to
+	// fall back on.
 	h := startInteractive(t, func(cfg *InteractiveConfig) {
-		cfg.Agent = ag
+		cfg.Ready = true // a bound session with a credential
 		cfg.Carrier = fc
 		cfg.CarrierSession = "s1"
 	})
@@ -1003,26 +1014,22 @@ func TestCarrierEndToEndVT(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	// Both rows must be on screen from the wire-reconstructed transcript —
-	// the crutch agent still has zero messages.
+	// Both rows must be on screen from the wire-reconstructed transcript, with
+	// no agent anywhere in the TUI to have supplied them.
 	h.waitText("hello wire")
 	h.waitText("hi from the wire")
-	if n := len(ag.Messages()); n != 0 {
-		t.Fatalf("crutch agent gained %d messages; rendering must not depend on it", n)
-	}
 }
 
 // TestCarrierNewSessionVT drives /new end-to-end on the VT harness with the
 // carrier-backed NewSession closure (the shape the ctrlproto entry point
-// wires): the switch installs the new session's crutch agent and the TUI
-// resets to a fresh transcript.
+// wires): the switch rebinds the TUI to the created session and resets to a
+// fresh transcript. No agent is installed — the TUI holds none (plan 4.1).
 func TestCarrierNewSessionVT(t *testing.T) {
 	fc := newFakeCarrier()
 	fc.stream = make(chan ctrlproto.Event, 16)
-	ag1, _, _ := fc.AgentFor("s1")
 	var ivp *Interactive
 	h := startInteractive(t, func(cfg *InteractiveConfig) {
-		cfg.Agent = ag1
+		cfg.Ready = true // a bound session with a credential
 		cfg.Carrier = fc
 		cfg.CarrierSession = "s1"
 		cfg.NewSession = func(_, _ string) error {
@@ -1035,10 +1042,6 @@ func TestCarrierNewSessionVT(t *testing.T) {
 	h.waitText(i18n.T("started a new session"))
 	if got := h.i.carrierSession(); got != "s2" {
 		t.Fatalf("carrierSession after /new = %q, want s2", got)
-	}
-	ag2, _, _ := fc.AgentFor("s2")
-	if h.i.turns.Agent() != ag2 {
-		t.Fatal("/new should install the created session's crutch agent")
 	}
 }
 
@@ -1167,4 +1170,57 @@ func TestHandleWireEventUsageAndStatus(t *testing.T) {
 	if i.statusOK != i18n.T("cancelled") || i.statusErr != "" {
 		t.Fatalf("aborted turn_end: ok=%q err=%q", i.statusOK, i.statusErr)
 	}
+}
+
+// TestCarrierExtPanelSyncAndClose: a proactively-opened extension panel
+// (host-hook, surfaced daemon-side as ext:<ext>:<id>) mirrors into the TUI
+// overlay on surface_updated, and closes when the daemon drops it — reported
+// only via surfaces_changed (paneClose emits no per-panel event).
+func TestCarrierExtPanelSyncAndClose(t *testing.T) {
+	i := newCtrlprotoTestInteractive()
+	i.extPanel = dialogs.NewExtPanelDialog()
+	fc := newFakeCarrier()
+	i.cfg.Carrier = fc
+
+	fc.mu.Lock()
+	fc.panels = map[string]ctrlproto.Surface{
+		"ext:memory:main": {ID: "ext:memory:main", Title: "Memory", Kind: "panel",
+			Panel: &ctrlproto.PanelView{Ext: "memory", Lines: []string{"recent"}, Footer: "q to close"}},
+	}
+	fc.metas = []ctrlproto.SurfaceMeta{{ID: "ext:memory:main", Kind: "panel"}}
+	fc.mu.Unlock()
+
+	// Proactive open: surface_updated for the ext panel opens the overlay and
+	// records the mirror id (so the close check knows it's daemon-backed).
+	i.handleCarrierEvent(ctrlproto.SurfaceUpdatedEvent("ext:memory:main"))
+	waitForCond(t, func() bool {
+		i.mu.Lock()
+		defer i.mu.Unlock()
+		return i.extPanel.Active() && i.extPanel.Ext() == "memory" && i.extPanel.ID() == "main" &&
+			i.carrierPanelSurface == "ext:memory:main"
+	}, "panel overlay to open from the ext surface")
+
+	// The extension closes it daemon-side: surfaces_changed with the panel gone
+	// → the overlay drops (and the mirror id clears).
+	fc.mu.Lock()
+	fc.metas = nil
+	delete(fc.panels, "ext:memory:main")
+	fc.mu.Unlock()
+	i.handleCarrierEvent(ctrlproto.SurfacesChangedEvent())
+	waitForCond(t, func() bool {
+		i.mu.Lock()
+		defer i.mu.Unlock()
+		return !i.extPanel.Active() && i.carrierPanelSurface == ""
+	}, "panel overlay to close after the surface disappears")
+}
+
+func waitForCond(t *testing.T, cond func() bool, what string) {
+	t.Helper()
+	for range 250 {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
 }

@@ -1,17 +1,17 @@
 package modes
 
-// The turn lifecycle: prompt dispatch, agent-event consumption,
-// auto/manual compaction, and the streaming pacer.
+// The turn lifecycle: prompt dispatch, manual compaction, and the
+// streaming pacer. The TUI drives the ctrlproto WorkspaceService; the
+// turn engine (claim/queue, event consumption, turn policy) is
+// daemon-side — see interactive_ctrlproto.go.
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
@@ -80,140 +80,17 @@ func (i *Interactive) cancelAndWaitForIdle() {
 	}
 }
 
-// runCompact invokes core.Agent.Compact and reflects the progress in
-// the tui. It runs in a goroutine so the ui stays responsive; esc/ctrl+c
-// cancel via the same cancelTurn channel used for normal turns.
-//
-// When auto is true the spinner message is pinned to "condensing
-// history" and the status bar surfaces "(auto)" next to the context
-// percentage so it's obvious the system triggered this, not the user.
-func (i *Interactive) runCompact(parent context.Context, auto bool) {
-	ag := i.turns.Agent()
-	if ag == nil {
+// runCompact routes a manual /compact through the ctrlproto carrier. It
+// runs in a goroutine (inside runCarrierCompact) so the ui stays
+// responsive; esc/ctrl+c cancel via the compact context. Policy
+// compactions (pre-turn auto-compact, the 413 retry) are daemon-side and
+// surface through the pump's compact_start/compact_end events, never here.
+func (i *Interactive) runCompact(parent context.Context) {
+	if !i.ready() {
 		i.setStatusErr(i18n.T("not logged in. type /login first."))
 		return
 	}
-	// Carrier mode: /compact routes through the service (auto-compact never
-	// reaches here — turn policy is daemon-side). Branching before the agent
-	// is touched keeps the wire's compact_start/compact_end vocabulary
-	// exclusively for policy compactions, so the pump's "(auto)" labeling
-	// stays truthful.
-	if i.cfg.Carrier != nil {
-		i.runCarrierCompact(parent)
-		return
-	}
-	ctx, cancel := context.WithCancel(parent)
-	if !i.turns.claimCompact(cancel, auto) {
-		// A turn is already in flight (raced a concurrent producer).
-		// That turn's completion re-evaluates the auto-compact policy,
-		// so just stand down.
-		cancel()
-		return
-	}
-	i.mu.Lock()
-	if auto {
-		i.spin.StartFixed(i18n.T("condensing history"))
-	} else {
-		i.spin.StartFixed(i18n.T("compacting"))
-	}
-	i.statusErr = ""
-	i.statusOK = ""
-	// The stream is deliberately NOT armed: the summary text should
-	// not be visible in the chat while compacting. The user just sees
-	// the spinner and can keep typing / queue prompts.
-	i.scrollOffset = 0
-	i.helpBlock = nil
-	i.mu.Unlock()
-	i.invalidate()
-	i.runClaimedCompact(ctx, ag, auto)
-}
-
-// runClaimedCompact runs the compaction body on a goroutine for an
-// already-claimed compact slot (spinner/status are the caller's job).
-// On completion it releases the slot atomically — dropping the queue
-// on failure, shifting the head to re-fire on success.
-func (i *Interactive) runClaimedCompact(ctx context.Context, ag *core.Agent, auto bool) {
-	go func() {
-		// Sink discards deltas — we don't stream the summary to the UI.
-		sink := func(delta string) {}
-		// Interactive compaction runs outside the Prompt loop, so emit the
-		// lifecycle events through OnEvent ourselves; without this an
-		// extension's OnCompaction / OnCompactStart never fires here.
-		reason := "compaction"
-		if auto {
-			reason = "context near limit"
-		}
-		ag.EmitLifecycle(core.EvCompactStart{Reason: reason})
-		summary, err := ag.Compact(ctx, core.AutoCompactKeepTail, sink)
-		_ = summary
-		// "Nothing to compact" is benign, not a failure: the transcript is
-		// already entirely keep-tail (e.g. a manual /compact right after an
-		// auto-compact). Normalize it so we emit a clean compact_end and show
-		// a gentle note instead of a phantom "✖ compaction failed".
-		nothingToCompact := errors.Is(err, core.ErrNothingToCompact)
-		if nothingToCompact {
-			err = nil
-		}
-		end := core.EvCompactEnd{}
-		if err != nil {
-			end.Err = err.Error()
-		}
-		ag.EmitLifecycle(end)
-		failed := err != nil || ctx.Err() != nil
-		next, hasNext := i.turns.release(failed)
-		i.turns.ResetStream()
-
-		i.mu.Lock()
-		switch {
-		case err != nil && ctx.Err() != nil:
-			i.statusErr = ""
-			if auto {
-				i.statusOK = i18n.T("auto-condense cancelled")
-			} else {
-				i.statusOK = i18n.T("compaction cancelled")
-			}
-		case err != nil:
-			i.statusErr = i18n.T("compaction failed: %s", err.Error())
-			i.statusOK = ""
-		case nothingToCompact:
-			i.statusErr = ""
-			i.statusOK = i18n.T("nothing to compact — transcript already minimal")
-			i.pendingPostCompactNote = ""
-		default:
-			i.statusErr = ""
-			// Read token count from the compaction message meta.
-			tokens := ""
-			msgs := ag.Messages()
-			if len(msgs) > 0 && msgs[0].Meta["compaction"] == "true" {
-				tokens = msgs[0].Meta["tokens_before"]
-			}
-			switch {
-			case i.pendingPostCompactNote != "":
-				i.statusOK = i.pendingPostCompactNote
-			case tokens != "":
-				i.statusOK = i18n.T("compacted from ~%s tokens (ctrl+o to expand)", tokens)
-			default:
-				i.statusOK = i18n.T("compacted (ctrl+o to expand)")
-			}
-			i.pendingPostCompactNote = ""
-			i.extNotes = stripAutoCompactNotes(i.extNotes)
-			i.lastCtxInput = 0
-			i.toolCalls = map[string]*tui.ToolCallView{}
-			i.toolOrder = nil
-			i.turns.ResetGates()
-			i.view.InvalidateRenderCache()
-		}
-		i.mu.Unlock()
-		i.invalidate()
-
-		if hasNext {
-			p := i.runCtx
-			if p == nil {
-				p = context.Background()
-			}
-			i.startTurn(p, next)
-		}
-	}()
+	i.runCarrierCompact(parent)
 }
 
 func (i *Interactive) startTurn(parent context.Context, prompt string) {
@@ -221,8 +98,7 @@ func (i *Interactive) startTurn(parent context.Context, prompt string) {
 }
 
 func (i *Interactive) startTurnWithImages(parent context.Context, prompt string, images []provider.ImageBlock) {
-	ag := i.turns.Agent()
-	if ag == nil {
+	if !i.ready() {
 		return
 	}
 	// Surface a dropped-image note up front: the provider layer
@@ -242,149 +118,11 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 		}
 	}
 
-	// ctrlproto mode: dispatch through the WorkspaceService. Everything below
-	// (pre-turn auto-compact, the claim-or-queue slot dance, the post-Prompt
-	// policy block) is daemon-side there.
-	if i.cfg.Carrier != nil {
-		i.startTurnCarrier(parent, prompt, images)
-		return
-	}
-
-	// Pre-turn safety: if the most recent context measurement is
-	// already past the auto-compact threshold, condense before
-	// sending so the next outbound request stays under the limit.
-	// The prompt is re-armed at the FRONT of the queue so it fires
-	// the moment the condensed transcript is ready, ahead of anything
-	// queued while waiting. Decided before claiming the slot; if a
-	// concurrent producer wins the claim race in between, claimCompact
-	// stands down and the prompt path below queues normally.
-	if i.shouldAutoCompact() {
-		compactCtx, compactCancel := context.WithCancel(parent)
-		if i.turns.claimCompact(compactCancel, true) {
-			// Re-arm under the claimed slot so the release-side shift
-			// finds it first.
-			if prompt != "" {
-				i.turns.RequeueFront(prompt)
-			}
-			i.mu.Lock()
-			i.statusErr = ""
-			i.extNotes = append(i.extNotes, autoCompactNoteLine(i.cfg.Theme, i18n.T(noteCondensingBeforeSend)))
-			i.pendingPostCompactNote = i18n.T("context auto-compacted; sending your last message")
-			i.spin.StartFixed(i18n.T("condensing history"))
-			i.scrollOffset = 0
-			i.helpBlock = nil
-			i.mu.Unlock()
-			i.invalidate()
-			i.runClaimedCompact(compactCtx, ag, true)
-			return
-		}
-		compactCancel()
-	}
-
-	ctx, cancel := context.WithCancel(parent)
-	// Atomically claim the turn slot or fold the prompt into the
-	// queue. The busy check, the busy claim, and the enqueue all
-	// happen under the engine's lock so two producers on different
-	// goroutines (key loop, telegram bridge, auto-swarm watcher,
-	// extension prompt actions) can't both observe idle and launch
-	// concurrent agent.Prompt calls — and a prompt queued as a turn
-	// ends can't strand (release shifts the queue under the same
-	// lock). See deep-review Part B #1/#3.
-	if !i.turns.claimOrQueue(prompt, cancel) {
-		cancel()
-		i.invalidate()
-		return
-	}
-	i.resetTurnUI()
-
-	sink := func(ev core.AgentEvent) {
-		i.handleEvent(ev)
-		i.invalidate()
-	}
-
-	go func() {
-		err := ag.Prompt(ctx, prompt, images, sink)
-		failed := err != nil || ctx.Err() != nil
-		// Atomically end the turn: cancelled/errored turns drop the
-		// queue (no stale follow-ups after an interrupt); clean turns
-		// shift the next queued prompt — including one that arrived in
-		// the final instants of this turn, which used to strand.
-		next, hasNext := i.turns.release(failed)
-
-		i.mu.Lock()
-		if err != nil && ctx.Err() == nil {
-			i.statusErr = err.Error()
-		}
-		// Decide whether to offer a model rescue picker for recoverable
-		// provider failures (auth/rate/temporary). The picker opens after
-		// the mutex is released so it can take its own locks freely.
-		var (
-			offer       bool
-			rescueWhy   string
-			rescueImgs  []provider.ImageBlock
-			rescueModel string
-			rescueProv  string
-			rescueFprov string
-		)
-		if err != nil && ctx.Err() == nil {
-			if ok, reason := core.ClassifyRecoverable(err); ok {
-				offer = true
-				rescueWhy = reason
-				rescueImgs = images
-				rescueModel = i.cfg.Model
-				rescueProv = i.cfg.Provider
-				rescueFprov = core.ExtractFailedProvider(err)
-				if rescueFprov == "" {
-					rescueFprov = i.cfg.Provider
-				}
-				// Suppress the red banner — the rescue dialog already
-				// surfaces the failure.
-				i.statusErr = ""
-			}
-		}
-		// Detect HTTP 413 "payload too large" responses. The provider
-		// rejected the request because the request body exceeded its
-		// per-request limit. Token-based auto-compact can miss this
-		// because the limit is on raw bytes, not tokens. Re-queue the
-		// prompt so it survives the condense pass and trigger one.
-		payloadTooLarge := err != nil && ctx.Err() == nil && core.IsPayloadTooLargeError(err)
-		if payloadTooLarge {
-			i.statusErr = ""
-			i.turns.RequeueFront(prompt)
-			i.extNotes = append(i.extNotes, autoCompactNoteLine(i.cfg.Theme, i18n.T(noteCondensingBeforeRetry)))
-			i.pendingPostCompactNote = i18n.T("context auto-compacted; retrying your last message")
-		}
-		// Persist the assistant's reply (and every tool row before
-		// it) to the session file while the turn memory is hot.
-		// Without this, WriteNewTranscript only fires at terva exit,
-		// meaning a crash or ungraceful kill drops the whole
-		// conversation. FlushSession is idempotent (it advances the
-		// baseline so subsequent flushes only write new rows).
-		flush := i.cfg.FlushSession
-		i.mu.Unlock()
-		if flush != nil {
-			flush()
-		}
-		// Auto-compact only when the turn completed cleanly AND no
-		// queued prompt is about to run (otherwise the queued message
-		// would race the condense).
-		shouldAutoCompact := !hasNext && !failed && i.shouldAutoCompact()
-		i.invalidate()
-		parent := i.runCtx
-		if parent == nil {
-			parent = context.Background()
-		}
-		switch {
-		case hasNext:
-			i.startTurn(parent, next)
-		case offer:
-			i.openRescueDialog(rescueProv, rescueFprov, rescueModel, rescueWhy, prompt, rescueImgs)
-		case payloadTooLarge:
-			i.runCompact(parent, true)
-		case shouldAutoCompact:
-			i.runCompact(parent, true)
-		}
-	}()
+	// Dispatch through the ctrlproto WorkspaceService: the pre-turn
+	// auto-compact, the claim-or-queue slot dance, and the post-Prompt
+	// policy block (rescue picker, 413 retry, persistence) are all
+	// daemon-side.
+	i.startTurnCarrier(parent, prompt, images)
 }
 
 // resetTurnUI clears the per-turn UI state right after the turn slot is
@@ -457,188 +195,6 @@ func autoCompactNoteLine(th tui.Theme, msg string) string {
 	return "  " + th.FG256(th.Warning, "⚠ "+msg)
 }
 
-// shouldAutoCompact reports whether the last turn pushed context
-// usage past the auto-compact threshold. The decision is core policy
-// (Agent.ShouldAutoCompact); this wrapper only adds the "not while a
-// compaction is already in flight" guard.
-func (i *Interactive) shouldAutoCompact() bool {
-	ag := i.turns.Agent()
-	if ag == nil || i.turns.AutoCompacting() {
-		return false
-	}
-	// CanCompact guards against re-triggering on an already-condensed
-	// transcript (whose post-compaction fraction can still read high):
-	// without it, auto-compact fires a no-op and reports "nothing to
-	// compact" as a failure.
-	return ag.ShouldAutoCompact(core.AutoCompactThreshold) && ag.CanCompact(core.AutoCompactKeepTail)
-}
-
-func (i *Interactive) handleEvent(ev core.AgentEvent) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	switch e := ev.(type) {
-	case core.EvAssistantStart:
-		// Fires at the top of every oneTurn, including follow-up
-		// turns after tool use. Without this, the streaming buffer
-		// is still marked off from the previous assistant message
-		// and the final summary text pops in all at once instead
-		// of typewriter-streaming delta by delta.
-		i.turns.BeginAssistant()
-		// Clear the live tool-call overlay. Any tools from the
-		// previous round are now fully folded into the transcript
-		// (assistant tool_use block + tool role message with the
-		// result), so keeping them in the overlay would duplicate
-		// them in the view — once inside the finalised transcript
-		// and once below the streaming block, with the streaming
-		// summary sandwiched in between. The next EvToolUseStart
-		// will populate fresh entries for this turn's tools.
-		i.toolCalls = map[string]*tui.ToolCallView{}
-		i.toolOrder = nil
-	case core.EvTextDelta:
-		// Buffer behind the pacer; the paintPace ticker paints a
-		// few runes at a time for a smooth typewriter effect
-		// independent of upstream chunk size.
-		i.turns.AppendDelta(e.Delta)
-	case core.EvAssistantMessage:
-		// OnAssistant + telegram mirroring always fire on message
-		// arrival — they read the FINAL message content, which is
-		// complete regardless of what's still in the pacer.
-		i.assistantMessageSideEffects(e.Message)
-		// If the pacer still has characters to drain this latches the
-		// flushing phase and the paintPace ticker finishes the reveal;
-		// otherwise (rare: full-replay sessions, abort paths) state
-		// clears synchronously so a later render doesn't show stale
-		// text.
-		if i.turns.FinishMessage() {
-			return
-		}
-	case core.EvToolUseStart:
-		// Live streaming: pre-create the view so the user sees the
-		// tool call being composed in real time. Any subsequent
-		// EvToolCall for the same ID updates the same struct (the
-		// final parsed args + name are already known here).
-		if _, exists := i.toolCalls[e.ID]; !exists {
-			i.toolCalls[e.ID] = &tui.ToolCallView{
-				ID:        e.ID,
-				Name:      e.Name,
-				Streaming: true,
-			}
-			i.toolOrder = append(i.toolOrder, e.ID)
-			i.turns.GateTool(e.ID)
-		}
-	case core.EvToolUseArgs:
-		if tc, ok := i.toolCalls[e.ID]; ok {
-			tc.RawJSONBuf += e.Delta
-			// Refresh the live path as soon as it parses; used in
-			// the header (write /Users/pat/Desktop/demo.ts)
-			// while the content is still streaming.
-			if p, pok, _ := tui.ExtractPartialStringField(tc.RawJSONBuf, "path"); pok {
-				tc.LivePath = p
-			} else if p, pok, _ := tui.ExtractPartialStringField(tc.RawJSONBuf, "file_path"); pok {
-				tc.LivePath = p
-			}
-		}
-	case core.EvToolUseEnd:
-		if tc, ok := i.toolCalls[e.ID]; ok {
-			tc.Streaming = false
-		}
-	case core.EvToolCall:
-		// If we already pre-created the view during streaming, just
-		// refresh the final Args summary. Otherwise create a new one
-		// (non-streaming providers or legacy paths).
-		if tc, ok := i.toolCalls[e.ID]; ok {
-			tc.Args = tui.ShortArgs(e.Name, e.Args)
-			tc.Streaming = false
-		} else {
-			i.toolCalls[e.ID] = &tui.ToolCallView{
-				ID:   e.ID,
-				Name: e.Name,
-				Args: tui.ShortArgs(e.Name, e.Args),
-			}
-			i.toolOrder = append(i.toolOrder, e.ID)
-			i.turns.GateTool(e.ID)
-		}
-	case core.EvToolResult:
-		if tc, ok := i.toolCalls[e.ID]; ok {
-			tc.Done = true
-			tc.Error = e.Result.IsError
-			var text strings.Builder
-			for _, c := range e.Result.Content {
-				if tb, ok := c.(provider.TextBlock); ok {
-					if text.Len() > 0 {
-						text.WriteString("\n")
-					}
-					text.WriteString(tb.Text)
-				}
-			}
-			tc.Result = text.String()
-			// Tally the agent's own line changes for the status bar's
-			// edits segment (Δ +N -M).
-			a, r := editStats(tc.Name, e.Result)
-			i.editsAdded += a
-			i.editsRemoved += r
-		}
-		if i.cfg.OnToolResult != nil {
-			i.cfg.OnToolResult(e.ID, e.Result)
-		}
-	case core.EvToolProgress:
-		// A long-running tool reported live status (e.g. actor_spawn: "aava
-		// responds (remembers the scene)…"). Show it until the result lands.
-		if tc, ok := i.toolCalls[e.ID]; ok {
-			tc.Progress = e.Text
-		}
-	case core.EvUsage:
-		i.cumUsage = e.Cumulative
-		if e.Usage.InputTokens > 0 {
-			i.lastCtxInput = e.Usage.InputTokens + e.Usage.CacheReadTokens + e.Usage.CacheWriteTokens
-		}
-	case core.EvUserMessageRejected:
-		// A user_message guard refused the prompt: it never reached the
-		// model. Surface the reason so the submit doesn't just vanish.
-		reason := e.Reason
-		if reason == "" {
-			reason = i18n.T("message blocked by extension")
-		}
-		i.statusErr = reason
-		i.statusOK = ""
-		return
-	case core.EvTurnEnd:
-		// The agent likely just touched the tree; refresh the status
-		// bar's git segment without waiting for the slow poll. Fires
-		// per step in a multi-step tool loop, which is fine — pokes
-		// coalesce on the buffered channel and a probe is a few ms.
-		// Status scripts re-run on the same signal (debounced).
-		i.pokeGitProber()
-		i.pokeStatusScripts()
-		if e.Stop == provider.StopAborted {
-			i.turns.ResetStream()
-			i.statusErr = ""
-			i.statusOK = i18n.T("cancelled")
-			return
-		}
-		if e.Stop == provider.StopLength {
-			// The model hit its output-token cap mid-response, so the
-			// reply (often a long write/edit) is truncated. Surface it
-			// explicitly, otherwise the turn just ends and reads like
-			// the UI gave up. The agent already requests the model's
-			// full MaxOutput budget, so this means the response genuinely
-			// exceeded that ceiling; ask the user to continue.
-			i.statusErr = i18n.T("response hit the model's output-token limit and was cut off, ask it to continue")
-			i.statusOK = ""
-			return
-		}
-		// Don't surface mid-loop stream errors as a red banner here.
-		// EvTurnEnd fires after every step in a multi-step tool loop,
-		// so a transient 503 / network blip would briefly paint a red
-		// banner over the still-streaming chat before the agent loop
-		// either retries or exits. The final error (if any) is set by
-		// startTurnWithImages once Prompt() returns, and recoverable
-		// failures are routed to the rescue picker instead — which
-		// keeps the chat clean while the agent is working.
-		_ = e.Err
-	}
-}
-
 // assistantText returns the concatenated text of every TextBlock in
 // m. Used by the streaming-view dedupe guard to tell when a live
 // streamed reply has already been promoted into the transcript.
@@ -653,35 +209,6 @@ func assistantText(m provider.Message) string {
 		}
 	}
 	return sb.String()
-}
-
-// assistantMessageSideEffects runs the non-visual hooks attached to
-// EvAssistantMessage: the host-provided OnAssistant callback and the
-// telegram-bridge mirror. Called with i.mu held.
-//
-// Factored out of handleEvent because the streaming pacer may defer
-// visual reset until after the last buffered rune has painted, but
-// the callbacks themselves must fire on message arrival so
-// downstream observers (session persistence, telegram, cost panels)
-// don't wait on a UI animation to catch up.
-func (i *Interactive) assistantMessageSideEffects(m provider.Message) {
-	if i.cfg.OnAssistant != nil {
-		i.cfg.OnAssistant(m)
-	}
-	if i.chatBridge != nil && i.chatBridge.Active() {
-		var sb strings.Builder
-		for _, c := range m.Content {
-			if tb, ok := c.(provider.TextBlock); ok {
-				if sb.Len() > 0 {
-					sb.WriteString("\n")
-				}
-				sb.WriteString(tb.Text)
-			}
-		}
-		if text := sb.String(); strings.TrimSpace(text) != "" {
-			go i.chatBridge.OnAssistantText(text)
-		}
-	}
 }
 
 // paintPaceRate is how many runes the streaming pacer releases per

@@ -6,6 +6,7 @@ import (
 
 	"github.com/mattn/go-runewidth"
 
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
@@ -422,10 +423,10 @@ func (s *slashSuggester) Render(input string, th tui.Theme, width int) []string 
 	}
 	// Window the matches around the cursor so the popup fits short
 	// terminals and PageUp/PageDown visibly change what's shown.
-	start, end := cursorWindow(s.cursor, len(m), s.maxRows)
+	start, end := dialogs.CursorWindow(s.cursor, len(m), s.maxRows)
 	var lines []string
 	if start > 0 {
-		lines = append(lines, windowMoreAbove(th, start))
+		lines = append(lines, dialogs.WindowMoreAbove(th, start))
 	}
 	for i := start; i < end; i++ {
 		c := m[i]
@@ -456,7 +457,7 @@ func (s *slashSuggester) Render(input string, th tui.Theme, width int) []string 
 		}
 	}
 	if end < len(m) {
-		lines = append(lines, windowMoreBelow(th, len(m), end))
+		lines = append(lines, dialogs.WindowMoreBelow(th, len(m), end))
 	}
 	// Blank row before the hint visually detaches it from the
 	// command list and groups it with its trailing blank.

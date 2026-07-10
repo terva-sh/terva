@@ -707,9 +707,14 @@ func segTags(p StatusBarParams) []string {
 	color := th.StatusColor(SegTags, th.Muted)
 	var atoms []string
 	switch {
-	case p.ApprovalMode != "" && p.ApprovalMode != "yolo":
+	case p.ApprovalMode == "yolo":
+		// Yolo runs every tool — foreign side-effecting ones included —
+		// without asking. Render it in the warning color so the riskiest
+		// posture is never the one segment with no badge.
+		atoms = append(atoms, th.FG256(th.Warning, i18n.T("%s mode", p.ApprovalMode)))
+	case p.ApprovalMode != "":
 		atoms = append(atoms, th.FG256(color, i18n.T("%s mode", p.ApprovalMode)))
-	case p.ApprovalMode == "" && p.NoYolo:
+	case p.NoYolo:
 		atoms = append(atoms, th.FG256(color, i18n.T("yolo mode disabled")))
 	}
 	if p.Locked {

@@ -4,12 +4,10 @@ import (
 	"context"
 	"sync"
 	"time"
-
-	"terva.sh/terva/packages/core"
 )
 
 // turnEngine owns the turn lifecycle state (TUI plan Phase 2b): the
-// agent pointer, the busy flag, the active turn's cancel func, the
+// busy flag, the active turn's cancel func, the
 // streaming pipeline, and the pacer — everything that decides whether
 // a prompt runs now or queues — behind one mutex.
 //
@@ -19,10 +17,16 @@ import (
 // *acting* on the answer. A prompt queued in the gap between the
 // agent loop's final queue check and busy flipping false was stranded
 // — it sat in the queue until some unrelated later turn drained it.
-// Here the check and the action are one critical section:
-// claimOrQueue either claims the slot or queues, and release flips
-// busy off and shifts the next queued prompt under the same hold, so
-// there is no instant where a message can fall between the two.
+// Here the check and the action are one critical section: release
+// flips busy off and shifts the next queued prompt under the same
+// hold, so there is no instant where a message can fall between the
+// two.
+//
+// The claim half of that pairing (claimOrQueue: claim, or queue under
+// the same hold) is gone. On the carrier path the daemon's wsSession
+// is the busy arbiter, not this engine — a producer that loses either
+// fails claimCarrier or gets CodeBusy back from Prompt, and queues
+// through the service so every client's queued view converges.
 //
 // Queueing is unified on the agent's own queue (Phase 2d): a running
 // loop drains it at safe boundaries (answered within the same turn),
@@ -36,7 +40,6 @@ import (
 // i.mu (i.mu → engine.mu is the one allowed nesting).
 type turnEngine struct {
 	mu             sync.Mutex
-	agent          *core.Agent
 	busy           bool
 	autoCompacting bool
 	cancel         context.CancelFunc
@@ -47,26 +50,11 @@ func newTurnEngine() *turnEngine {
 	return &turnEngine{stream: newStreamState()}
 }
 
-// ---- agent ownership ----
-
-// Agent returns the current agent (nil before login). The pointer is
-// safe to use without the engine lock — the agent has its own.
-func (t *turnEngine) Agent() *core.Agent {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.agent
-}
-
-// SetAgent swaps the live agent (login, model swap, session load,
-// cwd change).
-func (t *turnEngine) SetAgent(ag *core.Agent) {
-	t.mu.Lock()
-	t.agent = ag
-	t.mu.Unlock()
-}
-
-// HasAgent reports whether an agent is installed.
-func (t *turnEngine) HasAgent() bool { return t.Agent() != nil }
+// The engine once held the live *core.Agent (SetAgent / Agent), the TUI's
+// window into the daemon's session for rendering and management dialogs. Every
+// reader migrated to a snapshot or a surface (plan 4.1); /btw, the last, moved
+// to the sidechat surface. The engine now tracks only the local UI slot —
+// busy, the active cancel, the stream — and reaches for no agent at all.
 
 // ---- slot transitions ----
 
@@ -83,27 +71,6 @@ func (t *turnEngine) AutoCompacting() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.autoCompacting
-}
-
-// claimOrQueue atomically claims the turn slot, arming the stream for
-// a fresh turn. When the slot is already taken, the prompt is queued
-// onto the agent's queue under the same lock hold — the running
-// loop answers it at a safe boundary, or release restarts with it —
-// and claimOrQueue reports claimed=false.
-func (t *turnEngine) claimOrQueue(prompt string, cancel context.CancelFunc) (claimed bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.busy {
-		if t.agent != nil {
-			t.agent.QueueMessage(prompt)
-		}
-		return false
-	}
-	t.busy = true
-	t.cancel = cancel
-	t.stream.beginTurn()
-	t.stream.resetGates()
-	return true
 }
 
 // claimCompact claims the slot for a compaction run (no stream
@@ -135,27 +102,33 @@ func (t *turnEngine) claimSlot(cancel context.CancelFunc) bool {
 	return true
 }
 
-// release ends the in-flight work: flips busy off, retires the
-// stream if it has fully drained (the pacer keeps painting any
-// leftovers), and — under the same hold, so no producer can strand a
-// message in between — either drops the queue (cancelled/errored
-// turns must not fire stale follow-ups) or shifts its head to
-// restart with.
-func (t *turnEngine) release(dropQueue bool) (next string, hasNext bool) {
+// releaseSlot ends non-turn in-flight work (the ! shell escape): flips busy
+// off, retires the stream if it has fully drained (the pacer keeps painting any
+// leftovers), and touches NOTHING else.
+//
+// It used to own a queue decision — drain on cancel, shift-and-restart on
+// success — inherited from the legacy path, where the engine's agent was the
+// TUI's own. It no longer is: `turns.agent` was the DAEMON's session agent, so
+// those legacy semantics reached across into shared state. Cancelling a shell
+// escape drained the whole queue, discarding prompts another device or a paired
+// chat DM had queued, and with no queue_updated broadcast every other client
+// went on rendering chips for messages that no longer existed. Finishing one
+// shifted the head and re-dispatched it locally, racing the daemon's own
+// end-of-turn shift for the same message.
+//
+// The Workspace owns post-turn queue policy in carrier mode — releaseCarrier
+// has said so all along — and it needs no help here. A prompt typed during a
+// shell escape reaches the daemon through Queue: idle, it starts immediately;
+// busy, it waits on the agent's queue and the daemon's endTurn shifts it. The
+// escape's slot is a LOCAL UI reflection (spinner, input gate, esc target), and
+// releasing it is all this has to do.
+func (t *turnEngine) releaseSlot() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.busy = false
 	t.autoCompacting = false
 	t.cancel = nil
 	t.stream.promptReturned()
-	if t.agent == nil {
-		return "", false
-	}
-	if dropQueue {
-		t.agent.DrainQueuedMessages()
-		return "", false
-	}
-	return t.agent.ShiftQueuedMessage()
 }
 
 // ---- carrier slot transitions (the default ctrlproto TUI path) ----
@@ -165,11 +138,11 @@ func (t *turnEngine) release(dropQueue bool) (next string, hasNext bool) {
 // is the local UI reflection of that state — spinner, input gating, stream
 // arming — driven by the event stream instead of a synchronous Prompt return.
 
-// claimCarrier claims the turn slot for a carrier-dispatched turn: the same
-// stream arming as claimOrQueue, but no queue fallback — carrier mode queues
-// through the WorkspaceService so every client's queued view converges — and
-// cancel routes the esc/ctrl+c plumbing to the service's Cancel instead of a
-// local turn context.
+// claimCarrier claims the turn slot for a carrier-dispatched turn: it arms the
+// stream, but has no queue fallback — carrier mode queues through the
+// WorkspaceService so every client's queued view converges — and cancel routes
+// the esc/ctrl+c plumbing to the service's Cancel instead of a local turn
+// context.
 func (t *turnEngine) claimCarrier(cancel context.CancelFunc) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -238,59 +211,6 @@ func (t *turnEngine) cancelActive() bool {
 	return true
 }
 
-// ---- queue (unified on the agent's queue) ----
-
-// QueuedCount returns how many prompts wait for a turn slot.
-func (t *turnEngine) QueuedCount() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.agent == nil {
-		return 0
-	}
-	return t.agent.QueuedMessageCount()
-}
-
-// PendingQueued snapshots the queued prompts for the "sliding in"
-// chips.
-func (t *turnEngine) PendingQueued() []string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.agent == nil {
-		return nil
-	}
-	return t.agent.PendingQueuedMessages()
-}
-
-// PopQueued removes and returns the newest queued prompt (the
-// Alt+Up slide-back).
-func (t *turnEngine) PopQueued() (string, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.agent == nil {
-		return "", false
-	}
-	return t.agent.PopQueuedMessage()
-}
-
-// DrainQueued drops every queued prompt (explicit cancel/clear).
-func (t *turnEngine) DrainQueued() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.agent != nil {
-		t.agent.DrainQueuedMessages()
-	}
-}
-
-// RequeueFront arms text to run before anything else queued — the
-// auto-compact re-fire path.
-func (t *turnEngine) RequeueFront(text string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.agent != nil {
-		t.agent.RequeueFront(text)
-	}
-}
-
 // ---- streaming (event side; called from the agent-event sink) ----
 
 // BeginAssistant arms the typewriter for a fresh assistant message
@@ -345,7 +265,6 @@ func (t *turnEngine) ResetStream() {
 // turnRenderState is the render pass's one-lock snapshot of the
 // engine: everything buildChat and the status bar need for a frame.
 type turnRenderState struct {
-	agent          *core.Agent
 	busy           bool
 	autoCompacting bool
 	streamVisible  string
@@ -358,7 +277,6 @@ func (t *turnEngine) renderState() turnRenderState {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return turnRenderState{
-		agent:          t.agent,
 		busy:           t.busy,
 		autoCompacting: t.autoCompacting,
 		streamVisible:  t.stream.visible(),

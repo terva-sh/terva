@@ -1,6 +1,7 @@
 package modes
 
 import (
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
@@ -27,7 +28,7 @@ func renderUpdateBanner(th tui.Theme, info UpdateInfo, width int) []string {
 	}
 	color := th.Warning
 	out := []string{
-		frameHeaderColor(th, "update available", width, color),
+		dialogs.FrameHeaderColor(th, "update available", width, color),
 	}
 	out = append(out, "")
 
@@ -41,7 +42,7 @@ func renderUpdateBanner(th tui.Theme, info UpdateInfo, width int) []string {
 	}
 
 	out = append(out, "")
-	out = append(out, frameRuleColor(th, width, color))
+	out = append(out, dialogs.FrameRuleColor(th, width, color))
 	out = append(out, "")
 	return out
 }

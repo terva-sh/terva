@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/identity"
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
@@ -37,29 +38,29 @@ func (i *Interactive) openLogoutDialog() {
 		return
 	}
 
-	var items []logoutItem
+	var items []dialogs.LogoutItem
 	for _, p := range []string{"anthropic", "kimi", "google", "github-copilot"} {
 		if creds.Has(p) {
 			method := creds.Method(p)
 			if method == "oauth" {
 				method = "subscription"
 			}
-			items = append(items, logoutItem{
-				label:  providerLabel(p),
-				target: p,
-				method: method,
+			items = append(items, dialogs.LogoutItem{
+				Label:  dialogs.ProviderLabel(p),
+				Target: p,
+				Method: method,
 			})
 		}
 	}
 	if creds.OpenAI.APIKey != "" {
-		items = append(items, logoutItem{label: providerLabel("openai"), target: "openai", method: "api key"})
+		items = append(items, dialogs.LogoutItem{Label: dialogs.ProviderLabel("openai"), Target: "openai", Method: "api key"})
 	}
 	if creds.OpenAI.OAuth != nil {
-		items = append(items, logoutItem{label: providerLabel("openai-codex"), target: "openai-codex", method: "subscription"})
+		items = append(items, dialogs.LogoutItem{Label: dialogs.ProviderLabel("openai-codex"), Target: "openai-codex", Method: "subscription"})
 	}
 	for p, c := range creds.AdditionalAPIKeyCreds {
 		if c.APIKey != "" {
-			items = append(items, logoutItem{label: providerLabel(p), target: p, method: "api key"})
+			items = append(items, dialogs.LogoutItem{Label: dialogs.ProviderLabel(p), Target: p, Method: "api key"})
 		}
 	}
 	if len(items) == 0 {
@@ -71,7 +72,7 @@ func (i *Interactive) openLogoutDialog() {
 		return
 	}
 	if len(items) > 1 {
-		items = append(items, logoutItem{label: "all", target: "all"})
+		items = append(items, dialogs.LogoutItem{Label: "all", Target: "all"})
 	}
 
 	i.logoutDialog.Open(items)
@@ -157,10 +158,10 @@ func (i *Interactive) doLogout(target string) {
 	}
 	i.statusErr = ""
 	if clearedCurrent {
-		// The running agent was using a credential we just wiped. Drop
-		// it so prompts can't go out with the stale client, and hint at
-		// /login.
-		i.turns.SetAgent(nil)
+		// The credential this session's daemon agent was using is gone. Close
+		// the prompt gate so nothing goes out until /login; the daemon holds the
+		// agent and drops the stale client on its side.
+		i.setReadyLocked(false)
 		i.statusOK = i18n.T("logged out of %s. type /login to sign back in.", strings.Join(providers, ", "))
 	} else {
 		i.statusOK = i18n.T("logged out of %s", strings.Join(providers, ", "))
@@ -281,7 +282,7 @@ func (i *Interactive) startManualOAuthFlow(provider string) {
 		i.dialog.ShowResult(false, err.Error())
 		return
 	}
-	i.dialog.url = url
+	i.dialog.SetURL(url)
 	i.invalidate()
 }
 
@@ -361,29 +362,11 @@ func (i *Interactive) handleAuthEvent(ev auth.Event) {
 		if i.cfg.RefreshModels != nil {
 			i.cfg.RefreshModels()
 		}
-		// Apply the fresh credential. On the carrier path the workspace owns
-		// the agents: CarrierLogin refreshes its credential/defaults and
-		// ensures a session (creating the first one on a credential-less
-		// boot, rebuilding the live session's client on a re-login); the
-		// legacy path rebuilds the in-TUI agent directly.
-		if i.cfg.Carrier != nil {
-			i.finishCarrierLogin(ev)
-			return
-		}
-		ag, prov, model, err := i.cfg.BuildAgent()
-		if err != nil {
-			i.dialog.ShowResult(false, err.Error())
-			return
-		}
-		i.turns.SetAgent(ag)
-		i.mu.Lock()
-		i.cfg.Provider = prov
-		i.cfg.Model = model
-		i.statusErr = ""
-		i.statusOK = i18n.T("logged in to %s via %s", ev.Provider, ev.Method)
-		i.mu.Unlock()
-		i.applyChatTools(i.chatBridge != nil && i.chatBridge.Active())
-		i.dialog.ShowResult(true, "")
+		// Apply the fresh credential. The workspace owns the agents:
+		// CarrierLogin refreshes its credential/defaults and ensures a session
+		// (creating the first one on a credential-less boot, rebuilding the
+		// live session's client on a re-login).
+		i.finishCarrierLogin(ev)
 	}
 }
 
@@ -411,13 +394,11 @@ func (i *Interactive) finishCarrierLogin(ev auth.Event) {
 			i.dialog.ShowResult(false, err.Error())
 			return
 		}
-	} else if !i.turns.HasAgent() {
-		// Same session, but the crutch agent was dropped (a /logout of the
-		// current provider nils it to block prompting) — re-grab it so the
-		// prompt gate reopens.
-		if ag, _, err := i.cfg.Carrier.AgentFor(info.ID); err == nil {
-			i.turns.SetAgent(ag)
-		}
+	} else if !i.ready() {
+		// Same session, re-authenticated: reopen the prompt gate. The daemon
+		// re-armed the session's agent with the new credential when the login
+		// landed; the TUI holds none, so opening the gate is all there is to do.
+		i.setReady(true)
 	}
 	i.mu.Lock()
 	if info.Provider != "" {
@@ -429,6 +410,5 @@ func (i *Interactive) finishCarrierLogin(ev auth.Event) {
 	i.statusErr = ""
 	i.statusOK = i18n.T("logged in to %s via %s", ev.Provider, ev.Method)
 	i.mu.Unlock()
-	i.applyChatTools(i.chatBridge != nil && i.chatBridge.Active())
 	i.dialog.ShowResult(true, "")
 }

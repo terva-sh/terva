@@ -20,8 +20,8 @@ func TestSkillDirective(t *testing.T) {
 // exact-name dispatch routes them to different handlers.
 func TestSkillCommandRegistered(t *testing.T) {
 	var hasSkill, hasSkills bool
-	for _, c := range BuiltinSlashCommands() {
-		switch c.Name {
+	for _, c := range slashRegistry {
+		switch c.name {
 		case "/skill":
 			hasSkill = true
 		case "/skills":

@@ -1,6 +1,9 @@
 package modes
 
-import "terva.sh/terva/packages/i18n"
+import (
+	"terva.sh/terva/packages/agent/modes/dialogs"
+	"terva.sh/terva/packages/i18n"
+)
 
 // Hooks the per-extension config form to the host callbacks: open with the
 // extension's schema + saved values, then on save type+persist the values
@@ -30,7 +33,7 @@ func (i *Interactive) openExtConfigDialog(name string) {
 }
 
 // applyExtConfig persists the form's values and pushes them live.
-func (i *Interactive) applyExtConfig(act extConfigAction) {
+func (i *Interactive) applyExtConfig(act dialogs.ExtConfigAction) {
 	if !act.Save {
 		return
 	}

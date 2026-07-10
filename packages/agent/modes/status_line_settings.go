@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
@@ -164,36 +165,36 @@ func (i *Interactive) persistStatusRows(rows [][]string, note string) {
 // statusLineSettingsItems builds the /settings entries: the preset
 // picker plus the curated segment toggles reflecting the effective
 // layout.
-func (i *Interactive) statusLineSettingsItems() []settingsItem {
+func (i *Interactive) statusLineSettingsItems() []dialogs.SettingsItem {
 	preset := statusLinePresetName(i.cfg.StatusLineRows)
-	options := []settingsOption{
-		{value: "default", label: "default", desc: "built-in three-row layout (adapts to chat/play)"},
-		{value: "compact", label: "compact", desc: "one row: cwd, git, model, context, usage"},
-		{value: "detailed", label: "detailed", desc: "three rows including edits, swarm, session, clock"},
+	options := []dialogs.SettingsOption{
+		{Value: "default", Label: "default", Desc: "built-in three-row layout (adapts to chat/play)"},
+		{Value: "compact", Label: "compact", Desc: "one row: cwd, git, model, context, usage"},
+		{Value: "detailed", Label: "detailed", Desc: "three rows including edits, swarm, session, clock"},
 	}
 	if preset == "custom" {
-		options = append(options, settingsOption{value: "custom", label: "custom", desc: "hand-edited status_line.rows in config.json"})
+		options = append(options, dialogs.SettingsOption{Value: "custom", Label: "custom", Desc: "hand-edited status_line.rows in config.json"})
 	}
 	choice := 0
 	for idx, opt := range options {
-		if opt.value == preset {
+		if opt.Value == preset {
 			choice = idx
 		}
 	}
-	items := []settingsItem{{
-		key:     "status_line",
-		label:   "status line",
-		desc:    "segment layout preset; fine-tune rows in config.json (status_line.rows)",
-		options: options,
-		choice:  choice,
+	items := []dialogs.SettingsItem{{
+		Key:     "status_line",
+		Label:   "status line",
+		Desc:    "segment layout preset; fine-tune rows in config.json (status_line.rows)",
+		Options: options,
+		Choice:  choice,
 	}}
 	effective := i.effectiveStatusRows()
 	for _, t := range statusToggleSegments {
-		items = append(items, settingsItem{
-			key:   "statusseg_" + t.seg,
-			label: "status: " + t.seg,
-			desc:  t.desc,
-			value: statusRowsContain(effective, t.seg),
+		items = append(items, dialogs.SettingsItem{
+			Key:   "statusseg_" + t.seg,
+			Label: "status: " + t.seg,
+			Desc:  t.desc,
+			Value: statusRowsContain(effective, t.seg),
 		})
 	}
 	return items

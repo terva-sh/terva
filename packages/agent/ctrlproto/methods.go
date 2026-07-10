@@ -29,12 +29,19 @@ const (
 	MethodSessionRename Method = "sessions.rename" // params RenameParams (sess in frame)
 	MethodSessionDelete Method = "sessions.delete" // no params (sess in frame)
 	MethodUsageGet      Method = "usage.get"       // result UsageResult (sess in frame)
+	MethodUsageSnapshot Method = "usage.snapshot"  // params UsageSnapshotParams, result UsageSnapshotResult (sess in frame)
 	MethodContextGet    Method = "context.get"     // result ContextResult (sess in frame)
 	MethodContextNode   Method = "context.node"    // params ContextNodeParams, result ContextNodeResult (sess in frame)
 	MethodSurfacesList  Method = "surfaces.list"   // result SurfacesResult (sess in frame)
 	MethodSurfaceGet    Method = "surface.get"     // params SurfaceGetParams, result SurfaceResult
 	MethodSurfaceAction Method = "surface.action"  // params SurfaceActionParams (sess in frame)
 	MethodI18nCatalog   Method = "i18n.catalog"    // params I18nCatalogParams, result I18nCatalogResult (session-independent)
+
+	// Side chat: an ephemeral, tool-less completion against a FROZEN snapshot of
+	// a session, leaving no trace in its transcript. Backs the /btw overlay.
+	MethodSideChatOpen  Method = "sidechat.open"  // result SideChatOpenResult (sess in frame)
+	MethodSideChatAsk   Method = "sidechat.ask"   // params SideChatAskParams, result SideChatAskResult
+	MethodSideChatClose Method = "sidechat.close" // params SideChatCloseParams
 
 	// --- control group ---
 
@@ -58,8 +65,9 @@ func (m Method) Group() Group {
 		MethodClear, MethodApprove, MethodAnswer, MethodSubscribe, MethodUnsubscribe:
 		return GroupConversation
 	case MethodSessionsList, MethodSessionCreate, MethodSessionResume,
-		MethodSessionRename, MethodSessionDelete, MethodUsageGet, MethodContextGet,
-		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog:
+		MethodSessionRename, MethodSessionDelete, MethodUsageGet, MethodUsageSnapshot, MethodContextGet,
+		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
+		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite,
 		MethodTrust, MethodUntrust, MethodRestart:
@@ -170,6 +178,55 @@ type UsageResult struct {
 // ModelsResult is the payload of a [MethodModelsList] response.
 type ModelsResult struct {
 	Models []ModelInfo `json:"models"`
+}
+
+// UsageSnapshotParams is the payload of [MethodUsageSnapshot]. Refresh=true
+// pulls from the provider's usage endpoint and blocks on the fetch.
+type UsageSnapshotParams struct {
+	Refresh bool `json:"refresh,omitempty"`
+}
+
+// UsageSnapshotResult is the payload of a [MethodUsageSnapshot] response.
+type UsageSnapshotResult struct {
+	Usage UsageInfo `json:"usage"`
+}
+
+// --- side chat ---
+
+// SideChatTurn is one completed question/answer exchange inside a side chat.
+// Carried on every [MethodSideChatAsk] so the daemon holds no per-turn state:
+// the frozen base is the daemon's, the conversation on top of it is the
+// client's, and a failed or cancelled ask simply never becomes a turn.
+type SideChatTurn struct {
+	User      string `json:"user"`
+	Assistant string `json:"assistant"`
+}
+
+// SideChatOpenResult is the payload of a [MethodSideChatOpen] response. ID
+// names the frozen snapshot for the asks that follow.
+type SideChatOpenResult struct {
+	ID string `json:"id"`
+}
+
+// SideChatAskParams is the payload of [MethodSideChatAsk]. The daemon builds
+// the request as: the frozen system prompt, the frozen transcript, then Prior
+// (oldest first), then Question. No tools — a side chat is conversational.
+type SideChatAskParams struct {
+	ID       string         `json:"id"`
+	Prior    []SideChatTurn `json:"prior,omitempty"`
+	Question string         `json:"question"`
+}
+
+// SideChatAskResult is the payload of a [MethodSideChatAsk] response.
+type SideChatAskResult struct {
+	Text string `json:"text"`
+}
+
+// SideChatCloseParams is the payload of [MethodSideChatClose]: release the
+// frozen snapshot. Closing an unknown id is not an error — a client that
+// crashed and reconnected must not have to reason about what it leaked.
+type SideChatCloseParams struct {
+	ID string `json:"id"`
 }
 
 // ContextResult is the payload of a [MethodContextGet] response.

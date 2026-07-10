@@ -167,6 +167,37 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 	case MethodUsageGet:
 		u, err := s.svc.Usage(ctx, f.Sess)
 		s.respond(f.ID, UsageResult{Usage: u}, err)
+	case MethodUsageSnapshot:
+		var p UsageSnapshotParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		u, err := s.svc.UsageSnapshot(ctx, f.Sess, p.Refresh)
+		s.respond(f.ID, UsageSnapshotResult{Usage: u}, err)
+	case MethodSideChatOpen:
+		id, err := s.svc.SideChatOpen(ctx, f.Sess)
+		s.respond(f.ID, SideChatOpenResult{ID: id}, err)
+	case MethodSideChatAsk:
+		var p SideChatAskParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		// Blocks on the model — the same synchronous posture as MethodCompact.
+		// The in-process TUI carrier bypasses this loop entirely (it calls the
+		// WorkspaceService method directly, on the dialog's own goroutine), so
+		// /btw never stalls the session stream; a networked caller pays the same
+		// per-connection block compact already has.
+		text, err := s.svc.SideChatAsk(ctx, f.Sess, p.ID, p.Prior, p.Question)
+		s.respond(f.ID, SideChatAskResult{Text: text}, err)
+	case MethodSideChatClose:
+		var p SideChatCloseParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, s.svc.SideChatClose(ctx, f.Sess, p.ID))
 	case MethodContextGet:
 		b, err := s.svc.Context(ctx, f.Sess)
 		s.respond(f.ID, ContextResult{Breakdown: b}, err)

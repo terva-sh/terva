@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -28,7 +29,7 @@ func newInteractiveForSwarmTest(t *testing.T) (*Interactive, *swarm.Swarm) {
 	})
 	iv := &Interactive{
 		turns:       newTurnEngine(),
-		swarmDialog: newSwarmDialog(),
+		swarmDialog: dialogs.NewSwarmDialog(),
 		dirty:       make(chan struct{}, 1),
 	}
 	iv.cfg.Swarm = f
@@ -135,7 +136,7 @@ func TestRunSwarmSendDeliversToAgentInbox(t *testing.T) {
 		},
 	})
 	defer f.StopAll()
-	iv := &Interactive{swarmDialog: newSwarmDialog(), dirty: make(chan struct{}, 1), turns: newTurnEngine()}
+	iv := &Interactive{swarmDialog: dialogs.NewSwarmDialog(), dirty: make(chan struct{}, 1), turns: newTurnEngine()}
 	iv.cfg.Swarm = f
 
 	a, err := f.Spawn(context.Background(), "do thing")
@@ -229,7 +230,7 @@ func TestSplitIDAndRest(t *testing.T) {
 func TestRunSwarmWithoutSwarmIsNoop(t *testing.T) {
 	iv := &Interactive{
 		turns:       newTurnEngine(),
-		swarmDialog: newSwarmDialog(),
+		swarmDialog: dialogs.NewSwarmDialog(),
 		dirty:       make(chan struct{}, 1),
 	}
 	// cfg.Swarm stays nil. The command should set a status err and

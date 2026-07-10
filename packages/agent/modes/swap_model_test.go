@@ -3,76 +3,82 @@ package modes
 import (
 	"testing"
 
-	"terva.sh/terva/packages/core"
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/tui"
 )
 
 // newInteractiveForSwapTest builds the minimal Interactive that swapModel
-// touches, pointed at an openai-compatible model named curModel.
-func newInteractiveForSwapTest(curModel string) (*Interactive, *int) {
-	built := 0
-	iv := &Interactive{
+// touches, bound to a fake carrier.
+func newInteractiveForSwapTest(c *fakeCarrier) *Interactive {
+	return &Interactive{
 		view:  &tui.View{},
 		turns: newTurnEngine(),
-	}
-	iv.turns.SetAgent(&core.Agent{Model: curModel})
-	iv.cfg.Provider = "openai-compatible"
-	iv.cfg.Model = curModel
-	iv.cfg.BuildAgentFor = func(prov, model string) (*core.Agent, string, string, error) {
-		built++
-		return &core.Agent{Model: model}, prov, model, nil
-	}
-	return iv, &built
-}
-
-// TestSwapModelRebuildsWhenBaseURLChanges is the regression for the
-// wrong-backend bug: switching to a same-provider model whose models.json
-// baseUrl points at a different endpoint must rebuild the agent (and thus
-// its endpoint-bound client + the terva_status tool), not mutate the model
-// in place on the old client.
-func TestSwapModelRebuildsWhenBaseURLChanges(t *testing.T) {
-	provider.SetUserModels([]provider.Model{
-		{Provider: "openai-compatible", ID: "edge-a", DisplayName: "A", ContextWindow: 8192, MaxOutput: 4096, BaseURL: "http://a.local/v1", Source: "user"},
-		{Provider: "openai-compatible", ID: "edge-b", DisplayName: "B", ContextWindow: 8192, MaxOutput: 4096, BaseURL: "http://b.local/v1", Source: "user"},
-	})
-	t.Cleanup(func() { provider.SetUserModels(nil) })
-
-	iv, built := newInteractiveForSwapTest("edge-a")
-	iv.applyModelSelection("", "edge-b")
-
-	if *built != 1 {
-		t.Fatalf("swap to a different-baseURL model must rebuild the agent; builder calls = %d", *built)
-	}
-	if iv.cfg.Model != "edge-b" {
-		t.Fatalf("cfg.Model = %q, want edge-b", iv.cfg.Model)
-	}
-	if iv.turns.Agent().Model != "edge-b" {
-		t.Fatalf("rebuilt agent Model = %q, want edge-b", iv.turns.Agent().Model)
+		dirty: make(chan struct{}, 1),
+		cfg: InteractiveConfig{
+			Carrier:        c,
+			CarrierSession: "s1",
+			Provider:       "openai-compatible",
+			Model:          "edge-a",
+		},
 	}
 }
 
-// TestSwapModelReusesClientWhenBaseURLUnchanged keeps the fast path: two
-// models on the same endpoint (here, the shared default — no per-model
-// baseUrl) swap in place with no rebuild, so the cheap path still works.
-func TestSwapModelReusesClientWhenBaseURLUnchanged(t *testing.T) {
-	provider.SetUserModels([]provider.Model{
-		{Provider: "openai-compatible", ID: "same-a", DisplayName: "A", ContextWindow: 8192, MaxOutput: 4096, BaseURL: "http://same.local/v1", Source: "user"},
-		{Provider: "openai-compatible", ID: "same-b", DisplayName: "B", ContextWindow: 8192, MaxOutput: 4096, BaseURL: "http://same.local/v1", Source: "user"},
-	})
-	t.Cleanup(func() { provider.SetUserModels(nil) })
-
-	iv, built := newInteractiveForSwapTest("same-a")
-	prevAgent := iv.turns.Agent()
-	iv.applyModelSelection("", "same-b")
-
-	if *built != 0 {
-		t.Fatalf("same-endpoint swap must not rebuild; builder calls = %d", *built)
+// The /model picker's only job is to drive the service's SwitchModel verb — the
+// workspace owns the rebuild-vs-reuse decision (same provider+endpoint swaps the
+// model in place; a different baseUrl rebuilds the endpoint-bound client, the
+// wrong-backend regression covered by TestSwitchReusesClient in packages/agent).
+// The TUI then reads the authoritative post-swap identity back off ResumeSession
+// rather than racing the pump's session_updated handling.
+func TestApplyModelSelectionDrivesSwitchModel(t *testing.T) {
+	c := newFakeCarrier()
+	c.infos = map[string]ctrlproto.SessionInfo{
+		"s1": {ID: "s1", Provider: "openai-compatible", Model: "edge-b"},
 	}
-	if iv.turns.Agent() != prevAgent {
-		t.Fatal("same-endpoint swap replaced the agent; the client should be reused")
+	i := newInteractiveForSwapTest(c)
+
+	i.applyModelSelection("openai-compatible", "edge-b")
+
+	select {
+	case got := <-c.switches:
+		if got != [2]string{"openai-compatible", "edge-b"} {
+			t.Fatalf("SwitchModel called with %v, want openai-compatible/edge-b", got)
+		}
+	default:
+		t.Fatal("applyModelSelection did not call SwitchModel")
 	}
-	if iv.turns.Agent().Model != "same-b" {
-		t.Fatalf("in-place agent Model = %q, want same-b", iv.turns.Agent().Model)
+	if i.cfg.Model != "edge-b" {
+		t.Errorf("cfg.Model = %q, want edge-b (read back from ResumeSession)", i.cfg.Model)
+	}
+}
+
+// An empty model id is a no-op: no wire call at all.
+func TestApplyModelSelectionIgnoresEmptyModel(t *testing.T) {
+	c := newFakeCarrier()
+	i := newInteractiveForSwapTest(c)
+
+	i.applyModelSelection("openai-compatible", "")
+
+	select {
+	case got := <-c.switches:
+		t.Fatalf("an empty model must not switch; got %v", got)
+	default:
+	}
+}
+
+// The rescue picker routes through the same verb; the workspace's rebuild is
+// what drops launch-time --api-key / --base-url overrides.
+func TestApplyRescueModelSelectionDrivesSwitchModel(t *testing.T) {
+	c := newFakeCarrier()
+	i := newInteractiveForSwapTest(c)
+
+	i.applyRescueModelSelection("anthropic", "claude-x")
+
+	select {
+	case got := <-c.switches:
+		if got != [2]string{"anthropic", "claude-x"} {
+			t.Fatalf("rescue SwitchModel called with %v, want anthropic/claude-x", got)
+		}
+	default:
+		t.Fatal("applyRescueModelSelection did not call SwitchModel")
 	}
 }

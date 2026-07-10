@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modes/widgets"
 	"terva.sh/terva/packages/agent/replay"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -54,7 +55,7 @@ func newReplayTestInteractive(t *testing.T, c *replay.Carrier) *Interactive {
 	i := newCtrlprotoTestInteractive()
 	i.ed = tui.NewEditor(th.AccentBar(th.Accent))
 	i.suggest = newSlashSuggester()
-	i.fileSuggest = newFileSuggester()
+	i.fileSuggest = widgets.NewFileSuggester()
 	i.cfg.Carrier = c // sess is ignored by the single-session replay carrier
 	return i
 }

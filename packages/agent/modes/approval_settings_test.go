@@ -1,141 +1,126 @@
 package modes
 
 import (
-	"regexp"
+	"errors"
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/tui"
 )
 
 type fakeSettingsStore struct{}
 
 func (f *fakeSettingsStore) SetInlineImages(bool) error         { return nil }
-func (f *fakeSettingsStore) SetAutoSwarm(bool) error            { return nil }
 func (f *fakeSettingsStore) SetRecursiveFileSuggest(bool) error { return nil }
 func (f *fakeSettingsStore) SetRespectGitignore(bool) error     { return nil }
-func (f *fakeSettingsStore) SetReasoning(string) error          { return nil }
 func (f *fakeSettingsStore) SetTheme(string) error              { return nil }
 func (f *fakeSettingsStore) SetStatusLineRows([][]string) error { return nil }
 
-func newApprovalTestInteractive(gate *core.ConfirmGate, store SettingsStore, rebuilt *core.ApprovalMode) *Interactive {
+// newApprovalTestInteractive wires an Interactive onto the fake carrier — the
+// shipping seam. The gate lives daemon-side: the TUI reads the settings and
+// permissions surfaces and pushes changes back as surface actions, never
+// touching a *core.Agent or a *core.ConfirmGate.
+func newApprovalTestInteractive(c *fakeCarrier) *Interactive {
 	return &Interactive{
 		turns: newTurnEngine(),
 		dirty: make(chan struct{}, 1),
 		cfg: InteractiveConfig{
-			ConfirmGate:   gate,
-			SettingsStore: store,
-			SetApprovalMode: func(m core.ApprovalMode) core.Registry {
-				gate.SetMode(m)
-				*rebuilt = m
-				return core.Registry{}
-			},
+			Carrier:        c,
+			CarrierSession: "s1",
+			SettingsStore:  &fakeSettingsStore{},
+			Theme:          tui.Dark,
 		},
 	}
 }
 
-func TestApprovalSettingItemReflectsGateMode(t *testing.T) {
-	gate := core.NewPolicyGate(&core.PermissionPolicy{Mode: core.ApprovalAutoEdit, ReadOnly: core.NewReadOnlySet("read"), EditTools: map[string]bool{}}, nil)
-	var rebuilt core.ApprovalMode
-	i := newApprovalTestInteractive(gate, &fakeSettingsStore{}, &rebuilt)
+// The picker reflects the mode the daemon reports on the settings surface.
+func TestApprovalSettingItemReflectsSurfaceMode(t *testing.T) {
+	i := newApprovalTestInteractive(newFakeCarrier())
 
 	item, ok := i.approvalSettingItem()
 	if !ok {
-		t.Fatal("want an approval item when gate + callback are present")
+		t.Fatal("want an approval item when the settings surface carries one")
 	}
-	if item.key != "approval_mode" {
-		t.Fatalf("item key = %q", item.key)
+	if item.Key != "approval_mode" {
+		t.Fatalf("item key = %q", item.Key)
 	}
-	if got := item.options[item.choice].value; got != "auto-edit" {
-		t.Errorf("picker choice = %q, want auto-edit (the gate's mode)", got)
+	if got := item.Options[item.Choice].Value; got != "workspace" {
+		t.Errorf("picker choice = %q, want workspace (the surface's mode)", got)
 	}
 }
 
-func TestApprovalSettingItemAbsentWithoutWiring(t *testing.T) {
-	// No gate, or no rebuild callback → no picker (embedders/tests).
-	i := &Interactive{dirty: make(chan struct{}, 1), turns: newTurnEngine()}
+// An unreadable settings surface means no picker — the TUI has no local gate to
+// fall back on.
+func TestApprovalSettingItemAbsentWhenSurfaceUnavailable(t *testing.T) {
+	c := newFakeCarrier()
+	c.surfErr = errors.New("daemon gone")
+	i := newApprovalTestInteractive(c)
+
 	if _, ok := i.approvalSettingItem(); ok {
-		t.Error("no gate → no approval picker")
-	}
-	gate := core.NewPolicyGate(&core.PermissionPolicy{Mode: core.ApprovalYolo, ReadOnly: core.NewReadOnlySet(), EditTools: map[string]bool{}}, nil)
-	i2 := &Interactive{dirty: make(chan struct{}, 1), turns: newTurnEngine(), cfg: InteractiveConfig{ConfirmGate: gate}}
-	if _, ok := i2.approvalSettingItem(); ok {
-		t.Error("no SetApprovalMode callback → no approval picker")
+		t.Error("unreadable settings surface → no approval picker")
 	}
 }
 
-func TestApplyApprovalModeSwitchesLiveSessionOnly(t *testing.T) {
-	gate := core.NewPolicyGate(&core.PermissionPolicy{Mode: core.ApprovalYolo, ReadOnly: core.NewReadOnlySet("read"), EditTools: map[string]bool{"edit": true}}, nil)
-	var rebuilt core.ApprovalMode
-	i := newApprovalTestInteractive(gate, &fakeSettingsStore{}, &rebuilt)
+// Switching the mode pushes a settings surface action, which is where the
+// daemon swaps enforcement on the gate and rebuilds the session's tool set.
+// Session-only: the picker must never write the persistent default (the store
+// has no approval field precisely because nothing should call it).
+func TestApplyApprovalModeSendsSurfaceAction(t *testing.T) {
+	c := newFakeCarrier()
+	i := newApprovalTestInteractive(c)
 
 	i.applyApprovalModeSetting("plan")
 
-	if gate.Mode() != core.ApprovalPlan {
-		t.Errorf("gate mode = %s, want plan (enforcement swapped live)", gate.Mode())
+	select {
+	case act := <-c.surfActs:
+		if act.id != "settings" || act.action != "set" ||
+			act.args["key"] != "approval" || act.args["value"] != "plan" {
+			t.Fatalf("surface action = %+v, want settings/set approval=plan", act)
+		}
+	default:
+		t.Fatal("applyApprovalModeSetting sent no surface action")
 	}
-	if rebuilt != core.ApprovalPlan {
-		t.Errorf("registry not rebuilt for new mode (got %s)", rebuilt)
-	}
-	// And the status-bar label tracks it.
-	if i.approvalModeLabel() != "plan" {
-		t.Errorf("status label = %q, want plan", i.approvalModeLabel())
-	}
-	// Session-only: the picker must not write the persistent default —
-	// that comes only from explicit config / --approval. (The store
-	// has no approval field precisely because nothing should call it.)
 }
 
-func TestBuildPermissionsViewShowsModeRulesAndGrants(t *testing.T) {
-	pol := &core.PermissionPolicy{
-		Mode: core.ApprovalAsk,
-		Rules: []core.PermissionRule{
-			{Tool: "bash", Decision: core.RuleAllow, Source: "user"},
-			{Tool: "web_fetch_raw", Args: regexp.MustCompile("169"), Decision: core.RuleDeny, Reason: "metadata", Source: "extension web"},
-		},
-		ReadOnly: core.NewReadOnlySet("read"), EditTools: map[string]bool{},
-	}
-	gate := core.NewPolicyGate(pol, confirmStub{ConfirmDecision: core.ConfirmDecision{Allow: true, RememberTool: true}})
-	// Build a session grant.
-	gate.Check("edit", nil, "")
+func TestApplyApprovalModeRejectsBadValue(t *testing.T) {
+	c := newFakeCarrier()
+	i := newApprovalTestInteractive(c)
 
-	i := &Interactive{turns: newTurnEngine(), cfg: InteractiveConfig{ConfirmGate: gate, Theme: tui.Dark}}
+	i.applyApprovalModeSetting("bogus")
+
+	select {
+	case act := <-c.surfActs:
+		t.Fatalf("an invalid mode must not switch anything; got %+v", act)
+	default:
+	}
+}
+
+// The permissions inspector paints the daemon's wire view: mode, rules grouped
+// by source, and this session's revocable grants.
+func TestBuildPermissionsViewRendersWireView(t *testing.T) {
+	i := newApprovalTestInteractive(newFakeCarrier())
+
 	info, grants := i.buildPermissionsView()
 	text := strings.Join(info, "\n")
 
-	for _, want := range []string{"approval mode", "ask", "[user]", "bash", "allow", "[extension web]", "web_fetch_raw", "deny", "metadata", "this session"} {
+	for _, want := range []string{"approval mode", "safe", "[user]", "bash", "deny", "no deletes", "this session"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("permissions view missing %q\n---\n%s", want, text)
 		}
 	}
-	// The session grant for "edit" surfaces as a revocable list entry.
-	if len(grants) != 1 || grants[0].tool != "edit" {
-		t.Errorf("grants = %+v, want one entry for edit", grants)
+	// The fixture grants allow-all plus one tool; both surface as revocable rows.
+	if len(grants) != 2 {
+		t.Errorf("grants = %+v, want allow-all + write", grants)
 	}
 }
 
-func TestBuildPermissionsViewNoGate(t *testing.T) {
-	i := &Interactive{turns: newTurnEngine(), cfg: InteractiveConfig{Theme: tui.Dark}}
+func TestBuildPermissionsViewSurfaceUnavailable(t *testing.T) {
+	c := newFakeCarrier()
+	c.surfErr = errors.New("daemon gone")
+	i := newApprovalTestInteractive(c)
+
 	info, _ := i.buildPermissionsView()
-	text := strings.Join(info, "\n")
-	if !strings.Contains(text, "yolo") {
-		t.Errorf("no-gate view should mention yolo, got: %s", text)
-	}
-}
-
-// confirmStub is a Confirmer returning a fixed decision.
-type confirmStub struct{ core.ConfirmDecision }
-
-func (c confirmStub) Confirm(string, string) core.ConfirmDecision { return c.ConfirmDecision }
-
-func TestApplyApprovalModeRejectsBadValue(t *testing.T) {
-	gate := core.NewPolicyGate(&core.PermissionPolicy{Mode: core.ApprovalYolo, ReadOnly: core.NewReadOnlySet(), EditTools: map[string]bool{}}, nil)
-	var rebuilt core.ApprovalMode
-	i := newApprovalTestInteractive(gate, &fakeSettingsStore{}, &rebuilt)
-
-	i.applyApprovalModeSetting("bogus")
-	if gate.Mode() != core.ApprovalYolo || rebuilt != "" {
-		t.Error("an invalid mode must not switch anything")
+	if !strings.Contains(strings.Join(info, "\n"), "daemon gone") {
+		t.Errorf("an unreadable permissions surface should surface the error, got %v", info)
 	}
 }

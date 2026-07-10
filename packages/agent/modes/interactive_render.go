@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/modes/dialogs"
+	"terva.sh/terva/packages/agent/modes/widgets"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
@@ -145,14 +147,10 @@ func (i *Interactive) chatCacheKey2(cols int, snap frameSnapshot) (chatCacheKey,
 	if snap.ts.busy || snap.ts.streamActive {
 		return chatCacheKey{}, false
 	}
-	var rev uint64
-	if i.cfg.Carrier != nil {
-		// The pump-owned transcript is the render source in carrier mode; its
-		// revision plays the role agent.Revision() plays on the legacy path.
-		rev = uint64(i.carrierTranscriptRev())
-	} else if snap.ts.agent != nil {
-		rev = snap.ts.agent.Revision()
-	}
+	// The pump-owned transcript is the render source, and its revision is the
+	// cache key. carrierTranscriptRev takes its own lock and reads zero before
+	// the first snapshot lands.
+	rev := uint64(i.carrierTranscriptRev())
 	showVer := len(i.view.Messages) == 0 && !snap.ts.streamActive && len(snap.toolViews) == 0 && !i.welcomeStart.IsZero() && time.Since(i.welcomeStart) < welcomeVersionDuration
 	return chatCacheKey{
 		cols:            cols,
@@ -175,16 +173,14 @@ func (i *Interactive) chatCacheKey2(cols int, snap frameSnapshot) (chatCacheKey,
 
 func (i *Interactive) buildChat(cols int, snap frameSnapshot) []string {
 	ts := snap.ts
-	switch {
-	case i.cfg.Carrier != nil:
-		// Carrier mode renders the pump-owned transcript, reconstructed from
-		// the wire (snapshots + message events) — the Stage-4 cutover off the
-		// in-process crutch agent (tui-on-ctrlproto.md).
-		i.view.Messages = filterHiddenTranscriptMessages(i.carrierTranscript())
-	case ts.agent != nil:
-		i.view.Messages = filterHiddenTranscriptMessages(ts.agent.Messages())
-	default:
-		i.view.Messages = nil
+	// The transcript is reconstructed from the wire (snapshots + message
+	// events) and owned by the pump — never read off a live *core.Agent.
+	// carrierTranscript reads nil before the first snapshot lands.
+	i.view.Messages = filterHiddenTranscriptMessages(i.carrierTranscript())
+	// The binding's first snapshot decided whether to cap the paint at the
+	// tail; apply it here, where i.view is ours to write.
+	if limit, ok := i.takeCarrierTailLimit(); ok {
+		i.view.TailLimit = limit
 	}
 	// Pacer flush: while the streaming pacer is still draining the
 	// buffer (i.e. EvAssistantMessage already fired but more runes
@@ -349,26 +345,6 @@ func (i *Interactive) scrollBy(delta int) {
 	i.invalidate()
 }
 
-// scrollToBottom pins the view to the latest content.
-func (i *Interactive) scrollToBottom() {
-	i.mu.Lock()
-	i.scrollOffset = 0
-	i.parkedTurn = 0
-	i.parkedTotal = 0
-	// Reset the auto-follow baseline. scrollToBottom is the resume /
-	// session-swap snap point, where the chat buffer changes length
-	// wholesale; without zeroing these the next render's follow guard
-	// compares the fresh transcript against a stale baseline and nudges
-	// scrollOffset, which reads as a viewport jump right after resume.
-	i.prevChatLen = 0
-	i.prevChatCols = 0
-	if i.rend != nil {
-		i.rend.Invalidate()
-	}
-	i.mu.Unlock()
-	i.invalidate()
-}
-
 // anchorScrollOffset keeps the user's reading position pinned when the
 // chat buffer grows/shrinks or the viewport height changes between two
 // redraws while they're scrolled up.
@@ -416,7 +392,7 @@ func (i *Interactive) redraw() {
 		dialog = activeOv.render(cols)
 	}
 	if len(dialog) > 0 {
-		dialog = padDialogFrame(dialog)
+		dialog = dialogs.PadDialogFrame(dialog)
 	}
 
 	// Slash-command autocomplete: popup above the status line, only
@@ -551,10 +527,7 @@ func (i *Interactive) redraw() {
 	// in flight. Shown directly above the status bar so they're close
 	// to the editor but don't push the chat around.
 	var queue []string
-	var queued []string
-	if ts.agent != nil {
-		queued = ts.agent.PendingQueuedMessages()
-	}
+	queued := i.carrierQueuedList()
 	if len(queued) > 0 {
 		queue = append(queue, "")
 		for _, q := range queued {
@@ -867,41 +840,11 @@ func clipBottomClippedImages(lines []string) []string {
 // clipBottomClippedImages so an image's reservation rows still count
 // as blank when those rows are wrapped in "│  ...  │" inside a tool box.
 func isBoxBlankLine(line string) bool {
-	stripped := stripANSIBytes(line)
+	stripped := widgets.StripANSIBytes(line)
 	stripped = strings.TrimSpace(stripped)
 	stripped = strings.Trim(stripped, "│")
 	stripped = strings.TrimSpace(stripped)
 	return stripped == ""
-}
-
-// stripANSIBytes removes ANSI CSI escape sequences (ESC '[' ... final
-// byte) from s without pulling in the regexp package. Mirrors the
-// internal helper in package tui; the duplicated copy avoids exporting
-// it just for one caller.
-func stripANSIBytes(s string) string {
-	if !strings.Contains(s, "\x1b") {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	i := 0
-	for i < len(s) {
-		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
-			end := i + 2
-			for end < len(s) {
-				c := s[end]
-				end++
-				if c >= 0x40 && c <= 0x7e {
-					break
-				}
-			}
-			i = end
-			continue
-		}
-		b.WriteByte(s[i])
-		i++
-	}
-	return b.String()
 }
 
 func truncateLine(s string, n int) string {

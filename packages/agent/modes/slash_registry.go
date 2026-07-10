@@ -17,11 +17,15 @@ import (
 	"context"
 	"strings"
 
+	"terva.sh/terva/packages/agent/slash"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
-// slashSpec declares one built-in slash command.
+// slashSpec is one built-in slash command as this package dispatches
+// it: the shared metadata from packages/agent/slash (the neutral,
+// handler-free catalog every command surface consumes) joined with the
+// interactive handler bound at init.
 type slashSpec struct {
 	name    string   // canonical name, with leading slash
 	aliases []string // alternate spellings that dispatch identically
@@ -31,10 +35,8 @@ type slashSpec struct {
 	// the popup (and one section label in /help). Empty = ungrouped
 	// (used for /help itself, which leads the list without a divider).
 	group string
-	// hint, when set, describes the argument a command accepts. It is the
-	// text a non-TUI frontend (e.g. the ACP slash catalog) shows in the
-	// command's input field before anything is typed. Empty for commands
-	// that take no argument.
+	// hint, when set, describes the argument a command accepts. Empty for
+	// commands that take no argument.
 	hint string
 	// hidden commands dispatch but stay out of the popup and /help
 	// (internal verbs like /cd, driven by extensions).
@@ -47,222 +49,192 @@ type slashSpec struct {
 	run         func(i *Interactive, ctx context.Context, parts []string, raw string) (done bool)
 }
 
-// Display groups, in the order they appear in the popup and /help. The
-// names double as the divider/section labels the user sees, so they are
-// marked with i18n.M (extractor-visible, English value) and translated at
-// render time — never frozen at init.
-var (
-	groupSession = i18n.M("session")
-	groupContext = i18n.M("context & skills")
-	groupModel   = i18n.M("model & account")
-	groupSafety  = i18n.M("permissions & trust")
-	groupAgents  = i18n.M("agents & integrations")
-	groupSystem  = i18n.M("system")
-)
+// slashHandlers binds each catalog entry — by canonical name — to its
+// interactive handler. Metadata (descriptions, aliases, groups, hints,
+// flags, display order) lives in packages/agent/slash; adding a command
+// means one Spec there and one entry here. The two tables cannot
+// drift: TestSlashHandlersMatchCatalog fails on a spec without a
+// handler or a handler without a spec.
+var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts []string, raw string) (done bool){
+	"/help": (*Interactive).slashHelp,
 
-// slashRegistry is the table, in popup/help display order. Assigned
-// in init() rather than a var initializer: handler bodies may
-// (transitively) reference the registry — /help renders the catalog,
-// dispatch helpers look commands up — and a var initializer would
-// make that an initialization cycle.
+	"/new": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.startNewSession()
+		return false
+	},
+	"/sessions": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.sessionDialog.Rename = i.cfg.RenameSessionFile
+		i.sessionDialog.List = i.cfg.ListSessions
+		i.sessionDialog.Open(i.cfg.TervaHome, i.cfg.CWD)
+		return false
+	},
+	"/session": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
+		if len(parts) >= 2 {
+			action := parts[1]
+			arg := ""
+			if len(parts) >= 3 {
+				arg = strings.Join(parts[2:], " ")
+			}
+			i.doSessionOp(action, arg)
+			return false
+		}
+		i.openSessionOpsDialog()
+		return false
+	},
+	"/jump": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
+		i.openJumpDialog(parts[1:])
+		return false
+	},
+	"/compact": func(i *Interactive, ctx context.Context, _ []string, _ string) bool {
+		i.runCompact(ctx)
+		return false
+	},
+	"/clear": (*Interactive).slashClear,
+
+	"/study": (*Interactive).slashStudy,
+	"/btw": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
+		i.openBtwDialog(parts[1:])
+		return false
+	},
+	"/skill": (*Interactive).slashSkill,
+	"/skills": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.openSkillsDialog()
+		return false
+	},
+	"/context": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.slashContext()
+		return false
+	},
+	"/lore": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.slashLore()
+		return false
+	},
+
+	"/model": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
+		if len(parts) >= 2 {
+			i.applyModelSelection("", parts[1])
+			return false
+		}
+		var loggedIn []string
+		if i.cfg.LoggedInProviders != nil {
+			loggedIn = i.cfg.LoggedInProviders()
+		}
+		var favs []string
+		if i.cfg.FavoriteModels != nil {
+			favs = i.cfg.FavoriteModels()
+		}
+		i.modelDialog.Open(i.cfg.Model, loggedIn, favs)
+		return false
+	},
+	"/login": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.dialog.Open(i.cfg.TervaHome)
+		return false
+	},
+	"/logout": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
+		if len(parts) >= 2 {
+			// Explicit target: /logout anthropic | openai | all
+			i.doLogout(parts[1])
+			return false
+		}
+		// No arg: open the picker over whichever providers are
+		// currently logged in. If nothing's logged in, bail with
+		// a status line.
+		i.openLogoutDialog()
+		return false
+	},
+	"/usage": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.openUsageDialog()
+		return false
+	},
+
+	"/permissions": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.openPermissionsDialog()
+		return false
+	},
+	"/jail": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		if i.cfg.Sandbox == nil {
+			i.setStatusErr(i18n.T("sandbox not available in this build"))
+			return false
+		}
+		i.cfg.Sandbox.Lock()
+		i.setStatusOK("jailed to " + i.cfg.CWD + " (tools cannot touch paths outside this directory)")
+		return false
+	},
+	"/unjail": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		if i.cfg.Sandbox == nil {
+			i.setStatusErr(i18n.T("sandbox not available in this build"))
+			return false
+		}
+		i.cfg.Sandbox.Unlock()
+		i.setStatusOK("unjailed")
+		return false
+	},
+	"/trust":   (*Interactive).slashTrust,
+	"/untrust": (*Interactive).slashUntrust,
+
+	"/swarm": func(i *Interactive, ctx context.Context, parts []string, _ string) bool {
+		i.runSwarm(ctx, parts[1:])
+		return false
+	},
+	"/extensions": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.openExtensionsDialog()
+		return false
+	},
+	"/reload-ext": func(i *Interactive, ctx context.Context, _ []string, _ string) bool {
+		i.runReloadExt(ctx)
+		return false
+	},
+	"/mcp": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.openMCPDialog()
+		return false
+	},
+	"/connect": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
+		if len(parts) >= 2 {
+			i.doConnector(strings.Join(parts[1:], " "))
+			return false
+		}
+		i.openConnectDialog()
+		return false
+	},
+
+	"/settings": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.openSettingsDialog()
+		return false
+	},
+	"/paste": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.pasteClipboard()
+		return false
+	},
+	"/migrate": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.openMigrateDialog()
+		return false
+	},
+	"/exit": func(*Interactive, context.Context, []string, string) bool { return true },
+	"/cd":   (*Interactive).slashCD,
+}
+
+// slashRegistry is the dispatch table: the shared catalog joined with
+// slashHandlers, in the catalog's display order. Assigned in init()
+// rather than a var initializer: handler bodies may (transitively)
+// reference the registry — /help renders the catalog, dispatch helpers
+// look commands up — and a var initializer would make that an
+// initialization cycle.
 var slashRegistry []slashSpec
 
 func init() {
-	// Display order: /help leads ungrouped, then commands cluster into
-	// labelled groups (rendered as divider rows in the popup and section
-	// labels in /help), ordered roughly by how often a session reaches
-	// for them: conversation management first, context/capability next,
-	// model + account, safety, integrations, and system verbs last.
-	slashRegistry = []slashSpec{
-		{name: "/help", desc: i18n.M("show key bindings and commands"), run: (*Interactive).slashHelp},
-
-		{name: "/new", group: groupSession, desc: i18n.M("start a fresh session (the current one stays on disk)"), cancelsTurn: true,
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.startNewSession()
-				return false
-			}},
-		{name: "/sessions", group: groupSession, desc: i18n.M("resume a previous session for this directory"),
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.sessionDialog.Rename = i.cfg.RenameSessionFile
-				i.sessionDialog.List = i.cfg.ListSessions
-				i.sessionDialog.Open(i.cfg.TervaHome, i.cfg.CWD)
-				return false
-			}},
-		{name: "/session", group: groupSession, desc: i18n.M("export the current session to a .tervasession file, or import one"), hint: "export | import [path]",
-			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
-				if len(parts) >= 2 {
-					action := parts[1]
-					arg := ""
-					if len(parts) >= 3 {
-						arg = strings.Join(parts[2:], " ")
-					}
-					i.doSessionOp(action, arg)
-					return false
-				}
-				i.openSessionOpsDialog()
-				return false
-			}},
-		{name: "/jump", group: groupSession, desc: i18n.M("scroll the chat to a previous turn (or /jump <text>)"), hint: "text to jump to (optional)",
-			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
-				i.openJumpDialog(parts[1:])
-				return false
-			}},
-		{name: "/compact", group: groupSession, desc: i18n.M("summarize and replace the transcript to free up context"), cancelsTurn: true,
-			run: func(i *Interactive, ctx context.Context, _ []string, _ string) bool {
-				i.runCompact(ctx, false)
-				return false
-			}},
-		{name: "/clear", group: groupSession, desc: i18n.M("clear the chat transcript"), cancelsTurn: true,
-			run: (*Interactive).slashClear},
-
-		{name: "/study", group: groupContext, desc: "read every file in the cwd (or a passed file/dir) so the agent has full context", hint: "file or directory (optional)",
-			run: (*Interactive).slashStudy},
-		{name: "/btw", group: groupContext, desc: "side-chat that doesn't add to the main thread (saves tokens)",
-			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
-				i.openBtwDialog(parts[1:])
-				return false
-			}},
-		{name: "/skill", group: groupContext, desc: "prime your next request with a specific skill", hint: "name [request]",
-			run: (*Interactive).slashSkill},
-		{name: "/skills", group: groupContext, desc: "list discovered skills (SKILL.md files)",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.openSkillsDialog()
-				return false
-			}},
-		{name: "/context", group: groupContext, desc: "context breakdown (token sizes) + what extensions inject",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.slashContext()
-				return false
-			}},
-		{name: "/lore", group: groupContext, desc: "list this run's active lore (keyed-context) entries",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.slashLore()
-				return false
-			}},
-
-		{name: "/model", group: groupModel, desc: "pick a model (or /model <id>)", hint: "model id (optional)", cancelsTurn: true,
-			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
-				if len(parts) >= 2 {
-					i.applyModelSelection("", parts[1])
-					return false
-				}
-				var loggedIn []string
-				if i.cfg.LoggedInProviders != nil {
-					loggedIn = i.cfg.LoggedInProviders()
-				}
-				var favs []string
-				if i.cfg.FavoriteModels != nil {
-					favs = i.cfg.FavoriteModels()
-				}
-				i.modelDialog.Open(i.cfg.Model, loggedIn, favs)
-				return false
-			}},
-		{name: "/login", group: groupModel, desc: "log in via api key or subscription", cancelsTurn: true,
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.dialog.Open(i.cfg.TervaHome)
-				return false
-			}},
-		{name: "/logout", group: groupModel, desc: "clear a provider's credentials", hint: "provider (anthropic | openai | all)", cancelsTurn: true,
-			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
-				if len(parts) >= 2 {
-					// Explicit target: /logout anthropic | openai | all
-					i.doLogout(parts[1])
-					return false
-				}
-				// No arg: open the picker over whichever providers are
-				// currently logged in. If nothing's logged in, bail with
-				// a status line.
-				i.openLogoutDialog()
-				return false
-			}},
-		{name: "/usage", group: groupModel, desc: "subscription usage limits and reset windows",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.openUsageDialog()
-				return false
-			}},
-
-		{name: "/permissions", group: groupSafety, aliases: []string{"/perms"},
-			desc: "show the approval mode, permission rules, and session grants",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.openPermissionsDialog()
-				return false
-			}},
-		{name: "/jail", group: groupSafety, desc: "confine tools to the current directory",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				if i.cfg.Sandbox == nil {
-					i.setStatusErr(i18n.T("sandbox not available in this build"))
-					return false
-				}
-				i.cfg.Sandbox.Lock()
-				i.setStatusOK("jailed to " + i.cfg.CWD + " (tools cannot touch paths outside this directory)")
-				return false
-			}},
-		{name: "/unjail", group: groupSafety, desc: "allow tools to touch paths outside this directory",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				if i.cfg.Sandbox == nil {
-					i.setStatusErr(i18n.T("sandbox not available in this build"))
-					return false
-				}
-				i.cfg.Sandbox.Unlock()
-				i.setStatusOK("unjailed")
-				return false
-			}},
-		{name: "/trust", group: groupSafety, desc: "trust this directory so its project extensions/skills/context load (/trust parent for descendants too)",
-			hint: "parent (optional)", cancelsTurn: true,
-			run: (*Interactive).slashTrust},
-		{name: "/untrust", group: groupSafety, desc: "remove this directory from the trust list (its project content stops loading)",
-			cancelsTurn: true,
-			run:         (*Interactive).slashUntrust},
-
-		{name: "/swarm", group: groupAgents, desc: "supervise background agents that share this working directory",
-			run: func(i *Interactive, ctx context.Context, parts []string, _ string) bool {
-				i.runSwarm(ctx, parts[1:])
-				return false
-			}},
-		{name: "/extensions", group: groupAgents, aliases: []string{"/ext"}, desc: "list installed extensions; enable/disable globally or per-project",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.openExtensionsDialog()
-				return false
-			}},
-		{name: "/reload-ext", group: groupAgents, desc: "hot-reload all extensions (re-read manifests and respawn)", cancelsTurn: true,
-			run: func(i *Interactive, ctx context.Context, _ []string, _ string) bool {
-				i.runReloadExt(ctx)
-				return false
-			}},
-		{name: "/mcp", group: groupAgents, desc: "list MCP servers; enable/disable globally or per-project",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.openMCPDialog()
-				return false
-			}},
-		{name: "/connect", group: groupAgents, aliases: []string{"/telegram", "/tg"},
-			desc: "connect, disconnect, or show status of a chat bridge (compiled-in or connector extension)", hint: "connect [name] | disconnect | status",
-			run: func(i *Interactive, _ context.Context, parts []string, _ string) bool {
-				if len(parts) >= 2 {
-					i.doConnector(strings.Join(parts[1:], " "))
-					return false
-				}
-				i.openConnectDialog()
-				return false
-			}},
-
-		{name: "/settings", group: groupSystem, desc: "open settings",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.openSettingsDialog()
-				return false
-			}},
-		{name: "/paste", group: groupSystem, desc: "paste an image from the system clipboard into the prompt",
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.pasteClipboard()
-				return false
-			}},
-		{name: "/migrate", group: groupSystem, desc: "move your zot data dir to the terva location", cancelsTurn: true, // rename:keep
-			run: func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-				i.openMigrateDialog()
-				return false
-			}},
-		{name: "/exit", group: groupSystem, desc: "exit terva",
-			run: func(*Interactive, context.Context, []string, string) bool { return true }},
-		{name: "/cd", hidden: true, cancelsTurn: true, run: (*Interactive).slashCD},
+	specs := slash.Registry()
+	slashRegistry = make([]slashSpec, 0, len(specs))
+	for _, s := range specs {
+		slashRegistry = append(slashRegistry, slashSpec{
+			name:        s.Name,
+			aliases:     s.Aliases,
+			desc:        s.Desc,
+			group:       s.Group,
+			hint:        s.Hint,
+			hidden:      s.Hidden,
+			cancelsTurn: s.CancelsTurn,
+			run:         slashHandlers[s.Name],
+		})
 	}
 }
 
@@ -301,35 +273,6 @@ func builtinSlashCatalog() []slashCommand {
 		}
 		prevGroup = s.group
 		out = append(out, slashCommand{Name: s.name, Desc: i18n.T(s.desc)})
-	}
-	return out
-}
-
-// SlashCommandInfo is the frontend-agnostic view of a built-in slash
-// command: its canonical name, its one-line description, and an optional
-// argument hint. It carries no handler and no reference to *Interactive,
-// so a non-TUI frontend (the ACP run mode advertising a command catalog)
-// can consume the registry without dragging in the interactive struct.
-type SlashCommandInfo struct {
-	Name string // canonical name, with leading "/"
-	Desc string // one-line description
-	Hint string // argument hint, empty when the command takes no argument
-}
-
-// BuiltinSlashCommands returns the advertisable built-in slash commands in
-// registry (display) order: every non-hidden command, with its description
-// and argument hint. It is the exported, decoupled accessor that lets a
-// non-TUI frontend publish a slash-command catalog — the ACP
-// available_commands_update is built from a curated subset of this list.
-// Hidden internal verbs (e.g. /cd) are excluded, exactly as the
-// autocomplete catalog excludes them.
-func BuiltinSlashCommands() []SlashCommandInfo {
-	out := make([]SlashCommandInfo, 0, len(slashRegistry))
-	for _, s := range slashRegistry {
-		if s.hidden {
-			continue
-		}
-		out = append(out, SlashCommandInfo{Name: s.name, Desc: i18n.T(s.desc), Hint: s.hint})
 	}
 	return out
 }
@@ -373,17 +316,16 @@ func (i *Interactive) slashHelp(context.Context, []string, string) bool {
 }
 
 func (i *Interactive) slashClear(context.Context, []string, string) bool {
+	// The service owns the transcript: Clear wipes the live agent AND writes
+	// the durable empty checkpoint (so a resume starts fresh too). A still-busy
+	// session lands on the status line. With no workspace bound (embedder/test)
+	// there is no transcript to wipe — the local view still resets below.
 	if c := i.cfg.Carrier; c != nil {
-		// The service owns the transcript in carrier mode: Clear wipes the
-		// live agent AND writes the durable empty checkpoint (so a resume
-		// starts fresh too). A still-busy session lands on the status line.
 		if err := c.Clear(context.Background(), i.carrierSession()); err != nil {
 			i.setStatusErr(err.Error())
 			i.invalidate()
 			return false
 		}
-	} else if ag := i.turns.Agent(); ag != nil {
-		ag.SetMessages(nil)
 	}
 	i.resetLoreFired()
 	i.mu.Lock()
@@ -438,7 +380,11 @@ func (i *Interactive) slashStudy(ctx context.Context, parts []string, raw string
 // rebuild, sandbox re-rooting, and re-jail-if-jailed semantics.
 func (i *Interactive) slashCD(_ context.Context, parts []string, raw string) bool {
 	if i.cfg.ChangeCWD == nil {
-		i.setStatusErr(i18n.T("/cd unavailable: host did not wire ChangeCWD"))
+		// The default (ctrlproto) TUI pins each session to its working
+		// directory — sessions, trust, extensions, and the permission policy
+		// all resolve from it — so mid-session /cd isn't offered. Start terva
+		// in the target directory instead.
+		i.setStatusErr(i18n.T("/cd isn't available here — each session is pinned to its working directory; start terva in the target directory instead"))
 		return false
 	}
 	path := strings.TrimSpace(strings.TrimPrefix(raw, parts[0]))

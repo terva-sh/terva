@@ -6,6 +6,7 @@ import (
 
 	"github.com/mattn/go-runewidth"
 
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
@@ -78,7 +79,7 @@ func renderHelpBlock(th tui.Theme, width int) []string {
 	}
 
 	var out []string
-	out = append(out, frameHeader(th, i18n.T("terva help"), width), "")
+	out = append(out, dialogs.FrameHeader(th, i18n.T("terva help"), width), "")
 
 	// commands section. Group headers from the catalog become muted
 	// section labels with a blank row above, mirroring the divider rows
@@ -102,6 +103,6 @@ func renderHelpBlock(th tui.Theme, width int) []string {
 			th.FG256(th.Muted, i18n.T(k[1]))))
 	}
 
-	out = append(out, "", frameRule(th, width), "")
+	out = append(out, "", dialogs.FrameRule(th, width), "")
 	return out
 }

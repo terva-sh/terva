@@ -1,6 +1,9 @@
 package modes
 
-import "terva.sh/terva/packages/i18n"
+import (
+	"terva.sh/terva/packages/agent/modes/dialogs"
+	"terva.sh/terva/packages/i18n"
+)
 
 // Hooks the /extensions dialog to the host callbacks: open with the
 // current installed set, apply a global/project toggle via the injected
@@ -28,7 +31,7 @@ func (i *Interactive) openExtensionsDialog() {
 // whole flow runs on the UI goroutine: extension reload for a single
 // toggle is fast, and keeping it inline avoids racing the renderer on the
 // dialog's item slice.
-func (i *Interactive) applyExtensionToggle(act extensionsAction) {
+func (i *Interactive) applyExtensionToggle(act dialogs.ExtensionsAction) {
 	// A session extension is loaded by path via --ext for this run only; it
 	// lives outside the install roots, so there's no manifest or project
 	// config to flip. Explain that instead of failing with a "not found".

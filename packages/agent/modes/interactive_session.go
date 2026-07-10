@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
@@ -29,8 +30,11 @@ import (
 // the no-fallback marker right away — same rule as the CLI path.
 func (i *Interactive) openMigrateDialog() {
 	if i.cfg.Migration == nil || i.cfg.Migration.Plan == nil {
+		// The default (ctrlproto) TUI doesn't carry the interactive migrator for
+		// the pre-rename data directory — a one-time upgrade path that is now
+		// obsolete. Report it plainly rather than the cryptic host-wiring note.
 		i.mu.Lock()
-		i.statusErr = i18n.T("/migrate unavailable: host did not wire Migration")
+		i.statusErr = i18n.T("/migrate (the legacy data-directory migrator) isn't available in this TUI")
 		i.mu.Unlock()
 		i.invalidate()
 		return
@@ -56,20 +60,8 @@ func (i *Interactive) openMigrateDialog() {
 	i.invalidate()
 }
 
-// openBtwDialog opens the side-chat overlay with a frozen snapshot
-// of the current main session. The optional argument is auto-
-// submitted as the first question, so '/btw does X work?' fires the
-// model call immediately instead of just opening an empty dialog.
-func (i *Interactive) openBtwDialog(args []string) {
-	ag := i.turns.Agent()
-	if ag == nil {
-		i.setStatusErr(i18n.T("not logged in. type /login first."))
-		return
-	}
-	seed := strings.TrimSpace(strings.Join(args, " "))
-	i.btwDialog.Open(i.cfg.Theme, ag, ag.System, i.cfg.Model, i.cfg.CWD, seed, i.invalidate)
-	i.invalidate()
-}
+// openBtwDialog lives in interactive_btw.go — it opens the side-chat overlay
+// against a snapshot frozen by the daemon's sidechat surface.
 
 // openSkillsDialog opens the skill inspector. Opening it reloads: the
 // picker reflects edits/adds made during the session, AND the live skill
@@ -261,11 +253,11 @@ func (i *Interactive) startNewSession() {
 	}
 	i.resetLoreFired()
 	i.mu.Lock()
-	// The callback reset the agent's transcript and cost; mirror that in
-	// the view and the status-bar meters.
-	if ag := i.turns.Agent(); ag != nil {
-		i.view.Messages = ag.Messages()
-	}
+	// The callback reset the session's transcript and cost; mirror that in
+	// the view and the status-bar meters. The pump copy is the source of
+	// truth — the fresh session's snapshot refills it — and buildChat reads
+	// it again on the next frame anyway.
+	i.view.Messages = i.carrierTranscriptLocked()
 	i.toolCalls = map[string]*tui.ToolCallView{}
 	i.toolOrder = nil
 	i.cumUsage = provider.Usage{}
@@ -340,29 +332,13 @@ func (i *Interactive) applySessionSelection(path string) {
 		i.prevChatCols = 0
 		i.extNotes = nil
 		i.view.InvalidateRenderCache()
-		if ag := i.turns.Agent(); ag != nil {
-			i.view.Messages = ag.Messages()
-			i.cumUsage = ag.Cost()
-			// The loaded session's historical cost is the new burn-rate
-			// base; only spend from this instant counts toward $/hr.
-			// The edits tally starts over with the swap too.
-			i.costBase = i.cumUsage.CostUSD
-			i.costBaseAt = time.Now()
-			i.editsAdded, i.editsRemoved = 0, 0
-			if last := ag.LastTurnUsage(); last.InputTokens > 0 || last.CacheReadTokens > 0 || last.CacheWriteTokens > 0 {
-				i.lastCtxInput = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
-			} else {
-				i.lastCtxInput = 0
-			}
-			// Snap to the tail again — the swap brought in a fresh
-			// transcript whose markdown / chroma cost we don't want
-			// blocking the redraw.
-			if len(i.view.Messages) > initialResumeTailLimit {
-				i.view.TailLimit = initialResumeTailLimit
-			} else {
-				i.view.TailLimit = 0
-			}
-		}
+		// The transcript comes from the pump: LoadSession re-binds the
+		// carrier, which drops the old messages and arms the tail cap for
+		// the new binding's first snapshot. Nothing to mirror here.
+		i.view.Messages = i.carrierTranscriptLocked()
+		// The cost and context meters are seeded by the new binding's first
+		// snapshot (seedSessionMeters); the edits tally starts over here.
+		i.editsAdded, i.editsRemoved = 0, 0
 		i.invalidate()
 	}()
 }
@@ -372,11 +348,11 @@ func (i *Interactive) applySessionSelection(path string) {
 // a clear status message when the precondition isn't met (empty
 // transcript on fork; no parent/siblings on tree).
 func (i *Interactive) openSessionOpsDialog() {
-	items := []sessionOpsItem{
-		{label: "export", action: "export", hint: "write the current session to a .tervasession file"},
-		{label: "import", action: "import", hint: "load a .tervasession file into this directory"},
-		{label: "fork", action: "fork", hint: "branch from a past user message into a new session"},
-		{label: "tree", action: "tree", hint: "switch between branches in this directory"},
+	items := []dialogs.SessionOpsItem{
+		{Label: "export", Action: "export", Hint: "write the current session to a .tervasession file"},
+		{Label: "import", Action: "import", Hint: "load a .tervasession file into this directory"},
+		{Label: "fork", Action: "fork", Hint: "branch from a past user message into a new session"},
+		{Label: "tree", Action: "tree", Hint: "switch between branches in this directory"},
 	}
 	i.sessionOpsDialog.Open(items)
 	i.invalidate()
@@ -577,10 +553,7 @@ func (i *Interactive) doSessionFork() {
 		i.invalidate()
 		return
 	}
-	msgs := []provider.Message{}
-	if ag := i.turns.Agent(); ag != nil {
-		msgs = ag.Messages()
-	}
+	msgs := i.carrierTranscript()
 	if len(msgs) == 0 {
 		i.mu.Lock()
 		i.statusErr = i18n.T("fork: transcript is empty; nothing to fork from")

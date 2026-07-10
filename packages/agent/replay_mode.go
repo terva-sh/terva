@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/replay"
 	"terva.sh/terva/packages/tui"
@@ -24,7 +26,7 @@ import (
 // against a replay carrier. Playback autostarts when the TUI subscribes; typed
 // input is inert (the carrier has no agent, so the composer's submit gate
 // blocks it, and Prompt/Queue reject with CodeUnsupported anyway).
-func runReplayMode(ctx context.Context, args Args, version string) error {
+func runReplayMode(ctx context.Context, args build.Args, version string) error {
 	path := args.ReplayPath
 	if path == "" {
 		return fmt.Errorf("usage: terva replay <session.jsonl>")
@@ -46,8 +48,8 @@ func runReplayMode(ctx context.Context, args Args, version string) error {
 		return err
 	}
 
-	initialCfg, _ := LoadConfig()
-	theme, _, themeErr := tui.DetectThemeWithCustom(TervaHome(), initialCfg.Theme, 80*time.Millisecond)
+	initialCfg, _ := config.LoadConfig()
+	theme, _, themeErr := tui.DetectThemeWithCustom(config.TervaHome(), initialCfg.Theme, 80*time.Millisecond)
 	if themeErr != nil {
 		fmt.Fprintln(os.Stderr, "theme load:", themeErr)
 	}
@@ -64,9 +66,9 @@ func runReplayMode(ctx context.Context, args Args, version string) error {
 		Model:               info.Model,
 		Provider:            info.Provider,
 		CWD:                 cwd,
-		TervaHome:           TervaHome(),
+		TervaHome:           config.TervaHome(),
 		Version:             version,
-		Agent:               nil, // read-only replay: no live agent (render is wire-only)
+		Ready:               false, // read-only replay: no prompting, the transport replaces the turn loop
 		Carrier:             carrier,
 		CarrierSession:      info.ID,
 		// Session/control closures are intentionally omitted: they are all

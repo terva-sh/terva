@@ -7,57 +7,25 @@ import (
 	"context"
 	"strings"
 
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/tui"
 )
 
-// Submit feeds text through the agent loop as if the user had typed it.
+// Submit feeds text through the agent loop as if the user had typed it —
+// as a PROMPT, never as a command. A leading "!" is prose here: the shell
+// escape belongs to the editor's key path alone (see shellEscapeCommand),
+// because only there is the text known to be a human keystroke. This method
+// implements extdriver.HostHooks.Submit, so an extension reaches it; the
+// same reasoning SubmitSlash records for slash commands applies. The
+// driver invokes host hooks from its own goroutines, and turn start
+// mutates main-loop-only render state, so the submit is marshalled —
+// see SubmitOrQueue for the full story.
 func (i *Interactive) Submit(text string) {
-	if cmd, ok := shellEscapeCommand(text); ok {
-		i.startShellEscape(i.runCtx, cmd)
-		return
-	}
-	i.startTurn(i.runCtx, text)
-}
-
-// ApplyChangedCWD is called by the host after a successful /cd hook.
-// The host has already rebuilt the agent and opened a fresh session
-// in the new cwd; this method swaps the fresh agent into the running
-// TUI, updates the displayed cwd, clears the transcript display
-// caches, and points the file picker at the new directory.
-//
-// The fresh agent's transcript is empty (new session) so the chat
-// view starts blank, matching what relaunching `terva --cwd <path>`
-// would show. Cost meters reset.
-func (i *Interactive) ApplyChangedCWD(ag *core.Agent, provider, model, cwd string) {
-	i.turns.SetAgent(ag)
-	i.mu.Lock()
-	i.cfg.CWD = cwd
-	// Re-report the working directory to the terminal so "new tab / split
-	// here" tracks the /cd change (OSC 7).
-	if i.cfg.Terminal != nil {
-		if seq := tui.ReportCWD(cwd); seq != "" {
-			_, _ = i.cfg.Terminal.Write([]byte(seq))
-		}
-	}
-	i.cfg.Provider = provider
-	i.cfg.Model = model
-	i.toolCalls = map[string]*tui.ToolCallView{}
-	i.toolOrder = nil
-	i.turns.ResetGates()
-	i.helpBlock = nil
-	i.parkedTurn = 0
-	i.statusErr = ""
-	i.mu.Unlock()
-	i.fileSuggest.Reset()
-	i.fileSuggest.SetCWD(cwd)
-	// New working directory, possibly a different repo (or none):
-	// refresh the status bar's git segment and scripts right away.
-	i.pokeGitProber()
-	i.pokeStatusScripts()
-	i.invalidate()
+	i.runOnMain(func() {
+		i.startTurn(i.runCtx, text)
+	})
 }
 
 // SubmitSlash runs text as a slash command in the TUI as if the user
@@ -85,51 +53,56 @@ func (i *Interactive) SubmitSlash(text string) {
 
 // SubmitOrQueue runs text immediately if the agent is idle, or
 // appends it to the pending queue if a turn is already in flight.
-// Used by the telegram bridge (and by the editor submit path) so
-// both input sources share the same "queue behind an active turn"
-// semantics. Images are ignored for now — only the text prompt is
-// forwarded — because the queued-prompt path is text-only; a
-// follow-up can expand the queue entry to carry images.
+// Used by the chat bridge and by the auto-swarm recap injector so both
+// share the editor's "queue behind an active turn" semantics. Images are
+// ignored for now — only the text prompt is forwarded — because the
+// queued-prompt path is text-only; a follow-up can expand the queue entry
+// to carry images.
+//
+// text is always a PROMPT. A leading "!" is prose, never a shell escape:
+// every caller here is a machine (a paired chat DM, a sub-agent's recap),
+// and none of them may run a command on the host. Until this guarantee was
+// structural, a DM reading "!rm -rf ~" executed immediately — the escape
+// was decided by sniffing a string prefix at a choke point every caller
+// shared, so each new caller silently inherited it.
+//
+// Every caller is also on a background goroutine (the bridge's receive
+// loop, the swarm finalizer's Wait() watcher), while turn start mutates
+// main-loop-only render state — resetTurnUI clears view.TailLimit, the
+// scroll offsets, and the auto-follow baselines, none of which the
+// render path reads under i.mu. So the submit is marshalled through
+// runOnMain, the same way the shell-escape rule lives here: enforce the
+// invariant at the choke point and every future machine caller inherits
+// it instead of re-learning it from the race detector.
 func (i *Interactive) SubmitOrQueue(text string, images []provider.ImageBlock) {
-	if cmd, ok := shellEscapeCommand(text); ok {
-		i.startShellEscape(i.runCtx, cmd)
-		return
-	}
-	if !i.turns.HasAgent() {
-		i.setStatusErr(i18n.T("not logged in. type /login first."))
-		i.invalidate()
-		return
-	}
-	// startTurnWithImages claims-or-queues atomically inside the turn
-	// engine, so there is no busy pre-check here to race against the
-	// turn ending. Images still only reach immediately-started turns;
-	// queued prompts are text-only.
-	i.startTurnWithImages(i.runCtx, text, images)
+	i.runOnMain(func() {
+		if !i.ready() {
+			i.setStatusErr(i18n.T("not logged in. type /login first."))
+			i.invalidate()
+			return
+		}
+		// startTurnWithImages claims-or-queues atomically inside the turn
+		// engine, so there is no busy pre-check here to race against the
+		// turn ending. Images still only reach immediately-started turns;
+		// queued prompts are text-only.
+		i.startTurnWithImages(i.runCtx, text, images)
+	})
 }
 
-// CancelTurn aborts the active turn if one is running. Used by the
-// telegram bridge when the paired user sends /stop.
 // ChangelogVersion returns the version string of the changelog
 // currently shown (or last shown). Used by the dismiss callback
 // to store the correct version for dev builds.
 func (i *Interactive) ChangelogVersion() string {
-	if i.changelogDialog != nil {
-		return i.changelogDialog.version
-	}
-	return ""
+	return i.changelogDialog.Version()
 }
 
+// CancelTurn aborts the active turn if one is running. Used by the
+// telegram bridge when the paired user sends /stop.
 func (i *Interactive) CancelTurn() {
 	if i.turns.cancelActive() {
 		i.confirmDialog.CancelAll("turn cancelled")
 		i.questionDialog.CancelAll()
 	}
-}
-
-// Agent returns the current agent, if any. Used by cli.go to flush the
-// final transcript to the session file.
-func (i *Interactive) Agent() *core.Agent {
-	return i.turns.Agent()
 }
 
 // Confirm implements core.Confirmer. The agent goroutine calls
@@ -142,10 +115,10 @@ func (i *Interactive) Agent() *core.Agent {
 // deadlock.
 func (i *Interactive) Confirm(toolName string, preview string) core.ConfirmDecision {
 	resp := make(chan core.ConfirmDecision, 1)
-	i.confirmDialog.Enqueue(&confirmRequest{
-		toolName: toolName,
-		preview:  preview,
-		resp:     resp,
+	i.confirmDialog.Enqueue(&dialogs.ConfirmRequest{
+		ToolName: toolName,
+		Preview:  preview,
+		Resp:     resp,
 	})
 	i.invalidate()
 	return <-resp
@@ -158,11 +131,11 @@ func (i *Interactive) Confirm(toolName string, preview string) core.ConfirmDecis
 // cancellation is honored so a closing session doesn't deadlock the tool.
 func (i *Interactive) Ask(ctx context.Context, q core.UserQuestion) (core.UserAnswer, error) {
 	resp := make(chan core.UserAnswer, 1)
-	i.questionDialog.Enqueue(&questionRequest{
-		question:    q.Question,
-		options:     q.Options,
-		allowCustom: q.AllowCustom,
-		resp:        resp,
+	i.questionDialog.Enqueue(&dialogs.QuestionRequest{
+		Question:    q.Question,
+		Options:     q.Options,
+		AllowCustom: q.AllowCustom,
+		Resp:        resp,
 	})
 	i.invalidate()
 	select {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"strconv"
 
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -77,18 +78,18 @@ func (i *Interactive) openSettingsDialog() {
 	recursiveFiles := i.cfg.RecursiveFileSuggest != nil && *i.cfg.RecursiveFileSuggest
 	respectGitignore := i.cfg.RespectGitignore == nil || *i.cfg.RespectGitignore
 
-	reasoningOptions := []settingsOption{
-		{value: "", label: i18n.T("off"), desc: i18n.T("no reasoning")},
-		{value: "minimum", label: i18n.T("minimum"), desc: i18n.T("very brief (~1k tokens)")},
-		{value: "low", label: i18n.T("low"), desc: i18n.T("light (~2k tokens)")},
-		{value: "medium", label: i18n.T("medium"), desc: i18n.T("moderate (~8k tokens)")},
-		{value: "high", label: i18n.T("high"), desc: i18n.T("deep (~16k tokens)")},
-		{value: "maximum", label: i18n.T("maximum"), desc: i18n.T("highest (~32k tokens)")},
+	reasoningOptions := []dialogs.SettingsOption{
+		{Value: "", Label: i18n.T("off"), Desc: i18n.T("no reasoning")},
+		{Value: "minimum", Label: i18n.T("minimum"), Desc: i18n.T("very brief (~1k tokens)")},
+		{Value: "low", Label: i18n.T("low"), Desc: i18n.T("light (~2k tokens)")},
+		{Value: "medium", Label: i18n.T("medium"), Desc: i18n.T("moderate (~8k tokens)")},
+		{Value: "high", Label: i18n.T("high"), Desc: i18n.T("deep (~16k tokens)")},
+		{Value: "maximum", Label: i18n.T("maximum"), Desc: i18n.T("highest (~32k tokens)")},
 	}
 	reasoning := provider.NormalizeReasoning(i.cfg.Reasoning)
 	reasoningChoice := 0
 	for idx, opt := range reasoningOptions {
-		if opt.value == reasoning {
+		if opt.Value == reasoning {
 			reasoningChoice = idx
 			break
 		}
@@ -110,14 +111,14 @@ func (i *Interactive) openSettingsDialog() {
 		}
 		i.applyThemeNow("auto")
 	}
-	themeOptions := []settingsOption{}
+	themeOptions := []dialogs.SettingsOption{}
 	themeChoice := 0
 	availableThemes := tui.AvailableThemes(i.cfg.TervaHome)
 	if i.cfg.ExtensionThemes != nil {
 		availableThemes = append(availableThemes, i.cfg.ExtensionThemes()...)
 	}
 	for idx, opt := range availableThemes {
-		themeOptions = append(themeOptions, settingsOption{value: opt.Value, label: opt.Label, desc: opt.Description})
+		themeOptions = append(themeOptions, dialogs.SettingsOption{Value: opt.Value, Label: opt.Label, Desc: opt.Description})
 		if opt.Value == themeName {
 			themeChoice = idx
 		}
@@ -125,49 +126,49 @@ func (i *Interactive) openSettingsDialog() {
 
 	approvalItem, hasApproval := i.approvalSettingItem()
 
-	items := []settingsItem{
+	items := []dialogs.SettingsItem{
 		{
-			key:      "inline_images_enabled",
-			label:    i18n.T("render images when supported"),
-			desc:     i18n.T("draw screenshots inline instead of showing a text placeholder"),
-			value:    imgEnabled,
-			disabled: imgDisabled,
-			hint:     imgHint,
+			Key:      "inline_images_enabled",
+			Label:    i18n.T("render images when supported"),
+			Desc:     i18n.T("draw screenshots inline instead of showing a text placeholder"),
+			Value:    imgEnabled,
+			Disabled: imgDisabled,
+			Hint:     imgHint,
 		},
 		{
-			key:      "auto_swarm_enabled",
-			label:    i18n.T("auto-swarm"),
-			desc:     i18n.T("let the agent spawn background sub-agents in parallel via the swarm_spawn tool"),
-			value:    autoSwarm,
-			disabled: autoSwarmDisabled,
-			hint:     autoSwarmHint,
+			Key:      "auto_swarm_enabled",
+			Label:    i18n.T("auto-swarm"),
+			Desc:     i18n.T("let the agent spawn background sub-agents in parallel via the swarm_spawn tool"),
+			Value:    autoSwarm,
+			Disabled: autoSwarmDisabled,
+			Hint:     autoSwarmHint,
 		},
 		{
-			key:   "recursive_file_suggest",
-			label: i18n.T("recursive @-file search"),
-			desc:  i18n.T("fuzzy-search the whole project tree when picking files with @ instead of browsing one directory at a time"),
-			value: recursiveFiles,
+			Key:   "recursive_file_suggest",
+			Label: i18n.T("recursive @-file search"),
+			Desc:  i18n.T("fuzzy-search the whole project tree when picking files with @ instead of browsing one directory at a time"),
+			Value: recursiveFiles,
 		},
 		{
-			key:   "respect_gitignore",
-			label: i18n.T("hide gitignored files in @-picker"),
-			desc:  i18n.T("skip files and directories matched by the project's root .gitignore (and .git) when picking files with @"),
-			value: respectGitignore,
+			Key:   "respect_gitignore",
+			Label: i18n.T("hide gitignored files in @-picker"),
+			Desc:  i18n.T("skip files and directories matched by the project's root .gitignore (and .git) when picking files with @"),
+			Value: respectGitignore,
 		},
 		{
-			key:     "reasoning",
-			label:   i18n.T("thinking level"),
-			desc:    i18n.T("reasoning depth for thinking-capable models"),
-			options: reasoningOptions,
-			choice:  reasoningChoice,
-			hint:    reasoningHint,
+			Key:     "reasoning",
+			Label:   i18n.T("thinking level"),
+			Desc:    i18n.T("reasoning depth for thinking-capable models"),
+			Options: reasoningOptions,
+			Choice:  reasoningChoice,
+			Hint:    reasoningHint,
 		},
 		{
-			key:     "theme",
-			label:   i18n.T("color theme"),
-			desc:    i18n.T("choose a theme from $TERVA_HOME/themes or a loaded extension"),
-			options: themeOptions,
-			choice:  themeChoice,
+			Key:     "theme",
+			Label:   i18n.T("color theme"),
+			Desc:    i18n.T("choose a theme from $TERVA_HOME/themes or a loaded extension"),
+			Options: themeOptions,
+			Choice:  themeChoice,
 		},
 	}
 	if hasApproval {
@@ -194,151 +195,83 @@ func (i *Interactive) refreshPermissionsDialog() {
 	i.permissionsDialog.Refresh(info, grants)
 }
 
-// buildPermissionsView formats the gate's mode and rules into
-// theme-colored static lines (info) and returns this session's "always
-// allow" grants as a selectable list. Reads everything from the live
-// gate so it always reflects the current state.
-func (i *Interactive) buildPermissionsView() (info []string, grants []permGrant) {
+// buildPermissionsView formats the daemon-side gate's mode and rules into
+// theme-colored static lines (info) and returns this session's "always allow"
+// grants as a selectable list. Reads the permissions surface, so it always
+// reflects the current state.
+func (i *Interactive) buildPermissionsView() (info []string, grants []dialogs.PermGrant) {
 	th := i.cfg.Theme
-	// ctrlproto mode: the gate lives daemon-side; read the permissions
-	// surface and feed the same renderer shapes.
-	if c := i.cfg.Carrier; c != nil {
-		sf, err := c.Surface(context.Background(), i.carrierSession(), "permissions")
-		if err != nil || sf.Permissions == nil {
-			msg := i18n.T("permissions surface unavailable")
-			if err != nil {
-				msg = err.Error()
-			}
-			return []string{th.FG256(th.Muted, msg)}, nil
+	if i.cfg.Carrier == nil {
+		// No workspace bound (an embedder/test). Degrade — never reach for a
+		// local gate: the daemon owns permissions.
+		return []string{th.FG256(th.Muted, i18n.T("permissions surface unavailable"))}, nil
+	}
+	sf, err := i.cfg.Carrier.Surface(context.Background(), i.carrierSession(), "permissions")
+	if err != nil || sf.Permissions == nil {
+		msg := i18n.T("permissions surface unavailable")
+		if err != nil {
+			msg = err.Error()
 		}
-		return renderPermissionsWireView(th, *sf.Permissions)
+		return []string{th.FG256(th.Muted, msg)}, nil
 	}
-	gate := i.cfg.ConfirmGate
-	if gate == nil {
-		return []string{th.FG256(th.Muted, i18n.T("no permission gate (yolo): every tool runs without asking."))}, nil
-	}
-
-	var out []string
-	out = append(out, th.FG256(th.Accent, tui.Bold(i18n.T("approval mode")))+"  "+string(gate.Mode()))
-	out = append(out, th.FG256(th.Muted, "  "+i18n.T("change it in /settings; flags --approval / --no-yolo set the startup default.")))
-	out = append(out, "")
-
-	decColor := func(d core.RuleDecision) string {
-		switch d {
-		case core.RuleAllow:
-			return th.FG256(th.Accent, string(d))
-		case core.RuleDeny:
-			return th.FG256(th.Error, string(d))
-		default:
-			return th.FG256(th.Warning, string(d))
-		}
-	}
-
-	rules := gate.Rules()
-	if len(rules) == 0 {
-		out = append(out, th.FG256(th.Muted, i18n.T("no permission rules in effect.")))
-	} else {
-		out = append(out, th.FG256(th.Accent, tui.Bold(i18n.T("rules")))+th.FG256(th.Muted, "  "+i18n.T("(first match wins; user → project → extension)")))
-		lastSrc := ""
-		for _, r := range rules {
-			if r.Source != lastSrc {
-				out = append(out, th.FG256(th.Muted, "  ["+r.Source+"]"))
-				lastSrc = r.Source
-			}
-			line := "    " + decColor(r.Decision) + "  " + r.Tool
-			if r.Args != nil {
-				line += th.FG256(th.Muted, "  args~/"+r.Args.String()+"/")
-			}
-			if r.Reason != "" {
-				line += th.FG256(th.Muted, "  — "+r.Reason)
-			}
-			out = append(out, line)
-		}
-	}
-	out = append(out, "")
-
-	out = append(out, th.FG256(th.Accent, tui.Bold(i18n.T("this session"))))
-	allowAll, tools := gate.Grants()
-	if allowAll {
-		grants = append(grants, permGrant{allowAll: true})
-	}
-	for _, t := range tools {
-		grants = append(grants, permGrant{tool: t})
-	}
-	if len(grants) == 0 {
-		out = append(out, "  "+th.FG256(th.Muted, i18n.T("no session grants yet.")))
-	}
-	return out, grants
+	return renderPermissionsWireView(th, *sf.Permissions)
 }
 
-// approvalModeLabel returns the live approval mode for the status bar,
-// or "" when there's no gate (so the bar falls back to its legacy
-// NoYolo tag). "yolo" renders no badge.
+// approvalModeLabel returns the live approval mode for the status bar. The gate
+// lives daemon-side; refreshCarrierApprovalMode keeps this cache fed from the
+// settings surface.
 func (i *Interactive) approvalModeLabel() string {
-	if i.cfg.Carrier != nil {
-		i.mu.Lock()
-		defer i.mu.Unlock()
-		return i.carrierApprovalMode
-	}
-	if i.cfg.ConfirmGate == nil {
-		return ""
-	}
-	return string(i.cfg.ConfirmGate.Mode())
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.carrierApprovalMode
 }
 
-// approvalSettingItem builds the /settings approval-mode picker from
-// the live gate, or reports false when live switching isn't wired
-// (no gate or no rebuild callback — embedders/tests). The choice is
-// read from the gate so reopening /settings always reflects the
+// approvalSettingItem builds the /settings approval-mode picker from the
+// daemon-side gate, or reports false when the settings surface can't be read.
+// The choice comes off the surface so reopening /settings always reflects the
 // current mode.
-func (i *Interactive) approvalSettingItem() (settingsItem, bool) {
-	if i.cfg.Carrier == nil && (i.cfg.ConfirmGate == nil || i.cfg.SetApprovalMode == nil) {
-		return settingsItem{}, false
+func (i *Interactive) approvalSettingItem() (dialogs.SettingsItem, bool) {
+	if i.cfg.Carrier == nil {
+		return dialogs.SettingsItem{}, false // no workspace bound: no picker
 	}
-	opts := []settingsOption{
-		{value: string(core.ApprovalPlan), label: i18n.T("plan"), desc: i18n.T("read-only tools only; mutating tools are withheld")},
-		{value: string(core.ApprovalAsk), label: i18n.T("ask"), desc: i18n.T("confirm every tool call")},
-		{value: string(core.ApprovalAutoEdit), label: i18n.T("auto-edit"), desc: i18n.T("run reads + file edits; confirm everything else")},
-		{value: string(core.ApprovalWorkspace), label: i18n.T("workspace"), desc: i18n.T("run built-in tools + read-only tools; confirm side-effecting extension/MCP tools")},
-		{value: string(core.ApprovalYolo), label: i18n.T("yolo"), desc: i18n.T("run every tool without asking")},
+	opts := []dialogs.SettingsOption{
+		{Value: string(core.ApprovalPlan), Label: i18n.T("plan"), Desc: i18n.T("read-only tools only; mutating tools are withheld")},
+		{Value: string(core.ApprovalAsk), Label: i18n.T("ask"), Desc: i18n.T("confirm every tool call")},
+		{Value: string(core.ApprovalAutoEdit), Label: i18n.T("auto-edit"), Desc: i18n.T("run reads + file edits; confirm everything else")},
+		{Value: string(core.ApprovalWorkspace), Label: i18n.T("workspace"), Desc: i18n.T("run built-in tools + read-only tools; confirm side-effecting extension/MCP tools")},
+		{Value: string(core.ApprovalYolo), Label: i18n.T("yolo"), Desc: i18n.T("run every tool without asking")},
+	}
+	sf, err := i.cfg.Carrier.Surface(context.Background(), i.carrierSession(), "settings")
+	if err != nil || sf.Settings == nil {
+		return dialogs.SettingsItem{}, false
 	}
 	cur := ""
-	if i.cfg.Carrier != nil {
-		// ctrlproto mode: the gate lives daemon-side; the settings surface
-		// carries the live per-session mode.
-		sf, err := i.cfg.Carrier.Surface(context.Background(), i.carrierSession(), "settings")
-		if err != nil || sf.Settings == nil {
-			return settingsItem{}, false
+	for _, it := range sf.Settings.Items {
+		if it.Key == "approval" {
+			cur = it.Value
+			break
 		}
-		for _, it := range sf.Settings.Items {
-			if it.Key == "approval" {
-				cur = it.Value
-				break
-			}
-		}
-		if cur == "" {
-			return settingsItem{}, false
-		}
-	} else {
-		cur = string(i.cfg.ConfirmGate.Mode())
+	}
+	if cur == "" {
+		return dialogs.SettingsItem{}, false
 	}
 	choice := 0
 	for idx, o := range opts {
-		if o.value == cur {
+		if o.Value == cur {
 			choice = idx
 			break
 		}
 	}
-	return settingsItem{
-		key:     "approval_mode",
-		label:   i18n.T("approval mode"),
-		desc:    i18n.T("how much the agent may do without asking (see /permissions)"),
-		options: opts,
-		choice:  choice,
+	return dialogs.SettingsItem{
+		Key:     "approval_mode",
+		Label:   i18n.T("approval mode"),
+		Desc:    i18n.T("how much the agent may do without asking (see /permissions)"),
+		Options: opts,
+		Choice:  choice,
 	}, true
 }
 
-func (i *Interactive) applySettingChange(act settingsAction) {
+func (i *Interactive) applySettingChange(act dialogs.SettingsAction) {
 	switch act.Key {
 	case "reasoning":
 		i.applyReasoningSetting(act.StringValue)
@@ -353,45 +286,28 @@ func (i *Interactive) applySettingChange(act settingsAction) {
 	}
 }
 
-// applyApprovalModeSetting switches the approval mode for THIS SESSION:
-// the cli callback swaps enforcement on the gate and returns the tool
-// registry rebuilt for the new mode (plan withholds mutating tools),
-// which we install on the running agent. Deliberately NOT persisted —
-// the approval mode is a security posture like /jail, not a preference
-// like theme. The persistent default comes only from an explicit
-// `approval` key in config or the --approval flag, so the picker can
-// never silently pin a mode (least of all the current default) into
+// applyApprovalModeSetting switches the approval mode for THIS SESSION: the
+// settings surface flips the daemon-side gate live and rebuilds the session's
+// tool set in the new mode, so plan withholds mutating tools from the model's
+// view. Deliberately NOT persisted — the approval mode is a security posture
+// like /jail, not a preference like theme. The persistent default comes only
+// from an explicit `approval` key in config or the --approval flag, so the
+// picker can never silently pin a mode (least of all the current default) into
 // config and mask a future default change.
 func (i *Interactive) applyApprovalModeSetting(value string) {
 	defer i.invalidate()
-	mode, err := core.ParseApprovalMode(value)
-	if err != nil {
+	if i.cfg.Carrier == nil {
+		return // no workspace bound: nothing to switch
+	}
+	if _, err := core.ParseApprovalMode(value); err != nil {
 		return
 	}
-	// ctrlproto mode: the settings surface flips the daemon-side gate live
-	// (per-session, not persisted — same posture semantics) and rebuilds the
-	// session's tool set in the new mode, so plan withholds mutating tools
-	// from the model's view exactly like the legacy callback below.
-	if c := i.cfg.Carrier; c != nil {
-		if aerr := c.SurfaceAction(context.Background(), i.carrierSession(), "settings", "set",
-			map[string]string{"key": "approval", "value": value}); aerr != nil {
-			i.setStatusErr(aerr.Error())
-			return
-		}
-		i.mu.Lock()
-		i.statusOK = i18n.T("approval mode %s (this session)", value)
-		i.statusErr = ""
-		i.mu.Unlock()
+	if aerr := i.cfg.Carrier.SurfaceAction(context.Background(), i.carrierSession(), "settings", "set",
+		map[string]string{"key": "approval", "value": value}); aerr != nil {
+		i.setStatusErr(aerr.Error())
 		return
 	}
-	if i.cfg.SetApprovalMode == nil {
-		return
-	}
-	reg := i.cfg.SetApprovalMode(mode)
 	i.mu.Lock()
-	if ag := i.turns.Agent(); ag != nil && reg != nil {
-		ag.SetTools(reg)
-	}
 	i.statusOK = i18n.T("approval mode %s (this session)", value)
 	i.statusErr = ""
 	i.mu.Unlock()
@@ -432,40 +348,22 @@ func (i *Interactive) applySettingToggle(key string, value bool) {
 	case "auto_swarm_enabled":
 		val := value
 		i.cfg.AutoSwarmEnabled = &val
-		// Carrier path: the daemon owns persistence AND the live apply (it
-		// rebuilds every session's tool set + system prompt); the local
-		// pointer above just keeps this dialog's checkbox current.
-		if c := i.cfg.Carrier; c != nil {
-			if err := c.SurfaceAction(context.Background(), i.carrierSession(), "settings", "set",
-				map[string]string{"key": "auto_swarm", "value": strconv.FormatBool(value)}); err != nil {
-				i.mu.Lock()
-				i.statusErr = i18n.T("settings: %s", err)
-				i.mu.Unlock()
-				return
-			}
+		// The daemon owns persistence AND the live apply: settingsAction
+		// re-derives every session's tool set and system prompt from the new
+		// config (rebuildTools). The local pointer above just keeps this
+		// dialog's checkbox current. The TUI used to patch the running
+		// agent's registry and System string itself, in parallel; that code
+		// was unreachable behind this same carrier check.
+		if i.cfg.Carrier == nil {
+			return // no workspace bound: nothing to toggle
+		}
+		if err := i.cfg.Carrier.SurfaceAction(context.Background(), i.carrierSession(), "settings", "set",
+			map[string]string{"key": "auto_swarm", "value": strconv.FormatBool(value)}); err != nil {
 			i.mu.Lock()
-			i.statusOK = i18n.T("auto-swarm %s", onOff(value))
-			i.statusErr = ""
+			i.statusErr = i18n.T("settings: %s", err)
 			i.mu.Unlock()
 			return
 		}
-		if i.cfg.SettingsStore != nil {
-			if err := i.cfg.SettingsStore.SetAutoSwarm(value); err != nil {
-				i.mu.Lock()
-				i.statusErr = i18n.T("settings: %s", err)
-				i.mu.Unlock()
-				return
-			}
-		}
-		// Add/remove the swarm_spawn tool on the live agent so the
-		// model's tools[] list reflects the toggle on the next turn.
-		// Without this the tool stays advertised after a disable and
-		// the model keeps trying to call it.
-		i.applyAutoSwarmTool(value)
-		// Also swap the system-prompt addendum in/out so the model
-		// knows to use the tool proactively (or stops referencing it
-		// after a disable).
-		i.applyAutoSwarmSystemPrompt(value)
 		i.mu.Lock()
 		i.statusOK = i18n.T("auto-swarm %s", onOff(value))
 		i.statusErr = ""
@@ -576,23 +474,28 @@ func (i *Interactive) applyReasoningSetting(level string) {
 		i.invalidate()
 	}()
 	level = provider.NormalizeReasoning(level)
-	i.cfg.Reasoning = level
-	if i.cfg.SettingsStore != nil {
-		if err := i.cfg.SettingsStore.SetReasoning(level); err != nil {
-			i.mu.Lock()
-			i.statusErr = i18n.T("settings: %s", err)
-			i.mu.Unlock()
-			return
-		}
+	if i.cfg.Carrier == nil {
+		return // no workspace bound: nothing to apply the level to
 	}
-	i.mu.Lock()
-	if ag := i.turns.Agent(); ag != nil {
-		ag.Reasoning = level
+	// The daemon owns both halves. settingsAction("set", reasoning) persists
+	// the level and applies it live to every session's agent, through the
+	// locked Agent.SetReasoning. The TUI used to do both itself, and its
+	// half of the second one was a bare `ag.Reasoning = level` — an
+	// unsynchronized write to a field the turn loop reads under the agent's
+	// own mutex.
+	if err := i.cfg.Carrier.SurfaceAction(context.Background(), i.carrierSession(), "settings", "set",
+		map[string]string{"key": "reasoning", "value": level}); err != nil {
+		i.mu.Lock()
+		i.statusErr = i18n.T("settings: %s", err)
+		i.mu.Unlock()
+		return
 	}
 	label := level
 	if label == "" {
 		label = "off"
 	}
+	i.mu.Lock()
+	i.cfg.Reasoning = level
 	i.statusOK = i18n.T("thinking level %s", label)
 	i.statusErr = ""
 	i.mu.Unlock()
