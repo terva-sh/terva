@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -44,7 +45,7 @@ func TestWireHeadlessSessionPersistWritesTurns(t *testing.T) {
 	}
 
 	ag := core.NewAgent(&onePassClient{reply: "hello from the daemon"}, "fake-model", "", core.Registry{})
-	wireHeadlessSessionPersist(ag, sess)
+	build.WireHeadlessSessionPersist(ag, sess)
 
 	if id, path := ag.SessionIdentity(); id == "" || path != sess.Path {
 		t.Fatalf("helper did not adopt session identity: id=%q path=%q", id, path)

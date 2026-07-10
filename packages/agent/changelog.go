@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/identity"
 )
 
@@ -162,7 +163,7 @@ func FetchChangelogAsync(version string) <-chan ChangelogInfo {
 // Returns false on dev builds (version "" / "dev" / "0.0.0") and on
 // the first-ever launch (no LastChangelogShown stored — we don't
 // dump release notes at someone who just installed).
-func ShouldShowChangelog(currentVersion string, cfg Config) bool {
+func ShouldShowChangelog(currentVersion string, cfg config.Config) bool {
 	currentVersion = semverOnly(currentVersion)
 	if currentVersion == "" || currentVersion == "dev" {
 		return false
@@ -181,12 +182,12 @@ func ShouldShowChangelog(currentVersion string, cfg Config) bool {
 // actually shown (e.g. fetch failed) so we don't keep retrying.
 func MarkChangelogShown(version string) error {
 	v := semverOnly(version)
-	cfg, _ := LoadConfig()
+	cfg, _ := config.LoadConfig()
 	if semverOnly(cfg.LastChangelogShown) == v {
 		return nil
 	}
 	cfg.LastChangelogShown = v
-	return SaveConfig(cfg)
+	return config.SaveConfig(cfg)
 }
 
 // SeedChangelogVersion sets LastChangelogShown if it's currently
@@ -198,7 +199,7 @@ func SeedChangelogVersion(version string) {
 	if version == "" || version == "dev" {
 		return
 	}
-	cfg, err := LoadConfig()
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		return
 	}
@@ -206,5 +207,5 @@ func SeedChangelogVersion(version string) {
 		return
 	}
 	cfg.LastChangelogShown = version
-	_ = SaveConfig(cfg)
+	_ = config.SaveConfig(cfg)
 }

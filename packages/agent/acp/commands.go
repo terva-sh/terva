@@ -10,19 +10,21 @@ import (
 	"strconv"
 	"strings"
 
-	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/agent/slash"
 	"terva.sh/terva/packages/core"
 )
 
 // Phase 4c: slash-command advertisement + native execution of the
 // headless-safe subset.
 //
-// terva's slash registry (packages/agent/modes) is mostly TUI-coupled:
-// many commands open pickers/dialogs an ACP editor can't drive (/model,
-// /sessions, /login, ...). A growing handful, though, are pure agent- or
-// session-control whose *effect* has a headless meaning, so we reproduce that
-// effect here against the in-process core.Agent / session state without the
-// interactive TUI plumbing.
+// terva's slash-command HANDLERS (packages/agent/modes) are mostly
+// TUI-coupled: many commands open pickers/dialogs an ACP editor can't drive
+// (/model, /sessions, /login, ...). A growing handful, though, are pure agent-
+// or session-control whose *effect* has a headless meaning, so we reproduce
+// that effect here against the in-process core.Agent / session state without
+// the interactive TUI plumbing. The catalog itself (names, descriptions,
+// hints) comes from the neutral packages/agent/slash, so this package never
+// imports modes.
 //
 // Capability honesty (§13): we advertise ONLY the commands we can actually
 // honor over ACP, so the editor's command palette never offers a verb that
@@ -105,7 +107,7 @@ func init() {
 }
 
 // availableCommands builds the available_commands_update payload for sess: the
-// curated subset of modes.BuiltinSlashCommands() that this run mode can honor
+// curated subset of slash.Builtin() that this run mode can honor
 // (the nativeSlashCommands allowlist), PLUS every extension-registered command
 // the session's host wired (sess.extCommands). Each command carries its
 // description and (when it takes an argument) its hint. The curated built-ins
@@ -125,7 +127,7 @@ func availableCommands(sess *session) []AvailableCommand {
 	// Track advertised bare names so an extension command can't shadow (or
 	// duplicate) a built-in we already advertise.
 	seen := make(map[string]bool, len(nativeSlashCommands))
-	for _, info := range modes.BuiltinSlashCommands() {
+	for _, info := range slash.Builtin() {
 		if _, ok := nativeSlashCommands[info.Name]; !ok {
 			continue
 		}
@@ -211,7 +213,7 @@ func slashHead(text string) (head, arg string, ok bool) {
 // graceful-degradation note — a known-but-TUI-only command vs an outright
 // unknown verb.
 func isBuiltinSlash(head string) bool {
-	for _, c := range modes.BuiltinSlashCommands() {
+	for _, c := range slash.Builtin() {
 		if c.Name == head {
 			return true
 		}

@@ -16,7 +16,7 @@ import (
 // optionally rename a project's .zot/ to .terva/, and set the
 // envcompat marker that turns off zot config-file autoloading.
 // The CLI front-end lives in migratecmd.go; the TUI front-end is
-// modes.migrateDialog, wired through modes.MigrationHooks in cli.go.
+// dialogs.MigrateDialog, wired through dialogs.MigrationHooks in cli.go.
 
 // MigrationPlan is the immutable description of what a migration run
 // would do, computed up front so both front-ends can show it before

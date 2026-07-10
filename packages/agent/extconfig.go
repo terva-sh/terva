@@ -9,48 +9,14 @@ package agent
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extdriver"
-	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/modes"
 )
-
-// resolveExtensionConfig produces the values to deliver to one extension:
-// for every field its manifest declares, the user's saved value if present
-// (config.json extensions.<name>.<key>), else the field's default. It is
-// schema-driven — only declared keys are delivered, so a stale saved key
-// (the field was removed) is kept on disk but dropped from delivery.
-// Returns nil when the extension declares no schema or nothing resolves.
-// Matches extdriver.ConfigResolver so it wires straight into the driver.
-func resolveExtensionConfig(name string, schema []extdriver.ConfigField) map[string]json.RawMessage {
-	if len(schema) == 0 {
-		return nil
-	}
-	var stored map[string]json.RawMessage
-	if c, err := LoadConfig(); err == nil {
-		stored = c.Extensions[name]
-	}
-	out := map[string]json.RawMessage{}
-	for _, f := range schema {
-		if v, ok := stored[f.Key]; ok && len(v) > 0 {
-			out[f.Key] = v
-			continue
-		}
-		if f.Default != nil {
-			if b, err := json.Marshal(f.Default); err == nil {
-				out[f.Key] = b
-			}
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
 
 // setExtensionConfigValues writes one extension's saved values into the
 // user config.json (extensions.<name>), replacing the whole block; an
@@ -58,7 +24,7 @@ func resolveExtensionConfig(name string, schema []extdriver.ConfigField) map[str
 // is fully modeled), matching setUserMCPDisabled. Secret values are stored
 // plaintext — the UI masks them, the host never logs them.
 func setExtensionConfigValues(name string, values map[string]json.RawMessage) error {
-	c, err := LoadConfig()
+	c, err := config.LoadConfig()
 	if err != nil {
 		return err
 	}
@@ -73,28 +39,7 @@ func setExtensionConfigValues(name string, values map[string]json.RawMessage) er
 		}
 		c.Extensions[name] = values
 	}
-	return SaveConfig(c)
-}
-
-// extensionConfigSchema reads one installed extension's declared config
-// schema from its manifest, without spawning it (so the dialog works for a
-// stopped or disabled extension). Returns nil when not found or none.
-func extensionConfigSchema(cwd, name string) []extdriver.ConfigField {
-	dir, err := findExtensionDirIn(cwd, name)
-	if err != nil {
-		return nil
-	}
-	raw, err := os.ReadFile(filepath.Join(dir, "extension.json"))
-	if err != nil {
-		return nil
-	}
-	var m struct {
-		Config []extdriver.ConfigField `json:"config"`
-	}
-	if json.Unmarshal(raw, &m) != nil {
-		return nil
-	}
-	return m.Config
+	return config.SaveConfig(c)
 }
 
 // extensionConfigFields builds the /extensions config form for one
@@ -103,12 +48,12 @@ func extensionConfigSchema(cwd, name string) []extdriver.ConfigField {
 // value. Secret fields never expose the saved value — only whether one
 // exists (HasSaved) — so the dialog masks it.
 func extensionConfigFields(cwd, name string) []modes.ConfigField {
-	schema := extensionConfigSchema(cwd, name)
+	schema := build.ExtensionConfigSchema(cwd, name)
 	if len(schema) == 0 {
 		return nil
 	}
 	var saved map[string]json.RawMessage
-	if c, err := LoadConfig(); err == nil {
+	if c, err := config.LoadConfig(); err == nil {
 		saved = c.Extensions[name]
 	}
 	out := make([]modes.ConfigField, 0, len(schema))
@@ -168,9 +113,9 @@ func typeExtensionConfigValues(schema []extdriver.ConfigField, values map[string
 // extension's schema and persists them, keeping any existing secret the
 // user left blank.
 func setExtensionConfigFromForm(cwd, name string, values map[string]string) error {
-	schema := extensionConfigSchema(cwd, name)
+	schema := build.ExtensionConfigSchema(cwd, name)
 	var existing map[string]json.RawMessage
-	if c, err := LoadConfig(); err == nil {
+	if c, err := config.LoadConfig(); err == nil {
 		existing = c.Extensions[name]
 	}
 	return setExtensionConfigValues(name, typeExtensionConfigValues(schema, values, existing))
@@ -233,15 +178,4 @@ func defaultToDisplay(v any) string {
 		b, _ := json.Marshal(v)
 		return string(b)
 	}
-}
-
-// applyExtensionConfigLive delivers the just-saved config to a running
-// extension as a config_update event. No-op when the extension is stopped
-// or didn't subscribe — its new values still arrive in hello_ack on the
-// next spawn.
-func applyExtensionConfigLive(mgr *extensions.Manager, cwd, name string) {
-	if mgr == nil {
-		return
-	}
-	mgr.PushConfigUpdate(name, resolveExtensionConfig(name, extensionConfigSchema(cwd, name)))
 }

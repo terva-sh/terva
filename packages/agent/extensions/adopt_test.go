@@ -1,8 +1,9 @@
 package extensions
 
 import (
-	"terva.sh/terva/packages/testsupport"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestAdoptRejectsTraversalNames pins the path-traversal guard: adopt_extensions

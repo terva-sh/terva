@@ -3,6 +3,7 @@ package agent
 import (
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -73,11 +74,11 @@ func TestModelListFilter(t *testing.T) {
 }
 
 func TestParseArgsListModelsFilter(t *testing.T) {
-	a, err := ParseArgs([]string{"--list-models"})
+	a, err := build.ParseArgs([]string{"--list-models"})
 	if err != nil || !a.ListModels || a.ListModelsFilter != "" {
 		t.Fatalf("bare --list-models: %+v err=%v", a, err)
 	}
-	a, err = ParseArgs([]string{"--list-models=available,live+"})
+	a, err = build.ParseArgs([]string{"--list-models=available,live+"})
 	if err != nil || !a.ListModels || a.ListModelsFilter != "available,live+" {
 		t.Fatalf("--list-models=...: %+v err=%v", a, err)
 	}

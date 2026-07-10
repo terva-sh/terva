@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -14,7 +16,7 @@ import (
 func TestResolve_RestrictedNoteGatedOutOfImmersive(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
-	if err := SaveConfig(Config{Provider: "openai", Model: "gpt-5"}); err != nil {
+	if err := config.SaveConfig(config.Config{Provider: "openai", Model: "gpt-5"}); err != nil {
 		t.Fatal(err)
 	}
 	// An untrusted cwd with gated project content (.terva/extensions triggers
@@ -26,11 +28,11 @@ func TestResolve_RestrictedNoteGatedOutOfImmersive(t *testing.T) {
 
 	hasRestricted := func(t *testing.T, exp string) bool {
 		t.Helper()
-		r, err := Resolve(Args{CWD: dir, Experience: exp}, false)
+		r, err := build.Resolve(build.Args{CWD: dir, Experience: exp}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, s := range r.systemSegments {
+		for _, s := range r.SystemSegments {
 			if s.Source == "restricted-workspace" {
 				return true
 			}
@@ -41,10 +43,10 @@ func TestResolve_RestrictedNoteGatedOutOfImmersive(t *testing.T) {
 	if !hasRestricted(t, "") {
 		t.Error("coding mode should carry the restricted-workspace note when content is gated + untrusted")
 	}
-	if hasRestricted(t, ExperienceChat) {
+	if hasRestricted(t, build.ExperienceChat) {
 		t.Error("--chat must not carry the restricted-workspace note")
 	}
-	if hasRestricted(t, ExperiencePlay) {
+	if hasRestricted(t, build.ExperiencePlay) {
 		t.Error("--play must not carry the restricted-workspace note")
 	}
 }

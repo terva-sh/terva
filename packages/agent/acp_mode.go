@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/acp"
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/mcp"
@@ -33,7 +35,7 @@ import (
 // drives session/request_permission when the policy says "ask", session/cancel
 // cancels the in-flight turn (and any outstanding permission), and one turn
 // runs at a time per session.
-func runACPMode(ctx context.Context, args Args, version string) error {
+func runACPMode(ctx context.Context, args build.Args, version string) error {
 	factory := &acpFactory{ctx: ctx, args: args, version: version}
 	return acp.Serve(ctx, os.Stdin, os.Stdout, factory, acp.AgentInfo{
 		Name:    "terva",
@@ -69,7 +71,7 @@ func runACPMode(ctx context.Context, args Args, version string) error {
 // the same way, completing the ACP slash surface.
 type acpFactory struct {
 	ctx     context.Context
-	args    Args
+	args    build.Args
 	version string
 }
 
@@ -81,12 +83,12 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 	if err != nil {
 		return acp.SessionAgent{}, err
 	}
-	sess, err := core.NewSession(TervaHome(), r.CWD, r.Provider, r.Model, f.version)
+	sess, err := core.NewSession(config.TervaHome(), r.CWD, r.Provider, r.Model, f.version)
 	if err != nil {
 		cleanup()
 		return acp.SessionAgent{}, err
 	}
-	wireHeadlessSessionPersist(ag, sess)
+	build.WireHeadlessSessionPersist(ag, sess)
 	return acp.SessionAgent{
 		Agent:            ag,
 		Session:          sess,
@@ -127,7 +129,7 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 		_ = sess.Close()
 		return acp.SessionAgent{}, nil, err
 	}
-	wireHeadlessSessionPersist(ag, sess)
+	build.WireHeadlessSessionPersist(ag, sess)
 	// Seed the menus from the session's persisted provider/model when present
 	// (a prior /set_config_option model switch was recorded), else the
 	// resolved defaults.
@@ -169,7 +171,7 @@ func (f *acpFactory) ListSessions(cwd string) []acp.SessionInfo {
 	if cwd == "" {
 		return nil
 	}
-	root := TervaHome()
+	root := config.TervaHome()
 	summaries := core.DescribeSessions(root, cwd)
 	out := make([]acp.SessionInfo, 0, len(summaries))
 	for _, s := range summaries {
@@ -201,8 +203,8 @@ func (f *acpFactory) ListSessions(cwd string) []acp.SessionInfo {
 // and offer only what the user can actually reach.
 func acpLoggedInProviders() map[string]bool {
 	out := map[string]bool{}
-	for _, p := range knownProviders {
-		if _, _, err := ResolveCredential(p, ""); err == nil {
+	for _, p := range build.KnownProviders {
+		if _, _, err := build.ResolveCredential(p, ""); err == nil {
 			out[p] = true
 		}
 	}
@@ -210,7 +212,7 @@ func acpLoggedInProviders() map[string]bool {
 	out["ollama"] = true
 	// openai-compatible is reachable once a base URL is configured.
 	if !out["openai-compatible"] {
-		if bu, _, _ := AuthStoreFor().Extras("openai-compatible"); bu != "" {
+		if bu, _, _ := config.AuthStoreFor().Extras("openai-compatible"); bu != "" {
 			out["openai-compatible"] = true
 		}
 	}
@@ -297,7 +299,7 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 	// buildAgentForRescue's intent).
 	next.APIKey = ""
 	next.BaseURL = ""
-	r, err := Resolve(next, true)
+	r, err := build.Resolve(next, true)
 	if err != nil {
 		return acp.ModelSwitch{}, err
 	}
@@ -331,7 +333,7 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 // servers. A TRUSTED project's .terva/config.json MCP — a source the editor does
 // NOT manage — IS merged (trust-gated, editor wins on a collision); see
 // setupACPMCP.
-func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer, recordCall func(string)) (Resolved, *core.Agent, *core.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, error) {
+func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer, recordCall func(string)) (build.Resolved, *core.Agent, *core.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, error) {
 	// Each session resolves with its own cwd so tools, system prompt, and
 	// session dir bind to the editor-provided working directory.
 	args := f.args
@@ -353,7 +355,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// reaches the gate here regardless of whether the manager has finished
 	// spawning. Merging the extension TOOLS below is what makes those rules
 	// reachable (the model can now call the tool).
-	pol, polWarns := buildPermissionPolicy(args)
+	pol, polWarns := build.BuildPermissionPolicy(args)
 	for _, w := range polWarns {
 		fmt.Fprintf(os.Stderr, "note: %s\n", w)
 	}
@@ -371,14 +373,14 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	confirmGate := core.NewPolicyGate(pol, confirmer)
 	roSet := pol.ReadOnly
 
-	r, err := Resolve(args, true)
+	r, err := build.Resolve(args, true)
 	if err != nil {
-		return Resolved{}, nil, nil, nil, nil, nil, err
+		return build.Resolved{}, nil, nil, nil, nil, nil, err
 	}
 	// ACP untrusted = restricted for now (Phase 4 — an editor
 	// session/request_permission trust prompt — is deferred). Log a
 	// warning naming how to enable; --trust still works over the wire.
-	warnRestrictedWorkspace(args, r.Trusted)
+	build.WarnRestrictedWorkspace(args, r.Trusted)
 	r.AdoptReadOnlySet(roSet)
 
 	// Wire this session's extensions (tools + read-only classification) BEFORE
@@ -405,12 +407,12 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	}
 
 	ag := r.NewAgent()
-	hookEng := buildHookEngine(args, r.Trusted)
+	hookEng := build.BuildHookEngine(args, r.Trusted)
 	// Canonical tool-call ladder (pre-hooks, confirm gate, extension
 	// intercept). Passing extMgr in activates BOTH the extension tool-call
 	// intercept AND — through the confirm gate built above — the manifest
 	// permission rules. The ladder is nil-safe across all three args.
-	ladder := buildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
+	ladder := build.BuildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
 	// Wrap the ladder so the confirmer learns the toolCallId it is about to
 	// gate before gate.Check (and thus Confirm) runs — the §13 correlation
 	// seam. recordCall stays OUTSIDE the ladder so an extension tool's
@@ -421,7 +423,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 		recordCall(call.ID)
 		return ladder(call)
 	}
-	wireHostToolDispatcher(ag, extMgr, confirmGate)
+	build.WireHostToolDispatcher(ag, extMgr, confirmGate)
 	// Apply the subset of the non-interactive extension hooks that make sense
 	// under ACP: BeforeTurn / BeforeAssistantMessage (extension turn +
 	// assistant-message intercepts), ContextProvider (live context cards), and
@@ -448,7 +450,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 			}
 			return true, "", res.ReplaceText
 		}
-		wireExtEphemeral(ag, extMgr.EphemeralContext)
+		build.WireExtEphemeral(ag, extMgr.EphemeralContext)
 		ag.ContinueOnStop = continueOnOpenWork(extMgr)
 	}
 	// observe is the extension-side event sink: it fans every event out to the
@@ -469,11 +471,11 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 			sessionCWD := cwd
 			differ = tools.NewWorkspaceDiffer(func() string { return sessionCWD })
 		}
-		wsObserve := workspaceChangeObserver(differ, extMgr)
+		wsObserve := build.WorkspaceChangeObserver(differ, extMgr)
 		observe = func(ev core.AgentEvent) {
 			wsObserve(ev)
-			fanoutAgentEvent(extMgr, ev)
-			observeAgentEventForHooks(hookEng, ev)
+			build.FanoutAgentEvent(extMgr, ev)
+			build.ObserveAgentEventForHooks(hookEng, ev)
 		}
 	}
 	return r, ag, confirmGate, cleanup, observe, extMgr, nil
@@ -639,7 +641,7 @@ func acpTrustWorkspace(ctx context.Context, cwd string, extMgr *extensions.Manag
 		return nil
 	}
 	return func(parent bool) error {
-		if err := TrustPath(cwd, parent); err != nil {
+		if err := config.TrustPath(cwd, parent); err != nil {
 			return err
 		}
 		extMgr.SetProjectTrusted(true)
@@ -658,7 +660,7 @@ func acpUntrustWorkspace(ctx context.Context, cwd string, extMgr *extensions.Man
 		return nil
 	}
 	return func() error {
-		if err := UntrustPath(cwd); err != nil {
+		if err := config.UntrustPath(cwd); err != nil {
 			return err
 		}
 		extMgr.SetProjectTrusted(false)
@@ -701,9 +703,9 @@ func renderPanelText(p *extproto.PanelSpec) string {
 func synthYoloPolicy() *core.PermissionPolicy {
 	return &core.PermissionPolicy{
 		Mode:      core.ApprovalYolo,
-		ReadOnly:  builtinReadOnlySet(),
-		EditTools: editTools,
-		Builtin:   builtinTools,
+		ReadOnly:  build.BuiltinReadOnlySet(),
+		EditTools: build.EditTools,
+		Builtin:   build.BuiltinTools,
 	}
 }
 
@@ -722,7 +724,7 @@ func synthYoloPolicy() *core.PermissionPolicy {
 // session down. Per-server stderr goes to $TERVA_HOME/logs/mcp-<name>.log, like
 // the headless modes. Warnings surface to stderr: session/new|load runs before
 // the first turn, so there is no agent_message sink to route them to yet.
-func (f *acpFactory) setupACPMCP(ctx context.Context, args Args, r *Resolved, mcpServers json.RawMessage) func() {
+func (f *acpFactory) setupACPMCP(ctx context.Context, args build.Args, r *build.Resolved, mcpServers json.RawMessage) func() {
 	noop := func() {}
 	if args.NoMCP {
 		return noop
@@ -737,7 +739,7 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args Args, r *Resolved, mc
 	// entries below win on a name collision (the editor's set is authoritative
 	// under ACP). trustedProjectMCP returns nil unless r.Trusted, so an
 	// untrusted workspace adds nothing.
-	if proj := trustedProjectMCP(args.CWD, r.Trusted); proj != nil {
+	if proj := config.TrustedProjectMCP(args.CWD, r.Trusted); proj != nil {
 		for name, sc := range proj.Servers {
 			cfg.Servers[name] = sc
 		}
@@ -755,7 +757,7 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args Args, r *Resolved, mc
 	}
 	// Honor disable_mcp (user ∪ restrict-only project) here too. ACP has no
 	// /mcp dialog, so this is gating only: a disabled server never spawns.
-	for name := range resolvedDisableMCP(args.CWD, r.Trusted) {
+	for name := range config.ResolvedDisableMCP(args.CWD, r.Trusted) {
 		delete(cfg.Servers, name)
 	}
 	if len(cfg.Servers) == 0 {
@@ -763,10 +765,10 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args Args, r *Resolved, mc
 	}
 
 	stderrFor := func(server string) io.Writer {
-		if mkErr := os.MkdirAll(LogsPath(), 0o755); mkErr != nil {
+		if mkErr := os.MkdirAll(config.LogsPath(), 0o755); mkErr != nil {
 			return nil
 		}
-		fh, ferr := os.OpenFile(filepath.Join(LogsPath(), "mcp-"+server+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fh, ferr := os.OpenFile(filepath.Join(config.LogsPath(), "mcp-"+server+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if ferr != nil {
 			return nil
 		}
@@ -777,7 +779,7 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args Args, r *Resolved, mc
 	for _, w := range mgr.Warnings() {
 		fmt.Fprintln(os.Stderr, "note:", w)
 	}
-	r.MergeExtensionTools(&mcpToolAdapter{mgr: mgr})
+	r.MergeExtensionTools(&build.MCPToolAdapter{Mgr: mgr})
 	return mgr.StopAll
 }
 
@@ -804,13 +806,13 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args Args, r *Resolved, mc
 // paths. session_start is NOT emitted here — the durable session does not
 // exist yet at agent-build time; a future slash-command/session-identity slice
 // would emit it after NewSession, mirroring how the headless modes defer it.
-func (f *acpFactory) setupACPExtensions(ctx context.Context, args Args, r *Resolved) (*extensions.Manager, func()) {
-	extMgr := extensions.New(TervaHome(), r.CWD, f.version, r.Provider, r.Model, nonInteractiveExtHooks{})
+func (f *acpFactory) setupACPExtensions(ctx context.Context, args build.Args, r *build.Resolved) (*extensions.Manager, func()) {
+	extMgr := extensions.New(config.TervaHome(), r.CWD, f.version, r.Provider, r.Model, build.NonInteractiveExtHooks{})
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
-	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
-	extMgr.SetAllowedExtensions(args.WithExtensions)  // --extensions allowlist; --ext paths bypass
-	extMgr.SetConfigResolver(resolveExtensionConfig)  // hello_ack config delivery
-	wireSessionReader(extMgr, TervaHome(), r.CWD)
+	extMgr.SetDisabledExtensions(r.DisableExtensions)      // before Discover/LoadExplicit
+	extMgr.SetAllowedExtensions(args.WithExtensions)       // --extensions allowlist; --ext paths bypass
+	extMgr.SetConfigResolver(build.ResolveExtensionConfig) // hello_ack config delivery
+	build.WireSessionReader(extMgr, config.TervaHome(), r.CWD)
 	extMgr.SetProjectTrusted(r.Trusted) // gate project ext dirs on Workspace Trust
 	// --ext paths first so they win against installed extensions of the same
 	// name (loadOne's first-write-wins semantics).
@@ -825,7 +827,7 @@ func (f *acpFactory) setupACPExtensions(ctx context.Context, args Args, r *Resol
 	// 3s is the per-extension grace for the ready frame; well-behaved
 	// extensions release the wait the moment they signal ready.
 	extMgr.WaitForReady(3 * time.Second)
-	r.MergeExtensionTools(&extToolAdapter{mgr: extMgr})
+	r.MergeExtensionTools(&build.ExtToolAdapter{Mgr: extMgr})
 	return extMgr, func() { extMgr.Stop(2 * time.Second) }
 }
 
@@ -844,10 +846,10 @@ func (f *acpFactory) skillSnapshot(cwd string) func() []*skills.Skill {
 	// loaded for the model (project skills hidden while restricted).
 	trustArgs := f.args
 	trustArgs.CWD = cwd
-	trusted := resolveTrustState(trustArgs).IsTrusted()
+	trusted := build.ResolveTrustState(trustArgs).IsTrusted()
 	return func() []*skills.Skill {
 		userHome, _ := os.UserHomeDir()
-		list, _ := skills.Discover(TervaHome(), cwd, userHome, f.args.WithSkills, trusted)
+		list, _ := skills.Discover(config.TervaHome(), cwd, userHome, f.args.WithSkills, trusted)
 		return skills.VisibleSkills(list)
 	}
 }

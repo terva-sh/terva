@@ -5,30 +5,32 @@ import (
 	"path/filepath"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/testsupport"
 )
 
-// registerEndpoint adds a dynamic provider; collisions with a built-in id and
+// RegisterEndpoint adds a dynamic provider; collisions with a built-in id and
 // missing base URLs are rejected.
 func TestRegisterEndpoint(t *testing.T) {
-	if err := registerEndpoint("anthropic", EndpointConfig{BaseURL: "http://x/v1"}); err == nil {
+	if err := build.RegisterEndpoint("anthropic", config.EndpointConfig{BaseURL: "http://x/v1"}); err == nil {
 		t.Error("an endpoint named like a built-in provider should be rejected")
 	}
-	if err := registerEndpoint("ep-missing-url", EndpointConfig{}); err == nil {
+	if err := build.RegisterEndpoint("ep-missing-url", config.EndpointConfig{}); err == nil {
 		t.Error("an endpoint without a base URL should be rejected")
 	}
-	if err := registerEndpoint("ep-ok-unit", EndpointConfig{BaseURL: "http://ep:9000/v1"}); err != nil {
+	if err := build.RegisterEndpoint("ep-ok-unit", config.EndpointConfig{BaseURL: "http://ep:9000/v1"}); err != nil {
 		t.Fatalf("a fresh endpoint should register: %v", err)
 	}
-	if _, ok := providerByID["ep-ok-unit"]; !ok {
+	if _, ok := build.ProviderByID["ep-ok-unit"]; !ok {
 		t.Error("endpoint not added to providerByID")
 	}
-	if !isKnownProvider("ep-ok-unit") {
+	if !build.IsKnownProvider("ep-ok-unit") {
 		t.Error("endpoint not added to knownProviders")
 	}
 	// Re-registering the same id collides (idempotency is handled at the
 	// RegisterEndpointsFromConfig level, not here).
-	if err := registerEndpoint("ep-ok-unit", EndpointConfig{BaseURL: "http://ep:9000/v1"}); err == nil {
+	if err := build.RegisterEndpoint("ep-ok-unit", config.EndpointConfig{BaseURL: "http://ep:9000/v1"}); err == nil {
 		t.Error("re-registering the same id should collide")
 	}
 }
@@ -42,11 +44,11 @@ func TestResolveEndpointProvider(t *testing.T) {
 		[]byte(`{"endpoints":{"box-resolve":{"baseUrl":"http://box-resolve:9000/v1"}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := registerEndpoint("box-resolve", EndpointConfig{BaseURL: "http://box-resolve:9000/v1"}); err != nil {
+	if err := build.RegisterEndpoint("box-resolve", config.EndpointConfig{BaseURL: "http://box-resolve:9000/v1"}); err != nil {
 		t.Fatal(err)
 	}
 
-	r, err := Resolve(Args{Provider: "box-resolve", Model: "qwen-local"}, false)
+	r, err := build.Resolve(build.Args{Provider: "box-resolve", Model: "qwen-local"}, false)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -58,7 +60,7 @@ func TestResolveEndpointProvider(t *testing.T) {
 	}
 }
 
-// endpointNameFor derives a stable, collision-free endpoint id from a base URL.
+// EndpointNameFor derives a stable, collision-free endpoint id from a base URL.
 func TestEndpointNameFor(t *testing.T) {
 	used := map[string]bool{}
 	cases := []struct{ url, want string }{
@@ -67,16 +69,16 @@ func TestEndpointNameFor(t *testing.T) {
 		{"https://gw.internal/v1", "gw-internal"},
 	}
 	for _, c := range cases {
-		if got := endpointNameFor(c.url, used); got != c.want {
+		if got := build.EndpointNameFor(c.url, used); got != c.want {
 			t.Errorf("endpointNameFor(%q) = %q; want %q", c.url, got, c.want)
 		}
 	}
 	// A second box-a dedupes.
-	if got := endpointNameFor("http://box-a:9999/v1", used); got != "box-a-2" {
+	if got := build.EndpointNameFor("http://box-a:9999/v1", used); got != "box-a-2" {
 		t.Errorf("dedup: got %q; want box-a-2", got)
 	}
 	// A name matching a built-in provider id is suffixed so it can't collide.
-	if got := endpointNameFor("http://anthropic/v1", map[string]bool{}); got != "anthropic-ep" {
+	if got := build.EndpointNameFor("http://anthropic/v1", map[string]bool{}); got != "anthropic-ep" {
 		t.Errorf("built-in collision: got %q; want anthropic-ep", got)
 	}
 }
@@ -89,7 +91,7 @@ func TestMergeEndpointsIntoConfig(t *testing.T) {
 		[]byte(`{"endpoints":{"box-a":{"baseUrl":"http://box-a:8000/v1"}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	added, err := mergeEndpointsIntoConfig(map[string]EndpointConfig{
+	added, err := mergeEndpointsIntoConfig(map[string]config.EndpointConfig{
 		"box-a": {BaseURL: "http://DIFFERENT/v1"},  // exists -> skipped, not clobbered
 		"box-b": {BaseURL: "http://box-b:8000/v1"}, // new -> added
 	})
@@ -99,7 +101,7 @@ func TestMergeEndpointsIntoConfig(t *testing.T) {
 	if added != 1 {
 		t.Errorf("added = %d; want 1 (box-a skipped, box-b added)", added)
 	}
-	cfg, _ := LoadConfig()
+	cfg, _ := config.LoadConfig()
 	if cfg.Endpoints["box-a"].BaseURL != "http://box-a:8000/v1" {
 		t.Errorf("existing box-a was clobbered: %q", cfg.Endpoints["box-a"].BaseURL)
 	}

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/identity"
 	"terva.sh/terva/packages/i18n"
 )
@@ -72,7 +73,7 @@ notes:
   * The binary must be writable by the current user. On a system-wide
     install (e.g. /usr/local/bin/terva owned by root) re-run with sudo.
   * Dev builds (version 0.0.0) are refused — they typically come from
-    'go install' or a local 'make build' and shouldn't be silently
+    'go install' or a local 'just build' and shouldn't be silently
     replaced with a release binary.
   * Honours $TERVA_RELEASE_TOKEN (or $FORGEJO_TOKEN) if set, so
     private-repo releases work.
@@ -234,7 +235,7 @@ func runUpdate(version string) error {
 	// Best-effort: also refresh installed extensions that live in
 	// git checkouts. Failures here are advisory and never abort the
 	// overall update — the binary swap already succeeded.
-	updateAllExtensions(TervaHome())
+	updateAllExtensions(config.TervaHome())
 
 	return nil
 }

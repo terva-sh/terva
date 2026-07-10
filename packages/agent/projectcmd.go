@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -432,16 +434,16 @@ func runProjectTrust(untrust bool) error {
 		return err
 	}
 	if untrust {
-		if err := UntrustPath(cwd); err != nil {
+		if err := config.UntrustPath(cwd); err != nil {
 			return err
 		}
-		fmt.Printf("untrusted %s (its project content will no longer load)\n", canonicalTrustPath(cwd))
+		fmt.Printf("untrusted %s (its project content will no longer load)\n", config.CanonicalTrustPath(cwd))
 		return nil
 	}
-	if err := TrustPath(cwd, false); err != nil {
+	if err := config.TrustPath(cwd, false); err != nil {
 		return err
 	}
-	fmt.Printf("trusted %s (its project extensions/skills/context will load)\n", canonicalTrustPath(cwd))
+	fmt.Printf("trusted %s (its project extensions/skills/context will load)\n", config.CanonicalTrustPath(cwd))
 	return nil
 }
 
@@ -452,8 +454,8 @@ func runProjectStatus() error {
 	if err != nil {
 		return err
 	}
-	scoped := resolveProjectScoped(Args{CWD: cwd}, cwd)
-	trusted := resolveTrustState(Args{CWD: cwd}).IsTrusted()
+	scoped := resolveProjectScoped(build.Args{CWD: cwd}, cwd)
+	trusted := build.ResolveTrustState(build.Args{CWD: cwd}).IsTrusted()
 
 	fmt.Printf("project: %s\n", cwd)
 	fmt.Printf("  scoped:  %v\n", scoped)

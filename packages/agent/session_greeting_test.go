@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -21,7 +22,7 @@ func TestOpenOrCreateSession_SeedsGreetingAtExplicitSessionPath(t *testing.T) {
 	path := filepath.Join(dir, "sessions", "actor.jsonl") // does not exist yet
 
 	ag := &core.Agent{}
-	s, err := openOrCreateSession(Args{Session: path, CWD: dir}, Resolved{cardGreeting: "*The door creaks.* You made it."}, ag, "test")
+	s, err := openOrCreateSession(build.Args{Session: path, CWD: dir}, build.Resolved{CardGreeting: "*The door creaks.* You made it."}, ag, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func TestOpenOrCreateSession_SeedsGreetingAtExplicitSessionPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	ag2 := &core.Agent{}
-	s2, err := openOrCreateSession(Args{Session: path, CWD: dir}, Resolved{cardGreeting: "*The door creaks.* You made it."}, ag2, "test")
+	s2, err := openOrCreateSession(build.Args{Session: path, CWD: dir}, build.Resolved{CardGreeting: "*The door creaks.* You made it."}, ag2, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

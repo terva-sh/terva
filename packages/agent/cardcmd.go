@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/i18n"
 )
@@ -88,7 +89,7 @@ func printCardSummary(path string, c card.Card) {
 	if c.CharacterBook != nil {
 		// Report what will actually load, not just the authored count —
 		// cardBookToLore drops disabled, empty, and unactivatable entries.
-		effective, _ := cardBookToLore(c.CharacterBook, strings.TrimSpace(c.Name), "User")
+		effective, _ := build.CardBookToLore(c.CharacterBook, strings.TrimSpace(c.Name), "User")
 		if len(effective) == len(c.CharacterBook.Entries) {
 			fmt.Printf("  lorebook:    %d entries\n", len(c.CharacterBook.Entries))
 		} else {

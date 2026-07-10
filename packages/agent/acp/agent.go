@@ -573,26 +573,19 @@ func (s *agentServer) bindSession(id, cwd string, sa SessionAgent, confirmer *ac
 	// toolCallId (for correlation).
 	confirmer.bind(sess)
 
-	// The translator hangs off OnEvent so every event of every turn in this
-	// session narrates back as session/update — the persistent fan-out
-	// pattern (rpc.go wires OnEvent the same way). The per-turn sink passed
-	// to PromptWithPolicy is composed with this by the core (wrapSink).
+	// The translator is an event observer, so every event of every turn in this
+	// session narrates back as session/update — the persistent fan-out pattern
+	// (rpc.go registers the same way). The per-turn sink passed to
+	// PromptWithPolicy is composed with these by the core (wrapSink).
 	//
-	// When the host wired an extension event observer, COMPOSE rather than
-	// overwrite: translate the event into a session/update FIRST (so the
-	// editor stream is unaffected), THEN fan it out to extensions + the hook
-	// correlator. Doing it in this order means an extension's fanout can never
-	// preempt or corrupt the session/update narration, and a panic in observe
-	// (defensively shouldn't happen) still left the editor with the translated
-	// event.
-	if observe := sa.ObserveEvent; observe != nil {
-		ag.OnEvent = func(ev core.AgentEvent) {
-			sess.translateEvent(ev)
-			observe(ev)
-		}
-	} else {
-		ag.OnEvent = sess.translateEvent
-	}
+	// Registration order is delivery order: translate into a session/update
+	// FIRST, so an extension's fan-out can never preempt or corrupt the
+	// narration, and a panic in observe (defensively shouldn't happen) still
+	// left the editor with the translated event. AddEventObserver ignores a nil
+	// observer, so the host having wired none needs no branch — this used to be
+	// a hand-rolled compose-or-overwrite, the exact hazard registration removes.
+	ag.AddEventObserver(sess.translateEvent)
+	ag.AddEventObserver(sa.ObserveEvent)
 
 	return sess
 }

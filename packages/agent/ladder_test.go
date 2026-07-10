@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -47,7 +49,7 @@ func callBash(fn func(provider.ToolCallBlock) (bool, string, json.RawMessage)) (
 }
 
 func TestLadderHookDenyRefusesBeforeGate(t *testing.T) {
-	fn := buildBeforeToolExecute(context.Background(), ladderEngine(t, "deny"), nil, nil)
+	fn := build.BuildBeforeToolExecute(context.Background(), ladderEngine(t, "deny"), nil, nil)
 	allowed, reason, _ := callBash(fn)
 	if allowed {
 		t.Fatal("hook deny must refuse")
@@ -61,19 +63,19 @@ func TestLadderHookAllowSkipsRefusingGate(t *testing.T) {
 	// A refusing gate (nil inner, ask policy) would block this call;
 	// the user hook's allow is final and skips it.
 	gate := core.NewConfirmGate(nil)
-	fn := buildBeforeToolExecute(context.Background(), ladderEngine(t, "allow"), gate, nil)
+	fn := build.BuildBeforeToolExecute(context.Background(), ladderEngine(t, "allow"), gate, nil)
 	if allowed, reason, _ := callBash(fn); !allowed {
 		t.Fatalf("hook allow should skip the gate, got refusal %q", reason)
 	}
 	// Sanity: without the hook the same gate refuses.
-	fn = buildBeforeToolExecute(context.Background(), nil, gate, nil)
+	fn = build.BuildBeforeToolExecute(context.Background(), nil, gate, nil)
 	if allowed, _, _ := callBash(fn); allowed {
 		t.Fatal("control: gate alone should refuse")
 	}
 }
 
 func TestLadderHookRewriteFlowsToModifiedArgs(t *testing.T) {
-	fn := buildBeforeToolExecute(context.Background(), ladderEngine(t, "rewrite"), nil, nil)
+	fn := build.BuildBeforeToolExecute(context.Background(), ladderEngine(t, "rewrite"), nil, nil)
 	allowed, _, modified := callBash(fn)
 	if !allowed {
 		t.Fatal("rewrite-only hook must not block")
@@ -92,15 +94,15 @@ func TestLadderGateSeesRewrittenArgs(t *testing.T) {
 		pol := &core.PermissionPolicy{
 			Mode:     core.ApprovalYolo,
 			Rules:    []core.PermissionRule{{Tool: "bash", Args: regexp.MustCompile(pattern), Decision: core.RuleDeny, Source: "user"}},
-			ReadOnly: builtinReadOnlySet(), EditTools: editTools,
+			ReadOnly: build.BuiltinReadOnlySet(), EditTools: build.EditTools,
 		}
 		return core.NewPolicyGate(pol, nil)
 	}
-	fn := buildBeforeToolExecute(context.Background(), ladderEngine(t, "rewrite"), mkGate(`^ls$`), nil)
+	fn := build.BuildBeforeToolExecute(context.Background(), ladderEngine(t, "rewrite"), mkGate(`^ls$`), nil)
 	if allowed, _, _ := callBash(fn); !allowed {
 		t.Error("deny rule on the original args must not fire after rewrite")
 	}
-	fn = buildBeforeToolExecute(context.Background(), ladderEngine(t, "rewrite"), mkGate(`^echo rewritten$`), nil)
+	fn = build.BuildBeforeToolExecute(context.Background(), ladderEngine(t, "rewrite"), mkGate(`^echo rewritten$`), nil)
 	if allowed, _, _ := callBash(fn); allowed {
 		t.Error("deny rule on the rewritten args must fire")
 	}
@@ -109,14 +111,14 @@ func TestLadderGateSeesRewrittenArgs(t *testing.T) {
 func TestBuildHookEngineFromConfig(t *testing.T) {
 	home := withTempHome(t)
 	stub := buildLadderHookStub(t)
-	cfg := Config{Hooks: &hooks.Config{PreToolUse: []hooks.Spec{{Command: stub, Args: []string{"deny"}}}}}
+	cfg := config.Config{Hooks: &hooks.Config{PreToolUse: []hooks.Spec{{Command: stub, Args: []string{"deny"}}}}}
 	b, _ := json.Marshal(cfg)
 	if err := os.WriteFile(filepath.Join(home, "config.json"), b, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Untrusted (false): user-config hooks still build — only PROJECT hooks
 	// are trust-gated. Proves the user layer is unaffected by the trust gate.
-	eng := buildHookEngine(Args{CWD: testsupport.TempDir(t)}, false)
+	eng := build.BuildHookEngine(build.Args{CWD: testsupport.TempDir(t)}, false)
 	if eng == nil {
 		t.Fatal("engine should build from config")
 	}

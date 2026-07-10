@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extdriver"
 )
 
@@ -40,12 +42,12 @@ func sampleSchema() []extdriver.ConfigField {
 // schema-driven (only declared keys come back).
 func TestResolveExtensionConfigDefaultsAndStored(t *testing.T) {
 	withTempHome(t)
-	writeUserConfig(t, TervaHome(), Config{
+	writeUserConfig(t, config.TervaHome(), config.Config{
 		Extensions: map[string]map[string]json.RawMessage{
 			"weather": {"units": json.RawMessage(`"fahrenheit"`)},
 		},
 	})
-	got := resolveExtensionConfig("weather", sampleSchema())
+	got := build.ResolveExtensionConfig("weather", sampleSchema())
 	// Stored value wins for units; api_key has no default/stored so absent.
 	if string(got["units"]) != `"fahrenheit"` {
 		t.Errorf("units = %s, want fahrenheit", got["units"])
@@ -55,8 +57,8 @@ func TestResolveExtensionConfigDefaultsAndStored(t *testing.T) {
 	}
 
 	// With nothing stored, the default is delivered.
-	writeUserConfig(t, TervaHome(), Config{})
-	got = resolveExtensionConfig("weather", sampleSchema())
+	writeUserConfig(t, config.TervaHome(), config.Config{})
+	got = build.ResolveExtensionConfig("weather", sampleSchema())
 	if string(got["units"]) != `"celsius"` {
 		t.Errorf("default units = %s, want celsius", got["units"])
 	}
@@ -64,7 +66,7 @@ func TestResolveExtensionConfigDefaultsAndStored(t *testing.T) {
 
 func TestResolveExtensionConfigDropsStaleKeys(t *testing.T) {
 	withTempHome(t)
-	writeUserConfig(t, TervaHome(), Config{
+	writeUserConfig(t, config.TervaHome(), config.Config{
 		Extensions: map[string]map[string]json.RawMessage{
 			"weather": {
 				"units":   json.RawMessage(`"celsius"`),
@@ -72,7 +74,7 @@ func TestResolveExtensionConfigDropsStaleKeys(t *testing.T) {
 			},
 		},
 	})
-	got := resolveExtensionConfig("weather", sampleSchema())
+	got := build.ResolveExtensionConfig("weather", sampleSchema())
 	if _, ok := got["old_key"]; ok {
 		t.Errorf("stale key should be dropped from delivery, got %s", got["old_key"])
 	}
@@ -80,14 +82,14 @@ func TestResolveExtensionConfigDropsStaleKeys(t *testing.T) {
 
 func TestResolveExtensionConfigNoSchema(t *testing.T) {
 	withTempHome(t)
-	if got := resolveExtensionConfig("x", nil); got != nil {
+	if got := build.ResolveExtensionConfig("x", nil); got != nil {
 		t.Errorf("no schema should resolve to nil, got %v", got)
 	}
 }
 
 func TestSetExtensionConfigValuesRoundTrip(t *testing.T) {
 	withTempHome(t)
-	writeUserConfig(t, TervaHome(), Config{FavoriteModels: []string{"anthropic/opus"}})
+	writeUserConfig(t, config.TervaHome(), config.Config{FavoriteModels: []string{"anthropic/opus"}})
 
 	err := setExtensionConfigValues("weather", map[string]json.RawMessage{
 		"api_key": json.RawMessage(`"sk-123"`),
@@ -95,7 +97,7 @@ func TestSetExtensionConfigValuesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, _ := LoadConfig()
+	c, _ := config.LoadConfig()
 	if string(c.Extensions["weather"]["api_key"]) != `"sk-123"` {
 		t.Fatalf("stored api_key = %s", c.Extensions["weather"]["api_key"])
 	}
@@ -107,7 +109,7 @@ func TestSetExtensionConfigValuesRoundTrip(t *testing.T) {
 	if err := setExtensionConfigValues("weather", nil); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := LoadConfig(); c.Extensions["weather"] != nil {
+	if c, _ := config.LoadConfig(); c.Extensions["weather"] != nil {
 		t.Errorf("cleared config should remove the block, got %v", c.Extensions["weather"])
 	}
 }
@@ -152,7 +154,7 @@ func TestTypeExtensionConfigValues(t *testing.T) {
 func TestExtensionConfigFieldsMasksSecret(t *testing.T) {
 	home := withTempHome(t)
 	writeExtensionManifest(t, home, "weather", sampleSchema())
-	writeUserConfig(t, home, Config{
+	writeUserConfig(t, home, config.Config{
 		Extensions: map[string]map[string]json.RawMessage{
 			"weather": {"api_key": json.RawMessage(`"sk-secret"`)},
 		},

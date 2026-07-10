@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"terva.sh/terva/packages/testsupport"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // chdirTemp changes into dir for the test and restores the old cwd afterward.

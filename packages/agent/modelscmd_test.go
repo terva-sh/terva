@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -49,7 +50,7 @@ func TestModelsInitWritesLoadableScaffold(t *testing.T) {
 func TestModelsInitRefusesExistingWithoutForce(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	path := UserModelsPath()
-	if err := os.MkdirAll(TervaHome(), 0o755); err != nil {
+	if err := os.MkdirAll(config.TervaHome(), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	const sentinel = `{"providers":{}}`

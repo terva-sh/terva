@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/ignore"
 )
@@ -146,7 +147,7 @@ func extLogs(args []string) error {
 			follow = true
 		}
 	}
-	logPath := filepath.Join(TervaHome(), "logs", "ext-"+name+".log")
+	logPath := filepath.Join(config.TervaHome(), "logs", "ext-"+name+".log")
 	if _, err := os.Stat(logPath); err != nil {
 		return fmt.Errorf("no log for %q at %s", name, logPath)
 	}
@@ -179,7 +180,7 @@ func extToggle(args []string, enabled bool) error {
 	if err != nil {
 		return err
 	}
-	if err := setManifestEnabled(dir, enabled); err != nil {
+	if err := config.SetManifestEnabled(dir, enabled); err != nil {
 		return err
 	}
 	state := "enabled"
@@ -251,7 +252,7 @@ func cloneArgs(src, out, ref string) []string {
 // decide whether that's fatal or a skip. installOne does not print on
 // success; the caller reports the outcome.
 func installOne(src, ref, nameOverride string) (out string, err error) {
-	dest := filepath.Join(TervaHome(), "extensions")
+	dest := filepath.Join(config.TervaHome(), "extensions")
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return "", err
 	}
@@ -434,7 +435,7 @@ func extUpgrade(args []string) error {
 
 func extensionDirs() map[string]string {
 	out := map[string]string{}
-	if h := TervaHome(); h != "" {
+	if h := config.TervaHome(); h != "" {
 		out["global"] = filepath.Join(h, "extensions")
 	}
 	if cwd, err := os.Getwd(); err == nil {
@@ -460,51 +461,10 @@ func findExtensionDir(name string) (string, error) {
 	if d, ok := dirs["project"]; ok {
 		roots = append(roots, d)
 	}
-	if dir, ok := matchExtensionDir(roots, name); ok {
+	if dir, ok := config.MatchExtensionDir(roots, name); ok {
 		return dir, nil
 	}
 	return "", fmt.Errorf("extension %q not found", name)
-}
-
-// matchExtensionDir resolves an extension to its install directory within the
-// given roots (searched in order), preferring a directory whose basename is
-// name, then a directory whose manifest declares that name. The two differ
-// when the install dir keeps the source repo name (dir "terva-ext-index" for
-// manifest name "index"); `ext list` shows the manifest name, so every
-// name-keyed lookup must accept both. findExtensionDir and findExtensionDirIn
-// both route through here so their resolution can't drift apart — the drift
-// that once let the /extensions config dialog miss a manifest-named install.
-func matchExtensionDir(roots []string, name string) (string, bool) {
-	// 1. Direct install-directory match (fast path, back-compat).
-	for _, d := range roots {
-		cand := filepath.Join(d, name)
-		if _, err := os.Stat(filepath.Join(cand, "extension.json")); err == nil {
-			return cand, true
-		}
-	}
-	// 2. Manifest-name match (what `ext list` displays).
-	for _, d := range roots {
-		entries, err := os.ReadDir(d)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			raw, err := os.ReadFile(filepath.Join(d, e.Name(), "extension.json"))
-			if err != nil {
-				continue
-			}
-			var m struct {
-				Name string `json:"name"`
-			}
-			if json.Unmarshal(raw, &m) == nil && m.Name == name {
-				return filepath.Join(d, e.Name()), true
-			}
-		}
-	}
-	return "", false
 }
 
 func dashIfEmpty(s string) string {

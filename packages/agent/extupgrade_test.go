@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -87,7 +88,7 @@ func TestFindExtensionDirInResolvesManifestName(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"obsidian", "terva-ext-obsidian"} {
-		got, err := findExtensionDirIn("", name)
+		got, err := config.FindExtensionDirIn("", name)
 		if err != nil || got != gdir {
 			t.Fatalf("findExtensionDirIn(%q) = %q, %v; want %q", name, got, err, gdir)
 		}
@@ -102,11 +103,11 @@ func TestFindExtensionDirInResolvesManifestName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(pdir, "extension.json"), []byte(`{"name":"tasks"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := findExtensionDirIn(cwd, "tasks"); err != nil || got != pdir {
+	if got, err := config.FindExtensionDirIn(cwd, "tasks"); err != nil || got != pdir {
 		t.Fatalf(`findExtensionDirIn(cwd, "tasks") = %q, %v; want %q`, got, err, pdir)
 	}
 
-	if _, err := findExtensionDirIn("", "nope"); err == nil {
+	if _, err := config.FindExtensionDirIn("", "nope"); err == nil {
 		t.Fatal("expected a not-found error for an unknown name")
 	}
 }

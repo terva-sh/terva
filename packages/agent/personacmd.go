@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -67,14 +68,14 @@ default_persona in config.json or a $TERVA_HOME/persona.md file.`))
 // (where each persona is sourced from, and what it overrides).
 func personaList() error {
 	type row struct {
-		p         Persona
+		p         build.Persona
 		overrides []string // origins shadowed by this winner, lower tiers first
 	}
 	seen := map[string]int{}
 	var rows []row
-	for _, set := range personaTiers() {
+	for _, set := range build.PersonaTiers() {
 		for _, p := range set {
-			k := p.key()
+			k := p.Key()
 			if idx, ok := seen[k]; ok {
 				rows[idx].overrides = append(rows[idx].overrides, p.Origin())
 				continue
@@ -137,7 +138,7 @@ func validateOnePersona(path string) (ok bool) {
 		return false
 	}
 	var problems, warns []string
-	p, perr := parsePersona(string(raw), path)
+	p, perr := build.ParsePersona(string(raw), path)
 	if perr != nil {
 		problems = append(problems, perr.Error())
 	} else {
@@ -181,13 +182,13 @@ func personaInit(args []string) error {
 			force = true
 		}
 	}
-	dir := personasDir()
+	dir := build.PersonasDir()
 	written, skipped := 0, 0
-	err := fs.WalkDir(builtinPersonasFS, builtinPersonasRoot, func(p string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(build.BuiltinPersonasFS, build.BuiltinPersonasRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		rel := strings.TrimPrefix(p, builtinPersonasRoot+"/")
+		rel := strings.TrimPrefix(p, build.BuiltinPersonasRoot+"/")
 		dest := filepath.Join(dir, filepath.FromSlash(rel))
 		if !force {
 			if _, statErr := os.Stat(dest); statErr == nil {
@@ -195,7 +196,7 @@ func personaInit(args []string) error {
 				return nil
 			}
 		}
-		raw, readErr := fs.ReadFile(builtinPersonasFS, p)
+		raw, readErr := fs.ReadFile(build.BuiltinPersonasFS, p)
 		if readErr != nil {
 			return readErr
 		}

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/core"
@@ -19,7 +20,7 @@ import (
 // withdrawal frame has actually been processed by the in-order read loop.
 // Everything else is the embedded non-interactive no-op.
 type withdrawHookRecorder struct {
-	nonInteractiveExtHooks
+	build.NonInteractiveExtHooks
 	mu      sync.Mutex
 	refresh int
 }
@@ -93,7 +94,7 @@ while IFS= read -r line; do case "$line" in *'"type":"shutdown"'*) exit 0;; esac
 	}
 
 	// Model-facing merge feed: gitlog must be gone.
-	adapter := &extToolAdapter{mgr: mgr}
+	adapter := &build.ExtToolAdapter{Mgr: mgr}
 	for _, ti := range adapter.Tools() {
 		if ti.Name == "gitlog" {
 			t.Error("withdrawn gitlog leaked into the merge feed (extToolAdapter.Tools)")
@@ -103,7 +104,7 @@ while IFS= read -r line; do case "$line" in *'"type":"shutdown"'*) exit 0;; esac
 	// And therefore absent from a freshly merged registry, even in yolo
 	// (a mode that would otherwise admit every tool).
 	reg := core.Registry{}
-	MergeToolsForMode(reg, core.ApprovalYolo, core.NewReadOnlySet(), adapter)
+	build.MergeToolsForMode(reg, core.ApprovalYolo, core.NewReadOnlySet(), adapter)
 	if _, ok := reg["gitlog"]; ok {
 		t.Error("withdrawn gitlog reached the merged tool registry")
 	}

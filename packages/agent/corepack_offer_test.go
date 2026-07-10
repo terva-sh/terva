@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -76,12 +77,12 @@ func TestCorePackOfferAllowed(t *testing.T) {
 	t.Setenv("TERVA_HOME", home)
 
 	// Fresh, empty home, no flags -> allowed.
-	if !corePackOfferAllowed(Args{}) {
+	if !corePackOfferAllowed(build.Args{}) {
 		t.Fatal("fresh empty home should allow the offer")
 	}
 
 	// --no-ext suppresses it.
-	if corePackOfferAllowed(Args{NoExt: true}) {
+	if corePackOfferAllowed(build.Args{NoExt: true}) {
 		t.Error("--no-ext should suppress the offer")
 	}
 
@@ -89,7 +90,7 @@ func TestCorePackOfferAllowed(t *testing.T) {
 	if err := markCorePackOffered(); err != nil {
 		t.Fatal(err)
 	}
-	if corePackOfferAllowed(Args{}) {
+	if corePackOfferAllowed(build.Args{}) {
 		t.Error("already-offered should suppress the offer")
 	}
 }
@@ -99,7 +100,7 @@ func TestCorePackOfferAllowedWhenInstalled(t *testing.T) {
 	t.Setenv("TERVA_HOME", home)
 	installDummyExt(t, home, "demoext")
 
-	if corePackOfferAllowed(Args{}) {
+	if corePackOfferAllowed(build.Args{}) {
 		t.Error("an installed extension should suppress the offer")
 	}
 }
@@ -110,7 +111,7 @@ func TestMaybeOfferCorePackNonTTYNoop(t *testing.T) {
 	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
-	maybeOfferCorePack(Args{})
+	maybeOfferCorePack(build.Args{})
 
 	if corePackAlreadyOffered() {
 		t.Error("non-TTY run must not mark offered")

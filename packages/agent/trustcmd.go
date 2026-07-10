@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -68,10 +69,10 @@ func runTrust(args []string) error {
 		}
 		path = cwd
 	}
-	if err := TrustPath(path, parent); err != nil {
+	if err := config.TrustPath(path, parent); err != nil {
 		return err
 	}
-	real := canonicalTrustPath(path)
+	real := config.CanonicalTrustPath(path)
 	if parent {
 		fmt.Printf("trusted %s and everything under it (project extensions/skills/context will load there)\n", real)
 	} else {
@@ -105,15 +106,15 @@ func runUntrust(args []string) error {
 		}
 		path = cwd
 	}
-	if err := UntrustPath(path); err != nil {
+	if err := config.UntrustPath(path); err != nil {
 		return err
 	}
-	fmt.Printf("untrusted %s (its project content will no longer load)\n", canonicalTrustPath(path))
+	fmt.Printf("untrusted %s (its project content will no longer load)\n", config.CanonicalTrustPath(path))
 	return nil
 }
 
 func printTrustList() error {
-	s, err := LoadTrustStore()
+	s, err := config.LoadTrustStore()
 	if err != nil {
 		return err
 	}
@@ -121,7 +122,7 @@ func printTrustList() error {
 		fmt.Println("no trusted directories (project extensions/skills/context are restricted everywhere)")
 		return nil
 	}
-	fmt.Printf("trusted directories (%s):\n", TrustStorePath())
+	fmt.Printf("trusted directories (%s):\n", config.TrustStorePath())
 	for _, e := range s.Trusted {
 		scope := ""
 		if e.Parent {
@@ -152,5 +153,5 @@ notes:
     any project — a repo can never trust itself.
   * For a single run without persisting, pass --trust to terva instead.
   * Trust loads project code/skills; it does NOT let a project grant
-    itself tool permissions (the self-approval ban stays).`, TrustStorePath()))
+    itself tool permissions (the self-approval ban stays).`, config.TrustStorePath()))
 }

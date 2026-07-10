@@ -11,12 +11,9 @@ import (
 	"sort"
 	"strings"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/i18n"
 )
-
-// localesDir is $TERVA_HOME/locales, home to operator translation overlays
-// (<lang>.json), gap-capture todo files (<lang>.todo.json), and exports.
-func localesDir() string { return filepath.Join(TervaHome(), "locales") }
 
 // runLocaleCommand handles `terva locale ...`: inspect, scaffold, validate,
 // and contribute UI translations. Mirrors the other subcommand routers.
@@ -123,7 +120,7 @@ func localeList() error {
 	for _, n := range i18n.EmbeddedLocaleNames() {
 		langs[n] = true
 	}
-	if entries, err := os.ReadDir(localesDir()); err == nil {
+	if entries, err := os.ReadDir(config.LocalesDir()); err == nil {
 		for _, e := range entries {
 			name := strings.TrimSuffix(e.Name(), ".json")
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || name == "en" ||
@@ -138,7 +135,7 @@ func localeList() error {
 		return nil
 	}
 	for _, name := range sortedKeys(langs) {
-		merged, err := i18n.LoadMerged(name, TervaHome())
+		merged, err := i18n.LoadMerged(name, config.TervaHome())
 		if err != nil {
 			fmt.Printf("  %-8s (error: %v)\n", name, err)
 			continue
@@ -158,7 +155,7 @@ func localeList() error {
 			if len(kr) == 0 {
 				continue
 			}
-			if mk, err := i18n.LoadMergedKeyed(cat, name, TervaHome()); err == nil {
+			if mk, err := i18n.LoadMergedKeyed(cat, name, config.TervaHome()); err == nil {
 				fmt.Printf("  [%s %d/%d]", cat, keyedDone(mk, kr), len(kr))
 			}
 		}
@@ -167,7 +164,7 @@ func localeList() error {
 			if len(r.Singular)+len(r.Plural) == 0 {
 				continue
 			}
-			if m, err := i18n.LoadMergedIn(cat, name, TervaHome()); err == nil {
+			if m, err := i18n.LoadMergedIn(cat, name, config.TervaHome()); err == nil {
 				done, tot := coverage(m, r)
 				fmt.Printf("  [%s %d/%d]", cat, done, tot)
 			}
@@ -180,7 +177,7 @@ func localeList() error {
 // localeSource labels where a language's strings come from.
 func localeSource(name string) string {
 	embedded := slices.Contains(i18n.EmbeddedLocaleNames(), name)
-	_, diskErr := os.Stat(filepath.Join(localesDir(), name+".json"))
+	_, diskErr := os.Stat(filepath.Join(config.LocalesDir(), name+".json"))
 	onDisk := diskErr == nil
 	switch {
 	case embedded && onDisk:
@@ -227,11 +224,11 @@ func localeInit(args []string) error {
 	// wording — like `terva persona init` copies the real crew to edit.
 	// A brand-new language seeds blanks (which fall through to English at
 	// runtime until filled).
-	merged, err := i18n.LoadMerged(lang, TervaHome())
+	merged, err := i18n.LoadMerged(lang, config.TervaHome())
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(localesDir(), lang+".json")
+	path := filepath.Join(config.LocalesDir(), lang+".json")
 	out := loadRawLocale(path)
 	forms := i18n.FormsForLang(lang)
 	added := 0
@@ -294,11 +291,11 @@ func localeInitUICatalogs(lang string) error {
 		if len(ref.Singular)+len(ref.Plural) == 0 {
 			continue
 		}
-		merged, err := i18n.LoadMergedIn(cat, lang, TervaHome())
+		merged, err := i18n.LoadMergedIn(cat, lang, config.TervaHome())
 		if err != nil {
 			return err
 		}
-		path := filepath.Join(localesDir(), cat, lang+".json")
+		path := filepath.Join(config.LocalesDir(), cat, lang+".json")
 		out := loadRawLocale(path)
 		added := 0
 		for k := range ref.Singular {
@@ -353,11 +350,11 @@ func localeInitKeyed(lang string) error {
 		if len(ref) == 0 {
 			continue
 		}
-		merged, err := i18n.LoadMergedKeyed(cat, lang, TervaHome())
+		merged, err := i18n.LoadMergedKeyed(cat, lang, config.TervaHome())
 		if err != nil {
 			return err
 		}
-		path := filepath.Join(localesDir(), cat, lang+".json")
+		path := filepath.Join(config.LocalesDir(), cat, lang+".json")
 		out := loadRawLocale(path)
 		added := 0
 		for k, english := range ref {
@@ -393,7 +390,7 @@ func localeValidate(args []string) error {
 		if i18n.ActiveLang() == "en" {
 			return i18n.Errorf("usage: terva locale validate <file>...")
 		}
-		args = []string{filepath.Join(localesDir(), i18n.ActiveLang()+".json")}
+		args = []string{filepath.Join(config.LocalesDir(), i18n.ActiveLang()+".json")}
 	}
 	// Reference key set per catalog subdir ("" root, "web" the control panel);
 	// a web/<lang>.json validates against the web keys, not the root UI keys.
@@ -502,7 +499,7 @@ func diffUICatalog(subdir, lang string) error {
 	if len(ref.Singular)+len(ref.Plural) == 0 {
 		return nil
 	}
-	merged, err := i18n.LoadMergedIn(subdir, lang, TervaHome())
+	merged, err := i18n.LoadMergedIn(subdir, lang, config.TervaHome())
 	if err != nil {
 		return err
 	}
@@ -574,13 +571,13 @@ func localeMerge(args []string) error {
 	if lang == "" || lang == "en" {
 		return i18n.Errorf("usage: terva locale merge <lang>")
 	}
-	todoPath := filepath.Join(localesDir(), lang+".todo.json")
+	todoPath := filepath.Join(config.LocalesDir(), lang+".todo.json")
 	todo := loadRawLocale(todoPath)
 	if len(todo) == 0 {
 		fmt.Printf("no %s to merge\n", todoPath)
 		return nil
 	}
-	destPath := filepath.Join(localesDir(), lang+".json")
+	destPath := filepath.Join(config.LocalesDir(), lang+".json")
 	dest := loadRawLocale(destPath)
 	moved := 0
 	remaining := map[string]json.RawMessage{}
@@ -647,7 +644,7 @@ func localeExport(args []string) error {
 // is the root UI catalog (locales/<lang>.export.json); "web" nests under
 // locales/web/. A catalog with nothing translated writes nothing (count 0).
 func exportUICatalog(subdir, lang string) (string, int, error) {
-	merged, err := i18n.LoadMergedIn(subdir, lang, TervaHome())
+	merged, err := i18n.LoadMergedIn(subdir, lang, config.TervaHome())
 	if err != nil {
 		return "", 0, err
 	}
@@ -670,7 +667,7 @@ func exportUICatalog(subdir, lang string) (string, int, error) {
 		}
 		out[k] = i18n.MarshalValue(clean)
 	}
-	dir := localesDir()
+	dir := config.LocalesDir()
 	if subdir != "" {
 		dir = filepath.Join(dir, subdir)
 	}

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,11 +11,14 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/lineframe"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -40,30 +42,30 @@ import (
 //
 // Auth: if $TERVACORE_RPC_TOKEN is set, the first command must be
 // {"type":"hello","token":"..."} or the connection is closed.
-func runRPCMode(ctx context.Context, args Args, version string) error {
+func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// When --no-yolo is set there is no interactive prompt to confirm
 	// tool calls, so the gate is built with a nil inner Confirmer and
 	// refuses every call with a model-readable reason (see
 	// core.ConfirmGate.Check). headlessConfirmGate also prints the
 	// one-line stderr note. nil when yolo is on (gate.Check on a nil
 	// *core.ConfirmGate always allows).
-	confirmGate, roSet := headlessConfirmGate(args, "rpc")
-	r, err := Resolve(args, true)
+	confirmGate, roSet := build.HeadlessConfirmGate(args, "rpc")
+	r, err := build.Resolve(args, true)
 	if err != nil {
 		return err
 	}
-	warnRestrictedWorkspace(args, r.Trusted)
+	build.WarnRestrictedWorkspace(args, r.Trusted)
 	r.AdoptReadOnlySet(roSet)
 
 	// Extensions: same lifecycle as interactive mode, minus the
 	// host-hooks integration. Notify/Display calls from extensions
 	// emit RPC events instead of TUI lines so any consumer can react.
 	extHooks := &rpcExtHooks{}
-	extMgr := extensions.New(TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
+	extMgr := extensions.New(config.TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	extMgr.SetAllowedExtensions(args.WithExtensions)  // --extensions allowlist; --ext paths bypass
-	wireSessionReader(extMgr, TervaHome(), r.CWD)
+	build.WireSessionReader(extMgr, config.TervaHome(), r.CWD)
 	extMgr.SetProjectTrusted(r.Trusted) // gate project ext dirs on Workspace Trust
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
@@ -75,16 +77,16 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	}
 	extMgr.WaitForReady(3 * time.Second)
 	defer extMgr.Stop(2 * time.Second)
-	r.MergeExtensionTools(&extToolAdapter{mgr: extMgr})
-	_, stopMCP := setupMCP(ctx, args, &r)
+	r.MergeExtensionTools(&build.ExtToolAdapter{Mgr: extMgr})
+	_, stopMCP := build.SetupMCP(ctx, args, &r)
 	defer stopMCP()
 
 	ag := r.NewAgent()
-	hookEng := buildHookEngine(args, r.Trusted)
+	hookEng := build.BuildHookEngine(args, r.Trusted)
 	// Canonical tool-call ladder (pre-hooks, confirm gate, extension
 	// intercept) — shared with every other mode.
-	ag.BeforeToolExecute = buildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
-	wireHostToolDispatcher(ag, extMgr, confirmGate)
+	ag.BeforeToolExecute = build.BuildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
+	build.WireHostToolDispatcher(ag, extMgr, confirmGate)
 	ag.BeforeTurn = func(step int) (bool, string) {
 		r := extMgr.InterceptTurnStart(ctx, step)
 		return !r.Block, r.Reason
@@ -103,15 +105,14 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 		}
 		return true, "", r.ReplaceText
 	}
-	wsObserve := workspaceChangeObserver(tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), extMgr)
-	ag.OnEvent = func(ev core.AgentEvent) {
-		wsObserve(ev)
-		fanoutAgentEvent(extMgr, ev)
-		observeAgentEventForHooks(hookEng, ev)
-	}
+	wsObserve := build.WorkspaceChangeObserver(tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), extMgr)
+	// Registration order is delivery order.
+	ag.AddEventObserver(wsObserve)
+	ag.AddEventObserver(func(ev core.AgentEvent) { build.FanoutAgentEvent(extMgr, ev) })
+	ag.AddEventObserver(func(ev core.AgentEvent) { build.ObserveAgentEventForHooks(hookEng, ev) })
 	// Inject extensions' live context cards into the model each turn (live
 	// provider + sizing twin; ext context before the tail so PHI stays last).
-	wireExtEphemeral(ag, extMgr.EphemeralContext)
+	build.WireExtEphemeral(ag, extMgr.EphemeralContext)
 	// Re-prompt once at close if an extension flags open work.
 	ag.ContinueOnStop = continueOnOpenWork(extMgr)
 
@@ -119,9 +120,9 @@ func runRPCMode(ctx context.Context, args Args, version string) error {
 	// `reload_ext` if/when added). Rebuilds the tool registry on the
 	// current agent so freshly-registered extension tools become
 	// callable without restarting the rpc process.
-	adapter := &extToolAdapter{mgr: extMgr}
+	adapter := &build.ExtToolAdapter{Mgr: extMgr}
 	extMgr.SetOnReload(func() {
-		resolved, err := Resolve(args, true)
+		resolved, err := build.Resolve(args, true)
 		if err != nil {
 			return
 		}
@@ -191,7 +192,7 @@ func (h *rpcExtHooks) RefreshTools()                                            
 
 type rpcServer struct {
 	ctx      context.Context
-	args     Args
+	args     build.Args
 	agent    *core.Agent
 	provider string
 	model    string
@@ -222,6 +223,10 @@ func rpcAuthToken() string {
 	return os.Getenv("ZOTCORE_RPC_TOKEN") // rename:keep — embedder compat
 }
 
+// rpcMaxFrameBytes bounds one inbound NDJSON command frame — the historical
+// 16 MiB Scanner ceiling, now enforced recoverably by lineframe.
+const rpcMaxFrameBytes = 16 << 20 // 16 MiB
+
 // run reads NDJSON commands from in and dispatches them. Returns when
 // in is closed AND every in-flight long-running command (prompt /
 // compact) has finished, so a quick `echo cmd | terva rpc` invocation
@@ -230,10 +235,23 @@ func (s *rpcServer) run(in io.Reader) error {
 	requireToken := rpcAuthToken() != ""
 	s.authed = !requireToken
 
-	sc := bufio.NewScanner(in)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
+	// Read NDJSON through lineframe at a 16 MiB ceiling: an oversized command
+	// frame from an embedder is skipped (reported back as an error frame) and
+	// the stream continues, rather than tearing the RPC server down the way
+	// bufio.Scanner's ErrTooLong would.
+	fr := lineframe.NewReader(in, rpcMaxFrameBytes, func(msg string) {
+		s.writeError("", "", msg)
+	})
+	var readErr error
+	for {
+		frame, err := fr.Read()
+		if err != nil {
+			if err != io.EOF {
+				readErr = err // a clean EOF stays nil, matching Scanner.Err
+			}
+			break
+		}
+		line := strings.TrimSpace(string(frame))
 		if line == "" {
 			continue
 		}
@@ -269,9 +287,8 @@ func (s *rpcServer) run(in io.Reader) error {
 		}
 		s.dispatch(head.Type, head.ID, []byte(line))
 	}
-	err := sc.Err()
 	s.inFlight.Wait()
-	return err
+	return readErr
 }
 
 // dispatch routes a command. Long-running commands (prompt, compact)

@@ -5,17 +5,18 @@ import (
 	"encoding/json"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
 
 // fakeToolSource is a minimal ExtensionToolSource for merge tests.
 type fakeToolSource struct {
-	infos []ExtensionToolInfo
+	infos []build.ExtensionToolInfo
 }
 
-func (f *fakeToolSource) Tools() []ExtensionToolInfo { return f.infos }
-func (f *fakeToolSource) NewExtensionTool(info ExtensionToolInfo) core.Tool {
+func (f *fakeToolSource) Tools() []build.ExtensionToolInfo { return f.infos }
+func (f *fakeToolSource) NewExtensionTool(info build.ExtensionToolInfo) core.Tool {
 	return &fakeMergedTool{name: info.Name}
 }
 
@@ -36,17 +37,17 @@ func (t *fakeMergedTool) Execute(ctx context.Context, args json.RawMessage, prog
 func TestPlanModeAdmitsReadOnlyExtensionTools(t *testing.T) {
 	pol := &core.PermissionPolicy{
 		Mode:      core.ApprovalPlan,
-		ReadOnly:  builtinReadOnlySet(),
-		EditTools: editTools,
+		ReadOnly:  build.BuiltinReadOnlySet(),
+		EditTools: build.EditTools,
 	}
 	gate := core.NewPolicyGate(pol, nil)
 
-	r := &Resolved{
+	r := &build.Resolved{
 		ToolRegistry: core.Registry{},
-		approvalMode: core.ApprovalPlan,
+		ApprovalMode: core.ApprovalPlan,
 	}
 	r.AdoptReadOnlySet(pol.ReadOnly)
-	r.MergeExtensionTools(&fakeToolSource{infos: []ExtensionToolInfo{
+	r.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
 		{Extension: "x", Name: "peek_things", Schema: []byte(`{}`), ReadOnly: true},
 		{Extension: "x", Name: "mutate_things", Schema: []byte(`{}`)},
 	}})
@@ -71,13 +72,13 @@ func TestPlanModeAdmitsReadOnlyExtensionTools(t *testing.T) {
 func TestNonPlanModeMergeMarksReadOnly(t *testing.T) {
 	pol := &core.PermissionPolicy{
 		Mode:      core.ApprovalAutoEdit,
-		ReadOnly:  builtinReadOnlySet(),
-		EditTools: editTools,
+		ReadOnly:  build.BuiltinReadOnlySet(),
+		EditTools: build.EditTools,
 	}
 	gate := core.NewPolicyGate(pol, nil)
-	r := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalAutoEdit}
+	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalAutoEdit}
 	r.AdoptReadOnlySet(pol.ReadOnly)
-	r.MergeExtensionTools(&fakeToolSource{infos: []ExtensionToolInfo{
+	r.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
 		{Extension: "x", Name: "peek_things", Schema: []byte(`{}`), ReadOnly: true},
 		{Extension: "x", Name: "mutate_things", Schema: []byte(`{}`)},
 	}})
@@ -100,14 +101,14 @@ func TestNonPlanModeMergeMarksReadOnly(t *testing.T) {
 func TestAuthorityOverridesReadOnly(t *testing.T) {
 	pol := &core.PermissionPolicy{
 		Mode:      core.ApprovalWorkspace,
-		ReadOnly:  builtinReadOnlySet(),
-		EditTools: editTools,
-		Builtin:   builtinTools,
+		ReadOnly:  build.BuiltinReadOnlySet(),
+		EditTools: build.EditTools,
+		Builtin:   build.BuiltinTools,
 	}
 	gate := core.NewPolicyGate(pol, nil)
-	r := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalWorkspace}
+	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalWorkspace}
 	r.AdoptReadOnlySet(pol.ReadOnly)
-	r.MergeExtensionTools(&fakeToolSource{infos: []ExtensionToolInfo{
+	r.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
 		// Declares network-read AND the legacy read_only bool: authority
 		// wins, so it must NOT be auto-allowed as read-only.
 		{Extension: "web", Name: "web_fetch", Schema: []byte(`{}`), ReadOnly: true, Authority: string(core.AuthNetworkRead)},
@@ -133,10 +134,10 @@ func TestAuthorityOverridesReadOnly(t *testing.T) {
 // is not admitted to the plan-mode registry (plan permits local reads
 // only), even with read_only=true set.
 func TestAuthorityNetworkReadExcludedFromPlan(t *testing.T) {
-	pol := &core.PermissionPolicy{Mode: core.ApprovalPlan, ReadOnly: builtinReadOnlySet(), EditTools: editTools}
-	r := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalPlan}
+	pol := &core.PermissionPolicy{Mode: core.ApprovalPlan, ReadOnly: build.BuiltinReadOnlySet(), EditTools: build.EditTools}
+	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalPlan}
 	r.AdoptReadOnlySet(pol.ReadOnly)
-	r.MergeExtensionTools(&fakeToolSource{infos: []ExtensionToolInfo{
+	r.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
 		{Extension: "web", Name: "web_fetch", Schema: []byte(`{}`), ReadOnly: true, Authority: string(core.AuthNetworkRead)},
 		{Extension: "x", Name: "peek_things", Schema: []byte(`{}`), Authority: string(core.AuthLocalRead)},
 	}})
@@ -155,14 +156,14 @@ func TestAuthorityNetworkReadExcludedFromPlan(t *testing.T) {
 func TestAuthorityLocalDataAutoAllowed(t *testing.T) {
 	pol := &core.PermissionPolicy{
 		Mode:      core.ApprovalWorkspace,
-		ReadOnly:  builtinReadOnlySet(),
-		EditTools: editTools,
-		Builtin:   builtinTools,
+		ReadOnly:  build.BuiltinReadOnlySet(),
+		EditTools: build.EditTools,
+		Builtin:   build.BuiltinTools,
 	}
 	gate := core.NewPolicyGate(pol, nil)
-	r := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalWorkspace}
+	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalWorkspace}
 	r.AdoptReadOnlySet(pol.ReadOnly)
-	r.MergeExtensionTools(&fakeToolSource{infos: []ExtensionToolInfo{
+	r.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
 		{Extension: "memory", Name: "memory", Schema: []byte(`{}`), Authority: string(core.AuthLocalData)},
 	}})
 	if !pol.ReadOnly.Has("memory") {
@@ -174,10 +175,10 @@ func TestAuthorityLocalDataAutoAllowed(t *testing.T) {
 
 	// Plan mode: a local-data tool is read-only-equivalent, so it stays
 	// in the registry (unlike a network-read / mutating tool).
-	planPol := &core.PermissionPolicy{Mode: core.ApprovalPlan, ReadOnly: builtinReadOnlySet(), EditTools: editTools}
-	rp := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalPlan}
+	planPol := &core.PermissionPolicy{Mode: core.ApprovalPlan, ReadOnly: build.BuiltinReadOnlySet(), EditTools: build.EditTools}
+	rp := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalPlan}
 	rp.AdoptReadOnlySet(planPol.ReadOnly)
-	rp.MergeExtensionTools(&fakeToolSource{infos: []ExtensionToolInfo{
+	rp.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
 		{Extension: "memory", Name: "memory", Schema: []byte(`{}`), Authority: string(core.AuthLocalData)},
 	}})
 	if _, ok := rp.ToolRegistry["memory"]; !ok {

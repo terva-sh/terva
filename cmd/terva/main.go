@@ -14,8 +14,8 @@ import (
 )
 
 // Injected at build time via -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
-// See .goreleaser.yaml for the release build and the Makefile for
-// local builds. Binaries built without ldflags (`go install
+// See .goreleaser.yaml for the release build and the justfile (`just
+// build`) for local builds. Binaries built without ldflags (`go install
 // terva.sh/terva/cmd/terva@vX.Y.Z`, plain `go build`) recover what
 // they can from the embedded module build info instead.
 var (

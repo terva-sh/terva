@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/envcompat"
 )
 
@@ -22,17 +24,17 @@ import (
 
 // ProjectScoped reports whether this run is project-scoped (the data home was
 // redirected and credentials pinned global). True only after EnableProjectScope.
-func ProjectScoped() bool { return pinnedGlobalHome != "" }
+func ProjectScoped() bool { return config.PinnedGlobalHome != "" }
 
 // GlobalExtensionsDir is the user's global extensions directory — the source a
 // project-scoped agent adopts extensions FROM. It tracks CredentialHome, so it
 // points at the real global install even when data has been redirected.
-func GlobalExtensionsDir() string { return filepath.Join(CredentialHome(), "extensions") }
+func GlobalExtensionsDir() string { return filepath.Join(config.CredentialHome(), "extensions") }
 
 // resolveAdoptExtensions returns the global extensions a scoped project re-adopts
 // (its .terva/config.json adopt_extensions), or nil.
 func resolveAdoptExtensions(cwd string) []string {
-	pc, err := LoadProjectConfig(cwd)
+	pc, err := config.LoadProjectConfig(cwd)
 	if err != nil || pc == nil {
 		return nil
 	}
@@ -58,9 +60,9 @@ func projectScopedDecision(flagProject, flagNoProject bool, configScoped *bool) 
 // resolveProjectScoped combines the flags with the project config's
 // project_scoped field (looked up from cwd, walking up like other project
 // config). A read error just means "no config opinion".
-func resolveProjectScoped(args Args, cwd string) bool {
+func resolveProjectScoped(args build.Args, cwd string) bool {
 	var configScoped *bool
-	if pc, err := LoadProjectConfig(cwd); err == nil && pc != nil {
+	if pc, err := config.LoadProjectConfig(cwd); err == nil && pc != nil {
 		configScoped = pc.ProjectScoped
 	}
 	return projectScopedDecision(args.Project, args.NoProject, configScoped)
@@ -83,7 +85,7 @@ func projectDataHome(cwd string) string {
 // TERVA_HOME so every data-layer path follows. Call once, early, before
 // anything reads the home. Returns (dataHome, globalHome).
 func EnableProjectScope(cwd string) (dataHome, globalHome string, err error) {
-	globalHome = TervaHome() // capture BEFORE the redirect — auth + trust home
+	globalHome = config.TervaHome() // capture BEFORE the redirect — auth + trust home
 	dataHome = projectDataHome(cwd)
 	if err := os.MkdirAll(dataHome, 0o700); err != nil {
 		return "", "", fmt.Errorf("create project home %s: %w", dataHome, err)
@@ -100,13 +102,13 @@ func EnableProjectScope(cwd string) (dataHome, globalHome string, err error) {
 	// Set the pin only AFTER the redirect succeeds: otherwise ProjectScoped()
 	// would report true while TERVA_HOME was never actually redirected, an
 	// inconsistent global state. auth.json + trusted.json resolve here.
-	pinnedGlobalHome = globalHome
+	config.PinnedGlobalHome = globalHome
 	return dataHome, globalHome, nil
 }
 
 // maybeEnableProjectScope turns on project-scoped mode when the flags/config ask
 // for it, returning a human-readable note (or "") to surface to the user.
-func maybeEnableProjectScope(args Args) (string, error) {
+func maybeEnableProjectScope(args build.Args) (string, error) {
 	cwd := args.CWD
 	if cwd == "" {
 		cwd, _ = os.Getwd()
@@ -130,7 +132,7 @@ func maybeEnableProjectScope(args Args) (string, error) {
 	// and re-runs; `--trust` grants it for a single run.
 	trustArgs := args
 	trustArgs.CWD = cwd
-	if !resolveTrustState(trustArgs).IsTrusted() {
+	if !build.ResolveTrustState(trustArgs).IsTrusted() {
 		return "", fmt.Errorf(
 			"project-scoped agent in %s is not trusted.\n"+
 				"A scoped project runs its OWN config, extensions, hooks, and system prompt, so it must be trusted first:\n"+

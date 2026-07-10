@@ -13,8 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/external"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
@@ -92,7 +94,7 @@ func runBotCommand(rawArgs []string, version string) (handled bool, err error) {
 		if svc.Setup == nil {
 			return true, fmt.Errorf("connector %q has no setup flow", svc.Name)
 		}
-		return true, svc.Setup(TervaHome())
+		return true, svc.Setup(config.TervaHome())
 	case "status":
 		return true, botStatus(svc)
 	case "reset":
@@ -146,7 +148,7 @@ func botLink(tail []string) error {
 	if len(tail) != 1 {
 		return i18n.Errorf("usage: terva bot link <path/to/connector.json>")
 	}
-	dst, err := external.Link(TervaHome(), tail[0])
+	dst, err := external.Link(config.TervaHome(), tail[0])
 	if err != nil {
 		return err
 	}
@@ -243,26 +245,26 @@ config & state (telegram):
 // botStatus prints the connector's config block plus daemon liveness.
 func botStatus(svc chat.Service) error {
 	if svc.StatusText != nil {
-		text, err := svc.StatusText(TervaHome())
+		text, err := svc.StatusText(config.TervaHome())
 		if err != nil {
 			return err
 		}
 		fmt.Println(text)
-		if !svc.Configured(TervaHome()) {
+		if !svc.Configured(config.TervaHome()) {
 			return nil
 		}
 	}
 
-	pid, alive, _ := chat.IsRunning(TervaHome(), svc.Name)
+	pid, alive, _ := chat.IsRunning(config.TervaHome(), svc.Name)
 	switch {
 	case alive:
 		fmt.Printf("process:      running (pid %d)\n", pid)
 	case pid > 0:
-		fmt.Printf("process:      stopped (stale pid %d in %s)\n", pid, chat.PIDPath(TervaHome(), svc.Name))
+		fmt.Printf("process:      stopped (stale pid %d in %s)\n", pid, chat.PIDPath(config.TervaHome(), svc.Name))
 	default:
 		fmt.Println("process:      stopped")
 	}
-	logPath := chat.LogPath(TervaHome(), svc.Name)
+	logPath := chat.LogPath(config.TervaHome(), svc.Name)
 	if fi, err := os.Stat(logPath); err == nil {
 		fmt.Printf("log file:     %s (%d bytes)\n", logPath, fi.Size())
 	}
@@ -274,7 +276,7 @@ func botReset(svc chat.Service) error {
 	if svc.Reset == nil {
 		return fmt.Errorf("connector %q has no reset flow", svc.Name)
 	}
-	removed, err := svc.Reset(TervaHome())
+	removed, err := svc.Reset(config.TervaHome())
 	if err != nil {
 		return err
 	}
@@ -291,12 +293,12 @@ func botReset(svc chat.Service) error {
 // are redirected to the connector's log file.
 func botStart(svc chat.Service, rawTail []string) error {
 	// Refuse to start if another bot is already running.
-	if pid, alive, _ := chat.IsRunning(TervaHome(), svc.Name); alive {
+	if pid, alive, _ := chat.IsRunning(config.TervaHome(), svc.Name); alive {
 		return fmt.Errorf("bot is already running (pid %d); use `terva bot stop` first", pid)
 	}
-	_ = chat.RemovePID(TervaHome(), svc.Name) // clear any stale pid file
+	_ = chat.RemovePID(config.TervaHome(), svc.Name) // clear any stale pid file
 
-	if !svc.Configured(TervaHome()) {
+	if !svc.Configured(config.TervaHome()) {
 		return fmt.Errorf("connector %q is not configured — run `terva bot setup` first", svc.Name)
 	}
 
@@ -305,7 +307,7 @@ func botStart(svc chat.Service, rawTail []string) error {
 		return fmt.Errorf("locate terva binary: %w", err)
 	}
 
-	logPath := chat.LogPath(TervaHome(), svc.Name)
+	logPath := chat.LogPath(config.TervaHome(), svc.Name)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return err
 	}
@@ -320,7 +322,7 @@ func botStart(svc chat.Service, rawTail []string) error {
 	// Users hit cryptic tls / exec errors on that path; fail clearly.
 	if strings.Contains(self, string(os.PathSeparator)+"go-build") ||
 		strings.Contains(self, string(os.PathSeparator)+"go-tmp") {
-		return fmt.Errorf("detected `go run` temp binary at %s — run `make install` (or copy ./bin/terva to your PATH) and use the installed binary for `start`", self)
+		return fmt.Errorf("detected `go run` temp binary at %s — run `just install` (or copy ./bin/terva to your PATH) and use the installed binary for `start`", self)
 	}
 
 	// Child argv: same flags the user passed to `terva bot start`,
@@ -342,7 +344,7 @@ func botStart(svc chat.Service, rawTail []string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("spawn: %w", err)
 	}
-	if err := chat.WritePID(TervaHome(), svc.Name, cmd.Process.Pid); err != nil {
+	if err := chat.WritePID(config.TervaHome(), svc.Name, cmd.Process.Pid); err != nil {
 		_ = cmd.Process.Kill()
 		return fmt.Errorf("write pid: %w", err)
 	}
@@ -357,13 +359,13 @@ func botStart(svc chat.Service, rawTail []string) error {
 // botStop sends SIGTERM to the running bot (SIGKILL if it doesn't
 // exit within 5s) and cleans up the pid file.
 func botStop(svc chat.Service) error {
-	pid, alive, err := chat.IsRunning(TervaHome(), svc.Name)
+	pid, alive, err := chat.IsRunning(config.TervaHome(), svc.Name)
 	if err != nil {
 		return err
 	}
 	if !alive {
 		if pid > 0 {
-			_ = chat.RemovePID(TervaHome(), svc.Name)
+			_ = chat.RemovePID(config.TervaHome(), svc.Name)
 			fmt.Printf("no live process; cleared stale pid %d\n", pid)
 			return nil
 		}
@@ -373,7 +375,7 @@ func botStop(svc chat.Service) error {
 	if err := chat.StopProcess(pid, 5*time.Second); err != nil {
 		return fmt.Errorf("stop pid %d: %w", pid, err)
 	}
-	_ = chat.RemovePID(TervaHome(), svc.Name)
+	_ = chat.RemovePID(config.TervaHome(), svc.Name)
 	fmt.Printf("stopped pid %d\n", pid)
 	return nil
 }
@@ -386,7 +388,7 @@ func botLogs(svc chat.Service, rawTail []string) error {
 			follow = true
 		}
 	}
-	p := chat.LogPath(TervaHome(), svc.Name)
+	p := chat.LogPath(config.TervaHome(), svc.Name)
 	f, err := os.Open(p)
 	if errors.Is(err, os.ErrNotExist) {
 		fmt.Println("no log file at", p)
@@ -431,7 +433,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	// Parse only a small subset of flags relevant to bot run. We reuse
 	// the main args parser so --provider/--model/--cwd/--api-key/--reasoning
 	// behave the same as in the tui.
-	args, err := ParseArgs(rawTail)
+	args, err := build.ParseArgs(rawTail)
 	if err != nil {
 		return err
 	}
@@ -461,7 +463,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	// config "approval", still wins over the default. (Jail is left alone:
 	// built-in file/shell tools stay confined to the cwd.) Setting this
 	// before Resolve keeps the resolver and the gate agreeing.
-	cfg, _ := LoadConfig()
+	cfg, _ := config.LoadConfig()
 	if v := botApprovalDefault(args.Approval, args.NoYolo, cfg.Approval); v != "" {
 		args.Approval = v
 	}
@@ -480,7 +482,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	}()
 
 	// Bot mode always requires credentials (can't pop a /login dialog).
-	resolved, err := Resolve(args, true)
+	resolved, err := build.Resolve(args, true)
 	if err != nil {
 		return err
 	}
@@ -490,7 +492,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	// gate the print/json modes use. Honors --no-ext / --no-mcp / --no-tools,
 	// and the --chat / --play meta-modes (chat → no tools at all; play → the
 	// extension/MCP tools, built-in coding tools off) via Resolve + the merge.
-	gate, roSet := headlessConfirmGate(args, "bot")
+	gate, roSet := build.HeadlessConfirmGate(args, "bot")
 	resolved.AdoptReadOnlySet(roSet)
 	// Extensions (and the MCP servers wired inside the same setup) get
 	// their OWN lifetime context, not the signal-cancelled one: the
@@ -505,7 +507,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	extMgr, stopExt := setupNonInteractiveExtensions(extCtx, args, &resolved, version)
 	defer stopExt()
 
-	conn, pairing, err := svc.NewConnector(TervaHome(), nil)
+	conn, pairing, err := svc.NewConnector(config.TervaHome(), nil)
 	if err != nil {
 		return err
 	}
@@ -526,13 +528,13 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 		if serr == nil {
 			sess = s
 			defer sess.Close()
-			wireHeadlessSessionPersist(agent, sess)
+			build.WireHeadlessSessionPersist(agent, sess)
 		} else {
 			fmt.Fprintln(os.Stderr, "session:", serr)
 		}
 	}
 	// Tell session-keyed extensions the real session id before any turn runs.
-	emitSessionStart(extMgr, sess)
+	build.EmitSessionStart(extMgr, sess)
 
 	var loop *chat.Loop
 	loop = &chat.Loop{
@@ -546,7 +548,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 		// Gate v2: the owner admits groups (/approve, or the admission
 		// ask when the connector reports being added); everything
 		// non-DM stays silent until then.
-		Admissions: chat.LoadAdmissions(chat.AdmissionsPath(TervaHome(), svc.Name)),
+		Admissions: chat.LoadAdmissions(chat.AdmissionsPath(config.TervaHome(), svc.Name)),
 		// Per-chat sessions (stage C): the owner's DM keeps `agent`
 		// (and its persisted session); each approved group gets its
 		// own transcript, minted here with the same extension/gate
@@ -564,7 +566,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 			// Only the provider client is swapped — tools, sandbox,
 			// system prompt, and transcripts stay with the existing
 			// agents (the loop fans the swap out to every chat's).
-			next, err := Resolve(args, true)
+			next, err := build.Resolve(args, true)
 			if err != nil {
 				return err
 			}
@@ -596,8 +598,8 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 
 	// Record our pid so `terva bot status` / `terva bot stop` can find us,
 	// regardless of whether we were started directly or via `bot start`.
-	_ = chat.WritePID(TervaHome(), svc.Name, os.Getpid())
-	defer chat.RemovePID(TervaHome(), svc.Name)
+	_ = chat.WritePID(config.TervaHome(), svc.Name, os.Getpid())
+	defer chat.RemovePID(config.TervaHome(), svc.Name)
 
 	// Run the loop until it ends or the signal handler cancels it. A
 	// ^C / SIGTERM shutdown is CLEAN — the connector's receive loop
@@ -658,9 +660,9 @@ func extractIdleNudgeFlags(tail []string) (rest []string, idleAfter time.Duratio
 
 // openOrCreateSessionForBot reuses the same logic as interactive mode
 // but never prompts (no TTY picker); falls back to latest or new.
-func openOrCreateSessionForBot(args Args, r Resolved, ag *core.Agent, version string) (*core.Session, []any, error) {
+func openOrCreateSessionForBot(args build.Args, r build.Resolved, ag *core.Agent, version string) (*core.Session, []any, error) {
 	if args.Continue {
-		if latest := core.LatestSession(TervaHome(), args.CWD); latest != "" {
+		if latest := core.LatestSession(config.TervaHome(), args.CWD); latest != "" {
 			s, msgs, err := core.OpenSession(latest)
 			if err != nil {
 				return nil, nil, err
@@ -672,6 +674,6 @@ func openOrCreateSessionForBot(args Args, r Resolved, ag *core.Agent, version st
 			return s, nil, nil
 		}
 	}
-	s, err := core.NewSession(TervaHome(), args.CWD, r.Provider, r.Model, version)
+	s, err := core.NewSession(config.TervaHome(), args.CWD, r.Provider, r.Model, version)
 	return s, nil, err
 }

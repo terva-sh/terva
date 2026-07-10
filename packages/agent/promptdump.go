@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -13,14 +14,14 @@ import (
 // stdout, and exit before any model call. Resolve runs with requireCred=false,
 // so it needs no API key or tokens — a debugging + offline-assertion tool.
 // Output goes to stdout so `--dump-prompt=json | jq ...` works.
-func runPromptDump(args Args) error {
-	r, err := Resolve(args, false)
+func runPromptDump(args build.Args) error {
+	r, err := build.Resolve(args, false)
 	if err != nil {
 		return err
 	}
 	var msgs []provider.Message
 	// A card greeting shows as messages[0], mirroring a fresh session.
-	if g := strings.TrimSpace(r.cardGreeting); g != "" {
+	if g := strings.TrimSpace(r.CardGreeting); g != "" {
 		msgs = append(msgs, provider.Message{
 			Role:    provider.RoleAssistant,
 			Content: []provider.Content{provider.TextBlock{Text: g}},

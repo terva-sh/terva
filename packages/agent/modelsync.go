@@ -9,17 +9,19 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/provider"
 )
 
 // ModelCachePath returns the on-disk location of the merged model cache.
 func ModelCachePath() string {
-	return filepath.Join(TervaHome(), "models-cache.json")
+	return filepath.Join(config.TervaHome(), "models-cache.json")
 }
 
 // UserModelsPath returns the path to the user's models.json override.
 func UserModelsPath() string {
-	return filepath.Join(TervaHome(), "models.json")
+	return filepath.Join(config.TervaHome(), "models.json")
 }
 
 // LoadCachedModels loads the cache file and applies it to the provider
@@ -56,7 +58,7 @@ func LoadUserModels() {
 // (open-catalogue models have no baked-in entry). No-op when the
 // provider isn't configured.
 func LoadCompatModel() {
-	baseURL, model, ctxWin := AuthStoreFor().Extras("openai-compatible")
+	baseURL, model, ctxWin := config.AuthStoreFor().Extras("openai-compatible")
 	if baseURL == "" || model == "" {
 		return
 	}
@@ -77,7 +79,7 @@ func LoadCompatModel() {
 // compatDefaultContext returns the user's configured default context
 // window for the openai-compatible endpoint, or 32768 when unset.
 func compatDefaultContext() int {
-	if _, _, ctxWin := AuthStoreFor().Extras("openai-compatible"); ctxWin > 0 {
+	if _, _, ctxWin := config.AuthStoreFor().Extras("openai-compatible"); ctxWin > 0 {
 		return ctxWin
 	}
 	return 32768
@@ -90,7 +92,7 @@ func compatDefaultContext() int {
 // is cheap, so we re-list on every launch (and after a fresh login).
 // No-op when the endpoint isn't configured.
 func RefreshCompatModelsAsync() {
-	baseURL, _, _ := AuthStoreFor().Extras("openai-compatible")
+	baseURL, _, _ := config.AuthStoreFor().Extras("openai-compatible")
 	if baseURL == "" {
 		return
 	}
@@ -102,7 +104,7 @@ func RefreshCompatModelsAsync() {
 		// higher-precedence "user" layer, so hand-set overrides (e.g.
 		// maxTokens on the default model) win over discovered values
 		// by construction.
-		key, _, _ := ResolveCredential("openai-compatible", "")
+		key, _, _ := build.ResolveCredential("openai-compatible", "")
 		live, err := provider.DiscoverOpenAICompatible(ctx, baseURL, key, compatDefaultContext())
 		if err != nil {
 			return
@@ -127,14 +129,14 @@ func RefreshCompatModelsAsync() {
 // Silent on success; one stderr line per repair. Errors loading or
 // saving the file are non-fatal — the caller continues with defaults.
 func ValidateAndRepairConfig() {
-	cfg, err := LoadConfig()
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "terva: config.json: %v (using defaults)\n", err)
 		return
 	}
 	changed := false
 
-	if cfg.Provider != "" && !isKnownProvider(cfg.Provider) {
+	if cfg.Provider != "" && !build.IsKnownProvider(cfg.Provider) {
 		fmt.Fprintf(os.Stderr, "terva: config.json: unknown provider %q reset to \"anthropic\"\n", cfg.Provider)
 		cfg.Provider = "anthropic"
 		cfg.Model = ""
@@ -147,7 +149,7 @@ func ValidateAndRepairConfig() {
 	if cfg.Provider != "" && cfg.Model != "" && !openCatalogue {
 		if _, err := provider.FindModel(cfg.Provider, cfg.Model); err != nil {
 			if m, err := provider.FindModel("", cfg.Model); err == nil {
-				fix := defaultModelForProvider(cfg.Provider)
+				fix := build.DefaultModelForProvider(cfg.Provider)
 				fmt.Fprintf(os.Stderr,
 					"terva: config.json: model %q belongs to provider %q (config has provider=%q); switched model to %q\n",
 					cfg.Model, m.Provider, cfg.Provider, fix)
@@ -155,7 +157,7 @@ func ValidateAndRepairConfig() {
 				changed = true
 			} else if cfg.Provider != "ollama" {
 				// Model id not in any catalog. Reset to provider's default.
-				fix := defaultModelForProvider(cfg.Provider)
+				fix := build.DefaultModelForProvider(cfg.Provider)
 				fmt.Fprintf(os.Stderr,
 					"terva: config.json: model %q not found in the active catalog; switched to %q\n",
 					cfg.Model, fix)
@@ -166,7 +168,7 @@ func ValidateAndRepairConfig() {
 	}
 
 	if changed {
-		if err := SaveConfig(cfg); err != nil {
+		if err := config.SaveConfig(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "terva: config.json: failed to persist repair: %v\n", err)
 		}
 	}
@@ -205,7 +207,7 @@ func refreshModels(force bool) {
 
 	var all []provider.Model
 
-	if cred, method, err := ResolveCredential("anthropic", ""); err == nil && method == "apikey" {
+	if cred, method, err := build.ResolveCredential("anthropic", ""); err == nil && method == "apikey" {
 		// /v1/models on Anthropic is API-key only; OAuth tokens can
 		// also list models via the bearer header, but we skip OAuth
 		// here to avoid surprise rate-limit hits on subscription keys.
@@ -213,12 +215,12 @@ func refreshModels(force bool) {
 			all = append(all, live...)
 		}
 	}
-	if cred, method, err := ResolveCredential("openai", ""); err == nil && method == "apikey" {
+	if cred, method, err := build.ResolveCredential("openai", ""); err == nil && method == "apikey" {
 		if live, err := provider.DiscoverOpenAI(ctx, cred, ""); err == nil {
 			all = append(all, live...)
 		}
 	}
-	if cred, method, err := ResolveCredential("kimi", ""); err == nil && method == "apikey" {
+	if cred, method, err := build.ResolveCredential("kimi", ""); err == nil && method == "apikey" {
 		if live, err := provider.DiscoverOpenAI(ctx, cred, "https://api.kimi.com/coding/v1"); err == nil {
 			for i := range live {
 				live[i].Provider = "kimi"
@@ -227,12 +229,12 @@ func refreshModels(force bool) {
 			all = append(all, live...)
 		}
 	}
-	if cred, method, err := ResolveCredential("google", ""); err == nil && method == "apikey" {
+	if cred, method, err := build.ResolveCredential("google", ""); err == nil && method == "apikey" {
 		if live, err := provider.DiscoverGoogle(ctx, cred, ""); err == nil {
 			all = append(all, live...)
 		}
 	}
-	if _, _, err := ResolveCredential("openrouter", ""); err == nil {
+	if _, _, err := build.ResolveCredential("openrouter", ""); err == nil {
 		// /models is public; gate on a credential so the picker only
 		// fills with OpenRouter's hundreds of routes for users who use it.
 		if live, err := provider.DiscoverOpenRouter(ctx, ""); err == nil {
@@ -250,7 +252,7 @@ func refreshModels(force bool) {
 	} {
 		// /models is public; gate only on the user having connected this
 		// provider (any credential/method), like the openrouter block.
-		cred, _, err := ResolveCredential(oc.id, "")
+		cred, _, err := build.ResolveCredential(oc.id, "")
 		if err != nil {
 			continue
 		}
@@ -268,12 +270,12 @@ func refreshModels(force bool) {
 	// User-defined OpenAI-compatible endpoints (config.json "endpoints"): each
 	// is its own provider; discover its /v1/models list. The key is optional
 	// (most local servers need none) and resolves via APIKeyEnv/auth.json.
-	if uc, err := LoadConfig(); err == nil {
+	if uc, err := config.LoadConfig(); err == nil {
 		for id, ep := range uc.Endpoints {
 			if strings.TrimSpace(ep.BaseURL) == "" {
 				continue
 			}
-			cred, _, _ := ResolveCredential(id, "")
+			cred, _, _ := build.ResolveCredential(id, "")
 			defCtx := compatDefaultContext()
 			if ep.ContextWindow > 0 {
 				defCtx = ep.ContextWindow
@@ -322,7 +324,7 @@ func refreshGated(cached provider.ModelCache, force bool) bool {
 // change to the endpoint set forces a re-discovery on the next launch instead
 // of waiting out CacheTTL.
 func endpointsFingerprint() string {
-	cfg, err := LoadConfig()
+	cfg, err := config.LoadConfig()
 	if err != nil || len(cfg.Endpoints) == 0 {
 		return ""
 	}

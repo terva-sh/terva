@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extdriver"
 )
 
@@ -35,7 +36,7 @@ type installedExt struct {
 // install's manifest + git origin. Migration is global-scoped: that's
 // where `ext pack install` writes and where manual installs collide.
 func scanInstalledExtensions() []installedExt {
-	root := filepath.Join(TervaHome(), "extensions")
+	root := filepath.Join(config.TervaHome(), "extensions")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil
@@ -157,7 +158,7 @@ func detectDuplicates(entry PackEntry, insts []installedExt) []duplicateCandidat
 // the planned action with no side effects.
 func migrateDuplicate(c duplicateCandidate, dryRun bool) (string, error) {
 	canonical := c.Entry.entryName()
-	canonicalDir := filepath.Join(TervaHome(), "extensions", canonical)
+	canonicalDir := filepath.Join(config.TervaHome(), "extensions", canonical)
 	old := c.Inst.Dir
 
 	canonicalExists := false
@@ -177,7 +178,7 @@ func migrateDuplicate(c duplicateCandidate, dryRun bool) (string, error) {
 		// duplicate. Carry a user's disable intent onto the canonical (the
 		// only setting a removal would otherwise drop), then remove it.
 		if !c.Inst.Manifest.IsEnabled() {
-			_ = setManifestEnabled(canonicalDir, false)
+			_ = config.SetManifestEnabled(canonicalDir, false)
 		}
 		if err := os.RemoveAll(old); err != nil {
 			return "", err

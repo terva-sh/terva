@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/testsupport"
@@ -23,7 +25,7 @@ import (
 // the given hookstub mode.
 func writeUserHooks(t *testing.T, home, stub, mode string) {
 	t.Helper()
-	cfg := Config{Hooks: &hooks.Config{PreToolUse: []hooks.Spec{{Command: stub, Args: []string{mode}}}}}
+	cfg := config.Config{Hooks: &hooks.Config{PreToolUse: []hooks.Spec{{Command: stub, Args: []string{mode}}}}}
 	b, _ := json.Marshal(cfg)
 	if err := os.WriteFile(filepath.Join(home, "config.json"), b, 0o644); err != nil {
 		t.Fatal(err)
@@ -67,7 +69,7 @@ func TestUntrustedProjectHooksDoNotFire(t *testing.T) {
 	writeProjectConfig(t, proj, jsonHooksConfig(stub, "deny"))
 
 	// Untrusted (default): no user hooks, project hooks gated → nil engine.
-	eng := buildHookEngine(Args{CWD: proj}, false)
+	eng := build.BuildHookEngine(build.Args{CWD: proj}, false)
 	if eng != nil {
 		defer eng.Close()
 		// If an engine exists at all here, the project hook leaked through.
@@ -85,7 +87,7 @@ func TestTrustedProjectHooksFire(t *testing.T) {
 	writeProjectConfig(t, proj, jsonHooksConfig(stub, "deny"))
 
 	run := func(t *testing.T, trusted bool) {
-		eng := buildHookEngine(Args{CWD: proj}, trusted)
+		eng := build.BuildHookEngine(build.Args{CWD: proj}, trusted)
 		if eng == nil {
 			t.Fatal("trusted project hook should build an engine")
 		}
@@ -101,11 +103,11 @@ func TestTrustedProjectHooksFire(t *testing.T) {
 
 	// Via the persisted store: TrustPath + resolveTrustState resolves true.
 	t.Run("store", func(t *testing.T) {
-		if err := TrustPath(proj, false); err != nil {
+		if err := config.TrustPath(proj, false); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = UntrustPath(proj) })
-		trusted := resolveTrustState(Args{CWD: proj}).IsTrusted()
+		t.Cleanup(func() { _ = config.UntrustPath(proj) })
+		trusted := build.ResolveTrustState(build.Args{CWD: proj}).IsTrusted()
 		if !trusted {
 			t.Fatal("store entry should resolve the workspace as trusted")
 		}
@@ -127,8 +129,8 @@ func TestHookMergeUnionUserAndProject(t *testing.T) {
 	writeProjectConfig(t, proj, jsonHooksConfig(stub, "deny"))
 
 	// Trusted: merged engine has user(allow) THEN project(deny).
-	user, _ := LoadConfig()
-	merged := mergeHookConfigs(user.Hooks, trustedProjectHooks(proj, true))
+	user, _ := config.LoadConfig()
+	merged := config.MergeHookConfigs(user.Hooks, config.TrustedProjectHooks(proj, true))
 	if merged == nil || len(merged.PreToolUse) != 2 {
 		t.Fatalf("merged hooks should hold both user and project specs, got %+v", merged)
 	}
@@ -141,7 +143,7 @@ func TestHookMergeUnionUserAndProject(t *testing.T) {
 	}
 
 	// Untrusted: only the user spec survives (project dropped).
-	mergedOff := mergeHookConfigs(user.Hooks, trustedProjectHooks(proj, false))
+	mergedOff := config.MergeHookConfigs(user.Hooks, config.TrustedProjectHooks(proj, false))
 	if mergedOff == nil || len(mergedOff.PreToolUse) != 1 || mergedOff.PreToolUse[0].Args[0] != "allow" {
 		t.Errorf("untrusted merge should keep ONLY the user hook, got %+v", mergedOff)
 	}
@@ -158,7 +160,7 @@ func TestUserHooksUnaffectedByTrust(t *testing.T) {
 	proj := testsupport.TempDir(t) // no project config at all
 
 	for _, trusted := range []bool{false, true} {
-		eng := buildHookEngine(Args{CWD: proj}, trusted)
+		eng := build.BuildHookEngine(build.Args{CWD: proj}, trusted)
 		if eng == nil {
 			t.Fatalf("user hooks should load (trusted=%v)", trusted)
 		}
@@ -182,8 +184,8 @@ func TestUntrustedProjectMCPNotStarted(t *testing.T) {
 	// Untrusted: trustedProjectMCP returns nil, merge yields nothing. The
 	// adapter is now always non-nil (so /mcp can live-enable a server later),
 	// but an untrusted project's server must contribute NO tools.
-	r := &Resolved{Trusted: false, CWD: proj}
-	adapter, stop := setupMCP(context.Background(), Args{CWD: proj}, r)
+	r := &build.Resolved{Trusted: false, CWD: proj}
+	adapter, stop := build.SetupMCP(context.Background(), build.Args{CWD: proj}, r)
 	defer stop()
 	if adapter != nil && len(adapter.Tools()) != 0 {
 		t.Fatalf("untrusted project MCP must NOT start; got tools %+v", adapter.Tools())
@@ -200,7 +202,7 @@ func TestTrustedProjectMCPStarts(t *testing.T) {
 
 	// User config defines a server "shared"; project defines "repo" AND a
 	// colliding "shared" — the user's "shared" must win.
-	userCfg := Config{MCP: &mcp.Config{Servers: map[string]mcp.ServerConfig{
+	userCfg := config.Config{MCP: &mcp.Config{Servers: map[string]mcp.ServerConfig{
 		"shared": {Command: stub},
 	}}}
 	ub, _ := json.Marshal(userCfg)
@@ -216,8 +218,8 @@ func TestTrustedProjectMCPStarts(t *testing.T) {
 		`"shared":{"command":` + jsonString(bogus) + `}}}}`
 	writeProjectConfig(t, proj, body)
 
-	r := &Resolved{Trusted: true, CWD: proj}
-	adapter, stop := setupMCP(context.Background(), Args{CWD: proj}, r)
+	r := &build.Resolved{Trusted: true, CWD: proj}
+	adapter, stop := build.SetupMCP(context.Background(), build.Args{CWD: proj}, r)
 	defer stop()
 	if adapter == nil {
 		t.Fatal("trusted project MCP should start and yield an adapter")
@@ -242,7 +244,7 @@ func TestTrustedProjectMCPStarts(t *testing.T) {
 func TestUserMCPUnaffectedByUntrustedProject(t *testing.T) {
 	home := withTempHome(t)
 	stub := buildPhase6MCPStub(t)
-	userCfg := Config{MCP: &mcp.Config{Servers: map[string]mcp.ServerConfig{
+	userCfg := config.Config{MCP: &mcp.Config{Servers: map[string]mcp.ServerConfig{
 		"u": {Command: stub},
 	}}}
 	ub, _ := json.Marshal(userCfg)
@@ -254,8 +256,8 @@ func TestUserMCPUnaffectedByUntrustedProject(t *testing.T) {
 	writeProjectConfig(t, proj, body)
 
 	// Untrusted: only the user's "u" server tools appear; no "repo" tools.
-	r := &Resolved{Trusted: false, CWD: proj}
-	adapter, stop := setupMCP(context.Background(), Args{CWD: proj}, r)
+	r := &build.Resolved{Trusted: false, CWD: proj}
+	adapter, stop := build.SetupMCP(context.Background(), build.Args{CWD: proj}, r)
 	defer stop()
 	if adapter == nil {
 		t.Fatal("user MCP server should load even with an untrusted project")
@@ -283,7 +285,7 @@ func TestMergeMCPConfigsUserWinsCollision(t *testing.T) {
 		"shared": {Command: "project-cmd"}, // must lose to the user entry
 		"only-p": {Command: "p"},
 	}}
-	merged := mergeMCPConfigs(user, project)
+	merged := config.MergeMCPConfigs(user, project)
 	if merged == nil {
 		t.Fatal("merge of two non-empty configs should be non-nil")
 	}
@@ -297,11 +299,11 @@ func TestMergeMCPConfigsUserWinsCollision(t *testing.T) {
 		t.Error("user-only server must survive the merge")
 	}
 	// nil project (untrusted gate already applied) keeps only user servers.
-	onlyUser := mergeMCPConfigs(user, nil)
+	onlyUser := config.MergeMCPConfigs(user, nil)
 	if onlyUser == nil || len(onlyUser.Servers) != 2 {
 		t.Errorf("nil project merge should keep the 2 user servers, got %+v", onlyUser)
 	}
-	if mergeMCPConfigs(nil, nil) != nil {
+	if config.MergeMCPConfigs(nil, nil) != nil {
 		t.Error("merging two empty configs should be nil")
 	}
 }
@@ -315,12 +317,12 @@ func TestTrustedProjectHooksFlowThroughResolveVerdict(t *testing.T) {
 	proj := testsupport.TempDir(t)
 	writeProjectConfig(t, proj, jsonHooksConfig(stub, "deny"))
 
-	args := Args{CWD: proj, Trust: true}
-	trusted := resolveTrustState(args).IsTrusted()
+	args := build.Args{CWD: proj, Trust: true}
+	trusted := build.ResolveTrustState(args).IsTrusted()
 	if !trusted {
 		t.Fatal("--trust must resolve to trusted")
 	}
-	eng := buildHookEngine(args, trusted)
+	eng := build.BuildHookEngine(args, trusted)
 	if eng == nil {
 		t.Fatal("flag-trusted project hook should load")
 	}

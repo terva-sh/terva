@@ -5,6 +5,8 @@ package agent
 import (
 	"context"
 	"fmt"
+
+	"terva.sh/terva/packages/agent/build"
 )
 
 // runACPMode is the no-tag stub: the ACP mode is an opt-in build
@@ -12,6 +14,6 @@ import (
 // tag the `terva acp` subcommand still routes here and exits with a clear
 // note instead of a missing-symbol link error, so `case ModeACP` resolves in
 // both builds.
-func runACPMode(_ context.Context, _ Args, _ string) error {
+func runACPMode(_ context.Context, _ build.Args, _ string) error {
 	return fmt.Errorf("acp mode not built in: rebuild terva with -tags terva_acp to enable `terva acp`")
 }

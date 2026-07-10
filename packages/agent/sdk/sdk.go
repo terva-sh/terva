@@ -29,7 +29,7 @@ import (
 	"fmt"
 	"sync"
 
-	"terva.sh/terva/packages/agent"
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -141,8 +141,8 @@ func effectiveMaxSteps(n int) int {
 // New constructs a Runtime from cfg. Returns an error if no
 // credential is available for the requested provider.
 func New(cfg Config) (*Runtime, error) {
-	args := agent.Args{
-		Mode:               agent.ModeJSON, // headless
+	args := build.Args{
+		Mode:               build.ModeJSON, // headless
 		Provider:           cfg.Provider,
 		Model:              cfg.Model,
 		CWD:                cfg.CWD,
@@ -158,7 +158,7 @@ func New(cfg Config) (*Runtime, error) {
 		NoTools:            cfg.NoTools,
 		NoSess:             true, // SDK callers manage persistence themselves
 	}
-	r, err := agent.Resolve(args, true)
+	r, err := build.Resolve(args, true)
 	if err != nil {
 		return nil, err
 	}

@@ -179,9 +179,9 @@ func TestNoStrayOldNameInGoSources(t *testing.T) {
 		filepath.Join("packages", "envcompat"),         // bilingual by design
 		filepath.Join("packages", "agent", "extproto"), // frozen wire + goldens
 		filepath.Join("packages", "agent", "connproto"),
-		filepath.Join("packages", "agent", "identity", "identity_test.go"), // this file
-		filepath.Join("packages", "agent", "migrate"),                      // zot→terva migration engine + cmd: bilingual by design
-		filepath.Join("packages", "agent", "modes", "migrate_dialog"),      // its TUI front-end
+		filepath.Join("packages", "agent", "identity", "identity_test.go"),       // this file
+		filepath.Join("packages", "agent", "migrate"),                            // zot→terva migration engine + cmd: bilingual by design
+		filepath.Join("packages", "agent", "modes", "dialogs", "migrate_dialog"), // its TUI front-end
 	}
 
 	root := filepath.Join("..", "..", "..")

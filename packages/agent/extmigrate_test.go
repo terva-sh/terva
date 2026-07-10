@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extdriver"
 )
 
@@ -90,7 +91,7 @@ func TestDetectDuplicatesMaybeOnNameOnly(t *testing.T) {
 func TestMigrateDuplicateRename(t *testing.T) {
 	home := withTempHome(t)
 	writeExtDir(t, home, "terva-ext-index", "index", false) // user disabled it
-	writeUserConfig(t, home, Config{
+	writeUserConfig(t, home, config.Config{
 		Extensions: map[string]map[string]json.RawMessage{
 			"index": {"depth": json.RawMessage(`3`)},
 		},
@@ -119,7 +120,7 @@ func TestMigrateDuplicateRename(t *testing.T) {
 		t.Error("disabled state should survive the rename")
 	}
 	// config block (keyed by manifest name) is untouched.
-	if cfg, _ := LoadConfig(); string(cfg.Extensions["index"]["depth"]) != "3" {
+	if cfg, _ := config.LoadConfig(); string(cfg.Extensions["index"]["depth"]) != "3" {
 		t.Errorf("config block should survive, got %v", cfg.Extensions["index"])
 	}
 }

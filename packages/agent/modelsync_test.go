@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -48,18 +49,18 @@ func TestValidateAndRepairConfig_MismatchedPair(t *testing.T) {
 	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
-	must := func(c Config) {
+	must := func(c config.Config) {
 		t.Helper()
 		b, _ := json.Marshal(c)
 		if err := os.WriteFile(filepath.Join(home, "config.json"), b, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	must(Config{Provider: "anthropic", Model: "kimi-for-coding"})
+	must(config.Config{Provider: "anthropic", Model: "kimi-for-coding"})
 
 	ValidateAndRepairConfig()
 
-	out, err := LoadConfig()
+	out, err := config.LoadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,12 +82,12 @@ func TestValidateAndRepairConfig_UnknownProvider(t *testing.T) {
 	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
-	b, _ := json.Marshal(Config{Provider: "made-up-provider", Model: "some-model"})
+	b, _ := json.Marshal(config.Config{Provider: "made-up-provider", Model: "some-model"})
 	_ = os.WriteFile(filepath.Join(home, "config.json"), b, 0o644)
 
 	ValidateAndRepairConfig()
 
-	out, _ := LoadConfig()
+	out, _ := config.LoadConfig()
 	if out.Provider != "anthropic" {
 		t.Errorf("provider not reset: %q", out.Provider)
 	}
@@ -102,12 +103,12 @@ func TestValidateAndRepairConfig_UnknownModel(t *testing.T) {
 	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
-	b, _ := json.Marshal(Config{Provider: "anthropic", Model: "claude-deleted-model"})
+	b, _ := json.Marshal(config.Config{Provider: "anthropic", Model: "claude-deleted-model"})
 	_ = os.WriteFile(filepath.Join(home, "config.json"), b, 0o644)
 
 	ValidateAndRepairConfig()
 
-	out, _ := LoadConfig()
+	out, _ := config.LoadConfig()
 	if out.Provider != "anthropic" {
 		t.Errorf("provider changed: %q", out.Provider)
 	}
@@ -120,12 +121,12 @@ func TestValidateAndRepairConfig_DuplicateModelIDValidForConfiguredProvider(t *t
 	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
-	b, _ := json.Marshal(Config{Provider: "openai-codex", Model: "gpt-5.5"})
+	b, _ := json.Marshal(config.Config{Provider: "openai-codex", Model: "gpt-5.5"})
 	_ = os.WriteFile(filepath.Join(home, "config.json"), b, 0o644)
 
 	ValidateAndRepairConfig()
 
-	out, _ := LoadConfig()
+	out, _ := config.LoadConfig()
 	if out.Provider != "openai-codex" {
 		t.Errorf("provider mutated: %q", out.Provider)
 	}
@@ -139,12 +140,12 @@ func TestValidateAndRepairConfig_HappyPath(t *testing.T) {
 	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
-	b, _ := json.Marshal(Config{Provider: "anthropic", Model: "claude-sonnet-4-5"})
+	b, _ := json.Marshal(config.Config{Provider: "anthropic", Model: "claude-sonnet-4-5"})
 	_ = os.WriteFile(filepath.Join(home, "config.json"), b, 0o644)
 
 	ValidateAndRepairConfig()
 
-	out, _ := LoadConfig()
+	out, _ := config.LoadConfig()
 	if out.Provider != "anthropic" {
 		t.Errorf("provider mutated: %q", out.Provider)
 	}

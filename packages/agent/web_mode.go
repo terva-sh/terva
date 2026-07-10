@@ -10,8 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/web"
+	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/relaunch"
 )
@@ -24,7 +27,7 @@ import (
 // SIGINT/SIGTERM cancel the context so the server drains and ws.Close() tears
 // down every session's agent and extension subprocesses — the graceful stop a
 // systemd-managed daemon needs.
-func runWebMode(ctx context.Context, args Args, version string) error {
+func runWebMode(ctx context.Context, args build.Args, version string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Workspace prep below (credential resolve, MCP server spawn + tool listing)
@@ -33,7 +36,7 @@ func runWebMode(ctx context.Context, args Args, version string) error {
 	// start is attributable at a glance.
 	fmt.Fprintln(os.Stderr, "terva web: starting — the control panel will be available shortly")
 	begin := time.Now()
-	ws, err := NewWorkspace(args, version)
+	ws, err := workspace.NewWorkspace(args, version)
 	if err != nil {
 		return err
 	}
@@ -45,8 +48,8 @@ func runWebMode(ctx context.Context, args Args, version string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "terva web: workspace ready (took %s)\n", time.Since(begin).Round(10*time.Millisecond))
-	cfg, _ := LoadConfig()
-	fmt.Fprintf(os.Stderr, "terva web: approval mode %q (tool calls that need approval prompt in the browser)\n", resolveApprovalMode(args, cfg))
+	cfg, _ := config.LoadConfig()
+	fmt.Fprintf(os.Stderr, "terva web: approval mode %q (tool calls that need approval prompt in the browser)\n", build.ResolveApprovalMode(args, cfg))
 
 	// Self-restart is opt-in and must never ride on an unauthenticated,
 	// non-loopback listener open to ANY peer — the one place a stranger could
@@ -65,7 +68,7 @@ func runWebMode(ctx context.Context, args Args, version string) error {
 		// Tell every connected client just before the image is replaced; the PWA
 		// auto-reconnects and restores from the on-disk snapshot.
 		relaunch.OnPreExec(func(string) {
-			ws.broadcastAll(ctrlproto.NoticeEvent("info", "", i18n.T("terva is restarting — reconnecting shortly…")))
+			ws.BroadcastAll(ctrlproto.NoticeEvent("info", "", i18n.T("terva is restarting — reconnecting shortly…")))
 		})
 		fmt.Fprintln(os.Stderr, "terva web: self-restart enabled (control.restart + the terva_restart tool)")
 	}

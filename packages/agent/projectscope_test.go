@@ -3,8 +3,11 @@ package agent
 import (
 	"os"
 	"path/filepath"
-	"terva.sh/terva/packages/testsupport"
 	"testing"
+
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func boolp(b bool) *bool { return &b }
@@ -37,15 +40,15 @@ func TestResolveProjectScopedReadsConfig(t *testing.T) {
 	cwd := testsupport.TempDir(t)
 	mustWrite(t, filepath.Join(cwd, ".terva", "config.json"), `{"project_scoped": true}`)
 
-	if !resolveProjectScoped(Args{}, cwd) {
+	if !resolveProjectScoped(build.Args{}, cwd) {
 		t.Error("project_scoped:true in .terva/config.json should enable it")
 	}
 	// An explicit --no-project still wins over the config field.
-	if resolveProjectScoped(Args{NoProject: true}, cwd) {
+	if resolveProjectScoped(build.Args{NoProject: true}, cwd) {
 		t.Error("--no-project should override the config field")
 	}
 	// A directory with no config is off.
-	if resolveProjectScoped(Args{}, testsupport.TempDir(t)) {
+	if resolveProjectScoped(build.Args{}, testsupport.TempDir(t)) {
 		t.Error("no config ⇒ project-scoped off")
 	}
 }
@@ -55,10 +58,10 @@ func TestResolveProjectScopedReadsConfig(t *testing.T) {
 func TestEnableProjectScope(t *testing.T) {
 	global := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", global) // fake global home; restored at cleanup
-	defer func() { pinnedGlobalHome = "" }()
+	defer func() { config.PinnedGlobalHome = "" }()
 
 	// Sanity: before scoping, everything resolves to the global home.
-	if TervaHome() != global || AuthPath() != filepath.Join(global, "auth.json") {
+	if config.TervaHome() != global || config.AuthPath() != filepath.Join(global, "auth.json") {
 		t.Fatalf("precondition: home should be the global temp dir")
 	}
 
@@ -82,18 +85,18 @@ func TestEnableProjectScope(t *testing.T) {
 	}
 
 	// Data follows the redirect…
-	if TervaHome() != dataHome {
-		t.Errorf("TervaHome() = %q, want the project data home %q", TervaHome(), dataHome)
+	if config.TervaHome() != dataHome {
+		t.Errorf("TervaHome() = %q, want the project data home %q", config.TervaHome(), dataHome)
 	}
-	if ConfigPath() != filepath.Join(dataHome, "config.json") {
-		t.Errorf("config should follow the redirect, got %q", ConfigPath())
+	if config.ConfigPath() != filepath.Join(dataHome, "config.json") {
+		t.Errorf("config should follow the redirect, got %q", config.ConfigPath())
 	}
 	// …but credentials + trust stay pinned to the global home (inherited login).
-	if AuthPath() != filepath.Join(global, "auth.json") {
-		t.Errorf("auth.json should stay global, got %q", AuthPath())
+	if config.AuthPath() != filepath.Join(global, "auth.json") {
+		t.Errorf("auth.json should stay global, got %q", config.AuthPath())
 	}
-	if TrustStorePath() != filepath.Join(global, "trusted.json") {
-		t.Errorf("trusted.json should stay global, got %q", TrustStorePath())
+	if config.TrustStorePath() != filepath.Join(global, "trusted.json") {
+		t.Errorf("trusted.json should stay global, got %q", config.TrustStorePath())
 	}
 }
 
@@ -107,38 +110,38 @@ func TestEnableProjectScope(t *testing.T) {
 func TestMaybeEnableProjectScopeRequiresTrust(t *testing.T) {
 	global := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", global)
-	defer func() { pinnedGlobalHome = "" }()
+	defer func() { config.PinnedGlobalHome = "" }()
 
 	cwd := testsupport.TempDir(t)
 	mustWrite(t, filepath.Join(cwd, ".terva", "config.json"), `{"project_scoped": true}`)
 
 	// Untrusted (the default): refuse with an error; the redirect must not run.
-	if _, err := maybeEnableProjectScope(Args{CWD: cwd}); err == nil {
+	if _, err := maybeEnableProjectScope(build.Args{CWD: cwd}); err == nil {
 		t.Fatal("scoped + untrusted must error, not activate")
 	}
 	if ProjectScoped() {
 		t.Fatal("scope must not activate while untrusted")
 	}
-	if TervaHome() != global {
-		t.Fatalf("TERVA_HOME must stay global when refused, got %q", TervaHome())
+	if config.TervaHome() != global {
+		t.Fatalf("TERVA_HOME must stay global when refused, got %q", config.TervaHome())
 	}
 	if _, err := os.Stat(filepath.Join(cwd, ".terva", "home")); !os.IsNotExist(err) {
 		t.Fatalf("a refused activation must not create .terva/home (err=%v)", err)
 	}
 
 	// Trusting the workspace opens the gate: now it activates and redirects.
-	if err := TrustPath(cwd, false); err != nil {
+	if err := config.TrustPath(cwd, false); err != nil {
 		t.Fatal(err)
 	}
-	note, err := maybeEnableProjectScope(Args{CWD: cwd})
+	note, err := maybeEnableProjectScope(build.Args{CWD: cwd})
 	if err != nil {
 		t.Fatalf("a trusted scoped project should activate: %v", err)
 	}
 	if !ProjectScoped() || note == "" {
 		t.Fatalf("expected activation (note=%q scoped=%v)", note, ProjectScoped())
 	}
-	if want := filepath.Join(cwd, ".terva", "home"); TervaHome() != want {
-		t.Errorf("data should redirect into the repo once trusted: got %q want %q", TervaHome(), want)
+	if want := filepath.Join(cwd, ".terva", "home"); config.TervaHome() != want {
+		t.Errorf("data should redirect into the repo once trusted: got %q want %q", config.TervaHome(), want)
 	}
 }
 

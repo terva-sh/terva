@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"golang.org/x/term"
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 )
 
 // First-run offer: when an interactive session starts with no extensions
@@ -21,7 +23,7 @@ import (
 // subsequent Discover picks it up the same session. It is heavily gated
 // (see corePackOfferAllowed) and asks at most once. A no-op on any
 // non-interactive host or non-TTY stdin. Call BEFORE Discover.
-func maybeOfferCorePack(args Args) {
+func maybeOfferCorePack(args build.Args) {
 	if !stdinIsTTY() || !corePackOfferAllowed(args) {
 		return
 	}
@@ -51,7 +53,7 @@ func maybeOfferCorePack(args Args) {
 // so it's testable without a terminal): offer only when extensions aren't
 // disabled for this run, the user hasn't opted out, we haven't already
 // asked, and nothing is installed globally.
-func corePackOfferAllowed(args Args) bool {
+func corePackOfferAllowed(args build.Args) bool {
 	if args.NoExt {
 		return false
 	}
@@ -73,7 +75,7 @@ func stdinIsTTY() bool {
 // corePackOfferDisabled reads the user config opt-out. A missing/unreadable
 // config is treated as "not disabled" (offer allowed).
 func corePackOfferDisabled() bool {
-	c, err := LoadConfig()
+	c, err := config.LoadConfig()
 	if err != nil {
 		return false
 	}
@@ -84,7 +86,7 @@ func corePackOfferDisabled() bool {
 // installed extension (no subdir with an extension.json). A missing dir
 // counts as empty.
 func globalExtensionsEmpty() bool {
-	dir := filepath.Join(TervaHome(), "extensions")
+	dir := filepath.Join(config.TervaHome(), "extensions")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return true
@@ -103,7 +105,7 @@ func globalExtensionsEmpty() bool {
 // corePackOfferSentinel is the marker recording that the first-run offer
 // has been made, so it's a one-time prompt regardless of the answer.
 func corePackOfferSentinel() string {
-	return filepath.Join(TervaHome(), ".core-pack-offered")
+	return filepath.Join(config.TervaHome(), ".core-pack-offered")
 }
 
 func corePackAlreadyOffered() bool {
@@ -112,7 +114,7 @@ func corePackAlreadyOffered() bool {
 }
 
 func markCorePackOffered() error {
-	if err := os.MkdirAll(TervaHome(), 0o755); err != nil {
+	if err := os.MkdirAll(config.TervaHome(), 0o755); err != nil {
 		return err
 	}
 	return os.WriteFile(corePackOfferSentinel(), []byte("1\n"), 0o644)

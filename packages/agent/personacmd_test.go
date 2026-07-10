@@ -3,8 +3,9 @@ package agent
 import (
 	"os"
 	"path/filepath"
-	"terva.sh/terva/packages/testsupport"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestValidateOnePersona(t *testing.T) {

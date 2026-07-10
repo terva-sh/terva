@@ -3,12 +3,13 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -218,12 +219,12 @@ func runModelsEndpoints(apply bool) error {
 	// Name each endpoint from its host, avoiding collisions with built-in
 	// providers and with each other.
 	used := map[string]bool{}
-	eps := map[string]EndpointConfig{}
+	eps := map[string]config.EndpointConfig{}
 	nameFor := map[string]string{}
 	for _, bu := range order {
-		name := endpointNameFor(bu, used)
+		name := build.EndpointNameFor(bu, used)
 		nameFor[bu] = name
-		eps[name] = EndpointConfig{BaseURL: bu, ContextWindow: byURL[bu].ctx}
+		eps[name] = config.EndpointConfig{BaseURL: bu, ContextWindow: byURL[bu].ctx}
 	}
 
 	fmt.Fprintf(os.Stderr, "Found %d OpenAI-compatible endpoint(s) in %s.\n\n", len(order), path)
@@ -233,10 +234,10 @@ func runModelsEndpoints(apply bool) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "Added %d endpoint(s) to %s. Relaunch to discover their models.\n\n", added, ConfigPath())
+		fmt.Fprintf(os.Stderr, "Added %d endpoint(s) to %s. Relaunch to discover their models.\n\n", added, config.ConfigPath())
 	} else {
 		block, _ := json.MarshalIndent(map[string]any{"endpoints": eps}, "", "  ")
-		fmt.Fprintf(os.Stderr, "Add this to %s (or run with --apply):\n\n", ConfigPath())
+		fmt.Fprintf(os.Stderr, "Add this to %s (or run with --apply):\n\n", config.ConfigPath())
 		fmt.Println(string(block)) // stdout: the pasteable block
 		fmt.Fprintln(os.Stderr)
 	}
@@ -261,18 +262,18 @@ func runModelsEndpoints(apply bool) error {
 // Resolution is shown UNCAPPED; at spawn time a tier is capped to the host
 // model's own strength.
 func runModelsTiers(all bool) error {
-	cfg, _ := LoadConfig()
-	overrides := swarmTierMap(cfg.SwarmTiers)
+	cfg, _ := config.LoadConfig()
+	overrides := build.SwarmTierMap(cfg.SwarmTiers)
 
 	// Which providers to show: logged-in (default) or every known provider.
 	// "Logged in" = a resolvable credential, plus ollama (needs no auth).
 	show := map[string]bool{}
-	for _, p := range knownProviders {
+	for _, p := range build.KnownProviders {
 		if all {
 			show[p] = true
 			continue
 		}
-		if _, _, err := ResolveCredential(p, ""); err == nil {
+		if _, _, err := build.ResolveCredential(p, ""); err == nil {
 			show[p] = true
 		}
 	}
@@ -285,7 +286,7 @@ func runModelsTiers(all bool) error {
 	// Stable order: knownProviders first (registry order), then extras sorted.
 	var order []string
 	seen := map[string]bool{}
-	for _, p := range knownProviders {
+	for _, p := range build.KnownProviders {
 		if show[p] {
 			order = append(order, p)
 			seen[p] = true
@@ -335,14 +336,14 @@ func runModelsTiers(all bool) error {
 		}
 		fmt.Println()
 	}
-	fmt.Printf("Configure per provider in %s under \"swarm_tiers\". See docs/models.md.\n", ConfigPath())
+	fmt.Printf("Configure per provider in %s under \"swarm_tiers\". See docs/models.md.\n", config.ConfigPath())
 	return nil
 }
 
 // printTierScaffold shows the config block to pin tiers for a provider that has
 // none, plus a few candidate model ids from its catalog to choose from.
 func printTierScaffold(providerID string) {
-	fmt.Printf("  pin them in %s:\n", ConfigPath())
+	fmt.Printf("  pin them in %s:\n", config.ConfigPath())
 	fmt.Printf("    \"swarm_tiers\": { %q: { \"weak\": \"...\", \"medium\": \"...\", \"strong\": \"...\" } }\n", providerID)
 	var ids []string
 	for _, m := range provider.ModelsForProvider(providerID) {
@@ -356,56 +357,12 @@ func printTierScaffold(providerID string) {
 	}
 }
 
-// endpointNameFor derives a stable, valid endpoint id from a base URL's host,
-// avoiding collisions with built-in provider ids and with names already used.
-func endpointNameFor(rawURL string, used map[string]bool) string {
-	host := rawURL
-	if u, err := url.Parse(rawURL); err == nil && u.Hostname() != "" {
-		host = u.Hostname()
-		switch host {
-		case "localhost", "127.0.0.1", "0.0.0.0":
-			if p := u.Port(); p != "" {
-				host = "local-" + p
-			} else {
-				host = "local"
-			}
-		}
-	}
-	name := sanitizeID(host)
-	if name == "" {
-		name = "endpoint"
-	}
-	if _, builtIn := providerByID[name]; builtIn {
-		name += "-ep" // never propose a name that collides with a built-in provider
-	}
-	base := name
-	for i := 2; used[name]; i++ {
-		name = fmt.Sprintf("%s-%d", base, i)
-	}
-	used[name] = true
-	return name
-}
-
-// sanitizeID lowercases s and keeps [a-z0-9-], turning separators into dashes.
-func sanitizeID(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
-			b.WriteRune(r)
-		case r == '.' || r == '_' || r == ' ' || r == ':':
-			b.WriteByte('-')
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}
-
 // mergeEndpointsIntoConfig adds eps to config.json's endpoints map, skipping any
 // name that already exists (never clobbers). Returns how many were added.
-func mergeEndpointsIntoConfig(eps map[string]EndpointConfig) (int, error) {
-	cfg, _ := LoadConfig()
+func mergeEndpointsIntoConfig(eps map[string]config.EndpointConfig) (int, error) {
+	cfg, _ := config.LoadConfig()
 	if cfg.Endpoints == nil {
-		cfg.Endpoints = map[string]EndpointConfig{}
+		cfg.Endpoints = map[string]config.EndpointConfig{}
 	}
 	added := 0
 	for name, ep := range eps {
@@ -418,7 +375,7 @@ func mergeEndpointsIntoConfig(eps map[string]EndpointConfig) (int, error) {
 	if added == 0 {
 		return 0, nil
 	}
-	if err := SaveConfig(cfg); err != nil {
+	if err := config.SaveConfig(cfg); err != nil {
 		return 0, err
 	}
 	return added, nil
