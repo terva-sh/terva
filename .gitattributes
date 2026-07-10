@@ -10,3 +10,8 @@ examples/cards/*.png binary
 # (TestGoldenFrames); a CRLF checkout (the Windows CI default) desyncs every
 # frame. Pin the goldens to LF.
 packages/agent/ctrlproto/testdata/*.json text eol=lf
+
+# i18n reference catalogs are byte-compared against the linter's LF
+# output (`terva-i18n-lint -check`, the CI gate); a CRLF checkout (the
+# Windows CI default) marks every catalog stale. Pin them to LF.
+packages/i18n/locales/**/*.json text eol=lf
