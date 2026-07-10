@@ -24,7 +24,6 @@ package ext
 // See docs/proposals/connector-extensions.md.
 
 import (
-	"bufio"
 	"encoding/json"
 	"io"
 	"os"
@@ -32,6 +31,7 @@ import (
 
 	"terva.sh/terva/packages/agent/connsdk"
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/lineframe"
 )
 
 // chatEngineBuffer bounds host→engine frames queued while the engine is
@@ -123,11 +123,15 @@ func (e *Extension) handleChatOpen(id string) {
 	pumpDone := make(chan struct{})
 	go func() {
 		defer close(pumpDone)
-		scanner := bufio.NewScanner(outR)
-		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-		for scanner.Scan() {
-			frame := append(json.RawMessage(nil), scanner.Bytes()...)
-			_ = e.send(extproto.ChatFrame{Type: "chat", ID: id, Frame: frame})
+		fr := lineframe.NewReader(outR, lineframe.DefaultMaxBytes, func(msg string) {
+			e.Logf("connector %s: %s", name, msg)
+		})
+		for {
+			line, err := fr.Read()
+			if err != nil {
+				break // io.EOF or a read error: the engine closed its output
+			}
+			_ = e.send(extproto.ChatFrame{Type: "chat", ID: id, Frame: json.RawMessage(line)})
 		}
 	}()
 

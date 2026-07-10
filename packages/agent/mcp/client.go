@@ -11,7 +11,6 @@
 package mcp
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +21,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/procenv"
+	"terva.sh/terva/packages/lineframe"
 )
 
 // protocolVersion is what we offer at initialize. Servers negotiate
@@ -167,12 +167,18 @@ func (c *Client) Name() string { return c.name }
 func (c *Client) Tools() []ToolDef { return c.tools }
 
 func (c *Client) readLoop(stdout io.Reader) {
-	sc := bufio.NewScanner(stdout)
-	// MCP tool results can be large (a whole file in a text block);
-	// match the extension manager's 4MiB frame ceiling.
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := sc.Bytes()
+	// MCP tool results can be large (a whole file in a text block); read
+	// through lineframe at the shared 4 MiB ceiling so one oversized frame
+	// from a buggy or hostile server drops just that response (its caller
+	// times out) instead of tearing down the whole connection the way
+	// bufio.Scanner's ErrTooLong would. This minimal client has no logger
+	// seam, so the skip is silent.
+	fr := lineframe.NewReader(stdout, lineframe.DefaultMaxBytes, nil)
+	for {
+		line, err := fr.Read()
+		if err != nil {
+			break // io.EOF or a read error: the server closed stdout
+		}
 		if len(line) == 0 {
 			continue
 		}

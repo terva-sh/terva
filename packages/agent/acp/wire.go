@@ -3,12 +3,13 @@
 package acp
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"sync"
+
+	"terva.sh/terva/packages/lineframe"
 )
 
 // JSON-RPC 2.0 error codes. The first four are standard; auth_required and
@@ -72,7 +73,7 @@ type handlerFunc func(ctx context.Context, method string, params json.RawMessage
 // every outbound frame goes through write() under writeMu so streamed
 // session/update notifications and request frames can never interleave.
 type conn struct {
-	r       *bufio.Scanner
+	r       *lineframe.Reader
 	w       io.Writer
 	handler handlerFunc
 
@@ -89,11 +90,16 @@ type conn struct {
 	pending map[int64]chan rpcMessage
 }
 
+// acpMaxFrameBytes bounds one inbound JSON-RPC frame. ACP prompt and result
+// payloads run large, so this sits well above lineframe's 4 MiB default.
+const acpMaxFrameBytes = 16 << 20 // 16 MiB
+
 func newConn(r io.Reader, w io.Writer, h handlerFunc) *conn {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	return &conn{
-		r:       sc,
+		// lineframe skips an over-limit frame instead of dying the way
+		// bufio.Scanner does, so one oversized frame drops a single request
+		// rather than tearing down the whole session.
+		r:       lineframe.NewReader(r, acpMaxFrameBytes, nil),
 		w:       w,
 		handler: h,
 		pending: make(map[int64]chan rpcMessage),
@@ -105,8 +111,15 @@ func newConn(r io.Reader, w io.Writer, h handlerFunc) *conn {
 // not block the read loop (which must stay live to receive session/cancel
 // and to deliver responses to agent-initiated requests).
 func (c *conn) run(ctx context.Context) error {
-	for c.r.Scan() {
-		line := c.r.Bytes()
+	var readErr error
+	for {
+		line, err := c.r.Read()
+		if err != nil {
+			if err != io.EOF {
+				readErr = err // a clean EOF stays nil, matching Scanner.Err
+			}
+			break
+		}
 		if len(line) == 0 {
 			continue
 		}
@@ -131,9 +144,8 @@ func (c *conn) run(ctx context.Context) error {
 			c.deliver(msg)
 		}
 	}
-	err := c.r.Err()
 	c.inFlight.Wait()
-	return err
+	return readErr
 }
 
 // serve runs one handler call and writes its response (for requests; a

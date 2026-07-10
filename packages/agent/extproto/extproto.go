@@ -20,13 +20,15 @@ package extproto
 import (
 	"bufio"
 	"encoding/json"
+
+	"terva.sh/terva/packages/lineframe"
 )
 
 // MaxFrameBytes is the largest single wire frame the read side accepts.
 // A frame over this limit is skipped (logged), never fatal — both the
-// host and the SDK read through ReadFrame, which recovers instead of
-// dying the way bufio.Scanner does on ErrTooLong.
-const MaxFrameBytes = 4 << 20 // 4 MiB
+// host and the SDK read through ReadFrame, which recovers via lineframe
+// instead of dying the way bufio.Scanner does on ErrTooLong.
+const MaxFrameBytes = lineframe.DefaultMaxBytes
 
 // MaxToolCallBytes caps the serialized args the host will put in one
 // tool_call frame sent to an extension. Kept comfortably below
@@ -746,44 +748,11 @@ func Encode(v any) ([]byte, error) {
 	return append(b, '\n'), nil
 }
 
-// ReadFrame reads one '\n'-terminated frame from r, bounding its length
-// at MaxFrameBytes. It is the read counterpart to Encode and the
-// recoverable replacement for bufio.Scanner on this wire: where Scanner
-// is permanently done after a token exceeds its buffer (ErrTooLong),
-// ReadFrame fully consumes an over-limit line through its newline and
-// returns tooLong=true with a nil line, so the caller can log it, skip
-// it, and keep reading subsequent frames. The returned line excludes
-// the trailing newline and is a fresh copy (safe to retain). err is
-// io.EOF (or another read error) only at the actual end of the stream;
-// a normal frame returns err == nil.
+// ReadFrame reads one '\n'-terminated frame from r, bounding its length at
+// MaxFrameBytes. It is the read counterpart to Encode; a thin wrapper over
+// lineframe.ReadFrame, the recoverable framing contract shared across every
+// terva wire protocol (an over-limit line is drained and flagged tooLong
+// instead of poisoning the stream the way bufio.Scanner's ErrTooLong does).
 func ReadFrame(r *bufio.Reader) (line []byte, tooLong bool, err error) {
-	for {
-		chunk, e := r.ReadSlice('\n')
-		// The terminating newline doesn't count toward the limit.
-		add := len(chunk)
-		if e == nil && add > 0 && chunk[add-1] == '\n' {
-			add--
-		}
-		if tooLong {
-			// Already over the limit: keep draining to the newline,
-			// discarding, so the next frame starts clean.
-		} else if len(line)+add > MaxFrameBytes {
-			tooLong = true
-			line = nil
-		} else {
-			// ReadSlice's buffer is reused on the next read, so copy now.
-			line = append(line, chunk...)
-		}
-		switch e {
-		case nil:
-			if !tooLong && len(line) > 0 && line[len(line)-1] == '\n' {
-				line = line[:len(line)-1]
-			}
-			return line, tooLong, nil
-		case bufio.ErrBufferFull:
-			continue // line longer than the bufio buffer; keep reading
-		default:
-			return line, tooLong, e // io.EOF or a real read error
-		}
-	}
+	return lineframe.ReadFrame(r, MaxFrameBytes)
 }

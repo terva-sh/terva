@@ -11,7 +11,6 @@
 package connsdk
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -465,15 +464,19 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		return err
 	}
 
-	scanner := bufio.NewScanner(in)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	fr := connproto.NewFrameReader(in, func(msg string) {
+		if errlog != nil {
+			fmt.Fprintf(errlog, "[connsdk] %s\n", msg)
+		}
+	})
 
-	if !scanner.Scan() {
-		return fmt.Errorf("host closed the stream before hello_ack: %v", scanner.Err())
+	ackLine, err := fr.Read()
+	if err != nil {
+		return fmt.Errorf("host closed the stream before hello_ack: %v", err)
 	}
 	var ack connproto.HelloAckFromHost
-	if err := json.Unmarshal(scanner.Bytes(), &ack); err != nil || ack.Type != "hello_ack" {
-		return fmt.Errorf("expected hello_ack, got %q", scanner.Text())
+	if err := json.Unmarshal(ackLine, &ack); err != nil || ack.Type != "hello_ack" {
+		return fmt.Errorf("expected hello_ack, got %q", ackLine)
 	}
 	if ack.Protocol < connproto.ProtocolVersion || ack.Protocol > connproto.ProtocolMax {
 		return fmt.Errorf("host negotiated protocol %d; this SDK speaks %d..%d", ack.Protocol, connproto.ProtocolVersion, connproto.ProtocolMax)
@@ -513,17 +516,22 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 	defer close(done)
 	go func() {
 		defer close(lines)
-		for scanner.Scan() {
-			line := append([]byte(nil), scanner.Bytes()...)
+		for {
+			line, err := fr.Read()
+			if err != nil {
+				if err != io.EOF {
+					select {
+					case scanErr <- err:
+					default:
+					}
+				}
+				return
+			}
 			select {
 			case lines <- line:
 			case <-done:
 				return
 			}
-		}
-		select {
-		case scanErr <- scanner.Err():
-		default:
 		}
 	}()
 
