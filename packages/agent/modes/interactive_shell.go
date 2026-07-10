@@ -18,6 +18,15 @@ import (
 // surrounding whitespace) stripped. A bare "!" with no command is
 // treated as not an escape so it falls through to the normal prompt
 // path rather than running an empty shell.
+//
+// INVARIANT: exactly one call site — the editor's key handler, where the
+// text is known to be a human keystroke. startShellEscape runs bash with
+// no confirm gate and no audit record, so any programmatic caller that
+// reaches it (a chat DM, an extension's Submit, a sub-agent's recap text)
+// gets ungated command execution on the host. Prefix-sniffing at a shared
+// entry point is what made that happen: SubmitOrQueue parsed "!" for every
+// caller, and a paired Telegram message "!rm -rf ~" ran immediately.
+// TestShellEscapeHasOneCallSite enforces the invariant against the source.
 func shellEscapeCommand(text string) (string, bool) {
 	trimmed := strings.TrimLeft(text, " \t")
 	if !strings.HasPrefix(trimmed, "!") {
@@ -93,10 +102,13 @@ func (i *Interactive) startShellEscape(parent context.Context, cmd string) {
 
 		block := i.renderShellBlock(out, failed)
 
-		// Release the slot atomically; a prompt queued while the shell
-		// command ran restarts as its own turn (it used to strand until
-		// the next manual prompt).
-		next, hasNext := i.turns.release(cancelled)
+		// Release the local slot. A prompt typed while the shell command ran
+		// went to the daemon's queue, and the daemon restarts it: idle, Queue
+		// started it there and then; busy, its endTurn shifts it. The TUI used
+		// to shift that queue itself from here — reaching into the daemon's
+		// agent — which double-dispatched on success and, on cancel, drained
+		// prompts other clients had queued.
+		i.turns.releaseSlot()
 
 		i.mu.Lock()
 		i.shellRunning = false
@@ -114,13 +126,6 @@ func (i *Interactive) startShellEscape(parent context.Context, cmd string) {
 		}
 		i.mu.Unlock()
 		i.invalidate()
-		if hasNext {
-			p := i.runCtx
-			if p == nil {
-				p = context.Background()
-			}
-			i.startTurn(p, next)
-		}
 	}()
 }
 
