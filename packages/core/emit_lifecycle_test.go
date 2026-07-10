@@ -9,7 +9,7 @@ import "testing"
 func TestEmitLifecycleReachesOnEvent(t *testing.T) {
 	a := NewAgent(nil, "m", "", Registry{})
 	var got []string
-	a.OnEvent = func(ev AgentEvent) { got = append(got, ev.Type()) }
+	a.AddEventObserver(func(ev AgentEvent) { got = append(got, ev.Type()) })
 
 	a.EmitLifecycle(EvCompactStart{Reason: "context near limit"})
 	a.EmitLifecycle(EvCompactEnd{})

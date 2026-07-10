@@ -153,7 +153,7 @@ func TestImageRecoveryFiresExclusionHook(t *testing.T) {
 	a := NewAgent(client, "gpt-5.5", "system", Registry{})
 	a.RetryBaseDelay = time.Millisecond
 	var excluded []string
-	a.OnImageExcluded = func(sha string) { excluded = append(excluded, sha) }
+	a.AddImageExcludedObserver(func(sha string) { excluded = append(excluded, sha) })
 	a.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.ImageBlock{MimeType: "image/png", Data: bad}}},
 	})

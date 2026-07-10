@@ -1,6 +1,9 @@
 package agent
 
-import "terva.sh/terva/packages/tui"
+import (
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/tui"
+)
 
 // experienceTheme returns a copy of th with non-coding spinner + greeting
 // flavor for the chat/play meta-modes, so a roleplay or a conversation doesn't
@@ -9,10 +12,10 @@ import "terva.sh/terva/packages/tui"
 // so the caller's theme is not mutated.
 func experienceTheme(th tui.Theme, experience string) tui.Theme {
 	switch experience {
-	case ExperienceChat:
+	case build.ExperienceChat:
 		th.SpinnerMessages = experienceSpinnerMessages
 		th.Greetings = chatGreetings
-	case ExperiencePlay:
+	case build.ExperiencePlay:
 		th.SpinnerMessages = experienceSpinnerMessages
 		th.Greetings = playGreetings
 	}

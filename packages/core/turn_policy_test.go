@@ -55,6 +55,35 @@ func TestIsPayloadTooLargeError(t *testing.T) {
 	}
 }
 
+func TestIsContextLengthError(t *testing.T) {
+	positives := []error{
+		&provider.ProviderError{Provider: "openai", Status: 400, Msg: "This model's maximum context length is 272000 tokens."},
+		&provider.ProviderError{Provider: "openai-codex", Status: 400, Msg: "Your input exceeds the context window of this model."},
+		errors.New("openai: http 400: context_length_exceeded"),
+		errors.New("anthropic: http 400: prompt is too long: 210000 tokens > 200000 maximum"),
+		errors.New("gemini: input token count exceeds the maximum"),
+	}
+	for _, err := range positives {
+		if !IsContextLengthError(err) {
+			t.Errorf("not detected as context-length: %v", err)
+		}
+		if ok, _ := ClassifyRecoverable(err); ok {
+			t.Errorf("context-length error misclassified as recoverable: %v", err)
+		}
+	}
+	negatives := []error{
+		nil,
+		errors.New("openai: http 400: invalid value for parameter tools"),
+		&provider.ProviderError{Provider: "openai", Status: 400, Msg: "invalid request"},
+		errors.New("maximum retries reached"),
+	}
+	for _, err := range negatives {
+		if IsContextLengthError(err) {
+			t.Errorf("misdetected as context-length: %v", err)
+		}
+	}
+}
+
 func TestExtractFailedProvider(t *testing.T) {
 	if got := ExtractFailedProvider(&provider.ProviderError{Provider: "kimi", Status: 500, Msg: "x"}); got != "kimi" {
 		t.Errorf("typed provider = %q, want kimi", got)
@@ -67,10 +96,12 @@ func TestExtractFailedProvider(t *testing.T) {
 	}
 }
 
-// policyFakeClient fails the first prompt with HTTP 413, serves the
-// compaction summary, then succeeds the retried prompt.
+// policyFakeClient fails the first prompt with a configurable error
+// (HTTP 413 by default), serves the compaction summary, then succeeds
+// the retried prompt.
 type policyFakeClient struct {
-	calls int32
+	calls    int32
+	firstErr error
 }
 
 func (c *policyFakeClient) Name() string { return "policy-fake" }
@@ -78,6 +109,9 @@ func (c *policyFakeClient) Name() string { return "policy-fake" }
 func (c *policyFakeClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
 	call := atomic.AddInt32(&c.calls, 1)
 	if call == 1 {
+		if c.firstErr != nil {
+			return nil, c.firstErr
+		}
 		return nil, &provider.ProviderError{Provider: "policy-fake", Status: 413, Msg: "request entity too large"}
 	}
 	out := make(chan provider.Event, 4)
@@ -126,6 +160,36 @@ func TestPromptWithPolicyCompactsAndRetriesOn413(t *testing.T) {
 	msgs := a.Messages()
 	if len(msgs) == 0 || msgs[0].Meta["compaction"] != "true" {
 		t.Fatalf("transcript head is not a compaction summary; meta=%v", msgs[0].Meta)
+	}
+}
+
+// TestPromptWithPolicyCompactsAndRetriesOnContextLength mirrors the 413
+// test for the way providers actually reject an overgrown transcript: an
+// HTTP 400 whose message names the context window. Same policy — condense
+// once, retry once.
+func TestPromptWithPolicyCompactsAndRetriesOnContextLength(t *testing.T) {
+	client := &policyFakeClient{
+		firstErr: &provider.ProviderError{Provider: "policy-fake", Status: 400, Msg: "This model's maximum context length is 272000 tokens. However, your messages resulted in 273500 tokens."},
+	}
+	a := NewAgent(client, "fake-model", "system", Registry{})
+	seed := make([]provider.Message, 0, 8)
+	for range 4 {
+		seed = append(seed,
+			provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "q"}}},
+			provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "a"}}},
+		)
+	}
+	a.SetMessages(seed)
+
+	if err := a.PromptWithPolicy(context.Background(), "hello", nil, nil); err != nil {
+		t.Fatalf("PromptWithPolicy returned %v", err)
+	}
+	// Call 1: context-length 400. Call 2: compact summary. Call 3: retry.
+	if got := atomic.LoadInt32(&client.calls); got != 3 {
+		t.Fatalf("Stream calls = %d; want 3 (400, compact, retry)", got)
+	}
+	if msgs := a.Messages(); len(msgs) == 0 || msgs[0].Meta["compaction"] != "true" {
+		t.Fatal("transcript head is not a compaction summary after the retry path")
 	}
 }
 
@@ -272,12 +336,12 @@ func TestPromptWithPolicyNilSinkAutoCompact(t *testing.T) {
 
 	// The fan-out path a nil-sink caller relies on.
 	var lifecycle []string
-	a.OnEvent = func(ev AgentEvent) {
+	a.AddEventObserver(func(ev AgentEvent) {
 		switch ev.(type) {
 		case EvCompactStart, EvCompactEnd:
 			lifecycle = append(lifecycle, ev.Type())
 		}
-	}
+	})
 
 	// Nil sink: must not panic.
 	if err := a.PromptWithPolicy(context.Background(), "hello", nil, nil); err != nil {

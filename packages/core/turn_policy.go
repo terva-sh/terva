@@ -31,9 +31,9 @@ func ClassifyRecoverable(err error) (bool, string) {
 	}
 	msg := err.Error()
 
-	// Don't trigger on payload-too-large; that path has its own
-	// compact-and-retry handling.
-	if IsPayloadTooLargeError(err) {
+	// Don't trigger on payload-too-large or context-length overflow;
+	// those paths have their own compact-and-retry handling.
+	if IsPayloadTooLargeError(err) || IsContextLengthError(err) {
 		return false, ""
 	}
 
@@ -111,6 +111,27 @@ func IsPayloadTooLargeError(err error) bool {
 	return strings.Contains(msg, "http 413") || strings.Contains(msg, " 413") || strings.HasPrefix(msg, "413 ") || strings.Contains(msg, "payload too large") || strings.Contains(msg, "request entity too large")
 }
 
+// IsContextLengthError matches provider rejections of a transcript that
+// outgrew the model's context window. Providers phrase this as an HTTP
+// 400 (no dedicated status like 413), so the message text is the
+// discriminator for typed and untyped errors alike. The needle list is
+// deliberately conservative — a false positive would trigger a
+// compact-and-retry on an unrelated validation error.
+func IsContextLengthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return containsAnyText(strings.ToLower(err.Error()),
+		"context_length_exceeded",              // openai error code
+		"maximum context length",               // openai chat-completions message
+		"exceeds the context window",           // openai responses message
+		"prompt is too long",                   // anthropic
+		"input is too long for requested",      // anthropic on bedrock
+		"input token count exceeds",            // gemini
+		"exceeds the maximum number of tokens", // gemini/vertex variants
+	)
+}
+
 // ExtractFailedProvider pulls the failing provider name from a typed
 // provider error, falling back to parsing the conventional
 // "provider: http NNN: …" prefix for untyped errors. Returns "" when
@@ -134,6 +155,39 @@ func ExtractFailedProvider(err error) string {
 	return ""
 }
 
+// AutoCompactMode selects where automatic transcript compaction may
+// run. Manual /compact is always available regardless of mode.
+type AutoCompactMode string
+
+const (
+	// AutoCompactOff disables ALL automatic compaction, including the
+	// oversize-error recovery retry: context-limit failures surface to
+	// the user, who compacts by hand. The purist escape hatch.
+	AutoCompactOff AutoCompactMode = "off"
+	// AutoCompactTurns compacts at turn boundaries only (pre-turn /
+	// post-turn checks + the oversize-error recovery) — the behavior
+	// before mid-turn compaction existed.
+	AutoCompactTurns AutoCompactMode = "turns"
+	// AutoCompactSteps additionally compacts at the safe boundary
+	// between a turn's tool-loop steps, so a marathon agentic turn
+	// can't grow past the window with no check. The default.
+	AutoCompactSteps AutoCompactMode = "steps"
+)
+
+// autoCompactMode resolves the agent's effective mode: the host's live
+// policy hook when set and valid, AutoCompactSteps otherwise (an
+// unknown value from a hand-edited config degrades to the default, not
+// to silence).
+func (a *Agent) autoCompactMode() AutoCompactMode {
+	if a.AutoCompactPolicy != nil {
+		switch m := a.AutoCompactPolicy(); m {
+		case AutoCompactOff, AutoCompactTurns, AutoCompactSteps:
+			return m
+		}
+	}
+	return AutoCompactSteps
+}
+
 // AutoCompactThreshold is the context-window fraction at which a
 // host should condense the transcript after a turn ends. 0.85 leaves
 // enough headroom for one more user prompt + response before the
@@ -146,27 +200,44 @@ const AutoCompactThreshold = 0.85
 // size or smaller is entirely keep-tail.
 const AutoCompactKeepTail = 4
 
+// ContextWarnFraction is the context-window fraction at which the model
+// itself is warned about context pressure (an ephemeral note riding the
+// request tail — see oneTurn). Earlier than AutoCompactThreshold on
+// purpose: the band between the two is the model's window to wrap up or
+// get economical before the harness force-compacts.
+const ContextWarnFraction = 0.70
+
+// ContextUsage reports the most recent request's context consumption
+// (input + cache tokens) and the model's window from the live catalog.
+// window is 0 when the model is unknown; used is 0 before any request
+// lands usage.
+func (a *Agent) ContextUsage() (used, window int) {
+	if m, err := provider.FindModel("", a.Model); err == nil {
+		window = m.ContextWindow
+	}
+	last := a.LastTurnUsage()
+	used = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+	return used, window
+}
+
 // ContextFraction reports the share of the model's context window
 // the last turn consumed (input + cache tokens over the catalog's
 // window). Returns 0 when the window is unknown or no turn has
 // landed usage yet.
 func (a *Agent) ContextFraction() float64 {
-	m, err := provider.FindModel("", a.Model)
-	if err != nil || m.ContextWindow <= 0 {
+	used, window := a.ContextUsage()
+	if used <= 0 || window <= 0 {
 		return 0
 	}
-	last := a.LastTurnUsage()
-	used := last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
-	if used <= 0 {
-		return 0
-	}
-	return float64(used) / float64(m.ContextWindow)
+	return float64(used) / float64(window)
 }
 
 // ShouldAutoCompact reports whether the transcript has grown past
-// threshold (use AutoCompactThreshold for the standard policy).
+// threshold (use AutoCompactThreshold for the standard policy). Always
+// false in AutoCompactOff mode, so every host's opportunistic check
+// (pre-turn, post-turn, idle) inherits the knob without changes.
 func (a *Agent) ShouldAutoCompact(threshold float64) bool {
-	if threshold <= 0 {
+	if threshold <= 0 || a.autoCompactMode() == AutoCompactOff {
 		return false
 	}
 	return a.ContextFraction() >= threshold
@@ -195,8 +266,9 @@ func (a *Agent) CanCompact(keepTail int) bool {
 //   - pre-turn: when a resumed transcript is already past the
 //     auto-compact threshold, condense before sending so the request
 //     doesn't bounce off the context limit;
-//   - on HTTP 413 (request bytes too large): condense and retry the
-//     prompt once.
+//   - on HTTP 413 (request bytes too large) or a context-length
+//     rejection (providers phrase that as a 400): condense and retry
+//     the prompt once.
 //
 // Compaction progress is reported through sink as EvCompactStart /
 // EvCompactEnd so streaming consumers can surface it.
@@ -232,13 +304,27 @@ func (a *Agent) PromptWithPolicy(ctx context.Context, prompt string, images []pr
 		}
 	}
 	err := a.Prompt(ctx, prompt, images, sink)
-	if err != nil && ctx.Err() == nil && IsPayloadTooLargeError(err) {
+	if err != nil && ctx.Err() == nil && (IsPayloadTooLargeError(err) || IsContextLengthError(err)) &&
+		a.autoCompactMode() != AutoCompactOff {
 		if cerr := compact("request too large; retrying"); cerr != nil {
 			return err
 		}
 		return a.Prompt(ctx, prompt, images, sink)
 	}
 	return err
+}
+
+// fmtTokenCount renders a token count compactly (850, 12.3k, 1.2M) for
+// the context-pressure note, mirroring terva_status's formatting.
+func fmtTokenCount(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 // shortErrorText trims a long http-payload error to something

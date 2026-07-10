@@ -408,7 +408,7 @@ func BuildSessionTree(root, cwd string) []*TreeNode {
 	nodes := make(map[string]*TreeNode)
 	order := []string{}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || !isSessionTranscriptName(e.Name()) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
@@ -471,7 +471,7 @@ func FindSessionByID(root, cwd, id string) string {
 		return ""
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || !isSessionTranscriptName(e.Name()) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())

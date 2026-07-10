@@ -39,7 +39,24 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 		return "", ErrBusy
 	}
 	defer release()
+	return a.compactHeld(ctx, keepTail, sink, false)
+}
 
+// compactMidTurn condenses the transcript from INSIDE an active tool
+// loop (runLoop's step boundary): the single-flight guard is already
+// held, and the summarization prompt gains the mid-task addendum — the
+// resuming agent needs a precise ledger of already-executed actions so
+// it never repeats a side effect, which the idle-time format doesn't
+// demand.
+func (a *Agent) compactMidTurn(ctx context.Context, keepTail int) (string, error) {
+	return a.compactHeld(ctx, keepTail, nil, true)
+}
+
+// compactHeld is Compact's body for callers that already hold the
+// single-flight guard — the mid-turn auto-compact runs inside runLoop,
+// where Prompt/Continue own the slot, so re-acquiring would deadlock
+// into ErrBusy. midTurn selects the mid-task summarization addendum.
+func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta string), midTurn bool) (summary string, err error) {
 	a.mu.Lock()
 	msgs := append([]provider.Message(nil), a.messages...)
 	a.mu.Unlock()
@@ -62,7 +79,11 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 	// so the model treats it as material to summarize, not to continue.
 	transcript := serializeTranscript(summarizable)
 
-	prompt := "<conversation>\n" + transcript + "\n</conversation>\n\n" + i18n.P("compact.instruction", compactionPrompt)
+	instruction := i18n.P("compact.instruction", compactionPrompt)
+	if midTurn {
+		instruction += "\n\n" + i18n.P("compact.instruction.midturn", midTurnCompactionAddendum)
+	}
+	prompt := "<conversation>\n" + transcript + "\n</conversation>\n\n" + instruction
 
 	req := provider.Request{
 		Model:       a.Model,
@@ -91,6 +112,15 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 			if sink != nil {
 				sink(e.Delta)
 			}
+		case provider.EventUsage:
+			// The summarization request is real spend — fold it into the
+			// session total. Total-only: the last-turn snapshot is the
+			// context gauge, which SetLastTurn re-baselines below; letting
+			// this (transcript-sized) request overwrite it would re-arm
+			// every threshold check at stale-high. The durable usage rows
+			// catch up on the next turn's row (its cumulative includes
+			// this), keeping resume's gauge seeding clean.
+			a.cost.AddTotalOnly(e.Usage)
 		case provider.EventDone:
 			if e.Err != nil {
 				return "", e.Err
@@ -134,15 +164,30 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 	a.messages = next
 	a.rev++
 	a.transcriptEpoch++
-	onCompacted := a.OnTranscriptCompacted
 	persisted := append([]provider.Message(nil), next...)
 	a.mu.Unlock()
 
-	if onCompacted != nil {
-		onCompacted(persisted)
-	}
+	// Re-baseline the context gauge. LastTurnUsage still reflects the
+	// pre-compaction request, so every fraction-driven policy check
+	// (pre-turn, post-turn, mid-turn) would read stale-high until the
+	// next request lands usage — and re-fire a pointless compaction on
+	// the already-condensed transcript. Seed a rough estimate (the same
+	// 1 token ≈ 4 chars heuristic as tokens_before); the next real
+	// request corrects it.
+	a.cost.SetLastTurn(provider.Usage{InputTokens: estimateTokens(next)})
+
+	// Fired outside a.mu, like every other observer emit.
+	a.fireTranscriptCompacted(persisted)
 
 	return summary, nil
+}
+
+// estimateTokens is the crude transcript-size heuristic used to
+// re-baseline the context gauge right after compaction (1 token ≈ 4
+// chars of serialized text). Only threshold checks consume it, and the
+// next completed request overwrites it with provider-reported usage.
+func estimateTokens(msgs []provider.Message) int {
+	return len(serializeTranscript(msgs)) / 4
 }
 
 // repairOrphanedToolResults removes tool_result content blocks (and
@@ -235,3 +280,10 @@ Use this EXACT format:
 - [Or "(none)" if not applicable]
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`
+
+const midTurnCompactionAddendum = `IMPORTANT: this summary interrupts an agent MID-TASK. The conversation is inside an active tool-use loop; after your summary, the agent resumes directly from the most recent tool results (kept verbatim). Add one extra section, and make it exhaustive:
+
+## Actions Already Executed
+- [Every state-changing action already performed: files created/edited/deleted (exact paths), commands run (the exact command and its outcome), messages sent, sub-agents spawned. The resuming agent must NEVER repeat one of these — any ambiguity here causes duplicated side effects.]
+
+Under In Progress, record the precise current step: what the agent was about to do next, with exact file paths, line numbers, symbol names, and any error text it was responding to. Do NOT restate large file contents — name the file and the relevant location instead.`

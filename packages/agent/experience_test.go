@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/tui"
 )
@@ -16,7 +17,7 @@ func TestExperienceThemeFlavor(t *testing.T) {
 		t.Errorf("normal mode should keep the default spinner messages")
 	}
 
-	chat := experienceTheme(base, ExperienceChat)
+	chat := experienceTheme(base, build.ExperienceChat)
 	if !equalStrs(chat.SpinnerMessages, experienceSpinnerMessages) {
 		t.Errorf("chat mode should use neutral spinner messages")
 	}
@@ -30,7 +31,7 @@ func TestExperienceThemeFlavor(t *testing.T) {
 		}
 	}
 
-	play := experienceTheme(base, ExperiencePlay)
+	play := experienceTheme(base, build.ExperiencePlay)
 	if !equalStrs(play.Greetings, playGreetings) {
 		t.Errorf("play mode should use play greetings")
 	}
@@ -54,25 +55,25 @@ func equalStrs(a, b []string) bool {
 }
 
 func TestParseExperienceFlags(t *testing.T) {
-	chat, err := ParseArgs([]string{"--chat"})
-	if err != nil || chat.Experience != ExperienceChat {
+	chat, err := build.ParseArgs([]string{"--chat"})
+	if err != nil || chat.Experience != build.ExperienceChat {
 		t.Fatalf("--chat → %q, %v", chat.Experience, err)
 	}
-	play, err := ParseArgs([]string{"--play"})
-	if err != nil || play.Experience != ExperiencePlay {
+	play, err := build.ParseArgs([]string{"--play"})
+	if err != nil || play.Experience != build.ExperiencePlay {
 		t.Fatalf("--play → %q, %v", play.Experience, err)
 	}
-	if _, err := ParseArgs([]string{"--chat", "--play"}); err == nil {
+	if _, err := build.ParseArgs([]string{"--chat", "--play"}); err == nil {
 		t.Fatalf("--chat --play should be mutually exclusive")
 	}
-	none, _ := ParseArgs([]string{})
+	none, _ := build.ParseArgs([]string{})
 	if none.Experience != "" {
 		t.Fatalf("no flag → experience should be empty, got %q", none.Experience)
 	}
 }
 
 func TestSystemPromptChatMode(t *testing.T) {
-	p := BuildSystemPrompt(SystemPromptOpts{PersonaName: "Kaiku", Experience: ExperienceChat})
+	p := build.BuildSystemPrompt(build.SystemPromptOpts{PersonaName: "Kaiku", Experience: build.ExperienceChat})
 	if strings.Contains(p, "expert coding assistant") {
 		t.Error("chat mode must drop the coding-assistant identity")
 	}
@@ -88,7 +89,7 @@ func TestSystemPromptChatMode(t *testing.T) {
 }
 
 func TestSystemPromptPlayMode(t *testing.T) {
-	p := BuildSystemPrompt(SystemPromptOpts{PersonaName: "Data", Experience: ExperiencePlay})
+	p := build.BuildSystemPrompt(build.SystemPromptOpts{PersonaName: "Data", Experience: build.ExperiencePlay})
 	if strings.Contains(p, "expert coding assistant") {
 		t.Error("play mode must drop the coding-assistant identity")
 	}
@@ -98,10 +99,10 @@ func TestSystemPromptPlayMode(t *testing.T) {
 }
 
 func TestSystemPromptExperienceCharterLayers(t *testing.T) {
-	p := BuildSystemPrompt(SystemPromptOpts{
+	p := build.BuildSystemPrompt(build.SystemPromptOpts{
 		PersonaName: "Kaiku",
 		Charter:     "CHARTER-MARKER: be warm and curious.",
-		Experience:  ExperienceChat,
+		Experience:  build.ExperienceChat,
 	})
 	if !strings.Contains(p, "CHARTER-MARKER") {
 		t.Error("an additive charter should still layer in experience mode")
@@ -114,10 +115,10 @@ func TestSystemPromptExperienceCharterLayers(t *testing.T) {
 func TestSystemPromptImmersiveWinsOverExperience(t *testing.T) {
 	// An immersive persona sets Custom; that must win and the experience intro
 	// must not appear.
-	p := BuildSystemPrompt(SystemPromptOpts{
+	p := build.BuildSystemPrompt(build.SystemPromptOpts{
 		Custom:      "I-AM-THE-WHOLE-IDENTITY.",
 		PersonaName: "Data",
-		Experience:  ExperiencePlay,
+		Experience:  build.ExperiencePlay,
 	})
 	if !strings.Contains(p, "I-AM-THE-WHOLE-IDENTITY.") {
 		t.Error("Custom (immersive) prompt should be written verbatim")
@@ -128,12 +129,12 @@ func TestSystemPromptImmersiveWinsOverExperience(t *testing.T) {
 }
 
 func TestBuildToolRegistryDropsBuiltinsInExperienceModes(t *testing.T) {
-	normal := buildToolRegistry(Args{}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil)
+	normal := build.BuildToolRegistry(build.Args{}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil)
 	if len(normal) == 0 {
 		t.Fatal("normal mode should have built-in tools")
 	}
-	for _, exp := range []string{ExperienceChat, ExperiencePlay} {
-		reg := buildToolRegistry(Args{Experience: exp}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil)
+	for _, exp := range []string{build.ExperienceChat, build.ExperiencePlay} {
+		reg := build.BuildToolRegistry(build.Args{Experience: exp}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil)
 		if len(reg) != 0 {
 			t.Errorf("%s mode should drop built-in tools, got %d", exp, len(reg))
 		}
@@ -146,21 +147,21 @@ func TestBuildToolRegistryDropsBuiltinsInExperienceModes(t *testing.T) {
 // gated on the same !args.NoTools in buildResolved.
 func TestNoToolsSuppressesEveryToolSource(t *testing.T) {
 	// Built-ins: --no-tools empties the registry, like the experience modes.
-	if reg := buildToolRegistry(Args{NoTools: true}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil); len(reg) != 0 {
+	if reg := build.BuildToolRegistry(build.Args{NoTools: true}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil); len(reg) != 0 {
 		t.Errorf("--no-tools should drop built-in tools, got %d", len(reg))
 	}
 
-	src := &fakeToolSource{infos: []ExtensionToolInfo{
+	src := &fakeToolSource{infos: []build.ExtensionToolInfo{
 		{Extension: "world", Name: "travel", Schema: []byte(`{}`)},
 	}}
 	// Sanity: a normal Resolved DOES merge the extension/MCP tool…
-	normal := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalAutoEdit}
+	normal := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalAutoEdit}
 	normal.MergeExtensionTools(src)
 	if _, ok := normal.ToolRegistry["travel"]; !ok {
 		t.Fatal("precondition: normal mode should merge extension tools")
 	}
 	// …but with noTools set, the merge is skipped entirely.
-	none := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalAutoEdit, noTools: true}
+	none := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalAutoEdit, NoTools: true}
 	none.MergeExtensionTools(src)
 	if _, ok := none.ToolRegistry["travel"]; ok {
 		t.Error("--no-tools must keep extension/MCP tools out of the merge")
@@ -168,19 +169,19 @@ func TestNoToolsSuppressesEveryToolSource(t *testing.T) {
 }
 
 func TestMergeExtensionToolsChatSkipsPlayKeeps(t *testing.T) {
-	src := &fakeToolSource{infos: []ExtensionToolInfo{
+	src := &fakeToolSource{infos: []build.ExtensionToolInfo{
 		{Extension: "world", Name: "travel", Schema: []byte(`{}`)},
 	}}
 
 	// chat: extension tools do NOT merge (pure conversation).
-	chat := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalAutoEdit, experience: ExperienceChat}
+	chat := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalAutoEdit, Experience: build.ExperienceChat}
 	chat.MergeExtensionTools(src)
 	if _, ok := chat.ToolRegistry["travel"]; ok {
 		t.Error("chat mode must not merge extension tools")
 	}
 
 	// play: extension tools DO merge (the simulated world).
-	play := &Resolved{ToolRegistry: core.Registry{}, approvalMode: core.ApprovalAutoEdit, experience: ExperiencePlay}
+	play := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalAutoEdit, Experience: build.ExperiencePlay}
 	play.MergeExtensionTools(src)
 	if _, ok := play.ToolRegistry["travel"]; !ok {
 		t.Error("play mode must keep extension tools")

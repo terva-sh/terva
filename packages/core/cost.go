@@ -35,6 +35,18 @@ func (c *CostTracker) Add(u provider.Usage) provider.Usage {
 	return c.Total
 }
 
+// AddTotalOnly folds u into the running total WITHOUT touching the
+// last-turn snapshot. Compaction's summarization request uses it: the
+// spend is real, but the snapshot is the context gauge — letting a
+// transcript-sized summarization request overwrite the freshly
+// re-baselined value would leave every threshold check reading
+// stale-high again.
+func (c *CostTracker) AddTotalOnly(u provider.Usage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Total = c.Total.Add(u)
+}
+
 // CumulativeTotal returns the cumulative usage under the tracker lock.
 func (c *CostTracker) CumulativeTotal() provider.Usage {
 	c.mu.Lock()

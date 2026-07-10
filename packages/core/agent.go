@@ -92,11 +92,16 @@ type Agent struct {
 	MaxRetries     int
 	RetryBaseDelay time.Duration
 
-	// OnEvent, if set, mirrors every AgentEvent the loop emits to
-	// this callback in addition to the per-Prompt sink. Used by the
-	// extension manager to fan events out to subscribed extensions
-	// without each caller having to compose sinks manually.
-	OnEvent func(AgentEvent)
+	// Hook observers. Registered through AddEventObserver / AddMessageObserver /
+	// AddUsageObserver / AddTranscriptCompactedObserver /
+	// AddImageExcludedObserver, never assigned — see observers.go for why the
+	// assignable fields these replaced were a hazard.
+	obsMu                  sync.RWMutex
+	eventObs               []func(AgentEvent)
+	messageObs             []func(provider.Message)
+	usageObs               []func(u, cumulative provider.Usage)
+	transcriptCompactedObs []func(messages []provider.Message)
+	imageExcludedObs       []func(sha256Hex string)
 
 	// ContextProvider, if set, is called once per turn to obtain
 	// host-assembled ephemeral context (already wrapped/bounded) to
@@ -123,34 +128,11 @@ type Agent struct {
 	// return value, so a host that always returns true can't loop.
 	ContinueOnStop func(stop provider.StopReason) (cont bool, nudge string)
 
-	// OnMessageAppended, if set, fires every time a message is
-	// appended to the in-memory transcript by the agent loop — the
-	// initial user prompt, each finalised assistant message, and
-	// each tool-results message (plus the synthetic OpenAI image
-	// mirror, if any). Hosts wire this to the on-disk session so
-	// that turns are durable as soon as they happen, instead of
-	// only being flushed on a clean exit.
-	OnMessageAppended func(provider.Message)
-
-	// OnUsage, if set, fires after every turn's usage row arrives,
-	// carrying the cumulative usage for the session. Hosts wire
-	// this to the on-disk session so the persisted total stays
-	// current and a crash recovers the right cost figure.
-	OnUsage func(cumulative provider.Usage)
-
-	// OnTranscriptCompacted, if set, fires after Compact replaces the
-	// in-memory transcript with the synthetic summary plus kept tail.
-	// Hosts wire this to append an explicit compaction checkpoint to
-	// the session log; per-message append hooks do not fire for this
-	// wholesale transcript replacement.
-	OnTranscriptCompacted func(messages []provider.Message)
-
-	// OnImageExcluded, if set, fires when image-rejection recovery drops an
-	// image (a provider 400'd on it) from the transcript, carrying the image's
-	// sha256. Hosts wire this to append an exclude_image directive to the
-	// session, so the fix persists: a resumed session re-applies it instead of
-	// re-sending the bad image and re-failing. The recovery is paid once.
-	OnImageExcluded func(sha256Hex string)
+	// AutoCompactPolicy, if set, supplies the live auto-compaction mode
+	// (the config `auto_compact` knob, read per check so a settings edit
+	// applies without an agent rebuild). Nil — and any unknown value —
+	// resolves to AutoCompactSteps; see autoCompactMode.
+	AutoCompactPolicy func() AutoCompactMode
 
 	// running is the single-flight guard. It is set on entry to
 	// Prompt/Continue/Compact and cleared on exit; a second concurrent
@@ -193,6 +175,13 @@ type Agent struct {
 	// turn's terva_status call reads them.
 	sessionID   string
 	sessionPath string
+	// cacheID keys provider prompt caching (Request.PromptCacheKey). It
+	// prefers the session's meta UUID over the file basename: basenames
+	// are only unique within one directory, and every swarm child's
+	// transcript is literally named session.json — concurrent children
+	// keyed by basename share one cache route and evict each other.
+	// Falls back to the basename for legacy files with no meta id.
+	cacheID string
 
 	// queued holds user messages submitted while the agent is busy.
 	// The loop appends them as normal user messages at safe
@@ -228,11 +217,16 @@ func (a *Agent) AdoptSessionIdentity(s *Session) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if s == nil {
-		a.sessionID, a.sessionPath = "", ""
+		a.sessionID, a.sessionPath, a.cacheID = "", "", ""
 		return
 	}
 	a.sessionPath = s.Path
 	a.sessionID = strings.TrimSuffix(filepath.Base(s.Path), ".jsonl")
+	// Prefer the meta UUID for cache routing — globally unique where the
+	// basename is not (all swarm children persist to a session.json).
+	if a.cacheID = s.ID; a.cacheID == "" {
+		a.cacheID = a.sessionID
+	}
 }
 
 // SessionIdentity returns the transcript file this agent persists to:
@@ -642,16 +636,6 @@ func (a *Agent) SeedLastTurnUsage(u provider.Usage) {
 	a.cost.SetLastTurn(u)
 }
 
-// fireMessageAppended invokes OnMessageAppended without holding the
-// agent mutex, so the host's persistence callback can take its own
-// locks without deadlocking the agent loop. Tolerates a nil hook so
-// non-persisting callers (tests, RPC mode) don't have to set it.
-func (a *Agent) fireMessageAppended(m provider.Message) {
-	if a.OnMessageAppended != nil {
-		a.OnMessageAppended(m)
-	}
-}
-
 // acquire claims the single-flight guard. It returns a release func and
 // true on success, or nil and false if a run is already in progress.
 // Callers must defer release() once they hold the guard.
@@ -731,27 +715,33 @@ func (a *Agent) Continue(ctx context.Context, sink func(AgentEvent)) error {
 
 // EmitLifecycle delivers a host-lifecycle event to the OnEvent observer
 // (the extension fanout / hook engine) directly, independent of an active
-// Prompt. Compaction runs OUTSIDE the Prompt loop — callers invoke Compact
-// on their own — so its EvCompactStart/EvCompactEnd would otherwise never
-// reach OnEvent (the per-call sink that carries them is the host's own UI
-// sink, not the wrapped one). Compaction triggers call this so extensions
-// see compact_start / transcript_compacted. Nil-safe.
+// Prompt. Host-driven compaction runs OUTSIDE the Prompt loop — callers
+// invoke Compact on their own — so its EvCompactStart/EvCompactEnd would
+// otherwise never reach OnEvent (the per-call sink that carries them is the
+// host's own UI sink, not the wrapped one). Compaction triggers call this so
+// extensions see compact_start / transcript_compacted. Nil-safe. (The
+// mid-turn auto-compact inside runLoop doesn't need it: its sink is already
+// the wrapped one.)
 func (a *Agent) EmitLifecycle(ev AgentEvent) {
-	if a.OnEvent != nil {
-		a.OnEvent(ev)
+	for _, fn := range a.eventObservers() {
+		fn(ev)
 	}
 }
 
-// wrapSink composes the per-call sink with a.OnEvent (if set) so the
-// extension manager (or any other observer) sees every AgentEvent
-// without having to thread itself through every Prompt callsite.
+// wrapSink composes the per-call sink with the registered event observers so
+// the extension manager (or any other observer) sees every AgentEvent without
+// having to thread itself through every Prompt callsite. The observer set is
+// snapshotted once per Prompt rather than per event: the returned closure is on
+// the token-delta hot path and must not take a lock.
 func (a *Agent) wrapSink(sink func(AgentEvent)) func(AgentEvent) {
-	if a.OnEvent == nil {
+	obs := a.eventObservers()
+	if len(obs) == 0 {
 		return sink
 	}
-	obs := a.OnEvent
 	return func(ev AgentEvent) {
-		obs(ev)
+		for _, fn := range obs {
+			fn(ev)
+		}
 		sink(ev)
 	}
 }
@@ -761,6 +751,14 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 	// per Prompt, so a host that always says "continue" can't loop the
 	// model forever.
 	gateFired := false
+
+	// Mid-turn auto-compact hysteresis: after a compaction fires, the
+	// valve stays disarmed until the measured fraction actually drops
+	// below the threshold again (one completed request refreshes it).
+	// Without the re-arm rule, a tail too big to condense away — say one
+	// enormous tool result inside the keep-tail — would re-trigger a
+	// futile summarization on every subsequent step.
+	compactArmed := true
 
 	// Pin the cached prompt prefix — the system prompt and the tool set —
 	// for the WHOLE user turn, not per step. A host may swap these on
@@ -786,6 +784,41 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		// started yet.
 		if pending := a.drainQueuedMessages(); len(pending) > 0 {
 			a.appendQueuedAsUser(pending, false, sink)
+		}
+
+		// Mid-turn auto-compact, at the same safe boundary. A long
+		// agentic turn (one prompt, many tool steps) can grow the
+		// transcript past the context window with no turn boundary in
+		// between — the pre-turn check in PromptWithPolicy never gets
+		// another look. Each step's usage refreshes ContextFraction, so
+		// condense here the moment it crosses the threshold. Step 1 is
+		// exempt: its fraction reading predates this turn (the pre-turn
+		// policy owns that boundary), and right after a pre-turn compact
+		// the reading is an estimate that must not double-fire. Gated on
+		// the `steps` mode — `turns` restores the boundary-only policy
+		// and `off` disables auto-compaction entirely.
+		if step > 1 && a.autoCompactMode() == AutoCompactSteps {
+			if a.ContextFraction() < AutoCompactThreshold {
+				compactArmed = true
+			} else if compactArmed && a.CanCompact(AutoCompactKeepTail) {
+				compactArmed = false
+				sink(EvCompactStart{Reason: "context near limit (mid-turn)"})
+				_, cerr := a.compactMidTurn(ctx, AutoCompactKeepTail)
+				if errors.Is(cerr, ErrNothingToCompact) {
+					cerr = nil
+				}
+				end := EvCompactEnd{}
+				if cerr != nil {
+					end.Err = cerr.Error()
+				}
+				sink(end)
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				// A failed compaction is best-effort: the next request may
+				// still fit, and if it doesn't, the provider's context-length
+				// error surfaces through the normal error path.
+			}
 		}
 
 		sink(EvTurnStart{Step: step})
@@ -830,9 +863,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 					a.dropLastAssistantMessage()
 					// Persist the drop so a resumed session re-applies it instead
 					// of re-sending the bad image (fired outside the agent lock).
-					if a.OnImageExcluded != nil {
-						a.OnImageExcluded(sha)
-					}
+					a.fireImageExcluded(sha)
 					attempt-- // recovery rounds don't consume the transient-retry budget
 					continue
 				}
@@ -876,8 +907,8 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			// that carry tool-result images natively (Anthropic, Gemini)
 			// declare nothing and are left untouched.
 			var imageMirror provider.Message
-			// Use the unwrapping helper: openai-codex is wrapped in
-			// RefreshingClient and openai-responses in renamedClient, so a
+			// Use the unwrapping helper: openai-responses is wrapped in
+			// a renamedClient (openai-responses), so a
 			// direct type assertion on a.Client would miss the capability.
 			// The mirror additionally requires the model to accept image
 			// input at all — mirroring screenshots to a vision-less model
@@ -1140,6 +1171,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, sink
 	temperature := a.Temperature
 	client := a.Client
 	contextProvider := a.ContextProvider
+	cacheKey := a.cacheID
 	msgs := make([]provider.Message, len(a.messages))
 	copy(msgs, a.messages)
 	a.mu.Unlock()
@@ -1149,6 +1181,39 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, sink
 	var ephemeral string
 	if contextProvider != nil {
 		ephemeral = contextProvider()
+	}
+
+	// Context-pressure note: past ContextWarnFraction the model is told
+	// how full its window is instead of relying on it to poll
+	// terva_status (models don't re-poll). Rides the cache-free
+	// ephemeral tail so it refreshes every step and never lands in the
+	// transcript.
+	if used, window := a.ContextUsage(); window > 0 && used > 0 {
+		if f := float64(used) / float64(window); f >= ContextWarnFraction {
+			// The closing sentence must match the actual compaction policy:
+			// with auto_compact "off" there is no 85% valve — telling the
+			// model one exists invites it to defer summarization to a
+			// harness intervention that will never come.
+			var note string
+			if a.autoCompactMode() == AutoCompactOff {
+				note = i18n.P("context.pressure.no_autocompact",
+					"[context pressure] Your context window is %d%% full (%s of %s tokens). Be economical: prefer targeted reads over whole-file dumps, and summarize or persist important findings now. Automatic compaction is disabled for this session: past the limit, requests fail until the transcript is compacted — wrap up, or suggest the user run /compact.",
+					int(f*100), fmtTokenCount(used), fmtTokenCount(window))
+			} else {
+				note = i18n.P("context.pressure",
+					"[context pressure] Your context window is %d%% full (%s of %s tokens). Be economical: prefer targeted reads over whole-file dumps, and summarize or persist important findings now. Past %d%% the transcript is auto-compacted.",
+					int(f*100), fmtTokenCount(used), fmtTokenCount(window), int(AutoCompactThreshold*100))
+			}
+			// Delegation guidance deliberately does NOT ride this note: by
+			// 70% it's too late to restructure the work. The context-shield
+			// nudge lives in the always-on swarm system addendum instead
+			// (AutoSwarmSystemAddendum), where it shapes the plan from
+			// turn one.
+			if ephemeral != "" {
+				ephemeral += "\n\n"
+			}
+			ephemeral += note
+		}
 	}
 
 	req := provider.Request{
@@ -1168,6 +1233,11 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, sink
 		MaxTokens:        maxTokens,
 		Temperature:      temperature,
 		EphemeralContext: ephemeral,
+		// The session id doubles as the provider cache-routing key so
+		// concurrent conversations on one account (coordinator + swarm
+		// children) stop evicting each other's cached prefixes. Empty
+		// (live-only agents) sends nothing — today's behavior.
+		PromptCacheKey: cacheKey,
 	}
 	stream, err := client.Stream(ctx, req)
 	if err != nil {
@@ -1197,9 +1267,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, sink
 		case provider.EventUsage:
 			cum := a.cost.Add(e.Usage)
 			sink(EvUsage{Usage: e.Usage, Cumulative: cum})
-			if a.OnUsage != nil {
-				a.OnUsage(cum)
-			}
+			a.fireUsage(e.Usage, cum)
 		case provider.EventDone:
 			stop = e.Stop
 			finalErr = e.Err

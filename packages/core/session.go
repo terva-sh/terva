@@ -46,6 +46,15 @@ type Session struct {
 	// worth keeping.
 	messagesAppended int
 
+	// errMu guards the lazily-opened error sidecar (errFile). Provider/turn
+	// failures are recorded in a SEPARATE file alongside the transcript, never
+	// in the transcript itself — the .jsonl has a fixed record vocabulary that
+	// replay, resume, and compaction depend on, and an error row would be noise
+	// there. Its own mutex (not writeMu) because it writes a different file and
+	// is called off the turn goroutine, independent of transcript writes.
+	errMu   sync.Mutex
+	errFile *os.File
+
 	// LoadWarnings describes everything OpenSession had to skip or
 	// guess at while reading the file (corrupt rows, unknown block
 	// types, a newer format version). Empty for clean loads. Callers
@@ -774,7 +783,7 @@ func PruneEmptySessions(root, cwd string) {
 		return
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || !isSessionTranscriptName(e.Name()) {
 			continue
 		}
 		p := filepath.Join(dir, e.Name())
@@ -782,6 +791,18 @@ func PruneEmptySessions(root, cwd string) {
 			_ = os.Remove(p)
 		}
 	}
+}
+
+// isSessionTranscriptName reports whether a directory entry name is a
+// session transcript. Error sidecars (<session>.errors.jsonl, see
+// LogError) share the .jsonl extension so they sort next to their
+// transcript, but they are NOT sessions: listing them would surface
+// blank entries in /sessions and /continue, and pruning them would
+// silently destroy the failure record (sidecar rows carry no "message"
+// lines, so sessionHasNoMessages reads them as empty). Every scan of a
+// sessions directory must use this filter, not a bare .jsonl check.
+func isSessionTranscriptName(name string) bool {
+	return strings.HasSuffix(name, ".jsonl") && !strings.HasSuffix(name, ".errors.jsonl")
 }
 
 // sessionHasNoMessages returns true when the file at path contains
@@ -828,7 +849,7 @@ func ListSessions(root, cwd string) []string {
 	}
 	var files []rec
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || !isSessionTranscriptName(e.Name()) {
 			continue
 		}
 		p := filepath.Join(dir, e.Name())
@@ -922,6 +943,71 @@ func (s *Session) AppendUsage(u, cum provider.Usage) error {
 	return s.writeLine(sessionLine{Type: "usage", Usage: &u, Cumulative: &cum})
 }
 
+// sessionError is one row of the error sidecar (see LogError).
+type sessionError struct {
+	Time     time.Time `json:"time"`
+	Error    string    `json:"error"`
+	Provider string    `json:"provider,omitempty"`
+	Model    string    `json:"model,omitempty"`
+}
+
+// ErrorLogPath returns the path of the session's error sidecar — the
+// transcript path with its .jsonl suffix replaced by .errors.jsonl, so the
+// two sort together in a directory listing. Empty when the session has no
+// file (live-only conversations).
+func (s *Session) ErrorLogPath() string {
+	if s == nil || s.Path == "" {
+		return ""
+	}
+	return ErrorLogPathFor(s.Path)
+}
+
+// ErrorLogPathFor derives the error-sidecar path for a transcript path,
+// for callers that hold only the path (e.g. deleting a session that isn't
+// open). Keep in sync with ErrorLogPath; empty in, empty out.
+func ErrorLogPathFor(transcriptPath string) string {
+	if transcriptPath == "" {
+		return ""
+	}
+	return strings.TrimSuffix(transcriptPath, ".jsonl") + ".errors.jsonl"
+}
+
+// LogError records a turn/provider failure to the session's error sidecar — a
+// file ALONGSIDE the transcript, never inside it (the transcript's record
+// vocabulary is a contract for replay/resume/compaction). The file is created
+// lazily on the first error, so a clean session never leaves an empty sidecar.
+// Stamped with the session's current provider/model. Best-effort and
+// non-fatal: a failure to record an error must not compound the original one,
+// so the write error is returned for callers that care but is safe to ignore.
+func (s *Session) LogError(errText string) error {
+	if s == nil || s.Path == "" || strings.TrimSpace(errText) == "" {
+		return nil
+	}
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	if s.errFile == nil {
+		f, err := os.OpenFile(s.ErrorLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		s.errFile = f
+	}
+	// Redact secret-shaped substrings and bound the length before persisting:
+	// provider/auth errors can embed Authorization headers, tokened callback
+	// URLs, or whole response bodies, and the sidecar is a durable local file.
+	row := sessionError{Time: time.Now().UTC(), Error: redactErrorForSidecar(errText), Provider: s.Meta.Provider, Model: s.Meta.Model}
+	b, err := json.Marshal(row)
+	if err != nil {
+		return err
+	}
+	// Direct write + newline (no bufio): errors are rare and must survive a
+	// crash that skips Close, so we never leave a half-recorded failure buffered.
+	if _, err := s.errFile.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Close flushes and closes the session file. If the session was
 // freshly created in this process and never had any messages
 // appended (the user opened terva, looked around, and exited without
@@ -937,11 +1023,22 @@ func (s *Session) Close() error {
 	defer s.writeMu.Unlock()
 	flushErr := s.buf.Flush()
 	closeErr := s.writer.Close()
+	// Close the error sidecar if this session ever opened one (its writes are
+	// unbuffered, so there's nothing to flush — just release the handle).
+	s.errMu.Lock()
+	if s.errFile != nil {
+		_ = s.errFile.Close()
+		s.errFile = nil
+	}
+	s.errMu.Unlock()
 	if s.freshFile && s.messagesAppended == 0 {
 		// Best-effort cleanup. We deliberately don't propagate the
 		// remove error: if it fails (file already gone, perms changed)
 		// the worst case is one stale empty file in the listing.
 		_ = os.Remove(s.Path)
+		// Keep the sidecar paired with the transcript: if the empty transcript
+		// is discarded, drop its error log too rather than orphan it.
+		_ = os.Remove(s.ErrorLogPath())
 	}
 	if flushErr != nil {
 		return flushErr

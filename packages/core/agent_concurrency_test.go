@@ -121,9 +121,9 @@ func TestRetriedTurnFiresAppendOnceForFinalMessage(t *testing.T) {
 	a.RetryBaseDelay = time.Millisecond
 
 	var appended []provider.Message
-	a.OnMessageAppended = func(m provider.Message) {
+	a.AddMessageObserver(func(m provider.Message) {
 		appended = append(appended, m)
-	}
+	})
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt returned %v", err)

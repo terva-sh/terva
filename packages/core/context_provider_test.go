@@ -9,10 +9,12 @@ import (
 	"terva.sh/terva/packages/provider"
 )
 
-// ephemeralCaptureClient records the EphemeralContext of every request it sees.
+// ephemeralCaptureClient records the EphemeralContext and PromptCacheKey of
+// every request it sees.
 type ephemeralCaptureClient struct {
 	mu        sync.Mutex
 	ephemeral []string
+	cacheKeys []string
 }
 
 func (c *ephemeralCaptureClient) Name() string { return "capture" }
@@ -20,6 +22,7 @@ func (c *ephemeralCaptureClient) Name() string { return "capture" }
 func (c *ephemeralCaptureClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
 	c.mu.Lock()
 	c.ephemeral = append(c.ephemeral, req.EphemeralContext)
+	c.cacheKeys = append(c.cacheKeys, req.PromptCacheKey)
 	c.mu.Unlock()
 	out := make(chan provider.Event, 4)
 	go func() {
@@ -124,6 +127,63 @@ func TestAtCloseGateDeclineEndsRun(t *testing.T) {
 	}
 	if c.calls != 1 {
 		t.Errorf("decline should not add a turn; want 1 call, got %d", c.calls)
+	}
+}
+
+// The session id rides every request as the provider cache-routing key
+// (provider.Request.PromptCacheKey); live-only agents send nothing.
+func TestPromptCacheKeyFollowsSessionIdentity(t *testing.T) {
+	client := &ephemeralCaptureClient{}
+	a := NewAgent(client, "fake-model", "system", Registry{})
+
+	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	a.AdoptSessionIdentity(&Session{Path: "/sessions/x/20260708-abc123.jsonl"})
+	if err := a.Prompt(context.Background(), "again", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.cacheKeys) < 2 {
+		t.Fatalf("want 2 captured requests, got %d", len(client.cacheKeys))
+	}
+	if client.cacheKeys[0] != "" {
+		t.Errorf("live-only agent sent PromptCacheKey %q, want empty", client.cacheKeys[0])
+	}
+	if got := client.cacheKeys[len(client.cacheKeys)-1]; got != "20260708-abc123" {
+		t.Errorf("PromptCacheKey = %q, want the session id 20260708-abc123", got)
+	}
+}
+
+// The cache key prefers the session's meta UUID over the file basename.
+// Basenames are only unique within a directory — every swarm child's
+// transcript is named session.json, so keying by basename routes all
+// concurrent children to one provider cache shard where they evict each
+// other (observed as alternating ~10%/~99% hit rates in review swarms).
+func TestPromptCacheKeyPrefersMetaUUID(t *testing.T) {
+	client := &ephemeralCaptureClient{}
+	a := NewAgent(client, "fake-model", "system", Registry{})
+	b := NewAgent(client, "fake-model", "system", Registry{})
+
+	// Two swarm children: same basename, distinct meta UUIDs.
+	a.AdoptSessionIdentity(&Session{ID: "uuid-child-a", Path: "/swarm/agents/a/session.json"})
+	b.AdoptSessionIdentity(&Session{ID: "uuid-child-b", Path: "/swarm/agents/b/session.json"})
+	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
+		t.Fatalf("Prompt a: %v", err)
+	}
+	if err := b.Prompt(context.Background(), "hello", nil, nil); err != nil {
+		t.Fatalf("Prompt b: %v", err)
+	}
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.cacheKeys) != 2 {
+		t.Fatalf("want 2 captured requests, got %d", len(client.cacheKeys))
+	}
+	if client.cacheKeys[0] != "uuid-child-a" || client.cacheKeys[1] != "uuid-child-b" {
+		t.Errorf("cache keys = %v, want the meta UUIDs, not the shared basename", client.cacheKeys)
 	}
 }
 
