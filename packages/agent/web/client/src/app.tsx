@@ -1,5 +1,5 @@
 import type { VNode } from 'preact'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { Client } from './ctrlproto'
 import type {
   AskRequest,
@@ -12,10 +12,16 @@ import type {
   LoreEntry,
   LoreView,
   MCPView,
+  ChatView,
+  ChatServiceInfo,
   ModelInfo,
   PanelView,
   PermissionRequest,
   PermissionsView,
+  RaatiHistoryItem,
+  RaatiInquiry,
+  RaatiUnit,
+  RaatiView,
   SessionInfo,
   SettingsView,
   SkillInfo,
@@ -29,7 +35,7 @@ import type {
   WireEvent,
   WireUsage,
 } from './ctrlproto'
-import { applyEvent, itemsFromMessages, type Item, type ImageAttachment } from './store'
+import { applyEvent, itemsFromMessages, type Item, type ImageAttachment, isSafeImageMime } from './store'
 import { renderMarkdown } from './markdown'
 import { applyServerCatalog, setLocale, t, tn } from './i18n'
 
@@ -88,7 +94,8 @@ const maxImageBytes = 10 * 1024 * 1024
 // fileToAttachment reads an image File into a base64 ImageAttachment, or null if
 // it isn't an image or is over the size cap (the caller toasts the reason).
 function fileToAttachment(f: File): Promise<ImageAttachment | { error: string } | null> {
-  if (!f.type.startsWith('image/')) return Promise.resolve(null)
+  // Allowlisted raster types only — an SVG "image" is a script container.
+  if (!isSafeImageMime(f.type)) return Promise.resolve(null)
   if (f.size > maxImageBytes) {
     return Promise.resolve({ error: t('%s is too large (max 10 MB)', f.name || t('image')) })
   }
@@ -597,6 +604,11 @@ export function App() {
       run: () => openPane('context'),
     },
     {
+      name: 'raati',
+      desc: t('Open the deliberation board'),
+      run: () => openPane('raati'),
+    },
+    {
       name: 'new',
       desc: t('Start a new session'),
       run: () => {
@@ -607,7 +619,7 @@ export function App() {
     {
       name: 'help',
       desc: t('List slash commands'),
-      run: () => localNotice(t('Slash commands: /compact, /clear, /skill, /model, /context, /new. Type / in the composer to autocomplete.')),
+      run: () => localNotice(t('Slash commands: /compact, /clear, /skill, /model, /context, /raati, /new. Type / in the composer to autocomplete.')),
     },
   ]
 
@@ -791,6 +803,7 @@ export function App() {
             onRestart={canRestart ? restart : undefined}
             trusted={!!curInfo?.trusted}
             onTrust={trustWorkspace}
+            models={models}
           />
         )}
       </div>
@@ -1037,9 +1050,14 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 // open full-size in a new tab. Data is base64 already on the item, so the src is
 // a self-contained data: URL — no extra fetch.
 function ImageGallery({ images }: { images: ImageAttachment[] }) {
+  // Belt-and-suspenders: the store filters wire blocks and the upload path
+  // filters files, but anything that reaches this data:-URL sink gets the
+  // same allowlist check — no unvetted MIME ever lands in an href/src.
+  const safe = images.filter((im) => isSafeImageMime(im.mime))
+  if (!safe.length) return null
   return (
     <div class="msg-images">
-      {images.map((im, i) => {
+      {safe.map((im, i) => {
         const src = `data:${im.mime};base64,${im.data}`
         return (
           <a key={i} class="msg-image-link" href={src} target="_blank" rel="noreferrer">
@@ -1604,6 +1622,7 @@ function PaneHost({
   onRestart,
   trusted,
   onTrust,
+  models,
 }: {
   surfaces: SurfaceMeta[]
   active: string
@@ -1616,6 +1635,7 @@ function PaneHost({
   onRestart?: () => void
   trusted?: boolean
   onTrust?: (trust: boolean) => void
+  models?: ModelInfo[]
 }) {
   // Core panes (context/usage/tasks/status) stay on row 1; dynamic extension
   // panels get their own row so a long ext title can't shove the core tabs
@@ -1656,10 +1676,859 @@ function PaneHost({
             onRestart={onRestart}
             trusted={trusted}
             onTrust={onTrust}
+            models={models}
           />
         )}
       </div>
     </aside>
+  )
+}
+
+// ---- raati: the deliberation board (kind=raati) ----
+// Three panelist blocks + the tallied verdict, fed live by
+// surface_updated pushes. The homage beat: a verdict lands as kanji
+// with a flash, then fades into the viewer's language.
+
+const RAATI_KANJI: Record<string, string> = {
+  approve: '承認',
+  reject: '否定',
+  abstain: '棄権',
+  approved: '承認',
+  rejected: '否定',
+  escalated: '保留',
+}
+
+function raatiVerdictWord(v: string): string {
+  switch (v) {
+    case 'approve':
+      return t('APPROVE')
+    case 'reject':
+      return t('REJECT')
+    case 'abstain':
+      return t('ABSTAIN')
+    case 'approved':
+      return t('APPROVED')
+    case 'rejected':
+      return t('REJECTED')
+    case 'escalated':
+      return t('ESCALATED')
+  }
+  return v.toUpperCase()
+}
+
+function KanjiVerdict({ word, kanji, tone }: { word: string; kanji: string; tone: string }) {
+  const [settled, setSettled] = useState(false)
+  useEffect(() => {
+    setSettled(false)
+    const id = window.setTimeout(() => setSettled(true), 1600)
+    return () => window.clearTimeout(id)
+  }, [word, kanji])
+  return <span class={`raati-kanji tone-${tone}${settled ? ' settled' : ' flash'}`}>{settled ? word : kanji}</span>
+}
+
+// raatiUnitCopyText renders one panelist's position for the clipboard.
+function raatiUnitCopyText(u: RaatiUnit): string {
+  const who = u.binding ? `${u.name} (${u.binding})` : u.name
+  if (u.status === 'absent') return `${who}: absent — ${u.why ?? ''}`
+  const conf = typeof u.confidence === 'number' ? ` (${u.confidence.toFixed(2)})` : ''
+  const blind = u.blind && u.blind !== u.verdict ? ` [blind ballot: ${u.blind}]` : ''
+  return `${who}: ${u.verdict ?? ''}${conf}${blind} — ${u.rationale ?? ''}`
+}
+
+// raatiResultCopyText renders the whole outcome — verdict, tally, every
+// seat's position, and the minority report — for the clipboard.
+function raatiResultCopyText(v: RaatiView): string {
+  const lines: string[] = []
+  if (v.question) lines.push(`question: ${v.question}`)
+  const t = v.tally
+  lines.push(
+    `verdict: ${(v.decision ?? '').toUpperCase()}${v.degraded ? ' (degraded)' : ''}` +
+      (t ? ` — ${t.approve} approve / ${t.reject} reject / ${t.abstain} abstain / ${t.absent} absent` : ''),
+  )
+  for (const u of v.units ?? []) lines.push(raatiUnitCopyText(u))
+  if ((v.minority?.length ?? 0) > 0) {
+    lines.push('minority report:')
+    for (const m of v.minority ?? []) lines.push(`  ${m.unit}: ${m.rationale ?? ''}`)
+  }
+  return lines.join('\n')
+}
+
+function RaatiBody({
+  v,
+  onAction,
+  models,
+}: {
+  v: RaatiView
+  onAction: (id: string, action: string, args?: Record<string, string>) => void
+  models?: ModelInfo[]
+}) {
+  const [question, setQuestion] = useState('')
+  const [cls, setCls] = useState('advisory')
+  const [level, setLevel] = useState('0')
+  // Convening profile: picking one defers class/level to the server's
+  // profile resolution ('' selections mean "the profile decides");
+  // choosing either explicitly overrides the profile for that field.
+  const [profile, setProfile] = useState('')
+  const pickProfile = (p: string) => {
+    setProfile(p)
+    if (p) {
+      setCls('')
+      setLevel('')
+    } else {
+      if (!cls) setCls('advisory')
+      if (!level) setLevel('0')
+    }
+  }
+  const [seatOrder, setSeatOrder] = useState('')
+  const [binding, setBinding] = useState('') // level 0: index into models, '' = workspace default
+  const [ladderProv, setLadderProv] = useState('') // level 1: provider, '' = workspace default
+  const [seatPicks, setSeatPicks] = useState<string[]>(['', '', '']) // level 2: per-seat model indexes, all '' = config
+  const [evidence, setEvidence] = useState('')
+  const [conversation, setConversation] = useState('')
+  const [singleRound, setSingleRound] = useState(false)
+  const [inquire, setInquire] = useState('')
+  const [converge, setConverge] = useState(false)
+  // Theater: the fullscreen MAGI console. The default stays the pane
+  // (most integrated); a user who prefers theater gets it remembered.
+  const [theater, setTheater] = useState(() => {
+    try {
+      return localStorage.getItem('raati.view') === 'theater'
+    } catch {
+      return false
+    }
+  })
+  const showTheater = (on: boolean) => {
+    setTheater(on)
+    try {
+      localStorage.setItem('raati.view', on ? 'theater' : 'pane')
+    } catch {
+      /* private mode: honor the toggle for this session only */
+    }
+  }
+  const idle = !v.running && (v.units?.length ?? 0) === 0 && !v.decision && !v.error
+  const ticker = useRaatiTicker(v)
+  // Archive browsing: decision chips + question search, client-side over
+  // the server's 50-record window.
+  const [histFilter, setHistFilter] = useState('')
+  const [histQuery, setHistQuery] = useState('')
+  const [histShow, setHistShow] = useState(10)
+  const histNeedle = histQuery.trim().toLowerCase()
+  const hist = (v.history ?? []).filter(
+    (h) => (!histFilter || h.decision === histFilter) && (!histNeedle || h.question.toLowerCase().includes(histNeedle)),
+  )
+  const byProvider = useMemo(() => {
+    const g = new Map<string, { m: ModelInfo; idx: number }[]>()
+    ;(models ?? []).forEach((m, idx) => {
+      const list = g.get(m.provider) ?? []
+      list.push({ m, idx })
+      g.set(m.provider, list)
+    })
+    return [...g.entries()]
+  }, [models])
+  const seatsChosen = seatPicks.filter((s) => s !== '').length
+  const seatsPartial = level === '2' && seatsChosen > 0 && seatsChosen < seatPicks.length
+  const convene = () => {
+    const q = question.trim()
+    if (!q || seatsPartial) return
+    const args: Record<string, string> = { question: q }
+    if (profile) args.profile = profile
+    if (cls) args.class = cls
+    if (level) args.level = level
+    if (singleRound) args.single_round = 'true'
+    if (inquire) args.inquire = inquire
+    if (converge) args.rounds = '3'
+    if (seatOrder) args.seat_order = seatOrder
+    if (level === '0' && binding !== '') {
+      const m = (models ?? [])[Number(binding)]
+      if (m) {
+        args.provider = m.provider
+        args.model = m.id
+      }
+    }
+    if (level === '1' && ladderProv) args.provider = ladderProv
+    if (level === '2' && seatsChosen === seatPicks.length) {
+      seatPicks.forEach((s, i) => {
+        const m = (models ?? [])[Number(s)]
+        if (m) {
+          args[`provider_${i}`] = m.provider
+          args[`model_${i}`] = m.id
+        }
+      })
+    }
+    if (evidence.trim()) args.evidence = evidence
+    if (conversation) args.conversation = conversation
+    onAction('raati', 'convene', args)
+    setQuestion('')
+    setEvidence('')
+  }
+  return (
+    <div class="raati-body">
+      <div class="raati-board">
+        <div class="raati-head">
+          <span class="raati-logo">RAATI</span>
+          {v.class ? <span class="raati-chip">{v.class}</span> : null}
+          {v.seat_order ? <span class="raati-chip">{t('seats: %s', v.seat_order)}</span> : null}
+          {v.running ? (
+            <span class="raati-chip round">
+              {v.phase === 'briefing'
+                ? t('preparing brief')
+                : v.phase === 'inquiry'
+                  ? t('inquiry gap')
+                  : v.round === 3
+                  ? t('convergence round')
+                  : v.round === 2
+                    ? t('cross-examination')
+                    : t('blind round')}
+            </span>
+          ) : null}
+          {v.archived ? <span class="raati-chip">{t('archived %s', (v.when ?? '').slice(0, 10))}</span> : null}
+          {v.binding ? <span class="raati-binding">{v.binding}</span> : null}
+          <button class="raati-theater-btn" title={t('Theater view (fullscreen)')} onClick={() => showTheater(true)}>
+            ⛶
+          </button>
+        </div>
+        {v.question ? <div class="raati-question">{v.question}</div> : null}
+        {v.running && v.phase === 'briefing' ? (
+          <div class="raati-briefing">
+            <span class="raati-kanji pulse">摘要</span>
+            <div class="raati-dim">{t('the clerk is preparing a brief of the conversation for the panel…')}</div>
+          </div>
+        ) : null}
+        {(v.units?.length ?? 0) > 0 ? (
+          <div class="raati-units">
+            {(v.units ?? []).map((u) => (
+              <RaatiBlock key={u.name} u={u} />
+            ))}
+          </div>
+        ) : null}
+        {v.decision ? <RaatiVerdictPanel v={v} /> : null}
+        {v.error ? <div class="raati-error">{t('deliberation failed: %s', v.error)}</div> : null}
+        {idle ? (
+          <div class="raati-form">
+            <textarea
+              value={question}
+              rows={3}
+              placeholder={t('Put a question before the panel…')}
+              onInput={(e) => setQuestion((e.target as HTMLTextAreaElement).value)}
+            />
+            <details class="raati-evidence">
+              <summary>{t('evidence (optional)')}</summary>
+              <textarea
+                value={evidence}
+                rows={5}
+                placeholder={t('Paste what the panel should see — diffs, logs, constraints. The panel judges only what it is shown.')}
+                onInput={(e) => setEvidence((e.target as HTMLTextAreaElement).value)}
+              />
+            </details>
+            <div class="raati-form-row">
+              <select value={conversation} onChange={(e) => setConversation((e.target as HTMLSelectElement).value)}>
+                <option value="">{t('conversation: not shared')}</option>
+                <option value="summary">{t('conversation: summarized for the panel (one model pass)')}</option>
+                <option value="full">{t('conversation: recent context, capped')}</option>
+              </select>
+            </div>
+            <div class="raati-form-row">
+              {(v.profiles?.length ?? 0) > 0 ? (
+                <select
+                  class="raati-profile"
+                  value={profile}
+                  title={v.profiles?.find((p) => p.name === profile)?.description || t('convene under a named profile from your config (raati.profiles)')}
+                  onChange={(e) => pickProfile((e.target as HTMLSelectElement).value)}
+                >
+                  <option value="">{t('profile: none')}</option>
+                  {(v.profiles ?? []).map((p) => (
+                    <option key={p.name} value={p.name} title={p.description}>
+                      {p.description ? `${p.name} — ${p.description}` : p.name}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <select value={cls} onChange={(e) => setCls((e.target as HTMLSelectElement).value)}>
+                {profile ? <option value="">{t('class: profile default')}</option> : null}
+                <option value="advisory">{t('advisory — majority, dissent attached')}</option>
+                <option value="gate">{t('gate — unanimity, fails closed')}</option>
+                <option value="veto">{t('veto — MAGATAMA-3 may block')}</option>
+              </select>
+              <select value={level} onChange={(e) => setLevel((e.target as HTMLSelectElement).value)}>
+                {profile ? <option value="">{t('level: profile default')}</option> : null}
+                <option value="0">{t('level 0 kaiku — one binding, correlated')}</option>
+                <option value="1">{t('level 1 kuoro — the provider ladder')}</option>
+                <option value="2">{t('level 2 käräjät — cross-provider')}</option>
+              </select>
+              {level === '0' && byProvider.length > 0 ? (
+                <select value={binding} onChange={(e) => setBinding((e.target as HTMLSelectElement).value)}>
+                  <option value="">{t('binding: workspace default')}</option>
+                  {byProvider.map(([prov, list]) => (
+                    <optgroup key={prov} label={prov}>
+                      {list.map(({ m, idx }) => (
+                        <option key={`${m.provider}/${m.id}`} value={String(idx)}>
+                          {m.id}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              ) : null}
+              {level === '1' && byProvider.length > 0 ? (
+                <select value={ladderProv} onChange={(e) => setLadderProv((e.target as HTMLSelectElement).value)}>
+                  <option value="">{t('ladder: workspace default provider')}</option>
+                  {byProvider.map(([prov]) => (
+                    <option key={prov} value={prov}>
+                      {t('ladder: %s', prov)}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              {level === '2' && byProvider.length > 0
+                ? seatPicks.map((pick, i) => (
+                    <select
+                      key={i}
+                      value={pick}
+                      onChange={(e) => {
+                        const val = (e.target as HTMLSelectElement).value
+                        setSeatPicks((prev) => prev.map((p, j) => (j === i ? val : p)))
+                      }}
+                    >
+                      <option value="">{t('seat %d: config default', i + 1)}</option>
+                      {byProvider.map(([prov, list]) => (
+                        <optgroup key={prov} label={prov}>
+                          {list.map(({ m, idx }) => (
+                            <option key={`${m.provider}/${m.id}`} value={String(idx)}>
+                              {m.id}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  ))
+                : null}
+              <select value={seatOrder} onChange={(e) => setSeatOrder((e.target as HTMLSelectElement).value)}>
+                <option value="">{profile ? t('seats: profile default') : t('seats: config default')}</option>
+                <option value="convene">{t('seats: shuffled per convening')}</option>
+                <option value="fixed">{t('seats: fixed pool order')}</option>
+                <option value="turn">{t('seats: reshuffled per round (respawns, costlier)')}</option>
+              </select>
+              <label class="raati-check">
+                <input
+                  type="checkbox"
+                  checked={singleRound}
+                  onChange={(e) => setSingleRound((e.target as HTMLInputElement).checked)}
+                />
+                {t('single round')}
+              </label>
+              <select
+                value={inquire}
+                title={t('panelists may pose up to two questions each; the clerk answers between rounds')}
+                onChange={(e) => setInquire((e.target as HTMLSelectElement).value)}
+              >
+                <option value="">{profile ? t('inquiries: profile default') : t('inquiries: off')}</option>
+                {profile ? <option value="off">{t('inquiries: off')}</option> : null}
+                <option value="record">{t('inquiries: clerk answers from the record')}</option>
+                <option value="convener">{t('inquiries: clerk may also ask me')}</option>
+              </select>
+              <label class="raati-check" title={t('one extra reveal round, only if cross-examination flipped a verdict')}>
+                <input type="checkbox" checked={converge} onChange={(e) => setConverge((e.target as HTMLInputElement).checked)} />
+                {t('converge')}
+              </label>
+              <button
+                class="raati-convene"
+                onClick={convene}
+                disabled={!question.trim() || seatsPartial}
+                title={seatsPartial ? t('seat the whole panel or leave every seat on the config default') : undefined}
+              >
+                {t('Convene')}
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {!v.running && !idle ? (
+          <div class="raati-form-row">
+            <button class="raati-reset" onClick={() => onAction('raati', 'reset')}>
+              {t('New deliberation')}
+            </button>
+          </div>
+        ) : null}
+        {!v.running && (v.history?.length ?? 0) > 0 ? (
+          <div class="raati-history">
+            <div class="raati-history-title">{t('previous deliberations')}</div>
+            <div class="raati-history-controls">
+              {['', 'approved', 'rejected', 'escalated'].map((f) => (
+                <button
+                  key={f}
+                  class={`raati-chipbtn${histFilter === f ? ` on tone-${f || 'all'}` : ''}`}
+                  onClick={() => setHistFilter(f)}
+                >
+                  {f === '' ? t('all') : raatiVerdictWord(f)}
+                </button>
+              ))}
+              <input
+                class="raati-history-search"
+                value={histQuery}
+                placeholder={t('filter questions…')}
+                onInput={(e) => setHistQuery((e.target as HTMLInputElement).value)}
+              />
+            </div>
+            {hist.slice(0, histShow).map((h) => (
+              <RaatiHistoryRow key={h.id} h={h} onShow={() => onAction('raati', 'show', { id: h.id })} />
+            ))}
+            {hist.length === 0 ? <div class="raati-dim">{t('no matching deliberations')}</div> : null}
+            {hist.length > histShow ? (
+              <button class="raati-history-more" onClick={() => setHistShow((n) => n + 25)}>
+                {t('show %d more', hist.length - histShow)}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      {theater ? <RaatiTheater v={v} lines={ticker} onAction={onAction} onExit={() => showTheater(false)} /> : null}
+    </div>
+  )
+}
+
+// useRaatiTicker narrates a live deliberation by diffing consecutive
+// view states — the server pushes state, not events, so the feed is
+// synthesized client-side. Archive replays narrate nothing (the record
+// is history, not news); the feed clears when the board resets.
+function useRaatiTicker(v: RaatiView): string[] {
+  const [lines, setLines] = useState<string[]>([])
+  const prevRef = useRef<RaatiView | null>(null)
+  useEffect(() => {
+    const prev = prevRef.current
+    prevRef.current = v
+    if (v.archived) return
+    const idle = !v.running && (v.units?.length ?? 0) === 0 && !v.decision && !v.error
+    if (idle) {
+      if (prev && ((prev.units?.length ?? 0) > 0 || prev.decision || prev.archived)) setLines([])
+      return
+    }
+    const add: string[] = []
+    if (v.question && (!prev || prev.archived || prev.question !== v.question)) add.push(t('convened: %s', v.question))
+    if (v.phase === 'briefing' && prev?.phase !== 'briefing') add.push(t('the clerk prepares the brief'))
+    if (v.phase === 'inquiry' && prev?.phase !== 'inquiry') add.push(t('the clerk takes the panel\u2019s questions'))
+    if (v.round === 1 && prev?.round !== 1) add.push(t('blind round begins'))
+    if (v.round === 2 && prev?.round !== 2) add.push(t('cross-examination begins'))
+    if (v.round === 3 && prev?.round !== 3) add.push(t('positions changed — the panel converges'))
+    const seenInq = prev && !prev.archived ? (prev.inquiries?.length ?? 0) : 0
+    for (const q of (v.inquiries ?? []).slice(seenInq)) {
+      add.push(t('%s asks: %s', q.unit, q.question))
+      add.push(
+        q.source === 'unanswered' || !q.answer
+          ? t('clerk: not in the record')
+          : q.source === 'convener'
+            ? t('convener: %s', q.answer)
+            : t('clerk: %s', q.answer),
+      )
+    }
+    const before = new Map((prev && !prev.archived ? (prev.units ?? []) : []).map((u) => [u.name, u]))
+    for (const u of v.units ?? []) {
+      const p = before.get(u.name)
+      if (u.status === 'deliberating' && p?.status !== 'deliberating') add.push(t('%s deliberating', u.name))
+      if (u.status === 'voted' && p?.status !== 'voted' && u.verdict) {
+        const conf = typeof u.confidence === 'number' ? ` ${u.confidence.toFixed(2)}` : ''
+        const revised = u.blind && u.blind !== u.verdict ? ` — ${t('revised from %s', raatiVerdictWord(u.blind))}` : ''
+        add.push(`${u.name}: ${raatiVerdictWord(u.verdict)}${conf}${revised}`)
+      }
+      if (u.status === 'absent' && p?.status !== 'absent') add.push(`${u.name}: ${t('absent')}${u.why ? ` — ${u.why}` : ''}`)
+    }
+    if (v.decision && prev?.decision !== v.decision) {
+      const tally = v.tally ? ` ${v.tally.approve}·${v.tally.reject}·${v.tally.abstain}` : ''
+      add.push(`${raatiVerdictWord(v.decision)}${tally}${v.degraded ? ' ⚠' : ''}`)
+    }
+    if (v.error && prev?.error !== v.error) add.push(t('deliberation failed: %s', v.error))
+    if (add.length) {
+      const d = new Date()
+      const two = (n: number) => String(n).padStart(2, '0')
+      const stamp = `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+      setLines((cur) => [...cur, ...add.map((l) => `${stamp}  ${l}`)].slice(-100))
+    }
+  }, [v])
+  return lines
+}
+
+// raatiWhenLabel compresses an RFC 3339 stamp for archive rows: time of
+// day for today's records, month-day for this year, full date otherwise.
+function raatiWhenLabel(when?: string): string {
+  if (!when) return ''
+  const d = new Date(when)
+  if (isNaN(d.getTime())) return when.slice(0, 10)
+  const now = new Date()
+  const two = (n: number) => String(n).padStart(2, '0')
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+    return `${two(d.getHours())}:${two(d.getMinutes())}`
+  }
+  const md = `${two(d.getMonth() + 1)}-${two(d.getDate())}`
+  return d.getFullYear() === now.getFullYear() ? md : `${d.getFullYear()}-${md}`
+}
+
+function RaatiHistoryRow({ h, onShow }: { h: RaatiHistoryItem; onShow: () => void }) {
+  return (
+    <button class="raati-history-row" onClick={onShow} title={h.question}>
+      <div class="raati-history-top">
+        <span class={`raati-history-decision tone-${h.decision}`}>
+          {RAATI_KANJI[h.decision] ?? ''} {h.decision}
+        </span>
+        {h.tally ? (
+          <span class="raati-history-tally">
+            {h.tally.approve}·{h.tally.reject}·{h.tally.abstain}
+          </span>
+        ) : null}
+        {h.degraded ? <span class="raati-history-degraded">⚠</span> : null}
+        {h.class && h.class !== 'advisory' ? <span class="raati-history-class">{h.class}</span> : null}
+        {(h.minority?.length ?? 0) > 0 ? (
+          <span class="raati-history-dissent">
+            {t('dissent:')} {(h.minority ?? []).join(' ')}
+          </span>
+        ) : null}
+        <span class="raati-history-when">{raatiWhenLabel(h.when)}</span>
+      </div>
+      <div class="raati-history-q">{h.question}</div>
+    </button>
+  )
+}
+
+function RaatiBlock({ u }: { u: RaatiUnit }) {
+  const accent = u.accent || '#7aa2f7'
+  return (
+    <div class={`raati-block s-${u.status}`} style={{ borderColor: accent }}>
+      <div class="raati-block-head">
+        <div class="raati-block-name" style={{ color: accent }}>
+          {u.name}
+        </div>
+        {u.status === 'voted' || u.status === 'absent' ? <CopyButton text={raatiUnitCopyText(u)} label={t('Copy this ballot')} /> : null}
+      </div>
+      {u.binding ? <div class="raati-block-binding">{u.binding}</div> : null}
+      {u.status === 'deliberating' ? (
+        <div class="raati-deliberating">
+          <span class="raati-kanji pulse">審議中</span>
+          <div class="raati-dim">{u.verdict ? t('reconsidering — held %s', u.verdict) : t('deliberating…')}</div>
+        </div>
+      ) : null}
+      {u.status === 'voted' && u.verdict ? (
+        <div class="raati-vote">
+          <KanjiVerdict word={raatiVerdictWord(u.verdict)} kanji={RAATI_KANJI[u.verdict] ?? u.verdict} tone={u.verdict} />
+          {typeof u.confidence === 'number' ? (
+            <div class="raati-conf">
+              <div
+                class="raati-conf-fill"
+                style={{ width: `${Math.round(u.confidence * 100)}%`, background: accent }}
+              />
+            </div>
+          ) : null}
+          {u.blind && u.blind !== u.verdict ? <div class="raati-dim">{t('blind ballot: %s', u.blind)}</div> : null}
+          {u.rationale ? <div class="raati-rationale">{u.rationale}</div> : null}
+        </div>
+      ) : null}
+      {u.status === 'absent' ? (
+        <div class="raati-absent">
+          <span class="raati-offline">{t('OFFLINE')}</span>
+          {u.why ? <div class="raati-dim">{u.why}</div> : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function RaatiVerdictPanel({ v }: { v: RaatiView }) {
+  const d = v.decision ?? ''
+  return (
+    <div class={`raati-verdict tone-${d}`}>
+      <div class="raati-verdict-copy">
+        <CopyButton text={raatiResultCopyText(v)} label={t('Copy the full result')} />
+      </div>
+      <KanjiVerdict word={raatiVerdictWord(d)} kanji={RAATI_KANJI[d] ?? d} tone={d} />
+      {v.tally ? (
+        <div class="raati-tally">
+          {t('%d approve / %d reject / %d abstain / %d absent', v.tally.approve, v.tally.reject, v.tally.abstain, v.tally.absent)}
+          {v.degraded ? <span class="raati-degraded"> — {t('degraded: not every unit voted')}</span> : null}
+        </div>
+      ) : null}
+      {(v.minority?.length ?? 0) > 0 ? (
+        <div class="raati-minority">
+          <div class="raati-minority-title">{t('minority report')}</div>
+          {(v.minority ?? []).map((m) => (
+            <div class="raati-minority-row" key={m.unit}>
+              <b>{m.unit}</b>: {m.rationale}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {(v.inquiries?.length ?? 0) > 0 ? <RaatiInquiryList inquiries={v.inquiries ?? []} /> : null}
+    </div>
+  )
+}
+
+// RaatiInquiryList renders the panel's between-round Q&A docket — the
+// open (unanswered) questions matter most: the decision was made with
+// these gaps on the record.
+function RaatiInquiryList({ inquiries }: { inquiries: RaatiInquiry[] }) {
+  return (
+    <div class="raati-inquiries">
+      <div class="raati-minority-title">{t('the panel asked')}</div>
+      {inquiries.map((q, i) => (
+        <div class="raati-inquiry-row" key={i}>
+          <div>
+            <b>{q.unit}</b>: {q.question}
+          </div>
+          <div class={`raati-inquiry-answer${q.source === 'unanswered' || !q.answer ? ' open' : ''}`}>
+            {q.source === 'unanswered' || !q.answer ? t('not in the record — decided with this open') : `→ ${q.answer}`}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ---- raati: theater mode (the fullscreen MAGI console) ----
+// The same RaatiView the pane renders, staged as the Evangelion MAGI
+// console: three panels placed by unit number (KUSANAGI-2 top, YATA-1
+// lower-right, MAGATAMA-3 lower-left), the hub reading RAATI, panels
+// pulsing while they deliberate and settling to their verdict color.
+// Terva palette, not screen-accurate cyan. Web-client only — it consumes
+// the pushed surface like everything else, so there is no server change.
+
+function raatiTheaterSlots(units?: RaatiUnit[]): { top?: RaatiUnit; left?: RaatiUnit; right?: RaatiUnit } {
+  const u = units ?? []
+  const byNum: Record<number, RaatiUnit> = {}
+  let numbered = u.length > 0
+  for (const x of u) {
+    const m = x.name.match(/(\d+)\s*$/)
+    if (m) byNum[Number(m[1])] = x
+    else numbered = false
+  }
+  // Faithful placement by the classic MAGI numbering (·2 top, ·1 lower-
+  // right, ·3 lower-left). A recast panel that doesn't number cleanly
+  // falls back to feed order.
+  if (numbered && byNum[1] && byNum[2] && byNum[3]) return { top: byNum[2], right: byNum[1], left: byNum[3] }
+  return { top: u[0], left: u[1], right: u[2] }
+}
+
+function MagiPanel({
+  u,
+  pos,
+  selected,
+  onSelect,
+}: {
+  u?: RaatiUnit
+  pos: 'top' | 'left' | 'right'
+  selected: boolean
+  onSelect: () => void
+}) {
+  if (!u) return <div class={`magi-panel pos-${pos} empty`} />
+  const tone = u.status === 'voted' ? u.verdict ?? '' : u.status === 'absent' ? 'absent' : ''
+  return (
+    <button
+      class={`magi-panel pos-${pos} s-${u.status} tone-${tone}${selected ? ' selected' : ''}`}
+      style={`--accent:${u.accent || '#7aa2f7'}`}
+      onClick={onSelect}
+      title={u.rationale ?? u.why ?? u.name}
+    >
+      <div class="magi-name">{u.name}</div>
+      {u.binding ? <div class="magi-binding">{u.binding}</div> : null}
+      <div class="magi-state">
+        {u.status === 'deliberating' ? <span class="raati-kanji pulse magi-glyph">審議中</span> : null}
+        {u.status === 'voted' && u.verdict ? (
+          <KanjiVerdict word={raatiVerdictWord(u.verdict)} kanji={RAATI_KANJI[u.verdict] ?? u.verdict} tone={u.verdict} />
+        ) : null}
+        {u.status === 'absent' ? <span class="raati-offline">{t('OFFLINE')}</span> : null}
+      </div>
+      {u.status === 'voted' && typeof u.confidence === 'number' ? (
+        <div class="magi-conf">
+          <div class="magi-conf-fill" style={{ width: `${Math.round(u.confidence * 100)}%` }} />
+        </div>
+      ) : null}
+    </button>
+  )
+}
+
+function RaatiTheater({
+  v,
+  lines,
+  onAction,
+  onExit,
+}: {
+  v: RaatiView
+  lines: string[]
+  onAction: (id: string, action: string, args?: Record<string, string>) => void
+  onExit: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onExit()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onExit])
+  const tickerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = tickerRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [lines])
+  const slots = raatiTheaterSlots(v.units)
+  const idle = !v.running && (v.units?.length ?? 0) === 0 && !v.decision && !v.error
+  const [sel, setSel] = useState<string | null>(null)
+  // The stacked (mobile) conduits are right-angle circuit traces between
+  // elements whose positions depend on content — CSS can't reference
+  // sibling geometry, so measure the anchor lines into CSS variables.
+  const panelsRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = panelsRef.current
+    if (!el) return
+    const measure = () => {
+      const hub = el.querySelector<HTMLElement>('.magi-hub')
+      if (!hub) return
+      const base = el.getBoundingClientRect()
+      const set = (name: string, px: number) => el.style.setProperty(name, `${Math.round(px)}px`)
+      const hr = hub.getBoundingClientRect()
+      set('--hubl', hr.left - base.left)
+      set('--hubr', hr.right - base.left)
+      set('--hubm', hr.top + hr.height / 2 - base.top)
+      ;(['top', 'left', 'right'] as const).forEach((p, i) => {
+        const r = el.querySelector<HTMLElement>(`.magi-panel.pos-${p}`)?.getBoundingClientRect()
+        if (!r) return
+        set(`--p${i}t`, r.top - base.top)
+        set(`--p${i}b`, r.bottom - base.top)
+      })
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    el.querySelectorAll('.magi-panel, .magi-hub').forEach((n) => ro.observe(n))
+    return () => ro.disconnect()
+  }, [v.units?.length, v.decision, v.running, v.phase])
+  // The information console reads the dissent by default — dissent is the
+  // product — then whatever panel the operator selects.
+  const dissent = (v.minority ?? [])[0]?.unit ?? null
+  const focusName = sel ?? dissent
+  const focus = (v.units ?? []).find((u) => u.name === focusName) ?? null
+  const phase = v.running
+    ? v.phase === 'briefing'
+      ? t('preparing brief')
+      : v.phase === 'inquiry'
+        ? t('inquiry gap')
+        : v.round === 3
+        ? t('convergence round')
+        : v.round === 2
+          ? t('cross-examination')
+          : t('blind round')
+    : v.decision
+      ? t('decided')
+      : t('standby')
+  return (
+    <div class="magi-overlay" role="dialog" aria-modal="true">
+      <div class="magi-stage">
+        <header class="magi-header">
+          <span class="magi-title left">質問</span>
+          <div class="magi-info">
+            <div>
+              <b>LEVEL</b> {v.binding || '—'}
+            </div>
+            <div>
+              <b>CLASS</b> {v.class || '—'}
+            </div>
+            <div>
+              <b>ROUND</b> {v.round ?? '—'}
+            </div>
+            <div>
+              <b>SEAT</b> {v.seat_order || '—'}
+            </div>
+            <div>
+              <b>MODE</b> {phase}
+            </div>
+          </div>
+          <span class={`magi-title right${v.decision ? ' lit' : ''}`}>解決</span>
+        </header>
+        <div ref={panelsRef} class={`magi-panels${v.running ? ' running' : ''}${v.decision ? ` decided tone-${v.decision}` : ''}`}>
+          <div class="magi-conduit c-up" />
+          <div class="magi-conduit c-left" />
+          <div class="magi-conduit c-right" />
+          <MagiPanel u={slots.top} pos="top" selected={focusName === slots.top?.name} onSelect={() => slots.top && setSel(slots.top.name)} />
+          <div class={`magi-hub${v.decision ? ' decided' : ''}`}>
+            {v.decision ? (
+              <KanjiVerdict word={raatiVerdictWord(v.decision)} kanji={RAATI_KANJI[v.decision] ?? v.decision} tone={v.decision} />
+            ) : (
+              <span class="magi-hub-logo">RAATI</span>
+            )}
+            {v.tally ? (
+              <div class="magi-tally">
+                {v.tally.approve}·{v.tally.reject}·{v.tally.abstain}
+                {v.degraded ? ' ⚠' : ''}
+              </div>
+            ) : null}
+          </div>
+          <MagiPanel u={slots.left} pos="left" selected={focusName === slots.left?.name} onSelect={() => slots.left && setSel(slots.left.name)} />
+          <MagiPanel u={slots.right} pos="right" selected={focusName === slots.right?.name} onSelect={() => slots.right && setSel(slots.right.name)} />
+        </div>
+        <div class="magi-console">
+          {!v.running && !idle ? (
+            <button class="magi-archive-back" onClick={() => onAction('raati', 'reset')}>
+              {t('← archive')}
+            </button>
+          ) : null}
+          <div class="magi-console-tag">情報</div>
+          {v.error ? (
+            <div class="magi-console-body magi-console-err">{t('deliberation failed: %s', v.error)}</div>
+          ) : idle && (v.history?.length ?? 0) > 0 ? (
+            <div class="magi-console-body magi-archive">
+              <div class="magi-archive-title">{t('previous deliberations')}</div>
+              {(v.history ?? []).slice(0, 20).map((h) => (
+                <button key={h.id} class="magi-archive-row" onClick={() => onAction('raati', 'show', { id: h.id })} title={h.question}>
+                  <span class={`raati-kanji tone-${h.decision}`}>{RAATI_KANJI[h.decision] ?? '·'}</span>
+                  <span class="magi-archive-q">{h.question}</span>
+                  {h.tally ? (
+                    <span class="magi-archive-tally">
+                      {h.tally.approve}·{h.tally.reject}·{h.tally.abstain}
+                      {h.degraded ? ' ⚠' : ''}
+                    </span>
+                  ) : null}
+                  {(h.minority?.length ?? 0) > 0 ? <span class="magi-archive-dissent">{(h.minority ?? []).join(' ')}</span> : null}
+                  <span class="magi-archive-when">{raatiWhenLabel(h.when)}</span>
+                </button>
+              ))}
+            </div>
+          ) : focus ? (
+            <div class="magi-console-body">
+              <div class="magi-console-head">
+                <b style={`color:${focus.accent || '#7aa2f7'}`}>{focus.name}</b>
+                {focus.binding ? <span class="raati-dim"> {focus.binding}</span> : null}
+                {focus.status === 'voted' && focus.verdict ? (
+                  <span class="magi-console-verdict">
+                    {' · '}
+                    {raatiVerdictWord(focus.verdict)}
+                    {typeof focus.confidence === 'number' ? ` ${focus.confidence.toFixed(2)}` : ''}
+                  </span>
+                ) : null}
+                {dissent === focus.name ? <span class="magi-console-dissent"> · {t('minority')}</span> : null}
+              </div>
+              <div class="magi-console-text">{focus.rationale || focus.why || t('no statement yet')}</div>
+            </div>
+          ) : (
+            <div class="magi-console-body dim">{v.running ? t('the panel is deliberating…') : t('select a unit to read its reasoning')}</div>
+          )}
+          {(v.inquiries?.length ?? 0) > 0 ? <RaatiInquiryList inquiries={v.inquiries ?? []} /> : null}
+        </div>
+        {lines.length > 0 ? (
+          <div class="magi-ticker" ref={tickerRef} aria-live="polite">
+            {lines.map((l, i) => (
+              <div key={i} class="magi-ticker-line">
+                {l}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <footer class="magi-footer">
+          <div class="magi-q">
+            <span class="raati-dim">question:</span> {v.question || '—'}
+          </div>
+          <div class="magi-access">
+            <span class="raati-dim">access:</span> {(v.when ?? '').replace('T', ' ').slice(0, 19) || 'MAGI_SYS'}
+            <button class="magi-exit-hint" title={t('Exit theater (Esc)')} onClick={onExit}>
+              <span class="magi-exit-key">esc: </span>
+              {t('exit')}
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>
   )
 }
 
@@ -1670,6 +2539,7 @@ function SurfaceView({
   onRestart,
   trusted,
   onTrust,
+  models,
 }: {
   surface: Surface
   onAction: (id: string, action: string, args?: Record<string, string>) => void
@@ -1677,12 +2547,15 @@ function SurfaceView({
   onRestart?: () => void
   trusted?: boolean
   onTrust?: (trust: boolean) => void
+  models?: ModelInfo[]
 }) {
   switch (surface.kind) {
     case 'context':
       return surface.context ? <ContextBody d={surface.context} onFetchNode={onFetchNode} /> : null
     case 'tasks':
       return surface.tasks ? <TasksBody list={surface.tasks} onAction={onAction} /> : null
+    case 'raati':
+      return <RaatiBody v={surface.raati ?? { running: false }} onAction={onAction} models={models ?? []} />
     case 'settings':
       return surface.settings ? <SettingsBody v={surface.settings} onAction={onAction} onRestart={onRestart} /> : null
     case 'panel':
@@ -1699,9 +2572,107 @@ function SurfaceView({
       return <LoreBody v={surface.lore ?? { entries: [] }} onAction={onAction} />
     case 'mcp':
       return <MCPBody v={surface.mcp ?? { servers: [] }} onAction={onAction} />
+    case 'chat':
+      return <ChatBody v={surface.chat ?? { bridge: { state: 'idle' } }} onAction={onAction} />
     default:
       return <div class="pick-empty">{t('unsupported pane')}</div>
   }
+}
+
+// ChatBody renders the chat-connector pane: the live bridge and one row per
+// registered service. Connect is async — the daemon returns immediately and the
+// pane converges over surface_updated — so "connecting" is a real state here,
+// not a spinner we invent.
+//
+// The mirror is bound to the session it was connected from; it does not follow
+// this tab. That is why the connected card names its session explicitly.
+function ChatBody({
+  v,
+  onAction,
+}: {
+  v: ChatView
+  onAction: (id: string, action: string, args?: Record<string, string>) => void
+}) {
+  const b = v.bridge ?? { state: 'idle' }
+  const busy = b.state === 'connecting'
+  const connected = b.state === 'connected'
+
+  const tag = (s: ChatServiceInfo) => {
+    const parts: string[] = []
+    if (s.kind) parts.push(s.kind)
+    if (s.dev) parts.push('dev')
+    return parts.join(', ')
+  }
+
+  return (
+    <div class="pane-body">
+      {b.state === 'error' && b.error ? <div class="pane-error">{b.error}</div> : null}
+
+      {connected ? (
+        <div class="kv-card">
+          <div class="kv-row">
+            <span class="kv-k">{t('connector')}</span>
+            <span class="kv-v">{b.connector}</span>
+          </div>
+          {b.username ? (
+            <div class="kv-row">
+              <span class="kv-k">{t('bot')}</span>
+              <span class="kv-v">@{b.username}</span>
+            </div>
+          ) : null}
+          <div class="kv-row">
+            <span class="kv-k">{t('paired')}</span>
+            <span class="kv-v">
+              {b.paired_id ? b.paired_id : t('awaiting /start from your phone')}
+            </span>
+          </div>
+          {b.session ? (
+            <div class="kv-row">
+              <span class="kv-k">{t('mirroring session')}</span>
+              <span class="kv-v mono">{b.session}</span>
+            </div>
+          ) : null}
+          <div class="kv-actions">
+            <button onClick={() => onAction('chat', 'disconnect')}>{t('disconnect')}</button>
+            <button onClick={() => onAction('chat', 'rebind')}>{t('mirror this session')}</button>
+          </div>
+        </div>
+      ) : null}
+
+      {v.daemon_pid ? (
+        <div class="pane-note">
+          {t('a terva bot daemon is running (pid %s) — stop it before connecting', String(v.daemon_pid))}
+        </div>
+      ) : null}
+
+      {!connected
+        ? (v.services ?? []).map((s) => (
+            <div class="kv-row" key={s.name}>
+              <span class="kv-k">
+                {s.name}
+                {tag(s) ? <span class="dim"> ({tag(s)})</span> : null}
+              </span>
+              <span class="kv-v">
+                {!s.configured ? (
+                  <span class="dim">{t('not configured — run `terva bot setup`')}</span>
+                ) : (
+                  <button
+                    disabled={busy || !!v.daemon_pid}
+                    onClick={() => onAction('chat', 'connect', { name: s.name })}
+                  >
+                    {busy ? t('connecting…') : s.paired ? t('connect') : t('connect & pair')}
+                  </button>
+                )}
+              </span>
+            </div>
+          ))
+        : null}
+
+      {!connected && (v.services ?? []).length === 0 ? (
+        <div class="pick-empty">{t('no chat connectors compiled into this binary')}</div>
+      ) : null}
+    </div>
+  )
 }
 
 // CommandsBody renders every extension-registered command as a button, grouped

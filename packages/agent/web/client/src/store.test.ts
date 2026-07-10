@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyEvent, itemsFromMessages, type Item } from './store'
+import { applyEvent, itemsFromMessages, isSafeImageMime, type Item } from './store'
 import type { WireEvent, WireMessage } from './ctrlproto'
 
 // The store is the client's pure wire→render transform. These tests pin the
@@ -88,5 +88,31 @@ describe('applyEvent — image capture', () => {
     items = applyEvent(items, { type: 'tool_result', id: 't9', content: [imgBlock('GGGG')] })
     const tool = items.find((i) => i.kind === 'tool') as Extract<Item, { kind: 'tool' }>
     expect(tool.images).toEqual([{ mime: 'image/png', data: 'GGGG' }])
+  })
+})
+
+describe('image MIME allowlist', () => {
+  it('accepts only browser-safe raster types', () => {
+    for (const ok of ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'IMAGE/PNG', 'image/png; charset=binary']) {
+      expect(isSafeImageMime(ok), ok).toBe(true)
+    }
+    for (const bad of ['image/svg+xml', 'image/svg+xml; charset=utf-8', 'text/html', 'application/pdf', '', undefined]) {
+      expect(isSafeImageMime(bad as string | undefined), String(bad)).toBe(false)
+    }
+  })
+
+  it('drops non-allowlisted wire blocks before they reach the gallery', () => {
+    const svg = { type: 'image', mime_type: 'image/svg+xml', bytes: 3, data: 'PHN2Zz4=' }
+    const png = imgBlock('AAAA')
+    const msgs: WireMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'mixed' }, svg, png] }]
+    const [u] = userItems(itemsFromMessages(msgs))
+    expect(u.images).toEqual([{ mime: 'image/png', data: 'AAAA' }])
+  })
+
+  it('yields no images at all when every block is unsafe', () => {
+    const svg = { type: 'image', mime_type: 'image/svg+xml', bytes: 3, data: 'PHN2Zz4=' }
+    const msgs: WireMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'x' }, svg] }]
+    const [u] = userItems(itemsFromMessages(msgs))
+    expect(u.images).toBeUndefined()
   })
 })

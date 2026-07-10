@@ -243,6 +243,78 @@ export interface TaskList {
   tasks: TaskInfo[]
 }
 
+// The raati deliberation board (kind=raati): three panelist blocks plus
+// the tallied verdict. An idle view (no units, no decision) means the
+// client renders the convene form.
+export interface RaatiUnit {
+  name: string
+  accent?: string
+  binding?: string // this seat's provider/model
+  status: string // deliberating | voted | absent
+  verdict?: string
+  confidence?: number
+  rationale?: string
+  why?: string
+  blind?: string
+}
+
+export interface RaatiTally {
+  approve: number
+  reject: number
+  abstain: number
+  absent: number
+}
+
+export interface RaatiVoice {
+  unit: string
+  rationale?: string
+}
+
+export interface RaatiHistoryItem {
+  id: string
+  when?: string
+  question: string
+  class?: string
+  decision: string
+  degraded?: boolean
+  tally?: RaatiTally
+  minority?: string[] // dissenting unit names
+}
+
+export interface RaatiInquiry {
+  unit: string
+  question: string
+  answer?: string
+  source?: string // record | convener | unanswered
+  round?: number
+}
+
+export interface RaatiProfileInfo {
+  name: string
+  description?: string
+}
+
+export interface RaatiView {
+  running: boolean
+  question?: string
+  class?: string
+  round?: number
+  seat_order?: string // fixed | convene | turn — how the pool was dealt
+  phase?: string // "briefing" while the clerk summarizes the conversation
+  archived?: boolean
+  when?: string
+  history?: RaatiHistoryItem[]
+  binding?: string
+  units?: RaatiUnit[]
+  decision?: string // approved | rejected | escalated
+  degraded?: boolean
+  tally?: RaatiTally
+  minority?: RaatiVoice[]
+  inquiries?: RaatiInquiry[]
+  profiles?: RaatiProfileInfo[] // configured convening profiles (names + purpose)
+  error?: string
+}
+
 export interface SettingOption {
   value: string
   label: string
@@ -374,6 +446,35 @@ export interface Surface {
   permissions?: PermissionsView
   lore?: LoreView
   mcp?: MCPView
+  raati?: RaatiView
+  chat?: ChatView
+}
+
+// Chat-connector pane (kind=chat): the registered services and the live bridge.
+// Workspace-scoped — the bridge belongs to the workspace and is bound to one of
+// its sessions, and does not follow whichever session this tab is showing.
+export interface ChatServiceInfo {
+  name: string
+  kind?: string // "" | "extension"
+  dev?: boolean
+  configured: boolean
+  paired: boolean
+}
+
+export interface ChatBridgeState {
+  state: string // idle | connecting | connected | error
+  connector?: string
+  username?: string
+  paired_id?: string
+  session?: string
+  error?: string
+}
+
+export interface ChatView {
+  services?: ChatServiceInfo[]
+  bridge: ChatBridgeState
+  // A `terva bot` daemon already polling this service; connect is refused.
+  daemon_pid?: number
 }
 
 export interface WireEvent {

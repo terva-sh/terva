@@ -24,6 +24,9 @@
 }
 
 * { box-sizing: border-box; }
+/* iOS Safari font boosting inflates arbitrary text nodes and blows out
+   min-content widths; pin the type scale to what we declared. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 html, body, #app { height: 100%; margin: 0; }
 body {
   font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif;
@@ -529,3 +532,271 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .sys-note.notice { font-style: normal; }
 .sys-note.notice.err { color: var(--danger); opacity: 1; }
 .sys-note.notice.err .sys-tag { color: var(--danger); border-color: var(--danger); }
+
+/* raati pane — the deliberation board (docs/proposals/raati-deliberation.md).
+   Deliberately theme-FIXED: the board is a screen-within-a-screen (tar-black
+   like the terva site), so its palette does not follow prefers-color-scheme.
+   Unit accent colors arrive from the persona charters via the wire. */
+.raati-body { display: flex; flex-direction: column; gap: 10px; }
+.raati-board { background: #0a0a09; color: #e5e9f0; border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.raati-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.raati-logo { font-weight: 700; letter-spacing: 0.35em; color: #7aa2f7; }
+.raati-binding { color: #7a7979; font-size: 11px; margin-left: auto; overflow-wrap: anywhere; }
+.raati-chip { border: 1px solid #2e343b; border-radius: 3px; padding: 1px 6px; font-size: 11px; color: #a8a8a8; text-transform: uppercase; letter-spacing: 0.1em; }
+.raati-chip.round { color: #e0af68; border-color: #e0af68; }
+.raati-question { color: #c7c1b2; font-size: 13px; }
+.raati-units { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.raati-block { border: 1px solid #2e343b; background: #11100e; border-radius: 4px; padding: 10px; min-height: 120px; display: flex; flex-direction: column; gap: 8px; }
+.raati-block-name { font-size: 12px; font-weight: 700; letter-spacing: 0.2em; }
+.raati-block.s-absent { border-style: dashed; opacity: 0.85; }
+.raati-kanji { font-size: 28px; line-height: 1.2; display: inline-block; }
+.raati-kanji.pulse { animation: raati-pulse 1.6s ease-in-out infinite; color: #7aa2f7; }
+.raati-kanji.flash { animation: raati-flash 1.4s ease-out; }
+.raati-kanji.settled { animation: raati-settle 0.6s ease-in; font-size: 20px; letter-spacing: 0.15em; }
+.raati-kanji.tone-approve, .raati-kanji.tone-approved { color: #e0af68; }
+.raati-kanji.tone-reject, .raati-kanji.tone-rejected { color: #f7768e; }
+.raati-kanji.tone-abstain, .raati-kanji.tone-escalated { color: #7dcfff; }
+.raati-conf { height: 5px; background: #2e343b; border-radius: 2px; overflow: hidden; }
+.raati-conf-fill { height: 100%; }
+/* graduation ticks: 25% majors full height, 10% minors on the lower half,
+   drawn over the fill so the lit edge reads against the scale */
+.raati-conf, .magi-conf { position: relative; }
+.raati-conf::after, .magi-conf::after { content: ''; position: absolute; inset: 0; pointer-events: none; background:
+  repeating-linear-gradient(to right, transparent 0, transparent calc(25% - 1px), #0a0a09 calc(25% - 1px), #0a0a09 25%),
+  repeating-linear-gradient(to right, transparent 0, transparent calc(10% - 1px), rgba(10, 10, 9, 0.55) calc(10% - 1px), rgba(10, 10, 9, 0.55) 10%) bottom / 100% 55% no-repeat; }
+.raati-rationale { color: #a8a8a8; font-size: 11.5px; line-height: 1.45; }
+.raati-dim { color: #7a7979; font-size: 11px; }
+.raati-offline { color: #f7768e; font-weight: 700; letter-spacing: 0.25em; animation: raati-pulse 1.2s ease-in-out infinite; }
+.raati-verdict { border: 1px solid #e0af68; border-radius: 4px; background: #11100e; padding: 12px; text-align: center; display: flex; flex-direction: column; gap: 8px; }
+.raati-verdict.tone-rejected { border-color: #f7768e; }
+.raati-verdict.tone-escalated { border-color: #7dcfff; }
+.raati-verdict .raati-kanji { font-size: 44px; }
+.raati-verdict .raati-kanji.settled { font-size: 26px; }
+.raati-tally { color: #a8a8a8; font-size: 12px; }
+.raati-degraded { color: #e0af68; }
+.raati-minority { text-align: left; border-top: 1px dashed #2e343b; padding-top: 8px; }
+.raati-minority-title { color: #f7768e; text-transform: uppercase; letter-spacing: 0.2em; font-size: 11px; margin-bottom: 4px; }
+.raati-minority-row { color: #c7c1b2; font-size: 11.5px; }
+.raati-error { color: #f7768e; font-size: 12px; }
+.raati-form { display: flex; flex-direction: column; gap: 8px; }
+.raati-form textarea { background: #11100e; color: #e5e9f0; border: 1px solid #2e343b; border-radius: 4px; padding: 8px; font: inherit; resize: vertical; }
+.raati-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.raati-form select { background: #11100e; color: #e5e9f0; border: 1px solid #2e343b; border-radius: 4px; padding: 5px; font: inherit; font-size: 12px; }
+/* Profile names carry their description ("name — what it is for");
+   cap the closed select so a wordy profile can't blow the row wide —
+   the full text stays reachable via the title tooltip. */
+.raati-form select.raati-profile { max-width: 320px; text-overflow: ellipsis; }
+.raati-check { display: flex; gap: 5px; align-items: center; color: #a8a8a8; font-size: 12px; }
+.raati-convene, .raati-reset { background: #7aa2f7; color: #0a0a09; border: none; border-radius: 4px; padding: 6px 14px; font: inherit; font-weight: 700; letter-spacing: 0.1em; cursor: pointer; }
+.raati-convene:disabled { opacity: 0.4; cursor: default; }
+.raati-reset { background: transparent; color: #7aa2f7; border: 1px solid #7aa2f7; }
+@keyframes raati-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+@keyframes raati-flash { 0% { opacity: 0; transform: scale(1.6); text-shadow: 0 0 24px currentColor; } 30% { opacity: 1; transform: scale(1); text-shadow: 0 0 18px currentColor; } 100% { opacity: 1; text-shadow: 0 0 2px currentColor; } }
+@keyframes raati-settle { 0% { opacity: 0; } 100% { opacity: 1; } }
+.raati-block-binding { color: #7a7979; font-size: 10px; overflow-wrap: anywhere; margin-top: -4px; }
+.raati-evidence summary { color: #7a7979; font-size: 12px; cursor: pointer; letter-spacing: 0.05em; }
+.raati-evidence[open] summary { color: #a8a8a8; margin-bottom: 6px; }
+.raati-evidence textarea { width: 100%; background: #11100e; color: #e5e9f0; border: 1px solid #2e343b; border-radius: 4px; padding: 8px; font: inherit; font-size: 12px; resize: vertical; box-sizing: border-box; }
+.raati-briefing { display: flex; align-items: center; gap: 10px; }
+.raati-briefing .raati-kanji { font-size: 20px; }
+.raati-block-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.raati-board .copy-btn { color: #7a7979; }
+.raati-board .copy-btn:hover { color: #e5e9f0; }
+.raati-verdict { position: relative; }
+.raati-verdict-copy { position: absolute; top: 6px; right: 6px; }
+.raati-inquiries { margin-top: 8px; font-size: 12px; }
+.raati-inquiry-row { padding: 3px 0; }
+.raati-inquiry-answer { color: #a8a8a8; padding-left: 12px; }
+.raati-inquiry-answer.open { color: #7dcfff; }
+
+.raati-history { border-top: 1px dashed #2e343b; padding-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.raati-history-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.raati-chipbtn { background: none; border: 1px solid #2e343b; border-radius: 3px; color: #7a7979; font: inherit; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 8px; cursor: pointer; }
+.raati-chipbtn:hover { color: #c7c1b2; }
+.raati-chipbtn.on { color: #e5e9f0; border-color: #7aa2f7; }
+.raati-chipbtn.on.tone-approved { color: #e0af68; border-color: #e0af68; }
+.raati-chipbtn.on.tone-rejected { color: #f7768e; border-color: #f7768e; }
+.raati-chipbtn.on.tone-escalated { color: #7dcfff; border-color: #7dcfff; }
+.raati-history-search { flex: 1; min-width: 120px; background: #0d0d12; border: 1px solid #2e343b; border-radius: 3px; color: #e5e9f0; font: inherit; font-size: 11px; padding: 2px 8px; }
+.raati-history-search::placeholder { color: #7a7979; }
+.raati-history-more { background: none; border: 1px dashed #2e343b; border-radius: 3px; color: #7a7979; font: inherit; font-size: 11px; padding: 3px 8px; cursor: pointer; align-self: flex-start; }
+.raati-history-more:hover { color: #c7c1b2; border-color: #7a7979; }
+.raati-history-title { color: #7a7979; text-transform: uppercase; letter-spacing: 0.2em; font-size: 11px; margin-bottom: 4px; }
+.raati-history-row { display: flex; flex-direction: column; gap: 2px; background: none; border: none; padding: 4px; font: inherit; font-size: 12px; color: #c7c1b2; cursor: pointer; text-align: left; border-radius: 3px; }
+.raati-history-row:hover { background: #16191a; }
+.raati-history-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.raati-history-q { color: #c7c1b2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.raati-history-decision { text-transform: uppercase; font-size: 11px; letter-spacing: 0.1em; flex: none; }
+.raati-history-decision.tone-approved { color: #e0af68; }
+.raati-history-decision.tone-rejected { color: #f7768e; }
+.raati-history-decision.tone-escalated { color: #7dcfff; }
+.raati-history-tally { color: #a8a8a8; letter-spacing: 0.1em; font-size: 11px; flex: none; }
+.raati-history-degraded { color: #e0af68; flex: none; }
+.raati-history-class { color: #7dcfff; text-transform: uppercase; font-size: 10px; letter-spacing: 0.1em; border: 1px solid #2e343b; border-radius: 3px; padding: 0 4px; flex: none; }
+.raati-history-dissent { color: #f7768e; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.raati-history-when { margin-left: auto; color: #7a7979; font-size: 11px; flex: none; }
+
+/* raati theater — the fullscreen MAGI console (terva-palette homage) */
+.raati-theater-btn { margin-left: auto; background: transparent; border: 1px solid #2e343b; color: #7aa2f7; border-radius: 3px; font-size: 13px; line-height: 1; padding: 2px 7px; cursor: pointer; }
+.raati-theater-btn:hover { border-color: #7aa2f7; color: #e5e9f0; }
+
+.magi-overlay { position: fixed; inset: 0; z-index: 60; background: #0a0a09; color: #e5e9f0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; display: flex; padding: 18px; box-sizing: border-box; overflow: auto; }
+.magi-stage { flex: 1; display: flex; flex-direction: column; gap: 14px; border: 1px solid #7aa2f7; border-radius: 6px; padding: 16px 20px; min-height: 0; }
+
+.magi-header { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 16px; }
+.magi-title { font-size: clamp(26px, 5.5vw, 58px); font-weight: 700; letter-spacing: 0.16em; color: #e0af68; line-height: 1; }
+.magi-title.right { justify-self: end; opacity: 0.5; transition: opacity 0.5s ease, text-shadow 0.5s ease; }
+.magi-title.right.lit { opacity: 1; text-shadow: 0 0 18px #e0af68; }
+.magi-info { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: #7dcfff; letter-spacing: 0.08em; align-self: center; }
+.magi-info b { color: #7a7979; font-weight: 400; display: inline-block; min-width: 52px; }
+.magi-exit-hint { background: transparent; border: none; padding: 0; margin-left: 14px; font: inherit; color: #7a7979; letter-spacing: 0.08em; cursor: pointer; }
+.magi-exit-hint:hover { color: #f7768e; }
+
+/* The composition is pinned near the reference's aspect and centered —
+   letting it stretch to an ultrawide stage is what flattens the diagonals. */
+.magi-panels { position: relative; flex: 1; min-height: 280px; align-self: center; aspect-ratio: 1.5; min-width: 72%; max-width: 100%; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 0.9fr 1fr; gap: 24px; }
+.magi-panels.tone-approved { --tone: #e0af68; }
+.magi-panels.tone-rejected { --tone: #f7768e; }
+.magi-panels.tone-escalated { --tone: #7dcfff; }
+
+/* Panels carry a rim that traces the polygon: the button paints the rim
+   color, the ::before repaints the fill inside an inner polygon. The inner
+   polygon is spelled out per shape with px offsets perpendicular to each
+   edge — recomputing the same %-polygon on an inset box drifts by
+   (inset × coordinate%), which tapers the rim to nothing at the far
+   corners of the diagonals. */
+.magi-panel { --rim: #2e343b; --fill: #11100e; position: relative; border: none; background: var(--rim); color: #e5e9f0; font: inherit; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 14px; text-align: center; transition: background 0.5s ease, filter 0.5s ease; filter: drop-shadow(0 0 2px #05050a); }
+.magi-panel::before { content: ''; position: absolute; inset: 0; background: var(--fill); transition: background 0.5s ease; }
+.magi-panel > * { position: relative; }
+/* At the pinned aspect these diagonals sit at ~45° and each bottom cut is
+   collinear with the top panel's adjacent side, so the construction lines
+   read as continuous across the channel gaps. */
+.magi-panel.pos-top { grid-column: 1 / 3; clip-path: polygon(3% 0, 97% 0, 73% 78%, 27% 78%); }
+.magi-panel.pos-left { clip-path: polygon(0 0, 62% 0, 100% 55%, 100% 100%, 0 100%); }
+.magi-panel.pos-right { clip-path: polygon(38% 0, 100% 0, 100% 100%, 0 100%, 0 55%); }
+.magi-panel.pos-top::before { clip-path: polygon(calc(3% + 4.8px) 2px, calc(97% - 4.8px) 2px, calc(73% - 0.8px) calc(78% - 2px), calc(27% + 0.8px) calc(78% - 2px)); }
+.magi-panel.pos-left::before { clip-path: polygon(2px 2px, calc(62% - 0.8px) 2px, calc(100% - 2px) calc(55% + 0.7px), calc(100% - 2px) calc(100% - 2px), 2px calc(100% - 2px)); }
+.magi-panel.pos-right::before { clip-path: polygon(calc(38% + 0.8px) 2px, calc(100% - 2px) 2px, calc(100% - 2px) calc(100% - 2px), 2px calc(100% - 2px), 2px calc(55% + 0.7px)); }
+.magi-panel.empty { --rim: #1a1f27; --fill: #0d0d12; cursor: default; opacity: 0.5; }
+.magi-name { font-size: clamp(15px, 2.2vw, 26px); font-weight: 700; letter-spacing: 0.18em; color: var(--accent, #7aa2f7); }
+.magi-binding { font-size: 10px; color: #7a7979; overflow-wrap: anywhere; max-width: 82%; }
+.magi-state { min-height: 30px; display: flex; align-items: center; }
+.magi-glyph { font-size: 22px !important; color: var(--accent, #7aa2f7) !important; }
+
+/* deliberating: the rim tints toward the accent and the panel breathes */
+.magi-panel.s-deliberating { --rim: color-mix(in srgb, var(--accent, #7aa2f7) 55%, #2e343b); animation: magi-breathe 1.6s ease-in-out infinite; }
+@keyframes magi-breathe { 0%, 100% { filter: drop-shadow(0 0 3px var(--accent, #7aa2f7)); } 50% { filter: drop-shadow(0 0 20px var(--accent, #7aa2f7)); } }
+
+/* voted: settle to the verdict's representative color (matches the pane) */
+.magi-panel.s-voted.tone-approve { --rim: #e0af68; --fill: color-mix(in srgb, #e0af68 16%, #11100e); filter: drop-shadow(0 0 12px #e0af68); }
+.magi-panel.s-voted.tone-reject { --rim: #f7768e; --fill: color-mix(in srgb, #f7768e 16%, #11100e); filter: drop-shadow(0 0 12px #f7768e); }
+.magi-panel.s-voted.tone-abstain { --rim: #7dcfff; --fill: color-mix(in srgb, #7dcfff 16%, #11100e); filter: drop-shadow(0 0 12px #7dcfff); }
+.magi-panel.s-absent { --fill: #14141c; opacity: 0.65; filter: none; }
+.magi-panel.selected.selected { --rim: #e5e9f0; }
+
+.magi-conf { width: min(60%, 280px); height: 5px; background: #2e343b; border-radius: 2px; overflow: hidden; }
+.magi-conf-fill { height: 100%; background: var(--accent, #7aa2f7); }
+
+/* conduits: double-rail buses from the hub to each unit; they run under the
+   opaque panels so only the crossing of the dark channel is visible */
+.magi-conduit { position: absolute; left: 50%; top: 48%; height: 14px; margin-top: -7px; transform-origin: 0 50%; pointer-events: none; filter: drop-shadow(0 0 4px color-mix(in srgb, #e0af68 35%, transparent)); --c: color-mix(in srgb, #e0af68 55%, #2e343b); background: linear-gradient(to bottom, var(--c) 0 3px, transparent 3px calc(100% - 3px), var(--c) calc(100% - 3px) 100%); transition: filter 0.5s ease; }
+.magi-conduit.c-up { width: clamp(100px, 15vh, 150px); transform: rotate(-90deg); }
+.magi-conduit.c-left { width: clamp(120px, 20%, 260px); transform: rotate(145deg); }
+.magi-conduit.c-right { width: clamp(120px, 20%, 260px); transform: rotate(35deg); }
+.magi-panels.running .magi-conduit { animation: raati-pulse 2s ease-in-out infinite; }
+.magi-panels.decided .magi-conduit { --c: var(--tone, #e0af68); filter: drop-shadow(0 0 5px var(--tone, #e0af68)); }
+
+/* hub: corner-cut plate, same rim technique; takes the decision tone */
+.magi-hub { position: absolute; left: 50%; top: 48%; transform: translate(-50%, -50%); z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 20px; background: #e0af68; clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px), 0 10px); filter: drop-shadow(0 0 13px color-mix(in srgb, #e0af68 55%, transparent)); transition: background 0.5s ease, filter 0.5s ease; }
+.magi-hub::before { content: ''; position: absolute; inset: 2px; clip-path: inherit; background: #0a0a09; }
+.magi-hub > * { position: relative; }
+.magi-panels.decided .magi-hub { background: var(--tone, #e0af68); filter: drop-shadow(0 0 16px color-mix(in srgb, var(--tone, #e0af68) 70%, transparent)); }
+.magi-hub-logo { font-weight: 700; letter-spacing: 0.4em; color: #e0af68; font-size: clamp(16px, 2.4vw, 26px); animation: raati-pulse 2s ease-in-out infinite; }
+.magi-hub .raati-kanji { font-size: 34px; }
+.magi-tally { font-size: 12px; color: #a8a8a8; letter-spacing: 0.12em; }
+
+/* Fixed height: the console scrolls its content rather than resizing with
+   it, so switching units never reflows the composition above. */
+.magi-console { border: 1px solid #2e343b; border-radius: 4px; background: #0d0d12; padding: 10px 12px; position: relative; flex: none; height: clamp(84px, 16vh, 180px); overflow: auto; box-sizing: border-box; }
+.magi-console-tag { position: absolute; top: 6px; right: 10px; color: #7dcfff; font-size: 11px; letter-spacing: 0.2em; opacity: 0.7; }
+.magi-console-head { font-size: 12px; letter-spacing: 0.06em; margin-bottom: 6px; padding-right: 44px; }
+.magi-console-verdict { color: #e0af68; }
+.magi-console-dissent { color: #f7768e; text-transform: uppercase; letter-spacing: 0.1em; }
+.magi-console-text { color: #c7c1b2; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; }
+.magi-console-body.dim { color: #7a7979; font-size: 12px; padding-right: 48px; }
+.magi-console-err { color: #f7768e; font-size: 12px; }
+
+/* idle console: the archive as console lines — click to replay a record
+   onto the stage */
+.magi-archive-title { color: #7a7979; text-transform: uppercase; letter-spacing: 0.2em; font-size: 10px; margin-bottom: 4px; }
+.magi-archive-row { display: flex; align-items: baseline; gap: 10px; width: 100%; background: none; border: none; padding: 2px 4px; font: inherit; font-size: 12px; color: #c7c1b2; cursor: pointer; text-align: left; border-radius: 3px; }
+.magi-archive-row:hover { background: #16191a; }
+.magi-archive-row .raati-kanji { font-size: 13px; flex: none; }
+.magi-archive-q { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.magi-archive-tally { color: #a8a8a8; letter-spacing: 0.1em; flex: none; }
+.magi-archive-dissent { color: #f7768e; font-size: 11px; flex: none; }
+.magi-archive-when { color: #7a7979; flex: none; }
+/* its own row above the body — floating it over the text collides in
+   any console narrower than the line it lands on */
+.magi-archive-back { display: block; width: max-content; margin: 0 0 8px; padding: 4px 10px; background: transparent; border: 1px solid #2e343b; border-radius: 3px; color: #7a7979; font: inherit; font-size: 11px; letter-spacing: 0.08em; cursor: pointer; }
+.magi-archive-back:hover { color: #7dcfff; }
+
+/* ticker: the synthesized event feed narrating the deliberation */
+.magi-ticker { border: 1px solid #2e343b; border-radius: 4px; background: #0d0d12; padding: 6px 12px; height: 74px; overflow-y: auto; flex: none; font-size: 11.5px; color: #7a7979; box-sizing: border-box; }
+.magi-ticker-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.55; }
+.magi-ticker-line:last-child { color: #c7c1b2; }
+
+.magi-footer { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; color: #c7c1b2; border-top: 1px solid #2e343b; padding-top: 8px; }
+.magi-q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.magi-access { color: #7a7979; flex: none; }
+
+/* wide stages seat the reading console beside the composition (the
+   reference's side readout) instead of a bottom strip */
+@media (min-width: 1100px) {
+  .magi-stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); grid-template-rows: auto minmax(0, 1fr) auto auto; grid-template-areas: 'header header' 'panels console' 'ticker ticker' 'footer footer'; }
+  .magi-header { grid-area: header; }
+  /* height must be explicit: grid resolves inline size before block-axis
+     stretch, so aspect-ratio can't transfer from a stretched height and
+     the composition collapses to its min-width */
+  .magi-panels { grid-area: panels; justify-self: center; height: 100%; }
+  .magi-console { grid-area: console; height: auto; }
+  .magi-ticker { grid-area: ticker; }
+  .magi-footer { grid-area: footer; }
+}
+
+@media (max-width: 720px) {
+  .magi-overlay { padding: calc(10px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left)); overflow-x: hidden; }
+  .magi-stage { min-width: 0; padding: 12px; gap: 10px; }
+  .magi-title { font-size: clamp(20px, 7vw, 30px); }
+  .magi-info { display: none; }
+  /* side lanes give the conduit traces room to run beside the totem */
+  .magi-panels { display: flex; flex-direction: column; gap: 10px; align-self: stretch; aspect-ratio: auto; min-width: 0; min-height: 0; padding: 0 16px; box-sizing: border-box; }
+  /* faceted totem: px corner cuts keep the MAGI language without the
+     wide-triangle geometry (px coords also keep the rims uniform) */
+  .magi-panel.pos-top, .magi-panel.pos-left, .magi-panel.pos-right { min-height: 96px; }
+  .magi-panel.pos-top { clip-path: polygon(0 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 18px 100%, 0 calc(100% - 18px)); }
+  .magi-panel.pos-left, .magi-panel.pos-right { clip-path: polygon(18px 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%, 0 18px); }
+  .magi-panel.pos-top::before { clip-path: polygon(2px 2px, calc(100% - 2px) 2px, calc(100% - 2px) calc(100% - 18.8px), calc(100% - 18.8px) calc(100% - 2px), 18.8px calc(100% - 2px), 2px calc(100% - 18.8px)); }
+  .magi-panel.pos-left::before, .magi-panel.pos-right::before { clip-path: polygon(18.8px 2px, calc(100% - 18.8px) 2px, calc(100% - 2px) 18.8px, calc(100% - 2px) calc(100% - 2px), 2px calc(100% - 2px), 2px 18.8px); }
+  /* conduits become right-angle circuit traces drawn with borders: the
+     two lower units rise as parallel rails in the left lane and turn
+     into the hub; the top unit drops down the right lane and turns in.
+     Anchor lines (--hub*, --p*) are measured into vars at runtime; the
+     entry stubs tuck under the opaque panels like the desktop rails. */
+  /* the desktop width/rotate rules are two-class selectors, so the
+     resets must sit on the per-class rules to outrank them */
+  .magi-conduit { display: block; height: auto; margin: 0; background: none; border: 0 solid var(--c); }
+  /* each trace docks at its member's mid-height and runs to the hub */
+  .magi-conduit.c-up { width: auto; transform: none; left: calc(var(--hubr, 50%) - 6px); right: 5px; top: calc((var(--p0t, 0px) + var(--p0b, 0px)) / 2); bottom: calc(100% - var(--hubm, 0px) + 6px); border-width: 3px 3px 3px 0; }
+  .magi-conduit.c-left { width: auto; transform: none; left: 9px; right: calc(100% - var(--hubl, 50%) - 6px); top: calc(var(--hubm, 0px) - 2px); bottom: calc(100% - (var(--p1t, 0px) + var(--p1b, 0px)) / 2); border-width: 3px 0 3px 3px; }
+  .magi-conduit.c-right { width: auto; transform: none; left: 2px; right: calc(100% - var(--hubl, 50%) - 6px); top: calc(var(--hubm, 0px) + 6px); bottom: calc(100% - (var(--p2t, 0px) + var(--p2b, 0px)) / 2); border-width: 3px 0 3px 3px; }
+  .magi-hub { position: static; transform: none; align-self: center; max-width: 100%; box-sizing: border-box; padding: 8px 14px; }
+  .magi-hub .raati-kanji { font-size: 22px; }
+  .magi-hub-logo { font-size: 16px; letter-spacing: 0.3em; }
+  .magi-header { grid-template-columns: auto 1fr auto; }
+  .magi-footer { flex-wrap: wrap; }
+  .magi-ticker { display: none; }
+  .magi-exit-key { display: none; }
+  .magi-exit-hint { margin-left: 10px; padding: 6px 12px; border: 1px solid #2e343b; border-radius: 3px; color: #a8a8a8; }
+  .magi-archive-dissent { display: none; }
+}
