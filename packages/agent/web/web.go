@@ -126,8 +126,31 @@ func newMux(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) *
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "ok")
 	})
-	mux.Handle("/", authMiddleware(opts, staticHandler()))
+	mux.Handle("/", authMiddleware(opts, securityHeaders(staticHandler())))
 	return mux
+}
+
+// securityHeaders adds browser defense-in-depth to every static/PWA response.
+// The auth gate is the primary boundary; these bound what a compromised or
+// confused renderer can do afterwards. The CSP is written for the app as
+// built: no inline scripts or styles (vite emits external assets; Preact's
+// object-valued style props set DOM properties, which CSP does not police),
+// images from self plus the data: URLs the transcript gallery builds, and
+// same-origin WebSockets — 'self' alone does not match ws:// in every
+// browser, so the schemes are named; exfiltration via connect-src needs
+// script execution, which script-src 'self' already denies.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "+
+				"connect-src 'self' ws: wss:; manifest-src 'self'; worker-src 'self'; "+
+				"frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
 }
 
 var upgrader = websocket.Upgrader{

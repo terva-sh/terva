@@ -178,6 +178,55 @@ func TestStaticServed(t *testing.T) {
 	}
 }
 
+// TestStaticSecurityHeaders: every static/PWA response carries the
+// defense-in-depth headers (CSP, nosniff, referrer, permissions); the
+// unauthenticated health check does not need them and the WS upgrade
+// path must not be wrapped (a 101 ignores them anyway).
+func TestStaticSecurityHeaders(t *testing.T) {
+	srv := httptest.NewServer(newMux(context.Background(), newFakeWS(), Options{}))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	csp := resp.Header.Get("Content-Security-Policy")
+	for _, want := range []string{
+		"default-src 'self'",
+		"script-src 'self'",
+		"img-src 'self' data:",
+		"connect-src 'self' ws: wss:",
+		"frame-ancestors 'none'",
+		"object-src 'none'",
+	} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP missing %q: %q", want, csp)
+		}
+	}
+	if strings.Contains(csp, "unsafe-inline") || strings.Contains(csp, "unsafe-eval") {
+		t.Errorf("CSP must not allow unsafe-inline/eval: %q", csp)
+	}
+	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := resp.Header.Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+	}
+	if resp.Header.Get("Permissions-Policy") == "" {
+		t.Error("Permissions-Policy missing")
+	}
+
+	// The SPA fallback path (unknown route -> index.html) gets them too.
+	resp2, err := http.Get(srv.URL + "/some/client/route")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.Header.Get("Content-Security-Policy") == "" {
+		t.Error("SPA fallback response missing CSP")
+	}
+}
+
 func TestCheckBindSafety(t *testing.T) {
 	trusted, err := ParseTrustedProxies([]string{"10.0.0.0/24"})
 	if err != nil {
@@ -400,6 +449,13 @@ func (f *fakeWS) SetQueue(ctx context.Context, sess string, t []string) error { 
 func (f *fakeWS) Cancel(ctx context.Context, sess string) error               { return nil }
 func (f *fakeWS) Compact(ctx context.Context, sess string) error              { return nil }
 func (f *fakeWS) Clear(ctx context.Context, sess string) error                { return nil }
+func (f *fakeWS) SideChatOpen(ctx context.Context, sess string) (string, error) {
+	return "sc1", nil
+}
+func (f *fakeWS) SideChatAsk(ctx context.Context, sess, id string, prior []ctrlproto.SideChatTurn, q string) (string, error) {
+	return "", nil
+}
+func (f *fakeWS) SideChatClose(ctx context.Context, sess, id string) error { return nil }
 func (f *fakeWS) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
 	return nil
 }
@@ -417,6 +473,9 @@ func (f *fakeWS) RenameSession(ctx context.Context, sess, title string) error { 
 func (f *fakeWS) DeleteSession(ctx context.Context, sess string) error        { return nil }
 func (f *fakeWS) Usage(ctx context.Context, sess string) (core.WireUsage, error) {
 	return core.WireUsage{}, nil
+}
+func (f *fakeWS) UsageSnapshot(ctx context.Context, sess string, refresh bool) (ctrlproto.UsageInfo, error) {
+	return ctrlproto.UsageInfo{}, nil
 }
 func (f *fakeWS) Context(ctx context.Context, sess string) (ctrlproto.ContextBreakdown, error) {
 	return ctrlproto.ContextBreakdown{}, nil

@@ -31,8 +31,22 @@ const copyIcons =
   '<svg class="ic ic-copy" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>' +
   '<svg class="ic ic-check" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'
 
+// escapeAttr HTML-escapes a string for interpolation into a double-quoted
+// attribute inside a raw HTML string. Locale overlays are user-supplied
+// content ($TERVA_HOME/locales), so t() output is NOT trusted in this sink —
+// an unescaped quote in a translation would break out of the attribute
+// right next to model-rendered HTML.
+export function escapeAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 function withCopy(html: string): string {
-  const label = t('Copy')
+  const label = escapeAttr(t('Copy'))
   return `<div class="code-wrap"><button class="code-copy" type="button" aria-label="${label}" title="${label}">${copyIcons}</button>${html}</div>`
 }
 
