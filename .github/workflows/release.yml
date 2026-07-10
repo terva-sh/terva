@@ -7,6 +7,15 @@
 # `pub/vX.Y.Z` tag arrives here as `vX.Y.Z`); this workflow only
 # packages. It never creates tags, never bumps versions — a tag that
 # wasn't deliberately pushed cannot release anything.
+#
+# GATE: publishing is hard-blocked on the public `ci` workflow (ci.yml)
+# having concluded success for the *exact* tagged commit. ci.yml is the
+# fleet's ONLY Windows/macOS coverage, and it runs on `release` branch
+# pushes — a tag push does NOT trigger it. Without this gate a tag could
+# publish GitHub/GHCR artifacts for a tree the cross-platform matrix never
+# vetted; both prior public-only reds (v0.115.1, v0.117.1) were exactly
+# such Windows-only breakage. The maintainer runbook already says "tag only
+# after branch CI is green"; this makes that discipline machine-enforced.
 name: release
 
 on:
@@ -14,11 +23,13 @@ on:
     tags:
       - "v*"
 
-# goreleaser creates the release, uploads archives, and pushes the
-# container images to ghcr.io/terva-sh/terva.
+# contents/packages: goreleaser creates the release, uploads archives, and
+# pushes container images to ghcr.io/terva-sh/terva. actions: read lets the
+# verify-ci gate query the ci workflow's run conclusion for the tagged SHA.
 permissions:
   contents: write
   packages: write
+  actions: read
 
 # Queue, never cancel: two tags racing should both ship.
 concurrency:
@@ -26,8 +37,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-ci:
+    name: Require public CI green for the tagged commit
+    # Pinned to the public repo so forks of the mirror can't publish.
+    if: ${{ github.repository == 'terva-sh/terva' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert ci.yml concluded success for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          echo "Tag ${GITHUB_REF_NAME} points at ${SHA}."
+          echo "Requiring a successful 'ci' (ci.yml) run for that exact commit before publishing."
+          # ci.yml runs on release/release-* branch pushes; the tagged commit
+          # is the release-branch tip, so its run is found by head_sha. Any
+          # completed+success run for this SHA is sufficient evidence that the
+          # Windows/macOS + web overlay vetted this exact tree.
+          runs="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=100" \
+            --jq '[.workflow_runs[] | {status, conclusion}]')"
+          echo "ci runs for ${SHA}: ${runs}"
+          ok="$(printf '%s' "${runs}" | jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length')"
+          if [ "${ok}" -lt 1 ]; then
+            echo "::error::No successful 'ci' run found for ${SHA}. The public CI overlay (Windows/macOS + web-client) must pass on the tagged commit before a release can publish. Wait for ci to go green on the release-branch tip, then re-run this workflow (the tag/SHA is unchanged)."
+            exit 1
+          fi
+          echo "Public CI is green for ${SHA} — proceeding to publish."
+
   goreleaser:
     name: Build and Publish Release
+    # Gate: never publish unless the public CI overlay vetted this exact tree.
+    needs: verify-ci
     # Pinned to the public repo so forks of the mirror can't publish
     # releases from this workflow.
     if: ${{ github.repository == 'terva-sh/terva' }}

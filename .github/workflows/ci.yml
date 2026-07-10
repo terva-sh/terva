@@ -1,7 +1,16 @@
 # Public CI for github.com/terva-sh/terva. Ships on the curated
 # `release` branch (copied there by the release-cut, scripts/release.sh)
 # and replaces upstream's main-only workflow. Mirrors `just ci`:
-# vet + gofmt + race tests + the connector tag-matrix build.
+# vet + gofmt + the i18n catalog gate + race tests + the connector
+# tag-matrix build + the terva_acp / terva_web tagged build/vet/test +
+# the terva_pprof build guard, plus the web client's vitest suite.
+#
+# Two internal gates cannot run here by design: the packaging drift
+# check (scripts/release.sh is excluded from the public tree) and the
+# goreleaser snapshot (validated on the internal primary branch). This
+# workflow is also the fleet's ONLY Windows/macOS coverage — keep the
+# matrix and don't trim gates from it: both prior public-only CI reds
+# (v0.115.1, v0.117.1) were Windows-only breakage invisible internally.
 name: ci
 
 on:
@@ -51,8 +60,62 @@ jobs:
             exit 1
           fi
 
+      - name: i18n catalog gate
+        # The reference catalogs under packages/i18n/locales/ must match
+        # the wrapped T/P/H calls in packages/ and cmd/. Regenerate +
+        # commit with `go run ./cmd/terva-i18n-lint`.
+        run: go run ./cmd/terva-i18n-lint -check
+
       - name: go test
         run: go test -race ./...
 
-      - name: tag-matrix build (no chat connectors)
-        run: go build -tags terva_no_telegram ./...
+      - name: connector tag-matrix build (no chat connectors)
+        # The lean build must always compile; it proves no stray import
+        # links a tagged-out connector back in.
+        run: go build -tags terva_no_telegram,terva_no_discord ./...
+
+      - name: acp run mode (tagged build/vet/test)
+        # The ACP editor↔agent run mode lives behind -tags terva_acp; the
+        # default build only compiles the no-tag stub, so build + vet +
+        # test the real package or it regresses unnoticed.
+        run: |
+          go build -tags terva_acp ./...
+          go vet -tags terva_acp ./packages/agent/...
+          go test -tags terva_acp -race ./packages/agent/acp/... ./packages/agent/
+
+      - name: web control panel (tagged build/vet/test)
+        # The browser control panel lives behind -tags terva_web (the WS
+        # ctrlproto carrier + the embedded client dist). No Node needed —
+        # the committed client dist is embedded via go:embed.
+        run: |
+          go build -tags terva_web ./...
+          go vet -tags terva_web ./packages/agent/web/
+          go test -tags terva_web -race ./packages/agent/web/ ./packages/agent/
+
+      - name: terva_pprof build guard
+        # The profiling endpoint (cmd/terva/pprof.go) only compiles under
+        # this tag, so the default build can't catch a break in it.
+        run: go build -tags terva_pprof ./cmd/terva
+
+  # The web client's vitest suite (store transforms, markdown escaping,
+  # image-MIME allowlist) — security-relevant rendering logic no Go test
+  # covers. `just web-test` is the local equivalent. Linux-only: the
+  # suite is platform-independent TypeScript.
+  web-client:
+    name: web client tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: set up node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: packages/agent/web/client/package-lock.json
+
+      - name: npm ci
+        run: npm --prefix packages/agent/web/client ci
+
+      - name: vitest
+        run: npm --prefix packages/agent/web/client test

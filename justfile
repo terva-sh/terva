@@ -148,6 +148,11 @@ release-snapshot:
 # Run the full test suite with the race detector. Extra args pass through: `just test -run TestFoo`.
 test *ARGS:
     go test -race ./... {{ARGS}}
+    # The acp/web surfaces are tag-gated: without these lines the everyday
+    # test run silently skips them ("[no test files]") and only `just ci`
+    # or the CI workflow would catch a regression.
+    go test -tags terva_acp -race ./packages/agent/acp/... {{ARGS}}
+    go test -tags terva_web -race ./packages/agent/web/ {{ARGS}}
 
 # Faster tests without the race detector.
 test-fast *ARGS:
@@ -207,6 +212,19 @@ ci: lint test ci-acp ci-web
     # it — same reason ci-acp exists. install-dev is the only shipping use.
     go build -tags terva_pprof ./cmd/terva
     @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-overlay; fi
+
+# Pre-release gate for a public cut: the full local CI, then the manual
+# reminders for what can only be verified on GitHub. The public release
+# workflow hard-gates publishing on the public CI overlay (Windows/macOS +
+# web-client) passing for the tagged commit, so the tag must be pushed only
+# after that overlay is green on the release-branch tip.
+release-preflight-public: ci
+    @echo ""
+    @echo "Local gate passed. Before pushing the release tag, confirm on GitHub:"
+    @echo "  - the public 'ci' workflow (Windows/macOS matrix + web-client vitest)"
+    @echo "    is GREEN on the release-branch tip you are about to tag;"
+    @echo "  - the release workflow refuses to publish otherwise (verify-ci gate)."
+    @echo "Then push pub/vX.Y.Z. See scripts/release-overlay/.github/workflows/."
 
 # Print the version string the binary would report, built from source.
 version:
