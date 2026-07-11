@@ -21,6 +21,8 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/provider"
 )
 
 // detachChild configures cmd to run in its own process group so tty
@@ -308,10 +310,10 @@ func botStart(svc chat.Service, rawTail []string) error {
 	}
 
 	logPath := chat.LogPath(config.TervaHome(), svc.Name)
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(logPath)); err != nil {
 		return err
 	}
-	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	logFile, err := privfs.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		return fmt.Errorf("open log file: %w", err)
 	}
@@ -570,7 +572,14 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 			if err != nil {
 				return err
 			}
-			loop.SetClientAndModel(next.NewClient(), next.Model)
+			nc := next.NewClient()
+			// Carry the usage snapshot across the rebuild (same-provider
+			// swaps only; the seeder rejects foreign snapshots), mirroring
+			// Workspace.switchModel.
+			if snap, ok := loop.Agent.Usage(); ok {
+				provider.SeedClientUsage(nc, snap)
+			}
+			loop.SetClientAndModel(nc, next.Model)
 			loop.UpdateStatusContext(next.Provider, next.AuthMethod, next.CWD)
 			// UpdateStatusContext refreshes the /status connector command;
 			// terva_status (what the MODEL sees) reads a separate tool that

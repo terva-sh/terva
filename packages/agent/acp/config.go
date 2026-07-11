@@ -7,6 +7,7 @@ import (
 
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
 )
 
 // Phase 4b: model selection (config options) + approval mode (session modes).
@@ -104,6 +105,12 @@ func (s *agentServer) handleSetConfigOption(params json.RawMessage) (any, error)
 	if sw.Reuse {
 		sess.agent.SetModel(sw.Model)
 	} else {
+		// Carry the usage snapshot across the rebuild (same-provider swaps
+		// only; the seeder rejects foreign snapshots), mirroring
+		// Workspace.switchModel.
+		if snap, ok := sess.agent.Usage(); ok {
+			provider.SeedClientUsage(sw.Client, snap)
+		}
 		sess.agent.SetClientAndModel(sw.Client, sw.Model)
 		// The client swap keeps the tool registry, so terva_status still
 		// carries the previous provider identity — re-bind it, or the tool

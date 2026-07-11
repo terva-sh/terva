@@ -95,6 +95,28 @@ func ClientUsage(c Client) (UsageSnapshot, bool) {
 	return UsageSnapshot{}, false
 }
 
+// UsageSeeder is implemented by clients whose passively-observed snapshot can
+// be primed from a predecessor client's. A client rebuild (re-login, endpoint
+// change, a cross-then-back provider hop) starts with an empty snapshot that
+// nothing refills until the next turn's response headers arrive — so the
+// meters a user was just looking at vanish. Seeding carries the last
+// observation across the swap; implementations must ignore snapshots that
+// are not theirs (wrong Provider) and never let a seed displace a fresher
+// live observation.
+type UsageSeeder interface {
+	SeedUsage(UsageSnapshot)
+}
+
+// SeedClientUsage primes c with a predecessor's snapshot, looking through
+// wrapper layers for a UsageSeeder. A client that cannot be seeded (or a
+// snapshot the seeder rejects) is a silent no-op — seeding is best-effort
+// continuity, not state transfer.
+func SeedClientUsage(c Client, snap UsageSnapshot) {
+	if s, ok := clientAs[UsageSeeder](c); ok {
+		s.SeedUsage(snap)
+	}
+}
+
 // UsageRefresher is implemented by clients whose usage must be PULLED from a
 // dedicated endpoint (a balance/usage GET) rather than observed passively from
 // response headers. RefreshUsage performs that fetch and returns the latest

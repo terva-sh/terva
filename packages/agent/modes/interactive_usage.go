@@ -56,7 +56,30 @@ func (i *Interactive) fetchCarrierUsage(refresh bool) {
 
 // refreshUsageAsync kicks a refresh off the UI goroutine.
 func (i *Interactive) refreshUsageAsync(refresh bool) {
+	i.mu.Lock()
+	i.carrierUsageFetched = time.Now()
+	i.mu.Unlock()
 	go i.fetchCarrierUsage(refresh)
+}
+
+// usageRefreshMinInterval is the mid-turn throttle floor: per-step usage
+// events can arrive several times a second in a tool-heavy turn, and each
+// mirror refresh is a carrier round-trip. Turn-over and binding refreshes
+// bypass the throttle (refreshUsageAsync), so the meters are never more
+// than one interval stale while a turn streams and are exact at its end.
+const usageRefreshMinInterval = 5 * time.Second
+
+// refreshUsageThrottledLocked refreshes the usage mirror unless one was
+// kicked off within usageRefreshMinInterval. Called (with i.mu held) on
+// per-step usage events so the status-bar meters appear during a
+// long-running turn — a session whose first turn runs for minutes otherwise
+// shows no subscription picture at all until the turn ends.
+func (i *Interactive) refreshUsageThrottledLocked() {
+	if time.Since(i.carrierUsageFetched) < usageRefreshMinInterval {
+		return
+	}
+	i.carrierUsageFetched = time.Now()
+	go i.fetchCarrierUsage(false)
 }
 
 // usageRefreshable reports whether the current provider fetches its usage from
