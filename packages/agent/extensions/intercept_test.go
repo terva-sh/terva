@@ -95,7 +95,7 @@ done
 	if errs := m.LoadExplicit(ctx, []string{extDir}); len(errs) > 0 {
 		t.Fatalf("LoadExplicit: %v", errs)
 	}
-	m.WaitForReady(3 * time.Second)
+	m.WaitForReady(testsupport.ExtReadyGrace)
 
 	// tool_call: rm -rf is blocked
 	res := m.InterceptToolCall(ctx, "T1", "bash", json.RawMessage(`{"command":"rm -rf /tmp/foo"}`))
@@ -213,7 +213,7 @@ done
 	if errs := m.LoadExplicit(ctx, []string{extDir}); len(errs) > 0 {
 		t.Fatalf("LoadExplicit: %v", errs)
 	}
-	m.WaitForReady(3 * time.Second)
+	m.WaitForReady(testsupport.ExtReadyGrace)
 	before := len(m.All())
 	if before == 0 {
 		t.Fatal("extension didn't load")

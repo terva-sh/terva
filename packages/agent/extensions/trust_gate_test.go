@@ -62,7 +62,7 @@ func TestProjectExtensionGatedOnTrust(t *testing.T) {
 	if errs := mgr.Discover(context.Background()); len(errs) > 0 {
 		t.Fatalf("untrusted discover: %v", errs)
 	}
-	mgr.WaitForReady(500 * time.Millisecond)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 	mgr.Stop(2 * time.Second)
 	if mgr.HasCommand("projcmd") {
 		t.Error("untrusted workspace spawned its project extension (command registered) — RCE gap")
@@ -80,7 +80,7 @@ func TestProjectExtensionGatedOnTrust(t *testing.T) {
 		t.Fatalf("trusted discover: %v", errs)
 	}
 	defer mgr2.Stop(2 * time.Second)
-	mgr2.WaitForReady(time.Second)
+	mgr2.WaitForReady(testsupport.ExtReadyGrace)
 	if !mgr2.HasCommand("projcmd") {
 		t.Error("trusted workspace should spawn its project extension")
 	}
@@ -123,7 +123,7 @@ done
 		t.Fatalf("discover: %v", errs)
 	}
 	defer mgr.Stop(2 * time.Second)
-	mgr.WaitForReady(time.Second)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 	if !mgr.HasCommand("globalcmd") {
 		t.Error("global ($TERVA_HOME) extension should load even in an untrusted workspace")
 	}

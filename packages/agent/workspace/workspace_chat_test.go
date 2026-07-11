@@ -271,7 +271,12 @@ func registerFakeService(t *testing.T, name string) {
 
 func waitFor(t *testing.T, what string, pred func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	// Generous ceiling: these predicates poll on subprocess / connection state
+	// (connector spawn, hello handshake, bridge status) that is slow under CI
+	// load and the race detector, so a tight deadline flakes. The happy path
+	// returns the instant the predicate holds; a real failure still fails, just
+	// a little later.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if pred() {
 			return

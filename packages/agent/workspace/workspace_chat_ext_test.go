@@ -329,7 +329,12 @@ func TestExtConnectorConnectsDisconnectsReconnects(t *testing.T) {
 		t.Fatalf("extension load: %v", e)
 	}
 	t.Cleanup(func() { mgr.Stop(2 * time.Second) })
-	mgr.WaitForReady(3 * time.Second)
+	// The connector extension is a real subprocess; its spawn + ready handshake
+	// varies widely under CI load + -race. A tight grace here was the flake
+	// source (TestExtConnectorConnectsDisconnectsReconnects). WaitForReady is
+	// best-effort — it returns as soon as the ext is ready and only waits the
+	// full grace when the ext is genuinely slow to come up.
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 	s.extMgr = mgr
 
 	// Normally RegisterDiscovered does this at CLI startup, from the GLOBAL

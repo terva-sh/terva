@@ -32,7 +32,7 @@ func TestStopByNameSilentAndSurgical(t *testing.T) {
 	if errs := mgr.Discover(context.Background()); len(errs) > 0 {
 		t.Fatalf("discover: %v", errs)
 	}
-	mgr.WaitForReady(500 * time.Millisecond)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 	defer mgr.Stop(200 * time.Millisecond)
 
 	if mgr.Count() != 1 {

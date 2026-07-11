@@ -368,7 +368,7 @@ func TestConcurrentLargeFramesNoInterleave(t *testing.T) {
 		t.Fatalf("discover errors: %v", errs)
 	}
 	defer mgr.Stop(2 * time.Second)
-	mgr.WaitForReady(3 * time.Second)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 
 	if !mgr.HasTool("bigtool") {
 		t.Fatal("bigtool not registered")
@@ -443,7 +443,7 @@ func TestSpawnSanitizesChildEnv(t *testing.T) {
 		t.Fatalf("discover errors: %v", errs)
 	}
 	defer mgr.Stop(2 * time.Second)
-	mgr.WaitForReady(3 * time.Second)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 
 	ask := func(key string) string {
 		args, _ := json.Marshal(map[string]string{"key": key})

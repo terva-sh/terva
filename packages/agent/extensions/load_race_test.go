@@ -37,7 +37,7 @@ func TestConcurrentLoadSameNameClaimsOnce(t *testing.T) {
 	if c := mgr.Count(); c != 1 {
 		t.Fatalf("concurrent same-name loads must claim once; tracked count = %d", c)
 	}
-	mgr.WaitForReady(time.Second)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 	if crashNoticed(hooks) {
 		t.Error("a concurrent-load orphan must not surface 'exited unexpectedly'")
 	}

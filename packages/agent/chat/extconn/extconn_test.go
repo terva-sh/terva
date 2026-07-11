@@ -61,7 +61,7 @@ func bindDriver(t *testing.T, tmp, name, body string) *extdriver.Driver {
 		t.Fatalf("load: %v", err)
 	}
 	t.Cleanup(func() { d.Stop(2 * time.Second) })
-	d.WaitForReady(3 * time.Second)
+	d.WaitForReady(testsupport.ExtReadyGrace)
 	BindHost(d)
 	t.Cleanup(func() { BindHost(nil) })
 	return d
@@ -320,7 +320,7 @@ func (h *fakeRestartHost) RestartExtension(ctx context.Context, name string) err
 	if err := h.d.Load(ctx, h.dir, extdriver.Manifest{Name: name, Exec: "./run.sh", Connector: true}); err != nil {
 		return err
 	}
-	h.d.WaitForReady(3 * time.Second)
+	h.d.WaitForReady(testsupport.ExtReadyGrace)
 	return nil
 }
 

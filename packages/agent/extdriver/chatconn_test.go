@@ -48,7 +48,7 @@ func loadConnectorExt(t *testing.T, name, body string, consent bool) *Driver {
 		t.Fatalf("load: %v", err)
 	}
 	t.Cleanup(func() { d.Stop(2 * time.Second) })
-	d.WaitForReady(3 * time.Second)
+	d.WaitForReady(testsupport.ExtReadyGrace)
 	return d
 }
 

@@ -34,7 +34,7 @@ func TestInvokeToolOversizedArgsReturnsErrorNotKill(t *testing.T) {
 		t.Fatalf("discover: %v", errs)
 	}
 	defer mgr.Stop(2 * time.Second)
-	mgr.WaitForReady(3 * time.Second)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 	if !mgr.HasTool("bigtool") {
 		t.Fatal("bigtool not registered")
 	}

@@ -23,7 +23,7 @@ func TestRestartExtension(t *testing.T) {
 	if errs := mgr.Discover(context.Background()); len(errs) > 0 {
 		t.Fatalf("discover: %v", errs)
 	}
-	mgr.WaitForReady(time.Second)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 	defer mgr.Stop(200 * time.Millisecond)
 
 	before, ok := mgr.ExtensionByName("mock")

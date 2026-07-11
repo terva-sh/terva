@@ -59,7 +59,7 @@ func TestSetAllowedExtensionsScopesDiscovery(t *testing.T) {
 		t.Fatalf("discover: %v", errs)
 	}
 	defer mgr.Stop(2 * time.Second)
-	mgr.WaitForReady(time.Second)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 
 	if !mgr.HasCommand("calcmd") {
 		t.Error("allowlisted extension failed to load")
@@ -86,7 +86,7 @@ func TestAllowlistComposesWithDisableList(t *testing.T) {
 		t.Fatalf("discover: %v", errs)
 	}
 	defer mgr.Stop(2 * time.Second)
-	mgr.WaitForReady(time.Second)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 
 	if !mgr.HasCommand("calcmd") {
 		t.Error("allowlisted+enabled extension failed to load")

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // An extension named in SetDisabledExtensions is never loaded: its
@@ -26,7 +28,7 @@ done
 		t.Fatalf("discover: %v", errs)
 	}
 	defer mgr.Stop(2 * time.Second)
-	mgr.WaitForReady(500 * time.Millisecond)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 	if mgr.HasCommand("blockedcmd") {
 		t.Error("a disabled extension's command registered — it should never have loaded")
 	}
@@ -40,7 +42,7 @@ done
 		t.Fatalf("control discover: %v", errs)
 	}
 	defer mgr2.Stop(2 * time.Second)
-	mgr2.WaitForReady(time.Second)
+	mgr2.WaitForReady(testsupport.ExtReadyGrace)
 	if !mgr2.HasCommand("blockedcmd") {
 		t.Error("control: extension should load when not disabled")
 	}

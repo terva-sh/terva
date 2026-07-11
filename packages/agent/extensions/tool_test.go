@@ -61,7 +61,7 @@ func TestManagerToolRegistrationAndInvoke(t *testing.T) {
 	defer mgr.Stop(2 * time.Second)
 
 	// Wait for ready (the script sends it right after register_tool).
-	mgr.WaitForReady(time.Second)
+	mgr.WaitForReady(testsupport.ExtReadyGrace)
 
 	tools := mgr.Tools()
 	if len(tools) != 1 || tools[0].Name != "echo" {
