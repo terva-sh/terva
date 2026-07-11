@@ -1223,9 +1223,15 @@ func (i *Interactive) handleWireEvent(ev ctrlproto.Event) {
 	case "tool_call":
 		if tc, ok := i.toolCalls[ev.ID]; ok {
 			tc.Args = tui.ShortArgs(ev.Name, ev.Args)
+			// Non-streaming path (a full tool_call with no prior arg deltas):
+			// seed RawJSONBuf so the live body preview (e.g. the bash command)
+			// has the args to render.
+			if tc.RawJSONBuf == "" {
+				tc.RawJSONBuf = string(ev.Args)
+			}
 			tc.Streaming = false
 		} else {
-			i.toolCalls[ev.ID] = &tui.ToolCallView{ID: ev.ID, Name: ev.Name, Args: tui.ShortArgs(ev.Name, ev.Args)}
+			i.toolCalls[ev.ID] = &tui.ToolCallView{ID: ev.ID, Name: ev.Name, Args: tui.ShortArgs(ev.Name, ev.Args), RawJSONBuf: string(ev.Args)}
 			i.toolOrder = append(i.toolOrder, ev.ID)
 			i.turns.GateTool(ev.ID)
 		}
@@ -1256,6 +1262,10 @@ func (i *Interactive) handleWireEvent(ev ctrlproto.Event) {
 		if ev.Usage != nil && ev.Usage.Input > 0 {
 			i.lastCtxInput = ev.Usage.Input + ev.Usage.CacheRead + ev.Usage.CacheWrite
 		}
+		// The provider client re-captures its subscription windows on every
+		// call inside the turn; pull them so the meters appear while a long
+		// turn streams instead of only at its end.
+		i.refreshUsageThrottledLocked()
 	case "user_message_rejected":
 		// The rejection reason rides Text on the wire (Stage 0 enrichment).
 		reason := ev.Text

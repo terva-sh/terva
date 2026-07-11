@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mattn/go-runewidth"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -115,6 +116,11 @@ type View struct {
 	// the box top edge without having to look back at the assistant
 	// message that originated the call. Rebuilt on each Build().
 	toolCallLabels map[string]string
+	// toolCallNames maps tool_use_id to the bare tool name (no args), so
+	// grouped display can summarise a run of results ("bash ×3, read")
+	// from the result blocks alone (which carry the call id, not the
+	// name). Rebuilt on each Build() alongside toolCallLabels.
+	toolCallNames map[string]string
 	// toolArgCache memoises the parsed path/offset/label for each tool
 	// call by tool_use_id, so refreshToolPaths re-parses a call's JSON
 	// arguments only when it first appears or while it's still streaming
@@ -218,6 +224,15 @@ const (
 	// ToolDisplayHidden renders nothing for tool calls until the user
 	// expands with ctrl+o.
 	ToolDisplayHidden
+	// ToolDisplayGrouped collapses each consecutive run of tool calls
+	// into ONE muted disclosure line ("▸ 5 tool calls  bash ×3, read,
+	// edit · 1 failed"); ctrl+o (ExpandAll) expands the whole transcript
+	// back to full boxes. This mirrors the web UI's grouped transcript,
+	// and shares its name-summary formatter (summarizeToolNames). New
+	// values are appended so the existing constants keep their integer
+	// tags. The run detection lives in BuildWithAnchors, not renderMessage,
+	// because it is a cross-message transform.
+	ToolDisplayGrouped
 )
 
 // String returns the label shown in status messages and settings.
@@ -227,6 +242,8 @@ func (m ToolDisplayMode) String() string {
 		return "minimal"
 	case ToolDisplayHidden:
 		return "hidden"
+	case ToolDisplayGrouped:
+		return "grouped"
 	default:
 		return "boxes"
 	}
@@ -263,6 +280,67 @@ func minimalToolLine(th Theme, label string, suffix string, isErr bool, width in
 		text += " — " + suffix
 	}
 	line := strings.Repeat(" ", toolBoxOuterMargin) + mark + " " + th.FG256(th.Muted, text)
+	return truncateToWidth(line, width)
+}
+
+// classifyToolRun decides how a message participates in a grouped-mode
+// tool run. member is true when the message is part of a collapsible run:
+// either a tool-result message (which contributes its results) or an
+// assistant message that issued only tool calls and therefore renders
+// nothing of its own (a "transparent" member — its box is owned by the
+// results, and it must not break the run). Any other message — a user
+// prompt, an assistant reply with prose, a compaction summary — is a
+// run boundary. res carries the message's tool results (nil for the
+// transparent-assistant case) so the caller can tally names and failures
+// without re-walking the content.
+func classifyToolRun(m provider.Message) (member bool, res []provider.ToolResultBlock) {
+	if m.Meta["compaction"] == "true" {
+		return false, nil
+	}
+	switch m.Role {
+	case provider.RoleTool:
+		for _, c := range m.Content {
+			if tr, ok := c.(provider.ToolResultBlock); ok {
+				res = append(res, tr)
+			}
+		}
+		return len(res) > 0, res
+	case provider.RoleAssistant:
+		hasToolCall, hasText := false, false
+		for _, c := range m.Content {
+			switch b := c.(type) {
+			case provider.ToolCallBlock:
+				hasToolCall = true
+			case provider.TextBlock:
+				if strings.TrimSpace(b.Text) != "" {
+					hasText = true
+				}
+			}
+		}
+		// Prose makes it a real reply that breaks the run; tool-calls-only
+		// renders nothing and stays inside the run.
+		return hasToolCall && !hasText, nil
+	}
+	return false, nil
+}
+
+// groupedToolLine renders the ToolDisplayGrouped summary for one run of
+// tool calls: a muted disclosure line carrying the call count, the shared
+// name summary (summarizeToolNames — identical to the web UI, pinned by
+// the golden fixtures), and, when any failed, a failure count in the
+// error colour. ctrl+o (ExpandAll) expands the run back to full boxes.
+//
+//	▸ 5 tool calls  bash ×3, read, edit · 1 failed
+func (v *View) groupedToolLine(names []string, failed int, width int) string {
+	th := v.Theme
+	text := i18n.TN(len(names), "%d tool call", "%d tool calls")
+	if summary := summarizeToolNames(names); summary != "" {
+		text += "  " + summary
+	}
+	line := strings.Repeat(" ", toolBoxOuterMargin) + th.FG256(th.Muted, "▸ "+text)
+	if failed > 0 {
+		line += " " + th.FG256(th.Error, "· "+i18n.TN(failed, "%d failed", "%d failed"))
+	}
 	return truncateToWidth(line, width)
 }
 
@@ -504,7 +582,12 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 
 	out := make([]string, 0, total+16)
 	anchors := make([]MessageAnchor, 0, len(msgs))
-	for idx := range msgs {
+	// In grouped mode a consecutive run of tool messages collapses to a
+	// single summary line. ExpandAll (ctrl+o) makes effectiveToolDisplay
+	// report Full, so grouping is off and the per-message boxes render —
+	// the same escape hatch minimal/hidden use.
+	grouped := v.effectiveToolDisplay() == ToolDisplayGrouped
+	appendMsg := func(idx int) {
 		anchors = append(anchors, MessageAnchor{MessageIdx: idx, Row: len(out)})
 		out = append(out, rendered[idx]...)
 		// Skip the inter-message blank for messages that rendered
@@ -514,9 +597,50 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 		// would compound with the blank from the next real message
 		// and produce two blank rows between adjacent tool boxes.
 		if len(rendered[idx]) == 0 {
-			continue
+			return
 		}
 		out = append(out, "")
+	}
+	for idx := 0; idx < len(msgs); {
+		if grouped {
+			if member, _ := classifyToolRun(msgs[idx]); member {
+				// Consume the maximal run [idx, end) of tool messages and
+				// gather the completed results in order.
+				end := idx
+				var names []string
+				failed := 0
+				for end < len(msgs) {
+					mem, res := classifyToolRun(msgs[end])
+					if !mem {
+						break
+					}
+					for _, tr := range res {
+						names = append(names, v.toolCallNames[tr.CallID])
+						if tr.IsError {
+							failed++
+						}
+					}
+					end++
+				}
+				// Every message in the run anchors to the summary row so
+				// /jump still lands on a visible line; the row is where the
+				// summary will sit (or where the next real content begins
+				// when the run produced no completed results yet — an
+				// in-flight tail the live overlay renders instead).
+				row := len(out)
+				for j := idx; j < end; j++ {
+					anchors = append(anchors, MessageAnchor{MessageIdx: j, Row: row})
+				}
+				if len(names) > 0 {
+					out = append(out, v.groupedToolLine(names, failed, width))
+					out = append(out, "")
+				}
+				idx = end
+				continue
+			}
+		}
+		appendMsg(idx)
+		idx++
 	}
 	// Only render the streaming header/body when there's actual
 	// text to show. An empty streaming block (streamOn=true,
@@ -618,6 +742,7 @@ func (v *View) refreshToolPaths() {
 	v.toolPaths = map[string]string{}
 	v.toolStartLines = map[string]int{}
 	v.toolCallLabels = map[string]string{}
+	v.toolCallNames = map[string]string{}
 	// next is rebuilt each call so the cache stays pruned to the tool
 	// calls currently in the transcript (compaction/fork can drop some).
 	next := make(map[string]toolArgInfo, len(v.toolArgCache))
@@ -639,6 +764,7 @@ func (v *View) refreshToolPaths() {
 				v.toolStartLines[tc.ID] = info.offset
 			}
 			v.toolCallLabels[tc.ID] = info.label
+			v.toolCallNames[tc.ID] = tc.Name
 		}
 	}
 	v.toolArgCache = next
@@ -891,6 +1017,13 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 				// surface as a minimal line even in hidden mode — tucking
 				// mechanics away must never hide that something went wrong.
 				switch v.effectiveToolDisplay() {
+				case ToolDisplayGrouped:
+					// The run's single summary line is emitted by the
+					// assembly loop in BuildWithAnchors (it needs the
+					// whole run at once); each result renders nothing of
+					// its own here. Failures are surfaced by the group
+					// head's "· N failed" count, not per box.
+					continue
 				case ToolDisplayHidden:
 					if !tr.IsError {
 						continue
@@ -979,7 +1112,11 @@ func (v *View) renderToolCall(tc ToolCallView, width int) []string {
 			return nil
 		}
 		fallthrough
-	case ToolDisplayMinimal:
+	case ToolDisplayMinimal, ToolDisplayGrouped:
+		// Grouped mode collapses finished runs to one line, but an
+		// in-flight call has no run yet — show it as a minimal line so
+		// the user sees live progress; it folds into the run summary
+		// once its result reaches the transcript.
 		suffix := ""
 		if tc.Result == "" && !tc.Done {
 			suffix = "running…"
@@ -1083,6 +1220,8 @@ func (v *View) renderToolCall(tc ToolCallView, width int) []string {
 //   - edit:  shows the partial `newText` of the edit currently being
 //     streamed, prefixed with a "editing foo.ts (edit 2)" header so
 //     the user can see which of a multi-edit batch is in progress.
+//   - bash:  shows the full command as soon as the JSON args are known,
+//     before stdout/stderr arrives, so long-running commands are legible.
 //
 // Anything else returns nil and only the tool-call header shows.
 func (v *View) renderLiveToolBody(tc ToolCallView, width int) []string {
@@ -1104,8 +1243,44 @@ func (v *View) renderLiveToolBody(tc ToolCallView, width int) []string {
 		body := []string{"    " + v.Theme.FG256(v.Theme.Muted, hint), ""}
 		body = append(body, v.renderRawFile(partial, tc.LivePath, 1)...)
 		return v.wrapLiveBody(body, width)
+	case "bash", "Bash":
+		command, ok, _ := ExtractPartialStringField(tc.RawJSONBuf, "command")
+		if !ok || strings.TrimSpace(command) == "" {
+			return nil
+		}
+		return v.wrapLiveBody(v.renderLiveBashCommand(command, width), width)
 	}
 	return nil
+}
+
+// renderLiveBashCommand renders a bash tool's `$ command` body (multi-line,
+// wrapped) so a long-running command is legible in the live overlay before
+// any stdout arrives.
+func (v *View) renderLiveBashCommand(command string, width int) []string {
+	inner := toolBoxBodyRenderWidth(width)
+	prompt := v.Theme.FG256(v.Theme.Muted, "$ ")
+	var out []string
+	for i, line := range strings.Split(command, "\n") {
+		firstPrefix := "    "
+		if i == 0 {
+			firstPrefix += prompt
+		} else {
+			firstPrefix += "  "
+		}
+		contPrefix := "      "
+		wrapWidth := inner - visibleWidth(firstPrefix)
+		if wrapWidth < 10 {
+			wrapWidth = 10
+		}
+		for j, wrapped := range wrapANSILine(v.Theme.FG256(v.Theme.ToolOut, line), wrapWidth) {
+			prefix := firstPrefix
+			if j > 0 {
+				prefix = contPrefix
+			}
+			out = append(out, prefix+wrapped)
+		}
+	}
+	return out
 }
 
 // wrapLiveBody returns the streaming body content as a list of
@@ -2128,13 +2303,37 @@ func toolResultBlock(th Theme, text string, width int, color int) []string {
 	return out
 }
 
+// defaultToolArgWidth is the number of cells the tool-call header
+// truncates the primary argument (path/command/query) to when
+// TERVA_TOOL_ARG_WIDTH is unset or invalid.
+const defaultToolArgWidth = 60
+
+// toolArgWidth returns the maximum cell width for the truncated primary
+// argument shown in a tool-call header. It defaults to defaultToolArgWidth
+// but can be raised or lowered with the TERVA_TOOL_ARG_WIDTH environment
+// variable, useful on wide terminals where the default clips long queries.
+// Values outside [20, 500] are ignored so a stray setting can never produce
+// an unreadable header or an out-of-range slice.
+func toolArgWidth() int {
+	v := strings.TrimSpace(os.Getenv("TERVA_TOOL_ARG_WIDTH"))
+	if v == "" {
+		return defaultToolArgWidth
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 20 || n > 500 {
+		return defaultToolArgWidth
+	}
+	return n
+}
+
 // ShortArgs renders a tool call's arguments into a one-line
 // suffix for the "tool name <args>" header. tool is the tool
 // name so we can add shape-specific decorations: for read we
 // append the requested line range (e.g. "path:1-200") pulled
 // from the offset/limit args, which is useful context at a
 // glance without expanding the result body. Other tools keep
-// the legacy "path or command, truncated at 60 cells" shape.
+// the legacy "path or command, truncated" shape (default 60 cells,
+// tunable via TERVA_TOOL_ARG_WIDTH — see toolArgWidth).
 //
 // Exported because the interactive mode pre-populates the
 // ToolCallView.Args field with this value as soon as the tool
@@ -2152,12 +2351,13 @@ func ShortArgs(tool string, raw json.RawMessage) string {
 // value, so refreshToolPaths can share a single decode across the
 // path, offset, and label it derives (see parseToolArgInfo).
 func shortArgsFromParsed(tool string, v any) string {
+	width := toolArgWidth()
 	x, ok := v.(map[string]any)
 	if !ok {
 		b, _ := json.Marshal(v)
 		s := oneLineToolLabel(string(b))
-		if len(s) > 60 {
-			s = s[:57] + "..."
+		if len(s) > width {
+			s = s[:width-3] + "..."
 		}
 		return s
 	}
@@ -2171,8 +2371,8 @@ func shortArgsFromParsed(tool string, v any) string {
 	if primary == "" {
 		b, _ := json.Marshal(v)
 		s := oneLineToolLabel(string(b))
-		if len(s) > 60 {
-			s = s[:57] + "..."
+		if len(s) > width {
+			s = s[:width-3] + "..."
 		}
 		return s
 	}
@@ -2197,7 +2397,7 @@ func shortArgsFromParsed(tool string, v any) string {
 
 	// Truncate the primary arg leaving room for the suffix so the
 	// range stays visible even on absurdly long paths.
-	max := 60 - len(suffix)
+	max := width - len(suffix)
 	if max < 10 {
 		max = 10
 	}

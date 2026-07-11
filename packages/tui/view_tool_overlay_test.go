@@ -114,6 +114,26 @@ func TestToolProgressHiddenOnceDone(t *testing.T) {
 	}
 }
 
+func TestLiveToolOverlayShowsFullBashCommandBeforeResult(t *testing.T) {
+	args := json.RawMessage(`{"command":"printf 'start' && sleep 60 && printf 'done with a command long enough to exceed the header truncation limit'"}`)
+	v := View{
+		Theme: Dark,
+		ToolCalls: []ToolCallView{
+			{
+				ID:         "toolu_1",
+				Name:       "bash",
+				Args:       ShortArgs("bash", args),
+				RawJSONBuf: string(args),
+			},
+		},
+	}
+
+	plain := stripANSI(strings.Join(v.BuildLive(100), "\n"))
+	if !strings.Contains(plain, "$ printf 'start' && sleep 60") || !strings.Contains(plain, "header truncation limit") {
+		t.Fatalf("bash command was not visible before result arrived:\n%s", plain)
+	}
+}
+
 func TestLiveToolOverlayKeepsWritePreviewAfterArgsEnd(t *testing.T) {
 	args := json.RawMessage(`{"path":"/tmp/sample.ts","content":"export const n = 1\n"}`)
 	v := View{

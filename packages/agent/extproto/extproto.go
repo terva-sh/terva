@@ -1,5 +1,5 @@
 // Package extproto defines the JSON-over-stdin/stdout wire format
-// spoken between zot and its extension subprocesses. Both the host
+// spoken between terva and its extension subprocesses. Both the host
 // (packages/agent/extensions) and the SDK (packages/agent/ext) marshal/
 // unmarshal the same types, so changes here ripple through both.
 //
@@ -7,8 +7,8 @@
 // boundaries follow newline boundaries; no multi-line JSON.
 //
 // Direction conventions in this file:
-//   - Type names ending in "FromExt" are sent by the extension to zot.
-//   - Type names ending in "FromHost" are sent by zot to the extension.
+//   - Type names ending in "FromExt" are sent by the extension to terva.
+//   - Type names ending in "FromHost" are sent by terva to the extension.
 //   - Names without a suffix are direction-neutral payloads or shared
 //     value types.
 //
@@ -436,6 +436,15 @@ type ClearNotesFromExt struct {
 // start with '/'. Reserved for internal / opt-in extensions today;
 // the wire format is stable but not yet exposed in the public docs.
 type SubmitSlashFromExt struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// SubmitFromExt is a spontaneous frame an extension can send at any time
+// to queue a plain model prompt in the interactive host. The driver
+// routes it through HostHooks.Submit, so the TUI handles busy state and
+// turn startup (SubmitOrQueue). Empty/whitespace text is ignored.
+type SubmitFromExt struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
