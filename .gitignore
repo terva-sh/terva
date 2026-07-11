@@ -83,6 +83,9 @@ __pycache__/
 
 auth.json
 sessions/
+# Keep the web client's session feature source despite the runtime-state pattern above.
+!packages/agent/web/client/src/features/sessions/
+!packages/agent/web/client/src/features/sessions/**
 logs/
 
 *.bak

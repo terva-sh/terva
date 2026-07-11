@@ -1,6 +1,6 @@
 # terva common dev tasks. Run `just` (or `just --list`) to see everything.
 #
-# These wrap the same `go` invocations the Makefile / goreleaser use —
+# These wrap the same `go` invocations goreleaser uses —
 # nothing here reimplements building or installing, it just drives the
 # Go toolchain with the version metadata baked in.
 
@@ -31,7 +31,7 @@ version := "0.0.0"
 commit   := `git rev-parse --short HEAD 2>/dev/null || echo unknown`
 date     := `date -u +%Y-%m-%dT%H:%M:%SZ`
 
-# Stripped, trimmed release-style ldflags (matches Makefile + goreleaser).
+# Stripped, trimmed release-style ldflags (matches goreleaser).
 ldflags := "-s -w -X main.version=" + version + " -X main.commit=" + commit + " -X main.date=" + date
 # Debug build: keep symbols, disable inlining + optimizations so breakpoints land.
 debug_ldflags := "-X main.version=" + version + "-debug -X main.commit=" + commit + " -X main.date=" + date
@@ -168,7 +168,7 @@ test-pkg PKG *ARGS:
 test-e2e *ARGS:
     go test -v ./e2e/ {{ARGS}}
 
-# Vet + gofmt check (non-mutating; mirrors the Makefile lint target).
+# Vet + gofmt check (non-mutating; the lint gate).
 lint:
     go vet ./...
     @test -z "$(gofmt -l . | tee /dev/stderr)" || { echo "gofmt issues (run \`just fmt\`)"; exit 1; }
