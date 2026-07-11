@@ -2,7 +2,7 @@
 
 `terva rpc` runs the agent runtime as a subprocess that speaks newline-delimited JSON on stdin and stdout. Use it from any language that can spawn a process and read/write its pipes — Go, TypeScript, Python, Rust, shell, anything.
 
-For a Go program embedding the runtime in-process, use the `packages/agent/sdk` SDK instead. The wire format below IS the SDK's type set: every surface (`terva --json`, this RPC stream, the SDK's `Event`, swarm event logs) is generated from one serializer (`core.WireEvent`), so consumers can share parsing code.
+For a Go program embedding the runtime in-process, use the `packages/agent/sdk` SDK instead. The wire format below IS the SDK's type set: the **event stream** on every surface (`terva --json`, this RPC stream, the SDK's `Event`, swarm event logs) is generated from one serializer (`core.WireEvent`), so consumers can share parsing code. The RPC layer adds a few frames of its own on top of that stream — the `response` command acks, `hello`, the `get_*` result payloads, and `compact_done` — which are RPC-specific, not `core.WireEvent`.
 
 ## Quick start
 
@@ -23,7 +23,7 @@ You'll see one JSON object per line on stdout: a response acknowledging the prom
 
 ## Flags
 
-`terva rpc` accepts the same flags as the other modes: `--provider`, `--model`, `--cwd`, `--api-key`, `--base-url`, `--system-prompt`, `--append-system-prompt`, `--reasoning`, `--max-steps`, `--no-tools`, `--tools`. Sessions are disabled by default in RPC mode — the embedding application owns persistence.
+`terva rpc` accepts the same flags as the other modes: `--provider`, `--model`, `--cwd`, `--api-key`, `--base-url`, `--system-prompt`, `--append-system-prompt`, `--reasoning`, `--max-steps`, `--no-tools`, `--tools`. Session persistence is not implemented in RPC mode: the process holds an in-memory transcript for the life of the connection (`get_messages` reads it), but never opens, saves, or resumes a session file — the embedding application owns any persistence.
 
 ## Auth
 
@@ -102,7 +102,13 @@ Summarise the current transcript into one synthetic user message. Same lifecycle
 {"id":"3","type":"compact"}
 ```
 
-Final event: `{"type":"compact_done","summary":"<text>"}`.
+On success or a no-op it emits `{"type":"compact_done","summary":"<text>"}` — the
+summary is empty when the keep-tail already covers the whole transcript (nothing
+to compact). A failure emits the canonical `{"type":"error","error":"<message>"}`.
+Every outcome — success, no-op, failure, or cancellation — then terminates with
+exactly one `{"type":"done"}`, identical to `prompt`, so a generic event loop can
+key on `done` for both operations. `compact_done` is a result event, not the
+terminal one.
 
 Compaction also happens automatically as part of `prompt` (the same
 core turn policy every run mode gets): before the model call when a
@@ -191,6 +197,7 @@ Stream notifications during a `prompt` or `compact`. None carry an `id`.
 |---|---|---|
 | `turn_start` | `step` | Beginning of one model call (max-steps loop iteration) |
 | `user_message` | `message` | The submitted prompt as it was added to the transcript (see Message shape) |
+| `user_message_rejected` | `text` | A `BeforeUserMessage` guard refused the prompt: it never reached the model. `text` is the human-facing reason. On the initial-prompt path a `done` follows |
 | `assistant_start` | (none) | About to receive assistant streaming |
 | `text_delta` | `delta` | Partial assistant text. Concatenate to build the full reply |
 | `tool_use_start` | `id`, `name` | The model began streaming a tool call |
@@ -198,15 +205,15 @@ Stream notifications during a `prompt` or `compact`. None carry an `id`.
 | `tool_use_end` | `id` | Tool-argument streaming finished |
 | `tool_call` | `id`, `name`, `args` | The model wants to call a tool |
 | `tool_progress` | `id`, `text` | Optional progress line from the tool while it runs |
-| `tool_result` | `id`, `is_error`, `content` | Tool finished |
+| `tool_result` | `id`, `is_error`, `content`, optional `lines_added` / `lines_removed` | Tool finished; the line-change counts (present on edits) feed the status-bar Δ segment |
 | `assistant_message` | `message` | Final assistant message after the model turn ends (see Message shape) |
 | `usage` | `usage`, `cumulative` | Per-turn + cumulative tokens / cost, each `{input, output, cache_read, cache_write, cost_usd}` |
 | `turn_end` | `stop`, optional `error` | One model call finished. `stop` is `end`, `tool_use`, `length`, `error`, or `aborted` |
-| `done` | (none) | The whole prompt/compact completed (success or error) |
-| `error` | `error` | Non-fatal error message |
-| `compact_done` | `summary` | Compaction finished, summary text included |
-| `compact_start` | `text` | A policy-driven compaction began (`text` carries the reason) |
-| `compact_end` | optional `error` | The policy-driven compaction finished; empty `error` means success |
+| `done` | (none) | The sole terminal event of a `prompt` or `compact` — exactly one per operation, on every outcome (success, no-op, error, or cancellation) |
+| `error` | `error` | Error message under the canonical `error` field (prompt failures and explicit-`compact` failures alike) |
+| `compact_done` | `summary` | Result of an explicit `compact` (summary text; empty on a no-op). Not terminal — a `done` follows |
+| `compact_start` | `text` | An automatic, policy-driven compaction began inside a `prompt` (`text` carries the reason) |
+| `compact_end` | optional `error` | The automatic compaction finished (before the prompt's `done`); empty `error` means success. Not terminal |
 
 ## Message shape
 
@@ -216,9 +223,12 @@ Used by `get_messages` and inside `user_message` / `assistant_message` events.
 {
   "role": "user",
   "content": [<content_block>...],
-  "time": "2026-04-19T11:30:00Z"
+  "time": "2026-04-19T11:30:00Z",
+  "synthetic": false
 }
 ```
+
+`synthetic` is `true` for a host-injected message (e.g. the at-close continue-on-open-work nudge) rather than one the user typed; a client can render it as a system note instead of a user bubble. Omitted when false.
 
 ### Content block types
 
@@ -227,9 +237,10 @@ Used by `get_messages` and inside `user_message` / `assistant_message` events.
 {"type": "image", "mime_type": "image/png", "bytes": 12345}
 {"type": "tool_call", "id": "toolu_xyz", "name": "read", "args": {"path": "..."}}
 {"type": "tool_result", "call_id": "toolu_xyz", "is_error": false, "content": [<content_block>...]}
+{"type": "reasoning", "reasoning_id": "...", "summary": "...", "encrypted_content": "..."}
 ```
 
-Image bytes are reported as a count rather than embedded base64 to keep transcript dumps small. Tool results may nest text and image blocks.
+Image bytes are reported as a count rather than embedded base64 to keep transcript dumps small. Tool results may nest text and image blocks. A `reasoning` block carries assistant chain-of-thought metadata; some providers (e.g. OpenAI Codex with thinking enabled) require its `encrypted_content` replayed on follow-up requests, so it must survive a wire round-trip.
 
 ## Reference clients
 
