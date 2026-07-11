@@ -24,8 +24,8 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/raati"
+	"terva.sh/terva/packages/agent/run"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
@@ -649,7 +649,7 @@ func (w *Workspace) raatiSummarizeConversation(question, conversation string) (s
 	ctx, cancel := context.WithTimeout(w.ctx, 3*time.Minute)
 	defer cancel()
 	var buf bytes.Buffer
-	if err := modes.RunPrint(ctx, ag, prompt, nil, &buf); err != nil {
+	if err := run.Print(ctx, ag, prompt, nil, &buf); err != nil {
 		return "", err
 	}
 	out := strings.TrimSpace(buf.String())
@@ -704,7 +704,7 @@ func (w *Workspace) raatiClerkAnswer(ctx context.Context, question, evidence str
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	var buf bytes.Buffer
-	if err := modes.RunPrint(cctx, ag, prompt, nil, &buf); err != nil {
+	if err := run.Print(cctx, ag, prompt, nil, &buf); err != nil {
 		return unanswered()
 	}
 	answers, ok := parseClerkAnswers(buf.String(), len(qs))
