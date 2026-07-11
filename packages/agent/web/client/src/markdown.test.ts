@@ -37,3 +37,27 @@ describe('renderMarkdown copy button', () => {
     expect(html).toContain('aria-label="Copy"')
   })
 })
+
+// The security posture markdown.ts documents (html:false, safe link URLs, and
+// target/rel on links) is the difference between rendering model output and
+// executing it. Pin each invariant so a config flip can't slip through.
+describe('renderMarkdown safety config', () => {
+  it('escapes raw HTML from model output instead of emitting live markup', () => {
+    const html = renderMarkdown('<script>alert(1)</script>\n\n<img src=x onerror=alert(2)>')
+    expect(html).not.toContain('<script>')
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&lt;script&gt;')
+    expect(html).toContain('&lt;img')
+  })
+
+  it('opens links in a new tab with rel=noopener noreferrer', () => {
+    const html = renderMarkdown('[docs](https://example.com)')
+    expect(html).toContain('target="_blank"')
+    expect(html).toContain('rel="noopener noreferrer"')
+  })
+
+  it('never emits a javascript: href', () => {
+    const html = renderMarkdown('[x](javascript:alert(1))')
+    expect(html).not.toContain('href="javascript')
+  })
+})

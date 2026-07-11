@@ -1,16 +1,11 @@
 // The transcript model: a flat, ordered list of render items derived from the
 // ctrlproto event stream (and the initial snapshot). Kept separate from the
 // wire types so rendering has one stable shape to switch on.
-import type { WireEvent, WireMessage, WireBlock } from './ctrlproto'
+import type { WireEvent, WireMessage, WireBlock } from '../ctrlproto/types'
+import { isSafeImageMime, type ImageAttachment } from './images'
 
-// ImageAttachment is one rendered image (data: URL source), carried on the
-// message/tool items whose wire blocks included image payloads. Empty when the
-// carrier delivered size-only blocks (no "image-data" feature) — then the
-// bubble shows a metadata line instead.
-export interface ImageAttachment {
-  mime: string
-  data: string // base64
-}
+export type { ImageAttachment } from './images'
+export { isSafeImageMime } from './images'
 
 export type Item =
   | { kind: 'user'; id: string; text: string; images?: ImageAttachment[] }
@@ -45,21 +40,6 @@ function imageAttachments(blocks: WireBlock[] | undefined): ImageAttachment[] | 
     .filter((b) => b.type === 'image' && b.data && isSafeImageMime(b.mime_type ?? 'image/png'))
     .map((b) => ({ mime: b.mime_type ?? 'image/png', data: b.data as string }))
   return out.length ? out : undefined
-}
-
-// safeImageMimes is the allowlist of image types the panel renders or
-// uploads: raster formats a browser can only ever draw. Everything else —
-// image/svg+xml above all — is dropped: tool, MCP, extension, and provider
-// blocks can carry an arbitrary mime_type, and an SVG in a data:/blob:
-// context is a script container, not a picture.
-const safeImageMimes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-
-// isSafeImageMime reports whether mime is on the render/upload allowlist,
-// tolerating parameters and case ("image/PNG; charset=binary").
-export function isSafeImageMime(mime: string | undefined): boolean {
-  if (!mime) return false
-  const bare = mime.toLowerCase().split(';')[0].trim()
-  return safeImageMimes.has(bare)
 }
 
 // itemsFromMessages rebuilds the transcript from a snapshot's messages,

@@ -22,6 +22,9 @@ import type {
   RaatiInquiry,
   RaatiUnit,
   RaatiView,
+  ResetInfo,
+  ResetsListResult,
+  ResetConsumeResult,
   SessionInfo,
   SettingsView,
   SkillInfo,
@@ -35,82 +38,22 @@ import type {
   WireEvent,
   WireUsage,
 } from './ctrlproto'
-import { applyEvent, itemsFromMessages, type Item, type ImageAttachment, isSafeImageMime } from './store'
-import { renderMarkdown } from './markdown'
+import { Composer, type SlashCommand } from './features/conversation/Composer'
+import { ConversationTimeline } from './features/conversation/ConversationTimeline'
+import type { ToolView } from './features/conversation/types'
+import { AskRequest as AskRequestView } from './features/interactions/AskRequest'
+import { PermissionRequest as PermissionRequestView } from './features/interactions/PermissionRequest'
+import { ModelPicker } from './features/models/ModelPicker'
+import { SessionInfo as SessionInfoView } from './features/sessions/SessionInfo'
+import { SessionPicker } from './features/sessions/SessionPicker'
+import type { ImageAttachment } from './platform/conversation/images'
+import { applyEvent, itemsFromMessages, type Item } from './platform/conversation/store'
+import { buildConveneArgs, raatiResultCopyText, raatiUnitCopyText, raatiVerdictWord } from './raati'
 import { applyServerCatalog, setLocale, t, tn } from './i18n'
+import { CopyButton } from './ui/CopyButton'
+import { humanBytes, humanCount } from './ui/formatting'
 
-// ToolView mirrors the TUI's ctrl+t tool-display cycle, plus a web-only
-// 'grouped' state that collapses a run of tool calls to a single "N tool calls"
-// line you can expand — so a dozen tools between replies don't eat the view.
-type ToolView = 'full' | 'grouped' | 'minimal' | 'hidden'
 const TOOL_VIEWS: ToolView[] = ['full', 'grouped', 'minimal', 'hidden']
-
-// SlashCommand is one user-driven composer command (/compact, /skill, …). `run`
-// receives everything after the command name; `arg` is a display hint for the
-// autocomplete and marks whether the command takes an argument.
-interface SlashCommand {
-  name: string
-  arg?: string
-  desc: string
-  run: (arg: string) => void
-}
-
-// copyToClipboard writes text to the clipboard, falling back to a hidden
-// textarea + execCommand for insecure (plain-http) contexts where
-// navigator.clipboard is unavailable — terva web is commonly served over http on
-// a LAN/Tailscale, so the modern API is often absent. Returns whether it worked.
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
-      return true
-    }
-  } catch {
-    // Permission denied or non-secure context — fall through to the legacy path.
-  }
-  try {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.setAttribute('readonly', '')
-    ta.style.position = 'fixed'
-    ta.style.top = '-1000px'
-    ta.style.opacity = '0'
-    document.body.appendChild(ta)
-    ta.select()
-    const ok = document.execCommand('copy')
-    document.body.removeChild(ta)
-    return ok
-  } catch {
-    return false
-  }
-}
-
-// maxImageBytes caps a single pasted/dropped image's raw size. The WS carrier
-// bounds one frame at 16 MiB (packages/agent/web/conn.go); base64 inflates ~4/3
-// and the frame also carries JSON + prompt text, so 10 MiB of raw image keeps a
-// comfortable margin — exceeding the frame cap would drop the connection.
-const maxImageBytes = 10 * 1024 * 1024
-
-// fileToAttachment reads an image File into a base64 ImageAttachment, or null if
-// it isn't an image or is over the size cap (the caller toasts the reason).
-function fileToAttachment(f: File): Promise<ImageAttachment | { error: string } | null> {
-  // Allowlisted raster types only — an SVG "image" is a script container.
-  if (!isSafeImageMime(f.type)) return Promise.resolve(null)
-  if (f.size > maxImageBytes) {
-    return Promise.resolve({ error: t('%s is too large (max 10 MB)', f.name || t('image')) })
-  }
-  return new Promise((resolve) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      // readAsDataURL yields "data:<mime>;base64,<payload>"; keep the payload.
-      const url = String(reader.result)
-      const comma = url.indexOf(',')
-      resolve(comma < 0 ? null : { mime: f.type, data: url.slice(comma + 1) })
-    }
-    reader.onerror = () => resolve(null)
-    reader.readAsDataURL(f)
-  })
-}
 
 export function App() {
   const clientRef = useRef<Client | null>(null)
@@ -539,6 +482,23 @@ export function App() {
     [],
   )
 
+  // Usage resets (codex banked resets): list is read-only; consume spends a
+  // scarce credit and is only ever reached from the section's explicit confirm.
+  const listResets = useCallback(
+    (): Promise<ResetsListResult> =>
+      clientRef.current
+        ? clientRef.current.send<ResetsListResult>('usage.resets.list', null, curRef.current)
+        : Promise.reject(new Error('not connected')),
+    [],
+  )
+  const consumeReset = useCallback(
+    (id: string): Promise<ResetConsumeResult> =>
+      clientRef.current
+        ? clientRef.current.send<ResetConsumeResult>('usage.resets.consume', { id }, curRef.current)
+        : Promise.reject(new Error('not connected')),
+    [],
+  )
+
   // Client-side ephemeral note (help / usage hints) — an in-stream notice that
   // isn't sent anywhere and is dropped on the next snapshot, like server notices.
   const localNotice = useCallback((text: string) => {
@@ -594,8 +554,19 @@ export function App() {
       arg: '[id]',
       desc: t('Switch model, or open the model picker'),
       run: (arg) => {
-        if (arg.trim()) switchModel(arg.trim())
-        else setPickerOpen(true)
+        const id = arg.trim()
+        if (!id) {
+          setPickerOpen(true)
+          return
+        }
+        // A bare id can exist under several providers (an api-key twin and a
+        // subscription one); prefer the current provider's entry so /model
+        // never silently hops backends the way a global first-match would.
+        const cur = models.find((m) => m.current)
+        const match =
+          models.find((m) => m.id === id && m.provider === cur?.provider) ||
+          models.find((m) => m.id === id)
+        switchModel(id, match?.provider)
       },
     },
     {
@@ -736,7 +707,7 @@ export function App() {
       </header>
 
       {infoOpen && (
-        <InfoPopover
+        <SessionInfoView
           info={curInfo}
           cost={cost}
           onClose={() => setInfoOpen(false)}
@@ -762,7 +733,7 @@ export function App() {
       )}
 
       {drawer && (
-        <SessionDrawer
+        <SessionPicker
           sessions={sessions}
           current={curSess}
           onSelect={selectSession}
@@ -775,7 +746,7 @@ export function App() {
 
       <div class="workspace">
         <div class="main">
-          <MessageView
+          <ConversationTimeline
             items={items}
             busy={busy}
             toolView={toolView}
@@ -784,8 +755,8 @@ export function App() {
             onCancelQueued={cancelQueued}
           />
 
-          {permission && <PermissionCard req={permission} onDecide={decide} />}
-          {ask && <AskCard req={ask} onAnswer={answer} />}
+          {permission && <PermissionRequestView request={permission} onDecide={decide} />}
+          {ask && <AskRequestView request={ask} onAnswer={answer} />}
 
           <Composer busy={busy} onSend={onSubmit} onToast={setToast} commands={slashCommands} skills={skills} onCancel={() => clientRef.current?.fire('cancel', null, curRef.current)} />
         </div>
@@ -799,6 +770,8 @@ export function App() {
             onActivate={setActiveSurface}
             onAction={surfaceAction}
             onFetchNode={fetchNode}
+            onListResets={listResets}
+            onConsumeReset={consumeReset}
             onClose={() => setPaneOpen(false)}
             onRestart={canRestart ? restart : undefined}
             trusted={!!curInfo?.trusted}
@@ -817,796 +790,6 @@ export function App() {
   )
 }
 
-function MessageView({
-  items,
-  busy,
-  toolView,
-  queued,
-  onEditQueued,
-  onCancelQueued,
-}: {
-  items: Item[]
-  busy: boolean
-  toolView: ToolView
-  queued: string[]
-  onEditQueued: (i: number, text: string) => void
-  onCancelQueued: (i: number) => void
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  const pinnedRef = useRef(true)
-  const [showJump, setShowJump] = useState(false)
-
-  const onScroll = () => {
-    const el = ref.current
-    if (!el) return
-    // Pinned = within 80px of the bottom. Scrolling up unpins so the stream
-    // stops yanking the view back (TUI behavior).
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-    pinnedRef.current = nearBottom
-    setShowJump(!nearBottom)
-  }
-
-  useEffect(() => {
-    const el = ref.current
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
-  }, [items, busy, queued])
-
-  const jump = () => {
-    const el = ref.current
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-    pinnedRef.current = true
-    setShowJump(false)
-  }
-
-  // Delegated copy for code blocks: markdown renders a .code-copy button per
-  // block (see markdown.ts), and one listener here copies the adjacent <pre>'s
-  // text — no per-block Preact handler inside the dangerouslySetInnerHTML.
-  const onCodeCopy = useCallback((e: MouseEvent) => {
-    const btn = (e.target as HTMLElement)?.closest?.('.code-copy') as HTMLElement | null
-    if (!btn) return
-    const text = btn.parentElement?.querySelector('pre')?.textContent ?? ''
-    if (!text) return
-    void copyToClipboard(text).then((ok) => {
-      if (!ok) return
-      btn.classList.add('copied')
-      setTimeout(() => btn.classList.remove('copied'), 1200)
-    })
-  }, [])
-
-  return (
-    <div class="log-wrap">
-      <div class="log" ref={ref} onScroll={onScroll} onClick={onCodeCopy}>
-        {renderItems(items, toolView)}
-        {busy && items[items.length - 1]?.kind !== 'assistant' && <div class="working">{t('working…')}</div>}
-        {queued.map((q, i) => (
-          <QueuedBubble
-            key={'q' + i}
-            text={q}
-            onEdit={(t) => onEditQueued(i, t)}
-            onCancel={() => onCancelQueued(i)}
-          />
-        ))}
-      </div>
-      {showJump && (
-        <button class="jump" onClick={jump}>
-          ↓ {t('jump to latest')}
-        </button>
-      )}
-    </div>
-  )
-}
-
-function InfoPopover({
-  info,
-  cost,
-  onClose,
-  onContext,
-}: {
-  info: SessionInfo | null
-  cost: number
-  onClose: () => void
-  onContext: () => void
-}) {
-  if (!info) return null
-  const copy = (s: string) => void copyToClipboard(s)
-  return (
-    <div class="info-scrim" onClick={onClose}>
-      <div class="info-pop" onClick={(e) => e.stopPropagation()}>
-        <div class="info-row">
-          <span>{t('Persona')}</span>
-          <b>{info.persona || '—'}</b>
-        </div>
-        <div class="info-row">
-          <span>{t('Model')}</span>
-          <b>
-            {info.provider ? info.provider + ' / ' : ''}
-            {info.model || '—'}
-          </b>
-        </div>
-        <div class="info-row">
-          <span>{t('Messages')}</span>
-          <b>{info.messages}</b>
-        </div>
-        <div class="info-row">
-          <span>{t('Cost')}</span>
-          <b>${cost.toFixed(4)}</b>
-        </div>
-        <div class="info-row">
-          <span>{t('Session')}</span>
-          <b class="mono">{info.id}</b>
-        </div>
-        {info.path && (
-          <div class="info-row path">
-            <span>{t('Path')}</span>
-            <code class="mono" title={info.path}>
-              {info.path}
-            </code>
-            <button class="btn sm" onClick={() => copy(info.path!)}>
-              {t('copy')}
-            </button>
-          </div>
-        )}
-        <div class="info-actions">
-          <button class="btn sm" onClick={onContext}>
-            {t('Context breakdown →')}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// renderItems maps the transcript to bubbles. In 'grouped' mode it coalesces
-// each run of consecutive tool calls into one collapsible ToolGroup, so a burst
-// of tools reads as "N tool calls" until expanded.
-function renderItems(items: Item[], toolView: ToolView): VNode[] {
-  if (toolView !== 'grouped') {
-    return items.map((it) => <Bubble key={it.id} item={it} toolView={toolView} />)
-  }
-  const out: VNode[] = []
-  let run: Item[] = []
-  const flush = () => {
-    if (run.length > 0) {
-      out.push(<ToolGroup key={'tg-' + run[0].id} tools={run} />)
-      run = []
-    }
-  }
-  for (const it of items) {
-    if (it.kind === 'tool') {
-      run.push(it)
-      continue
-    }
-    flush()
-    out.push(<Bubble key={it.id} item={it} toolView={toolView} />)
-  }
-  flush()
-  return out
-}
-
-// ToolGroup collapses a run of tool calls to a single "N tool calls" line
-// (with a summary of which tools + any failures), expandable to the full boxes.
-function ToolGroup({ tools }: { tools: Item[] }) {
-  const [expanded, setExpanded] = useState(false)
-  const n = tools.length
-  const failed = tools.reduce((c, t) => c + (t.kind === 'tool' && t.error ? 1 : 0), 0)
-  return (
-    <div class="tool-group">
-      <button class={`tool-group-head${expanded ? ' open' : ''}`} onClick={() => setExpanded((e) => !e)}>
-        <span class="tg-caret">{expanded ? '▾' : '▸'}</span>
-        <span class="tg-count">{tn(n, '%d tool call', '%d tool calls')}</span>
-        {!expanded && <span class="tg-summary">{summarizeTools(tools)}</span>}
-        {failed > 0 && <span class="tg-failed">· {tn(failed, '%d failed', '%d failed')}</span>}
-      </button>
-      {expanded && (
-        <div class="tool-group-body">
-          {tools.map((t) => (
-            <Bubble key={t.id} item={t} toolView="full" />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// summarizeTools names the tools in a group with counts: "bash ×3, read, edit".
-function summarizeTools(tools: Item[]): string {
-  const counts = new Map<string, number>()
-  for (const t of tools) if (t.kind === 'tool') counts.set(t.name, (counts.get(t.name) ?? 0) + 1)
-  const parts = [...counts.entries()].map(([name, c]) => (c > 1 ? `${name} ×${c}` : name))
-  return parts.length > 4 ? parts.slice(0, 4).join(', ') + ', …' : parts.join(', ')
-}
-
-// CopyButton copies `text` to the clipboard and flashes a check for ~1.2s. Used
-// on assistant replies (the raw markdown source, so fenced code round-trips) and
-// wherever a one-tap copy helps.
-function CopyButton({ text, label }: { text: string; label?: string }) {
-  const [copied, setCopied] = useState(false)
-  const onClick = useCallback(() => {
-    void copyToClipboard(text).then((ok) => {
-      if (!ok) return
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1200)
-    })
-  }, [text])
-  const title = copied ? t('Copied') : label || t('Copy')
-  return (
-    <button class={`copy-btn${copied ? ' copied' : ''}`} title={title} aria-label={title} onClick={onClick}>
-      {copied ? (
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M20 6 9 17l-5-5" />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="9" y="9" width="11" height="11" rx="2" />
-          <path d="M5 15V5a2 2 0 0 1 2-2h10" />
-        </svg>
-      )}
-    </button>
-  )
-}
-
-// ImageGallery renders a message's image attachments as inline thumbnails that
-// open full-size in a new tab. Data is base64 already on the item, so the src is
-// a self-contained data: URL — no extra fetch.
-function ImageGallery({ images }: { images: ImageAttachment[] }) {
-  // Belt-and-suspenders: the store filters wire blocks and the upload path
-  // filters files, but anything that reaches this data:-URL sink gets the
-  // same allowlist check — no unvetted MIME ever lands in an href/src.
-  const safe = images.filter((im) => isSafeImageMime(im.mime))
-  if (!safe.length) return null
-  return (
-    <div class="msg-images">
-      {safe.map((im, i) => {
-        const src = `data:${im.mime};base64,${im.data}`
-        return (
-          <a key={i} class="msg-image-link" href={src} target="_blank" rel="noreferrer">
-            <img class="msg-image" src={src} alt={t('attached image')} loading="lazy" />
-          </a>
-        )
-      })}
-    </div>
-  )
-}
-
-function Bubble({ item, toolView }: { item: Item; toolView: ToolView }) {
-  switch (item.kind) {
-    case 'user':
-      return (
-        <div class="msg-wrap user-wrap">
-          <div class="msg user">
-            {item.text}
-            {item.images && <ImageGallery images={item.images} />}
-          </div>
-          {item.text && <CopyButton text={item.text} />}
-        </div>
-      )
-    case 'assistant':
-      // Stream as raw text (re-parsing markdown per token is wasteful); render
-      // markdown once the message finalizes.
-      if (item.streaming) {
-        return <div class="msg assistant streaming">{item.text}</div>
-      }
-      return (
-        <div class="msg-wrap assistant-wrap">
-          <div class="msg assistant md">
-            <div dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
-            {item.images && <ImageGallery images={item.images} />}
-          </div>
-          {item.text && <CopyButton text={item.text} />}
-        </div>
-      )
-    case 'error':
-      return <div class="msg err">{item.text}</div>
-    case 'system':
-      // Host-injected nudge (e.g. continue-on-open-work) — de-emphasized so it
-      // doesn't read as something the user typed.
-      return (
-        <div class="sys-note">
-          <span class="sys-tag">{t('auto')}</span>
-          {item.text}
-        </div>
-      )
-    case 'notice':
-      // A one-shot result from an extension command (display/error). Attributed
-      // to its extension, styled red when it's an error.
-      return (
-        <div class={`sys-note notice${item.level === 'error' ? ' err' : ''}`}>
-          {item.ext && <span class="sys-tag">{item.ext}</span>}
-          {item.text}
-        </div>
-      )
-    case 'tool':
-      if (toolView === 'hidden') return null
-      if (toolView === 'minimal') {
-        return (
-          <div class="tool-min" aria-hidden="true">
-            ▸ {item.name}
-            {item.error ? ' · ' + t('failed') : ''}
-          </div>
-        )
-      }
-      return (
-        <div class="tool">
-          <div class="tool-head">
-            <span class="tool-name">{item.name}</span>
-            {item.args != null && <span class="tool-args">{compact(item.args)}</span>}
-          </div>
-          {item.result && <pre class={`tool-result${item.error ? ' err' : ''}`}>{truncate(item.result, 2000)}</pre>}
-          {item.images && <ImageGallery images={item.images} />}
-        </div>
-      )
-  }
-}
-
-function SessionDrawer(props: {
-  sessions: SessionInfo[]
-  current: string
-  onSelect: (id: string) => void
-  onNew: () => void
-  onRename: (s: SessionInfo) => void
-  onDelete: (s: SessionInfo) => void
-  onClose: () => void
-}) {
-  return (
-    <div class="drawer-scrim" onClick={props.onClose}>
-      <aside class="drawer" onClick={(e) => e.stopPropagation()}>
-        <div class="drawer-head">
-          <strong>{t('Sessions')}</strong>
-          <button class="btn" onClick={props.onNew}>
-            + {t('New')}
-          </button>
-        </div>
-        <div class="session-list">
-          {props.sessions.map((s) => (
-            <div key={s.id} class={`session${s.id === props.current ? ' active' : ''}`} onClick={() => props.onSelect(s.id)}>
-              <div class="session-main">
-                <div class="session-title">{s.title || s.id}</div>
-                <div class="session-meta">
-                  {s.model ? s.model + ' · ' : ''}
-                  {tn(s.messages, '%d msg', '%d msgs')}
-                  {s.usage?.cost_usd ? ' · $' + s.usage.cost_usd.toFixed(3) : ''}
-                </div>
-              </div>
-              <button class="icon sm" title={t('Rename')} onClick={(e) => (e.stopPropagation(), props.onRename(s))}>
-                ✎
-              </button>
-              <button class="icon sm" title={t('Delete')} onClick={(e) => (e.stopPropagation(), props.onDelete(s))}>
-                ×
-              </button>
-            </div>
-          ))}
-        </div>
-      </aside>
-    </div>
-  )
-}
-
-function PermissionCard({ req, onDecide }: { req: PermissionRequest; onDecide: (id: string, d: Decision) => void }) {
-  return (
-    <div class="card perm">
-      <div class="card-head">
-        {t('Approve tool:')} <code>{req.tool}</code>
-      </div>
-      {req.preview && <pre class="preview">{truncate(req.preview, 1500)}</pre>}
-      <div class="card-actions">
-        <button class="btn primary" onClick={() => onDecide(req.call_id, { allow: true })}>
-          {t('Allow')}
-        </button>
-        <button class="btn" onClick={() => onDecide(req.call_id, { allow: true, remember_tool: true })}>
-          {t('Allow & remember')}
-        </button>
-        <button class="btn danger" onClick={() => onDecide(req.call_id, { allow: false, reason: 'denied by user' })}>
-          {t('Deny')}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function AskCard({ req, onAnswer }: { req: AskRequest; onAnswer: (id: string, text: string) => void }) {
-  const [custom, setCustom] = useState('')
-  return (
-    <div class="card ask">
-      <div class="card-head">{req.question}</div>
-      <div class="card-actions">
-        {(req.options ?? []).map((o) => (
-          <button class="btn" onClick={() => onAnswer(req.ask_id, o)}>
-            {o}
-          </button>
-        ))}
-      </div>
-      {req.allow_custom && (
-        <form
-          class="ask-custom"
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (custom.trim()) onAnswer(req.ask_id, custom.trim())
-          }}
-        >
-          <input value={custom} onInput={(e) => setCustom((e.target as HTMLInputElement).value)} placeholder={t('custom answer…')} />
-          <button class="btn primary" type="submit">
-            {t('Send')}
-          </button>
-        </form>
-      )}
-    </div>
-  )
-}
-
-function Composer({
-  busy,
-  onSend,
-  onToast,
-  commands,
-  skills,
-  onCancel,
-}: {
-  busy: boolean
-  onSend: (t: string, images: ImageAttachment[]) => boolean
-  onToast: (msg: string) => void
-  commands: SlashCommand[]
-  skills: SkillInfo[]
-  onCancel: () => void
-}) {
-  const [text, setText] = useState('')
-  const [images, setImages] = useState<ImageAttachment[]>([])
-  const [sel, setSel] = useState(0)
-  const [dismissed, setDismissed] = useState(false)
-  const ref = useRef<HTMLTextAreaElement>(null)
-  // Auto-grow to content (capped at 40vh), and shrink back when cleared — so
-  // multiline is visible and signals there's more context in play.
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4)) + 'px'
-  }, [text])
-
-  // addFiles reads image files (from paste or drop) into attachments, toasting
-  // any that are the wrong type or too big rather than silently dropping them.
-  const addFiles = async (files: File[]) => {
-    const results = await Promise.all(files.map(fileToAttachment))
-    const ok: ImageAttachment[] = []
-    for (const r of results) {
-      if (r && 'error' in r) onToast(r.error)
-      else if (r) ok.push(r)
-    }
-    if (ok.length) setImages((cur) => [...cur, ...ok])
-  }
-
-  const submit = () => {
-    if (!text.trim() && images.length === 0) return
-    // Clear only if the send was accepted (a busy image send is refused so the
-    // attachments aren't lost).
-    if (onSend(text, images)) {
-      setText('')
-      setImages([])
-      setDismissed(false)
-    }
-  }
-  // Choose a command from the menu: argless commands run immediately; commands
-  // that take an argument prime "/name " and keep focus for the argument.
-  const chooseCmd = (c: SlashCommand) => {
-    if (c.arg) {
-      setText('/' + c.name + ' ')
-      ref.current?.focus()
-    } else {
-      onSend('/' + c.name, [])
-      setText('')
-    }
-    setDismissed(false)
-  }
-
-  // Two autocomplete stages: command names while the text is a bare "/partial",
-  // then skill names once "/skill " is being argued. Each item knows how to
-  // apply itself on select.
-  type MenuItem = { key: string; label: string; hint: string; apply: () => void }
-  const cmdStage = /^\/(\S*)$/.exec(text)
-  const skillStage = /^\/skill\s+(\S*)$/.exec(text)
-  let menu: MenuItem[] = []
-  if (cmdStage) {
-    const q = cmdStage[1].toLowerCase()
-    menu = commands
-      .filter((c) => c.name.startsWith(q))
-      .map((c) => ({
-        key: c.name,
-        label: '/' + c.name + (c.arg ? ' ' + c.arg : ''),
-        hint: c.desc,
-        apply: () => chooseCmd(c),
-      }))
-  } else if (skillStage) {
-    const q = skillStage[1].toLowerCase()
-    menu = skills
-      .filter((s) => s.name.toLowerCase().startsWith(q))
-      .map((s) => ({
-        key: s.name,
-        label: s.name,
-        hint: s.description ?? '',
-        apply: () => {
-          setText('/skill ' + s.name + ' ')
-          ref.current?.focus()
-          setDismissed(false)
-        },
-      }))
-  }
-  const menuOpen = menu.length > 0 && !dismissed
-  const clampedSel = Math.min(sel, Math.max(0, menu.length - 1))
-
-  return (
-    <footer
-      class="composer"
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        const files = [...(e.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith('image/'))
-        if (files.length) {
-          e.preventDefault()
-          void addFiles(files)
-        }
-      }}
-    >
-      {menuOpen && (
-        <div class="slash-menu" role="listbox">
-          {menu.map((it, i) => (
-            <button
-              key={it.key}
-              class={`slash-item${i === clampedSel ? ' sel' : ''}`}
-              role="option"
-              aria-selected={i === clampedSel}
-              onMouseDown={(e) => {
-                e.preventDefault()
-                it.apply()
-              }}
-            >
-              <span class="slash-name">{it.label}</span>
-              {it.hint && <span class="slash-desc">{it.hint}</span>}
-            </button>
-          ))}
-        </div>
-      )}
-      {images.length > 0 && (
-        <div class="composer-chips">
-          {images.map((im, i) => (
-            <div key={i} class="composer-chip">
-              <img src={`data:${im.mime};base64,${im.data}`} alt={t('attached image')} />
-              <button
-                class="chip-x"
-                title={t('Remove')}
-                aria-label={t('Remove')}
-                onClick={() => setImages((cur) => cur.filter((_, j) => j !== i))}
-              >
-                ×
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      <textarea
-        ref={ref}
-        rows={1}
-        value={text}
-        placeholder={t('Message terva…')}
-        onPaste={(e) => {
-          const files = [...(e.clipboardData?.items ?? [])]
-            .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
-            .map((it) => it.getAsFile())
-            .filter((f): f is File => f != null)
-          if (files.length) {
-            e.preventDefault()
-            void addFiles(files)
-          }
-        }}
-        onInput={(e) => {
-          setText((e.target as HTMLTextAreaElement).value)
-          setSel(0)
-          setDismissed(false)
-        }}
-        onKeyDown={(e) => {
-          if (menuOpen) {
-            if (e.key === 'ArrowDown') {
-              e.preventDefault()
-              setSel((s) => Math.min(s + 1, menu.length - 1))
-              return
-            }
-            if (e.key === 'ArrowUp') {
-              e.preventDefault()
-              setSel((s) => Math.max(s - 1, 0))
-              return
-            }
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              setDismissed(true)
-              return
-            }
-            if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
-              e.preventDefault()
-              menu[clampedSel].apply()
-              return
-            }
-          }
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault()
-            submit()
-          }
-        }}
-      />
-      {busy ? (
-        <button class="btn danger" onClick={onCancel} title={t('Stop')}>
-          {t('Stop')}
-        </button>
-      ) : (
-        <button class="btn primary" onClick={submit}>
-          {t('Send')}
-        </button>
-      )}
-    </footer>
-  )
-}
-
-// QueuedBubble is a pending user message shown while a turn runs. It can be
-// edited in place or removed before the agent consumes it.
-function QueuedBubble({
-  text,
-  onEdit,
-  onCancel,
-}: {
-  text: string
-  onEdit: (t: string) => void
-  onCancel: () => void
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(text)
-  const editRef = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => {
-    if (editing) editRef.current?.focus()
-  }, [editing])
-  if (editing) {
-    return (
-      <form
-        class="msg user queued editing"
-        onSubmit={(e) => {
-          e.preventDefault()
-          setEditing(false)
-          if (draft.trim() !== text) onEdit(draft)
-        }}
-      >
-        <textarea
-          value={draft}
-          rows={1}
-          ref={editRef}
-          onInput={(e) => setDraft((e.target as HTMLTextAreaElement).value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              ;(e.currentTarget.form as HTMLFormElement).requestSubmit()
-            } else if (e.key === 'Escape') {
-              setDraft(text)
-              setEditing(false)
-            }
-          }}
-        />
-        <div class="queued-actions">
-          <button type="submit" class="btn sm primary">
-            {t('Save')}
-          </button>
-          <button
-            type="button"
-            class="btn sm"
-            onClick={() => {
-              setDraft(text)
-              setEditing(false)
-            }}
-          >
-            {t('Cancel')}
-          </button>
-        </div>
-      </form>
-    )
-  }
-  return (
-    <div class="msg user queued" title={t('queued — sends when the current turn reaches a safe point')}>
-      <span class="queued-mark">⟳</span>
-      <span class="queued-text">{text}</span>
-      <span class="queued-tools">
-        <button
-          class="icon sm"
-          title={t('Edit queued message')}
-          onClick={() => {
-            setDraft(text)
-            setEditing(true)
-          }}
-        >
-          ✎
-        </button>
-        <button class="icon sm" title={t('Remove from queue')} onClick={onCancel}>
-          ×
-        </button>
-      </span>
-    </div>
-  )
-}
-
-// ModelPicker is the searchable model switcher: a filter box over favorites +
-// per-provider groups, each row a click-to-switch with its own ★ toggle.
-function ModelPicker({
-  groups,
-  favorites,
-  current,
-  onSwitch,
-  onToggleFavorite,
-  onClose,
-}: {
-  groups: [string, ModelInfo[]][]
-  favorites: ModelInfo[]
-  current?: string
-  onSwitch: (id: string, provider?: string) => void
-  onToggleFavorite: (provider: string, id: string, on: boolean) => void
-  onClose: () => void
-}) {
-  const [q, setQ] = useState('')
-  const searchRef = useRef<HTMLInputElement>(null)
-  useEffect(() => searchRef.current?.focus(), [])
-  const needle = q.trim().toLowerCase()
-  const match = (m: ModelInfo) =>
-    !needle || m.id.toLowerCase().includes(needle) || m.provider.toLowerCase().includes(needle)
-  const favMatched = favorites.filter(match)
-  const groupsMatched = groups
-    .map(([prov, ms]) => [prov, ms.filter(match)] as [string, ModelInfo[]])
-    .filter(([, ms]) => ms.length > 0)
-
-  const row = (m: ModelInfo, keyPrefix: string) => (
-    <div
-      key={keyPrefix + m.provider + '/' + m.id}
-      class={`pick-row${m.id === current ? ' current' : ''}`}
-      onClick={() => onSwitch(m.id, m.provider)}
-    >
-      <button
-        class="pick-star"
-        title={m.favorite ? t('Unfavorite') : t('Favorite')}
-        onClick={(e) => {
-          e.stopPropagation()
-          onToggleFavorite(m.provider, m.id, !m.favorite)
-        }}
-      >
-        {m.favorite ? '★' : '☆'}
-      </button>
-      <span class="pick-id">{m.id}</span>
-      <span class="pick-meta">
-        {m.provider}
-        {m.context_window ? ' · ' + humanCount(m.context_window) : ''}
-      </span>
-    </div>
-  )
-
-  return (
-    <div class="modal-scrim" onClick={onClose}>
-      <div class="modal picker" onClick={(e) => e.stopPropagation()}>
-        <input
-          class="pick-search"
-          ref={searchRef}
-          placeholder={t('Search models…')}
-          value={q}
-          onInput={(e) => setQ((e.target as HTMLInputElement).value)}
-          onKeyDown={(e) => e.key === 'Escape' && onClose()}
-        />
-        <div class="pick-list">
-          {favMatched.length > 0 && <div class="pick-group">★ {t('favorites')}</div>}
-          {favMatched.map((m) => row(m, 'fav:'))}
-          {groupsMatched.map(([prov, ms]) => (
-            <div key={'grp' + prov}>
-              <div class="pick-group">{prov}</div>
-              {ms.map((m) => row(m, 'g:'))}
-            </div>
-          ))}
-          {favMatched.length === 0 && groupsMatched.length === 0 && (
-            <div class="pick-empty">{t('no models match “%s”', q)}</div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // PaneHost is the switchable pane region — a right rail on desktop, a full sheet
 // on mobile. It shows a switcher of available surfaces and renders the active
 // one by kind (the generalization of the old context modal).
@@ -1618,6 +801,8 @@ function PaneHost({
   onActivate,
   onAction,
   onFetchNode,
+  onListResets,
+  onConsumeReset,
   onClose,
   onRestart,
   trusted,
@@ -1631,6 +816,8 @@ function PaneHost({
   onActivate: (id: string) => void
   onAction: (id: string, action: string, args?: Record<string, string>) => void
   onFetchNode: (id: string, op?: string) => Promise<ContextNode>
+  onListResets: () => Promise<ResetsListResult>
+  onConsumeReset: (id: string) => Promise<ResetConsumeResult>
   onClose: () => void
   onRestart?: () => void
   trusted?: boolean
@@ -1673,6 +860,8 @@ function PaneHost({
             surface={data}
             onAction={onAction}
             onFetchNode={onFetchNode}
+            onListResets={onListResets}
+            onConsumeReset={onConsumeReset}
             onRestart={onRestart}
             trusted={trusted}
             onTrust={onTrust}
@@ -1698,24 +887,6 @@ const RAATI_KANJI: Record<string, string> = {
   escalated: '保留',
 }
 
-function raatiVerdictWord(v: string): string {
-  switch (v) {
-    case 'approve':
-      return t('APPROVE')
-    case 'reject':
-      return t('REJECT')
-    case 'abstain':
-      return t('ABSTAIN')
-    case 'approved':
-      return t('APPROVED')
-    case 'rejected':
-      return t('REJECTED')
-    case 'escalated':
-      return t('ESCALATED')
-  }
-  return v.toUpperCase()
-}
-
 function KanjiVerdict({ word, kanji, tone }: { word: string; kanji: string; tone: string }) {
   const [settled, setSettled] = useState(false)
   useEffect(() => {
@@ -1724,33 +895,6 @@ function KanjiVerdict({ word, kanji, tone }: { word: string; kanji: string; tone
     return () => window.clearTimeout(id)
   }, [word, kanji])
   return <span class={`raati-kanji tone-${tone}${settled ? ' settled' : ' flash'}`}>{settled ? word : kanji}</span>
-}
-
-// raatiUnitCopyText renders one panelist's position for the clipboard.
-function raatiUnitCopyText(u: RaatiUnit): string {
-  const who = u.binding ? `${u.name} (${u.binding})` : u.name
-  if (u.status === 'absent') return `${who}: absent — ${u.why ?? ''}`
-  const conf = typeof u.confidence === 'number' ? ` (${u.confidence.toFixed(2)})` : ''
-  const blind = u.blind && u.blind !== u.verdict ? ` [blind ballot: ${u.blind}]` : ''
-  return `${who}: ${u.verdict ?? ''}${conf}${blind} — ${u.rationale ?? ''}`
-}
-
-// raatiResultCopyText renders the whole outcome — verdict, tally, every
-// seat's position, and the minority report — for the clipboard.
-function raatiResultCopyText(v: RaatiView): string {
-  const lines: string[] = []
-  if (v.question) lines.push(`question: ${v.question}`)
-  const t = v.tally
-  lines.push(
-    `verdict: ${(v.decision ?? '').toUpperCase()}${v.degraded ? ' (degraded)' : ''}` +
-      (t ? ` — ${t.approve} approve / ${t.reject} reject / ${t.abstain} abstain / ${t.absent} absent` : ''),
-  )
-  for (const u of v.units ?? []) lines.push(raatiUnitCopyText(u))
-  if ((v.minority?.length ?? 0) > 0) {
-    lines.push('minority report:')
-    for (const m of v.minority ?? []) lines.push(`  ${m.unit}: ${m.rationale ?? ''}`)
-  }
-  return lines.join('\n')
 }
 
 function RaatiBody({
@@ -1828,35 +972,11 @@ function RaatiBody({
   const seatsChosen = seatPicks.filter((s) => s !== '').length
   const seatsPartial = level === '2' && seatsChosen > 0 && seatsChosen < seatPicks.length
   const convene = () => {
-    const q = question.trim()
-    if (!q || seatsPartial) return
-    const args: Record<string, string> = { question: q }
-    if (profile) args.profile = profile
-    if (cls) args.class = cls
-    if (level) args.level = level
-    if (singleRound) args.single_round = 'true'
-    if (inquire) args.inquire = inquire
-    if (converge) args.rounds = '3'
-    if (seatOrder) args.seat_order = seatOrder
-    if (level === '0' && binding !== '') {
-      const m = (models ?? [])[Number(binding)]
-      if (m) {
-        args.provider = m.provider
-        args.model = m.id
-      }
-    }
-    if (level === '1' && ladderProv) args.provider = ladderProv
-    if (level === '2' && seatsChosen === seatPicks.length) {
-      seatPicks.forEach((s, i) => {
-        const m = (models ?? [])[Number(s)]
-        if (m) {
-          args[`provider_${i}`] = m.provider
-          args[`model_${i}`] = m.id
-        }
-      })
-    }
-    if (evidence.trim()) args.evidence = evidence
-    if (conversation) args.conversation = conversation
+    const args = buildConveneArgs(
+      { question, profile, cls, level, singleRound, inquire, converge, seatOrder, binding, ladderProv, seatPicks, evidence, conversation },
+      models,
+    )
+    if (!args) return
     onAction('raati', 'convene', args)
     setQuestion('')
     setEvidence('')
@@ -2536,6 +1656,8 @@ function SurfaceView({
   surface,
   onAction,
   onFetchNode,
+  onListResets,
+  onConsumeReset,
   onRestart,
   trusted,
   onTrust,
@@ -2544,6 +1666,8 @@ function SurfaceView({
   surface: Surface
   onAction: (id: string, action: string, args?: Record<string, string>) => void
   onFetchNode: (id: string, op?: string) => Promise<ContextNode>
+  onListResets: () => Promise<ResetsListResult>
+  onConsumeReset: (id: string) => Promise<ResetConsumeResult>
   onRestart?: () => void
   trusted?: boolean
   onTrust?: (trust: boolean) => void
@@ -2551,7 +1675,14 @@ function SurfaceView({
 }) {
   switch (surface.kind) {
     case 'context':
-      return surface.context ? <ContextBody d={surface.context} onFetchNode={onFetchNode} /> : null
+      return surface.context ? (
+        <ContextBody
+          d={surface.context}
+          onFetchNode={onFetchNode}
+          onListResets={onListResets}
+          onConsumeReset={onConsumeReset}
+        />
+      ) : null
     case 'tasks':
       return surface.tasks ? <TasksBody list={surface.tasks} onAction={onAction} /> : null
     case 'raati':
@@ -3547,12 +2678,157 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '')
 }
 
+// ResetsSection lists the provider's banked usage-reset credits under the usage
+// summary and redeems one on demand. Redeeming spends a scarce, irreversible
+// credit, so a click first arms an inline confirm (the credit's title + expiry)
+// and only a second, explicit "Redeem" performs the spend — there is no
+// auto-redeem. It self-fetches on mount and hides entirely when the provider
+// offers no resets, so it's invisible everywhere except a codex subscription.
+function ResetsSection({
+  onList,
+  onConsume,
+}: {
+  onList: () => Promise<ResetsListResult>
+  onConsume: (id: string) => Promise<ResetConsumeResult>
+}) {
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [supported, setSupported] = useState(false)
+  const [resets, setResets] = useState<ResetInfo[]>([])
+  const [err, setErr] = useState('')
+  const [arming, setArming] = useState('') // credit id awaiting confirm
+  const [busy, setBusy] = useState('') // credit id being redeemed
+  const [done, setDone] = useState('') // outcome line after a redeem
+
+  const refresh = useCallback(() => {
+    setState('loading')
+    onList()
+      .then((r) => {
+        setSupported(r.supported)
+        setResets(r.resets ?? [])
+        setState('ready')
+      })
+      .catch((e) => {
+        setErr(String(e?.message ?? e))
+        setState('error')
+      })
+  }, [onList])
+
+  useEffect(() => {
+    refresh()
+  }, [refresh])
+
+  // Hide the whole section unless the provider supports resets and there's
+  // something to show — usage panes for non-codex providers stay unchanged.
+  if (state === 'loading') return null
+  if (state === 'error') {
+    return (
+      <>
+        <div class="ctx-section-label">{t('usage resets')}</div>
+        <div class="resets-err">{err}</div>
+      </>
+    )
+  }
+  if (!supported || resets.length === 0) return null
+
+  const redeem = (id: string) => {
+    setBusy(id)
+    setArming('')
+    onConsume(id)
+      .then((r) => {
+        const n = r.windows_reset ?? 0
+        setDone(n === 1 ? t('Redeemed — 1 usage window cleared.') : t('Redeemed — %d usage windows cleared.', n))
+        setBusy('')
+        refresh()
+      })
+      .catch((e) => {
+        setErr(String(e?.message ?? e))
+        setBusy('')
+        refresh()
+      })
+  }
+
+  const avail = resets.filter((r) => r.status === 'available').length
+  return (
+    <>
+      <div class="ctx-section-label">
+        {t('usage resets')} <span class="resets-count">{t('%d available', avail)}</span>
+      </div>
+      {done && <div class="resets-done">{done}</div>}
+      <div class="resets-list">
+        {resets.map((r) => (
+          <ResetRow
+            key={r.id}
+            r={r}
+            arming={arming === r.id}
+            busy={busy === r.id}
+            onArm={() => setArming(r.id)}
+            onCancel={() => setArming('')}
+            onRedeem={() => redeem(r.id)}
+          />
+        ))}
+      </div>
+    </>
+  )
+}
+
+function ResetRow({
+  r,
+  arming,
+  busy,
+  onArm,
+  onCancel,
+  onRedeem,
+}: {
+  r: ResetInfo
+  arming: boolean
+  busy: boolean
+  onArm: () => void
+  onCancel: () => void
+  onRedeem: () => void
+}) {
+  const available = r.status === 'available'
+  const expiry = r.expires_at ? r.expires_at.slice(0, 10) : ''
+  const spent = r.status === 'redeemed'
+  return (
+    <div class={`reset-row${available ? '' : ' spent'}`}>
+      <div class="reset-main">
+        <span class="reset-title">{r.title || t('reset credit')}</span>
+        <span class="reset-meta">
+          {spent ? t('spent') : expiry ? t('expires %s', expiry) : r.status}
+        </span>
+      </div>
+      {available &&
+        (busy ? (
+          <span class="reset-busy">{t('redeeming…')}</span>
+        ) : arming ? (
+          <span class="reset-confirm">
+            <span class="reset-warn">{t('Spend this credit? Cannot be undone.')}</span>
+            <button class="reset-btn danger" onClick={onRedeem}>
+              {t('Redeem')}
+            </button>
+            <button class="reset-btn" onClick={onCancel}>
+              {t('Cancel')}
+            </button>
+          </span>
+        ) : (
+          <button class="reset-btn" onClick={onArm}>
+            {t('Redeem')}
+          </button>
+        ))}
+    </div>
+  )
+}
+
 function ContextBody({
   d,
   onFetchNode,
+  onListResets,
+  onConsumeReset,
 }: {
   d: ContextBreakdown
   onFetchNode: (id: string, op?: string) => Promise<ContextNode>
+  onListResets: () => Promise<ResetsListResult>
+  onConsumeReset: (id: string) => Promise<ResetConsumeResult>
 }) {
   const realTok = d.context_tokens ?? 0
   const estTok = Math.round(d.total_bytes / 4)
@@ -3580,6 +2856,8 @@ function ContextBody({
         subscription={d.subscription}
         windows={d.usage_windows}
       />
+
+      <ResetsSection onList={onListResets} onConsume={onConsumeReset} />
 
       <div class="ctx-section-label">{t('Next request — estimated by size')}</div>
       <div class="ctx-rows">
@@ -3768,28 +3046,4 @@ function countdown(iso: string): string {
   if (days > 0) return `${days}d${hours}h`
   if (hours > 0) return `${hours}h${m}m`
   return `${m}m`
-}
-
-function humanBytes(n: number): string {
-  if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + ' MB'
-  if (n >= 1 << 10) return (n / (1 << 10)).toFixed(1) + ' KB'
-  return n + ' B'
-}
-
-function humanCount(n: number): string {
-  if (n >= 1_000_000) return (n / 1e6).toFixed(1) + 'M'
-  if (n >= 1_000) return (n / 1e3).toFixed(0) + 'k'
-  return String(n)
-}
-
-function compact(v: unknown): string {
-  try {
-    return truncate(JSON.stringify(v), 200)
-  } catch {
-    return ''
-  }
-}
-
-function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n) + '…' : s
 }

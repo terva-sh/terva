@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { applyEvent, itemsFromMessages, isSafeImageMime, type Item } from './store'
-import type { WireEvent, WireMessage } from './ctrlproto'
+import type { WireEvent, WireMessage } from '../ctrlproto/types'
 
 // The store is the client's pure wire→render transform. These tests pin the
 // image scenarios: attachments and agent-generated images surface as renderable
@@ -114,5 +114,104 @@ describe('image MIME allowlist', () => {
     const msgs: WireMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'x' }, svg] }]
     const [u] = userItems(itemsFromMessages(msgs))
     expect(u.images).toBeUndefined()
+  })
+})
+
+// The image tests above cover the attachment path; these pin the rest of the
+// reducer — streaming accumulation, tool-result mapping, and the error/notice/
+// synthetic item variants — so a broken fold is caught, not just a broken image.
+
+describe('applyEvent — text streaming', () => {
+  it('appends consecutive deltas onto one streaming item (not replace)', () => {
+    let items = applyEvent([], { type: 'text_delta', delta: 'draw ' })
+    items = applyEvent(items, { type: 'text_delta', delta: 'a cat' })
+    expect(items).toHaveLength(1)
+    const a = items[0] as Extract<Item, { kind: 'assistant' }>
+    expect(a.text).toBe('draw a cat')
+    expect(a.streaming).toBe(true)
+  })
+
+  it('starts a fresh streaming item when the last item is not a live stream', () => {
+    const start = applyEvent([], {
+      type: 'user_message',
+      message: { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+    })
+    const items = applyEvent(start, { type: 'text_delta', delta: 'reply' })
+    expect(items).toHaveLength(2)
+    expect(items[1]).toMatchObject({ kind: 'assistant', text: 'reply', streaming: true })
+  })
+
+  it('finalizes the stream, keeping the streamed text over the message text', () => {
+    let items = applyEvent([], { type: 'text_delta', delta: 'partial' })
+    items = applyEvent(items, {
+      type: 'assistant_message',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'ignored final' }] },
+    })
+    const a = items[items.length - 1] as Extract<Item, { kind: 'assistant' }>
+    expect(a.streaming).toBe(false)
+    expect(a.text).toBe('partial')
+  })
+})
+
+describe('applyEvent — tool results', () => {
+  it('maps result text and a failure flag onto the matching tool item', () => {
+    let items = applyEvent([], { type: 'tool_call', id: 'c1', name: 'bash' })
+    items = applyEvent(items, { type: 'tool_result', id: 'c1', content: [{ type: 'text', text: 'boom' }], is_error: true })
+    const tool = items.find((i) => i.kind === 'tool') as Extract<Item, { kind: 'tool' }>
+    expect(tool.result).toBe('boom')
+    expect(tool.error).toBe(true)
+  })
+
+  it('records a successful result with error=false', () => {
+    let items = applyEvent([], { type: 'tool_call', id: 'c2', name: 'read' })
+    items = applyEvent(items, { type: 'tool_result', id: 'c2', content: [{ type: 'text', text: 'ok' }], is_error: false })
+    const tool = items.find((i) => i.kind === 'tool') as Extract<Item, { kind: 'tool' }>
+    expect(tool.result).toBe('ok')
+    expect(tool.error).toBe(false)
+  })
+
+  it('is a no-op for a tool_result whose id matches no pending call', () => {
+    const before = applyEvent([], { type: 'tool_call', id: 'c3', name: 'bash' })
+    const after = applyEvent(before, { type: 'tool_result', id: 'nope', content: [{ type: 'text', text: 'x' }] })
+    expect(after).toBe(before) // same reference — nothing changed
+  })
+
+  it('itemsFromMessages maps tool result text and error, not just images', () => {
+    const msgs: WireMessage[] = [
+      { role: 'assistant', content: [{ type: 'tool_call', id: 't1', name: 'bash' }] },
+      { role: 'tool', content: [{ type: 'tool_result', call_id: 't1', content: [{ type: 'text', text: 'oops' }], is_error: true }] },
+    ]
+    const tool = itemsFromMessages(msgs).find((i) => i.kind === 'tool') as Extract<Item, { kind: 'tool' }>
+    expect(tool.result).toBe('oops')
+    expect(tool.error).toBe(true)
+  })
+})
+
+describe('applyEvent — error, notice, and synthetic items', () => {
+  it('appends an error item, falling back to a generic message', () => {
+    expect(applyEvent([], { type: 'error', error: 'kaboom' })).toEqual([
+      { kind: 'error', id: expect.any(String), text: 'kaboom' },
+    ])
+    const [e] = applyEvent([], { type: 'error' })
+    expect(e).toMatchObject({ kind: 'error', text: 'unknown error' })
+  })
+
+  it('appends a notice carrying level/ext/kind, and drops an empty notice', () => {
+    const [n] = applyEvent([], {
+      type: 'notice',
+      notice: { level: 'error', ext: 'index', text: 'reindexed', kind: 'prompt_rebuilt' },
+    })
+    expect(n).toMatchObject({ kind: 'notice', level: 'error', ext: 'index', text: 'reindexed', noticeKind: 'prompt_rebuilt' })
+    expect(applyEvent([], { type: 'notice', notice: { level: 'info', text: '' } })).toEqual([])
+  })
+
+  it('renders a synthetic user message as a system note, not a user bubble', () => {
+    const [s] = applyEvent([], {
+      type: 'user_message',
+      message: { role: 'user', synthetic: true, content: [{ type: 'text', text: 'continue?' }] },
+    })
+    expect(s).toMatchObject({ kind: 'system', text: 'continue?' })
+    const [fromSnapshot] = itemsFromMessages([{ role: 'user', synthetic: true, content: [{ type: 'text', text: 'nudge' }] }])
+    expect(fromSnapshot).toMatchObject({ kind: 'system', text: 'nudge' })
   })
 })
