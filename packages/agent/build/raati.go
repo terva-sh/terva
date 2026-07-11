@@ -9,7 +9,9 @@ package build
 // duplicated adapter or a config→raati dependency.
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -31,11 +33,31 @@ func WriteRaatiRecord(res *raati.Result) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, fmt.Sprintf("raati-%d.json", time.Now().UnixNano()))
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		return "", err
+	// The record id is the write-time UnixNano (history sorts on it),
+	// but Windows' wall clock advances in ~0.5ms steps, so two
+	// back-to-back convenings can observe the same nano. O_EXCL plus a
+	// bump keeps the second record from silently overwriting the first
+	// while preserving write order.
+	nano := time.Now().UnixNano()
+	for {
+		path := filepath.Join(dir, fmt.Sprintf("raati-%d.json", nano))
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, fs.ErrExist) {
+			nano++
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if _, werr := f.Write(raw); werr != nil {
+			f.Close()
+			return "", werr
+		}
+		if cerr := f.Close(); cerr != nil {
+			return "", cerr
+		}
+		return path, nil
 	}
-	return path, nil
 }
 
 // RaatiLevel2Bindings maps the user config's raati.level2 seats onto the
