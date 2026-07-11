@@ -228,7 +228,7 @@ It's one JSON object per line (JSONL), so it's greppable and `jq`-able:
 ```bash
 # every bash command this machine's terva has run, and how it was permitted
 jq 'select(.tool=="bash") | {time, mode, decision, cmd: .args.command}' \
-  ~/.terva/logs/audit.log
+  "$TERVA_HOME/logs/audit.log"
 ```
 
 Fields: `time` (UTC), `pid`, `tool`, `mode`, `decision` (`allow`/`deny`),

@@ -21,7 +21,7 @@ TUI's own surface (slash commands, keys) lives in [tui.md](tui.md).
 | `--no-session` | Don't read or write session files. |
 | `--cwd <path>` | Use `<path>` as the working directory. |
 | `-e`, `--ext <path>` | Load an extension from `<path>` for this run (repeatable; wins against installed extensions of the same name). |
-| `--no-workspace-tools` | Turn off the built-in workspace tools (read/write/edit/bash/grep/glob); extensions, MCP, and skills stay — an agent with its integrations but no host filesystem/shell. |
+| `--no-workspace-tools` | Turn off the whole built-in base tool set — read/write/edit/bash/grep/glob plus `terva_status`, `ask_user_question`, and (if configured) `generate_image`; extensions, MCP, and skills stay — an agent with its integrations but no host filesystem/shell. |
 | `--no-ext` | Turn off extension discovery for this run. `--ext` still works on top, so `--no-ext --ext ./x` runs only `x`. |
 | `--no-mcp` | Turn off MCP servers for this run. |
 | `--extensions <csv>` | Only load the listed installed extensions, by manifest name (repeatable). Restrict-only: `--ext` paths bypass it, config disables still subtract. The least-privilege flag for exposed agents — a group-room Discord bot gets `--extensions calendar`, not your mail extension. |
@@ -36,7 +36,7 @@ TUI's own surface (slash commands, keys) lives in [tui.md](tui.md).
 | `--as <name>` | What a card's `{{user}}` macro resolves to (defaults to the saved name, else `"User"`). |
 | `--cast NAME=REF` | Declare an actor a `--play` director can voice via the `actor_spawn` tool (`REF` = a persona name or a card path); repeatable. Implies `--play`; rejected with `--chat`. A trusted project's `.terva/cast.json` can declare a cast too. See [personas.md](personas.md#cast-and-actor-dispatch). |
 | `--no-lore` | Disable the lore keyed-context primitive for this run — no discovery, no injection. See [debugging-prompts.md](debugging-prompts.md). |
-| `--max-steps <n>` | Cap agent loop iterations (default: unlimited; pass `0` for unlimited). |
+| `--max-steps <n>` | Cap agent loop iterations to a positive integer. Omit the flag for the default (unlimited); `0` is rejected. |
 | `--approval MODE` | Approval mode: `plan` (read-only only), `ask` (confirm everything), `auto-edit` (read-only + file editors run freely, the rest asks), `workspace` (built-in tools + read-only tools run, foreign side-effecting tools ask — the interactive default), `yolo` (run freely — the headless default). Combines with permission rules in config — see [permissions.md](permissions.md). In print / json / rpc modes anything that would need a prompt is **refused** with a model-readable message; allow rules and the mode's auto-allows still run. |
 | `--jail` / `--no-jail` | Force the sandbox on / off at startup. Default: on for an interactive session (so the trusted built-in tools stay confined to the cwd), off for headless modes. `/jail` and `/unjail` toggle it at runtime in the TUI. |
 | `--no-yolo` | Alias for `--approval ask`. In the interactive TUI a dialog shows the tool name and a one-line preview of its args with five choices (yes, always-this-tool, always-this-tool-saved, always-this-session, no). In print / json / rpc modes there is no prompt to confirm at, so every not-pre-allowed tool call is **refused** rather than run unconfirmed — use permission rules or omit the flag for unattended automation. |

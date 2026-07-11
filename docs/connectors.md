@@ -130,7 +130,8 @@ handshake, verb dispatch, and result correlation.
 `cmd/terva-telegram-connector` is the worked example — the in-tree
 telegram transport wrapped for the external path (it registers as
 `telegram-ext` with its own token store, so it can run next to the
-built-in).
+built-in). `cmd/terva-discord-connector` is a second in-tree external
+connector (the handshake examples below use it).
 
 ## Protocol reference (versions 1 and 2)
 
@@ -179,7 +180,7 @@ Handshake — the connector speaks first:
 ```json
 → {"type":"hello","name":"discord","version":"1.0.0","protocol_min":1,"protocol_max":1,
    "capabilities":{"max_text_len":2000,"typing_refresh_ms":8000,"sends_images":true,"sends_files":true}}
-← {"type":"hello_ack","protocol":1,"terva_version":"1.2.3","terva_version":"1.2.3",
+← {"type":"hello_ack","protocol":1,"zot_version":"1.2.3","terva_version":"1.2.3",
    "data_dir":"$TERVA_HOME/connectors/discord/data"}
 ```
 

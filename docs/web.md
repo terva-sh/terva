@@ -186,6 +186,21 @@ changing anything under `client/src`, rebuild and commit:
 just web-build     # npm ci + vite build -> client/dist (commit the result)
 ```
 
+The client source is organized by dependency direction:
+
+- `src/platform/` contains Preact-free protocol, conversation-state, and
+  image-policy modules;
+- `src/features/` contains reusable Preact features and feature-local behavior
+  such as conversation attachments, interactions, sessions, and model UI;
+- `src/ui/` contains small shared presentation primitives plus browser and
+  formatting helpers; and
+- `src/app.tsx` remains the control-panel composition root while its product
+  surfaces and orchestration are split incrementally.
+
+Keep transport calls in the composition/controller layer and pass typed data and
+callbacks into visual components. Run `just web-test`, the client `typecheck` and
+`i18n-check` scripts, and `just web-build` after source changes.
+
 ## Languages
 
 The panel follows terva's operator language (config `language`, or `LANG`; see
@@ -298,8 +313,8 @@ docs/proposals/web-surfaces.md). Today's panes:
   prompt to the model, or post a one-shot note back into the conversation
   (`display`/`error`; `insert` degrades to a note since there's no shared
   composer to fill). The pane appears whenever any loaded extension has
-  commands. (User-driven slash commands like `/skill` are a separate, still-to-
-  come concern — this pane is only the extension-provided set.)
+  commands. User-driven slash commands such as `/skill` are a separate composer
+  autocomplete surface; this pane contains only the extension-provided set.
 - **Extensions** — a management pane listing the session's installed + loaded
   extensions with a health rollup: a status badge (running / stopped / disabled /
   gated), version, scope, language, tool + command counts, and — for one that
