@@ -16,6 +16,7 @@ import (
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider/auth"
 )
 
@@ -743,16 +744,15 @@ func MutateConfig(fn func(*Config)) error {
 	return SaveConfig(c)
 }
 
-// saveConfigAt writes home/config.json, creating parent dirs.
+// saveConfigAt writes home/config.json atomically with private (0600)
+// permissions. config.json stores extension secrets in plaintext, so it must
+// not be world/group-readable; privfs.WriteFile also creates home 0700.
 func saveConfigAt(home string, c Config) error {
-	if err := os.MkdirAll(home, 0o755); err != nil {
-		return err
-	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(home, "config.json"), b, 0o644)
+	return privfs.WriteFile(filepath.Join(home, "config.json"), b)
 }
 
 // GlobalUserPrefs is the small, explicit allowlist of user-identity preferences
@@ -1176,10 +1176,10 @@ func SetKimiCLIFallbackDisabled(disabled bool) error {
 		}
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte("disabled\n"), 0o600)
+	return os.WriteFile(path, []byte("disabled\n"), privfs.FileMode)
 }
 
 func LoadKimiCodeCLIToken() *auth.OAuthToken {

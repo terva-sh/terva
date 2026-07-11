@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -46,7 +45,7 @@ func RequestGitHubCopilotDeviceAuthorization(ctx context.Context) (GitHubCopilot
 		return GitHubCopilotDeviceAuthorization{}, fmt.Errorf("github copilot device authorization: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readCappedBody(resp.Body, maxTokenBodyBytes)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return GitHubCopilotDeviceAuthorization{}, fmt.Errorf("github copilot device authorization http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -104,7 +103,7 @@ func pollGitHubCopilotDeviceTokenOnce(ctx context.Context, deviceCode string, in
 		return nil, 0, fmt.Errorf("github copilot token poll: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readCappedBody(resp.Body, maxTokenBodyBytes)
 	var raw struct {
 		AccessToken      string `json:"access_token"`
 		TokenType        string `json:"token_type"`

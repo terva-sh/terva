@@ -28,7 +28,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -84,7 +83,7 @@ func (c *copilotTokenCache) exchange(ctx context.Context, pat string) (copilotTo
 		return copilotToken{}, fmt.Errorf("copilot token exchange: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readBodyCapped(resp.Body, maxDiscoveryBodyBytes)
 	if resp.StatusCode != http.StatusOK {
 		return copilotToken{}, fmt.Errorf("copilot token exchange: http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}

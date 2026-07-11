@@ -581,9 +581,8 @@ func (c *bedrockClient) Stream(ctx context.Context, req Request) (<-chan Event, 
 		return nil, fmt.Errorf("bedrock: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
+		msg := errorBodySnippet(resp.Body)
 		resp.Body.Close()
-		msg := strings.TrimSpace(string(b))
 		// A 403 on the bearer route is almost always a region mismatch:
 		// short-term Bedrock API keys are scoped to the region of the
 		// console session that minted them, but terva defaults to

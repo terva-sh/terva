@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/privfs"
 )
 
 // This file is the engine behind `terva migrate` and the TUI's
@@ -168,7 +169,7 @@ func CopyUserData(oldDir, newDir string) MigrationCopyReport {
 		if rel == "." {
 			// The destination root may not exist yet (fresh install
 			// that never launched terva).
-			if err := os.MkdirAll(newDir, 0o755); err != nil {
+			if err := privfs.MkdirAll(newDir); err != nil {
 				rep.Errors = append(rep.Errors, fmt.Sprintf("%s: %v", newDir, err))
 				return fs.SkipDir
 			}
@@ -187,7 +188,9 @@ func CopyUserData(oldDir, newDir string) MigrationCopyReport {
 			if err == nil {
 				mode = info.Mode().Perm()
 			}
-			if err := os.MkdirAll(dest, mode); err != nil {
+			// Preserve the owner bits (structure, +x on dirs) but strip
+			// group/other so a migrated tree lands private, matching new writes.
+			if err := os.MkdirAll(dest, mode&0o700); err != nil {
 				rep.Errors = append(rep.Errors, fmt.Sprintf("%s: %v", rel, err))
 				return fs.SkipDir
 			}
@@ -245,7 +248,9 @@ func copyFileNoClobber(src, dest string, d fs.DirEntry) error {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	// Strip group/other bits but keep owner bits, so a migrated binary stays
+	// executable while the copy is private (matches privfs new-file modes).
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode&0o700)
 	if err != nil {
 		return err
 	}

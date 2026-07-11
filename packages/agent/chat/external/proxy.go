@@ -15,6 +15,7 @@ import (
 	"terva.sh/terva/packages/agent/chat/connhost"
 	"terva.sh/terva/packages/agent/connproto"
 	"terva.sh/terva/packages/agent/procenv"
+	"terva.sh/terva/packages/privfs"
 )
 
 // Tunables. Fields on the Proxy (not consts) so tests can shrink them.
@@ -219,15 +220,15 @@ func (p *Proxy) restart(ctx context.Context, exitErr error) error {
 // /connect time.
 func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 	logPath := p.logPath()
-	_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	_ = privfs.MkdirAll(filepath.Dir(logPath))
+	logFile, err := privfs.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY)
 	if err != nil {
 		return fmt.Errorf("open connector log: %w", err)
 	}
 	fmt.Fprintf(logFile, "\n[terva] starting connector %s/%s at %s\n",
 		p.manifest.Name, p.manifest.Version, time.Now().Format(time.RFC3339))
 
-	if err := os.MkdirAll(p.dataDir(), 0o755); err != nil {
+	if err := privfs.MkdirAll(p.dataDir()); err != nil {
 		logFile.Close()
 		return err
 	}

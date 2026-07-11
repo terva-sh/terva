@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -264,7 +263,7 @@ func (p OAuthProvider) doTokenRequest(ctx context.Context, payload map[string]st
 		return nil, fmt.Errorf("token request: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readCappedBody(resp.Body, maxTokenBodyBytes)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("token http %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,7 +34,7 @@ func DiscoverAnthropic(ctx context.Context, apiKey, baseURL string) ([]Model, er
 		if err != nil {
 			return nil, err
 		}
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readBodyCapped(resp.Body, maxDiscoveryBodyBytes)
 		resp.Body.Close()
 		if resp.StatusCode != 200 {
 			return nil, fmt.Errorf("anthropic discover http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -84,7 +83,7 @@ func DiscoverOpenAI(ctx context.Context, apiKey, baseURL string) ([]Model, error
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readBodyCapped(resp.Body, maxDiscoveryBodyBytes)
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("openai discover http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -137,7 +136,7 @@ func DiscoverGoogle(ctx context.Context, apiKey, baseURL string) ([]Model, error
 		if err != nil {
 			return nil, err
 		}
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readBodyCapped(resp.Body, maxDiscoveryBodyBytes)
 		resp.Body.Close()
 		if resp.StatusCode != 200 {
 			return nil, fmt.Errorf("google discover http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -257,7 +256,7 @@ func DiscoverOpenAICompatible(ctx context.Context, baseURL, key string, defaultC
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readBodyCapped(resp.Body, maxDiscoveryBodyBytes)
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("openai-compatible discover http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -388,7 +387,7 @@ func DiscoverOpenRouter(ctx context.Context, baseURL string) ([]Model, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readBodyCapped(resp.Body, maxDiscoveryBodyBytes)
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("openrouter discover http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}

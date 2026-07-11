@@ -171,10 +171,11 @@ func TestCopyUserDataNoClobber(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dest, ".terva-migration-note-shown")); !os.IsNotExist(err) {
 		t.Error("legacy one-shot sentinel must not be copied")
 	}
-	// Windows emulates unix permissions (0666/0444 only), so the
-	// preserved-mode assertion is meaningful elsewhere only.
-	if st, err := os.Stat(filepath.Join(dest, "sessions", "abc", "s1.jsonl")); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o644) {
-		t.Errorf("mode not preserved: %v %v", st, err)
+	// Migration tightens copied files to private, preserving the owner bits
+	// but stripping group/other (mode & 0o700), so a 0644 source lands 0600.
+	// Windows emulates unix permissions (0666/0444 only), so assert elsewhere.
+	if st, err := os.Stat(filepath.Join(dest, "sessions", "abc", "s1.jsonl")); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o600) {
+		t.Errorf("mode not tightened to 0600: %v %v", st, err)
 	}
 	// In-dir symlink target rewritten to the new location.
 	if target, err := os.Readlink(filepath.Join(dest, "connectors", "link.json")); err != nil || target != filepath.Join(dest, "connectors", "real.json") {

@@ -35,6 +35,7 @@ import (
 	"terva.sh/terva/packages/agent/chat/connhost"
 	"terva.sh/terva/packages/agent/connproto"
 	"terva.sh/terva/packages/agent/connsdk"
+	"terva.sh/terva/packages/privfs"
 )
 
 const (
@@ -142,12 +143,12 @@ func (p *pipeFrames) WriteFrame(b []byte) error {
 // Connect starts the engine and runs the protocol handshake + connect
 // round trips through the pipes.
 func (c *Conn) Connect(ctx context.Context) (chat.Identity, error) {
-	if err := os.MkdirAll(c.dataDir(), 0o755); err != nil {
+	if err := privfs.MkdirAll(c.dataDir()); err != nil {
 		return chat.Identity{}, err
 	}
 	logPath := filepath.Join(c.tervaHome, "logs", "connector-"+c.name+".log")
-	_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	_ = privfs.MkdirAll(filepath.Dir(logPath))
+	logFile, err := privfs.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY)
 	if err != nil {
 		return chat.Identity{}, fmt.Errorf("open connector log: %w", err)
 	}

@@ -44,7 +44,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -260,7 +259,7 @@ func (c *vertexTokenCache) get(ctx context.Context, cfg *vertexConfig) (string, 
 		return "", fmt.Errorf("vertex: token exchange: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readBodyCapped(resp.Body, maxDiscoveryBodyBytes)
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("vertex: token exchange http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}

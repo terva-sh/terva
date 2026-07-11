@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -511,9 +510,9 @@ func (c *openaiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 		return nil, fmt.Errorf("%s: %w", c.Name(), err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
+		snippet := errorBodySnippet(resp.Body)
 		resp.Body.Close()
-		return nil, NewHTTPError(c.Name(), resp.StatusCode, resp.Header.Get("Retry-After"), string(b))
+		return nil, NewHTTPError(c.Name(), resp.StatusCode, resp.Header.Get("Retry-After"), snippet)
 	}
 
 	// Capture x-ratelimit-* off every successful response (free, passive —

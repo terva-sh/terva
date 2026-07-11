@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 )
@@ -37,7 +36,7 @@ func RequestKimiDeviceAuthorization(ctx context.Context) (KimiDeviceAuthorizatio
 		return KimiDeviceAuthorization{}, fmt.Errorf("kimi device authorization: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readCappedBody(resp.Body, maxTokenBodyBytes)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return KimiDeviceAuthorization{}, fmt.Errorf("kimi device authorization http %d: %s", resp.StatusCode, string(body))
 	}
@@ -87,7 +86,7 @@ func pollKimiDeviceTokenOnce(ctx context.Context, deviceCode string) (*OAuthToke
 		return nil, 0, fmt.Errorf("kimi token poll: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readCappedBody(resp.Body, maxTokenBodyBytes)
 	var raw struct {
 		AccessToken      string  `json:"access_token"`
 		RefreshToken     string  `json:"refresh_token"`

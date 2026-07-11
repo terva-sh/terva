@@ -318,6 +318,14 @@ func (m *Manager) loadOne(ctx context.Context, dir string, explicit bool) error 
 	if mf.Name == "" {
 		return errors.New("manifest: name is required")
 	}
+	if !isPlainExtensionName(mf.Name) {
+		// The manifest name becomes a map key and is joined into the host's
+		// ext-data/<name> and ext-<name>.log paths (extdriver). A value with
+		// path separators, "."/"..", or an absolute path could make those
+		// host-created paths escape their intended directory, so reject it
+		// with the same plain-element rule adopt-list names must satisfy.
+		return fmt.Errorf("manifest: name %q must be a plain identifier (no path separators, %q, %q, or absolute paths)", mf.Name, ".", "..")
+	}
 	hasTheme := hasExtensionTheme(dir)
 	if mf.Exec == "" && !hasTheme {
 		return errors.New("manifest: exec is required")

@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -615,9 +614,9 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 		return nil, fmt.Errorf("anthropic: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
+		snippet := errorBodySnippet(resp.Body)
 		resp.Body.Close()
-		return nil, NewHTTPError("anthropic", resp.StatusCode, resp.Header.Get("Retry-After"), string(b))
+		return nil, NewHTTPError("anthropic", resp.StatusCode, resp.Header.Get("Retry-After"), snippet)
 	}
 
 	out := make(chan Event, 16)
