@@ -1,0 +1,10 @@
+[
+  { "names": [], "want": "" },
+  { "names": ["bash"], "want": "bash" },
+  { "names": ["read", "read"], "want": "read ×2" },
+  { "names": ["bash", "bash", "bash", "read", "edit"], "want": "bash ×3, read, edit" },
+  { "names": ["z", "a", "z"], "want": "z ×2, a" },
+  { "names": ["a", "b", "c", "d"], "want": "a, b, c, d" },
+  { "names": ["a", "b", "c", "d", "e"], "want": "a, b, c, d, …" },
+  { "names": ["a", "a", "b", "b", "c", "c", "d", "d", "e", "e"], "want": "a ×2, b ×2, c ×2, d ×2, …" }
+]

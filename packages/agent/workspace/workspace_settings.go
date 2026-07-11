@@ -36,6 +36,7 @@ var reasoningOptions = []ctrlproto.SettingOption{
 	{Value: "medium", Label: i18n.M("medium")},
 	{Value: "high", Label: i18n.M("high")},
 	{Value: "maximum", Label: i18n.M("maximum")},
+	{Value: "max", Label: i18n.M("max")},
 }
 
 // localizeOptions returns a copy of opts with each label translated to the

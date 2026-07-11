@@ -114,6 +114,28 @@ func TestStatusBarThinkingLevelBetweenModelAndStats(t *testing.T) {
 }
 
 // Extension status segments appear as ambient atoms on the meters row.
+func TestThinkingLevelLabel(t *testing.T) {
+	// "max" is a distinct tier above "maximum" and must show as its own
+	// label, not collapse into "maximum" (which would hide the selection).
+	cases := map[string]string{
+		"":        "",
+		"off":     "",
+		"minimum": "minimal",
+		"min":     "minimal",
+		"low":     "low",
+		"medium":  "medium",
+		"high":    "high",
+		"maximum": "maximum",
+		"xhigh":   "maximum",
+		"max":     "max",
+	}
+	for in, want := range cases {
+		if got := thinkingLevelLabel(in); got != want {
+			t.Errorf("thinkingLevelLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestStatusBarExtStatusSegments(t *testing.T) {
 	lines := StatusBar(StatusBarParams{
 		Theme:     Dark,

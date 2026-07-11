@@ -85,6 +85,7 @@ func (i *Interactive) openSettingsDialog() {
 		{Value: "medium", Label: i18n.T("medium"), Desc: i18n.T("moderate (~8k tokens)")},
 		{Value: "high", Label: i18n.T("high"), Desc: i18n.T("deep (~16k tokens)")},
 		{Value: "maximum", Label: i18n.T("maximum"), Desc: i18n.T("highest (~32k tokens)")},
+		{Value: "max", Label: i18n.T("max"), Desc: i18n.T("native max — GPT-5.6 / adaptive Claude; else same as maximum")},
 	}
 	reasoning := provider.NormalizeReasoning(i.cfg.Reasoning)
 	reasoningChoice := 0
@@ -435,7 +436,7 @@ func (i *Interactive) applyThemeNow(name string) {
 			_ = i.cfg.SettingsStore.SetTheme("auto")
 		}
 		i.cfg.ThemeName = ""
-		th, applied, _ = tui.LoadThemeFromHome(i.cfg.TervaHome, "auto", detected)
+		th, _, _ = tui.LoadThemeFromHome(i.cfg.TervaHome, "auto", detected)
 		i.mu.Lock()
 		i.statusErr = i18n.T("theme missing; reset to default")
 		i.mu.Unlock()

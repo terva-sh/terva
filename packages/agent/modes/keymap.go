@@ -247,15 +247,18 @@ func (i *Interactive) keyToggleExpand(context.Context, tui.Key) keyOutcome {
 }
 
 // keyCycleToolDisplay (ctrl+t) cycles how tool calls render: full
-// bordered boxes → one-line minimal summaries → hidden → back to
-// boxes. Like ctrl+o this rewrites already-emitted transcript rows,
-// so it forces a full clear+replay rather than editing scrollback.
+// bordered boxes → one-line minimal summaries → grouped (one line per
+// run of calls) → hidden → back to boxes. Like ctrl+o this rewrites
+// already-emitted transcript rows, so it forces a full clear+replay
+// rather than editing scrollback.
 func (i *Interactive) keyCycleToolDisplay(context.Context, tui.Key) keyOutcome {
 	i.mu.Lock()
 	switch i.view.ToolDisplay {
 	case tui.ToolDisplayFull:
 		i.view.ToolDisplay = tui.ToolDisplayMinimal
 	case tui.ToolDisplayMinimal:
+		i.view.ToolDisplay = tui.ToolDisplayGrouped
+	case tui.ToolDisplayGrouped:
 		i.view.ToolDisplay = tui.ToolDisplayHidden
 	default:
 		i.view.ToolDisplay = tui.ToolDisplayFull

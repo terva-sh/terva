@@ -827,8 +827,10 @@ func thinkingLevelLabel(level string) string {
 		return ""
 	case "minimum", "minimal", "min":
 		return "minimal"
-	case "maximum", "max", "xhigh":
+	case "maximum", "xhigh":
 		return "maximum"
+	case "max":
+		return "max"
 	default:
 		return strings.ToLower(strings.TrimSpace(level))
 	}

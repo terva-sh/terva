@@ -27,7 +27,7 @@ var helpKeyRows = [][2]string{
 	{"alt+← / alt+→", i18n.M("jump one word back / forward")},
 	{"ctrl+l", i18n.M("redraw the screen")},
 	{"ctrl+o", i18n.M("expand / collapse long tool results")},
-	{"ctrl+t", i18n.M("cycle tool display (boxes - minimal - hidden)")},
+	{"ctrl+t", i18n.M("cycle tool display (boxes - minimal - grouped - hidden)")},
 	{"ctrl+v", i18n.M("paste a clipboard image into the prompt (also /paste)")},
 	{"pgup / pgdn", i18n.M("scroll the chat one page up / down")},
 	{"up / down", i18n.M("move within multi-line input - scroll chat at input edge")},
