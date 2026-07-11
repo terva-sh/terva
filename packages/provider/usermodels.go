@@ -60,20 +60,21 @@ type UserProvider struct {
 // spelling for the image-input capability ("image" present ⇒ vision);
 // an explicit Capabilities key wins over it.
 type UserModel struct {
-	ID              string          `json:"id"`
-	Name            string          `json:"name"`
-	Reasoning       *bool           `json:"reasoning"`
-	ContextWindow   int             `json:"contextWindow"`
-	MaxTokens       int             `json:"maxTokens"`
-	PriceInput      float64         `json:"priceInput"`
-	PriceOutput     float64         `json:"priceOutput"`
-	PriceCacheRead  float64         `json:"priceCacheRead"`
-	PriceCacheWrite float64         `json:"priceCacheWrite"`
-	BaseURL         string          `json:"baseUrl,omitempty"`
-	Temperature     *float32        `json:"temperature,omitempty"` // default sampling temperature (0–2); nil = inherit
-	Capabilities    map[string]bool `json:"capabilities,omitempty"`
-	Input           []string        `json:"input"` // legacy capability spelling, see above
-	API             string          `json:"api"`   // informational only
+	ID                   string          `json:"id"`
+	Name                 string          `json:"name"`
+	Reasoning            *bool           `json:"reasoning"`
+	ContextWindow        int             `json:"contextWindow"`
+	DesiredContextWindow int             `json:"desiredContextWindow"`
+	MaxTokens            int             `json:"maxTokens"`
+	PriceInput           float64         `json:"priceInput"`
+	PriceOutput          float64         `json:"priceOutput"`
+	PriceCacheRead       float64         `json:"priceCacheRead"`
+	PriceCacheWrite      float64         `json:"priceCacheWrite"`
+	BaseURL              string          `json:"baseUrl,omitempty"`
+	Temperature          *float32        `json:"temperature,omitempty"` // default sampling temperature (0–2); nil = inherit
+	Capabilities         map[string]bool `json:"capabilities,omitempty"`
+	Input                []string        `json:"input"` // legacy capability spelling, see above
+	API                  string          `json:"api"`   // informational only
 }
 
 // UserOverride is one models.json entry held in the user layer: the
@@ -127,10 +128,13 @@ func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
 				warnings = append(warnings, fmt.Sprintf("models.json: provider %q entry #%d has empty id; skipped", providerName, i))
 				continue
 			}
-			if um.ContextWindow < 0 || um.MaxTokens < 0 {
-				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s has negative contextWindow/maxTokens; clamped to 0", normalized, um.ID))
+			if um.ContextWindow < 0 || um.DesiredContextWindow < 0 || um.MaxTokens < 0 {
+				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s has negative contextWindow/desiredContextWindow/maxTokens; clamped to 0", normalized, um.ID))
 				if um.ContextWindow < 0 {
 					um.ContextWindow = 0
+				}
+				if um.DesiredContextWindow < 0 {
+					um.DesiredContextWindow = 0
 				}
 				if um.MaxTokens < 0 {
 					um.MaxTokens = 0
@@ -145,19 +149,20 @@ func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
 				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s: %s", normalized, um.ID, w))
 			}
 			m := Model{
-				Provider:        normalized,
-				ID:              um.ID,
-				DisplayName:     um.Name,
-				ContextWindow:   um.ContextWindow,
-				MaxOutput:       um.MaxTokens,
-				PriceInput:      um.PriceInput,
-				PriceOutput:     um.PriceOutput,
-				PriceCacheRead:  um.PriceCacheRead,
-				PriceCacheWrite: um.PriceCacheWrite,
-				BaseURL:         um.BaseURL,
-				Temperature:     um.Temperature,
-				Source:          "user",
-				Caps:            caps,
+				Provider:             normalized,
+				ID:                   um.ID,
+				DisplayName:          um.Name,
+				ContextWindow:        um.ContextWindow,
+				DesiredContextWindow: um.DesiredContextWindow,
+				MaxOutput:            um.MaxTokens,
+				PriceInput:           um.PriceInput,
+				PriceOutput:          um.PriceOutput,
+				PriceCacheRead:       um.PriceCacheRead,
+				PriceCacheWrite:      um.PriceCacheWrite,
+				BaseURL:              um.BaseURL,
+				Temperature:          um.Temperature,
+				Source:               "user",
+				Caps:                 caps,
 			}
 			// The legacy Reasoning field and capabilities.reasoning are
 			// two spellings of the same fact; the top-level field wins

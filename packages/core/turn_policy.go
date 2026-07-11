@@ -208,12 +208,15 @@ const AutoCompactKeepTail = 4
 const ContextWarnFraction = 0.70
 
 // ContextUsage reports the most recent request's context consumption
-// (input + cache tokens) and the model's window from the live catalog.
-// window is 0 when the model is unknown; used is 0 before any request
-// lands usage.
+// (input + cache tokens) and the model's working window from the live
+// catalog. The working window is EffectiveContextWindow — the desired
+// window when the user (or catalog) set one below the model max, else the
+// model max — so auto-compaction can be pinned below a pricing surcharge
+// without lying about the model's true ceiling. window is 0 when the
+// model is unknown; used is 0 before any request lands usage.
 func (a *Agent) ContextUsage() (used, window int) {
 	if m, err := provider.FindModel("", a.Model); err == nil {
-		window = m.ContextWindow
+		window = m.EffectiveContextWindow()
 	}
 	last := a.LastTurnUsage()
 	used = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens

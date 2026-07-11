@@ -157,13 +157,18 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 		sb.WriteString("session: none (live-only conversation; not persisted)\n")
 	}
 
-	// Context-window usage. The window comes from the live catalog
-	// (so models.json overrides are reflected); usage is the most
-	// recent completed turn's input, matching the status-bar gauge.
+	// Context-window usage. The window is the model's effective working
+	// window (EffectiveContextWindow — the desired working window when set
+	// below the model max, else the max), so this percentage matches the
+	// status-bar gauge and the auto-compaction threshold. models.json
+	// overrides are reflected; usage is the most recent completed turn's
+	// input.
 	ctxWindow := 0
+	modelMax := 0
 	if model != "" {
 		if m, err := provider.FindModel(provName, model); err == nil {
-			ctxWindow = m.ContextWindow
+			ctxWindow = m.EffectiveContextWindow()
+			modelMax = m.ContextWindow
 		}
 	}
 	used := last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
@@ -171,8 +176,12 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 	case !haveAgent:
 		sb.WriteString("context: live usage unavailable (no live agent)\n")
 	case ctxWindow > 0 && used > 0:
-		fmt.Fprintf(&sb, "context: %s / %s tokens (%.1f%% of window), as of the last turn\n",
+		fmt.Fprintf(&sb, "context: %s / %s tokens (%.1f%% of window), as of the last turn",
 			fmtTokens(used), fmtTokens(ctxWindow), float64(used)/float64(ctxWindow)*100)
+		if modelMax > ctxWindow {
+			fmt.Fprintf(&sb, " (working window; model max %s)", fmtTokens(modelMax))
+		}
+		sb.WriteString("\n")
 	case ctxWindow > 0:
 		fmt.Fprintf(&sb, "context: window %s tokens; no turn has completed yet\n", fmtTokens(ctxWindow))
 	case used > 0:

@@ -367,3 +367,24 @@ func TestContextFractionUnknownModelIsZero(t *testing.T) {
 		t.Fatal("ShouldAutoCompact true with no usage data")
 	}
 }
+
+// TestContextUsageUsesEffectiveWindow pins the model-max vs working-window
+// split: gpt-5.6-sol has a 1.05M model max but ships a 272K desired working
+// window (the cost-safe default), so auto-compaction must measure against
+// 272K. At 200k used that is ~0.74 — over the warn line — where the 1.05M
+// max would report a harmless ~0.19 and never compact before the surcharge.
+func TestContextUsageUsesEffectiveWindow(t *testing.T) {
+	a := NewAgent(nil, "gpt-5.6-sol", "", Registry{})
+	a.SeedLastTurnUsage(provider.Usage{InputTokens: 200_000})
+
+	used, window := a.ContextUsage()
+	if window != 272000 {
+		t.Fatalf("window = %d, want 272000 (effective working window, not the 1.05M max)", window)
+	}
+	if used != 200_000 {
+		t.Fatalf("used = %d, want 200000", used)
+	}
+	if f := a.ContextFraction(); f < 0.70 || f >= 0.85 {
+		t.Fatalf("ContextFraction = %v, want in [0.70, 0.85) against the 272K working window", f)
+	}
+}

@@ -76,6 +76,17 @@ var scalarParams = []ScalarParam{
 		},
 	},
 	{
+		Key: "desiredContextWindow", Label: "desired context window", Kind: ScalarInt,
+		Default:     func(m Model) string { return posIntStr(m.DesiredContextWindow) },
+		Override:    func(um UserModel) string { return posIntStr(um.DesiredContextWindow) },
+		SetOverride: func(um *UserModel, s string) error { return setNonNegInt(&um.DesiredContextWindow, s) },
+		Merge: func(dst *Model, src Model) {
+			if src.DesiredContextWindow > 0 {
+				dst.DesiredContextWindow = src.DesiredContextWindow
+			}
+		},
+	},
+	{
 		Key: "maxTokens", Label: "max tokens", Kind: ScalarInt,
 		Default:     func(m Model) string { return posIntStr(m.MaxOutput) },
 		Override:    func(um UserModel) string { return posIntStr(um.MaxTokens) },

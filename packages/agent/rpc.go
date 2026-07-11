@@ -376,11 +376,13 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 		out := []map[string]any{}
 		for _, m := range provider.ModelsForProvider(s.provider) {
 			out = append(out, map[string]any{
-				"id":             m.ID,
-				"provider":       m.Provider,
-				"context_window": m.ContextWindow,
-				"max_output":     m.MaxOutput,
-				"reasoning":      m.Reasoning,
+				"id":                     m.ID,
+				"provider":               m.Provider,
+				"context_window":         m.ContextWindow, // model max
+				"desired_context_window": m.DesiredContextWindow,
+				"context_surcharge_at":   m.ContextSurchargeAt,
+				"max_output":             m.MaxOutput,
+				"reasoning":              m.Reasoning,
 			})
 		}
 		s.writeResponse(id, cmd, map[string]any{"models": out})
@@ -454,7 +456,14 @@ func (s *rpcServer) runPrompt(id, message string, images []struct {
 	s.writeEvent(map[string]any{"type": "done"})
 }
 
-// runCompact mirrors runPrompt but for compaction.
+// runCompact mirrors runPrompt's terminal-event contract for an explicit
+// compact request: it emits at most one result event and then exactly one
+// terminal "done" on every outcome, so a generic RPC loop can key on "done"
+// for prompts and compactions alike. compact_done carries the (possibly empty)
+// summary on success/no-op; a real failure rides the canonical "error" field
+// (matching runPrompt, --json, and the SDK — not the old "message"); a
+// cancellation emits no result event (the prior turn signal already covers it)
+// but still terminates with "done".
 func (s *rpcServer) runCompact(id string) {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
@@ -465,22 +474,18 @@ func (s *rpcServer) runCompact(id string) {
 
 	s.writeResponse(id, "compact", map[string]any{"started": true})
 	summary, err := s.agent.Compact(subCtx, core.AutoCompactKeepTail, nil)
-	if err != nil {
-		if errors.Is(err, core.ErrNothingToCompact) {
-			// Explicit /compact with nothing to summarize — benign no-op,
-			// not an error.
-			s.writeEvent(map[string]any{"type": "compact_done", "summary": ""})
-			return
-		}
-		if !errors.Is(err, context.Canceled) {
-			s.writeEvent(map[string]any{"type": "error", "message": err.Error()})
-		}
-		return
+	switch {
+	case err == nil:
+		s.writeEvent(map[string]any{"type": "compact_done", "summary": summary})
+	case errors.Is(err, core.ErrNothingToCompact):
+		// Explicit /compact with nothing to summarize — benign no-op.
+		s.writeEvent(map[string]any{"type": "compact_done", "summary": ""})
+	case errors.Is(err, context.Canceled):
+		// Cancelled mid-compaction; terminate without a result event.
+	default:
+		s.writeEvent(map[string]any{"type": "error", "error": err.Error()})
 	}
-	s.writeEvent(map[string]any{
-		"type":    "compact_done",
-		"summary": summary,
-	})
+	s.writeEvent(map[string]any{"type": "done"})
 }
 
 // snapshotState builds the get_state response.

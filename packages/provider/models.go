@@ -10,9 +10,24 @@ type Model struct {
 	Provider      string // "anthropic" | "openai"
 	ID            string // API id
 	DisplayName   string
-	ContextWindow int
-	MaxOutput     int
-	Reasoning     bool // supports reasoning/thinking
+	ContextWindow int // model max — the hard ceiling (maxTok clamp, display)
+
+	// DesiredContextWindow is the working window that drives auto-compaction
+	// (the warn/compact thresholds are fractions of it, via
+	// EffectiveContextWindow). It lets a user keep a large-window model but
+	// compact earlier — e.g. to stay under a long-context pricing surcharge —
+	// without pretending the model is smaller. 0 means "use ContextWindow";
+	// a value above ContextWindow is clamped down. User-settable per model
+	// via models.json `desiredContextWindow`.
+	DesiredContextWindow int
+	// ContextSurchargeAt is the input-token count above which the provider
+	// charges a higher rate (OpenAI bills 2x input / 1.5x output past 272K on
+	// GPT-5.6). Informational: it names the natural cost-safe value for
+	// DesiredContextWindow. 0 means no surcharge tier.
+	ContextSurchargeAt int
+
+	MaxOutput int
+	Reasoning bool // supports reasoning/thinking
 
 	// AdaptiveThinking marks Anthropic models that only support the
 	// adaptive thinking mode (Opus 4.7+). These reject explicit
@@ -59,6 +74,23 @@ type Model struct {
 	// params). Launch resolve order: --temperature flag > per-model > global
 	// config. One of the registry-driven scalar params (see ScalarParams).
 	Temperature *float32
+}
+
+// EffectiveContextWindow is the window used for auto-compaction: the
+// desired working window when set and sane, otherwise the model max.
+// A desired window above the model max is clamped down (you cannot make
+// the model hold more than it can); a desired window on a model whose max
+// is unknown (0) is honored as-is. The hard ceiling — maxTok clamp and
+// capability display — always uses ContextWindow; this only moves the
+// warn/compact thresholds.
+func (m Model) EffectiveContextWindow() int {
+	if m.DesiredContextWindow > 0 {
+		if m.ContextWindow > 0 && m.DesiredContextWindow > m.ContextWindow {
+			return m.ContextWindow
+		}
+		return m.DesiredContextWindow
+	}
+	return m.ContextWindow
 }
 
 // Capability names one per-model feature flag. Typed string, not
@@ -435,18 +467,21 @@ var Catalog = []Model{
 	// the Codex subscription backend. `gpt-5.6` upstream aliases Sol.
 	{
 		Provider: "openai-codex", ID: "gpt-5.6-sol", DisplayName: "GPT-5.6 Sol",
-		ContextWindow: 1050000, MaxOutput: 128000, Reasoning: true,
-		PriceInput: 5, PriceOutput: 30, PriceCacheRead: 0.5,
+		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
+		MaxOutput: 128000, Reasoning: true,
+		PriceInput: 5, PriceOutput: 30, PriceCacheRead: 0.5, PriceCacheWrite: 6.25,
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.6-terra", DisplayName: "GPT-5.6 Terra",
-		ContextWindow: 1050000, MaxOutput: 128000, Reasoning: true,
-		PriceInput: 2.5, PriceOutput: 15, PriceCacheRead: 0.25,
+		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
+		MaxOutput: 128000, Reasoning: true,
+		PriceInput: 2.5, PriceOutput: 15, PriceCacheRead: 0.25, PriceCacheWrite: 3.125,
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.6-luna", DisplayName: "GPT-5.6 Luna",
-		ContextWindow: 1050000, MaxOutput: 128000, Reasoning: true,
-		PriceInput: 1, PriceOutput: 6, PriceCacheRead: 0.1,
+		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
+		MaxOutput: 128000, Reasoning: true,
+		PriceInput: 1, PriceOutput: 6, PriceCacheRead: 0.1, PriceCacheWrite: 1.25,
 	},
 }
 
