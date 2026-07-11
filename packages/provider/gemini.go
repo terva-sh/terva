@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -416,7 +415,7 @@ func geminiThinkingConfig(modelID, level string) *gemThinkingConfig {
 			} else {
 				lvl = "MEDIUM"
 			}
-		case "high", "maximum":
+		case "high", "maximum", "max":
 			lvl = "HIGH"
 		default:
 			return nil
@@ -486,9 +485,9 @@ func (c *geminiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 		return nil, fmt.Errorf("google: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
+		snippet := errorBodySnippet(resp.Body)
 		resp.Body.Close()
-		return nil, NewHTTPError("google", resp.StatusCode, resp.Header.Get("Retry-After"), string(b))
+		return nil, NewHTTPError("google", resp.StatusCode, resp.Header.Get("Retry-After"), snippet)
 	}
 
 	out := make(chan Event, 16)

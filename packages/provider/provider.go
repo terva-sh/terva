@@ -245,10 +245,12 @@ type Request struct {
 	Tools       []Tool
 	MaxTokens   int
 	Temperature *float32
-	// Reasoning is "", "minimum", "low", "medium", "high", or "maximum".
-	// Empty disables reasoning. Budget-based providers map these to roughly
-	// 1k/2k/8k/16k/32k thinking tokens; effort-based providers map them onto
-	// their closest supported reasoning_effort values.
+	// Reasoning is "", "minimum", "low", "medium", "high", "maximum", or
+	// "max". Empty disables reasoning. Budget-based providers map these to
+	// roughly 1k/2k/8k/16k/32k thinking tokens; effort-based providers map
+	// them onto their closest supported reasoning_effort values. "max" is
+	// sent natively only to models that support it (GPT-5.6, adaptive
+	// Claude) and clamped to the "maximum" effort elsewhere.
 	Reasoning string
 
 	// EphemeralContext is host-assembled, host-wrapped text injected into

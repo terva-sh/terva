@@ -1,9 +1,46 @@
 package provider
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 )
+
+func TestCodexNestedStreamError(t *testing.T) {
+	// The GPT-5.6 preview backend reports errors nested under "error".
+	// The handler must surface that message, not a blank string.
+	c := NewOpenAICodex("token", "acct", "").(*codexClient)
+	resp := &http.Response{
+		Body: io.NopCloser(strings.NewReader("data: {\"type\":\"error\",\"error\":{\"code\":\"model_not_available\",\"message\":\"limited preview\"}}\n\n")),
+	}
+	out := make(chan Event, 16)
+	go c.runStream(context.Background(), resp, Request{Model: "gpt-5.6-sol"}, out)
+
+	var got error
+	for ev := range out {
+		if done, ok := ev.(EventDone); ok {
+			got = done.Err
+		}
+	}
+	if got == nil || got.Error() != "openai-codex: limited preview" {
+		t.Fatalf("error = %v", got)
+	}
+}
+
+// GPT-5.6 supports a native "max" reasoning effort above xhigh; the
+// codex request builder must send it verbatim for those models.
+func TestGPT56UsesNativeMaxReasoningEffort(t *testing.T) {
+	c := NewOpenAICodex("token", "acct", "").(*codexClient)
+	wire, err := c.buildRequest(Request{Model: "gpt-5.6-sol", Reasoning: "max"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire.Reasoning == nil || wire.Reasoning.Effort != "max" {
+		t.Fatalf("reasoning = %+v, want effort=max", wire.Reasoning)
+	}
+}
 
 // An image-only tool result must not serialize to an empty
 // function_call_output (the Responses API may reject it) and a

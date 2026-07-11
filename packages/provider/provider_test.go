@@ -242,6 +242,19 @@ func TestAnthropicAdaptiveThinking(t *testing.T) {
 		t.Fatalf("want effort=xhigh, got %+v", wire.OutputConfig)
 	}
 
+	// max -> native max effort, a separate tier above xhigh on adaptive models.
+	wire, err = c.buildRequest(Request{
+		Model:     "claude-opus-4-8",
+		Reasoning: "max",
+		Messages:  []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire.OutputConfig == nil || wire.OutputConfig.Effort != "max" {
+		t.Fatalf("want effort=max, got %+v", wire.OutputConfig)
+	}
+
 	// Opus 4.5 -> budget-based thinking, no output_config, temperature kept.
 	wire, err = c.buildRequest(Request{
 		Model:       "claude-opus-4-5",

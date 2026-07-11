@@ -3,7 +3,10 @@ package provider
 import "strings"
 
 // NormalizeReasoning canonicalizes terva's user-facing thinking levels.
-// Empty string means reasoning/thinking is disabled.
+// Empty string means reasoning/thinking is disabled. "maximum" is the
+// long-standing top tier (mapped to xhigh effort); "max" is a separate
+// opt-in tier above it, sent natively only to models that support it
+// (GPT-5.6, adaptive Claude) and clamped to the "maximum" effort elsewhere.
 func NormalizeReasoning(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "", "off", "none", "no", "false", "disabled":
@@ -16,8 +19,10 @@ func NormalizeReasoning(level string) string {
 		return "medium"
 	case "hi", "high":
 		return "high"
-	case "max", "maximum":
+	case "maximum":
 		return "maximum"
+	case "max":
+		return "max"
 	default:
 		return strings.ToLower(strings.TrimSpace(level))
 	}
@@ -35,7 +40,7 @@ func ReasoningBudget(level string) int {
 		return 8192
 	case "high":
 		return 16384
-	case "maximum":
+	case "maximum", "max":
 		return 32768
 	default:
 		return 0
@@ -57,6 +62,9 @@ func AnthropicAdaptiveEffort(level string) string {
 		return "high"
 	case "maximum":
 		return "xhigh"
+	case "max":
+		// Adaptive models accept a native max effort above xhigh.
+		return "max"
 	default:
 		return ""
 	}
@@ -72,7 +80,8 @@ func OpenAIReasoningEffort(level string) string {
 		return "low"
 	case "medium":
 		return "medium"
-	case "high", "maximum":
+	case "high", "maximum", "max":
+		// Generic compatible endpoints top out at high; clamp both top tiers.
 		return "high"
 	default:
 		return ""
@@ -97,6 +106,8 @@ func OpenAICompatAnthropicEffort(level string) string {
 		return "high"
 	case "maximum":
 		return "xhigh"
+	case "max":
+		return "max"
 	default:
 		return ""
 	}
@@ -104,8 +115,9 @@ func OpenAICompatAnthropicEffort(level string) string {
 
 // OpenAICodexReasoningEffort maps terva levels onto the ChatGPT/Codex
 // Responses backend enum. That backend rejects "minimal" and uses
-// "xhigh" for the highest tier on recent GPT-5.x models.
-func OpenAICodexReasoningEffort(level string) string {
+// "xhigh" for the top of the GPT-5.x tier. GPT-5.6 additionally supports
+// a native "max" effort above xhigh; other models clamp "max" to xhigh.
+func OpenAICodexReasoningEffort(level, model string) string {
 	switch NormalizeReasoning(level) {
 	case "minimum", "low":
 		return "low"
@@ -114,6 +126,11 @@ func OpenAICodexReasoningEffort(level string) string {
 	case "high":
 		return "high"
 	case "maximum":
+		return "xhigh"
+	case "max":
+		if strings.HasPrefix(strings.ToLower(model), "gpt-5.6-") {
+			return "max"
+		}
 		return "xhigh"
 	default:
 		return ""
