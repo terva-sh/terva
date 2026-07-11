@@ -19,7 +19,7 @@ import (
 // (handled=true, err) if rawArgs starts with "ext"; otherwise
 // (handled=false, nil) so the main router falls through to the
 // regular flag parser.
-func runExtCommand(rawArgs []string) (handled bool, err error) {
+func runExtCommand(rawArgs []string, version string) (handled bool, err error) {
 	if len(rawArgs) == 0 || rawArgs[0] != "ext" {
 		return false, nil
 	}
@@ -30,6 +30,8 @@ func runExtCommand(rawArgs []string) (handled bool, err error) {
 	switch rawArgs[1] {
 	case "list":
 		return true, extList()
+	case "doctor":
+		return true, extDoctor(version)
 	case "logs":
 		return true, extLogs(rawArgs[2:])
 	case "enable":
@@ -60,6 +62,7 @@ func printExtHelp() {
 
 usage:
   terva ext list                    list installed extensions and their state
+  terva ext doctor                  diagnose extension discovery and registration
   terva ext logs <name> [-f]        cat / tail an extension's stderr log
   terva ext enable <name>           re-enable a disabled extension
   terva ext disable <name>          disable without removing

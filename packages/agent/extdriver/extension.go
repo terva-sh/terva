@@ -143,6 +143,14 @@ type Extension struct {
 	readyCh   chan struct{}
 	readyOnce sync.Once
 
+	// Diagnostics for `terva ext doctor` (guarded by mu): autoReady and
+	// readyTimedOut record how the ready gate resolved; diagnostics
+	// accumulates human-readable notes (name conflicts, ...). Read-only
+	// reporting — recording them never changes driver behavior.
+	autoReady     bool
+	readyTimedOut bool
+	diagnostics   []string
+
 	// pending command invocations waiting on a CommandResponseFromExt
 	// keyed by the id we sent in CommandInvokedFromHost.
 	// pendingTool is the same idea for tool calls.
@@ -186,6 +194,15 @@ type Extension struct {
 	connectorRole bool
 	chatTun       *ChatTunnel
 	dataDir       string
+}
+
+// recordDiagnostic appends a human-readable diagnostic note for
+// `terva ext doctor`. Safe to call under the Driver's mu (the lock order
+// is always driver.mu -> ext.mu, matching Driver.Diagnostics).
+func (ext *Extension) recordDiagnostic(msg string) {
+	ext.mu.Lock()
+	defer ext.mu.Unlock()
+	ext.diagnostics = append(ext.diagnostics, msg)
 }
 
 // newExtension allocates an Extension with its maps and the ready

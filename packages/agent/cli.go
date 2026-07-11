@@ -19,11 +19,13 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/agent/run"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/envcompat"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -87,6 +89,16 @@ func Run(rawArgs []string, version string) error {
 		fmt.Fprintln(os.Stderr, note)
 	}
 
+	// One-time permissions repair: older installs wrote config.json (which
+	// holds plaintext extension secrets), transcripts, sidecars, and logs as
+	// 0644 under 0755 dirs, readable by other local users. Tighten any
+	// pre-existing group/world-readable state to owner-only, once, gated by a
+	// marker file so the walk never repeats. New writes already use private
+	// modes via packages/privfs.
+	if n, err := privfs.RepairOnce(config.TervaHome()); err == nil && n > 0 {
+		fmt.Fprintf(os.Stderr, "note: tightened permissions on %d private file(s) under %s\n", n, config.TervaHome())
+	}
+
 	// External chat connectors ($TERVA_HOME/connectors — global only,
 	// never project-local) register before any dispatch so `terva bot`
 	// and the TUI's /connect both see them alongside the compiled-in
@@ -124,7 +136,7 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runProjectCommand(rawArgs); handled {
 		return err
 	}
-	if handled, err := runExtCommand(rawArgs); handled {
+	if handled, err := runExtCommand(rawArgs, version); handled {
 		return err
 	}
 	if handled, err := runPersonaCommand(rawArgs); handled {
@@ -183,7 +195,7 @@ func Run(rawArgs []string, version string) error {
 
 	args, err := build.ParseArgs(rawArgs)
 	if err != nil {
-		build.PrintHelp(version)
+		PrintHelp(version)
 		return err
 	}
 	if args.Help {
@@ -194,7 +206,7 @@ func Run(rawArgs []string, version string) error {
 		case build.ModeWeb:
 			build.PrintWebHelp()
 		default:
-			build.PrintHelp(version)
+			PrintHelp(version)
 		}
 		return nil
 	}
@@ -395,7 +407,7 @@ func runPrintMode(ctx context.Context, args build.Args, version string) error {
 	}
 
 	start := len(ag.Messages())
-	err = modes.RunPrint(ctx, ag, prompt, nil, os.Stdout)
+	err = run.Print(ctx, ag, prompt, nil, os.Stdout)
 	WriteNewTranscript(ag, sess, start)
 	return err
 }

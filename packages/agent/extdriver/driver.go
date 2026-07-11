@@ -15,6 +15,7 @@ import (
 
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/procenv"
+	"terva.sh/terva/packages/privfs"
 )
 
 // HostHooks is the small interface the driver calls back into the
@@ -182,6 +183,14 @@ func New(tervaHome, cwd, tervaVersion, provider, model string, hooks HostHooks) 
 // already loaded is a no-op (the higher-priority discovery location, or
 // the explicit --ext path, already won).
 func (d *Driver) Load(ctx context.Context, dir string, mf Manifest) error {
+	// Defense in depth: the manifest name becomes a map key and is joined into
+	// ext-data/<name> and ext-<name>.log host paths below, so a value with
+	// path separators, "."/"..", or an absolute path could escape its intended
+	// directory. The manager validates this too, but Load is the lower-level
+	// API any caller reaches, so guard it here as well.
+	if !isSafeManifestName(mf.Name) {
+		return fmt.Errorf("extension manifest name %q is not a safe path element", mf.Name)
+	}
 	ext := newExtension(mf, dir)
 
 	// Claim the name atomically BEFORE spawning. The dup-check and the
@@ -292,6 +301,21 @@ func (d *Driver) extDataDir(name string) string {
 		return ""
 	}
 	return filepath.Join(d.tervaHome, "ext-data", name)
+}
+
+// isSafeManifestName reports whether name is a single, safe path element.
+// The manifest name is joined into ext-data/<name> and ext-<name>.log host
+// paths, so a value with path separators, "."/"..", or an absolute path could
+// make host-created paths escape their intended directory. Mirrors the
+// adopt-list rule in the extensions package.
+func isSafeManifestName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if filepath.IsAbs(name) || strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	return filepath.Base(name) == name
 }
 
 // Reset tears down every currently loaded extension and clears the
@@ -432,6 +456,10 @@ func (d *Driver) WaitForReady(grace time.Duration) {
 			select {
 			case <-ext.readyCh:
 			case <-deadline:
+				ext.mu.Lock()
+				ext.readyTimedOut = true
+				ext.diagnostics = append(ext.diagnostics, "timed out waiting for ready frame")
+				ext.mu.Unlock()
 				fmt.Fprintf(ext.logFile, "[terva] timed out waiting for ready frame; proceeding\n")
 				ext.readyOnce.Do(func() { close(ext.readyCh) })
 			}
@@ -445,9 +473,9 @@ func (d *Driver) WaitForReady(grace time.Duration) {
 // frames are processed in a goroutine started here.
 func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 	logsDir := filepath.Join(d.tervaHome, "logs")
-	_ = os.MkdirAll(logsDir, 0o755)
+	_ = privfs.MkdirAll(logsDir)
 	logPath := filepath.Join(logsDir, "ext-"+ext.Manifest.Name+".log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	logFile, err := privfs.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY)
 	if err != nil {
 		return fmt.Errorf("open log: %w", err)
 	}
@@ -585,7 +613,7 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 	// created — preserving the old colocated behavior rather than failing.
 	dataDir := ext.Dir
 	if dd := d.extDataDir(ext.Manifest.Name); dd != "" {
-		if err := os.MkdirAll(dd, 0o755); err == nil {
+		if err := privfs.MkdirAll(dd); err == nil {
 			dataDir = dd
 		}
 	}
@@ -657,6 +685,10 @@ func (d *Driver) assumeReadyAfterIdle(ext *Extension) {
 		if current.Equal(last) {
 			// No new frame in the idle window. Treat as ready.
 			ext.readyOnce.Do(func() {
+				ext.mu.Lock()
+				ext.autoReady = true
+				ext.diagnostics = append(ext.diagnostics, "no ready frame; auto-ready after idle")
+				ext.mu.Unlock()
 				fmt.Fprintf(ext.logFile, "[terva] no ready frame; auto-readying after idle (legacy SDK?)\n")
 				close(ext.readyCh)
 			})
@@ -689,6 +721,8 @@ func (d *Driver) registerTool(ext *Extension, rt extproto.RegisterToolFromExt) {
 	ext.tools = append(ext.tools, rt)
 	if _, exists := d.toolIndex[rt.Name]; !exists {
 		d.toolIndex[rt.Name] = ext
+	} else {
+		ext.recordDiagnostic(fmt.Sprintf("tool %s conflicts with another extension registering the same name", rt.Name))
 	}
 }
 
@@ -754,7 +788,96 @@ func (d *Driver) registerCommand(ext *Extension, rc extproto.RegisterCommandFrom
 	ext.commands = append(ext.commands, rc)
 	if _, exists := d.commandIndex[rc.Name]; !exists {
 		d.commandIndex[rc.Name] = ext
+	} else {
+		ext.recordDiagnostic(fmt.Sprintf("command /%s conflicts with another extension registering the same name", rc.Name))
 	}
+}
+
+// RegisteredCommandDiagnostic describes one command an extension registered
+// and whether it owns the active dispatch slot.
+type RegisteredCommandDiagnostic struct {
+	Name        string
+	Description string
+	Active      bool
+}
+
+// RegisteredToolDiagnostic describes one tool an extension registered and
+// whether it owns the active dispatch slot.
+type RegisteredToolDiagnostic struct {
+	Name        string
+	Description string
+	Active      bool
+}
+
+// ExtensionDiagnostic is a read-only snapshot of one loaded extension's
+// state for `terva ext doctor`.
+type ExtensionDiagnostic struct {
+	Name          string
+	Version       string
+	Dir           string
+	LogPath       string
+	ThemeOnly     bool
+	Ready         bool
+	AutoReady     bool
+	ReadyTimedOut bool
+	Commands      []RegisteredCommandDiagnostic
+	Tools         []RegisteredToolDiagnostic
+	Messages      []string
+}
+
+// Diagnostics returns a snapshot of loaded-extension state for diagnostic
+// commands (terva ext doctor). Read-only; it never changes driver behavior.
+func (d *Driver) Diagnostics() []ExtensionDiagnostic {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	names := make([]string, 0, len(d.ext))
+	for name := range d.ext {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]ExtensionDiagnostic, 0, len(names))
+	for _, name := range names {
+		ext := d.ext[name]
+		ext.mu.Lock()
+		msgs := append([]string(nil), ext.diagnostics...)
+		autoReady := ext.autoReady
+		readyTimedOut := ext.readyTimedOut
+		ext.mu.Unlock()
+
+		diag := ExtensionDiagnostic{
+			Name:          ext.Manifest.Name,
+			Version:       ext.Manifest.Version,
+			Dir:           ext.Dir,
+			LogPath:       ext.LogPath,
+			ThemeOnly:     ext.Manifest.Exec == "",
+			AutoReady:     autoReady,
+			ReadyTimedOut: readyTimedOut,
+			Messages:      msgs,
+		}
+		select {
+		case <-ext.readyCh:
+			diag.Ready = true
+		default:
+		}
+		// ext.commands/ext.tools are guarded by d.mu (held here), so reading
+		// them without ext.mu is safe.
+		for _, c := range ext.commands {
+			diag.Commands = append(diag.Commands, RegisteredCommandDiagnostic{
+				Name:        c.Name,
+				Description: c.Description,
+				Active:      d.commandIndex[c.Name] == ext,
+			})
+		}
+		for _, t := range ext.tools {
+			diag.Tools = append(diag.Tools, RegisteredToolDiagnostic{
+				Name:        t.Name,
+				Description: t.Description,
+				Active:      d.toolIndex[t.Name] == ext,
+			})
+		}
+		out = append(out, diag)
+	}
+	return out
 }
 
 // subscribeEvents records event subscriptions under maxExtEventSubs,
@@ -922,6 +1045,17 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 			}
 		case "clear_notes":
 			d.hooks.ClearNotes(ext.Manifest.Name)
+		case "submit":
+			// Spontaneous request to queue a plain model prompt. Unlike
+			// submit_slash there is no slash guard: the host's SubmitOrQueue
+			// treats it exactly like typed input (busy-aware). Empty text is
+			// dropped.
+			var s extproto.SubmitFromExt
+			if err := json.Unmarshal(line, &s); err == nil {
+				if text := strings.TrimSpace(s.Text); text != "" {
+					d.hooks.Submit(text)
+				}
+			}
 		case "submit_slash":
 			// Spontaneous request to invoke a slash command in the
 			// TUI. Refused unless the payload looks like a slash
