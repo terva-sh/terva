@@ -87,6 +87,7 @@ var registry = []Spec{
 	{Name: "/login", Group: groupModel, Desc: "log in via api key or subscription", CancelsTurn: true},
 	{Name: "/logout", Group: groupModel, Desc: "clear a provider's credentials", Hint: "provider (anthropic | openai | all)", CancelsTurn: true},
 	{Name: "/usage", Group: groupModel, Desc: "subscription usage limits and reset windows"},
+	{Name: "/resets", Group: groupModel, Desc: "list and redeem banked usage-reset credits (codex subscription)"},
 
 	{Name: "/permissions", Group: groupSafety, Aliases: []string{"/perms"},
 		Desc: "show the approval mode, permission rules, and session grants"},

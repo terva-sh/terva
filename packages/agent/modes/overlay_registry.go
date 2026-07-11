@@ -261,6 +261,17 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			render: func(cols int) []string { return i.usageDialog.Render(i.cfg.Theme, cols) },
 		},
+		{ // /resets: list + redeem banked usage-reset credits
+			active: i.resetsDialog.Active,
+			ctrlC:  func() bool { i.resetsDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				if act := i.resetsDialog.HandleKey(k); act.Consume {
+					i.consumeReset(act.CreditID)
+				}
+				return false
+			},
+			render: func(cols int) []string { return i.resetsDialog.Render(i.cfg.Theme, cols) },
+		},
 		{ // rescue picker (after a recoverable provider failure)
 			active: i.rescueDialog.Active,
 			ctrlC:  func() bool { i.rescueDialog.Close(); return true },

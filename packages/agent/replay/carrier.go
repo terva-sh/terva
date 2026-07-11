@@ -31,7 +31,7 @@ const replayStateInterval = 80 * time.Millisecond
 // execution, no side effects.
 //
 // Carrier implements ctrlproto.WorkspaceService and structurally satisfies
-// modes.Carrier (it also has SubscribeReliable + AgentFor); the composition root
+// modes.Carrier (it also has SubscribeReliable); the composition root
 // asserts modes.Carrier so this package need not import the TUI.
 type Carrier struct {
 	id       string
@@ -368,6 +368,18 @@ func (c *Carrier) Usage(ctx context.Context, sess string) (core.WireUsage, error
 // than an error banner on every turn.
 func (c *Carrier) UsageSnapshot(ctx context.Context, sess string, refresh bool) (ctrlproto.UsageInfo, error) {
 	return ctrlproto.UsageInfo{}, nil
+}
+
+// ListResets reports no reset credits: a replay has no provider client to ask.
+// Supported=false hides the affordance, matching UsageSnapshot's posture.
+func (c *Carrier) ListResets(ctx context.Context, sess string) (ctrlproto.ResetsListResult, error) {
+	return ctrlproto.ResetsListResult{}, nil
+}
+
+// ConsumeReset is unsupported on a replay — there is no live provider to redeem
+// against — so it refuses cleanly rather than pretending to spend a credit.
+func (c *Carrier) ConsumeReset(ctx context.Context, sess, id string) (ctrlproto.ResetConsumeResult, error) {
+	return ctrlproto.ResetConsumeResult{}, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "replay sessions have no usage resets")
 }
 
 // Surfaces reports no auxiliary panes for a replay (nothing to act on).

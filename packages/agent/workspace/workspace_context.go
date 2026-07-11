@@ -193,6 +193,35 @@ func usageInfo(snap provider.UsageSnapshot, ok, refreshable bool) ctrlproto.Usag
 	return info
 }
 
+// resetInfos maps a provider's reset credits to the wire form.
+func resetInfos(rs []provider.UsageReset) []ctrlproto.ResetInfo {
+	out := make([]ctrlproto.ResetInfo, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, resetInfo(r))
+	}
+	return out
+}
+
+func resetInfo(r provider.UsageReset) ctrlproto.ResetInfo {
+	info := ctrlproto.ResetInfo{
+		ID:          r.ID,
+		Kind:        r.Kind,
+		Title:       r.Title,
+		Description: r.Description,
+		Status:      string(r.Status),
+	}
+	if !r.GrantedAt.IsZero() {
+		info.GrantedAt = ctrlTimeString(r.GrantedAt)
+	}
+	if !r.ExpiresAt.IsZero() {
+		info.ExpiresAt = ctrlTimeString(r.ExpiresAt)
+	}
+	if !r.RedeemedAt.IsZero() {
+		info.RedeemedAt = ctrlTimeString(r.RedeemedAt)
+	}
+	return info
+}
+
 // ctxMessageBytes estimates a message's wire size by marshalling it to JSON
 // (close to what a provider serializes, and accounts for tool results + base64
 // image data). Falls back to summing text content.

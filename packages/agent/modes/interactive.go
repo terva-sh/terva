@@ -491,11 +491,6 @@ type Interactive struct {
 	// pre-turn fraction guard. Cleared by runCompact once shown.
 	pendingPostCompactNote string
 
-	// autoCompacting is true while a model-triggered compaction is in
-	// flight. Surfaced in the status bar so the user can tell a
-	// condense pass from a regular assistant turn.
-	autoCompacting bool
-
 	// updateInfo is the result of the async update check. Zero value
 	// while the check hasn't completed or nothing is available.
 	updateInfo UpdateInfo
@@ -509,6 +504,7 @@ type Interactive struct {
 	logDialog         *dialogs.LogDialog
 	contextDialog     *dialogs.ContextDialog
 	usageDialog       *dialogs.UsageDialog
+	resetsDialog      *dialogs.ResetsDialog
 	rescueDialog      *dialogs.RescueDialog
 	sessionDialog     *dialogs.SessionDialog
 	swarmDialog       *dialogs.SwarmDialog
@@ -729,8 +725,14 @@ type Interactive struct {
 	// carrierUsage mirrors the provider's subscription picture (plan and
 	// rate-limit windows, credits) from the usage.snapshot verb — the wire twin
 	// of the crutch agent's Usage(). Refreshed once per turn, once per binding,
-	// and when /usage opens. The status bar reads it every frame. Guarded by mu.
+	// mid-turn on (throttled) usage events, and when /usage opens. The status
+	// bar reads it every frame. Guarded by mu.
 	carrierUsage ctrlproto.UsageInfo
+
+	// carrierUsageFetched is when a mirror refresh was last kicked off, for
+	// the mid-turn throttle: a tool-heavy turn emits a usage event per
+	// provider call, and each refresh is a carrier round-trip. Guarded by mu.
+	carrierUsageFetched time.Time
 
 	// carrierChat mirrors the daemon's chat pane (the bridge state + the
 	// registered services). The status bar reads it every frame; /connect
@@ -816,6 +818,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		logDialog:         dialogs.NewLogDialog(),
 		contextDialog:     dialogs.NewContextDialog(),
 		usageDialog:       dialogs.NewUsageDialog(),
+		resetsDialog:      dialogs.NewResetsDialog(),
 		rescueDialog:      dialogs.NewRescueDialog(),
 		sessionDialog:     dialogs.NewSessionDialog(),
 		swarmDialog:       dialogs.NewSwarmDialog(),

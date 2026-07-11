@@ -175,6 +175,17 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		}
 		u, err := s.svc.UsageSnapshot(ctx, f.Sess, p.Refresh)
 		s.respond(f.ID, UsageSnapshotResult{Usage: u}, err)
+	case MethodResetsList:
+		res, err := s.svc.ListResets(ctx, f.Sess)
+		s.respond(f.ID, res, err)
+	case MethodResetsConsume:
+		var p ResetConsumeParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		res, err := s.svc.ConsumeReset(ctx, f.Sess, p.ID)
+		s.respond(f.ID, res, err)
 	case MethodSideChatOpen:
 		id, err := s.svc.SideChatOpen(ctx, f.Sess)
 		s.respond(f.ID, SideChatOpenResult{ID: id}, err)

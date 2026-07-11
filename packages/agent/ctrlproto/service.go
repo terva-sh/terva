@@ -110,6 +110,19 @@ type WorkspaceService interface {
 	// zero UsageInfo with HasData false — not an error.
 	UsageSnapshot(ctx context.Context, sess string, refresh bool) (UsageInfo, error)
 
+	// ListResets returns sess's provider usage-reset credits (codex banked
+	// resets), read-only. Supported is false when the provider offers none; a
+	// session with no agent is likewise unsupported, not an error. BLOCKS on the
+	// provider's endpoint — keep it off a UI goroutine.
+	ListResets(ctx context.Context, sess string) (ResetsListResult, error)
+
+	// ConsumeReset redeems the credit named by id on sess's provider. It is
+	// IRREVERSIBLE and spends a scarce grant, so a client MUST confirm with the
+	// user before calling. BLOCKS on the provider's endpoint. A provider with no
+	// reset support, or an unknown/unavailable credit, is the implementation's
+	// error to return.
+	ConsumeReset(ctx context.Context, sess, id string) (ResetConsumeResult, error)
+
 	// SideChatOpen freezes sess's system prompt and transcript and returns an id
 	// naming that snapshot. The side chat is an ephemeral, tool-less completion
 	// alongside a session — the /btw overlay — and it never appends to, reads
@@ -352,6 +365,42 @@ type UsageInfo struct {
 	Credits     *CreditsInfo      `json:"credits,omitempty"`
 	CapturedAt  string            `json:"captured_at,omitempty"` // RFC 3339; empty unknown
 	Refreshable bool              `json:"refreshable,omitempty"` // provider fetches usage from an endpoint
+}
+
+// ResetInfo is one consumable usage-reset credit, mirroring [provider.UsageReset]
+// for the wire. Times are RFC 3339 (empty when the provider didn't report one).
+type ResetInfo struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind,omitempty"`  // provider reset-type tag (codex: "codex_rate_limits")
+	Title       string `json:"title,omitempty"` // human label
+	Description string `json:"description,omitempty"`
+	Status      string `json:"status"` // available | pending | redeemed | expired
+	GrantedAt   string `json:"granted_at,omitempty"`
+	ExpiresAt   string `json:"expires_at,omitempty"`
+	RedeemedAt  string `json:"redeemed_at,omitempty"`
+}
+
+// ResetsListResult is the payload of a [MethodResetsList] response. Supported
+// is false when the current provider offers no resets at all — the client then
+// hides the affordance rather than showing an empty list that reads as "you
+// have none".
+type ResetsListResult struct {
+	Supported bool        `json:"supported"`
+	Resets    []ResetInfo `json:"resets,omitempty"`
+}
+
+// ResetConsumeParams is the payload of [MethodResetsConsume]: the credit id to
+// redeem. The host confirms with the user BEFORE issuing this — the call spends
+// the credit.
+type ResetConsumeParams struct {
+	ID string `json:"id"`
+}
+
+// ResetConsumeResult is the payload of a [MethodResetsConsume] response: the
+// credit in its redeemed state and how many usage windows it cleared.
+type ResetConsumeResult struct {
+	Reset        ResetInfo `json:"reset"`
+	WindowsReset int       `json:"windows_reset,omitempty"`
 }
 
 // SurfaceMeta describes one available pane for the client's surface switcher.

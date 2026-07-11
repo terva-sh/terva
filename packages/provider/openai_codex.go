@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -74,6 +73,13 @@ func NewOpenAICodexSource(cred CredentialSource, accountID, baseURL string) Clie
 }
 
 func (c *codexClient) Name() string { return "openai-codex" }
+
+// codexUserAgent is the UA sent on every chatgpt.com/backend-api call (the
+// responses stream and the /wham account endpoints), so both paths present
+// terva identically.
+func codexUserAgent() string {
+	return fmt.Sprintf("terva (%s %s)", runtime.GOOS, runtime.GOARCH)
+}
 
 // Capabilities declares that tool-result images must be mirrored into
 // a following user message. The Responses API's function_call_output
@@ -198,7 +204,7 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 		PromptCacheKey:    req.PromptCacheKey,
 	}
 	if m.Reasoning {
-		if effort := OpenAICodexReasoningEffort(req.Reasoning); effort != "" {
+		if effort := OpenAICodexReasoningEffort(req.Reasoning, req.Model); effort != "" {
 			body.Reasoning = &codexReasoningConfig{Effort: effort}
 		}
 	}
@@ -384,7 +390,7 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 		httpReq.Header.Set("chatgpt-account-id", c.accountID)
 		httpReq.Header.Set("openai-beta", "responses=experimental")
 		httpReq.Header.Set("originator", "terva")
-		httpReq.Header.Set("user-agent", fmt.Sprintf("terva (%s %s)", runtime.GOOS, runtime.GOARCH))
+		httpReq.Header.Set("user-agent", codexUserAgent())
 		return httpReq, nil
 	}
 
@@ -393,9 +399,9 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 		return nil, fmt.Errorf("openai-codex: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
+		snippet := errorBodySnippet(resp.Body)
 		resp.Body.Close()
-		return nil, NewHTTPError("openai-codex", resp.StatusCode, resp.Header.Get("Retry-After"), string(b))
+		return nil, NewHTTPError("openai-codex", resp.StatusCode, resp.Header.Get("Retry-After"), snippet)
 	}
 
 	// Codex returns the subscription usage windows as response headers
@@ -416,6 +422,24 @@ func (c *codexClient) UsageSnapshot() (UsageSnapshot, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lastUsage, c.hasUsage
+}
+
+// SeedUsage primes the snapshot from a predecessor client, so a rebuild
+// (re-login, endpoint change) doesn't blank the usage meters until the next
+// turn. Foreign snapshots are rejected — another provider's windows say
+// nothing about this subscription — and a live observation always wins over
+// a seed, since the seed is by definition at least one rebuild old.
+func (c *codexClient) SeedUsage(snap UsageSnapshot) {
+	if snap.Provider != "openai-codex" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.hasUsage {
+		return
+	}
+	c.lastUsage = snap
+	c.hasUsage = true
 }
 
 func (c *codexClient) recordUsageHeaders(h http.Header) {
@@ -813,19 +837,41 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				sendDone()
 				return
 			case "error":
+				// The ChatGPT backend delivers errors in two shapes: a flat
+				// {message,code} and a nested {error:{message,code}} — the
+				// GPT-5.6 preview backend uses the nested form. Read both and
+				// fall back to the raw payload so the user never sees a blank
+				// error (the flat-only reader surfaced "" for nested errors).
 				var p struct {
 					Message string `json:"message"`
 					Code    string `json:"code"`
+					Error   struct {
+						Message string `json:"message"`
+						Code    string `json:"code"`
+					} `json:"error"`
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &p)
 				msg := p.Message
 				if msg == "" {
+					msg = p.Error.Message
+				}
+				if msg == "" {
 					msg = p.Code
+				}
+				if msg == "" {
+					msg = p.Error.Code
+				}
+				if msg == "" {
+					msg = strings.TrimSpace(ev.Data)
+				}
+				code := p.Code
+				if code == "" {
+					code = p.Error.Code
 				}
 				stop = StopError
 				// The gateway uses rate_limit_* codes for transient
 				// throttling on the ChatGPT backend.
-				finalErr = NewAPIError("openai-codex", msg, strings.HasPrefix(p.Code, "rate_limit"))
+				finalErr = NewAPIError("openai-codex", msg, strings.HasPrefix(code, "rate_limit"))
 				sawTerminal = true
 				sendDone()
 				return

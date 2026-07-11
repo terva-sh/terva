@@ -608,6 +608,37 @@ func (a *Agent) UsageRefreshable() bool {
 	return provider.ClientNeedsUsageFetch(c)
 }
 
+// SupportsResets reports whether the current provider exposes consumable usage
+// resets (codex banked resets) — the gate for offering a /resets affordance.
+// It probes the live a.Client through wrapper layers, so a SetClientAndModel
+// swap surfaces the new provider's capability.
+func (a *Agent) SupportsResets() bool {
+	a.mu.Lock()
+	c := a.Client
+	a.mu.Unlock()
+	return provider.ClientSupportsResets(c)
+}
+
+// ListResets returns the provider's usage-reset credits (available and spent),
+// or nil when the provider offers none. It BLOCKS on the provider's endpoint,
+// so callers must run it off the UI goroutine.
+func (a *Agent) ListResets(ctx context.Context) ([]provider.UsageReset, error) {
+	a.mu.Lock()
+	c := a.Client
+	a.mu.Unlock()
+	return provider.ClientListResets(ctx, c)
+}
+
+// ConsumeReset redeems one reset credit by id. It is IRREVERSIBLE and spends a
+// scarce, provider-granted credit, so callers MUST gate it behind explicit user
+// confirmation. It BLOCKS on the provider's endpoint.
+func (a *Agent) ConsumeReset(ctx context.Context, id string) (provider.UsageResetResult, error) {
+	a.mu.Lock()
+	c := a.Client
+	a.mu.Unlock()
+	return provider.ClientConsumeReset(ctx, c, id)
+}
+
 // Cost returns the cumulative usage. The CostTracker carries its own
 // lock so this is safe to call concurrently with a running turn, which
 // folds usage in from the stream goroutine.

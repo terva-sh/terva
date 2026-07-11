@@ -477,6 +477,12 @@ func (f *fakeWS) Usage(ctx context.Context, sess string) (core.WireUsage, error)
 func (f *fakeWS) UsageSnapshot(ctx context.Context, sess string, refresh bool) (ctrlproto.UsageInfo, error) {
 	return ctrlproto.UsageInfo{}, nil
 }
+func (f *fakeWS) ListResets(ctx context.Context, sess string) (ctrlproto.ResetsListResult, error) {
+	return ctrlproto.ResetsListResult{}, nil
+}
+func (f *fakeWS) ConsumeReset(ctx context.Context, sess, id string) (ctrlproto.ResetConsumeResult, error) {
+	return ctrlproto.ResetConsumeResult{}, nil
+}
 func (f *fakeWS) Context(ctx context.Context, sess string) (ctrlproto.ContextBreakdown, error) {
 	return ctrlproto.ContextBreakdown{}, nil
 }

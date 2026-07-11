@@ -577,6 +577,14 @@ func (f *fakeSvc) UsageSnapshot(ctx context.Context, sess string, refresh bool) 
 	return UsageInfo{Provider: "fake", HasData: true, Refreshable: refresh}, nil
 }
 
+func (f *fakeSvc) ListResets(ctx context.Context, sess string) (ResetsListResult, error) {
+	return ResetsListResult{}, nil
+}
+
+func (f *fakeSvc) ConsumeReset(ctx context.Context, sess, id string) (ResetConsumeResult, error) {
+	return ResetConsumeResult{}, nil
+}
+
 func (f *fakeSvc) Context(ctx context.Context, sess string) (ContextBreakdown, error) {
 	return ContextBreakdown{}, nil
 }

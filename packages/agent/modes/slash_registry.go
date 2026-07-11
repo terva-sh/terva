@@ -146,6 +146,10 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		i.openUsageDialog()
 		return false
 	},
+	"/resets": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.openResetsDialog()
+		return false
+	},
 
 	"/permissions": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 		i.openPermissionsDialog()

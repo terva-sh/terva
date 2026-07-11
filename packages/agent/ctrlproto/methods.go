@@ -23,19 +23,20 @@ const (
 
 	// --- session group ---
 
-	MethodSessionsList  Method = "sessions.list"   // result SessionsResult
-	MethodSessionCreate Method = "sessions.create" // params CreateOpts, result SessionResult
-	MethodSessionResume Method = "sessions.resume" // result SessionResult (sess in frame)
-	MethodSessionRename Method = "sessions.rename" // params RenameParams (sess in frame)
-	MethodSessionDelete Method = "sessions.delete" // no params (sess in frame)
-	MethodUsageGet      Method = "usage.get"       // result UsageResult (sess in frame)
-	MethodUsageSnapshot Method = "usage.snapshot"  // params UsageSnapshotParams, result UsageSnapshotResult (sess in frame)
-	MethodContextGet    Method = "context.get"     // result ContextResult (sess in frame)
-	MethodContextNode   Method = "context.node"    // params ContextNodeParams, result ContextNodeResult (sess in frame)
-	MethodSurfacesList  Method = "surfaces.list"   // result SurfacesResult (sess in frame)
-	MethodSurfaceGet    Method = "surface.get"     // params SurfaceGetParams, result SurfaceResult
-	MethodSurfaceAction Method = "surface.action"  // params SurfaceActionParams (sess in frame)
-	MethodI18nCatalog   Method = "i18n.catalog"    // params I18nCatalogParams, result I18nCatalogResult (session-independent)
+	MethodSessionsList  Method = "sessions.list"     // result SessionsResult
+	MethodSessionCreate Method = "sessions.create"   // params CreateOpts, result SessionResult
+	MethodSessionResume Method = "sessions.resume"   // result SessionResult (sess in frame)
+	MethodSessionRename Method = "sessions.rename"   // params RenameParams (sess in frame)
+	MethodSessionDelete Method = "sessions.delete"   // no params (sess in frame)
+	MethodUsageGet      Method = "usage.get"         // result UsageResult (sess in frame)
+	MethodUsageSnapshot Method = "usage.snapshot"    // params UsageSnapshotParams, result UsageSnapshotResult (sess in frame)
+	MethodResetsList    Method = "usage.resets.list" // result ResetsListResult (sess in frame); read-only
+	MethodContextGet    Method = "context.get"       // result ContextResult (sess in frame)
+	MethodContextNode   Method = "context.node"      // params ContextNodeParams, result ContextNodeResult (sess in frame)
+	MethodSurfacesList  Method = "surfaces.list"     // result SurfacesResult (sess in frame)
+	MethodSurfaceGet    Method = "surface.get"       // params SurfaceGetParams, result SurfaceResult
+	MethodSurfaceAction Method = "surface.action"    // params SurfaceActionParams (sess in frame)
+	MethodI18nCatalog   Method = "i18n.catalog"      // params I18nCatalogParams, result I18nCatalogResult (session-independent)
 
 	// Side chat: an ephemeral, tool-less completion against a FROZEN snapshot of
 	// a session, leaving no trace in its transcript. Backs the /btw overlay.
@@ -51,6 +52,11 @@ const (
 	MethodTrust         Method = "control.trust"   // params TrustParams; grant Workspace Trust to cwd
 	MethodUntrust       Method = "control.untrust" // no params; revoke Workspace Trust for cwd
 	MethodRestart       Method = "control.restart" // no params; re-execs the daemon (Tier-1 self-restart)
+	// MethodResetsConsume redeems a usage-reset credit — irreversible and spends
+	// a scarce provider grant, so it sits in the control group (categorically
+	// higher authority than the read-only usage.resets.list in the session
+	// group). The host still requires explicit user confirmation before calling.
+	MethodResetsConsume Method = "usage.resets.consume" // params ResetConsumeParams, result ResetConsumeResult (sess in frame)
 
 	// --- replay group (optional; served only by a ReplayController) ---
 
@@ -65,12 +71,12 @@ func (m Method) Group() Group {
 		MethodClear, MethodApprove, MethodAnswer, MethodSubscribe, MethodUnsubscribe:
 		return GroupConversation
 	case MethodSessionsList, MethodSessionCreate, MethodSessionResume,
-		MethodSessionRename, MethodSessionDelete, MethodUsageGet, MethodUsageSnapshot, MethodContextGet,
+		MethodSessionRename, MethodSessionDelete, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
 		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
 		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite,
-		MethodTrust, MethodUntrust, MethodRestart:
+		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume:
 		return GroupControl
 	case MethodReplayControl, MethodReplayState:
 		return GroupReplay

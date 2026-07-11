@@ -151,6 +151,12 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 	// merged into each session's agent in buildSession. setupMCP also merges into
 	// this (throwaway) r — harmless; the per-session merge is what counts.
 	w.mcpAdapter, w.mcpStop = build.SetupMCP(w.ctx, args, &r)
+	// When a workspace-global MCP server dies unexpectedly, the manager
+	// withdraws its tools; refresh every live session so the model's tool set
+	// drops the dead server promptly — the same rebuild a live /mcp toggle runs.
+	if w.mcpAdapter != nil && w.mcpAdapter.Mgr != nil {
+		w.mcpAdapter.Mgr.SetOnToolsChanged(func() { w.rebuildAllSessions("mcp-server-died") })
+	}
 
 	return w, nil
 }
@@ -655,6 +661,42 @@ func (w *Workspace) UsageSnapshot(ctx context.Context, sess string, refresh bool
 	return usageInfo(snap, ok, ag.UsageRefreshable()), nil
 }
 
+// ListResets reports the provider's usage-reset credits for the LIVE session.
+// Like UsageSnapshot, an unmaterialized session (or a provider with no reset
+// support) is Supported=false, not an error. It blocks on the provider's
+// endpoint; the verb's context bounds it.
+func (w *Workspace) ListResets(ctx context.Context, sess string) (ctrlproto.ResetsListResult, error) {
+	s := w.existing(sess)
+	if s == nil || s.agent == nil || !s.agent.SupportsResets() {
+		return ctrlproto.ResetsListResult{}, nil
+	}
+	resets, err := s.agent.ListResets(ctx)
+	if err != nil {
+		return ctrlproto.ResetsListResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "list resets: %v", err)
+	}
+	return ctrlproto.ResetsListResult{Supported: true, Resets: resetInfos(resets)}, nil
+}
+
+// ConsumeReset redeems a reset credit on the LIVE session's provider. The
+// caller (TUI/panel) has already confirmed with the user; this method performs
+// the irreversible spend. An unmaterialized session or unsupported provider is
+// a clean CodeUnsupported rather than a silent success.
+func (w *Workspace) ConsumeReset(ctx context.Context, sess, id string) (ctrlproto.ResetConsumeResult, error) {
+	s := w.existing(sess)
+	if s == nil || s.agent == nil || !s.agent.SupportsResets() {
+		return ctrlproto.ResetConsumeResult{}, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "provider does not support usage resets")
+	}
+	res, err := s.agent.ConsumeReset(ctx, id)
+	if err != nil {
+		return ctrlproto.ResetConsumeResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "consume reset: %v", err)
+	}
+	// A redemption cleared the provider's windows, so the cached usage snapshot
+	// is now stale; the next usage.snapshot refresh (or turn) repopulates it.
+	// Broadcast a session_updated so open clients re-pull promptly.
+	s.broadcast(ctrlproto.SessionUpdatedEvent(s.info()))
+	return ctrlproto.ResetConsumeResult{Reset: resetInfo(res.Reset), WindowsReset: res.WindowsReset}, nil
+}
+
 // --- control group (WorkspaceService) ---
 
 // Restart re-execs the daemon into the currently-installed binary (Tier-1
@@ -824,12 +866,23 @@ func switchReusesClient(curProv string, cur provider.Model, curErr error, target
 // providerName qualifies the id (same rationale as CreateOpts.Provider).
 // forceRebuild skips the same-endpoint id-swap shortcut so a re-login can
 // replace the client even when nothing else changed.
+//
+// A bare id (empty providerName) resolves against the CURRENT provider first:
+// several ids exist under both an api-key provider and a subscription one
+// (openai's gpt-5.5 precedes openai-codex's in the catalog), and a global
+// first-match would silently hop providers — onto one the user may hold no
+// credential for — when they meant "same backend, different model".
 func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forceRebuild bool) error {
+	curProv, curModel := s.currentModel()
 	target, err := provider.FindModel(providerName, modelID)
+	if providerName == "" && curProv != "" {
+		if m, err2 := provider.FindModel(curProv, modelID); err2 == nil {
+			target, err = m, nil
+		}
+	}
 	if err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "unknown model %q", modelID)
 	}
-	curProv, curModel := s.currentModel()
 	cur, curErr := provider.FindModel(curProv, curModel)
 	if switchReusesClient(curProv, cur, curErr, target, forceRebuild) {
 		s.agent.SetModel(target.ID)
@@ -847,7 +900,15 @@ func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forc
 		if !r.HasCredential() {
 			return ctrlproto.Errorf(ctrlproto.CodeUnauthorized, "no credential for provider %q", r.Provider)
 		}
-		s.agent.SetClientAndModel(r.NewClient(), r.Model)
+		nc := r.NewClient()
+		// Carry the passively-observed usage snapshot across the rebuild
+		// (same-provider swaps only; the seeder rejects foreign snapshots).
+		// Without this a re-login or endpoint change blanks the status-bar
+		// meters until the next turn's headers arrive.
+		if snap, ok := s.agent.Usage(); ok {
+			provider.SeedClientUsage(nc, snap)
+		}
+		s.agent.SetClientAndModel(nc, r.Model)
 		s.setModel(r.Provider, r.Model)
 		// SetClientAndModel keeps the agent's registry, so terva_status
 		// still carries the OLD provider identity: re-bind it to the target
@@ -861,6 +922,16 @@ func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forc
 		}
 	}
 	prov, model := s.currentModel()
+	// A mid-session model swap must refresh every host-routed dispatch tool
+	// (swarm_spawn, ...) so a sub-agent spawned afterward inherits the
+	// CURRENT provider/model and resolves tiers against it, not the stale
+	// pre-swap route. Generic over HostRouted so this covers both the
+	// same-endpoint id-swap and the rebuild path, and any future such tool.
+	for _, tl := range s.agent.ToolsSnapshot() {
+		if hr, ok := tl.(tools.HostRouted); ok {
+			hr.SetHost(prov, model)
+		}
+	}
 	_ = s.sess.UpdateModel(prov, model)
 	w.mu.Lock()
 	w.provider, w.model = prov, model
