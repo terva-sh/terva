@@ -54,6 +54,13 @@ type Manager struct {
 	// original tool name.
 	routes map[string]route
 	warns  []string
+	// cwd is the project directory every server subprocess runs in,
+	// captured at StartAll so a mid-session StartOne inherits it too.
+	cwd string
+	// onToolsChanged, if set, is invoked (off-lock) after a server dies
+	// unexpectedly and its routes are withdrawn, so the host can rebuild the
+	// live tool registry. Mirrors the extension manager's SetOnReload.
+	onToolsChanged func()
 }
 
 type route struct {
@@ -63,10 +70,11 @@ type route struct {
 
 // StartAll spawns every configured server and lists its tools.
 // Failures are per-server warnings, never fatal: one broken MCP
-// server must not take the session down. stderrFor supplies a log
-// sink per server (nil means discard).
-func StartAll(ctx context.Context, cfg *Config, stderrFor func(server string) io.Writer) *Manager {
-	m := &Manager{clients: map[string]*Client{}, routes: map[string]route{}}
+// server must not take the session down. cwd is the project directory
+// the servers run in (empty inherits terva's process cwd). stderrFor
+// supplies a log sink per server (nil means discard).
+func StartAll(ctx context.Context, cfg *Config, cwd string, stderrFor func(server string) io.Writer) *Manager {
+	m := &Manager{clients: map[string]*Client{}, routes: map[string]route{}, cwd: cwd}
 	if cfg == nil || len(cfg.Servers) == 0 {
 		return m
 	}
@@ -85,7 +93,7 @@ func StartAll(ctx context.Context, cfg *Config, stderrFor func(server string) io
 			if stderrFor != nil {
 				stderr = stderrFor(name)
 			}
-			cl, err := Start(ctx, name, sc, stderr)
+			cl, err := Start(ctx, name, sc, m.cwd, stderr)
 			m.mu.Lock()
 			defer m.mu.Unlock()
 			if err != nil {
@@ -93,6 +101,7 @@ func StartAll(ctx context.Context, cfg *Config, stderrFor func(server string) io
 				return
 			}
 			m.clients[name] = cl
+			go m.watch(name, cl)
 		}(name, cfg.Servers[name])
 	}
 	wg.Wait()
@@ -157,7 +166,7 @@ func (m *Manager) StartOne(ctx context.Context, name string, sc ServerConfig, st
 	if running {
 		return nil
 	}
-	cl, err := Start(ctx, name, sc, stderr)
+	cl, err := Start(ctx, name, sc, m.cwd, stderr)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.clearServerWarnsLocked(name)
@@ -167,7 +176,51 @@ func (m *Manager) StartOne(ctx context.Context, name string, sc ServerConfig, st
 	}
 	m.clients[name] = cl
 	m.indexRoutesLocked(name, cl)
+	go m.watch(name, cl)
 	return nil
+}
+
+// SetOnToolsChanged registers a callback invoked (off-lock) after the set of
+// available tools changes because a server died unexpectedly and its tools
+// were withdrawn. The host wires this to its live tool-registry rebuild
+// (the same seam extension reloads use). Nil disables it.
+func (m *Manager) SetOnToolsChanged(fn func()) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.onToolsChanged = fn
+	m.mu.Unlock()
+}
+
+// watch waits for one client's read loop to exit. If the client is still the
+// one registered under its name, the exit was an unexpected death (StopOne and
+// StopAll delete from the map before stopping, so an intentional shutdown is
+// already gone here): withdraw its routes, drop it so Status/Tools stop
+// reporting it, record a warning, and ask the host to refresh its tools.
+// Automatic restart is intentionally left to a later feature — truthful status
+// and discovery are the requirement.
+func (m *Manager) watch(name string, cl *Client) {
+	<-cl.Done()
+	m.mu.Lock()
+	if m.clients[name] != cl {
+		// Already removed by an intentional Stop — not a crash.
+		m.mu.Unlock()
+		return
+	}
+	delete(m.clients, name)
+	for ns, r := range m.routes {
+		if r.server == name {
+			delete(m.routes, ns)
+		}
+	}
+	m.warns = append(m.warns, fmt.Sprintf("mcp server %s: connection closed unexpectedly; its tools were withdrawn", name))
+	onChanged := m.onToolsChanged
+	m.mu.Unlock()
+	cl.Stop() // reap the dead subprocess (closed is already set, so this is fast)
+	if onChanged != nil {
+		onChanged()
+	}
 }
 
 // StopOne stops a single running server and removes its routes. No-op if

@@ -122,6 +122,36 @@ func TestBtwDialogReplaysItsOwnPriorTurns(t *testing.T) {
 	}
 }
 
+// The reported cursor must land on the editor row even after a turn
+// exists. PadDialogFrame only inserts its post-header blank when the
+// first body row isn't already blank (the empty state); with a turn the
+// first body row is blank, so CursorPos must not count that pad row.
+// Before the fix it did, dropping the cursor one row below the editor.
+func TestBtwDialogCursorLandsOnEditorAfterTurn(t *testing.T) {
+	const width = 80
+	a := &scriptedAsker{reply: "a reply"}
+	d := NewBtwDialog()
+	d.Open(tui.Dark, a, testsupport.TempDir(t), "a question", func() {})
+	waitUntil(t, "the reply", func() bool {
+		return strings.Contains(strings.Join(d.Render(tui.Dark, width), "\n"), "a reply")
+	})
+
+	// Type a marker into the editor without submitting it.
+	const marker = "ZZMARKERZZ"
+	for _, r := range marker {
+		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r}, func() {})
+	}
+
+	padded := PadDialogFrame(d.Render(tui.Dark, width))
+	row, _ := d.CursorPos(width)
+	if row < 0 || row >= len(padded) {
+		t.Fatalf("cursor row %d out of range [0,%d)", row, len(padded))
+	}
+	if !strings.Contains(padded[row], marker) {
+		t.Fatalf("cursor row %d does not land on the editor line.\nrow content: %q", row, padded[row])
+	}
+}
+
 // esc during an in-flight ask cancels it (ctx fires) and does NOT close the
 // dialog; a second esc closes and releases the snapshot exactly once.
 func TestBtwDialogEscCancelsThenCloses(t *testing.T) {

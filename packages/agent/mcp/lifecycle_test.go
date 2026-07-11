@@ -15,7 +15,7 @@ import (
 // appear) and shrinks it again (everything for that server vanishes).
 func TestStartOneStopOneLifecycle(t *testing.T) {
 	stub := buildStub(t)
-	m := StartAll(context.Background(), nil, nil) // empty, no servers
+	m := StartAll(context.Background(), nil, "", nil) // empty, no servers
 	defer m.StopAll()
 	if len(m.Tools()) != 0 || len(m.Status()) != 0 {
 		t.Fatalf("empty manager: %d tools, %d status; want 0/0", len(m.Tools()), len(m.Status()))
@@ -48,7 +48,7 @@ func TestStartOneStopOneLifecycle(t *testing.T) {
 // no-op, never a duplicate client/tool set.
 func TestStartOneIdempotent(t *testing.T) {
 	stub := buildStub(t)
-	m := StartAll(context.Background(), nil, nil)
+	m := StartAll(context.Background(), nil, "", nil)
 	defer m.StopAll()
 	if err := m.StartOne(context.Background(), "alpha", ServerConfig{Command: stub}, nil); err != nil {
 		t.Fatal(err)
@@ -65,7 +65,7 @@ func TestStartOneIdempotent(t *testing.T) {
 // returns the error (so the dialog can show "failed"), and leaves the
 // Manager usable for the next server.
 func TestStartOneFailedIsWarningAndError(t *testing.T) {
-	m := StartAll(context.Background(), nil, nil)
+	m := StartAll(context.Background(), nil, "", nil)
 	defer m.StopAll()
 	err := m.StartOne(context.Background(), "bad", ServerConfig{Command: filepath.Join(testsupport.TempDir(t), "nope")}, nil)
 	if err == nil {
@@ -89,7 +89,7 @@ func TestStartOneFailedIsWarningAndError(t *testing.T) {
 // same server keep exactly one warning (clearServerWarnsLocked), so the
 // dialog never shows a growing pile of stale "failed" notes.
 func TestStartOneFailureWarningsDoNotAccumulate(t *testing.T) {
-	m := StartAll(context.Background(), nil, nil)
+	m := StartAll(context.Background(), nil, "", nil)
 	defer m.StopAll()
 	bad := ServerConfig{Command: filepath.Join(testsupport.TempDir(t), "nope")}
 	_ = m.StartOne(context.Background(), "bad", bad, nil)

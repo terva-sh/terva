@@ -21,6 +21,7 @@ import (
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -765,17 +766,17 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args build.Args, r *build.
 	}
 
 	stderrFor := func(server string) io.Writer {
-		if mkErr := os.MkdirAll(config.LogsPath(), 0o755); mkErr != nil {
+		if mkErr := privfs.MkdirAll(config.LogsPath()); mkErr != nil {
 			return nil
 		}
-		fh, ferr := os.OpenFile(filepath.Join(config.LogsPath(), "mcp-"+server+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fh, ferr := privfs.OpenFile(filepath.Join(config.LogsPath(), "mcp-"+server+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 		if ferr != nil {
 			return nil
 		}
 		return fh
 	}
 
-	mgr := mcp.StartAll(ctx, cfg, stderrFor)
+	mgr := mcp.StartAll(ctx, cfg, args.CWD, stderrFor)
 	for _, w := range mgr.Warnings() {
 		fmt.Fprintln(os.Stderr, "note:", w)
 	}

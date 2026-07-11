@@ -49,7 +49,7 @@ func buildStub(t *testing.T) string {
 
 func startStub(t *testing.T, args ...string) *Client {
 	t.Helper()
-	cl, err := Start(context.Background(), "stub", ServerConfig{Command: buildStub(t), Args: args}, nil)
+	cl, err := Start(context.Background(), "stub", ServerConfig{Command: buildStub(t), Args: args}, "", nil)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestCallToolUnknownIsRPCError(t *testing.T) {
 func TestServerDeathFailsPendingFast(t *testing.T) {
 	// A server that dies must fail callers promptly via the read-loop
 	// EOF path, not strand them until the 60s call timeout.
-	cl, err := Start(context.Background(), "stub", ServerConfig{Command: buildStub(t), Args: []string{"--die-after-init"}}, nil)
+	cl, err := Start(context.Background(), "stub", ServerConfig{Command: buildStub(t), Args: []string{"--die-after-init"}}, "", nil)
 	if err != nil {
 		// Dying right after init may already surface at Start (the
 		// tools/list hits EOF) — that is the same guarantee.
@@ -134,7 +134,7 @@ func TestManagerNamespacingAndRouting(t *testing.T) {
 		"alpha": {Command: stub},
 		"beta":  {Command: stub},
 	}}
-	m := StartAll(context.Background(), cfg, nil)
+	m := StartAll(context.Background(), cfg, "", nil)
 	defer m.StopAll()
 	if w := m.Warnings(); len(w) != 0 {
 		t.Fatalf("warnings: %v", w)
@@ -163,7 +163,7 @@ func TestManagerBrokenServerIsWarningNotFatal(t *testing.T) {
 		"good": {Command: buildStub(t)},
 		"bad":  {Command: filepath.Join(testsupport.TempDir(t), "does-not-exist")},
 	}}
-	m := StartAll(context.Background(), cfg, nil)
+	m := StartAll(context.Background(), cfg, "", nil)
 	defer m.StopAll()
 	if len(m.Warnings()) != 1 || !strings.Contains(m.Warnings()[0], "bad") {
 		t.Fatalf("warnings = %v", m.Warnings())
@@ -175,7 +175,7 @@ func TestManagerBrokenServerIsWarningNotFatal(t *testing.T) {
 
 func TestToolAdapterConvertsContent(t *testing.T) {
 	stub := buildStub(t)
-	m := StartAll(context.Background(), &Config{Servers: map[string]ServerConfig{"s": {Command: stub}}}, nil)
+	m := StartAll(context.Background(), &Config{Servers: map[string]ServerConfig{"s": {Command: stub}}}, "", nil)
 	defer m.StopAll()
 
 	var img *Tool
@@ -202,7 +202,7 @@ func TestToolAdapterConvertsContent(t *testing.T) {
 
 func TestReadOnlyHintMapsToToolInfo(t *testing.T) {
 	stub := buildStub(t)
-	m := StartAll(context.Background(), &Config{Servers: map[string]ServerConfig{"s": {Command: stub}}}, nil)
+	m := StartAll(context.Background(), &Config{Servers: map[string]ServerConfig{"s": {Command: stub}}}, "", nil)
 	defer m.StopAll()
 	got := map[string]bool{}
 	for _, ti := range m.Tools() {
@@ -230,7 +230,7 @@ func TestConfigEnvCannotReintroduceInjection(t *testing.T) {
 	cl, err := Start(context.Background(), "s", ServerConfig{
 		Command: stub,
 		Env:     map[string]string{"LD_PRELOAD": "/tmp/evil.so", "PATH": "/tmp", "MY_TOKEN": "ok"},
-	}, nil)
+	}, "", nil)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -251,5 +251,40 @@ func TestConfigEnvCannotReintroduceInjection(t *testing.T) {
 	}
 	if !found {
 		t.Error("benign config env var was dropped")
+	}
+}
+
+func TestStartRunsServerInProjectCWD(t *testing.T) {
+	// A server spawned with an explicit cwd must run there, so its
+	// relative-path / directory-listing tools resolve against the user's
+	// project rather than terva's launch directory.
+	cwd := testsupport.TempDir(t)
+	cl, err := Start(context.Background(), "stub", ServerConfig{Command: buildStub(t)}, cwd, nil)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer cl.Stop()
+	if cl.cmd.Dir != cwd {
+		t.Fatalf("server cwd = %q, want %q", cl.cmd.Dir, cwd)
+	}
+}
+
+func TestManagerStartOneInheritsProjectCWD(t *testing.T) {
+	// A server started mid-session via StartOne must inherit the project
+	// cwd captured at StartAll, not terva's launch directory.
+	cwd := testsupport.TempDir(t)
+	m := StartAll(context.Background(), nil, cwd, nil) // empty; captures cwd
+	if err := m.StartOne(context.Background(), "alpha", ServerConfig{Command: buildStub(t)}, nil); err != nil {
+		t.Fatalf("StartOne: %v", err)
+	}
+	m.mu.Lock()
+	cl := m.clients["alpha"]
+	m.mu.Unlock()
+	if cl == nil {
+		t.Fatal("server not started")
+	}
+	defer cl.Stop()
+	if cl.cmd.Dir != cwd {
+		t.Fatalf("StartOne server cwd = %q, want %q", cl.cmd.Dir, cwd)
 	}
 }

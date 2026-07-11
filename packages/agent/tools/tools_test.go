@@ -39,6 +39,30 @@ func TestReadText(t *testing.T) {
 	}
 }
 
+func TestReadImageMimeFromContentNotExtension(t *testing.T) {
+	// A file named .png whose bytes are actually JPEG. The MIME must be
+	// sniffed from the content (image/jpeg), not the extension, or
+	// providers that validate the declared media type reject the request.
+	dir := testsupport.TempDir(t)
+	p := filepath.Join(dir, "shot.png")
+	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F'}
+	if err := os.WriteFile(p, jpegBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &ReadTool{CWD: dir, SupportsVision: true}
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"path": "shot.png"}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, ok := res.Content[0].(provider.ImageBlock)
+	if !ok {
+		t.Fatalf("expected ImageBlock, got %T", res.Content[0])
+	}
+	if img.MimeType != "image/jpeg" {
+		t.Fatalf("mime from extension not corrected: got %s want image/jpeg", img.MimeType)
+	}
+}
+
 func TestReadOffsetLimit(t *testing.T) {
 	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "a.txt")

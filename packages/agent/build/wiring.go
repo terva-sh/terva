@@ -20,6 +20,7 @@ import (
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -104,10 +105,10 @@ type MCPToolAdapter struct {
 // StderrFor opens (append) and tracks the per-server log sink. Safe for
 // the several goroutines StartAll spawns, and reused by live StartOne.
 func (a *MCPToolAdapter) StderrFor(server string) io.Writer {
-	if mkErr := os.MkdirAll(config.LogsPath(), 0o755); mkErr != nil {
+	if mkErr := privfs.MkdirAll(config.LogsPath()); mkErr != nil {
 		return nil
 	}
-	f, ferr := os.OpenFile(filepath.Join(config.LogsPath(), "mcp-"+server+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, ferr := privfs.OpenFile(filepath.Join(config.LogsPath(), "mcp-"+server+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if ferr != nil {
 		return nil
 	}
@@ -188,7 +189,7 @@ func SetupMCP(ctx context.Context, args Args, r *Resolved) (*MCPToolAdapter, fun
 	// StartOne, and an empty Manager is a valid no-op (no subprocesses).
 	// Only --no-mcp (handled above) skips the Manager entirely.
 	adapter := &MCPToolAdapter{allowed: mcpAllowSet(args.WithMCP)}
-	mgr := mcp.StartAll(ctx, mcpCfg, adapter.StderrFor)
+	mgr := mcp.StartAll(ctx, mcpCfg, args.CWD, adapter.StderrFor)
 	adapter.Mgr = mgr
 	for _, w := range mgr.Warnings() {
 		fmt.Fprintln(os.Stderr, "note:", w)
@@ -460,8 +461,8 @@ func BuildHookEngine(args Args, trusted bool) *hooks.Engine {
 	}
 	logf := func(string, ...any) {}
 	var logCloser io.Closer
-	if err := os.MkdirAll(config.LogsPath(), 0o755); err == nil {
-		if f, ferr := os.OpenFile(filepath.Join(config.LogsPath(), "hooks.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr == nil {
+	if err := privfs.MkdirAll(config.LogsPath()); err == nil {
+		if f, ferr := privfs.OpenFile(filepath.Join(config.LogsPath(), "hooks.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY); ferr == nil {
 			logCloser = f
 			logf = func(format string, a ...any) {
 				fmt.Fprintf(f, time.Now().Format(time.RFC3339)+" "+format+"\n", a...)

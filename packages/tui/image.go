@@ -7,7 +7,7 @@ import (
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
-	_ "image/png"
+	"image/png"
 	"math"
 	"os"
 	"strconv"
@@ -126,6 +126,27 @@ func renderITerm2(data []byte, maxCellsWide, maxCellsHigh int) string {
 	return sb.String()
 }
 
+// kittyEnsurePNG returns data unchanged when it is already a PNG, and
+// otherwise decodes and re-encodes it to PNG so the Kitty graphics
+// protocol (f=100, PNG-only) can render it. On any decode/encode error
+// the original bytes are returned untouched: the worst case is the
+// pre-existing empty-box behaviour rather than a panic or a broken
+// escape, and ImageDimensions still works off the original bytes.
+func kittyEnsurePNG(data []byte) []byte {
+	if len(data) >= 8 && bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}) {
+		return data
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return data
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return data
+	}
+	return buf.Bytes()
+}
+
 // renderKitty builds a Kitty graphics protocol sequence. Supports chunked
 // data via the "m" continuation flag; chunk size is 4096 to stay under
 // terminal escape-buffer limits.
@@ -137,6 +158,12 @@ func renderITerm2(data []byte, maxCellsWide, maxCellsHigh int) string {
 //
 // Reference: https://sw.kovidgoyal.net/kitty/graphics-protocol/
 func renderKitty(data []byte, maxCellsWide, maxCellsHigh int) string {
+	// The Kitty graphics protocol with f=100 expects a PNG payload; it
+	// has no JPEG/GIF decoder. Feeding it non-PNG bytes makes kitty/
+	// ghostty reserve the cell rectangle but paint nothing, leaving an
+	// empty box. Re-encode anything that is not already PNG to PNG so the
+	// image actually renders regardless of its source format.
+	data = kittyEnsurePNG(data)
 	b64 := base64.StdEncoding.EncodeToString(data)
 	const chunk = 4096
 	var sb strings.Builder

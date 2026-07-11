@@ -62,6 +62,42 @@ func TestAnthShrinkImage_PassesThroughWhenSmall(t *testing.T) {
 	}
 }
 
+func TestAnthShrinkImage_CorrectsMislabeledMimeWhenSmall(t *testing.T) {
+	// A JPEG that fits within the cap but is wrongly declared as PNG.
+	// Anthropic 400s on the mismatch, so the builder must rewrite the
+	// declared media type to match the bytes even without resizing.
+	src := encodeJPEG(t, makeRect(800, 600))
+	out, mime := anthShrinkImageBytesIfTooBig(src, "image/png")
+	if !bytes.Equal(out, src) {
+		t.Errorf("small image bytes were rewritten; expected pass-through")
+	}
+	if mime != "image/jpeg" {
+		t.Errorf("mislabeled mime not corrected: got %s want image/jpeg", mime)
+	}
+}
+
+func TestAnthBuildToolResultContent_RepairsMislabeledImageOnResume(t *testing.T) {
+	// Simulates continuing a session whose transcript already carries a
+	// tool_result image with the wrong declared media type (.png name,
+	// JPEG bytes). The outbound request builder must rewrite the media
+	// type to match the bytes so Anthropic accepts the resumed request.
+	jpegBytes := encodeJPEG(t, makeRect(64, 64))
+	blocks := []Content{
+		TextBlock{Text: "screenshot"},
+		ImageBlock{MimeType: "image/png", Data: jpegBytes},
+	}
+	raw, err := anthBuildToolResultContent(blocks)
+	if err != nil {
+		t.Fatalf("build tool result: %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"media_type":"image/jpeg"`)) {
+		t.Fatalf("media type not repaired in outbound request: %s", raw)
+	}
+	if bytes.Contains(raw, []byte(`"media_type":"image/png"`)) {
+		t.Fatalf("stale image/png media type still present: %s", raw)
+	}
+}
+
 func TestAnthShrinkImage_DownscalesWhenTooWide(t *testing.T) {
 	src := encodePNG(t, makeRect(4000, 1000))
 	out, mime := anthShrinkImageBytesIfTooBig(src, "image/png")

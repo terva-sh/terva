@@ -350,12 +350,14 @@ func (d *BtwDialog) CursorPos(width int) (row, col int) {
 	}
 	// Reproduce render's structure to find where the editor sits.
 	// Note: the parent (interactive.go) wraps every dialog with
-	// padDialogFrame, which injects a blank row right after the
-	// frame header. We have to count that injected row here too;
-	// otherwise the reported cursor lands one row above the editor.
+	// PadDialogFrame. It only injects a blank row after the frame
+	// header when Render did not already put one there. With existing
+	// turns or a loading spinner, Render's first body row is already
+	// blank, so counting an extra pad row would place the cursor one
+	// row too low.
 	editorOffset := 1 // header
-	editorOffset++    // padDialogFrame's post-header blank
 	if len(d.turns) == 0 && !d.loading {
+		editorOffset++ // padDialogFrame's post-header blank
 		editorOffset++ // muted "ask anything..." line
 	}
 	for _, t := range d.turns {

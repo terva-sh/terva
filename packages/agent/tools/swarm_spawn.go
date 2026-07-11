@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
@@ -45,6 +46,11 @@ type SwarmSpawnTool struct {
 	// inherits the host model), so older construction sites still work.
 	HostProvider string
 	HostModel    string
+	// hostMu guards live mutation of HostProvider/HostModel by SetHost when
+	// the host session swaps models mid-turn; Execute reads them through
+	// host() under the read lock. Construction sets the fields directly,
+	// before the tool is registered, so those writes need no lock.
+	hostMu sync.RWMutex
 
 	// Tiers is the user's per-provider tier→model override (Config.SwarmTiers).
 	// It composes over the built-in family table, so a provider terva can't
@@ -73,6 +79,23 @@ type SwarmSpawnTool struct {
 	// `terva trust` (or pass allow_untrusted to proceed degraded). Nil
 	// means the host doesn't track trust; the gate is skipped.
 	Trusted func() bool
+}
+
+// SetHost updates the host provider/model this tool inherits for tier
+// resolution and omitted-route spawns. Safe to call while a turn runs: a
+// mid-session model swap mutates this live, and Execute reads through
+// host() under the read lock. Implements HostRouted.
+func (t *SwarmSpawnTool) SetHost(provider, model string) {
+	t.hostMu.Lock()
+	defer t.hostMu.Unlock()
+	t.HostProvider = provider
+	t.HostModel = model
+}
+
+func (t *SwarmSpawnTool) host() (provider, model string) {
+	t.hostMu.RLock()
+	defer t.hostMu.RUnlock()
+	return t.HostProvider, t.HostModel
 }
 
 type swarmSpawnArgs struct {
@@ -184,7 +207,8 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		}
 	}
 
-	route, errMsg := resolveSpawnRoute(a, t.HostProvider, t.HostModel, t.Tiers)
+	hostProvider, hostModel := t.host()
+	route, errMsg := resolveSpawnRoute(a, hostProvider, hostModel, t.Tiers)
 	if errMsg != "" {
 		return toolErr("swarm_spawn: " + errMsg), nil
 	}

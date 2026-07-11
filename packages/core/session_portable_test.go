@@ -232,6 +232,83 @@ func TestBranchSessionCopiesPrefix(t *testing.T) {
 	}
 }
 
+func TestBranchSessionUsesEffectiveTranscriptAfterCompaction(t *testing.T) {
+	root := testsupport.TempDir(t)
+	cwd := "/project"
+	parent, err := NewSession(root, cwd, "anthropic", "claude-opus-4-7", "0.0.0-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"raw-a", "raw-b", "raw-c", "raw-d"} {
+		_ = parent.AppendMessage(provider.Message{
+			Role:    provider.RoleUser,
+			Content: []provider.Content{provider.TextBlock{Text: text}},
+		})
+	}
+	_ = parent.AppendCompaction([]provider.Message{
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "summary"}}},
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "tail-c"}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "tail-d"}}},
+	})
+	_ = parent.AppendMessage(provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.Content{provider.TextBlock{Text: "after-compact"}},
+	})
+	_ = parent.Close()
+
+	opened, msgs, err := OpenSession(parent.Path)
+	if err != nil {
+		t.Fatalf("OpenSession parent: %v", err)
+	}
+	_ = opened.Close()
+	assertMessageTexts(t, msgs, []string{"summary", "tail-c", "tail-d", "after-compact"})
+
+	branchPath, err := BranchSession(parent.Path, root, cwd, "0.0.0-test", 4)
+	if err != nil {
+		t.Fatalf("BranchSession: %v", err)
+	}
+	branch, branchMsgs, err := OpenSession(branchPath)
+	if err != nil {
+		t.Fatalf("OpenSession branch: %v", err)
+	}
+	defer branch.Close()
+
+	assertMessageTexts(t, branchMsgs, []string{"summary", "tail-c", "tail-d", "after-compact"})
+	if branch.Meta.Parent != parent.Meta.ID {
+		t.Errorf("parent id: want %q, got %q", parent.Meta.ID, branch.Meta.Parent)
+	}
+	if branch.Meta.ForkPoint != 4 {
+		t.Errorf("fork_point: want 4, got %d", branch.Meta.ForkPoint)
+	}
+
+	shortBranchPath, err := BranchSession(parent.Path, root, cwd, "0.0.0-test", 2)
+	if err != nil {
+		t.Fatalf("BranchSession short fork: %v", err)
+	}
+	shortBranch, shortBranchMsgs, err := OpenSession(shortBranchPath)
+	if err != nil {
+		t.Fatalf("OpenSession short branch: %v", err)
+	}
+	defer shortBranch.Close()
+
+	assertMessageTexts(t, shortBranchMsgs, []string{"summary", "tail-c"})
+	if shortBranch.Meta.ForkPoint != 2 {
+		t.Errorf("short branch fork_point: want 2, got %d", shortBranch.Meta.ForkPoint)
+	}
+}
+
+func assertMessageTexts(t *testing.T, msgs []provider.Message, want []string) {
+	t.Helper()
+	if len(msgs) != len(want) {
+		t.Fatalf("message count: want %d, got %d", len(want), len(msgs))
+	}
+	for i, msg := range msgs {
+		if got := extractText(msg); got != want[i] {
+			t.Errorf("message %d: want %q, got %q", i, want[i], got)
+		}
+	}
+}
+
 // TestBuildSessionTree verifies parent/child edges are rebuilt
 // from meta + sibling-scan.
 func TestBuildSessionTree(t *testing.T) {

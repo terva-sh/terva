@@ -416,7 +416,7 @@ func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confi
 	// Discover the on-disk fake extension; any load error surfaces as a failed
 	// assertion downstream (no tools registered), so it is not swallowed.
 	_ = extMgr.Discover(ctx)
-	extMgr.WaitForReady(3 * time.Second)
+	extMgr.WaitForReady(testsupport.ExtReadyGrace)
 	f.extMu.Lock()
 	f.lastExtMgr = extMgr
 	f.extMu.Unlock()
@@ -965,7 +965,7 @@ func (f *fakeFactory) startMCP(ctx context.Context, mcpServers json.RawMessage) 
 	for _, s := range servers {
 		cfg.Servers[s.Name] = mcp.ServerConfig{Command: s.Command, Args: s.Args, Env: s.Env}
 	}
-	mgr := mcp.StartAll(ctx, cfg, nil)
+	mgr := mcp.StartAll(ctx, cfg, "", nil)
 	// Merge the namespaced MCP tools onto a copy of the base registry so the
 	// agent (and the test) see mcp_<server>_<tool> alongside the fakes.
 	reg := core.Registry{}

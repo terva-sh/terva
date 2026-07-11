@@ -100,14 +100,22 @@ type Client struct {
 	mu      sync.Mutex
 	pending map[int64]chan rpcResponse
 	closed  bool
+	// done is closed when readLoop exits (the server's stdout closed:
+	// it died or was stopped). The Manager watches this to withdraw a
+	// server that dies unexpectedly.
+	done chan struct{}
 
 	tools      []ToolDef
 	serverInfo string
 }
 
 // Start spawns the server, performs the initialize handshake, and
-// lists its tools. The context bounds startup only.
-func Start(ctx context.Context, name string, cfg ServerConfig, stderr io.Writer) (*Client, error) {
+// lists its tools. The context bounds startup only. cwd, when non-empty,
+// is the working directory the server subprocess runs in — the user's
+// project directory — so relative-path and directory-listing MCP tools
+// resolve against the project rather than terva's launch directory (which
+// under a carrier/daemon or an explicit --cwd is a different place).
+func Start(ctx context.Context, name string, cfg ServerConfig, cwd string, stderr io.Writer) (*Client, error) {
 	timeout := 60 * time.Second
 	if cfg.TimeoutMS > 0 {
 		timeout = time.Duration(cfg.TimeoutMS) * time.Millisecond
@@ -117,9 +125,13 @@ func Start(ctx context.Context, name string, cfg ServerConfig, stderr io.Writer)
 		cfg:     cfg,
 		timeout: timeout,
 		pending: map[int64]chan rpcResponse{},
+		done:    make(chan struct{}),
 	}
 
 	cmd := exec.Command(cfg.Command, cfg.Args...)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
 	env := procenv.Inherited()
 	for k, v := range cfg.Env {
 		// Validated at config load; belt-and-braces here because this
@@ -165,6 +177,11 @@ func (c *Client) Name() string { return c.name }
 
 // Tools returns the defs captured at startup.
 func (c *Client) Tools() []ToolDef { return c.tools }
+
+// Done returns a channel closed when the server's stdout has closed —
+// the subprocess died or was stopped and readLoop has exited. The
+// Manager watches this to withdraw a server that dies unexpectedly.
+func (c *Client) Done() <-chan struct{} { return c.done }
 
 func (c *Client) readLoop(stdout io.Reader) {
 	// MCP tool results can be large (a whole file in a text block); read
@@ -213,6 +230,10 @@ func (c *Client) readLoop(stdout io.Reader) {
 		ch <- rpcResponse{Error: &rpcError{Code: -1, Message: "mcp server closed the connection"}}
 	}
 	c.mu.Unlock()
+	// Signal death exactly once (readLoop runs once per client). The Manager's
+	// watcher wakes on this to decide whether the exit was a crash to withdraw
+	// or an intentional Stop.
+	close(c.done)
 }
 
 // call sends one request and waits for its response or timeout.

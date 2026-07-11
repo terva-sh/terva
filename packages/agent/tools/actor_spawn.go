@@ -58,6 +58,27 @@ type ActorSpawnTool struct {
 	HostProvider string
 	HostModel    string
 	Tiers        SwarmTierMap
+	// hostMu guards SetHost's live mutation of HostProvider/HostModel on a
+	// mid-session model swap; acquire() reads them through host(). Construction
+	// sets the fields directly, before the tool is registered.
+	hostMu sync.RWMutex
+}
+
+// SetHost updates the host provider/model an actor inherits for tier
+// resolution. Safe to call while a turn runs: a mid-session model swap
+// mutates this live, and acquire() reads through host() under the read
+// lock. Implements HostRouted.
+func (t *ActorSpawnTool) SetHost(provider, model string) {
+	t.hostMu.Lock()
+	defer t.hostMu.Unlock()
+	t.HostProvider = provider
+	t.HostModel = model
+}
+
+func (t *ActorSpawnTool) host() (provider, model string) {
+	t.hostMu.RLock()
+	defer t.hostMu.RUnlock()
+	return t.HostProvider, t.HostModel
 }
 
 type actorSpawnArgs struct {
@@ -160,7 +181,8 @@ func (t *ActorSpawnTool) acquire(ctx context.Context, name, task string, member 
 		t.dropActor(name) // stale (child gone) — fall through and re-spawn
 	}
 
-	route, errMsg := resolveSpawnRoute(swarmSpawnArgs{Tier: tier}, t.HostProvider, t.HostModel, t.Tiers)
+	hostProvider, hostModel := t.host()
+	route, errMsg := resolveSpawnRoute(swarmSpawnArgs{Tier: tier}, hostProvider, hostModel, t.Tiers)
 	if errMsg != "" {
 		return nil, nil, errors.New(errMsg)
 	}

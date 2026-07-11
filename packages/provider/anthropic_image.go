@@ -24,6 +24,24 @@ import (
 // kinds of screenshots / charts the model usually consumes.
 const anthMaxImageSide = 2000
 
+// anthSniffImageMIME returns the media type implied by an image's
+// leading magic bytes, independent of any declared type or stdlib
+// decoder registration. Returns "" when the signature is unrecognized,
+// leaving the caller's declared MIME untouched.
+func anthSniffImageMIME(data []byte) string {
+	switch {
+	case len(data) >= 8 && bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}):
+		return "image/png"
+	case len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF:
+		return "image/jpeg"
+	case len(data) >= 6 && (bytes.Equal(data[:6], []byte("GIF87a")) || bytes.Equal(data[:6], []byte("GIF89a"))):
+		return "image/gif"
+	case len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP")):
+		return "image/webp"
+	}
+	return ""
+}
+
 // maxInputPixels bounds the SOURCE image area we are willing to fully
 // decode for resizing: 64 megapixels (an 8000×8000 — Anthropic's own
 // single-image dimension cap — decodes to ~256 MB of RGBA, the most we
@@ -53,6 +71,19 @@ const maxInputPixels = 64 * 1000 * 1000
 func anthShrinkImageBytesIfTooBig(data []byte, mime string) ([]byte, string) {
 	if len(data) == 0 {
 		return data, mime
+	}
+	// Reconcile the declared media type with the actual bytes before
+	// anything else. Callers can mislabel images (a .png that is really
+	// JPEG, an extension that hardcodes a type), and so can already-
+	// persisted session transcripts created before this fix existed.
+	// Anthropic rejects the whole request when the declared type
+	// disagrees with the bytes it sniffs, which would make such a session
+	// impossible to continue. Sniffing the magic bytes here (independent
+	// of stdlib decoder registration, and resilient to a DecodeConfig
+	// failure below) makes the mismatch impossible to ship and lets a
+	// previously-broken session resume cleanly.
+	if real := anthSniffImageMIME(data); real != "" {
+		mime = real
 	}
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {

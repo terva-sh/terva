@@ -2,6 +2,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -164,6 +165,16 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return core.ToolResult{}, err
+		}
+		// The extension is only a hint. Files are routinely mislabeled (a
+		// .png that is actually JPEG bytes, a renamed download, an editor
+		// that re-encoded on save). Anthropic and other providers sniff the
+		// real bytes and reject the whole request when the declared media
+		// type disagrees, which would break the session. Derive the MIME
+		// from the actual content; keep the extension-based guess only when
+		// the bytes are unrecognized.
+		if sniffed := sniffImageMIME(data); sniffed != "" {
+			mime = sniffed
 		}
 		return core.ToolResult{
 			Content: []provider.Content{provider.ImageBlock{MimeType: mime, Data: data}},
@@ -359,6 +370,26 @@ func imageMIME(path string) string {
 	case ".gif":
 		return "image/gif"
 	case ".webp":
+		return "image/webp"
+	}
+	return ""
+}
+
+// sniffImageMIME inspects the leading bytes of an image and returns the
+// real media type, independent of the file's extension. Providers
+// validate the declared media type against the actual bytes and 400 the
+// whole request on a mismatch, so the extension can never be trusted.
+// Returns "" when the format is not one we ship images for, leaving the
+// caller's extension-based guess in place.
+func sniffImageMIME(data []byte) string {
+	switch {
+	case len(data) >= 8 && bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}):
+		return "image/png"
+	case len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF:
+		return "image/jpeg"
+	case len(data) >= 6 && (bytes.Equal(data[:6], []byte("GIF87a")) || bytes.Equal(data[:6], []byte("GIF89a"))):
+		return "image/gif"
+	case len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP")):
 		return "image/webp"
 	}
 	return ""

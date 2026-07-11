@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"terva.sh/terva/packages/agent/raati"
@@ -44,6 +45,10 @@ type RaatiConveneTool struct {
 	// ladder.
 	HostProvider string
 	HostModel    string
+	// hostMu guards SetHost's live mutation of HostProvider/HostModel on a
+	// mid-session model swap; Execute reads them through host(). Construction
+	// sets the fields directly, before the tool is registered.
+	hostMu sync.RWMutex
 
 	// Tiers is the user's per-provider tier ladder (level 1).
 	Tiers SwarmTierMap
@@ -78,6 +83,23 @@ type RaatiConveneTool struct {
 
 	// RoundTimeout bounds each round; zero uses the coordinator default.
 	RoundTimeout time.Duration
+}
+
+// SetHost updates the host provider/model that seats rigor level 0 and
+// anchors the level-1 ladder. Safe to call while a turn runs: a mid-session
+// model swap mutates this live, and Execute reads through host() under the
+// read lock. Implements HostRouted.
+func (t *RaatiConveneTool) SetHost(provider, model string) {
+	t.hostMu.Lock()
+	defer t.hostMu.Unlock()
+	t.HostProvider = provider
+	t.HostModel = model
+}
+
+func (t *RaatiConveneTool) host() (provider, model string) {
+	t.hostMu.RLock()
+	defer t.hostMu.RUnlock()
+	return t.HostProvider, t.HostModel
 }
 
 // raatiConveneArgs is the wire shape. Level and the bool knobs are
@@ -193,10 +215,11 @@ func (t *RaatiConveneTool) Execute(ctx context.Context, raw json.RawMessage, pro
 	if err != nil {
 		return toolErr("raati_convene: " + err.Error()), nil
 	}
+	hostProvider, hostModel := t.host()
 	level := 0
 	if a.Level != nil {
 		level = *a.Level
-	} else if v, ok, viaAuto := prof.PickLevel(HighestRaatiLevel(t.HostProvider, t.Tiers, t.Level2, len(raati.DefaultPanel()))); ok {
+	} else if v, ok, viaAuto := prof.PickLevel(HighestRaatiLevel(hostProvider, t.Tiers, t.Level2, len(raati.DefaultPanel()))); ok {
 		if err := RefuseCorrelatedGate(a.Profile, class, v, viaAuto); err != nil {
 			return toolErr("raati_convene: " + err.Error()), nil
 		}
@@ -231,7 +254,7 @@ func (t *RaatiConveneTool) Execute(ctx context.Context, raw json.RawMessage, pro
 		level2 = prof.Seats
 	}
 
-	pool, err := ResolveRaatiBindings(level, t.HostProvider, t.HostModel, t.Tiers, level2, len(raati.DefaultPanel()))
+	pool, err := ResolveRaatiBindings(level, hostProvider, hostModel, t.Tiers, level2, len(raati.DefaultPanel()))
 	if err != nil {
 		return toolErr("raati_convene: " + err.Error()), nil
 	}
