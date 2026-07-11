@@ -47,13 +47,19 @@ func TestRefreshUsageThrottledCoalesces(t *testing.T) {
 		t.Error("second refresh inside the window restamped (throttle did not coalesce)")
 	}
 
-	// Past the window, the next event refreshes again.
+	// Past the window, the next event refreshes again. Compare against the
+	// stale stamp we inject (a full window+ in the past), NOT against `first`:
+	// `first` and `third` are two time.Now() reads microseconds apart, and on a
+	// coarse monotonic clock (Windows, ~15ms) they can be equal, so
+	// `third.After(first)` is a false negative. `third.After(stale)` holds by
+	// seconds on every platform and still proves the restamp happened.
 	i.mu.Lock()
-	i.carrierUsageFetched = time.Now().Add(-usageRefreshMinInterval - time.Second)
+	stale := time.Now().Add(-usageRefreshMinInterval - time.Second)
+	i.carrierUsageFetched = stale
 	i.refreshUsageThrottledLocked()
 	third := i.carrierUsageFetched
 	i.mu.Unlock()
-	if !third.After(first) {
+	if !third.After(stale) {
 		t.Error("refresh past the window did not restamp")
 	}
 }
