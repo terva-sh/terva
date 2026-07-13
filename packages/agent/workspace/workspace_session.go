@@ -614,6 +614,18 @@ func (s *wsSession) rebuildTools(reason string) {
 	// Keep the workspace-shared sandbox (and its live /jail state) across the
 	// rebuild — Resolve just minted a fresh unlocked one for the new tools.
 	rr.UseSandbox(s.ws.sandbox)
+	// Re-bind the ask channel. Unlike the confirmer — which lives on the
+	// long-lived gate and so survives a rebuild untouched — the asker lives on
+	// the tool instance, and Resolve just minted a fresh ask_user_question with
+	// a nil Asker. Without this the rebuilt tool reports "no interactive
+	// channel" for the rest of the session, with the front end sitting right
+	// there, question dialog wired and waiting.
+	//
+	// Not a corner case: a rebuild fires before the first turn whenever an
+	// extension asserts its tool policy, and again on entering plan mode — the
+	// one mode that deliberately keeps ask_user_question, precisely so the agent
+	// can ask when requirements are unclear.
+	rr.SetAsker(&webAsker{s: s})
 	toolsChanged := s.agent.SetTools(rr.ToolRegistry)
 	// The system prompt carries view state too — the prompt's tool list, the
 	// auto-swarm nudge, an extension's static context — so install the

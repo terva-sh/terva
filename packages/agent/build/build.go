@@ -1240,11 +1240,17 @@ func (r *Resolved) SetAsker(a core.Asker) {
 }
 
 // bindAsker wires the front-end question channel into the
-// ask_user_question tool of an arbitrary registry. Used both for the
-// initial registry and for the fresh registry a live approval-mode
-// switch builds, so the tool keeps its channel across that rebuild
-// (without it the rebuilt tool's Asker is nil and the tool falls back to
-// its "no channel" result). Nil-safe; no-op when the tool isn't present.
+// ask_user_question tool of an arbitrary registry.
+//
+// It must be called for EVERY registry handed to a live agent, not just the
+// first. The asker lives on the tool instance, so a rebuild that re-resolves
+// the registry mints a fresh ask_user_question with a nil Asker and silently
+// drops the channel — the tool then reports "no interactive channel" for the
+// rest of the session. (The confirmer has no such hazard: it lives on the
+// long-lived gate, which a rebuild never touches.) Every rebuild path is
+// therefore a call site: see wsSession.rebuildTools.
+//
+// Nil-safe; no-op when the tool isn't present.
 func bindAsker(reg core.Registry, a core.Asker) {
 	if t, ok := reg["ask_user_question"].(*tools.AskUserTool); ok {
 		t.Asker = a
