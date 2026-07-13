@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -61,6 +62,14 @@ type Session struct {
 	// types, a newer format version). Empty for clean loads. Callers
 	// decide how to surface it; the data is never silently dropped.
 	LoadWarnings []string
+
+	// TitleGenerated reports whether the title OpenSession loaded (the last
+	// rename row, reflected into Meta.Title) was machine-generated
+	// (RenameSessionGenerated) rather than a user rename. Provenance decides
+	// whether automatic re-titling may replace the title — a manual rename
+	// is never clobbered. Meta-line titles and legacy source-less rename
+	// rows count as manual: the conservative reading.
+	TitleGenerated bool
 }
 
 // sessionFormatVersion is the version of the on-disk session schema
@@ -358,6 +367,122 @@ func forEachJSONLLine(r io.Reader, fn func([]byte) error) error {
 	}
 }
 
+// jsonlPerLineCeiling bounds the bytes forEachJSONLLineBounded will materialize
+// for a SINGLE row before handing it to fn. A row longer than this is drained to
+// its newline and skipped without ever being allocated whole — an oversized or
+// unterminated row can't force an allocation past this bound. It sits below the
+// cumulative scan ceiling (session_inspect's 64 MiB) yet well above any real
+// transcript row (a base64 image block or a whole-session compaction
+// checkpoint), so only pathological input trips it. A var so tests can lower it.
+var jsonlPerLineCeiling int64 = 16 << 20
+
+// errJSONLCumulative stops the bounded walk when the cumulative byte budget is
+// spent. It never escapes forEachJSONLLineBounded's callers, who map it to a
+// truncation flag.
+var errJSONLCumulative = errors.New("jsonl: cumulative byte ceiling reached")
+
+// forEachJSONLLineBounded is forEachJSONLLine with two input bounds enforced at
+// the READ boundary — before a row is trimmed, unmarshaled, or handed to fn:
+//
+//   - perLineMax caps a single row's bytes. A longer row is drained to its
+//     newline and skipped (onOversize is called with the raw byte count so the
+//     caller can flag truncation); fn never sees it, so no oversized or
+//     unterminated row is ever materialized whole. Memory stays ~perLineMax.
+//   - cumulativeMax caps total row bytes read across the file, enforced even
+//     mid-row so one unterminated row can't read the whole file. Reaching it
+//     stops the walk with errJSONLCumulative.
+//
+// A max <= 0 disables that bound; onOversize may be nil. fn MUST NOT retain the
+// slice it is handed (the backing buffer is reused across rows).
+func forEachJSONLLineBounded(r io.Reader, perLineMax, cumulativeMax int64, onOversize func(n int64), fn func([]byte) error) error {
+	br := bufio.NewReader(r)
+	var cumulative, rowBytes int64
+	var line []byte
+	oversized := false
+	for {
+		frag, err := br.ReadSlice('\n')
+		cumulative += int64(len(frag))
+		rowBytes += int64(len(frag))
+		if perLineMax > 0 && !oversized && int64(len(line))+int64(len(frag)) > perLineMax {
+			oversized = true // stop retaining; drain the rest of this row
+			line = line[:0]
+		}
+		if !oversized {
+			line = append(line, frag...) // append copies frag out of br's buffer
+		}
+
+		if err == bufio.ErrBufferFull {
+			// Row continues past bufio's buffer; enforce the budget mid-row.
+			if cumulativeMax > 0 && cumulative > cumulativeMax {
+				return errJSONLCumulative
+			}
+			continue
+		}
+
+		// Row complete: delimiter found, or EOF closed the file's final row.
+		if oversized {
+			if onOversize != nil {
+				onOversize(rowBytes)
+			}
+		} else if trimmed := bytes.TrimRight(line, "\r\n"); len(trimmed) > 0 {
+			if ferr := fn(trimmed); ferr != nil {
+				return ferr
+			}
+		}
+		line = line[:0]
+		rowBytes = 0
+		oversized = false
+
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err // a real read error
+		}
+		if cumulativeMax > 0 && cumulative > cumulativeMax {
+			return errJSONLCumulative
+		}
+	}
+}
+
+// ReadSessionMeta reads only a session file's meta row — the cheap
+// authorization primitive a caller uses BEFORE committing to a full scan (e.g.
+// session_inspect confirming a swarm child's project ownership before parsing
+// its payload). The loader writes meta as the first row, and a later UpdateModel
+// only rewrites provider/model (never cwd), so the first meta row's cwd is
+// authoritative; the scan stops there. Per-line and cumulative bounded so a
+// damaged/crafted first row can't force unbounded work. A missing meta returns
+// the zero value (empty cwd), which authorization treats as fail-closed.
+func ReadSessionMeta(path string) (SessionMeta, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return SessionMeta{}, err
+	}
+	defer f.Close()
+	var meta SessionMeta
+	werr := forEachJSONLLineBounded(f, jsonlPerLineCeiling, jsonlPerLineCeiling, nil, func(line []byte) error {
+		var head sessionLineHead
+		if err := json.Unmarshal(line, &head); err != nil {
+			return nil
+		}
+		if head.Type != "meta" {
+			return nil
+		}
+		var row struct {
+			Meta SessionMeta `json:"meta"`
+		}
+		if err := json.Unmarshal(line, &row); err == nil {
+			meta = row.Meta
+			return io.EOF // first meta row is authoritative for cwd; stop
+		}
+		return nil
+	})
+	if werr != nil && werr != io.EOF {
+		return SessionMeta{}, werr
+	}
+	return meta, nil
+}
+
 // SessionUsage returns the most recent cumulative usage row stored in
 // a session file. Sessions append one usage row per completed turn; the
 // latest row's cumulative field is the session total. Missing usage rows
@@ -447,6 +572,7 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 	defer f.Close()
 
 	var meta SessionMeta
+	var titleGenerated bool
 	var messages []provider.Message
 	excludeImages := map[string]bool{}
 	rep := &loadReport{}
@@ -463,8 +589,21 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 			}
 			if err := json.Unmarshal(line, &row); err == nil {
 				meta = row.Meta
+				titleGenerated = false
 			} else {
 				rep.corruptLines++
+			}
+		case "rename":
+			// The latest rename row IS the session's title; without this a
+			// session renamed while cold would materialize untitled and the
+			// automatic titling pass could clobber the user's name.
+			var row struct {
+				Title  string `json:"title"`
+				Source string `json:"source"`
+			}
+			if err := json.Unmarshal(line, &row); err == nil && row.Title != "" {
+				meta.Title = row.Title
+				titleGenerated = row.Source == renameSourceGenerated
 			}
 		case "message":
 			msg, err := hydrateMessage(line, rep)
@@ -508,7 +647,7 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	s := &Session{ID: meta.ID, Path: path, Meta: meta, writer: out, buf: bufio.NewWriter(out), LoadWarnings: rep.warnings(path)}
+	s := &Session{ID: meta.ID, Path: path, Meta: meta, TitleGenerated: titleGenerated, writer: out, buf: bufio.NewWriter(out), LoadWarnings: rep.warnings(path)}
 	return s, messages, nil
 }
 
@@ -653,21 +792,41 @@ type SessionSummary struct {
 	FirstUserText string
 	TotalCost     float64
 	Title         string
+	// TitleGenerated reports machine provenance for Title (see
+	// Session.TitleGenerated); false for user renames and meta-line titles.
+	TitleGenerated bool
 }
 
-// RenameSession updates the title field in the session's meta line.
-// It rewrites the first line of the file (the meta line) with the
-// updated title.
-// RenameSession appends a rename line to the session file. This is
+// renameSourceGenerated marks a rename row written by machine titling
+// (settleTitle / sessions.generate_title / the post-compaction refresh).
+// User renames carry no source. The distinction is provenance: automatic
+// re-titling may replace a generated title, never a manual one.
+const renameSourceGenerated = "generated"
+
+// RenameSession appends a USER rename line to the session file. This is
 // safe even for the currently active session because it opens the
 // file independently and appends (doesn't rewrite).
 func RenameSession(path, title string) error {
+	return appendRename(path, title, "")
+}
+
+// RenameSessionGenerated appends a machine-generated rename line — same row
+// as RenameSession plus the provenance marker automatic re-titling keys on.
+func RenameSessionGenerated(path, title string) error {
+	return appendRename(path, title, renameSourceGenerated)
+}
+
+func appendRename(path, title, source string) error {
 	f, err := privfs.OpenFile(path, os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	line, _ := json.Marshal(map[string]string{"type": "rename", "title": title})
+	row := map[string]string{"type": "rename", "title": title}
+	if source != "" {
+		row["source"] = source
+	}
+	line, _ := json.Marshal(row)
 	line = append(line, '\n')
 	_, err = f.Write(line)
 	return err
@@ -707,6 +866,7 @@ func describeSession(path string) SessionSummary {
 				s.Model = row.Meta.Model
 				s.Provider = row.Meta.Provider
 				s.Title = row.Meta.Title
+				s.TitleGenerated = false
 			}
 		case "message":
 			s.MessageCount++
@@ -722,10 +882,12 @@ func describeSession(path string) SessionSummary {
 			}
 		case "rename":
 			var row struct {
-				Title string `json:"title"`
+				Title  string `json:"title"`
+				Source string `json:"source"`
 			}
 			if err := json.Unmarshal(line, &row); err == nil && row.Title != "" {
 				s.Title = row.Title
+				s.TitleGenerated = row.Source == renameSourceGenerated
 			}
 		case "usage":
 			var row struct {

@@ -51,6 +51,10 @@ type sessionDialogAction struct {
 	Path    string
 	Close   bool
 	Renamed bool
+	// GenerateTitle asks the host to run on-demand title generation for
+	// Path (a model call — the host handles it asynchronously and reports
+	// back via SetTitleFor / the status line).
+	GenerateTitle bool
 }
 
 func NewSessionDialog() *SessionDialog { return &SessionDialog{} }
@@ -116,7 +120,7 @@ func (d *SessionDialog) Render(th tui.Theme, width int) []string {
 		lines = append(lines, FrameRule(th, width))
 		return lines
 	}
-	lines = append(lines, th.FG256(th.Muted, i18n.T("pick a session (↑/↓, pgup/pgdn, enter resume, r rename, esc cancel)")))
+	lines = append(lines, th.FG256(th.Muted, i18n.T("pick a session (↑/↓, pgup/pgdn, enter resume, r rename, g generate title, esc cancel)")))
 
 	// Viewport: windowed slice of d.sessions around d.cursor so a
 	// list taller than the terminal still scrolls. Caller sets
@@ -140,7 +144,7 @@ func (d *SessionDialog) Render(th tui.Theme, width int) []string {
 	}
 	for i := d.viewTop; i < viewBot; i++ {
 		s := d.sessions[i]
-		plain := "  " + formatSessionRowPlain(s, width-2)
+		plain := "  " + FormatSessionRowPlain(s, width-2)
 		if i == d.cursor {
 			lines = append(lines, th.PadHighlight(plain, width))
 		} else {
@@ -186,12 +190,13 @@ func clampViewTop(viewTop, cursor, window, total int) int {
 	return viewTop
 }
 
-// formatSessionRowPlain returns the session row body without any ANSI
+// FormatSessionRowPlain returns the session row body without any ANSI
 // styling so the caller can wrap it in either a plain mute color or a
 // full-row selection highlight. The returned string is guaranteed to
 // fit within maxWidth visible characters so the terminal never soft-
-// wraps it into the next row.
-func formatSessionRowPlain(s core.SessionSummary, maxWidth int) string {
+// wraps it into the next row. Exported because the pre-TUI --resume
+// fallback picker (non-TTY boots) renders the same rows.
+func FormatSessionRowPlain(s core.SessionSummary, maxWidth int) string {
 	when := formatRelative(s.Started)
 	summary := strings.TrimSpace(s.Title)
 	if summary == "" {
@@ -342,6 +347,21 @@ func (d *SessionDialog) HandleKey(k tui.Key) sessionDialogAction {
 			}
 			return sessionDialogAction{}
 		}
+		if k.Rune == 'g' && len(d.sessions) > 0 {
+			return sessionDialogAction{GenerateTitle: true, Path: d.sessions[d.cursor].Path}
+		}
 	}
 	return sessionDialogAction{}
+}
+
+// SetTitleFor updates the displayed title of the row for path, if it is
+// still listed — the host calls it when an async title generation lands.
+// A dialog that was closed or re-listed in the meantime simply no-ops.
+func (d *SessionDialog) SetTitleFor(path, title string) {
+	for i := range d.sessions {
+		if d.sessions[i].Path == path {
+			d.sessions[i].Title = title
+			return
+		}
+	}
 }

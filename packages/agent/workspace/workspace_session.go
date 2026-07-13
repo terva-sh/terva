@@ -19,6 +19,7 @@ import (
 	"terva.sh/terva/packages/agent/raati"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -39,11 +40,12 @@ type wsSession struct {
 	ws          *Workspace
 	agent       *core.Agent
 	sess        *core.Session
-	gate        *core.ConfirmGate   // nil in pure-yolo (no confirmation needed)
-	extMgr      *extensions.Manager // this session's extension subprocesses
-	stopExt     func()              // tears extMgr down on close
-	skillTool   *skills.Tool        // available skills, for /skill autocomplete (may be nil)
-	loreEntries []lore.Entry        // discovered lore, for the lore inspector pane (nil when lore off)
+	gate        *core.ConfirmGate    // nil in pure-yolo (no confirmation needed)
+	extMgr      *extensions.Manager  // this session's extension subprocesses
+	stopExt     func()               // tears extMgr down on close
+	skillTool   *skills.Tool         // available skills, for /skill autocomplete (may be nil)
+	tasks       *tasktool.Controller // the built-in task board (nil when the session has no base workspace tools)
+	loreEntries []lore.Entry         // discovered lore, for the lore inspector pane (nil when lore off)
 	// actorCast + warmActors back the --play director's actor_spawn tool: the
 	// closed declared cast and the live-actor cache that survives registry
 	// rebuilds (so re-injecting actor_spawn on reload keeps the warm scene).
@@ -56,19 +58,24 @@ type wsSession struct {
 	hub          *wsHub
 	subscription bool // credential is an OAuth ("sub") token, not a paid api key
 
-	mu         sync.Mutex
-	provider   string
-	model      string
-	title      string
-	persona    string
-	turnCtx    context.Context
-	turnCancel context.CancelFunc // non-nil while a turn runs
-	curCallID  string             // the tool call currently at the gate (recordCall)
-	pendPerm   map[string]chan core.ConfirmDecision
-	pendAsk    map[string]chan core.UserAnswer
-	permReq    map[string]ctrlproto.PermissionRequest // details for the snapshot
-	askReq     map[string]ctrlproto.AskRequest        // details for the snapshot
-	askSeq     uint64
+	mu       sync.Mutex
+	provider string
+	model    string
+	title    string
+	// titleGenerated is title's provenance: true when machine titling wrote
+	// it (settleTitle / generate_title / the post-compaction refresh), false
+	// for a user rename. Automatic re-titling keys on it — a manual name is
+	// never clobbered. Seeded from the session file's rename rows.
+	titleGenerated bool
+	persona        string
+	turnCtx        context.Context
+	turnCancel     context.CancelFunc // non-nil while a turn runs
+	curCallID      string             // the tool call currently at the gate (recordCall)
+	pendPerm       map[string]chan core.ConfirmDecision
+	pendAsk        map[string]chan core.UserAnswer
+	permReq        map[string]ctrlproto.PermissionRequest // details for the snapshot
+	askReq         map[string]ctrlproto.AskRequest        // details for the snapshot
+	askSeq         uint64
 
 	paneMu    sync.Mutex           // guards extPanels (touched from ext driver goroutines)
 	extPanels map[string]*webPanel // surface id → open extension panel
@@ -114,18 +121,23 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	}
 
 	s := &wsSession{
-		id:        id,
-		ws:        w,
-		sess:      sess,
-		hub:       newWSHub(),
-		provider:  sess.Meta.Provider,
-		model:     sess.Meta.Model,
-		title:     sess.Meta.Title,
-		pendPerm:  map[string]chan core.ConfirmDecision{},
-		pendAsk:   map[string]chan core.UserAnswer{},
-		permReq:   map[string]ctrlproto.PermissionRequest{},
-		askReq:    map[string]ctrlproto.AskRequest{},
-		extPanels: map[string]*webPanel{},
+		id:       id,
+		ws:       w,
+		sess:     sess,
+		hub:      newWSHub(),
+		provider: sess.Meta.Provider,
+		model:    sess.Meta.Model,
+		// Title + provenance come from the file (OpenSession reflects the
+		// last rename row into Meta.Title), so a session renamed while cold
+		// materializes titled — and the automatic passes know whether the
+		// name is theirs to replace.
+		title:          sess.Meta.Title,
+		titleGenerated: sess.TitleGenerated,
+		pendPerm:       map[string]chan core.ConfirmDecision{},
+		pendAsk:        map[string]chan core.UserAnswer{},
+		permReq:        map[string]ctrlproto.PermissionRequest{},
+		askReq:         map[string]ctrlproto.AskRequest{},
+		extPanels:      map[string]*webPanel{},
 	}
 
 	pol, warns := build.BuildPermissionPolicy(args)
@@ -190,6 +202,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	s.agent = ag
 	s.gate = gate
 	s.skillTool = r.SkillTool
+	s.tasks = r.Tasks
 	s.args = args
 	s.cwd = r.CWD
 	s.trusted.Store(r.Trusted)
@@ -245,23 +258,23 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 			return true, "", res.ReplaceText
 		}
 		build.WireExtEphemeral(ag, extMgr.EphemeralContext)
+		build.WireTasksEphemeral(ag, r.Tasks)
 	}
 	// Don't let the coordinator declare "finished" while it has open work —
 	// an extension's blocking context (protocol), OR sub-agents it spawned that
-	// are still running. The swarm hold fires once, then the coordinator idles
-	// and the queued [auto-swarm update] recap re-engages it (no spin).
-	ag.ContinueOnStop = func(stop provider.StopReason) (bool, string) {
-		if stop != provider.StopEnd {
-			return false, ""
-		}
-		if extMgr != nil && extMgr.HasBlockingContext() {
-			return true, build.OpenWorkGateMessage
-		}
-		if s.swarmGuardHold() {
-			return true, swarmWaitGateMessage
-		}
-		return false, ""
-	}
+	// are still running. Registration order is priority: open work outranks the
+	// swarm hold. The swarm hold fires once, then the coordinator idles and the
+	// queued [auto-swarm update] recap re-engages it (no spin).
+	ag.AddContinuationGate(build.OpenWorkGate(extMgr, r.Tasks))
+	ag.AddContinuationGate(core.ContinuationGate{
+		Cause: "swarm-hold",
+		Fire: func(provider.StopReason) (string, bool) {
+			if s.swarmGuardHold() {
+				return swarmWaitGateMessage, true
+			}
+			return "", false
+		},
+	})
 
 	// Event observers, in registration order — which IS the delivery order.
 	// Broadcast to clients FIRST (so the UI streams promptly), then the
@@ -316,6 +329,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// Announce the session to extensions AFTER it exists, so a session-keyed
 	// extension (e.g. memory) learns the real id before the first tool call.
 	build.EmitSessionStart(extMgr, sess)
+	build.RebindTasks(r.Tasks, sess)
 	return s, nil
 }
 
@@ -495,6 +509,13 @@ func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock) error 
 		// before it existed. Cost: one full-transcript frame per turn end to
 		// every subscriber (image bytes ride by reference in-process).
 		s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
+		// The task board only mutates via task_* tool calls within a turn, so a
+		// single surface_updated at turn end is the reasonable refresh cadence: it
+		// keeps an open /tasks panel and the status-bar glance current without a
+		// per-mutation poller. Web ignores the id (not offered as a tab).
+		if s.hasTaskBoard() {
+			s.broadcast(ctrlproto.SurfaceUpdatedEvent("taskboard"))
+		}
 		// After the turn, settle an untitled session's title and push it live, so
 		// the header/list stop reading "new chat" without a page refresh. Uses the
 		// workspace context (not the turn's) so it survives turn teardown.
@@ -683,6 +704,11 @@ func (s *wsSession) compact(ctx context.Context) error {
 	// Replace every client's transcript with the compacted one.
 	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	s.broadcast(ctrlproto.NoticeEvent("info", "", i18n.T("Compacted the conversation.")))
+	// A compacted session has outgrown its early title; refresh a
+	// machine-generated one from the new summary anchor (never a manual
+	// rename; gated on auto_title inside). Uses the workspace context so it
+	// survives the caller — same reasoning as settleTitle at turn end.
+	go s.retitleAfterCompaction(s.ws.ctx)
 	return nil
 }
 
@@ -749,7 +775,10 @@ func (s *wsSession) settleTitle(ctx context.Context) {
 	if !ok || cl == nil {
 		return
 	}
-	gen := generateTitle(ctx, cl, model, first)
+	// The cascading seed (compaction anchor + recent exchanges) degenerates
+	// to the first user message here — settleTitle only ever runs on a
+	// still-untitled session, i.e. right after the first exchange.
+	gen := generateTitle(ctx, cl, model, core.BuildTitleSeed(s.agent.Messages(), core.TitleSeedBudget))
 	if gen == "" {
 		return
 	}
@@ -763,18 +792,56 @@ func (s *wsSession) settleTitle(ctx context.Context) {
 	}
 }
 
-// applyTitle persists a title to the session file, records it in memory, and
-// broadcasts the change. Best-effort persistence: an update still reaches
-// clients even if the append fails.
+// applyTitle persists a machine-generated title to the session file (with
+// the provenance marker automatic re-titling keys on), records it in memory,
+// and broadcasts the change. Best-effort persistence: an update still
+// reaches clients even if the append fails. Manual renames don't come here —
+// they go through RenameSession (the verb), which writes a user row.
 func (s *wsSession) applyTitle(title string) {
 	if title == "" {
 		return
 	}
 	if s.sess != nil {
-		_ = core.RenameSession(s.sess.Path, title)
+		_ = core.RenameSessionGenerated(s.sess.Path, title)
 	}
-	s.setTitle(title)
+	s.setTitle(title, true)
 	s.broadcast(ctrlproto.SessionUpdatedEvent(s.info()))
+}
+
+// retitleAfterCompaction refreshes a machine-generated title right after a
+// compaction — the moment a session has provably outgrown the title its
+// opening earned, and exactly when BuildTitleSeed gains a fresh anchor. Same
+// gate as the automatic pass (auto_title governs tokens spent unasked) and
+// the same client resolution; a manual rename is never touched, including
+// one that lands while the model is thinking (re-checked before apply).
+// Runs off the compact path (async) so neither the compact verb nor the
+// turn-end auto-compact waits on a second model call.
+func (s *wsSession) retitleAfterCompaction(ctx context.Context) {
+	s.mu.Lock()
+	prev, replaceable := s.title, s.titleGenerated || s.title == ""
+	s.mu.Unlock()
+	if !replaceable {
+		return
+	}
+	ok, cl, model := s.ws.titleGen(s)
+	if !ok || cl == nil {
+		return
+	}
+	seed := core.BuildTitleSeed(s.agent.Messages(), core.TitleSeedBudget)
+	if seed == "" {
+		return
+	}
+	gen := generateTitle(ctx, cl, model, seed)
+	if gen == "" || gen == prev {
+		return
+	}
+	s.mu.Lock()
+	raced := s.title != prev
+	s.mu.Unlock()
+	if raced {
+		return
+	}
+	s.applyTitle(gen)
 }
 
 // firstUserText returns the text of the first user message in a transcript, the
@@ -842,6 +909,15 @@ func (s *wsSession) cancelTurn() {
 	if c != nil {
 		c()
 	}
+}
+
+// busy reports whether a turn is currently running (its cancel is armed). Used
+// by the restart drain to wait for a cancelled turn to reach endTurn, which
+// clears turnCancel.
+func (s *wsSession) busy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnCancel != nil
 }
 
 // recordCall notes the tool call about to be gated, so the web Confirmer can
@@ -924,17 +1000,18 @@ func (s *wsSession) skillList() []ctrlproto.SkillInfo {
 
 func (s *wsSession) info() ctrlproto.SessionInfo {
 	s.mu.Lock()
-	prov, model, title, persona := s.provider, s.model, s.title, s.persona
+	prov, model, title, persona, sub := s.provider, s.model, s.title, s.persona, s.subscription
 	s.mu.Unlock()
 	info := ctrlproto.SessionInfo{
-		ID:       s.id,
-		Title:    title,
-		Provider: prov,
-		Model:    model,
-		Persona:  persona,
-		Path:     s.sess.Path,
-		Created:  ctrlTimeString(s.sess.Meta.Started),
-		Trusted:  s.trusted.Load(),
+		ID:           s.id,
+		Title:        title,
+		Provider:     prov,
+		Model:        model,
+		Persona:      persona,
+		Path:         s.sess.Path,
+		Created:      ctrlTimeString(s.sess.Meta.Started),
+		Trusted:      s.trusted.Load(),
+		Subscription: sub,
 	}
 	if s.agent != nil {
 		info.Messages = len(s.agent.Messages())
@@ -966,9 +1043,12 @@ func (s *wsSession) setModel(prov, model string) {
 	s.mu.Unlock()
 }
 
-func (s *wsSession) setTitle(t string) {
+// setTitle records a title and its provenance (generated: machine titling —
+// replaceable by automatic passes; not: a user rename — never clobbered).
+func (s *wsSession) setTitle(t string, generated bool) {
 	s.mu.Lock()
 	s.title = t
+	s.titleGenerated = generated
 	s.mu.Unlock()
 }
 

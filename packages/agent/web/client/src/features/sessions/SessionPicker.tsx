@@ -7,6 +7,7 @@ export function SessionPicker(props: {
   onSelect: (id: string) => void
   onNew: () => void
   onRename: (session: SessionInfo) => void
+  onGenerateTitle: (session: SessionInfo) => void
   onDelete: (session: SessionInfo) => void
   onClose: () => void
 }) {
@@ -40,6 +41,13 @@ export function SessionPicker(props: {
                 onClick={(event) => (event.stopPropagation(), props.onRename(session))}
               >
                 ✎
+              </button>
+              <button
+                class="icon sm"
+                title={t('Generate title')}
+                onClick={(event) => (event.stopPropagation(), props.onGenerateTitle(session))}
+              >
+                ✨
               </button>
               <button
                 class="icon sm"

@@ -78,6 +78,35 @@ func SessionIDFromPath(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
 }
 
+// LooksLikeSessionID reports whether s has the session filename-stem shape
+// core.NewSession generates — YYYYMMDD-HHMMSS-xxxxxxxx (8 digits, dash, 6
+// digits, dash, 8 lowercase hex), .jsonl suffix tolerated. The --resume flag
+// consumes its optional value only on a match, so a positional prompt after
+// -r is never mistaken for a session id.
+func LooksLikeSessionID(s string) bool {
+	s = strings.TrimSuffix(s, ".jsonl")
+	if len(s) != 24 {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case i == 8 || i == 15:
+			if r != '-' {
+				return false
+			}
+		case i < 15:
+			if r < '0' || r > '9' {
+				return false
+			}
+		default:
+			if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // flattenMessageText concatenates a message's text blocks, dropping
 // tool-call structure the way a text index wants.
 func flattenMessageText(m provider.Message) string {

@@ -34,22 +34,24 @@ describe('SessionInfo', () => {
 describe('SessionPicker', () => {
   it('selects sessions and marks the current one active', () => {
     const onSelect = vi.fn()
-    render(<SessionPicker sessions={[session(), session({ id: 's2', title: 'Second' })]} current="s2" onSelect={onSelect} onNew={() => {}} onRename={() => {}} onDelete={() => {}} onClose={() => {}} />)
+    render(<SessionPicker sessions={[session(), session({ id: 's2', title: 'Second' })]} current="s2" onSelect={onSelect} onNew={() => {}} onRename={() => {}} onGenerateTitle={() => {}} onDelete={() => {}} onClose={() => {}} />)
     const current = screen.getByText('Second').closest('.session')
     expect(current?.classList.contains('active')).toBe(true)
     fireEvent.click(screen.getByText('Second'))
     expect(onSelect).toHaveBeenCalledWith('s2')
   })
 
-  it('routes new, rename, and delete without selecting the row', () => {
-    const onNew = vi.fn(), onRename = vi.fn(), onDelete = vi.fn(), onSelect = vi.fn()
+  it('routes new, rename, generate title, and delete without selecting the row', () => {
+    const onNew = vi.fn(), onRename = vi.fn(), onGenerateTitle = vi.fn(), onDelete = vi.fn(), onSelect = vi.fn()
     const value = session()
-    render(<SessionPicker sessions={[value]} current="" onSelect={onSelect} onNew={onNew} onRename={onRename} onDelete={onDelete} onClose={() => {}} />)
+    render(<SessionPicker sessions={[value]} current="" onSelect={onSelect} onNew={onNew} onRename={onRename} onGenerateTitle={onGenerateTitle} onDelete={onDelete} onClose={() => {}} />)
     fireEvent.click(screen.getByRole('button', { name: '+ New' }))
     fireEvent.click(screen.getByTitle('Rename'))
+    fireEvent.click(screen.getByTitle('Generate title'))
     fireEvent.click(screen.getByTitle('Delete'))
     expect(onNew).toHaveBeenCalledOnce()
     expect(onRename).toHaveBeenCalledWith(value)
+    expect(onGenerateTitle).toHaveBeenCalledWith(value)
     expect(onDelete).toHaveBeenCalledWith(value)
     expect(onSelect).not.toHaveBeenCalled()
   })

@@ -5,11 +5,13 @@ import { copyToClipboard } from '../../ui/browser'
 export function SessionInfo({
   info,
   cost,
+  version,
   onClose,
   onContext,
 }: {
   info: SessionInfoData | null
   cost: number
+  version?: string
   onClose: () => void
   onContext: () => void
 }) {
@@ -41,6 +43,12 @@ export function SessionInfo({
           <span>{t('Session')}</span>
           <b class="mono">{info.id}</b>
         </div>
+        {version && (
+          <div class="info-row">
+            <span>{t('terva')}</span>
+            <b class="mono">v{version}</b>
+          </div>
+        )}
         {info.path && (
           <div class="info-row path">
             <span>{t('Path')}</span>
