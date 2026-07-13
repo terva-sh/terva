@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"terva.sh/terva/packages/testsupport"
@@ -139,8 +140,11 @@ func TestUnjailStoreIsPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := fi.Mode().Perm(); perm != 0o600 {
-		t.Errorf("unjailed.json mode = %o, want 600", perm)
+	// Windows has no POSIX mode to assert — Go reports 0666 there whatever the
+	// file was created with. The store is written the same way trusted.json is,
+	// and trust's own test skips the check on the same grounds.
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Errorf("unjailed.json mode = %o, want 600", fi.Mode().Perm())
 	}
 }
 
