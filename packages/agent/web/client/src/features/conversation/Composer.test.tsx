@@ -302,6 +302,38 @@ describe('Composer core interaction', () => {
     expect(textarea.style.height).toBe('30px')
   })
 
+  // iOS keeps window.innerHeight at the full screen height while the software
+  // keyboard covers the bottom half of it, so a cap measured against innerHeight
+  // lets the box grow under the keyboard and swallow the transcript. Only
+  // visualViewport shrinks with the keyboard — so that is what the cap reads,
+  // and a resize (the keyboard opening under an already-grown box) re-tightens it.
+  it('caps growth against the visible viewport, not the keyboard-blind one', async () => {
+    const listeners: Record<string, () => void> = {}
+    const viewport = {
+      height: 400, // a phone with the keyboard up; innerHeight is still 1000
+      addEventListener: (event: string, fn: () => void) => {
+        listeners[event] = fn
+      },
+      removeEventListener: (event: string) => {
+        delete listeners[event]
+      },
+    }
+    vi.stubGlobal('visualViewport', viewport)
+
+    render(<Composer {...props()} />)
+    const textarea = screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement
+
+    textareaScrollHeight = 700
+    fireEvent.input(textarea, { target: { value: 'a\nvery\ntall\nmessage' } })
+    // 40% of the VISIBLE 400px — not the 400px that 40%-of-innerHeight would give.
+    await waitFor(() => expect(textarea.style.height).toBe('160px'))
+
+    // The keyboard dismisses: the cap loosens on the resize, with no keystroke.
+    viewport.height = 900
+    listeners.resize?.()
+    await waitFor(() => expect(textarea.style.height).toBe('360px'))
+  })
+
   it('submits Enter without Shift and clears accepted text', () => {
     const onSend = vi.fn(() => true)
     render(<Composer {...props({ onSend })} />)

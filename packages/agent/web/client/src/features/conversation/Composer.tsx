@@ -82,13 +82,28 @@ export function Composer({
   const [sel, setSel] = useState(0)
   const [dismissed, setDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
-  // Auto-grow to content (capped at 40vh), and shrink back when cleared — so
-  // multiline is visible and signals there's more context in play.
+  // Auto-grow to content (capped at 40% of the viewport), and shrink back when
+  // cleared — so multiline is visible and signals there's more context in play.
+  //
+  // The cap is measured against visualViewport, NOT window.innerHeight: iOS
+  // holds innerHeight (and vh/dvh) at the full screen height while the software
+  // keyboard covers the bottom half of it, so 40%-of-innerHeight is most of
+  // what's actually visible — the growing box swallows the transcript and runs
+  // on under the keyboard. visualViewport is the only height that shrinks with
+  // the keyboard, and it re-fires on resize, so the cap re-tightens when the
+  // keyboard opens under an already-grown box.
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4)) + 'px'
+    const grow = () => {
+      const visible = window.visualViewport?.height ?? window.innerHeight
+      el.style.height = 'auto'
+      el.style.height = Math.min(el.scrollHeight, Math.round(visible * 0.4)) + 'px'
+    }
+    grow()
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', grow)
+    return () => vv?.removeEventListener('resize', grow)
   }, [text])
 
   // addFiles reads image files (from paste or drop) into attachments, toasting

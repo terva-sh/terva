@@ -25,6 +25,10 @@
    5. Density tokens (--fs-ui / --fs-detail / --fs-note, --pad-pane,
       --gap-row) size the pane surfaces. A tablet/touch pass should override
       the tokens in one block, not restyle individual rules.
+   6. Text-entry controls floor at 16px on touch (one @media (pointer: coarse)
+      block by the reset). Below that, focusing a field makes iOS Safari zoom
+      the page, which pans the layout sideways — the density tokens are a
+      desktop scale and must not reach the phone's inputs.
 
    The raati board + theater keep their own MAGI palette and monospace type by
    design (an EVA homage) — exempt from the color/density tokens, but they
@@ -71,6 +75,28 @@ select, input, textarea, button { min-width: 0; max-width: 100%; }
 /* iOS Safari font boosting inflates arbitrary text nodes and blows out
    min-content widths; pin the type scale to what we declared. */
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* Convention #6: a text-entry control never renders below 16px on a touch
+   device. iOS Safari force-zooms the page when a field with a smaller computed
+   font-size takes focus — and a zoomed page's visual viewport is NARROWER than
+   its layout viewport, so the composer's Send button falls off the right edge
+   and the whole page pans sideways, which nothing undoes but pinching back out.
+   (text-size-adjust above does not prevent this: that governs font boosting, a
+   different mechanism. Only the 16px floor does.)
+
+   !important is deliberate, and the one place in this sheet that earns it. This
+   is a floor on browser behavior, not a style preference: it has to beat every
+   component rule that sizes a field — which today range from `.set-input`
+   (0,1,0) to `.msg.queued.editing textarea` (0,3,1), and most of which say
+   `font: inherit`, a shorthand that silently resets font-size. A selector list
+   cannot outrank all of them, and a new component rule must not be able to
+   reopen the bug by accident. tests/smoke/overflow.smoke.ts holds the line.
+
+   pointer:coarse keeps the desktop density scale (--fs-detail et al) untouched. */
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']), select, textarea {
+    font-size: max(16px, 1em) !important;
+  }
+}
 html, body, #app { height: 100%; margin: 0; }
 body {
   font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif;
@@ -671,7 +697,13 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .raati-error { color: #f7768e; font-size: 12px; }
 .raati-form { display: flex; flex-direction: column; gap: 8px; }
 .raati-form textarea { background: #11100e; color: #e5e9f0; border: 1px solid #2e343b; border-radius: 4px; padding: 8px; font: inherit; resize: vertical; }
-.raati-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+/* overflow-x: clip for the same reason .set-head has it: WebKit keeps a
+   <select>'s untruncated option text scrollable even once the box is clamped,
+   so the pane pans sideways with nothing visibly cut. The raati form only
+   escaped that before because its selects were 12px — convention #6 floors
+   them at 16px on touch, which is enough to reopen it. (Clip, not hidden: the
+   row sets no overflow-y, so clip stays clip and creates no scroll axis.) */
+.raati-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; overflow-x: clip; }
 /* Option labels here are sentences; the reset (convention #1) keeps the
    selects shrinkable, and clipped labels stay readable in the dropdown. */
 .raati-form select { background: #11100e; color: #e5e9f0; border: 1px solid #2e343b; border-radius: 4px; padding: 5px; font: inherit; font-size: 12px; text-overflow: ellipsis; }

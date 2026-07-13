@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { installMockBackend } from './support'
 
 // Flow 6: NO pane surface scrolls horizontally, at any width the pane actually
@@ -202,6 +202,88 @@ for (const surface of SURFACES) {
         return doc.scrollLeft
       })
       expect(docPan, `${vp.name} (${vp.width}px) document`).toBe(0)
+
+      // Convention #6: no text-entry control in the pane renders below 16px on
+      // a touch device, or focusing it makes iOS Safari zoom the page — which
+      // pans the layout sideways and is the one overflow this file's other
+      // assertions cannot see (the zoom is a visual-viewport effect; the layout
+      // viewport it measures stays innocent). Only meaningful under a coarse
+      // pointer, so it self-skips on the desktop-Chromium project.
+      expect(await smallFields(page), `${vp.name} (${vp.width}px) sub-16px fields`).toEqual([])
     }
   })
 }
+
+// smallFields returns a description of every focusable text-entry control whose
+// computed font-size would trip iOS Safari's focus zoom. Empty on a fine
+// pointer (the rule is coarse-pointer-only, and desktop density is deliberate).
+async function smallFields(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    if (!matchMedia('(pointer: coarse)').matches) return []
+    const out: string[] = []
+    document.querySelectorAll<HTMLElement>('input, select, textarea').forEach((el) => {
+      const type = el.getAttribute('type')
+      if (type === 'checkbox' || type === 'radio') return
+      if (!el.offsetParent && getComputedStyle(el).position !== 'fixed') return // not rendered
+      const px = parseFloat(getComputedStyle(el).fontSize)
+      if (px < 16) out.push(`${el.tagName.toLowerCase()}.${[...el.classList].join('.')} ${px}px`)
+    })
+    return out
+  })
+}
+
+// The composer is not a pane surface, so the sweep above never sees it — and it
+// is the field users actually type into. It grows with its content, which on a
+// phone is where both mobile failures showed up: the Send button fell off the
+// right edge (iOS focus zoom, convention #6) and the box grew under the
+// keyboard (a cap measured against the layout viewport, which iOS does not
+// shrink for the keyboard — Composer.tsx now caps against visualViewport).
+test('the composer stays inside the viewport as it grows', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 780 })
+  await installMockBackend(page, { respond })
+  await page.goto('/')
+  await page.locator('.topbar .dot.open').waitFor()
+
+  const composer = page.locator('.composer textarea')
+  await composer.waitFor()
+  expect(await smallFields(page), 'composer invites an iOS focus zoom').toEqual([])
+
+  const oneLine = await composer.evaluate((el) => el.getBoundingClientRect().height)
+  await composer.click()
+  await composer.fill(
+    'Let us take a note for the agent managing terva: if we have to restart, it would be ' +
+      'convenient to provide an autoprompt that is delivered on restart and then cleared. Not ' +
+      'something the agent can dictate, but enough to bump the loop after an intentional restart.',
+  )
+  // The box must actually have grown, or the rest of this proves nothing.
+  await expect
+    .poll(() => composer.evaluate((el) => el.getBoundingClientRect().height))
+    .toBeGreaterThan(oneLine)
+
+  const grown = await page.evaluate(() => {
+    const vw = document.documentElement.clientWidth
+    const send = document.querySelector<HTMLElement>('.composer .btn')!
+    const doc = document.scrollingElement as HTMLElement
+    doc.scrollLeft = 120
+    const pan = doc.scrollLeft
+    doc.scrollLeft = 0
+    const spill: string[] = []
+    document.querySelectorAll<HTMLElement>('.composer, .composer *').forEach((el) => {
+      const r = el.getBoundingClientRect()
+      if (r.right > vw + 0.5 || r.left < -0.5) spill.push(`${el.tagName}.${[...el.classList].join('.')}`)
+    })
+    const ta = document.querySelector<HTMLElement>('.composer textarea')!
+    return { pan, spill, sendRight: send.getBoundingClientRect().right, vw, taHeight: ta.getBoundingClientRect().height }
+  })
+
+  // Nothing in the composer spills sideways, the Send button is reachable, and
+  // the document gained no horizontal scroll range.
+  expect(grown.spill, 'composer spills past the viewport').toEqual([])
+  expect(grown.sendRight).toBeLessThanOrEqual(grown.vw + 0.5)
+  expect(grown.pan, 'document panned horizontally').toBe(0)
+
+  // …and the grown box still leaves the transcript most of the screen: the cap
+  // is 40% of the VISIBLE viewport, so it can never eat the conversation.
+  const visible = await page.evaluate(() => window.visualViewport?.height ?? window.innerHeight)
+  expect(grown.taHeight).toBeLessThanOrEqual(visible * 0.4 + 1)
+})
