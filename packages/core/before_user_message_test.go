@@ -168,8 +168,8 @@ func TestBeforeUserMessageGatesQueuedDrain(t *testing.T) {
 	}
 }
 
-// The synthetic at-close gate nudge (ContinueOnStop) is a host re-prompt,
-// not the user's words — it must never reach the BeforeUserMessage guard.
+// The synthetic at-close gate nudge (a continuation gate's re-prompt) is the
+// host's words, not the user's — it must never reach the BeforeUserMessage guard.
 func TestBeforeUserMessageSkipsSyntheticGateNudge(t *testing.T) {
 	a := NewAgent(endTurnClient{}, "test", "", Registry{})
 
@@ -178,16 +178,11 @@ func TestBeforeUserMessageSkipsSyntheticGateNudge(t *testing.T) {
 		seen = append(seen, text)
 		return true, "", ""
 	}
-	// Fire the at-close nudge exactly once (gateFired caps it), so the
-	// loop runs a second step that drains the synthetic nudge.
-	fired := false
-	a.ContinueOnStop = func(provider.StopReason) (bool, string) {
-		if fired {
-			return false, ""
-		}
-		fired = true
-		return true, "OPEN-WORK-NUDGE"
-	}
+	// Fire the at-close nudge exactly once (the default per-Prompt cap), so
+	// the loop runs a second step that drains the synthetic nudge.
+	a.AddContinuationGate(ContinuationGate{Cause: "test", Fire: func(provider.StopReason) (string, bool) {
+		return "OPEN-WORK-NUDGE", true
+	}})
 
 	var userTextsSeen []string
 	err := a.Prompt(context.Background(), "hello", nil, func(ev AgentEvent) {

@@ -44,19 +44,34 @@ type ToolResult struct {
 // Registry is a name->Tool map.
 type Registry map[string]Tool
 
-// Specs returns the tool definitions to advertise to the LLM.
-// Sorted by tool name so the order is stable across requests. This
-// is load-bearing for provider-side prompt caching: providers
-// prefix-match tool definitions, and Go's map iteration order is
-// randomized per call, which would otherwise bust the cache every
-// single turn.
-func (r Registry) Specs() []provider.Tool {
+// Specs returns the tool definitions to advertise to the LLM: every
+// registered tool. See SpecsVisible for advertising a subset.
+func (r Registry) Specs() []provider.Tool { return r.SpecsVisible(nil) }
+
+// SpecsVisible returns the tool definitions to advertise to the LLM, restricted
+// to the tools the visible predicate admits (a nil predicate admits all — the
+// Specs behavior). This filters only the *advertised* surface: the registry
+// itself is not narrowed, so Get and the agent's dispatch still resolve every
+// registered tool, and the permission gate still fires — a tool hidden here
+// stays callable and stays gated. Advertisement is not authority (retro H2·b's
+// visibility ≠ authority invariant).
+//
+// The output is sorted by tool name so the order is stable across requests.
+// This is load-bearing for provider-side prompt caching: providers prefix-match
+// tool definitions, and Go's map iteration order is randomized per call, which
+// would otherwise bust the cache every single turn. The predicate must be a
+// pure function of the name so the advertised set (hence the cached prefix) is
+// stable when nothing has changed.
+func (r Registry) SpecsVisible(visible func(name string) bool) []provider.Tool {
 	names := make([]string, 0, len(r))
 	for name := range r {
+		if visible != nil && !visible(name) {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	out := make([]provider.Tool, 0, len(r))
+	out := make([]provider.Tool, 0, len(names))
 	for _, name := range names {
 		t := r[name]
 		out = append(out, provider.Tool{
@@ -66,6 +81,25 @@ func (r Registry) Specs() []provider.Tool {
 		})
 	}
 	return out
+}
+
+// CoreToolGroup is the always-visible capability group of first-party built-in
+// tools — the coding tools that ARE the task, never an optional capability
+// (retro H2·b). Lazy tool visibility never hides the core group.
+const CoreToolGroup = "core"
+
+// ToolGroup classifies a tool into its capability group for lazy tool
+// visibility (retro H2·b). An extension or MCP tool reports its source through
+// an Extension() accessor (the extension name, or "mcp:<server>"); everything
+// else is a built-in and belongs to CoreToolGroup. The accessor is a structural
+// interface so core need not import the extension/MCP packages.
+func ToolGroup(t Tool) string {
+	if e, ok := t.(interface{ Extension() string }); ok {
+		if g := e.Extension(); g != "" {
+			return g
+		}
+	}
+	return CoreToolGroup
 }
 
 // Get looks up a tool by name.

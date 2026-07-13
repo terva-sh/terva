@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"terva.sh/terva/packages/core"
@@ -89,8 +90,24 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage, progress func(
 	}
 
 	header := fmt.Sprintf("# Skill: %s\n\n%s\n\n---\n\n", s.Name, s.Description)
+	body := s.Body
+
+	// Skill-driven tool activation (retro H2·b step 5): if the skill declares the
+	// tools it depends on (allowed-tools frontmatter), surface their capability
+	// groups under lazy tool visibility so they're advertised next turn. Strictly
+	// visibility — the permission/trust gate is untouched, so a hidden tool a
+	// skill reveals is still gated when called, and an untrusted workspace (whose
+	// extension tools were never loaded) has nothing to reveal. No-op off lazy.
+	if len(s.AllowedTools) > 0 {
+		if ag := core.AgentFromContext(ctx); ag != nil {
+			if activated := ag.ActivateGroupsForTools(s.AllowedTools); len(activated) > 0 {
+				body += fmt.Sprintf("\n\n(Activated tool group(s) for this skill: %s — available from your next turn; each still requires its normal permission.)", strings.Join(activated, ", "))
+			}
+		}
+	}
+
 	return core.ToolResult{
-		Content: []provider.Content{provider.TextBlock{Text: header + s.Body}},
+		Content: []provider.Content{provider.TextBlock{Text: header + body}},
 		Details: map[string]any{
 			"skill": s.Name,
 			"path":  s.Path,

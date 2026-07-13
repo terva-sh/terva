@@ -96,6 +96,43 @@ func (a *Agent) AddImageExcludedObserver(fn func(sha256Hex string)) {
 	a.obsMu.Unlock()
 }
 
+// ContinuationGate is one cause-tagged at-close continuation: consulted when a
+// turn ends with a natural stop (the model produced a final message, no tool
+// calls) to decide whether the prompt continues with one more segment. Hosts
+// use gates to re-prompt the model while tracked work is still open (the
+// open-work card, a coordinator's still-running sub-agents); activation
+// continuation (docs/proposals/activation-continuation.md) registers its gate
+// here too. Unlike the observers above a gate steers control flow, but it is
+// registered the same way and for the same reason: the single assignable field
+// this replaced (ContinueOnStop) forced each host to hand-compose every cause
+// into one closure, and two hosts had already diverged.
+type ContinuationGate struct {
+	// Cause labels the gate in code and telemetry ("open-work", "swarm-hold",
+	// "activation"). A label, not an identity — two gates may share one.
+	Cause string
+	// Fire returns the nudge to append (as a synthetic user message) and true
+	// to continue the prompt. The loop consults gates only on StopEnd; stop is
+	// passed for symmetry with any future boundary kinds. A ("", true) return
+	// counts as a decline.
+	Fire func(stop provider.StopReason) (nudge string, ok bool)
+	// Cap bounds how many times this gate may fire within one Prompt; 0 means
+	// once. Declines don't consume the budget.
+	Cap int
+}
+
+// AddContinuationGate registers an at-close continuation gate. Gates are
+// consulted in registration order — which IS priority order — and the first
+// that fires wins the boundary; the rest wait for the next natural stop. A
+// gate with a nil Fire is a no-op.
+func (a *Agent) AddContinuationGate(g ContinuationGate) {
+	if g.Fire == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.continuationGates = append(a.continuationGates, g)
+	a.obsMu.Unlock()
+}
+
 // --- emit paths -------------------------------------------------------------
 //
 // Each snapshots under the registry read lock and fires outside it, so an
@@ -111,6 +148,17 @@ func (a *Agent) eventObservers() []func(AgentEvent) {
 	obs := make([]func(AgentEvent), len(a.eventObs))
 	copy(obs, a.eventObs)
 	return obs
+}
+
+func (a *Agent) continuationGateSnapshot() []ContinuationGate {
+	a.obsMu.RLock()
+	defer a.obsMu.RUnlock()
+	if len(a.continuationGates) == 0 {
+		return nil
+	}
+	gates := make([]ContinuationGate, len(a.continuationGates))
+	copy(gates, a.continuationGates)
+	return gates
 }
 
 func (a *Agent) fireMessageAppended(m provider.Message) {

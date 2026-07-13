@@ -23,7 +23,7 @@ type EvUserMessage struct {
 	Message provider.Message
 	// Synthetic marks a user-role message the host injected rather than
 	// one the human submitted — currently the at-close open-work gate
-	// nudge (ContinueOnStop). Observers that surface "the user said X"
+	// nudge (a continuation gate). Observers that surface "the user said X"
 	// (a memory or session-index extension) skip these so a system
 	// re-prompt isn't mistaken for the user's words. Genuine prompts
 	// (initial and queued) leave it false.
@@ -31,6 +31,18 @@ type EvUserMessage struct {
 }
 
 func (EvUserMessage) Type() string { return "user_message" }
+
+// EvContinuation fires when an at-close continuation gate re-prompts the
+// model: the Prompt is not over — a synthetic nudge (an EvUserMessage with
+// Synthetic set) follows and the loop runs at least one more segment. Cause
+// is the gate's label ("open-work", "swarm-hold", "activation"). Surfaces
+// decide their own presentation and none is required — the continued reply
+// speaks for itself (docs/proposals/activation-continuation.md, Decisions).
+type EvContinuation struct {
+	Cause string
+}
+
+func (EvContinuation) Type() string { return "continuation" }
 
 // EvUserMessageRejected fires when a BeforeUserMessage guard refuses a
 // prompt: the message is neither appended to the transcript nor sent to

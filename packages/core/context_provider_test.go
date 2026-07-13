@@ -86,15 +86,15 @@ func (c *stopEndCountingClient) Stream(ctx context.Context, req provider.Request
 	return out, nil
 }
 
-// The at-close gate re-prompts once when ContinueOnStop says to, appends
-// the nudge as a user turn, and is capped to a single re-prompt even
-// when the host always says "continue".
+// The at-close gate re-prompts once when a continuation gate says to, appends
+// the nudge as a user turn, and is capped to a single re-prompt (the default
+// Cap) even when the gate always says "continue".
 func TestAtCloseGateFiresOnceThenStops(t *testing.T) {
 	c := &stopEndCountingClient{}
 	a := NewAgent(c, "fake-model", "system", Registry{})
-	a.ContinueOnStop = func(stop provider.StopReason) (bool, string) {
-		return true, "REVIEW-OPEN-WORK" // always asks to continue
-	}
+	a.AddContinuationGate(ContinuationGate{Cause: "open-work", Fire: func(provider.StopReason) (string, bool) {
+		return "REVIEW-OPEN-WORK", true // always asks to continue
+	}})
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
@@ -117,16 +117,96 @@ func TestAtCloseGateFiresOnceThenStops(t *testing.T) {
 	}
 }
 
-// When ContinueOnStop declines, the run ends with no extra turn.
+// When every gate declines, the run ends with no extra turn.
 func TestAtCloseGateDeclineEndsRun(t *testing.T) {
 	c := &stopEndCountingClient{}
 	a := NewAgent(c, "fake-model", "system", Registry{})
-	a.ContinueOnStop = func(stop provider.StopReason) (bool, string) { return false, "" }
+	a.AddContinuationGate(ContinuationGate{Cause: "open-work", Fire: func(provider.StopReason) (string, bool) { return "", false }})
 	if err := a.Prompt(context.Background(), "hi", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
 	if c.calls != 1 {
 		t.Errorf("decline should not add a turn; want 1 call, got %d", c.calls)
+	}
+}
+
+// Gates are consulted in registration order — priority — and the first that
+// fires wins the boundary; once it hits its per-Prompt cap, the next natural
+// stop goes to the gate behind it.
+func TestContinuationGatesFirstWinsThenRotates(t *testing.T) {
+	c := &stopEndCountingClient{}
+	a := NewAgent(c, "fake-model", "system", Registry{})
+	a.AddContinuationGate(ContinuationGate{Cause: "first", Fire: func(provider.StopReason) (string, bool) {
+		return "NUDGE-FIRST", true
+	}})
+	a.AddContinuationGate(ContinuationGate{Cause: "second", Fire: func(provider.StopReason) (string, bool) {
+		return "NUDGE-SECOND", true
+	}})
+	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if c.calls != 3 {
+		t.Errorf("want 3 model calls (initial + one boundary per gate), got %d", c.calls)
+	}
+	var nudges []string
+	for _, m := range a.Messages() {
+		if m.Role != provider.RoleUser || m.Meta[MetaSynthetic] != "true" {
+			continue
+		}
+		for _, ct := range m.Content {
+			if tb, ok := ct.(provider.TextBlock); ok {
+				nudges = append(nudges, tb.Text)
+			}
+		}
+	}
+	if len(nudges) != 2 || !strings.Contains(nudges[0], "NUDGE-FIRST") || !strings.Contains(nudges[1], "NUDGE-SECOND") {
+		t.Errorf("want the first gate's nudge then the second's, got %v", nudges)
+	}
+}
+
+// A decline spends nothing: the gate is consulted again at every later
+// boundary, while a gate behind it carries the boundary meanwhile.
+func TestContinuationGateDeclineSpendsNothing(t *testing.T) {
+	c := &stopEndCountingClient{}
+	a := NewAgent(c, "fake-model", "system", Registry{})
+	consulted := 0
+	a.AddContinuationGate(ContinuationGate{Cause: "picky", Fire: func(provider.StopReason) (string, bool) {
+		consulted++
+		return "", false
+	}})
+	a.AddContinuationGate(ContinuationGate{Cause: "eager", Fire: func(provider.StopReason) (string, bool) {
+		return "NUDGE-EAGER", true
+	}})
+	if err := a.Prompt(context.Background(), "hi", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if c.calls != 2 {
+		t.Errorf("want 2 calls (initial + the eager gate's re-prompt), got %d", c.calls)
+	}
+	if consulted != 2 {
+		t.Errorf("the declining gate should be consulted at both boundaries, got %d", consulted)
+	}
+}
+
+// Cap raises a single gate's per-Prompt budget, and the budget resets between
+// Prompts.
+func TestContinuationGateCapAndPromptReset(t *testing.T) {
+	c := &stopEndCountingClient{}
+	a := NewAgent(c, "fake-model", "system", Registry{})
+	a.AddContinuationGate(ContinuationGate{Cause: "twice", Cap: 2, Fire: func(provider.StopReason) (string, bool) {
+		return "AGAIN", true
+	}})
+	if err := a.Prompt(context.Background(), "one", nil, nil); err != nil {
+		t.Fatalf("Prompt 1: %v", err)
+	}
+	if c.calls != 3 {
+		t.Errorf("Cap 2 should allow two re-prompts (3 calls), got %d", c.calls)
+	}
+	if err := a.Prompt(context.Background(), "two", nil, nil); err != nil {
+		t.Fatalf("Prompt 2: %v", err)
+	}
+	if c.calls != 6 {
+		t.Errorf("the budget must reset per Prompt (6 calls total), got %d", c.calls)
 	}
 }
 

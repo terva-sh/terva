@@ -66,9 +66,13 @@ type Skill struct {
 	// shipped in their project.
 	Builtin bool
 
-	// AllowedTools and Permissions are parsed for forward-
-	// compatibility but NOT enforced in this version. They appear
-	// in the skill body so the model can self-regulate.
+	// AllowedTools, under lazy tool visibility (retro H2·b), names the tools
+	// this skill depends on: loading the skill activates their capability
+	// groups so they are advertised next turn (tool.go Execute →
+	// Agent.ActivateGroupsForTools). This is strictly a VISIBILITY hint — it
+	// never grants authority, so a revealed tool still faces its normal
+	// permission/trust gate, and it is a no-op when lazy mode is off. Permissions
+	// is parsed for forward-compatibility but not yet enforced.
 	AllowedTools []string
 	Permissions  map[string][]string
 }
@@ -376,8 +380,9 @@ func splitFrontmatter(raw string) (string, string) {
 
 // frontmatter is the YAML head of a SKILL.md. terva recognises name,
 // description, an allowed-tools list (either spelling), and a
-// permissions map of tool -> patterns. AllowedTools and Permissions
-// are parsed for forward-compatibility but not yet enforced.
+// permissions map of tool -> patterns. AllowedTools drives lazy-visibility
+// activation (see Skill.AllowedTools); Permissions is parsed for
+// forward-compatibility but not yet enforced.
 type frontmatter struct {
 	Name            string              `yaml:"name"`
 	Description     string              `yaml:"description"`

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,21 @@ type Agent struct {
 	Tools     Registry
 	MaxSteps  int
 	Reasoning string
+
+	// VisibleTool, when non-nil, reports whether a registered tool is
+	// ADVERTISED to the model on a turn. It filters only the tool specs sent
+	// in the request (SpecsVisible, in oneTurn); it never touches dispatch or
+	// the permission gate, both of which resolve the full Tools registry — so a
+	// tool hidden here stays callable and stays gated. Advertisement is not
+	// authority (retro H2·b's visibility ≠ authority invariant). nil advertises
+	// the whole registry: today's behavior. Like Tools/System, it is pinned per
+	// turn (see runLoop), so a mid-turn change lands only on the next turn.
+	//
+	// The predicate must be pure in the name so the advertised set — hence the
+	// cached prompt prefix — is stable when nothing changed; a change to the
+	// visible set is a model-facing-surface change and (once a host mutates it)
+	// must be treated like a Tools swap for cache-write accounting.
+	VisibleTool func(name string) bool
 
 	// Temperature sets the sampling temperature on each request. Nil
 	// leaves it unset so each provider applies its own default (terva's
@@ -94,14 +110,15 @@ type Agent struct {
 
 	// Hook observers. Registered through AddEventObserver / AddMessageObserver /
 	// AddUsageObserver / AddTranscriptCompactedObserver /
-	// AddImageExcludedObserver, never assigned — see observers.go for why the
-	// assignable fields these replaced were a hazard.
+	// AddImageExcludedObserver / AddContinuationGate, never assigned — see
+	// observers.go for why the assignable fields these replaced were a hazard.
 	obsMu                  sync.RWMutex
 	eventObs               []func(AgentEvent)
 	messageObs             []func(provider.Message)
 	usageObs               []func(u, cumulative provider.Usage)
 	transcriptCompactedObs []func(messages []provider.Message)
 	imageExcludedObs       []func(sha256Hex string)
+	continuationGates      []ContinuationGate
 
 	// ContextProvider, if set, is called once per turn to obtain
 	// host-assembled ephemeral context (already wrapped/bounded) to
@@ -119,15 +136,6 @@ type Agent struct {
 	// the ephemeral tail (e.g. /context) without corrupting that state.
 	ContextProviderPeek func() string
 
-	// ContinueOnStop, if set, is consulted when a turn ends with a
-	// natural stop (the model produced a final message, no tool calls).
-	// Returning (true, nudge) appends nudge as a user message and runs
-	// one more turn — the at-close gate hosts use to re-prompt the model
-	// when tracked work is still open ("you indicated you're finishing
-	// …"). The loop fires it at most ONCE per Prompt regardless of the
-	// return value, so a host that always returns true can't loop.
-	ContinueOnStop func(stop provider.StopReason) (cont bool, nudge string)
-
 	// AutoCompactPolicy, if set, supplies the live auto-compaction mode
 	// (the config `auto_compact` knob, read per check so a settings edit
 	// applies without an agent rebuild). Nil — and any unknown value —
@@ -141,7 +149,22 @@ type Agent struct {
 	// the check-and-set needs no separate lock and never blocks.
 	running atomic.Bool
 
-	mu       sync.Mutex
+	mu sync.Mutex
+
+	// Lazy tool visibility (retro H2·b), guarded by mu. When lazyTools is on,
+	// only the core group plus activeGroups are ADVERTISED; the rest are hidden
+	// (still callable + gated) and surfaced as a capability note so the model can
+	// activate_tools them. Resolved into a turnTools snapshot at the per-turn pin
+	// (runLoop), so a mid-turn ActivateGroup lands on the next turn — one
+	// deliberate cache write, never mid-turn churn. Off = advertise all (default).
+	lazyTools    bool
+	activeGroups map[string]bool
+	// activationContinuationOff disables the built-in activation gate
+	// (docs/proposals/activation-continuation.md): a segment that activated a
+	// group is auto-continued with the tools live. The zero value keeps it ON
+	// — the agreed default — wherever lazy tools are enabled. Guarded by mu.
+	activationContinuationOff bool
+
 	messages []provider.Message
 	// rev increments whenever the transcript slice is replaced or a
 	// message is appended. The TUI uses it as a cheap redraw cache key
@@ -376,7 +399,7 @@ func (a *Agent) appendQueuedAsUser(texts []string, synthetic bool, sink func(Age
 			Content: []provider.Content{provider.TextBlock{Text: text}},
 			Time:    time.Now(),
 		}
-		// Mark host-injected nudges (the at-close ContinueOnStop re-prompt) so
+		// Mark host-injected nudges (an at-close continuation-gate re-prompt) so
 		// display surfaces can distinguish them from the user's own words — both
 		// live (the event carries the message) and durably (the snapshot rebuilds
 		// from the transcript). See WireMessage.Synthetic.
@@ -455,6 +478,258 @@ func registryEqual(a, b Registry) bool {
 		}
 	}
 	return true
+}
+
+// EnableLazyTools turns on lazy tool visibility (retro H2·b): only the core
+// group plus the given always-active groups are advertised; every other group
+// starts hidden (still callable, still gated) and is offered as a capability
+// note the model can act on with ActivateGroup. Idempotent setup; call once.
+func (a *Agent) EnableLazyTools(active ...string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lazyTools = true
+	a.activeGroups = make(map[string]bool, len(active))
+	for _, g := range active {
+		if g != "" && g != CoreToolGroup {
+			a.activeGroups[g] = true
+		}
+	}
+}
+
+// SetActivationContinuation toggles activation continuation — the built-in
+// at-close gate that resumes a Prompt when the ended segment activated a tool
+// group, re-pinning so the continuation runs with the tools live
+// (docs/proposals/activation-continuation.md). On by default wherever lazy
+// tools are enabled; the engine-feature surface (stage 3) drives this setter.
+func (a *Agent) SetActivationContinuation(on bool) {
+	a.mu.Lock()
+	a.activationContinuationOff = !on
+	a.mu.Unlock()
+}
+
+// ActivationContinuationEnabled reports whether the activation gate is live
+// for this agent: lazy tools on and the feature not switched off.
+// activate_tools reads it to tell the model whether it will be continued
+// automatically after finishing its reply.
+func (a *Agent) ActivationContinuationEnabled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lazyTools && !a.activationContinuationOff
+}
+
+// newlyActiveSincePin returns the sorted names of tools whose capability
+// groups are active now but were not at the pin — what an activation
+// continuation announces as newly live, and the dirty test for re-pinning at
+// a segment boundary. Empty when nothing new is active. Activation is
+// monotonic, so a non-empty result can never turn empty within one boundary.
+func (a *Agent) newlyActiveSincePin(pinned map[string]bool) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.lazyTools {
+		return nil
+	}
+	var names []string
+	for name, t := range a.Tools {
+		g := ToolGroup(t)
+		if g == CoreToolGroup || pinned[g] || !a.activeGroups[g] {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ActivateGroup marks a capability group advertised from the next turn. Returns
+// false if it was already active (or is the always-on core group). Visibility
+// only — it never grants authority, and it takes effect at the next turn's pin
+// (one deliberate cache write), never mid-turn.
+func (a *Agent) ActivateGroup(group string) bool {
+	if group == "" || group == CoreToolGroup {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.activeGroups == nil {
+		a.activeGroups = map[string]bool{}
+	}
+	if a.activeGroups[group] {
+		return false
+	}
+	a.activeGroups[group] = true
+	return true
+}
+
+// ToolsInGroup returns the names of registered tools in a capability group,
+// sorted. Empty means no such group is installed (an activate_tools guard).
+func (a *Agent) ToolsInGroup(group string) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var names []string
+	for name, t := range a.Tools {
+		if ToolGroup(t) == group {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ToolSpecsInGroup returns the provider specs (name, description, schema) of the
+// registered tools in a capability group, name-sorted for a stable render. It
+// is the schema-bearing twin of ToolsInGroup: activate_tools echoes these into
+// its result so the model can compose its next-turn call immediately, since the
+// activated group's schemas only reach the advertised Tools array on the next
+// turn (the per-turn pin). Reuses SpecsVisible so the sort matches the
+// advertised order. Empty means no such group.
+func (a *Agent) ToolSpecsInGroup(group string) []provider.Tool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.Tools.SpecsVisible(func(name string) bool {
+		t, ok := a.Tools[name]
+		return ok && ToolGroup(t) == group
+	})
+}
+
+// ActivateGroupsForTools activates the capability groups of the named tools —
+// skill-driven activation (retro H2·b step 5): a skill declaring the tools it
+// needs (its allowed-tools) can SURFACE their groups on load. Visibility only,
+// so it never grants authority: dispatch and the permission gate keep resolving
+// the full registry, so a revealed tool is still gated when actually called.
+// A no-op unless lazy mode is on; names absent from this registry (e.g. an
+// untrusted workspace never loaded that extension) and core-group names are
+// skipped. Returns the groups newly activated (for a load notice), sorted.
+func (a *Agent) ActivateGroupsForTools(names []string) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.lazyTools {
+		return nil
+	}
+	if a.activeGroups == nil {
+		a.activeGroups = map[string]bool{}
+	}
+	var activated []string
+	for _, n := range names {
+		t, ok := a.Tools[n]
+		if !ok {
+			continue
+		}
+		g := ToolGroup(t)
+		if g == CoreToolGroup || a.activeGroups[g] {
+			continue
+		}
+		a.activeGroups[g] = true
+		activated = append(activated, g)
+	}
+	sort.Strings(activated)
+	return activated
+}
+
+// AdvertisedTools reports the current tool-advertisement decision as a predicate
+// over tool names: whether a registered tool would be sent to the model this
+// turn (core + active groups under lazy mode, or the VisibleTool override).
+// filtered is false in the default all-advertised case — then visible admits
+// every tool. It is the read-only twin of the per-turn pin (turnToolsLocked) for
+// inspection surfaces like /context, which use it to separate the live
+// advertised weight from installed-but-inactive schemas. The returned predicate
+// is a pure function of the name and safe to call after the lock is released.
+func (a *Agent) AdvertisedTools() (visible func(name string) bool, filtered bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	tt := a.turnToolsLocked(a.Tools)
+	if tt.visible == nil {
+		return func(string) bool { return true }, false
+	}
+	return tt.visible, true
+}
+
+// CapabilityNote returns the inactive-tool-groups note that rides this turn's
+// ephemeral tail under lazy visibility — the names (not schemas) of the hidden
+// groups the model can activate_tools. Empty when lazy mode is off or nothing is
+// hidden. It is the exact text oneTurn appends to EphemeralContext, so /context
+// can account for the few bytes deferred discovery actually costs (the schemas
+// are gone from the window, but their names are not free).
+func (a *Agent) CapabilityNote() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.turnToolsLocked(a.Tools).capabilityNote
+}
+
+// turnTools is the per-turn tool-advertisement decision, pinned as a unit so the
+// advertised specs and the capability note the model reads can never drift.
+type turnTools struct {
+	visible        func(name string) bool // nil = advertise every registered tool
+	capabilityNote string                 // inactive-group summary for the ephemeral tail (lazy mode)
+	groups         map[string]bool        // active-group snapshot at the pin (lazy mode; nil otherwise); never mutated
+}
+
+// turnToolsLocked resolves this turn's advertisement; a.mu must be held. An
+// embedder's VisibleTool wins (the raw visibility seam); otherwise lazy mode
+// advertises core + the active groups and notes the inactive ones; otherwise
+// nil (advertise all — today's default).
+func (a *Agent) turnToolsLocked(reg Registry) turnTools {
+	if a.VisibleTool != nil {
+		return turnTools{visible: a.VisibleTool}
+	}
+	if !a.lazyTools {
+		return turnTools{}
+	}
+	active := make(map[string]bool, len(a.activeGroups))
+	for g := range a.activeGroups {
+		active[g] = true
+	}
+	return turnTools{
+		visible:        lazyVisible(reg, active),
+		capabilityNote: inactiveGroupNote(reg, active),
+		groups:         active,
+	}
+}
+
+// lazyVisible advertises a tool iff its group is core or currently active. A
+// name absent from reg is advertised (never hidden by a stale predicate).
+func lazyVisible(reg Registry, active map[string]bool) func(name string) bool {
+	return func(name string) bool {
+		t, ok := reg[name]
+		if !ok {
+			return true
+		}
+		g := ToolGroup(t)
+		return g == CoreToolGroup || active[g]
+	}
+}
+
+// inactiveGroupNote summarizes the groups hidden this turn — the model reads it
+// from the ephemeral tail and can bring one in with activate_tools. Empty when
+// nothing is hidden. It lists tool names (not schemas) so discovery costs a few
+// bytes, not the whole schema (retro H2·b: the cache-cheap capability line).
+func inactiveGroupNote(reg Registry, active map[string]bool) string {
+	byGroup := map[string][]string{}
+	for name, t := range reg {
+		g := ToolGroup(t)
+		if g == CoreToolGroup || active[g] {
+			continue
+		}
+		byGroup[g] = append(byGroup[g], name)
+	}
+	if len(byGroup) == 0 {
+		return ""
+	}
+	groups := make([]string, 0, len(byGroup))
+	for g := range byGroup {
+		groups = append(groups, g)
+	}
+	sort.Strings(groups)
+	var b strings.Builder
+	// Model-facing prompt injection (rides the ephemeral tail like the
+	// context-pressure note), so it is translatable via the prompts catalog.
+	b.WriteString(i18n.P("tools.lazy.inactive_groups",
+		"[inactive tool groups] These capabilities are installed but their tool schemas are not loaded. Call activate_tools with a group name to load them; activation is visibility only — each tool still requires its normal permission when used:"))
+	for _, g := range groups {
+		names := byGroup[g]
+		sort.Strings(names)
+		fmt.Fprintf(&b, "\n  - %s: %s", g, strings.Join(names, ", "))
+	}
+	return b.String()
 }
 
 // SetSystem swaps the system prompt under the agent's lock — the live twin of
@@ -777,11 +1052,117 @@ func (a *Agent) wrapSink(sink func(AgentEvent)) func(AgentEvent) {
 	}
 }
 
+// turnPin is the cached prompt prefix — the system prompt, the tool registry,
+// and the per-turn tool visibility — snapshotted once and threaded through
+// every step it covers. One pin spans one SEGMENT of the loop: the steps
+// between StopEnd boundaries (queued input, an at-close gate). A boundary
+// deliberately reuses the pin unchanged unless the ended segment activated a
+// tool group under activation continuation, in which case it refreshes
+// (repinForContinuation) so the continuation runs with the tools live —
+// docs/proposals/activation-continuation.md.
+type turnPin struct {
+	system string
+	tools  Registry
+	turn   turnTools
+}
+
+// pinTurn snapshots the cached prompt prefix for a segment. A host may swap
+// System/Tools on another goroutine mid-turn — an extension's refresh_context
+// / set_withdrawn_tools, or /reload-ext — and activate_tools may extend the
+// active group set. Re-reading any of that between the model→tool→model steps
+// of one segment would evict the prompt cache and change the tools the model
+// is mid-way through using — very disruptive. By snapshotting once, a
+// mid-segment change updates the agent fields but cannot affect in-flight
+// steps; the next pin — a dirty segment boundary, or the next Prompt — picks
+// it up. (The cache-free ephemeral tail and the growing transcript still
+// update per step — only the cached prefix is frozen.)
+func (a *Agent) pinTurn() turnPin {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return turnPin{system: a.System, tools: a.Tools, turn: a.turnToolsLocked(a.Tools)}
+}
+
+// fireContinuationGate consults the at-close gates in registration order and
+// returns the first willing gate's nudge and cause, consuming one unit of that
+// gate's per-Prompt budget. fires is indexed alongside gates; declines cost
+// nothing.
+func fireContinuationGate(gates []ContinuationGate, fires []int, stop provider.StopReason) (nudge, cause string, ok bool) {
+	for i, g := range gates {
+		budget := g.Cap
+		if budget <= 0 {
+			budget = 1
+		}
+		if fires[i] >= budget {
+			continue
+		}
+		if nudge, ok := g.Fire(stop); ok && nudge != "" {
+			fires[i]++
+			return nudge, g.Cause, true
+		}
+	}
+	return "", "", false
+}
+
+// activationContinuationCap bounds the built-in activation gate's fires per
+// Prompt. Activation is monotonic (a group cannot be newly activated twice),
+// so continuation chains are structurally bounded by the group count and this
+// cap should never bind — defense in depth, deliberately a constant rather
+// than configuration (the proposal's Decisions).
+const activationContinuationCap = 3
+
+// activationGate builds the built-in activation continuation gate for one
+// runLoop. It is appended AFTER every host gate — registration order is
+// priority, and correctness gates (open work, the swarm hold) outrank the
+// convenience continuation. It fires when the ended segment newly activated a
+// tool group, so a model that deliberately finished its reply after
+// activate_tools is re-prompted with those tools actually live. pin is the
+// loop's live pin variable: the gate diffs against whatever pin is current at
+// that boundary, and the boundary then refreshes it (repinForContinuation).
+func (a *Agent) activationGate(pin *turnPin) ContinuationGate {
+	return ContinuationGate{
+		Cause: "activation",
+		Cap:   activationContinuationCap,
+		Fire: func(provider.StopReason) (string, bool) {
+			newly := a.newlyActiveSincePin(pin.turn.groups)
+			if len(newly) == 0 {
+				return "", false
+			}
+			return "[activation continuation] Now live: " + strings.Join(newly, ", ") + ". Continue where you left off.", true
+		},
+	}
+}
+
+// repinForContinuation refreshes the pin at a segment boundary when the ended
+// segment activated a tool group and activation continuation is on; otherwise
+// it returns the pin unchanged — the deliberate reuse the stage-0 contract
+// pinned. A refresh is one tools-array cache write, the same write the next
+// Prompt would have paid. It shares newlyActiveSincePin with the activation
+// gate so a fired gate's "now live" promise and the re-pin can never disagree.
+func (a *Agent) repinForContinuation(pin turnPin) turnPin {
+	if !a.ActivationContinuationEnabled() {
+		return pin
+	}
+	if len(a.newlyActiveSincePin(pin.turn.groups)) == 0 {
+		return pin
+	}
+	return a.pinTurn()
+}
+
 func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
-	// gateFired caps the at-close gate (ContinueOnStop) to one re-prompt
-	// per Prompt, so a host that always says "continue" can't loop the
-	// model forever.
-	gateFired := false
+	// One pin per segment; the whole Prompt is a single segment until a
+	// boundary refreshes it (repinForContinuation) — see pinTurn.
+	pin := a.pinTurn()
+
+	// The at-close continuation gates, snapshotted per Prompt like the
+	// observers, with per-gate fire counts enforcing each gate's Cap
+	// (default 1) — so a gate that always says "continue" can't loop the
+	// model forever. The built-in activation gate runs last: host
+	// correctness gates outrank the convenience continuation.
+	gates := a.continuationGateSnapshot()
+	if a.ActivationContinuationEnabled() {
+		gates = append(gates, a.activationGate(&pin))
+	}
+	gateFires := make([]int, len(gates))
 
 	// Mid-turn auto-compact hysteresis: after a compaction fires, the
 	// valve stays disarmed until the measured fraction actually drops
@@ -790,22 +1171,6 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 	// enormous tool result inside the keep-tail — would re-trigger a
 	// futile summarization on every subsequent step.
 	compactArmed := true
-
-	// Pin the cached prompt prefix — the system prompt and the tool set —
-	// for the WHOLE user turn, not per step. A host may swap these on
-	// another goroutine mid-turn: an extension's refresh_context /
-	// set_withdrawn_tools, or /reload-ext. Re-reading them between the
-	// model→tool→model steps of one agentic turn would evict the prompt
-	// cache and change the tools the model is mid-way through using — very
-	// disruptive. By snapshotting once here and threading the pair through
-	// every step, a mid-turn swap updates the agent fields but cannot
-	// affect the in-flight turn; the next Prompt re-reads them. (The
-	// cache-free ephemeral tail and the growing transcript still update per
-	// step — only the cached prefix is frozen.)
-	a.mu.Lock()
-	pinnedSystem := a.System
-	pinnedTools := a.Tools
-	a.mu.Unlock()
 
 	for step := 1; a.MaxSteps <= 0 || step <= a.MaxSteps; step++ {
 		// Messages queued while the agent was busy are delivered
@@ -872,7 +1237,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		)
 		imageRounds := 0
 		for attempt := 0; ; attempt++ {
-			stop, assistantMsg, commit, err = a.oneTurn(ctx, pinnedSystem, pinnedTools, sink)
+			stop, assistantMsg, commit, err = a.oneTurn(ctx, pin.system, pin.tools, pin.turn, sink)
 			sink(EvTurnEnd{Stop: stop, Err: err})
 			if err == nil {
 				break
@@ -922,7 +1287,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 
 		if stop == provider.StopToolUse {
 			// Execute each tool call, append a single tool-results message, continue.
-			toolMsg, hadError := a.executeTools(ctx, assistantMsg, pinnedTools, sink)
+			toolMsg, hadError := a.executeTools(ctx, assistantMsg, pin.tools, sink)
 			a.mu.Lock()
 			a.messages = append(a.messages, toolMsg)
 			a.rev++
@@ -975,19 +1340,31 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		// If the assistant stopped without tool calls but a message was
 		// queued while it was speaking, loop once more so that message
 		// is appended and answered instead of waiting until a later
-		// top-level prompt.
+		// top-level prompt. This is a segment boundary: real input
+		// outranks any gate (no synthetic nudge is injected), and the pin
+		// refreshes only when the ended segment activated a tool group —
+		// otherwise it is deliberately reused.
 		if ctx.Err() == nil && a.QueuedMessageCount() > 0 {
+			pin = a.repinForContinuation(pin)
 			continue
 		}
 
-		// At-close gate: when the model finishes naturally but the host
-		// still has open work (a blocking context card), re-prompt it
-		// once with the host's nudge, appended as a user turn so the
-		// model can respond. Capped to one re-prompt per Prompt.
-		if ctx.Err() == nil && !gateFired && stop == provider.StopEnd && a.ContinueOnStop != nil {
-			if cont, nudge := a.ContinueOnStop(stop); cont && nudge != "" {
-				gateFired = true
+		// At-close gates: when the model finishes naturally but a gate
+		// still has work for it (a blocking context card, running
+		// sub-agents, a freshly activated tool group), re-prompt with
+		// that gate's nudge, appended as a user turn so the model can
+		// respond. Registration order is priority order — the first gate
+		// that fires wins the boundary, the rest wait for the next
+		// natural stop — and each gate is capped per Prompt (Cap,
+		// default 1). Also a segment boundary: the pin refreshes only
+		// when the ended segment activated a tool group, so an activation
+		// gate's continuation (and any other gate's, incidentally) runs
+		// with the new tools live.
+		if ctx.Err() == nil && stop == provider.StopEnd {
+			if nudge, cause, ok := fireContinuationGate(gates, gateFires, stop); ok {
+				sink(EvContinuation{Cause: cause})
 				a.appendQueuedAsUser([]string{nudge}, true, sink)
+				pin = a.repinForContinuation(pin)
 				continue
 			}
 		}
@@ -1187,7 +1564,7 @@ func (a *Agent) dropLastAssistantMessage() {
 // its visible events; it is nil when no message was kept. The caller
 // must invoke commit only once the turn is final — never before a
 // retry — so an abandoned partial attempt is not persisted durably.
-func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, sink func(AgentEvent)) (provider.StopReason, provider.Message, func(), error) {
+func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt turnTools, sink func(AgentEvent)) (provider.StopReason, provider.Message, func(), error) {
 	// system and tools are PINNED by runLoop for the whole user turn (see
 	// the snapshot there) so a mid-turn host swap can't evict the prompt
 	// cache between steps. The remaining request fields are read per step
@@ -1212,6 +1589,19 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, sink
 	var ephemeral string
 	if contextProvider != nil {
 		ephemeral = contextProvider()
+	}
+
+	// Lazy tool visibility (retro H2·b): surface the groups hidden this turn so
+	// the model can discover and activate_tools them. Rides the cache-free
+	// ephemeral tail (pinned with the visibility that produced it, so the note
+	// and the advertised specs never disagree) rather than the cached system
+	// prefix, so bringing a group in is a tools-array cache write only — the
+	// note itself never costs cache.
+	if tt.capabilityNote != "" {
+		if ephemeral != "" {
+			ephemeral += "\n\n"
+		}
+		ephemeral += tt.capabilityNote
 	}
 
 	// Context-pressure note: past ContextWarnFraction the model is told
@@ -1258,8 +1648,12 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, sink
 		// next in-process request is rejected by providers like Anthropic
 		// with "tool_use ids were found without tool_result blocks". The
 		// repair is pure and a no-op on already-valid transcripts.
-		Messages:         repairToolUseResultPairs(msgs),
-		Tools:            tools.Specs(),
+		Messages: repairToolUseResultPairs(msgs),
+		// SpecsVisible advertises only the tools the pinned visibility predicate
+		// admits (nil = all, today's behavior). Dispatch and the permission gate
+		// still resolve the full `tools` registry (runOneTool below), so hiding a
+		// tool here never affects callability or authority (retro H2·b).
+		Tools:            tools.SpecsVisible(tt.visible),
 		Reasoning:        reasoning,
 		MaxTokens:        maxTokens,
 		Temperature:      temperature,

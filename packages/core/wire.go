@@ -60,7 +60,7 @@ type WireEvent struct {
 }
 
 // MetaSynthetic marks a user-role message the host injected (the at-close
-// ContinueOnStop nudge) rather than one the user typed. Display surfaces
+// continuation-gate nudge) rather than one the user typed. Display surfaces
 // de-emphasize it; extension observers already skip it (EvUserMessage.Synthetic).
 const MetaSynthetic = "synthetic"
 

@@ -113,8 +113,19 @@ func renderContextOverview(th tui.Theme, b ctrlproto.ContextBreakdown) []string 
 		out = append(out, muted("    "+i18n.T("└ of which ext guidance: %s (%s)",
 			humanBytes(b.ExtGuidanceBytes), estTok(b.ExtGuidanceBytes))))
 	}
-	out = append(out, row(i18n.T("tool defs"), b.ToolBytes, "  "+i18n.T("[%d tools]", b.ToolCount)))
+	toolSuffix := "  " + i18n.T("[%d tools]", b.ToolCount)
+	if b.ToolCountInstalled > b.ToolCount {
+		// Lazy visibility: report the advertised set (what's on the wire) and the
+		// installed total that would load if every group were activated.
+		toolSuffix = "  " + i18n.T("[%d of %d tools · %s installed]",
+			b.ToolCount, b.ToolCountInstalled, humanBytes(b.ToolBytesInstalled))
+	}
+	out = append(out, row(i18n.T("tool defs"), b.ToolBytes, toolSuffix))
 	out = append(out, row(i18n.T("ext context"), b.ExtBytes, "  "+i18n.T("(cards, ephemeral)")))
+	if b.LazyNoteBytes > 0 {
+		out = append(out, muted("    "+i18n.T("└ of which lazy-tool note: %s (%s)",
+			humanBytes(b.LazyNoteBytes), estTok(b.LazyNoteBytes))))
+	}
 	out = append(out, row(i18n.T("transcript"), b.TranscriptBytes, "  "+i18n.T("[%d msgs]", len(b.Messages))))
 	for _, m := range b.Messages {
 		line := fmt.Sprintf("    [%d] %-13s %10s", m.Index, m.Kind, humanBytes(m.Bytes))
