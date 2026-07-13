@@ -268,6 +268,10 @@ func newMux(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) *
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "ok")
 	})
+	// The login form posts here, so it sits OUTSIDE authMiddleware — a gate that
+	// turned away the request carrying the token would be a closed loop. The
+	// handler does its own constant-time check and throttles guesses.
+	mux.HandleFunc(loginPath, handleLogin(opts))
 	mux.Handle("/", authMiddleware(opts, securityHeaders(staticHandler())))
 	return mux
 }

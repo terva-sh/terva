@@ -31,6 +31,17 @@ import (
 func runWebMode(ctx context.Context, args build.Args, version string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Settle the bearer token before anything reads it. args is a copy, so
+	// writing it back here is what lets every downstream check — the
+	// self-restart gate below, web.Options, checkBindSafety — see a token that
+	// arrived by file or environment, not just one typed on the command line.
+	// Miss this and an env-provisioned daemon silently refuses to self-restart
+	// and refuses to bind, both on the grounds that it has no auth.
+	tok, err := build.ResolveWebToken(args)
+	if err != nil {
+		return err
+	}
+	args.WebToken = tok
 	// Workspace prep below (credential resolve, MCP server spawn + tool listing)
 	// runs BEFORE the listener binds, so a refreshing browser sees
 	// connection-refused until it finishes — announce it, and time it so a slow

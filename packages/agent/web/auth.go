@@ -26,6 +26,14 @@ func authMiddleware(opts Options, next http.Handler) http.Handler {
 			// operator most wants (probes, a wrong/expired token). Health checks
 			// are unauthenticated, so they never reach here to spam the log.
 			fmt.Fprintf(os.Stderr, "terva web: rejected unauthorized %s %s from %s\n", r.Method, r.URL.Path, r.RemoteAddr)
+			// A browser navigating here gets the form instead of the word
+			// "unauthorized", so the token has somewhere to go that isn't the
+			// address bar. Everything else — curl, the PWA's asset fetches, a
+			// native ctrlproto client — still gets the plain 401 it can act on.
+			if wantsLoginPage(opts, r) {
+				serveLogin(w, r, http.StatusUnauthorized, "")
+				return
+			}
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

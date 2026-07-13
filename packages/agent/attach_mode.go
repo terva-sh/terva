@@ -151,9 +151,14 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 	// The transport matches the endpoint form: same WebSocket protocol, over
 	// TCP or a unix domain socket (no token needed there — the socket file's
 	// permissions gate access; one is still sent if given).
-	dial := ctrlclient.DialWebSocket(endpoint.URL, args.Token)
+	//
+	// TERVA_WEB_TOKEN stands in for --token: the flag is as readable from `ps`
+	// as the daemon's is, so attaching to an authenticated daemon should not
+	// force the secret onto the command line of every client.
+	token := build.ResolveAttachToken(args)
+	dial := ctrlclient.DialWebSocket(endpoint.URL, token)
 	if endpoint.UnixPath != "" {
-		dial = ctrlclient.DialWebSocketUnix(endpoint.UnixPath, args.Token)
+		dial = ctrlclient.DialWebSocketUnix(endpoint.UnixPath, token)
 	}
 	client, err := ctrlclient.New(ctrlclient.Options{
 		Dial: func(ctx context.Context) (ctrlproto.FrameConn, error) {

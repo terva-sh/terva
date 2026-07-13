@@ -71,7 +71,8 @@ type Args struct {
 	WebAddr           string   // listen address (default 127.0.0.1:8730)
 	WebAuthHeader     string   // trust this forward-auth header as the authenticated user (e.g. X-Forwarded-User)
 	WebTrustedProxies []string // IPs/CIDRs (besides loopback) allowed to assert the forward-auth header
-	WebToken          string   // bearer token required on requests when no forward-auth is used
+	WebToken          string   // bearer token required on requests when no forward-auth is used; leaks via ps/cmdline, prefer the two below
+	WebTokenFile      string   // read the bearer token from this file (systemd LoadCredential=); never enters the environment
 	WebInsecure       bool     // allow binding a non-loopback address with no auth mode (dangerous)
 	WebInsecureCIDRs  []string // IPs/CIDRs granted no-auth access (besides loopback) — the scoped, safer form of --web-insecure (e.g. a tailnet range)
 
@@ -390,6 +391,12 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.WebToken = v
+		case "--web-token-file":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.WebTokenFile = v
 		case "--web-insecure":
 			a.WebInsecure = true
 		case "--web-insecure-cidr":
@@ -764,7 +771,11 @@ func PrintWebHelp() {
 
 Web-specific flags:
   --web-addr ADDR               listen address:port, or unix:/path for a filesystem socket (default 127.0.0.1:8730)
-  --web-token TOKEN             require this bearer token (Authorization: Bearer, or ?token= for the browser)
+  --web-token TOKEN             require this bearer token (Authorization: Bearer, or ?token= for the browser).
+                                Readable by any local user via ps/proc — prefer the two below
+  --web-token-file PATH         read the bearer token from PATH (systemd LoadCredential=); never enters the environment
+  TERVA_WEB_TOKEN (env)         the bearer token (systemd EnvironmentFile=); scrubbed from the environment once read,
+                                so the agent's own shell cannot read it back
   --web-auth-header NAME        trust a forward-auth proxy header as the authenticated user
   --web-trusted-proxy CIDR      IP/CIDR(s) allowed to assert --web-auth-header (comma-separated; loopback always allowed)
   --allow-restart               enable Tier-1 self-restart (control.restart + the terva_restart tool);

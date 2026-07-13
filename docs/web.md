@@ -31,7 +31,9 @@ Flags:
 | Flag | Default | Meaning |
 |---|---|---|
 | `--web-addr` | `127.0.0.1:8730` | listen address |
-| `--web-token` | — | require `Authorization: Bearer <token>` (or `?token=` on the socket) |
+| `--web-token` | — | require `Authorization: Bearer <token>` (or `?token=` on the socket). Readable by any local user via `ps` — prefer the two below for anything long-lived |
+| `--web-token-file` | — | read the bearer token from a file; never enters the environment (systemd `LoadCredential=`) |
+| `TERVA_WEB_TOKEN` (env) | — | the bearer token (systemd `EnvironmentFile=`), scrubbed from the environment once read |
 | `--web-auth-header` | — | trust this forward-auth header as the authenticated user (only from loopback / a trusted proxy — see [Auth](#auth)) |
 | `--web-trusted-proxy` | — | IP/CIDR(s) allowed to assert `--web-auth-header` (comma-separated; loopback is always allowed) |
 | `--web-insecure` | off | permit a non-loopback bind with **no** auth mode (dangerous — open to any source) |
@@ -82,13 +84,39 @@ address with no auth mode is refused unless you pass `--web-insecure`.
   terva web --web-addr 0.0.0.0:8730 --web-token "$(openssl rand -hex 24)"
   ```
 
-  The browser can't set request headers on a WebSocket handshake, so the panel
-  passes the token as a `?token=` query parameter on the socket URL; the same
-  token also works as `Authorization: Bearer` for non-browser clients. A token in
-  a URL can leak into a fronting proxy's access logs, browser history, and the
-  `Referer` header (terva's own logs never record it — auth failures log the path
-  only). For a hardened setup prefer forward-auth (no token in the URL) or a
-  native client sending the `Authorization` header.
+  **Don't leave it on the command line for anything long-lived.**
+  `/proc/<pid>/cmdline` is world-readable, so `ps` hands the token to every other
+  user on the box, and under systemd it also sits in the unit file and in
+  `systemctl show`. Two routes keep it out:
+
+  ```bash
+  TERVA_WEB_TOKEN="$(openssl rand -hex 24)" terva web --web-addr 0.0.0.0:8730
+  terva web --web-addr 0.0.0.0:8730 --web-token-file /etc/terva/web-token
+  ```
+
+  `TERVA_WEB_TOKEN` is scrubbed from the environment once read, so the agent's own
+  shell tool — which inherits terva's environment — cannot read the token back out
+  with `env`. `--web-token-file` keeps it out of the environment altogether, which
+  is what systemd's `LoadCredential=` wants. A token file that is missing or empty
+  is a startup error, never a silent fall back to no auth.
+
+  **In the browser, just open the panel.** An unauthenticated page load gets a
+  login form; type the token and the daemon exchanges it for an HttpOnly,
+  SameSite=Strict cookie. The cookie carries the app *and* the WebSocket handshake
+  — browsers send cookies on a same-origin socket, which is the one thing they
+  will not let you set a header on — so from then on the token appears in no URL
+  at all. Guesses at the form are compared in constant time and throttled per
+  source IP.
+
+  `?token=<secret>` still works and is still how you hand someone a one-click
+  link, but it is no longer the only way in, and it is the worse one: a token in a
+  URL lands in the fronting proxy's access log, the browser's history and
+  autocomplete, and the `Referer` of anything the page links to. terva's own logs
+  never record it (auth failures log the path only), but the rest is out of its
+  hands. The form posts the token in a request body, which none of them record.
+
+  Non-browser clients send `Authorization: Bearer <token>` and never touch either
+  path.
 
 - **Trusted network, no per-request auth.** To expose the panel over a private
   overlay (Tailscale/WireGuard/VPN) and let the *network* be the boundary — no
@@ -133,6 +161,30 @@ ExecStart=/usr/local/bin/terva web --web-addr 127.0.0.1:8730 --web-auth-header X
 WorkingDirectory=/srv/workspace
 Restart=always
 ```
+
+Fronting it with a plain proxy instead (no forward-auth), give it a bearer
+token — and keep the token out of `ExecStart`, which `ps` shows to every local
+user:
+
+```ini
+[Service]
+# systemd reads the file (0600, root-owned) and hands it over out of band
+LoadCredential=web-token:/etc/terva/web-token
+ExecStart=/usr/local/bin/terva web --web-addr 127.0.0.1:8730 --web-token-file %d/web-token
+
+# or, the EnvironmentFile route — TERVA_WEB_TOKEN=<secret> in a 0600 file
+EnvironmentFile=/etc/terva/web.env
+ExecStart=/usr/local/bin/terva web --web-addr 127.0.0.1:8730
+```
+
+**Where the token lives decides whether it is doing anything.** If the proxy
+*injects* `Authorization: Bearer …` on the way through, it stamps that header for
+everyone it proxies — including an attacker — so the token buys nothing against
+whoever can reach the proxy, and only closes the direct-to-loopback path. For the
+token to be real auth, the **client** has to carry it: open the panel, type the
+token into the login form, and the cookie takes it from there. If instead the
+network genuinely is your boundary, say so with `--web-insecure` rather than
+running a token that only looks like a lock.
 
 Sessions persist under `$TERVA_HOME`, so a restart (deploy, crash, reboot)
 loses no history. The daemon defaults its working directory to the pinned
