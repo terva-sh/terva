@@ -121,16 +121,56 @@ func parseCodexResetTime(s string) time.Time {
 
 // ---- UsageResetProvider ----
 
+// resetsTTL bounds how often ListResets re-fetches. Credits are granted rarely
+// and expire on multi-day horizons, so the list is all but static — the one
+// thing that changes it within a TTL is a redeem, and ConsumeReset invalidates
+// the cache explicitly rather than waiting this out.
+//
+// Without it every REMOUNT of a UI that lists credits is an uncached GET
+// against an undocumented endpoint: the web panel fetches when its resets
+// section mounts, which happens again on every pane close/reopen, surface
+// tab-switch, and session change. Flipping the pane 30 times sent 30 requests.
+// (Usage has had the same guard since it shipped — usagePollTTL.)
+const resetsTTL = 5 * time.Minute
+
 func (c *codexClient) ListResets(ctx context.Context) ([]UsageReset, error) {
+	c.mu.Lock()
+	if c.hasResets && time.Since(c.resetsAt) < resetsTTL {
+		out := append([]UsageReset(nil), c.resets...) // copy: callers must not alias the cache
+		c.mu.Unlock()
+		return out, nil
+	}
+	c.mu.Unlock()
+
 	var resp codexResetCreditsResp
 	if err := c.whamJSON(ctx, http.MethodGet, "/wham/rate-limit-reset-credits", nil, &resp); err != nil {
+		// Deliberately NOT serving a stale list on error: this drives a
+		// spend-a-credit button, and a failed refresh must not leave a
+		// confidently-rendered list of credits that may no longer exist.
 		return nil, err
 	}
 	out := make([]UsageReset, 0, len(resp.Credits))
 	for _, cr := range resp.Credits {
 		out = append(out, codexResetFromWire(cr))
 	}
+
+	c.mu.Lock()
+	c.resets = append([]UsageReset(nil), out...)
+	c.hasResets = true
+	c.resetsAt = time.Now()
+	c.mu.Unlock()
 	return out, nil
+}
+
+// invalidateResets drops the cached credit list, so the next ListResets goes to
+// the backend. Called after a redeem: the whole point of the next list is to
+// show the credit gone, and serving the pre-redeem cache would show it still
+// there — the UI refreshes immediately after consuming, so this is not
+// theoretical.
+func (c *codexClient) invalidateResets() {
+	c.mu.Lock()
+	c.resets, c.hasResets, c.resetsAt = nil, false, time.Time{}
+	c.mu.Unlock()
 }
 
 func (c *codexClient) ConsumeReset(ctx context.Context, id string) (UsageResetResult, error) {
@@ -142,7 +182,12 @@ func (c *codexClient) ConsumeReset(ctx context.Context, id string) (UsageResetRe
 		"redeem_request_id": codexRedeemRequestID(id),
 	}
 	var resp codexConsumeResp
-	if err := c.whamJSON(ctx, http.MethodPost, "/wham/rate-limit-reset-credits/consume", body, &resp); err != nil {
+	err := c.whamJSON(ctx, http.MethodPost, "/wham/rate-limit-reset-credits/consume", body, &resp)
+	// Invalidate on failure too: a redeem that timed out may well have landed
+	// (it is idempotent by construction, not by luck — see codexRedeemRequestID),
+	// so the cached list is no longer trustworthy either way.
+	c.invalidateResets()
+	if err != nil {
 		return UsageResetResult{}, err
 	}
 	return UsageResetResult{

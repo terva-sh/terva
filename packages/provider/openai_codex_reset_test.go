@@ -80,6 +80,99 @@ func TestCodexListResets(t *testing.T) {
 	}
 }
 
+// The credit list is all but static, but the UI that shows it refetches on
+// every mount — and remounts on every pane close/reopen, tab-switch and session
+// change. Uncached, that is one GET per flip against an undocumented endpoint.
+func TestCodexListResetsCaches(t *testing.T) {
+	var gets int
+	c := codexTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gets++
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(codexCreditsJSON))
+	})
+	ctx := context.Background()
+
+	for range 5 {
+		if _, err := ClientListResets(ctx, c); err != nil {
+			t.Fatalf("list: %v", err)
+		}
+	}
+	if gets != 1 {
+		t.Errorf("5 lists inside the TTL hit the backend %d times, want 1", gets)
+	}
+
+	// Past the TTL it refetches — the cache is a rate limit, not a freeze.
+	inner := c.(*codexClient)
+	inner.mu.Lock()
+	inner.resetsAt = time.Now().Add(-resetsTTL - time.Second)
+	inner.mu.Unlock()
+	if _, err := ClientListResets(ctx, c); err != nil {
+		t.Fatalf("list after TTL: %v", err)
+	}
+	if gets != 2 {
+		t.Errorf("a list past the TTL hit the backend %d times, want 2", gets)
+	}
+}
+
+// A cached list must never outlive a redeem: the UI refreshes immediately after
+// consuming, and serving the pre-redeem cache would show the credit still
+// sitting there, spendable.
+func TestCodexConsumeResetInvalidatesCache(t *testing.T) {
+	var gets int
+	c := codexTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"code":"reset","windows_reset":2,"credit":{"id":"RateLimitResetCredit_a","status":"redeemed"}}`))
+			return
+		}
+		gets++
+		_, _ = w.Write([]byte(codexCreditsJSON))
+	})
+	ctx := context.Background()
+
+	if _, err := ClientListResets(ctx, c); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if _, err := ClientConsumeReset(ctx, c, "RateLimitResetCredit_a"); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if _, err := ClientListResets(ctx, c); err != nil {
+		t.Fatalf("list after consume: %v", err)
+	}
+	if gets != 2 {
+		t.Errorf("the list after a redeem was served from cache (%d GETs, want 2)", gets)
+	}
+}
+
+// A redeem that FAILED may still have landed — it is idempotent by
+// construction, not by luck — so the cache is untrustworthy either way.
+func TestCodexConsumeResetInvalidatesOnFailure(t *testing.T) {
+	var gets int
+	c := codexTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusGatewayTimeout)
+			return
+		}
+		gets++
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(codexCreditsJSON))
+	})
+	ctx := context.Background()
+
+	if _, err := ClientListResets(ctx, c); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if _, err := ClientConsumeReset(ctx, c, "RateLimitResetCredit_a"); err == nil {
+		t.Fatal("a 504 consume must surface an error")
+	}
+	if _, err := ClientListResets(ctx, c); err != nil {
+		t.Fatalf("list after failed consume: %v", err)
+	}
+	if gets != 2 {
+		t.Errorf("the list after a failed redeem was served from cache (%d GETs, want 2)", gets)
+	}
+}
+
 func TestCodexConsumeReset(t *testing.T) {
 	var gotBody map[string]string
 	c := codexTestClient(t, func(w http.ResponseWriter, r *http.Request) {

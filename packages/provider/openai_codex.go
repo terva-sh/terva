@@ -48,6 +48,11 @@ type codexClient struct {
 	mu        sync.Mutex
 	lastUsage UsageSnapshot
 	hasUsage  bool
+
+	// Reset credits, cached for resetsTTL (see ListResets). Also under mu.
+	resets    []UsageReset
+	hasResets bool
+	resetsAt  time.Time
 }
 
 // NewOpenAICodex creates a client that talks to ChatGPT's Codex endpoint
