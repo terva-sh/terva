@@ -8,8 +8,12 @@ package relaunch
 
 import (
 	"errors"
+	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/buildinfo"
 )
 
 // withStubbedExec swaps the exec/timer indirections for synchronous test doubles
@@ -23,6 +27,9 @@ func withStubbedExec(t *testing.T, exec func() error) *int {
 	origExec, origAfter, origEnabled := execImage, afterFunc, enabled
 	origPre, origFail, origDelay := preExec, onFailure, Delay
 	origExe, origErr := launchExe, captureErr
+	origEnv, origIn := launchEnv, handoffIn
+	origOut := handoffOut
+	handoffOut = map[string]string{}
 	execImage = func() error { calls++; return exec() }
 	afterFunc = func(_ time.Duration, fn func()) *time.Timer { fn(); return nil }
 	Delay = 0
@@ -33,6 +40,7 @@ func withStubbedExec(t *testing.T, exec func() error) *int {
 		execImage, afterFunc, enabled = origExec, origAfter, origEnabled
 		preExec, onFailure, Delay = origPre, origFail, origDelay
 		launchExe, captureErr = origExe, origErr
+		launchEnv, handoffIn, handoffOut = origEnv, origIn, origOut
 		restarting.Store(false)
 	})
 	return &calls
@@ -97,6 +105,60 @@ func TestTriggerExecFailureRunsOnFailureAndResets(t *testing.T) {
 	}
 }
 
+// TestTriggerHandsVersionToNextImage checks the exec env carries the
+// outgoing build's version (exactly once, replacing any stale entry) so the
+// restarted image can report what it replaced.
+func TestTriggerHandsVersionToNextImage(t *testing.T) {
+	withStubbedExec(t, func() error { return nil })
+	Enable()
+	origInfo := buildinfo.Get()
+	buildinfo.Set(buildinfo.Info{Version: "1.2.3", Commit: "abcdef0123456789", Date: "2026-07-12T00:00:00Z"})
+	t.Cleanup(func() { buildinfo.Set(origInfo) })
+	launchEnv = []string{"HOME=/home/x", "TERVA_RELAUNCH_FROM=stale"}
+
+	if err := Trigger("upgrade"); err != nil {
+		t.Fatalf("Trigger: %v", err)
+	}
+	want := "TERVA_RELAUNCH_FROM=1.2.3 (abcdef0, 2026-07-12T00:00:00Z)"
+	found := 0
+	for _, kv := range launchEnv {
+		if strings.HasPrefix(kv, "TERVA_RELAUNCH_FROM=") {
+			found++
+			if kv != want {
+				t.Errorf("exec env entry = %q, want %q", kv, want)
+			}
+		}
+	}
+	if found != 1 {
+		t.Errorf("exec env has %d FROM entries, want 1 (env: %v)", found, launchEnv)
+	}
+}
+
+// TestCaptureReadsAndScrubsPrevVersion checks a restarted image reads its
+// predecessor's version from the env and scrubs it — from the process env
+// (children must not inherit it) and from the captured exec env (a later
+// restart must not re-hand a stale value).
+func TestCaptureReadsAndScrubsPrevVersion(t *testing.T) {
+	withStubbedExec(t, func() error { return nil })
+	origArgs := launchArgs
+	t.Cleanup(func() { launchArgs = origArgs })
+	t.Setenv("TERVA_RELAUNCH_FROM", "1.2.2 (0123abc)")
+
+	capture()
+
+	if got := PrevVersion(); got != "1.2.2 (0123abc)" {
+		t.Errorf("PrevVersion() = %q, want %q", got, "1.2.2 (0123abc)")
+	}
+	if v := os.Getenv("TERVA_RELAUNCH_FROM"); v != "" {
+		t.Errorf("process env still carries TERVA_RELAUNCH_FROM=%q; want scrubbed", v)
+	}
+	for _, kv := range launchEnv {
+		if strings.HasPrefix(kv, "TERVA_RELAUNCH_FROM=") {
+			t.Errorf("captured exec env still carries %q; want scrubbed", kv)
+		}
+	}
+}
+
 func TestIsGoRun(t *testing.T) {
 	cases := map[string]bool{
 		"/usr/local/bin/terva":                 false,
@@ -110,5 +172,41 @@ func TestIsGoRun(t *testing.T) {
 		if got := isGoRun(path); got != want {
 			t.Errorf("isGoRun(%q) = %v, want %v", path, got, want)
 		}
+	}
+}
+
+// TestHandoffCrossesExec checks a caller's SetHandoff value (here a session
+// id, set from a pre-exec hook the way the TUI does it) rides the exec env
+// alongside the automatic FROM stamp, and that capture reads it back.
+func TestHandoffCrossesExec(t *testing.T) {
+	withStubbedExec(t, func() error { return nil })
+	Enable()
+	OnPreExec(func(string) { SetHandoff("SESSION", "20260712-abc") })
+	launchEnv = []string{"HOME=/home/x", "TERVA_RELAUNCH_SESSION=stale"}
+
+	if err := Trigger("upgrade"); err != nil {
+		t.Fatalf("Trigger: %v", err)
+	}
+	found := 0
+	for _, kv := range launchEnv {
+		if kv == "TERVA_RELAUNCH_SESSION=20260712-abc" {
+			found++
+		} else if strings.HasPrefix(kv, "TERVA_RELAUNCH_SESSION=") {
+			t.Errorf("stale handoff survived: %q", kv)
+		}
+	}
+	if found != 1 {
+		t.Errorf("exec env has %d SESSION entries, want 1 (env: %v)", found, launchEnv)
+	}
+
+	t.Setenv("TERVA_RELAUNCH_SESSION", "20260712-abc")
+	origArgs := launchArgs
+	t.Cleanup(func() { launchArgs = origArgs })
+	capture()
+	if got := Handoff("SESSION"); got != "20260712-abc" {
+		t.Errorf("Handoff(SESSION) = %q, want %q", got, "20260712-abc")
+	}
+	if v := os.Getenv("TERVA_RELAUNCH_SESSION"); v != "" {
+		t.Errorf("process env still carries TERVA_RELAUNCH_SESSION=%q; want scrubbed", v)
 	}
 }

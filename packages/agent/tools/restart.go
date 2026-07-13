@@ -11,7 +11,7 @@ import (
 
 // RestartTool re-execs the running terva into the currently-installed binary
 // (Tier-1 self-restart). It is registered only when self-restart is enabled
-// (--web-allow-restart, itself refused on an insecure no-auth listener). It is
+// (--allow-restart; web mode refuses it on an insecure no-auth listener). It is
 // deliberately left out of the permission classifier maps, so in every GATING
 // approval mode (ask / auto-edit / workspace — the web default) it prompts the
 // operator before running: the "agent restarts itself, with approval" path.

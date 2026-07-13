@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -125,6 +126,80 @@ func mustExec(t *testing.T, st *StatusTool) core.ToolResult {
 		t.Fatalf("Execute: %v", err)
 	}
 	return res
+}
+
+// TestStatusReportsBuildVersion: the running binary's build identity —
+// version, commit, build timestamp — rides the report (text + Details),
+// so an agent can identify its own build for bug reports and verify a
+// self-restart loaded the expected binary. The text line abbreviates the
+// commit; Details carries the full hash.
+func TestStatusReportsBuildVersion(t *testing.T) {
+	st := &StatusTool{
+		Provider: "anthropic",
+		CWD:      "/tmp/proj",
+		Build: buildinfo.Info{
+			Version: "0.120.1",
+			Commit:  "8f5bd80abcdef1234567890",
+			Date:    "2026-07-12T06:30:32Z",
+		},
+	}
+	res, err := st.Execute(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	text := statusText(res)
+	want := "version: 0.120.1 (commit 8f5bd80, built 2026-07-12T06:30:32Z)"
+	if !strings.Contains(text, want) {
+		t.Errorf("status output missing %q\n--- output ---\n%s", want, text)
+	}
+
+	d, ok := res.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("Details is %T, want map[string]any", res.Details)
+	}
+	if d["version"] != "0.120.1" {
+		t.Errorf("Details version = %v, want 0.120.1", d["version"])
+	}
+	// Details keeps the FULL commit hash, not the abbreviated form.
+	if d["commit"] != "8f5bd80abcdef1234567890" {
+		t.Errorf("Details commit = %v, want full hash", d["commit"])
+	}
+	if d["build_date"] != "2026-07-12T06:30:32Z" {
+		t.Errorf("Details build_date = %v", d["build_date"])
+	}
+}
+
+// TestStatusOmitsBuildWhenUnrecorded: an SDK embedder (or a test) that
+// never records a build leaves the zero Info; the report drops the
+// version line entirely rather than printing empty fields.
+func TestStatusOmitsBuildWhenUnrecorded(t *testing.T) {
+	st := &StatusTool{Provider: "anthropic", CWD: "/tmp/proj"} // Build left zero
+	res, err := st.Execute(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if text := statusText(res); strings.Contains(text, "version:") {
+		t.Errorf("unrecorded build should print no version line\n--- output ---\n%s", text)
+	}
+}
+
+func TestFmtBuild(t *testing.T) {
+	cases := []struct {
+		name string
+		in   buildinfo.Info
+		want string
+	}{
+		{"empty", buildinfo.Info{}, ""},
+		{"version only", buildinfo.Info{Version: "0.0.0"}, "0.0.0"},
+		{"version+commit", buildinfo.Info{Version: "0.120.1", Commit: "8f5bd80"}, "0.120.1 (commit 8f5bd80)"},
+		{"abbreviates long commit", buildinfo.Info{Version: "0.120.1", Commit: "8f5bd80abcdef", Date: "2026-07-12T06:30:32Z"}, "0.120.1 (commit 8f5bd80, built 2026-07-12T06:30:32Z)"},
+		{"date without commit", buildinfo.Info{Version: "0.120.1", Date: "2026-07-12T06:30:32Z"}, "0.120.1 (built 2026-07-12T06:30:32Z)"},
+	}
+	for _, c := range cases {
+		if got := fmtBuild(c.in); got != c.want {
+			t.Errorf("fmtBuild(%s) = %q, want %q", c.name, got, c.want)
+		}
+	}
 }
 
 func TestFmtTokens(t *testing.T) {

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
+	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -57,6 +59,14 @@ type StatusTool struct {
 	// nil, the tool reports the static facts and marks live usage
 	// unavailable.
 	Agent *core.Agent
+
+	// Build is the running binary's build identity (version, commit,
+	// build timestamp). Immutable for the process lifetime, so it's set
+	// once at construction (from buildinfo.Get) and never re-bound — no
+	// lock, unlike the provider-identity fields. A zero Build (an SDK
+	// embedder that never recorded it, a direct-construction test) is
+	// reported as unavailable rather than as empty fields.
+	Build buildinfo.Info
 }
 
 // SetProvider re-binds the provider-identity facts after a live
@@ -77,7 +87,7 @@ func (t *StatusTool) SetProvider(provider, authMethod, baseURL string) {
 func (t *StatusTool) Name() string { return "terva_status" }
 
 func (t *StatusTool) Description() string {
-	return "Report your own runtime status: model, provider, working directory, session id and transcript file, reasoning effort, and how full your context window is. Takes no arguments. Useful for deciding whether to summarize or wrap up before the context fills."
+	return "Report your own runtime status: model, provider, the running terva binary's version/commit/build-date, process uptime, working directory, session id and transcript file, reasoning effort, and how full your context window is. Takes no arguments. Useful for deciding whether to summarize or wrap up before the context fills, and for reporting which build is serving this session."
 }
 
 // No arguments. Providers that require an object schema accept an
@@ -133,6 +143,17 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 	if baseURL != "" {
 		fmt.Fprintf(&sb, "base url: %s\n", baseURL)
 	}
+	// The running process's build identity — what actually serves this
+	// session, which may differ from whatever `terva --version` in a
+	// shell reports. Immutable, so it's whatever was recorded at startup.
+	if line := fmtBuild(t.Build); line != "" {
+		fmt.Fprintf(&sb, "version: %s\n", line)
+	}
+	// Uptime is read at call time (not construction): with the version
+	// line it confirms a self-restart really replaced the process —
+	// same build or not, the uptime resets.
+	uptime := time.Since(buildinfo.Started()).Round(time.Second)
+	fmt.Fprintf(&sb, "uptime: %s\n", uptime)
 	if reasoning != "" {
 		fmt.Fprintf(&sb, "reasoning effort: %s\n", reasoning)
 	}
@@ -207,6 +228,10 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 		Details: map[string]any{
 			"provider":       provName,
 			"model":          model,
+			"version":        t.Build.Version,
+			"commit":         t.Build.Commit,
+			"build_date":     t.Build.Date,
+			"uptime_seconds": int(uptime.Seconds()),
 			"cwd":            cwd,
 			"project_id":     projectID,
 			"session_id":     sessID,
@@ -217,6 +242,33 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 			"cumulative":     cum,
 		},
 	}, nil
+}
+
+// fmtBuild renders the build identity as one line, e.g.
+// "0.120.1 (commit 8f5bd80, built 2026-07-12T06:30:32Z)". The commit is
+// abbreviated to 7 chars for the text line (the full hash rides in
+// Details); commit and date are each omitted when absent. Returns "" for
+// a zero Info (no version recorded) so the caller drops the line
+// entirely.
+func fmtBuild(b buildinfo.Info) string {
+	if b.Version == "" {
+		return ""
+	}
+	s := b.Version
+	if b.Commit != "" {
+		short := b.Commit
+		if len(short) > 7 {
+			short = short[:7]
+		}
+		s += " (commit " + short
+		if b.Date != "" {
+			s += ", built " + b.Date
+		}
+		s += ")"
+	} else if b.Date != "" {
+		s += " (built " + b.Date + ")"
+	}
+	return s
 }
 
 // fmtTokens renders a token count compactly: 850, 12.3k, 1.2M.
