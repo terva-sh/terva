@@ -310,6 +310,41 @@ func TestHostAllowedRebind(t *testing.T) {
 	}
 }
 
+// The reverse-proxy deployment, from the daemon's side: terva on loopback, a
+// proxy on the same host fronting it under a public vhost name. The refusal an
+// operator meets there reads like a missing --web-allow-host flag, and has been
+// reported as one. It is not. The Host check is the no-auth mode's
+// DNS-rebinding defense, so there is no allowlist to widen — every auth mode
+// lifts it outright, and that is the supported path.
+//
+// The no-auth arm is the one that matters: a proxy publishing this daemon under
+// a public name is publishing an unauthenticated agent, and the refusal is the
+// only thing standing in front of it. Widening the Host set would take that away
+// while leaving the endpoint wide open, so it stays pinned shut.
+func TestProxiedVhostWantsAuthNotAnAllowlist(t *testing.T) {
+	const vhost = "terva.example.com"
+	proxied := func() *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Host = vhost                   // the proxy's public name
+		r.RemoteAddr = "127.0.0.1:33156" // the proxy itself, same host
+		r.Header.Set("X-Forwarded-For", "203.0.113.9")
+		return r
+	}
+
+	if hostAllowed(Options{}, proxied()) {
+		t.Error("no-auth accepted a proxied public Host — that publishes an unauthenticated agent under it")
+	}
+	for flag, opts := range map[string]Options{
+		"--web-token":       {Token: "s3cret"},
+		"--web-auth-header": {AuthHeader: "X-Authentik-Username"},
+		"--web-insecure":    {AllowInsecure: true},
+	} {
+		if !hostAllowed(opts, proxied()) {
+			t.Errorf("%s did not lift the Host check — the vhost deployment stays blocked with no way out", flag)
+		}
+	}
+}
+
 // TestInsecureCIDR covers --web-insecure-cidr: no-auth access scoped to a source
 // range (e.g. a tailnet), with the Host check relaxed for in-range peers but the
 // loopback-source rebind defense preserved. Also checks blanket --web-insecure.

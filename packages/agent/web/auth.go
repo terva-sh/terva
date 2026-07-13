@@ -8,7 +8,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+
+	"terva.sh/terva/packages/agent/config"
 )
 
 // authMiddleware gates every request. The auth model is deliberately thin —
@@ -18,7 +22,8 @@ func authMiddleware(opts Options, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !hostAllowed(opts, r) {
 			fmt.Fprintf(os.Stderr, "terva web: rejected request with disallowed Host %q from %s\n", r.Host, r.RemoteAddr)
-			http.Error(w, "forbidden", http.StatusForbidden)
+			explainHostRejection(r)
+			http.Error(w, "forbidden: no auth is configured, so only a loopback Host is accepted (DNS-rebinding defense) — see the terva web log", http.StatusForbidden)
 			return
 		}
 		if !authorized(opts, r) {
@@ -94,6 +99,45 @@ func hostAllowed(opts Options, r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// hostRejectionHelp fires at most once per process.
+var hostRejectionHelp sync.Once
+
+// explainHostRejection says why the request was refused and what to do about it.
+//
+// The bare rejection line reads like a missing allowlist, and the first instinct
+// it provokes is to hunt for a --web-allow-host flag. No such flag exists, and
+// none should: the Host check is not an allowlist to widen but the no-auth
+// mode's DNS-rebinding defense, and configuring ANY auth removes it (hostAllowed
+// returns early). An operator who takes the allowlist reading spends the whole
+// investigation looking for the wrong knob — so spell out the real shape here,
+// once, at the moment of the failure.
+//
+// When a proxy is fronting the daemon, this rejection is more than an
+// inconvenience: it means a reverse proxy is publishing an endpoint that has no
+// authentication behind it, and everything the agent can do is on offer to
+// whoever can reach the proxy. Say so plainly. The forwarding headers are the
+// giveaway — forgeable, but this is advice, not a boundary.
+func explainHostRejection(r *http.Request) {
+	proxied := r.Header.Get("X-Forwarded-For") != "" ||
+		r.Header.Get("X-Forwarded-Proto") != "" ||
+		r.Header.Get("X-Forwarded-Host") != "" ||
+		r.Header.Get("Forwarded") != ""
+	hostRejectionHelp.Do(func() {
+		p := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "terva web:   "+format+"\n", a...) }
+		if proxied {
+			p("^ that request came through a reverse proxy, and this daemon has NO auth.")
+			p("  The Host check is all that is standing between the proxy's callers and an unauthenticated agent.")
+		} else {
+			p("^ this daemon has NO auth, so it accepts only a loopback Host (a DNS-rebinding defense).")
+		}
+		p("  The check is not an allowlist to extend — it exists ONLY while there is no auth, and any auth mode lifts it:")
+		p("    TERVA_WEB_TOKEN=<secret>   bearer auth, out of the command line (or --web-token-file PATH)")
+		p("    --web-auth-header <header>  trust a forward-auth header from the proxy (with --web-trusted-proxy)")
+		p("    --web-insecure             keep no auth at all — only if the network really is your boundary")
+		p("  Full deployment guide: %s", filepath.Join(config.TervaHome(), "docs", "web.md"))
+	})
 }
 
 // authorized applies, in order: no-auth (only reachable on a loopback bind,
