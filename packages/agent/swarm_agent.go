@@ -45,6 +45,7 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 		return err
 	}
 	build.WarnRestrictedWorkspace(args, r.Trusted)
+	build.WarnPersistentlyUnjailed(args)
 	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()

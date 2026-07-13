@@ -122,20 +122,119 @@ func ResolveApprovalMode(args Args, cfg config.Config) core.ApprovalMode {
 	return core.ApprovalYolo
 }
 
-// resolveJail decides the sandbox's startup lock state: --no-jail /
-// --jail win; otherwise the default is on for sessions with a real user —
-// interactive (TUI) and ACP — pairing with their workspace approval mode so
-// its trust-the-built-ins premise holds (built-in tools are confined to the
-// cwd); it's off for the other headless modes (rpc/json/print/swarm) so
-// unattended automation isn't surprised by path confinement.
+// resolveJail decides the sandbox's startup lock state.
+//
+// Precedence, highest first:
+//
+//	--jail / --no-jail        this run only (--no-jail wins if both are
+//	                          given, as it always has). Either flag settles
+//	                          it, so a stored exception never overrides what
+//	                          the user just typed.
+//	unjailed.json             a persisted per-directory exception
+//	mode default              on for sessions with a real user (interactive,
+//	                          ACP), off for the headless modes
+//
+// The default is on for interactive and ACP because it pairs with their
+// workspace approval mode: that mode's trust-the-built-ins premise holds
+// precisely BECAUSE the built-ins are confined to the cwd. It's off for the
+// other headless modes (rpc/json/print/swarm) so unattended automation isn't
+// surprised by path confinement.
+//
+// A store that cannot be read leaves the jail on and the error is surfaced by
+// the caller (JailNotice). Failing closed is the only safe direction: a
+// sandbox must never come down because a file was corrupt.
 func resolveJail(args Args) bool {
 	switch {
 	case args.NoJail:
 		return false
 	case args.Jail:
 		return true
-	default:
-		return args.Mode == ModeInteractive || args.Mode == ModeACP
+	}
+	if unjailed, err := config.IsPathUnjailed(args.CWD); err == nil && unjailed {
+		return false
+	}
+	return args.Mode == ModeInteractive || args.Mode == ModeACP
+}
+
+// JailNotice describes the resolved jail posture for the user-facing surfaces.
+// Persisted reports that the sandbox is down because of a stored decision
+// rather than a flag — a state the user made once and will not otherwise be
+// reminded of.
+type JailNotice struct {
+	Jailed    bool
+	Persisted bool
+	Entry     config.UnjailEntry
+	// AutoApproved is the combination worth saying out loud: the sandbox is
+	// down AND the approval mode auto-approves the built-in tools. Each is a
+	// deliberate choice; together they mean built-in tools may write anywhere
+	// on the filesystem without asking, and nothing else on screen says so.
+	AutoApproved bool
+	Err          error
+}
+
+// ResolveJailNotice resolves the jail posture along with why, for the callers
+// that have to tell the user about it.
+func ResolveJailNotice(args Args, cfg config.Config) JailNotice {
+	n := JailNotice{Jailed: resolveJail(args)}
+	if args.Jail || args.NoJail {
+		return n // an explicit flag this run: the user just said it, don't nag
+	}
+	store, err := config.LoadUnjailStore()
+	if err != nil {
+		n.Err = err
+		return n
+	}
+	ok, e := store.IsUnjailed(args.CWD)
+	if !ok {
+		return n
+	}
+	n.Persisted = true
+	n.Entry = e
+	switch ResolveApprovalMode(args, cfg) {
+	case core.ApprovalWorkspace, core.ApprovalYolo:
+		n.AutoApproved = true
+	}
+	return n
+}
+
+// Message renders the notice for a user-facing surface, or "" when there is
+// nothing worth saying. A persisted unjail is worth saying: unlike a flag, the
+// user set it once — possibly long ago — and the status bar signals it only by
+// the ABSENCE of a "jailed" badge, which is no signal at all.
+func (n JailNotice) Message() string {
+	if n.Err != nil {
+		// The store is unreadable, so the jail stayed on. Say so: silence here
+		// would look identical to "you have no unjail rules", and the user
+		// would wonder why their directory is suddenly confined.
+		return fmt.Sprintf("could not read the unjail list (%v) — staying jailed", n.Err)
+	}
+	if !n.Persisted {
+		return ""
+	}
+	if n.AutoApproved {
+		return fmt.Sprintf("unjailed by a saved rule for %s, and the approval mode auto-approves built-in tools: "+
+			"they may read and write anywhere without asking. `terva jail` to undo", n.Entry.Real)
+	}
+	return fmt.Sprintf("unjailed by a saved rule for %s — tools may read and write outside it. `terva jail` to undo", n.Entry.Real)
+}
+
+// JailNoticeFor is ResolveJailNotice with the user config loaded, for the call
+// sites that don't already hold one (same convenience shape as
+// effectiveApprovalMode).
+func JailNoticeFor(args Args) JailNotice {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		cfg = config.Config{}
+	}
+	return ResolveJailNotice(args, cfg)
+}
+
+// WarnPersistentlyUnjailed prints the notice to stderr for the modes with no
+// status line. The counterpart of WarnRestrictedWorkspace (trust_cli.go), and
+// the same stance: inform, never prompt.
+func WarnPersistentlyUnjailed(args Args) {
+	if msg := JailNoticeFor(args).Message(); msg != "" {
+		fmt.Fprintf(os.Stderr, "terva: %s\n", msg)
 	}
 }
 

@@ -29,8 +29,8 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/resets` | List the banked usage-reset credits a subscription has accrued (OpenAI Codex today) and redeem one to clear a spent window. Redeeming is irreversible and confirmed first; `esc` closes. |
 | `/compact` | Summarize the transcript into one message to free up context. |
 | `/study` | Run the canned prompt "Read and understand everything in the current directory." so the agent has full project context before you start asking targeted questions. Pass a path — typed, drag-dropped, or selected via `@` — to target a specific file or directory instead: `/study [dir:packages/]`, `/study cmd/terva/main.go`. |
-| `/jail` | Confine tools to the current directory. (On by default in interactive sessions; `--no-jail` starts unjailed.) |
-| `/unjail` | Allow tools to touch paths outside again. |
+| `/jail` | Confine tools to the current directory. (On by default in interactive sessions; `--no-jail` starts unjailed.) `/jail always` also forgets a saved unjail rule for this directory. |
+| `/unjail` | Allow tools to touch paths outside again — this session only. `/unjail always` records the directory so it starts unjailed from now on (see [permissions.md](permissions.md#unjailing-a-directory-for-good)). |
 | `/trust` | Trust the current directory so its project content — `.terva` extensions, skills, lore, context, permission rules — loads. `/trust parent` trusts the parent so every directory under it counts as trusted too. Project extensions become discoverable immediately (`/reload-ext` picks them up); prompt-baked content lands on the next launch. |
 | `/untrust` | Remove the current directory from the trust list; its project content stops loading on the next launch. |
 | `/permissions` | Show the current approval mode and the active permission rules grouped by source (user/project/extension), and revoke this session's "always allow" grants: `↑`/`↓` select a grant, `r` or `del` takes it back, `R` clears them all, `esc` closes. Rules stay read-only (edit them in config). Alias: `/perms`. See [permissions.md](permissions.md). |
@@ -248,6 +248,8 @@ terva also auto-compacts in the background: after any turn that leaves context u
 Enforces a sandbox rooted at the cwd shown in the status bar. `read`, `write`, and `edit` resolve their target path (including through symlinks) and refuse anything outside the sandbox. `bash` refuses obvious escape patterns: `sudo`, `rm -rf /`, leading `cd /`, `cd ..`, `cd ~`, `chmod -R`, `dd of=/`, and similar. The status bar shows `jailed, ~/your/cwd` while active.
 
 This is a guardrail against accidents, not a hard security boundary. If you need real isolation, run terva under docker or a proper sandbox.
+
+`/unjail` lifts it for the session. `/unjail always` records the directory in `$TERVA_HOME/unjailed.json` so it starts unjailed every time — useful for a dotfiles repo that writes into your home — and `/jail always` takes it back. terva says so on the status line at launch when a saved rule is what lowered the jail, because otherwise the only sign is the *absence* of the `jailed` badge.
 
 ## Status bar
 

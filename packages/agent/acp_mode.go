@@ -382,6 +382,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// session/request_permission trust prompt — is deferred). Log a
 	// warning naming how to enable; --trust still works over the wire.
 	build.WarnRestrictedWorkspace(args, r.Trusted)
+	build.WarnPersistentlyUnjailed(args)
 	r.AdoptReadOnlySet(roSet)
 
 	// Wire this session's extensions (tools + read-only classification) BEFORE

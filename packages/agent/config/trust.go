@@ -154,6 +154,24 @@ func CanonicalTrustPath(path string) string {
 	return abs
 }
 
+// canonicalEntryReal returns the canonical match key for a stored entry.
+// real is the recorded canonical path; path is the as-entered display form,
+// used as a fallback when a hand-edited file recorded only that. On Windows the
+// recorded value is re-folded, since it may have been written by hand.
+//
+// Shared by trusted.json and unjailed.json (unjail.go): both are path-keyed
+// security stores, and two copies of this comparison would eventually disagree
+// about what counts as the same directory.
+func canonicalEntryReal(real, path string) string {
+	if real == "" {
+		return CanonicalTrustPath(path)
+	}
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(filepath.Clean(real))
+	}
+	return real
+}
+
 // trustPathContains reports whether child is parent or a descendant of
 // parent, using the same cleaned/case-folded canonical form as
 // CanonicalTrustPath. Both arguments must already be canonical. The
@@ -184,14 +202,9 @@ func (s TrustStore) IsTrusted(path string) (bool, TrustEntry) {
 		return false, TrustEntry{}
 	}
 	for _, e := range s.Trusted {
-		entryReal := e.Real
-		if entryReal == "" {
-			// Tolerate an entry that only recorded the display path
-			// (hand-edited file): canonicalize it on read.
-			entryReal = CanonicalTrustPath(e.Path)
-		} else if runtime.GOOS == "windows" {
-			entryReal = strings.ToLower(filepath.Clean(entryReal))
-		}
+		// Tolerates an entry that recorded only the display path (a
+		// hand-edited file): canonicalized on read.
+		entryReal := canonicalEntryReal(e.Real, e.Path)
 		if e.Parent {
 			if trustPathContains(entryReal, real) {
 				return true, e
@@ -215,13 +228,7 @@ func (s *TrustStore) Add(path string, parent bool) bool {
 		return false
 	}
 	for i := range s.Trusted {
-		er := s.Trusted[i].Real
-		if er == "" {
-			er = CanonicalTrustPath(s.Trusted[i].Path)
-		} else if runtime.GOOS == "windows" {
-			er = strings.ToLower(filepath.Clean(er))
-		}
-		if er == real {
+		if canonicalEntryReal(s.Trusted[i].Real, s.Trusted[i].Path) == real {
 			if s.Trusted[i].Parent == parent {
 				return false // already present with the same scope
 			}
@@ -250,13 +257,7 @@ func (s *TrustStore) Remove(path string) bool {
 	out := s.Trusted[:0]
 	changed := false
 	for _, e := range s.Trusted {
-		er := e.Real
-		if er == "" {
-			er = CanonicalTrustPath(e.Path)
-		} else if runtime.GOOS == "windows" {
-			er = strings.ToLower(filepath.Clean(er))
-		}
-		if er == real {
+		if canonicalEntryReal(e.Real, e.Path) == real {
 			changed = true
 			continue
 		}

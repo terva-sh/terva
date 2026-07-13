@@ -149,6 +149,9 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runTrustCommand(rawArgs); handled {
 		return err
 	}
+	if handled, err := runUnjailCommand(rawArgs); handled {
+		return err
+	}
 	if handled, err := runLocaleCommand(rawArgs); handled {
 		return err
 	}
@@ -386,6 +389,7 @@ func runPrintMode(ctx context.Context, args build.Args, version string) error {
 		return err
 	}
 	build.WarnRestrictedWorkspace(args, r.Trusted)
+	build.WarnPersistentlyUnjailed(args)
 	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
@@ -428,6 +432,7 @@ func runJSONMode(ctx context.Context, args build.Args, version string) error {
 		return err
 	}
 	build.WarnRestrictedWorkspace(args, r.Trusted)
+	build.WarnPersistentlyUnjailed(args)
 	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()

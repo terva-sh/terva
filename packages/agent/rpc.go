@@ -55,6 +55,7 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 		return err
 	}
 	build.WarnRestrictedWorkspace(args, r.Trusted)
+	build.WarnPersistentlyUnjailed(args)
 	r.AdoptReadOnlySet(roSet)
 
 	// Extensions: same lifecycle as interactive mode, minus the

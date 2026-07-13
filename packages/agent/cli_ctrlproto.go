@@ -307,6 +307,7 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		OpenSessionsOnBoot:  args.Resume && args.ResumeID == "",
 		Trusted:             bootTrusted,
 		GatedContentPresent: config.HasGatedProjectContent(w.CWD()),
+		JailNotice:          build.JailNoticeFor(args).Message(),
 
 		// --- in-TUI login (the carrier flavor) ---
 		// The auth manager runs the OAuth/api-key flows in this process; on

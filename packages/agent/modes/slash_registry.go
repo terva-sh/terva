@@ -16,6 +16,7 @@ package modes
 import (
 	"context"
 	"strings"
+	"terva.sh/terva/packages/agent/config"
 
 	"terva.sh/terva/packages/agent/slash"
 	"terva.sh/terva/packages/i18n"
@@ -157,24 +158,8 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		i.openPermissionsDialog()
 		return false
 	},
-	"/jail": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-		if i.cfg.Sandbox == nil {
-			i.setStatusErr(i18n.T("sandbox not available in this build"))
-			return false
-		}
-		i.cfg.Sandbox.Lock()
-		i.setStatusOK("jailed to " + i.cfg.CWD + " (tools cannot touch paths outside this directory)")
-		return false
-	},
-	"/unjail": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-		if i.cfg.Sandbox == nil {
-			i.setStatusErr(i18n.T("sandbox not available in this build"))
-			return false
-		}
-		i.cfg.Sandbox.Unlock()
-		i.setStatusOK("unjailed")
-		return false
-	},
+	"/jail":    (*Interactive).slashJail,
+	"/unjail":  (*Interactive).slashUnjail,
 	"/trust":   (*Interactive).slashTrust,
 	"/untrust": (*Interactive).slashUntrust,
 
@@ -453,6 +438,63 @@ func (i *Interactive) slashCD(_ context.Context, parts []string, raw string) boo
 // agent with the now-trusted Resolve (project extensions/skills/context
 // load). If the host didn't wire a rebuild path, it persists and tells
 // the user a restart will apply it. See docs/plans/workspace-trust.md.
+// wantsAlways reports whether a slash arg asked for the decision to be
+// remembered. Accepts the repo's bare-word idiom (`/unjail always`, matching
+// `/trust parent`) and the flag spelling people reach for anyway.
+func wantsAlways(parts []string) bool {
+	for _, p := range parts[1:] {
+		switch strings.ToLower(strings.TrimSpace(p)) {
+		case "always", "--always", "-always":
+			return true
+		}
+	}
+	return false
+}
+
+// slashJail confines tools to the working directory. `/jail always` also drops
+// any persisted unjail record for this directory, so the confinement survives a
+// restart — otherwise a stored exception would silently undo it on the next
+// launch, which is the sort of thing that makes a sandbox worthless.
+func (i *Interactive) slashJail(_ context.Context, parts []string, _ string) bool {
+	if i.cfg.Sandbox == nil {
+		i.setStatusErr(i18n.T("sandbox not available in this build"))
+		return false
+	}
+	i.cfg.Sandbox.Lock()
+	msg := "jailed to " + i.cfg.CWD + " (tools cannot touch paths outside this directory)"
+
+	if wantsAlways(parts) {
+		if err := config.RejailPath(i.cfg.CWD); err != nil {
+			i.setStatusErr(i18n.T("/jail: %s", err))
+			return false
+		}
+		msg += " - and remembered"
+	}
+	i.setStatusOK(msg)
+	return false
+}
+
+// slashUnjail lifts the sandbox. `/unjail always` records the directory so it
+// starts unjailed from now on; plain `/unjail` is this session only, as before.
+func (i *Interactive) slashUnjail(_ context.Context, parts []string, _ string) bool {
+	if i.cfg.Sandbox == nil {
+		i.setStatusErr(i18n.T("sandbox not available in this build"))
+		return false
+	}
+	i.cfg.Sandbox.Unlock()
+
+	if !wantsAlways(parts) {
+		i.setStatusOK("unjailed (this session only - /unjail always to remember)")
+		return false
+	}
+	if err := config.UnjailPath(i.cfg.CWD, false); err != nil {
+		i.setStatusErr(i18n.T("/unjail: %s", err))
+		return false
+	}
+	i.setStatusOK("unjailed " + i.cfg.CWD + " and remembered - tools may read and write outside it from now on (`/jail always` to undo)")
+	return false
+}
+
 func (i *Interactive) slashTrust(_ context.Context, parts []string, _ string) bool {
 	if i.cfg.TrustWorkspace == nil {
 		i.setStatusErr(i18n.T("/trust unavailable: host did not wire TrustWorkspace"))

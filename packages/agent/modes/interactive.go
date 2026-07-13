@@ -256,6 +256,13 @@ type InteractiveConfig struct {
 	// repo never sees a trust nag.
 	GatedContentPresent bool
 
+	// JailNotice is the launch-time message about the sandbox, or "" when
+	// there is nothing to say. Non-empty when a SAVED rule took the jail down
+	// for this directory — a decision the user made once and would otherwise
+	// only learn about from the absence of a "jailed" badge, which is no
+	// signal at all. Set by the host from build.JailNoticeFor.
+	JailNotice string
+
 	// TrustWorkspace persists trust for the current cwd (parent=true also
 	// trusts descendants), then ideally re-applies project content for
 	// the session. Wired by the cli to TrustPath + an agent rebuild. nil
@@ -1181,6 +1188,12 @@ func (i *Interactive) Run(ctx context.Context) error {
 	if !i.ready() && (i.cfg.Carrier == nil || i.cfg.CarrierLogin != nil) {
 		i.statusErr = i18n.T("not logged in. pick a login method below or press esc to dismiss.")
 		i.dialog.Open(i.cfg.TervaHome)
+	} else if i.cfg.JailNotice != "" {
+		// A saved rule took the sandbox down for this directory. Say it before
+		// the trust nag: trust withholds capability (the safe direction, and
+		// the message is an offer), while this GRANTED capability — and unlike
+		// a flag, the user is not being reminded by having just typed it.
+		i.statusErr = i18n.T("%s", i.cfg.JailNotice)
 	} else if !i.cfg.Trusted && i.cfg.GatedContentPresent {
 		// Workspace Trust reminder: the cwd ships project extensions/
 		// skills/context that were NOT loaded because the directory is

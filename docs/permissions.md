@@ -23,11 +23,14 @@ beats the built-in default; `--no-yolo` is a compatibility alias for
 
 In the TUI, `/settings` switches the mode live for the **current
 session** (plan immediately withholds the mutating tools) — it does
-**not** write your config. The approval mode is a security posture
-like `/jail`, not a saved preference: the persistent default comes
-only from the `approval` config key or the `--approval` flag, so the
-picker can never silently pin a mode (and a future default change is
-never masked by an accidentally-saved value). The current mode shows
+**not** write your config. The approval mode is a security posture, not a
+preference, so it is never saved as a side effect: the persistent default
+comes only from the `approval` config key or the `--approval` flag, so
+the picker can never silently pin a mode (and a future default change is
+never masked by an accidentally-saved value). `/jail` and `/unjail`
+follow the same rule — session-only unless you explicitly say
+`always` ([Unjailing a directory for good](#unjailing-a-directory-for-good)).
+The current mode shows
 in the status bar; `/permissions` shows the active mode and rules, and
 lets you revoke this session's grants (see below).
 
@@ -47,6 +50,42 @@ swarm agents) default to `yolo` and unjailed, so unattended automation
 isn't surprised by prompts (which it can't answer) or path confinement.
 Set `--approval` / config `approval` and `--jail`/`--no-jail` to
 override either.
+
+## Unjailing a directory for good
+
+Some work genuinely lives outside its own folder — a dotfiles repo that
+writes into your home, a build that emits above the tree. Passing
+`--no-jail` every time is a poor way to say so, and `/unjail` forgets on
+restart, so the decision can be recorded per directory:
+
+```bash
+terva unjail                    # this directory, from now on
+terva unjail --parent ~/src     # and everything under it
+terva unjail --list
+terva jail                      # back to confined
+```
+
+In the TUI, `/unjail` is still session-only; `/unjail always` records it,
+and `/jail always` forgets it again.
+
+The list lives in `$TERVA_HOME/unjailed.json` (mode 0600), **outside any
+project** — for the same reason the trust list does: a repo must not be
+able to unjail itself by shipping a file. `--jail` and `--no-jail` still
+settle a single run, so a saved rule never overrides what you just typed.
+
+**Unjail is not trust, and neither implies the other.** Trust decides
+whether a project's *own code and instructions* load; unjail decides
+*where tools may write*. A repo you trust enough to run is not thereby a
+repo you want writing to your home directory, and a directory you need
+to write outside of is not thereby one whose code you want executing.
+
+**One combination is worth saying out loud**, and terva says it at
+startup rather than leaving you to infer it: a saved unjail rule
+*together with* an auto-approving mode (`workspace`, `yolo`) means the
+built-in tools may read and write anywhere **without asking**. The jail
+is what made `workspace` safe to leave alone — built-ins are
+auto-approved precisely *because* they were confined. Take the jail away
+and that premise goes with it.
 
 Tools that are not classified read-only — including every extension
 tool — are treated as mutating. In headless modes (`-p`, `--json`,

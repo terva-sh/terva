@@ -92,8 +92,8 @@ var registry = []Spec{
 
 	{Name: "/permissions", Group: groupSafety, Aliases: []string{"/perms"},
 		Desc: "show the approval mode, permission rules, and session grants"},
-	{Name: "/jail", Group: groupSafety, Desc: "confine tools to the current directory"},
-	{Name: "/unjail", Group: groupSafety, Desc: "allow tools to touch paths outside this directory"},
+	{Name: "/jail", Group: groupSafety, Desc: "confine tools to the current directory (/jail always to also forget a saved unjail)"},
+	{Name: "/unjail", Group: groupSafety, Desc: "allow tools to touch paths outside this directory (/unjail always to remember it)"},
 	{Name: "/trust", Group: groupSafety, Desc: "trust this directory so its project extensions/skills/context load (/trust parent for descendants too)",
 		Hint: "parent (optional)", CancelsTurn: true},
 	{Name: "/untrust", Group: groupSafety, Desc: "remove this directory from the trust list (its project content stops loading)",

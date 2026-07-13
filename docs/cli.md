@@ -157,6 +157,7 @@ own detailed screen — `terva <command> --help`.
 | `terva raati "question"` | Convene the three-unit deliberation panel; prints the verdict and the dissent. Flags under Modes above; full guide in [raati.md](raati.md). |
 | `terva web` | Serve the browser control panel (see Modes and [web.md](web.md)). |
 | `terva trust` / `terva untrust` | Manage which directories may load project-local extensions, skills, hooks, MCP servers, and context files. `--trust` does it for one run without persisting. See `docs/plans/workspace-trust.md`. |
+| `terva unjail` / `terva jail` | Record which directories run without the filesystem sandbox, so tools there may read and write outside the working directory. `--parent` covers descendants; `--list` shows the list. `--no-jail` does it for one run without persisting. Not the same as trust — see [permissions.md](permissions.md#unjailing-a-directory-for-good). |
 | `terva project ...` | Project-scoped agents: data and extensions pinned to a directory (login and trust stay global). See [extensions.md](extensions.md#project-scoped-agents). |
 | `terva migrate` | Migrate a legacy install's data into the terva data directory. |
 | `terva update` | Download and install the latest release. |
