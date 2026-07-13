@@ -1,4 +1,9 @@
 node_modules/
+# Playwright smoke-harness artifacts (opt-in; see tests/smoke/README.md).
+test-results/
+playwright-report/
+blob-report/
+.playwright/
 # dist/ is committed: it is embedded into the binary via go:embed so a plain
 # `go build -tags terva_web` works without a JS toolchain. Rebuild with
 # `npm run build` (or `just web-build`) and commit the result.

@@ -161,6 +161,15 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 				i.clearFileSuggestQuery()
 			}
 			return false
+		case tui.KeyTab:
+			// Shell-style completion of the @-token in place: extend to the
+			// unique candidate or the longest common prefix (AtComplete —
+			// the web composer runs the same fixture-pinned semantics).
+			// Enter stays the commit; Tab only rewrites text.
+			if nv, ok := i.fileSuggest.TabComplete(i.ed.Value()); ok {
+				i.ed.SetValue(nv)
+			}
+			return false
 		case tui.KeyEnter:
 			if entry, ok := i.fileSuggest.SelectedEntry(i.ed.Value()); ok {
 				var chip string

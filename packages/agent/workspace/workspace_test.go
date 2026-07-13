@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -878,6 +879,47 @@ func TestContextBreakdown(t *testing.T) {
 	}
 }
 
+// TestContextBreakdownLazyAdvertised: under lazy visibility the tool weight
+// counts only the ADVERTISED set (what reaches the model), and the installed
+// totals ride separate fields for the "N of M tools" split. A hidden group's
+// schemas never inflate ToolBytes or TotalBytes.
+func TestContextBreakdownLazyAdvertised(t *testing.T) {
+	reg := core.Registry{
+		"read":      ctxFakeTool{name: "read"},                   // core → advertised
+		"mail_send": ctxFakeTool{name: "mail_send", ext: "mail"}, // hidden group
+	}
+	ag := core.NewAgent(nil, "fake", "", reg)
+	ag.EnableLazyTools() // only core active; "mail" stays inactive
+	s := &wsSession{id: "x", hub: newWSHub(), agent: ag}
+
+	b := s.contextBreakdown()
+	if b.ToolCount != 1 {
+		t.Errorf("advertised tool count = %d, want 1 (core only)", b.ToolCount)
+	}
+	if b.ToolCountInstalled != 2 {
+		t.Errorf("installed tool count = %d, want 2", b.ToolCountInstalled)
+	}
+	if b.ToolBytesInstalled <= b.ToolBytes {
+		t.Errorf("installed bytes %d should exceed advertised bytes %d", b.ToolBytesInstalled, b.ToolBytes)
+	}
+	// TotalBytes counts only the advertised weight — the hidden schema is not in
+	// the context window (only its name rides the ephemeral capability note).
+	if b.TotalBytes != b.SystemBytes+b.ToolBytes+b.ExtBytes+b.TranscriptBytes {
+		t.Errorf("total %d != sum of advertised parts", b.TotalBytes)
+	}
+	// The hidden group's names DO cost a few bytes on the ephemeral tail: the
+	// capability note is captured and folded into the ephemeral (ext) total.
+	if b.LazyNoteBytes <= 0 {
+		t.Errorf("a hidden group should contribute a capability note; LazyNoteBytes = %d", b.LazyNoteBytes)
+	}
+	if b.ExtBytes < b.LazyNoteBytes {
+		t.Errorf("ext bytes %d should include the lazy note %d", b.ExtBytes, b.LazyNoteBytes)
+	}
+	if !strings.Contains(ag.CapabilityNote(), "mail_send") {
+		t.Errorf("capability note should name the hidden tool, got %q", ag.CapabilityNote())
+	}
+}
+
 // TestContextTree covers the context-tree outline: sections at the root, the
 // transcript grouped into turns by user-prompt boundary, with a leading
 // compaction summary + preserved tail collected under "preserved context"
@@ -1231,6 +1273,57 @@ func TestWorkspaceRestartGated(t *testing.T) {
 	var ce *ctrlproto.Error
 	if !errors.As(err, &ce) || ce.Code != ctrlproto.CodeUnsupported {
 		t.Fatalf("want CodeUnsupported, got %v", err)
+	}
+}
+
+// TestCancelAndDrainTurnsWaitsForIdle pins the graceful half of the restart
+// contract: the drain cancels every live turn and returns once they've reached
+// endTurn (turnCancel cleared) — not before, so a cancelled turn gets its window
+// to persist before the image is replaced.
+func TestCancelAndDrainTurnsWaitsForIdle(t *testing.T) {
+	w := &Workspace{sessions: map[string]*wsSession{}}
+	s := &wsSession{}
+	// Cancelling schedules the turn to reach endTurn (clear turnCancel) shortly
+	// after, modeling a real turn unwinding and persisting.
+	s.turnCancel = func() {
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			s.mu.Lock()
+			s.turnCancel = nil
+			s.mu.Unlock()
+		}()
+	}
+	w.sessions["s1"] = s
+
+	start := time.Now()
+	w.cancelAndDrainTurns(context.Background(), time.Second)
+	if s.busy() {
+		t.Fatal("drain returned while the turn was still busy")
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Fatalf("drain took %v; it should return promptly once the turn goes idle", d)
+	}
+}
+
+// TestCancelAndDrainTurnsBounded: a turn that ignores cancellation must not hang
+// the restart — the drain cancels it, waits out its bounded budget, and returns.
+func TestCancelAndDrainTurnsBounded(t *testing.T) {
+	w := &Workspace{sessions: map[string]*wsSession{}}
+	cancelled := false
+	s := &wsSession{}
+	s.turnCancel = func() { cancelled = true } // never clears turnCancel: stays busy
+	w.sessions["s1"] = s
+
+	start := time.Now()
+	w.cancelAndDrainTurns(context.Background(), 50*time.Millisecond)
+	if !cancelled {
+		t.Fatal("drain must cancel the in-flight turn before waiting")
+	}
+	if d := time.Since(start); d < 40*time.Millisecond || d > time.Second {
+		t.Fatalf("drain returned after %v; want ~the 50ms bounded budget", d)
+	}
+	if !s.busy() {
+		t.Fatal("a turn ignoring cancellation should still read busy after the drain")
 	}
 }
 
@@ -1742,6 +1835,64 @@ func TestWorkspaceTrust(t *testing.T) {
 	}
 }
 
+// SessionInfo carries the session's subscription flag — the daemon resolved
+// the credential, so it (not the client) knows whether cost is metered. The
+// TUI's status bar tags cost "(sub)" off this when attached.
+func TestSessionInfoSubscription(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	sess, err := core.NewSession(dir, dir, "fake", "model", "v")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sess.Close() // release the file handle so TempDir cleanup works on Windows
+	s := &wsSession{id: "x", hub: newWSHub(), sess: sess, subscription: true}
+	if !s.info().Subscription {
+		t.Fatal("SessionInfo.Subscription should reflect the session's OAuth credential")
+	}
+}
+
+// ListFiles serves the @-file picker over the wire: entries relative to the
+// workspace cwd in wire (slash) form, gitignore honored, and a
+// client-supplied dir that escapes the cwd refused — the param arrives off
+// the network.
+func TestWorkspaceListFiles(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	for rel, content := range map[string]string{
+		".gitignore":  "dist/\n",
+		"src/main.go": "x",
+		"dist/out.js": "x",
+	} {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := &Workspace{cwd: dir}
+
+	res, err := w.ListFiles(context.Background(), ctrlproto.FilesListParams{Recursive: true, RespectGitignore: true})
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	var paths []string
+	for _, f := range res.Files {
+		paths = append(paths, f.Path)
+	}
+	joined := strings.Join(paths, ",")
+	if !strings.Contains(joined, "src/main.go") {
+		t.Fatalf("listing missing src/main.go: %v", paths)
+	}
+	if strings.Contains(joined, "dist") {
+		t.Fatalf("listing surfaced gitignored dist/: %v", paths)
+	}
+
+	if _, err := w.ListFiles(context.Background(), ctrlproto.FilesListParams{Dir: "../outside"}); err == nil {
+		t.Fatal("ListFiles accepted a dir escaping the workspace cwd")
+	}
+}
+
 // TestCreateSessionPersonaValidation covers the CreateOpts.Persona honesty fix:
 // an unknown persona is rejected up front with CodeBadRequest rather than being
 // silently dropped (or surfacing as a CodeInternal from the deferred Resolve).
@@ -1869,6 +2020,143 @@ func TestSettingsLanguage(t *testing.T) {
 	}
 	if err := s.settingsAction("set", map[string]string{"key": "language", "value": "zz-not-a-lang"}); err == nil {
 		t.Error("unknown language should error")
+	}
+}
+
+// TestSettingsLazyTools: the settings surface exposes the lazy-tool-loading
+// config toggle (retro H2·b), and setting it persists to config (applies to new
+// sessions — it is resolved at session build, so it does not reshape a running
+// session live).
+func TestSettingsLazyTools(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	s := newTestSession()
+	s.ws = &Workspace{} // BroadcastAll over an empty session set is a no-op
+
+	find := func() *ctrlproto.SettingItem {
+		sv := s.settingsView()
+		for i := range sv.Items {
+			if sv.Items[i].Key == "lazy_tools" {
+				return &sv.Items[i]
+			}
+		}
+		return nil
+	}
+
+	it := find()
+	if it == nil || it.Type != "bool" {
+		t.Fatalf("no lazy_tools bool row in the settings view: %+v", s.settingsView().Items)
+	}
+	if it.Value != "false" {
+		t.Errorf("lazy_tools default = %q, want false", it.Value)
+	}
+
+	if err := s.settingsAction("set", map[string]string{"key": "lazy_tools", "value": "true"}); err != nil {
+		t.Fatalf("enable lazy_tools: %v", err)
+	}
+	if cfg, _ := config.LoadConfig(); !cfg.LazyTools {
+		t.Error("enabling lazy_tools must persist to config")
+	}
+	if it := find(); it == nil || it.Value != "true" {
+		t.Errorf("the view should reflect lazy_tools=true, got %+v", it)
+	}
+}
+
+// TestSettingsSweep covers the config-surface sweep: the tricky cases —
+// default-on polarity (respect_gitignore), the inverted disable-flag
+// (core_pack_offer), temperature preset parsing + range, theme auto↔"", and
+// enum validation.
+func TestSettingsSweep(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	s := newTestSession()
+	s.ws = &Workspace{} // BroadcastAll over an empty session set is a no-op
+
+	val := func(key string) string {
+		for _, it := range s.settingsView().Items {
+			if it.Key == key {
+				return it.Value
+			}
+		}
+		t.Fatalf("no %q setting in the view", key)
+		return ""
+	}
+	set := func(key, v string) error {
+		return s.settingsAction("set", map[string]string{"key": key, "value": v})
+	}
+
+	// respect_gitignore defaults ON (nil polarity).
+	if v := val("respect_gitignore"); v != "true" {
+		t.Errorf("respect_gitignore default = %q, want true (nil = on)", v)
+	}
+	// core_pack_offer is the inverted view of DisableCorePackOffer.
+	if v := val("core_pack_offer"); v != "true" {
+		t.Errorf("core_pack_offer default = %q, want true (offer allowed)", v)
+	}
+	if err := set("core_pack_offer", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := config.LoadConfig(); !cfg.DisableCorePackOffer {
+		t.Error("turning the offer off must set DisableCorePackOffer=true")
+	}
+
+	// auto_compact: valid round-trip; invalid rejected.
+	if err := set("auto_compact", "off"); err != nil {
+		t.Fatal(err)
+	}
+	if v := val("auto_compact"); v != "off" {
+		t.Errorf("auto_compact = %q, want off", v)
+	}
+	if err := set("auto_compact", "bogus"); err == nil {
+		t.Error("an invalid auto_compact value must error")
+	}
+
+	// temperature: a preset persists a non-nil *float32 that round-trips; an
+	// out-of-range value is rejected; "" clears to the model default.
+	if err := set("temperature", "0.7"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := config.LoadConfig(); cfg.Temperature == nil {
+		t.Error("temperature 0.7 must persist a non-nil value")
+	}
+	if v := val("temperature"); v != "0.7" {
+		t.Errorf("temperature view = %q, want 0.7", v)
+	}
+	if err := set("temperature", "9"); err == nil {
+		t.Error("an out-of-range temperature must error")
+	}
+	if err := set("temperature", ""); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := config.LoadConfig(); cfg.Temperature != nil {
+		t.Error("an empty temperature must clear to nil (model default)")
+	}
+
+	// theme: "auto" is stored as the canonical empty string; a real theme
+	// round-trips and an empty stored theme displays as "auto".
+	if err := set("theme", "dark"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := config.LoadConfig(); cfg.Theme != "dark" {
+		t.Errorf("theme = %q, want dark", cfg.Theme)
+	}
+	if err := set("theme", "auto"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := config.LoadConfig(); cfg.Theme != "" {
+		t.Errorf("auto theme must store as empty, got %q", cfg.Theme)
+	}
+	if v := val("theme"); v != "auto" {
+		t.Errorf("an empty stored theme should display as auto, got %q", v)
+	}
+
+	// a plain pointer-bool: swarm_worktrees defaults off, persists on.
+	if v := val("swarm_worktrees"); v != "false" {
+		t.Errorf("swarm_worktrees default = %q, want false", v)
+	}
+	if err := set("swarm_worktrees", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := config.LoadConfig(); cfg.SwarmWorktrees == nil || !*cfg.SwarmWorktrees {
+		t.Error("swarm_worktrees must persist true")
 	}
 }
 

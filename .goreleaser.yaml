@@ -167,13 +167,11 @@ release:
   header: |
     ## terva {{ .Tag }}
 
-    > terva is a hard fork of zot, not a <!-- rename:keep -->
-    > replacement for it — zot continues upstream as its own project. terva is an <!-- rename:keep -->
-    > experiment in hardening a fast-moving agent harness, and weights priorities
-    > differently. Coming from zot, migration is smooth: the self-updater bridges <!-- rename:keep -->
-    > the rename, `ZOT_*` env vars and pre-rename data directories are still read <!-- rename:keep -->
-    > (deprecation window: two tagged releases for env vars; data dirs forever),
-    > and `.zotsession` files import forever. Details: docs/fork.md. <!-- rename:keep -->
+    An agent harness in a single static Go binary: a coding agent out of the
+    box, open to anything you can wire a tool to. One hardened core — agent
+    loop, event wire, permission policy, two dozen model providers — driven
+    from a terminal UI, a web control panel, an ACP editor, chat, or an
+    embeddable RPC/SDK.
 
     one-liner install:
 

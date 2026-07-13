@@ -135,7 +135,7 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 	// Reload pulls previously-spawned agents off disk (shown as detached, like
 	// the TUI). Close drains running children gracefully (StopAllAndWait) so
 	// their durable state survives for the next launch's Reload/Resume.
-	swarmCfg := swarm.Config{Root: filepath.Join(config.TervaHome(), "swarm"), RepoRoot: r.CWD}
+	swarmCfg := swarm.Config{Root: swarm.DefaultRoot(config.TervaHome()), RepoRoot: r.CWD}
 	// --swarm-worktrees: lease each sub-agent its own git worktree via the
 	// terva-git-worktree extension. The hook resolves a live session's manager
 	// lazily (the swarm is workspace-global, extensions are per-session), so it
@@ -586,10 +586,58 @@ func (w *Workspace) RenameSession(ctx context.Context, sess, title string) error
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "rename: %v", err)
 	}
 	if s := w.existing(sess); s != nil {
-		s.setTitle(title)
+		s.setTitle(title, false) // a user rename: never replaceable by automatic titling
 		s.broadcast(ctrlproto.SessionUpdatedEvent(s.info()))
 	}
 	return nil
+}
+
+// GenerateSessionTitle implements sessions.generate_title: one bounded model
+// call over the transcript's title seed, persisted and (for a live session)
+// broadcast via applyTitle. It deliberately skips the auto_title gate — that
+// toggle governs spending tokens UNASKED; this is the user asking — and
+// overwrites whatever title exists, manual renames included. Cold sessions
+// are read from disk without materializing a wsSession; their titles land as
+// a rename row and clients converge on their next list.
+func (w *Workspace) GenerateSessionTitle(ctx context.Context, sess string) (string, error) {
+	if !validSessionID(sess) {
+		return "", ctrlproto.ErrNoSession
+	}
+	live := w.existing(sess)
+	var msgs []provider.Message
+	var prov, model string
+	if live != nil {
+		msgs = live.agent.Messages()
+		prov, model = live.currentModel()
+	} else {
+		file, m, err := core.OpenSession(w.sessionPath(sess))
+		if err != nil {
+			return "", ctrlproto.ErrNoSession
+		}
+		file.Close() // read-only use; a reopened session is never pruned by Close
+		msgs = m
+		prov, model = file.Meta.Provider, file.Meta.Model
+	}
+	seed := core.BuildTitleSeed(msgs, core.TitleSeedBudget)
+	if seed == "" {
+		return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "session has no conversation to title")
+	}
+	ok, cl, m := w.titleClient(prov, model)
+	if !ok {
+		return "", ctrlproto.Errorf(ctrlproto.CodeInternal, "no usable credential for a title model")
+	}
+	title := generateTitle(ctx, cl, m, seed)
+	if title == "" {
+		return "", ctrlproto.Errorf(ctrlproto.CodeInternal, "the model returned no title")
+	}
+	if live != nil {
+		live.applyTitle(title)
+		return title, nil
+	}
+	if err := core.RenameSessionGenerated(w.sessionPath(sess), title); err != nil {
+		return "", ctrlproto.Errorf(ctrlproto.CodeInternal, "persist title: %v", err)
+	}
+	return title, nil
 }
 
 func (w *Workspace) DeleteSession(ctx context.Context, sess string) error {
@@ -699,19 +747,73 @@ func (w *Workspace) ConsumeReset(ctx context.Context, sess, id string) (ctrlprot
 
 // --- control group (WorkspaceService) ---
 
+// restartDrainTimeout bounds how long Restart waits for cancelled turns to
+// unwind and persist before it replaces the process image. A var so a test can
+// shorten it. It only ever fully elapses if a turn ignores cancellation; the
+// common case (idle, or a turn that stops promptly) returns well under it.
+var restartDrainTimeout = 3 * time.Second
+
 // Restart re-execs the daemon into the currently-installed binary (Tier-1
-// self-restart). It acks immediately; relaunch runs the pre-exec notice hook
-// and then replaces the process image after a short flush delay. Gated by
-// relaunch.Enabled() (set from --web-allow-restart, after the insecure-listener
-// refusal in runWebMode), so it reports CodeUnsupported when off.
+// self-restart). It first cancels any in-flight turn and waits, bounded, for it
+// to unwind and persist — the graceful contract documented in docs/tui.md and
+// docs/controllers.md — then relaunch runs the pre-exec notice hook and replaces
+// the process image after a short flush delay. Gated by relaunch.Enabled() (set
+// from --allow-restart; web mode adds an insecure-listener refusal in
+// runWebMode), so it reports CodeUnsupported when off.
 func (w *Workspace) Restart(ctx context.Context) error {
 	if !relaunch.Enabled() {
-		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "self-restart is not enabled (start with --web-allow-restart)")
+		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "self-restart is not enabled (start with --allow-restart)")
 	}
+	// The image is about to be replaced, killing every in-flight turn regardless.
+	// Cancel them first and give them a bounded window to stop their tools and
+	// let endTurn persist, so a restart during streaming or a mutating tool call
+	// finalizes cleanly rather than being killed mid-step. Session history
+	// persists incrementally, so already-recorded events are safe regardless.
+	w.cancelAndDrainTurns(ctx, restartDrainTimeout)
 	if err := relaunch.Trigger("control-plane request"); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "restart: %v", err)
 	}
 	return nil
+}
+
+// cancelAndDrainTurns cancels every live session's in-flight turn and waits,
+// bounded, for them all to go idle. Returns when all cancelled turns have
+// reached endTurn (turnCancel cleared), the budget elapses, or ctx is done — a
+// turn wedged past the budget is abandoned rather than blocking the restart
+// forever; already-persisted history is still safe. No-op when nothing is
+// running.
+func (w *Workspace) cancelAndDrainTurns(ctx context.Context, timeout time.Duration) {
+	w.mu.Lock()
+	all := make([]*wsSession, 0, len(w.sessions))
+	for _, s := range w.sessions {
+		all = append(all, s)
+	}
+	w.mu.Unlock()
+
+	var pending []*wsSession
+	for _, s := range all {
+		if s.busy() {
+			s.cancelTurn()
+			pending = append(pending, s)
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		allIdle := true
+		for _, s := range pending {
+			if s.busy() {
+				allIdle = false
+				break
+			}
+		}
+		if allIdle || !time.Now().Before(deadline) || ctx.Err() != nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (w *Workspace) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) {
@@ -952,17 +1054,28 @@ func titleFromFirstText(s string) string {
 }
 
 // titleGen reports whether LLM auto-titling is enabled (config AutoTitle) and,
-// if so, returns a fresh client + model to generate with. It resolves its own
-// client rather than borrowing the session's — so it never races a concurrent
-// model switch touching the live agent. AutoTitleModel overrides the model;
-// empty uses the session's current one. Any resolution failure disables it for
-// this call (the first-line fallback title already stands).
+// if so, returns a fresh client + model to generate with. Any resolution
+// failure disables it for this call (the first-line fallback title already
+// stands). The on-demand verb (GenerateSessionTitle) skips this gate — the
+// toggle governs spending tokens unasked, not an explicit request.
 func (w *Workspace) titleGen(s *wsSession) (bool, provider.Client, string) {
 	cfg, _ := config.LoadConfig()
 	if cfg.AutoTitle == nil || !*cfg.AutoTitle {
 		return false, nil, ""
 	}
 	prov, model := s.currentModel()
+	return w.titleClient(prov, model)
+}
+
+// titleClient resolves a fresh client + model to generate a title against the
+// given session provider/model. It resolves its own client rather than
+// borrowing the session's — so it never races a concurrent model switch
+// touching the live agent. AutoTitleModel overrides the model. The launch
+// flags' APIKey/BaseURL apply only when the title provider IS the launch
+// provider — they'd misdirect any other provider (and stripping them
+// unconditionally used to break titling for custom-endpoint sessions).
+func (w *Workspace) titleClient(prov, model string) (bool, provider.Client, string) {
+	cfg, _ := config.LoadConfig()
 	if cfg.AutoTitleModel != "" {
 		if t, err := provider.FindModel("", cfg.AutoTitleModel); err == nil {
 			prov, model = t.Provider, t.ID
@@ -971,8 +1084,10 @@ func (w *Workspace) titleGen(s *wsSession) (bool, provider.Client, string) {
 	next := w.args
 	next.Provider = prov
 	next.Model = model
-	next.APIKey = ""
-	next.BaseURL = ""
+	if prov != w.args.Provider {
+		next.APIKey = ""
+		next.BaseURL = ""
+	}
 	r, err := build.Resolve(next, true)
 	if err != nil || !r.HasCredential() {
 		return false, nil, ""
@@ -982,20 +1097,18 @@ func (w *Workspace) titleGen(s *wsSession) (bool, provider.Client, string) {
 
 const titleSystem = "You write concise, specific titles for chat sessions. Reply with only the title — at most six words, no surrounding quotes, no trailing punctuation."
 
-// generateTitle asks the model for a short title seeded by the first message.
-// Best-effort: any error yields "" and the caller keeps the fallback title.
+// generateTitle asks the model for a short title from a pre-budgeted,
+// self-labeled seed (core.BuildTitleSeed — the old head-only byte slice here
+// could split a UTF-8 sequence; the builder clips rune-safely). Best-effort:
+// any error yields "" and the caller keeps whatever title stands.
 func generateTitle(ctx context.Context, cl provider.Client, model, seed string) string {
-	const maxSeed = 2000
-	if len(seed) > maxSeed {
-		seed = seed[:maxSeed]
-	}
 	req := provider.Request{
 		Model:     model,
 		System:    titleSystem,
 		MaxTokens: 24,
 		Messages: []provider.Message{{
 			Role:    provider.RoleUser,
-			Content: []provider.Content{provider.TextBlock{Text: "Title this chat, which opens with:\n\n" + seed}},
+			Content: []provider.Content{provider.TextBlock{Text: "Title this chat.\n\n" + seed}},
 			Time:    time.Now(),
 		}},
 	}

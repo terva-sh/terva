@@ -66,6 +66,12 @@ type frameSnapshot struct {
 	editsRemoved int
 	scriptSegs   map[string]string
 
+	// Wire-reported session/workspace state for the status bar (see the
+	// carrierSessPath field group on Interactive).
+	carrierCtxWindow    int
+	carrierSubscription bool
+	carrierJailed       bool
+
 	// busyPrefix is the pre-rendered spinner segment of the status
 	// bar; the spinner's state is mutated by turn goroutines under
 	// i.mu, so it must be formatted inside the snapshot hold.
@@ -90,6 +96,10 @@ func (i *Interactive) snapshotFrameLocked(ts turnRenderState) frameSnapshot {
 		git:          i.gitInfo,
 		editsAdded:   i.editsAdded,
 		editsRemoved: i.editsRemoved,
+
+		carrierCtxWindow:    i.carrierCtxWindow,
+		carrierSubscription: i.carrierSubscription,
+		carrierJailed:       i.carrierJailed,
 	}
 	if len(i.scriptSegs) > 0 {
 		// Value copy: the script runner mutates the live map under
@@ -367,6 +377,12 @@ func anchorScrollOffset(offset, prevLen, newLen, prevRows, newRows int) int {
 }
 
 func (i *Interactive) redraw() {
+	// No frames once terminal teardown has begun (self-restart or exit):
+	// a repaint after the reset sequences would leave the terminal
+	// half-painted for the next image / the returning shell.
+	if i.shuttingDown.Load() {
+		return
+	}
 	cols, _ := i.cfg.Terminal.Size()
 	// One engine snapshot per frame: chat build, status bar, and the
 	// queue chips all read the same turn state, so a turn ending
@@ -485,6 +501,12 @@ func (i *Interactive) redraw() {
 	if m, err := provider.FindModel(i.cfg.Provider, i.cfg.Model); err == nil {
 		ctxMax = m.ContextWindow
 	}
+	// The daemon's answer beats the local catalog: an attach client whose
+	// build skews from the daemon's would otherwise gauge against the wrong
+	// (or zero) window. 0 = the wire doesn't know either; keep the local read.
+	if snap.carrierCtxWindow > 0 {
+		ctxMax = snap.carrierCtxWindow
+	}
 	statusLines := tui.StatusBar(tui.StatusBarParams{
 		Theme:            i.cfg.Theme,
 		Provider:         i.cfg.Provider,
@@ -493,11 +515,11 @@ func (i *Interactive) redraw() {
 		Busy:             ts.busy,
 		BusyPrefix:       snap.busyPrefix,
 		CWD:              i.cfg.CWD,
-		Locked:           i.cfg.Sandbox.Locked(),
+		Locked:           i.cfg.Sandbox.Locked() || snap.carrierJailed,
 		NoYolo:           i.cfg.NoYolo,
 		ApprovalMode:     i.approvalModeLabel(),
 		Usage:            snap.cumUsage,
-		Subscription:     i.cfg.AuthMethod == "oauth",
+		Subscription:     i.cfg.AuthMethod == "oauth" || snap.carrierSubscription,
 		ContextUsed:      snap.lastCtxInput,
 		ContextMax:       ctxMax,
 		AutoCompacting:   ts.autoCompacting,
@@ -507,6 +529,7 @@ func (i *Interactive) redraw() {
 		HideWorkspace:    i.cfg.Experience != "",
 		Git:              snap.git,
 		SwarmAgents:      i.swarmAgentCount(),
+		TaskGlance:       i.taskBoardGlance(),
 		SessionName:      i.sessionShortName(),
 		Replay:           i.replayScrubber(),
 		PersonaName:      i.cfg.PersonaName,

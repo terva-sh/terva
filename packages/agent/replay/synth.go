@@ -80,7 +80,7 @@ func (s *synth) emit(ev core.AgentEvent, d time.Duration) {
 func (s *synth) message(m provider.Message) {
 	switch m.Role {
 	case provider.RoleUser:
-		// A synthetic user message (the ContinueOnStop nudge) rides inside a
+		// A synthetic user message (a continuation-gate nudge) rides inside a
 		// running prompt and must not open a new one; a genuine prompt does.
 		synthetic := m.Meta[core.MetaSynthetic] == "true"
 		if !synthetic {

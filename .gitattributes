@@ -22,3 +22,18 @@ packages/i18n/locales/**/*.json text eol=lf
 # markers, and shipped prompt text should not vary by build host. Pin
 # every embedded persona to LF.
 packages/agent/build/personas/**/*.md text eol=lf
+
+# Generated artifacts committed so a plain `go build -tags terva_web` needs no
+# JS/Node toolchain (see `just web-build`). Mark them linguist-generated so the
+# forges (Forgejo/GitHub, via go-enry/linguist) collapse them in PR diffs and
+# omit them from language stats — a reviewer reads the source change, not the
+# minified/hashed output. Orthogonal to the eol=lf pins above; this only affects
+# review presentation, never checkout. `just diff-review` reads the same marker.
+#   - the Vite build output (hashed+minified JS/CSS, index.html, sw.js, icons);
+#   - the English-as-key reference catalogs the i18n linter regenerates
+#     (`terva-i18n-lint`, en.json only — the fi.json translations are AUTHORED,
+#     so they stay reviewable and are deliberately NOT marked);
+#   - the first-paint web-catalog mirror the build copies into the client bundle.
+packages/agent/web/client/dist/**            linguist-generated=true
+packages/i18n/locales/**/en.json             linguist-generated=true
+packages/agent/web/client/src/locales/**     linguist-generated=true

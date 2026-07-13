@@ -292,6 +292,9 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				if act.Select {
 					i.applySessionSelection(act.Path)
 				}
+				if act.GenerateTitle {
+					i.generateSessionTitle(act.Path)
+				}
 				return false
 			},
 			render: func(cols int) []string {
@@ -467,6 +470,30 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				return false
 			},
 			render:            func(cols int) []string { return i.extPanel.Render(i.cfg.Theme, cols) },
+			hideCaretFallback: true,
+		},
+		{ // task board (read-only): /tasks
+			active: i.tasksDialog.Active,
+			ctrlC:  func() bool { i.tasksDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				if i.tasksDialog.HandleKey(k).Close {
+					i.tasksDialog.Close()
+				}
+				return false
+			},
+			render: func(cols int) []string {
+				// Budget body rows from the terminal height (like the session
+				// browser) so a long list scrolls inside the bottom band. Reserve
+				// the editor (~3), status line (~2), and dialog chrome
+				// (header + hint + rule, ~5).
+				_, rows := i.cfg.Terminal.Size()
+				avail := rows - 10
+				if avail < 3 {
+					avail = 3
+				}
+				i.tasksDialog.MaxRows = avail
+				return i.tasksDialog.Render(i.cfg.Theme, cols)
+			},
 			hideCaretFallback: true,
 		},
 		{ // jump-to-turn picker (also backs /fork's turn selection)

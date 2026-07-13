@@ -207,10 +207,12 @@ func TestInteractiveDialogRegistryRoundTrip(t *testing.T) {
 
 	// The settings body is taller than the 24-row screen; the scroll
 	// window must keep the header and the first (cursor) item visible
-	// and advertise the clipped remainder.
+	// and advertise the clipped remainder. The first item is the daemon
+	// surface's first row (generic render), then the TUI-local widgets.
 	h.term.Type("/settings\r")
 	h.waitText("── settings")
-	h.waitText("render images when supported")
+	h.waitText("Approval mode")
+	h.waitText("color theme")
 	h.waitText("more below")
 	h.term.Type("\x03")
 	h.waitGone("── settings")

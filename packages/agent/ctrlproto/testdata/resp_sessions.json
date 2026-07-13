@@ -16,7 +16,10 @@
           "cache_write": 0,
           "cost_usd": 0.01
         },
-        "current": true
+        "current": true,
+        "context_tokens": 39000,
+        "context_window": 1000000,
+        "subscription": true
       }
     ]
   }

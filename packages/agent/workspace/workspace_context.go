@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/core"
@@ -35,18 +37,45 @@ func (s *wsSession) contextBreakdown() ctrlproto.ContextBreakdown {
 	b.SystemBytes = len(ag.System)
 	// Snapshot the tool registry under the agent lock (a concurrent extension/MCP
 	// toggle or trust change calls SetTools on another goroutine) before ranging.
+	// Tool weight is the ADVERTISED set — what the model actually receives this
+	// turn — not the full installed registry: under lazy visibility an inactive
+	// group's schemas never reach the wire (only its names ride the ephemeral
+	// capability note), so counting them would over-report the context. The
+	// installed totals ride separate fields for the "N of M tools" split.
 	tools := ag.ToolsSnapshot()
-	if specs := tools.Specs(); len(specs) > 0 {
-		if raw, err := json.Marshal(specs); err == nil {
+	advertised, filtered := ag.AdvertisedTools()
+	var advSpecs, allSpecs []provider.Tool
+	for _, spec := range tools.Specs() {
+		allSpecs = append(allSpecs, spec)
+		if advertised(spec.Name) {
+			advSpecs = append(advSpecs, spec)
+		}
+	}
+	if len(advSpecs) > 0 {
+		if raw, err := json.Marshal(advSpecs); err == nil {
 			b.ToolBytes = len(raw)
 		}
 	}
-	b.ToolCount = len(tools)
+	b.ToolCount = len(advSpecs)
+	if filtered && len(allSpecs) != len(advSpecs) {
+		if raw, err := json.Marshal(allSpecs); err == nil {
+			b.ToolBytesInstalled = len(raw)
+		}
+		b.ToolCountInstalled = len(allSpecs)
+	}
 
 	// Ephemeral extension/card context, via the lock-guarded, side-effect-free
 	// preview so opening /context never records a phantom "lore fired this turn"
 	// and never races a live lore/trust reload swapping the provider.
 	b.ExtBytes = len(ag.ContextPreview())
+	// The lazy-tool capability note also rides the ephemeral tail (oneTurn appends
+	// it after the host context), but it is NOT part of ContextPreview — it is
+	// pinned per turn, not produced by the context provider. Fold its bytes into
+	// the ephemeral total and expose the attributable share, so /context reflects
+	// what deferred discovery costs (schemas gone, names not): the same "sub-share
+	// of a section" shape as ExtGuidanceBytes under the system prompt.
+	b.LazyNoteBytes = len(ag.CapabilityNote())
+	b.ExtBytes += b.LazyNoteBytes
 	// Static ext guidance is folded into the system prompt (already inside
 	// SystemBytes); surface its share so a small "ext context" isn't read as
 	// "extensions inject nothing" when the bulk is guidance.
@@ -270,13 +299,24 @@ func (s *wsSession) contextNode(id, op string) (ctrlproto.ContextNode, error) {
 		node.Children = s.extContextItems("static", "sys/xg")
 		return node, nil
 	case id == "tools":
-		return ctxToolsNode(ag.ToolsSnapshot()), nil
+		advertised, filtered := ag.AdvertisedTools()
+		return ctxToolsNode(ag.ToolsSnapshot(), advertised, filtered), nil
 	case id == "xt":
 		// The ephemeral context, plus the per-extension cards that make up its
 		// ext share (lore/PHI are the remainder, inspectable via the lore surface).
 		txt := ag.ContextPreview()
 		node := ctrlproto.ContextNode{ID: "xt", Kind: "section", Label: "ext context", Bytes: len(txt), Content: txt}
 		node.Children = s.extContextItems("card", "xt/card")
+		// The lazy-tool capability note rides the same ephemeral tail but isn't in
+		// ContextPreview; surface it as an inspectable leaf so the expanded section
+		// sums to its byte total.
+		if note := ag.CapabilityNote(); note != "" {
+			node.Bytes += len(note)
+			node.Children = append(node.Children, ctrlproto.ContextNode{
+				ID: "xt/lazynote", Kind: "block", Label: "inactive tool groups (capability note)",
+				Bytes: len(note), Summary: ctxFirstLineOf(note), Content: note,
+			})
+		}
 		return node, nil
 	case strings.HasPrefix(id, "tr/m"):
 		return ctxMessageContentNode(id, ag.Messages())
@@ -320,19 +360,118 @@ func ctxExtItems(items []extensions.ContextItem, kind, idPrefix string) []ctrlpr
 }
 
 // ctxToolsNode expands the tool-defs section into one node per tool, each
-// carrying its JSON spec as content (Specs() is already name-sorted).
-func ctxToolsNode(reg core.Registry) ctrlproto.ContextNode {
+// carrying its JSON spec as content (Specs() is already name-sorted). When
+// extensions or MCP servers have merged tools, the leaves are bucketed under a
+// per-capability-group node with a byte rollup (retro H2·b: core built-ins
+// first, then each extension / "mcp:<server>") so an operator can see which
+// group is costing the most context — the decision unit for lazy visibility.
+// The whole subtree returns in one expansion (leaves carry their spec inline),
+// so the extra nesting level needs no per-leaf refetch.
+//
+// advertised reports whether a tool's schema is actually sent to the model this
+// turn; filtered is true when lazy visibility (or a VisibleTool override) is in
+// effect. The section's Bytes is the LIVE cost — only advertised schemas — so
+// /context reports the real context weight, not the full installed registry.
+// Inactive groups are still listed (an operator wants to see what could be
+// activated) but contribute 0 live bytes; their deferred weight rides the
+// summary/Meta. When nothing is filtered (the default) every tool is advertised
+// and this is exactly the old all-in accounting.
+func ctxToolsNode(reg core.Registry, advertised func(name string) bool, filtered bool) ctrlproto.ContextNode {
 	node := ctrlproto.ContextNode{ID: "tools", Kind: "section", Label: "tool defs"}
+	if advertised == nil {
+		advertised = func(string) bool { return true }
+	}
+
+	leaves := map[string][]ctrlproto.ContextNode{}
+	liveByGroup := map[string]int{}     // advertised bytes (counted in the live total)
+	deferredByGroup := map[string]int{} // installed-but-hidden bytes (not in context now)
+	countByGroup := map[string]int{}
+	var installedBytes, advertisedBytes, advertisedTools int
 	for _, spec := range reg.Specs() {
 		raw, _ := json.MarshalIndent(spec, "", "  ")
-		child := ctrlproto.ContextNode{
+		group := build.ToolGroup(reg[spec.Name])
+		live := advertised(spec.Name)
+		meta := map[string]string{"group": group, "active": strconv.FormatBool(live)}
+		leaves[group] = append(leaves[group], ctrlproto.ContextNode{
 			ID: "tools/" + spec.Name, Kind: "tool", Label: spec.Name,
 			Bytes: len(raw), Summary: ctxTruncate(spec.Description, 72), Content: string(raw),
+			Meta: meta,
+		})
+		countByGroup[group]++
+		installedBytes += len(raw)
+		if live {
+			liveByGroup[group] += len(raw)
+			advertisedBytes += len(raw)
+			advertisedTools++
+			node.Bytes += len(raw)
+		} else {
+			deferredByGroup[group] += len(raw)
 		}
-		node.Children = append(node.Children, child)
-		node.Bytes += child.Bytes
+	}
+
+	// Report the advertised-vs-installed split on the section so a panel can show
+	// "16 of 62 tools advertised · 3.1 KB live / 12.4 KB installed" without
+	// re-summing the tree. Only when filtering is actually in effect.
+	if filtered {
+		node.Meta = map[string]string{
+			"advertised_bytes": strconv.Itoa(advertisedBytes),
+			"installed_bytes":  strconv.Itoa(installedBytes),
+			"advertised_tools": strconv.Itoa(advertisedTools),
+			"installed_tools":  strconv.Itoa(len(reg)),
+		}
+		node.Summary = fmt.Sprintf("%d of %d tools advertised · %s live / %s installed",
+			advertisedTools, len(reg), ctxBytesLabel(advertisedBytes), ctxBytesLabel(installedBytes))
+	}
+
+	groups := ctxOrderedGroups(leaves)
+	// No extensions/MCP merged (only built-ins): keep the flat per-tool list so
+	// the common case gains no needless "core" wrapper level.
+	if len(groups) <= 1 {
+		for _, g := range groups {
+			node.Children = leaves[g]
+		}
+		return node
+	}
+	for _, g := range groups {
+		children := leaves[g]
+		active := liveByGroup[g] > 0 || deferredByGroup[g] == 0 // core/active groups have live bytes
+		gnode := ctrlproto.ContextNode{
+			ID: "tools#" + g, Kind: "group", Label: g,
+			Bytes:    liveByGroup[g], // live cost only; an inactive group is ~free (names ride the ephemeral note)
+			Meta:     map[string]string{"group": g, "count": strconv.Itoa(countByGroup[g]), "active": strconv.FormatBool(active)},
+			Children: children,
+		}
+		if active {
+			gnode.Summary = fmt.Sprintf("%d tools", countByGroup[g])
+		} else {
+			// Inactive: schemas are not loaded — only the group's tool names ride the
+			// cache-free capability note. Show the deferred weight so the operator
+			// sees what activating it would add.
+			gnode.Summary = fmt.Sprintf("%d tools · not loaded · ~%s deferred", countByGroup[g], ctxBytesLabel(deferredByGroup[g]))
+			gnode.Meta["deferred_bytes"] = strconv.Itoa(deferredByGroup[g])
+		}
+		node.Children = append(node.Children, gnode)
 	}
 	return node
+}
+
+// ctxOrderedGroups lists the capability groups present, the always-visible core
+// group first and the rest alphabetically — a stable, legible order.
+func ctxOrderedGroups(byGroup map[string][]ctrlproto.ContextNode) []string {
+	rest := make([]string, 0, len(byGroup))
+	hasCore := false
+	for g := range byGroup {
+		if g == build.CoreToolGroup {
+			hasCore = true
+			continue
+		}
+		rest = append(rest, g)
+	}
+	sort.Strings(rest)
+	if hasCore {
+		return append([]string{build.CoreToolGroup}, rest...)
+	}
+	return rest
 }
 
 // ctxMessageContentNode expands a transcript message (id "tr/m<i>") into its
@@ -488,6 +627,12 @@ func ctxBuildTree(b ctrlproto.ContextBreakdown, msgNodes []ctrlproto.ContextNode
 		ID: "tools", Kind: "section", Label: "tool defs", Bytes: b.ToolBytes, Expandable: b.ToolCount > 0,
 		Meta: map[string]string{"count": strconv.Itoa(b.ToolCount)},
 	}
+	if b.ToolCountInstalled > b.ToolCount {
+		tools.Meta["count_installed"] = strconv.Itoa(b.ToolCountInstalled)
+		tools.Meta["bytes_installed"] = strconv.Itoa(b.ToolBytesInstalled)
+		tools.Summary = fmt.Sprintf("%d of %d advertised · %s installed",
+			b.ToolCount, b.ToolCountInstalled, ctxBytesLabel(b.ToolBytesInstalled))
+	}
 	ext := ctrlproto.ContextNode{ID: "xt", Kind: "section", Label: "ext context", Bytes: b.ExtBytes, Expandable: b.ExtBytes > 0}
 	transcript := ctrlproto.ContextNode{
 		ID: "tr", Kind: "section", Label: "transcript", Bytes: b.TranscriptBytes,
@@ -571,6 +716,16 @@ func ctxFirstLine(m provider.Message) string {
 		return ctxTruncate(s, 72)
 	}
 	return ""
+}
+
+// ctxBytesLabel renders a byte count for a node summary — "812 B", "3.1 KB" —
+// so the advertised-vs-installed split reads at a glance. Kilobytes use 1000
+// (matching the ~tokens ≈ bytes/4 convention operators already read elsewhere).
+func ctxBytesLabel(n int) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d B", n)
+	}
+	return fmt.Sprintf("%.1f KB", float64(n)/1000)
 }
 
 // ctxTruncate shortens s to at most n runes, appending an ellipsis when it cuts.

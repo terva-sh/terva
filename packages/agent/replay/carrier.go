@@ -423,6 +423,9 @@ func (c *Carrier) CreateSession(ctx context.Context, opts ctrlproto.CreateOpts) 
 func (c *Carrier) RenameSession(ctx context.Context, sess, title string) error {
 	return unsupported("rename")
 }
+func (c *Carrier) GenerateSessionTitle(ctx context.Context, sess string) (string, error) {
+	return "", unsupported("generate title")
+}
 func (c *Carrier) DeleteSession(ctx context.Context, sess string) error {
 	return unsupported("delete")
 }
@@ -440,6 +443,9 @@ func (c *Carrier) SurfaceAction(ctx context.Context, sess, id, action string, ar
 }
 func (c *Carrier) Catalog(ctx context.Context, lang string) (ctrlproto.CatalogView, error) {
 	return ctrlproto.CatalogView{}, unsupported("catalog")
+}
+func (c *Carrier) ListFiles(ctx context.Context, opts ctrlproto.FilesListParams) (ctrlproto.FilesListResult, error) {
+	return ctrlproto.FilesListResult{}, unsupported("files.list")
 }
 func (c *Carrier) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) {
 	return nil, unsupported("models")

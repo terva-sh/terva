@@ -423,6 +423,24 @@ func RegisterEndpoint(id string, ep config.EndpointConfig) error {
 	return nil
 }
 
+// UnregisterEndpoint removes a dynamically registered endpoint provider.
+// Production never needs it — endpoints register once at startup and live for
+// the process — it exists so tests that register endpoints can restore the
+// global registry (-count>1 reruns a test in the same process, where a
+// leftover registration collides with itself).
+func UnregisterEndpoint(id string) {
+	if _, ok := ProviderByID[id]; !ok {
+		return
+	}
+	delete(ProviderByID, id)
+	for i, k := range KnownProviders {
+		if k == id {
+			KnownProviders = append(KnownProviders[:i], KnownProviders[i+1:]...)
+			break
+		}
+	}
+}
+
 // isEndpointProvider reports whether id is a user-defined endpoint (vs a
 // built-in provider). Used by Resolve to give it openai-compatible treatment.
 func isEndpointProvider(id string, cfg config.Config) bool {

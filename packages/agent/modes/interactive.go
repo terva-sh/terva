@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
@@ -19,6 +20,7 @@ import (
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
+	"terva.sh/terva/packages/relaunch"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -47,14 +49,21 @@ type InteractiveConfig struct {
 	AutoSwarmEnabled *bool
 
 	// RecursiveFileSuggest mirrors the persisted recursive_file_suggest
-	// flag at startup. When true the @-mention picker fuzzy-searches the
-	// whole project tree instead of browsing one directory at a time.
+	// flag at startup. nil or true (the default — matching the web
+	// composer) fuzzy-searches the whole project tree; false opts back
+	// into one-directory-at-a-time browsing.
 	RecursiveFileSuggest *bool
 
 	// RespectGitignore mirrors the persisted respect_gitignore flag at
 	// startup. nil means the default (on); when false the @-mention
 	// picker shows files matched by the project's root .gitignore.
 	RespectGitignore *bool
+
+	// RemoteFiles, when set, lists workspace files from the daemon (the
+	// files.list verb) for the @-mention picker instead of reading local
+	// disk — the attach entry point wires it when the server hello
+	// advertises the files-list feature. Runs on a background goroutine.
+	RemoteFiles widgets.RemoteLister
 
 	// StatusLineRows mirrors the persisted status_line.rows layout: the
 	// user's segment-ID rows for the status bar. nil means the per-mode
@@ -116,6 +125,12 @@ type InteractiveConfig struct {
 	// from immersive/no-tools sessions so the dashboard can't re-inject the
 	// coding skin there.
 	CarrierTasks bool
+	// CarrierRemote marks the carrier as a network client of another process
+	// (terva attach) rather than the in-process workspace. Remote-only
+	// adaptations key on it explicitly — e.g. adopting the settings surface's
+	// reasoning value for the status bar, which in-process would stomp a
+	// --reasoning flag override the surface can't see.
+	CarrierRemote bool
 	// CarrierLogin finalizes a successful in-TUI login. It refreshes the workspace's
 	// credential/defaults, then ensures a current session: creating the first
 	// one on a credential-less boot (current == ""), or rebuilding the live
@@ -126,6 +141,22 @@ type InteractiveConfig struct {
 	CarrierLogin func(current string) (ctrlproto.SessionInfo, error)
 
 	InitialInput string
+
+	// OpenSessionsOnBoot opens the /sessions picker over the freshly booted
+	// session (--resume, terva attach --resume) — the same auto-open mechanic
+	// as the credential-less login dialog. Esc falls through to the session
+	// the boot already bound, i.e. exactly what the command would have done
+	// without the flag: a fresh session for terva, the daemon's current
+	// binding for attach. On a credential-less boot the login dialog opens
+	// first and the picker follows the first successful login.
+	OpenSessionsOnBoot bool
+
+	// GenerateSessionTitle runs on-demand title generation for the session at
+	// path and returns the persisted title — the picker's `g` binding. Blocks
+	// on a model call; the TUI invokes it off the main loop. Left nil when the
+	// host can't serve it (a pre-generate-title daemon on attach), and the
+	// binding reports that instead of firing a method that can't land.
+	GenerateSessionTitle func(path string) (string, error)
 
 	// Auth is required. When the user runs /login, Interactive talks to
 	// AuthManager to open a browser and wait for the callback.
@@ -160,6 +191,11 @@ type InteractiveConfig struct {
 	// Used only for display; the update check itself is done outside
 	// this package to avoid an import cycle.
 	Version string
+
+	// BootNotice, when set, renders as a one-shot note above the editor on
+	// the session's first frames — e.g. "restarted — was vX, now vY" after
+	// a self-restart resume. Cleared on the next prompt, like ext notes.
+	BootNotice string
 
 	// UpdateInfoChan is an optional channel that delivers the result
 	// of the github-release update check. Interactive reads at most
@@ -424,6 +460,18 @@ type Interactive struct {
 	// through runOnMain).
 	rend *tui.Renderer
 
+	// Terminal teardown state: restoreRaw leaves raw mode (from EnterRaw);
+	// teardownOnce makes teardownTerminal safe to reach from both Run's exit
+	// defer and the self-restart pre-exec hook; shuttingDown stops new
+	// frames once teardown has begun (redraw checks it).
+	restoreRaw   func() error
+	teardownOnce sync.Once
+	shuttingDown atomic.Bool
+	// restartFailQuit is closed by resumeAfterFailedRestart only when a failed
+	// self-restart leaves the terminal unrecoverable (raw mode won't re-enter);
+	// the main loop selects on it to exit cleanly. Buffered/closed once.
+	restartFailQuit chan struct{}
+
 	mu sync.Mutex
 	// turns owns the turn lifecycle: the agent pointer, the busy
 	// flag, the active turn's cancel, the unified prompt queue, the
@@ -522,6 +570,7 @@ type Interactive struct {
 	sessionTreeDialog *dialogs.SessionTreeDialog
 	extPanel          *dialogs.ExtPanelDialog
 	migrateDialog     *dialogs.MigrateDialog
+	tasksDialog       *dialogs.TasksDialog
 
 	// overlays is the priority-ordered modal registry: key routing,
 	// rendering, cursor ownership, and tick animation for every
@@ -679,6 +728,24 @@ type Interactive struct {
 	// surface_updated("settings") broadcast. Guarded by mu.
 	carrierApprovalMode string
 
+	// The bound session's wire-reported metadata the status bar reads every
+	// frame: the transcript path (sess segment — cached here so an attached
+	// client doesn't RPC per repaint), the model's context window (ctx gauge
+	// denominator — the daemon's catalog is authoritative; a version-skewed
+	// attach client's local lookup may disagree), and the subscription flag
+	// (the "(sub)" cost tag). Captured wherever a full SessionInfo lands:
+	// every binding snapshot, session_updated events, and
+	// SwitchCarrierSession's resume. Guarded by mu.
+	carrierSessPath     string
+	carrierCtxWindow    int
+	carrierSubscription bool
+
+	// carrierJailed mirrors the daemon's workspace sandbox lock for the
+	// status bar's jailed badge — an attached TUI holds no Sandbox object.
+	// Seeded from the server hello at attach and on every reconnect
+	// (SetCarrierJailed). Guarded by mu.
+	carrierJailed bool
+
 	// carrierPanelSurface is the surface id of the daemon-backed extension
 	// panel currently mirrored in the overlay ("" when the overlay is empty or
 	// shows a command-result panel, which has no surface). Lets the
@@ -690,8 +757,25 @@ type Interactive struct {
 	// those reads; a fetch happens only when carrierTasksStale is set — on
 	// the daemon's surface_updated("tasks") broadcast (≤1 per poll tick,
 	// change-driven) and when the dashboard opens. Guarded by mu.
-	carrierTaskRows   []swarm.AgentSnapshot
-	carrierTasksStale bool
+	carrierTaskRows      []swarm.AgentSnapshot
+	carrierTasksStale    bool
+	carrierTasksFetching bool // one async fill in flight; render never blocks
+
+	// carrierTaskBoard caches the per-session task-board surface (the built-in
+	// task_* list) that backs the /tasks panel and the status-bar glance, both of
+	// which re-read every frame. Push-filled by the pump (refreshCarrierTaskBoard)
+	// on the daemon's surface_updated("taskboard") broadcast (once per turn end)
+	// and on a snapshot resync, so the render path never blocks on a fetch.
+	// Guarded by mu. Distinct from carrierTaskRows, the workspace swarm dashboard.
+	// Cached as ctrlproto items; taskBoardRows maps them to tasks.Task for the
+	// shared renderers.
+	carrierTaskBoard []ctrlproto.TaskBoardItem
+	// carrierTaskBoardSession is the session id carrierTaskBoard was filled for.
+	// The board fetch is async (refreshCarrierTaskBoard runs off the pump), so a
+	// switch can land while a fetch is in flight; keying the cache lets a commit
+	// verify it still matches the live session before landing, and lets reads
+	// ignore a board left over from a previous binding. Guarded by mu.
+	carrierTaskBoardSession string
 
 	// carrierMessages is the pump-owned transcript on the carrier path —
 	// the wire twin of the crutch agent's Messages(), and what buildChat
@@ -755,6 +839,18 @@ type Interactive struct {
 	// about the agent — the TUI nilled it on /logout and re-grabbed it on
 	// /login, purely to open and close this gate. Guarded by mu.
 	carrierReady bool
+
+	// bootSessionsPending is the one-shot arming of OpenSessionsOnBoot: set
+	// from cfg at construction, cleared by whichever site opens the boot
+	// picker first — Run on a ready boot, or the first successful in-TUI
+	// login on a credential-less one (the login dialog keeps overlay
+	// priority until dismissed). Main-loop-only state, like the dialogs.
+	bootSessionsPending bool
+
+	// titleGenBusy serializes the picker's `g` (on-demand title generation):
+	// one model call at a time, a second press while one runs is refused.
+	// Main-loop-only state (set on key handling, cleared via runOnMain).
+	titleGenBusy bool
 
 	// replayState is the latest transport state of a replay session (position,
 	// total, playing, speed), stashed from EventReplayState broadcasts and read
@@ -836,6 +932,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		sessionTreeDialog: dialogs.NewSessionTreeDialog(),
 		extPanel:          dialogs.NewExtPanelDialog(),
 		migrateDialog:     dialogs.NewMigrateDialog(),
+		tasksDialog:       dialogs.NewTasksDialog(),
 		suggest:           newSlashSuggester(),
 		fileSuggest:       widgets.NewFileSuggester(),
 		spin:              widgets.NewSpinner(cfg.Theme),
@@ -857,20 +954,98 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 	if cfg.Experience != "" {
 		i.view.ToolDisplay = tui.ToolDisplayMinimal
 	}
-	i.fileSuggest.SetRecursive(cfg.RecursiveFileSuggest != nil && *cfg.RecursiveFileSuggest)
+	i.fileSuggest.SetRecursive(cfg.RecursiveFileSuggest == nil || *cfg.RecursiveFileSuggest)
 	i.fileSuggest.SetRespectGitignore(cfg.RespectGitignore == nil || *cfg.RespectGitignore)
+	if cfg.RemoteFiles != nil {
+		// @-file completion lists the daemon's tree over the wire; the fill
+		// lands off the render path and invalidate pops the popup in.
+		i.fileSuggest.SetRemoteLister(cfg.RemoteFiles, i.invalidate)
+	}
 	// Arm the initial binding: its first snapshot decides the first-paint
 	// tail cap and seeds the cost/context meters. Neither the transcript nor
 	// the meters are known yet — both arrive from the pump.
 	i.carrierTailPending = -1
 	i.armCarrierBind()
 	i.carrierReady = cfg.Ready
+	i.bootSessionsPending = cfg.OpenSessionsOnBoot
 	return i
+}
+
+// teardownTerminal returns the terminal to the shell's state: stop new
+// frames, erase the live status/input band (while the renderer's
+// cursor/viewport state still matches what's on screen — the chat transcript
+// stays in scrollback), reset the modes the session enabled (scroll region,
+// kitty images, enhanced keyboard, bracketed paste, cursor), and leave raw
+// mode. Once-only: it runs on Run's exit defer AND from the self-restart
+// pre-exec hook — syscall.Exec skips defers, so a restart must tear down
+// eagerly or the next image inherits a raw, half-painted terminal.
+func (i *Interactive) teardownTerminal() {
+	i.teardownOnce.Do(func() {
+		i.shuttingDown.Store(true)
+		if i.rend != nil {
+			i.rend.TeardownLog()
+		}
+		_, _ = i.cfg.Terminal.Write([]byte(tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqEnhancedKeyboardOff + tui.SeqBracketedPasteOff + tui.SeqShowCursor))
+		if i.restoreRaw != nil {
+			_ = i.restoreRaw()
+		}
+	})
+}
+
+// armTerminalModes enables the input/display modes the TUI runs under
+// (bracketed paste, enhanced keyboard, a clean scroll region, no leftover kitty
+// images). Emitted once on startup and again when recovering the terminal after
+// a failed self-restart — the exact inverse of the *Off sequences teardown
+// writes. It deliberately does NOT clear the screen or scrollback, so recovery
+// keeps the chat transcript intact.
+func (i *Interactive) armTerminalModes() {
+	_, _ = i.cfg.Terminal.Write([]byte(tui.SeqBracketedPasteOn + tui.SeqEnhancedKeyboardOn + tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages))
+}
+
+// resumeAfterFailedRestart reverses the pre-exec teardown when a deferred
+// self-restart exec fails and relaunch keeps this process serving (see
+// relaunch.OnFailure). Without it the pre-exec hook has already set
+// shuttingDown, spent teardownOnce, left cooked mode, and erased the live band —
+// so the surviving process can no longer paint or read keys. This runs on the
+// main loop (terminal + renderer state is main-loop-only): it re-enters raw
+// mode, re-arms the modes teardown turned off, re-arms teardownOnce so a later
+// real exit still restores the terminal, clears the no-frames latch, and
+// repaints (TeardownLog left the renderer marked for a full redraw). If raw mode
+// can't be re-entered the terminal is unusable for input, so fall back to a
+// clean exit rather than claim the process can continue.
+func (i *Interactive) resumeAfterFailedRestart(cause error) {
+	restore, err := i.cfg.Terminal.EnterRaw()
+	if err != nil {
+		// Terminal is still in cooked mode (teardown restored it), so the shell
+		// is usable — just end the run loop cleanly rather than live on half-torn.
+		fmt.Fprintf(os.Stderr, "relaunch: restart failed (%v) and the terminal could not be recovered (%v); exiting\n", cause, err)
+		select {
+		case <-i.restartFailQuit:
+		default:
+			close(i.restartFailQuit)
+		}
+		return
+	}
+	i.restoreRaw = restore
+	i.teardownOnce = sync.Once{}
+	i.shuttingDown.Store(false)
+	i.armTerminalModes()
+	cols, rows := i.cfg.Terminal.Size()
+	i.rend.Resize(cols, rows)
+	i.setStatusErr(i18n.T("restart failed: %s — continuing on the current build", cause.Error()))
+	i.invalidate()
 }
 
 // Run blocks until the user quits.
 func (i *Interactive) Run(ctx context.Context) error {
 	i.runCtx = ctx
+	i.restartFailQuit = make(chan struct{})
+	// Rides the one-shot note area rather than statusOK: startup already
+	// competes for the status line (the restricted-workspace notice), and
+	// the last writer would silently win.
+	if i.cfg.BootNotice != "" {
+		i.extNotes = append(i.extNotes, "  "+i.cfg.Theme.FG256(i.cfg.Theme.Accent, "↻ "+i.cfg.BootNotice))
+	}
 
 	// Streaming-repaint cap (see resolveBusyRedrawInterval). The note is
 	// emitted to stderr only when overridden, so a bug report from a user
@@ -886,7 +1061,8 @@ func (i *Interactive) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer restore()
+	i.restoreRaw = restore
+	defer i.teardownTerminal()
 
 	// Enabling mouse reporting steals click-drag selection from the
 	// host terminal (VS Code, Ghostty, iTerm). The user prefers native
@@ -897,21 +1073,42 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// enter the alternate-screen buffer (CSI ?1049h). The renderer emits
 	// chat as normal terminal flow/scrollback and redraws only the live
 	// input/status block on normal typing.
-	_, _ = term.Write([]byte(tui.SeqBracketedPasteOn + tui.SeqEnhancedKeyboardOn + tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqClearScreenNoHome + tui.SeqClearScrollback + tui.MoveTo(1, 1)))
+	i.armTerminalModes()
+	_, _ = term.Write([]byte(tui.SeqClearScreenNoHome + tui.SeqClearScrollback + tui.MoveTo(1, 1)))
 	// Tell the terminal our working directory (OSC 7) so "new tab / split
 	// here" opens in the launch cwd instead of inheriting a stale directory
 	// from an extension subprocess. Harmless on terminals that ignore it.
 	if seq := tui.ReportCWD(i.cfg.CWD); seq != "" {
 		_, _ = term.Write([]byte(seq))
 	}
-	defer term.Write([]byte(tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqEnhancedKeyboardOff + tui.SeqBracketedPasteOff + tui.SeqShowCursor))
-	// Erase the live status/input band on exit so the returning shell
-	// prompt lands on a clean line right after the conversation instead of
-	// underneath a stale frame. Runs before the resets above (defers are
-	// LIFO) while the renderer's cursor/viewport state still matches what's
-	// on screen. The chat transcript stays in scrollback.
-	if i.rend != nil {
-		defer i.rend.TeardownLog()
+
+	// Self-restart (--allow-restart): syscall.Exec skips the teardown defer
+	// above, so the pre-exec hook must return the terminal to the shell's
+	// state eagerly — and hand the live session id to the next image so it
+	// resumes this conversation instead of starting fresh. The hook fires on
+	// the trigger goroutine (the tool call or control verb), but rend is
+	// main-loop-only state: marshal the teardown there and wait, bounded —
+	// relaunch.Delay outlasts the wait — falling back to a direct
+	// once-guarded call if the main loop is wedged. Torn-down-off-main beats
+	// exec'ing into a raw, half-painted terminal.
+	if relaunch.Enabled() {
+		relaunch.OnPreExec(func(string) {
+			relaunch.SetHandoff("SESSION", i.carrierSession())
+			done := make(chan struct{})
+			i.runOnMain(func() { i.teardownTerminal(); close(done) })
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				i.teardownTerminal()
+			}
+		})
+		// If the deferred exec fails, relaunch keeps this process serving — but
+		// the pre-exec hook already tore the terminal down. Marshal a recovery
+		// onto the main loop so the survived process becomes a live TUI again
+		// (or exits cleanly) instead of a dead one holding a torn-down terminal.
+		relaunch.OnFailure(func(err error) {
+			i.runOnMain(func() { i.resumeAfterFailedRestart(err) })
+		})
 	}
 
 	// Streaming pacer: drains buffered text deltas at a steady rate
@@ -990,6 +1187,15 @@ func (i *Interactive) Run(ctx context.Context) error {
 		// untrusted. Tell the user once, on the status line, how to opt
 		// in. No prompt/dialog (inform-don't-prompt, decision #2).
 		i.statusOK = i18n.T("restricted workspace: project extensions/skills/context not loaded — /trust to load them")
+	}
+	// --resume: open the session picker over the fresh boot. On a
+	// credential-less boot the login dialog above stays armed instead;
+	// finishCarrierLogin opens the picker after the first successful login.
+	// Esc closes the picker onto the session the boot already bound — what
+	// the command would have done without the flag.
+	if i.bootSessionsPending && i.ready() {
+		i.bootSessionsPending = false
+		i.openSessionsDialog()
 	}
 
 	// Input goroutine. Buffered generously so a drag-drop that the
@@ -1094,6 +1300,10 @@ func (i *Interactive) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-i.restartFailQuit:
+			// A failed self-restart left the terminal unrecoverable; the
+			// resume path restored cooked mode and asked us to exit cleanly.
+			return nil
 		case k := <-keys:
 			if done := i.handleKey(ctx, k); done {
 				return nil

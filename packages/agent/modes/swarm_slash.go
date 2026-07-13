@@ -57,7 +57,11 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		}
 		// Open with a fresh snapshot even if no change signal arrived since
 		// the last fetch (the poller's signature can lag a just-issued verb).
+		// The fill is synchronous here — opening the dashboard is a user
+		// action, not a render frame, and the dialog's first paint should
+		// show current rows.
 		i.invalidateCarrierTasks()
+		i.fetchCarrierTasks()
 	case i.cfg.Swarm != nil:
 		snapshotFn = i.cfg.Swarm.SnapshotAll
 		stopFn = i.cfg.Swarm.Stop

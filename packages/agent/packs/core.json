@@ -20,11 +20,6 @@
       "description": "Workspace and user cross session memory."
     },
     {
-      "name": "tasks",
-      "source": "https://github.com/terva-sh/terva-tasks.git",
-      "description": "Workspace task management."
-    },
-    {
       "name": "web",
       "source": "https://github.com/terva-sh/zot-web.git",
       "description": "Web search and content fetching."

@@ -269,7 +269,7 @@ func registerFakeService(t *testing.T, name string) {
 
 // --- helpers -------------------------------------------------------------
 
-func waitFor(t *testing.T, what string, pred func() bool) {
+func waitFor(t *testing.T, what string, pred func() bool, diag ...func() string) {
 	t.Helper()
 	// Generous ceiling: these predicates poll on subprocess / connection state
 	// (connector spawn, hello handshake, bridge status) that is slow under CI
@@ -283,7 +283,15 @@ func waitFor(t *testing.T, what string, pred func() bool) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", what)
+	// A bare "timed out" hides whether the state machine was still moving or
+	// had already failed (a refused dial parks in "error" forever, and this
+	// deadline is then blamed for it) — dump the caller's diagnostics so a CI
+	// log answers that without a reproduction.
+	detail := ""
+	for _, d := range diag {
+		detail += "\n  " + d()
+	}
+	t.Fatalf("timed out waiting for %s%s", what, detail)
 }
 
 // chatTestWorkspace builds a workspace with one live session backed by a fake

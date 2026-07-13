@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -35,6 +36,33 @@ func TestResolveRegistersAndBindsStatusTool(t *testing.T) {
 	// The system prompt should mention the tool when it's registered.
 	if !strings.Contains(r.SystemPrompt, "terva_status") {
 		t.Error("system prompt is missing the terva_status hint when the tool is registered")
+	}
+}
+
+// TestResolveStampsStatusToolWithBuildInfo closes the full runtime wire:
+// main records the build (buildinfo.Set) before Resolve, and Resolve →
+// BuildToolRegistry stamps it into terva_status via buildinfo.Get(). The
+// unit tests set StatusTool.Build directly; this proves the construction
+// path actually reads the process-global.
+func TestResolveStampsStatusToolWithBuildInfo(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	prev := buildinfo.Get() // process-global; restore so later tests see the original
+	t.Cleanup(func() { buildinfo.Set(prev) })
+	want := buildinfo.Info{Version: "9.9.9-test", Commit: "abc1234def", Date: "2026-07-12T00:00:00Z"}
+	buildinfo.Set(want)
+
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	st, ok := r.ToolRegistry["terva_status"].(*tools.StatusTool)
+	if !ok {
+		t.Fatal("terva_status not registered")
+	}
+	if st.Build != want {
+		t.Errorf("status tool Build = %+v, want %+v", st.Build, want)
 	}
 }
 

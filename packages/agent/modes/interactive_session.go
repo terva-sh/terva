@@ -343,6 +343,56 @@ func (i *Interactive) applySessionSelection(path string) {
 	}()
 }
 
+// openSessionsDialog wires the /sessions picker's seams from cfg and shows
+// it. Shared by the /sessions slash handler and the --resume boot open
+// (OpenSessionsOnBoot): re-wiring Rename/List on every open keeps the dialog
+// pointed at the current carrier closures rather than a stale capture.
+func (i *Interactive) openSessionsDialog() {
+	i.sessionDialog.Rename = i.cfg.RenameSessionFile
+	i.sessionDialog.List = i.cfg.ListSessions
+	i.sessionDialog.Open(i.cfg.TervaHome, i.cfg.CWD)
+}
+
+// generateSessionTitle runs the picker's `g` binding: on-demand title
+// generation via the host seam, off the main loop (it blocks on a model
+// call). One at a time — a second `g` while one runs is refused, not queued.
+// The result lands back on the main loop: the dialog row updates in place
+// (SetTitleFor no-ops if the dialog moved on) and the status line reports.
+func (i *Interactive) generateSessionTitle(path string) {
+	gen := i.cfg.GenerateSessionTitle
+	if gen == nil {
+		i.mu.Lock()
+		i.statusErr = i18n.T("title generation isn't available here")
+		i.mu.Unlock()
+		i.invalidate()
+		return
+	}
+	if i.titleGenBusy {
+		return
+	}
+	i.titleGenBusy = true
+	i.mu.Lock()
+	i.statusOK = i18n.T("generating title…")
+	i.statusErr = ""
+	i.mu.Unlock()
+	i.invalidate()
+	go func() {
+		title, err := gen(path)
+		i.runOnMain(func() {
+			i.titleGenBusy = false
+			i.mu.Lock()
+			defer i.mu.Unlock()
+			if err != nil {
+				i.statusErr = err.Error()
+				i.statusOK = ""
+				return
+			}
+			i.sessionDialog.SetTitleFor(path, title)
+			i.statusOK = i18n.T("titled: %s", title)
+		})
+	}()
+}
+
 // openSessionOpsDialog shows the picker for `/session` with no arg.
 // Always offers export, import, fork, tree; the handlers bail with
 // a clear status message when the precondition isn't met (empty

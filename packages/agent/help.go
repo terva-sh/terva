@@ -103,6 +103,7 @@ func PrintHelp(version string) {
 		row{"terva bot ...", i18n.T("run a chat-bridge bot (telegram and others)")},
 		row{"terva raati \"q\"", i18n.T("convene a three-unit deliberation panel; prints verdict + dissent")},
 		row{"terva web", i18n.T("browser control panel (self-hosted web ui)")},
+		row{"terva attach [URL]", i18n.T("run the TUI as a client of a running terva web daemon (default ws://127.0.0.1:8730/ws; --token for auth). Survives daemon restarts; quit and re-attach without disturbing the agent")},
 		row{"terva trust / untrust", i18n.T("manage which directories load project extensions/skills/context")},
 		row{"terva project ...", i18n.T("project-scoped agents (data + extensions pinned to a directory)")},
 		row{"terva migrate", i18n.T("migrate a legacy install's data to the terva location")},
@@ -126,7 +127,7 @@ func PrintHelp(version string) {
 		row{"--as NAME", i18n.T("what a card's {{user}} resolves to (defaults to the saved name, else \"User\")")},
 		row{"--context-file PATH", i18n.T("inject a file's contents into the system prompt (repeatable)")},
 		row{"-c, --continue", i18n.T("continue the most recent session for this cwd")},
-		row{"-r, --resume", i18n.T("pick a session to resume")},
+		row{"-r, --resume [ID]", i18n.T("open the session picker at startup, or resume session ID directly (also: terva attach -r)")},
 		row{"--session PATH", i18n.T("resume a specific session file")},
 		row{"--no-session", i18n.T("do not read or write a session file")},
 	)
@@ -155,9 +156,10 @@ func PrintHelp(version string) {
 		row{"--project / --no-project", i18n.T("force project-scoped mode on/off (data in .terva/home, only project extensions; login+trust stay global)")},
 	)
 	section(i18n.T("misc"),
+		row{"--allow-restart", i18n.T("enable Tier-1 self-restart: the agent (terva_restart) or the control plane can re-exec terva into the currently-installed binary; the TUI resumes its session, web clients reconnect")},
 		row{"--swarm-worktrees", i18n.T("give each swarm sub-agent its own git worktree (needs the terva-git-worktree extension)")},
 		row{"--max-steps N", i18n.T("agent loop iteration cap (default: unlimited)")},
-		row{"--dump-prompt[=text|json|raw]", i18n.T("print the assembled prompt for the pending turn and exit (no model call)")},
+		row{"--dump-prompt[=text|json|raw|sizes]", i18n.T("print the assembled prompt for the pending turn and exit (no model call); sizes shows per-section/per-tool byte+token weight")},
 		row{"--list-models[=FILTER]", i18n.T("print known models and exit. FILTER: comma list of user|live|catalog|speculative, a tier threshold like live+ (that tier and above), or available (only providers your credentials can use right now)")},
 		row{"-h, --help", i18n.T("show this help")},
 		row{"-v, --version", i18n.T("show version info")},

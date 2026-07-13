@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -123,6 +124,33 @@ func composeEphemeral(providers ...func() string) func() string {
 func WireExtEphemeral(ag *core.Agent, ephemeral func() string) {
 	ag.ContextProvider = composeEphemeral(ephemeral, ag.ContextProvider)
 	ag.ContextProviderPeek = composeEphemeral(ephemeral, ag.ContextProviderPeek)
+}
+
+// WireTasksEphemeral folds the built-in task controller's live context card into
+// the agent's per-turn tail (live provider + sizing twin), the same way
+// WireExtEphemeral folds extension cards — through composeEphemeral, so the card
+// sits before the run's own lore/PHI tail. nil ctrl is a no-op.
+func WireTasksEphemeral(ag *core.Agent, ctrl *tasktool.Controller) {
+	if ctrl == nil {
+		return
+	}
+	ag.ContextProvider = composeEphemeral(ctrl.Ephemeral, ag.ContextProvider)
+	ag.ContextProviderPeek = composeEphemeral(ctrl.Ephemeral, ag.ContextProviderPeek)
+}
+
+// RebindTasks re-keys the built-in task store to a session so the board follows
+// the active session across open / resume / fork / /new / /cd / close. Call it
+// wherever EmitSessionStart fires. nil ctrl is a no-op; a rebind error is
+// swallowed (a persistence hiccup must not break session start).
+func RebindTasks(ctrl *tasktool.Controller, sess *core.Session) {
+	if ctrl == nil {
+		return
+	}
+	id := ""
+	if sess != nil {
+		id = sess.ID
+	}
+	_ = ctrl.Rebind(id)
 }
 
 // loreFiredRecord holds the lore entry sources that fired — and that the

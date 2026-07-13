@@ -27,11 +27,26 @@ import (
 // here (including every extension/MCP tool) are treated as mutating;
 // a new built-in must be added deliberately.
 var readOnlyTools = map[string]bool{
-	"read":         true,
-	"grep":         true,
-	"glob":         true,
-	"terva_status": true,
-	"skill":        true,
+	"read":            true,
+	"grep":            true,
+	"glob":            true,
+	"terva_status":    true,
+	"session_inspect": true,
+	"skill":           true,
+	// The task tools mutate only terva's own task board under $TERVA_HOME — never
+	// the workspace — so they auto-admit and stay available in plan mode like a
+	// read-only tool (the built-in equivalent of the former extension's
+	// AuthorityLocalData). task_list is a pure read; create/update/archive touch
+	// only that board, which never appears in a workspace diff.
+	"task_list":    true,
+	"task_create":  true,
+	"task_update":  true,
+	"task_archive": true,
+	// activate_tools only changes which tool schemas are advertised this session
+	// (lazy tool visibility, retro H2·b) — visibility, never authority — so it
+	// auto-admits without a confirm, like session_inspect. Each tool it reveals
+	// still faces its own gate when actually called.
+	"activate_tools": true,
 }
 
 // EditTools names the file editors auto-edit additionally allows:
@@ -63,7 +78,13 @@ var BuiltinTools = map[string]bool{
 	"grep":              true,
 	"glob":              true,
 	"terva_status":      true,
+	"session_inspect":   true,
 	"skill":             true,
+	"task_list":         true,
+	"task_create":       true,
+	"task_update":       true,
+	"task_archive":      true,
+	"activate_tools":    true,
 	"swarm_spawn":       true,
 	"chat_send_image":   true,
 	"chat_send_file":    true,

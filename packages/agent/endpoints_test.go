@@ -19,6 +19,7 @@ func TestRegisterEndpoint(t *testing.T) {
 	if err := build.RegisterEndpoint("ep-missing-url", config.EndpointConfig{}); err == nil {
 		t.Error("an endpoint without a base URL should be rejected")
 	}
+	t.Cleanup(func() { build.UnregisterEndpoint("ep-ok-unit") })
 	if err := build.RegisterEndpoint("ep-ok-unit", config.EndpointConfig{BaseURL: "http://ep:9000/v1"}); err != nil {
 		t.Fatalf("a fresh endpoint should register: %v", err)
 	}
@@ -44,6 +45,7 @@ func TestResolveEndpointProvider(t *testing.T) {
 		[]byte(`{"endpoints":{"box-resolve":{"baseUrl":"http://box-resolve:9000/v1"}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { build.UnregisterEndpoint("box-resolve") })
 	if err := build.RegisterEndpoint("box-resolve", config.EndpointConfig{BaseURL: "http://box-resolve:9000/v1"}); err != nil {
 		t.Fatal(err)
 	}

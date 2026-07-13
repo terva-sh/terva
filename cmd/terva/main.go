@@ -11,6 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent"
 	"terva.sh/terva/packages/agent/procenv"
+	"terva.sh/terva/packages/buildinfo"
 )
 
 // Injected at build time via -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
@@ -73,19 +74,13 @@ func main() {
 			}
 		}
 	}
-	v := version
-	if commit != "" {
-		short := commit
-		if len(short) > 7 {
-			short = short[:7]
-		}
-		v = v + " (" + short
-		if date != "" {
-			v = v + ", " + date
-		}
-		v = v + ")"
-	}
-	if err := agent.Run(os.Args[1:], v); err != nil {
+	// Record the structured triple before it's folded into the combined
+	// display string — terva_status and the relaunch/startup version
+	// lines read it back to report the running process's build (see
+	// packages/buildinfo).
+	info := buildinfo.Info{Version: version, Commit: commit, Date: date}
+	buildinfo.Set(info)
+	if err := agent.Run(os.Args[1:], info.String()); err != nil {
 		fmt.Fprintln(os.Stderr, "terva:", err)
 		os.Exit(1)
 	}

@@ -19,8 +19,10 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/run"
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/envcompat"
@@ -34,19 +36,6 @@ import (
 // workspace need not import modes; cli.go is the composition root that bridges
 // the two. See docs/proposals/tui-on-ctrlproto.md.
 var _ modes.Carrier = (*workspace.Workspace)(nil)
-
-// continueOnOpenWork builds the ContinueOnStop gate for an agent: when a
-// turn ends naturally and the manager reports a blocking card, re-prompt
-// once with openWorkGateMessage. Shared by every host (interactive, rpc,
-// non-interactive).
-func continueOnOpenWork(extMgr *extensions.Manager) func(provider.StopReason) (bool, string) {
-	return func(stop provider.StopReason) (bool, string) {
-		if stop != provider.StopEnd || extMgr == nil || !extMgr.HasBlockingContext() {
-			return false, ""
-		}
-		return true, build.OpenWorkGateMessage
-	}
-}
 
 // workspaceRootFn resolves the agent's live workspace root for a
 // WorkspaceDiffer: the sandbox's writable root (which a /cd updates) when
@@ -186,6 +175,12 @@ func Run(rawArgs []string, version string) error {
 	if len(rawArgs) > 0 && rawArgs[0] == "web" {
 		rawArgs = append([]string{"--web"}, rawArgs[1:]...)
 	}
+	// `terva attach [URL]` is shorthand for `terva --attach [URL]` (the
+	// remote-TUI mode), routed like `terva web`. The optional URL rides as
+	// the flag's positional value.
+	if len(rawArgs) > 0 && rawArgs[0] == "attach" {
+		rawArgs = append([]string{"--attach"}, rawArgs[1:]...)
+	}
 	// `terva replay <file>` is shorthand for `terva --replay <file>` (the
 	// session-player mode), routed like `terva web`. The leading path becomes
 	// the flag value; ParseArgs errors cleanly if it is missing.
@@ -279,6 +274,8 @@ func Run(rawArgs []string, version string) error {
 		return runWebMode(ctx, args, version)
 	case build.ModeReplay:
 		return runReplayMode(ctx, args, version)
+	case build.ModeAttach:
+		return runAttachMode(ctx, args, version)
 	case build.ModeSwarmAgent:
 		return runSwarmAgentMode(ctx, args, version)
 	default:
@@ -332,7 +329,7 @@ func setupNonInteractiveExtensions(ctx context.Context, args build.Args, r *buil
 	}
 }
 
-func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate, hookEng *hooks.Engine, differ *tools.WorkspaceDiffer) {
+func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate, hookEng *hooks.Engine, differ *tools.WorkspaceDiffer, tasksCtrl *tasktool.Controller) {
 	if ag == nil || extMgr == nil {
 		return
 	}
@@ -364,8 +361,10 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 	// Inject extensions' live context cards into the model each turn (live
 	// provider + sizing twin; ext context before the tail so PHI stays last).
 	build.WireExtEphemeral(ag, extMgr.EphemeralContext)
-	// Re-prompt once at close if an extension flags open work.
-	ag.ContinueOnStop = continueOnOpenWork(extMgr)
+	// Inject the built-in task board's live card the same way.
+	build.WireTasksEphemeral(ag, tasksCtrl)
+	// Re-prompt once at close if an extension flags open work or a task is open.
+	ag.AddContinuationGate(build.OpenWorkGate(extMgr, tasksCtrl))
 }
 
 // wireBotAgentExtHooks wires a long-lived chat-bot agent to its extension
@@ -373,8 +372,11 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 // extension interception + live context cards + event fanout) — bundled so
 // botcmd.go needs no extra imports. The bot loop runs turns one at a time, so
 // the per-turn hooks fire exactly as they do in a headless single-shot run.
-func wireBotAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate, args build.Args, r *build.Resolved) {
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, gate, build.BuildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)))
+// tasksCtrl is per-CONVERSATION, not per-process: the owner DM passes the
+// shared r.Tasks (bound to its durable session); each admitted group passes
+// its own fresh controller so its card and open-work gate read its own board.
+func wireBotAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate, args build.Args, r *build.Resolved, tasksCtrl *tasktool.Controller) {
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, gate, build.BuildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), tasksCtrl)
 }
 
 func runPrintMode(ctx context.Context, args build.Args, version string) error {
@@ -389,13 +391,20 @@ func runPrintMode(ctx context.Context, args build.Args, version string) error {
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, build.BuildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)))
-	sess, _ := openOrCreateSession(args, r, ag, version)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, build.BuildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), r.Tasks)
+	sess, serr := openOrCreateSession(args, r, ag, version)
+	if serr != nil {
+		if err := headlessSessionErr(args, serr); err != nil {
+			return err
+		}
+	}
 	defer sess.Close()
 	ag.AdoptSessionIdentity(sess)
 	// Tell session-keyed extensions the real session id before any turn
 	// runs, so per-session state persists in headless modes too.
 	build.EmitSessionStart(extMgr, sess)
+	// Follow the active session with the built-in task board too.
+	build.RebindTasks(r.Tasks, sess)
 
 	prompt := args.Prompt
 	if prompt == "" {
@@ -424,13 +433,20 @@ func runJSONMode(ctx context.Context, args build.Args, version string) error {
 	defer stopExt()
 
 	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, build.BuildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)))
-	sess, _ := openOrCreateSession(args, r, ag, version)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, build.BuildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), r.Tasks)
+	sess, serr := openOrCreateSession(args, r, ag, version)
+	if serr != nil {
+		if err := headlessSessionErr(args, serr); err != nil {
+			return err
+		}
+	}
 	defer sess.Close()
 	ag.AdoptSessionIdentity(sess)
 	// Tell session-keyed extensions the real session id before any turn
 	// runs, so per-session state persists in headless modes too.
 	build.EmitSessionStart(extMgr, sess)
+	// Follow the active session with the built-in task board too.
+	build.RebindTasks(r.Tasks, sess)
 
 	prompt := args.Prompt
 	if prompt == "" {
@@ -589,6 +605,15 @@ func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, vers
 		if latest != "" {
 			s, msgs, err = core.OpenSession(latest)
 		}
+	case args.ResumeID != "":
+		// --resume <id>: direct resume for headless runs (docs/cli.md's
+		// "ask the agent for its session id" debugging loop). Fail loudly
+		// rather than silently starting fresh.
+		path, perr := resolveSessionID(args.CWD, args.ResumeID)
+		if perr != nil {
+			return nil, perr
+		}
+		s, msgs, err = core.OpenSession(path)
 	case args.Resume:
 		picked, perr := pickSession(args.CWD)
 		if perr != nil {
@@ -653,24 +678,74 @@ func seedCardGreeting(s *core.Session, ag *core.Agent, greeting string) {
 	}
 }
 
+// pickSession is the pre-TUI terminal picker: the --resume fallback for
+// boots that never own the terminal (print/json, the swarm child). TTY
+// boots open the in-TUI session dialog instead (interactive/ctrlproto).
+// Rows render through the dialog's formatter — title (or first message),
+// age, model, size, cost — never raw file paths.
 func pickSession(cwd string) (string, error) {
-	files := core.ListSessions(config.TervaHome(), cwd)
-	if len(files) == 0 {
+	summaries := pickableSessions(core.DescribeSessions(config.TervaHome(), cwd))
+	if len(summaries) == 0 {
 		fmt.Fprintln(os.Stderr, "no sessions for", cwd)
 		return "", nil
 	}
-	for i, f := range files {
-		fmt.Fprintf(os.Stderr, "  %2d) %s\n", i+1, f)
+	// Fixed row budget: this path has no terminal-size probe (stdout may
+	// not even be a TTY); the formatter hard-clamps so rows never wrap on
+	// any modern terminal width.
+	const rowWidth = 100
+	for i, s := range summaries {
+		fmt.Fprintf(os.Stderr, "  %2d) %s\n", i+1, dialogs.FormatSessionRowPlain(s, rowWidth))
 	}
 	fmt.Fprint(os.Stderr, "pick #: ")
 	rd := bufio.NewReader(os.Stdin)
 	line, _ := rd.ReadString('\n')
 	line = strings.TrimSpace(line)
 	var n int
-	if _, err := fmt.Sscanf(line, "%d", &n); err != nil || n < 1 || n > len(files) {
+	if _, err := fmt.Sscanf(line, "%d", &n); err != nil || n < 1 || n > len(summaries) {
 		return "", fmt.Errorf("invalid selection")
 	}
-	return files[n-1], nil
+	return summaries[n-1].Path, nil
+}
+
+// headlessSessionErr triages a session-open failure for the print/json
+// modes: fatal (returned) when the run named an explicit target — a
+// --resume <id> or --session path that doesn't resolve must not silently
+// land on a fresh transcript — otherwise surfaced as a warning and the run
+// continues without persistence, the long-standing headless behavior (and
+// the bot daemon's convention).
+func headlessSessionErr(args build.Args, serr error) error {
+	if args.ResumeID != "" || args.Session != "" {
+		return serr
+	}
+	fmt.Fprintln(os.Stderr, "session:", serr)
+	return nil
+}
+
+// resolveSessionID maps a --resume <id> (filename stem, .jsonl tolerated)
+// to the transcript path in this cwd's session dir, erroring when no such
+// session exists.
+func resolveSessionID(cwd, id string) (string, error) {
+	id = strings.TrimSuffix(id, ".jsonl")
+	for _, p := range core.ListSessions(config.TervaHome(), cwd) {
+		if build.SessionIDFromPath(p) == id {
+			return p, nil
+		}
+	}
+	return "", i18n.Errorf("no session %s for %s", id, cwd)
+}
+
+// pickableSessions drops zero-message sessions — same rule as the in-TUI
+// dialog: resuming an empty session is a no-op, and fresh/crashed empties
+// would otherwise pad the list until the next prune sweep.
+func pickableSessions(all []core.SessionSummary) []core.SessionSummary {
+	out := make([]core.SessionSummary, 0, len(all))
+	for _, s := range all {
+		if s.MessageCount == 0 {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // WriteNewTranscript appends only messages after index `from` from the

@@ -131,6 +131,87 @@ web-test:
     npm --prefix packages/agent/web/client ci
     npm --prefix packages/agent/web/client test
 
+# Fast web inner-loop gate: unit tests, typecheck, and i18n check (no build).
+# Run this after touching packages/agent/web/client/src; `just web-check` is the
+# complete pre-push gate.
+web-check-fast:
+    npm --prefix packages/agent/web/client ci
+    npm --prefix packages/agent/web/client test
+    npm --prefix packages/agent/web/client run typecheck
+    npm --prefix packages/agent/web/client run i18n-check
+
+# Verify the committed web assets (dist/ + mirrored catalogs) are the
+# deterministic product of the current source: regenerate them exactly as
+# `web-build` does, then assert git sees no change. A test-only source commit
+# should pass this without a reviewer reading minified output.
+web-verify-dist: web-build
+    @if git diff --quiet -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json; then \
+        echo "web-verify-dist: OK — committed web assets match a fresh build"; \
+    else \
+        echo "web-verify-dist: committed web assets DIFFER from a fresh build —"; \
+        git -c color.ui=never diff --stat -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json; \
+        echo "  hashed-asset renames + index.html/sw.js only -> run 'just web-build' and commit;"; \
+        echo "  unrelated or churning files                  -> the build may be nondeterministic; investigate."; \
+        exit 1; \
+    fi
+
+# Tiered diff review (retro H6): split the changed files for a diff <spec> into
+# source vs generated (git's linguist-generated attribute; see .gitattributes),
+# print the source diff in full, and collapse the generated changes (hashed-asset
+# rehashes, index.html/sw.js ref bumps, regenerated catalogs) to a one-line-per-
+# asset summary. Never hides — the full diff is `git diff <spec>`. Complements
+# `web-verify-dist`: that proves the generated tree is the faithful build of the
+# source; this shows a reviewer just the source and names the generated delta.
+#   just diff-review                 # working tree vs HEAD
+#   just diff-review sothr-main      # working tree vs a ref
+#   just diff-review main..feature   # a commit range
+diff-review spec="HEAD":
+    @scripts/diff-review.sh "{{spec}}"
+
+# Complete local web gate (pre-push): unit tests, typecheck, i18n, catalog+dist
+# regeneration with a determinism check, prod-dep audit (fails on high/critical),
+# the tagged Go embed test, and a whitespace check. Installs node deps ONCE.
+# Node.js required; there is no Node in `just ci`, so this is the developer gate
+# for web-client changes — run it before pushing them.
+web-check:
+    @echo "== web-check: install =="
+    npm --prefix packages/agent/web/client ci
+    @echo "== web-check: unit tests =="
+    npm --prefix packages/agent/web/client test
+    @echo "== web-check: typecheck =="
+    npm --prefix packages/agent/web/client run typecheck
+    @echo "== web-check: i18n =="
+    npm --prefix packages/agent/web/client run i18n-check
+    @echo "== web-check: regenerate catalogs + dist =="
+    npm --prefix packages/agent/web/client run i18n-extract
+    @mkdir -p packages/agent/web/client/src/locales
+    @for f in packages/i18n/locales/web/*.json; do case "$f" in */en.json) ;; *) cp "$f" packages/agent/web/client/src/locales/;; esac; done
+    npm --prefix packages/agent/web/client run build
+    @echo "== web-check: committed-asset determinism =="
+    @git diff --quiet -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json || { echo "committed web assets differ from a fresh build — run 'just web-build' and commit:"; git -c color.ui=never diff --stat -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json; exit 1; }
+    @echo "== web-check: prod-dep audit =="
+    npm --prefix packages/agent/web/client audit --omit=dev --audit-level=high
+    @echo "== web-check: tagged Go embed test =="
+    go test -tags terva_web ./packages/agent/web
+    @echo "== web-check: whitespace =="
+    git diff --check
+    @echo "== web-check: OK =="
+
+# Opt-in real-browser smoke tests for the web control panel (Playwright driving
+# a headless Chromium against the built dist/, with the backend WebSocket
+# mocked). Deliberately NOT part of `just ci` or `web-check`: it downloads and
+# runs a browser, which the standard-tools architecture keeps in recommended
+# extension/MCP territory, not the core toolchain. Covers only durable flows
+# that unit tests can't (render at two widths, pinned-vs-unpinned scroll,
+# composer focus/keys, image paste/drop, overlay close, pane overflow on a
+# phone — the last also under WebKit, where the settings bug lived). On Linux
+# the browser install may need `--with-deps` (system libraries). See
+# packages/agent/web/client/tests/smoke/README.md.
+web-smoke:
+    npm --prefix packages/agent/web/client ci
+    npm --prefix packages/agent/web/client exec -- playwright install chromium webkit
+    npm --prefix packages/agent/web/client run test:smoke
+
 # goreleaser drives real packaging (cross-compiled archives + checksums;
 # CI snapshot job and the tag-triggered release workflow use the same
 # config). These targets install goreleaser on first use.
@@ -158,8 +239,14 @@ test *ARGS:
 test-fast *ARGS:
     go test ./... {{ARGS}}
 
-# Test a single package with verbose output: `just test-pkg ./packages/provider/auth`.
+# Test a single package: `just test-pkg ./packages/provider/auth`. Quiet by
+# default — failures still print in full, but passing tests are one `ok` line
+# instead of a PASS per test (which floods an agent's context for no signal).
 test-pkg PKG *ARGS:
+    go test -race {{PKG}} {{ARGS}}
+
+# Verbose variant: narrates every test as it runs.
+test-pkg-v PKG *ARGS:
     go test -race -v {{PKG}} {{ARGS}}
 
 # End-to-end harness only: builds the real binary, drives print/json
@@ -212,6 +299,9 @@ ci: lint test ci-acp ci-web
     # it — same reason ci-acp exists. install-dev is the only shipping use.
     go build -tags terva_pprof ./cmd/terva
     @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-overlay; fi
+    # A shipped doc that links into docs/plans, docs/architecture, … resolves
+    # here and 404s on the public mirror. Only a gate catches that.
+    @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-links; fi
 
 # Pre-release gate for a public cut: the full local CI, then the manual
 # reminders for what can only be verified on GitHub. The public release

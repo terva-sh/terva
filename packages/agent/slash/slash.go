@@ -82,6 +82,7 @@ var registry = []Spec{
 	{Name: "/skills", Group: groupContext, Desc: "list discovered skills (SKILL.md files)"},
 	{Name: "/context", Group: groupContext, Desc: "context breakdown (token sizes) + what extensions inject"},
 	{Name: "/lore", Group: groupContext, Desc: "list this run's active lore (keyed-context) entries"},
+	{Name: "/tasks", Group: groupContext, Desc: "show the agent's task list (the built-in task tracker)"},
 
 	{Name: "/model", Group: groupModel, Desc: "pick a model (or /model <id>)", Hint: "model id (optional)", CancelsTurn: true},
 	{Name: "/login", Group: groupModel, Desc: "log in via api key or subscription", CancelsTurn: true},
@@ -105,6 +106,8 @@ var registry = []Spec{
 	{Name: "/connect", Group: groupAgents, Aliases: []string{"/telegram", "/tg"},
 		Desc: "connect, disconnect, or show status of a chat bridge (compiled-in or connector extension)", Hint: "connect [name] | disconnect | status"},
 
+	{Name: "/status", Group: groupSystem, Desc: i18n.M("harness status: version, uptime, model, session, context usage")},
+	{Name: "/restart", Group: groupSystem, Desc: i18n.M("re-exec terva into the currently-installed binary and resume this session (needs --allow-restart)"), CancelsTurn: true},
 	{Name: "/settings", Group: groupSystem, Desc: "open settings"},
 	{Name: "/paste", Group: groupSystem, Desc: "paste an image from the system clipboard into the prompt"},
 	{Name: "/migrate", Group: groupSystem, Desc: "move your zot data dir to the terva location", CancelsTurn: true}, // rename:keep

@@ -86,6 +86,19 @@ export interface SkillInfo {
   description?: string
 }
 
+// WireFileEntry is one workspace file/directory from files.list (Go
+// ctrlproto.FileEntry): path relative to the workspace cwd, "/"-separated.
+export interface WireFileEntry {
+  path: string
+  dir?: boolean
+}
+
+// FilesListResult is the files.list response (Go ctrlproto.FilesListResult).
+export interface FilesListResult {
+  files: WireFileEntry[]
+  truncated?: boolean
+}
+
 export interface Snapshot {
   session: SessionInfo
   messages: WireMessage[]
@@ -156,9 +169,12 @@ export interface ContextBreakdown {
   window: number
   system_bytes: number
   ext_guidance_bytes: number
-  tool_bytes: number
+  tool_bytes: number // advertised tool defs (what the model receives); excludes lazy-inactive groups
   tool_count: number
-  ext_bytes: number
+  tool_bytes_installed?: number // full installed-registry weight, set only when lazy visibility hides some tools
+  tool_count_installed?: number
+  ext_bytes: number // ephemeral tail: ext cards + the lazy-tool capability note
+  lazy_note_bytes?: number // the inactive-tool-groups note's share of ext_bytes (names of hidden groups)
   transcript_bytes: number
   total_bytes: number
   messages: ContextMessage[]
@@ -522,8 +538,9 @@ export interface WireEvent {
 }
 
 // ServerHello is the handshake frame the server sends back (role "server").
-// We only read the bits the client acts on today — the active locale, so the
-// PWA can select its string catalog to match the daemon.
+// We only read the bits the client acts on today — the active locale (so the
+// PWA can select its string catalog to match the daemon), the workspace cwd,
+// and the feature list.
 export interface ServerHello {
   role: string
   protocol?: number
@@ -532,6 +549,11 @@ export interface ServerHello {
   groups?: string[]
   features?: string[]
   locale?: string
+  // The daemon's workspace working directory (Go Hello.CWD): names the tree
+  // the panel controls.
+  cwd?: string
+  // The workspace sandbox lock (Go Hello.Jailed).
+  jailed?: boolean
 }
 
 export interface Frame {

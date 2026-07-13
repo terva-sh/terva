@@ -38,6 +38,13 @@ const (
 	// is an opt-in build (-tags terva_web); the no-tag binary routes here too
 	// but exits with "web mode not built in".
 	ModeWeb Mode = "web"
+	// ModeAttach runs the interactive TUI as a CLIENT of a running daemon
+	// (`terva attach [URL]` / --attach): the same Interactive loop, but the
+	// carrier is a reconnecting ctrlproto WebSocket client instead of an
+	// in-process Workspace. Sessions, credentials, extensions, and tools all
+	// live daemon-side; the TUI renders and controls. See
+	// docs/proposals/archive/tui-attach.md (stage 2).
+	ModeAttach Mode = "attach"
 	// ModeReplay plays a recorded session transcript back through the
 	// interactive TUI as a deterministic, transport-controlled scene (the
 	// session player). Routed via `terva replay <file>` / --replay. It backs
@@ -67,7 +74,21 @@ type Args struct {
 	WebToken          string   // bearer token required on requests when no forward-auth is used
 	WebInsecure       bool     // allow binding a non-loopback address with no auth mode (dangerous)
 	WebInsecureCIDRs  []string // IPs/CIDRs granted no-auth access (besides loopback) — the scoped, safer form of --web-insecure (e.g. a tailnet range)
-	WebAllowRestart   bool     // enable Tier-1 self-restart (control.restart + the terva_restart tool); off by default
+
+	// AllowRestart enables Tier-1 self-restart (the control.restart verb +
+	// the terva_restart tool) in the modes that support it — terva web and
+	// the interactive TUI. --allow-restart; --web-allow-restart is the
+	// accepted alias from when web was the only mode that had it. Off by
+	// default.
+	AllowRestart bool
+
+	// Attach mode (`terva attach [URL]` / --attach, Mode == ModeAttach).
+	// AttachURL is the daemon endpoint — a full ws:// or wss:// URL, or a
+	// bare host:port that normalizes to ws://host:port/ws; empty means the
+	// local default (ws://127.0.0.1:8730/ws, terva web's default listener).
+	// Token authenticates as a bearer header (the daemon's --web-token).
+	AttachURL string
+	Token     string
 
 	SystemPrompt       string
 	AppendSystemPrompt []string
@@ -105,10 +126,10 @@ type Args struct {
 	// error; ignored without --card.
 	Greeting int
 
-	// DumpPrompt, when non-empty ("text"|"json"|"raw"), assembles the prompt
-	// for the pending turn, prints the manifest, and exits before any model
-	// call (--dump-prompt / --dump-prompt=<format>). A debugging + assertion
-	// tool; needs no credential.
+	// DumpPrompt, when non-empty ("text"|"json"|"raw"|"sizes"), assembles the
+	// prompt for the pending turn, prints the manifest (or, for "sizes", its
+	// byte/token attribution), and exits before any model call (--dump-prompt /
+	// --dump-prompt=<format>). A debugging + assertion tool; needs no credential.
 	DumpPrompt string
 
 	Reasoning   string
@@ -122,6 +143,11 @@ type Args struct {
 
 	Continue bool
 	Resume   bool
+	// ResumeID is --resume's optional value: a session id (the transcript's
+	// filename stem, YYYYMMDD-HHMMSS-xxxxxxxx, .jsonl suffix tolerated) to
+	// resume directly, skipping the picker. Only a token with that exact
+	// shape is consumed, so a positional prompt after -r is never swallowed.
+	ResumeID string
 	Session  string
 	NoSess   bool
 
@@ -316,6 +342,19 @@ func ParseArgs(in []string) (Args, error) {
 			a.Mode = ModeACP
 		case "--web":
 			a.Mode = ModeWeb
+		case "--attach":
+			a.Mode = ModeAttach
+			// Optional URL: consume the next token when it isn't a flag.
+			if i+1 < len(in) && !strings.HasPrefix(in[i+1], "-") {
+				i++
+				a.AttachURL = in[i]
+			}
+		case "--token":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.Token = v
 		case "--replay":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -363,12 +402,19 @@ func ParseArgs(in []string) (Args, error) {
 					a.WebInsecureCIDRs = append(a.WebInsecureCIDRs, p)
 				}
 			}
-		case "--web-allow-restart":
-			a.WebAllowRestart = true
+		case "--allow-restart", "--web-allow-restart":
+			a.AllowRestart = true
 		case "-c", "--continue":
 			a.Continue = true
 		case "-r", "--resume":
 			a.Resume = true
+			// Optional session id: consume the next token only when it has
+			// the session-id shape (docs/cli.md documents the id as "what
+			// --resume accepts"), never a prompt or another flag.
+			if i+1 < len(in) && LooksLikeSessionID(in[i+1]) {
+				i++
+				a.ResumeID = in[i]
+			}
 		case "--no-session":
 			a.NoSess = true
 		case "--no-tools":
@@ -638,10 +684,10 @@ func ParseArgs(in []string) (Args, error) {
 			if strings.HasPrefix(arg, "--dump-prompt=") {
 				v := strings.TrimPrefix(arg, "--dump-prompt=")
 				switch v {
-				case "text", "json", "raw":
+				case "text", "json", "raw", "sizes":
 					a.DumpPrompt = v
 				default:
-					return a, i18n.Errorf("--dump-prompt must be text|json|raw")
+					return a, i18n.Errorf("--dump-prompt must be text|json|raw|sizes")
 				}
 				continue
 			}
@@ -712,13 +758,17 @@ func PrintWebHelp() {
 
   terva web                          serve on 127.0.0.1:8730 (open http://127.0.0.1:8730)
   terva web --web-addr 0.0.0.0:8730  bind all IPv4 interfaces (needs an auth mode or --web-insecure-cidr; see below)
+  terva web --web-addr unix:/run/user/1000/terva.sock
+                                     serve on a unix socket (0600; the file's permissions are the auth —
+                                     attach with: terva attach unix:/run/user/1000/terva.sock)
 
 Web-specific flags:
-  --web-addr ADDR               listen address:port (default 127.0.0.1:8730)
+  --web-addr ADDR               listen address:port, or unix:/path for a filesystem socket (default 127.0.0.1:8730)
   --web-token TOKEN             require this bearer token (Authorization: Bearer, or ?token= for the browser)
   --web-auth-header NAME        trust a forward-auth proxy header as the authenticated user
   --web-trusted-proxy CIDR      IP/CIDR(s) allowed to assert --web-auth-header (comma-separated; loopback always allowed)
-  --web-allow-restart           enable Tier-1 self-restart (control.restart + the terva_restart tool)
+  --allow-restart               enable Tier-1 self-restart (control.restart + the terva_restart tool);
+                                --web-allow-restart is the accepted older spelling
   --web-insecure                allow binding a non-loopback address with NO auth (dangerous)
   --web-insecure-cidr CIDR      grant NO-auth access to these source IP/CIDR(s) only (comma-separated; loopback always
                                 allowed) — the scoped, safer form of --web-insecure for a trusted overlay (e.g. a tailnet
@@ -734,6 +784,11 @@ auth proxy (e.g. Authentik) in front for real deployments. To expose over a
 trusted overlay network (tailscale/WireGuard/VPN) with no per-request auth, scope
 it with --web-insecure-cidr <range> instead of the blanket --web-insecure — access
 is then limited to source IPs in that range and the network is your boundary.
+
+systemd socket activation is supported: when LISTEN_FDS names this process (a
+.socket unit started the service), the passed socket — unix or TCP, the unit
+decides — is served instead of --web-addr, and Tier-1 self-restart re-adopts
+it across the exec. Example unit files in docs/web.md.
 
 A web session honors the usual session flags — the directory, model, and posture
 it runs with (per-session model is switchable in-app):

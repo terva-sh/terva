@@ -23,20 +23,27 @@ const (
 
 	// --- session group ---
 
-	MethodSessionsList  Method = "sessions.list"     // result SessionsResult
-	MethodSessionCreate Method = "sessions.create"   // params CreateOpts, result SessionResult
-	MethodSessionResume Method = "sessions.resume"   // result SessionResult (sess in frame)
-	MethodSessionRename Method = "sessions.rename"   // params RenameParams (sess in frame)
-	MethodSessionDelete Method = "sessions.delete"   // no params (sess in frame)
-	MethodUsageGet      Method = "usage.get"         // result UsageResult (sess in frame)
-	MethodUsageSnapshot Method = "usage.snapshot"    // params UsageSnapshotParams, result UsageSnapshotResult (sess in frame)
-	MethodResetsList    Method = "usage.resets.list" // result ResetsListResult (sess in frame); read-only
-	MethodContextGet    Method = "context.get"       // result ContextResult (sess in frame)
-	MethodContextNode   Method = "context.node"      // params ContextNodeParams, result ContextNodeResult (sess in frame)
-	MethodSurfacesList  Method = "surfaces.list"     // result SurfacesResult (sess in frame)
-	MethodSurfaceGet    Method = "surface.get"       // params SurfaceGetParams, result SurfaceResult
-	MethodSurfaceAction Method = "surface.action"    // params SurfaceActionParams (sess in frame)
-	MethodI18nCatalog   Method = "i18n.catalog"      // params I18nCatalogParams, result I18nCatalogResult (session-independent)
+	MethodSessionsList  Method = "sessions.list"   // result SessionsResult
+	MethodSessionCreate Method = "sessions.create" // params CreateOpts, result SessionResult
+	MethodSessionResume Method = "sessions.resume" // result SessionResult (sess in frame)
+	MethodSessionRename Method = "sessions.rename" // params RenameParams (sess in frame)
+	// MethodSessionGenerateTitle regenerates sess's title from its transcript
+	// with a one-shot model call — the on-demand sibling of the automatic
+	// auto_title pass, and the backfill for old untitled sessions. BLOCKS on
+	// the model (same synchronous posture as compact). An explicit request
+	// overwrites whatever title exists, manual renames included.
+	MethodSessionGenerateTitle Method = "sessions.generate_title" // result GenerateTitleResult (sess in frame)
+	MethodSessionDelete        Method = "sessions.delete"         // no params (sess in frame)
+	MethodUsageGet             Method = "usage.get"               // result UsageResult (sess in frame)
+	MethodUsageSnapshot        Method = "usage.snapshot"          // params UsageSnapshotParams, result UsageSnapshotResult (sess in frame)
+	MethodResetsList           Method = "usage.resets.list"       // result ResetsListResult (sess in frame); read-only
+	MethodContextGet           Method = "context.get"             // result ContextResult (sess in frame)
+	MethodContextNode          Method = "context.node"            // params ContextNodeParams, result ContextNodeResult (sess in frame)
+	MethodSurfacesList         Method = "surfaces.list"           // result SurfacesResult (sess in frame)
+	MethodSurfaceGet           Method = "surface.get"             // params SurfaceGetParams, result SurfaceResult
+	MethodSurfaceAction        Method = "surface.action"          // params SurfaceActionParams (sess in frame)
+	MethodI18nCatalog          Method = "i18n.catalog"            // params I18nCatalogParams, result I18nCatalogResult (session-independent)
+	MethodFilesList            Method = "files.list"              // params FilesListParams, result FilesListResult (session-independent)
 
 	// Side chat: an ephemeral, tool-less completion against a FROZEN snapshot of
 	// a session, leaving no trace in its transcript. Backs the /btw overlay.
@@ -71,9 +78,9 @@ func (m Method) Group() Group {
 		MethodClear, MethodApprove, MethodAnswer, MethodSubscribe, MethodUnsubscribe:
 		return GroupConversation
 	case MethodSessionsList, MethodSessionCreate, MethodSessionResume,
-		MethodSessionRename, MethodSessionDelete, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
+		MethodSessionRename, MethodSessionGenerateTitle, MethodSessionDelete, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
 		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
-		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose:
+		MethodFilesList, MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite,
 		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume:
@@ -121,6 +128,13 @@ type RenameParams struct {
 	Title string `json:"title"`
 }
 
+// GenerateTitleResult is the result of [MethodSessionGenerateTitle]: the
+// generated (and already-persisted) title. The requesting client updates its
+// row from it; a live session's other clients converge via session_updated.
+type GenerateTitleResult struct {
+	Title string `json:"title"`
+}
+
 // ModelSwitchParams is the payload of [MethodModelSwitch]. Provider qualifies
 // Model (ids are not globally unique across providers); empty resolves across
 // all providers, preserving the old wire behavior.
@@ -161,6 +175,18 @@ type TrustParams struct {
 // tag, empty for the daemon's active language.
 type I18nCatalogParams struct {
 	Lang string `json:"lang,omitempty"`
+}
+
+// FilesListParams is the payload of [MethodFilesList]: list workspace files
+// for a client's @-file picker, walked daemon-side under the workspace's
+// working directory with the picker's usual semantics (gitignore filtering,
+// .git pruning, entry/depth caps). Dir selects a subdirectory in flat mode
+// ("" = the cwd itself; ".." escapes are rejected) and is ignored when
+// Recursive is set — a recursive listing always covers the whole tree.
+type FilesListParams struct {
+	Dir              string `json:"dir,omitempty"`
+	Recursive        bool   `json:"recursive,omitempty"`
+	RespectGitignore bool   `json:"respect_gitignore,omitempty"`
 }
 
 // --- command results ---
@@ -272,6 +298,21 @@ type SurfaceResult struct {
 // back to the English key. See [CatalogView].
 type I18nCatalogResult struct {
 	Catalog CatalogView `json:"catalog"`
+}
+
+// FileEntry is one listed file or directory in a [FilesListResult]. Path is
+// relative to the workspace's working directory, "/"-separated on the wire.
+type FileEntry struct {
+	Path string `json:"path"`
+	Dir  bool   `json:"dir,omitempty"`
+}
+
+// FilesListResult is the payload of a [MethodFilesList] response. Truncated
+// reports a recursive walk stopped at the entry/depth caps — the list is
+// still usable, just not exhaustive.
+type FilesListResult struct {
+	Files     []FileEntry `json:"files"`
+	Truncated bool        `json:"truncated,omitempty"`
 }
 
 // --- decision / answer wire forms ---

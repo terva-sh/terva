@@ -177,6 +177,16 @@ func (s *wsSession) surface(id string) (ctrlproto.Surface, error) {
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Usage"), Kind: "context", Context: &b}, nil
 	case "tasks":
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Tasks"), Kind: "tasks", Tasks: s.ws.taskList()}, nil
+	case "taskboard":
+		// The per-session task board (built-in task_* tools). Fetched by explicit
+		// id from the TUI's /tasks panel + status glance; deliberately not in
+		// surfaceList (no web tab yet), see workspace_taskboard.go. NotFound when
+		// the session has no board (chat/play/--no-tools) so the TUI can say
+		// "unavailable" rather than show an empty, never-populated panel.
+		if !s.hasTaskBoard() {
+			return ctrlproto.Surface{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "no task board in this session")
+		}
+		return ctrlproto.Surface{ID: id, Title: i18n.T("Tasks"), Kind: "taskboard", TaskBoard: taskBoardView(s.tasks)}, nil
 	case "raati":
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Raati"), Kind: "raati", Raati: s.ws.raatiView()}, nil
 	case "settings":

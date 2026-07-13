@@ -303,7 +303,7 @@ func (i *Interactive) keyCycleApprovalMode(_ context.Context, _ tui.Key) keyOutc
 		return keyPass
 	}
 	next := nextApprovalMode(core.ApprovalMode(i.approvalModeLabel()))
-	i.applyApprovalModeSetting(string(next))
+	i.applyApprovalMode(string(next))
 	// Optimistically advance the cached mode so a rapid second shift+tab
 	// computes from the value we just set, not a stale one: the carrier's
 	// surface_updated round-trip that normally refreshes the cache is async.

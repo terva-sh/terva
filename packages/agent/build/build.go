@@ -15,6 +15,9 @@ import (
 	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/agent/tools/tasks"
+	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
+	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -53,6 +56,10 @@ type Resolved struct {
 	ImageRegistry *imagegen.Registry
 
 	ToolRegistry core.Registry
+	// Tasks is the built-in task controller (nil in chat/play/--no-tools). The
+	// host wires its per-turn context card, its open-work gate, and its
+	// per-session store rebind.
+	Tasks        *tasktool.Controller
 	ToolSummary  []ToolSummary
 	SystemPrompt string
 	MaxSteps     int
@@ -79,6 +86,19 @@ type Resolved struct {
 	// extensions that must not be loaded at all. The host passes it to
 	// the extension manager via SetDisabledExtensions BEFORE discovery.
 	DisableExtensions []string
+
+	// LazyTools enables lazy tool visibility (retro H2·b) on the agent:
+	// NewAgent calls EnableLazyTools(LazyToolActive...) so only the core group
+	// plus the always-active groups are advertised, and the activate_tools tool
+	// is registered so the model can bring hidden groups in on demand. Off by
+	// default. From the user config (config.LazyTools).
+	LazyTools      bool
+	LazyToolActive []string
+
+	// EngineFeatures carries the config `engine_features` overrides to the
+	// NewAgent funnel, where every declared EngineFeature is applied (its
+	// default unless overridden here). From config.EngineFeatures.
+	EngineFeatures map[string]bool
 
 	// Trusted is the resolved Workspace Trust verdict for this launch's
 	// cwd (resolveTrust: --trust flag, then the store, else untrusted).
@@ -832,6 +852,45 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		append_ = append(append_, PromptSegment{Source: "swarm-child", Text: SwarmChildAddendum()})
 	}
 
+	// The task tools are a built-in coding-workflow capability, folded in from
+	// the former terva-tasks extension. Present exactly when the base coding
+	// tools are — chat/play/--no-tools drop it with them. The store reads its
+	// per-session board through a layered FS (the built-in's own dir over the old
+	// extension data dir), so boards written by terva-tasks migrate forward on
+	// their next write. A fresh controller per resolve is fine: Rebind reloads
+	// the board from disk, so it survives /model and /cd rebuilds.
+	var tasksCtrl *tasktool.Controller
+	if HasBaseWorkspaceTools(args) {
+		fs := tasks.NewLayeredFS(filepath.Join(home, "tasks"), filepath.Join(home, "ext-data", "tasks"))
+		tasksCtrl = tasktool.New(tasks.NewStore(fs, "agent"))
+		for _, t := range tasksCtrl.Tools() {
+			if len(args.Tools) > 0 {
+				allowed := false
+				for _, n := range args.Tools {
+					if n == t.Name() {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					continue
+				}
+			}
+			reg[t.Name()] = t
+		}
+		append_ = append(append_, PromptSegment{Source: "tasks", Text: tasksCtrl.Policy()})
+	}
+
+	// activate_tools lets the model bring a hidden capability group into the
+	// advertised set under lazy tool visibility (retro H2·b). It exists only when
+	// lazy mode is on — otherwise every group is already advertised and there is
+	// nothing to activate — and only with the base coding tools. Visibility only:
+	// it never grants authority (EnableLazyTools + the permission gate keep the
+	// full registry callable/gated), so it is classed read-only (no confirm).
+	if eff.Config.LazyTools && HasBaseWorkspaceTools(args) {
+		reg["activate_tools"] = &tools.ActivateToolsTool{}
+	}
+
 	// Custom system prompt resolution order:
 	//   1. --system-prompt flag (highest priority; ad-hoc per run)
 	//   2. $TERVA_HOME/SYSTEM.md (persistent user override)
@@ -945,6 +1004,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		VisionCapable:            visionCapable,
 		ImageRegistry:            imageReg,
 		ToolRegistry:             reg,
+		Tasks:                    tasksCtrl,
 		ToolSummary:              summaries,
 		SystemPrompt:             sys,
 		MaxSteps:                 max,
@@ -953,6 +1013,9 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		SkillTool:                skillTool,
 		DisableContextExtensions: eff.Config.DisableContextExtensions,
 		DisableExtensions:        eff.Config.DisableExtensions,
+		LazyTools:                eff.Config.LazyTools,
+		LazyToolActive:           eff.Config.LazyToolActive,
+		EngineFeatures:           eff.Config.EngineFeatures,
 		Trusted:                  trusted,
 		systemAppend:             append_,
 		SystemSegments:           sysSegs,
@@ -1209,11 +1272,31 @@ func (r Resolved) NewAgent() *core.Agent {
 	if st, ok := r.ToolRegistry["terva_status"].(*tools.StatusTool); ok {
 		st.Agent = a
 	}
+	// Same late-binding fallback for session_inspect's current-session default.
+	if si, ok := r.ToolRegistry["session_inspect"].(*tools.SessionInspectTool); ok {
+		si.Agent = a
+	}
 	// Bind the agent's transcript epoch into read so it can dedup re-reads
 	// of an unchanged file that is still in context (same late-binding —
 	// and same ctx-wins fallback semantics — as terva_status above).
 	if rt, ok := r.ToolRegistry["read"].(*tools.ReadTool); ok {
 		rt.Epoch = a
+	}
+	// Lazy tool visibility (retro H2·b): advertise only the core group plus the
+	// configured always-active groups; the model brings the rest in on demand
+	// with activate_tools (registered above). Every host funnels through here,
+	// so the opt-in is universal (TUI, web, acp, chat, swarm children).
+	if r.LazyTools {
+		a.EnableLazyTools(r.LazyToolActive...)
+	}
+	// Engine features (docs/proposals/activation-continuation.md stage 3):
+	// declared defaults overlaid with the config `engine_features` overrides.
+	// Applied unconditionally — a feature's own semantics decide when it
+	// matters (activation continuation is inert without lazy tools) — and at
+	// this funnel so every host and every headless run resolves identically.
+	// The workspace settings surface flips live agents through the same Apply.
+	for _, f := range EngineFeatures {
+		f.Apply(a, EngineFeatureOn(r.EngineFeatures, f))
 	}
 	// Lore's per-turn provider scans this run's triggered lore entries
 	// against recent messages each turn (nil when lore is off / has no
@@ -1223,6 +1306,45 @@ func (r Resolved) NewAgent() *core.Agent {
 	a.ContextProvider = r.PerTurnContext(a)
 	a.ContextProviderPeek = r.PerTurnContextPeek(a)
 	return a
+}
+
+// freshTasksRegistry clones r's tool registry with the task tools rebound to a
+// fresh, never-persisting controller. Both nil when r carries no task
+// controller (chat/play/--no-tools). Only tool names the resolve actually
+// registered are replaced, so a --tools allowlist that dropped some task tools
+// keeps them dropped in the clone.
+func (r Resolved) freshTasksRegistry() (core.Registry, *tasktool.Controller) {
+	if r.Tasks == nil {
+		return nil, nil
+	}
+	// Live-only by construction: a nil FileStore can never write, so even a
+	// stray Rebind cannot key this board to the owner's session file.
+	ctrl := tasktool.New(tasks.NewStore(nil, "agent"))
+	reg := make(core.Registry, len(r.ToolRegistry))
+	for name, t := range r.ToolRegistry {
+		reg[name] = t
+	}
+	for _, t := range ctrl.Tools() {
+		if _, ok := reg[t.Name()]; ok {
+			reg[t.Name()] = t
+		}
+	}
+	return reg, ctrl
+}
+
+// NewAgentWithFreshTasks constructs a per-conversation agent whose task tools
+// are bound to a fresh in-memory board instead of the shared r.Tasks — the
+// isolation seam for bot mode's admitted groups. r.Tasks stays bound to the
+// owner DM's durable session; the returned controller (nil when tasks are off)
+// is what the caller must wire into the agent's ephemeral card and open-work
+// gate, and it dies with the agent (group boards are live-only working state).
+func (r Resolved) NewAgentWithFreshTasks() (*core.Agent, *tasktool.Controller) {
+	reg, ctrl := r.freshTasksRegistry()
+	if ctrl == nil {
+		return r.NewAgent(), nil
+	}
+	r.ToolRegistry = reg // r is a value copy; the caller's Resolved keeps the shared registry
+	return r.NewAgent(), ctrl
 }
 
 // BuildToolRegistry assembles the built-in tool set. visionCapable is
@@ -1258,7 +1380,8 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 		"bash":              &tools.BashTool{CWD: cwd, Sandbox: sandbox, Env: map[string]string{"TERVA_HOME": config.TervaHome()}},
 		"grep":              &tools.GrepTool{CWD: cwd, Sandbox: sandbox},
 		"glob":              &tools.GlobTool{CWD: cwd, Sandbox: sandbox},
-		"terva_status":      &tools.StatusTool{Provider: provName, CWD: cwd, AuthMethod: authMethod, BaseURL: args.BaseURL},
+		"terva_status":      &tools.StatusTool{Provider: provName, CWD: cwd, AuthMethod: authMethod, BaseURL: args.BaseURL, Build: buildinfo.Get()},
+		"session_inspect":   &tools.SessionInspectTool{TervaHome: config.TervaHome(), CWD: cwd},
 		"ask_user_question": &tools.AskUserTool{},
 	}
 	// generate_image is opt-in and only useful with a backend, so it enters

@@ -15,6 +15,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -345,10 +346,14 @@ func TestExtConnectorConnectsDisconnectsReconnects(t *testing.T) {
 	if err := w.chatConnect("s1", name); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
+	chatDiag := func() string {
+		v := w.chatView()
+		return fmt.Sprintf("bridge state=%q err=%q user=%q", v.Bridge.State, v.Bridge.Error, v.Bridge.Username)
+	}
 	waitFor(t, "the connector extension to come up", func() bool {
 		v := w.chatView()
 		return v.Bridge.State == chatStateConnected && v.Bridge.Username == "e2e-bot"
-	})
+	}, chatDiag)
 
 	if err := w.chatDisconnect(); err != nil {
 		t.Fatalf("disconnect: %v", err)
@@ -362,7 +367,7 @@ func TestExtConnectorConnectsDisconnectsReconnects(t *testing.T) {
 	}
 	waitFor(t, "the second dial", func() bool {
 		return w.chatView().Bridge.State == chatStateConnected
-	})
+	}, chatDiag)
 	if err := w.chatDisconnect(); err != nil {
 		t.Fatalf("second disconnect: %v", err)
 	}

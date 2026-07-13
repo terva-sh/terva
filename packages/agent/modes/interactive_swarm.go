@@ -148,6 +148,14 @@ func (i *Interactive) flushSwarmSummary(batch []*swarmWatchEntry) {
 			sb.WriteString(i18n.P("swarm.summary.findings", "   findings: %s", truncateForSummary(findings, 1500)))
 			sb.WriteByte('\n')
 		}
+		// The retrieval handle for the findings the 1500-byte budget cut off:
+		// the agent id doubles as a session_inspect id (S1 — coordinators
+		// otherwise guess it is a project session id and hit "no such
+		// session"). Only when the child actually has a transcript.
+		if snap.SessionPath != "" {
+			sb.WriteString(i18n.P("swarm.summary.inspect", "   full transcript: session_inspect with session_id %q (it is a sub-agent id, not a project session; expand an event's #n for its complete text)", snap.ID))
+			sb.WriteByte('\n')
+		}
 		sb.WriteString("\n")
 	}
 	sb.WriteString(i18n.P("swarm.summary.instruction", "This is observed state from sub-agents you spawned, not a new user request. Briefly summarise the collective outcome for the user, referencing the agents by id. If any failed, suggest a follow-up; otherwise confirm completion. Do not spawn new sub-agents unless the user asks."))

@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:smoke": "playwright test",
     "i18n-extract": "node scripts/i18n-extract.mjs",
     "i18n-check": "node scripts/i18n-extract.mjs --check"
   },
@@ -19,6 +20,7 @@
     "preact": "^10.25.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@preact/preset-vite": "^2.10.1",
     "@testing-library/preact": "^3.2.4",
     "@types/markdown-it": "^14.1.2",

@@ -428,7 +428,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// Apply the subset of the non-interactive extension hooks that make sense
 	// under ACP: BeforeTurn / BeforeAssistantMessage (extension turn +
 	// assistant-message intercepts), ContextProvider (live context cards), and
-	// ContinueOnStop (re-prompt once on open work). We deliberately do NOT set
+	// the open-work continuation gate (re-prompt once on open work). We deliberately do NOT set
 	// ag.OnEvent here — the acp package owns that field for its session/update
 	// translator — and instead hand the event observer back so bindSession can
 	// COMPOSE it after the translator (see the returned observe func).
@@ -452,7 +452,8 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 			return true, "", res.ReplaceText
 		}
 		build.WireExtEphemeral(ag, extMgr.EphemeralContext)
-		ag.ContinueOnStop = continueOnOpenWork(extMgr)
+		build.WireTasksEphemeral(ag, r.Tasks)
+		ag.AddContinuationGate(build.OpenWorkGate(extMgr, r.Tasks))
 	}
 	// observe is the extension-side event sink: it fans every event out to the
 	// extensions and feeds the two tool events into the hook correlator —

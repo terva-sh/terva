@@ -48,6 +48,7 @@
   "swarm.summary.error": "   error: %s",
   "swarm.summary.findings": "   findings: %s",
   "swarm.summary.header": "[auto-swarm update] %d sub-agent(s) finished:",
+  "swarm.summary.inspect": "   full transcript: session_inspect with session_id %q (it is a sub-agent id, not a project session; expand an event's #n for its complete text)",
   "swarm.summary.instruction": "This is observed state from sub-agents you spawned, not a new user request. Briefly summarise the collective outcome for the user, referencing the agents by id. If any failed, suggest a follow-up; otherwise confirm completion. Do not spawn new sub-agents unless the user asks.",
   "swarm.summary.persona": "   persona: %s",
   "swarm.summary.task": "   task: %s",
@@ -62,5 +63,6 @@
   "system.identity.play": "You are %s, operating inside terva (pronounced TEHR-vah) — Finnish for pine tar, the preservative that kept boats whole; you are a mind it carries. You are present within a world that you perceive and act in through the tools available to you — treat them as your senses and your hands. Stay in character, and trust the tools as the source of truth about what is real.",
   "system.immersive.chat_framing": "This is a conversation: speak and act naturally and in character, as yourself.",
   "system.immersive.play_framing": "You are present within a world you perceive and act in through the tools available to you — treat them as your senses and your hands. Stay in character, and trust the tools as the source of truth about what is real.",
-  "system.status_tool_hint": "Call the terva_status tool (no arguments) to check your own runtime state — current model, provider, working directory, reasoning effort, and how full your context window is — for example to decide whether to summarise before the context fills. Its tool description lists every field it returns."
+  "system.status_tool_hint": "Call the terva_status tool (no arguments) to check your own runtime state — current model, provider, working directory, reasoning effort, and how full your context window is — for example to decide whether to summarise before the context fills. Its tool description lists every field it returns.",
+  "tools.lazy.inactive_groups": "[inactive tool groups] These capabilities are installed but their tool schemas are not loaded. Call activate_tools with a group name to load them; activation is visibility only — each tool still requires its normal permission when used:"
 }

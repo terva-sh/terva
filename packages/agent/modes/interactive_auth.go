@@ -411,4 +411,13 @@ func (i *Interactive) finishCarrierLogin(ev auth.Event) {
 	i.statusOK = i18n.T("logged in to %s via %s", ev.Provider, ev.Method)
 	i.mu.Unlock()
 	i.dialog.ShowResult(true, "")
+	// --resume on a credential-less boot: the picker deferred to the login
+	// dialog at startup; now that a session exists, arm it. The login dialog
+	// sits above the session browser in the overlay order, so the picker
+	// surfaces when the user dismisses the login result. One-shot: a later
+	// re-login must not reopen it.
+	if i.bootSessionsPending {
+		i.bootSessionsPending = false
+		i.openSessionsDialog()
+	}
 }

@@ -23,7 +23,9 @@ import (
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider/auth"
+	"terva.sh/terva/packages/relaunch"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -42,6 +44,16 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	// same session. Both are TTY-gated, ask-once no-ops otherwise.
 	args = maybePromptUserName(args)
 	maybeOfferCorePack(args)
+
+	// Self-restart (--allow-restart): enabled before the Workspace exists so
+	// session builds register the terva_restart tool; the /restart command
+	// and control.restart gate on it too. Unlike web mode there is no
+	// listener here, so the flag alone is the gate (no insecure-listener
+	// refusal to mirror). The TUI's pre-exec hook (terminal restore + session
+	// handoff) registers inside Interactive.Run, next to the state it saves.
+	if args.AllowRestart {
+		relaunch.Enable()
+	}
 
 	// A credential-less Workspace boots fine (only sessions hard-require a
 	// credential), so a first run lands in the TUI with the login dialog
@@ -80,40 +92,40 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		diagMu.Unlock()
 	})
 
-	// Session selection mirrors the legacy startup: --continue reopens the
-	// latest session for this cwd (the Workspace's empty-id resolution is
-	// exactly that, falling back to a fresh session when none exists);
-	// --resume runs the pre-TUI terminal picker; default is a fresh session.
+	// Session selection: --continue reopens the latest session for this cwd
+	// (the Workspace's empty-id resolution is exactly that, falling back to a
+	// fresh session when none exists); --resume boots the default fresh
+	// session and opens the in-TUI session picker over it
+	// (OpenSessionsOnBoot below) — Esc keeps the fresh session, a pick
+	// switches onto the chosen one. The pre-TUI stderr picker survives only
+	// in modes that never own the terminal (openOrCreateSession).
 	//
 	// On a credential-less boot the first session is DEFERRED until /login
-	// succeeds (sessions hard-require a credential). --resume's picker still
-	// runs now — it is a disk scan needing no credential and cannot run once
-	// the TUI owns the terminal — and the pick materializes post-login.
+	// succeeds (sessions hard-require a credential); --resume's picker opens
+	// after that first login lands (finishCarrierLogin).
 	needLogin := w.CredentialErr() != nil
 	var info ctrlproto.SessionInfo
-	var sessID, pendingResume string
-	if needLogin {
-		if args.Resume {
-			picked, perr := pickSession(args.CWD)
-			if perr != nil {
-				return perr
-			}
-			pendingResume = build.SessionIDFromPath(picked)
-		}
-	} else {
+	var sessID string
+	if !needLogin {
 		switch {
+		case relaunch.Handoff("SESSION") != "":
+			// Restarted in place (--allow-restart): reattach to the session
+			// the previous image was serving — whatever the original argv
+			// said — falling back to a fresh one if it went missing.
+			info, err = w.ResumeSession(ctx, relaunch.Handoff("SESSION"))
+			if err != nil {
+				info, err = w.CreateSession(ctx, ctrlproto.CreateOpts{})
+			}
+		case args.ResumeID != "":
+			// --resume <id>: direct resume, no picker. Fail loudly — a
+			// scripted resume that silently landed on a fresh session would
+			// be worse than an error.
+			info, err = w.ResumeSession(ctx, build.SessionIDFromPath(args.ResumeID))
+			if err != nil {
+				return fmt.Errorf("--resume %s: %w", args.ResumeID, err)
+			}
 		case args.Continue:
 			info, err = w.ResumeSession(ctx, "")
-		case args.Resume:
-			picked, perr := pickSession(args.CWD)
-			if perr != nil {
-				return perr
-			}
-			if picked == "" {
-				info, err = w.CreateSession(ctx, ctrlproto.CreateOpts{})
-			} else {
-				info, err = w.ResumeSession(ctx, build.SessionIDFromPath(picked))
-			}
 		default:
 			info, err = w.CreateSession(ctx, ctrlproto.CreateOpts{})
 		}
@@ -189,6 +201,14 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		}
 	}()
 
+	// After a self-restart resume, tell the operator what build hop happened —
+	// the pre-TUI stderr lines are wiped by the TUI's screen clear, so this
+	// rides the status line instead.
+	bootNotice := ""
+	if prev := relaunch.PrevVersion(); prev != "" {
+		bootNotice = i18n.T("restarted — was v%s, now v%s", prev, version)
+	}
+
 	term := tui.NewProcTerm()
 	// Forward-declared so the session-group closures below can re-point the
 	// running TUI (the legacy entry point uses the same pattern).
@@ -263,6 +283,7 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		CWD:              w.CWD(),
 		TervaHome:        config.TervaHome(),
 		Version:          version,
+		BootNotice:       bootNotice,
 		// A credential-less boot defers the first session until /login, so the
 		// prompt gate opens iff a credential resolved. This was `ag != nil`
 		// before the agent crutch went away; it means the same thing.
@@ -274,6 +295,7 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		// so the dashboard can't re-inject the coding skin there).
 		CarrierTasks:        build.HasBaseWorkspaceTools(args),
 		InitialInput:        args.Prompt,
+		OpenSessionsOnBoot:  args.Resume && args.ResumeID == "",
 		Trusted:             bootTrusted,
 		GatedContentPresent: config.HasGatedProjectContent(w.CWD()),
 
@@ -304,9 +326,11 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 			}
 			// First login on a credential-less boot: honor the launch-time
 			// session selection that was deferred until a credential existed.
+			// (Bare --resume needs no case here: it boots the default fresh
+			// session and finishCarrierLogin opens the picker over it.)
 			switch {
-			case pendingResume != "":
-				return w.ResumeSession(ctx, pendingResume)
+			case args.ResumeID != "":
+				return w.ResumeSession(ctx, build.SessionIDFromPath(args.ResumeID))
 			case args.Continue:
 				return w.ResumeSession(ctx, "")
 			default:
@@ -336,6 +360,9 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		},
 		RenameSessionFile: func(path, title string) error {
 			return w.RenameSession(ctx, build.SessionIDFromPath(path), title)
+		},
+		GenerateSessionTitle: func(path string) (string, error) {
+			return w.GenerateSessionTitle(ctx, build.SessionIDFromPath(path))
 		},
 		// The /sessions picker lists via the session group instead of its own
 		// disk scan — same store, but the service overlays live state (current

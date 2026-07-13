@@ -134,10 +134,11 @@ type Config struct {
 	// --swarm-worktrees flag overrides this for a single run.
 	SwarmWorktrees *bool `json:"swarm_worktrees,omitempty"`
 
-	// RecursiveFileSuggest controls the @-mention file picker. When true
-	// the picker fuzzy-searches the whole project tree below the working
-	// directory; nil/missing/false keeps the default directory-by-
-	// directory browse. Toggle from /settings.
+	// RecursiveFileSuggest controls the @-mention file picker. nil/missing
+	// or true fuzzy-searches the whole project tree below the working
+	// directory — the default, matching the web composer's @-stage; false
+	// opts back into directory-by-directory browsing. Toggle from
+	// /settings.
 	RecursiveFileSuggest *bool `json:"recursive_file_suggest,omitempty"`
 
 	// RespectGitignore controls whether the @-mention file picker hides
@@ -207,6 +208,28 @@ type Config struct {
 	// terva-tasks running), but can never re-enable one the user
 	// disabled. See docs/extensions.md.
 	DisableExtensions []string `json:"disable_extensions,omitempty"`
+
+	// LazyTools enables lazy tool visibility (retro H2·b): only the core group
+	// of built-in coding tools plus LazyToolActive groups are advertised to the
+	// model; every other extension/MCP group starts hidden (still callable and
+	// still permission-gated) and is offered through a one-line capability note,
+	// so the model brings a group in with activate_tools only when it needs it —
+	// trimming the tool schemas that otherwise fill context every turn. Off by
+	// default; a user-level preference (not project-overridable). See
+	// docs/proposals/lazy-tool-visibility.md.
+	LazyTools bool `json:"lazy_tools,omitempty"`
+
+	// LazyToolActive lists capability groups to advertise from the start when
+	// LazyTools is on (beyond the always-on core group), by extension name or
+	// "mcp:<server>". Everything else stays hidden until the model activates it.
+	LazyToolActive []string `json:"lazy_tool_active,omitempty"`
+
+	// EngineFeatures holds per-feature overrides for the runtime-toggleable
+	// loop behaviors build.EngineFeatures declares, keyed by feature id —
+	// e.g. {"activation_continuation": false}. An absent id means the
+	// feature's default (activation_continuation defaults ON). Managed by the
+	// settings surface; hand-editable here for headless runs.
+	EngineFeatures map[string]bool `json:"engine_features,omitempty"`
 
 	// Extensions holds per-extension configuration values, keyed by
 	// extension name and then by the config field keys the extension

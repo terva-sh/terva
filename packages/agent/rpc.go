@@ -113,8 +113,9 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// Inject extensions' live context cards into the model each turn (live
 	// provider + sizing twin; ext context before the tail so PHI stays last).
 	build.WireExtEphemeral(ag, extMgr.EphemeralContext)
-	// Re-prompt once at close if an extension flags open work.
-	ag.ContinueOnStop = continueOnOpenWork(extMgr)
+	build.WireTasksEphemeral(ag, r.Tasks)
+	// Re-prompt once at close if an extension flags open work or a task is open.
+	ag.AddContinuationGate(build.OpenWorkGate(extMgr, r.Tasks))
 
 	// /reload-ext hot-reload callback (also triggered via rpc
 	// `reload_ext` if/when added). Rebuilds the tool registry on the

@@ -15,7 +15,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -242,7 +241,7 @@ func raatiRun(args build.Args, o raatiOpts) error {
 		maxRounds = 3
 	}
 
-	eng := swarm.New(swarm.Config{Root: filepath.Join(config.TervaHome(), "swarm"), RepoRoot: r.CWD})
+	eng := swarm.New(swarm.Config{Root: swarm.DefaultRoot(config.TervaHome()), RepoRoot: r.CWD})
 	// Units are daemons; Convene dismisses its own seats, and this
 	// bounds the drain for anything a cancelled run left behind.
 	defer eng.StopAllAndWait(5 * time.Second)

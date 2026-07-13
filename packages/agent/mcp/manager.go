@@ -348,6 +348,12 @@ func (m *Manager) NewTool(info ToolInfo) *Tool { return &Tool{mgr: m, info: info
 
 func (t *Tool) Name() string        { return t.info.Name }
 func (t *Tool) Description() string { return t.info.Description }
+
+// Extension reports this tool's capability group for lazy tool visibility
+// (retro H2·b): "mcp:<server>", mirroring the label the build merge assigns
+// (build/wiring.go). It matches the accessor an extension tool exposes, so a
+// group classifier can treat MCP and extension tools uniformly by interface.
+func (t *Tool) Extension() string { return "mcp:" + t.info.Server }
 func (t *Tool) Schema() json.RawMessage {
 	if len(t.info.Schema) == 0 {
 		return json.RawMessage(`{"type":"object"}`)

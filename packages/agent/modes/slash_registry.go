@@ -63,9 +63,7 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		return false
 	},
 	"/sessions": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-		i.sessionDialog.Rename = i.cfg.RenameSessionFile
-		i.sessionDialog.List = i.cfg.ListSessions
-		i.sessionDialog.Open(i.cfg.TervaHome, i.cfg.CWD)
+		i.openSessionsDialog()
 		return false
 	},
 	"/session": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
@@ -107,6 +105,10 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 	},
 	"/lore": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 		i.slashLore()
+		return false
+	},
+	"/tasks": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.openTasksDialog()
 		return false
 	},
 
@@ -201,6 +203,11 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		return false
 	},
 
+	"/status": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.slashStatus()
+		return false
+	},
+	"/restart": (*Interactive).slashRestart,
 	"/settings": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 		i.openSettingsDialog()
 		return false
@@ -305,6 +312,25 @@ func isKnownSlashCommand(text string) bool {
 }
 
 // ---- handlers too large to inline in the table ----
+
+// slashRestart drives Tier-1 self-restart through the carrier's control verb —
+// the same control.restart the web panel's Restart button calls. The daemon
+// side answers with a clear error when the capability is off (no
+// --allow-restart), which lands on the status line. On success the pre-exec
+// hook (registered in Run) tears the terminal down and hands the session id
+// to the next image; there is nothing more to do here but tell the user.
+func (i *Interactive) slashRestart(_ context.Context, _ []string, _ string) bool {
+	if i.cfg.Carrier == nil {
+		i.setStatusErr(i18n.T("no workspace to restart"))
+		return false
+	}
+	if err := i.cfg.Carrier.Restart(context.Background()); err != nil {
+		i.setStatusErr(err.Error())
+		return false
+	}
+	i.setStatusOK(i18n.T("restarting…"))
+	return false
+}
 
 func (i *Interactive) slashHelp(context.Context, []string, string) bool {
 	i.mu.Lock()
