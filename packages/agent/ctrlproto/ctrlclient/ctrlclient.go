@@ -104,10 +104,42 @@ type Client struct {
 type subscription struct {
 	sess string
 	ch   chan ctrlproto.Event
-	once sync.Once
+
+	// mu orders send against close. Idempotence alone is not enough: the
+	// closers (ctx cancellation via Subscribe's AfterFunc, teardown) run on
+	// other goroutines than the read loop's fan-out, so a dispatcher holding
+	// a pointer it copied out of the registry could otherwise send on an
+	// already-closed channel and panic. Never taken while c.mu is held.
+	mu     sync.Mutex
+	closed bool
 }
 
-func (s *subscription) close() { s.once.Do(func() { close(s.ch) }) }
+func (s *subscription) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	close(s.ch)
+}
+
+// send offers ev to the subscriber. It reports false only when the buffer is
+// full — the overflow signal the caller turns into a close. A subscription
+// that is already closed reports true: it is gone, not behind.
+func (s *subscription) send(ev ctrlproto.Event) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return true
+	}
+	select {
+	case s.ch <- ev:
+		return true
+	default:
+		return false
+	}
+}
 
 // New builds a client. Run must be started for anything to connect.
 func New(opts Options) (*Client, error) {
@@ -239,9 +271,7 @@ func (c *Client) dispatchEvent(sess string, ev ctrlproto.Event) {
 	subs := append([]*subscription(nil), c.subs[sess]...)
 	c.mu.Unlock()
 	for _, s := range subs {
-		select {
-		case s.ch <- ev:
-		default:
+		if !s.send(ev) {
 			c.removeSub(s)
 			s.close()
 		}

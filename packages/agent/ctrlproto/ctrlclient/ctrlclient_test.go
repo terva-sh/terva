@@ -303,3 +303,42 @@ func TestCloseStopsReconnecting(t *testing.T) {
 		t.Fatalf("err = %v, want ErrClosed", err)
 	}
 }
+
+// A subscriber cancelled while the read loop is fanning out must not panic the
+// dispatcher. dispatchEvent copies the subscriber pointers out of the registry
+// and then sends without c.mu, while Subscribe's ctx AfterFunc closes the very
+// same channel from another goroutine — so send has to be ORDERED against
+// close, not merely idempotent. Before the per-subscription lock this panicked
+// with "send on closed channel", killing the whole terva attach process on an
+// ordinary /sessions switch during a live turn.
+func TestDispatchEventRacesSubscriptionClose(t *testing.T) {
+	for range 300 {
+		c := &Client{subs: map[string][]*subscription{}}
+		const n = 16
+		list := make([]*subscription, n)
+		for i := range list {
+			// Buffer 1 with 2 events in flight also exercises the overflow
+			// close path racing the cancellation close.
+			list[i] = &subscription{sess: "s", ch: make(chan ctrlproto.Event, 1)}
+		}
+		// The registry gets its own backing array: removeSub compacts in
+		// place, and the loop below must not be ranging over the same one.
+		c.subs["s"] = append([]*subscription(nil), list...)
+
+		var wg sync.WaitGroup
+		wg.Add(1 + n)
+		go func() {
+			defer wg.Done()
+			c.dispatchEvent("s", ctrlproto.Event{})
+			c.dispatchEvent("s", ctrlproto.Event{})
+		}()
+		for _, s := range list {
+			go func(s *subscription) {
+				defer wg.Done()
+				c.removeSub(s)
+				s.close() // what context.AfterFunc does on subscription ctx end
+			}(s)
+		}
+		wg.Wait()
+	}
+}
