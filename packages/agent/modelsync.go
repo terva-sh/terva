@@ -76,13 +76,30 @@ func LoadCompatModel() {
 	})
 }
 
-// compatDefaultContext returns the user's configured default context
-// window for the openai-compatible endpoint, or 32768 when unset.
+// unknownModelContext is the window assumed for a model nobody can describe:
+// the provider's /v1/models list names it, the baked catalog has never heard of
+// it, and no hint came back with it. Deliberately conservative — under-guessing
+// only makes terva compact earlier than it needs to, while over-guessing
+// overflows the model's real window and the request fails outright.
+//
+// It is a floor for the genuinely unknown, not a default for the merely
+// unlisted: a model in the baked catalog keeps its curated window (MergeCatalog
+// preserves it), so this is only reached by models missing from the catalog.
+// `just models-sync` reports exactly which those are.
+const unknownModelContext = 32768
+
+// compatDefaultContext returns the user's configured default context window for
+// THE openai-compatible endpoint, falling back to unknownModelContext.
+//
+// It applies to that provider only. It used to be handed to the opencode and
+// opencode-go discoveries as well, which meant a context window the user had
+// configured for their own local server — an LM Studio box, say — silently
+// became the assumed window for a completely unrelated hosted gateway's models.
 func compatDefaultContext() int {
 	if _, _, ctxWin := config.AuthStoreFor().Extras("openai-compatible"); ctxWin > 0 {
 		return ctxWin
 	}
-	return 32768
+	return unknownModelContext
 }
 
 // RefreshCompatModelsAsync discovers the openai-compatible endpoint's
@@ -256,7 +273,13 @@ func refreshModels(force bool) {
 		if err != nil {
 			continue
 		}
-		live, err := provider.DiscoverOpenAICompatible(ctx, oc.baseURL, cred, compatDefaultContext())
+		// unknownModelContext, not compatDefaultContext: these are hosted
+		// gateways, and the openai-compatible endpoint's configured window is
+		// the user's own local server's, which has nothing to do with them.
+		// Anything in the baked catalog keeps its curated window regardless —
+		// MergeCatalog preserves it — so this only lands on models the catalog
+		// is missing, which `just models-sync` reports.
+		live, err := provider.DiscoverOpenAICompatible(ctx, oc.baseURL, cred, unknownModelContext)
 		if err != nil {
 			continue
 		}
@@ -276,7 +299,10 @@ func refreshModels(force bool) {
 				continue
 			}
 			cred, _, _ := build.ResolveCredential(id, "")
-			defCtx := compatDefaultContext()
+			// This endpoint's own configured window, or the unknown floor —
+			// never the openai-compatible provider's, which belongs to a
+			// different server entirely.
+			defCtx := unknownModelContext
 			if ep.ContextWindow > 0 {
 				defCtx = ep.ContextWindow
 			}

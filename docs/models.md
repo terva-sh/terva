@@ -24,6 +24,35 @@ Use `/login` to store API keys or subscription credentials. `/model` only shows 
 - **Catalog**: models baked into terva, covering Claude, GPT/Codex, Gemini/Gemma, Kimi/Moonshot, DeepSeek, Groq-hosted Llama/Gemma/Compound, OpenRouter-routed models, Bedrock model ids, Vertex model ids, Azure OpenAI deployments, Copilot models, and other provider-specific catalog entries.
 - **Speculative**: IDs that appear in the upstream generator but aren't live on the public API yet. They'll 404 today and start working the moment the provider ships them.
 
+### Where context windows come from
+
+A provider's `/v1/models` says *which* models exist but not how big their
+context is — the OpenAI list schema carries only `{id, object, created,
+owned_by}`, no limits. So live discovery can name a model it has no numbers
+for, and a model the baked catalog has never heard of falls back to a
+conservative default. That is how a million-token model can end up budgeted
+as 32k, compacting a conversation that has barely started.
+
+The catalog is therefore the source of truth for limits and prices, and it is
+kept in step with [models.dev](https://models.dev) — the community catalog
+several of these gateways publish from — at **build time**, so the shipped
+binary needs no network to know how big a model's context is:
+
+```bash
+just models-check    # report drift; non-zero exit when the catalog is behind
+just models-sync     # apply it, then review the diff
+```
+
+The sync fills gaps rather than replacing wholesale: models.dev is not a
+superset of what every provider serves, and the catalog carries hand-curated
+limits for some models it has never heard of. Those are kept. Where both have
+a value and they disagree, the sync takes models.dev's — it tracks upstream, a
+hand-typed constant does not — and the diff is there to be reviewed.
+
+Models that *neither* source can describe are reported by name and left out of
+the catalog, so they fall back to the conservative default rather than a
+fabricated number. Give one a real window with a `models.json` entry (below).
+
 The full list is long, so `--list-models=FILTER` narrows it — the flow
 for finding the `--provider`/`--model` pair to pin a bot to:
 

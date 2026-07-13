@@ -272,6 +272,27 @@ fmt:
 tidy:
     go mod tidy
 
+# Reconcile the baked model catalog against models.dev and each provider's
+# live /v1/models list, then gofmt the result. Prints what it would change;
+# pass nothing to review, and commit the diff.
+#
+# A provider's /v1/models says WHICH models exist but not how big their
+# context is (the OpenAI list schema carries no limits), so a model the
+# catalog has never heard of falls back to a guessed window — which is how a
+# million-token model gets budgeted as 32k. This pulls the real numbers in at
+# build time, so the shipped binary needs no network to know them.
+#
+# NOT part of `ci`: it reaches the network, and the gate stays hermetic.
+# Run it when a provider ships new models, and before a release.
+models-sync:
+    go run ./cmd/terva-models-sync -write
+    gofmt -w packages/provider/catalog_builtin.go
+
+# Report catalog drift without touching anything. Exits non-zero when the
+# catalog is behind, so it can be run as a periodic check.
+models-check:
+    go run ./cmd/terva-models-sync
+
 # ACP run mode (behind -tags terva_acp): build/vet/test it. The default
 # build only compiles the no-tag stub, so `test` can't cover the real
 # package — this guards it from silent breakage.
