@@ -323,6 +323,12 @@ ci: lint test ci-acp ci-web
     # A shipped doc that links into docs/plans, docs/architecture, … resolves
     # here and 404s on the public mirror. Only a gate catches that.
     @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-links; fi
+    # An internal hostname or remote that reaches the public tree used to
+    # surface only at cut time — days after the commit that introduced it, and
+    # once at the cost of a whole release cycle over a URL in a test fixture.
+    # Build the public tree here and scrub it, so it fails on the commit that
+    # leaks it rather than on the release that would have shipped it.
+    @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-scrub; fi
 
 # Pre-release gate for a public cut: the full local CI, then the manual
 # reminders for what can only be verified on GitHub. The public release
