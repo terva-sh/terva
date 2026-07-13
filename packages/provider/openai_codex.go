@@ -466,9 +466,12 @@ func (c *codexClient) recordUsageHeaders(h http.Header) {
 //	x-codex-{primary,secondary}-{used-percent,window-minutes,reset-at}
 //	x-codex-credits-{has-credits,unlimited,balance}
 //
-// "primary" is the short (~5h) rolling window, "secondary" the ~weekly
-// one; labels are derived from window-minutes so they stay correct if
-// OpenAI changes the durations.
+// The slots are NOT fixed durations. "primary" was the short (~5h) rolling
+// window and "secondary" the ~weekly one right up until OpenAI lifted the
+// 5h limit (2026-07-12) and started reporting the weekly limit in the
+// primary slot with an empty secondary. So every label is derived from
+// window-minutes; the fallbacks below are a last resort for a window that
+// reports usage without a duration, not a claim about which slot is which.
 func parseCodexUsageHeaders(h http.Header) (UsageSnapshot, bool) {
 	var snap UsageSnapshot
 	if w, ok := parseCodexWindow(h, "primary", "5h"); ok {
@@ -498,6 +501,15 @@ func parseCodexWindow(h http.Header, key, fallbackLabel string) (UsageWindow, bo
 		w.WindowMinutes = v
 	}
 	w.ResetsAt = parseCodexResetAt(reset)
+	// An all-zero window is the backend saying "this limit is not in force",
+	// not "you have used none of it" — when OpenAI lifted the 5h limit it kept
+	// sending a bare `secondary-used-percent: 0` with no duration and no reset,
+	// and a window emitted from that renders as an empty second bar carrying
+	// its fallback label. A real window at 0% still has a duration to report,
+	// so it survives on window-minutes. (Same has_data rule as the Codex CLI.)
+	if w.UsedPercent <= 0 && w.WindowMinutes == 0 && w.ResetsAt.IsZero() {
+		return UsageWindow{}, false
+	}
 	w.Label = windowLabel(w.WindowMinutes, fallbackLabel)
 	return w, true
 }
@@ -551,29 +563,39 @@ func parseCodexResetAt(s string) time.Time {
 	return time.Time{}
 }
 
+// approxWindow reports whether minutes is within ±5% of want. The backend does
+// not send round durations — 299 and 10079 both turn up in the wild for what it
+// calls the 5-hour and weekly windows — so an exact-multiple test renders them
+// as "299m" and "10079m". This is the tolerance the Codex CLI itself uses.
+func approxWindow(minutes, want int) bool {
+	return float64(minutes) >= float64(want)*0.95 && float64(minutes) <= float64(want)*1.05
+}
+
 // windowLabel humanizes a window length for display, falling back to the
-// provided label when the duration is unknown.
+// provided label when the duration is unknown. A duration is named in the
+// largest unit it lands within tolerance of, so 299 and 300 both read "5h"
+// while a genuine 90-minute window still reads "90m" rather than rounding
+// itself up to a nonexistent 2h one.
 func windowLabel(minutes int, fallback string) string {
-	switch {
-	case minutes <= 0:
+	if minutes <= 0 {
 		return fallback
-	case minutes%10080 == 0:
-		if n := minutes / 10080; n == 1 {
-			return "weekly"
-		} else {
-			return fmt.Sprintf("%dw", n)
-		}
-	case minutes%1440 == 0:
-		if n := minutes / 1440; n == 1 {
-			return "daily"
-		} else {
-			return fmt.Sprintf("%dd", n)
-		}
-	case minutes%60 == 0:
-		return fmt.Sprintf("%dh", minutes/60)
-	default:
-		return fmt.Sprintf("%dm", minutes)
 	}
+	if n := (minutes + 10080/2) / 10080; n > 0 && approxWindow(minutes, n*10080) {
+		if n == 1 {
+			return "weekly"
+		}
+		return fmt.Sprintf("%dw", n)
+	}
+	if n := (minutes + 1440/2) / 1440; n > 0 && approxWindow(minutes, n*1440) {
+		if n == 1 {
+			return "daily"
+		}
+		return fmt.Sprintf("%dd", n)
+	}
+	if n := (minutes + 60/2) / 60; n > 0 && approxWindow(minutes, n*60) {
+		return fmt.Sprintf("%dh", n)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
 
 func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {

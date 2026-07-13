@@ -128,6 +128,81 @@ func TestParseCodexUsageHeaders(t *testing.T) {
 				}
 			},
 		},
+		{
+			// Captured verbatim from a live turn on 2026-07-13, the day after
+			// OpenAI lifted the Codex 5h limit: the weekly limit is reported in
+			// the PRIMARY slot and the secondary is an all-zero placeholder
+			// (percent 0, minutes 0, an empty reset-at). Emitting a window for
+			// that placeholder put a second, empty "weekly" bar — it has no
+			// duration to name itself by, so it fell back to its slot's label —
+			// under the real one.
+			name: "lifted 5h limit: the zeroed secondary is not a window",
+			headers: map[string]string{
+				"x-codex-primary-used-percent":                 "19",
+				"x-codex-primary-window-minutes":               "10080",
+				"x-codex-primary-reset-at":                     "1784488125",
+				"x-codex-primary-reset-after-seconds":          "533939",
+				"x-codex-secondary-used-percent":               "0",
+				"x-codex-secondary-window-minutes":             "0",
+				"x-codex-secondary-reset-at":                   "",
+				"x-codex-secondary-reset-after-seconds":        "0",
+				"x-codex-plan-type":                            "prolite",
+				"x-codex-active-limit":                         "premium",
+				"x-codex-primary-over-secondary-limit-percent": "0",
+			},
+			wantOK: true,
+			check: func(t *testing.T, s UsageSnapshot) {
+				if len(s.Windows) != 1 {
+					t.Fatalf("windows = %+v, want just the weekly one", s.Windows)
+				}
+				w := s.Windows[0]
+				if w.Label != "weekly" || w.UsedPercent != 19 || w.WindowMinutes != 10080 {
+					t.Errorf("window = %+v, want weekly at 19%%", w)
+				}
+				if !w.ResetsAt.Equal(time.Unix(1784488125, 0).UTC()) {
+					t.Errorf("reset = %v", w.ResetsAt)
+				}
+			},
+		},
+		{
+			// The backend also reports per-model limit families under their own
+			// prefix (x-codex-bengalfox-* is GPT-5.3-Codex-Spark's bucket, and
+			// the Codex CLI discovers them by scanning for *-primary-used-percent).
+			// We read only the account-wide `codex` family; a sibling family's
+			// headers must not leak into it — least of all bengalfox's idle 0%,
+			// which would resurrect the empty bar under a different name.
+			name: "a per-model limit family is not mistaken for the account's",
+			headers: map[string]string{
+				"x-codex-primary-used-percent":             "19",
+				"x-codex-primary-window-minutes":           "10080",
+				"x-codex-bengalfox-limit-name":             "GPT-5.3-Codex-Spark",
+				"x-codex-bengalfox-primary-used-percent":   "0",
+				"x-codex-bengalfox-primary-window-minutes": "10080",
+				"x-codex-bengalfox-primary-reset-at":       "1784558987",
+				"x-codex-bengalfox-secondary-used-percent": "0",
+			},
+			wantOK: true,
+			check: func(t *testing.T, s UsageSnapshot) {
+				if len(s.Windows) != 1 || s.Windows[0].UsedPercent != 19 {
+					t.Fatalf("windows = %+v, want only the account-wide weekly", s.Windows)
+				}
+			},
+		},
+		{
+			// …but a limit that is genuinely in force and merely unused still has
+			// a duration, so it keeps its bar. 0% is news; nothing at all is not.
+			name: "a real window at 0% survives",
+			headers: map[string]string{
+				"x-codex-secondary-used-percent":   "0",
+				"x-codex-secondary-window-minutes": "10080",
+			},
+			wantOK: true,
+			check: func(t *testing.T, s UsageSnapshot) {
+				if len(s.Windows) != 1 || s.Windows[0].UsedPercent != 0 || s.Windows[0].Label != "weekly" {
+					t.Fatalf("windows = %+v", s.Windows)
+				}
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,6 +235,16 @@ func TestWindowLabel(t *testing.T) {
 		{20160, "2w"},
 		{2880, "2d"},
 		{90, "90m"},
+		// The backend rounds: these are the durations it really sends for the
+		// windows it calls 5-hour and weekly. Exact-multiple matching rendered
+		// them "299m" and "10079m".
+		{299, "5h"},
+		{10079, "weekly"},
+		{1435, "daily"},
+		// …but tolerance is ±5%, so a duration that is genuinely its own thing
+		// is still named for what it is rather than rounded into a neighbour.
+		{330, "330m"},
+		{45, "45m"},
 	}
 	for _, tc := range cases {
 		if got := windowLabel(tc.minutes, "fallback"); got != tc.want {
