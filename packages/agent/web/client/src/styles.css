@@ -446,6 +446,16 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .pick-row:hover { background: var(--panel); }
 .pick-row.current { background: color-mix(in srgb, var(--user) 14%, var(--bg)); }
 .pick-star { background: none; border: none; cursor: pointer; font-size: 15px; color: var(--accent); padding: 0 2px; flex: none; }
+/* ◉ set-as-default, beside the ★. Muted until it IS the default, so the row
+   reads "starred / not" and "default / not" at a glance without two loud marks. */
+.pick-default { background: none; border: none; cursor: pointer; font-size: 13px; color: var(--muted); padding: 0 2px; flex: none; }
+.pick-default.on { color: var(--user); }
+/* The scope confirm, in the footer rather than under the row: a model shows up
+   in both the ★ group and its provider group, so an inline prompt would render
+   the same question twice. */
+.pick-promote { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--panel); }
+.pick-promote-q { min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-detail); color: var(--fg); }
+.pick-promote-btns { display: flex; gap: 6px; flex: none; }
 .pick-id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 13px; }
 .pick-meta { flex: none; font-size: 12px; color: var(--muted); }
 .pick-empty { padding: 20px 12px; color: var(--muted); text-align: center; }

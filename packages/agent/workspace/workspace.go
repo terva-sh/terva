@@ -831,12 +831,13 @@ func (w *Workspace) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) {
 	w.mu.Unlock()
 	authed := webLoggedInProviders()
 	favs := favoriteModelSet()
+	defProv, defModel, defScope := w.defaultModel()
 	var out []ctrlproto.ModelInfo
 	for _, m := range provider.Active() {
 		if !authed[m.Provider] {
 			continue
 		}
-		out = append(out, ctrlproto.ModelInfo{
+		info := ctrlproto.ModelInfo{
 			ID:            m.ID,
 			Provider:      m.Provider,
 			ContextWindow: m.ContextWindow,
@@ -844,7 +845,11 @@ func (w *Workspace) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) {
 			Reasoning:     m.Reasoning,
 			Current:       m.ID == curModel && m.Provider == curProv,
 			Favorite:      favs[favModelKey(m.Provider, m.ID)],
-		})
+		}
+		if m.ID == defModel && m.Provider == defProv {
+			info.Default, info.DefaultScope = true, defScope
+		}
+		out = append(out, info)
 	}
 	return out, nil
 }
@@ -871,6 +876,54 @@ func (w *Workspace) SetFavoriteModel(ctx context.Context, provider, model string
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 	}
 	return nil
+}
+
+// SetDefaultModel persists provider+model as the default for NEW sessions. It
+// deliberately leaves every live session alone — SwitchModel is the live one,
+// and trying a model is not the same as adopting it.
+//
+// This is the wire half of the TUI model picker's ctrl+d, and it is the reason
+// that logic lives here rather than in the TUI's config closure: an attach-mode
+// TUI is a ctrlproto client, so before this existed its ctrl+d had nowhere to
+// land and did nothing.
+func (w *Workspace) SetDefaultModel(ctx context.Context, provider, model string, scope ctrlproto.DefaultScope) error {
+	if provider == "" || model == "" {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "provider and model are both required")
+	}
+	switch scope {
+	case ctrlproto.ScopeGlobal:
+		if err := config.MutateConfig(func(c *config.Config) {
+			c.Provider, c.Model = provider, model
+		}); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case ctrlproto.ScopeProject:
+		if err := config.SetProjectModel(w.CWD(), provider, model); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save project config: %v", err)
+		}
+	default:
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown model-default scope %q", scope)
+	}
+	return nil
+}
+
+// defaultModel reports which model new sessions start on, and which scope said
+// so. A project default shadows the global one — the same precedence config
+// resolution applies — and it only counts while the workspace is trusted, so an
+// untrusted project default is not advertised as in force when it is not.
+func (w *Workspace) defaultModel() (provider, model string, scope ctrlproto.DefaultScope) {
+	if w.Trusted() {
+		// LoadProjectConfig returns (nil, nil) when the workspace has no project
+		// config at all — the common case, and not an error.
+		if pc, err := config.LoadProjectConfig(w.CWD()); err == nil && pc != nil && pc.Provider != "" && pc.Model != "" {
+			return pc.Provider, pc.Model, ctrlproto.ScopeProject
+		}
+	}
+	cfg, _ := config.LoadConfig()
+	if cfg.Provider == "" || cfg.Model == "" {
+		return "", "", ""
+	}
+	return cfg.Provider, cfg.Model, ctrlproto.ScopeGlobal
 }
 
 // Trust grants Workspace Trust to the workspace's cwd (parent = trust

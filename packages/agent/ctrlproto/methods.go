@@ -56,9 +56,14 @@ const (
 	MethodModelsList    Method = "models.list"     // result ModelsResult
 	MethodModelSwitch   Method = "models.switch"   // params ModelSwitchParams (sess in frame)
 	MethodModelFavorite Method = "models.favorite" // params FavoriteParams
-	MethodTrust         Method = "control.trust"   // params TrustParams; grant Workspace Trust to cwd
-	MethodUntrust       Method = "control.untrust" // no params; revoke Workspace Trust for cwd
-	MethodRestart       Method = "control.restart" // no params; re-execs the daemon (Tier-1 self-restart)
+	// MethodModelSetDefault persists a model as the default for NEW sessions.
+	// Distinct from MethodModelSwitch, which changes one live session and
+	// touches no config: this writes to disk and outlives the daemon, which is
+	// why it sits in the control group rather than the session one.
+	MethodModelSetDefault Method = "models.set_default" // params SetDefaultParams
+	MethodTrust           Method = "control.trust"      // params TrustParams; grant Workspace Trust to cwd
+	MethodUntrust         Method = "control.untrust"    // no params; revoke Workspace Trust for cwd
+	MethodRestart         Method = "control.restart"    // no params; re-execs the daemon (Tier-1 self-restart)
 	// MethodResetsConsume redeems a usage-reset credit — irreversible and spends
 	// a scarce provider grant, so it sits in the control group (categorically
 	// higher authority than the read-only usage.resets.list in the session
@@ -82,7 +87,7 @@ func (m Method) Group() Group {
 		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
 		MethodFilesList, MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose:
 		return GroupSession
-	case MethodModelsList, MethodModelSwitch, MethodModelFavorite,
+	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault,
 		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume:
 		return GroupControl
 	case MethodReplayControl, MethodReplayState:
@@ -162,6 +167,26 @@ type FavoriteParams struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	On       bool   `json:"on"`
+}
+
+// DefaultScope is where a model default is written — the two scopes the TUI's
+// model picker offers under ctrl+d.
+type DefaultScope string
+
+const (
+	// ScopeGlobal writes provider+model to the user's config: the default
+	// everywhere, for every workspace.
+	ScopeGlobal DefaultScope = "global"
+	// ScopeProject writes them to the workspace's project config, which only
+	// takes effect while that workspace is trusted.
+	ScopeProject DefaultScope = "project"
+)
+
+// SetDefaultParams is the payload of [MethodModelSetDefault].
+type SetDefaultParams struct {
+	Provider string       `json:"provider"`
+	Model    string       `json:"model"`
+	Scope    DefaultScope `json:"scope"`
 }
 
 // TrustParams is the payload of [MethodTrust]: Parent also trusts descendant

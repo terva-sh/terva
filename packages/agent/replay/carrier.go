@@ -456,6 +456,9 @@ func (c *Carrier) SwitchModel(ctx context.Context, sess, providerName, modelID s
 func (c *Carrier) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {
 	return unsupported("favorite model")
 }
+func (c *Carrier) SetDefaultModel(ctx context.Context, provider, model string, scope ctrlproto.DefaultScope) error {
+	return unsupported("set default model")
+}
 func (c *Carrier) Trust(ctx context.Context, parent bool) error { return unsupported("trust") }
 func (c *Carrier) Untrust(ctx context.Context) error            { return unsupported("untrust") }
 func (c *Carrier) Restart(ctx context.Context) error            { return unsupported("restart") }

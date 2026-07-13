@@ -277,6 +277,13 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			return
 		}
 		s.respond(f.ID, nil, s.svc.SetFavoriteModel(ctx, p.Provider, p.Model, p.On))
+	case MethodModelSetDefault:
+		var p SetDefaultParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, s.svc.SetDefaultModel(ctx, p.Provider, p.Model, p.Scope))
 	case MethodTrust:
 		var p TrustParams
 		if err := f.Bind(&p); err != nil {

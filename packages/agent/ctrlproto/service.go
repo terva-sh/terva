@@ -211,6 +211,12 @@ type WorkspaceService interface {
 	// favorites view), persisted to config.
 	SetFavoriteModel(ctx context.Context, provider, model string, on bool) error
 
+	// SetDefaultModel persists a model as the default for NEW sessions, in the
+	// given scope. It does not touch any live session — SwitchModel does that,
+	// and the two are deliberately separate: a user may well want to try a
+	// model here without adopting it everywhere.
+	SetDefaultModel(ctx context.Context, provider, model string, scope DefaultScope) error
+
 	// Trust grants Workspace Trust to the workspace's cwd, persisting the
 	// verdict (parent = trust descendant directories too) and bringing project
 	// content (extensions, lore, project permission rules) live for every open
@@ -864,4 +870,10 @@ type ModelInfo struct {
 	Reasoning     bool   `json:"reasoning,omitempty"`
 	Current       bool   `json:"current,omitempty"`
 	Favorite      bool   `json:"favorite,omitempty"` // pinned by the user (the ★ favorites view)
+	// Default marks the model new sessions start on, and DefaultScope says
+	// where that came from — "global" (the user's config) or "project" (this
+	// workspace's, which only applies while it is trusted). A project default
+	// shadows the global one, so at most one model carries Default.
+	Default      bool         `json:"default,omitempty"`
+	DefaultScope DefaultScope `json:"default_scope,omitempty"`
 }

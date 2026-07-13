@@ -205,6 +205,12 @@ func (s *Service) SetFavoriteModel(ctx context.Context, provider, model string, 
 	}, nil)
 }
 
+func (s *Service) SetDefaultModel(ctx context.Context, provider, model string, scope ctrlproto.DefaultScope) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodModelSetDefault, ctrlproto.SetDefaultParams{
+		Provider: provider, Model: model, Scope: scope,
+	}, nil)
+}
+
 func (s *Service) Trust(ctx context.Context, parent bool) error {
 	return s.c.Call(ctx, "", ctrlproto.MethodTrust, ctrlproto.TrustParams{Parent: parent}, nil)
 }

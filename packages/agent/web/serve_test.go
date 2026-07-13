@@ -549,6 +549,9 @@ func (f *fakeWS) SwitchModel(ctx context.Context, sess, providerName, modelID st
 func (f *fakeWS) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {
 	return nil
 }
+func (f *fakeWS) SetDefaultModel(ctx context.Context, provider, model string, scope ctrlproto.DefaultScope) error {
+	return nil
+}
 func (f *fakeWS) Trust(ctx context.Context, parent bool) error { return nil }
 func (f *fakeWS) Untrust(ctx context.Context) error            { return nil }
 func (f *fakeWS) Restart(ctx context.Context) error            { return nil }

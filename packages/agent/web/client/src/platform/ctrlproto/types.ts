@@ -66,6 +66,10 @@ export interface ModelInfo {
   reasoning?: boolean
   current?: boolean
   favorite?: boolean
+  // default marks the model NEW sessions start on — not the one this session is
+  // on (that is `current`, and the two are deliberately allowed to differ).
+  default?: boolean
+  default_scope?: 'global' | 'project'
 }
 
 export interface PermissionRequest {

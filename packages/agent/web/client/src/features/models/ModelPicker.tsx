@@ -4,13 +4,16 @@ import type { ModelInfo } from '../../platform/ctrlproto/types'
 import { humanCount } from '../../ui/formatting'
 
 // ModelPicker is the searchable model switcher: a filter box over favorites +
-// per-provider groups, each row a click-to-switch with its own ★ toggle.
+// per-provider groups, each row a click-to-switch with its own ★ toggle and a
+// ◉ set-as-default toggle (the TUI picker's ctrl+d, which arms the same
+// project/global choice).
 export function ModelPicker({
   groups,
   favorites,
   current,
   onSwitch,
   onToggleFavorite,
+  onSetDefault,
   onClose,
 }: {
   groups: [string, ModelInfo[]][]
@@ -18,9 +21,16 @@ export function ModelPicker({
   current?: string
   onSwitch: (id: string, provider?: string) => void
   onToggleFavorite: (provider: string, id: string, on: boolean) => void
+  onSetDefault: (provider: string, id: string, scope: 'global' | 'project') => void
   onClose: () => void
 }) {
   const [q, setQ] = useState('')
+  // The model whose scope prompt is armed, mirroring the TUI's two-key confirm:
+  // choosing a default is a persistent, cross-session write, so it does not
+  // happen on a single tap. Held as a key, and the prompt renders once in the
+  // footer — a model appears in both the ★ group and its provider group, so an
+  // inline prompt would render twice for the same choice.
+  const [promoting, setPromoting] = useState<ModelInfo | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   useEffect(() => searchRef.current?.focus(), [])
   const needle = q.trim().toLowerCase()
@@ -46,6 +56,22 @@ export function ModelPicker({
         }}
       >
         {model.favorite ? '★' : '☆'}
+      </button>
+      <button
+        class={`pick-default${model.default ? ' on' : ''}`}
+        title={
+          model.default
+            ? model.default_scope === 'project'
+              ? t('Default for new sessions (this project)')
+              : t('Default for new sessions (everywhere)')
+            : t('Set as default for new sessions')
+        }
+        onClick={(event) => {
+          event.stopPropagation()
+          setPromoting(model)
+        }}
+      >
+        {model.default ? '◉' : '○'}
       </button>
       <span class="pick-id">{model.id}</span>
       <span class="pick-meta">
@@ -79,6 +105,35 @@ export function ModelPicker({
             <div class="pick-empty">{t('no models match “%s”', q)}</div>
           )}
         </div>
+        {promoting && (
+          <div class="pick-promote">
+            <span class="pick-promote-q">{t('set “%s” as the default for new sessions:', promoting.id)}</span>
+            <div class="pick-promote-btns">
+              <button
+                class="btn sm primary"
+                onClick={() => {
+                  onSetDefault(promoting.provider, promoting.id, 'global')
+                  setPromoting(null)
+                }}
+              >
+                {t('Everywhere')}
+              </button>
+              <button
+                class="btn sm"
+                title={t('Only in this workspace, and only while it is trusted')}
+                onClick={() => {
+                  onSetDefault(promoting.provider, promoting.id, 'project')
+                  setPromoting(null)
+                }}
+              >
+                {t('This project')}
+              </button>
+              <button class="btn sm" onClick={() => setPromoting(null)}>
+                {t('Cancel')}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

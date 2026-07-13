@@ -186,6 +186,30 @@ export function App() {
     [reloadModels],
   )
 
+  // Adopt a model as the default for NEW sessions. Session-independent (''),
+  // like models.favorite — and deliberately NOT a switch: this session stays on
+  // whatever it was on, because trying a model and adopting it are different
+  // decisions. The daemon confirms by re-listing, so the ◉ moves only once the
+  // write actually landed.
+  const setDefaultModel = useCallback(
+    async (provider: string, id: string, scope: 'global' | 'project') => {
+      const c = clientRef.current
+      if (!c) return
+      try {
+        await c.send('models.set_default', { provider, model: id, scope }, '')
+        await reloadModels()
+        setToast(
+          scope === 'project'
+            ? t('%s is the default for this project', id)
+            : t('%s is the default for new sessions', id),
+        )
+      } catch (e) {
+        setToast(String(e))
+      }
+    },
+    [reloadModels],
+  )
+
   const refreshSessions = useCallback(async (c: Client): Promise<SessionInfo[]> => {
     try {
       const res = await c.send<{ sessions: SessionInfo[] }>('sessions.list', null, '')
@@ -798,6 +822,7 @@ export function App() {
             setPickerOpen(false)
           }}
           onToggleFavorite={favoriteModel}
+          onSetDefault={setDefaultModel}
           onClose={() => setPickerOpen(false)}
         />
       )}

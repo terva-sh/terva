@@ -491,10 +491,11 @@ func (c *memConn) Close() error {
 
 // fakeSvc is a minimal WorkspaceService for transport tests.
 type fakeSvc struct {
-	mu        sync.Mutex
-	subs      map[string][]chan Event
-	approvals []string
-	answers   []string
+	mu           sync.Mutex
+	subs         map[string][]chan Event
+	approvals    []string
+	answers      []string
+	defaultModel string // "provider/model@scope", set by SetDefaultModel
 }
 
 func newFakeSvc() *fakeSvc { return &fakeSvc{subs: map[string][]chan Event{}} }
@@ -633,6 +634,10 @@ func (f *fakeSvc) SwitchModel(ctx context.Context, sess, providerName, modelID s
 	return nil
 }
 func (f *fakeSvc) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {
+	return nil
+}
+func (f *fakeSvc) SetDefaultModel(ctx context.Context, provider, model string, scope DefaultScope) error {
+	f.defaultModel = provider + "/" + model + "@" + string(scope)
 	return nil
 }
 func (f *fakeSvc) Trust(ctx context.Context, parent bool) error { return nil }

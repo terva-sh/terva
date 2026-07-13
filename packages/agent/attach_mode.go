@@ -399,6 +399,13 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 			}
 			return svc.SetFavoriteModel(ctx, prov, model, on)
 		},
+		// The picker's ctrl+d was dead in attach mode until models.set_default
+		// existed: the promote logic lived in the local carrier's config closure,
+		// which a ctrlproto client never builds. It now lands on the daemon,
+		// which is the process whose config actually governs new sessions.
+		PromoteModelDefault: func(providerName, model, scope string) error {
+			return svc.SetDefaultModel(ctx, providerName, model, ctrlproto.DefaultScope(scope))
+		},
 		TrustWorkspace:   func(parent bool) error { return svc.Trust(ctx, parent) },
 		UntrustWorkspace: func() error { return svc.Untrust(ctx) },
 	})

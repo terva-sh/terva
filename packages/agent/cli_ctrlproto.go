@@ -415,17 +415,7 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 			return w.SetFavoriteModel(ctx, prov, model, on)
 		},
 		PromoteModelDefault: func(providerName, model, scope string) error {
-			switch scope {
-			case "project":
-				return config.SetProjectModel(w.CWD(), providerName, model)
-			case "global":
-				cfg, _ := config.LoadConfig()
-				cfg.Provider = providerName
-				cfg.Model = model
-				return config.SaveConfig(cfg)
-			default:
-				return fmt.Errorf("unknown model-default scope %q", scope)
-			}
+			return w.SetDefaultModel(ctx, providerName, model, ctrlproto.DefaultScope(scope))
 		},
 		TrustWorkspace: func(parent bool) error {
 			return w.Trust(ctx, parent)
