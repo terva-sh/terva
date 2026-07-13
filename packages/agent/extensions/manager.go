@@ -282,6 +282,26 @@ func (m *Manager) searchDirs() []string {
 	return dirs
 }
 
+// reservedExtensionName rejects identifiers that would collide with the tool
+// capability-group namespace (lazy tool visibility, retro H2·b). An extension
+// tool's group IS its extension name (core.ToolGroup via the Extension()
+// accessor), so an extension named "core" would land in the always-visible
+// built-in group — bypassing lazy hiding — and an "mcp:"-prefixed name would
+// share an activation group and /context attribution with a real MCP server.
+// No authority is at stake (permissions are per-tool), but visibility and
+// attribution must stay unambiguous. The literals mirror core.CoreToolGroup
+// and the MCP group prefix; this package deliberately does not import core
+// (TestExtensionsDependencyBoundary), so a lockstep test pins them instead.
+func reservedExtensionName(name string) string {
+	if name == "core" {
+		return "it names the always-visible built-in tool group"
+	}
+	if strings.HasPrefix(name, "mcp:") {
+		return `the "mcp:" prefix names MCP server tool groups`
+	}
+	return ""
+}
+
 // isPlainExtensionName reports whether name is a single, safe path element to
 // join under the global extensions root. adopt_extensions comes from the
 // project's (untrusted) config, so a crafted "../../evil" or "/abs/path" must
@@ -325,6 +345,9 @@ func (m *Manager) loadOne(ctx context.Context, dir string, explicit bool) error 
 		// host-created paths escape their intended directory, so reject it
 		// with the same plain-element rule adopt-list names must satisfy.
 		return fmt.Errorf("manifest: name %q must be a plain identifier (no path separators, %q, %q, or absolute paths)", mf.Name, ".", "..")
+	}
+	if why := reservedExtensionName(mf.Name); why != "" {
+		return fmt.Errorf("manifest: name %q is reserved: %s", mf.Name, why)
 	}
 	hasTheme := hasExtensionTheme(dir)
 	if mf.Exec == "" && !hasTheme {

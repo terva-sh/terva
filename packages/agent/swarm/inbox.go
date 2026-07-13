@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // InboxMsg is one supervisor→agent control message. The wire form is
@@ -220,7 +222,7 @@ type Listener struct {
 // previous run: we unlink first, mirroring how most unix daemons
 // behave.
 func Listen(path string) (*Listener, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("inbox dir: %w", err)
 	}
 	// Best-effort cleanup of a stale socket. If the parent

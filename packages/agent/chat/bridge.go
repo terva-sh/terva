@@ -5,9 +5,27 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"terva.sh/terva/packages/provider"
 )
+
+// bridgePhase is the bridge's lifecycle state. Start claims idle→starting under
+// the lock BEFORE dialing, so two concurrent Starts can't both call Connect; the
+// receive goroutine (not Stop) drives the return to idle, so the connector slot
+// the loop holds is only surrendered once Receive has actually returned.
+type bridgePhase int32
+
+const (
+	phaseIdle bridgePhase = iota
+	phaseStarting
+	phaseRunning
+	phaseStopping
+)
+
+// defaultStopTimeout bounds Stop's join on the receive loop (and a restart's
+// wait for a prior teardown) when the bridge sets no stopTimeout of its own.
+const defaultStopTimeout = 10 * time.Second
 
 // Host is the small interface the Bridge calls back into the TUI
 // through. Decouples bridge plumbing from the Interactive type.
@@ -53,12 +71,29 @@ type Bridge struct {
 	HelpText   string
 	PairedText string
 
-	mu       sync.Mutex
-	running  bool
-	cancel   context.CancelFunc
+	mu    sync.Mutex
+	phase bridgePhase
+	// cancel ends the current lifetime's context; set when a Start claims the
+	// slot (phaseStarting), cleared when the loop settles back to idle.
+	cancel context.CancelFunc
+	// done closes when the receive goroutine exits AND the bridge has returned
+	// to phaseIdle; Stop joins on it so "Stop returned" means "the connector is
+	// released", and a restart joins on it so a reconnect never overlaps a
+	// still-draining receiver. For a connector extension the receive loop's exit
+	// is what closes the driver's one-chat-session tunnel slot — an async Stop
+	// let an immediate reconnect race that teardown and be refused with "a chat
+	// session is already open on this extension" (the CI flake behind #62/#63's
+	// deadline raises: no deadline fixes a dial that already failed).
+	done     chan struct{}
 	identity Identity
 	chatID   string // populated after first DM from the paired user
 	gate     *gate
+
+	// stopTimeout bounds both Stop's join on the receive loop and a restart's
+	// wait for a prior teardown to release the slot; 0 uses defaultStopTimeout.
+	// A wedge guard, not a deadline on Receive: a hung handle() must not hang a
+	// daemon shutdown; the slot frees whenever the loop finally exits.
+	stopTimeout time.Duration
 
 	// nextReplyFromChat is set when the next assistant reply was
 	// initiated by a chat message rather than typed in the TUI.
@@ -82,7 +117,7 @@ func (b *Bridge) Active() bool {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.running
+	return b.phase == phaseRunning
 }
 
 // State returns a snapshot of the bridge for status displays.
@@ -98,23 +133,88 @@ func (b *Bridge) State() BridgeState {
 		pid = b.gate.pairing.AllowedUserID
 		b.gate.mu.Unlock()
 	}
-	return BridgeState{Running: b.running, Username: b.identity.Username, PairedID: pid}
+	return BridgeState{Running: b.phase == phaseRunning, Username: b.identity.Username, PairedID: pid}
 }
 
-// Start connects and begins receiving. Idempotent: calling twice
-// returns nil the second time and leaves the existing loop alone.
+// stopWait is the bounded budget Stop (and a restart's Start) waits on the
+// receive loop before giving up as a wedge guard.
+func (b *Bridge) stopWait() time.Duration {
+	if b.stopTimeout > 0 {
+		return b.stopTimeout
+	}
+	return defaultStopTimeout
+}
+
+// settleIdle returns the bridge to idle when a lifetime ends — the receive loop
+// exited, or a start failed / was preempted before the loop launched — and wakes
+// everyone joined on done (a Stop, or a restart waiting out the teardown).
+func (b *Bridge) settleIdle(done chan struct{}) {
+	b.mu.Lock()
+	b.phase = phaseIdle
+	b.cancel = nil
+	if b.done == done {
+		b.done = nil
+	}
+	b.mu.Unlock()
+	close(done)
+}
+
+// joinDone waits (bounded) for the receive loop to release the connector. On
+// timeout it warns and returns — the wedge guard — leaving the loop to free the
+// slot when it finally exits.
+func (b *Bridge) joinDone(done chan struct{}) {
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(b.stopWait()):
+		if b.Host != nil {
+			b.Host.Notify("warn", fmt.Sprintf("%s: receive loop still draining after Stop; its session slot frees when it exits", b.Connector.Name()))
+		}
+	}
+}
+
+// Start connects and begins receiving. Idempotent: a second call while starting
+// or running returns nil and never dials a second connector session. A call
+// while a prior Stop is still draining waits (bounded) for the slot to free
+// before reconnecting, so a restart never overlaps a still-live receiver.
 func (b *Bridge) Start(parent context.Context) error {
 	b.mu.Lock()
-	if b.running {
+	// A prior lifetime still tearing down: wait for its receive loop to release
+	// the connector before claiming the slot, so a reconnect never overlaps a
+	// still-draining receiver (old inbound entering a new lifetime; for a
+	// connector extension, the one-chat-session slot refused).
+	for b.phase == phaseStopping {
+		done := b.done
+		b.mu.Unlock()
+		if done != nil {
+			select {
+			case <-done:
+			case <-time.After(b.stopWait()):
+				return fmt.Errorf("%s bridge: previous session still draining; retry", b.Connector.Name())
+			}
+		}
+		b.mu.Lock()
+	}
+	if b.phase != phaseIdle {
+		// Already starting or running: idempotent, and — crucially — never a
+		// second Connect. Concurrent Starts serialize here; the first claims
+		// phaseStarting under the lock, the rest return without dialing.
 		b.mu.Unlock()
 		return nil
 	}
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	b.phase = phaseStarting
+	b.cancel = cancel
+	b.done = done
 	b.mu.Unlock()
 
-	ctx, cancel := context.WithCancel(parent)
 	id, err := b.Connector.Connect(ctx)
 	if err != nil {
 		cancel()
+		b.settleIdle(done)
 		return err
 	}
 
@@ -128,8 +228,16 @@ func (b *Bridge) Start(parent context.Context) error {
 	}
 
 	b.mu.Lock()
-	b.running = true
-	b.cancel = cancel
+	if b.phase != phaseStarting {
+		// A Stop arrived while Connect was in flight and moved us to
+		// phaseStopping. No receive loop launched, so release here; the Stop
+		// joined on done returns with the slot free.
+		b.mu.Unlock()
+		cancel()
+		b.settleIdle(done)
+		return nil
+	}
+	b.phase = phaseRunning
 	b.identity = id
 	// If a user paired in a previous session, adopt their DM chat
 	// when the connector can address them directly. (For telegram,
@@ -156,6 +264,7 @@ func (b *Bridge) Start(parent context.Context) error {
 	b.mu.Unlock()
 
 	go func() {
+		defer b.settleIdle(done)
 		if err := b.Connector.Receive(ctx, b.handle); err != nil && ctx.Err() == nil {
 			b.Host.Notify("warn", fmt.Sprintf("%s: receive: %v", b.Connector.Name(), err))
 		}
@@ -163,16 +272,36 @@ func (b *Bridge) Start(parent context.Context) error {
 	return nil
 }
 
-// Stop halts the receive loop. Safe to call when not running.
+// Stop halts the receive loop and waits for it to exit, so the connector
+// (and, for a connector extension, the driver's single chat-tunnel slot) is
+// actually released when Stop returns — a disconnect immediately followed by
+// a reconnect must find the slot free, not race the teardown. Safe to call
+// when not running. The wait is bounded (stopTimeout, default 10s) as a wedge
+// guard: a connector whose in-flight handle() never returns should not hang a
+// daemon shutdown; the slot then frees whenever the loop finally exits.
 func (b *Bridge) Stop() {
 	b.mu.Lock()
+	switch b.phase {
+	case phaseIdle:
+		b.mu.Unlock()
+		return
+	case phaseStopping:
+		// Another Stop already cancelled and owns the transition to idle; join
+		// the same teardown so this call, too, returns only once the loop exits.
+		done := b.done
+		b.mu.Unlock()
+		b.joinDone(done)
+		return
+	}
+	// phaseStarting or phaseRunning: this call owns the teardown.
 	cancel := b.cancel
-	b.running = false
-	b.cancel = nil
+	done := b.done
+	b.phase = phaseStopping
 	b.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
+	b.joinDone(done)
 }
 
 // handle routes one inbound message.
@@ -239,7 +368,7 @@ func (b *Bridge) OnUserTyped(text string) {
 func (b *Bridge) sendToPaired(text, prefix string) {
 	b.mu.Lock()
 	chatID := b.chatID
-	running := b.running
+	running := b.phase == phaseRunning
 	b.mu.Unlock()
 	if !running || chatID == "" {
 		return
@@ -283,7 +412,7 @@ func (b *Bridge) SendDocument(ctx context.Context, path, caption string) error {
 func (b *Bridge) pairedChat() (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.running {
+	if b.phase != phaseRunning {
 		return "", fmt.Errorf("%s bridge is not running", b.Connector.Name())
 	}
 	if b.chatID == "" {

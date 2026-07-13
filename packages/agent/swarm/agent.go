@@ -259,10 +259,13 @@ func (a *Agent) appendTranscript(chunk string) {
 	a.mu.Unlock()
 }
 
-// newAgentID returns a short, mostly-collision-free identifier of the
-// form "<slug>-<nano>". The slug is derived from the task text so
-// dashboards stay readable; the nano suffix guarantees uniqueness
-// even when two agents are spawned in the same millisecond.
+// newAgentID returns a short, readable identifier of the form
+// "<slug>-<nano>". The slug is derived from the task text so dashboards
+// stay readable; the nano suffix is only entropy, NOT a uniqueness
+// guarantee — UnixNano()%1e6 is the sub-millisecond offset, which
+// repeats every millisecond, so two spawns CAN mint the same id.
+// Uniqueness is claimAgentID's job (it re-mints on collision under the
+// swarm lock); nothing else may use this raw value as an identity.
 func newAgentID(task string, now time.Time) string {
 	slug := taskSlug(task)
 	return fmt.Sprintf("%s-%d", slug, now.UnixNano()%1_000_000)

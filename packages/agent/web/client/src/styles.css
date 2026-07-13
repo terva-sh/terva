@@ -1,3 +1,36 @@
+/* ============================================================================
+   Layout conventions (the overflow sweep in tests/smoke/overflow.smoke.ts
+   enforces #1–#3 across every pane surface at phone/tablet/rail widths):
+
+   1. Form controls are shrinkable by default: the reset gives select/input/
+      textarea/button `min-width: 0; max-width: 100%`. A <select> never
+      shrinks below its widest option on its own, and pane content (option
+      labels, settings items) is server-driven — the client does not control
+      its width. Opt out with an explicit width where intrinsic sizing is
+      genuinely wanted.
+   2. A pane scrolls ONE axis. `.pane-body` clips x; content wider than the
+      pane (tables, preformatted output) opts into its own inner scroller
+      (.wg-table-wrap, .panel-lines, .md pre) instead of widening the pane.
+      Pane prose tolerates unbroken tokens (paths, ids, model names):
+      `overflow-wrap: anywhere` inherits from `.pane-body` — wrap, don't
+      widen. Single-line text opts out with nowrap + ellipsis.
+   3. Pane-internal layout responds to the PANE's width, not the viewport:
+      `.pane-body` is a size container named `pane`, because the same surface
+      renders in a desktop rail (300–400px), a phone sheet, and any future
+      tablet column. Use `@container pane (…)` inside panes; viewport media
+      queries are for the app shell only.
+   4. Canonical viewport breakpoints (shell only — do not invent new ones):
+        760px  — the pane rail becomes a full-screen sheet; the phone cutoff.
+        1100px — wide-desktop affordances (raati theater side panel).
+   5. Density tokens (--fs-ui / --fs-detail / --fs-note, --pad-pane,
+      --gap-row) size the pane surfaces. A tablet/touch pass should override
+      the tokens in one block, not restyle individual rules.
+
+   The raati board + theater keep their own MAGI palette and monospace type by
+   design (an EVA homage) — exempt from the color/density tokens, but they
+   follow #1–#3 like everything else.
+   ========================================================================== */
+
 :root {
   color-scheme: light dark;
   --bg: #ffffff;
@@ -11,6 +44,12 @@
   --danger: #d1453b;
   --ok: #2f9e44;
   --radius: 12px;
+  /* density tokens (convention #5): pane-surface type + spacing */
+  --fs-ui: 13px; /* labels, tab titles, row text */
+  --fs-detail: 12px; /* descriptions, secondary rows, small inputs */
+  --fs-note: 11px; /* fine print, badges, status chips */
+  --pad-pane: 12px; /* pane-surface outer padding */
+  --gap-row: 8px; /* gap between rows/cards in a pane list */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -24,6 +63,11 @@
 }
 
 * { box-sizing: border-box; }
+/* Convention #1: form controls shrink instead of overflowing. Without this a
+   <select> floors at its widest option (WebKit holds that floor even against
+   a max-width cap unless min-width is 0) and one long server-sent label turns
+   a pane into a horizontal scroller. */
+select, input, textarea, button { min-width: 0; max-width: 100%; }
 /* iOS Safari font boosting inflates arbitrary text nodes and blows out
    min-content widths; pin the type scale to what we declared. */
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
@@ -60,41 +104,59 @@ body {
 .pane-tabs { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
 /* dynamic extension-panel tabs on their own row, visually separated */
 .pane-tabs.ext-row { border-top: 1px dashed var(--line); padding-top: 4px; }
-.pane-tab { display: flex; align-items: center; gap: 5px; flex: none; font: inherit; font-size: 13px; padding: 5px 9px; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.pane-tab { display: flex; align-items: center; gap: 5px; flex: none; font: inherit; font-size: var(--fs-ui); padding: 5px 9px; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .pane-tab:hover { color: var(--fg); background: var(--panel); }
 .pane-tab.active { color: var(--fg); background: var(--panel); border-color: var(--line); }
 .pane-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* bound ext tab labels so a long title can't stretch the rail; hover shows full */
 .ext-row .pane-tab-label { max-width: 90px; }
 .pane-tab-badge { font-size: 11px; background: var(--user); color: var(--user-fg); border-radius: 999px; padding: 0 5px; }
-.pane-body { flex: 1; overflow-y: auto; min-height: 0; }
+/* Conventions #2 + #3: one scroll axis (overflow-x clip — mobile made
+   settings/raati two-axis scrollers via intrinsically wide selects; wide
+   content uses its own inner scroller), inherited overflow-wrap so a server-
+   sent path/id wraps instead of widening its row, and the `pane` size
+   container that pane-internal @container rules respond to. */
+.pane-body { flex: 1; overflow-y: auto; overflow-x: clip; min-height: 0; overflow-wrap: anywhere; container: pane / inline-size; }
 
 /* tasks pane (background swarm agents) */
-.tasks-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.tasks-body { padding: var(--pad-pane); display: flex; flex-direction: column; gap: var(--gap-row); }
 .task-row { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
 .task-head { display: flex; align-items: baseline; gap: 8px; cursor: pointer; }
-.task-status { flex: none; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 7px; border-radius: 999px; background: var(--panel); color: var(--muted); }
+.task-status { flex: none; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 7px; border-radius: 999px; background: var(--panel); color: var(--muted); }
 .task-status.s-running, .task-status.s-pending { background: color-mix(in srgb, var(--user) 20%, transparent); color: var(--user); }
 .task-status.s-done { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
 .task-status.s-failed, .task-status.s-killed { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
-.task-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.task-model { flex: none; font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
-.task-activity { font-size: 12px; color: var(--muted); font-style: italic; }
-.task-error { font-size: 12px; color: var(--danger); overflow-wrap: anywhere; }
+.task-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-ui); }
+.task-model { flex: none; font-size: var(--fs-note); color: var(--muted); font-family: ui-monospace, monospace; }
+.task-activity { font-size: var(--fs-detail); color: var(--muted); font-style: italic; }
+.task-error { font-size: var(--fs-detail); color: var(--danger); overflow-wrap: anywhere; }
 .task-tail { margin: 2px 0 0; padding: 8px; background: var(--panel); border-radius: 8px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }
 .task-actions { display: flex; gap: 6px; justify-content: flex-end; }
 .task-actions:empty { display: none; }
 .task-send { display: flex; gap: 6px; }
-.task-send input { flex: 1; min-width: 0; font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+.task-send input { flex: 1; font: inherit; font-size: var(--fs-detail); padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 
 /* settings pane */
-.settings-body { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+.settings-body { padding: var(--pad-pane); display: flex; flex-direction: column; gap: 14px; }
 .set-row { display: flex; flex-direction: column; gap: 3px; }
-.set-head { display: flex; align-items: center; gap: 10px; }
-.set-label { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; }
-.set-input { flex: none; max-width: 55%; font: inherit; font-size: 12px; padding: 4px 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
-.set-desc { font-size: 12px; color: var(--muted); }
-.set-note { font-size: 11px; color: var(--muted); font-style: italic; }
+/* overflow-x clip: WebKit counts a select's untruncated option text as
+   scrollable overflow even once the box is clamped, which let the whole pane
+   pan sideways on iOS; clip discards it without creating a scroll container. */
+.set-head { display: flex; align-items: center; gap: 10px; overflow-x: clip; }
+.set-label { flex: 1; min-width: 0; font-size: var(--fs-ui); font-weight: 500; }
+.set-input { flex: none; max-width: 55%; font: inherit; font-size: var(--fs-detail); padding: 4px 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); text-overflow: ellipsis; }
+/* Read-only value on a set-row (e.g. the terva version). min-width 0 +
+   overflow-wrap so a long build string wraps instead of widening the pane. */
+.set-value { flex: none; min-width: 0; max-width: 55%; font-size: var(--fs-detail); color: var(--muted); text-align: right; overflow-wrap: anywhere; }
+/* Convention #3: in a narrow pane (phone sheet, skinny rail) a 55% control is
+   a truncated sliver — let the head wrap and give the control the full row.
+   Wider panes (a future tablet column) keep label + control on one line. */
+@container pane (max-width: 480px) {
+  .set-head { flex-wrap: wrap; }
+  .set-input, .set-value { max-width: 100%; }
+}
+.set-desc { font-size: var(--fs-detail); color: var(--muted); }
+.set-note { font-size: var(--fs-note); color: var(--muted); font-style: italic; }
 .restart-row { border-top: 1px solid var(--line); margin-top: 2px; padding-top: 12px; }
 .restart-confirm { flex: none; display: inline-flex; gap: 6px; }
 .set-toggle { flex: none; width: 38px; height: 22px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; padding: 0; position: relative; transition: background .12s; }
@@ -103,12 +165,12 @@ body {
 .set-toggle.on .set-knob { left: 18px; background: var(--user-fg); opacity: 1; }
 
 /* extension panel / status pane */
-.panel-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.panel-body { padding: var(--pad-pane); display: flex; flex-direction: column; gap: 10px; }
 .panel-lines { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12.5px; }
 .panel-lines.interactive { cursor: text; border-radius: 6px; }
 .panel-lines.interactive:focus { outline: 2px solid color-mix(in srgb, var(--user) 60%, transparent); outline-offset: 3px; }
-.panel-hint { font-size: 11px; color: var(--muted); }
-.panel-footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
+.panel-hint { font-size: var(--fs-note); color: var(--muted); }
+.panel-footer { font-size: var(--fs-detail); color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
 .panel-actions { display: flex; justify-content: flex-end; }
 
 /* mobile: the rail becomes a full-screen sheet over the chat */
@@ -125,6 +187,19 @@ body {
   padding-top: max(8px, env(safe-area-inset-top));
   border-bottom: 1px solid var(--line);
   background: var(--bg);
+}
+/* phone: the fixed-width controls consume the whole row and squeeze the
+   session identity (the only flexible item) to nothing. Give the identity its
+   own full-width first line — persona and title inline — and let the controls
+   flow below, wrapping further on very narrow screens instead of spilling. */
+@media (max-width: 760px) {
+  .topbar { flex-wrap: wrap; row-gap: 4px; }
+  .topbar .ident { order: -1; flex-basis: 100%; flex-direction: row; align-items: baseline; gap: 6px; }
+  .topbar .ident .persona { flex: none; }
+  .topbar .ident .sess-title { min-width: 0; }
+  /* with its own row the controls have spare width — let the model id use it
+     (up to its full text) instead of truncating at the desktop clamp */
+  .topbar .model-btn { flex: 1 1 auto; max-width: max-content; }
 }
 .topbar .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
 .spacer { flex: 1; }
@@ -597,11 +672,18 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .raati-form { display: flex; flex-direction: column; gap: 8px; }
 .raati-form textarea { background: #11100e; color: #e5e9f0; border: 1px solid #2e343b; border-radius: 4px; padding: 8px; font: inherit; resize: vertical; }
 .raati-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.raati-form select { background: #11100e; color: #e5e9f0; border: 1px solid #2e343b; border-radius: 4px; padding: 5px; font: inherit; font-size: 12px; }
+/* Option labels here are sentences; the reset (convention #1) keeps the
+   selects shrinkable, and clipped labels stay readable in the dropdown. */
+.raati-form select { background: #11100e; color: #e5e9f0; border: 1px solid #2e343b; border-radius: 4px; padding: 5px; font: inherit; font-size: 12px; text-overflow: ellipsis; }
+/* Convention #3: in a narrow pane the wrapped form rows leave ragged select
+   widths — give each select its own full row instead. */
+@container pane (max-width: 480px) {
+  .raati-form-row > select { flex: 1 1 100%; }
+}
 /* Profile names carry their description ("name — what it is for");
    cap the closed select so a wordy profile can't blow the row wide —
    the full text stays reachable via the title tooltip. */
-.raati-form select.raati-profile { max-width: 320px; text-overflow: ellipsis; }
+.raati-form select.raati-profile { max-width: min(320px, 100%); text-overflow: ellipsis; }
 .raati-check { display: flex; gap: 5px; align-items: center; color: #a8a8a8; font-size: 12px; }
 .raati-convene, .raati-reset { background: #7aa2f7; color: #0a0a09; border: none; border-radius: 4px; padding: 6px 14px; font: inherit; font-weight: 700; letter-spacing: 0.1em; cursor: pointer; }
 .raati-convene:disabled { opacity: 0.4; cursor: default; }
@@ -780,7 +862,9 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
   .magi-footer { grid-area: footer; }
 }
 
-@media (max-width: 720px) {
+/* 760px = the canonical phone cutoff (convention #4; was a drifted 720px) —
+   the theater is a fullscreen overlay, so the viewport IS its container. */
+@media (max-width: 760px) {
   .magi-overlay { padding: calc(10px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left)); overflow-x: hidden; }
   .magi-stage { min-width: 0; padding: 12px; gap: 10px; }
   .magi-title { font-size: clamp(20px, 7vw, 30px); }

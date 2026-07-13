@@ -27,6 +27,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // agentMeta is the durable identity record for one agent. Only fields
@@ -88,17 +90,13 @@ func writeAgentMeta(stateDir string, a *Agent) error {
 	if err != nil {
 		return fmt.Errorf("swarm meta marshal: %w", err)
 	}
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	if err := privfs.MkdirAll(stateDir); err != nil {
 		return fmt.Errorf("swarm meta dir: %w", err)
 	}
-	final := metaPath(stateDir)
-	tmp := final + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+	// privfs.WriteFile is the same temp+rename dance this used to hand-roll,
+	// plus private modes (0600 under 0700).
+	if err := privfs.WriteFile(metaPath(stateDir), append(b, '\n')); err != nil {
 		return fmt.Errorf("swarm meta write: %w", err)
-	}
-	if err := os.Rename(tmp, final); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("swarm meta rename: %w", err)
 	}
 	return nil
 }

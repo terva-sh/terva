@@ -447,6 +447,11 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 		return nil
 	}
 
+	// The bot usually runs detached with stderr in $TERVA_HOME/logs/bot.log —
+	// stamp which build wrote each run's entries, or version drift across
+	// restarts is invisible in a long-lived log.
+	fmt.Fprintf(os.Stderr, "bot: terva v%s starting (connector %s)\n", version, svc.Name)
+
 	// Project-scoped mode (data in .terva/home, only project extensions; login
 	// + trust stay global). Must run before LoadConfig/Resolve read the home.
 	if note, perr := maybeEnableProjectScope(args); perr != nil {
@@ -515,7 +520,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	}
 
 	agent := resolved.NewAgent()
-	wireBotAgentExtHooks(ctx, agent, extMgr, gate, args, &resolved)
+	wireBotAgentExtHooks(ctx, agent, extMgr, gate, args, &resolved, resolved.Tasks)
 
 	// Session: optional, same model as the tui; --no-session disables.
 	// The paired DM's agent persists per-message (the same durable hooks
@@ -537,6 +542,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	}
 	// Tell session-keyed extensions the real session id before any turn runs.
 	build.EmitSessionStart(extMgr, sess)
+	build.RebindTasks(resolved.Tasks, sess)
 
 	var loop *chat.Loop
 	loop = &chat.Loop{
@@ -554,10 +560,15 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 		// Per-chat sessions (stage C): the owner's DM keeps `agent`
 		// (and its persisted session); each approved group gets its
 		// own transcript, minted here with the same extension/gate
-		// hooks the primary got.
+		// hooks the primary got — but its OWN in-memory task board.
+		// The shared registry's task tools close over resolved.Tasks
+		// (bound to the owner's durable session), so handing a group
+		// the plain registry would let any participant read or mutate
+		// the owner's board; the fresh controller isolates it, and the
+		// board dies with the agent (live-only, like the transcript).
 		NewChatAgent: func() *core.Agent {
-			a := resolved.NewAgent()
-			wireBotAgentExtHooks(ctx, a, extMgr, gate, args, &resolved)
+			a, groupTasks := resolved.NewAgentWithFreshTasks()
+			wireBotAgentExtHooks(ctx, a, extMgr, gate, args, &resolved, groupTasks)
 			return a
 		},
 		IdleAfter: idleAfter,

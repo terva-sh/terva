@@ -16,7 +16,7 @@ import (
 // ever wired on the legacy driver, via SwarmSpawnTool.OnSpawned).
 
 // swarmWaitGateMessage re-prompts a coordinator that tried to finish while its
-// spawned sub-agents are still running (see the ContinueOnStop guard). Injected
+// spawned sub-agents are still running (see the swarm-hold continuation gate). Injected
 // once per batch — long enough to stop it racing off; the queued [auto-swarm
 // update] recap does the rest.
 const swarmWaitGateMessage = "You indicated you're finishing, but sub-agents you spawned are still running. Do NOT write your final answer yet — when they finish you'll receive an [auto-swarm update] with each one's outcome, and you should fold their findings into your response. For now, briefly note you're awaiting them; that update will re-engage you."
@@ -140,6 +140,14 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 		// deliverable the coordinator must fold into the report.
 		if findings := snap.Findings(); findings != "" {
 			sb.WriteString(i18n.P("swarm.summary.findings", "   findings: %s", truncateForSummary(findings, 1500)))
+			sb.WriteByte('\n')
+		}
+		// The retrieval handle for the findings the 1500-byte budget cut off:
+		// the agent id doubles as a session_inspect id (S1 — coordinators
+		// otherwise guess it is a project session id and hit "no such
+		// session"). Only when the child actually has a transcript.
+		if snap.SessionPath != "" {
+			sb.WriteString(i18n.P("swarm.summary.inspect", "   full transcript: session_inspect with session_id %q (it is a sub-agent id, not a project session; expand an event's #n for its complete text)", snap.ID))
 			sb.WriteByte('\n')
 		}
 		sb.WriteString("\n")

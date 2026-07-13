@@ -24,7 +24,10 @@ const (
 	// repairMarkerName is written under the home once RepairOnce has run, so
 	// the (potentially large) tree walk happens at most once per install.
 	// Versioned so a future stricter repair can re-run by bumping the suffix.
-	repairMarkerName = ".perms-repaired-v1"
+	// v2: task boards and swarm state (events.jsonl, meta.json) kept writing
+	// permissive modes after the v1 walk shipped; re-walk once to tighten
+	// what accumulated in between.
+	repairMarkerName = ".perms-repaired-v2"
 )
 
 // MkdirAll creates dir and any missing parents with private (0700) permissions.

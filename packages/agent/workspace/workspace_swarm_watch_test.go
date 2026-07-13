@@ -126,6 +126,7 @@ func TestCarrierRecapFlowsToSessionQueue(t *testing.T) {
 		"boom: provider exploded",
 		"review the QA surface",
 		"doomed side quest",
+		"full transcript: session_inspect with session_id", // the S1 retrieval handle
 	} {
 		if !strings.Contains(recap, want) {
 			t.Errorf("recap missing %q:\n%s", want, recap)

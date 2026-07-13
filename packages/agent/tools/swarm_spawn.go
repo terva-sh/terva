@@ -213,12 +213,22 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		return toolErr("swarm_spawn: " + errMsg), nil
 	}
 
-	agent, err := t.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
+	req := swarm.SpawnRequest{
 		Task:     task,
 		Model:    route.Model,
 		Provider: route.Provider,
 		Persona:  persona,
-	})
+	}
+	// Stamp the spawn with the host conversation's session id so the child's
+	// meta.json records which conversation it belongs to and the /swarm
+	// dashboard can scope to it. The dispatch context carries the calling
+	// agent; a live-only conversation (no transcript) leaves the stamp empty.
+	if ag := core.AgentFromContext(ctx); ag != nil {
+		if sid, _ := ag.SessionIdentity(); sid != "" {
+			req.SessionID = sid
+		}
+	}
+	agent, err := t.Swarm.SpawnReq(ctx, req)
 	if err != nil {
 		return core.ToolResult{}, fmt.Errorf("swarm_spawn: %w", err)
 	}
@@ -253,7 +263,8 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	if untrusted {
 		sb.WriteString("note: UNTRUSTED workspace — the sub-agent runs without project extensions, skills, or context files.\n")
 	}
-	sb.WriteString("\nThe sub-agent is running in the background. Use /swarm in the TUI to monitor it. ")
+	sb.WriteString("\nThe sub-agent is running in the background. Use /swarm in the TUI to monitor it; ")
+	fmt.Fprintf(&sb, "once it has run, session_inspect accepts %q as a session_id to read its transcript (the id is NOT a project session id). ", agent.ID)
 	sb.WriteString("This conversation continues immediately; do not wait for the sub-agent to finish before working on the next thing.")
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: sb.String()}},

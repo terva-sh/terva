@@ -1,6 +1,7 @@
 import type { VNode } from 'preact'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { Client } from './ctrlproto'
+import { restartRejection } from './restart'
 import type {
   AskRequest,
   CatalogView,
@@ -9,6 +10,7 @@ import type {
   ContextNode,
   Decision,
   ExtensionsView,
+  FilesListResult,
   LoreEntry,
   LoreView,
   MCPView,
@@ -23,6 +25,7 @@ import type {
   RaatiUnit,
   RaatiView,
   ResetInfo,
+  WireFileEntry,
   ResetsListResult,
   ResetConsumeResult,
   SessionInfo,
@@ -84,6 +87,18 @@ export function App() {
   const [queued, setQueued] = useState<string[]>([])
   // Whether the daemon advertised the self-restart capability (--web-allow-restart).
   const [canRestart, setCanRestart] = useState(false)
+  // The daemon's workspace file listing for the composer's @-stage, fetched
+  // lazily on first "@" and refreshed by TTL (the tree moves as the agent
+  // works). null = feature absent or nothing fetched yet.
+  const [fileList, setFileList] = useState<WireFileEntry[] | null>(null)
+  const canListFiles = useRef(false)
+  const fileListAt = useRef(0)
+  const fileListInFlight = useRef(false)
+  // The daemon's build display string from the ctrlproto hello. The ref
+  // remembers the previous connection's value so a reconnect that lands on a
+  // different build (a self-restart picked up a new binary) can announce it.
+  const [serverVersion, setServerVersion] = useState('')
+  const verRef = useRef('')
   // Available skills (from the snapshot), for /skill autocomplete.
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -133,6 +148,27 @@ export function App() {
       setModels(res.models ?? [])
     } catch {
       /* control group optional */
+    }
+  }, [])
+
+  // requestFiles backs the composer's @-stage: one fetch per TTL window,
+  // recursive with gitignore filtering (the TUI picker's defaults), entries
+  // cached until the TTL lapses or a reconnect drops them.
+  const requestFiles = useCallback(async () => {
+    const c = clientRef.current
+    if (!c || !canListFiles.current || fileListInFlight.current) return
+    if (Date.now() - fileListAt.current < 30_000) return
+    fileListInFlight.current = true
+    try {
+      const res = await c.send<FilesListResult>('files.list', { recursive: true, respect_gitignore: true }, '')
+      setFileList(res.files ?? [])
+      fileListAt.current = Date.now()
+    } catch {
+      // A daemon mid-restart or an older build: leave the stage empty; the
+      // next "@" (past the TTL) retries.
+      fileListAt.current = Date.now()
+    } finally {
+      fileListInFlight.current = false
     }
   }, [])
 
@@ -359,6 +395,17 @@ export function App() {
       const lang = setLocale(hello?.locale ?? 'en')
       document.documentElement.lang = lang
       setCanRestart(!!hello?.features?.includes('restart'))
+      canListFiles.current = !!hello?.features?.includes('files-list')
+      // A (re)connect may be a different build or a moved tree — refetch on
+      // the next "@".
+      setFileList(null)
+      fileListAt.current = 0
+      const ver = hello?.version ?? ''
+      if (ver && verRef.current && ver !== verRef.current) {
+        setToast(t('terva restarted: v%s → v%s', verRef.current, ver))
+      }
+      verRef.current = ver
+      setServerVersion(ver)
       reI18n()
       refreshI18n()
       try {
@@ -387,11 +434,16 @@ export function App() {
     return () => c.close()
   }, [handleEvent, newSession, refreshSessions, selectSession, refreshI18n])
 
-  // Restart the daemon. The socket drops as the process re-execs; the pre-exec
-  // notice already reached us, and the client auto-reconnects to the new build,
-  // so the "connection closed" rejection here is expected and swallowed.
+  // Restart the daemon. A successful restart acks first and re-execs a beat
+  // later, so the client auto-reconnects to the new build. Only a real failure
+  // rejects here — an unsupported platform, a go-run build, a failed preflight,
+  // a disabled capability — so surface those as a toast rather than swallowing
+  // them (a deferred exec failure arrives separately as a broadcast notice).
   const restart = useCallback(() => {
-    clientRef.current?.send('control.restart', null, '').catch(() => {})
+    clientRef.current?.send('control.restart', null, '').catch((e: unknown) => {
+      const msg = restartRejection(e)
+      if (msg !== null) setToast(t('restart failed: %s', msg))
+    })
   }, [])
 
   // Trust / untrust the workspace (control-group verbs). Workspace-global, so no
@@ -633,6 +685,23 @@ export function App() {
     [refreshSessions],
   )
 
+  const generateTitle = useCallback(
+    async (s: SessionInfo) => {
+      const c = clientRef.current
+      if (!c) return
+      setToast(t('Generating title…'))
+      try {
+        const r = await c.send<{ title: string }>('sessions.generate_title', null, s.id)
+        setToast(t('Titled: %s', r.title))
+      } catch (e) {
+        setToast(String(e))
+        return
+      }
+      await refreshSessions(c)
+    },
+    [refreshSessions],
+  )
+
   const del = useCallback(
     async (s: SessionInfo) => {
       if (!window.confirm(t('Delete “%s”?', s.title || s.id))) return
@@ -710,6 +779,7 @@ export function App() {
         <SessionInfoView
           info={curInfo}
           cost={cost}
+          version={serverVersion}
           onClose={() => setInfoOpen(false)}
           onContext={() => {
             setInfoOpen(false)
@@ -739,6 +809,7 @@ export function App() {
           onSelect={selectSession}
           onNew={() => newSession()}
           onRename={rename}
+          onGenerateTitle={generateTitle}
           onDelete={del}
           onClose={() => setDrawer(false)}
         />
@@ -758,7 +829,16 @@ export function App() {
           {permission && <PermissionRequestView request={permission} onDecide={decide} />}
           {ask && <AskRequestView request={ask} onAnswer={answer} />}
 
-          <Composer busy={busy} onSend={onSubmit} onToast={setToast} commands={slashCommands} skills={skills} onCancel={() => clientRef.current?.fire('cancel', null, curRef.current)} />
+          <Composer
+            busy={busy}
+            onSend={onSubmit}
+            onToast={setToast}
+            commands={slashCommands}
+            skills={skills}
+            files={fileList}
+            onFilesNeeded={() => void requestFiles()}
+            onCancel={() => clientRef.current?.fire('cancel', null, curRef.current)}
+          />
         </div>
 
         {paneOpen && (
@@ -774,6 +854,7 @@ export function App() {
             onConsumeReset={consumeReset}
             onClose={() => setPaneOpen(false)}
             onRestart={canRestart ? restart : undefined}
+            version={serverVersion}
             trusted={!!curInfo?.trusted}
             onTrust={trustWorkspace}
             models={models}
@@ -805,6 +886,7 @@ function PaneHost({
   onConsumeReset,
   onClose,
   onRestart,
+  version,
   trusted,
   onTrust,
   models,
@@ -820,6 +902,7 @@ function PaneHost({
   onConsumeReset: (id: string) => Promise<ResetConsumeResult>
   onClose: () => void
   onRestart?: () => void
+  version?: string
   trusted?: boolean
   onTrust?: (trust: boolean) => void
   models?: ModelInfo[]
@@ -863,6 +946,7 @@ function PaneHost({
             onListResets={onListResets}
             onConsumeReset={onConsumeReset}
             onRestart={onRestart}
+            version={version}
             trusted={trusted}
             onTrust={onTrust}
             models={models}
@@ -1659,6 +1743,7 @@ function SurfaceView({
   onListResets,
   onConsumeReset,
   onRestart,
+  version,
   trusted,
   onTrust,
   models,
@@ -1669,6 +1754,7 @@ function SurfaceView({
   onListResets: () => Promise<ResetsListResult>
   onConsumeReset: (id: string) => Promise<ResetConsumeResult>
   onRestart?: () => void
+  version?: string
   trusted?: boolean
   onTrust?: (trust: boolean) => void
   models?: ModelInfo[]
@@ -1688,7 +1774,7 @@ function SurfaceView({
     case 'raati':
       return <RaatiBody v={surface.raati ?? { running: false }} onAction={onAction} models={models ?? []} />
     case 'settings':
-      return surface.settings ? <SettingsBody v={surface.settings} onAction={onAction} onRestart={onRestart} /> : null
+      return surface.settings ? <SettingsBody v={surface.settings} onAction={onAction} onRestart={onRestart} version={version} /> : null
     case 'panel':
       return surface.panel ? <PanelBody id={surface.id} p={surface.panel} onAction={onAction} /> : null
     case 'widgets':
@@ -2527,10 +2613,12 @@ function SettingsBody({
   v,
   onAction,
   onRestart,
+  version,
 }: {
   v: SettingsView
   onAction: (id: string, action: string, args?: Record<string, string>) => void
   onRestart?: () => void
+  version?: string
 }) {
   const set = (key: string, value: string) => onAction('settings', 'set', { key, value })
   return (
@@ -2562,6 +2650,15 @@ function SettingsBody({
         </div>
       ))}
       {onRestart && <RestartRow onRestart={onRestart} />}
+      {version && (
+        <div class="set-row">
+          <div class="set-head">
+            <span class="set-label">{t('terva version')}</span>
+            <span class="set-value mono">v{version}</span>
+          </div>
+          <div class="set-desc">{t('The build serving this panel (re-announced on every reconnect).')}</div>
+        </div>
+      )}
     </div>
   )
 }
@@ -2866,8 +2963,24 @@ function ContextBody({
           bytes={d.system_bytes}
           note={d.ext_guidance_bytes > 0 ? t('incl. %s ext guidance', humanBytes(d.ext_guidance_bytes)) : ''}
         />
-        <CtxRow label={t('tool defs')} bytes={d.tool_bytes} note={tn(d.tool_count, '%d tool', '%d tools')} />
-        <CtxRow label={t('ext context')} bytes={d.ext_bytes} note={t('cards, ephemeral')} />
+        <CtxRow
+          label={t('tool defs')}
+          bytes={d.tool_bytes}
+          note={
+            d.tool_count_installed && d.tool_count_installed > d.tool_count
+              ? t('%d of %d tools · %s installed', d.tool_count, d.tool_count_installed, humanBytes(d.tool_bytes_installed ?? 0))
+              : tn(d.tool_count, '%d tool', '%d tools')
+          }
+        />
+        <CtxRow
+          label={t('ext context')}
+          bytes={d.ext_bytes}
+          note={
+            d.lazy_note_bytes
+              ? t('cards, ephemeral · incl. %s lazy-tool note', humanBytes(d.lazy_note_bytes))
+              : t('cards, ephemeral')
+          }
+        />
         <CtxRow label={t('transcript')} bytes={d.transcript_bytes} note={tn(d.messages.length, '%d msg', '%d msgs')} />
         <div class="ctx-total">
           <CtxRow label={t('TOTAL')} bytes={d.total_bytes} note="" />

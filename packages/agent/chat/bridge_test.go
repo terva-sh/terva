@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -230,5 +231,232 @@ func TestBridgeSendToolPassthrough(t *testing.T) {
 	defer conn.mu.Unlock()
 	if len(conn.images) != 1 || len(conn.files) != 1 {
 		t.Fatalf("uploads = %v / %v", conn.images, conn.files)
+	}
+}
+
+// stopJoinConnector simulates the connector-extension shape of Receive: after
+// ctx cancellation it still has teardown to run (extconn closes the driver's
+// single chat-tunnel slot there) before returning. released flips only when
+// that teardown finished.
+type stopJoinConnector struct {
+	released atomic.Bool
+}
+
+func (c *stopJoinConnector) Name() string { return "stopjoin" }
+func (c *stopJoinConnector) Connect(ctx context.Context) (Identity, error) {
+	return Identity{Username: "stopjoin-bot"}, nil
+}
+func (c *stopJoinConnector) Receive(ctx context.Context, handle func(Message)) error {
+	<-ctx.Done()
+	// The post-cancel teardown a real connector performs (tunnel close,
+	// session release). Long enough that an async Stop would reliably
+	// return first; trivial next to the 10s join bound.
+	time.Sleep(50 * time.Millisecond)
+	c.released.Store(true)
+	return ctx.Err()
+}
+func (c *stopJoinConnector) Send(context.Context, Outgoing) error { return nil }
+func (c *stopJoinConnector) SendImage(ctx context.Context, chatID, path, caption string) error {
+	return nil
+}
+func (c *stopJoinConnector) SendFile(ctx context.Context, chatID, path, caption string) error {
+	return nil
+}
+func (c *stopJoinConnector) Typing(context.Context, string) error { return nil }
+func (c *stopJoinConnector) Capabilities() Capabilities           { return Capabilities{} }
+
+// TestStopJoinsReceiveLoop pins the synchronous-Stop contract: when Stop
+// returns, the receive loop has EXITED and whatever it releases on the way
+// out (for a connector extension, the driver's one-chat-session slot) is
+// actually free. The async Stop this replaces returned right after the
+// context cancel, so a disconnect immediately followed by a reconnect raced
+// the teardown and was refused with "a chat session is already open on this
+// extension" — the CI flake in TestExtConnectorConnectsDisconnectsReconnects
+// that outlived #62/#63's deadline raises.
+func TestStopJoinsReceiveLoop(t *testing.T) {
+	conn := &stopJoinConnector{}
+	b := &Bridge{Connector: conn, Host: &fakeHost{}}
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	b.Stop()
+	if !conn.released.Load() {
+		t.Fatal("Stop returned before the receive loop finished its teardown — a reconnect would race the released-slot invariant")
+	}
+}
+
+// countingConnector records Connect calls and, once connected, parks in Receive
+// until ctx ends. gate, when non-nil, blocks Connect until closed — letting a
+// test pin a Start inside Connect (phaseStarting) while other calls race the
+// claim, maximizing the double-Connect window the serialization must close.
+type countingConnector struct {
+	connects atomic.Int32
+	gate     chan struct{}
+}
+
+func (c *countingConnector) Name() string { return "counting" }
+func (c *countingConnector) Connect(ctx context.Context) (Identity, error) {
+	c.connects.Add(1)
+	if c.gate != nil {
+		select {
+		case <-c.gate:
+		case <-ctx.Done():
+			return Identity{}, ctx.Err()
+		}
+	}
+	return Identity{Username: "counting-bot"}, nil
+}
+func (c *countingConnector) Receive(ctx context.Context, handle func(Message)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (c *countingConnector) Send(context.Context, Outgoing) error                    { return nil }
+func (c *countingConnector) SendImage(context.Context, string, string, string) error { return nil }
+func (c *countingConnector) SendFile(context.Context, string, string, string) error  { return nil }
+func (c *countingConnector) Typing(context.Context, string) error                    { return nil }
+func (c *countingConnector) Capabilities() Capabilities                              { return Capabilities{} }
+
+// wedgedConnector's Receive never returns, even after ctx ends — the hung
+// handle() the Stop wedge-guard exists for.
+type wedgedConnector struct{ block chan struct{} }
+
+func (c *wedgedConnector) Name() string { return "wedged" }
+func (c *wedgedConnector) Connect(context.Context) (Identity, error) {
+	return Identity{Username: "wedged-bot"}, nil
+}
+func (c *wedgedConnector) Receive(ctx context.Context, handle func(Message)) error {
+	<-c.block // ignores ctx entirely
+	return nil
+}
+func (c *wedgedConnector) Send(context.Context, Outgoing) error                    { return nil }
+func (c *wedgedConnector) SendImage(context.Context, string, string, string) error { return nil }
+func (c *wedgedConnector) SendFile(context.Context, string, string, string) error  { return nil }
+func (c *wedgedConnector) Typing(context.Context, string) error                    { return nil }
+func (c *wedgedConnector) Capabilities() Capabilities                              { return Capabilities{} }
+
+// TestBridgeConcurrentStartConnectsOnce: N racing Starts must dial exactly once.
+// The gate holds the winner inside Connect (phaseStarting) so the losers observe
+// the claim and bail — proving serialization happens before Connect, not after.
+func TestBridgeConcurrentStartConnectsOnce(t *testing.T) {
+	conn := &countingConnector{gate: make(chan struct{})}
+	b := &Bridge{Connector: conn, Host: &fakeHost{}}
+	t.Cleanup(b.Stop)
+
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = b.Start(context.Background())
+		}(i)
+	}
+	time.Sleep(20 * time.Millisecond) // winner parks in Connect; losers race the claim
+	close(conn.gate)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Start[%d] = %v, want nil", i, err)
+		}
+	}
+	if got := conn.connects.Load(); got != 1 {
+		t.Fatalf("Connect called %d times, want exactly 1", got)
+	}
+	if !b.Active() {
+		t.Fatal("bridge not active after concurrent Start")
+	}
+}
+
+// TestBridgeStartStopInterleave: a Stop landing while Start is mid-Connect must
+// tear the half-started bridge down cleanly — no orphaned loop, no active bridge,
+// and both calls return. Connect parks (gate never closed) until the Stop's ctx
+// cancel frees it, so the interleave is deterministic.
+func TestBridgeStartStopInterleave(t *testing.T) {
+	conn := &countingConnector{gate: make(chan struct{})}
+	b := &Bridge{Connector: conn, Host: &fakeHost{}, stopTimeout: 2 * time.Second}
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- b.Start(context.Background()) }()
+	time.Sleep(20 * time.Millisecond) // Start claims phaseStarting, parks in Connect
+
+	stopped := make(chan struct{})
+	go func() { b.Stop(); close(stopped) }()
+
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop wedged on a start/stop interleave")
+	}
+	<-startErr // must return, never hang
+	if b.Active() {
+		t.Fatal("bridge still active after a Start/Stop interleave")
+	}
+	if b.State().Running {
+		t.Fatal("State().Running true after interleave")
+	}
+	if got := conn.connects.Load(); got != 1 {
+		t.Fatalf("Connect calls = %d, want 1", got)
+	}
+}
+
+// TestBridgeStopTimeoutDoesNotHang: a receive loop that ignores ctx must not
+// hang Stop; the bounded wedge guard fires and warns, and the slot frees when
+// the loop finally exits.
+func TestBridgeStopTimeoutDoesNotHang(t *testing.T) {
+	conn := &wedgedConnector{block: make(chan struct{})}
+	defer close(conn.block) // release the loop at test end so it settles to idle
+	host := &fakeHost{}
+	b := &Bridge{Connector: conn, Host: host, stopTimeout: 50 * time.Millisecond}
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	b.Stop()
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Stop blocked %v on a wedged receive loop; the timeout guard failed", d)
+	}
+	host.mu.Lock()
+	warned := false
+	for _, n := range host.notifies {
+		if strings.Contains(n, "still draining") {
+			warned = true
+		}
+	}
+	host.mu.Unlock()
+	if !warned {
+		t.Fatalf("no 'still draining' warning after Stop timed out; notifies=%v", host.notifies)
+	}
+}
+
+// TestBridgeStartAfterStopReconnects: after a synchronous Stop frees the slot, a
+// fresh Start must reconnect (a second Connect), proving idle was reached.
+func TestBridgeStartAfterStopReconnects(t *testing.T) {
+	conn := &countingConnector{} // gate nil: Connect returns immediately
+	b := &Bridge{Connector: conn, Host: &fakeHost{}, stopTimeout: 2 * time.Second}
+
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !b.Active() {
+		t.Fatal("not active after first Start")
+	}
+	b.Stop()
+	if b.Active() {
+		t.Fatal("still active after Stop")
+	}
+
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	t.Cleanup(b.Stop)
+	if !b.Active() {
+		t.Fatal("not active after reconnect")
+	}
+	if got := conn.connects.Load(); got != 2 {
+		t.Fatalf("Connect called %d times across start/stop/start, want 2", got)
 	}
 }

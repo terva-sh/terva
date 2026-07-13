@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/procenv"
+	"terva.sh/terva/packages/privfs"
 )
 
 // execRunner spawns `terva --swarm-agent <inbox> --session <path>` in
@@ -172,7 +173,7 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 	if sessionPath == "" {
 		return fmt.Errorf("swarm: agent missing session path (set SpawnRequest via Swarm.SpawnReq, or hand-build Agent with SessionPath populated)")
 	}
-	if err := os.MkdirAll(filepath.Dir(sessionPath), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(sessionPath)); err != nil {
 		return fmt.Errorf("session dir: %w", err)
 	}
 

@@ -186,14 +186,22 @@ func (t *ActorSpawnTool) acquire(ctx context.Context, name, task string, member 
 	if errMsg != "" {
 		return nil, nil, errors.New(errMsg)
 	}
-	agent, err := t.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
+	req := swarm.SpawnRequest{
 		Task:       task,
 		Experience: "chat", // a tool-less voice; the director owns the world
 		Persona:    member.Persona,
 		Card:       member.Card,
 		Model:      route.Model,
 		Provider:   route.Provider,
-	})
+	}
+	// Same session stamp swarm_spawn applies: the actor belongs to the
+	// director's conversation, so its meta.json should say so.
+	if ag := core.AgentFromContext(ctx); ag != nil {
+		if sid, _ := ag.SessionIdentity(); sid != "" {
+			req.SessionID = sid
+		}
+	}
+	agent, err := t.Swarm.SpawnReq(ctx, req)
 	if err != nil {
 		return nil, nil, err
 	}

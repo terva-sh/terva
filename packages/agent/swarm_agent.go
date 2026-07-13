@@ -53,7 +53,8 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 	// nil differ: swarm sub-agents run concurrently sharing one workspace,
 	// so per-sub-agent diffing would race and double-report; the parent
 	// run's workspace_changed captures the net effect of the whole swarm.
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, build.BuildHookEngine(args, r.Trusted), nil)
+	// nil task controller: a focused sub-agent doesn't carry its own task board.
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, build.BuildHookEngine(args, r.Trusted), nil, nil)
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 	ag.AdoptSessionIdentity(sess)

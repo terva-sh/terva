@@ -40,6 +40,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // Status is the high-level lifecycle state of an Agent.
@@ -180,7 +182,11 @@ type Swarm struct {
 
 	mu     sync.Mutex
 	agents map[string]*Agent
-	order  []string // creation order for stable listing
+	// claimed holds agent ids minted by an in-flight SpawnReq that has not
+	// yet registered in agents — the reservation that makes concurrent
+	// spawns collision-proof between mint and insert. Guarded by mu.
+	claimed map[string]bool
+	order   []string // creation order for stable listing
 
 	// activeSession is the host session id the dashboard is
 	// currently scoped to. When non-empty, SnapshotAll filters out
@@ -207,8 +213,9 @@ func New(cfg Config) *Swarm {
 		cfg.NewRunner = func(a *Agent) Runner { return &execRunner{agent: a} }
 	}
 	s := &Swarm{
-		cfg:    cfg,
-		agents: map[string]*Agent{},
+		cfg:     cfg,
+		agents:  map[string]*Agent{},
+		claimed: map[string]bool{},
 	}
 	s.ctx, s.cancelAll = context.WithCancel(context.Background())
 	return s
@@ -247,6 +254,60 @@ func (f *Swarm) agentStateDir(id string) string {
 	return filepath.Join(f.cfg.Root, "agents", id)
 }
 
+// claimAgentID mints an agent id that is unique among live agents, reloaded
+// agents, concurrent in-flight spawns, and leftover on-disk state dirs.
+// newAgentID's nano suffix repeats every millisecond, and a duplicate id
+// silently overwrote the first agent's map entry — orphaning it (invisible
+// to /swarm, unreachable by StopAll: its runner ran forever) while both
+// children shared one state dir (session.json, events.jsonl, meta.json).
+// Collisions re-mint with a bumped suffix under the lock; the caller must
+// release the claim via f.claimed once registered (or on a failed spawn).
+func (f *Swarm) claimAgentID(task string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	base := newAgentID(task, f.cfg.Now())
+	id := base
+	for i := 1; f.idTakenLocked(id); i++ {
+		id = fmt.Sprintf("%s-%d", base, i)
+	}
+	f.claimed[id] = true
+	return id
+}
+
+// idTakenLocked reports whether an agent id is already in use: claimed by an
+// in-flight spawn, registered live (Spawn or Reload both insert into agents),
+// or present on disk from a prior process whose agent was never reloaded —
+// reusing that dir would clobber its meta.json and interleave two agents'
+// event logs. Caller holds f.mu; the Stat is small and spawns are rare.
+func (f *Swarm) idTakenLocked(id string) bool {
+	if f.claimed[id] {
+		return true
+	}
+	if _, exists := f.agents[id]; exists {
+		return true
+	}
+	if _, err := os.Stat(f.agentStateDir(id)); err == nil {
+		return true
+	}
+	return false
+}
+
+// DefaultRoot is the swarm state root every host wires under a terva home —
+// the directory agentStateDir's layout lives in. Exported so out-of-package
+// readers (e.g. session_inspect resolving a sub-agent id to its transcript)
+// derive the same path instead of duplicating the join.
+func DefaultRoot(tervaHome string) string {
+	return filepath.Join(tervaHome, "swarm")
+}
+
+// AgentSessionPath returns the persistent session transcript for one agent id
+// under a swarm root (see agentStateDir's layout). The id is used as a path
+// element verbatim, so callers taking ids from an untrusted source must
+// path-validate first.
+func AgentSessionPath(root, id string) string {
+	return filepath.Join(root, "agents", id, "session.json")
+}
+
 // SpawnRequest configures a Spawn. Only Task is required; the rest
 // are optional. Model + Provider, when set, get baked into the
 // child argv as --model / --provider so the agent runs against the
@@ -266,6 +327,14 @@ type SpawnRequest struct {
 	Experience string
 	Substrate  string
 	Card       string
+
+	// SessionID scopes the agent to the host terva session that spawned it:
+	// the /swarm dashboard narrows to matching agents, and the id persists in
+	// meta.json (the durable "which conversation do you belong to" stamp).
+	// Callers with a session in hand (the spawn tools resolve it from the
+	// dispatch-context agent) should set it; empty falls back to the swarm's
+	// SetActiveSession value, which no production host currently sets.
+	SessionID string
 }
 
 // Spawn creates a new Agent for the given task, allocates its
@@ -300,7 +369,18 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 	if task == "" {
 		return nil, errors.New("swarm: empty task")
 	}
-	id := newAgentID(task, f.cfg.Now())
+	id := f.claimAgentID(task)
+	// Every early return below must release the claim, or the id (and its
+	// suffix) would stay burned for the life of the process. Registration
+	// clears claimedID so the deferred release is a no-op on success.
+	claimedID := id
+	defer func() {
+		if claimedID != "" {
+			f.mu.Lock()
+			delete(f.claimed, claimedID)
+			f.mu.Unlock()
+		}
+	}()
 
 	dir := f.cfg.RepoRoot
 	var releaseWorktree func()
@@ -321,11 +401,11 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 	}
 
 	stateDir := f.agentStateDir(id)
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	if err := privfs.MkdirAll(stateDir); err != nil {
 		return nil, fmt.Errorf("swarm state dir: %w", err)
 	}
 	logPath := filepath.Join(stateDir, "events.jsonl")
-	sessionPath := filepath.Join(stateDir, "session.json")
+	sessionPath := AgentSessionPath(f.cfg.Root, id)
 	// Unix sockets have a hard 104-byte path limit on darwin and 108
 	// on linux. Long TERVA_HOME paths plus an agent slug blow that cap
 	// quickly. Pick the shortest path that still keeps sockets
@@ -337,12 +417,16 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		return nil, fmt.Errorf("swarm inbox path: %w", err)
 	}
 
-	// Snapshot activeSession under the lock; we use it twice (struct
-	// init below + persistence). Reading it without the lock would
-	// race a concurrent SetActiveSession call.
-	f.mu.Lock()
-	sessionID := f.activeSession
-	f.mu.Unlock()
+	// The spawning conversation's own session id wins — a daemon hosts many
+	// sessions, so a per-spawn stamp is the only value that is always right.
+	// Fall back to the swarm-wide SetActiveSession scope (snapshotted under
+	// the lock; reading it unlocked would race a concurrent set).
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		f.mu.Lock()
+		sessionID = f.activeSession
+		f.mu.Unlock()
+	}
 
 	a := &Agent{
 		ID:           id,
@@ -377,7 +461,9 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 	f.mu.Lock()
 	f.agents[id] = a
 	f.order = append(f.order, id)
+	delete(f.claimed, id)
 	f.mu.Unlock()
+	claimedID = ""
 
 	// Persist the agent's identity so a later `terva` invocation can
 	// reload it from disk via Swarm.Reload. Best-effort: if the disk

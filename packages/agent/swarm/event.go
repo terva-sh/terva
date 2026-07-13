@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // Event is one structured datum in an agent's durable event log.
@@ -87,10 +89,12 @@ type EventLog struct {
 // OpenEventLog opens (or creates) the events.jsonl file at path.
 // Parent directories are created as needed.
 func OpenEventLog(path string) (*EventLog, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("event log dir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	// The event log carries full tool output — session-transcript-grade
+	// data — so it is user-private like the child's session file.
+	f, err := privfs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY)
 	if err != nil {
 		return nil, fmt.Errorf("event log open: %w", err)
 	}
