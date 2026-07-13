@@ -185,9 +185,17 @@ func unixSocketPath(addr string) string {
 // listenUnix binds a filesystem socket with 0600 permissions — the file IS
 // the auth boundary. A stale socket left by a crashed daemon is cleared
 // first; a live daemon answers the probe dial and the bind is refused
-// instead of stealing its socket.
+// instead of stealing its socket. Anything at the path that is NOT a socket is
+// refused outright and left on disk — never removed.
 func listenUnix(path string) (net.Listener, error) {
-	if _, err := os.Stat(path); err == nil {
+	// Lstat, not Stat: the mode has to be the mode of the path itself, and a
+	// symlink is not a socket we put there. A failed dial cannot stand in for
+	// "stale socket" — every regular file fails it too — and the removal is
+	// irreversible, so the socket bit has to be checked rather than assumed.
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSocket == 0 {
+			return nil, fmt.Errorf("terva web: %s already exists and is not a socket (%s) — refusing to remove it; pick another path or delete it yourself", path, fi.Mode().Type())
+		}
 		if c, derr := net.DialTimeout("unix", path, 500*time.Millisecond); derr == nil {
 			_ = c.Close()
 			return nil, fmt.Errorf("terva web: %s is already served by a running daemon", path)

@@ -107,13 +107,19 @@ func TestListenUnixStaleAndLive(t *testing.T) {
 	if err != nil {
 		t.Skipf("unix sockets unavailable here: %v", err)
 	}
-	// Simulate a crash: the file outlives the listener. Close unlinks on
-	// most platforms, so re-create the file to model the leftover.
+	// Model a crash: the socket file outlives the listener. Go unlinks on
+	// Close by default, so opt out — the leftover has to be a REAL socket,
+	// because that is the only thing listenUnix is allowed to reclaim.
+	if ul, ok := ln.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
 	_ = ln.Close()
-	if _, err := os.Stat(stale); os.IsNotExist(err) {
-		if f, ferr := os.Create(stale); ferr == nil {
-			f.Close()
-		}
+	fi, err := os.Lstat(stale)
+	if err != nil {
+		t.Fatalf("stale socket vanished on Close: %v", err)
+	}
+	if fi.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("stale fixture is %s, want a socket", fi.Mode().Type())
 	}
 	ln2, err := listenUnix(stale)
 	if err != nil {
@@ -138,6 +144,47 @@ func TestListenUnixStaleAndLive(t *testing.T) {
 	}()
 	if _, err := listenUnix(live); err == nil {
 		t.Fatal("listenUnix stole a live daemon's socket")
+	}
+}
+
+// A non-socket at the address is an operator typo (--web-addr unix:notes.txt),
+// never a socket to reclaim: refuse the bind and leave the entry alone. The
+// deletion is irreversible, so "is it a socket" has to be checked, not assumed
+// from a failed dial — every regular file also fails to dial.
+func TestListenUnixRefusesNonSocket(t *testing.T) {
+	dir := testsupport.TempDir(t)
+
+	file := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(file, []byte("precious"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	link := filepath.Join(dir, "link.sock")
+	if err := os.Symlink(file, link); err != nil {
+		t.Skipf("symlinks unavailable here: %v", err)
+	}
+
+	subdir := filepath.Join(dir, "adir")
+	if err := os.Mkdir(subdir, 0o700); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+
+	for _, path := range []string{file, link, subdir} {
+		if ln, err := listenUnix(path); err == nil {
+			_ = ln.Close()
+			t.Fatalf("listenUnix(%s) bound over a non-socket, want refusal", path)
+		}
+	}
+
+	// Every fixture must still be there — refusing is the whole point.
+	if got, err := os.ReadFile(file); err != nil || string(got) != "precious" {
+		t.Fatalf("regular file destroyed: got %q err %v", got, err)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Fatalf("symlink destroyed: %v", err)
+	}
+	if _, err := os.Lstat(subdir); err != nil {
+		t.Fatalf("directory destroyed: %v", err)
 	}
 }
 
