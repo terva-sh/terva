@@ -25,7 +25,7 @@ var statusLinePresets = map[string][][]string{
 	"detailed": {
 		{"cwd", "git", "edits", "model", "thinking", "tokens", "cost"},
 		{"context", "usage", "swarm"},
-		{"session", "clock", "tags", "bridge", "ext"},
+		{"session", "clock", "tags", "tasks", "bridge", "ext"},
 	},
 }
 
@@ -41,6 +41,7 @@ var statusToggleSegments = []struct {
 	{"edits", 0, "lines the agent's edit/write tools changed this session"},
 	{"thinking", 0, "the model's reasoning level"},
 	{"swarm", 1, "live background agent count"},
+	{"tasks", 2, "the built-in task board's current task"},
 	{"session", 2, "the session file's short name"},
 	{"clock", 2, "a 24h wall clock"},
 }

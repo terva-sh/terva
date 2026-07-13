@@ -43,9 +43,14 @@ type SettingsOption struct {
 }
 
 type SettingsAction struct {
-	Toggle      bool
-	Key         string
-	Value       bool
+	Toggle bool
+	Key    string
+	Value  bool
+	// Enum is true when this action came from an option picker (the chosen
+	// value is in StringValue); false for a bool toggle (state in Value). It
+	// disambiguates an enum selecting the empty value (e.g. reasoning "off")
+	// from a false toggle, so a dispatcher never mistakes one for the other.
+	Enum        bool
 	StringValue string
 	Close       bool
 }
@@ -158,7 +163,7 @@ func (d *SettingsDialog) selectCurrentOption() SettingsAction {
 	it.Choice = d.optionCursor
 	d.items[d.cursor] = it
 	d.selecting = false
-	return SettingsAction{Toggle: true, Key: it.Key, StringValue: it.Options[it.Choice].Value}
+	return SettingsAction{Toggle: true, Enum: true, Key: it.Key, StringValue: it.Options[it.Choice].Value}
 }
 
 func (d *SettingsDialog) Render(th tui.Theme, width int) []string {

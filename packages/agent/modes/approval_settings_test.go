@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -33,43 +34,62 @@ func newApprovalTestInteractive(c *fakeCarrier) *Interactive {
 	}
 }
 
-// The picker reflects the mode the daemon reports on the settings surface.
-func TestApprovalSettingItemReflectsSurfaceMode(t *testing.T) {
+// findSettingsItem returns the dialog row for key — a test helper for asserting
+// on the generic settings rows.
+func findSettingsItem(items []dialogs.SettingsItem, key string) (dialogs.SettingsItem, bool) {
+	for _, it := range items {
+		if it.Key == key {
+			return it, true
+		}
+	}
+	return dialogs.SettingsItem{}, false
+}
+
+// The generic settings rows reflect the daemon surface: the approval picker's
+// selected option is the mode the surface reports, and a bool item round-trips.
+func TestDaemonSettingsReflectSurface(t *testing.T) {
 	i := newApprovalTestInteractive(newFakeCarrier())
 
-	item, ok := i.approvalSettingItem()
+	items := i.daemonSettingsItems()
+	approval, ok := findSettingsItem(items, "approval")
 	if !ok {
-		t.Fatal("want an approval item when the settings surface carries one")
+		t.Fatal("want an approval row when the settings surface carries one")
 	}
-	if item.Key != "approval_mode" {
-		t.Fatalf("item key = %q", item.Key)
-	}
-	if got := item.Options[item.Choice].Value; got != "workspace" {
+	if got := approval.Options[approval.Choice].Value; got != "workspace" {
 		t.Errorf("picker choice = %q, want workspace (the surface's mode)", got)
+	}
+	lazy, ok := findSettingsItem(items, "lazy_tools")
+	if !ok {
+		t.Fatal("want the lazy_tools bool row from the settings surface")
+	}
+	if !lazy.Value {
+		t.Error("lazy_tools row should be checked (surface value true)")
 	}
 }
 
-// An unreadable settings surface means no picker — the TUI has no local gate to
-// fall back on.
-func TestApprovalSettingItemAbsentWhenSurfaceUnavailable(t *testing.T) {
+// An unreadable settings surface yields no rows — the TUI has no local settings
+// to fall back on when the daemon is gone.
+func TestDaemonSettingsAbsentWhenSurfaceUnavailable(t *testing.T) {
 	c := newFakeCarrier()
 	c.surfErr = errors.New("daemon gone")
 	i := newApprovalTestInteractive(c)
 
-	if _, ok := i.approvalSettingItem(); ok {
-		t.Error("unreadable settings surface → no approval picker")
+	if items := i.daemonSettingsItems(); len(items) != 0 {
+		t.Errorf("unreadable settings surface → no rows, got %d", len(items))
 	}
 }
 
 // Switching the mode pushes a settings surface action, which is where the
 // daemon swaps enforcement on the gate and rebuilds the session's tool set.
 // Session-only: the picker must never write the persistent default (the store
-// has no approval field precisely because nothing should call it).
+// has no approval field precisely because nothing should call it). Invalid
+// values can't reach here — the picker only offers the daemon's options, and
+// the daemon validates — so no local validation is duplicated.
 func TestApplyApprovalModeSendsSurfaceAction(t *testing.T) {
 	c := newFakeCarrier()
 	i := newApprovalTestInteractive(c)
 
-	i.applyApprovalModeSetting("plan")
+	i.applyApprovalMode("plan")
 
 	select {
 	case act := <-c.surfActs:
@@ -78,20 +98,7 @@ func TestApplyApprovalModeSendsSurfaceAction(t *testing.T) {
 			t.Fatalf("surface action = %+v, want settings/set approval=plan", act)
 		}
 	default:
-		t.Fatal("applyApprovalModeSetting sent no surface action")
-	}
-}
-
-func TestApplyApprovalModeRejectsBadValue(t *testing.T) {
-	c := newFakeCarrier()
-	i := newApprovalTestInteractive(c)
-
-	i.applyApprovalModeSetting("bogus")
-
-	select {
-	case act := <-c.surfActs:
-		t.Fatalf("an invalid mode must not switch anything; got %+v", act)
-	default:
+		t.Fatal("applyApprovalMode sent no surface action")
 	}
 }
 

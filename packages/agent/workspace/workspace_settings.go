@@ -4,8 +4,10 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
@@ -29,14 +31,58 @@ var approvalOptions = []ctrlproto.SettingOption{
 	{Value: "yolo", Label: i18n.M("yolo — no prompts")},
 }
 
+// The labels fold in each level's rough token budget (the SettingOption wire
+// carries no per-option description), so both the web dropdown and the TUI
+// picker render self-describing choices from this one source.
 var reasoningOptions = []ctrlproto.SettingOption{
 	{Value: "", Label: i18n.M("off")},
-	{Value: "minimum", Label: i18n.M("minimum")},
-	{Value: "low", Label: i18n.M("low")},
-	{Value: "medium", Label: i18n.M("medium")},
-	{Value: "high", Label: i18n.M("high")},
-	{Value: "maximum", Label: i18n.M("maximum")},
-	{Value: "max", Label: i18n.M("max")},
+	{Value: "minimum", Label: i18n.M("minimum — very brief (~1k tokens)")},
+	{Value: "low", Label: i18n.M("low — light (~2k tokens)")},
+	{Value: "medium", Label: i18n.M("medium — moderate (~8k tokens)")},
+	{Value: "high", Label: i18n.M("high — deep (~16k tokens)")},
+	{Value: "maximum", Label: i18n.M("maximum — highest (~32k tokens)")},
+	{Value: "max", Label: i18n.M("max — native max (GPT-5.6 / adaptive Claude)")},
+}
+
+var autoCompactOptions = []ctrlproto.SettingOption{
+	{Value: "steps", Label: i18n.M("steps — condense mid-turn as the window fills")},
+	{Value: "turns", Label: i18n.M("turns — condense only at turn boundaries")},
+	{Value: "off", Label: i18n.M("off — never auto-condense")},
+}
+
+var themeOptions = []ctrlproto.SettingOption{
+	{Value: "auto", Label: i18n.M("auto — match the terminal")},
+	{Value: "dark", Label: i18n.M("dark")},
+	{Value: "light", Label: i18n.M("light")},
+	{Value: "dark-daltonized", Label: i18n.M("dark (daltonized)")},
+	{Value: "light-daltonized", Label: i18n.M("light (daltonized)")},
+	{Value: "daltonized", Label: i18n.M("daltonized")},
+}
+
+var temperatureOptions = []ctrlproto.SettingOption{
+	{Value: "", Label: i18n.M("default — the model/provider default")},
+	{Value: "0", Label: i18n.M("0.0 — most deterministic")},
+	{Value: "0.3", Label: i18n.M("0.3")},
+	{Value: "0.7", Label: i18n.M("0.7")},
+	{Value: "1", Label: i18n.M("1.0 — most varied")},
+}
+
+// optionsWithCurrent prepends value as a bare option when it is non-empty and
+// absent from opts, so an enum setting whose current value is a custom theme or
+// an off-preset temperature (set by hand in config.json) still round-trips —
+// the SettingItem.Value always matches a listed option.
+func optionsWithCurrent(opts []ctrlproto.SettingOption, value string) []ctrlproto.SettingOption {
+	if value == "" {
+		return opts
+	}
+	for _, o := range opts {
+		if o.Value == value {
+			return opts
+		}
+	}
+	// A custom value (e.g. a user theme name, an off-preset temperature) is
+	// displayed verbatim; localizeOptions' i18n.T leaves an unknown string as-is.
+	return append([]ctrlproto.SettingOption{{Value: value, Label: value}}, opts...)
 }
 
 // localizeOptions returns a copy of opts with each label translated to the
@@ -87,6 +133,67 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Description: i18n.T("Let the agent spawn background sub-agents (swarm_spawn) for independent parallel sub-tasks."),
 			Note:        i18n.T("applies to new sessions"),
 		},
+		{
+			Key: "lazy_tools", Label: i18n.T("Lazy tool loading"), Type: "bool",
+			Value:       boolStr(cfg.LazyTools),
+			Description: i18n.T("Advertise only the core coding tools at first and let the agent load extension/MCP tool groups on demand (activate_tools), trimming the tool schemas that fill context every turn."),
+			Note:        i18n.T("applies to new sessions"),
+		},
+		{
+			Key: "auto_compact", Label: i18n.T("Auto-condense"), Type: "enum",
+			Value: autoCompactValue(cfg), Options: localizeOptions(autoCompactOptions),
+			Description: i18n.T("When to automatically condense the transcript as the context window fills."),
+			Note:        i18n.T("applies live to every session"),
+		},
+		{
+			Key: "temperature", Label: i18n.T("Temperature"), Type: "enum",
+			Value:       temperatureValue(cfg),
+			Options:     localizeOptions(optionsWithCurrent(temperatureOptions, temperatureValue(cfg))),
+			Description: i18n.T("Sampling temperature (0–2). Higher is more varied; the default defers to the model."),
+			Note:        i18n.T("applies to new sessions"),
+		},
+		{
+			Key: "theme", Label: i18n.T("Theme"), Type: "enum",
+			Value:       themeValue(cfg),
+			Options:     localizeOptions(optionsWithCurrent(themeOptions, themeValue(cfg))),
+			Description: i18n.T("Color theme for the terminal UI."),
+			Note:        i18n.T("applies to new sessions"),
+		},
+		{
+			Key: "inline_images", Label: i18n.T("Inline images"), Type: "bool",
+			Value:       boolStr(cfg.InlineImagesEnabled == nil || *cfg.InlineImagesEnabled),
+			Description: i18n.T("Render images inline in terminals that support an image protocol."),
+			Note:        i18n.T("applies to new sessions"),
+		},
+		{
+			Key: "recursive_file_suggest", Label: i18n.T("Recursive file search"), Type: "bool",
+			Value:       boolStr(cfg.RecursiveFileSuggest == nil || *cfg.RecursiveFileSuggest),
+			Description: i18n.T("Fuzzy-search the whole tree in the @-mention file picker instead of browsing one directory at a time."),
+			Note:        i18n.T("applies to new sessions"),
+		},
+		{
+			Key: "respect_gitignore", Label: i18n.T("Respect .gitignore"), Type: "bool",
+			Value:       boolStr(cfg.RespectGitignore == nil || *cfg.RespectGitignore),
+			Description: i18n.T("Hide git-ignored files from the @-mention file picker."),
+			Note:        i18n.T("applies to new sessions"),
+		},
+		{
+			Key: "lore", Label: i18n.T("Lore (keyed context)"), Type: "bool",
+			Value:       boolStr(cfg.Lore == nil || *cfg.Lore),
+			Description: i18n.T("Discover and inject keyword-triggered context entries (lore) into the prompt when their trigger keys appear. Off is the persistent form of --no-lore."),
+			Note:        i18n.T("applies to new sessions"),
+		},
+		{
+			Key: "swarm_worktrees", Label: i18n.T("Swarm worktrees"), Type: "bool",
+			Value:       boolStr(cfg.SwarmWorktrees != nil && *cfg.SwarmWorktrees),
+			Description: i18n.T("Give each background sub-agent its own git worktree so parallel work never collides in the tree."),
+			Note:        i18n.T("applies to new sessions"),
+		},
+		{
+			Key: "core_pack_offer", Label: i18n.T("Offer the core tool pack"), Type: "bool",
+			Value:       boolStr(!cfg.DisableCorePackOffer),
+			Description: i18n.T("Offer to install the recommended extension pack on the first run in a new workspace."),
+		},
 	}
 	// The nudge is meaningful only when the tool is on (Toggle 2 nested under
 	// Toggle 1); it re-appears when auto_swarm flips on (the surface re-fetches).
@@ -98,7 +205,49 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Note:        i18n.T("applies to new sessions"),
 		})
 	}
+	// Engine features project into the same pane (the seam build.EngineFeatures
+	// declares). A lazy-tools-bound feature nests under the lazy_tools toggle
+	// the same way the nudge nests under auto_swarm: hidden while meaningless,
+	// re-appearing when the parent flips on (the surface re-fetches).
+	for _, f := range build.EngineFeatures {
+		if f.RequiresLazyTools && !cfg.LazyTools {
+			continue
+		}
+		items = append(items, ctrlproto.SettingItem{
+			Key: f.ID, Label: i18n.T(f.Title), Type: "bool",
+			Value:       boolStr(build.EngineFeatureOn(cfg.EngineFeatures, f)),
+			Description: i18n.T(f.Desc),
+			Note:        i18n.T("applies live to every session"),
+		})
+	}
 	return ctrlproto.SettingsView{Items: items}
+}
+
+// autoCompactValue is the current auto-compact policy for the enum, defaulting
+// unset/blank to "steps" (core.autoCompactMode's fallback).
+func autoCompactValue(cfg config.Config) string {
+	if v := strings.ToLower(strings.TrimSpace(cfg.AutoCompact)); v != "" {
+		return v
+	}
+	return "steps"
+}
+
+// themeValue maps the stored theme to its enum value: "" (the canonical "auto")
+// displays as "auto".
+func themeValue(cfg config.Config) string {
+	if cfg.Theme == "" {
+		return "auto"
+	}
+	return cfg.Theme
+}
+
+// temperatureValue renders the stored *float32 as the enum value ("" when unset
+// = the model/provider default), in the shortest form that round-trips.
+func temperatureValue(cfg config.Config) string {
+	if cfg.Temperature == nil {
+		return ""
+	}
+	return strconv.FormatFloat(float64(*cfg.Temperature), 'g', -1, 32)
 }
 
 // boolStr renders a bool as the "true"/"false" the SettingItem wire uses.
@@ -180,6 +329,81 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		if err := config.MutateConfig(func(c *config.Config) { c.AutoTitle = &on }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
+	case "lazy_tools":
+		// Persist-only, like auto_title: lazy visibility is resolved at session
+		// build (NewAgent → EnableLazyTools + the activate_tools registration),
+		// so it applies to new sessions rather than reshaping a running one.
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.LazyTools = on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "auto_compact":
+		switch val {
+		case "steps", "turns", "off":
+		default:
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown auto_compact %q (steps|turns|off)", val)
+		}
+		// Live for every session: Agent.AutoCompactPolicy re-reads config on each
+		// threshold check, so this applies on the next check with no rebuild.
+		if err := config.MutateConfig(func(c *config.Config) { c.AutoCompact = val }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "temperature":
+		var tp *float32
+		if val != "" {
+			f, err := strconv.ParseFloat(val, 32)
+			if err != nil || f < 0 || f > 2 {
+				return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "temperature must be a number between 0 and 2")
+			}
+			t := float32(f)
+			tp = &t
+		}
+		if err := config.MutateConfig(func(c *config.Config) { c.Temperature = tp }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "theme":
+		// "auto" is stored as the canonical empty string (SetTheme's convention).
+		theme := val
+		if theme == "auto" {
+			theme = ""
+		}
+		if err := config.MutateConfig(func(c *config.Config) { c.Theme = theme }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "inline_images":
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.InlineImagesEnabled = &on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "recursive_file_suggest":
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.RecursiveFileSuggest = &on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "respect_gitignore":
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.RespectGitignore = &on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "lore":
+		// Persist-only: lore discovery/injection is resolved at session build
+		// (cfg.Lore == nil || *cfg.Lore), so it applies to new sessions — the
+		// persistent equivalent of the per-run --no-lore flag.
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.Lore = &on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "swarm_worktrees":
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.SwarmWorktrees = &on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "core_pack_offer":
+		// Inverted: the toggle reads "offer" but the config flag is "disable".
+		off := val != "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.DisableCorePackOffer = off }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
 	case "auto_swarm":
 		// Tool availability (Toggle 1). Persist, then re-derive every live
 		// session's view: rebuildTools re-runs injectExtraTools (which reads
@@ -216,7 +440,24 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		}
 		s.ws.BroadcastAll(ctrlproto.LocaleChangedEvent(i18n.ActiveLang()))
 	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown setting %q", key)
+		f, ok := build.EngineFeatureByID(key)
+		if !ok {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown setting %q", key)
+		}
+		// An engine feature: persist the override, then flip every live
+		// session's agent through the feature's own Apply (new sessions read
+		// the override at build). A session mid-Prompt picks it up on its
+		// next Prompt — the loop snapshots its gates per Prompt.
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) {
+			if c.EngineFeatures == nil {
+				c.EngineFeatures = map[string]bool{}
+			}
+			c.EngineFeatures[key] = on
+		}); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+		s.ws.applyEngineFeature(f, on)
 	}
 	// Settings surface reflects per-session (approval) + shared config; nudge
 	// every client to re-fetch so config changes converge across sessions.
@@ -243,6 +484,22 @@ func (w *Workspace) applyReasoning(level string) {
 	for _, s := range sess {
 		if s.agent != nil {
 			s.agent.SetReasoning(level)
+		}
+	}
+}
+
+// applyEngineFeature flips an engine feature live on every session's agent —
+// the same fan-out as applyReasoning, through the feature's own Apply.
+func (w *Workspace) applyEngineFeature(f build.EngineFeature, on bool) {
+	w.mu.Lock()
+	sess := make([]*wsSession, 0, len(w.sessions))
+	for _, s := range w.sessions {
+		sess = append(sess, s)
+	}
+	w.mu.Unlock()
+	for _, s := range sess {
+		if s.agent != nil {
+			f.Apply(s.agent, on)
 		}
 	}
 }

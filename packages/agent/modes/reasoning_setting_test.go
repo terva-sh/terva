@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/agent/modes/dialogs"
 )
 
 // /settings → thinking level routes through the daemon's settings surface,
@@ -23,7 +25,7 @@ func TestReasoningSettingRoutesThroughSurfaceAction(t *testing.T) {
 	i.cfg.Carrier = fc
 	i.cfg.CarrierSession = "s1"
 
-	i.applyReasoningSetting("high")
+	i.applySettingChange(dialogs.SettingsAction{Toggle: true, Enum: true, Key: "reasoning", StringValue: "high"})
 
 	select {
 	case act := <-fc.surfActs:
@@ -52,7 +54,7 @@ func TestReasoningSettingSurfacesDaemonError(t *testing.T) {
 	i.cfg.CarrierSession = "s1"
 	i.cfg.Reasoning = "low"
 
-	i.applyReasoningSetting("high")
+	i.applySettingChange(dialogs.SettingsAction{Toggle: true, Enum: true, Key: "reasoning", StringValue: "high"})
 	<-fc.surfActs
 
 	i.mu.Lock()
