@@ -96,6 +96,27 @@ func (a *Agent) AddImageExcludedObserver(fn func(sha256Hex string)) {
 	a.obsMu.Unlock()
 }
 
+// AddQueueDrainedObserver registers fn to fire when the agent loop consumes
+// queued user messages at a mid-turn safe boundary, carrying what it took.
+//
+// This is the one queue mutation a host cannot already know about. Every other
+// one it performs itself — QueueMessage, SetQueuedMessages, ShiftQueuedMessage —
+// and announces on the way out. The loop's own drain happens on the turn
+// goroutine, between steps, with nobody watching: the messages leave the queue
+// and arrive in the transcript, and a host that mirrors the queue rather than
+// tracking it goes on rendering prompts the agent has already sent. Hosts wire
+// this to whatever they broadcast the queue with.
+//
+// Fired with a.mu released, so an observer may read the agent. nil is a no-op.
+func (a *Agent) AddQueueDrainedObserver(fn func(drained []string)) {
+	if fn == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.queueDrainedObs = append(a.queueDrainedObs, fn)
+	a.obsMu.Unlock()
+}
+
 // ContinuationGate is one cause-tagged at-close continuation: consulted when a
 // turn ends with a natural stop (the model produced a final message, no tool
 // calls) to decide whether the prompt continues with one more segment. Hosts
@@ -198,5 +219,17 @@ func (a *Agent) fireImageExcluded(sha256Hex string) {
 	a.obsMu.RUnlock()
 	for _, fn := range obs {
 		fn(sha256Hex)
+	}
+}
+
+// fireQueueDrained runs with a.mu released — observers call back into the host,
+// which reads the agent.
+func (a *Agent) fireQueueDrained(drained []string) {
+	a.obsMu.RLock()
+	obs := make([]func(drained []string), len(a.queueDrainedObs))
+	copy(obs, a.queueDrainedObs)
+	a.obsMu.RUnlock()
+	for _, fn := range obs {
+		fn(drained)
 	}
 }

@@ -118,6 +118,7 @@ type Agent struct {
 	usageObs               []func(u, cumulative provider.Usage)
 	transcriptCompactedObs []func(messages []provider.Message)
 	imageExcludedObs       []func(sha256Hex string)
+	queueDrainedObs        []func(drained []string)
 	continuationGates      []ContinuationGate
 
 	// ContextProvider, if set, is called once per turn to obtain
@@ -1180,6 +1181,12 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		// started yet.
 		if pending := a.drainQueuedMessages(); len(pending) > 0 {
 			a.appendQueuedAsUser(pending, false, sink)
+			// The queue just shrank, and no host asked it to — this is the
+			// only mutation the host does not perform itself, so it is the
+			// only one it cannot announce without being told. Left unsaid, a
+			// client that mirrors the queue keeps rendering messages that are
+			// already in the transcript above.
+			a.fireQueueDrained(pending)
 		}
 
 		// Mid-turn auto-compact, at the same safe boundary. A long

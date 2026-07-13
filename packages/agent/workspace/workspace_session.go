@@ -294,6 +294,12 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	ag.AddEventObserver(wsObserve)
 	ag.AddEventObserver(func(ev core.AgentEvent) { build.FanoutAgentEvent(extMgr, ev) })
 	ag.AddEventObserver(func(ev core.AgentEvent) { build.ObserveAgentEventForHooks(hookEng, ev) })
+	// The queue is mirrored, not tracked, so every mutation has to announce
+	// itself. The host performs — and therefore announces — all of them but
+	// one: the loop's own drain at a mid-turn safe boundary, which is what this
+	// closes. Broadcast the queue as it stands rather than the drained list, so
+	// a message queued in the same breath is not overwritten by a stale empty.
+	ag.AddQueueDrainedObserver(func([]string) { s.broadcastQueue() })
 
 	// Durable persistence: every message/usage/compaction flows to the session
 	// JSONL as it happens (also adopts the session identity). Sets the On*
