@@ -1,0 +1,15 @@
+{
+  "kind": "resp",
+  "id": 10,
+  "result": {
+    "files": [
+      {
+        "path": "src",
+        "dir": true
+      },
+      {
+        "path": "src/main.go"
+      }
+    ]
+  }
+}

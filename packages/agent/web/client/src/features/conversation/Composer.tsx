@@ -1,8 +1,48 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../../i18n'
-import type { SkillInfo } from '../../platform/ctrlproto/types'
+import type { SkillInfo, WireFileEntry } from '../../platform/ctrlproto/types'
 import type { ImageAttachment } from '../../platform/conversation/images'
+import { atComplete } from './atcomplete'
 import { fileToAttachment } from './attachments'
+
+// matchFiles ranks the workspace file list against an @-query: substring
+// hits first (earlier is better), then subsequence hits (the TUI ranks with
+// a fuzzy matcher; a subsequence pass is the same recall for a menu this
+// short). Case-insensitive, capped — the menu is a picker, not a listing.
+export function matchFiles(files: WireFileEntry[], query: string, cap = 8): WireFileEntry[] {
+  if (!query) return files.slice(0, cap)
+  const q = query.toLowerCase()
+  const subs: { f: WireFileEntry; at: number }[] = []
+  const seq: WireFileEntry[] = []
+  for (const f of files) {
+    const p = f.path.toLowerCase()
+    const at = p.indexOf(q)
+    if (at >= 0) {
+      subs.push({ f, at })
+      continue
+    }
+    let i = 0
+    for (const ch of p) {
+      if (ch === q[i]) i++
+      if (i === q.length) break
+    }
+    if (i === q.length) seq.push(f)
+  }
+  subs.sort((a, b) => a.at - b.at || a.f.path.length - b.f.path.length)
+  return [...subs.map((s) => s.f), ...seq].slice(0, cap)
+}
+
+// extractAtQuery mirrors the TUI picker's trigger: the last "@" at start or
+// after a space opens the stage, and the query is everything after it (no
+// whitespace). Returns null when no @-token is live at the end of the text.
+export function extractAtQuery(text: string): { start: number; query: string } | null {
+  const idx = text.lastIndexOf('@')
+  if (idx < 0) return null
+  if (idx > 0 && text[idx - 1] !== ' ' && text[idx - 1] !== '\n') return null
+  const query = text.slice(idx + 1)
+  if (/[\s]/.test(query)) return null
+  return { start: idx, query }
+}
 
 // SlashCommand is one user-driven composer command (/compact, /skill, …). `run`
 // receives everything after the command name; `arg` is a display hint for the
@@ -20,6 +60,8 @@ export function Composer({
   onToast,
   commands,
   skills,
+  files,
+  onFilesNeeded,
   onCancel,
 }: {
   busy: boolean
@@ -27,6 +69,12 @@ export function Composer({
   onToast: (message: string) => void
   commands: SlashCommand[]
   skills: SkillInfo[]
+  // files is the daemon's workspace listing for the @-stage: null while the
+  // daemon doesn't serve files.list (or nothing is fetched yet). The stage
+  // calls onFilesNeeded when it activates, so the fetch is lazy — nothing
+  // rides the wire until someone types "@".
+  files?: WireFileEntry[] | null
+  onFilesNeeded?: () => void
   onCancel: () => void
 }) {
   const [text, setText] = useState('')
@@ -78,12 +126,20 @@ export function Composer({
     setDismissed(false)
   }
 
-  // Two autocomplete stages: command names while the text is a bare "/partial",
-  // then skill names once "/skill " is being argued. Each item knows how to
-  // apply itself on select.
+  // Three autocomplete stages: command names while the text is a bare
+  // "/partial", skill names once "/skill " is being argued, and workspace
+  // files behind a live "@"-token (daemon-listed; see files prop). Each item
+  // knows how to apply itself on select.
   type MenuItem = { key: string; label: string; hint: string; apply: () => void }
   const cmdStage = /^\/(\S*)$/.exec(text)
   const skillStage = /^\/skill\s+(\S*)$/.exec(text)
+  const atStage = onFilesNeeded ? extractAtQuery(text) : null
+  // Lazy-load the listing the first time an @-stage goes live (and refresh
+  // per the parent's TTL policy). An effect, not render-time work: the fetch
+  // sets parent state.
+  useEffect(() => {
+    if (atStage) onFilesNeeded?.()
+  }, [atStage != null])
   let menu: MenuItem[] = []
   if (cmdStage) {
     const query = cmdStage[1].toLowerCase()
@@ -109,6 +165,24 @@ export function Composer({
           setDismissed(false)
         },
       }))
+  } else if (atStage && files && files.length) {
+    menu = matchFiles(files, atStage.query).map((file) => ({
+      key: file.path,
+      label: file.path + (file.dir ? '/' : ''),
+      hint: '',
+      // Selecting a file replaces the live @-token with the path (relative
+      // to the workspace cwd — the daemon's tools resolve it there, and
+      // it's what a user would have typed by hand) plus a space. Selecting
+      // a directory keeps the @ and appends "/", so the stage stays live
+      // and the query narrows into that directory.
+      apply: () => {
+        const head = text.slice(0, atStage.start)
+        setText(file.dir ? head + '@' + file.path + '/' : head + file.path + ' ')
+        ref.current?.focus()
+        setDismissed(false)
+        setSel(0)
+      },
+    }))
   }
   const menuOpen = menu.length > 0 && !dismissed
   const clampedSel = Math.min(sel, Math.max(0, menu.length - 1))
@@ -182,6 +256,22 @@ export function Composer({
           setDismissed(false)
         }}
         onKeyDown={(event) => {
+          // Tab on a live @-token is shell-style completion (atComplete —
+          // the TUI runs the same fixture-pinned semantics): extend to the
+          // unique candidate or the longest common prefix, never commit.
+          // Enter still applies the highlighted row. Even a no-op consumes
+          // the keystroke, like a shell — and works after Escape dismissed
+          // the menu, as completion doesn't need the popup.
+          if (event.key === 'Tab' && atStage && files && files.length) {
+            event.preventDefault()
+            const [extended] = atComplete(files, atStage.query)
+            if (extended !== atStage.query) {
+              setText(text.slice(0, atStage.start + 1) + extended)
+              setSel(0)
+              setDismissed(false)
+            }
+            return
+          }
           if (menuOpen) {
             if (event.key === 'ArrowDown') {
               event.preventDefault()

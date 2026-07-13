@@ -182,6 +182,108 @@ describe('Composer autocomplete', () => {
   })
 })
 
+describe('Composer @-file stage', () => {
+  const files = [
+    { path: 'docs', dir: true },
+    { path: 'src/main.go' },
+    { path: 'src/util/parse.go' },
+    { path: 'README.md' },
+  ]
+
+  it('requests the listing lazily and completes a file, replacing the @-token', () => {
+    const onFilesNeeded = vi.fn()
+    render(<Composer {...props({ files, onFilesNeeded })} />)
+    const textarea = screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement
+
+    fireEvent.input(textarea, { target: { value: 'look at @main' } })
+    expect(onFilesNeeded).toHaveBeenCalled()
+    const options = screen.getAllByRole('option')
+    expect(options[0].textContent).toBe('src/main.go')
+
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false })
+    expect(textarea.value).toBe('look at src/main.go ')
+    expect(document.activeElement).toBe(textarea)
+    expect(screen.queryByRole('listbox')).toBeNull()
+  })
+
+  it('ranks substring hits above subsequence hits and matches case-insensitively', () => {
+    render(<Composer {...props({ files, onFilesNeeded: () => {} })} />)
+    const textarea = screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement
+
+    // "READ" substring-matches README.md; "sup" only subsequence-matches
+    // src/util/parse.go.
+    fireEvent.input(textarea, { target: { value: '@READ' } })
+    expect(screen.getAllByRole('option')[0].textContent).toBe('README.md')
+    fireEvent.input(textarea, { target: { value: '@sup' } })
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toContain('src/util/parse.go')
+  })
+
+  it('keeps the stage live when a directory is completed, narrowing into it', () => {
+    render(<Composer {...props({ files, onFilesNeeded: () => {} })} />)
+    const textarea = screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement
+
+    fireEvent.input(textarea, { target: { value: '@docs' } })
+    fireEvent.keyDown(textarea, { key: 'Tab' })
+    expect(textarea.value).toBe('@docs/')
+    // The token is still live: the menu re-filters against the new query.
+    expect(screen.queryByRole('listbox')).toBeNull() // nothing under docs/ in the fixture
+  })
+
+  it('Tab shell-completes the token — extend, never commit; Enter commits', () => {
+    const onSend = vi.fn(() => true)
+    render(<Composer {...props({ files, onFilesNeeded: () => {}, onSend })} />)
+    const textarea = screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement
+
+    // Unique file: Tab completes the text fully but sends nothing.
+    fireEvent.input(textarea, { target: { value: 'see @REA' } })
+    fireEvent.keyDown(textarea, { key: 'Tab' })
+    expect(textarea.value).toBe('see @README.md')
+    expect(onSend).not.toHaveBeenCalled()
+    // A second Tab is a consumed no-op at the deepest prefix.
+    fireEvent.keyDown(textarea, { key: 'Tab' })
+    expect(textarea.value).toBe('see @README.md')
+    // Enter applies the (single) highlighted row — the commit.
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false })
+    expect(textarea.value).toBe('see README.md ')
+
+    // Segment-wise: completion happens within the token's parent.
+    fireEvent.input(textarea, { target: { value: '@src/m' } })
+    fireEvent.keyDown(textarea, { key: 'Tab' })
+    expect(textarea.value).toBe('@src/main.go')
+  })
+
+  it('Tab still completes after Escape dismissed the menu', () => {
+    render(<Composer {...props({ files, onFilesNeeded: () => {} })} />)
+    const textarea = screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement
+
+    fireEvent.input(textarea, { target: { value: '@REA' } })
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    expect(screen.queryByRole('listbox')).toBeNull()
+    fireEvent.keyDown(textarea, { key: 'Tab' })
+    expect(textarea.value).toBe('@README.md')
+  })
+
+  it('only triggers on an @ at start or after whitespace, and never mid-word', () => {
+    render(<Composer {...props({ files, onFilesNeeded: () => {} })} />)
+    const textarea = screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement
+
+    fireEvent.input(textarea, { target: { value: 'user@host' } })
+    expect(screen.queryByRole('listbox')).toBeNull()
+    fireEvent.input(textarea, { target: { value: 'see @src' } })
+    expect(screen.getAllByRole('option').length).toBeGreaterThan(0)
+    // A completed token (whitespace after) closes the stage.
+    fireEvent.input(textarea, { target: { value: 'see @src/main.go done' } })
+    expect(screen.queryByRole('listbox')).toBeNull()
+  })
+
+  it('shows no stage when the daemon serves no listing', () => {
+    render(<Composer {...props({ files: null, onFilesNeeded: () => {} })} />)
+    const textarea = screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement
+    fireEvent.input(textarea, { target: { value: '@src' } })
+    expect(screen.queryByRole('listbox')).toBeNull()
+  })
+})
+
 describe('Composer core interaction', () => {
   it('grows with content, caps at 40vh, and shrinks after an accepted send', async () => {
     const onSend = vi.fn(() => true)

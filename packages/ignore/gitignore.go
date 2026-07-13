@@ -115,6 +115,51 @@ func (s *Stack) Match(rel string, isDir bool) bool {
 	return ignored
 }
 
+// Ignored reports whether absPath is excluded by a .gitignore rule rooted at
+// root — including the common case where an ANCESTOR directory is ignored (a
+// dir-only rule like "sessions/" hides everything beneath it, which a single
+// leaf-path Match would miss because dir-only rules skip non-directories). It
+// walks each path component from the root down, testing ancestors as
+// directories and the leaf as a file, honoring nested per-directory .gitignore
+// files along the way. It needs no .git dir, and returns false when absPath
+// escapes root or when there is no .gitignore anywhere (so it never warns
+// spuriously). root and absPath should be absolute; absPath must lie under root.
+func Ignored(root, absPath string) bool {
+	rel, err := filepath.Rel(root, absPath)
+	if err != nil {
+		return false
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+		return false
+	}
+	st := NewStack(root)
+	parts := strings.Split(rel, "/")
+	cur := ""
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		if cur == "" {
+			cur = p
+		} else {
+			cur += "/" + p
+		}
+		// Every component except the last names a directory; a dir-only rule
+		// (e.g. "sessions/") matches an ancestor here even though it would skip
+		// the leaf file. Once an ancestor is ignored the leaf can't be re-included
+		// (git semantics), so return immediately.
+		isDir := i < len(parts)-1
+		if st.Match(cur, isDir) {
+			return true
+		}
+		if isDir {
+			st.Push(filepath.Join(root, filepath.FromSlash(cur)), cur)
+		}
+	}
+	return false
+}
+
 // Parse builds a matcher from raw .gitignore file contents.
 func Parse(data string) *Gitignore {
 	g := &Gitignore{}

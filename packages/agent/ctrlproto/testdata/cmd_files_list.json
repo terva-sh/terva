@@ -1,0 +1,9 @@
+{
+  "kind": "cmd",
+  "id": 10,
+  "method": "files.list",
+  "params": {
+    "recursive": true,
+    "respect_gitignore": true
+  }
+}

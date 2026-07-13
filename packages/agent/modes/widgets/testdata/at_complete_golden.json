@@ -1,0 +1,93 @@
+[
+  {
+    "name": "unique file completes fully, no commit",
+    "entries": [{"path": "README.md"}, {"path": "src", "dir": true}, {"path": "src/main.go"}],
+    "query": "REA",
+    "want": "README.md",
+    "n": 1
+  },
+  {
+    "name": "unique directory gains a trailing slash so the token stays live",
+    "entries": [{"path": "packages", "dir": true}, {"path": "packages/core/agent.go"}, {"path": "README.md"}],
+    "query": "pack",
+    "want": "packages/",
+    "n": 1
+  },
+  {
+    "name": "several candidates extend to their longest common prefix",
+    "entries": [{"path": "interactive_input.go"}, {"path": "interactive_render.go"}, {"path": "keymap.go"}],
+    "query": "int",
+    "want": "interactive_",
+    "n": 2
+  },
+  {
+    "name": "base already at the deepest unambiguous prefix is a no-op",
+    "entries": [{"path": "interactive_input.go"}, {"path": "interactive_render.go"}],
+    "query": "interactive_",
+    "want": "interactive_",
+    "n": 2
+  },
+  {
+    "name": "no matches leaves the token unchanged",
+    "entries": [{"path": "README.md"}],
+    "query": "zzz",
+    "want": "zzz",
+    "n": 0
+  },
+  {
+    "name": "segment-wise: completion happens within the token's parent",
+    "entries": [{"path": "src", "dir": true}, {"path": "src/main.go"}, {"path": "src/menu.go"}, {"path": "main.ts"}],
+    "query": "src/m",
+    "want": "src/m",
+    "n": 2
+  },
+  {
+    "name": "segment-wise unique within the parent",
+    "entries": [{"path": "src", "dir": true}, {"path": "src/main.go"}, {"path": "src/util", "dir": true}, {"path": "top.txt"}],
+    "query": "src/ma",
+    "want": "src/main.go",
+    "n": 1
+  },
+  {
+    "name": "descending into a completed directory: next Tab completes its children",
+    "entries": [{"path": "src", "dir": true}, {"path": "src/util", "dir": true}, {"path": "src/util/parse.go"}],
+    "query": "src/util/",
+    "want": "src/util/parse.go",
+    "n": 1
+  },
+  {
+    "name": "dot-names are hidden unless the base asks for them",
+    "entries": [{"path": ".gitignore"}, {"path": ".github", "dir": true}, {"path": "go.mod"}],
+    "query": "g",
+    "want": "go.mod",
+    "n": 1
+  },
+  {
+    "name": "a leading dot in the base surfaces dot-names",
+    "entries": [{"path": ".gitignore"}, {"path": ".github", "dir": true}, {"path": "go.mod"}],
+    "query": ".git",
+    "want": ".git",
+    "n": 2
+  },
+  {
+    "name": "prefix matching is case-sensitive, bash-style",
+    "entries": [{"path": "README.md"}, {"path": "readme-notes.txt"}],
+    "query": "read",
+    "want": "readme-notes.txt",
+    "n": 1
+  },
+  {
+    "name": "empty base lists every child and extends to their LCP",
+    "entries": [{"path": "pkg_a", "dir": true}, {"path": "pkg_b", "dir": true}],
+    "query": "",
+    "want": "pkg_",
+    "n": 2
+  },
+  {
+    "name": "duplicate child rows collapse (a dir row plus its files)",
+    "entries": [{"path": "src", "dir": true}, {"path": "src/a.go"}, {"path": "src/b.go"}],
+    "query": "s",
+    "want": "src/",
+    "n": 1
+  }
+]

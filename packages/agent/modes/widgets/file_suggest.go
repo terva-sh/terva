@@ -4,41 +4,31 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sahilm/fuzzy"
 
-	"terva.sh/terva/packages/ignore"
+	"terva.sh/terva/packages/fswalk"
 	"terva.sh/terva/packages/tui"
 )
 
-// recursiveScanLimits bound the recursive walk so the picker stays
-// responsive in very large repos. Hitting either cap stops the walk
-// early; the entries gathered so far are still searchable.
-//
-// The entry cap is set against the real bottleneck, which is not memory
-// but the per-keystroke fuzzy.Find ranking that scores every entry. A
-// fileEntry is ~120 bytes all-in (40-byte struct header plus the path
-// string), so even 50k entries is only ~6 MB. fuzzy.Find scales roughly
-// linearly: ~2 ms at 5k, ~13 ms at 50k, ~21 ms at 100k on a typical
-// laptop. 50k keeps ranking under one 60 Hz frame (~16 ms) while
-// comfortably holding a large monorepo once nested .gitignore pruning
-// (node_modules, build outputs, tool caches) has done its job. The
-// depth cap likewise guards against pathologically deep trees; 24
-// levels is far below anything a human navigates yet still reaches the
-// deeply nested source files real monorepos bury.
-const (
-	maxRecursiveEntries = 50000
-	maxRecursiveDepth   = 24
-)
+// The walk itself — gitignore handling, .git pruning, the entry/depth caps
+// that keep per-keystroke fuzzy ranking under a frame — lives in
+// packages/fswalk, shared with the daemon's files.list verb so an attached
+// picker completes over exactly the entries a local one would.
 
-// alwaysSkipDir is never descended into during a recursive scan,
-// regardless of .gitignore. .git is a repo-internal directory that
-// real projects rarely list in their own .gitignore yet never want
-// surfaced as an @-mention target.
-const alwaysSkipDir = ".git"
+// remoteTTL bounds how long a wire-fetched listing serves before the next
+// popup interaction refetches. The local scans re-read on directory mtime;
+// no such signal crosses the wire, so freshness is time-based.
+const remoteTTL = 15 * time.Second
+
+// RemoteLister fetches the file listing from elsewhere — the attach entry
+// point wires it to the daemon's files.list verb. It runs on a background
+// goroutine (never the render path) and returns entries relative to the
+// workspace root plus whether the walk was cap-truncated.
+type RemoteLister func(dir string, recursive, respectGitignore bool) ([]fswalk.Entry, bool, error)
 
 // FileSuggester provides an @-triggered file/directory picker popup.
 // Type "@" followed by an optional filter to list files in the working
@@ -58,8 +48,23 @@ type FileSuggester struct {
 	// listings. Mirrors the persisted respect_gitignore setting; on by
 	// default. Toggled live from /settings.
 	respectGitignore bool
-	cachedDir        string // absolute directory we last scanned
-	cachedAll        []FileEntry
+
+	// remote, when set, replaces local disk reads with wire fetches; the
+	// fills land on a background goroutine and onUpdate requests a repaint,
+	// so the popup pops in when data arrives instead of a frame blocking on
+	// the network. Everything else — fuzzy ranking, navigation, chips — is
+	// unchanged.
+	remote   RemoteLister
+	onUpdate func()
+
+	// mu guards the cache fields below: in remote mode a fill goroutine
+	// writes them while the render path reads. Local mode never contends
+	// (everything runs on the main goroutine) but locks uniformly — the
+	// section is a few loads. The slice is replaced, never mutated, so a
+	// returned cache stays valid after release.
+	mu        sync.Mutex
+	cachedDir string // absolute directory we last scanned (local mode)
+	cachedAll []FileEntry
 	// cachedMTime is the mtime of cachedDir at the time of the scan.
 	// scan() compares the current mtime against this on every call and
 	// re-reads the directory if it has changed, so files or folders
@@ -67,6 +72,11 @@ type FileSuggester struct {
 	// Stat is cheap (single syscall) so doing it per keystroke while
 	// the popup is open does not impact responsiveness.
 	cachedMTime time.Time
+	// Remote-mode cache slot: which (dir|mode) the entries answer, when
+	// they landed (remoteTTL freshness), and whether a fill is in flight.
+	remoteKey      string
+	remoteAt       time.Time
+	remoteFetching bool
 }
 
 type FileEntry struct {
@@ -80,13 +90,32 @@ type FileEntry struct {
 // setting is known.
 func NewFileSuggester() *FileSuggester { return &FileSuggester{respectGitignore: true} }
 
+// SetRemoteLister switches the picker onto a wire-backed listing (nil keeps
+// local disk). onUpdate is called — from a background goroutine — when a
+// fill lands, so the host can request a repaint (the popup appears when the
+// data does).
+func (s *FileSuggester) SetRemoteLister(fn RemoteLister, onUpdate func()) {
+	s.remote = fn
+	s.onUpdate = onUpdate
+	s.dropCache()
+}
+
+// dropCache invalidates both cache slots (local and remote).
+func (s *FileSuggester) dropCache() {
+	s.mu.Lock()
+	s.cachedDir = ""
+	s.cachedAll = nil
+	s.remoteKey = ""
+	s.remoteAt = time.Time{}
+	s.mu.Unlock()
+}
+
 // SetCWD updates the project root.
 func (s *FileSuggester) SetCWD(cwd string) {
 	if s.cwd != cwd {
 		s.cwd = cwd
 		s.browseRel = ""
-		s.cachedDir = ""
-		s.cachedAll = nil
+		s.dropCache()
 	}
 }
 
@@ -99,8 +128,7 @@ func (s *FileSuggester) SetRecursive(on bool) {
 	}
 	s.recursive = on
 	s.browseRel = ""
-	s.cachedDir = ""
-	s.cachedAll = nil
+	s.dropCache()
 	s.cursor = 0
 }
 
@@ -111,8 +139,7 @@ func (s *FileSuggester) SetRespectGitignore(on bool) {
 		return
 	}
 	s.respectGitignore = on
-	s.cachedDir = ""
-	s.cachedAll = nil
+	s.dropCache()
 	s.cursor = 0
 }
 
@@ -124,179 +151,127 @@ func (s *FileSuggester) browseDir() string {
 	return filepath.Join(s.cwd, s.browseRel)
 }
 
-// scan reads entries from the current browse directory.
+// scan returns entries for the current browse position: remote mode serves
+// the wire cache (kicking an async fill when stale), local mode reads disk
+// through fswalk.
 //
-// Results are cached by absolute path + mtime: a repeated call against
-// the same directory returns the cached slice when nothing has changed
-// on disk, and re-reads when an entry was added, removed, or renamed
-// (any of which bumps the directory's mtime on every filesystem terva
-// supports). A failed stat falls through to a fresh ReadDir rather
-// than returning a stale cache so transient errors self-heal.
+// Local results are cached by absolute path + mtime: a repeated call
+// against the same directory returns the cached slice when nothing has
+// changed on disk, and re-reads when an entry was added, removed, or
+// renamed (any of which bumps the directory's mtime on every filesystem
+// terva supports; in recursive mode the root mtime is a best-effort
+// signal, with Invalidate() and the toggle drops keeping it fresh). A
+// failed stat falls through to a fresh read rather than returning a stale
+// cache so transient errors self-heal.
 func (s *FileSuggester) scan() []FileEntry {
-	if s.recursive {
-		return s.scanRecursive()
+	if s.remote != nil {
+		return s.scanRemote()
 	}
-	dir := s.browseDir()
+	statDir := s.browseDir()
+	if s.recursive {
+		statDir = s.cwd
+	}
 	var mtime time.Time
-	if info, err := os.Stat(dir); err == nil {
+	if info, err := os.Stat(statDir); err == nil {
 		mtime = info.ModTime()
 	}
-	if s.cachedDir == dir && s.cachedAll != nil && !mtime.IsZero() && mtime.Equal(s.cachedMTime) {
-		return s.cachedAll
+	s.mu.Lock()
+	if s.cachedDir == statDir && s.cachedAll != nil && !mtime.IsZero() && mtime.Equal(s.cachedMTime) {
+		all := s.cachedAll
+		s.mu.Unlock()
+		return all
 	}
-	entries, err := os.ReadDir(dir)
+	s.mu.Unlock()
+	entries, _, err := fswalk.List(s.cwd, fswalk.Options{
+		Dir:              s.browseRel,
+		Recursive:        s.recursive,
+		RespectGitignore: s.respectGitignore,
+	})
 	if err != nil {
 		return nil
 	}
-	var ig *ignore.Gitignore
-	if s.respectGitignore {
-		ig = ignore.Load(s.cwd)
-	}
-	var all []FileEntry
-	for _, e := range entries {
-		name := e.Name()
-		rel := name
-		if s.browseRel != "" {
-			rel = filepath.Join(s.browseRel, name)
-		}
-		if s.respectGitignore {
-			if e.IsDir() && name == alwaysSkipDir {
-				continue
-			}
-			if ig.Match(filepath.ToSlash(rel), e.IsDir()) {
-				continue
-			}
-		}
-		all = append(all, FileEntry{
-			name:  name,
-			Rel:   rel,
-			IsDir: e.IsDir(),
-		})
-	}
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].IsDir != all[j].IsDir {
-			return all[i].IsDir
-		}
-		return strings.ToLower(all[i].name) < strings.ToLower(all[j].name)
-	})
+	all := fromWalk(entries, s.recursive)
+	s.mu.Lock()
 	s.cachedAll = all
-	s.cachedDir = dir
+	s.cachedDir = statDir
 	s.cachedMTime = mtime
+	s.mu.Unlock()
 	return all
 }
 
-// scanRecursive walks the whole project tree below cwd and returns
-// every file and directory as a fileEntry whose rel is the path
-// relative to cwd. The walk honors the project's root .gitignore (so
-// build outputs, dependency directories, and tool caches like
-// .terraform/.terragrunt-cache stay out of the picker) plus an
-// unconditional .git skip, and stops once it hits the entry/depth caps.
-//
-// Results are cached by cwd + mtime of cwd. Unlike the flat scan a
-// single mtime can't catch every nested change, so the cache is best
-// effort; Invalidate() (called on each keystroke path that matters)
-// and the explicit cache drops on toggle keep it fresh enough for an
-// interactive picker.
-func (s *FileSuggester) scanRecursive() []FileEntry {
-	root := s.cwd
-	var mtime time.Time
-	if info, err := os.Stat(root); err == nil {
-		mtime = info.ModTime()
+// fromWalk maps fswalk entries onto picker rows: flat mode displays base
+// names (the browsed directory is the context), recursive mode full
+// relative paths (the fuzzy haystack). A free function taking recursive
+// explicitly — the remote fill goroutine must not read main-thread fields.
+func fromWalk(entries []fswalk.Entry, recursive bool) []FileEntry {
+	all := make([]FileEntry, 0, len(entries))
+	for _, e := range entries {
+		name := e.Rel
+		if !recursive {
+			name = filepath.Base(e.Rel)
+		}
+		all = append(all, FileEntry{name: name, Rel: e.Rel, IsDir: e.IsDir})
 	}
-	if s.cachedDir == root && s.cachedAll != nil && !mtime.IsZero() && mtime.Equal(s.cachedMTime) {
-		return s.cachedAll
-	}
-
-	var stack *ignore.Stack
-	if s.respectGitignore {
-		stack = ignore.NewStack(root)
-	}
-	var all []FileEntry
-	rootSep := strings.Count(root, string(os.PathSeparator))
-	// pushed mirrors the directories whose nested .gitignore we've
-	// brought into scope on stack but not yet dropped. WalkDir is
-	// depth-first in lexical order, so before each entry we pop frames
-	// for directories we've finished walking (those that are no longer
-	// an ancestor of the current path), then push the current
-	// directory. Honoring nested .gitignore files is what stops a
-	// vendored node_modules whose ignore rule lives in a subdirectory
-	// (e.g. .opencode/.gitignore) from swamping the entry budget before
-	// the walk ever reaches the user's deeply nested source file.
-	var pushed []string
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			if d != nil && d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if path == root {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return nil
-		}
-		relSlash := filepath.ToSlash(rel)
-		if s.respectGitignore {
-			// Drop stack frames for directories we've finished walking:
-			// any pushed dir that is not an ancestor of this entry's dir.
-			dirSlash := relSlash
-			if !d.IsDir() {
-				if i := strings.LastIndex(relSlash, "/"); i >= 0 {
-					dirSlash = relSlash[:i]
-				} else {
-					dirSlash = ""
-				}
-			}
-			for len(pushed) > 0 {
-				top := pushed[len(pushed)-1]
-				if top == dirSlash || strings.HasPrefix(dirSlash, top+"/") {
-					break
-				}
-				pushed = pushed[:len(pushed)-1]
-				stack.Pop()
-			}
-			// .gitignore patterns are matched against slash-separated paths.
-			if stack.Match(relSlash, d.IsDir()) {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-		}
-		if d.IsDir() {
-			// .git is always pruned: it's never a useful @-mention target
-			// and would otherwise blow the entry budget even when
-			// gitignore filtering is off.
-			if d.Name() == alwaysSkipDir {
-				return filepath.SkipDir
-			}
-			if strings.Count(path, string(os.PathSeparator))-rootSep >= maxRecursiveDepth {
-				return filepath.SkipDir
-			}
-			// This directory is kept; bring its nested .gitignore (if
-			// any) into scope for the descendants we're about to visit.
-			if s.respectGitignore {
-				stack.Push(path, rel)
-				pushed = append(pushed, relSlash)
-			}
-		}
-		all = append(all, FileEntry{
-			name:  rel,
-			Rel:   rel,
-			IsDir: d.IsDir(),
-		})
-		if len(all) >= maxRecursiveEntries {
-			return filepath.SkipAll
-		}
-		return nil
-	})
-
-	s.cachedAll = all
-	s.cachedDir = root
-	s.cachedMTime = mtime
 	return all
+}
+
+// remoteCacheKey identifies which listing the remote cache slot answers.
+func (s *FileSuggester) remoteCacheKey() string {
+	key := s.browseRel
+	if s.recursive {
+		key = "\x00recursive"
+	}
+	if s.respectGitignore {
+		key += "\x00gi"
+	}
+	return key
+}
+
+// scanRemote serves the wire cache and never blocks: a stale or missing
+// slot kicks one background fill (the popup pops in when it lands, via
+// onUpdate → repaint), and until the fill answers the CURRENT key the
+// picker shows nothing rather than another directory's entries.
+func (s *FileSuggester) scanRemote() []FileEntry {
+	key := s.remoteCacheKey()
+	s.mu.Lock()
+	hit := s.remoteKey == key && s.cachedAll != nil
+	fresh := hit && time.Since(s.remoteAt) < remoteTTL
+	var rows []FileEntry
+	if hit {
+		rows = s.cachedAll
+	}
+	kick := !fresh && !s.remoteFetching
+	if kick {
+		s.remoteFetching = true
+	}
+	s.mu.Unlock()
+	if kick {
+		go s.fetchRemote(key, s.browseRel, s.recursive, s.respectGitignore)
+	}
+	return rows
+}
+
+// fetchRemote is the one background fill: fetch, store under the key the
+// request answered, repaint. A failed fetch stores an empty slot so the
+// render path doesn't re-kick at frame rate against a broken daemon — the
+// TTL (or an explicit Invalidate) retries.
+func (s *FileSuggester) fetchRemote(key, dir string, recursive, respectGitignore bool) {
+	entries, _, err := s.remote(dir, recursive, respectGitignore)
+	var all []FileEntry
+	if err == nil {
+		all = fromWalk(entries, recursive)
+	} else {
+		all = []FileEntry{}
+	}
+	s.mu.Lock()
+	s.remoteFetching = false
+	s.cachedAll = all
+	s.remoteKey = key
+	s.remoteAt = time.Now()
+	s.mu.Unlock()
+	if s.onUpdate != nil {
+		s.onUpdate()
+	}
 }
 
 // extractAtQuery returns the filter string after "@".
@@ -362,14 +337,12 @@ func (s *FileSuggester) Reset() {
 	s.cursor = 0
 	s.lastMatches = nil
 	s.browseRel = ""
-	s.cachedDir = ""
-	s.cachedAll = nil
+	s.dropCache()
 }
 
-// Invalidate forces a rescan.
+// Invalidate forces a rescan (or, remote, a refetch).
 func (s *FileSuggester) Invalidate() {
-	s.cachedDir = ""
-	s.cachedAll = nil
+	s.dropCache()
 }
 
 func (s *FileSuggester) Up() {
@@ -400,8 +373,7 @@ func (s *FileSuggester) Right() bool {
 		return false
 	}
 	s.browseRel = e.Rel
-	s.cachedDir = ""
-	s.cachedAll = nil
+	s.dropCache()
 	s.cursor = 0
 	return true
 }
@@ -420,10 +392,46 @@ func (s *FileSuggester) Left() bool {
 		parent = ""
 	}
 	s.browseRel = parent
-	s.cachedDir = ""
-	s.cachedAll = nil
+	s.dropCache()
 	s.cursor = 0
 	return true
+}
+
+// TabComplete rewrites input's live @-token by one shell-style Tab press
+// over the current listing (AtComplete semantics: segment-wise prefix
+// completion to unique or longest-common-prefix; a unique directory gains a
+// "/" so the token stays live). ok reports the keystroke was consumed — a
+// live token existed — even when nothing extended. Runs over the same
+// cached entries the popup shows, so it never blocks on the wire; while a
+// remote fill is still in flight the press is a consumed no-op and the next
+// one completes.
+func (s *FileSuggester) TabComplete(input string) (string, bool) {
+	query, ok := extractAtQuery(input)
+	if !ok {
+		return input, false
+	}
+	all := s.scan()
+	cands := make([]AtCandidate, 0, len(all))
+	for _, e := range all {
+		p := filepath.ToSlash(e.Rel)
+		if !s.recursive {
+			// Flat mode browses one directory: complete over basenames in
+			// that namespace (the query is a filter, not a path).
+			p = e.name
+		}
+		cands = append(cands, AtCandidate{Path: p, Dir: e.IsDir})
+	}
+	extended, _ := AtComplete(cands, query)
+	if !s.recursive {
+		// Flat mode has no in-token descent — the popup's → key descends —
+		// so a completed directory stays slash-less and selectable.
+		extended = strings.TrimSuffix(extended, "/")
+	}
+	if extended == query {
+		return input, true
+	}
+	idx := strings.LastIndex(input, "@")
+	return input[:idx+1] + extended, true
 }
 
 // Selection returns the relative path of the currently highlighted entry.
@@ -502,11 +510,11 @@ func (s *FileSuggester) Render(input string, th tui.Theme, width int) []string {
 	var hint string
 	switch {
 	case s.recursive:
-		hint = "  \u2191/\u2193 navigate - enter select - esc cancel (recursive)"
+		hint = "  \u2191/\u2193 navigate - tab complete - enter select - esc cancel (recursive)"
 	case s.browseRel != "":
-		hint = "  \u2191/\u2193 navigate - \u2192 open - \u2190 back - enter select - esc cancel"
+		hint = "  \u2191/\u2193 navigate - \u2192 open - \u2190 back - tab complete - enter select - esc cancel"
 	default:
-		hint = "  \u2191/\u2193 navigate - \u2192 open dir - enter select - esc cancel"
+		hint = "  \u2191/\u2193 navigate - \u2192 open dir - tab complete - enter select - esc cancel"
 	}
 	out = append(out, th.FG256(th.Muted, hint))
 	out = append(out, "")
