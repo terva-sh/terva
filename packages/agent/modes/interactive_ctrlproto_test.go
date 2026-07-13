@@ -69,11 +69,17 @@ type fakeCarrier struct {
 	// stream, when non-nil, is what SubscribeReliable returns — the test
 	// plays the daemon by feeding events into it. When nil, each subscribe
 	// gets its own channel, closed when its ctx cancels (like the real hub).
+	// subErr, when non-nil, fails every subscribe (the pump fail-stop tests).
 	stream chan ctrlproto.Event
+	subErr error
 	// panels / metas back the extension-panel surface fixtures (guarded by mu):
 	// Surface serves panels by id, Surfaces returns metas.
 	panels map[string]ctrlproto.Surface
 	metas  []ctrlproto.SurfaceMeta
+	// onSurface, when set, runs inside Surface before it returns — a seam for
+	// modeling a session switch (or any state change) landing while a fetch is
+	// still in flight. Called with no lock held.
+	onSurface func(id string)
 	// setQueues records every SetQueue call, in order (guarded by mu).
 	setQueues [][]string
 	// usage is the usage.snapshot fixture; usageCalls records each call's
@@ -174,6 +180,9 @@ func (f *fakeCarrier) Clear(ctx context.Context, sess string) error {
 }
 
 func (f *fakeCarrier) SubscribeReliable(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {
+	if f.subErr != nil {
+		return nil, f.subErr
+	}
 	select {
 	case f.subs <- sess:
 	default:
@@ -197,6 +206,9 @@ func (f *fakeCarrier) SwitchModel(ctx context.Context, sess, providerName, model
 func (f *fakeCarrier) Surface(ctx context.Context, sess, id string) (ctrlproto.Surface, error) {
 	if f.surfErr != nil {
 		return ctrlproto.Surface{}, f.surfErr
+	}
+	if f.onSurface != nil {
+		f.onSurface(id)
 	}
 	switch id {
 	case "chat":
@@ -233,7 +245,19 @@ func (f *fakeCarrier) Surface(ctx context.Context, sess, id string) (ctrlproto.S
 		}}, nil
 	case "settings":
 		return ctrlproto.Surface{ID: id, Kind: "settings", Settings: &ctrlproto.SettingsView{
-			Items: []ctrlproto.SettingItem{{Key: "approval", Type: "enum", Value: "workspace"}},
+			Items: []ctrlproto.SettingItem{
+				{Key: "approval", Label: "Approval mode", Type: "enum", Value: "workspace",
+					Description: "How tool calls are gated for this session.",
+					Note:        "per-session — not saved",
+					Options: []ctrlproto.SettingOption{
+						{Value: "plan", Label: "plan"},
+						{Value: "ask", Label: "ask"},
+						{Value: "auto-edit", Label: "auto-edit"},
+						{Value: "workspace", Label: "workspace"},
+						{Value: "yolo", Label: "yolo"},
+					}},
+				{Key: "lazy_tools", Label: "Lazy tool loading", Type: "bool", Value: "true"},
+			},
 		}}, nil
 	case "lore":
 		return ctrlproto.Surface{ID: id, Kind: "lore", Lore: &ctrlproto.LoreView{
@@ -682,6 +706,10 @@ func TestCarrierSwarmDashboard(t *testing.T) {
 		t.Fatalf("pre-signal snapshot = %d rows, want the cached 2", got)
 	}
 	i.handleCarrierEvent(ctrlproto.SurfaceUpdatedEvent("tasks"))
+	// The signal only marks the cache stale — a render-path read kicks the
+	// fill asynchronously (a frame must never block on the network). Run the
+	// fill synchronously here so the assertion doesn't race it.
+	i.fetchCarrierTasks()
 	if got := len(i.carrierTaskSnapshot()); got != 1 {
 		t.Fatalf("post-signal snapshot = %d rows, want 1", got)
 	}
@@ -827,15 +855,15 @@ func TestCarrierTranscriptKeepsImagePixels(t *testing.T) {
 	}
 }
 
-// TestCarrierApprovalSetting: the /settings approval item reads the daemon's
-// live mode from the settings surface and applies changes through it; the
-// status-bar badge follows via the cached refresh.
+// TestCarrierApprovalSetting: the generic /settings surface carries the
+// daemon's live approval mode, and changes (picker or shift+tab) apply through
+// it; the status-bar badge follows via the cached refresh.
 func TestCarrierApprovalSetting(t *testing.T) {
 	i := newCtrlprotoTestInteractive()
 	fc := newFakeCarrier()
 	i.cfg.Carrier = fc
 
-	item, ok := i.approvalSettingItem()
+	item, ok := findSettingsItem(i.daemonSettingsItems(), "approval")
 	if !ok {
 		t.Fatal("approval item should exist in carrier mode")
 	}
@@ -843,7 +871,7 @@ func TestCarrierApprovalSetting(t *testing.T) {
 		t.Fatalf("current mode = %q, want workspace", item.Options[item.Choice].Value)
 	}
 
-	i.applyApprovalModeSetting("ask")
+	i.applyApprovalMode("ask")
 	if act := recv(t, fc.surfActs, "approval set"); act.id != "settings" || act.action != "set" ||
 		act.args["key"] != "approval" || act.args["value"] != "ask" {
 		t.Fatalf("approval action = %+v", act)

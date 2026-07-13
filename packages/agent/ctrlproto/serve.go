@@ -162,6 +162,10 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			return
 		}
 		s.respond(f.ID, nil, s.svc.RenameSession(ctx, f.Sess, p.Title))
+	case MethodSessionGenerateTitle:
+		// Blocks on the model — the same synchronous posture as MethodCompact.
+		title, err := s.svc.GenerateSessionTitle(ctx, f.Sess)
+		s.respond(f.ID, GenerateTitleResult{Title: title}, err)
 	case MethodSessionDelete:
 		s.respond(f.ID, nil, s.svc.DeleteSession(ctx, f.Sess))
 	case MethodUsageGet:
@@ -246,6 +250,14 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		}
 		cv, err := s.svc.Catalog(ctx, p.Lang)
 		s.respond(f.ID, I18nCatalogResult{Catalog: cv}, err)
+	case MethodFilesList:
+		var p FilesListParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		res, err := s.svc.ListFiles(ctx, p)
+		s.respond(f.ID, res, err)
 
 	// --- control ---
 	case MethodModelsList:

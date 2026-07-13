@@ -44,13 +44,25 @@ func (i *Interactive) carrierSession() string {
 // (e.g. CurrentSessionPath in the ctrlproto entry point).
 func (i *Interactive) CarrierSessionID() string { return i.carrierSession() }
 
+// carrierResubscribeDelay paces the pump's retry against a reconnecting
+// carrier whose transport is down — a touch above the transport's own
+// reconnect backoff so one retry usually lands on a live connection. A var
+// so the pump test can compress the wait.
+var carrierResubscribeDelay = 2 * time.Second
+
 // runCarrierLoop is the ctrlproto TUI's event pump: a reliable subscription to
 // the CURRENT session's stream, feeding every event through
 // handleCarrierEvent. It replaces the legacy path's synchronous per-turn sink.
 // The loop is a supervisor: a session switch cancels just the subscription
 // (carrierPumpCancel) and the loop re-subscribes to the new current session;
-// only ctx ending (or a subscribe failure) exits the pump itself.
+// only ctx ending (or an in-process subscribe failure) exits the pump itself.
+//
+// Attached (a [ReconnectingCarrier]), the same supervisor is the resync
+// engine: a dropped connection closes the subscription channel, the loop
+// re-subscribes — retrying with backoff while the transport reconnects — and
+// the fresh snapshot that leads every subscription repaints the session.
 func (i *Interactive) runCarrierLoop(ctx context.Context) {
+	wasDown := false
 	for ctx.Err() == nil {
 		subCtx, cancel := context.WithCancel(ctx)
 		i.mu.Lock()
@@ -68,9 +80,27 @@ func (i *Interactive) runCarrierLoop(ctx context.Context) {
 		ch, err := i.cfg.Carrier.SubscribeReliable(subCtx, sess)
 		if err != nil {
 			cancel()
+			// A reconnecting carrier (terva attach) fails transiently while
+			// its transport is down: show the outage, back off, retry. An
+			// in-process carrier error is a real bug — keep the fail-stop.
+			if rc, ok := i.cfg.Carrier.(ReconnectingCarrier); ok && rc.Reconnecting() {
+				wasDown = true
+				i.setStatusErr(i18n.T("connection lost — reconnecting…"))
+				i.invalidate()
+				select {
+				case <-ctx.Done():
+				case <-time.After(carrierResubscribeDelay):
+				}
+				continue
+			}
 			i.setStatusErr(i18n.T("control-plane subscribe failed: %s", err.Error()))
 			i.invalidate()
 			return
+		}
+		if wasDown {
+			wasDown = false
+			i.setStatusOK(i18n.T("reconnected — session resynced"))
+			i.invalidate()
 		}
 		for ev := range ch {
 			if i.carrierSession() != sess {
@@ -136,6 +166,11 @@ func (i *Interactive) SwitchCarrierSession(id string) error {
 	i.carrierQueued = nil
 	i.carrierUsage = ctrlproto.UsageInfo{}
 	i.carrierChat = ctrlproto.ChatView{}
+	// Drop the old session's task board now so the /tasks panel and status glance
+	// don't flash the previous session's tasks; the new binding's refresh
+	// (surface_updated("taskboard") or the resync) refills it under the new id.
+	i.carrierTaskBoard = nil
+	i.carrierTaskBoardSession = id
 	i.armCarrierBind()
 	if info.Provider != "" {
 		i.cfg.Provider = info.Provider
@@ -143,6 +178,7 @@ func (i *Interactive) SwitchCarrierSession(id string) error {
 	if info.Model != "" {
 		i.cfg.Model = info.Model
 	}
+	i.noteSessionMetaLocked(info)
 	kick := i.carrierPumpCancel
 	// Binding to a session that resolved means prompting is possible again,
 	// even if a /logout had closed the gate on the old one.
@@ -301,6 +337,7 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		i.setCarrierTranscript(ev.Snapshot.Messages)
 		i.setCarrierQueue(ev.Snapshot.Queued)
 		i.seedSessionMeters(ev.Snapshot.Session)
+		i.noteSessionMeta(ev.Snapshot.Session)
 		i.seedCarrierChat()
 		// The usage picture belongs to the provider client, not the session, so
 		// it does not ride the snapshot. Pull the cached one for this binding.
@@ -315,6 +352,9 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 			i.enqueueCarrierAsk(a)
 		}
 		i.refreshCarrierApprovalMode()
+		// Resync the task-board cache so the status glance is populated on
+		// (re)subscribe/resume/session-switch without waiting for the next turn.
+		go i.refreshCarrierTaskBoard()
 	case ctrlproto.EventNotice:
 		if ev.Notice == nil {
 			return
@@ -341,6 +381,7 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		if ev.Info.Model != "" {
 			i.cfg.Model = ev.Info.Model
 		}
+		i.noteSessionMetaLocked(*ev.Info)
 		i.mu.Unlock()
 	case ctrlproto.EventSurfaceUpdated:
 		// The settings surface carries the approval-mode badge; the tasks
@@ -352,6 +393,11 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 			i.refreshCarrierApprovalMode()
 		case ev.SurfaceID == "tasks":
 			i.invalidateCarrierTasks()
+		case ev.SurfaceID == "taskboard":
+			// The per-session task board changed (once per turn end). Refresh the
+			// cache off the pump so the status glance and an open /tasks panel
+			// re-render — but never auto-open the panel.
+			go i.refreshCarrierTaskBoard()
 		case ev.SurfaceID == "chat":
 			// connect/disconnect/rebind, from this client or another.
 			go i.fetchCarrierChat()
@@ -568,27 +614,37 @@ func (i *Interactive) dismissCarrierAsk(askID string) {
 }
 
 // refreshCarrierApprovalMode re-reads the daemon-side gate's mode off the
-// settings surface into the status-bar cache. Async — called from the pump on
+// settings surface into the status-bar cache — and, for a REMOTE carrier,
+// the daemon's reasoning level too (in-process, cfg.Reasoning was seeded
+// from the resolved runtime, which a --reasoning flag may have set; the
+// surface only knows the config value, so adopting it there would stomp the
+// override the agent actually runs with). Async — called from the pump on
 // snapshot and on surface_updated("settings").
 func (i *Interactive) refreshCarrierApprovalMode() {
 	c, sess := i.cfg.Carrier, i.carrierSession()
+	adoptReasoning := i.cfg.CarrierRemote
 	go func() {
 		sf, err := c.Surface(context.Background(), sess, "settings")
 		if err != nil || sf.Settings == nil {
 			return
 		}
+		changed := false
+		i.mu.Lock()
 		for _, it := range sf.Settings.Items {
-			if it.Key != "approval" {
-				continue
+			switch it.Key {
+			case "approval":
+				changed = changed || i.carrierApprovalMode != it.Value
+				i.carrierApprovalMode = it.Value
+			case "reasoning":
+				if adoptReasoning {
+					changed = changed || i.cfg.Reasoning != it.Value
+					i.cfg.Reasoning = it.Value
+				}
 			}
-			i.mu.Lock()
-			changed := i.carrierApprovalMode != it.Value
-			i.carrierApprovalMode = it.Value
-			i.mu.Unlock()
-			if changed {
-				i.invalidate()
-			}
-			return
+		}
+		i.mu.Unlock()
+		if changed {
+			i.invalidate()
 		}
 	}()
 }
@@ -810,21 +866,48 @@ func (i *Interactive) carrierTaskSnapshot() []swarm.AgentSnapshot {
 	stale := i.carrierTasksStale || i.carrierTaskRows == nil
 	rows := i.carrierTaskRows
 	i.mu.Unlock()
-	if !stale {
-		return rows
+	if stale {
+		// Fill off the render path: the status bar's swarm glance and the
+		// open dashboard read this per frame, and on an attached carrier the
+		// surface read is a network round-trip a frame must not block on.
+		// The fill's invalidate repaints with the fresh rows.
+		go i.fetchCarrierTasks()
 	}
+	return rows
+}
+
+// fetchCarrierTasks fills the tasks cache from the surface; at most one fill
+// runs at a time (concurrent calls no-op). On failure the cache settles on
+// the last good view — or an empty (non-nil) one, so a daemon that doesn't
+// serve the surface isn't re-fetched every frame; the next change signal or
+// dialog open marks the cache stale and retries.
+func (i *Interactive) fetchCarrierTasks() {
+	i.mu.Lock()
+	if i.carrierTasksFetching {
+		i.mu.Unlock()
+		return
+	}
+	i.carrierTasksFetching = true
+	i.mu.Unlock()
+
 	sf, err := i.cfg.Carrier.Surface(context.Background(), i.carrierSession(), "tasks")
-	if err != nil || sf.Tasks == nil {
-		return rows // keep the last good view; the next change signal retries
-	}
-	fresh := make([]swarm.AgentSnapshot, 0, len(sf.Tasks.Tasks))
-	for _, t := range sf.Tasks.Tasks {
-		fresh = append(fresh, taskInfoSnapshot(t))
+	fetched := err == nil && sf.Tasks != nil
+	fresh := []swarm.AgentSnapshot{}
+	if fetched {
+		for _, t := range sf.Tasks.Tasks {
+			fresh = append(fresh, taskInfoSnapshot(t))
+		}
 	}
 	i.mu.Lock()
-	i.carrierTaskRows, i.carrierTasksStale = fresh, false
+	i.carrierTasksFetching = false
+	i.carrierTasksStale = false
+	if fetched || i.carrierTaskRows == nil {
+		i.carrierTaskRows = fresh
+	}
 	i.mu.Unlock()
-	return fresh
+	if fetched {
+		i.invalidate()
+	}
 }
 
 // taskInfoSnapshot maps the wire task view back onto the dialog's native row
@@ -978,6 +1061,51 @@ func (i *Interactive) armCarrierBind() {
 	i.carrierTailPending = -1
 	i.carrierSeedArmed = true
 	i.carrierChatArmed = true
+}
+
+// noteSessionMeta captures the per-frame session metadata off a full
+// SessionInfo (see the carrierSessPath field group). Unlike seedSessionMeters
+// it is NOT bind-armed: every snapshot and session_updated refreshes it, so a
+// model switch or rename that happened while this client was disconnected
+// lands with the resubscribe's snapshot.
+func (i *Interactive) noteSessionMeta(info ctrlproto.SessionInfo) {
+	i.mu.Lock()
+	i.noteSessionMetaLocked(info)
+	i.mu.Unlock()
+}
+
+// noteSessionMetaLocked is noteSessionMeta for callers already holding i.mu.
+// Every producer broadcasts the whole s.info(), never a partial — adopt
+// unconditionally (ContextWindow 0 means the daemon doesn't know the model;
+// the render falls back to the local catalog).
+func (i *Interactive) noteSessionMetaLocked(info ctrlproto.SessionInfo) {
+	if info.Path != "" {
+		i.carrierSessPath = info.Path
+	}
+	i.carrierCtxWindow = info.ContextWindow
+	i.carrierSubscription = info.Subscription
+}
+
+// CarrierSessionPath is the bound session's transcript path as the wire last
+// reported it — the attach entry point's CurrentSessionPath reads this cache
+// instead of a resume round-trip per status-bar frame.
+func (i *Interactive) CarrierSessionPath() string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.carrierSessPath
+}
+
+// SetCarrierJailed mirrors the daemon's sandbox lock into the status bar's
+// jailed badge. Called by the attach entry point from each server hello, so a
+// daemon restarted with a different jail flag re-seeds on reconnect.
+func (i *Interactive) SetCarrierJailed(v bool) {
+	i.mu.Lock()
+	changed := i.carrierJailed != v
+	i.carrierJailed = v
+	i.mu.Unlock()
+	if changed {
+		i.invalidate()
+	}
 }
 
 // seedSessionMeters hydrates the cumulative-cost and context-token gauges from

@@ -104,6 +104,11 @@ type StatusBarParams struct {
 	// agents; 0 renders the segment absent.
 	SwarmAgents int
 
+	// TaskGlance is the built-in task board's short status line (e.g.
+	// "▸ Wiring the panel (2/5)"), computed by tasks.StatusGlance; empty
+	// renders the segment absent (no tasks / not this mode).
+	TaskGlance string
+
 	// SessionName is the short name of the live session file; empty
 	// renders the segment absent.
 	SessionName string
@@ -183,6 +188,7 @@ const (
 	SegBridge   SegmentID = "bridge"
 	SegExt      SegmentID = "ext"
 	SegReplay   SegmentID = "replay"
+	SegTasks    SegmentID = "tasks"
 )
 
 // segmentFunc renders one segment into zero or more pre-styled atoms.
@@ -209,6 +215,7 @@ var statusSegments = map[SegmentID]segmentFunc{
 	SegBridge:   segBridge,
 	SegExt:      segExt,
 	SegReplay:   segReplay,
+	SegTasks:    segTasks,
 }
 
 // defaultStatusRows is the built-in layout: identity + spend on row 1
@@ -234,7 +241,7 @@ func defaultStatusRows(hideWorkspace bool) [][]SegmentID {
 	return [][]SegmentID{
 		{SegReplay, SegCWD, SegGit, SegEdits, SegModel, SegThinking, SegTokens, SegCost},
 		{SegContext, SegUsage, SegSwarm},
-		{SegTags, SegBridge, SegExt},
+		{SegTags, SegTasks, SegBridge, SegExt},
 	}
 }
 
@@ -547,6 +554,17 @@ func segSwarm(p StatusBarParams) []string {
 	}
 	th := p.Theme
 	return []string{th.FG256(th.StatusColor(SegSwarm, th.Muted), i18n.TN(p.SwarmAgents, "⛭ %d agent", "⛭ %d agents"))}
+}
+
+// segTasks renders the built-in task board's glance (the active task + a
+// done/total count, "▸ …" — see tasks.StatusGlance). Absent when there are no
+// tasks. Accent-coloured so the current task reads at a glance, like the
+// terva-tasks extension's segment it replaces.
+func segTasks(p StatusBarParams) []string {
+	if s := strings.TrimSpace(p.TaskGlance); s != "" {
+		return []string{p.Theme.FG256(p.Theme.StatusColor(SegTasks, p.Theme.Accent), s)}
+	}
+	return nil
 }
 
 // segReplay renders the session-player scrubber (Replay is pre-formatted by

@@ -470,7 +470,10 @@ func (f *fakeWS) ResumeSession(ctx context.Context, sess string) (ctrlproto.Sess
 	return ctrlproto.SessionInfo{ID: sess}, nil
 }
 func (f *fakeWS) RenameSession(ctx context.Context, sess, title string) error { return nil }
-func (f *fakeWS) DeleteSession(ctx context.Context, sess string) error        { return nil }
+func (f *fakeWS) GenerateSessionTitle(ctx context.Context, sess string) (string, error) {
+	return "generated title", nil
+}
+func (f *fakeWS) DeleteSession(ctx context.Context, sess string) error { return nil }
 func (f *fakeWS) Usage(ctx context.Context, sess string) (core.WireUsage, error) {
 	return core.WireUsage{}, nil
 }
@@ -500,6 +503,9 @@ func (f *fakeWS) SurfaceAction(ctx context.Context, sess, id, action string, arg
 }
 func (f *fakeWS) Catalog(ctx context.Context, lang string) (ctrlproto.CatalogView, error) {
 	return ctrlproto.CatalogView{Lang: lang}, nil
+}
+func (f *fakeWS) ListFiles(ctx context.Context, opts ctrlproto.FilesListParams) (ctrlproto.FilesListResult, error) {
+	return ctrlproto.FilesListResult{}, nil
 }
 func (f *fakeWS) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) { return nil, nil }
 func (f *fakeWS) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {

@@ -20,6 +20,10 @@
 Description=terva chat bot (%i connector)
 After=network-online.target
 Wants=network-online.target
+# The restart budget for the Restart=on-failure below. StartLimit* is
+# read from [Unit], NOT [Service] — systemd silently ignores it there.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 # Adjust to where terva is installed (`command -v terva`): the
@@ -38,11 +42,10 @@ WorkingDirectory=%h/agents/%i
 # The connector already retries transient network trouble internally
 # and exits only when PERMANENTLY broken (bad token, revoked bot) or
 # when its crash budget is exhausted — so restart on failure, but
-# don't hot-loop on a dead credential.
+# don't hot-loop on a dead credential (the StartLimit* pair in [Unit]
+# caps it at five failures in five minutes).
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 [Install]
 WantedBy=default.target

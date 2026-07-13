@@ -52,6 +52,16 @@ const (
 	// serialization entirely and always see the full form. The inbound
 	// direction (attachments on prompt) is FeatureImages, unchanged.
 	FeatureImageData = "image-data"
+	// FeatureFilesList advertises files.list — daemon-side workspace file
+	// listing for a client's @-file picker. A client that doesn't see it
+	// keeps its local-disk fallback (correct on the daemon's host, absent
+	// cross-host) instead of firing a method the daemon can't serve.
+	FeatureFilesList = "files-list"
+	// FeatureGenerateTitle advertises sessions.generate_title — on-demand
+	// session titling. A client that doesn't see it withholds the surface
+	// (the TUI's `g` binding, the web button) instead of firing a method an
+	// older daemon can't serve.
+	FeatureGenerateTitle = "generate-title"
 )
 
 // Hello is the handshake frame each side sends once at connect time. The
@@ -75,6 +85,18 @@ type Hello struct {
 	// protocol layer never sets this — the composition root does, to avoid a
 	// dependency on the i18n package.
 	Locale string `json:"locale,omitempty"`
+	// CWD is the server's workspace working directory (absolute, host-local).
+	// A client renders it so the status chrome names the tree it is actually
+	// controlling, and — when it shares the daemon's host, the v1 attach
+	// stance — points its local affordances (the @-file picker, the git
+	// probe) at that tree instead of its own process cwd. Like Locale, the
+	// protocol layer never sets this; the composition root does.
+	CWD string `json:"cwd,omitempty"`
+	// Jailed reports the workspace sandbox confining tools to the working
+	// directory. A headless daemon has no runtime jail toggle, and the hello
+	// re-announces on every (re)connect, so connect-time state stays truthful
+	// across a restart that changes the flag. Server-side only, like Locale.
+	Jailed bool `json:"jailed,omitempty"`
 }
 
 const (
@@ -151,6 +173,6 @@ func ServerHello(agent, version string) Hello {
 		Agent:    agent,
 		Version:  version,
 		Groups:   []Group{GroupConversation, GroupSession, GroupControl},
-		Features: []string{FeatureImages, FeatureResolveEvents, FeatureContextTree, FeatureImageData},
+		Features: []string{FeatureImages, FeatureResolveEvents, FeatureContextTree, FeatureImageData, FeatureFilesList, FeatureGenerateTitle},
 	}
 }

@@ -14,6 +14,12 @@
 Description=terva chat bot (discord)
 After=network-online.target
 Wants=network-online.target
+# The restart budget for the Restart=on-failure below: five failures in
+# five minutes and the unit stays down instead of hot-looping on a dead
+# credential. StartLimit* is read from [Unit], NOT [Service] — systemd
+# silently ignores it there.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 User=terva
@@ -23,8 +29,6 @@ ExecStart=/usr/local/bin/terva bot run --connector discord --continue --approval
 WorkingDirectory=/var/lib/terva/workspace
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Hardening, sized honestly: the agent RUNS COMMANDS, so the sandbox
 # posture comes from terva's own flags (--jail, --no-workspace-tools,

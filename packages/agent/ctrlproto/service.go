@@ -88,6 +88,15 @@ type WorkspaceService interface {
 	// RenameSession sets a session's display title (its "nickname").
 	RenameSession(ctx context.Context, sess, title string) error
 
+	// GenerateSessionTitle regenerates sess's title from its transcript with
+	// a one-shot model call and persists it — the on-demand sibling of the
+	// automatic auto_title pass (which it works independently of), and the
+	// backfill for old untitled sessions. Works on live and cold sessions.
+	// An explicit request overwrites whatever title exists, manual renames
+	// included — the user just asked for it. BLOCKS on the model; keep it
+	// off a UI goroutine. Returns the persisted title.
+	GenerateSessionTitle(ctx context.Context, sess string) (string, error)
+
 	// DeleteSession removes a session and its transcript.
 	DeleteSession(ctx context.Context, sess string) error
 
@@ -177,6 +186,14 @@ type WorkspaceService interface {
 	// hello to localize its own strings.
 	Catalog(ctx context.Context, lang string) (CatalogView, error)
 
+	// ListFiles lists workspace files under the working directory for a
+	// client's @-file picker (fswalk semantics: gitignore filtering, .git
+	// pruning, entry/depth caps). Session-independent — files belong to the
+	// workspace, not a session. The [FeatureFilesList] hello feature
+	// advertises it, so a client on an older daemon degrades to its local
+	// fallback instead of a method error.
+	ListFiles(ctx context.Context, opts FilesListParams) (FilesListResult, error)
+
 	// --- control group (mostly v2; implementations may return
 	// CodeUnsupported for the parts they do not yet serve) ---
 
@@ -243,6 +260,10 @@ type SessionInfo struct {
 	// they drive a live context meter without a modal round-trip.
 	ContextTokens int `json:"context_tokens,omitempty"`
 	ContextWindow int `json:"context_window,omitempty"`
+	// Subscription reports that the session's credential is a subscription
+	// (OAuth) login rather than a metered API key — a client tags its cost
+	// display "(sub)". Resolved daemon-side, where the credential lives.
+	Subscription bool `json:"subscription,omitempty"`
 }
 
 // CreateOpts parameterizes [WorkspaceService.CreateSession]. All fields are
@@ -267,17 +288,30 @@ type CreateOpts struct {
 // TUI status bar's live usage picture (real last-turn context tokens,
 // cumulative usage, subscription windows).
 type ContextBreakdown struct {
-	Provider         string           `json:"provider,omitempty"` // active provider (header line, from the usage pane)
-	Model            string           `json:"model,omitempty"`    // active model
-	Window           int              `json:"window"`             // model context window in tokens (0 = unknown)
-	SystemBytes      int              `json:"system_bytes"`       // system prompt (includes folded-in ext guidance)
-	ExtGuidanceBytes int              `json:"ext_guidance_bytes"` // the static ext guidance share of system_bytes
-	ToolBytes        int              `json:"tool_bytes"`         // JSON of all tool definitions
-	ToolCount        int              `json:"tool_count"`
-	ExtBytes         int              `json:"ext_bytes"` // ephemeral extension/card context
-	TranscriptBytes  int              `json:"transcript_bytes"`
-	TotalBytes       int              `json:"total_bytes"`
-	Messages         []ContextMessage `json:"messages"`
+	Provider         string `json:"provider,omitempty"` // active provider (header line, from the usage pane)
+	Model            string `json:"model,omitempty"`    // active model
+	Window           int    `json:"window"`             // model context window in tokens (0 = unknown)
+	SystemBytes      int    `json:"system_bytes"`       // system prompt (includes folded-in ext guidance)
+	ExtGuidanceBytes int    `json:"ext_guidance_bytes"` // the static ext guidance share of system_bytes
+	ToolBytes        int    `json:"tool_bytes"`         // JSON of the ADVERTISED tool definitions — what the model actually receives; under lazy visibility this excludes inactive groups (their schemas are not in context)
+	ToolCount        int    `json:"tool_count"`         // advertised tool count
+	// Installed totals, set only when lazy visibility hides some tools: the full
+	// registry's weight/count, so a client can show "16 of 62 tools · 12.4 KB
+	// installed". Omitted when advertised == installed (nothing hidden). The
+	// hidden schemas are NOT counted in ToolBytes/TotalBytes — only their names
+	// ride the cache-free capability note — so the totals stay honest.
+	ToolBytesInstalled int `json:"tool_bytes_installed,omitempty"`
+	ToolCountInstalled int `json:"tool_count_installed,omitempty"`
+	ExtBytes           int `json:"ext_bytes"` // ephemeral tail: extension/card context + the lazy-tool note
+	// LazyNoteBytes is the inactive-tool-groups capability note's share of
+	// ExtBytes — the names (not schemas) of hidden groups that ride the ephemeral
+	// tail under lazy visibility. Zero/omitted when nothing is hidden. Surfaced so
+	// /context shows what deferred discovery costs, the sub-share twin of
+	// ExtGuidanceBytes.
+	LazyNoteBytes   int              `json:"lazy_note_bytes,omitempty"`
+	TranscriptBytes int              `json:"transcript_bytes"`
+	TotalBytes      int              `json:"total_bytes"`
+	Messages        []ContextMessage `json:"messages"`
 	// ContextTokens is the real last-turn context size (input+cache tokens),
 	// the accurate live gauge next to the byte estimate. Cumulative is the
 	// session's token/cost totals. Subscription marks an OAuth ("sub")
@@ -427,6 +461,7 @@ type Surface struct {
 	Context     *ContextBreakdown `json:"context,omitempty"`     // kind=context
 	Usage       *UsageView        `json:"usage,omitempty"`       // kind=usage
 	Tasks       *TaskList         `json:"tasks,omitempty"`       // kind=tasks
+	TaskBoard   *TaskBoardView    `json:"task_board,omitempty"`  // kind=taskboard
 	Settings    *SettingsView     `json:"settings,omitempty"`    // kind=settings
 	Panel       *PanelView        `json:"panel,omitempty"`       // kind=panel
 	Widgets     []Widget          `json:"widgets,omitempty"`     // kind=widgets
@@ -642,6 +677,25 @@ type TaskInfo struct {
 	// only needs Tail; a serialized carrier pays for Lines only when the
 	// swarm state actually changed (fetches ride surface_updated).
 	Lines []string `json:"lines,omitempty"`
+}
+
+// TaskBoardView is the per-session task-board pane (the built-in task_* tools'
+// list) — distinct from TaskList, which is the workspace swarm dashboard. It
+// carries the raw task fields so a frontend reconstructs them and renders via
+// the shared helpers in packages/agent/tools/tasks (one renderer, no drift).
+type TaskBoardView struct {
+	Tasks []TaskBoardItem `json:"tasks"`
+}
+
+// TaskBoardItem is one task, mapped from tasks.Task. Timestamps are omitted:
+// the board pane and status glance need only status + labels.
+type TaskBoardItem struct {
+	ID         string `json:"id"`
+	Status     string `json:"status"` // pending|active|blocked|done|cancelled
+	Title      string `json:"title"`
+	ActiveForm string `json:"active_form,omitempty"`
+	Evidence   string `json:"evidence,omitempty"`
+	Note       string `json:"note,omitempty"`
 }
 
 // RaatiView is the deliberation board pane: the workspace's current (or

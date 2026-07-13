@@ -31,6 +31,15 @@ func goldenCases(t *testing.T) []goldenCase {
 			Features: []string{FeatureImages, FeatureResolveEvents},
 		})},
 		{"hello_server", HelloFrame(ServerHello("terva web", "1.2.3"))},
+		{"hello_server_workspace", HelloFrame(func() Hello {
+			// The composition root decorates the base server hello with
+			// workspace facts, the way web_mode does.
+			h := ServerHello("terva web", "1.2.3")
+			h.Locale = "de"
+			h.CWD = "/home/u/project"
+			h.Jailed = true
+			return h
+		}())},
 		{"cmd_prompt", mustCmd(t, 1, "s1", MethodPrompt, PromptParams{
 			Text:   "fix the failing test",
 			Images: []Image{{MimeType: "image/png", Data: []byte("PNG")}},
@@ -49,6 +58,7 @@ func goldenCases(t *testing.T) []goldenCase {
 		{"resp_sessions", mustOK(t, 2, SessionsResult{Sessions: []SessionInfo{{
 			ID: "s1", Title: "main", Provider: "anthropic", Model: "claude-opus-4-8",
 			Messages: 12, Usage: core.WireUsage{Input: 100, Output: 50, CostUSD: 0.01}, Current: true,
+			ContextTokens: 39000, ContextWindow: 1000000, Subscription: true,
 		}}})},
 		{"resp_err_busy", ErrFrame(7, CodeBusy, "a turn is already running")},
 		{"event_text_delta", EventFrame("s1", ConversationEvent(core.WireEvent{Type: "text_delta", Delta: "Hello"}))},
@@ -69,6 +79,12 @@ func goldenCases(t *testing.T) []goldenCase {
 				{Role: "assistant", Content: []core.WireBlock{{Type: "text", Text: "hello"}}},
 			},
 		}))},
+		{"cmd_files_list", mustCmd(t, 10, "", MethodFilesList, FilesListParams{
+			Recursive: true, RespectGitignore: true,
+		})},
+		{"resp_files_list", mustOK(t, 10, FilesListResult{Files: []FileEntry{
+			{Path: "src", Dir: true}, {Path: "src/main.go"},
+		}})},
 		{"cmd_replay_control", mustCmd(t, 9, "r1", MethodReplayControl, ReplayControlParams{Action: "seek", Position: 42})},
 		{"event_replay_state", EventFrame("r1", ReplayStateEvent(ReplayState{
 			Playing: true, Position: 42, Total: 128, Speed: 2, Mode: "effective",
@@ -537,6 +553,9 @@ func (f *fakeSvc) SideChatClose(ctx context.Context, sess, id string) error { re
 func (f *fakeSvc) Catalog(ctx context.Context, lang string) (CatalogView, error) {
 	return CatalogView{Lang: lang, Singular: map[string]string{"Send": "TX"}}, nil
 }
+func (f *fakeSvc) ListFiles(ctx context.Context, opts FilesListParams) (FilesListResult, error) {
+	return FilesListResult{Files: []FileEntry{{Path: "src", Dir: true}, {Path: "src/main.go"}}}, nil
+}
 
 func (f *fakeSvc) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
 	f.mu.Lock()
@@ -567,7 +586,10 @@ func (f *fakeSvc) ResumeSession(ctx context.Context, sess string) (SessionInfo, 
 }
 
 func (f *fakeSvc) RenameSession(ctx context.Context, sess, title string) error { return nil }
-func (f *fakeSvc) DeleteSession(ctx context.Context, sess string) error        { return nil }
+func (f *fakeSvc) GenerateSessionTitle(ctx context.Context, sess string) (string, error) {
+	return "generated title", nil
+}
+func (f *fakeSvc) DeleteSession(ctx context.Context, sess string) error { return nil }
 
 func (f *fakeSvc) Usage(ctx context.Context, sess string) (core.WireUsage, error) {
 	return core.WireUsage{}, nil

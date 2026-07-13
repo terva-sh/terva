@@ -56,6 +56,13 @@ func authMiddleware(opts Options, next http.Handler) http.Handler {
 // SOURCE is deliberately NOT auto-trusted here — only if a CIDR names it — so a
 // scoped listener keeps the DNS-rebinding defense for the local browser.
 func hostAllowed(opts Options, r *http.Request) bool {
+	// A unix-socket listener is unreachable to a browser (no fetch/WebSocket
+	// API dials a filesystem socket), so DNS rebinding cannot occur and the
+	// Host header is whatever placeholder the native client used. The socket
+	// file's permissions are the boundary.
+	if opts.unixListener {
+		return true
+	}
 	if opts.Token != "" || opts.AuthHeader != "" {
 		return true
 	}
@@ -86,9 +93,14 @@ func hostAllowed(opts Options, r *http.Request) bool {
 // header — but ONLY when the request came from the fronting proxy.
 func authorized(opts Options, r *http.Request) bool {
 	if opts.Token == "" && opts.AuthHeader == "" {
-		// No-auth mode. A scoped insecure listener (--web-insecure-cidr) admits
-		// loopback + the named source networks only; a blanket --web-insecure
-		// admits any source; otherwise startup guaranteed a loopback bind.
+		// No-auth mode. A unix-socket listener's boundary is the socket
+		// file's permissions — source-IP scoping is meaningless there. A
+		// scoped insecure TCP listener (--web-insecure-cidr) admits loopback
+		// + the named source networks only; a blanket --web-insecure admits
+		// any source; otherwise startup guaranteed a loopback bind.
+		if opts.unixListener {
+			return true
+		}
 		if len(opts.InsecureCIDRs) > 0 {
 			return remoteFromTrustedProxy(r.RemoteAddr, opts.InsecureCIDRs)
 		}

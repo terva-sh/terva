@@ -41,5 +41,23 @@ type Carrier interface {
 
 	// SubscribeReliable is Subscribe with no-drop delivery — a dropped text
 	// delta would corrupt the rendered transcript.
+	//
+	// A NETWORKED carrier (terva attach) cannot make that promise and
+	// honours the spirit of it differently: delivery is lossless while the
+	// connection holds, and the channel CLOSES when it can't be (transport
+	// drop, consumer overflow). The closed channel is the resync signal —
+	// the pump re-subscribes and the snapshot leading every subscription
+	// repaints the session. Such a carrier also implements
+	// [ReconnectingCarrier] so the pump retries instead of failing stop.
 	SubscribeReliable(ctx context.Context, sess string) (<-chan ctrlproto.Event, error)
+}
+
+// ReconnectingCarrier marks a carrier whose transport reconnects on its own —
+// SubscribeReliable can fail transiently while the connection is down, and
+// the pump should back off and retry (surfacing the outage) rather than
+// treating the error as fatal the way an in-process failure is.
+type ReconnectingCarrier interface {
+	// Reconnecting reports whether the carrier is currently between
+	// connections (down but expected to come back).
+	Reconnecting() bool
 }

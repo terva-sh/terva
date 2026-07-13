@@ -151,6 +151,28 @@ func TestStatusBarExtStatusSegments(t *testing.T) {
 	}
 }
 
+func TestStatusBarTaskGlanceSegment(t *testing.T) {
+	base := StatusBarParams{
+		Theme:    Dark,
+		Provider: "anthropic",
+		Model:    "claude-opus-4-7",
+		CWD:      "/tmp/x",
+		Cols:     500,
+	}
+	// Present when there's an active task…
+	base.TaskGlance = "▸ Wiring the panel (2/5)"
+	joined := stripANSI(strings.Join(StatusBar(base), "\n"))
+	if !strings.Contains(joined, "Wiring the panel (2/5)") {
+		t.Errorf("task glance missing from status bar:\n%s", joined)
+	}
+	// …and vanishes (with its separators) when empty.
+	base.TaskGlance = ""
+	joined = stripANSI(strings.Join(StatusBar(base), "\n"))
+	if strings.Contains(joined, "Wiring the panel") {
+		t.Errorf("task glance should be absent when empty:\n%s", joined)
+	}
+}
+
 func TestStatusBarNoYoloTag(t *testing.T) {
 	lines := StatusBar(StatusBarParams{
 		Theme:    Dark,

@@ -17,6 +17,9 @@
       "image-data",
       "files-list",
       "generate-title"
-    ]
+    ],
+    "locale": "de",
+    "cwd": "/home/u/project",
+    "jailed": true
   }
 }

@@ -15,6 +15,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/web"
 	"terva.sh/terva/packages/agent/workspace"
+	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/relaunch"
 )
@@ -34,7 +35,10 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 	// runs BEFORE the listener binds, so a refreshing browser sees
 	// connection-refused until it finishes — announce it, and time it so a slow
 	// start is attributable at a glance.
-	fmt.Fprintln(os.Stderr, "terva web: starting — the control panel will be available shortly")
+	fmt.Fprintf(os.Stderr, "terva web: starting v%s — the control panel will be available shortly\n", version)
+	if prev := relaunch.PrevVersion(); prev != "" {
+		fmt.Fprintf(os.Stderr, "terva web: self-restart complete — was v%s, now v%s\n", prev, version)
+	}
 	begin := time.Now()
 	ws, err := workspace.NewWorkspace(args, version)
 	if err != nil {
@@ -57,10 +61,17 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 	// so refuse there. A scoped --web-insecure-cidr listener is bounded to a
 	// trusted source range (the operator's overlay network), so restart is allowed
 	// alongside it.
-	allowRestart := args.WebAllowRestart
+	allowRestart := args.AllowRestart
 	unscopedInsecure := args.WebInsecure && len(args.WebInsecureCIDRs) == 0
 	if allowRestart && unscopedInsecure && args.WebToken == "" && args.WebAuthHeader == "" {
 		fmt.Fprintln(os.Stderr, "terva web: refusing self-restart on an insecure (no-auth) listener — add --web-token, --web-auth-header, or scope it with --web-insecure-cidr")
+		allowRestart = false
+	}
+	// Don't advertise a restart control the platform can't honor (Windows lacks
+	// exec(2)): the browser would show a button that can only ever error. Gate the
+	// feature here so unsupported hosts render no restart control at all.
+	if allowRestart && !relaunch.Supported() {
+		fmt.Fprintln(os.Stderr, "terva web: self-restart is not supported on this platform — the restart control is hidden")
 		allowRestart = false
 	}
 	if allowRestart {
@@ -68,7 +79,20 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		// Tell every connected client just before the image is replaced; the PWA
 		// auto-reconnects and restores from the on-disk snapshot.
 		relaunch.OnPreExec(func(string) {
-			ws.BroadcastAll(ctrlproto.NoticeEvent("info", "", i18n.T("terva is restarting — reconnecting shortly…")))
+			// The toast names the outgoing build so the operator can spot the
+			// version change once the client reconnects to the new one; the
+			// bare semver (not the commit+date display string) keeps it short.
+			msg := i18n.T("terva is restarting — reconnecting shortly…")
+			if v := buildinfo.Get().Version; v != "" {
+				msg = i18n.T("terva v%s is restarting — reconnecting shortly…", v)
+			}
+			ws.BroadcastAll(ctrlproto.NoticeEvent("info", "", msg))
+		})
+		// If the deferred exec fails, the process keeps serving on the old image
+		// and the socket never drops — so the client is still connected to hear
+		// that the restart it was promised did not happen.
+		relaunch.OnFailure(func(err error) {
+			ws.BroadcastAll(ctrlproto.NoticeEvent("error", "", i18n.T("restart failed — still running the current build: %s", err.Error())))
 		})
 		fmt.Fprintln(os.Stderr, "terva web: self-restart enabled (control.restart + the terva_restart tool)")
 	}
@@ -91,6 +115,8 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		InsecureCIDRs:  insecureCIDRs,
 		Version:        version,
 		Locale:         i18n.ActiveLang(),
+		CWD:            ws.CWD(),
+		Jailed:         ws.Sandbox().Locked(),
 		AllowRestart:   allowRestart,
 	})
 }

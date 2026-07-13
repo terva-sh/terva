@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,7 +35,7 @@ const DefaultAddr = "127.0.0.1:8730"
 
 // Options configures the server. It mirrors the --web-* flags.
 type Options struct {
-	Addr           string       // listen address; DefaultAddr if empty
+	Addr           string       // listen address: host:port, or unix:/path for a filesystem socket; DefaultAddr if empty
 	AuthHeader     string       // trusted forward-auth header (proxy asserts identity)
 	TrustedProxies []*net.IPNet // peers (besides loopback) allowed to assert AuthHeader
 	Token          string       // bearer token required when no forward-auth is used
@@ -42,7 +43,17 @@ type Options struct {
 	InsecureCIDRs  []*net.IPNet // source networks granted no-auth access (scoped insecure); permits a non-loopback bind
 	Version        string       // reported in the ctrlproto hello
 	Locale         string       // active UI language (BCP-47), advertised to clients
+	CWD            string       // workspace working directory, advertised in the hello
+	Jailed         bool         // workspace sandbox lock state, advertised in the hello
 	AllowRestart   bool         // advertise the restart feature so clients show a restart control
+
+	// unixListener marks the effective listener as a unix domain socket —
+	// set by Serve (from the unix: address form or an adopted systemd
+	// socket), never by callers. The socket file's permissions are the auth
+	// boundary there: the loopback-Host and no-auth posture checks key on
+	// this, and IP-based options (TrustedProxies, InsecureCIDRs) are
+	// meaningless for it. A Token, if set, is still enforced on top.
+	unixListener bool
 }
 
 // ParseTrustedProxies parses CIDR strings (e.g. "10.0.0.0/24") into networks for
@@ -75,16 +86,36 @@ func ParseTrustedProxies(cidrs []string) ([]*net.IPNet, error) {
 // Serve runs the HTTP server until ctx is cancelled or serving fails.
 // It fails closed: binding a non-loopback address with no auth mode is refused
 // unless AllowInsecure is set, because the endpoint can run tools as the user.
+//
+// Three listener sources, in precedence order: a systemd socket-activation fd
+// (LISTEN_FDS, either family — the .socket unit decides), a `unix:/path`
+// address (filesystem socket, 0600 — the permissions are the auth boundary),
+// or a TCP host:port. Binding happens before announcing: once Listen returns
+// the kernel is accepting connections, so the ready line is truthful.
 func Serve(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) error {
 	if opts.Addr == "" {
 		opts.Addr = DefaultAddr
 	}
-	if err := checkBindSafety(opts); err != nil {
+
+	ln, display, err := listenControl(opts)
+	if err != nil {
 		return err
+	}
+	opts.unixListener = ln.Addr().Network() == "unix"
+	// A systemd-activated TCP socket binds whatever the unit says, not
+	// opts.Addr — apply the fail-closed posture to the address it actually
+	// bound. (The unix: and plain-TCP paths were checked in listenControl,
+	// before their sockets existed.)
+	if !opts.unixListener {
+		effective := opts
+		effective.Addr = ln.Addr().String()
+		if err := checkBindSafety(effective); err != nil {
+			_ = ln.Close()
+			return err
+		}
 	}
 
 	srv := &http.Server{
-		Addr:              opts.Addr,
 		Handler:           newMux(ctx, svc, opts),
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
@@ -96,22 +127,125 @@ func Serve(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) er
 		_ = srv.Shutdown(sc)
 	}()
 
-	// Bind before announcing: once Listen returns the kernel is accepting
-	// connections, so the ready line is truthful — with ListenAndServe it would
-	// print before the socket exists. Print the requested address, not
-	// ln.Addr(): a dual-stack wildcard bind reports itself as "[::]", which
-	// reads as a regression to someone who asked for 0.0.0.0.
-	ln, err := net.Listen("tcp", opts.Addr)
-	if err != nil {
-		return err
+	fmt.Fprintf(os.Stderr, "terva web: ready — serving on %s\n", display)
+	if opts.unixListener {
+		fmt.Fprintln(os.Stderr, "terva web: auth = the socket file's permissions (plus the bearer token, if one is set)")
+	} else {
+		describeAuth(opts)
 	}
-	fmt.Fprintf(os.Stderr, "terva web: ready — serving on http://%s\n", opts.Addr)
-	describeAuth(opts)
 
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// listenControl produces the control listener plus its display string. The
+// display prints the REQUESTED address for a plain TCP bind, not ln.Addr():
+// a dual-stack wildcard bind reports itself as "[::]", which reads as a
+// regression to someone who asked for 0.0.0.0.
+func listenControl(opts Options) (net.Listener, string, error) {
+	if ln, err := systemdListener(); err != nil {
+		return nil, "", err
+	} else if ln != nil {
+		net_ := ln.Addr().Network()
+		if net_ == "unix" {
+			return ln, "unix:" + ln.Addr().String() + " (systemd socket)", nil
+		}
+		return ln, "http://" + ln.Addr().String() + " (systemd socket)", nil
+	}
+	if path := unixSocketPath(opts.Addr); path != "" {
+		ln, err := listenUnix(path)
+		if err != nil {
+			return nil, "", err
+		}
+		return ln, "unix:" + path, nil
+	}
+	if err := checkBindSafety(opts); err != nil {
+		return nil, "", err
+	}
+	ln, err := net.Listen("tcp", opts.Addr)
+	if err != nil {
+		return nil, "", err
+	}
+	return ln, "http://" + opts.Addr, nil
+}
+
+// unixSocketPath extracts the filesystem path from a unix:-form listen
+// address — "unix:/run/terva.sock" or "unix:///run/terva.sock" — and returns
+// "" for anything else (a TCP host:port).
+func unixSocketPath(addr string) string {
+	rest, ok := strings.CutPrefix(addr, "unix:")
+	if !ok {
+		return ""
+	}
+	return strings.TrimPrefix(rest, "//")
+}
+
+// listenUnix binds a filesystem socket with 0600 permissions — the file IS
+// the auth boundary. A stale socket left by a crashed daemon is cleared
+// first; a live daemon answers the probe dial and the bind is refused
+// instead of stealing its socket.
+func listenUnix(path string) (net.Listener, error) {
+	if _, err := os.Stat(path); err == nil {
+		if c, derr := net.DialTimeout("unix", path, 500*time.Millisecond); derr == nil {
+			_ = c.Close()
+			return nil, fmt.Errorf("terva web: %s is already served by a running daemon", path)
+		}
+		if rerr := os.Remove(path); rerr != nil {
+			return nil, fmt.Errorf("terva web: stale socket %s: %w", path, rerr)
+		}
+		fmt.Fprintf(os.Stderr, "terva web: removed stale socket %s\n", path)
+	}
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	// Tighten to owner-only right after the bind (Listen creates it under
+	// the umask). The window is a few instructions wide and the daemon has
+	// accepted nothing yet.
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = ln.Close()
+		return nil, fmt.Errorf("terva web: chmod %s: %w", path, err)
+	}
+	return ln, nil
+}
+
+// sdSocket pins the systemd-inherited fd 3 open for the process lifetime.
+// net.FileListener dups the fd, and letting the *os.File be collected would
+// close fd 3 itself — which must survive: it carries no CLOEXEC (systemd
+// cleared it) and syscall.Exec keeps the pid, so a Tier-1 self-restart's new
+// image re-reads LISTEN_PID/LISTEN_FDS, finds them valid, and re-adopts this
+// very fd. That is what makes /restart work under socket activation.
+var sdSocket *os.File
+
+// systemdListener adopts a socket-activation fd (sd_listen_fds(3) without
+// the dependency): LISTEN_PID must name this process and LISTEN_FDS must be
+// exactly 1 — terva serves one control endpoint. Returns (nil, nil) when not
+// socket-activated. The LISTEN_* env is deliberately NOT scrubbed (see
+// sdSocket: the restart re-exec needs it).
+func systemdListener() (net.Listener, error) {
+	fdsEnv := os.Getenv("LISTEN_FDS")
+	if fdsEnv == "" {
+		return nil, nil
+	}
+	if pid := os.Getenv("LISTEN_PID"); pid != strconv.Itoa(os.Getpid()) {
+		return nil, nil // activation aimed at some other process; ignore
+	}
+	n, err := strconv.Atoi(fdsEnv)
+	if err != nil || n < 1 {
+		return nil, fmt.Errorf("terva web: malformed LISTEN_FDS=%q", fdsEnv)
+	}
+	if n > 1 {
+		return nil, fmt.Errorf("terva web: %d systemd sockets passed; terva serves exactly one — declare one ListenStream in the .socket unit", n)
+	}
+	f := os.NewFile(3, "systemd-socket")
+	ln, err := net.FileListener(f)
+	if err != nil {
+		return nil, fmt.Errorf("terva web: adopt systemd socket: %w", err)
+	}
+	sdSocket = f
+	return ln, nil
 }
 
 // newMux builds the HTTP routes: the auth-gated WebSocket carrier, an
@@ -196,6 +330,8 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	conn := &wsConn{c: c}
 	hello := ctrlproto.ServerHello("terva web", opts.Version)
 	hello.Locale = opts.Locale
+	hello.CWD = opts.CWD
+	hello.Jailed = opts.Jailed
 	if opts.AllowRestart {
 		hello.Features = append(hello.Features, ctrlproto.FeatureRestart)
 	}
