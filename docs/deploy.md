@@ -14,8 +14,12 @@ Two rules before anything else:
   process managers fighting over one child.
 - **`bot setup` is a one-time interactive step** (it prompts for the
   service token on your tty) — run it as the service's user, with the
-  service's `TERVA_HOME`, before enabling the unit. Credentials land
-  in `$TERVA_HOME/<service>.json` (mode 0600), never in the unit file.
+  service's `TERVA_HOME`, before enabling the unit. Credentials land in
+  `$TERVA_HOME` (mode 0600), never in the unit file — Discord writes
+  `discord.json`, Telegram writes `bot.json`, and an external connector
+  owns its own state through its `setup` verb.
+  `bot reset --connector <name>` is the inverse: it removes that config
+  so you can re-run `setup` against a fresh token.
 
 ## User-level unit (recommended)
 
@@ -86,9 +90,10 @@ bad token, a revoked bot, an exhausted budget. So:
 
 - `Restart=on-failure` with `RestartSec=10` restarts the real
   failures;
-- `StartLimitIntervalSec=300` / `StartLimitBurst=5` stops a dead
-  credential from hot-looping — after five failures in five minutes
-  the unit stays down until you `systemctl reset-failed` it.
+- `StartLimitIntervalSec=300` / `StartLimitBurst=5` — in the **`[Unit]`**
+  section, which is the only place systemd reads them — stops a dead
+  credential from hot-looping: after five failures in five minutes the
+  unit stays down until you `systemctl reset-failed` it.
 
 A clean stop (`systemctl stop`, which sends SIGTERM) shuts the
 extension subprocesses down gracefully and exits 0; it does not count

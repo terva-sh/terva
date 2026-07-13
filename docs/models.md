@@ -79,7 +79,7 @@ Place a `models.json` in `$TERVA_HOME` (macOS: `~/Library/Application Support/te
 }
 ```
 
-Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `maxTokens`, `temperature`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`. `contextWindow` is the model's total token budget (drives the context gauge and auto-compaction); `maxTokens` is the cap on a single response; `temperature` (0–2) is the model's default sampling temperature, used when no `--temperature` flag is given and ignored for adaptive-thinking models (which reject sampling params). These are editable in-app from the `/model` picker with `Ctrl+E`. Several are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog — see [Local models](#local-models-with-ollama).
+Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `desiredContextWindow`, `maxTokens`, `temperature`, `capabilities`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`. `contextWindow` is the model's total token budget (the hard ceiling: it drives the context gauge and clamps `maxTokens`); `desiredContextWindow` is an optional smaller *working* window that moves the auto-compaction thresholds only — compact earlier on a large-window model, e.g. to stay under a long-context pricing surcharge, without pretending the model is smaller; `maxTokens` is the cap on a single response; `temperature` (0–2) is the model's default sampling temperature, used when no `--temperature` flag is given and ignored for adaptive-thinking models (which reject sampling params); `capabilities` is an object of explicit capability assertions — `image-input`, `image-output`, `reasoning` — that override what terva would otherwise infer (`{"image-input": false}` on a vision-less local model, say). These are editable in-app from the `/model` picker with `Ctrl+E`. Several are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog — see [Local models](#local-models-with-ollama).
 
 Provider keys are normalized: `openai-codex` and `openai-responses` map to `openai`, `anthropic-messages` maps to `anthropic`, `moonshot`, `moonshot-ai`, and `kimi-code` map to `kimi`, and `deepseek-chat` and `deepseek-ai` map to `deepseek`. Built-in provider ids such as `groq`, `openrouter`, `github-copilot`, `amazon-bedrock`, `google-vertex`, `azure-openai-responses`, `fireworks`, `vercel-ai-gateway`, `mistral`, and `xai` can also be used directly.
 
@@ -87,7 +87,7 @@ User-defined models show `source: user` in `--list-models` and take precedence o
 
 ### Kimi Code
 
-terva has built-in Kimi support through Kimi's OpenAI-compatible chat API.
+terva has built-in Kimi support through Kimi Code, which speaks the **Anthropic Messages API** (not OpenAI chat-completions) — terva drives it with the same client it uses for Claude.
 
 ```bash
 terva --provider kimi
@@ -96,7 +96,7 @@ terva --provider kimi
 By default this uses:
 
 - model: `kimi-for-coding`
-- base URL: `https://api.kimi.com/coding/v1`
+- base URL: `https://api.kimi.com/coding` (no `/v1` suffix — the Anthropic client appends `/v1/messages` itself)
 
 Credential lookup order for Kimi:
 
@@ -108,13 +108,13 @@ Credential lookup order for Kimi:
 
 Use `/login` for either API-key login or Kimi Code subscription login. The subscription flow uses Kimi Code's device-code OAuth flow: terva opens the verification URL, waits for browser approval, stores the token in `auth.json`, and refreshes it automatically.
 
-For direct Moonshot API keys or a custom compatible endpoint:
+Direct Moonshot API keys are a *different* provider — `moonshotai` — because the Moonshot platform endpoint is OpenAI-compatible where Kimi Code is Anthropic-shaped:
 
 ```bash
-terva --provider kimi --model kimi-k2-0905-preview --base-url https://api.moonshot.ai/v1 --api-key "$KIMI_API_KEY"
+terva --provider moonshotai --model kimi-k2.6 --api-key "$MOONSHOT_API_KEY"   # base URL defaults to https://api.moonshot.ai/v1
 ```
 
-You can add additional Kimi/Moonshot model IDs to `models.json` under the `kimi` provider.
+You can add additional Kimi model IDs to `models.json` under the `kimi` provider, and Moonshot ones under `moonshotai`.
 
 ### DeepSeek
 
@@ -139,9 +139,9 @@ Credential lookup order for DeepSeek:
 
 Use `/login` and pick **api key** to paste a DeepSeek key. terva probes `/v1/models` once and stores the key under `deepseek` in `auth.json`.
 
-> **Auth model: API key only.** DeepSeek does not offer a subscription OAuth flow. The `/login subscription` step lists only Anthropic, OpenAI, and Kimi; DeepSeek shows up only under `/login → api key`.
+> **Auth model: API key only.** DeepSeek does not offer a subscription OAuth flow. The `/login subscription` step lists only Anthropic, OpenAI Codex, Kimi, and GitHub Copilot; DeepSeek shows up only under `/login → api key`.
 
-> **Text only at the wire level.** DeepSeek's chat-completions endpoint currently rejects the multimodal content schema (`unknown variant image_url, expected text`). When the active provider is `deepseek`, terva silently drops `ImageBlock` parts from outgoing user/tool messages and keeps only the text. Switching back to a vision-capable model (Claude, GPT-4o/5, Gemini) re-sends the image normally because the session file still stores it.
+> **Text only at the wire level.** DeepSeek's chat-completions endpoint currently rejects the multimodal content schema (`unknown variant image_url, expected text`), so the V4 catalog rows are tagged `image-input: false`. The drop is **capability-keyed, not provider-keyed**: for any model without the image-input capability — a DeepSeek V4 row, a vision-less local GGUF, a `{"image-input": false}` entry in your `models.json` — terva silently drops `ImageBlock` parts from outgoing user/tool messages and keeps only the text. Switching back to a vision-capable model (Claude, GPT-5, Gemini) re-sends the image normally because the session file still stores it.
 
 For a custom-compatible endpoint (mirror, gateway, self-host):
 
@@ -162,7 +162,7 @@ By default this uses:
 - model: `gemini-2.5-pro`
 - base URL: `https://generativelanguage.googleapis.com`
 
-Catalog ships with `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, and `gemini-2.0-flash-lite`. Live discovery against `/v1beta/models` adds anything else your key can see.
+The catalog spans the 3.x line (`gemini-3-pro-preview`, `gemini-3.1-pro-preview`, `gemini-3.5-flash`, the Flash-Lite previews), the rolling `gemini-flash-latest` / `gemini-flash-lite-latest` aliases, the 2.x line (`gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-2.0-flash-lite`), and the open Gemma models. It moves with every Google release — run `terva --list-models` for the current set. Live discovery against `/v1beta/models` adds anything else your key can see.
 
 Credential lookup order for Google:
 
@@ -173,11 +173,11 @@ Credential lookup order for Google:
 
 Use `/login` and pick **api key** to paste an AI Studio key. terva probes `/v1beta/models` once and stores the key under `google` in `auth.json`.
 
-> **Auth model: API key only.** Google does not issue OAuth tokens for consumer Gemini Advanced / Google One AI Premium subscriptions, so there is no "log in with your Google subscription" flow. Programmatic access requires either an AI Studio API key (this provider) or a Vertex AI / GCP service-account credential (not yet wired up in terva). The `/login subscription` step quietly downgrades to the api-key form when you pick Google so you don't end up in a dead end.
+> **Auth model: API key only.** Google does not issue OAuth tokens for consumer Gemini Advanced / Google One AI Premium subscriptions, so there is no "log in with your Google subscription" flow. Programmatic access requires either an AI Studio API key (this provider) or a Vertex AI / GCP service-account credential (not yet wired up in terva). Google is therefore absent from the `/login subscription` list entirely; pick it under `/login → api key`.
 
 > **Free-tier rate limits.** AI Studio's free tier has tight per-minute and per-day caps that vary by model: `gemini-2.5-pro` is the strictest (a few requests per minute, ~50 per day), Flash and Flash-Lite are far more generous. If a Pro turn 429s with `"You exceeded your current quota"` while Flash on the same key still works, you've hit the Pro free-tier RPD. Either switch to Flash for agent loops, or [enable billing](https://aistudio.google.com/app/apikey) on your AI Studio project to flip the same key from free to pay-as-you-go pricing (`$1.25/M` input, `$10/M` output for Pro).
 
-Reasoning levels (`--reasoning off|minimum|low|medium|high|maximum`, also configurable in `/settings` as **thinking level**) map differently per generation. Budget-based providers use roughly 1k/2k/8k/16k/32k thinking tokens for minimum/low/medium/high/maximum, with provider/model caps applied (Gemini 2.5 Pro caps at 32k; Flash at 24k). Gemini 3.x uses the `thinkingLevel` enum (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH`), with Gemini-3-Pro pinned to `LOW` minimum and `HIGH` for any "medium" or higher request. Effort-based OpenAI-compatible chat providers map minimum to `low`, low/medium directly, and high/maximum to `high`; the Codex/Responses backend maps maximum to `xhigh` where supported. `off` sends no reasoning config. 2.0-family Gemini models have no thinking config at all.
+Reasoning levels (`--reasoning off|minimum|low|medium|high|maximum|max`, also configurable in `/settings` as **thinking level**) map differently per generation. Budget-based providers use roughly 1k/2k/8k/16k/32k thinking tokens for minimum/low/medium/high/maximum, with provider/model caps applied (Gemini 2.5 Pro caps at 32k; Flash at 24k). Gemini 3.x uses the `thinkingLevel` enum (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH`), with Gemini-3-Pro pinned to `LOW` minimum and `HIGH` for any "medium" or higher request. Effort-based OpenAI-compatible chat providers map minimum to `low`, low/medium directly, and high/maximum to `high`; the Codex/Responses backend maps maximum to `xhigh` where supported. `max` is a seventh tier *above* `maximum`, opt-in on purpose: it is sent natively only where the model has an effort above `xhigh` (GPT-5.6, adaptive-thinking Claude) and is clamped back to the `maximum` effort everywhere else. `off` sends no reasoning config. 2.0-family Gemini models have no thinking config at all.
 
 You can add additional Gemini model IDs to `models.json` under the `google` provider.
 

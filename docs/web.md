@@ -9,9 +9,12 @@ It is an **opt-in build** (build tag `terva_web`), excluded from the `min`
 binary exactly like the `terva acp` mode and the chat connectors. The full
 install one-liner and `just install` include it.
 
-- Design: [docs/proposals/terva-web.md](proposals/terva-web.md)
-- Protocol: [docs/controllers.md](controllers.md) (`ctrlproto` reference) · [design rationale](proposals/control-plane-protocol.md)
-- Horizon: [docs/proposals/terva-platform.md](proposals/terva-platform.md)
+The protocol it speaks is the `ctrlproto` control plane —
+[docs/controllers.md](controllers.md) is the reference. The design record
+(`docs/proposals/terva-web.md`), the protocol rationale
+(`docs/proposals/control-plane-protocol.md`), and the platform horizon
+(`docs/proposals/terva-platform.md`) live in the development repository, not
+the public release tree.
 
 ## Running it
 
@@ -33,7 +36,7 @@ Flags:
 | `--web-trusted-proxy` | — | IP/CIDR(s) allowed to assert `--web-auth-header` (comma-separated; loopback is always allowed) |
 | `--web-insecure` | off | permit a non-loopback bind with **no** auth mode (dangerous — open to any source) |
 | `--web-insecure-cidr` | — | grant **no**-auth access to these source IP/CIDR(s) only (comma-separated; loopback always allowed) — the scoped, safer form of `--web-insecure` for a trusted overlay network (see [Auth](#auth)) |
-| `--web-allow-restart` | off | enable Tier-1 self-restart (see [Self-restart](#self-restart)) |
+| `--allow-restart` | off | enable Tier-1 self-restart (see [Self-restart](#self-restart)); `--web-allow-restart` is the accepted older spelling |
 
 Standard flags apply too: `--cwd` pins the workspace, `--model` / `--provider`
 pick the default, `--yolo` runs without approval prompts, `--jail` / `--no-jail`
@@ -136,9 +139,50 @@ loses no history. The daemon defaults its working directory to the pinned
 project; the panel can flip the jail off so tools can reach beyond it when a
 task needs to.
 
+### Unix socket
+
+`--web-addr unix:/path/to/terva.sock` serves the same HTTP + WebSocket stack
+on a filesystem socket instead of TCP. The socket is created `0600` and the
+file's permissions **are** the auth boundary — no token dance for a same-user
+client (a `--web-token`, if set, is still enforced on top; the IP-based
+options are meaningless here). Browsers can't dial filesystem sockets, so
+this form is for `terva attach unix:/path/to/terva.sock` and programmatic
+ctrlproto clients; a stale socket left by a crash is cleared on the next
+start, and a live daemon's socket is refused rather than stolen.
+
+### systemd socket activation
+
+When `LISTEN_FDS` names the process (a `.socket` unit started the service),
+the passed socket — unix or TCP, whichever the unit declares — is served and
+`--web-addr` is ignored. The daemon starts on the first connection rather
+than at boot, and Tier-1 self-restart re-adopts the inherited socket across
+the exec (the pid is unchanged, so `LISTEN_PID` stays valid):
+
+```ini
+# ~/.config/systemd/user/terva-web.socket
+[Socket]
+ListenStream=%t/terva.sock
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target
+```
+
+```ini
+# ~/.config/systemd/user/terva-web.service
+[Service]
+ExecStart=/usr/local/bin/terva web --allow-restart
+WorkingDirectory=%h/workspace
+```
+
+`systemctl --user enable --now terva-web.socket`, then
+`terva attach unix:/run/user/1000/terva.sock` — the first attach spawns the
+daemon.
+
 ## Self-restart
 
-With `--web-allow-restart`, `terva web` can restart itself into the
+With `--allow-restart` (also accepted as `--web-allow-restart`, its original
+web-only spelling), `terva web` can restart itself into the
 currently-installed binary — no external supervisor — to pick up a new build.
 It is a Tier-1 restart: it re-execs the same executable (via `exec(2)`) with the
 original arguments and environment, so the PID is preserved and the process
@@ -169,11 +213,24 @@ Two ways to trigger it, both funneling through the same path:
   > re-exec the daemon without confirmation. That was a deliberate v1 choice
   > (yolo means "run freely"); combine the two only when that's acceptable.
 
-On restart the daemon broadcasts a "restarting — reconnecting shortly" notice,
-then replaces the image after a brief flush delay. Sessions persist to disk
-per-message, and the PWA auto-reconnects and restores from the on-disk snapshot,
-so no history is lost — but an **in-flight turn is interrupted** (Tier 1 does not
-preserve active tool calls). Prefer restarting while idle.
+On restart the daemon broadcasts a "terva vX is restarting — reconnecting
+shortly" notice (naming the outgoing build), then replaces the image after a
+brief flush delay. The version is visible on both sides of the hop: stderr
+logs the running build with the restart request and the new image logs
+`self-restart complete — was vX, now vY` on boot (the prior version rides the
+exec env), while in the browser the Settings pane shows the build serving the
+panel and a toast announces the version change once the client reconnects to a
+different build. Sessions persist to disk per-message, and the PWA
+auto-reconnects and restores from the on-disk snapshot, so no history is lost —
+but an **in-flight turn is interrupted** (Tier 1 does not preserve active tool
+calls). Prefer restarting while idle.
+
+## Attaching the TUI
+
+`terva attach [URL]` connects the interactive TUI to a running `terva web`
+daemon as a second client — same sessions, same live stream as the browser
+panel, with the PWA's reconnect/resync discipline. See docs/tui.md
+§"Attaching to a running daemon".
 
 ## Building the client
 
@@ -203,7 +260,9 @@ callbacks into visual components. Run `just web-test`, the client `typecheck` an
 
 ## Languages
 
-The panel follows terva's operator language (config `language`, or `LANG`; see
+The panel follows terva's operator language (the `TERVA_LANG` env var — the
+legacy `ZOT_LANG` spelling still works <!-- rename:keep --> — else config
+`language`; the OS `LANG` is *not* consulted. See
 [docs/localization.md](localization.md)), and you can change it from **Settings →
 Language**: it switches the daemon's active language live, saves it as the
 default, and broadcasts to every open tab (each re-fetches its catalog + panes
@@ -267,7 +326,21 @@ instead, set it in `config.json` (off by default so no extra tokens are spent):
 
 `auto_title_model` is optional — leave it out to title with the session's own
 model. Either way you can always rename a session by hand; a manual name is
-never overwritten.
+never overwritten by the automatic pass.
+
+You can also generate a title **on demand**: the ✨ button next to rename in
+the session drawer (or `g` in the TUI's `/sessions` picker) runs one bounded
+model call over the conversation — the latest compaction summary when one
+exists, plus the most recent exchanges — and works regardless of the
+`auto_title` setting, including as backfill for old untitled sessions. An
+explicit generate does replace whatever name is there: you asked for it.
+Long sessions get better titles this way than from their opening line.
+
+With `auto_title` on, titles also **refresh automatically after each
+compaction** — the moment a session has provably outgrown the name its
+opening earned. Only machine-generated titles refresh; a session you named
+by hand keeps its name (title provenance is tracked in the transcript, so
+this holds across restarts too).
 
 ## Panes
 
@@ -298,14 +371,21 @@ docs/proposals/web-surfaces.md). Today's panes:
   coordinator has a real event feed — no poller). With `raati.convene_tool`
   enabled, the **agent** can convene a panel too (`raati_convene`, always
   behind the approval gate) — its deliberation renders on this same board.
-- **Settings** — approval mode (per-session, live, not saved — a security
-  posture), thinking/reasoning effort (applies live and saved as the default),
-  auto-title (saved), **language** (switches live for all tabs + saved — see
-  Languages below), and **auto-swarm** as two nested toggles: *background
-  sub-agents* (the `swarm_spawn` tool) and, under it, the *proactive-delegation
-  nudge* (default on — off keeps the tool but drops the system-prompt push). The
-  swarm toggles are saved and apply to **new sessions** (the tool set + prompt
-  are baked at session construction). Config writes are concurrency-safe.
+- **Settings** — every setting the daemon exposes, rendered from one
+  server-side surface (`workspace_settings.go`) that the TUI's `/settings`
+  renders too, so the two never drift. Each row states when it bites: **approval
+  mode** (per-session, live, not saved — a security posture); **thinking**
+  effort, **auto-condense** (steps / turns / off) and **language** (all live, and
+  saved as the default — language switches every open tab, see Languages below);
+  **auto-title**, **temperature**, **theme**, **inline images**, **lazy tool
+  loading** (advertise core tools first, let the agent pull tool groups in with
+  `activate_tools`), **recursive file search**, **respect .gitignore**, **lore**
+  (keyed context), **swarm worktrees**, and the first-run **core tool pack**
+  offer; plus **auto-swarm** as two nested toggles: *background sub-agents* (the
+  `swarm_spawn` tool) and, under it, the *proactive-delegation nudge* (default on
+  — off keeps the tool but drops the system-prompt push). The ones marked
+  *applies to new sessions* (the swarm toggles, lazy tools, lore, …) are baked at
+  session construction. Config writes are concurrency-safe.
 - **Commands** — every slash command an extension registered, as clickable
   buttons grouped by extension. The web has no command line, so a command is a
   button, not a `/name` you type (the TUI keeps the slash prompt). Running one
@@ -341,6 +421,20 @@ docs/proposals/web-surfaces.md). Today's panes:
   sessions** (kept that way on purpose, so an edit doesn't reset the prompt
   cache). Only web-managed user entries are editable — entries from extension
   bundles, character cards, or other tiers are read-only.
+- **Chat** — the chat-bridge manager (the TUI's `/connect`). Lists every
+  registered chat service — the compiled-in telegram and discord connectors plus
+  any connector extensions (tagged `extension`, and `dev` where applicable) —
+  each either **not configured** (with a pointer to `terva bot setup`) or a
+  **connect** / **connect & pair** button. Once connected it shows the connector,
+  the bot's `@username`, the paired user (or *awaiting `/start` from your phone*),
+  and which session is being mirrored, with **disconnect** and **mirror this
+  session** actions — the bridge is bound to one session and does *not* follow
+  whichever session a tab happens to be showing, so rebinding is explicit.
+  Workspace-global, like the bridge itself. A running `terva bot` daemon already
+  polling the service blocks connecting (both consumers would race each update
+  and one always loses); the pane says so and names the pid. The pane is offered
+  whenever any chat service is registered, so it can explain "not configured"
+  rather than silently going missing. See [connectors.md](connectors.md).
 - **MCP** — the Model Context Protocol server manager. `terva web` now starts the
   configured MCP servers (user `config.json` + a trusted project's) once for the
   daemon and merges their tools into every session, so MCP tools are usable in
@@ -414,8 +508,10 @@ The tool-display button in the top bar cycles four levels (the choice is
 remembered): **box** (full name/args/result), **grouped** (a run of tool calls
 between replies collapses to a single "N tool calls" line — with a summary of
 which tools and any failures — that expands to the full boxes on click),
-**minimal** (one greyed line per call), and **hidden**. Grouped is the web
-answer to a dozen tools burying a reply; the TUI has no equivalent.
+**minimal** (one greyed line per call), and **hidden**. Grouped is the answer to
+a dozen tools burying a reply; the TUI has the same four levels on its `ctrl+t`
+cycle, and both sides summarize a run identically (one shared format, pinned by
+golden fixtures).
 
 ## Slash commands
 
@@ -433,6 +529,7 @@ sends as a normal prompt.
 | `/skill <name> [task]` | Prime the model to load a skill — it rewrites to *Use the "name" skill for: task* and sends it, so the model calls the `skill` tool. After `/skill ` the menu autocompletes skill names. |
 | `/model [id]` | Switch to a model by id, or open the model picker. |
 | `/context` | Open the Usage pane. |
+| `/raati` | Open the deliberation board. |
 | `/new` | Start a new session. |
 | `/help` | List the commands. |
 
@@ -440,6 +537,24 @@ Only the daily-driver subset is exposed; TUI-only chrome (`/jail`, `/paste`, …
 and things with dedicated web UI (settings, sessions) are not. `/compact` and
 `/clear` are each backed by a ctrlproto conversation method (`compact` / `clear`);
 the rest are existing methods or client-side transforms.
+
+## @-file mentions
+
+Type `@` (at the start of the message or after a space) for workspace-file
+completion — the daemon lists its own tree over ctrlproto (`files.list`,
+gitignore-filtered, advertised as the `files-list` hello feature; on an older
+daemon the stage simply doesn't appear). Matching is substring-then-
+subsequence over the whole relative path; selecting a file inserts the path,
+selecting a directory keeps the token live and narrows into it. The listing
+is fetched lazily on the first `@` and re-fetched on a 30-second TTL, so
+keystrokes never ride the wire.
+
+**Tab** shell-completes the token in place — segment-wise prefix completion
+to the unique candidate (a directory gains `/` and stays live) or the
+longest common prefix, bash dot-name rules included. Tab never commits;
+Enter applies the highlighted row. The TUI's `@`-picker Tab runs the same
+semantics — both implementations are pinned to one shared golden-fixture
+file, so they cannot drift.
 
 ## Queued messages
 
@@ -452,5 +567,8 @@ Before the agent consumes it you can **edit** it in place (✎) or **remove** it
 v1 is the daily-driver: chat, session switching + nicknames, model switching
 (searchable picker with per-model favorites), a context breakdown, usage, and
 the PWA. Extensions load per session (like ACP), so lore, hooks, tool
-approvals, and extension tools all work. Deferred (further `ctrlproto` control
-group): lore editing, extension management, prompt overrides, and templates.
+approvals, and extension tools all work. Management surfaces have since landed
+on top of that — lore editing and extension enable/disable both ship (see the
+Lore and Extensions panes above), as do MCP, permissions, and the chat bridge.
+Still deferred (further `ctrlproto` control group): prompt overrides and
+templates.

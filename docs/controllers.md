@@ -17,7 +17,7 @@ their shape:
 
 The code lives in `packages/agent/ctrlproto` (always built, carrier-agnostic).
 For the design rationale see the proposal:
-[docs/proposals/control-plane-protocol.md](proposals/control-plane-protocol.md).
+`docs/proposals/control-plane-protocol.md`.
 
 > **Status.** Out-of-process *programmatic* control and multi-instance
 > management are **not available yet**. The only shipped carrier is the
@@ -50,7 +50,7 @@ The same `WorkspaceService` is bound to different transports:
 
 | Carrier | Client | Status |
 |---|---|---|
-| **in-process** | the TUI / any embedding host — direct interface calls, no serialization | **shipped, the only TUI backend**: the TUI binds `Workspace` through the `modes.Carrier` seam (PR #14; the legacy direct driver has since been removed, `--tui-legacy` is a deprecated no-op). Honest caveat: it is a ctrlproto-*backed* in-process client, not transport-pure — the nil-Carrier direct-agent fallback is gone, but ~22 residual management readers still use the `AgentFor` crutch (see `modes/carrier.go`); retiring them needs protocol widening and is the remote-carrier milestone (remediation plan 4.1) |
+| **in-process** | the TUI / any embedding host — direct interface calls, no serialization | **shipped, the only TUI backend**: the TUI binds `Workspace` through the `modes.Carrier` seam (PR #14; the legacy direct driver has since been removed, `--tui-legacy` is a deprecated no-op). The `AgentFor` crutch is **gone** (remediation plan 4.1, complete — see `modes/carrier.go`): the TUI holds no `*core.Agent`, and its whole control path is ctrlproto — prompt dispatch, the event stream, approvals/asks, transcript rendering, `/context`, `/permissions`, `/settings`, `/clear`, `/model`, login, side chat. Honest caveat: file-based session fork/tree/export stays local (out of wire scope v1) |
 | **WebSocket** | [`terva web`](web.md) — bidirectional, streaming, browser-native | **shipped** |
 | **stdio** | a CLI, scripts, or a fleet controller (one agent per child) | designed, **not built** |
 | **ext-tunnel** | extensions, over extproto (the `chat_open`/`chat`/`chat_close` envelope trick connproto already uses) | designed, **not built** |
@@ -59,15 +59,16 @@ Adding a carrier is a binding, not new protocol work.
 
 ## Method groups
 
-The surface is split into three **capability-negotiated groups** with different
+The surface is split into four **capability-negotiated groups** with different
 rates of change and audiences. A client declares which groups it speaks in its
 hello; a minimal client (the mobile PWA) negotiates only the first two.
 
 | Group | Carries | Authority |
 |---|---|---|
 | **conversation** | the event stream (out) + turn commands: prompt, queue, cancel, compact, clear, approve, answer, subscribe | frontend-driving |
-| **session** | session lifecycle (list/create/resume/rename/delete), usage, context breakdown, surfaces, i18n catalog | frontend-driving |
-| **control** | host-reconfiguring management: models, trust, restart — and (future) lore, prompt/system overrides, templates, jail | **categorically higher** — see [Security & authority](#security--authority) |
+| **session** | session lifecycle (list/create/resume/rename/delete), usage (incl. snapshots and reset credits), context breakdown + tree nodes, side chat, surfaces, i18n catalog | frontend-driving |
+| **control** | host-reconfiguring management: models, trust, restart, reset-credit redemption — and (future) lore, prompt/system overrides, templates, jail | **categorically higher** — see [Security & authority](#security--authority) |
+| **replay** | a recorded session's transport (`replay.control` / `replay.state`) and its `replay_state` broadcast | frontend-driving, but **optional**: it is off the base server hello — only a carrier backing a `ReplayController` advertises it, so a client that negotiates it is guaranteed the group is served |
 
 Keeping the groups separable is what lets one protocol serve a focused mobile
 client, a full desktop control panel, and a fleet controller without any of them
@@ -123,7 +124,8 @@ only on a breaking envelope change, which negotiation is designed to avoid.
 | `images` | inbound image attachments on `prompt` |
 | `image-data` | outbound image payloads: image blocks in snapshots and message / tool-result events keep raw `data` alongside `mime_type`+`bytes`, so the client renders real pixels. Without it the carrier strips `data` at the connection boundary (size-only blocks — inlined payloads are opt-in, not a default). In-process carriers bypass serialization and always see the full form |
 | `resolve-events` | the `permission_resolved` / `ask_resolved` multi-client dismissal events |
-| `restart` | the daemon will serve `control.restart` (advertised only under `--web-allow-restart`) |
+| `context-tree` | `context.get` carries the hierarchical `ContextBreakdown.Tree` (section/turn/message outline), lazily expanded with `context.node`. A client that doesn't see it falls back to the flat message list |
+| `restart` | the daemon will serve `control.restart` (advertised only under `--allow-restart`; `--web-allow-restart` is an accepted alias) |
 
 The server also advertises its active UI language (`locale`, BCP-47) so a client
 can fetch the matching string catalog (`i18n.catalog`); server-originated display
@@ -159,7 +161,13 @@ Every command is a `cmd` frame; the server answers with a `resp` (a bare ok, a
 | `sessions.rename` | `{title}` | set the display nickname |
 | `sessions.delete` | — | remove a session + transcript |
 | `usage.get` | → `{usage}` | cumulative tokens / cost |
+| `usage.snapshot` | `{refresh?}` → `{usage}` | the provider's usage windows / credits; `refresh` pulls from the provider's usage endpoint and blocks on the fetch |
+| `usage.resets.list` | → `{supported, resets?}` | the consumable usage-reset credits and their status — read-only (redeeming one is `usage.resets.consume`, in **control**) |
 | `context.get` | → `{breakdown}` | the `/context` size view (prompt, tools, ext context, transcript vs window) |
+| `context.node` | `{id, op?}` → `{node}` | resolve one context-tree node by its opaque id: expand it a level deep, or run a node-named reveal (feature `context-tree`) |
+| `sidechat.open` | → `{id}` | freeze a snapshot of the session for an off-transcript side chat (the `/btw` overlay) |
+| `sidechat.ask` | `{id, prior?, question}` → `{text}` | one tool-less completion against the frozen snapshot; the client carries the prior turns, so the daemon holds no per-turn state |
+| `sidechat.close` | `{id}` | release the snapshot (closing an unknown id is not an error) |
 | `surfaces.list` | → `{surfaces}` | auxiliary panes (context, usage, extension panels) |
 | `surface.get` | `{id}` → `{surface}` | one pane's content |
 | `surface.action` | `{id, action, args?}` | act on a pane (e.g. forward a keypress; `extensions`/`mcp` `toggle` takes `{name, enabled, scope: global\|project}`; `tasks` takes `spawn {task, model?, provider?, persona?}` / `stop`/`remove`/`resume` `{id}` / `send {id, text}` — actions return no payload, so a spawned agent's id arrives via the next `tasks` fetch) |
@@ -175,6 +183,15 @@ Every command is a `cmd` frame; the server answers with a `resp` (a bare ok, a
 | `control.trust` | `{parent?}` | grant Workspace Trust to the cwd; brings project extensions/lore/permission rules live across open sessions |
 | `control.untrust` | — | revoke it, tearing project content back down |
 | `control.restart` | — | Tier-1 self-restart (re-exec into the installed binary); `unsupported` unless `restart` was advertised |
+| `usage.resets.consume` | `{id}` → `{reset, windows_reset?}` | redeem a usage-reset credit. Irreversible and it spends a scarce provider grant, so it sits here rather than beside the read-only `usage.resets.list`; the host confirms with the user before issuing it |
+
+**replay** (optional — served only by a carrier backing a `ReplayController`,
+which advertises the group in its hello; otherwise `unsupported`)
+
+| Method | Params → Result | Effect |
+|---|---|---|
+| `replay.control` | `{action, position?, multiplier?, unit?}` → `{state}` | drive a recorded session's transport: `play` / `pause` / `step` / `seek` / `turn` / `speed`. Only the field the action needs is read |
+| `replay.state` | → `{state}` | the current transport state: `{playing, position, total, speed, mode}` (`mode` = `effective` \| `raw`) |
 
 Implementations may return `unsupported` for control methods they don't yet
 serve — jail, lore CRUD, prompt/system overrides, and templates are shaped in
@@ -214,6 +231,7 @@ must render and answer:
 | `surfaces_changed` | — | the set of panes changed — re-list |
 | `locale_changed` | `locale` | the daemon's UI language changed — re-fetch catalogs & re-render |
 | `notice` | `notice:{level, text, ext?, kind?, data?}` | a one-shot, ephemeral message (not persisted, not replayed) |
+| `replay_state` | `replay:{playing, position, total, speed, mode?}` | a recorded session's transport moved (play/pause/seek/speed) — every client's scrubber re-syncs (group `replay`) |
 
 **Kinded notices.** A notice may carry a machine-readable `kind` plus a
 string-map `data` payload. `text` always stands alone, so a client that
@@ -225,7 +243,7 @@ constants in `ctrlproto/event.go`. Current kinds:
 
 | kind | data keys | meaning |
 |---|---|---|
-| `prompt_rebuilt` | `scope` (system \| tools \| both), `reason` (approval-mode \| auto-swarm \| extension-reload \| mcp-toggle \| trust), `context_tokens?` | the session's pinned prompt prefix changed, so the provider prompt cache is invalidated and the next turn re-reads ~`context_tokens` tokens uncached. Emitted only on a real diff — an identical rebuild is silent. Informational, never blocking: the run loop pins the prefix per turn, so the change lands at the next turn regardless. |
+| `prompt_rebuilt` | `scope` (system \| tools \| both), `reason` (approval-mode \| auto-swarm \| extension-reload \| mcp-toggle \| trust \| tool-withdrawal \| extension-context \| chat-connect \| chat-disconnect), `context_tokens?` | the session's pinned prompt prefix changed, so the provider prompt cache is invalidated and the next turn re-reads ~`context_tokens` tokens uncached. Emitted only on a real diff — an identical rebuild is silent. The extension-driven reasons (`tool-withdrawal`, `extension-context`) are suppressed to a host log when they fire before the first turn — a startup policy assertion invalidates no cache. Informational, never blocking: the run loop pins the prefix per turn, so the change lands at the next turn regardless. |
 
 Example — a tool-approval round-trip:
 
@@ -280,7 +298,8 @@ apply:
   defeats DNS rebinding), or a bearer token, or a trusted forward-auth header
   from a reverse proxy (Authentik) — honored only from a loopback peer. See
   [web.md](web.md). `control.restart` is additionally gated behind
-  `--web-allow-restart` (the `restart` feature).
+  `--allow-restart` (the `restart` feature; `--web-allow-restart` is an accepted
+  alias — the capability is not web-only).
 
 **Per-group *authority* gating is a future requirement for the ext-tunnel
 carrier.** When ctrlproto is tunneled over extproto, an extension that speaks the
@@ -310,7 +329,7 @@ the envelope from the start:
   frontend on the wire.
 
 See the platform vision in
-[docs/proposals/terva-platform.md](proposals/terva-platform.md).
+`docs/proposals/terva-platform.md`.
 
 ## See also
 
@@ -318,5 +337,5 @@ See the platform vision in
 - [connectors.md](connectors.md) — connproto, the chat-connector wire (the meta-architecture ctrlproto reuses)
 - [extensions.md](extensions.md) — extproto, the host↔extension wire (a future ctrlproto carrier)
 - [rpc.md](rpc.md) — the `core.WireEvent` JSON stream that ctrlproto's conversation events *are*
-- [docs/proposals/control-plane-protocol.md](proposals/control-plane-protocol.md) — the full design rationale and roadmap
+- `docs/proposals/control-plane-protocol.md` — the full design rationale and roadmap
 - `packages/agent/ctrlproto` — the implementation (`doc.go`, `wire.go`, `methods.go`, `event.go`, `hello.go`, `service.go`, `serve.go`)

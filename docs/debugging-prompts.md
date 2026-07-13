@@ -30,7 +30,7 @@ that's a bug.
 terva --card examples/cards/aava-v2.json --dump-prompt -p "tell me about the fog-bell"
 ```
 
-Three formats:
+Four formats:
 
 - **`--dump-prompt`** (text, default) — annotated, each segment tagged with its
   `[source]`. The *"where did this come from"* view.
@@ -38,6 +38,9 @@ Three formats:
 - **`--dump-prompt=raw`** — segment text concatenated, unlabeled: the logical
   prompt. (Not the literal wire payload — no `cache_control` markers or JSON
   escaping; a wire-level dump is a planned follow-up.)
+- **`--dump-prompt=sizes`** — per-section and per-tool byte + token weight. The
+  *"what's eating my context"* view: no prompt text, just the attribution, so a
+  bloated tool schema or an oversized context file is one command away.
 
 The manifest is the **source of truth**: the flat system-prompt string is
 *derived* from the same labeled segments the dump shows, so the dump can't
@@ -90,8 +93,11 @@ without a persona or `--system-prompt`, via the prompt overlay
 
 ## In-session
 
-- **`/lore`** — lists the run's active lore (name · trigger · source) and shows
-  which entries **fired last turn**. The in-session version of the tail check.
+- **`/lore`** — lists the run's active lore (name · trigger · source): what's
+  *loaded and eligible*. It does **not** report what fired on the last turn — the
+  TUI reads lore over ctrlproto and the wire view carries no per-turn firing
+  record — so for *did it actually fire*, the `tail` sources in
+  `--dump-prompt=json` remain the check.
 - **`/context`** — token breakdown of the assembled context and what extensions
   inject.
 
@@ -99,7 +105,7 @@ without a persona or `--system-prompt`, via the prompt overlay
 
 | symptom | check | likely cause → fix |
 |---|---|---|
-| A lore entry never fires | `--dump-prompt=json` tail sources, or `/lore` "fired last turn" | keyword not in the scan window → widen `scan_depth`, or the term isn't in the recent messages; whole-word/case mismatch; `--no-lore` set; `.terva/lore` untrusted → `terva trust`. Validate with `terva lore validate`. |
+| A lore entry never fires | `--dump-prompt=json` tail sources (`/lore` only confirms the entry is *loaded*, not that it fired) | keyword not in the scan window → widen `scan_depth`, or the term isn't in the recent messages; whole-word/case mismatch; `--no-lore` set; `.terva/lore` untrusted → `terva trust`. Validate with `terva lore validate`. |
 | A card's `system_prompt` is ignored | is `card:system_prompt` in `system`? | `--system-prompt`/`SYSTEM.md` (a raw `custom` replace) wins over a card; or the card has none. |
 | The greeting is missing | is `messages[0]` = `card:greeting`? | it only seeds on a **fresh** session (not `--continue`/`--resume`), or `first_mes` is empty. Try `--greeting N`. |
 | The character calls me the wrong name (or "User") | read the intro/greeting text where the card uses `{{user}}` | no name set → pass `--as NAME`, or set `user_name` (an interactive card session asks once and remembers it **globally**, so it persists across projects even under project-scoping). Precedence: `--as` > a trusted project's `user_name` > global `user_name` > `"User"`. |

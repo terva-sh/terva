@@ -20,23 +20,73 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/jump` | Scroll the chat to a previous turn (or `/jump <text>` to filter). |
 | `/btw` | Side chat with full context that doesn't add to the main thread. |
 | `/swarm` | Spawn, monitor, and chat with background subagents. Each runs in parallel with your main session and shares its working directory. |
+| `/skill` | Prime your next request with a specific skill: `/skill <name> [request]` rewrites to "use the *name* skill for: request" so the model reaches for it. Autocompletes skill names after `/skill `. |
 | `/skills` | List discovered skills (SKILL.md files) and preview their bodies. |
-| `/context` | Token breakdown of the assembled context and what each extension injects. Read-only. |
-| `/lore` | List this run's active lore (keyed-context) entries — name, trigger, and source — and which fired last turn. Read-only. See [debugging-prompts.md](debugging-prompts.md). |
-| `/usage` | Show subscription usage limits — the 5h/weekly windows, how much is used, and when they reset — for providers that report them (OpenAI Codex today). Read-only; `esc` closes. See [providers.md](providers.md#usage-limits-usage). |
+| `/context` | Token breakdown of the assembled context and what each extension injects. Under lazy tool visibility it reports both numbers honestly — the *advertised* tool set that is actually on the wire, and the *installed* total that would load if every group were activated (`[4 of 31 tools · 48 KB installed]`), plus the bytes the capability note itself costs. Read-only. |
+| `/lore` | List this run's active lore (keyed-context) entries — name, trigger, and source. Read-only. It does **not** report which entries fired on the last turn: the default TUI reads lore over ctrlproto and the wire view carries no per-turn firing record. To see what actually fired, use `--dump-prompt=json` and read the `tail` sources. See [debugging-prompts.md](debugging-prompts.md). |
+| `/tasks` | Show the agent's task list — the built-in task tracker the model writes to as it works. Read-only; `esc` closes. |
+| `/usage` | Show usage limits — subscription windows (5h/weekly), the provider's rate-limit windows, and any credit balance — with how much is used and when each resets. Read-only; `esc` closes. See [providers.md](providers.md#usage-limits-usage). |
+| `/resets` | List the banked usage-reset credits a subscription has accrued (OpenAI Codex today) and redeem one to clear a spent window. Redeeming is irreversible and confirmed first; `esc` closes. |
 | `/compact` | Summarize the transcript into one message to free up context. |
 | `/study` | Run the canned prompt "Read and understand everything in the current directory." so the agent has full project context before you start asking targeted questions. Pass a path — typed, drag-dropped, or selected via `@` — to target a specific file or directory instead: `/study [dir:packages/]`, `/study cmd/terva/main.go`. |
 | `/jail` | Confine tools to the current directory. (On by default in interactive sessions; `--no-jail` starts unjailed.) |
 | `/unjail` | Allow tools to touch paths outside again. |
+| `/trust` | Trust the current directory so its project content — `.terva` extensions, skills, lore, context, permission rules — loads. `/trust parent` trusts the parent so every directory under it counts as trusted too. Project extensions become discoverable immediately (`/reload-ext` picks them up); prompt-baked content lands on the next launch. |
+| `/untrust` | Remove the current directory from the trust list; its project content stops loading on the next launch. |
 | `/permissions` | Show the current approval mode and the active permission rules grouped by source (user/project/extension), and revoke this session's "always allow" grants: `↑`/`↓` select a grant, `r` or `del` takes it back, `R` clears them all, `esc` closes. Rules stay read-only (edit them in config). Alias: `/perms`. See [permissions.md](permissions.md). |
 | `/reload-ext` | Hot-reload all extensions (re-read manifests, respawn subprocesses, rebuild tool registry). |
 | `/extensions` | List installed extensions and their state; enable/disable each globally (`g`) or per-project (`p`). Alias `/ext`. |
+| `/mcp` | List the configured MCP servers with their state and tool counts; enable/disable each globally or per-project. See [mcp.md](mcp.md). |
 | `/connect` | Connect, disconnect, or show status of the chat bridge (takes `connect` / `disconnect` / `status` as an optional argument; opens a picker without one). When connected, DMs from the paired user become prompts in the running session and the assistant's replies are mirrored back to the chat. The picker lists every configured service — the built-in telegram and discord connectors plus any connector extensions (tagged "extension") — and `/connect <name>` selects one directly. Aliases: `/telegram`, `/tg` (pin telegram). |
-| `/settings` | Toggle persistent settings (inline images, auto-swarm, reasoning, theme) with `enter`/`space` or the option picker — saved to `$TERVA_HOME/config.json`, effective immediately. The **approval mode** picker is the exception: it switches the mode live for the **current session only** (like `/jail`), and is *not* persisted — the startup default comes only from an explicit `approval` key in config or the `--approval` flag, so the picker can never silently pin a mode into your config. |
+| `/status` | Read-only harness status, inline like `/help`: the running build (version/commit/date), process uptime, provider/model, auth, reasoning, cwd + trust state, session id and transcript file, live context usage, cumulative token/cost totals, and provider usage windows. The operator's view of what the model-facing `terva_status` tool reports — no turn spent. |
+| `/restart` | Re-exec terva into the currently-installed binary and resume this session (Tier-1 self-restart; needs `--allow-restart`). The terminal is restored before the exec, the new image reattaches to the same session, and the status line reports the build hop (`restarted — was vX, now vY`). Same semantics as web: an in-flight turn is cancelled first and given a brief, bounded window to unwind and persist before the image is replaced — only already-persisted history is guaranteed across the hop. The agent-driven `terva_restart` tool is registered under the same flag — the edit-own-code → reinstall → relaunch loop works from the TUI too. |
+| `/settings` | Open the settings dialog — thinking level, auto-condense, lazy tool loading, lore, theme, status line, and the rest — with `enter`/`space` or the option picker. Saved to `$TERVA_HOME/config.json`, effective immediately. The **approval mode** picker is the exception: it switches the mode live for the **current session only** (like `/jail`), and is *not* persisted — the startup default comes only from an explicit `approval` key in config or the `--approval` flag, so the picker can never silently pin a mode into your config. |
+| `/paste` | Paste an image from the system clipboard into the prompt as a `[clipboard image #N]` marker (the same thing `ctrl+v` does). Text paste needs neither — it arrives as an ordinary bracketed paste. |
+| `/migrate` | Move a pre-rename `zot` data directory to the terva location. <!-- rename:keep --> A one-time upgrade path; the default TUI reports it as unavailable, since it doesn't carry the interactive migrator. |
 | `/clear` | Clear the chat transcript. |
 | `/exit` | Exit terva. |
 
 Extension-registered commands appear under a divider at the bottom of the popup, sorted by name.
+
+### Attaching to a running daemon (`terva attach`)
+
+`terva attach [URL]` runs this same TUI as a **client** of a running `terva
+web` daemon instead of hosting the workspace in-process (default endpoint
+`ws://127.0.0.1:8730/ws`; `--token` matches the daemon's `--web-token`; bare
+`host:port` and `http(s)://` forms normalize, and `unix:/path/to.sock`
+targets a daemon serving a filesystem socket — no token needed there, the
+socket file's permissions gate access). Sessions, credentials, extensions,
+and tools all live daemon-side — the TUI renders and controls, and the
+browser panel can watch the same session simultaneously.
+
+The status line tells the daemon's truth, not the local process's: the daemon
+advertises its working directory and sandbox lock in the hello, and the wire
+carries the session's context window, transcript name, and subscription flag —
+so the cwd/git segments, ctx gauge, `(sub)` cost tag, jailed badge, and
+thinking level all describe the workspace you're attached to, from whatever
+directory you launched. `/swarm` and the status bar's swarm glance ride the
+daemon's tasks surface.
+
+The connection is self-healing: if the daemon restarts (its `/restart`, the
+`terva_restart` tool, or a crash-and-relaunch), the TUI shows "connection lost
+— reconnecting…", re-subscribes, resyncs from the snapshot, and announces
+`daemon restarted: vX → vY` when the build changed. The inverse is the
+quality-of-life win for iterating on terva itself: quit the TUI mid-turn,
+reinstall it, re-attach — the agent never noticed.
+
+The `@`-file picker lists the daemon's tree **over the wire** (the
+`files.list` verb, advertised as the `files-list` hello feature) — correct
+from any host, with the same gitignore filtering and caps as the local
+picker; against an older daemon it falls back to reading local disk at the
+daemon's advertised cwd (same-host correct).
+
+v1 boundaries: the git probe and model-catalog reads are local — pointed at
+the daemon's advertised cwd, so they're truthful from any directory on the
+daemon's host and degrade to absent cross-host; session file operations
+(`/session` export/import/fork/tree) and `/login` are daemon-side concerns
+and degrade with a clear message; `/jail` and extension pickers likewise.
+See docs/proposals/orchestration-frontend.md for the trajectory (the
+sessions board over N subscriptions).
 
 ### Editing a model's config (`ctrl+e`)
 
@@ -156,14 +206,32 @@ Background subagents that run alongside your main session. Each one is a separat
 
 ### `/settings`
 
-Opens a dialog with every persistent setting. `up`/`down` to navigate, `enter` or `space` to change the selected row, `esc` to close. Changes are written to `$TERVA_HOME/config.json` and take effect on the next turn (no restart needed). Current settings:
+Opens a dialog with every setting. `up`/`down` to navigate, `enter` or `space` to flip a checkbox or open an enum's option picker, `esc` to close. Persisted changes are written to `$TERVA_HOME/config.json`; no restart needed.
 
-- **render images when supported** — draw screenshots / `read`-returned images inline using the terminal's image protocol, or fall back to a text placeholder. Auto-detected from `TERM_PROGRAM`; the toggle overrides the detection. The row is greyed out and forced off on terminals that don't speak any image protocol.
-- **auto-swarm** — let the main agent spawn background sub-agents in parallel via a built-in `swarm_spawn` tool. Off by default. When on, the tool is registered with the running agent, the system prompt gains a short addendum telling the model to delegate independent sub-tasks proactively, and terva watches every sub-agent the main agent spawns. As soon as the last sub-agent in a batch finishes its initial task, an `[auto-swarm update]` message is injected back into the chat with each agent's status / task / transcript tail, so the main agent can summarise the collective outcome. Flipping off mid-session removes the tool from the live agent and strips the addendum on the next turn — the model stops trying to delegate. See `/swarm` for the dashboard that lets you monitor, message, kill, or remove the spawned agents.
-- **thinking level** — choose reasoning for supported models: off (default; no reasoning), minimum (~1k tokens), low (~2k), medium (~8k), high (~16k), maximum (~32k). The change is persisted to `config.json` and applied to the running agent's next model call.
+Most of the dialog is a **generic rendering of the daemon's settings surface** — the same single source the web panel's Settings pane renders (`packages/agent/workspace/workspace_settings.go`), so a setting added there shows up in both without a TUI change. Each row carries its own hint about when it bites: *applies live*, *applies to new sessions* (the tool set and system prompt are baked at session construction), or *per-session, not saved*.
+
+From the daemon surface:
+
+- **approval mode** — how tool calls are gated (plan / ask / auto-edit / workspace / yolo). The exception to everything else here: it switches the mode live for the **current session only** (like `/jail`) and is *not* persisted — the startup default comes only from an explicit `approval` key in config or the `--approval` flag, so the picker can never silently pin a mode into your config. `shift+tab` cycles the everyday three. See [permissions.md](permissions.md).
+- **thinking** — reasoning effort for supported models: off (default; no reasoning), minimum (~1k tokens), low (~2k), medium (~8k), high (~16k), maximum (~32k), and `max` (the model's native maximum — GPT-5.6's ceiling, adaptive on Claude). Applies live and becomes the default for new sessions.
+- **auto-title sessions** — name a session with a short model call instead of the first message line.
+- **language** — the UI language. Switches live and is saved as the default. See [localization.md](localization.md).
+- **background sub-agents** (auto-swarm) — let the main agent spawn sub-agents in parallel via a built-in `swarm_spawn` tool. Off by default. When on, a nested **proactive delegation** toggle appears: on (the default) the system prompt gains a short addendum telling the model to delegate independent sub-tasks; off keeps the tool but lets the agent decide when to reach for it. terva watches every sub-agent spawned, and as the last one in a batch finishes an `[auto-swarm update]` message is injected back into the chat with each agent's status / task / transcript tail. See `/swarm` for the dashboard.
+- **lazy tool loading** — advertise only the core coding tools at first and let the agent pull extension/MCP tool groups in on demand (`activate_tools`), trimming the tool schemas that fill context every turn.
+- **auto-condense** — when to automatically compact the transcript as the window fills: `steps` (mid-turn), `turns` (only at turn boundaries), or `off`. Applies live to every session.
+- **temperature** — sampling temperature; the default defers to the model/provider. An off-preset value hand-set in `config.json` round-trips.
+- **inline images** — render images inline with the terminal's image protocol, or fall back to a text placeholder. Auto-detected from `TERM_PROGRAM`; the toggle overrides the detection.
+- **recursive file search** — fuzzy-search the whole tree in the `@`-mention picker (the default, matching the web composer); turn off to browse one directory at a time instead.
+- **respect .gitignore** — hide git-ignored files from the `@`-mention picker.
+- **lore (keyed context)** — discover and inject keyword-triggered context entries. Off is the persistent form of `--no-lore`.
+- **swarm worktrees** — give each background sub-agent its own git worktree so parallel work never collides in the tree (the persistent form of `--swarm-worktrees`).
+- **offer the core tool pack** — offer to install the recommended extension pack on the first run in a new workspace.
+
+Three rows are TUI-local widgets the generic surface can't drive — a terminal-only layout, and theme discovery the daemon's fixed enum can't see:
+
 - **color theme** — choose the built-in auto/dark/light theme (including the color-vision-friendly `daltonized` variants) or any JSON theme discovered under `$TERVA_HOME/themes` or a loaded extension. Theme files can override any subset of UI colors, syntax colors, and spinner frames/messages. Changes apply immediately; if a selected theme file is deleted, terva resets to auto. See [docs/themes.md](themes.md).
 - **status line** — pick a layout preset for the status bar: `default` (the built-in three-row layout), `compact` (one row), or `detailed` (everything, including session + clock). A hand-edited `status_line.rows` in config shows up as `custom` and is never clobbered unless you pick a different preset. See the Status bar section below.
-- **status: git / edits / thinking / swarm / session / clock** — show/hide individual status-bar segments on top of the current layout. Toggling writes the resulting rows to `status_line.rows`, so the config file stays the single source of truth.
+- **status: git / edits / thinking / swarm / tasks / session / clock** — show/hide individual status-bar segments on top of the current layout. Toggling writes the resulting rows to `status_line.rows`, so the config file stays the single source of truth.
 
 ### `/skills`
 
@@ -193,6 +261,7 @@ The block above the editor is built from named **segments** laid out in rows. Th
 
 | segment | shows | notes |
 |---|---|---|
+| `replay` | the session-player scrubber | leads row 1; absent outside `terva replay` |
 | `cwd` | the working directory, abbreviated (`~/W/g/t/terva`) | |
 | `git` | branch, dirty `*`, `+added -removed` vs HEAD | fed by a background prober (10s + refresh at turn end and `/cd`); absent outside a repo |
 | `edits` | `Δ +N -M` — lines the agent's own edit/write tools changed this session | resets on `/new` and session load |
@@ -207,6 +276,7 @@ The block above the editor is built from named **segments** laid out in rows. Th
 | `session` | the session file's short name | config-only (not in the defaults) |
 | `clock` | 24h wall clock | config-only |
 | `tags` | approval mode, `jailed` | |
+| `tasks` | the built-in task board's current task and done/total count (`▸ Wiring the panel (2/5)`) | absent when the board is empty |
 | `bridge` | connected chat bridge | |
 | `ext` | extension `status_segment` frames | |
 
@@ -249,11 +319,11 @@ The stdin payload (`"schema": 1`, additive — fields get added, never renamed):
 
 ## Tool display (`ctrl+t`)
 
-Tool calls render as bordered boxes by default. `ctrl+t` cycles the transcript through three densities: **boxes** → **minimal** (one muted line per call, `· bash go test ./... — 42 lines`) → **hidden** (nothing at all). Failed calls stay visible as a `×` line even when hidden, and `ctrl+o` always force-expands everything back to full boxes, so nothing is more than a keystroke from recoverable. `--chat`/`--play` default to minimal.
+Tool calls render as bordered boxes by default. `ctrl+t` cycles the transcript through four densities: **boxes** → **minimal** (one muted line per call, `· bash go test ./... — 42 lines`) → **grouped** (a run of consecutive calls between replies collapses to one muted line, `▸ 5 tool calls  bash ×3, read, edit · 1 failed`) → **hidden** (nothing at all). Failed calls stay visible as a `×` line even when hidden, and `ctrl+o` always force-expands everything back to full boxes, so nothing is more than a keystroke from recoverable. `--chat`/`--play` default to minimal.
 
 ## Sessions
 
-Every interactive or print/json run (unless `--no-session`) writes a JSONL transcript under `$TERVA_HOME/sessions/<cwd-hash>/`. Resume any of them with `--continue`, `--resume`, `--session <path>`, or interactively via `/sessions` inside the TUI. Start a fresh one without leaving the TUI via `/new`. Empty sessions (the user exited without prompting) are deleted on close so the list stays tidy.
+Every interactive or print/json run (unless `--no-session`) writes a JSONL transcript under `$TERVA_HOME/sessions/<cwd-hash>/`. Resume any of them with `--continue`, `--resume`, `--session <path>`, or interactively via `/sessions` inside the TUI. `terva --resume` (and `terva attach --resume`) boots straight into that same picker — titles, age, model, message count, cost; `r` renames, `g` generates a title with a one-shot model call (works on old untitled sessions too, and unlike a rename it overwrites the current name — you asked for it), Esc falls through to the session the boot bound (a fresh one for `terva`, the daemon's current one attached). `--resume <id>` skips the picker and resumes the id directly. Start a fresh session without leaving the TUI via `/new`. Empty sessions (the user exited without prompting) are deleted on close so the list stays tidy.
 
 ## Inline images
 
@@ -288,7 +358,7 @@ You can keep typing while the agent is working. Pressing `enter` during a turn q
 
 To recover the most recently queued message back into the editor (to tweak it before it runs), press `Option+↑`. In VS Code's integrated terminal that chord doesn't survive xterm.js's macOS key handling — use `Option+Shift+↑` there. terva's hint line under the sliding-in queue adapts automatically based on `$TERM_PROGRAM`.
 
-Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jump`, `/btw`, `/sessions`, `/skills`, `/context`, `/lore`, `/usage`, `/settings`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`) cancel the active turn first and then run.
+Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jump`, `/btw`, `/sessions`, `/skills`, `/context`, `/lore`, `/tasks`, `/status`, `/usage`, `/resets`, `/settings`, `/permissions`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/new`, `/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`, `/restart`, `/trust`, `/untrust`, `/migrate`, `/cd`) cancel the active turn first and then run.
 
 
 ## Keys (interactive mode)
@@ -298,14 +368,16 @@ Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jum
 | Key | Action |
 |---|---|
 | `enter` | Submit (queued if the agent is busy). |
-| `alt+enter` | Newline. |
+| `alt+enter`, `shift+enter` | Newline. |
 | `tab` | Complete the selected slash command. |
+| `shift+tab` | Cycle the approval mode: plan → workspace → auto-edit, wrapping. This session only — never persisted (`ask` and `yolo` are deliberately off the wheel; reach them from `/settings` or `--approval`). See [permissions.md](permissions.md). |
 | `esc` | Cancel the current turn (while busy); clear input (while idle). |
 | `ctrl+c` | Clear the input and queue (while idle) or arm the exit hint (while busy). Press again within 2s to exit. Use `esc` to cancel a running turn. |
 | `ctrl+d` | Exit on empty input. |
 | `ctrl+l` | Redraw the screen. |
-| `ctrl+o` | Expand or collapse long tool results (read, write, edit, bash outputs over ~12 lines). Also overrides `ctrl+t`'s minimal/hidden modes with full boxes. |
-| `ctrl+t` | Cycle tool display: boxes → minimal one-liners → hidden. Errors stay visible; `ctrl+o` recovers everything. |
+| `ctrl+o` | Expand or collapse long tool results (read, write, edit, bash outputs over ~12 lines). Also overrides `ctrl+t`'s minimal/grouped/hidden modes with full boxes. |
+| `ctrl+t` | Cycle tool display: boxes → minimal one-liners → grouped → hidden. Errors stay visible; `ctrl+o` recovers everything. |
+| `ctrl+v` | Paste an image from the system clipboard into the prompt (same as `/paste`). Text paste needs no key — it arrives as a bracketed paste. |
 | `@` | Open the file picker. Browse files and directories in the working directory. |
 
 ### File picker (`@`)
@@ -316,10 +388,11 @@ Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jum
 | `up`, `down` | Navigate the file list. |
 | `right` | Open the selected directory. |
 | `left` | Go back to the parent directory. |
+| `tab` | Shell-complete the token in place: extend to the unique candidate (a directory gains `/` in recursive mode and the next tab descends) or the longest common prefix, bash dot-name rules included. Never commits — that's enter's job. |
 | `enter` | Select the file or directory and insert it as a chip (`[file:name]` or `[dir:name/]`). |
 | `esc` | Close the file picker. |
 
-Type `@` followed by a filter string to narrow the list (e.g. `@read` shows only entries containing "read"). Selected files are inserted as compact chips that expand to the full path on submit. Dragged-and-dropped files and directories also collapse to chips automatically.
+Type `@` followed by a filter string to narrow the list (e.g. `@read` shows only entries containing "read"). By default the picker fuzzy-searches the **whole tree** (nested paths match too — `@foobar` finds `src/foo/bar.go`), matching the web composer; the `→`/`←` browse keys apply when **recursive file search** is turned off in `/settings`, which lists one directory at a time instead. Selected files are inserted as compact chips that expand to the full path on submit. Dragged-and-dropped files and directories also collapse to chips automatically.
 
 ### Editor line navigation
 

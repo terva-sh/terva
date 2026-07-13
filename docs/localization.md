@@ -93,11 +93,13 @@ contribute.
 terva locale init fi
 ```
 
-writes `$TERVA_HOME/locales/fi.json` listing every UI string (and
-`locales/prompts/fi.json` for the model-facing prompts — see
-[below](#customizing-tervas-prompts)). Existing translations are pre-filled;
-the rest are blank. It's idempotent — re-run it after a terva update to pick up
-new strings without disturbing your work.
+scaffolds **every** catalog for that language in one pass — the core UI
+(`$TERVA_HOME/locales/fi.json`), the two UI sub-catalogs (`locales/tui/fi.json`,
+`locales/web/fi.json`), and the dotted-key ones (`locales/prompts/fi.json` for
+the model-facing prompts — see [below](#customizing-tervas-prompts) — and
+`locales/help/fi.json` for the big `--help` screens). Existing translations are
+pre-filled; the rest are blank. It's idempotent — re-run it after a terva update
+to pick up new strings without disturbing your work.
 
 ### 2. Edit the JSON
 
@@ -125,12 +127,14 @@ Keep the machinery intact:
 ### 3. Check
 
 ```bash
-terva locale validate $TERVA_HOME/locales/fi.json   # JSON + %-arg parity
-terva locale diff fi                                # what's missing or now-orphaned
-terva locale list                                   # coverage %, per language
+terva locale validate $TERVA_HOME/locales/fi.json   # JSON + %-arg parity (alias: check)
+terva locale diff fi                                # what's missing or now-orphaned (alias: status)
+terva locale list                                   # coverage %, per language (alias: ls)
 ```
 
-`list` also reports prompt coverage as `[prompts N/34]`.
+`list` reports the core-UI percentage, then one bracket per side catalog —
+`[prompts …]`, `[help …]`, `[tui …]`, `[web …]` — each showing translated over
+total for that catalog (the prompt catalog holds 66 keys today, and grows).
 
 ### 4. Translate-as-you-use (optional)
 
@@ -209,6 +213,8 @@ see the full set. The families:
 | `compact.system`, `compact.instruction` | the summarizer's system prompt and the "summarize this" instruction |
 | `study.*`, `skill.directive` | the `/study` task variants and the "use the X skill for:" preamble |
 | `swarm.*` | the auto-swarm addendum, the persona roster, and every line of the sub-agent result summary |
+| `raati.*` | the [deliberation](raati.md) panel's whole script — the clerk's system + prompt, the evidence framing, each round's header/question, the cross-examination, and the summarizer. The largest family (26 of the 66 keys). |
+| `context.pressure`, `context.pressure.no_autocompact` | the warning the agent is handed when the context window is filling (the second variant when auto-condense is off) |
 | `play.*`, `chat.*` | the `--play` cast/actor framing and the `--chat` intro / idle-nudge / attachment preamble |
 
 Keep any `%s`/`%d` in a template — they're filled at runtime (a path, an agent
@@ -226,13 +232,17 @@ $TERVA_HOME/locales/prompts/en.json` checks that parity.
 
 ```text
 $TERVA_HOME/locales/
-  <lang>.json               UI translations / overrides   (English-as-key)
+  <lang>.json               core UI translations / overrides  (English-as-key)
   <lang>.todo.json          capture gaps to fill in
+  tui/
+    <lang>.json             interactive-TUI strings           (English-as-key)
+  web/
+    <lang>.json             web control-panel strings         (English-as-key)
   prompts/
-    <lang>.json             prompt overrides              (dotted keys)
+    <lang>.json             prompt overrides                  (dotted keys)
     <lang>.todo.json        captured prompt gaps
   help/
-    <lang>.json             help-screen overrides         (dotted keys)
+    <lang>.json             help-screen overrides             (dotted keys)
     <lang>.todo.json        captured help gaps
 ```
 

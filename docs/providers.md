@@ -49,22 +49,34 @@ for the busiest window once it crosses 80%, colored yellow (≥80) then red (≥
 below that it stays out of the way.
 
 This works wherever the provider puts usage data on the wire terva already talks
-to. Today that is **OpenAI Codex**, which returns its window state as response
-headers on every request — so `/usage` is accurate and costs no extra calls. The
-data refreshes each turn.
+to, or hangs it off a cheap endpoint beside it. Today:
+
+- **OpenAI Codex** returns its subscription window state as response headers on
+  every request — so `/usage` is accurate, costs no extra calls, and refreshes
+  each turn.
+- **Every OpenAI-shaped provider** (openai, groq, xai, ollama, the compatibles)
+  reports whatever `x-ratelimit-*` windows its responses carry, on the same free
+  ride.
+- **OpenRouter** and **DeepSeek** ship no window headers but do have a balance
+  endpoint, so terva polls it lazily (cached, off the hot path) and renders the
+  answer as pay-as-you-go credits: OpenRouter's key limit/remaining plus lifetime
+  spend, DeepSeek's account balance.
 
 Providers that don't expose usage data show `<provider> doesn't report usage
 limits` in `/usage`, and no status-bar hint. This includes OpenCode Go for now:
 it has no usage/balance endpoint yet ([anomalyco/opencode#16017](https://github.com/anomalyco/opencode/issues/16017)).
 The mechanism is a generic `provider.UsageReporter` capability — any provider
 lights up `/usage` automatically once its client implements it, with no harness
-changes. See [docs/plans/archive/usage-windows.md](plans/archive/usage-windows.md).
+changes. See `docs/plans/archive/usage-windows.md`.
 
 ## API-key providers
 
 These providers can use environment variables. Simple API-key providers can
 also be configured through `/login`. Providers that require extra cloud setup
-show instructions and should be configured with environment variables.
+show instructions and should be configured with environment variables. Two rows
+below are *not* offered in the `/login` picker and are reached another way:
+`openai-responses` (opt in with `--provider openai-responses`; it reuses your
+OpenAI key from the environment) and `ollama` (a local server — no key at all).
 
 | Provider | Environment variable | Stored key |
 | --- | --- | --- |
@@ -98,6 +110,7 @@ show instructions and should be configured with environment variables.
 | Cloudflare Workers AI | `CLOUDFLARE_API_KEY` | `cloudflare-workers-ai` |
 | Cloudflare AI Gateway | `CLOUDFLARE_API_KEY` | `cloudflare-ai-gateway` |
 | Azure OpenAI Responses | `AZURE_OPENAI_API_KEY` | `azure-openai-responses` |
+| Ollama (local) | — (no key; `--base-url` for a remote host) | `ollama` |
 | OpenAI Compatible (local/custom) | — (use `/login` or `--base-url`) | `openai-compatible` |
 
 Example:
@@ -189,6 +202,24 @@ terva --provider azure-openai-responses
 
 If your Azure deployment names differ from terva model IDs, add model overrides
 in `$TERVA_HOME/models.json`.
+
+## Ollama (local)
+
+The `ollama` provider is the batteries-included local path: it speaks the same
+OpenAI chat-completions wire, but defaults its base URL to
+`http://localhost:11434` and needs no credential at all. There is no default
+model — name the one you pulled:
+
+```bash
+ollama pull qwen3.5:4b
+terva --provider ollama --model qwen3.5:4b
+```
+
+A remote or authenticated instance takes the usual flags
+(`--base-url https://my-server.example/v1 --api-key <token>`), and `--insecure`
+is permitted here for a self-signed endpoint. Pin models and context windows in
+`models.json` under the `ollama` provider — see
+[models.md](models.md#local-models-with-ollama).
 
 ## OpenAI-compatible endpoints (local and custom servers)
 
@@ -351,8 +382,12 @@ servers, or OpenAI-compatible gateways that are not in the built-in catalog.
 User entries override built-in entries with the same provider and model ID.
 
 Supported fields per model: `id` (required), `name`, `reasoning`,
-`contextWindow`, `maxTokens`, `baseUrl`, `priceInput`, `priceOutput`,
-`priceCacheRead`, `priceCacheWrite`, `capabilities`. See
+`contextWindow`, `desiredContextWindow`, `maxTokens`, `temperature`, `baseUrl`,
+`priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`,
+`capabilities`. `desiredContextWindow` is an optional smaller working window
+that only moves the auto-compaction thresholds (compact earlier without
+pretending the model is smaller); `temperature` (0–2) is the model's default
+sampling temperature when no `--temperature` flag is given. See
 [Context window and max response tokens](#context-window-and-max-response-tokens)
 for what `contextWindow` and `maxTokens` control and a full
 `openai-compatible` example.
@@ -362,9 +397,9 @@ for what `contextWindow` and `maxTokens` control and a full
 `capabilities` marks what a model can do, when terva can't know on its
 own. Keys it understands today: `image-input` (vision — defaults to
 **true** when unset), `image-output` (image generation — defaults to
-false; reserved, no consumer yet), and `reasoning` (an alias for the
-top-level `reasoning` field). Unknown keys load with a warning so a
-file written for a newer terva still works here.
+false; consumed today by the `/model` picker's capability filter), and
+`reasoning` (an alias for the top-level `reasoning` field). Unknown keys
+load with a warning so a file written for a newer terva still works here.
 
 The **true** default applies to the built-in catalog (its models are
 known vision-capable). Models found by **discovery** are different: a
@@ -404,8 +439,10 @@ means the same thing; an explicit `capabilities` key wins over it.
 Capability tags follow the same precedence as everything else in
 `models.json`: your entry beats the built-in catalog, which beats
 live discovery (OpenRouter's modality data is folded in
-automatically). In the `/model` picker, `◈` marks vision models and
-typing `:img` or `:reasoning` filters by capability;
+automatically). In the `/model` picker, `◈` marks vision models and a
+`:` token filters by capability — `:img` (also `:image`, `:images`,
+`:vision`), `:reasoning` (also `:reason`, `:thinking`), and `:imggen`
+(also `:imagegen`, `:image-gen`, `:image-out`, `:imageout`);
 `terva --list-models` shows a `vision` column.
 
 ```json
@@ -438,7 +475,7 @@ Bedrock then uses the AWS SDK credential chain for the actual request.
 
 ## The /login flow in detail
 
-- **API key**: a small local web server starts on `127.0.0.1:<free-port>`, your browser opens a form, you pick a provider from the full API-key provider list, paste the key, and terva saves it to `auth.json` if accepted. Providers with a lightweight model-list endpoint are probed before saving; provider backends that need extra project/account env vars are saved directly.
+- **API key**: a small local web server starts on `127.0.0.1:<free-port>`, your browser opens a form, you pick a provider from the API-key provider list, paste the key, and terva saves it to `auth.json` if accepted. Providers with a lightweight model-list endpoint are probed before saving; provider backends that need extra project/account env vars are saved directly. The list is not quite every provider id: `openai-responses` and `ollama` are absent by design (see [API-key providers](#api-key-providers)).
 - **Subscription**: use your Claude Pro/Max, ChatGPT Plus/Pro, Kimi Code, or GitHub Copilot subscription. DeepSeek and Google Gemini do **not** have a subscription login path. For those, use the API-key flow.
   - Anthropic and OpenAI pin the browser callback to fixed provider-specific ports (`localhost:53692` for Anthropic, `localhost:1455` for OpenAI) because those are the only ports their auth servers will redirect to.
   - Anthropic uses the Claude Code OAuth flow. Messages go to `api.anthropic.com` with a bearer token and the Claude Code identity headers.

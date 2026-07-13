@@ -148,9 +148,11 @@ highest version both sides speak (hello carries
 `protocol_min`/`protocol_max`; hello_ack answers with the pick). At
 protocol 2: `message` gains `id` (the message's OWN id, stable within
 its chat — REQUIRED), `ts` (unix ms), `chat_kind`
-(`dm|group|thread|channel`) and `chat_title`; `reply_to` means truly
-in-reply-to in both directions; `result` gains `message_id` (the id of
-what a send created); and both sides exchange feature strings
+(`dm|group|thread|channel`), `chat_title`, and `scope_id` (the container
+the chat belongs to — a Discord guild, say; empty means scopeless, and it
+is what lets the admission gate approve or revoke a whole scope at once);
+`reply_to` means truly in-reply-to in both directions; `result` gains
+`message_id` (the id of what a send created); and both sides exchange feature strings
 (`capabilities.features` on hello = what the connector produces or
 accepts; on hello_ack = what the host consumes). Everything past that
 is gated by feature strings, never version bumps. Protocol-1
@@ -178,15 +180,17 @@ presence-evident, so declaring them is informative, not load-bearing.)
 Handshake — the connector speaks first:
 
 ```json
-→ {"type":"hello","name":"discord","version":"1.0.0","protocol_min":1,"protocol_max":1,
-   "capabilities":{"max_text_len":2000,"typing_refresh_ms":8000,"sends_images":true,"sends_files":true}}
-← {"type":"hello_ack","protocol":1,"zot_version":"1.2.3","terva_version":"1.2.3",
-   "data_dir":"$TERVA_HOME/connectors/discord/data"}
+→ {"type":"hello","name":"discord","version":"1.0.0","protocol_min":1,"protocol_max":2,
+   "capabilities":{"max_text_len":2000,"typing_refresh_ms":8000,"sends_images":true,"sends_files":true,
+     "features":["entities","edits_in","reactions_out","asks"]}}
+← {"type":"hello_ack","protocol":2,"zot_version":"1.2.3","terva_version":"1.2.3",
+   "data_dir":"$TERVA_HOME/connectors/discord/data",
+   "capabilities":{"features":["entities","edits_in","reactions_out","asks"]}}
 ```
 
 `zot_version` and `terva_version` carry the same host version string <!-- rename:keep -->
 (terva kept zot's legacy key for compatibility when it forked; see
-`docs/plans/rename-terva.md`). Read `terva_version` and fall back to
+[fork.md](fork.md)). Read `terva_version` and fall back to
 `zot_version` — the old key is deprecated and will be dropped after the <!-- rename:keep -->
 connector-SDK deprecation window; the Go SDK already handles this for you.
 
@@ -217,7 +221,7 @@ Connector to host:
 ```json
 {"type":"connected","id":"1234","username":"tervabot"}
 {"type":"connect_error","error":"bad token"}
-{"type":"message","chat_id":"...","user_id":"...","username":"...","reply_to":"...",
+{"type":"message","chat_id":"...","scope_id":"...","user_id":"...","username":"...","reply_to":"...",
  "text":"...","attachments":[{"mime_type":"image/png","path":"<data_dir>/in/abc.png"}]}
 {"type":"result","id":"42","error":""}
 {"type":"warn","message":"gateway reconnecting"}

@@ -11,10 +11,16 @@ Scope, deliberately: **stdio transport, tools only.** Resources,
 prompts, sampling, and HTTP transports can arrive later behind the
 same seam; SSE is skipped for good (the ecosystem deprecated it).
 
-**Trust boundary:** MCP servers configure from the **user config
-only** (`$TERVA_HOME/config.json`). A project's `.terva/config.json`
-cannot add servers — that would let a cloned repo execute arbitrary
-commands at session start. Same posture as hooks.
+**Trust boundary:** the gate is **Workspace Trust**, not the config
+layer. The user config (`$TERVA_HOME/config.json`) is trusted, so its
+servers always start. A project's `.terva/config.json` may declare
+`mcp.servers` too, but they are spawned **only in a trusted workspace**
+(`terva trust`, or `--trust` for one run) — an untrusted cloned repo's
+servers never start, so a clone alone still can't execute arbitrary
+commands at session start. When the workspace is trusted the two sets
+merge and the **user wins on a name collision**: a project may only *add*
+servers, never shadow one you defined. (Hooks stay stricter — user config
+only, no project surface at all.)
 
 ## Configuration
 

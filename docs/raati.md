@@ -202,5 +202,6 @@ prefix at byte zero), but each unit caches normally across its own rounds.
 All of it is **user-layer config only**: a cloned project can neither enable
 deliberation spend nor redirect which models sit on the panel.
 
-Design record: [proposals/archive/raati-deliberation.md](proposals/archive/raati-deliberation.md) —
-remaining work: [proposals/raati-deliberation.md](proposals/raati-deliberation.md).
+Design record: `docs/proposals/archive/raati-deliberation.md`, with the remaining
+work in `docs/proposals/raati-deliberation.md` — both in the development
+repository, not the public release tree.

@@ -569,7 +569,7 @@ restarted.
 ## Context contributions
 
 An extension can contribute to what the **model** sees, under host
-control (see [the design](plans/archive/extension-context-cards.md)): static
+control (see `docs/plans/archive/extension-context-cards.md`): static
 guidance folded into the system prompt (`register_context`), live
 per-turn cards (`context_card`), and a status-line segment
 (`status_segment`). Run `/context` and switch to the **Extensions** tab
@@ -763,6 +763,15 @@ both directions. Oversized frames are handled gracefully, never fatally:
  "capabilities":["commands","tools","panels"]}
 ```
 
+The optional `"min_protocol": 3` field is the lowest host `protocol_version`
+this extension can run against — the wire behind `RequireProtocol(n)`. Zero
+(the default, and what every pre-negotiation extension sends) means "no
+minimum", so old extensions and old hosts interoperate unchanged. When set, a
+host below it refuses to load the extension with a clear message instead of
+letting it misbehave against a wire it doesn't fully speak. Declare it only
+when your extension genuinely can't function without that protocol level;
+otherwise feature-detect on `Host().ProtocolVersion` and degrade.
+
 #### `register_command`
 
 ```json
@@ -782,7 +791,8 @@ describing the tool's args (the same shape Anthropic and OpenAI accept).
    "type":"object",
    "properties":{"city":{"type":"string"}},
    "required":["city"]
- }}
+ },
+ "authority":"network-read"}
 ```
 
 The optional `"read_only": true` field declares the tool side-effect
@@ -791,6 +801,16 @@ the `plan` approval mode and auto-allowed in `auto-edit` (see
 [permissions.md](permissions.md)); unannotated tools are treated as
 mutating. Lying here only cheats your own user's policy. Old hosts
 ignore the field; old extensions never send it — fully additive.
+
+The optional `"authority"` field is its **richer successor**: the tool's effect
+class — `local-read`, `local-data`, `workspace-mutation`, `process-execution`,
+`network-read`, `external-mutation` (see the
+[authority classification](standard-tools.md#authority-classification)). It says
+what `read_only` cannot: a `network-read` tool reads nothing locally yet must
+not be auto-allowed as read-only. Also additive/optional — empty means the host
+falls back to the `read_only` bool, and an unknown value is treated as
+side-effecting (the safe default). From the Go SDK: `ext.WithAuthority(...)`,
+the counterpart to `ext.ReadOnly()`.
 
 #### `set_withdrawn_tools` (protocol 4)
 
@@ -817,6 +837,57 @@ set per turn, so a mid-turn change applies on the next turn. Additive — a
 protocol-3 host ignores the frame and the tools stay visible — so
 feature-detect with `Host().ProtocolVersion >= 4` rather than declaring
 `RequireProtocol(4)`.
+
+#### `register_context` (protocol 2)
+
+Declares the extension's **static** context block: guidance the host wraps,
+bounds, attributes, and folds into the cached system-prompt addendum. Sent
+during the register phase, like `register_command` / `register_tool`. See
+[Context contributions](#context-contributions).
+
+```json
+{"type":"register_context","text":"House style: prefer table-driven tests."}
+```
+
+#### `refresh_context` (protocol 3)
+
+`register_context` you can send **mid-session**: the host swaps the block,
+rebuilds the cached system prompt, and the change lands on the next turn. The
+block stays a *snapshot* — it changes only when you send this frame, never per
+turn — so re-snapshot at a boundary (`session_start`, `transcript_compacted`)
+rather than churning the prompt cache. Empty `text` clears the block. Same host
+wrapping, attribution, and byte bound as `register_context`. Declare
+`RequireProtocol(3)`.
+
+```json
+{"type":"refresh_context","text":"Project notes for acme-api: …"}
+```
+
+#### `context_card` / `context_card_clear` (protocol 2)
+
+A **dynamic** block the host injects at the cache-free tail each turn and never
+persists — the channel for live state (a task list, a build status) that would
+otherwise invalidate the cached prefix. Set or replace by `id`; `label` is a
+short header for the host's wrapper, `priority` orders multiple cards (lower
+first), and `blocking` marks open work, which makes the host append a soft
+"review before closing" nudge to the card's injection.
+
+```json
+{"type":"context_card","id":"todos","label":"Open work",
+ "text":"□ ship panel api\n✓ persist state","priority":10,"blocking":true}
+{"type":"context_card_clear","id":"todos"}
+```
+
+#### `status_segment` (protocol 2)
+
+Sets (or replaces, by `id`) a short segment in the host's status line. Host-
+rendered and **not** model-facing — the adjacent channel to the context ones,
+for the things a user should see but the model shouldn't pay for. An empty
+`text` clears the segment.
+
+```json
+{"type":"status_segment","id":"weather","text":"Berlin 16°C"}
+```
 
 #### `host_tool_call` (protocol 3)
 
@@ -906,9 +977,9 @@ which it wants to intercept. Send once after `hello`, before `ready`.
 Recognised event names: `session_start`, `session_end`, `turn_start`,
 `turn_end`, `run_end`, `tool_call`, `tool_result`, `user_message`,
 `assistant_message`, `workspace_changed`, `compact_start`,
-`transcript_compacted`. (The host advertises the exact set it emits in
-`hello_ack.supported_events`; subscribing to a name an older host doesn't
-emit is harmless — it simply never fires.)
+`transcript_compacted`, `config_update`. (The host advertises the exact set it
+emits in `hello_ack.supported_events`; subscribing to a name an older host
+doesn't emit is harmless — it simply never fires.)
 
 `run_end` fires once when the agent finishes a whole prompt — every step,
 tool loop, and the at-close gate done. It's the per-prompt bookend to
@@ -977,6 +1048,13 @@ the just-finished session. It is **best-effort**: a hard kill (SIGKILL)
 skips it, so persist incrementally and treat it as a flush point, not a
 durability guarantee. Additive/opt-in; the Go SDK exposes it as
 `OnSessionEnd`.
+
+`config_update` fires when the user changes **this** extension's config (the
+`/extensions` config dialog). The new resolved values ride the event's `config`
+field, the same shape `hello_ack` carries — so an extension re-reads its
+settings live instead of asking the user to restart terva. Fire-and-forget and
+gracefully degrading (an older host never emits it, and the initial values still
+arrive in `hello_ack` regardless). The Go SDK exposes it as `OnConfig`.
 
 Interceptable events:
 
@@ -1062,6 +1140,21 @@ Example:
 If `error` is non-empty, terva renders it as a red status line
 regardless of `action`.
 
+#### `open_panel` (one-way, any time)
+
+Opens an interactive panel **without** a command invocation to hang it off —
+the spontaneous twin of the `open_panel` action inside `command_response`. Send
+it from a tool handler, an event handler, or any background goroutine. The
+payload is the same panel spec.
+
+```json
+{"type":"open_panel","panel":{
+   "id":"todos-main",
+   "title":"Todos",
+   "lines":["□ ship panel api","✓ persist state"],
+   "footer":"↑/↓ navigate - a add - x complete - esc close"}}
+```
+
 #### `panel_render` (one-way, while a panel is open)
 
 Pushes a fresh frame for an already-open panel.
@@ -1103,8 +1196,24 @@ so they do not stack up; notes from other extensions are untouched.
 {"type":"clear_notes"}
 ```
 
-In `--mode rpc`, this surfaces to the host as an `ext_clear_notes`
+Under `terva rpc`, this surfaces to the host as an `ext_clear_notes`
 event (alongside `ext_notify` / `ext_display`).
+
+#### `submit` (one-way, any time)
+
+Queues a plain model prompt in the interactive host, as if the user had typed
+and sent it. The host routes it through its submit-or-queue path, so it is safe
+to send while a turn is running — it lands at the next boundary rather than
+racing the active turn. Empty/whitespace `text` is ignored.
+
+```json
+{"type":"submit","text":"summarize what changed in the last turn"}
+```
+
+Interactive-mode only (the RPC loop has no editor and takes its prompts from
+the client, so it ignores this). The Go SDK has no helper for it yet — send the
+frame directly, or use a `command_response` with `action:"prompt"` when the
+prompt is the answer to a slash command.
 
 #### `submit_slash` (one-way, any time)
 
@@ -1158,7 +1267,7 @@ Sent in response to `shutdown`. Extension should exit promptly after.
 
 ```json
 {"type":"hello_ack","protocol_version":2,
- "terva_version":"0.0.7","provider":"anthropic",
+ "zot_version":"0.0.7","terva_version":"0.0.7","provider":"anthropic",
  "model":"claude-opus-4-7","cwd":"/Users/pat/Developer/terva",
  "extension_dir":"/Users/pat/Developer/terva/.terva/extensions/todos",
  "data_dir":"/Users/pat/.terva/ext-data/todos",
@@ -1169,6 +1278,12 @@ Sent in response to `shutdown`. Extension should exit promptly after.
 Sent immediately after `hello`. The extension can use these fields to
 decide which commands to register (e.g. only register a Python tool
 on macOS, only register a model-specific shortcut for opus, etc.).
+
+`zot_version` and `terva_version` carry the same host version string, and the <!-- rename:keep -->
+old key is **always** on the wire — a frozen wire field kept for compatibility
+with extensions written against the pre-fork protocol, and pinned by golden
+tests (see [fork.md](fork.md)). Read `terva_version` and fall back to
+`zot_version`. <!-- rename:keep -->
 
 `supported_events` lists the lifecycle events this host can emit — a
 finer-grained capability signal than `protocol_version`. Use it to adapt
@@ -1264,6 +1379,19 @@ name (`up`, `down`, `left`, `right`, `enter`, `esc`, `tab`, `pageup`,
 {"type":"panel_key","panel_id":"todos-main","key":"rune","text":"x"}
 ```
 
+#### `panel_resize`
+
+Tells the extension the panel's drawing area changed, so a renderer can re-wrap
+its `lines` to the new `width` / `height` (in cells).
+
+```json
+{"type":"panel_resize","panel_id":"todos-main","width":80,"height":24}
+```
+
+Honest caveat: the frame is part of the wire spec, but **no host currently emits
+it** — panels are re-rendered on the extension's own `panel_render` cadence.
+Handle it defensively if you like; don't wait for it.
+
 #### `panel_close`
 
 Sent when the user closes the focused panel from terva (for example with
@@ -1307,7 +1435,13 @@ terva ext remove <name>           delete an extension directory
 terva ext enable <name>           re-enable a disabled extension
 terva ext disable <name>          disable without removing
 terva ext logs <name> [-f]        cat / tail the extension's stderr
+terva ext doctor                  diagnose extension discovery and registration
 ```
+
+`terva ext doctor` reads every installed manifest, then actually spawns the
+extensions and reports what each one registered (and why one failed to load) —
+the first thing to run when an extension is installed but its command, tool, or
+context block never shows up.
 
 `terva ext install <path>` does a recursive copy; `<git-url>` does a
 shallow clone. Both validate that the destination contains an
@@ -1321,10 +1455,15 @@ restrict-only lists, by extension name:
 
 ```json
 {
-  "disable_extensions": ["terva-tasks"],
+  "disable_extensions": ["web"],
   "disable_context_extensions": ["noisy-ext"]
 }
 ```
+
+(These lists govern *extensions* only. The task tools are core built-ins
+now — a per-run `--tools` allowlist is the way to drop them; a
+`disable_extensions: ["terva-tasks"]` entry only affects a leftover install
+of the retired extension.)
 
 - **`disable_extensions`** — the extension is **never loaded**: not
   spawned, no tools/commands/panels/context. The strong "I don't want
@@ -1632,6 +1771,7 @@ terva ext enable <name>             # re-enable a disabled extension
 terva ext disable <name>            # disable without removing
 terva ext upgrade <name>...         # fast-forward-pull just these extensions
 terva ext remove <name>             # delete an extension directory
+terva ext doctor                    # diagnose discovery + registration (what loaded, what didn't)
 ```
 
 For development, point `terva --ext <path>` at a working directory and skip the install step entirely. Repeatable; takes precedence over installed extensions of the same name.

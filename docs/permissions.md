@@ -34,7 +34,7 @@ lets you revoke this session's grants (see below).
 | mode | behavior |
 |---|---|
 | `yolo` | every tool call runs without asking. `ask` rules don't prompt here — yolo never prompts — but `deny` rules still block |
-| `workspace` | **the interactive default.** Every built-in tool (`read`/`write`/`edit`/`bash`, bounded by the sandbox) and every read-only tool — including read-only *extension/MCP* tools like `web_search`/`web_fetch` — runs freely; foreign tools that can have side effects (a writing extension tool, a mutating MCP tool) ask. The trust axis is origin: your own tools vs foreign code |
+| `workspace` | **the interactive default.** Every built-in tool (`read`/`write`/`edit`/`bash`, bounded by the sandbox) runs freely, and so does any *extension/MCP* tool classified read-only; foreign tools that can have side effects (a writing extension tool, a mutating MCP tool) ask. The trust axis is origin: your own tools vs foreign code — but a foreign tool that declares the `network-read` authority asks even though it reads nothing locally (see below) |
 | `auto-edit` | read-only tools (`read`, `terva_status`, `skill`) and the file editors (`write`, `edit`) run freely; everything else — `bash`, extension tools, chat sends — asks |
 | `ask` | every tool call asks, read-only included (exactly what `--no-yolo` always did) |
 | `plan` | only read-only tools run, and mutating tools don't even enter the registry — the model is steered to present a plan. Mutating calls that arrive anyway are refused with a model-readable reason, not prompted |
@@ -76,18 +76,25 @@ would be wrong. The classes (`core.Authority`):
 
 | Authority | Meaning | Example |
 |---|---|---|
-| `local-read` | reads files/state under the jail; no process/network/external effect | `read`, `grep`, `glob`, `terva_status` |
+| `local-read` | reads files/state under the jail; no process/network/external effect | `read`, `grep`, `glob`, `terva_status`, `session_inspect`, `skill` |
+| `local-data` | reads **and writes** the tool's own host-managed data store — for an extension, its `$TERVA_HOME/ext-data/<name>` — and nothing else: never your workspace, a process, the network, or an external service. Auto-allowable like `local-read`, because the write never leaves private, host-controlled storage | `task_create`/`task_update`/`task_list`/`task_archive`; a memory/notes extension tool |
 | `workspace-mutation` | writes files / edits workspace state | `write`, `edit` |
 | `process-execution` | runs commands / subprocesses | `bash` |
 | `network-read` | fetches URLs / search results (can leak, log, reach private nets) | a web-fetch extension tool |
 | `external-mutation` | writes to third-party APIs, sends messages, changes remote resources | a chat-send / PR-open tool |
 | `user-interaction` | blocks to ask the user; no other effect | `ask_user_question` |
 
+One built-in sits outside the taxonomy: `activate_tools` changes only
+which tool schemas are advertised this session — visibility, never
+authority — so it auto-admits like a read, and every tool it reveals
+still faces its own gate when actually called.
+
 How each mode treats a class:
 
 | Authority | `plan` | `auto-edit` | `workspace` | `ask` | `yolo` |
 |---|---|---|---|---|---|
 | `local-read` | run | run | run | ask | run |
+| `local-data` | run | run | run | ask | run |
 | `workspace-mutation` (built-in editors) | refuse | run | run (built-in) | ask | run |
 | `process-execution` (built-in `bash`) | refuse | ask | run (built-in) | ask | run |
 | `network-read` (foreign) | refuse | ask | ask | ask | run |
@@ -104,8 +111,20 @@ approval prompt is nonsensical.
 
 Extensions and MCP tools declare their class via the `authority` field on
 `register_tool` (`ext.WithAuthority` in the Go SDK). A declared authority
-decides read-only classification; an empty value falls back to the
-`read_only` bool, and an unknown value is treated as side-effecting.
+decides read-only classification — `local-read` and `local-data` are
+auto-allowable, everything else is not — and it **wins over** the legacy
+`read_only` bool, which is consulted only when the authority is empty. An
+unknown value is treated as side-effecting.
+
+That precedence is what reconciles the two statements above. Whether
+`workspace` auto-allows a foreign tool is decided by its *classification*,
+not by its subject matter, so a tool declaring `network-read` asks even if
+it also set `read_only: true`. The web extension's `web_search`/`web_fetch`
+run freely in `workspace` today only because that extension still ships the
+bare legacy bool and has not yet declared an authority; once it declares
+`network-read` — which it should, and which is tracked in
+[standard-tools.md](standard-tools.md) — those calls will ask like any other
+foreign network tool. **Mark network tools `network-read`, not `read_only`.**
 
 ### Outbound network safety (egress guard) — staged, not yet wired
 
@@ -183,6 +202,14 @@ repo-specific project rule beats a global extension default.
 load time. A cloned repo — or an installed extension — must never be
 able to grant itself tool access you didn't; only your user config can
 `allow`. (Same trust posture as project `context_files` containment.)
+
+**Extension rules from a project's own bundles are Workspace-Trust-gated.**
+An untrusted project's extensions never load, so the rules they suggest do
+not apply either; trust the directory (`terva trust`, or `--trust` for one
+run) and they join the extension layer. Suggestions from extensions
+installed globally under `$TERVA_HOME` always apply. The project's own
+`.terva/config.json` rules stay honored either way, trusted or not — they
+can only tighten, and "refuse more" is always safe to accept from a repo.
 
 Broken rules (bad regexp, unknown decision) are dropped with a stderr
 note; they never fail startup.

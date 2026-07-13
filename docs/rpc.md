@@ -23,7 +23,13 @@ You'll see one JSON object per line on stdout: a response acknowledging the prom
 
 ## Flags
 
-`terva rpc` accepts the same flags as the other modes: `--provider`, `--model`, `--cwd`, `--api-key`, `--base-url`, `--system-prompt`, `--append-system-prompt`, `--reasoning`, `--max-steps`, `--no-tools`, `--tools`. Session persistence is not implemented in RPC mode: the process holds an in-memory transcript for the life of the connection (`get_messages` reads it), but never opens, saves, or resumes a session file — the embedding application owns any persistence.
+`terva rpc` accepts the same flags as the other modes: `--provider`, `--model`, `--cwd`, `--api-key`, `--base-url`, `--system-prompt`, `--append-system-prompt`, `--reasoning`, `--max-steps`, `--no-tools`, `--tools`.
+
+[Extensions](extensions.md) and [MCP servers](mcp.md) load on the same lifecycle as every other mode, with the same flags — `--ext DIR` (repeatable), `--extensions a,b` (allowlist), `--no-ext`; `--mcp git,jira` (restrict-only), `--no-mcp`. Their tools join the registry like any other, and an extension's notes surface on the stream as the `ext_notify` / `ext_display` / `ext_clear_notes` events (the RPC loop has no editor, so an extension's `submit`/`insert` are no-ops).
+
+Tool calls run unconfirmed by default (headless is yolo). `--no-yolo`, or `--approval MODE`, installs the [permission](permissions.md) gate — but RPC has no interactive prompt, so a call that would need confirmation is **refused** with a model-readable reason rather than asked (`plan` still runs read-only tools; explicit `allow`/`deny` rules apply as written). A gate that will refuse says so in a one-line note on stderr at startup.
+
+Session persistence is not implemented in RPC mode: the process holds an in-memory transcript for the life of the connection (`get_messages` reads it), but never opens, saves, or resumes a session file — the embedding application owns any persistence.
 
 ## Auth
 
@@ -33,7 +39,7 @@ If the environment variable `TERVACORE_RPC_TOKEN` is set on the spawned process,
 {"id":"0","type":"hello","token":"shared-secret"}
 ```
 
-If absent or wrong, the response carries `success:false` and the process exits. Without `TERVACORE_RPC_TOKEN` set, no auth is required (the spawning process is implicitly trusted; if it can spawn `terva` it can also read your `auth.json` directly).
+A **wrong** token is fatal: the response carries `success:false` with `invalid token` and the process exits. A first frame that is **not** a `hello` is not — it gets `success:false` with `auth required: send hello with token first` and the read loop continues, refusing every command the same way until a valid `hello` arrives. Without `TERVACORE_RPC_TOKEN` set, no auth is required (the spawning process is implicitly trusted; if it can spawn `terva` it can also read your `auth.json` directly).
 
 ## Wire format
 
@@ -167,7 +173,9 @@ Switch model within the same provider.
 {"id":"7","type":"set_model","model":"claude-sonnet-4-5"}
 ```
 
-Cross-provider swaps require relaunching `terva rpc` with the new `--provider`.
+Response data: `{"model":"claude-sonnet-4-5"}` — the model now backing the session.
+
+Cross-provider swaps require relaunching `terva rpc` with the new `--provider`. So do cross-*endpoint* ones: the swap is in-place on the live client, which captured its base URL immutably at construction, so a model whose `models.json` `baseUrl` differs from the current model's is **rejected** (`model "..." routes to a different endpoint; restart the rpc session to switch`) rather than quietly firing requests at the old endpoint.
 
 ### `get_models`
 
@@ -177,7 +185,9 @@ List models known for the current provider.
 {"id":"8","type":"get_models"}
 ```
 
-Response data: `{"models":[{"id":"...","provider":"...","context_window":200000,"max_output":8192,"reasoning":true}, ...]}`.
+Response data: `{"models":[{"id":"...","provider":"...","context_window":200000,"desired_context_window":0,"context_surcharge_at":0,"max_output":8192,"reasoning":true}, ...]}`.
+
+`context_window` is the model max — the hard ceiling. `desired_context_window` is the working window that drives auto-compaction (0 = use the max); `context_surcharge_at` is the input-token count above which the provider bills a higher rate (0 = no surcharge tier), which is the natural cost-safe value for the desired window. See [models.md](models.md).
 
 ### `ping`
 
@@ -214,21 +224,26 @@ Stream notifications during a `prompt` or `compact`. None carry an `id`.
 | `compact_done` | `summary` | Result of an explicit `compact` (summary text; empty on a no-op). Not terminal — a `done` follows |
 | `compact_start` | `text` | An automatic, policy-driven compaction began inside a `prompt` (`text` carries the reason) |
 | `compact_end` | optional `error` | The automatic compaction finished (before the prompt's `done`); empty `error` means success. Not terminal |
+| `ext_notify` | `extension`, `level`, `message` | An extension raised a note (its `notify` frame). RPC-specific, not a `core.WireEvent` |
+| `ext_display` | `extension`, `text` | An extension asked to show text (its `display` frame) |
+| `ext_clear_notes` | `extension` | An extension cleared the notes it had raised |
+
+The three `ext_*` events are the RPC surface of the extension host hooks — the RPC loop has no TUI to draw notes in, so they go on the stream for the client to render. Unlike the rest of the table they are driven by the extension, not the turn, so they can arrive outside a `prompt` / `compact`. See [extensions.md](extensions.md).
 
 ## Message shape
 
-Used by `get_messages` and inside `user_message` / `assistant_message` events.
+Used by `get_messages` and inside `user_message` / `assistant_message` events — with one difference between the two paths.
 
 ```json
 {
   "role": "user",
   "content": [<content_block>...],
   "time": "2026-04-19T11:30:00Z",
-  "synthetic": false
+  "synthetic": true
 }
 ```
 
-`synthetic` is `true` for a host-injected message (e.g. the at-close continue-on-open-work nudge) rather than one the user typed; a client can render it as a system note instead of a user bubble. Omitted when false.
+`synthetic` rides the **event** path only (it is a `core.WireMessage` field): `true` marks a host-injected message (e.g. the at-close continue-on-open-work nudge) rather than one the user typed, so a client can render it as a system note instead of a user bubble; it is omitted when false. `get_messages` serialises the transcript through its own encoder and emits `role`, `content`, and `time` **only** — never `synthetic`. A client that needs the distinction must take it from the live event stream.
 
 ### Content block types
 

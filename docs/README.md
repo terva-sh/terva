@@ -5,8 +5,8 @@ loop against your filesystem and shell, with a hand-rolled TUI, a browser
 control panel, out-of-process extensions and chat connectors, and origin-aware
 permissions. This page maps everything under `docs/`.
 
-**New here?** Start with the [CLI reference](cli.md) and the [TUI guide](tui.md),
-then skim the [architecture overview](architecture/01-overview.md).
+**New here?** Start with the [CLI reference](cli.md), then pick your front end —
+the [TUI guide](tui.md) or the [web panel](web.md).
 
 ## User & operator guides
 
@@ -48,31 +48,27 @@ then skim the [architecture overview](architecture/01-overview.md).
 | [providers.md](providers.md) | Provider setup & auth |
 | [profiling.md](profiling.md) | Profiling terva |
 | [resource-limits.md](resource-limits.md) | Resource limits |
-| [fork.md](fork.md) | terva & zot — the fork relationship |
+| [fork.md](fork.md) | Lineage — how terva relates to zot, and where the compat promises end |
 | [positioning.md](positioning.md) | Where terva sits in the landscape |
 
-## Architecture
+## Engineering records (development repository only)
 
-[`architecture/`](architecture/README.md) is a **historical baseline
-(June 2026)** — a working mental model of the system from `01-overview` through
-the deep review and the permission model. Specific file/line/size claims may
-have drifted since the major feature waves; the mental model holds. Start at its
-[README](architecture/README.md).
+The pages above are the shipped documentation. The engineering record — design
+proposals, work plans, architecture notes, decision records, reviews — lives in
+the development repository and is **not part of the public release tree**, since
+it references internal infrastructure. It is named here, not linked, because the
+links would 404 for most readers:
 
-## Plans & proposals
-
-- [`plans/`](plans/README.md) — active work plans plus the living
-  [roadmap](plans/roadmap.md). Implemented plans live in
-  [`plans/archive/`](plans/archive/).
-- [`proposals/`](proposals/README.md) — active design proposals. Implemented
-  ones live in [`proposals/archive/`](proposals/archive/).
+| path | what's in it |
+|---|---|
+| `docs/architecture/` | Subsystem-by-subsystem internals. A historical baseline (June 2026): specific file/line/size claims have drifted, but the mental model holds. |
+| `docs/plans/` | Active work plans plus the living roadmap. Implemented plans move to `plans/archive/`. |
+| `docs/proposals/` | Active design proposals; implemented ones move to `proposals/archive/`. |
+| `docs/decisions/` | Architecture decision records (ADRs). |
+| `docs/reviews/` | Point-in-time whole-project review findings. |
+| `docs/vanity/` | The terva.sh vanity-site sources. |
+| `docs/working-agreements.md` | Conventions for planning and validating larger changes. |
 
 Partially-shipped items are **split**: the as-shipped design record sits in
 `archive/`, and a slim "remaining work" doc stays active. Every archived doc
 opens with an **Archived** banner pointing to where the feature shipped.
-
-## Records
-
-- [`decisions/`](decisions/README.md) — architecture decision records (ADRs).
-- [`reviews/`](reviews/README.md) — point-in-time whole-project review findings.
-- [`vanity/`](vanity/README.md) — the terva.sh vanity-site sources.

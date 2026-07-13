@@ -137,8 +137,11 @@ All fields are optional.
       "selection_bg": 24,
       "selection_fg": 231,
       "spinner_frames": ["⠋", "⠙", "⠚", "⠞", "⠖", "⠦", "⠴", "⠲", "⠳", "⠓"],
-      "spinner_messages": ["thinking", "working"],
+      "spinner_messages": ["thinking", "{verb} the {noun}"],
       "spinner_interval_ms": 80,
+      "greetings": ["{verb} the {noun}.", "point me at anything."],
+      "flavor_verbs": ["harness", "wrangle", "tame"],
+      "flavor_nouns": ["wildcard", "chaos", "entropy"],
       "syntax_base_style": "monokai",
       "syntax": {
         "keyword": "#81a1c1 bold",
@@ -211,10 +214,10 @@ Most color fields are xterm-256 indexes (`0`–`255`).
 - `status_colors` — per-segment recoloring for the status bar, an
   object keyed by segment ID (`cwd`, `git`, `edits`, `model`,
   `persona`, `thinking`, `tokens`, `cost`, `context`, `usage`,
-  `swarm`, `session`, `clock`, `tags`, `bridge`, `ext`). Segments not
-  named keep the muted default. Themes only restyle the bar — which
-  segments render, and in what order, is `status_line` in
-  `config.json`, never the theme.
+  `swarm`, `session`, `clock`, `tags`, `bridge`, `ext`, `replay`,
+  `tasks`). Segments not named keep the muted default. Themes only
+  restyle the bar — which segments render, and in what order, is
+  `status_line` in `config.json`, never the theme.
 
 ```json
 {
@@ -246,8 +249,40 @@ Spinner settings can appear at top level, under `colors`, or under
 - `spinner_frames` — list of frame strings. Single-cell glyphs keep
   status-bar alignment clean.
 - `spinner_messages` — list of messages; terva picks one per turn.
+  Templated — see Flavor fields.
 - `spinner_interval_ms` — frame interval in milliseconds. Missing or
   invalid falls back to 80ms.
+
+## Flavor fields
+
+The startup headline and the spinner's working lines are **templates**, not
+fixed strings: a template may embed `{verb}` and `{noun}`, each filled with an
+independent random pick from the theme's word pools. A plain string with no
+placeholder passes through unchanged, so fixed and generated lines can sit in
+the same list. Overriding these three lists rethemes terva's whole voice
+without a rebuild. Like the spinner fields, they can appear at top level, under
+`colors`, or under `colors.dark` / `colors.light`.
+
+- `greetings` — taglines for the startup headline: the text after the `i'm …`
+  prefix (`i'm terva.` on the help/usage screen, `i'm <persona>.` in the
+  interactive welcome banner). terva picks one at random per launch. With none
+  configured it falls back to a plain line.
+- `flavor_verbs` — the `{verb}` pool. Keep them imperative (`harness`, not
+  `harnessing`) so they read in a greeting.
+- `flavor_nouns` — the `{noun}` pool. Keep them bare so `the {noun}` stays
+  grammatical.
+
+```json
+{
+  "name": "nautical",
+  "greetings": ["{verb} the {noun}.", "here to {verb} the {noun}."],
+  "flavor_verbs": ["chart", "moor", "fathom"],
+  "flavor_nouns": ["tide", "shoal", "reckoning"]
+}
+```
+
+An empty or missing pool leaves its `{token}` verbatim, so define both pools if
+your templates use both.
 
 ## Syntax fields
 

@@ -9,10 +9,12 @@ permissions. To reword the *default* identity or terva's other canned prompts
 key-by-key (rather than swap in a whole persona), use the prompt overlay — see
 [localization](localization.md#customizing-tervas-prompts).
 
-terva ships a default persona (**Mieli**), a crew of specialist reviewers, and
-**Kertoja**, an immersive game-master for `--play` (see
-[Cast and actor dispatch](#cast-and-actor-dispatch)); you can author your own or
-get them from extensions. An immersive persona or a [character card](#character-cards)
+terva ships a default persona (**Mieli**), a crew of specialist reviewers
+(`review-crew`), the three-seat deliberation panel `raati-crew` — YATA-1
+(truth), KUSANAGI-2 (decisiveness), MAGATAMA-3 (benevolence), the default panel
+for `raati_convene` (see [raati.md](raati.md)) — and **Kertoja**, an immersive
+game-master for `--play` (see [Cast and actor dispatch](#cast-and-actor-dispatch));
+you can author your own or get them from extensions. An immersive persona or a [character card](#character-cards)
 can also *be* the whole identity for a chat or roleplay.
 
 ## The format
@@ -147,7 +149,11 @@ terva --play --ext ./world --persona wayfarer      # act in a simulated world
 A **character card** is an immersive identity in a portable, widely-shared
 format — SillyTavern's **Character Card V2** (CCv2), as a `.json` file or a
 `.png` with the card embedded in a `chara` text chunk (the community sharing
-convention; the two forms parse identically). Load one with `--card`:
+convention; the two forms parse identically). CCv2 is the shape terva reads,
+but the parser is tolerant either side of it: a flat **V1** card is upgraded to
+the V2 shape on load, and any `chara_card_v*` card (**V3** included) parses on
+its V2-compatible core — fields terva has no use for are carried but never
+interpreted. Load one with `--card`:
 
 ```bash
 terva --card ./aava.png                 # chat as the character (implies --chat)
@@ -229,18 +235,18 @@ extension name. The qualified name is `namespace:name`:
 |---|---|---|
 | `personas/mieli.md` | — | `mieli` |
 | `personas/review-crew/vartija.md` | `review-crew` | `review-crew:vartija` |
-| `<ext>/personas/deep-researcher.md` (ext `zot-web`) | `zot-web` | `zot-web:deep-researcher` |
+| `<ext>/personas/deep-researcher.md` (ext `web`) | `web` | `web:deep-researcher` |
 
 `--persona` (and `swarm_spawn`'s `persona`) accept either form:
 
 - `--persona review-crew:vartija` — exact.
 - `--persona vartija` — bare; resolves across namespaces by precedence (so two
   namespaces can both define `deep-researcher` without colliding —
-  `zot-web:deep-researcher` vs `other:deep-researcher`).
+  `web:deep-researcher` vs `other:deep-researcher`).
 
 **Override** by mirroring the namespace as a subdirectory:
-`$TERVA_HOME/personas/zot-web/deep-researcher.md` shadows the extension's
-`zot-web:deep-researcher` (user tier > extension tier), exactly as a top-level
+`$TERVA_HOME/personas/web/deep-researcher.md` shadows the extension's
+`web:deep-researcher` (user tier > extension tier), exactly as a top-level
 `$TERVA_HOME/personas/mieli.md` overrides the built-in Mieli.
 
 `terva persona list` shows the qualified name and the **provenance** of each
@@ -255,10 +261,10 @@ An installed extension can contribute personas the same way it contributes
 need to be running.
 
 ```
-$TERVA_HOME/extensions/zot-web/
+$TERVA_HOME/extensions/web/
   extension.json
   personas/
-    deep-researcher.md        # → zot-web:deep-researcher
+    deep-researcher.md        # → web:deep-researcher
 ```
 
 - Each persona is **namespaced by the extension name**, sourced `ext:<name>`.
@@ -270,10 +276,11 @@ $TERVA_HOME/extensions/zot-web/
   persona never outlives the tools that back it.
 
 The cohesive case: an extension ships both the *capability* (its tools) and the
-*identity* (a persona) for using it. With `zot-web` installed and a
-`deep-researcher` persona that declares `good_for: [web-research]`, a coordinator
-can dispatch `swarm_spawn(persona="zot-web:deep-researcher", …)` and the
-sub-agent boots with zot-web's web tools *and* the deep-researcher charter.
+*identity* (a persona) for using it. With the core pack's `web` extension
+installed and a `deep-researcher` persona that declares
+`good_for: [web-research]`, a coordinator can dispatch
+`swarm_spawn(persona="web:deep-researcher", …)` and the sub-agent boots with the
+web tools *and* the deep-researcher charter.
 
 > Authoring a persona for an extension is identical to authoring any persona —
 > see the `write-terva-persona` skill. Just place the `.md` under your bundle's

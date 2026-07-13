@@ -8,17 +8,20 @@ changes, change it here first.
 ## Core statement
 
 > **terva is a harness for tool-using agents** — a permissioned loop where a
-> model drives tools, projected through many front ends (terminal, editor
-> over ACP, chat, an embeddable RPC/SDK) and extensible in any language. It
-> ships wired for coding — read, write, and run across your project — but the
-> core is general: hand it extensions or MCP servers and it operates whatever
-> they expose, from services to physical hardware, all under one permission
-> and policy model. The breadth is safe because the core is *consolidated*:
-> one agent loop, one event wire, one policy, one provider registry — typed
-> and test-backed — so every surface is a thin projection of a single
-> hardened core, not a reimplementation that drifts. A hard fork of zot
-> focused on hardening the seams and widening the surface; its own project,
-> not a replacement.
+> model drives tools, projected through many front ends (terminal, browser,
+> editor over ACP, chat, an embeddable RPC/SDK) and extensible in any
+> language. It ships wired for coding — read, write, and run across your
+> project — but the core is general: hand it extensions or MCP servers and it
+> operates whatever they expose, from services to physical hardware, all under
+> one permission and policy model. The breadth is safe because the core is
+> *consolidated*: one agent loop, one event wire, one policy, one provider
+> registry — typed and test-backed — so every surface is a thin projection of a
+> single hardened core, not a reimplementation that drifts.
+
+The fork lineage is history, not identity: lead with what terva *is*. Where
+the origin genuinely matters (compat questions, "how does this relate to
+zot?"), point at [fork.md](fork.md) rather than restating it — see
+*Relationship to zot* below.
 
 ## Hero line (site / GitHub About)
 
@@ -27,10 +30,10 @@ changes, change it here first.
 
 ## Pillars
 
-1. **One core, many front ends.** Terminal, editor (ACP), chat, an
-   embeddable RPC/SDK — and soon agent-to-agent meshes (A2A) — are
-   *projections of one agent loop and one event stream*, not separate
-   reimplementations.
+1. **One core, many front ends.** Terminal and browser (both first-class),
+   editor (ACP), chat, an embeddable RPC/SDK — and soon agent-to-agent meshes
+   (A2A) — are *projections of one agent loop and one event stream* over the
+   `ctrlproto` control plane, not separate reimplementations.
 2. **A general tool-operator, pluggable in any language.** Coding tools are
    built in; everything else you wire up — services, hardware, your own
    systems — attaches over small versioned protocols (extensions, connectors,
@@ -43,9 +46,19 @@ changes, change it here first.
 
 ## Relationship to zot
 
-> A hard fork of zot, focused on hardening the seams and widening the
-> surface. zot continues upstream as its own project; terva is its own
-> project, not a replacement.
+Lineage, not positioning. Keep it out of the lead; it belongs in a footer, an
+FAQ answer, or [fork.md](fork.md). The one-line form, when asked:
+
+> terva began as a hard fork of zot in May 2026 and has long since gone its
+> own way — its own control plane, front ends, protocols, and roadmap. zot
+> continues upstream as its own project; terva is not a replacement for it.
+> Existing zot installs keep working; upstream tracking was retired in July
+> 2026.
+
+Do not claim we track upstream, pull upstream changes on a cadence, or
+promise that zot extensions/connectors stay in lockstep — none of that is
+true anymore. [fork.md](fork.md) states exactly where the compatibility
+promises begin and end.
 
 ## Audience
 

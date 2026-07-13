@@ -7,14 +7,6 @@
   <a href="https://terva.sh">terva.sh</a>
 </p>
 
-> **A hard fork of zot.** terva began as <!-- rename:keep -->
-> [patriceckhart/zot](https://github.com/patriceckhart/zot) and took its own name (it's <!-- rename:keep -->
-> Finnish for pine tar, the traditional preservative and cure-all) once it
-> diverged too far to carry upstream's. It is **not** a replacement, successor, or rename of zot — zot lives on as its own project. Existing zot installs keep <!-- rename:keep -->
-> working unchanged — run `terva migrate` when you're ready to adopt the
-> new data location; see [docs/fork.md](docs/fork.md) for the compat story
-> and how the two projects relate.
-
 ## What is it?
 
 An agent harness in a single static Go binary: a coding agent out of the box,
@@ -22,13 +14,27 @@ open to anything you can wire a tool to. One hardened, test-backed core — the
 agent loop, event wire, permission policy, and two dozen model providers —
 projected through many front ends and extensible in any language.
 
+Two first-class front ends ship in the box, both driving that same core over
+the control plane — same sessions, same permissions, same event stream:
+
+- a **terminal UI** (`terva`) — the default: hand-rolled, fast, with slash
+  commands, inline images, and message queueing. See [docs/tui.md](docs/tui.md).
+- a **web UI** (`terva web`) — a browser control panel, not a viewer: drive
+  sessions, approve tool calls, edit settings, watch the transcript stream.
+  See [docs/web.md](docs/web.md).
+
+Pick either, or both against the same session. Beyond them: an editor
+integration over ACP, chat connectors, print/json for scripting, and an
+embeddable RPC/SDK.
+
 - one static binary.
 - built-in providers for Anthropic, OpenAI/Codex/Responses, Kimi, DeepSeek, Google Gemini/Vertex, GitHub Copilot, Bedrock, Azure OpenAI, OpenRouter, Groq, Cerebras, xAI, Together, Hugging Face, Mistral, Moonshot, Z.AI, Xiaomi, MiniMax, Fireworks, Vercel AI Gateway, OpenCode, Cloudflare AI, Ollama, and any OpenAI-compatible local/custom endpoint.
-- six core tools (read, write, edit, bash, plus read-only grep/glob search), plus `terva_status` for agent self-introspection.
+- the built-in tool set: read, write, edit, bash, read-only grep/glob search, `terva_status` for agent self-introspection, a `task_*` board the agent plans with, and `session_inspect` for reading its own past transcripts. Under lazy tool visibility the model activates hidden groups on demand via `activate_tools`.
 - a permission system: approval modes (`plan`/`ask`/`auto-edit`/`workspace`/`yolo`) plus typed permission rules. Interactive sessions default to **`workspace`** (built-in tools and reads run; foreign extension/MCP tools that can have side effects ask) and are **sandboxed to the working directory** by default. See [docs/permissions.md](docs/permissions.md).
 - pre/post tool-use **hooks** (veto, rewrite, or observe tool calls with your own scripts; [docs/hooks.md](docs/hooks.md)) and an **MCP client** (attach Model Context Protocol servers as tools; [docs/mcp.md](docs/mcp.md)).
-- run modes for every front end: interactive tui, an **editor integration over ACP** (Agent Client Protocol — drive terva from Zed and other ACP editors), print, json, and a JSON-RPC server for embedding.
+- run modes beyond the two UIs: an **editor integration over ACP** (Agent Client Protocol — drive terva from Zed and other ACP editors), print, json, and a JSON-RPC server for embedding. Every front end is a thin client of one agent loop and one event stream, spoken over the `ctrlproto` control plane ([docs/controllers.md](docs/controllers.md)).
 - background subagents: fan work out to parallel **swarm** agents from within a session.
+- **RAATI**: convene a panel of models to argue a decision to a recorded verdict, instead of trusting one model's first answer. See [docs/raati.md](docs/raati.md).
 - chat connectors: built-in telegram and discord bridges, **external
   connectors in any language** (separate executables speaking a small
   versioned JSON protocol), and connectors bundled inside extensions —
@@ -42,20 +48,6 @@ projected through many front ends and extensible in any language.
 - optional **image generation**: an opt-in `generate_image` tool over a registry of hosted or self-hosted backends (OpenAI/LocalAI, AUTOMATIC1111/Forge, ComfyUI), rendered inline and optionally saved into the workspace. See [docs/image-generation.md](docs/image-generation.md).
 - **chat & play modes**: reframe the harness away from coding — a conversation (`--chat`) or a roleplay/simulation (`--play`), fronted by a persona or a SillyTavern **character card** (`--card`), with a keyword-triggered **lore** context engine and a director that can voice a declared **cast** of actors. See [docs/personas.md](docs/personas.md).
 - no community atm.
-
-## How terva differs from zot <!-- rename:keep -->
-
-terva is not a replacement for zot — it's an experiment in hardening <!-- rename:keep -->
-an agent harness. The seams between harness parts are typed
-contracts enforced by tests (one golden-tested event wire, typed provider
-errors, declarative model capabilities, one chat-ops loop behind a
-`Connector` contract); an end-to-end harness and golden protocol tests
-back every change; and a long tail of upstream bugs and oddities has been
-fixed along the way. We watch upstream and pull what's worth pulling, and
-zot extensions remain a supported surface here permanently — with the <!-- rename:keep -->
-intent to bridge any future upstream connector protocol so those tools run
-on either harness. The full story, with specifics:
-[docs/fork.md](docs/fork.md).
 
 ## Install
 
@@ -143,12 +135,13 @@ terva --help
 
 | Doc | What's in it |
 |---|---|
-| [docs/cli.md](docs/cli.md) | Flags, tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`terva_status`), run modes, the data directory |
+| [docs/cli.md](docs/cli.md) | Flags, tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`terva_status`/`task_*`/`session_inspect`), run modes, the data directory |
 | [docs/standard-tools.md](docs/standard-tools.md) | The tool-surface strategy: core vs standard extension vs MCP preset, and the roadmap for new tools |
 | [docs/permissions.md](docs/permissions.md) | Approval modes (`plan`/`ask`/`auto-edit`/`workspace`/`yolo`, with `workspace` the interactive default), permission rules, and the jail-by-default sandbox |
 | [docs/hooks.md](docs/hooks.md) | Pre/post tool-use hooks: veto, rewrite, or observe tool calls with your own scripts |
 | [docs/mcp.md](docs/mcp.md) | Attaching MCP servers as tool providers (stdio, namespaced, permission-gated) |
-| [docs/tui.md](docs/tui.md) | Slash commands, sessions, inline images, message queueing, key bindings |
+| [docs/tui.md](docs/tui.md) | The terminal UI: slash commands, sessions, inline images, message queueing, key bindings |
+| [docs/web.md](docs/web.md) | The web control panel (`terva web`): serving it, the panes, and how it drives the same core |
 | [docs/models.md](docs/models.md) | Picking models, fallback/rescue, custom catalogs, per-provider notes (Kimi, DeepSeek, Gemini, ollama, OpenAI-compatible) |
 | [docs/providers.md](docs/providers.md) | Login flows, endpoints, `models.json` reference, capability tags |
 | [docs/connectors.md](docs/connectors.md) | Chat connectors: the telegram and discord bridges, external connectors in any language, group admission, approvals over chat |
@@ -157,13 +150,15 @@ terva --help
 | [docs/controllers.md](docs/controllers.md) | The control-plane protocol (`ctrlproto`): frames, method groups, events, carriers, and the management-plane horizon |
 | [docs/skills.md](docs/skills.md) | `SKILL.md` reusable instructions: anatomy, discovery, authoring |
 | [docs/personas.md](docs/personas.md) | Personas and immersive chat/play: charters, immersive identities, character cards, the cast + `actor_spawn`, and the mode flags |
+| [docs/raati.md](docs/raati.md) | RAATI: the deliberation primitive — several models argue a decision to a recorded verdict |
+| [docs/context-construction.md](docs/context-construction.md) | What actually goes into the model's context each turn, and in what order |
 | [docs/debugging-prompts.md](docs/debugging-prompts.md) | Inspecting the assembled prompt (`--dump-prompt`), the lore engine, and card/lore/greeting troubleshooting |
 | [docs/themes.md](docs/themes.md) | User and extension themes |
 | [docs/localization.md](docs/localization.md) | Translating the UI into another language, and overriding terva's wording or model-facing prompts in place (even in English) |
 | [docs/rpc.md](docs/rpc.md) | Embedding terva: the RPC wire schema and the JSON event stream (Go SDK: `packages/agent/sdk`, examples under `examples/`) |
+| [docs/resource-limits.md](docs/resource-limits.md) | Bounding what a session can spend: turns, tokens, cost, and wall-clock |
 | [docs/profiling.md](docs/profiling.md) | Performance-profiling the harness: the `terva_pprof` dev build, pprof/`GODEBUG` capture, and reading a TUI CPU profile |
-| [docs/fork.md](docs/fork.md) | How terva relates to zot, and the compatibility promises | <!-- rename:keep -->
-| [docs/architecture/](docs/architecture/) | Subsystem-by-subsystem internals |
+| [docs/fork.md](docs/fork.md) | Lineage: how terva relates to zot, and the compatibility promises | <!-- rename:keep -->
 
 ## Development
 
@@ -209,6 +204,20 @@ packages/agent/ext/                   public Go SDK for writing extensions (pack
 
 Downstream consumers can depend on individual packages:
 `go get terva.sh/terva/packages/core` pulls only `core` and its transitive deps (today: `provider`), no agent or TUI code.
+
+## Lineage
+
+terva began in May 2026 as a hard fork of
+[patriceckhart/zot](https://github.com/patriceckhart/zot) and took its own <!-- rename:keep -->
+name once it diverged too far to carry upstream's. It is **not** a
+replacement, successor, or rename — zot lives on as its own project, and the <!-- rename:keep -->
+two have long since gone their separate ways. Existing zot installs keep <!-- rename:keep -->
+working: `ZOT_*` env vars, legacy data directories, and `.zotsession` import <!-- rename:keep -->
+all still work, and `terva migrate` moves you over when you're ready.
+
+[docs/fork.md](docs/fork.md) has the full story — what terva grew since the
+fork, where the compatibility promises begin and end, and why upstream
+tracking was retired.
 
 ## License
 

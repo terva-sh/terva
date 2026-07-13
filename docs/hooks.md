@@ -6,10 +6,17 @@ object on stdin — a ten-line shell script qualifies — can observe,
 veto, or rewrite tool calls without speaking the
 [extension protocol](extensions.md).
 
-**Trust boundary:** hooks load from the **user config only**
-(`$TERVA_HOME/config.json`). A project's `.terva/config.json` cannot
-define hooks — that would hand any cloned repository arbitrary code
-execution the moment a session starts in it.
+**Trust boundary:** your **user config** (`$TERVA_HOME/config.json`)
+always defines hooks. A project's `.terva/config.json` may define them
+too, but only when the workspace is **trusted** — a hook is arbitrary
+code execution at a tool-call boundary, so an untrusted (the default)
+cloned repository's hooks are never loaded: the engine sees only yours.
+Trust the directory (`terva trust`, or `--trust` for a single run) and
+the project's hooks are **appended** to yours: both sets fire, user
+hooks first within each phase. It is a union, never a replacement, so a
+repo cannot displace a hook you rely on — and because the first
+allow/deny stops the chain (see below), your hooks get the first say.
+See `docs/plans/workspace-trust.md`.
 
 ## Configuration
 

@@ -6,9 +6,9 @@ and what stays a **recommended MCP preset**. Consult this before adding,
 removing, or reclassifying any tool.
 
 The near-term implementation roadmap (and what is deferred) lives in
-[plans/standard-tools-bucket2.md](plans/standard-tools-bucket2.md). The
+`docs/plans/standard-tools-bucket2.md`. The
 original landscape comparison that motivated this is
-[plans/harness-landscape-2026.md](plans/harness-landscape-2026.md).
+`docs/plans/harness-landscape-2026.md`.
 
 ## Guiding principle
 
@@ -33,7 +33,7 @@ extension is therefore consent to run a local program. Do **not** imply an
 extension is sandboxed merely because its LLM-callable tools are
 permission-gated. (Project-local extensions/skills/hooks/MCP are
 additionally gated by Workspace Trust; see
-[plans/workspace-trust.md](plans/workspace-trust.md).)
+`docs/plans/workspace-trust.md`.)
 
 ## The four layers
 
@@ -41,8 +41,8 @@ When adding a capability, decide its layer first:
 
 1. **Core built-in** — universal, high-frequency, low-dependency tools
    that benefit from tight permission/sandbox integration. Lives in
-   `packages/agent/tools/`, registered in `buildToolRegistry`
-   (`packages/agent/build.go`).
+   `packages/agent/tools/`, registered in `BuildToolRegistry`
+   (`packages/agent/build/build.go`).
 2. **Standard extension** — a terva-maintained or explicitly blessed,
    documented, easy-to-install **opt-in** extension. Still runs as
    trusted local code (see above).
@@ -92,7 +92,7 @@ auto-allowable, so a `network-read` tool is gated like a side-effecting tool (it
 legacy `read_only` bool. **Mark network tools `network-read`, not
 `read_only`.** Still to come (bucket-2 Phase A): the shared egress guard
 and an optional per-host allowlist that lets `workspace` auto-allow chosen
-network hosts. See [plans/standard-tools-bucket2.md](plans/standard-tools-bucket2.md).
+network hosts. See `docs/plans/standard-tools-bucket2.md`.
 
 ## Current standard bundle
 
@@ -108,16 +108,45 @@ network hosts. See [plans/standard-tools-bucket2.md](plans/standard-tools-bucket
 | `glob` | local read-only | path glob (`**` recurses); `.gitignore`-aware, paged |
 | `ask_user_question` | user interaction | structured clarifying question; permitted in every mode; interactive-only (headless returns a proceed-anyway result) |
 | `terva_status` | local read-only | session self-introspection |
+| `session_inspect` | local read-only | bounded, filterable view over a session transcript: this session, another session in the project, or a swarm sub-agent's (by its id); `expand` reads one event's full text in pages. Secrets redacted, input scan and output both capped. |
+| `task_create` / `task_update` / `task_list` / `task_archive` | local data | the built-in task board (folded in from the former `terva-tasks` extension): one active task at a time, evidence to close, archive generations, `task_list format:"markdown"` exports a checkbox worklog. The board persists per session under `$TERVA_HOME/tasks` (private modes) and its live state rides each turn as a context card. |
+| `activate_tools` | visibility only | present only when `lazy_tools` is on (see below); brings a hidden capability group into the advertised set. The advertised set is pinned while the model replies, so an activated group can never join the current reply's remaining calls — instead, activation continuation (on by default) automatically re-prompts the model with the tools live the moment it finishes that reply; with continuation off, the group lands on the NEXT turn. Its result echoes the group's schemas (capped at a 4 KB budget; past that, names only) so the model can compose that next call without waiting to see them. Grants no authority — revealed tools keep their normal permission gates. |
 
 `grep`/`glob` are jailed exactly like the file tools (cwd containment,
 symlink skip) and survive `plan` mode because they are classified
 read-only.
 
+The task tools ship exactly when the base coding tools do — `--chat`, `--play`,
+`--no-tools`, and `--no-workspace-tools` drop them together — and there is no
+standing config switch beyond that: a per-run `--tools` allowlist that omits
+them is the way to run coding tools without the board. Boards written by the
+old `terva-tasks` extension migrate forward automatically on their next write
+(the store reads through the legacy `ext-data/tasks` layer).
+
+#### Lazy tool visibility (`lazy_tools`)
+
+With many extensions/MCP servers attached, most of the tool surface is noise
+most of the time. Setting `lazy_tools: true` in `config.json` advertises only
+the core group plus the groups named in `lazy_tool_active` (e.g.
+`["mcp:github"]`); everything else is summarized in a per-turn
+`[inactive tool groups]` note the model can act on with `activate_tools`.
+Visibility only: hidden tools remain callable and permission-gated, so no
+authority changes hands. Activation never lands mid-reply (the advertised set
+is pinned per segment); by default the model is automatically continued with
+the tools live the moment it finishes the reply that activated them —
+activation continuation (the `activation-continuation` design record) — and
+with the feature off they arrive on the next turn. The toggle lives in the
+settings pane (web and TUI `/settings`) once `lazy_tools` is on, or as
+`"engine_features": {"activation_continuation": false}` in `config.json` for
+headless runs. Extension names may not squat the reserved group namespace
+(`core`, `mcp:*`).
+
 ### Host-injected skins (conditional)
 
 Two model-visible tools are **not** always-on: the host injects them only when a
 session opts in, and both are thin **skins over one dispatch engine**
-(`packages/agent/swarm/`) rather than new primitives.
+(`packages/agent/swarm/`) rather than new primitives. They are not the only
+conditional tools, though — the rest are tabled further down.
 
 | Tool | Injected when | Authority | Skin |
 |---|---|---|---|
@@ -140,6 +169,31 @@ into the workspace through the sandbox. Workspace-mutating and it spends money o
 hosted backends, so it is approval-gated and absent in plan mode. See
 [image-generation.md](image-generation.md).
 
+The remaining conditional tools are injected by
+`packages/agent/workspace/workspace_session.go`, each from a declarative
+input — connecting a bridge or flipping a config key re-derives the registry
+rather than patching a live one:
+
+| Tool | Injected when | Authority | Notes |
+|---|---|---|---|
+| `generate_image` | an `image` config block resolves a backend | workspace mutation | see above |
+| `raati_convene` | `raati.convene_tool` is set, in base workspace sessions only | *(unclassified — always prompts)* | the agent convenes its own deliberation panel. A convening spends real sub-agent turns, so every call hits the approval gate; the run mirrors onto the live raati pane. Skin-gated out of `--chat`/`--play`. See [raati.md](raati.md). |
+| `chat_send_image` / `chat_send_file` | a chat bridge is connected **and bound to this session**, and the connector advertises the capability | external mutation | sends into the paired chat. Bound per session, so a second session never sees another's chat tools. See [connectors.md](connectors.md). |
+| `terva_restart` | self-restart is enabled (`--allow-restart`), in the TUI as well as web | *(unclassified — always prompts)* | re-execs the running binary in place, preserving the session. See below. |
+
+**`terva_restart` is the acknowledged exception to "no tool without an explicit
+authority class."** It is deliberately left out of the permission tables — not
+overlooked. There is no honest class for "replace the process image": it is not
+workspace mutation, not process execution in the `bash` sense, and any class we
+gave it would make *some* mode auto-allow it. Being unclassified means it falls
+through to the side-effecting default in every mode, so it **always** prompts —
+yolo included. The prompt is the feature. Two gates stand in front of it: the
+capability is off unless an operator passes `--allow-restart`, and web mode
+additionally refuses to enable it at all on an unauthenticated non-loopback
+listener. If a
+future tool wants the same treatment, it must earn it the same way — by having
+no class that is truthful, not by skipping the classification step.
+
 ### Standard extensions (opt-in, terva-blessed)
 
 These are the designated official standard extensions. They run as trusted
@@ -147,20 +201,38 @@ local code; each must meet the acceptance bar below before being treated
 as fully blessed (some promotion work is still tracked in the bucket-2
 plan).
 
-- **Tasks** — `task_create`/`task_list`/`task_update` plus a compact
-  context card. Opinionated rules: exactly one active task; evidence
-  required to mark done/blocked; never mark failed/partial work done.
-  (Reference implementation: `examples/extensions/todo/`.)
+Four of them ship in the built-in **core pack** (`packages/agent/packs/core.json`,
+installed by `terva ext pack install`): `index`, `git-worktree`, `memory`, and
+`web`. That pack is the blessed set — a starting point an operator opts into, not
+something terva loads on its own.
+
+- **Index** — `index` (`github.com/terva-sh/terva-ext-index`): a workspace code
+  index and search. It exists to replace repeated `bash grep`/`rg` sweeps — and
+  the whole-file reads they lead to — with a structured, indexed lookup: exactly
+  the "replaces a risky/verbose `bash` pattern" case the candidate checklist
+  below asks about.
 - **Worktrees** — `terva-git-worktree` (`worktree_list`/`_create`/
   `_claim`/`_release`/`_remove`), integrating with swarm isolation via
   `--swarm-worktrees`. Mutates git state, so it is never marked read-only.
+- **Memory** — `memory` (`github.com/terva-sh/terva-ext-memory`): cross-session
+  memory, scoped per workspace and per user, so an agent can carry facts forward
+  instead of re-deriving them every session. The natural home for the
+  **local-data** authority — a store confined to the extension's own
+  `$TERVA_HOME/ext-data/<name>` dir, never the user's workspace, which is what
+  makes that class auto-allowable in the first place.
 - **Web** (adopted; niceties pending — bucket-2 Phase C) — `web_search`/`web_fetch`/
   `web_images` are implemented by the hardened `zot-web` extension
   (`github.com/terva-sh/zot-web`), which loads under terva via the preserved
-  zot wire protocol and now **ships in the blessed core pack as `web`**. The
+  zot wire protocol and **ships in the core pack as `web`**. The
   remaining niceties (network-read authority declaration, host egress policy, a
   `terva_version` handshake adapter) are tracked in
-  [plans/standard-tools-bucket2.md](plans/standard-tools-bucket2.md).
+  `docs/plans/standard-tools-bucket2.md`. Until it
+  declares `network-read`, its bare legacy `read_only` bool is what lets
+  `workspace` mode auto-allow a web fetch — the gap that declaration closes.
+- **Tasks** — **promoted to core built-ins** (see the table above); the
+  standalone `terva-tasks` extension is retired, and legacy boards migrate
+  forward on their next write. (The historical reference implementation
+  remains at `examples/extensions/todo/`.)
 
 ### Recommended MCP presets (docs + starter config only)
 
@@ -171,7 +243,12 @@ once MCP gains an HTTP/OAuth transport (bucket-2 Phase D).
 
 ## Non-negotiables
 
-- No tool without a permission story and an explicit authority class.
+- No tool without a permission story and an explicit authority class. The
+  one deliberate exception is `terva_restart`, and it proves the rule: it is
+  unclassified *because* no class is truthful for "replace the process image",
+  and being unclassified is what makes it always prompt (see above). Absent a
+  class, a tool must fall through to the side-effecting default — never to an
+  auto-allow.
 - Untrusted layers (project config, extension bundles) may only **restrict**
   — never grant new authority.
 - Respect Workspace Trust: untrusted project-local extensions, skills,
@@ -211,12 +288,12 @@ For each proposed tool, answer:
 ### A new core tool
 
 - Implementation under `packages/agent/tools/`, registered in
-  `buildToolRegistry`; sandbox pointer rebound in `Resolved.UseSandbox`.
+  `BuildToolRegistry`; sandbox pointer rebound in `Resolved.UseSandbox`.
 - Bounded JSON schema; description with concrete safety steering.
 - Read-only classification where appropriate
   (`readOnlyTools`) and first-party classification (`builtinTools`) in
-  `packages/agent/permissions.go`; added to the system-prompt tool order
-  in `toolSummaries`.
+  `packages/agent/build/permissions.go`; added to the system-prompt tool
+  order in `toolSummaries`.
 - Authority class documented here.
 - Permission-policy tests, including plan/headless allow/refuse behavior.
 - Jail/sandbox tests if it touches paths or commands (symlink and
@@ -251,10 +328,11 @@ For each proposed tool, answer:
 
 ## References
 
-- Policy ladder: `packages/core/policy.go`, `packages/agent/permissions.go`
+- Policy ladder: `packages/core/policy.go`, `packages/agent/build/permissions.go`
 - Tools: `packages/agent/tools/`
+- Conditional-tool injection: `packages/agent/workspace/workspace_session.go`
 - Swarm/worktree: `packages/agent/swarm/`, `--swarm-worktrees`
-- Dispatch skins: `swarm_spawn`/`actor_spawn` in `packages/agent/tools/`, over `packages/agent/swarm/`; cast wiring in `packages/agent/actorcast.go`
+- Dispatch skins: `swarm_spawn`/`actor_spawn` in `packages/agent/tools/`, over `packages/agent/swarm/`; cast wiring in `packages/agent/build/actorcast.go`
 - MCP: `packages/agent/mcp/`, [mcp.md](mcp.md)
 - Extensions: [extensions.md](extensions.md)
 - Permissions/jail: [permissions.md](permissions.md), [tui.md](tui.md)

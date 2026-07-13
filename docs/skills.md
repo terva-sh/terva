@@ -4,8 +4,14 @@ A skill is a reusable instruction set written as a single
 `SKILL.md` file with a YAML frontmatter header. terva discovers skills
 at startup and surfaces them to the model in two ways:
 
-1. The system prompt gains a short manifest:
-   `Available skills: ... - code-review — Run a self-review pass...`
+1. The system prompt gains a short manifest — a header, then one line
+   per skill with its source in brackets:
+
+   ```
+   Available skills (call the `skill` tool with a name from this list to load its full instructions):
+   - code-review [~/.terva/skills/code-review/SKILL.md]: Run a thorough self-review pass on a recent change.
+   - write-terva-skill [builtin]: Author a new terva skill and install it where terva discovers it.
+   ```
 2. A built-in `skill` tool lets the model load any one skill's full
    body on demand.
 
@@ -35,12 +41,19 @@ When asked to review code, ...
 |---|---|---|
 | `name` | optional | skill identifier; defaults to the directory name |
 | `description` | required | one-line summary shown in the system prompt |
-| `allowed-tools` | optional | list of tool names the skill is meant to use; informational |
+| `allowed-tools` | optional | list of tool names the skill needs; loading the skill reveals them |
 | `permissions` | optional | per-tool patterns; informational |
 
-`allowed-tools` and `permissions` are **parsed but not enforced** in
-this version. They appear in the rendered skill body so the model can
-see them and self-regulate. Future versions may enforce.
+`allowed-tools` is a **visibility hint, not a grant**. Under lazy tool
+visibility, loading the skill activates the capability groups of the
+tools it names, so they are advertised to the model from its next turn
+instead of staying hidden. It never confers authority: a revealed tool
+still faces its normal permission and trust gate when called, and the
+field is a no-op when lazy tool visibility is off.
+
+`permissions` is still **parsed but not enforced**. It appears in the
+rendered skill body so the model can see it and self-regulate. Future
+versions may enforce.
 
 The body (everything after the second `---`) is plain markdown.
 There's no template engine; the model sees what you write.
@@ -54,10 +67,18 @@ first `SKILL.md` it finds for each unique name:
 |---|---|
 | `./.terva/skills/<name>/SKILL.md` | project (native) |
 | `$TERVA_HOME/skills/<name>/SKILL.md` | global (native) |
+| `$TERVA_HOME/extensions/<ext>/skills/<name>/SKILL.md` | extension (global) |
+| `./.terva/extensions/<ext>/skills/<name>/SKILL.md` | extension (project) |
 | `./.claude/skills/<name>/SKILL.md` | project (claude-compat) |
 | `~/.claude/skills/<name>/SKILL.md` | global (claude-compat) |
 | `./.agents/skills/<name>/SKILL.md` | project (agent-compat) |
 | `~/.agents/skills/<name>/SKILL.md` | global (agent-compat) |
+| (compiled into the binary) | built-in |
+
+An installed, **enabled** extension may ship a `skills/` directory beside
+its `extension.json` — a data-only bundle contribution. Those rank after
+your own dirs, so a bundle can never shadow a skill you deliberately
+wrote; a disabled extension contributes nothing, skills included.
 
 The compat paths are deliberate: a `SKILL.md` written for an existing
 skill ecosystem works in terva unchanged. Drop your existing
@@ -67,11 +88,41 @@ terva will pick them up.
 `$TERVA_HOME` defaults to `~/Library/Application Support/terva/` on macOS,
 `$XDG_STATE_HOME/terva` on Linux, `%LOCALAPPDATA%\terva` on Windows.
 
+`--no-skill` skips discovery entirely for a run: no manifest in the
+system prompt, no `skill` tool, not even the built-ins.
+
+### Workspace trust gates the project tiers
+
+Every **project** row above (the cwd-anchored ones: `./.terva/skills/`,
+`./.claude/skills/`, `./.agents/skills/`, and project-extension bundles)
+is dropped when the workspace is untrusted — the default for a workspace
+you haven't trusted yet. A repo you clone therefore cannot inject
+`SKILL.md` instructions into the model's prompt by merely being opened.
+Global, user, and built-in skills load regardless.
+
+If a project's skills seem to be missing, that is almost always why:
+trust the workspace and they appear.
+
+### Built-in skills
+
+Seven skills ship inside the binary — `write-terva-card`,
+`write-terva-extension`, `write-terva-locale`, `write-terva-lore`,
+`write-terva-persona`, `write-terva-skill`, `write-terva-themes` — the
+ones that teach the model how to author terva's own artifacts.
+
+They are fully active: they appear in the system-prompt manifest (tagged
+`[builtin]`) and the model loads them through the `skill` tool like any
+other. They are deliberately **hidden from `/skills`** and the other
+user-facing pickers, which show only skills you installed or shipped in
+your project. Being last in priority, a skill of your own with the same
+name shadows the built-in.
+
 ## Inspecting installed skills
 
-In terva, run `/skills`. A picker lists every discovered skill with its
-description and source path. Press enter on a row to view the full
-body inline. Press esc to go back.
+In terva, run `/skills`. A picker lists the discovered skills — the ones
+you installed or shipped, with their description and source path; the
+built-ins stay out of it. Press enter on a row to view the full body
+inline. Press esc to go back.
 
 ## How the model uses a skill
 

@@ -1,133 +1,170 @@
 # terva and zot
 
-terva is an **agent harness** — a permissioned loop where a model
-drives tools. It ships wired for coding but isn't bounded by it (point
-it at extensions or MCP servers and it operates anything they expose),
-and it projects one hardened core through many front ends: terminal,
-editor (over ACP), chat, and an embeddable RPC/SDK. It is a hard fork of
-[zot](https://github.com/patriceckhart/zot) that took its own name once it
-diverged too far to carry upstream's — not a replacement or successor for
-zot, which lives on. *terva* is Finnish for pine tar — the traditional
-preservative and cure-all that sealed boats and kept them seaworthy; its
-default agent persona is *Mieli*, Finnish for "mind" (a mind in a preserved
-vessel).
+terva is an **agent harness** — a permissioned loop where a model drives
+tools. It ships wired for coding but isn't bounded by it (point it at
+extensions or MCP servers and it operates anything they expose), and it
+projects one hardened core through many front ends: terminal, browser,
+editor (over ACP), chat, and an embeddable RPC/SDK.
 
-**terva is not a replacement for zot.** zot continues upstream as its
-own project; terva is its own project that weights priorities
-differently. zot favors moving fast; terva bets on the *seams* —
-hardening the contract surfaces and growing the test suite until the
-core is safe to change — then spends that safety on widening the
-surface: more front ends, more ways to plug in. The two share DNA, and
-terva still pulls worthwhile upstream changes (see *Upstream posture*
-below), but they are separate projects with separate goals.
+It began in May 2026 as a hard fork of
+[zot](https://github.com/patriceckhart/zot) and took its own name once it
+diverged too far to carry upstream's. *terva* is Finnish for pine tar — the
+traditional preservative and cure-all that sealed boats and kept them
+seaworthy; its default agent persona is *Mieli*, Finnish for "mind" (a mind
+in a preserved vessel).
 
-## What's different
+**terva is not a replacement, successor, or rename of zot.** zot continues
+upstream as its own project, with its own goals. This document is the
+honest account of how the two relate now — which is: not much, beyond a
+shared starting commit and a handful of compatibility promises we keep on
+purpose.
 
-### Contracts over conventions
+## Where things actually stand
 
-The seams between harness parts are typed and enforced instead of
-hand-maintained:
+The fork is no longer a variant of zot. It is a different program that
+happens to share an origin.
 
-- **One canonical event serializer** (`core.WireEvent`) feeds
-  `--json` mode, the RPC server, the embedding SDK, and swarm replay.
-  Golden tests pin the wire shape in core and at the compiled-binary
-  level, so four consumers can't drift apart again.
-- **Typed provider errors** replace substring classification of
-  failure text, so retry/rescue behavior is decided on structured
-  data.
-- **Declarative model capabilities** — vision, reasoning, image
-  generation — are tags on the model catalog with per-capability
-  defaults and a single merge path, replacing hardcoded
-  provider-name checks (`/model` filters on them with `:img`,
-  `:reasoning`).
-- **One chat-ops loop.** Chat services implement a small `Connector`
-  contract (pure transport); pairing, queueing, chunking, and
-  commands exist once, instead of being rewritten per service.
-- **Capability structs, never interface probing** through wrapper
-  chains — a bug class upstream hit (tool-image mirroring silently
-  disabled by a wrapping client) that the convention exists to
-  prevent.
+| | |
+|---|---|
+| fork-only history begins | 2026-05-29 |
+| commits on the fork line | ~1,100 |
+| Go sources | ~894 files / ~198k lines |
+| test files | 445 |
+| upstream commits merged since July 2026 | 0 |
 
-### Many front ends, one core
+For scale: the last apples-to-apples measurement against a translated
+upstream tree (2026-06-12) put terva at 284 Go files and 111 test files,
+against zot's 213 and 65. terva has roughly **tripled** since that snapshot,
+and the test suite has **quadrupled**. The measurement has not been re-run
+because the premise it rests on — that a translated upstream tree is a
+meaningful diff base — stopped being true.
 
-The hardened core is projected through more surfaces than zot exposes,
-each a thin client of the same agent loop and event stream rather than
-a separate reimplementation: an **editor integration over ACP** (drive
-terva from Zed and other ACP editors), the **chat connectors** below,
-print/json for scripting, and an embeddable RPC/SDK. The tool surface
-is general, too — built-in coding tools (read/write/edit/run) alongside
-**MCP servers**, **pre/post tool-use hooks**, and **extensions in any
-language** — so terva operates services, hardware, or your own systems,
-not just files. All of it runs under one permission and policy model.
+### What terva grew that zot does not have
 
-### Tests as the safety net
+Whole subsystems, not features bolted onto upstream's:
 
-An end-to-end harness builds the real binary and drives print/json/
-RPC modes against a fake provider. Golden frame tests pin both
-subprocess wire protocols (extensions and connectors) byte-for-byte.
-The chat loop, the external-connector proxy (including crash/restart
-budgets and attachment containment), and the model-catalog layering
-have dedicated suites. CI runs the race detector and a build-tag
-matrix on every change.
+- **A control plane.** Every front end — TUI, web, chat bot, editor —
+  drives the agent through one versioned protocol (`ctrlproto`) instead of
+  reaching into the loop directly. This is the deepest structural break
+  with upstream: there is no seam left to merge against. See
+  [controllers.md](controllers.md).
+- **A browser front end.** `terva web` is a first-class control panel, not
+  a viewer — same sessions, same permissions, same event stream as the TUI.
+  See [web.md](web.md).
+- **Chat connectors.** Built-in Telegram and Discord bridges plus
+  **external connectors in any language** over a versioned JSON protocol,
+  with group admission, interactive approvals over chat, per-chat sessions,
+  and threads. See [connectors.md](connectors.md).
+- **Background subagents.** Fan work out to parallel *swarm* agents from
+  inside a session.
+- **RAATI** — a deliberation primitive where several models argue a
+  decision to a recorded verdict. See [raati.md](raati.md).
+- **Personas and immersive modes.** `--chat` and `--play` reframe the
+  harness away from coding, fronted by a persona or a SillyTavern
+  **character card**, with a keyword-triggered **lore** context engine and a
+  director that can voice a declared cast. See [personas.md](personas.md).
+- **Localization.** Translate the UI, or override terva's wording *and its
+  model-facing prompts* in place, via per-key overlays. See
+  [localization.md](localization.md).
+- **Skills, hooks, themes, image generation, session replay, egress
+  control, workspace trust, resource limits** — each with its own doc.
+- **An editor integration over ACP**, print/json modes for scripting, and
+  an embeddable RPC/SDK.
 
-### Bugs and oddities fixed along the way
+Under all of it: typed contracts where upstream has conventions. One
+canonical event serializer (`core.WireEvent`) feeds `--json`, the RPC
+server, the SDK, the web panel, and swarm replay, with golden tests pinning
+the wire shape at the compiled-binary level. Typed provider errors replace
+substring classification of failure text. Model capabilities are
+declarative tags on the catalog, not hardcoded provider-name checks. Chat
+services implement a small `Connector` contract, so pairing, queueing,
+chunking, and commands exist once.
 
-Among them: a queue double-drain race in the chat bridge, tool-result
-images silently dropped through client wrapper chains, sessions
-bricked when a non-vision model met a screenshot in the transcript
-(now: per-model capability, images dropped with a visible note), and
-self-update paths that would have replaced a fork binary with
-upstream's release.
+And a test suite that is the real product of the exercise: an end-to-end
+harness that builds the actual binary and drives it against a fake
+provider, golden frame tests pinning both subprocess wire protocols
+byte-for-byte, a VT-emulator harness for the TUI, and CI running the race
+detector across a build-tag matrix on every change.
 
-### Connector extensibility
+### Bugs fixed along the way
 
-Chat connectors got the same treatment extensions already had:
-out-of-process executables in any language, speaking a small
-JSON-lines protocol over stdio with **negotiated versioning**, loud
-crash/restart handling, and host-side pairing (the host never sees
-service tokens; the connector never sees pairing policy). A Go SDK
-makes a minimal connector ~50 lines. See
-[docs/connectors.md](connectors.md).
+Among the ones worth naming, because they were inherited: a queue
+double-drain race in the chat bridge, tool-result images silently dropped
+through client wrapper chains, sessions bricked when a non-vision model met
+a screenshot in the transcript (now: per-model capability, images dropped
+with a visible note), and self-update paths that would have replaced a fork
+binary with upstream's release.
 
 ## Upstream posture
 
-Upstream tracking was retired in July 2026: the fork has diverged past
-the point where pulling upstream commits is meaningful (most
-fundamentally, every terva frontend now drives the agent through the
-ctrlproto control plane, a seam upstream doesn't have). There is no
-`upstream` remote, no sync mirror, and no drift cadence. Should a
-specific upstream change ever be worth a one-off manual port,
-`scripts/rename-upstream.sh` still translates their naming (and module
-path) onto terva's — run it over a copy of their tree and cherry-pick
-by hand. Their direction may inform ours; it doesn't steer it.
+**We do not track zot.** Upstream tracking was retired in July 2026. There
+is no `upstream` remote, no sync mirror, no drift cadence, no merge budget.
+The fork has diverged past the point where pulling upstream commits is
+meaningful — most fundamentally, every terva front end now drives the agent
+through the control plane, a seam upstream doesn't have, so their patches
+don't apply to our tree in any but the most peripheral files.
+
+What we *do*, occasionally: **look**. If zot ships something clever, we read
+it and decide on the merits whether terva wants that idea — and then
+implement it our way, against our contracts. Inspiration, not a dependency.
+`scripts/rename-upstream.sh` still translates upstream naming and module
+paths onto terva's, so a one-off manual port stays possible if a specific
+change ever justifies the effort. Nothing is scheduled.
+
+Their direction may inform ours. It does not steer it.
 
 ## Compatibility promises
 
-- **zot extensions are a supported surface, permanently.** The
-  extension wire format is frozen by golden tests — field names
-  (including `zot_version`) never take rename sweeps — so an
-  extension written for either harness runs on terva unchanged.
-- **If upstream grows a connector protocol**, the intent is to bridge
-  it at the boundary (an adapter, not wire re-convergence) so those
-  connectors work on either harness too.
-- **Existing zot installs keep working across the rename**: the
-  self-updater accepts either binary name, `ZOT_*` env vars are
-  honored (deprecation window: two tagged releases), pre-rename data
-  directories and `.zot/` project dirs are read until you opt out,
-  and `.zotsession` files import forever.
-- **Migration is opt-in, never forced.** `terva migrate` (or
-  `/migrate` in the TUI) copies the zot data dir to the terva
-  location without overwriting anything, offers to delete the
-  original and to rename a project's `.zot/` to `.terva/`, and
-  writes a `$TERVA_HOME/.zot-fallback-disabled` marker that turns
-  off legacy-directory discovery from then on (delete the marker to
-  re-enable it). `ZOT_*` env vars keep working through their
-  deprecation window and `.zotsession` import stays forever — the
-  marker gates config-file autoloading only.
+These are deliberate, and they are the only places where divergence is
+capped — increasingly, the only thing the two projects share.
 
-The full rename engineering record — phases, deviations, the
-enforcement tests — lives in
-[docs/plans/archive/rename-terva.md](plans/archive/rename-terva.md). A quantitative
-divergence measurement (commit/diff/test metrics against translated
-upstream, with the method to re-run it) lives in
-[docs/architecture/09-zot-divergence.md](architecture/09-zot-divergence.md).
+### Still true, indefinitely
+
+- **Existing zot installs keep working.** The self-updater accepts either
+  binary name, `ZOT_*` env vars are honored, pre-rename data directories
+  and `.zot/` project dirs are read until you opt out, and `.zotsession`
+  files import forever.
+- **Migration is opt-in, never forced.** `terva migrate` (or `/migrate` in
+  the TUI) copies the zot data dir to the terva location without
+  overwriting anything, offers to delete the original and to rename a
+  project's `.zot/` to `.terva/`, and writes a
+  `$TERVA_HOME/.zot-fallback-disabled` marker that turns off
+  legacy-directory discovery from then on (delete the marker to re-enable
+  it). The marker gates config-file autoloading only — `ZOT_*` env vars and
+  `.zotsession` import are unaffected.
+- **The extension wire format never takes rename sweeps.** Field names —
+  including `zot_version` — are frozen by golden tests. An extension
+  written against the zot protocol as it stands today loads on terva
+  unchanged.
+
+### Capped, honestly
+
+- **zot extension support is pinned at the current zot protocol.**
+  Upstream's extension protocol is still evolving (their spontaneous
+  `open_panel` frames were the change that made this concrete). We are not
+  chasing it. terva implements the protocol as forked, plus terva's own
+  additions to it; a zot extension that depends on newer upstream protocol
+  features is not guaranteed to load. We will revisit periodically and lift
+  anything worth having, but bidirectional extension parity is not a goal
+  and not a promise.
+- **zot connectors are not planned.** Earlier versions of this document
+  said the intent was to bridge any future upstream connector protocol so
+  connectors would run on either harness. That is no longer the plan.
+  terva's connector protocol is its own — versioned, with an SDK, and far
+  enough along that adapting to a hypothetical upstream design would cost
+  more than it returns. Write connectors against
+  [connectors.md](connectors.md).
+
+The short version: **what you already have keeps working; what upstream
+builds next is not something terva promises to run.**
+
+## Records
+
+Two engineering records back this document. Both live in the development
+repository rather than the public tree, so they are named here, not linked:
+
+- `docs/plans/archive/rename-terva.md` — the rename record: phases,
+  deviations, and the tests that enforce the compatibility promises above.
+- `docs/architecture/09-zot-divergence.md` — the June 2026 quantitative
+  divergence measurement and its method. A historical snapshot: it predates
+  the control plane, the web front end, and the end of upstream tracking.
