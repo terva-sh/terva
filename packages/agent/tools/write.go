@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/ignore"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -62,14 +63,26 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 	if len(a.Content) > 0 && !strings.HasSuffix(a.Content, "\n") {
 		totalLines++ // count the last unterminated line
 	}
+	content := []provider.Content{provider.TextBlock{Text: a.Content}}
+	details := map[string]any{
+		"path":        path,
+		"bytes":       len(a.Content),
+		"total_lines": totalLines,
+		"start_line":  1,
+	}
+	// A newly written file under a .gitignore rule is a silent trap: the write
+	// succeeds, but the file won't show up in workspace diffs, grep/glob, or git
+	// status, so a later "why isn't my change there?" has no visible cause. Warn
+	// in the model-visible body — without changing ignore semantics or the file.
+	if ignore.Ignored(t.CWD, path) {
+		details["gitignored"] = true
+		content = append([]provider.Content{provider.TextBlock{
+			Text: fmt.Sprintf("warning: %s is ignored by .gitignore — it will not appear in workspace diffs, grep/glob, or git status.", a.Path),
+		}}, content...)
+	}
 	return core.ToolResult{
-		Content: []provider.Content{provider.TextBlock{Text: a.Content}},
-		Details: map[string]any{
-			"path":        path,
-			"bytes":       len(a.Content),
-			"total_lines": totalLines,
-			"start_line":  1,
-		},
+		Content: content,
+		Details: details,
 		// A whole-file write counts as added lines (overwrites don't subtract
 		// the old content — unknown here, and "wrote N lines" is the honest
 		// claim either way).

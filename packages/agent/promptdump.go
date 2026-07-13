@@ -36,6 +36,10 @@ func runPromptDump(args build.Args) error {
 			Content: []provider.Content{provider.TextBlock{Text: p}},
 		})
 	}
+	if args.DumpPrompt == "sizes" {
+		fmt.Fprintln(os.Stdout, r.BuildPromptSizes(msgs).Text())
+		return nil
+	}
 	m := r.BuildPromptManifest(msgs)
 	switch args.DumpPrompt {
 	case "json":

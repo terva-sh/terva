@@ -37,15 +37,25 @@ var sidecarRedactions = []struct {
 	{regexp.MustCompile(`(?i)("?(?:access_token|refresh_token|id_token|api[_-]?key|apikey|client_secret|password|secret|token)"?\s*[:=]\s*"?)[^"\s,}&]+`), `${1}[REDACTED]`},
 }
 
+// RedactSecrets strips secret-shaped substrings (auth headers, bearer/JWT
+// tokens, known API-key formats, and credential-bearing URL/JSON fields) from
+// text that will be surfaced outside the session file. It is the shared
+// redaction the error sidecar and session_inspect both apply; it does not bound
+// length (callers cap their own output) and never fails.
+func RedactSecrets(text string) string {
+	for _, r := range sidecarRedactions {
+		text = r.re.ReplaceAllString(text, r.repl)
+	}
+	return text
+}
+
 // redactErrorForSidecar strips secret-shaped substrings from an error string
 // and bounds its length before it is written to the durable error sidecar. It
 // never fails: worst case it returns the (still length-bounded) input. The
 // length bound runs after redaction and backs up to a UTF-8 rune boundary so
 // truncation can't emit an invalid trailing rune.
 func redactErrorForSidecar(errText string) string {
-	for _, r := range sidecarRedactions {
-		errText = r.re.ReplaceAllString(errText, r.repl)
-	}
+	errText = RedactSecrets(errText)
 	if len(errText) > maxSidecarErrorLen {
 		cut := maxSidecarErrorLen
 		for cut > 0 && !utf8.RuneStart(errText[cut]) {

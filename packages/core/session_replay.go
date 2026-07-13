@@ -1,7 +1,9 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 
 	"terva.sh/terva/packages/provider"
@@ -106,4 +108,69 @@ func ReadReplayRows(path string) ([]ReplayRow, SessionMeta, error) {
 		return nil, SessionMeta{}, err
 	}
 	return rows, meta, nil
+}
+
+// StreamReplayMessages walks a session JSONL like ReadReplayRows but retains
+// nothing: each message row is hydrated, handed to fn with its replay-row
+// index, then discarded — so a caller inspecting a large transcript holds one
+// message at a time instead of the whole file. Usage and compaction rows are
+// counted (keeping row numbers aligned with ReadReplayRows' indexes, except
+// for corrupt rows, which that reader drops) but never decoded — skipping
+// checkpoint hydration entirely. Input is bounded at the read boundary: any
+// single row past jsonlPerLineCeiling is skipped without being materialized
+// whole (flagging truncated), and maxBytes > 0 caps the cumulative row bytes
+// scanned; hitting either stops the walk with truncated=true and everything
+// streamed so far still delivered. ctx is checked per delivered row so a long
+// scan aborts promptly (returning ctx.Err()). Corrupt rows are skipped
+// (best-effort, like the loader). The meta row is returned whenever present.
+func StreamReplayMessages(ctx context.Context, path string, maxBytes int64, fn func(row int, m provider.Message)) (meta SessionMeta, truncated bool, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return SessionMeta{}, false, err
+	}
+	defer f.Close()
+
+	row := 0
+	rep := &loadReport{}
+	// An oversized row is skipped by the reader (never hydrated); it still means
+	// the window is incomplete, so flag truncation.
+	onOversize := func(int64) { truncated = true }
+	walkErr := forEachJSONLLineBounded(f, jsonlPerLineCeiling, maxBytes, onOversize, func(line []byte) error {
+		// Cancellation is checked once per delivered row so a long scan aborts
+		// promptly; the drain/cumulative bounds cap the only path fn doesn't see.
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		var head sessionLineHead
+		if err := json.Unmarshal(line, &head); err != nil {
+			return nil
+		}
+		switch head.Type {
+		case "meta":
+			var mrow struct {
+				Meta SessionMeta `json:"meta"`
+			}
+			if err := json.Unmarshal(line, &mrow); err == nil {
+				meta = mrow.Meta
+			}
+		case "message":
+			m, err := hydrateMessage(line, rep)
+			if err != nil || len(m.Content) == 0 {
+				return nil
+			}
+			fn(row, m)
+			row++
+		case "usage", "compaction":
+			row++
+		}
+		return nil
+	})
+	if errors.Is(walkErr, errJSONLCumulative) {
+		truncated = true
+		walkErr = nil
+	}
+	if walkErr != nil {
+		return SessionMeta{}, truncated, walkErr // e.g. context.Canceled or an I/O error
+	}
+	return meta, truncated, nil
 }

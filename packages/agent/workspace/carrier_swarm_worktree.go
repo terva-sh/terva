@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/swarm"
 )
@@ -41,11 +42,28 @@ func (w *Workspace) acquireSwarmWorktree(ctx context.Context, req swarm.Worktree
 		return swarm.WorktreeLease{}, fmt.Errorf("swarm worktree isolation: worktree_create returned an error: %s", build.FirstText(res))
 	}
 	var cr struct {
-		Path string `json:"path"`
+		Path       string         `json:"path"`
+		Provenance *extProvenance `json:"provenance"` // preferred when the ext reports it (Phase 7 §7a)
 	}
 	_ = json.Unmarshal([]byte(build.FirstText(res)), &cr)
 	if cr.Path == "" {
 		return swarm.WorktreeLease{}, fmt.Errorf("swarm worktree isolation: worktree_create returned no path (result: %s)", build.FirstText(res))
+	}
+	// The swarm_spawn gate checks the HOST cwd's trust, but this sub-agent boots
+	// with --cwd <worktree> and re-resolves trust for the worktree path. A
+	// worktree outside the trusted path boots UNTRUSTED even when the host is
+	// trusted — the gate would pass while the child silently loses this project's
+	// extensions, skills, and context. Surface the full provenance record here
+	// (retro H5·ux, Phase 7 §7a/§7c) so the operator sees repo/branch/base/commit
+	// and the trust state — and, when restricted, the exact-path grant hint —
+	// BEFORE the child boots. Never auto-trust: the record reflects the store
+	// verdict verbatim (a worktree can carry different executable project content
+	// than the host). Gated on the host being trusted, matching the swarm_spawn
+	// gate: a restricted host is handled there, so there's no lease to narrate.
+	if w.diag != nil && w.Trusted() {
+		if store, err := config.LoadTrustStore(); err == nil {
+			w.diag(newWorktreeProvenance(ctx, store, w.cwd, cr.Path, cr.Provenance).Render())
+		}
 	}
 	return swarm.WorktreeLease{
 		Dir: cr.Path,
