@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -761,8 +762,16 @@ var restartDrainTimeout = 3 * time.Second
 // from --allow-restart; web mode adds an insecure-listener refusal in
 // runWebMode), so it reports CodeUnsupported when off.
 func (w *Workspace) Restart(ctx context.Context) error {
-	if !relaunch.Enabled() {
-		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "self-restart is not enabled (start with --allow-restart)")
+	// Ask BEFORE destroying anything. The drain below cancels every in-flight
+	// turn, and relaunch can still refuse afterwards — an unsupported platform,
+	// a `go run`/debug binary, a failed executable capture, a restart already
+	// pending. A refusal that lands after the drain has thrown the user's work
+	// away for a restart that never happens, so the refusal has to come first.
+	if err := relaunch.CanTrigger(); err != nil {
+		if errors.Is(err, relaunch.ErrDisabled) {
+			return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "self-restart is not enabled (start with --allow-restart)")
+		}
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "restart: %v", err)
 	}
 	// The image is about to be replaced, killing every in-flight turn regardless.
 	// Cancel them first and give them a bounded window to stop their tools and

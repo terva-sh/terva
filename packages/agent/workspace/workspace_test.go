@@ -22,6 +22,7 @@ import (
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/relaunch"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -1273,6 +1274,40 @@ func TestWorkspaceRestartGated(t *testing.T) {
 	var ce *ctrlproto.Error
 	if !errors.As(err, &ce) || ce.Code != ctrlproto.CodeUnsupported {
 		t.Fatalf("want CodeUnsupported, got %v", err)
+	}
+}
+
+// TestWorkspaceRestartRefusalIsNonDestructive: a restart relaunch will REFUSE
+// must not destroy anything on its way to the refusal. The drain cancels every
+// in-flight turn, so it has to run AFTER the gate — otherwise an unsupported
+// platform, a `go run`/debug binary, a failed exe capture or an already-pending
+// restart costs the user a live turn for a restart that never happens.
+//
+// The refusal here is free and genuine: a `go test` binary lives in a go-build
+// temp dir, which relaunch's preflight refuses (it cannot exec into itself). So
+// enabling the capability puts us on exactly the path that used to drain first
+// and refuse second.
+func TestWorkspaceRestartRefusalIsNonDestructive(t *testing.T) {
+	relaunch.Enable()
+	t.Cleanup(relaunch.Disable)
+	if err := relaunch.CanTrigger(); err == nil {
+		t.Skip("relaunch would accept a restart from this binary; nothing to refuse")
+	}
+
+	w := &Workspace{sessions: map[string]*wsSession{}}
+	s := &wsSession{}
+	cancelled := false
+	s.turnCancel = func() { cancelled = true }
+	w.sessions["s1"] = s
+
+	if err := w.Restart(context.Background()); err == nil {
+		t.Fatal("Restart should refuse: relaunch cannot exec a go-build test binary")
+	}
+	if cancelled {
+		t.Fatal("a REFUSED restart cancelled the in-flight turn — preflight must run before the drain")
+	}
+	if !s.busy() {
+		t.Fatal("the in-flight turn should still be running after a refused restart")
 	}
 }
 

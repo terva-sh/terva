@@ -26,7 +26,7 @@ type RestartTool struct{}
 func (t *RestartTool) Name() string { return "terva_restart" }
 
 func (t *RestartTool) Description() string {
-	return "Restart the terva process into the currently-installed binary to pick up a fresh build (e.g. after terva's own code was changed and reinstalled). Requires operator approval and interrupts the current session; connected clients reconnect automatically and the transcript is restored from disk. Use only when asked to restart or apply a new build."
+	return "Restart the terva process into the currently-installed binary to pick up a fresh build (e.g. after terva's own code was changed and reinstalled). Prompts the operator for approval in every gating approval mode, and interrupts the current session; connected clients reconnect automatically and the transcript is restored from disk. Use only when asked to restart or apply a new build."
 }
 
 func (t *RestartTool) Schema() json.RawMessage {

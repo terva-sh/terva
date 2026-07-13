@@ -47,11 +47,20 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 
 	// Self-restart (--allow-restart): enabled before the Workspace exists so
 	// session builds register the terva_restart tool; the /restart command
-	// and control.restart gate on it too. Unlike web mode there is no
-	// listener here, so the flag alone is the gate (no insecure-listener
-	// refusal to mirror). The TUI's pre-exec hook (terminal restore + session
-	// handoff) registers inside Interactive.Run, next to the state it saves.
-	if args.AllowRestart {
+	// and control.restart gate on it too. Unlike web mode there is no listener
+	// here, so there is no insecure-listener refusal to mirror — but the
+	// platform gate DOES apply, exactly as in runWebMode: on a host without
+	// exec(2) the capability can only ever fail, so don't advertise it. Leaving
+	// it on registered terva_restart, offered /restart, and let control.restart
+	// through, all so they could error at the end. The TUI's pre-exec hook
+	// (terminal restore + session handoff) registers inside Interactive.Run,
+	// next to the state it saves.
+	allowRestart := args.AllowRestart
+	if allowRestart && !relaunch.Supported() {
+		fmt.Fprintln(os.Stderr, "terva: self-restart is not supported on this platform — --allow-restart has no effect")
+		allowRestart = false
+	}
+	if allowRestart {
 		relaunch.Enable()
 	}
 

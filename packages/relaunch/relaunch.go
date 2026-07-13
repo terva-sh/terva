@@ -148,6 +148,15 @@ func Enable() {
 	mu.Unlock()
 }
 
+// Disable turns the restart capability back off. Idempotent. The counterpart to
+// Enable: relaunch state is process-global, so a test that enables the
+// capability has to hand it back rather than leak it into the next one.
+func Disable() {
+	mu.Lock()
+	enabled = false
+	mu.Unlock()
+}
+
 // Enabled reports whether the capability is on.
 func Enabled() bool {
 	mu.Lock()
@@ -236,6 +245,29 @@ func Trigger(reason string) error {
 			fn(err)
 		}
 	})
+	return nil
+}
+
+// CanTrigger reports whether Trigger would be accepted right now, changing
+// nothing — the same gate Trigger applies: enabled, preflight clean, and no
+// restart already pending.
+//
+// A caller that must destroy state to restart (Workspace.Restart cancels every
+// in-flight turn first) has to ask this BEFORE it does the destroying, or a
+// refusal costs the user their work for a restart that never happens. Trigger
+// still enforces the gate itself, so the small window between the two calls is
+// safe: the worst case is a drain followed by an honest refusal, which is what
+// happened unconditionally before.
+func CanTrigger() error {
+	if !Enabled() {
+		return ErrDisabled
+	}
+	if err := preflight(); err != nil {
+		return err
+	}
+	if Restarting() {
+		return ErrInProgress
+	}
 	return nil
 }
 
