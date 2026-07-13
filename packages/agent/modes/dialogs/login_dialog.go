@@ -4,12 +4,41 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/tui"
 )
+
+// CompatProvider is the one api-key provider whose login needs more than a
+// key — a base URL and a model id — so it gets a small form of its own
+// rather than the single paste box.
+const CompatProvider = "openai-compatible"
+
+// compatProvider is the unexported alias used inside this file.
+const compatProvider = CompatProvider
+
+// Fields of the openai-compatible form, in tab order. Base URL and model are
+// required; the key is optional (local servers routinely ignore it) and the
+// context window is an optional default for models the endpoint does not
+// describe.
+const (
+	compatFieldBaseURL = iota
+	compatFieldModel
+	compatFieldKey
+	compatFieldContextWindow
+	compatFieldCount
+)
+
+var compatFieldLabels = [compatFieldCount]string{
+	compatFieldBaseURL:       "base url (required), e.g. http://localhost:1234/v1",
+	compatFieldModel:         "default model id (required), e.g. qwen2.5-coder",
+	compatFieldKey:           "api key (optional - many local servers ignore it)",
+	compatFieldContextWindow: "default context window (optional, e.g. 32768)",
+}
 
 // loginStep is the current node in the login dialog state machine.
 type loginStep int
@@ -18,13 +47,14 @@ type loginStep int
 // dialog must default to closed so nothing shows up until Open() is
 // explicitly called.
 const (
-	loginStepClosed    loginStep = iota
-	loginStepMethod              // pick apikey vs subscription
-	loginStepProvider            // pick anthropic vs openai vs kimi
-	loginStepWaiting             // browser open, waiting for callback
-	loginStepPasteCode           // user pastes the auth code here
-	loginStepInfo                // informational setup guidance
-	loginStepDone                // success or error, waiting for key to dismiss
+	loginStepClosed     loginStep = iota
+	loginStepMethod               // pick apikey vs subscription
+	loginStepProvider             // pick anthropic vs openai vs kimi
+	loginStepWaiting              // browser open, waiting for callback
+	loginStepPasteCode            // user pastes the auth code here
+	loginStepInfo                 // informational setup guidance
+	loginStepCompatForm           // openai-compatible: base url, model, key, ctx window
+	loginStepDone                 // success or error, waiting for key to dismiss
 )
 
 const loginProviderPageSize = 8
@@ -42,6 +72,14 @@ type LoginDialog struct {
 	codeEd    *tui.Editor
 	infoTitle string
 	infoLines []string
+
+	// openai-compatible form state: one editor per field, the focused
+	// field, and an inline validation message. compatErr is rendered in
+	// place rather than closing the dialog, so a missing base url does not
+	// throw away everything already typed.
+	compatEds [compatFieldCount]*tui.Editor
+	compatIdx int
+	compatErr string
 
 	// status is a snapshot of the current login state for each
 	// provider, captured when Open() runs. Rendered above the
@@ -164,7 +202,15 @@ func (d *LoginDialog) Render(th tui.Theme, width int) []string {
 		lines = append(lines, FrameRule(th, width))
 	case loginStepWaiting:
 		lines = append(lines, FrameHeader(th, "login - "+d.method+" - "+ProviderLabel(d.provider), width))
-		lines = append(lines, th.FG256(th.Muted, "open this URL in a browser:"))
+		// The api-key page binds to loopback, so on a headless host the URL
+		// below is unreachable and the paste box is the whole flow. Say so,
+		// rather than asking for an "authorization code" that an api-key
+		// login never produces.
+		if d.method == "apikey" {
+			lines = append(lines, th.FG256(th.Muted, i18n.T("paste your API key below, or open this URL in a browser on this machine:")))
+		} else {
+			lines = append(lines, th.FG256(th.Muted, "open this URL in a browser:"))
+		}
 		wrapW := width - 2
 		if wrapW < 20 {
 			wrapW = 20
@@ -178,7 +224,11 @@ func (d *LoginDialog) Render(th tui.Theme, width int) []string {
 			lines = append(lines, th.FG256(th.Accent, seg))
 		}
 		lines = append(lines, "")
-		lines = append(lines, th.FG256(th.Muted, i18n.T("paste the authorization code (or full redirect URL / code#state):")))
+		if d.method == "apikey" {
+			lines = append(lines, th.FG256(th.Muted, i18n.T("paste your API key:")))
+		} else {
+			lines = append(lines, th.FG256(th.Muted, i18n.T("paste the authorization code (or full redirect URL / code#state):")))
+		}
 		if d.codeEd == nil {
 			d.codeEd = tui.NewEditor(th.AccentBar(th.Accent))
 		}
@@ -187,7 +237,44 @@ func (d *LoginDialog) Render(th tui.Theme, width int) []string {
 			lines = append(lines, l)
 		}
 		lines = append(lines, "")
-		lines = append(lines, th.FG256(th.Muted, "enter submits - esc cancels - waiting for browser callback in background"))
+		if d.method == "apikey" {
+			lines = append(lines, th.FG256(th.Muted, "enter submits - esc cancels"))
+		} else {
+			lines = append(lines, th.FG256(th.Muted, "enter submits - esc cancels - waiting for browser callback in background"))
+		}
+		lines = append(lines, FrameRule(th, width))
+	case loginStepCompatForm:
+		lines = append(lines, FrameHeader(th, "login - apikey - "+ProviderLabel(d.provider), width))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("point terva at any openai-compatible endpoint (lm studio, vllm, llama.cpp, ollama's /v1, a gateway).")))
+		lines = append(lines, "")
+		wrapW := width - 2
+		if wrapW < 20 {
+			wrapW = 20
+		}
+		for i := range compatFieldCount {
+			label := i18n.T(compatFieldLabels[i])
+			if i == d.compatIdx {
+				lines = append(lines, th.FG256(th.Accent, "> "+label))
+			} else {
+				lines = append(lines, th.FG256(th.Muted, "  "+label))
+			}
+			edLines, _, _ := d.compatEditor(th, i).Render(width - 2)
+			lines = append(lines, edLines...)
+		}
+		if d.compatErr != "" {
+			lines = append(lines, "")
+			lines = append(lines, th.FG256(th.Error, d.compatErr))
+		}
+		lines = append(lines, "")
+		// The browser form is still live for anyone at a browser on this
+		// machine; on a headless host it is unreachable and this form is
+		// the whole flow.
+		lines = append(lines, th.FG256(th.Muted, i18n.T("or use the browser form on this machine:")))
+		for _, seg := range tui.WrapANSILine(d.url, wrapW) {
+			lines = append(lines, th.FG256(th.Accent, seg))
+		}
+		lines = append(lines, "")
+		lines = append(lines, th.FG256(th.Muted, "tab/shift-tab move between fields - enter submits - esc cancels"))
 		lines = append(lines, FrameRule(th, width))
 	case loginStepPasteCode:
 		lines = append(lines, FrameHeader(th, "login - "+d.method+" - "+ProviderLabel(d.provider)+" - paste code", width))
@@ -364,6 +451,21 @@ type loginDialogAction struct {
 	Provider    string
 	Close       bool
 	SubmitCode  string
+	// SubmitKey carries a pasted API key. It is distinct from SubmitCode
+	// because the two go to different places: a code is exchanged with the
+	// provider, a key is stored as-is. Routing a key through the code path
+	// is what used to make headless api-key logins fail silently.
+	SubmitKey string
+	// SubmitCompat carries a filled-in openai-compatible form.
+	SubmitCompat *CompatSubmit
+}
+
+// CompatSubmit is a completed openai-compatible login form.
+type CompatSubmit struct {
+	BaseURL       string
+	Model         string
+	Key           string // optional
+	ContextWindow int    // 0 = unknown
 }
 
 // HandleKey advances the dialog and returns an action to apply, if any.
@@ -377,6 +479,8 @@ func (d *LoginDialog) HandleKey(k tui.Key) loginDialogAction {
 		return d.handleWaitingKey(k)
 	case loginStepPasteCode:
 		return d.handlePasteCodeKey(k)
+	case loginStepCompatForm:
+		return d.handleCompatFormKey(k)
 	case loginStepInfo:
 		d.Close()
 		return loginDialogAction{Close: true}
@@ -459,8 +563,47 @@ func (d *LoginDialog) ShowWaiting(url string) {
 	if d.step == loginStepClosed {
 		return
 	}
+	// The compat form is already the right surface for this login, and it
+	// wants the browser-form URL, not to be replaced by a paste box. The
+	// api-key flow emits its "started" event (carrying that URL) after the
+	// form has been opened, so without this the event would demote the form
+	// the instant it appeared.
+	if d.step == loginStepCompatForm {
+		d.url = url
+		return
+	}
 	d.step = loginStepWaiting
 	d.url = url
+}
+
+// ShowCompatForm opens the openai-compatible field form. url is the browser
+// form, still running and still usable from a browser on this machine; the
+// TUI form exists because that URL is loopback-only and so unreachable from
+// a headless host.
+func (d *LoginDialog) ShowCompatForm(url string) {
+	if d.step == loginStepClosed {
+		return
+	}
+	d.step = loginStepCompatForm
+	d.url = url
+	d.compatIdx = 0
+	d.compatErr = ""
+}
+
+// compatEditor lazily builds the editor for field i.
+func (d *LoginDialog) compatEditor(th tui.Theme, i int) *tui.Editor {
+	if d.compatEds[i] == nil {
+		d.compatEds[i] = tui.NewEditor(th.AccentBar(th.Accent))
+	}
+	return d.compatEds[i]
+}
+
+// compatValue reads a field without disturbing it.
+func (d *LoginDialog) compatValue(i int) string {
+	if d.compatEds[i] == nil {
+		return ""
+	}
+	return strings.TrimSpace(d.compatEds[i].Value())
 }
 
 // SetURL replaces the displayed verification URL without changing the
@@ -499,11 +642,72 @@ func (d *LoginDialog) handleWaitingKey(k tui.Key) loginDialogAction {
 		return loginDialogAction{}
 	}
 	if submit := d.codeEd.HandleKey(k); submit {
-		code := d.codeEd.SubmitValue()
+		v := d.codeEd.SubmitValue()
 		d.codeEd.Clear()
-		return loginDialogAction{SubmitCode: code}
+		if strings.TrimSpace(v) == "" {
+			return loginDialogAction{}
+		}
+		if d.method == "apikey" {
+			return loginDialogAction{SubmitKey: v, Provider: d.provider}
+		}
+		return loginDialogAction{SubmitCode: v}
 	}
 	return loginDialogAction{}
+}
+
+// handleCompatFormKey drives the openai-compatible field form. Tab and
+// shift-tab move between fields; enter submits the whole form.
+func (d *LoginDialog) handleCompatFormKey(k tui.Key) loginDialogAction {
+	switch k.Kind {
+	case tui.KeyEsc:
+		d.Close()
+		return loginDialogAction{Close: true}
+	case tui.KeyTab:
+		d.compatIdx = (d.compatIdx + 1) % compatFieldCount
+		return loginDialogAction{}
+	case tui.KeyShiftTab:
+		d.compatIdx = (d.compatIdx - 1 + compatFieldCount) % compatFieldCount
+		return loginDialogAction{}
+	}
+
+	ed := d.compatEds[d.compatIdx]
+	if ed == nil {
+		// Not rendered yet, so there is nothing to type into.
+		return loginDialogAction{}
+	}
+	submit := ed.HandleKey(k)
+	if !submit {
+		return loginDialogAction{}
+	}
+
+	// Enter submits the form, not just the focused field. Validate here so
+	// a mistake is shown in place and nothing already typed is lost.
+	baseURL := d.compatValue(compatFieldBaseURL)
+	model := d.compatValue(compatFieldModel)
+	if baseURL == "" || model == "" {
+		d.compatErr = i18n.T("base url and model are required")
+		return loginDialogAction{}
+	}
+	ctxWindow := 0
+	if raw := d.compatValue(compatFieldContextWindow); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			d.compatErr = i18n.T("context window must be a positive whole number")
+			d.compatIdx = compatFieldContextWindow
+			return loginDialogAction{}
+		}
+		ctxWindow = n
+	}
+	d.compatErr = ""
+	return loginDialogAction{
+		Provider: compatProvider,
+		SubmitCompat: &CompatSubmit{
+			BaseURL:       baseURL,
+			Model:         model,
+			Key:           d.compatValue(compatFieldKey),
+			ContextWindow: ctxWindow,
+		},
+	}
 }
 
 func (d *LoginDialog) handlePasteCodeKey(k tui.Key) loginDialogAction {

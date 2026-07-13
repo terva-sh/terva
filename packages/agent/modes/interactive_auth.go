@@ -249,6 +249,14 @@ func (i *Interactive) startAPIKeyFlow(provider string) {
 		i.dialog.ShowResult(false, err.Error())
 		return
 	}
+	// The compat endpoint needs a base URL and a model as well as a key, so
+	// a single paste box cannot express it. Collect the fields in the TUI —
+	// that is the only path that works headless. The browser form is still
+	// running at url for anyone who prefers it, so show that too.
+	if provider == dialogs.CompatProvider {
+		i.dialog.ShowCompatForm(url)
+		return
+	}
 	i.dialog.ShowWaiting(url)
 }
 
@@ -302,6 +310,36 @@ func (i *Interactive) submitManualOAuthCode(code string) {
 		// unreachable from the dialog submit path, which gates on a
 		// non-empty SubmitCode with a manual flow already started.
 		_ = i.cfg.AuthManager.CompleteManualOAuth(i.runCtx, code)
+	}()
+}
+
+// submitAPIKey stores a key pasted into the login dialog. On a headless
+// host the api-key page (loopback, random port) cannot be reached, so this
+// is the only way to finish the flow.
+//
+// Like submitManualOAuthCode, the result comes back over
+// AuthManager.Events(), which Run() consumes via handleAuthEvent on the main
+// goroutine. Touching i.dialog from here would race that — loginDialog has
+// no mutex — so the event path owns the result. Every return path of the
+// Complete* calls emits, so nothing can be swallowed.
+func (i *Interactive) submitAPIKey(provider, key string) {
+	if i.cfg.AuthManager == nil {
+		return
+	}
+	go func() {
+		_ = i.cfg.AuthManager.CompleteAPIKey(i.runCtx, provider, key)
+	}()
+}
+
+// submitCompatAPIKey stores an openai-compatible endpoint entered in the
+// login dialog's compat form: base URL and model id, plus an optional key
+// and default context window.
+func (i *Interactive) submitCompatAPIKey(baseURL, model, key string, contextWindow int) {
+	if i.cfg.AuthManager == nil {
+		return
+	}
+	go func() {
+		_ = i.cfg.AuthManager.CompleteCompatAPIKey(i.runCtx, baseURL, model, key, contextWindow)
 	}()
 }
 

@@ -51,7 +51,18 @@ type Manager struct {
 	manualEventProvider string
 	manualPKCE          PKCE
 	manualState         string
+
+	// Probe seams, mirroring Server.probeFn. A key handed straight to the
+	// Manager (the headless path) is validated exactly as the browser form
+	// validates one, and tests swap these out to stay off the network.
+	probeAPIKey func(ctx context.Context, provider, key string) error
+	probeCompat func(ctx context.Context, baseURL, key string) error
 }
+
+// compatProvider is the openai-compatible endpoint: the one api-key provider
+// whose login carries more than a key (a base URL, a model id, and an
+// optional default context window).
+const compatProvider = "openai-compatible"
 
 // NewManager returns a Manager bound to store.
 func NewManager(store *Store) *Manager {
@@ -59,6 +70,8 @@ func NewManager(store *Store) *Manager {
 		store:       store,
 		events:      make(chan Event, 16),
 		openBrowser: true,
+		probeAPIKey: ProbeAPIKey,
+		probeCompat: ProbeOpenAICompatible,
 	}
 }
 
@@ -102,6 +115,77 @@ func (m *Manager) StartAPIKey(provider string) (string, error) {
 	go m.maybeOpen(u)
 	m.emit(Event{Kind: "started", Provider: provider, Method: "apikey", URL: u})
 	return u, nil
+}
+
+// CompleteAPIKey stores an API key handed to terva directly, rather than
+// through the local browser form. The form server binds to loopback with a
+// random port (see NewServer), so on a headless host — a remote box over
+// SSH, a container — it is unreachable: there is no browser on that side of
+// the connection, and the URL cannot be opened from anywhere else. Handing
+// the key straight to terva is the only way in, and this is where it lands.
+//
+// The key is probed before it is stored, exactly as the browser form does,
+// so a mistyped key is rejected here instead of surfacing as a confusing
+// failure on the first request.
+//
+// openai-compatible does not come through here — it carries a base URL and
+// a model id as well, so it has its own entry point below.
+func (m *Manager) CompleteAPIKey(ctx context.Context, provider, key string) error {
+	fail := func(err error) error {
+		m.emit(Event{Kind: "error", Provider: provider, Method: "apikey", Message: err.Error()})
+		return err
+	}
+	if !isKnownAPIKeyProvider(provider) {
+		return fail(errors.New(apiKeyProviderMessage()))
+	}
+	if provider == compatProvider {
+		return fail(errors.New(i18n.T("an openai-compatible endpoint needs a base url and model too")))
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fail(errors.New(i18n.T("api key is empty")))
+	}
+	if err := m.probeAPIKey(ctx, provider, key); err != nil {
+		return fail(err)
+	}
+	if err := m.store.SetAPIKey(provider, key); err != nil {
+		return fail(err)
+	}
+	m.emit(Event{Kind: "success", Provider: provider, Method: "apikey"})
+	return nil
+}
+
+// CompleteCompatAPIKey stores an openai-compatible endpoint handed to terva
+// directly. It is the headless twin of the browser form's compat fields, and
+// it takes everything that form takes.
+//
+// baseURL and model are required — without them there is nowhere to send a
+// request and nothing to send it with. The key is optional on purpose: local
+// servers (lm studio, llama.cpp, ollama's /v1, vllm) routinely ignore it.
+// contextWindow is a default for models the endpoint does not describe; 0
+// means "unknown", which is also what a blank entry becomes.
+func (m *Manager) CompleteCompatAPIKey(ctx context.Context, baseURL, model, key string, contextWindow int) error {
+	fail := func(err error) error {
+		m.emit(Event{Kind: "error", Provider: compatProvider, Method: "apikey", Message: err.Error()})
+		return err
+	}
+	baseURL = strings.TrimSpace(baseURL)
+	model = strings.TrimSpace(model)
+	key = strings.TrimSpace(key)
+	if baseURL == "" || model == "" {
+		return fail(errors.New(i18n.T("base url and model are required for an openai-compatible endpoint")))
+	}
+	if contextWindow < 0 {
+		contextWindow = 0
+	}
+	if err := m.probeCompat(ctx, baseURL, key); err != nil {
+		return fail(err)
+	}
+	if err := m.store.SetCompatAPIKey(compatProvider, key, baseURL, model, contextWindow); err != nil {
+		return fail(err)
+	}
+	m.emit(Event{Kind: "success", Provider: compatProvider, Method: "apikey"})
+	return nil
 }
 
 func (m *Manager) ensureKeyServer() error {

@@ -147,6 +147,12 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				if act.SubmitCode != "" {
 					i.submitManualOAuthCode(act.SubmitCode)
 				}
+				if act.SubmitKey != "" {
+					i.submitAPIKey(act.Provider, act.SubmitKey)
+				}
+				if c := act.SubmitCompat; c != nil {
+					i.submitCompatAPIKey(c.BaseURL, c.Model, c.Key, c.ContextWindow)
+				}
 				return false
 			},
 			render: func(cols int) []string { return i.dialog.Render(i.cfg.Theme, cols) },

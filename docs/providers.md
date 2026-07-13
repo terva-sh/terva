@@ -26,6 +26,36 @@ Setup-instruction providers:
 - Cloudflare AI Gateway
 - Azure OpenAI Responses
 
+## Logging in on a headless machine
+
+Both login methods work over plain SSH, in a container, or anywhere else
+with no browser on the terva host. `/login` opens a local page as a
+convenience, but never depends on it.
+
+**API key.** Paste the key straight into the `/login` dialog and press
+enter. The key is checked against the provider before it is stored, so a
+mistyped key is rejected there and then rather than failing later on the
+first request. The local page is offered as well, and still works if you
+are at a browser on that machine — but it binds to loopback on a random
+port, so it is unreachable from anywhere else. The paste box is the
+headless path.
+
+**OpenAI Compatible** needs a base URL and a default model id as well, so
+`/login` gives it a small form instead of a single box: base URL, default
+model id, an optional API key (most local servers ignore it), and an
+optional default context window. Tab and shift-tab move between the fields,
+enter submits. The endpoint is probed before it is stored.
+
+**Subscription (OAuth).** The provider's callback URL is pinned to
+`localhost` by the provider's own client registration, so terva cannot move
+it to a reachable address — the browser on your laptop will fail to load it.
+That is expected and harmless: the authorization code is in the failed URL.
+Copy the whole URL out of the browser's address bar and paste it back into
+the `/login` dialog. It also accepts a bare code or `code#state`.
+
+Anthropic additionally offers a variant that redirects to its own console
+instead of a local port, so no local server is involved at all.
+
 ## Subscription providers
 
 These providers support subscription login:
@@ -230,14 +260,19 @@ has no fixed base URL and is configured through `/login`.
 
 ### Logging in
 
-Run `/login`, choose **OpenAI Compatible (local/custom)**, and the browser form
-collects three things (plus an optional API key):
+Run `/login` and choose **OpenAI Compatible (local/custom)**. terva shows a
+form collecting three things (plus an optional API key):
 
 - **base url** — where requests go, e.g. `http://localhost:1234/v1`. terva lists
   the endpoint's models once to confirm it's reachable.
 - **default model id** — the model selected after login, e.g. `qwen2.5-coder`.
 - **default context window** — applied to discovered models the server doesn't
   describe a size for (optional; leave blank if unsure).
+
+Tab and shift-tab move between fields; enter submits. The same fields are
+served as a browser form on the terva host, if you prefer to fill them in
+there — but that page is loopback-only, so on a remote host the TUI form is
+the one that works.
 
 These are stored in `$TERVA_HOME/auth.json` under `openai-compatible`. The API key
 is optional — most local servers ignore it.
