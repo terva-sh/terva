@@ -157,6 +157,65 @@ func transientHTTPStatus(status int) bool {
 	return false
 }
 
+// retryAdvice is the sentence OpenAI's backend puts in a generic server error
+// when it carries no machine-readable code at all: "…You can retry your request,
+// or contact support…". It is the server instructing the client to retry, which
+// is a fact and not a guess — but it is the LAST thing consulted, only after both
+// the transient and the permanent vocabularies below have declined to recognize
+// the error, so a permanent failure whose prose happens to mention retrying can
+// never reach it.
+//
+// This is the one prose match allowed anywhere in the retry path. Agent.
+// canRetryError used to hold a list of them and it retried "prompt is too long:
+// 208500 tokens" because "500" matched.
+const retryAdvice = "you can retry your request"
+
+// transientErrorCode is the retry policy for errors delivered INSIDE an
+// otherwise-healthy stream — the sibling of [transientHTTPStatus], for the axis
+// that has no status code. The wire has already returned 200; whatever went
+// wrong is described only by the error frame's own vocabulary.
+//
+// It exists because every streaming decoder had grown its own copy of this
+// judgement and they disagreed: codex knew about rate limits but called a
+// server_error permanent, openai knew about server_error but never read the
+// `code` field, anthropic knew about api_error and nothing else. The vocabulary
+// is shared across the openai and anthropic wire formats, so the classifier is
+// too, and a provider that learns a new retryable code teaches every other one.
+//
+// code and kind are the error object's "code" and "type" (either may be empty;
+// providers populate them inconsistently, which is the whole problem). msg is the
+// human-readable message, consulted only as a last resort.
+func transientErrorCode(code, kind, msg string) bool {
+	for _, v := range []string{code, kind} {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "" {
+			continue
+		}
+		// rate_limit_error, rate_limit_exceeded, rate_limited, …
+		if strings.HasPrefix(v, "rate_limit") {
+			return true
+		}
+		switch v {
+		case "server_error", "internal_server_error", "service_unavailable",
+			"overloaded_error", "timeout", "request_timeout",
+			// anthropic's name for its own 500.
+			"api_error":
+			return true
+		}
+		// Recognized CLIENT errors are permanent, and must say so HERE — before
+		// the prose fallback gets a chance to guess otherwise. Retrying one of
+		// these just fails the same way N more times and spends the user's money
+		// doing it.
+		switch v {
+		case "invalid_request_error", "invalid_api_key", "authentication_error",
+			"permission_error", "not_found_error", "context_length_exceeded",
+			"content_filter", "invalid_prompt":
+			return false
+		}
+	}
+	return strings.Contains(strings.ToLower(msg), retryAdvice)
+}
+
 // ParseRetryAfter parses a Retry-After header value: either delay
 // seconds ("17") or an HTTP-date. Returns 0 for absent or
 // unparseable values, never a negative duration.

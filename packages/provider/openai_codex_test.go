@@ -29,6 +29,53 @@ func TestCodexNestedStreamError(t *testing.T) {
 	}
 }
 
+func TestCodexResponseFailedTransience(t *testing.T) {
+	const retryMessage = "An error occurred while processing your request. You can retry your request, or contact support if the error persists."
+	cases := []struct {
+		name      string
+		payload   string
+		transient bool
+	}{
+		{
+			name:      "server error code",
+			payload:   `{"type":"response.failed","response":{"error":{"code":"server_error","message":"failed"}}}`,
+			transient: true,
+		},
+		{
+			name:      "canonical retry advice without code",
+			payload:   `{"type":"response.failed","response":{"error":{"message":"` + retryMessage + `"}}}`,
+			transient: true,
+		},
+		{
+			name:      "invalid request remains permanent",
+			payload:   `{"type":"response.failed","response":{"error":{"code":"invalid_request_error","message":"bad input"}}}`,
+			transient: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewOpenAICodex("token", "acct", "").(*codexClient)
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader("data: " + tc.payload + "\n\n"))}
+			out := make(chan Event, 16)
+			go c.runStream(context.Background(), resp, Request{Model: "gpt-5.6-sol"}, out)
+
+			var got error
+			for ev := range out {
+				if done, ok := ev.(EventDone); ok {
+					got = done.Err
+				}
+			}
+			pe, ok := got.(*ProviderError)
+			if !ok {
+				t.Fatalf("error = %T %v, want *ProviderError", got, got)
+			}
+			if pe.Transient != tc.transient {
+				t.Fatalf("Transient = %v, want %v (error %v)", pe.Transient, tc.transient, pe)
+			}
+		})
+	}
+}
+
 // GPT-5.6 supports a native "max" reasoning effort above xhigh; the
 // codex request builder must send it verbatim for those models.
 func TestGPT56UsesNativeMaxReasoningEffort(t *testing.T) {

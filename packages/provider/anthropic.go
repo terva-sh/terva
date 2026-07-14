@@ -877,12 +877,11 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &e)
 				stop = StopError
-				// Anthropic's documented transient error types: 529
-				// overloaded, 500 api_error, 429 rate_limit_error.
-				transient := e.Error.Type == "overloaded_error" ||
-					e.Error.Type == "api_error" ||
-					e.Error.Type == "rate_limit_error"
-				finalErr = NewAPIError("anthropic", e.Error.Type+": "+e.Error.Message, transient)
+				// Anthropic's documented transient error types — 529 overloaded,
+				// 500 api_error, 429 rate_limit_error — are all in the shared
+				// vocabulary. Its error frame has no `code`, only a `type`.
+				finalErr = NewAPIError("anthropic", e.Error.Type+": "+e.Error.Message,
+					transientErrorCode("", e.Error.Type, e.Error.Message))
 				sendDone()
 				return
 			}

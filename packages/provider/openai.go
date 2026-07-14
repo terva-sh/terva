@@ -697,6 +697,12 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 				Error *struct {
 					Message string `json:"message"`
 					Type    string `json:"type"`
+					// An openai-wire error carries its specific reason in `code`
+					// and only its family in `type`. This decoder did not read it
+					// at all, so a code-only failure — which is how a gateway or a
+					// local server usually reports one — was classified on a field
+					// that was empty, and every one of them came out permanent.
+					Code string `json:"code"`
 				} `json:"error"`
 			}
 			if err := json.Unmarshal([]byte(ev.Data), &chunk); err != nil {
@@ -704,13 +710,8 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 			}
 			if chunk.Error != nil {
 				stop = StopError
-				// Transient when the provider's own error vocabulary
-				// says so; openai-wire servers use these type strings
-				// for retryable conditions.
-				transient := chunk.Error.Type == "server_error" ||
-					chunk.Error.Type == "rate_limit_error" ||
-					chunk.Error.Type == "overloaded_error"
-				finalErr = NewAPIError(c.Name(), chunk.Error.Message, transient)
+				finalErr = NewAPIError(c.Name(), chunk.Error.Message,
+					transientErrorCode(chunk.Error.Code, chunk.Error.Type, chunk.Error.Message))
 				sendDone()
 				return
 			}

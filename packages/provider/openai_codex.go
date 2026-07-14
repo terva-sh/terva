@@ -853,13 +853,16 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				var p struct {
 					Response struct {
 						Error struct {
+							Code    string `json:"code"`
+							Type    string `json:"type"`
 							Message string `json:"message"`
 						} `json:"error"`
 					} `json:"response"`
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &p)
 				stop = StopError
-				finalErr = NewAPIError("openai-codex", p.Response.Error.Message, false)
+				finalErr = NewAPIError("openai-codex", p.Response.Error.Message,
+					transientErrorCode(p.Response.Error.Code, p.Response.Error.Type, p.Response.Error.Message))
 				sawTerminal = true
 				sendDone()
 				return
@@ -872,9 +875,11 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				var p struct {
 					Message string `json:"message"`
 					Code    string `json:"code"`
+					Type    string `json:"type"`
 					Error   struct {
 						Message string `json:"message"`
 						Code    string `json:"code"`
+						Type    string `json:"type"`
 					} `json:"error"`
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &p)
@@ -895,10 +900,12 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				if code == "" {
 					code = p.Error.Code
 				}
+				kind := p.Type
+				if kind == "" {
+					kind = p.Error.Type
+				}
 				stop = StopError
-				// The gateway uses rate_limit_* codes for transient
-				// throttling on the ChatGPT backend.
-				finalErr = NewAPIError("openai-codex", msg, strings.HasPrefix(code, "rate_limit"))
+				finalErr = NewAPIError("openai-codex", msg, transientErrorCode(code, kind, msg))
 				sawTerminal = true
 				sendDone()
 				return
