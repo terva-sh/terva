@@ -531,6 +531,12 @@ func (w *Workspace) saveEndpoint(ctx context.Context, name, baseURL, apiKey stri
 			}
 		}
 	}
+	// Naming a backend is a login: it is the moment this provider became
+	// reachable, and nothing else will go and ask it what models it serves. Skip
+	// this and the endpoint appears in the picker with an empty model list until
+	// the daemon is restarted — which sends the operator to the TUI to type in by
+	// hand the models the server would have told us.
+	w.applyCredential(name)
 	w.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("providers"))
 	w.BroadcastAll(ctrlproto.AuthStateEvent(ctrlproto.AuthState{Kind: "success", Provider: name, Method: "endpoint"}))
 	return nil

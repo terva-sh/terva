@@ -198,30 +198,10 @@ func (f *acpFactory) ListSessions(cwd string) []acp.SessionInfo {
 	return out
 }
 
-// acpLoggedInProviders returns the set of providers the user is authenticated
-// for, mirroring cli.go's LoggedInProviders: a provider with a resolvable
-// credential, plus ollama (always available, no auth) and openai-compatible
-// (reachable once a base URL is configured). This is how the ACP model menu is
-// scoped to authenticated providers only (plan §14) — the catalog returns
-// every known provider regardless of creds, so we consult the credential store
-// and offer only what the user can actually reach.
-func acpLoggedInProviders() map[string]bool {
-	out := map[string]bool{}
-	for _, p := range build.KnownProviders {
-		if _, _, err := build.ResolveCredential(p, ""); err == nil {
-			out[p] = true
-		}
-	}
-	// Ollama needs no auth.
-	out["ollama"] = true
-	// openai-compatible is reachable once a base URL is configured.
-	if !out["openai-compatible"] {
-		if bu, _, _ := config.AuthStoreFor().Extras("openai-compatible"); bu != "" {
-			out["openai-compatible"] = true
-		}
-	}
-	return out
-}
+// acpLoggedInProviders scopes the ACP model menu to the providers the user can
+// actually reach (plan §14) — the catalog offers every known provider regardless
+// of credentials, and a menu entry that cannot run a turn is not an offer.
+func acpLoggedInProviders() map[string]bool { return build.LoggedInProviderSet() }
 
 // ModelOptions returns the catalog filtered to AUTHENTICATED providers — the
 // ACP `model` config option's selectable values (plan §14 "model menu scope").

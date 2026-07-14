@@ -535,42 +535,10 @@ func readLineRaw(r io.Reader) string {
 
 // ---- interactive mode: opens the TUI even without credentials ----
 
-// loggedInProviderList returns the providers a picker can offer: every
-// provider with a resolvable credential, plus the always-available ollama,
-// plus configured keyless endpoints (openai-compatible and user-defined).
-// Shared by interactive startup and the in-TUI login flow.
+// loggedInProviderList returns the providers a picker can offer. Shared by
+// interactive startup and the in-TUI login flow.
 func loggedInProviderList() []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, p := range build.KnownProviders {
-		if _, _, err := build.ResolveCredential(p, ""); err == nil && !seen[p] {
-			out = append(out, p)
-			seen[p] = true
-		}
-	}
-	// Ollama models are always available (no auth needed).
-	if !seen["ollama"] {
-		out = append(out, "ollama")
-	}
-	// openai-compatible is reachable once configured (base URL set; the API
-	// key is optional, so a keyless endpoint won't have surfaced via
-	// ResolveCredential above).
-	if !seen["openai-compatible"] {
-		if bu, _, _ := config.AuthStoreFor().Extras("openai-compatible"); bu != "" {
-			out = append(out, "openai-compatible")
-		}
-	}
-	// User-defined endpoints are reachable once configured (base URL set;
-	// key optional), so surface each like openai-compatible.
-	if uc, err := config.LoadConfig(); err == nil {
-		for id, ep := range uc.Endpoints {
-			if ep.BaseURL != "" && !seen[id] {
-				out = append(out, id)
-				seen[id] = true
-			}
-		}
-	}
-	return out
+	return build.LoggedInProviders()
 }
 
 // openOrCreateSession returns a session for the run. sess may be nil

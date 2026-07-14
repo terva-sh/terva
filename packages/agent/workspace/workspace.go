@@ -894,7 +894,7 @@ func (w *Workspace) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) {
 	w.mu.Lock()
 	curProv, curModel := w.provider, w.model
 	w.mu.Unlock()
-	authed := webLoggedInProviders()
+	authed := build.LoggedInProviderSet()
 	favs := favoriteModelSet()
 	defProv, defModel, defScope := w.defaultModel()
 	var out []ctrlproto.ModelInfo
@@ -1026,27 +1026,6 @@ func (w *Workspace) applyTrust(ctx context.Context, trusted bool) {
 	for _, s := range sess {
 		s.setTrusted(ctx, trusted)
 	}
-}
-
-// webLoggedInProviders returns the providers the user can actually reach: those
-// with a resolvable credential, plus ollama (no auth) and openai-compatible
-// (once a base URL is configured). Mirrors acpLoggedInProviders so the web model
-// menu — like ACP's — is scoped to authenticated providers instead of the whole
-// catalog. SwitchModel still guards the switch, so a stale entry fails cleanly.
-func webLoggedInProviders() map[string]bool {
-	out := map[string]bool{}
-	for _, p := range build.KnownProviders {
-		if _, _, err := build.ResolveCredential(p, ""); err == nil {
-			out[p] = true
-		}
-	}
-	out["ollama"] = true
-	if !out["openai-compatible"] {
-		if bu, _, _ := config.AuthStoreFor().Extras("openai-compatible"); bu != "" {
-			out["openai-compatible"] = true
-		}
-	}
-	return out
 }
 
 func (w *Workspace) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {
