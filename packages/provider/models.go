@@ -397,6 +397,12 @@ var Catalog = []Model{
 		Speculative: true,
 	},
 	{
+		Provider: "anthropic", ID: "claude-sonnet-5", DisplayName: "Claude Sonnet 5",
+		ContextWindow: 1000000, MaxOutput: 64000, Reasoning: true, AdaptiveThinking: true,
+		PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, PriceCacheWrite: 3.75,
+		Speculative: true,
+	},
+	{
 		Provider: "anthropic", ID: "claude-fable-5", DisplayName: "Claude Fable 5",
 		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
 		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 0.5, PriceCacheWrite: 6.25,
