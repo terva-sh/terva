@@ -94,6 +94,7 @@ func TestACustomEndpointAsksForEverythingItNeeds(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
+		"name":           "text",
 		"base_url":       "text",
 		"model":          "text",
 		"api_key":        "secret",
@@ -118,11 +119,25 @@ func TestACustomEndpointAsksForEverythingItNeeds(t *testing.T) {
 	for _, f := range step.Fields {
 		byName[f.Name] = f
 	}
-	if !byName["base_url"].Required || !byName["model"].Required {
-		t.Error("base_url and model must be required")
+	if !byName["base_url"].Required {
+		t.Error("base_url must be required — without it there is nothing to talk to")
 	}
 	if byName["api_key"].Required {
 		t.Error("the key must be optional — lm studio, llama.cpp and ollama all ignore it")
+	}
+	// The name is what turns this into its own provider instead of overwriting the
+	// single shared slot. Optional, because leaving it empty must keep doing
+	// exactly what it always did.
+	if byName["name"].Required {
+		t.Error("the name must be optional — an empty name is the shared openai-compatible slot, and that behaviour cannot change")
+	}
+	// The model is required for the shared slot and pointless for a named endpoint,
+	// which discovers its own. RequiredUnless is what lets the form say which of the
+	// two the operator is filling in, instead of disabling the button and going
+	// quiet — the exact failure this pane exists to prevent.
+	if !byName["model"].Required || byName["model"].RequiredUnless != "name" {
+		t.Errorf("model must be required unless the endpoint is named; got required=%v required_unless=%q",
+			byName["model"].Required, byName["model"].RequiredUnless)
 	}
 }
 

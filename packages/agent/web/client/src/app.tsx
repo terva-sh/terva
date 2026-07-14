@@ -53,6 +53,7 @@ import { AskRequest as AskRequestView } from './features/interactions/AskRequest
 import { PermissionRequest as PermissionRequestView } from './features/interactions/PermissionRequest'
 import { ModelParamsForm } from './features/models/ModelParamsForm'
 import { ModelPicker } from './features/models/ModelPicker'
+import { AuthStepForm } from './features/providers/AuthStepForm'
 import { SessionInfo as SessionInfoView } from './features/sessions/SessionInfo'
 import { SessionPicker } from './features/sessions/SessionPicker'
 import type { ImageAttachment } from './platform/conversation/images'
@@ -980,6 +981,16 @@ export function App() {
       },
     },
     {
+      name: 'login',
+      desc: t('Open the Providers pane to sign in'),
+      // The TUI's /login opens a dialog; here the Providers pane IS that dialog,
+      // so this opens the pane rather than inventing a second login surface. Like
+      // the tab, it opens even when the daemon serves no login (no
+      // --web-allow-login): the pane then explains why it is read-only, which is
+      // exactly when someone types /login and needs an answer.
+      run: () => openPane('providers'),
+    },
+    {
       name: 'context',
       desc: t('Open the usage & context breakdown'),
       run: () => openPane('context'),
@@ -1000,7 +1011,7 @@ export function App() {
     {
       name: 'help',
       desc: t('List slash commands'),
-      run: () => localNotice(t('Slash commands: /compact, /clear, /skill, /model, /context, /raati, /new. Type / in the composer to autocomplete.')),
+      run: () => localNotice(t('Slash commands: /compact, /clear, /skill, /model, /login, /context, /raati, /new. Type / in the composer to autocomplete.')),
     },
   ]
 
@@ -1244,6 +1255,7 @@ export function App() {
               submit: submitLogin,
               cancel: cancelLogin,
               logout: logoutProvider,
+              removeEndpoint,
             }}
             trusted={!!curInfo?.trusted}
             onTrust={trustWorkspace}
@@ -2197,6 +2209,7 @@ function SurfaceView({
           onSubmit={auth?.submit ?? (() => {})}
           onCancel={auth?.cancel ?? (() => {})}
           onLogout={auth?.logout ?? (() => {})}
+          onRemoveEndpoint={auth?.removeEndpoint ?? (() => {})}
         />
       )
     default:
@@ -2215,6 +2228,9 @@ interface AuthPaneProps {
   submit: (values: Record<string, string>) => void
   cancel: () => void
   logout: (provider: string) => void
+  // Forgets a named endpoint's DEFINITION, not just its key — a separate verb
+  // from logout on purpose. See ProviderInfo.endpoint.
+  removeEndpoint: (id: string) => void
 }
 
 // authMessage unwraps a ctrlproto error for display. The daemon's text is the
@@ -2225,91 +2241,6 @@ function authMessage(e: unknown): string {
   // Frames arrive as "code: message"; the code is for us, the message is for them.
   const i = m.indexOf(': ')
   return i > 0 ? m.slice(i + 2) : m
-}
-
-// AuthStepForm renders whatever the daemon asked for.
-//
-// It knows nothing about any provider. It is handed a list of labelled fields and
-// gives back a name→value map — which is the entire point of the descriptor: a
-// provider that wants a field nobody anticipated costs a daemon change and
-// nothing here. The one thing it will not do is decide what is VALID; integer
-// fields go back as strings and the daemon parses, so there is exactly one
-// authority on what a context window may be rather than three that can disagree.
-function AuthStepForm({
-  step,
-  onSubmit,
-  onCancel,
-  busy,
-  error,
-}: {
-  step: AuthFlowStep
-  onSubmit: (values: Record<string, string>) => void
-  onCancel: () => void
-  busy: boolean
-  error: string
-}) {
-  const fields = step.fields ?? []
-  const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(fields.map((f) => [f.name, f.default ?? ''])),
-  )
-  const incomplete = fields.some((f) => f.required && !values[f.name]?.trim())
-
-  return (
-    <div class="prov-flow">
-      {step.title ? <div class="prov-flow-title">{step.title}</div> : null}
-      {step.lines?.map((l, i) => (
-        <div key={i} class="prov-note">
-          {l}
-        </div>
-      ))}
-
-      {/* Displayed, never opened FOR you: the daemon may be on another machine
-          entirely, and the browser that has to visit this is the one you are
-          reading it in. */}
-      {step.url ? (
-        <a class="prov-url" href={step.url} target="_blank" rel="noreferrer noopener">
-          {step.url}
-        </a>
-      ) : null}
-      {step.user_code ? <div class="prov-code">{step.user_code}</div> : null}
-
-      {step.kind === 'display' ? (
-        <div class="prov-note">{t('Waiting for you to approve it — this updates by itself.')}</div>
-      ) : null}
-
-      {fields.map((f) => (
-        <label key={f.name} class="prov-field">
-          <span class="prov-label">
-            {f.label}
-            {f.required ? '' : ` ${t('(optional)')}`}
-          </span>
-          <input
-            type={f.type === 'secret' ? 'password' : 'text'}
-            inputMode={f.type === 'integer' ? 'numeric' : undefined}
-            autocomplete="off"
-            spellcheck={false}
-            placeholder={f.placeholder}
-            value={values[f.name] ?? ''}
-            onInput={(e) => setValues({ ...values, [f.name]: (e.target as HTMLInputElement).value })}
-          />
-          {f.help ? <span class="prov-help">{f.help}</span> : null}
-        </label>
-      ))}
-
-      {error ? <div class="prov-warn">{error}</div> : null}
-
-      <div class="prov-actions">
-        {step.kind === 'form' ? (
-          <button class="btn" disabled={busy || incomplete} onClick={() => onSubmit(values)}>
-            {busy ? t('Signing in…') : t('Sign in')}
-          </button>
-        ) : null}
-        <button class="btn ghost" onClick={onCancel}>
-          {step.kind === 'info' ? t('Close') : t('Cancel')}
-        </button>
-      </div>
-    </div>
-  )
 }
 
 // ProvidersBody renders the daemon's MODEL-PROVIDER credentials, and — when the
@@ -2329,6 +2260,7 @@ function ProvidersBody({
   onSubmit,
   onCancel,
   onLogout,
+  onRemoveEndpoint,
   busy,
   error,
 }: {
@@ -2338,13 +2270,24 @@ function ProvidersBody({
   onSubmit: (values: Record<string, string>) => void
   onCancel: () => void
   onLogout: (provider: string) => void
+  onRemoveEndpoint: (id: string) => void
   busy: boolean
   error: string
 }) {
   const all = v.providers ?? []
-  const active = all.filter((p) => p.method)
-  const available = all.filter((p) => !p.method)
+  // The operator's own servers are their own group. Sorted by credential they
+  // would land in "not signed in" — a keyless local server has no credential and
+  // never will — and be offered a login it does not need, next to providers it has
+  // nothing to do with.
+  const endpoints = all.filter((p) => p.endpoint)
+  const shipped = all.filter((p) => !p.endpoint)
+  const active = shipped.filter((p) => p.method)
+  const available = shipped.filter((p) => !p.method)
   const canLogin = !!v.can_login
+  // Removing an endpoint deletes terva's only record of a machine — which host,
+  // which port, which context window. Cheap to re-type only if you remember it, so
+  // the button asks once.
+  const [confirmRemove, setConfirmRemove] = useState('')
 
   const methodLabel = (p: ProviderInfo) => {
     if (p.method === 'oauth') return t('subscription')
@@ -2411,6 +2354,50 @@ function ProvidersBody({
           ) : null}
         </div>
       ))}
+
+      {endpoints.length ? (
+        <>
+          <div class="prov-note">
+            {t('Your OpenAI-compatible endpoints — each is its own provider and lists its own models.')}
+          </div>
+          {endpoints.map((p) => (
+            <div key={p.id} class="ext-card">
+              <div class="ext-head">
+                <span class="ext-name">{p.label}</span>
+                <span class="ext-badge s-running">{t('endpoint')}</span>
+              </div>
+              <div class="ext-meta">{p.base_url}</div>
+              {canLogin ? (
+                <div class="prov-actions">
+                  {confirmRemove === p.id ? (
+                    <>
+                      {/* Say what will be lost, not just "are you sure". The base URL is
+                          the thing nobody remembers. */}
+                      <span class="prov-help">{t('Forget %s? terva keeps no other record of it.', p.base_url ?? p.id)}</span>
+                      <button
+                        class="btn"
+                        onClick={() => {
+                          setConfirmRemove('')
+                          onRemoveEndpoint(p.id)
+                        }}
+                      >
+                        {t('Forget it')}
+                      </button>
+                      <button class="btn ghost" onClick={() => setConfirmRemove('')}>
+                        {t('Cancel')}
+                      </button>
+                    </>
+                  ) : (
+                    <button class="btn ghost" onClick={() => setConfirmRemove(p.id)}>
+                      {t('Remove')}
+                    </button>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </>
+      ) : null}
 
       {available.length ? (
         <>

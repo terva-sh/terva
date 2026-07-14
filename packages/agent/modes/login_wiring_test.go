@@ -18,10 +18,11 @@ type authCarrier struct {
 
 	// Guarded: a submit is dispatched on its own goroutine (it talks to a provider
 	// over the network in production), so the recording races the assertion.
-	mu        sync.Mutex
-	started   []ctrlproto.AuthLoginStartParams
-	submitted []ctrlproto.AuthLoginSubmitParams
-	logouts   []string
+	mu               sync.Mutex
+	started          []ctrlproto.AuthLoginStartParams
+	submitted        []ctrlproto.AuthLoginSubmitParams
+	logouts          []string
+	endpointsRemoved []string
 }
 
 func (a *authCarrier) starts() []ctrlproto.AuthLoginStartParams {
@@ -61,6 +62,15 @@ func (a *authCarrier) AuthLoginCancel(_ context.Context, _ ctrlproto.AuthFlowRef
 func (a *authCarrier) AuthLogout(_ context.Context, p ctrlproto.AuthLogoutParams) error {
 	a.mu.Lock()
 	a.logouts = append(a.logouts, p.Provider)
+	a.mu.Unlock()
+	return nil
+}
+
+// Recorded separately from logouts, because they are separate acts: a logout
+// forgets a secret, this forgets the operator's definition of a machine.
+func (a *authCarrier) AuthEndpointRemove(_ context.Context, p ctrlproto.AuthEndpointRemoveParams) error {
+	a.mu.Lock()
+	a.endpointsRemoved = append(a.endpointsRemoved, p.ID)
 	a.mu.Unlock()
 	return nil
 }

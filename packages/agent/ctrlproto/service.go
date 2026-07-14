@@ -614,6 +614,14 @@ type ProviderInfo struct {
 	BaseURL string `json:"base_url,omitempty"`
 	Model   string `json:"model,omitempty"`
 
+	// Endpoint marks a row the OPERATOR defined — a named openai-compatible
+	// server in config.json's `endpoints`, which is its own provider and runs its
+	// own /v1/models discovery. It is a DEFINITION, not a credential, which is why
+	// it is removed by its own verb and not by a logout: signing out of a provider
+	// forgets a secret, while forgetting this would delete the operator's record of
+	// a machine. A client needs the distinction to offer the right control.
+	Endpoint bool `json:"endpoint,omitempty"`
+
 	// Note is setup guidance for a provider terva stores no credential for at all
 	// (bedrock, vertex, azure, cloudflare ×2). For those, "logging in" means
 	// setting an environment variable, and the honest thing is to say so rather

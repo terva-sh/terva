@@ -101,6 +101,17 @@ const (
 	MethodAuthLoginSubmit Method = "auth.login.submit" // params AuthLoginSubmitParams; carries the secret
 	MethodAuthLoginCancel Method = "auth.login.cancel" // params AuthFlowRef
 	MethodAuthLogout      Method = "auth.logout"       // params AuthLogoutParams
+	// MethodAuthEndpointRemove forgets a named openai-compatible endpoint. In the
+	// auth group, not the session one: defining or forgetting a backend the agent
+	// will talk to is at least as privileged as holding its key.
+	MethodAuthEndpointRemove Method = "auth.endpoint.remove" // params AuthEndpointRemoveParams
+
+	// Per-model overrides (models.json): context window, max tokens, temperature.
+	// In the control group — they change what the running agent talks to, and a
+	// base URL among them points it at a different machine entirely.
+	MethodModelParams      Method = "models.params"       // params ModelParamsParams, result ModelParamsView
+	MethodModelParamsSet   Method = "models.params.set"   // params ModelParamsSetParams
+	MethodModelParamsReset Method = "models.params.reset" // params ModelParamsParams
 
 	// Side chat: an ephemeral, tool-less completion against a FROZEN snapshot of
 	// a session, leaving no trace in its transcript. Backs the /btw overlay.
@@ -146,11 +157,13 @@ func (m Method) Group() Group {
 		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault,
+		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
 		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume:
 		return GroupControl
 	case MethodReplayControl, MethodReplayState:
 		return GroupReplay
-	case MethodAuthLoginStart, MethodAuthLoginSubmit, MethodAuthLoginCancel, MethodAuthLogout:
+	case MethodAuthLoginStart, MethodAuthLoginSubmit, MethodAuthLoginCancel, MethodAuthLogout,
+		MethodAuthEndpointRemove:
 		return GroupAuth
 	}
 	return ""

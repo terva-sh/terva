@@ -546,6 +546,12 @@ export interface AuthField {
   // daemon parses, so there is exactly one place that decides what is valid.
   type: 'text' | 'secret' | 'integer'
   required?: boolean
+  // Names another field that relaxes this one: required only while THAT field is
+  // empty. openai-compatible's default model needs it — mandatory for the single
+  // shared slot, pointless for a named endpoint, which discovers its own models.
+  // Without it the form could not tell the operator what is still outstanding,
+  // and a form that goes quietly dead is the bug this pane exists to prevent.
+  required_unless?: string
   default?: string
   placeholder?: string
   help?: string
@@ -575,6 +581,11 @@ export interface ProviderInfo {
   offers?: string[] // apikey | oauth | env
   base_url?: string
   model?: string
+  // A server the OPERATOR named (config.json "endpoints"): its own provider, with
+  // its own /v1/models discovery. A definition, not a credential — so it is
+  // removed by its own verb, never by a logout. Signing out forgets a secret you
+  // can re-enter; forgetting this deletes terva's only record of a machine.
+  endpoint?: boolean
   // Setup guidance for a provider terva stores no credential for at all — for
   // these, "logging in" means setting environment variables.
   note?: string[]
@@ -681,3 +692,31 @@ export interface Decision {
 }
 
 export type Status = 'connecting' | 'open' | 'closed'
+
+// The per-model overrides in models.json — context window, max tokens,
+// temperature. Described by the daemon, rendered blind by the client: nothing
+// here names a setting, so a provider that gains a knob costs no client change.
+export interface ModelParamSpec {
+  key: string
+  label: string
+  // A rendering hint. Everything goes back as a string and the DAEMON parses —
+  // bounds live in packages/provider, and a second opinion on the wire is a
+  // second thing to disagree.
+  kind: 'text' | 'int' | 'float'
+  // What this model takes with NO override. Belongs in the placeholder, never in
+  // the box: a pre-filled default reads as an override and would be saved as one.
+  default?: string
+  // The override currently pinned in models.json, or "" for none.
+  value?: string
+  min?: number
+  max?: number
+  help?: string
+}
+
+export interface ModelParamsView {
+  provider: string
+  model: string
+  // Whether models.json holds an entry — i.e. whether a reset would do anything.
+  has_override?: boolean
+  params: ModelParamSpec[]
+}

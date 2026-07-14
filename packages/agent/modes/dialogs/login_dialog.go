@@ -449,6 +449,27 @@ func (d *LoginDialog) fieldValue(i int) string {
 	return strings.TrimSpace(d.eds[i].Value())
 }
 
+// fieldNeeded reports whether f must be filled in RIGHT NOW.
+//
+// RequiredUnless names another field that relaxes this one. Naming an
+// openai-compatible endpoint makes its default model pointless — a named endpoint
+// is its own provider and discovers the models the server serves — so demanding
+// one would be asking the operator to paste back what terva is about to find for
+// itself. The daemon re-checks at submit; this only decides what the dialog asks.
+func (d *LoginDialog) fieldNeeded(f ctrlproto.AuthField) bool {
+	if !f.Required || f.RequiredUnless == "" {
+		return f.Required
+	}
+	for i, other := range d.flow.Fields {
+		if other.Name == f.RequiredUnless {
+			return d.fieldValue(i) == ""
+		}
+	}
+	// The field it names does not exist. Fall back to required: refusing a login is
+	// recoverable, silently accepting an incomplete one is not.
+	return true
+}
+
 // renderFlow draws the descriptor: a title, some prose, a URL to open, a device
 // code to type, and one labelled editor per field. It branches on Kind, never on
 // which provider this is.
@@ -484,7 +505,7 @@ func (d *LoginDialog) renderFlow(th tui.Theme, width int) []string {
 	for i, f := range d.flow.Fields {
 		lines = append(lines, "")
 		label := f.Label
-		if !f.Required {
+		if !d.fieldNeeded(f) {
 			label += i18n.T(" (optional)")
 		}
 		if i == d.edIdx {
@@ -556,10 +577,13 @@ func (d *LoginDialog) handleFlowKey(k tui.Key) loginDialogAction {
 		return loginDialogAction{}
 	}
 
+	// fieldNeeded, not f.Required: see the method. The label and this check must
+	// agree, or the dialog marks a field optional and then refuses to submit
+	// without it.
 	values := map[string]string{}
 	for i, f := range d.flow.Fields {
 		v := d.fieldValue(i)
-		if f.Required && v == "" {
+		if d.fieldNeeded(f) && v == "" {
 			d.flowErr = i18n.T("%s is required", f.Label)
 			d.edIdx = i
 			return loginDialogAction{}

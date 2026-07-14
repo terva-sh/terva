@@ -260,12 +260,18 @@ has no fixed base URL and is configured through `/login`.
 
 ### Logging in
 
-Run `/login` and choose **OpenAI Compatible (local/custom)**. terva shows a
-form collecting three things (plus an optional API key):
+Run `/login` and choose **OpenAI Compatible (local/custom)** — in the terminal or
+in the web panel's **Providers** pane, which serve the same form. terva collects:
 
+- **name** — *optional, and the one that matters if you run more than one server.*
+  Name it and the endpoint becomes **its own provider**, kept alongside your
+  others; leave it empty and it goes into the single shared `openai-compatible`
+  slot, **replacing whatever was there**. See [Several at once](#several-endpoints-at-once).
 - **base url** — where requests go, e.g. `http://localhost:1234/v1`. terva lists
   the endpoint's models once to confirm it's reachable.
 - **default model id** — the model selected after login, e.g. `qwen2.5-coder`.
+  Required for the shared slot; **not needed for a named endpoint**, which
+  discovers the models the server serves.
 - **default context window** — applied to discovered models the server doesn't
   describe a size for (optional; leave blank if unsure).
 
@@ -299,16 +305,48 @@ gateways' `context_length` / `context_window`) when present, and otherwise
 applies your **default context window**. For exact per-model sizing, pin the
 model in `models.json` (see below).
 
-### One endpoint per login; use models.json for several
+### Several endpoints at once
 
-`/login` stores exactly **one** openai-compatible endpoint. The base URL,
-default model, optional key, and default context window live under a single
-`openai-compatible` entry in `auth.json`, so logging in to a second endpoint
-**overwrites the first** — there is no second slot and no per-endpoint naming.
+**Name the endpoint when you log in.** A named endpoint is registered as its own
+provider under that name — with its own `/v1/models` discovery and its own rows in
+`/model` — and it does not touch any other. This is how you run a small model on
+one machine for titles and a large one on another for the work:
 
-To use several endpoints at once, register them in `models.json` instead. Each
-model entry pins its own `baseUrl`, so many endpoints coexist in `/model`
-simultaneously and none clobbers another:
+```
+/login → OpenAI Compatible → name: workshop-3090   base url: http://3090.box:8000/v1
+/login → OpenAI Compatible → name: little-box      base url: http://mini.box:1234/v1
+```
+
+Named endpoints are recorded in `$TERVA_HOME/config.json` under `endpoints`, so you
+can also write them by hand:
+
+```json
+{
+  "endpoints": {
+    "workshop-3090": { "baseUrl": "http://3090.box:8000/v1", "contextWindow": 131072 },
+    "little-box":    { "baseUrl": "http://mini.box:1234/v1",  "apiKeyEnv": "LITTLE_BOX_KEY" }
+  }
+}
+```
+
+Keys are **never** stored in `config.json`. Give a key at login and it goes into
+`auth.json` under the endpoint's name; or point `apiKeyEnv` at an environment
+variable. Most local servers want no key at all.
+
+The web panel's **Providers** pane lists your named endpoints and can forget one
+(its definition *and* its key — a sign-out would only clear the key and leave the
+server configured).
+
+**Leaving the name empty** puts the endpoint in the single shared
+`openai-compatible` slot in `auth.json`, which holds exactly one: logging in
+without a name a second time **overwrites the first**. That slot is fine for a
+single server and is what `--base-url` and the CLI flags below drive.
+
+#### The older route: per-model baseUrl in models.json
+
+Predates named endpoints and still works. Each model entry pins its own `baseUrl`,
+so many endpoints coexist in `/model` — but you must hand-list every model, because
+there is no discovery:
 
 ```json
 {
@@ -330,16 +368,13 @@ ids/URLs, then run `terva --list-models` to confirm the entries load (they show
 you pass `--force`. A per-launch `--base-url` override also works for a one-off
 without touching the stored login.
 
-**Prefer named endpoints when a server should list its own models.** The
-`models.json` pattern above only shows the entries you hand-list; a *named
-endpoint* (defined in `config.json` under `endpoints`) becomes its own provider
-that runs `/v1/models` discovery, so you don't pre-register each model. The two
-coexist, so there's no forced migration. To convert an existing multi-`baseUrl`
-`models.json`, run `terva models endpoints` — it prints a ready-to-paste
-`endpoints` block (or `--apply` writes it to `config.json`) and flags the
-now-redundant `models.json` entries for you to trim. See
-[models.md](models.md#openai-compatible-endpoints-lm-studio-vllm-llamacpp-gateways)
-for the named-endpoints reference and the full lift-and-trim path.
+**Prefer named endpoints when a server should list its own models** — name it at
+`/login` and there is nothing to hand-list. The `models.json` pattern above shows
+only the entries you write out yourself. The two coexist, so there is no forced
+migration. To convert an existing multi-`baseUrl` `models.json`, run `terva models
+endpoints` — it prints a ready-to-paste `endpoints` block (or `--apply` writes it
+to `config.json`) and flags the now-redundant `models.json` entries for you to
+trim.
 
 ## Context window and max response tokens
 

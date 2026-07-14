@@ -647,6 +647,15 @@ func TervaHome() string {
 // ConfigPath returns the path to config.json.
 func ConfigPath() string { return filepath.Join(TervaHome(), "config.json") }
 
+// UserModelsPath returns the path to the user's models.json — the highest-
+// precedence model layer, holding per-model overrides (context window, max
+// tokens, temperature, base URL).
+//
+// It lives here rather than in packages/agent because the WORKSPACE has to write
+// it too, and the workspace cannot import its own parent. One helper, so the two
+// callers cannot drift onto different files.
+func UserModelsPath() string { return filepath.Join(TervaHome(), "models.json") }
+
 // DefaultPersonaName is the agent's out-of-the-box persona name. "Mieli" is
 // Finnish for "mind" — the mind housed inside terva (Finnish for pine tar, the
 // preservative that sealed boats and kept them seaworthy): a mind in a

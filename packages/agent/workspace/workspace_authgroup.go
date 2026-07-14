@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider/auth"
@@ -258,11 +259,20 @@ func (w *Workspace) startAPIKeyForm(m *auth.Manager, provider string, local bool
 			Flow:  flow,
 			Kind:  "form",
 			Title: i18n.T("Connect an OpenAI-compatible endpoint"),
-			Lines: []string{i18n.T("Point terva at any OpenAI-compatible server: LM Studio, vLLM, llama.cpp, Ollama's /v1, or a gateway.")},
-			URL:   browserURL,
+			Lines: []string{
+				i18n.T("Point terva at any OpenAI-compatible server: LM Studio, vLLM, llama.cpp, Ollama's /v1, or a gateway."),
+				i18n.T("Name it to keep several servers at once — each named endpoint is its own provider and lists its own models. Leave the name empty and this replaces the single shared endpoint."),
+			},
+			URL: browserURL,
 			Fields: []ctrlproto.AuthField{
+				{Name: "name", Label: i18n.T("Name"), Type: "text", Placeholder: "workshop-3090",
+					Help: i18n.T("Optional. Naming it keeps your other endpoints; leaving it empty overwrites the shared one.")},
 				{Name: "base_url", Label: i18n.T("Base URL"), Type: "text", Required: true, Placeholder: "http://localhost:1234/v1"},
-				{Name: "model", Label: i18n.T("Default model"), Type: "text", Required: true, Placeholder: "qwen2.5-coder"},
+				// Required for the shared slot, pointless for a named endpoint: that one
+				// discovers its own models, so there is nothing to type. RequiredUnless
+				// lets the form say which of the two you are filling in.
+				{Name: "model", Label: i18n.T("Default model"), Type: "text", Required: true, RequiredUnless: "name", Placeholder: "qwen2.5-coder",
+					Help: i18n.T("Not needed for a named endpoint — it discovers the models the server serves.")},
 				{Name: "api_key", Label: i18n.T("API key"), Type: "secret", Help: i18n.T("Optional — many local servers ignore it.")},
 				{Name: "context_window", Label: i18n.T("Default context window"), Type: "integer", Placeholder: "32768"},
 			},
@@ -382,6 +392,25 @@ func (w *Workspace) AuthLoginSubmit(ctx context.Context, p ctrlproto.AuthLoginSu
 			}
 			win = n
 		}
+		if name := val("name"); name != "" {
+			// A named endpoint is a provider DEFINITION, not a credential, so it does
+			// not go where a login goes. It is written to config.json (the operator's
+			// own layer, never a project's — a checked-in project config must not be
+			// able to point the agent at someone else's server), and its key, if the
+			// server even wants one, lands in auth.json under this same id, which is
+			// exactly where ResolveCredential already looks for it.
+			if err := w.saveEndpoint(ctx, name, val("base_url"), val("api_key"), win); err != nil {
+				return w.failFlow(p.Flow, fl.provider, err)
+			}
+			break
+		}
+		if val("model") == "" {
+			// The shared slot has no discovery to fall back on, so it genuinely needs
+			// a model. The form says so too (RequiredUnless), but the form is an
+			// affordance and this is the authority.
+			return w.failFlow(p.Flow, fl.provider, ctrlproto.Errorf(ctrlproto.CodeBadRequest,
+				"a default model is required, or name this endpoint and terva will discover its models"))
+		}
 		if err := m.CompleteCompatAPIKey(ctx, val("base_url"), val("model"), val("api_key"), win); err != nil {
 			return authErr(err)
 		}
@@ -464,6 +493,82 @@ func (w *Workspace) AuthLogout(_ context.Context, p ctrlproto.AuthLogoutParams) 
 	// phone changes what the laptop can do.
 	w.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("providers"))
 	w.BroadcastAll(ctrlproto.AuthStateEvent(ctrlproto.AuthState{Kind: "success", Provider: p.Provider, Method: "logout"}))
+	return nil
+}
+
+// saveEndpoint records a named openai-compatible server: its definition in
+// config.json, its key (if the server wants one) in auth.json under the same id.
+//
+// The endpoint is PROBED first. Writing an unreachable backend would leave the
+// operator with a provider that appears in /model and fails on the first turn,
+// and the failure would surface as a broken conversation rather than as a typo in
+// a base URL — which is the whole reason the shared slot probes too.
+func (w *Workspace) saveEndpoint(ctx context.Context, name, baseURL, apiKey string, win int) error {
+	if err := ValidEndpointName(name); err != nil {
+		return err
+	}
+	if err := auth.ProbeOpenAICompatible(ctx, baseURL, apiKey); err != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", err.Error())
+	}
+	// MutateConfig, never LoadConfig+SaveConfig: SaveConfig is a whole-file
+	// overwrite, and the web has N sessions that can each be saving a setting.
+	if err := config.MutateConfig(func(c *config.Config) {
+		if c.Endpoints == nil {
+			c.Endpoints = map[string]config.EndpointConfig{}
+		}
+		c.Endpoints[name] = config.EndpointConfig{BaseURL: baseURL, ContextWindow: win}
+	}); err != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "could not save the endpoint: %v", err)
+	}
+	// Only if there is one. A key written for a server that ignores keys is a
+	// secret stored for no reason.
+	if apiKey != "" {
+		if m := w.authManager(); m != nil {
+			if store := m.Store(); store != nil {
+				if err := store.SetAPIKey(name, apiKey); err != nil {
+					return ctrlproto.Errorf(ctrlproto.CodeInternal, "endpoint saved, but its key was not: %v", err)
+				}
+			}
+		}
+	}
+	w.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("providers"))
+	w.BroadcastAll(ctrlproto.AuthStateEvent(ctrlproto.AuthState{Kind: "success", Provider: name, Method: "endpoint"}))
+	return nil
+}
+
+// AuthEndpointRemove forgets a named endpoint: its config entry and any key
+// stored under its id.
+//
+// Not a logout, and not reachable through one. A logout forgets a secret and
+// leaves the provider there to sign back into; this forgets which machine, which
+// port, which context window — and nothing in terva remembers those but this
+// entry. So it is a verb an operator has to ask for by name.
+func (w *Workspace) AuthEndpointRemove(_ context.Context, p ctrlproto.AuthEndpointRemoveParams) error {
+	m := w.authManager()
+	if m == nil {
+		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "this daemon does not serve provider logins")
+	}
+	id := strings.TrimSpace(p.ID)
+	if _, ok := configEndpoints()[id]; !ok {
+		// Refuse rather than no-op: "removed" for something that was never there
+		// would let a typo look like a success, and the operator would go on
+		// believing a backend is gone when it is still serving the agent.
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no endpoint named %q", id)
+	}
+	if err := config.MutateConfig(func(c *config.Config) {
+		delete(c.Endpoints, id)
+	}); err != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "could not remove the endpoint: %v", err)
+	}
+	// The key outlives the definition otherwise: a secret for a provider that no
+	// longer exists, which nothing would ever show the operator again.
+	if store := m.Store(); store != nil {
+		if err := store.Clear(id); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "endpoint removed, but its key was not: %v", err)
+		}
+	}
+	w.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("providers"))
+	w.BroadcastAll(ctrlproto.AuthStateEvent(ctrlproto.AuthState{Kind: "success", Provider: id, Method: "endpoint-removed"}))
 	return nil
 }
 

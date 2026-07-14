@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"terva.sh/terva/packages/agent/config"
@@ -63,6 +64,27 @@ func (w *Workspace) AuthProviders(_ context.Context) (ctrlproto.ProvidersView, e
 		}
 		out = append(out, info)
 	}
+	// The operator's own openai-compatible servers (config.json "endpoints"). Each
+	// is already its own provider with its own /v1/models discovery — but nothing
+	// here could SEE one: this list is auth.Describe's, which enumerates the static
+	// catalog and overlays stored credentials, and a named endpoint is in neither
+	// (not built in, and a local server usually needs no key). So terva shipped the
+	// feature and then hid it. These rows are what make it real.
+	for id, ep := range configEndpoints() {
+		info := ctrlproto.ProviderInfo{
+			ID:       id,
+			Label:    id, // the operator named it; do not second-guess them
+			Endpoint: true,
+			BaseURL:  ep.BaseURL,
+		}
+		// Ask the credentials directly, not auth.Describe: Describe enumerates the
+		// static catalog, and this id is by definition not in it, so its state would
+		// always come back empty. A key is optional here anyway (most local servers
+		// ignore one), so this reports only whether there IS one.
+		info.Method = creds.Method(id)
+		out = append(out, info)
+	}
+
 	// A map has no order, and a pane that reshuffles itself between fetches is a
 	// bug. Logged-in providers first — that is what the reader came for — then by
 	// label.
@@ -82,6 +104,68 @@ func (w *Workspace) AuthProviders(_ context.Context) (ctrlproto.ProvidersView, e
 		CanLogin: w.canLogin(),
 	}, nil
 }
+
+// configEndpoints returns the operator's named openai-compatible endpoints,
+// skipping any with no base URL — a half-written entry is not a backend, and a
+// row for it would only offer to remove something that never worked.
+//
+// A failed config load yields none rather than an error, for the same reason the
+// caller tolerates an unreadable credential file: a pane that explains the
+// providers it CAN see beats a pane that blanks itself.
+func configEndpoints() map[string]config.EndpointConfig {
+	c, err := config.LoadConfig()
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]config.EndpointConfig, len(c.Endpoints))
+	for id, ep := range c.Endpoints {
+		if strings.TrimSpace(ep.BaseURL) == "" {
+			continue
+		}
+		out[id] = ep
+	}
+	return out
+}
+
+// ValidEndpointName reports whether id may name a new endpoint, and says why not
+// when it may not.
+//
+// The name becomes a PROVIDER ID — it is what /model groups by, what auth.json
+// keys a credential under, and what config.json records. So it may not collide
+// with a provider terva ships: an endpoint called "anthropic" would shadow the
+// real one in every one of those places, and the operator would be debugging a
+// machine they own against a name they did not choose. Nor may it be
+// "openai-compatible", which is the single shared slot this exists to escape.
+func ValidEndpointName(id string) error {
+	id = strings.TrimSpace(id)
+	switch {
+	case id == "":
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "name this endpoint, or leave the name empty to use the shared openai-compatible slot")
+	case id == compatSharedSlot:
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%q is the shared slot's own name; choose another", compatSharedSlot)
+	}
+	// A provider id travels through config keys, a credential file, and a model
+	// picker. Keep it to something that cannot be mistaken for punctuation in any
+	// of them.
+	for _, r := range id {
+		if !(r == '-' || r == '_' || r == '.' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
+				"an endpoint name may use letters, digits, dash, underscore and dot only")
+		}
+	}
+	for _, p := range append(auth.APIKeyProviders(), auth.OAuthProviders()...) {
+		if p == id {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
+				"%q is a provider terva already ships; choose another name", id)
+		}
+	}
+	return nil
+}
+
+// compatSharedSlot is the single openai-compatible entry in auth.json — the one
+// a second login overwrites, and the reason named endpoints exist.
+const compatSharedSlot = "openai-compatible"
 
 // offersFor reports how a provider can be logged into.
 //

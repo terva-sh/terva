@@ -31,6 +31,9 @@ type AuthController interface {
 	AuthLoginCancel(ctx context.Context, p AuthFlowRef) error
 	// AuthLogout clears a stored credential.
 	AuthLogout(ctx context.Context, p AuthLogoutParams) error
+	// AuthEndpointRemove forgets a named openai-compatible endpoint — the
+	// definition, not just its key. See AuthEndpointRemoveParams.
+	AuthEndpointRemove(ctx context.Context, p AuthEndpointRemoveParams) error
 }
 
 // AuthLoginStartParams begins a login.
@@ -129,11 +132,19 @@ type AuthField struct {
 	// parses. The context-window field is already parsed and range-checked in the
 	// TUI dialog AND again in the auth manager; a typed int on the wire would add
 	// a third site to disagree. One authority, at the end.
-	Type        string `json:"type"`
-	Required    bool   `json:"required,omitempty"`
-	Default     string `json:"default,omitempty"`
-	Placeholder string `json:"placeholder,omitempty"`
-	Help        string `json:"help,omitempty"`
+	Type     string `json:"type"`
+	Required bool   `json:"required,omitempty"`
+	// RequiredUnless names another field that relaxes this one: required only
+	// while THAT field is empty. openai-compatible's default model needs it —
+	// mandatory for the single shared slot, pointless for a named endpoint, which
+	// discovers its own models. Without it the client could not tell the user what
+	// is still outstanding before they press the button, and a form that goes
+	// quietly dead is the bug this whole surface exists to avoid. The daemon still
+	// re-checks at submit: this is an affordance, never the authority.
+	RequiredUnless string `json:"required_unless,omitempty"`
+	Default        string `json:"default,omitempty"`
+	Placeholder    string `json:"placeholder,omitempty"`
+	Help           string `json:"help,omitempty"`
 }
 
 // AuthLoginSubmitParams completes a form step. Values is keyed by AuthField.Name.
@@ -151,6 +162,18 @@ type AuthLoginSubmitParams struct {
 // other standing. auth.Describe owns that split; this just names which.
 type AuthLogoutParams struct {
 	Provider string `json:"provider"`
+}
+
+// AuthEndpointRemoveParams forgets a named openai-compatible endpoint: its entry
+// in config.json's `endpoints`, and any key stored under that id.
+//
+// Deliberately NOT a logout. A logout forgets a secret and the provider is still
+// there to sign back into; this forgets the operator's DEFINITION of a server —
+// which host, which port, which context window. Making "sign out" do that
+// silently would be a trap, so the two verbs stay apart even though the same
+// pane offers both.
+type AuthEndpointRemoveParams struct {
+	ID string `json:"id"`
 }
 
 // AuthState is the auth_state event: a login flow's progress.
