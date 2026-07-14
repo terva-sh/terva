@@ -105,6 +105,7 @@ func PrintHelp(version string) {
 		row{"terva web", i18n.T("browser control panel (self-hosted web ui)")},
 		row{"terva attach [URL]", i18n.T("run the TUI as a client of a running terva web daemon (default ws://127.0.0.1:8730/ws; --token for auth). Survives daemon restarts; quit and re-attach without disturbing the agent")},
 		row{"terva trust / untrust", i18n.T("manage which directories load project extensions/skills/context")},
+		row{"terva doctor", i18n.T("report effective privilege & deployment posture (uid, no-new-privs, sudo)")},
 		row{"terva project ...", i18n.T("project-scoped agents (data + extensions pinned to a directory)")},
 		row{"terva migrate", i18n.T("migrate a legacy install's data to the terva location")},
 		row{"terva update", i18n.T("download and install the latest release")},

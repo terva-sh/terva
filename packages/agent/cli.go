@@ -149,6 +149,9 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runTrustCommand(rawArgs); handled {
 		return err
 	}
+	if handled, err := runDoctorCommand(rawArgs); handled {
+		return err
+	}
 	if handled, err := runUnjailCommand(rawArgs); handled {
 		return err
 	}
