@@ -7,8 +7,10 @@ package dialogs
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +21,11 @@ import (
 // scriptedAsker records what it was asked and answers from a queue. A nil entry
 // blocks until released, so a test can hold an ask in flight.
 type scriptedAsker struct {
+	// entered counts Ask CALLS, bumped on entry and before the mutex, so it
+	// stays meaningful even if the recording below somehow isn't. It exists to
+	// tell "Ask never ran" apart from "Ask ran and its record went missing" —
+	// see askerState.
+	entered   atomic.Int64
 	mu        sync.Mutex
 	priors    [][]SideChatExchange
 	questions []string
@@ -28,6 +35,7 @@ type scriptedAsker struct {
 }
 
 func (a *scriptedAsker) Ask(ctx context.Context, prior []SideChatExchange, question string) (string, error) {
+	a.entered.Add(1)
 	a.mu.Lock()
 	a.priors = append(a.priors, prior)
 	a.questions = append(a.questions, question)
@@ -59,7 +67,29 @@ func (a *scriptedAsker) snapshot() ([][]SideChatExchange, []string, int) {
 	return a.priors, append([]string(nil), a.questions...), a.closed
 }
 
-func waitUntil(t *testing.T, what string, pred func() bool) {
+// askerState is what a failure in here has to print to be diagnosable at all.
+//
+// A Windows CI run once failed the seeded-ask test with "asked []" — and that
+// message cannot be acted on, because fmt renders both []string{} and
+// []string{""} as exactly "[]". "No question was asked" and "an empty question
+// was asked" are different bugs with different causes, and the output could not
+// tell them apart. So: quote the questions, and report the Ask entry count
+// separately from what Ask recorded. The three failures then read distinctly —
+// entered=0 (the answer text appeared without an ask at all), entered=1 with an
+// empty question (the seed was lost before the ask), and entered=1 with the
+// question recorded but not visible here (a synchronisation claim this test
+// relies on is false).
+func askerState(a *scriptedAsker, d *BtwDialog, width int) string {
+	_, questions, closed := a.snapshot()
+	return fmt.Sprintf("Ask entered %d time(s); recorded %d question(s) %q; closed=%d\nrendered pane:\n%s",
+		a.entered.Load(), len(questions), questions, closed,
+		strings.Join(d.Render(tui.Dark, width), "\n"))
+}
+
+// waitUntil polls pred to a deadline. An optional diag is rendered into the
+// timeout message: a timeout here says only "it never happened", which is the
+// least informative thing a failure can say.
+func waitUntil(t *testing.T, what string, pred func() bool, diag ...func() string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -68,7 +98,11 @@ func waitUntil(t *testing.T, what string, pred func() bool) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", what)
+	detail := ""
+	if len(diag) > 0 && diag[0] != nil {
+		detail = "\n" + diag[0]()
+	}
+	t.Fatalf("timed out waiting for %s%s", what, detail)
 }
 
 // A seeded open asks immediately, and the reply lands on the turn.
@@ -79,11 +113,11 @@ func TestBtwDialogSeededAskCompletes(t *testing.T) {
 
 	waitUntil(t, "the reply to render", func() bool {
 		return strings.Contains(strings.Join(d.Render(tui.Dark, 80), "\n"), "the answer")
-	})
+	}, func() string { return askerState(a, d, 80) })
 
 	_, questions, _ := a.snapshot()
 	if len(questions) != 1 || questions[0] != "why is the sky blue" {
-		t.Fatalf("asked %v, want the seed once", questions)
+		t.Fatalf("want the seed asked exactly once.\n%s", askerState(a, d, 80))
 	}
 }
 
