@@ -101,7 +101,7 @@ network hosts. See `docs/plans/standard-tools-bucket2.md`.
 | Tool | Authority | Notes |
 |---|---|---|
 | `read` | local read-only | files + inline images for vision models |
-| `write` | workspace mutation | overwrites; description steers toward `edit` for partial changes |
+| `write` | workspace mutation | overwrites; description steers toward `edit` for partial changes; optional `mode` (octal ≤ `0777`) sets permission bits — e.g. an executable script — in one reviewable step |
 | `edit` | workspace mutation | exact-match replacements, whitespace-tolerant fallback |
 | `bash` | process execution | merged stdout/stderr, timeout; description carries git/secrets/file-tool-preference guardrails |
 | `grep` | local read-only | RE2 content search; `.gitignore`-aware, binary-skipping, paged |

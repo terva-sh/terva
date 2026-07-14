@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"terva.sh/terva/packages/core"
@@ -22,13 +23,14 @@ type WriteTool struct {
 type writeArgs struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+	Mode    string `json:"mode"`
 }
 
-const writeSchema = `{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}`
+const writeSchema = `{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"mode":{"type":"string","description":"optional octal permission bits, e.g. \"0755\" to create an executable script. Range 0o000–0o777 (setuid/setgid/sticky are not allowed here). Omit to keep the secure default: a new file honors the umask, an existing file keeps its current mode."}},"required":["path","content"]}`
 
 func (t *WriteTool) Name() string { return "write" }
 func (t *WriteTool) Description() string {
-	return "Write a file, creating parent directories. OVERWRITES the entire file. For an existing file, prefer `edit` to change part of it; use `write` only to create a new file or when you intend to fully replace one."
+	return "Write a file, creating parent directories. OVERWRITES the entire file. For an existing file, prefer `edit` to change part of it; use `write` only to create a new file or when you intend to fully replace one. Pass `mode` (octal, e.g. \"0755\") to set the file's permission bits in the same step — for creating an executable script — instead of a follow-up `chmod`; omit it to keep the secure default (new files honor the umask, existing files keep their mode)."
 }
 func (t *WriteTool) Schema() json.RawMessage { return json.RawMessage(writeSchema) }
 
@@ -45,11 +47,35 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 		return core.ToolResult{}, err
 	}
 
+	// An explicit mode is parsed before any write, so a bad value fails without
+	// touching the filesystem. Omitted, the secure default stands: a new file
+	// honors the umask (private under a 0077 umask) and an existing file keeps
+	// its mode — so a write can never silently broaden a secret file.
+	perm := os.FileMode(0o644)
+	modeSet := a.Mode != ""
+	if modeSet {
+		p, err := parseFileMode(a.Mode)
+		if err != nil {
+			return core.ToolResult{}, err
+		}
+		perm = p
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return core.ToolResult{}, err
 	}
-	if err := os.WriteFile(path, []byte(a.Content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(a.Content), perm); err != nil {
 		return core.ToolResult{}, err
+	}
+	// os.WriteFile applies perm only when it creates the file, and even then the
+	// umask masks it; on an overwrite it changes nothing. Chmod pins the exact
+	// bits so an explicit mode is honored under any umask and on an overwrite.
+	// Creating with perm first means the file is never looser than requested,
+	// even in the window before this Chmod.
+	if modeSet {
+		if err := os.Chmod(path, perm); err != nil {
+			return core.ToolResult{}, fmt.Errorf("set mode %s: %w", a.Mode, err)
+		}
 	}
 
 	// Return the file content as the result body, just like `read`
@@ -70,6 +96,9 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 		"total_lines": totalLines,
 		"start_line":  1,
 	}
+	if modeSet {
+		details["mode"] = fmt.Sprintf("%#o", perm) // e.g. 0755 — recorded so the mode change is reviewable
+	}
 	// A newly written file under a .gitignore rule is a silent trap: the write
 	// succeeds, but the file won't show up in workspace diffs, grep/glob, or git
 	// status, so a later "why isn't my change there?" has no visible cause. Warn
@@ -88,4 +117,22 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 		// claim either way).
 		LinesAdded: totalLines,
 	}, nil
+}
+
+// parseFileMode parses an octal permission string ("0755", "755", or "0o755")
+// into permission bits. It rejects anything outside 0o777: setuid, setgid, and
+// the sticky bit are deliberately not settable through a reviewable write —
+// those carry real escalation risk and need the bash tool and explicit intent.
+func parseFileMode(s string) (os.FileMode, error) {
+	t := strings.TrimSpace(s)
+	t = strings.TrimPrefix(t, "0o")
+	t = strings.TrimPrefix(t, "0O")
+	v, err := strconv.ParseUint(t, 8, 32)
+	if err != nil {
+		return 0, fmt.Errorf("mode %q must be octal permission bits, e.g. \"0755\"", s)
+	}
+	if v > 0o777 {
+		return 0, fmt.Errorf("mode %q sets bits outside 0o777; set setuid/setgid/sticky with the bash tool", s)
+	}
+	return os.FileMode(v), nil
 }
