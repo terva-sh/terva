@@ -364,6 +364,10 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 		_ = c.Close()
 	}()
 	conn := &wsConn{c: c}
+	// Keep the socket alive across a silent turn (a proxy reads silence as death)
+	// and reap it if the peer stops answering. Both halves live in conn.go.
+	conn.armReadDeadline()
+	go conn.keepalive(connCtx)
 	hello := ctrlproto.ServerHello("terva web", opts.Version)
 	hello.Locale = opts.Locale
 	hello.CWD = opts.CWD

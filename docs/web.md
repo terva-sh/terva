@@ -52,6 +52,38 @@ set the sandbox default.
 > `net.inet6.ip6.v6only=1`; prefer `0.0.0.0:PORT` unless you specifically want
 > IPv6. Either way a non-loopback bind needs an auth mode or `--web-insecure-cidr`.
 
+## Behind a reverse proxy: the WebSocket is a long, quiet connection
+
+The panel holds one WebSocket open for the life of the session, and it says
+**nothing at all** while the agent is thinking. Proxies read that silence as a
+dead connection.
+
+terva pings every 20 seconds so the traffic keeps the proxy's idle timer from
+firing, which is enough for the defaults you are likely to meet. But a proxy
+configured tightly enough will still cut the socket, and it is worth knowing what
+to look for: a panel that reconnects on a **fixed interval**, forever, is not a
+terva bug — it is the proxy's idle timeout, and the interval is its value.
+
+- **haproxy** applies `timeout client` / `timeout server` to an upgraded
+  WebSocket unless you say otherwise. Give tunnels their own, longer timeout:
+
+  ```
+  defaults
+    timeout client  50s
+    timeout server  50s
+    timeout tunnel  1h   # WebSockets — without this they inherit the 50s above
+  ```
+
+- **nginx** defaults `proxy_read_timeout` to 60s. Raise it for the panel's
+  location, and pass the upgrade headers:
+
+  ```nginx
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  proxy_read_timeout 1h;
+  ```
+
 ## Auth
 
 terva's identity is single-user, so the auth here is a **gate** ("keep

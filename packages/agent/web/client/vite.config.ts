@@ -33,7 +33,28 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // NO `html`. This is the second half of the fix below, and it is the
+        // half that was missed — the shell must not be PRECACHED either.
+        //
+        // Dropping navigateFallback (below) removes the NavigationRoute, but
+        // workbox's PrecacheRoute answers a navigation to "/" all by itself:
+        // its match generates URL variations and, with the default
+        // `directoryIndex: 'index.html'`, "/" becomes "/index.html" — which is
+        // in the precache manifest the moment `html` is in these globs. That
+        // route is registered by precacheAndRoute BEFORE our runtime route, so
+        // it wins, and it is cache-FIRST. Every navigation to the panel's own
+        // start_url was still answered from disk; the NetworkFirst route below
+        // was dead code for the only URL the PWA ever navigates to.
+        //
+        // The daemon's 401 login form was therefore STILL unreachable, and a
+        // client that lost its credential was still stranded forever, quietly
+        // retrying its WebSocket — the exact bug the comment below describes,
+        // through a second door.
+        //
+        // The shell needs no precache entry: the runtime route caches it on
+        // every successful navigation, so offline still works. Precaching it
+        // only ever bought a first-load-while-offline that cannot happen.
+        globPatterns: ['**/*.{js,css,svg,png,woff2}'],
         // Explicitly undefined, not merely absent: vite-plugin-pwa's own default
         // for this is 'index.html' (defaultWorkbox, dist/index.js), applied with
         // Object.assign — which copies an explicit undefined but not a missing
