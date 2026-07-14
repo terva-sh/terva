@@ -186,7 +186,10 @@ func (i *Interactive) buildChat(cols int, snap frameSnapshot) []string {
 	// The transcript is reconstructed from the wire (snapshots + message
 	// events) and owned by the pump — never read off a live *core.Agent.
 	// carrierTranscript reads nil before the first snapshot lands.
-	i.view.Messages = filterHiddenTranscriptMessages(i.carrierTranscript())
+	// displayTranscript, not carrierTranscript: the turns the user paged back in
+	// through a compaction divider ride above the live transcript. Display-only —
+	// they are not in the model's context and are not in carrierMessages.
+	i.view.Messages = filterHiddenTranscriptMessages(i.displayTranscript())
 	// The binding's first snapshot decided whether to cap the paint at the
 	// tail; apply it here, where i.view is ours to write.
 	if limit, ok := i.takeCarrierTailLimit(); ok {
@@ -335,6 +338,19 @@ func (i *Interactive) chatPage() int {
 // the "viewing turn N" footer goes away automatically as soon as you
 // scroll back to the live tail.
 func (i *Interactive) scrollBy(delta int) {
+	// Scrolling UP past everything we hold is the ask for more. Behind the top of a
+	// compacted transcript lies the history the compaction folded away, and this is
+	// the same gesture the tail cap already teaches — scroll up, older content
+	// appears — carried past the point where the local transcript runs out.
+	//
+	// Deliberately a GESTURE and not a render-time condition: a short transcript is
+	// already scrolled to its top the instant it paints, and fetching history nobody
+	// asked for is not "revealing" it. startReveal is a no-op unless there is a
+	// divider at the head, it is not already fetching, and the walk has not hit a
+	// /clear (which takes /reveal to cross).
+	if delta > 0 {
+		i.startReveal()
+	}
 	i.mu.Lock()
 	i.scrollOffset += delta
 	if i.scrollOffset < 0 {

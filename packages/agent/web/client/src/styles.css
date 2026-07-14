@@ -610,6 +610,34 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .ext-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--muted); }
 .ext-note { font-size: 11px; color: var(--danger); font-family: ui-monospace, SFMono-Regular, monospace; overflow-wrap: anywhere; }
 
+/* providers pane (kind=providers): the daemon's MODEL-PROVIDER credentials —
+   which model vendors terva can reach, and which have expired. Not this panel's
+   own bearer login. Read-only, so it borrows the extension-card shell rather
+   than growing controls of its own. .prov-env wraps rather than scrolling, per
+   the one-axis pane rule at the top of this file. */
+.prov-warn { font-size: 12px; color: var(--danger); border: 1px solid var(--danger); border-radius: 6px; padding: 8px 10px; overflow-wrap: anywhere; }
+.prov-note { font-size: 11px; color: var(--muted); padding: 6px 2px 0; overflow-wrap: anywhere; }
+.prov-env { margin: 0; font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ext-card.muted { opacity: .7; }
+
+/* the login flow the daemon described: a title, some prose, maybe a URL and a
+   code to read out, and N labelled fields. Nothing here knows which provider it
+   is rendering — see AuthStepForm. Inputs are min-width:0 so a long placeholder
+   cannot widen the pane (the one-axis rule). */
+.prov-flow { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+.prov-flow-title { font-size: 13px; font-weight: 600; }
+.prov-url { font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; color: var(--accent); overflow-wrap: anywhere; }
+.prov-code { align-self: flex-start; font-size: 18px; font-weight: 700; letter-spacing: .12em; font-family: ui-monospace, SFMono-Regular, monospace; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; user-select: all; }
+.prov-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.prov-label { font-size: 11px; color: var(--muted); }
+.prov-field input { min-width: 0; width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.prov-help { font-size: 11px; color: var(--muted); }
+.prov-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+/* the secondary action beside a primary one: same shape, less weight. Signing OUT
+   and cancelling should not look as inviting as signing in. */
+.btn.ghost { color: var(--muted); }
+.btn.ghost:hover { color: var(--fg); }
+
 /* permissions inspector pane (kind=permissions) */
 .perm-body { display: flex; flex-direction: column; gap: 14px; padding: 10px 8px; }
 .perm-mode { display: flex; align-items: baseline; gap: 8px; }
@@ -659,6 +687,29 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .sys-note.notice { font-style: normal; }
 .sys-note.notice.err { color: var(--danger); opacity: 1; }
 .sys-note.notice.err .sys-tag { color: var(--danger); border-color: var(--danger); }
+
+/* compaction divider — the boundary where context was condensed. Everything
+   above it is out of the model's context; the summary standing in for it is
+   collapsed behind the toggle. Full-width on purpose: it is a rule across the
+   conversation, not another bubble in it. */
+.compaction { align-self: stretch; width: 100%; min-width: 0; margin: 10px 0; }
+.compaction-rule { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.compaction-rule::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--line); }
+.compaction-toggle { flex: none; display: flex; align-items: center; gap: 5px; font: inherit; font-size: var(--fs-note); color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; cursor: pointer; white-space: nowrap; }
+.compaction-toggle:hover { color: var(--fg); }
+.compaction-chev { font-size: 9px; }
+/* Pages in the turns the checkpoint folded away. Sits beside the label, with the
+   rule (::after) filling the remaining width, so it reads as an action on the
+   boundary rather than part of its title. */
+.compaction-reveal { flex: none; font: inherit; font-size: var(--fs-note); color: var(--muted); background: none; border: 1px solid transparent; border-radius: 999px; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+.compaction-reveal:hover:not(:disabled) { color: var(--fg); border-color: var(--line); }
+.compaction-reveal:disabled { opacity: .6; cursor: default; }
+.compaction-summary { margin-top: 8px; padding: 10px 12px; border-left: 2px solid var(--line); font-size: var(--fs-detail); color: var(--muted); overflow-x: auto; }
+/* A /clear reads as a harder boundary than a compaction — a decision, not a
+   condensation. Dashed rule, and a label that states a fact instead of inviting a
+   click. */
+.compaction.cleared .compaction-rule::after { border-top: 1px dashed var(--line); background: none; height: 0; }
+.compaction-toggle.static { border-style: dashed; cursor: default; }
 
 /* raati pane — the deliberation board (docs/proposals/raati-deliberation.md).
    Deliberately theme-FIXED: the board is a screen-within-a-screen (tar-black
@@ -942,3 +993,11 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
   .magi-exit-hint { margin-left: 10px; padding: 6px 12px; border: 1px solid #2e343b; border-radius: 3px; color: #a8a8a8; }
   .magi-archive-dissent { display: none; }
 }
+
+/* "load earlier messages" — the live transcript above the snapshot's window. Sits at
+   the very top of the timeline, above even a compaction divider, because the window is
+   the newest thing we hold and everything else is older than it. */
+.load-earlier { display: flex; justify-content: center; padding: 6px 0 10px; }
+.load-earlier button { font: inherit; font-size: var(--fs-note); color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
+.load-earlier button:hover:not(:disabled) { color: var(--fg); }
+.load-earlier button:disabled { opacity: .6; cursor: default; }

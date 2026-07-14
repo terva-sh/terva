@@ -7,11 +7,35 @@ import { isSafeImageMime, type ImageAttachment } from './images'
 export type { ImageAttachment } from './images'
 export { isSafeImageMime } from './images'
 
-export type Item =
-  | { kind: 'user'; id: string; text: string; images?: ImageAttachment[] }
-  | { kind: 'assistant'; id: string; text: string; streaming: boolean; images?: ImageAttachment[] }
-  | { kind: 'tool'; id: string; name: string; args: unknown; result?: string; error?: boolean; images?: ImageAttachment[] }
-  | { kind: 'error'; id: string; text: string }
+// Every item carries where it came from, which is what lets a snapshot MERGE into the
+// list instead of rebuilding it:
+//
+//   idx      — the item's index in the LIVE transcript. Stable within an epoch: the
+//              daemon's transcriptEpoch bumps only on a wholesale replace (compact,
+//              /clear) and never on an append, so within one epoch an index never
+//              moves. Absent for anything not in the live transcript.
+//   history  — paged in from BEHIND a compaction (conversation.reveal). Not in the
+//              live transcript at all, so it has no idx — and a snapshot must not
+//              sweep it away, which is exactly what the merge protects.
+//
+// A notice has neither: it is ephemeral and is meant to be dropped on the next
+// snapshot.
+type Placed = { idx?: number; history?: boolean }
+
+export type Item = Placed &
+  (
+    | { kind: 'user'; id: string; text: string; images?: ImageAttachment[] }
+    | { kind: 'assistant'; id: string; text: string; streaming: boolean; images?: ImageAttachment[] }
+    | {
+        kind: 'tool'
+        id: string
+        name: string
+        args: unknown
+        result?: string
+        error?: boolean
+        images?: ImageAttachment[]
+      }
+    | { kind: 'error'; id: string; text: string }
   // host-injected (synthetic) user-role message, e.g. a continue-on-open-work
   // nudge — shown as a de-emphasized system note, not a user bubble.
   | { kind: 'system'; id: string; text: string }
@@ -20,10 +44,63 @@ export type Item =
   // noticeKind is the wire Notice.kind (the item's own `kind` is the row
   // discriminator): typed notices like prompt_rebuilt can be filtered/styled;
   // unknown kinds fall back to the plain text.
-  | { kind: 'notice'; id: string; level: string; ext?: string; text: string; noticeKind?: string }
+    | { kind: 'notice'; id: string; level: string; ext?: string; text: string; noticeKind?: string }
+    // a compaction checkpoint: the turns above it are no longer in the model's
+    // context, and `summary` is what stands in for them. Rendered as a divider with
+    // the summary collapsed behind it — never as the user bubble its wire role
+    // ('user') would otherwise produce.
+    //
+    // `ordinal` names the checkpoint for conversation.reveal (-1 = the latest, which
+    // is always the one in the live transcript). `revealed` flips once the turns
+    // above it have been paged in, so the control retires. Both are display state,
+    // not wire state.
+    | {
+        kind: 'compaction'
+        id: string
+        summary: string
+        tokensBefore?: number
+        ordinal: number
+        revealed?: boolean
+      }
+    // a /clear: the user said "done with that, start fresh". Nearer a session
+    // boundary than a compaction, so the backward walk STOPS here and crossing it is
+    // a separate, deliberate choice — never something scrolling does for you.
+    | { kind: 'clear'; id: string; ordinal: number; revealed?: boolean }
+  )
 
 let seq = 0
 const nextID = () => `i${++seq}`
+
+// msgID is a message's stable identity: (epoch, index). The daemon's transcriptEpoch
+// bumps ONLY on a wholesale replace and never on an append, so an index never moves
+// within an epoch — which is what makes a windowed snapshot mergeable and keeps a row
+// from remounting every turn.
+const msgID = (epoch: number, idx: number) => `m${epoch}.${idx}`
+
+// The heading core.Compact puts on every summary. Stripped for display: the
+// divider already says what this is, so the marker is noise inside it.
+const SUMMARY_HEADING = '## Context Summary (compacted)'
+
+function compactionItem(
+  m: WireMessage,
+  text: string,
+  ordinal: number,
+  id: string,
+  placed: Placed,
+): Extract<Item, { kind: 'compaction' }> & Placed {
+  let summary = text
+  if (summary.startsWith(SUMMARY_HEADING)) {
+    summary = summary.slice(SUMMARY_HEADING.length).trimStart()
+  }
+  return { kind: 'compaction', id, summary, tokensBefore: m.tokens_before, ordinal, ...placed }
+}
+
+// Where a run of messages sits. A live-transcript window knows its epoch and the index
+// its first message has; a span paged in from behind a compaction is `history` and has
+// no index at all, because it is not in the live transcript.
+export type Placement =
+  | { history?: false; epoch: number; base: number }
+  | { history: true; compactionOrdinal: number }
 
 function blockText(blocks: WireBlock[] | undefined): string {
   return (blocks ?? [])
@@ -42,26 +119,56 @@ function imageAttachments(blocks: WireBlock[] | undefined): ImageAttachment[] | 
   return out.length ? out : undefined
 }
 
-// itemsFromMessages rebuilds the transcript from a snapshot's messages,
-// attaching each tool_result to its tool_call by id.
-export function itemsFromMessages(msgs: WireMessage[]): Item[] {
+// itemsFromMessages turns a run of wire messages into render items, attaching each
+// tool_result to its tool_call by id, and PLACING each one so a later snapshot can
+// merge rather than rebuild (see Placed).
+//
+// A live window carries {epoch, base}: item i is transcript index base+i, and its id
+// is (epoch, index) — stable, so a re-broadcast neither remounts the row nor loses
+// display state attached to it. A span paged in from behind a compaction carries
+// {history: true}: it is not in the live transcript, has no index, and keeps a
+// mint-once id.
+//
+// compactionOrdinal (history spans only) names the checkpoint the summary in the span
+// belongs to; a live window's summary is always the LATEST checkpoint, hence -1.
+export function itemsFromMessages(msgs: WireMessage[], at: Placement): Item[] {
   const out: Item[] = []
-  const byCall = new Map<string, Extract<Item, { kind: 'tool' }>>()
-  for (const m of msgs) {
+  const byCall = new Map<string, Extract<Item, { kind: 'tool' }> & Placed>()
+
+  msgs.forEach((m, i) => {
+    const live = at.history !== true
+    const placed: Placed = live ? { idx: at.base + i } : { history: true }
+    // A live message's identity is its position; a revealed one has none, so it mints.
+    const id = live ? msgID(at.epoch, at.base + i) : nextID()
+    const ordinal = live ? -1 : at.compactionOrdinal
+
     const text = blockText(m.content)
     const images = imageAttachments(m.content)
     if (text || images) {
       out.push(
-        m.synthetic
-          ? { kind: 'system', id: nextID(), text }
-          : m.role === 'user'
-            ? { kind: 'user', id: nextID(), text, images }
-            : { kind: 'assistant', id: nextID(), text, streaming: false, images },
+        // Checked before role: a compaction summary IS role 'user', and reading
+        // the role first is exactly how it used to render as a user bubble.
+        m.compaction
+          ? compactionItem(m, text, ordinal, id, placed)
+          : m.synthetic
+            ? { kind: 'system', id, text, ...placed }
+            : m.role === 'user'
+              ? { kind: 'user', id, text, images, ...placed }
+              : { kind: 'assistant', id, text, streaming: false, images, ...placed },
       )
     }
     for (const b of m.content ?? []) {
       if (b.type === 'tool_call' && b.id) {
-        const t: Extract<Item, { kind: 'tool' }> = { kind: 'tool', id: b.id, name: b.name ?? '', args: b.args }
+        // A tool call is already stably identified by the provider's call id, so it
+        // keeps it — but it still needs placing, or the merge cannot tell whether it
+        // belongs above the window or inside it.
+        const t: Extract<Item, { kind: 'tool' }> & Placed = {
+          kind: 'tool',
+          id: b.id,
+          name: b.name ?? '',
+          args: b.args,
+          ...placed,
+        }
         byCall.set(b.id, t)
         out.push(t)
       } else if (b.type === 'tool_result' && b.call_id) {
@@ -73,13 +180,123 @@ export function itemsFromMessages(msgs: WireMessage[]): Item[] {
         }
       }
     }
-  }
+  })
   return out
+}
+
+// Snapshot is what a windowed snapshot (or a conversation.history page) tells us about
+// where its messages sit.
+export type Window = { epoch: number; base: number; total: number; messages: WireMessage[] }
+
+// mergeSnapshot folds a snapshot into the list the client already holds, instead of
+// throwing that list away and rebuilding it.
+//
+// This is the whole point of stage 2, and it is what a stable identity buys. A snapshot
+// arrives at the end of EVERY turn, not just on open. Rebuilding from it meant every
+// row remounted, and anything the client held that the snapshot did not carry — the
+// history you had paged in behind a compaction — silently vanished. Stage 1 had to
+// keep a cache keyed on the divider's summary text just to put it back. That cache is
+// now gone: the items were never lost in the first place.
+//
+// The rules:
+//   - A DIFFERENT epoch means the transcript was wholesale replaced (compacted,
+//     cleared). Everything the client holds describes a conversation that no longer
+//     exists, revealed history included — so rebuild, which is the correct answer here
+//     rather than a fallback.
+//   - Otherwise keep everything ABOVE the window (idx < base) and everything with no
+//     place in the live transcript at all (history), and swap in the window. Notices
+//     have neither and are dropped, which is what they are for.
+//   - Display state attached to a row that is still the same row survives: a compaction
+//     divider you have already expanded must not come back offering to expand again,
+//     or clicking it would splice its history in twice.
+export function mergeSnapshot(prev: Item[], snap: Window, heldEpoch: number): Item[] {
+  const rebuilt = itemsFromMessages(snap.messages, { epoch: snap.epoch, base: snap.base })
+  if (heldEpoch !== snap.epoch) return rebuilt
+
+  // Carry forward the display state of rows that are still the same rows.
+  const before = new Map(prev.map((i) => [i.id, i]))
+  const merged = rebuilt.map((i) => {
+    const old = before.get(i.id)
+    if (old?.kind === 'compaction' && i.kind === 'compaction') return { ...i, revealed: old.revealed }
+    if (old?.kind === 'clear' && i.kind === 'clear') return { ...i, revealed: old.revealed }
+    return i
+  })
+
+  const above = prev.filter((i) => i.history || (i.idx !== undefined && i.idx < snap.base))
+  return [...above, ...merged]
+}
+
+// prependHistory puts a conversation.history page above what the client holds — the
+// part of the LIVE transcript a window did not carry. Distinct from spliceRevealed,
+// which goes behind a compaction to turns the model no longer has.
+export function prependHistory(items: Item[], page: Window): Item[] {
+  const older = itemsFromMessages(page.messages, { epoch: page.epoch, base: page.base })
+  // Above the live transcript sits only revealed history, and this page belongs below
+  // it — it IS live transcript. Splice in at the boundary rather than at index 0.
+  const at = items.findIndex((i) => !i.history)
+  if (at < 0) return [...items, ...older]
+  return [...items.slice(0, at), ...older, ...items.slice(at)]
+}
+
+// spliceRevealed inserts the turns a compaction folded away directly ABOVE their
+// divider, and retires that divider's "earlier turns" control.
+//
+// It can insert rather than merge because of a property the daemon guarantees and
+// a Go test pins: the revealed span excludes the tail the checkpoint kept, so it
+// never contains a message the client already has. No dedup, no reordering.
+//
+// `revealed` may itself begin with the PREVIOUS checkpoint's summary — a session
+// compacted twice has a divider behind the divider — which itemsFromMessages turns
+// into a fresh compaction item carrying prevOrdinal. Expanding one boundary simply
+// exposes the next, and the walk terminates when the daemon reports prev_ordinal
+// below zero (the beginning of the conversation).
+// Divider is either boundary a user can page history back through.
+export type Divider = Extract<Item, { kind: 'compaction' | 'clear' }>
+
+// What one reveal came back with. prevClear means a /clear sits behind this
+// checkpoint: the walk stops, and crossing is offered as its own choice.
+export type RevealSpan = { messages: WireMessage[]; prevOrdinal: number; prevClear?: boolean }
+
+// spliceRevealed inserts the turns a checkpoint folded away directly ABOVE its
+// divider, and retires that divider's control.
+//
+// It can insert rather than merge because of a property the daemon guarantees and a
+// Go test pins: the revealed span excludes the tail the checkpoint kept, so it never
+// contains a message the client already has. No dedup, no reordering.
+//
+// Two things can appear above the inserted turns. The span may BEGIN with the
+// previous checkpoint's summary — a session compacted twice has a divider behind the
+// divider — which itemsFromMessages turns into a fresh compaction divider carrying
+// prevOrdinal. Or prevClear says a /clear sits back there, which leaves no summary
+// message to become one, so we mint the clear divider ourselves. Either way,
+// expanding one boundary exposes the next, and the walk ends when the daemon reports
+// prev_ordinal below zero.
+export function spliceRevealed(items: Item[], dividerID: string, span: RevealSpan): Item[] {
+  const at = items.findIndex((i) => i.id === dividerID)
+  if (at < 0) return items // the divider went away under us (a snapshot landed) — drop the result
+  const divider = items[at]
+  if (divider.kind !== 'compaction' && divider.kind !== 'clear') return items
+
+  const above: Item[] = itemsFromMessages(span.messages, {
+    history: true,
+    compactionOrdinal: span.prevOrdinal,
+  })
+  if (span.prevClear) {
+    above.unshift({ kind: 'clear', id: nextID(), ordinal: span.prevOrdinal, history: true })
+  }
+  return [...items.slice(0, at), ...above, { ...divider, revealed: true }, ...items.slice(at + 1)]
 }
 
 // applyEvent folds one conversation event into the item list, returning a new
 // array (immutable for Preact). Non-transcript events (permission/ask/usage/
 // turn_end) are handled by the caller and ignored here.
+//
+// The rows it appends are OPTIMISTIC and unplaced: they have no idx, because the
+// daemon has not told us where they land yet. That is deliberate, and it composes with
+// mergeSnapshot — the snapshot at the end of the turn carries the same messages with
+// their real indexes, and the merge drops the unplaced ones in favour of them. So the
+// live turn paints immediately and settles onto the authoritative transcript, without
+// either half having to know about the other.
 export function applyEvent(items: Item[], ev: WireEvent): Item[] {
   switch (ev.type) {
     case 'user_message': {

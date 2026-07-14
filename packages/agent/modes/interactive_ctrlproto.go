@@ -50,6 +50,54 @@ func (i *Interactive) CarrierSessionID() string { return i.carrierSession() }
 // so the pump test can compress the wait.
 var carrierResubscribeDelay = 2 * time.Second
 
+// runWorkspaceLoop is the pump's sibling: a reliable subscription to the
+// WORKSPACE, feeding the facts that are true of the daemon rather than of any
+// session — a workspace surface changing (tasks, mcp, chat, settings,
+// permissions, raati), the locale changing, a restart notice — through the same
+// handler.
+//
+// These used to ride the session stream, stamped with each live session's id by
+// the workspace itself. They arrive once now, on their own address, which is
+// what lets a client hear them while holding no session subscription at all.
+//
+// Unlike runCarrierLoop this is NOT torn down on a session switch: the workspace
+// does not change when the session does. It exits only when the context ends, or
+// when the carrier turns out to have no workspace stream at all — a replay
+// carrier, or a daemon too old to know the address. Neither is a failure: an old
+// daemon relays those events into the session subscription anyway, which is
+// exactly the fallback this replaces.
+func (i *Interactive) runWorkspaceLoop(ctx context.Context) {
+	for ctx.Err() == nil {
+		ch, err := i.cfg.Carrier.SubscribeReliable(ctx, ctrlproto.AddrWorkspace)
+		if err != nil {
+			// Transient, on an attached carrier whose transport is down: the
+			// session pump owns the user-visible outage message, so just wait
+			// and retry quietly.
+			if rc, ok := i.cfg.Carrier.(ReconnectingCarrier); ok && rc.Reconnecting() {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(carrierResubscribeDelay):
+				}
+				continue
+			}
+			return // this carrier has no workspace stream; nothing to pump
+		}
+		for ev := range ch {
+			i.handleCarrierEvent(ev)
+			i.invalidate()
+		}
+		// Closed channel: the transport dropped (attached) or the workspace is
+		// shutting down. Re-subscribing is free when it is the former; when it
+		// is the latter, ctx ends and the loop exits.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(carrierResubscribeDelay):
+		}
+	}
+}
+
 // runCarrierLoop is the ctrlproto TUI's event pump: a reliable subscription to
 // the CURRENT session's stream, feeding every event through
 // handleCarrierEvent. It replaces the legacy path's synchronous per-turn sink.
@@ -383,6 +431,12 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		}
 		i.noteSessionMetaLocked(*ev.Info)
 		i.mu.Unlock()
+	case ctrlproto.EventAuthState:
+		// A provider login moved — possibly one this TUI did not start, and
+		// possibly finished in a browser on another device entirely.
+		if ev.Auth != nil {
+			i.handleAuthState(*ev.Auth)
+		}
 	case ctrlproto.EventSurfaceUpdated:
 		// The settings surface carries the approval-mode badge; the tasks
 		// surface backs the /swarm dashboard's cached snapshot (and the
@@ -1036,6 +1090,12 @@ func (i *Interactive) setCarrierTranscript(msgs []core.WireMessage) {
 	i.mu.Lock()
 	i.carrierMessages = out
 	i.carrierMessagesRev++
+	// Re-validate the history the user paged in behind the compaction divider. A
+	// snapshot lands at the end of EVERY turn, not just on open, so without this a
+	// user would reveal an hour of scrollback, send one message, and watch it go.
+	// Kept when the divider is still the same checkpoint; dropped when it is not,
+	// because auto-compact fires at turn end — exactly when a snapshot arrives.
+	i.resetRevealForTranscript(out)
 	// This binding's first snapshot resolves the tail cap: a resumed
 	// multi-thousand-message session must not block the first paint on
 	// rendering every prior turn. Only the first — a later snapshot

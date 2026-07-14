@@ -512,6 +512,10 @@ func (f *fakeSvc) broadcast(sess string, ev Event) {
 	}
 }
 
+func (f *fakeSvc) AuthProviders(ctx context.Context) (ProvidersView, error) {
+	return ProvidersView{Providers: []ProviderInfo{{ID: "anthropic", Label: "Anthropic", Method: "oauth"}}}, nil
+}
+
 func (f *fakeSvc) Subscribe(ctx context.Context, sess string) (<-chan Event, error) {
 	ch := make(chan Event, 32)
 	f.mu.Lock()
@@ -614,6 +618,14 @@ func (f *fakeSvc) Context(ctx context.Context, sess string) (ContextBreakdown, e
 
 func (f *fakeSvc) Node(ctx context.Context, sess, id, op string) (ContextNode, error) {
 	return ContextNode{ID: id}, nil
+}
+
+func (f *fakeSvc) History(ctx context.Context, sess string, before, limit int, epoch uint64) (HistoryResult, error) {
+	return HistoryResult{Epoch: epoch, Base: 0, Total: 0}, nil
+}
+
+func (f *fakeSvc) Reveal(ctx context.Context, sess string, ordinal int) (RevealResult, error) {
+	return RevealResult{Ordinal: ordinal, PrevOrdinal: -1, Total: 1}, nil
 }
 
 func (f *fakeSvc) Surfaces(ctx context.Context, sess string) ([]SurfaceMeta, error) {

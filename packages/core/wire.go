@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"terva.sh/terva/packages/provider"
@@ -64,6 +65,30 @@ type WireEvent struct {
 // de-emphasize it; extension observers already skip it (EvUserMessage.Synthetic).
 const MetaSynthetic = "synthetic"
 
+// MetaCompaction marks the synthetic summary a compaction checkpoint left in
+// place of the turns it folded away, and MetaTokensBefore carries that
+// checkpoint's estimate of the transcript size it replaced. Set in Compact;
+// read by every display surface, which renders the message as a divider rather
+// than as the user message its RoleUser would otherwise imply.
+const (
+	MetaCompaction   = "compaction"
+	MetaTokensBefore = "tokens_before"
+)
+
+// MetaClear marks a DISPLAY-ONLY divider standing in for a /clear checkpoint.
+//
+// Unlike a compaction, a clear leaves no message behind — it is an empty checkpoint
+// (AppendCompaction(nil)) — so there is nothing in the transcript for a renderer to
+// draw a boundary on, and the conversation above it would otherwise just stop with
+// no explanation. A client that pages history back through one MINTS this marker to
+// mark the spot.
+//
+// It is never in a model transcript and never crosses the wire as a message: it is
+// synthesized by the client, lives only in what that client paints, and is not in
+// the agent's message list. Values: "true" while the clear still stands between you
+// and the conversation before it, "crossed" once you have chosen to look anyway.
+const MetaClear = "clear"
+
 // WireMessage is one transcript entry on the wire.
 type WireMessage struct {
 	Role    string      `json:"role"`
@@ -72,6 +97,18 @@ type WireMessage struct {
 	// Synthetic is true for a host-injected message (not the user's words), so a
 	// client can render it as a system note instead of a user bubble.
 	Synthetic bool `json:"synthetic,omitempty"`
+	// Compaction is true for the summary a compaction checkpoint left behind,
+	// and TokensBefore is that checkpoint's estimate of what it replaced. A
+	// client renders the pair as a divider ("compacted here, ~N tokens") with
+	// the summary collapsed behind it — not as a user bubble full of raw
+	// "## Context Summary" markdown, which is what every frontend showed while
+	// these fields did not exist and provider.Message.Meta could not cross.
+	//
+	// Deliberately two typed fields and not the whole Meta map: Meta is an open
+	// bag, and shipping it wholesale would make every key anyone ever adds to it
+	// into protocol — including keys we did not mean to hand a client.
+	Compaction   bool `json:"compaction,omitempty"`
+	TokensBefore int  `json:"tokens_before,omitempty"`
 }
 
 // WireBlock is one piece of message content. Discriminate on Type:
@@ -228,6 +265,12 @@ func messageToWire(m provider.Message, imageData bool) WireMessage {
 	if m.Meta[MetaSynthetic] == "true" {
 		w.Synthetic = true
 	}
+	if m.Meta[MetaCompaction] == "true" {
+		w.Compaction = true
+		// A malformed count is not worth failing a transcript over: the divider
+		// renders without it.
+		w.TokensBefore, _ = strconv.Atoi(m.Meta[MetaTokensBefore])
+	}
 	return w
 }
 
@@ -288,8 +331,20 @@ func MessageFromWire(w WireMessage) provider.Message {
 			m.Time = t
 		}
 	}
+	setMeta := func(k, v string) {
+		if m.Meta == nil {
+			m.Meta = map[string]string{}
+		}
+		m.Meta[k] = v
+	}
 	if w.Synthetic {
-		m.Meta = map[string]string{MetaSynthetic: "true"}
+		setMeta(MetaSynthetic, "true")
+	}
+	if w.Compaction {
+		setMeta(MetaCompaction, "true")
+		if w.TokensBefore > 0 {
+			setMeta(MetaTokensBefore, strconv.Itoa(w.TokensBefore))
+		}
 	}
 	return m
 }

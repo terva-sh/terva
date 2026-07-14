@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
-import { t } from '../../i18n'
+import { t, tn } from '../../i18n'
 import type { Item } from '../../platform/conversation/store'
 import { copyToClipboard } from '../../ui/browser'
+import type { RevealFn } from './CompactionDivider'
 import { ConversationItems } from './ConversationItems'
 import { QueuedMessage } from './QueuedMessage'
 import type { ToolView } from './types'
@@ -13,6 +14,11 @@ export function ConversationTimeline({
   queued,
   onEditQueued,
   onCancelQueued,
+  onReveal,
+  revealingID,
+  earlier,
+  onLoadEarlier,
+  loadingEarlier,
 }: {
   items: Item[]
   busy: boolean
@@ -20,6 +26,13 @@ export function ConversationTimeline({
   queued: string[]
   onEditQueued: (index: number, text: string) => void
   onCancelQueued: (index: number) => void
+  onReveal?: RevealFn
+  revealingID?: string
+  // How many messages of the LIVE transcript sit above the window we hold. The
+  // snapshot carries only the tail; this is the rest, fetched on demand.
+  earlier?: number
+  onLoadEarlier?: () => void
+  loadingEarlier?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const pinnedRef = useRef(true)
@@ -66,7 +79,14 @@ export function ConversationTimeline({
   return (
     <div class="log-wrap">
       <div class="log" ref={ref} onScroll={onScroll} onClick={onCodeCopy}>
-        <ConversationItems items={items} toolView={toolView} />
+        {!!earlier && earlier > 0 && onLoadEarlier && (
+          <div class="load-earlier">
+            <button type="button" onClick={onLoadEarlier} disabled={loadingEarlier}>
+              {loadingEarlier ? t('loading…') : tn(earlier, '▴ %d earlier message', '▴ %d earlier messages')}
+            </button>
+          </div>
+        )}
+        <ConversationItems items={items} toolView={toolView} onReveal={onReveal} revealingID={revealingID} />
         {busy && items[items.length - 1]?.kind !== 'assistant' && <div class="working">{t('working…')}</div>}
         {queued.map((text, index) => (
           <QueuedMessage

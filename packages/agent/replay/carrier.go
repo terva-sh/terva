@@ -435,6 +435,21 @@ func (c *Carrier) Context(ctx context.Context, sess string) (ctrlproto.ContextBr
 func (c *Carrier) Node(ctx context.Context, sess, id, op string) (ctrlproto.ContextNode, error) {
 	return ctrlproto.ContextNode{}, unsupported("context node")
 }
+
+// History is unsupported here for the same reason Reveal is: a replay carrier hands
+// the whole scene to the player, which owns the playhead. There is no window to page.
+func (c *Carrier) History(ctx context.Context, sess string, before, limit int, epoch uint64) (ctrlproto.HistoryResult, error) {
+	return ctrlproto.HistoryResult{}, unsupported("history")
+}
+
+// Reveal is unsupported here, and deliberately so: a replay carrier already
+// answers this question at the scene level. ModeRaw plays the full original
+// history — every turn a compaction later summarized away — so there is nothing
+// behind a divider left to reveal. Wiring it up would give a player two different
+// ways to show the same messages.
+func (c *Carrier) Reveal(ctx context.Context, sess string, ordinal int) (ctrlproto.RevealResult, error) {
+	return ctrlproto.RevealResult{}, unsupported("reveal")
+}
 func (c *Carrier) Surface(ctx context.Context, sess, id string) (ctrlproto.Surface, error) {
 	return ctrlproto.Surface{}, unsupported("surface")
 }
@@ -446,6 +461,13 @@ func (c *Carrier) Catalog(ctx context.Context, lang string) (ctrlproto.CatalogVi
 }
 func (c *Carrier) ListFiles(ctx context.Context, opts ctrlproto.FilesListParams) (ctrlproto.FilesListResult, error) {
 	return ctrlproto.FilesListResult{}, unsupported("files.list")
+}
+
+// A recording has no credentials — it is a transcript, not a daemon. Reporting
+// the LOCAL machine's providers here would be a lie about the session being
+// replayed, and possibly about a different machine entirely.
+func (c *Carrier) AuthProviders(ctx context.Context) (ctrlproto.ProvidersView, error) {
+	return ctrlproto.ProvidersView{}, unsupported("auth.providers")
 }
 func (c *Carrier) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) {
 	return nil, unsupported("models")

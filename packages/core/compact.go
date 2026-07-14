@@ -144,8 +144,8 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		},
 		Time: time.Now(),
 		Meta: map[string]string{
-			"compaction":    "true",
-			"tokens_before": strconv.Itoa(tokensBefore),
+			MetaCompaction:   "true",
+			MetaTokensBefore: strconv.Itoa(tokensBefore),
 		},
 	}
 

@@ -527,6 +527,12 @@ func (f *fakeWS) Context(ctx context.Context, sess string) (ctrlproto.ContextBre
 func (f *fakeWS) Node(ctx context.Context, sess, id, op string) (ctrlproto.ContextNode, error) {
 	return ctrlproto.ContextNode{ID: id}, nil
 }
+func (f *fakeWS) History(ctx context.Context, sess string, before, limit int, epoch uint64) (ctrlproto.HistoryResult, error) {
+	return ctrlproto.HistoryResult{Epoch: epoch}, nil
+}
+func (f *fakeWS) Reveal(ctx context.Context, sess string, ordinal int) (ctrlproto.RevealResult, error) {
+	return ctrlproto.RevealResult{Ordinal: ordinal, PrevOrdinal: -1, Total: 1}, nil
+}
 func (f *fakeWS) Surfaces(ctx context.Context, sess string) ([]ctrlproto.SurfaceMeta, error) {
 	return nil, nil
 }
@@ -541,6 +547,9 @@ func (f *fakeWS) Catalog(ctx context.Context, lang string) (ctrlproto.CatalogVie
 }
 func (f *fakeWS) ListFiles(ctx context.Context, opts ctrlproto.FilesListParams) (ctrlproto.FilesListResult, error) {
 	return ctrlproto.FilesListResult{}, nil
+}
+func (f *fakeWS) AuthProviders(ctx context.Context) (ctrlproto.ProvidersView, error) {
+	return ctrlproto.ProvidersView{}, nil
 }
 func (f *fakeWS) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) { return nil, nil }
 func (f *fakeWS) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {

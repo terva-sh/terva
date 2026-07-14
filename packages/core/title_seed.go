@@ -115,7 +115,7 @@ func messageText(m provider.Message) string {
 // isCompactionMessage reports whether m is the synthetic summary message a
 // compaction leaves in the transcript (compact.go stamps it).
 func isCompactionMessage(m provider.Message) bool {
-	return m.Meta != nil && m.Meta["compaction"] == "true"
+	return m.Meta != nil && m.Meta[MetaCompaction] == "true"
 }
 
 // BuildTitleSeed assembles the model seed for titling a session from its

@@ -104,6 +104,15 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		i.slashContext()
 		return false
 	},
+	// Crossing a /clear. Scrolling up walks back through compactions on its own, but
+	// it stops at a clear: that was a deliberate act — "done with that, start fresh"
+	// — and closer to a session boundary than a compaction, which merely condenses a
+	// conversation you are still having. So undoing it takes a deliberate act too.
+	// Not an unlock: those turns are in the session file either way.
+	"/reveal": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.revealAcrossClear()
+		return false
+	},
 	"/lore": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 		i.slashLore()
 		return false

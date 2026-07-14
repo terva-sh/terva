@@ -15,10 +15,31 @@ import (
 // docs/proposals/context-inspector.md.
 type CompactionSpan struct {
 	Ordinal     int                // 0-based position among the file's "compaction" rows
-	PrevOrdinal int                // the checkpoint before it, or -1 if this is the first
+	PrevOrdinal int                // the checkpoint before it, or -1 if there is nothing further to reveal
 	Replaced    []provider.Message // the messages the checkpoint folded into its summary
 	KeptCount   int                // messages the checkpoint preserved verbatim (its tail)
 	Total       int                // total compaction checkpoints in the file
+	// Clear is true when the TARGET checkpoint is a /clear rather than a compaction,
+	// and PrevClear when the one BEHIND it is. A clear is written as an empty
+	// checkpoint (AppendCompaction(nil), workspace_session.go): it summarized nothing
+	// and kept nothing, so its Replaced is the whole conversation before it and it
+	// leaves no summary message in the transcript to hang a divider on.
+	//
+	// A clear is a deliberate act — "I am done with that; start fresh" — and closer
+	// to a session boundary than to a compaction, which merely condenses a
+	// conversation you are still having. So a client walking history backward STOPS
+	// at one: on PrevClear it stops chaining automatically and offers to cross only
+	// as an explicit, separate choice. Deliberate to make, deliberate to undo.
+	//
+	// PrevOrdinal stays truthful either way — the floor is a policy the caller
+	// applies, not a fact hidden from it. Crossing is served, not refused; a client
+	// that means it passes the clear's own ordinal.
+	//
+	// This is an INTENT boundary, NOT redaction. The rows are still in the JSONL in
+	// plaintext, and --replay's raw mode, export, and session_inspect all read them.
+	// Nothing here makes a secret pasted before a clear go away.
+	Clear     bool
+	PrevClear bool
 }
 
 // RevealCompaction reconstructs what the compaction checkpoint at ordinal
@@ -85,11 +106,15 @@ func RevealCompaction(path string, ordinal int) (CompactionSpan, error) {
 	var messages, input []provider.Message
 	keptCount := 0
 	c := 0
+	// A clear is an EMPTY checkpoint: it kept no tail and left no summary behind.
+	// Recorded per checkpoint so the floor below can see one without re-walking.
+	clear := make([]bool, total)
 	for _, r := range rows {
 		if !r.compaction {
 			messages = append(messages, r.msg)
 			continue
 		}
+		clear[c] = len(r.out) == 0
 		if c == target {
 			input = append([]provider.Message(nil), messages...) // snapshot before the reset
 			if keptCount = len(r.out) - 1; keptCount < 0 {
@@ -111,5 +136,7 @@ func RevealCompaction(path string, ordinal int) (CompactionSpan, error) {
 		Replaced:    span,
 		KeptCount:   keptCount,
 		Total:       total,
+		Clear:       clear[target],
+		PrevClear:   prev >= 0 && clear[prev],
 	}, nil
 }

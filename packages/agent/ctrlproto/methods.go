@@ -45,6 +45,63 @@ const (
 	MethodI18nCatalog          Method = "i18n.catalog"            // params I18nCatalogParams, result I18nCatalogResult (session-independent)
 	MethodFilesList            Method = "files.list"              // params FilesListParams, result FilesListResult (session-independent)
 
+	// MethodConversationReveal returns the turns a compaction checkpoint
+	// summarized away. They are not gone: a compaction row is an append-only
+	// checkpoint the loader honors, never a rewrite of the rows above it, so the
+	// superseded messages are still in the session file. This reads them back so
+	// a client can keep them in the scrollback above the compaction divider —
+	// dimmed, out of context, but READABLE — instead of the conversation simply
+	// appearing to have lost its history. See docs/proposals/scrollback-history.md.
+	//
+	// The span it returns EXCLUDES the tail the checkpoint kept verbatim, so it
+	// cannot overlap the live transcript: a client prepends it and is done. No
+	// dedup, no reordering, no identity reconciliation. That property is what
+	// keeps this cheap, and it is pinned by a test.
+	//
+	// In the SESSION group, not the conversation group, for the reason
+	// MethodAuthProviders gives: it grants no authority. It hands back the same
+	// transcript a subscriber already streams, only older. Every verb in the
+	// conversation group MUTATES a turn; this one reads.
+	//
+	// Requires a persisted session (an ephemeral one has no file to read):
+	// CodeNotFound, which the client renders as "earlier turns unavailable"
+	// rather than an error.
+	MethodConversationReveal Method = "conversation.reveal" // params RevealParams, result RevealResult (sess in frame)
+
+	// MethodConversationHistory pages BACKWARD through the live transcript — the
+	// part a windowed snapshot did not carry (see FeatureHistoryWindow).
+	//
+	// Distinct from conversation.reveal, and the distinction is the whole shape of
+	// this system: history walks within the transcript the model still has, served
+	// from memory; reveal goes BEHIND a compaction, to turns the model no longer has,
+	// served from the session file. A client scrolling up uses history until Base
+	// reaches 0, then finds the compaction divider and uses reveal.
+	//
+	// Refuses a stale epoch (CodeConflict) rather than serving indexes into a
+	// transcript that has since been replaced — which, silently, would hand back
+	// somebody else's messages.
+	MethodConversationHistory Method = "conversation.history" // params HistoryParams, result HistoryResult (sess in frame)
+
+	// MethodAuthProviders reports the workspace's MODEL-PROVIDER credential
+	// state: who terva can log into, who it is logged into, and how. Read-only
+	// and session-independent; it reveals state, never material (see
+	// ProvidersView — nothing it returns is a secret).
+	//
+	// It sits in the SESSION group, not the control group, because it grants no
+	// authority: a client that can read your transcripts already learns which
+	// provider you use from the first usage event. The verbs that CHANGE a
+	// credential are a separate group, at a higher authority, and do not exist
+	// yet — see docs/proposals/web-provider-login.md.
+	MethodAuthProviders Method = "auth.providers" // result ProvidersView (session-independent)
+
+	// --- auth group (optional; advertised only when the daemon will serve a
+	// login). These CHANGE the credential terva uses to reach a model provider,
+	// which is why they are not in the session group with the read verb above.
+	MethodAuthLoginStart  Method = "auth.login.start"  // params AuthLoginStartParams, result AuthFlowStep
+	MethodAuthLoginSubmit Method = "auth.login.submit" // params AuthLoginSubmitParams; carries the secret
+	MethodAuthLoginCancel Method = "auth.login.cancel" // params AuthFlowRef
+	MethodAuthLogout      Method = "auth.logout"       // params AuthLogoutParams
+
 	// Side chat: an ephemeral, tool-less completion against a FROZEN snapshot of
 	// a session, leaving no trace in its transcript. Backs the /btw overlay.
 	MethodSideChatOpen  Method = "sidechat.open"  // result SideChatOpenResult (sess in frame)
@@ -85,13 +142,16 @@ func (m Method) Group() Group {
 	case MethodSessionsList, MethodSessionCreate, MethodSessionResume,
 		MethodSessionRename, MethodSessionGenerateTitle, MethodSessionDelete, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
 		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
-		MethodFilesList, MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose:
+		MethodFilesList, MethodAuthProviders, MethodConversationReveal, MethodConversationHistory,
+		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault,
 		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume:
 		return GroupControl
 	case MethodReplayControl, MethodReplayState:
 		return GroupReplay
+	case MethodAuthLoginStart, MethodAuthLoginSubmit, MethodAuthLoginCancel, MethodAuthLogout:
+		return GroupAuth
 	}
 	return ""
 }
@@ -298,6 +358,69 @@ type ContextResult struct {
 type ContextNodeParams struct {
 	ID string `json:"id"`
 	Op string `json:"op,omitempty"`
+}
+
+// HistoryParams is the payload of [MethodConversationHistory]: give me the Limit
+// messages ENDING just before index Before, in the transcript at Epoch.
+//
+// Before is the client's current Base — the index of the oldest message it holds —
+// so paging up is "ask for what is above what I have". Epoch is what it thinks it is
+// holding; sending it back is what lets the daemon refuse rather than quietly index
+// into a transcript that has since been replaced.
+type HistoryParams struct {
+	Before int    `json:"before"`
+	Limit  int    `json:"limit,omitempty"` // 0 → HistoryWindow
+	Epoch  uint64 `json:"epoch,omitempty"` // 0 → no check (a client that does not track it)
+}
+
+// HistoryResult is the payload of a [MethodConversationHistory] response: the slice
+// [Base, Base+len(Messages)) of the transcript at Epoch. Base is 0 when the client
+// has now reached the start of the live transcript — beyond which lies whatever a
+// compaction folded away, reachable with conversation.reveal, not this.
+type HistoryResult struct {
+	Epoch    uint64             `json:"epoch"`
+	Base     int                `json:"base"`
+	Total    int                `json:"total"`
+	Messages []core.WireMessage `json:"messages"`
+}
+
+// RevealParams is the payload of [MethodConversationReveal]: which compaction
+// checkpoint to look behind. Ordinal is 0-based among the session's checkpoints;
+// a NEGATIVE ordinal means the latest, which is what a client walking up from the
+// live transcript asks for first. Not omitempty — 0 is the first checkpoint, a
+// perfectly ordinary thing to ask for.
+type RevealParams struct {
+	Ordinal int `json:"ordinal"`
+}
+
+// RevealResult is the payload of a [MethodConversationReveal] response.
+//
+// Messages is the span the checkpoint folded into its summary, in transcript
+// order, MINUS the tail it kept verbatim — so it abuts the client's existing
+// scrollback without overlapping it.
+//
+// PrevOrdinal chains further back: a session compacted more than once has a
+// checkpoint behind the checkpoint, and revealing one exposes the next divider
+// above it. It is -1 when this is the first, which is how a client knows it has
+// reached the beginning of the conversation.
+//
+// PrevClear says the checkpoint behind this one is a /clear, and it is the one
+// place the walk is expected to STOP on its own. A clear is a deliberate act —
+// "done with that, start fresh" — nearer a session boundary than a compaction,
+// which only condenses a conversation you are still having. So a client does not
+// chain across one; it offers the crossing as a separate, explicit choice, and
+// passes the clear's own ordinal when the user takes it. Clear says the target
+// WAS that crossing. Deliberate to make, deliberate to undo.
+//
+// None of this is redaction. The rows are still in the session file in plaintext,
+// and --replay raw, export, and session_inspect all read them.
+type RevealResult struct {
+	Ordinal     int                `json:"ordinal"`
+	PrevOrdinal int                `json:"prev_ordinal"`
+	Total       int                `json:"total"`
+	Messages    []core.WireMessage `json:"messages"`
+	Clear       bool               `json:"clear,omitempty"`
+	PrevClear   bool               `json:"prev_clear,omitempty"`
 }
 
 // ContextNodeResult is the payload of a [MethodContextNode] response: the

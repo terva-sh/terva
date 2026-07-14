@@ -294,7 +294,9 @@ func minimalToolLine(th Theme, label string, suffix string, isErr bool, width in
 // transparent-assistant case) so the caller can tally names and failures
 // without re-walking the content.
 func classifyToolRun(m provider.Message) (member bool, res []provider.ToolResultBlock) {
-	if m.Meta["compaction"] == "true" {
+	// Both dividers are run boundaries: a tool run must not be grouped across the
+	// line where the conversation was condensed or cut.
+	if m.Meta["compaction"] == "true" || m.Meta["clear"] != "" {
 		return false, nil
 	}
 	switch m.Role {
@@ -563,10 +565,10 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 		if m.Role == provider.RoleAssistant {
 			for j := idx - 1; j >= 0; j-- {
 				prev := msgs[j]
-				// Skip compaction summary messages — they're
-				// rendered as a muted footer line (or hidden
-				// entirely when collapsed) and don't open a turn.
-				if prev.Meta["compaction"] == "true" {
+				// Skip the dividers — a compaction summary or a /clear
+				// boundary renders as a rule across the chat, not as a
+				// speaker's message, so neither opens a turn.
+				if prev.Meta["compaction"] == "true" || prev.Meta["clear"] != "" {
 					continue
 				}
 				if prev.Role == provider.RoleAssistant || prev.Role == provider.RoleTool {
@@ -826,6 +828,18 @@ func hashMessage(m provider.Message) uint64 {
 	h := fnv64aInit
 	h = fnv64aWrite(h, []byte(m.Role))
 	h = fnv64aWriteByte(h, 0)
+	// The Meta that renderMessage actually branches on. Content alone is not enough:
+	// the two states of a /clear divider have IDENTICAL (empty) content and must
+	// render differently, so hashing content only served the stale row back from the
+	// cache forever. Same latent trap for a compaction whose token count changes
+	// under an unchanged summary. Anything renderMessage reads must be hashed.
+	for _, k := range []string{"compaction", "tokens_before", "clear"} {
+		if val := m.Meta[k]; val != "" {
+			h = fnv64aWriteByte(h, 'm')
+			h = fnv64aWrite(h, []byte(k))
+			h = fnv64aWrite(h, []byte(val))
+		}
+	}
 	for _, c := range m.Content {
 		switch b := c.(type) {
 		case provider.TextBlock:
@@ -926,14 +940,16 @@ func fnv64aWriteUint(h uint64, n uint64) uint64 {
 func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []string {
 	var lines []string
 
-	// Compaction summary: render as a single muted line at the end
-	// of the chat instead of as a user message.
+	// Compaction summary: a divider in the conversation, not a user message.
+	// Collapsed it is a one-line rule; expanded (ctrl+o) it shows the summary
+	// the model was actually left with.
 	if m.Meta["compaction"] == "true" {
-		if v.ExpandAll {
-			return v.renderCompactionBlock(m, width)
-		}
-		// Collapsed: skip entirely. The status bar shows the info.
-		return nil
+		return v.renderCompactionBlock(m, width)
+	}
+	// A /clear: a harder boundary than a compaction, and one the transcript cannot
+	// show on its own (a clear leaves no message behind — the client mints this).
+	if state := m.Meta["clear"]; state != "" {
+		return v.renderClearBlock(state, width)
 	}
 
 	switch m.Role {
@@ -2427,45 +2443,82 @@ func toInt(v any) (int, bool) {
 	return 0, false
 }
 
-// renderCompactionBlock renders a compaction summary as a distinct
-// visual block in the chat. When collapsed it shows a one-line label
-// with the pre-compaction token count; when expanded (ctrl+o) it
-// shows the full summary text.
+// renderCompactionBlock renders a compaction checkpoint as a divider in the
+// conversation: the turns above it are no longer in the model's context, and
+// the summary standing in for them is collapsed behind the rule until ctrl+o.
+//
+// It renders in BOTH states on purpose. The collapsed arm used to be
+// unreachable — renderMessage skipped a compaction message outright — which,
+// combined with provider.Message.Meta not surviving the wire, meant a
+// carrier-backed TUI drew the summary as an ordinary user bubble full of raw
+// "## Context Summary" markdown. A compaction that leaves no mark reads as if
+// the conversation simply lost its history.
+// transcriptRule draws a horizontal boundary across the chat with its label inset,
+// so the eye reads a break in the conversation rather than a stray muted line:
+//
+//	──── compacted · ~112k tokens ──────────────────────────
+//
+// fill distinguishes the kinds without needing colour: a solid rule for a compaction
+// (the conversation continues, only condensed) and a dashed one for a /clear (it
+// does not).
+func (v *View) transcriptRule(label string, fill rune, width int) string {
+	const indent = "    "
+	body := string([]rune{fill, fill}) + " " + label + " "
+	if pad := width - len(indent) - runewidth.StringWidth(body); pad > 0 {
+		body += strings.Repeat(string(fill), pad)
+	}
+	return indent + v.Theme.FG256(v.Theme.Muted, body)
+}
+
+// renderClearBlock draws the boundary where the conversation was /cleared.
+//
+// It has to be synthesized, unlike a compaction: a clear is an EMPTY checkpoint and
+// leaves no message behind, so without a minted divider the history paged in from
+// before one would just run out with nothing to say why. state is "true" while the
+// clear still stands between you and what came before, "crossed" once you have said
+// /reveal and looked anyway — and it keeps drawing either way, because the point is
+// to show where the conversation was cut, not to pretend it wasn't.
+func (v *View) renderClearBlock(state string, width int) []string {
+	label := i18n.T("conversation cleared")
+	if state != "crossed" {
+		label += " · " + i18n.T("/reveal to show what came before")
+	}
+	return []string{v.transcriptRule(label, '╌', width)}
+}
+
 func (v *View) renderCompactionBlock(m provider.Message, width int) []string {
 	th := v.Theme
 	const indent = "    "
 
-	tokens := m.Meta["tokens_before"]
-	if tokens == "" {
-		tokens = "?"
+	label := i18n.T("compacted")
+	if n, err := strconv.Atoi(m.Meta["tokens_before"]); err == nil && n > 0 {
+		label = i18n.T("compacted · ~%s tokens", formatTokens(n))
+	}
+	if !v.ExpandAll {
+		label += " · " + i18n.T("ctrl+o to expand")
 	}
 
-	if v.ExpandAll {
-		var lines []string
-		header := th.FG256(th.Muted, fmt.Sprintf("compacted from ~%s tokens", tokens))
-		lines = append(lines, indent+header)
-		lines = append(lines, "")
-		for _, c := range m.Content {
-			if tb, ok := c.(provider.TextBlock); ok {
-				text := tb.Text
-				if idx := strings.Index(text, "\n\n"); idx >= 0 && strings.HasPrefix(text, "## Context Summary") {
-					text = text[idx+2:]
+	if !v.ExpandAll {
+		return []string{v.transcriptRule(label, '─', width)}
+	}
+
+	lines := []string{v.transcriptRule(label, '─', width), ""}
+	for _, c := range m.Content {
+		if tb, ok := c.(provider.TextBlock); ok {
+			text := tb.Text
+			if idx := strings.Index(text, "\n\n"); idx >= 0 && strings.HasPrefix(text, "## Context Summary") {
+				text = text[idx+2:]
+			}
+			md := RenderMarkdown(text, th, width-4)
+			for _, l := range strings.Split(md, "\n") {
+				if len(l) > 0 && l[0] == FlushLeftSentinel {
+					l = l[1:]
 				}
-				md := RenderMarkdown(text, th, width-4)
-				for _, l := range strings.Split(md, "\n") {
-					if len(l) > 0 && l[0] == FlushLeftSentinel {
-						l = l[1:]
-					}
-					lines = append(lines, indent+l)
-				}
+				lines = append(lines, indent+l)
 			}
 		}
-		return lines
 	}
-
-	// Collapsed: single line, no banner.
-	line := th.FG256(th.Muted, fmt.Sprintf("compacted from ~%s tokens (ctrl+o to expand)", tokens))
-	return []string{indent + line}
+	return lines
 }
 
 // formatTokens footer formatter:
