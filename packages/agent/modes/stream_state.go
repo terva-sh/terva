@@ -115,6 +115,42 @@ func (s *streamState) promptReturned() {
 	}
 }
 
+// paceRate returns how many runes the pacer should release this tick.
+//
+// A FIXED rate cannot smooth a provider that arrives in fat, infrequent
+// chunks. Measured on the same prompt: openai-codex delivers ~5 runes every
+// ~20ms, while Anthropic's OAuth path delivers ~56 runes every ~460ms — the
+// same throughput, an order of magnitude coarser. Draining that at a fixed 6
+// runes/tick empties one chunk in ~310ms and then paints NOTHING for the
+// remaining ~150ms, so the reply lands in visible lumps. The pacer was meant
+// to normalize exactly this, and a fixed rate cannot: it drains as fast as it
+// can and then starves.
+//
+// So the rate follows the buffer — spread whatever is queued across
+// paceDrainTicks. The buffer settles at (arrival rate x horizon) runes and the
+// pacer paints continuously at the arrival rate, which is what a jitter buffer
+// is: a bounded, ~400ms latency traded for an even reveal. The ceiling keeps it
+// above zero while anything is queued, so the typewriter can never stall
+// mid-word; paceMaxRate bounds the catch-up on a deep buffer.
+//
+// Flushing is the exception. The final message has landed and no more deltas
+// are coming, so there is no jitter left to absorb — drain the tail at the
+// plain typewriter rate instead of trickling it out at the arrival rate.
+func (s *streamState) paceRate() int {
+	n := len(s.pending)
+	if n == 0 {
+		return 0
+	}
+	if s.phase == streamFlushing {
+		return paintPaceRate
+	}
+	rate := (n + paceDrainTicks - 1) / paceDrainTicks // ceil: never 0 while queued
+	if rate > paceMaxRate {
+		rate = paceMaxRate
+	}
+	return rate
+}
+
 // paceTick advances the typewriter by up to n runes. painted=true
 // means new text is visible; finished=true means a deferred
 // finishMessage just completed and the transcript may reveal the

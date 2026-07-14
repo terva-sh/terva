@@ -305,6 +305,10 @@ func (t *turnEngine) GateOpen(id string) bool {
 // summary into 3 fat chunks, visually indistinguishable from "the
 // whole reply just appeared". The pacer normalizes that so every
 // path looks the same on screen.
+//
+// The rate it drains at is the stream's own (see streamState.paceRate):
+// a jitter buffer while deltas are still arriving, the plain typewriter
+// rate once the message is complete.
 func (t *turnEngine) runPacer(ctx context.Context, invalidate func()) {
 	tick := time.NewTicker(paintPaceInterval)
 	defer tick.Stop()
@@ -314,7 +318,7 @@ func (t *turnEngine) runPacer(ctx context.Context, invalidate func()) {
 			return
 		case <-tick.C:
 			t.mu.Lock()
-			painted, finished := t.stream.paceTick(paintPaceRate)
+			painted, finished := t.stream.paceTick(t.stream.paceRate())
 			t.mu.Unlock()
 			if painted || finished {
 				invalidate()

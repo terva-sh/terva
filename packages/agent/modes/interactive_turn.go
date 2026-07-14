@@ -211,12 +211,28 @@ func assistantText(m provider.Message) string {
 	return sb.String()
 }
 
-// paintPaceRate is how many runes the streaming pacer releases per
-// tick. With a 16ms tick, 6 runes/tick is ~375 runes/s — fast enough
-// that a 500-rune summary finishes in ~1.3s, slow enough to look
-// like a human typing. Empirically matches the feel of provider
-// paths that already drip-stream natively.
+// paintPaceRate is how many runes the streaming pacer releases per tick
+// once the stream is FLUSHING — the final message has landed, no more
+// deltas are coming, and there is nothing left to smooth against. With a
+// 16ms tick, 6 runes/tick is ~375 runes/s — fast enough that a 500-rune
+// summary finishes in ~1.3s, slow enough to look like a human typing.
 const paintPaceRate = 6
+
+// paceDrainTicks is the jitter buffer's horizon, in ticks: while deltas
+// are still arriving, the pacer aims to spread whatever is queued across
+// this many ticks rather than draining at a fixed rate (see paceRate).
+// 25 ticks x 16ms is ~400ms of buffered latency — long enough to bridge
+// the silences between a coarse provider's chunks, short enough that the
+// text never feels detached from the model that is producing it.
+const paceDrainTicks = 25
+
+// paceMaxRate caps the jitter buffer's catch-up, in runes/tick. It binds
+// only on a deep buffer — a provider that hands over a whole reply in one
+// delta, or a local model streaming faster than the pacer's steady state,
+// which the old fixed rate could never keep up with at all. 24 runes/tick
+// is ~1500 runes/s: brisk enough to track any real provider, bounded so a
+// deep buffer still reveals rather than dumps.
+const paceMaxRate = 24
 
 // paintPaceInterval is the tick interval for the streaming pacer.
 // 16ms lines up with the redraw throttle so we never paint faster

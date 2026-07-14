@@ -64,6 +64,7 @@ import {
   type RevealSpan,
   type Window,
 } from './platform/conversation/store'
+import { PACE_INTERVAL_MS, StreamPacer } from './platform/conversation/pacer'
 import { buildConveneArgs, raatiResultCopyText, raatiUnitCopyText, raatiVerdictWord } from './raati'
 import { applyServerCatalog, setLocale, t, tn } from './i18n'
 import { CopyButton } from './ui/CopyButton'
@@ -142,6 +143,15 @@ export function App() {
   const [surfaceErr, setSurfaceErr] = useState('')
   const paneOpenRef = useRef(false)
   const activeSurfaceRef = useRef('context')
+
+  // The streaming pacer sits between the wire and handleEvent, so the transcript
+  // reveals at an even rate no matter how coarsely the provider chunks its
+  // deltas (see platform/conversation/pacer.ts). handleEvent is a useCallback and
+  // changes identity, so the pacer reaches it through a ref rather than being
+  // rebuilt — rebuilding it would drop whatever text it still had buffered.
+  const handleEventRef = useRef<(ev: WireEvent) => void>(() => {})
+  const pacerRef = useRef<StreamPacer | null>(null)
+  if (!pacerRef.current) pacerRef.current = new StreamPacer((ev) => handleEventRef.current(ev))
 
   curRef.current = curSess
   busyRef.current = busy
@@ -273,6 +283,9 @@ export function App() {
     setInfoOpen(false)
     setSurfaces([])
     setSurfaceData(null)
+    // Anything the pacer still has buffered belongs to the session we are leaving;
+    // replaying it here would splice one transcript into another.
+    pacerRef.current?.reset()
     curRef.current = id
     setCurSess(id)
     c.fire('subscribe', null, id)
@@ -478,6 +491,16 @@ export function App() {
     }
   }, [listSurfaces, loadSurface, refreshI18n])
 
+  handleEventRef.current = handleEvent
+
+  // Drive the pacer. One 16ms timer for the life of the panel: tick() is a no-op
+  // on an empty queue, which is what it is for all but the seconds a reply is
+  // actually streaming.
+  useEffect(() => {
+    const id = setInterval(() => pacerRef.current?.tick(), PACE_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [])
+
   useEffect(() => {
     const c = new Client()
     clientRef.current = c
@@ -488,7 +511,7 @@ export function App() {
       // locale, a notice) used to arrive stamped with each live session's id —
       // which is the only reason this equality test ever saw them. They arrive on
       // their own address now, so the test has to admit it, or they vanish.
-      if (sess === ADDR_WORKSPACE || sess === curRef.current) handleEvent(ev)
+      if (sess === ADDR_WORKSPACE || sess === curRef.current) pacerRef.current?.push(ev)
     }
     c.onReady = async (hello) => {
       // Match the PWA's bundled catalog to the daemon's active language for an
@@ -544,7 +567,7 @@ export function App() {
     }
     c.connect()
     return () => c.close()
-  }, [handleEvent, newSession, refreshSessions, selectSession, refreshI18n])
+  }, [newSession, refreshSessions, selectSession, refreshI18n])
 
   // Restart the daemon. A successful restart acks first and re-execs a beat
   // later, so the client auto-reconnects to the new build. Only a real failure
