@@ -110,18 +110,26 @@ changelog:
   # `git` reads the local log; the github/gitea modes query the host's
   # API, which the fork's Forgejo release flow doesn't need.
   use: git
+  # A conventional-commit scope is "(anything)", not "(one word)": scopes are
+  # routinely multi-part (feat(web,tui):) and a class of [(\w)] does not admit
+  # the comma, so such a commit silently misses its group and lands in "other".
+  # An unscoped-only anchor (^chore:) likewise never matches chore(web):, so
+  # every SCOPED housekeeping commit was published in the notes it is meant to
+  # be filtered out of. Both bugs are invisible until someone writes the scope
+  # that trips them, so match the scope generally — and the optional "!" while
+  # we are here, or a breaking-change marker would fall through the same hole.
   filters:
     exclude:
-      - "^docs:"
-      - "^chore:"
-      - "^ci:"
-      - "^test:"
+      - "^docs(\\(.*\\))?!?:"
+      - "^chore(\\(.*\\))?!?:"
+      - "^ci(\\(.*\\))?!?:"
+      - "^test(\\(.*\\))?!?:"
   groups:
     - title: features
-      regexp: "^.*feat[(\\w)]*:+.*$"
+      regexp: "^.*feat(\\(.*\\))?!?:.*$"
       order: 0
     - title: fixes
-      regexp: "^.*fix[(\\w)]*:+.*$"
+      regexp: "^.*fix(\\(.*\\))?!?:.*$"
       order: 1
     - title: other
       order: 999

@@ -125,8 +125,9 @@ web-build:
     @echo "built web client -> packages/agent/web/client/dist (commit it)"
 
 # Run the web client's unit tests (vitest over the pure store/transform logic).
-# Local-only, like web-build: there is no Node in `just ci`, so this is a
-# developer gate you run after changing packages/agent/web/client/src.
+# Always reinstalls, so it is the honest one to reach for when node_modules may
+# be stale. `just ci` runs the same suite (ci-web-client) whenever npm is on the
+# machine, reusing an existing node_modules; this forces the clean install.
 web-test:
     npm --prefix packages/agent/web/client ci
     npm --prefix packages/agent/web/client test
@@ -310,10 +311,39 @@ ci-web:
     go vet -tags terva_web ./packages/agent/web/
     go test -tags terva_web -race ./packages/agent/web/ ./packages/agent/
 
+# The web client's vitest suite, when this machine has Node.
+#
+# This was deliberately left out of `just ci` once, on the grounds that ci is
+# pure Go and must keep working on a machine with no Node at all. That property
+# is worth keeping — and it is kept, below — but leaving the suite out ENTIRELY
+# bought it at too high a price: a green `just ci` could ship a client that
+# cannot talk to the daemon.
+#
+# It did. The panel's hello stopped requesting the `auth` method group, so every
+# login call came back "method group not negotiated" and the Providers pane
+# rendered buttons that could not work. `just ci` was green the whole time. The
+# vitest assertion that pins the hello is what caught it — in the remote CI,
+# after the push, which is the expensive place to find out.
+#
+# So: run it where Node exists, and SAY SO where it does not, rather than being
+# quietly green. A gate that passes because it skipped the check is not a gate.
+ci-web-client:
+    @if command -v npm >/dev/null 2>&1; then \
+        if [ ! -d packages/agent/web/client/node_modules ] || \
+           [ packages/agent/web/client/package-lock.json -nt packages/agent/web/client/node_modules ]; then \
+            npm --prefix packages/agent/web/client ci; \
+        fi; \
+        npm --prefix packages/agent/web/client test; \
+    else \
+        echo "ci-web-client: SKIPPED — no npm on this machine."; \
+        echo "  The ci workflow DOES run vitest. If you touched packages/agent/web/client/src,"; \
+        echo "  run 'just web-test' somewhere with Node before you push."; \
+    fi
+
 # fmt-check + vet + race tests + connector tag-matrix build + acp + web tag
-# build/test + terva_pprof tag build + public packaging drift check, as
-# a pre-push gate.
-ci: lint test ci-acp ci-web
+# build/test + the web client's vitest suite (Node-gated) + terva_pprof tag
+# build + public packaging drift check, as a pre-push gate.
+ci: lint test ci-acp ci-web ci-web-client
     go build -tags terva_no_telegram,terva_no_discord ./...
     # terva_pprof guard: the profiling endpoint (cmd/terva/pprof.go) only
     # compiles under this tag, so the default build can't catch a break in
