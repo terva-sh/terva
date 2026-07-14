@@ -16,6 +16,36 @@ import "terva.sh/terva/packages/core"
 // so a non-negotiating client sees byte-identical frames to the pre-Full
 // protocol.
 
+// HistoryWindow is how many trailing messages a snapshot carries to a client that
+// negotiated FeatureHistoryWindow. It pages the rest in with conversation.history.
+//
+// 80 is the TUI's own first-paint cap (modes.initialResumeTailLimit) and is chosen
+// the same way: comfortably more than a screenful, so the common case never pages at
+// all, while a multi-thousand-message session stops shipping whole down a phone's
+// WebSocket at the end of every turn.
+const HistoryWindow = 80
+
+// windowSnapshot cuts a snapshot's transcript down to its last HistoryWindow
+// messages, stamping the Base the window starts at so the client can place it.
+//
+// Copy-on-window, like every helper here: one Event value is shared by every
+// subscriber of a session, so the original is NEVER mutated. A snapshot already
+// short enough is returned untouched apart from its placement fields, which are the
+// same values a full transcript would carry.
+func windowSnapshot(ev Event, limit int) Event {
+	if ev.Snapshot == nil || limit <= 0 || len(ev.Snapshot.Messages) <= limit {
+		return ev
+	}
+	snap := *ev.Snapshot
+	base := len(snap.Messages) - limit
+	// Reslice, not copy: the messages themselves are shared read-only, and the whole
+	// point of this function is to stop moving them around.
+	snap.Messages = snap.Messages[base:]
+	snap.Base = base
+	ev.Snapshot = &snap
+	return ev
+}
+
 // stripImageData returns ev without outbound image payloads, copying only
 // what it must. Events with no image data are returned unchanged.
 func stripImageData(ev Event) Event {

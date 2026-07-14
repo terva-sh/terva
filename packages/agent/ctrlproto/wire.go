@@ -70,7 +70,13 @@ const (
 	CodeBadRequest   = "bad_request"  // malformed params
 	CodeUnsupported  = "unsupported"  // method not served (e.g. an unimplemented control call)
 	CodeUnauthorized = "unauthorized" // the auth gate rejected the caller
-	CodeInternal     = "internal"     // an unexpected server-side failure
+	// CodeConflict: the request was well-formed and permitted, but the state it named
+	// has moved on — a conversation.history page indexed into a transcript that has
+	// since been compacted or cleared. Distinct from not_found (nothing was ever
+	// there) and bad_request (the caller is wrong): the caller was right, and then
+	// the world changed. A client's answer is to resync, not to retry.
+	CodeConflict = "conflict"
+	CodeInternal = "internal" // an unexpected server-side failure
 )
 
 // Encode serializes a frame to its compact JSON wire bytes (no trailing

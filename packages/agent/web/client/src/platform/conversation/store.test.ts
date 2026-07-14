@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { applyEvent, itemsFromMessages, isSafeImageMime, type Item } from './store'
 import type { WireEvent, WireMessage } from '../ctrlproto/types'
 
+// Every message here belongs to the live transcript, starting at index 0.
+const LIVE = { epoch: 1, base: 0 }
+
 // The store is the client's pure wire→render transform. These tests pin the
 // image scenarios: attachments and agent-generated images surface as renderable
 // data on the right items, and size-only blocks (a carrier without the
@@ -18,19 +21,19 @@ describe('itemsFromMessages — image capture', () => {
     const msgs: WireMessage[] = [
       { role: 'user', content: [{ type: 'text', text: 'look' }, imgBlock('AAAA')] },
     ]
-    const [u] = userItems(itemsFromMessages(msgs))
+    const [u] = userItems(itemsFromMessages(msgs, LIVE))
     expect(u.text).toBe('look')
     expect(u.images).toEqual([{ mime: 'image/png', data: 'AAAA' }])
   })
 
   it('surfaces an image-only user message (no text)', () => {
-    const items = itemsFromMessages([{ role: 'user', content: [imgBlock('BBBB')] }])
+    const items = itemsFromMessages([{ role: 'user', content: [imgBlock('BBBB')] }], LIVE)
     expect(userItems(items)).toHaveLength(1)
     expect(userItems(items)[0].images).toHaveLength(1)
   })
 
   it('skips size-only image blocks (carrier without image-data)', () => {
-    const items = itemsFromMessages([{ role: 'user', content: [{ type: 'text', text: 'hi' }, imgBlock()] }])
+    const items = itemsFromMessages([{ role: 'user', content: [{ type: 'text', text: 'hi' }, imgBlock()] }], LIVE)
     expect(userItems(items)[0].images).toBeUndefined()
   })
 
@@ -45,7 +48,7 @@ describe('itemsFromMessages — image capture', () => {
         content: [{ type: 'tool_result', call_id: 't1', content: [imgBlock('CCCC')] }],
       },
     ]
-    const tool = itemsFromMessages(msgs).find((i) => i.kind === 'tool') as Extract<Item, { kind: 'tool' }>
+    const tool = itemsFromMessages(msgs, LIVE).find((i) => i.kind === 'tool') as Extract<Item, { kind: 'tool' }>
     expect(tool.images).toEqual([{ mime: 'image/png', data: 'CCCC' }])
   })
 })
@@ -105,14 +108,14 @@ describe('image MIME allowlist', () => {
     const svg = { type: 'image', mime_type: 'image/svg+xml', bytes: 3, data: 'PHN2Zz4=' }
     const png = imgBlock('AAAA')
     const msgs: WireMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'mixed' }, svg, png] }]
-    const [u] = userItems(itemsFromMessages(msgs))
+    const [u] = userItems(itemsFromMessages(msgs, LIVE))
     expect(u.images).toEqual([{ mime: 'image/png', data: 'AAAA' }])
   })
 
   it('yields no images at all when every block is unsafe', () => {
     const svg = { type: 'image', mime_type: 'image/svg+xml', bytes: 3, data: 'PHN2Zz4=' }
     const msgs: WireMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'x' }, svg] }]
-    const [u] = userItems(itemsFromMessages(msgs))
+    const [u] = userItems(itemsFromMessages(msgs, LIVE))
     expect(u.images).toBeUndefined()
   })
 })
@@ -181,7 +184,7 @@ describe('applyEvent — tool results', () => {
       { role: 'assistant', content: [{ type: 'tool_call', id: 't1', name: 'bash' }] },
       { role: 'tool', content: [{ type: 'tool_result', call_id: 't1', content: [{ type: 'text', text: 'oops' }], is_error: true }] },
     ]
-    const tool = itemsFromMessages(msgs).find((i) => i.kind === 'tool') as Extract<Item, { kind: 'tool' }>
+    const tool = itemsFromMessages(msgs, LIVE).find((i) => i.kind === 'tool') as Extract<Item, { kind: 'tool' }>
     expect(tool.result).toBe('oops')
     expect(tool.error).toBe(true)
   })
@@ -211,7 +214,7 @@ describe('applyEvent — error, notice, and synthetic items', () => {
       message: { role: 'user', synthetic: true, content: [{ type: 'text', text: 'continue?' }] },
     })
     expect(s).toMatchObject({ kind: 'system', text: 'continue?' })
-    const [fromSnapshot] = itemsFromMessages([{ role: 'user', synthetic: true, content: [{ type: 'text', text: 'nudge' }] }])
+    const [fromSnapshot] = itemsFromMessages([{ role: 'user', synthetic: true, content: [{ type: 'text', text: 'nudge' }] }], LIVE)
     expect(fromSnapshot).toMatchObject({ kind: 'system', text: 'nudge' })
   })
 })

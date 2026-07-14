@@ -993,8 +993,14 @@ func (s *wsSession) snapshot() ctrlproto.Snapshot {
 	}
 	s.mu.Unlock()
 	return ctrlproto.Snapshot{
-		Session:     s.info(),
-		Messages:    wm,
+		Session:  s.info(),
+		Messages: wm,
+		// The transcript this window was cut from. The hub always broadcasts the WHOLE
+		// thing (free in-process — the slices are shared); the serialization edge cuts
+		// it down per client contract, and stamps Base. Total and Epoch are true of the
+		// transcript either way, which is what lets a windowed client place what it got.
+		Epoch:       s.agent.TranscriptEpoch(),
+		Total:       len(wm),
 		Busy:        busy,
 		Permissions: perms,
 		Asks:        asks,

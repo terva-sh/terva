@@ -46,6 +46,11 @@ type Event struct {
 	// Replay is set on an [EventReplayState] event: a replay session's transport
 	// changed (play/pause/seek/speed), so every client's scrubber converges.
 	Replay *ReplayState `json:"replay,omitempty"`
+	// Auth is set on an [EventAuthState] event: a model-provider login flow moved.
+	// Broadcast on the WORKSPACE address — a credential belongs to the daemon, not
+	// to any session, and the client that started the login may not have one in
+	// focus when it lands.
+	Auth *AuthState `json:"auth,omitempty"`
 }
 
 // Control-plane event types. These extend the [core.WireEvent] type space; the
@@ -93,6 +98,15 @@ const (
 	// EventReplayState carries a replay session's transport state (Replay) after
 	// a play/pause/seek/speed change, so every client's scrubber stays in sync.
 	EventReplayState = "replay_state"
+	// EventAuthState carries a model-provider login flow's progress (Auth):
+	// started, succeeded, failed, cancelled. Broadcast on [AddrWorkspace].
+	//
+	// It exists because a login is asynchronous and finishes ELSEWHERE — you
+	// authorize in a browser on another device, and the daemon finds out by
+	// polling. The client that started the flow cannot know when it landed unless
+	// it is told, and polling auth.providers for it would mean a panel that
+	// updates on the next tick rather than the moment you finish.
+	EventAuthState = "auth_state"
 )
 
 // Notice is a transient host-originated message shown in the conversation area
@@ -141,7 +155,26 @@ const (
 type Snapshot struct {
 	Session  SessionInfo        `json:"session"`
 	Messages []core.WireMessage `json:"messages"`
-	Busy     bool               `json:"busy"` // a turn is currently running
+	// Epoch, Base and Total place Messages within the session's transcript.
+	//
+	// Epoch is the agent's transcriptEpoch, which increments ONLY when the
+	// transcript is wholesale replaced or shrunk (compact, /clear, SetMessages) and
+	// never on a plain append. So within one epoch the transcript only grows and an
+	// index never moves, which makes (Epoch, index) a stable identity for a message
+	// — the thing a client needs to MERGE a snapshot instead of replacing its whole
+	// list. An epoch a client has not seen means the transcript changed under it,
+	// which is exactly when a full rebuild is the correct answer rather than a
+	// fallback.
+	//
+	// Base is the index of Messages[0] in the full transcript and Total its true
+	// length. For a client that negotiated FeatureHistoryWindow, Messages is a TAIL
+	// WINDOW and Base > 0 means there is more above it (fetch with
+	// conversation.history). For every other client Messages is the whole transcript
+	// and Base is 0, as it has always been.
+	Epoch uint64 `json:"epoch,omitempty"`
+	Base  int    `json:"base,omitempty"`
+	Total int    `json:"total,omitempty"`
+	Busy  bool   `json:"busy"` // a turn is currently running
 	// Permissions / Asks are requests still awaiting an answer, so a client that
 	// (re)subscribes mid-turn — e.g. after a suspended tab reconnects — restores
 	// the dialog instead of leaving the parked turn invisible.
