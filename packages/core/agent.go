@@ -827,6 +827,22 @@ func (a *Agent) SetModel(model string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.Model = model
+	a.refreshMaxTokensLocked()
+}
+
+// refreshMaxTokensLocked re-derives the per-turn output budget from the
+// current model's advertised cap after a model swap. MaxTokens is seeded
+// once at build time from the launch model's MaxOutput and would otherwise
+// stay pinned to it: a swap to a lower-cap model leaves a stale, too-large
+// budget (the provider request builders clamp it at send time, but the
+// agent's own field — read by cost/context accounting and terva_status —
+// stays wrong). Best-effort: only a successful, non-zero lookup updates the
+// field, so a swap to a model missing from the catalog leaves the previous
+// working budget untouched rather than zeroing it. Caller holds a.mu.
+func (a *Agent) refreshMaxTokensLocked() {
+	if m, err := provider.FindModel("", a.Model); err == nil && m.MaxOutput > 0 {
+		a.MaxTokens = m.MaxOutput
+	}
 }
 
 // SetReasoning swaps the reasoning/thinking level under the same lock oneTurn
@@ -849,6 +865,7 @@ func (a *Agent) SetClientAndModel(client provider.Client, model string) {
 	defer a.mu.Unlock()
 	a.Client = client
 	a.Model = model
+	a.refreshMaxTokensLocked()
 }
 
 // Usage returns the current provider client's subscription usage

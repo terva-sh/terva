@@ -244,6 +244,15 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	if maxTok <= 0 {
 		maxTok = m.MaxOutput
 	}
+	// Clamp to the model's advertised output cap. A stale per-turn budget
+	// can outlive the model it was sized for: Agent.SetModel swaps the model
+	// id in place without refreshing Agent.MaxTokens, so a /model switch from
+	// a high-cap model (e.g. 128000) to a lower-cap one (sonnet's 64000)
+	// would otherwise send the old budget and earn a hard 400
+	// ("max_tokens: N > CAP"). The OpenAI builder clamps for the same reason.
+	if m.MaxOutput > 0 && maxTok > m.MaxOutput {
+		maxTok = m.MaxOutput
+	}
 
 	adaptive := usesAdaptiveThinking(m)
 

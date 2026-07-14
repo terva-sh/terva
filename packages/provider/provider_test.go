@@ -276,6 +276,41 @@ func TestAnthropicAdaptiveThinking(t *testing.T) {
 	}
 }
 
+// TestAnthropicClampsMaxTokensToModelCap guards the stale-budget 400: a
+// per-turn MaxTokens sized for a high-cap model (Agent.MaxTokens is pinned at
+// build time and NOT refreshed by Agent.SetModel) must be clamped to the
+// resolved model's own MaxOutput, or a /model switch to a lower-cap model
+// sends the old budget and Anthropic rejects it ("max_tokens: 128000 > 64000").
+func TestAnthropicClampsMaxTokensToModelCap(t *testing.T) {
+	c := NewAnthropic("x", "").(*anthropicClient)
+
+	// sonnet-4-5 caps output at 64000; a stale 128000 budget must clamp down.
+	wire, err := c.buildRequest(Request{
+		Model:     "claude-sonnet-4-5",
+		MaxTokens: 128000,
+		Messages:  []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire.MaxTokens != 64000 {
+		t.Fatalf("want max_tokens clamped to 64000, got %d", wire.MaxTokens)
+	}
+
+	// A budget already within the cap is left untouched.
+	wire, err = c.buildRequest(Request{
+		Model:     "claude-sonnet-4-5",
+		MaxTokens: 32000,
+		Messages:  []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire.MaxTokens != 32000 {
+		t.Fatalf("want max_tokens preserved at 32000, got %d", wire.MaxTokens)
+	}
+}
+
 func TestAnthropicBuildRequestStripsAssistantImages(t *testing.T) {
 	c := NewAnthropic("x", "").(*anthropicClient)
 	wire, err := c.buildRequest(Request{
