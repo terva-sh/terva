@@ -116,7 +116,7 @@ type Agent struct {
 	eventObs               []func(AgentEvent)
 	messageObs             []func(provider.Message)
 	usageObs               []func(u, cumulative provider.Usage)
-	transcriptCompactedObs []func(messages []provider.Message)
+	transcriptCompactedObs []func(messages []provider.Message, res CompactResult)
 	imageExcludedObs       []func(sha256Hex string)
 	queueDrainedObs        []func(drained []string)
 	continuationGates      []ContinuationGate
@@ -136,6 +136,30 @@ type Agent struct {
 	// lore fired). The core never calls it — it exists so the UI can SIZE
 	// the ephemeral tail (e.g. /context) without corrupting that state.
 	ContextProviderPeek func() string
+
+	// ReadOnly names the side-effect-free tools, shared with the permission
+	// policy (which uses it to auto-allow in plan mode). Compaction reads it to
+	// decide which discarded tool calls belong in the executed-actions ledger.
+	//
+	// Nil means every tool is assumed to mutate, and that is the correct failure
+	// direction: a nil set over-reports the ledger, which costs a few tokens. The
+	// opposite — assuming an unknown tool was read-only — would silently omit a
+	// side effect from the record and invite the resuming agent to run it twice.
+	// Extensions and MCP servers register arbitrary tools, so "unknown" is the
+	// common case, not the edge one.
+	ReadOnly *ReadOnlySet
+
+	// Asker, if set, is the front end's question channel — the same seam the
+	// ask_user_question tool uses, wired onto the agent so the LOOP can ask too.
+	// Today its one caller is the prefix-change guard, which offers a compaction
+	// before a cache-invalidating change lands (offerCompactOnPrefixChange).
+	//
+	// Nil is the normal state for a host with nobody to ask: one-shot runs, the
+	// chat bridge, swarm children. Those skip the offer rather than blocking on a
+	// question no one will answer — and rather than silently compacting on their
+	// behalf, which is not what a guard is for. Assigned at build, before the
+	// agent runs a turn.
+	Asker Asker
 
 	// AutoCompactPolicy, if set, supplies the live auto-compaction mode
 	// (the config `auto_compact` knob, read per check so a settings edit
@@ -206,6 +230,24 @@ type Agent struct {
 	// keyed by basename share one cache route and evict each other.
 	// Falls back to the basename for legacy files with no meta id.
 	cacheID string
+
+	// lastSent is the prompt prefix of the most recent request actually
+	// dispatched (recordDispatch, from oneTurn) — nil until the first one goes
+	// out. It is the only surviving copy of what the provider has cached once a
+	// host swaps System/Tools/Model out from under it, which is what makes
+	// compacting on the outgoing model possible. See promptPrefix.
+	lastSent *promptPrefix
+
+	// cacheAwareCompaction summarizes against the warm prefix instead of a
+	// bespoke one (engine feature cache_aware_compaction, default off). Guarded
+	// by mu and read at compaction time, so a settings toggle applies without
+	// rebuilding the agent. See SetCacheAwareCompaction.
+	cacheAwareCompaction bool
+
+	// prefixGuard offers a compaction before a cache-invalidating change lands
+	// (engine feature prefix_change_guard). Guarded by mu; see
+	// SetPrefixChangeGuard and offerCompactOnPrefixChange.
+	prefixGuard bool
 
 	// queued holds user messages submitted while the agent is busy.
 	// The loop appends them as normal user messages at safe
@@ -1223,11 +1265,11 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			} else if compactArmed && a.CanCompact(AutoCompactKeepTail) {
 				compactArmed = false
 				sink(EvCompactStart{Reason: "context near limit (mid-turn)"})
-				_, cerr := a.compactMidTurn(ctx, AutoCompactKeepTail)
+				cres, cerr := a.compactMidTurn(ctx, AutoCompactKeepTail)
 				if errors.Is(cerr, ErrNothingToCompact) {
 					cerr = nil
 				}
-				end := EvCompactEnd{}
+				end := EvCompactEnd{Usage: cres.Usage}
 				if cerr != nil {
 					end.Err = cerr.Error()
 				}
@@ -1690,8 +1732,14 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	}
 	stream, err := client.Stream(ctx, req)
 	if err != nil {
+		// Nothing reached the provider, so nothing was cached — leave the
+		// retained prefix pointing at the last request that actually landed.
 		return provider.StopError, provider.Message{}, nil, err
 	}
+	// This prefix is now warm at the provider. Retain it: a host swap (an
+	// extension reload, a /model switch) can overwrite the agent's copy at any
+	// moment, and this then becomes the only record of what is actually cached.
+	a.recordDispatch(client, req)
 
 	sink(EvAssistantStart{})
 

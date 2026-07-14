@@ -185,6 +185,12 @@ type Resolved struct {
 	// (the source SystemSegments produced), captured for the prompt-dump
 	// manifest. Kept in sync by rebuildSystemPrompt.
 	SystemSegments []PromptSegment
+
+	// asker is the front end's question channel, retained by SetAsker so
+	// NewAgent can give the agent loop its own handle on it (the prefix-change
+	// guard asks from the turn policy, not from a tool). Nil for hosts that never
+	// call SetAsker — every headless mode.
+	asker core.Asker
 }
 
 // AdoptReadOnlySet hands the permission policy's read-only registry
@@ -1236,6 +1242,12 @@ func (r *Resolved) SetAsker(a core.Asker) {
 	if r == nil {
 		return
 	}
+	// Retained as well as bound, so NewAgent can hand it to the agent LOOP: the
+	// prefix-change guard asks its question from the turn policy, not from a
+	// tool. Hosts call SetAsker before NewAgent (the front end exists first), so
+	// the agent picks it up; a host that never calls it leaves the agent's Asker
+	// nil and the guard simply stays quiet.
+	r.asker = a
 	bindAsker(r.ToolRegistry, a)
 }
 
@@ -1264,6 +1276,16 @@ func (r Resolved) NewAgent() *core.Agent {
 	a.MaxTokens = r.MaxOutput
 	a.Reasoning = r.Reasoning
 	a.Temperature = r.Temperature
+	// The front end's question channel, when there is one. The prefix-change
+	// guard asks from inside the turn policy; hosts with nobody to ask (one-shot
+	// runs, swarm children) leave this nil and the guard stays quiet.
+	a.Asker = r.asker
+	// The same read-only registry the permission policy uses, so compaction's
+	// executed-actions ledger and `plan` mode agree on what "side-effect-free"
+	// means rather than each keeping its own list. Nil here (a host that never
+	// adopted one) makes the ledger treat every tool as state-changing, which
+	// over-reports rather than under-reports — the right way to be wrong.
+	a.ReadOnly = r.readOnlySet
 	// The auto_compact knob, read live per threshold check — every agent
 	// funnels through here, so the policy is universal (TUI, web, acp,
 	// chat, swarm children).

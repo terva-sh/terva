@@ -56,3 +56,51 @@ func TestEngineFeaturesApplyAtNewAgent(t *testing.T) {
 		t.Error("the engine_features override must switch the feature off at build")
 	}
 }
+
+// Cache-aware compaction ships ON, and must be switchable OFF.
+//
+// The default lives ONLY here — core.NewAgent's zero value is off, and every
+// core test sets the flag explicitly — so without this test a flip back to
+// default-off would break nothing and pass everything. The off switch matters
+// just as much: the cost side of this feature is measured and settled, but its
+// effect on summary QUALITY is not, and shipping something unproven without a
+// way back is how a dogfood becomes a regression nobody can escape.
+func TestCacheAwareCompactionShipsOnAndCanBeSwitchedOff(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	ag := r.NewAgent()
+	if !ag.CacheAwareCompactionEnabled() {
+		t.Error("cache_aware_compaction must default ON — a compaction that rebuilds its own prefix re-reads the whole conversation at full price")
+	}
+	if !ag.PrefixChangeGuardEnabled() {
+		t.Error("prefix_change_guard must default ON; it comes alive with cache-aware compaction")
+	}
+
+	// The way back. Both are independently escapable: someone who wants the
+	// dedicated summarizer's prompt can have it, and someone who wants the cheap
+	// compaction without a pre-turn dialog can have that too.
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.EngineFeatures = map[string]bool{"cache_aware_compaction": false}
+	}); err != nil {
+		t.Fatalf("override config: %v", err)
+	}
+	r, err = Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve with override: %v", err)
+	}
+	ag = r.NewAgent()
+	if ag.CacheAwareCompactionEnabled() {
+		t.Error("engine_features.cache_aware_compaction=false must switch it off at build")
+	}
+	// The guard stays declared-on, but is inert without the summarizer that gives
+	// its offer something to save — so turning cache-aware off is a complete exit
+	// from both behaviors, with no second toggle to hunt for.
+	if !ag.PrefixChangeGuardEnabled() {
+		t.Error("the guard's own toggle should be untouched by the other feature's override")
+	}
+}

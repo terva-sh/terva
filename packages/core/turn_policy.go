@@ -215,7 +215,17 @@ const ContextWarnFraction = 0.70
 // without lying about the model's true ceiling. window is 0 when the
 // model is unknown; used is 0 before any request lands usage.
 func (a *Agent) ContextUsage() (used, window int) {
-	if m, err := provider.FindModel("", a.Model); err == nil {
+	// a.Model under the lock: SetModel and SetClientAndModel write it there, and
+	// this is called from the turn loop while a host may be swapping models on
+	// another goroutine. The unlocked read this replaces was a real data race —
+	// latent only because nothing had exercised the two concurrently. No caller
+	// holds a.mu (runLoop, oneTurn after its snapshot, compactHeld, the policy
+	// checks), so taking it here cannot re-enter.
+	a.mu.Lock()
+	model := a.Model
+	a.mu.Unlock()
+
+	if m, err := provider.FindModel("", model); err == nil {
 		window = m.EffectiveContextWindow()
 	}
 	last := a.LastTurnUsage()
@@ -287,13 +297,13 @@ func (a *Agent) PromptWithPolicy(ctx context.Context, prompt string, images []pr
 		start := EvCompactStart{Reason: reason}
 		sink(start)
 		a.EmitLifecycle(start) // reach extensions: sink here is the host UI sink, not the OnEvent fanout
-		_, err := a.Compact(ctx, AutoCompactKeepTail, func(string) {})
+		res, err := a.Compact(ctx, AutoCompactKeepTail, func(string) {})
 		if errors.Is(err, ErrNothingToCompact) {
 			// Nothing left to summarize — not a failure. Report a clean
 			// compact_end so consumers don't surface a phantom error.
 			err = nil
 		}
-		ev := EvCompactEnd{}
+		ev := EvCompactEnd{Usage: res.Usage}
 		if err != nil {
 			ev.Err = err.Error()
 		}
@@ -301,6 +311,11 @@ func (a *Agent) PromptWithPolicy(ctx context.Context, prompt string, images []pr
 		a.EmitLifecycle(ev)
 		return err
 	}
+	// The prefix-change guard, before the auto-compact check because a
+	// compaction here makes that one moot, and before Prompt appends the user's
+	// message so the summarizer sees the conversation as it actually stood.
+	a.offerCompactOnPrefixChange(ctx, compact)
+
 	if a.ShouldAutoCompact(AutoCompactThreshold) && a.CanCompact(AutoCompactKeepTail) {
 		if err := compact("context near limit"); err != nil {
 			return fmt.Errorf("auto-compact before prompt: %w", err)
@@ -315,6 +330,63 @@ func (a *Agent) PromptWithPolicy(ctx context.Context, prompt string, images []pr
 		return a.Prompt(ctx, prompt, images, sink)
 	}
 	return err
+}
+
+// offerCompactOnPrefixChange asks whether to condense the transcript before a
+// pending prompt-prefix invalidation lands, and condenses it if the answer is
+// yes. It is the reason the rest of this file's cache machinery exists.
+//
+// The situation it guards: while the agent sat idle, something rewrote the
+// prompt prefix the provider had cached — a /model switch, an extension reload
+// regenerating the tool set and the system prompt that embeds it. Nothing is
+// broken and nothing warns. The next message simply costs, silently, a
+// full-price re-read of a 60-100k transcript that was being served from cache
+// for a tenth of that a minute ago. The user finds out on the invoice.
+//
+// Three properties, all inherited from comparing prefixes rather than counting
+// events (see pendingPrefixChange): the offer is made ONCE no matter how many
+// things changed, it quotes the cost of the invalidation actually about to be
+// paid, and a change that gets reverted before the next turn withdraws its own
+// offer. And it needs no "already asked" flag: accept or decline, the turn
+// dispatches, lastSent becomes the new prefix, and there is nothing left to ask
+// about. The invalidation is a one-time toll, so an offer to avoid it can only
+// ever be made once.
+//
+// It requires cache_aware_compaction, and that is the economics rather than an
+// implementation convenience. With the bespoke summarizer, compacting costs a
+// full-price read of the whole transcript — which is the same full-price read
+// that eating the invalidation costs. There would be no saving to offer, and a
+// dialog that says "compact to pay less" would be lying. The warm summarizer
+// reads that same transcript at cache rates; only then is the offer true.
+//
+// A failed compaction does NOT fail the turn. The user asked to save money, not
+// to have their message dropped: the compact closure already reports the error
+// through EvCompactEnd, and the turn proceeds — expensively, which is exactly
+// the outcome they were trying to avoid, but not destructively.
+func (a *Agent) offerCompactOnPrefixChange(ctx context.Context, compact func(reason string) error) {
+	if !a.prefixGuardOn() || !a.cacheAwareCompactionOn() {
+		return
+	}
+	asker := a.Asker
+	if asker == nil {
+		return
+	}
+	reason, tokens, ok := a.pendingPrefixChange()
+	if !ok || !a.CanCompact(AutoCompactKeepTail) {
+		return
+	}
+
+	compactNow := i18n.T("Compact first")
+	ans, err := asker.Ask(ctx, UserQuestion{
+		Question: i18n.T(
+			"Since your last message %s, so the provider's cached prompt no longer matches: the next request re-reads %s tokens at full price instead of serving them from cache. Compact the conversation first? The summary is written against the prompt that is still cached, so it costs a fraction of the re-read.",
+			reason, fmtTokenCount(tokens)),
+		Options: []string{compactNow, i18n.T("Send as-is")},
+	})
+	if err != nil || ans.Declined || ans.Answer != compactNow {
+		return
+	}
+	_ = compact(i18n.T("prompt cache invalidated: %s", reason))
 }
 
 // fmtTokenCount renders a token count compactly (850, 12.3k, 1.2M) for

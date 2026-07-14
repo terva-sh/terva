@@ -226,6 +226,11 @@ func eventToWire(ev AgentEvent, imageData bool) WireEvent {
 		out.Text = e.Reason
 	case EvCompactEnd:
 		out.Error = e.Err
+		// What the condense itself cost. Rides the same Usage field EvUsage
+		// uses, but on a compact_end frame — so a client that seeds a context
+		// gauge from usage (they key off EvUsage) can't mistake it for one.
+		u := usageToWire(e.Usage)
+		out.Usage = &u
 	case EvError:
 		if e.Err != nil {
 			out.Error = e.Err.Error()

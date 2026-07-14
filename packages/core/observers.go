@@ -72,8 +72,10 @@ func (a *Agent) AddUsageObserver(fn func(u, cumulative provider.Usage)) {
 // AddTranscriptCompactedObserver registers fn to fire after Compact replaces
 // the in-memory transcript with the synthetic summary plus kept tail. Message
 // observers do not fire for that wholesale replacement, so hosts append an
-// explicit compaction checkpoint here. nil is a no-op.
-func (a *Agent) AddTranscriptCompactedObserver(fn func(messages []provider.Message)) {
+// explicit compaction checkpoint here. res carries what the compaction cost,
+// so the checkpoint can record it (see CompactResult — that spend is cost, not
+// context, and must never reach a usage row). nil is a no-op.
+func (a *Agent) AddTranscriptCompactedObserver(fn func(messages []provider.Message, res CompactResult)) {
 	if fn == nil {
 		return
 	}
@@ -202,13 +204,13 @@ func (a *Agent) fireUsage(u, cumulative provider.Usage) {
 	}
 }
 
-func (a *Agent) fireTranscriptCompacted(messages []provider.Message) {
+func (a *Agent) fireTranscriptCompacted(messages []provider.Message, res CompactResult) {
 	a.obsMu.RLock()
-	obs := make([]func(messages []provider.Message), len(a.transcriptCompactedObs))
+	obs := make([]func(messages []provider.Message, res CompactResult), len(a.transcriptCompactedObs))
 	copy(obs, a.transcriptCompactedObs)
 	a.obsMu.RUnlock()
 	for _, fn := range obs {
-		fn(messages)
+		fn(messages, res)
 	}
 }
 

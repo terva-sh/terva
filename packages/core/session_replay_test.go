@@ -140,7 +140,7 @@ func TestReadReplayRowsKeepsCompactedHistory(t *testing.T) {
 	if err := sess.AppendMessage(msg("two")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendCompaction([]provider.Message{msg("summary")}); err != nil {
+	if err := sess.AppendCompaction([]provider.Message{msg("summary")}, CompactResult{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.AppendMessage(msg("three")); err != nil {

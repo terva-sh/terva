@@ -164,8 +164,14 @@ type EvCompactStart struct {
 func (EvCompactStart) Type() string { return "compact_start" }
 
 // EvCompactEnd closes an EvCompactStart. Err is empty on success.
+//
+// Usage is the summarization call's own spend, so a host can tell the user
+// what the condense cost — and, on a cache-aware summarizer, how much of it
+// was served from the prompt cache rather than re-read. It is cost, never a
+// context-window sample (see CompactResult): nothing may seed a gauge from it.
 type EvCompactEnd struct {
-	Err string
+	Err   string
+	Usage provider.Usage
 }
 
 func (EvCompactEnd) Type() string { return "compact_end" }

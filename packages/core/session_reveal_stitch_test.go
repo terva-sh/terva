@@ -38,7 +38,7 @@ func TestRevealChainReconstructsDisplayHistoryWithoutOverlap(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.AppendCompaction([]provider.Message{revSummary("summary1"), revUser("m2"), revUser("m3")}); err != nil {
+	if err := s.AppendCompaction([]provider.Message{revSummary("summary1"), revUser("m2"), revUser("m3")}, CompactResult{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range []provider.Message{revUser("m4"), revUser("m5")} {
@@ -46,7 +46,7 @@ func TestRevealChainReconstructsDisplayHistoryWithoutOverlap(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.AppendCompaction([]provider.Message{revSummary("summary2"), revUser("m4"), revUser("m5")}); err != nil {
+	if err := s.AppendCompaction([]provider.Message{revSummary("summary2"), revUser("m4"), revUser("m5")}, CompactResult{}); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()
@@ -137,7 +137,7 @@ func TestRevealStopsAtAClear(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.AppendCompaction(nil); err != nil { // this is what /clear writes
+	if err := s.AppendCompaction(nil, CompactResult{}); err != nil { // this is what /clear writes
 		t.Fatal(err)
 	}
 	for _, m := range []provider.Message{revUser("after0"), revUser("after1")} {
@@ -145,7 +145,7 @@ func TestRevealStopsAtAClear(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.AppendCompaction([]provider.Message{revSummary("summary"), revUser("after1")}); err != nil {
+	if err := s.AppendCompaction([]provider.Message{revSummary("summary"), revUser("after1")}, CompactResult{}); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()

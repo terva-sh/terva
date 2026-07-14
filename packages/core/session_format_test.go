@@ -108,7 +108,7 @@ func TestSessionCompactionRoundTrip(t *testing.T) {
 	}
 	summary := provider.Message{Role: provider.RoleAssistant, Time: when,
 		Content: []provider.Content{provider.TextBlock{Text: "summary of everything"}}}
-	if err := s.AppendCompaction([]provider.Message{summary}); err != nil {
+	if err := s.AppendCompaction([]provider.Message{summary}, CompactResult{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

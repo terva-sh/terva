@@ -33,7 +33,7 @@ func TestSessionConcurrentWrites(t *testing.T) {
 		},
 		func() { // the clear/compact checkpoint path
 			for i := 0; i < 60; i++ {
-				_ = s.AppendCompaction(nil)
+				_ = s.AppendCompaction(nil, CompactResult{})
 			}
 		},
 		func() { // usage rows

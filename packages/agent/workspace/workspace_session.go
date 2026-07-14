@@ -744,7 +744,9 @@ func (s *wsSession) clear() error {
 		return ctrlproto.ErrBusy
 	}
 	s.agent.SetMessages(nil)
-	_ = s.sess.AppendCompaction(nil)
+	// A clear reuses the compaction row as a floor marker. No summarizer ran,
+	// so it cost nothing — zero usage, not the previous compaction's.
+	_ = s.sess.AppendCompaction(nil, core.CompactResult{})
 	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	s.broadcast(ctrlproto.NoticeEvent("info", "", i18n.T("Cleared the conversation.")))
 	return nil

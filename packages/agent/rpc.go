@@ -475,10 +475,35 @@ func (s *rpcServer) runCompact(id string) {
 	defer s.setCancel(nil)
 
 	s.writeResponse(id, "compact", map[string]any{"started": true})
-	summary, err := s.agent.Compact(subCtx, core.AutoCompactKeepTail, nil)
+	// res.Summary, not res: the event's "summary" field is a string, and
+	// map[string]any would have accepted the whole struct without a murmur
+	// from the compiler — silently turning a documented string field into an
+	// object for every --json consumer.
+	res, err := s.agent.Compact(subCtx, core.AutoCompactKeepTail, nil)
 	switch {
 	case err == nil:
-		s.writeEvent(map[string]any{"type": "compact_done", "summary": summary})
+		// strategy/usage ride the event because RPC is the programmatic driver —
+		// and unlike the TUI it persists no session, so without them there is no
+		// way to observe WHICH summarizer ran or whether its cache actually hit.
+		// That is the one thing a cache-aware compaction cannot tell you by
+		// succeeding: a prefix match that missed produces the same summary and
+		// the same transcript, and differs only in these numbers.
+		ev := map[string]any{
+			"type":     "compact_done",
+			"summary":  res.Summary,
+			"strategy": string(res.Strategy),
+			"usage": map[string]any{
+				"input":       res.Usage.InputTokens,
+				"output":      res.Usage.OutputTokens,
+				"cache_read":  res.Usage.CacheReadTokens,
+				"cache_write": res.Usage.CacheWriteTokens,
+				"cost_usd":    res.Usage.CostUSD,
+			},
+		}
+		if res.FallbackReason != "" {
+			ev["fallback_reason"] = res.FallbackReason
+		}
+		s.writeEvent(ev)
 	case errors.Is(err, core.ErrNothingToCompact):
 		// Explicit /compact with nothing to summarize — benign no-op.
 		s.writeEvent(map[string]any{"type": "compact_done", "summary": ""})

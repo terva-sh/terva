@@ -130,7 +130,7 @@ func TestCarrierEffectiveCompactionCollapses(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := sess.AppendCompaction([]provider.Message{am("[summary]")}); err != nil {
+	if err := sess.AppendCompaction([]provider.Message{am("[summary]")}, core.CompactResult{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range []provider.Message{um("three"), am("third")} {

@@ -108,9 +108,31 @@ Summarise the current transcript into one synthetic user message. Same lifecycle
 {"id":"3","type":"compact"}
 ```
 
-On success or a no-op it emits `{"type":"compact_done","summary":"<text>"}` — the
-summary is empty when the keep-tail already covers the whole transcript (nothing
-to compact). A failure emits the canonical `{"type":"error","error":"<message>"}`.
+On success it emits:
+
+```json
+{"type":"compact_done","summary":"<text>","strategy":"warm",
+ "usage":{"input":412,"output":880,"cache_read":11904,"cache_write":0,"cost_usd":0.021}}
+```
+
+`strategy` is `"cold"` (the bespoke summarizer — its own system prompt, no tools,
+the transcript flattened into one block, matching nothing the provider has
+cached), `"warm"` (the `cache_aware_compaction` engine feature: the conversation's
+own prompt prefix, so the transcript is served from cache), or
+`"warm_fallback_cold"`, which adds a `fallback_reason` — `tool_use` (the model had
+its tools live, as it must, and used one instead of summarizing),
+`rejected_too_large`, `error`, or `empty_summary`.
+
+`usage` is the summarization call's own spend, summed across both attempts when a
+warm one fell back. **This is the only way to tell whether a warm compaction
+actually hit the cache**: one that missed produces the same summary and the same
+transcript and raises no error, differing only in that `cache_read` is ~0 and the
+tokens were billed at full price. RPC persists no session, so there is no row to
+check afterwards — if you are measuring, measure here.
+
+On a no-op, `summary` is empty (the keep-tail already covers the whole transcript,
+so there was nothing to compact). A failure emits the canonical
+`{"type":"error","error":"<message>"}`.
 Every outcome — success, no-op, failure, or cancellation — then terminates with
 exactly one `{"type":"done"}`, identical to `prompt`, so a generic event loop can
 key on `done` for both operations. `compact_done` is a result event, not the

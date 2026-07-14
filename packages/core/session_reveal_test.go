@@ -36,7 +36,7 @@ func TestRevealCompaction(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.AppendCompaction([]provider.Message{revSummary("summary1"), revUser("m2"), revUser("m3")}); err != nil {
+	if err := s.AppendCompaction([]provider.Message{revSummary("summary1"), revUser("m2"), revUser("m3")}, CompactResult{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range []provider.Message{revUser("m4"), revUser("m5")} {
@@ -44,7 +44,7 @@ func TestRevealCompaction(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.AppendCompaction([]provider.Message{revSummary("summary2"), revUser("m4"), revUser("m5")}); err != nil {
+	if err := s.AppendCompaction([]provider.Message{revSummary("summary2"), revUser("m4"), revUser("m5")}, CompactResult{}); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()

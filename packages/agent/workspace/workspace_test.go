@@ -1044,10 +1044,10 @@ func TestRevealCompactionNode(t *testing.T) {
 	for _, s := range []string{"m0", "m1", "m2", "m3"} {
 		_ = sess.AppendMessage(um(s))
 	}
-	_ = sess.AppendCompaction([]provider.Message{sm("summary1"), um("m2"), um("m3")})
+	_ = sess.AppendCompaction([]provider.Message{sm("summary1"), um("m2"), um("m3")}, core.CompactResult{})
 	_ = sess.AppendMessage(um("m4"))
 	_ = sess.AppendMessage(um("m5"))
-	_ = sess.AppendCompaction([]provider.Message{sm("summary2"), um("m4"), um("m5")})
+	_ = sess.AppendCompaction([]provider.Message{sm("summary2"), um("m4"), um("m5")}, core.CompactResult{})
 
 	// The live agent after compaction holds the latest summary + its kept tail.
 	ag := core.NewAgent(nil, "fake", "", core.Registry{})

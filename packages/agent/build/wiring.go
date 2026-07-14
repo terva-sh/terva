@@ -655,10 +655,10 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 		defer mu.Unlock()
 		_ = sess.AppendUsage(u, cum)
 	})
-	ag.AddTranscriptCompactedObserver(func(messages []provider.Message) {
+	ag.AddTranscriptCompactedObserver(func(messages []provider.Message, res core.CompactResult) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendCompaction(messages)
+		_ = sess.AppendCompaction(messages, res)
 	})
 	// Image-rejection recovery: the agent drops an image the provider 400'd on
 	// and fires this. Persisting an exclude_image directive is what makes the

@@ -125,6 +125,17 @@ type sessionLine struct {
 	Usage      *provider.Usage   `json:"usage,omitempty"`
 	Cumulative *provider.Usage   `json:"cumulative,omitempty"`
 	Directive  *sessionDirective `json:"directive,omitempty"`
+
+	// Strategy and FallbackReason ride "compaction" rows only, and only when the
+	// cache-aware summarizer is in play ("cold" is the default and stays
+	// implicit on legacy rows, which decode to ""). They make the
+	// cache_aware_compaction A/B analyzable straight out of the session log —
+	// which arm ran, how often the warm one fell back and why — and, more
+	// importantly, make the silent failure detectable: strategy "warm" whose
+	// usage shows no cache reads means the prefix match MISSED and the tokens
+	// were billed at full price behind a label promising otherwise.
+	Strategy       string `json:"strategy,omitempty"`
+	FallbackReason string `json:"fallback_reason,omitempty"`
 }
 
 // sessionDirective is an append-only mutation instruction: a JSONL line that
@@ -512,29 +523,65 @@ func SessionUsageDetail(path string) (cumulative, lastTurn provider.Usage, err e
 	// cumulative rows. For prompt-size purposes, cache_read/cache_write
 	// reflect the most recent prompt directly, so we take those from the
 	// final cumulative row as-is rather than as a delta.
+	//
+	// Compaction rows carry their own spend (AppendCompaction), and it is
+	// folded into the running total in memory — so a turn's cumulative row
+	// already contains every compaction that preceded it. Two corrections
+	// follow, and both matter:
+	//
+	//   - A compaction BETWEEN the final two turns inflates the naive delta,
+	//     because cum_N = cum_{N-1} + compaction + u_N. Left uncorrected the
+	//     resumed context gauge reads roughly double (a compaction's input is
+	//     transcript-sized), and the first threshold check fires a spurious
+	//     auto-compact on an already-condensed transcript. Subtract it.
+	//   - A compaction AFTER the last turn is in no cumulative row at all —
+	//     the in-memory total has it, but nothing wrote it. Compact and then
+	//     quit for the day, which is an ordinary thing to do, and the spend
+	//     vanished. Add it.
+	//
+	// Old sessions have no usage on their compaction rows; both corrections
+	// are then zero and this degrades exactly to the previous behaviour.
 	var prevCum provider.Usage
 	var haveCum bool
+	var sinceLastTurn provider.Usage // compaction spend after the newest usage row
+	var betweenLastTwo provider.Usage
 	if ierr := forEachJSONLLine(f, func(line []byte) error {
 		var head sessionLineHead
-		if err := json.Unmarshal(line, &head); err != nil || head.Type != "usage" {
+		if err := json.Unmarshal(line, &head); err != nil {
 			return nil
 		}
-		var row struct {
-			Cumulative provider.Usage `json:"cumulative"`
+		switch head.Type {
+		case "compaction":
+			var row struct {
+				Usage *provider.Usage `json:"usage"`
+			}
+			if err := json.Unmarshal(line, &row); err != nil || row.Usage == nil {
+				return nil
+			}
+			sinceLastTurn = sinceLastTurn.Add(*row.Usage)
+		case "usage":
+			var row struct {
+				Cumulative provider.Usage `json:"cumulative"`
+			}
+			if err := json.Unmarshal(line, &row); err != nil {
+				return nil
+			}
+			if haveCum {
+				prevCum = cumulative
+			}
+			betweenLastTwo = sinceLastTurn
+			sinceLastTurn = provider.Usage{}
+			cumulative = row.Cumulative
+			haveCum = true
 		}
-		if err := json.Unmarshal(line, &row); err != nil {
-			return nil
-		}
-		if haveCum {
-			prevCum = cumulative
-		}
-		cumulative = row.Cumulative
-		haveCum = true
 		return nil
 	}); ierr != nil {
 		return provider.Usage{}, provider.Usage{}, ierr
 	}
 	if haveCum {
+		// Charge the compactions that ran between the final two turns to the
+		// baseline, not to the turn: delta(cum_N, cum_{N-1} + between) = u_N.
+		prevCum = prevCum.Add(betweenLastTwo)
 		// input/output are monotonic totals -> per-turn = delta.
 		lastTurn.InputTokens = nonNegDelta(cumulative.InputTokens, prevCum.InputTokens)
 		lastTurn.OutputTokens = nonNegDelta(cumulative.OutputTokens, prevCum.OutputTokens)
@@ -553,6 +600,9 @@ func SessionUsageDetail(path string) (cumulative, lastTurn provider.Usage, err e
 			lastTurn.CostUSD = 0
 		}
 	}
+	// A compaction after the newest turn never reached a cumulative row. Fold
+	// it into the total — but NOT into lastTurn, which is the context gauge.
+	cumulative = cumulative.Add(sinceLastTurn)
 	return cumulative, lastTurn, nil
 }
 
@@ -1054,7 +1104,21 @@ func (s *Session) AppendMessage(m provider.Message) error {
 // transcript rows when the session is resumed. The old rows remain in
 // the JSONL file for audit/export, while loaders use the latest
 // compaction row as the effective transcript.
-func (s *Session) AppendCompaction(messages []provider.Message) error {
+//
+// res.Usage is the summarization call's own spend, recorded on THIS row rather
+// than as a "usage" row on purpose. SessionUsageDetail derives the resumed
+// context gauge from usage rows alone, and a compaction's input count is
+// transcript-sized by construction — as a usage row it would seed the gauge
+// stale-high and fire a spurious auto-compact on an already-condensed
+// transcript, which is the exact bug CostTracker.AddTotalOnly avoids in
+// memory. Compaction spend is cost, never context; the row type is what
+// carries that distinction across the file boundary.
+//
+// res.Strategy records which summarizer produced it, because usage alone cannot
+// say — and a cache-aware compaction that MISSED the cache is indistinguishable
+// from one that hit, except in these numbers. A zero CompactResult is what
+// /clear writes: a floor marker that summarized nothing and cost nothing.
+func (s *Session) AppendCompaction(messages []provider.Message, res CompactResult) error {
 	if s == nil {
 		return nil
 	}
@@ -1062,9 +1126,16 @@ func (s *Session) AppendCompaction(messages []provider.Message) error {
 	for _, m := range messages {
 		wires = append(wires, encodeWireMessage(m))
 	}
+	u := res.Usage
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.writeLineLocked(sessionLine{Type: "compaction", Messages: wires}); err != nil {
+	if err := s.writeLineLocked(sessionLine{
+		Type:           "compaction",
+		Messages:       wires,
+		Usage:          &u,
+		Strategy:       string(res.Strategy),
+		FallbackReason: res.FallbackReason,
+	}); err != nil {
 		return err
 	}
 	s.messagesAppended = len(messages)

@@ -314,7 +314,7 @@ func (r *Runtime) Compact(ctx context.Context, customInstructions string) (Compa
 		r.mu.Unlock()
 	}()
 
-	summary, err := r.agent.Compact(subCtx, core.AutoCompactKeepTail, nil)
+	res, err := r.agent.Compact(subCtx, core.AutoCompactKeepTail, nil)
 	if err != nil {
 		if errors.Is(err, core.ErrNothingToCompact) {
 			// Nothing to summarize — benign. Return an empty-summary result
@@ -323,7 +323,7 @@ func (r *Runtime) Compact(ctx context.Context, customInstructions string) (Compa
 		}
 		return CompactResult{}, err
 	}
-	return CompactResult{Summary: summary, Messages: r.Messages()}, nil
+	return CompactResult{Summary: res.Summary, Messages: r.Messages()}, nil
 }
 
 // SetModel switches the active model. Same provider only; for cross-

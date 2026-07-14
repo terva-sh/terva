@@ -756,7 +756,9 @@ func (f *fakeFactory) newDurableSession(cwd string) (*core.Session, error) {
 func wireFakePersist(ag *core.Agent, sess *core.Session) {
 	ag.AddMessageObserver(func(m provider.Message) { _ = sess.AppendMessage(m) })
 	ag.AddUsageObserver(func(u, cum provider.Usage) { _ = sess.AppendUsage(u, cum) })
-	ag.AddTranscriptCompactedObserver(func(msgs []provider.Message) { _ = sess.AppendCompaction(msgs) })
+	ag.AddTranscriptCompactedObserver(func(msgs []provider.Message, res core.CompactResult) {
+		_ = sess.AppendCompaction(msgs, res)
+	})
 }
 
 func (f *fakeFactory) sessionModel() (prov, model string) {

@@ -78,7 +78,7 @@ func TestNilObserverIsDropped(t *testing.T) {
 	a.EmitLifecycle(EvCompactEnd{})
 	a.fireMessageAppended(provider.Message{})
 	a.fireUsage(provider.Usage{}, provider.Usage{})
-	a.fireTranscriptCompacted(nil)
+	a.fireTranscriptCompacted(nil, CompactResult{})
 	a.fireImageExcluded("deadbeef")
 
 	if got := a.eventObservers(); len(got) != 0 {

@@ -249,7 +249,7 @@ func TestBranchSessionUsesEffectiveTranscriptAfterCompaction(t *testing.T) {
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "summary"}}},
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "tail-c"}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "tail-d"}}},
-	})
+	}, CompactResult{})
 	_ = parent.AppendMessage(provider.Message{
 		Role:    provider.RoleUser,
 		Content: []provider.Content{provider.TextBlock{Text: "after-compact"}},
