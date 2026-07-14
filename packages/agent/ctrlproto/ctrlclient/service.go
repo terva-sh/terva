@@ -235,6 +235,26 @@ func (s *Service) AuthLogout(ctx context.Context, p ctrlproto.AuthLogoutParams) 
 	return s.c.Call(ctx, "", ctrlproto.MethodAuthLogout, p, nil)
 }
 
+func (s *Service) AuthEndpointRemove(ctx context.Context, p ctrlproto.AuthEndpointRemoveParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodAuthEndpointRemove, p, nil)
+}
+
+// --- model params (models.json overrides) ---
+
+func (s *Service) ModelParams(ctx context.Context, p ctrlproto.ModelParamsParams) (ctrlproto.ModelParamsView, error) {
+	var r ctrlproto.ModelParamsView
+	err := s.c.Call(ctx, "", ctrlproto.MethodModelParams, p, &r)
+	return r, err
+}
+
+func (s *Service) ModelParamsSet(ctx context.Context, p ctrlproto.ModelParamsSetParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodModelParamsSet, p, nil)
+}
+
+func (s *Service) ModelParamsReset(ctx context.Context, p ctrlproto.ModelParamsParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodModelParamsReset, p, nil)
+}
+
 // --- control group ---
 
 func (s *Service) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) {

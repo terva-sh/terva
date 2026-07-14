@@ -14,6 +14,7 @@ export function ModelPicker({
   onSwitch,
   onToggleFavorite,
   onSetDefault,
+  onEdit,
   onClose,
 }: {
   groups: [string, ModelInfo[]][]
@@ -22,6 +23,10 @@ export function ModelPicker({
   onSwitch: (id: string, provider?: string) => void
   onToggleFavorite: (provider: string, id: string, on: boolean) => void
   onSetDefault: (provider: string, id: string, scope: 'global' | 'project') => void
+  // Opens the per-model overrides (context window, max tokens, …). They are
+  // settings ABOUT this model, so they hang off its row rather than off a pane
+  // that would have to list every model a second time.
+  onEdit: (provider: string, id: string) => void
   onClose: () => void
 }) {
   const [q, setQ] = useState('')
@@ -72,6 +77,16 @@ export function ModelPicker({
         }}
       >
         {model.default ? '◉' : '○'}
+      </button>
+      <button
+        class="pick-default"
+        title={t('Model settings (context window, max tokens, …)')}
+        onClick={(event) => {
+          event.stopPropagation()
+          onEdit(model.provider, model.id)
+        }}
+      >
+        ⚙
       </button>
       <span class="pick-id">{model.id}</span>
       <span class="pick-meta">

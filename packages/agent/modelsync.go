@@ -20,9 +20,7 @@ func ModelCachePath() string {
 }
 
 // UserModelsPath returns the path to the user's models.json override.
-func UserModelsPath() string {
-	return filepath.Join(config.TervaHome(), "models.json")
-}
+func UserModelsPath() string { return config.UserModelsPath() }
 
 // LoadCachedModels loads the cache file and applies it to the provider
 // package so FindModel / ModelsForProvider see live ids immediately.

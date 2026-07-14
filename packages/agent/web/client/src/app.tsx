@@ -17,6 +17,7 @@ import type {
   ChatView,
   ChatServiceInfo,
   ModelInfo,
+  ModelParamsView,
   AuthFlowStep,
   PanelView,
   PermissionRequest,
@@ -50,6 +51,7 @@ import { ConversationTimeline } from './features/conversation/ConversationTimeli
 import type { ToolView } from './features/conversation/types'
 import { AskRequest as AskRequestView } from './features/interactions/AskRequest'
 import { PermissionRequest as PermissionRequestView } from './features/interactions/PermissionRequest'
+import { ModelParamsForm } from './features/models/ModelParamsForm'
 import { ModelPicker } from './features/models/ModelPicker'
 import { SessionInfo as SessionInfoView } from './features/sessions/SessionInfo'
 import { SessionPicker } from './features/sessions/SessionPicker'
@@ -130,6 +132,11 @@ export function App() {
   // Available skills (from the snapshot), for /skill autocomplete.
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
+  // The per-model overrides (models.json). Held here rather than in the picker so
+  // a failed save keeps its error next to the form that produced it.
+  const [modelParams, setModelParams] = useState<ModelParamsView | null>(null)
+  const [modelParamsBusy, setModelParamsBusy] = useState(false)
+  const [modelParamsErr, setModelParamsErr] = useState('')
   // Pane host (surfaces): context/usage/extension panels in a right rail.
   const [paneOpen, setPaneOpen] = useState(false)
   const [surfaces, setSurfaces] = useState<SurfaceMeta[]>([])
@@ -722,6 +729,75 @@ export function App() {
     }
   }, [])
 
+  // Forgets a named endpoint outright — its config entry and any key stored under
+  // it. Deliberately not routed through logout: that clears a secret and leaves the
+  // provider there to sign back into, while this deletes the operator's only record
+  // of which machine, which port, which context window.
+  const removeEndpoint = useCallback(async (id: string) => {
+    const c = clientRef.current
+    if (!c) return
+    setAuthErr('')
+    try {
+      await c.send('auth.endpoint.remove', { id }, '')
+    } catch (e) {
+      setAuthErr(authMessage(e))
+    }
+  }, [])
+
+  // Per-model settings: the daemon describes them, we render whatever it sends.
+  const openModelParams = useCallback(async (provider: string, id: string) => {
+    const c = clientRef.current
+    if (!c) return
+    setModelParamsErr('')
+    try {
+      const v = await c.send<ModelParamsView>('models.params', { provider, model: id }, '')
+      setModelParams(v)
+    } catch (e) {
+      setToast(authMessage(e))
+    }
+  }, [])
+
+  const saveModelParams = useCallback(
+    async (values: Record<string, string>) => {
+      const v = modelParams
+      const c = clientRef.current
+      if (!v || !c) return
+      setModelParamsBusy(true)
+      setModelParamsErr('')
+      try {
+        await c.send('models.params.set', { provider: v.provider, model: v.model, values }, '')
+        setModelParams(null)
+        setPickerOpen(false)
+        setToast(t('saved settings for %s', `${v.provider}/${v.model}`))
+      } catch (e) {
+        // Kept open, with the daemon's own words: it names the setting that was
+        // wrong, and closing the form would take that away along with the typing.
+        setModelParamsErr(authMessage(e))
+      } finally {
+        setModelParamsBusy(false)
+      }
+    },
+    [modelParams],
+  )
+
+  const resetModelParams = useCallback(async () => {
+    const v = modelParams
+    const c = clientRef.current
+    if (!v || !c) return
+    setModelParamsBusy(true)
+    setModelParamsErr('')
+    try {
+      await c.send('models.params.reset', { provider: v.provider, model: v.model }, '')
+      setModelParams(null)
+      setPickerOpen(false)
+      setToast(t('reset %s to its defaults', `${v.provider}/${v.model}`))
+    } catch (e) {
+      setModelParamsErr(authMessage(e))
+    } finally {
+      setModelParamsBusy(false)
+    }
+  }, [modelParams])
+
   // Lazily fetch a context node's content/children on expand (context.node).
   const fetchNode = useCallback(
     (id: string, op?: string): Promise<ContextNode> =>
@@ -1070,7 +1146,23 @@ export function App() {
         />
       )}
 
-      {pickerOpen && (
+      {/* The settings form OWNS the overlay while it is open. Leaving the model
+          list behind it invites picking a second model mid-edit, and the typing
+          would go to whichever one the form still thought it was editing. */}
+      {pickerOpen && modelParams ? (
+        <div class="modal-scrim" onClick={() => setModelParams(null)}>
+          <div class="modal picker" onClick={(e) => e.stopPropagation()}>
+            <ModelParamsForm
+              view={modelParams}
+              busy={modelParamsBusy}
+              error={modelParamsErr}
+              onSave={saveModelParams}
+              onReset={resetModelParams}
+              onCancel={() => setModelParams(null)}
+            />
+          </div>
+        </div>
+      ) : pickerOpen ? (
         <ModelPicker
           groups={modelGroups}
           favorites={favorites}
@@ -1081,9 +1173,10 @@ export function App() {
           }}
           onToggleFavorite={favoriteModel}
           onSetDefault={setDefaultModel}
+          onEdit={openModelParams}
           onClose={() => setPickerOpen(false)}
         />
-      )}
+      ) : null}
 
       {drawer && (
         <SessionPicker

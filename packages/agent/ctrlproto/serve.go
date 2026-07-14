@@ -383,6 +383,52 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		}
 		s.respond(f.ID, nil, ac.AuthLogout(ctx, p))
 
+	case MethodModelParams, MethodModelParamsSet, MethodModelParamsReset:
+		// Optional, like the auth group: a carrier with no models.json to write
+		// simply does not implement it, and says so rather than failing deeper.
+		mc, ok := s.svc.(ModelParamsController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "editing model settings is not supported here"))
+			return
+		}
+		switch f.Method {
+		case MethodModelParams:
+			var p ModelParamsParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := mc.ModelParams(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodModelParamsSet:
+			var p ModelParamsSetParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, mc.ModelParamsSet(ctx, p))
+		default:
+			var p ModelParamsParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, mc.ModelParamsReset(ctx, p))
+		}
+
+	case MethodAuthEndpointRemove:
+		ac, ok := s.svc.(AuthController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "login not supported"))
+			return
+		}
+		var p AuthEndpointRemoveParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, ac.AuthEndpointRemove(ctx, p))
+
 	// --- replay (optional; served only by a ReplayController) ---
 	case MethodReplayControl:
 		rc, ok := s.svc.(ReplayController)

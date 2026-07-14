@@ -250,13 +250,38 @@ You can also add models to your `models.json` so you don't need flags every time
 
 The `ollama` provider uses the OpenAI chat completions protocol internally, so it also works with any OpenAI-compatible server (vLLM, LM Studio, LocalAI, etc.).
 
+### Editing a model's settings
+
+Per-model overrides — **context window**, **desired context window**, **max
+tokens**, **temperature**, **base URL** — live in `$TERVA_HOME/models.json` and are
+editable from either frontend:
+
+- **TUI**: open `/model`, highlight a model, and edit it.
+- **Web**: open the model picker and press the ⚙ on the model's row.
+
+Both write the same `models.json` and both are driven by one descriptor in the
+daemon, so neither can drift onto a different idea of what a setting means.
+
+An **empty box means inherit** — whatever terva knows about that model — so the
+default is shown as placeholder text rather than filled in. Clearing a box removes
+that override; **Reset to defaults** removes the model's entry outright.
+
+`desiredContextWindow` is the one whose name does not explain it: it is not the
+model's ceiling but the *working* window that drives auto-condensing, so you can
+keep a large-window model and still condense earlier.
+
+Changing a setting takes effect immediately; a session sitting on that model is
+re-resolved, which is what lets a changed base URL actually reach the new machine.
+
 ### OpenAI-compatible endpoints (LM Studio, vLLM, llama.cpp, gateways)
 
 For local servers that aren't Ollama — or any hosted OpenAI-compatible gateway — use the first-class `openai-compatible` provider. Unlike `ollama` it has no fixed base URL: you configure the endpoint through `/login`.
 
 Run `/login`, pick **OpenAI Compatible (local/custom)**, and enter the base URL, a default model id, and (optionally) a default context window. The API key is optional — most local servers ignore it. terva then lists `GET {base-url}/models` on every launch and adds every model the server serves to the `/model` picker, so you don't pre-register them.
 
-**One endpoint per login.** `/login` stores a single `openai-compatible` endpoint, so logging in to a second one overwrites the first.
+**Name it to keep several.** A named endpoint (the optional first field at `/login`, in the terminal or the web panel's Providers pane) is registered as **its own provider** under that name, with its own `/v1/models` discovery — so a small local model for titles and a big one on another box coexist in `/model`. Named endpoints live in `config.json` under `endpoints`; their keys, if any, live in `auth.json` under the same name, and a named endpoint needs no default model id.
+
+**Leave the name empty and it is the shared slot.** `/login` then stores a single `openai-compatible` endpoint, so logging in to a second one without a name overwrites the first.
 
 **Several backends at once — named endpoints.** Define them in `config.json` under `endpoints`; each becomes its **own provider** (the key is the provider id) with its own `/v1/models` discovery and its own row in the `/model` picker — so models from different machines don't pile into one `openai-compatible` list:
 
