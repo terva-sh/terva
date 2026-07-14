@@ -72,6 +72,12 @@ dist/
 /terva-discord-connector
 
 node_modules/
+# Vite's cache. It normally lives under the client's node_modules/ (already
+# ignored) — but it is written relative to the CWD, so running vitest or vite
+# from the repo root (`npm --prefix packages/agent/web/client exec vitest …`,
+# which is the natural way to run one test file) drops it HERE instead, where a
+# `git add -A` will happily commit it. Nothing generates it in CI.
+.vite/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
