@@ -1074,12 +1074,45 @@ func (s *Session) AppendCompaction(messages []provider.Message) error {
 // UpdateModel records a provider/model switch in the session file.
 // The reader keeps the most recent meta entry, so the session resumes
 // with the updated model.
+//
+// A switch that changes nothing writes nothing. Startup applies the resolved
+// model unconditionally, so without this a session opened three times over
+// began with three byte-identical meta rows saying the same thing — noise in a
+// file whose meta rows are supposed to read as a timeline of what changed.
 func (s *Session) UpdateModel(providerName, model string) error {
 	if s == nil {
 		return nil
 	}
+	if s.Meta.Provider == providerName && s.Meta.Model == model {
+		return nil
+	}
 	s.Meta.Provider = providerName
 	s.Meta.Model = model
+	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+}
+
+// StampVersion records the running build in the session file, so a session that
+// spans an upgrade can say which terva wrote which part of it.
+//
+// The meta rows already form a timeline: they are append-only, the loader keeps
+// the last one, and UpdateModel writes a fresh one on every model switch — which
+// is what lets a reader say "these turns ran on codex, those on anthropic".
+// Version was the one field that never joined it. It was stamped once by
+// NewSession and then re-emitted verbatim forever, so every row a resumed
+// session wrote CLAIMED the build that had created the session, however many
+// upgrades ago. Attribution across an upgrade was not missing so much as wrong.
+//
+// Callers are the paths that RESUME a session to keep talking in it. Opening a
+// session to read it — an inspector, a sub-agent lifting its transcript — must
+// not stamp: it isn't writing any of the rows it would be claiming.
+//
+// A no-op when the version is unchanged, which is the common case, so a session
+// that never crosses an upgrade grows no extra rows.
+func (s *Session) StampVersion(version string) error {
+	if s == nil || version == "" || s.Meta.Version == version {
+		return nil
+	}
+	s.Meta.Version = version
 	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
 }
 

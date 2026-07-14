@@ -384,6 +384,11 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "open session: %v", err)
 	}
+	// The daemon is picking this session back up to keep talking in it, so the
+	// rows it is about to write belong to THIS build, not the one that created
+	// the file. Best-effort: a session that resumes but cannot record its
+	// version is still a session worth resuming.
+	_ = sess.StampVersion(w.version)
 	// Resume with the same compact window the legacy TUI uses: the live agent
 	// gets the recent tail (plus any compaction summary), not the whole
 	// multi-thousand-message history — which would otherwise ride every

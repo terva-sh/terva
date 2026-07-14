@@ -119,6 +119,9 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 		// session file to resource_not_found rather than internal_error.
 		return acp.SessionAgent{}, nil, err
 	}
+	// Reopened to keep talking in it: the rows this build appends are this
+	// build's. Best-effort — never fail a resume over a provenance row.
+	_ = sess.StampVersion(f.version)
 	// Prefer the request cwd; fall back to the session's recorded cwd so the
 	// agent's tools/system-prompt bind to the right working directory even
 	// when the editor omits it.

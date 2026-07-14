@@ -635,6 +635,13 @@ func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, vers
 		return nil, err
 	}
 	if s != nil {
+		// Every resume above lands here, which is the one place that knows the
+		// session is being CONTINUED rather than merely read — so it is where the
+		// running build gets recorded. Without it a session resumed after an
+		// upgrade keeps re-stamping the version that created it.
+		if verr := s.StampVersion(version); verr != nil {
+			fmt.Fprintln(os.Stderr, "terva:", verr)
+		}
 		// Startup path: stderr is still ours (no TUI yet), so surface
 		// anything OpenSession had to skip instead of losing it.
 		for _, w := range s.LoadWarnings {

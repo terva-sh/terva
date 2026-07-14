@@ -687,6 +687,9 @@ func openOrCreateSessionForBot(args build.Args, r build.Resolved, ag *core.Agent
 			if err != nil {
 				return nil, nil, err
 			}
+			if verr := s.StampVersion(version); verr != nil {
+				fmt.Fprintln(os.Stderr, "terva:", verr)
+			}
 			for _, w := range s.LoadWarnings {
 				fmt.Fprintln(os.Stderr, "terva:", w)
 			}
