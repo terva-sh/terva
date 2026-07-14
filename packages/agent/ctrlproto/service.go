@@ -169,6 +169,29 @@ type WorkspaceService interface {
 	// reveal (stage 3). Returns a CodeNotFound error for a stale or unknown id.
 	Node(ctx context.Context, sess, id, op string) (ContextNode, error)
 
+	// History pages backward through the LIVE transcript: the Limit messages ending
+	// just before index before, at the given epoch (0 to skip the check). It is what
+	// a client with a windowed snapshot calls as the user scrolls up, and it is
+	// served from memory — the effective transcript is in the agent.
+	//
+	// Not to be confused with Reveal, which goes BEHIND a compaction to turns the
+	// model no longer has, out of the session file. Scrolling up runs History until
+	// Base is 0, then meets the compaction divider and switches to Reveal.
+	//
+	// CodeConflict on a stale epoch: an index into a transcript that has since been
+	// replaced does not name the message the client meant, and quietly returning
+	// whatever now sits there would be worse than an error.
+	History(ctx context.Context, sess string, before, limit int, epoch uint64) (HistoryResult, error)
+
+	// Reveal returns the turns the compaction checkpoint at ordinal summarized
+	// away (a negative ordinal means the latest), so a client can keep them in the
+	// scrollback above the divider instead of losing them to a context-management
+	// act. Read-only: the live transcript is untouched, and the span returned
+	// excludes the tail the checkpoint kept, so it cannot overlap what the client
+	// already has. CodeNotFound for an ephemeral session or an ordinal that has no
+	// checkpoint. See docs/proposals/scrollback-history.md.
+	Reveal(ctx context.Context, sess string, ordinal int) (RevealResult, error)
+
 	// Surfaces lists the auxiliary panes available for sess (context, usage,
 	// extension panels, …) for the client's surface switcher.
 	Surfaces(ctx context.Context, sess string) ([]SurfaceMeta, error)
@@ -193,6 +216,11 @@ type WorkspaceService interface {
 	// advertises it, so a client on an older daemon degrades to its local
 	// fallback instead of a method error.
 	ListFiles(ctx context.Context, opts FilesListParams) (FilesListResult, error)
+
+	// AuthProviders reports the workspace's model-provider credential state.
+	// Session-independent — a credential belongs to the daemon, not to a
+	// conversation. Read-only, and it never returns a secret; see [ProvidersView].
+	AuthProviders(ctx context.Context) (ProvidersView, error)
 
 	// --- control group (mostly v2; implementations may return
 	// CodeUnsupported for the parts they do not yet serve) ---
@@ -478,6 +506,7 @@ type Surface struct {
 	MCP         *MCPView          `json:"mcp,omitempty"`         // kind=mcp
 	Raati       *RaatiView        `json:"raati,omitempty"`       // kind=raati
 	Chat        *ChatView         `json:"chat,omitempty"`        // kind=chat
+	Providers   *ProvidersView    `json:"providers,omitempty"`   // kind=providers
 }
 
 // ChatView is the chat-connector pane: every registered chat service and the
@@ -536,6 +565,60 @@ type PermissionRule struct {
 	Reason    string `json:"reason,omitempty"`
 	Source    string `json:"source,omitempty"`    // user | project | extension | builtin
 	Removable bool   `json:"removable,omitempty"` // a user rule the pane may delete
+}
+
+// ProvidersView is the workspace's MODEL-PROVIDER credential state: who terva
+// can log into, who it is currently logged into, and how.
+//
+// Not to be confused with the web panel's own bearer-token login (web/auth.go).
+// That answers "may YOU talk to this daemon"; this answers "may this daemon talk
+// to Anthropic". The pane is called Providers, never Login, for exactly that
+// reason — "login" in the web UI already means the bearer form.
+//
+// One shape, two consumers: the result of [MethodAuthProviders] and the payload
+// of the "providers" surface. They cannot drift, because they are the same type.
+//
+// NOTHING HERE IS A SECRET — not a key, not a token, not a prefix of either. It
+// is built to be safe on a screen someone else can see, because it will be on one.
+type ProvidersView struct {
+	Providers []ProviderInfo `json:"providers"`
+	// CanLogin reports whether this daemon serves the auth group — whether the
+	// pane may offer a way IN, or only report what it finds. False until that
+	// group lands, so the pane says "log in from the terminal" rather than
+	// showing a control that does nothing.
+	CanLogin bool `json:"can_login,omitempty"`
+}
+
+// ProviderInfo is one provider's credential state.
+type ProviderInfo struct {
+	// ID is the LOGIN id, not the storage id: "openai" (a platform API key) and
+	// "openai-codex" (a ChatGPT subscription) are separate logins that share one
+	// slot on disk. See auth.Describe.
+	ID    string `json:"id"`
+	Label string `json:"label"`
+
+	// Method is "apikey", "oauth", or "" for not logged in.
+	Method string `json:"method,omitempty"`
+
+	// Expiry is an OAuth token's expiry (RFC 3339). Expired is the flag a user
+	// actually needs — the subscription is dead and wants a re-login — and today
+	// the only way they find that out is a turn that fails.
+	Expiry  string `json:"expiry,omitempty"`
+	Expired bool   `json:"expired,omitempty"`
+
+	// Offers lists the login methods this provider supports: apikey | oauth | env.
+	Offers []string `json:"offers,omitempty"`
+
+	// BaseURL/Model describe a configured openai-compatible endpoint. Config, not
+	// credentials.
+	BaseURL string `json:"base_url,omitempty"`
+	Model   string `json:"model,omitempty"`
+
+	// Note is setup guidance for a provider terva stores no credential for at all
+	// (bedrock, vertex, azure, cloudflare ×2). For those, "logging in" means
+	// setting an environment variable, and the honest thing is to say so rather
+	// than offer a paste box that stores nothing.
+	Note []string `json:"note,omitempty"`
 }
 
 // MCPView is the MCP-management pane: the workspace's configured Model Context

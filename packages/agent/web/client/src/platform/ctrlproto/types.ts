@@ -39,6 +39,12 @@ export interface WireMessage {
   content: WireBlock[]
   time?: string
   synthetic?: boolean // host-injected (e.g. a continue-on-open-work nudge), not user-typed
+  // The summary a compaction checkpoint left in place of the turns it folded
+  // away, and its estimate of what those turns cost. Its role is 'user' — render
+  // the pair as a divider, not as a user bubble, or the transcript shows the raw
+  // "## Context Summary" markdown as if the user had typed it.
+  compaction?: boolean
+  tokens_before?: number
 }
 
 export interface SessionInfo {
@@ -105,6 +111,14 @@ export interface FilesListResult {
 
 export interface Snapshot {
   session: SessionInfo
+  // messages is a WINDOW — the tail of the transcript — because we negotiate
+  // 'history-window'. epoch/base/total place it: base is the index of messages[0], so
+  // base > 0 means there is more above (fetch it with conversation.history), and epoch
+  // identifies the transcript itself. epoch changes ONLY when the transcript is
+  // wholesale replaced (compacted, cleared) — the signal to rebuild rather than merge.
+  epoch: number
+  base: number
+  total: number
   messages: WireMessage[]
   busy: boolean
   permissions?: PermissionRequest[]
@@ -487,6 +501,83 @@ export interface Surface {
   mcp?: MCPView
   raati?: RaatiView
   chat?: ChatView
+  providers?: ProvidersView
+}
+
+// Providers pane (kind=providers): the daemon's MODEL-PROVIDER credentials.
+//
+// Not this panel's own login. The bearer token you typed to get in here answers
+// "may you talk to this daemon"; this answers "may this daemon talk to Anthropic".
+// The pane is called Providers, never Login, precisely so the two do not blur.
+//
+// Nothing here is a secret: no key, no token, not a prefix of either.
+export interface ProvidersView {
+  providers: ProviderInfo[]
+  // Whether the daemon will serve a login. False today — the pane reports, and
+  // points you at the terminal, rather than showing a control that does nothing.
+  can_login?: boolean
+}
+
+// AuthFlowStep is what the daemon asks us to render for a login. One shape for
+// every provider — the client does not know, and must not need to know, which
+// fields Anthropic wants versus an OpenAI-compatible endpoint. Add a provider
+// that needs a field nobody anticipated, and this file does not change.
+export interface AuthFlowStep {
+  // Opaque handle for this attempt; required on submit. A submit against a
+  // superseded handle is refused rather than exchanged against the wrong flow.
+  flow: string
+  // form: collect fields, then submit.
+  // display: show url (+ user_code) and wait — the daemon is polling, and the
+  //          result arrives as an auth_state event. Nothing to submit.
+  // info: read-only prose. Nothing to submit, ever.
+  kind: 'form' | 'display' | 'info'
+  title?: string
+  lines?: string[]
+  // DISPLAYED, never auto-opened: the daemon's browser is not ours.
+  url?: string
+  user_code?: string
+  fields?: AuthField[]
+}
+
+export interface AuthField {
+  name: string
+  label: string
+  // A rendering hint. Everything goes back as a string, including integer — the
+  // daemon parses, so there is exactly one place that decides what is valid.
+  type: 'text' | 'secret' | 'integer'
+  required?: boolean
+  default?: string
+  placeholder?: string
+  help?: string
+}
+
+// auth_state event payload: a login flow moved. Arrives on the WORKSPACE address,
+// because a credential belongs to the daemon and the flow may finish while no
+// session is in focus — you authorized in a browser on another device.
+export interface AuthState {
+  kind: 'started' | 'success' | 'error' | 'canceled'
+  flow?: string
+  provider?: string
+  method?: string
+  url?: string
+  user_code?: string
+  message?: string
+}
+
+export interface ProviderInfo {
+  // The LOGIN id: "openai" (a platform API key) and "openai-codex" (a ChatGPT
+  // subscription) are separate logins that share one slot on disk.
+  id: string
+  label: string
+  method?: string // apikey | oauth | "" (not logged in)
+  expiry?: string // RFC 3339, oauth only
+  expired?: boolean
+  offers?: string[] // apikey | oauth | env
+  base_url?: string
+  model?: string
+  // Setup guidance for a provider terva stores no credential for at all — for
+  // these, "logging in" means setting environment variables.
+  note?: string[]
 }
 
 // Chat-connector pane (kind=chat): the registered services and the live bridge.
@@ -539,12 +630,22 @@ export interface WireEvent {
   surface_id?: string
   locale?: string
   notice?: Notice
+  auth?: AuthState
 }
 
 // ServerHello is the handshake frame the server sends back (role "server").
 // We only read the bits the client acts on today — the active locale (so the
 // PWA can select its string catalog to match the daemon), the workspace cwd,
 // and the feature list.
+// ADDR_WORKSPACE is the reserved address for facts that are true of the daemon
+// rather than of any session: a workspace surface changing, the locale changing,
+// a notice — and, once the auth group lands, a provider login.
+//
+// It is an address, not a session: never pass it to a conversation verb, and
+// never render it as a session id. The empty string is NOT the same thing — on a
+// command that means "the default session", and the daemon will materialize one.
+export const ADDR_WORKSPACE = '#workspace'
+
 export interface ServerHello {
   role: string
   protocol?: number

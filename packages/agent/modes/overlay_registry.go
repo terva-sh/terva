@@ -128,30 +128,19 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			active: i.dialog.Active,
 			ctrlC: func() bool {
 				i.dialog.Close()
-				if i.cfg.AuthManager != nil {
-					i.cfg.AuthManager.CancelOAuth()
-				}
+				i.cancelLogin()
 				return true
 			},
 			handleKey: func(k tui.Key) bool {
 				act := i.dialog.HandleKey(k)
-				if act.StartAPIKey {
-					i.startAPIKeyFlow(act.Provider)
+				if act.StartLogin {
+					i.startLogin(act.Provider, act.Method)
 				}
-				if act.StartOAuth {
-					i.startOAuthFlow(act.Provider)
+				if act.Submit != nil {
+					i.submitLogin(act.Submit)
 				}
-				if act.StartManual {
-					i.startManualOAuthFlow(act.Provider)
-				}
-				if act.SubmitCode != "" {
-					i.submitManualOAuthCode(act.SubmitCode)
-				}
-				if act.SubmitKey != "" {
-					i.submitAPIKey(act.Provider, act.SubmitKey)
-				}
-				if c := act.SubmitCompat; c != nil {
-					i.submitCompatAPIKey(c.BaseURL, c.Model, c.Key, c.ContextWindow)
+				if act.Close {
+					i.cancelLogin()
 				}
 				return false
 			},

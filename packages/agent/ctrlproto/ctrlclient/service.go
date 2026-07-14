@@ -155,6 +155,19 @@ func (s *Service) Node(ctx context.Context, sess, id, op string) (ctrlproto.Cont
 	return r.Node, err
 }
 
+func (s *Service) History(ctx context.Context, sess string, before, limit int, epoch uint64) (ctrlproto.HistoryResult, error) {
+	var r ctrlproto.HistoryResult
+	err := s.c.Call(ctx, sess, ctrlproto.MethodConversationHistory,
+		ctrlproto.HistoryParams{Before: before, Limit: limit, Epoch: epoch}, &r)
+	return r, err
+}
+
+func (s *Service) Reveal(ctx context.Context, sess string, ordinal int) (ctrlproto.RevealResult, error) {
+	var r ctrlproto.RevealResult
+	err := s.c.Call(ctx, sess, ctrlproto.MethodConversationReveal, ctrlproto.RevealParams{Ordinal: ordinal}, &r)
+	return r, err
+}
+
 func (s *Service) Surfaces(ctx context.Context, sess string) ([]ctrlproto.SurfaceMeta, error) {
 	var r ctrlproto.SurfacesResult
 	err := s.c.Call(ctx, sess, ctrlproto.MethodSurfacesList, nil, &r)
@@ -183,6 +196,43 @@ func (s *Service) ListFiles(ctx context.Context, opts ctrlproto.FilesListParams)
 	var r ctrlproto.FilesListResult
 	err := s.c.Call(ctx, "", ctrlproto.MethodFilesList, opts, &r)
 	return r, err
+}
+
+// AuthProviders asks the DAEMON which providers it holds credentials for. An
+// attached client has none of its own: credentials live on the host that runs
+// the agent, which is the whole reason the panel needs to be told about them.
+func (s *Service) AuthProviders(ctx context.Context) (ctrlproto.ProvidersView, error) {
+	var r ctrlproto.ProvidersView
+	err := s.c.Call(ctx, "", ctrlproto.MethodAuthProviders, nil, &r)
+	return r, err
+}
+
+// The attached carrier serves the auth group too — over the wire, to the DAEMON's
+// credential store, which is the only one that matters. `terva attach`'s /login
+// therefore works, and works on the right machine.
+var _ ctrlproto.AuthController = (*Service)(nil)
+
+// --- auth group (optional; served only when the daemon advertised GroupAuth) ---
+//
+// These drive a login on the DAEMON. The secret the user types travels one way,
+// in: nothing on this wire ever hands a credential back.
+
+func (s *Service) AuthLoginStart(ctx context.Context, p ctrlproto.AuthLoginStartParams) (ctrlproto.AuthFlowStep, error) {
+	var r ctrlproto.AuthFlowStep
+	err := s.c.Call(ctx, "", ctrlproto.MethodAuthLoginStart, p, &r)
+	return r, err
+}
+
+func (s *Service) AuthLoginSubmit(ctx context.Context, p ctrlproto.AuthLoginSubmitParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodAuthLoginSubmit, p, nil)
+}
+
+func (s *Service) AuthLoginCancel(ctx context.Context, p ctrlproto.AuthFlowRef) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodAuthLoginCancel, p, nil)
+}
+
+func (s *Service) AuthLogout(ctx context.Context, p ctrlproto.AuthLogoutParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodAuthLogout, p, nil)
 }
 
 // --- control group ---

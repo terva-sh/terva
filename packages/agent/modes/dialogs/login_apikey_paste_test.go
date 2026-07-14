@@ -4,21 +4,50 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/tui"
 )
 
-// waitingOn drives the dialog into loginStepWaiting for a given method and
-// provider, the state /login lands in once a flow has started.
-func waitingOn(method, provider string) *LoginDialog {
+// These tests used to pin a class of bug the descriptor makes structurally
+// impossible: a pasted API KEY routed into the OAuth code exchange, because a
+// single paste box chose its destination from d.method. The dialog could not tell
+// a key from a code, so it guessed, and a wrong guess failed silently.
+//
+// It does not guess now. The daemon NAMES the field — "api_key", "code" — and the
+// dialog returns a map keyed by that name. There is no destination to choose. What
+// is worth pinning is that the naming survives the round trip, and that this
+// package still knows nothing about any provider.
+
+// onStep drives the dialog into a rendered flow step — the state /login lands in
+// once the daemon has described what it wants.
+func onStep(step ctrlproto.AuthFlowStep) *LoginDialog {
 	d := &LoginDialog{}
-	d.step = loginStepWaiting
-	d.method = method
-	d.provider = provider
-	d.url = "http://127.0.0.1:54321/apikey?provider=" + provider
+	d.step = loginStepMethod // any non-closed step; ShowStep refuses a closed dialog
+	d.provider = "opencode-go"
+	d.ShowStep(step)
 	return d
 }
 
-// typeAndEnter feeds a string into the dialog's editor and submits it.
+func keyStep() ctrlproto.AuthFlowStep {
+	return ctrlproto.AuthFlowStep{
+		Flow: "f1", Kind: "form", Title: "Sign in with an API key",
+		Fields: []ctrlproto.AuthField{
+			{Name: "api_key", Label: "API key", Type: "secret", Required: true},
+		},
+	}
+}
+
+func codeStep() ctrlproto.AuthFlowStep {
+	return ctrlproto.AuthFlowStep{
+		Flow: "f2", Kind: "form", Title: "Authorize terva, then paste the code",
+		URL: "https://console.anthropic.com/oauth/authorize?x=1",
+		Fields: []ctrlproto.AuthField{
+			{Name: "code", Label: "Authorization code", Type: "secret", Required: true},
+		},
+	}
+}
+
+// typeAndEnter feeds a string into the focused editor and submits.
 func typeAndEnter(d *LoginDialog, s string) loginDialogAction {
 	for _, r := range s {
 		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
@@ -26,85 +55,80 @@ func typeAndEnter(d *LoginDialog, s string) loginDialogAction {
 	return d.HandleKey(tui.Key{Kind: tui.KeyEnter})
 }
 
-// The regression this whole change exists for: an api-key login used to
-// route the pasted value into the OAuth code exchange, which had no flow in
-// progress, returned an error that was then discarded — so the user typed a
-// key, pressed enter, and nothing happened at all. A key must come back as
-// SubmitKey, never SubmitCode.
-func TestWaitingAPIKeySubmitsAsKeyNotCode(t *testing.T) {
-	d := waitingOn("apikey", "opencode-go")
-	// The editor is lazily built by Render; do that first, as the real
-	// TUI does before any key reaches the dialog.
-	d.Render(tui.Theme{}, 80)
+// A key comes back under the name the daemon gave it — and the dialog does not
+// invent a field it was never asked for.
+func TestAKeyComesBackAsTheFieldTheDaemonNamed(t *testing.T) {
+	d := onStep(keyStep())
+	d.Render(tui.Theme{}, 80) // editors are built lazily at render, as in the real TUI
 
 	act := typeAndEnter(d, "sk-live-key")
 
-	if act.SubmitKey != "sk-live-key" {
-		t.Errorf("SubmitKey = %q, want the pasted key", act.SubmitKey)
+	if act.Submit["api_key"] != "sk-live-key" {
+		t.Errorf("Submit = %+v, want api_key to carry the pasted key", act.Submit)
 	}
-	if act.SubmitCode != "" {
-		t.Errorf("SubmitCode = %q, want empty — a key is not an oauth code", act.SubmitCode)
-	}
-	if act.Provider != "opencode-go" {
-		t.Errorf("Provider = %q, want it carried with the key", act.Provider)
+	if _, ok := act.Submit["code"]; ok {
+		t.Error("the dialog invented a 'code' field the daemon never asked for")
 	}
 }
 
-// The oauth path must be untouched: a code still goes to the code exchange.
-func TestWaitingOAuthStillSubmitsAsCode(t *testing.T) {
-	d := waitingOn("oauth", "anthropic")
+// ...and a code likewise. The dialog does not know these are different KINDS of
+// secret, and does not need to.
+func TestACodeComesBackAsTheFieldTheDaemonNamed(t *testing.T) {
+	d := onStep(codeStep())
 	d.Render(tui.Theme{}, 80)
 
 	act := typeAndEnter(d, "abc123#state")
 
-	if act.SubmitCode != "abc123#state" {
-		t.Errorf("SubmitCode = %q, want the pasted code", act.SubmitCode)
+	if act.Submit["code"] != "abc123#state" {
+		t.Errorf("Submit = %+v, want code to carry the pasted value", act.Submit)
 	}
-	if act.SubmitKey != "" {
-		t.Errorf("SubmitKey = %q, want empty on an oauth flow", act.SubmitKey)
+	if _, ok := act.Submit["api_key"]; ok {
+		t.Error("the dialog invented an 'api_key' field the daemon never asked for")
 	}
 }
 
-// An empty submit must do nothing rather than emit a doomed action.
-func TestWaitingEmptySubmitIsInert(t *testing.T) {
-	d := waitingOn("apikey", "opencode-go")
+// An empty required field must not submit: it would spend a flow handle on a
+// request the daemon can only refuse.
+func TestAnEmptyRequiredFieldDoesNotSubmit(t *testing.T) {
+	d := onStep(keyStep())
 	d.Render(tui.Theme{}, 80)
 
-	act := typeAndEnter(d, "   ")
-
-	if act.SubmitKey != "" || act.SubmitCode != "" {
-		t.Errorf("act = %+v, want an empty submit to be inert", act)
+	if act := typeAndEnter(d, "   "); act.Submit != nil {
+		t.Errorf("act = %+v, want an empty required field to be inert", act)
 	}
 }
 
-// The api-key prompt must ask for a key. It used to say "paste the
-// authorization code", which is what sent users looking for a code that an
-// api-key login never produces.
-func TestWaitingAPIKeyPromptAsksForAKey(t *testing.T) {
-	d := waitingOn("apikey", "opencode-go")
+// The label the user reads is the daemon's, verbatim. The dialog used to compose
+// its own prompt from d.method — and told api-key users to "paste the
+// authorization code", sending them to look for a code an api-key login never
+// produces.
+func TestThePromptIsTheDaemonsLabel(t *testing.T) {
+	d := onStep(keyStep())
 	out := strings.Join(d.Render(tui.Theme{}, 80), "\n")
 
 	if !strings.Contains(out, "API key") {
-		t.Errorf("render = %q, want it to ask for an API key", out)
+		t.Errorf("render = %q, want the daemon's label", out)
 	}
 	if strings.Contains(out, "authorization code") {
-		t.Errorf("render still asks for an authorization code:\n%s", out)
+		t.Errorf("the dialog invented an 'authorization code' prompt for an api-key login:\n%s", out)
 	}
 }
 
-// ---- openai-compatible form ----
+// ---- a multi-field form (openai-compatible, and anything shaped like it) ----
 
-// compatForm opens the dialog on the openai-compatible field form.
-func compatForm() *LoginDialog {
-	d := &LoginDialog{}
-	d.step = loginStepMethod // any non-closed step; ShowCompatForm refuses closed
-	d.method = "apikey"
-	d.provider = CompatProvider
-	d.ShowCompatForm("http://127.0.0.1:54321/apikey?provider=openai-compatible")
-	return d
+func compatStep() ctrlproto.AuthFlowStep {
+	return ctrlproto.AuthFlowStep{
+		Flow: "f3", Kind: "form", Title: "Connect an OpenAI-compatible endpoint",
+		Fields: []ctrlproto.AuthField{
+			{Name: "base_url", Label: "Base URL", Type: "text", Required: true},
+			{Name: "model", Label: "Default model", Type: "text", Required: true},
+			{Name: "api_key", Label: "API key", Type: "secret"},
+			{Name: "context_window", Label: "Default context window", Type: "integer"},
+		},
+	}
 }
 
-// fill types s into the focused field, then tabs to the next one.
+// fill types s into the focused field, then tabs on.
 func fill(d *LoginDialog, s string) {
 	for _, r := range s {
 		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
@@ -112,128 +136,128 @@ func fill(d *LoginDialog, s string) {
 	d.HandleKey(tui.Key{Kind: tui.KeyTab})
 }
 
-// The compat endpoint carries a base URL and a model as well as a key, so it
-// gets a form. Filling it must produce all four fields — this is what makes
-// openai-compatible usable on a headless host at all.
-func TestCompatFormSubmitsEveryField(t *testing.T) {
-	d := compatForm()
-	d.Render(tui.Theme{}, 80) // builds the field editors
-
-	fill(d, "http://localhost:1234/v1") // base url -> tab
-	fill(d, "qwen2.5-coder")            // model    -> tab
-	fill(d, "sk-local")                 // key      -> tab
-	for _, r := range "32768" {         // context window
-		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
-	}
-	act := d.HandleKey(tui.Key{Kind: tui.KeyEnter})
-
-	if act.SubmitCompat == nil {
-		t.Fatalf("act = %+v, want a compat submission", act)
-	}
-	got := *act.SubmitCompat
-	want := CompatSubmit{
-		BaseURL:       "http://localhost:1234/v1",
-		Model:         "qwen2.5-coder",
-		Key:           "sk-local",
-		ContextWindow: 32768,
-	}
-	if got != want {
-		t.Errorf("submitted %+v, want %+v", got, want)
-	}
-}
-
-// The key is optional — local servers ignore it — but the base URL and model
-// are not. A missing one must be reported in place, not silently swallowed
-// and not by throwing away everything already typed.
-func TestCompatFormRequiresBaseURLAndModel(t *testing.T) {
-	d := compatForm()
-	d.Render(tui.Theme{}, 80)
-
-	fill(d, "http://localhost:1234/v1") // base url, then tab to model
-	act := d.HandleKey(tui.Key{Kind: tui.KeyEnter})
-
-	if act.SubmitCompat != nil {
-		t.Fatalf("act = %+v, want no submission without a model", act)
-	}
-	out := strings.Join(d.Render(tui.Theme{}, 80), "\n")
-	if !strings.Contains(out, "required") {
-		t.Errorf("render = %q, want an inline validation message", out)
-	}
-	// The already-typed base url must survive the failed submit.
-	if !strings.Contains(out, "http://localhost:1234/v1") {
-		t.Error("a failed submit discarded what was already typed")
-	}
-}
-
-func TestCompatFormAllowsAnEmptyKey(t *testing.T) {
-	d := compatForm()
-	d.Render(tui.Theme{}, 80)
-
-	fill(d, "http://localhost:11434/v1")
-	fill(d, "llama3")
-	act := d.HandleKey(tui.Key{Kind: tui.KeyEnter}) // key + window left blank
-
-	if act.SubmitCompat == nil {
-		t.Fatalf("act = %+v, want a submission with no key", act)
-	}
-	if act.SubmitCompat.Key != "" {
-		t.Errorf("key = %q, want empty", act.SubmitCompat.Key)
-	}
-	if act.SubmitCompat.ContextWindow != 0 {
-		t.Errorf("context window = %d, want 0 (unknown)", act.SubmitCompat.ContextWindow)
-	}
-}
-
-func TestCompatFormRejectsNonNumericContextWindow(t *testing.T) {
-	d := compatForm()
+// Four fields, rendered and returned, with nothing in this package naming any of
+// them. The case that proves the descriptor earns its keep: the dialog has no idea
+// what an openai-compatible endpoint is.
+func TestAMultiFieldFormSubmitsEveryFieldTheDaemonAskedFor(t *testing.T) {
+	d := onStep(compatStep())
 	d.Render(tui.Theme{}, 80)
 
 	fill(d, "http://localhost:1234/v1")
-	fill(d, "qwen")
-	fill(d, "") // skip the key
-	for _, r := range "lots" {
+	fill(d, "qwen2.5-coder")
+	fill(d, "sk-local")
+	for _, r := range "32768" {
 		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
 	}
 	act := d.HandleKey(tui.Key{Kind: tui.KeyEnter})
 
-	if act.SubmitCompat != nil {
-		t.Fatalf("act = %+v, want no submission for a non-numeric window", act)
-	}
-	out := strings.Join(d.Render(tui.Theme{}, 80), "\n")
-	if !strings.Contains(out, "whole number") {
-		t.Errorf("render = %q, want it to explain the context window format", out)
-	}
-}
-
-// The form must still show the browser URL: it works for anyone at a browser
-// on the terva host, and only fails to be reachable from elsewhere.
-func TestCompatFormStillOffersTheBrowserForm(t *testing.T) {
-	d := compatForm()
-	out := strings.Join(d.Render(tui.Theme{}, 80), "\n")
-	if !strings.Contains(out, "127.0.0.1:54321") {
-		t.Errorf("render = %q, want the browser form URL offered too", out)
+	for k, v := range map[string]string{
+		"base_url":       "http://localhost:1234/v1",
+		"model":          "qwen2.5-coder",
+		"api_key":        "sk-local",
+		"context_window": "32768",
+	} {
+		if act.Submit[k] != v {
+			t.Errorf("Submit[%q] = %q, want %q (full: %+v)", k, act.Submit[k], v, act.Submit)
+		}
 	}
 }
 
-// The api-key flow emits its "started" event — carrying the browser-form URL —
-// after the compat form is opened, and the event handler turns that into a
-// ShowWaiting call. ShowWaiting must hand the form its URL rather than replace
-// it with the paste box: the form would otherwise vanish the instant it
-// appeared, and the fields typed into the paste box behind it would be routed
-// to the wrong place entirely. Only an end-to-end run catches this, so pin it.
-func TestStartedEventDoesNotClobberTheCompatForm(t *testing.T) {
-	d := compatForm()
+// The optional fields stay optional: a local server that ignores keys, and an
+// endpoint that describes its own context window, must both be loggable.
+func TestOptionalFieldsMayBeLeftBlank(t *testing.T) {
+	d := onStep(compatStep())
+	d.Render(tui.Theme{}, 80)
 
-	d.ShowWaiting("http://127.0.0.1:99999/apikey?provider=openai-compatible")
+	fill(d, "http://localhost:1234/v1")
+	for _, r := range "qwen" {
+		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
+	}
+	act := d.HandleKey(tui.Key{Kind: tui.KeyEnter})
 
-	if d.step != loginStepCompatForm {
-		t.Fatalf("step = %v, want the compat form to survive a started event", d.step)
+	if act.Submit == nil {
+		t.Fatal("a form with its required fields filled did not submit")
+	}
+	if act.Submit["api_key"] != "" || act.Submit["context_window"] != "" {
+		t.Errorf("blank optionals did not come back blank: %+v", act.Submit)
+	}
+}
+
+// A missing REQUIRED field is reported in place, and nothing already typed is
+// thrown away — which here is a base URL the user just went and looked up.
+func TestAMissingRequiredFieldIsReportedWithoutLosingTheForm(t *testing.T) {
+	d := onStep(compatStep())
+	d.Render(tui.Theme{}, 80)
+
+	fill(d, "http://localhost:1234/v1")
+	act := d.HandleKey(tui.Key{Kind: tui.KeyEnter}) // model is still empty
+
+	if act.Submit != nil {
+		t.Fatal("submitted with a required field empty")
 	}
 	out := strings.Join(d.Render(tui.Theme{}, 80), "\n")
-	if !strings.Contains(out, "base url") {
-		t.Error("the compat form was replaced by the paste box")
+	if !strings.Contains(out, "required") {
+		t.Errorf("the user was not told a field is missing:\n%s", out)
 	}
-	if !strings.Contains(out, "99999") {
-		t.Error("the compat form did not pick up the browser-form URL")
+	if !strings.Contains(out, "http://localhost:1234/v1") {
+		t.Error("the base URL the user already typed was discarded")
+	}
+}
+
+// The daemon's refusal — a key the provider rejected — is shown IN the form, not
+// instead of it. Losing a filled-in endpoint because a key was mistyped would be
+// its own small cruelty.
+func TestADaemonRefusalKeepsTheFormOnScreen(t *testing.T) {
+	d := onStep(compatStep())
+	d.Render(tui.Theme{}, 80)
+	fill(d, "http://localhost:1234/v1")
+
+	d.ShowFlowError("that endpoint refused the key (http 401)")
+
+	out := strings.Join(d.Render(tui.Theme{}, 80), "\n")
+	if !strings.Contains(out, "refused the key") {
+		t.Errorf("the daemon's refusal was not shown:\n%s", out)
+	}
+	if !strings.Contains(out, "http://localhost:1234/v1") {
+		t.Error("the form was discarded along with the error")
+	}
+}
+
+// A display step (a device code) has nothing to submit: the flow completes on its
+// own and says so with an event. Enter must not fabricate an empty submission.
+func TestADisplayStepHasNothingToSubmit(t *testing.T) {
+	d := onStep(ctrlproto.AuthFlowStep{
+		Flow: "f4", Kind: "display", Title: "Approve terva in your browser",
+		URL: "https://github.com/login/device", UserCode: "ABCD-1234",
+	})
+	out := strings.Join(d.Render(tui.Theme{}, 80), "\n")
+	if !strings.Contains(out, "ABCD-1234") {
+		t.Errorf("the device code is not shown as text; a user who cannot open the URL has nothing to type:\n%s", out)
+	}
+
+	if act := d.HandleKey(tui.Key{Kind: tui.KeyEnter}); act.Submit != nil {
+		t.Errorf("a display step submitted %+v", act.Submit)
+	}
+}
+
+// An info step (bedrock, vertex, azure, cloudflare) is prose, not a form: there is
+// no key for terva to take, and a paste box would be a dead end that looks like a
+// way in. Any key dismisses it.
+func TestAnInfoStepIsProseAndCloses(t *testing.T) {
+	d := onStep(ctrlproto.AuthFlowStep{
+		Kind: "info", Title: "Amazon Bedrock setup",
+		Lines: []string{"Set:", "  AWS_BEARER_TOKEN_BEDROCK=..."},
+	})
+	out := strings.Join(d.Render(tui.Theme{}, 80), "\n")
+	if !strings.Contains(out, "AWS_BEARER_TOKEN_BEDROCK") {
+		t.Errorf("the guidance was not rendered:\n%s", out)
+	}
+
+	act := d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: 'x'})
+	if !act.Close {
+		t.Error("an info step did not close on a keypress")
+	}
+	if act.Submit != nil {
+		t.Errorf("an info step submitted %+v — there is nothing to store", act.Submit)
 	}
 }

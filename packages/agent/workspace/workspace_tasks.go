@@ -66,18 +66,23 @@ func taskSignature(snaps []swarm.AgentSnapshot) string {
 	return b.String()
 }
 
-// BroadcastAll fans an event out to every live session's subscribers, for
-// workspace-scoped surfaces like tasks.
+// BroadcastAll publishes a WORKSPACE-scoped event: one that is true of the
+// daemon rather than of any session — a workspace surface changing (tasks, mcp,
+// chat, settings, permissions, raati), the locale changing, a restart notice.
+//
+// It used to fan the event out to every live session's subscribers, stamping a
+// copy with each session's id, because a session hub was the only hub there was.
+// That had a hole it could not close: it reaches LIVE SESSIONS' subscribers, so
+// a client holding no subscriptions — or a workspace whose last live session was
+// just deleted — heard nothing at all. For an event whose whole job is to
+// describe a workspace that may have no sessions, that is not an edge case.
+//
+// Now it publishes ONCE, to the workspace itself. The per-session duplication
+// still happens for a client that has not negotiated FeatureWorkspaceEvents, but
+// it happens at the serialization edge (serveState's compat pump), where it
+// belongs: it is a property of that client's contract, not of the workspace.
 func (w *Workspace) BroadcastAll(ev ctrlproto.Event) {
-	w.mu.Lock()
-	sess := make([]*wsSession, 0, len(w.sessions))
-	for _, s := range w.sessions {
-		sess = append(sess, s)
-	}
-	w.mu.Unlock()
-	for _, s := range sess {
-		s.broadcast(ev)
-	}
+	w.events().broadcast(ev)
 }
 
 // taskList builds the tasks pane from the swarm snapshot.

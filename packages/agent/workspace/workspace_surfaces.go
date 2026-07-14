@@ -138,6 +138,20 @@ func (s *wsSession) surfaceList() []ctrlproto.SurfaceMeta {
 	if s.ws != nil && s.ws.mcpAdapter != nil && len(build.ListMCPServers(s.cwd, s.trusted.Load(), s.ws.mcpAdapter.Mgr)) > 0 {
 		metas = append(metas, ctrlproto.SurfaceMeta{ID: "mcp", Title: i18n.T("MCP"), Icon: "🔗", Kind: "mcp", Scope: "workspace", Actions: true})
 	}
+	// Always offered. A credential is workspace-scoped (one auth.json, one
+	// daemon), and the pane's whole job is to explain an ABSENCE — why the model
+	// picker is short, why a subscription stopped working — so hiding it when
+	// nothing is logged in would hide it exactly when it is needed. Read-only for
+	// now: no Actions until the auth group can serve them.
+	if s.ws != nil {
+		// Live: an auth_state event moves this pane (a login lands, a device flow
+		// completes in a browser on another device). Actions only when the daemon
+		// will actually serve them — see EnableAuth.
+		metas = append(metas, ctrlproto.SurfaceMeta{
+			ID: "providers", Title: i18n.T("Providers"), Icon: "🔑", Kind: "providers",
+			Scope: "workspace", Live: true, Actions: s.ws.canLogin(),
+		})
+	}
 	// Offered whenever any chat service is registered, so the pane can explain
 	// "not configured" / "run terva bot setup" rather than silently missing.
 	if len(chat.Services()) > 0 {
@@ -205,6 +219,14 @@ func (s *wsSession) surface(id string) (ctrlproto.Surface, error) {
 	case "chat":
 		cv := s.ws.chatView()
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Chat"), Kind: "chat", Chat: &cv}, nil
+	case "providers":
+		// The pane and the auth.providers method are the same data: one shape,
+		// one implementation, nothing to drift.
+		pv, err := s.ws.AuthProviders(context.Background())
+		if err != nil {
+			return ctrlproto.Surface{}, err
+		}
+		return ctrlproto.Surface{ID: id, Title: i18n.T("Providers"), Kind: "providers", Providers: &pv}, nil
 	case "status":
 		var segs []string
 		if s.extMgr != nil {

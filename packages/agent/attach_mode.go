@@ -175,11 +175,15 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 			Version: version,
 			// The full feature set the in-process TUI enjoys: attachments,
 			// inline image payloads, dialog-dismiss resolves, context tree,
-			// daemon-side @-file listing, on-demand session titling.
+			// daemon-side @-file listing, on-demand session titling, and the
+			// workspace address (so workspace-scoped events arrive once, on
+			// #workspace, rather than stamped onto whatever sessions happen to
+			// be subscribed).
 			Features: []string{
 				ctrlproto.FeatureImages, ctrlproto.FeatureImageData,
 				ctrlproto.FeatureResolveEvents, ctrlproto.FeatureContextTree,
 				ctrlproto.FeatureFilesList, ctrlproto.FeatureGenerateTitle,
+				ctrlproto.FeatureWorkspaceEvents,
 			},
 		},
 		OnConnect: func(h ctrlproto.Hello) {
@@ -340,7 +344,18 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 		// Esc keeps that binding — what attach does without the flag; the
 		// picker's list/rename verbs already ride the wire.
 		OpenSessionsOnBoot: args.Resume && args.ResumeID == "",
-		AuthManager:        authMgr,
+		// CarrierLocal is FALSE: the daemon is somewhere else, so a loopback OAuth
+		// callback bound on ITS host is unreachable from this browser. The daemon
+		// hands back the paste-back form instead.
+		//
+		// And note what is NOT here: a local auth.Manager. Attach used to be given
+		// one, which meant a /login driven from an attached TUI ran the flow on
+		// THIS machine and stored the credential HERE — on the client, not on the
+		// daemon whose agent actually needs it. The dialog then fail-softed with
+		// "credentials are owned by the daemon", after the credential had already
+		// been written to the wrong disk. /login now goes over the wire to the
+		// daemon's AuthController, which is the only place a credential is any use.
+		CarrierLocal: false,
 
 		RecursiveFileSuggest: initialCfg.RecursiveFileSuggest,
 		RemoteFiles:          remoteFiles,

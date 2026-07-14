@@ -23,6 +23,23 @@ const (
 	// client that negotiates it is guaranteed the group is served. See
 	// docs/proposals/session-player.md.
 	GroupReplay Group = "replay"
+	// GroupAuth carries MODEL-PROVIDER credential mutation: establish, repair,
+	// and revoke the credential terva uses to reach Anthropic, OpenAI, Kimi.
+	// (Reading that state is auth.providers, which needs no authority and lives
+	// in the session group.)
+	//
+	// Its own group rather than a corner of control, because groups are the unit
+	// of authority gating (see the protocol proposal's security note). An
+	// extension granted the control group can switch models and edit lore; it
+	// must not thereby be able to REPLACE YOUR ANTHROPIC TOKEN. Separating them
+	// now is nearly free; retrofitting the separation after something has been
+	// granted control is not.
+	//
+	// Optional and off the base ServerHello, like GroupReplay: a carrier
+	// advertises it only when it will actually serve a login, so a client that
+	// negotiates it is guaranteed the group works. `terva web` advertises it only
+	// under --web-allow-login, and refuses to on an unauthenticated listener.
+	GroupAuth Group = "auth"
 )
 
 // Feature strings name additive capabilities negotiated on top of the groups.
@@ -62,6 +79,34 @@ const (
 	// (the TUI's `g` binding, the web button) instead of firing a method an
 	// older daemon can't serve.
 	FeatureGenerateTitle = "generate-title"
+	// FeatureWorkspaceEvents advertises the reserved address [AddrWorkspace]:
+	// a client may subscribe to the WORKSPACE and receive the facts that are
+	// true of the daemon rather than of any session (a login landing, the
+	// session set changing, the locale changing, a workspace-scoped surface
+	// updating).
+	//
+	// A client that does not negotiate it still receives those events, because
+	// the server falls back to what it did before this existed: stamping one
+	// copy with each session id the client is subscribed to (serveState's compat
+	// pump). That fallback is the reason the feature can be added without a
+	// flag day — and the reason the duplication is now a property of an old
+	// client's contract rather than of the workspace, which publishes once.
+	FeatureWorkspaceEvents = "workspace-events"
+	// FeatureHistoryWindow advertises WINDOWED snapshots: Snapshot.Messages carries
+	// a tail of the transcript rather than all of it, plus the Epoch/Base/Total it
+	// was cut at, and the client pages backward with conversation.history.
+	//
+	// It exists because a snapshot rides EVERY subscribe and — more expensively —
+	// the end of EVERY turn (workspace_session.go: "one full-transcript frame per
+	// turn end to every subscriber"). In-process that is free, image bytes and all,
+	// because the slices are shared. Over a WebSocket to a phone it is the whole
+	// conversation, again, after every message.
+	//
+	// A client that does not negotiate it receives the entire transcript exactly as
+	// before. That is the point: the window is cut at the serialization boundary,
+	// per contract, next to where image data is already stripped — so nothing that
+	// exists has to change, and no flag day is needed.
+	FeatureHistoryWindow = "history-window"
 )
 
 // Hello is the handshake frame each side sends once at connect time. The
@@ -173,6 +218,6 @@ func ServerHello(agent, version string) Hello {
 		Agent:    agent,
 		Version:  version,
 		Groups:   []Group{GroupConversation, GroupSession, GroupControl},
-		Features: []string{FeatureImages, FeatureResolveEvents, FeatureContextTree, FeatureImageData, FeatureFilesList, FeatureGenerateTitle},
+		Features: []string{FeatureImages, FeatureResolveEvents, FeatureContextTree, FeatureImageData, FeatureFilesList, FeatureGenerateTitle, FeatureWorkspaceEvents},
 	}
 }

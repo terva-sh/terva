@@ -4,41 +4,31 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/tui"
 )
 
-// CompatProvider is the one api-key provider whose login needs more than a
-// key — a base URL and a model id — so it gets a small form of its own
-// rather than the single paste box.
-const CompatProvider = "openai-compatible"
-
-// compatProvider is the unexported alias used inside this file.
-const compatProvider = CompatProvider
-
-// Fields of the openai-compatible form, in tab order. Base URL and model are
-// required; the key is optional (local servers routinely ignore it) and the
-// context window is an optional default for models the endpoint does not
-// describe.
-const (
-	compatFieldBaseURL = iota
-	compatFieldModel
-	compatFieldKey
-	compatFieldContextWindow
-	compatFieldCount
-)
-
-var compatFieldLabels = [compatFieldCount]string{
-	compatFieldBaseURL:       "base url (required), e.g. http://localhost:1234/v1",
-	compatFieldModel:         "default model id (required), e.g. qwen2.5-coder",
-	compatFieldKey:           "api key (optional - many local servers ignore it)",
-	compatFieldContextWindow: "default context window (optional, e.g. 32768)",
-}
+// The login dialog is a RENDERER, not a login flow.
+//
+// It used to be both: it knew that openai-compatible needs four fields in a
+// particular order, that an api-key login shows a paste box and an oauth login
+// shows a paste box with different wording, and that bedrock is not a form at
+// all. Every one of those facts also had to be known by the web panel, which
+// could not import this package — so they were known twice, and the two copies
+// had already drifted (the browser form and this one ordered the compat fields
+// differently).
+//
+// Now the daemon describes the step — kind, prose, a URL to visit, N typed
+// fields — and this draws it. It does not know which provider it is rendering,
+// and adding one does not change it. Same descriptor the web client renders, from
+// the same code: ctrlproto.AuthFlowStep, built by the workspace's AuthController.
+// The TUI reaches that in-process, with no serialization; `terva attach` reaches
+// the identical thing over the wire.
 
 // loginStep is the current node in the login dialog state machine.
 type loginStep int
@@ -47,14 +37,11 @@ type loginStep int
 // dialog must default to closed so nothing shows up until Open() is
 // explicitly called.
 const (
-	loginStepClosed     loginStep = iota
-	loginStepMethod               // pick apikey vs subscription
-	loginStepProvider             // pick anthropic vs openai vs kimi
-	loginStepWaiting              // browser open, waiting for callback
-	loginStepPasteCode            // user pastes the auth code here
-	loginStepInfo                 // informational setup guidance
-	loginStepCompatForm           // openai-compatible: base url, model, key, ctx window
-	loginStepDone                 // success or error, waiting for key to dismiss
+	loginStepClosed   loginStep = iota
+	loginStepMethod             // pick apikey vs subscription
+	loginStepProvider           // pick anthropic vs openai vs kimi
+	loginStepFlow               // render whatever the daemon asked for
+	loginStepDone               // success or error, waiting for key to dismiss
 )
 
 const loginProviderPageSize = 8
@@ -62,31 +49,24 @@ const loginProviderPageSize = 8
 // LoginDialog is a tiny inline dialog rendered above the editor while
 // the user picks their login method and provider.
 type LoginDialog struct {
-	step      loginStep
-	method    string // "apikey" | "oauth"
-	provider  string // "anthropic" | "openai" | "openai-codex" | "kimi" | "google"
-	message   string
-	success   bool
-	url       string
-	cursor    int
-	codeEd    *tui.Editor
-	infoTitle string
-	infoLines []string
+	step     loginStep
+	method   string // "apikey" | "oauth"
+	provider string
+	message  string
+	success  bool
+	cursor   int
 
-	// openai-compatible form state: one editor per field, the focused
-	// field, and an inline validation message. compatErr is rendered in
-	// place rather than closing the dialog, so a missing base url does not
-	// throw away everything already typed.
-	compatEds [compatFieldCount]*tui.Editor
-	compatIdx int
-	compatErr string
+	// flow is the step the daemon asked us to render, and eds are one editor per
+	// field it named. flowErr is shown in place rather than closing the dialog, so
+	// a rejected key does not throw away everything already typed.
+	flow    ctrlproto.AuthFlowStep
+	eds     []*tui.Editor
+	edIdx   int
+	flowErr string
 
-	// status is a snapshot of the current login state for each
-	// provider, captured when Open() runs. Rendered above the
-	// method picker so the user can see whether they're already
-	// logged in (and how) before starting a new flow. Keys:
-	// "anthropic", "openai", "openai-codex", "kimi", "google". Value is
-	// "apikey", "oauth", or "" (not logged in).
+	// status is a snapshot of the current login state per provider, captured when
+	// Open() runs, so the user can see what they are already signed in to before
+	// starting a new flow. Value is "apikey", "oauth", or "" (not logged in).
 	status map[string]string
 }
 
@@ -109,39 +89,23 @@ func (d *LoginDialog) Open(tervaHome string) {
 	d.provider = ""
 	d.message = ""
 	d.success = false
-	d.url = ""
 	d.cursor = 0
-	d.infoTitle = ""
-	d.infoLines = nil
+	d.flow = ctrlproto.AuthFlowStep{}
+	d.eds = nil
+	d.edIdx = 0
+	d.flowErr = ""
+	// Best-effort: if the auth file can't be read, auth.Describe still returns
+	// every loggable provider as not-logged-in. The status line just won't show
+	// anything useful in that case, which is fine — the user was about to log
+	// in anyway.
+	//
+	// The openai/openai-codex split (one store slot, two independent logins)
+	// used to be reconstructed here by hand, and again in the logout dialog.
+	// Describe owns it now.
 	d.status = map[string]string{}
-	for _, p := range providersForMethod("apikey") {
-		d.status[p] = ""
-	}
-	for _, p := range providersForMethod("oauth") {
-		d.status[p] = ""
-	}
-	// Best-effort: if the auth file can't be read, treat every
-	// provider as not-logged-in. The status line just won't show
-	// anything useful in that case, which is fine — the user
-	// was about to log in anyway.
-	path := filepath.Join(tervaHome, "auth.json")
-	if creds, err := auth.NewStore(path).Load(); err == nil {
-		d.status["anthropic"] = creds.Method("anthropic")
-		d.status["openai"] = ""
-		if creds.OpenAI.APIKey != "" {
-			d.status["openai"] = "apikey"
-		}
-		d.status["openai-codex"] = ""
-		if creds.OpenAI.OAuth != nil {
-			d.status["openai-codex"] = "oauth"
-		}
-		d.status["kimi"] = creds.Method("kimi")
-		d.status["deepseek"] = creds.Method("deepseek")
-		d.status["google"] = creds.Method("google")
-		d.status["github-copilot"] = creds.Method("github-copilot")
-		for p := range creds.AdditionalAPIKeyCreds {
-			d.status[p] = creds.Method(p)
-		}
+	creds, _ := auth.NewStore(filepath.Join(tervaHome, "auth.json")).Load()
+	for id, st := range auth.Describe(creds) {
+		d.status[id] = st.Method
 	}
 }
 
@@ -200,116 +164,8 @@ func (d *LoginDialog) Render(th tui.Theme, width int) []string {
 			lines = append(lines, th.FG256(th.Muted, fmt.Sprintf("  (%d/%d)", d.cursor+1, len(opts))))
 		}
 		lines = append(lines, FrameRule(th, width))
-	case loginStepWaiting:
-		lines = append(lines, FrameHeader(th, "login - "+d.method+" - "+ProviderLabel(d.provider), width))
-		// The api-key page binds to loopback, so on a headless host the URL
-		// below is unreachable and the paste box is the whole flow. Say so,
-		// rather than asking for an "authorization code" that an api-key
-		// login never produces.
-		if d.method == "apikey" {
-			lines = append(lines, th.FG256(th.Muted, i18n.T("paste your API key below, or open this URL in a browser on this machine:")))
-		} else {
-			lines = append(lines, th.FG256(th.Muted, "open this URL in a browser:"))
-		}
-		wrapW := width - 2
-		if wrapW < 20 {
-			wrapW = 20
-		}
-		// Future note (applies to both URL blocks in this dialog): these wrap a
-		// plain URL then colour each segment, which is correct. They could adopt
-		// tui.WrapANSILineKeepStyle (colour once, keep-style wrap) to match the
-		// direct-emit standard, but with no correctness gain — single-colour
-		// text already re-coloured per piece. Convert opportunistically.
-		for _, seg := range tui.WrapANSILine(d.url, wrapW) {
-			lines = append(lines, th.FG256(th.Accent, seg))
-		}
-		lines = append(lines, "")
-		if d.method == "apikey" {
-			lines = append(lines, th.FG256(th.Muted, i18n.T("paste your API key:")))
-		} else {
-			lines = append(lines, th.FG256(th.Muted, i18n.T("paste the authorization code (or full redirect URL / code#state):")))
-		}
-		if d.codeEd == nil {
-			d.codeEd = tui.NewEditor(th.AccentBar(th.Accent))
-		}
-		edLines, _, _ := d.codeEd.Render(width - 2)
-		for _, l := range edLines {
-			lines = append(lines, l)
-		}
-		lines = append(lines, "")
-		if d.method == "apikey" {
-			lines = append(lines, th.FG256(th.Muted, "enter submits - esc cancels"))
-		} else {
-			lines = append(lines, th.FG256(th.Muted, "enter submits - esc cancels - waiting for browser callback in background"))
-		}
-		lines = append(lines, FrameRule(th, width))
-	case loginStepCompatForm:
-		lines = append(lines, FrameHeader(th, "login - apikey - "+ProviderLabel(d.provider), width))
-		lines = append(lines, th.FG256(th.Muted, i18n.T("point terva at any openai-compatible endpoint (lm studio, vllm, llama.cpp, ollama's /v1, a gateway).")))
-		lines = append(lines, "")
-		wrapW := width - 2
-		if wrapW < 20 {
-			wrapW = 20
-		}
-		for i := range compatFieldCount {
-			label := i18n.T(compatFieldLabels[i])
-			if i == d.compatIdx {
-				lines = append(lines, th.FG256(th.Accent, "> "+label))
-			} else {
-				lines = append(lines, th.FG256(th.Muted, "  "+label))
-			}
-			edLines, _, _ := d.compatEditor(th, i).Render(width - 2)
-			lines = append(lines, edLines...)
-		}
-		if d.compatErr != "" {
-			lines = append(lines, "")
-			lines = append(lines, th.FG256(th.Error, d.compatErr))
-		}
-		lines = append(lines, "")
-		// The browser form is still live for anyone at a browser on this
-		// machine; on a headless host it is unreachable and this form is
-		// the whole flow.
-		lines = append(lines, th.FG256(th.Muted, i18n.T("or use the browser form on this machine:")))
-		for _, seg := range tui.WrapANSILine(d.url, wrapW) {
-			lines = append(lines, th.FG256(th.Accent, seg))
-		}
-		lines = append(lines, "")
-		lines = append(lines, th.FG256(th.Muted, "tab/shift-tab move between fields - enter submits - esc cancels"))
-		lines = append(lines, FrameRule(th, width))
-	case loginStepPasteCode:
-		lines = append(lines, FrameHeader(th, "login - "+d.method+" - "+ProviderLabel(d.provider)+" - paste code", width))
-		lines = append(lines, th.FG256(th.Muted, "open this URL in any browser:"))
-		wrapW := width - 2
-		if wrapW < 20 {
-			wrapW = 20
-		}
-		for _, seg := range tui.WrapANSILine(d.url, wrapW) {
-			lines = append(lines, th.FG256(th.Accent, seg))
-		}
-		lines = append(lines, "")
-		lines = append(lines, th.FG256(th.Muted, i18n.T("paste the authorization code (or full redirect URL / code#state):")))
-		if d.codeEd == nil {
-			d.codeEd = tui.NewEditor(th.AccentBar(th.Accent))
-		}
-		edLines, _, _ := d.codeEd.Render(width - 2)
-		for _, l := range edLines {
-			lines = append(lines, l)
-		}
-		lines = append(lines, "")
-		lines = append(lines, th.FG256(th.Muted, "enter submits - esc cancels"))
-		lines = append(lines, FrameRule(th, width))
-	case loginStepInfo:
-		title := d.infoTitle
-		if title == "" {
-			title = "login - setup"
-		}
-		lines = append(lines, FrameHeader(th, title, width))
-		for _, l := range d.infoLines {
-			lines = append(lines, l)
-		}
-		lines = append(lines, "")
-		lines = append(lines, th.FG256(th.Muted, "press any key to close"))
-		lines = append(lines, FrameRule(th, width))
+	case loginStepFlow:
+		lines = append(lines, d.renderFlow(th, width)...)
 	case loginStepDone:
 		title := "login - failed"
 		body := th.FG256(th.Error, d.message)
@@ -325,16 +181,14 @@ func (d *LoginDialog) Render(th tui.Theme, width int) []string {
 	return lines
 }
 
-// providersForMethod returns the providers offered for a given login
-// method. API-key is the universal path so it lists every provider;
-// subscription/OAuth only lists providers that actually issue tokens
-// usable against the same API the model picker drives (Google's
-// consumer Gemini Advanced login does not, and DeepSeek has no
-// subscription product at all).
+// providersForMethod returns the providers offered for a given login method,
+// ordered for display. Which providers those ARE is the auth package's business
+// (see auth.OAuthProviders); sorting them by their user-facing label is this
+// layer's.
 func providersForMethod(method string) []string {
 	var providers []string
 	if method == "oauth" {
-		providers = []string{"anthropic", "openai-codex", "kimi", "github-copilot"}
+		providers = auth.OAuthProviders()
 	} else {
 		providers = auth.APIKeyProviders()
 	}
@@ -443,29 +297,20 @@ func (d *LoginDialog) renderStatusLines(th tui.Theme) []string {
 	return out
 }
 
-// Key is the result of handling a key press.
+// loginDialogAction is the result of handling a key press.
+//
+// Two verbs, where there used to be five (StartAPIKey, StartOAuth, SubmitCode,
+// SubmitKey, SubmitCompat). Start a login, or submit the values the daemon asked
+// for. The dialog no longer knows what a code is, or that a key is different from
+// one — the daemon named the fields, and this hands them back.
 type loginDialogAction struct {
-	StartAPIKey bool
-	StartOAuth  bool
-	StartManual bool
-	Provider    string
-	Close       bool
-	SubmitCode  string
-	// SubmitKey carries a pasted API key. It is distinct from SubmitCode
-	// because the two go to different places: a code is exchanged with the
-	// provider, a key is stored as-is. Routing a key through the code path
-	// is what used to make headless api-key logins fail silently.
-	SubmitKey string
-	// SubmitCompat carries a filled-in openai-compatible form.
-	SubmitCompat *CompatSubmit
-}
-
-// CompatSubmit is a completed openai-compatible login form.
-type CompatSubmit struct {
-	BaseURL       string
-	Model         string
-	Key           string // optional
-	ContextWindow int    // 0 = unknown
+	StartLogin bool
+	Provider   string
+	Method     string // apikey | oauth
+	// Submit carries the filled-in fields, keyed by AuthField.Name. Nil unless the
+	// user pressed enter on a completed form.
+	Submit map[string]string
+	Close  bool
 }
 
 // HandleKey advances the dialog and returns an action to apply, if any.
@@ -475,15 +320,8 @@ func (d *LoginDialog) HandleKey(k tui.Key) loginDialogAction {
 		return d.handleMethodKey(k)
 	case loginStepProvider:
 		return d.handleProviderKey(k)
-	case loginStepWaiting:
-		return d.handleWaitingKey(k)
-	case loginStepPasteCode:
-		return d.handlePasteCodeKey(k)
-	case loginStepCompatForm:
-		return d.handleCompatFormKey(k)
-	case loginStepInfo:
-		d.Close()
-		return loginDialogAction{Close: true}
+	case loginStepFlow:
+		return d.handleFlowKey(k)
 	case loginStepDone:
 		d.Close()
 		return loginDialogAction{Close: true}
@@ -548,78 +386,37 @@ func (d *LoginDialog) handleProviderKey(k tui.Key) loginDialogAction {
 			return loginDialogAction{}
 		}
 		d.provider = providers[d.cursor]
-		d.step = loginStepWaiting
-		if d.method == "apikey" {
-			return loginDialogAction{StartAPIKey: true, Provider: d.provider}
-		}
-		return loginDialogAction{StartOAuth: true, Provider: d.provider}
+		// Stay put until the daemon answers with a step to render; ShowStep moves
+		// us on. A dialog that jumped to a blank form and then had to be corrected
+		// by an event is how the old one ended up with a "do not demote the compat
+		// form" guard.
+		return loginDialogAction{StartLogin: true, Provider: d.provider, Method: d.method}
 	}
 	return loginDialogAction{}
 }
 
-// ShowWaiting transitions to the waiting state with the given URL.
-// No-op if the user has already dismissed the dialog.
-func (d *LoginDialog) ShowWaiting(url string) {
+// ShowStep renders the step the daemon described. No-op if the user already
+// dismissed the dialog — a login the user walked away from must not reappear.
+func (d *LoginDialog) ShowStep(step ctrlproto.AuthFlowStep) {
 	if d.step == loginStepClosed {
 		return
 	}
-	// The compat form is already the right surface for this login, and it
-	// wants the browser-form URL, not to be replaced by a paste box. The
-	// api-key flow emits its "started" event (carrying that URL) after the
-	// form has been opened, so without this the event would demote the form
-	// the instant it appeared.
-	if d.step == loginStepCompatForm {
-		d.url = url
+	d.step = loginStepFlow
+	d.flow = step
+	d.eds = make([]*tui.Editor, len(step.Fields))
+	d.edIdx = 0
+	d.flowErr = ""
+}
+
+// ShowFlowError puts the daemon's refusal in front of the user WITHOUT closing
+// the form. A mistyped key should cost you the key, not everything else you
+// typed — which for the compat endpoint is a base URL, a model, and a context
+// window.
+func (d *LoginDialog) ShowFlowError(msg string) {
+	if d.step != loginStepFlow {
 		return
 	}
-	d.step = loginStepWaiting
-	d.url = url
-}
-
-// ShowCompatForm opens the openai-compatible field form. url is the browser
-// form, still running and still usable from a browser on this machine; the
-// TUI form exists because that URL is loopback-only and so unreachable from
-// a headless host.
-func (d *LoginDialog) ShowCompatForm(url string) {
-	if d.step == loginStepClosed {
-		return
-	}
-	d.step = loginStepCompatForm
-	d.url = url
-	d.compatIdx = 0
-	d.compatErr = ""
-}
-
-// compatEditor lazily builds the editor for field i.
-func (d *LoginDialog) compatEditor(th tui.Theme, i int) *tui.Editor {
-	if d.compatEds[i] == nil {
-		d.compatEds[i] = tui.NewEditor(th.AccentBar(th.Accent))
-	}
-	return d.compatEds[i]
-}
-
-// compatValue reads a field without disturbing it.
-func (d *LoginDialog) compatValue(i int) string {
-	if d.compatEds[i] == nil {
-		return ""
-	}
-	return strings.TrimSpace(d.compatEds[i].Value())
-}
-
-// SetURL replaces the displayed verification URL without changing the
-// step. Restarting a manual OAuth flow re-issues the URL while the
-// dialog is already parked on the paste-code screen.
-func (d *LoginDialog) SetURL(url string) { d.url = url }
-
-// ShowInfo transitions to an informational setup dialog.
-// No-op if the user has already dismissed the dialog.
-func (d *LoginDialog) ShowInfo(title string, lines []string) {
-	if d.step == loginStepClosed {
-		return
-	}
-	d.step = loginStepInfo
-	d.infoTitle = title
-	d.infoLines = lines
+	d.flowErr = msg
 }
 
 // ShowResult transitions to the done state with the given outcome.
@@ -633,120 +430,180 @@ func (d *LoginDialog) ShowResult(success bool, message string) {
 	d.message = message
 }
 
-func (d *LoginDialog) handleWaitingKey(k tui.Key) loginDialogAction {
-	if k.Kind == tui.KeyEsc {
+// editor lazily builds the editor for field i. The theme is only available at
+// render time, which is why these are not built in ShowStep.
+func (d *LoginDialog) editor(th tui.Theme, i int) *tui.Editor {
+	if i < 0 || i >= len(d.eds) {
+		return nil
+	}
+	if d.eds[i] == nil {
+		d.eds[i] = tui.NewEditor(th.AccentBar(th.Accent))
+	}
+	return d.eds[i]
+}
+
+func (d *LoginDialog) fieldValue(i int) string {
+	if i < 0 || i >= len(d.eds) || d.eds[i] == nil {
+		return ""
+	}
+	return strings.TrimSpace(d.eds[i].Value())
+}
+
+// renderFlow draws the descriptor: a title, some prose, a URL to open, a device
+// code to type, and one labelled editor per field. It branches on Kind, never on
+// which provider this is.
+func (d *LoginDialog) renderFlow(th tui.Theme, width int) []string {
+	var lines []string
+	title := d.flow.Title
+	if title == "" {
+		title = "login - " + ProviderLabel(d.provider)
+	}
+	lines = append(lines, FrameHeader(th, title, width))
+
+	for _, l := range d.flow.Lines {
+		lines = append(lines, th.FG256(th.Muted, l))
+	}
+
+	wrapW := width - 2
+	if wrapW < 20 {
+		wrapW = 20
+	}
+	if d.flow.URL != "" {
+		lines = append(lines, "")
+		lines = append(lines, th.FG256(th.Muted, i18n.T("open this URL in a browser:")))
+		for _, seg := range tui.WrapANSILine(d.flow.URL, wrapW) {
+			lines = append(lines, th.FG256(th.Accent, seg))
+		}
+	}
+	if d.flow.UserCode != "" {
+		lines = append(lines, "")
+		lines = append(lines, th.FG256(th.Muted, i18n.T("and enter this code:")))
+		lines = append(lines, th.FG256(th.Accent, "  "+d.flow.UserCode))
+	}
+
+	for i, f := range d.flow.Fields {
+		lines = append(lines, "")
+		label := f.Label
+		if !f.Required {
+			label += i18n.T(" (optional)")
+		}
+		if i == d.edIdx {
+			lines = append(lines, th.FG256(th.Accent, "> "+label))
+		} else {
+			lines = append(lines, th.FG256(th.Muted, "  "+label))
+		}
+		edLines, _, _ := d.editor(th, i).Render(width - 2)
+		lines = append(lines, edLines...)
+		if f.Help != "" {
+			lines = append(lines, th.FG256(th.Muted, "  "+f.Help))
+		}
+	}
+
+	if d.flowErr != "" {
+		lines = append(lines, "")
+		lines = append(lines, th.FG256(th.Error, d.flowErr))
+	}
+
+	lines = append(lines, "")
+	switch {
+	case d.flow.Kind == "info":
+		lines = append(lines, th.FG256(th.Muted, i18n.T("press any key to close")))
+	case d.flow.Kind == "display":
+		lines = append(lines, th.FG256(th.Muted, i18n.T("waiting for you to approve it - esc cancels")))
+	case len(d.flow.Fields) > 1:
+		lines = append(lines, th.FG256(th.Muted, i18n.T("tab/shift-tab move between fields - enter submits - esc cancels")))
+	default:
+		lines = append(lines, th.FG256(th.Muted, i18n.T("enter submits - esc cancels")))
+	}
+	lines = append(lines, FrameRule(th, width))
+	return lines
+}
+
+// handleFlowKey drives whatever the daemon asked for.
+//
+// It validates only that the REQUIRED fields are filled — nothing else. Whether a
+// context window is a number, whether a base URL is reachable, whether a key is
+// accepted: all of that is the daemon's to decide, and it is decided in one place
+// instead of here and there and in the manager.
+func (d *LoginDialog) handleFlowKey(k tui.Key) loginDialogAction {
+	if d.flow.Kind == "info" {
 		d.Close()
 		return loginDialogAction{Close: true}
 	}
-	if d.codeEd == nil {
-		return loginDialogAction{}
-	}
-	if submit := d.codeEd.HandleKey(k); submit {
-		v := d.codeEd.SubmitValue()
-		d.codeEd.Clear()
-		if strings.TrimSpace(v) == "" {
-			return loginDialogAction{}
-		}
-		if d.method == "apikey" {
-			return loginDialogAction{SubmitKey: v, Provider: d.provider}
-		}
-		return loginDialogAction{SubmitCode: v}
-	}
-	return loginDialogAction{}
-}
-
-// handleCompatFormKey drives the openai-compatible field form. Tab and
-// shift-tab move between fields; enter submits the whole form.
-func (d *LoginDialog) handleCompatFormKey(k tui.Key) loginDialogAction {
 	switch k.Kind {
 	case tui.KeyEsc:
 		d.Close()
 		return loginDialogAction{Close: true}
 	case tui.KeyTab:
-		d.compatIdx = (d.compatIdx + 1) % compatFieldCount
+		if n := len(d.flow.Fields); n > 0 {
+			d.edIdx = (d.edIdx + 1) % n
+		}
 		return loginDialogAction{}
 	case tui.KeyShiftTab:
-		d.compatIdx = (d.compatIdx - 1 + compatFieldCount) % compatFieldCount
+		if n := len(d.flow.Fields); n > 0 {
+			d.edIdx = (d.edIdx - 1 + n) % n
+		}
 		return loginDialogAction{}
 	}
-
-	ed := d.compatEds[d.compatIdx]
+	if len(d.flow.Fields) == 0 {
+		return loginDialogAction{} // a display step: nothing to type into
+	}
+	ed := d.eds[d.edIdx]
 	if ed == nil {
-		// Not rendered yet, so there is nothing to type into.
-		return loginDialogAction{}
+		return loginDialogAction{} // not rendered yet
 	}
-	submit := ed.HandleKey(k)
-	if !submit {
+	if submit := ed.HandleKey(k); !submit {
 		return loginDialogAction{}
 	}
 
-	// Enter submits the form, not just the focused field. Validate here so
-	// a mistake is shown in place and nothing already typed is lost.
-	baseURL := d.compatValue(compatFieldBaseURL)
-	model := d.compatValue(compatFieldModel)
-	if baseURL == "" || model == "" {
-		d.compatErr = i18n.T("base url and model are required")
-		return loginDialogAction{}
-	}
-	ctxWindow := 0
-	if raw := d.compatValue(compatFieldContextWindow); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			d.compatErr = i18n.T("context window must be a positive whole number")
-			d.compatIdx = compatFieldContextWindow
+	values := map[string]string{}
+	for i, f := range d.flow.Fields {
+		v := d.fieldValue(i)
+		if f.Required && v == "" {
+			d.flowErr = i18n.T("%s is required", f.Label)
+			d.edIdx = i
 			return loginDialogAction{}
 		}
-		ctxWindow = n
+		values[f.Name] = v
 	}
-	d.compatErr = ""
-	return loginDialogAction{
-		Provider: compatProvider,
-		SubmitCompat: &CompatSubmit{
-			BaseURL:       baseURL,
-			Model:         model,
-			Key:           d.compatValue(compatFieldKey),
-			ContextWindow: ctxWindow,
-		},
-	}
+	d.flowErr = ""
+	return loginDialogAction{Submit: values, Provider: d.provider}
 }
 
-func (d *LoginDialog) handlePasteCodeKey(k tui.Key) loginDialogAction {
-	if k.Kind == tui.KeyEsc {
-		d.Close()
-		return loginDialogAction{Close: true}
-	}
-	if d.codeEd == nil {
-		return loginDialogAction{}
-	}
-	if submit := d.codeEd.HandleKey(k); submit {
-		code := d.codeEd.SubmitValue()
-		d.codeEd.Clear()
-		return loginDialogAction{SubmitCode: code}
-	}
-	return loginDialogAction{}
-}
-
-// CursorPos returns the absolute row/col inside the dialog where the
-// terminal cursor should sit (paste-code step). Returns -1, -1 if the
-// dialog is not in an input-expecting state. The host uses this to
-// place the real blinking cursor on the code input.
+// CursorPos returns the absolute row/col inside the dialog where the terminal
+// cursor should sit, so the real blinking cursor lands on the focused input.
+// Returns -1,-1 when the dialog expects no typing.
 func (d *LoginDialog) CursorPos(width int) (row, col int) {
-	if d.codeEd == nil {
+	if d.step != loginStepFlow || len(d.flow.Fields) == 0 {
 		return -1, -1
 	}
-	if d.step != loginStepPasteCode && d.step != loginStepWaiting {
+	ed := d.eds[d.edIdx]
+	if ed == nil {
 		return -1, -1
 	}
-	_, eRow, eCol := d.codeEd.Render(width - 2)
 	wrapW := width - 2
 	if wrapW < 20 {
 		wrapW = 20
 	}
-	urlLines := len(tui.WrapANSILine(d.url, wrapW))
-	// interactive.redraw wraps dialog output with padDialogFrame, which
-	// injects a blank row after the frame header. Count that row here so
-	// the real terminal cursor lands on the editor input instead of the
-	// prompt above it.
-	baseOffset := 1 /*frameHeader*/ + 1 /*padDialogFrame blank*/ + 1 /*hint*/ + urlLines + 1 /*blank*/ + 1 /*prompt*/
-	return baseOffset + eRow, eCol
+	// Count the rows renderFlow emits ahead of the focused editor. interactive's
+	// redraw wraps dialog output in padDialogFrame, which injects a blank row
+	// after the frame header — hence the +1 that is not in renderFlow itself.
+	rows := 1 /*frame header*/ + 1 /*padDialogFrame blank*/ + len(d.flow.Lines)
+	if d.flow.URL != "" {
+		rows += 1 /*blank*/ + 1 /*hint*/ + len(tui.WrapANSILine(d.flow.URL, wrapW))
+	}
+	if d.flow.UserCode != "" {
+		rows += 3 // blank, hint, code
+	}
+	for i := 0; i < d.edIdx; i++ {
+		rows += 2 // blank, label
+		edLines, _, _ := d.editor(tui.Dark, i).Render(width - 2)
+		rows += len(edLines)
+		if d.flow.Fields[i].Help != "" {
+			rows++
+		}
+	}
+	rows += 2 // the focused field's own blank + label
+	_, eRow, eCol := ed.Render(width - 2)
+	return rows + eRow, eCol
 }

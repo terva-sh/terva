@@ -16,7 +16,8 @@
       "context-tree",
       "image-data",
       "files-list",
-      "generate-title"
+      "generate-title",
+      "workspace-events"
     ],
     "locale": "de",
     "cwd": "/home/u/project",

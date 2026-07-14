@@ -285,7 +285,7 @@ func TestStartManualOAuthAdoptsLoopbackFlow(t *testing.T) {
 		}
 		return u.Query().Get("state")
 	}
-	loopState, manualState := stateOf(loopURL), stateOf(manualURL)
+	loopState, manualState := stateOf(loopURL.URL), stateOf(manualURL.URL)
 	if loopState == "" {
 		t.Fatal("loopback URL has empty state")
 	}

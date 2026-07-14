@@ -219,6 +219,31 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	}
 
 	term := tui.NewProcTerm()
+
+	// Named because two things need it: the /model picker's Ctrl+D, and the
+	// post-login apply (an openai-compatible login promotes the model the user
+	// just pointed terva at).
+	promoteModelDefault := func(providerName, model, scope string) error {
+		return w.SetDefaultModel(ctx, providerName, model, ctrlproto.DefaultScope(scope))
+	}
+
+	// The SAME auth group the web daemon serves, on the same workspace. The TUI is
+	// a ctrlproto client that happens to share the process, so /login goes through
+	// the control plane like everything else — no second login implementation, no
+	// second form builder, no second answer to "who is logged in".
+	//
+	// OpenBrowser is true here and false on the daemon: a user at this terminal
+	// expects a browser to pop; a user at a phone would be watching a window open
+	// on a machine in another room.
+	w.EnableAuth(authMgr, workspace.AuthOptions{
+		OpenBrowser: true,
+		ApplyStart:  ApplyLoginStart,
+		ApplyLogout: ApplyLogout,
+		ApplyLogin: func(providerID string) {
+			ApplyLoginSuccess(authMgr.Store(), providerID, promoteModelDefault)
+		},
+	})
+
 	// Forward-declared so the session-group closures below can re-point the
 	// running TUI (the legacy entry point uses the same pattern).
 	var iv *modes.Interactive
@@ -309,18 +334,15 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		GatedContentPresent: config.HasGatedProjectContent(w.CWD()),
 		JailNotice:          build.JailNoticeFor(args).Message(),
 
-		// --- in-TUI login (the carrier flavor) ---
-		// The auth manager runs the OAuth/api-key flows in this process; on
-		// success the TUI calls CarrierLogin, which refreshes the workspace's
-		// credential/defaults and ensures a session to bind to. Its presence
-		// also marks this carrier as login-capable (a remote daemon's client
-		// would leave it nil — credentials live server-side there).
-		AuthManager:         authMgr,
-		RefreshModels:       RefreshModelsForceAsync,
-		RefreshCompatModels: RefreshCompatModelsAsync,
-		// Logging in/out of Kimi toggles whether terva may fall back to the
-		// official Kimi Code CLI token — so a logout actually stops using it.
-		SetKimiCLIFallbackDisabled: config.SetKimiCLIFallbackDisabled,
+		// --- in-TUI login ---
+		// The TUI drives the workspace's AuthController, exactly as the web panel
+		// does — same verbs, same form descriptor, same auth_state events — only
+		// in-process, with no serialization. See EnableAuth above.
+		//
+		// CarrierLocal: the browser this user will authorize in is on THIS machine,
+		// so the daemon may use the loopback OAuth callback (click, approve, done)
+		// rather than only the paste-back form a remote client gets.
+		CarrierLocal: true,
 		CarrierLogin: func(current string) (ctrlproto.SessionInfo, error) {
 			if err := w.RefreshDefaults(); err != nil {
 				return ctrlproto.SessionInfo{}, err
@@ -414,9 +436,7 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 			}
 			return w.SetFavoriteModel(ctx, prov, model, on)
 		},
-		PromoteModelDefault: func(providerName, model, scope string) error {
-			return w.SetDefaultModel(ctx, providerName, model, ctrlproto.DefaultScope(scope))
-		},
+		PromoteModelDefault: promoteModelDefault,
 		TrustWorkspace: func(parent bool) error {
 			return w.Trust(ctx, parent)
 		},

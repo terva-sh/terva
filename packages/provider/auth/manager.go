@@ -6,8 +6,10 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"terva.sh/terva/packages/i18n"
@@ -16,11 +18,45 @@ import (
 // Event is delivered on Manager.Events().
 type Event struct {
 	Kind     string // "started" | "browser_open" | "success" | "error" | "canceled"
+	Flow     FlowID // the attempt this is about; empty for browser_open
 	Provider string
 	Method   string
 	URL      string // login URL (for "started"/"browser_open")
+	UserCode string // device flows: the code to type at the verification page
 	Message  string // on error
 }
+
+// FlowID identifies one login attempt.
+//
+// It exists because a login is not a pure function of its inputs: the manual
+// OAuth flow leaves the pkce verifier and the state parameter on the Manager,
+// and the code the user pastes back is only meaningful against the flow that
+// minted them. With one user at one keyboard that is invisible. With a daemon
+// serving a phone and a laptop it is a bug: two logins started concurrently
+// overwrite each other's verifier, and the first user's paste is then exchanged
+// against the second user's flow. The handle makes that refusable instead of
+// silently wrong — see ErrFlowSuperseded.
+type FlowID string
+
+// Flow is a started login attempt: what to put in front of the user, and the
+// handle needed to finish it.
+type Flow struct {
+	ID       FlowID
+	Provider string
+	Method   string // "apikey" | "oauth"
+	URL      string // to DISPLAY — never assume the daemon's browser is the user's
+	UserCode string // device flows: shown as text, not merely fused into URL
+}
+
+var (
+	// ErrNoFlow — a completion arrived with no login in progress.
+	ErrNoFlow = errors.New("no login flow in progress")
+	// ErrFlowSuperseded — a completion arrived for a login that a newer one has
+	// replaced. The credentials it carries belong to a flow whose pkce verifier
+	// is gone; exchanging them would either fail obscurely or, worse, succeed
+	// against the wrong attempt.
+	ErrFlowSuperseded = errors.New("this login was superseded by a newer one")
+)
 
 // Manager drives a login flow end-to-end. It owns a local web server
 // (for api-key form) plus provider-specific OAuth callback servers.
@@ -51,6 +87,11 @@ type Manager struct {
 	manualEventProvider string
 	manualPKCE          PKCE
 	manualState         string
+	manualFlow          FlowID
+
+	// flowSeq mints FlowIDs. Monotonic, never reused, so a handle from a
+	// superseded attempt can always be told apart from the current one.
+	flowSeq atomic.Uint64
 
 	// Probe seams, mirroring Server.probeFn. A key handed straight to the
 	// Manager (the headless path) is validated exactly as the browser form
@@ -81,6 +122,32 @@ func (m *Manager) Store() *Store { return m.store }
 // Events returns the read-only event channel.
 func (m *Manager) Events() <-chan Event { return m.events }
 
+// SetOpenBrowser controls whether a started flow tries to open the login URL in
+// a browser on THIS machine.
+//
+// A terminal on the user's laptop wants that; a daemon does not. `terva web`
+// serves a browser that is somewhere else entirely, so an xdg-open here is at
+// best a no-op on a headless box and at worst pops a window on a machine nobody
+// is looking at. Any carrier whose user is not sitting at the daemon must turn
+// this off. The URL is still returned and still emitted — displaying it is the
+// contract; opening it is a convenience.
+func (m *Manager) SetOpenBrowser(open bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.openBrowser = open
+}
+
+func (m *Manager) browserEnabled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.openBrowser
+}
+
+// nextFlow mints a fresh handle.
+func (m *Manager) nextFlow() FlowID {
+	return FlowID(strconv.FormatUint(m.flowSeq.Add(1), 10))
+}
+
 // Close shuts down any running servers and cancels pending flows.
 func (m *Manager) Close() {
 	m.mu.Lock()
@@ -104,17 +171,23 @@ func (m *Manager) Close() {
 // ---- API key flow ----
 
 // StartAPIKey launches the API-key login flow.
-func (m *Manager) StartAPIKey(provider string) (string, error) {
+//
+// The URL it returns is a form on the DAEMON's loopback (see NewServer), so it
+// is reachable only by a browser on this machine. A remote client must ignore it
+// and use CompleteAPIKey, which is the same flow with the key handed over
+// directly.
+func (m *Manager) StartAPIKey(provider string) (Flow, error) {
 	if !isKnownAPIKeyProvider(provider) {
-		return "", errors.New(apiKeyProviderMessage())
+		return Flow{}, errors.New(apiKeyProviderMessage())
 	}
 	if err := m.ensureKeyServer(); err != nil {
-		return "", err
+		return Flow{}, err
 	}
 	u := m.keyServer.URL() + "/apikey?provider=" + provider
+	f := Flow{ID: m.nextFlow(), Provider: provider, Method: "apikey", URL: u}
 	go m.maybeOpen(u)
-	m.emit(Event{Kind: "started", Provider: provider, Method: "apikey", URL: u})
-	return u, nil
+	m.emit(Event{Kind: "started", Flow: f.ID, Provider: provider, Method: "apikey", URL: u})
+	return f, nil
 }
 
 // CompleteAPIKey stores an API key handed to terva directly, rather than
@@ -199,12 +272,17 @@ func (m *Manager) ensureKeyServer() error {
 		return err
 	}
 	m.keyServer = s
-	go m.consumeKeyServerResults()
+	// Hand the server to the consumer rather than letting it reach back for
+	// m.keyServer: Close() nils that field under the mutex, and the consumer
+	// read it without one — a real data race, and on the losing schedule a nil
+	// dereference in a goroutine, which takes the process down. The consumer
+	// needs exactly one server for its whole life, so it should hold it.
+	go m.consumeKeyServerResults(s)
 	return nil
 }
 
-func (m *Manager) consumeKeyServerResults() {
-	for res := range m.keyServer.Result() {
+func (m *Manager) consumeKeyServerResults(s *Server) {
+	for res := range s.Result() {
 		if res.Err != nil {
 			m.emit(Event{Kind: "error", Provider: res.Provider, Method: res.Method, Message: res.Err.Error()})
 			continue
@@ -233,7 +311,7 @@ func (m *Manager) consumeKeyServerResults() {
 // offer a subscription OAuth that exchanges a Google One AI / Gemini
 // Advanced login for usable Generative Language API credentials, so
 // the only supported google login path is the API-key flow.
-func (m *Manager) StartOAuth(provider string) (string, error) {
+func (m *Manager) StartOAuth(provider string) (Flow, error) {
 	if provider == "kimi" {
 		return m.StartKimiDeviceOAuth()
 	}
@@ -249,11 +327,11 @@ func (m *Manager) StartOAuth(provider string) (string, error) {
 		op = OpenAIOAuth
 		storeProvider = "openai"
 	case "google":
-		return "", i18n.Errorf("google login is api-key only; use api key login for gemini")
+		return Flow{}, i18n.Errorf("google login is api-key only; use api key login for gemini")
 	case "deepseek":
-		return "", i18n.Errorf("deepseek login is api-key only; use api key login")
+		return Flow{}, i18n.Errorf("deepseek login is api-key only; use api key login")
 	default:
-		return "", i18n.Errorf("provider must be anthropic, openai, openai-codex, kimi, github-copilot, deepseek, or google")
+		return Flow{}, i18n.Errorf("provider must be anthropic, openai, openai-codex, kimi, github-copilot, deepseek, or google")
 	}
 
 	m.mu.Lock()
@@ -268,19 +346,20 @@ func (m *Manager) StartOAuth(provider string) (string, error) {
 
 	pkce, err := NewPKCE()
 	if err != nil {
-		return "", err
+		return Flow{}, err
 	}
 	authURL, state, err := op.AuthorizeURL(pkce)
 	if err != nil {
-		return "", err
+		return Flow{}, err
 	}
 
 	cs, err := NewCallbackServer(op, state)
 	if err != nil {
-		return "", err
+		return Flow{}, err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	f := Flow{ID: m.nextFlow(), Provider: provider, Method: "oauth", URL: authURL}
 	m.mu.Lock()
 	m.oauthServer = cs
 	m.oauthCtx = ctx
@@ -295,26 +374,30 @@ func (m *Manager) StartOAuth(provider string) (string, error) {
 	m.oauthURL = authURL
 	m.mu.Unlock()
 
-	go m.awaitOAuth(ctx, op, storeProvider, provider, cs, pkce, state)
+	go m.awaitOAuth(ctx, f.ID, op, storeProvider, provider, cs, pkce, state)
 	go m.maybeOpen(authURL)
-	m.emit(Event{Kind: "started", Provider: provider, Method: "oauth", URL: authURL})
-	return authURL, nil
+	m.emit(Event{Kind: "started", Flow: f.ID, Provider: provider, Method: "oauth", URL: authURL})
+	return f, nil
 }
 
-func (m *Manager) awaitOAuth(ctx context.Context, op OAuthProvider, storeProvider, eventProvider string, cs *CallbackServer, pkce PKCE, state string) {
+func (m *Manager) awaitOAuth(ctx context.Context, flow FlowID, op OAuthProvider, storeProvider, eventProvider string, cs *CallbackServer, pkce PKCE, state string) {
 	defer cs.Shutdown()
+
+	fail := func(msg string) {
+		m.emit(Event{Kind: "error", Flow: flow, Provider: eventProvider, Method: "oauth", Message: msg})
+	}
 
 	waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer waitCancel()
 	res, err := cs.Result(waitCtx)
 	if err != nil {
 		if ctx.Err() == nil {
-			m.emit(Event{Kind: "error", Provider: eventProvider, Method: "oauth", Message: "timeout waiting for callback"})
+			fail("timeout waiting for callback")
 		}
 		return
 	}
 	if res.Err != nil {
-		m.emit(Event{Kind: "error", Provider: eventProvider, Method: "oauth", Message: res.Err.Error()})
+		fail(res.Err.Error())
 		return
 	}
 
@@ -322,18 +405,22 @@ func (m *Manager) awaitOAuth(ctx context.Context, op OAuthProvider, storeProvide
 	defer exCancel()
 	tok, err := op.Exchange(exCtx, res.Code, res.State, pkce)
 	if err != nil {
-		m.emit(Event{Kind: "error", Provider: eventProvider, Method: "oauth", Message: err.Error()})
+		fail(err.Error())
 		return
 	}
 	if err := m.store.SetOAuth(storeProvider, *tok); err != nil {
-		m.emit(Event{Kind: "error", Provider: eventProvider, Method: "oauth", Message: err.Error()})
+		fail(err.Error())
 		return
 	}
-	m.emit(Event{Kind: "success", Provider: eventProvider, Method: "oauth"})
+	m.emit(Event{Kind: "success", Flow: flow, Provider: eventProvider, Method: "oauth"})
 }
 
 // StartKimiDeviceOAuth starts Kimi Code's device-code subscription login.
-func (m *Manager) StartKimiDeviceOAuth() (string, error) {
+//
+// The user code rides in the verification URL, but it is also returned on its
+// own: a client that cannot open a URL for the user (a phone reading a panel
+// served from a VM) has to be able to render "type this code" as text.
+func (m *Manager) StartKimiDeviceOAuth() (Flow, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()
 	if m.oauthCancel != nil {
@@ -345,30 +432,23 @@ func (m *Manager) StartKimiDeviceOAuth() (string, error) {
 
 	dev, err := RequestKimiDeviceAuthorization(ctx)
 	if err != nil {
-		return "", err
+		return Flow{}, err
 	}
-	url := dev.VerificationURIComplete
-	go m.maybeOpen(url)
-	m.emit(Event{Kind: "started", Provider: "kimi", Method: "oauth", URL: url})
-	go func() {
-		tok, err := PollKimiDeviceToken(ctx, dev)
-		if err != nil {
-			if ctx.Err() == nil {
-				m.emit(Event{Kind: "error", Provider: "kimi", Method: "oauth", Message: err.Error()})
-			}
-			return
-		}
-		if err := m.store.SetOAuth("kimi", *tok); err != nil {
-			m.emit(Event{Kind: "error", Provider: "kimi", Method: "oauth", Message: err.Error()})
-			return
-		}
-		m.emit(Event{Kind: "success", Provider: "kimi", Method: "oauth"})
-	}()
-	return url, nil
+	f := Flow{
+		ID:       m.nextFlow(),
+		Provider: "kimi",
+		Method:   "oauth",
+		URL:      dev.VerificationURIComplete,
+		UserCode: dev.UserCode,
+	}
+	go m.maybeOpen(f.URL)
+	m.emit(Event{Kind: "started", Flow: f.ID, Provider: "kimi", Method: "oauth", URL: f.URL, UserCode: f.UserCode})
+	go m.awaitDevice(ctx, f, func() (*OAuthToken, error) { return PollKimiDeviceToken(ctx, dev) })
+	return f, nil
 }
 
 // StartGitHubCopilotDeviceOAuth starts GitHub Copilot's device-code subscription login.
-func (m *Manager) StartGitHubCopilotDeviceOAuth() (string, error) {
+func (m *Manager) StartGitHubCopilotDeviceOAuth() (Flow, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()
 	if m.oauthCancel != nil {
@@ -380,36 +460,51 @@ func (m *Manager) StartGitHubCopilotDeviceOAuth() (string, error) {
 
 	dev, err := RequestGitHubCopilotDeviceAuthorization(ctx)
 	if err != nil {
-		return "", err
+		return Flow{}, err
 	}
 	loginURL := dev.VerificationURI
 	if dev.UserCode != "" {
 		loginURL += "?user_code=" + url.QueryEscape(dev.UserCode)
 	}
-	go m.maybeOpen(loginURL)
-	m.emit(Event{Kind: "started", Provider: "github-copilot", Method: "oauth", URL: loginURL})
-	go func() {
-		tok, err := PollGitHubCopilotDeviceToken(ctx, dev)
-		if err != nil {
-			if ctx.Err() == nil {
-				m.emit(Event{Kind: "error", Provider: "github-copilot", Method: "oauth", Message: err.Error()})
-			}
-			return
+	f := Flow{
+		ID:       m.nextFlow(),
+		Provider: "github-copilot",
+		Method:   "oauth",
+		URL:      loginURL,
+		UserCode: dev.UserCode,
+	}
+	go m.maybeOpen(f.URL)
+	m.emit(Event{Kind: "started", Flow: f.ID, Provider: "github-copilot", Method: "oauth", URL: f.URL, UserCode: f.UserCode})
+	go m.awaitDevice(ctx, f, func() (*OAuthToken, error) { return PollGitHubCopilotDeviceToken(ctx, dev) })
+	return f, nil
+}
+
+// awaitDevice polls a device-code flow to completion. Both device providers
+// differ only in how they poll and where the token lands, so the reporting —
+// which is the part a wire client depends on — is shared rather than copied.
+func (m *Manager) awaitDevice(ctx context.Context, f Flow, poll func() (*OAuthToken, error)) {
+	fail := func(msg string) {
+		m.emit(Event{Kind: "error", Flow: f.ID, Provider: f.Provider, Method: "oauth", Message: msg})
+	}
+	tok, err := poll()
+	if err != nil {
+		if ctx.Err() == nil {
+			fail(err.Error())
 		}
-		if err := m.store.SetOAuth("github-copilot", *tok); err != nil {
-			m.emit(Event{Kind: "error", Provider: "github-copilot", Method: "oauth", Message: err.Error()})
-			return
-		}
-		m.emit(Event{Kind: "success", Provider: "github-copilot", Method: "oauth"})
-	}()
-	return loginURL, nil
+		return
+	}
+	if err := m.store.SetOAuth(f.Provider, *tok); err != nil {
+		fail(err.Error())
+		return
+	}
+	m.emit(Event{Kind: "success", Flow: f.ID, Provider: f.Provider, Method: "oauth"})
 }
 
 // StartManualOAuth begins an OAuth flow but does NOT start a local
 // callback server or open a browser. The returned URL is shown to the
 // user so they can complete the authorization on another device; the
 // resulting code is pasted back via CompleteManualOAuth.
-func (m *Manager) StartManualOAuth(provider string) (string, error) {
+func (m *Manager) StartManualOAuth(provider string) (Flow, error) {
 	if provider == "kimi" {
 		return m.StartKimiDeviceOAuth()
 	}
@@ -425,12 +520,14 @@ func (m *Manager) StartManualOAuth(provider string) (string, error) {
 		op = OpenAIOAuth
 		storeProvider = "openai"
 	case "google":
-		return "", i18n.Errorf("google login is api-key only; use api key login for gemini")
+		return Flow{}, i18n.Errorf("google login is api-key only; use api key login for gemini")
 	case "deepseek":
-		return "", i18n.Errorf("deepseek login is api-key only; use api key login")
+		return Flow{}, i18n.Errorf("deepseek login is api-key only; use api key login")
 	default:
-		return "", i18n.Errorf("provider must be anthropic, openai, openai-codex, kimi, github-copilot, deepseek, or google")
+		return Flow{}, i18n.Errorf("provider must be anthropic, openai, openai-codex, kimi, github-copilot, deepseek, or google")
 	}
+
+	flow := m.nextFlow()
 
 	// If a loopback OAuth flow is already in progress for a provider that
 	// shares this redirect URI (OpenAI/Codex has no off-host manual page,
@@ -448,20 +545,22 @@ func (m *Manager) StartManualOAuth(provider string) (string, error) {
 		m.manualEventProvider = provider
 		m.manualPKCE = m.oauthPKCE
 		m.manualState = m.oauthState
+		m.manualFlow = flow
 		authURL := m.oauthURL
 		m.mu.Unlock()
-		m.emit(Event{Kind: "started", Provider: provider, Method: "oauth", URL: authURL})
-		return authURL, nil
+		f := Flow{ID: flow, Provider: provider, Method: "oauth", URL: authURL}
+		m.emit(Event{Kind: "started", Flow: flow, Provider: provider, Method: "oauth", URL: authURL})
+		return f, nil
 	}
 	m.mu.Unlock()
 
 	pkce, err := NewPKCE()
 	if err != nil {
-		return "", err
+		return Flow{}, err
 	}
 	authURL, state, err := op.AuthorizeURL(pkce)
 	if err != nil {
-		return "", err
+		return Flow{}, err
 	}
 
 	m.mu.Lock()
@@ -470,25 +569,39 @@ func (m *Manager) StartManualOAuth(provider string) (string, error) {
 	m.manualEventProvider = provider
 	m.manualPKCE = pkce
 	m.manualState = state
+	m.manualFlow = flow
 	m.mu.Unlock()
 
-	m.emit(Event{Kind: "started", Provider: provider, Method: "oauth", URL: authURL})
-	return authURL, nil
+	f := Flow{ID: flow, Provider: provider, Method: "oauth", URL: authURL}
+	m.emit(Event{Kind: "started", Flow: flow, Provider: provider, Method: "oauth", URL: authURL})
+	return f, nil
 }
 
-// CompleteManualOAuth exchanges the user-pasted authorization code for
-// a token and stores it. Accepts either a raw code or a "code#state"
-// token shown by providers like Anthropic when code=true is set.
-func (m *Manager) CompleteManualOAuth(ctx context.Context, input string) error {
+// CompleteManualOAuth exchanges the user-pasted authorization code for a token
+// and stores it. Accepts a raw code, a "code#state" pair (what Anthropic's
+// copy-code page shows), or the whole redirect URL out of the browser's address
+// bar — see parseManualCodeInput.
+//
+// flow must be the handle StartManualOAuth returned. The pkce verifier and the
+// state parameter live on the Manager, so a code is only meaningful against the
+// flow that minted them: if a second login started in the meantime — another
+// client, another device — this one's verifier is gone, and exchanging the code
+// against the newer flow's verifier would be a silent mix-up of two people's
+// logins. Refuse instead (ErrFlowSuperseded), and let the caller start again.
+func (m *Manager) CompleteManualOAuth(ctx context.Context, flow FlowID, input string) error {
 	m.mu.Lock()
 	op := m.manualOp
 	storeProvider := m.manualStoreProvider
 	eventProvider := m.manualEventProvider
 	pkce := m.manualPKCE
 	state := m.manualState
+	current := m.manualFlow
 	m.mu.Unlock()
 	if op == nil {
-		return i18n.Errorf("no manual oauth flow in progress")
+		return ErrNoFlow
+	}
+	if flow != current {
+		return ErrFlowSuperseded
 	}
 	code, pastedState := parseManualCodeInput(strings.TrimSpace(input))
 	if pastedState != "" {
@@ -497,26 +610,38 @@ func (m *Manager) CompleteManualOAuth(ctx context.Context, input string) error {
 	if code == "" {
 		return i18n.Errorf("empty code")
 	}
+	fail := func(err error) error {
+		m.emit(Event{Kind: "error", Flow: flow, Provider: eventProvider, Method: "oauth", Message: err.Error()})
+		return err
+	}
 	exCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	tok, err := op.Exchange(exCtx, code, state, pkce)
 	if err != nil {
-		m.emit(Event{Kind: "error", Provider: eventProvider, Method: "oauth", Message: err.Error()})
-		return err
+		return fail(err)
 	}
 	if err := m.store.SetOAuth(storeProvider, *tok); err != nil {
-		m.emit(Event{Kind: "error", Provider: eventProvider, Method: "oauth", Message: err.Error()})
-		return err
+		return fail(err)
 	}
 	m.mu.Lock()
+	// Only clear the flow if it is still ours — a login that superseded this
+	// one while the exchange was in flight owns the slot now, and wiping it
+	// would strand a paste that is about to arrive for a perfectly live flow.
+	if m.manualFlow == flow {
+		m.clearManualLocked()
+	}
+	m.mu.Unlock()
+	m.emit(Event{Kind: "success", Flow: flow, Provider: eventProvider, Method: "oauth"})
+	return nil
+}
+
+func (m *Manager) clearManualLocked() {
 	m.manualOp = nil
 	m.manualStoreProvider = ""
 	m.manualEventProvider = ""
 	m.manualPKCE = PKCE{}
 	m.manualState = ""
-	m.mu.Unlock()
-	m.emit(Event{Kind: "success", Provider: eventProvider, Method: "oauth"})
-	return nil
+	m.manualFlow = ""
 }
 
 // parseManualCodeInput accepts any of:
@@ -538,10 +663,21 @@ func parseManualCodeInput(s string) (code, state string) {
 	return s, ""
 }
 
-// CancelOAuth aborts any in-flight OAuth flow.
+// CancelOAuth aborts any in-flight OAuth flow: the loopback callback server,
+// the device-code poller, and the manual paste-back flow alike.
+//
+// It used to leave the manual state standing — the callback server went away
+// but manualOp/manualPKCE did not, so a code pasted after a cancel was still
+// exchanged, and a flow the user had explicitly abandoned could still store a
+// credential. Clearing it here is what makes "cancel" mean cancelled.
+//
+// The "canceled" event has been part of Event's documented vocabulary since the
+// beginning and was never once emitted; a client waiting for a terminal event
+// after cancelling waited forever. It is emitted now.
 func (m *Manager) CancelOAuth() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	flow := m.manualFlow
+	provider := m.manualEventProvider
 	if m.oauthCancel != nil {
 		m.oauthCancel()
 		m.oauthCancel = nil
@@ -550,6 +686,11 @@ func (m *Manager) CancelOAuth() {
 		m.oauthServer.Shutdown()
 		m.oauthServer = nil
 	}
+	m.oauthOp = nil
+	m.oauthURL = ""
+	m.clearManualLocked()
+	m.mu.Unlock()
+	m.emit(Event{Kind: "canceled", Flow: flow, Provider: provider, Method: "oauth"})
 }
 
 // ---- shared ----
@@ -561,9 +702,10 @@ func (m *Manager) emit(e Event) {
 	}
 }
 
-// maybeOpen tries to open u in the system browser.
+// maybeOpen tries to open u in the system browser — on THIS machine, which is
+// why a daemon carrier turns it off (SetOpenBrowser).
 func (m *Manager) maybeOpen(u string) {
-	if !m.openBrowser {
+	if !m.browserEnabled() {
 		return
 	}
 	var cmd *exec.Cmd

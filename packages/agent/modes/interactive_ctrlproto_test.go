@@ -71,7 +71,13 @@ type fakeCarrier struct {
 	// gets its own channel, closed when its ctx cancels (like the real hub).
 	// subErr, when non-nil, fails every subscribe (the pump fail-stop tests).
 	stream chan ctrlproto.Event
-	subErr error
+	// wsStream, when non-nil, is what a subscribe to the WORKSPACE address
+	// (ctrlproto.AddrWorkspace) returns. Deliberately separate from stream: the
+	// workspace is a different address with a different hub behind it, and a fake
+	// that handed both pumps the same channel would let the workspace pump race
+	// the session pump and eat its events.
+	wsStream chan ctrlproto.Event
+	subErr   error
 	// panels / metas back the extension-panel surface fixtures (guarded by mu):
 	// Surface serves panels by id, Surfaces returns metas.
 	panels map[string]ctrlproto.Surface
@@ -183,6 +189,14 @@ func (f *fakeCarrier) SubscribeReliable(ctx context.Context, sess string) (<-cha
 	if f.subErr != nil {
 		return nil, f.subErr
 	}
+	// The workspace is not a session: it is never recorded in subs (which tests
+	// read to assert which SESSION the pump bound to), and it has its own stream.
+	if sess == ctrlproto.AddrWorkspace {
+		if f.wsStream != nil {
+			return f.wsStream, nil
+		}
+		return closedOnCancel(ctx), nil
+	}
 	select {
 	case f.subs <- sess:
 	default:
@@ -190,12 +204,18 @@ func (f *fakeCarrier) SubscribeReliable(ctx context.Context, sess string) (<-cha
 	if f.stream != nil {
 		return f.stream, nil
 	}
+	return closedOnCancel(ctx), nil
+}
+
+// closedOnCancel is an idle subscription: no events, closed when its ctx ends —
+// what the real hub does for a subscriber nothing is broadcasting to.
+func closedOnCancel(ctx context.Context) chan ctrlproto.Event {
 	ch := make(chan ctrlproto.Event, 64)
 	go func() {
 		<-ctx.Done()
 		close(ch)
 	}()
-	return ch, nil
+	return ch
 }
 
 func (f *fakeCarrier) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {

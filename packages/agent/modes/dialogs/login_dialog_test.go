@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modes/widgets"
 	"terva.sh/terva/packages/testsupport"
 	"terva.sh/terva/packages/tui"
@@ -14,7 +15,15 @@ func TestLoginDialogCursorPosMatchesPaddedInputRow(t *testing.T) {
 	d.Open(testsupport.TempDir(t))
 	d.method = "oauth"
 	d.provider = "anthropic"
-	d.ShowWaiting("https://example.com/oauth/authorize?code_challenge=abc&state=xyz")
+	d.ShowStep(ctrlproto.AuthFlowStep{
+		Flow: "f1", Kind: "form",
+		Title: "Authorize terva, then paste the code",
+		Lines: []string{"Open this page, approve, and paste back what it gives you."},
+		URL:   "https://example.com/oauth/authorize?code_challenge=abc&state=xyz",
+		Fields: []ctrlproto.AuthField{
+			{Name: "code", Label: "Authorization code", Type: "secret", Required: true},
+		},
+	})
 
 	lines := PadDialogFrame(d.Render(tui.Theme{}, 80))
 	row, _ := d.CursorPos(80)

@@ -61,6 +61,15 @@ func ServeConn(ctx context.Context, conn FrameConn, svc WorkspaceService, server
 	s := &serveState{svc: svc, contract: contract, write: write, subs: map[string]context.CancelFunc{}}
 	defer s.closeSubs()
 
+	// A client that did not negotiate FeatureWorkspaceEvents cannot subscribe to
+	// the workspace, so relay its events into the session subscriptions it does
+	// hold — which is exactly what the workspace itself used to do before it had
+	// a hub of its own. The duplication is now a property of this client's
+	// contract rather than of the workspace, which publishes once.
+	if !contract.HasFeature(FeatureWorkspaceEvents) {
+		s.relayWorkspaceEvents(loopCtx)
+	}
+
 	for {
 		f, err := conn.ReadFrame(loopCtx)
 		if err != nil {
@@ -224,6 +233,22 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		}
 		n, err := s.svc.Node(ctx, f.Sess, p.ID, p.Op)
 		s.respond(f.ID, ContextNodeResult{Node: n}, err)
+	case MethodConversationReveal:
+		var p RevealParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		res, err := s.svc.Reveal(ctx, f.Sess, p.Ordinal)
+		s.respond(f.ID, res, err)
+	case MethodConversationHistory:
+		var p HistoryParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		res, err := s.svc.History(ctx, f.Sess, p.Before, p.Limit, p.Epoch)
+		s.respond(f.ID, res, err)
 	case MethodSurfacesList:
 		list, err := s.svc.Surfaces(ctx, f.Sess)
 		s.respond(f.ID, SurfacesResult{Surfaces: list}, err)
@@ -257,6 +282,12 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			return
 		}
 		res, err := s.svc.ListFiles(ctx, p)
+		s.respond(f.ID, res, err)
+
+	case MethodAuthProviders:
+		// Session-independent: f.Sess is ignored on purpose. A credential belongs
+		// to the daemon, not to a conversation.
+		res, err := s.svc.AuthProviders(ctx)
 		s.respond(f.ID, res, err)
 
 	// --- control ---
@@ -295,6 +326,62 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		s.respond(f.ID, nil, s.svc.Untrust(ctx))
 	case MethodRestart:
 		s.respond(f.ID, nil, s.svc.Restart(ctx))
+
+	// --- auth (optional; served only by an AuthController, and only when the
+	// carrier advertised GroupAuth. Every one of these CHANGES a credential;
+	// none of them returns one.) ---
+	case MethodAuthLoginStart:
+		ac, ok := s.svc.(AuthController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "login not supported"))
+			return
+		}
+		var p AuthLoginStartParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		step, err := ac.AuthLoginStart(ctx, p)
+		s.respond(f.ID, step, err)
+
+	case MethodAuthLoginSubmit:
+		ac, ok := s.svc.(AuthController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "login not supported"))
+			return
+		}
+		var p AuthLoginSubmitParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, ac.AuthLoginSubmit(ctx, p))
+
+	case MethodAuthLoginCancel:
+		ac, ok := s.svc.(AuthController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "login not supported"))
+			return
+		}
+		var p AuthFlowRef
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, ac.AuthLoginCancel(ctx, p))
+
+	case MethodAuthLogout:
+		ac, ok := s.svc.(AuthController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "login not supported"))
+			return
+		}
+		var p AuthLogoutParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, ac.AuthLogout(ctx, p))
 
 	// --- replay (optional; served only by a ReplayController) ---
 	case MethodReplayControl:
@@ -353,11 +440,92 @@ func (s *serveState) fail(id uint64, err error) {
 	s.write(ErrFrame(id, CodeInternal, err.Error()))
 }
 
+// relayWorkspaceEvents is the backward-compatibility half of the workspace
+// address: it stamps each workspace event with every session id this connection
+// is subscribed to, reproducing the fan-out the workspace used to do itself.
+//
+// Only for a client that did not negotiate FeatureWorkspaceEvents. A client that
+// did subscribes to AddrWorkspace and receives one copy, correctly addressed.
+//
+// Ordering note: workspace events now reach the socket from their own pump, so
+// they are no longer interleaved with a session's conversation events in a fixed
+// order. Nothing depends on that. A workspace event says "something changed, go
+// re-read it" — it carries no state whose position in the stream matters.
+func (s *serveState) relayWorkspaceEvents(ctx context.Context) {
+	ch, err := s.svc.Subscribe(ctx, AddrWorkspace)
+	if err != nil {
+		// A carrier with no workspace stream (the replay carrier) has no
+		// workspace events to relay. Nothing to do, and not an error.
+		return
+	}
+	strip := !s.contract.HasFeature(FeatureImageData)
+	// A window is cut for a client that asked for one, and only for that client. The
+	// hub broadcasts one full snapshot; this is the per-connection edge, where image
+	// data is already dropped per contract. Window BEFORE stripping so the strip walk
+	// only touches what will actually be sent.
+	window := 0
+	if s.contract.HasFeature(FeatureHistoryWindow) {
+		window = HistoryWindow
+	}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-ch:
+				if !ok {
+					return
+				}
+				ev = windowSnapshot(ev, window)
+				if strip {
+					ev = stripImageData(ev)
+				}
+				for _, sess := range s.sessionSubs() {
+					if err := s.write(EventFrame(sess, ev)); err != nil {
+						return
+					}
+				}
+			}
+		}
+	}()
+}
+
+// sessionSubs lists the real sessions this connection is subscribed to —
+// reserved addresses are not sessions and never appear.
+func (s *serveState) sessionSubs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.subs))
+	for sess := range s.subs {
+		if !IsReservedAddr(sess) {
+			out = append(out, sess)
+		}
+	}
+	return out
+}
+
 // subscribe starts (idempotently) an event pump for the frame's session,
 // forwarding every event as a [KindEvent] frame until the connection or the
 // subscription ends.
 func (s *serveState) subscribe(ctx context.Context, f Frame) {
 	sess := f.Sess
+
+	// The reserved addresses are not sessions, and only one of them exists. A
+	// client must have said it understands them (FeatureWorkspaceEvents) before
+	// it may subscribe to one — otherwise it would receive workspace events
+	// twice, once here and once from the compat pump that is relaying them into
+	// its session subscriptions on its behalf.
+	if IsReservedAddr(sess) {
+		switch {
+		case sess != AddrWorkspace:
+			s.write(ErrFrame(f.ID, CodeNotFound, "unknown reserved address: "+sess))
+			return
+		case !s.contract.HasFeature(FeatureWorkspaceEvents):
+			s.write(ErrFrame(f.ID, CodeUnsupported, "feature not negotiated: "+FeatureWorkspaceEvents))
+			return
+		}
+	}
+
 	s.mu.Lock()
 	if _, ok := s.subs[sess]; ok {
 		s.mu.Unlock()
@@ -381,6 +549,14 @@ func (s *serveState) subscribe(ctx context.Context, f Frame) {
 	// unless this client negotiated them, so a non-negotiating client sees
 	// exactly the lean wire shape.
 	strip := !s.contract.HasFeature(FeatureImageData)
+	// A window is cut for a client that asked for one, and only for that client. The
+	// hub broadcasts one full snapshot; this is the per-connection edge, where image
+	// data is already dropped per contract. Window BEFORE stripping so the strip walk
+	// only touches what will actually be sent.
+	window := 0
+	if s.contract.HasFeature(FeatureHistoryWindow) {
+		window = HistoryWindow
+	}
 
 	go func() {
 		defer func() {
@@ -399,6 +575,7 @@ func (s *serveState) subscribe(ctx context.Context, f Frame) {
 				if !ok {
 					return
 				}
+				ev = windowSnapshot(ev, window)
 				if strip {
 					ev = stripImageData(ev)
 				}

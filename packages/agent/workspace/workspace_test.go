@@ -652,6 +652,11 @@ func TestWorkspaceSetApprovalPlanWithholdsTools(t *testing.T) {
 		t.Fatal("baseline registry should include the write tool")
 	}
 	sub := s.hub.add(nil, true)
+	// The settings surface is workspace-scoped, so its refresh is published to
+	// the workspace, not stamped onto each live session's stream. The notice is a
+	// fact about THIS session's agent being rebuilt, and still rides the session.
+	wsEvents := w.events().add(nil, true)
+
 	if err := s.settingsAction("set", map[string]string{"key": "approval", "value": "plan"}); err != nil {
 		t.Fatalf("set approval plan: %v", err)
 	}
@@ -670,18 +675,22 @@ func TestWorkspaceSetApprovalPlanWithholdsTools(t *testing.T) {
 	if ev.Notice.Data["reason"] != "approval-mode" || ev.Notice.Data["scope"] == "" {
 		t.Errorf("notice data = %+v; want reason approval-mode with a scope", ev.Notice.Data)
 	}
-	drainUntil(t, sub, ctrlproto.EventSurfaceUpdated)
+	drainUntil(t, wsEvents, ctrlproto.EventSurfaceUpdated)
 
 	// Re-applying the same mode rebuilds an identical view — no cache break,
 	// so no notice: only the surface refresh goes out.
 	if err := s.settingsAction("set", map[string]string{"key": "approval", "value": "plan"}); err != nil {
 		t.Fatalf("re-set approval plan: %v", err)
 	}
-	_, seen := drainUntil(t, sub, ctrlproto.EventSurfaceUpdated)
-	for _, e := range seen {
-		if e.Type == ctrlproto.EventNotice {
-			t.Errorf("identical rebuild must not emit a notice, got %+v", e.Notice)
-		}
+	// The surface refresh is the sentinel that the action finished. Both
+	// broadcasts are synchronous and in order (notice, then surface), so once the
+	// surface event lands, any notice would already be sitting on the session
+	// stream — and there must not be one.
+	drainUntil(t, wsEvents, ctrlproto.EventSurfaceUpdated)
+	select {
+	case e := <-sub:
+		t.Errorf("identical rebuild must not emit a notice, got %+v", e.Notice)
+	default:
 	}
 
 	if err := s.settingsAction("set", map[string]string{"key": "approval", "value": "workspace"}); err != nil {

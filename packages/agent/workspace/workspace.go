@@ -74,6 +74,30 @@ type Workspace struct {
 	mcpStop    func()
 	mcpMu      sync.Mutex // serializes live MCP toggles (StartOne/StopOne want one caller)
 
+	// hub carries WORKSPACE-scoped events: the facts that are true of the daemon
+	// rather than of any session (a workspace surface changing, the locale
+	// changing, a restart notice — and, once the auth group lands, a login).
+	//
+	// Before it, BroadcastAll simulated a workspace hub by looping over the live
+	// sessions' hubs and stamping a copy with each session's id. That could not
+	// reach a client holding no subscriptions, nor survive the deletion of the
+	// last live session — which is exactly when a workspace-scoped event matters
+	// most. Subscribers reach this through Subscribe(ctx, ctrlproto.AddrWorkspace).
+	//
+	// Reached through events(), never directly: a Workspace is also built by
+	// struct literal (tests, and any future composition root that skips New), and
+	// a workspace-scoped broadcast must not depend on somebody having remembered
+	// to construct a hub.
+	hub     *wsHub
+	hubOnce sync.Once
+
+	// auth is the model-provider login machinery, live only when the composition
+	// root called EnableAuth (`terva web --web-allow-login`). Zero value = the
+	// auth group is not served, every auth verb answers CodeUnsupported, and the
+	// Providers pane reports CanLogin false so a client renders no controls
+	// rather than controls that fail.
+	auth wsAuth
+
 	mu       sync.Mutex
 	sessions map[string]*wsSession
 
@@ -265,6 +289,15 @@ func (w *Workspace) sessionPath(id string) string { return filepath.Join(w.sessi
 // anything with a separator, a "..", or that isn't its own basename.
 func validSessionID(id string) bool {
 	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	// A reserved address (#workspace) is an address, not a session. Everything
+	// below is a PATH-SAFETY check — no separators, no traversal, a clean base
+	// name — and "#workspace" passes all of it, so without this line the
+	// workspace would cheerfully materialize a session FILE by that name, and a
+	// client could create a session that shadows an address. Nothing else in
+	// this function would catch it.
+	if ctrlproto.IsReservedAddr(id) {
 		return false
 	}
 	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
@@ -481,11 +514,35 @@ func (w *Workspace) Answer(ctx context.Context, sess, askID string, a core.UserA
 }
 
 func (w *Workspace) Subscribe(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {
+	if sess == ctrlproto.AddrWorkspace {
+		return w.subscribeWorkspace(ctx, false), nil
+	}
 	s, err := w.resolve(sess)
 	if err != nil {
 		return nil, err
 	}
 	return s.subscribe(ctx, false), nil
+}
+
+// events returns the workspace's event hub, building it on first use.
+func (w *Workspace) events() *wsHub {
+	w.hubOnce.Do(func() { w.hub = newWSHub() })
+	return w.hub
+}
+
+// subscribeWorkspace streams the workspace's own events. There is no snapshot:
+// a workspace event is a notification that something changed, and the client
+// answers it by re-reading whatever it names (sessions.list, surface.get,
+// auth.providers). Carrying the new state in the event would invent a second
+// source of truth for state a verb already returns.
+func (w *Workspace) subscribeWorkspace(ctx context.Context, reliable bool) <-chan ctrlproto.Event {
+	hub := w.events()
+	ch := hub.add(nil, reliable)
+	go func() {
+		<-ctx.Done()
+		hub.remove(ch)
+	}()
+	return ch
 }
 
 // SubscribeReliable is Subscribe with no-drop delivery, for the in-process
@@ -496,6 +553,9 @@ func (w *Workspace) Subscribe(ctx context.Context, sess string) (<-chan ctrlprot
 // (the consumer must keep draining; a stall applies contained same-session
 // backpressure rather than silently dropping a text delta).
 func (w *Workspace) SubscribeReliable(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {
+	if sess == ctrlproto.AddrWorkspace {
+		return w.subscribeWorkspace(ctx, true), nil
+	}
 	s, err := w.resolve(sess)
 	if err != nil {
 		return nil, err

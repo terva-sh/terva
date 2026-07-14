@@ -13,7 +13,6 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
-	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -121,7 +120,7 @@ func TestResumeBootDefersToLoginThenOpensOnce(t *testing.T) {
 	if i.sessionDialog.Active() {
 		t.Fatal("picker opened before login on a credential-less boot")
 	}
-	i.finishCarrierLogin(auth.Event{Provider: "test", Method: "oauth"})
+	i.finishCarrierLogin(ctrlproto.AuthState{Kind: "success", Provider: "test", Method: "oauth"})
 	if !i.sessionDialog.Active() {
 		t.Fatal("picker did not open after the first login")
 	}
@@ -130,7 +129,7 @@ func TestResumeBootDefersToLoginThenOpensOnce(t *testing.T) {
 	}
 	// Re-login: the one-shot must not fire again.
 	i.sessionDialog.Close()
-	i.finishCarrierLogin(auth.Event{Provider: "test", Method: "oauth"})
+	i.finishCarrierLogin(ctrlproto.AuthState{Kind: "success", Provider: "test", Method: "oauth"})
 	if i.sessionDialog.Active() {
 		t.Fatal("re-login reopened the boot picker")
 	}

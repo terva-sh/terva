@@ -17,6 +17,7 @@ import (
 	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/relaunch"
 )
 
@@ -108,6 +109,41 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		fmt.Fprintln(os.Stderr, "terva web: self-restart enabled (control.restart + the terva_restart tool)")
 	}
 
+	// Provider login is opt-in, and refused on an unauthenticated listener for the
+	// same reason self-restart is — one rung higher. Writing the credential terva
+	// uses to reach a model provider is categorically more authority than driving
+	// a conversation, and a stranger who could reach an open port must never be
+	// able to revoke the operator's subscription or point the daemon at their own
+	// endpoint. Loopback-only or a scoped CIDR is a bounded audience; blanket
+	// --web-insecure with no auth is not.
+	//
+	// Note what this does NOT do: it does not relax the credential-less boot check
+	// above. terva still will not start the web daemon without a credential. The
+	// first login on a machine happens at the TUI, or is pre-seeded by whatever
+	// provisioned the box; this is for the second provider, and for the
+	// subscription that expired.
+	allowLogin := args.AllowWebLogin
+	if allowLogin && unscopedInsecure && args.WebToken == "" && args.WebAuthHeader == "" {
+		fmt.Fprintln(os.Stderr, "terva web: refusing provider login on an insecure (no-auth) listener — add --web-token, --web-auth-header, or scope it with --web-insecure-cidr")
+		allowLogin = false
+	}
+	if allowLogin {
+		mgr := auth.NewManager(config.AuthStoreFor())
+		defer mgr.Close()
+		ws.EnableAuth(mgr, workspace.AuthOptions{
+			// A daemon must not open a browser: the user is somewhere else.
+			OpenBrowser: false,
+			ApplyStart:  ApplyLoginStart,
+			ApplyLogin: func(providerID string) {
+				ApplyLoginSuccess(mgr.Store(), providerID, func(providerName, model, scope string) error {
+					return ws.SetDefaultModel(ctx, providerName, model, ctrlproto.DefaultScope(scope))
+				})
+			},
+			ApplyLogout: ApplyLogout,
+		})
+		fmt.Fprintln(os.Stderr, "terva web: provider login enabled (the Providers pane can add, repair, and revoke credentials)")
+	}
+
 	trustedProxies, err := web.ParseTrustedProxies(args.WebTrustedProxies)
 	if err != nil {
 		return err
@@ -129,5 +165,6 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		CWD:            ws.CWD(),
 		Jailed:         ws.Sandbox().Locked(),
 		AllowRestart:   allowRestart,
+		AllowLogin:     allowLogin,
 	})
 }

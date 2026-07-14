@@ -1,6 +1,6 @@
 import type { VNode } from 'preact'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { Client } from './ctrlproto'
+import { ADDR_WORKSPACE, Client } from './ctrlproto'
 import { restartRejection } from './restart'
 import type {
   AskRequest,
@@ -17,9 +17,12 @@ import type {
   ChatView,
   ChatServiceInfo,
   ModelInfo,
+  AuthFlowStep,
   PanelView,
   PermissionRequest,
   PermissionsView,
+  ProviderInfo,
+  ProvidersView,
   RaatiHistoryItem,
   RaatiInquiry,
   RaatiUnit,
@@ -39,6 +42,7 @@ import type {
   UsageWindow,
   Widget,
   WireEvent,
+  WireMessage,
   WireUsage,
 } from './ctrlproto'
 import { Composer, type SlashCommand } from './features/conversation/Composer'
@@ -50,7 +54,16 @@ import { ModelPicker } from './features/models/ModelPicker'
 import { SessionInfo as SessionInfoView } from './features/sessions/SessionInfo'
 import { SessionPicker } from './features/sessions/SessionPicker'
 import type { ImageAttachment } from './platform/conversation/images'
-import { applyEvent, itemsFromMessages, type Item } from './platform/conversation/store'
+import {
+  applyEvent,
+  mergeSnapshot,
+  prependHistory,
+  spliceRevealed,
+  type Divider,
+  type Item,
+  type RevealSpan,
+  type Window,
+} from './platform/conversation/store'
 import { buildConveneArgs, raatiResultCopyText, raatiUnitCopyText, raatiVerdictWord } from './raati'
 import { applyServerCatalog, setLocale, t, tn } from './i18n'
 import { CopyButton } from './ui/CopyButton'
@@ -72,6 +85,20 @@ export function App() {
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [curSess, setCurSess] = useState('')
   const [items, setItems] = useState<Item[]>([])
+  // The compaction divider currently paging in its history, if any. The ref is the
+  // guard (a second click while the first is in flight would splice twice); the
+  // state is only there to render the spinner on the right divider.
+  const [revealingID, setRevealingID] = useState('')
+  const revealingRef = useRef('')
+  // Where the transcript window we hold sits. A snapshot carries only the tail (we
+  // negotiate 'history-window'), so `base` is the index of the oldest message we have —
+  // base > 0 means there is more above, fetched with conversation.history — and `epoch`
+  // identifies the transcript itself. The ref is what the merge and the history call
+  // read; the state is what the UI renders.
+  const [win, setWin] = useState({ epoch: 0, base: 0, total: 0 })
+  const winRef = useRef({ epoch: 0, base: 0, total: 0 })
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const loadingEarlierRef = useRef(false)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [busy, setBusy] = useState(false)
   const [cost, setCost] = useState(0)
@@ -107,6 +134,11 @@ export function App() {
   const [surfaces, setSurfaces] = useState<SurfaceMeta[]>([])
   const [activeSurface, setActiveSurface] = useState('context')
   const [surfaceData, setSurfaceData] = useState<Surface | null>(null)
+  // The provider-login flow in progress, if any: the daemon hands us a step to
+  // render, we hand back a name→value map. null means "show the provider list".
+  const [authFlow, setAuthFlow] = useState<AuthFlowStep | null>(null)
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authErr, setAuthErr] = useState('')
   const [surfaceErr, setSurfaceErr] = useState('')
   const paneOpenRef = useRef(false)
   const activeSurfaceRef = useRef('context')
@@ -228,6 +260,10 @@ export function App() {
     }
     if (curRef.current) c.fire('unsubscribe', null, curRef.current)
     setItems([])
+    // The window belongs to the session we are leaving. Zeroing the epoch also makes
+    // the next snapshot's merge a rebuild, which is what it must be.
+    winRef.current = { epoch: 0, base: 0, total: 0 }
+    setWin(winRef.current)
     setPermission(null)
     setAsk(null)
     setBusy(false)
@@ -300,8 +336,25 @@ export function App() {
 
   const handleEvent = useCallback((ev: WireEvent) => {
     switch (ev.type) {
-      case 'snapshot':
-        setItems(itemsFromMessages(ev.snapshot?.messages ?? []))
+      case 'snapshot': {
+        // A snapshot is authoritative — and one lands at the end of EVERY turn, not
+        // just on open. MERGE it: keep everything above the window and everything not
+        // in the live transcript at all (history paged in behind a compaction), and
+        // swap in the window. Rebuilding instead is what used to remount every row and
+        // silently discard the user's scrollback.
+        const snap: Window = {
+          epoch: ev.snapshot?.epoch ?? 0,
+          base: ev.snapshot?.base ?? 0,
+          total: ev.snapshot?.total ?? (ev.snapshot?.messages?.length ?? 0),
+          messages: ev.snapshot?.messages ?? [],
+        }
+        setItems((prev) => mergeSnapshot(prev, snap, winRef.current.epoch))
+        // The window we now hold. A merge KEEPS what was above the snapshot's base, so
+        // our base is the lower of the two — not the snapshot's.
+        const held = winRef.current
+        const base = held.epoch === snap.epoch ? Math.min(held.base, snap.base) : snap.base
+        winRef.current = { epoch: snap.epoch, base, total: snap.total }
+        setWin(winRef.current)
         setBusy(!!ev.snapshot?.busy)
         setCurInfo(ev.snapshot?.session ?? null)
         setQueued(ev.snapshot?.queued ?? [])
@@ -311,6 +364,7 @@ export function App() {
         setPermission(ev.snapshot?.permissions?.[0] ?? null)
         setAsk(ev.snapshot?.asks?.[0] ?? null)
         return
+      }
       case 'session_updated': {
         // A title settled, a rename, or a model switch — refresh the header and
         // the session-list entry live, without re-fetching.
@@ -335,6 +389,26 @@ export function App() {
           loadSurface(activeSurfaceRef.current)
         }
         return
+      case 'auth_state': {
+        // A provider login moved. It may have MOVED SOMEWHERE ELSE — a device
+        // flow finishes in a browser on another device, and the daemon finds out
+        // by polling — so this is the only way the panel learns it landed.
+        const a = ev.auth
+        if (!a) return
+        if (a.kind === 'success' || a.kind === 'canceled') {
+          setAuthFlow(null)
+          setAuthBusy(false)
+          setAuthErr('')
+          if (a.kind === 'success' && a.method !== 'logout') {
+            setToast(t('signed in to %s', a.provider ?? ''))
+          }
+        }
+        if (a.kind === 'error') {
+          setAuthBusy(false)
+          setAuthErr(a.message ?? t('login failed'))
+        }
+        return
+      }
       case 'locale_changed':
         // The daemon's UI language changed: re-fetch the client catalog (and
         // re-render), and re-fetch any open pane so server-rendered titles/labels
@@ -409,7 +483,12 @@ export function App() {
     clientRef.current = c
     c.onStatus = setStatus
     c.onEvent = (sess, ev) => {
-      if (sess === curRef.current) handleEvent(ev)
+      // Two addresses reach this panel: the focused session, and the workspace
+      // itself. Workspace events (a workspace-scoped surface changing, the
+      // locale, a notice) used to arrive stamped with each live session's id —
+      // which is the only reason this equality test ever saw them. They arrive on
+      // their own address now, so the test has to admit it, or they vanish.
+      if (sess === ADDR_WORKSPACE || sess === curRef.current) handleEvent(ev)
     }
     c.onReady = async (hello) => {
       // Match the PWA's bundled catalog to the daemon's active language for an
@@ -420,6 +499,15 @@ export function App() {
       document.documentElement.lang = lang
       setCanRestart(!!hello?.features?.includes('restart'))
       canListFiles.current = !!hello?.features?.includes('files-list')
+      // Subscribe to the workspace itself, once per connection. It is not a
+      // session: it does not change when the focused session does, and it must
+      // stay subscribed even when no session is focused at all — which is the
+      // whole point of it having an address. A daemon too old to know it relays
+      // these events into the session subscription instead, so skipping the
+      // subscribe is the correct degradation rather than a lost capability.
+      if (hello?.features?.includes('workspace-events')) {
+        c.fire('subscribe', null, ADDR_WORKSPACE)
+      }
       // A (re)connect may be a different build or a moved tree — refetch on
       // the next "@".
       setFileList(null)
@@ -549,6 +637,68 @@ export function App() {
     clientRef.current?.fire('surface.action', { id, action, args }, curRef.current)
   }, [])
 
+  // --- provider login (the auth group; only served when the daemon says so) ---
+  //
+  // Every call here is addressed to no session. A credential belongs to the
+  // daemon, not to a conversation, and the flow may well complete while no
+  // session is in focus — the auth_state event that finishes it rides the
+  // workspace address for exactly that reason.
+  const startLogin = useCallback(async (provider: string, method: string) => {
+    const c = clientRef.current
+    if (!c) return
+    setAuthErr('')
+    setAuthBusy(true)
+    try {
+      setAuthFlow(await c.send<AuthFlowStep>('auth.login.start', { provider, method }, ''))
+    } catch (e) {
+      setAuthErr(authMessage(e))
+    } finally {
+      setAuthBusy(false)
+    }
+  }, [])
+
+  const submitLogin = useCallback(
+    async (values: Record<string, string>) => {
+      const c = clientRef.current
+      const flow = authFlow?.flow
+      if (!c || !flow) return
+      setAuthErr('')
+      setAuthBusy(true)
+      try {
+        // The one call in this client that carries a secret. It goes one way.
+        await c.send('auth.login.submit', { flow, values }, '')
+        setAuthFlow(null)
+      } catch (e) {
+        // A refusal here is usually the provider rejecting the credential — a
+        // mistyped key, a dead code — so it is the user's to fix, and the
+        // daemon's message is more useful than anything we could invent.
+        setAuthErr(authMessage(e))
+      } finally {
+        setAuthBusy(false)
+      }
+    },
+    [authFlow],
+  )
+
+  const cancelLogin = useCallback(() => {
+    const flow = authFlow?.flow
+    if (flow) clientRef.current?.fire('auth.login.cancel', { flow }, '')
+    setAuthFlow(null)
+    setAuthErr('')
+    setAuthBusy(false)
+  }, [authFlow])
+
+  const logoutProvider = useCallback(async (provider: string) => {
+    const c = clientRef.current
+    if (!c) return
+    setAuthErr('')
+    try {
+      await c.send('auth.logout', { provider }, '')
+    } catch (e) {
+      setAuthErr(authMessage(e))
+    }
+  }, [])
+
   // Lazily fetch a context node's content/children on expand (context.node).
   const fetchNode = useCallback(
     (id: string, op?: string): Promise<ContextNode> =>
@@ -557,6 +707,7 @@ export function App() {
         : Promise.reject(new Error('not connected')),
     [],
   )
+
 
   // Usage resets (codex banked resets): list is read-only; consume spends a
   // scarce credit and is only ever reached from the section's explicit confirm.
@@ -580,6 +731,90 @@ export function App() {
   const localNotice = useCallback((text: string) => {
     setItems((it) => [...it, { kind: 'notice', id: 'ln-' + Date.now(), level: 'info', text }])
   }, [])
+
+  // Page in the turns a compaction folded away (conversation.reveal), so the
+  // scrollback keeps them instead of losing them to what is, after all, only a
+  // context-management act. The revealed span never overlaps what we already have —
+  // the daemon subtracts the tail its checkpoint kept, and a Go test pins that — so
+  // this splices, never merges.
+  // Page in the part of the LIVE transcript the window did not carry. Distinct from
+  // revealTurns below, and the distinction is the shape of the whole system: this walks
+  // within the transcript the model still has, served from the daemon's memory; reveal
+  // goes BEHIND a compaction to turns it no longer has, read from the session file.
+  // Scrolling up runs this until base is 0, then meets the compaction divider.
+  const loadEarlier = useCallback(() => {
+    const c = clientRef.current
+    const held = winRef.current
+    if (!c || loadingEarlierRef.current || held.base <= 0) return
+    loadingEarlierRef.current = true
+    setLoadingEarlier(true)
+    c.send<{ epoch: number; base: number; total: number; messages: WireMessage[] }>(
+      'conversation.history',
+      { before: held.base, epoch: held.epoch },
+      curRef.current,
+    )
+      .then((page) => {
+        // The daemon refuses a stale epoch rather than indexing into a transcript that
+        // has been replaced, so a page that arrives is one we can trust to belong here.
+        if (page.epoch !== winRef.current.epoch) return
+        setItems((it) => prependHistory(it, page))
+        winRef.current = { ...winRef.current, base: page.base, total: page.total }
+        setWin(winRef.current)
+      })
+      .catch((e) => {
+        // A conflict means the conversation was compacted or cleared while we scrolled;
+        // the next snapshot rebuilds us at the new epoch, so there is nothing to do but
+        // say so. Anything else is worth the same one line.
+        localNotice(t('could not load earlier messages: %s', String(e)))
+      })
+      .finally(() => {
+        loadingEarlierRef.current = false
+        setLoadingEarlier(false)
+      })
+  }, [localNotice])
+
+  const revealTurns = useCallback(
+    (item: Divider) => {
+      const c = clientRef.current
+      if (!c || revealingRef.current) return
+      revealingRef.current = item.id
+      setRevealingID(item.id)
+      c.send<{ messages: WireMessage[]; prev_ordinal: number; prev_clear?: boolean }>(
+        'conversation.reveal',
+        { ordinal: item.ordinal },
+        curRef.current,
+      )
+        .then((r) => {
+          const span: RevealSpan = {
+            messages: r.messages ?? [],
+            prevOrdinal: r.prev_ordinal,
+            // A /clear behind this checkpoint ends the automatic walk: the divider we
+            // mint for it offers the crossing, and the user has to mean it.
+            prevClear: r.prev_clear,
+          }
+          // No cache to keep it in any more. Revealed rows are marked `history` — not
+          // in the live transcript — and mergeSnapshot preserves them, so the turn-end
+          // snapshot no longer sweeps them away and nothing has to put them back.
+          setItems((it) => spliceRevealed(it, item.id, span))
+        })
+        .catch((e) => {
+          // An ephemeral session has no file to read back, and an older daemon has
+          // no such method. Neither is the user's fault. Retire the control rather
+          // than leave it inviting a click that cannot work, and say why once.
+          setItems((it) =>
+            it.map((i) =>
+              i.id === item.id && (i.kind === 'compaction' || i.kind === 'clear') ? { ...i, revealed: true } : i,
+            ),
+          )
+          localNotice(t('earlier turns are not available for this session: %s', String(e)))
+        })
+        .finally(() => {
+          revealingRef.current = ''
+          setRevealingID('')
+        })
+    },
+    [localNotice],
+  )
 
   // User-driven slash commands typed in the composer. Distinct from the
   // extension Commands pane (buttons): these are operator chrome (compact,
@@ -849,6 +1084,11 @@ export function App() {
             queued={queued}
             onEditQueued={editQueued}
             onCancelQueued={cancelQueued}
+            onReveal={revealTurns}
+            revealingID={revealingID}
+            earlier={win.base}
+            onLoadEarlier={loadEarlier}
+            loadingEarlier={loadingEarlier}
           />
 
           {permission && <PermissionRequestView request={permission} onDecide={decide} />}
@@ -880,6 +1120,15 @@ export function App() {
             onClose={() => setPaneOpen(false)}
             onRestart={canRestart ? restart : undefined}
             version={serverVersion}
+            auth={{
+              flow: authFlow,
+              busy: authBusy,
+              error: authErr,
+              start: startLogin,
+              submit: submitLogin,
+              cancel: cancelLogin,
+              logout: logoutProvider,
+            }}
             trusted={!!curInfo?.trusted}
             onTrust={trustWorkspace}
             models={models}
@@ -915,6 +1164,7 @@ function PaneHost({
   trusted,
   onTrust,
   models,
+  auth,
 }: {
   surfaces: SurfaceMeta[]
   active: string
@@ -931,6 +1181,7 @@ function PaneHost({
   trusted?: boolean
   onTrust?: (trust: boolean) => void
   models?: ModelInfo[]
+  auth?: AuthPaneProps
 }) {
   // Core panes (context/usage/tasks/status) stay on row 1; dynamic extension
   // panels get their own row so a long ext title can't shove the core tabs
@@ -975,6 +1226,7 @@ function PaneHost({
             trusted={trusted}
             onTrust={onTrust}
             models={models}
+            auth={auth}
           />
         )}
       </div>
@@ -1772,6 +2024,7 @@ function SurfaceView({
   trusted,
   onTrust,
   models,
+  auth,
 }: {
   surface: Surface
   onAction: (id: string, action: string, args?: Record<string, string>) => void
@@ -1783,6 +2036,7 @@ function SurfaceView({
   trusted?: boolean
   onTrust?: (trust: boolean) => void
   models?: ModelInfo[]
+  auth?: AuthPaneProps
 }) {
   switch (surface.kind) {
     case 'context':
@@ -1816,9 +2070,266 @@ function SurfaceView({
       return <MCPBody v={surface.mcp ?? { servers: [] }} onAction={onAction} />
     case 'chat':
       return <ChatBody v={surface.chat ?? { bridge: { state: 'idle' } }} onAction={onAction} />
+    case 'providers':
+      return (
+        <ProvidersBody
+          v={surface.providers ?? { providers: [] }}
+          flow={auth?.flow ?? null}
+          busy={!!auth?.busy}
+          error={auth?.error ?? ''}
+          onStart={auth?.start ?? (() => {})}
+          onSubmit={auth?.submit ?? (() => {})}
+          onCancel={auth?.cancel ?? (() => {})}
+          onLogout={auth?.logout ?? (() => {})}
+        />
+      )
     default:
       return <div class="pick-empty">{t('unsupported pane')}</div>
   }
+}
+
+// AuthPaneProps is everything the Providers pane needs to drive a login. Bundled
+// because it threads App → PaneHost → SurfaceView → ProvidersBody, and seven
+// loose props at each hop is how a prop gets dropped silently.
+interface AuthPaneProps {
+  flow: AuthFlowStep | null
+  busy: boolean
+  error: string
+  start: (provider: string, method: string) => void
+  submit: (values: Record<string, string>) => void
+  cancel: () => void
+  logout: (provider: string) => void
+}
+
+// authMessage unwraps a ctrlproto error for display. The daemon's text is the
+// useful part — "that key was not accepted", "this login was superseded" — and
+// inventing our own would be strictly less informative.
+function authMessage(e: unknown): string {
+  const m = e instanceof Error ? e.message : String(e)
+  // Frames arrive as "code: message"; the code is for us, the message is for them.
+  const i = m.indexOf(': ')
+  return i > 0 ? m.slice(i + 2) : m
+}
+
+// AuthStepForm renders whatever the daemon asked for.
+//
+// It knows nothing about any provider. It is handed a list of labelled fields and
+// gives back a name→value map — which is the entire point of the descriptor: a
+// provider that wants a field nobody anticipated costs a daemon change and
+// nothing here. The one thing it will not do is decide what is VALID; integer
+// fields go back as strings and the daemon parses, so there is exactly one
+// authority on what a context window may be rather than three that can disagree.
+function AuthStepForm({
+  step,
+  onSubmit,
+  onCancel,
+  busy,
+  error,
+}: {
+  step: AuthFlowStep
+  onSubmit: (values: Record<string, string>) => void
+  onCancel: () => void
+  busy: boolean
+  error: string
+}) {
+  const fields = step.fields ?? []
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(fields.map((f) => [f.name, f.default ?? ''])),
+  )
+  const incomplete = fields.some((f) => f.required && !values[f.name]?.trim())
+
+  return (
+    <div class="prov-flow">
+      {step.title ? <div class="prov-flow-title">{step.title}</div> : null}
+      {step.lines?.map((l, i) => (
+        <div key={i} class="prov-note">
+          {l}
+        </div>
+      ))}
+
+      {/* Displayed, never opened FOR you: the daemon may be on another machine
+          entirely, and the browser that has to visit this is the one you are
+          reading it in. */}
+      {step.url ? (
+        <a class="prov-url" href={step.url} target="_blank" rel="noreferrer noopener">
+          {step.url}
+        </a>
+      ) : null}
+      {step.user_code ? <div class="prov-code">{step.user_code}</div> : null}
+
+      {step.kind === 'display' ? (
+        <div class="prov-note">{t('Waiting for you to approve it — this updates by itself.')}</div>
+      ) : null}
+
+      {fields.map((f) => (
+        <label key={f.name} class="prov-field">
+          <span class="prov-label">
+            {f.label}
+            {f.required ? '' : ` ${t('(optional)')}`}
+          </span>
+          <input
+            type={f.type === 'secret' ? 'password' : 'text'}
+            inputMode={f.type === 'integer' ? 'numeric' : undefined}
+            autocomplete="off"
+            spellcheck={false}
+            placeholder={f.placeholder}
+            value={values[f.name] ?? ''}
+            onInput={(e) => setValues({ ...values, [f.name]: (e.target as HTMLInputElement).value })}
+          />
+          {f.help ? <span class="prov-help">{f.help}</span> : null}
+        </label>
+      ))}
+
+      {error ? <div class="prov-warn">{error}</div> : null}
+
+      <div class="prov-actions">
+        {step.kind === 'form' ? (
+          <button class="btn" disabled={busy || incomplete} onClick={() => onSubmit(values)}>
+            {busy ? t('Signing in…') : t('Sign in')}
+          </button>
+        ) : null}
+        <button class="btn ghost" onClick={onCancel}>
+          {step.kind === 'info' ? t('Close') : t('Cancel')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ProvidersBody renders the daemon's MODEL-PROVIDER credentials, and — when the
+// daemon will serve it — drives a login.
+//
+// It exists to explain an absence. The model picker silently omits every provider
+// terva was never logged into, and an expired subscription arrives as a turn that
+// fails for no stated reason. Both look like bugs and are actually missing
+// credentials, and this is where you find that out and fix it.
+//
+// It is deliberately not called "Login": in this UI that word already means the
+// bearer-token form that let you in. This is about who the DAEMON can talk to.
+function ProvidersBody({
+  v,
+  flow,
+  onStart,
+  onSubmit,
+  onCancel,
+  onLogout,
+  busy,
+  error,
+}: {
+  v: ProvidersView
+  flow: AuthFlowStep | null
+  onStart: (provider: string, method: string) => void
+  onSubmit: (values: Record<string, string>) => void
+  onCancel: () => void
+  onLogout: (provider: string) => void
+  busy: boolean
+  error: string
+}) {
+  const all = v.providers ?? []
+  const active = all.filter((p) => p.method)
+  const available = all.filter((p) => !p.method)
+  const canLogin = !!v.can_login
+
+  const methodLabel = (p: ProviderInfo) => {
+    if (p.method === 'oauth') return t('subscription')
+    if (p.method === 'apikey') return t('api key')
+    return ''
+  }
+
+  // A flow in progress owns the pane. Leaving the provider list visible behind a
+  // half-finished login only invites starting a second one — and a second one
+  // SUPERSEDES the first, which is exactly the collision the flow handle exists to
+  // make refusable rather than silent.
+  if (flow) {
+    return (
+      <div class="ext-body">
+        <AuthStepForm step={flow} onSubmit={onSubmit} onCancel={onCancel} busy={busy} error={error} />
+      </div>
+    )
+  }
+
+  return (
+    <div class="ext-body">
+      {active.length === 0 ? (
+        <div class="prov-warn">
+          {t('terva has no model-provider credentials. It cannot reach any model until it does.')}
+        </div>
+      ) : null}
+      {error ? <div class="prov-warn">{error}</div> : null}
+
+      {active.map((p) => (
+        <div key={p.id} class="ext-card">
+          <div class="ext-head">
+            <span class="ext-name">{p.label}</span>
+            <span class={`ext-badge${p.expired ? ' s-failed' : ' s-running'}`}>
+              {p.expired ? t('expired') : methodLabel(p)}
+            </span>
+          </div>
+          {p.expired ? (
+            <div class="ext-desc">
+              {canLogin
+                ? t('This subscription has expired. Sign in again to repair it.')
+                : t('This subscription has expired. Run /login in the terminal to sign in again.')}
+            </div>
+          ) : null}
+          {p.base_url ? (
+            <div class="ext-meta">
+              {p.base_url}
+              {p.model ? ` · ${p.model}` : ''}
+            </div>
+          ) : null}
+          {p.expiry && !p.expired ? (
+            <div class="ext-meta">{t('expires %s', new Date(p.expiry).toLocaleString())}</div>
+          ) : null}
+          {canLogin ? (
+            <div class="prov-actions">
+              {p.expired && p.offers?.includes('oauth') ? (
+                <button class="btn" onClick={() => onStart(p.id, 'oauth')}>
+                  {t('Sign in again')}
+                </button>
+              ) : null}
+              <button class="btn ghost" onClick={() => onLogout(p.id)}>
+                {t('Sign out')}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ))}
+
+      {available.length ? (
+        <>
+          <div class="prov-note">
+            {canLogin
+              ? t('Not signed in:')
+              : t('Not signed in. terva can only be signed in from the terminal — run /login there.')}
+          </div>
+          {available.map((p) => (
+            <div key={p.id} class="ext-card muted">
+              <div class="ext-head">
+                <span class="ext-name">{p.label}</span>
+                {p.offers?.includes('env') ? <span class="ext-badge">{t('environment')}</span> : null}
+              </div>
+              {p.note?.length ? <pre class="prov-env">{p.note.join('\n')}</pre> : null}
+              {canLogin && !p.offers?.includes('env') ? (
+                <div class="prov-actions">
+                  {p.offers?.includes('oauth') ? (
+                    <button class="btn ghost" onClick={() => onStart(p.id, 'oauth')}>
+                      {t('Subscription')}
+                    </button>
+                  ) : null}
+                  {p.offers?.includes('apikey') ? (
+                    <button class="btn ghost" onClick={() => onStart(p.id, 'apikey')}>
+                      {t('API key')}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </>
+      ) : null}
+    </div>
+  )
 }
 
 // ChatBody renders the chat-connector pane: the live bridge and one row per

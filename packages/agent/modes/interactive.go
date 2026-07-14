@@ -19,7 +19,6 @@ import (
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/relaunch"
 	"terva.sh/terva/packages/tui"
 )
@@ -158,13 +157,39 @@ type InteractiveConfig struct {
 	// binding reports that instead of firing a method that can't land.
 	GenerateSessionTitle func(path string) (string, error)
 
-	// Auth is required. When the user runs /login, Interactive talks to
-	// AuthManager to open a browser and wait for the callback.
-	AuthManager *auth.Manager
+	// There is no AuthManager here any more, and nothing may put one back.
+	//
+	// The TUI used to hold the credential state machine and drive it directly —
+	// which meant it also had to know that openai-compatible needs four fields,
+	// that bedrock is not a form, and how to clear the openai/openai-codex split.
+	// The web panel could not import any of that, so it knew the same things
+	// separately, and the two had already drifted. /login now goes through the
+	// carrier's ctrlproto.AuthController, exactly as the panel's does. A feature
+	// that needs the manager adds a verb; it does not reach back through here.
 
-	// SetKimiCLIFallbackDisabled controls whether terva may fall back to
-	// the official Kimi Code CLI token when terva has no stored Kimi token.
-	SetKimiCLIFallbackDisabled func(disabled bool) error
+	// CarrierLocal says this TUI is running on the SAME MACHINE as the workspace
+	// it drives — true for the in-process carrier, false for `terva attach`.
+	//
+	// It decides whether a login may use the loopback flows: an OAuth callback
+	// server binds a port on the DAEMON, so it is reachable exactly when the
+	// browser is here too. Getting it wrong costs nothing worse than a browser
+	// that opens on the wrong machine and a paste-back form that still works.
+	CarrierLocal bool
+
+	// ApplyLoginStart, ApplyLogin and ApplyLogout are the host's side of a
+	// credential change: what a login MEANS beyond a secret landing on disk —
+	// registering a custom endpoint's model, promoting it to the default,
+	// re-discovering a provider's live model list, and toggling whether terva
+	// may borrow the Kimi CLI's token.
+	//
+	// One seam each, rather than the provider-specific logic that used to sit in
+	// handleAuthEvent: the daemon serving `terva web` cannot import this package,
+	// so anything spelled out here would have to be reimplemented there — and a
+	// web login that got it wrong would still report success while the thing the
+	// user just configured never appeared. See agent.ApplyLoginSuccess.
+	ApplyLoginStart func(providerID string) error
+	ApplyLogin      func(providerID string)
+	ApplyLogout     func(providerID string) error
 
 	// Migration wires /migrate to the zot→terva migration engine. // rename:keep
 	// Optional: when nil, /migrate reports that the host didn't
@@ -303,18 +328,10 @@ type InteractiveConfig struct {
 	// Wired to Ctrl+D in the /model picker and to the post-login flow.
 	PromoteModelDefault func(providerName, model, scope string) error
 
-	// RefreshCompatModels, if set, kicks a background /v1/models discovery
-	// for a configured openai-compatible endpoint so a fresh login surfaces
-	// all of the server's models in the picker without a restart.
-	RefreshCompatModels func()
-
-	// RefreshModels, if set, forces a background live-model re-discovery for
-	// every provider we hold credentials for, ignoring the model cache's
-	// freshness gate. Called after a successful runtime login so a newly-
-	// connected provider (opencode-go, openrouter, …) shows its full model
-	// list in /model without a restart. Distinct from RefreshCompatModels,
-	// which covers only the openai-compatible endpoint.
-	RefreshModels func()
+	// (RefreshCompatModels and RefreshModels used to live here. They had exactly
+	// one caller between them — the login-success handler — and moved into
+	// agent.ApplyLoginSuccess with the rest of what a login means, so the daemon
+	// gets them for free rather than having to remember them.)
 
 	OnAssistant  func(m provider.Message)
 	OnToolResult func(id string, r core.ToolResult)
@@ -796,6 +813,32 @@ type Interactive struct {
 	carrierMessages    []provider.Message
 	carrierMessagesRev int
 
+	// Compaction scrollback (docs/proposals/scrollback-history.md). A compaction
+	// replaces the transcript with a summary plus a short tail, which — before this
+	// — simply deleted the conversation from the screen. The turns are still in the
+	// session file, so conversation.reveal pages them back.
+	//
+	// revealed holds them, DISPLAY-ONLY, prepended to carrierMessages at the render
+	// site. Kept out of carrierMessages on purpose: that field is the wire twin of
+	// what the model sees, and nothing that is not in the model's context belongs in
+	// it. It also means a snapshot — which lands at the end of EVERY turn and
+	// replaces carrierMessages wholesale — cannot silently throw the user's history
+	// away.
+	//
+	// revealAnchor is the summary text of the live divider the reveals hang off, so
+	// a snapshot can tell "same checkpoint, keep them" from "auto-compact ran, these
+	// are stale" (the summary is written by the checkpoint that produced it).
+	//
+	// revealNext is the ordinal to ask for next; revealClear is set when a /clear
+	// sits behind it, which STOPS the automatic walk — crossing one is a deliberate
+	// act (/reveal), not something scrolling does for you. Guarded by mu.
+	revealed     []provider.Message
+	revealAnchor string
+	revealNext   int
+	revealClear  bool
+	revealDone   bool
+	revealBusy   bool
+
 	// The first-paint tail cap, in three steps, because the transcript now
 	// arrives from the pump instead of off a crutch agent at construction:
 	//
@@ -853,6 +896,12 @@ type Interactive struct {
 	// login on a credential-less one (the login dialog keeps overlay
 	// priority until dismissed). Main-loop-only state, like the dialogs.
 	bootSessionsPending bool
+
+	// loginFlow is the handle of the login attempt the dialog is currently showing.
+	// The daemon holds the pkce verifier against it and refuses a submit from a
+	// superseded flow, so the frontend has to carry it. Main-loop-only state, like
+	// the dialogs.
+	loginFlow string
 
 	// titleGenBusy serializes the picker's `g` (on-demand title generation):
 	// one model call at a time, a second press while one runs is refused.
@@ -1129,6 +1178,9 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// one reliable subscription for the whole session (tui-on-ctrlproto.md).
 	if i.cfg.Carrier != nil {
 		go i.runCarrierLoop(ctx)
+		// ...and its sibling on the workspace address, for the events that are
+		// not about any session (workspace surfaces, locale, notices).
+		go i.runWorkspaceLoop(ctx)
 	}
 
 	cols, rows := term.Size()
@@ -1227,11 +1279,11 @@ func (i *Interactive) Run(ctx context.Context) error {
 		}
 	}()
 
-	// Subscribe to auth events.
-	var authEvents <-chan auth.Event
-	if i.cfg.AuthManager != nil {
-		authEvents = i.cfg.AuthManager.Events()
-	}
+	// Auth events are NOT consumed here any more. A provider login is a fact about
+	// the workspace, not about this frontend, and it arrives as an auth_state event
+	// on the workspace address like any other — through runWorkspaceLoop, the same
+	// pump the web panel's equivalent uses. That is what lets a device-code login
+	// approved on a phone reach a TUI that never started it.
 
 	// Animation ticker: drives spinner and dialog-related redraws when
 	// nothing else changed. 120ms is slow enough that highlighting a huge
@@ -1346,9 +1398,6 @@ func (i *Interactive) Run(ctx context.Context) error {
 			c, r := term.Size()
 			i.rend.Resize(c, r)
 			i.redraw()
-		case ev := <-authEvents:
-			i.handleAuthEvent(ev)
-			i.invalidate()
 		case fn := <-i.actions:
 			// Work marshalled onto the main goroutine by off-main
 			// callers (see runOnMain). Drain a burst so a flurry of

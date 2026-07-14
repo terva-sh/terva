@@ -87,8 +87,17 @@ describe('ctrlproto Client', () => {
         protocol: 1,
         agent: 'terva-web',
         version: '1',
-        groups: ['conversation', 'session', 'control'],
-        features: ['images', 'image-data', 'resolve-events'],
+        // auth: the provider-login group. Omitting it does not merely hide the
+        // feature — the daemon refuses every auth.* call with "method group not
+        // negotiated", so the Providers pane renders buttons that all fail.
+        // workspace-events: the #workspace address, without which every
+        // workspace-scoped event (surfaces, locale, auth_state) is silently
+        // dropped by the demux.
+        // history-window: windowed snapshots. Without it the daemon ships the WHOLE
+        // transcript — image bytes and all — on every subscribe AND at the end of
+        // every turn, which is the network tax this client pays and the TUI does not.
+        groups: ['conversation', 'session', 'control', 'auth'],
+        features: ['images', 'image-data', 'resolve-events', 'workspace-events', 'history-window'],
       },
     })
   })
