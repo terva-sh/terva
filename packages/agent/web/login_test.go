@@ -73,9 +73,15 @@ func TestBrowserGetsTheFormNotTheWordUnauthorized(t *testing.T) {
 }
 
 // Everything that is not a browser navigating keeps the plain 401 and its
-// WWW-Authenticate header: curl, the PWA's own asset fetches, native clients.
-// Handing an HTML form to a JSON client would be a regression dressed as a
-// feature.
+// WWW-Authenticate header: curl, a script's fetch(), native clients. Handing an
+// HTML form to a JSON client would be a regression dressed as a feature.
+//
+// The subresource case used to be spelled /assets/app.js. It cannot be any more —
+// the fingerprinted bundle is served OUTSIDE the gate now, because the service
+// worker precaches it and a precache entry the client cannot fetch is a worker that
+// cannot install (see TestThePrecacheManifestIsFetchableWithoutACredential). So the
+// example moved to a path that is still gated. The rule under test is unchanged:
+// answer a NAVIGATION with the form, answer everything else with a status.
 func TestNonBrowserClientsStillGetAPlain401(t *testing.T) {
 	srv := loginServer(t)
 	for name, mk := range map[string]func() *http.Request{
@@ -83,8 +89,8 @@ func TestNonBrowserClientsStillGetAPlain401(t *testing.T) {
 			r, _ := http.NewRequest("GET", srv.URL+"/", nil)
 			return r
 		},
-		"asset fetch": func() *http.Request {
-			r, _ := http.NewRequest("GET", srv.URL+"/assets/app.js", nil)
+		"a script fetching the gated shell": func() *http.Request {
+			r, _ := http.NewRequest("GET", srv.URL+"/index.html", nil)
 			r.Header.Set("Sec-Fetch-Mode", "cors")
 			r.Header.Set("Accept", "*/*")
 			return r

@@ -3,6 +3,8 @@
 package web
 
 import (
+	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -75,5 +77,82 @@ func TestServiceWorkerStillPrecachesTheBundle(t *testing.T) {
 	if !strings.Contains(sw, `url:"assets/`) {
 		t.Error("sw.js precaches no fingerprinted assets: the panel would refetch its whole " +
 			"bundle on every launch and would not work offline at all")
+	}
+}
+
+// precacheEntry pulls the urls out of the shipped worker's precache manifest,
+// which workbox emits as precacheAndRoute([{url:"...",revision:"..."},…]).
+var precacheEntry = regexp.MustCompile(`url:"([^"]+)"`)
+
+// TestThePrecacheManifestIsFetchableWithoutACredential is THE rule, and the one
+// that has now been broken three times in three different ways.
+//
+// A service worker's install step fetches every URL in its precache manifest, and
+// workbox throws `bad-precaching-response` if ANY of them comes back non-OK —
+// deliberately, so a worker never activates holding a half-populated cache. So a
+// single gated entry does not degrade the worker. It stops the worker from
+// EXISTING.
+//
+// And the failure is invisible and self-perpetuating, which is why it survived two
+// fixes. A logged-out client fetches the new sw.js happily — it is public, that was
+// the last fix — starts installing it, hits the gated bundle, takes a 401, and
+// throws the new worker away. The OLD worker stays in control, serving the OLD app,
+// forever: every fix shipped after the client lost its cookie is unreachable BY THE
+// CLIENT THAT NEEDS IT.
+//
+// It even hid behind a coincidence. A browser that still had its cookie installed
+// the worker fine, so the panel healed on the desktop and never on the phone —
+// which reads like a mobile bug, and is not one.
+//
+// So: whatever the worker precaches, the gate must let through. Assert it against
+// the REAL mux and the REAL manifest, not against a list someone remembered to
+// update.
+func TestThePrecacheManifestIsFetchableWithoutACredential(t *testing.T) {
+	srv := loginServer(t)
+
+	matches := precacheEntry.FindAllStringSubmatch(swSource(t), -1)
+	if len(matches) == 0 {
+		t.Fatal("no precache manifest found in sw.js — the regexp is stale, not the worker")
+	}
+
+	seenBundle := false
+	for _, m := range matches {
+		url := m[1]
+		if strings.HasPrefix(url, "assets/") {
+			seenBundle = true
+		}
+		resp, err := srv.Client().Get(srv.URL + "/" + url)
+		if err != nil {
+			t.Fatalf("GET /%s: %v", url, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("the service worker precaches /%s, but a client with no credential gets %d for it.\n"+
+				"That does not merely hide the file: workbox fails the whole INSTALL on a non-OK precache "+
+				"response, so the new worker never activates and the stranded old one keeps control forever. "+
+				"Serve it outside the gate, or stop precaching it.", url, resp.StatusCode)
+		}
+	}
+	if !seenBundle {
+		t.Error("the precache manifest names no assets/ bundle — this test would pass vacuously; " +
+			"check that the build still fingerprints its output there")
+	}
+}
+
+// TestTheAppShellStaysGated is the other half. Opening the bundle up must not open
+// up the app: an unauthenticated navigation has to keep answering with the login
+// form, which is the only reason the panel is reachable at all after a cookie dies.
+func TestTheAppShellStaysGated(t *testing.T) {
+	srv := loginServer(t)
+	for _, p := range []string{"/", "/index.html"} {
+		resp, err := srv.Client().Get(srv.URL + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("GET %s with no credential = %d, want 401: the shell is the gate, and a 401 is "+
+				"what carries the login form", p, resp.StatusCode)
+		}
 	}
 }

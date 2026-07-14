@@ -296,6 +296,13 @@ func newMux(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) *
 	for _, p := range pwaShellPaths() {
 		mux.Handle(p, securityHeaders(shellHandler()))
 	}
+	// ...and so is the fingerprinted bundle, because the service worker PRECACHES it
+	// and a precache entry it cannot fetch is a worker that cannot install at all.
+	// This is the rule, not an exception to it: nothing in the precache manifest may
+	// sit behind the gate. TestThePrecacheManifestIsFetchableWithoutACredential holds
+	// the line. index.html is NOT under this prefix and stays gated, which is what
+	// makes an unauthenticated navigation answer with the login form.
+	mux.Handle(assetsPrefix, securityHeaders(shellHandler()))
 	mux.Handle("/", authMiddleware(opts, securityHeaders(staticHandler())))
 	return mux
 }
