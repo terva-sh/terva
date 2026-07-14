@@ -34,10 +34,47 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        navigateFallback: 'index.html',
-        // Never let the service worker intercept the live control-plane socket
-        // or the health probe.
-        navigateFallbackDenylist: [/^\/ws/, /^\/healthz/],
+        // Explicitly undefined, not merely absent: vite-plugin-pwa's own default
+        // for this is 'index.html' (defaultWorkbox, dist/index.js), applied with
+        // Object.assign — which copies an explicit undefined but not a missing
+        // key. Omitting the line therefore does NOT omit the route; it silently
+        // reinstates the cache-first NavigationRoute described below, registered
+        // ahead of ours so ours never matches. Deleting this line is a regression.
+        navigateFallback: undefined,
+        // Navigations go to the NETWORK first, and fall back to the cache only
+        // when the network does not answer at all.
+        //
+        // The obvious config for an SPA is `navigateFallback: 'index.html'`, and
+        // it was what this used. But that registers a NavigationRoute bound to the
+        // PRECACHED index.html, which is cache-FIRST: every navigation is answered
+        // from disk and the server is never consulted. That is fine until the
+        // server has something to say — and it does. An unauthenticated request is
+        // answered with a 401 carrying the login form, and a cache-first worker
+        // threw that form away and served the app shell over the top of it. The
+        // panel then booted, opened its WebSocket, was refused, and retried
+        // forever: signed out, unable to say so, and unable to offer the one thing
+        // that would fix it. Reloading could not help — the reload was served from
+        // the same cache. The app could not even be repaired by shipping a fix,
+        // because the worker holding it hostage was the thing that had to change.
+        //
+        // NetworkFirst returns whatever the server says, 401 included, and only
+        // reaches for the cache when the fetch fails outright. Offline still works;
+        // the server just gets to decide who is allowed in. This panel is useless
+        // without a live socket to the daemon anyway, so a cached shell was never
+        // worth much — and it was never worth this.
+        runtimeCaching: [
+          {
+            urlPattern: ({ request }) => request.mode === 'navigate',
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'terva-shell',
+              networkTimeoutSeconds: 5,
+              // Cache only a real page. A 401 is an answer, not an app, and
+              // storing one would reintroduce exactly the bug above.
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+        ],
       },
     }),
   ],

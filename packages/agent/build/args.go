@@ -68,13 +68,14 @@ type Args struct {
 	ReplayPath string
 
 	// Web control-panel mode (--web / `terva web`, build tag terva_web).
-	WebAddr           string   // listen address (default 127.0.0.1:8730)
-	WebAuthHeader     string   // trust this forward-auth header as the authenticated user (e.g. X-Forwarded-User)
-	WebTrustedProxies []string // IPs/CIDRs (besides loopback) allowed to assert the forward-auth header
-	WebToken          string   // bearer token required on requests when no forward-auth is used; leaks via ps/cmdline, prefer the two below
-	WebTokenFile      string   // read the bearer token from this file (systemd LoadCredential=); never enters the environment
-	WebInsecure       bool     // allow binding a non-loopback address with no auth mode (dangerous)
-	WebInsecureCIDRs  []string // IPs/CIDRs granted no-auth access (besides loopback) — the scoped, safer form of --web-insecure (e.g. a tailnet range)
+	WebAddr             string   // listen address (default 127.0.0.1:8730)
+	WebAuthHeader       string   // trust this forward-auth header as the authenticated user (e.g. X-Forwarded-User)
+	WebTrustedProxies   []string // IPs/CIDRs (besides loopback) allowed to assert the forward-auth header
+	WebToken            string   // bearer token required on requests when no forward-auth is used; leaks via ps/cmdline, prefer the two below
+	WebTokenFile        string   // read the bearer token from this file (systemd LoadCredential=); never enters the environment
+	WebTokenRequireFile bool     // hardening opt-in: accept the token only from --web-token-file, refusing --web-token (argv) and TERVA_WEB_TOKEN (/proc/environ)
+	WebInsecure         bool     // allow binding a non-loopback address with no auth mode (dangerous)
+	WebInsecureCIDRs    []string // IPs/CIDRs granted no-auth access (besides loopback) — the scoped, safer form of --web-insecure (e.g. a tailnet range)
 
 	// AllowRestart enables Tier-1 self-restart (the control.restart verb +
 	// the terva_restart tool) in the modes that support it — terva web and
@@ -82,6 +83,19 @@ type Args struct {
 	// accepted alias from when web was the only mode that had it. Off by
 	// default.
 	AllowRestart bool
+
+	// AllowWebLogin lets `terva web` serve the ctrlproto auth group: adding,
+	// repairing, and revoking the MODEL-PROVIDER credential terva uses to reach
+	// Anthropic, OpenAI, Kimi. --web-allow-login. Off by default.
+	//
+	// Opt-in for the same reason self-restart is, one rung higher: writing a
+	// provider credential is categorically more authority than driving a
+	// conversation, and it must never ride on an unauthenticated listener that any
+	// peer can reach. It does NOT relax the credential-less boot check — terva
+	// still refuses to start the web daemon without a credential, and the first
+	// one on a machine is established at the TUI or pre-seeded. This is for the
+	// SECOND provider, and for the subscription that expired.
+	AllowWebLogin bool
 
 	// Attach mode (`terva attach [URL]` / --attach, Mode == ModeAttach).
 	// AttachURL is the daemon endpoint — a full ws:// or wss:// URL, or a
@@ -397,6 +411,8 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.WebTokenFile = v
+		case "--web-token-require-file":
+			a.WebTokenRequireFile = true
 		case "--web-insecure":
 			a.WebInsecure = true
 		case "--web-insecure-cidr":
@@ -411,6 +427,8 @@ func ParseArgs(in []string) (Args, error) {
 			}
 		case "--allow-restart", "--web-allow-restart":
 			a.AllowRestart = true
+		case "--web-allow-login":
+			a.AllowWebLogin = true
 		case "-c", "--continue":
 			a.Continue = true
 		case "-r", "--resume":
@@ -774,8 +792,11 @@ Web-specific flags:
   --web-token TOKEN             require this bearer token (Authorization: Bearer, or ?token= for the browser).
                                 Readable by any local user via ps/proc — prefer the two below
   --web-token-file PATH         read the bearer token from PATH (systemd LoadCredential=); never enters the environment
-  TERVA_WEB_TOKEN (env)         the bearer token (systemd EnvironmentFile=); scrubbed from the environment once read,
-                                so the agent's own shell cannot read it back
+  TERVA_WEB_TOKEN (env)         the bearer token (systemd EnvironmentFile=); scrubbed from os.Environ() once read (so
+                                the agent's shell can't see it via env), but it stays in /proc/<pid>/environ where a
+                                same-UID process can still read it — use --web-token-file to keep it out of memory
+  --web-token-require-file      hardening opt-in (off by default): accept the token only from --web-token-file, and
+                                refuse --web-token (argv leak) and TERVA_WEB_TOKEN (/proc/<pid>/environ leak) as a hard error
   --web-auth-header NAME        trust a forward-auth proxy header as the authenticated user
   --web-trusted-proxy CIDR      IP/CIDR(s) allowed to assert --web-auth-header (comma-separated; loopback always allowed)
   --allow-restart               enable Tier-1 self-restart (control.restart + the terva_restart tool);

@@ -26,9 +26,14 @@ import (
 // ?token= still works: it is how you hand someone a one-click link, and removing
 // it would break the PWA install flow. This just means nobody has to use it.
 
-// loginPath is where the form posts. It sits outside authMiddleware for the
-// obvious reason.
-const loginPath = "/auth"
+// loginPath is where the form posts, and where a client whose credential has
+// gone stale sends the browser. It sits outside authMiddleware for the obvious
+// reason. authStatusPath is the credential probe (see newMux); it sits INSIDE the
+// gate, because its whole job is to report what the gate decided.
+const (
+	loginPath      = "/auth"
+	authStatusPath = "/auth/status"
+)
 
 // loginTmpl is deliberately one self-contained page with no script: a login form
 // that depended on the bundled PWA could not be served to a client that is not
@@ -112,11 +117,20 @@ func serveLogin(w http.ResponseWriter, r *http.Request, status int, errMsg strin
 	// next carries the path the browser was denied, so a deep link survives the
 	// detour. Only a local path — an absolute URL here would make the login page
 	// an open redirect, handing an attacker a terva-hosted bounce to anywhere.
+	//
+	// When the denied request WAS the login page (the client bounces the browser
+	// here on a 401, carrying the real destination in ?next=), its own URI is not
+	// the destination — posting it back would land on the form again and only
+	// reach the app on a second hop.
+	next := r.URL.RequestURI()
+	if r.URL.Path == loginPath {
+		next = r.URL.Query().Get("next")
+	}
 	_ = loginTmpl.Execute(w, struct{ Nonce, Err, Action, Next string }{
 		Nonce:  n,
 		Err:    errMsg,
 		Action: loginPath,
-		Next:   safeNext(r.URL.RequestURI()),
+		Next:   safeNext(next),
 	})
 }
 
@@ -138,18 +152,33 @@ func safeNext(p string) string {
 // cookies, so nothing downstream needs the token in a URL ever again.
 func handleLogin(opts Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			serveLogin(w, r, http.StatusMethodNotAllowed, "")
-			return
-		}
 		// No token configured means no token to type; the form should never
 		// have been offered, and accepting a POST here would be theatre.
 		if opts.Token == "" {
 			http.Error(w, "no token auth is configured", http.StatusNotFound)
 			return
 		}
-		if !loginAttemptAllowed(r.RemoteAddr) {
-			fmt.Fprintf(os.Stderr, "terva web: throttling token guesses from %s\n", r.RemoteAddr)
+		// GET is a browser ASKING for the form — the client bounces here when it
+		// finds its credential gone, and an operator may simply navigate here. It
+		// is a page, so it answers 200. (It used to answer 405, which renders the
+		// same HTML but tells every cache and proxy between us that the method was
+		// the problem.) An already-authenticated visitor wants the panel, not a
+		// form demanding what they have already proved.
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			if authorized(opts, r) {
+				http.Redirect(w, r, safeNext(r.URL.Query().Get("next")), http.StatusSeeOther)
+				return
+			}
+			serveLogin(w, r, http.StatusOK, "")
+			return
+		}
+		if r.Method != http.MethodPost {
+			serveLogin(w, r, http.StatusMethodNotAllowed, "")
+			return
+		}
+		who := clientIP(opts, r)
+		if !loginAttemptAllowed(who) {
+			fmt.Fprintf(os.Stderr, "terva web: throttling token guesses from %s\n", who)
 			serveLogin(w, r, http.StatusTooManyRequests, "Too many attempts. Wait a minute and try again.")
 			return
 		}
@@ -158,12 +187,12 @@ func handleLogin(opts Options) http.HandlerFunc {
 			return
 		}
 		if !constantTimeEqual(strings.TrimSpace(r.PostFormValue("token")), opts.Token) {
-			loginFailed(r.RemoteAddr)
-			fmt.Fprintf(os.Stderr, "terva web: rejected bad token from %s\n", r.RemoteAddr)
+			loginFailed(who)
+			fmt.Fprintf(os.Stderr, "terva web: rejected bad token from %s\n", who)
 			serveLogin(w, r, http.StatusUnauthorized, "That token was not accepted.")
 			return
 		}
-		loginSucceeded(r.RemoteAddr)
+		loginSucceeded(who)
 		setTokenCookie(w, r, opts.Token)
 		http.Redirect(w, r, safeNext(r.PostFormValue("next")), http.StatusSeeOther)
 	}
@@ -187,8 +216,13 @@ type loginRecord struct {
 	until time.Time
 }
 
-func loginAttemptAllowed(remoteAddr string) bool {
-	v, ok := loginFailures.Load(loginKey(remoteAddr))
+// The bucket key is a client IP (see clientIP), never an IP:port — every request
+// from one client arrives on a fresh ephemeral port, so keying on the pair would
+// hand a guesser an unlimited supply of clean slates — and never the bare peer
+// address, which behind a reverse proxy is the proxy and so is the SAME for every
+// caller: one stranger's five bad guesses would lock out the operator too.
+func loginAttemptAllowed(ip string) bool {
+	v, ok := loginFailures.Load(ip)
 	if !ok {
 		return true
 	}
@@ -202,8 +236,8 @@ func loginAttemptAllowed(remoteAddr string) bool {
 	return rec.n < loginMaxFailures
 }
 
-func loginFailed(remoteAddr string) {
-	v, _ := loginFailures.LoadOrStore(loginKey(remoteAddr), &loginRecord{})
+func loginFailed(ip string) {
+	v, _ := loginFailures.LoadOrStore(ip, &loginRecord{})
 	rec := v.(*loginRecord)
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -214,17 +248,7 @@ func loginFailed(remoteAddr string) {
 	rec.until = time.Now().Add(loginWindow)
 }
 
-func loginSucceeded(remoteAddr string) { loginFailures.Delete(loginKey(remoteAddr)) }
-
-// loginKey buckets by source IP, not by IP:port — every request from one client
-// arrives on a fresh ephemeral port, so keying on the pair would hand a guesser
-// an unlimited supply of clean slates.
-func loginKey(remoteAddr string) string {
-	if ip := remoteIP(remoteAddr); ip != nil {
-		return ip.String()
-	}
-	return remoteAddr
-}
+func loginSucceeded(ip string) { loginFailures.Delete(ip) }
 
 // wantsLoginPage reports whether this request is a browser asking for a page, as
 // opposed to curl, the PWA's own asset fetches, or a native ctrlproto client —

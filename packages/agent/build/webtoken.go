@@ -22,6 +22,14 @@ const WebTokenEnv = "TERVA_WEB_TOKEN"
 // longer be read out of. relaunch.capture scrubs TERVA_RELAUNCH_* from the live
 // environment for exactly this reason.
 //
+// The scrub closes the os.Environ() copy, not /proc/<pid>/environ: the kernel
+// wrote the token's KEY=VALUE bytes to the initial process stack at execve, and
+// os.Unsetenv rewrites glibc's environ[] array without touching that region, so
+// a same-UID process (the agent's own shell) can still read the value out of
+// /proc. Only a source that never puts the token in the environment closes that
+// route — hence ResolveWebToken warns on the env path, and --web-token-file
+// exists to keep the token out of process memory entirely.
+//
 // Reading through a sync.OnceValue keeps that safe under a second call, which
 // would otherwise find the variable already gone and report no token.
 var webTokenFromEnv = sync.OnceValue(func() string {
@@ -43,14 +51,23 @@ var webTokenFromEnv = sync.OnceValue(func() string {
 //
 //	--web-token-file PATH   the token never enters the environment at all —
 //	                        what systemd's LoadCredential= is for
-//	TERVA_WEB_TOKEN         the EnvironmentFile= route, scrubbed once read
+//	TERVA_WEB_TOKEN         the EnvironmentFile= route, scrubbed from os.Environ()
+//	                        once read — but see webTokenFromEnv, it lingers in /proc
 //
 // A --web-token-file that cannot be read, or that holds nothing, is a hard error
 // rather than an empty token. Returning "" there would drop the daemon into
 // no-auth mode — the one outcome an operator reaching for a token file is trying
 // to avoid, and one they would only discover from the absence of a log line.
+//
+// --web-token-require-file (off by default) is the hardening opt-in: it accepts
+// the token only from --web-token-file and turns the other two sources into hard
+// errors, so an operator who has committed to the file route cannot silently
+// regress to the argv or /proc-visible environment paths.
 func ResolveWebToken(args Args) (string, error) {
 	if args.WebToken != "" {
+		if args.WebTokenRequireFile {
+			return "", fmt.Errorf("--web-token-require-file: refusing --web-token, whose value is in this process's command line (readable via ps and /proc/<pid>/cmdline); pass the token with --web-token-file")
+		}
 		fmt.Fprintf(os.Stderr, "terva web: note: --web-token puts the token in this process's command line, where any local user can read it (ps, /proc/<pid>/cmdline). Prefer %s or --web-token-file.\n", WebTokenEnv)
 		return args.WebToken, nil
 	}
@@ -65,7 +82,16 @@ func ResolveWebToken(args Args) (string, error) {
 		}
 		return tok, nil
 	}
-	return webTokenFromEnv(), nil
+	tok := webTokenFromEnv()
+	if tok != "" {
+		if args.WebTokenRequireFile {
+			return "", fmt.Errorf("--web-token-require-file: refusing %s, whose value remains in /proc/<pid>/environ after the scrub; pass the token with --web-token-file", WebTokenEnv)
+		}
+		if webTokenInProcEnviron() {
+			fmt.Fprintf(os.Stderr, "terva web: note: %s was scrubbed from the environment, but its value remains in /proc/<pid>/environ, where any same-UID process (including the agent's own shell) can read it. Use --web-token-file to keep the token out of process memory.\n", WebTokenEnv)
+		}
+	}
+	return tok, nil
 }
 
 // ResolveAttachToken settles the bearer token an attaching client presents. Same

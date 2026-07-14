@@ -30,7 +30,9 @@ func authMiddleware(opts Options, next http.Handler) http.Handler {
 			// Surface failed auth: on an exposed endpoint this is the signal an
 			// operator most wants (probes, a wrong/expired token). Health checks
 			// are unauthenticated, so they never reach here to spam the log.
-			fmt.Fprintf(os.Stderr, "terva web: rejected unauthorized %s %s from %s\n", r.Method, r.URL.Path, r.RemoteAddr)
+			// clientDesc, not RemoteAddr: behind a proxy the latter is the proxy,
+			// so every line would name 127.0.0.1 and say nothing about who called.
+			fmt.Fprintf(os.Stderr, "terva web: rejected unauthorized %s %s from %s\n", r.Method, r.URL.Path, clientDesc(opts, r))
 			// A browser navigating here gets the form instead of the word
 			// "unauthorized", so the token has somewhere to go that isn't the
 			// address bar. Everything else — curl, the PWA's asset fetches, a
@@ -234,6 +236,17 @@ func requestToken(r *http.Request) string {
 	return r.URL.Query().Get("token")
 }
 
+// tokenCookieMaxAge outlives the browser session on purpose. A cookie with no
+// Max-Age is a SESSION cookie, and an installed PWA is exactly the client that
+// gets its session torn down without warning — iOS evicts the web app's process
+// whenever it wants memory. A session cookie therefore meant a home-screen terva
+// silently lost its credential every few hours and could only be revived by
+// re-typing the token, which is precisely the friction the login form exists to
+// remove. The token itself does not expire (it is a file the operator writes), so
+// the cookie's lifetime is a convenience horizon, not a security one; rotating
+// the token invalidates every outstanding cookie on the next request.
+const tokenCookieMaxAge = 30 * 24 * 60 * 60 // seconds
+
 // setTokenCookie persists a validated token as a cookie so subsequent same-origin
 // requests (assets, the WebSocket handshake, a PWA relaunch) authenticate without
 // it in the URL. No-op when the request already carried the matching cookie.
@@ -247,8 +260,59 @@ func setTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
+		Secure:   requestIsHTTPS(r),
+		MaxAge:   tokenCookieMaxAge,
 	})
+}
+
+// requestIsHTTPS reports whether the BROWSER's leg of this request was TLS, which
+// is not the same question as whether ours was: the common deployment terminates
+// TLS at a reverse proxy and forwards cleartext to a loopback listener, so r.TLS
+// is nil on a request the user made over https. Trusting only r.TLS there drops
+// the Secure attribute from the token cookie on a site served entirely over TLS,
+// and the browser will then hand that cookie to a plaintext request to the same
+// host — a redirect to https happens too late, the secret is already on the wire.
+//
+// X-Forwarded-Proto is forgeable, but forging it is not useful: the worst it does
+// is ADD Secure to a cookie that did not need it, which withholds the cookie from
+// cleartext requests. That fails closed, so honoring the header unconditionally is
+// safe in a way that honoring a forwarded IP or a forward-auth header is not.
+func requestIsHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// clientIP is the source address terva is willing to make a DECISION on — today,
+// which bucket a failed login counts against. Behind a reverse proxy every request
+// arrives from the proxy (127.0.0.1 for a same-host haproxy/nginx), so keying on
+// RemoteAddr collapses every client in the world into one bucket and lets any
+// stranger's bad guesses lock the operator out. The real client is in
+// X-Forwarded-For — but only the part our own proxy appended.
+//
+// So: take the RIGHTMOST entry, and only from a peer trusted to have written it.
+// A proxy appends the peer it saw to whatever the client sent, so a client that
+// forges "X-Forwarded-For: 1.2.3.4" produces "1.2.3.4, <real>" — the leftmost
+// entry is the attacker's to choose, the rightmost is our proxy's. (clientDesc
+// takes the leftmost instead; it is descriptive text for a human reading the log,
+// never a decision, and the leftmost is the more useful one to print when several
+// proxies are chained.)
+func clientIP(opts Options, r *http.Request) string {
+	if remoteFromTrustedProxy(r.RemoteAddr, opts.TrustedProxies) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			hops := strings.Split(xff, ",")
+			if last := strings.TrimSpace(hops[len(hops)-1]); last != "" {
+				if ip := net.ParseIP(last); ip != nil {
+					return ip.String()
+				}
+			}
+		}
+	}
+	if ip := remoteIP(r.RemoteAddr); ip != nil {
+		return ip.String()
+	}
+	return r.RemoteAddr
 }
 
 func constantTimeEqual(a, b string) bool {

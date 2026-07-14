@@ -73,7 +73,8 @@ safely. Details in [web.md](web.md).
 | `--web-addr <host:port>` | Listen address (default `127.0.0.1:8730`). |
 | `--web-token <token>` | Require this bearer token on requests. The simplest way to expose the panel beyond loopback — but `ps` shows it to every local user, so for anything long-lived use one of the next two. |
 | `--web-token-file <path>` | Read the bearer token from a file. Never enters the environment; pairs with systemd `LoadCredential=`. Missing or empty is a startup error, never a silent fall back to no auth. |
-| `TERVA_WEB_TOKEN` (env) | The bearer token, for systemd `EnvironmentFile=`. Scrubbed from the environment once read, so the agent's own shell cannot read it back. Also supplies `terva attach --token`. |
+| `TERVA_WEB_TOKEN` (env) | The bearer token, for systemd `EnvironmentFile=`. Scrubbed from `os.Environ()` once read, so a child that inherits it (the agent's shell) can't see it with `env` — but the value **remains in `/proc/<pid>/environ`**, where any same-UID process can still read it back. Use `--web-token-file` to keep the token out of process memory entirely. Also supplies `terva attach --token`. |
+| `--web-token-require-file` | Hardening opt-in (off by default): accept the token only from `--web-token-file`, and refuse `--web-token` and `TERVA_WEB_TOKEN` as a startup error. For a host that has committed to the file route and wants to prevent a silent regression to a leaky source. |
 | `--web-auth-header <name>` | Trust a forward-auth header (e.g. `X-Forwarded-User`) as the authenticated user — for running behind an authenticating reverse proxy. |
 | `--web-trusted-proxy <ip\|cidr>` | IPs/CIDRs, besides loopback, allowed to assert that forward-auth header (comma-separated, repeatable). Without it a spoofed header from anywhere else is ignored. |
 | `--web-insecure-cidr <ip\|cidr>` | Grant no-auth access to specific IPs/CIDRs besides loopback — e.g. a tailnet range. The scoped, safer form of `--web-insecure`. |
@@ -86,6 +87,10 @@ on an unauthenticated non-loopback listener.
 
 - `read`: read text files, or inline images (PNG, JPEG, GIF, WebP).
 - `write`: create or overwrite files, making parent directories as needed.
+  Pass `mode` (octal, e.g. `0755`) to set the permission bits in the same
+  step — for an executable script — instead of a follow-up `chmod`; omit it
+  to keep the secure default (new files honor the umask, existing files keep
+  their mode).
 - `edit`: one or more exact-match replacements in an existing file, with
   an optional `replaceAll` per edit and a whitespace-tolerant fallback
   when an exact match fails (see

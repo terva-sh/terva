@@ -33,7 +33,8 @@ Flags:
 | `--web-addr` | `127.0.0.1:8730` | listen address |
 | `--web-token` | — | require `Authorization: Bearer <token>` (or `?token=` on the socket). Readable by any local user via `ps` — prefer the two below for anything long-lived |
 | `--web-token-file` | — | read the bearer token from a file; never enters the environment (systemd `LoadCredential=`) |
-| `TERVA_WEB_TOKEN` (env) | — | the bearer token (systemd `EnvironmentFile=`), scrubbed from the environment once read |
+| `TERVA_WEB_TOKEN` (env) | — | the bearer token (systemd `EnvironmentFile=`), scrubbed from `os.Environ()` once read but **still readable via `/proc/<pid>/environ`** — see [Auth](#auth); prefer `--web-token-file` |
+| `--web-token-require-file` | off | hardening opt-in: accept the token only from `--web-token-file`; refuse `--web-token` and `TERVA_WEB_TOKEN` as a startup error |
 | `--web-auth-header` | — | trust this forward-auth header as the authenticated user (only from loopback / a trusted proxy — see [Auth](#auth)) |
 | `--web-trusted-proxy` | — | IP/CIDR(s) allowed to assert `--web-auth-header` (comma-separated; loopback is always allowed) |
 | `--web-insecure` | off | permit a non-loopback bind with **no** auth mode (dangerous — open to any source) |
@@ -94,11 +95,21 @@ address with no auth mode is refused unless you pass `--web-insecure`.
   terva web --web-addr 0.0.0.0:8730 --web-token-file /etc/terva/web-token
   ```
 
-  `TERVA_WEB_TOKEN` is scrubbed from the environment once read, so the agent's own
-  shell tool — which inherits terva's environment — cannot read the token back out
-  with `env`. `--web-token-file` keeps it out of the environment altogether, which
-  is what systemd's `LoadCredential=` wants. A token file that is missing or empty
-  is a startup error, never a silent fall back to no auth.
+  `TERVA_WEB_TOKEN` is scrubbed from `os.Environ()` once read, so the agent's own
+  shell tool — which inherits that environment — cannot read the token back out
+  with `env`. It does **not** vanish from `/proc/<pid>/environ`, though: the kernel
+  wrote the value to the process's initial stack at `execve`, and the scrub cannot
+  reach that region, so any same-UID process (the agent's shell included) can still
+  recover it there — and a self-restart re-exposes it each generation. On startup
+  terva warns when the token is still readable that way. `--web-token-file` keeps it
+  out of the environment *and* out of `/proc`, which is also what systemd's
+  `LoadCredential=` wants; note that on a single-user host the token file is itself
+  readable by that user's agent shell, so this closes the ambient leak, not a
+  determined same-UID read. A token file that is missing or empty is a startup
+  error, never a silent fall back to no auth. For a host that has committed to the
+  file route, `--web-token-require-file` (off by default) turns `--web-token` and
+  `TERVA_WEB_TOKEN` into a startup error, so a later change can't silently regress
+  to a leaky source.
 
   **In the browser, just open the panel.** An unauthenticated page load gets a
   login form; type the token and the daemon exchanges it for an HttpOnly,

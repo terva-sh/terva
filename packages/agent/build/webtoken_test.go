@@ -188,3 +188,97 @@ func resetWebTokenOnce(t *testing.T) {
 	})
 	t.Cleanup(func() { webTokenFromEnv = old })
 }
+
+// TestTW005_TokenSourceEnvContract documents, per source, whether resolving the
+// token leaves a copy in this process's Go-visible environment — os.Environ(),
+// which the agent's shell tool inherits (tools/bash.go). The argv dimension is
+// inherent to --web-token (the value is in the command line by construction);
+// the /proc/<pid>/environ dimension is Linux-specific and lives in
+// webtoken_procenv_linux_test.go.
+func TestTW005_TokenSourceEnvContract(t *testing.T) {
+	// --web-token: the value lives only in Args (and, in a real launch, argv).
+	// It must never be written to the environment.
+	resetWebTokenOnce(t)
+	if _, err := ResolveWebToken(Args{WebToken: "flag-token"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := os.LookupEnv(WebTokenEnv); ok {
+		t.Errorf("flag route populated %s — it must not touch the environment", WebTokenEnv)
+	}
+
+	// --web-token-file: read from disk, never enters the environment.
+	resetWebTokenOnce(t)
+	if _, err := ResolveWebToken(Args{WebTokenFile: tokenFile(t, "file-token")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := os.LookupEnv(WebTokenEnv); ok {
+		t.Errorf("file route populated %s — it must not touch the environment", WebTokenEnv)
+	}
+
+	// TERVA_WEB_TOKEN: present before, scrubbed from os.Environ() after. (Whether
+	// it lingers in /proc is the separate, Linux-only guarantee.)
+	resetWebTokenOnce(t)
+	t.Setenv(WebTokenEnv, "env-token")
+	if _, err := ResolveWebToken(Args{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := os.LookupEnv(WebTokenEnv); ok {
+		t.Errorf("env route left %s in os.Environ() — the scrub must remove it", WebTokenEnv)
+	}
+}
+
+// TestTW005_RequireFileRejectsLeakySources: with --web-token-require-file the
+// file route is the only accepted source. The argv and environment routes are
+// hard errors (no token returned alongside), the file route still works, and no
+// token at all is not an error — require-file constrains the source, it does not
+// mandate a token (no-auth is a separate policy the bind guards enforce). The
+// errors never contain a token value.
+func TestTW005_RequireFileRejectsLeakySources(t *testing.T) {
+	// --web-token (argv) is refused.
+	resetWebTokenOnce(t)
+	got, err := ResolveWebToken(Args{WebToken: "flag-token", WebTokenRequireFile: true})
+	if err == nil {
+		t.Error("require-file: --web-token was accepted; it must be a hard error")
+	}
+	if got != "" {
+		t.Errorf("require-file: returned token %q alongside the --web-token error", got)
+	}
+
+	// TERVA_WEB_TOKEN (environment) is refused.
+	resetWebTokenOnce(t)
+	t.Setenv(WebTokenEnv, "env-token")
+	got, err = ResolveWebToken(Args{WebTokenRequireFile: true})
+	if err == nil {
+		t.Error("require-file: TERVA_WEB_TOKEN was accepted; it must be a hard error")
+	}
+	if got != "" {
+		t.Errorf("require-file: returned token %q alongside the env error", got)
+	}
+
+	// --web-token-file is still accepted.
+	resetWebTokenOnce(t)
+	got, err = ResolveWebToken(Args{WebTokenFile: tokenFile(t, "file-token"), WebTokenRequireFile: true})
+	if err != nil {
+		t.Fatalf("require-file: --web-token-file must still be accepted, got %v", err)
+	}
+	if got != "file-token" {
+		t.Errorf("require-file: file token = %q, want %q", got, "file-token")
+	}
+
+	// No token at all is not an error.
+	resetWebTokenOnce(t)
+	if got, err = ResolveWebToken(Args{WebTokenRequireFile: true}); err != nil || got != "" {
+		t.Errorf("require-file with no token = (%q, %v), want (\"\", nil)", got, err)
+	}
+
+	// The errors are secret-safe.
+	resetWebTokenOnce(t)
+	if _, err = ResolveWebToken(Args{WebToken: "super-secret-flag", WebTokenRequireFile: true}); err != nil && strings.Contains(err.Error(), "super-secret-flag") {
+		t.Error("require-file error leaked the --web-token value")
+	}
+	resetWebTokenOnce(t)
+	t.Setenv(WebTokenEnv, "super-secret-env")
+	if _, err = ResolveWebToken(Args{WebTokenRequireFile: true}); err != nil && strings.Contains(err.Error(), "super-secret-env") {
+		t.Error("require-file error leaked the TERVA_WEB_TOKEN value")
+	}
+}

@@ -28,6 +28,11 @@ func browserGet(srv *httptest.Server, path string) (*http.Response, string) {
 
 func loginServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	// The throttle's buckets are a package-level map, so without this a test that
+	// spends the loopback bucket on bad guesses silently 429s every later test
+	// that logs in from loopback — and the failure reads as "a correct token set
+	// no cookie", which points nowhere near the cause.
+	loginFailures.Clear()
 	srv := httptest.NewServer(newMux(context.Background(), newFakeWS(), Options{Token: "s3cret"}))
 	t.Cleanup(srv.Close)
 	// Don't follow the post-login redirect; the test wants to see it.

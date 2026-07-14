@@ -46,6 +46,12 @@ type Options struct {
 	CWD            string       // workspace working directory, advertised in the hello
 	Jailed         bool         // workspace sandbox lock state, advertised in the hello
 	AllowRestart   bool         // advertise the restart feature so clients show a restart control
+	// AllowLogin advertises the AUTH GROUP: this daemon will add, repair, and
+	// revoke MODEL-PROVIDER credentials. Off the base ServerHello, like the replay
+	// group — a client that negotiates it is guaranteed the verbs work, and one
+	// that does not see it renders no login controls at all. Never enabled on an
+	// unauthenticated listener (see web_mode.go).
+	AllowLogin bool
 
 	// unixListener marks the effective listener as a unix domain socket —
 	// set by Serve (from the unix: address form or an adopted systemd
@@ -272,6 +278,24 @@ func newMux(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) *
 	// turned away the request carrying the token would be a closed loop. The
 	// handler does its own constant-time check and throttles guesses.
 	mux.HandleFunc(loginPath, handleLogin(opts))
+	// The credential probe. It exists because the WebSocket API is silent about
+	// WHY a handshake failed: a 401 and an unreachable daemon both surface to the
+	// page as a bare close event with no status, so the panel cannot tell "your
+	// token expired" from "the machine is asleep" — and, unable to tell, it did
+	// the only safe thing and reconnected forever, in silence. This answers the
+	// question over plain HTTP, where the status code survives: 204 authenticated,
+	// 401 not. It is a GET with no body, so the login form is never served here —
+	// wantsLoginPage only fires for a navigation.
+	mux.Handle(authStatusPath, authMiddleware(opts, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	// The PWA shell — manifest, icons, service worker — is served unauthenticated
+	// so an installed app that has lost its cookie can still boot far enough to
+	// show the login form and to pull a newer service worker. See pwaShellPaths.
+	for _, p := range pwaShellPaths() {
+		mux.Handle(p, securityHeaders(shellHandler()))
+	}
 	mux.Handle("/", authMiddleware(opts, securityHeaders(staticHandler())))
 	return mux
 }
@@ -346,6 +370,9 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	hello.Jailed = opts.Jailed
 	if opts.AllowRestart {
 		hello.Features = append(hello.Features, ctrlproto.FeatureRestart)
+	}
+	if opts.AllowLogin {
+		hello.Groups = append(hello.Groups, ctrlproto.GroupAuth)
 	}
 	_, _ = ctrlproto.ServeConn(connCtx, conn, svc, hello)
 }
