@@ -102,8 +102,10 @@ func TestLedgerFailsClosedWithoutAReadOnlySet(t *testing.T) {
 // A silent cap would read as "this is everything" — the one thing it must never
 // claim falsely.
 func TestLedgerIsBoundedAndSaysWhenItTruncates(t *testing.T) {
+	const overflow = 15
+	total := ledgerMaxEntries + overflow
 	var msgs []provider.Message
-	for i := 0; i < ledgerMaxEntries+15; i++ {
+	for i := 0; i < total; i++ {
 		id := fmt.Sprintf("c%d", i)
 		msgs = append(msgs, call(id, "bash", fmt.Sprintf(`{"command":"step-%d"}`, i)), result(id, "ok", false))
 	}
@@ -113,13 +115,30 @@ func TestLedgerIsBoundedAndSaysWhenItTruncates(t *testing.T) {
 	if entries > ledgerMaxEntries {
 		t.Errorf("ledger listed %d entries; capped at %d", entries, ledgerMaxEntries)
 	}
-	if !strings.Contains(led, "15 earlier state-changing calls are not listed") {
+	if !strings.Contains(led, fmt.Sprintf("%d earlier state-changing calls are not listed", overflow)) {
 		t.Errorf("the ledger truncated silently, which reads as completeness:\n%s", led)
 	}
-	// The most recent survive: they are the likeliest to be re-attempted the
-	// instant the agent resumes.
-	if !strings.Contains(led, "step-54") {
-		t.Errorf("the newest action was dropped:\n%s", led)
+	// The most recent survive — they are the likeliest to be re-attempted the
+	// instant the agent resumes — and the oldest, past the cap, do not. Derived
+	// from the cap so this keeps testing "keeps the newest" if the cap moves.
+	if newest := fmt.Sprintf("step-%d", total-1); !strings.Contains(led, newest) {
+		t.Errorf("the newest action (%s) was dropped:\n%s", newest, led)
+	}
+	if strings.Contains(led, `step-0"`) {
+		t.Errorf("the oldest action (step-0) survived past the cap; overflow should drop the front:\n%s", led)
+	}
+}
+
+// The cap is sized from evidence, not taste. A real dogfood session ran 88
+// distinct state-changing calls before its first compaction; a cap below that
+// pushes more than half of a heavy session's actions into prose the model has to
+// remember, which is the exact reliance the ledger exists to remove. Pin the
+// intent so a future "tidy up the constants" pass can't quietly undo it.
+func TestLedgerCapCoversAHeavyRealSession(t *testing.T) {
+	const observedHeaviestSession = 88
+	if ledgerMaxEntries < observedHeaviestSession {
+		t.Errorf("ledgerMaxEntries = %d, below the %d distinct calls a real session produced before one "+
+			"compaction — over half its actions would fall to prose-only", ledgerMaxEntries, observedHeaviestSession)
 	}
 }
 

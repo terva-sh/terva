@@ -480,9 +480,15 @@ func (a *Agent) drainSummary(ctx context.Context, client provider.Client, req pr
 // reclaimed. Identical calls collapse with a count, arguments are clipped, and an
 // overflow is stated out loud rather than silently truncated.
 const (
-	// ledgerMaxEntries caps distinct actions. After dedup, forty distinct
-	// state-changing calls in one compaction window is already a lot.
-	ledgerMaxEntries = 40
+	// ledgerMaxEntries caps distinct actions. Sized from a real dogfood session
+	// that ran 88 distinct state-changing calls before its first compaction — the
+	// original 40 dropped 55% of them to prose-only. At ~45 tokens per clipped
+	// line, 100 entries is ~4.5k tokens, negligible against the tens-of-thousands
+	// a compaction reclaims, and it keeps the whole record deterministic rather
+	// than leaning on the model's prose for the overflow. The overflow notice
+	// still fires past this, because "a lot" and "unbounded" are different
+	// promises.
+	ledgerMaxEntries = 100
 	// ledgerMaxArgChars clips each call's arguments. Enough to identify WHICH
 	// file was written or WHICH command ran, which is all the resuming agent
 	// needs to recognize it and not do it again.
