@@ -1,0 +1,60 @@
+# Persistent terva terminal — USER unit (dtach + `terva attach`).
+#
+# dtach holds ONE program in a detachable pty — no windows, no panes, no
+# config, and no keybinding but detach (Ctrl-\). It passes the terminal
+# through raw, so terva's colors, mouse, and escape sequences reach your
+# terminal unmediated (unlike a full multiplexer, which interposes its own
+# emulation layer). It is a good fit here precisely because terva already
+# manages its own transcript and scrollback — the one thing a multiplexer's
+# screen buffer would add.
+#
+# Reach it from any shell:
+#
+#   dtach -a %t/terva.dtach -r ctrl_l          (detach: Ctrl-\)
+#
+# terva repaints on reattach. dtach's `-r ctrl_l` injects a redraw on attach,
+# and terva also force-repaints on a same-size SIGWINCH, so `-r winch` (dtach's
+# other method) works too — handy for muxes that can't inject a key (abduco).
+#
+# The attach is a thin CLIENT of terva-web.service; its connection is what
+# socket-activates the daemon. State lives in the daemon, so this terminal can
+# be killed and recreated freely — the conversation resumes on reconnect.
+#
+# On supervision: dtach's master daemonizes to hold the pty, so systemd tracks
+# it loosely — stop/reload act through pkill, not $MAINPID (see the anchors
+# below).
+
+[Unit]
+Description=persistent terva terminal (dtach + terva attach)
+# The attach dials the socket, which socket-activates the daemon.
+After=terva-web.socket
+Wants=terva-web.socket
+
+[Service]
+Type=forking
+
+# -n creates a detached session; the socket path is where clients attach.
+# --allow-restart lets the client reload itself in place (see ExecReload).
+ExecStart=/usr/bin/dtach -n %t/terva.dtach /usr/local/bin/terva attach unix:%t/terva.sock --allow-restart
+
+# `systemctl --user reload terva-attach` SIGHUPs the terva process, which
+# re-execs it into the freshly-installed binary on the SAME pty and reconnects
+# — one blink, your session intact. The pattern is ANCHORED on the terva binary
+# (^…): dtach's own command line contains "terva attach …" as its child args,
+# so an unanchored match would also HUP the dtach master and tear the pty down.
+ExecReload=/usr/bin/pkill --signal HUP --full '^/usr/local/bin/terva attach unix:%t/terva.sock'
+
+# Stop by killing the dtach master (its child terva goes with it). This pattern
+# matches only the master — a terva client's command line never contains
+# "dtach -n".
+ExecStop=/usr/bin/pkill --full 'dtach -n %t/terva.dtach'
+
+# If terva attach exits (the daemon wasn't up yet at boot, or it crashed), the
+# dtach master exits with its child — bring it back. The daemon's cold-boot
+# (credential resolve + MCP spawn) can outrun the client's 8s first-handshake
+# timeout on the very first try; the retry rides over it.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

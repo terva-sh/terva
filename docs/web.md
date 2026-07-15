@@ -267,12 +267,71 @@ WantedBy=sockets.target
 # ~/.config/systemd/user/terva-web.service
 [Service]
 ExecStart=/usr/local/bin/terva web --allow-restart
+# `systemctl --user reload terva-web` re-execs into the installed binary in
+# place — a real restart, not a config re-read. See "Self-restart" below.
+ExecReload=/bin/kill -HUP $MAINPID
 WorkingDirectory=%h/workspace
 ```
 
 `systemctl --user enable --now terva-web.socket`, then
 `terva attach unix:/run/user/1000/terva.sock` — the first attach spawns the
 daemon.
+
+### A persistent terminal
+
+The socket-activated daemon plus a supervised `terva attach` gives you a
+terminal that is always your terva session: close the laptop, SSH back
+tomorrow, reattach, and the conversation is exactly where you left it — still
+live, because the daemon never stopped. `examples/deploy/systemd/` ships the
+three user units:
+
+- **`terva-web.socket`** — the activation point (`%t/terva.sock`, `0600`).
+- **`terva-web.service`** — the daemon; holds every session, credential, and
+  tool. Reloading it is what preserves your work across a new build.
+- **`terva-attach.service`** — `terva attach` held in a detached
+  [`dtach`](https://github.com/crigler/dtach) pty, so a live TUI keeps running
+  with nobody watching.
+
+The example uses `dtach` rather than a full multiplexer on purpose: it holds
+*one* program in a detachable pty with no windows, no config, and no emulation
+layer of its own — terva's colors, mouse, and escapes reach your terminal
+unmediated. terva already owns its transcript and scrollback, which is the one
+thing a multiplexer's screen buffer would otherwise add. (`abduco` and GNU
+`screen` work the same way; tmux does too if you already live in it.)
+
+Two layers persist independently. The **daemon** holds the conversation, so
+even a killed client resyncs to the live session on reconnect (and sessions
+are on disk regardless). **`dtach` keeps the client process alive** with its
+own state — the input you were typing, where you'd scrolled — so on reattach
+terva repaints exactly that, not a fresh session. Because dtach keeps no screen
+buffer, terva repaints itself on reattach; `dtach -r ctrl_l` triggers that, and
+terva's same-size-SIGWINCH repaint covers the buffer-less muxes that can't
+inject a key.
+
+```
+# install (see the comments in terva-web.socket for the full sequence)
+cp examples/deploy/systemd/terva-{web.socket,web.service,attach.service} ~/.config/systemd/user/
+terva login <provider>          # the daemon refuses to boot with no credential
+systemctl --user enable --now terva-web.socket terva-attach.service
+loginctl enable-linger $USER
+
+# reach it from any shell
+dtach -a $XDG_RUNTIME_DIR/terva.dtach -r ctrl_l              # detach: Ctrl-\
+```
+
+Deploying a new build is then two reloads, and nobody loses their place:
+
+```
+systemctl --user reload terva-web       # daemon re-execs in place; clients blink + resync
+systemctl --user reload terva-attach    # the client terva re-execs on the same pty + reconnects
+```
+
+`reload terva-web` keeps the socket up throughout (systemd holds it, the daemon
+re-adopts it), so the client's reconnect is immediate. `reload terva-attach`
+SIGHUPs the terva process — the client-side self-restart — so it comes back on
+the new build on the same pty, without disturbing your dtach session. Note that
+`/restart` *inside* the attached TUI restarts the daemon over the wire, not the
+client; the client is reloaded from the outside, by signal.
 
 ## Self-restart
 
@@ -292,10 +351,27 @@ re-exec the daemon). A `--web-insecure-cidr` listener bounds who can reach it to
 a trusted source range, so restart **is** permitted there. It is unix-only
 (`exec(2)`); running from a `go run` temp binary is rejected with a clear error.
 
-Two ways to trigger it, both funneling through the same path:
+Three ways to trigger it, all funneling through the same path:
 
 - **From the browser** — a **Restart terva** control appears in the **Settings**
   pane (arm, then confirm). It calls the `control.restart` ctrlproto method.
+- **From the OS** — a **SIGHUP** re-execs the daemon, so a systemd unit with
+  `ExecReload=/bin/kill -HUP $MAINPID` turns `systemctl reload terva-web` into an
+  in-place upgrade to the installed build. Unlike the browser and tool paths,
+  SIGHUP carries no bearer token — the kernel only lets the unit's owner or root
+  signal the process, so the signal *is* the authorization — but it still honors
+  `--allow-restart`: started without it, the daemon **logs the reload and keeps
+  serving** rather than restarting (and, deliberately, rather than letting the
+  unhandled signal terminate it, which is SIGHUP's default).
+
+  > **`reload` here is a real restart, not a config re-read.** It runs the same
+  > internal Tier-1 mechanics as every other trigger: `exec(2)` replaces the
+  > running process in place, so despite the **preserved PID there is a brief
+  > outage** — open connections drop and the endpoint is unavailable in the gap
+  > between the old image handing off and the new one finishing startup
+  > (credential resolve, MCP spawn, tool listing) and re-binding. An in-flight
+  > turn is interrupted. It is for picking up a new **build**, exactly like
+  > `restart` — reload while idle; do not wire it into a per-file hot-reload loop.
 - **From the agent** — a `terva_restart` tool. It is registered only when the
   flag is set and **prompts for your approval** in the browser before running in
   every gating approval mode (it is left unclassified in the permission model, so

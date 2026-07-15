@@ -36,6 +36,7 @@ import (
 	"terva.sh/terva/packages/fswalk"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider/auth"
+	"terva.sh/terva/packages/relaunch"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -127,6 +128,22 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 	endpoint, err := normalizeAttachURL(args.AttachURL)
 	if err != nil {
 		return err
+	}
+
+	// Self-restart (--allow-restart): the attach CLIENT re-execs itself into the
+	// freshly-installed binary and reconnects — the client-side twin of the
+	// daemon's own reload (which /restart still drives over the wire; the two are
+	// independent). Platform-gated like every mode; there is no listener here, so
+	// no insecure-listener refusal. When enabled, modes.Interactive.Run registers
+	// the terminal-restore + session-handoff pre-exec hook, so the exec is clean;
+	// the SIGHUP trigger is installed just before Run below.
+	allowRestart := args.AllowRestart
+	if allowRestart && !relaunch.Supported() {
+		fmt.Fprintln(os.Stderr, "terva: self-restart is not supported on this platform — --allow-restart has no effect")
+		allowRestart = false
+	}
+	if allowRestart {
+		relaunch.Enable()
 	}
 
 	// The TUI is constructed only after the first handshake; these bridge the
@@ -431,6 +448,16 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 	// The first hello arrived before the TUI existed — seed the sandbox badge
 	// now; reconnects re-seed through OnConnect.
 	ivLocal.SetCarrierJailed(hello.Jailed)
+
+	// SIGHUP drives the client self-restart, so `systemctl reload` re-execs a
+	// persistent attach into the new binary. Installed ONLY when --allow-restart
+	// is set — unlike the web daemon (no terminal), an attach client owns a
+	// terminal where SIGHUP is also the hangup signal, so without self-restart we
+	// leave SIGHUP's default (terminate on hangup) intact rather than swallowing
+	// it. runCtx cancels when this returns, tearing the handler down.
+	if relaunch.Enabled() {
+		installReloadHandler(runCtx)
+	}
 
 	return ivLocal.Run(ctx)
 }

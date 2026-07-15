@@ -72,7 +72,21 @@ The connection is self-healing: if the daemon restarts (its `/restart`, the
 — reconnecting…", re-subscribes, resyncs from the snapshot, and announces
 `daemon restarted: vX → vY` when the build changed. The inverse is the
 quality-of-life win for iterating on terva itself: quit the TUI mid-turn,
-reinstall it, re-attach — the agent never noticed.
+reinstall it, re-attach — the agent never noticed. Note that `/restart` from an
+attached TUI restarts the **daemon**, over the wire — not this client.
+
+The client can restart **itself**, too. Started with `--allow-restart`,
+`terva attach` re-execs into the freshly-installed binary and reconnects on
+**SIGHUP** — the same Tier-1 mechanics the daemon uses (terminal restored first,
+same session rebound, a brief outage while the new client boots). That makes a
+persistent attach — one supervised in a systemd unit or a long-lived
+tmux/screen pane — pick up a new build via `systemctl --user reload …` /
+`kill -HUP`, the client-side counterpart to reloading the daemon. It is off
+unless `--allow-restart` is passed: an attach client owns a terminal, where
+SIGHUP is *also* the hangup signal, so without the flag SIGHUP keeps its default
+(exit on hangup). Reserve it for those persistent, non-throwaway attaches.
+`examples/deploy/systemd/` ships a ready-made socket-activated daemon + `dtach`
+attach that does exactly this — see docs/web.md §"A persistent terminal".
 
 The `@`-file picker lists the daemon's tree **over the wire** (the
 `files.list` verb, advertised as the `files-list` hello feature) — correct

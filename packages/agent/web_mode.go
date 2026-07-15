@@ -106,8 +106,15 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		relaunch.OnFailure(func(err error) {
 			ws.BroadcastAll(ctrlproto.NoticeEvent("error", "", i18n.T("restart failed — still running the current build: %s", err.Error())))
 		})
-		fmt.Fprintln(os.Stderr, "terva web: self-restart enabled (control.restart + the terva_restart tool)")
+		fmt.Fprintln(os.Stderr, "terva web: self-restart enabled (control.restart, the terva_restart tool, and SIGHUP / `systemctl reload`)")
 	}
+
+	// SIGHUP drives the SAME Tier-1 self-restart as the control plane and the
+	// tool — so a systemd unit's `ExecReload=/bin/kill -HUP $MAINPID` picks up a
+	// freshly-installed binary in place. Installed unconditionally (not only under
+	// allowRestart): an unhandled SIGHUP would terminate the daemon, so when
+	// restart is off the signal is swallowed with a log instead of killing it.
+	installReloadHandler(ctx)
 
 	// Provider login is opt-in, and refused on an unauthenticated listener for the
 	// same reason self-restart is — one rung higher. Writing the credential terva

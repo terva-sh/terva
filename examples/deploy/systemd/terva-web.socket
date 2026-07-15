@@ -1,0 +1,37 @@
+# terva control socket — USER unit.
+#
+# Socket-activates the terva daemon (terva-web.service): the daemon is not
+# started until the first client connects here — the terva-attach terminal
+# below, or a local proxy. The socket file's 0600 permissions ARE the auth
+# boundary (only your user can dial it), so no --web-token is needed for
+# same-user access.
+#
+# This is one of a set of three units that give you a persistent terminal:
+#   terva-web.socket      — this file (the activation point)
+#   terva-web.service     — the daemon, holds all state
+#   terva-attach.service  — a persistent `terva attach` TUI inside tmux
+#
+# Install all three:
+#   mkdir -p ~/.config/systemd/user ~/workspace
+#   cp terva-web.socket terva-web.service terva-attach.service ~/.config/systemd/user/
+#   terva login <provider>               # the daemon refuses to boot with no credential
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now terva-web.socket terva-attach.service
+#   loginctl enable-linger $USER         # keep it all running after logout
+#
+# Then, from any shell:
+#   tmux -S $XDG_RUNTIME_DIR/terva-tmux.sock attach -t terva   (detach: Ctrl-b d)
+
+[Unit]
+Description=terva control socket
+
+[Socket]
+# $XDG_RUNTIME_DIR/terva.sock — a per-user runtime path (%t) that the attach
+# service and any local proxy dial. The daemon inherits this bound socket via
+# LISTEN_FDS and re-adopts it across a self-restart (same PID), so a reload
+# never drops the endpoint.
+ListenStream=%t/terva.sock
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target

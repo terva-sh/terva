@@ -1,0 +1,42 @@
+# terva daemon — USER unit, socket-activated by terva-web.socket.
+#
+# Holds ALL the state: sessions, the live agent, credentials, tools. Clients
+# (the browser panel, `terva attach`) are thin — they render and control, and
+# resync from this daemon's snapshot on every (re)connect. So reloading or
+# restarting THIS service is what preserves your work across a new build; the
+# terminal on the other end just blinks and catches back up.
+#
+# No [Install] section on purpose: this service is not enabled directly. The
+# matching terva-web.socket activates it by name on the first connection. (If
+# you'd rather it be up at boot without waiting for a client, you can also
+# `systemctl --user enable terva-web.service`.)
+
+[Unit]
+Description=terva daemon (socket-activated)
+Requires=terva-web.socket
+After=terva-web.socket
+
+[Service]
+# Adjust the path to wherever terva is installed (`command -v terva`).
+# --allow-restart enables the Tier-1 self-restart the ExecReload below drives.
+# The daemon adopts the socket from LISTEN_FDS, so no --web-addr is needed.
+ExecStart=/usr/local/bin/terva web --allow-restart
+
+# `systemctl --user reload terva-web` re-execs the daemon into the
+# freshly-installed binary IN PLACE: same PID, and the socket is re-adopted
+# across the exec so the endpoint never drops. It is a real restart with a
+# brief outage (the new image resolves the credential and spawns MCP servers
+# before it serves again), NOT a config re-read — deploy a new build, then
+# reload, and connected clients show "reconnecting…" and resync.
+ExecReload=/bin/kill -HUP $MAINPID
+
+# The daemon's working directory is its default project/workspace.
+WorkingDirectory=%h/workspace
+
+# TERVA_HOME defaults to the user's config dir; uncomment to pin one.
+#Environment=TERVA_HOME=%h/.config/terva
+
+# Socket activation starts it; nothing stops it on idle, so it runs until you
+# do. Restart it if it ever crashes.
+Restart=on-failure
+RestartSec=5
