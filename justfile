@@ -107,6 +107,15 @@ install-dev:
     go install -tags terva_acp,terva_pprof,terva_web -ldflags "{{debug_ldflags}}" ./cmd/terva
     @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (dev, non-stripped, terva_acp,terva_pprof,terva_web) -> $dest/terva"
 
+# Run a self-contained dogfood scenario (a dir under testdata/scenarios/):
+# builds the current tree, seeds a throwaway TERVA_HOME from the scenario's
+# PRISTINE fixtures (auto-resets every run — no manual state cleanup), inherits
+# your auth, trusts the workspace, and launches the TUI with the task preloaded.
+# Interactive. `just dogfood` with no name lists the scenarios.
+# See testdata/scenarios/<name>/README.md for per-scenario prereqs.
+dogfood NAME='':
+    ./scripts/dogfood.sh {{NAME}}
+
 # Build the web control-panel client (Preact/Vite → packages/agent/web/client/dist),
 # which the terva_web build embeds via go:embed. Commit the regenerated dist so
 # a plain `go build -tags terva_web` (and CI) needs no JS toolchain. Requires

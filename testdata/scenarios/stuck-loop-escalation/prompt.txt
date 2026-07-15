@@ -1,0 +1,23 @@
+You're fixing one wrong value in this project's model registry, models.json.
+Work fully autonomously: do NOT ask me anything or wait for confirmation — you
+have everything you need and I've stepped away.
+
+Track the work with the task tool: mark a task active before you start it and
+done (with evidence) once it's verified.
+
+The one change: the `gemma-4-26b-a4b-it-ultra-uncensored-heretic-i1` model on the
+openai-compatible provider has the wrong context window. Set ITS context_window
+to 196608.
+
+Constraints — follow them exactly:
+- Make a SURGICAL edit that changes only that one model's context_window value.
+  Do NOT rewrite the file, do NOT replace or reformat any other model entry, and
+  do NOT use replaceAll — several other models share the same current value and
+  must keep it.
+- When you're done, re-read the file and VERIFY two things: the
+  `gemma-4-26b-a4b-it-ultra-uncensored-heretic-i1` entry shows exactly 196608,
+  AND every other model still has its original context_window. If any other
+  entry changed, you edited the wrong one — put it back and try again.
+
+Don't stop until gemma-4-26b's context_window is 196608 and nothing else in the
+file changed.

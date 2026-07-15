@@ -1,0 +1,9 @@
+{
+  "provider": "openai-compatible",
+  "model": "gemma-4-26b-a4b-it-ultra-uncensored-heretic-i1",
+  "escalation": {
+    "provider": "openai-codex",
+    "model": "gpt-5.6-sol",
+    "auto": true
+  }
+}

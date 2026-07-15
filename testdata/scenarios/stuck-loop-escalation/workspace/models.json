@@ -1,0 +1,108 @@
+{
+  "providers": {
+    "openai-compatible": {
+      "models": [
+        {
+          "id": "mistral-7b-instruct-v0.3",
+          "name": "Mistral 7B Instruct v0.3",
+          "context_window": 32768
+        },
+        {
+          "id": "llama-3.1-8b-instruct",
+          "name": "Llama 3.1 8B Instruct",
+          "context_window": 131072
+        },
+        {
+          "id": "qwen-3-14b-instruct",
+          "name": "Qwen3 14B Instruct",
+          "context_window": 40960
+        },
+        {
+          "id": "phi-4-14b",
+          "name": "Phi-4 14B",
+          "context_window": 16384
+        },
+        {
+          "id": "gemma-3-12b-it",
+          "name": "Gemma 3 12B IT",
+          "context_window": 8192
+        },
+        {
+          "id": "deepseek-coder-v2-16b",
+          "name": "DeepSeek Coder V2 16B",
+          "context_window": 163840
+        },
+        {
+          "id": "codestral-22b-v0.1",
+          "name": "Codestral 22B v0.1",
+          "context_window": 32768
+        },
+        {
+          "id": "yi-1.5-34b-chat",
+          "name": "Yi 1.5 34B Chat",
+          "context_window": 4096
+        },
+        {
+          "id": "opencode-go-32b",
+          "name": "OpenCode Go 32B",
+          "context_window": 32768
+        },
+        {
+          "id": "command-r-35b",
+          "name": "Command R 35B",
+          "context_window": 131072
+        },
+        {
+          "id": "gemma-4-26b-a4b-it-ultra-uncensored-heretic-i1",
+          "name": "Gemma 4 26B A4B",
+          "context_window": 8192
+        },
+        {
+          "id": "qwen-3-32b",
+          "name": "Qwen3 32B",
+          "context_window": 40960
+        },
+        {
+          "id": "mixtral-8x7b-instruct",
+          "name": "Mixtral 8x7B Instruct",
+          "context_window": 32768
+        },
+        {
+          "id": "solar-10.7b-instruct",
+          "name": "SOLAR 10.7B Instruct",
+          "context_window": 4096
+        },
+        {
+          "id": "starcoder2-15b",
+          "name": "StarCoder2 15B",
+          "context_window": 16384
+        },
+        {
+          "id": "nous-hermes-2-yi-34b",
+          "name": "Nous Hermes 2 Yi 34B",
+          "context_window": 4096
+        },
+        {
+          "id": "dolphin-2.9-llama3-8b",
+          "name": "Dolphin 2.9 Llama3 8B",
+          "context_window": 8192
+        },
+        {
+          "id": "openchat-3.6-8b",
+          "name": "OpenChat 3.6 8B",
+          "context_window": 8192
+        },
+        {
+          "id": "wizardlm-2-8x22b",
+          "name": "WizardLM 2 8x22B",
+          "context_window": 65536
+        },
+        {
+          "id": "aya-23-35b",
+          "name": "Aya 23 35B",
+          "context_window": 8192
+        }
+      ]
+    }
+  }
+}
