@@ -112,6 +112,12 @@ func (r *Renderer) ResetScrollRegion() {
 	}
 }
 
+// Size returns the terminal dimensions the renderer is currently laid out
+// for — the size the last Resize settled on. Callers use it to tell a real
+// resize (dimensions changed) from a same-size SIGWINCH (a multiplexer
+// reattach), which want different repaint handling.
+func (r *Renderer) Size() (cols, rows int) { return r.cols, r.rows }
+
 func (r *Renderer) Resize(cols, rows int) {
 	if cols != r.cols || rows != r.rows {
 		r.cols = cols

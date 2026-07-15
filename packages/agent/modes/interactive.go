@@ -1402,7 +1402,21 @@ func (i *Interactive) Run(ctx context.Context) error {
 			// redraw throttle: a window resize is a discrete user
 			// action where a stale frame reads as brokenness.
 			c, r := term.Size()
+			prevC, prevR := i.rend.Size()
 			i.rend.Resize(c, r)
+			if c == prevC && r == prevR {
+				// A same-size SIGWINCH is not a resize — it is a terminal
+				// multiplexer reattach (dtach/abduco/screen re-send WINCH
+				// on attach) or a spurious signal. Resize() no-ops on an
+				// unchanged size and the renderer still believes its cached
+				// frame is on screen, so a plain redraw would emit nothing
+				// and the reattached terminal would stay blank until the
+				// next keypress. Force the clean full repaint a reattaching
+				// user expects — the same clear+repaint Ctrl+L (keyRepaint)
+				// runs. A real resize already clears inside Resize(), so
+				// this only fires for the reattach case.
+				i.rend.Clear()
+			}
 			i.redraw()
 		case fn := <-i.actions:
 			// Work marshalled onto the main goroutine by off-main

@@ -295,6 +295,34 @@ func TestInteractiveResizeRepaints(t *testing.T) {
 	h.waitText("i'm Mieli")
 }
 
+// A terminal multiplexer (dtach/abduco/screen) re-sends SIGWINCH on reattach,
+// but at the SAME size, and it does not restore the screen it cleared — the
+// program has to repaint itself. terva's resize path no-ops on an unchanged
+// size, so without the same-size force-repaint the reattached terminal would
+// stay blank until the next keypress.
+//
+// Simulate a reattach: blank the emulated screen out-of-band (as a mux does on
+// attach), which terva's renderer knows nothing about — its frame cache still
+// believes the old frame is displayed. Then fire a same-size SIGWINCH. Only a
+// cache-resetting repaint brings the frame back: a plain redraw diffs against
+// the stale cache and emits nothing, and so does every background timer redraw,
+// which is what makes this assertion immune to spurious repaints.
+func TestInteractiveReattachRepaints(t *testing.T) {
+	h := startInteractive(t, nil)
+	h.dismissLoginDialog()
+	h.term.Type("reattach marker")
+	h.waitText("reattach marker")
+
+	// Clear the emulator directly (screen + scrollback + home), bypassing
+	// terva — exactly what a multiplexer leaves behind on reattach.
+	_, _ = h.term.Screen().Write([]byte("\x1b[3J\x1b[2J\x1b[H"))
+	h.waitGone("reattach marker")
+
+	// The reattach signal: a SIGWINCH at the unchanged size.
+	h.term.Resize(80, 24)
+	h.waitText("reattach marker")
+}
+
 // TestInteractiveResizeWhileTypingStress interleaves resize callbacks
 // (which run on the signal-handler goroutine in production) with
 // typing on the main loop. Under -race this pins the invariant that
