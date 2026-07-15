@@ -127,6 +127,7 @@ func PrintHelp(version string) {
 		row{"--greeting N", i18n.T("with --card: pick the opening line (0 = first_mes, 1..N = alternate greetings)")},
 		row{"--as NAME", i18n.T("what a card's {{user}} resolves to (defaults to the saved name, else \"User\")")},
 		row{"--context-file PATH", i18n.T("inject a file's contents into the system prompt (repeatable)")},
+		row{"--task PATH", i18n.T("preload the prompt from a file: interactive opens with it pre-filled (not sent), headless runs it")},
 		row{"-c, --continue", i18n.T("continue the most recent session for this cwd")},
 		row{"-r, --resume [ID]", i18n.T("open the session picker at startup, or resume session ID directly (also: terva attach -r)")},
 		row{"--session PATH", i18n.T("resume a specific session file")},

@@ -80,6 +80,43 @@ func TestParseArgsContextFileRequiresValue(t *testing.T) {
 	}
 }
 
+func TestParseArgsTaskReadsFileIntoPrompt(t *testing.T) {
+	f := filepath.Join(testsupport.TempDir(t), "task.txt")
+	// Trailing newline (as an editor leaves) must be trimmed; internal newlines kept.
+	if err := os.WriteFile(f, []byte("do the thing\nthen verify\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := ParseArgs([]string{"--task", f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Prompt != "do the thing\nthen verify" {
+		t.Fatalf("task prompt = %q, want the file body with the trailing newline trimmed", a.Prompt)
+	}
+	// It preloads an interactive run (not a mode change).
+	if a.Mode != ModeInteractive {
+		t.Errorf("--task must not change the mode, got %q", a.Mode)
+	}
+}
+
+func TestParseArgsTaskMissingFileErrors(t *testing.T) {
+	_, err := ParseArgs([]string{"--task", filepath.Join(testsupport.TempDir(t), "nope.txt")})
+	if err == nil {
+		t.Fatal("expected an error when --task names a missing file")
+	}
+}
+
+func TestParseArgsTaskAndPositionalAreMutuallyExclusive(t *testing.T) {
+	f := filepath.Join(testsupport.TempDir(t), "task.txt")
+	if err := os.WriteFile(f, []byte("from file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ParseArgs([]string{"--task", f, "also", "positional"})
+	if err == nil {
+		t.Fatal("expected an error when --task is combined with a positional prompt")
+	}
+}
+
 func TestParseArgsCWDRejectsFile(t *testing.T) {
 	f := filepath.Join(testsupport.TempDir(t), "afile")
 	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {

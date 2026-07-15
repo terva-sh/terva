@@ -331,6 +331,7 @@ type Args struct {
 func ParseArgs(in []string) (Args, error) {
 	a := Args{Mode: ModeInteractive, MaxSteps: 0, WithSkills: true}
 	positional := []string{}
+	taskFromFile := false
 
 	want := func(i *int, flag string) (string, error) {
 		*i++
@@ -700,6 +701,22 @@ func ParseArgs(in []string) (Args, error) {
 				return a, i18n.Errorf("--max-steps must be a positive integer")
 			}
 			a.MaxSteps = n
+		case "--task":
+			// Preload the prompt from a file — the composer opens pre-filled in
+			// interactive mode (nothing is sent until you hit enter), and headless
+			// modes run it. Reads the file relative to the process cwd, so a
+			// multi-line task travels without shell-quoting. Sets Prompt, so it is
+			// mutually exclusive with a positional prompt.
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			b, rerr := os.ReadFile(v)
+			if rerr != nil {
+				return a, fmt.Errorf("%s: %w", i18n.T("--task %q", v), rerr)
+			}
+			a.Prompt = strings.TrimRight(string(b), " \t\r\n")
+			taskFromFile = true
 		default:
 			if strings.HasPrefix(arg, "--list-models=") {
 				a.ListModels = true
@@ -745,6 +762,9 @@ func ParseArgs(in []string) (Args, error) {
 	}
 
 	if len(positional) > 0 {
+		if taskFromFile {
+			return a, i18n.Errorf("--task and a positional prompt are mutually exclusive")
+		}
 		a.Prompt = strings.Join(positional, " ")
 	}
 
