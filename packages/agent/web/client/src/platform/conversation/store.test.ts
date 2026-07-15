@@ -218,3 +218,70 @@ describe('applyEvent — error, notice, and synthetic items', () => {
     expect(fromSnapshot).toMatchObject({ kind: 'system', text: 'nudge' })
   })
 })
+
+// The stuck-loop hatch's live events (EvStall / EvEscalation) render as in-stream
+// hatch notes, toned and glyphed by kind/disposition — the web twin of the TUI
+// inline note, so an operator watching the web sees the harness act in real time.
+describe('applyEvent — stuck-loop hatch', () => {
+  const hatch = (items: Item[]) => items.filter((i): i is Extract<Item, { kind: 'hatch' }> => i.kind === 'hatch')
+
+  it('renders a stall (nudge) as an accent note naming the tool', () => {
+    const h = hatch(applyEvent([], { type: 'stall', stall: { axis: 'spin', tool: 'read' } } as WireEvent))
+    expect(h).toHaveLength(1)
+    expect(h[0]).toMatchObject({ tone: 'accent', glyph: '⟳' })
+    expect(h[0].text).toContain('read')
+    expect(h[0].text.toLowerCase()).toContain('loop detected')
+  })
+
+  it('coalesces repeated stalls into one counting item, leaving others alone', () => {
+    let items = applyEvent([], {
+      type: 'user_message',
+      message: { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+    } as WireEvent)
+    for (let n = 0; n < 5; n++) {
+      items = applyEvent(items, { type: 'stall', stall: { axis: 'spin', tool: 'read' } } as WireEvent)
+    }
+    const h = hatch(items)
+    expect(h).toHaveLength(1) // five nudges → ONE item, not five
+    expect(h[0].count).toBe(5)
+    expect(h[0].text).toContain('5')
+    expect(items).toHaveLength(2) // the user message + the single coalesced hatch
+  })
+
+  it('renders a switched escalation as an ok note with the target', () => {
+    const h = hatch(
+      applyEvent([], {
+        type: 'escalation',
+        escalation: { disposition: 'switched', to_model: 'gpt-5.6-sol', to_provider: 'openai-codex' },
+      } as WireEvent),
+    )
+    expect(h).toHaveLength(1)
+    expect(h[0]).toMatchObject({ tone: 'ok', glyph: '⇗' })
+    expect(h[0].text).toContain('gpt-5.6-sol')
+    expect(h[0].text).toContain('openai-codex')
+  })
+
+  it('renders a failed escalation as an err note carrying the cause', () => {
+    const h = hatch(
+      applyEvent([], {
+        type: 'escalation',
+        escalation: { disposition: 'failed', to_model: 'gpt-5.6-sol', detail: 'no credential' },
+      } as WireEvent),
+    )
+    expect(h[0]).toMatchObject({ tone: 'err' })
+    expect(h[0].text).toContain('no credential')
+  })
+
+  it('renders a declined escalation as a muted note keeping the current model', () => {
+    const h = hatch(
+      applyEvent([], { type: 'escalation', escalation: { disposition: 'declined', from_model: 'gemma-4-26b' } } as WireEvent),
+    )
+    expect(h[0]).toMatchObject({ tone: 'muted' })
+    expect(h[0].text).toContain('gemma-4-26b')
+  })
+
+  it('ignores a hatch event with no payload', () => {
+    expect(applyEvent([], { type: 'stall' } as WireEvent)).toHaveLength(0)
+    expect(applyEvent([], { type: 'escalation' } as WireEvent)).toHaveLength(0)
+  })
+})

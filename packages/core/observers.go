@@ -98,6 +98,40 @@ func (a *Agent) AddImageExcludedObserver(fn func(sha256Hex string)) {
 	a.obsMu.Unlock()
 }
 
+// AddEscalationObserver registers fn to fire when rung 3 of the stuck-loop hatch
+// resolves an escalation decision — a swap to a stronger model, or a decline, a
+// stop, or a failed swap (see EscalationRecord.Disposition). Hosts persist an
+// "escalation" session row here: the swap itself writes only a "meta" row (via
+// UpdateModel), byte-identical to a user /model switch, so this is the provenance
+// that tells a harness escalation apart from a human one in the log. Fires only
+// once a target is configured (unconfigured users get no rows) and for every
+// disposition, not just successful swaps. nil is a no-op.
+func (a *Agent) AddEscalationObserver(fn func(EscalationRecord)) {
+	if fn == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.escalationObs = append(a.escalationObs, fn)
+	a.obsMu.Unlock()
+}
+
+// AddStallObserver registers fn to fire when the stuck-loop detector nudges —
+// rung 1 of the hatch: a model repeated the same call, or hit the same failure,
+// past the threshold (see StallRecord). Fires once per distinct loop per turn.
+// Hosts persist a "stall" session row here so the detector's action is visible
+// after the fact — the thing that otherwise happens only on the ephemeral tail,
+// leaving no trace of whether it fired. Unlike escalation this needs no
+// configured target: any session with the (default-on) detector records nudges.
+// nil is a no-op.
+func (a *Agent) AddStallObserver(fn func(StallRecord)) {
+	if fn == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.stallObs = append(a.stallObs, fn)
+	a.obsMu.Unlock()
+}
+
 // AddQueueDrainedObserver registers fn to fire when the agent loop consumes
 // queued user messages at a mid-turn safe boundary, carrying what it took.
 //
@@ -221,6 +255,26 @@ func (a *Agent) fireImageExcluded(sha256Hex string) {
 	a.obsMu.RUnlock()
 	for _, fn := range obs {
 		fn(sha256Hex)
+	}
+}
+
+func (a *Agent) fireEscalation(rec EscalationRecord) {
+	a.obsMu.RLock()
+	obs := make([]func(EscalationRecord), len(a.escalationObs))
+	copy(obs, a.escalationObs)
+	a.obsMu.RUnlock()
+	for _, fn := range obs {
+		fn(rec)
+	}
+}
+
+func (a *Agent) fireStall(rec StallRecord) {
+	a.obsMu.RLock()
+	obs := make([]func(StallRecord), len(a.stallObs))
+	copy(obs, a.stallObs)
+	a.obsMu.RUnlock()
+	for _, fn := range obs {
+		fn(rec)
 	}
 }
 

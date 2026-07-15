@@ -1,6 +1,7 @@
 // The transcript model: a flat, ordered list of render items derived from the
 // ctrlproto event stream (and the initial snapshot). Kept separate from the
 // wire types so rendering has one stable shape to switch on.
+import { t } from '../../i18n'
 import type { WireEvent, WireMessage, WireBlock } from '../ctrlproto/types'
 import { isSafeImageMime, type ImageAttachment } from './images'
 
@@ -45,6 +46,13 @@ export type Item = Placed &
   // discriminator): typed notices like prompt_rebuilt can be filtered/styled;
   // unknown kinds fall back to the plain text.
     | { kind: 'notice'; id: string; level: string; ext?: string; text: string; noticeKind?: string }
+  // a stuck-loop-hatch heads-up (a detector nudge or a model escalation, Go
+  // EvStall / EvEscalation) — shown in-stream like a notice, ephemeral and
+  // dropped on the next snapshot. tone picks the accent colour; glyph + text are
+  // the rendered line, formatted once here so rendering stays a plain switch.
+  // count is the coalesced nudge tally: repeated stalls update ONE item rather
+  // than stacking, so a wedged run doesn't pile up notes.
+    | { kind: 'hatch'; id: string; tone: 'accent' | 'ok' | 'err' | 'muted'; glyph: string; text: string; count?: number }
     // a compaction checkpoint: the turns above it are no longer in the model's
     // context, and `summary` is what stands in for them. Rendered as a divider with
     // the summary collapsed behind it — never as the user bubble its wire role
@@ -340,6 +348,45 @@ export function applyEvent(items: Item[], ev: WireEvent): Item[] {
       const n = ev.notice
       if (!n?.text) return items
       return [...items, { kind: 'notice', id: nextID(), level: n.level, ext: n.ext, text: n.text, noticeKind: n.kind }]
+    }
+    case 'stall': {
+      // Rung 1 of the stuck-loop hatch: the detector nudged a repeating model.
+      // Coalesce into ONE counting item — a wedged run fires many nudges, and a
+      // growing stack of identical notes is noise.
+      const s = ev.stall
+      if (!s) return items
+      const prev = items.findIndex((it) => it.kind === 'hatch' && it.glyph === '⟳')
+      const count = prev >= 0 ? ((items[prev] as Extract<Item, { kind: 'hatch' }>).count ?? 1) + 1 : 1
+      const id = prev >= 0 ? items[prev].id : nextID()
+      const line: Item = {
+        kind: 'hatch',
+        id,
+        tone: 'accent',
+        glyph: '⟳',
+        count,
+        text: t('loop detected — nudged the model %d× this turn to break out (latest tool: %s)', count, s.tool || '—'),
+      }
+      return prev >= 0 ? [...items.slice(0, prev), line, ...items.slice(prev + 1)] : [...items, line]
+    }
+    case 'escalation': {
+      // Rung 3: a model swap resolved. Word and colour it by disposition. Rare
+      // (once per turn), so dedup identical rather than coalesce.
+      const e = ev.escalation
+      if (!e) return items
+      let tone: 'accent' | 'ok' | 'err' | 'muted' = 'muted'
+      let glyph = '•'
+      let text = t('escalation declined — staying on %s', e.from_model || '—')
+      if (e.disposition === 'switched') {
+        tone = 'ok'
+        glyph = '⇗'
+        text = t('escalated to %s (%s) to break the loop', e.to_model || '—', e.to_provider || '')
+      } else if (e.disposition === 'failed') {
+        tone = 'err'
+        glyph = '⚠'
+        text = t('escalation to %s failed: %s', e.to_model || '—', e.detail || '')
+      }
+      if (items.some((it) => it.kind === 'hatch' && it.text === text)) return items
+      return [...items, { kind: 'hatch', id: nextID(), tone, glyph, text }]
     }
     default:
       return items

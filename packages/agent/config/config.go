@@ -119,6 +119,13 @@ type Config struct {
 	// and validate with `terva models tiers`.
 	SwarmTiers map[string]TierConfig `json:"swarm_tiers,omitempty"`
 
+	// Escalation configures rung 3 of the stuck-loop hatch (docs/plans/
+	// stuck-loop-escalation-rung3.md): the stronger model the harness offers to
+	// switch to when a tool loop persists past the detector's nudge. With no
+	// Target the feature is inert — the detector still nudges, nothing escalates.
+	// User layer only, like SwarmTiers.
+	Escalation *EscalationConfig `json:"escalation,omitempty"`
+
 	// Raati configures the deliberation primitive: the opt-in
 	// raati_convene agent tool and the level-2 seat bindings. User
 	// layer only, for the same reason as SwarmTiers.
@@ -306,6 +313,23 @@ type TierConfig struct {
 	Weak   string `json:"weak,omitempty"`
 	Medium string `json:"medium,omitempty"`
 	Strong string `json:"strong,omitempty"`
+}
+
+// EscalationConfig names the stronger model rung 3 switches to. Provider and
+// Model are both required for escalation to do anything — a partial target is
+// treated as no target (inert). The provider must be one the user holds a
+// credential for; that is checked at switch time, and a missing credential
+// surfaces as a non-fatal escalation failure, not a broken turn.
+//
+// Auto escalates WITHOUT asking. Off by default because escalating a local model
+// to a remote one egresses the transcript, and that should be a decision, not a
+// surprise; with it off, a persistent loop prompts first. Like the target, it is
+// honored from the USER layer only (a project config can never force silent
+// egress) — see sessionEscalator.Target and ResolveConfig's overlay allowlist.
+type EscalationConfig struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Auto     bool   `json:"auto,omitempty"`
 }
 
 // RaatiConfig is the user-layer raati block (docs/proposals/

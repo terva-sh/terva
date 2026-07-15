@@ -175,3 +175,28 @@ type EvCompactEnd struct {
 }
 
 func (EvCompactEnd) Type() string { return "compact_end" }
+
+// EvStall is the live twin of the stall session row (StallRecord): the
+// stuck-loop detector nudged a repeating model — rung 1 of the hatch. Hosts
+// surface it so the operator sees the detector act in real time ("loop detected
+// on <tool>") instead of only finding it in the log afterwards, which is the
+// difference between knowing to keep pushing and waiting on a stall the harness
+// already caught. It carries the same payload the observer persists; fires once
+// per distinct loop per turn.
+type EvStall struct {
+	StallRecord
+}
+
+func (EvStall) Type() string { return "stall" }
+
+// EvEscalation is the live twin of the escalation session row (EscalationRecord):
+// rung 3 resolved — a swap to a stronger model, or a decline / stop / failure.
+// Hosts surface it so a model change the harness made is visibly attributed as
+// such in the moment, not mistaken for the user's own /model switch. It fires
+// for every disposition (Disposition says which), carrying what the observer
+// persists.
+type EvEscalation struct {
+	EscalationRecord
+}
+
+func (EvEscalation) Type() string { return "escalation" }

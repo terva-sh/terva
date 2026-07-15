@@ -94,6 +94,17 @@ export const MessageContent = memo(function MessageContent({
           {item.text}
         </div>
       )
+    case 'hatch':
+      // The stuck-loop hatch acting in real time: a detector nudge or a model
+      // escalation. Glyph + tone colour distinguish nudge / swap / fail / skip.
+      return (
+        <div class={`sys-note hatch ${item.tone}`}>
+          <span class="hatch-glyph" aria-hidden="true">
+            {item.glyph}
+          </span>
+          {item.text}
+        </div>
+      )
     case 'tool':
       if (toolView === 'hidden') return null
       if (toolView === 'minimal') {

@@ -81,6 +81,32 @@ var EngineFeatures = []EngineFeature{
 		Default: true,
 		Apply:   func(a *core.Agent, on bool) { a.SetPrefixChangeGuard(on) },
 	},
+	{
+		ID:    "stuck_loop_detection",
+		Title: i18n.M("Detect stuck tool loops"),
+		Desc:  i18n.M("Notice when the model repeats the same tool call, or hits the same error, over and over without progress — and nudge it once to read state or change tack instead of spinning. In-band and local only: it never switches models or sends anything anywhere. The escalation half (offer to hand a stuck step to a stronger model) builds on this and ships separately."),
+		// ON. Detection + a one-turn nudge is safe — no model swap, no egress, just
+		// an ephemeral note when the model provably spins (same call, or same
+		// error, three times in a short window). Grounded in a real session where a
+		// small local model repeated one failing task_update 18 times; the escape
+		// hatches that act on the signal (ask, escalate) are opt-in and land later.
+		// See docs/proposals/stuck-loop-escalation.md.
+		Default: true,
+		Apply:   func(a *core.Agent, on bool) { a.SetStallDetection(on) },
+	},
+	{
+		ID:    "stuck_loop_escalation",
+		Title: i18n.M("Escalate stuck loops to a stronger model"),
+		Desc:  i18n.M("When a tool loop keeps going after the nudge, offer to hand the stuck step to a stronger model and continue on it — the swap you'd otherwise make by hand. Requires the detector above (it's the trigger) and an escalation target in config (escalation.provider + escalation.model); with no target it does nothing. You're asked before the swap, which sends the conversation to that provider."),
+		// ON, but INERT without a configured target and a host that binds an
+		// Escalator (a nil Escalator makes the runLoop driver a no-op). So "on"
+		// surprises no one: a user with no escalation.target set never sees it, and
+		// one who sets a target is asked before any swap (ask-first; auto is 3c).
+		// This mirrors prefix_change_guard, which is declared-on but inert without
+		// cache-aware compaction. See docs/plans/stuck-loop-escalation-rung3.md.
+		Default: true,
+		Apply:   func(a *core.Agent, on bool) { a.SetStuckLoopEscalation(on) },
+	},
 }
 
 // EngineFeatureByID resolves a feature by its id (the settings-action lookup).

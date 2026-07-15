@@ -347,6 +347,66 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		i.pendingPostCompactNote = ""
 		i.spin.Start() // back to the normal spinner for the turn that follows
 		i.mu.Unlock()
+	case "stall":
+		// Rung 1 of the stuck-loop hatch: the detector caught a repeating model
+		// and nudged it. Coalesce into ONE line that counts up rather than
+		// appending a note per nudge — a wedged run fires many, and a growing
+		// stack of identical notes is noise. The turn continues on the same model,
+		// so no spinner/status change.
+		if ev.Stall == nil {
+			break
+		}
+		th := i.cfg.Theme
+		i.mu.Lock()
+		hadOld := false
+		kept := i.extNotes[:0:0]
+		for _, note := range i.extNotes {
+			if strings.Contains(note, stallNudgeGlyph) {
+				hadOld = true // drop the previous coalesced line; a fresh one replaces it
+				continue
+			}
+			kept = append(kept, note)
+		}
+		if hadOld {
+			i.stallNudges++
+		} else {
+			i.stallNudges = 1 // self-resets when the line is gone (notes clear on the next prompt)
+		}
+		msg := i18n.T("loop detected — nudged the model %d× this turn to break out (latest tool: %s)", i.stallNudges, orDash(ev.Stall.Tool))
+		i.extNotes = append(kept, hatchNoteLine(th, th.Warning, stallNudgeGlyph, msg))
+		i.mu.Unlock()
+	case "escalation":
+		// Rung 3: the harness swapped (or tried to) to a stronger model. Word the
+		// note by disposition so a switch, a decline, and a failed swap read
+		// distinctly; a switch also changes the model shown in the header, and
+		// this says why. Rare (once per turn), so dedup identical rather than
+		// coalesce — distinct dispositions stay as their own lines.
+		if ev.Escalation == nil {
+			break
+		}
+		th := i.cfg.Theme
+		e := ev.Escalation
+		var line string
+		switch e.Disposition {
+		case "switched":
+			line = hatchNoteLine(th, th.Accent, "⇗", i18n.T("escalated to %s (%s) to break the loop", orDash(e.ToModel), e.ToProvider))
+		case "failed":
+			line = hatchNoteLine(th, th.Error, "⚠", i18n.T("escalation to %s failed: %s", orDash(e.ToModel), e.Detail))
+		default: // declined | stopped: the user chose not to swap (they saw the ask)
+			line = hatchNoteLine(th, th.Muted, "•", i18n.T("escalation declined — staying on %s", orDash(e.FromModel)))
+		}
+		i.mu.Lock()
+		dup := false
+		for _, note := range i.extNotes {
+			if note == line {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			i.extNotes = append(i.extNotes, line)
+		}
+		i.mu.Unlock()
 	case ctrlproto.EventPermissionRequest:
 		if ev.Permission != nil {
 			i.enqueueCarrierPermission(*ev.Permission)

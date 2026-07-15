@@ -110,8 +110,9 @@ type Agent struct {
 
 	// Hook observers. Registered through AddEventObserver / AddMessageObserver /
 	// AddUsageObserver / AddTranscriptCompactedObserver /
-	// AddImageExcludedObserver / AddContinuationGate, never assigned — see
-	// observers.go for why the assignable fields these replaced were a hazard.
+	// AddImageExcludedObserver / AddEscalationObserver / AddStallObserver /
+	// AddContinuationGate, never assigned — see observers.go for why the
+	// assignable fields these replaced were a hazard.
 	obsMu                  sync.RWMutex
 	eventObs               []func(AgentEvent)
 	messageObs             []func(provider.Message)
@@ -119,6 +120,8 @@ type Agent struct {
 	transcriptCompactedObs []func(messages []provider.Message, res CompactResult)
 	imageExcludedObs       []func(sha256Hex string)
 	queueDrainedObs        []func(drained []string)
+	escalationObs          []func(EscalationRecord)
+	stallObs               []func(StallRecord)
 	continuationGates      []ContinuationGate
 
 	// ContextProvider, if set, is called once per turn to obtain
@@ -160,6 +163,13 @@ type Agent struct {
 	// behalf, which is not what a guard is for. Assigned at build, before the
 	// agent runs a turn.
 	Asker Asker
+
+	// Escalator, if set, hands the live session to a stronger model when a tool
+	// loop persists past the detector's nudge (rung 3 of the stuck-loop hatch —
+	// stall.go, escalate.go). The seam mirrors Asker: an interface here, a
+	// per-session implementation in the host, nil in modes with no swap target.
+	// Nil, or a host with no configured target, makes escalation inert.
+	Escalator Escalator
 
 	// AutoCompactPolicy, if set, supplies the live auto-compaction mode
 	// (the config `auto_compact` knob, read per check so a settings edit
@@ -248,6 +258,22 @@ type Agent struct {
 	// (engine feature prefix_change_guard). Guarded by mu; see
 	// SetPrefixChangeGuard and offerCompactOnPrefixChange.
 	prefixGuard bool
+
+	// stallDetect arms the stuck-loop detector (engine feature
+	// stuck_loop_detection). Guarded by mu; see SetStallDetection.
+	stallDetect bool
+
+	// stuckLoopEscalate arms rung 3 (engine feature stuck_loop_escalation); it
+	// depends on stallDetect (the detector is the trigger) and is inert without a
+	// bound Escalator + a configured target. escalateAuto swaps without asking
+	// (config escalation.auto). Both guarded by mu; see escalate.go.
+	stuckLoopEscalate bool
+	escalateAuto      bool
+
+	// stall is the detector's per-turn state. Touched only on the turn goroutine
+	// (runLoop resets and observes; oneTurn reads the nudge), so it carries no
+	// lock — unlike stallDetect, which a host may toggle from another goroutine.
+	stall stallTracker
 
 	// queued holds user messages submitted while the agent is busy.
 	// The loop appends them as normal user messages at safe
@@ -1213,6 +1239,10 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 	// boundary refreshes it (repinForContinuation) — see pinTurn.
 	pin := a.pinTurn()
 
+	// Stuck-loop detection spans this turn's tool-use steps and no further: a
+	// repeat across turns is usually the user asking again, not the model stuck.
+	a.stall.reset()
+
 	// The at-close continuation gates, snapshotted per Prompt like the
 	// observers, with per-gate fire counts enforcing each gate's Cap
 	// (default 1) — so a gate that always says "continue" can't loop the
@@ -1398,6 +1428,24 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			if err := ctx.Err(); err != nil {
 				sink(EvDone{})
 				return err
+			}
+			// Feed the just-completed step to the stuck-loop detector; a trip
+			// stages a one-turn nudge that the next oneTurn rides on the
+			// ephemeral tail (never the transcript). If the loop has persisted
+			// past the nudge, rung 3 may offer to escalate to a stronger model
+			// (inert unless a host bound an Escalator). A user-chosen "stop"
+			// ends the turn cleanly; an escalation continues the loop on the new
+			// model with a handoff marker staged.
+			if a.stallDetectionOn() {
+				for _, ev := range a.stall.observe(assistantMsg, toolMsg) {
+					rec := StallRecord{Axis: ev.axis, Tool: ev.tool, Detail: ev.detail}
+					a.fireStall(rec)                // durable: the session row
+					sink(EvStall{StallRecord: rec}) // live: UI + extension observers
+				}
+				if a.maybeEscalate(ctx, sink) {
+					sink(EvDone{})
+					return nil
+				}
 			}
 			_ = hadError
 			continue
@@ -1703,6 +1751,20 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		}
 	}
 
+	// Stuck-loop nudge: when the detector tripped on the previous step, ride its
+	// one-turn note on the ephemeral tail. Peeked (not consumed) here because
+	// oneTurn is re-entered per retry attempt — the note must survive a failed
+	// attempt and clear only once a request actually reaches the provider
+	// (clearNudge, after recordDispatch below).
+	if a.stallDetectionOn() {
+		if note := a.stall.nudge(); note != "" {
+			if ephemeral != "" {
+				ephemeral += "\n\n"
+			}
+			ephemeral += note
+		}
+	}
+
 	req := provider.Request{
 		Model:  model,
 		System: system,
@@ -1740,6 +1802,10 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	// extension reload, a /model switch) can overwrite the agent's copy at any
 	// moment, and this then becomes the only record of what is actually cached.
 	a.recordDispatch(client, req)
+
+	// The request landed, so any stuck-loop nudge it carried has been delivered:
+	// drop it so it rides exactly one dispatch, not every subsequent step.
+	a.stall.clearNudge()
 
 	sink(EvAssistantStart{})
 

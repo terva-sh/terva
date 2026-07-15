@@ -58,6 +58,35 @@ type WireEvent struct {
 
 	// turn_end (failed) and error
 	Error string `json:"error,omitempty"`
+
+	// stall / escalation (the stuck-loop hatch's live events). Nested rather
+	// than flattened: each carries several fields, and keeping them self-contained
+	// leaves the flat bag above readable — the same reason Message and Usage nest.
+	Stall      *WireStall      `json:"stall,omitempty"`
+	Escalation *WireEscalation `json:"escalation,omitempty"`
+}
+
+// WireStall is the payload of a "stall" event: the stuck-loop detector nudged
+// (rung 1). axis is which axis caught the loop, tool the tool it looped on,
+// detail the repeated error slice (churn only).
+type WireStall struct {
+	Axis   string `json:"axis,omitempty"`
+	Tool   string `json:"tool,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// WireEscalation is the payload of an "escalation" event: rung 3 resolved.
+// disposition ∈ switched|declined|stopped|failed; on a switch, to_provider/
+// to_model name where the session went (egress the operator should see).
+type WireEscalation struct {
+	Reason      string `json:"reason,omitempty"`
+	Tool        string `json:"tool,omitempty"`
+	FromModel   string `json:"from_model,omitempty"`
+	ToProvider  string `json:"to_provider,omitempty"`
+	ToModel     string `json:"to_model,omitempty"`
+	Auto        bool   `json:"auto,omitempty"`
+	Disposition string `json:"disposition,omitempty"`
+	Detail      string `json:"detail,omitempty"` // failure error or host note (e.g. why a swap failed)
 }
 
 // MetaSynthetic marks a user-role message the host injected (the at-close
@@ -231,6 +260,19 @@ func eventToWire(ev AgentEvent, imageData bool) WireEvent {
 		// gauge from usage (they key off EvUsage) can't mistake it for one.
 		u := usageToWire(e.Usage)
 		out.Usage = &u
+	case EvStall:
+		out.Stall = &WireStall{Axis: e.Axis, Tool: e.Tool, Detail: e.Detail}
+	case EvEscalation:
+		out.Escalation = &WireEscalation{
+			Reason:      e.Reason,
+			Tool:        e.Tool,
+			FromModel:   e.FromModel,
+			ToProvider:  e.ToProvider,
+			ToModel:     e.ToModel,
+			Auto:        e.Auto,
+			Disposition: string(e.Disposition),
+			Detail:      e.Detail,
+		}
 	case EvError:
 		if e.Err != nil {
 			out.Error = e.Err.Error()

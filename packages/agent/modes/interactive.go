@@ -695,6 +695,12 @@ type Interactive struct {
 	// transcript) until cleared by /clear or another reset.
 	extNotes []string
 
+	// stallNudges counts stuck-loop nudges in the current run so the "loop
+	// detected" note coalesces into ONE line that counts up, instead of stacking
+	// a note per nudge (a wedged run fires many). Tied to the note's presence in
+	// extNotes: it resets implicitly when those clear on the next prompt.
+	stallNudges int
+
 	// shellBlock holds the rendered terminal-log lines of the most
 	// recent !command shell escape. It lives below the transcript
 	// (under extNotes) until the user sends their next prompt or runs

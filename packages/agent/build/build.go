@@ -100,6 +100,11 @@ type Resolved struct {
 	// default unless overridden here). From config.EngineFeatures.
 	EngineFeatures map[string]bool
 
+	// EscalateAuto is config escalation.auto: escalate a stuck loop to the
+	// stronger model WITHOUT asking first. From the user layer only (a project
+	// config can never force silent transcript egress). Applied at NewAgent.
+	EscalateAuto bool
+
 	// Trusted is the resolved Workspace Trust verdict for this launch's
 	// cwd (resolveTrust: --trust flag, then the store, else untrusted).
 	// When false the project is RESTRICTED: its project-local
@@ -191,6 +196,12 @@ type Resolved struct {
 	// guard asks from the turn policy, not from a tool). Nil for hosts that never
 	// call SetAsker — every headless mode.
 	asker core.Asker
+
+	// escalator hands the live session to a stronger model when a tool loop
+	// persists past the detector's nudge (rung 3). Retained by SetEscalator and
+	// bound at NewAgent, mirroring asker. Nil for hosts with no swap target — the
+	// detector still nudges, nothing escalates.
+	escalator core.Escalator
 }
 
 // AdoptReadOnlySet hands the permission policy's read-only registry
@@ -1022,6 +1033,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		LazyTools:                eff.Config.LazyTools,
 		LazyToolActive:           eff.Config.LazyToolActive,
 		EngineFeatures:           eff.Config.EngineFeatures,
+		EscalateAuto:             eff.Config.Escalation != nil && eff.Config.Escalation.Auto,
 		Trusted:                  trusted,
 		systemAppend:             append_,
 		SystemSegments:           sysSegs,
@@ -1251,6 +1263,17 @@ func (r *Resolved) SetAsker(a core.Asker) {
 	bindAsker(r.ToolRegistry, a)
 }
 
+// SetEscalator retains the host's model-escalation channel so NewAgent can bind
+// it onto the agent loop (rung 3 of the stuck-loop hatch). Mirrors SetAsker;
+// unlike the asker it drives no tool, so there is nothing to bind into the
+// registry. Nil-safe; hosts with no swap target never call it.
+func (r *Resolved) SetEscalator(e core.Escalator) {
+	if r == nil {
+		return
+	}
+	r.escalator = e
+}
+
 // bindAsker wires the front-end question channel into the
 // ask_user_question tool of an arbitrary registry.
 //
@@ -1280,6 +1303,13 @@ func (r Resolved) NewAgent() *core.Agent {
 	// guard asks from inside the turn policy; hosts with nobody to ask (one-shot
 	// runs, swarm children) leave this nil and the guard stays quiet.
 	a.Asker = r.asker
+	// The model-escalation channel, when the host wired one. Nil (headless, swarm
+	// children, or a host with no configured target) leaves rung 3 inert — the
+	// stuck-loop detector still nudges.
+	a.Escalator = r.escalator
+	// Auto-escalate policy (config escalation.auto): swap without asking. Off by
+	// default, so a persistent loop prompts first before egressing the transcript.
+	a.SetEscalateAuto(r.EscalateAuto)
 	// The same read-only registry the permission policy uses, so compaction's
 	// executed-actions ledger and `plan` mode agree on what "side-effect-free"
 	// means rather than each keeping its own list. Nil here (a host that never

@@ -195,6 +195,28 @@ func autoCompactNoteLine(th tui.Theme, msg string) string {
 	return "  " + th.FG256(th.Warning, "⚠ "+msg)
 }
 
+// stallNudgeGlyph leads the coalesced "loop detected" nudge note. It doubles as
+// the marker the carrier handler matches to find and replace that one line, so
+// repeated nudges update a single counted note instead of stacking.
+const stallNudgeGlyph = "⟳"
+
+// hatchNoteLine styles a stuck-loop-hatch heads-up (a detector nudge or a model
+// escalation) as an inline chat-area note, the same shape as autoCompactNoteLine
+// but with a caller-chosen glyph and colour so a nudge, a swap, and a failed swap
+// read distinctly. Lives in extNotes so it survives the busy-spinner overwrite.
+func hatchNoteLine(th tui.Theme, color int, glyph, msg string) string {
+	return "  " + th.FG256(color, glyph+" "+msg)
+}
+
+// orDash renders a possibly-empty label as an em dash, so a hatch note never
+// reads "escalated to  ()" if a field somehow arrives blank.
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
 // assistantText returns the concatenated text of every TextBlock in
 // m. Used by the streaming-view dedupe guard to tell when a live
 // streamed reply has already been promoted into the transcript.

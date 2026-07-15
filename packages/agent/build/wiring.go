@@ -675,6 +675,25 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 		defer mu.Unlock()
 		_ = sess.AppendImageExclusion(sha256Hex, "provider rejected the image")
 	})
+	// Rung 3 of the stuck-loop hatch swapped (or tried to swap) the model. The
+	// swap already wrote a "meta" row via UpdateModel, indistinguishable from a
+	// user /model switch; this records the escalation that caused it so the log
+	// can tell the two apart. The observer fires only when a target is configured,
+	// so unconfigured sessions grow no escalation rows.
+	ag.AddEscalationObserver(func(rec core.EscalationRecord) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = sess.AppendEscalation(rec)
+	})
+	// Rung 1 of the stuck-loop hatch: the detector nudged a repeating model. The
+	// nudge only rides the ephemeral tail, so without this row nothing in the log
+	// says it fired. Recorded for every session that runs the (default-on)
+	// detector, not just ones with an escalation target.
+	ag.AddStallObserver(func(rec core.StallRecord) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = sess.AppendStall(rec)
+	})
 }
 
 // mcpAllowSet folds the --mcp names into a set; nil when no allowlist.

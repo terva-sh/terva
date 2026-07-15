@@ -104,3 +104,95 @@ func TestCacheAwareCompactionShipsOnAndCanBeSwitchedOff(t *testing.T) {
 		t.Error("the guard's own toggle should be untouched by the other feature's override")
 	}
 }
+
+// Stuck-loop detection ships ON and must be switchable OFF. Like cache-aware
+// compaction, the shipped default lives ONLY here — core.NewAgent's zero value is
+// off — so without this a flip back to default-off would pass every core test.
+// The off switch matters because the nudge is a model-facing intervention: a
+// deployment that finds it noisy needs a way to silence it without a rebuild.
+func TestStuckLoopDetectionShipsOnAndCanBeSwitchedOff(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !r.NewAgent().StallDetectionEnabled() {
+		t.Error("stuck_loop_detection must default ON — detection + a one-turn nudge is safe (in-band, no model swap, no egress)")
+	}
+
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.EngineFeatures = map[string]bool{"stuck_loop_detection": false}
+	}); err != nil {
+		t.Fatalf("override config: %v", err)
+	}
+	r, err = Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve with override: %v", err)
+	}
+	if r.NewAgent().StallDetectionEnabled() {
+		t.Error("engine_features.stuck_loop_detection=false must switch it off at build")
+	}
+}
+
+// Stuck-loop escalation ships ON but inert: the flag defaults on (so a user who
+// configures a target is asked without hunting for a toggle), yet nothing
+// escalates until a host binds an Escalator and a target is set. Like the others,
+// the shipped default lives only here.
+func TestStuckLoopEscalationShipsOnAndCanBeSwitchedOff(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	// On by default, but inert here: a plain Resolve binds no Escalator, so the
+	// flag is armed and the runLoop driver is still a no-op.
+	if !r.NewAgent().StuckLoopEscalationEnabled() {
+		t.Error("stuck_loop_escalation must default ON (inert without a bound Escalator + a configured target)")
+	}
+
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.EngineFeatures = map[string]bool{"stuck_loop_escalation": false}
+	}); err != nil {
+		t.Fatalf("override config: %v", err)
+	}
+	r, err = Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve with override: %v", err)
+	}
+	if r.NewAgent().StuckLoopEscalationEnabled() {
+		t.Error("engine_features.stuck_loop_escalation=false must switch it off at build")
+	}
+}
+
+// Auto-escalate defaults OFF (a persistent loop asks first, because escalating a
+// local model to a remote one egresses the transcript), and config escalation.auto
+// arms it at the build funnel.
+func TestEscalationAutoFromConfig(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.NewAgent().EscalateAutoEnabled() {
+		t.Error("auto-escalate must default OFF (ask-first) with no escalation config")
+	}
+
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.Escalation = &config.EscalationConfig{Provider: "anthropic", Model: "claude-sonnet-5", Auto: true}
+	}); err != nil {
+		t.Fatalf("override config: %v", err)
+	}
+	r, err = Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve with override: %v", err)
+	}
+	if !r.NewAgent().EscalateAutoEnabled() {
+		t.Error("escalation.auto=true must arm auto-escalate at the build funnel")
+	}
+}

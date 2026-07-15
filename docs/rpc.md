@@ -246,6 +246,8 @@ Stream notifications during a `prompt` or `compact`. None carry an `id`.
 | `compact_done` | `summary` | Result of an explicit `compact` (summary text; empty on a no-op). Not terminal — a `done` follows |
 | `compact_start` | `text` | An automatic, policy-driven compaction began inside a `prompt` (`text` carries the reason) |
 | `compact_end` | optional `error` | The automatic compaction finished (before the prompt's `done`); empty `error` means success. Not terminal |
+| `stall` | `stall` (`axis`, `tool`, optional `detail`) | The stuck-loop detector nudged a repeating model (rung 1 of the escalation hatch). `axis` is `spin` (same call) or `churn` (same failure). Informational; the turn continues |
+| `escalation` | `escalation` (`reason`, `tool`, `from_model`, `to_provider`, `to_model`, `auto`, `disposition`, optional `detail`) | The hatch resolved a model escalation (rung 3). `disposition` is `switched`, `declined`, `stopped`, or `failed`; `detail` carries a failure's cause. Informational |
 | `ext_notify` | `extension`, `level`, `message` | An extension raised a note (its `notify` frame). RPC-specific, not a `core.WireEvent` |
 | `ext_display` | `extension`, `text` | An extension asked to show text (its `display` frame) |
 | `ext_clear_notes` | `extension` | An extension cleared the notes it had raised |

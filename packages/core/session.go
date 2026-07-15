@@ -125,6 +125,8 @@ type sessionLine struct {
 	Usage      *provider.Usage   `json:"usage,omitempty"`
 	Cumulative *provider.Usage   `json:"cumulative,omitempty"`
 	Directive  *sessionDirective `json:"directive,omitempty"`
+	Escalation *escalationRecord `json:"escalation,omitempty"`
+	Stall      *stallRecord      `json:"stall,omitempty"`
 
 	// Strategy and FallbackReason ride "compaction" rows only, and only when the
 	// cache-aware summarizer is in play ("cold" is the default and stays
@@ -149,9 +151,45 @@ type sessionDirective struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// escalationRecord rides an "escalation" row: rung 3 of the stuck-loop hatch
+// (docs/proposals/stuck-loop-escalation.md) swapped, or tried to swap, the live
+// model to a stronger one because the detector's nudge failed to break a loop.
+// The swap itself already writes a "meta" row (via UpdateModel) that is
+// byte-identical to a user /model switch, so without this row the log cannot say
+// a model change was the harness escalating rather than the user choosing. It is
+// purely informational — it never rewrites the transcript, and a loader that
+// predates it skips it (the row-type switch has no default), so resume is
+// unaffected. The core payload is EscalationRecord (escalate.go).
+type escalationRecord struct {
+	Reason      string `json:"reason,omitempty"`
+	Tool        string `json:"tool,omitempty"`
+	FromModel   string `json:"from_model,omitempty"`
+	ToProvider  string `json:"to_provider,omitempty"`
+	ToModel     string `json:"to_model,omitempty"`
+	Auto        bool   `json:"auto,omitempty"`
+	Disposition string `json:"disposition,omitempty"` // switched | declined | stopped | failed
+	Detail      string `json:"detail,omitempty"`
+}
+
+// stallRecord rides a "stall" row: the stuck-loop detector nudged (rung 1 of the
+// hatch) because a model repeated the same call or the same failure past the
+// threshold. The nudge itself rides the ephemeral tail and leaves no other
+// trace, so this row is the only durable evidence the detector fired at all —
+// the sibling of escalationRecord one rung up. Informational: it never enters
+// the transcript, and a loader that predates it skips it (the row-type switch
+// has no default), so resume is unaffected. The core payload is StallRecord
+// (stall.go).
+type stallRecord struct {
+	Axis   string `json:"axis,omitempty"`   // spin (same call) | churn (same failure)
+	Tool   string `json:"tool,omitempty"`   // the tool the model looped on
+	Detail string `json:"detail,omitempty"` // the repeated error/guard slice; empty for spin
+}
+
 const (
 	recordDirective       = "directive"
 	directiveExcludeImage = "exclude_image"
+	recordEscalation      = "escalation"
+	recordStall           = "stall"
 )
 
 type sessionLineHead struct {
@@ -1199,6 +1237,44 @@ func (s *Session) AppendImageExclusion(sha256Hex, reason string) error {
 	}
 	return s.writeLine(sessionLine{Type: recordDirective, Directive: &sessionDirective{
 		Op: directiveExcludeImage, SHA256: sha256Hex, Reason: reason,
+	}})
+}
+
+// AppendEscalation records that the stuck-loop hatch escalated, or tried to (see
+// escalationRecord). It accompanies the "meta" row the swap itself produced
+// (UpdateModel), carrying the "why" that meta row cannot: a harness escalation is
+// otherwise indistinguishable from a user /model switch. Append only and purely
+// informational — the loader skips it, so it never affects the rebuilt
+// transcript or resume. Written only when an escalation target is configured
+// (the observer fires nowhere else).
+func (s *Session) AppendEscalation(rec EscalationRecord) error {
+	if s == nil {
+		return nil
+	}
+	return s.writeLine(sessionLine{Type: recordEscalation, Escalation: &escalationRecord{
+		Reason:      rec.Reason,
+		Tool:        rec.Tool,
+		FromModel:   rec.FromModel,
+		ToProvider:  rec.ToProvider,
+		ToModel:     rec.ToModel,
+		Auto:        rec.Auto,
+		Disposition: string(rec.Disposition),
+		Detail:      rec.Detail,
+	}})
+}
+
+// AppendStall records that the stuck-loop detector nudged (see stallRecord). It
+// is the durable trace of rung 1 — the nudge itself only rides the ephemeral
+// tail — sitting inline where the loop happened. Append only and informational;
+// the loader skips it, so it never affects the rebuilt transcript or resume.
+func (s *Session) AppendStall(rec StallRecord) error {
+	if s == nil {
+		return nil
+	}
+	return s.writeLine(sessionLine{Type: recordStall, Stall: &stallRecord{
+		Axis:   rec.Axis,
+		Tool:   rec.Tool,
+		Detail: rec.Detail,
 	}})
 }
 

@@ -156,6 +156,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		r.AdoptReadOnlySet(pol.ReadOnly)
 	}
 	r.SetAsker(&webAsker{s: s})
+	r.SetEscalator(&sessionEscalator{s: s})
 
 	// Per-session extensions, like ACP: each session owns its manager (own
 	// announced session, own host-tool dispatcher, own context), so concurrent
@@ -632,6 +633,7 @@ func (s *wsSession) rebuildTools(reason string) {
 	// one mode that deliberately keeps ask_user_question, precisely so the agent
 	// can ask when requirements are unclear.
 	rr.SetAsker(&webAsker{s: s})
+	rr.SetEscalator(&sessionEscalator{s: s})
 	toolsChanged := s.agent.SetTools(rr.ToolRegistry)
 	// The system prompt carries view state too — the prompt's tool list, the
 	// auto-swarm nudge, an extension's static context — so install the

@@ -688,6 +688,15 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .sys-note.notice.err { color: var(--danger); opacity: 1; }
 .sys-note.notice.err .sys-tag { color: var(--danger); border-color: var(--danger); }
 
+/* stuck-loop-hatch heads-up (detector nudge / model escalation), in-stream
+   (extends .sys-note). Tone colours the whole line; the glyph leads it. */
+.sys-note.hatch { font-style: normal; opacity: 1; }
+.sys-note.hatch.accent { color: var(--accent); }
+.sys-note.hatch.ok { color: var(--ok); }
+.sys-note.hatch.err { color: var(--danger); }
+.sys-note.hatch.muted { color: var(--muted); }
+.hatch-glyph { flex: none; }
+
 /* compaction divider — the boundary where context was condensed. Everything
    above it is out of the model's context; the summary standing in for it is
    collapsed behind the toggle. Full-width on purpose: it is a rule across the

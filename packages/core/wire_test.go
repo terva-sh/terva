@@ -52,6 +52,12 @@ func TestEventToWireGolden(t *testing.T) {
 		{"turn_end clean", EvTurnEnd{Stop: provider.StopEnd}, `{"type":"turn_end","stop":"end"}`},
 		{"turn_end error", EvTurnEnd{Stop: provider.StopError, Err: errors.New("boom")},
 			`{"type":"turn_end","stop":"error","error":"boom"}`},
+		{"stall", EvStall{StallRecord: StallRecord{Axis: "churn", Tool: "task_update", Detail: "activate_next must name a different task"}},
+			`{"type":"stall","stall":{"axis":"churn","tool":"task_update","detail":"activate_next must name a different task"}}`},
+		{"escalation", EvEscalation{EscalationRecord: EscalationRecord{
+			Reason: "stuck on task_update", Tool: "task_update", FromModel: "gemma-4-26b",
+			ToProvider: "openai-codex", ToModel: "gpt-5.6-sol", Auto: true, Disposition: EscalationSwitched,
+		}}, `{"type":"escalation","escalation":{"reason":"stuck on task_update","tool":"task_update","from_model":"gemma-4-26b","to_provider":"openai-codex","to_model":"gpt-5.6-sol","auto":true,"disposition":"switched"}}`},
 	}
 	for _, c := range cases {
 		b, err := json.Marshal(EventToWire(c.ev))

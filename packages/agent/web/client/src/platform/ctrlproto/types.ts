@@ -618,6 +618,28 @@ export interface ChatView {
   daemon_pid?: number
 }
 
+// WireStall / WireEscalation are the payloads of the stuck-loop hatch's live
+// events (Go core.WireStall / WireEscalation). A `stall` is a detector nudge
+// (rung 1); an `escalation` is a model swap resolving (rung 3), disposition ∈
+// switched | declined | stopped | failed. Both are informational — shown
+// in-stream, never joining the transcript.
+export interface WireStall {
+  axis?: string // spin (same call) | churn (same failure)
+  tool?: string
+  detail?: string
+}
+
+export interface WireEscalation {
+  reason?: string
+  tool?: string
+  from_model?: string
+  to_provider?: string
+  to_model?: string
+  auto?: boolean
+  disposition?: string
+  detail?: string // failure cause, on a failed swap
+}
+
 export interface WireEvent {
   type: string
   delta?: string
@@ -642,6 +664,8 @@ export interface WireEvent {
   locale?: string
   notice?: Notice
   auth?: AuthState
+  stall?: WireStall
+  escalation?: WireEscalation
 }
 
 // ServerHello is the handshake frame the server sends back (role "server").
