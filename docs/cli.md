@@ -3,6 +3,53 @@
 Flags, tools, run modes, and the data directory. The interactive
 TUI's own surface (slash commands, keys) lives in [tui.md](tui.md).
 
+## Ways to run terva
+
+terva is one binary and one agent core. What changes between these shapes is
+**where the session lives** and **how you reach it** — every front end drives
+the same core over the [control plane](controllers.md) (same sessions, same
+permissions, same event stream), so you can even mix them against one session.
+
+**1. The terminal UI — `terva`** *(the default)*
+Everything runs in one process bound to your terminal: the agent loop, the
+tools, the session. Start it, work, exit. Sessions persist to disk (reopen with
+`--continue` / `--resume`), but the *process* is your terminal — close the
+terminal and the agent stops. It is the simplest, fastest way to work on one
+machine, and what you get by just running `terva`. Guide: [tui.md](tui.md).
+
+**2. The web daemon — `terva web`**
+A long-lived server *holds* the workspace — the agent, sessions, credentials,
+and tools all live in the daemon; a browser is a thin client that renders and
+controls over the wire. The daemon keeps running when no one is watching, so you
+can drive it from a browser on any device, disconnect and reconnect without
+losing the live turn, and put several clients on one session at once. Run it as
+a service for always-on, phone, or remote access. Guide: [web.md](web.md).
+
+**3. The web daemon + an attached terminal — `terva web` + `terva attach`**
+The same persistent daemon as (2), reached with the **terminal UI** instead of
+(or alongside) a browser. `terva attach <url>` connects the full TUI to a
+running daemon as a client; the state stays in the daemon, so the terminal is
+disposable and reattachable — the conversation survives a dropped connection,
+and the same session is reachable from a terminal and a browser at once. Paired
+with a detach tool and systemd it becomes a **persistent terminal** that is
+always your live session ([web.md](web.md#a-persistent-terminal)).
+
+The dividing line is where state lives: in (1) it lives in the terminal process
+(ephemeral process, on-disk session); in (2) and (3) it lives in a **daemon**,
+and the client — browser or terminal — is disposable.
+
+| | `terva` | `terva web` | `terva web` + `attach` |
+|---|---|---|---|
+| Front end | terminal | browser | terminal |
+| Session lives in | terminal process | a daemon | a daemon |
+| Survives client disconnect | resumable from disk | yes, live | yes, live |
+| Reach from other devices | — | yes | same-host / tunnel |
+| Best for | single-machine work | always-on, mobile, remote | a persistent, reattachable TUI |
+
+Beyond these interactive shapes, terva runs headless too — **print**, **json**,
+**rpc**, **acp** (editor integration), **replay**, and chat **bot** connectors,
+all in [Modes](#modes) below.
+
 ## Flags
 
 | Flag | Description |
@@ -140,6 +187,7 @@ The model is nudged toward the tool by a one-line hint in the default system pro
 - **RPC**: `terva rpc` runs as a long-lived child process; commands in on stdin, events and responses out on stdout, both as NDJSON. Designed for embedding terva in third-party apps written in any language. See [docs/rpc.md](rpc.md) for the wire schema and `examples/rpc/{python,node,shell,go}` for working clients.
 - **ACP**: `terva acp` (or `--acp`) speaks the Agent Client Protocol — editor↔agent JSON-RPC 2.0 over stdio, for Zed and other ACP clients. An opt-in build (`-tags terva_acp`); a binary built without the tag routes here and exits saying so.
 - **Web**: `terva web` (or `--web`) serves the browser control panel — a local HTTP server speaking ctrlproto over a WebSocket to a self-hosted workspace (chat, sessions, models, raati board). Loopback and no-auth by default; see the web-mode flags above and [web.md](web.md). Also an opt-in build (`-tags terva_web`).
+- **Attach**: `terva attach [url]` runs the interactive TUI as a **client** of a running `terva web` daemon instead of hosting the workspace in-process — same sessions and live stream as the browser panel, reattachable, resyncing from the daemon's snapshot on reconnect. Default endpoint `ws://127.0.0.1:8730/ws`; a `unix:/path/to.sock` or a remote URL also work, and `--token` matches the daemon's `--web-token`. This is variant 3 in [Ways to run terva](#ways-to-run-terva). See [tui.md](tui.md#attaching-to-a-running-daemon-terva-attach).
 - **Replay**: `terva replay <file>` (or `--replay <file>`) plays a recorded transcript back through the TUI as a deterministic scene. It backs the TUI with a read-only replay carrier instead of a live workspace, so it needs no credential and refuses prompts.
 - **Raati**: `terva raati "question"` convenes a three-unit deliberation panel (YATA-1 truth / KUSANAGI-2 decisiveness / MAGATAMA-3 benevolence) over the swarm engine: a blind round, a cross-examination round, then a tallied verdict with the minority report — a 2–1 split is information, not failure. Flags: `--class advisory|gate|veto` (gate = unanimity, fails closed), `--veto-holder UNIT` (which seat may block under `--class veto`; defaults to MAGATAMA-3), `--evidence PATH` (repeatable), `--round-timeout DUR` (a late unit abstains), `--single-round` (blind ballots are final), and `--level 0|1|2` — the rigor ladder: 0 *kaiku* seats every unit on the invocation's provider/model (cheapest; correlated judgment — pair with `--provider ollama --model <tag>` for a free local panel), 1 *kuoro* seats the provider's weak/medium/strong tier ladder (needs a full ladder: `terva models tiers`), 2 *käräjät* seats three providers from the user config's `raati.level2` (real error decorrelation, gate-grade). How the level's model pool maps onto seats is `--seat-order` (or user config `raati.seat_order`): `convene` (default) shuffles once per convening, `fixed` uses pool order (remappable via `raati.seat_map`, an index permutation), and `turn` reshuffles per voting round — the seat persists while the weights behind it rotate, at the cost of respawning every seat cold for the final round (no cross-round cache reuse, evidence re-read per seat) in exchange for the least fixed model-to-prior bias. Agents can convene a panel themselves via the opt-in `raati_convene` tool (user config `raati.convene_tool`; every call passes the approval gate, and the run renders live on the web board). `--profile NAME` convenes under a named bundle — built-ins `triage`, `counsel`, `code-review`, `ethics`, overridden or extended via the user config's `raati.profiles`; the profile fills whatever flags you leave unsaid (explicit flags win). The full record persists under `$TERVA_HOME/raati/`; see `docs/raati.md` for the full guide.
 
@@ -161,6 +209,7 @@ own detailed screen — `terva <command> --help`.
 | `terva bot ...` | Run a chat-bridge bot (Telegram, Discord, and other connectors) — `terva bot run` daemonizes an agent onto a chat platform. See [connectors.md](connectors.md). |
 | `terva raati "question"` | Convene the three-unit deliberation panel; prints the verdict and the dissent. Flags under Modes above; full guide in [raati.md](raati.md). |
 | `terva web` | Serve the browser control panel (see Modes and [web.md](web.md)). |
+| `terva attach [url]` | Attach the interactive TUI to a running `terva web` daemon as a client (default `ws://127.0.0.1:8730/ws`; a `unix:` socket or remote URL also work). See Modes, [tui.md](tui.md#attaching-to-a-running-daemon-terva-attach), and [web.md](web.md). |
 | `terva trust` / `terva untrust` | Manage which directories may load project-local extensions, skills, hooks, MCP servers, and context files. `--trust` does it for one run without persisting. See `docs/plans/workspace-trust.md`. |
 | `terva unjail` / `terva jail` | Record which directories run without the filesystem sandbox, so tools there may read and write outside the working directory. `--parent` covers descendants; `--list` shows the list. `--no-jail` does it for one run without persisting. Not the same as trust — see [permissions.md](permissions.md#unjailing-a-directory-for-good). |
 | `terva project ...` | Project-scoped agents: data and extensions pinned to a directory (login and trust stay global). See [extensions.md](extensions.md#project-scoped-agents). |

@@ -5,8 +5,10 @@ loop against your filesystem and shell, with a hand-rolled TUI, a browser
 control panel, out-of-process extensions and chat connectors, and origin-aware
 permissions. This page maps everything under `docs/`.
 
-**New here?** Start with the [CLI reference](cli.md), then pick your front end —
-the [TUI guide](tui.md) or the [web panel](web.md).
+**New here?** Start with the [CLI reference](cli.md) — it opens with
+[the ways to run terva](cli.md#ways-to-run-terva) (the terminal UI, the web
+daemon, and a terminal attached to that daemon) and when to use each — then dig
+into your front end: the [TUI guide](tui.md) or the [web panel](web.md).
 
 ## User & operator guides
 

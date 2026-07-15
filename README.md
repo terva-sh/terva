@@ -23,9 +23,12 @@ the control plane — same sessions, same permissions, same event stream:
   sessions, approve tool calls, edit settings, watch the transcript stream.
   See [docs/web.md](docs/web.md).
 
-Pick either, or both against the same session. Beyond them: an editor
-integration over ACP, chat connectors, print/json for scripting, and an
-embeddable RPC/SDK.
+Pick either, or both against the same session — the TUI can also drive a
+running `terva web` daemon as a client (`terva attach`), so the terminal
+becomes disposable and the session survives disconnects. The three shapes and
+when to use each are laid out in [ways to run terva](docs/cli.md#ways-to-run-terva).
+Beyond them: an editor integration over ACP, chat connectors, print/json for
+scripting, and an embeddable RPC/SDK.
 
 - one static binary.
 - built-in providers for Anthropic, OpenAI/Codex/Responses, Kimi, DeepSeek, Google Gemini/Vertex, GitHub Copilot, Bedrock, Azure OpenAI, OpenRouter, Groq, Cerebras, xAI, Together, Hugging Face, Mistral, Moonshot, Z.AI, Xiaomi, MiniMax, Fireworks, Vercel AI Gateway, OpenCode, Cloudflare AI, Ollama, and any OpenAI-compatible local/custom endpoint.
