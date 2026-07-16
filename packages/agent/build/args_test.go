@@ -165,6 +165,24 @@ func TestParseArgsTUIBackendFlags(t *testing.T) {
 	}
 }
 
+// --web-token-file (the daemon's spelling) and --token-file (the attach client's,
+// paired with --token) are two names for one field: the resolver for each mode
+// reads Args.WebTokenFile, so both must land there.
+func TestParseArgsTokenFileSpellings(t *testing.T) {
+	for _, flag := range []string{"--web-token-file", "--token-file"} {
+		a, err := ParseArgs([]string{flag, "/etc/terva/web-token"})
+		if err != nil {
+			t.Fatalf("ParseArgs(%q) errored: %v", flag, err)
+		}
+		if a.WebTokenFile != "/etc/terva/web-token" {
+			t.Errorf("%s: WebTokenFile = %q, want the path to be stored", flag, a.WebTokenFile)
+		}
+	}
+	if _, err := ParseArgs([]string{"--token-file"}); err == nil {
+		t.Error("--token-file with no value should error, not silently take an empty path")
+	}
+}
+
 func TestResolveSwarmWorktrees(t *testing.T) {
 	tru := true
 	fls := false

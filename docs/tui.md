@@ -52,10 +52,12 @@ Extension-registered commands appear under a divider at the bottom of the popup,
 
 `terva attach [URL]` runs this same TUI as a **client** of a running `terva
 web` daemon instead of hosting the workspace in-process (default endpoint
-`ws://127.0.0.1:8730/ws`; `--token` matches the daemon's `--web-token`; bare
-`host:port` and `http(s)://` forms normalize, and `unix:/path/to.sock`
-targets a daemon serving a filesystem socket — no token needed there, the
-socket file's permissions gate access). Sessions, credentials, extensions,
+`ws://127.0.0.1:8730/ws`; `--token` matches the daemon's `--web-token` — or
+`--token-file PATH` / `TERVA_WEB_TOKEN` to keep the secret off the command line,
+the same three sources the daemon reads under its own `--web-token*` spellings
+(see the persistent-attach note below); bare `host:port` and `http(s)://` forms normalize, and
+`unix:/path/to.sock` targets a daemon serving a filesystem socket — no token
+needed there, the socket file's permissions gate access). Sessions, credentials, extensions,
 and tools all live daemon-side — the TUI renders and controls, and the
 browser panel can watch the same session simultaneously.
 
@@ -87,6 +89,18 @@ SIGHUP is *also* the hangup signal, so without the flag SIGHUP keeps its default
 (exit on hangup). Reserve it for those persistent, non-throwaway attaches.
 `examples/deploy/systemd/` ships a ready-made socket-activated daemon + `dtach`
 attach that does exactly this — see docs/web.md §"A persistent terminal".
+
+A persistent attach lives as long as the daemon, so a `--token` on its command
+line sits in the unit file and in `ps` / `/proc/<pid>/cmdline` for every local
+user to read — the same argv leak the daemon has. When you attach across a
+network to an authenticated daemon (rather than the local `unix:` socket, whose
+file permissions are the auth), reach for `--token-file PATH` (the client's
+spelling of the daemon's `--web-token-file`) — the token is read from disk and
+never touches the command line, exactly what systemd's `LoadCredential=`
+provides. An unreadable or empty file is fatal, not a silent token-less dial.
+`TERVA_WEB_TOKEN` (systemd `EnvironmentFile=`) is the middle
+ground; since an attach client runs no agent shell, the environment is a safer
+place for it than it is on the daemon.
 
 The `@`-file picker lists the daemon's tree **over the wire** (the
 `files.list` verb, advertised as the `files-list` hello feature) — correct

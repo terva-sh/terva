@@ -171,8 +171,14 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 	//
 	// TERVA_WEB_TOKEN stands in for --token: the flag is as readable from `ps`
 	// as the daemon's is, so attaching to an authenticated daemon should not
-	// force the secret onto the command line of every client.
-	token := build.ResolveAttachToken(args)
+	// force the secret onto the command line of every client. --web-token-file
+	// is the leak-free route a persistent attach wants (systemd LoadCredential=);
+	// a bad token file is fatal here rather than a token-less dial the daemon
+	// would reject with a confusing handshake error.
+	token, err := build.ResolveAttachToken(args)
+	if err != nil {
+		return err
+	}
 	dial := ctrlclient.DialWebSocket(endpoint.URL, token)
 	if endpoint.UnixPath != "" {
 		dial = ctrlclient.DialWebSocketUnix(endpoint.UnixPath, token)

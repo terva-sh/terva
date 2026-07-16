@@ -271,7 +271,7 @@
   "rigor level 1 needs a full weak/medium/strong ladder for provider %q — configure swarm_tiers.%s and check it with `terva models tiers`": "rigor level 1 needs a full weak/medium/strong ladder for provider %q — configure swarm_tiers.%s and check it with `terva models tiers`",
   "rigor level 2 needs exactly %d seat bindings in the user config's raati.level2 (each {\"provider\": …, \"model\": …}); found %d": "rigor level 2 needs exactly %d seat bindings in the user config's raati.level2 (each {\"provider\": …, \"model\": …}); found %d",
   "run a chat-bridge bot (telegram and others)": "run a chat-bridge bot (telegram and others)",
-  "run the TUI as a client of a running terva web daemon (default ws://127.0.0.1:8730/ws; --token for auth). Survives daemon restarts; quit and re-attach without disturbing the agent": "run the TUI as a client of a running terva web daemon (default ws://127.0.0.1:8730/ws; --token for auth). Survives daemon restarts; quit and re-attach without disturbing the agent",
+  "run the TUI as a client of a running terva web daemon (default ws://127.0.0.1:8730/ws; --token / --token-file / TERVA_WEB_TOKEN for auth). Survives daemon restarts; quit and re-attach without disturbing the agent": "run the TUI as a client of a running terva web daemon (default ws://127.0.0.1:8730/ws; --token / --token-file / TERVA_WEB_TOKEN for auth). Survives daemon restarts; quit and re-attach without disturbing the agent",
   "sampling temperature, 0 to 2 (omit for provider default)": "sampling temperature, 0 to 2 (omit for provider default)",
   "saved to %s": "saved to %s",
   "saved: @%s (id=%d) to %s": "saved: @%s (id=%d) to %s",

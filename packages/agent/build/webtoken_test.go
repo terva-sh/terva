@@ -73,7 +73,11 @@ func TestWebTokenFromEnvIsScrubbed(t *testing.T) {
 	// Reading it twice must not lose it: the scrub removed the only copy, so a
 	// second caller has to see the cached value rather than conclude "no token"
 	// and start a daemon with no auth.
-	if again := ResolveAttachToken(Args{}); again != "from-env" {
+	again, err := ResolveAttachToken(Args{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != "from-env" {
 		t.Errorf("second resolve = %q, want %q — the scrub ate the token", again, "from-env")
 	}
 }
@@ -138,11 +142,68 @@ func TestAttachTokenFallsBackToEnv(t *testing.T) {
 	resetWebTokenOnce(t)
 	t.Setenv(WebTokenEnv, "shared")
 
-	if got := ResolveAttachToken(Args{Token: "explicit"}); got != "explicit" {
+	got, err := ResolveAttachToken(Args{Token: "explicit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "explicit" {
 		t.Errorf("attach token = %q, want the flag to win", got)
 	}
-	if got := ResolveAttachToken(Args{}); got != "shared" {
+	got, err = ResolveAttachToken(Args{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "shared" {
 		t.Errorf("attach token = %q, want the environment fallback %q", got, "shared")
+	}
+}
+
+// The attach client honors --token-file (its spelling of the daemon's
+// --web-token-file; both parse into WebTokenFile), the same leak-free route: a
+// persistent `terva attach` (the systemd/dtach terminal) is as long-lived as the
+// daemon, so its --token is just as readable via ps. The file beats the
+// environment, and the trailing newline `echo secret > token` leaves is trimmed,
+// just as for the daemon.
+func TestAttachTokenFromFile(t *testing.T) {
+	resetWebTokenOnce(t)
+	t.Setenv(WebTokenEnv, "env-token")
+
+	got, err := ResolveAttachToken(Args{WebTokenFile: tokenFile(t, "file-token\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "file-token" {
+		t.Errorf("attach token = %q, want the file to beat the environment (newline trimmed)", got)
+	}
+
+	// The explicit flag still wins over the file, mirroring the daemon's order.
+	got, err = ResolveAttachToken(Args{Token: "flag-token", WebTokenFile: tokenFile(t, "file-token")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "flag-token" {
+		t.Errorf("attach token = %q, want the explicit flag to win over the file", got)
+	}
+}
+
+// A --token-file the client cannot read, or that holds nothing, is fatal —
+// never a silent token-less dial. On an authenticated daemon that would fail the
+// handshake with a confusing rejection; the operator wanted the credential they
+// pointed at, so say the file is the problem.
+func TestAttachTokenFileNeverFallsThroughSilently(t *testing.T) {
+	resetWebTokenOnce(t)
+	for name, path := range map[string]string{
+		"missing": filepath.Join(testsupport.TempDir(t), "nope"),
+		"empty":   tokenFile(t, ""),
+		"blank":   tokenFile(t, "\n  \n"),
+	} {
+		got, err := ResolveAttachToken(Args{WebTokenFile: path})
+		if err == nil {
+			t.Errorf("%s token file: no error, and token = %q — the client would dial with no token", name, got)
+		}
+		if got != "" {
+			t.Errorf("%s token file: returned a token %q alongside the error", name, got)
+		}
 	}
 }
 

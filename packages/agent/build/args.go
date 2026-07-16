@@ -72,7 +72,7 @@ type Args struct {
 	WebAuthHeader       string   // trust this forward-auth header as the authenticated user (e.g. X-Forwarded-User)
 	WebTrustedProxies   []string // IPs/CIDRs (besides loopback) allowed to assert the forward-auth header
 	WebToken            string   // bearer token required on requests when no forward-auth is used; leaks via ps/cmdline, prefer the two below
-	WebTokenFile        string   // read the bearer token from this file (systemd LoadCredential=); never enters the environment
+	WebTokenFile        string   // read the bearer token from this file (systemd LoadCredential=); never enters the environment. --web-token-file (web) / --token-file (attach)
 	WebTokenRequireFile bool     // hardening opt-in: accept the token only from --web-token-file, refusing --web-token (argv) and TERVA_WEB_TOKEN (/proc/environ)
 	WebInsecure         bool     // allow binding a non-loopback address with no auth mode (dangerous)
 	WebInsecureCIDRs    []string // IPs/CIDRs granted no-auth access (besides loopback) — the scoped, safer form of --web-insecure (e.g. a tailnet range)
@@ -406,7 +406,11 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.WebToken = v
-		case "--web-token-file":
+		case "--web-token-file", "--token-file":
+			// Same file, same secret: --web-token-file is the daemon's spelling
+			// (paired with --web-token); --token-file is the attach client's
+			// (paired with --token). Both land in WebTokenFile — the resolver
+			// for each mode reads it.
 			v, err := want(&i, arg)
 			if err != nil {
 				return a, err

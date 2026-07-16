@@ -40,6 +40,27 @@ var webTokenFromEnv = sync.OnceValue(func() string {
 	return v
 })
 
+// readTokenFile reads a bearer token from a --web-token-file/--token-file path,
+// trimming the trailing newline `echo secret > token` leaves. flag names the
+// caller's spelling so the error blames the flag the operator actually typed.
+//
+// An unreadable or empty file is a hard error, never an empty token: for the
+// daemon that would fall through to no-auth, and for an attaching client to a
+// token-less dial the daemon rejects — either way the silent-empty outcome is the
+// one an operator reaching for a token file is trying to avoid, and it would
+// surface only as an absent log line or a confusing handshake failure.
+func readTokenFile(flag, path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", flag, err)
+	}
+	tok := strings.TrimSpace(string(b))
+	if tok == "" {
+		return "", fmt.Errorf("%s %s: holds no token (refusing to fall back to no auth)", flag, path)
+	}
+	return tok, nil
+}
+
 // ResolveWebToken settles the bearer token for `terva web`, from — in order —
 // the explicit flag, a file, or the environment.
 //
@@ -72,15 +93,7 @@ func ResolveWebToken(args Args) (string, error) {
 		return args.WebToken, nil
 	}
 	if path := args.WebTokenFile; path != "" {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return "", fmt.Errorf("--web-token-file: %w", err)
-		}
-		tok := strings.TrimSpace(string(b))
-		if tok == "" {
-			return "", fmt.Errorf("--web-token-file %s: holds no token (refusing to fall back to no auth)", path)
-		}
-		return tok, nil
+		return readTokenFile("--web-token-file", path)
 	}
 	tok := webTokenFromEnv()
 	if tok != "" {
@@ -94,12 +107,30 @@ func ResolveWebToken(args Args) (string, error) {
 	return tok, nil
 }
 
-// ResolveAttachToken settles the bearer token an attaching client presents. Same
-// secret, same leak, same environment fallback — `terva attach --token` is as
-// readable from `ps` as the daemon's flag is.
-func ResolveAttachToken(args Args) string {
+// ResolveAttachToken settles the bearer token an attaching client presents, from
+// — in order — the explicit --token flag, --token-file, or TERVA_WEB_TOKEN. It is
+// the same secret the daemon's --web-token gates on; --token-file is the attach
+// spelling of the daemon's --web-token-file (both parse into Args.WebTokenFile).
+//
+// The file route matters most for a PERSISTENT attach: the systemd/dtach
+// persistent terminal runs `terva attach` for as long as the daemon lives, so a
+// --token sits in the unit's ExecStart and in ps / /proc/<pid>/cmdline for every
+// local user to read — exactly the daemon's own argv leak. Point --token-file at
+// a systemd LoadCredential= path and the token never touches the command line.
+//
+// Unlike the daemon, an attach client runs no agent and no shell tool, so a token
+// in its environment is not one `env` call from a model — the env fallback needs
+// no scrub warning here. An unreadable or empty --token-file is still a hard error
+// (see readTokenFile): a silent fall-through to a token-less dial would surface
+// only as a confusing handshake rejection, not the missing credential the operator
+// meant to supply.
+func ResolveAttachToken(args Args) (string, error) {
 	if args.Token != "" {
-		return args.Token
+		fmt.Fprintf(os.Stderr, "terva attach: note: --token puts the token in this process's command line, where any local user can read it (ps, /proc/<pid>/cmdline). Prefer %s or --token-file.\n", WebTokenEnv)
+		return args.Token, nil
 	}
-	return webTokenFromEnv()
+	if path := args.WebTokenFile; path != "" {
+		return readTokenFile("--token-file", path)
+	}
+	return webTokenFromEnv(), nil
 }
