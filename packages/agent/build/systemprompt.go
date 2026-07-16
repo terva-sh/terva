@@ -27,6 +27,9 @@ type SystemPromptOpts struct {
 	Append       []PromptSegment // extra labeled blocks appended after the identity
 	Now          time.Time
 	TervaDocsDir string
+	// TervaExamplesDir is $TERVA_HOME/examples, where the deployment/setup
+	// examples install. Empty drops the hint (same guard as the docs hint).
+	TervaExamplesDir string
 	// StatusTool adds a one-line hint that the terva_status tool exists.
 	// Set only when that tool is actually in the registry (it can be
 	// dropped by --no-tools or a --tools allowlist), so the prompt never
@@ -153,6 +156,9 @@ func SystemSegments(o SystemPromptOpts) []PromptSegment {
 	// hint would just be a dead instruction — drop it.
 	if d := strings.TrimSpace(o.TervaDocsDir); d != "" && hasTool(o.Tools, "read") {
 		add("terva-docs-hint", i18n.P("system.docs_hint", "Terva's own docs are installed under %s; use the read tool there when you need details about terva RPC, extensions, skills, or built-in behaviour.", d))
+	}
+	if d := strings.TrimSpace(o.TervaExamplesDir); d != "" && hasTool(o.Tools, "read") {
+		add("terva-examples-hint", i18n.P("system.examples_hint", "Deployment and setup examples — systemd units, reverse-proxy configs, container recipes — are installed under %s; read them when bootstrapping or configuring a terva host.", d))
 	}
 	if o.StatusTool {
 		add("status-tool-hint", i18n.P("system.status_tool_hint", "Call the terva_status tool (no arguments) to check your own runtime state — current model, provider, working directory, reasoning effort, and how full your context window is — for example to decide whether to summarise before the context fills. Its tool description lists every field it returns."))

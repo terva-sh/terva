@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	tervadocs "terva.sh/terva"
+	tervaexamples "terva.sh/terva/examples"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/imagegen"
 	"terva.sh/terva/packages/agent/lore"
@@ -719,6 +720,11 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	reg := BuildToolRegistry(args, approval, args.CWD, sandbox, provName, method, visionCapable, imageReg)
 
 	docsDir, _ := tervadocs.EnsureInstalled(config.TervaHome())
+	// Deployment/setup examples (systemd units, reverse-proxy configs) ride in
+	// the binary and install alongside the docs, so an agent bootstrapping a
+	// host has them on disk even with no source checkout — and the docs' own
+	// ../examples/deploy/… links resolve against them.
+	examplesDir, _ := tervaexamples.EnsureInstalled(config.TervaHome())
 	// terva's own state lives under $TERVA_HOME, outside the cwd jail. A
 	// jailed agent still needs to read the non-sensitive, shared dirs —
 	// its docs (referenced in the system prompt), installed skills/themes,
@@ -733,6 +739,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	home := config.TervaHome()
 	sandbox.AddReadOnlyRoot(
 		docsDir,
+		examplesDir,
 		filepath.Join(home, "extensions"),
 		filepath.Join(home, "ext-data"),
 		filepath.Join(home, "skills"),
@@ -975,17 +982,18 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	}
 
 	sysSegs := SystemSegments(SystemPromptOpts{
-		CWD:           args.CWD,
-		Tools:         summaries,
-		Custom:        custom,
-		Append:        append_,
-		TervaDocsDir:  docsDir,
-		StatusTool:    reg["terva_status"] != nil,
-		PersonaName:   Persona.Name,
-		Charter:       Persona.Charter,
-		Experience:    args.Experience,
-		IntroOverride: introOverride,
-		IntroSource:   introSource,
+		CWD:              args.CWD,
+		Tools:            summaries,
+		Custom:           custom,
+		Append:           append_,
+		TervaDocsDir:     docsDir,
+		TervaExamplesDir: examplesDir,
+		StatusTool:       reg["terva_status"] != nil,
+		PersonaName:      Persona.Name,
+		Charter:          Persona.Charter,
+		Experience:       args.Experience,
+		IntroOverride:    introOverride,
+		IntroSource:      introSource,
 	})
 	sys := joinSegmentTexts(sysSegs)
 
