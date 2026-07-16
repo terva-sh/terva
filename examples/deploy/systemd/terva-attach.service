@@ -16,6 +16,21 @@
 # and terva also force-repaints on a same-size SIGWINCH, so `-r winch` (dtach's
 # other method) works too — handy for muxes that can't inject a key (abduco).
 #
+# Or dial straight in over SSH, one hop (the remote shell expands $(id -u)):
+#
+#   ssh -t you@host 'exec dtach -a /run/user/$(id -u)/terva.dtach -r ctrl_l'
+#
+# For one-command access, put it in ~/.ssh/config on your workstation:
+#
+#   Host terva
+#       HostName host.example
+#       RequestTTY force
+#       RemoteCommand exec dtach -a /run/user/$(id -u)/terva.dtach -r ctrl_l
+#
+# then `ssh terva` lands you in the terminal. This terminal IS the daemon — it
+# runs with the daemon's tools, filesystem, and (if configured) sudo, so SSH
+# access to it is administrative access, not a sandboxed "terminal key."
+#
 # The attach is a thin CLIENT of terva-web.service; its connection is what
 # socket-activates the daemon. State lives in the daemon, so this terminal can
 # be killed and recreated freely — the conversation resumes on reconnect.
@@ -33,9 +48,27 @@ Wants=terva-web.socket
 [Service]
 Type=forking
 
+# Keep anything this unit creates (the dtach socket) owner-only. Belt-and-
+# suspenders: %t (/run/user/<uid>) is already 0700, but don't depend on it.
+UMask=0077
+
 # -n creates a detached session; the socket path is where clients attach.
 # --allow-restart lets the client reload itself in place (see ExecReload).
 ExecStart=/usr/bin/dtach -n %t/terva.dtach /usr/local/bin/terva attach unix:%t/terva.sock --allow-restart
+
+# The unix socket needs no token — its file permissions ARE the auth. To attach
+# across a network to an authenticated daemon instead (--web-token on the daemon),
+# read the token from a credential file so it never lands on this long-lived
+# command line, where ps / systemctl show would expose it:
+#
+#   LoadCredential=web-token:/etc/terva/web-token
+#   ExecStart=/usr/bin/dtach -n %t/terva.dtach /usr/local/bin/terva attach \
+#             wss://terva.example:8730/ws --token-file %d/web-token --allow-restart
+#
+# (--token-file is the client's spelling of the daemon's --web-token-file. %d is
+# the credentials directory systemd fills from LoadCredential=; an empty or
+# unreadable file is fatal, not a silent token-less dial. TERVA_WEB_TOKEN via
+# EnvironmentFile= also works.)
 
 # `systemctl --user reload terva-attach` SIGHUPs the terva process, which
 # re-execs it into the freshly-installed binary on the SAME pty and reconnects

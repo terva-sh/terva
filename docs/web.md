@@ -84,6 +84,11 @@ terva bug — it is the proxy's idle timeout, and the interval is its value.
   proxy_read_timeout 1h;
   ```
 
+Complete, validated HAProxy configs — a loopback-TCP backend and a
+filesystem-socket backend, with the tunnel timeout, host routing, and the auth
+model wired up — are in
+[`examples/deploy/haproxy/`](../examples/deploy/haproxy/).
+
 ## Auth
 
 terva's identity is single-user, so the auth here is a **gate** ("keep
@@ -318,6 +323,29 @@ loginctl enable-linger $USER
 # reach it from any shell
 dtach -a $XDG_RUNTIME_DIR/terva.dtach -r ctrl_l              # detach: Ctrl-\
 ```
+
+That last line reattaches from a shell already on the box. To dial straight in
+from your workstation in one hop — no intermediate shell — let SSH run it (the
+remote shell expands `$(id -u)`):
+
+```
+ssh -t you@host 'exec dtach -a /run/user/$(id -u)/terva.dtach -r ctrl_l'
+```
+
+or make it a one-command alias in `~/.ssh/config`, so `ssh terva` drops you
+straight into the terminal:
+
+```
+Host terva
+    HostName host.example
+    RequestTTY force
+    RemoteCommand exec dtach -a /run/user/$(id -u)/terva.dtach -r ctrl_l
+```
+
+Mind what that terminal is: it *is* the daemon, running with its tools,
+filesystem, and (if configured) sudo, so SSH access to it is administrative
+access — not a sandboxed "terminal key," and no substitute for `sshd`
+restricting who may log in at all.
 
 Deploying a new build is then two reloads, and nobody loses their place:
 

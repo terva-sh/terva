@@ -9,7 +9,7 @@
 # This is one of a set of three units that give you a persistent terminal:
 #   terva-web.socket      — this file (the activation point)
 #   terva-web.service     — the daemon, holds all state
-#   terva-attach.service  — a persistent `terva attach` TUI inside tmux
+#   terva-attach.service  — a persistent `terva attach` TUI inside dtach
 #
 # Install all three:
 #   mkdir -p ~/.config/systemd/user ~/workspace
@@ -19,8 +19,8 @@
 #   systemctl --user enable --now terva-web.socket terva-attach.service
 #   loginctl enable-linger $USER         # keep it all running after logout
 #
-# Then, from any shell:
-#   tmux -S $XDG_RUNTIME_DIR/terva-tmux.sock attach -t terva   (detach: Ctrl-b d)
+# Then, from any shell (see terva-attach.service for reaching it over SSH):
+#   dtach -a $XDG_RUNTIME_DIR/terva.dtach -r ctrl_l   (detach: Ctrl-\)
 
 [Unit]
 Description=terva control socket
@@ -32,6 +32,14 @@ Description=terva control socket
 # never drops the endpoint.
 ListenStream=%t/terva.sock
 SocketMode=0600
+
+# To socket-activate a loopback TCP port instead — e.g. to front the daemon with
+# a reverse proxy that speaks TCP (see examples/deploy/haproxy/) — replace the
+# two lines above with:
+#   ListenStream=127.0.0.1:8730
+# A TCP socket has no filesystem-permission gate, so pair it with a token on the
+# daemon (--web-token-file) — unlike the unix socket above, whose 0600 mode IS
+# the auth. terva serves whichever the unit declares and ignores --web-addr.
 
 [Install]
 WantedBy=sockets.target
