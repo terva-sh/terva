@@ -148,6 +148,16 @@ func (i *Interactive) flushSwarmSummary(batch []*swarmWatchEntry) {
 			sb.WriteString(i18n.P("swarm.summary.findings", "   findings: %s", truncateForSummary(findings, 1500)))
 			sb.WriteByte('\n')
 		}
+		// Structured-deliverable verdict (schema spawns only): the free-text
+		// findings above can read fine while the machine contract silently
+		// failed, so the coordinator is told explicitly which it got.
+		if len(snap.Deliverable) > 0 {
+			sb.WriteString(i18n.P("swarm.summary.deliverable_ok", "   deliverable: validated structured report (%d bytes; full JSON via the tasks surface)", len(snap.Deliverable)))
+			sb.WriteByte('\n')
+		} else if snap.DeliverableError != "" {
+			sb.WriteString(i18n.P("swarm.summary.deliverable_err", "   deliverable: contract NOT met — %s", truncateForSummary(snap.DeliverableError, 240)))
+			sb.WriteByte('\n')
+		}
 		// The retrieval handle for the findings the 1500-byte budget cut off:
 		// the agent id doubles as a session_inspect id (S1 — coordinators
 		// otherwise guess it is a project session id and hit "no such

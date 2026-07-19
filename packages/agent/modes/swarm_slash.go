@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/worker"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -13,8 +14,11 @@ import (
 //
 //	/swarm                       -> open the dashboard
 //	/swarm list                  -> open the dashboard
-//	/swarm new [--model M] [--provider P] <task...>
-//	                             -> spawn an agent (optionally pinned to a model)
+//	/swarm new [--model M] [--provider P] [--persona N] [--backend B] <task...>
+//	                             -> spawn an agent (optionally pinned to a model,
+//	                                persona, or a worker backend — claude/terva/…;
+//	                                empty backend = a native swarm agent). A foreign
+//	                                backend is gated on external_workers being on.
 //	/swarm kill <id>             -> stop a running agent
 //	/swarm remove <id>           -> tear down a terminated agent
 //	/swarm logs <id>             -> open the scrollable transcript view
@@ -35,7 +39,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		snapshotFn func() []swarm.AgentSnapshot
 		stopFn     func(id string) error
 		removeFn   func(id string) error
-		spawnFn    func(task, model, provider, persona string) (string, error)
+		spawnFn    func(task, model, provider, persona, backend string) (string, error)
 		sendFn     func(id, text string) error
 		resumeFn   func(id string) (string, error)
 	)
@@ -44,9 +48,9 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		snapshotFn = i.carrierTaskSnapshot
 		stopFn = func(id string) error { return i.carrierTaskAction("stop", map[string]string{"id": id}) }
 		removeFn = func(id string) error { return i.carrierTaskAction("remove", map[string]string{"id": id}) }
-		spawnFn = func(task, model, provider, persona string) (string, error) {
+		spawnFn = func(task, model, provider, persona, backend string) (string, error) {
 			return "", i.carrierTaskAction("spawn", map[string]string{
-				"task": task, "model": model, "provider": provider, "persona": persona,
+				"task": task, "model": model, "provider": provider, "persona": persona, "backend": backend,
 			})
 		}
 		sendFn = func(id, text string) error {
@@ -66,9 +70,18 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		snapshotFn = i.cfg.Swarm.SnapshotAll
 		stopFn = i.cfg.Swarm.Stop
 		removeFn = i.cfg.Swarm.Remove
-		spawnFn = func(task, model, provider, persona string) (string, error) {
+		spawnFn = func(task, model, provider, persona, backend string) (string, error) {
+			// A foreign backend runs through the same gate the model's swarm_spawn
+			// tool and the board's tasks-surface spawn use (worker.AllowSpawn), so
+			// this local /swarm path can't dispatch a worker they couldn't. Native
+			// (empty backend) stays ungated, as every /swarm spawn always was.
+			if backend != "" {
+				if err := worker.AllowSpawn(backend); err != nil {
+					return "", err
+				}
+			}
 			a, err := i.cfg.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
-				Task: task, Model: model, Provider: provider, Persona: persona,
+				Task: task, Model: model, Provider: provider, Persona: persona, Backend: backend,
 			})
 			if err != nil {
 				return "", err
@@ -110,7 +123,9 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 	// points (list, logs/view-jump, resume) feed the dialog identical
 	// callbacks.
 	spawnAdapter := func(task, model, provider string) error {
-		_, err := spawnFn(task, model, provider, "")
+		// The dashboard's inline spawn editor is native-only (like persona, a
+		// backend is a command flag, not a picker); pass an empty backend.
+		_, err := spawnFn(task, model, provider, "", "")
 		return err
 	}
 	resumeAdapter := func(id string) error {
@@ -151,17 +166,21 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		// --model foo do a thing` and `/swarm new do --model thing`
 		// (where --model is part of the task) unambiguous — only
 		// leading flags are consumed.
-		model, provider, persona, task := parseSpawnFlags(rest)
+		model, provider, persona, backend, task := parseSpawnFlags(rest)
 		if task == "" {
-			i.swarmStatus("", i18n.T("/swarm new: missing task (after any --model/--provider/--persona flags)"))
+			i.swarmStatus("", i18n.T("/swarm new: missing task (after any --model/--provider/--persona/--backend flags)"))
 			return
 		}
-		id, err := spawnFn(task, model, provider, persona)
+		id, err := spawnFn(task, model, provider, persona, backend)
 		if err != nil {
 			i.swarmStatus("", i18n.T("spawn: %s", err.Error()))
 			return
 		}
 		switch {
+		case backend != "" && id != "":
+			i.swarmStatus(i18n.T("spawned %s (backend %s)", id, backend), "")
+		case backend != "":
+			i.swarmStatus(i18n.T("spawned (backend %s)", backend), "")
 		case persona != "" && id != "":
 			i.swarmStatus(i18n.T("spawned %s (persona %s)", id, persona), "")
 		case persona != "":
@@ -292,7 +311,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 //	--provider=X         single-token form
 //	--persona X          two-token form (built-in/installed name, or .md path)
 //	--persona=X          single-token form
-func parseSpawnFlags(s string) (model, provider, persona, task string) {
+func parseSpawnFlags(s string) (model, provider, persona, backend, task string) {
 	fields := strings.Fields(s)
 	i := 0
 	for i < len(fields) {
@@ -335,6 +354,18 @@ func parseSpawnFlags(s string) (model, provider, persona, task string) {
 			continue
 		case strings.HasPrefix(f, "--persona="):
 			persona = strings.TrimPrefix(f, "--persona=")
+			i++
+			continue
+		case f == "--backend":
+			if i+1 < len(fields) {
+				backend = fields[i+1]
+				i += 2
+			} else {
+				i++
+			}
+			continue
+		case strings.HasPrefix(f, "--backend="):
+			backend = strings.TrimPrefix(f, "--backend=")
 			i++
 			continue
 		}

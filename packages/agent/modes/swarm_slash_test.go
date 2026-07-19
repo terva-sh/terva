@@ -98,6 +98,27 @@ func TestRunSwarmNewSpawnsAgent(t *testing.T) {
 	}
 }
 
+// TestRunSwarmNewForeignBackendGated: /swarm new --backend <foreign> runs the
+// human spawn through the same gate the model's tool and the board use
+// (worker.AllowSpawn). An unregistered backend is refused before any agent
+// launches — whichever way external_workers is set — so the local /swarm path
+// can't bypass the policy.
+func TestRunSwarmNewForeignBackendGated(t *testing.T) {
+	iv, f := newInteractiveForSwarmTest(t)
+	defer f.StopAll()
+
+	iv.runSwarm(context.Background(), []string{"new", "--backend", "nonesuch-backend", "do", "stuff"})
+	if n := len(f.List()); n != 0 {
+		t.Fatalf("a gated backend must not spawn; got %d agent(s)", n)
+	}
+	iv.mu.Lock()
+	gotErr := iv.statusErr
+	iv.mu.Unlock()
+	if gotErr == "" {
+		t.Fatal("a gated backend must set a spawn-error status")
+	}
+}
+
 // TestRunSwarmSendDeliversToAgentInbox spins up a real agent with a
 // fake Runner whose only job is to forward inbox lines to a channel,
 // then asserts the /swarm send <id> <text...> path routes through
@@ -178,30 +199,35 @@ func TestRunSwarmSendDeliversToAgentInbox(t *testing.T) {
 
 func TestParseSpawnFlags(t *testing.T) {
 	cases := []struct {
-		in                               string
-		wantModel, wantProv, wantPersona string
-		wantTask                         string
+		in                                            string
+		wantModel, wantProv, wantPersona, wantBackend string
+		wantTask                                      string
 	}{
-		{"do x", "", "", "", "do x"},
-		{"--model claude do x", "claude", "", "", "do x"},
-		{"--model=claude do x", "claude", "", "", "do x"},
-		{"--provider openai --model gpt-5 do x", "gpt-5", "openai", "", "do x"},
-		{"--provider=openai --model=gpt-5 do x", "gpt-5", "openai", "", "do x"},
-		{"--persona vartija review x", "", "", "vartija", "review x"},
-		{"--persona=vartija review x", "", "", "vartija", "review x"},
-		{"--persona ./d.md --model=gpt-5 t", "gpt-5", "", "./d.md", "t"},
+		{"do x", "", "", "", "", "do x"},
+		{"--model claude do x", "claude", "", "", "", "do x"},
+		{"--model=claude do x", "claude", "", "", "", "do x"},
+		{"--provider openai --model gpt-5 do x", "gpt-5", "openai", "", "", "do x"},
+		{"--provider=openai --model=gpt-5 do x", "gpt-5", "openai", "", "", "do x"},
+		{"--persona vartija review x", "", "", "vartija", "", "review x"},
+		{"--persona=vartija review x", "", "", "vartija", "", "review x"},
+		{"--persona ./d.md --model=gpt-5 t", "gpt-5", "", "./d.md", "", "t"},
+		// --backend, both forms, and combined with other flags.
+		{"--backend claude do x", "", "", "", "claude", "do x"},
+		{"--backend=terva:portable do x", "", "", "", "terva:portable", "do x"},
+		{"--backend claude --model=gpt-5 t", "gpt-5", "", "", "claude", "t"},
 		// Only LEADING flags are consumed.
-		{"do --model x", "", "", "", "do --model x"},
-		{"do --persona x", "", "", "", "do --persona x"},
+		{"do --model x", "", "", "", "", "do --model x"},
+		{"do --persona x", "", "", "", "", "do --persona x"},
+		{"do --backend x", "", "", "", "", "do --backend x"},
 		// Missing value: --model with no follow-up token leaves model empty
 		// and the next field starts the task.
-		{"--model", "", "", "", ""},
+		{"--model", "", "", "", "", ""},
 	}
 	for _, c := range cases {
-		m, p, persona, task := parseSpawnFlags(c.in)
-		if m != c.wantModel || p != c.wantProv || persona != c.wantPersona || task != c.wantTask {
-			t.Errorf("parseSpawnFlags(%q) = (%q,%q,%q,%q); want (%q,%q,%q,%q)",
-				c.in, m, p, persona, task, c.wantModel, c.wantProv, c.wantPersona, c.wantTask)
+		m, p, persona, backend, task := parseSpawnFlags(c.in)
+		if m != c.wantModel || p != c.wantProv || persona != c.wantPersona || backend != c.wantBackend || task != c.wantTask {
+			t.Errorf("parseSpawnFlags(%q) = (%q,%q,%q,%q,%q); want (%q,%q,%q,%q,%q)",
+				c.in, m, p, persona, backend, task, c.wantModel, c.wantProv, c.wantPersona, c.wantBackend, c.wantTask)
 		}
 	}
 }

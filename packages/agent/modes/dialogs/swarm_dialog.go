@@ -1074,11 +1074,19 @@ func (d *SwarmDialog) renderTranscript(th tui.Theme, width int) []string {
 		d.viewing = false
 		return d.Render(th, width)
 	}
+	// Cost rides the always-present status line rather than its own row, so a
+	// worker whose spend is known but whose per-agent model override is empty
+	// still shows it — and the transcript cursor-row math (which counts fixed
+	// header rows) needs no change.
+	statusLine := i18n.T("status: %s, %s", a.Status, a.Activity)
+	if a.CostUSD > 0 {
+		statusLine += fmt.Sprintf(" · $%.4f", a.CostUSD)
+	}
 	header := []string{
 		FrameHeader(th, i18n.T("swarm: %s  (type to send, esc back)", a.ID), width),
 		"  " + th.FG256(th.Muted, i18n.T("task: %s", a.Task)),
 		"  " + th.FG256(th.Muted, i18n.T("dir: %s", a.Dir)),
-		"  " + th.FG256(th.Muted, i18n.T("status: %s, %s", a.Status, a.Activity)),
+		"  " + th.FG256(th.Muted, statusLine),
 	}
 	if a.Model != "" {
 		modelLine := i18n.T("model: %s", a.Model)

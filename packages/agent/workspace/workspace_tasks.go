@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/worker"
 )
 
 // The tasks pane surfaces the workspace-global swarm of background agents. The
@@ -94,22 +95,29 @@ func (w *Workspace) taskList() *ctrlproto.TaskList {
 	out := make([]ctrlproto.TaskInfo, 0, len(snaps))
 	for _, s := range snaps {
 		out = append(out, ctrlproto.TaskInfo{
-			ID:       s.ID,
-			Task:     s.Task,
-			Status:   string(s.Status),
-			Activity: s.Activity,
-			Model:    s.Model,
-			Provider: s.Provider,
-			Persona:  s.Persona,
-			Dir:      s.Dir,
-			Started:  ctrlTimeString(s.Started),
-			Finished: ctrlTimeString(s.Finished),
-			Err:      s.Err,
-			Tail:     s.Tail,
-			Lines:    s.Lines,
+			ID:               s.ID,
+			Task:             s.Task,
+			Status:           string(s.Status),
+			Activity:         s.Activity,
+			Model:            s.Model,
+			Provider:         s.Provider,
+			Persona:          s.Persona,
+			Backend:          s.Backend,
+			Dir:              s.Dir,
+			Started:          ctrlTimeString(s.Started),
+			Finished:         ctrlTimeString(s.Finished),
+			Err:              s.Err,
+			CostUSD:          s.CostUSD,
+			Deliverable:      s.Deliverable,
+			DeliverableError: s.DeliverableError,
+			Tail:             s.Tail,
+			Lines:            s.Lines,
 		})
 	}
-	return &ctrlproto.TaskList{Tasks: out}
+	// Advertise the spawn capability so the board's swarm lane can offer a
+	// backend picker (native is implicit; foreign backends are listed even when
+	// disabled so the UI can grey them with a hint) — see TaskList.Backends.
+	return &ctrlproto.TaskList{Tasks: out, Backends: worker.Names(), WorkersEnabled: config.ExternalWorkersEnabled()}
 }
 
 // hasTasks reports whether the tasks pane should be offered: auto-swarm is on
@@ -144,8 +152,18 @@ func (w *Workspace) taskAction(action string, args map[string]string) error {
 		if strings.TrimSpace(args["task"]) == "" {
 			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "spawn: missing task")
 		}
+		// A foreign backend goes through the SAME gate the model's swarm_spawn
+		// tool applies (external workers on + a registered backend), so the human
+		// path is at parity: the board can't dispatch a worker the model couldn't.
+		// Empty backend = a native swarm agent, ungated as it always has been.
+		backend := args["backend"]
+		if backend != "" {
+			if gerr := allowWorkerBackend(backend); gerr != nil {
+				return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%v", gerr)
+			}
+		}
 		_, err = w.swarm.SpawnReq(w.ctx, swarm.SpawnRequest{
-			Task: args["task"], Model: args["model"], Provider: args["provider"], Persona: args["persona"],
+			Task: args["task"], Model: args["model"], Provider: args["provider"], Persona: args["persona"], Backend: backend,
 		})
 	default:
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown tasks action %q", action)
