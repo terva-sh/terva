@@ -934,12 +934,12 @@ From the Go SDK, pass `ext.ReadOnly()` as a trailing option to declare
 it:
 
 ```go
-e.Tool("worktree_list", "List worktrees.", schema, handler, ext.ReadOnly())
+e.Tool("branch_list", "List branches.", schema, handler, ext.ReadOnly())
 ```
 
 Tool names live in the same namespace as built-in tools (`read`,
-`write`, `edit`, `bash`, `skill`). Conflicts are silently shadowed by
-the built-in.
+`write`, `edit`, `bash`, `skill`, the `worktree_*` five). Conflicts are
+silently shadowed by the built-in.
 
 #### `ready`
 

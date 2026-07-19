@@ -23,13 +23,21 @@ You'll see one JSON object per line on stdout: a response acknowledging the prom
 
 ## Flags
 
-`terva rpc` accepts the same flags as the other modes: `--provider`, `--model`, `--cwd`, `--api-key`, `--base-url`, `--system-prompt`, `--append-system-prompt`, `--reasoning`, `--max-steps`, `--no-tools`, `--tools`.
+`terva rpc` accepts the same flags as the other modes: `--provider`, `--model`, `--cwd`, `--api-key`, `--base-url`, `--system-prompt`, `--append-system-prompt`, `--reasoning`, `--max-steps`, `--no-tools`, `--tools`, `--session <path>` (opt into a durable, resumable session — see below).
 
 [Extensions](extensions.md) and [MCP servers](mcp.md) load on the same lifecycle as every other mode, with the same flags — `--ext DIR` (repeatable), `--extensions a,b` (allowlist), `--no-ext`; `--mcp git,jira` (restrict-only), `--no-mcp`. Their tools join the registry like any other, and an extension's notes surface on the stream as the `ext_notify` / `ext_display` / `ext_clear_notes` events (the RPC loop has no editor, so an extension's `submit`/`insert` are no-ops).
 
 Tool calls run unconfirmed by default (headless is yolo). `--no-yolo`, or `--approval MODE`, installs the [permission](permissions.md) gate — but RPC has no interactive prompt, so a call that would need confirmation is **refused** with a model-readable reason rather than asked (`plan` still runs read-only tools; explicit `allow`/`deny` rules apply as written). A gate that will refuse says so in a one-line note on stderr at startup.
 
-Session persistence is not implemented in RPC mode: the process holds an in-memory transcript for the life of the connection (`get_messages` reads it), but never opens, saves, or resumes a session file — the embedding application owns any persistence.
+To **confirm** instead of refuse, opt into an approval carrier that fills the gate out-of-band:
+
+- `--rpc-approvals` — answer prompts over this JSON-RPC wire. A tool needing confirmation arrives as a request the driver replies to over the same connection; a driver that never answers keeps the safe refuse-by-default rather than hanging.
+- `--approval-socket <path>` — route the gate through a local MCP approval bridge at a Unix socket (terva's own MCP client). The transport-opaque sibling of `--rpc-approvals`.
+- `--approval-http <addr>` — route the gate through a Streamable-HTTP MCP permission endpoint (a remote orchestrator). The networked sibling of `--approval-socket`.
+
+A backend sets **one** carrier, never several; each fails closed, leaving the refuse-by-default in place if it can't start.
+
+Session persistence is **opt-in** in RPC mode. By default the process holds an in-memory transcript for the life of the connection (`get_messages` reads it) and never touches disk — the embedding application owns any persistence. Pass `--session <path>` to make the session durable and **resumable**: the prior transcript at that path is restored on start (or the file is created fresh on first run), and every message, usage row, and post-compaction transcript is written as it happens. A process pointed at the same `--session` path continues the conversation instead of starting blank — which is how a supervised worker (`terva rpc` under the swarm) is revived with its history intact after its process dies. Without `--session`, nothing is persisted, exactly as before.
 
 ## Auth
 
@@ -127,8 +135,8 @@ its tools live, as it must, and used one instead of summarizing),
 warm one fell back. **This is the only way to tell whether a warm compaction
 actually hit the cache**: one that missed produces the same summary and the same
 transcript and raises no error, differing only in that `cache_read` is ~0 and the
-tokens were billed at full price. RPC persists no session, so there is no row to
-check afterwards — if you are measuring, measure here.
+tokens were billed at full price. Unless you ran with `--session`, RPC persists no
+session, so there is no row to check afterwards — if you are measuring, measure here.
 
 On a no-op, `summary` is empty (the keep-tail already covers the whole transcript,
 so there was nothing to compact). A failure emits the canonical

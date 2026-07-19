@@ -20,6 +20,7 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/jump` | Scroll the chat to a previous turn (or `/jump <text>` to filter). |
 | `/btw` | Side chat with full context that doesn't add to the main thread. |
 | `/swarm` | Spawn, monitor, and chat with background subagents. Each runs in parallel with your main session and shares its working directory. |
+| `/worktree` | Managed git worktrees (the built-in `worktree_*` engine): the list view shows each worktree's claim state, base, and dirtiness — ↑/↓ select, ↵ `/cd`s into one, `c` switches to the merge-back **collect** overview (commits ahead of base, dirty/unpushed flags), `r` refreshes. Also fills the status bar's worktree glance. Unavailable outside a git repo. |
 | `/skill` | Prime your next request with a specific skill: `/skill <name> [request]` rewrites to "use the *name* skill for: request" so the model reaches for it. Autocompletes skill names after `/skill `. |
 | `/skills` | List discovered skills (SKILL.md files) and preview their bodies. |
 | `/context` | Token breakdown of the assembled context and what each extension injects. Under lazy tool visibility it reports both numbers honestly — the *advertised* tool set that is actually on the wire, and the *installed* total that would load if every group were activated (`[4 of 31 tools · 48 KB installed]`), plus the bytes the capability note itself costs. Read-only. |
@@ -186,11 +187,11 @@ Background subagents that run alongside your main session. Each one is a separat
 > `bash` tools as the main agent against the host's working directory.
 > Start terva with `--swarm-worktrees` (config: `swarm_worktrees`) to give
 > each sub-agent its own git worktree and branch instead. Isolation is
-> leased through the `terva-git-worktree` extension (`worktree_create` /
-> `worktree_release`), so that extension must be installed — if it isn't,
-> spawns fail loudly rather than silently sharing the host tree. Finished
-> worktrees and branches are kept for review/merge via the extension's
-> `/worktree collect`.
+> leased from the built-in worktree engine (no extension required); the
+> cwd must be a git repository — outside one, spawns fail loudly rather
+> than silently sharing the host tree. Finished worktrees and branches
+> are kept for review/merge — `/worktree collect` view shows what each
+> branch carries (each lives under `$TERVA_HOME/worktrees/`).
 
 ```
 /swarm                            # open the dashboard
@@ -231,6 +232,21 @@ Background subagents that run alongside your main session. Each one is a separat
 **`/session export` does NOT bundle subagents.** A `.tervasession` is just the main chat transcript; per-agent state (session file, unix-socket inbox) is machine-local and doesn't round-trip through a JSONL file. To share what an agent said, copy it out of the transcript view manually.
 
 **Auto-swarm.** With `/settings` -> auto-swarm on, the main agent gets a built-in `swarm_spawn` tool and a system-prompt nudge to use it. It can then fork sub-agents on its own when a request naturally splits into independent parallel work ("implement A and B", "investigate three files"). Each spawn returns the sub-agent id immediately and the main turn keeps going. The agent can pick a model strength per sub-agent with a `tier` of `weak`/`medium`/`strong` (e.g. Haiku/Sonnet/Opus on Anthropic) — never stronger than the host model, so routine sub-tasks run cheap. Only Anthropic has a built-in mapping; for any other provider (gateways like opencode-go/OpenRouter/LiteLLM) `tier` is ignored until you configure one — run `terva models tiers` to see what resolves and set per-provider tiers (see [models.md](models.md#swarm-sub-agent-tiers-weak--medium--strong)). When every sub-agent the agent spawned in that batch finishes its initial task, terva injects one `[auto-swarm update]` message back into the main chat recapping each agent's status, task, and transcript tail; the main agent then writes a short follow-up summary referencing the agents by id. Off by default; toggle from `/settings`.
+
+**Structured deliverables.** A spawn can demand a machine-readable report
+instead of trusting prose: `swarm_spawn`'s optional `deliverable_schema` (a
+JSON Schema whose top level must be an object) makes the child's report data.
+A native child gets a `deliver_result` tool whose argument schema *is* the
+spawn schema — it calls the tool once with its findings, and a mismatch comes
+back as a retryable validation error rather than a silent acceptance. A
+worker that can't carry the tool (an external harness) gets the same contract
+appended to its briefing and reports by ending its final message with one
+fenced ` ```json ` block. Either way the supervisor re-validates when the
+task ends and records the result on the agent — the parsed deliverable, or
+*absent* with the concrete reason (never delivered, invalid, fence didn't
+parse) — and the `[auto-swarm update]` recap marks each agent's contract
+**met** or **not met**. The captured report also lands as `deliverable.json`
+in the agent's state directory, next to its session file.
 
 ### `/settings`
 

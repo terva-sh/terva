@@ -158,10 +158,12 @@ write inside its working directory — the same rule as `write`.
 
 These are future niceties, not shipping yet:
 
-- **Native model output** — a chat model emitting images itself (e.g. Gemini's
-  image models, OpenAI's Responses image tool) as another backend behind the
-  same tool, gated on the model's `image-output` capability. Today generation
-  always goes through a backend endpoint.
+- **Native model output** — a chat model emitting images itself. This **shipped
+  separately** as inline [native image output](native-image-output.md) (the
+  OpenAI Responses `image_generation` tool over the Codex subscription),
+  configured under `native_output` rather than as a `generate_image` backend:
+  the model draws inline in its own reply instead of terva calling an endpoint.
+  Gemini image models could still slot in behind this tool later.
 - **Variations carousel** — generate several, view them, pick one to keep and
   regenerate the rest, in the web client. For now use `n` and ask the agent to
   regenerate.

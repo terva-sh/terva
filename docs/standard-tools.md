@@ -116,6 +116,18 @@ network hosts. See `docs/plans/standard-tools-bucket2.md`.
 symlink skip) and survive `plan` mode because they are classified
 read-only.
 
+**Git-conditional built-ins**: the five `worktree_*` tools (folded in from the
+retired `terva-git-worktree` extension) join the registry only when the session
+cwd is — or has an immediate child that is — a git repository, decided once per
+registry build: managed worktrees with an available/claimed reuse model,
+`worktree_list` (read-only; the pre-decision call) plus
+`create`/`claim`/`release`/`remove` (git-state mutating, classified like
+`write`/`edit`). A session outside any repo pays no tokens for them. They sit
+in the lazy group `worktree` under `lazy_tools`, share their engine
+(`packages/agent/worktree`) with the swarm's `--swarm-worktrees` lease, and
+keep state under `$TERVA_HOME/worktrees/` (extension-era state migrates on
+first touch; existing checkouts stay at their old paths).
+
 The task tools ship exactly when the base coding tools do — `--chat`, `--play`,
 `--no-tools`, and `--no-workspace-tools` drop them together — and there is no
 standing config switch beyond that: a per-run `--tools` allowlist that omits
@@ -150,7 +162,7 @@ conditional tools, though — the rest are tabled further down.
 
 | Tool | Injected when | Authority | Skin |
 |---|---|---|---|
-| `swarm_spawn` | auto-swarm on (coding sessions only) | process execution | fire-and-forget parallel coding sub-agents; a `tier` picks a cheaper model, never stronger than the host. See [tui.md](tui.md) (auto-swarm). |
+| `swarm_spawn` | auto-swarm on (coding sessions only) | process execution | fire-and-forget parallel coding sub-agents; a `tier` picks a cheaper model, never stronger than the host. An optional `deliverable_schema` (JSON Schema, object at the top level) demands a structured report back — see below. See [tui.md](tui.md) (auto-swarm). |
 | `actor_spawn` | `--play` with a declared cast | process execution | synchronous "director voices an actor" — hands the actor a situation, waits, returns its line. Cast is closed and named; the model dispatches by name, never a path. See [personas.md](personas.md#cast-and-actor-dispatch). |
 
 Because they wrap the same engine they share its lifecycle, session
@@ -160,6 +172,20 @@ setting vs. `--play` + a cast). New dispatch front-ends should follow this
 pattern — another skin over the one engine — rather than adding a parallel
 engine. Both are gated out of the wrong context: `actor_spawn` never appears in a
 coding session, and `swarm_spawn` never appears in an immersive one.
+
+**Structured deliverables** (`deliverable_schema` → `deliver_result`): when a
+`swarm_spawn` call carries a `deliverable_schema`, the child session gains one
+extra tool, `deliver_result`, whose argument schema is exactly the spawn's
+schema — the sub-agent reports by calling it once, and validation failures are
+retryable errors, not silent acceptances. `deliver_result` exists only inside
+a sub-agent session spawned with a schema (it is never part of the host
+session's surface) and is classified local read-only: it records the agent's
+own report in its own state directory and touches nothing else. Workers that
+cannot carry tools (external harnesses) get the same contract as briefing
+text and report via a fenced ` ```json ` block instead; the supervisor
+re-validates either route when the task ends and surfaces the parsed
+deliverable — or its absence, with the reason — on the task record and in the
+auto-swarm recap. See [tui.md](tui.md) (auto-swarm) for the operator's view.
 
 `generate_image` is likewise conditional — injected only when an `image` config
 block resolves a backend (opt-in, off by default). It turns a prompt into an
@@ -194,6 +220,21 @@ listener. If a
 future tool wants the same treatment, it must earn it the same way — by having
 no class that is truthful, not by skipping the classification step.
 
+### Build-gated built-ins (compile-time conditional)
+
+One built-in's condition is decided at *compile* time, not at session
+setup — a third kind of conditionality next to "always on" and
+"host-injected":
+
+| Tool | Present when | Authority | Notes |
+|---|---|---|---|
+| `code_execution` | the binary was built with `-tags terva_scripting` (release builds are; `terva-min` and a plain `go build` are not) | local read-only | runs a short JavaScript program with `read`/`grep`/`glob` exposed as functions; only `print`ed output returns, so N-step read-only lookups cost one tool result. Read-only **because** every binding is — the classification follows the binding set, and each host call a script makes still passes the normal permission gate. Sits in the lazy group `scripting` under `lazy_tools`. See [scripting.md](scripting.md). |
+
+A build without the tag has no trace of the tool: nothing registers, no
+config key exists to turn it on. The tag exists because the embedded JS
+engine costs ~6 MB of binary — capability follows the build, and the gate
+semantics stay in the permission tables like every other tool.
+
 ### Standard extensions (opt-in, terva-blessed)
 
 These are the designated official standard extensions. They run as trusted
@@ -201,19 +242,22 @@ local code; each must meet the acceptance bar below before being treated
 as fully blessed (some promotion work is still tracked in the bucket-2
 plan).
 
-Four of them ship in the built-in **core pack** (`packages/agent/packs/core.json`,
-installed by `terva ext pack install`): `index`, `git-worktree`, `memory`, and
-`web`. That pack is the blessed set — a starting point an operator opts into, not
-something terva loads on its own.
+Three of them ship in the built-in **core pack** (`packages/agent/packs/core.json`,
+installed by `terva ext pack install`): `index`, `memory`, and `web`. That pack
+is the blessed set — a starting point an operator opts into, not something
+terva loads on its own.
 
 - **Index** — `index` (`github.com/terva-sh/terva-ext-index`): a workspace code
   index and search. It exists to replace repeated `bash grep`/`rg` sweeps — and
   the whole-file reads they lead to — with a structured, indexed lookup: exactly
   the "replaces a risky/verbose `bash` pattern" case the candidate checklist
   below asks about.
-- **Worktrees** — `terva-git-worktree` (`worktree_list`/`_create`/
-  `_claim`/`_release`/`_remove`), integrating with swarm isolation via
-  `--swarm-worktrees`. Mutates git state, so it is never marked read-only.
+- **Worktrees** — **folded into core built-ins** (the `worktree_*` five: see
+  the git-conditional note under the core table above). The standalone
+  `terva-git-worktree` extension is superseded — an installed copy is skipped
+  at load with a pointer — and its state migrates on first touch (existing
+  checkouts stay valid at their extension-era paths). `--swarm-worktrees`
+  now leases directly from the built-in engine.
 - **Memory** — `memory` (`github.com/terva-sh/terva-ext-memory`): cross-session
   memory, scoped per workspace and per user, so an agent can carry facts forward
   instead of re-deriving them every session. The natural home for the

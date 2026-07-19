@@ -33,7 +33,7 @@ terva --card examples/cards/aava-v2.json --dump-prompt -p "tell me about the fog
 Four formats:
 
 - **`--dump-prompt`** (text, default) — annotated, each segment tagged with its
-  `[source]`. The *"where did this come from"* view.
+  `[source · portability]`. The *"where did this come from"* view.
 - **`--dump-prompt=json`** — the structured manifest, for assertions/tooling.
 - **`--dump-prompt=raw`** — segment text concatenated, unlabeled: the logical
   prompt. (Not the literal wire payload — no `cache_control` markers or JSON
@@ -45,6 +45,25 @@ Four formats:
 The manifest is the **source of truth**: the flat system-prompt string is
 *derived* from the same labeled segments the dump shows, so the dump can't
 disagree with what the model receives.
+
+### The prompt is written for the surface it lands on
+
+The `conventions` segment is not fixed. It is written against where this run's
+output actually goes, so the same command dumped under different modes says
+different things:
+
+| run | what the model is told |
+|---|---|
+| the TUI, `terva web`, an ACP editor, a swarm child | *rendered as markdown for a person* — use it freely |
+| `terva bot run` | *posted as a chat message* — skip headings and tables, keep it short |
+| `terva -p` | *written to a plain-text stream with nothing to render it* |
+| `--rpc`, `--json`, the SDK | *handed to a program*, which decides how or whether to display it |
+
+If the model is emitting markdown tables into a Discord message, or headings
+into a pipe, **dump the prompt in that mode** — the conventions segment names
+the surface it thinks it has. The edit/write guidance follows the same rule: it
+ships only when those tools are actually in the registry, so a `--no-tools` dump
+does not name them.
 
 ### The fastest read: section → sources
 
@@ -63,6 +82,13 @@ terva --card examples/cards/aava-v2.json --dump-prompt=json -p "the fog-bell" \
 That one line answers most questions: *is the card's `system_prompt` in `system`?
 did the greeting seed? did the fog-bell lore fire into `tail`? are tools present?*
 
+And the same shape answers *what would cross to a foreign agent?*:
+
+```
+terva --dump-prompt=json | jq -r '.sections[].segments[]
+  | select(.portability == "portable") | .source'
+```
+
 The chat/play system section is deliberately leaner than coding mode: the
 **date/cwd footer** and the **terva-docs hint** are dropped (a character
 shouldn't be told today's date or pointed at a `read` tool it doesn't have), so
@@ -72,11 +98,12 @@ their absence here is expected, not a bug.
 
 | source | region | meaning |
 |---|---|---|
-| `identity-intro` | system | terva's generated identity intro (branded), used when nothing overrides it |
+| `identity-intro` | system | who the agent is — the name, and nothing else. Brand-free, so it can travel |
+| `vessel` | system | what carries it: terva, the harness, the pine-tar image, the pronunciations. Emitted beside the identity, and withheld when a card or persona brings its own |
 | `card:system_prompt` / `card:framing` | system | a card owns the intro: its `system_prompt` (with `{{original}}` → a short brand-free framing), or that framing alone when the card has no `system_prompt` |
 | `persona:introduction` | system | a native persona's `agent_introduction` field replacing the branded intro (conventions still kept) |
 | `charter` | system | the persona/card descriptive body (description/personality/scenario/examples) |
-| `conventions` | system | terva's output invariants (always last so nothing erodes them) |
+| `conventions` | system | terva's output invariants, written against the run's **surface** (see above) plus the edit/write discipline when those tools exist. Always last, so nothing erodes them |
 | `lore:constant` / `card:character_book` | system | always-on lore folded into the cached prefix |
 | `skills`, `context-files`, `agents-md` | system | skill manifest, `--context-file`/config context, repo AGENTS.md |
 | `restricted-workspace` | system | note that project content was withheld (untrusted cwd) |
@@ -84,6 +111,47 @@ their absence here is expected, not a bug.
 | `lore:triggered [files]` | tail | keyword-triggered lore that fired this turn, labeled by source file |
 | `card:post_history` | tail | a card's `post_history_instructions` |
 | `extension-context` | system/tail | an extension's static/`register_context` block |
+
+## What the portability class means
+
+In `system` and `tail` — the regions terva *assembles* from labeled sources —
+every segment also carries a **portability class**, printed beside the source:
+
+```
+---- [identity-intro · portable] ----
+---- [vessel · harness-local] ----
+---- [agents-md · discovery-owned] ----
+```
+
+It answers one question: **would this segment reach an agent that is not terva?**
+
+| class | meaning |
+|---|---|
+| `portable` | travels verbatim. Authored by you or by a persona, and about identity or intent — not about terva's machinery |
+| `harness-local` | never crosses. It describes terva's tools, terva's surfaces, or terva's policy; abroad it is false at best, and at worst it invites an agent to call a tool it does not have |
+| `discovery-owned` | content a foreign agent finds for itself (AGENTS.md, skills, context files). A renderer passes the *path*, not the payload — pasting it would duplicate or contradict that agent's own discovery |
+| `no-analog` | no foreign delivery mechanism exists. terva injects lore, card books, and extension context into a per-turn tail region that other agents simply do not expose |
+
+The class is **derived from the source at render time**, by the same function the
+composer consults — never stored on a segment, so the dump cannot disagree with
+what would actually be sent. An unrecognised source classifies `harness-local`:
+it fails *closed*, because an over-strip degrades a briefing visibly while a leak
+degrades nothing and surfaces only as a foreign agent inventing tool calls.
+
+`--dump-prompt=sizes` names the class in its `system — by source` breakdown too,
+so you can read weight and destination in one pass: a heavy `harness-local`
+segment is context no worker will ever carry, and a heavy `discovery-owned` one
+is a file to point at rather than paste.
+
+The classes exist for the external-agent-workers seam, where terva composes a
+briefing for a foreign coding agent; they are documented in
+`docs/proposals/external-agent-workers.md`. They are worth reading here whether
+or not a worker ever runs: they are the clearest statement of which parts of
+terva's prompt are *about terva*.
+
+Messages and tools carry no class. The conversation is not a segment terva
+composed from a labeled source — a briefing carries the task on purpose — and
+classifying it would print an answer to a question nobody asked.
 
 The wording of the generated segments themselves — `identity-intro`,
 `conventions`, the docs/status hints, the footer — is overridable per key

@@ -44,6 +44,33 @@ The wire is intentionally the connproto/extproto meta-architecture — a wire sp
 id-correlated commands and uncorrelated streamed events — with a richer,
 non-chat vocabulary.
 
+### Optional controllers and the forwarder's completeness
+
+Capability verbs beyond the base `WorkspaceService` hang off **optional
+controller interfaces** — `CardsController`, `BackgroundsController`,
+`CastController`, `NoteController`, `UserController`, … — which `ServeConn`
+type-asserts at dispatch and answers `unsupported` for when a carrier does not
+implement them. Two things implement these: the real daemon-side `Workspace`,
+and `ctrlclient.Service`, the **wire-client forwarder** that lets a Go client
+(the TUI, `terva attach`) drive a *remote* daemon through the same interface,
+turning each call into a frame.
+
+The forwarder does not implement every controller. The Stage/play-immersion
+controllers — **cast, author's note, user persona, `turn.continue`, replay** —
+are **web-only today**: no Go client drives them, so the forwarder deliberately
+omits them (a future "TUI Stage" would add the relevant ones — cast most
+plausibly, if it rides the swarm-spawn machinery). Which controllers the
+forwarder serves is therefore a real decision, not an accident, and
+[`forwarder_complete_test.go`](../packages/agent/ctrlproto/ctrlclient/forwarder_complete_test.go)
+enforces it: it reads every `*Controller` interface from source and requires
+each to be in exactly one bucket — **forwarded** (carrying the compile-time
+`var _ ctrlproto.XController = (*Service)(nil)` assertion, which itself proves
+the implementation) or on the test's **`notForwarded` allow-list with a
+reason**. A newly-added controller fails the test until its author categorizes
+it, which closes the silent gap where a forwarded-but-unasserted method — or a
+never-forwarded one — would simply `unknown`/404 from a Go client with nothing
+flagging it.
+
 ## Carriers & current state
 
 The same `WorkspaceService` is bound to different transports:
@@ -65,9 +92,9 @@ hello; a minimal client (the mobile PWA) negotiates only the first two.
 
 | Group | Carries | Authority |
 |---|---|---|
-| **conversation** | the event stream (out) + turn commands: prompt, queue, cancel, compact, clear, approve, answer, subscribe | frontend-driving |
-| **session** | session lifecycle (list/create/resume/rename/delete), usage (incl. snapshots and reset credits), context breakdown + tree nodes, side chat, surfaces, i18n catalog | frontend-driving |
-| **control** | host-reconfiguring management: models, trust, restart, reset-credit redemption — and (future) lore, prompt/system overrides, templates, jail | **categorically higher** — see [Security & authority](#security--authority) |
+| **conversation** | the event stream (out) + turn commands: prompt, queue, cancel, compact, clear, the transcript-revision verbs (edit/delete/retry/swipe), approve, answer, subscribe | frontend-driving |
+| **session** | session lifecycle (list/create/resume/fork/rename/delete), usage (incl. snapshots and reset credits), context breakdown + tree nodes, side chat, surfaces, i18n catalog | frontend-driving |
+| **control** | host-reconfiguring management: models, trust, restart, reset-credit redemption, the content library (cards, personas, backgrounds) — and (future) lore, prompt/system overrides, templates, jail | **categorically higher** — see [Security & authority](#security--authority) |
 | **replay** | a recorded session's transport (`replay.control` / `replay.state`) and its `replay_state` broadcast | frontend-driving, but **optional**: it is off the base server hello — only a carrier backing a `ReplayController` advertises it, so a client that negotiates it is guaranteed the group is served |
 
 Keeping the groups separable is what lets one protocol serve a focused mobile
@@ -127,6 +154,7 @@ only on a breaking envelope change, which negotiation is designed to avoid.
 | `resolve-events` | the `permission_resolved` / `ask_resolved` multi-client dismissal events |
 | `context-tree` | `context.get` carries the hierarchical `ContextBreakdown.Tree` (section/turn/message outline), lazily expanded with `context.node`. A client that doesn't see it falls back to the flat message list |
 | `restart` | the daemon will serve `control.restart` (advertised only under `--allow-restart`; `--web-allow-restart` is an accepted alias) |
+| `stage` | the daemon serves the Stage immersive chat/play app at `/stage/` (advertised under `--web-stage` or the `web_stage` config knob); a client reads it to offer an "open in Stage" link. See [web.md](web.md#stage-the-immersive-chatplay-surface) |
 
 The server also advertises its active UI language (`locale`, BCP-47) so a client
 can fetch the matching string catalog (`i18n.catalog`); server-originated display
@@ -147,6 +175,11 @@ Every command is a `cmd` frame; the server answers with a `resp` (a bare ok, a
 | `cancel` | — | interrupt the active turn; no-op when idle |
 | `compact` | — | summarize + replace the transcript; clients get a fresh snapshot |
 | `clear` | — | wipe the transcript (no summary), same session |
+| `message.edit` | `{epoch, index, text}` | replace the message at `index` with same-role text (edit in place); epoch-guarded — `conflict` if the transcript shifted under the client |
+| `message.delete` | `{epoch, index}` | remove the message at `index` (later messages shift down); epoch-guarded |
+| `turn.retry` | `{epoch}` | regenerate the last response, keeping the current one as a swipeable take; starts a turn (`busy` if one is already running) |
+| `turn.swipe` | `{epoch, variant}` | make take `variant` of the tail span active — swipe among a regenerated turn's alternatives or a card's pre-seeded greetings; epoch-guarded |
+| `turn.continue` | `{epoch}` | extend the trailing assistant message as a provider prefill — the merged text replaces it in place (a replace amend), not a new message. Optional (a `ContinueController`): `unsupported` where unserved, `bad request` when there is no trailing assistant or the provider can't continue a prefill (only Anthropic today; `SessionInfo.supports_continue` advertises it). Starts a turn (`busy` if one runs) |
 | `approve` | `{call_id, decision}` | resolve a `permission_request` (first client wins) |
 | `answer` | `{ask_id, answer}` | resolve an `ask_request` (first client wins) |
 | `subscribe` | — | stream events for `sess`; the server sends a `snapshot` first |
@@ -157,8 +190,9 @@ Every command is a `cmd` frame; the server answers with a `resp` (a bare ok, a
 | Method | Params → Result | Effect |
 |---|---|---|
 | `sessions.list` | → `{sessions:[SessionInfo]}` | list sessions, newest activity first |
-| `sessions.create` | `{…CreateOpts}` → `{session}` | mint a session (honors `persona`) |
+| `sessions.create` | `{…CreateOpts}` → `{session}` | mint a session. `CreateOpts` carries title/provider/model/persona and the immersive spec — `experience` (`chat`/`play`), `card`, `cast`, `greeting`, `background` — all persisted to session meta so a restart re-materializes what the session was |
 | `sessions.resume` | → `{session}` | load a persisted transcript |
+| `sessions.fork` | `{from_index}` → `{session}` | branch the frame's session at `from_index` into a NEW parent-linked child: it keeps messages `0..from_index` and diverges after; the parent is untouched (the wire story for `core.BranchSession`) |
 | `sessions.rename` | `{title}` | set the display nickname |
 | `sessions.delete` | — | remove a session + transcript |
 | `usage.get` | → `{usage}` | cumulative tokens / cost |
@@ -187,6 +221,23 @@ Every command is a `cmd` frame; the server answers with a `resp` (a bare ok, a
 | `control.untrust` | — | revoke it, tearing project content back down |
 | `control.restart` | — | Tier-1 self-restart (re-exec into the installed binary); `unsupported` unless `restart` was advertised |
 | `usage.resets.consume` | `{id}` → `{reset, windows_reset?}` | redeem a usage-reset credit. Irreversible and it spends a scarce provider grant, so it sits here rather than beside the read-only `usage.resets.list`; the host confirms with the user before issuing it |
+| `cards.list` / `cards.get` | → `{cards}` / `{CardView}` | the character-card library — optional, served only by a `CardsController` |
+| `cards.import` | `{bytes\|path\|url}` → `{CardView}` | import a CCv2 card (PNG or JSON) by upload, server path, or remote URL (fetched through the SSRF-guarded `egress` client); the avatar pixels are retained for the `/media/` route |
+| `cards.edit` | `{id, fields}` → `{CardView}` | mutate a card's own fields and re-serialize (unknown `extensions` round-trip losslessly); a card stays untrusted **data** — an edit never widens what it can do |
+| `cards.delete` | `{id}` | remove a library card |
+| `cards.export` | `{id, format?}` → `{CardExport}` | serialize a card for download — a CCv2 PNG (the current JSON embedded in the retained avatar via `card.WritePNG`) when it has one, else CCv2 JSON; `format` forces `png`/`json`, `""` auto-picks. Bytes ride base64 |
+| `personas.list` / `personas.get` | → `{personas}` / `{PersonaView}` | the persona library — optional, served only by a `PersonasController` |
+| `personas.create` / `personas.edit` | `{…}` → `{PersonaView}` | write a persona — **trusted-tier gated** (a charter shapes identity in the cached prefix), unlike the ungated card edits above |
+| `backgrounds.list` | → `{backgrounds}` | scene backdrops — optional, served only by a `BackgroundsController` |
+| `backgrounds.import` | `{bytes\|path}` → `{BackgroundView}` | add a backdrop image |
+| `backgrounds.delete` | `{id}` | remove a backdrop |
+| `backgrounds.bind` | `{id}` | bind a backdrop to the frame's session (per-session, written to meta) |
+| `backgrounds.generate` | `{prompt, negative_prompt?, size?, backend?}` → `{BackgroundView}` | paint a scene from a prompt via the session's image backend (the same registry `generate_image` uses), store it, and bind it to the session in one step; a bad request when no image backend is configured |
+| `note.set` | `{text}` | set/clear the session's author's note — a live steering string injected into the uncached per-turn tail (no cache bust); optional, served only by a `NoteController` |
+| `user.bind` | `{name?, description?, ref?}` | bind the session's **user persona** — who the user is *in the story* (distinct from `persona`, who the agent is). The description rides the free per-turn tail; a changed name re-bakes the `{{user}}` macro into the cached prefix (a deliberate rebuild). `ref` (a saved user-persona) is reserved and rejected for now. Optional, served only by a `UserController` |
+| `cast.add` | `{name, ref}` | add/update a **play** session's cast member (actor name → persona name or card path); the ref is validated, then the `actor_spawn` tool + cast addendum rebuild. Optional, served only by a `CastController`; a bad request on a chat/coding session |
+| `cast.remove` | `{name}` | drop a cast member and retire its warm actor; rebuilds as above |
+| `cast.speak` | `{actor}` | user-directs ("pick who speaks"): direct the narrator to bring a cast member into the scene now — runs a normal turn (the narrator stays the source of truth and voices the actor via `actor_spawn`), so it returns once the turn is accepted, `CodeBusy` if one is running |
 
 **replay** (optional — served only by a carrier backing a `ReplayController`,
 which advertises the group in its hello; otherwise `unsupported`)
@@ -227,7 +278,7 @@ must render and answer:
 | `ask_request` | `ask:{ask_id, question, options?, allow_custom?}` | a mid-turn question (resolve with `answer`) |
 | `permission_resolved` | `resolved:{call_id}` | another client / a remembered decision answered it — dismiss the dialog (feature `resolve-events`) |
 | `ask_resolved` | `resolved:{ask_id}` | the question was answered |
-| `snapshot` | `snapshot:{…}` | sent only to a **new subscriber**: transcript, pending permissions/asks, queue, skills, `busy` — render history before the live stream |
+| `snapshot` | `snapshot:{…}` | sent only to a **new subscriber**: transcript, pending permissions/asks, queue, skills, `busy`, and the tail span's variant metadata (`tail:{span_start, variants, active}`, so a reconnecting client redraws the swipe arrows) — render history before the live stream |
 | `session_updated` | `info:{SessionInfo}` | metadata changed (title, model, cost, `trusted`) — refresh headers & the session list |
 | `queue_updated` | `queued:[…]` | the pending queue changed (absent = cleared) |
 | `surface_updated` | `surface_id` | a pane's content changed — re-fetch with `surface.get` |

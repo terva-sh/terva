@@ -93,9 +93,12 @@ a role you are playing. ...
   still wins. The order is: `--system-prompt` > `SYSTEM.md` > immersive persona >
   additive persona > built-in default.
 - **Write a complete charter.** An immersive charter owns everything, so the
-  harness conventions (terminal/Markdown output, edit-tool discipline) are *not*
-  added — include any operating guidance you actually want (a one-line "your
-  output renders as Markdown" is usually enough).
+  harness conventions are *not* added — neither the output guidance (which terva
+  otherwise writes against the run's surface: a rendered pane, a chat message, a
+  plain stream, or a program) nor the edit/write discipline. Include any
+  operating guidance you actually want. A one-line "your output renders as
+  Markdown" is usually enough — but if the persona will run somewhere that does
+  *not* render markdown, say that instead, because nothing else will.
 - The 2000-char static-block budget that `persona validate` warns about does not
   apply to an immersive charter (it's the whole prompt, not a bounded block).
 - It degrades gracefully: a host that predates the field treats the persona as

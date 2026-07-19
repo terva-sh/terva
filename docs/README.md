@@ -22,9 +22,12 @@ into your front end: the [TUI guide](tui.md) or the [web panel](web.md).
 | [models.md](models.md) | Models & providers in practice |
 | [personas.md](personas.md) | Personas and crews |
 | [raati.md](raati.md) | RAATI — the three-seat deliberation panel |
+| [workflows.md](workflows.md) | Scripted multi-agent orchestration — `terva workflow run` |
 | [permissions.md](permissions.md) | Approval modes, typed rules, the sandbox |
 | [context-construction.md](context-construction.md) | What goes into the model's context each turn |
 | [image-generation.md](image-generation.md) | `generate_image` and its backends |
+| [native-image-output.md](native-image-output.md) | The model drawing images inline (`native_output`, Codex) |
+| [scripting.md](scripting.md) | `code_execution` — the in-engine JavaScript sandbox |
 | [themes.md](themes.md) | TUI themes |
 | [skills.md](skills.md) | `SKILL.md` instruction files |
 | [debugging-prompts.md](debugging-prompts.md) | Inspecting / debugging a prompt |

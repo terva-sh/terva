@@ -39,3 +39,10 @@ literal `"User"`.
 The `depth_prompt` and `terva.sh/harness` blocks under `extensions` are retained
 verbatim but **never interpreted as capabilities** — a card is data, never code —
 and `creator_notes` is never sent to the model.
+
+Beyond the CLI, a card can also be imported into the **character library** — the
+`cards.import` control-plane verb, or a drag onto the panel's **Characters** pane
+(and the immersive [Stage](../../docs/web.md#stage-the-immersive-chatplay-surface)
+app). The library keeps the original file, so the avatar pixels survive and serve
+over the auth-gated `/media/` route. See [docs/controllers.md](../../docs/controllers.md)
+for the `cards.*` verbs and `docs/proposals/stage-surface.md` §3 for the library.

@@ -40,6 +40,8 @@ Flags:
 | `--web-insecure` | off | permit a non-loopback bind with **no** auth mode (dangerous — open to any source) |
 | `--web-insecure-cidr` | — | grant **no**-auth access to these source IP/CIDR(s) only (comma-separated; loopback always allowed) — the scoped, safer form of `--web-insecure` for a trusted overlay network (see [Auth](#auth)) |
 | `--allow-restart` | off | enable Tier-1 self-restart (see [Self-restart](#self-restart)); `--web-allow-restart` is the accepted older spelling |
+| `--web-stage` | off | mount **Stage**, the immersive chat/play surface, at `/stage/` — a second web app alongside the panel, gated by the same auth, opted into per deployment (see [Stage](#stage-the-immersive-chatplay-surface)) |
+| `--web-allow-login` | off | serve the provider-login group so the web UI can add / repair / revoke the **model-provider** credential (Anthropic/OpenAI/Kimi/…). Off by default and, like `--allow-restart`, must never ride an unauthenticated listener — writing a credential is more authority than driving a conversation. Does not relax the credential-less boot check; it's for adding a *second* provider or replacing an expired subscription (see [Auth](#auth)) |
 
 Standard flags apply too: `--cwd` pins the workspace, `--model` / `--provider`
 pick the default, `--yolo` runs without approval prompts, `--jail` / `--no-jail`
@@ -431,9 +433,48 @@ daemon as a second client — same sessions, same live stream as the browser
 panel, with the PWA's reconnect/resync discipline. See docs/tui.md
 §"Attaching to a running daemon".
 
+## Stage: the immersive chat/play surface
+
+**Stage** is terva's SillyTavern-inspired chat/play front end — a second web app
+served by the same daemon, for driving a character card or persona through an
+immersive conversation or roleplay rather than a coding session. It is **off by
+default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
+`/`.
+
+- **A distinct app, one daemon.** Stage is its own composition root and its own
+  installable PWA (its own name/icon, `start_url`/`scope` `/stage/`), not a third
+  view mode of the panel. It shares the panel's transport, auth gate, and embed —
+  one `/ws`, one login. Its shell is auth-gated exactly like the panel, so like
+  the panel **nothing under `/stage/` is service-worker-precached**.
+- **What it is made of.** Immersive sessions are ordinary sessions carrying an
+  *experience* — `chat` (pure conversation, no tools) or `play` (embodied in a
+  world via extension/MCP tools) — created next to coding sessions in the same
+  workspace. The character library (the [Characters](#panes) pane), the
+  transcript-revision grammar (swipe / regenerate / edit any message), scene
+  backgrounds, and greeting seeding are all engine/wire primitives — Stage is one
+  consumer of them, the panel's focus view is another.
+- **Enabling it.** Pass `--web-stage`, or set `"web_stage": true` in config (the
+  flag OR the knob turns it on) — the flag suits a one-off, the knob a deployment
+  that always wants Stage. There is also a **Settings toggle** ("Stage surface")
+  that writes the config knob; because the `/stage/` route is mounted when the web
+  server starts, the toggle takes effect on the next launch (a persist-only setting,
+  like lazy tool loading). Once on, the daemon advertises the `stage` hello feature,
+  which a panel reads to offer an "open in Stage" link. Access is gated by the same
+  auth as the panel — Stage inherits it, there is no separate gate.
+- **Status.** Stage is **opt-in while it matures** — progressive disclosure: the
+  panel is the power surface, Stage is turned on per deployment once it's good. The
+  design of record — session model, the interaction grammar, the content library,
+  and the two-app split — is `docs/proposals/stage-surface.md`.
+
 ## Building the client
 
-The panel is a Preact + Vite PWA under `packages/agent/web/client/`. Its build
+The web client is a Preact + Vite **multi-page app (MPA)** under
+`packages/agent/web/client/`, building **two** apps from one workspace: the
+control **panel** (`index.html`) and — behind `--web-stage` — the immersive
+**[Stage](#stage-the-immersive-chatplay-surface)** app (`stage.html`). Rollup
+chunk-splits the code they share, so the two apps share bytes in `dist/` rather
+than duplicating them, and one npm project keeps a single typecheck, i18n catalog,
+mock-backend smoke harness, and `web-verify-dist` gate across both. The build
 output (`client/dist/`) is **committed** and embedded via `go:embed`, so
 `go build -tags terva_web` and the release pipeline need no Node.js. After
 changing anything under `client/src`, rebuild and commit:
@@ -442,20 +483,27 @@ changing anything under `client/src`, rebuild and commit:
 just web-build     # npm ci + vite build -> client/dist (commit the result)
 ```
 
-The client source is organized by dependency direction:
+The client source is organized by dependency direction, low to high:
 
-- `src/platform/` contains Preact-free protocol, conversation-state, and
-  image-policy modules;
-- `src/features/` contains reusable Preact features and feature-local behavior
-  such as conversation attachments, interactions, sessions, and model UI;
-- `src/ui/` contains small shared presentation primitives plus browser and
-  formatting helpers; and
-- `src/app.tsx` remains the control-panel composition root while its product
-  surfaces and orchestration are split incrementally.
+- `src/platform/` — Preact-free protocol, conversation-state, and image-policy
+  modules; **fully shared** by both apps (the consistency layer);
+- `src/ui/` — small shared presentation primitives plus browser and formatting
+  helpers;
+- `src/features/` — reusable Preact features and feature-local behavior
+  (conversation attachments, interactions, sessions, model UI), shared
+  selectively;
+- `src/app.tsx` — the control-**panel** composition root (owns the transport and
+  every verb); and
+- `src/apps/stage/` — the **Stage** composition root: its own routes, shell,
+  theme, and PWA manifest.
 
-Keep transport calls in the composition/controller layer and pass typed data and
-callbacks into visual components. Run `just web-test`, the client `typecheck` and
-`i18n-check` scripts, and `just web-build` after source changes.
+The layering is enforced by `boundaries.test.ts`: an app may import
+`platform`/`ui`/`features`; those lower layers never import an app; and **the
+Stage app and the panel never import each other** — anything both need is promoted
+down into a shared layer, never reached across. Keep transport calls in the
+composition/controller layer and pass typed data and callbacks into visual
+components. Run `just web-test`, the client `typecheck` and `i18n-check` scripts,
+and `just web-build` after source changes.
 
 ## Languages
 
@@ -570,6 +618,15 @@ docs/proposals/web-surfaces.md). Today's panes:
   coordinator has a real event feed — no poller). With `raati.convene_tool`
   enabled, the **agent** can convene a panel too (`raati_convene`, always
   behind the approval gate) — its deliberation renders on this same board.
+- **Worktrees** — managed git worktrees (the built-in `worktree_*` engine): the
+  same one-fetch view the TUI's `/worktree` panel renders. Each worktree shows
+  its claim state (`claimed(self)` means claimed by *this* session), branch,
+  base, and dirtiness; the **Merge-back** toggle switches to the collect
+  overview — what each branch carries over its base (commits ahead,
+  dirty/unpushed flags; merging back stays a manual act). Read-only, and the
+  tab appears only when the session's cwd sits inside a git repo. No push
+  event exists for worktree changes, so the pane fetches when opened and the ↻
+  button re-fetches on demand.
 - **Settings** — every setting the daemon exposes, rendered from one
   server-side surface (`workspace_settings.go`) that the TUI's `/settings`
   renders too, so the two never drift. Each row states when it bites: **approval
@@ -620,6 +677,17 @@ docs/proposals/web-surfaces.md). Today's panes:
   sessions** (kept that way on purpose, so an edit doesn't reset the prompt
   cache). Only web-managed user entries are editable — entries from extension
   bundles, character cards, or other tiers are read-only.
+- **Characters** — the content library the immersive [Stage](#stage-the-immersive-chatplay-surface)
+  surface plays from, surfaced in the panel so both manage **one** store. Two
+  rosters: **character cards** (import a SillyTavern CCv2 card by drag or file, see
+  its greeting/lorebook/PHI inventory, edit a card's own fields, delete) and
+  **personas** (the embedded crew plus your own; create/edit is gated to a
+  **trusted** workspace, because a persona charter shapes identity in the cached
+  prefix — a card, by contrast, is untrusted data whose edit never changes what it
+  can *do*). Backed by the `cards.*` / `personas.*` control verbs; avatars serve
+  over the auth-gated `/media/` route (never SW-precached, like the panel). It is
+  workspace-global and always offered — the embedded persona crew is never empty —
+  and an import or edit refreshes it live.
 - **Chat** — the chat-bridge manager (the TUI's `/connect`). Lists every
   registered chat service — the compiled-in telegram and discord connectors plus
   any connector extensions (tagged `extension`, and `dev` where applicable) —

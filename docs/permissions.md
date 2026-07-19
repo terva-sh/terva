@@ -115,7 +115,7 @@ would be wrong. The classes (`core.Authority`):
 
 | Authority | Meaning | Example |
 |---|---|---|
-| `local-read` | reads files/state under the jail; no process/network/external effect | `read`, `grep`, `glob`, `terva_status`, `session_inspect`, `skill` |
+| `local-read` | reads files/state under the jail; no process/network/external effect | `read`, `grep`, `glob`, `terva_status`, `session_inspect`, `skill`, `worktree_list`, `code_execution` (read-only exactly as long as every function it exposes is — see [scripting.md](scripting.md#permissions)) |
 | `local-data` | reads **and writes** the tool's own host-managed data store — for an extension, its `$TERVA_HOME/ext-data/<name>` — and nothing else: never your workspace, a process, the network, or an external service. Auto-allowable like `local-read`, because the write never leaves private, host-controlled storage | `task_create`/`task_update`/`task_list`/`task_archive`; a memory/notes extension tool |
 | `workspace-mutation` | writes files / edits workspace state | `write`, `edit` |
 | `process-execution` | runs commands / subprocesses | `bash` |
