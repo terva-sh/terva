@@ -79,6 +79,16 @@ type SwarmSpawnTool struct {
 	// `terva trust` (or pass allow_untrusted to proceed degraded). Nil
 	// means the host doesn't track trust; the gate is skipped.
 	Trusted func() bool
+
+	// AllowBackend gates and validates the `backend` argument — a request to run
+	// the task on a NON-terva agent (see the worker package) instead of a native
+	// sub-agent. The host supplies it: this package cannot import the worker
+	// registry (that would cycle through build), so the host injects a closure
+	// that reads the external-workers config gate LIVE and validates the name
+	// against the registered backends. Returning an error rejects the spawn with
+	// that message; returning nil allows it. Nil means this host offers no
+	// external backends at all, and any `backend` request is refused.
+	AllowBackend func(name string) error
 }
 
 // SetHost updates the host provider/model this tool inherits for tier
@@ -105,6 +115,10 @@ type swarmSpawnArgs struct {
 	Provider       string `json:"provider,omitempty"`
 	Tier           string `json:"tier,omitempty"`
 	AllowUntrusted bool   `json:"allow_untrusted,omitempty"`
+	Backend        string `json:"backend,omitempty"`
+	// DeliverableSchema is the structured-deliverable contract: a JSON
+	// schema the sub-agent's report must match (see SpawnRequest.Schema).
+	DeliverableSchema json.RawMessage `json:"deliverable_schema,omitempty"`
 }
 
 const swarmSpawnSchema = `{
@@ -117,6 +131,10 @@ const swarmSpawnSchema = `{
     "persona": {
       "type": "string",
       "description": "Optional persona to boot the sub-agent as a specialist. Pick the one whose focus matches the sub-task (your instructions list what each is good for when there are any); omit for a general-purpose sub-agent."
+    },
+    "deliverable_schema": {
+      "type": "object",
+      "description": "Optional JSON schema the sub-agent's report must match (top-level \"type\" must be \"object\"). The sub-agent gets a deliver_result tool bound to it, and the validated JSON is surfaced in the recap and on the swarm dashboard. Use when you will machine-read the result (findings lists, counts, verdicts); omit for prose answers."
     },
     "tier": {
       "type": "string",
@@ -134,6 +152,10 @@ const swarmSpawnSchema = `{
     "allow_untrusted": {
       "type": "boolean",
       "description": "Set true ONLY after the user has explicitly declined to trust this workspace but still wants sub-agents: spawns them degraded (no project extensions, skills, or context files). Normally leave unset — if the workspace is untrusted, ask the user to run 'terva trust' first."
+    },
+    "backend": {
+      "type": "string",
+      "description": "Optional. Hand this task to an EXTERNAL coding agent instead of a native terva sub-agent — e.g. \"claude\" for Claude Code. The external agent works in its own leased checkout, brings its own tools and credentials, and reports back its result the same way a native sub-agent does. Only available when the user has enabled external workers; omit for a normal terva sub-agent (the right default almost always)."
     }
   },
   "required": ["task"]
@@ -213,11 +235,40 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		return toolErr("swarm_spawn: " + errMsg), nil
 	}
 
+	// A request to run this task on an external agent is gated and validated by
+	// the host (the config gate is read live there, and the name is checked
+	// against the registered backends). A native sub-agent — the overwhelming
+	// default — leaves this empty and the whole check is skipped.
+	backend := strings.TrimSpace(a.Backend)
+	if backend != "" {
+		if t.AllowBackend == nil {
+			return toolErr("swarm_spawn: external worker backends are not available in this host; omit `backend` to spawn a native sub-agent"), nil
+		}
+		if err := t.AllowBackend(backend); err != nil {
+			return toolErr("swarm_spawn: " + err.Error()), nil
+		}
+	}
+
+	// The deliverable schema becomes the child's deliver_result argument
+	// schema verbatim, so it must parse and be a top-level object (a
+	// provider requirement for tool schemas) BEFORE anything spawns.
+	if len(a.DeliverableSchema) > 0 {
+		var m map[string]any
+		if err := json.Unmarshal(a.DeliverableSchema, &m); err != nil {
+			return toolErr(fmt.Sprintf("swarm_spawn: deliverable_schema does not parse: %v", err)), nil
+		}
+		if typ, _ := m["type"].(string); typ != "object" {
+			return toolErr(`swarm_spawn: deliverable_schema must declare "type": "object" at the top level (it becomes the sub-agent's deliver_result argument schema)`), nil
+		}
+	}
+
 	req := swarm.SpawnRequest{
 		Task:     task,
 		Model:    route.Model,
 		Provider: route.Provider,
 		Persona:  persona,
+		Backend:  backend,
+		Schema:   a.DeliverableSchema,
 	}
 	// Stamp the spawn with the host conversation's session id so the child's
 	// meta.json records which conversation it belongs to and the /swarm
@@ -242,6 +293,11 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	fmt.Fprintf(&sb, "task: %s\n", truncateTask(task, 200))
 	if persona != "" {
 		fmt.Fprintf(&sb, "persona: %s\n", persona)
+	}
+	if backend != "" {
+		// Name it so the coordinator knows this one runs elsewhere — its result
+		// comes back the same way, but it is not a native terva sub-agent.
+		fmt.Fprintf(&sb, "backend: %s (external worker)\n", backend)
 	}
 	switch {
 	case route.TierModel != "":
