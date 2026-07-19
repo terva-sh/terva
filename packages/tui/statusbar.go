@@ -109,6 +109,12 @@ type StatusBarParams struct {
 	// renders the segment absent (no tasks / not this mode).
 	TaskGlance string
 
+	// WorktreeGlance is the managed-worktree count line (e.g.
+	// "worktrees 3 · 1 yours"), computed by worktree.StatusGlance from the
+	// /worktree panel's cache; empty renders the segment absent (no
+	// worktrees, or the panel has not been opened yet this session).
+	WorktreeGlance string
+
 	// SessionName is the short name of the live session file; empty
 	// renders the segment absent.
 	SessionName string
@@ -189,6 +195,7 @@ const (
 	SegExt      SegmentID = "ext"
 	SegReplay   SegmentID = "replay"
 	SegTasks    SegmentID = "tasks"
+	SegWorktree SegmentID = "worktrees"
 )
 
 // segmentFunc renders one segment into zero or more pre-styled atoms.
@@ -216,6 +223,7 @@ var statusSegments = map[SegmentID]segmentFunc{
 	SegExt:      segExt,
 	SegReplay:   segReplay,
 	SegTasks:    segTasks,
+	SegWorktree: segWorktree,
 }
 
 // defaultStatusRows is the built-in layout: identity + spend on row 1
@@ -241,7 +249,7 @@ func defaultStatusRows(hideWorkspace bool) [][]SegmentID {
 	return [][]SegmentID{
 		{SegReplay, SegCWD, SegGit, SegEdits, SegModel, SegThinking, SegTokens, SegCost},
 		{SegContext, SegUsage, SegSwarm},
-		{SegTags, SegTasks, SegBridge, SegExt},
+		{SegTags, SegTasks, SegWorktree, SegBridge, SegExt},
 	}
 }
 
@@ -563,6 +571,17 @@ func segSwarm(p StatusBarParams) []string {
 func segTasks(p StatusBarParams) []string {
 	if s := strings.TrimSpace(p.TaskGlance); s != "" {
 		return []string{p.Theme.FG256(p.Theme.StatusColor(SegTasks, p.Theme.Accent), s)}
+	}
+	return nil
+}
+
+// segWorktree renders the managed-worktree glance (count + how many this
+// session holds — see worktree.StatusGlance). Absent until the /worktree
+// panel has populated the cache, and absent with zero worktrees — the same
+// visibility the retired terva-git-worktree extension's segment had.
+func segWorktree(p StatusBarParams) []string {
+	if s := strings.TrimSpace(p.WorktreeGlance); s != "" {
+		return []string{p.Theme.FG256(p.Theme.StatusColor(SegWorktree, p.Theme.Muted), s)}
 	}
 	return nil
 }

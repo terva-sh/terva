@@ -25,8 +25,10 @@ func TestClientCapabilitiesDeclared(t *testing.T) {
 		{"groq", NewGroq("k", ""), true, true},
 		{"openai-codex", NewOpenAICodex("k", "", ""), true, true},
 		{"deepseek", NewDeepSeek("k", ""), true, true},
-		// Anthropic carries tool images natively: declares nothing.
-		{"anthropic", NewAnthropic("k", ""), false, false},
+		// Anthropic carries tool images natively (no mirror) but DOES declare a
+		// capability now — ContinuesAssistantPrefill — so it implements the
+		// interface; MirrorsToolImages stays false.
+		{"anthropic", NewAnthropic("k", ""), true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,6 +78,83 @@ func TestClientMirrorsToolImagesThroughWrappers(t *testing.T) {
 				t.Errorf("ClientMirrorsToolImages(%s) = %v, want %v", tc.name, got, tc.want)
 			}
 		})
+	}
+}
+
+// ContinuesAssistantPrefill is the inverse split of MirrorsToolImages: only
+// Anthropic (Claude Messages) extends a trailing assistant message as a prefill,
+// so only it opts in — the Stage "continue" gate. It must survive the wrapper
+// walk the same way, so the OAuth client (which some builds wrap) still reports
+// it. OpenAI/codex/deepseek treat a trailing assistant as history or reject it.
+func TestClientContinuesAssistantPrefill(t *testing.T) {
+	cases := []struct {
+		name string
+		c    Client
+		want bool
+	}{
+		{"anthropic", NewAnthropic("k", ""), true},
+		{"anthropic-oauth", NewAnthropicOAuth("t", ""), true},
+		{"openai", NewOpenAI("k", ""), false},
+		{"openai-codex", NewOpenAICodex("k", "", ""), false},
+		{"deepseek", NewDeepSeek("k", ""), false},
+		// A codexClient behind renamedClient stays false through the unwrap walk.
+		{"openai-responses", NewOpenAIResponses("k", ""), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClientContinuesAssistantPrefill(tc.c); got != tc.want {
+				t.Errorf("ClientContinuesAssistantPrefill(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// A trailing assistant message is a prefill; Anthropic rejects one that ends in
+// whitespace, so the converter right-trims its final text block — but only when
+// the assistant message is genuinely last (the continue case), never when a
+// user/tool/ephemeral message follows it.
+func TestAnthropicTrimsTrailingAssistantPrefill(t *testing.T) {
+	c := NewAnthropic("k", "").(*anthropicClient)
+
+	// Trailing assistant (a prefill): the whitespace is trimmed.
+	req, err := c.buildRequest(Request{Model: "claude-sonnet-4-5", Messages: []Message{
+		{Role: RoleUser, Content: []Content{TextBlock{Text: "Tell me a story."}}},
+		{Role: RoleAssistant, Content: []Content{TextBlock{Text: "The knight rode on,\n\n"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := req.Messages[len(req.Messages)-1]
+	if last.Role != "assistant" {
+		t.Fatalf("last message role = %q, want assistant", last.Role)
+	}
+	if got := last.Content[len(last.Content)-1].(anthTextBlock).Text; got != "The knight rode on," {
+		t.Errorf("trailing assistant prefill not trimmed: %q", got)
+	}
+
+	// An assistant message followed by ephemeral context is NOT a prefill — the
+	// ephemeral user block is last, so nothing is trimmed.
+	req2, err := c.buildRequest(Request{
+		Model:            "claude-sonnet-4-5",
+		EphemeralContext: "It is raining.",
+		Messages: []Message{
+			{Role: RoleUser, Content: []Content{TextBlock{Text: "Hi."}}},
+			{Role: RoleAssistant, Content: []Content{TextBlock{Text: "Hello.\n"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := req2.Messages[len(req2.Messages)-1].Role; got != "user" {
+		t.Fatalf("with ephemeral, last role = %q, want user", got)
+	}
+	// The assistant message keeps its trailing newline (it is not the prefill).
+	for _, m := range req2.Messages {
+		if m.Role == "assistant" {
+			if got := m.Content[len(m.Content)-1].(anthTextBlock).Text; got != "Hello.\n" {
+				t.Errorf("non-trailing assistant was trimmed: %q", got)
+			}
+		}
 	}
 }
 

@@ -439,6 +439,13 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	if err != nil {
 		return err
 	}
+	// `bot run` is routed before the mode switch and has no mode flag of its
+	// own, so ParseArgs hands back its ModeInteractive default. A bot is not
+	// interactive: its user is a chat room. Say so — the prompt reads it to
+	// learn where its words land (build.SurfaceOf), and resolveJail reads it to
+	// keep the built-in file/shell tools confined to the cwd, which is the
+	// posture a bot has always had and must keep.
+	args.Mode = build.ModeBot
 	// `terva bot run --help` / -h: print bot usage and stop, rather than
 	// falling through and trying to launch (ParseArgs records Help but the run
 	// path never checked it).

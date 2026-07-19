@@ -1,6 +1,7 @@
 package build
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,6 +53,25 @@ const (
 	// it needs no credential and rejects prompts. See
 	// docs/proposals/session-player.md.
 	ModeReplay Mode = "replay"
+	// ModeBot is the chat-connector daemon (`terva bot run`): a full agent
+	// whose user is a Discord/Slack conversation. It is NOT set by a flag —
+	// `bot run` is routed before the mode switch and parses its own tail, so
+	// runBotRun stamps it after ParseArgs.
+	//
+	// It exists because a bot is neither interactive nor headless and both
+	// answers are wrong for it. It used to inherit ParseArgs's ModeInteractive
+	// default, which quietly made two decisions: the prompt told a Discord bot
+	// its output rendered in a TUI (see Surface), and resolveJail confined it to
+	// the cwd. The first was a bug; the second was right, and is now said out
+	// loud rather than inherited.
+	ModeBot Mode = "bot"
+)
+
+// Portable-mode values for Args.Portable / SystemPromptOpts.Portable.
+const (
+	PortableOff    = ""       // the default — terva's full self-context
+	PortableOn     = "on"     // drop harness-local self-context; keep own discovery
+	PortableStrict = "strict" // also drop discovery; the briefing stands alone
 )
 
 // Args holds parsed command-line options.
@@ -97,6 +117,11 @@ type Args struct {
 	// SECOND provider, and for the subscription that expired.
 	AllowWebLogin bool
 
+	// WebStage mounts the Stage app (the immersive chat/play surface) at /stage/
+	// and advertises it in the hello. --web-stage. Off by default: Stage is a
+	// distinct product from the control panel, opted into per deployment.
+	WebStage bool
+
 	// Attach mode (`terva attach [URL]` / --attach, Mode == ModeAttach).
 	// AttachURL is the daemon endpoint — a full ws:// or wss:// URL, or a
 	// bare host:port that normalizes to ws://host:port/ws; empty means the
@@ -107,6 +132,21 @@ type Args struct {
 
 	SystemPrompt       string
 	AppendSystemPrompt []string
+
+	// Portable strips terva's harness-local self-context from the system prompt,
+	// so a terva worker runs on ONLY what a portable briefing gave it — the
+	// worker side of the external-agent-workers sufficiency test. "" is off; "on"
+	// drops harness-local segments (docs-hint, status-hint, auto-swarm, cast,
+	// tasks, swarm-child, restricted-workspace, footer) while keeping terva's own
+	// discovery (AGENTS.md, skills, lore) as the symmetric analog to a foreign
+	// agent reading its own project files; "strict" additionally drops that
+	// discovery, proving the briefing stands alone. --portable / --portable=strict.
+	//
+	// Its semantics are the SAME PortabilityOf classification the worker composer
+	// uses — one table, two consumers — so the two cannot drift. See
+	// docs/proposals/external-agent-workers.md.
+	Portable string
+
 	// Persona selects the active Persona (--Persona): a built-in/on-disk name
 	// or a path to a .md file. Empty resolves via Persona.md / default_persona /
 	// the embedded Mieli default.
@@ -297,6 +337,35 @@ type Args struct {
 	// ResolveApprovalMode (permissions.go).
 	Approval string
 
+	// RPCApprovals opts an rpc-mode run into the ask/approve carrier: a tool
+	// call that needs confirmation emits an `ask` frame and BLOCKS for the
+	// driver's matching `approve` command, instead of the headless default of
+	// refusing it. It is OPT-IN because a driver that does not answer would hang
+	// — worse than refuse-by-default — so terva only asks a driver that has
+	// promised (by setting --rpc-approvals) to answer. This is the rpc-native
+	// carrier of core.Confirmer; see docs/proposals/external-agent-workers.md.
+	RPCApprovals bool
+
+	// ApprovalSocket routes an rpc-mode run's confirmations through terva's OWN
+	// MCP client to the approval bridge at this unix-socket path: terva spawns
+	// `terva mcp-approval-bridge --socket <path>` as an MCP server and fills the
+	// confirm gate with a Confirmer that calls its approval tool. It is the MCP
+	// carrier of core.Confirmer — the config-OPAQUE sibling of --rpc-approvals,
+	// used by the terva:portable worker so its approvals ride the identical bridge
+	// a foreign (claude) worker uses. Empty means no MCP approval carrier.
+	ApprovalSocket string
+
+	// ApprovalHTTP routes an rpc-mode run's confirmations through terva's OWN MCP
+	// client to a REMOTE Streamable-HTTP permission endpoint, carried as a compact
+	// JSON descriptor ({url, tool?, bearer_env?, headers?, timeout_ms?}). It is the
+	// networked sibling of --approval-socket: the same {behavior} permission-tool
+	// contract, reached over HTTP instead of a local unix socket, so a foreign
+	// orchestrator on another host can gate this worker's tool calls. Empty means
+	// no HTTP approval carrier; a backend sets this OR --approval-socket, not both.
+	// Requires an http-transport build (terva_no_mcp_http off); otherwise the
+	// carrier fails to start and the run stays refuse-by-default (fail closed).
+	ApprovalHTTP string
+
 	ListModels bool
 	// ListModelsFilter narrows --list-models output (the `=FILTER`
 	// form): a comma list of source terms (user | live | catalog |
@@ -316,6 +385,15 @@ type Args struct {
 	// swarm-spawned agent. Empty in every other mode. Set by
 	// --swarm-agent <path>; presence flips Mode to ModeSwarmAgent.
 	SwarmAgent string
+
+	// DeliverableSchema is the structured-deliverable contract for a swarm
+	// child (ModeSwarmAgent only): the JSON schema its report must match.
+	// Populated by the swarm-agent bootstrap from
+	// TERVA_SWARM_DELIVERABLE_SCHEMA — the supervisor's runner sets the env
+	// var; there is deliberately no flag (a schema is a JSON blob with no
+	// business in `ps` output). Non-empty: Resolve registers the
+	// deliver_result tool bound to it and pins the contract addendum.
+	DeliverableSchema json.RawMessage
 
 	// SwarmWorktrees is the tri-state override for per-agent swarm
 	// worktree isolation. nil means "not set on the command line" (the
@@ -434,6 +512,8 @@ func ParseArgs(in []string) (Args, error) {
 			a.AllowRestart = true
 		case "--web-allow-login":
 			a.AllowWebLogin = true
+		case "--web-stage":
+			a.WebStage = true
 		case "-c", "--continue":
 			a.Continue = true
 		case "-r", "--resume":
@@ -510,6 +590,12 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.AppendSystemPrompt = append(a.AppendSystemPrompt, v)
+		case "--portable":
+			// Bare flag; the value form is a separate exact case below so a bare
+			// --portable never swallows a following positional as its value.
+			a.Portable = PortableOn
+		case "--portable=strict":
+			a.Portable = PortableStrict
 		case "--persona":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -629,6 +715,20 @@ func ParseArgs(in []string) (Args, error) {
 			a.WithSkills = true
 		case "--no-yolo":
 			a.NoYolo = true
+		case "--rpc-approvals":
+			a.RPCApprovals = true
+		case "--approval-socket":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.ApprovalSocket = v
+		case "--approval-http":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.ApprovalHTTP = v
 		case "--approval":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -825,6 +925,10 @@ Web-specific flags:
   --web-trusted-proxy CIDR      IP/CIDR(s) allowed to assert --web-auth-header (comma-separated; loopback always allowed)
   --allow-restart               enable Tier-1 self-restart (control.restart + the terva_restart tool);
                                 --web-allow-restart is the accepted older spelling
+  --web-stage                   mount Stage — the immersive chat/play surface — at /stage/, a second web
+                                app alongside the panel, gated by the same auth (off by default)
+  --web-allow-login             serve the provider-login group: add / repair / revoke the model-provider
+                                credential from the web UI (off by default; never on an unauthenticated bind)
   --web-insecure                allow binding a non-loopback address with NO auth (dangerous)
   --web-insecure-cidr CIDR      grant NO-auth access to these source IP/CIDR(s) only (comma-separated; loopback always
                                 allowed) — the scoped, safer form of --web-insecure for a trusted overlay (e.g. a tailnet

@@ -28,6 +28,11 @@ func TestResolveApprovalModePrecedence(t *testing.T) {
 		{"flag beats config", Args{Approval: "yolo"}, config.Config{Approval: "ask"}, core.ApprovalYolo},
 		{"no-yolo beats config", Args{NoYolo: true}, config.Config{Approval: "yolo"}, core.ApprovalAsk},
 		{"bad config value falls back to interactive default", Args{Mode: ModeInteractive}, config.Config{Approval: "bogus"}, core.ApprovalWorkspace},
+		// The one path where a bot's mode is actually consulted: botRun settles
+		// args.Approval before this runs in every case EXCEPT an unparseable
+		// config value. That case has to fail toward asking the chat, not toward
+		// running un-gated — a typo in config.json must not arm a Discord room.
+		{"bot with an unparseable config value asks, never yolos", Args{Mode: ModeBot}, config.Config{Approval: "bogus"}, core.ApprovalWorkspace},
 	}
 	for _, c := range cases {
 		if got := ResolveApprovalMode(c.args, c.cfg); got != c.want {
@@ -44,8 +49,13 @@ func TestResolveJail(t *testing.T) {
 	}{
 		{"interactive jails by default", Args{Mode: ModeInteractive}, true},
 		{"acp jails by default", Args{Mode: ModeACP}, true},
+		// A bot has always been jailed — it got there by inheriting ParseArgs's
+		// ModeInteractive default, and botcmd records that as deliberate. Giving
+		// it a mode of its own must not quietly let a chat room out of the cwd.
+		{"bot jails by default", Args{Mode: ModeBot}, true},
 		{"headless does not jail by default", Args{Mode: ModePrint}, false},
 		{"--no-jail forces off in interactive", Args{Mode: ModeInteractive, NoJail: true}, false},
+		{"--no-jail forces off in a bot", Args{Mode: ModeBot, NoJail: true}, false},
 		{"--jail forces on in headless", Args{Mode: ModePrint, Jail: true}, true},
 		{"--no-jail beats --jail", Args{Mode: ModeInteractive, Jail: true, NoJail: true}, false},
 	}

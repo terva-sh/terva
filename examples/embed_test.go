@@ -10,41 +10,45 @@ import (
 	"terva.sh/terva/packages/testsupport"
 )
 
-// Every file under the real deploy/ tree must reach disk on an install. A doc
-// that points a reader at examples/deploy/<x> — docs/web.md and docs/deploy.md
-// do, for the systemd units and the HAProxy configs — dangles otherwise, on
-// exactly the install-only host that has no checkout to fall back on. This reads
-// the source tree, not the embed, so it catches a file the glob somehow missed
-// rather than restating the glob to itself (the reasoning docs.go records).
-func TestEveryDeployExampleIsInstalled(t *testing.T) {
+// Every file under the real embedded trees must reach disk on an install. A
+// doc that points a reader at examples/<tree>/<x> — docs/web.md and
+// docs/deploy.md do for the systemd units and HAProxy configs,
+// docs/workflows.md does for the example scripts — dangles otherwise, on
+// exactly the install-only host that has no checkout to fall back on. This
+// reads the source tree, not the embed, so it catches a file the glob
+// somehow missed rather than restating the glob to itself (the reasoning
+// docs.go records).
+func TestEveryExampleTreeIsInstalled(t *testing.T) {
 	root, err := EnsureInstalled(testsupport.TempDir(t))
 	if err != nil {
 		t.Fatalf("EnsureInstalled: %v", err)
 	}
-	err = filepath.WalkDir("deploy", func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
+	for _, tree := range embeddedRoots {
+		err = filepath.WalkDir(tree, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			src, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			dst := filepath.Join(root, filepath.FromSlash(p))
+			got, err := os.ReadFile(dst)
+			if err != nil {
+				t.Errorf("%s is in the source tree but was not installed to %s: %v", p, dst, err)
+				return nil
+			}
+			if !bytes.Equal(src, got) {
+				t.Errorf("%s installed with content that differs from the source", p)
+			}
 			return nil
-		}
-		src, err := os.ReadFile(p)
+		})
 		if err != nil {
-			return err
+			t.Fatalf("walk %s/: %v", tree, err)
 		}
-		dst := filepath.Join(root, filepath.FromSlash(p))
-		got, err := os.ReadFile(dst)
-		if err != nil {
-			t.Errorf("%s is in the source tree but was not installed to %s: %v", p, dst, err)
-			return nil
-		}
-		if !bytes.Equal(src, got) {
-			t.Errorf("%s installed with content that differs from the source", p)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk deploy/: %v", err)
 	}
 }
 

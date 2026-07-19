@@ -546,6 +546,7 @@ func (i *Interactive) redraw() {
 		Git:              snap.git,
 		SwarmAgents:      i.swarmAgentCount(),
 		TaskGlance:       i.taskBoardGlance(),
+		WorktreeGlance:   i.worktreeGlance(),
 		SessionName:      i.sessionShortName(),
 		Replay:           i.replayScrubber(),
 		PersonaName:      i.cfg.PersonaName,

@@ -76,12 +76,13 @@ build:
     go build -trimpath -ldflags "{{ldflags}}" -o bin/terva ./cmd/terva
     @echo "built bin/terva ({{version}}, {{commit}})"
 
-# Build a lean binary with every chat connector tagged out
-# (-tags terva_no_telegram,terva_no_discord): no chat transports or SDKs linked in.
+# Build a lean binary with every chat connector AND the remote-MCP HTTP transport
+# tagged out (-tags terva_no_telegram,terva_no_discord,terva_no_mcp_http): no chat
+# transports or SDKs, and no MCP egress (stdio MCP servers still work).
 build-min:
     @mkdir -p bin
-    go build -trimpath -tags terva_no_telegram,terva_no_discord -ldflags "{{ldflags}}" -o bin/terva-min ./cmd/terva
-    @echo "built bin/terva-min (no chat connectors)"
+    go build -trimpath -tags terva_no_telegram,terva_no_discord,terva_no_mcp_http -ldflags "{{ldflags}}" -o bin/terva-min ./cmd/terva
+    @echo "built bin/terva-min (no chat connectors, no remote-MCP HTTP)"
 
 # Build and install the FULL terva from source into your Go bin (GOBIN, else
 # GOPATH/bin) via `go install`. "Full" = every optional feature compiled in,
@@ -92,8 +93,8 @@ build-min:
 # packages/agent/web/client/dist (committed); run `just web-build` after
 # changing the client.
 install:
-    go install -trimpath -tags terva_acp,terva_web -ldflags "{{ldflags}}" ./cmd/terva
-    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (full, terva_acp,terva_web) -> $dest/terva"
+    go install -trimpath -tags terva_acp,terva_web,terva_scripting,terva_workflows -ldflags "{{ldflags}}" ./cmd/terva
+    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (full, terva_acp,terva_web,terva_scripting,terva_workflows) -> $dest/terva"
 
 # Like `just install` (full features, terva_acp, into GOBIN/GOPATH bin)
 # but NON-STRIPPED: no `-s -w`, no `-trimpath`, so symbols and source
@@ -104,8 +105,8 @@ install:
 # links the /debug/pprof endpoint (kept out of every other build); even
 # here it stays off until you set TERVA_PPROF=localhost:6060.
 install-dev:
-    go install -tags terva_acp,terva_pprof,terva_web -ldflags "{{debug_ldflags}}" ./cmd/terva
-    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (dev, non-stripped, terva_acp,terva_pprof,terva_web) -> $dest/terva"
+    go install -tags terva_acp,terva_pprof,terva_web,terva_scripting,terva_workflows -ldflags "{{debug_ldflags}}" ./cmd/terva
+    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (dev, non-stripped, terva_acp,terva_pprof,terva_web,terva_scripting,terva_workflows) -> $dest/terva"
 
 # Run a self-contained dogfood scenario (a dir under testdata/scenarios/):
 # builds the current tree, seeds a throwaway TERVA_HOME from the scenario's
@@ -259,6 +260,20 @@ test-pkg PKG *ARGS:
 test-pkg-v PKG *ARGS:
     go test -race -v {{PKG}} {{ARGS}}
 
+# Type-check every build-tag surface, INCLUDING _test.go (go vet compiles test
+# files, unlike `go build`). This is the missing rung between `test-pkg` (one
+# untagged package) and `ci` (everything, race, minutes): it catches an interface
+# change that breaks a tag-gated implementer the everyday `go test ./…` never
+# compiles — e.g. a ctrlproto.WorkspaceService method added without updating the
+# terva_web-only fakeWS, or the terva_acp carrier. Vet, not test, so it's seconds,
+# not a race suite. `just ci` remains the full gate before a push.
+#
+# Fast pre-commit sanity across the build-tag surfaces (seconds, no race).
+check:
+    go vet ./packages/agent/...
+    go vet -tags terva_web ./packages/agent/web/ ./packages/agent/
+    go vet -tags terva_acp ./packages/agent/acp/ ./packages/agent/
+
 # End-to-end harness only: builds the real binary, drives print/json
 # modes against a fake provider. Included in `just test` / `just ci`
 # via ./... — this target is for iterating on the harness itself.
@@ -320,6 +335,26 @@ ci-web:
     go vet -tags terva_web ./packages/agent/web/
     go test -tags terva_web -race ./packages/agent/web/ ./packages/agent/
 
+# The jsengine scripting consumer (behind -tags terva_scripting): build/
+# vet/test the code_execution tool and its registration seam. The engine
+# package itself (packages/agent/jsengine) is untagged, so the default
+# `test` already covers it — this guards the tagged tool + build wiring,
+# same discipline as ci-acp/ci-web. The tag is what links sobek into the
+# binary; the default build stays interpreter-free.
+ci-scripting:
+    go build -tags terva_scripting ./...
+    go vet -tags terva_scripting ./packages/agent/tools/ ./packages/agent/build/
+    go test -tags terva_scripting -race -run 'CodeExecution|Scripting' ./packages/agent/tools/ ./packages/agent/build/
+
+# The workflow engine's CLI seam (behind -tags terva_workflows): build/vet/
+# test the `terva workflow` subcommand wiring. The engine itself
+# (packages/agent/workflow + the jsengine async profile) is untagged, so
+# the default `test` already covers it — same discipline as ci-scripting.
+ci-workflows:
+    go build -tags terva_workflows ./...
+    go vet -tags terva_workflows ./packages/agent/
+    go test -tags terva_workflows -race -run 'Workflow' ./packages/agent/
+
 # The web client's vitest suite, when this machine has Node.
 #
 # This was deliberately left out of `just ci` once, on the grounds that ci is
@@ -352,7 +387,7 @@ ci-web-client:
 # fmt-check + vet + race tests + connector tag-matrix build + acp + web tag
 # build/test + the web client's vitest suite (Node-gated) + terva_pprof tag
 # build + public packaging drift check, as a pre-push gate.
-ci: lint test ci-acp ci-web ci-web-client
+ci: lint test ci-acp ci-web ci-scripting ci-workflows ci-web-client
     go build -tags terva_no_telegram,terva_no_discord ./...
     # terva_pprof guard: the profiling endpoint (cmd/terva/pprof.go) only
     # compiles under this tag, so the default build can't catch a break in

@@ -117,6 +117,14 @@ func (c *anthropicClient) Name() string {
 	return "anthropic"
 }
 
+// Capabilities reports the Anthropic wire format's opt-in behaviors. Claude's
+// Messages API extends a trailing assistant message as a prefill (the basis for
+// the Stage "continue" interaction), so ContinuesAssistantPrefill is true.
+// MirrorsToolImages stays false — Anthropic carries images inside tool results.
+func (c *anthropicClient) Capabilities() ClientCapabilities {
+	return ClientCapabilities{ContinuesAssistantPrefill: true}
+}
+
 // ---- wire types ----
 
 type anthTextBlock struct {
@@ -371,10 +379,12 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	// emitting them separately keeps each message bit-stable across
 	// turns, so the cache prefix matches for the entire history up
 	// to the newest block.
-	// Repair orphaned tool results, then make a leading assistant turn (a
-	// card's seeded greeting) valid by prepending a request-scoped user turn.
-	// Both operate on the generic message list and never mutate history.
-	req.Messages = EnsureLeadingUserTurn(RepairOrphanedToolResults(req.Messages))
+	// Repair orphaned tool results, merge any same-role adjacency an edit/delete
+	// left behind (Anthropic requires strict alternation), then make a leading
+	// assistant turn (a card's seeded greeting) valid by prepending a
+	// request-scoped user turn. All operate on the generic message list and never
+	// mutate history.
+	req.Messages = EnsureLeadingUserTurn(MergeAdjacentSameRole(RepairOrphanedToolResults(req.Messages)))
 	for _, msg := range req.Messages {
 		renameTools := c.oauth
 		switch msg.Role {
@@ -414,7 +424,31 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		})
 	}
 
+	// A trailing assistant message is a PREFILL — the continue interaction, where
+	// the model extends the last response. Anthropic 400s on an assistant message
+	// ending in whitespace, so right-trim its final text block. This only fires for
+	// a prefill request: a normal turn ends in a user/tool message (or the
+	// ephemeral user block just appended), never a bare trailing assistant.
+	trimTrailingAssistantPrefill(out.Messages)
+
 	return out, nil
+}
+
+// trimTrailingAssistantPrefill right-trims whitespace from the last text block of
+// a trailing assistant message so an assistant-prefill continue request is
+// accepted. No-op unless the final message is an assistant one.
+func trimTrailingAssistantPrefill(msgs []anthMessage) {
+	if len(msgs) == 0 || msgs[len(msgs)-1].Role != "assistant" {
+		return
+	}
+	content := msgs[len(msgs)-1].Content
+	for i := len(content) - 1; i >= 0; i-- {
+		if tb, ok := content[i].(anthTextBlock); ok {
+			tb.Text = strings.TrimRight(tb.Text, " \t\n\r")
+			content[i] = tb
+			return
+		}
+	}
 }
 
 // tagLastUserCache marks the last block of the most recent user

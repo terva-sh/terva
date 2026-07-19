@@ -86,6 +86,12 @@ type Config struct {
 	// absent means off (no tool). See docs/proposals/image-generation.md.
 	Image *ImageConfig `json:"image,omitempty"`
 
+	// NativeOutput configures NATIVE (in-protocol) image output — the model
+	// drawing images inline in its own replies via the provider's built-in
+	// image tool. Separate from Image (the generate_image tool). Opt-in:
+	// absent/disabled means off. See docs/proposals/native-image-output.md.
+	NativeOutput *NativeOutputConfig `json:"native_output,omitempty"`
+
 	// AutoCompact selects where automatic transcript compaction may run:
 	// "steps" (default; turn boundaries + between a turn's tool-loop
 	// steps), "turns" (turn boundaries only — the pre-mid-turn behavior),
@@ -99,6 +105,17 @@ type Config struct {
 	// for parallel sub-tasks via a built-in swarm_spawn tool. Off by
 	// default; nil/missing means disabled. Toggle from /settings.
 	AutoSwarmEnabled *bool `json:"auto_swarm_enabled,omitempty"`
+
+	// ExternalWorkersEnabled lets swarm_spawn dispatch a task to a NON-terva
+	// coding agent (a "backend", e.g. Claude Code) instead of a native terva
+	// sub-agent. Off by default; nil/missing means disabled. A separate gate from
+	// AutoSwarmEnabled on purpose: turning on background sub-agents is one
+	// decision, letting them be FOREIGN processes — which authenticate
+	// themselves and run outside terva's policy — is a second, stronger one.
+	// Read live per spawn, so an edit applies without restarting. Reviving a
+	// worker already spawned (on resume) is NOT gated by this — disabling it
+	// stops new foreign spawns, it does not strand ones already running.
+	ExternalWorkersEnabled *bool `json:"external_workers_enabled,omitempty"`
 
 	// AutoSwarmNudge controls whether, when auto-swarm is enabled, the system
 	// prompt carries the proactive-delegation guidance (the swarm addendum).
@@ -134,10 +151,10 @@ type Config struct {
 	// SwarmWorktrees opts swarm sub-agents into per-agent git worktrees
 	// instead of sharing the host's working tree. Off by default;
 	// nil/missing means disabled. When on, each spawned agent leases an
-	// isolated worktree via the terva-git-worktree extension (released
-	// — not removed — on completion so you can review/merge via the
-	// extension's `/worktree collect`). Requires that extension to be
-	// installed; without it, spawning a sub-agent fails loudly. The
+	// isolated worktree from the built-in worktree engine
+	// (packages/agent/worktree; released — not removed — on completion so
+	// the branch survives for review/merge). Needs the host cwd to be a
+	// git repository; outside one, spawning a sub-agent fails loudly. The
 	// --swarm-worktrees flag overrides this for a single run.
 	SwarmWorktrees *bool `json:"swarm_worktrees,omitempty"`
 
@@ -225,6 +242,14 @@ type Config struct {
 	// default; a user-level preference (not project-overridable). See
 	// docs/proposals/lazy-tool-visibility.md.
 	LazyTools bool `json:"lazy_tools,omitempty"`
+
+	// WebStage mounts the Stage immersive chat/play surface at /stage/ (and
+	// advertises it in the hello) when `terva web` starts — the config-file twin
+	// of the --web-stage flag, so a deployment enables Stage without a launch
+	// flag. Off by default (Stage is opt-in until it stabilizes); the flag OR this
+	// knob turns it on. Read once at web-server start, so a Settings toggle takes
+	// effect on the next launch (the /stage/ route is mounted at startup).
+	WebStage bool `json:"web_stage,omitempty"`
 
 	// LazyToolActive lists capability groups to advertise from the start when
 	// LazyTools is on (beyond the always-on core group), by extension name or

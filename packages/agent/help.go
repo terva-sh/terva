@@ -89,6 +89,8 @@ func PrintHelp(version string) {
 		row{"terva -p \"prompt\"", i18n.T("print final text, exit")},
 		row{"terva --json \"prompt\"", i18n.T("newline-delimited json events, exit")},
 		row{"terva rpc", i18n.T("json-rpc loop on stdin/stdout (see docs/rpc.md)")},
+		row{"terva acp", i18n.T("agent-client-protocol loop for editor integrations (opt-in build; see docs/cli.md)")},
+		row{"terva replay FILE", i18n.T("replay a saved session file as a local player (see docs/cli.md)")},
 	)
 	// Subcommands are listed one line each; each has its own detailed screen —
 	// run `terva <command> --help`. This keeps the top-level help scannable as
@@ -159,7 +161,7 @@ func PrintHelp(version string) {
 	)
 	section(i18n.T("misc"),
 		row{"--allow-restart", i18n.T("enable Tier-1 self-restart: the agent (terva_restart) or the control plane can re-exec terva into the currently-installed binary; the TUI resumes its session, web clients reconnect")},
-		row{"--swarm-worktrees", i18n.T("give each swarm sub-agent its own git worktree (needs the terva-git-worktree extension)")},
+		row{"--swarm-worktrees", i18n.T("give each swarm sub-agent its own git worktree (leased from the built-in worktree engine; cwd must be a git repo)")},
 		row{"--max-steps N", i18n.T("agent loop iteration cap (default: unlimited)")},
 		row{"--dump-prompt[=text|json|raw|sizes]", i18n.T("print the assembled prompt for the pending turn and exit (no model call); sizes shows per-section/per-tool byte+token weight")},
 		row{"--list-models[=FILTER]", i18n.T("print known models and exit. FILTER: comma list of user|live|catalog|speculative, a tier threshold like live+ (that tier and above), or available (only providers your credentials can use right now)")},
@@ -167,6 +169,6 @@ func PrintHelp(version string) {
 		row{"-v, --version", i18n.T("show version info")},
 	)
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, assistant(i18n.T("see also: docs/extensions.md, docs/rpc.md, docs/skills.md")))
+	fmt.Fprintln(os.Stderr, assistant(i18n.T("see also: docs/cli.md, docs/extensions.md, docs/rpc.md, docs/skills.md")))
 	fmt.Fprintln(os.Stderr)
 }

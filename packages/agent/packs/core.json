@@ -10,11 +10,6 @@
       "description": "Workspace code index and search."
     },
     {
-      "name": "git-worktree",
-      "source": "https://github.com/terva-sh/terva-git-worktree.git",
-      "description": "Workspace native git worktree support."
-    },
-    {
       "name": "memory",
       "source": "https://github.com/terva-sh/terva-ext-memory.git",
       "description": "Workspace and user cross session memory."

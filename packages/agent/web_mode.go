@@ -129,6 +129,10 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 	// first login on a machine happens at the TUI, or is pre-seeded by whatever
 	// provisioned the box; this is for the second provider, and for the
 	// subscription that expired.
+	// Stage is enabled by the --web-stage flag OR the web_stage config knob, so a
+	// deployment can turn it on without a launch flag (config read once at start).
+	allowStage := args.WebStage || cfg.WebStage
+
 	allowLogin := args.AllowWebLogin
 	if allowLogin && unscopedInsecure && args.WebToken == "" && args.WebAuthHeader == "" {
 		fmt.Fprintln(os.Stderr, "terva web: refusing provider login on an insecure (no-auth) listener — add --web-token, --web-auth-header, or scope it with --web-insecure-cidr")
@@ -173,5 +177,6 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		Jailed:         ws.Sandbox().Locked(),
 		AllowRestart:   allowRestart,
 		AllowLogin:     allowLogin,
+		AllowStage:     allowStage,
 	})
 }

@@ -463,6 +463,9 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		// Resync the task-board cache so the status glance is populated on
 		// (re)subscribe/resume/session-switch without waiting for the next turn.
 		go i.refreshCarrierTaskBoard()
+		// Same for the worktree cache — its only other fill points are the
+		// /worktree panel's open and refresh (no push event exists for it).
+		go i.refreshCarrierWorktrees()
 	case ctrlproto.EventNotice:
 		if ev.Notice == nil {
 			return
@@ -526,6 +529,19 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		// panel is mirrored in the overlay, it may have been the one removed
 		// (paneClose broadcasts only this event) — re-check and close if so.
 		i.checkCarrierExtPanelClosed()
+	case ctrlproto.EventSessionsChanged:
+		// The session SET changed on the daemon — another client created,
+		// renamed, or deleted one, or a cold session materialized. If the
+		// /sessions picker is open, re-list it live so it never shows a stale
+		// set. Dialog state isn't mutex-guarded, so mutate it on the main loop.
+		i.runOnMain(func() {
+			if !i.sessionDialog.Active() {
+				return
+			}
+			i.sessionDialog.List = i.cfg.ListSessions
+			i.sessionDialog.Refresh(i.cfg.TervaHome, i.cfg.CWD)
+			i.invalidate()
+		})
 	case ctrlproto.EventQueueUpdated:
 		// The daemon broadcasts the whole list after every mutation — its own
 		// enqueue at a turn boundary, the post-turn shift, a drop on failure,
@@ -1044,6 +1060,13 @@ func taskInfoSnapshot(t ctrlproto.TaskInfo) swarm.AgentSnapshot {
 		Model:    t.Model,
 		Provider: t.Provider,
 		Persona:  t.Persona,
+		// Reconstruct the worker-shaped fields too, or an ATTACHED /swarm dialog
+		// lies by omission relative to a local one: the dialog already renders
+		// cost, and backend is what tells a Claude worker apart from a native
+		// child. Both ride the wire (TaskInfo) — dropping them here was the
+		// attach-fidelity gap the reverse mapping must not reopen.
+		Backend: t.Backend,
+		CostUSD: t.CostUSD,
 	}
 }
 

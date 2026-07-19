@@ -161,6 +161,12 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runRaatiCommand(rawArgs, version); handled {
 		return err
 	}
+	if handled, err := runMCPApprovalBridgeCommand(rawArgs); handled {
+		return err
+	}
+	if handled, err := runWorkflowCommand(rawArgs, version); handled {
+		return err
+	}
 	// `terva rpc` is shorthand for `terva --rpc` so third-party apps can
 	// spawn the binary with a clean argv. Strip the leading 'rpc'
 	// token and let the rest flow through the normal arg parser.

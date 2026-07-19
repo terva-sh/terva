@@ -245,3 +245,76 @@ func TestParseArgsExtensionsAndMCPAllowlists(t *testing.T) {
 		t.Error("--mcp without a value should error")
 	}
 }
+
+func TestParseArgsPortable(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{}, PortableOff},
+		{[]string{"--portable"}, PortableOn},
+		{[]string{"--portable=strict"}, PortableStrict},
+	} {
+		a, err := ParseArgs(c.args)
+		if err != nil {
+			t.Fatalf("ParseArgs(%v): %v", c.args, err)
+		}
+		if a.Portable != c.want {
+			t.Errorf("ParseArgs(%v).Portable = %q, want %q", c.args, a.Portable, c.want)
+		}
+	}
+	// A bare --portable must not swallow a following positional as its value.
+	a, err := ParseArgs([]string{"--portable", "do the task"})
+	if err != nil {
+		t.Fatalf("ParseArgs: %v", err)
+	}
+	if a.Portable != PortableOn {
+		t.Errorf("bare --portable = %q, want on", a.Portable)
+	}
+	if a.Prompt != "do the task" {
+		t.Errorf("--portable swallowed the positional; Prompt = %q", a.Prompt)
+	}
+}
+
+func TestParseArgsRPCApprovals(t *testing.T) {
+	a, err := ParseArgs([]string{"--rpc-approvals"})
+	if err != nil {
+		t.Fatalf("ParseArgs: %v", err)
+	}
+	if !a.RPCApprovals {
+		t.Error("--rpc-approvals should set RPCApprovals")
+	}
+	b, _ := ParseArgs([]string{})
+	if b.RPCApprovals {
+		t.Error("RPCApprovals should default off")
+	}
+}
+
+func TestParseArgsApprovalSocket(t *testing.T) {
+	a, err := ParseArgs([]string{"--approval-socket", "/leases/wt-7/in.ap"})
+	if err != nil {
+		t.Fatalf("ParseArgs: %v", err)
+	}
+	if a.ApprovalSocket != "/leases/wt-7/in.ap" {
+		t.Errorf("ApprovalSocket = %q, want the socket path", a.ApprovalSocket)
+	}
+	b, _ := ParseArgs([]string{})
+	if b.ApprovalSocket != "" {
+		t.Error("ApprovalSocket should default empty (no MCP approval carrier)")
+	}
+}
+
+func TestParseArgsApprovalHTTP(t *testing.T) {
+	spec := `{"url":"https://orch.example/mcp","bearer_env":"ORCH_TOKEN"}`
+	a, err := ParseArgs([]string{"--approval-http", spec})
+	if err != nil {
+		t.Fatalf("ParseArgs: %v", err)
+	}
+	if a.ApprovalHTTP != spec {
+		t.Errorf("ApprovalHTTP = %q, want the descriptor verbatim", a.ApprovalHTTP)
+	}
+	b, _ := ParseArgs([]string{})
+	if b.ApprovalHTTP != "" {
+		t.Error("ApprovalHTTP should default empty (no HTTP approval carrier)")
+	}
+}

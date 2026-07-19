@@ -491,6 +491,35 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			hideCaretFallback: true,
 		},
+		{ // managed worktrees: /worktree (list + collect views)
+			active: i.worktreeDialog.Active,
+			ctrlC:  func() bool { i.worktreeDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				act := i.worktreeDialog.HandleKey(k)
+				switch {
+				case act.Close:
+					i.worktreeDialog.Close()
+				case act.Refresh:
+					go i.refreshCarrierWorktrees()
+				case act.CdPath != "":
+					// The panel's ↵: switch the session into the worktree, the
+					// same /cd the retired extension submitted.
+					i.worktreeDialog.Close()
+					i.SubmitSlash("/cd " + act.CdPath)
+				}
+				return false
+			},
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				avail := rows - 10
+				if avail < 3 {
+					avail = 3
+				}
+				i.worktreeDialog.MaxRows = avail
+				return i.worktreeDialog.Render(i.cfg.Theme, cols)
+			},
+			hideCaretFallback: true,
+		},
 		{ // jump-to-turn picker (also backs /fork's turn selection)
 			active: i.jumpDialog.Active,
 			ctrlC: func() bool {

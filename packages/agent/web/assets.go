@@ -105,6 +105,48 @@ func shellHandler() http.Handler {
 	})
 }
 
+// stageHandler serves the Stage app (the second MPA entry) under /stage/, with
+// SPA fallback to stage.html. It is mounted only when web_stage is enabled and,
+// like staticHandler, sits behind the auth gate.
+//
+// The Stage app's assets are the SAME fingerprinted bundle the panel uses (rollup
+// chunk-splits the shared platform/ui code across both entries). With base './',
+// stage.html at /stage/ references ./assets/x → /stage/assets/x, so this handler
+// maps a /stage/-prefixed real-file request back onto the embedded dist root
+// (StripPrefix "/stage"). Anything that is not a real file is a client route and
+// falls back to stage.html. Serving the assets behind the gate here is fine — a
+// Stage user is authenticated, and nothing under /stage/ is SW-precached (the
+// precache manifest sweeps only the root-served bundle; stage.html is gated,
+// therefore never precached, mirroring index.html).
+func stageHandler() http.Handler {
+	sub, err := fs.Sub(clientFS, "client/dist")
+	if err != nil {
+		return http.NotFoundHandler()
+	}
+	stripped := http.StripPrefix("/stage", http.FileServer(http.FS(sub)))
+	stage, serr := fs.ReadFile(sub, "stage.html")
+	writeStage := func(w http.ResponseWriter) {
+		if serr != nil {
+			http.Error(w, "stage app not built", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(stage)
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/stage/")
+		if p == "" {
+			writeStage(w) // the app root
+			return
+		}
+		if _, statErr := fs.Stat(sub, p); statErr != nil {
+			writeStage(w) // a client route → SPA fallback
+			return
+		}
+		stripped.ServeHTTP(w, r) // a real embedded file (assets/*, stage.html, …)
+	})
+}
+
 // staticHandler serves the embedded PWA with SPA fallback: a request for a path
 // that is not a real asset gets index.html, so client-side routing works.
 func staticHandler() http.Handler {

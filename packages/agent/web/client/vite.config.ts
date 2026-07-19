@@ -99,5 +99,18 @@ export default defineConfig({
       },
     }),
   ],
-  build: { outDir: 'dist', emptyOutDir: true },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    // Multi-page app: the panel (index.html) and the Stage app (stage.html) are
+    // two entries in ONE client workspace. Rollup chunk-splits the shared
+    // platform/ui/features code, so the apps share bytes in dist rather than
+    // duplicating them. One vitest, one typecheck, one i18n catalog, one embed.
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        stage: 'stage.html',
+      },
+    },
+  },
 })

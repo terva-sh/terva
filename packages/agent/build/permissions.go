@@ -47,6 +47,17 @@ var readOnlyTools = map[string]bool{
 	// auto-admits without a confirm, like session_inspect. Each tool it reveals
 	// still faces its own gate when actually called.
 	"activate_tools": true,
+	// deliver_result writes only the swarm state dir under the terva home —
+	// never the workspace — the same AuthorityLocalData rationale as the task
+	// tools above. Read-only classification also keeps it alive in plan mode,
+	// where a dispatched reviewer must still deliver its findings.
+	"deliver_result": true,
+	// worktree_list joins git's own worktree bookkeeping with the managed
+	// registry and mutates neither beyond reconciling entries git already
+	// dropped — the read-only pre-decision call. Its four siblings
+	// (create/claim/release/remove) mutate git state and stay out of this map
+	// on purpose: they classify like write/edit, not like reads.
+	"worktree_list": true,
 }
 
 // EditTools names the file editors auto-edit additionally allows:
@@ -85,10 +96,16 @@ var BuiltinTools = map[string]bool{
 	"task_update":       true,
 	"task_archive":      true,
 	"activate_tools":    true,
+	"deliver_result":    true,
 	"swarm_spawn":       true,
 	"chat_send_image":   true,
 	"chat_send_file":    true,
 	"ask_user_question": true,
+	"worktree_list":     true,
+	"worktree_create":   true,
+	"worktree_claim":    true,
+	"worktree_release":  true,
+	"worktree_remove":   true,
 }
 
 // ResolveApprovalMode picks the effective mode: flag beats the
@@ -111,12 +128,21 @@ func ResolveApprovalMode(args Args, cfg config.Config) core.ApprovalMode {
 			return m
 		}
 	}
-	// Interactive (TUI), ACP, and web all have a real user to ask, so they
-	// default to workspace — the permission round-trip engages out of the box
-	// (in ACP, session/request_permission to the editor; in web, a broadcast
-	// approval dialog to the browser). Other headless modes (rpc/json/print/
-	// swarm) have no one to prompt, so they stay yolo.
-	if args.Mode == ModeInteractive || args.Mode == ModeACP || args.Mode == ModeWeb {
+	// Interactive (TUI), ACP, web, and a bot all have a real user to ask, so
+	// they default to workspace — the permission round-trip engages out of the
+	// box (in ACP, session/request_permission to the editor; in web, a broadcast
+	// approval dialog to the browser; in a bot, an ask in the paired chat via
+	// its ChatConfirmer). Other headless modes (rpc/json/print/swarm) have no one
+	// to prompt, so they stay yolo.
+	//
+	// The bot rarely reaches this line — botRun settles args.Approval to yolo
+	// first, and an explicit --approval/--no-yolo/config value is answered above.
+	// It reaches it in exactly one case: a config `approval` string that does not
+	// parse. That case must fail toward asking, not toward running. A bot used to
+	// land here as ModeInteractive and get workspace; now that it has a mode of
+	// its own, it has to be listed by name or a typo'd config would quietly hand
+	// a chat room un-gated tools.
+	if args.Mode == ModeInteractive || args.Mode == ModeACP || args.Mode == ModeWeb || args.Mode == ModeBot {
 		return core.ApprovalWorkspace
 	}
 	return core.ApprovalYolo
@@ -132,13 +158,20 @@ func ResolveApprovalMode(args Args, cfg config.Config) core.ApprovalMode {
 //	                          the user just typed.
 //	unjailed.json             a persisted per-directory exception
 //	mode default              on for sessions with a real user (interactive,
-//	                          ACP), off for the headless modes
+//	                          ACP, bot), off for the headless modes
 //
 // The default is on for interactive and ACP because it pairs with their
 // workspace approval mode: that mode's trust-the-built-ins premise holds
 // precisely BECAUSE the built-ins are confined to the cwd. It's off for the
 // other headless modes (rpc/json/print/swarm) so unattended automation isn't
 // surprised by path confinement.
+//
+// A bot is jailed for a different reason than the other two, and it is the
+// stronger one: its user is whoever can type into a chat room. It has always
+// been jailed — it rode ModeInteractive's default to get there, and botcmd's
+// comment ("Jail is left alone: built-in file/shell tools stay confined to the
+// cwd") records that as deliberate. Now that a bot has a mode of its own, the
+// intent is named here instead of inherited by accident.
 //
 // A store that cannot be read leaves the jail on and the error is surfaced by
 // the caller (JailNotice). Failing closed is the only safe direction: a
@@ -153,7 +186,7 @@ func resolveJail(args Args) bool {
 	if unjailed, err := config.IsPathUnjailed(args.CWD); err == nil && unjailed {
 		return false
 	}
-	return args.Mode == ModeInteractive || args.Mode == ModeACP
+	return args.Mode == ModeInteractive || args.Mode == ModeACP || args.Mode == ModeBot
 }
 
 // JailNotice describes the resolved jail posture for the user-facing surfaces.

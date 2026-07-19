@@ -42,6 +42,7 @@ var statusToggleSegments = []struct {
 	{"thinking", 0, "the model's reasoning level"},
 	{"swarm", 1, "live background agent count"},
 	{"tasks", 2, "the built-in task board's current task"},
+	{"worktrees", 2, "managed worktree count (fills after /worktree)"},
 	{"session", 2, "the session file's short name"},
 	{"clock", 2, "a 24h wall clock"},
 }

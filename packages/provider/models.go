@@ -448,7 +448,9 @@ var Catalog = []Model{
 	// ChatGPT Codex OAuth backend rather than api.openai.com.
 	{
 		// Text-only research preview, ChatGPT Pro entitlement; 128k
-		// window (not the 272k of its mainline siblings).
+		// window (not the 272k of its mainline siblings). No CapImageOutput:
+		// text-only, so the Responses image_generation tool doesn't apply
+		// (every other codex model here was live-verified to support it).
 		Provider: "openai-codex", ID: "gpt-5.3-codex-spark", DisplayName: "GPT-5.3 Codex Spark",
 		ContextWindow: 128000, MaxOutput: 32000, Reasoning: true,
 		PriceInput: 1.75, PriceOutput: 14, PriceCacheRead: 0.175,
@@ -457,16 +459,21 @@ var Catalog = []Model{
 		Provider: "openai-codex", ID: "gpt-5.4", DisplayName: "GPT-5.4",
 		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 2.5, PriceOutput: 15, PriceCacheRead: 0.25,
+		Caps: map[Capability]bool{CapImageOutput: true},
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 mini",
 		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 0.75, PriceOutput: 4.5, PriceCacheRead: 0.075,
+		Caps: map[Capability]bool{CapImageOutput: true},
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.5", DisplayName: "GPT-5.5",
 		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 5, PriceOutput: 30, PriceCacheRead: 0.5,
+		// Native image output via the Responses image_generation tool —
+		// live-verified against the Codex subscription backend (2026-07-17).
+		Caps: map[Capability]bool{CapImageOutput: true},
 	},
 
 	// GPT-5.6 tiers (Sol/Terra/Luna), GA 2026-07-09 on both the API and
@@ -476,18 +483,21 @@ var Catalog = []Model{
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
 		MaxOutput: 128000, Reasoning: true,
 		PriceInput: 5, PriceOutput: 30, PriceCacheRead: 0.5, PriceCacheWrite: 6.25,
+		Caps: map[Capability]bool{CapImageOutput: true},
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.6-terra", DisplayName: "GPT-5.6 Terra",
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
 		MaxOutput: 128000, Reasoning: true,
 		PriceInput: 2.5, PriceOutput: 15, PriceCacheRead: 0.25, PriceCacheWrite: 3.125,
+		Caps: map[Capability]bool{CapImageOutput: true},
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.6-luna", DisplayName: "GPT-5.6 Luna",
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
 		MaxOutput: 128000, Reasoning: true,
 		PriceInput: 1, PriceOutput: 6, PriceCacheRead: 0.1, PriceCacheWrite: 1.25,
+		Caps: map[Capability]bool{CapImageOutput: true},
 	},
 }
 

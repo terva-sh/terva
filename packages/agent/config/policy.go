@@ -32,6 +32,17 @@ func AutoSwarmEnabled() bool {
 	return cfg.AutoSwarmEnabled != nil && *cfg.AutoSwarmEnabled
 }
 
+// ExternalWorkersEnabled reads the current external-workers flag from config.
+// Used by the swarm_spawn backend gate at spawn time, live per call like
+// AutoSwarmEnabled, so a config edit applies without restarting the session.
+func ExternalWorkersEnabled() bool {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return false
+	}
+	return cfg.ExternalWorkersEnabled != nil && *cfg.ExternalWorkersEnabled
+}
+
 // AutoSwarmNudgeEnabled reports whether the proactive-delegation nudge (the
 // swarm system addendum) should be injected. Independent of AutoSwarmEnabled
 // and defaults ON (nil = true), so enabling auto-swarm keeps today's behavior;

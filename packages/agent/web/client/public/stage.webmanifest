@@ -1,0 +1,15 @@
+{
+  "name": "terva Stage",
+  "short_name": "Stage",
+  "description": "Immersive chat and play on terva.",
+  "theme_color": "#0a0a09",
+  "background_color": "#0a0a09",
+  "display": "standalone",
+  "start_url": "/stage/",
+  "scope": "/stage/",
+  "icons": [
+    { "src": "/pwa-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/pwa-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/pwa-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

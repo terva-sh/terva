@@ -40,7 +40,8 @@ builds:
         goarch: arm64
     flags:
       - -trimpath
-    # Full build: compile in the ACP run mode and the web control panel.
+    # Full build: compile in the ACP run mode, the web control panel, and
+    # both jsengine consumers (code_execution + the workflow engine; sobek).
     # Telegram is in by default, so no tag is needed to keep it. terva_web
     # embeds the prebuilt client from packages/agent/web/client/dist (committed
     # to the tree, so the release needs no Node.js — rebuild it with
@@ -48,6 +49,8 @@ builds:
     tags:
       - terva_acp
       - terva_web
+      - terva_scripting
+      - terva_workflows
     ldflags:
       - -s -w
       - -X main.version={{.Version}}

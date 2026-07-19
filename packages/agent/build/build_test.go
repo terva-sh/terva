@@ -32,7 +32,7 @@ func TestReadAgentsContextLoadsGlobalAndAncestors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := readAgentsContext(nested, tervaHome)
+	got, origin := readAgentsContext(nested, tervaHome)
 	for _, want := range []string{"global rule", "repo rule", "app rule"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("readAgentsContext missing %q in:\n%s", want, got)
@@ -41,12 +41,26 @@ func TestReadAgentsContextLoadsGlobalAndAncestors(t *testing.T) {
 	if strings.Index(got, "global rule") > strings.Index(got, "repo rule") || strings.Index(got, "repo rule") > strings.Index(got, "app rule") {
 		t.Fatalf("AGENTS.md files loaded in wrong order:\n%s", got)
 	}
+	// The block names the files in prose; Origin names them as paths, in the
+	// same order — so a reader (or a foreign worker being pointed rather than
+	// pasted) never has to parse the prose back apart.
+	if len(origin) != 3 {
+		t.Fatalf("origin should list all 3 files, got %v", origin)
+	}
+	for i, want := range []string{tervaHome, project, nested} {
+		if filepath.Dir(origin[i]) != want {
+			t.Errorf("origin[%d] = %q, want an AGENTS.md under %q", i, origin[i], want)
+		}
+	}
 }
 
 func TestReadAgentsContextMissingFilesIsEmpty(t *testing.T) {
-	got := readAgentsContext(testsupport.TempDir(t), testsupport.TempDir(t))
+	got, origin := readAgentsContext(testsupport.TempDir(t), testsupport.TempDir(t))
 	if got != "" {
 		t.Fatalf("expected no context, got %q", got)
+	}
+	if origin != nil {
+		t.Fatalf("no files read -> no origin, got %v", origin)
 	}
 }
 

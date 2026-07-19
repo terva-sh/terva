@@ -294,10 +294,11 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 
 	req.Messages = RepairOrphanedToolResults(req.Messages)
 	// OpenAI proper tolerates a leading assistant turn (a card's seeded
-	// greeting), but this builder also serves every OpenAI-compatible clone
-	// (Moonshot/Kimi, local templates with strict alternation) via
-	// newOpenAICompat — the guard is a no-cost safety net there.
-	req.Messages = EnsureLeadingUserTurn(req.Messages)
+	// greeting) and same-role adjacency, but this builder also serves every
+	// OpenAI-compatible clone (Moonshot/Kimi, local templates with strict
+	// alternation) via newOpenAICompat — merging any adjacency an edit/delete
+	// left behind and the leading-user guard are no-cost safety nets there.
+	req.Messages = EnsureLeadingUserTurn(MergeAdjacentSameRole(req.Messages))
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case RoleUser:

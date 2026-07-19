@@ -341,7 +341,10 @@ func (c *bedrockClient) buildRequest(req Request) (*bedrockRequest, error) {
 	if out.InferenceConfig.MaxTokens == 0 {
 		out.InferenceConfig.MaxTokens = 4096
 	}
-	for _, m := range EnsureLeadingUserTurn(normalizeBedrockToolResults(req.Messages)) {
+	// Bedrock Converse requires strict user/assistant alternation: merge any
+	// same-role adjacency an edit/delete left behind (after tool-result
+	// normalization) and prepend a user turn for a card's leading greeting.
+	for _, m := range EnsureLeadingUserTurn(MergeAdjacentSameRole(normalizeBedrockToolResults(req.Messages))) {
 		role := string(m.Role)
 		if role == "tool" {
 			role = "user"

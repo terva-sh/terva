@@ -484,6 +484,22 @@ func (f *fakeWS) SetQueue(ctx context.Context, sess string, t []string) error { 
 func (f *fakeWS) Cancel(ctx context.Context, sess string) error               { return nil }
 func (f *fakeWS) Compact(ctx context.Context, sess string) error              { return nil }
 func (f *fakeWS) Clear(ctx context.Context, sess string) error                { return nil }
+func (f *fakeWS) EditMessage(ctx context.Context, sess string, epoch uint64, index int, text string) error {
+	return nil
+}
+func (f *fakeWS) DeleteMessage(ctx context.Context, sess string, epoch uint64, index int) error {
+	return nil
+}
+func (f *fakeWS) SwipeTurn(ctx context.Context, sess string, epoch uint64, variant int) error {
+	return nil
+}
+func (f *fakeWS) SwipeMessage(ctx context.Context, sess string, epoch uint64, index, variant int) error {
+	return nil
+}
+func (f *fakeWS) RetryTurn(ctx context.Context, sess string, epoch uint64) error { return nil }
+func (f *fakeWS) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
+	return ctrlproto.SessionInfo{ID: "fork-of-" + sess}, nil
+}
 func (f *fakeWS) SideChatOpen(ctx context.Context, sess string) (string, error) {
 	return "sc1", nil
 }

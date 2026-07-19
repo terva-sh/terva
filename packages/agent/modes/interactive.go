@@ -595,6 +595,7 @@ type Interactive struct {
 	extPanel          *dialogs.ExtPanelDialog
 	migrateDialog     *dialogs.MigrateDialog
 	tasksDialog       *dialogs.TasksDialog
+	worktreeDialog    *dialogs.WorktreeDialog
 
 	// overlays is the priority-ordered modal registry: key routing,
 	// rendering, cursor ownership, and tick animation for every
@@ -807,6 +808,14 @@ type Interactive struct {
 	// ignore a board left over from a previous binding. Guarded by mu.
 	carrierTaskBoardSession string
 
+	// carrierWorktrees caches the "worktrees" surface (the built-in worktree
+	// engine's list + collect view) backing /worktree and the status glance.
+	// No push event exists for worktree changes: filled on session bind, on
+	// /worktree open, and on the panel's r key (worktree_view.go). Guarded by
+	// mu; keyed by session like the task board above.
+	carrierWorktrees        *ctrlproto.WorktreeView
+	carrierWorktreesSession string
+
 	// carrierMessages is the pump-owned transcript on the carrier path —
 	// the wire twin of the crutch agent's Messages(), and what buildChat
 	// renders in carrier mode. Snapshots replace it wholesale (they ride
@@ -995,6 +1004,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		extPanel:          dialogs.NewExtPanelDialog(),
 		migrateDialog:     dialogs.NewMigrateDialog(),
 		tasksDialog:       dialogs.NewTasksDialog(),
+		worktreeDialog:    dialogs.NewWorktreeDialog(),
 		suggest:           newSlashSuggester(),
 		fileSuggest:       widgets.NewFileSuggester(),
 		spin:              widgets.NewSpinner(cfg.Theme),

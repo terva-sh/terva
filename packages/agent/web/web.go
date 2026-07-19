@@ -53,6 +53,12 @@ type Options struct {
 	// unauthenticated listener (see web_mode.go).
 	AllowLogin bool
 
+	// AllowStage mounts the Stage app at /stage/ and advertises the `stage`
+	// feature in the hello, so the panel offers an "open in Stage" link. Off by
+	// default (--web-stage) — Stage is the immersive chat/play surface, a distinct
+	// product from the control panel, opted into per deployment.
+	AllowStage bool
+
 	// unixListener marks the effective listener as a unix domain socket —
 	// set by Serve (from the unix: address form or an adopted systemd
 	// socket), never by callers. The socket file's permissions are the auth
@@ -303,6 +309,16 @@ func newMux(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) *
 	// the line. index.html is NOT under this prefix and stays gated, which is what
 	// makes an unauthenticated navigation answer with the login form.
 	mux.Handle(assetsPrefix, securityHeaders(shellHandler()))
+	// Library media (card avatars, later backgrounds) — auth-gated like /ws, and
+	// deliberately NOT in the precache manifest: it serves user content from
+	// $TERVA_HOME, which must never boot without a credential. Kept above the "/"
+	// catch-all only for readability; ServeMux matches the longest prefix.
+	mux.Handle("/media/", authMiddleware(opts, securityHeaders(http.HandlerFunc(serveMedia))))
+	// The Stage app (second MPA entry), gated like the panel and mounted only when
+	// web_stage is enabled. ServeMux matches the longer /stage/ prefix over "/".
+	if opts.AllowStage {
+		mux.Handle("/stage/", authMiddleware(opts, securityHeaders(stageHandler())))
+	}
 	mux.Handle("/", authMiddleware(opts, securityHeaders(staticHandler())))
 	return mux
 }
@@ -384,6 +400,9 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	}
 	if opts.AllowLogin {
 		hello.Groups = append(hello.Groups, ctrlproto.GroupAuth)
+	}
+	if opts.AllowStage {
+		hello.Features = append(hello.Features, ctrlproto.FeatureStage)
 	}
 	_, _ = ctrlproto.ServeConn(connCtx, conn, svc, hello)
 }

@@ -1,9 +1,10 @@
 // Package egress is terva's shared outbound-network safety guard: the
 // SSRF / private-network defense intended as the single chokepoint for
-// network-touching features terva itself drives. NOTHING CONSUMES IT YET —
-// it was staged for the MCP HTTP transport (docs/plans/mcp-http-transport.md)
-// and host-side web policy; when the first consumer lands, add an import
-// test so the package cannot silently go dead again. Until then the rules
+// network-touching features terva itself drives. The first consumer is
+// Stage's card URL import (packages/agent/workspace.fetchCardBytes), which
+// exercises this package end-to-end so it cannot silently go dead; it was
+// staged ahead of that for the MCP HTTP transport
+// (docs/plans/mcp-http-transport.md) and host-side web policy. The rules
 // live here, tested, instead of being re-derived per tool.
 //
 // The guard blocks connections to non-public addresses — loopback,

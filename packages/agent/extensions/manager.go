@@ -68,6 +68,8 @@ type Manager struct {
 	// the freshly-registered extension tools.
 	onReload func()
 
+	// supersededExtensions (package-level, below) names extensions whose
+	// capability was folded into terva itself.
 	// disabledExtensions is the set of extension names that must not be
 	// loaded at all (resolved user ∪ project config). Consulted in
 	// loadOne, so it MUST be set via SetDisabledExtensions BEFORE
@@ -361,6 +363,15 @@ func (m *Manager) loadOne(ctx context.Context, dir string, explicit bool) error 
 		// Disabled by user/project config (disable_extensions): never
 		// spawned, so its tools/commands/panels/context never appear.
 		fmt.Fprintf(os.Stderr, "extension %q not loaded (disabled by config)\n", mf.Name)
+		return nil
+	}
+	if why := supersededExtensions[mf.Name]; why != "" {
+		// The capability moved into terva itself. Loading the extension
+		// anyway would register a second, colliding implementation of the
+		// same tool names against a state home the built-in has migrated
+		// away from — skip it with the pointer instead. Checked before the
+		// allowlist: an allowlist naming it doesn't resurrect it.
+		fmt.Fprintf(os.Stderr, "extension %q not loaded (superseded: %s)\n", mf.Name, why)
 		return nil
 	}
 	if !explicit && !m.extensionAllowlisted(mf.Name) {

@@ -121,6 +121,10 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		i.openTasksDialog()
 		return false
 	},
+	"/worktree": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
+		i.openWorktreeDialog(len(parts) > 1 && strings.EqualFold(parts[1], "collect"))
+		return false
+	},
 
 	"/model": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 		if len(parts) >= 2 {

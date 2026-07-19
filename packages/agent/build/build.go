@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 
@@ -18,6 +19,7 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/tools/tasks"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
+	"terva.sh/terva/packages/agent/worktree"
 	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -40,6 +42,10 @@ type Resolved struct {
 	CWD           string
 	Reasoning     string
 	Temperature   *float32
+	// ImageOutput carries the resolved native image-output config (from the
+	// opt-in native_output block), or nil when off. The core agent forwards it
+	// only on a model that advertises CapImageOutput.
+	ImageOutput *provider.ImageOutputConfig
 	// Insecure skips TLS verification for the inference client only
 	// (gated to openai-compatible/ollama + explicit --base-url in Resolve).
 	Insecure bool
@@ -139,6 +145,17 @@ type Resolved struct {
 	// extension tools out of the merge (pure conversation); play keeps them.
 	Experience string
 
+	// Surface is where this run's output lands — derived from args.Mode at
+	// resolve time (SurfaceOf) and captured so rebuildSystemPrompt re-renders
+	// the conventions against the same audience. A mid-session rebuild does not
+	// move the agent to a different screen.
+	Surface Surface
+
+	// Portable mirrors args.Portable (the --portable / --portable=strict worker
+	// flag), captured so rebuildSystemPrompt keeps stripping terva's harness-local
+	// self-context on a mid-session re-render. Empty for every normal run.
+	Portable string
+
 	// NoTools mirrors args.NoTools. Like chat it suppresses ALL tools — but
 	// the tools only: built-ins are dropped in BuildToolRegistry, and the
 	// skill tool + extension/MCP merges are skipped (MergeExtensionTools),
@@ -163,14 +180,21 @@ type Resolved struct {
 	// loreActive is every lore entry loaded for this run (file + card,
 	// constant + triggered), captured so /lore can list what's active.
 	loreActive []lore.Entry
-	// loreFired records which triggered entries matched on the most recent
-	// turn (a shared pointer so value-copies of Resolved agree); /lore reads
-	// it via LoreFired. Allocated in Resolve.
-	loreFired *loreFiredRecord
+	// loreFired records the activation trace of the most recent turn (a shared
+	// pointer so value-copies of Resolved agree); the steering surfaces read it
+	// via LoreFired(). Allocated in Resolve.
+	loreFired *LoreFiredRecord
 
-	// CardGreeting is a --card's first_mes (macros substituted), seeded as the
-	// opening assistant message of a fresh session. Empty when no card.
+	// CardGreeting is the SELECTED greeting (macros substituted), seeded as the
+	// active opening assistant message of a fresh session. Empty when no card.
 	CardGreeting string
+
+	// CardGreetings is a --card's full opening set — first_mes + every
+	// alternate_greeting (macros substituted), in card order — pre-seeded as
+	// message-0 swipe variants so the user can swipe between openings. The
+	// selected greeting (CardGreeting == CardGreetings[--greeting]) is the active
+	// take. Length 1 (or nil) means a single opening, no swipe. Empty when no card.
+	CardGreetings []string
 
 	// introOverride is the fully-resolved intro-slot override — a --card's
 	// system_prompt/framing ({{original}} + macros resolved) or, for a native
@@ -186,6 +210,22 @@ type Resolved struct {
 	// resolved), injected by PerTurnContext into the uncached per-turn tail
 	// after the lore block. Empty when no card / no PHI.
 	postHistory string
+
+	// note holds the session's live author's note (a shared pointer so
+	// value-copies of Resolved agree), injected by PerTurnContext into the
+	// uncached tail AFTER postHistory. Non-nil only for immersive sessions
+	// (allocated in Resolve on Experience != ""), which keeps its tail live so a
+	// later note.set takes effect; the workspace retains it via Resolved.Note().
+	note *NoteRecord
+
+	// userDesc holds the session's live user-persona description — who the user is
+	// in the story — a live tail string (same NoteRecord shape as note), injected
+	// by PerTurnContext BEFORE postHistory, framed with userName. Non-nil only for
+	// immersive sessions; the workspace retains it via Resolved.User() and updates
+	// it on user.bind. userName is the resolved {{user}} name (Args.As > config >
+	// "User"), captured so the tail can attribute the description to the right name.
+	userDesc *NoteRecord
+	userName string
 
 	// SystemSegments is the labeled provenance of the current system prompt
 	// (the source SystemSegments produced), captured for the prompt-dump
@@ -245,7 +285,7 @@ func (r *Resolved) AddExtraTools(extra []core.Tool) {
 func (r *Resolved) rebuildSystemPrompt() {
 	appendBlocks := r.systemAppend
 	if strings.TrimSpace(r.extensionContext) != "" {
-		appendBlocks = append(append([]PromptSegment{}, r.systemAppend...), PromptSegment{Source: "extension-context", Text: r.extensionContext})
+		appendBlocks = append(append([]PromptSegment{}, r.systemAppend...), PromptSegment{Source: SourceExtensionContext, Text: r.extensionContext})
 	}
 	r.SystemSegments = SystemSegments(SystemPromptOpts{
 		CWD:           r.CWD,
@@ -257,6 +297,8 @@ func (r *Resolved) rebuildSystemPrompt() {
 		PersonaName:   r.Persona.Name,
 		Charter:       r.Persona.Charter,
 		Experience:    r.Experience,
+		Surface:       r.Surface,
+		Portable:      r.Portable,
 		IntroOverride: r.introOverride,
 		IntroSource:   r.introSource,
 	})
@@ -789,7 +831,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 
 	var append_ []PromptSegment
 	for _, a := range args.AppendSystemPrompt {
-		append_ = append(append_, PromptSegment{Source: "user-append", Text: a})
+		append_ = append(append_, PromptSegment{Source: SourceUserAppend, Text: a})
 	}
 	// Startup context files (project/user config_files, then --context-file
 	// flags) inject just before AGENTS.md so repo policy stays the most
@@ -803,20 +845,20 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	if args.Experience != "" {
 		cfgCtxFiles = nil
 	}
-	if ctxBlock, err := readStartupContextFiles(args.CWD, cfgCtxFiles, args.ContextFiles); err != nil {
+	if ctxBlock, ctxOrigin, err := readStartupContextFiles(args.CWD, cfgCtxFiles, args.ContextFiles); err != nil {
 		return Resolved{}, err
 	} else if ctxBlock != "" {
-		append_ = append(append_, PromptSegment{Source: "context-files", Text: ctxBlock})
+		append_ = append(append_, PromptSegment{Source: SourceContextFiles, Text: ctxBlock, Origin: ctxOrigin})
 	}
 	// AGENTS.md is repo coding policy; chat/play sessions aren't working in the
 	// repo, so don't let a stray AGENTS.md steer a conversation or a roleplay.
 	if args.Experience == "" {
-		if agentsAddendum := readAgentsContext(args.CWD, config.TervaHome()); agentsAddendum != "" {
-			append_ = append(append_, PromptSegment{Source: "agents-md", Text: agentsAddendum})
+		if agentsAddendum, agentsOrigin := readAgentsContext(args.CWD, config.TervaHome()); agentsAddendum != "" {
+			append_ = append(append_, PromptSegment{Source: SourceAgentsMD, Text: agentsAddendum, Origin: agentsOrigin})
 		}
 	}
 	if skillAddendum != "" {
-		append_ = append(append_, PromptSegment{Source: "skills", Text: skillAddendum})
+		append_ = append(append_, PromptSegment{Source: SourceSkills, Text: skillAddendum})
 	}
 	// Lore: authored keyed-context entries. Always-on (constant) entries are
 	// baked into the cached prefix here, alongside skills + context files;
@@ -833,7 +875,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		constant, loreTriggered = lore.Partition(loreEntries)
 		loreActive = loreEntries
 		if block := lore.PlaceConstant(constant); block != "" {
-			append_ = append(append_, PromptSegment{Source: "lore:constant", Text: block})
+			append_ = append(append_, PromptSegment{Source: SourceLoreConstant, Text: block})
 		}
 	}
 	// Untrusted workspace with gated content: tell the model the project
@@ -844,7 +886,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// interactive TUI already nudges the user to /trust when content is gated).
 	if args.Experience == "" {
 		if note := config.RestrictedSystemNote(args.CWD, trusted); note != "" {
-			append_ = append(append_, PromptSegment{Source: "restricted-workspace", Text: note})
+			append_ = append(append_, PromptSegment{Source: SourceRestrictedWorkspace, Text: note})
 		}
 	}
 	// Auto-swarm is a coding-workflow skin: only in a session with base
@@ -854,7 +896,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// both are on, so a session can keep the tool without the nudge.
 	if HasBaseWorkspaceTools(args) && config.AutoSwarmEnabled() && config.AutoSwarmNudgeEnabled() {
 		logPersonaRosterTripwire()
-		append_ = append(append_, PromptSegment{Source: "auto-swarm", Text: autoSwarmAddendum()})
+		append_ = append(append_, PromptSegment{Source: SourceAutoSwarm, Text: autoSwarmAddendum()})
 	}
 	// The play director's cast pacing nudge — the twin of the coding proactive
 	// nudge, gated by the same AutoSwarmNudge toggle. Only in --play with a cast
@@ -863,7 +905,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// regardless; this is just the disposition.
 	if CastSkinActive(args) && config.AutoSwarmNudgeEnabled() {
 		if refs := MergedCastRefs(args, args.CWD, trusted); len(refs) > 0 {
-			append_ = append(append_, PromptSegment{Source: "cast", Text: castAddendum()})
+			append_ = append(append_, PromptSegment{Source: SourceCast, Text: castAddendum()})
 		}
 	}
 	// Swarm children (--swarm-agent) report back through the auto-swarm
@@ -873,7 +915,18 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// the same contract in their own voice, this covers Persona-less
 	// children too).
 	if args.Mode == ModeSwarmAgent {
-		append_ = append(append_, PromptSegment{Source: "swarm-child", Text: SwarmChildAddendum()})
+		append_ = append(append_, PromptSegment{Source: SourceSwarmChild, Text: SwarmChildAddendum()})
+		// A schema-carrying spawn (the structured-deliverable contract)
+		// gets the deliver_result tool bound to its schema plus the
+		// addendum requiring it. Validation happens at the tool layer so
+		// the model fixes and retries in-turn — the supervisor re-validates
+		// what lands on disk regardless (swarm.captureDeliverable). Not
+		// filtered by --tools: the dispatcher asked for the contract, so
+		// the tool must exist.
+		if len(args.DeliverableSchema) > 0 {
+			reg["deliver_result"] = &tools.DeliverResultTool{ArgSchema: args.DeliverableSchema}
+			append_ = append(append_, PromptSegment{Source: SourceSwarmChild, Text: DeliverResultAddendum()})
+		}
 	}
 
 	// The task tools are a built-in coding-workflow capability, folded in from
@@ -902,7 +955,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 			}
 			reg[t.Name()] = t
 		}
-		append_ = append(append_, PromptSegment{Source: "tasks", Text: tasksCtrl.Policy()})
+		append_ = append(append_, PromptSegment{Source: SourceTasks, Text: tasksCtrl.Policy()})
 	}
 
 	// activate_tools lets the model bring a hidden capability group into the
@@ -938,20 +991,29 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// character_book onto this run's lore (constant -> prefix, triggered ->
 	// tail — the same seam as file lore). ParseArgs already implied --chat.
 	var CardGreeting, cardIntroOverride, cardIntroSource, cardPostHistory string
+	var cardGreetings []string
 	if args.Card != "" {
-		ci, cerr := loadCardIdentity(args.Card, args.Experience, args.Greeting, resolveCardUserName(args, eff.Config))
+		// The reference may be a filesystem path (classic --card) or a library id
+		// (a session spawned from the card store); resolve either to a loadable
+		// card document.
+		cardPath, rerr := ResolveCardRef(args.Card)
+		if rerr != nil {
+			return Resolved{}, fmt.Errorf("--card: %w", rerr)
+		}
+		ci, cerr := loadCardIdentity(cardPath, args.Experience, args.Greeting, resolveCardUserName(args, eff.Config))
 		if cerr != nil {
 			return Resolved{}, cerr
 		}
 		Persona = ci.Persona
 		CardGreeting = ci.greeting
+		cardGreetings = ci.greetings
 		cardIntroOverride = ci.introOverride
 		cardIntroSource = ci.introSource
 		cardPostHistory = ci.postHistory
 		if !args.NoLore && (cfg.Lore == nil || *cfg.Lore) {
 			cc, ct := lore.Partition(ci.lore)
 			if blk := lore.PlaceConstant(cc); blk != "" {
-				append_ = append(append_, PromptSegment{Source: "card:character_book", Text: blk})
+				append_ = append(append_, PromptSegment{Source: SourceCardCharacterBook, Text: blk})
 			}
 			loreTriggered = append(loreTriggered, ct...)
 			loreActive = append(loreActive, ci.lore...)
@@ -992,6 +1054,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		PersonaName:      Persona.Name,
 		Charter:          Persona.Charter,
 		Experience:       args.Experience,
+		Surface:          SurfaceOf(args.Mode),
+		Portable:         args.Portable,
 		IntroOverride:    introOverride,
 		IntroSource:      introSource,
 	})
@@ -1012,6 +1076,18 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		temperature = nil
 	}
 
+	// Native image output (opt-in native_output block). Carry the config when
+	// enabled; the per-model CapImageOutput gate is applied per-turn in the
+	// core agent so a model swap toggles it without a rebuild.
+	var imageOutput *provider.ImageOutputConfig
+	if cfg.NativeOutput.IsEnabled() {
+		imageOutput = &provider.ImageOutputConfig{
+			Size:        cfg.NativeOutput.Size,
+			Quality:     cfg.NativeOutput.Quality,
+			EditHistory: cfg.NativeOutput.EditHistoryOr(1),
+		}
+	}
+
 	max := args.MaxSteps // 0 = unlimited
 
 	return Resolved{
@@ -1025,6 +1101,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		CWD:                      args.CWD,
 		Reasoning:                reasoning,
 		Temperature:              temperature,
+		ImageOutput:              imageOutput,
 		Insecure:                 args.Insecure,
 		VisionCapable:            visionCapable,
 		ImageRegistry:            imageReg,
@@ -1050,16 +1127,32 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		toolDescriptions:         descMapFromSummaries(summaries),
 		ApprovalMode:             approval,
 		Experience:               args.Experience,
+		Surface:                  SurfaceOf(args.Mode),
+		Portable:                 args.Portable,
 		NoTools:                  args.NoTools,
 		loreTriggered:            loreTriggered,
 		loreConfig:               loreConfig,
 		loreActive:               loreActive,
-		loreFired:                &loreFiredRecord{},
+		loreFired:                &LoreFiredRecord{},
 		CardGreeting:             CardGreeting,
+		CardGreetings:            cardGreetings,
 		introOverride:            introOverride,
 		introSource:              introSource,
 		postHistory:              cardPostHistory,
+		note:                     newNoteRecord(args.Experience != ""),
+		userDesc:                 newNoteRecord(args.Experience != ""),
+		userName:                 resolveCardUserName(args, eff.Config),
 	}, nil
+}
+
+// newNoteRecord allocates a live author's-note record for an immersive session
+// (which keeps its per-turn tail live so a later note.set injects), or nil for a
+// coding session, which has no author's note and no note tail.
+func newNoteRecord(immersive bool) *NoteRecord {
+	if !immersive {
+		return nil
+	}
+	return &NoteRecord{}
 }
 
 // readUserSystemPrompt looks for $TERVA_HOME/SYSTEM.md and returns its
@@ -1083,7 +1176,12 @@ func readUserSystemPrompt(tervaHome string) string {
 // default file is created or required: terva only includes files that
 // already exist. Global instructions ($TERVA_HOME/AGENTS.md) come first,
 // followed by project instructions from the top-most parent down to cwd.
-func readAgentsContext(cwd, tervaHome string) string {
+//
+// It returns the rendered block and the paths that went into it, in order —
+// the segment's Origin. The block names them in prose already; returning them
+// as paths is what lets the dump list them and lets a foreign worker be pointed
+// at the files instead of pasted their contents.
+func readAgentsContext(cwd, tervaHome string) (string, []string) {
 	type contextFile struct {
 		path    string
 		content string
@@ -1146,14 +1244,16 @@ func readAgentsContext(cwd, tervaHome string) string {
 	}
 
 	if len(files) == 0 {
-		return ""
+		return "", nil
 	}
 	var sb strings.Builder
+	origin := make([]string, 0, len(files))
 	sb.WriteString("Project context instructions loaded from AGENTS.md files. Follow them when working in this repository. Later files are more specific and may override earlier ones.\n")
 	for _, f := range files {
 		fmt.Fprintf(&sb, "\n## %s\n\n%s\n", f.path, f.content)
+		origin = append(origin, f.path)
 	}
-	return strings.TrimSpace(sb.String())
+	return strings.TrimSpace(sb.String()), origin
 }
 
 // descMapFromSummaries indexes the human-readable descriptions for
@@ -1307,6 +1407,7 @@ func (r Resolved) NewAgent() *core.Agent {
 	a.MaxTokens = r.MaxOutput
 	a.Reasoning = r.Reasoning
 	a.Temperature = r.Temperature
+	a.ImageOutput = r.ImageOutput
 	// The front end's question channel, when there is one. The prefix-change
 	// guard asks from inside the turn policy; hosts with nobody to ask (one-shot
 	// runs, swarm children) leave this nil and the guard stays quiet.
@@ -1430,6 +1531,12 @@ func HasBaseWorkspaceTools(args Args) bool {
 	return args.Experience == "" && !args.NoTools && !args.NoWorkspaceTools
 }
 
+// extraBuiltinTools holds optional built-in constructors contributed by
+// build-tag gated features; empty in a default build. Appended from init()
+// in a tag's _on file (see scripting_on.go), so ordering is package-init
+// and the slice is never mutated after startup.
+var extraBuiltinTools []func(cwd string, sandbox *tools.Sandbox) (string, core.Tool)
+
 func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbox *tools.Sandbox, provName, authMethod string, visionCapable bool, imageReg *imagegen.Registry) core.Registry {
 	// chat and play both drop the built-in coding tools (read/write/edit/bash/
 	// …): chat is pure conversation, play acts only through a world extension's
@@ -1456,6 +1563,46 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 	if imageReg != nil && imageReg.Len() > 0 {
 		all["generate_image"] = &tools.GenerateImageTool{CWD: cwd, Sandbox: sandbox, Registry: imageReg}
 	}
+	// The worktree tools (folded in from the terva-git-worktree extension)
+	// register only where they can do anything: a git repo at — or one
+	// directory below — the session cwd. Decided once per registry build, the
+	// native twin of the extension's per-session tool withdrawal; a session
+	// started outside any repo pays no tokens for them. worktree_list alone is
+	// read-only, so it alone survives the plan-mode prune below.
+	if worktree.GitAvailable(cwd) {
+		wc := &tools.WorktreeCore{
+			Manager:    worktree.NewManager(),
+			Root:       filepath.Join(config.TervaHome(), "worktrees"),
+			LegacyRoot: filepath.Join(config.TervaHome(), "ext-data", "git-worktree"),
+			CWD:        cwd,
+		}
+		all["worktree_list"] = &tools.WorktreeListTool{WorktreeCore: wc}
+		all["worktree_create"] = &tools.WorktreeCreateTool{WorktreeCore: wc}
+		all["worktree_claim"] = &tools.WorktreeClaimTool{WorktreeCore: wc}
+		all["worktree_release"] = &tools.WorktreeReleaseTool{WorktreeCore: wc}
+		all["worktree_remove"] = &tools.WorktreeRemoveTool{WorktreeCore: wc}
+	}
+	// Build-tag-gated optional built-ins (terva_scripting's code_execution,
+	// …) contribute here from their _on file's init(). They pass through
+	// the same plan-mode prune and --tools filter below, and classify via
+	// the same permissions maps their init() extends — a tag adds a tool,
+	// never a parallel registration path.
+	for _, add := range extraBuiltinTools {
+		if name, t := add(cwd, sandbox); t != nil {
+			all[name] = t
+		}
+	}
+	// Recognized built-in tool names, captured BEFORE the plan-mode prune below
+	// so a --tools entry for a tool that plan mode legitimately drops (write,
+	// bash, …) isn't mistaken for a typo. skill and activate_tools are added to
+	// the registry by the caller after this --tools filter, so they count as
+	// recognized here too. Backs the unknown-name warning at the bottom.
+	recognized := make(map[string]bool, len(all)+2)
+	for name := range all {
+		recognized[name] = true
+	}
+	recognized["skill"] = true
+	recognized["activate_tools"] = true
 	// Plan mode promises read-only: mutating tools don't enter the
 	// registry at all (the model shouldn't even see them), with the
 	// confirm gate as the backstop for anything that arrives later.
@@ -1480,7 +1627,34 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 			reg[name] = t
 		}
 	}
+	// --tools is an allowlist; an entry that matches no known tool would
+	// otherwise be dropped silently, so a typo like `--tools edt` quietly
+	// removes the `edit` capability with no feedback. Warn (don't fail — the
+	// available set is runtime-dependent) naming the unmatched entries and the
+	// tools that were actually on offer this run.
+	if unknown := unrecognizedTools(args.Tools, recognized); len(unknown) > 0 {
+		known := make([]string, 0, len(recognized))
+		for name := range recognized {
+			known = append(known, name)
+		}
+		sort.Strings(known)
+		fmt.Fprintf(os.Stderr, "note: --tools: unknown tool name(s) %s ignored (known: %s)\n",
+			strings.Join(unknown, ", "), strings.Join(known, ", "))
+	}
 	return reg
+}
+
+// unrecognizedTools returns the --tools entries in requested that name no
+// recognized built-in tool, preserving their given order. It backs the startup
+// warning that keeps a typo (`--tools edt`) from silently dropping a capability.
+func unrecognizedTools(requested []string, recognized map[string]bool) []string {
+	var out []string
+	for _, name := range requested {
+		if !recognized[name] {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func toolSummaries(reg core.Registry, args Args) []ToolSummary {
