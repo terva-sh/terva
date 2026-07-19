@@ -9,10 +9,15 @@
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="./favicon.ico" sizes="32x32" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
-  <title>terva</title>
-  <script type="module" crossorigin src="./assets/main-Biyb_Rmg.js"></script>
+  <!-- Stage's own PWA identity (start_url/scope /stage/) — a static manifest,
+       linked FIRST so it wins over the root manifest vite-plugin-pwa injects into
+       every entry (the plugin manages one manifest; browsers use the first
+       rel=manifest). This is what makes Stage separately installable. -->
+  <link rel="manifest" href="./stage.webmanifest" />
+  <title>terva Stage</title>
+  <script type="module" crossorigin src="./assets/stage-B7A0XDS2.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/pacer-Dk9T8cCD.js">
-  <link rel="stylesheet" crossorigin href="./assets/main-BF-dR4FC.css">
+  <link rel="stylesheet" crossorigin href="./assets/stage-B8TSOzlY.css">
 <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 <body>
   <div id="app"></div>
