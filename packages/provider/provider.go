@@ -39,6 +39,12 @@ func (TextBlock) isContent() {}
 type ImageBlock struct {
 	MimeType string `json:"mime_type"`
 	Data     []byte `json:"data"` // raw bytes; encoded to base64 on the wire
+	// ID is the provider-issued generation id for an image the assistant
+	// produced itself (OpenAI Responses "ig_…" image_generation_call id),
+	// carried so a later turn can replay the image to edit it. Empty for
+	// image *inputs* (the read tool, pasted images), which no provider
+	// treats as editable and which never round-trip as a generation call.
+	ID string `json:"id,omitempty"`
 }
 
 func (ImageBlock) isContent() {}
@@ -136,6 +142,40 @@ func EnsureLeadingUserTurn(msgs []Message) []Message {
 		Role:    RoleUser,
 		Content: []Content{TextBlock{Text: "[Begin.]"}},
 	}}, msgs...)
+}
+
+// MergeAdjacentSameRole coalesces consecutive messages that share a role into one
+// by concatenating their content — a request-scoped repair for the strict
+// alternation the Anthropic, Bedrock, and Gemini APIs enforce (and that some
+// OpenAI-compatible backends, e.g. Moonshot/Kimi and local templates, do too).
+//
+// Transcript revision can leave two same-role turns adjacent: deleting the
+// assistant reply between two user messages, editing across a boundary, or a
+// compaction summary landing next to a same-role turn. Those APIs reject the
+// resulting sequence with a 400. Merging restores alternation while keeping every
+// turn's content. It runs AFTER tool-pair repair, so tool_use/tool_result
+// structure is already settled and merging same-role turns cannot split a pair.
+//
+// It returns a new slice and copies any message it merges into, so the input and
+// its messages are never mutated — the merge is request-scoped and never cached
+// as part of the history prefix. Dormant for well-formed transcripts, which
+// already alternate (a step's parallel tool results are one RoleTool message, so
+// normal turns never trip it).
+func MergeAdjacentSameRole(msgs []Message) []Message {
+	if len(msgs) < 2 {
+		return msgs
+	}
+	out := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		if n := len(out); n > 0 && out[n-1].Role == m.Role {
+			prev := out[n-1] // copy so the source message's slice is never aliased
+			prev.Content = append(append([]Content(nil), prev.Content...), m.Content...)
+			out[n-1] = prev
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // Message is a single turn in the conversation.
@@ -273,6 +313,31 @@ type Request struct {
 	// Only clients known to accept the field forward it
 	// (OpenAI-compatible backends may reject unknown parameters).
 	PromptCacheKey string
+
+	// ImageOutput, when non-nil, enables native (in-protocol) image output
+	// for this request: the model may draw images inline in its own turn via
+	// the provider's built-in image tool (OpenAI Responses image_generation),
+	// which arrive as ImageBlocks in the assistant Message. Nil means the
+	// tool is not offered. Only clients that implement it act on this; the
+	// rest ignore the field. The host gates this (opt-in config + the model's
+	// CapImageOutput + not plan mode) before setting it.
+	ImageOutput *ImageOutputConfig
+}
+
+// ImageOutputConfig configures native image output (see Request.ImageOutput).
+type ImageOutputConfig struct {
+	// Size and Quality configure the built-in image tool, e.g.
+	// "1024x1024"/"1024x1536"/"1536x1024"/"auto" and
+	// "low"/"medium"/"high"/"auto". Empty lets the provider default.
+	Size    string
+	Quality string
+	// EditHistory bounds how many of the most recent assistant-generated
+	// images are replayed to the model (with their bytes) so it can edit
+	// them. Each replayed image re-uploads as image-input tokens every turn,
+	// so this trades cost/latency for how far back editing reaches. 0 means
+	// generation only (no image replayed); 1 (the default) keeps only the
+	// most recent image editable.
+	EditHistory int
 }
 
 // Client is an LLM streaming client.
@@ -312,6 +377,15 @@ type ClientCapabilities struct {
 	// all is the separate per-model image-input capability the loop
 	// checks alongside it.
 	MirrorsToolImages bool
+
+	// ContinuesAssistantPrefill is true for wire formats that treat a
+	// TRAILING assistant message as a prefill to extend — the model
+	// continues that message rather than starting a fresh turn. Anthropic
+	// (Claude Messages) does; OpenAI treats it as history, Codex marks it
+	// completed, and Gemini enforces strict alternation. The Stage
+	// "continue" interaction (turn.continue) is gated on this: only a
+	// prefill-continuing provider can extend the last response in place.
+	ContinuesAssistantPrefill bool
 }
 
 // capabilityProvider is implemented by concrete clients that declare
@@ -359,4 +433,11 @@ func ClientCaps(c Client) ClientCapabilities {
 // the agent loop's tool-image-mirror decision.
 func ClientMirrorsToolImages(c Client) bool {
 	return ClientCaps(c).MirrorsToolImages
+}
+
+// ClientContinuesAssistantPrefill is a named convenience over ClientCaps for
+// the Stage "continue" gate: whether this client's wire format extends a
+// trailing assistant message (a prefill) rather than starting a fresh turn.
+func ClientContinuesAssistantPrefill(c Client) bool {
+	return ClientCaps(c).ContinuesAssistantPrefill
 }

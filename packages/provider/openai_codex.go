@@ -166,6 +166,27 @@ type codexTool struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
+// codexImageTool is the Responses built-in image_generation tool. Unlike
+// codexTool (a function terva must execute), it is a server-side tool the
+// model invokes to produce image output inline in its turn; the bytes come
+// back as an image_generation_call output item (see runStream), never a
+// function_call_output — so it sidesteps MirrorsToolImages entirely.
+type codexImageTool struct {
+	Type    string `json:"type"` // "image_generation"
+	Size    string `json:"size,omitempty"`
+	Quality string `json:"quality,omitempty"`
+}
+
+// codexImageGenCall replays a prior assistant image back into the input so
+// the model can edit it. Under store:false the backend retains nothing, so
+// Result (the base64 bytes) is required, not just the id.
+type codexImageGenCall struct {
+	Type   string `json:"type"` // "image_generation_call"
+	ID     string `json:"id"`
+	Status string `json:"status,omitempty"` // "completed"
+	Result string `json:"result,omitempty"`
+}
+
 type codexReasoningConfig struct {
 	Effort string `json:"effort,omitempty"`
 }
@@ -176,7 +197,7 @@ type codexRequest struct {
 	Stream            bool                  `json:"stream"`
 	Instructions      string                `json:"instructions,omitempty"`
 	Input             []any                 `json:"input"`
-	Tools             []codexTool           `json:"tools,omitempty"`
+	Tools             []any                 `json:"tools,omitempty"` // codexTool (function) and/or codexImageTool (built-in)
 	ToolChoice        string                `json:"tool_choice,omitempty"`
 	ParallelToolCalls bool                  `json:"parallel_tool_calls"`
 	Include           []string              `json:"include,omitempty"`
@@ -213,27 +234,65 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 			body.Reasoning = &codexReasoningConfig{Effort: effort}
 		}
 	}
-	if len(req.Tools) > 0 {
-		body.ToolChoice = "auto"
-		for _, t := range req.Tools {
-			params := t.Schema
-			if len(params) == 0 {
-				params = json.RawMessage(`{"type":"object","properties":{}}`)
-			}
-			body.Tools = append(body.Tools, codexTool{
-				Type:        "function",
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  params,
-			})
+	for _, t := range req.Tools {
+		params := t.Schema
+		if len(params) == 0 {
+			params = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
+		body.Tools = append(body.Tools, codexTool{
+			Type:        "function",
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  params,
+		})
+	}
+	// Native image output: offer the built-in image_generation tool alongside
+	// the function tools (the backend accepts the mixed array). The host has
+	// already gated this on config + the model's CapImageOutput + plan mode.
+	if req.ImageOutput != nil {
+		body.Tools = append(body.Tools, codexImageTool{
+			Type:    "image_generation",
+			Size:    req.ImageOutput.Size,
+			Quality: req.ImageOutput.Quality,
+		})
+	}
+	if len(body.Tools) > 0 {
+		body.ToolChoice = "auto"
 	}
 
 	msgIdx := 0
 	req.Messages = RepairOrphanedToolResults(req.Messages)
-	// Same guard as the chat-completions builder: keep a card's seeded
-	// leading-assistant greeting valid for backends that require user-first.
-	req.Messages = EnsureLeadingUserTurn(req.Messages)
+	// Same guards as the chat-completions builder: merge any same-role adjacency
+	// an edit/delete left behind, and keep a card's seeded leading-assistant
+	// greeting valid for backends that require user-first.
+	req.Messages = EnsureLeadingUserTurn(MergeAdjacentSameRole(req.Messages))
+
+	// Native image editing: the most-recent EditHistory assistant images are
+	// replayed as image_generation_call input items (with their bytes) so the
+	// model can edit them; older ones are dropped from replay. Only when the
+	// image tool is offered this turn — replaying a call for a tool the request
+	// doesn't declare would be invalid.
+	replay := map[string]bool{}
+	if req.ImageOutput != nil && req.ImageOutput.EditHistory > 0 {
+		var ids []string
+		for _, msg := range req.Messages {
+			if msg.Role != RoleAssistant {
+				continue
+			}
+			for _, c := range msg.Content {
+				if ib, ok := c.(ImageBlock); ok && ib.ID != "" {
+					ids = append(ids, ib.ID)
+				}
+			}
+		}
+		if n := req.ImageOutput.EditHistory; n < len(ids) {
+			ids = ids[len(ids)-n:]
+		}
+		for _, id := range ids {
+			replay[id] = true
+		}
+	}
+
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case RoleUser:
@@ -260,6 +319,8 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 			// we captured. The reasoning replay is what keeps OpenAI
 			// Codex from rejecting follow-up tool calls with
 			// "thinking is enabled but reasoning_content is missing".
+			startLen := len(body.Input)
+			droppedImg := 0
 			for _, c := range msg.Content {
 				switch v := c.(type) {
 				case ReasoningBlock:
@@ -299,7 +360,37 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 						Name:      v.Name,
 						Arguments: args,
 					})
+				case ImageBlock:
+					// An image the assistant produced. If it's within the edit
+					// window, replay it as an editable image_generation_call
+					// (bytes included, required under store:false); otherwise
+					// drop it from the model's input.
+					if v.ID != "" && replay[v.ID] {
+						body.Input = append(body.Input, codexImageGenCall{
+							Type:   "image_generation_call",
+							ID:     v.ID,
+							Status: "completed",
+							Result: base64.StdEncoding.EncodeToString(v.Data),
+						})
+					} else {
+						droppedImg++
+					}
 				}
+			}
+			if len(body.Input) == startLen && droppedImg > 0 {
+				// An image-only assistant turn whose image is outside the edit
+				// window would otherwise vanish; keep a placeholder so the turn
+				// isn't dropped entirely.
+				msgIdx++
+				body.Input = append(body.Input, codexOutputMessage{
+					Type:   "message",
+					Role:   "assistant",
+					Status: "completed",
+					ID:     fmt.Sprintf("msg_%d", msgIdx),
+					Content: []codexOutputText{
+						{Type: "output_text", Text: "[generated an image]", Annotations: []any{}},
+					},
+				})
 			}
 		case RoleTool:
 			for _, c := range msg.Content {
@@ -363,6 +454,22 @@ func splitCallID(id string) (string, string) {
 		return id[:i], id[i+1:]
 	}
 	return id, ""
+}
+
+// imageMimeFromFormat maps a Responses image_generation output_format to a
+// MIME type, falling back to content sniffing when the field is absent.
+func imageMimeFromFormat(format string, data []byte) string {
+	switch strings.ToLower(format) {
+	case "png":
+		return "image/png"
+	case "jpeg", "jpg":
+		return "image/jpeg"
+	case "webp":
+		return "image/webp"
+	case "gif":
+		return "image/gif"
+	}
+	return http.DetectContentType(data)
 }
 
 // ---- Streaming ----
@@ -620,7 +727,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 	// item is either a "message" (text) or a "function_call". We track
 	// the in-flight item by its index.
 	type itemState struct {
-		kind      string // "message" | "function_call" | "reasoning"
+		kind      string // "message" | "function_call" | "reasoning" | "image"
 		callID    string
 		name      string
 		argsBuf   strings.Builder
@@ -629,6 +736,9 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 		rawID     string
 		encrypted string
 		announced bool
+		imgData   []byte // decoded image bytes (kind == "image")
+		imgMime   string
+		imgID     string // the "ig_…" image_generation_call id, for later edit replay
 	}
 	var (
 		items    = map[int]*itemState{}
@@ -652,6 +762,10 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 			case "message":
 				if it.textBuf.Len() > 0 {
 					content = append(content, TextBlock{Text: it.textBuf.String()})
+				}
+			case "image":
+				if len(it.imgData) > 0 {
+					content = append(content, ImageBlock{MimeType: it.imgMime, Data: it.imgData, ID: it.imgID})
 				}
 			case "function_call":
 				args := it.argsBuf.String()
@@ -741,6 +855,9 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 					it.kind = "reasoning"
 					it.rawID = p.Item.ID
 					it.encrypted = p.Item.EncryptedContent
+				case "image_generation_call":
+					it.kind = "image"
+					it.imgID = p.Item.ID
 				default:
 					continue
 				}
@@ -784,6 +901,8 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 						Type             string `json:"type"`
 						ID               string `json:"id"`
 						EncryptedContent string `json:"encrypted_content"`
+						Result           string `json:"result"`        // image_generation_call: base64 image
+						OutputFormat     string `json:"output_format"` // image_generation_call: "png" | "jpeg" | "webp"
 						Summary          []struct {
 							Type string `json:"type"`
 							Text string `json:"text"`
@@ -795,6 +914,16 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 					switch it.kind {
 					case "function_call":
 						out <- EventToolEnd{ID: it.callID}
+					case "image":
+						if p.Item.Result != "" {
+							if data, derr := base64.StdEncoding.DecodeString(p.Item.Result); derr == nil && len(data) > 0 {
+								it.imgData = data
+								it.imgMime = imageMimeFromFormat(p.Item.OutputFormat, data)
+							}
+						}
+						if it.imgID == "" && p.Item.ID != "" {
+							it.imgID = p.Item.ID
+						}
 					case "reasoning":
 						if p.Item.EncryptedContent != "" {
 							it.encrypted = p.Item.EncryptedContent

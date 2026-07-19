@@ -1022,6 +1022,15 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 				// blocks doesn't produce a stack of unclosed top
 				// edges. Each tool result owns its own box.
 				_ = b
+			case provider.ImageBlock:
+				// An image the assistant drew inline (native image output).
+				// Render it like a tool-result image but without box edges —
+				// assistant prose isn't boxed — stripping the footprint
+				// sentinel and applying the same left indent as the prose.
+				for _, line := range v.renderImageBlock(b, inner) {
+					_, stripped := parseImageFootprint(line)
+					lines = append(lines, indent+stripped)
+				}
 			}
 		}
 	case provider.RoleTool:
