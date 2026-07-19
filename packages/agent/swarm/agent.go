@@ -2,6 +2,7 @@ package swarm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -17,7 +18,15 @@ type Agent struct {
 	// Dir is the agent's working directory. By default it's the host's
 	// RepoRoot (agents share its cwd); when the swarm was configured
 	// with an AcquireWorktree hook it's the leased per-agent directory.
-	Dir     string
+	Dir string
+	// Leased is true when AcquireWorktree granted this agent its OWN
+	// directory (a dedicated worktree), false when it shares the host's
+	// RepoRoot. A worker backend reads it to decide its default approval
+	// posture: autonomous (yolo) in its own lease, but never silently yolo
+	// in the shared host cwd — there it inherits the dispatcher's posture.
+	// A lease is a git worktree, NOT a security sandbox, so this gates
+	// AUTONOMY, not privilege. Persisted in meta.json so Resume keeps it.
+	Leased  bool
 	Started time.Time
 
 	// Model and Provider, when non-empty, override the child
@@ -43,6 +52,42 @@ type Agent struct {
 	Experience string
 	Substrate  string
 	Card       string
+
+	// Backend names the worker backend that drives this agent — "claude" for a
+	// Claude Code child, "terva" for a terva one. EMPTY IS THE DEFAULT AND MEANS
+	// A NATIVE TERVA SWARM AGENT: the historical `terva --swarm-agent` child,
+	// unchanged, and no external process of any other kind.
+	//
+	// The swarm does not know what a backend IS. It carries the label, persists
+	// it, and hands it to Config.NewRunner, which is the host's business — the
+	// same deliberate ignorance the swarm keeps about worktrees, where
+	// AcquireWorktree is an opaque hook and the swarm knows nothing about git.
+	// Keeping it that way is what stops a vendor's CLI quirks from leaking into
+	// the supervisor.
+	//
+	// Persisted in meta.json: an agent revived after a terva restart must come
+	// back on the SAME backend, or its resume cursor and its event stream would
+	// be handed to a runner that cannot read them.
+	Backend string
+
+	// Approval, when non-empty, is an EXPLICIT per-worker approval posture that
+	// overrides the default resolution — it always wins, whether the agent is
+	// leased or not. Empty means "resolve by policy": yolo in a lease, else the
+	// dispatcher's posture (see the worker runner's posture resolution). The
+	// value is a posture string ("yolo" | "ask" | "workspace" | "plan"); the
+	// swarm carries it opaquely and the backend interprets it. Persisted in
+	// meta.json so a revived worker keeps the operator's choice.
+	Approval string
+
+	// Schema, when non-empty, is the JSON schema the agent's deliverable
+	// must match (the structured-deliverable contract): a native child gets
+	// a deliver_result tool bound to it, a foreign worker gets it rendered
+	// into its briefing, and the supervisor validates whichever route the
+	// report arrives by (see captureDeliverable). Carried opaquely like
+	// Backend — the swarm never interprets it — and persisted in meta.json
+	// so a revived agent keeps its contract. Empty = no contract (the
+	// historical free-text report).
+	Schema json.RawMessage
 
 	// SessionID, when non-empty, scopes the agent to a particular
 	// host terva session: the dashboard only surfaces agents whose
@@ -106,6 +151,25 @@ type Agent struct {
 	// housekeeping that would otherwise clobber the findings in the
 	// recap. Guarded by mu.
 	preGuardAssistant string
+
+	// deliverable is the schema-validated structured report captured at the
+	// last task-level turn_end (nil when validation failed or no turn has
+	// ended); deliverableErr carries the extraction/validation error when
+	// the contract was not met — ABSENT with a reason. Only meaningful when
+	// Schema is set. Guarded by mu; written by captureDeliverable.
+	deliverable    json.RawMessage
+	deliverableErr string
+
+	// costUSD is the worker's cumulative spend so far — the CUMULATIVE
+	// session total, not a per-turn delta, so it is SET to the latest value
+	// (never summed). It arrives via costFromEvent from whichever shape the
+	// backend produces: a terva/native worker's per-turn `usage` event
+	// (cumulative.cost_usd, so this climbs LIVE as the run spends) or a claude
+	// worker's synthesised task_end (cost_usd off result.total_cost_usd, which
+	// already sums prior turns). Zero until the first event that carries a
+	// cost. In-memory like the transcript; the durable record is events.jsonl,
+	// which replays those same events through IngestEvent. Guarded by mu.
+	costUSD float64
 
 	// OnTurnEnd, if set, fires once per TASK-level turn_end the runner
 	// observes from the child daemon — i.e. once each time the child's
@@ -226,6 +290,19 @@ func (a *Agent) setLastAssistant(txt string) {
 	}
 	a.mu.Lock()
 	a.lastAssistant = txt
+	a.mu.Unlock()
+}
+
+// setCost records the worker's cumulative spend from a task_end. The value is
+// the vendor's running session total (not a per-turn delta), so it REPLACES the
+// stored cost rather than adding to it. A non-positive value is ignored, so a
+// task_end with no cost never zeroes a real figure.
+func (a *Agent) setCost(usd float64) {
+	if usd <= 0 {
+		return
+	}
+	a.mu.Lock()
+	a.costUSD = usd
 	a.mu.Unlock()
 }
 

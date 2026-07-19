@@ -408,6 +408,25 @@ func (c *Carrier) SetQueue(ctx context.Context, sess string, texts []string) err
 }
 func (c *Carrier) Compact(ctx context.Context, sess string) error { return unsupported("compact") }
 func (c *Carrier) Clear(ctx context.Context, sess string) error   { return unsupported("clear") }
+func (c *Carrier) EditMessage(ctx context.Context, sess string, epoch uint64, index int, text string) error {
+	return unsupported("message.edit")
+}
+func (c *Carrier) DeleteMessage(ctx context.Context, sess string, epoch uint64, index int) error {
+	return unsupported("message.delete")
+}
+func (c *Carrier) SwipeTurn(ctx context.Context, sess string, epoch uint64, variant int) error {
+	return unsupported("turn.swipe")
+}
+
+func (c *Carrier) SwipeMessage(ctx context.Context, sess string, epoch uint64, index, variant int) error {
+	return unsupported("turn.swipe")
+}
+func (c *Carrier) RetryTurn(ctx context.Context, sess string, epoch uint64) error {
+	return unsupported("turn.retry")
+}
+func (c *Carrier) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
+	return ctrlproto.SessionInfo{}, unsupported("sessions.fork")
+}
 
 // A replay has no provider client, so there is nothing to complete against.
 func (c *Carrier) SideChatOpen(ctx context.Context, sess string) (string, error) {

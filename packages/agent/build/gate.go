@@ -47,6 +47,10 @@ func HeadlessConfirmGate(args Args, mode string) (*core.ConfirmGate, *core.ReadO
 			// confirmation prompts reach the paired chat instead of
 			// being refused (see botRun).
 			fmt.Fprintf(os.Stderr, "note: approval mode %q in bot mode: tool calls that need confirmation ask the paired user over chat, fail-closed on timeout\n", pol.Mode)
+		} else if mode == "rpc" {
+			// RPC can carry approvals out-of-band, so the refusal is opt-out:
+			// name the flags that fill the gate instead of leaving a dead end.
+			fmt.Fprintf(os.Stderr, "note: approval mode %q in rpc mode refuses tool calls that would need confirmation (no interactive prompt available); carry approvals over the wire with --rpc-approvals, or out-of-band with --approval-socket / --approval-http (see docs/rpc.md)\n", pol.Mode)
 		} else {
 			fmt.Fprintf(os.Stderr, "note: approval mode %q in %s mode refuses tool calls that would need confirmation (no interactive prompt available)\n", pol.Mode, mode)
 		}

@@ -69,7 +69,7 @@ func (r *Resolved) tailSegments(msgs []provider.Message) []PromptSegment {
 		}
 	}
 	if r.postHistory != "" {
-		segs = append(segs, PromptSegment{Source: "card:post_history", Text: r.postHistory})
+		segs = append(segs, PromptSegment{Source: SourceCardPostHistory, Text: r.postHistory})
 	}
 	return segs
 }

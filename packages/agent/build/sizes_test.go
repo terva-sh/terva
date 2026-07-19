@@ -109,3 +109,36 @@ func toolOrder(rows []PromptSizeRow) []string {
 	}
 	return out
 }
+
+// The weight view names the portability class too, so "which of these bytes
+// would a foreign worker actually carry?" is answerable from the column that
+// tells you how many bytes there are. A heavy harness-local segment is weight
+// no worker will ever see; a heavy discovery-owned one is a file to point at
+// rather than paste.
+func TestPromptSizesNameThePortabilityClass(t *testing.T) {
+	r := &Resolved{
+		SystemSegments: []PromptSegment{
+			{Source: SourceIdentityIntro, Text: "You are Mieli."},
+			{Source: SourceConventions, Text: "Use markdown."},
+			{Source: SourceAgentsMD, Text: strings.Repeat("project rules. ", 40)},
+		},
+		ToolRegistry: core.Registry{},
+	}
+	txt := r.BuildPromptSizes(nil).Text()
+	for _, want := range []string{
+		"identity-intro",
+		"portable",
+		"conventions",
+		"harness-local",
+		"agents-md",
+		"discovery-owned",
+	} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("sizes view should name %q:\n%s", want, txt)
+		}
+	}
+	// The tools section is not classified, so it must not sprout a class column.
+	if strings.Contains(txt, "tool:") {
+		t.Errorf("tool rows should stay unprefixed:\n%s", txt)
+	}
+}

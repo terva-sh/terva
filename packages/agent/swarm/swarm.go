@@ -13,11 +13,12 @@
 // real worktree, a different terminal) yourself.
 //
 // A host can opt agents into per-agent working directories by setting
-// Config.AcquireWorktree (e.g. wiring it to the terva-git-worktree
-// extension): each spawn then leases its own directory and releases it
-// exactly once on the agent's terminal transition. The swarm itself
-// stays generic — it only sees an opaque AcquireWorktree hook and the
-// WorktreeReq/WorktreeLease values; it knows nothing about git.
+// Config.AcquireWorktree (the workspace wires it to the built-in
+// worktree engine, packages/agent/worktree): each spawn then leases its
+// own directory and releases it exactly once on the agent's terminal
+// transition. The swarm itself stays generic — it only sees an opaque
+// AcquireWorktree hook and the WorktreeReq/WorktreeLease values; it
+// knows nothing about git.
 //
 // Each Agent has:
 //   - a unique id (short slug + nanoseconds)
@@ -32,6 +33,7 @@ package swarm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -210,7 +212,7 @@ func New(cfg Config) *Swarm {
 		cfg.StopGrace = defaultStopGrace
 	}
 	if cfg.NewRunner == nil {
-		cfg.NewRunner = func(a *Agent) Runner { return &execRunner{agent: a} }
+		cfg.NewRunner = NewExecRunner
 	}
 	s := &Swarm{
 		cfg:     cfg,
@@ -328,6 +330,26 @@ type SpawnRequest struct {
 	Substrate  string
 	Card       string
 
+	// Backend selects a worker backend — an agent that is not terva (see
+	// Agent.Backend). Empty means a native terva swarm agent, which is what
+	// every spawn has always been and what every spawn still is unless someone
+	// asks for otherwise. The swarm neither validates nor interprets it; the
+	// host's NewRunner resolves it, and an unknown name is the host's error to
+	// raise, not the supervisor's.
+	Backend string
+
+	// Approval is an OPTIONAL explicit approval posture for a worker backend
+	// (see Agent.Approval). Empty means the worker resolves its own default
+	// (yolo in a lease, else the dispatcher's posture); a value forces it. The
+	// swarm carries it opaquely.
+	Approval string
+
+	// Schema, when non-empty, is the JSON schema the agent's report must
+	// match (see Agent.Schema — the structured-deliverable contract).
+	// Carried opaquely; the host's child bootstrap and worker briefing
+	// impose it, and the supervisor validates against it at turn end.
+	Schema json.RawMessage
+
 	// SessionID scopes the agent to the host terva session that spawned it:
 	// the /swarm dashboard narrows to matching agents, and the id persists in
 	// meta.json (the durable "which conversation do you belong to" stamp).
@@ -383,6 +405,7 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 	}()
 
 	dir := f.cfg.RepoRoot
+	leased := false
 	var releaseWorktree func()
 	if f.cfg.AcquireWorktree != nil {
 		lease, err := f.cfg.AcquireWorktree(ctx, WorktreeReq{
@@ -394,8 +417,11 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		if err != nil {
 			return nil, fmt.Errorf("swarm: acquire worktree: %w", err)
 		}
+		// A non-empty Dir is a dedicated lease; an empty one falls back to
+		// RepoRoot (shared cwd) and is NOT leased.
 		if lease.Dir != "" {
 			dir = lease.Dir
+			leased = true
 		}
 		releaseWorktree = lease.Release
 	}
@@ -432,6 +458,7 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		ID:           id,
 		Task:         task,
 		Dir:          dir,
+		Leased:       leased,
 		Started:      f.cfg.Now(),
 		Model:        strings.TrimSpace(req.Model),
 		Provider:     strings.TrimSpace(req.Provider),
@@ -439,6 +466,9 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		Experience:   strings.TrimSpace(req.Experience),
 		Substrate:    strings.TrimSpace(req.Substrate),
 		Card:         strings.TrimSpace(req.Card),
+		Backend:      strings.TrimSpace(req.Backend),
+		Approval:     strings.TrimSpace(req.Approval),
+		Schema:       req.Schema,
 		SessionID:    sessionID,
 		InboxPath:    inboxPath,
 		EventLogPath: logPath,
@@ -777,6 +807,14 @@ type AgentSnapshot struct {
 	Model    string
 	Provider string
 
+	// CostUSD is the worker's cumulative spend so far, from its task_end
+	// events. Zero for a native terva child or a terva-backend worker until
+	// their wire carries usage; a Claude worker reports it on every result
+	// envelope. Surfaced so a dashboard can show what a foreign agent is
+	// spending — the one thing a supervisor running billable workers most
+	// needs and otherwise cannot see.
+	CostUSD float64
+
 	// Persona is the persona the sub-agent booted as (empty = host
 	// default). Surfaced so the dashboard and the auto-swarm summary can
 	// label each sub-agent by the specialist that ran it.
@@ -789,6 +827,21 @@ type AgentSnapshot struct {
 	Experience string
 	Substrate  string
 	Card       string
+
+	// Backend names the worker backend driving this agent, or "" for a native
+	// terva child (see Agent.Backend). Surfaced so a dashboard can say WHAT is
+	// running: a swarm of mixed native and foreign agents otherwise looks
+	// uniform, and the difference is exactly what a watcher needs to know when
+	// one of them behaves unlike the others.
+	Backend string
+
+	// Deliverable is the schema-validated structured report captured at the
+	// last task-level turn_end, nil when the spawn carried no schema or the
+	// contract was not met; DeliverableError carries the extraction or
+	// validation failure in the not-met case (ABSENT with a reason). See
+	// Agent.Schema and captureDeliverable.
+	Deliverable      json.RawMessage
+	DeliverableError string
 
 	// Paths to the agent's durable state. Surface them in the
 	// snapshot so the dashboard / /swarm open can read events.jsonl
@@ -866,10 +919,14 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		PreGuardAssistant: a.preGuardAssistant,
 		Model:             a.Model,
 		Provider:          a.Provider,
+		CostUSD:           a.costUSD,
 		Persona:           a.Persona,
 		Experience:        a.Experience,
 		Substrate:         a.Substrate,
 		Card:              a.Card,
+		Backend:           a.Backend,
+		Deliverable:       a.deliverable,
+		DeliverableError:  a.deliverableErr,
 		InboxPath:         a.InboxPath,
 		EventLogPath:      a.EventLogPath,
 		SessionPath:       a.SessionPath,

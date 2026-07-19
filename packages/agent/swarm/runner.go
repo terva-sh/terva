@@ -54,6 +54,87 @@ type execRunner struct {
 	SessionPath string
 }
 
+// NewExecRunner builds the default native runner — the `terva --swarm-agent`
+// child. Exported so a host that installs its OWN Config.NewRunner (to route
+// some agents to a foreign backend by Agent.Backend) can still fall back to the
+// native path for the agents that have no backend, which is every agent unless
+// someone asked otherwise. Without this the host's NewRunner would have to
+// reach for the unexported execRunner it cannot name.
+func NewExecRunner(a *Agent) Runner { return &execRunner{agent: a} }
+
+// IngestEvent is the post-parse bookkeeping every runner shares: append the
+// event to the durable log, mirror it into the in-memory sink, and fan a
+// TASK-level turn_end up to any OnTurnEnd subscriber on the agent.
+//
+// It exists as a seam because there are now TWO runners producing swarm events
+// — the native execRunner, which parses its child's own JSONL, and a bridging
+// runner in another package that TRANSLATES a foreign CLI's stream into these
+// same events. Both must record identically (same durable log, same sink
+// updates, same once-per-task callback), and the only way to guarantee that is
+// one function. A foreign-backend runner cannot reach applyEventToSink or the
+// agent's mutex from outside the package; this is the door it comes through.
+//
+// The OnTurnEnd fan-out filters the core agent's intermediate per-turn turn_ends
+// (taskLevelTurnEnd), so the callback fires exactly once per ag.Prompt — the
+// distinction auto-swarm relies on to summarise as each initial task completes,
+// not after the sub-agent's first tool call.
+func IngestEvent(ev Event, log *EventLog, sink Sink, a *Agent) {
+	if log != nil {
+		_ = log.Append(ev)
+	}
+	applyEventToSink(ev, sink)
+	if a != nil {
+		// Record the worker's cumulative spend as it flows by, so the snapshot
+		// shows current cost. Both event shapes are cumulative — see setCost —
+		// so this is last-wins, never a sum.
+		if cost, ok := costFromEvent(ev); ok {
+			a.setCost(cost)
+		}
+	}
+	if step, errMsg, ok := taskLevelTurnEnd(ev); ok && a != nil {
+		// Derive the structured deliverable (schema spawns only) BEFORE the
+		// OnTurnEnd fan-out, so a recap subscriber reading the snapshot in
+		// its callback sees the validated document, not a race.
+		a.captureDeliverable()
+		a.mu.Lock()
+		fn := a.OnTurnEnd
+		a.mu.Unlock()
+		if fn != nil {
+			go fn(step, errMsg)
+		}
+	}
+}
+
+// costFromEvent pulls a worker's cumulative spend out of an event, honouring
+// the two shapes the backends produce:
+//
+//   - a usage event's nested cumulative.cost_usd — the terva/native route. The
+//     rpc wire and the native child both emit a core.WireEvent `usage` event
+//     every turn, so cost lights up for any backend whose stream IS terva's
+//     vocabulary, and updates LIVE as the run spends rather than only at the
+//     terminal event.
+//   - a task_end's top-level cost_usd — the claude route, where the foreign
+//     result envelope's cumulative total_cost_usd is the only cost signal (its
+//     stream emits no per-turn usage we can read), synthesised onto task_end by
+//     the claude translator.
+//
+// Both numbers are cumulative session totals, not per-turn deltas.
+func costFromEvent(ev Event) (float64, bool) {
+	switch ev.Type {
+	case "usage":
+		if cum, ok := ev.Data["cumulative"].(map[string]any); ok {
+			if cost, ok := cum["cost_usd"].(float64); ok {
+				return cost, true
+			}
+		}
+	case "task_end":
+		if cost, ok := ev.Data["cost_usd"].(float64); ok {
+			return cost, true
+		}
+	}
+	return 0, false
+}
+
 // swarmAgentArgsOpts captures every dynamic input to swarmAgentArgs
 // so future per-agent overrides (e.g. tools, reasoning) can be added
 // without churning the signature. The fields map 1:1 onto child CLI
@@ -206,6 +287,13 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 		"TERVA_SWARM_AGENT_ID="+r.agent.ID,
 		"TERVA_SWARM_EVENT_LOG="+logPath,
 	)
+	// The structured-deliverable contract rides the env, not argv: a schema
+	// is a multi-line JSON blob that has no business being a positional or
+	// a flag value in `ps` output. The child bootstrap reads it back and
+	// wires the deliver_result tool + contract addendum from it.
+	if len(r.agent.Schema) > 0 {
+		cmd.Env = append(cmd.Env, "TERVA_SWARM_DELIVERABLE_SCHEMA="+string(r.agent.Schema))
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -239,23 +327,12 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 					goto next
 				}
 				if ev, ok := parseEventLine(trimmed); ok {
-					_ = log.Append(ev)
-					applyEventToSink(ev, sink)
-					// Fan the TASK-level turn_end up to any subscriber on
-					// the supervised Agent. Daemons stay alive across many
-					// turns, so Wait()-style hooks would never fire; a
-					// per-task callback lets auto-swarm summarise as each
-					// initial task completes. taskLevelTurnEnd filters out
-					// the core agent's intermediate per-turn turn_ends so
-					// the callback fires exactly once per ag.Prompt.
-					if step, errMsg, ok := taskLevelTurnEnd(ev); ok && r.agent != nil {
-						r.agent.mu.Lock()
-						fn := r.agent.OnTurnEnd
-						r.agent.mu.Unlock()
-						if fn != nil {
-							go fn(step, errMsg)
-						}
-					}
+					// The shared post-parse bookkeeping — durable log, in-memory
+					// sink, and the task-level OnTurnEnd fan-out. A bridging
+					// runner in another package (one translating a FOREIGN CLI's
+					// stream into swarm events) calls the same helper, so the two
+					// paths cannot drift.
+					IngestEvent(ev, log, sink, r.agent)
 				} else {
 					// Non-JSON output. Keep it as transcript so an
 					// accidental fmt.Println in the child still
@@ -434,6 +511,12 @@ func applyEventToSink(ev Event, sink Sink) {
 	case "turn_end", "task_end":
 		sink.Activity("idle")
 	case "agent_ready":
+		// This event also carries "backend" + the probed CLI "version" in
+		// ev.Data — free from the child's init, no extra probe. We only mark
+		// idle today; the version reaches nowhere but the durable event log.
+		// Capture it onto the Agent/snapshot if a dashboard tile ever wants
+		// "backend vX.Y.Z" — see external-agent-workers.md, "Named, not built —
+		// the snapshot's other worker fields".
 		sink.Activity("idle")
 	case "agent_stopped":
 		// terminal status is decided by Swarm.run from the runner's

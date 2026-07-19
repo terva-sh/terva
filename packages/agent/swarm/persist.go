@@ -40,19 +40,34 @@ import (
 // by encoding/json's permissive decoder when an older meta.json is
 // loaded; we don't need to keep them in the struct.
 type agentMeta struct {
-	ID           string    `json:"id"`
-	Task         string    `json:"task"`
-	Dir          string    `json:"dir"`
-	Started      time.Time `json:"started"`
-	Model        string    `json:"model,omitempty"`
-	Provider     string    `json:"provider,omitempty"`
-	Persona      string    `json:"persona,omitempty"`
-	Experience   string    `json:"experience,omitempty"`
-	Substrate    string    `json:"substrate,omitempty"`
-	Card         string    `json:"card,omitempty"`
-	InboxPath    string    `json:"inbox_path"`
-	EventLogPath string    `json:"event_log_path"`
-	SessionPath  string    `json:"session_path"`
+	ID         string    `json:"id"`
+	Task       string    `json:"task"`
+	Dir        string    `json:"dir"`
+	Started    time.Time `json:"started"`
+	Model      string    `json:"model,omitempty"`
+	Provider   string    `json:"provider,omitempty"`
+	Persona    string    `json:"persona,omitempty"`
+	Experience string    `json:"experience,omitempty"`
+	Substrate  string    `json:"substrate,omitempty"`
+	Card       string    `json:"card,omitempty"`
+	// Backend is the worker backend that drove this agent (empty = a native
+	// terva swarm child). An agent revived onto the WRONG backend would be
+	// handed a cursor and an event stream its runner cannot read, so this is
+	// durable state, not a spawn-time convenience.
+	Backend string `json:"backend,omitempty"`
+	// Approval is an explicit per-worker posture override; Leased records
+	// whether this agent got its own worktree. Both feed the worker backend's
+	// default-posture resolution, so a revived worker keeps the same posture it
+	// ran with (a leased worker stays autonomous; an explicit override persists).
+	Approval string `json:"approval,omitempty"`
+	Leased   bool   `json:"leased,omitempty"`
+	// Schema is the structured-deliverable contract (see Agent.Schema). A
+	// revived agent must keep it or its next turn would silently drop the
+	// validation the dispatcher asked for.
+	Schema       json.RawMessage `json:"schema,omitempty"`
+	InboxPath    string          `json:"inbox_path"`
+	EventLogPath string          `json:"event_log_path"`
+	SessionPath  string          `json:"session_path"`
 
 	// SessionID, when non-empty, scopes the agent to a particular
 	// host terva session: the dashboard only shows agents whose
@@ -81,6 +96,10 @@ func writeAgentMeta(stateDir string, a *Agent) error {
 		Experience:   a.Experience,
 		Substrate:    a.Substrate,
 		Card:         a.Card,
+		Backend:      a.Backend,
+		Approval:     a.Approval,
+		Leased:       a.Leased,
+		Schema:       a.Schema,
 		InboxPath:    a.InboxPath,
 		EventLogPath: a.EventLogPath,
 		SessionPath:  a.SessionPath,
@@ -215,6 +234,10 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 		Experience:   m.Experience,
 		Substrate:    m.Substrate,
 		Card:         m.Card,
+		Backend:      m.Backend,
+		Approval:     m.Approval,
+		Leased:       m.Leased,
+		Schema:       m.Schema,
 		InboxPath:    m.InboxPath,
 		EventLogPath: m.EventLogPath,
 		SessionPath:  m.SessionPath,
@@ -375,6 +398,9 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Dir: existing.Dir, Started: existing.Started,
 		Model: existing.Model, Provider: existing.Provider, Persona: existing.Persona,
 		Experience: existing.Experience, Substrate: existing.Substrate, Card: existing.Card,
+		Backend:  existing.Backend,
+		Approval: existing.Approval, Leased: existing.Leased,
+		Schema:    existing.Schema,
 		InboxPath: existing.InboxPath, EventLogPath: existing.EventLogPath,
 		SessionPath: existing.SessionPath,
 		// SessionID is spawn-time scoping; it must survive Resume or
@@ -394,6 +420,10 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Experience:   m.Experience,
 		Substrate:    m.Substrate,
 		Card:         m.Card,
+		Backend:      m.Backend,
+		Approval:     m.Approval,
+		Leased:       m.Leased,
+		Schema:       m.Schema,
 		SessionID:    m.SessionID,
 		InboxPath:    m.InboxPath,
 		EventLogPath: m.EventLogPath,

@@ -17,7 +17,9 @@ func TestManifestRenderers(t *testing.T) {
 	}}
 
 	txt := m.Text()
-	if !strings.Contains(txt, "==== SYSTEM ====") || !strings.Contains(txt, "[identity-intro]") || !strings.Contains(txt, "assistant · card:greeting") {
+	// A system segment carries its portability class; a message does not — the
+	// table is not about the conversation (see PromptSection.Classified).
+	if !strings.Contains(txt, "==== SYSTEM ====") || !strings.Contains(txt, "[identity-intro · portable]") || !strings.Contains(txt, "assistant · card:greeting") {
 		t.Errorf("annotated text missing labels: %q", txt)
 	}
 
@@ -148,5 +150,76 @@ func TestBuildPromptManifest_NoTriggerWhenKeywordAbsent(t *testing.T) {
 	m := r.BuildPromptManifest(msgs)
 	if tail := m.section("tail"); tail != nil && len(tail.Segments) != 0 {
 		t.Errorf("no keyword -> empty tail, got %+v", tail.Segments)
+	}
+}
+
+// The dump prints the portability class so a human can SEE what would reach a
+// foreign worker. That is only worth printing if it cannot disagree with what
+// the composer would actually do — so it is derived at render time from the
+// same PortabilityOf the composer consults, never stored on the segment and
+// never recomputed by a second rule.
+func TestManifestPortabilityMatchesTheClassifier(t *testing.T) {
+	m := PromptManifest{Sections: []PromptSection{
+		{Name: "system", Segments: []PromptSegment{
+			{Source: SourceIdentityIntro, Text: "You are X."},
+			{Source: SourceVessel, Text: "terva carries you."},
+			{Source: SourceConventions, Text: "markdown."},
+			{Source: SourceAgentsMD, Text: "project rules"},
+		}},
+		{Name: "tail", Segments: []PromptSegment{
+			{Source: "lore:triggered [vault.md]", Text: "sealed"},
+		}},
+	}}
+
+	txt := m.Text()
+	for _, want := range []string{
+		"[identity-intro · portable]",            // the mind travels
+		"[vessel · harness-local]",               // the ship does not
+		"[conventions · harness-local]",          // names terva's tools and terva's screen
+		"[agents-md · discovery-owned]",          // point at the path, don't paste the file
+		"lore:triggered [vault.md] · no-analog]", // nowhere to put it abroad
+	} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("dump should label %q:\n%s", want, txt)
+		}
+	}
+
+	// And the JSON view agrees with the classifier segment for segment.
+	var back struct {
+		Sections []struct {
+			Name     string `json:"name"`
+			Segments []struct {
+				Source      string `json:"source"`
+				Portability string `json:"portability"`
+			} `json:"segments"`
+		} `json:"sections"`
+	}
+	if err := json.Unmarshal([]byte(m.JSON()), &back); err != nil {
+		t.Fatalf("json invalid: %v", err)
+	}
+	for _, sec := range back.Sections {
+		for _, seg := range sec.Segments {
+			if want := string(PortabilityOf(seg.Source)); seg.Portability != want {
+				t.Errorf("%s/%s dumped as %q but the classifier says %q — the dump must not be able to disagree with the composer",
+					sec.Name, seg.Source, seg.Portability, want)
+			}
+		}
+	}
+}
+
+// The conversation is not a segment terva assembled from a labeled source, so
+// the table is not about it. Classifying it anyway would print "harness-local"
+// (the fail-closed default) beside every user turn — an answer to a question
+// nobody asked, that reads like a finding.
+func TestManifestDoesNotClassifyMessagesOrTools(t *testing.T) {
+	m := PromptManifest{Sections: []PromptSection{
+		{Name: "messages", Segments: []PromptSegment{{Source: "user", Role: "user", Text: "fix the bug"}}},
+		{Name: "tools", Segments: []PromptSegment{{Source: "tools", Text: "bash, edit, read"}}},
+	}}
+	if txt := m.Text(); strings.Contains(txt, "harness-local") {
+		t.Errorf("messages/tools must not carry a portability class:\n%s", txt)
+	}
+	if js := m.JSON(); strings.Contains(js, "portability") {
+		t.Errorf("messages/tools must not carry a portability class in json:\n%s", js)
 	}
 }

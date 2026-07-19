@@ -38,6 +38,12 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 	if args.SwarmAgent == "" {
 		return fmt.Errorf("--swarm-agent requires a socket path")
 	}
+	// The structured-deliverable contract rides the env (set by the
+	// supervisor's runner), not a flag — adopt it before Resolve so the
+	// deliver_result tool and its addendum are wired into this child.
+	if s := envcompat.Get("SWARM_DELIVERABLE_SCHEMA"); s != "" {
+		args.DeliverableSchema = json.RawMessage(s)
+	}
 
 	confirmGate, roSet := build.HeadlessConfirmGate(args, "swarm-agent")
 	r, err := build.Resolve(args, true)

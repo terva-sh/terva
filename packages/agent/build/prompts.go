@@ -26,3 +26,16 @@ const SwarmChildSystemAddendum = `You are a sub-agent dispatched by a coordinati
 // SwarmChildAddendum renders the contract through the model-facing prompt
 // catalog so operator translations cover it.
 func SwarmChildAddendum() string { return i18n.P("swarm.child.addendum", SwarmChildSystemAddendum) }
+
+// DeliverResultSystemAddendum is the structured-deliverable overlay on the
+// child contract, pinned only when the spawn carried a schema (and the
+// deliver_result tool is therefore registered). It rides ON TOP of
+// SwarmChildSystemAddendum: the final prose message still matters for
+// humans, but the machine-read report is the tool call.
+const DeliverResultSystemAddendum = `Your dispatcher requires a STRUCTURED deliverable. Before ending your task, call the deliver_result tool exactly once with your complete findings as its arguments — the tool's schema is the required shape. If the call reports a validation error, fix the arguments and call it again until it succeeds. Your final text message remains a short prose summary for humans; the deliver_result call is the report the dispatcher machine-reads. A task that ends without a successful deliver_result call is recorded as contract-NOT-met.`
+
+// DeliverResultAddendum renders the structured-deliverable overlay through
+// the model-facing prompt catalog (same treatment as SwarmChildAddendum).
+func DeliverResultAddendum() string {
+	return i18n.P("swarm.child.deliver_result", DeliverResultSystemAddendum)
+}

@@ -150,6 +150,12 @@ func (s PromptSizes) rowsFor(section string) []PromptSizeRow {
 	return out
 }
 
+// writeBreakdown lists rows heaviest-first for one section. In a classified
+// section (system, tail) each row also names its portability class, derived from
+// the source exactly as the manifest derives it — so "which of these bytes would
+// reach a foreign worker?" is answerable from the weight view, not just the text
+// one. Reading the two columns together is the point: a heavy segment that is
+// harness-local is weight a worker will never carry.
 func writeBreakdown(b *strings.Builder, title string, rows []PromptSizeRow, withDetail bool) {
 	if len(rows) == 0 {
 		return
@@ -157,7 +163,13 @@ func writeBreakdown(b *strings.Builder, title string, rows []PromptSizeRow, with
 	b.WriteString("\n" + title + "\n")
 	for _, r := range rows {
 		label := strings.TrimPrefix(r.Source, "tool:")
-		line := fmt.Sprintf("  %-18s %10s %9s", label, commafy(r.Bytes), "~"+commafy(r.Tokens))
+		// 22, not 18: `restricted-workspace` is 20 characters and had been
+		// shunting its own row's numbers out of column since before there was a
+		// third column to notice it.
+		line := fmt.Sprintf("  %-22s %10s %9s", label, commafy(r.Bytes), "~"+commafy(r.Tokens))
+		if classifiedSection(r.Section) {
+			line += fmt.Sprintf("  %-15s", PortabilityOf(r.Source))
+		}
 		if withDetail && r.Detail != "" {
 			line += "  " + r.Detail
 		}

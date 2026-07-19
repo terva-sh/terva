@@ -132,7 +132,32 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 		ag.SetTools(resolved.ToolRegistry)
 	})
 
-	extMgr.EmitEvent(extproto.EventFromHost{Event: extproto.EventSessionStart})
+	// Session persistence & resume. rpc mode is stateless by default — its
+	// long-standing contract ("RPC persists no session") — so a run with no
+	// --session keeps sess nil and writes nothing, exactly as before. A driver
+	// that passes --session <path> opts into a persistent, RESUMABLE session:
+	// openOrCreateSession restores the prior transcript onto the agent (or creates
+	// the file fresh on first run), and WireHeadlessSessionPersist streams every
+	// message, usage row, and post-compaction transcript to disk as it happens.
+	// So a worker whose process died is revived with its conversation intact
+	// rather than blank — the same resume the native --swarm-agent child has, now
+	// on the rpc carrier. Persistence is observer-driven, so the turn handlers
+	// (runPrompt/runCompact) need no changes.
+	var sess *core.Session
+	if args.Session != "" {
+		s, serr := openOrCreateSession(args, r, ag, version)
+		if serr != nil {
+			return serr
+		}
+		sess = s
+	}
+	if sess != nil {
+		defer sess.Close()
+		build.WireHeadlessSessionPersist(ag, sess)
+	}
+	// Announce the session to extensions with its real identity when one exists
+	// (nil emits a bare session_start, identical to the prior unconditional emit).
+	build.EmitSessionStart(extMgr, sess)
 
 	server := &rpcServer{
 		ctx:      ctx,
@@ -144,6 +169,44 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 		version:  version,
 	}
 	extHooks.server = server
+	// Fill the confirm gate's nil-inner hole with the rpc carrier when the driver
+	// opted in: a tool that needs confirmation now asks over the wire instead of
+	// being refused outright. Only when a gate exists (a non-yolo mode built one)
+	// and only on opt-in — a driver that never answers must keep the safe
+	// refuse-by-default rather than hang. See core.ConfirmGate.Check.
+	if args.RPCApprovals && confirmGate != nil {
+		confirmGate.SetConfirmer(server)
+	}
+	// The MCP approval carrier (the terva:portable worker): route the confirm gate
+	// through the bridge at --approval-socket, using terva's OWN MCP client — the
+	// config-opaque sibling of --rpc-approvals. Both fill the same gate hole, and a
+	// backend sets one or the other, never both. Fail closed: if the bridge won't
+	// start, leave the gate's refuse-by-default rather than opening it.
+	if args.ApprovalSocket != "" && confirmGate != nil {
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			fmt.Fprintln(os.Stderr, "approval bridge: locate terva:", exeErr)
+		} else if confirmer, stop, berr := startBridgeConfirmer(ctx, exe, args.ApprovalSocket, r.CWD); berr != nil {
+			fmt.Fprintln(os.Stderr, "approval bridge:", berr)
+		} else {
+			defer stop()
+			confirmGate.SetConfirmer(confirmer)
+		}
+	}
+	// The HTTP approval carrier (a remote orchestrator): route the confirm gate
+	// through a Streamable-HTTP MCP permission endpoint. The networked sibling of
+	// --approval-socket, and a backend sets one or the other — so this only runs
+	// when no local socket carrier claimed the gate. Fail closed: if the endpoint
+	// won't start (bad descriptor, unreachable, or no http transport in this
+	// build), leave the gate's refuse-by-default rather than opening it.
+	if args.ApprovalHTTP != "" && args.ApprovalSocket == "" && confirmGate != nil {
+		if confirmer, stop, herr := startHTTPConfirmer(ctx, args.ApprovalHTTP, r.CWD); herr != nil {
+			fmt.Fprintln(os.Stderr, "approval http:", herr)
+		} else {
+			defer stop()
+			confirmGate.SetConfirmer(confirmer)
+		}
+	}
 	return server.run(os.Stdin)
 }
 
@@ -212,6 +275,15 @@ type rpcServer struct {
 	// process exit against the agent loop and the prompt would never
 	// produce output.
 	inFlight sync.WaitGroup
+
+	// pending correlates an outstanding `ask` frame with the goroutine blocked
+	// in Confirm: the ask id maps to the channel the matching `approve` command
+	// delivers the decision on. Guarded by pendMu. Used only when the run opted
+	// into the ask/approve carrier (--rpc-approvals); otherwise Confirm is never
+	// wired and this stays empty.
+	pendMu  sync.Mutex
+	askSeq  int
+	pending map[string]chan core.ConfirmDecision
 }
 
 // rpcAuthToken returns the embedder-supplied RPC auth token. Both
@@ -325,6 +397,33 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 	case "abort":
 		if c := s.takeCancel(); c != nil {
 			c()
+		}
+		s.writeResponse(id, cmd, nil)
+
+	case "approve":
+		// The driver's answer to an `ask` frame. `id` (the command id) is the
+		// ask id being answered — the correlation the ask frame carried. The
+		// decision fields mirror core.ConfirmDecision so a driver can also grant
+		// a session-scoped "always" (remember) without a second round trip.
+		var req struct {
+			Allow        bool   `json:"allow"`
+			Reason       string `json:"reason"`
+			RememberTool bool   `json:"remember_tool"`
+			RememberAll  bool   `json:"remember_all"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			s.writeError(id, cmd, err.Error())
+			return
+		}
+		ok := s.resolveAsk(id, core.ConfirmDecision{
+			Allow:        req.Allow,
+			Reason:       req.Reason,
+			RememberTool: req.RememberTool,
+			RememberAll:  req.RememberAll,
+		})
+		if !ok {
+			s.writeError(id, cmd, "no pending approval with id "+id)
+			return
 		}
 		s.writeResponse(id, cmd, nil)
 
@@ -600,6 +699,71 @@ func (s *rpcServer) busy() bool {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.activeCancel != nil
+}
+
+// Confirm implements core.Confirmer over the rpc wire. It emits an `ask` frame
+// naming the tool and its preview, then BLOCKS until the driver answers with a
+// matching `approve` command (or the server's context is cancelled). This is the
+// fill for rpc.go's historical nil-inner gate — the Confirmer-shaped hole whose
+// only behaviour was to refuse — and wiring it retires refuse-by-default for any
+// embedder that opts in with --rpc-approvals.
+//
+// It runs on the prompt goroutine (a tool call inside PromptWithPolicy), never
+// on the read loop, so blocking here leaves the read loop free to receive the
+// `approve` command that unblocks it.
+func (s *rpcServer) Confirm(toolName, preview string) core.ConfirmDecision {
+	id, ch := s.registerAsk()
+	defer s.forgetAsk(id)
+	s.write(map[string]any{
+		"type":    "ask",
+		"id":      id,
+		"tool":    toolName,
+		"preview": preview,
+	})
+	select {
+	case d := <-ch:
+		return d
+	case <-s.ctx.Done():
+		// The session is going away; deny so the tool call unwinds with a
+		// model-readable reason rather than hanging the shutdown.
+		return core.ConfirmDecision{Allow: false, Reason: "approval request cancelled (session ending)"}
+	}
+}
+
+func (s *rpcServer) registerAsk() (string, chan core.ConfirmDecision) {
+	s.pendMu.Lock()
+	defer s.pendMu.Unlock()
+	if s.pending == nil {
+		s.pending = map[string]chan core.ConfirmDecision{}
+	}
+	s.askSeq++
+	id := fmt.Sprintf("ask-%d", s.askSeq)
+	ch := make(chan core.ConfirmDecision, 1) // buffered so resolveAsk never blocks
+	s.pending[id] = ch
+	return id, ch
+}
+
+func (s *rpcServer) forgetAsk(id string) {
+	s.pendMu.Lock()
+	delete(s.pending, id)
+	s.pendMu.Unlock()
+}
+
+// resolveAsk delivers a decision to the Confirm call waiting on id. Returns
+// false if there is no such pending request (a stale or duplicate approve),
+// which the caller surfaces as an error rather than dropping silently.
+func (s *rpcServer) resolveAsk(id string, d core.ConfirmDecision) bool {
+	s.pendMu.Lock()
+	ch, ok := s.pending[id]
+	if ok {
+		delete(s.pending, id)
+	}
+	s.pendMu.Unlock()
+	if !ok {
+		return false
+	}
+	ch <- d // buffered cap 1; never blocks
+	return true
 }
 
 // messagesToJSON serialises a transcript using the same schema as the

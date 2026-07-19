@@ -552,6 +552,87 @@ func TestSpawnReqPersistsModel(t *testing.T) {
 	}
 }
 
+// TestSpawnRecordsLeaseAndApproval pins the two inputs to a worker's posture
+// policy: Spawn sets Leased iff AcquireWorktree granted a dedicated dir, records
+// an explicit Approval override, and both survive a Reload — so a resumed worker
+// keeps the posture it ran with (a leased worker stays autonomous; an override
+// persists).
+func TestSpawnRecordsLeaseAndApproval(t *testing.T) {
+	root := testsupport.TempDir(t)
+	leaseDir := testsupport.TempDir(t)
+	f := New(Config{
+		Root: root, RepoRoot: root,
+		AcquireWorktree: func(ctx context.Context, req WorktreeReq) (WorktreeLease, error) {
+			return WorktreeLease{Dir: leaseDir, Release: func() {}}, nil
+		},
+		NewRunner: func(a *Agent) Runner {
+			return RunnerFunc(func(ctx context.Context, _ Sink) error { <-ctx.Done(); return ctx.Err() })
+		},
+	})
+	a, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "x", Approval: "workspace"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if !a.Leased {
+		t.Error("a dedicated worktree lease must set Agent.Leased")
+	}
+	if a.Dir != leaseDir {
+		t.Errorf("agent dir = %q, want the lease %q", a.Dir, leaseDir)
+	}
+	if a.Approval != "workspace" {
+		t.Errorf("Agent.Approval = %q, want the SpawnRequest override", a.Approval)
+	}
+
+	if err := f.Stop(a.ID); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+
+	// Persisted to meta.json...
+	m, err := readAgentMeta(f.agentStateDir(a.ID))
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if !m.Leased || m.Approval != "workspace" {
+		t.Errorf("meta lost posture inputs: leased=%v approval=%q", m.Leased, m.Approval)
+	}
+
+	// ...and carried across a Reload, so Resume keeps the posture.
+	g := New(Config{Root: root, RepoRoot: root})
+	if loaded, errs := g.Reload(); loaded != 1 || len(errs) > 0 {
+		t.Fatalf("reload loaded=%d errs=%v", loaded, errs)
+	}
+	re := g.Get(a.ID)
+	if re == nil || !re.Leased || re.Approval != "workspace" {
+		t.Errorf("reloaded agent lost posture inputs: %+v", re)
+	}
+}
+
+// TestSpawnUnleasedIsNotLeased: with no AcquireWorktree hook the agent shares the
+// host cwd and must NOT read as leased — the guard that keeps an unleased worker
+// from silently going yolo in the shared working directory.
+func TestSpawnUnleasedIsNotLeased(t *testing.T) {
+	root := testsupport.TempDir(t)
+	f := New(Config{
+		Root: root, RepoRoot: root,
+		NewRunner: func(a *Agent) Runner {
+			return RunnerFunc(func(ctx context.Context, _ Sink) error { <-ctx.Done(); return ctx.Err() })
+		},
+	})
+	a, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "x"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if a.Leased {
+		t.Error("an agent sharing RepoRoot must not be Leased")
+	}
+	if a.Dir != root {
+		t.Errorf("unleased agent dir = %q, want RepoRoot %q", a.Dir, root)
+	}
+	_ = f.Stop(a.ID)
+	a.Wait()
+}
+
 // TestSwarmAgentArgsIncludesModelFlags pins the argv contract that
 // connects the supervisor's per-agent model override to the child's
 // --model / --provider flag set. Adding a new path to argv without

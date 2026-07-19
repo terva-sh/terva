@@ -80,9 +80,16 @@ func contentBlocksFromResult(content []provider.Content) []extproto.ContentBlock
 // protocol-3 host_tool_call, under the same registry and approval gate
 // the model uses. No-op when extensions or the agent are absent. Called
 // from every agent-construction seam that already wires the extension
-// tool-call ladder, so all run modes get it.
+// tool-call ladder, so all run modes get it. It also late-binds the
+// scripting host-call path (terva_scripting's code_execution — a no-op
+// stub otherwise), which needs the same ag+gate pair but must not depend
+// on an extension manager being present.
 func WireHostToolDispatcher(ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate) {
-	if ag == nil || extMgr == nil {
+	if ag == nil {
+		return
+	}
+	wireScriptingHostCall(ag, gate)
+	if extMgr == nil {
 		return
 	}
 	extMgr.SetHostToolDispatcher(buildHostToolDispatcher(ag, gate, extMgr))

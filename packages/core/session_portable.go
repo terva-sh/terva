@@ -293,21 +293,31 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 	}
 	defer src.Close()
 
-	// Read the parent meta so we can copy model/provider and record
-	// the parent id on the child.
+	// Read the parent's EFFECTIVE meta so the child copies model/provider and
+	// the whole creation spec (persona + immersive experience/card/cast/greeting)
+	// and records the parent id. Meta rows are an append-only timeline whose LAST
+	// entry wins — the spec is stamped by a meta row written after NewSession's —
+	// so the first line alone would miss it. Scan the file and keep the last meta.
 	sc := bufio.NewScanner(src)
 	sc.Buffer(make([]byte, 0, 64*1024), 20*1024*1024)
-	if !sc.Scan() {
-		return "", errors.New("branch: parent session is empty")
+	var parentMeta SessionMeta
+	haveMeta := false
+	for sc.Scan() {
+		var head sessionLine
+		if err := json.Unmarshal(sc.Bytes(), &head); err != nil {
+			continue
+		}
+		if head.Type == "meta" && head.Meta != nil {
+			parentMeta = *head.Meta
+			haveMeta = true
+		}
 	}
-	var head sessionLine
-	if err := json.Unmarshal(sc.Bytes(), &head); err != nil {
-		return "", fmt.Errorf("branch: parse parent meta: %w", err)
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("branch: scan parent: %w", err)
 	}
-	if head.Type != "meta" || head.Meta == nil {
-		return "", errors.New("branch: parent first line is not a meta row")
+	if !haveMeta {
+		return "", errors.New("branch: parent has no meta row")
 	}
-	parentMeta := *head.Meta
 
 	// Build the destination file.
 	dir := SessionsDir(root, cwd)
@@ -324,16 +334,27 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 	defer dst.Close()
 	bw := bufio.NewWriter(dst)
 
-	// Write the branch meta.
+	// Write the branch meta. The child re-serializes its prefix as typed v2
+	// message rows (no amends), so it declares the base format version, and it
+	// inherits the parent's creation spec — persona + immersive
+	// experience/card/cast/greeting — so a branch continues the SAME kind of
+	// session (a forked Stage chat stays that chat) rather than the workspace
+	// default.
 	branchMeta := SessionMeta{
-		ID:        newID,
-		CWD:       cwd,
-		Model:     parentMeta.Model,
-		Provider:  parentMeta.Provider,
-		Started:   time.Now().UTC(),
-		Version:   version,
-		Parent:    parentMeta.ID,
-		ForkPoint: upToMessageIdx,
+		ID:            newID,
+		CWD:           cwd,
+		Model:         parentMeta.Model,
+		Provider:      parentMeta.Provider,
+		Started:       time.Now().UTC(),
+		Version:       version,
+		FormatVersion: sessionFormatVersion,
+		Parent:        parentMeta.ID,
+		ForkPoint:     upToMessageIdx,
+		Persona:       parentMeta.Persona,
+		Experience:    parentMeta.Experience,
+		Card:          parentMeta.Card,
+		Cast:          parentMeta.Cast,
+		Greeting:      parentMeta.Greeting,
 	}
 	metaLine, err := json.Marshal(sessionLine{Type: "meta", Meta: &branchMeta})
 	if err != nil {
@@ -356,47 +377,39 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 		return "", fmt.Errorf("branch: rewind parent: %w", err)
 	}
 	rep := &loadReport{}
-	var effective []provider.Message
 	var nonCompactedRows [][]byte
-	effectiveCount := 0
 	sawCompaction := false
-	if err := forEachJSONLLine(src, func(line []byte) error {
-		var h sessionLineHead
-		if err := json.Unmarshal(line, &h); err != nil {
-			return nil
-		}
-		switch h.Type {
-		case "message":
-			msg, err := hydrateMessage(line, rep)
-			if err != nil || len(msg.Content) == 0 {
-				return nil
-			}
-			effective = append(effective, msg)
-			// Before any compaction the on-disk row IS the effective row,
-			// so keep it verbatim (preserves exact bytes + usage rows).
-			if !sawCompaction && effectiveCount < upToMessageIdx {
+	sawAmend := false
+	// walkSession reconstructs the effective transcript (append a message, reset
+	// on a compaction, apply an amend); the hooks additionally keep the raw bytes
+	// of the pre-compaction prefix rows so an uncompacted branch copies them
+	// verbatim. onMessage's idx and onUsage's effLen are the effective length at
+	// that row, matching the pre-append counter the verbatim-copy cutoff keys on.
+	effective, walkErr := walkSession(src, rep, sessionWalkHooks{
+		onMessage: func(_ provider.Message, idx int, line []byte) {
+			if !sawCompaction && idx < upToMessageIdx {
 				nonCompactedRows = append(nonCompactedRows, append([]byte(nil), line...))
 			}
-			effectiveCount++
-		case "compaction":
-			if compacted, err := hydrateCompaction(line, rep); err == nil {
-				effective = compacted
-				effectiveCount = len(effective)
-				sawCompaction = true
-			}
-		case "usage":
-			if !sawCompaction && effectiveCount < upToMessageIdx {
+		},
+		onUsage: func(_, _ provider.Usage, effLen int, line []byte) {
+			if !sawCompaction && effLen < upToMessageIdx {
 				nonCompactedRows = append(nonCompactedRows, append([]byte(nil), line...))
 			}
-		}
-		return nil
-	}); err != nil && err != io.EOF {
-		return "", fmt.Errorf("branch: read parent: %w", err)
+		},
+		onCompaction: func(_, _ []provider.Message, _ int, _ []byte) {
+			sawCompaction = true
+		},
+		onAmend: func(_ string, _ int, _ []byte) {
+			sawAmend = true
+		},
+	})
+	if walkErr != nil && walkErr != io.EOF {
+		return "", fmt.Errorf("branch: read parent: %w", walkErr)
 	}
-	if sawCompaction {
-		// The parent compacted: the effective transcript no longer maps
-		// onto raw on-disk rows, so re-serialize the cut prefix as fresh
-		// message rows the branch can replay directly.
+	if sawCompaction || sawAmend {
+		// The parent compacted or was amended: the effective transcript no
+		// longer maps onto raw on-disk rows, so re-serialize the cut prefix as
+		// fresh message rows the branch can replay directly.
 		limit := upToMessageIdx
 		if limit > len(effective) {
 			limit = len(effective)
