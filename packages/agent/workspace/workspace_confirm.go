@@ -58,6 +58,55 @@ func (c *webConfirmer) Confirm(toolName, preview string) core.ConfirmDecision {
 	}
 }
 
+// workerConfirmer routes a WORKER's tool-approval request to the dispatching
+// session's human card — the "terva as caller" seam. A foreign worker that asks
+// for permission (over its backend's ask/approve carrier) lands on the same card
+// the session's own tool calls do, so one human answers for both.
+//
+// Unlike webConfirmer — scoped to the session's OWN in-flight call via
+// curCallID — it mints a stable per-request callID namespaced by the agent id,
+// so several workers' concurrent asks never collide in pendPerm. It parks on the
+// daemon context rather than a turn context because a worker is not the session's
+// turn; the runner's handleAsk separately abandons the wait if the worker is
+// stopped first (racing this Confirm against the worker's own context).
+type workerConfirmer struct {
+	s       *wsSession
+	ctx     context.Context // daemon lifetime; unblocks a parked wait on shutdown
+	agentID string
+	seq     atomic.Uint64
+}
+
+var _ core.Confirmer = (*workerConfirmer)(nil)
+
+func (c *workerConfirmer) Confirm(toolName, preview string) core.ConfirmDecision {
+	s := c.s
+	callID := fmt.Sprintf("worker-%s-%d", c.agentID, c.seq.Add(1))
+	// Agent carries the worker id as a first-class field so a board can
+	// correlate this ask to the worker's lane tile; the callID prefix and the
+	// "worker <id>:" preview stay as human-facing labeling, not the contract.
+	req := ctrlproto.PermissionRequest{CallID: callID, Tool: toolName, Preview: preview, Agent: c.agentID}
+	ch := make(chan core.ConfirmDecision, 1)
+	s.mu.Lock()
+	s.pendPerm[callID] = ch
+	s.permReq[callID] = req
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.pendPerm, callID)
+		delete(s.permReq, callID)
+		s.mu.Unlock()
+		s.broadcast(ctrlproto.PermissionResolvedEvent(callID))
+	}()
+
+	s.broadcast(ctrlproto.PermissionEvent(req))
+	select {
+	case d := <-ch:
+		return d
+	case <-c.ctx.Done():
+		return core.ConfirmDecision{Allow: false, Reason: "cancelled (session ending)"}
+	}
+}
+
 // webAsker is a session's mid-turn question seam, mirroring webConfirmer:
 // broadcast an ask-request, park until the first [Workspace.Answer].
 type webAsker struct{ s *wsSession }

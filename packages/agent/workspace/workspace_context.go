@@ -76,6 +76,20 @@ func (s *wsSession) contextBreakdown() ctrlproto.ContextBreakdown {
 	// of a section" shape as ExtGuidanceBytes under the system prompt.
 	b.LazyNoteBytes = len(ag.CapabilityNote())
 	b.ExtBytes += b.LazyNoteBytes
+	// The lore that fired last turn — the activation trace behind the ExtBytes
+	// tail. Read the retained record (the real turn's trace, not the side-effect-
+	// free peek above), so the Usage pane shows which entries fed the tail and why
+	// without re-running Select. The Stage drawer's LoreView is the other home.
+	s.mu.Lock()
+	loreRec := s.loreFired
+	s.mu.Unlock()
+	if loreRec != nil {
+		for _, f := range loreRec.Get() {
+			b.LoreFired = append(b.LoreFired, ctrlproto.ContextLoreEntry{
+				Name: f.Name, Source: f.Source, Constant: f.Constant, Keys: f.Keys, Dropped: f.Dropped,
+			})
+		}
+	}
 	// Static ext guidance is folded into the system prompt (already inside
 	// SystemBytes); surface its share so a small "ext context" isn't read as
 	// "extensions inject nothing" when the bulk is guidance.

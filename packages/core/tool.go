@@ -90,10 +90,18 @@ const CoreToolGroup = "core"
 
 // ToolGroup classifies a tool into its capability group for lazy tool
 // visibility (retro H2·b). An extension or MCP tool reports its source through
-// an Extension() accessor (the extension name, or "mcp:<server>"); everything
-// else is a built-in and belongs to CoreToolGroup. The accessor is a structural
-// interface so core need not import the extension/MCP packages.
+// an Extension() accessor (the extension name, or "mcp:<server>"); a built-in
+// that is an optional capability rather than a core coding tool may opt into a
+// named group through a ToolGroupName() accessor (checked first — it is an
+// explicit classification, where Extension() is a provenance fact); everything
+// else is a built-in and belongs to CoreToolGroup. Both accessors are
+// structural interfaces so core need not import the implementing packages.
 func ToolGroup(t Tool) string {
+	if g, ok := t.(interface{ ToolGroupName() string }); ok {
+		if name := g.ToolGroupName(); name != "" {
+			return name
+		}
+	}
 	if e, ok := t.(interface{ Extension() string }); ok {
 		if g := e.Extension(); g != "" {
 			return g

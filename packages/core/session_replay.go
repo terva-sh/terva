@@ -64,46 +64,21 @@ func ReadReplayRows(path string) ([]ReplayRow, SessionMeta, error) {
 	var meta SessionMeta
 	var rows []ReplayRow
 	rep := &loadReport{}
-	if err := forEachJSONLLine(f, func(line []byte) error {
-		var head sessionLineHead
-		if err := json.Unmarshal(line, &head); err != nil {
-			return nil
-		}
-		switch head.Type {
-		case "meta":
-			var row struct {
-				Meta SessionMeta `json:"meta"`
-			}
-			if err := json.Unmarshal(line, &row); err == nil {
-				meta = row.Meta
-			}
-		case "message":
-			m, err := hydrateMessage(line, rep)
-			if err != nil || len(m.Content) == 0 {
-				return nil
-			}
+	if _, err := walkSession(f, rep, sessionWalkHooks{
+		onMeta: func(m SessionMeta, _ []byte) { meta = m },
+		onMessage: func(m provider.Message, _ int, _ []byte) {
 			rows = append(rows, ReplayRow{Kind: ReplayRowMessage, Message: m})
-		case "usage":
-			var row struct {
-				Usage      provider.Usage `json:"usage"`
-				Cumulative provider.Usage `json:"cumulative"`
-			}
-			if err := json.Unmarshal(line, &row); err != nil {
-				return nil
-			}
-			rows = append(rows, ReplayRow{
-				Kind:       ReplayRowUsage,
-				Usage:      row.Usage,
-				Cumulative: row.Cumulative,
-			})
-		case "compaction":
-			out, err := hydrateCompaction(line, rep)
-			if err != nil {
-				return nil
-			}
-			rows = append(rows, ReplayRow{Kind: ReplayRowCompaction, Checkpoint: out})
-		}
-		return nil
+		},
+		onUsage: func(u, cum provider.Usage, _ int, _ []byte) {
+			rows = append(rows, ReplayRow{Kind: ReplayRowUsage, Usage: u, Cumulative: cum})
+		},
+		onCompaction: func(out, _ []provider.Message, _ int, _ []byte) {
+			// walkSession aliases `out` as its live effective transcript after the
+			// checkpoint, and a following amend (delete/replace) mutates that backing
+			// array in place — so a retained reference would be corrupted later. Copy
+			// per the walk-hook contract (sessionWalkHooks doc).
+			rows = append(rows, ReplayRow{Kind: ReplayRowCompaction, Checkpoint: append([]provider.Message(nil), out...)})
+		},
 	}); err != nil {
 		return nil, SessionMeta{}, err
 	}

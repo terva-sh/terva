@@ -45,6 +45,9 @@ import type {
   WireEvent,
   WireMessage,
   WireUsage,
+  WorktreeCollectItem,
+  WorktreeView,
+  WorktreeViewItem,
 } from './ctrlproto'
 import { Composer, type SlashCommand } from './features/conversation/Composer'
 import { ConversationTimeline } from './features/conversation/ConversationTimeline'
@@ -53,6 +56,10 @@ import { AskRequest as AskRequestView } from './features/interactions/AskRequest
 import { PermissionRequest as PermissionRequestView } from './features/interactions/PermissionRequest'
 import { ModelParamsForm } from './features/models/ModelParamsForm'
 import { ModelPicker } from './features/models/ModelPicker'
+import { SessionsBoard } from './features/board/SessionsBoard'
+import { SwarmLane } from './features/board/SwarmLane'
+import { applyBoardBusy, forgetBoardBusy, type BoardBusy } from './platform/board/store'
+import { applyBoardApproval, forgetBoardApprovals, waitingByAgent, type BoardApprovals } from './platform/board/approvals'
 import { AuthStepForm } from './features/providers/AuthStepForm'
 import { SessionInfo as SessionInfoView } from './features/sessions/SessionInfo'
 import { SessionPicker } from './features/sessions/SessionPicker'
@@ -74,6 +81,11 @@ import { CopyButton } from './ui/CopyButton'
 import { humanBytes, humanCount } from './ui/formatting'
 
 const TOOL_VIEWS: ToolView[] = ['full', 'grouped', 'minimal', 'hidden']
+
+// How many live tiles the board streams at once (phase B). Each is one server
+// pump + one snapshot on subscribe; the cap bounds the reconnect snapshot storm
+// on a large workspace. The rest fall back to the periodic list's busy flag.
+const BOARD_SUB_CAP = 16
 
 export function App() {
   const clientRef = useRef<Client | null>(null)
@@ -113,6 +125,32 @@ export function App() {
   const [toolView, setToolView] = useState<ToolView>(
     () => (localStorage.getItem('terva_toolview') as ToolView) || 'full',
   )
+  // focus (single-session conversation) ⇄ board (a tile per session). Persisted
+  // like toolView; the board is a monitor + focus + lifecycle view — clicking a
+  // tile focuses that session and returns to focus mode.
+  const [viewMode, setViewMode] = useState<'focus' | 'board'>(
+    () => (localStorage.getItem('terva_viewmode') === 'board' ? 'board' : 'focus'),
+  )
+  const viewModeRef = useRef(viewMode)
+  // The board's second lane: the workspace swarm (the tasks surface), fetched
+  // while the board is open and refreshed by surface_updated("tasks").
+  const [boardTasks, setBoardTasks] = useState<TaskInfo[]>([])
+  // The spawn capability the tasks surface advertises: which worker backends a
+  // human may dispatch, and whether external workers are enabled (foreign spawn
+  // is gated on it — the picker shows them greyed otherwise).
+  const [boardBackends, setBoardBackends] = useState<string[]>([])
+  const [boardWorkersEnabled, setBoardWorkersEnabled] = useState(false)
+  // Phase B: per-tile busy from live subscriptions the board holds while open.
+  // boardSubsRef is the set of sessions currently subscribed FOR the board
+  // (never the focused one — the focus view owns that). Capped so a large
+  // workspace doesn't open dozens of server pumps at once.
+  const [boardBusy, setBoardBusy] = useState<BoardBusy>({})
+  const boardSubsRef = useRef<Set<string>>(new Set())
+  // Which swarm workers are parked on a human approval (call_id -> worker+session).
+  // Fed from every approval event regardless of address (a worker's request rides
+  // its dispatching session's stream — the focused one or a board sub); read only
+  // in board mode, to badge the stalled lane tile.
+  const [boardApprovals, setBoardApprovals] = useState<BoardApprovals>({})
   const [curInfo, setCurInfo] = useState<SessionInfo | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
   const [queued, setQueued] = useState<string[]>([])
@@ -165,6 +203,7 @@ export function App() {
   busyRef.current = busy
   paneOpenRef.current = paneOpen
   activeSurfaceRef.current = activeSurface
+  viewModeRef.current = viewMode
 
   const cycleToolView = useCallback(() => {
     setToolView((v) => {
@@ -268,6 +307,71 @@ export function App() {
     } catch {
       return []
     }
+  }, [])
+
+  // Fetch the tasks surface for the board's swarm lane. Workspace-scoped (any
+  // sess returns the global list), so it rides the focused session's address.
+  const fetchBoardTasks = useCallback(async () => {
+    const c = clientRef.current
+    if (!c) return
+    try {
+      const res = await c.send<{ surface: Surface }>('surface.get', { id: 'tasks' }, curRef.current)
+      const tasks = res.surface?.tasks?.tasks ?? []
+      setBoardTasks(tasks)
+      setBoardBackends(res.surface?.tasks?.backends ?? [])
+      setBoardWorkersEnabled(!!res.surface?.tasks?.workers_enabled)
+      // Prune stalled-approval state for workers that have since vanished (a
+      // stopped/removed agent), so a missed resolved can't leave a stale badge.
+      setBoardApprovals((s) => forgetBoardApprovals(s, new Set(tasks.map((tk) => tk.id))))
+    } catch {
+      setBoardTasks([])
+    }
+  }, [])
+
+  // Spawn a swarm agent from the board's lane — native (empty backend) or a
+  // foreign worker. The daemon applies the same gate the model's swarm_spawn tool
+  // does, so a disallowed foreign backend is refused; use send (awaited), not the
+  // fire-and-forget surface action, to surface that refusal instead of a silent
+  // no-op. On success the new agent arrives via the tasks surface_updated broadcast.
+  const spawnWorker = useCallback(async (task: string, backend: string) => {
+    const c = clientRef.current
+    if (!c) return
+    const args: Record<string, string> = { task }
+    if (backend) args.backend = backend
+    try {
+      await c.send<unknown>('surface.action', { id: 'tasks', action: 'spawn', args }, curRef.current)
+    } catch (e) {
+      setToast((e as { message?: string })?.message || t('could not spawn the agent'))
+    }
+  }, [])
+
+  // Reconcile the board's live subscriptions to the currently-live tiles (minus
+  // the focused session, whose subscription the focus view owns): subscribe
+  // newcomers, unsubscribe those gone, cap the total. Each subscribe opens with
+  // one snapshot — bounded by the cap — from which the store takes only busy.
+  const reconcileBoardSubs = useCallback((liveIds: string[]) => {
+    const c = clientRef.current
+    if (!c) return
+    const want = new Set(liveIds.filter((id) => id && id !== curRef.current).slice(0, BOARD_SUB_CAP))
+    const have = boardSubsRef.current
+    for (const id of want) if (!have.has(id)) c.fire('subscribe', null, id)
+    for (const id of have) if (!want.has(id)) c.fire('unsubscribe', null, id)
+    boardSubsRef.current = want
+    setBoardBusy((s) => forgetBoardBusy(s, want))
+  }, [])
+
+  // Drop every board subscription (leaving board mode). Never the focused
+  // session: clicking a tile focuses it AND leaves board mode in the same tick,
+  // so by the time this runs curRef.current may be a session that was a board
+  // sub a moment ago and now backs the focus view — unsubscribing it would
+  // freeze the conversation we just opened.
+  const clearBoardSubs = useCallback(() => {
+    const c = clientRef.current
+    if (c) for (const id of boardSubsRef.current) {
+      if (id !== curRef.current) c.fire('unsubscribe', null, id)
+    }
+    boardSubsRef.current = new Set()
+    setBoardBusy({})
   }, [])
 
   const selectSession = useCallback((id: string) => {
@@ -404,10 +508,21 @@ export function App() {
         // The set of panes changed (ext panel opened/closed, status appeared).
         if (paneOpenRef.current) listSurfaces()
         return
+      case 'sessions_changed':
+        // The session SET changed on the daemon — created, renamed, deleted, or
+        // a cold one materialized. Re-list so the drawer and the board reflect
+        // it; sessions.list carries fresh busy/live per row.
+        if (clientRef.current) refreshSessions(clientRef.current)
+        return
       case 'surface_updated':
         // A live pane's content changed; re-fetch if we're showing it.
         if (paneOpenRef.current && ev.surface_id === activeSurfaceRef.current) {
           loadSurface(activeSurfaceRef.current)
+        }
+        // The board's swarm lane rides the tasks surface (the daemon diffs the
+        // swarm every 800ms and pushes this) — keep it live while the board's up.
+        if (viewModeRef.current === 'board' && ev.surface_id === 'tasks') {
+          fetchBoardTasks()
         }
         return
       case 'auth_state': {
@@ -497,7 +612,7 @@ export function App() {
       default:
         setItems((it) => applyEvent(it, ev))
     }
-  }, [listSurfaces, loadSurface, refreshI18n])
+  }, [listSurfaces, loadSurface, refreshI18n, refreshSessions, fetchBoardTasks])
 
   handleEventRef.current = handleEvent
 
@@ -514,12 +629,30 @@ export function App() {
     clientRef.current = c
     c.onStatus = setStatus
     c.onEvent = (sess, ev) => {
+      // Worker approvals: a swarm worker parked on a tool call has its approval
+      // routed to the dispatching session's card, riding that session's stream as
+      // a permission_request whose `agent` names the worker. Fold every approval
+      // event address-agnostically (the dispatcher may be the focused session or a
+      // board sub) so the swarm lane can badge a stalled tile; a non-worker
+      // approval carries no agent and is ignored inside.
+      if (ev.type === 'permission_request' || ev.type === 'permission_resolved' || ev.type === 'snapshot') {
+        setBoardApprovals((s) => applyBoardApproval(s, sess, ev))
+      }
       // Two addresses reach this panel: the focused session, and the workspace
       // itself. Workspace events (a workspace-scoped surface changing, the
       // locale, a notice) used to arrive stamped with each live session's id —
       // which is the only reason this equality test ever saw them. They arrive on
       // their own address now, so the test has to admit it, or they vanish.
-      if (sess === ADDR_WORKSPACE || sess === curRef.current) pacerRef.current?.push(ev)
+      if (sess === ADDR_WORKSPACE || sess === curRef.current) {
+        pacerRef.current?.push(ev)
+        return
+      }
+      // A board subscription (some OTHER live session, held while the board is
+      // open): derive its busy for the tile, but never merge its transcript —
+      // the board wants the flag, not the conversation.
+      if (boardSubsRef.current.has(sess)) {
+        setBoardBusy((s) => applyBoardBusy(s, sess, ev))
+      }
     }
     c.onReady = async (hello) => {
       // Match the PWA's bundled catalog to the daemon's active language for an
@@ -539,6 +672,14 @@ export function App() {
       if (hello?.features?.includes('workspace-events')) {
         c.fire('subscribe', null, ADDR_WORKSPACE)
       }
+      // A reconnect is a fresh connection with NO server-side subscriptions, but
+      // boardSubsRef still holds the previous connection's set — so when the board
+      // reconcile next runs it would see want ⊆ have and skip re-subscribing the
+      // tiles, leaving their busy/idle and approval indicators frozen on stale
+      // data. Forget the board subs (and their busy) so the reconcile re-subscribes
+      // every live tile on the new connection.
+      boardSubsRef.current = new Set()
+      setBoardBusy({})
       // A (re)connect may be a different build or a moved tree — refetch on
       // the next "@".
       setFileList(null)
@@ -576,6 +717,34 @@ export function App() {
     c.connect()
     return () => c.close()
   }, [newSession, refreshSessions, selectSession, refreshI18n])
+
+  // While the board is open, re-list on a slow cadence: a tile's busy/live moves
+  // on a session's turn boundaries, which don't emit sessions_changed, so the
+  // board polls sessions.list (a cheap disk scan + live overlay — it never
+  // materializes a cold session) to stay fresh without a per-tile subscription.
+  // Off entirely in focus mode, where the subscribed session is authoritative.
+  useEffect(() => {
+    if (viewMode !== 'board') {
+      clearBoardSubs() // leaving the board: drop its live subscriptions
+      return
+    }
+    if (clientRef.current) refreshSessions(clientRef.current)
+    fetchBoardTasks() // the swarm lane; refreshed thereafter by surface_updated("tasks")
+    // The 4s poll now only refreshes tile metadata (cost, message counts) and
+    // catches live→cold; busy comes live from the subscriptions below.
+    const id = setInterval(() => {
+      if (clientRef.current) refreshSessions(clientRef.current)
+    }, 4000)
+    return () => clearInterval(id)
+  }, [viewMode, refreshSessions, fetchBoardTasks, clearBoardSubs])
+
+  // Keep the board's live subscriptions in step with the live tiles: when the
+  // set of live sessions changes (a materialize, a delete, a new spawn), re-aim
+  // the subscriptions so busy stays streamed for exactly the tiles on screen.
+  useEffect(() => {
+    if (viewMode !== 'board') return
+    reconcileBoardSubs(sessions.filter((s) => s.live).map((s) => s.id))
+  }, [viewMode, sessions, reconcileBoardSubs])
 
   // Restart the daemon. A successful restart acks first and re-execs a beat
   // later, so the client auto-reconnects to the new build. Only a real failure
@@ -1089,6 +1258,10 @@ export function App() {
   )
 
   const current = sessions.find((s) => s.id === curSess)
+  // The focused session's tile reads the focus view's own busy state (its
+  // subscription lives there, not in boardSubsRef); the rest come from the
+  // board subscriptions. One merged map for the tiles.
+  const liveBusy = curSess ? { ...boardBusy, [curSess]: busy } : boardBusy
   const curModel = models.find((m) => m.current)
   const ctxTok = curInfo?.context_tokens ?? 0
   const ctxWin = curInfo?.context_window ?? 0
@@ -1120,6 +1293,19 @@ export function App() {
           onClick={() => (paneOpen ? setPaneOpen(false) : openPane(activeSurface))}
         >
           ⊞
+        </button>
+        <button
+          class={`icon${viewMode === 'board' ? ' on' : ''}`}
+          title={t('Sessions board / focus view')}
+          onClick={() =>
+            setViewMode((m) => {
+              const next = m === 'board' ? 'focus' : 'board'
+              localStorage.setItem('terva_viewmode', next)
+              return next
+            })
+          }
+        >
+          ▦
         </button>
         <button class="model-btn" title={t('Switch model')} onClick={() => setPickerOpen(true)}>
           {curModel ? (curModel.favorite ? '★ ' : '') + curModel.id : t('model')}
@@ -1204,33 +1390,66 @@ export function App() {
 
       <div class="workspace">
         <div class="main">
-          <ConversationTimeline
-            items={items}
-            busy={busy}
-            toolView={toolView}
-            queued={queued}
-            onEditQueued={editQueued}
-            onCancelQueued={cancelQueued}
-            onReveal={revealTurns}
-            revealingID={revealingID}
-            earlier={win.base}
-            onLoadEarlier={loadEarlier}
-            loadingEarlier={loadingEarlier}
-          />
+          {viewMode === 'board' ? (
+            <div class="board-view">
+              <SessionsBoard
+                sessions={sessions}
+                current={curSess}
+                liveBusy={liveBusy}
+                onSelect={(id) => {
+                  selectSession(id)
+                  setViewMode('focus')
+                  localStorage.setItem('terva_viewmode', 'focus')
+                }}
+                onNew={() => newSession()}
+                onRename={rename}
+                onDelete={del}
+              />
+              <SwarmLane
+                tasks={boardTasks}
+                backends={boardBackends}
+                workersEnabled={boardWorkersEnabled}
+                onSpawn={spawnWorker}
+                onAction={surfaceAction}
+                waiting={waitingByAgent(boardApprovals)}
+                onOpenSession={(id) => {
+                  selectSession(id)
+                  setViewMode('focus')
+                  localStorage.setItem('terva_viewmode', 'focus')
+                }}
+              />
+            </div>
+          ) : (
+            <>
+              <ConversationTimeline
+                items={items}
+                busy={busy}
+                toolView={toolView}
+                queued={queued}
+                onEditQueued={editQueued}
+                onCancelQueued={cancelQueued}
+                onReveal={revealTurns}
+                revealingID={revealingID}
+                earlier={win.base}
+                onLoadEarlier={loadEarlier}
+                loadingEarlier={loadingEarlier}
+              />
 
-          {permission && <PermissionRequestView request={permission} onDecide={decide} />}
-          {ask && <AskRequestView request={ask} onAnswer={answer} />}
+              {permission && <PermissionRequestView request={permission} onDecide={decide} />}
+              {ask && <AskRequestView request={ask} onAnswer={answer} />}
 
-          <Composer
-            busy={busy}
-            onSend={onSubmit}
-            onToast={setToast}
-            commands={slashCommands}
-            skills={skills}
-            files={fileList}
-            onFilesNeeded={() => void requestFiles()}
-            onCancel={() => clientRef.current?.fire('cancel', null, curRef.current)}
-          />
+              <Composer
+                busy={busy}
+                onSend={onSubmit}
+                onToast={setToast}
+                commands={slashCommands}
+                skills={skills}
+                files={fileList}
+                onFilesNeeded={() => void requestFiles()}
+                onCancel={() => clientRef.current?.fire('cancel', null, curRef.current)}
+              />
+            </>
+          )}
         </div>
 
         {paneOpen && (
@@ -1245,6 +1464,7 @@ export function App() {
             onListResets={listResets}
             onConsumeReset={consumeReset}
             onClose={() => setPaneOpen(false)}
+            onRefresh={loadSurface}
             onRestart={canRestart ? restart : undefined}
             version={serverVersion}
             auth={{
@@ -1287,6 +1507,7 @@ function PaneHost({
   onListResets,
   onConsumeReset,
   onClose,
+  onRefresh,
   onRestart,
   version,
   trusted,
@@ -1304,6 +1525,7 @@ function PaneHost({
   onListResets: () => Promise<ResetsListResult>
   onConsumeReset: (id: string) => Promise<ResetConsumeResult>
   onClose: () => void
+  onRefresh?: (id: string) => void
   onRestart?: () => void
   version?: string
   trusted?: boolean
@@ -1349,6 +1571,7 @@ function PaneHost({
             onFetchNode={onFetchNode}
             onListResets={onListResets}
             onConsumeReset={onConsumeReset}
+            onRefresh={onRefresh}
             onRestart={onRestart}
             version={version}
             trusted={trusted}
@@ -2147,6 +2370,7 @@ function SurfaceView({
   onFetchNode,
   onListResets,
   onConsumeReset,
+  onRefresh,
   onRestart,
   version,
   trusted,
@@ -2159,6 +2383,7 @@ function SurfaceView({
   onFetchNode: (id: string, op?: string) => Promise<ContextNode>
   onListResets: () => Promise<ResetsListResult>
   onConsumeReset: (id: string) => Promise<ResetConsumeResult>
+  onRefresh?: (id: string) => void
   onRestart?: () => void
   version?: string
   trusted?: boolean
@@ -2178,6 +2403,13 @@ function SurfaceView({
       ) : null
     case 'tasks':
       return surface.tasks ? <TasksBody list={surface.tasks} onAction={onAction} /> : null
+    case 'worktrees':
+      return (
+        <WorktreesBody
+          v={surface.worktrees ?? { repo_key: '' }}
+          onRefresh={onRefresh ? () => onRefresh(surface.id) : undefined}
+        />
+      )
     case 'raati':
       return <RaatiBody v={surface.raati ?? { running: false }} onAction={onAction} models={models ?? []} />
     case 'settings':
@@ -3202,7 +3434,13 @@ function TaskRow({
       <div class="task-head" onClick={() => setExpanded((e) => !e)}>
         <span class={`task-status s-${task.status}`}>{task.status}</span>
         <span class="task-title">{task.task || task.id}</span>
+        {task.backend && <span class="task-backend">{task.backend}</span>}
         {task.model && <span class="task-model">{task.model}</span>}
+        {task.cost_usd ? (
+          <span class="task-cost" title={t('spend so far')}>
+            ${task.cost_usd.toFixed(4)}
+          </span>
+        ) : null}
       </div>
       {task.activity && <div class="task-activity">{task.activity}</div>}
       {task.error && <div class="task-error">{task.error}</div>}
@@ -3241,6 +3479,125 @@ function TaskRow({
             {t('Remove')}
           </button>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ---- worktrees: managed git worktrees (kind=worktrees) ----
+// The web face of the TUI's /worktree panel: the same one-fetch view (the
+// list plus the merge-back collect overview), read-only. No push event exists
+// for worktree changes, so the pane fetches on open and the ↻ button
+// re-fetches on demand — the same freshness the TUI panel's r key has. The
+// status vocabulary (claimed(self), ✱dirty, ⇡unpushed, (here)) mirrors the
+// engine renderer in packages/agent/worktree/render.go so both frontends
+// describe a worktree in the same words.
+
+const wtSHA = (s: string) => (s.length > 7 ? s.slice(0, 7) : s)
+
+function wtStatus(it: WorktreeViewItem): { label: string; cls: string } {
+  if (it.unmanaged) return { label: 'unmanaged', cls: 's-unmanaged' }
+  if (it.claimed_by === 'self') return { label: 'claimed(self)', cls: 's-self' }
+  if (it.status === 'claimed' && it.claimed_by) return { label: `claimed(${it.claimed_by})`, cls: 's-claimed' }
+  if (it.stale_reason) return { label: 'stale', cls: 's-stale' }
+  return { label: 'available', cls: 's-available' }
+}
+
+function WorktreesBody({ v, onRefresh }: { v: WorktreeView; onRefresh?: () => void }) {
+  const [collect, setCollect] = useState(false)
+  const pending = (v.collect ?? []).filter((c) => c.ahead > 0 || c.dirty).length
+  return (
+    <div class="wt-body">
+      <div class="wt-head">
+        <div class="wt-tabs">
+          <button class={`wt-tab${!collect ? ' active' : ''}`} onClick={() => setCollect(false)}>
+            {t('List')}
+          </button>
+          <button class={`wt-tab${collect ? ' active' : ''}`} onClick={() => setCollect(true)}>
+            {t('Merge-back')}
+            {pending > 0 && <span class="wt-pending">{pending}</span>}
+          </button>
+        </div>
+        <span class="wt-repo">{v.repo_key}</span>
+        {onRefresh && (
+          <button class="icon sm" title={t('Refresh')} onClick={onRefresh}>
+            ↻
+          </button>
+        )}
+      </div>
+      {collect ? <WorktreeCollect items={v.collect ?? []} /> : <WorktreeList v={v} />}
+    </div>
+  )
+}
+
+function WorktreeList({ v }: { v: WorktreeView }) {
+  const items = v.items ?? []
+  if (!items.length)
+    return <div class="pick-empty">{t('No worktrees yet — create one with the worktree_create tool.')}</div>
+  return (
+    <div class="wt-list">
+      {items.map((it) => {
+        const st = wtStatus(it)
+        const here = it.name === v.cwd_worktree
+        return (
+          <div key={it.name} class={`wt-row${here ? ' here' : ''}`}>
+            <div class="wt-row-head">
+              <span class="wt-name">{it.name}</span>
+              {here && <span class="wt-here">{t('here')}</span>}
+              {it.dirty && <span class="wt-dirty">✱dirty</span>}
+              <span class={`wt-status ${st.cls}`}>{st.label}</span>
+            </div>
+            <div class="wt-row-detail">
+              {it.branch && <span class="wt-branch">{it.branch}</span>}
+              <span class="wt-base">
+                {it.base_ref}
+                {it.base_commit ? '@' + wtSHA(it.base_commit) : ''}
+                {it.head_commit && it.head_commit !== it.base_commit ? ' → ' + wtSHA(it.head_commit) : ''}
+              </span>
+              {it.stale_reason && <span class="wt-stale-why">{it.stale_reason}</span>}
+            </div>
+            <div class="wt-path">{it.path}</div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// WorktreeCollect is the read-only merge-back overview: per worktree, how far
+// its branch is ahead of base and the pending commit subjects. Like the TUI
+// view it ends with a reminder that merging back is a manual act.
+function WorktreeCollect({ items }: { items: WorktreeCollectItem[] }) {
+  if (!items.length) return <div class="pick-empty">{t('No worktrees to collect.')}</div>
+  const pending = items.filter((it) => it.ahead > 0 || it.dirty).length
+  return (
+    <div class="wt-list">
+      {items.map((it) => (
+        <div key={it.name} class="wt-row">
+          <div class="wt-row-head">
+            <span class="wt-name">{it.name}</span>
+            {it.branch && <span class="wt-branch">{it.branch}</span>}
+            {it.dirty && <span class="wt-dirty">✱dirty</span>}
+            {it.unpushed && <span class="wt-dirty">⇡unpushed</span>}
+            <span class="wt-ahead">{tn(it.ahead, '+%d commit', '+%d commits')}</span>
+          </div>
+          <div class="wt-row-detail">
+            <span class="wt-base">{t('ahead of %s', it.base_ref ?? '')}</span>
+          </div>
+          {it.commits && it.commits.length > 0 && (
+            <ul class="wt-commits">
+              {it.commits.map((c, idx) => (
+                <li key={idx}>{c}</li>
+              ))}
+            </ul>
+          )}
+          {it.ahead === 0 && !it.dirty && <div class="wt-even">{t('nothing to collect')}</div>}
+        </div>
+      ))}
+      <div class="wt-footnote">
+        {pending === 0
+          ? t('All worktrees are even with their base — nothing to merge back.')
+          : t('Review, then merge manually (e.g. git merge <branch>). No auto-merge.')}
       </div>
     </div>
   )
@@ -3625,6 +3982,24 @@ function ContextBody({
           <CtxRow label={t('TOTAL')} bytes={d.total_bytes} note="" />
         </div>
       </div>
+      {d.lore_fired && d.lore_fired.length > 0 && (
+        <>
+          <div class="ctx-section-label">{t('lore fired last turn')}</div>
+          <div class="ctx-lore">
+            {d.lore_fired.map((e, i) => (
+              <div key={i} class={`ctx-lore-row${e.dropped ? ' dropped' : ''}`}>
+                <span class="ctx-lore-name">{e.name}</span>
+                {e.constant ? (
+                  <span class="ctx-lore-tag">{t('always on')}</span>
+                ) : (
+                  (e.keys ?? []).length > 0 && <span class="ctx-lore-keys">{(e.keys ?? []).join(', ')}</span>
+                )}
+                {e.dropped && <span class="ctx-lore-tag dropped">{t('budget dropped')}</span>}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
       {useTree ? (
         <>
           <div class="ctx-section-label">{t('transcript — by turn')}</div>

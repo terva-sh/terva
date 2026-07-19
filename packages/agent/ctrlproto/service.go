@@ -2,6 +2,7 @@ package ctrlproto
 
 import (
 	"context"
+	"encoding/json"
 
 	"terva.sh/terva/packages/core"
 )
@@ -56,6 +57,42 @@ type WorkspaceService interface {
 	// (empty) snapshot.
 	Clear(ctx context.Context, sess string) error
 
+	// EditMessage replaces the message at index with a text message of the same
+	// role — the Stage surface's edit interaction. epoch is the client's
+	// transcript epoch; a stale one is refused with [CodeConflict] (the index no
+	// longer means what the client thought). Returns [CodeBusy] if a turn is
+	// running, [CodeBadRequest] for an out-of-range index. On success clients
+	// receive a fresh snapshot.
+	EditMessage(ctx context.Context, sess string, epoch uint64, index int, text string) error
+
+	// DeleteMessage removes the message at index (later messages shift down),
+	// with the same epoch/busy/range semantics as EditMessage.
+	DeleteMessage(ctx context.Context, sess string, epoch uint64, index int) error
+
+	// SwipeTurn switches the tail span's active take to variant — the Stage
+	// surface's swipe among a regenerated turn's alternatives or pre-seeded
+	// greetings. variant is an absolute index into the tail's takes (reported in
+	// the snapshot's [TailInfo]). Same epoch/busy semantics as EditMessage;
+	// [CodeBadRequest] when there is nothing to swipe or variant is out of range;
+	// a swipe to the current variant is an accepted no-op. On success clients
+	// receive a fresh snapshot with the chosen take live.
+	SwipeTurn(ctx context.Context, sess string, epoch uint64, variant int) error
+
+	// SwipeMessage switches a message-scoped variant's active take — the swipe for
+	// an edited message at index (from the snapshot's [VariantMark]s), the
+	// per-position twin of SwipeTurn (which acts on the tail span). Same
+	// epoch/busy/no-op semantics; [CodeBadRequest] when index has no variants or
+	// variant is out of range. On success clients receive a fresh snapshot.
+	SwipeMessage(ctx context.Context, sess string, epoch uint64, index, variant int) error
+
+	// RetryTurn regenerates the last response, keeping the current one as a
+	// swipeable take — the Stage surface's regenerate. It retracts the tail span
+	// and runs a fresh generation against the prior user turn; like Prompt it
+	// returns once the turn is accepted and the regeneration streams to
+	// subscribers. epoch is checked as in EditMessage; [CodeBusy] when a turn is
+	// running, [CodeBadRequest] when there is no response to retry.
+	RetryTurn(ctx context.Context, sess string, epoch uint64) error
+
 	// Approve resolves a pending tool-approval round-trip previously surfaced
 	// as an [EventPermissionRequest] event with the matching callID. The first
 	// client to answer wins; late answers for an already-resolved call are
@@ -84,6 +121,14 @@ type WorkspaceService interface {
 	// ResumeSession loads a persisted session's transcript so subsequent
 	// Prompt/Subscribe calls operate on it, and returns its descriptor.
 	ResumeSession(ctx context.Context, sess string) (SessionInfo, error)
+
+	// ForkSession branches sess at fromIndex into a NEW parent-linked session:
+	// the child keeps the parent's messages 0..fromIndex (inclusive) and diverges
+	// after, the parent untouched — SillyTavern's branch/checkpoint, and the wire
+	// story for core.BranchSession. The child inherits the parent's persona and
+	// immersive spec. Returns the child's descriptor; [CodeBusy] if the parent has
+	// a turn running (its transcript is moving under the index).
+	ForkSession(ctx context.Context, sess string, fromIndex int) (SessionInfo, error)
 
 	// RenameSession sets a session's display title (its "nickname").
 	RenameSession(ctx context.Context, sess, title string) error
@@ -272,17 +317,47 @@ type Image struct {
 // SessionInfo describes one session for a picker/switcher. It maps from core's
 // session summary + metadata.
 type SessionInfo struct {
-	ID       string         `json:"id"`
-	Title    string         `json:"title,omitempty"` // the display nickname
-	Provider string         `json:"provider,omitempty"`
-	Model    string         `json:"model,omitempty"`
-	Persona  string         `json:"persona,omitempty"` // loaded persona/agent name
-	Path     string         `json:"path,omitempty"`    // session transcript file path
-	Created  string         `json:"created,omitempty"` // RFC 3339
-	Updated  string         `json:"updated,omitempty"` // RFC 3339
-	Messages int            `json:"messages"`
-	Usage    core.WireUsage `json:"usage"`
-	Current  bool           `json:"current,omitempty"` // the active session
+	ID       string `json:"id"`
+	Title    string `json:"title,omitempty"` // the display nickname
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Persona  string `json:"persona,omitempty"` // loaded persona/agent name
+	// Experience tags an immersive session — "chat" or "play" — so a client
+	// badges it distinctly from a coding session (empty). Persisted at creation.
+	Experience string `json:"experience,omitempty"`
+	// Background is the scene backdrop bound to this session (a backgrounds
+	// library id, fetched from /media/backgrounds/<id>), or "" for none. Mutable
+	// mid-session via backgrounds.bind.
+	Background string `json:"background,omitempty"`
+	// Note is the session's author's note — a live steering string injected into
+	// the uncached per-turn tail (set via note.set), or "" for none. Immersive
+	// sessions only; a client renders it in the steering surface.
+	Note string `json:"note,omitempty"`
+	// UserName and UserDescription are the bound user persona — who the user is in
+	// the story (set via user.bind), distinct from Persona (who the agent is). The
+	// description rides the free per-turn tail; the name is the {{user}} macro in
+	// the cached prefix. Both "" for an unbound / coding session.
+	UserName        string `json:"user_name,omitempty"`
+	UserDescription string `json:"user_description,omitempty"`
+	// SupportsContinue is true when this session's provider can extend a trailing
+	// assistant message as a prefill (turn.continue) — a Stage gate for the
+	// "continue" affordance. A client also needs a trailing assistant message and
+	// an idle session, both of which it reads from the transcript itself.
+	SupportsContinue bool `json:"supports_continue,omitempty"`
+	// Card is the character-card ref (library id or path) the session was created
+	// from, so the Stage library can group a character's chats under it.
+	Card string `json:"card,omitempty"`
+	// Cast is a play session's ensemble — actor name → persona/card ref — the
+	// director (Kertoja) can bring on stage via actor_spawn. A client reads it to
+	// show who is in the scene; empty for a solo chat. Set at creation
+	// (immutable mid-session until cast.* verbs land), live sessions only.
+	Cast     map[string]string `json:"cast,omitempty"`
+	Path     string            `json:"path,omitempty"`    // session transcript file path
+	Created  string            `json:"created,omitempty"` // RFC 3339
+	Updated  string            `json:"updated,omitempty"` // RFC 3339
+	Messages int               `json:"messages"`
+	Usage    core.WireUsage    `json:"usage"`
+	Current  bool              `json:"current,omitempty"` // the active session
 	// Trusted reports whether the session's workspace (its cwd) has Workspace
 	// Trust granted. Project-scoped content — extensions, lore, permission
 	// rules — only loads/edits when trusted; a client reads this to show the
@@ -298,11 +373,22 @@ type SessionInfo struct {
 	// (OAuth) login rather than a metered API key — a client tags its cost
 	// display "(sub)". Resolved daemon-side, where the credential lives.
 	Subscription bool `json:"subscription,omitempty"`
+	// Live reports that the session is materialized in memory (an open
+	// wsSession), not just a transcript on disk. A board subscribes only to
+	// live sessions — a cold one renders from this metadata alone and is never
+	// woken by a dashboard opening. Busy reports that a live session has a turn
+	// in flight (always false for a cold session). Both omitempty so an old
+	// daemon that never set them sends nothing, and a client reads ABSENT as
+	// unknown rather than idle/cold.
+	Live bool `json:"live,omitempty"`
+	Busy bool `json:"busy,omitempty"`
 }
 
 // CreateOpts parameterizes [WorkspaceService.CreateSession]. All fields are
-// optional; empty values fall back to the workspace defaults. Template and
-// persona are shaped now but honored as the control group lands.
+// optional; empty values fall back to the workspace defaults. Persona and the
+// immersive fields (Experience/Card/Cast/Greeting) are persisted to session meta
+// so a restart re-materializes the session as created. Template is accepted but
+// not yet applied (reserved).
 type CreateOpts struct {
 	Title string `json:"title,omitempty"`
 	// Provider disambiguates Model: some model ids exist under several
@@ -313,6 +399,20 @@ type CreateOpts struct {
 	Model    string `json:"model,omitempty"`
 	Persona  string `json:"persona,omitempty"`
 	Template string `json:"template,omitempty"`
+	// Experience selects an immersive (Stage) mode instead of coding: "chat"
+	// (pure conversation, no tools) or "play" (embodied in a world via
+	// extension/MCP tools). Empty is an ordinary coding session.
+	Experience string `json:"experience,omitempty"`
+	// Card loads a SillyTavern character card (library id or path) as the
+	// session's identity; Greeting selects which opening it seeds (0 = first_mes,
+	// 1..N = alternate greetings). Cast declares the named actors a play director
+	// can voice (name -> persona name or card ref).
+	Card     string            `json:"card,omitempty"`
+	Cast     map[string]string `json:"cast,omitempty"`
+	Greeting int               `json:"greeting,omitempty"`
+	// Background binds a scene backdrop (a backgrounds-library id) at creation;
+	// it can also be set or changed later via backgrounds.bind.
+	Background string `json:"background,omitempty"`
 }
 
 // ContextBreakdown is a byte-size accounting of what fills the model's context
@@ -367,6 +467,22 @@ type ContextBreakdown struct {
 	// transcriptEpoch). A client can compare it before a context.node call to
 	// tell whether its opaque node ids have gone stale (the transcript grew).
 	Rev int `json:"rev,omitempty"`
+	// LoreFired is the lore activation trace of the last turn — which entries fed
+	// the ExtBytes ephemeral tail, why (the trigger keys that matched), and what
+	// the token budget dropped. The Usage pane's second home for the 4c trace (the
+	// Stage drawer is the other): it turns the lore share of the tail from a byte
+	// total into "which entries, and why." Empty when no lore fired last turn.
+	LoreFired []ContextLoreEntry `json:"lore_fired,omitempty"`
+}
+
+// ContextLoreEntry is one entry of the [ContextBreakdown.LoreFired] activation
+// trace — the compact Usage-pane form of the LoreView badges.
+type ContextLoreEntry struct {
+	Name     string   `json:"name"`
+	Source   string   `json:"source,omitempty"`
+	Constant bool     `json:"constant,omitempty"` // always-on (baked into the prompt, no trigger keys)
+	Keys     []string `json:"keys,omitempty"`     // the trigger keys that matched (empty for a constant entry)
+	Dropped  bool     `json:"dropped,omitempty"`  // fired but cut for token budget (no silent truncation)
 }
 
 // ContextMessage is one transcript entry's size in a [ContextBreakdown].
@@ -478,7 +594,7 @@ type SurfaceMeta struct {
 	ID      string `json:"id"`              // "context", "usage", "status", "ext:<name>:<panel>"
 	Title   string `json:"title"`           // switcher label
 	Icon    string `json:"icon,omitempty"`  // glyph/emoji hint
-	Kind    string `json:"kind"`            // context | usage | panel | widgets | settings | tasks | commands | extensions | permissions | lore | mcp | raati
+	Kind    string `json:"kind"`            // context | usage | panel | widgets | settings | tasks | commands | extensions | permissions | lore | mcp | raati | characters
 	Scope   string `json:"scope,omitempty"` // session | workspace
 	Live    bool   `json:"live,omitempty"`  // pushes EventSurfaceUpdated
 	Actions bool   `json:"actions,omitempty"`
@@ -507,6 +623,18 @@ type Surface struct {
 	Raati       *RaatiView        `json:"raati,omitempty"`       // kind=raati
 	Chat        *ChatView         `json:"chat,omitempty"`        // kind=chat
 	Providers   *ProvidersView    `json:"providers,omitempty"`   // kind=providers
+	Characters  *CharactersView   `json:"characters,omitempty"`  // kind=characters
+	Worktrees   *WorktreeView     `json:"worktrees,omitempty"`   // kind=worktrees
+}
+
+// CharactersView is the content-library pane (kind=characters): the workspace's
+// cards and personas side by side, so the panel inspects and picks from the same
+// store the Stage app plays from. Read-only — mutation rides the dedicated
+// cards.*/personas.* verbs, not a pane action — but Live, so an import or edit
+// refreshes it. It reuses the very summaries those verbs return, one shape.
+type CharactersView struct {
+	Cards    []CardSummary    `json:"cards"`
+	Personas []PersonaSummary `json:"personas"`
 }
 
 // ChatView is the chat-connector pane: every registered chat service and the
@@ -671,6 +799,14 @@ type LoreEntry struct {
 	Content  string   `json:"content,omitempty"`  // full body (client truncates for display, uses full to edit)
 	Editable bool     `json:"editable,omitempty"` // a web-managed entry (deletable/editable)
 	Scope    string   `json:"scope,omitempty"`    // user | project (which tier the entry's file lives in)
+	// The last turn's activation trace, for TRIGGERED entries (constant lore is
+	// always-on and baked, so it never appears here). Fired reports the entry fired
+	// last turn; MatchedKeys is WHY (the trigger keys that hit); DroppedForBudget
+	// reports it fired but was cut to fit the token budget — the lorebook-opacity
+	// answer, and the "no silent truncation" signal.
+	Fired            bool     `json:"fired,omitempty"`
+	MatchedKeys      []string `json:"matched_keys,omitempty"`
+	DroppedForBudget bool     `json:"dropped_for_budget,omitempty"`
 }
 
 // ExtensionsView is the extension-management pane: the session's installed +
@@ -753,6 +889,13 @@ type SettingOption struct {
 // TaskList is the background-agent (swarm) dashboard pane.
 type TaskList struct {
 	Tasks []TaskInfo `json:"tasks"`
+	// Backends are the worker backends a human may spawn against (worker.Names()
+	// — the same set the swarm_spawn tool's enum is built from). Native (empty
+	// backend) is always available and is NOT listed here. WorkersEnabled mirrors
+	// config.ExternalWorkersEnabled(): false still lists the backends (so the UI
+	// can show them greyed, with a hint) but a foreign spawn is gated and refused.
+	Backends       []string `json:"backends,omitempty"`
+	WorkersEnabled bool     `json:"workers_enabled,omitempty"`
 }
 
 // TaskInfo is one background agent, mapped from swarm.AgentSnapshot.
@@ -764,11 +907,29 @@ type TaskInfo struct {
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	Persona  string `json:"persona,omitempty"`
+	// Backend names the worker backend driving this agent ("claude", "terva",
+	// …), or "" for a native terva child (see swarm.AgentSnapshot.Backend). On
+	// the wire so a dashboard can say WHAT is running: a mixed roster of native
+	// and foreign agents otherwise looks uniform, and the difference is exactly
+	// what a watcher needs when one behaves unlike the others. omitempty: absent
+	// for native children and from old daemons, which a client reads as
+	// backend-unknown rather than guessing native.
+	Backend  string `json:"backend,omitempty"`
 	Dir      string `json:"dir,omitempty"`      // agent working directory
 	Started  string `json:"started,omitempty"`  // RFC 3339
 	Finished string `json:"finished,omitempty"` // RFC 3339
 	Err      string `json:"error,omitempty"`
-	Tail     string `json:"tail,omitempty"` // last few transcript lines
+	// CostUSD is the worker's cumulative spend so far (0 when unknown — a native
+	// or terva-backend agent whose wire doesn't yet carry usage). omitempty keeps
+	// it off the wire until there's something to show.
+	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Deliverable is the schema-validated structured report for a spawn that
+	// carried a deliverable schema (see swarm.AgentSnapshot.Deliverable);
+	// DeliverableError says why the contract was NOT met (extraction or
+	// validation failure). Both absent for schema-less spawns and old daemons.
+	Deliverable      json.RawMessage `json:"deliverable,omitempty"`
+	DeliverableError string          `json:"deliverable_error,omitempty"`
+	Tail             string          `json:"tail,omitempty"` // last few transcript lines
 	// Lines is the full in-memory transcript (capped daemon-side at 2000
 	// lines per agent) — what a transcript viewer scrolls. The list pane
 	// only needs Tail; a serialized carrier pays for Lines only when the
@@ -793,6 +954,47 @@ type TaskBoardItem struct {
 	ActiveForm string `json:"active_form,omitempty"`
 	Evidence   string `json:"evidence,omitempty"`
 	Note       string `json:"note,omitempty"`
+}
+
+// WorktreeView is the managed-worktrees pane (the built-in worktree engine's
+// list + merge-back overview). It carries the raw engine fields so a frontend
+// reconstructs worktree.ListResult/CollectResult and renders via the shared
+// helpers in packages/agent/worktree (one renderer, no drift — the
+// TaskBoardView pattern).
+type WorktreeView struct {
+	RepoKey     string                `json:"repo_key"`
+	CWDWorktree *string               `json:"cwd_worktree,omitempty"`
+	Items       []WorktreeViewItem    `json:"items"`
+	Collect     []WorktreeCollectItem `json:"collect,omitempty"`
+}
+
+// WorktreeViewItem is one worktree, mapped from worktree.ListItem.
+type WorktreeViewItem struct {
+	Name        string  `json:"name"`
+	Path        string  `json:"path"`
+	Branch      string  `json:"branch,omitempty"`
+	BaseCommit  string  `json:"base_commit,omitempty"`
+	BaseRef     string  `json:"base_ref,omitempty"`
+	HeadCommit  string  `json:"head_commit,omitempty"`
+	Status      string  `json:"status"` // available|claimed
+	ClaimedBy   *string `json:"claimed_by,omitempty"`
+	StaleReason string  `json:"stale_reason,omitempty"`
+	Dirty       bool    `json:"dirty,omitempty"`
+	Unmanaged   bool    `json:"unmanaged,omitempty"`
+}
+
+// WorktreeCollectItem is one worktree's pending work, mapped from
+// worktree.CollectItem.
+type WorktreeCollectItem struct {
+	Name       string   `json:"name"`
+	Branch     string   `json:"branch,omitempty"`
+	BaseRef    string   `json:"base_ref,omitempty"`
+	BaseCommit string   `json:"base_commit,omitempty"`
+	HeadCommit string   `json:"head_commit,omitempty"`
+	Ahead      int      `json:"ahead"`
+	Commits    []string `json:"commits,omitempty"`
+	Dirty      bool     `json:"dirty,omitempty"`
+	Unpushed   bool     `json:"unpushed,omitempty"`
 }
 
 // RaatiView is the deliberation board pane: the workspace's current (or

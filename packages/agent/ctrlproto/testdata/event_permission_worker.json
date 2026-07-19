@@ -1,0 +1,13 @@
+{
+  "kind": "event",
+  "sess": "s1",
+  "event": {
+    "type": "permission_request",
+    "permission": {
+      "call_id": "worker-wk7-1",
+      "tool": "bash",
+      "preview": "worker wk7: ls -la",
+      "agent": "wk7"
+    }
+  }
+}

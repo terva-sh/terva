@@ -129,6 +129,51 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		s.respond(f.ID, nil, s.svc.Compact(ctx, f.Sess))
 	case MethodClear:
 		s.respond(f.ID, nil, s.svc.Clear(ctx, f.Sess))
+	case MethodMessageEdit:
+		var p MessageEditParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, s.svc.EditMessage(ctx, f.Sess, p.Epoch, p.Index, p.Text))
+	case MethodMessageDelete:
+		var p MessageDeleteParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, s.svc.DeleteMessage(ctx, f.Sess, p.Epoch, p.Index))
+	case MethodTurnSwipe:
+		var p TurnSwipeParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		if p.Index != nil {
+			s.respond(f.ID, nil, s.svc.SwipeMessage(ctx, f.Sess, p.Epoch, *p.Index, p.Variant))
+		} else {
+			s.respond(f.ID, nil, s.svc.SwipeTurn(ctx, f.Sess, p.Epoch, p.Variant))
+		}
+	case MethodTurnRetry:
+		var p TurnRetryParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, s.svc.RetryTurn(ctx, f.Sess, p.Epoch))
+
+	case MethodTurnContinue:
+		cc, ok := s.svc.(ContinueController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "continue is not available here"))
+			return
+		}
+		var p TurnContinueParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, cc.ContinueTurn(ctx, f.Sess, p.Epoch))
 	case MethodApprove:
 		var p ApproveParams
 		if err := f.Bind(&p); err != nil {
@@ -163,6 +208,14 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		s.respond(f.ID, SessionResult{Session: info}, err)
 	case MethodSessionResume:
 		info, err := s.svc.ResumeSession(ctx, f.Sess)
+		s.respond(f.ID, SessionResult{Session: info}, err)
+	case MethodSessionFork:
+		var p SessionForkParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		info, err := s.svc.ForkSession(ctx, f.Sess, p.FromIndex)
 		s.respond(f.ID, SessionResult{Session: info}, err)
 	case MethodSessionRename:
 		var p RenameParams
@@ -428,6 +481,303 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			return
 		}
 		s.respond(f.ID, nil, ac.AuthEndpointRemove(ctx, p))
+
+	case MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint:
+		// Optional, like the model-params group: a carrier with no card library
+		// simply does not implement it and says so, rather than failing deeper.
+		cc, ok := s.svc.(CardsController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "the card library is not available here"))
+			return
+		}
+		switch f.Method {
+		case MethodCardsList:
+			v, err := cc.CardsList(ctx)
+			s.respond(f.ID, v, err)
+		case MethodCardsGet:
+			var p CardGetParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := cc.CardsGet(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodCardsImport:
+			var p CardImportParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := cc.CardsImport(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodCardsEdit:
+			var p CardEditParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := cc.CardsEdit(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodCardsExport:
+			var p CardExportParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := cc.CardsExport(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodCardsLint:
+			var p CardLintParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := cc.CardsLint(ctx, p)
+			s.respond(f.ID, v, err)
+		default:
+			var p CardDeleteParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, cc.CardsDelete(ctx, p))
+		}
+
+	case MethodCardsDoctor:
+		// Optional, like the card library — but also needs a usable model, so a
+		// carrier without one (or without a credential) answers "unsupported".
+		dc, ok := s.svc.(DoctorController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "the card doctor is not available here"))
+			return
+		}
+		var p DoctorParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		v, err := dc.CardsDoctor(ctx, p)
+		s.respond(f.ID, v, err)
+
+	case MethodSuggestReply:
+		// Optional, like the card doctor — needs a model and the session's
+		// transcript, so a carrier without one answers "unsupported".
+		sc, ok := s.svc.(SuggestController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "reply suggestions are not available here"))
+			return
+		}
+		var p SuggestParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		v, err := sc.SuggestReply(ctx, f.Sess, p)
+		s.respond(f.ID, v, err)
+
+	case MethodPersonasList, MethodPersonasGet, MethodPersonasCreate, MethodPersonasEdit:
+		// Optional, like the card library. Create/edit are trusted-tier — the
+		// workspace enforces the gate; the group only decides whether it's served.
+		pc, ok := s.svc.(PersonasController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "the persona library is not available here"))
+			return
+		}
+		switch f.Method {
+		case MethodPersonasList:
+			v, err := pc.PersonasList(ctx)
+			s.respond(f.ID, v, err)
+		case MethodPersonasGet:
+			var p PersonaGetParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := pc.PersonasGet(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodPersonasCreate:
+			var p PersonaWriteParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := pc.PersonasCreate(ctx, p)
+			s.respond(f.ID, v, err)
+		default:
+			var p PersonaWriteParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := pc.PersonasEdit(ctx, p)
+			s.respond(f.ID, v, err)
+		}
+
+	case MethodBackgroundsList, MethodBackgroundsImport, MethodBackgroundsDelete, MethodBackgroundBind, MethodBackgroundGenerate:
+		bc, ok := s.svc.(BackgroundsController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "scene backgrounds are not available here"))
+			return
+		}
+		switch f.Method {
+		case MethodBackgroundsList:
+			v, err := bc.BackgroundsList(ctx)
+			s.respond(f.ID, v, err)
+		case MethodBackgroundGenerate:
+			var p BackgroundGenerateParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := bc.BackgroundsGenerate(ctx, f.Sess, p)
+			s.respond(f.ID, v, err)
+		case MethodBackgroundsImport:
+			var p BackgroundImportParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := bc.BackgroundsImport(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodBackgroundsDelete:
+			var p BackgroundDeleteParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, bc.BackgroundsDelete(ctx, p))
+		default:
+			var p BackgroundBindParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, bc.BackgroundBind(ctx, f.Sess, p))
+		}
+
+	case MethodNoteSet:
+		nc, ok := s.svc.(NoteController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "the author's note is not available here"))
+			return
+		}
+		var p NoteSetParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, nc.NoteSet(ctx, f.Sess, p))
+
+	case MethodUserBind:
+		uc, ok := s.svc.(UserController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "the user persona is not available here"))
+			return
+		}
+		var p UserBindParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, uc.UserBind(ctx, f.Sess, p))
+
+	case MethodSessionDiscardDraft:
+		dc, ok := s.svc.(DraftController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "draft sessions are not available here"))
+			return
+		}
+		s.respond(f.ID, nil, dc.DiscardDraft(ctx, f.Sess))
+
+	case MethodUserPersonasList, MethodUserPersonaSave, MethodUserPersonaDelete, MethodUserPersonaSetDefault:
+		upc, ok := s.svc.(UserPersonasController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "saved user personas are not available here"))
+			return
+		}
+		switch f.Method {
+		case MethodUserPersonasList:
+			v, err := upc.UserPersonasList(ctx)
+			s.respond(f.ID, v, err)
+		case MethodUserPersonaSave:
+			var p UserPersonaView
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := upc.UserPersonaSave(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodUserPersonaDelete:
+			var p UserPersonaRef
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, upc.UserPersonaDelete(ctx, p))
+		default: // MethodUserPersonaSetDefault
+			var p UserPersonaRef
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, upc.UserPersonaSetDefault(ctx, p))
+		}
+
+	case MethodCastAdd, MethodCastRemove:
+		cc, ok := s.svc.(CastController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "the cast is not available here"))
+			return
+		}
+		var p CastMemberParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		if f.Method == MethodCastAdd {
+			s.respond(f.ID, nil, cc.CastAdd(ctx, f.Sess, p))
+		} else {
+			s.respond(f.ID, nil, cc.CastRemove(ctx, f.Sess, p))
+		}
+
+	case MethodCastSpeak:
+		cc, ok := s.svc.(CastController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "the cast is not available here"))
+			return
+		}
+		var p CastSpeakParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, cc.CastSpeak(ctx, f.Sess, p))
+
+	// --- message-scoped variant cleanup (optional; served only by a VariantsController) ---
+	case MethodVariantsPrune:
+		vc, ok := s.svc.(VariantsController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "variant cleanup is not available here"))
+			return
+		}
+		var p VariantsPruneParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, vc.PruneVariants(ctx, f.Sess, p.Epoch, p.Index))
+	case MethodVariantsDrop:
+		vc, ok := s.svc.(VariantsController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "variant cleanup is not available here"))
+			return
+		}
+		var p VariantsDropParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, vc.DropVariant(ctx, f.Sess, p.Epoch, p.Index, p.Variant))
 
 	// --- replay (optional; served only by a ReplayController) ---
 	case MethodReplayControl:

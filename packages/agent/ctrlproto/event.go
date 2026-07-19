@@ -85,6 +85,15 @@ const (
 	// EventSurfacesChanged signals that the set of available panes changed (an
 	// extension panel opened/closed, status appeared); the client re-lists.
 	EventSurfacesChanged = "surfaces_changed"
+	// EventSessionsChanged signals that the SET of sessions changed shape —
+	// create, delete, rename, or a cold session materializing live. It carries
+	// no payload: a client answers it by re-running sessions.list, which is the
+	// single source of truth (a delta in the event would invent a second). Like
+	// surfaces_changed it is workspace-scoped, broadcast on [AddrWorkspace] via
+	// Workspace.BroadcastAll; a board uses it to auto-populate and prune tiles
+	// without polling. Additive: an old client that never negotiated it simply
+	// ignores the unknown type.
+	EventSessionsChanged = "sessions_changed"
 	// EventLocaleChanged announces that the daemon's active UI language changed
 	// (Locale). Every client re-fetches its string catalog (i18n.catalog) and
 	// re-renders; a client showing panes also re-lists/re-fetches them, since
@@ -186,6 +195,36 @@ type Snapshot struct {
 	// Skills are the session's available skills, so the client can autocomplete
 	// the `/skill` composer command by name.
 	Skills []SkillInfo `json:"skills,omitempty"`
+	// Tail describes the tail span's swipe alternatives when the last response
+	// has more than one (a regenerated/reloaded turn, or pre-seeded greetings).
+	// Absent when there is nothing to swipe. A client draws the swipe arrows from
+	// Variants/Active and switches with turn.swipe{variant}.
+	Tail *TailInfo `json:"tail,omitempty"`
+	// VariantMarks is the superset of Tail: EVERY switchable position — the tail
+	// span plus message-scoped edit variants at any position (Option C). Each mark
+	// draws a swipe control at Index. A client that reads VariantMarks should prefer
+	// it over Tail (it includes the tail, with Span=true) and switch with
+	// turn.swipe{index, variant}; Tail remains for clients that only draw the tail.
+	VariantMarks []VariantMark `json:"variant_marks,omitempty"`
+}
+
+// VariantMark places one switchable position for the per-position swipe UI: its
+// transcript Index, how many takes it has, which is active, and whether it is the
+// tail suffix span (Span=true — the whole last response) or a message-scoped edit
+// (Span=false — one message with shared downstream).
+type VariantMark struct {
+	Index    int  `json:"index"`
+	Variants int  `json:"variants"`
+	Active   int  `json:"active"`
+	Span     bool `json:"span,omitempty"`
+}
+
+// TailInfo is the swipe state of the transcript's tail span (see [Snapshot.Tail]):
+// the span the swipe UI acts on, how many alternatives it has, and which is live.
+type TailInfo struct {
+	SpanStart int `json:"span_start"` // effective index where the swipeable span begins
+	Variants  int `json:"variants"`   // number of alternative takes (>= 2)
+	Active    int `json:"active"`     // index of the take currently in the transcript
 }
 
 // SkillInfo is one available skill, surfaced for `/skill` autocomplete.
@@ -200,6 +239,14 @@ type PermissionRequest struct {
 	CallID  string `json:"call_id"`
 	Tool    string `json:"tool"`
 	Preview string `json:"preview,omitempty"`
+	// Agent, when set, is the id of the swarm worker whose tool call this
+	// request is for: the daemon routes a foreign worker's ask onto the
+	// dispatching session's card (see workspace.workerConfirmer), and this is
+	// the machine-readable link back to the worker so a board can badge the
+	// right lane tile without parsing the CallID convention. Empty for the
+	// session's OWN tool calls; omitempty keeps it off the wire for ordinary
+	// approvals and for old daemons that never set it.
+	Agent string `json:"agent,omitempty"`
 }
 
 // AskRequest is a pending mid-turn question (the ask_user_question tool). The
@@ -273,6 +320,12 @@ func SurfaceUpdatedEvent(surfaceID string) Event {
 // SurfacesChangedEvent builds an [EventSurfacesChanged] signal (re-list panes).
 func SurfacesChangedEvent() Event {
 	return Event{WireEvent: core.WireEvent{Type: EventSurfacesChanged}}
+}
+
+// SessionsChangedEvent builds an [EventSessionsChanged] signal (re-list
+// sessions). No payload: the client re-runs sessions.list.
+func SessionsChangedEvent() Event {
+	return Event{WireEvent: core.WireEvent{Type: EventSessionsChanged}}
 }
 
 // LocaleChangedEvent builds an [EventLocaleChanged] signal carrying the new

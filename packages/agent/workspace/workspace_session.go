@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/agent/imagegen"
 	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/raati"
 	"terva.sh/terva/packages/agent/skills"
@@ -40,23 +42,30 @@ type wsSession struct {
 	ws          *Workspace
 	agent       *core.Agent
 	sess        *core.Session
-	gate        *core.ConfirmGate    // nil in pure-yolo (no confirmation needed)
-	extMgr      *extensions.Manager  // this session's extension subprocesses
-	stopExt     func()               // tears extMgr down on close
-	skillTool   *skills.Tool         // available skills, for /skill autocomplete (may be nil)
-	tasks       *tasktool.Controller // the built-in task board (nil when the session has no base workspace tools)
-	loreEntries []lore.Entry         // discovered lore, for the lore inspector pane (nil when lore off)
+	gate        *core.ConfirmGate      // nil in pure-yolo (no confirmation needed)
+	extMgr      *extensions.Manager    // this session's extension subprocesses
+	stopExt     func()                 // tears extMgr down on close
+	skillTool   *skills.Tool           // available skills, for /skill autocomplete (may be nil)
+	tasks       *tasktool.Controller   // the built-in task board (nil when the session has no base workspace tools)
+	loreEntries []lore.Entry           // discovered lore, for the lore inspector pane (nil when lore off)
+	note        *build.NoteRecord      // live author's-note record (nil for a coding session); note.set writes it, the per-turn tail reads it
+	user        *build.NoteRecord      // live user-persona description record (nil for a coding session); user.bind writes it, the per-turn tail reads it
+	loreFired   *build.LoreFiredRecord // the last turn's lore activation trace (which entries fired, why, what the budget dropped); refreshed on reloadLore
 	// actorCast + warmActors back the --play director's actor_spawn tool: the
 	// closed declared cast and the live-actor cache that survives registry
 	// rebuilds (so re-injecting actor_spawn on reload keeps the warm scene).
 	// Built once in buildSession when castSkinActive; nil otherwise.
-	actorCast    map[string]tools.CastMember
-	warmActors   *tools.WarmActors
-	args         build.Args  // this session's resolved args (for tool rebuilds on reload/MCP toggle)
-	cwd          string      // resolved workspace dir (for the extensions inventory scan)
-	trusted      atomic.Bool // workspace trust (project extensions/skills gating); mutated live by Trust/Untrust
-	hub          *wsHub
-	subscription bool // credential is an OAuth ("sub") token, not a paid api key
+	actorCast  map[string]tools.CastMember
+	warmActors *tools.WarmActors
+	// imageRegistry is the session's resolved image-generation backends, retained
+	// so backgrounds.generate can paint a scene (the model-facing generate_image
+	// tool holds the same registry). nil/empty when no backend is configured.
+	imageRegistry *imagegen.Registry
+	args          build.Args  // this session's resolved args (for tool rebuilds on reload/MCP toggle)
+	cwd           string      // resolved workspace dir (for the extensions inventory scan)
+	trusted       atomic.Bool // workspace trust (project extensions/skills gating); mutated live by Trust/Untrust
+	hub           *wsHub
+	subscription  bool // credential is an OAuth ("sub") token, not a paid api key
 
 	mu       sync.Mutex
 	provider string
@@ -76,6 +85,33 @@ type wsSession struct {
 	permReq        map[string]ctrlproto.PermissionRequest // details for the snapshot
 	askReq         map[string]ctrlproto.AskRequest        // details for the snapshot
 	askSeq         uint64
+	// tail is the current tail span's swipe state — the ONE switchable span.
+	// Seeded from the session file at materialize (a session may load with
+	// retract/select rows already written: pre-seeded greetings, or a retry from
+	// before this daemon started) and moved by swipe. A new turn, a tail edit, a
+	// delete, or a compaction commits or invalidates the alternatives, so those
+	// paths clear it. len(takes) < 2 means there is nothing to swipe. Guarded by mu.
+	tail tailVariants
+	// msgVars is the message-scoped variant state (Option C), by effective index —
+	// an older message edited into swipeable alternatives with its downstream
+	// shared. Independent of tail and NOT cleared by a new turn. Seeded from the
+	// file at materialize (counts only; a resumed position's takes hydrate lazily
+	// on the first swipe) and grown by an older-message edit. Guarded by mu.
+	msgVars map[int]*msgVarLive
+
+	// reviseBase re-anchors this session's in-memory transcript indices to the
+	// on-disk effective transcript. A resume trims the in-memory transcript to a
+	// recent window (TrimMessagesForResume) while the file keeps the full history,
+	// so in-memory index i is on-disk index i+reviseBase. Revise verbs mutate the
+	// live (trimmed) agent by the in-memory index but must PERSIST amends against
+	// the on-disk index — walkSession replays them over the full transcript on the
+	// next reload — so every amend/fork index crosses diskIndex first. reviseHead
+	// marks that the trim prepended the compaction summary as in-memory index 0
+	// (which maps to on-disk 0, not +base, and is not itself revisable). Both are
+	// zero/false for a session that was not trimmed, making diskIndex the identity
+	// and the common case unchanged. Set in buildSession, then immutable.
+	reviseBase int
+	reviseHead bool
 
 	paneMu    sync.Mutex           // guards extPanels (touched from ext driver goroutines)
 	extPanels map[string]*webPanel // surface id → open extension panel
@@ -102,8 +138,10 @@ type wsSession struct {
 // buildSession constructs the live agent for a session, wiring the confirm gate
 // (with a broadcasting web Confirmer), the Asker, this session's extension
 // manager + the full tool-call ladder, durable persistence, lore (via NewAgent),
-// and event fan-out. msgs is the resumed transcript (nil for a fresh session).
-func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.Message, persona string) (*wsSession, error) {
+// and event fan-out. msgs is the resumed transcript (nil for a fresh session);
+// reviseBase/reviseHead re-anchor its indices to the on-disk transcript when a
+// resume trimmed it (both zero for fresh/untrimmed — see wsSession.reviseBase).
+func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.Message, reviseBase int, reviseHead bool) (*wsSession, error) {
 	args := w.args
 	if sess.Meta.Provider != "" {
 		args.Provider = sess.Meta.Provider
@@ -111,13 +149,32 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	if sess.Meta.Model != "" {
 		args.Model = sess.Meta.Model
 	}
-	// A per-session persona (from CreateOpts.Persona) overrides the workspace
-	// default; Resolve turns the name into the active persona/charter. Empty
-	// keeps whatever the workspace launched with. Not persisted to session meta
-	// yet, so a fresh materialize after a daemon restart falls back to the
-	// default — durable per-session personas are a follow-up (needs core meta).
-	if persona != "" {
-		args.Persona = persona
+	// The per-session creation spec — persona plus the immersive (Stage) fields —
+	// is persisted in session meta (SetCreationSpec), so it overrides the
+	// workspace launch defaults on every build, including a fresh materialize
+	// after a daemon restart. Resolve turns these into the active persona,
+	// experience mode, card identity, and cast.
+	if sess.Meta.Persona != "" {
+		args.Persona = sess.Meta.Persona
+	}
+	if sess.Meta.Experience != "" {
+		args.Experience = sess.Meta.Experience
+	}
+	if sess.Meta.Card != "" {
+		args.Card = sess.Meta.Card
+	}
+	if len(sess.Meta.Cast) > 0 {
+		args.Cast = sess.Meta.Cast
+	}
+	if sess.Meta.Greeting != 0 {
+		args.Greeting = sess.Meta.Greeting
+	}
+	// A bound user-persona NAME is the card {{user}} macro, so it threads into the
+	// build like any other creation-spec field (Args.As feeds resolveCardUserName)
+	// and bakes into the cached prefix — re-applied on every materialize, including
+	// a restart. The DESCRIPTION rides the per-turn tail instead (seeded below).
+	if sess.Meta.UserName != "" {
+		args.As = sess.Meta.UserName
 	}
 
 	s := &wsSession{
@@ -138,6 +195,8 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		permReq:        map[string]ctrlproto.PermissionRequest{},
 		askReq:         map[string]ctrlproto.AskRequest{},
 		extPanels:      map[string]*webPanel{},
+		reviseBase:     reviseBase,
+		reviseHead:     reviseHead,
 	}
 
 	pol, warns := build.BuildPermissionPolicy(args)
@@ -206,6 +265,28 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	s.tasks = r.Tasks
 	s.args = args
 	s.cwd = r.CWD
+	// Retain the live author's-note record (immersive sessions only) and seed it
+	// from the persisted meta, so note.set updates the value the per-turn tail
+	// reads and the note survives a daemon restart. The tail closure holds the
+	// same pointer (via r.NewAgent above), so a later Set is visible next turn.
+	if nr := r.Note(); nr != nil {
+		nr.Set(s.sess.Meta.Note)
+		s.note = nr
+	}
+	// Retain the live user-persona description record the same way — seeded from
+	// meta so user.bind updates the tail value and it survives a restart. (The
+	// NAME half already threaded into args.As above, baked into the prefix.)
+	if ur := r.User(); ur != nil {
+		ur.Set(s.sess.Meta.UserDescription)
+		s.user = ur
+	}
+	// Retain the lore activation-trace record the per-turn tail writes, so the
+	// lore surface and /context can show what fired last turn (reloadLore swaps
+	// the provider and re-points this — see workspace_lore.go).
+	s.loreFired = r.LoreFired()
+	// Retain the image-backend registry so backgrounds.generate can paint a scene
+	// off the same backends the generate_image tool uses.
+	s.imageRegistry = r.ImageRegistry
 	s.trusted.Store(r.Trusted)
 	s.persona = r.Persona.Name
 	// Discover the authored lore for the read-only inspector pane (respecting the
@@ -331,6 +412,26 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 			ag.SeedCost(cum)
 			ag.SeedLastTurnUsage(last)
 		}
+	} else if sess.Meta.Experience != "" && len(r.CardGreetings) > 0 {
+		// A brand-new immersive session: seed the card's openings — first_mes plus
+		// every alternate_greeting — as message-0 swipe variants, the selected one
+		// active, so the character greets the user AND the user can swipe between
+		// openings. The greeting is DEFERRED (held in memory, not written), so a chat
+		// the user only previews stays a meta-only draft the prune gates discard; the
+		// first real turn flushes it (core.DeferGreetingVariants). The tail-span swipe
+		// state is set in memory here — the on-disk rows seedTail reads don't exist
+		// yet — and re-derived from meta on a reload before the first turn.
+		s.seedDeferredGreeting(sess, r.CardGreetings)
+	}
+
+	// Seed the tail-span swipe state for an immersive session, so alternatives —
+	// pre-seeded greeting variants (just written above) or a retry's takes written
+	// before this daemon started — are switchable. Gated to immersive: it re-reads
+	// the file, and swipe is a Stage interaction, so a coding-session build pays
+	// nothing. seedTail is a no-op when there are fewer than two takes.
+	if sess.Meta.Experience != "" {
+		s.seedTail()
+		s.seedMsgVars()
 	}
 
 	// Announce the session to extensions AFTER it exists, so a session-keyed
@@ -363,6 +464,11 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			PersonaResolver: build.ResolveDispatchPersona,
 			Personas:        build.DispatchablePersonaNames(),
 			Trusted:         w.Trusted, // live: a Trust/Untrust flip applies to the next spawn
+			// Gate + validate the `backend` param (dispatch to a foreign worker).
+			// Reads the external-workers knob live and checks the worker registry;
+			// nil-safe by absence would refuse every backend, so it is always
+			// wired here — the gate is inside the closure, not in whether it exists.
+			AllowBackend: allowWorkerBackend,
 			// Track each spawn so the coordinator gets the [auto-swarm update]
 			// recap when the batch finishes (the carrier twin of the legacy
 			// OnSpawned wiring; without it a coordinator never learns they're done).
@@ -476,19 +582,46 @@ func (s *wsSession) prompt(text string, images []ctrlproto.Image) error {
 // delivers provider.ImageBlock directly (it never speaks ctrlproto), and both
 // entries must claim the same turn slot, so they share one body.
 func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock) error {
+	turnCtx, err := s.beginTurn()
+	if err != nil {
+		return err
+	}
+	// A new user turn commits the tail span (its pre-seeded greeting or swipe
+	// choice is now history); the freshly generated response has no alternatives
+	// until it is retried, so drop the switchable set.
+	s.clearTail()
+	s.launchTurn(turnCtx, func(ctx context.Context) error {
+		// sink is nil: the agent's OnEvent (set in buildSession) fans every event
+		// out, so Continue() and any internal re-prompt stream too.
+		return s.agent.PromptWithPolicy(ctx, text, imgs, nil)
+	}, nil)
+	return nil
+}
+
+// beginTurn claims the single turn slot and returns the turn context, or ErrBusy
+// if a turn is already running. The context is derived from the workspace (not a
+// client connection), so a client disconnecting mid-turn does not abort the run
+// other clients are watching. The caller runs the turn with launchTurn.
+func (s *wsSession) beginTurn() (context.Context, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.turnCancel != nil {
-		s.mu.Unlock()
-		return ctrlproto.ErrBusy
+		return nil, ctrlproto.ErrBusy
 	}
 	turnCtx, cancel := context.WithCancel(s.ws.ctx)
 	s.turnCtx, s.turnCancel = turnCtx, cancel
-	s.mu.Unlock()
+	return turnCtx, nil
+}
 
+// launchTurn runs the turn goroutine shared by prompt and retry: it invokes gen
+// (a user prompt or a regenerate), fans out error/done, settles the turn, runs
+// afterTurn once the transcript is sealed (retry re-derives its tail variants
+// there), re-broadcasts the authoritative snapshot, and handles titling,
+// post-turn auto-compact, and the queued-message restart. The caller must have
+// claimed the slot with beginTurn.
+func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context) error, afterTurn func()) {
 	go func() {
-		// sink is nil: the agent's OnEvent (set in buildSession) fans every event
-		// out, so Continue() and any internal re-prompt stream too.
-		err := s.agent.PromptWithPolicy(turnCtx, text, imgs, nil)
+		err := gen(turnCtx)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			s.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "error", Error: err.Error()}))
 			// The banner is transient; persist the failure to the session's
@@ -508,6 +641,9 @@ func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock) error 
 			s.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "done"}))
 		}
 		next, restart := s.endTurn(turnCtx, err)
+		if afterTurn != nil {
+			afterTurn()
+		}
 		// Snapshot-on-done: the transcript now contains the sealed final step,
 		// so re-broadcast the authoritative snapshot the way compact/clear do.
 		// This converges any subscriber that attached mid-step — its initial
@@ -547,7 +683,88 @@ func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock) error 
 			}
 		}
 	}()
+}
+
+// retry regenerates the last response, keeping the current one as a swipeable
+// take (SillyTavern's regenerate). It retracts the tail span — persists a retract
+// amend, sets the current response aside, and truncates the transcript back to
+// the last user turn — then runs a fresh generation against that prefix. When the
+// turn seals, the tail's variants (the kept response plus the new one) are
+// re-derived from disk, so both are switchable via turn.swipe. Like prompt it
+// returns once the turn is accepted; the regeneration streams to subscribers.
+// Epoch/busy guarding matches edit/delete/swipe.
+func (s *wsSession) retry(epoch uint64) error {
+	if err := s.reviseGuard(epoch); err != nil {
+		return err
+	}
+	idx := lastResponseStart(s.agent.Messages())
+	if idx <= 0 || idx >= len(s.agent.Messages()) {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "nothing to retry")
+	}
+	turnCtx, err := s.beginTurn()
+	if err != nil {
+		return err
+	}
+	// Retract the current response: persist the amend (so a reload reconstructs
+	// the kept take), set it aside, and truncate to the last user turn. clearTail
+	// drops the stale in-memory span; seedTail rebuilds it from disk once the new
+	// take is generated and persisted. The amend is written against the on-disk
+	// index (diskIndex) so a reload retracts the right span; the live agent is
+	// truncated by the in-memory index.
+	if disk, ok := s.diskIndex(idx); ok {
+		_ = s.sess.AppendAmend(core.AmendRetract, disk, nil, "retry")
+	}
+	s.agent.TruncateTo(idx)
+	s.clearTail()
+	s.launchTurn(turnCtx, func(ctx context.Context) error {
+		return s.agent.Continue(ctx, nil)
+	}, s.seedTail)
 	return nil
+}
+
+// lastResponseStart is the index where the last response span begins: just after
+// the last user message. It is the retract point for a regenerate. Returns 0 when
+// there is no user message (a greeting-only transcript is not a retry target).
+func lastResponseStart(msgs []provider.Message) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == provider.RoleUser {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// reviseBaseFor computes the re-anchoring offset for a resumed transcript that a
+// window trim shortened. full is the untrimmed effective transcript OpenSession
+// reconstructed; trimmed is what TrimMessagesForResume kept in memory. base is the
+// count of leading effective messages the trim dropped — add it to an in-memory
+// index to get the on-disk one. head is true when the trim prepended the
+// compaction summary as trimmed[0]: that row maps to on-disk index 0 (not base)
+// and is not a revisable message. base 0 (an untrimmed session) makes both the
+// zero value, so diskIndex is the identity and nothing downstream shifts.
+func reviseBaseFor(full, trimmed []provider.Message) (base int, head bool) {
+	base = len(full) - len(trimmed)
+	if base <= 0 {
+		return 0, false
+	}
+	head = len(trimmed) > 0 && trimmed[0].Meta["compaction"] == "true"
+	return base, head
+}
+
+// diskIndex maps an in-memory transcript index to the on-disk effective-transcript
+// index an amend must be persisted against. A resume trims the in-memory transcript
+// to a recent window while the file keeps the full history, so a revise verb that
+// mutates the live agent at in-memory index i must record its amend at i+reviseBase
+// — otherwise walkSession replays it over the full transcript on the next reload and
+// hits the wrong message (silent corruption of exactly the long sessions a trim
+// applies to). ok is false for the resume-window compaction summary at index 0,
+// which is not a revisable message. Identity when reviseBase is 0, so a session that
+// was never trimmed is unaffected.
+func (s *wsSession) diskIndex(i int) (int, bool) {
+	if s.reviseHead && i == 0 {
+		return 0, false
+	}
+	return i + s.reviseBase, true
 }
 
 // endTurn atomically closes out a finished turn: it releases the busy slot and
@@ -654,8 +871,8 @@ func (s *wsSession) rebuildTools(reason string) {
 // filter or badge it, a plain one shows the text.
 //
 // One rebuild is expected at startup and carries no signal: an extension
-// asserts its tool/context policy once the session cwd is known (e.g.
-// terva-git-worktree withdrawing its tools outside a repo), which fires a
+// asserts its tool/context policy once the session cwd is known (an
+// extension withdrawing its tools where they can't work), which fires a
 // "tool-withdrawal" / "extension-context" rebuild before the first turn. With
 // no turn yet there is no prompt cache to invalidate, so a banner there just
 // confuses the user about a non-event — it goes to the host diagnostic log
@@ -721,7 +938,10 @@ func (s *wsSession) compact(ctx context.Context) error {
 		}
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "compact: %v", err)
 	}
-	// Replace every client's transcript with the compacted one.
+	// Replace every client's transcript with the compacted one. Compaction
+	// snapshots the amended transcript, so the tail's swipe alternatives are now
+	// folded away — drop the switchable set (they remain on disk for audit).
+	s.clearTail()
 	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	s.broadcast(ctrlproto.NoticeEvent("info", "", i18n.T("Compacted the conversation.")))
 	// A compacted session has outgrown its early title; refresh a
@@ -746,12 +966,461 @@ func (s *wsSession) clear() error {
 		return ctrlproto.ErrBusy
 	}
 	s.agent.SetMessages(nil)
+	s.clearTail()
 	// A clear reuses the compaction row as a floor marker. No summarizer ran,
 	// so it cost nothing — zero usage, not the previous compaction's.
 	_ = s.sess.AppendCompaction(nil, core.CompactResult{})
 	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	s.broadcast(ctrlproto.NoticeEvent("info", "", i18n.T("Cleared the conversation.")))
 	return nil
+}
+
+// reviseGuard is the shared precondition for an in-place transcript revision: no
+// turn may be running (a concurrent append would race the index), and the
+// client's epoch must match the live transcript's — a mismatch means the
+// transcript shifted under the client (another edit, a turn, a compaction) so its
+// index no longer means what it thought. The busy gate also makes the direct
+// durable AppendAmend safe, exactly as clear/compact rely on it.
+func (s *wsSession) reviseGuard(epoch uint64) error {
+	s.mu.Lock()
+	busy := s.turnCancel != nil
+	s.mu.Unlock()
+	if busy {
+		return ctrlproto.ErrBusy
+	}
+	if s.agent.TranscriptEpoch() != epoch {
+		return ctrlproto.Errorf(ctrlproto.CodeConflict, "transcript changed since epoch %d; reload and retry", epoch)
+	}
+	return nil
+}
+
+// editMessage replaces the message at index with a text message of the same role
+// (the Stage surface's edit), persists the change as a replace amend, and
+// broadcasts a fresh snapshot so every client converges. The role and any
+// structural blocks are preserved (see reviseMessageText); only the prose changes.
+func (s *wsSession) editMessage(epoch uint64, index int, text string) error {
+	if err := s.reviseGuard(epoch); err != nil {
+		return err
+	}
+	msgs := s.agent.Messages()
+	if index < 0 || index >= len(msgs) {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "message index %d out of range", index)
+	}
+	if _, ok := s.diskIndex(index); !ok {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the resume-window summary at index %d cannot be edited", index)
+	}
+	edited := reviseMessageText(msgs[index], text)
+	// An edit within the current response span (the tail) rides the tail suffix
+	// machinery; an edit to an OLDER message becomes a message-scoped variant (the
+	// original kept, the downstream shared). Both keep the original swipeable.
+	if start := lastResponseStart(msgs); index >= start {
+		return s.editTailAsVariant(msgs, start, index, edited)
+	}
+	return s.editMessageAsVariant(msgs, index, edited)
+}
+
+// editMessageAsVariant records an edit to an older message (before the current
+// response span) as a message-scoped variant: the transcript's message at index is
+// replaced in place (downstream untouched), the prior version is retained as a
+// swipeable take, and the in-memory msgVars is updated so the snapshot marks the
+// position and a later swipe can switch it. The tail is left alone — an older edit
+// does not touch the last response.
+func (s *wsSession) editMessageAsVariant(msgs []provider.Message, index int, edited provider.Message) error {
+	prior := msgs[index]
+	if !s.agent.ReplaceMessage(index, edited) {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "message index %d out of range", index)
+	}
+	if disk, ok := s.diskIndex(index); ok {
+		_ = s.sess.AppendReplaceVariant(disk, edited, "edit") // keep_prior: retain the original as a take
+	}
+	s.mu.Lock()
+	if s.msgVars == nil {
+		s.msgVars = map[int]*msgVarLive{}
+	}
+	switch mv := s.msgVars[index]; {
+	case mv == nil:
+		// Brand-new position: the original + this edit are the two takes, edit active.
+		s.msgVars[index] = &msgVarLive{takes: []provider.Message{prior, edited}, count: 2, active: 1}
+	case mv.takes == nil:
+		// Resumed count, not yet hydrated: the file gains a take. Bump the count and
+		// active; the full list stays lazy (a swipe hydrates it from disk).
+		mv.count++
+		mv.active = mv.count - 1
+	default:
+		mv.takes = append(mv.takes, edited)
+		mv.count = len(mv.takes)
+		mv.active = mv.count - 1
+	}
+	s.mu.Unlock()
+	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
+	return nil
+}
+
+// editTailAsVariant records an edit to the current response span (the tail, from
+// lastResponseStart to the end) as a swipeable alternative: the current span
+// becomes a kept take and the edited span becomes the new active take, reusing the
+// retract machinery retry already uses — so the original stays reachable with the
+// swipe arrows and the existing tail counter lights up. Because the span from the
+// last user turn is the final assistant message(s), never the tool_use/tool_result
+// pairs before it, an edit here leaves the actor_spawn machinery and its 🎭
+// attribution untouched. Amend-persist errors are best-effort, matching retry.
+func (s *wsSession) editTailAsVariant(msgs []provider.Message, start, index int, edited provider.Message) error {
+	newSpan := append([]provider.Message(nil), msgs[start:]...)
+	newSpan[index-start] = edited
+
+	if disk, ok := s.diskIndex(start); ok {
+		_ = s.sess.AppendAmend(core.AmendRetract, disk, nil, "edit") // set the current span aside as a take
+	}
+	for _, m := range newSpan {
+		_ = s.sess.AppendMessage(m) // the edited span becomes the new active take
+	}
+	s.agent.SetMessages(append(append([]provider.Message(nil), msgs[:start]...), newSpan...))
+	s.seedTail() // reconstruct [current, edited] (edited active) from disk
+	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
+	return nil
+}
+
+// reviseMessageText rebuilds a message with its prose replaced by text, PRESERVING
+// the structural blocks that carry meaning beyond prose: tool calls and their
+// results, and any inline images, kept in their original order. This is what keeps
+// an edit to a cast turn's narration from stripping the actor_spawn machinery the
+// 🎭 attribution rides on (Details.actor lives on the tool_result, a block this
+// edit never touches). Reasoning blocks are dropped — they described the original
+// text and no longer correspond to the edit. If the message had no prose block, the
+// new text leads; otherwise it replaces the first text block and later text blocks
+// are folded into that one.
+func reviseMessageText(orig provider.Message, text string) provider.Message {
+	var rebuilt []provider.Content
+	placed := false
+	for _, c := range orig.Content {
+		switch c.(type) {
+		case provider.TextBlock:
+			if !placed {
+				rebuilt = append(rebuilt, provider.TextBlock{Text: text})
+				placed = true
+			}
+			// drop later text blocks — consolidated into the first
+		case provider.ReasoningBlock:
+			// drop — stale relative to the edited prose
+		default:
+			rebuilt = append(rebuilt, c) // keep tool_call / tool_result / image, in order
+		}
+	}
+	if !placed {
+		rebuilt = append([]provider.Content{provider.TextBlock{Text: text}}, rebuilt...)
+	}
+	return provider.Message{Role: orig.Role, Content: rebuilt}
+}
+
+// deleteMessage removes the message at index, persists a delete amend, and
+// broadcasts a fresh snapshot.
+func (s *wsSession) deleteMessage(epoch uint64, index int) error {
+	if err := s.reviseGuard(epoch); err != nil {
+		return err
+	}
+	disk, ok := s.diskIndex(index)
+	if !ok {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the resume-window summary at index %d cannot be deleted", index)
+	}
+	if !s.agent.DeleteMessage(index) {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "message index %d out of range", index)
+	}
+	_ = s.sess.AppendAmend(core.AmendDelete, disk, nil, "delete")
+	s.clearTail()
+	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
+	return nil
+}
+
+// tailVariants holds the current tail span's swipe state in memory — the span's
+// start index in the effective transcript, its alternative takes (creation
+// order), and which take is currently live. The takes are materialized here for
+// the tail span only, mirroring the session format's derived-variant model (older
+// spans keep their variants on disk but drop out of memory). len(takes) < 2 means
+// nothing to swipe.
+type tailVariants struct {
+	start  int
+	takes  [][]provider.Message
+	active int
+}
+
+// msgVarLive is one position's message-scoped variant state in memory. takes is
+// populated for a position edited in this daemon; for a position seeded from the
+// file on resume it is nil (only count/active are known) until a swipe hydrates it
+// via core.SessionMsgVariant. count is authoritative (== len(takes) once hydrated).
+type msgVarLive struct {
+	takes  []provider.Message
+	count  int
+	active int
+}
+
+// swipe switches the tail span's active take to variant — the Stage surface's
+// swipe-back. It rebuilds the transcript as the unchanged prefix plus the chosen
+// take, persists the choice as a select amend (reconstructed on reload, no bytes
+// duplicated), and broadcasts a fresh snapshot. Epoch/busy guarding matches
+// edit/delete; a swipe to the current variant is an idempotent no-op.
+func (s *wsSession) swipe(epoch uint64, variant int) error {
+	if err := s.reviseGuard(epoch); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	t := s.tail
+	s.mu.Unlock()
+	if len(t.takes) < 2 {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no alternatives to swipe")
+	}
+	if variant < 0 || variant >= len(t.takes) {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "variant %d out of range", variant)
+	}
+	if variant == t.active {
+		return nil // already live — nothing to write
+	}
+	msgs := s.agent.Messages()
+	if t.start > len(msgs) {
+		// The transcript shrank under the tracked span (should not happen — the
+		// mutators that could clear it, but be safe rather than index-panic).
+		return ctrlproto.Errorf(ctrlproto.CodeConflict, "tail changed; reload and retry")
+	}
+	newMsgs := append(append([]provider.Message(nil), msgs[:t.start]...), t.takes[variant]...)
+	s.agent.SetMessages(newMsgs)
+	if s.sess.HasPendingGreeting() {
+		// A pre-first-turn greeting swipe stays a draft: update the deferred active
+		// in memory, no disk write, so previewing openings does not promote the
+		// session. The flush at the first turn persists this chosen active.
+		s.sess.SetPendingGreetingActive(variant)
+	} else if disk, ok := s.diskIndex(t.start); ok {
+		_ = s.sess.AppendSelect(disk, variant, "swipe")
+	}
+	s.mu.Lock()
+	s.tail.active = variant
+	s.mu.Unlock()
+	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
+	return nil
+}
+
+// swipeMessage switches a message-scoped variant's active take at index — the swipe
+// for an edited older message. It swaps that one message in place (the downstream
+// is untouched), persists an mselect amend, and lazily hydrates the take list from
+// disk the first time a resumed position is swiped (seedMsgVars kept only counts).
+func (s *wsSession) swipeMessage(epoch uint64, index, variant int) error {
+	if err := s.reviseGuard(epoch); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	mv := s.msgVars[index]
+	s.mu.Unlock()
+	if mv == nil || mv.count < 2 {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no alternatives to swipe at %d", index)
+	}
+	if variant < 0 || variant >= mv.count {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "variant %d out of range", variant)
+	}
+	if variant == mv.active {
+		return nil // already live — nothing to write
+	}
+	disk, ok := s.diskIndex(index)
+	if !ok {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the resume-window summary at index %d has no variants", index)
+	}
+	// Lazily hydrate a resumed position's full take list on the first swipe. The
+	// take list lives on disk at the on-disk index, so hydrate + persist use it.
+	takes := mv.takes
+	if takes == nil {
+		hydrated, ok, err := core.SessionMsgVariant(s.sess.Path, disk)
+		if err != nil || !ok || len(hydrated.Takes) != mv.count {
+			return ctrlproto.Errorf(ctrlproto.CodeConflict, "could not load variants at %d; reload and retry", index)
+		}
+		takes = hydrated.Takes
+	}
+	if !s.agent.ReplaceMessage(index, takes[variant]) {
+		return ctrlproto.Errorf(ctrlproto.CodeConflict, "message %d changed; reload and retry", index)
+	}
+	_ = s.sess.AppendMsgSelect(disk, variant, "swipe")
+	s.mu.Lock()
+	mv.takes = takes // cache the now-hydrated list
+	mv.active = variant
+	s.mu.Unlock()
+	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
+	return nil
+}
+
+// pruneVariants collapses the message-scoped variant at index to its active take
+// and closes the position (prune-to-latest). The active take is already live in the
+// transcript, so this only seals the position on disk and drops the in-memory
+// marker — no transcript change, no epoch bump; the fresh snapshot removes the
+// swipe control.
+func (s *wsSession) pruneVariants(epoch uint64, index int) error {
+	if err := s.reviseGuard(epoch); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	mv := s.msgVars[index]
+	s.mu.Unlock()
+	if mv == nil || mv.count < 2 {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no variants to prune at %d", index)
+	}
+	disk, ok := s.diskIndex(index)
+	if !ok {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the resume-window summary at index %d has no variants", index)
+	}
+	_ = s.sess.AppendSeal(disk, mv.active, "prune")
+	s.mu.Lock()
+	delete(s.msgVars, index)
+	s.mu.Unlock()
+	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
+	return nil
+}
+
+// dropVariant removes one take from the message-scoped variant at index, keeping
+// the rest swipeable; closes the position at one take. It hydrates the take list if
+// needed (a resumed position) to compute the new active take, mirrors the fold's
+// active-adjustment, persists a drop-take amend, and swaps the live message.
+func (s *wsSession) dropVariant(epoch uint64, index, variant int) error {
+	if err := s.reviseGuard(epoch); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	mv := s.msgVars[index]
+	s.mu.Unlock()
+	if mv == nil || mv.count < 2 {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no variants to drop at %d", index)
+	}
+	if variant < 0 || variant >= mv.count {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "variant %d out of range", variant)
+	}
+	disk, ok := s.diskIndex(index)
+	if !ok {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the resume-window summary at index %d has no variants", index)
+	}
+	takes := mv.takes
+	if takes == nil {
+		hydrated, ok, err := core.SessionMsgVariant(s.sess.Path, disk)
+		if err != nil || !ok || len(hydrated.Takes) != mv.count {
+			return ctrlproto.Errorf(ctrlproto.CodeConflict, "could not load variants at %d; reload and retry", index)
+		}
+		takes = hydrated.Takes
+	}
+	active := mv.active
+	newTakes := append(append([]provider.Message(nil), takes[:variant]...), takes[variant+1:]...)
+	switch {
+	case variant < active:
+		active--
+	case variant == active && active >= len(newTakes):
+		active = len(newTakes) - 1
+	}
+	_ = s.sess.AppendDropTake(disk, variant, "drop")
+	if len(newTakes) <= 1 {
+		s.mu.Lock()
+		delete(s.msgVars, index)
+		s.mu.Unlock()
+		s.agent.ReplaceMessage(index, newTakes[0])
+	} else {
+		s.mu.Lock()
+		mv.takes, mv.count, mv.active = newTakes, len(newTakes), active
+		s.mu.Unlock()
+		s.agent.ReplaceMessage(index, newTakes[active])
+	}
+	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
+	return nil
+}
+
+// seedDeferredGreeting seeds a card's openings as a DEFERRED greeting (in memory,
+// not on disk — see core.DeferGreetingVariants) and sets the tail-span swipe
+// state directly, so the character greets the user and the openings are swipeable
+// while the session stays a meta-only draft until the first real turn. Shared by
+// buildSession and the pre-first-turn user-persona rename (UserBind), which
+// re-derives the greeting text with the new {{user}} before calling this.
+func (s *wsSession) seedDeferredGreeting(sess *core.Session, greetings []string) {
+	greetingMsgs := make([]provider.Message, 0, len(greetings))
+	for _, g := range greetings {
+		greetingMsgs = append(greetingMsgs, provider.Message{
+			Role:    provider.RoleAssistant,
+			Content: []provider.Content{provider.TextBlock{Text: g}},
+			Meta:    map[string]string{"source": "card:greeting"},
+		})
+	}
+	activeMsg, _ := sess.DeferGreetingVariants(greetingMsgs, sess.Meta.Greeting)
+	s.agent.SetMessages([]provider.Message{activeMsg})
+	// Set the tail-span swipe state directly — one single-message take per opening,
+	// the selected one active — mirroring exactly what seedTail would read off disk
+	// for a persisted greeting, so snapshot() renders the swipe arrows identically.
+	if len(greetingMsgs) > 1 {
+		takes := make([][]provider.Message, len(greetingMsgs))
+		for i := range greetingMsgs {
+			takes[i] = []provider.Message{greetingMsgs[i]}
+		}
+		active := sess.Meta.Greeting
+		if active < 0 || active >= len(takes) {
+			active = 0
+		}
+		s.mu.Lock()
+		s.tail = tailVariants{start: 0, takes: takes, active: active}
+		s.mu.Unlock()
+	}
+}
+
+// seedTail captures the session file's tail-span swipe state into memory at
+// materialize, so swipes written before this daemon started (a pre-restart
+// retry, or pre-seeded greetings) are switchable again. It is defensive about
+// OpenSession's post-walk tool-pair repair: it adopts the takes only when the
+// active one lines up with the live transcript's tail by length, so a repair that
+// shifted indices yields no-swipe rather than a wrong swipe.
+func (s *wsSession) seedTail() {
+	start, takes, active, err := core.SessionTail(s.sess.Path)
+	if err != nil || start < 0 || len(takes) < 2 || active < 0 || active >= len(takes) {
+		return
+	}
+	// SessionTail reports on-disk indices; the live agent may be a resume-trimmed
+	// window of the transcript, so re-anchor to in-memory space. A span that begins
+	// before the window (start < 0 after the shift) is not swipeable here.
+	start -= s.reviseBase
+	if start < 0 {
+		return
+	}
+	msgs := s.agent.Messages()
+	if start > len(msgs) || len(takes[active]) != len(msgs)-start {
+		return // repair moved the transcript out from under the takes
+	}
+	s.mu.Lock()
+	s.tail = tailVariants{start: start, takes: takes, active: active}
+	s.mu.Unlock()
+}
+
+// seedMsgVars captures the session file's message-scoped variant positions into
+// memory at materialize — counts and active only, the full take lists staying lazy
+// (a swipe hydrates one from disk via core.SessionMsgVariant) — so a session that
+// reloads with keep_prior edits already written draws its per-position swipe
+// markers. The tail span is left to seedTail. A no-op when there are none.
+func (s *wsSession) seedMsgVars() {
+	vars, err := core.SessionVariants(s.sess.Path)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, v := range vars {
+		if v.Span {
+			continue // the tail suffix span is seedTail's job
+		}
+		// SessionVariants reports on-disk indices; re-anchor to the live agent's
+		// (possibly resume-trimmed) space. A position before the window is dropped —
+		// its message is not in the in-memory transcript to swipe.
+		idx := v.Index - s.reviseBase
+		if idx < 0 {
+			continue
+		}
+		if s.msgVars == nil {
+			s.msgVars = map[int]*msgVarLive{}
+		}
+		s.msgVars[idx] = &msgVarLive{count: v.Count, active: v.Active} // takes nil = hydrate on swipe
+	}
+}
+
+// clearTail drops the tail-span swipe state — a new turn, a tail edit, a delete, or
+// a compaction commits or invalidates the alternatives.
+func (s *wsSession) clearTail() {
+	s.mu.Lock()
+	s.tail = tailVariants{}
+	s.mu.Unlock()
 }
 
 // setTrusted brings this session's project content in line with a new Workspace
@@ -792,6 +1461,15 @@ func (s *wsSession) settleTitle(ctx context.Context) {
 	}
 	fallback := titleFromFirstText(first)
 	s.applyTitle(fallback)
+
+	// Immersive (Stage) sessions keep the instant first-line title and skip the
+	// LLM refinement: a generated title on roleplay reads as "User greets the elf
+	// innkeeper…", and it spends unasked tokens on a chat/play session. Titling by
+	// character name (+ counter) rides the Phase-2 library, which resolves a card's
+	// name; until then the opening line is a saner default than a narrated summary.
+	if s.sess != nil && s.sess.Meta.Experience != "" {
+		return
+	}
 
 	ok, cl, model := s.ws.titleGen(s)
 	if !ok || cl == nil {
@@ -995,7 +1673,23 @@ func (s *wsSession) snapshot() ctrlproto.Snapshot {
 	for _, r := range s.askReq {
 		asks = append(asks, r)
 	}
+	var tail *ctrlproto.TailInfo
+	var marks []ctrlproto.VariantMark
+	if len(s.tail.takes) >= 2 {
+		tail = &ctrlproto.TailInfo{
+			SpanStart: s.tail.start,
+			Variants:  len(s.tail.takes),
+			Active:    s.tail.active,
+		}
+		marks = append(marks, ctrlproto.VariantMark{Index: s.tail.start, Variants: len(s.tail.takes), Active: s.tail.active, Span: true})
+	}
+	for idx, mv := range s.msgVars {
+		if mv.count >= 2 {
+			marks = append(marks, ctrlproto.VariantMark{Index: idx, Variants: mv.count, Active: mv.active})
+		}
+	}
 	s.mu.Unlock()
+	sort.Slice(marks, func(i, j int) bool { return marks[i].Index < marks[j].Index })
 	return ctrlproto.Snapshot{
 		Session:  s.info(),
 		Messages: wm,
@@ -1003,13 +1697,15 @@ func (s *wsSession) snapshot() ctrlproto.Snapshot {
 		// thing (free in-process — the slices are shared); the serialization edge cuts
 		// it down per client contract, and stamps Base. Total and Epoch are true of the
 		// transcript either way, which is what lets a windowed client place what it got.
-		Epoch:       s.agent.TranscriptEpoch(),
-		Total:       len(wm),
-		Busy:        busy,
-		Permissions: perms,
-		Asks:        asks,
-		Queued:      s.agent.PendingQueuedMessages(),
-		Skills:      s.skillList(),
+		Epoch:        s.agent.TranscriptEpoch(),
+		Total:        len(wm),
+		Busy:         busy,
+		Permissions:  perms,
+		Asks:         asks,
+		Queued:       s.agent.PendingQueuedMessages(),
+		Skills:       s.skillList(),
+		Tail:         tail,
+		VariantMarks: marks,
 	}
 }
 
@@ -1029,20 +1725,33 @@ func (s *wsSession) skillList() []ctrlproto.SkillInfo {
 func (s *wsSession) info() ctrlproto.SessionInfo {
 	s.mu.Lock()
 	prov, model, title, persona, sub := s.provider, s.model, s.title, s.persona, s.subscription
+	busy := s.turnCancel != nil
 	s.mu.Unlock()
 	info := ctrlproto.SessionInfo{
-		ID:           s.id,
-		Title:        title,
-		Provider:     prov,
-		Model:        model,
-		Persona:      persona,
-		Path:         s.sess.Path,
-		Created:      ctrlTimeString(s.sess.Meta.Started),
-		Trusted:      s.trusted.Load(),
-		Subscription: sub,
+		ID:              s.id,
+		Title:           title,
+		Provider:        prov,
+		Model:           model,
+		Persona:         persona,
+		Experience:      s.sess.Meta.Experience,
+		Background:      s.sess.Meta.Background,
+		Note:            s.sess.Meta.Note,
+		UserName:        s.sess.Meta.UserName,
+		UserDescription: s.sess.Meta.UserDescription,
+		Card:            s.sess.Meta.Card,
+		Cast:            s.sess.Meta.Cast,
+		Path:            s.sess.Path,
+		Created:         ctrlTimeString(s.sess.Meta.Started),
+		Trusted:         s.trusted.Load(),
+		Subscription:    sub,
+		// info() only ever describes a materialized session, so Live is always
+		// true here; the cold rows are built in Workspace.Sessions without it.
+		Live: true,
+		Busy: busy,
 	}
 	if s.agent != nil {
 		info.Messages = len(s.agent.Messages())
+		info.SupportsContinue = s.agent.ContinuesAssistantPrefill()
 		info.Usage = toCtrlUsage(s.agent.Cost())
 		last := s.agent.LastTurnUsage()
 		info.ContextTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
@@ -1063,6 +1772,15 @@ func (s *wsSession) personaName() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.persona
+}
+
+// busyNow reports whether a turn is in flight (a running turn holds
+// turnCancel). Used by Workspace.Sessions to set SessionInfo.Busy on the live
+// rows without building a full snapshot.
+func (s *wsSession) busyNow() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnCancel != nil
 }
 
 func (s *wsSession) setModel(prov, model string) {

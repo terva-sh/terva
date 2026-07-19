@@ -16,6 +16,7 @@ import (
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/agent/worker"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/relaunch"
@@ -155,19 +156,28 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 		sandbox:  r.Sandbox, // shared across sessions; carries the initial jail lock
 		diag:     func(m string) { fmt.Fprintln(os.Stderr, m) },
 	}
+	// Sweep leaked empty sessions at boot: a Stage chat opened for preview defers
+	// its greeting (no message rows), so a daemon hard-killed before that draft's
+	// Close can leave a meta-only file behind. PruneEmptySessions removes any file
+	// with no message row before any resume, so drafts never accrue. (The TUI/CLI
+	// path already prunes; the web daemon did not until here.)
+	core.PruneEmptySessions(w.root, w.cwd)
 	w.personaName = r.Persona.Name
 	// Workspace-global swarm for the tasks pane. Construction does no I/O;
 	// Reload pulls previously-spawned agents off disk (shown as detached, like
 	// the TUI). Close drains running children gracefully (StopAllAndWait) so
 	// their durable state survives for the next launch's Reload/Resume.
 	swarmCfg := swarm.Config{Root: swarm.DefaultRoot(config.TervaHome()), RepoRoot: r.CWD}
-	// --swarm-worktrees: lease each sub-agent its own git worktree via the
-	// terva-git-worktree extension. The hook resolves a live session's manager
-	// lazily (the swarm is workspace-global, extensions are per-session), so it
-	// works once a session with the extension exists. Off => shared tree.
+	// --swarm-worktrees: lease each sub-agent its own git worktree from the
+	// built-in worktree engine (carrier_swarm_worktree.go calls it directly —
+	// no extension, no live-session requirement). Off => shared tree.
 	if uc, _ := config.LoadConfig(); build.ResolveSwarmWorktrees(args.SwarmWorktrees, uc.SwarmWorktrees) {
 		swarmCfg.AcquireWorktree = w.acquireSwarmWorktree
 	}
+	// Route each agent to its runner by the opaque Backend label the swarm
+	// persists but never interprets: no label -> the native `terva --swarm-agent`
+	// child; a label -> a foreign worker driven behind the same supervisor seams.
+	swarmCfg.NewRunner = w.newRunner
 	w.swarm = swarm.New(swarmCfg)
 	_, _ = w.swarm.Reload()
 	go w.pollTasks()
@@ -184,6 +194,89 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 	}
 
 	return w, nil
+}
+
+// newRunner is the swarm's Config.NewRunner: it produces the runner for one
+// agent by the opaque Backend label. No label is the historical case and stays
+// the native `terva --swarm-agent` child. A label routes to a foreign worker,
+// composed and scrubbed and supervised by worker.Runner.
+//
+// Note this is UNCONDITIONAL on the external-workers config gate: the gate lives
+// at the spawn tool (whether a NEW foreign spawn is allowed), not here. An agent
+// that already carries a backend — revived from meta.json after a restart — must
+// come back on its backend whatever the current gate says, or disabling the knob
+// would strand a worker mid-task rather than merely stopping new ones.
+func (w *Workspace) newRunner(a *swarm.Agent) swarm.Runner {
+	if a.Backend == "" {
+		return swarm.NewExecRunner(a)
+	}
+	b, err := worker.Lookup(a.Backend)
+	if err != nil {
+		// An unknown backend is the host's error to raise, and raising it as a
+		// failed agent (rather than a fallback to native, which would run
+		// plausible work under the wrong identity) is the whole point of Lookup
+		// erroring instead of defaulting.
+		return failedRunner{err}
+	}
+	resolved, err := w.resolveForWorker(a)
+	if err != nil {
+		return failedRunner{fmt.Errorf("worker %s: resolve briefing: %w", a.Backend, err)}
+	}
+	return worker.NewRunner(a, b, resolved, w.workerApprover(a))
+}
+
+// workerApprover is the orchestrator's approval seam for a worker: it routes the
+// worker's tool-approval requests to the DISPATCHING session's human card (the
+// same place that session's own tool approvals land). Nil when the dispatching
+// session is gone — a worker revived after a restart, or a spawn with no session
+// stamp — in which case the runner denies the worker's asks cleanly rather than
+// hanging on a human who isn't there.
+func (w *Workspace) workerApprover(a *swarm.Agent) core.Confirmer {
+	s := w.existing(a.SessionID)
+	if s == nil {
+		return nil
+	}
+	return &workerConfirmer{s: s, ctx: w.ctx, agentID: a.ID}
+}
+
+// resolveForWorker assembles terva's own resolved state for a worker's briefing.
+// It is the SAME build.Resolve the host uses for a session — the one-assembler
+// rule — parameterised by the WORKER's identity: its persona (which may differ
+// from the dispatcher's), its model, its provider.
+//
+// It resolves against the dispatcher's cwd, NOT the worker's lease: that keeps
+// the trust verdict and project config correct (they were resolved for the repo
+// the user trusted, not for a fresh worktree path the trust store has never
+// seen), and the composer re-roots the discovery pointers into the lease itself
+// (worker.rerootIntoWorkspace). Credentials are NOT required — a foreign worker
+// authenticates itself, and terva deliberately hands it none — so a credential-
+// less resolve is expected and its swallowed error is ignored by the composer.
+func (w *Workspace) resolveForWorker(a *swarm.Agent) (build.Resolved, error) {
+	next := w.args
+	next.Persona = a.Persona
+	next.Model = a.Model
+	next.Provider = a.Provider
+	return build.Resolve(next, false)
+}
+
+// failedRunner reports a fixed error the moment the swarm runs it. The
+// Config.NewRunner seam returns a Runner and no error, so a backend that cannot
+// be looked up or a briefing that cannot be resolved has nowhere to fail at
+// construction; this carries the failure into Run, where the swarm turns it into
+// a StatusFailed agent with the message on its tile — visible and diagnosable,
+// which an error swallowed at spawn would not be.
+type failedRunner struct{ err error }
+
+func (r failedRunner) Run(context.Context, swarm.Sink) error { return r.err }
+
+// allowWorkerBackend is the swarm_spawn `backend` gate, injected into the tool
+// (the tools package cannot import the worker registry without cycling through
+// build). It delegates to worker.AllowSpawn — the single gate shared with the
+// board's tasks-surface spawn and the TUI's /swarm command, so the policy can't
+// drift between initiators — which reads the external-workers knob LIVE and
+// validates the name against the registered backends.
+func allowWorkerBackend(name string) error {
+	return worker.AllowSpawn(name)
 }
 
 // SetDiag redirects host-side session-build diagnostics away from os.Stderr —
@@ -334,8 +427,17 @@ func ctrlTimeString(t time.Time) string {
 // fresh one). Used by Prompt/Subscribe/Resume.
 func (w *Workspace) resolve(id string) (*wsSession, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.sessionLocked(id)
+	had := len(w.sessions)
+	s, err := w.sessionLocked(id)
+	// The live set grew: a cold session just materialized (or an empty id
+	// created a fresh one). A board keys "which sessions can I subscribe to?"
+	// off Live, so tell it to re-list — broadcast after the unlock.
+	grew := err == nil && len(w.sessions) > had
+	w.mu.Unlock()
+	if grew {
+		w.BroadcastAll(ctrlproto.SessionsChangedEvent())
+	}
+	return s, err
 }
 
 // existing returns an already-materialized session for id, or nil.
@@ -384,6 +486,15 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "open session: %v", err)
 	}
+	// Load-cost telemetry: a session that carries revision (edits/variants) logs
+	// how long its transcript took to reconstruct and how much amend machinery it
+	// replayed, so accumulating variants becoming a load-time tax shows up in the
+	// diagnostics before it is felt (stage-inline-editing.md §9). Silent for plain
+	// sessions (no amends).
+	if st := sess.LoadStats; st.Amends > 0 {
+		w.diag(fmt.Sprintf("session %s reconstructed: %d msgs, %d amends, %d tail takes in %s",
+			id, st.Messages, st.Amends, st.TailTakes, st.Elapsed.Round(time.Microsecond)))
+	}
 	// The daemon is picking this session back up to keep talking in it, so the
 	// rows it is about to write belong to THIS build, not the one that created
 	// the file. Best-effort: a session that resumes but cannot record its
@@ -394,8 +505,13 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 	// multi-thousand-message history — which would otherwise ride every
 	// subsequent request. The session FILE stays intact, and the per-message
 	// persistence hooks only append new rows, so nothing is lost on disk.
-	msgs = build.TrimMessagesForResume(msgs, 100)
-	s, err := w.buildSession(id, sess, msgs, "")
+	full := msgs
+	msgs = build.TrimMessagesForResume(full, 100)
+	// The trim shortens the in-memory transcript while the file keeps the full
+	// history, so record how far the two index spaces diverge — revise verbs anchor
+	// their persisted amends to the on-disk space through it (see wsSession.diskIndex).
+	base, head := reviseBaseFor(full, msgs)
+	s, err := w.buildSession(id, sess, msgs, base, head)
 	if err != nil {
 		return nil, err
 	}
@@ -422,6 +538,9 @@ func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) 
 			return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown persona %q: %v", opts.Persona, err)
 		}
 	}
+	if opts.Experience != "" && opts.Experience != build.ExperienceChat && opts.Experience != build.ExperiencePlay {
+		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown experience %q (want %q or %q)", opts.Experience, build.ExperienceChat, build.ExperiencePlay)
+	}
 	sess, err := core.NewSession(w.root, w.cwd, prov, model, w.version)
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "create session: %v", err)
@@ -430,8 +549,29 @@ func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) 
 		_ = core.RenameSession(sess.Path, opts.Title)
 		sess.Meta.Title = opts.Title
 	}
+	// Persist the creation spec (persona + immersive fields) so a daemon restart
+	// re-materializes this session as created rather than as the workspace default.
+	if err := sess.SetCreationSpec(opts.Persona, opts.Experience, opts.Card, opts.Cast, opts.Greeting); err != nil {
+		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "persist session spec: %v", err)
+	}
+	// A default saved user persona pre-fills a fresh immersive session's identity,
+	// so a new chat opens as "you" rather than the literal "User" (rough-edge #5).
+	// Stamped into meta before buildSession, so its name threads into the {{user}}
+	// macro of the (deferred) greeting and it shows in the steering panel.
+	if opts.Experience != "" {
+		if def, ok := w.userPersonaStore().Default(); ok {
+			if err := sess.SetUserPersona(def.Name, def.Description); err != nil {
+				return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "apply default user persona: %v", err)
+			}
+		}
+	}
+	if opts.Background != "" {
+		if err := sess.SetBackground(opts.Background); err != nil {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "persist session background: %v", err)
+		}
+	}
 	id := build.SessionIDFromPath(sess.Path)
-	s, err := w.buildSession(id, sess, nil, opts.Persona)
+	s, err := w.buildSession(id, sess, nil, 0, false)
 	if err != nil {
 		return nil, err
 	}
@@ -502,6 +642,64 @@ func (w *Workspace) Clear(ctx context.Context, sess string) error {
 		return err
 	}
 	return s.clear()
+}
+
+func (w *Workspace) EditMessage(ctx context.Context, sess string, epoch uint64, index int, text string) error {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return err
+	}
+	return s.editMessage(epoch, index, text)
+}
+
+func (w *Workspace) DeleteMessage(ctx context.Context, sess string, epoch uint64, index int) error {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return err
+	}
+	return s.deleteMessage(epoch, index)
+}
+
+func (w *Workspace) SwipeTurn(ctx context.Context, sess string, epoch uint64, variant int) error {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return err
+	}
+	return s.swipe(epoch, variant)
+}
+
+func (w *Workspace) SwipeMessage(ctx context.Context, sess string, epoch uint64, index, variant int) error {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return err
+	}
+	return s.swipeMessage(epoch, index, variant)
+}
+
+var _ ctrlproto.VariantsController = (*Workspace)(nil)
+
+func (w *Workspace) PruneVariants(ctx context.Context, sess string, epoch uint64, index int) error {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return err
+	}
+	return s.pruneVariants(epoch, index)
+}
+
+func (w *Workspace) DropVariant(ctx context.Context, sess string, epoch uint64, index, variant int) error {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return err
+	}
+	return s.dropVariant(epoch, index, variant)
+}
+
+func (w *Workspace) RetryTurn(ctx context.Context, sess string, epoch uint64) error {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return err
+	}
+	return s.retry(epoch)
 }
 
 func (w *Workspace) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
@@ -591,22 +789,34 @@ func (w *Workspace) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, erro
 	defer w.mu.Unlock()
 	out := make([]ctrlproto.SessionInfo, 0, len(summaries))
 	for _, sm := range summaries {
+		// A draft: an immersive session whose greeting is still deferred, so it has
+		// no durable message rows (MessageCount == 0) — a character the user opened to
+		// preview but never sent into. Excluded so previewing doesn't clutter the
+		// list; the first real turn flushes the greeting and it appears. This also
+		// catches a live-but-unflushed draft (its file is meta-only). Coding sessions
+		// (Experience == "") are never drafts and are untouched.
+		if sm.Experience != "" && sm.MessageCount == 0 {
+			continue
+		}
 		id := build.SessionIDFromPath(sm.Path)
 		title := sm.Title
 		if title == "" {
 			title = titleFromFirstText(sm.FirstUserText)
 		}
 		info := ctrlproto.SessionInfo{
-			ID:       id,
-			Title:    title,
-			Provider: sm.Provider,
-			Model:    sm.Model,
-			Path:     sm.Path,
-			Created:  ctrlTimeString(sm.Started),
-			Messages: sm.MessageCount,
-			Usage:    core.WireUsage{CostUSD: sm.TotalCost},
-			Current:  id == defID,
-			Trusted:  wsTrusted,
+			ID:         id,
+			Title:      title,
+			Provider:   sm.Provider,
+			Model:      sm.Model,
+			Experience: sm.Experience,
+			Background: sm.Background,
+			Card:       sm.Card,
+			Path:       sm.Path,
+			Created:    ctrlTimeString(sm.Started),
+			Messages:   sm.MessageCount,
+			Usage:      core.WireUsage{CostUSD: sm.TotalCost},
+			Current:    id == defID,
+			Trusted:    wsTrusted,
 		}
 		if fi, e := os.Stat(sm.Path); e == nil {
 			info.Updated = ctrlTimeString(fi.ModTime())
@@ -616,6 +826,8 @@ func (w *Workspace) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, erro
 			info.Persona = s.personaName()
 			info.Usage = toCtrlUsage(s.agent.Cost())
 			info.Trusted = s.trusted.Load()
+			info.Live = true
+			info.Busy = s.busyNow()
 		}
 		out = append(out, info)
 	}
@@ -624,11 +836,14 @@ func (w *Workspace) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, erro
 
 func (w *Workspace) CreateSession(ctx context.Context, opts ctrlproto.CreateOpts) (ctrlproto.SessionInfo, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	s, err := w.createLocked(opts)
+	w.mu.Unlock()
 	if err != nil {
 		return ctrlproto.SessionInfo{}, err
 	}
+	// A new session joined the set; broadcast outside the lock so a board
+	// re-lists and adds its tile (BroadcastAll takes only the hub mutex).
+	w.BroadcastAll(ctrlproto.SessionsChangedEvent())
 	return s.info(), nil
 }
 
@@ -638,6 +853,71 @@ func (w *Workspace) ResumeSession(ctx context.Context, sess string) (ctrlproto.S
 		return ctrlproto.SessionInfo{}, err
 	}
 	return s.info(), nil
+}
+
+// ForkSession branches the parent session at fromIndex (see the interface doc):
+// core.BranchSession copies the parent's resolved transcript through fromIndex
+// into a new parent-linked file, which is then materialized and registered like
+// a create. Broadcasts sessions_changed so a board adds the child's tile.
+func (w *Workspace) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
+	w.mu.Lock()
+	s, err := w.forkLocked(sess, fromIndex)
+	w.mu.Unlock()
+	if err != nil {
+		return ctrlproto.SessionInfo{}, err
+	}
+	w.BroadcastAll(ctrlproto.SessionsChangedEvent())
+	return s.info(), nil
+}
+
+func (w *Workspace) forkLocked(sess string, fromIndex int) (*wsSession, error) {
+	if fromIndex < 0 {
+		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "fork index %d out of range", fromIndex)
+	}
+	if !validSessionID(sess) {
+		return nil, ctrlproto.ErrNoSession
+	}
+	parentPath := w.sessionPath(sess)
+	if _, err := os.Stat(parentPath); err != nil {
+		return nil, ctrlproto.ErrNoSession
+	}
+	// A parent mid-turn is appending to its file, so its transcript — and the
+	// client's index into it — is moving; refuse until it settles (the revise
+	// guard's discipline, applied to the branch point).
+	p := w.sessions[sess]
+	if p != nil && p.busyNow() {
+		return nil, ctrlproto.ErrBusy
+	}
+	// The client's fromIndex is into the live parent's (possibly resume-trimmed)
+	// transcript, but BranchSession walks the parent FILE's full effective
+	// transcript — so re-anchor the branch point to on-disk space (identity for an
+	// untrimmed parent). Without this, a long resumed parent would branch at the
+	// wrong message. A cold parent (p nil) was never trimmed in this daemon, so its
+	// indices already match the file.
+	branchAt := fromIndex
+	if p != nil {
+		disk, ok := p.diskIndex(fromIndex)
+		if !ok {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "cannot fork at the resume-window summary (index %d)", fromIndex)
+		}
+		branchAt = disk
+	}
+	// BranchSession keeps the parent's first N messages; fromIndex is inclusive.
+	newPath, err := core.BranchSession(parentPath, w.root, w.cwd, w.version, branchAt+1)
+	if err != nil {
+		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "fork: %v", err)
+	}
+	id := build.SessionIDFromPath(newPath)
+	childSess, msgs, err := core.OpenSession(newPath)
+	if err != nil {
+		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "open fork: %v", err)
+	}
+	child, err := w.buildSession(id, childSess, msgs, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	w.sessions[id] = child
+	return child, nil
 }
 
 func (w *Workspace) RenameSession(ctx context.Context, sess, title string) error {
@@ -655,6 +935,10 @@ func (w *Workspace) RenameSession(ctx context.Context, sess, title string) error
 		s.setTitle(title, false) // a user rename: never replaceable by automatic titling
 		s.broadcast(ctrlproto.SessionUpdatedEvent(s.info()))
 	}
+	// A rename changes the set's shape (its labels), so tell boards to re-list —
+	// SessionUpdatedEvent above only reaches THAT session's subscribers, not a
+	// board watching the workspace.
+	w.BroadcastAll(ctrlproto.SessionsChangedEvent())
 	return nil
 }
 
@@ -733,6 +1017,38 @@ func (w *Workspace) DeleteSession(ctx context.Context, sess string) error {
 	if os.IsNotExist(err) && !existed {
 		return ctrlproto.ErrNoSession
 	}
+	// A session left the set; boards re-list to prune its tile.
+	w.BroadcastAll(ctrlproto.SessionsChangedEvent())
+	return nil
+}
+
+var _ ctrlproto.DraftController = (*Workspace)(nil)
+
+// DiscardDraft removes an UNPROMOTED draft — a Stage session whose greeting is
+// still deferred (opened for preview, never sent into) — reclaiming its live
+// session and any extension subprocesses the moment the user navigates away,
+// rather than leaving it live until shutdown. A guarded no-op on anything else
+// (a promoted chat, a coding session), keyed on the pending-greeting signal, so
+// the front end can call it freely on back-out without risking real work. It
+// mirrors DeleteSession's close+remove+broadcast.
+func (w *Workspace) DiscardDraft(ctx context.Context, sess string) error {
+	if !validSessionID(sess) {
+		return nil
+	}
+	w.mu.Lock()
+	s, existed := w.sessions[sess]
+	if !existed || !s.sess.HasPendingGreeting() {
+		w.mu.Unlock()
+		return nil // not a live unpromoted draft — keep it
+	}
+	s.close() // an empty fresh session's close prunes its meta-only file
+	delete(w.sessions, sess)
+	w.mu.Unlock()
+	_ = os.Remove(w.sessionPath(sess)) // best-effort straggler cleanup
+	if sc := core.ErrorLogPathFor(w.sessionPath(sess)); sc != "" {
+		_ = os.Remove(sc)
+	}
+	w.BroadcastAll(ctrlproto.SessionsChangedEvent())
 	return nil
 }
 

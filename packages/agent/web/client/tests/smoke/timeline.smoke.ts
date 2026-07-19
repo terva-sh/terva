@@ -26,9 +26,20 @@ test('pinned timeline follows streaming; unpinned does not jump', async ({ page 
   await expect.poll(distanceFromBottom, { timeout: 5000 }).toBeLessThan(80)
   await expect(page.locator('.jump')).toHaveCount(0)
 
+  // Wait for the pacer to finish draining the burst before unpinning. A
+  // teleported scrollTop=0 coalesces with any pinned auto-scroll that lands in
+  // the same frame — the single scroll event then reports "at bottom" and the
+  // unpin never happens. A real reader's wheel/drag fires a stream of events,
+  // so only this synthetic one-shot scroll can lose that race.
+  await expect(log.getByText('streaming line 39')).toBeVisible()
+
   // Scroll to the top → unpin. The jump button appears.
   await log.evaluate((el) => (el.scrollTop = 0))
   await expect(page.locator('.jump')).toBeVisible()
+
+  // The unpin must survive the follow-up burst below, so make sure it landed
+  // (pinnedRef reads the scroll event, which dispatches async).
+  await expect.poll(() => log.evaluate((el) => el.scrollTop)).toBeLessThan(80)
 
   // More output arrives while unpinned…
   for (let i = 0; i < 20; i++) {

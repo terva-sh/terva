@@ -91,7 +91,7 @@ func TestBuildSystemPrompt_IntroOverride(t *testing.T) {
 	if strings.Contains(got, "operating inside terva") {
 		t.Errorf("branded intro should be replaced by the override:\n%s", got)
 	}
-	if !strings.Contains(got, "Your output renders") {
+	if !strings.Contains(got, "Act first, then summarise") {
 		t.Errorf("terva conventions should still bracket the end:\n%s", got)
 	}
 	segs := SystemSegments(opts)

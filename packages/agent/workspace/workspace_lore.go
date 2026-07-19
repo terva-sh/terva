@@ -35,9 +35,21 @@ func (s *wsSession) loreSnapshot() []lore.Entry {
 // trust-gated on load).
 func (s *wsSession) loreView() *ctrlproto.LoreView {
 	v := &ctrlproto.LoreView{CanProject: s.trusted.Load()}
+	// The last turn's activation trace, keyed the way loreFiredOf resolves a
+	// source (source, else name), so a triggered entry can be annotated with
+	// whether it fired, why, and whether the budget dropped it.
+	s.mu.Lock()
+	rec := s.loreFired
+	s.mu.Unlock()
+	trace := map[string]build.LoreFired{}
+	if rec != nil {
+		for _, f := range rec.Get() {
+			trace[loreTraceKey(f.Name, f.Source)] = f
+		}
+	}
 	for _, e := range s.loreSnapshot() {
 		scope := s.loreEntryScope(e.Name)
-		v.Entries = append(v.Entries, ctrlproto.LoreEntry{
+		entry := ctrlproto.LoreEntry{
 			Name:     e.Name,
 			Keys:     e.Keys,
 			Constant: e.Constant,
@@ -45,9 +57,24 @@ func (s *wsSession) loreView() *ctrlproto.LoreView {
 			Content:  e.Content,
 			Editable: scope != "",
 			Scope:    scope,
-		})
+		}
+		if f, ok := trace[loreTraceKey(e.Name, e.Source)]; ok {
+			entry.Fired = true
+			entry.MatchedKeys = f.Keys
+			entry.DroppedForBudget = f.Dropped
+		}
+		v.Entries = append(v.Entries, entry)
 	}
 	return v
+}
+
+// loreTraceKey is the identity a loreView entry and an activation-trace entry
+// join on — the display source, falling back to the name (matching loreFiredOf).
+func loreTraceKey(name, source string) string {
+	if source != "" {
+		return source
+	}
+	return name
 }
 
 // loreAction creates/edits ("save") or removes ("delete") a user lore entry,
@@ -124,8 +151,31 @@ func (s *wsSession) reloadLore() {
 		if rr, err := build.Resolve(args, true); err == nil {
 			s.agent.SetContextProvider(rr.PerTurnContext(s.agent))
 			s.agent.SetContextProviderPeek(rr.PerTurnContextPeek(s.agent))
+			s.rewireTail(rr)
 		}
 	}
+}
+
+// rewireTail re-points the retained per-turn tail record handles at rr's fresh
+// records — a new Resolve behind a swapped context provider mints new note /
+// user-persona / activation-trace records — and re-seeds the live-authored ones
+// (note, user-persona description) from the durable meta. Without the re-seed a
+// tail rebuild would orphan the author's note the surface keeps writing to
+// (the pre-4b bug this centralizes the fix for): the surface would write the
+// old record while the tail read the new empty one. Call it right after
+// installing rr's PerTurnContext. The caller must NOT hold s.mu.
+func (s *wsSession) rewireTail(rr build.Resolved) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if nr := rr.Note(); nr != nil {
+		nr.Set(s.sess.Meta.Note)
+		s.note = nr
+	}
+	if ur := rr.User(); ur != nil {
+		ur.Set(s.sess.Meta.UserDescription)
+		s.user = ur
+	}
+	s.loreFired = rr.LoreFired()
 }
 
 // loreDir is the directory the web manages entries in, per scope: user

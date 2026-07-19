@@ -31,6 +31,9 @@ func TestSessionRoundTripAllBlockKinds(t *testing.T) {
 			provider.TextBlock{Text: "let me check"},
 			provider.ReasoningBlock{ID: "r1", Summary: "thinking", Encrypted: "blob"},
 			provider.ToolCallBlock{ID: "call_1", Name: "read", Arguments: json.RawMessage(`{"path":"a.txt"}`)},
+			// An assistant-emitted image carries its generation id, which
+			// must survive the round trip so a later turn can edit it.
+			provider.ImageBlock{MimeType: "image/png", Data: []byte{4, 5, 6}, ID: "ig_abc123"},
 		},
 	}
 	toolMsg := provider.Message{

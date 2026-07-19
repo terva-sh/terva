@@ -1415,7 +1415,7 @@ func TestSessionSummariesFromInfos(t *testing.T) {
 	got := SessionSummariesFromInfos([]ctrlproto.SessionInfo{{
 		ID: "ab12", Title: "fix the parser", Provider: "openai", Model: "gpt-5.5",
 		Path: "/s/ab12.jsonl", Created: "2026-07-04T10:00:00Z", Messages: 7,
-		Usage: core.WireUsage{CostUSD: 1.25},
+		Usage: core.WireUsage{CostUSD: 1.25}, Live: true, Busy: true,
 	}})
 	if len(got) != 1 {
 		t.Fatalf("got %d summaries, want 1", len(got))
@@ -1424,6 +1424,10 @@ func TestSessionSummariesFromInfos(t *testing.T) {
 	if s.Path != "/s/ab12.jsonl" || s.Title != "fix the parser" || s.Provider != "openai" ||
 		s.Model != "gpt-5.5" || s.MessageCount != 7 || s.TotalCost != 1.25 || s.Started.IsZero() {
 		t.Fatalf("summary = %+v", s)
+	}
+	// The live flags ride through so the picker can glyph a busy/live row.
+	if !s.Live || !s.Busy {
+		t.Fatalf("live/busy not carried: Live=%v Busy=%v", s.Live, s.Busy)
 	}
 }
 
@@ -1439,6 +1443,16 @@ func TestTaskActionSpawnValidation(t *testing.T) {
 	w.swarm = swarm.New(swarm.Config{Root: testsupport.TempDir(t), RepoRoot: testsupport.TempDir(t)})
 	if err := w.taskAction("spawn", map[string]string{"task": "   "}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeBadRequest {
 		t.Fatalf("spawn with blank task = %v, want CodeBadRequest", err)
+	}
+	// A foreign backend runs the human spawn through the SAME gate the model's
+	// swarm_spawn tool uses; an unregistered name is refused before any spawn —
+	// whichever way the external-workers knob is set (disabled → "disabled";
+	// enabled → worker.Lookup's "unknown backend"). Either way, nothing launches.
+	if err := w.taskAction("spawn", map[string]string{"task": "x", "backend": "nonesuch-backend"}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeBadRequest {
+		t.Fatalf("spawn with an unknown backend = %v, want CodeBadRequest", err)
+	}
+	if n := len(w.swarm.SnapshotAll()); n != 0 {
+		t.Fatalf("a refused backend must not spawn; swarm has %d agent(s)", n)
 	}
 }
 
@@ -2102,6 +2116,42 @@ func TestSettingsLazyTools(t *testing.T) {
 	}
 	if it := find(); it == nil || it.Value != "true" {
 		t.Errorf("the view should reflect lazy_tools=true, got %+v", it)
+	}
+}
+
+// TestSettingsWebStage: the Stage surface toggle persists web_stage to config
+// (the config twin of --web-stage that `terva web` reads at startup) and the
+// view reflects it — default off.
+func TestSettingsWebStage(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	s := newTestSession()
+	s.ws = &Workspace{}
+
+	find := func() *ctrlproto.SettingItem {
+		sv := s.settingsView()
+		for i := range sv.Items {
+			if sv.Items[i].Key == "web_stage" {
+				return &sv.Items[i]
+			}
+		}
+		return nil
+	}
+
+	it := find()
+	if it == nil || it.Type != "bool" {
+		t.Fatalf("no web_stage bool row in the settings view")
+	}
+	if it.Value != "false" {
+		t.Errorf("web_stage default = %q, want false", it.Value)
+	}
+	if err := s.settingsAction("set", map[string]string{"key": "web_stage", "value": "true"}); err != nil {
+		t.Fatalf("enable web_stage: %v", err)
+	}
+	if cfg, _ := config.LoadConfig(); !cfg.WebStage {
+		t.Error("enabling web_stage must persist to config")
+	}
+	if it := find(); it == nil || it.Value != "true" {
+		t.Errorf("the view should reflect web_stage=true, got %+v", it)
 	}
 }
 

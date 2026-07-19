@@ -103,6 +103,42 @@ func TestLoadCardIdentity(t *testing.T) {
 	}
 }
 
+// TestLoadCardIdentityGreetings: the full opening set (first_mes +
+// alternate_greetings) is carried, macro-substituted and in card order, with the
+// selected --greeting as the active one.
+func TestLoadCardIdentityGreetings(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	path := filepath.Join(dir, "nova.json")
+	body := `{"spec":"chara_card_v2","spec_version":"2.0","data":{
+		"name":"Nova","first_mes":"Hi {{user}}, I'm {{char}}.",
+		"alternate_greetings":["A cold open, {{user}}.","*{{char}} waves at {{user}}.*"]}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Select the second alternate (index 2).
+	ci, err := loadCardIdentity(path, ExperienceChat, 2, "Kira")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ci.greetings) != 3 {
+		t.Fatalf("greetings = %d, want 3 (first_mes + 2 alternates)", len(ci.greetings))
+	}
+	if !strings.Contains(ci.greetings[0], "Hi Kira, I'm Nova.") {
+		t.Errorf("greeting 0 unsubstituted: %q", ci.greetings[0])
+	}
+	if !strings.Contains(ci.greetings[2], "Nova waves at Kira") {
+		t.Errorf("greeting 2 unsubstituted: %q", ci.greetings[2])
+	}
+	if ci.greeting != ci.greetings[2] {
+		t.Errorf("selected greeting = %q, want greetings[2] = %q", ci.greeting, ci.greetings[2])
+	}
+	for _, g := range ci.greetings {
+		if strings.Contains(g, "{{") {
+			t.Errorf("greeting has unsubstituted macro: %q", g)
+		}
+	}
+}
+
 func TestCardBookToLore_SelectiveGatesSecondaryKeys(t *testing.T) {
 	// Per CCv2, secondary_keys apply only when `selective` is true. ST
 	// serializes leftover keysecondary even when selective is toggled off, so
@@ -251,5 +287,92 @@ func TestPerTurnContext_PHIAndEmpty(t *testing.T) {
 	// Neither lore nor PHI -> nil provider (composeEphemeral skips it).
 	if (&Resolved{}).PerTurnContext(nil) != nil {
 		t.Error("empty run should yield a nil per-turn provider")
+	}
+}
+
+func TestPerTurnContext_AuthorNote(t *testing.T) {
+	// The author's note comes AFTER PHI, read live so a mid-session change shows
+	// on the next call — no rebuild.
+	r := &Resolved{postHistory: "Stay in character.", note: &NoteRecord{}}
+	r.note.Set("The storm has passed.")
+	fn := r.PerTurnContext(nil)
+	if fn == nil {
+		t.Fatal("expected a provider when a note record is present")
+	}
+	if got := fn(); got != "Stay in character.\n\nThe storm has passed." {
+		t.Errorf("note-after-PHI = %q", got)
+	}
+	r.note.Set("Night falls.") // a live edit is visible on the next turn
+	if got := fn(); got != "Stay in character.\n\nNight falls." {
+		t.Errorf("live note edit not reflected: %q", got)
+	}
+
+	// A note record with no lore and no PHI still yields a LIVE (non-nil) tail, so
+	// a note added later (note.set) injects; empty renders nothing until then.
+	empty := &Resolved{note: &NoteRecord{}}
+	fn2 := empty.PerTurnContext(nil)
+	if fn2 == nil {
+		t.Fatal("a note record must keep the tail live even with no lore/PHI")
+	}
+	if got := fn2(); got != "" {
+		t.Errorf("empty note should render nothing, got %q", got)
+	}
+	empty.note.Set("Begin.")
+	if got := fn2(); got != "Begin." {
+		t.Errorf("note added after wiring should inject: %q", got)
+	}
+
+	// A coding session carries no note record (nil), so the tail is unchanged.
+	if (&Resolved{}).Note() != nil {
+		t.Error("a bare Resolved should carry no note record")
+	}
+}
+
+func TestPerTurnContext_UserPersona(t *testing.T) {
+	// The user-persona description sits between the lore block and PHI, framed
+	// with the bound {{user}} name so the model attributes it to the human; the
+	// author's note still comes last. Full tail order: lore → user → PHI → note.
+	r := &Resolved{postHistory: "Stay in character.", note: &NoteRecord{}, userDesc: &NoteRecord{}, userName: "Alice"}
+	r.userDesc.Set("A weary courier who trusts no one.")
+	r.note.Set("It is raining.")
+	fn := r.PerTurnContext(nil)
+	if fn == nil {
+		t.Fatal("expected a provider when a user-persona record is present")
+	}
+	want := "About Alice (the user you are interacting with):\nA weary courier who trusts no one.\n\nStay in character.\n\nIt is raining."
+	if got := fn(); got != want {
+		t.Errorf("user/PHI/note order = %q", got)
+	}
+	r.userDesc.Set("A seasoned smuggler.") // a live edit is visible on the next turn
+	want = "About Alice (the user you are interacting with):\nA seasoned smuggler.\n\nStay in character.\n\nIt is raining."
+	if got := fn(); got != want {
+		t.Errorf("live user-desc edit not reflected: %q", got)
+	}
+
+	// A userDesc record with no lore/PHI/note still yields a LIVE tail, so a
+	// user.bind added later injects; empty renders nothing until then.
+	empty := &Resolved{userDesc: &NoteRecord{}, userName: "User"}
+	fn2 := empty.PerTurnContext(nil)
+	if fn2 == nil {
+		t.Fatal("a user-persona record must keep the tail live even with no lore/PHI/note")
+	}
+	if got := fn2(); got != "" {
+		t.Errorf("empty user-desc should render nothing, got %q", got)
+	}
+	empty.userDesc.Set("Quiet and observant.")
+	if got := fn2(); got != "About User (the user you are interacting with):\nQuiet and observant." {
+		t.Errorf("user-desc added after wiring should inject: %q", got)
+	}
+
+	// An unnamed persona falls back to a generic frame rather than an empty name.
+	unnamed := &Resolved{userDesc: &NoteRecord{}}
+	unnamed.userDesc.Set("A stranger.")
+	if got := unnamed.PerTurnContext(nil)(); got != "About The user (the user you are interacting with):\nA stranger." {
+		t.Errorf("unnamed user-desc frame = %q", got)
+	}
+
+	// A coding session carries no user-persona record (nil).
+	if (&Resolved{}).User() != nil {
+		t.Error("a bare Resolved should carry no user-persona record")
 	}
 }

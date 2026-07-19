@@ -68,10 +68,14 @@ func goldenCases(t *testing.T) []goldenCase {
 		{"event_permission", EventFrame("s1", PermissionEvent(PermissionRequest{
 			CallID: "call_1", Tool: "bash", Preview: "ls -la",
 		}))},
+		{"event_permission_worker", EventFrame("s1", PermissionEvent(PermissionRequest{
+			CallID: "worker-wk7-1", Tool: "bash", Preview: "worker wk7: ls -la", Agent: "wk7",
+		}))},
 		{"event_ask", EventFrame("s1", AskEvent(AskRequest{
 			AskID: "ask_1", Question: "Which approach?", Options: []string{"rewrite", "patch"}, AllowCustom: true,
 		}))},
 		{"event_permission_resolved", EventFrame("s1", PermissionResolvedEvent("call_1"))},
+		{"event_sessions_changed", EventFrame(AddrWorkspace, SessionsChangedEvent())},
 		{"event_snapshot", EventFrame("s1", SnapshotEvent(Snapshot{
 			Session: SessionInfo{ID: "s1", Title: "main", Provider: "anthropic", Model: "claude-opus-4-8", Messages: 2},
 			Messages: []core.WireMessage{
@@ -149,6 +153,47 @@ func TestFrameCodecSymmetry(t *testing.T) {
 				t.Errorf("codec asymmetric\n first: %s\nsecond: %s", b1, b2)
 			}
 		})
+	}
+}
+
+// SessionInfo.Live/.Busy ride the wire so a board can subscribe only to live
+// sessions and show busy markers; both omitempty, so an old daemon sends
+// nothing and a client reads absence as unknown rather than idle/cold.
+func TestSessionInfoLiveBusyWire(t *testing.T) {
+	live, err := json.Marshal(SessionInfo{ID: "s1", Live: true, Busy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(live, []byte(`"live":true`)) || !bytes.Contains(live, []byte(`"busy":true`)) {
+		t.Errorf("Live/Busy not carried on the wire: %s", live)
+	}
+	cold, err := json.Marshal(SessionInfo{ID: "s2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(cold, []byte("live")) || bytes.Contains(cold, []byte("busy")) {
+		t.Errorf("a cold/unknown SessionInfo must omit live/busy (omitempty): %s", cold)
+	}
+}
+
+// TaskInfo.Backend rides the wire so a board's swarm lane can distinguish a
+// foreign worker from a native child; empty stays off the wire (omitempty) and
+// a client reads its absence as backend-unknown. R2 of the orchestration
+// reconciliation (docs/reviews/2026-07-15-eaw-review-from-orchestration-frontend.md).
+func TestTaskInfoBackendWire(t *testing.T) {
+	withBackend, err := json.Marshal(TaskInfo{ID: "wk1", Task: "x", Status: "running", Backend: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(withBackend, []byte(`"backend":"claude"`)) {
+		t.Errorf("TaskInfo.Backend not carried on the wire: %s", withBackend)
+	}
+	native, err := json.Marshal(TaskInfo{ID: "a", Task: "x", Status: "running"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(native, []byte("backend")) {
+		t.Errorf("empty Backend must be omitted (omitempty), else native children read as a backend: %s", native)
 	}
 }
 
@@ -548,6 +593,22 @@ func (f *fakeSvc) SetQueue(ctx context.Context, sess string, t []string) error {
 func (f *fakeSvc) Cancel(ctx context.Context, sess string) error               { return nil }
 func (f *fakeSvc) Compact(ctx context.Context, sess string) error              { return nil }
 func (f *fakeSvc) Clear(ctx context.Context, sess string) error                { return nil }
+func (f *fakeSvc) EditMessage(ctx context.Context, sess string, epoch uint64, index int, text string) error {
+	return nil
+}
+func (f *fakeSvc) DeleteMessage(ctx context.Context, sess string, epoch uint64, index int) error {
+	return nil
+}
+func (f *fakeSvc) SwipeTurn(ctx context.Context, sess string, epoch uint64, variant int) error {
+	return nil
+}
+
+func (f *fakeSvc) SwipeMessage(ctx context.Context, sess string, epoch uint64, index, variant int) error {
+	return nil
+}
+func (f *fakeSvc) RetryTurn(ctx context.Context, sess string, epoch uint64) error {
+	return nil
+}
 func (f *fakeSvc) SideChatOpen(ctx context.Context, sess string) (string, error) {
 	return "sc1", nil
 }
@@ -588,6 +649,10 @@ func (f *fakeSvc) CreateSession(ctx context.Context, opts CreateOpts) (SessionIn
 
 func (f *fakeSvc) ResumeSession(ctx context.Context, sess string) (SessionInfo, error) {
 	return SessionInfo{ID: sess}, nil
+}
+
+func (f *fakeSvc) ForkSession(ctx context.Context, sess string, fromIndex int) (SessionInfo, error) {
+	return SessionInfo{ID: "fork-of-" + sess}, nil
 }
 
 func (f *fakeSvc) RenameSession(ctx context.Context, sess, title string) error { return nil }

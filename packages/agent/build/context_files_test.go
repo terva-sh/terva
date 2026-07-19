@@ -26,7 +26,7 @@ func TestReadStartupContextFilesOrderAndDedup(t *testing.T) {
 	writeCtxFile(t, filepath.Join(dir, "b.md"), "BBB")
 
 	// config provides a.md; flags provide b.md then a.md again (a dup).
-	out, err := readStartupContextFiles(dir,
+	out, origin, err := readStartupContextFiles(dir,
 		[]string{filepath.Join(dir, "a.md")},
 		[]string{"b.md", "a.md"})
 	if err != nil {
@@ -42,12 +42,23 @@ func TestReadStartupContextFilesOrderAndDedup(t *testing.T) {
 	if n := strings.Count(out, "AAA"); n != 1 {
 		t.Fatalf("duplicate not deduped: AAA appears %d times", n)
 	}
+	// Origin mirrors the block: same files, same order, deduped the same way.
+	// It is the block's table of contents, not a second opinion about it.
+	want := []string{filepath.Join(dir, "a.md"), filepath.Join(dir, "b.md")}
+	if len(origin) != len(want) {
+		t.Fatalf("origin = %v, want %v", origin, want)
+	}
+	for i := range want {
+		if origin[i] != want[i] {
+			t.Errorf("origin[%d] = %q, want %q", i, origin[i], want[i])
+		}
+	}
 }
 
 func TestReadStartupContextFilesRelativeFlagResolvesAgainstCwd(t *testing.T) {
 	dir := testsupport.TempDir(t)
 	writeCtxFile(t, filepath.Join(dir, "sub", "c.md"), "CCC")
-	out, err := readStartupContextFiles(dir, nil, []string{"sub/c.md"})
+	out, _, err := readStartupContextFiles(dir, nil, []string{"sub/c.md"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +72,7 @@ func TestReadStartupContextFilesRelativeFlagResolvesAgainstCwd(t *testing.T) {
 
 func TestReadStartupContextFilesMissingErrors(t *testing.T) {
 	dir := testsupport.TempDir(t)
-	_, err := readStartupContextFiles(dir, nil, []string{"nope.md"})
+	_, _, err := readStartupContextFiles(dir, nil, []string{"nope.md"})
 	if err == nil {
 		t.Fatal("expected error for missing context file")
 	}
@@ -73,7 +84,7 @@ func TestReadStartupContextFilesDirectoryErrors(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := readStartupContextFiles(dir, []string{sub}, nil)
+	_, _, err := readStartupContextFiles(dir, []string{sub}, nil)
 	if err == nil {
 		t.Fatal("expected error when a context file is a directory")
 	}
@@ -82,7 +93,7 @@ func TestReadStartupContextFilesDirectoryErrors(t *testing.T) {
 func TestReadStartupContextFilesEmptySkipped(t *testing.T) {
 	dir := testsupport.TempDir(t)
 	writeCtxFile(t, filepath.Join(dir, "blank.md"), "   \n\t  ")
-	out, err := readStartupContextFiles(dir, []string{filepath.Join(dir, "blank.md")}, nil)
+	out, _, err := readStartupContextFiles(dir, []string{filepath.Join(dir, "blank.md")}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +106,7 @@ func TestReadStartupContextFilesOversizeErrors(t *testing.T) {
 	dir := testsupport.TempDir(t)
 	big := filepath.Join(dir, "big.md")
 	writeCtxFile(t, big, strings.Repeat("x", maxContextFileBytes+1))
-	_, err := readStartupContextFiles(dir, []string{big}, nil)
+	_, _, err := readStartupContextFiles(dir, []string{big}, nil)
 	if err == nil {
 		t.Fatal("expected error for oversize context file")
 	}
@@ -109,7 +120,7 @@ func TestReadStartupContextFilesFlagAbsolutePathAccepted(t *testing.T) {
 	outside := filepath.Join(testsupport.TempDir(t), "team-rules.md")
 	writeCtxFile(t, outside, "RULES")
 
-	out, err := readStartupContextFiles(cwd, nil, []string{outside})
+	out, _, err := readStartupContextFiles(cwd, nil, []string{outside})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +133,7 @@ func TestReadStartupContextFilesFlagAbsolutePathAccepted(t *testing.T) {
 }
 
 func TestReadStartupContextFilesNoneReturnsEmpty(t *testing.T) {
-	out, err := readStartupContextFiles(testsupport.TempDir(t), nil, nil)
+	out, _, err := readStartupContextFiles(testsupport.TempDir(t), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

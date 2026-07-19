@@ -20,8 +20,10 @@ export type MockBackend = {
 export type MockBackendOptions = {
   // Answer a send()-style cmd ahead of the built-in defaults; return undefined
   // to fall through. Lets a test serve extra methods (surfaces.list,
-  // surface.get) without re-implementing the handshake.
-  respond?: (method: string, params: unknown) => unknown
+  // surface.get) without re-implementing the handshake. sess is the frame's
+  // session address — some verbs (sessions.delete, note.set) carry their target
+  // there rather than in params.
+  respond?: (method: string, params: unknown, sess?: string) => unknown
 }
 
 export async function installMockBackend(page: Page, opts: MockBackendOptions = {}): Promise<MockBackend> {
@@ -32,7 +34,7 @@ export async function installMockBackend(page: Page, opts: MockBackendOptions = 
   await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
     current = ws
     ws.onMessage((raw) => {
-      let f: { kind?: string; id?: number; method?: string; params?: unknown }
+      let f: { kind?: string; id?: number; method?: string; params?: unknown; sess?: string }
       try {
         f = JSON.parse(String(raw))
       } catch {
@@ -51,7 +53,7 @@ export async function installMockBackend(page: Page, opts: MockBackendOptions = 
         // prompt, queue, …) ignore one, so a reply is harmless either way.
         if (f.id != null) {
           const result =
-            opts.respond?.(f.method ?? '', f.params) ??
+            opts.respond?.(f.method ?? '', f.params, f.sess) ??
             (f.method === 'models.list'
               ? { models: [] }
               : f.method === 'sessions.list'

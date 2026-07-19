@@ -1,6 +1,9 @@
 package lore
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func activated(r Result) []string {
 	var out []string
@@ -142,6 +145,37 @@ func TestSelect_Budget(t *testing.T) {
 	}
 	if len(r.Dropped) != 1 || r.Dropped[0].Name != "lo" {
 		t.Fatalf("dropped should list lo; got %v", r.Dropped)
+	}
+}
+
+// TestSelect_FiredTrace pins the activation trace: a triggered entry records
+// WHICH keys fired it, a constant entry fires with no keys, and a budget-dropped
+// entry is traced with Dropped=true (the "no silent truncation" rule).
+func TestSelect_FiredTrace(t *testing.T) {
+	body := "aaaaaaaa" // 8 bytes -> 2 tokens under ApproxTokens
+	entries := []Entry{
+		{Name: "always", Constant: true, Content: body, Order: 300},
+		{Name: "pass", Keys: []string{"pass", "mountain"}, Content: body, Order: 200},
+		{Name: "cut", Keys: []string{"pass"}, Content: body, Order: 100},
+	}
+	// Budget 5 tokens keeps always(2)+pass(2)=4, drops cut (would be 6 > 5).
+	r := Select(entries, Config{TokenBudget: 5}, []string{"over the mountain pass"}, ApproxTokens)
+
+	trace := map[string]Fired{}
+	for _, f := range r.Fired {
+		trace[f.Entry.Name] = f
+	}
+	if len(trace) != 3 {
+		t.Fatalf("all three activated entries should be traced; got %d: %+v", len(trace), r.Fired)
+	}
+	if got := trace["always"]; len(got.Keys) != 0 || got.Dropped {
+		t.Errorf("constant: want no keys, not dropped; got %+v", got)
+	}
+	if got := trace["pass"]; !reflect.DeepEqual(got.Keys, []string{"pass", "mountain"}) || got.Dropped {
+		t.Errorf("keyword: want keys [pass mountain], not dropped; got %+v", got)
+	}
+	if got := trace["cut"]; !got.Dropped || !reflect.DeepEqual(got.Keys, []string{"pass"}) {
+		t.Errorf("dropped: want dropped with key [pass]; got %+v", got)
 	}
 }
 

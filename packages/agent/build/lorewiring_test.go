@@ -18,7 +18,7 @@ func TestPerTurnContextPeek_DoesNotRecord(t *testing.T) {
 	r := &Resolved{
 		loreTriggered: []lore.Entry{entry},
 		loreConfig:    lore.Config{},
-		loreFired:     &loreFiredRecord{},
+		loreFired:     &LoreFiredRecord{},
 	}
 	ag := &core.Agent{}
 	ag.SetMessages([]provider.Message{
@@ -32,16 +32,21 @@ func TestPerTurnContextPeek_DoesNotRecord(t *testing.T) {
 	if s := peek(); !strings.Contains(s, "vault is sealed") {
 		t.Fatalf("peek should render the fired lore, got %q", s)
 	}
-	if got := r.loreFired.get(); len(got) != 0 {
+	if got := r.loreFired.Get(); len(got) != 0 {
 		t.Errorf("peek must NOT record fired lore; loreFired = %v", got)
 	}
 
-	// The real provider does record, for /lore's "fired last turn".
+	// The real provider does record, for /lore's "fired last turn" — including WHY
+	// (the matched key).
 	if s := r.PerTurnContext(ag)(); !strings.Contains(s, "vault is sealed") {
 		t.Fatalf("provider should render the fired lore, got %q", s)
 	}
-	if got := r.loreFired.get(); len(got) != 1 || got[0] != "vault.md" {
-		t.Errorf("provider should record fired lore, got %v", got)
+	got := r.loreFired.Get()
+	if len(got) != 1 || got[0].Source != "vault.md" || got[0].Dropped {
+		t.Fatalf("provider should record the fired entry, got %+v", got)
+	}
+	if len(got[0].Keys) != 1 || got[0].Keys[0] != "vault" {
+		t.Errorf("provider should record the matched key, got %v", got[0].Keys)
 	}
 }
 
@@ -74,22 +79,25 @@ func TestWireExtEphemeral_PeekInSyncAndPHILast(t *testing.T) {
 }
 
 func TestLoreFiredRecord(t *testing.T) {
-	rec := &loreFiredRecord{}
-	if got := rec.get(); len(got) != 0 {
+	rec := &LoreFiredRecord{}
+	if got := rec.Get(); len(got) != 0 {
 		t.Errorf("fresh record should be empty, got %v", got)
 	}
-	rec.set([]string{"vault.md", "auth.md"}, []string{"minor.md"})
-	got := rec.get()
-	if len(got) != 2 || got[0] != "vault.md" {
-		t.Fatalf("get after set = %v", got)
+	rec.Set([]LoreFired{
+		{Name: "vault", Source: "vault.md", Keys: []string{"vault"}},
+		{Name: "minor", Source: "minor.md", Dropped: true},
+	})
+	got := rec.Get()
+	if len(got) != 2 || got[0].Source != "vault.md" || got[0].Dropped {
+		t.Fatalf("Get after set = %+v", got)
 	}
-	if d := rec.getDropped(); len(d) != 1 || d[0] != "minor.md" {
-		t.Fatalf("getDropped after set = %v", d)
+	if !got[1].Dropped || got[1].Source != "minor.md" {
+		t.Fatalf("dropped entry not recorded: %+v", got)
 	}
-	// get returns a defensive copy — mutating it must not affect the record.
-	got[0] = "mutated"
-	if rec.get()[0] != "vault.md" {
-		t.Error("get should return a copy, not the backing slice")
+	// Get returns a defensive copy — mutating it must not affect the record.
+	got[0].Source = "mutated"
+	if rec.Get()[0].Source != "vault.md" {
+		t.Error("Get should return a copy, not the backing slice")
 	}
 }
 
@@ -104,7 +112,7 @@ func TestPerTurnContext_RecordsBudgetDropped(t *testing.T) {
 	r := &Resolved{
 		loreTriggered: []lore.Entry{big, small},
 		loreConfig:    lore.Config{TokenBudget: 10},
-		loreFired:     &loreFiredRecord{},
+		loreFired:     &LoreFiredRecord{},
 	}
 	ag := &core.Agent{}
 	ag.SetMessages([]provider.Message{
@@ -114,11 +122,24 @@ func TestPerTurnContext_RecordsBudgetDropped(t *testing.T) {
 	if s := r.PerTurnContext(ag)(); !strings.Contains(s, "sealed history") {
 		t.Fatalf("the top-priority entry should still inject, got %q", s[:min(len(s), 80)])
 	}
-	if fired := r.loreFired.get(); len(fired) != 1 || fired[0] != "big.md" {
-		t.Errorf("fired = %v, want just big.md", fired)
+	trace := r.loreFired.Get()
+	if len(trace) != 2 {
+		t.Fatalf("both activated entries should be traced, got %+v", trace)
 	}
-	if dropped := r.loreFired.getDropped(); len(dropped) != 1 || dropped[0] != "small.md" {
-		t.Errorf("dropped = %v, want small.md recorded (no silent truncation)", dropped)
+	var bigF, smallF LoreFired
+	for _, f := range trace {
+		switch f.Source {
+		case "big.md":
+			bigF = f
+		case "small.md":
+			smallF = f
+		}
+	}
+	if bigF.Source != "big.md" || bigF.Dropped {
+		t.Errorf("big should be kept and traced, got %+v", bigF)
+	}
+	if smallF.Source != "small.md" || !smallF.Dropped {
+		t.Errorf("small should be recorded as dropped for budget (no silent truncation), got %+v", smallF)
 	}
 }
 

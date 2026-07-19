@@ -27,6 +27,8 @@ func SessionSummariesFromInfos(infos []ctrlproto.SessionInfo) []core.SessionSumm
 			MessageCount: in.Messages,
 			TotalCost:    in.Usage.CostUSD,
 			Title:        in.Title,
+			Live:         in.Live,
+			Busy:         in.Busy,
 		})
 	}
 	return out

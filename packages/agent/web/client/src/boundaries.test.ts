@@ -56,7 +56,12 @@ function layerOf(srcRel: string): string {
   return 'root'
 }
 
-const COMPOSITION_ROOTS = /^(app|main)(\.tsx?)?$/
+// The composition roots the lower layers must never import: the panel
+// (app.tsx/main.tsx at the top) and every app under apps/ (the Stage app is
+// apps/stage/). apps/* files themselves are classified 'root' by layerOf and so
+// are free to import platform/ui/features — sharing happens by promotion
+// downward, never by a lower layer reaching up into an app.
+const COMPOSITION_ROOTS = /^(app|main)(\.tsx?)?$|^apps\//
 
 interface Violation {
   file: string
@@ -118,6 +123,8 @@ describe('import boundaries (docs/web.md dependency direction)', () => {
       ['platform/conversation/x.ts', '../../features/y', true],
       ['platform/conversation/x.ts', '../../ui/y', true],
       ['platform/conversation/x.ts', '../../app', true],
+      ['platform/conversation/x.ts', '../../apps/stage/Stage', true], // no reaching up into an app
+      ['ui/x.ts', '../apps/stage/Stage', true],
       ['ui/x.ts', '../features/y', true],
       ['ui/x.ts', '../platform/ctrlproto/y', false], // the documented exception
       ['features/x.ts', '../app', true],

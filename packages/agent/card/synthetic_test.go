@@ -56,6 +56,51 @@ func embedCharaPNG(cardJSON []byte) ([]byte, error) {
 	return out, nil
 }
 
+// TestWritePNGRoundTrip: WritePNG embeds the current card JSON into an existing
+// PNG, replacing any stale chara chunk (the import-then-edit case) — the pixels
+// survive and ReadPNG reads back exactly what was written.
+func TestWritePNGRoundTrip(t *testing.T) {
+	oldJSON := []byte(`{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"Old"}}`)
+	newJSON := []byte(`{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"New","description":"edited"}}`)
+
+	// A PNG that already carries an OLD chara chunk.
+	src, err := embedCharaPNG(oldJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := WritePNG(src, newJSON)
+	if err != nil {
+		t.Fatalf("WritePNG: %v", err)
+	}
+	// The embedded card is the NEW json — the stale chunk was replaced, not
+	// duplicated (ReadPNG returns the first `chara`, so a stale one left ahead of
+	// ours would win and this would fail).
+	if got, err := ReadPNG(out); err != nil || !bytes.Equal(got, newJSON) {
+		t.Fatalf("ReadPNG(WritePNG) = %s, %v; want %s", got, err, newJSON)
+	}
+	if _, err := png.Decode(bytes.NewReader(out)); err != nil {
+		t.Errorf("output is not a decodable PNG (pixels lost): %v", err)
+	}
+
+	// A PNG with NO prior chara chunk embeds just as cleanly.
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 8, 8))); err != nil {
+		t.Fatal(err)
+	}
+	out2, err := WritePNG(buf.Bytes(), newJSON)
+	if err != nil {
+		t.Fatalf("WritePNG (clean): %v", err)
+	}
+	if got, err := ReadPNG(out2); err != nil || !bytes.Equal(got, newJSON) {
+		t.Fatalf("clean round-trip = %s, %v; want %s", got, err, newJSON)
+	}
+
+	// Non-PNG input is refused.
+	if _, err := WritePNG([]byte("not a png"), newJSON); err == nil {
+		t.Error("WritePNG on non-PNG bytes should error")
+	}
+}
+
 // TestSyntheticCard covers the shipped best-practices fixture: it must exercise
 // the full CCv2 surface, and the PNG and JSON versions must parse identically
 // (the regression the PNG version exists for). Regenerate the PNG with:

@@ -20,6 +20,9 @@ const (
 
 // readStartupContextFiles loads the explicit startup context files and renders
 // them as one labeled block for the system prompt, or "" when there are none.
+// It also returns the paths it actually read, in order — the segment's Origin,
+// which is how a reader (or a foreign worker) learns what is in the block
+// without parsing the block.
 //
 // configFiles come from EffectiveConfig.ContextFiles (already absolute);
 // flagFiles come from --context-file and resolve against cwd. Order is
@@ -30,7 +33,7 @@ const (
 // returns an error. The user named the file explicitly (in config or on the
 // command line), so a problem is almost always a typo worth surfacing rather
 // than silently running without the context they intended.
-func readStartupContextFiles(cwd string, configFiles, flagFiles []string) (string, error) {
+func readStartupContextFiles(cwd string, configFiles, flagFiles []string) (string, []string, error) {
 	paths := make([]string, 0, len(configFiles)+len(flagFiles))
 	paths = append(paths, configFiles...) // already absolute
 	for _, p := range flagFiles {
@@ -43,7 +46,7 @@ func readStartupContextFiles(cwd string, configFiles, flagFiles []string) (strin
 		paths = append(paths, filepath.Clean(p))
 	}
 	if len(paths) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 
 	type ctxFile struct{ path, content string }
@@ -58,21 +61,21 @@ func readStartupContextFiles(cwd string, configFiles, flagFiles []string) (strin
 
 		info, err := os.Stat(path)
 		if err != nil {
-			return "", fmt.Errorf("context file %q: %w", path, err)
+			return "", nil, fmt.Errorf("context file %q: %w", path, err)
 		}
 		if info.IsDir() {
-			return "", fmt.Errorf("context file %q: is a directory, not a file", path)
+			return "", nil, fmt.Errorf("context file %q: is a directory, not a file", path)
 		}
 		if !info.Mode().IsRegular() {
-			return "", fmt.Errorf("context file %q: not a regular file", path)
+			return "", nil, fmt.Errorf("context file %q: not a regular file", path)
 		}
 		if info.Size() > maxContextFileBytes {
-			return "", fmt.Errorf("context file %q: %d bytes exceeds the %d byte per-file limit; use a skill or a smaller file", path, info.Size(), maxContextFileBytes)
+			return "", nil, fmt.Errorf("context file %q: %d bytes exceeds the %d byte per-file limit; use a skill or a smaller file", path, info.Size(), maxContextFileBytes)
 		}
 
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			return "", fmt.Errorf("context file %q: %w", path, err)
+			return "", nil, fmt.Errorf("context file %q: %w", path, err)
 		}
 		content := strings.TrimSpace(string(raw))
 		if content == "" {
@@ -80,18 +83,20 @@ func readStartupContextFiles(cwd string, configFiles, flagFiles []string) (strin
 		}
 		total += len(content)
 		if total > maxContextTotalBytes {
-			return "", fmt.Errorf("startup context files exceed the %d byte total limit; load fewer or smaller files", maxContextTotalBytes)
+			return "", nil, fmt.Errorf("startup context files exceed the %d byte total limit; load fewer or smaller files", maxContextTotalBytes)
 		}
 		files = append(files, ctxFile{path: path, content: content})
 	}
 	if len(files) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 
 	var sb strings.Builder
+	origin := make([]string, 0, len(files))
 	sb.WriteString("Startup context files. Treat these as additional project/task context. Later files may refine or override earlier ones.\n")
 	for _, f := range files {
 		fmt.Fprintf(&sb, "\n## %s\n\n%s\n", f.path, f.content)
+		origin = append(origin, f.path)
 	}
-	return strings.TrimSpace(sb.String()), nil
+	return strings.TrimSpace(sb.String()), origin, nil
 }

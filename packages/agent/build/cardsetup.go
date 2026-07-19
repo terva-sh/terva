@@ -16,10 +16,11 @@ import (
 // mapped onto ephemeral lore entries.
 type cardIdentity struct {
 	Persona       Persona
-	greeting      string
-	introOverride string // the card's intro block (system_prompt with {{original}} resolved, else the short framing)
-	introSource   string // provenance for introOverride: "card:system_prompt" or "card:framing"
-	postHistory   string // card post_history_instructions (macros + {{original}}); "" if none
+	greeting      string   // the SELECTED greeting (greetings[greetingIdx]) — the active opening
+	greetings     []string // first_mes + all alternate_greetings, macro-substituted, in card order — the swipeable openings
+	introOverride string   // the card's intro block (system_prompt with {{original}} resolved, else the short framing)
+	introSource   string   // provenance for introOverride: "card:system_prompt" or "card:framing"
+	postHistory   string   // card post_history_instructions (macros + {{original}}); "" if none
 	lore          []lore.Entry
 	loreCfg       lore.Config
 }
@@ -51,15 +52,23 @@ func loadCardIdentity(path, Experience string, greetingIdx int, userName string)
 		return cardIdentity{}, fmt.Errorf("--greeting %d out of range: card has %d greeting(s) (0..%d)", greetingIdx, len(greetings), len(greetings)-1)
 	}
 	entries, cfg := CardBookToLore(c.CharacterBook, charName, userName)
+	// Substitute macros in every greeting, in card order, so the whole set can be
+	// pre-seeded as message-0 swipe variants; the selected one stays the active
+	// opening.
+	allGreetings := make([]string, 0, len(greetings))
+	for _, g := range greetings {
+		allGreetings = append(allGreetings, strings.TrimSpace(card.Substitute(g, charName, userName)))
+	}
 	ci := cardIdentity{
 		Persona: Persona{
 			Name:    charName,
 			Charter: buildCardCharter(c, charName, userName),
 			Source:  "card:" + filepath.Base(path),
 		},
-		greeting: strings.TrimSpace(card.Substitute(greetings[greetingIdx], charName, userName)),
-		lore:     entries,
-		loreCfg:  cfg,
+		greeting:  allGreetings[greetingIdx],
+		greetings: allGreetings,
+		lore:      entries,
+		loreCfg:   cfg,
 	}
 	// A card owns its identity. Its system_prompt replaces terva's intro block,
 	// with {{original}} resolving to a short, brand-free framing (not terva's
@@ -67,7 +76,7 @@ func loadCardIdentity(path, Experience string, greetingIdx int, userName string)
 	// still bracket it (terva-brackets-the-card). A card that supplies no
 	// system_prompt gets that same short framing as its intro, so terva's
 	// branding never leaks onto a character.
-	original := immersiveOriginal(Experience)
+	original := experienceFraming(Experience)
 	if sp := strings.TrimSpace(card.Substitute(c.SystemPrompt, charName, userName)); sp != "" {
 		ci.introOverride = card.ApplyOriginal(sp, original)
 		ci.introSource = "card:system_prompt"

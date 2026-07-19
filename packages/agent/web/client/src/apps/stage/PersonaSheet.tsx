@@ -1,0 +1,97 @@
+import { useEffect, useState } from 'preact/hooks'
+import type { Client } from '../../platform/ctrlproto/client'
+import type { PersonaSummary, PersonaView } from '../../platform/ctrlproto/types'
+
+// A labeled long-text block; renders nothing when the value is empty (unlike the
+// card sheet's "—", a persona simply omits fields it doesn't carry).
+function Field(props: { label: string; value?: string }) {
+  if (!props.value?.trim()) return null
+  return (
+    <div class="stage-personasheet__field">
+      <div class="stage-personasheet__label">{props.label}</div>
+      <p class="stage-personasheet__value">{props.value}</p>
+    </div>
+  )
+}
+
+// A labeled chip list (good-for / avoid-for / skills); omitted when empty.
+function ListField(props: { label: string; items?: string[]; tone?: 'good' | 'avoid' }) {
+  if (!props.items?.length) return null
+  return (
+    <div class="stage-personasheet__field">
+      <div class="stage-personasheet__label">{props.label}</div>
+      <div class="stage-personasheet__chips">
+        {props.items.map((it) => (
+          <span key={it} class={`stage-personasheet__chip ${props.tone ? `stage-personasheet__chip--${props.tone}` : ''}`}>
+            {it}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// PersonaSheet is the persona detail sheet (rough-edge #9): the Library's persona
+// roster was display-only; tapping one now opens its full PersonaView
+// (personas.get) — specialty, summary, introduction, the charter that shapes its
+// identity, and the good-for/avoid-for guidance. Read-only for now; the same
+// sheet is the natural seam for a persona editor later (personas.edit exists).
+export function PersonaSheet(props: { client: Client; persona: PersonaSummary; onClose: () => void }) {
+  const { client, persona, onClose } = props
+  const [view, setView] = useState<PersonaView | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    // Name accepts a bare name or a namespace:name ref — pass the ref so a
+    // namespaced persona resolves unambiguously.
+    client
+      .send<PersonaView>('personas.get', { name: persona.ref })
+      .then(setView)
+      .catch((e: unknown) => setError(String(e)))
+  }, [persona.ref])
+
+  const v = view ?? persona
+
+  return (
+    <div class="stage-sheet-backdrop" onClick={onClose}>
+      <div class="stage-sheet stage-personasheet" onClick={(e) => e.stopPropagation()}>
+        <header class="stage-personasheet__head">
+          <span class="stage-personasheet__emoji" aria-hidden="true">
+            {persona.emoji || '🎭'}
+          </span>
+          <div class="stage-personasheet__id">
+            <h3>{persona.name}</h3>
+            <div class="stage-personasheet__meta">
+              {v.specialty && <span>{v.specialty}</span>}
+              <span>{persona.origin}</span>
+              {persona.namespace && <span>{persona.namespace}</span>}
+              {persona.immersive && <span class="stage-personasheet__immersive">immersive</span>}
+            </div>
+          </div>
+          <button class="stage-drawer__close" onClick={onClose}>
+            ✕
+          </button>
+        </header>
+
+        {error && (
+          <p class="stage-error" onClick={() => setError('')}>
+            {error}
+          </p>
+        )}
+        {!view && !error && <p class="stage-empty">Loading…</p>}
+
+        {view && (
+          <div class="stage-personasheet__body">
+            {view.summary && <p class="stage-personasheet__summary">{view.summary}</p>}
+            <Field label="Introduction" value={view.introduction} />
+            <Field label="Charter" value={view.charter} />
+            <ListField label="Good for" items={view.good_for} tone="good" />
+            <ListField label="Avoid for" items={view.avoid_for} tone="avoid" />
+            <ListField label="Recommended skills" items={view.recommended_skills} />
+            <Field label="Pronunciation" value={view.pronunciation} />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

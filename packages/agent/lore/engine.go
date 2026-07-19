@@ -15,6 +15,21 @@ type Result struct {
 	Before  []Entry // Position==before, ascending Order (placement order)
 	After   []Entry // Position==after, ascending Order
 	Dropped []Entry // fired but cut to fit the token budget (highest Order kept)
+	// Fired is the activation trace in priority order (highest Order first): every
+	// activated entry, the trigger keys that fired it (empty for a constant
+	// "always on" entry), and whether the budget dropped it. Before/After/Dropped
+	// stay the placement/budget buckets the tail builder consumes; Fired is what a
+	// UI reads to show WHY the character's lore is what it is — the lorebook-
+	// opacity answer.
+	Fired []Fired
+}
+
+// Fired is one activated lore entry plus the reason it fired: the matched trigger
+// keys (empty for a constant entry) and whether it was cut to fit the budget.
+type Fired struct {
+	Entry   Entry
+	Keys    []string
+	Dropped bool
 }
 
 // All returns every activated entry (Before then After) in placement order.
@@ -53,6 +68,7 @@ func Select(entries []Entry, cfg Config, scan []string, countTokens func(string)
 	// stable tie-break; `on` dedups.
 	on := make([]bool, len(entries))
 	var activated []int
+	matched := make(map[int][]string) // entry index -> the trigger keys that fired it
 	var recurse strings.Builder
 
 	for step := 1; step <= maxRecursionSteps; step++ {
@@ -66,8 +82,9 @@ func Select(entries []Entry, cfg Config, scan []string, countTokens func(string)
 			if step > 1 && entries[i].ExcludeRecursion {
 				continue
 			}
-			if entryActivates(entries[i], cfg, scan, depthDefault, recurse.String()) {
+			if mk, ok := entryActivates(entries[i], cfg, scan, depthDefault, recurse.String()); ok {
 				newly = append(newly, i)
+				matched[i] = mk
 			}
 		}
 		if len(newly) == 0 {
@@ -106,11 +123,13 @@ func Select(entries []Entry, cfg Config, scan []string, countTokens func(string)
 		return entries[activated[a]].Order > entries[activated[b]].Order
 	})
 	var kept, dropped []Entry
+	var fired []Fired
 	overflowed, used := false, 0
 	for _, i := range activated {
 		e := entries[i]
 		if overflowed {
 			dropped = append(dropped, e)
+			fired = append(fired, Fired{Entry: e, Keys: matched[i], Dropped: true})
 			continue
 		}
 		if cfg.TokenBudget > 0 {
@@ -118,11 +137,13 @@ func Select(entries []Entry, cfg Config, scan []string, countTokens func(string)
 			if len(kept) > 0 && used+cost > cfg.TokenBudget {
 				overflowed = true
 				dropped = append(dropped, e)
+				fired = append(fired, Fired{Entry: e, Keys: matched[i], Dropped: true})
 				continue
 			}
 			used += cost
 		}
 		kept = append(kept, e)
+		fired = append(fired, Fired{Entry: e, Keys: matched[i], Dropped: false})
 	}
 
 	// Placement: bucket by position, ascending Order within each bucket
@@ -141,14 +162,15 @@ func Select(entries []Entry, cfg Config, scan []string, countTokens func(string)
 	}
 	byAscOrder(before)
 	byAscOrder(after)
-	return Result{Before: before, After: after, Dropped: dropped}
+	return Result{Before: before, After: after, Dropped: dropped, Fired: fired}
 }
 
-// entryActivates reports whether a single entry fires against the scan
-// window (plus any recursion buffer).
-func entryActivates(e Entry, cfg Config, scan []string, depthDefault int, recurse string) bool {
+// entryActivates reports whether a single entry fires against the scan window
+// (plus any recursion buffer), and — when it does — which primary trigger keys
+// matched (nil for a constant entry, which fires unconditionally).
+func entryActivates(e Entry, cfg Config, scan []string, depthDefault int, recurse string) (matched []string, ok bool) {
 	if e.Constant {
-		return true
+		return nil, true
 	}
 	depth := depthDefault
 	if e.ScanDepth != nil && *e.ScanDepth > 0 {
@@ -159,13 +181,17 @@ func entryActivates(e Entry, cfg Config, scan []string, depthDefault int, recurs
 	// mirroring MatchWholeWords, which is likewise a collection-level default.
 	caseSensitive := e.CaseSensitive || cfg.CaseSensitive
 	hay := buildHaystack(scan, depth, recurse, caseSensitive)
-	if !anyKeyMatches(e.Keys, hay, caseSensitive, cfg.MatchWholeWords) {
-		return false
+	mk := matchedKeys(e.Keys, hay, caseSensitive, cfg.MatchWholeWords)
+	if len(mk) == 0 {
+		return nil, false
 	}
 	if len(e.SecondaryKeys) == 0 {
-		return true
+		return mk, true
 	}
-	return secondaryOK(e, hay, caseSensitive, cfg.MatchWholeWords)
+	if !secondaryOK(e, hay, caseSensitive, cfg.MatchWholeWords) {
+		return nil, false
+	}
+	return mk, true
 }
 
 // buildHaystack joins the newest `depth` messages (plus the recursion
@@ -194,13 +220,16 @@ func buildHaystack(scan []string, depth int, recurse string, caseSensitive bool)
 	return s
 }
 
-func anyKeyMatches(keys []string, hay string, caseSensitive, wholeWords bool) bool {
+// matchedKeys returns the primary keys that occur in the haystack, in key order —
+// the "why" behind an activation. Empty when none match.
+func matchedKeys(keys []string, hay string, caseSensitive, wholeWords bool) []string {
+	var out []string
 	for _, k := range keys {
 		if containsKey(hay, normalizeNeedle(k, caseSensitive), wholeWords) {
-			return true
+			out = append(out, k)
 		}
 	}
-	return false
+	return out
 }
 
 // secondaryOK applies the entry's Logic across its secondary keys. The

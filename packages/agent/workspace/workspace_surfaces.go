@@ -9,6 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/worktree"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -123,6 +124,16 @@ func (s *wsSession) surfaceList() []ctrlproto.SurfaceMeta {
 		// like the swarm that runs it.
 		metas = append(metas, ctrlproto.SurfaceMeta{ID: "raati", Title: i18n.T("Raati"), Icon: "⚖️", Kind: "raati", Scope: "workspace", Live: true, Actions: true})
 	}
+	// Managed git worktrees — the same view the TUI's /worktree panel renders.
+	// Gated on the STRICT InRepo check (not GitAvailable's nearby-repo
+	// leniency) so the tab only appears where surface.get will succeed.
+	// Session-scoped: the repo resolves from this session's cwd and the claim
+	// identity is this session's own. Read-only, and not Live — no push event
+	// exists for worktree changes, so the pane fetches on open (the same
+	// freshness the TUI panel has).
+	if worktree.InRepo(s.cwd) {
+		metas = append(metas, ctrlproto.SurfaceMeta{ID: "worktrees", Title: i18n.T("Worktrees"), Icon: "🌳", Kind: "worktrees", Scope: "session"})
+	}
 	if s.extMgr != nil && len(s.extMgr.Commands()) > 0 {
 		metas = append(metas, ctrlproto.SurfaceMeta{ID: "commands", Title: i18n.T("Commands"), Icon: "⌘", Kind: "commands", Scope: "session", Actions: true})
 	}
@@ -137,6 +148,12 @@ func (s *wsSession) surfaceList() []ctrlproto.SurfaceMeta {
 	}
 	if s.ws != nil && s.ws.mcpAdapter != nil && len(build.ListMCPServers(s.cwd, s.trusted.Load(), s.ws.mcpAdapter.Mgr)) > 0 {
 		metas = append(metas, ctrlproto.SurfaceMeta{ID: "mcp", Title: i18n.T("MCP"), Icon: "🔗", Kind: "mcp", Scope: "workspace", Actions: true})
+	}
+	// The character/persona library — a workspace-global pane so the panel
+	// manages the same store the Stage app plays from. Always offered (the
+	// embedded persona crew is never empty); Live so an import/edit refreshes it.
+	if s.ws != nil {
+		metas = append(metas, ctrlproto.SurfaceMeta{ID: "characters", Title: i18n.T("Characters"), Icon: "🎭", Kind: "characters", Scope: "workspace", Live: true})
 	}
 	// Always offered. A credential is workspace-scoped (one auth.json, one
 	// daemon), and the pane's whole job is to explain an ABSENCE — why the model
@@ -201,6 +218,15 @@ func (s *wsSession) surface(id string) (ctrlproto.Surface, error) {
 			return ctrlproto.Surface{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "no task board in this session")
 		}
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Tasks"), Kind: "taskboard", TaskBoard: taskBoardView(s.tasks)}, nil
+	case "worktrees":
+		// Managed git worktrees (built-in engine). The TUI's /worktree panel +
+		// glance fetch it by explicit id; the web tab comes from surfaceList
+		// (gated on the same InRepo check). NotFound outside a git repo.
+		wv, err := s.worktreesView()
+		if err != nil {
+			return ctrlproto.Surface{}, err
+		}
+		return ctrlproto.Surface{ID: id, Title: i18n.T("Worktrees"), Kind: "worktrees", Worktrees: wv}, nil
 	case "raati":
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Raati"), Kind: "raati", Raati: s.ws.raatiView()}, nil
 	case "settings":
@@ -214,6 +240,8 @@ func (s *wsSession) surface(id string) (ctrlproto.Surface, error) {
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Permissions"), Kind: "permissions", Permissions: s.permissionsView()}, nil
 	case "lore":
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Lore"), Kind: "lore", Lore: s.loreView()}, nil
+	case "characters":
+		return ctrlproto.Surface{ID: id, Title: i18n.T("Characters"), Kind: "characters", Characters: s.charactersView()}, nil
 	case "mcp":
 		return ctrlproto.Surface{ID: id, Title: i18n.T("MCP"), Kind: "mcp", MCP: s.mcpView()}, nil
 	case "chat":

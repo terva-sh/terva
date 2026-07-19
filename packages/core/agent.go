@@ -65,6 +65,14 @@ type Agent struct {
 	// responses aren't silently cut off with stopReason=length.
 	MaxTokens int
 
+	// ImageOutput, when non-nil, requests native (in-protocol) image output:
+	// the model may draw images inline in its own turn via the provider's
+	// built-in image tool (OpenAI Responses image_generation). Set from the
+	// opt-in native_output config. oneTurn only forwards it when the live model
+	// advertises provider.CapImageOutput, so it tracks a model swap without a
+	// rebuild. nil (the default) leaves native image output off.
+	ImageOutput *provider.ImageOutputConfig
+
 	// BeforeToolExecute, if set, is called immediately before each
 	// tool runs. Returning (allowed=false, reason) short-circuits
 	// the call with an error result containing reason. Optionally,
@@ -222,6 +230,17 @@ type Agent struct {
 	// low 32 bits; the base occupies the high 32.
 	transcriptEpoch uint64
 	cost            CostTracker
+
+	// continuePrefill is set for the duration of one ContinueAssistant turn
+	// (guarded by mu, cleared on return). It makes oneTurn (a) suppress the
+	// ephemeral tail so the trailing assistant message is the LAST message in the
+	// request — required for a provider assistant-prefill continuation — and (b)
+	// MERGE the streamed continuation onto that trailing assistant message in
+	// place instead of appending a new message and persisting it. The merged
+	// message + its index are stashed in continueResult for the caller (the
+	// workspace) to persist as an AmendReplace.
+	continuePrefill bool
+	continueResult  *continuedMessage
 
 	// sessionID / sessionPath identify the transcript file this
 	// conversation persists to: sessionID is the file basename without
@@ -883,6 +902,61 @@ func (a *Agent) SetMessages(msgs []provider.Message) {
 	a.transcriptEpoch++
 }
 
+// ReplaceMessage swaps the message at idx for msg — an in-place edit backing the
+// Stage surface's edit interaction. Identity is (epoch, index): an edit changes a
+// message's content without moving it, but memoized renders and read-dedup
+// fingerprints key on that identity, so it must still bump the transcript epoch.
+// Out-of-range idx is a no-op returning false.
+//
+// It deliberately does NOT run tool-pair repair. Repair runs at send time and
+// load time — after any batch of edits — and running it here would drop messages
+// and shift indices out from under a following edit, breaking the invariant that
+// a reloaded transcript equals the live one. Persisting the edit (an amend row
+// via Session.AppendAmend) is the caller's responsibility.
+func (a *Agent) ReplaceMessage(idx int, msg provider.Message) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if idx < 0 || idx >= len(a.messages) {
+		return false
+	}
+	a.messages[idx] = msg
+	a.rev++
+	a.transcriptEpoch++
+	return true
+}
+
+// DeleteMessage removes the message at idx; later messages shift down. Same
+// epoch and no-repair reasoning as ReplaceMessage. Out-of-range idx is a no-op
+// returning false. The caller persists it as a delete amend.
+func (a *Agent) DeleteMessage(idx int) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if idx < 0 || idx >= len(a.messages) {
+		return false
+	}
+	a.messages = append(a.messages[:idx], a.messages[idx+1:]...)
+	a.rev++
+	a.transcriptEpoch++
+	return true
+}
+
+// TruncateTo cuts the transcript to its first idx messages — the primitive behind
+// regenerate (truncate to before the last turn, then prompt anew). idx == len is
+// an accepted no-op that still returns true; a negative or too-large idx returns
+// false. Same epoch and no-repair reasoning as ReplaceMessage. The caller
+// persists it as a truncate amend.
+func (a *Agent) TruncateTo(idx int) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if idx < 0 || idx > len(a.messages) {
+		return false
+	}
+	a.messages = a.messages[:idx]
+	a.rev++
+	a.transcriptEpoch++
+	return true
+}
+
 // SetModel swaps the active model under the lock that oneTurn snapshots
 // request fields with, so a host can change models on another goroutine
 // without racing a starting turn. It only mutates the model id — the
@@ -1103,6 +1177,122 @@ func (a *Agent) Continue(ctx context.Context, sink func(AgentEvent)) error {
 	}
 	sink = a.wrapSink(sink)
 	return a.runLoop(ctx, sink)
+}
+
+// ErrNoAssistantToContinue is returned by ContinueAssistant when the transcript
+// does not end in an assistant message (there is nothing to extend).
+var ErrNoAssistantToContinue = errors.New("no trailing assistant message to continue")
+
+// ErrContinueUnsupported is returned by ContinueAssistant when the active
+// provider's wire format does not extend a trailing assistant message as a
+// prefill (only Anthropic does today).
+var ErrContinueUnsupported = errors.New("this provider does not support continuing an assistant message")
+
+// continuedMessage is the stashed result of a ContinueAssistant turn: the
+// trailing assistant message extended in place, and its transcript index, for
+// the caller to persist as an AmendReplace.
+type continuedMessage struct {
+	index   int
+	message provider.Message
+}
+
+// ContinueAssistant extends the trailing assistant message: it runs one turn
+// with that message as a provider prefill and MERGES the streamed continuation
+// onto it in place, rather than appending a new message (the inverse of
+// dropLastAssistantMessage). The ephemeral tail is suppressed for the turn so the
+// assistant message is genuinely the last message in the request — required for
+// the prefill. Requires the active client to advertise ContinuesAssistantPrefill.
+// The merged message is stashed for ConsumeContinueResult so the caller persists
+// an AmendReplace; the agent appends nothing durable itself.
+func (a *Agent) ContinueAssistant(ctx context.Context, sink func(AgentEvent)) error {
+	release, ok := a.acquire()
+	if !ok {
+		return ErrBusy
+	}
+	defer release()
+	a.mu.Lock()
+	n := len(a.messages)
+	trailingIsAssistant := n > 0 && a.messages[n-1].Role == provider.RoleAssistant
+	client := a.Client
+	a.mu.Unlock()
+	if !trailingIsAssistant {
+		return ErrNoAssistantToContinue
+	}
+	if !provider.ClientContinuesAssistantPrefill(client) {
+		return ErrContinueUnsupported
+	}
+	if sink == nil {
+		sink = func(AgentEvent) {}
+	}
+	a.mu.Lock()
+	a.continuePrefill = true
+	a.continueResult = nil
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		a.continuePrefill = false
+		a.mu.Unlock()
+	}()
+	sink = a.wrapSink(sink)
+	return a.runLoop(ctx, sink)
+}
+
+// ConsumeContinueResult returns and clears the last ContinueAssistant turn's
+// merged message and index, or ok=false if the turn produced no merge (e.g. it
+// errored before any text landed). The caller persists an AmendReplace at index.
+func (a *Agent) ConsumeContinueResult() (index int, merged provider.Message, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.continueResult == nil {
+		return 0, provider.Message{}, false
+	}
+	r := a.continueResult
+	a.continueResult = nil
+	return r.index, r.message, true
+}
+
+// ContinuesAssistantPrefill reports whether the agent's active provider can
+// extend a trailing assistant message (the turn.continue gate).
+func (a *Agent) ContinuesAssistantPrefill() bool {
+	a.mu.Lock()
+	c := a.Client
+	a.mu.Unlock()
+	return provider.ClientContinuesAssistantPrefill(c)
+}
+
+// mergeContinuation folds a prefill continuation onto the message it extends: the
+// base's blocks, then the continuation's, joining a trailing text block of base
+// with the leading text block of the continuation into one (the model continued
+// mid-text). The base's trailing whitespace is trimmed at the seam so the stored
+// text matches what the model actually continued from (the converter trims the
+// prefill the same way).
+func mergeContinuation(base, cont provider.Message) provider.Message {
+	merged := base
+	merged.Content = append([]provider.Content{}, base.Content...)
+	tail := cont.Content
+	if n := len(merged.Content); n > 0 && len(tail) > 0 {
+		if bt, ok := merged.Content[n-1].(provider.TextBlock); ok {
+			baseText := strings.TrimRight(bt.Text, " \t\n\r")
+			if ct, ok := tail[0].(provider.TextBlock); ok {
+				merged.Content[n-1] = provider.TextBlock{Text: baseText + ct.Text}
+				tail = tail[1:]
+			} else {
+				merged.Content[n-1] = provider.TextBlock{Text: baseText}
+			}
+		}
+	}
+	merged.Content = append(merged.Content, tail...)
+	return merged
+}
+
+// messageHasToolCall reports whether a message carries any tool-call block.
+func messageHasToolCall(m provider.Message) bool {
+	for _, c := range m.Content {
+		if _, ok := c.(provider.ToolCallBlock); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // EmitLifecycle delivers a host-lifecycle event to the OnEvent observer
@@ -1332,6 +1522,17 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			err          error
 		)
 		imageRounds := 0
+		// A continue turn deliberately leaves its prefill target (the trailing
+		// assistant message) LAST so oneTurn can extend it in place. The retry/
+		// image-recovery drops below key on "last message is assistant" — which is
+		// exactly that target — so on a transient error they would delete the very
+		// message being continued, and the retry would then build from a transcript
+		// no longer ending in an assistant, losing the prefill. Suppress the drops
+		// for a continue turn: a transient error there carried no new content to
+		// abandon (oneTurn kept nothing), and the target must survive to be retried.
+		a.mu.Lock()
+		continuePrefill := a.continuePrefill
+		a.mu.Unlock()
 		for attempt := 0; ; attempt++ {
 			stop, assistantMsg, commit, err = a.oneTurn(ctx, pin.system, pin.tools, pin.turn, sink)
 			sink(EvTurnEnd{Stop: stop, Err: err})
@@ -1352,7 +1553,9 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			if isImageRejectionError(err) && imageRounds < maxImageRecoveryRounds {
 				if sha, ok := a.neutralizeLastTranscriptImage(); ok {
 					imageRounds++
-					a.dropLastAssistantMessage()
+					if !continuePrefill {
+						a.dropLastAssistantMessage()
+					}
 					// Persist the drop so a resumed session re-applies it instead
 					// of re-sending the bad image (fired outside the agent lock).
 					a.fireImageExcluded(sha)
@@ -1365,8 +1568,12 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			}
 			// This attempt is being retried: drop its (possibly partial)
 			// assistant message from memory and do NOT commit it, so the
-			// durable session never records the abandoned attempt.
-			a.dropLastAssistantMessage()
+			// durable session never records the abandoned attempt. Skipped for a
+			// continue turn, whose trailing assistant is the prefill target, not an
+			// abandoned attempt (see the continuePrefill note above the loop).
+			if !continuePrefill {
+				a.dropLastAssistantMessage()
+			}
 			if sleepErr := sleepRetry(ctx, a.retryDelay(attempt, err)); sleepErr != nil {
 				return sleepErr
 			}
@@ -1691,12 +1898,25 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	reasoning := a.Reasoning
 	maxTokens := a.MaxTokens
 	temperature := a.Temperature
+	imageOutput := a.ImageOutput
 	client := a.Client
 	contextProvider := a.ContextProvider
 	cacheKey := a.cacheID
+	continuePrefill := a.continuePrefill
 	msgs := make([]provider.Message, len(a.messages))
 	copy(msgs, a.messages)
 	a.mu.Unlock()
+
+	// Native image output is offered only when the live model advertises
+	// CapImageOutput, so swapping to (or away from) an image-capable model
+	// toggles it with no rebuild. Look it up under the current client's
+	// provider — the capability is provider-specific (only the Responses/codex
+	// path implements it), and an id can exist under more than one provider.
+	if imageOutput != nil {
+		if m, err := provider.FindModel(client.Name(), model); err != nil || !m.Has(provider.CapImageOutput) {
+			imageOutput = nil
+		}
+	}
 
 	// Pull host ephemeral context (e.g. an extension's live task card)
 	// outside the lock; it rides the request only, never the transcript.
@@ -1765,6 +1985,14 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		}
 	}
 
+	// A continue turn suppresses the ENTIRE ephemeral tail (the context provider
+	// plus the lazy-tool / context-pressure / stall notes assembled above), so the
+	// trailing assistant message is genuinely the last message in the request —
+	// the Anthropic prefill only continues it when nothing follows it.
+	if continuePrefill {
+		ephemeral = ""
+	}
+
 	req := provider.Request{
 		Model:  model,
 		System: system,
@@ -1785,6 +2013,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		Reasoning:        reasoning,
 		MaxTokens:        maxTokens,
 		Temperature:      temperature,
+		ImageOutput:      imageOutput,
 		EphemeralContext: ephemeral,
 		// The session id doubles as the provider cache-routing key so
 		// concurrent conversations on one account (coordinator + swarm
@@ -1876,6 +2105,35 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 					emit = replaceText(finalMsg, replacement)
 				}
 			}
+		}
+
+		// A continue turn MERGES this message onto the trailing assistant message
+		// in place instead of appending it, stashing the result for the caller to
+		// persist as an AmendReplace (no durable append here — the model didn't
+		// say a NEW message, it extended the last one). Only a pure-text
+		// continuation merges: if the model produced tool calls it is a real new
+		// step, so fall through to the normal append path. Inert for every
+		// non-continue turn (continuePrefill is false).
+		if continuePrefill && !messageHasToolCall(finalMsg) {
+			a.mu.Lock()
+			if mi := len(a.messages) - 1; mi >= 0 && a.messages[mi].Role == provider.RoleAssistant {
+				merged := mergeContinuation(a.messages[mi], finalMsg)
+				a.messages[mi] = merged
+				a.rev++
+				a.continueResult = &continuedMessage{index: mi, message: merged}
+				a.mu.Unlock()
+				commit := func() {
+					// No fireMessageAppended: the workspace persists an
+					// AmendReplace from the stashed result. Emit the merged message
+					// so a live subscriber redraws the extended bubble; the
+					// post-turn snapshot is authoritative regardless.
+					if !suppress {
+						sink(EvAssistantMessage{Message: merged})
+					}
+				}
+				return stop, merged, commit, finalErr
+			}
+			a.mu.Unlock()
 		}
 
 		// Append to the in-memory transcript now so a same-process

@@ -107,6 +107,11 @@ const (
 	// per contract, next to where image data is already stripped — so nothing that
 	// exists has to change, and no flag day is needed.
 	FeatureHistoryWindow = "history-window"
+	// FeatureStage advertises that this daemon serves the Stage app at /stage/
+	// (web_stage enabled). A panel reads it to show an "open in Stage" link only
+	// where the surface actually exists; it gates presentation, not a method group
+	// (the library verbs the Stage app uses live in the always-on control group).
+	FeatureStage = "stage"
 )
 
 // Hello is the handshake frame each side sends once at connect time. The

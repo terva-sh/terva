@@ -24,12 +24,12 @@ func freshHome(t *testing.T) string {
 func TestEmbeddedCrew(t *testing.T) {
 	freshHome(t)
 	got := listEmbeddedPersonas()
-	if len(got) != 12 {
+	if len(got) != 13 {
 		names := make([]string, len(got))
 		for i, p := range got {
 			names[i] = p.Name
 		}
-		t.Fatalf("embedded crew: got %d personas %v, want 12", len(got), names)
+		t.Fatalf("embedded crew: got %d personas %v, want 13", len(got), names)
 	}
 	by := map[string]Persona{}
 	for _, p := range got {
@@ -55,6 +55,11 @@ func TestEmbeddedCrew(t *testing.T) {
 		t.Error("YATA-1 (the raati truth panelist) missing from embedded crew")
 	} else if y.Namespace != "raati-crew" {
 		t.Errorf("YATA-1 namespace = %q, want raati-crew", y.Namespace)
+	}
+	if s, ok := by["Seppä"]; !ok {
+		t.Error("Seppä (the card doctor) missing from embedded crew")
+	} else if s.Immersive {
+		t.Error("Seppä should not be immersive (it is an additive card-craft persona)")
 	}
 }
 
@@ -195,7 +200,10 @@ func TestBuildSystemPrompt_CharterPlacement(t *testing.T) {
 	got := BuildSystemPrompt(SystemPromptOpts{PersonaName: "Vartija", Charter: "REVIEW-AS-SECURITY"})
 	intro := strings.Index(got, "You are Vartija,")
 	charter := strings.Index(got, "REVIEW-AS-SECURITY")
-	conv := strings.Index(got, "Your output renders in a TUI")
+	// Anchor on the surface-independent half of the conventions: the opening
+	// sentence now varies with where the output lands (see Surface), so keying
+	// the ordering check on it would make this test a hostage to the audience.
+	conv := strings.Index(got, "Act first, then summarise")
 	if intro < 0 || charter < 0 || conv < 0 {
 		t.Fatalf("missing a section: intro=%d charter=%d conv=%d\n%s", intro, charter, conv, got)
 	}

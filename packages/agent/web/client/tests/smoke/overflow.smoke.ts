@@ -106,10 +106,48 @@ const CHAT_VIEW = {
   bridge: { state: 'connected', connector: 'telegram', username: 'terva_dev_bot', paired_id: '@drew', session: 'sess-0119gr6zgm' },
 }
 
+// The worktrees pane's overflow hazards are exactly the tokens git makes long:
+// absolute checkout paths, wt/-prefixed branch names, session-id claim owners.
+const WORKTREES_VIEW = {
+  repo_key: 'terva-workspace-explore-workflow-ab12cd34ef',
+  cwd_worktree: 'feat-worktree-web-pane',
+  items: [
+    {
+      name: 'feat-worktree-web-pane',
+      path: '/Users/drewshort/Library/Application Support/terva/worktrees/terva-ab12cd34ef/worktrees/feat-worktree-web-pane',
+      branch: 'wt/feat-worktree-web-pane',
+      base_ref: 'sothr-main', base_commit: 'b6c2a1738872', head_commit: 'c001dbeef012',
+      status: 'claimed', claimed_by: 'self', dirty: true,
+    },
+    {
+      name: 'fix-release-notes-grouping-and-the-changelog-curation-threshold',
+      path: '/Users/drewshort/Library/Application Support/terva/worktrees/terva-ab12cd34ef/worktrees/fix-release-notes-grouping-and-the-changelog-curation-threshold',
+      branch: 'wt/fix-release-notes-grouping-and-the-changelog-curation-threshold',
+      base_ref: 'sothr-main', base_commit: 'b6c2a1738872',
+      status: 'claimed', claimed_by: 'sess-0119gr6zgm7h3xq2',
+    },
+    {
+      name: 'idle-explore',
+      path: '/Users/drewshort/Library/Application Support/terva/ext-data/git-worktree/terva-ab12cd34ef/worktrees/idle-explore',
+      branch: 'wt/idle-explore', base_ref: 'sothr-main', base_commit: 'b6c2a1738872',
+      status: 'available', stale_reason: 'claiming session gone (pid 4242 dead)',
+    },
+  ],
+  collect: [
+    {
+      name: 'feat-worktree-web-pane', branch: 'wt/feat-worktree-web-pane', base_ref: 'sothr-main',
+      ahead: 2, dirty: true,
+      commits: ['a1b2c3d feat(web): the worktrees pane — list + merge-back views over the listed surface', 'd4e5f6a chore(web): regenerate dist'],
+    },
+    { name: 'idle-explore', branch: 'wt/idle-explore', base_ref: 'sothr-main', ahead: 0 },
+  ],
+}
+
 // Every core surface the daemon serves, with a per-surface readiness selector
 // (the body element that proves the view rendered, not the loading stub).
 const SURFACES: { id: string; title: string; kind: string; ready: string; view: Record<string, unknown> }[] = [
   { id: 'tasks', title: 'Tasks', kind: 'tasks', ready: '.tasks-body', view: { tasks: TASKS_VIEW } },
+  { id: 'worktrees', title: 'Worktrees', kind: 'worktrees', ready: '.wt-body', view: { worktrees: WORKTREES_VIEW } },
   { id: 'raati', title: 'Raati', kind: 'raati', ready: '.raati-body', view: { raati: RAATI_VIEW } },
   { id: 'settings', title: 'Settings', kind: 'settings', ready: '.settings-body', view: { settings: SETTINGS_VIEW } },
   { id: 'widgets', title: 'Usage', kind: 'widgets', ready: '.wg-body', view: { widgets: WIDGETS_VIEW } },
@@ -213,6 +251,36 @@ for (const surface of SURFACES) {
     }
   })
 }
+
+// The worktrees pane's merge-back (collect) view hides behind an in-pane
+// toggle, so the generic sweep above never renders it — give its long commit
+// subjects their own horizontal-pan pass.
+test('Worktrees merge-back view stays one-axis at every width', async ({ page }) => {
+  await page.setViewportSize({ width: VIEWPORTS[0].width, height: VIEWPORTS[0].height })
+  await installMockBackend(page, { respond })
+  await page.goto('/')
+  await page.locator('.topbar .dot.open').waitFor()
+  await page.locator('.topbar button[title="Panes (usage, settings, extensions)"]').click()
+  await page.locator('.pane-tab[title="Worktrees"]').click()
+  await page.locator('.wt-body').waitFor()
+  await page.locator('.wt-tab', { hasText: 'Merge-back' }).click()
+  await page.locator('.wt-footnote').waitFor()
+  for (const vp of VIEWPORTS) {
+    await page.setViewportSize({ width: vp.width, height: vp.height })
+    const pan = await page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>('.pane-body')!
+      el.scrollLeft = 120
+      return el.scrollLeft
+    })
+    expect(pan, `${vp.name} (${vp.width}px)`).toBe(0)
+    const docPan = await page.evaluate(() => {
+      const doc = document.scrollingElement as HTMLElement
+      doc.scrollLeft = 120
+      return doc.scrollLeft
+    })
+    expect(docPan, `${vp.name} (${vp.width}px) document`).toBe(0)
+  }
+})
 
 // smallFields returns a description of every focusable text-entry control whose
 // computed font-size would trip iOS Safari's focus zoom. Empty on a fine

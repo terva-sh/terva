@@ -154,6 +154,7 @@ body {
 .task-status.s-failed, .task-status.s-killed { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
 .task-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-ui); }
 .task-model { flex: none; font-size: var(--fs-note); color: var(--muted); font-family: ui-monospace, monospace; }
+.task-cost { flex: none; font-size: var(--fs-note); color: var(--muted); font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 .task-activity { font-size: var(--fs-detail); color: var(--muted); font-style: italic; }
 .task-error { font-size: var(--fs-detail); color: var(--danger); overflow-wrap: anywhere; }
 .task-tail { margin: 2px 0 0; padding: 8px; background: var(--panel); border-radius: 8px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }
@@ -161,6 +162,37 @@ body {
 .task-actions:empty { display: none; }
 .task-send { display: flex; gap: 6px; }
 .task-send input { flex: 1; font: inherit; font-size: var(--fs-detail); padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+
+/* worktrees pane. Status chips stay lowercase (claimed(<session>) carries a
+   real id); paths/branches wrap rather than widen (convention #2). */
+.wt-body { padding: var(--pad-pane); display: flex; flex-direction: column; gap: var(--gap-row); }
+.wt-head { display: flex; align-items: center; gap: 8px; }
+.wt-tabs { flex: none; display: flex; gap: 2px; background: var(--panel); border-radius: 8px; padding: 2px; }
+.wt-tab { border: 0; background: transparent; color: var(--muted); font-size: var(--fs-detail); padding: 3px 10px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+.wt-tab.active { background: var(--bg); color: var(--fg); }
+.wt-pending { font-size: var(--fs-note); font-weight: 600; padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--warning, #d1901f) 22%, transparent); color: var(--warning, #d1901f); }
+.wt-repo { flex: 1; min-width: 0; text-align: right; font-size: var(--fs-note); color: var(--muted); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-list { display: flex; flex-direction: column; gap: var(--gap-row); }
+.wt-row { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; }
+.wt-row.here { border-color: color-mix(in srgb, var(--user) 45%, var(--line)); }
+.wt-row-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.wt-name { min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-ui); font-weight: 500; }
+.wt-here { flex: none; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--user) 20%, transparent); color: var(--user); }
+.wt-status { flex: none; margin-left: auto; font-size: var(--fs-note); font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--panel); color: var(--muted); overflow-wrap: anywhere; }
+.wt-status.s-self { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+.wt-status.s-claimed { background: color-mix(in srgb, var(--user) 18%, transparent); color: var(--user); }
+.wt-status.s-stale, .wt-status.s-unmanaged { background: color-mix(in srgb, var(--warning, #d1901f) 20%, transparent); color: var(--warning, #d1901f); }
+.wt-dirty { flex: none; font-size: var(--fs-note); color: var(--warning, #d1901f); }
+.wt-ahead { flex: none; margin-left: auto; font-size: var(--fs-note); color: var(--muted); font-variant-numeric: tabular-nums; }
+.wt-row-detail { display: flex; gap: 8px; flex-wrap: wrap; font-size: var(--fs-detail); color: var(--muted); }
+.wt-branch { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.wt-base { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.wt-stale-why { font-style: italic; }
+.wt-path { font-size: var(--fs-note); color: var(--muted); font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.wt-commits { margin: 0; padding-left: 18px; font-size: var(--fs-detail); display: flex; flex-direction: column; gap: 2px; }
+.wt-commits li { overflow-wrap: anywhere; }
+.wt-even { font-size: var(--fs-note); color: var(--muted); font-style: italic; }
+.wt-footnote { font-size: var(--fs-note); color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
 
 /* settings pane */
 .settings-body { padding: var(--pad-pane); display: flex; flex-direction: column; gap: 14px; }
@@ -379,6 +411,49 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .session-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-meta { font-size: 12px; color: var(--muted); }
 
+/* sessions board (stage 4.1) — one tile per session: monitor + focus + lifecycle.
+   Renders in .main, so it follows the shell width. minmax(min(200px,100%),1fr)
+   collapses to one column on a phone without a 200px min overflowing a narrow
+   .main (convention #2: never widen the container). */
+.board-view { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.board { display: flex; flex-direction: column; min-width: 0; }
+.board-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.board-empty { padding: 24px 14px; color: var(--muted); }
+/* second lane: the workspace swarm, below the session tiles */
+.board-lane { border-top: 1px solid var(--line); }
+.board-lane .board-head { justify-content: flex-start; }
+.board-lane-count { font-size: var(--fs-note); color: var(--muted); background: var(--panel); border-radius: 999px; padding: 0 8px; }
+/* push the "+ New" action to the right edge of the (left-aligned) lane head */
+.board-head-action { margin-left: auto; }
+/* the inline spawn form: task text + backend picker + spawn/cancel */
+.swarm-spawn { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.swarm-spawn-task { flex: 1 1 180px; min-width: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font-size: var(--fs-ui); }
+.swarm-spawn-backend { flex: none; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font-size: var(--fs-note); }
+.swarm-spawn-hint { padding: 0 14px 10px; font-size: var(--fs-detail); color: var(--warning, #d1901f); }
+.swarm-tile { gap: 4px; }
+.swarm-backend { flex: none; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 6px; background: var(--panel); color: var(--muted); margin-right: 6px; }
+.swarm-activity { font-size: var(--fs-detail); color: var(--muted); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.swarm-error { font-size: var(--fs-detail); color: var(--danger); overflow-wrap: anywhere; }
+/* a worker parked on a human approval: an actionable badge (click opens the
+   session where the card lives) plus a whole-tile accent so it stands out. */
+.swarm-waiting { align-self: flex-start; flex: none; cursor: pointer; border: 0; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--warning, #d1901f) 22%, transparent); color: var(--warning, #d1901f); }
+.swarm-waiting:hover { background: color-mix(in srgb, var(--warning, #d1901f) 34%, transparent); }
+.board-tile.swarm-tile.waiting { border-color: var(--warning, #d1901f); }
+/* worker-shaped fields on the pane's task rows (light up under a workers daemon) */
+.task-backend { flex: none; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 6px; background: var(--panel); color: var(--muted); }
+.task-cost { flex: none; font-size: var(--fs-note); color: var(--muted); font-family: ui-monospace, monospace; }
+.board-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: 10px; padding: 12px; }
+.board-tile { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; min-width: 0; }
+.board-tile:hover { border-color: var(--muted); }
+.board-tile.active { border-color: var(--user); background: color-mix(in srgb, var(--user) 12%, var(--bg)); }
+.board-tile-head { display: flex; align-items: baseline; gap: 8px; }
+.board-tile-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; font-size: var(--fs-ui); }
+.board-tile-meta { font-size: var(--fs-detail); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-tile-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.board-status { flex: none; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 7px; border-radius: 999px; background: var(--panel); color: var(--muted); }
+.board-status.busy { background: color-mix(in srgb, var(--user) 20%, transparent); color: var(--user); }
+.board-status.live { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+
 /* toast */
 .toast { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%); background: var(--danger); color: #fff; padding: 8px 14px; border-radius: 10px; max-width: 90vw; cursor: pointer; z-index: 30; box-shadow: 0 4px 16px #0004; }
 
@@ -509,6 +584,15 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .ctx-msg-kind { flex: 1; min-width: 0; }
 .ctx-msg-b { flex: none; text-align: right; font-variant-numeric: tabular-nums; }
 .ctx-msg-tag { flex: none; }
+/* lore-fired trace: which lore fed the ephemeral tail last turn, and why */
+.ctx-lore { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.ctx-lore-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; font-size: 12px; }
+.ctx-lore-row:nth-child(odd) { background: color-mix(in srgb, var(--muted) 6%, transparent); }
+.ctx-lore-row.dropped { color: var(--muted); }
+.ctx-lore-name { flex: 1; min-width: 0; font-weight: 600; }
+.ctx-lore-keys { flex: none; font-family: ui-monospace, monospace; color: var(--muted); }
+.ctx-lore-tag { flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+.ctx-lore-tag.dropped { color: var(--warning, #d1901f); }
 /* context-tree outline: collapsible turns → messages */
 .ctx-tree { border: 1px solid var(--line); border-radius: 8px; max-height: 42vh; overflow-y: auto; padding: 2px 0; }
 .ctx-trow { display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; font-size: 12px; font-family: ui-monospace, monospace; border-radius: 4px; }

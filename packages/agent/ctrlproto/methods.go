@@ -10,22 +10,28 @@ type Method string
 const (
 	// --- conversation group ---
 
-	MethodPrompt      Method = "prompt"      // params PromptParams
-	MethodQueue       Method = "queue"       // params QueueParams
-	MethodQueueSet    Method = "queue.set"   // params QueueSetParams (edit/cancel pending queue)
-	MethodCancel      Method = "cancel"      // no params
-	MethodCompact     Method = "compact"     // no params; summarize+replace the transcript
-	MethodClear       Method = "clear"       // no params; wipe the transcript (no summary)
-	MethodApprove     Method = "approve"     // params ApproveParams
-	MethodAnswer      Method = "answer"      // params AnswerParams
-	MethodSubscribe   Method = "subscribe"   // no params; streams events for the frame's sess
-	MethodUnsubscribe Method = "unsubscribe" // no params
+	MethodPrompt        Method = "prompt"         // params PromptParams
+	MethodQueue         Method = "queue"          // params QueueParams
+	MethodQueueSet      Method = "queue.set"      // params QueueSetParams (edit/cancel pending queue)
+	MethodCancel        Method = "cancel"         // no params
+	MethodCompact       Method = "compact"        // no params; summarize+replace the transcript
+	MethodClear         Method = "clear"          // no params; wipe the transcript (no summary)
+	MethodMessageEdit   Method = "message.edit"   // params MessageEditParams; edit a message in place
+	MethodMessageDelete Method = "message.delete" // params MessageDeleteParams; remove a message
+	MethodTurnSwipe     Method = "turn.swipe"     // params TurnSwipeParams; switch the tail span's active variant
+	MethodTurnRetry     Method = "turn.retry"     // params TurnRetryParams; regenerate the last response, keeping the old
+	MethodTurnContinue  Method = "turn.continue"  // params TurnContinueParams; extend the trailing assistant (optional ContinueController)
+	MethodApprove       Method = "approve"        // params ApproveParams
+	MethodAnswer        Method = "answer"         // params AnswerParams
+	MethodSubscribe     Method = "subscribe"      // no params; streams events for the frame's sess
+	MethodUnsubscribe   Method = "unsubscribe"    // no params
 
 	// --- session group ---
 
 	MethodSessionsList  Method = "sessions.list"   // result SessionsResult
 	MethodSessionCreate Method = "sessions.create" // params CreateOpts, result SessionResult
 	MethodSessionResume Method = "sessions.resume" // result SessionResult (sess in frame)
+	MethodSessionFork   Method = "sessions.fork"   // params SessionForkParams, result SessionResult (parent sess in frame)
 	MethodSessionRename Method = "sessions.rename" // params RenameParams (sess in frame)
 	// MethodSessionGenerateTitle regenerates sess's title from its transcript
 	// with a one-shot model call — the on-demand sibling of the automatic
@@ -34,6 +40,7 @@ const (
 	// overwrites whatever title exists, manual renames included.
 	MethodSessionGenerateTitle Method = "sessions.generate_title" // result GenerateTitleResult (sess in frame)
 	MethodSessionDelete        Method = "sessions.delete"         // no params (sess in frame)
+	MethodSessionDiscardDraft  Method = "sessions.discard_draft"  // no params (sess in frame); served by an optional DraftController
 	MethodUsageGet             Method = "usage.get"               // result UsageResult (sess in frame)
 	MethodUsageSnapshot        Method = "usage.snapshot"          // params UsageSnapshotParams, result UsageSnapshotResult (sess in frame)
 	MethodResetsList           Method = "usage.resets.list"       // result ResetsListResult (sess in frame); read-only
@@ -119,6 +126,11 @@ const (
 	MethodSideChatAsk   Method = "sidechat.ask"   // params SideChatAskParams, result SideChatAskResult
 	MethodSideChatClose Method = "sidechat.close" // params SideChatCloseParams
 
+	// Suggest a reply (optional; served only by a SuggestController). Drafts the
+	// player's next message from the session transcript + user persona; a composer
+	// aid that never writes the transcript. Session rides the frame's sess.
+	MethodSuggestReply Method = "suggest.reply" // params SuggestParams, result SuggestResult (sess in frame)
+
 	// --- control group ---
 
 	MethodModelsList    Method = "models.list"     // result ModelsResult
@@ -138,6 +150,64 @@ const (
 	// group). The host still requires explicit user confirmation before calling.
 	MethodResetsConsume Method = "usage.resets.consume" // params ResetConsumeParams, result ResetConsumeResult (sess in frame)
 
+	// The character-card library (optional; served only by a CardsController).
+	// In the control group: a card is workspace-wide state that outlives any one
+	// session, like the model defaults above.
+	MethodCardsList   Method = "cards.list"   // result CardsListResult
+	MethodCardsGet    Method = "cards.get"    // params CardGetParams, result CardView
+	MethodCardsImport Method = "cards.import" // params CardImportParams, result CardView
+	MethodCardsEdit   Method = "cards.edit"   // params CardEditParams, result CardView
+	MethodCardsDelete Method = "cards.delete" // params CardDeleteParams
+	MethodCardsExport Method = "cards.export" // params CardExportParams, result CardExport
+	MethodCardsLint   Method = "cards.lint"   // params CardLintParams, result CardLintResult
+
+	// The LLM card doctor (optional; served only by a DoctorController). Reads a
+	// card + its deterministic lint and proposes structured per-field edits.
+	MethodCardsDoctor Method = "cards.doctor" // params DoctorParams, result DoctorResult
+
+	// The persona library (optional; served only by a PersonasController). In the
+	// control group with cards; create/edit are trusted-tier (gated in the
+	// workspace), so they change what the running agent IS, like the model
+	// defaults and per-model overrides above.
+	MethodPersonasList   Method = "personas.list"   // result PersonasListResult
+	MethodPersonasGet    Method = "personas.get"    // params PersonaGetParams, result PersonaView
+	MethodPersonasCreate Method = "personas.create" // params PersonaWriteParams, result PersonaView
+	MethodPersonasEdit   Method = "personas.edit"   // params PersonaWriteParams, result PersonaView
+
+	// Scene backdrops (optional; served only by a BackgroundsController). The
+	// store is global like cards; bind is per-session (sess in frame).
+	MethodBackgroundsList    Method = "backgrounds.list"     // result BackgroundsListResult
+	MethodBackgroundsImport  Method = "backgrounds.import"   // params BackgroundImportParams, result BackgroundView
+	MethodBackgroundsDelete  Method = "backgrounds.delete"   // params BackgroundDeleteParams
+	MethodBackgroundBind     Method = "backgrounds.bind"     // params BackgroundBindParams (sess in frame)
+	MethodBackgroundGenerate Method = "backgrounds.generate" // params BackgroundGenerateParams, result BackgroundView (sess in frame)
+
+	// The author's note (optional; served only by a NoteController). Per-session
+	// steering injected into the uncached tail — set live, no cache bust.
+	MethodNoteSet Method = "note.set" // params NoteSetParams (sess in frame)
+
+	// The user persona (optional; served only by a UserController). Binds who the
+	// user is in the story — the description rides the free tail, the name rebuilds
+	// the cached prefix.
+	MethodUserBind Method = "user.bind" // params UserBindParams (sess in frame)
+
+	// Saved user personas (optional; served only by a UserPersonasController). The
+	// reusable user identities a chat can pre-fill or swap between.
+	MethodUserPersonasList      Method = "userpersonas.list"        // result UserPersonasListResult
+	MethodUserPersonaSave       Method = "userpersonas.save"        // params UserPersonaView, result UserPersonaView
+	MethodUserPersonaDelete     Method = "userpersonas.delete"      // params UserPersonaRef
+	MethodUserPersonaSetDefault Method = "userpersonas.set_default" // params UserPersonaRef
+
+	// The play cast (optional; served only by a CastController). Edit a play
+	// session's ensemble mid-scene; each change rebuilds the actor_spawn tool.
+	MethodCastAdd    Method = "cast.add"    // params CastMemberParams (sess in frame)
+	MethodCastRemove Method = "cast.remove" // params CastMemberParams (sess in frame)
+	MethodCastSpeak  Method = "cast.speak"  // params CastSpeakParams (sess in frame); runs a turn
+
+	// Message-scoped variant cleanup (optional; served only by a VariantsController).
+	MethodVariantsPrune Method = "variants.prune" // params VariantsPruneParams (sess in frame)
+	MethodVariantsDrop  Method = "variants.drop"  // params VariantsDropParams (sess in frame)
+
 	// --- replay group (optional; served only by a ReplayController) ---
 
 	MethodReplayControl Method = "replay.control" // params ReplayControlParams, result ReplayStateResult (sess in frame)
@@ -148,17 +218,23 @@ const (
 func (m Method) Group() Group {
 	switch m {
 	case MethodPrompt, MethodQueue, MethodQueueSet, MethodCancel, MethodCompact,
-		MethodClear, MethodApprove, MethodAnswer, MethodSubscribe, MethodUnsubscribe:
+		MethodClear, MethodMessageEdit, MethodMessageDelete, MethodTurnSwipe, MethodTurnRetry, MethodTurnContinue, MethodApprove, MethodAnswer,
+		MethodVariantsPrune, MethodVariantsDrop, MethodSubscribe, MethodUnsubscribe:
 		return GroupConversation
-	case MethodSessionsList, MethodSessionCreate, MethodSessionResume,
-		MethodSessionRename, MethodSessionGenerateTitle, MethodSessionDelete, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
+	case MethodSessionsList, MethodSessionCreate, MethodSessionResume, MethodSessionFork,
+		MethodSessionRename, MethodSessionGenerateTitle, MethodSessionDelete, MethodSessionDiscardDraft, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
 		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
 		MethodFilesList, MethodAuthProviders, MethodConversationReveal, MethodConversationHistory,
-		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose:
+		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose, MethodSuggestReply:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault,
 		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
-		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume:
+		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume,
+		MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint, MethodCardsDoctor,
+		MethodPersonasList, MethodPersonasGet, MethodPersonasCreate, MethodPersonasEdit,
+		MethodBackgroundsList, MethodBackgroundsImport, MethodBackgroundsDelete, MethodBackgroundBind, MethodBackgroundGenerate,
+		MethodNoteSet, MethodUserBind, MethodCastAdd, MethodCastRemove, MethodCastSpeak,
+		MethodUserPersonasList, MethodUserPersonaSave, MethodUserPersonaDelete, MethodUserPersonaSetDefault:
 		return GroupControl
 	case MethodReplayControl, MethodReplayState:
 		return GroupReplay
@@ -295,9 +371,20 @@ type SessionsResult struct {
 }
 
 // SessionResult is the payload of a [MethodSessionCreate] / [MethodSessionResume]
-// response.
+// / [MethodSessionFork] response.
 type SessionResult struct {
 	Session SessionInfo `json:"session"`
+}
+
+// SessionForkParams is the payload of [MethodSessionFork]: branch the session in
+// the frame at FromIndex into a NEW parent-linked session. The child keeps the
+// parent's messages 0..FromIndex (inclusive) and diverges after; the parent is
+// untouched. FromIndex is a message index in the transcript the client sees —
+// branch at a user-turn boundary (a mid-response index still works, but the
+// child's load-time tool-pair repair may drop a dangling call). Returns the
+// child's descriptor.
+type SessionForkParams struct {
+	FromIndex int `json:"from_index"`
 }
 
 // UsageResult is the payload of a [MethodUsageGet] response.
@@ -371,6 +458,50 @@ type ContextResult struct {
 type ContextNodeParams struct {
 	ID string `json:"id"`
 	Op string `json:"op,omitempty"`
+}
+
+// MessageEditParams is the payload of [MethodMessageEdit]: replace the message at
+// Index with a text message of the same role. Epoch is the client's transcript
+// epoch (from the last snapshot); a stale one means the transcript shifted under
+// the client — the index no longer means what it thought — and the edit is
+// refused with [CodeConflict] rather than applied to the wrong message.
+type MessageEditParams struct {
+	Epoch uint64 `json:"epoch"`
+	Index int    `json:"index"`
+	Text  string `json:"text"`
+}
+
+// MessageDeleteParams is the payload of [MethodMessageDelete]: remove the message
+// at Index (later messages shift down). Epoch is checked as in [MessageEditParams].
+type MessageDeleteParams struct {
+	Epoch uint64 `json:"epoch"`
+	Index int    `json:"index"`
+}
+
+// TurnSwipeParams is the payload of [MethodTurnSwipe]: make take Variant of the
+// current tail span active (swipe-back among a regenerated turn's alternatives or
+// pre-seeded greetings). Variant is an ABSOLUTE index into the tail's takes — the
+// client resolves next/prev arrows against [TailInfo] and sends the destination.
+// Epoch is checked as in [MessageEditParams]; a swipe to the current variant is a
+// no-op.
+type TurnSwipeParams struct {
+	Epoch   uint64 `json:"epoch"`
+	Variant int    `json:"variant"`
+	// Index selects WHICH switchable position to swipe (from the snapshot's
+	// VariantMarks). Absent (nil) means the tail span — the original behavior, so a
+	// client that only swipes the tail need not send it. Present means the
+	// message-scoped variant at that effective index (Option C); index 0 is a real
+	// position, which is why this is a pointer rather than a 0-default.
+	Index *int `json:"index,omitempty"`
+}
+
+// TurnRetryParams is the payload of [MethodTurnRetry]: regenerate the last
+// response, keeping the current one as a swipeable take. Epoch is checked as in
+// [MessageEditParams] — a stale one means the transcript shifted under the client.
+// Like a prompt it starts a turn (returns once accepted; the regeneration
+// streams), and [CodeBusy] when a turn is already running.
+type TurnRetryParams struct {
+	Epoch uint64 `json:"epoch"`
 }
 
 // HistoryParams is the payload of [MethodConversationHistory]: give me the Limit

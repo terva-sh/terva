@@ -48,6 +48,17 @@ type Session struct {
 	// worth keeping.
 	messagesAppended int
 
+	// pendingGreeting holds a deferred, re-derivable opening set (a Stage card's
+	// first_mes + alternate_greetings) seeded into the LIVE transcript but not yet
+	// written to disk, so a chat the user only previews stays a meta-only draft the
+	// prune gates discard. Non-nil ⟺ the greeting is deferred; the first durable
+	// append flushes it (flushPendingGreeting) before its own row, so the persisted
+	// transcript is greeting-then-content, identical to a seed-at-build. Guarded by
+	// pgMu — a distinct lock, because the flush calls SeedGreetingVariants, which
+	// takes writeMu, so it must not itself hold writeMu.
+	pendingGreeting *pendingGreeting
+	pgMu            sync.Mutex
+
 	// errMu guards the lazily-opened error sidecar (errFile). Provider/turn
 	// failures are recorded in a SEPARATE file alongside the transcript, never
 	// in the transcript itself — the .jsonl has a fixed record vocabulary that
@@ -62,6 +73,14 @@ type Session struct {
 	// types, a newer format version). Empty for clean loads. Callers
 	// decide how to surface it; the data is never silently dropped.
 	LoadWarnings []string
+
+	// LoadStats records what reconstructing this session's transcript cost —
+	// the fold's wall time and how much revision machinery it replayed. It is
+	// cheap insurance against variant/amend accumulation becoming a silent
+	// load-time tax (docs/proposals/stage-inline-editing.md §9): captured on
+	// every open, surfaced by callers (the workspace logs it via diag when a
+	// session carries amends), and available to a future debug surface.
+	LoadStats LoadStats
 
 	// TitleGenerated reports whether the title OpenSession loaded (the last
 	// rename row, reflected into Meta.Title) was machine-generated
@@ -80,10 +99,21 @@ type Session struct {
 //	2 — every content block is written with an explicit "type"
 //	  ("text", "image", "tool_call", "tool_result", "reasoning").
 //	  v1 files keep loading through the field-presence fallback.
+//	3 — the file carries `amend` rows (transcript revision: edit,
+//	  delete, truncate, retract/select variants). A v2 loader skips
+//	  unknown row types SILENTLY, so it would present the un-revised
+//	  transcript as if nothing happened — hence a session only declares
+//	  v3 once it actually holds an amend (bumpFormatForAmend), and a
+//	  pre-amend build then warns instead of misleading.
 //
-// Readers warn (Session.LoadWarnings) when a file declares a NEWER
-// version than this and load best-effort.
-const sessionFormatVersion = 2
+// A fresh session is stamped sessionFormatVersion; the amend bump lifts
+// it to sessionFormatVersionAmend on the first revision. This build READS
+// up to sessionFormatVersionAmend without warning; a file declaring more
+// warns (Session.LoadWarnings) and loads best-effort.
+const (
+	sessionFormatVersion      = 2
+	sessionFormatVersionAmend = 3
+)
 
 // SessionMeta is written as the first line of every session file.
 type SessionMeta struct {
@@ -110,6 +140,38 @@ type SessionMeta struct {
 	// are copied from the parent verbatim; the user's next turn on
 	// the child session continues from there.
 	ForkPoint int `json:"fork_point,omitempty"`
+
+	// Persona is the per-session persona/agent name chosen at creation. It is
+	// persisted so a daemon restart re-materializes the session as the chosen
+	// persona rather than falling back to the workspace default.
+	Persona string `json:"persona,omitempty"`
+	// Experience, Card, Cast, and Greeting persist how an immersive (Stage)
+	// session was created — its --chat/--play mode, character card, declared
+	// cast, and selected opening — so a restart rebuilds the same session rather
+	// than the workspace default. Empty/zero for ordinary coding sessions.
+	Experience string            `json:"experience,omitempty"` // "chat" | "play"
+	Card       string            `json:"card,omitempty"`       // card ref (library id or path)
+	Cast       map[string]string `json:"cast,omitempty"`       // actor name -> persona|card ref
+	Greeting   int               `json:"greeting,omitempty"`   // selected greeting index
+	// Background is the scene backdrop bound to this session (a backgrounds-library
+	// id, served over /media/backgrounds/<id>). Unlike the creation spec above it
+	// is mutable mid-session (SetBackground), so it is presentation metadata the
+	// client renders, not a build input.
+	Background string `json:"background,omitempty"`
+	// Note is the session's author's note — a live steering instruction injected
+	// into the UNCACHED per-turn tail (after a card's post_history_instructions),
+	// never the cached prefix. Mutable mid-session (SetNote); unlike the creation
+	// spec it takes effect on the next turn without a rebuild. Empty for none.
+	Note string `json:"note,omitempty"`
+	// UserName and UserDescription are the session's bound user persona — who the
+	// user is *in the story* (distinct from Persona, which is who the agent is).
+	// The DESCRIPTION rides the uncached per-turn tail (like Note), so a change
+	// takes effect next turn for free. The NAME is the card {{user}} macro, baked
+	// into the cached prefix at build (threaded into build Args.As on materialize),
+	// so changing it mid-session is a deliberate prefix rebuild. Both persist as a
+	// last-wins meta row (SetUserPersona); empty for an unbound / coding session.
+	UserName        string `json:"user_name,omitempty"`
+	UserDescription string `json:"user_description,omitempty"`
 }
 
 // sessionLine is the on-disk row type. Messages are written in the
@@ -125,6 +187,7 @@ type sessionLine struct {
 	Usage      *provider.Usage   `json:"usage,omitempty"`
 	Cumulative *provider.Usage   `json:"cumulative,omitempty"`
 	Directive  *sessionDirective `json:"directive,omitempty"`
+	Amend      *sessionAmend     `json:"amend,omitempty"`
 	Escalation *escalationRecord `json:"escalation,omitempty"`
 	Stall      *stallRecord      `json:"stall,omitempty"`
 
@@ -149,6 +212,39 @@ type sessionDirective struct {
 	Op     string `json:"op"`               // e.g. "exclude_image"
 	SHA256 string `json:"sha256,omitempty"` // content hash of the image to drop
 	Reason string `json:"reason,omitempty"`
+}
+
+// sessionAmend rides an "amend" row: an append-only transcript revision applied
+// in file order as the loader rebuilds the effective transcript (compaction-
+// shaped, unlike the content-addressed directive above). It backs the Stage
+// surface's edit/delete/regenerate interactions without rewriting earlier rows.
+//
+//   - "replace" swaps the message at Index for Message (edit in place).
+//   - "delete" removes the message at Index (later indices shift).
+//   - "truncate" cuts the transcript to Index (regenerate = truncate + new turn).
+//   - "retract" sets the span at Index aside as a variant ("take") and begins a
+//     new take there — regenerate that KEEPS the old response, swipeable. The
+//     retracted span stays in the file as its original message rows, so takes are
+//     reconstructed on every walk with no byte duplication.
+//   - "select" makes stored take Variant of the tail span at Index the active
+//     one — the swipe interaction, carrying no message bytes.
+//
+// Index is interpreted against the effective transcript at the point the row is
+// applied — deterministic on replay because the writer and the walk apply the
+// same rules. Out-of-range indices are ignored (best-effort, like the loader).
+type sessionAmend struct {
+	Op      string       `json:"op"`
+	Index   int          `json:"index"`
+	Variant int          `json:"variant,omitempty"` // select/mselect only: which take to activate
+	Message *wireMessage `json:"message,omitempty"` // replace only
+	// KeepPrior, on a "replace", tells the walk to RETAIN the overwritten message
+	// as a swipeable message-scoped take at Index rather than discard it — the
+	// edit-as-variant-at-any-position path (docs/proposals/stage-inline-editing.md,
+	// Option C). Absent/false = the original destructive replace, so old edits stay
+	// collapsed. Additive: a pre-Option-C loader ignores the field and folds the
+	// replace as it always did.
+	KeepPrior bool   `json:"keep_prior,omitempty"`
+	Reason    string `json:"reason,omitempty"` // "edit" | "delete" | "retry" | "swipe" | ...
 }
 
 // escalationRecord rides an "escalation" row: rung 3 of the stuck-loop hatch
@@ -190,6 +286,32 @@ const (
 	directiveExcludeImage = "exclude_image"
 	recordEscalation      = "escalation"
 	recordStall           = "stall"
+	recordAmend           = "amend"
+)
+
+// Amend op values for [Session.AppendAmend], exported so callers that persist a
+// transcript revision (the workspace's edit/delete verbs) name the op without
+// magic strings. See sessionAmend for the semantics.
+const (
+	AmendReplace  = "replace"
+	AmendDelete   = "delete"
+	AmendTruncate = "truncate"
+	AmendRetract  = "retract"
+	AmendSelect   = "select"
+	// AmendMsgSelect switches a message-scoped variant's active take (the swipe for
+	// a retained-history edit) — the per-index twin of AmendSelect, which acts on
+	// the tail suffix span. Carries Index + Variant, no message bytes.
+	AmendMsgSelect = "mselect"
+	// AmendSeal collapses the message-scoped variant at Index to take Variant and
+	// CLOSES the position — the walk stops reconstructing the other takes, so the
+	// swipe marker goes away (prune-to-latest). The dropped takes' bytes linger in
+	// the file for audit until a compaction reclaims them, but the fold no longer
+	// materializes them.
+	AmendSeal = "seal"
+	// AmendDropTake removes take Variant from the message-scoped variant at Index,
+	// keeping the rest swipeable (per-take removal); if one take remains, the
+	// position closes like AmendSeal.
+	AmendDropTake = "droptake"
 )
 
 type sessionLineHead struct {
@@ -217,6 +339,7 @@ type wireBlock struct {
 	// image
 	MimeType string `json:"mime_type,omitempty"`
 	Data     []byte `json:"data,omitempty"`
+	ImageID  string `json:"image_id,omitempty"` // ig_… generation id (assistant-emitted images), for edit replay
 	// tool_call
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
@@ -257,7 +380,7 @@ func encodeWireBlocks(blocks []provider.Content) []wireBlock {
 		case provider.TextBlock:
 			out = append(out, wireBlock{Type: blockText, Text: b.Text})
 		case provider.ImageBlock:
-			out = append(out, wireBlock{Type: blockImage, MimeType: b.MimeType, Data: b.Data})
+			out = append(out, wireBlock{Type: blockImage, MimeType: b.MimeType, Data: b.Data, ImageID: b.ID})
 		case provider.ToolCallBlock:
 			out = append(out, wireBlock{Type: blockToolCall, ID: b.ID, Name: b.Name, Arguments: b.Arguments})
 		case provider.ToolResultBlock:
@@ -652,6 +775,19 @@ func nonNegDelta(cur, prev int) int {
 }
 
 // OpenSession opens an existing session for appending.
+// LoadStats records what reconstructing a session's transcript cost — the fold's
+// wall time plus how much revision machinery it replayed. Amends counts the
+// in-place transforms (replace/delete/retract/select/truncate) applied during the
+// walk — the proxy for variant/edit accumulation — and TailTakes is the switchable
+// tail span's take count. Used to watch for load-time growth before it is felt
+// (docs/proposals/stage-inline-editing.md §9).
+type LoadStats struct {
+	Elapsed   time.Duration
+	Messages  int
+	Amends    int
+	TailTakes int
+}
+
 func OpenSession(path string) (*Session, []provider.Message, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -664,64 +800,35 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 	var messages []provider.Message
 	excludeImages := map[string]bool{}
 	rep := &loadReport{}
-	if err := forEachJSONLLine(f, func(line []byte) error {
-		var head sessionLineHead
-		if err := json.Unmarshal(line, &head); err != nil {
-			rep.corruptLines++
-			return nil
-		}
-		switch head.Type {
-		case "meta":
-			var row struct {
-				Meta SessionMeta `json:"meta"`
-			}
-			if err := json.Unmarshal(line, &row); err == nil {
-				meta = row.Meta
-				titleGenerated = false
-			} else {
-				rep.corruptLines++
-			}
-		case "rename":
+	var walkErr error
+	var amends, tailTakes int
+	start := time.Now()
+	messages, walkErr = walkSession(f, rep, sessionWalkHooks{
+		onMeta: func(m SessionMeta, _ []byte) {
+			meta = m
+			titleGenerated = false
+		},
+		onRename: func(title, source string, _ []byte) {
 			// The latest rename row IS the session's title; without this a
 			// session renamed while cold would materialize untitled and the
 			// automatic titling pass could clobber the user's name.
-			var row struct {
-				Title  string `json:"title"`
-				Source string `json:"source"`
+			if title != "" {
+				meta.Title = title
+				titleGenerated = source == renameSourceGenerated
 			}
-			if err := json.Unmarshal(line, &row); err == nil && row.Title != "" {
-				meta.Title = row.Title
-				titleGenerated = row.Source == renameSourceGenerated
+		},
+		onDirective: func(d sessionDirective, _ []byte) {
+			if d.Op == directiveExcludeImage && d.SHA256 != "" {
+				excludeImages[strings.ToLower(d.SHA256)] = true
 			}
-		case "message":
-			msg, err := hydrateMessage(line, rep)
-			if err != nil {
-				rep.corruptLines++
-				return nil
-			}
-			if len(msg.Content) > 0 {
-				messages = append(messages, msg)
-			}
-		case "compaction":
-			if compacted, err := hydrateCompaction(line, rep); err == nil {
-				messages = compacted
-			} else {
-				rep.corruptLines++
-			}
-		case recordDirective:
-			var row struct {
-				Directive sessionDirective `json:"directive"`
-			}
-			if err := json.Unmarshal(line, &row); err == nil &&
-				row.Directive.Op == directiveExcludeImage && row.Directive.SHA256 != "" {
-				excludeImages[strings.ToLower(row.Directive.SHA256)] = true
-			}
-		}
-		return nil
-	}); err != nil {
-		return nil, nil, err
+		},
+		onAmend: func(_ string, _ int, _ []byte) { amends++ },
+		onTail:  func(_ int, takes [][]provider.Message, _ int) { tailTakes = len(takes) },
+	})
+	if walkErr != nil {
+		return nil, nil, walkErr
 	}
-	if meta.FormatVersion > sessionFormatVersion {
+	if meta.FormatVersion > sessionFormatVersionAmend {
 		rep.newerFormat = meta.FormatVersion
 	}
 	// Apply append-only directives before repair so the rebuilt transcript
@@ -731,12 +838,120 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 		messages = applyImageExclusions(messages, excludeImages)
 	}
 	messages = repairToolUseResultPairs(messages)
+	elapsed := time.Since(start)
 	out, err := privfs.OpenFile(path, os.O_APPEND|os.O_WRONLY)
 	if err != nil {
 		return nil, nil, err
 	}
-	s := &Session{ID: meta.ID, Path: path, Meta: meta, TitleGenerated: titleGenerated, writer: out, buf: bufio.NewWriter(out), LoadWarnings: rep.warnings(path)}
+	s := &Session{ID: meta.ID, Path: path, Meta: meta, TitleGenerated: titleGenerated, writer: out, buf: bufio.NewWriter(out), LoadWarnings: rep.warnings(path),
+		LoadStats: LoadStats{Elapsed: elapsed, Messages: len(messages), Amends: amends, TailTakes: tailTakes}}
 	return s, messages, nil
+}
+
+// SessionTail reports the swipe state of a session's tail span without opening it
+// for appending: start is the effective index where the last response's swipeable
+// span begins, takes are its alternative spans in creation order, and active is
+// the one currently live in the transcript. It walks the file exactly as
+// OpenSession does — so the takes are reconstructed from the message rows, never
+// stored twice — but keeps only the tail-span variant state (the sole switchable
+// position). start < 0, or fewer than two takes, means there is nothing to swipe.
+//
+// The takes are PRE-repair spans: OpenSession runs repairToolUseResultPairs after
+// the walk, so a caller seeding a live transcript must reconcile them against the
+// repaired transcript (a length check against the live tail suffices — repair is
+// a no-op for the tool-free chat sessions this primarily serves).
+func SessionTail(path string) (start int, takes [][]provider.Message, active int, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return -1, nil, 0, err
+	}
+	defer f.Close()
+	start = -1
+	rep := &loadReport{}
+	if _, walkErr := walkSession(f, rep, sessionWalkHooks{
+		onTail: func(ts int, tk [][]provider.Message, ac int) {
+			start, takes, active = ts, tk, ac
+		},
+	}); walkErr != nil {
+		return -1, nil, 0, walkErr
+	}
+	return start, takes, active, nil
+}
+
+// MsgVariants is the reconstructed message-scoped variant set at one position: the
+// alternative single-message takes in creation order and which one is active
+// (live in the effective transcript).
+type MsgVariants struct {
+	Takes  []provider.Message
+	Active int
+}
+
+// VariantPos summarizes a switchable position for a snapshot's per-position swipe
+// markers: its effective-transcript Index, how many takes it has, and which is
+// active. Span distinguishes the tail suffix span (retry/greeting variants, whole
+// tail) from a message-scoped variant (an edited single message with shared
+// downstream).
+type VariantPos struct {
+	Index  int
+	Count  int
+	Active int
+	Span   bool
+}
+
+// SessionVariants reports every switchable position in a session without opening
+// it for appending — the tail suffix span (as SessionTail) plus each message-
+// scoped variant (Option C) — as the cheap per-position counts a snapshot needs to
+// draw swipe markers across the whole transcript. The full take lists are NOT
+// returned; a non-tail position is hydrated on demand with SessionMsgVariant.
+func SessionVariants(path string) ([]VariantPos, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []VariantPos
+	rep := &loadReport{}
+	if _, walkErr := walkSession(f, rep, sessionWalkHooks{
+		onTail: func(ts int, tk [][]provider.Message, ac int) {
+			if ts >= 0 && len(tk) >= 2 {
+				out = append(out, VariantPos{Index: ts, Count: len(tk), Active: ac, Span: true})
+			}
+		},
+		onMsgVariants: func(m map[int]MsgVariants) {
+			for idx, mv := range m {
+				if len(mv.Takes) >= 2 {
+					out = append(out, VariantPos{Index: idx, Count: len(mv.Takes), Active: mv.Active})
+				}
+			}
+		},
+	}); walkErr != nil {
+		return nil, walkErr
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Index < out[j].Index })
+	return out, nil
+}
+
+// SessionMsgVariant reconstructs the full message-scoped variant set at one
+// position — the lazy hydration a client does when it actually swipes a non-tail
+// edited message (SessionVariants gave only the count). ok is false when Index has
+// no message-scoped variants.
+func SessionMsgVariant(path string, index int) (mv MsgVariants, ok bool, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return MsgVariants{}, false, err
+	}
+	defer f.Close()
+	rep := &loadReport{}
+	if _, walkErr := walkSession(f, rep, sessionWalkHooks{
+		onMsgVariants: func(m map[int]MsgVariants) {
+			if v, has := m[index]; has {
+				mv, ok = v, true
+			}
+		},
+	}); walkErr != nil {
+		return MsgVariants{}, false, walkErr
+	}
+	return mv, ok, nil
 }
 
 // applyImageExclusions replaces every ImageBlock whose content sha256 is in the
@@ -883,6 +1098,19 @@ type SessionSummary struct {
 	// TitleGenerated reports machine provenance for Title (see
 	// Session.TitleGenerated); false for user renames and meta-line titles.
 	TitleGenerated bool
+	// Experience/Card/Background carry the immersive spec from meta so a cold
+	// session (a disk scan, never opened this run) still badges as chat/play and
+	// groups under its character — the Stage library reads them without waking it.
+	Experience string
+	Card       string
+	Background string
+	// Live/Busy are the session's live state, set only on the attached-TUI path
+	// (from ctrlproto.SessionInfo via SessionSummariesFromInfos): Live = the
+	// session is materialized in memory, Busy = a turn is in flight. A disk scan
+	// (DescribeSessions) and an old daemon both leave them false — honestly cold,
+	// since a session you are not attached to has no live state to show.
+	Live bool
+	Busy bool
 }
 
 // renameSourceGenerated marks a rename row written by machine titling
@@ -955,6 +1183,10 @@ func describeSession(path string) SessionSummary {
 				s.Provider = row.Meta.Provider
 				s.Title = row.Meta.Title
 				s.TitleGenerated = false
+				// Meta is a last-wins timeline, so the final row's spec wins.
+				s.Experience = row.Meta.Experience
+				s.Card = row.Meta.Card
+				s.Background = row.Meta.Background
 			}
 		case "message":
 			s.MessageCount++
@@ -1128,6 +1360,9 @@ func (s *Session) AppendMessage(m provider.Message) error {
 	if s == nil {
 		return nil
 	}
+	if err := s.flushPendingGreeting(); err != nil {
+		return err
+	}
 	w := encodeWireMessage(m)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -1159,6 +1394,9 @@ func (s *Session) AppendMessage(m provider.Message) error {
 func (s *Session) AppendCompaction(messages []provider.Message, res CompactResult) error {
 	if s == nil {
 		return nil
+	}
+	if err := s.flushPendingGreeting(); err != nil {
+		return err
 	}
 	wires := make([]wireMessage, 0, len(messages))
 	for _, m := range messages {
@@ -1223,6 +1461,346 @@ func (s *Session) StampVersion(version string) error {
 	}
 	s.Meta.Version = version
 	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+}
+
+// SetCreationSpec records the per-session creation parameters — the chosen
+// persona and the immersive (Stage) fields (experience/card/cast/greeting) — on
+// the session metadata and writes a fresh meta row. Meta rows are an append-only
+// timeline whose last entry wins, so this makes the spec durable: a resume after
+// a daemon restart re-materializes the session as it was created rather than as
+// the workspace default. A no-op on a nil receiver, mirroring the other stampers.
+func (s *Session) SetCreationSpec(persona, experience, card string, cast map[string]string, greeting int) error {
+	if s == nil {
+		return nil
+	}
+	s.Meta.Persona = persona
+	s.Meta.Experience = experience
+	s.Meta.Card = card
+	s.Meta.Cast = cast
+	s.Meta.Greeting = greeting
+	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+}
+
+// SetBackground binds (or, with "", clears) the session's scene backdrop and
+// writes a fresh meta row. Like the creation spec it rides the last-wins meta
+// timeline, so a rebind is durable across a restart; unlike it, a background can
+// change any number of times during a session. A no-op on a nil receiver.
+func (s *Session) SetBackground(id string) error {
+	if s == nil {
+		return nil
+	}
+	s.Meta.Background = id
+	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+}
+
+// SetNote sets (or, with "", clears) the session's author's note and writes a
+// fresh meta row. Like SetBackground it rides the last-wins meta timeline, so the
+// note is durable across a restart and can change any number of times during a
+// session. Unlike a background, the note is a build input — it is injected into
+// the uncached per-turn tail — but it never touches the cached prefix, so a change
+// takes effect on the next turn without a rebuild. A no-op on a nil receiver.
+func (s *Session) SetNote(text string) error {
+	if s == nil {
+		return nil
+	}
+	s.Meta.Note = text
+	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+}
+
+// SetUserPersona binds (or, with empty strings, clears) the session's user
+// persona — who the user is in the story. Persisted as one last-wins meta row
+// carrying both halves; the caller applies the live effects (the description
+// updates the per-turn tail for free, the name rebuilds the cached prefix).
+func (s *Session) SetUserPersona(name, description string) error {
+	if s == nil {
+		return nil
+	}
+	s.Meta.UserName = name
+	s.Meta.UserDescription = description
+	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+}
+
+// SetCast replaces (or, with a nil/empty map, clears) a play session's cast —
+// the actor-name → persona/card refs the director can voice via actor_spawn.
+// Like the other stampers it rides the last-wins meta timeline, so a mid-scene
+// cast change is durable across a restart. The caller rebuilds the actor_spawn
+// tool + cast addendum to apply it live (unlike the creation spec, which bakes
+// the cast at build time). A no-op on a nil receiver.
+func (s *Session) SetCast(cast map[string]string) error {
+	if s == nil {
+		return nil
+	}
+	s.Meta.Cast = cast
+	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+}
+
+// AppendAmend writes an append-only transcript revision (see sessionAmend): a
+// "replace"/"delete"/"truncate" applied in file order when the session is
+// reloaded. The original message rows stay in the file for audit; the loader
+// folds the amend into the rebuilt transcript. Amend rows are NOT counted as
+// appended messages, so a session that is only a seeded greeting plus an edit
+// still prunes correctly on Close. msg is required for "replace" and ignored
+// otherwise.
+func (s *Session) AppendAmend(op string, index int, msg *provider.Message, reason string) error {
+	if s == nil {
+		return nil
+	}
+	if err := s.flushPendingGreeting(); err != nil {
+		return err
+	}
+	if err := s.bumpFormatForAmend(); err != nil {
+		return err
+	}
+	amend := &sessionAmend{Op: op, Index: index, Reason: reason}
+	if msg != nil {
+		w := encodeWireMessage(*msg)
+		amend.Message = &w
+	}
+	return s.writeLine(sessionLine{Type: recordAmend, Amend: amend})
+}
+
+// bumpFormatForAmend raises the session's declared on-disk format version to the
+// amend-aware version the first time a revision row is written, by appending a
+// fresh meta row (meta rows are an append-only timeline whose last entry wins).
+// A pre-amend build then WARNS on load instead of silently presenting the
+// un-revised transcript. Idempotent: a no-op once the session already declares
+// the version, so a heavily-edited session grows exactly one extra meta row.
+func (s *Session) bumpFormatForAmend() error {
+	if s == nil || s.Meta.FormatVersion >= sessionFormatVersionAmend {
+		return nil
+	}
+	s.Meta.FormatVersion = sessionFormatVersionAmend
+	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+}
+
+// AppendSelect writes a "select" amend (see sessionAmend): make take `variant` of
+// the tail span starting at `index` the active one — the swipe interaction. It
+// carries no message bytes (the take is reconstructed from the file) and, like
+// every amend, is not counted as an appended message.
+func (s *Session) AppendSelect(index, variant int, reason string) error {
+	if s == nil {
+		return nil
+	}
+	if err := s.bumpFormatForAmend(); err != nil {
+		return err
+	}
+	return s.writeLine(sessionLine{Type: recordAmend, Amend: &sessionAmend{
+		Op: AmendSelect, Index: index, Variant: variant, Reason: reason,
+	}})
+}
+
+// AppendReplaceVariant writes a retained-history replace: the message at index is
+// swapped for msg, but the walk keeps the overwritten message as a swipeable
+// message-scoped take at that index (unlike AppendAmend(AmendReplace,…), which
+// discards it). This is edit-as-variant at any position (Option C) — the prior
+// version stays reachable via AppendMsgSelect. The bytes cost nothing extra: the
+// prior message is reconstructed from its own earlier row on every walk.
+func (s *Session) AppendReplaceVariant(index int, msg provider.Message, reason string) error {
+	if s == nil {
+		return nil
+	}
+	if err := s.flushPendingGreeting(); err != nil {
+		return err
+	}
+	if err := s.bumpFormatForAmend(); err != nil {
+		return err
+	}
+	w := encodeWireMessage(msg)
+	return s.writeLine(sessionLine{Type: recordAmend, Amend: &sessionAmend{
+		Op: AmendReplace, Index: index, Message: &w, KeepPrior: true, Reason: reason,
+	}})
+}
+
+// AppendMsgSelect writes a message-scoped select (see AmendMsgSelect): make take
+// `variant` of the retained-history message-variant at Index the active one — the
+// swipe-back for an edited message, carrying no message bytes.
+func (s *Session) AppendMsgSelect(index, variant int, reason string) error {
+	if s == nil {
+		return nil
+	}
+	if err := s.flushPendingGreeting(); err != nil {
+		return err
+	}
+	if err := s.bumpFormatForAmend(); err != nil {
+		return err
+	}
+	return s.writeLine(sessionLine{Type: recordAmend, Amend: &sessionAmend{
+		Op: AmendMsgSelect, Index: index, Variant: variant, Reason: reason,
+	}})
+}
+
+// AppendSeal writes a seal (see AmendSeal): collapse the message-scoped variant at
+// index to take `keep` and close the position — prune-to-latest, carrying no
+// message bytes.
+func (s *Session) AppendSeal(index, keep int, reason string) error {
+	if s == nil {
+		return nil
+	}
+	if err := s.flushPendingGreeting(); err != nil {
+		return err
+	}
+	if err := s.bumpFormatForAmend(); err != nil {
+		return err
+	}
+	return s.writeLine(sessionLine{Type: recordAmend, Amend: &sessionAmend{
+		Op: AmendSeal, Index: index, Variant: keep, Reason: reason,
+	}})
+}
+
+// AppendDropTake writes a drop-take (see AmendDropTake): remove one take from the
+// message-scoped variant at index, keeping the rest swipeable.
+func (s *Session) AppendDropTake(index, drop int, reason string) error {
+	if s == nil {
+		return nil
+	}
+	if err := s.flushPendingGreeting(); err != nil {
+		return err
+	}
+	if err := s.bumpFormatForAmend(); err != nil {
+		return err
+	}
+	return s.writeLine(sessionLine{Type: recordAmend, Amend: &sessionAmend{
+		Op: AmendDropTake, Index: index, Variant: drop, Reason: reason,
+	}})
+}
+
+// SeedGreetingVariants seeds a set of opening messages as message-0 swipe
+// variants (takes) on a fresh session, with take `active` live — so a card's
+// first_mes + alternate_greetings all pre-seed and the user can swipe between
+// openings. Each message becomes its own single-message take at index 0: the
+// first is appended, then each subsequent one retracts the current opening as a
+// take and appends the next, and finally the active take is selected. The walker
+// (session_walk.go) reconstructs the takes from these rows exactly as it does a
+// retry's. A single greeting seeds one message with no variants; empty is a
+// no-op. Returns the active message so the caller can prime the live transcript.
+func (s *Session) SeedGreetingVariants(greetings []provider.Message, active int) (provider.Message, error) {
+	if s == nil || len(greetings) == 0 {
+		return provider.Message{}, nil
+	}
+	if active < 0 || active >= len(greetings) {
+		active = 0
+	}
+	if err := s.AppendMessage(greetings[0]); err != nil {
+		return provider.Message{}, err
+	}
+	for i := 1; i < len(greetings); i++ {
+		if err := s.AppendAmend(AmendRetract, 0, nil, "greeting-variant"); err != nil {
+			return provider.Message{}, err
+		}
+		if err := s.AppendMessage(greetings[i]); err != nil {
+			return provider.Message{}, err
+		}
+	}
+	// After the loop the last-appended greeting is live; select the intended one
+	// unless it is already active (avoids a redundant amend for the common case).
+	if active != len(greetings)-1 {
+		if err := s.AppendSelect(0, active, "greeting-variant"); err != nil {
+			return provider.Message{}, err
+		}
+	}
+	return greetings[active], nil
+}
+
+// pendingGreeting is a deferred opening set held in memory until the first
+// durable append flushes it — see Session.pendingGreeting.
+type pendingGreeting struct {
+	msgs   []provider.Message
+	active int
+}
+
+// DeferGreetingVariants seeds the opening set (first_mes + alternate_greetings)
+// as a PENDING greeting held in memory only — no disk write — and returns the
+// active message so the caller can prime the live transcript. The file stays
+// meta-only (messagesAppended == 0), so Close/PruneEmptySessions treat it as an
+// empty draft: a chat the user opens to preview but never sends into is discarded
+// rather than cluttering the list. The first durable append flushes it
+// (flushPendingGreeting) before writing its own row, so the on-disk shape is
+// identical to a seed-at-build — only *when* it is written moves. Mirrors
+// SeedGreetingVariants' active clamp and return; empty is a no-op.
+func (s *Session) DeferGreetingVariants(greetings []provider.Message, active int) (provider.Message, error) {
+	if s == nil || len(greetings) == 0 {
+		return provider.Message{}, nil
+	}
+	if active < 0 || active >= len(greetings) {
+		active = 0
+	}
+	s.pgMu.Lock()
+	s.pendingGreeting = &pendingGreeting{msgs: append([]provider.Message(nil), greetings...), active: active}
+	s.pgMu.Unlock()
+	return greetings[active], nil
+}
+
+// flushPendingGreeting writes a deferred greeting to disk (via
+// SeedGreetingVariants) if one is pending, then clears it. It runs at the top of
+// every durable-content appender BEFORE that appender takes writeMu, so the first
+// real turn persists the greeting ahead of its own row. Niling the pending set
+// BEFORE the write makes it recursion-safe: SeedGreetingVariants re-enters the
+// appenders, but they find nothing pending and no-op. Cheap (a lock + nil check)
+// when nothing is pending — the common path for every non-draft append.
+func (s *Session) flushPendingGreeting() error {
+	if s == nil {
+		return nil
+	}
+	s.pgMu.Lock()
+	pg := s.pendingGreeting
+	s.pendingGreeting = nil
+	s.pgMu.Unlock()
+	if pg == nil {
+		return nil
+	}
+	_, err := s.SeedGreetingVariants(pg.msgs, pg.active)
+	return err
+}
+
+// HasPendingGreeting reports whether the greeting is still deferred (in memory,
+// not on disk) — i.e. the session is an unpromoted draft with no real turn yet.
+func (s *Session) HasPendingGreeting() bool {
+	if s == nil {
+		return false
+	}
+	s.pgMu.Lock()
+	defer s.pgMu.Unlock()
+	return s.pendingGreeting != nil
+}
+
+// SetPendingGreetingActive updates which take of a deferred greeting is active (a
+// pre-first-turn swipe) with no disk write, so swiping a preview does not promote
+// the draft. Returns the new active message and true when a greeting was pending.
+func (s *Session) SetPendingGreetingActive(active int) (provider.Message, bool) {
+	if s == nil {
+		return provider.Message{}, false
+	}
+	s.pgMu.Lock()
+	defer s.pgMu.Unlock()
+	pg := s.pendingGreeting
+	if pg == nil {
+		return provider.Message{}, false
+	}
+	if active < 0 || active >= len(pg.msgs) {
+		active = 0
+	}
+	pg.active = active
+	return pg.msgs[active], true
+}
+
+// ReplacePendingGreeting swaps the whole deferred opening set — for a pre-first-
+// turn user-persona rename, which re-derives the greeting with the new {{user}}.
+// A no-op unless a greeting is still pending; returns the new active message and
+// whether it applied.
+func (s *Session) ReplacePendingGreeting(greetings []provider.Message, active int) (provider.Message, bool) {
+	if s == nil || len(greetings) == 0 {
+		return provider.Message{}, false
+	}
+	s.pgMu.Lock()
+	defer s.pgMu.Unlock()
+	if s.pendingGreeting == nil {
+		return provider.Message{}, false
+	}
+	if active < 0 || active >= len(greetings) {
+		active = 0
+	}
+	s.pendingGreeting = &pendingGreeting{msgs: append([]provider.Message(nil), greetings...), active: active}
+	return greetings[active], true
 }
 
 // AppendImageExclusion writes a directive telling future loads to drop the
@@ -1454,7 +2032,7 @@ func (r *loadReport) warnings(path string) []string {
 	var out []string
 	base := filepath.Base(path)
 	if r.newerFormat > 0 {
-		out = append(out, fmt.Sprintf("session %s: written by a newer terva (format v%d, this build reads v%d); loaded best-effort", base, r.newerFormat, sessionFormatVersion))
+		out = append(out, fmt.Sprintf("session %s: written by a newer terva (format v%d, this build reads v%d); loaded best-effort", base, r.newerFormat, sessionFormatVersionAmend))
 	}
 	if r.corruptLines > 0 {
 		out = append(out, fmt.Sprintf("session %s: %d corrupt line(s) skipped", base, r.corruptLines))
@@ -1507,7 +2085,7 @@ func decodeWireBlock(b wireBlock) (provider.Content, bool) {
 	case blockText:
 		return provider.TextBlock{Text: b.Text}, true
 	case blockImage:
-		return provider.ImageBlock{MimeType: b.MimeType, Data: b.Data}, true
+		return provider.ImageBlock{MimeType: b.MimeType, Data: b.Data, ID: b.ImageID}, true
 	case blockToolCall:
 		return provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: b.Arguments}, true
 	case blockToolResult:

@@ -69,6 +69,12 @@ type BookEntry struct {
 // pngSignature is the 8-byte PNG magic.
 const pngSignature = "\x89PNG\r\n\x1a\n"
 
+// IsPNG reports whether data begins with the PNG signature — i.e. a card that
+// carries an avatar image, with its JSON in a `chara` text chunk.
+func IsPNG(data []byte) bool {
+	return len(data) >= len(pngSignature) && string(data[:len(pngSignature)]) == pngSignature
+}
+
 // Load reads a card from a .json or .png path, sniffing the format by
 // content (PNG signature) rather than extension.
 func Load(path string) (Card, error) {
@@ -76,7 +82,7 @@ func Load(path string) (Card, error) {
 	if err != nil {
 		return Card{}, err
 	}
-	if len(data) >= len(pngSignature) && string(data[:len(pngSignature)]) == pngSignature {
+	if IsPNG(data) {
 		jsonBytes, err := ReadPNG(data)
 		if err != nil {
 			return Card{}, fmt.Errorf("%s: %w", path, err)
@@ -84,6 +90,39 @@ func Load(path string) (Card, error) {
 		return ParseJSON(jsonBytes)
 	}
 	return ParseJSON(data)
+}
+
+// LoadBytes parses a card from raw bytes, sniffing PNG-vs-JSON by content the
+// same way Load does for a path. The PNG pixels are NOT retained here — only the
+// embedded card JSON — so a caller that wants to keep the avatar must hold the
+// original bytes itself (the library store does exactly this).
+func LoadBytes(data []byte) (Card, error) {
+	if IsPNG(data) {
+		jsonBytes, err := ReadPNG(data)
+		if err != nil {
+			return Card{}, err
+		}
+		return ParseJSON(jsonBytes)
+	}
+	return ParseJSON(data)
+}
+
+// Marshal encodes a Card as a CCv2 character-card JSON document
+// ({spec, spec_version, data}) that ParseJSON round-trips. Unknown `extensions`
+// ride through verbatim (json.RawMessage), honoring the round-trip rule the
+// character-card design requires. The output is deterministic for a given Card,
+// so it is safe to content-hash for a stable library id.
+func Marshal(c Card) ([]byte, error) {
+	data, err := json.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+	doc := struct {
+		Spec        string          `json:"spec"`
+		SpecVersion string          `json:"spec_version"`
+		Data        json.RawMessage `json:"data"`
+	}{Spec: "chara_card_v2", SpecVersion: "2.0", Data: data}
+	return json.MarshalIndent(doc, "", "  ")
 }
 
 // ParseJSON parses a card from JSON bytes, detecting V2 (spec + data

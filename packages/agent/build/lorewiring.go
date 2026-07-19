@@ -35,30 +35,61 @@ func (r *Resolved) PerTurnContextPeek(ag *core.Agent) func() string {
 // tailProvider builds the per-turn tail closure. When record is true the
 // resulting closure notes which lore fired (for /lore); when false it is pure.
 func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
-	if r == nil || (len(r.loreTriggered) == 0 && r.postHistory == "") {
+	// A non-nil note/userDesc record keeps the tail live even with no lore/PHI, so
+	// a note or user-persona added later takes effect — see Resolve, which
+	// allocates them only for immersive sessions.
+	if r == nil || (len(r.loreTriggered) == 0 && r.postHistory == "" && r.note == nil && r.userDesc == nil) {
 		return nil
 	}
-	triggered, cfg, phi, rec := r.loreTriggered, r.loreConfig, r.postHistory, r.loreFired
+	triggered, cfg, phi, rec, note := r.loreTriggered, r.loreConfig, r.postHistory, r.loreFired, r.note
+	userDesc, userName := r.userDesc, r.userName
 	return func() string {
 		var parts []string
 		if len(triggered) > 0 {
 			res := lore.Select(triggered, cfg, recentLoreScan(ag.Messages()), lore.ApproxTokens)
 			fired := res.All()
 			if record && rec != nil {
-				// Record what fired AND what the budget dropped, for /lore —
-				// the proposal's "no silent truncation" rule: an overflowed
-				// token_budget must leave a user-visible trace.
-				rec.set(loreSourcesOf(fired), loreSourcesOf(res.Dropped))
+				// Record the full activation trace (which entries fired, why, and
+				// what the budget dropped) — the proposal's "no silent truncation"
+				// rule: an overflowed token_budget must leave a user-visible trace.
+				rec.Set(loreFiredOf(res.Fired))
 			}
 			if s := lore.Render(fired); s != "" {
 				parts = append(parts, s)
 			}
 		}
+		// The user-persona description — who the user is in the story — sits after
+		// the world lore and before the card's instructions, framed so the model
+		// attributes it to {{user}} rather than the character. Read live so a
+		// user.bind mid-session takes effect next turn (shared-pointer record).
+		if userDesc != nil {
+			if d := strings.TrimSpace(userDesc.Get()); d != "" {
+				parts = append(parts, userPersonaFrame(userName, d))
+			}
+		}
 		if phi != "" {
 			parts = append(parts, phi)
 		}
+		// The author's note comes LAST (the PHI slot precedes it), read live so a
+		// note.set mid-session takes effect next turn: the record is a shared
+		// pointer the workspace writes and this per-turn closure reads.
+		if note != nil {
+			if s := strings.TrimSpace(note.Get()); s != "" {
+				parts = append(parts, s)
+			}
+		}
 		return strings.Join(parts, "\n\n")
 	}
+}
+
+// userPersonaFrame frames the bound user-persona description so the model
+// attributes it to {{user}} (the human in the scene), not the character. The
+// name mirrors the {{user}} macro already baked into the charter/greeting.
+func userPersonaFrame(name, desc string) string {
+	if strings.TrimSpace(name) == "" {
+		name = "The user"
+	}
+	return "About " + name + " (the user you are interacting with):\n" + desc
 }
 
 // recentLoreScan returns the visible text of recent messages, newest first,
@@ -153,34 +184,60 @@ func RebindTasks(ctrl *tasktool.Controller, sess *core.Session) {
 	_ = ctrl.Rebind(id)
 }
 
-// loreFiredRecord holds the lore entry sources that fired — and that the
-// token budget dropped — on the most recent turn. It sits behind a pointer on
-// Resolved so the (value-copied) Resolved shares one record: PerTurnContext
-// (turn goroutine) writes it, /lore (TUI goroutine) reads it — guarded by the
-// mutex.
-type loreFiredRecord struct {
-	mu      sync.Mutex
-	sources []string
-	dropped []string
+// LoreFired is one entry that fired on the last turn — its identity, whether it
+// is constant, the trigger keys that matched (empty for a constant entry), and
+// whether the budget dropped it. This is the activation-trace record the steering
+// surfaces read to answer "why is the character's lore what it is."
+type LoreFired struct {
+	Name     string
+	Source   string
+	Constant bool
+	Keys     []string
+	Dropped  bool
 }
 
-func (rec *loreFiredRecord) set(sources, dropped []string) {
+// LoreFiredRecord holds the activation trace of the most recent turn behind a
+// pointer on Resolved, so the (value-copied) Resolved shares one record:
+// PerTurnContext (the turn goroutine) writes it, the steering surfaces (/lore,
+// the Stage drawer, /context) read it — guarded by the mutex.
+type LoreFiredRecord struct {
+	mu    sync.Mutex
+	fired []LoreFired
+}
+
+// Set replaces the recorded trace (the per-turn tail calls this each turn).
+func (rec *LoreFiredRecord) Set(fired []LoreFired) {
 	rec.mu.Lock()
-	rec.sources = sources
-	rec.dropped = dropped
+	rec.fired = fired
 	rec.mu.Unlock()
 }
 
-func (rec *loreFiredRecord) get() []string {
+// Get returns a copy of the last turn's activation trace — nil before the first
+// turn (or after a turn that fired no lore).
+func (rec *LoreFiredRecord) Get() []LoreFired {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	return append([]string(nil), rec.sources...)
+	return append([]LoreFired(nil), rec.fired...)
 }
 
-func (rec *loreFiredRecord) getDropped() []string {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	return append([]string(nil), rec.dropped...)
+// loreFiredOf maps a lore.Select trace to the record's form (resolving each
+// entry's display source the way loreSourcesOf does).
+func loreFiredOf(fired []lore.Fired) []LoreFired {
+	out := make([]LoreFired, 0, len(fired))
+	for _, f := range fired {
+		src := f.Entry.Source
+		if src == "" {
+			src = f.Entry.Name
+		}
+		out = append(out, LoreFired{
+			Name:     f.Entry.Name,
+			Source:   src,
+			Constant: f.Entry.Constant,
+			Keys:     f.Keys,
+			Dropped:  f.Dropped,
+		})
+	}
+	return out
 }
 
 // loreSourcesOf maps entries to their source labels (file path / "card" / name).
@@ -194,4 +251,60 @@ func loreSourcesOf(entries []lore.Entry) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// NoteRecord holds a live tail string behind a pointer on Resolved, so the
+// (value-copied) Resolved shares one value: the workspace (the note.set /
+// user.bind goroutine) writes it, the per-turn tail closure (turn goroutine)
+// reads it — guarded by the mutex. It backs both the author's note and the
+// user-persona description; either edit is visible next turn with no cache bust.
+type NoteRecord struct {
+	mu   sync.Mutex
+	text string
+}
+
+// Set replaces the note text (note.set); "" clears it.
+func (n *NoteRecord) Set(text string) {
+	n.mu.Lock()
+	n.text = text
+	n.mu.Unlock()
+}
+
+// Get returns the current note text.
+func (n *NoteRecord) Get() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.text
+}
+
+// Note returns the session's live author's-note record, or nil for a session
+// that carries no note (a non-immersive session). The workspace retains this
+// pointer so note.set can update the value the per-turn tail reads.
+func (r *Resolved) Note() *NoteRecord {
+	if r == nil {
+		return nil
+	}
+	return r.note
+}
+
+// User returns the session's live user-persona description record, or nil for a
+// non-immersive session. The workspace retains this pointer so user.bind can
+// update the value the per-turn tail reads. Its twin, the user-persona NAME, is
+// baked into the cached prefix (Args.As), not carried here.
+func (r *Resolved) User() *NoteRecord {
+	if r == nil {
+		return nil
+	}
+	return r.userDesc
+}
+
+// LoreFired returns the session's lore activation-trace record — the shared
+// pointer the per-turn tail writes each turn. The workspace retains it (and
+// re-fetches it after a reloadLore that swaps the tail provider) so the lore
+// surface and /context can show what fired last turn.
+func (r *Resolved) LoreFired() *LoreFiredRecord {
+	if r == nil {
+		return nil
+	}
+	return r.loreFired
 }

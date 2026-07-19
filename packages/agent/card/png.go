@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"strings"
 )
@@ -55,6 +56,77 @@ func ReadPNG(data []byte) ([]byte, error) {
 }
 
 func isChara(kw string) bool { return strings.EqualFold(kw, "chara") }
+
+// WritePNG embeds cardJSON into a copy of pngData as a base64 `chara` tEXt chunk
+// (the SillyTavern convention), REPLACING any existing chara text chunk — so a
+// card edited after import exports its current data, not the pixels' stale
+// embed. The image pixels are preserved verbatim. The inverse of ReadPNG.
+func WritePNG(pngData, cardJSON []byte) ([]byte, error) {
+	if len(pngData) < len(pngSignature) || string(pngData[:len(pngSignature)]) != pngSignature {
+		return nil, fmt.Errorf("not a PNG")
+	}
+	out := make([]byte, 0, len(pngData)+len(cardJSON)+64)
+	out = append(out, pngSignature...)
+	pos := len(pngSignature)
+	inserted := false
+	for pos+8 <= len(pngData) {
+		length := int(binary.BigEndian.Uint32(pngData[pos : pos+4]))
+		ctype := string(pngData[pos+4 : pos+8])
+		start := pos + 8
+		if length < 0 || start+length < start || start+length+4 > len(pngData) {
+			return nil, fmt.Errorf("truncated or malformed PNG chunk")
+		}
+		end := start + length + 4 // include the 4-byte CRC
+		if isCharaTextChunk(ctype, pngData[start:start+length]) {
+			pos = end // drop the stale chara chunk; the fresh one goes in before IEND
+			continue
+		}
+		if ctype == "IEND" {
+			out = appendPNGChunk(out, "tEXt", []byte("chara\x00"+base64.StdEncoding.EncodeToString(cardJSON)))
+			inserted = true
+		}
+		out = append(out, pngData[pos:end]...)
+		pos = end
+	}
+	if !inserted {
+		return nil, fmt.Errorf("PNG has no IEND chunk")
+	}
+	return out, nil
+}
+
+// isCharaTextChunk reports whether a chunk is a text chunk keyed "chara".
+func isCharaTextChunk(ctype string, data []byte) bool {
+	switch ctype {
+	case "tEXt":
+		if kw, _, ok := parseTEXt(data); ok {
+			return isChara(kw)
+		}
+	case "zTXt":
+		if kw, _, ok := parseZTXt(data); ok {
+			return isChara(kw)
+		}
+	case "iTXt":
+		if kw, _, ok := parseITXt(data); ok {
+			return isChara(kw)
+		}
+	}
+	return false
+}
+
+// appendPNGChunk writes one PNG chunk (length, type, data, CRC-32 of type+data).
+func appendPNGChunk(dst []byte, ctype string, data []byte) []byte {
+	var n [4]byte
+	binary.BigEndian.PutUint32(n[:], uint32(len(data)))
+	dst = append(dst, n[:]...)
+	dst = append(dst, ctype...)
+	dst = append(dst, data...)
+	crc := crc32.NewIEEE()
+	_, _ = crc.Write([]byte(ctype))
+	_, _ = crc.Write(data)
+	var c [4]byte
+	binary.BigEndian.PutUint32(c[:], crc.Sum32())
+	return append(dst, c[:]...)
+}
 
 // parseTEXt: keyword \0 text (uncompressed).
 func parseTEXt(chunk []byte) (kw string, text []byte, ok bool) {

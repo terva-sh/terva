@@ -437,6 +437,17 @@ func (w *WarmActors) drop(name string) *warmActor {
 	return wa
 }
 
+// Retire removes one named actor from the cache and, if it had warmed up, calls
+// stop(agentID) so the caller tears down its swarm process — the single-actor
+// twin of Shutdown, for when a cast member is dropped mid-scene. A no-op if the
+// actor was never spawned.
+func (w *WarmActors) Retire(name string, stop func(agentID string)) {
+	wa := w.drop(name)
+	if wa != nil && stop != nil {
+		stop(wa.agent.ID)
+	}
+}
+
 // Shutdown retires every live actor (scene teardown): it clears the cache and
 // calls stop(agentID) for each, so the caller owns the swarm interaction and
 // this package need not expose the agent handle.

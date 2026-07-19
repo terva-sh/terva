@@ -1,7 +1,6 @@
 package core
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -58,40 +57,29 @@ func RevealCompaction(path string, ordinal int) (CompactionSpan, error) {
 	}
 	defer f.Close()
 
-	// A parsed row: either an appended message or a checkpoint with its output.
-	type row struct {
-		compaction bool
-		msg        provider.Message
-		out        []provider.Message
+	// Each compaction checkpoint, captured with the effective transcript it
+	// summarized (its input) and the output it stored. walkSession maintains the
+	// effective transcript (append a message, reset on a checkpoint); onCompaction
+	// hands us its state at the instant just before each reset — exactly the input
+	// that checkpoint summarized.
+	type checkpoint struct {
+		input []provider.Message
+		out   []provider.Message
 	}
+	var checkpoints []checkpoint
 	rep := &loadReport{}
-	var rows []row
-	if err := forEachJSONLLine(f, func(line []byte) error {
-		var head sessionLineHead
-		if err := json.Unmarshal(line, &head); err != nil {
-			return nil
-		}
-		switch head.Type {
-		case "message":
-			if m, err := hydrateMessage(line, rep); err == nil && len(m.Content) > 0 {
-				rows = append(rows, row{msg: m})
-			}
-		case "compaction":
-			if out, err := hydrateCompaction(line, rep); err == nil {
-				rows = append(rows, row{compaction: true, out: out})
-			}
-		}
-		return nil
+	if _, err := walkSession(f, rep, sessionWalkHooks{
+		onCompaction: func(out, before []provider.Message, _ int, _ []byte) {
+			checkpoints = append(checkpoints, checkpoint{
+				input: append([]provider.Message(nil), before...), // snapshot before the reset
+				out:   out,
+			})
+		},
 	}); err != nil {
 		return CompactionSpan{}, err
 	}
 
-	total := 0
-	for _, r := range rows {
-		if r.compaction {
-			total++
-		}
-	}
+	total := len(checkpoints)
 	if total == 0 {
 		return CompactionSpan{}, fmt.Errorf("session has no compaction checkpoints")
 	}
@@ -103,28 +91,12 @@ func RevealCompaction(path string, ordinal int) (CompactionSpan, error) {
 		return CompactionSpan{}, fmt.Errorf("no compaction checkpoint at ordinal %d (have %d)", ordinal, total)
 	}
 
-	var messages, input []provider.Message
-	keptCount := 0
-	c := 0
+	input := checkpoints[target].input
 	// A clear is an EMPTY checkpoint: it kept no tail and left no summary behind.
-	// Recorded per checkpoint so the floor below can see one without re-walking.
-	clear := make([]bool, total)
-	for _, r := range rows {
-		if !r.compaction {
-			messages = append(messages, r.msg)
-			continue
-		}
-		clear[c] = len(r.out) == 0
-		if c == target {
-			input = append([]provider.Message(nil), messages...) // snapshot before the reset
-			if keptCount = len(r.out) - 1; keptCount < 0 {
-				keptCount = 0 // a "clear" checkpoint has no summary/tail
-			}
-		}
-		messages = r.out
-		c++
+	keptCount := len(checkpoints[target].out) - 1
+	if keptCount < 0 {
+		keptCount = 0 // a "clear" checkpoint has no summary/tail
 	}
-
 	span := input
 	if n := len(input) - keptCount; n >= 0 && n <= len(input) {
 		span = input[:n]
@@ -136,7 +108,7 @@ func RevealCompaction(path string, ordinal int) (CompactionSpan, error) {
 		Replaced:    span,
 		KeptCount:   keptCount,
 		Total:       total,
-		Clear:       clear[target],
-		PrevClear:   prev >= 0 && clear[prev],
+		Clear:       len(checkpoints[target].out) == 0,
+		PrevClear:   prev >= 0 && len(checkpoints[prev].out) == 0,
 	}, nil
 }

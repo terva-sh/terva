@@ -91,18 +91,22 @@ func (p Persona) Phonetic() string { return strings.TrimSpace(p.Pronunciation) }
 // hand-authored on-disk file).
 func (p Persona) Builtin() bool { return strings.HasPrefix(p.Source, "embedded:") }
 
+// personaFrontmatter is the YAML head of a persona .md. omitempty keeps a
+// serialized persona (MarshalPersona) from emitting a wall of empty keys;
+// omitempty affects marshaling only, so parsing is unchanged (an absent optional
+// field already meant its zero value).
 type personaFrontmatter struct {
 	Name              string   `yaml:"name"`
-	Pronunciation     string   `yaml:"pronunciation"`
-	Specialty         string   `yaml:"specialty"`
-	Summary           string   `yaml:"summary"`
-	Emoji             string   `yaml:"emoji"`
-	AccentColor       string   `yaml:"accent_color"`
-	RecommendedSkills []string `yaml:"recommended_skills"`
-	GoodFor           []string `yaml:"good_for"`
-	AvoidFor          []string `yaml:"avoid_for"`
-	Immersive         bool     `yaml:"immersive"`
-	AgentIntroduction string   `yaml:"agent_introduction"`
+	Pronunciation     string   `yaml:"pronunciation,omitempty"`
+	Specialty         string   `yaml:"specialty,omitempty"`
+	Summary           string   `yaml:"summary,omitempty"`
+	Emoji             string   `yaml:"emoji,omitempty"`
+	AccentColor       string   `yaml:"accent_color,omitempty"`
+	RecommendedSkills []string `yaml:"recommended_skills,omitempty"`
+	GoodFor           []string `yaml:"good_for,omitempty"`
+	AvoidFor          []string `yaml:"avoid_for,omitempty"`
+	Immersive         bool     `yaml:"immersive,omitempty"`
+	AgentIntroduction string   `yaml:"agent_introduction,omitempty"`
 }
 
 // ParsePersona parses a Persona .md (YAML frontmatter + charter body). A

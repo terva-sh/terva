@@ -51,6 +51,32 @@ func (s *Service) Clear(ctx context.Context, sess string) error {
 	return s.c.Call(ctx, sess, ctrlproto.MethodClear, nil, nil)
 }
 
+func (s *Service) EditMessage(ctx context.Context, sess string, epoch uint64, index int, text string) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodMessageEdit, ctrlproto.MessageEditParams{Epoch: epoch, Index: index, Text: text}, nil)
+}
+
+func (s *Service) DeleteMessage(ctx context.Context, sess string, epoch uint64, index int) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodMessageDelete, ctrlproto.MessageDeleteParams{Epoch: epoch, Index: index}, nil)
+}
+
+func (s *Service) SwipeTurn(ctx context.Context, sess string, epoch uint64, variant int) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodTurnSwipe, ctrlproto.TurnSwipeParams{Epoch: epoch, Variant: variant}, nil)
+}
+
+func (s *Service) SwipeMessage(ctx context.Context, sess string, epoch uint64, index, variant int) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodTurnSwipe, ctrlproto.TurnSwipeParams{Epoch: epoch, Variant: variant, Index: &index}, nil)
+}
+
+func (s *Service) RetryTurn(ctx context.Context, sess string, epoch uint64) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodTurnRetry, ctrlproto.TurnRetryParams{Epoch: epoch}, nil)
+}
+
+func (s *Service) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
+	var r ctrlproto.SessionResult
+	err := s.c.Call(ctx, sess, ctrlproto.MethodSessionFork, ctrlproto.SessionForkParams{FromIndex: fromIndex}, &r)
+	return r.Session, err
+}
+
 func (s *Service) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
 	return s.c.Call(ctx, sess, ctrlproto.MethodApprove, ctrlproto.ApproveParams{
 		CallID: callID, Decision: ctrlproto.DecisionFromCore(d),
@@ -241,6 +267,8 @@ func (s *Service) AuthEndpointRemove(ctx context.Context, p ctrlproto.AuthEndpoi
 
 // --- model params (models.json overrides) ---
 
+var _ ctrlproto.ModelParamsController = (*Service)(nil)
+
 func (s *Service) ModelParams(ctx context.Context, p ctrlproto.ModelParamsParams) (ctrlproto.ModelParamsView, error) {
 	var r ctrlproto.ModelParamsView
 	err := s.c.Call(ctx, "", ctrlproto.MethodModelParams, p, &r)
@@ -253,6 +281,108 @@ func (s *Service) ModelParamsSet(ctx context.Context, p ctrlproto.ModelParamsSet
 
 func (s *Service) ModelParamsReset(ctx context.Context, p ctrlproto.ModelParamsParams) error {
 	return s.c.Call(ctx, "", ctrlproto.MethodModelParamsReset, p, nil)
+}
+
+// --- card library ---
+
+var _ ctrlproto.CardsController = (*Service)(nil)
+
+func (s *Service) CardsList(ctx context.Context) (ctrlproto.CardsListResult, error) {
+	var r ctrlproto.CardsListResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodCardsList, nil, &r)
+	return r, err
+}
+
+func (s *Service) CardsGet(ctx context.Context, p ctrlproto.CardGetParams) (ctrlproto.CardView, error) {
+	var r ctrlproto.CardView
+	err := s.c.Call(ctx, "", ctrlproto.MethodCardsGet, p, &r)
+	return r, err
+}
+
+func (s *Service) CardsImport(ctx context.Context, p ctrlproto.CardImportParams) (ctrlproto.CardView, error) {
+	var r ctrlproto.CardView
+	err := s.c.Call(ctx, "", ctrlproto.MethodCardsImport, p, &r)
+	return r, err
+}
+
+func (s *Service) CardsEdit(ctx context.Context, p ctrlproto.CardEditParams) (ctrlproto.CardView, error) {
+	var r ctrlproto.CardView
+	err := s.c.Call(ctx, "", ctrlproto.MethodCardsEdit, p, &r)
+	return r, err
+}
+
+func (s *Service) CardsDelete(ctx context.Context, p ctrlproto.CardDeleteParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodCardsDelete, p, nil)
+}
+
+func (s *Service) CardsExport(ctx context.Context, p ctrlproto.CardExportParams) (ctrlproto.CardExport, error) {
+	var r ctrlproto.CardExport
+	err := s.c.Call(ctx, "", ctrlproto.MethodCardsExport, p, &r)
+	return r, err
+}
+
+func (s *Service) CardsLint(ctx context.Context, p ctrlproto.CardLintParams) (ctrlproto.CardLintResult, error) {
+	var r ctrlproto.CardLintResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodCardsLint, p, &r)
+	return r, err
+}
+
+// --- persona library ---
+
+var _ ctrlproto.PersonasController = (*Service)(nil)
+
+func (s *Service) PersonasList(ctx context.Context) (ctrlproto.PersonasListResult, error) {
+	var r ctrlproto.PersonasListResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodPersonasList, nil, &r)
+	return r, err
+}
+
+func (s *Service) PersonasGet(ctx context.Context, p ctrlproto.PersonaGetParams) (ctrlproto.PersonaView, error) {
+	var r ctrlproto.PersonaView
+	err := s.c.Call(ctx, "", ctrlproto.MethodPersonasGet, p, &r)
+	return r, err
+}
+
+func (s *Service) PersonasCreate(ctx context.Context, p ctrlproto.PersonaWriteParams) (ctrlproto.PersonaView, error) {
+	var r ctrlproto.PersonaView
+	err := s.c.Call(ctx, "", ctrlproto.MethodPersonasCreate, p, &r)
+	return r, err
+}
+
+func (s *Service) PersonasEdit(ctx context.Context, p ctrlproto.PersonaWriteParams) (ctrlproto.PersonaView, error) {
+	var r ctrlproto.PersonaView
+	err := s.c.Call(ctx, "", ctrlproto.MethodPersonasEdit, p, &r)
+	return r, err
+}
+
+// --- backgrounds ---
+
+var _ ctrlproto.BackgroundsController = (*Service)(nil)
+
+func (s *Service) BackgroundsList(ctx context.Context) (ctrlproto.BackgroundsListResult, error) {
+	var r ctrlproto.BackgroundsListResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodBackgroundsList, nil, &r)
+	return r, err
+}
+
+func (s *Service) BackgroundsImport(ctx context.Context, p ctrlproto.BackgroundImportParams) (ctrlproto.BackgroundView, error) {
+	var r ctrlproto.BackgroundView
+	err := s.c.Call(ctx, "", ctrlproto.MethodBackgroundsImport, p, &r)
+	return r, err
+}
+
+func (s *Service) BackgroundsDelete(ctx context.Context, p ctrlproto.BackgroundDeleteParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodBackgroundsDelete, p, nil)
+}
+
+func (s *Service) BackgroundBind(ctx context.Context, sess string, p ctrlproto.BackgroundBindParams) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodBackgroundBind, p, nil)
+}
+
+func (s *Service) BackgroundsGenerate(ctx context.Context, sess string, p ctrlproto.BackgroundGenerateParams) (ctrlproto.BackgroundView, error) {
+	var r ctrlproto.BackgroundView
+	err := s.c.Call(ctx, sess, ctrlproto.MethodBackgroundGenerate, p, &r)
+	return r, err
 }
 
 // --- control group ---

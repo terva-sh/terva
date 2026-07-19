@@ -140,6 +140,12 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Note:        i18n.T("applies to new sessions"),
 		},
 		{
+			Key: "web_stage", Label: i18n.T("Stage surface"), Type: "bool",
+			Value:       boolStr(cfg.WebStage),
+			Description: i18n.T("Serve the Stage immersive chat/play surface at /stage/ (the config twin of --web-stage). Off by default while Stage stabilizes."),
+			Note:        i18n.T("takes effect on the next web launch"),
+		},
+		{
 			Key: "auto_compact", Label: i18n.T("Auto-condense"), Type: "enum",
 			Value: autoCompactValue(cfg), Options: localizeOptions(autoCompactOptions),
 			Description: i18n.T("When to automatically condense the transcript as the context window fills."),
@@ -203,6 +209,16 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Value:       boolStr(cfg.AutoSwarmNudge == nil || *cfg.AutoSwarmNudge),
 			Description: i18n.T("Nudge the agent to proactively split work across sub-agents. Off keeps the tool but lets the agent decide when to use it."),
 			Note:        i18n.T("applies to new sessions"),
+		})
+		// External workers nest under auto_swarm the same way the nudge does — the
+		// backend param lives on swarm_spawn, so it is meaningless until the tool
+		// exists. A separate, stronger toggle: these sub-agents are FOREIGN
+		// processes that authenticate themselves and run outside terva's policy.
+		items = append(items, ctrlproto.SettingItem{
+			Key: "external_workers", Label: i18n.T("External agent workers"), Type: "bool",
+			Value:       boolStr(cfg.ExternalWorkersEnabled != nil && *cfg.ExternalWorkersEnabled),
+			Description: i18n.T("Let swarm_spawn hand a task to an external coding agent (e.g. Claude Code) instead of a native sub-agent. The worker runs in its own checkout with its own tools and credentials, and reports its result back the same way."),
+			Note:        i18n.T("applies live per spawn"),
 		})
 	}
 	// Engine features project into the same pane (the seam build.EngineFeatures
@@ -337,6 +353,14 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		if err := config.MutateConfig(func(c *config.Config) { c.LazyTools = on }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
+	case "web_stage":
+		// Persist-only: the /stage/ route is mounted when `terva web` starts
+		// (web_mode.go reads the flag OR this knob), so a toggle takes effect on
+		// the next launch rather than reshaping the running server.
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.WebStage = on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
 	case "auto_compact":
 		switch val {
 		case "steps", "turns", "off":
@@ -423,6 +447,15 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
 		s.ws.applyAutoSwarm()
+	case "external_workers":
+		// Read live by the swarm_spawn backend gate (config.ExternalWorkersEnabled)
+		// and by newRunner, so persisting is enough — no rebuild. Disabling stops
+		// NEW foreign spawns; a worker already running keeps its backend, because
+		// newRunner is deliberately unconditional (it must revive persisted ones).
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.ExternalWorkersEnabled = &on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
 	case "language":
 		// Switch the daemon's active UI language live: swap the process-global
 		// i18n, persist as the default, and tell every tab to re-fetch its string
