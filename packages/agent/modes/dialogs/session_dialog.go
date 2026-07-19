@@ -206,8 +206,8 @@ func FormatSessionRowPlain(s core.SessionSummary, maxWidth int) string {
 		summary = i18n.T("(empty)")
 	}
 	summary = strings.ReplaceAll(summary, "\n", " ")
-	left := fmt.Sprintf("%-14s  %s/%s  %d msgs  $%.4f  ",
-		when, s.Provider, s.Model, s.MessageCount, s.TotalCost)
+	left := fmt.Sprintf("%s%-14s  %s/%s  %d msgs  $%.4f  ",
+		sessionStatusGlyph(s), when, s.Provider, s.Model, s.MessageCount, s.TotalCost)
 	room := maxWidth - len([]rune(left))
 	if room < 4 {
 		room = 4
@@ -227,6 +227,23 @@ func FormatSessionRowPlain(s core.SessionSummary, maxWidth int) string {
 		}
 	}
 	return row
+}
+
+// sessionStatusGlyph is a fixed-width (2-column) prefix conveying a session's
+// live state: ● a turn is in flight, ○ materialized but idle, or two spaces for
+// a cold on-disk session (the common case for a local picker or an old daemon).
+// Monochrome on purpose — a row is styled as a whole (the selection highlight or
+// a flat mute), so the state has to read from the glyph shape, not colour. The
+// filled/hollow/blank gradient mirrors the web board's busy/idle/cold pills.
+func sessionStatusGlyph(s core.SessionSummary) string {
+	switch {
+	case s.Busy:
+		return "● "
+	case s.Live:
+		return "○ "
+	default:
+		return "  "
+	}
 }
 
 func formatRelative(t time.Time) string {
@@ -352,6 +369,28 @@ func (d *SessionDialog) HandleKey(k tui.Key) sessionDialogAction {
 		}
 	}
 	return sessionDialogAction{}
+}
+
+// Refresh re-runs List (if set) so an OPEN picker picks up sessions another
+// client added, renamed, or deleted, keeping the cursor on the same session
+// where it survives. A no-op while closed or mid-rename (a re-list under the
+// user's fingers would fight a rename in progress). The attached TUI calls it
+// on a sessions_changed broadcast so the picker never shows a stale set.
+func (d *SessionDialog) Refresh(root, cwd string) {
+	if !d.Active() || d.renaming {
+		return
+	}
+	var curPath string
+	if d.cursor >= 0 && d.cursor < len(d.sessions) {
+		curPath = d.sessions[d.cursor].Path
+	}
+	d.Open(root, cwd) // re-lists via List(); resets cursor to 0
+	for i := range d.sessions {
+		if d.sessions[i].Path == curPath {
+			d.cursor = i
+			break
+		}
+	}
 }
 
 // SetTitleFor updates the displayed title of the row for path, if it is

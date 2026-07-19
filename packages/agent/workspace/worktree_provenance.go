@@ -19,11 +19,11 @@ import (
 // own --parent rule, never by inheriting the host's verdict. A restricted
 // worktree carries the actionable `terva trust <path>` hint.
 //
-// The git facts are best-effort. An ext-reported provenance object (the
-// forward-compatible contract the terva-git-worktree extension will populate;
-// see Phase 7 §7a) is preferred; otherwise the host reads them lock-free from
-// the on-disk worktree. Any field that can't be determined is omitted, never
-// guessed.
+// The git facts are best-effort. An engine-reported provenance object (the
+// carrier fills it from the worktree engine's CreateResult — the contract this
+// file held open since Phase 7 §7a) is preferred; otherwise the host reads
+// them lock-free from the on-disk worktree. Any field that can't be determined
+// is omitted, never guessed.
 type worktreeProvenance struct {
 	Repo    string // origin repo name (best-effort)
 	Path    string // the leased worktree path (as reported by worktree_create)

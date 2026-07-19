@@ -2,52 +2,47 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"time"
+	"path/filepath"
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/worktree"
 )
 
+// swarmWorktreeMgr drives the leases. One package-level engine: the in-process
+// mutex is per-Manager, and the registry flock serializes across processes (and
+// across any other Manager instance) regardless.
+var swarmWorktreeMgr = worktree.NewManager()
+
 // acquireSwarmWorktree is the workspace swarm's AcquireWorktree hook on the
-// carrier — the daemon twin of the legacy swarmWorktreeAcquirer. It leases a
-// dedicated git worktree per swarm sub-agent from the terva-git-worktree
-// extension, wired only when --swarm-worktrees is on (see resolveSwarmWorktrees).
+// carrier: it leases a dedicated git worktree per swarm sub-agent straight from
+// the in-tree worktree engine (stage 1 of the terva-git-worktree fold-in).
 //
-// The swarm is workspace-global but extensions are per-session, so it resolves a
-// live session that provides worktree_create at call time (and again at release,
-// since the acquiring session may have closed by then). Worktree isolation was
-// explicitly requested, so any failure surfaces and fails the spawn rather than
-// silently dropping back to the shared host tree. On release it calls
-// worktree_release (NOT worktree_remove) so the worktree + branch survive for
-// review/merge via the extension's `/worktree collect`.
+// This used to dial the extension's worktree_create through whichever live
+// session happened to carry it — and failed the spawn when none did (a fresh
+// daemon, a headless run, an uninstalled extension). A direct engine call has
+// no such mode: --swarm-worktrees works whenever the binary does. Worktree
+// isolation was explicitly requested, so any failure still surfaces and fails
+// the spawn rather than silently dropping back to the shared host tree. On
+// release it releases the claim (NOT remove), so the worktree + branch survive
+// for review/merge.
+//
+// The claim is owned by a per-agent identity ("swarm:<agent-id>"), not the
+// acquiring session — honest attribution, and release works no matter which
+// sessions have come or gone in between.
 func (w *Workspace) acquireSwarmWorktree(ctx context.Context, req swarm.WorktreeReq) (swarm.WorktreeLease, error) {
 	name := build.SlugAgent(req.AgentID, req.Task)
-	mgr := w.worktreeExtManager()
-	if mgr == nil {
-		return swarm.WorktreeLease{}, fmt.Errorf("swarm worktree isolation: no live session provides worktree_create (install the terva-git-worktree extension or drop --swarm-worktrees)")
+	env := worktree.Env{
+		Root:       filepath.Join(config.TervaHome(), "worktrees"),
+		LegacyRoot: filepath.Join(config.TervaHome(), "ext-data", "git-worktree"),
+		CWD:        w.cwd,
+		SessionID:  "swarm:" + req.AgentID,
 	}
-	args, err := json.Marshal(map[string]any{"name": name}) // base defaults to HEAD
+	res, err := swarmWorktreeMgr.Create(env, worktree.CreateArgs{Name: name, ReuseIfAvailable: true}) // base defaults to HEAD
 	if err != nil {
-		return swarm.WorktreeLease{}, fmt.Errorf("marshal worktree_create args: %w", err)
-	}
-	res, err := mgr.InvokeTool(ctx, "worktree_create", args, 30*time.Second)
-	if err != nil {
-		return swarm.WorktreeLease{}, fmt.Errorf("swarm worktree isolation: worktree_create via terva-git-worktree failed (install the extension or drop --swarm-worktrees): %w", err)
-	}
-	if res.IsError {
-		return swarm.WorktreeLease{}, fmt.Errorf("swarm worktree isolation: worktree_create returned an error: %s", build.FirstText(res))
-	}
-	var cr struct {
-		Path       string         `json:"path"`
-		Provenance *extProvenance `json:"provenance"` // preferred when the ext reports it (Phase 7 §7a)
-	}
-	_ = json.Unmarshal([]byte(build.FirstText(res)), &cr)
-	if cr.Path == "" {
-		return swarm.WorktreeLease{}, fmt.Errorf("swarm worktree isolation: worktree_create returned no path (result: %s)", build.FirstText(res))
+		return swarm.WorktreeLease{}, fmt.Errorf("swarm worktree isolation: %w", err)
 	}
 	// The swarm_spawn gate checks the HOST cwd's trust, but this sub-agent boots
 	// with --cwd <worktree> and re-resolves trust for the worktree path. A
@@ -60,37 +55,24 @@ func (w *Workspace) acquireSwarmWorktree(ctx context.Context, req swarm.Worktree
 	// verdict verbatim (a worktree can carry different executable project content
 	// than the host). Gated on the host being trusted, matching the swarm_spawn
 	// gate: a restricted host is handled there, so there's no lease to narrate.
+	// The engine result fills the git facts directly — the contract
+	// worktree_provenance.go held open for the extension to populate.
 	if w.diag != nil && w.Trusted() {
-		if store, err := config.LoadTrustStore(); err == nil {
-			w.diag(newWorktreeProvenance(ctx, store, w.cwd, cr.Path, cr.Provenance).Render())
+		if store, terr := config.LoadTrustStore(); terr == nil {
+			short := res.HeadCommit
+			if len(short) > 12 {
+				short = short[:12]
+			}
+			facts := &extProvenance{Branch: res.Branch, Base: res.BaseRef, Commit: short}
+			w.diag(newWorktreeProvenance(ctx, store, w.cwd, res.Path, facts).Render())
 		}
 	}
 	return swarm.WorktreeLease{
-		Dir: cr.Path,
+		Dir: res.Path,
 		Release: func() {
-			// Release, never remove: keep the worktree + branch for review/merge.
-			// Best-effort, detached from ctx (the agent is already terminal), and
-			// re-resolves a live manager since the acquiring session may be gone.
-			rmgr := w.worktreeExtManager()
-			if rmgr == nil {
-				return
-			}
-			rel, _ := json.Marshal(map[string]any{"name": name})
-			_, _ = rmgr.InvokeTool(context.Background(), "worktree_release", rel, 10*time.Second)
+			// Release, never remove: keep the worktree + branch for
+			// review/merge. Best-effort — the agent is already terminal.
+			_, _ = swarmWorktreeMgr.Release(env, worktree.ReleaseArgs{Name: name})
 		},
 	}, nil
-}
-
-// worktreeExtManager returns a live session's extension manager that provides
-// the worktree_create tool, or nil. Any session with the terva-git-worktree
-// extension can service a lease, since the extension acts on the shared repo.
-func (w *Workspace) worktreeExtManager() *extensions.Manager {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for _, s := range w.sessions {
-		if s.extMgr != nil && s.extMgr.HasTool("worktree_create") {
-			return s.extMgr
-		}
-	}
-	return nil
 }
