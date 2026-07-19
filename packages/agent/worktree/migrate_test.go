@@ -83,7 +83,10 @@ func TestMigrationAdoptsLegacyRegistryWithPinnedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrated registry missing from the first-class home: %v", err)
 	}
-	if !strings.Contains(string(b), legacyPath) {
+	// The registry is JSON; on Windows the pinned path's separators are escaped
+	// (\ -> \\), so match the JSON-escaped form rather than the raw path.
+	esc, _ := json.Marshal(legacyPath)
+	if !strings.Contains(string(b), string(esc[1:len(esc)-1])) {
 		t.Errorf("migrated registry does not pin the legacy path:\n%s", b)
 	}
 }

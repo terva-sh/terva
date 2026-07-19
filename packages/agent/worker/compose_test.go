@@ -212,8 +212,11 @@ func TestPointersAimAtTheWorkersOwnCheckout(t *testing.T) {
 	r := loadedRepo(t)
 	b := Compose(r, demoTask(), Workspace{Path: "/leases/wt-7", Branch: "work/x"})
 
+	// re-rooting goes through filepath.Join, so the workspace prefix carries the
+	// OS separator (backslash on Windows) — build it the same way, not as a literal.
+	wsPrefix := filepath.Clean("/leases/wt-7") + string(filepath.Separator)
 	for _, p := range b.Pointers {
-		if !strings.HasPrefix(p.Path, "/leases/wt-7/") {
+		if !strings.HasPrefix(p.Path, wsPrefix) {
 			t.Errorf("pointer %q is outside the worker's workspace — it names our checkout, not its own", p.Path)
 		}
 		if strings.HasPrefix(p.Path, r.CWD) {
@@ -238,7 +241,8 @@ func TestOutOfTreePointersAreNotReRooted(t *testing.T) {
 	if got := rerootIntoWorkspace(outside, "/repo", "/leases/wt-7"); got != outside {
 		t.Errorf("re-rooted an out-of-tree file to %q; it has no counterpart in the lease", got)
 	}
-	if got := rerootIntoWorkspace("/repo/pkg/AGENTS.md", "/repo", "/leases/wt-7"); got != "/leases/wt-7/pkg/AGENTS.md" {
+	want := filepath.Join("/leases/wt-7", "pkg", "AGENTS.md") // OS-native, like the code under test
+	if got := rerootIntoWorkspace("/repo/pkg/AGENTS.md", "/repo", "/leases/wt-7"); got != want {
 		t.Errorf("in-tree file should re-root under the lease, got %q", got)
 	}
 }

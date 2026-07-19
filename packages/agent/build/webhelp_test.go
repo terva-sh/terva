@@ -17,14 +17,19 @@ func captureWebHelp(t *testing.T) string {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	// Drain the read end concurrently: PrintWebHelp writes several KB, which
+	// overflows a small pipe buffer (Windows' is ~4KB) and would deadlock the
+	// write if we only read after it returns. Copy while it writes.
+	done := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, r)
+		done <- b.String()
+	}()
 	PrintWebHelp()
 	_ = w.Close()
 	os.Stderr = old
-	out, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(out)
+	return <-done
 }
 
 // TestWebHelpDocumentsEveryWebFlag guards the gap that hid --web-stage (and

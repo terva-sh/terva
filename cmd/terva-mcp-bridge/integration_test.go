@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -74,6 +75,9 @@ func TestRealTervaClientDrivesBridge(t *testing.T) {
 func buildBridge(t *testing.T) string {
 	t.Helper()
 	out := filepath.Join(testsupport.TempDir(t), "terva-mcp-bridge")
+	if runtime.GOOS == "windows" {
+		out += ".exe" // Windows exec needs the extension; go build writes it there
+	}
 	cmd := exec.Command("go", "build", "-o", out, ".")
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if b, err := cmd.CombinedOutput(); err != nil {

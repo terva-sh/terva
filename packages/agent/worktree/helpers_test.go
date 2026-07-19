@@ -106,23 +106,25 @@ func TestParsePorcelain(t *testing.T) {
 	if len(m) != 5 {
 		t.Fatalf("want 5 worktrees, got %d: %+v", len(m), m)
 	}
-	main := m["/repo/main"]
+	// parsePorcelain keys the map by canonPath (OS-native separators on Windows),
+	// so look up the same way rather than with raw forward-slash literals.
+	main := m[canonPath("/repo/main")]
 	if main.Head != "aaaa1111" || main.Branch != "main" || main.Detached || main.Bare {
 		t.Errorf("main parsed wrong: %+v", main)
 	}
-	feat := m["/repo/wt/feat"]
+	feat := m[canonPath("/repo/wt/feat")]
 	if feat.Branch != "wt/feat" { // refs/heads/ stripped, internal slash kept
 		t.Errorf("feat branch parsed wrong: %+v", feat)
 	}
-	det := m["/repo/detached"]
+	det := m[canonPath("/repo/detached")]
 	if !det.Detached || det.Branch != "" {
 		t.Errorf("detached parsed wrong: %+v", det)
 	}
-	bare := m["/repo/bare"]
+	bare := m[canonPath("/repo/bare")]
 	if !bare.Bare {
 		t.Errorf("bare parsed wrong: %+v", bare)
 	}
-	pr := m["/repo/prunable-wt"]
+	pr := m[canonPath("/repo/prunable-wt")]
 	if !pr.Prunable {
 		t.Errorf("prunable parsed wrong: %+v", pr)
 	}

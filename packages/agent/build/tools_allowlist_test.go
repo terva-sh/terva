@@ -19,14 +19,18 @@ func captureStderr(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	// Drain concurrently so a write larger than the OS pipe buffer (Windows' is
+	// ~4KB) cannot deadlock fn against a read that only starts after it returns.
+	done := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, r)
+		done <- b.String()
+	}()
 	fn()
 	_ = w.Close()
 	os.Stderr = old
-	out, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(out)
+	return <-done
 }
 
 func TestUnrecognizedTools(t *testing.T) {
