@@ -235,7 +235,7 @@ func TestConfigEnvCannotReintroduceInjection(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cl.Stop()
-	for _, kv := range cl.cmd.Env {
+	for _, kv := range cl.stdioCmd().Env {
 		if strings.HasPrefix(kv, "LD_PRELOAD=") {
 			t.Error("LD_PRELOAD leaked into MCP server env")
 		}
@@ -244,7 +244,7 @@ func TestConfigEnvCannotReintroduceInjection(t *testing.T) {
 		}
 	}
 	found := false
-	for _, kv := range cl.cmd.Env {
+	for _, kv := range cl.stdioCmd().Env {
 		if kv == "MY_TOKEN=ok" {
 			found = true
 		}
@@ -264,8 +264,8 @@ func TestStartRunsServerInProjectCWD(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cl.Stop()
-	if cl.cmd.Dir != cwd {
-		t.Fatalf("server cwd = %q, want %q", cl.cmd.Dir, cwd)
+	if cl.stdioCmd().Dir != cwd {
+		t.Fatalf("server cwd = %q, want %q", cl.stdioCmd().Dir, cwd)
 	}
 }
 
@@ -284,7 +284,7 @@ func TestManagerStartOneInheritsProjectCWD(t *testing.T) {
 		t.Fatal("server not started")
 	}
 	defer cl.Stop()
-	if cl.cmd.Dir != cwd {
-		t.Fatalf("StartOne server cwd = %q, want %q", cl.cmd.Dir, cwd)
+	if cl.stdioCmd().Dir != cwd {
+		t.Fatalf("StartOne server cwd = %q, want %q", cl.stdioCmd().Dir, cwd)
 	}
 }

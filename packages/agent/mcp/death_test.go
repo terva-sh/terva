@@ -35,7 +35,7 @@ func TestManagerWithdrawsToolsWhenServerDies(t *testing.T) {
 
 	// Kill the subprocess out from under the manager — a server crash.
 	m.mu.Lock()
-	proc := m.clients["alpha"].cmd.Process
+	proc := m.clients["alpha"].stdioCmd().Process
 	m.mu.Unlock()
 	if err := proc.Kill(); err != nil {
 		t.Fatalf("kill stub: %v", err)
