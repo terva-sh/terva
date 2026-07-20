@@ -218,24 +218,6 @@ func TestHeadlessGateAllowRuleRunsWithoutPrompt(t *testing.T) {
 	}
 }
 
-func TestAppendUserPermissionRulePersists(t *testing.T) {
-	withTempHome(t)
-	if err := AppendUserPermissionRule("bash"); err != nil {
-		t.Fatal(err)
-	}
-	// Idempotent: a second grant doesn't duplicate.
-	if err := AppendUserPermissionRule("bash"); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Permissions) != 1 || cfg.Permissions[0].Tool != "bash" || cfg.Permissions[0].Decision != "allow" {
-		t.Fatalf("persisted rules = %+v", cfg.Permissions)
-	}
-}
-
 func TestPlanModeFiltersToolRegistry(t *testing.T) {
 	reg := BuildToolRegistry(Args{}, core.ApprovalPlan, testsupport.TempDir(t), nil, "anthropic", "apikey", true, nil)
 	for name := range reg {

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 )
 
 // ChatConfirmer renders tool-approval prompts as chat asks — the
@@ -58,19 +59,19 @@ func (c *ChatConfirmer) Confirm(toolName string, preview string) core.ConfirmDec
 		restrict = []string{owner}
 	}
 
-	text := fmt.Sprintf("approval needed: %s", toolName)
+	text := i18n.T("approval needed: %s", toolName)
 	if preview != "" {
 		text += "\n" + preview
 	}
 	ans, err := c.loop.Ask(c.ctx, Ask{
 		ChatID: chatID, ReplyTo: replyTo, Text: text,
 		Options: []AskOption{
-			{Key: "approve", Label: "Approve", Style: "affirm", Hint: "👍"},
-			{Key: "always", Label: "Always (this tool)"},
-			{Key: "deny", Label: "Deny", Style: "deny", Hint: "👎"},
+			{Key: "approve", Label: i18n.T("Approve"), Style: "affirm", Hint: "👍"},
+			{Key: "always", Label: i18n.T("Always (this tool)")},
+			{Key: "deny", Label: i18n.T("Deny"), Style: "deny", Hint: "👎"},
 		},
 		RestrictTo:     restrict,
-		TimeoutOutcome: "no answer — denied",
+		TimeoutOutcome: i18n.T("no answer — denied"),
 	})
 	if err != nil {
 		reason := "tool call refused: " + err.Error()
@@ -94,18 +95,18 @@ func (c *ChatConfirmer) Confirm(toolName string, preview string) core.ConfirmDec
 	}
 	switch ans.Key {
 	case "approve":
-		c.loop.addNote(noteChat, "approval", fmt.Sprintf("tool %q approved by @%s", toolName, who))
+		c.loop.addNote(noteChat, "approval", i18n.T("tool %q approved by @%s", toolName, who))
 		return core.ConfirmDecision{Allow: true}
 	case "always":
 		if ans.Attestation == AttestationAttested {
-			c.loop.addNote(noteChat, "approval", fmt.Sprintf("tool %q approved by @%s for the rest of the session", toolName, who))
+			c.loop.addNote(noteChat, "approval", i18n.T("tool %q approved by @%s for the rest of the session", toolName, who))
 			return core.ConfirmDecision{Allow: true, RememberTool: true}
 		}
 		// A parsed-text "always" cannot carry a durable grant; say so
 		// where the answer happened and allow this call only.
 		_ = c.loop.Connector.Send(c.ctx, Outgoing{ChatID: chatID,
-			Text: "\"always\" needs an attested answer (buttons); allowed once instead."})
-		c.loop.addNote(noteChat, "approval", fmt.Sprintf("tool %q approved once by @%s (a durable \"always\" needs an attested answer)", toolName, who))
+			Text: i18n.T("\"always\" needs an attested answer (buttons); allowed once instead.")})
+		c.loop.addNote(noteChat, "approval", i18n.T("tool %q approved once by @%s (a durable \"always\" needs an attested answer)", toolName, who))
 		return core.ConfirmDecision{Allow: true}
 	default:
 		return core.ConfirmDecision{Allow: false,

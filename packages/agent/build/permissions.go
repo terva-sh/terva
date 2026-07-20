@@ -482,24 +482,3 @@ func BuiltinReadOnlySet() *core.ReadOnlySet {
 	}
 	return core.NewReadOnlySet(names...)
 }
-
-// AppendUserPermissionRule persists a durable allow grant for a tool
-// — the confirm dialog's "always, save to config" answer. Appended at
-// the end of the user list so existing deny/ask rules keep beating it
-// (rules are first-match-wins and project rules run earlier still).
-func AppendUserPermissionRule(toolName string) error {
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		return err
-	}
-	for _, r := range cfg.Permissions {
-		if r.Tool == toolName && r.Args == "" && strings.EqualFold(r.Decision, string(core.RuleAllow)) {
-			return nil // already granted
-		}
-	}
-	cfg.Permissions = append(cfg.Permissions, config.PermissionRuleConfig{
-		Tool:     toolName,
-		Decision: string(core.RuleAllow),
-	})
-	return config.SaveConfig(cfg)
-}

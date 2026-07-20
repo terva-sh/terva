@@ -77,7 +77,7 @@ type TrustEntry struct {
 
 // TrustStore is the persisted trust list. Mirrors the LoadConfig /
 // SaveConfig shapes (config.go) and the append-a-decision idiom of
-// AppendUserPermissionRule (permissions.go).
+// addUserPermissionRule (workspace/workspace_permissions.go).
 type TrustStore struct {
 	Version int          `json:"version"`
 	Trusted []TrustEntry `json:"trusted,omitempty"`

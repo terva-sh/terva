@@ -12,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 )
 
 // The permissions inspector surface: the session's approval mode + compiled
@@ -46,13 +47,13 @@ func (s *wsSession) permissionsView() *ctrlproto.PermissionsView {
 // add/remove (persisted to user config + applied live to every session).
 func (s *wsSession) permissionsAction(action string, args map[string]string) error {
 	if s.gate == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "no permission gate for this session")
+		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("no permission gate for this session"))
 	}
 	switch action {
 	case "revoke":
 		tool := args["tool"]
 		if tool == "" {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "revoke: missing tool")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("revoke: missing tool"))
 		}
 		s.gate.Revoke(tool)
 		s.broadcast(ctrlproto.SurfaceUpdatedEvent("permissions"))
@@ -63,17 +64,17 @@ func (s *wsSession) permissionsAction(action string, args map[string]string) err
 		tool := strings.TrimSpace(args["tool"])
 		decision := strings.ToLower(strings.TrimSpace(args["decision"]))
 		if tool == "" {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "add_rule: missing tool")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("add_rule: missing tool"))
 		}
 		if !validRuleDecision(decision) {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "add_rule: decision must be allow, deny, or ask")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("add_rule: decision must be allow, deny, or ask"))
 		}
 		rule := config.PermissionRuleConfig{Tool: tool, Args: strings.TrimSpace(args["args"]), Decision: decision, Reason: strings.TrimSpace(args["reason"])}
 		var err error
 		if args["scope"] == "project" {
 			// Project rules are restrict-only — the self-approval ban forbids allow.
 			if decision == string(core.RuleAllow) {
-				return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "add_rule: project rules can't grant allow")
+				return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("add_rule: project rules can't grant allow"))
 			}
 			err = setProjectPermissionRule(s.cwd, rule, true)
 		} else {
@@ -98,7 +99,7 @@ func (s *wsSession) permissionsAction(action string, args map[string]string) err
 		s.ws.refreshAllPolicies()
 		s.ws.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("permissions"))
 	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown permissions action %q", action)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown permissions action %q", action))
 	}
 	return nil
 }
@@ -112,7 +113,9 @@ func validRuleDecision(d string) bool {
 }
 
 // addUserPermissionRule appends a rule to the user config (idempotent on an
-// exact duplicate). Richer than AppendUserPermissionRule (which is allow-only).
+// exact duplicate), via MutateConfig's atomic read-modify-write. The sole
+// durable-grant writer: both the permissions pane's add_rule and the confirm
+// dialog's PersistTool answer (wired in workspace_session.go) land here.
 func addUserPermissionRule(rule config.PermissionRuleConfig) error {
 	return config.MutateConfig(func(c *config.Config) {
 		if slices.Contains(c.Permissions, rule) {

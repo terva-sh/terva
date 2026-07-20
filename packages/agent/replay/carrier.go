@@ -421,7 +421,7 @@ func (c *Carrier) SwipeTurn(ctx context.Context, sess string, epoch uint64, vari
 func (c *Carrier) SwipeMessage(ctx context.Context, sess string, epoch uint64, index, variant int) error {
 	return unsupported("turn.swipe")
 }
-func (c *Carrier) RetryTurn(ctx context.Context, sess string, epoch uint64) error {
+func (c *Carrier) RetryTurn(ctx context.Context, sess string, p ctrlproto.TurnRetryParams) error {
 	return unsupported("turn.retry")
 }
 func (c *Carrier) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
