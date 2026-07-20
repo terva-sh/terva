@@ -11,6 +11,10 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # justfile still works there.
 import? 'release.just'
 
+# Maintainer-only Forgejo PR targets (pr/pr-status/pr-merge/…). Same
+# optional-import reason: the public tree ships without forge.just.
+import? 'forge.just'
+
 # This is a hard fork (renamed terva). The flow is OUTBOUND only:
 # `just mirror-*` pushes the curated release branches to the public
 # GitHub mirror. Upstream tracking was retired in July 2026 (the
