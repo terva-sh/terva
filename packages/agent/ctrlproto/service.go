@@ -270,8 +270,11 @@ type WorkspaceService interface {
 	// --- control group (mostly v2; implementations may return
 	// CodeUnsupported for the parts they do not yet serve) ---
 
-	// Models lists the models the workspace can switch to.
-	Models(ctx context.Context) ([]ModelInfo, error)
+	// Models lists the models the workspace can switch to. sess frames the
+	// session whose model is flagged Current, so a picker reflects the model of
+	// the session the client is viewing; an empty sess (or one naming no live
+	// session) falls back to the workspace default.
+	Models(ctx context.Context, sess string) ([]ModelInfo, error)
 
 	// SwitchModel changes the model backing sess, live, for the next turn.
 	// providerName qualifies modelID — model ids are not globally unique
@@ -339,6 +342,8 @@ type SessionInfo struct {
 	// the cached prefix. Both "" for an unbound / coding session.
 	UserName        string `json:"user_name,omitempty"`
 	UserDescription string `json:"user_description,omitempty"`
+	UserGender      string `json:"user_gender,omitempty"`
+	UserPronouns    string `json:"user_pronouns,omitempty"`
 	// SupportsContinue is true when this session's provider can extend a trailing
 	// assistant message as a prefill (turn.continue) — a Stage gate for the
 	// "continue" affordance. A client also needs a trailing assistant message and
@@ -351,13 +356,29 @@ type SessionInfo struct {
 	// director (Kertoja) can bring on stage via actor_spawn. A client reads it to
 	// show who is in the scene; empty for a solo chat. Set at creation
 	// (immutable mid-session until cast.* verbs land), live sessions only.
-	Cast     map[string]string `json:"cast,omitempty"`
-	Path     string            `json:"path,omitempty"`    // session transcript file path
-	Created  string            `json:"created,omitempty"` // RFC 3339
-	Updated  string            `json:"updated,omitempty"` // RFC 3339
-	Messages int               `json:"messages"`
-	Usage    core.WireUsage    `json:"usage"`
-	Current  bool              `json:"current,omitempty"` // the active session
+	Cast map[string]string `json:"cast,omitempty"`
+	// CastModels surfaces per-actor model pins (Phase 7): actor name → route. An
+	// actor absent here inherits the session/host route. Play sessions only.
+	CastModels map[string]CastRoute `json:"cast_models,omitempty"`
+	// WorldLore is the session's World lorebook (Worlds L1) — shared,
+	// session-scoped entries edited via world.lore.put / world.lore.delete. A
+	// client renders and edits it in the steering surface; empty for a coding
+	// session or a World with no lore yet.
+	WorldLore []WorldLoreEntry `json:"world_lore,omitempty"`
+	// Coordination is the World's meta-narrator mode (W3, set via world.set):
+	// "" auto, "off", or "focus:<roster name>". Meaningful only for a chat
+	// World with a roster.
+	Coordination string `json:"coordination,omitempty"`
+	// World is the saved World this session belongs to (a worlds-library id,
+	// W5) — "" while its World is still session-embedded. Grouping metadata;
+	// the session's roster/lore stay its working copy.
+	World    string         `json:"world,omitempty"`
+	Path     string         `json:"path,omitempty"`    // session transcript file path
+	Created  string         `json:"created,omitempty"` // RFC 3339
+	Updated  string         `json:"updated,omitempty"` // RFC 3339
+	Messages int            `json:"messages"`
+	Usage    core.WireUsage `json:"usage"`
+	Current  bool           `json:"current,omitempty"` // the active session
 	// Trusted reports whether the session's workspace (its cwd) has Workspace
 	// Trust granted. Project-scoped content — extensions, lore, permission
 	// rules — only loads/edits when trusted; a client reads this to show the
@@ -410,6 +431,10 @@ type CreateOpts struct {
 	Card     string            `json:"card,omitempty"`
 	Cast     map[string]string `json:"cast,omitempty"`
 	Greeting int               `json:"greeting,omitempty"`
+	// World creates the session inside a saved World (a worlds-library id, W5):
+	// the World's roster, model pins, lore, and coordination seed the session's
+	// working copy, and the session is stamped a member (SessionInfo.World).
+	World string `json:"world,omitempty"`
 	// Background binds a scene backdrop (a backgrounds-library id) at creation;
 	// it can also be set or changed later via backgrounds.bind.
 	Background string `json:"background,omitempty"`
@@ -1169,4 +1194,10 @@ type ModelInfo struct {
 	// shadows the global one, so at most one model carries Default.
 	Default      bool         `json:"default,omitempty"`
 	DefaultScope DefaultScope `json:"default_scope,omitempty"`
+	// Auth is how this model's provider authenticates — "oauth" (a subscription
+	// plan) or "apikey" (metered). It lets a picker distinguish two rows that
+	// carry the SAME model id but reach it through different providers, which
+	// the id alone cannot express. Empty for keyless backends (ollama, named
+	// endpoints): unknown, not "neither" — render nothing rather than a guess.
+	Auth string `json:"auth,omitempty"`
 }

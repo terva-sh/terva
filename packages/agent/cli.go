@@ -621,6 +621,12 @@ func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, vers
 		for _, w := range s.LoadWarnings {
 			fmt.Fprintln(os.Stderr, "terva:", w)
 		}
+		// Run on the session's OWN stored model, not the resolved default the
+		// agent was built on: a resume must reproduce the session's model, not
+		// silently drop to the config default. Non-fatal (see applyResumedModel).
+		if _, _, note := applyResumedModel(ag, args, s, r.Provider, r.Model); note != "" {
+			fmt.Fprintln(os.Stderr, "terva:", note)
+		}
 		ag.SetMessages(msgs)
 		// A brand-new session at an explicit --session path seeds the card
 		// greeting exactly like the fresh path below (after SetMessages, which
@@ -643,6 +649,54 @@ func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, vers
 	}
 	seedCardGreeting(fresh, ag, r.CardGreeting)
 	return fresh, nil
+}
+
+// applyResumedModel re-points a freshly-built resumed agent at the session's OWN
+// stored model when it differs from the model the agent was built on (the
+// resolved default). Without it a --continue/--resume/rpc/swarm resume — and,
+// via the ACP twin, an editor resume — keeps running on the config default while
+// the session file still names another model, silently downgrading the
+// conversation. The daemon/carrier resume path already gets this right by
+// injecting sess.Meta.Model before build.Resolve; this is the headless/ACP
+// equivalent, applied after the agent is already built.
+//
+// It mirrors the live model-switch rebuild (build.Resolve → HasCredential →
+// NewClient → SetClientAndModel), carries the observed usage snapshot across, and
+// re-binds terva_status so context-window reporting follows the swap. Non-fatal
+// by design: a resume must never fail over a model swap, so a stored model that
+// no longer resolves or has no credential leaves the built model in place and
+// returns a note for the caller to log. The returned (prov, model) always names
+// the agent's actual live model — callers use it for the menu/status line.
+func applyResumedModel(ag *core.Agent, base build.Args, sess *core.Session, builtProv, builtModel string) (prov, model, note string) {
+	sp, sm := sess.Meta.Provider, sess.Meta.Model
+	if sp == "" || sm == "" || (sp == builtProv && sm == builtModel) {
+		return builtProv, builtModel, "" // nothing stored, or already correct
+	}
+	next := base
+	next.Provider = sp
+	next.Model = sm
+	// Drop launch-time key/URL pins to the OLD model's endpoint so the stored
+	// model resolves its own credential/endpoint (as switchModel does).
+	next.APIKey = ""
+	next.BaseURL = ""
+	r, err := build.Resolve(next, true)
+	if err != nil {
+		return builtProv, builtModel, fmt.Sprintf("session's stored model %s/%s did not resolve (%v); continuing on %s/%s", sp, sm, err, builtProv, builtModel)
+	}
+	if !r.HasCredential() {
+		return builtProv, builtModel, fmt.Sprintf("no credential for the session's stored model %s/%s; continuing on %s/%s", sp, sm, builtProv, builtModel)
+	}
+	nc := r.NewClient()
+	if snap, ok := ag.Usage(); ok {
+		provider.SeedClientUsage(nc, snap)
+	}
+	ag.SetClientAndModel(nc, r.Model)
+	if st, ok := ag.LookupTool("terva_status"); ok {
+		if stt, ok := st.(*tools.StatusTool); ok {
+			stt.SetProvider(r.Provider, r.AuthMethod, r.BaseURL)
+		}
+	}
+	return r.Provider, r.Model, ""
 }
 
 // seedCardGreeting seeds a --card's opening line (first_mes) as the first

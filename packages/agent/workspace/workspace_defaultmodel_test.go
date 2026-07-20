@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/testsupport"
@@ -58,6 +59,51 @@ func TestSetDefaultModelRejectsBadInput(t *testing.T) {
 	}
 	if err := w.SetDefaultModel(ctx, "anthropic", "", ctrlproto.ScopeGlobal); err == nil {
 		t.Error("an empty model must be refused")
+	}
+}
+
+// Stage 2 of the per-session model-selection plan: a new session starts on the
+// CONFIGURED default (models.set_default → config), read live, rather than the
+// workspace's boot model or whatever a live session was last switched to. The
+// boot model (openai/gpt-5, from Args) is deliberately distinct from the
+// configured default (openai/gpt-5.5) so the assertion proves which one wins.
+func TestNewSessionSeedsFromConfiguredDefault(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key") // credential so CreateSession's resolve succeeds
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.Provider, c.Model = "openai", "gpt-5.5"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w, err := NewWorkspace(build.Args{Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t), NoExt: true, NoMCP: true}, "test")
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	info, err := w.CreateSession(context.Background(), ctrlproto.CreateOpts{})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if info.Provider != "openai" || info.Model != "gpt-5.5" {
+		t.Errorf("new session = %s/%s, want openai/gpt-5.5 (the configured default, not boot gpt-5)", info.Provider, info.Model)
+	}
+}
+
+// With no configured default, a new session falls back to the workspace's
+// boot-resolved model — which honors a launch --model (here Args.Model) and the
+// catalog. This is the branch that keeps launch-time behavior intact.
+func TestNewSessionFallsBackToBootDefault(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key") // credential so CreateSession's resolve succeeds
+	w, err := NewWorkspace(build.Args{Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t), NoExt: true, NoMCP: true}, "test")
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	info, err := w.CreateSession(context.Background(), ctrlproto.CreateOpts{})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if info.Model != "gpt-5" {
+		t.Errorf("new session model = %s, want gpt-5 (boot fallback when config names no default)", info.Model)
 	}
 }
 

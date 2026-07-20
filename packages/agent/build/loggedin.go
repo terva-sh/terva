@@ -76,3 +76,24 @@ func LoggedInProviderSet() map[string]bool {
 	}
 	return out
 }
+
+// LoggedInProviderAuth reports HOW each credentialed provider authenticates:
+// "oauth" for a subscription token (a Claude/ChatGPT/Kimi plan) or "apikey" for
+// a metered key. A picker can then say which of two rows offering the same model
+// id spends a subscription and which bills per token — the one thing the model
+// id alone can never tell you.
+//
+// Keyless backends carry NO entry, deliberately. ollama, the shared
+// openai-compatible slot and named endpoints are reachable without a credential
+// (see [LoggedInProviders]), so there is no method to report and guessing one
+// would put a confident, wrong badge on a row. An absent entry means "unknown",
+// and the caller should render nothing rather than invent a label.
+func LoggedInProviderAuth() map[string]string {
+	out := map[string]string{}
+	for _, p := range KnownProviders {
+		if _, method, err := ResolveCredential(p, ""); err == nil && method != "" {
+			out[p] = method
+		}
+	}
+	return out
+}

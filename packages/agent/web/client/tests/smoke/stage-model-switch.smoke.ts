@@ -63,12 +63,12 @@ test('stage: switch the session model from the steering drawer', async ({ page }
   await page.locator('.stage-steer-btn').click()
   await expect(page.locator('.stage-modelpick__cur-id')).toHaveText('claude-opus-4-8')
 
-  // Expand → provider-grouped list; the current model is highlighted, favorites
-  // float to the top of their group.
+  // Expand → a ★ Favorites group leads the provider groups (S10 favorites-
+  // everywhere); the current model is highlighted in both homes.
   await page.locator('.stage-modelpick__current').click()
   await expect(page.locator('.stage-modelpick__list')).toBeVisible()
-  await expect(page.locator('.stage-modelpick__provider')).toHaveText(['anthropic', 'openai-codex'])
-  await expect(page.locator('.stage-modelpick__row--current .stage-modelpick__id')).toHaveText('claude-opus-4-8')
+  await expect(page.locator('.stage-modelpick__provider')).toHaveText(['★ Favorites', 'anthropic', 'openai-codex'])
+  await expect(page.locator('.stage-modelpick__row--current .stage-modelpick__id')).toHaveText(['claude-opus-4-8', 'claude-opus-4-8'])
 
   // Favorite toggle rides its own control without switching.
   await page.locator('.stage-modelpick__row', { hasText: 'claude-haiku-4-5' }).locator('.stage-modelpick__star').click()

@@ -134,15 +134,14 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 		return acp.SessionAgent{}, nil, err
 	}
 	build.WireHeadlessSessionPersist(ag, sess)
-	// Seed the menus from the session's persisted provider/model when present
-	// (a prior /set_config_option model switch was recorded), else the
-	// resolved defaults.
-	prov, model := r.Provider, r.Model
-	if sess.Meta.Provider != "" {
-		prov = sess.Meta.Provider
-	}
-	if sess.Meta.Model != "" {
-		model = sess.Meta.Model
+	// Re-point the agent at the session's OWN stored model, not just the menu:
+	// before this, ACP resume DISPLAYED the stored model (a prior model switch,
+	// recorded in meta) but RAN on the resolved default until a later switch
+	// rebuilt the client. Non-fatal — on failure the built model stands; the
+	// returned pair drives the menu, so display and runtime can no longer diverge.
+	prov, model, note := applyResumedModel(ag, f.args, sess, r.Provider, r.Model)
+	if note != "" {
+		fmt.Fprintln(os.Stderr, "terva:", note)
 	}
 	return acp.SessionAgent{
 		Agent:            ag,

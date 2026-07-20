@@ -520,7 +520,16 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 }
 
 func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) {
+	// New sessions start on the configured default (models.set_default), read
+	// live so a default set earlier this session takes effect at once — NOT on
+	// whatever model another session was last switched to (switchModel no longer
+	// moves the workspace default). Fall back to the boot-resolved default
+	// (w.provider/w.model, which honors a launch --model and the catalog
+	// fallback) when config names no default. An explicit opts.Model wins below.
 	prov, model := w.provider, w.model
+	if dp, dm, _ := w.defaultModel(); dp != "" && dm != "" {
+		prov, model = dp, dm
+	}
 	if opts.Model != "" {
 		// Honor an explicit provider: model ids can exist under several
 		// providers (subscription vs api-key), and the unqualified lookup may
@@ -541,6 +550,24 @@ func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) 
 	if opts.Experience != "" && opts.Experience != build.ExperienceChat && opts.Experience != build.ExperiencePlay {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown experience %q (want %q or %q)", opts.Experience, build.ExperienceChat, build.ExperiencePlay)
 	}
+	// Creating inside a saved World (W5): the World's roster/pins/lore/
+	// coordination seed the session's working copy — a COPY, never a live link
+	// (worlds.save writes back explicitly). Resolved before the session file
+	// exists so an unknown World is a clean refusal.
+	var worldDoc *build.WorldDoc
+	if opts.World != "" {
+		doc, err := build.NewWorldStore().Get(opts.World)
+		if err != nil {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown world %q", opts.World)
+		}
+		worldDoc = &doc
+		if opts.Experience == "" {
+			opts.Experience = build.ExperienceChat // a World session is immersive
+		}
+		if len(opts.Cast) == 0 {
+			opts.Cast = doc.Characters
+		}
+	}
 	sess, err := core.NewSession(w.root, w.cwd, prov, model, w.version)
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "create session: %v", err)
@@ -560,7 +587,7 @@ func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) 
 	// macro of the (deferred) greeting and it shows in the steering panel.
 	if opts.Experience != "" {
 		if def, ok := w.userPersonaStore().Default(); ok {
-			if err := sess.SetUserPersona(def.Name, def.Description); err != nil {
+			if err := sess.SetUserPersona(def.Name, def.Description, def.Gender, def.Pronouns); err != nil {
 				return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "apply default user persona: %v", err)
 			}
 		}
@@ -568,6 +595,24 @@ func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) 
 	if opts.Background != "" {
 		if err := sess.SetBackground(opts.Background); err != nil {
 			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "persist session background: %v", err)
+		}
+	}
+	// The rest of the World's state — pins, lore, coordination, membership —
+	// stamps before materialize, which seeds every live record from meta.
+	if worldDoc != nil {
+		if err := sess.SetCast(opts.Cast, worldDoc.CharacterModels); err != nil {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "seed world cast: %v", err)
+		}
+		if err := sess.SetWorldLore(worldDoc.Lore); err != nil {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "seed world lore: %v", err)
+		}
+		if worldDoc.Coordination != "" {
+			if err := sess.SetCoordination(worldDoc.Coordination); err != nil {
+				return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "seed world coordination: %v", err)
+			}
+		}
+		if err := sess.SetWorld(worldDoc.ID); err != nil {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "stamp world membership: %v", err)
 		}
 	}
 	id := build.SessionIDFromPath(sess.Path)
@@ -811,6 +856,7 @@ func (w *Workspace) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, erro
 			Experience: sm.Experience,
 			Background: sm.Background,
 			Card:       sm.Card,
+			World:      sm.World,
 			Path:       sm.Path,
 			Created:    ctrlTimeString(sm.Started),
 			Messages:   sm.MessageCount,
@@ -976,7 +1022,9 @@ func (w *Workspace) GenerateSessionTitle(ctx context.Context, sess string) (stri
 	if !ok {
 		return "", ctrlproto.Errorf(ctrlproto.CodeInternal, "no usable credential for a title model")
 	}
-	title := generateTitle(ctx, cl, m, seed)
+	// A live session books the spend; a cold one was read without
+	// materializing an agent, so there is no meter for it (nil no-op).
+	title := generateTitle(ctx, cl, m, seed, live)
 	if title == "" {
 		return "", ctrlproto.Errorf(ctrlproto.CodeInternal, "the model returned no title")
 	}
@@ -1206,11 +1254,27 @@ func (w *Workspace) cancelAndDrainTurns(ctx context.Context, timeout time.Durati
 	}
 }
 
-func (w *Workspace) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) {
-	w.mu.Lock()
-	curProv, curModel := w.provider, w.model
-	w.mu.Unlock()
+func (w *Workspace) Models(ctx context.Context, sess string) ([]ctrlproto.ModelInfo, error) {
+	// Current reflects the FRAMED session's own model, so the picker shows the
+	// model of the session the client is viewing rather than a workspace-global
+	// last-switched value. existing() has no side effects — unlike resolve, which
+	// would materialize a cold session or create one for an empty id — so a
+	// read-only model list never mutates the live set. With no live session in
+	// frame (startup, pre-first-session, a session-less caller) we fall back to
+	// the workspace default, which is the right "what a new session starts on".
+	var curProv, curModel string
+	if s := w.existing(sess); s != nil {
+		curProv, curModel = s.currentModel()
+	} else {
+		w.mu.Lock()
+		curProv, curModel = w.provider, w.model
+		w.mu.Unlock()
+	}
 	authed := build.LoggedInProviderSet()
+	// How each provider authenticates, so the picker can tell a subscription-backed
+	// row from a metered one when both offer the same model id. Cheap beside the
+	// membership sweep above: an unexpired OAuth token short-circuits its refresh.
+	authMethod := build.LoggedInProviderAuth()
 	favs := favoriteModelSet()
 	defProv, defModel, defScope := w.defaultModel()
 	var out []ctrlproto.ModelInfo
@@ -1226,6 +1290,7 @@ func (w *Workspace) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) {
 			Reasoning:     m.Reasoning,
 			Current:       m.ID == curModel && m.Provider == curProv,
 			Favorite:      favs[favModelKey(m.Provider, m.ID)],
+			Auth:          authMethod[m.Provider],
 		}
 		if m.ID == defModel && m.Provider == defProv {
 			info.Default, info.DefaultScope = true, defScope
@@ -1352,6 +1417,44 @@ func (w *Workspace) SwitchModel(ctx context.Context, sess, providerName, modelID
 	return w.switchModel(s, providerName, modelID, false)
 }
 
+// overrideClient builds a provider.Client + resolved model id for an optional
+// per-generation model override (Phase 7 — per-generation model routing). An
+// empty modelID resolves `base` as-is — the caller's default (workspace args for
+// the card doctor, the session's args for suggest). A non-empty modelID names a
+// specific model to run this ONE generation on, provider-qualified (same
+// rationale as CreateOpts.Provider — a bare id resolves against base's provider
+// first to avoid a silent provider hop), rebuilt as a fresh client that drops any
+// launch-time key/URL pinning (mirroring switchModel's rebuild path). It does NOT
+// touch the session — the override is ephemeral, scoped to the one call. An
+// unknown model or one with no credential is a clean CodeBadRequest up front, not
+// a deferred failure mid-stream.
+func (w *Workspace) overrideClient(base build.Args, providerName, modelID string) (provider.Client, string, error) {
+	next := base
+	if strings.TrimSpace(modelID) != "" {
+		target, err := provider.FindModel(providerName, modelID)
+		if providerName == "" && strings.TrimSpace(base.Provider) != "" {
+			if m, e := provider.FindModel(base.Provider, modelID); e == nil {
+				target, err = m, nil
+			}
+		}
+		if err != nil {
+			return nil, "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown model %q", modelID)
+		}
+		next.Provider = target.Provider
+		next.Model = target.ID
+		next.APIKey = ""
+		next.BaseURL = ""
+	}
+	r, err := build.Resolve(next, true)
+	if err != nil || !r.HasCredential() {
+		if strings.TrimSpace(modelID) != "" {
+			return nil, "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no usable credential for model %q", modelID)
+		}
+		return nil, "", ctrlproto.Errorf(ctrlproto.CodeInternal, "no usable credential")
+	}
+	return r.NewClient(), r.Model, nil
+}
+
 // RefreshSessionCredential rebuilds a live session's provider client from a
 // freshly-resolved credential, keeping its provider/model/transcript — the
 // carrier twin of the legacy login rebuild (BuildAgent + SetAgent). Without
@@ -1457,9 +1560,12 @@ func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forc
 		}
 	}
 	_ = s.sess.UpdateModel(prov, model)
-	w.mu.Lock()
-	w.provider, w.model = prov, model
-	w.mu.Unlock()
+	// A per-session switch changes ONLY this session; it must not move the
+	// workspace default new sessions inherit — that is models.set_default's job
+	// (SetDefaultModel writes config). Before Stage 2 this wrote w.provider/
+	// w.model here, so trying a model in one chat silently became the default
+	// every later new chat opened on. See createLocked, which now seeds from the
+	// configured default rather than this workspace-global pair.
 	s.broadcast(ctrlproto.SessionUpdatedEvent(s.info()))
 	return nil
 }
@@ -1523,7 +1629,14 @@ const titleSystem = "You write concise, specific titles for chat sessions. Reply
 // self-labeled seed (core.BuildTitleSeed — the old head-only byte slice here
 // could split a UTF-8 sequence; the builder clips rune-safely). Best-effort:
 // any error yields "" and the caller keeps whatever title stands.
-func generateTitle(ctx context.Context, cl provider.Client, model, seed string) string {
+//
+// The spend is booked against s. A title call is a side-channel completion
+// like any other, and this drain predated streamText's usage contract, so it
+// dropped EventUsage on the floor. Passing the session here rather than
+// returning the usage makes booking structural: a caller with no session
+// meter — GenerateSessionTitle's cold path — passes nil (safe no-op), which
+// is the deliberate, visible form of not booking.
+func generateTitle(ctx context.Context, cl provider.Client, model, seed string, s *wsSession) string {
 	req := provider.Request{
 		Model:     model,
 		System:    titleSystem,
@@ -1534,22 +1647,12 @@ func generateTitle(ctx context.Context, cl provider.Client, model, seed string) 
 			Time:    time.Now(),
 		}},
 	}
-	stream, err := cl.Stream(ctx, req)
+	out, usage, err := streamText(ctx, cl, req)
+	s.recordSideChannelUsage(usage)
 	if err != nil {
 		return ""
 	}
-	var sb strings.Builder
-	for ev := range stream {
-		switch e := ev.(type) {
-		case provider.EventTextDelta:
-			sb.WriteString(e.Delta)
-		case provider.EventDone:
-			if e.Err != nil {
-				return ""
-			}
-		}
-	}
-	return cleanTitle(sb.String())
+	return cleanTitle(out)
 }
 
 // cleanTitle normalizes a model-produced title: one line, no wrapping quotes,

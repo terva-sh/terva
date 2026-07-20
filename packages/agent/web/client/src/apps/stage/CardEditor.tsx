@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import type { Client } from '../../platform/ctrlproto/client'
 import type { CardSummary, CardView, CardLintFinding, CardLintResult, DoctorProposal, DoctorResult, DoctorDecision } from '../../platform/ctrlproto/types'
+import { ModelPick } from './ModelPick'
 
 // The card fields the doctor may edit (mirrors the server's allow-list) — the
 // scalar text fields, so a proposal's `after` is a whole new string value.
@@ -126,6 +127,11 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
   const [declined, setDeclined] = useState<Record<string, string>>({})
   const [decliningId, setDecliningId] = useState<string | null>(null)
   const [reasonDraft, setReasonDraft] = useState('')
+  // A per-generation model override for the doctor (Phase 7): empty = the
+  // workspace default. Run the doctor on a stronger/cheaper model without changing
+  // any session's model.
+  const [ovProvider, setOvProvider] = useState('')
+  const [ovModel, setOvModel] = useState('')
 
   const lint = () => {
     client
@@ -162,7 +168,7 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
     setDoctorRunning(true)
     setDoctorError('')
     try {
-      const r = await client.send<DoctorResult>('cards.doctor', { id: card.id })
+      const r = await client.send<DoctorResult>('cards.doctor', { id: card.id, provider: ovProvider, model: ovModel })
       setProposals(r.proposals ?? [])
       setDoctorNote(r.note ?? '')
     } catch (e) {
@@ -222,7 +228,7 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
     try {
       const decisions = buildDecisions()
       if (!(await save())) return // a failed save surfaces its own error; don't consult on a stale card
-      const r = await client.send<DoctorResult>('cards.doctor', { id: card.id, decisions })
+      const r = await client.send<DoctorResult>('cards.doctor', { id: card.id, decisions, provider: ovProvider, model: ovModel })
       setProposals(r.proposals ?? [])
       setDoctorNote(r.note ?? '')
       setApplied({})
@@ -348,6 +354,19 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
                 {doctorRunning ? 'Consulting…' : 'Ask the doctor'}
               </button>
             )}
+          </div>
+          <div class="stage-doctor__model">
+            <ModelPick
+              client={client}
+              sessionId=""
+              currentProvider={ovProvider}
+              currentModel={ovModel}
+              onSelect={(p, m) => {
+                setOvProvider(p)
+                setOvModel(m)
+              }}
+              defaultLabel="Workspace model"
+            />
           </div>
           {doctorError && (
             <p class="stage-error" onClick={() => setDoctorError('')}>
