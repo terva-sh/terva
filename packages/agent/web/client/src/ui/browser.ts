@@ -1,3 +1,29 @@
+// A file the daemon serialized for download — the shape cards.export,
+// worlds.export and sessions.export all return. `bytes` is base64 on the wire.
+export type DownloadPayload = { filename: string; mime_type: string; bytes: string }
+
+// Saves an export payload to the user's disk.
+//
+// Extracted because this was written out twice verbatim (the card sheet and the
+// world sheet) and a third export was about to copy it again. The base64 decode
+// is the part worth having in one place: `atob` yields a binary STRING, and
+// handing that to Blob directly would re-encode it as UTF-8 and corrupt every
+// byte above 0x7f — silently, and only for cards with avatars or any non-ASCII
+// content.
+export function downloadExport(res: DownloadPayload): void {
+  const bin = atob(res.bytes)
+  const arr = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
+  const url = URL.createObjectURL(new Blob([arr], { type: res.mime_type }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = res.filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 // Writes text to the clipboard, falling back to a hidden textarea for insecure
 // plain-HTTP contexts where navigator.clipboard is unavailable.
 export async function copyToClipboard(text: string): Promise<boolean> {

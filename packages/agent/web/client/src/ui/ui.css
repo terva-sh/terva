@@ -1,0 +1,56 @@
+/* Styling owned by the shared src/ui/ components and by markdown.ts.
+ *
+ * Why this file exists: a shared module that emits class names has an
+ * undeclared dependency on whichever stylesheet happens to define them. That
+ * dependency was real and silent — markdown.ts renders .code-wrap/.code-copy
+ * on every surface, but the rules lived only in styles.css, so Stage drew an
+ * unpositioned copy button showing BOTH state icons at once. Anything ui/ or
+ * markdown.ts renders is styled here, and travels with the module.
+ *
+ * Palette: these rules speak --ui-* only. Each app maps its own tokens onto
+ * those names in its :root (styles.css for the panel, stage.css for Stage).
+ * Custom properties resolve at use time, so Stage's per-theme palettes flow
+ * through the mapping without it being restated per theme.
+ *
+ * Both entries import this BEFORE their own sheet, so an app can still override
+ * a rule here on specificity/order.
+ */
+
+/* --- per-message copy (ui/CopyButton.tsx) --- */
+.copy-btn {
+  position: absolute; top: 6px; right: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0; border-radius: 7px;
+  border: 1px solid var(--ui-line); background: var(--ui-bg); color: var(--ui-muted);
+  cursor: pointer; opacity: 0; transition: opacity .12s, color .12s, border-color .12s;
+}
+.msg-wrap:hover .copy-btn, .copy-btn:focus-visible { opacity: 1; }
+.copy-btn:hover { color: var(--ui-fg); border-color: var(--ui-muted); }
+.copy-btn.copied { opacity: 1; color: var(--ui-ok); border-color: var(--ui-ok); }
+/* touch devices have no hover — keep it faintly visible so it's discoverable. */
+@media (hover: none) { .copy-btn { opacity: .5; } }
+
+/* --- per-code-block copy: markdown.ts wraps each block in .code-wrap with a
+       .code-copy button pinned to the block's top-right; the click is handled
+       by ui/codecopy.ts. The .ic-* toggles below are what make the button show
+       one icon rather than both. --- */
+.code-wrap { position: relative; }
+.code-copy {
+  position: absolute; top: 8px; right: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border-radius: 6px;
+  border: 1px solid var(--ui-line); background: var(--ui-bg); color: var(--ui-muted);
+  cursor: pointer; opacity: 0; transition: opacity .12s, color .12s, border-color .12s;
+}
+.code-wrap:hover .code-copy, .code-copy:focus-visible { opacity: 1; }
+.code-copy:hover { color: var(--ui-fg); border-color: var(--ui-muted); }
+.code-copy.copied { opacity: 1; color: var(--ui-ok); border-color: var(--ui-ok); }
+.code-copy .ic-check { display: none; }
+.code-copy.copied .ic-copy { display: none; }
+.code-copy.copied .ic-check { display: inline; }
+@media (hover: none) { .code-copy { opacity: .5; } }
+
+/* --- inline image attachments (ui/ImageGallery.tsx) --- */
+.msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.msg-image-link { display: block; line-height: 0; }
+.msg-image { max-width: min(320px, 100%); max-height: 320px; border-radius: 8px; border: 1px solid var(--ui-line); }

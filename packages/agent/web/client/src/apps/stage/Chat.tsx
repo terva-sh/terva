@@ -1,12 +1,20 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
-import type { Client } from '../../platform/ctrlproto/client'
+import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { AskRequest, CardView } from '../../platform/ctrlproto/types'
 import type { Item } from '../../platform/conversation/store'
-import { renderMarkdown } from '../../markdown'
+import { t, tn } from '../../i18n'
+import { panelHref } from '../../ui/navlinks'
+import { handleCodeCopyClick } from '../../ui/codecopy'
+import { truncate } from '../../ui/formatting'
+import { ImageGallery } from '../../ui/ImageGallery'
+import { Markdown } from '../../ui/Markdown'
 import { useConversation } from './useConversation'
 import { useAutoGrow } from './autogrow'
 import { Steering } from './Steering'
 import { SuggestReply } from './SuggestReply'
+import { DoctorOverlay, type DoctorAsk } from './SessionDoctor'
+import { SceneStateCard, sceneStateOf } from './SceneState'
+import { NextSceneSheet } from './NextScene'
 
 type Character = { name: string; avatar?: string }
 
@@ -26,16 +34,16 @@ const BRANCH_HINT = 2
 // a sentence on. Exported for its own test: the arithmetic decides which of two
 // materially different things the user is agreeing to.
 export function deleteWarning(downstream: number): string {
-  if (downstream <= 0) return 'Delete this message? This can’t be undone.'
-  const s = downstream === 1 ? 'reply was' : 'replies were'
-  return (
-    `Delete this message? The ${downstream} ${s} written to it and will stay, ` +
-    'so the scene may not read straight afterwards. Branch instead to keep this thread intact.'
+  if (downstream <= 0) return t('Delete this message? This can’t be undone.')
+  return tn(
+    downstream,
+    'Delete this message? The %d reply was written to it and will stay, so the scene may not read straight afterwards. Branch instead to keep this thread intact.',
+    'Delete this message? The %d replies were written to it and will stay, so the scene may not read straight afterwards. Branch instead to keep this thread intact.',
   )
 }
 
 export function Chat(props: {
-  client: Client
+  client: ClientLike
   sessionId: string
   // Connection generation — bumped on every (re)connect so the subscription is
   // re-established. See useConversation.
@@ -48,8 +56,19 @@ export function Chat(props: {
   const [draft, setDraft] = useState('')
   const [character, setCharacter] = useState<Character | null>(null)
   const [editing, setEditing] = useState<{ idx: number; text: string } | null>(null)
+  // The guided-regenerate box on the last response: null is closed, and ↻ stays a
+  // one-click plain regenerate whether it is open or not. ignorePrior is per
+  // regeneration rather than a remembered setting — "don't look at that one" is a
+  // judgement about the take in front of you, not a standing preference.
+  const [guiding, setGuiding] = useState<{ text: string; ignorePrior: boolean } | null>(null)
   const [steerOpen, setSteerOpen] = useState(false)
   const [suggestOpen, setSuggestOpen] = useState(false)
+  // A narrowed session-doctor ask (SD2/SD3), launched from a message's edit
+  // actions: keep one moment as lore, or promote a walk-on the scene voiced.
+  const [doctorAsk, setDoctorAsk] = useState<DoctorAsk | null>(null)
+  // The scene-break flow (SD5): null = closed, a string = open with that
+  // title seeded (empty when the author started it themselves).
+  const [nextScene, setNextScene] = useState<string | null>(null)
   const [error, setError] = useState('')
   // The composer grows with its content (up to the CSS cap); keyed on `draft` so
   // it also fits text dropped in by ✨ Suggest and shrinks back after a send.
@@ -86,7 +105,7 @@ export function Chat(props: {
   // A set session title wins over the card name (matching the Library's
   // `title || name`), so a rename or ✨-regenerate from Steering shows here; an
   // untitled chat falls back to the character it stars.
-  const title = info?.title || character?.name || 'Chat'
+  const title = info?.title || character?.name || t('Chat')
   const lastAssistantId = [...items].reverse().find((it) => it.kind === 'assistant')?.id
 
   const submit = () => {
@@ -100,10 +119,20 @@ export function Chat(props: {
   // into the scene (a normal turn), so it reuses the transcript + attribution.
   const castSpeak = (actor: string) => guard(client.send('cast.speak', { actor }, sessionId))
   const cast = info?.experience === 'play' ? info?.cast ?? {} : {}
+  const sceneState = sceneStateOf(info?.world_lore)
   const saveEdit = () => {
     if (!editing) return
     guard(edit(editing.idx, editing.text))
     setEditing(null)
+  }
+  // Submitting an empty box is not an error — it is the plain regenerate, which is
+  // what someone who opened the box and then had nothing to add actually wants.
+  // retry() drops the field when the text is blank, so the daemon sees the
+  // untouched original verb.
+  const submitGuided = () => {
+    if (!guiding) return
+    guard(retry(guiding.text, guiding.ignorePrior))
+    setGuiding(null)
   }
   // Delete a message outright. Confirms first (the Library's idiom for a
   // destructive act), and closes the edit box before the snapshot lands — the
@@ -137,21 +166,29 @@ export function Chat(props: {
             props.onBack()
           }}
         >
-          ‹ Library
+          {t('‹ Library')}
         </button>
         <span class="stage-chat__title">{title}</span>
         <div class="stage-chat__right">
-          <span class="stage-status">{busy ? 'thinking…' : ''}</span>
+          <span class="stage-status">{busy ? t('thinking…') : ''}</span>
           {/* Lean header: the way back to the panel, and Steering. Everything
               else lives in the drawer's tabs. */}
-          <a class="stage-nav-link stage-nav-link--icon" href="/" title="Open the control panel" aria-label="Open the control panel">⌂</a>
-          <button class="stage-steer-btn" title="Steering" onClick={() => setSteerOpen(true)}>☰</button>
+          {/* Carries the session, so the panel lands on THIS chat rather than
+              whichever one it considers current. */}
+          <a
+            class="stage-nav-link stage-nav-link--icon"
+            href={panelHref(sessionId)}
+            title={t('Open this session in the control panel')}
+            aria-label={t('Open this session in the control panel')}
+          >
+            ⌂
+          </a>
+          <button class="stage-steer-btn" title={t('Steering')} onClick={() => setSteerOpen(true)}>☰</button>
         </div>
       </header>
 
       <main class="stage-transcript" ref={transcriptRef} onScroll={onTranscriptScroll}>
-        {error && <p class="stage-error" onClick={() => setError('')}>{error}</p>}
-        {items.length === 0 && <p class="stage-empty">Say something to begin.</p>}
+        {items.length === 0 && <p class="stage-empty">{t('Say something to begin.')}</p>}
         {items.map((it) => (
           <ChatRow
             key={it.id}
@@ -165,9 +202,26 @@ export function Chat(props: {
             onCancelEdit={() => setEditing(null)}
             onBranch={() => it.idx != null && branchAt(it.idx)}
             onDelete={() => it.idx != null && deleteMessage(it.idx)}
+            onKeepAsLore={() => {
+              if (it.idx == null) return
+              setEditing(null)
+              setDoctorAsk({ focus: it.idx })
+            }}
+            onPromote={
+              'actor' in it && it.actor && (it.directed || it.routed) && !(it.actor in (info?.cast ?? {}))
+                ? () => {
+                    setEditing(null)
+                    setDoctorAsk({ promote: it.actor! })
+                  }
+                : null
+            }
             branchNote={
               editing != null && editing.idx === it.idx && it.idx != null && msgCount - 1 - it.idx >= BRANCH_HINT
-                ? `${msgCount - 1 - it.idx} messages below were written to this — Save keeps them, Branch starts a new thread.`
+                ? tn(
+                    msgCount - 1 - it.idx,
+                    '%d message below was written to this — Save keeps it, Branch starts a new thread.',
+                    '%d messages below were written to this — Save keeps them, Branch starts a new thread.',
+                  )
                 : undefined
             }
             isLast={it.id === lastAssistantId}
@@ -180,6 +234,14 @@ export function Chat(props: {
             onPrune={() => it.idx != null && guard(pruneAt(it.idx))}
             onDropTake={(v) => it.idx != null && guard(dropAt(it.idx, v))}
             onRetry={() => guard(retry())}
+            guiding={it.id === lastAssistantId ? guiding : null}
+            onOpenGuide={() => {
+              setEditing(null) // the edit box and the guidance box share the row
+              setGuiding({ text: '', ignorePrior: false })
+            }}
+            onGuideChange={setGuiding}
+            onSubmitGuide={submitGuided}
+            onCancelGuide={() => setGuiding(null)}
             onContinue={() => guard(continueTurn())}
           />
         ))}
@@ -187,7 +249,7 @@ export function Chat(props: {
 
       {Object.keys(cast).length > 0 && (
         <div class="stage-cast-strip">
-          <span class="stage-cast-strip__label">Who speaks?</span>
+          <span class="stage-cast-strip__label">{t('Who speaks?')}</span>
           {Object.keys(cast).map((name) => (
             <button key={name} class="stage-cast-strip__actor" disabled={busy} onClick={() => castSpeak(name)}>
               🎭 {name}
@@ -203,18 +265,40 @@ export function Chat(props: {
       {permission && (
         <div class="stage-interact">
           <div class="stage-interact__head">
-            Approve tool: <code>{permission.tool}</code>
+            {t('Approve tool:')} <code>{permission.tool}</code>
           </div>
-          {permission.preview && <pre class="stage-interact__preview">{permission.preview.slice(0, 1500)}</pre>}
+          {permission.preview && <pre class="stage-interact__preview">{truncate(permission.preview, 1500)}</pre>}
           <div class="stage-interact__actions">
-            <button class="stage-interact__go" onClick={() => decide(permission.call_id, { allow: true })}>Allow</button>
-            <button onClick={() => decide(permission.call_id, { allow: true, remember_tool: true })}>Allow &amp; remember</button>
-            <button class="stage-interact__deny" onClick={() => decide(permission.call_id, { allow: false, reason: 'denied by user' })}>Deny</button>
+            <button class="stage-interact__go" onClick={() => decide(permission.call_id, { allow: true })}>{t('Allow')}</button>
+            <button title={t('For the rest of this session')} onClick={() => decide(permission.call_id, { allow: true, remember_tool: true })}>{t('Allow & remember')}</button>
+            <button class="stage-interact__deny" onClick={() => decide(permission.call_id, { allow: false, reason: 'denied by user' })}>{t('Deny')}</button>
           </div>
         </div>
       )}
 
       {ask && <AskPrompt request={ask} onAnswer={answerAsk} />}
+
+      {/* The pinned scene-state card (SD4): above the composer, not buried in
+          lore — the one piece of World state worth a permanent slot on the
+          play surface. Rendered only when a card is pinned; pinning happens
+          via the doctor, the model (world_note), or Steering's World tab. */}
+      {sceneState && <SceneStateCard client={client} sessionId={sessionId} entry={sceneState} stale={info?.scene_pin_stale} />}
+
+      {/* A refused action reports NEXT TO THE CONTROL THAT WAS REFUSED, which
+          means outside the transcript. This used to render as the first child of
+          .stage-transcript — the very top of the scrollback — while the
+          transcript pins itself to the bottom, so the daemon's answer to a ↻ at
+          the end of a long scene ("nothing to retry", a stale-epoch conflict,
+          "regenerating would discard the lines you wrote") scrolled hundreds of
+          messages out of view the moment it appeared. The button looked dead:
+          the refusal WAS rendered, just never where anyone was looking. Same
+          reasoning as the working signal below — it lives out here so it cannot
+          scroll away. */}
+      {error && (
+        <p class="stage-error stage-error--live" role="alert" onClick={() => setError('')} title={t('Dismiss')}>
+          {error}
+        </p>
+      )}
 
       {/* The working signal, at the bottom where the waiting happens. The header's
           "thinking…" is easy to miss, and the per-message caret only appears once
@@ -229,15 +313,15 @@ export function Chat(props: {
             <i />
             <i />
           </span>
-          <span class="stage-working__label">working…</span>
+          <span class="stage-working__label">{t('working…')}</span>
         </div>
       )}
 
       <footer class="stage-composer">
         <button
           class="stage-suggest-btn"
-          title="Suggest a reply — draft your next message with the model"
-          aria-label="Suggest a reply"
+          title={t('Suggest a reply — draft your next message with the model')}
+          aria-label={t('Suggest a reply')}
           onClick={() => setSuggestOpen(true)}
         >
           ✨
@@ -246,8 +330,8 @@ export function Chat(props: {
             half of ✨ — that one drafts YOUR line, this one asks for theirs. */}
         <button
           class="stage-advance-btn"
-          title="Advance — let the scene continue without saying anything"
-          aria-label="Advance the scene"
+          title={t('Advance — let the scene continue without saying anything')}
+          aria-label={t('Advance the scene')}
           disabled={busy}
           onClick={() => guard(advance())}
         >
@@ -256,7 +340,7 @@ export function Chat(props: {
         <textarea
           ref={composerRef}
           value={draft}
-          placeholder="Say something…"
+          placeholder={t('Say something…')}
           rows={1}
           onInput={(e) => setDraft((e.target as HTMLTextAreaElement).value)}
           onKeyDown={(e) => {
@@ -272,15 +356,35 @@ export function Chat(props: {
             reject while a turn is in flight, and a cancelled turn keeps whatever
             streamed as a normal truncated line, so the scene stays usable. */}
         {busy ? (
-          <button class="stage-stop-btn" title="Stop — interrupt this turn so you can steer the scene" onClick={cancel}>
-            ■ Stop
+          <button class="stage-stop-btn" title={t('Stop — interrupt this turn so you can steer the scene')} onClick={cancel}>
+            {t('■ Stop')}
           </button>
         ) : (
-          <button onClick={submit} disabled={!draft.trim()}>Send</button>
+          <button onClick={submit} disabled={!draft.trim()}>{t('Send')}</button>
         )}
       </footer>
 
-      {steerOpen && <Steering client={client} sessionId={sessionId} info={info} onClose={() => setSteerOpen(false)} />}
+      {steerOpen && (
+        <Steering
+          client={client}
+          sessionId={sessionId}
+          info={info}
+          onClose={() => setSteerOpen(false)}
+          onNextScene={(title) => setNextScene(title)}
+        />
+      )}
+
+      {doctorAsk && <DoctorOverlay client={client} sessionId={sessionId} ask={doctorAsk} onClose={() => setDoctorAsk(null)} />}
+
+      {nextScene !== null && (
+        <NextSceneSheet
+          client={client}
+          sessionId={sessionId}
+          suggestedTitle={nextScene}
+          onOpenSession={onOpenSession}
+          onClose={() => setNextScene(null)}
+        />
+      )}
 
       {suggestOpen && (
         <SuggestReply
@@ -328,9 +432,9 @@ function AskPrompt(props: { request: AskRequest; onAnswer: (id: string, text: st
             if (custom.trim()) onAnswer(request.ask_id, custom.trim())
           }}
         >
-          <input value={custom} placeholder="Your answer…" onInput={(e) => setCustom((e.target as HTMLInputElement).value)} />
+          <input value={custom} placeholder={t('Your answer…')} onInput={(e) => setCustom((e.target as HTMLInputElement).value)} />
           <button class="stage-interact__go" type="submit" disabled={!custom.trim()}>
-            Answer
+            {t('Answer')}
           </button>
         </form>
       )}
@@ -349,6 +453,10 @@ function ChatRow(props: {
   onCancelEdit: () => void
   onBranch: () => void
   onDelete: () => void
+  onKeepAsLore: () => void
+  // null hides the button: only an attributed line whose actor is not already
+  // on stage can promote (the server re-checks either way).
+  onPromote: (() => void) | null
   branchNote: string | undefined
   onPrune: () => void
   onDropTake: (variant: number) => void
@@ -360,6 +468,11 @@ function ChatRow(props: {
   onSwipe: (variant: number) => void
   onSwipeAt: (variant: number) => void
   onRetry: () => void
+  guiding: { text: string; ignorePrior: boolean } | null
+  onOpenGuide: () => void
+  onGuideChange: (g: { text: string; ignorePrior: boolean }) => void
+  onSubmitGuide: () => void
+  onCancelGuide: () => void
   onContinue: () => void
 }) {
   const { item, character, editing, isLast, tail, mark, busy } = props
@@ -370,22 +483,39 @@ function ChatRow(props: {
   // on every non-editing row, so the per-row hook is a no-op until this one edits.
   const editRef = useAutoGrow(props.editText)
 
+  // A bubble is both "copy this code block" and "tap to edit this message", and
+  // the copy button sits INSIDE the bubble — so a bare delegated listener on an
+  // ancestor would fire after the bubble had already opened the editor. Try the
+  // copy first and only fall through to editing when the click was not on one.
+  const onBubbleClick = (event: MouseEvent) => {
+    if (handleCodeCopyClick(event)) return
+    props.onStartEdit()
+  }
+
   const editBox = (
     <div class="stage-edit">
       <textarea ref={editRef} value={props.editText} onInput={(e) => props.onEditText((e.target as HTMLTextAreaElement).value)} />
       <div class="stage-edit__actions">
-        <button onClick={props.onSaveEdit}>Save</button>
-        <button class="stage-edit__cancel" onClick={props.onCancelEdit}>Cancel</button>
-        <button class="stage-edit__branch" title="Start a new thread from here" onClick={props.onBranch}>⑂ Branch here</button>
+        <button onClick={props.onSaveEdit}>{t('Save')}</button>
+        <button class="stage-edit__cancel" onClick={props.onCancelEdit}>{t('Cancel')}</button>
+        <button class="stage-edit__branch" title={t('Start a new thread from here')} onClick={props.onBranch}>{t('⑂ Branch here')}</button>
         {mark && mark.variants > 1 && (
-          <button class="stage-edit__prune" title="Discard this message's other versions" onClick={props.onPrune}>Keep only this</button>
+          <button class="stage-edit__prune" title={t("Discard this message's other versions")} onClick={props.onPrune}>{t('Keep only this')}</button>
+        )}
+        <button class="stage-edit__lore" title={t('Draft a World lore entry from this moment')} onClick={props.onKeepAsLore}>
+          {t('📖 Keep as lore')}
+        </button>
+        {props.onPromote && (
+          <button class="stage-edit__promote" title={t('Seed a card from their played lines and put them on stage')} onClick={props.onPromote}>
+            {t('🎭 Promote to cast')}
+          </button>
         )}
         {/* Rightmost and last, behind a confirm: the one action here that removes
             rather than revises. Disabled mid-turn because the daemon refuses a
             revision while one is running — better to look unavailable than to
             answer a click with an error. */}
-        <button class="stage-edit__delete" title="Delete this message" disabled={busy} onClick={props.onDelete}>
-          🗑 Delete
+        <button class="stage-edit__delete" title={t('Delete this message')} disabled={busy} onClick={props.onDelete}>
+          {t('🗑 Delete')}
         </button>
       </div>
       {props.branchNote && <p class="stage-edit__note">{props.branchNote}</p>}
@@ -401,7 +531,7 @@ function ChatRow(props: {
         <button disabled={busy || mark.active <= 0} onClick={() => props.onSwipeAt(mark.active - 1)}>◀</button>
         <span>{mark.active + 1}/{mark.variants}</span>
         <button disabled={busy || mark.active >= mark.variants - 1} onClick={() => props.onSwipeAt(mark.active + 1)}>▶</button>
-        <button class="stage-swipe__drop" title="Remove this version" disabled={busy} onClick={() => props.onDropTake(mark.active)}>✕</button>
+        <button class="stage-swipe__drop" title={t('Remove this version')} disabled={busy} onClick={() => props.onDropTake(mark.active)}>✕</button>
       </div>
     ) : null
 
@@ -412,7 +542,7 @@ function ChatRow(props: {
       // to the speaking character (or the narrator) with 🎭, not to the card's
       // main character, and drop the (possibly misleading) card avatar.
       const attributed = item.directed || item.routed
-      const speaker = attributed ? (item.actor?.trim() || 'Narrator') : character?.name
+      const speaker = attributed ? (item.actor?.trim() || t('Narrator')) : character?.name
       // Directed and routed are BOTH attributed, but they are not the same thing
       // and used to render identically: a line you wrote into the scene yourself
       // and a line the meta-narrator invented came out as the same unadorned
@@ -420,7 +550,7 @@ function ChatRow(props: {
       // has always distinguished them; only the UI collapsed them.
       const mark = item.directed ? '✍' : '🎭'
       const kindClass = item.directed ? ' stage-row--directed' : item.routed ? ' stage-row--routed' : ''
-      const kindTitle = item.directed ? 'You wrote this line into the scene' : 'The meta-narrator handed this beat to a character'
+      const kindTitle = item.directed ? t('You wrote this line into the scene') : t('The meta-narrator handed this beat to a character')
       return (
         <div class={`stage-row stage-row--assistant${kindClass}${editing ? ' stage-row--editing' : ''}`}>
           {!attributed && character?.avatar ? (
@@ -435,7 +565,10 @@ function ChatRow(props: {
               </span>
             )}
             {editing ? editBox : (
-              <div class="stage-bubble" onClick={props.onStartEdit} dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
+              <>
+                <Markdown class="stage-bubble" text={item.text} onClick={onBubbleClick} />
+                {item.images && <ImageGallery images={item.images} />}
+              </>
             )}
             {item.streaming && <span class="stage-caret" aria-hidden="true">▋</span>}
             {msgSwipe}
@@ -448,13 +581,57 @@ function ChatRow(props: {
                     <button disabled={busy || tail.active >= tail.variants - 1} onClick={() => props.onSwipe(tail.active + 1)}>▶</button>
                   </div>
                 )}
-                <button class="stage-regen" disabled={busy} title="Regenerate" onClick={props.onRetry}>↻</button>
+                <button class="stage-regen" disabled={busy} title={t('Regenerate')} onClick={props.onRetry}>↻</button>
+                {/* The guided twin sits beside the plain one rather than replacing
+                    it: "just roll again" is the common case and stays one click,
+                    while "roll again, but shorter" gets a box to say so in. */}
+                <button
+                  class="stage-regen stage-regen--guided"
+                  disabled={busy}
+                  title={t('Regenerate with guidance')}
+                  onClick={props.onOpenGuide}
+                >↻✎</button>
                 <button
                   class="stage-continue"
                   disabled={busy || !props.canContinue}
-                  title={props.canContinue ? 'Continue' : "Continue isn't available for this model — assistant-prefill continue is Anthropic-only"}
+                  title={props.canContinue ? t('Continue') : t("Continue isn't available for this model — assistant-prefill continue is Anthropic-only")}
                   onClick={() => props.canContinue && props.onContinue()}
                 >⤸</button>
+              </div>
+            )}
+            {isLast && !editing && props.guiding && (
+              <div class="stage-guide">
+                <input
+                  class="stage-guide__text"
+                  autofocus
+                  value={props.guiding.text}
+                  placeholder={t('What should be different this time?')}
+                  onInput={(e) =>
+                    props.onGuideChange({ ...props.guiding!, text: (e.target as HTMLInputElement).value })
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') props.onSubmitGuide()
+                    if (e.key === 'Escape') props.onCancelGuide()
+                  }}
+                />
+                <div class="stage-guide__actions">
+                  {/* Phrased as an opt-out because showing the withdrawn take is
+                      the default, and it is the default because guidance is
+                      usually relative — "shorter" than WHAT. Ticking this is for
+                      when the last attempt went somewhere you want no trace of. */}
+                  <label class="stage-guide__blind" title={t('Useful when the last attempt went somewhere you want no trace of')}>
+                    <input
+                      type="checkbox"
+                      checked={props.guiding.ignorePrior}
+                      onChange={(e) =>
+                        props.onGuideChange({ ...props.guiding!, ignorePrior: (e.target as HTMLInputElement).checked })
+                      }
+                    />
+                    {t('Start fresh — hide the previous attempt')}
+                  </label>
+                  <button class="stage-guide__go" disabled={busy} onClick={props.onSubmitGuide}>{t('Regenerate')}</button>
+                  <button class="stage-guide__cancel" onClick={props.onCancelGuide}>{t('Cancel')}</button>
+                </div>
               </div>
             )}
           </div>
@@ -472,7 +649,10 @@ function ChatRow(props: {
         <div class={`stage-row stage-row--user${editing ? ' stage-row--editing' : ''}`}>
           <div class="stage-row__body">
             {editing ? editBox : (
-              <div class="stage-bubble" onClick={props.onStartEdit} dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
+              <>
+                <Markdown class="stage-bubble" text={item.text} onClick={onBubbleClick} />
+                {item.images && <ImageGallery images={item.images} />}
+              </>
             )}
             {msgSwipe}
           </div>
@@ -484,7 +664,15 @@ function ChatRow(props: {
       // play scene reads as "who just spoke."
       const actor = item.name === 'actor_spawn' ? (item.args as { actor?: string } | undefined)?.actor : undefined
       if (actor) return <div class="stage-row stage-row--actor">🎭 {actor}</div>
-      return <div class="stage-row stage-row--tool">· {item.name}</div>
+      // Stage keeps tool rows to a single quiet line — but a tool that RETURNED
+      // an image (generate_image, a scene backdrop) has produced something the
+      // scene is about, so the picture shows even though the call stays folded.
+      return (
+        <div class="stage-row stage-row--tool">
+          <span>· {item.name}</span>
+          {item.images && <ImageGallery images={item.images} />}
+        </div>
+      )
     }
     case 'error':
       return <div class="stage-row stage-row--error">{item.text}</div>
@@ -493,9 +681,9 @@ function ChatRow(props: {
     case 'hatch':
       return <div class="stage-row stage-row--note">{item.text}</div>
     case 'compaction':
-      return <div class="stage-divider">— summary —</div>
+      return <div class="stage-divider">{t('— summary —')}</div>
     case 'clear':
-      return <div class="stage-divider">— cleared —</div>
+      return <div class="stage-divider">{t('— cleared —')}</div>
     default:
       return null
   }

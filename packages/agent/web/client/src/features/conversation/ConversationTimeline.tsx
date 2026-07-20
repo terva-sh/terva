@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { t, tn } from '../../i18n'
 import type { Item } from '../../platform/conversation/store'
-import { copyToClipboard } from '../../ui/browser'
+import { handleCodeCopyClick } from '../../ui/codecopy'
 import type { RevealFn } from './CompactionDivider'
 import { ConversationItems } from './ConversationItems'
 import { QueuedMessage } from './QueuedMessage'
@@ -63,17 +63,11 @@ export function ConversationTimeline({
 
   // Delegated copy for code blocks: markdown renders a .code-copy button per
   // block (see markdown.ts), and one listener here copies the adjacent <pre>'s
-  // text — no per-block Preact handler inside the dangerouslySetInnerHTML.
+  // text — no per-block Preact handler inside the dangerouslySetInnerHTML. The
+  // handler itself lives in ui/ so every surface that renders markdown can wire
+  // it; it used to be private here, which is why Stage's buttons did nothing.
   const onCodeCopy = useCallback((event: MouseEvent) => {
-    const button = (event.target as HTMLElement)?.closest?.('.code-copy') as HTMLElement | null
-    if (!button) return
-    const text = button.parentElement?.querySelector('pre')?.textContent ?? ''
-    if (!text) return
-    void copyToClipboard(text).then((ok) => {
-      if (!ok) return
-      button.classList.add('copied')
-      setTimeout(() => button.classList.remove('copied'), 1200)
-    })
+    handleCodeCopyClick(event)
   }, [])
 
   return (

@@ -11,6 +11,19 @@
   --stage-muted: #9a9384;
   --stage-accent: #c9a45a;
   --stage-user: #2c3a3f;
+  --stage-ok: #7fbf8a;
+  /* Text drawn ON --stage-accent. Near-black suits the three dark presets,
+     whose accents are light; Parchment's accent is a mid-brown that near-black
+     sits at ~3:1 against, so it overrides this below. */
+  --stage-on-accent: var(--stage-on-accent);
+  /* Stage's mapping onto the shared vocabulary ui/ui.css speaks. Declared once
+     here rather than per preset: custom properties resolve at use time, so a
+     data-theme override of --stage-* below flows through untouched. */
+  --ui-bg: var(--stage-surface);
+  --ui-fg: var(--stage-fg);
+  --ui-muted: var(--stage-muted);
+  --ui-line: var(--stage-line);
+  --ui-ok: var(--stage-ok);
 }
 
 /* Theme presets (theme.ts): the base :root above is Dusk (the no-attribute
@@ -24,6 +37,8 @@
   --stage-muted: #7c7262;
   --stage-accent: #9a5f2c;
   --stage-user: #cdd8d0;
+  /* The one light preset: its accent needs light text on it, not near-black. */
+  --stage-on-accent: #fbf7ee;
 }
 :root[data-theme='nocturne'] {
   --stage-bg: #0b0e14;
@@ -197,6 +212,19 @@ button:disabled {
   color: #d67a6a;
   /* Importing a multi-file selection reports one problem per line. */
   white-space: pre-line;
+}
+/* The play surface's refusal banner, pinned outside the transcript so it cannot
+   scroll away from the control that raised it. Reads as a strip rather than a
+   stray line of red text, because it appears where the composer is and has to be
+   distinguishable from the scene at a glance. Click dismisses. */
+.stage-error--live {
+  margin: 0 0 0.4rem;
+  padding: 0.45rem 0.7rem;
+  background: color-mix(in srgb, #d67a6a 16%, var(--stage-surface));
+  border: 1px solid color-mix(in srgb, #d67a6a 45%, transparent);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
 }
 
 /* A non-fatal import note (a downscaled portrait): the card is IN the library,
@@ -416,7 +444,7 @@ button:disabled {
   background: #000;
 }
 .stage-card__avatar--blank {
-  background: linear-gradient(135deg, #232019, #171613);
+  background: linear-gradient(135deg, var(--stage-surface-2), var(--stage-surface));
 }
 .stage-card__name {
   font-weight: 600;
@@ -515,7 +543,7 @@ button:disabled {
   background: #000;
 }
 .stage-yourchats__avatar--blank {
-  background: linear-gradient(135deg, #2a2419, #171613);
+  background: linear-gradient(135deg, var(--stage-surface-2), var(--stage-surface));
 }
 .stage-yourchats__text {
   flex: 1;
@@ -739,8 +767,8 @@ button:disabled {
   color: var(--stage-muted);
 }
 .stage-personasheet__chip--good {
-  color: #7fbf8a;
-  border-color: rgba(127, 191, 138, 0.4);
+  color: var(--stage-ok);
+  border-color: color-mix(in srgb, var(--stage-ok) 40%, transparent);
 }
 .stage-personasheet__chip--avoid {
   color: #d6a86a;
@@ -792,7 +820,7 @@ button:disabled {
   border: none;
   border-radius: 8px;
   background: var(--stage-accent);
-  color: #1a1509;
+  color: var(--stage-on-accent);
   font-weight: 600;
 }
 .stage-sheet__export {
@@ -848,7 +876,7 @@ button:disabled {
 .stage-cardsheet__avatar--blank {
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #2a2419, #171613);
+  background: linear-gradient(135deg, var(--stage-surface-2), var(--stage-surface));
   color: var(--stage-muted);
   font-weight: 600;
   font-size: 1.4rem;
@@ -1049,7 +1077,7 @@ button:disabled {
   font-size: 0.7rem;
   padding: 0.05rem 0.4rem;
   border-radius: 4px;
-  background: rgba(201, 164, 90, 0.15);
+  background: color-mix(in srgb, var(--stage-accent) 15%, transparent);
   color: var(--stage-accent);
 }
 .stage-cardsheet__edit {
@@ -1182,7 +1210,7 @@ button:disabled {
   border: none;
   border-radius: 8px;
   background: var(--stage-accent);
-  color: #1a1509;
+  color: var(--stage-on-accent);
   font-weight: 600;
   cursor: pointer;
 }
@@ -1319,7 +1347,7 @@ button:disabled {
   border: none;
   border-radius: 7px;
   background: var(--stage-accent);
-  color: #1a1509;
+  color: var(--stage-on-accent);
   font-weight: 600;
   font-size: 0.82rem;
   cursor: pointer;
@@ -1422,7 +1450,7 @@ button:disabled {
 .stage-chat__scrim {
   position: fixed;
   inset: 0;
-  background: linear-gradient(180deg, rgba(10, 10, 9, 0.8), rgba(10, 10, 9, 0.6) 40%, rgba(10, 10, 9, 0.9));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--stage-bg) 80%, transparent), color-mix(in srgb, var(--stage-bg) 60%, transparent) 40%, color-mix(in srgb, var(--stage-bg) 90%, transparent));
   pointer-events: none;
   z-index: 0;
 }
@@ -1507,7 +1535,7 @@ button:disabled {
 .stage-avatar--blank {
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #2a2419, #171613);
+  background: linear-gradient(135deg, var(--stage-surface-2), var(--stage-surface));
   color: var(--stage-muted);
   font-weight: 600;
 }
@@ -1515,12 +1543,12 @@ button:disabled {
 .stage-bubble {
   padding: 0.55rem 0.85rem;
   border-radius: 14px;
-  background: rgba(23, 22, 19, 0.9);
+  background: color-mix(in srgb, var(--stage-surface) 90%, transparent);
   border: 1px solid var(--stage-line);
   cursor: text;
 }
 .stage-row--user .stage-bubble {
-  background: rgba(44, 58, 63, 0.92);
+  background: color-mix(in srgb, var(--stage-user) 92%, transparent);
   border-color: transparent;
 }
 .stage-bubble :first-child {
@@ -1587,6 +1615,69 @@ button:disabled {
   color: var(--stage-accent);
 }
 
+/* The guided-regenerate box, opened by ↻✎ under the last response. Sized and
+   coloured like the edit box it shares the row with — both are "revise this
+   message" surfaces — but a single line, because the guidance is a note, not a
+   rewrite. */
+.stage-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: 100%;
+  margin-top: 0.35rem;
+}
+.stage-guide__text {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.45rem 0.5rem;
+  background: var(--stage-surface);
+  color: var(--stage-fg);
+  border: 1px solid var(--stage-accent);
+  border-radius: 8px;
+  font: inherit;
+}
+.stage-guide__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+}
+/* The opt-out reads as a quiet aside next to the button that acts on it — it is a
+   qualifier on this regeneration, not a setting of equal weight. */
+.stage-guide__blind {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--stage-muted);
+  cursor: pointer;
+}
+.stage-guide__blind input {
+  margin: 0;
+}
+/* The global `button` reset sets font/colour/cursor and NO background, so a
+   button with no rule of its own falls through to the browser's default chrome —
+   which is light, whatever the theme. These two shipped without one and stood out
+   as a pair of light buttons in a dark scene. Styled like the edit box's actions,
+   which is the pattern for an affirmative/dismiss pair on a message row. */
+.stage-guide__actions button {
+  border: none;
+  border-radius: 6px;
+  padding: 0.3rem 0.75rem;
+  background: var(--stage-accent);
+  color: var(--stage-on-accent);
+  font-weight: 600;
+}
+.stage-guide__go {
+  margin-left: auto; /* the affirmative action anchors the right edge */
+}
+.stage-guide__cancel {
+  background: var(--stage-surface-2) !important;
+  color: var(--stage-fg) !important;
+  font-weight: 500 !important;
+}
+
 .stage-edit {
   display: flex;
   flex-direction: column;
@@ -1617,7 +1708,7 @@ button:disabled {
   border-radius: 6px;
   padding: 0.3rem 0.75rem;
   background: var(--stage-accent);
-  color: #1a1509;
+  color: var(--stage-on-accent);
   font-weight: 600;
 }
 .stage-edit__cancel {
@@ -1745,7 +1836,7 @@ button:disabled {
   font-size: 0.85rem;
   white-space: nowrap;
   color: var(--stage-accent);
-  background: rgba(10, 10, 9, 0.55);
+  background: color-mix(in srgb, var(--stage-bg) 55%, transparent);
   border: 1px solid var(--stage-line);
   border-radius: 999px;
   cursor: pointer;
@@ -1866,7 +1957,7 @@ button:disabled {
 }
 .stage-interact__go {
   background: var(--stage-accent) !important;
-  color: #1a1509 !important;
+  color: var(--stage-on-accent) !important;
   border-color: transparent !important;
   font-weight: 600;
 }
@@ -1881,7 +1972,7 @@ button:disabled {
   flex: 1;
   min-width: 0;
   padding: 0.4rem 0.6rem;
-  background: rgba(23, 22, 19, 0.9);
+  background: color-mix(in srgb, var(--stage-surface) 90%, transparent);
   color: var(--stage-fg);
   border: 1px solid var(--stage-line);
   border-radius: 6px;
@@ -1889,12 +1980,279 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+/* --- the scene-break flow (SD5) --- */
+
+/* The drawer's entry point, and the sheet the flow runs in. The sheet reuses
+   the doctor's overlay shell (.stage-sheet-backdrop) — same modal weight, same
+   accept-before-anything-happens posture. */
+.stage-nextscene__open {
+  align-self: flex-start;
+  padding: 0.4rem 0.8rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-nextscene__open:hover {
+  border-color: var(--stage-accent);
+}
+.stage-nextscene {
+  width: min(44rem, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem 1rem;
+  background: var(--stage-surface);
+  color: var(--stage-fg);
+  border: 1px solid var(--stage-line);
+  border-radius: 12px;
+}
+.stage-nextscene__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.stage-nextscene__head h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 1rem;
+}
+.stage-nextscene__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--stage-muted);
+}
+/* The World-grouping offer, shown only when the story is in no World yet. Set
+   apart from the three drafted fields above it: those are the scene, this is
+   what the scene belongs to. */
+.stage-nextscene__world {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.6rem 0.7rem;
+  background: var(--stage-surface-2);
+  border: 1px dashed var(--stage-line);
+  border-radius: 8px;
+}
+.stage-nextscene__group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--stage-fg);
+  cursor: pointer;
+}
+.stage-nextscene__group input {
+  margin: 0;
+}
+.stage-nextscene__world .stage-hint {
+  margin: 0;
+}
+.stage-nextscene__worldname,
+.stage-nextscene__field input,
+.stage-nextscene__field textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 0.45rem 0.6rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.stage-nextscene__field input:focus,
+.stage-nextscene__field textarea:focus {
+  outline: none;
+  border-color: var(--stage-accent);
+}
+.stage-nextscene__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.stage-nextscene__acts button {
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-nextscene__acts button:hover:not(:disabled) {
+  border-color: var(--stage-accent);
+}
+.stage-nextscene__acts button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.stage-nextscene__go {
+  background: var(--stage-accent) !important;
+  color: var(--stage-bg) !important;
+  border-color: transparent !important;
+  font-weight: 600;
+}
+
+/* --- the pinned scene-state card (SD4) --- */
+
+/* Above the composer, quiet by default: collapsed it is one muted line (the
+   card's first line — by convention the in-fiction clock), tapped open it is
+   a small surface panel with edit/unpin. Ambient chrome, so line-edged, not
+   accent-edged like .stage-interact (nothing is blocked on it). */
+.stage-chat > .stage-scene-state {
+  position: relative;
+  z-index: 1;
+}
+.stage-scene-state {
+  margin: 0 0 0.5rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 10px;
+  background: var(--stage-surface);
+  color: var(--stage-fg);
+  font-size: 0.85rem;
+}
+.stage-scene-state--closed {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.35rem 0.7rem;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--stage-muted);
+  cursor: pointer;
+  text-align: left;
+}
+.stage-scene-state--closed:hover {
+  border-color: var(--stage-accent);
+}
+.stage-scene-state__line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The drift badge (SD6): the pin outranks the scene when they disagree and
+   nothing updates it on its own, so a card left behind quietly wins arguments
+   it should lose. Amber — the same hue the lore trace uses for "budget
+   dropped": something is not reaching the model the way you think. */
+.stage-scene-state__stale {
+  flex: none;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #d6a86a;
+  background: rgba(214, 168, 106, 0.16);
+}
+.stage-scene-state--stale {
+  border-color: rgba(214, 168, 106, 0.5);
+}
+.stage-scene-state--open {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.55rem 0.7rem;
+}
+.stage-scene-state__head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.stage-scene-state__title {
+  flex: 1;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.stage-scene-state__act {
+  border: none;
+  background: none;
+  color: var(--stage-muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+.stage-scene-state__act:hover {
+  color: var(--stage-fg);
+}
+.stage-scene-state__content {
+  margin: 0;
+  max-height: 30vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--stage-fg);
+}
+.stage-scene-state__editor {
+  width: 100%;
+  resize: vertical;
+  padding: 0.45rem 0.6rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.stage-scene-state__editor:focus {
+  outline: none;
+  border-color: var(--stage-accent);
+}
+.stage-scene-state__acts {
+  display: flex;
+  gap: 0.5rem;
+}
+.stage-scene-state__acts button {
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-scene-state__acts button:hover:not(:disabled) {
+  border-color: var(--stage-accent);
+}
+.stage-scene-state__acts button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.stage-scene-state__save {
+  background: var(--stage-accent) !important;
+  color: var(--stage-bg) !important;
+  border-color: transparent !important;
+  font-weight: 600;
+}
+.stage-scene-state__unpin {
+  color: var(--stage-muted) !important;
+}
+.stage-scene-state__error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #d67a6a;
+}
+
 .stage-composer {
   display: flex;
   gap: 0.5rem;
   padding: 0.75rem 0 calc(0.75rem + env(safe-area-inset-bottom));
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(10, 10, 9, 0.6);
+  background: color-mix(in srgb, var(--stage-bg) 60%, transparent);
   backdrop-filter: blur(6px);
 }
 .stage-composer textarea {
@@ -1904,7 +2262,7 @@ button:disabled {
   max-height: 40vh;
   overflow-y: auto; /* JS auto-grows height to scrollHeight; past the cap it scrolls */
   padding: 0.55rem 0.7rem;
-  background: rgba(23, 22, 19, 0.9);
+  background: color-mix(in srgb, var(--stage-surface) 90%, transparent);
   color: var(--stage-fg);
   border: 1px solid var(--stage-line);
   border-radius: 8px;
@@ -1916,7 +2274,7 @@ button:disabled {
   border: none;
   border-radius: 8px;
   background: var(--stage-accent);
-  color: #1a1509;
+  color: var(--stage-on-accent);
   font-weight: 600;
 }
 
@@ -1926,7 +2284,7 @@ button:disabled {
    action next to the accent-filled Send button. */
 .stage-composer .stage-suggest-btn {
   align-self: flex-end;
-  background: rgba(23, 22, 19, 0.9);
+  background: color-mix(in srgb, var(--stage-surface) 90%, transparent);
   color: var(--stage-fg);
   border: 1px solid var(--stage-line);
   font-weight: 400;
@@ -1940,7 +2298,7 @@ button:disabled {
    primary Send action. Disabled while a turn is in flight. */
 .stage-composer .stage-advance-btn {
   align-self: flex-end;
-  background: rgba(23, 22, 19, 0.9);
+  background: color-mix(in srgb, var(--stage-surface) 90%, transparent);
   color: var(--stage-fg);
   border: 1px solid var(--stage-line);
   font-weight: 400;
@@ -1962,7 +2320,7 @@ button:disabled {
    accent action, so it does not look like the way to proceed. */
 .stage-composer .stage-stop-btn {
   align-self: flex-end;
-  background: rgba(23, 22, 19, 0.9);
+  background: color-mix(in srgb, var(--stage-surface) 90%, transparent);
   color: #e6a6a6;
   border: 1px solid #7a4a4a;
   font-weight: 600;
@@ -2023,7 +2381,7 @@ button:disabled {
   cursor: pointer;
 }
 .stage-suggest__target button.is-active {
-  color: #1a1509;
+  color: var(--stage-on-accent);
   background: var(--stage-accent);
   border-color: var(--stage-accent);
   font-weight: 600;
@@ -2075,7 +2433,7 @@ button:disabled {
   border-radius: 999px;
 }
 .stage-suggest__roster-chip.is-active {
-  color: #1a1509;
+  color: var(--stage-on-accent);
   background: var(--stage-accent);
   border-color: var(--stage-accent);
 }
@@ -2119,7 +2477,7 @@ button:disabled {
   border: none;
   border-radius: 8px;
   background: var(--stage-accent);
-  color: #1a1509;
+  color: var(--stage-on-accent);
   font-weight: 600;
 }
 .stage-suggest__go {
@@ -2317,6 +2675,29 @@ button:disabled {
 .stage-detail dd {
   margin: 0;
 }
+/* Diagnostics rows: an id or a path beside a copy button. The value wraps
+   rather than ellipsing — a truncated path you cannot read is worse than two
+   lines, and this section exists precisely to be read off. */
+.stage-copyrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.stage-copyrow code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  color: var(--stage-muted);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+/* The inspect link sits under the rows as a block, not inline with them. */
+.stage-inspect {
+  display: inline-block;
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+}
+
 /* The Title row carries inline rename (✎) and regenerate (✨) actions. */
 .stage-detail__title {
   display: flex;
@@ -2463,8 +2844,8 @@ button:disabled {
 }
 .stage-modelpick__auth--oauth {
   color: var(--stage-accent);
-  border-color: rgba(201, 164, 90, 0.5);
-  background: rgba(201, 164, 90, 0.12);
+  border-color: color-mix(in srgb, var(--stage-accent) 50%, transparent);
+  background: color-mix(in srgb, var(--stage-accent) 12%, transparent);
 }
 .stage-modelpick__row {
   display: flex;
@@ -2479,10 +2860,10 @@ button:disabled {
   background: var(--stage-surface);
 }
 .stage-modelpick__row:active {
-  background: rgba(201, 164, 90, 0.24);
+  background: color-mix(in srgb, var(--stage-accent) 24%, transparent);
 }
 .stage-modelpick__row--current {
-  background: rgba(201, 164, 90, 0.14);
+  background: color-mix(in srgb, var(--stage-accent) 14%, transparent);
 }
 .stage-modelpick__row--current .stage-modelpick__id {
   color: var(--stage-accent);
@@ -2737,7 +3118,7 @@ button:disabled {
   font-size: 0.72rem;
   padding: 0.05rem 0.4rem;
   border-radius: 4px;
-  background: rgba(201, 164, 90, 0.15);
+  background: color-mix(in srgb, var(--stage-accent) 15%, transparent);
   color: var(--stage-accent);
 }
 .stage-lore__const {
@@ -2762,8 +3143,8 @@ button:disabled {
   letter-spacing: 0.04em;
 }
 .stage-lore__badge--fired {
-  color: #7fbf8a;
-  background: rgba(127, 191, 138, 0.14);
+  color: var(--stage-ok);
+  background: color-mix(in srgb, var(--stage-ok) 14%, transparent);
 }
 .stage-lore__badge--dropped {
   color: #d6a86a;
@@ -2788,6 +3169,37 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+}
+/* The scene-state pin offer (SD4) — shown only while nothing is pinned; the
+   card itself lives above the composer, not in this list. */
+.stage-worldlore__pinbtn {
+  align-self: flex-start;
+  margin: 0 0 0.6rem;
+  padding: 0.35rem 0.7rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  border: 1px dashed var(--stage-line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-worldlore__pinbtn:hover {
+  border-color: var(--stage-accent);
+}
+/* The pinned card, ACCOUNTED FOR here but edited above the composer. Same block
+   as a lore entry so it reads as part of what this world carries, with the
+   dashed border of the offer it replaces — a standing note, not a row with
+   actions on it. */
+.stage-worldlore__pinned {
+  margin: 0 0 0.6rem;
+  padding: 0.5rem 0.65rem;
+  background: var(--stage-surface-2);
+  border: 1px dashed var(--stage-line);
+  border-radius: 8px;
+}
+.stage-worldlore__pinned .stage-hint {
+  margin: 0.35rem 0 0;
 }
 .stage-worldlore__entry {
   padding: 0.5rem 0.65rem;
@@ -3163,8 +3575,8 @@ button:disabled {
   padding: 0.05rem 0.4rem;
 }
 .stage-enrich__verdict--on {
-  border-color: #7fbf8a;
-  color: #7fbf8a;
+  border-color: var(--stage-ok);
+  color: var(--stage-ok);
 }
 .stage-enrich__verdict--off {
   border-color: #d6a86a;
@@ -3188,7 +3600,7 @@ button:disabled {
   max-height: 4rem;
 }
 .stage-enrich__text--after {
-  border-left: 2px solid #7fbf8a;
+  border-left: 2px solid var(--stage-ok);
 }
 .stage-enrich__reason {
   width: 100%;
@@ -3291,4 +3703,187 @@ button:disabled {
   padding-top: 0.6rem;
   background: var(--stage-surface);
   border-top: 1px solid var(--stage-line);
+}
+
+/* Session doctor (SD1): Dramaturgi's proposal list in the World tab. All
+   colors ride the --stage-* theme variables (dusk/parchment/nocturne/rose and
+   any accessibility preset) — the first cut hardcoded Tokyo-Night fallbacks
+   behind variable names that don't exist here, which rendered the same
+   unreadable palette on every theme. */
+.stage-doctor__run,
+.stage-doctor__revise,
+.stage-doctor__accept,
+.stage-doctor__reason button {
+  padding: 0.4rem 0.9rem;
+  background: var(--stage-accent);
+  color: var(--stage-bg);
+  border: none;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+/* lore_retire (SD6) is the only acceptance that REMOVES something, so it must
+   not wear the same affirmative accent as "record this". Amber rather than red:
+   retiring played-past lore is routine hygiene, not a danger. */
+.stage-doctor__accept--destructive {
+  background: rgba(214, 168, 106, 0.16);
+  color: #d6a86a;
+  border: 1px solid rgba(214, 168, 106, 0.5);
+}
+.stage-doctor__decline,
+.stage-doctor__close {
+  padding: 0.4rem 0.9rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-muted);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-doctor__run:disabled,
+.stage-doctor__revise:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.stage-doctor__note {
+  font-style: italic;
+  color: var(--stage-muted);
+}
+.stage-doctor__list {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.stage-doctor__item {
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  background: var(--stage-surface);
+}
+.stage-doctor__item--accepted,
+.stage-doctor__item--declined {
+  opacity: 0.55;
+}
+.stage-doctor__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.stage-doctor__kind {
+  font-size: 0.8em;
+  color: var(--stage-muted);
+  white-space: nowrap;
+}
+.stage-doctor__scope,
+.stage-doctor__keys {
+  font-size: 0.8em;
+  color: var(--stage-muted);
+}
+.stage-doctor__done {
+  margin-left: auto;
+  font-size: 0.85em;
+  color: var(--stage-muted);
+}
+.stage-doctor__rationale {
+  font-size: 0.85em;
+  color: var(--stage-muted);
+  margin: 0.25rem 0;
+}
+.stage-doctor__content {
+  margin: 0.25rem 0;
+}
+.stage-doctor__promo {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.35rem 0;
+}
+.stage-doctor__field {
+  display: grid;
+  gap: 0.15rem;
+  font-size: 0.85em;
+  color: var(--stage-muted);
+}
+.stage-doctor__field textarea,
+.stage-doctor__reason input {
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  font: inherit;
+}
+.stage-doctor__field textarea:focus,
+.stage-doctor__reason input:focus {
+  outline: none;
+  border-color: var(--stage-accent);
+}
+.stage-doctor__field textarea {
+  width: 100%;
+  resize: vertical;
+}
+.stage-doctor__acts,
+.stage-doctor__reason,
+.stage-doctor__round {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+  align-items: center;
+}
+.stage-doctor__reason input {
+  flex: 1;
+  min-width: 0;
+}
+.stage-doctor__error {
+  color: #d67a6a;
+}
+
+/* The doctor overlay (SD2/SD3): a narrowed ask hosted in a sheet over the
+   scene, same backdrop as suggest. */
+.stage-doctor-sheet {
+  background: var(--stage-surface);
+  border: 1px solid var(--stage-line);
+  border-radius: 12px;
+  padding: 0.75rem 0.9rem;
+  width: min(560px, calc(100vw - 2rem));
+  max-height: min(80vh, 40rem);
+  overflow-y: auto;
+}
+.stage-doctor-sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.stage-doctor-sheet__head h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--stage-fg);
+}
+
+/* Export the scene as a story. A full-width action under the model picker —
+   it acts on the whole session, not on any one row above it. */
+.stage-export {
+  width: 100%;
+  margin-top: 0.6rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-export:hover:not(:disabled) {
+  border-color: var(--stage-accent);
+  color: var(--stage-accent);
+}
+.stage-export:disabled {
+  opacity: 0.6;
+  cursor: default;
 }

@@ -3,13 +3,17 @@
 // client-local preference (Stage owns its own shell/theme), applied to the
 // document root so both the library and the chat screens re-skin at once.
 
+import { m } from '../../i18n'
+
+// The display names are m()-marked for extraction; translate with tr(name) at
+// the render site (the ids are wire/storage values and stay as-is).
 export type ThemePreset = { id: string; name: string }
 
 export const THEMES: ThemePreset[] = [
-  { id: 'dusk', name: 'Dusk' },
-  { id: 'parchment', name: 'Parchment' },
-  { id: 'nocturne', name: 'Nocturne' },
-  { id: 'rose', name: 'Rose' },
+  { id: 'dusk', name: m('Dusk') },
+  { id: 'parchment', name: m('Parchment') },
+  { id: 'nocturne', name: m('Nocturne') },
+  { id: 'rose', name: m('Rose') },
 ]
 
 const KEY = 'stage-theme'

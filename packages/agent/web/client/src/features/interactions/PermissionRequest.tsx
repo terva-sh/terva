@@ -19,9 +19,18 @@ export function PermissionRequest({
         <button class="btn primary" onClick={() => onDecide(request.call_id, { allow: true })}>
           {t('Allow')}
         </button>
-        <button class="btn" onClick={() => onDecide(request.call_id, { allow: true, remember_tool: true })}>
+        <button
+          class="btn"
+          title={t('For the rest of this session')}
+          onClick={() => onDecide(request.call_id, { allow: true, remember_tool: true })}
+        >
           {t('Allow & remember')}
         </button>
+        {/* No "always — save to config" button yet, though the wire and the gate
+            both carry persist_tool: nothing installs ConfirmGate.SetPersist in a
+            production build, so the durable grant silently degrades to this
+            session only. Offering it here would repeat what the TUI's dialog
+            already claims and does not do. See docs/reviews/2026-07-20. */}
         <button class="btn danger" onClick={() => onDecide(request.call_id, { allow: false, reason: 'denied by user' })}>
           {t('Deny')}
         </button>

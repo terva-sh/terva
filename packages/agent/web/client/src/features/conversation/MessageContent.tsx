@@ -1,11 +1,9 @@
-import { useMemo } from 'preact/hooks'
-
 import { t } from '../../i18n'
-import { renderMarkdown } from '../../markdown'
 import type { Item } from '../../platform/conversation/store'
 import { CopyButton } from '../../ui/CopyButton'
 import { compact, truncate } from '../../ui/formatting'
 import { ImageGallery } from '../../ui/ImageGallery'
+import { Markdown } from '../../ui/Markdown'
 import { memo } from '../../ui/memo'
 import { ClearDivider } from './ClearDivider'
 import { CompactionDivider, type RevealFn } from './CompactionDivider'
@@ -13,24 +11,14 @@ import type { ToolView } from './types'
 
 export type { ToolView } from './types'
 
-// AssistantMessage exists to own a hook, and the hook is the point.
-//
-// renderMarkdown used to sit in the render body, so it re-parsed on EVERY render of
-// the list — and the list re-renders on every token delta, 30+ times a second. That
-// meant re-parsing the markdown of every finished assistant message in the transcript,
-// none of which had changed, dozens of times a second. Measured at ~53µs a message, a
-// long conversation spent a fifth of a core on it. On a phone, considerably more.
-//
-// The memo is keyed on the text, so it also survives the item OBJECT being rebuilt by
-// a turn-end snapshot — and it is scoped to the mounted row, so it is collected when
-// the row is, rather than accumulating in a module-level cache that would have to
-// guess at a bound.
+// The markdown memo that used to live here now lives in ui/Markdown, so Stage
+// gets it too — it had re-introduced the un-memoized render this comment was
+// written about. See that file for the measurement and the reasoning.
 function AssistantMessage({ item }: { item: Extract<Item, { kind: 'assistant' }> }) {
-  const html = useMemo(() => renderMarkdown(item.text), [item.text])
   return (
     <div class="msg-wrap assistant-wrap">
       <div class="msg assistant md">
-        <div dangerouslySetInnerHTML={{ __html: html }} />
+        <Markdown text={item.text} />
         {item.images && <ImageGallery images={item.images} />}
       </div>
       {item.text && <CopyButton text={item.text} />}
