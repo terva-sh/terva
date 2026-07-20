@@ -1,4 +1,4 @@
-import type { Frame, ServerHello, Status, WireEvent } from './types'
+import type { Frame, ParamsFor, ServerHello, Status, Verb, WireEvent } from './types'
 
 const PROTOCOL = 1
 
@@ -63,9 +63,42 @@ function bounceToLogin() {
   location.assign('/auth?next=' + encodeURIComponent(next))
 }
 
+// ClientLike is the transport seam: everything a consumer of ctrlproto needs,
+// with no WebSocket in it.
+//
+// Client is a class with private fields, so TypeScript treats it nominally — a
+// plain object can never satisfy it, which is why every test that wanted a stub
+// wrote `{ send: vi.fn() } as unknown as Client`. That cast is not a formality:
+// it disables checking entirely, so a stub could omit a method, or keep one this
+// interface had since renamed, and every test using it still passed.
+//
+// Components depend on this; the two composition roots (app.tsx, apps/stage) are
+// the only places that name the concrete Client, because they are the only ones
+// that connect a socket.
+export interface ClientLike {
+  send<T = unknown, M extends Verb = Verb>(method: M, params: ParamsFor<M>, sess?: string): Promise<T>
+  fire<M extends Verb = Verb>(method: M, params: ParamsFor<M>, sess?: string): void
+  // Mutable by design: useConversation save-restores onEvent around its own
+  // handler, since one socket serves whichever screen is mounted.
+  onEvent: (sess: string, ev: WireEvent) => void
+  onStatus: (s: Status) => void
+  onReady: (hello?: ServerHello) => void
+  maxUploadBytes: number
+}
+
+// ConnectableClient adds the socket lifecycle. Deliberately separate from
+// ClientLike: a screen sends verbs and reads events, it does not open or close
+// the connection — only a composition root does. Keeping the two apart means a
+// component cannot reach for connect() and a test double for a component need
+// not pretend to have one.
+export interface ConnectableClient extends ClientLike {
+  connect(): void
+  close(): void
+}
+
 // Client is a reconnecting ctrlproto peer over one WebSocket. Commands return
 // promises correlated by id; events are delivered to onEvent by session.
-export class Client {
+export class Client implements ConnectableClient {
   private ws: WebSocket | null = null
   private nextId = 1
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
@@ -151,7 +184,10 @@ export class Client {
     return this.ws != null && this.ws.readyState === WebSocket.OPEN
   }
 
-  send<T = unknown>(method: string, params: unknown, sess = ''): Promise<T> {
+  // method is a Verb, not a string: a typo'd verb is now a compile error rather
+  // than a runtime rejection nobody is listening for. params is pinned for the
+  // verbs VerbParams maps and stays `unknown` for the rest — see types.ts.
+  send<T = unknown, M extends Verb = Verb>(method: M, params: ParamsFor<M>, sess = ''): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       // Reject cleanly rather than letting ws.send() throw InvalidStateError on
       // a CONNECTING/closed socket (e.g. during a reconnect). Callers that care
@@ -166,7 +202,7 @@ export class Client {
     })
   }
 
-  fire(method: string, params: unknown, sess = '') {
+  fire<M extends Verb = Verb>(method: M, params: ParamsFor<M>, sess = '') {
     // Fire-and-forget: silently drop if the socket isn't open. Calling send() on
     // a CONNECTING socket throws InvalidStateError, and there's no promise here
     // to reject; a reconnect re-subscribes and re-syncs via the snapshot.

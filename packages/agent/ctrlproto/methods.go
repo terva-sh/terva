@@ -165,6 +165,25 @@ const (
 	// card + its deterministic lint and proposes structured per-field edits.
 	MethodCardsDoctor Method = "cards.doctor" // params DoctorParams, result DoctorResult
 
+	// MethodSessionsDoctor runs the session doctor (Dramaturgi) over a live
+	// immersive session — typed proposals in the card doctor's negotiation
+	// shape. Session in the frame, like suggest.
+	MethodSessionsDoctor Method = "sessions.doctor" // params SessionDoctorParams, result SessionDoctorResult (sess in frame)
+
+	// MethodSessionsNextScene starts the next scene of a played session (SD5):
+	// propose drafts the recap + cold open, commit creates the scene carrying
+	// this session's live World state. Session in the frame.
+	MethodSessionsNextScene Method = "sessions.next_scene" // params NextSceneParams, result NextSceneResult (sess in frame)
+
+	// MethodSessionsExport serializes a session for something outside terva.
+	//
+	// Deliberately ONE verb with a format discriminator rather than a verb per
+	// format, matching cards.export: "markdown" renders the played scene as a
+	// readable story, "tervasession" is the lossless raw-JSONL round-trip
+	// docs/proposals/archive/tui-ctrlproto-parity.md reserved this name for.
+	// Those are different audiences for the same act, not different acts.
+	MethodSessionsExport Method = "sessions.export" // params SessionExportParams, result SessionExport (sess in frame)
+
 	// The persona library (optional; served only by a PersonasController). In the
 	// control group with cards; create/edit are trusted-tier (gated in the
 	// workspace), so they change what the running agent IS, like the model
@@ -261,7 +280,8 @@ func (m Method) Group() Group {
 		MethodSessionRename, MethodSessionGenerateTitle, MethodSessionDelete, MethodSessionDiscardDraft, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
 		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
 		MethodFilesList, MethodAuthProviders, MethodConversationReveal, MethodConversationHistory,
-		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose, MethodSuggestReply:
+		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose, MethodSuggestReply, MethodSessionsDoctor,
+		MethodSessionsNextScene, MethodSessionsExport:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault,
 		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
@@ -540,6 +560,28 @@ type TurnSwipeParams struct {
 // streams), and [CodeBusy] when a turn is already running.
 type TurnRetryParams struct {
 	Epoch uint64 `json:"epoch"`
+
+	// Guidance is an OPTIONAL note about what should be different this time —
+	// "shorter", "have her refuse instead", "less purple". Empty (the zero value,
+	// and what every pre-guidance client sends) is the plain regenerate: an
+	// independent sample from the same prefix, unchanged in every respect.
+	//
+	// It steers exactly one generation and is never persisted. A regenerate's
+	// takes all share the transcript prefix they were generated from, so writing
+	// the guidance into that prefix would put it in front of takes that never saw
+	// it. See [core.Agent.ContinueWithCue].
+	Guidance string `json:"guidance,omitempty"`
+
+	// IgnorePrior asks for a BLIND guided regenerate: follow the guidance, but do
+	// not show the model the take being replaced. Ignored when Guidance is empty
+	// (a plain regenerate never sees the prior take — it is meant to be an
+	// independent sample).
+	//
+	// The default is deliberately the other way round, which is why this is phrased
+	// as an opt-OUT: guidance is usually relative ("shorter", "less of that"), and
+	// a model that cannot see what it is being asked to change is guessing. Set
+	// this when the previous attempt went somewhere the user wants no trace of.
+	IgnorePrior bool `json:"ignore_prior,omitempty"`
 }
 
 // HistoryParams is the payload of [MethodConversationHistory]: give me the Limit

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // FrameConn is a bidirectional frame transport. Each carrier — WebSocket,
@@ -160,12 +162,12 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			s.badReq(f.ID, err)
 			return
 		}
-		s.respond(f.ID, nil, s.svc.RetryTurn(ctx, f.Sess, p.Epoch))
+		s.respond(f.ID, nil, s.svc.RetryTurn(ctx, f.Sess, p))
 
 	case MethodTurnContinue:
 		cc, ok := s.svc.(ContinueController)
 		if !ok {
-			s.write(ErrFrame(f.ID, CodeUnsupported, "continue is not available here"))
+			s.write(ErrFrame(f.ID, CodeUnsupported, i18n.T("continue is not available here")))
 			return
 		}
 		var p TurnContinueParams
@@ -386,7 +388,7 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 	case MethodAuthLoginStart:
 		ac, ok := s.svc.(AuthController)
 		if !ok {
-			s.write(ErrFrame(f.ID, CodeUnsupported, "login not supported"))
+			s.write(ErrFrame(f.ID, CodeUnsupported, i18n.T("login not supported")))
 			return
 		}
 		var p AuthLoginStartParams
@@ -400,7 +402,7 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 	case MethodAuthLoginSubmit:
 		ac, ok := s.svc.(AuthController)
 		if !ok {
-			s.write(ErrFrame(f.ID, CodeUnsupported, "login not supported"))
+			s.write(ErrFrame(f.ID, CodeUnsupported, i18n.T("login not supported")))
 			return
 		}
 		var p AuthLoginSubmitParams
@@ -413,7 +415,7 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 	case MethodAuthLoginCancel:
 		ac, ok := s.svc.(AuthController)
 		if !ok {
-			s.write(ErrFrame(f.ID, CodeUnsupported, "login not supported"))
+			s.write(ErrFrame(f.ID, CodeUnsupported, i18n.T("login not supported")))
 			return
 		}
 		var p AuthFlowRef
@@ -426,7 +428,7 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 	case MethodAuthLogout:
 		ac, ok := s.svc.(AuthController)
 		if !ok {
-			s.write(ErrFrame(f.ID, CodeUnsupported, "login not supported"))
+			s.write(ErrFrame(f.ID, CodeUnsupported, i18n.T("login not supported")))
 			return
 		}
 		var p AuthLogoutParams
@@ -441,7 +443,7 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		// simply does not implement it, and says so rather than failing deeper.
 		mc, ok := s.svc.(ModelParamsController)
 		if !ok {
-			s.write(ErrFrame(f.ID, CodeUnsupported, "editing model settings is not supported here"))
+			s.write(ErrFrame(f.ID, CodeUnsupported, i18n.T("editing model settings is not supported here")))
 			return
 		}
 		switch f.Method {
@@ -460,19 +462,21 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 				return
 			}
 			s.respond(f.ID, nil, mc.ModelParamsSet(ctx, p))
-		default:
+		case MethodModelParamsReset:
 			var p ModelParamsParams
 			if err := f.Bind(&p); err != nil {
 				s.badReq(f.ID, err)
 				return
 			}
 			s.respond(f.ID, nil, mc.ModelParamsReset(ctx, p))
+		default:
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled model-params verb %q", f.Method)))
 		}
 
 	case MethodAuthEndpointRemove:
 		ac, ok := s.svc.(AuthController)
 		if !ok {
-			s.write(ErrFrame(f.ID, CodeUnsupported, "login not supported"))
+			s.write(ErrFrame(f.ID, CodeUnsupported, i18n.T("login not supported")))
 			return
 		}
 		var p AuthEndpointRemoveParams
@@ -534,13 +538,15 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			}
 			v, err := cc.CardsLint(ctx, p)
 			s.respond(f.ID, v, err)
-		default:
+		case MethodCardsDelete:
 			var p CardDeleteParams
 			if err := f.Bind(&p); err != nil {
 				s.badReq(f.ID, err)
 				return
 			}
 			s.respond(f.ID, nil, cc.CardsDelete(ctx, p))
+		default:
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled card verb %q", f.Method)))
 		}
 
 	case MethodCardsDoctor:
@@ -557,6 +563,54 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			return
 		}
 		v, err := dc.CardsDoctor(ctx, p)
+		s.respond(f.ID, v, err)
+
+	case MethodSessionsDoctor:
+		// Same posture as the card doctor: optional controller, needs a model.
+		dc, ok := s.svc.(DoctorController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "the session doctor is not available here"))
+			return
+		}
+		var p SessionDoctorParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		v, err := dc.SessionsDoctor(ctx, f.Sess, p)
+		s.respond(f.ID, v, err)
+
+	case MethodSessionsNextScene:
+		// Same posture again: the propose half is a Dramaturgi call, so a
+		// carrier without a model answers "unsupported" rather than failing
+		// deeper on the commit half it could technically serve.
+		dc, ok := s.svc.(DoctorController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "scene breaks are not available here"))
+			return
+		}
+		var p NextSceneParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		v, err := dc.SessionsNextScene(ctx, f.Sess, p)
+		s.respond(f.ID, v, err)
+
+	case MethodSessionsExport:
+		// An explicit arm, never the trailing `default:` idiom — that binds the
+		// LAST verb's params struct to any new verb in the group, silently.
+		ec, ok := s.svc.(ExportController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "session export is not available here"))
+			return
+		}
+		var p SessionExportParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		v, err := ec.SessionsExport(ctx, f.Sess, p)
 		s.respond(f.ID, v, err)
 
 	case MethodSuggestReply:
@@ -660,13 +714,15 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 				return
 			}
 			s.respond(f.ID, nil, bc.BackgroundsDelete(ctx, p))
-		default:
+		case MethodBackgroundBind:
 			var p BackgroundBindParams
 			if err := f.Bind(&p); err != nil {
 				s.badReq(f.ID, err)
 				return
 			}
 			s.respond(f.ID, nil, bc.BackgroundBind(ctx, f.Sess, p))
+		default:
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled background verb %q", f.Method)))
 		}
 
 	case MethodNoteSet:
@@ -728,13 +784,15 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 				return
 			}
 			s.respond(f.ID, nil, upc.UserPersonaDelete(ctx, p))
-		default: // MethodUserPersonaSetDefault
+		case MethodUserPersonaSetDefault:
 			var p UserPersonaRef
 			if err := f.Bind(&p); err != nil {
 				s.badReq(f.ID, err)
 				return
 			}
 			s.respond(f.ID, nil, upc.UserPersonaSetDefault(ctx, p))
+		default:
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled user-persona verb %q", f.Method)))
 		}
 
 	case MethodCastAdd, MethodCastRemove:
@@ -748,10 +806,16 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			s.badReq(f.ID, err)
 			return
 		}
-		if f.Method == MethodCastAdd {
+		// Switch, not if/else: an else arm is the same trap as a bare default —
+		// a third verb added to the outer list above would silently REMOVE a
+		// cast member. The backstop makes that a loud error instead.
+		switch f.Method {
+		case MethodCastAdd:
 			s.respond(f.ID, nil, cc.CastAdd(ctx, f.Sess, p))
-		} else {
+		case MethodCastRemove:
 			s.respond(f.ID, nil, cc.CastRemove(ctx, f.Sess, p))
+		default:
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled cast verb %q", f.Method)))
 		}
 
 	case MethodCastSpeak:
@@ -788,13 +852,15 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 				return
 			}
 			s.respond(f.ID, nil, wc.WorldLoreDelete(ctx, f.Sess, p))
-		default: // MethodWorldSet
+		case MethodWorldSet:
 			var p WorldSetParams
 			if err := f.Bind(&p); err != nil {
 				s.badReq(f.ID, err)
 				return
 			}
 			s.respond(f.ID, nil, wc.WorldSet(ctx, f.Sess, p))
+		default:
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled world verb %q", f.Method)))
 		}
 
 	case MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldsExport, MethodWorldsImport:
@@ -839,13 +905,15 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			}
 			v, err := wc.WorldsImport(ctx, p)
 			s.respond(f.ID, v, err)
-		default: // MethodWorldDelete
+		case MethodWorldDelete:
 			var p WorldDeleteParams
 			if err := f.Bind(&p); err != nil {
 				s.badReq(f.ID, err)
 				return
 			}
 			s.respond(f.ID, nil, wc.WorldDelete(ctx, p))
+		default:
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled worlds verb %q", f.Method)))
 		}
 
 	case MethodPostLine, MethodDirectTurn, MethodTurnAdvance:
@@ -856,26 +924,31 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			s.write(ErrFrame(f.ID, CodeUnsupported, "directed authorship is not available here"))
 			return
 		}
-		if f.Method == MethodTurnAdvance {
+		// Switch, not a chain of ifs with an implicit trailing arm: the fallthrough
+		// used to be post_line, so a fourth verb added to the outer list above
+		// would silently POST A LINE into the transcript with its params bound as
+		// PostLineParams. The backstop makes that a loud error instead.
+		switch f.Method {
+		case MethodTurnAdvance:
 			// No params by design: advance injects nothing.
 			s.respond(f.ID, nil, dc.AdvanceTurn(ctx, f.Sess))
-			return
-		}
-		if f.Method == MethodDirectTurn {
+		case MethodDirectTurn:
 			var p DirectTurnParams
 			if err := f.Bind(&p); err != nil {
 				s.badReq(f.ID, err)
 				return
 			}
 			s.respond(f.ID, nil, dc.DirectTurn(ctx, f.Sess, p))
-			return
+		case MethodPostLine:
+			var p PostLineParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, dc.PostLine(ctx, f.Sess, p))
+		default:
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled directed-authorship verb %q", f.Method)))
 		}
-		var p PostLineParams
-		if err := f.Bind(&p); err != nil {
-			s.badReq(f.ID, err)
-			return
-		}
-		s.respond(f.ID, nil, dc.PostLine(ctx, f.Sess, p))
 
 	// --- message-scoped variant cleanup (optional; served only by a VariantsController) ---
 	case MethodVariantsPrune:
@@ -951,10 +1024,15 @@ func (s *serveState) badReq(id uint64, err error) {
 }
 
 // fail forwards a [*Error]'s code verbatim; any other error becomes internal.
+// The message prose is passed through i18n.T on a COPY at this one emission
+// point: a constant message (the i18n.M-marked sentinels) translates here,
+// a parameterized one translated at its construction site passes through
+// unchanged (a non-key is returned verbatim), and the shared sentinel values
+// are never mutated.
 func (s *serveState) fail(id uint64, err error) {
 	var ce *Error
 	if errors.As(err, &ce) {
-		s.write(Frame{Kind: KindResp, ID: id, Error: ce})
+		s.write(Frame{Kind: KindResp, ID: id, Error: &Error{Code: ce.Code, Message: i18n.T(ce.Message)}})
 		return
 	}
 	s.write(ErrFrame(id, CodeInternal, err.Error()))

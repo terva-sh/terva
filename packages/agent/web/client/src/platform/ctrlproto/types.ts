@@ -1,5 +1,16 @@
-// Typed ctrlproto client. Mirrors packages/agent/ctrlproto's wire shapes; the
-// Go golden-frame tests pin the exact JSON these interfaces describe.
+// Typed ctrlproto client. Mirrors packages/agent/ctrlproto's wire shapes.
+//
+// How much of that mirror is actually checked, precisely — the previous version
+// of this header claimed the Go golden-frame tests pinned these interfaces, and
+// nothing in this client had ever read a Go file:
+//
+//   - the VERB VOCABULARY is checked, both directions, against methods.go
+//     (verbs.test.ts). A verb added, renamed or removed in Go fails here.
+//   - PARAMS are checked for the verbs VerbParams maps, because send() keys off
+//     it. Everything else still passes `unknown` — those interfaces are
+//     documentation, and can drift. Adding a VerbParams entry is what promotes
+//     one from documentation to contract.
+//   - RESULT and EVENT shapes are unchecked. Responses are cast, not validated.
 
 export interface WireUsage {
   input: number
@@ -105,6 +116,12 @@ export interface SessionInfo {
   // character on stage sees, edited via world.lore.put / world.lore.delete. Like
   // the note it rides the uncached per-turn tail: edits apply next turn, no rebuild.
   world_lore?: WorldLoreEntry[]
+  // scene_pin_stale is how many messages have played since the pinned
+  // scene-state card was last written (SD6); 0 when current, absent when there
+  // is no pin. The pin is the one entry whose frame tells the model to trust it
+  // over disagreeing history, and nothing keeps it current on its own — so the
+  // drift is surfaced rather than left for the author to discover in the prose.
+  scene_pin_stale?: number
   // coordination is the World's meta-narrator mode (W3, set via world.set):
   // '' auto (the router picks who answers), 'off' (the bound character always
   // answers), or 'focus:<roster name>'. Chat Worlds with a roster only.
@@ -769,6 +786,80 @@ export interface DoctorDecision {
   reason?: string
 }
 
+// SessionProposal is one typed session-doctor proposal (Go
+// ctrlproto.SessionProposal). kind decides the payload and the apply verb:
+// lore_entry/open_thread → world.lore.put, cast_promotion → cards.import +
+// cast.add (via a prefilled editor, never a silent import), scene_state (SD4)
+// → world.lore.put on the reserved pin name (name/content arrive server-
+// forced: canonical name, no keys/audience — the accept path needs no
+// special-casing beyond the label).
+export interface SessionProposal {
+  id: string
+  // lore_retire (SD6) carries name only and applies through world.lore.delete —
+  // the one kind whose acceptance REMOVES something, so its accept button says
+  // so rather than reading as another "Accept".
+  kind: 'lore_entry' | 'open_thread' | 'cast_promotion' | 'scene_state' | 'scene_break' | 'lore_retire'
+  rationale: string
+  // lore_entry / open_thread; scene_state uses name+content only
+  name?: string
+  content?: string
+  keys?: string[]
+  audience?: string[]
+  // cast_promotion
+  character?: string
+  description?: string
+  personality?: string
+  first_mes?: string
+}
+
+// SessionDoctorParams drives sessions.doctor (session rides the frame); the
+// decisions loop and per-generation model override match the card doctor.
+export interface SessionDoctorParams {
+  decisions?: DoctorDecision[]
+  provider?: string
+  model?: string
+  // The narrowed asks (SD2/SD3), mutually exclusive: focus marks one message
+  // index to draft lore from; promote names a walk-on to seed a card for.
+  focus?: number
+  promote?: string
+}
+
+export interface SessionDoctorResult {
+  proposals: SessionProposal[]
+  note?: string
+}
+
+// NextSceneParams drives sessions.next_scene (SD5), a two-phase verb: without
+// commit it drafts (one booked model call, creates nothing); with commit it
+// creates the scene from the fields as the author edited them.
+export interface NextSceneParams {
+  commit?: boolean
+  title?: string
+  summary?: string
+  opening?: string
+  provider?: string
+  model?: string
+  // The World the new scene joins (#297/#298). Go has carried this since the
+  // scene-break work landed and NextScene.tsx has always sent it; this mirror
+  // simply never grew the field, and `params: unknown` meant nothing noticed.
+  world?: string
+}
+
+export interface NextSceneResult {
+  title?: string
+  summary?: string
+  opening?: string
+  note?: string
+  // The created scene; absent on a propose.
+  session?: SessionInfo
+  // The saved World this story already belongs to, absent when it belongs to
+  // none — which is what tells the sheet whether to OFFER a promotion.
+  world_id?: string
+  // That World's name, or (with no world_id) a suggested name to prefill the
+  // offer with.
+  world_name?: string
+}
+
 export interface CardsListResult {
   cards: CardSummary[]
 }
@@ -921,6 +1012,15 @@ export interface WorldImportParams {
 // CardExport is a card serialized for download: a CCv2 PNG or JSON. bytes is
 // base64 on the wire (Go []byte).
 export interface CardExport {
+  filename: string
+  mime_type: string
+  bytes: string
+}
+
+// SessionExport is a session serialized for download — markdown (the readable
+// story) or the raw .tervasession round-trip. Same triple as CardExport, so the
+// one download helper serves all three.
+export interface SessionExport {
   filename: string
   mime_type: string
   bytes: string
@@ -1223,8 +1323,13 @@ export interface Frame {
 export interface Decision {
   allow: boolean
   reason?: string
+  // Auto-allow this tool for the rest of the SESSION.
   remember_tool?: boolean
+  // Auto-allow every tool for the rest of the session.
   remember_all?: boolean
+  // Save a permanent allow rule for this tool to the user's config — outlives
+  // the session. Implies remember_tool for the current one.
+  persist_tool?: boolean
 }
 
 export type Status = 'connecting' | 'open' | 'closed'
@@ -1256,3 +1361,143 @@ export interface ModelParamsView {
   has_override?: boolean
   params: ModelParamSpec[]
 }
+
+// --- the verb vocabulary -----------------------------------------------------
+//
+// Verb is every method ctrlproto serves. It exists so client.send() can take a
+// verb literal instead of a bare string: before this, `send(method: string,
+// params: unknown)` type-checked nothing, so a typo'd verb and a params object
+// that disagreed with Go both compiled and failed at runtime with an error
+// nobody was watching for.
+//
+// This list is a mirror of packages/agent/ctrlproto/methods.go, and mirrors
+// drift — so verbs.test.ts parses that file and fails if the two disagree in
+// either direction. Do not edit this list by hand without running the tests.
+export type Verb =
+  | 'answer'
+  | 'approve'
+  | 'auth.endpoint.remove'
+  | 'auth.login.cancel'
+  | 'auth.login.start'
+  | 'auth.login.submit'
+  | 'auth.logout'
+  | 'auth.providers'
+  | 'backgrounds.bind'
+  | 'backgrounds.delete'
+  | 'backgrounds.generate'
+  | 'backgrounds.import'
+  | 'backgrounds.list'
+  | 'cancel'
+  | 'cards.delete'
+  | 'cards.doctor'
+  | 'cards.edit'
+  | 'cards.export'
+  | 'cards.get'
+  | 'cards.import'
+  | 'cards.lint'
+  | 'cards.list'
+  | 'cast.add'
+  | 'cast.remove'
+  | 'cast.speak'
+  | 'clear'
+  | 'compact'
+  | 'context.get'
+  | 'context.node'
+  | 'control.restart'
+  | 'control.trust'
+  | 'control.untrust'
+  | 'conversation.history'
+  | 'conversation.reveal'
+  | 'direct.turn'
+  | 'files.list'
+  | 'i18n.catalog'
+  | 'message.delete'
+  | 'message.edit'
+  | 'models.favorite'
+  | 'models.list'
+  | 'models.params'
+  | 'models.params.reset'
+  | 'models.params.set'
+  | 'models.set_default'
+  | 'models.switch'
+  | 'note.set'
+  | 'personas.create'
+  | 'personas.delete'
+  | 'personas.edit'
+  | 'personas.get'
+  | 'personas.list'
+  | 'post.line'
+  | 'prompt'
+  | 'queue'
+  | 'queue.set'
+  | 'replay.control'
+  | 'replay.state'
+  | 'sessions.create'
+  | 'sessions.delete'
+  | 'sessions.discard_draft'
+  | 'sessions.doctor'
+  | 'sessions.export'
+  | 'sessions.fork'
+  | 'sessions.generate_title'
+  | 'sessions.list'
+  | 'sessions.next_scene'
+  | 'sessions.rename'
+  | 'sessions.resume'
+  | 'sidechat.ask'
+  | 'sidechat.close'
+  | 'sidechat.open'
+  | 'subscribe'
+  | 'suggest.reply'
+  | 'surface.action'
+  | 'surface.get'
+  | 'surfaces.list'
+  | 'turn.advance'
+  | 'turn.continue'
+  | 'turn.retry'
+  | 'turn.swipe'
+  | 'unsubscribe'
+  | 'usage.get'
+  | 'usage.resets.consume'
+  | 'usage.resets.list'
+  | 'usage.snapshot'
+  | 'user.bind'
+  | 'userpersonas.delete'
+  | 'userpersonas.list'
+  | 'userpersonas.save'
+  | 'userpersonas.set_default'
+  | 'variants.drop'
+  | 'variants.prune'
+  | 'world.lore.delete'
+  | 'world.lore.put'
+  | 'world.set'
+  | 'worlds.delete'
+  | 'worlds.export'
+  | 'worlds.import'
+  | 'worlds.list'
+  | 'worlds.save'
+  | 'worlds.update'
+
+// VerbParams pins the params shape for the verbs whose Go struct this file
+// mirrors. It is deliberately PARTIAL: a verb absent here still type-checks its
+// name, and its params fall back to `unknown` exactly as before. Adding an entry
+// tightens one verb without touching any other call site — so this map is meant
+// to grow as the mirrored interfaces do, and every entry added is one more place
+// a Go-side field rename stops compiling here instead of failing silently.
+export interface VerbParams {
+  'sessions.doctor': SessionDoctorParams
+  'sessions.next_scene': NextSceneParams
+  'suggest.reply': SuggestParams
+  'post.line': PostLineParams
+  'direct.turn': DirectTurnParams
+  'world.lore.put': WorldLorePutParams
+  'world.lore.delete': WorldLoreDeleteParams
+  'world.set': WorldSetParams
+  'worlds.save': WorldSaveParams
+  'worlds.update': WorldUpdateParams
+  'worlds.import': WorldImportParams
+  'personas.create': PersonaWriteParams
+  'personas.edit': PersonaWriteParams
+}
+
+// ParamsFor is VerbParams[V] where the verb is mapped, and `unknown` otherwise.
+export type ParamsFor<V extends Verb> = V extends keyof VerbParams ? VerbParams[V] : unknown

@@ -89,9 +89,14 @@ type WorkspaceService interface {
 	// swipeable take — the Stage surface's regenerate. It retracts the tail span
 	// and runs a fresh generation against the prior user turn; like Prompt it
 	// returns once the turn is accepted and the regeneration streams to
-	// subscribers. epoch is checked as in EditMessage; [CodeBusy] when a turn is
+	// subscribers. p.Epoch is checked as in EditMessage; [CodeBusy] when a turn is
 	// running, [CodeBadRequest] when there is no response to retry.
-	RetryTurn(ctx context.Context, sess string, epoch uint64) error
+	//
+	// p.Guidance, when set, steers that generation with a one-turn cue (and, unless
+	// p.IgnorePrior, the withdrawn take) instead of resampling blind. It takes the
+	// whole params struct rather than a widening argument list because that is the
+	// growth this verb keeps doing.
+	RetryTurn(ctx context.Context, sess string, p TurnRetryParams) error
 
 	// Approve resolves a pending tool-approval round-trip previously surfaced
 	// as an [EventPermissionRequest] event with the matching callID. The first
@@ -365,6 +370,13 @@ type SessionInfo struct {
 	// client renders and edits it in the steering surface; empty for a coding
 	// session or a World with no lore yet.
 	WorldLore []WorldLoreEntry `json:"world_lore,omitempty"`
+	// ScenePinStale is how many messages have played since the pinned
+	// scene-state card was last written (SD6); 0 when it is current, absent
+	// when the session has no pin. The pin is the one entry whose frame tells
+	// the model to trust it over disagreeing history, and nothing keeps it
+	// current on its own — so a client badges the drift and offers to run the
+	// doctor rather than letting a stale card quietly outrank the scene.
+	ScenePinStale int `json:"scene_pin_stale,omitempty"`
 	// Coordination is the World's meta-narrator mode (W3, set via world.set):
 	// "" auto, "off", or "focus:<roster name>". Meaningful only for a chat
 	// World with a roster.

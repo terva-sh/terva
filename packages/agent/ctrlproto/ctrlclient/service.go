@@ -67,8 +67,8 @@ func (s *Service) SwipeMessage(ctx context.Context, sess string, epoch uint64, i
 	return s.c.Call(ctx, sess, ctrlproto.MethodTurnSwipe, ctrlproto.TurnSwipeParams{Epoch: epoch, Variant: variant, Index: &index}, nil)
 }
 
-func (s *Service) RetryTurn(ctx context.Context, sess string, epoch uint64) error {
-	return s.c.Call(ctx, sess, ctrlproto.MethodTurnRetry, ctrlproto.TurnRetryParams{Epoch: epoch}, nil)
+func (s *Service) RetryTurn(ctx context.Context, sess string, p ctrlproto.TurnRetryParams) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodTurnRetry, p, nil)
 }
 
 func (s *Service) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
@@ -318,6 +318,18 @@ func (s *Service) CardsDelete(ctx context.Context, p ctrlproto.CardDeleteParams)
 func (s *Service) CardsExport(ctx context.Context, p ctrlproto.CardExportParams) (ctrlproto.CardExport, error) {
 	var r ctrlproto.CardExport
 	err := s.c.Call(ctx, "", ctrlproto.MethodCardsExport, p, &r)
+	return r, err
+}
+
+// Session export is forwarded rather than exempted as web-only: rendering the
+// story server-side was chosen precisely so every client gets the same one, and
+// a TUI that can already write a .tervasession has every reason to write a
+// readable transcript too.
+var _ ctrlproto.ExportController = (*Service)(nil)
+
+func (s *Service) SessionsExport(ctx context.Context, sess string, p ctrlproto.SessionExportParams) (ctrlproto.SessionExport, error) {
+	var r ctrlproto.SessionExport
+	err := s.c.Call(ctx, sess, ctrlproto.MethodSessionsExport, p, &r)
 	return r, err
 }
 
