@@ -103,7 +103,7 @@ just install      # into $GOBIN (else $GOPATH/bin)
 
 ### Prebuilt binaries
 
-Every release on the [releases page](https://github.com/terva-sh/terva/releases) ships archives for Linux, macOS, and Windows on amd64 and arm64 (except windows/arm64), plus a `checksums.txt` file. Each platform comes in two builds: **`terva`** (full — every feature compiled in, including the ACP editor mode; what the one-liner installs) and **`terva-min`** (lean — chat connectors left out). Both unpack the same `terva` command. Download, verify, `chmod +x`, and drop on your `$PATH`.
+Every release on the [releases page](https://github.com/terva-sh/terva/releases) ships archives for Linux, macOS, and Windows on amd64 and arm64 (except windows/arm64), plus a `checksums.txt` file. Each platform comes in two builds: **`terva`** (full — every feature compiled in, including the ACP editor mode; what the one-liner installs) and **`terva-min`** (lean — chat connectors left out). Both unpack the same `terva` command. Download, verify, `chmod +x`, and drop on your `$PATH`. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
 
 ## Authenticate
 
@@ -162,6 +162,7 @@ terva --help
 | [docs/resource-limits.md](docs/resource-limits.md) | Bounding what a session can spend: turns, tokens, cost, and wall-clock |
 | [docs/profiling.md](docs/profiling.md) | Performance-profiling the harness: the `terva_pprof` dev build, pprof/`GODEBUG` capture, and reading a TUI CPU profile |
 | [docs/fork.md](docs/fork.md) | Lineage: how terva relates to zot, and the compatibility promises | <!-- rename:keep -->
+| [CHANGELOG.md](CHANGELOG.md) | What changed in every released version, newest first |
 
 ## Development
 

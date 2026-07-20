@@ -442,10 +442,15 @@ default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
 `/`.
 
 - **A distinct app, one daemon.** Stage is its own composition root and its own
-  installable PWA (its own name/icon, `start_url`/`scope` `/stage/`), not a third
-  view mode of the panel. It shares the panel's transport, auth gate, and embed —
-  one `/ws`, one login. Its shell is auth-gated exactly like the panel, so like
-  the panel **nothing under `/stage/` is service-worker-precached**.
+  installable, offline-capable PWA (`start_url`/`scope` `/stage/`; it reuses the
+  terva app icons until it earns its own), not a third view mode of the panel. It
+  shares the panel's transport, auth gate, and embed — one `/ws`, one login.
+  Exactly like the panel, Stage's **bundle, service worker, manifests, and icons
+  are served ungated under `/stage/`** so the `/stage/`-scoped worker can precache
+  them (a precache entry the client cannot fetch is a worker that cannot install),
+  while its **shell (`stage.html`) stays auth-gated** so an unauthenticated
+  navigation answers with the login form. See `packages/agent/web/assets.go`
+  (`stagePwaShellPaths`) and `stage_sw_gate_test.go`.
 - **What it is made of.** Immersive sessions are ordinary sessions carrying an
   *experience* — `chat` (pure conversation, no tools) or `play` (embodied in a
   world via extension/MCP tools) — created next to coding sessions in the same
