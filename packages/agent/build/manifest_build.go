@@ -65,7 +65,9 @@ func (r *Resolved) tailSegments(msgs []provider.Message) []PromptSegment {
 	if len(r.loreTriggered) > 0 {
 		fired := lore.Select(r.loreTriggered, r.loreConfig, recentLoreScan(msgs), lore.ApproxTokens).All()
 		if block := lore.Render(fired); block != "" {
-			segs = append(segs, PromptSegment{Source: loreFiredLabel(fired), Text: block})
+			// Framed exactly as tailProvider frames it: the dump's whole promise is
+			// that it shows what would be injected, and the frame is injected.
+			segs = append(segs, PromptSegment{Source: loreFiredLabel(fired), Text: loreReferenceFrame(block)})
 		}
 	}
 	if r.postHistory != "" {

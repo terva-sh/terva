@@ -18,19 +18,19 @@ func freshHome(t *testing.T) string {
 	return home
 }
 
-// The embedded crew is the 14 personas (Mieli + 7 review specialists +
+// The embedded crew is the 16 personas (Mieli + 7 review specialists +
 // Kertoja the play director + Seppä the card doctor + Toimittaja the
-// character editor + the 3 raati panelists); the team READMEs are not
-// personas.
+// character editor + Dramaturgi the session doctor + Kartoittaja the
+// creator + the 3 raati panelists); the team READMEs are not personas.
 func TestEmbeddedCrew(t *testing.T) {
 	freshHome(t)
 	got := listEmbeddedPersonas()
-	if len(got) != 14 {
+	if len(got) != 16 {
 		names := make([]string, len(got))
 		for i, p := range got {
 			names[i] = p.Name
 		}
-		t.Fatalf("embedded crew: got %d personas %v, want 14", len(got), names)
+		t.Fatalf("embedded crew: got %d personas %v, want 16", len(got), names)
 	}
 	by := map[string]Persona{}
 	for _, p := range got {
@@ -51,6 +51,16 @@ func TestEmbeddedCrew(t *testing.T) {
 		t.Error("Kertoja (the play director) missing from embedded crew")
 	} else if !k.Immersive {
 		t.Error("Kertoja should be immersive")
+	}
+	// Kartoittaja must stay ADDITIVE. Immersive routes the charter through
+	// o.Custom, which SystemSegments takes as a raw replace — skipping
+	// conventions() and with it immersiveCraft, whose "at most one question,
+	// invent rather than ask" lever the creator's convergence phase depends on.
+	// Setting the flag here would silently defeat the charter.
+	if k, ok := by["Kartoittaja"]; !ok {
+		t.Error("Kartoittaja (the creator) missing from embedded crew")
+	} else if k.Immersive {
+		t.Error("Kartoittaja must NOT be immersive: it would lose the craft guards")
 	}
 	if y, ok := by["YATA-1"]; !ok {
 		t.Error("YATA-1 (the raati truth panelist) missing from embedded crew")

@@ -8,18 +8,24 @@ import (
 )
 
 // dispatchablePersonas includes only personas with a non-empty good_for: the
-// embedded crew's 7 review specialists qualify; the default Mieli (no good_for)
-// does not.
+// embedded crew's 7 review specialists qualify (plus the Stage four — Seppä,
+// Toimittaja, Dramaturgi, and Kartoittaja); the default Mieli (no good_for)
+// does not, and neither does Kertoja.
+//
+// Note the conflation this pins: dispatchability is inferred from good_for,
+// which is also just a display field in Stage's persona sheet. That is why the
+// Stage personas appear in a CODING agent's swarm roster at all — harmless
+// (dispatching one is a no-op, not a hazard) but not intended.
 func TestDispatchablePersonas(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("TERVA_PERSONA_NAME", "")
 	ds := dispatchablePersonas()
-	if len(ds) != 9 {
+	if len(ds) != 11 {
 		names := make([]string, len(ds))
 		for i, p := range ds {
 			names[i] = p.Name
 		}
-		t.Fatalf("dispatchable: got %d %v, want 9 (Mieli excluded)", len(ds), names)
+		t.Fatalf("dispatchable: got %d %v, want 11 (Mieli excluded)", len(ds), names)
 	}
 	for _, p := range ds {
 		if p.Name == "Mieli" {
