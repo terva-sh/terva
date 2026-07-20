@@ -297,3 +297,30 @@ func TestActorSpawn_Validation(t *testing.T) {
 		t.Error("empty situation should error")
 	}
 }
+
+// Worlds W6: the actor's audience-filtered World-lore block rides its task —
+// rendered per dispatch, appended after the situation, name substituted into
+// the heading. No source or an empty render leaves the task untouched.
+func TestActorSpawn_ComposeTaskWorldLore(t *testing.T) {
+	bare := &ActorSpawnTool{}
+	if got := bare.composeTask("aava", "the door opens"); !strings.Contains(got, "the door opens") || strings.Contains(got, "knows of the world") {
+		t.Errorf("no lore source should leave the task bare: %q", got)
+	}
+
+	tool := &ActorSpawnTool{WorldLore: func(actor, situation string) string {
+		if actor == "aava" && situation == "the door opens" {
+			return "- The vault key is hidden in the well."
+		}
+		return ""
+	}}
+	got := tool.composeTask("aava", "the door opens")
+	if !strings.Contains(got, "What aava knows of the world") {
+		t.Errorf("heading should name the actor: %q", got)
+	}
+	if !strings.Contains(got, "The vault key is hidden in the well.") {
+		t.Errorf("lore block should ride the task: %q", got)
+	}
+	if got := tool.composeTask("rook", "the door opens"); strings.Contains(got, "vault key") {
+		t.Errorf("an out-of-audience actor must not receive the block: %q", got)
+	}
+}

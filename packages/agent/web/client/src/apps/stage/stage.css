@@ -135,6 +135,28 @@ button:disabled {
   outline: none;
   border-color: var(--stage-accent);
 }
+/* Cross-nav back to the control panel (served at /). A real <a> so it opens in a
+   new tab on middle-click; styled to sit quietly beside the theme picker. */
+.stage-nav-link {
+  font-size: 0.8rem;
+  color: var(--stage-muted);
+  text-decoration: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+  white-space: nowrap;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.stage-nav-link:hover {
+  color: var(--stage-fg);
+  border-color: var(--stage-accent);
+}
+/* Icon-only variant, for the lean chat header where space is tight. */
+.stage-nav-link--icon {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.95rem;
+  line-height: 1.2;
+}
 
 /* --- library --- */
 
@@ -173,6 +195,15 @@ button:disabled {
 }
 .stage-error {
   color: #d67a6a;
+  /* Importing a multi-file selection reports one problem per line. */
+  white-space: pre-line;
+}
+
+/* A non-fatal import note (a downscaled portrait): the card is IN the library,
+   so this must not read as the red of a failure. */
+.stage-note {
+  color: var(--stage-muted);
+  font-size: 0.85rem;
 }
 
 /* Import a card from a remote URL — a compact row under the Characters head. */
@@ -251,6 +282,45 @@ button:disabled {
 .stage-user-desc::placeholder,
 .stage-user-name::placeholder {
   color: var(--stage-muted);
+}
+
+/* Gender / pronouns — an inclusive dropdown per field (each with an "Other…"
+   free-text escape), in a two-column row under the description. */
+.stage-identity-row {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+.stage-identity {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.stage-identity__label {
+  font-size: 0.75rem;
+  color: var(--stage-muted);
+}
+.stage-identity__select,
+.stage-identity__other {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--stage-fg);
+  background: var(--stage-surface);
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+}
+.stage-identity__other {
+  margin-top: 0.25rem;
+}
+.stage-identity__select:focus,
+.stage-identity__other:focus {
+  outline: none;
+  border-color: var(--stage-accent);
 }
 
 /* Saved user personas — reusable "who I am" identities (chips to swap between, a
@@ -734,6 +804,23 @@ button:disabled {
   background: var(--stage-surface);
   color: var(--stage-fg);
   cursor: pointer;
+}
+/* Delete sits under Export deliberately: exporting is the thing you might want
+   to do FIRST, and the order says so. Muted at rest like every other destructive
+   control in Stage, taking the shared #d67a6a only on hover. */
+.stage-sheet__delete {
+  width: 100%;
+  margin-top: 0.4rem;
+  padding: 0.6rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--stage-muted);
+  cursor: pointer;
+}
+.stage-sheet__delete:hover {
+  color: #d67a6a;
+  border-color: #d67a6a;
 }
 
 /* --- character detail sheet (CardSheet) --- */
@@ -1362,7 +1449,11 @@ button:disabled {
 .stage-transcript {
   flex: 1;
   overflow-y: auto;
-  padding: 1rem 0;
+  /* Right padding keeps rows (and an edit box's action row) clear of the
+     scrollbar; scrollbar-gutter reserves it where the platform draws a classic
+     bar. */
+  padding: 1rem 0.5rem 1rem 0;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -1381,6 +1472,17 @@ button:disabled {
 .stage-row--user {
   align-self: flex-end;
   flex-direction: row-reverse;
+}
+/* Editing is a focused state: the row spans the pane and its body grows so the
+   edit box is a comfortable width — not crammed into the message's bubble
+   footprint (which pinned it to the textarea's min-width). */
+.stage-row--editing {
+  max-width: 100%;
+  width: 100%;
+}
+.stage-row--editing .stage-row__body {
+  flex: 1;
+  min-width: 0;
 }
 .stage-row__body {
   display: flex;
@@ -1489,17 +1591,22 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  width: 100%;
 }
 .stage-edit textarea {
-  min-width: 16rem;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   min-height: 4rem;
+  max-height: 40vh; /* matches the composer; JS auto-grows to fit, then scrolls */
+  overflow-y: auto;
   padding: 0.5rem;
   background: var(--stage-surface);
   color: var(--stage-fg);
   border: 1px solid var(--stage-accent);
   border-radius: 8px;
   font: inherit;
-  resize: vertical;
+  resize: none;
 }
 .stage-edit__actions {
   display: flex;
@@ -1539,6 +1646,21 @@ button:disabled {
 .stage-edit__prune:hover {
   color: var(--stage-accent) !important;
 }
+/* Delete sits with the other secondary actions rather than being tinted red at
+   rest — it is one of several things you can do to a message, not a hazard the
+   row has to shout about. The destructive colour (the same #d67a6a the chat and
+   persona deletes use) arrives on hover, once you are actually pointing at it. */
+.stage-edit__delete {
+  background: var(--stage-surface-2) !important;
+  color: var(--stage-muted) !important;
+  font-weight: 500 !important;
+}
+.stage-edit__delete:hover:not(:disabled) {
+  color: #d67a6a !important;
+}
+.stage-edit__delete:disabled {
+  opacity: 0.45;
+}
 
 .stage-row--tool,
 .stage-row--note {
@@ -1557,6 +1679,36 @@ button:disabled {
   font-size: 0.8rem;
   letter-spacing: 0.02em;
   color: var(--stage-accent);
+}
+/* A directed line (Phase 6): the user authored it into the scene. Its 🎭 name
+   already reads as attribution; a soft accent rail sets it apart from a model
+   turn without shouting. */
+.stage-row--directed .stage-row__name {
+  color: var(--stage-accent);
+}
+.stage-row--directed .stage-bubble {
+  border-left: 2px solid var(--stage-accent);
+}
+/* A ROUTED line (Worlds W3): the meta-narrator chose who this beat belonged to
+   and the model wrote it. Attributed like a directed line, but authored by the
+   machine, not by you — so it takes the muted rail rather than the accent one.
+   The two used to share a class and were indistinguishable on screen, which
+   made it impossible to see which beats of a scene you had actually written. */
+.stage-row--routed .stage-row__name {
+  color: var(--stage-muted);
+}
+.stage-row--routed .stage-bubble {
+  border-left: 2px dashed var(--stage-line);
+}
+/* A [Direction] steer (Phase 6b / cast.speak): the user directed the story
+   out-of-character. De-emphasized and centered — a stage cue, not dialogue. */
+.stage-row--direction {
+  align-self: center;
+  max-width: 85%;
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--stage-muted);
+  text-align: center;
 }
 .stage-divider {
   align-self: center;
@@ -1601,6 +1753,140 @@ button:disabled {
 .stage-cast-strip__actor:disabled {
   color: var(--stage-muted);
   cursor: default;
+}
+
+/* --- working indicator --- */
+
+/* The bottom-of-screen "something is happening" signal. Deliberately outside the
+   transcript so it cannot scroll out of view, and driven off busy rather than
+   streaming so it covers the pre-first-token wait the caret never did. */
+.stage-working {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.15rem 0.1rem 0.35rem;
+  color: var(--stage-muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.stage-working__dots {
+  display: inline-flex;
+  gap: 0.22rem;
+}
+.stage-working__dots i {
+  width: 0.34rem;
+  height: 0.34rem;
+  border-radius: 50%;
+  background: var(--stage-accent);
+  animation: stage-throb 1.2s ease-in-out infinite;
+}
+.stage-working__dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.stage-working__dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes stage-throb {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-0.12rem);
+  }
+}
+/* Respect a reduced-motion preference: keep the signal, drop the movement. */
+@media (prefers-reduced-motion: reduce) {
+  .stage-working__dots i {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+/* --- blocked-turn prompts (tool approval / a question) --- */
+
+/* Sits directly above the composer, where the answer is expected. Accent-edged
+   because the turn is STOPPED until it is answered — this is not ambient chrome. */
+.stage-interact {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--stage-surface);
+  border: 1px solid var(--stage-accent);
+  border-radius: 10px;
+}
+.stage-interact__head {
+  font-size: 0.9rem;
+  color: var(--stage-fg);
+}
+.stage-interact__head code {
+  color: var(--stage-accent);
+}
+.stage-interact__preview {
+  margin: 0;
+  max-height: 30vh;
+  overflow: auto;
+  padding: 0.5rem;
+  background: var(--stage-surface-2);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.stage-interact__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.stage-interact button {
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-interact button:hover:not(:disabled) {
+  border-color: var(--stage-accent);
+}
+.stage-interact button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.stage-interact__go {
+  background: var(--stage-accent) !important;
+  color: #1a1509 !important;
+  border-color: transparent !important;
+  font-weight: 600;
+}
+.stage-interact__deny {
+  color: #e6a6a6 !important;
+}
+.stage-interact__custom {
+  display: flex;
+  gap: 0.5rem;
+}
+.stage-interact__custom input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  background: rgba(23, 22, 19, 0.9);
+  color: var(--stage-fg);
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.85rem;
 }
 
 .stage-composer {
@@ -1650,6 +1936,46 @@ button:disabled {
 .stage-composer .stage-suggest-btn:hover {
   border-color: var(--stage-accent);
 }
+/* Advance (▶) — the sibling of ✨: secondary chrome like it, since neither is the
+   primary Send action. Disabled while a turn is in flight. */
+.stage-composer .stage-advance-btn {
+  align-self: flex-end;
+  background: rgba(23, 22, 19, 0.9);
+  color: var(--stage-fg);
+  border: 1px solid var(--stage-line);
+  font-weight: 400;
+  padding: 0.55rem 0.7rem;
+  font-size: 1.05rem;
+  transition: border-color 0.12s ease, opacity 0.12s ease;
+}
+.stage-composer .stage-advance-btn:hover:not(:disabled) {
+  border-color: var(--stage-accent);
+}
+.stage-composer .stage-advance-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.stage-composer .stage-advance-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* Stop — takes Send's slot while a turn runs. Reads as an interrupt, not an
+   accent action, so it does not look like the way to proceed. */
+.stage-composer .stage-stop-btn {
+  align-self: flex-end;
+  background: rgba(23, 22, 19, 0.9);
+  color: #e6a6a6;
+  border: 1px solid #7a4a4a;
+  font-weight: 600;
+  padding: 0.55rem 1rem;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.stage-composer .stage-stop-btn:hover {
+  border-color: #e6a6a6;
+  color: #f0c0c0;
+}
+.stage-composer .stage-stop-btn:active {
+  transform: scale(0.97);
+}
 
 .stage-suggest {
   width: 100%;
@@ -1676,6 +2002,97 @@ button:disabled {
   margin: 0 0 0.6rem;
   color: var(--stage-muted);
   font-size: 0.85rem;
+}
+/* Directed-authorship target picker (Phase 6): Me / Character / Narrator / Direct.
+   Wraps to two rows on a narrow modal rather than crushing four labels. */
+.stage-suggest__target {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+.stage-suggest__target button {
+  flex: 1 1 auto;
+  min-width: 5.5rem;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+  color: var(--stage-fg);
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.stage-suggest__target button.is-active {
+  color: #1a1509;
+  background: var(--stage-accent);
+  border-color: var(--stage-accent);
+  font-weight: 600;
+}
+.stage-suggest__target button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.stage-suggest__voice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+.stage-suggest__voice input,
+.stage-suggest__card-pick {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  font: inherit;
+  color: var(--stage-fg);
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+}
+/* Worlds W1: the note shown when a library card is voicing the actor. */
+.stage-suggest__card-note {
+  margin: 0.1rem 0 0;
+  font-size: 0.82rem;
+  color: var(--stage-muted);
+}
+/* Worlds W2: the on-stage roster quick-picks + keep-on-stage. */
+.stage-suggest__roster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+.stage-suggest__roster-label {
+  font-size: 0.75rem;
+  color: var(--stage-muted);
+}
+.stage-suggest__roster-chip {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.82rem;
+  color: var(--stage-accent);
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 999px;
+}
+.stage-suggest__roster-chip.is-active {
+  color: #1a1509;
+  background: var(--stage-accent);
+  border-color: var(--stage-accent);
+}
+.stage-suggest__card-chosen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.stage-suggest__keep {
+  flex: 0 0 auto;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.82rem;
+  color: var(--stage-accent);
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
 }
 .stage-suggest__note {
   width: 100%;
@@ -1832,6 +2249,45 @@ button:disabled {
   color: var(--stage-muted);
   font-size: 1rem;
 }
+/* Drawer tabs: Session / You / Scene. Splits what used to be one long scroll so
+   each group is a glance rather than a hunt. Sticky so it stays reachable while
+   a tab's own content scrolls under it. */
+.stage-drawer__tabs {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 0.25rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--stage-line);
+  background: var(--stage-bg);
+}
+.stage-drawer__tab {
+  flex: 1;
+  border: none;
+  background: none;
+  color: var(--stage-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.stage-drawer__tab:hover {
+  color: var(--stage-fg);
+  background: var(--stage-surface-2);
+}
+.stage-drawer__tab--on {
+  color: var(--stage-accent);
+  border-bottom-color: var(--stage-accent);
+  font-weight: 600;
+}
+.stage-drawer__tab:active {
+  transform: scale(0.97);
+}
+/* The first section in a tab sits right under the tab strip. */
 .stage-drawer__section {
   margin-top: 1.5rem;
 }
@@ -1861,12 +2317,52 @@ button:disabled {
 .stage-detail dd {
   margin: 0;
 }
+/* The Title row carries inline rename (✎) and regenerate (✨) actions. */
+.stage-detail__title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.stage-detail__title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-title-btn {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--stage-accent);
+  cursor: pointer;
+  padding: 0.1rem 0.2rem;
+  line-height: 1;
+  border-radius: 4px;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.stage-title-btn:hover {
+  color: var(--stage-fg);
+  background: var(--stage-surface-2);
+}
+.stage-title-btn:active {
+  transform: scale(0.9);
+}
 
 /* Model picker (in the Session block): the read-only model line, upgraded to a
    live switcher. The current model is a tappable field; tapping expands a
    provider-grouped list that switches the session live (models.switch). */
 .stage-modelpick {
   margin-top: 0.6rem;
+}
+/* The per-generation model picker (Phase 7) reused inside the suggest + doctor
+   panels — the picker brings its own styling; these just seat its wrapper. */
+.stage-suggest__model,
+.stage-doctor__model {
+  margin: 0.1rem 0 0.4rem;
+}
+.stage-suggest__model .stage-modelpick,
+.stage-doctor__model .stage-modelpick {
+  margin-top: 0;
 }
 .stage-modelpick__head {
   display: flex;
@@ -1890,14 +2386,31 @@ button:disabled {
   background: var(--stage-surface-2);
   border: 1px solid var(--stage-line);
   border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 .stage-modelpick__current:hover {
+  border-color: var(--stage-accent);
+}
+.stage-modelpick__current:active {
+  background: var(--stage-surface);
   border-color: var(--stage-accent);
 }
 .stage-modelpick__cur-id {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The current model's provider, on the collapsed button. Yields before the model
+   id does (the id is the primary identity) but stays legible on a narrow drawer. */
+.stage-modelpick__cur-prov {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.7rem;
+  color: var(--stage-muted);
 }
 .stage-modelpick__caret {
   flex: 0 0 auto;
@@ -1914,11 +2427,44 @@ button:disabled {
   padding: 0.3rem;
 }
 .stage-modelpick__provider {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   padding: 0.35rem 0.4rem 0.2rem;
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--stage-muted);
+}
+/* Provenance on a favorites row: which backend this model id actually reaches.
+   Shrinkable (min-width:0) so a long provider name yields to the model id rather
+   than pushing the context-window meta out of the row. */
+.stage-modelpick__prov {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.7rem;
+  color: var(--stage-muted);
+}
+/* Billing mode. Subscription is tinted (it is the one you usually want to spend
+   first); metered stays muted so it reads as the neutral default, not a warning. */
+.stage-modelpick__auth {
+  flex: 0 0 auto;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-radius: 4px;
+  border: 1px solid var(--stage-line);
+  color: var(--stage-muted);
+  cursor: help;
+}
+.stage-modelpick__auth--oauth {
+  color: var(--stage-accent);
+  border-color: rgba(201, 164, 90, 0.5);
+  background: rgba(201, 164, 90, 0.12);
 }
 .stage-modelpick__row {
   display: flex;
@@ -1927,9 +2473,13 @@ button:disabled {
   padding: 0.35rem 0.4rem;
   border-radius: 6px;
   cursor: pointer;
+  transition: background 0.1s ease;
 }
 .stage-modelpick__row:hover {
   background: var(--stage-surface);
+}
+.stage-modelpick__row:active {
+  background: rgba(201, 164, 90, 0.24);
 }
 .stage-modelpick__row--current {
   background: rgba(201, 164, 90, 0.14);
@@ -1946,9 +2496,14 @@ button:disabled {
   font-size: 0.85rem;
   color: var(--stage-muted);
   line-height: 1;
+  cursor: pointer;
+  transition: color 0.12s ease, transform 0.08s ease;
 }
 .stage-modelpick__star:hover {
   color: var(--stage-accent);
+}
+.stage-modelpick__star:active {
+  transform: scale(0.82);
 }
 .stage-modelpick__id {
   flex: 1;
@@ -2002,7 +2557,22 @@ button:disabled {
 }
 .stage-cast-add {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.4rem;
+}
+/* Per-actor model pin (Phase 7): the pinned-model chip on a roster row, and the
+   select-mode picker seated full-width below the name/ref/Add row. */
+.stage-cast__model {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  color: var(--stage-accent);
+  white-space: nowrap;
+}
+.stage-cast-add__model {
+  flex: 1 0 100%;
+}
+.stage-cast-add__model .stage-modelpick {
+  margin-top: 0.1rem;
 }
 .stage-cast-add__name,
 .stage-cast-add__ref {
@@ -2099,6 +2669,49 @@ button:disabled {
   border-color: var(--stage-accent);
   box-shadow: 0 0 0 1px var(--stage-accent);
 }
+/* A tile plus its remove control. The cell is the grid item now, so the tile has
+   to fill it rather than be sized by the column directly. */
+.stage-bg-cell {
+  position: relative;
+}
+.stage-bg-cell .stage-bg-tile {
+  display: block;
+  width: 100%;
+}
+/* Hidden until the tile is hovered or the control is focused — the grid is for
+   picking a scene, and a row of ✕s reads as a management screen. Always visible
+   on touch, where there is no hover to reveal it (same treatment as the chat-row
+   delete). */
+.stage-bg-cell__del {
+  position: absolute;
+  top: 0.2rem;
+  right: 0.2rem;
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--stage-surface);
+  color: var(--stage-muted);
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.stage-bg-cell:hover .stage-bg-cell__del,
+.stage-bg-cell__del:focus-visible {
+  opacity: 1;
+}
+.stage-bg-cell__del:hover {
+  color: #d67a6a;
+  border-color: #d67a6a;
+}
+@media (hover: none) {
+  .stage-bg-cell__del {
+    opacity: 1;
+  }
+}
 
 .stage-lore {
   list-style: none;
@@ -2163,4 +2776,519 @@ button:disabled {
   white-space: pre-wrap;
   max-height: 6rem;
   overflow-y: auto;
+}
+
+/* The World tab (Worlds W2): the editable World-lore list + its entry form.
+   Entries reuse the read-only lorebook chips (.stage-lore__key/__const/__content);
+   only the head row (name + edit/delete) and the form are new. */
+.stage-worldlore {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.stage-worldlore__entry {
+  padding: 0.5rem 0.65rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+}
+.stage-worldlore__head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+.stage-worldlore__head .stage-lore__keys {
+  margin-bottom: 0;
+  flex: 1;
+  min-width: 0;
+}
+.stage-worldlore__name {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.stage-worldlore__act {
+  background: none;
+  border: none;
+  color: var(--stage-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0 0.15rem;
+}
+.stage-worldlore__act:hover {
+  color: var(--stage-fg);
+}
+.stage-worldlore-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.stage-worldlore-form__name,
+.stage-worldlore-form__keys,
+.stage-worldlore-form__content {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.85rem;
+}
+.stage-worldlore-form__name:focus,
+.stage-worldlore-form__keys:focus,
+.stage-worldlore-form__content:focus {
+  outline: none;
+  border-color: var(--stage-accent);
+}
+.stage-worldlore-form__content {
+  resize: vertical;
+}
+.stage-worldlore-form__always {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--stage-muted);
+}
+.stage-worldlore-form__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.stage-worldlore-form__save {
+  padding: 0.4rem 0.9rem;
+  background: var(--stage-accent);
+  color: var(--stage-bg);
+  border: none;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-worldlore-form__save:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.stage-worldlore-form__cancel {
+  padding: 0.4rem 0.9rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-muted);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+/* Audience scoping (L2): the 🔒 badge on a targeted entry + the form's chips. */
+.stage-worldlore__audience {
+  font-size: 0.72rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(214, 168, 106, 0.16);
+  color: #d6a86a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+}
+.stage-worldlore__model {
+  font-size: 0.72rem;
+}
+.stage-worldlore-form__audience {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.stage-worldlore-form__audience-label {
+  font-size: 0.8rem;
+  color: var(--stage-muted);
+}
+.stage-worldlore-form__audience-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.stage-worldlore-form__chip {
+  padding: 0.25rem 0.6rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 999px;
+  color: var(--stage-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-worldlore-form__chip--on {
+  border-color: var(--stage-accent);
+  color: var(--stage-accent);
+}
+
+/* Saved Worlds (W5): the Library shelf, the World sheet, the save form. */
+.stage-worlds {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.stage-world {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 0.8rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 10px;
+  color: var(--stage-fg);
+  cursor: pointer;
+  text-align: left;
+}
+.stage-world:hover {
+  border-color: var(--stage-accent);
+}
+.stage-world__icon {
+  font-size: 1.3rem;
+}
+.stage-world__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.stage-world__name {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.stage-world__meta {
+  font-size: 0.75rem;
+  color: var(--stage-muted);
+}
+.stage-worldsheet__chat {
+  padding: 0.25rem 0.7rem;
+  background: var(--stage-accent);
+  color: var(--stage-bg);
+  border: none;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-worldsheet__delete {
+  margin: 0.5rem 1rem 1rem;
+  padding: 0.4rem 0.9rem;
+  background: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  color: #d6a86a;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-world__cover {
+  width: 2.4rem;
+  height: 2.4rem;
+  object-fit: cover;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.stage-worldsheet__cover {
+  display: block;
+  width: calc(100% - 2rem);
+  max-height: 10rem;
+  object-fit: cover;
+  margin: 0 1rem 0.6rem;
+  border-radius: 10px;
+}
+.stage-worldedit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0 1rem 0.8rem;
+}
+.stage-worldedit__name,
+.stage-worldedit__desc {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  color: var(--stage-fg);
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.stage-worldedit__desc {
+  min-height: 3.2rem;
+  resize: vertical;
+}
+.stage-worldedit__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.stage-worldedit__save {
+  padding: 0.35rem 0.9rem;
+  background: var(--stage-accent);
+  color: var(--stage-bg);
+  border: none;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-worldedit__save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.stage-worldedit__cancel {
+  padding: 0.35rem 0.9rem;
+  background: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  color: var(--stage-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-worldsheet__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 1rem 0;
+}
+.stage-worldsheet__play,
+.stage-worldsheet__export,
+.stage-worldsheet__coverbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.9rem;
+  background: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  color: var(--stage-fg);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-worldsheet__play:hover,
+.stage-worldsheet__export:hover,
+.stage-worldsheet__coverbtn:hover {
+  border-color: var(--stage-accent);
+}
+.stage-worldsave {
+  display: flex;
+  gap: 0.5rem;
+}
+.stage-worldsave__name {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.85rem;
+}
+.stage-worldsave__name:focus {
+  outline: none;
+  border-color: var(--stage-accent);
+}
+.stage-worldsave__go {
+  padding: 0.4rem 0.9rem;
+  background: var(--stage-accent);
+  color: var(--stage-bg);
+  border: none;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-worldsave__go:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The editor sheet (W4): ✏️ enrich a character's card from the scene. */
+.stage-enrich {
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.65rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.stage-enrich__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.stage-enrich__title {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.stage-enrich__proposal {
+  border-top: 1px solid var(--stage-line);
+  padding-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.stage-enrich__proposal--declined {
+  opacity: 0.6;
+}
+.stage-enrich__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.stage-enrich__field {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--stage-accent);
+}
+.stage-enrich__why {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  color: var(--stage-muted);
+}
+.stage-enrich__verdict {
+  background: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  color: var(--stage-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.05rem 0.4rem;
+}
+.stage-enrich__verdict--on {
+  border-color: #7fbf8a;
+  color: #7fbf8a;
+}
+.stage-enrich__verdict--off {
+  border-color: #d6a86a;
+  color: #d6a86a;
+}
+.stage-enrich__text {
+  margin: 0;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 8rem;
+  overflow-y: auto;
+  border-radius: 6px;
+  background: var(--stage-bg);
+}
+.stage-enrich__text--before {
+  color: var(--stage-muted);
+  text-decoration: line-through;
+  opacity: 0.7;
+  max-height: 4rem;
+}
+.stage-enrich__text--after {
+  border-left: 2px solid #7fbf8a;
+}
+.stage-enrich__reason {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.35rem 0.45rem;
+  background: var(--stage-bg);
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.78rem;
+}
+.stage-enrich__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* The meta-narrator setting (W3): who answers a normal turn in this World. */
+.stage-coordination {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+}
+.stage-coordination__label {
+  font-size: 0.8rem;
+  color: var(--stage-muted);
+}
+.stage-coordination__select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+/* --- persona editor (writable sibling of PersonaSheet) --- */
+
+.stage-personaeditor__head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+.stage-personaeditor__head h3 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-personaeditor__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  overflow-y: auto;
+}
+/* A name that would collide or produce no filename. Warning-coloured but not an
+   error banner: nothing has failed yet, and the Save button is already disabled
+   — this says why. */
+.stage-personaeditor__warn {
+  margin: -0.3rem 0 0;
+  font-size: 0.78rem;
+  color: #d6a86a;
+}
+/* The filename a persona will take. Shown only while creating, where the name is
+   still in play — an edit cannot change its own slug. */
+.stage-personaeditor__slug {
+  margin: -0.3rem 0 0;
+  font-size: 0.72rem;
+  color: var(--stage-muted);
+}
+.stage-personaeditor__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--stage-muted);
+}
+.stage-personaeditor__check input {
+  margin-top: 0.15rem;
+}
+/* Same sticky footer as the card editor: opaque, bordered, floating over the
+   scrolling fields. Reuses the card editor's button classes rather than cloning
+   them — only the bar itself needs its own selector. */
+.stage-personaeditor__bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  background: var(--stage-surface);
+  border-top: 1px solid var(--stage-line);
 }

@@ -218,7 +218,5 @@ func TestCastSpeak(t *testing.T) {
 	}
 	close(cl.release)
 	drainUntil(t, sub, "done")
-	if s.busy() {
-		t.Error("turn should be done after release")
-	}
+	waitIdle(t, s)
 }

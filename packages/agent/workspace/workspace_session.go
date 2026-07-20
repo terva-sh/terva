@@ -50,6 +50,7 @@ type wsSession struct {
 	loreEntries []lore.Entry           // discovered lore, for the lore inspector pane (nil when lore off)
 	note        *build.NoteRecord      // live author's-note record (nil for a coding session); note.set writes it, the per-turn tail reads it
 	user        *build.NoteRecord      // live user-persona description record (nil for a coding session); user.bind writes it, the per-turn tail reads it
+	worldLore   *build.WorldLoreRecord // live World-lore record (nil for a coding session); world.lore.* writes it, the per-turn tail scans it
 	loreFired   *build.LoreFiredRecord // the last turn's lore activation trace (which entries fired, why, what the budget dropped); refreshed on reloadLore
 	// actorCast + warmActors back the --play director's actor_spawn tool: the
 	// closed declared cast and the live-actor cache that survives registry
@@ -176,6 +177,11 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	if sess.Meta.UserName != "" {
 		args.As = sess.Meta.UserName
 	}
+	// Gender/pronouns ride the uncached per-turn tail (the user-persona frame), not
+	// the {{user}} macro, so they thread through unconditionally — re-applied on
+	// every materialize, including a restart.
+	args.UserGender = sess.Meta.UserGender
+	args.UserPronouns = sess.Meta.UserPronouns
 
 	s := &wsSession{
 		id:       id,
@@ -244,6 +250,8 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "actor cast: %v", cerr)
 		}
 		if len(cast) > 0 {
+			// Overlay the persisted per-actor model pins (Phase 7) onto the built cast.
+			applyCastModels(cast, sess.Meta.CastModels)
 			s.actorCast = cast
 			s.warmActors = tools.NewWarmActors(tools.DefaultWarmActorCap)
 		}
@@ -279,6 +287,14 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	if ur := r.User(); ur != nil {
 		ur.Set(s.sess.Meta.UserDescription)
 		s.user = ur
+	}
+	// Retain the live World-lore record the same way — seeded from meta so
+	// world.lore.* edits update the entries the per-turn tail scans and the
+	// World's lore survives a restart. Audience-filtered (L2) for who the tail
+	// speaks for: the bound character in a chat, the director in play.
+	if wr := r.WorldLore(); wr != nil {
+		s.worldLore = wr
+		wr.Set(build.WorldLoreEntries(worldLoreFor(s.sess.Meta.WorldLore, s.tailLoreAudience())))
 	}
 	// Retain the lore activation-trace record the per-turn tail writes, so the
 	// lore surface and /context can show what fired last turn (reloadLore swaps
@@ -475,6 +491,15 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			OnSpawned: s.trackSwarmAgent,
 		}
 	}
+	// The model's World hands (Worlds W4b): the play director records world
+	// knowledge (world_note) and marks characters learning secrets
+	// (world_reveal). Play-only — chat is pure conversation (no tools), and
+	// these belong to the scene authority anyway. Bounded on purpose: append +
+	// reveal; edit/delete/promotion stay user verbs.
+	if s != nil && args.Experience == build.ExperiencePlay && !args.NoTools {
+		r.ToolRegistry["world_note"] = &worldNoteTool{s: s}
+		r.ToolRegistry["world_reveal"] = &worldRevealTool{s: s}
+	}
 	// actor_spawn: the --play director's cast-dispatch skin. Only when the cast
 	// was built (castSkinActive with a non-empty cast). Shares the session's
 	// warm-actor cache across rebuilds so the live scene survives a reload.
@@ -487,6 +512,13 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			HostProvider: r.Provider,
 			HostModel:    r.Model,
 			Tiers:        build.SwarmTierMap(cfg.SwarmTiers),
+			// Worlds W6: each dispatch renders the audience-filtered lore block
+			// for the named actor against the current situation + scene tail —
+			// the same L2 seam voiceLine uses in chat, so what an actor "knows"
+			// is governed by the one lorebook, not by which surface voices them.
+			WorldLore: func(actor, situation string) string {
+				return s.worldLoreBlock(situation, actor)
+			},
 		}
 	}
 	// raati_convene: convene a deliberation panel on a decisive question
@@ -574,7 +606,13 @@ func setupWebExtensions(ctx context.Context, args build.Args, r *build.Resolved,
 // prompt starts a turn. The turn's context is derived from the workspace (not a
 // client connection), so a client disconnecting mid-turn does not abort the run
 // other clients are watching. Returns ErrBusy if a turn is already running.
+// A chat World with a roster routes through the meta-narrator first (Worlds
+// W3, workspace_route.go); everything else — including the queue-restart path,
+// which re-enters here — is today's turn.
 func (s *wsSession) prompt(text string, images []ctrlproto.Image) error {
+	if s.shouldRoute(text, images) {
+		return s.routedTurn(text)
+	}
 	return s.promptBlocks(text, toImageBlocks(images))
 }
 
@@ -663,6 +701,11 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		// the header/list stop reading "new chat" without a page refresh. Uses the
 		// workspace context (not the turn's) so it survives turn teardown.
 		s.settleTitle(s.ws.ctx)
+		// A Stage session opens on the character's name (instant, free) and upgrades
+		// to a scene summary once there is a scene. Guarded to fire once, so this is
+		// a cheap no-op on every turn after it lands. Async: a title call must not
+		// hold up the turn's teardown or the auto-compact below.
+		go s.upgradeImmersiveTitle(s.ws.ctx)
 		// Post-turn auto-compact, mirroring the legacy TUI engine and the
 		// rpc/chat hosts: condense while idle so the NEXT prompt doesn't pay
 		// the summarization latency in PromptWithPolicy's pre-turn check. A
@@ -697,9 +740,20 @@ func (s *wsSession) retry(epoch uint64) error {
 	if err := s.reviseGuard(epoch); err != nil {
 		return err
 	}
-	idx := lastResponseStart(s.agent.Messages())
-	if idx <= 0 || idx >= len(s.agent.Messages()) {
+	msgs := s.agent.Messages()
+	idx := lastResponseStart(msgs)
+	if idx <= 0 || idx >= len(msgs) {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "nothing to retry")
+	}
+	// Refuse rather than silently destroy authored work. The retract span runs to
+	// the end of the transcript, so in a Stage scene it can contain directed lines
+	// the USER wrote (postDirected appends them as assistant messages). Those are
+	// not a model take to throw away and regenerate — and they were written in
+	// response to the take being retried, so keeping them across a regenerate would
+	// not be coherent either. Say so, and point at the two things that do work.
+	if n := directedCount(msgs[idx:]); n > 0 {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
+			"regenerating would discard %d line(s) you wrote into this scene. Delete them first if you meant to, or use advance to continue the scene instead", n)
 	}
 	turnCtx, err := s.beginTurn()
 	if err != nil {
@@ -720,6 +774,20 @@ func (s *wsSession) retry(epoch uint64) error {
 		return s.agent.Continue(ctx, nil)
 	}, s.seedTail)
 	return nil
+}
+
+// directedCount reports how many of msgs the user authored into the scene
+// (Stage's directed lines, tagged core.MetaDirected). A regenerate retracts a
+// whole span, so this is what tells retry whether that span is purely a model
+// take — the only thing it is allowed to throw away.
+func directedCount(msgs []provider.Message) int {
+	n := 0
+	for _, m := range msgs {
+		if m.Meta[core.MetaSource] == core.MetaDirected {
+			n++
+		}
+	}
+	return n
 }
 
 // lastResponseStart is the index where the last response span begins: just after
@@ -1331,10 +1399,20 @@ func (s *wsSession) dropVariant(epoch uint64, index, variant int) error {
 // re-derives the greeting text with the new {{user}} before calling this.
 func (s *wsSession) seedDeferredGreeting(sess *core.Session, greetings []string) {
 	greetingMsgs := make([]provider.Message, 0, len(greetings))
+	// Stamped like every other message, and like the CLI's own greeting seed
+	// (seedCardGreeting). Without it a deferred greeting persisted with a zero
+	// Time — "0001-01-01T00:00:00Z" as the opening beat of every Stage chat.
+	// Invisible in Stage, which draws no per-message times, but it is the first
+	// row in the file: anything that reads the session as a timeline (the player,
+	// a replay, a time-sorted export) starts two thousand years before the scene.
+	// Construction time, not flush time: the greeting enters the conversation when
+	// the chat opens and the user reads it, which is what the deferral is hiding.
+	now := time.Now()
 	for _, g := range greetings {
 		greetingMsgs = append(greetingMsgs, provider.Message{
 			Role:    provider.RoleAssistant,
 			Content: []provider.Content{provider.TextBlock{Text: g}},
+			Time:    now,
 			Meta:    map[string]string{"source": "card:greeting"},
 		})
 	}
@@ -1460,16 +1538,29 @@ func (s *wsSession) settleTitle(ctx context.Context) {
 		return
 	}
 	fallback := titleFromFirstText(first)
-	s.applyTitle(fallback)
 
-	// Immersive (Stage) sessions keep the instant first-line title and skip the
-	// LLM refinement: a generated title on roleplay reads as "User greets the elf
-	// innkeeper…", and it spends unasked tokens on a chat/play session. Titling by
-	// character name (+ counter) rides the Phase-2 library, which resolves a card's
-	// name; until then the opening line is a saner default than a narrated summary.
+	// Immersive (Stage) sessions title by the character name — not the player's
+	// first line (which reads as a stammered fragment) and not an LLM summary
+	// (which spends unasked tokens and reads as "User greets the elf innkeeper…").
+	// The design's "default title = character name"; resolve it from the bound
+	// card and fall back to the first line only when there is no card name to use.
 	if s.sess != nil && s.sess.Meta.Experience != "" {
+		title := fallback
+		if name := s.ws.cardName(s.sess.Meta.Card); name != "" {
+			title = name
+		}
+		// Provisional, not final. The character name is instant and free, which is
+		// what a chat needs the moment it opens — but every chat with the same
+		// character then carries the same title, and the Library draws the character
+		// name beside it anyway, so the row reads "Kobeni / Kobeni" and three chats
+		// with her are indistinguishable. upgradeImmersiveTitle replaces it once the
+		// scene has enough in it to summarize. applyTitle marks it machine-generated,
+		// which is what makes it replaceable (and a manual rename un-replaceable).
+		s.applyTitle(title)
 		return
 	}
+
+	s.applyTitle(fallback)
 
 	ok, cl, model := s.ws.titleGen(s)
 	if !ok || cl == nil {
@@ -1478,7 +1569,7 @@ func (s *wsSession) settleTitle(ctx context.Context) {
 	// The cascading seed (compaction anchor + recent exchanges) degenerates
 	// to the first user message here — settleTitle only ever runs on a
 	// still-untitled session, i.e. right after the first exchange.
-	gen := generateTitle(ctx, cl, model, core.BuildTitleSeed(s.agent.Messages(), core.TitleSeedBudget))
+	gen := generateTitle(ctx, cl, model, core.BuildTitleSeed(s.agent.Messages(), core.TitleSeedBudget), s)
 	if gen == "" {
 		return
 	}
@@ -1508,6 +1599,93 @@ func (s *wsSession) applyTitle(title string) {
 	s.broadcast(ctrlproto.SessionUpdatedEvent(s.info()))
 }
 
+// immersiveTitleUpgradeTurns is how many of the player's own messages a scene
+// needs before its title is worth generating. Two is too few — the opening
+// exchange is greetings and setup, and a title drawn from it says "User greets
+// the shopkeeper". By the third the scene has a subject.
+const immersiveTitleUpgradeTurns = 3
+
+// upgradeImmersiveTitle replaces a Stage session's provisional character-name
+// title with a generated one, once the scene has enough in it to summarize.
+//
+// settleTitle gives an immersive session the bound character's name: instant,
+// free, and right for the moment the chat opens. It is also the same title every
+// other chat with that character gets, and the Library already draws the
+// character name beside it — so the row reads "Kobeni / Kobeni" and three chats
+// with her are indistinguishable. Dogfooding bore that out: the user hit ✨
+// regenerate twice and settled on a scene summary.
+//
+// Deferred rather than generated up front for the reason settleTitle avoided it
+// originally — tokens spent unasked. Waiting until the third player turn means a
+// character opened for a look, or a chat abandoned after one line, never spends
+// anything; only a scene someone is actually playing does, once.
+//
+// Same guards as the post-compaction refresh: the auto_title gate, and a title
+// that is still machine-owned. A manual rename is never touched, including one
+// that lands while the model is thinking.
+func (s *wsSession) upgradeImmersiveTitle(ctx context.Context) {
+	if s.sess == nil || s.sess.Meta.Experience == "" {
+		return
+	}
+	prev, due := s.titleUpgradeDue()
+	if !due {
+		return
+	}
+	ok, cl, model := s.ws.titleGen(s)
+	if !ok || cl == nil {
+		return
+	}
+	seed := core.BuildTitleSeed(s.agent.Messages(), core.TitleSeedBudget)
+	if seed == "" {
+		return
+	}
+	gen := generateTitle(ctx, cl, model, seed, s)
+	if gen == "" || gen == prev {
+		return
+	}
+	// Re-check under the lock: a manual rename may have landed while the model was
+	// thinking, and it outranks us.
+	s.mu.Lock()
+	stillOurs := s.title == prev && s.titleGenerated
+	s.mu.Unlock()
+	if stillOurs {
+		s.applyTitle(gen)
+	}
+}
+
+// titleUpgradeDue reports whether this session is still wearing its provisional
+// character-name title and the scene has grown enough to replace it, returning
+// that title so the caller can re-check it after the model call.
+//
+// Split out from upgradeImmersiveTitle so the decision is testable without a
+// model: everything that decides whether tokens get spent lives here.
+func (s *wsSession) titleUpgradeDue() (string, bool) {
+	s.mu.Lock()
+	prev, generated := s.title, s.titleGenerated
+	s.mu.Unlock()
+	if prev == "" || !generated {
+		return prev, false // never titled, or a manual rename — not ours to replace
+	}
+	// Only the provisional character name is upgradeable. Any other machine title
+	// is a summary this pass already produced.
+	if prev != s.ws.cardName(s.sess.Meta.Card) {
+		return prev, false
+	}
+	return prev, playerTurns(s.agent.Messages()) >= immersiveTitleUpgradeTurns
+}
+
+// playerTurns counts the human's own messages — synthetic (harness-injected)
+// ones do not mean the player said anything.
+func playerTurns(msgs []provider.Message) int {
+	n := 0
+	for _, m := range msgs {
+		if m.Role == provider.RoleUser && m.Meta[core.MetaSynthetic] != "true" {
+			n++
+		}
+	}
+	return n
+}
+
 // retitleAfterCompaction refreshes a machine-generated title right after a
 // compaction — the moment a session has provably outgrown the title its
 // opening earned, and exactly when BuildTitleSeed gains a fresh anchor. Same
@@ -1531,7 +1709,7 @@ func (s *wsSession) retitleAfterCompaction(ctx context.Context) {
 	if seed == "" {
 		return
 	}
-	gen := generateTitle(ctx, cl, model, seed)
+	gen := generateTitle(ctx, cl, model, seed, s)
 	if gen == "" || gen == prev {
 		return
 	}
@@ -1738,8 +1916,14 @@ func (s *wsSession) info() ctrlproto.SessionInfo {
 		Note:            s.sess.Meta.Note,
 		UserName:        s.sess.Meta.UserName,
 		UserDescription: s.sess.Meta.UserDescription,
+		UserGender:      s.sess.Meta.UserGender,
+		UserPronouns:    s.sess.Meta.UserPronouns,
 		Card:            s.sess.Meta.Card,
 		Cast:            s.sess.Meta.Cast,
+		CastModels:      castRoutesToView(s.sess.Meta.CastModels),
+		WorldLore:       worldLoreToView(s.sess.Meta.WorldLore),
+		Coordination:    s.sess.Meta.Coordination,
+		World:           s.sess.Meta.World,
 		Path:            s.sess.Path,
 		Created:         ctrlTimeString(s.sess.Meta.Started),
 		Trusted:         s.trusted.Load(),

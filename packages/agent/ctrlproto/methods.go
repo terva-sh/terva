@@ -173,6 +173,7 @@ const (
 	MethodPersonasGet    Method = "personas.get"    // params PersonaGetParams, result PersonaView
 	MethodPersonasCreate Method = "personas.create" // params PersonaWriteParams, result PersonaView
 	MethodPersonasEdit   Method = "personas.edit"   // params PersonaWriteParams, result PersonaView
+	MethodPersonasDelete Method = "personas.delete" // params PersonaDeleteParams
 
 	// Scene backdrops (optional; served only by a BackgroundsController). The
 	// store is global like cards; bind is per-session (sess in frame).
@@ -204,6 +205,41 @@ const (
 	MethodCastRemove Method = "cast.remove" // params CastMemberParams (sess in frame)
 	MethodCastSpeak  Method = "cast.speak"  // params CastSpeakParams (sess in frame); runs a turn
 
+	// World lore (optional; served only by a WorldController). Session-scoped
+	// shared lore (Worlds L1) — like the author's note it rides the uncached
+	// per-turn tail, edited live with no cache bust. State reads ride
+	// SessionInfo.WorldLore.
+	MethodWorldLorePut    Method = "world.lore.put"    // params WorldLorePutParams (sess in frame)
+	MethodWorldLoreDelete Method = "world.lore.delete" // params WorldLoreDeleteParams (sess in frame)
+	// World settings (W3): today, the meta-narrator coordination mode. State
+	// reads ride SessionInfo.Coordination.
+	MethodWorldSet Method = "world.set" // params WorldSetParams (sess in frame)
+	// Saved Worlds (W5): list the library, promote/update a session's World
+	// into it, remove one. Membership reads ride SessionInfo.World. W5b adds
+	// sessionless metadata edits (rename/description/cover) and the bundle
+	// verbs — export a World with its cards embedded, import one elsewhere.
+	MethodWorldsList   Method = "worlds.list"   // result WorldsListResult
+	MethodWorldSave    Method = "worlds.save"   // params WorldSaveParams, result WorldView (sess in frame)
+	MethodWorldDelete  Method = "worlds.delete" // params WorldDeleteParams
+	MethodWorldUpdate  Method = "worlds.update" // params WorldUpdateParams, result WorldView
+	MethodWorldsExport Method = "worlds.export" // params WorldExportParams, result WorldExport
+	MethodWorldsImport Method = "worlds.import" // params WorldImportParams, result WorldView
+
+	// Directed authorship (optional; served only by a DirectController). Posts an
+	// approved character/narrator line INTO the transcript — the commit half of
+	// Stage's suggest→review→post loop (Phase 6). Mutates the transcript (like an
+	// edit), so it sits in the conversation group; the session rides the frame's
+	// sess.
+	MethodPostLine Method = "post.line" // params PostLineParams (sess in frame); appends an attributed message
+	// MethodDirectTurn runs one turn steered by an out-of-character direction —
+	// the "apply-as-direction" disposition (Phase 6b). Runs the model (a turn), so
+	// it sits in the conversation group like a prompt.
+	MethodDirectTurn Method = "direct.turn" // params DirectTurnParams (sess in frame); runs a steered turn
+	// MethodTurnAdvance runs one turn on the transcript as it stands — Stage's
+	// "▶ Advance". No params: the whole point is that nothing is injected. Runs the
+	// model, so it sits in the conversation group like a prompt.
+	MethodTurnAdvance Method = "turn.advance" // no params (sess in frame); runs a turn on the transcript as-is
+
 	// Message-scoped variant cleanup (optional; served only by a VariantsController).
 	MethodVariantsPrune Method = "variants.prune" // params VariantsPruneParams (sess in frame)
 	MethodVariantsDrop  Method = "variants.drop"  // params VariantsDropParams (sess in frame)
@@ -219,7 +255,7 @@ func (m Method) Group() Group {
 	switch m {
 	case MethodPrompt, MethodQueue, MethodQueueSet, MethodCancel, MethodCompact,
 		MethodClear, MethodMessageEdit, MethodMessageDelete, MethodTurnSwipe, MethodTurnRetry, MethodTurnContinue, MethodApprove, MethodAnswer,
-		MethodVariantsPrune, MethodVariantsDrop, MethodSubscribe, MethodUnsubscribe:
+		MethodPostLine, MethodDirectTurn, MethodTurnAdvance, MethodVariantsPrune, MethodVariantsDrop, MethodSubscribe, MethodUnsubscribe:
 		return GroupConversation
 	case MethodSessionsList, MethodSessionCreate, MethodSessionResume, MethodSessionFork,
 		MethodSessionRename, MethodSessionGenerateTitle, MethodSessionDelete, MethodSessionDiscardDraft, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
@@ -231,9 +267,11 @@ func (m Method) Group() Group {
 		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
 		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume,
 		MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint, MethodCardsDoctor,
-		MethodPersonasList, MethodPersonasGet, MethodPersonasCreate, MethodPersonasEdit,
+		MethodPersonasList, MethodPersonasGet, MethodPersonasCreate, MethodPersonasEdit, MethodPersonasDelete,
 		MethodBackgroundsList, MethodBackgroundsImport, MethodBackgroundsDelete, MethodBackgroundBind, MethodBackgroundGenerate,
 		MethodNoteSet, MethodUserBind, MethodCastAdd, MethodCastRemove, MethodCastSpeak,
+		MethodWorldLorePut, MethodWorldLoreDelete, MethodWorldSet,
+		MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldsExport, MethodWorldsImport,
 		MethodUserPersonasList, MethodUserPersonaSave, MethodUserPersonaDelete, MethodUserPersonaSetDefault:
 		return GroupControl
 	case MethodReplayControl, MethodReplayState:

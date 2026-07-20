@@ -184,6 +184,14 @@ type Resolved struct {
 	// pointer so value-copies of Resolved agree); the steering surfaces read it
 	// via LoreFired(). Allocated in Resolve.
 	loreFired *LoreFiredRecord
+	// worldLore holds the session's live World lore (Worlds L1) — authored
+	// entries scoped to the session, merged into the per-turn lore scan alongside
+	// the file/card triggered entries. A shared pointer like note: the workspace
+	// writes it on world.lore.* edits and seeds it from persisted meta, the tail
+	// closure reads it each turn, so an edit lands next turn with no cache bust
+	// (which is also why World constants stay OUT of the cached prefix). Non-nil
+	// only for immersive sessions; retained via Resolved.WorldLore().
+	worldLore *WorldLoreRecord
 
 	// CardGreeting is the SELECTED greeting (macros substituted), seeded as the
 	// active opening assistant message of a fresh session. Empty when no card.
@@ -226,6 +234,11 @@ type Resolved struct {
 	// "User"), captured so the tail can attribute the description to the right name.
 	userDesc *NoteRecord
 	userName string
+	// userGender and userPronouns are the persona's stated identity, captured from
+	// Args and rendered by the tail's user-persona frame: stated → use them, unset
+	// → steer away from inventing them.
+	userGender   string
+	userPronouns string
 
 	// SystemSegments is the labeled provenance of the current system prompt
 	// (the source SystemSegments produced), captured for the prompt-dump
@@ -1134,6 +1147,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		loreConfig:               loreConfig,
 		loreActive:               loreActive,
 		loreFired:                &LoreFiredRecord{},
+		worldLore:                newWorldLoreRecord(args.Experience != ""),
 		CardGreeting:             CardGreeting,
 		CardGreetings:            cardGreetings,
 		introOverride:            introOverride,
@@ -1142,6 +1156,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		note:                     newNoteRecord(args.Experience != ""),
 		userDesc:                 newNoteRecord(args.Experience != ""),
 		userName:                 resolveCardUserName(args, eff.Config),
+		userGender:               strings.TrimSpace(args.UserGender),
+		userPronouns:             strings.TrimSpace(args.UserPronouns),
 	}, nil
 }
 

@@ -1,12 +1,15 @@
 package workspace
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
 )
 
 // The card doctor's system prompt is the Seppä persona's charter; it must resolve
@@ -46,6 +49,76 @@ func TestRenderDoctorPromptIncludesFieldsFindingsDecisions(t *testing.T) {
 	// An empty field is labeled, not silently dropped.
 	if !strings.Contains(out, "personality: (empty)") {
 		t.Errorf("prompt should mark empty fields:\n%s", out)
+	}
+}
+
+// The editor (W4) is the doctor's session mode: its persona must resolve and
+// read like a promotion-from-play editor, not a card-lint smith.
+func TestEditorPersonaResolves(t *testing.T) {
+	p, err := build.ResolvePersona(editorPersona)
+	if err != nil {
+		t.Fatalf("resolve editor persona %q: %v", editorPersona, err)
+	}
+	if strings.TrimSpace(p.Charter) == "" {
+		t.Fatal("editor persona has an empty charter")
+	}
+	low := strings.ToLower(p.Charter)
+	if !strings.Contains(low, "scene") || !strings.Contains(low, "promot") {
+		t.Errorf("editor charter does not read like promotion-from-play:\n%s", p.Charter)
+	}
+}
+
+// The editor's evidence block: the scene is speaker-attributed (a routed line
+// carries its actor, a directed narrator beat reads Narrator) and the lore is
+// the pre-filtered set the character is cleared for.
+func TestRenderEditorEvidence(t *testing.T) {
+	transcript := []provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "Who has the ledger?"}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "\"Not me,\" Ivy lies."}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "\"I do.\""}},
+			Meta: map[string]string{core.MetaSource: core.MetaRouted, core.MetaActor: "Elira"}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "Rain hammers the roof."}},
+			Meta: map[string]string{core.MetaSource: core.MetaDirected}},
+	}
+	lore := []core.WorldLoreEntry{{Name: "the-debt", Content: "Elira owes the guild.", Audience: []string{"Elira"}}}
+	out := renderEditorEvidence("Elira", "Ivy", "Kira", lore, transcript)
+	for _, want := range []string{
+		"THE PLAYED SCENE",
+		"Kira: Who has the ledger?",
+		"Ivy: \"Not me,\" Ivy lies.", // the bound character label is the char name passed... (see below)
+		"Elira: \"I do.\"",
+		"Narrator: Rain hammers the roof.",
+		"WHAT ELIRA KNOWS OF THIS WORLD",
+		"the-debt: Elira owes the guild.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("evidence missing %q:\n%s", want, out)
+		}
+	}
+	if got := renderEditorEvidence("Elira", "Ivy", "Me", nil, nil); !strings.Contains(got, "(nothing recorded)") || !strings.Contains(got, "scene has not started") {
+		t.Errorf("empty evidence should say so:\n%s", got)
+	}
+}
+
+// The editor mode gates on a live immersive session — a coding session (or an
+// unknown one) is refused before any model resolution.
+func TestEditorModeGates(t *testing.T) {
+	w := draftWorkspace(t)
+	ctx := context.Background()
+	imported, err := w.CardsImport(ctx, ctrlproto.CardImportParams{Bytes: []byte(`{"name":"Elira","first_mes":"hi"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coding, err := w.CreateSession(ctx, ctrlproto.CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = w.CardsDoctor(ctx, ctrlproto.DoctorParams{ID: imported.ID, Session: coding.ID})
+	if err == nil || !strings.Contains(err.Error(), "chat or play") {
+		t.Errorf("a coding session should be refused, got %v", err)
+	}
+	if _, err := w.CardsDoctor(ctx, ctrlproto.DoctorParams{ID: imported.ID, Session: "no-such-session"}); err == nil {
+		t.Error("an unknown session should be refused")
 	}
 }
 

@@ -22,6 +22,11 @@ import (
 type CastMember struct {
 	Persona string
 	Card    string // absolute path
+	// Provider/Model pin this actor to a specific route (Phase 7); empty inherits
+	// the host/tier route. An explicit pin MAY differ from the host — the author's
+	// choice — unlike a `tier`, which never exceeds the host.
+	Provider string
+	Model    string
 }
 
 // ActorSpawnTool is the --play director's skin over the swarm dispatch engine:
@@ -58,6 +63,14 @@ type ActorSpawnTool struct {
 	HostProvider string
 	HostModel    string
 	Tiers        SwarmTierMap
+	// WorldLore renders the World-lore block the named actor is cleared to see
+	// for this situation (Worlds W6): the L2 audience filter applied to the
+	// session's lorebook, keyword-scanned against the situation and the recent
+	// scene. Called on EVERY dispatch — spawn and warm reuse alike — so a
+	// world_note or world_reveal mid-scene reaches the actor's next beat, the
+	// same freshness the chat tail gives the bound character. Optional; nil or
+	// an empty render injects nothing.
+	WorldLore func(actor, situation string) string
 	// hostMu guards SetHost's live mutation of HostProvider/HostModel on a
 	// mid-session model swap; acquire() reads them through host(). Construction
 	// sets the fields directly, before the tool is registered.
@@ -95,6 +108,23 @@ const actorFramingNote = "[Director's note: you are voicing a character in a sce
 
 func composeActorTask(situation string) string {
 	return i18n.P("play.actor.framing", actorFramingNote) + "\n\n" + situation
+}
+
+// composeTask builds the actor's full user turn: the framing note, the
+// situation, and — when the tool has a WorldLore source — the audience-
+// filtered lore block for this actor (Worlds W6). The lore rides the
+// situation, the uncached per-beat channel, never the child's cached charter,
+// so a mid-scene world_note or world_reveal reaches the actor's next beat.
+func (t *ActorSpawnTool) composeTask(name, situation string) string {
+	task := composeActorTask(situation)
+	if t.WorldLore != nil {
+		if block := t.WorldLore(name, situation); block != "" {
+			heading := strings.ReplaceAll(i18n.P("play.actor.worldlore",
+				"[What {name} knows of the world — established facts; weave them in only where the moment calls for them:]"), "{name}", name)
+			task += "\n\n" + heading + "\n" + block
+		}
+	}
+	return task
 }
 
 func (t *ActorSpawnTool) Name() string { return "actor_spawn" }
@@ -148,7 +178,7 @@ func (t *ActorSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	if !ok {
 		return toolErr(fmt.Sprintf("actor_spawn: %q is not in the cast (%s)", name, strings.Join(castNames(t.Cast), ", "))), nil
 	}
-	task := composeActorTask(situation)
+	task := t.composeTask(name, situation)
 
 	wa, turnDone, err := t.acquire(ctx, name, task, member, a.Tier, progress)
 	if err != nil {
@@ -186,13 +216,19 @@ func (t *ActorSpawnTool) acquire(ctx context.Context, name, task string, member 
 	if errMsg != "" {
 		return nil, nil, errors.New(errMsg)
 	}
+	spawnProvider, spawnModel := route.Provider, route.Model
+	if strings.TrimSpace(member.Model) != "" {
+		// An explicit per-actor pin (Phase 7) overrides the host/tier route — the
+		// author chose this model for this actor, so it may differ from the host.
+		spawnProvider, spawnModel = member.Provider, member.Model
+	}
 	req := swarm.SpawnRequest{
 		Task:       task,
 		Experience: "chat", // a tool-less voice; the director owns the world
 		Persona:    member.Persona,
 		Card:       member.Card,
-		Model:      route.Model,
-		Provider:   route.Provider,
+		Model:      spawnModel,
+		Provider:   spawnProvider,
 	}
 	// Same session stamp swarm_spawn applies: the actor belongs to the
 	// director's conversation, so its meta.json should say so.

@@ -76,11 +76,12 @@ test('stage: play session shows its cast and attributes actor lines', async ({ p
   await expect(page.locator('.stage-cast__name').first()).toHaveText('Seraphina')
   if (process.env.CAST_SHOT) await page.screenshot({ path: `${process.env.CAST_SHOT}.png`, fullPage: true })
 
-  // Add a new cast member — the form posts cast.add {name, ref}.
+  // Add a new cast member — the form posts cast.add {name, ref} (the Phase 7
+  // model-pin fields ride along, empty = inherit the session model).
   await page.locator('.stage-cast-add__name').fill('Rook')
   await page.locator('.stage-cast-add__ref').fill('scout')
   await page.locator('.stage-cast-add__go').click()
-  await expect.poll(() => added).toEqual({ name: 'Rook', ref: 'scout' })
+  await expect.poll(() => added).toEqual({ name: 'Rook', ref: 'scout', provider: '', model: '' })
 
   // Remove Seraphina — the ✕ posts cast.remove {name}.
   await page.locator('.stage-cast__member', { hasText: 'Seraphina' }).locator('.stage-cast__remove').click()

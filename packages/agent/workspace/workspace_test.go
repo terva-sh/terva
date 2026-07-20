@@ -715,6 +715,37 @@ func drainUntil(t *testing.T, ch <-chan ctrlproto.Event, want ...string) (ctrlpr
 	}
 }
 
+// waitIdle blocks until the turn slot is released, because a "done" event does
+// NOT mean the session is idle yet.
+//
+// On the clean path launchTurn runs `err := gen(turnCtx)` and only then calls
+// endTurn, while the agent broadcasts its own "done" from INSIDE gen — so a
+// subscriber always observes "done" strictly before endTurn clears turnCancel
+// (which is all busy() reads). The error path has the same shape, just narrower:
+// an explicit done broadcast immediately precedes the endTurn call.
+//
+// So `drainUntil(t, sub, "done"); if s.busy() {…}` is racy by construction. It
+// passes on a quiet machine and loses under `just ci`, whose whole-tree
+// `go test -race ./...` widens the window — a flake that reads as "the branch I
+// am rebasing broke this" to whoever hits it next.
+//
+// The ordering itself is deliberate and must not be "fixed" by releasing the
+// slot before the broadcast: endTurn settles the pending queue under the same
+// s.mu hold, and an earlier release would reopen the gap its doc comment exists
+// to close. The event means "the turn's output is complete", not "the engine is
+// ready for the next one" — so a test that wants the latter waits for it.
+func waitIdle(t *testing.T, s *wsSession) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !s.busy() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Error("turn slot was never released")
+}
+
 // TestWorkspaceTurnErrorEmitsErrorThenDone: the agent's own "done" does not
 // fire when the run loop returns an error, so the workspace must synthesize a
 // definitive completion — error first (status/rescue payload), then done (the

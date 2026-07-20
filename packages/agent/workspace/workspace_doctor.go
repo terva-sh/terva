@@ -11,6 +11,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -19,6 +20,11 @@ import (
 // "Seppä"). A user can shadow it with their own persona of the same
 // name/stem (user tier wins), the same as any other persona.
 const doctorPersona = "seppa"
+
+// editorPersona is the built-in story-editor persona (display name
+// "Toimittaja") the doctor's EDITOR mode runs as (Worlds W4): promotion from
+// play — enriching a character's card from the scenes they appeared in.
+const editorPersona = "toimittaja"
 
 // doctorFields maps a proposal's field name to the current value of that field
 // on a card. It is the allow-list of fields the doctor may edit — the editable
@@ -41,26 +47,62 @@ func doctorFields(c card.Card) map[string]string {
 
 // CardsDoctor runs the LLM card doctor over a stored card: it feeds the card and
 // its deterministic lint (plus any prior-round decisions) to the card-craft
-// persona and returns structured per-field edit proposals.
+// persona and returns structured per-field edit proposals. With p.Session set it
+// runs in EDITOR mode instead (Worlds W4): the Toimittaja persona, grounded in
+// that session's scene and the character's World lore — promotion from play.
 func (w *Workspace) CardsDoctor(ctx context.Context, p ctrlproto.DoctorParams) (ctrlproto.DoctorResult, error) {
 	sc, err := w.cardStore().Get(p.ID)
 	if err != nil {
 		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%v", err)
 	}
-	persona, err := build.ResolvePersona(doctorPersona)
-	if err != nil || strings.TrimSpace(persona.Charter) == "" {
-		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "the card doctor persona is unavailable")
+	personaName, task := doctorPersona, doctorTask
+	scene := ""
+	var s *wsSession
+	if strings.TrimSpace(p.Session) != "" {
+		s, err = w.resolve(p.Session)
+		if err != nil {
+			return ctrlproto.DoctorResult{}, err
+		}
+		if s.sess == nil || s.sess.Meta.Experience == "" {
+			return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the editor grounds in a chat or play session")
+		}
+		personaName, task = editorPersona, editorTask
+		charName := strings.TrimSpace(sc.Card.Name)
+		boundName, _ := s.boundCharacter()
+		scene = renderEditorEvidence(charName, boundName, s.playerLabel(),
+			worldLoreFor(s.sess.Meta.WorldLore, charName), s.agent.Messages())
 	}
-	cl, model, ok := w.doctorClient()
-	if !ok {
-		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "no usable credential for a card-doctor model")
+	persona, err := build.ResolvePersona(personaName)
+	if err != nil || strings.TrimSpace(persona.Charter) == "" {
+		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "the %s persona is unavailable", personaName)
+	}
+	// Resolve the client for this run: the workspace default model, or a
+	// per-generation override the caller picked (Phase 7).
+	cl, model, err := w.overrideClient(w.args, p.Provider, p.Model)
+	if err != nil {
+		return ctrlproto.DoctorResult{}, err
 	}
 
 	findings := card.Lint(sc.Card)
 	fields := doctorFields(sc.Card)
-	system := persona.Charter + "\n\n" + doctorTask
+	system := persona.Charter + "\n\n" + task
 	user := renderDoctorPrompt(fields, findings, p.Decisions)
+	if scene != "" {
+		user += "\n" + scene
+	}
 
+	return doctorRun(ctx, cl, model, system, user, fields, s)
+}
+
+// doctorRun is the doctor's one model call: stream, book, parse. Split from
+// CardsDoctor the way titleUpgradeDue was split from its caller — the part
+// that spends and books tokens is testable without resolving a real
+// credential. This drain predated streamText's usage contract, so a doctor
+// pass — the priciest one-off completion the daemon runs — spent unrecorded.
+// The spend lands on the grounding session when there is one (editor mode);
+// a plain Library-scoped run has no session meter, and nil is the deliberate,
+// visible form of that gap (recordSideChannelUsage is nil-safe).
+func doctorRun(ctx context.Context, cl provider.Client, model, system, user string, fields map[string]string, s *wsSession) (ctrlproto.DoctorResult, error) {
 	req := provider.Request{
 		Model:     model,
 		System:    system,
@@ -71,38 +113,16 @@ func (w *Workspace) CardsDoctor(ctx context.Context, p ctrlproto.DoctorParams) (
 			Time:    time.Now(),
 		}},
 	}
-	stream, err := cl.Stream(ctx, req)
+	out, usage, err := streamText(ctx, cl, req)
+	s.recordSideChannelUsage(usage)
 	if err != nil {
 		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "card doctor: %v", err)
 	}
-	var sb strings.Builder
-	for ev := range stream {
-		switch e := ev.(type) {
-		case provider.EventTextDelta:
-			sb.WriteString(e.Delta)
-		case provider.EventDone:
-			if e.Err != nil {
-				return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "card doctor: %v", e.Err)
-			}
-		}
-	}
-
-	res, err := parseDoctorResult(sb.String(), fields)
+	res, err := parseDoctorResult(out, fields)
 	if err != nil {
 		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%v", err)
 	}
 	return res, nil
-}
-
-// doctorClient resolves the workspace's default provider/model as a usable
-// client for the doctor pass, mirroring titleClient but keeping the workspace's
-// configured model (card-craft wants a capable model, not the title model).
-func (w *Workspace) doctorClient() (provider.Client, string, bool) {
-	r, err := build.Resolve(w.args, true)
-	if err != nil || !r.HasCredential() {
-		return nil, "", false
-	}
-	return r.NewClient(), r.Model, true
 }
 
 const doctorTask = `You are being run as a one-shot card doctor. You receive a character card's fields, the deterministic lint findings, and — on a follow-up round — the author's decisions on your previous proposals.
@@ -129,6 +149,100 @@ Rules:
 - Make the smallest edit that does the job; keep the author's tone and intent.
 - If the author declined a previous proposal with a reason, honor it: withdraw or revise toward what they want, don't re-propose the same change.
 - If the card is already in good shape, return an empty "proposals" array and say so in "note".`
+
+// editorTask is the EDITOR mode's contract: the same JSON proposal shape as the
+// doctor (one parser, one negotiation loop, one client sheet), with promotion
+// rules — every edit traces to the played scene.
+const editorTask = `You are being run as a one-shot character editor. You receive a character card's fields, the deterministic lint findings, the PLAYED SCENE the character appeared in, what the character knows of the world, and — on a follow-up round — the author's decisions on your previous proposals.
+
+Respond with ONLY a JSON object (no prose, no code fences) of this exact shape:
+
+{
+  "note": "<one short overall remark, or an empty string>",
+  "proposals": [
+    {
+      "id": "<short stable id, e.g. p1>",
+      "field": "<one of: name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes>",
+      "severity": "<warn | info | suggestion>",
+      "rationale": "<what in the scene warrants this — name the moment>",
+      "after": "<the COMPLETE new value for that field — it replaces the field wholesale>"
+    }
+  ]
+}
+
+Rules:
+- The played scene is your warrant: every proposal's rationale must trace to something that actually happened in it. Do not invent facts the scene doesn't show.
+- ENRICH, don't rewrite: extend fields with what play established (voice, relationships, learned facts, example dialogue lifted from their actual lines); keep the author's tone, format conventions, and every {{char}}/{{user}} macro. "after" is still the entire new value of the field.
+- A minimal character may grow personality/example dialogue from nothing; a rich one should change only where the scene genuinely moved them.
+- If the scene contradicts the card, flag it ("warn") and propose the reconciliation the author most plausibly intends — never silently pick a side.
+- If the author declined a previous proposal with a reason, honor it: withdraw or revise, don't re-propose.
+- If there is not enough played material to justify edits, return an empty "proposals" array and say so in "note".`
+
+// renderEditorEvidence assembles the editor's grounding block: the played scene
+// (speaker-attributed — a routed/directed line is labeled with its actor, an
+// ordinary reply with the BOUND character, who may differ from the character
+// being enriched) and the World lore this character is cleared for. A free
+// function for testability.
+func renderEditorEvidence(charName, boundName, playerLabel string, lore []core.WorldLoreEntry, transcript []provider.Message) string {
+	var b strings.Builder
+	b.WriteString("\nTHE PLAYED SCENE (most recent last) — your primary source\n")
+	tail := renderSceneTail(transcript, playerLabel, boundName, editorMaxTranscript)
+	if tail == "" {
+		tail = "(the scene has not started yet)"
+	}
+	b.WriteString(tail + "\n")
+	b.WriteString("\nWHAT " + strings.ToUpper(charName) + " KNOWS OF THIS WORLD (their lore)\n")
+	if len(lore) == 0 {
+		b.WriteString("(nothing recorded)\n")
+	}
+	for _, e := range lore {
+		b.WriteString("- " + e.Name + ": " + e.Content + "\n")
+	}
+	return b.String()
+}
+
+// editorMaxTranscript bounds the editor's scene evidence — more generous than a
+// drafting tail (the editor mines the whole recent scene for voice), still
+// most-recent anchored.
+const editorMaxTranscript = 16000
+
+// renderSceneTail is renderTranscriptTail with speaker attribution: an
+// assistant message carrying MetaActor (a directed or routed line) is labeled
+// with its actor — "who said what" is exactly what the editor mines.
+func renderSceneTail(msgs []provider.Message, playerLabel, charLabel string, budget int) string {
+	var lines []string
+	for _, m := range msgs {
+		text := messageProse(m)
+		if text == "" {
+			continue
+		}
+		label := charLabel
+		switch {
+		case m.Role == provider.RoleUser:
+			label = playerLabel
+		case m.Meta[core.MetaActor] != "":
+			label = m.Meta[core.MetaActor]
+		case m.Meta[core.MetaSource] == core.MetaDirected || m.Meta[core.MetaSource] == core.MetaRouted:
+			label = "Narrator"
+		}
+		lines = append(lines, label+": "+text)
+	}
+	start, total := 0, 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		total += len(lines[i]) + 1
+		if total > budget {
+			start = i + 1
+			break
+		}
+	}
+	if start >= len(lines) {
+		if len(lines) == 0 {
+			return ""
+		}
+		start = len(lines) - 1
+	}
+	return strings.Join(lines[start:], "\n")
+}
 
 // renderDoctorPrompt assembles the user message: the card's editable fields, the
 // deterministic lint findings, and (on a follow-up round) the author's decisions.

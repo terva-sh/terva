@@ -345,7 +345,7 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 
 	// --- control ---
 	case MethodModelsList:
-		m, err := s.svc.Models(ctx)
+		m, err := s.svc.Models(ctx, f.Sess)
 		s.respond(f.ID, ModelsResult{Models: m}, err)
 	case MethodModelSwitch:
 		var p ModelSwitchParams
@@ -575,9 +575,10 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		v, err := sc.SuggestReply(ctx, f.Sess, p)
 		s.respond(f.ID, v, err)
 
-	case MethodPersonasList, MethodPersonasGet, MethodPersonasCreate, MethodPersonasEdit:
-		// Optional, like the card library. Create/edit are trusted-tier — the
-		// workspace enforces the gate; the group only decides whether it's served.
+	case MethodPersonasList, MethodPersonasGet, MethodPersonasCreate, MethodPersonasEdit, MethodPersonasDelete:
+		// Optional, like the card library. Create/edit/delete are trusted-tier —
+		// the workspace enforces the gate; the group only decides whether it's
+		// served.
 		pc, ok := s.svc.(PersonasController)
 		if !ok {
 			s.write(ErrFrame(f.ID, CodeUnsupported, "the persona library is not available here"))
@@ -603,7 +604,7 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			}
 			v, err := pc.PersonasCreate(ctx, p)
 			s.respond(f.ID, v, err)
-		default:
+		case MethodPersonasEdit:
 			var p PersonaWriteParams
 			if err := f.Bind(&p); err != nil {
 				s.badReq(f.ID, err)
@@ -611,6 +612,19 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			}
 			v, err := pc.PersonasEdit(ctx, p)
 			s.respond(f.ID, v, err)
+		case MethodPersonasDelete:
+			var p PersonaDeleteParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, pc.PersonasDelete(ctx, p))
+		default:
+			// Every member of the outer case list is handled above. This arm is a
+			// backstop for a verb added there and forgotten here: the previous
+			// shape made edit the default, so a new member silently BOUND ITS
+			// PARAMS AS A WRITE and overwrote the persona with an empty one.
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled persona verb %q", f.Method)))
 		}
 
 	case MethodBackgroundsList, MethodBackgroundsImport, MethodBackgroundsDelete, MethodBackgroundBind, MethodBackgroundGenerate:
@@ -752,6 +766,116 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			return
 		}
 		s.respond(f.ID, nil, cc.CastSpeak(ctx, f.Sess, p))
+
+	case MethodWorldLorePut, MethodWorldLoreDelete, MethodWorldSet:
+		wc, ok := s.svc.(WorldController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "the World is not available here"))
+			return
+		}
+		switch f.Method {
+		case MethodWorldLorePut:
+			var p WorldLorePutParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, wc.WorldLorePut(ctx, f.Sess, p))
+		case MethodWorldLoreDelete:
+			var p WorldLoreDeleteParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, wc.WorldLoreDelete(ctx, f.Sess, p))
+		default: // MethodWorldSet
+			var p WorldSetParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, wc.WorldSet(ctx, f.Sess, p))
+		}
+
+	case MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldsExport, MethodWorldsImport:
+		wc, ok := s.svc.(WorldController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "the World is not available here"))
+			return
+		}
+		switch f.Method {
+		case MethodWorldsList:
+			v, err := wc.WorldsList(ctx)
+			s.respond(f.ID, v, err)
+		case MethodWorldSave:
+			var p WorldSaveParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := wc.WorldSave(ctx, f.Sess, p)
+			s.respond(f.ID, v, err)
+		case MethodWorldUpdate:
+			var p WorldUpdateParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := wc.WorldUpdate(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodWorldsExport:
+			var p WorldExportParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := wc.WorldsExport(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodWorldsImport:
+			var p WorldImportParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := wc.WorldsImport(ctx, p)
+			s.respond(f.ID, v, err)
+		default: // MethodWorldDelete
+			var p WorldDeleteParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, wc.WorldDelete(ctx, p))
+		}
+
+	case MethodPostLine, MethodDirectTurn, MethodTurnAdvance:
+		// Optional, like suggest — needs a live session's transcript, so a carrier
+		// without one answers "unsupported".
+		dc, ok := s.svc.(DirectController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "directed authorship is not available here"))
+			return
+		}
+		if f.Method == MethodTurnAdvance {
+			// No params by design: advance injects nothing.
+			s.respond(f.ID, nil, dc.AdvanceTurn(ctx, f.Sess))
+			return
+		}
+		if f.Method == MethodDirectTurn {
+			var p DirectTurnParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, dc.DirectTurn(ctx, f.Sess, p))
+			return
+		}
+		var p PostLineParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		s.respond(f.ID, nil, dc.PostLine(ctx, f.Sess, p))
 
 	// --- message-scoped variant cleanup (optional; served only by a VariantsController) ---
 	case MethodVariantsPrune:

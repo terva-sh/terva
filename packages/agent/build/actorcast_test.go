@@ -161,3 +161,32 @@ func TestBuildActorCast_ValidatesRefsAtLaunch(t *testing.T) {
 		t.Errorf("missing card should fail at launch naming NAME=REF, got: %v", err)
 	}
 }
+
+// A cast ref may be a card-LIBRARY id (Worlds W6): how a World roster names its
+// characters. It resolves to the stored card.json, so a play session created
+// inside a saved World warms actors from the same cards a chat roster uses —
+// the exact seam the W5 live play-test found broken (library ids were tried
+// only as personas and creation failed).
+func TestBuildActorCast_LibraryID(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	dir := testsupport.TempDir(t)
+	sc, err := NewCardStore().ImportBytes([]byte(`{"name":"Elira","first_mes":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cast, err := BuildActorCast(map[string]string{"Elira": sc.ID}, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(CardsDir(), sc.ID, "card.json")
+	if got := cast["Elira"]; got.Card != want || got.Persona != "" {
+		t.Errorf("library id should resolve to the stored card.json: %+v (want Card=%s)", got, want)
+	}
+
+	// A ref that is neither a persona nor a library card names both failures.
+	_, err = BuildActorCast(map[string]string{"ghost": "no-such-ref"}, dir)
+	if err == nil || !strings.Contains(err.Error(), "persona") || !strings.Contains(err.Error(), "card") {
+		t.Errorf("unresolvable ref should name both lookups, got: %v", err)
+	}
+}

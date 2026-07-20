@@ -181,3 +181,48 @@ func TestCodingSessionUnaffectedByDraftDeferral(t *testing.T) {
 		t.Errorf("a coding session opens with no messages, got %v", got)
 	}
 }
+
+// Worlds W2: keeping a library character "on stage" in a CHAT persists to the
+// session roster (SessionMeta.Cast, the universal roster) but — unlike a play
+// cast — warms no actors and injects no actor_spawn tool. A bogus ref is
+// rejected against the card store.
+func TestChatRosterPersistsWithoutWarmActors(t *testing.T) {
+	w := draftWorkspace(t)
+	ctx := context.Background()
+
+	imported, err := w.CardsImport(ctx, ctrlproto.CardImportParams{Bytes: []byte(`{"name":"Elira","first_mes":"You kept me waiting."}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rook, err := w.CardsImport(ctx, ctrlproto.CardImportParams{Bytes: []byte(`{"name":"Rook","first_mes":"Trouble?"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := w.CreateSession(ctx, ctrlproto.CreateOpts{Experience: "chat", Card: imported.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.CastAdd(ctx, info.ID, ctrlproto.CastMemberParams{Name: "Rook", Ref: rook.ID}); err != nil {
+		t.Fatalf("keep-on-stage in a chat: %v", err)
+	}
+	live := w.live(info.ID)
+	if got := live.castRefs()["Rook"]; got != rook.ID {
+		t.Errorf("roster ref = %q, want %q", got, rook.ID)
+	}
+	// The bound character is already on stage: re-adding them would flip the
+	// meta-narrator on for a one-character scene (the kobeni review's defect).
+	if err := w.CastAdd(ctx, info.ID, ctrlproto.CastMemberParams{Name: "Elira", Ref: imported.ID}); err == nil {
+		t.Error("adding the bound card to a chat cast should be rejected")
+	}
+	// The play skin stays dormant: no warm actors (actor_spawn injection is gated
+	// on len(actorCast) > 0, so an empty cast means no tool either).
+	if n := len(live.actorCast); n != 0 {
+		t.Errorf("chat roster warmed %d actors, want 0", n)
+	}
+
+	// An unknown card ref is rejected against the card store.
+	if err := w.CastAdd(ctx, info.ID, ctrlproto.CastMemberParams{Name: "Ghost", Ref: "no-such-card"}); err == nil {
+		t.Error("an unknown card ref should be rejected")
+	}
+}

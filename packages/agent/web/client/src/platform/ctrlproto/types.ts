@@ -45,6 +45,22 @@ export interface WireMessage {
   // "## Context Summary" markdown as if the user had typed it.
   compaction?: boolean
   tokens_before?: number
+  // routed marks a line the meta-narrator routed to a character on a normal
+  // turn (Worlds W3) — model-produced, in that character's voice (actor).
+  routed?: boolean
+  // A line the user AUTHORED into the scene via directed authorship (Phase 6) —
+  // a character's or the narrator's turn they drafted and posted — rather than a
+  // model turn. `actor` names the speaking character; empty means the narrator.
+  // Render with 🎭 attribution, not as an ordinary assistant bubble.
+  directed?: boolean
+  actor?: string
+}
+
+// CastRoute is one cast member's pinned provider+model (Phase 7); empty fields
+// mean the actor inherits the session/host model.
+export interface CastRoute {
+  provider?: string
+  model?: string
 }
 
 export interface SessionInfo {
@@ -68,6 +84,10 @@ export interface SessionInfo {
   // into the cached prefix, so changing it is a deliberate rebuild. Immersive only.
   user_name?: string
   user_description?: string
+  // user_gender / user_pronouns are the persona's stated identity (free-form; the
+  // UI offers an inclusive dropdown with an "Other" text escape). Immersive only.
+  user_gender?: string
+  user_pronouns?: string
   // supports_continue is true when the session's provider can extend a trailing
   // assistant message as a prefill (turn.continue) — the Stage "continue" gate. A
   // client also needs a trailing assistant message and an idle session.
@@ -78,6 +98,20 @@ export interface SessionInfo {
   // cast is a play session's ensemble (actor name → persona/card ref) the
   // director can bring on stage via actor_spawn; empty for a solo chat.
   cast?: Record<string, string>
+  // cast_models pins actors to a specific provider+model (Phase 7); actor name →
+  // route, absent = inherit the session/host model. Play sessions only.
+  cast_models?: Record<string, CastRoute>
+  // world_lore is the session's World lorebook (Worlds L1) — shared entries every
+  // character on stage sees, edited via world.lore.put / world.lore.delete. Like
+  // the note it rides the uncached per-turn tail: edits apply next turn, no rebuild.
+  world_lore?: WorldLoreEntry[]
+  // coordination is the World's meta-narrator mode (W3, set via world.set):
+  // '' auto (the router picks who answers), 'off' (the bound character always
+  // answers), or 'focus:<roster name>'. Chat Worlds with a roster only.
+  coordination?: string
+  // world is the saved World this session belongs to (a worlds-library id,
+  // W5) — '' while its World is still session-embedded.
+  world?: string
   path?: string
   created?: string
   updated?: string
@@ -110,6 +144,9 @@ export interface CreateOpts {
   cast?: Record<string, string>
   greeting?: number
   background?: string
+  // world creates the session inside a saved World (W5): its roster, pins,
+  // lore, and coordination seed the session's working copy.
+  world?: string
 }
 
 export interface ModelInfo {
@@ -124,6 +161,10 @@ export interface ModelInfo {
   // on (that is `current`, and the two are deliberately allowed to differ).
   default?: boolean
   default_scope?: 'global' | 'project'
+  // auth is how this model's PROVIDER authenticates: 'oauth' spends a
+  // subscription plan, 'apikey' bills per token. Absent for keyless backends
+  // (ollama, named endpoints) — that means unknown, so render nothing.
+  auth?: 'oauth' | 'apikey'
 }
 
 export interface PermissionRequest {
@@ -678,6 +719,9 @@ export interface CardSummary {
 // editor round-trips fields it doesn't render (unknown extensions).
 export interface CardView extends CardSummary {
   raw: unknown
+  // Non-fatal notes from an import (Go CardView.Warnings) — a portrait that was
+  // downscaled or dropped. The card imported fine; these say what was done to it.
+  warnings?: string[]
 }
 
 // CardLintFinding is one deterministic card-lint result (Go card.Finding): a
@@ -743,12 +787,135 @@ export interface SuggestTurn {
 export interface SuggestParams {
   history?: SuggestTurn[]
   note?: string
+  // A per-generation model override (Phase 7); empty = the session's own model.
+  provider?: string
+  model?: string
+  // Whose line to draft (Phase 6 directed authorship): '' | 'user' drafts the
+  // player's reply (fills the composer); 'actor' drafts target_name's line in
+  // their voice; 'narrator' drafts a narrative beat. target_voice is a short
+  // description of a walk-on actor. An actor/narrator draft is posted with
+  // post.line, not typed as the player.
+  target?: 'user' | 'actor' | 'narrator'
+  target_name?: string
+  target_voice?: string
+  // Voice a LIBRARY CARD instead of a typed walk-on (Worlds W1): a card ref the
+  // daemon resolves to the character's full voice. Actor target only; supersedes
+  // target_voice.
+  target_card?: string
 }
 
 // SuggestResult is the payload of suggest.reply: the drafted next user message,
 // ready to drop into the composer (the user still sends it).
 export interface SuggestResult {
   draft: string
+}
+
+// PostLineParams drives post.line (Phase 6 directed authorship): commit an
+// approved character/narrator line INTO the transcript as an attributed
+// assistant message. actor names the speaking character; empty posts a narrator
+// beat. Session rides the frame's sess.
+export interface PostLineParams {
+  actor?: string
+  text: string
+}
+
+// DirectTurnParams drives direct.turn (Phase 6b): run one turn steered by an
+// out-of-character direction. text is what should happen next; the daemon wraps
+// it in the [Direction] marker and the model writes the beat. Session rides the
+// frame's sess.
+export interface DirectTurnParams {
+  text: string
+}
+
+// WorldLoreEntry is one World lore entry (Worlds L1): session-scoped keyed
+// context. keys trigger injection when one appears in recent messages;
+// constant injects every turn (keys ignored). audience (L2) names the
+// characters who know the entry — empty = everyone on stage; a named
+// character's generation only sees entries they are cleared for.
+export interface WorldLoreEntry {
+  name: string
+  keys?: string[]
+  constant?: boolean
+  content: string
+  audience?: string[]
+  // model marks an entry the play director's world_note tool authored (📝
+  // badge); learned is the L3 ledger: character → when they learned it via
+  // world_reveal. Both read-only on the wire.
+  model?: boolean
+  learned?: Record<string, string>
+}
+
+// WorldLorePutParams drives world.lore.put: add or update one entry (upsert by
+// entry.name); replace names the superseded entry on a rename. Session rides
+// the frame's sess.
+export interface WorldLorePutParams {
+  entry: WorldLoreEntry
+  replace?: string
+}
+
+// WorldLoreDeleteParams drives world.lore.delete. Session rides the frame's sess.
+export interface WorldLoreDeleteParams {
+  name: string
+}
+
+// WorldSetParams drives world.set: the meta-narrator coordination mode — ''
+// auto, 'off', or 'focus:<roster name>'. Session rides the frame's sess.
+export interface WorldSetParams {
+  coordination: string
+}
+
+// WorldView is one saved World (W5): the roster, its lore, and how many
+// sessions belong to it.
+export interface WorldView {
+  id: string
+  name: string
+  description?: string
+  characters?: Record<string, string>
+  lore?: WorldLoreEntry[]
+  sessions?: number
+  created?: string
+  updated?: string
+  // cover_url is the media route for the World's cover image (W5b), same
+  // contract as CardSummary.avatar_url.
+  cover_url?: string
+}
+
+// WorldsListResult is the payload of worlds.list.
+export interface WorldsListResult {
+  worlds: WorldView[]
+}
+
+// WorldSaveParams drives worlds.save: promote the session's World (name
+// required on first save) or update its saved World in place (name renames).
+// Session rides the frame's sess.
+export interface WorldSaveParams {
+  name?: string
+  description?: string
+}
+
+// WorldUpdateParams drives worlds.update (W5b): sessionless metadata edits on
+// a saved World. name '' keeps the current name; description is applied
+// VERBATIM (send the current text back when leaving it unchanged); cover sets
+// a new cover image (base64), remove_cover deletes it — never both.
+export interface WorldUpdateParams {
+  id: string
+  name?: string
+  description: string
+  cover?: string
+  remove_cover?: boolean
+}
+
+// WorldExport is a World bundle serialized for download (worlds.export) — the
+// same download shape as CardExport. bytes is base64 on the wire.
+export interface WorldExport {
+  filename: string
+  mime_type: string
+  bytes: string
+}
+
+// WorldImportParams drives worlds.import: a World bundle upload (base64).
+export interface WorldImportParams {
+  bytes: string
 }
 
 // CardExport is a card serialized for download: a CCv2 PNG or JSON. bytes is
@@ -785,6 +952,27 @@ export interface PersonaView extends PersonaSummary {
   charter?: string
 }
 
+// PersonaWriteParams is the editable form — what personas.create/edit accept.
+// Deliberately NOT PersonaView: ref/namespace/origin/editable are server-derived
+// and sending them back is noise the binder ignores.
+//
+// ⚠️ A write REPLACES the whole file. Every field must be re-sent on an edit or
+// it is ERASED, not preserved — there is no partial update.
+export interface PersonaWriteParams {
+  name: string
+  pronunciation?: string
+  specialty?: string
+  summary?: string
+  emoji?: string
+  accent_color?: string
+  recommended_skills?: string[]
+  good_for?: string[]
+  avoid_for?: string[]
+  immersive?: boolean
+  introduction?: string
+  charter?: string
+}
+
 export interface PersonasListResult {
   personas: PersonaSummary[]
 }
@@ -796,6 +984,8 @@ export interface UserPersonaView {
   ref?: string
   name: string
   description?: string
+  gender?: string
+  pronouns?: string
   default?: boolean
 }
 
@@ -1010,6 +1200,12 @@ export interface ServerHello {
   cwd?: string
   // The workspace sandbox lock (Go Hello.Jailed).
   jailed?: boolean
+  // The largest single file the carrier accepts in one frame (Go
+  // Hello.MaxUploadBytes), or absent when unbounded. Check a file against this
+  // BEFORE sending it: an oversized frame does not come back as an error, it
+  // closes the socket, and the in-flight request then fails with a generic
+  // dead-socket message that explains nothing.
+  max_upload_bytes?: number
 }
 
 export interface Frame {

@@ -14,12 +14,12 @@ func TestDispatchablePersonas(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("TERVA_PERSONA_NAME", "")
 	ds := dispatchablePersonas()
-	if len(ds) != 8 {
+	if len(ds) != 9 {
 		names := make([]string, len(ds))
 		for i, p := range ds {
 			names[i] = p.Name
 		}
-		t.Fatalf("dispatchable: got %d %v, want 8 (Mieli excluded)", len(ds), names)
+		t.Fatalf("dispatchable: got %d %v, want 9 (Mieli excluded)", len(ds), names)
 	}
 	for _, p := range ds {
 		if p.Name == "Mieli" {

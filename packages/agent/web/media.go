@@ -34,6 +34,8 @@ func serveMedia(w http.ResponseWriter, r *http.Request) {
 		path = build.NewCardStore().AvatarPath(id)
 	case "backgrounds":
 		path = build.NewBackgroundStore().Path(id)
+	case "worlds":
+		path = build.NewWorldStore().CoverPath(id)
 	default:
 		http.NotFound(w, r)
 		return

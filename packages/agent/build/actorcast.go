@@ -75,12 +75,16 @@ func castAddendum() string {
 }
 
 // BuildActorCast resolves the --cast declaration (NAME=REF) into the actor_spawn
-// tool's cast: each REF is a Persona name or a character-card path. Card paths
-// are absolutized against the launch cwd so the dispatched child (which runs in
-// the same cwd) loads the same file. Refs are validated NOW: a typo'd Persona
-// or a missing card file fails at launch naming the offending NAME=REF, rather
-// than opaquely mid-scene ("the actor exited before responding") the first time
-// the director voices that actor. Returns nil for an empty declaration.
+// tool's cast: each REF is a Persona name, a character-card path, or a card-
+// library id (how a World roster names its characters — Worlds W6, so a play
+// session created inside a saved World warms its actors from the same cards a
+// chat roster uses). Card paths are absolutized against the launch cwd so the
+// dispatched child (which runs in the same cwd) loads the same file; a library
+// id resolves to the stored card.json, itself a valid card document. Refs are
+// validated NOW: a typo'd ref fails at launch naming the offending NAME=REF,
+// rather than opaquely mid-scene ("the actor exited before responding") the
+// first time the director voices that actor. Returns nil for an empty
+// declaration.
 func BuildActorCast(raw map[string]string, cwd string) (map[string]tools.CastMember, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -97,11 +101,18 @@ func BuildActorCast(raw map[string]string, cwd string) (map[string]tools.CastMem
 				return nil, fmt.Errorf("cast %s=%s: %w", name, ref, err)
 			}
 			cast[name] = tools.CastMember{Card: p}
-		} else {
-			if _, err := ResolvePersona(ref); err != nil {
-				return nil, fmt.Errorf("cast %s=%s: %w", name, ref, err)
-			}
+			continue
+		}
+		// Persona names first (the original vocabulary — existing play sessions
+		// keep resolving exactly as before), then the card library.
+		if _, perr := ResolvePersona(ref); perr == nil {
 			cast[name] = tools.CastMember{Persona: ref}
+			continue
+		} else if p, cerr := ResolveCardRef(ref); cerr == nil {
+			cast[name] = tools.CastMember{Card: p}
+			continue
+		} else {
+			return nil, fmt.Errorf("cast %s=%s: neither a persona (%v) nor a library card (%v)", name, ref, perr, cerr)
 		}
 	}
 	return cast, nil

@@ -33,6 +33,18 @@ type CastController interface {
 type CastMemberParams struct {
 	Name string `json:"name"`
 	Ref  string `json:"ref,omitempty"`
+	// Provider/Model optionally pin this actor to a specific model (Phase 7); empty
+	// inherits the session/host route. cast.add is an upsert, so re-adding a member
+	// with a different pin changes it.
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
+// CastRoute is one cast member's pinned provider+model (Phase 7); empty fields
+// mean the actor inherits the session/host route.
+type CastRoute struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 // CastSpeakParams names the cast member to bring into the scene.

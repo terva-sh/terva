@@ -21,6 +21,16 @@ type DoctorController interface {
 type DoctorParams struct {
 	ID        string           `json:"id"`
 	Decisions []DoctorDecision `json:"decisions,omitempty"`
+	// Provider/Model optionally run the doctor on a specific model instead of the
+	// workspace default (Phase 7 per-generation routing). Empty = the default.
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	// Session switches the doctor into EDITOR mode (Worlds W4): the proposals
+	// come from the Toimittaja persona, grounded in the named immersive
+	// session's scene and the character's World lore — promotion from play —
+	// rather than from card-craft lint alone. The same proposal shape and
+	// negotiation loop apply.
+	Session string `json:"session,omitempty"`
 }
 
 // DoctorDecision is the user's verdict on one prior proposal: accepted, or
