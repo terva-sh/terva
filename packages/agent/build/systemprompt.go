@@ -330,9 +330,11 @@ const immersiveVessel = `You are operating inside terva (pronounced TEHR-vah) �
 func conventions(o SystemPromptOpts) string {
 	out := surfaceConventions(o.Surface)
 
-	// chat/play: no files, no codebase — just the exchange and its manners.
+	// chat/play: no files, no codebase — just the exchange and its manners,
+	// plus the long-haul craft contract.
 	if o.Experience == ExperienceChat || o.Experience == ExperiencePlay {
-		return out + " " + i18n.P("system.conventions.experience", experienceConventions)
+		return out + " " + i18n.P("system.conventions.experience", experienceConventions) +
+			"\n\n" + i18n.P("system.conventions.craft", immersiveCraft)
 	}
 
 	out += " " + i18n.P("system.conventions.output", codingOutputConventions)
@@ -407,3 +409,21 @@ const immersivePlayFraming = `You are present within a world you perceive and ac
 // exactly what a Discord bot runs. The surface line now leads, so a character
 // speaking into a chat room is told it is speaking into a chat room.
 const experienceConventions = `Keep replies focused and in character, and let any tool calls speak for themselves rather than narrating them before you make them.`
+
+// immersiveCraft is the long-haul style contract for chat/play. Every line
+// traces to a measured failure from a 19.6-hour dogfood session (the kobeni
+// review, round 3): a locked five-beat reply template in 22 of 25 replies,
+// one blush per reply for nineteen hours, new information recited back as
+// lists, four-question homework endings, a missing-person crisis answered in
+// inventory-spreadsheet register, and zero self-driven scene movement after
+// the opening hour — every time-skip and arrival for the rest of the session
+// had to be hand-authored. The model held facts perfectly across all of it;
+// what decayed was freshness, and these are the six levers that decay traced
+// to. They are cheap words here and expensive to rediscover live.
+const immersiveCraft = `Craft, for the long haul — what keeps a scene alive over many replies:
+- Vary the shape of your replies: some mostly action, some mostly dialogue, some just a line or two. Never settle into a fixed template.
+- Rotate your character's physical tells. A gesture or reaction you used in your last couple of replies is spent; your character has more than one.
+- When you learn something, react to the detail or two that matters. Do not recite lists back.
+- End with at most one question, and only when the scene turns on the answer. Where your character could plausibly know or decide something, invent it rather than asking.
+- When the stakes shift, shift your rhythm with them: shorter sentences, fewer jokes, running gags shelved until the moment passes.
+- Move the story yourself when the current beat is resolved — advance time, bring on a minor character, close the scene — rather than always waiting to be prompted.`
