@@ -292,6 +292,9 @@ button.cost:hover { color: var(--fg); text-decoration: underline; }
 .btn.primary { background: var(--user); color: var(--user-fg); border-color: transparent; }
 .btn.danger { color: var(--danger); }
 .icon { background: none; border: none; color: var(--fg); font-size: 20px; cursor: pointer; padding: 4px 8px; line-height: 1; }
+/* The Stage cross-nav is a real <a> (middle-click / open-in-tab), so strip the
+   link chrome and let it sit inline with the button icons. */
+a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .icon.sm { font-size: 15px; padding: 2px 6px; color: var(--muted); }
 .icon:hover, .icon.sm:hover { color: var(--fg); }
 .icon.on { color: var(--user); }

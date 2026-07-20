@@ -25,6 +25,20 @@ type PersonasController interface {
 	// PersonasEdit overwrites an existing persona (copy-to-edit for a built-in).
 	// Trusted-tier; errors if no persona of that name exists (create it instead).
 	PersonasEdit(ctx context.Context, p PersonaWriteParams) (PersonaView, error)
+	// PersonasDelete removes a persona from the USER library. Trusted-tier.
+	//
+	// Only an on-disk user file can be deleted — the embedded crew and extension
+	// bundles are not ours to remove, and a request naming one is refused rather
+	// than silently doing nothing. Deleting a user file that SHADOWS a built-in
+	// is the un-shadow: the built-in becomes visible again, which is the only way
+	// back from a copy-to-edit and the reason this is a delete rather than a
+	// tombstone.
+	PersonasDelete(ctx context.Context, p PersonaDeleteParams) error
+}
+
+// PersonaDeleteParams names the persona to remove from the user library.
+type PersonaDeleteParams struct {
+	Name string `json:"name"`
 }
 
 // PersonaGetParams names a persona by a bare name/stem or "namespace:name" ref.

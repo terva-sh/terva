@@ -33,6 +33,8 @@ test('stage: generate a scene background from a prompt', async ({ page }) => {
 
   await page.locator('.stage-steer-btn').click()
   await expect(page.locator('.stage-drawer')).toBeVisible()
+  // Since the S10 tab split, the scene generator lives behind the Scene tab.
+  await page.locator('.stage-drawer__tab', { hasText: 'Scene' }).click()
 
   // The scene generator posts backgrounds.generate {prompt}.
   await page.locator('.stage-bg-gen__prompt').fill('a rain-slick alley at night, neon reflections')

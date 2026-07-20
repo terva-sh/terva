@@ -107,14 +107,17 @@ test('stage: library renders and a card opens an immersive chat', async ({ page 
   await expect(page.locator('.stage-continue')).toBeVisible()
   if (process.env.STAGE_SHOT) await page.screenshot({ path: `${process.env.STAGE_SHOT}-chat.png`, fullPage: true })
 
-  // Open the steering drawer: session details, the scene picker, the lorebook.
+  // Open the steering drawer. Since the S10 tab split it lands on Session; the
+  // user persona lives in You, and the note/scene/lorebook in Scene.
   await page.locator('.stage-steer-btn').click()
   await expect(page.locator('.stage-drawer')).toBeVisible()
-  // The author's note seeds from the session snapshot (SessionInfo.note).
-  await expect(page.locator('.stage-note')).toHaveValue('It is dusk on the pass.')
-  // The user persona — name + description — seeds from the snapshot too.
+  // The user persona — name + description — seeds from the session snapshot.
+  await page.locator('.stage-drawer__tab', { hasText: 'You' }).click()
   await expect(page.locator('.stage-user-name')).toHaveValue('Kira')
   await expect(page.locator('.stage-user-desc')).toHaveValue('A wary courier who trusts no one.')
+  // The author's note seeds from the snapshot too (SessionInfo.note).
+  await page.locator('.stage-drawer__tab', { hasText: 'Scene' }).click()
+  await expect(page.locator('.stage-note')).toHaveValue('It is dusk on the pass.')
   await expect(page.locator('.stage-bg-tile')).toHaveCount(3) // None + 2 backgrounds
   await expect(page.locator('.stage-lore__entry')).toHaveCount(3)
   // The activation trace: one entry fired (its matched key highlighted), one fired

@@ -64,6 +64,35 @@ func (w *Workspace) PersonasEdit(_ context.Context, p ctrlproto.PersonaWritePara
 	return w.writePersona(p)
 }
 
+// PersonasDelete removes a persona from the user library (trusted-tier).
+//
+// Only a user on-disk file can go. A built-in or extension persona is not ours
+// to remove, and the request is REFUSED rather than quietly succeeding — a
+// silent no-op would leave the roster unchanged with nothing to explain why.
+// Deleting a user file that shadows a built-in un-shadows it, so the built-in
+// reappears in the roster; that is the only way back from a copy-to-edit, and
+// the reason the refusal message names it.
+func (w *Workspace) PersonasDelete(_ context.Context, p ctrlproto.PersonaDeleteParams) error {
+	if err := w.guardPersonaWrite(p.Name); err != nil {
+		return err
+	}
+	removed, err := build.DeletePersona(p.Name)
+	if err != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "delete persona: %v", err)
+	}
+	if !removed {
+		// Distinguish the two ways there is nothing to delete: a name you never
+		// had, versus a built-in you cannot remove (and did not customize).
+		if found, ok := build.LookupPersona(p.Name); ok {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
+				"persona %q is %s, not yours to delete — duplicate it under a new name instead", p.Name, personaOrigin(found))
+		}
+		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "persona %q not found", p.Name)
+	}
+	w.broadcastLibraryChanged()
+	return nil
+}
+
 // guardPersonaWrite enforces the two preconditions every persona write shares:
 // a trusted workspace, and a non-empty name.
 func (w *Workspace) guardPersonaWrite(name string) error {

@@ -34,10 +34,29 @@ function ListField(props: { label: string; items?: string[]; tone?: 'good' | 'av
 // PersonaSheet is the persona detail sheet (rough-edge #9): the Library's persona
 // roster was display-only; tapping one now opens its full PersonaView
 // (personas.get) — specialty, summary, introduction, the charter that shapes its
-// identity, and the good-for/avoid-for guidance. Read-only for now; the same
-// sheet is the natural seam for a persona editor later (personas.edit exists).
-export function PersonaSheet(props: { client: Client; persona: PersonaSummary; onClose: () => void }) {
-  const { client, persona, onClose } = props
+// identity, and the good-for/avoid-for guidance.
+//
+// The editor seam this comment used to promise is now wired, and provenance
+// decides which actions it offers. A persona of YOURS edits and deletes in
+// place. A built-in or extension persona does NEITHER: it offers Duplicate.
+//
+// That asymmetry is deliberate and is not what the daemon would enforce on its
+// own — personas.edit on a built-in succeeds, writing a user file that shadows
+// it by slug. The shadow is permanent and invisible: a later terva release that
+// improves that charter would never reach you, and no screen would ever explain
+// why. Duplicating under a new name gets the same customization while leaving
+// the built-in live.
+export function PersonaSheet(props: {
+  client: Client
+  persona: PersonaSummary
+  onClose: () => void
+  onEdit?: () => void
+  onDuplicate?: () => void
+  onDelete?: () => void
+}) {
+  const { client, persona, onClose, onEdit, onDuplicate, onDelete } = props
+  // `editable` is the daemon's own verdict: true only for a user on-disk file.
+  const mine = persona.editable === true
   const [view, setView] = useState<PersonaView | null>(null)
   const [error, setError] = useState('')
 
@@ -68,6 +87,20 @@ export function PersonaSheet(props: { client: Client; persona: PersonaSummary; o
               {persona.immersive && <span class="stage-personasheet__immersive">immersive</span>}
             </div>
           </div>
+          {mine && onEdit && (
+            <button class="stage-cardsheet__edit" title="Edit this persona" onClick={onEdit}>
+              ✎ Edit
+            </button>
+          )}
+          {!mine && onDuplicate && (
+            <button
+              class="stage-cardsheet__edit"
+              title={`Make your own copy of ${persona.name} under a new name — the ${persona.origin} one stays as it is`}
+              onClick={onDuplicate}
+            >
+              ⧉ Duplicate
+            </button>
+          )}
           <button class="stage-drawer__close" onClick={onClose}>
             ✕
           </button>
@@ -90,6 +123,12 @@ export function PersonaSheet(props: { client: Client; persona: PersonaSummary; o
             <ListField label="Recommended skills" items={view.recommended_skills} />
             <Field label="Pronunciation" value={view.pronunciation} />
           </div>
+        )}
+
+        {mine && onDelete && (
+          <button class="stage-sheet__delete" onClick={onDelete}>
+            Delete persona
+          </button>
         )}
       </div>
     </div>

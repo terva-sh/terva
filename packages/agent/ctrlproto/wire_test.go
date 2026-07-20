@@ -703,7 +703,7 @@ func (f *fakeSvc) SurfaceAction(ctx context.Context, sess, id, action string, ar
 	return nil
 }
 
-func (f *fakeSvc) Models(ctx context.Context) ([]ModelInfo, error) {
+func (f *fakeSvc) Models(ctx context.Context, sess string) ([]ModelInfo, error) {
 	return []ModelInfo{{ID: "claude-opus-4-8", Provider: "anthropic", Current: true}}, nil
 }
 

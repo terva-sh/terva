@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
@@ -143,4 +144,114 @@ func containsPersona(ps []ctrlproto.PersonaSummary, name string) bool {
 		}
 	}
 	return false
+}
+
+// TestWorkspacePersonaDelete — a user persona can be removed, and the roster
+// stops carrying it.
+func TestWorkspacePersonaDelete(t *testing.T) {
+	w := newPersonaWorkspace(t)
+	ctx := context.Background()
+	if err := config.TrustPath(w.cwd, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.PersonasCreate(ctx, ctrlproto.PersonaWriteParams{Name: "Scratch", Charter: "temp."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.PersonasDelete(ctx, ctrlproto.PersonaDeleteParams{Name: "Scratch"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := build.UserPersonaPath("Scratch"); exists {
+		t.Error("the user file should be gone")
+	}
+	r, err := w.PersonasList(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsPersona(r.Personas, "Scratch") {
+		t.Error("a deleted persona should leave the roster")
+	}
+}
+
+// TestWorkspacePersonaDeleteRefusesABuiltin — the embedded crew is not ours to
+// remove. The refusal must be an ERROR, not a silent success: a no-op would
+// leave the roster unchanged with nothing to explain why, which reads as a bug.
+func TestWorkspacePersonaDeleteRefusesABuiltin(t *testing.T) {
+	w := newPersonaWorkspace(t)
+	ctx := context.Background()
+	if err := config.TrustPath(w.cwd, false); err != nil {
+		t.Fatal(err)
+	}
+	err := w.PersonasDelete(ctx, ctrlproto.PersonaDeleteParams{Name: "Mieli"})
+	if err == nil {
+		t.Fatal("deleting a built-in should be refused")
+	}
+	if !strings.Contains(err.Error(), "built-in") {
+		t.Errorf("the refusal should say WHY it cannot go: %v", err)
+	}
+	if _, ok := build.LookupPersona("Mieli"); !ok {
+		t.Error("the built-in must survive a refused delete")
+	}
+}
+
+// TestWorkspacePersonaDeleteUnshadowsABuiltin — 🔑 the way back from a
+// copy-to-edit. Editing a built-in writes a user file that shadows it by slug;
+// deleting that file must REVEAL the built-in again rather than leave a hole,
+// which is the whole reason delete beats a tombstone.
+func TestWorkspacePersonaDeleteUnshadowsABuiltin(t *testing.T) {
+	w := newPersonaWorkspace(t)
+	ctx := context.Background()
+	if err := config.TrustPath(w.cwd, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.PersonasEdit(ctx, ctrlproto.PersonaWriteParams{Name: "Mieli", Summary: "mine", Charter: "Custom."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.PersonasDelete(ctx, ctrlproto.PersonaDeleteParams{Name: "Mieli"}); err != nil {
+		t.Fatal(err)
+	}
+	restored, ok := build.LookupPersona("Mieli")
+	if !ok {
+		t.Fatal("deleting the shadow should reveal the built-in, not remove the persona")
+	}
+	if restored.Summary == "mine" {
+		t.Error("the roster still resolves the deleted user copy")
+	}
+	if origin := personaOrigin(restored); origin != "built-in" {
+		t.Errorf("origin after un-shadow = %q, want built-in", origin)
+	}
+}
+
+// TestWorkspacePersonaDeleteRequiresTrust — delete is a trusted-tier mutation
+// like create/edit; an untrusted workspace must not be able to remove identity.
+func TestWorkspacePersonaDeleteRequiresTrust(t *testing.T) {
+	w := newPersonaWorkspace(t)
+	ctx := context.Background()
+	if err := config.TrustPath(w.cwd, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.PersonasCreate(ctx, ctrlproto.PersonaWriteParams{Name: "Scratch", Charter: "temp."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.UntrustPath(w.cwd); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.PersonasDelete(ctx, ctrlproto.PersonaDeleteParams{Name: "Scratch"}); err == nil {
+		t.Fatal("an untrusted workspace must not delete a persona")
+	}
+	if _, exists := build.UserPersonaPath("Scratch"); !exists {
+		t.Error("the persona must survive a refused delete")
+	}
+}
+
+// TestWorkspacePersonaDeleteUnknown — a name that was never there is a
+// not-found, distinct from the built-in refusal above.
+func TestWorkspacePersonaDeleteUnknown(t *testing.T) {
+	w := newPersonaWorkspace(t)
+	ctx := context.Background()
+	if err := config.TrustPath(w.cwd, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.PersonasDelete(ctx, ctrlproto.PersonaDeleteParams{Name: "Ghost"}); err == nil {
+		t.Error("deleting an unknown persona should error")
+	}
 }

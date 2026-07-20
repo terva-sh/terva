@@ -104,3 +104,26 @@ func WritePersona(p Persona) (string, error) {
 	}
 	return dest, nil
 }
+
+// DeletePersona removes a persona from the user library ($TERVA_HOME/personas),
+// the inverse of WritePersona. It touches ONLY the user tier: the embedded crew
+// and extension bundles are not on disk here and are unaffected, so deleting a
+// user file that shadowed a built-in un-shadows it and the built-in becomes
+// visible again — the way back from a copy-to-edit.
+//
+// Reports whether a file was removed, so a caller can tell "deleted" from
+// "there was nothing of yours by that name" and answer accordingly. As with
+// WritePersona, the trust gate is the CALLER's job.
+func DeletePersona(name string) (bool, error) {
+	dest, exists := UserPersonaPath(name)
+	if dest == "" {
+		return false, fmt.Errorf("persona: name %q has no usable filename", name)
+	}
+	if !exists {
+		return false, nil
+	}
+	if err := os.Remove(dest); err != nil {
+		return false, err
+	}
+	return true, nil
+}
