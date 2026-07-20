@@ -45,6 +45,11 @@ type StoredCard struct {
 	// verbatim so an editor round-trips `extensions` it does not itself render.
 	Raw       []byte
 	AvatarExt string // "png" when an avatar was retained, else ""
+	// Warnings are non-fatal notes from the import that a user should see — a
+	// downscaled or dropped portrait, say. An imported card is usable with
+	// warnings; they explain what the library did to it, so a surprise (a
+	// missing avatar) has a stated reason instead of looking like a bug.
+	Warnings []string
 }
 
 // HasAvatar reports whether an avatar image is stored alongside the card.
@@ -119,9 +124,10 @@ func (s *CardStore) ImportPath(path string) (StoredCard, error) {
 }
 
 // ImportBytes imports a card from raw file bytes (a PNG with an embedded card,
-// or a bare JSON card). A PNG's original bytes are kept as the avatar. The id is
-// derived from the card's content, so re-importing the same card is idempotent
-// (same id, same directory) rather than piling up duplicates.
+// or a bare JSON card). A PNG's pixels are kept as the avatar, downscaled first
+// when the portrait is oversized (see normalizeAvatar). The id is derived from
+// the card's content, so re-importing the same card is idempotent (same id, same
+// directory) rather than piling up duplicates.
 func (s *CardStore) ImportBytes(data []byte) (StoredCard, error) {
 	c, err := card.LoadBytes(data)
 	if err != nil {
@@ -140,13 +146,34 @@ func (s *CardStore) ImportBytes(data []byte) (StoredCard, error) {
 		return StoredCard{}, err
 	}
 	ext := ""
-	if card.IsPNG(data) {
-		if err := os.WriteFile(filepath.Join(dir, cardAvatarName), data, 0o644); err != nil {
-			return StoredCard{}, err
-		}
-		ext = "png"
+	var warnings []string
+	// More than one `chara` chunk means the parse had to choose. Say so: the
+	// candidates are routinely different REVISIONS of the character rather than
+	// duplicates, so the unchosen one is not equivalent, and a user comparing
+	// this import against the same card elsewhere deserves to know why they
+	// differ. See card.CountCharaChunks for why first-wins is the rule.
+	if n := card.CountCharaChunks(data); n > 1 {
+		warnings = append(warnings, fmt.Sprintf(
+			"this PNG embeds %d character records; imported the first. They are often different revisions of the card, so check the description and greeting look right.", n))
 	}
-	return StoredCard{ID: id, Card: c, Raw: raw, AvatarExt: ext}, nil
+	// A V3 card's data now survives import and round-trips unharmed, but some of
+	// what V3 can DECLARE is not yet something terva acts on. Say which, on
+	// arrival, so a lorebook that never fires has a stated reason rather than
+	// looking like a bug in the card.
+	warnings = append(warnings, card.UnsupportedV3Features(c)...)
+	if card.IsPNG(data) {
+		avatar, note := normalizeAvatar(data)
+		if note != "" {
+			warnings = append(warnings, note)
+		}
+		if avatar != nil {
+			if err := os.WriteFile(filepath.Join(dir, cardAvatarName), avatar, 0o644); err != nil {
+				return StoredCard{}, err
+			}
+			ext = "png"
+		}
+	}
+	return StoredCard{ID: id, Card: c, Raw: raw, AvatarExt: ext, Warnings: warnings}, nil
 }
 
 // Edit replaces a stored card's fields with a full edited card document

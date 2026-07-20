@@ -147,6 +147,14 @@ type Hello struct {
 	// re-announces on every (re)connect, so connect-time state stays truthful
 	// across a restart that changes the flag. Server-side only, like Locale.
 	Jailed bool `json:"jailed,omitempty"`
+	// MaxUploadBytes is the largest single file the carrier will accept in one
+	// frame, or 0 when the carrier does not bound it. A client checks a file
+	// against this BEFORE sending: an oversized frame is not rejected with an
+	// error, it kills the connection, so the request it belonged to fails with a
+	// generic dead-socket message that names nothing useful. Advertising the
+	// bound is what lets the panel say "this file is 19.6 MB, the limit is 24 MB"
+	// instead. Carrier-owned (web/conn.go), so the composition root sets it.
+	MaxUploadBytes int64 `json:"max_upload_bytes,omitempty"`
 }
 
 const (

@@ -138,4 +138,8 @@ type CardSummary struct {
 type CardView struct {
 	CardSummary
 	Raw json.RawMessage `json:"raw"`
+	// Warnings are non-fatal notes from an import — a portrait that was
+	// downscaled or dropped. The card imported fine; these say what was done to
+	// it. Empty on a read (cards.get), populated only by cards.import.
+	Warnings []string `json:"warnings,omitempty"`
 }

@@ -61,8 +61,12 @@ export function CardSheet(props: {
   onClose: () => void
   onStart: (greeting: number) => void
   onEdit?: () => void
+  // Delete lives here rather than on the grid tile: the tile's one corner slot is
+  // already the "⋯ Details" button, and a destructive action reached by mistake
+  // from a grid is worse than one reached deliberately from the detail sheet.
+  onDelete?: () => void
 }) {
-  const { client, card, busy, onClose, onStart, onEdit } = props
+  const { client, card, busy, onClose, onStart, onEdit, onDelete } = props
   const [view, setView] = useState<CardView | null>(null)
   const [findings, setFindings] = useState<CardLintFinding[] | null>(null)
   const [greeting, setGreeting] = useState(0)
@@ -271,6 +275,11 @@ export function CardSheet(props: {
         <button class="stage-sheet__export" onClick={() => void exportCard()}>
           Export card
         </button>
+        {onDelete && (
+          <button class="stage-sheet__delete" onClick={onDelete}>
+            Delete card
+          </button>
+        )}
       </div>
     </div>
   )

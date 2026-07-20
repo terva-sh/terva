@@ -114,3 +114,58 @@ func TestReadPNG_Errors(t *testing.T) {
 		t.Error("expected error when no chara chunk present")
 	}
 }
+
+// A PNG may legally repeat a tEXt keyword, and real cards do: one off chub.ai
+// carried two `chara` chunks holding DIFFERENT REVISIONS of the character (one
+// system prompt twice the other's, differing first_mes and tags). ReadPNG takes
+// the first; CountCharaChunks is how an importer learns a choice was made, so it
+// can say so.
+func TestCountCharaChunks(t *testing.T) {
+	chara := func(name string) []byte {
+		doc := `{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"` + name + `"}}`
+		return pngChunk("tEXt", []byte("chara\x00"+base64.StdEncoding.EncodeToString([]byte(doc))))
+	}
+
+	t.Run("none", func(t *testing.T) {
+		if n := CountCharaChunks(makePNG(pngChunk("IEND", nil))); n != 0 {
+			t.Errorf("got %d, want 0", n)
+		}
+	})
+
+	t.Run("one", func(t *testing.T) {
+		if n := CountCharaChunks(makePNG(chara("Mara"), pngChunk("IEND", nil))); n != 1 {
+			t.Errorf("got %d, want 1", n)
+		}
+	})
+
+	// The shape of the real card: two chara chunks with other chunks interleaved.
+	t.Run("two with an interleaved chunk", func(t *testing.T) {
+		png := makePNG(chara("Mara"), pngChunk("iCCP", []byte("profile\x00\x00x")), chara("Other"), pngChunk("IEND", nil))
+		if n := CountCharaChunks(png); n != 2 {
+			t.Fatalf("got %d, want 2", n)
+		}
+		// And the FIRST is still what parses out — the count reports the
+		// ambiguity, it must not change which record wins.
+		got, err := ReadPNG(png)
+		if err != nil {
+			t.Fatalf("ReadPNG: %v", err)
+		}
+		if c, err := ParseJSON(got); err != nil || c.Name != "Mara" {
+			t.Fatalf("first chunk must win: %v / %+v", err, c)
+		}
+	})
+
+	// Non-chara text chunks must not inflate the count.
+	t.Run("ignores other keywords", func(t *testing.T) {
+		png := makePNG(pngChunk("tEXt", []byte("Comment\x00hi")), chara("Mara"), pngChunk("IEND", nil))
+		if n := CountCharaChunks(png); n != 1 {
+			t.Errorf("got %d, want 1", n)
+		}
+	})
+
+	t.Run("not a png", func(t *testing.T) {
+		if n := CountCharaChunks([]byte("nope")); n != 0 {
+			t.Errorf("got %d, want 0", n)
+		}
+	})
+}

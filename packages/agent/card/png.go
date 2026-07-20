@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -17,13 +18,49 @@ import (
 // cards are a few KiB.
 const maxCharaBytes = 8 << 20 // 8 MiB
 
-// ReadPNG extracts the embedded character JSON from a PNG's `chara` text
+// ReadPNG extracts the embedded character JSON from a PNG's character text
 // chunk (tEXt, zTXt, or iTXt), decoding the common base64-of-JSON convention
 // and accepting raw JSON. Reads are bounded and defensive — PNG input is
 // untrusted.
+//
+// A CCv3 card lives in a `ccv3` chunk, and its writers ALSO emit a `chara` chunk
+// holding a V2 rendering of the same character so older readers still see
+// something. The spec's rule for a reader that finds both is to use `ccv3` — and
+// terva used to match only `chara`, so a V3 card either imported as its
+// downgraded V2 twin (quietly losing everything V3 added) or, when the writer
+// emitted `ccv3` alone, failed to import at all with "no character metadata".
+// Hence: `ccv3` first, `chara` as the fallback.
 func ReadPNG(data []byte) ([]byte, error) {
+	found, err := scanCardChunks(data)
+	if err != nil {
+		return nil, err
+	}
+	if found.ccv3 != nil {
+		return decodeChara(found.ccv3)
+	}
+	if found.chara != nil {
+		return decodeChara(found.chara)
+	}
+	return nil, fmt.Errorf("no character metadata (`ccv3` or `chara` chunk) in PNG")
+}
+
+// cardChunks is what one pass over a PNG's text chunks turned up: the first
+// payload under each recognized keyword, plus how many of each were present so
+// an importer can report an ambiguous file.
+type cardChunks struct {
+	ccv3       []byte
+	chara      []byte
+	ccv3Count  int
+	charaCount int
+}
+
+// scanCardChunks walks the PNG once, collecting the first `ccv3` and first
+// `chara` text chunk and counting both. One pass, so precedence and the
+// duplicate report cannot disagree about what the file contains.
+func scanCardChunks(data []byte) (cardChunks, error) {
+	var out cardChunks
 	if len(data) < len(pngSignature) || string(data[:len(pngSignature)]) != pngSignature {
-		return nil, fmt.Errorf("not a PNG")
+		return out, fmt.Errorf("not a PNG")
 	}
 	pos := len(pngSignature)
 	for pos+8 <= len(data) {
@@ -31,41 +68,103 @@ func ReadPNG(data []byte) ([]byte, error) {
 		ctype := string(data[pos+4 : pos+8])
 		start := pos + 8
 		if length < 0 || start+length < start || start+length > len(data) {
-			return nil, fmt.Errorf("truncated or malformed PNG chunk")
+			return out, fmt.Errorf("truncated or malformed PNG chunk")
 		}
-		chunk := data[start : start+length]
-		switch ctype {
-		case "tEXt":
-			if kw, text, ok := parseTEXt(chunk); ok && isChara(kw) {
-				return decodeChara(text)
+		if kw, text, ok := parseTextChunk(ctype, data[start:start+length]); ok {
+			switch {
+			case isCCv3(kw):
+				out.ccv3Count++
+				if out.ccv3 == nil {
+					out.ccv3 = text
+				}
+			case isChara(kw):
+				out.charaCount++
+				if out.chara == nil {
+					out.chara = text
+				}
 			}
-		case "zTXt":
-			if kw, text, ok := parseZTXt(chunk); ok && isChara(kw) {
-				return decodeChara(text)
-			}
-		case "iTXt":
-			if kw, text, ok := parseITXt(chunk); ok && isChara(kw) {
-				return decodeChara(text)
-			}
-		case "IEND":
-			return nil, fmt.Errorf("no character metadata (`chara` chunk) in PNG")
+		}
+		if ctype == "IEND" {
+			break
 		}
 		pos = start + length + 4 // skip the 4-byte CRC
 	}
-	return nil, fmt.Errorf("no character metadata (`chara` chunk) in PNG")
+	return out, nil
+}
+
+// parseTextChunk decodes any of PNG's three text chunk flavors to (keyword,
+// text). Not a text chunk => ok=false.
+func parseTextChunk(ctype string, chunk []byte) (kw string, text []byte, ok bool) {
+	switch ctype {
+	case "tEXt":
+		return parseTEXt(chunk)
+	case "zTXt":
+		return parseZTXt(chunk)
+	case "iTXt":
+		return parseITXt(chunk)
+	}
+	return "", nil, false
 }
 
 func isChara(kw string) bool { return strings.EqualFold(kw, "chara") }
+func isCCv3(kw string) bool  { return strings.EqualFold(kw, "ccv3") }
 
-// WritePNG embeds cardJSON into a copy of pngData as a base64 `chara` tEXt chunk
-// (the SillyTavern convention), REPLACING any existing chara text chunk — so a
-// card edited after import exports its current data, not the pixels' stale
-// embed. The image pixels are preserved verbatim. The inverse of ReadPNG.
+// CountCharaChunks reports how many `chara` text chunks a PNG carries. ReadPNG
+// takes the FIRST and ignores the rest, so anything above one means the import
+// silently chose between candidates.
+//
+// That is not a hypothetical. A real card off chub.ai (the RPG world simulation
+// engine) shipped two, and they were not duplicates — different revisions of the
+// same character, one with a system prompt twice the length of the other, plus a
+// differing first_mes and tags. Whichever a reader picks, it gets a materially
+// different character under the same name.
+//
+// The PNG spec permits repeated tEXt keywords, so such a file is well-formed and
+// cannot simply be rejected; the V2 card spec, meanwhile, says nothing about
+// which of two `chara` chunks wins, so every reader's choice is its own. (The
+// SANCTIONED multi-chunk pattern uses distinct keywords — a `ccv3` chunk beside
+// a `chara` one, V3 winning — which is a precedence ladder, not this.) Almost
+// always a duplicate is an exporter appending a fresh chunk instead of replacing
+// the stale one; terva's own WritePNG drops every existing chara chunk before
+// writing exactly one, so terva never emits these.
+//
+// So: take the first, deterministically, and TELL the user we had to choose.
+// A count, not the chunks themselves — the caller only needs to know a choice
+// was made, and returning the losing payloads would invite acting on them.
+// It counts within ONE keyword. A `ccv3` chunk sitting beside a `chara` one is
+// the sanctioned V3 layout, not an ambiguity — different keywords with a defined
+// precedence — so it is not reported here; only a repeated keyword is.
+func CountCharaChunks(data []byte) int {
+	found, err := scanCardChunks(data)
+	if err != nil {
+		return 0
+	}
+	// Whichever keyword actually supplied the card is the one whose duplicates
+	// mattered: ReadPNG prefers ccv3, so on a V3 file the chara chunks are the
+	// back-compat copies and their count is not what the user chose between.
+	if found.ccv3Count > 0 {
+		return found.ccv3Count
+	}
+	return found.charaCount
+}
+
+// WritePNG embeds cardJSON into a copy of pngData as base64 text chunks,
+// REPLACING any existing character chunk — so a card edited after import exports
+// its current data, not the pixels' stale embed. The image pixels are preserved
+// verbatim. The inverse of ReadPNG.
+//
+// A V2 document is written as one `chara` chunk (the SillyTavern convention). A
+// V3 document is written as a `ccv3` chunk PLUS a `chara` chunk holding a V2
+// downgrade of the same card, which is the layout V3 writers use and the reason
+// ReadPNG needs a precedence rule at all: the pair keeps the card openable in
+// V2-only tools without the V3 reader losing anything. Writing the V3 document
+// into `chara` instead would hand a V2 reader a spec label it does not know.
 func WritePNG(pngData, cardJSON []byte) ([]byte, error) {
 	if len(pngData) < len(pngSignature) || string(pngData[:len(pngSignature)]) != pngSignature {
 		return nil, fmt.Errorf("not a PNG")
 	}
-	out := make([]byte, 0, len(pngData)+len(cardJSON)+64)
+	chunks := cardChunksFor(cardJSON)
+	out := make([]byte, 0, len(pngData)+2*len(cardJSON)+128)
 	out = append(out, pngSignature...)
 	pos := len(pngSignature)
 	inserted := false
@@ -77,12 +176,14 @@ func WritePNG(pngData, cardJSON []byte) ([]byte, error) {
 			return nil, fmt.Errorf("truncated or malformed PNG chunk")
 		}
 		end := start + length + 4 // include the 4-byte CRC
-		if isCharaTextChunk(ctype, pngData[start:start+length]) {
-			pos = end // drop the stale chara chunk; the fresh one goes in before IEND
+		if isCardTextChunk(ctype, pngData[start:start+length]) {
+			pos = end // drop the stale chunk; the fresh one goes in before IEND
 			continue
 		}
 		if ctype == "IEND" {
-			out = appendPNGChunk(out, "tEXt", []byte("chara\x00"+base64.StdEncoding.EncodeToString(cardJSON)))
+			for _, ch := range chunks {
+				out = appendPNGChunk(out, "tEXt", []byte(ch.keyword+"\x00"+base64.StdEncoding.EncodeToString(ch.doc)))
+			}
 			inserted = true
 		}
 		out = append(out, pngData[pos:end]...)
@@ -94,23 +195,40 @@ func WritePNG(pngData, cardJSON []byte) ([]byte, error) {
 	return out, nil
 }
 
-// isCharaTextChunk reports whether a chunk is a text chunk keyed "chara".
-func isCharaTextChunk(ctype string, data []byte) bool {
-	switch ctype {
-	case "tEXt":
-		if kw, _, ok := parseTEXt(data); ok {
-			return isChara(kw)
-		}
-	case "zTXt":
-		if kw, _, ok := parseZTXt(data); ok {
-			return isChara(kw)
-		}
-	case "iTXt":
-		if kw, _, ok := parseITXt(data); ok {
-			return isChara(kw)
+// cardChunksFor decides which text chunks a document is written as: a `ccv3`
+// chunk plus a V2 back-compat `chara` chunk for a V3 card, or a lone `chara`
+// chunk otherwise.
+//
+// A document that claims V3 but cannot be re-parsed into a Card is written as-is
+// under `chara` rather than failing the export — the caller handed us bytes to
+// embed, and refusing to export a card because its downgrade could not be
+// computed would be a worse outcome than a single-chunk PNG.
+func cardChunksFor(cardJSON []byte) []struct {
+	keyword string
+	doc     []byte
+} {
+	type chunk = struct {
+		keyword string
+		doc     []byte
+	}
+	var probe struct {
+		Spec string `json:"spec"`
+	}
+	if err := json.Unmarshal(cardJSON, &probe); err == nil && strings.EqualFold(probe.Spec, "chara_card_v3") {
+		if c, err := ParseJSON(cardJSON); err == nil {
+			if v2, err := MarshalV2(c); err == nil {
+				return []chunk{{"ccv3", cardJSON}, {"chara", v2}}
+			}
 		}
 	}
-	return false
+	return []chunk{{"chara", cardJSON}}
+}
+
+// isCardTextChunk reports whether a chunk is a text chunk keyed "chara" or
+// "ccv3" — i.e. one WritePNG must drop before writing fresh ones.
+func isCardTextChunk(ctype string, data []byte) bool {
+	kw, _, ok := parseTextChunk(ctype, data)
+	return ok && (isChara(kw) || isCCv3(kw))
 }
 
 // appendPNGChunk writes one PNG chunk (length, type, data, CRC-32 of type+data).

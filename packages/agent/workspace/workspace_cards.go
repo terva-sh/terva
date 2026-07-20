@@ -23,6 +23,20 @@ var _ ctrlproto.CardsController = (*Workspace)(nil)
 
 func (w *Workspace) cardStore() *build.CardStore { return build.NewCardStore() }
 
+// cardName resolves a stored card's display name from its library ref, or "" if
+// the ref is empty or the card can't be loaded. Used to title immersive sessions
+// by their character (the design's "default title = character name").
+func (w *Workspace) cardName(ref string) string {
+	if strings.TrimSpace(ref) == "" {
+		return ""
+	}
+	sc, err := w.cardStore().Get(ref)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(sc.Card.Name)
+}
+
 // CardsList summarizes every stored card.
 func (w *Workspace) CardsList(_ context.Context) (ctrlproto.CardsListResult, error) {
 	stored, err := w.cardStore().List()
@@ -154,7 +168,14 @@ func (w *Workspace) CardsExport(_ context.Context, p ctrlproto.CardExportParams)
 	if err != nil {
 		return ctrlproto.CardExport{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%v", err)
 	}
-	format := strings.ToLower(strings.TrimSpace(p.Format))
+	return w.exportCard(sc, p.Format)
+}
+
+// exportCard serializes a stored card for download in the given format ("" =
+// auto: PNG when it retains an avatar, else JSON) — the core of cards.export,
+// shared with worlds.export, which embeds every roster card in this form.
+func (w *Workspace) exportCard(sc build.StoredCard, format string) (ctrlproto.CardExport, error) {
+	format = strings.ToLower(strings.TrimSpace(format))
 	if format == "" {
 		if sc.HasAvatar() {
 			format = "png"
@@ -167,9 +188,9 @@ func (w *Workspace) CardsExport(_ context.Context, p ctrlproto.CardExportParams)
 	case "json":
 		return ctrlproto.CardExport{Filename: name + ".json", MimeType: "application/json", Bytes: sc.Raw}, nil
 	case "png":
-		path := w.cardStore().AvatarPath(p.ID)
+		path := w.cardStore().AvatarPath(sc.ID)
 		if path == "" {
-			return ctrlproto.CardExport{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "card %q has no avatar to embed in a PNG — export it as json", p.ID)
+			return ctrlproto.CardExport{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "card %q has no avatar to embed in a PNG — export it as json", sc.ID)
 		}
 		avatar, err := os.ReadFile(path)
 		if err != nil {
@@ -235,7 +256,7 @@ func cardSummary(sc build.StoredCard) ctrlproto.CardSummary {
 }
 
 func cardView(sc build.StoredCard) ctrlproto.CardView {
-	return ctrlproto.CardView{CardSummary: cardSummary(sc), Raw: sc.Raw}
+	return ctrlproto.CardView{CardSummary: cardSummary(sc), Raw: sc.Raw, Warnings: sc.Warnings}
 }
 
 // cardAvatarURL is the media route a client fetches a card's portrait from

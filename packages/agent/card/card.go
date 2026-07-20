@@ -34,10 +34,47 @@ type Card struct {
 	// interpreted as terva capabilities (tools, MCP, hooks, authority).
 	Extensions json.RawMessage `json:"extensions,omitempty"`
 
+	// --- CCv3 additions ---
+	//
+	// These are modelled rather than left to fall on the floor. A V3 `data`
+	// object was previously unmarshalled into a struct that had no such fields,
+	// so every one of them was silently dropped — and then Marshal re-emitted
+	// the card as chara_card_v2, persisting the loss. They carry `omitempty` so
+	// a V2 card does not grow V3 keys on round-trip.
+	//
+	// All are inert data. Nothing here is interpreted as a terva capability,
+	// exactly as with Extensions.
+	Nickname                 string            `json:"nickname,omitempty"`
+	CreatorNotesMultilingual map[string]string `json:"creator_notes_multilingual,omitempty"`
+	Source                   []string          `json:"source,omitempty"`
+	GroupOnlyGreetings       []string          `json:"group_only_greetings,omitempty"`
+	CreationDate             *int64            `json:"creation_date,omitempty"`
+	ModificationDate         *int64            `json:"modification_date,omitempty"`
+	// Assets are the V3 portrait/background/emotion set. terva serves a single
+	// avatar today, so these ride through for fidelity and are surfaced as an
+	// import warning rather than acted on.
+	Assets []Asset `json:"assets,omitempty"`
+
 	// SpecVersion is the card's declared spec_version ("2.0", "3.0", or ""
-	// for a V1 card). Informational.
+	// for a V1 card). Informational, and the switch Marshal reads to decide
+	// which spec document to emit.
 	SpecVersion string `json:"-"`
 }
+
+// Asset is one CCv3 `assets` entry: a typed, named media reference (icon,
+// background, user_icon, emotion, or an x_-prefixed custom type). The uri is an
+// http(s) URL, a base64 data URL, `embeded://path` (into a .charx container), or
+// `ccdefault:` meaning "the card's own image".
+type Asset struct {
+	Type string `json:"type"`
+	URI  string `json:"uri"`
+	Name string `json:"name"`
+	Ext  string `json:"ext"`
+}
+
+// IsV3 reports whether the card declared the CCv3 spec. Marshal and WritePNG
+// key on this to avoid re-emitting a V3 card as a V2 one.
+func (c Card) IsV3() bool { return strings.HasPrefix(c.SpecVersion, "3") }
 
 // CharacterBook is a CCv2 embedded lorebook. terva imports it onto the lore
 // engine (an ephemeral, in-memory collection for the session).
@@ -64,6 +101,10 @@ type BookEntry struct {
 	CaseSensitive  bool     `json:"case_sensitive"`
 	Name           string   `json:"name"`
 	Priority       *int     `json:"priority"`
+	// UseRegex is a CCv3 addition: keys are regular expressions rather than
+	// literals. Carried so it round-trips; the lore engine does NOT honor it
+	// yet, which is why a card that sets it earns an import warning.
+	UseRegex bool `json:"use_regex,omitempty"`
 }
 
 // pngSignature is the 8-byte PNG magic.
@@ -107,12 +148,41 @@ func LoadBytes(data []byte) (Card, error) {
 	return ParseJSON(data)
 }
 
-// Marshal encodes a Card as a CCv2 character-card JSON document
+// Marshal encodes a Card as a character-card JSON document
 // ({spec, spec_version, data}) that ParseJSON round-trips. Unknown `extensions`
 // ride through verbatim (json.RawMessage), honoring the round-trip rule the
 // character-card design requires. The output is deterministic for a given Card,
 // so it is safe to content-hash for a stable library id.
+//
+// The document keeps the SPEC THE CARD ARRIVED AS. This used to be hardcoded to
+// chara_card_v2, which meant importing a V3 card wrote a V2 card.json — the V3
+// fields had already been dropped by the parse, and the downgrade then made that
+// loss permanent and invisible. A V3 card now stays V3 on disk.
 func Marshal(c Card) ([]byte, error) {
+	if c.IsV3() {
+		return marshalDoc(c, "chara_card_v3", "3.0")
+	}
+	return marshalDoc(c, "chara_card_v2", "2.0")
+}
+
+// MarshalV2 encodes a Card as a chara_card_v2 document regardless of the spec it
+// arrived as — the deliberate downgrade, for the back-compat `chara` chunk that
+// rides alongside `ccv3` in an exported PNG so a V2-only reader still sees a
+// card. V3-only fields are omitted rather than smuggled under a V2 spec label.
+func MarshalV2(c Card) ([]byte, error) {
+	v2 := c
+	v2.SpecVersion = "2.0"
+	v2.Nickname = ""
+	v2.CreatorNotesMultilingual = nil
+	v2.Source = nil
+	v2.GroupOnlyGreetings = nil
+	v2.CreationDate = nil
+	v2.ModificationDate = nil
+	v2.Assets = nil
+	return marshalDoc(v2, "chara_card_v2", "2.0")
+}
+
+func marshalDoc(c Card, spec, version string) ([]byte, error) {
 	data, err := json.Marshal(c)
 	if err != nil {
 		return nil, err
@@ -121,7 +191,7 @@ func Marshal(c Card) ([]byte, error) {
 		Spec        string          `json:"spec"`
 		SpecVersion string          `json:"spec_version"`
 		Data        json.RawMessage `json:"data"`
-	}{Spec: "chara_card_v2", SpecVersion: "2.0", Data: data}
+	}{Spec: spec, SpecVersion: version, Data: data}
 	return json.MarshalIndent(doc, "", "  ")
 }
 
@@ -152,4 +222,80 @@ func ParseJSON(data []byte) (Card, error) {
 		return Card{}, fmt.Errorf("card: missing required 'name'")
 	}
 	return c, nil
+}
+
+// UnsupportedV3Features lists the CCv3 capabilities a card declares that terva
+// carries but does not yet ACT on, phrased for a user rather than a log.
+//
+// The point is to make the gap visible instead of silent. A V3 card now imports
+// with its data intact and round-trips unharmed, but "the fields survived" is
+// not the same as "the behaviour works": a lorebook whose keys are regexes, or
+// whose entries steer placement with @@decorators, will simply not match the way
+// its author intended, and an emotion/background asset set is not something the
+// library renders. Reporting that up front is the difference between a card that
+// behaves oddly for unknown reasons and one whose limits were stated on arrival.
+//
+// Returns nil for a V2 card, and for a V3 card that uses nothing beyond what
+// terva already honors.
+func UnsupportedV3Features(c Card) []string {
+	var out []string
+	if c.CharacterBook != nil {
+		regex, decorated := 0, 0
+		for _, e := range c.CharacterBook.Entries {
+			if e.UseRegex {
+				regex++
+			}
+			if hasDecorator(e.Content) {
+				decorated++
+			}
+		}
+		if regex > 0 {
+			out = append(out, fmt.Sprintf("%d lorebook %s use regex keys (use_regex), which terva matches literally for now", regex, plural(regex, "entry", "entries")))
+		}
+		if decorated > 0 {
+			out = append(out, fmt.Sprintf("%d lorebook %s carry @@decorators, which terva keeps but does not act on yet", decorated, plural(decorated, "entry", "entries")))
+		}
+	}
+	// The spec's default when assets is absent is a single `ccdefault:` icon —
+	// i.e. the card's own image, which is exactly what terva already serves. Only
+	// a set that goes beyond that is worth mentioning.
+	if extra := len(nonDefaultAssets(c.Assets)); extra > 0 {
+		out = append(out, fmt.Sprintf("the card defines %d extra %s (portraits, backgrounds, emotions); terva shows the main image only", extra, plural(extra, "asset", "assets")))
+	}
+	if len(c.GroupOnlyGreetings) > 0 {
+		out = append(out, fmt.Sprintf("%d group-chat %s stored but unused (terva has no group chat)", len(c.GroupOnlyGreetings), plural(len(c.GroupOnlyGreetings), "greeting", "greetings")))
+	}
+	return out
+}
+
+// hasDecorator reports whether a lorebook entry's content opens any line with
+// the CCv3 `@@decorator` marker. Decorators are line-leading by construction, so
+// a mid-sentence "@@" in prose is not mistaken for one.
+func hasDecorator(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "@@") {
+			return true
+		}
+	}
+	return false
+}
+
+// nonDefaultAssets drops the entries terva already satisfies: the spec's default
+// main icon resolving to the card's own image (`ccdefault:`).
+func nonDefaultAssets(assets []Asset) []Asset {
+	var out []Asset
+	for _, a := range assets {
+		if a.Type == "icon" && a.Name == "main" && (a.URI == "ccdefault:" || a.URI == "") {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
