@@ -394,5 +394,6 @@
   "workflow %s: run %s — %d agents (%d replayed), $%.4f, %s": "workflow %s: run %s — %d agents (%d replayed), $%.4f, %s",
   "workspace — auto in-workspace, ask foreign": "workspace — auto in-workspace, ask foreign",
   "workspace, tools, skills": "workspace, tools, skills",
-  "yolo — no prompts": "yolo — no prompts"
+  "yolo — no prompts": "yolo — no prompts",
+  "🎭 %s is replying…": "🎭 %s is replying…"
 }
