@@ -156,6 +156,9 @@ export function App() {
   const [queued, setQueued] = useState<string[]>([])
   // Whether the daemon advertised the self-restart capability (--web-allow-restart).
   const [canRestart, setCanRestart] = useState(false)
+  // Whether the daemon serves the Stage app (--web-stage). When set, the topbar
+  // shows a link across to /stage/; the panel is otherwise unaware of Stage.
+  const [stageEnabled, setStageEnabled] = useState(false)
   // The daemon's workspace file listing for the composer's @-stage, fetched
   // lazily on first "@" and refreshed by TTL (the tree moves as the agent
   // works). null = feature absent or nothing fetched yet.
@@ -233,12 +236,21 @@ export function App() {
     const c = clientRef.current
     if (!c) return
     try {
-      const res = await c.send<{ models: ModelInfo[] }>('models.list', null, '')
+      // Frame the focused session so the daemon flags Current from THIS
+      // session's model, not a workspace-global value (empty = the default).
+      const res = await c.send<{ models: ModelInfo[] }>('models.list', null, curRef.current)
       setModels(res.models ?? [])
     } catch {
       /* control group optional */
     }
   }, [])
+
+  // Refetch the model list whenever the focused session changes so the picker's
+  // "current" flag tracks THIS session's model. reloadModels reads curRef.current,
+  // set synchronously before curSess in selectSession, so it frames the new one.
+  useEffect(() => {
+    reloadModels()
+  }, [curSess, reloadModels])
 
   // requestFiles backs the composer's @-stage: one fetch per TTL window,
   // recursive with gitignore filtering (the TUI picker's defaults), entries
@@ -662,6 +674,7 @@ export function App() {
       const lang = setLocale(hello?.locale ?? 'en')
       document.documentElement.lang = lang
       setCanRestart(!!hello?.features?.includes('restart'))
+      setStageEnabled(!!hello?.features?.includes('stage'))
       canListFiles.current = !!hello?.features?.includes('files-list')
       // Subscribe to the workspace itself, once per connection. It is not a
       // session: it does not change when the focused session does, and it must
@@ -693,7 +706,7 @@ export function App() {
       reI18n()
       refreshI18n()
       try {
-        const res = await c.send<{ models: ModelInfo[] }>('models.list', null, '')
+        const res = await c.send<{ models: ModelInfo[] }>('models.list', null, curRef.current)
         setModels(res.models ?? [])
       } catch {
         /* control group optional */
@@ -1326,6 +1339,11 @@ export function App() {
           <button class="cost" title={t('Usage')} onClick={() => openPane('context')}>
             ${cost.toFixed(4)}
           </button>
+        )}
+        {stageEnabled && (
+          <a class="icon" href="/stage/" title={t('Open Stage')} aria-label={t('Open Stage')}>
+            🎭
+          </a>
         )}
         <span class={`dot ${status}`} title={status} />
       </header>

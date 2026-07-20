@@ -62,14 +62,55 @@ func pwaShellPaths() []string {
 		if e.IsDir() {
 			continue
 		}
-		n := e.Name()
-		switch {
-		case n == "sw.js", n == "registerSW.js", n == "manifest.webmanifest",
-			strings.HasPrefix(n, "favicon."),
-			strings.HasPrefix(n, "apple-touch-icon"),
-			strings.HasPrefix(n, "pwa-"),
-			strings.HasPrefix(n, "workbox-") && strings.HasSuffix(n, ".js"):
+		if n := e.Name(); isPWAShellFile(n) {
 			out = append(out, "/"+n)
+		}
+	}
+	return out
+}
+
+// isPWAShellFile reports whether a top-level dist file name is part of the
+// unauthenticated PWA shell — the manifest, the icons, and the worker scripts.
+// Shared by pwaShellPaths (root) and stagePwaShellPaths (/stage/) so the two
+// ungated allowlists cannot drift apart as the toolchain renames things (the
+// workbox runtime ships under a content-hashed name).
+func isPWAShellFile(n string) bool {
+	switch {
+	case n == "sw.js", n == "registerSW.js", n == "manifest.webmanifest",
+		strings.HasPrefix(n, "favicon."),
+		strings.HasPrefix(n, "apple-touch-icon"),
+		strings.HasPrefix(n, "pwa-"),
+		strings.HasPrefix(n, "workbox-") && strings.HasSuffix(n, ".js"):
+		return true
+	}
+	return false
+}
+
+// stagePwaShellPaths is pwaShellPaths for the Stage app: the same shell files,
+// served without auth under /stage/ instead of at root, PLUS Stage's own
+// stage.webmanifest. Stage registers the (single, shared) service worker at scope
+// /stage/, so its precache entries resolve to /stage/-prefixed URLs — and, exactly
+// as at root, a precache entry the client cannot fetch is a worker that cannot
+// install. So the Stage shell files sit outside the gate too; only stage.html (the
+// shell itself) stays gated, which is what makes an unauthenticated navigation to
+// /stage/ answer with the login form. See stageShellHandler and
+// TestStagePrecacheFetchableWithoutACredential.
+func stagePwaShellPaths() []string {
+	sub, err := fs.Sub(clientFS, "client/dist")
+	if err != nil {
+		return nil
+	}
+	ents, err := fs.ReadDir(sub, ".")
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range ents {
+		if e.IsDir() {
+			continue
+		}
+		if n := e.Name(); isPWAShellFile(n) || n == "stage.webmanifest" {
+			out = append(out, "/stage/"+n)
 		}
 	}
 	return out
@@ -105,19 +146,43 @@ func shellHandler() http.Handler {
 	})
 }
 
-// stageHandler serves the Stage app (the second MPA entry) under /stage/, with
-// SPA fallback to stage.html. It is mounted only when web_stage is enabled and,
-// like staticHandler, sits behind the auth gate.
+// stageShellHandler serves one embedded Stage shell file — mapped from a
+// /stage/-prefixed URL onto the dist root (StripPrefix "/stage") — and nothing
+// else. Like shellHandler, and unlike stageHandler, it sits OUTSIDE the auth gate
+// and deliberately does NOT SPA-fall-back: a fallback here would hand stage.html
+// to an unauthenticated request for any misspelled /stage/ path, turning a 404
+// into a way around the gate. It backs /stage/assets/… and the /stage/ shell
+// files (sw.js, registerSW.js, workbox-*, the manifests, icons) that the Stage
+// service worker precaches, which must be fetchable without a credential.
+func stageShellHandler() http.Handler {
+	sub, err := fs.Sub(clientFS, "client/dist")
+	if err != nil {
+		return http.NotFoundHandler()
+	}
+	stripped := http.StripPrefix("/stage", http.FileServer(http.FS(sub)))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, statErr := fs.Stat(sub, strings.TrimPrefix(r.URL.Path, "/stage/")); statErr != nil {
+			http.NotFound(w, r)
+			return
+		}
+		stripped.ServeHTTP(w, r)
+	})
+}
+
+// stageHandler serves the gated Stage SHELL: /stage/ (→ stage.html) and any
+// unknown /stage/<route> (→ stage.html, SPA fallback). It is mounted only when
+// web_stage is enabled and sits behind the auth gate, so an unauthenticated
+// navigation answers with the login form, exactly like index.html.
 //
-// The Stage app's assets are the SAME fingerprinted bundle the panel uses (rollup
-// chunk-splits the shared platform/ui code across both entries). With base './',
-// stage.html at /stage/ references ./assets/x → /stage/assets/x, so this handler
-// maps a /stage/-prefixed real-file request back onto the embedded dist root
-// (StripPrefix "/stage"). Anything that is not a real file is a client route and
-// falls back to stage.html. Serving the assets behind the gate here is fine — a
-// Stage user is authenticated, and nothing under /stage/ is SW-precached (the
-// precache manifest sweeps only the root-served bundle; stage.html is gated,
-// therefore never precached, mirroring index.html).
+// The Stage BUNDLE and shell files (assets, sw.js, the manifests, icons) are
+// served separately and OUTSIDE the gate by stageShellHandler, mounted ahead of
+// this on more specific prefixes — because the /stage/-scoped service worker
+// precaches them, and a precache entry the client cannot fetch is a worker that
+// cannot install (the rule on pwaShellPaths, now enforced for /stage/ by
+// TestStagePrecacheFetchableWithoutACredential). Those specific routes win
+// ServeMux's longest-prefix match, so a real bundle file never reaches here; what
+// remains is the shell and client routes. With base './', stage.html at /stage/
+// references ./assets/x → /stage/assets/x, served ungated by stageShellHandler.
 func stageHandler() http.Handler {
 	sub, err := fs.Sub(clientFS, "client/dist")
 	if err != nil {

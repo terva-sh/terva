@@ -314,9 +314,23 @@ func newMux(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) *
 	// $TERVA_HOME, which must never boot without a credential. Kept above the "/"
 	// catch-all only for readability; ServeMux matches the longest prefix.
 	mux.Handle("/media/", authMiddleware(opts, securityHeaders(http.HandlerFunc(serveMedia))))
-	// The Stage app (second MPA entry), gated like the panel and mounted only when
-	// web_stage is enabled. ServeMux matches the longer /stage/ prefix over "/".
+	// The Stage app (second MPA entry), mounted only when web_stage is enabled.
+	// ServeMux matches the longer /stage/ prefix over "/".
 	if opts.AllowStage {
+		// Stage's bundle, service worker, manifests, and icons are served OUTSIDE
+		// the gate under /stage/, mirroring the panel's root exception: the
+		// /stage/-scoped worker PRECACHES them, and a precache entry the client
+		// cannot fetch is a worker that cannot install (see stagePwaShellPaths and
+		// TestStagePrecacheFetchableWithoutACredential). It is the same
+		// content-addressed shared bundle already ungated at /assets/, and holds no
+		// token or session. These specific routes are matched ahead of the gated
+		// /stage/ catch-all by ServeMux's longest-prefix rule.
+		for _, p := range stagePwaShellPaths() {
+			mux.Handle(p, securityHeaders(stageShellHandler()))
+		}
+		mux.Handle("/stage/assets/", securityHeaders(stageShellHandler()))
+		// The Stage shell (stage.html) and its client routes stay gated, so an
+		// unauthenticated navigation to /stage/ answers with the login form.
 		mux.Handle("/stage/", authMiddleware(opts, securityHeaders(stageHandler())))
 	}
 	mux.Handle("/", authMiddleware(opts, securityHeaders(staticHandler())))
@@ -395,6 +409,7 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	hello.Locale = opts.Locale
 	hello.CWD = opts.CWD
 	hello.Jailed = opts.Jailed
+	hello.MaxUploadBytes = maxUploadBytes
 	if opts.AllowRestart {
 		hello.Features = append(hello.Features, ctrlproto.FeatureRestart)
 	}
@@ -404,7 +419,33 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	if opts.AllowStage {
 		hello.Features = append(hello.Features, ctrlproto.FeatureStage)
 	}
-	_, _ = ctrlproto.ServeConn(connCtx, conn, svc, hello)
+	if _, err := ctrlproto.ServeConn(connCtx, conn, svc, hello); err != nil {
+		logConnEnd(who, err)
+	}
+}
+
+// logConnEnd explains why a connection ended, for the ends that are NOT a client
+// simply going away. This error used to be discarded, and one case in particular
+// was undiagnosable because of it: a frame over maxFrameBytes makes gorilla close
+// the socket from under an in-flight request, so the browser reports a generic
+// dead-socket error ("not connected") while the daemon logged only its usual
+// "client disconnected". Nothing on either side named the size, which is the one
+// fact that identifies the problem.
+func logConnEnd(who string, err error) {
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
+		return // our own shutdown closing the socket, not a fault
+	case websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway):
+		return // the tab closed or navigated away
+	}
+	if errors.Is(err, websocket.ErrReadLimit) || websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
+		fmt.Fprintf(os.Stderr,
+			"terva web: %s sent a frame larger than the %d-byte limit — connection closed. "+
+				"A file upload inflates ~4/3 in base64, so the practical file ceiling is ~%d bytes.\n",
+			who, maxFrameBytes, maxUploadBytes)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "terva web: connection ended — %s: %v\n", who, err)
 }
 
 // clientDesc describes a connecting client for the console log: its socket

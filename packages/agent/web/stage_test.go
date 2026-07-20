@@ -57,16 +57,18 @@ func TestStageServedWhenEnabled(t *testing.T) {
 }
 
 // TestStageHasOwnManifest — the installability spike: the Stage app carries its
-// own PWA identity (start_url/scope /stage/), not the panel's, served under the
-// gate like the rest of /stage/.
+// own PWA identity (start_url/scope /stage/), not the panel's. The manifest is
+// served UNGATED under /stage/ (it is part of the Stage PWA shell), so a
+// logged-out (re)install can read Stage's identity, mirroring the root manifest.
 func TestStageHasOwnManifest(t *testing.T) {
 	srv := httptest.NewServer(newMux(context.Background(), newFakeWS(), Options{Token: "secret", AllowStage: true}))
 	defer srv.Close()
 
-	resp := authedGet(t, srv.URL+"/stage/stage.webmanifest", "secret")
+	// No credential: the manifest is ungated, like /manifest.webmanifest at root.
+	resp := authedGet(t, srv.URL+"/stage/stage.webmanifest", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("/stage/stage.webmanifest: status %d, want 200", resp.StatusCode)
+		t.Fatalf("unauthenticated /stage/stage.webmanifest: status %d, want 200", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	for _, want := range []string{`"terva Stage"`, `"start_url": "/stage/"`, `"scope": "/stage/"`} {
