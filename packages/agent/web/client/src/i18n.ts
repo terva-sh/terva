@@ -14,7 +14,8 @@
 // Operator overlay for these client strings (server-served overrides layered on
 // the bundle) is a later phase; setLocale/mergeOverrides is shaped to accept it.
 
-import fiRaw from './locales/fi.json'
+/// <reference types="vite/client" />
+// (for import.meta.glob below — tsconfig keeps ambient types empty on purpose)
 
 type Singular = Record<string, string>
 type Plural = Record<string, Record<string, string>>
@@ -29,10 +30,26 @@ function parse(raw: Record<string, unknown>): { singular: Singular; plural: Plur
   return { singular, plural }
 }
 
-// Bundled non-English catalogs, keyed by base language. Add a language by
-// dropping a locales/<lang>.json next to this file and registering it here.
-const CATALOGS: Record<string, { singular: Singular; plural: Plural }> = {
-  fi: parse(fiRaw as Record<string, unknown>),
+// Bundled non-English catalogs, keyed by base language. `just web-build`
+// mirrors every canonical non-English catalog (packages/i18n/locales/web/ and
+// .../stage/) into locales/ and locales/stage/; the glob picks up whatever is
+// there, so adding a language is just adding its canonical files — no
+// registration step. The panel and Stage catalogs for one language merge into
+// one lookup, mirroring the daemon's merged i18n.catalog response.
+const CATALOGS: Record<string, { singular: Singular; plural: Plural }> = {}
+{
+  const files = import.meta.glob('./locales/**/*.json', { eager: true }) as Record<
+    string,
+    { default: Record<string, unknown> }
+  >
+  for (const [path, mod] of Object.entries(files)) {
+    const base = (path.split('/').pop() ?? '').replace(/\.json$/, '').toLowerCase()
+    if (!base || base === 'en') continue
+    const { singular, plural } = parse(mod.default ?? (mod as unknown as Record<string, unknown>))
+    const cat = (CATALOGS[base] ??= { singular: {}, plural: {} })
+    Object.assign(cat.singular, singular)
+    Object.assign(cat.plural, plural)
+  }
 }
 
 let singular: Singular = {}
@@ -110,4 +127,24 @@ export function tn(n: number, one: string, other: string, ...args: unknown[]): s
 
 function englishPlural(n: number, one: string, other: string): string {
   return n === 1 ? one : other
+}
+
+// m MARKS a literal declared in a module-level data table (theme names, badge
+// label tables) for extraction, without translating at init time — the client
+// twin of Go's i18n.M. Translate the stored English with tr() where it is
+// rendered.
+export function m(source: string): string {
+  return source
+}
+
+// tr translates a runtime string — one that reached the render site through a
+// variable (an m()-marked table entry, a server-sent English string). It is
+// invisible to the extractor (which only follows literal t()/tn() calls), so
+// every string passed here must be marked with m() at its declaration or it
+// will silently miss the catalog. (Implemented without calling t() — the
+// extractor hard-errors on any t() whose key is not a literal, this one
+// included.)
+export function tr(source: string, ...args: unknown[]): string {
+  const found = singular[source]
+  return fmt(found ? found : source, args)
 }

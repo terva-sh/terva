@@ -26,17 +26,20 @@ two-thirds of all UI text):
 | **UI — core** | short CLI / engine / connector text: errors, status lines, prompts you answer outside the terminal UI | the **English text itself** (`"start a fresh session"`) | `locales/<lang>.json` |
 | **UI — tui** | the interactive terminal UI: dialogs, the status bar, the slash menu, transcript chrome | the **English text itself** | `locales/tui/<lang>.json` |
 | **UI — web** | the browser control panel (`terva web`) | the **English text itself** | `locales/web/<lang>.json` |
+| **UI — stage** | the Stage play surface (the installable `/stage/` PWA) | the **English text itself** | `locales/stage/<lang>.json` |
 | **Prompts** | canned English terva sends *to the model*: the `/study` task, the auto-swarm result summary, the base system-prompt segments, the compaction instructions | a stable **dotted id** (`study.file`, `system.identity.default`) | `locales/prompts/<lang>.json` |
 | **Help** | the large `terva <cmd> --help` screens (`terva bot`, `terva models`, …) | a stable **dotted id** (`help.bot`, `help.models`) | `locales/help/<lang>.json` |
 
 Short UI text uses English-as-key so a translator sees the sentence, not an
-invented id, and the UI catalog is split by surface (core / tui / web) purely so
-each can be finished on its own — at runtime every UI string resolves against one
-merged lookup, so nothing changes about how the code calls `i18n.T`. A source
-directory routes its UI strings to a non-core catalog with a `//i18n:catalog`
-directive (e.g. `//i18n:catalog tui` on `packages/agent/modes` and
-`packages/tui`); the web catalog is authored in the separate web client and
-served to the browser. Prompts and Help are **large, few, and stable**, so
+invented id, and the UI catalog is split by surface (core / tui / web / stage)
+purely so each can be finished on its own — at runtime every UI string resolves
+against one merged lookup, so nothing changes about how the code calls `i18n.T`.
+A source directory routes its UI strings to a non-core catalog with a
+`//i18n:catalog` directive (e.g. `//i18n:catalog tui` on `packages/agent/modes`
+and `packages/tui`); the web and stage catalogs are authored in the web client
+(its extractor routes `src/apps/stage/` to stage, the rest to web) and served
+to the browser as one merged document — Stage is split out because it is the
+surface most likely to be handed to someone who isn't the operator. Prompts and Help are **large, few, and stable**, so
 English-as-key would mean paragraph-length JSON keys — they use short dotted keys
 instead, kept apart because a prompt author and a UI translator are usually
 different people. Each dotted entry is one translatable template, never English
@@ -53,8 +56,8 @@ embedded default            (shipped in the binary)
 
 Each non-core catalog overlays the same way under its own subdirectory —
 `$TERVA_HOME/locales/tui/<lang>.json`, `.../web/<lang>.json`,
-`.../prompts/<lang>.json`, `.../help/<lang>.json` — so you can drop in just the
-surface you want to translate.
+`.../stage/<lang>.json`, `.../prompts/<lang>.json`, `.../help/<lang>.json` — so
+you can drop in just the surface you want to translate.
 
 - **Per-key, not whole-file.** Override `"quit"` alone; every other string
   still resolves.
@@ -94,8 +97,9 @@ terva locale init fi
 ```
 
 scaffolds **every** catalog for that language in one pass — the core UI
-(`$TERVA_HOME/locales/fi.json`), the two UI sub-catalogs (`locales/tui/fi.json`,
-`locales/web/fi.json`), and the dotted-key ones (`locales/prompts/fi.json` for
+(`$TERVA_HOME/locales/fi.json`), the UI sub-catalogs (`locales/tui/fi.json`,
+`locales/web/fi.json`, `locales/stage/fi.json`), and the dotted-key ones
+(`locales/prompts/fi.json` for
 the model-facing prompts — see [below](#customizing-tervas-prompts) — and
 `locales/help/fi.json` for the big `--help` screens). Existing translations are
 pre-filled; the rest are blank. It's idempotent — re-run it after a terva update
@@ -133,8 +137,9 @@ terva locale list                                   # coverage %, per language (
 ```
 
 `list` reports the core-UI percentage, then one bracket per side catalog —
-`[prompts …]`, `[help …]`, `[tui …]`, `[web …]` — each showing translated over
-total for that catalog (the prompt catalog holds 66 keys today, and grows).
+`[prompts …]`, `[help …]`, `[tui …]`, `[web …]`, `[stage …]` — each showing
+translated over total for that catalog (the prompt catalog is the largest of
+the dotted-key ones, and grows with every new model-facing surface).
 
 ### 4. Translate-as-you-use (optional)
 
@@ -213,9 +218,12 @@ see the full set. The families:
 | `compact.system`, `compact.instruction` | the summarizer's system prompt and the "summarize this" instruction |
 | `study.*`, `skill.directive` | the `/study` task variants and the "use the X skill for:" preamble |
 | `swarm.*` | the auto-swarm addendum, the persona roster, and every line of the sub-agent result summary |
-| `raati.*` | the [deliberation](raati.md) panel's whole script — the clerk's system + prompt, the evidence framing, each round's header/question, the cross-examination, and the summarizer. The largest family (26 of the 66 keys). |
+| `raati.*` | the [deliberation](raati.md) panel's whole script — the clerk's system + prompt, the evidence framing, each round's header/question, the cross-examination, and the summarizer |
 | `context.pressure`, `context.pressure.no_autocompact` | the warning the agent is handed when the context window is filling (the second variant when auto-condense is off) |
 | `play.*`, `chat.*` | the `--play` cast/actor framing and the `--chat` intro / idle-nudge / attachment preamble |
+| `stage.*` | the Stage side-channel generators — the meta-narrator router and voiced line (`stage.route.*`, `stage.voice.*`), the Suggest drafter (`stage.suggest.*`), the card doctor/editor contracts (`stage.doctor.*`, `stage.editor.*`), the advance-turn cue, and the shared section framing (`stage.frame.*`). The largest family. ⚠ `stage.route.narrator_name` and the words the router/doctor parse from model output (`Narrator`, the JSON field names and `warn`/`info`/`suggestion` severities inside the doctor tasks) must survive translation intact — the narrator name is round-tripped (a translated name is matched too), the JSON skeleton is not. |
+| `title.*` | the session title generator — its system prompt, the "Title this chat." instruction, and the seed's section labels |
+| `persona.user.*` | how a prompt introduces the human in the scene: the "About X (the user…)" frame and the gender/pronoun clauses (including the anti-inference steers) |
 
 Keep any `%s`/`%d` in a template — they're filled at runtime (a path, an agent
 id, the persona name). `terva locale validate
@@ -238,6 +246,8 @@ $TERVA_HOME/locales/
     <lang>.json             interactive-TUI strings           (English-as-key)
   web/
     <lang>.json             web control-panel strings         (English-as-key)
+  stage/
+    <lang>.json             Stage play-surface strings        (English-as-key)
   prompts/
     <lang>.json             prompt overrides                  (dotted keys)
     <lang>.todo.json        captured prompt gaps
@@ -297,6 +307,17 @@ When you add operator-facing text in Go:
   non-constant format trips `go vet`).
 - Leave command names, flags, model/provider ids, URLs, and paths unwrapped —
   they're not prose.
+- **The tool surface stays English, by decision** (the i18n round-2 proposal,
+  in a checkout's `docs/proposals/`): tool *descriptions*, *schemas*, and
+  *result strings* sent to the model are model-API machinery, not voice —
+  don't wrap them. `i18n.P` is for canned prose that shapes what the user
+  ultimately reads (identity, narration cues, summaries, section framing).
+- **Wire errors translate their prose, never their code.** A ctrlproto error
+  the panel or Stage shows a user gets its message translated at the
+  construction site — `ctrlproto.Errorf(code, "%s", i18n.T("what went wrong",
+  args…))` (the outer `"%s"` keeps vet's constant-format rule) — while the
+  machine `Code` stays English forever; clients classify by code. Internal
+  operation wraps (`"open session: %v"`) and log lines stay English.
 
 After wrapping, regenerate the reference catalogs and commit them:
 
@@ -309,3 +330,14 @@ go run ./cmd/terva-i18n-lint -unwrapped packages/agent/modes   # advisory: prose
 stale. Default-English output must stay byte-identical after wrapping
 (`i18n.T(x) == x` when the language is English), so existing golden and
 `strings.Contains` tests never churn.
+
+In the **web client**, the same rules wear TypeScript clothes: wrap render-site
+literals in `t('…')` / `tn(n, '…', '…')` (English-as-key, `%s`/`%d` args), mark
+module-level table strings with `m('…')` and translate them where rendered with
+`tr(v)` (the `i18n.M`/`T` pair), and never pass a non-literal key to `t()`. The
+extractor (`npm run i18n-extract`) routes `src/apps/stage/` to the stage
+catalog and everything else to web, and its `i18n-check` (in `just web-check`)
+also **fails on unwrapped user-visible strings** — JSX text, `placeholder` /
+`title` / `aria-label` / `alt`, `confirm()`/`prompt()` prose. A string that is
+deliberately English (a wordmark, a key name) takes an `i18n-exempt` comment on
+its line or the line above, with a reason.

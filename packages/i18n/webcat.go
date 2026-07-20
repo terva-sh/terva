@@ -13,21 +13,42 @@ package i18n
 // WebCatalogName is the subdir/name of the web control-panel string catalog.
 const WebCatalogName = "web"
 
+// StageCatalogName is the subdir/name of the Stage app's string catalog.
+// Stage is its own installable PWA and the surface most likely to be handed to
+// a non-operator, so it is authored as its own catalog (translate the surface
+// you use first — the same reasoning as the tui/core split). The split is
+// authoring-only: WebCatalog serves web ⊕ stage as one merged document, so the
+// browser keeps a single lookup and the wire shape is unchanged.
+const StageCatalogName = "stage"
+
 // uiCatalogs are English-as-key singular+plural catalogs that live in their own
 // subdirectory (like the keyed catalogs' file layout, but Doc-shaped contents),
 // beyond the root UI catalog. `terva locale` iterates these for init/coverage/
 // merge/export. TUICatalogName is ALSO merged into the Go T lookup at runtime
-// (see mergedUICatalogs); WebCatalogName is served to the browser instead.
-var uiCatalogs = []string{TUICatalogName, WebCatalogName}
+// (see mergedUICatalogs); WebCatalogName and StageCatalogName are served to the
+// browser instead.
+var uiCatalogs = []string{TUICatalogName, WebCatalogName, StageCatalogName}
 
-// UICatalogs returns the named English-as-key catalogs (currently just "web"),
-// for the command/lint layers that iterate them.
+// UICatalogs returns the named English-as-key catalogs beyond core/tui, for
+// the command/lint layers that iterate them.
 func UICatalogs() []string { return append([]string(nil), uiCatalogs...) }
 
-// WebCatalog returns the effective web catalog for lang — the embedded default
-// overlaid by $TERVA_HOME/locales/web/<lang>.json — read fresh, for serving to
-// the browser. English (or an unknown lang) yields whatever is embedded (empty
-// unless an English overlay ships), and the client falls back to its keys.
+// WebCatalog returns the effective browser catalog for lang — the embedded
+// defaults overlaid by $TERVA_HOME/locales/{web,stage}/<lang>.json — read
+// fresh, for serving to the browser. The web and stage catalogs are merged
+// into one document (stage wins a key collision — its strings are the ones on
+// a Stage screen). English (or an unknown lang) yields whatever is embedded
+// (empty unless an English overlay ships), and the client falls back to its
+// keys.
 func WebCatalog(lang, home string) (Doc, error) {
-	return LoadMergedIn(WebCatalogName, lang, home)
+	web, err := LoadMergedIn(WebCatalogName, lang, home)
+	if err != nil {
+		return Doc{}, err
+	}
+	stage, err := LoadMergedIn(StageCatalogName, lang, home)
+	if err != nil {
+		return Doc{}, err
+	}
+	mergeInto(&web, stage)
+	return web, nil
 }
