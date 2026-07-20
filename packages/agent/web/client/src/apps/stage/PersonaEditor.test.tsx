@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { fakeClient } from '../../platform/ctrlproto/testing'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
-import type { Client } from '../../platform/ctrlproto/client'
 import type { PersonaSummary, PersonaView } from '../../platform/ctrlproto/types'
 import { PersonaEditor, duplicateName, formFromView, slugPreview } from './PersonaEditor'
 import { PersonaSheet } from './PersonaSheet'
@@ -22,11 +22,7 @@ const VIEW: PersonaView = {
 }
 
 function stubClient(view: PersonaView = VIEW) {
-  const send = vi.fn().mockImplementation((method: string) => {
-    if (method === 'personas.get') return Promise.resolve(view)
-    return Promise.resolve({})
-  })
-  return { send, fire: vi.fn() } as unknown as Client & { send: ReturnType<typeof vi.fn> }
+  return fakeClient({ respond: (method) => (method === 'personas.get' ? view : {}) })
 }
 
 afterEach(cleanup)

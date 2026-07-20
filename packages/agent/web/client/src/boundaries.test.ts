@@ -8,6 +8,14 @@
 //   - src/ui/ holds shared presentation primitives: it may import platform
 //     (the documented exception) but never features/ or the composition roots.
 //   - src/features/ may not import the composition roots.
+//   - src/apps/* (the non-panel apps — Stage) may import ui/ and platform/ but
+//     never features/. That layer is the PANEL's own code, extracted out of
+//     app.tsx for file size — not a shared layer (a 2026-07 audit measured 0
+//     Stage consumers across all of features/). A Stage module reaching for a
+//     features/ helper is the signal to promote it down into ui/ or platform/,
+//     which is the documented direction of sharing — not to import sideways
+//     into the panel and grow a silent mirror. The panel roots (app.tsx,
+//     main.tsx) are exempt: importing features/ is exactly what they are for.
 //
 // Deliberately a small allow/deny walk, not a lint stack; extend the rules as
 // the extraction continues.
@@ -63,6 +71,11 @@ function layerOf(srcRel: string): string {
 // downward, never by a lower layer reaching up into an app.
 const COMPOSITION_ROOTS = /^(app|main)(\.tsx?)?$|^apps\//
 
+// A non-panel app: apps/stage/… and any future sibling, but NOT the panel roots
+// app.tsx/main.tsx. These may share downward (ui/, platform/) but must not reach
+// sideways into features/ — see the header.
+const NON_PANEL_APP = /^apps\//
+
 interface Violation {
   file: string
   spec: string
@@ -74,7 +87,10 @@ function violationsIn(files: string[]): Violation[] {
   for (const file of files) {
     const rel = relative(SRC, file).replaceAll('\\', '/')
     const layer = layerOf(rel)
-    if (layer === 'root') continue
+    const inApp = NON_PANEL_APP.test(rel)
+    // apps/* are 'root' by layerOf and otherwise unconstrained, but they carry
+    // one rule of their own: no importing features/ (the panel's private code).
+    if (layer === 'root' && !inApp) continue
     for (const spec of importsOf(file)) {
       if (layer === 'platform' && /^@?preact(\/|$)/.test(spec)) {
         out.push({ file: rel, spec, why: 'platform must stay Preact-free' })
@@ -83,6 +99,16 @@ function violationsIn(files: string[]): Violation[] {
       const target = srcTarget(file, spec)
       if (target === null) continue
       const targetLayer = layerOf(target)
+      if (inApp) {
+        if (targetLayer === 'features') {
+          out.push({
+            file: rel,
+            spec,
+            why: 'an app must not import features/ — it is the panel\'s own code; promote the module to ui/ or platform/ first',
+          })
+        }
+        continue
+      }
       if (COMPOSITION_ROOTS.test(target)) {
         out.push({ file: rel, spec, why: `${layer} must not import the composition root` })
       } else if (layer === 'platform' && (targetLayer === 'features' || targetLayer === 'ui')) {
@@ -99,7 +125,9 @@ describe('import boundaries (docs/web.md dependency direction)', () => {
   const files = walk(SRC)
 
   it('sees the layered tree it guards', () => {
-    for (const layer of ['platform/', 'ui/', 'features/']) {
+    // apps/ is here too: the apps→features rule silently passes if no apps/*
+    // file is ever walked, so assert the subtree the rule inspects exists.
+    for (const layer of ['platform/', 'ui/', 'features/', 'apps/']) {
       expect(
         files.some((f) => relative(SRC, f).replaceAll('\\', '/').startsWith(layer)),
         `no files under src/${layer} — update this guard alongside the restructure`,
@@ -130,18 +158,32 @@ describe('import boundaries (docs/web.md dependency direction)', () => {
       ['features/x.ts', '../app', true],
       ['features/x.ts', '../platform/ctrlproto/y', false],
       ['features/x.ts', '../ui/y', false],
+      // apps/* (Stage): ui/ and platform/ ok, features/ forbidden, siblings ok.
+      ['apps/stage/Chat.tsx', '../../features/models/ModelPicker', true],
+      ['apps/stage/Chat.tsx', '../../ui/Markdown', false],
+      ['apps/stage/Chat.tsx', '../../platform/conversation/session', false],
+      ['apps/stage/Chat.tsx', './useConversation', false],
+      // The panel roots are exempt — importing features/ is what they are for.
+      ['app.tsx', './features/models/ModelPicker', false],
+      ['main.tsx', './features/board/SessionsBoard', false],
     ]
     for (const [fakeRel, spec, wantViolation] of cases) {
       const target = srcTarget(resolve(SRC, fakeRel), spec)
       const layer = layerOf(fakeRel)
+      const inApp = NON_PANEL_APP.test(fakeRel)
       let violates = false
-      if (layer === 'platform' && /^@?preact(\/|$)/.test(spec)) violates = true
+      // Mirror violationsIn exactly: panel roots and non-features app siblings
+      // are unconstrained here.
+      if (layer === 'root' && !inApp) violates = false
+      else if (layer === 'platform' && /^@?preact(\/|$)/.test(spec)) violates = true
       else if (target !== null) {
         const targetLayer = layerOf(target)
-        violates =
-          COMPOSITION_ROOTS.test(target) ||
-          (layer === 'platform' && (targetLayer === 'features' || targetLayer === 'ui')) ||
-          (layer === 'ui' && targetLayer === 'features')
+        if (inApp) violates = targetLayer === 'features'
+        else
+          violates =
+            COMPOSITION_ROOTS.test(target) ||
+            (layer === 'platform' && (targetLayer === 'features' || targetLayer === 'ui')) ||
+            (layer === 'ui' && targetLayer === 'features')
       }
       expect(violates, `${fakeRel} importing "${spec}"`).toBe(wantViolation)
     }

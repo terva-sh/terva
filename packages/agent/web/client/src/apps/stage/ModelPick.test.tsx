@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { fakeClient } from '../../platform/ctrlproto/testing'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
-import type { Client } from '../../platform/ctrlproto/client'
 import type { ModelInfo } from '../../platform/ctrlproto/types'
 import { ModelPick } from './ModelPick'
 
@@ -17,11 +17,8 @@ const models: ModelInfo[] = [
 
 // A client stub that answers models.list and nothing else. ModelPick loads the
 // catalog lazily, so a collapsed picker never reaches it.
-function stubClient(list: ModelInfo[] = models): Client {
-  return {
-    send: vi.fn().mockResolvedValue({ models: list }),
-    fire: vi.fn(),
-  } as unknown as Client
+function stubClient(list: ModelInfo[] = models) {
+  return fakeClient({ respond: () => ({ models: list }) })
 }
 
 afterEach(cleanup)

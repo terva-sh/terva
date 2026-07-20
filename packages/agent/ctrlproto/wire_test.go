@@ -606,7 +606,7 @@ func (f *fakeSvc) SwipeTurn(ctx context.Context, sess string, epoch uint64, vari
 func (f *fakeSvc) SwipeMessage(ctx context.Context, sess string, epoch uint64, index, variant int) error {
 	return nil
 }
-func (f *fakeSvc) RetryTurn(ctx context.Context, sess string, epoch uint64) error {
+func (f *fakeSvc) RetryTurn(ctx context.Context, sess string, p TurnRetryParams) error {
 	return nil
 }
 func (f *fakeSvc) SideChatOpen(ctx context.Context, sess string) (string, error) {

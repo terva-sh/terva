@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Client } from './client'
-import type { Frame } from './types'
+import type { Frame, Verb } from './types'
+
+// These exercise TRANSPORT mechanics — id correlation, out-of-order responses,
+// reconnect — not the verb vocabulary, so synthetic verbs are the right fixture:
+// naming a real verb here would imply the test says something about that verb.
+// Verb is a closed union now, so route the fakes through one cast rather than
+// loosening the signature that production callers are checked against.
+const verb = (v: string) => v as Verb
 
 class FakeWebSocket {
   static readonly CONNECTING = 0
@@ -128,12 +135,12 @@ describe('ctrlproto Client', () => {
     ws.open()
     ws.sent = []
 
-    const success = client.send<{ value: number }>('example.get', { key: 'x' }, 's1')
-    expect(sentFrame(ws)).toEqual({ kind: 'cmd', id: 1, sess: 's1', method: 'example.get', params: { key: 'x' } })
+    const success = client.send<{ value: number }>(verb('example.get'), { key: 'x' }, 's1')
+    expect(sentFrame(ws)).toEqual({ kind: 'cmd', id: 1, sess: 's1', method: verb('example.get'), params: { key: 'x' } })
     ws.message({ kind: 'resp', id: 1, result: { value: 7 } })
     await expect(success).resolves.toEqual({ value: 7 })
 
-    const failure = client.send('example.fail', null)
+    const failure = client.send(verb('example.fail'), null)
     ws.message({ kind: 'resp', id: 2, error: { code: 'bad_request', message: 'nope' } })
     await expect(failure).rejects.toThrow('bad_request: nope')
   })
@@ -143,8 +150,8 @@ describe('ctrlproto Client', () => {
     client.connect()
     const ws = socket()
 
-    await expect(client.send('example.get', null)).rejects.toThrow('not connected')
-    client.fire('example.fire', null)
+    await expect(client.send(verb('example.get'), null)).rejects.toThrow('not connected')
+    client.fire(verb('example.fire'), null)
     expect(ws.sent).toEqual([])
   })
 
@@ -156,7 +163,7 @@ describe('ctrlproto Client', () => {
     client.connect()
     const ws = socket()
     ws.open()
-    const pending = client.send('example.wait', null)
+    const pending = client.send(verb('example.wait'), null)
 
     ws.disconnect()
     await expect(pending).rejects.toThrow('connection closed')
@@ -204,8 +211,8 @@ describe('ctrlproto Client', () => {
     ws.open()
     ws.sent = []
 
-    const a = client.send<string>('a', null)
-    const b = client.send<string>('b', null)
+    const a = client.send<string>(verb('a'), null)
+    const b = client.send<string>(verb('b'), null)
     ws.message({ kind: 'resp', id: 2, result: 'B' }) // second request answered first
     ws.message({ kind: 'resp', id: 1, result: 'A' })
     await expect(a).resolves.toBe('A')

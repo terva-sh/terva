@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { fakeClient } from '../../platform/ctrlproto/testing'
 import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/preact'
-import type { Client } from '../../platform/ctrlproto/client'
 import type { WireEvent } from '../../platform/ctrlproto/types'
 import { Chat, deleteWarning } from './Chat'
 import { useConversation } from './useConversation'
@@ -42,10 +42,7 @@ describe('useConversation deleteAt', () => {
   // landed; no client had ever called it. These pin the call it now makes,
   // because a wrong verb name or a dropped epoch fails silently at runtime —
   // the daemon answers with an error nobody is watching for.
-  function stubClient() {
-    const send = vi.fn().mockResolvedValue({})
-    return { send, fire: vi.fn(), onEvent: undefined } as unknown as Client & { send: ReturnType<typeof vi.fn> }
-  }
+  const stubClient = () => fakeClient()
 
   it('sends message.delete with the index, on the session', () => {
     const client = stubClient()
@@ -84,11 +81,7 @@ describe('Chat delete affordance', () => {
   // timers have to run before anything renders.
   function mountChat() {
     vi.useFakeTimers()
-    const send = vi.fn().mockResolvedValue({})
-    const client = { send, fire: vi.fn(), onEvent: undefined } as unknown as Client & {
-      send: ReturnType<typeof vi.fn>
-      onEvent?: (sess: string, ev: WireEvent) => void
-    }
+    const client = fakeClient()
     render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
     const snapshot: WireEvent = {
       type: 'snapshot',
@@ -105,7 +98,7 @@ describe('Chat delete affordance', () => {
       },
     } as unknown as WireEvent
     act(() => {
-      client.onEvent?.('s1', snapshot)
+      client.emit('s1', snapshot)
       vi.advanceTimersByTime(64)
     })
     return client
@@ -159,5 +152,251 @@ describe('Chat delete affordance', () => {
     fireEvent.click(screen.getByText('Cancel'))
     fireEvent.click(openEditor('i step inside'))
     expect(confirm.mock.calls[1][0]).toBe(deleteWarning(2))
+  })
+})
+
+// Does the pinned scene-state card appear the moment it is set, with no turn and
+// no other traffic in between?
+//
+// Setting it — the doctor's accepted scene_state proposal, the model's world_note,
+// Steering's pin button — all land on world.lore.put, which broadcasts a fresh
+// snapshot carrying session.world_lore. If that snapshot alone does not raise the
+// card, the pin would look like it did nothing until some LATER event happened to
+// refresh the session info, which is exactly the "it showed up after a round of
+// suggest" report this is here to rule in or out.
+describe('Chat scene-state card liveness', () => {
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+  })
+
+  function snapshotWith(lore: unknown[]): WireEvent {
+    return {
+      type: 'snapshot',
+      snapshot: {
+        epoch: 7,
+        base: 0,
+        total: 1,
+        busy: false,
+        session: { id: 's1', experience: 'chat', world_lore: lore },
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: 'the door shuts' }] }],
+      },
+    } as unknown as WireEvent
+  }
+
+  it('raises the card on the put snapshot alone — no turn, no suggest', () => {
+    vi.useFakeTimers()
+    const client = fakeClient()
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
+
+    // Nothing pinned yet.
+    act(() => {
+      client.emit('s1', snapshotWith([]))
+      vi.advanceTimersByTime(64)
+    })
+    expect(screen.queryByText('Day 14, first light.')).toBeNull()
+
+    // The put's broadcast, and nothing else.
+    act(() => {
+      client.emit(
+        's1',
+        snapshotWith([{ name: 'Scene state', constant: true, content: 'Day 14, first light.\n3 silver owed to Marrow.' }]),
+      )
+      vi.advanceTimersByTime(64)
+    })
+    expect(screen.queryByText('Day 14, first light.')).not.toBeNull()
+  })
+})
+
+// ↻ is the most-used control on the surface and nothing pinned that it actually
+// sends anything. The guided twin beside it made the handler take arguments,
+// which is exactly the kind of change that can turn a working button into a
+// silent no-op without any test noticing.
+describe('Chat regenerate controls', () => {
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function mountWithReply() {
+    vi.useFakeTimers()
+    const client = fakeClient()
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
+    act(() => {
+      client.emit('s1', {
+        type: 'snapshot',
+        snapshot: {
+          epoch: 7,
+          base: 0,
+          total: 2,
+          busy: false,
+          messages: [
+            { role: 'user', content: [{ type: 'text', text: 'i step inside' }] },
+            { role: 'assistant', content: [{ type: 'text', text: 'the door shuts' }] },
+          ],
+        },
+      } as unknown as WireEvent)
+      vi.advanceTimersByTime(64)
+    })
+    return client
+  }
+
+  it('sends turn.retry when ↻ is clicked', () => {
+    const client = mountWithReply()
+    fireEvent.click(screen.getByTitle('Regenerate'))
+    expect(client.send).toHaveBeenCalledWith('turn.retry', { epoch: 7 }, 's1')
+  })
+
+  it('sends the guidance and the prior-take choice when the guided box is submitted', () => {
+    const client = mountWithReply()
+    fireEvent.click(screen.getByTitle('Regenerate with guidance'))
+    const box = screen.getByPlaceholderText('What should be different this time?')
+    fireEvent.input(box, { target: { value: 'make her answer out loud' } })
+    fireEvent.click(screen.getByText('Regenerate'))
+    expect(client.send).toHaveBeenCalledWith(
+      'turn.retry',
+      { epoch: 7, guidance: 'make her answer out loud', ignore_prior: false },
+      's1',
+    )
+  })
+})
+
+// A refused action has to report where the user is looking. The transcript pins
+// itself to the bottom, so an error rendered INSIDE it — as this one was, as the
+// first child — scrolls out of view the instant a scene gets long. The daemon's
+// refusal was reaching the client and being drawn hundreds of messages above the
+// button that caused it, which is indistinguishable from a dead button.
+describe('Chat surfaces a refusal where it happened', () => {
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+  })
+
+  it('renders a rejected retry outside the scrolling transcript', async () => {
+    vi.useFakeTimers()
+    const client = fakeClient({
+      respond: () => {
+        throw new Error('nothing to retry')
+      },
+    })
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
+    act(() => {
+      client.emit('s1', {
+        type: 'snapshot',
+        snapshot: {
+          epoch: 7,
+          base: 0,
+          total: 2,
+          busy: false,
+          messages: [
+            { role: 'user', content: [{ type: 'text', text: 'i step inside' }] },
+            { role: 'assistant', content: [{ type: 'text', text: 'the door shuts' }] },
+          ],
+        },
+      } as unknown as WireEvent)
+      vi.advanceTimersByTime(64)
+    })
+
+    fireEvent.click(screen.getByTitle('Regenerate'))
+    await act(async () => {
+      await Promise.resolve()
+      vi.advanceTimersByTime(64)
+    })
+
+    const banner = screen.getByText(/nothing to retry/)
+    expect(banner).not.toBeNull()
+    // The actual regression: it must not live inside the element that scrolls.
+    expect(banner.closest('.stage-transcript')).toBeNull()
+  })
+})
+
+// Stage renders its own transcript rows rather than the panel's MessageContent,
+// so everything the panel's row does had to be re-done here — and three things
+// silently were not. These pin the ones that were user-visible: the wire carried
+// the data and Stage dropped it on the floor.
+describe('Chat transcript fidelity', () => {
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  // A 1x1 transparent PNG — enough to assert the src is built and rendered.
+  const PNG =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+
+  function mountWith(messages: unknown[]) {
+    vi.useFakeTimers()
+    const client = fakeClient()
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
+    act(() => {
+      client.emit('s1', {
+        type: 'snapshot',
+        snapshot: { epoch: 1, base: 0, total: messages.length, busy: false, messages },
+      } as unknown as WireEvent)
+      vi.advanceTimersByTime(64)
+    })
+    return client
+  }
+
+  // Stage negotiates image-data over the shared client and the shared store
+  // attaches the blocks to the item — so the payload always arrived. The row
+  // just never read item.images, and a generated picture rendered as nothing.
+  it('renders an image the assistant sent', () => {
+    mountWith([
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'here it is' },
+          { type: 'image', mime_type: 'image/png', data: PNG },
+        ],
+      },
+    ])
+    const img = document.querySelector('img.msg-image') as HTMLImageElement | null
+    expect(img).not.toBeNull()
+    expect(img?.src).toBe(`data:image/png;base64,${PNG}`)
+  })
+
+  // Same for a tool that RETURNED an image (generate_image, a backdrop). Stage
+  // folds tool calls to one quiet line, but the picture is the point of the call.
+  it('renders an image a tool returned, without unfolding the tool row', () => {
+    mountWith([
+      {
+        role: 'tool',
+        content: [{ type: 'image', mime_type: 'image/png', data: PNG }],
+        tool_call_id: 'c1',
+        name: 'generate_image',
+      },
+    ])
+    expect(document.querySelector('img.msg-image')).not.toBeNull()
+  })
+
+  // markdown.ts renders a .code-copy button into EVERY fenced block on every
+  // surface. The click handler used to be private to the panel's timeline, so
+  // in Stage the button was decoration: it copied nothing, and because it sits
+  // inside the bubble, clicking it opened the inline editor instead.
+  it('copies a code block, and does not open the editor doing it', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    mountWith([{ role: 'assistant', content: [{ type: 'text', text: '```\nls -la\n```' }] }])
+
+    const button = document.querySelector('.code-copy') as HTMLElement
+    expect(button).not.toBeNull()
+    await act(async () => {
+      fireEvent.click(button)
+    })
+
+    expect(writeText).toHaveBeenCalledWith('ls -la\n')
+    // The bubble's tap-to-edit must not have fired underneath the copy.
+    expect(document.querySelector('.stage-edit')).toBeNull()
+  })
+
+  // A tap anywhere else in the bubble still edits — the copy guard must not have
+  // swallowed the row's own affordance.
+  it('still opens the editor on a tap that is not the copy button', () => {
+    mountWith([{ role: 'assistant', content: [{ type: 'text', text: 'the door shuts' }] }])
+    fireEvent.click(screen.getByText('the door shuts'))
+    expect(document.querySelector('.stage-edit')).not.toBeNull()
   })
 })
