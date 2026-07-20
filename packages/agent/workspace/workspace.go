@@ -18,6 +18,7 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/worker"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/relaunch"
 )
@@ -519,7 +520,38 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 	return s, nil
 }
 
+// sceneSeed carries a parent scene's LIVE state into the session createLocked
+// is building (SD5's next-scene flow). A saved WorldDoc is the wrong source
+// for this: an unsaved chat World has none at all, and a saved one is only as
+// fresh as the last worlds.save — the session that just played is the truth.
+// nil for every ordinary create.
+type sceneSeed struct {
+	lore         []core.WorldLoreEntry
+	coordination string
+	world        string
+	castModels   map[string]core.CastRoute
+	note         string
+	// The parent's bound user persona — who the player is in the story. It
+	// outranks the workspace default a fresh immersive session would take:
+	// scene two of the same story is the same person.
+	userName, userDescription, userGender, userPronouns string
+	// opening is the cold-open beat. It is appended BEFORE materialize, which
+	// is what makes it stand in place of the card greeting — buildSession only
+	// seeds greetings into an empty transcript.
+	opening      string
+	openingActor string
+	// parent is the scene this one continues. A next scene is a SUCCESSOR, not a
+	// branch — it shares no transcript prefix, so ForkPoint stays empty — but
+	// without this the two sessions had nothing recording that one came from the
+	// other, and a World (which does not order its scenes) could not supply it.
+	parent string
+}
+
 func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) {
+	return w.createSeededLocked(opts, nil)
+}
+
+func (w *Workspace) createSeededLocked(opts ctrlproto.CreateOpts, seed *sceneSeed) (*wsSession, error) {
 	// New sessions start on the configured default (models.set_default), read
 	// live so a default set earlier this session takes effect at once — NOT on
 	// whatever model another session was last switched to (switchModel no longer
@@ -544,11 +576,11 @@ func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) 
 	// Template is accepted on the wire but not yet applied (reserved).
 	if opts.Persona != "" {
 		if _, err := build.ResolvePersona(opts.Persona); err != nil {
-			return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown persona %q: %v", opts.Persona, err)
+			return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown persona %q: %v", opts.Persona, err))
 		}
 	}
 	if opts.Experience != "" && opts.Experience != build.ExperienceChat && opts.Experience != build.ExperiencePlay {
-		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown experience %q (want %q or %q)", opts.Experience, build.ExperienceChat, build.ExperiencePlay)
+		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown experience %q (want %q or %q)", opts.Experience, build.ExperienceChat, build.ExperiencePlay))
 	}
 	// Creating inside a saved World (W5): the World's roster/pins/lore/
 	// coordination seed the session's working copy — a COPY, never a live link
@@ -558,7 +590,7 @@ func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) 
 	if opts.World != "" {
 		doc, err := build.NewWorldStore().Get(opts.World)
 		if err != nil {
-			return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown world %q", opts.World)
+			return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown world %q", opts.World))
 		}
 		worldDoc = &doc
 		if opts.Experience == "" {
@@ -586,7 +618,11 @@ func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) 
 	// Stamped into meta before buildSession, so its name threads into the {{user}}
 	// macro of the (deferred) greeting and it shows in the steering panel.
 	if opts.Experience != "" {
-		if def, ok := w.userPersonaStore().Default(); ok {
+		if seed != nil {
+			if err := sess.SetUserPersona(seed.userName, seed.userDescription, seed.userGender, seed.userPronouns); err != nil {
+				return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "carry user persona: %v", err)
+			}
+		} else if def, ok := w.userPersonaStore().Default(); ok {
 			if err := sess.SetUserPersona(def.Name, def.Description, def.Gender, def.Pronouns); err != nil {
 				return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "apply default user persona: %v", err)
 			}
@@ -615,8 +651,55 @@ func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) 
 			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "stamp world membership: %v", err)
 		}
 	}
+	// A scene sequel (SD5) stamps the parent's live World state over anything a
+	// saved WorldDoc seeded above, then opens on its cold-open beat.
+	var msgs []provider.Message
+	if seed != nil {
+		if err := sess.SetCast(opts.Cast, seed.castModels); err != nil {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "carry cast: %v", err)
+		}
+		if err := sess.SetWorldLore(seed.lore); err != nil {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "carry world lore: %v", err)
+		}
+		if seed.coordination != "" {
+			if err := sess.SetCoordination(seed.coordination); err != nil {
+				return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "carry coordination: %v", err)
+			}
+		}
+		if seed.world != "" {
+			if err := sess.SetWorld(seed.world); err != nil {
+				return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "carry world membership: %v", err)
+			}
+		}
+		if seed.note != "" {
+			if err := sess.SetNote(seed.note); err != nil {
+				return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "carry author's note: %v", err)
+			}
+		}
+		if seed.parent != "" {
+			if err := sess.SetParent(seed.parent); err != nil {
+				return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "record scene lineage: %v", err)
+			}
+		}
+		if body := strings.TrimSpace(seed.opening); body != "" {
+			meta := map[string]string{core.MetaSource: core.MetaDirected}
+			if a := strings.TrimSpace(seed.openingActor); a != "" {
+				meta[core.MetaActor] = a
+			}
+			m := provider.Message{
+				Role:    provider.RoleAssistant,
+				Content: []provider.Content{provider.TextBlock{Text: body}},
+				Time:    time.Now(),
+				Meta:    meta,
+			}
+			if err := sess.AppendMessage(m); err != nil {
+				return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "seed cold open: %v", err)
+			}
+			msgs = append(msgs, m)
+		}
+	}
 	id := build.SessionIDFromPath(sess.Path)
-	s, err := w.buildSession(id, sess, nil, 0, false)
+	s, err := w.buildSession(id, sess, msgs, 0, false)
 	if err != nil {
 		return nil, err
 	}
@@ -739,12 +822,12 @@ func (w *Workspace) DropVariant(ctx context.Context, sess string, epoch uint64, 
 	return s.dropVariant(epoch, index, variant)
 }
 
-func (w *Workspace) RetryTurn(ctx context.Context, sess string, epoch uint64) error {
+func (w *Workspace) RetryTurn(ctx context.Context, sess string, p ctrlproto.TurnRetryParams) error {
 	s, err := w.resolve(sess)
 	if err != nil {
 		return err
 	}
-	return s.retry(epoch)
+	return s.retry(p)
 }
 
 func (w *Workspace) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
@@ -918,7 +1001,7 @@ func (w *Workspace) ForkSession(ctx context.Context, sess string, fromIndex int)
 
 func (w *Workspace) forkLocked(sess string, fromIndex int) (*wsSession, error) {
 	if fromIndex < 0 {
-		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "fork index %d out of range", fromIndex)
+		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("fork index %d out of range", fromIndex))
 	}
 	if !validSessionID(sess) {
 		return nil, ctrlproto.ErrNoSession
@@ -944,7 +1027,7 @@ func (w *Workspace) forkLocked(sess string, fromIndex int) (*wsSession, error) {
 	if p != nil {
 		disk, ok := p.diskIndex(fromIndex)
 		if !ok {
-			return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "cannot fork at the resume-window summary (index %d)", fromIndex)
+			return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("cannot fork at the resume-window summary (index %d)", fromIndex))
 		}
 		branchAt = disk
 	}
@@ -1016,17 +1099,17 @@ func (w *Workspace) GenerateSessionTitle(ctx context.Context, sess string) (stri
 	}
 	seed := core.BuildTitleSeed(msgs, core.TitleSeedBudget)
 	if seed == "" {
-		return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "session has no conversation to title")
+		return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("session has no conversation to title"))
 	}
 	ok, cl, m := w.titleClient(prov, model)
 	if !ok {
-		return "", ctrlproto.Errorf(ctrlproto.CodeInternal, "no usable credential for a title model")
+		return "", ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("no usable credential for a title model"))
 	}
 	// A live session books the spend; a cold one was read without
 	// materializing an agent, so there is no meter for it (nil no-op).
 	title := generateTitle(ctx, cl, m, seed, live)
 	if title == "" {
-		return "", ctrlproto.Errorf(ctrlproto.CodeInternal, "the model returned no title")
+		return "", ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the model returned no title"))
 	}
 	if live != nil {
 		live.applyTitle(title)
@@ -1162,7 +1245,7 @@ func (w *Workspace) ListResets(ctx context.Context, sess string) (ctrlproto.Rese
 func (w *Workspace) ConsumeReset(ctx context.Context, sess, id string) (ctrlproto.ResetConsumeResult, error) {
 	s := w.existing(sess)
 	if s == nil || s.agent == nil || !s.agent.SupportsResets() {
-		return ctrlproto.ResetConsumeResult{}, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "provider does not support usage resets")
+		return ctrlproto.ResetConsumeResult{}, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("provider does not support usage resets"))
 	}
 	res, err := s.agent.ConsumeReset(ctx, id)
 	if err != nil {
@@ -1198,7 +1281,7 @@ func (w *Workspace) Restart(ctx context.Context) error {
 	// away for a restart that never happens, so the refusal has to come first.
 	if err := relaunch.CanTrigger(); err != nil {
 		if errors.Is(err, relaunch.ErrDisabled) {
-			return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "self-restart is not enabled (start with --allow-restart)")
+			return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("self-restart is not enabled (start with --allow-restart)"))
 		}
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "restart: %v", err)
 	}
@@ -1334,7 +1417,7 @@ func (w *Workspace) SetFavoriteModel(ctx context.Context, provider, model string
 // land and did nothing.
 func (w *Workspace) SetDefaultModel(ctx context.Context, provider, model string, scope ctrlproto.DefaultScope) error {
 	if provider == "" || model == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "provider and model are both required")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("provider and model are both required"))
 	}
 	switch scope {
 	case ctrlproto.ScopeGlobal:
@@ -1348,7 +1431,7 @@ func (w *Workspace) SetDefaultModel(ctx context.Context, provider, model string,
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save project config: %v", err)
 		}
 	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown model-default scope %q", scope)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown model-default scope %q", scope))
 	}
 	return nil
 }
@@ -1438,7 +1521,7 @@ func (w *Workspace) overrideClient(base build.Args, providerName, modelID string
 			}
 		}
 		if err != nil {
-			return nil, "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown model %q", modelID)
+			return nil, "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown model %q", modelID))
 		}
 		next.Provider = target.Provider
 		next.Model = target.ID
@@ -1448,9 +1531,9 @@ func (w *Workspace) overrideClient(base build.Args, providerName, modelID string
 	r, err := build.Resolve(next, true)
 	if err != nil || !r.HasCredential() {
 		if strings.TrimSpace(modelID) != "" {
-			return nil, "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no usable credential for model %q", modelID)
+			return nil, "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no usable credential for model %q", modelID))
 		}
-		return nil, "", ctrlproto.Errorf(ctrlproto.CodeInternal, "no usable credential")
+		return nil, "", ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("no usable credential"))
 	}
 	return r.NewClient(), r.Model, nil
 }
@@ -1508,7 +1591,7 @@ func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forc
 		}
 	}
 	if err != nil {
-		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "unknown model %q", modelID)
+		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown model %q", modelID))
 	}
 	cur, curErr := provider.FindModel(curProv, curModel)
 	if switchReusesClient(curProv, cur, curErr, target, forceRebuild) {
@@ -1525,7 +1608,7 @@ func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forc
 			return ctrlproto.Errorf(ctrlproto.CodeUnauthorized, "%v", rerr)
 		}
 		if !r.HasCredential() {
-			return ctrlproto.Errorf(ctrlproto.CodeUnauthorized, "no credential for provider %q", r.Provider)
+			return ctrlproto.Errorf(ctrlproto.CodeUnauthorized, "%s", i18n.T("no credential for provider %q", r.Provider))
 		}
 		nc := r.NewClient()
 		// Carry the passively-observed usage snapshot across the rebuild
@@ -1639,11 +1722,11 @@ const titleSystem = "You write concise, specific titles for chat sessions. Reply
 func generateTitle(ctx context.Context, cl provider.Client, model, seed string, s *wsSession) string {
 	req := provider.Request{
 		Model:     model,
-		System:    titleSystem,
+		System:    i18n.P("title.system", titleSystem),
 		MaxTokens: 24,
 		Messages: []provider.Message{{
 			Role:    provider.RoleUser,
-			Content: []provider.Content{provider.TextBlock{Text: "Title this chat.\n\n" + seed}},
+			Content: []provider.Content{provider.TextBlock{Text: i18n.P("title.instruction", "Title this chat.") + "\n\n" + seed}},
 			Time:    time.Now(),
 		}},
 	}

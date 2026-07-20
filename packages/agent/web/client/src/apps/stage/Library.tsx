@@ -6,7 +6,10 @@ import { PersonaSheet } from './PersonaSheet'
 import { PersonaEditor } from './PersonaEditor'
 import { CharacterChats } from './CharacterChats'
 import { relativeTime } from './format'
-import type { Client } from '../../platform/ctrlproto/client'
+import { t, tn, tr } from '../../i18n'
+import { panelHref } from '../../ui/navlinks'
+import { downloadExport } from '../../ui/browser'
+import type { ClientLike } from '../../platform/ctrlproto/client'
 import type {
   Status,
   CardSummary,
@@ -39,9 +42,9 @@ async function fileToBase64(file: File): Promise<string> {
 }
 
 export function formatBytes(n: number): string {
-  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} MB`
-  if (n >= 1 << 10) return `${Math.round(n / (1 << 10))} KB`
-  return `${n} bytes`
+  if (n >= 1 << 20) return t('%s MB', (n / (1 << 20)).toFixed(1))
+  if (n >= 1 << 10) return t('%d KB', Math.round(n / (1 << 10)))
+  return t('%d bytes', n)
 }
 
 // importError turns a failed cards.import into something a user can act on.
@@ -58,7 +61,10 @@ export function importError(e: unknown, file?: File): string {
   const msg = e instanceof Error ? e.message : String(e)
   if (/not connected|connection closed/i.test(msg)) {
     const size = file ? ` (${formatBytes(file.size)})` : ''
-    return `Lost the connection to terva while uploading${size}. If the file is large this is likely its size — the daemon closes the socket on an oversized upload. Otherwise the daemon may have restarted; it should reconnect on its own.`
+    return t(
+      'Lost the connection to terva while uploading%s. If the file is large this is likely its size — the daemon closes the socket on an oversized upload. Otherwise the daemon may have restarted; it should reconnect on its own.',
+      size,
+    )
   }
   // "badRequest: import card: ..." → "import card: ...". The wire code is noise
   // to a user; the sentence after it is the actual reason.
@@ -75,17 +81,23 @@ export function importError(e: unknown, file?: File): string {
 // evicted. Nothing warns you later and nothing brings it back, so the count is
 // the whole message. Exported for its own test.
 export function cardDeleteWarning(name: string, chats: number): string {
-  const head = `Delete “${name}”? The card and its avatar are removed for good.`
+  const head = t('Delete “%s”? The card and its avatar are removed for good.', name)
   if (chats <= 0) return head
-  const s = chats === 1 ? `${chats} chat` : `${chats} chats`
-  return `${head}\n\n${s} with ${name} will no longer open — a chat needs its card to resume. Export the card first if you might want it back.`
+  const tail = tn(
+    chats,
+    '%d chat with %s will no longer open — a chat needs its card to resume. Export the card first if you might want it back.',
+    '%d chats with %s will no longer open — a chat needs its card to resume. Export the card first if you might want it back.',
+    chats,
+    name,
+  )
+  return `${head}\n\n${tail}`
 }
 
 // The library screen: an avatar-forward character grid (tap a card → start
 // talking with its default greeting; the ⋯ opens options), card import by drag
 // or file-pick, a recent-chats strip, and the persona roster.
 export function Library(props: {
-  client: Client
+  client: ClientLike
   ready: boolean
   status: Status
   onOpenChat: (session: string) => void
@@ -185,7 +197,7 @@ export function Library(props: {
     }
   }
   const deleteWorld = async (world: WorldView) => {
-    if (!window.confirm(`Delete the World “${world.name}”? Its chats keep their own copies — only the saved World goes.`)) return
+    if (!window.confirm(t('Delete the World “%s”? Its chats keep their own copies — only the saved World goes.', world.name))) return
     try {
       await client.send('worlds.delete', { id: world.id })
       setWorldSheet(null)
@@ -205,7 +217,7 @@ export function Library(props: {
       for (const file of Array.from(files)) {
         const limit = client.maxUploadBytes
         if (limit > 0 && file.size > limit) {
-          throw new Error(`${file.name} is ${formatBytes(file.size)}, over the ${formatBytes(limit)} upload limit.`)
+          throw new Error(t('%s is %s, over the %s upload limit.', file.name, formatBytes(file.size), formatBytes(limit)))
         }
         await client.send<WorldView>('worlds.import', { bytes: await fileToBase64(file) })
       }
@@ -217,22 +229,11 @@ export function Library(props: {
     }
   }
 
-  // Download a World as a bundle — the CardSheet export pattern.
+  // Download a World as a bundle.
   const exportWorld = async (world: WorldView) => {
     setError('')
     try {
-      const res = await client.send<WorldExport>('worlds.export', { id: world.id })
-      const bin = atob(res.bytes)
-      const arr = new Uint8Array(bin.length)
-      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
-      const url = URL.createObjectURL(new Blob([arr], { type: res.mime_type }))
-      const a = document.createElement('a')
-      a.href = url
-      a.download = res.filename
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
+      downloadExport(await client.send<WorldExport>('worlds.export', { id: world.id }))
     } catch (e) {
       setError(String(e))
     }
@@ -265,8 +266,12 @@ export function Library(props: {
       const limit = client.maxUploadBytes
       if (limit > 0 && file.size > limit) {
         problems.push(
-          `${file.name} is ${formatBytes(file.size)}, over the ${formatBytes(limit)} upload limit. ` +
-            `Character cards carry their portrait as the image itself, so an oversized one is usually a wallpaper-sized picture — re-export it at a smaller resolution, or import it by URL instead.`,
+          t(
+            '%s is %s, over the %s upload limit. Character cards carry their portrait as the image itself, so an oversized one is usually a wallpaper-sized picture — re-export it at a smaller resolution, or import it by URL instead.',
+            file.name,
+            formatBytes(file.size),
+            formatBytes(limit),
+          ),
         )
         continue
       }
@@ -338,8 +343,8 @@ export function Library(props: {
   const deletePersona = async (p: PersonaSummary) => {
     const shadows = personas.some((o) => o.ref !== p.ref && o.name.trim().toLowerCase() === p.name.trim().toLowerCase())
     const msg = shadows
-      ? `Delete your “${p.name}”? The built-in of the same name comes back in its place.`
-      : `Delete the persona “${p.name}”? This can't be undone.`
+      ? t('Delete your “%s”? The built-in of the same name comes back in its place.', p.name)
+      : t("Delete the persona “%s”? This can't be undone.", p.name)
     if (!window.confirm(msg)) return
     try {
       await client.send('personas.delete', { name: p.ref })
@@ -363,8 +368,8 @@ export function Library(props: {
   // broadcasts the change. The label helps you tell one untitled chat from the
   // next in the confirm.
   const deleteSession = async (s: SessionInfo) => {
-    const label = s.title || (s.card ? cardById.get(s.card)?.name : '') || 'this chat'
-    if (!window.confirm(`Delete “${label}”? This can't be undone.`)) return
+    const label = s.title || (s.card ? cardById.get(s.card)?.name : '') || t('this chat')
+    if (!window.confirm(t("Delete “%s”? This can't be undone.", label))) return
     try {
       await client.send('sessions.delete', null, s.id)
       load()
@@ -376,12 +381,13 @@ export function Library(props: {
   return (
     <div class="stage">
       <header class="stage-topbar">
+        {/* i18n-exempt — the terva Stage wordmark, a product name */}
         <h1 class="stage-brand">terva Stage</h1>
         <div class="stage-topbar__right">
-          <a class="stage-nav-link" href="/" title="Open the control panel">⌂ Panel</a>
+          <a class="stage-nav-link" href={panelHref()} title={t('Open the control panel')}>{t('⌂ Panel')}</a>
           <select
             class="stage-theme-pick"
-            title="Theme"
+            title={t('Theme')}
             value={theme}
             onChange={(e) => {
               const id = (e.target as HTMLSelectElement).value
@@ -389,9 +395,9 @@ export function Library(props: {
               applyTheme(id)
             }}
           >
-            {THEMES.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
+            {THEMES.map((th) => (
+              <option key={th.id} value={th.id}>
+                {tr(th.name)}
               </option>
             ))}
           </select>
@@ -413,9 +419,9 @@ export function Library(props: {
         }}
       >
         <div class="stage-section-head">
-          <h2>Characters</h2>
+          <h2>{t('Characters')}</h2>
           <label class="stage-import">
-            + Import
+            {t('+ Import')}
             <input
               type="file"
               accept="image/png,application/json"
@@ -438,13 +444,13 @@ export function Library(props: {
           <input
             type="url"
             class="stage-import-url__input"
-            placeholder="Paste a card URL (chub.ai, …)"
+            placeholder={t('Paste a card URL (chub.ai, …)')}
             value={importUrl}
             disabled={busy}
             onInput={(e) => setImportUrl((e.target as HTMLInputElement).value)}
           />
           <button type="submit" class="stage-import-url__go" disabled={busy || !importUrl.trim()}>
-            Import URL
+            {t('Import URL')}
           </button>
         </form>
         {error && <p class="stage-error">{error}</p>}
@@ -454,7 +460,7 @@ export function Library(props: {
         {notes.map((n) => (
           <p key={n} class="stage-note">{n}</p>
         ))}
-        {cards.length === 0 && ready && <p class="stage-empty">No characters yet — drop a card PNG here, paste a URL, or use Import.</p>}
+        {cards.length === 0 && ready && <p class="stage-empty">{t('No characters yet — drop a card PNG here, paste a URL, or use Import.')}</p>}
 
         <ul class="stage-grid">
           {cards.map((card) => (
@@ -462,7 +468,7 @@ export function Library(props: {
               <button
                 class="stage-card"
                 disabled={busy}
-                title={chatsFor(card.id) > 0 ? `${chatsFor(card.id)} chat${chatsFor(card.id) === 1 ? '' : 's'} with ${card.name}` : `Chat with ${card.name}`}
+                title={chatsFor(card.id) > 0 ? tn(chatsFor(card.id), '%d chat with %s', '%d chats with %s', chatsFor(card.id), card.name) : t('Chat with %s', card.name)}
                 onClick={() => openCharacter(card)}
               >
                 {card.avatar_url ? (
@@ -476,7 +482,7 @@ export function Library(props: {
                   {chatsFor(card.id) > 0 && <span class="stage-card__count">·{chatsFor(card.id)}</span>}
                 </span>
               </button>
-              <button class="stage-card__more" title="Details" onClick={() => setSheet(card)}>
+              <button class="stage-card__more" title={t('Details')} onClick={() => setSheet(card)}>
                 ⋯
               </button>
             </li>
@@ -486,9 +492,9 @@ export function Library(props: {
         {worldsSupported && (
           <>
             <div class="stage-section-head">
-              <h2>Worlds</h2>
+              <h2>{t('Worlds')}</h2>
               <label class="stage-import">
-                + Import
+                {t('+ Import')}
                 <input
                   type="file"
                   accept="application/json,.json"
@@ -502,7 +508,7 @@ export function Library(props: {
               </label>
             </div>
             {worlds.length === 0 && (
-              <p class="stage-empty">No Worlds yet — save a chat as one (Steering → World tab) or import a World bundle.</p>
+              <p class="stage-empty">{t('No Worlds yet — save a chat as one (Steering → World tab) or import a World bundle.')}</p>
             )}
             <ul class="stage-worlds">
               {worlds.map((wld) => (
@@ -516,8 +522,8 @@ export function Library(props: {
                     <span class="stage-world__text">
                       <span class="stage-world__name">{wld.name}</span>
                       <span class="stage-world__meta">
-                        {Object.keys(wld.characters ?? {}).length} character{Object.keys(wld.characters ?? {}).length === 1 ? '' : 's'}
-                        {(wld.sessions ?? 0) > 0 && <span> · {wld.sessions} chat{wld.sessions === 1 ? '' : 's'}</span>}
+                        {tn(Object.keys(wld.characters ?? {}).length, '%d character', '%d characters')}
+                        {(wld.sessions ?? 0) > 0 && <span> · {tn(wld.sessions ?? 0, '%d chat', '%d chats')}</span>}
                       </span>
                     </span>
                   </button>
@@ -529,7 +535,7 @@ export function Library(props: {
 
         {chats.length > 0 && (
           <>
-            <h2>Your chats</h2>
+            <h2>{t('Your chats')}</h2>
             <ul class="stage-yourchats">
               {visibleChats.map((s) => {
                 const c = s.card ? cardById.get(s.card) : undefined
@@ -543,16 +549,16 @@ export function Library(props: {
                         <div class="stage-yourchats__avatar stage-yourchats__avatar--blank" aria-hidden="true" />
                       )}
                       <span class="stage-yourchats__text">
-                        <span class="stage-yourchats__title">{s.title || c?.name || 'Untitled'}</span>
+                        <span class="stage-yourchats__title">{s.title || c?.name || t('Untitled')}</span>
                         <span class="stage-yourchats__sub">
                           {c && <span class="stage-yourchats__char">{c.name}</span>}
-                          {s.experience === 'play' && <span class="stage-yourchats__exp">play</span>}
-                          {(s.messages ?? 0) > 0 && <span>· {s.messages} msg</span>}
+                          {s.experience === 'play' && <span class="stage-yourchats__exp">{t('play')}</span>}
+                          {(s.messages ?? 0) > 0 && <span>· {t('%d msg', s.messages ?? 0)}</span>}
                         </span>
                       </span>
                       {when && <span class="stage-yourchats__when">{when}</span>}
                     </button>
-                    <button class="stage-yourchats__del" title="Delete this chat" aria-label="Delete this chat" onClick={() => void deleteSession(s)}>
+                    <button class="stage-yourchats__del" title={t('Delete this chat')} aria-label={t('Delete this chat')} onClick={() => void deleteSession(s)}>
                       🗑
                     </button>
                   </li>
@@ -561,7 +567,7 @@ export function Library(props: {
             </ul>
             {chats.length > CHATS_SHOWN && (
               <button class="stage-yourchats__more" onClick={() => setShowAllChats((v) => !v)}>
-                {showAllChats ? 'Show fewer' : `Show all ${chats.length} chats`}
+                {showAllChats ? t('Show fewer') : t('Show all %d chats', chats.length)}
               </button>
             )}
           </>
@@ -573,15 +579,15 @@ export function Library(props: {
             exists is the one case where it is useless. */}
         <>
             <div class="stage-drawer__head2">
-              <h2>Personas</h2>
+              <h2>{t('Personas')}</h2>
               <button class="stage-import" onClick={() => setPersonaEditor({ mode: 'new' })}>
-                + New
+                {t('+ New')}
               </button>
             </div>
             <ul class="stage-personas">
               {personas.map((p) => (
                 <li key={p.ref}>
-                  <button class="stage-persona" title={`About ${p.name}`} onClick={() => setPersonaSheet(p)}>
+                  <button class="stage-persona" title={t('About %s', p.name)} onClick={() => setPersonaSheet(p)}>
                     <span class="stage-persona__emoji" aria-hidden="true">
                       {p.emoji || '🎭'}
                     </span>
@@ -664,7 +670,7 @@ export function Library(props: {
               <h3>🌍 {worldSheet.name}</h3>
               <button
                 class="stage-worldlore__act"
-                title="Rename or describe this World"
+                title={t('Rename or describe this World')}
                 onClick={() => {
                   setWorldEditName(worldSheet.name)
                   setWorldEditDesc(worldSheet.description ?? '')
@@ -688,22 +694,22 @@ export function Library(props: {
               >
                 <input
                   class="stage-worldedit__name"
-                  placeholder="World name"
+                  placeholder={t('World name')}
                   value={worldEditName}
                   onInput={(e) => setWorldEditName((e.target as HTMLInputElement).value)}
                 />
                 <textarea
                   class="stage-worldedit__desc"
-                  placeholder="What is this World? (shown on the shelf)"
+                  placeholder={t('What is this World? (shown on the shelf)')}
                   value={worldEditDesc}
                   onInput={(e) => setWorldEditDesc((e.target as HTMLTextAreaElement).value)}
                 />
                 <div class="stage-worldedit__actions">
                   <button type="submit" class="stage-worldedit__save" disabled={!worldEditName.trim()}>
-                    Save
+                    {t('Save')}
                   </button>
                   <button type="button" class="stage-worldedit__cancel" onClick={() => setWorldEdit(false)}>
-                    Cancel
+                    {t('Cancel')}
                   </button>
                 </div>
               </form>
@@ -711,22 +717,22 @@ export function Library(props: {
               worldSheet.description && <p class="stage-hint">{worldSheet.description}</p>
             )}
             <section class="stage-drawer__section">
-              <h4>Characters</h4>
-              {Object.keys(worldSheet.characters ?? {}).length === 0 && <p class="stage-empty">No characters saved in this World.</p>}
+              <h4>{t('Characters')}</h4>
+              {Object.keys(worldSheet.characters ?? {}).length === 0 && <p class="stage-empty">{t('No characters saved in this World.')}</p>}
               <ul class="stage-cast">
                 {Object.entries(worldSheet.characters ?? {}).map(([name, ref]) => (
                   <li key={name} class="stage-cast__member">
                     <span class="stage-cast__name">{name}</span>
-                    <button class="stage-worldsheet__chat" disabled={busy} title={`New chat with ${name} in ${worldSheet.name}`} onClick={() => void startChatInWorld(worldSheet, ref)}>
-                      Chat
+                    <button class="stage-worldsheet__chat" disabled={busy} title={t('New chat with %s in %s', name, worldSheet.name)} onClick={() => void startChatInWorld(worldSheet, ref)}>
+                      {t('Chat')}
                     </button>
                   </li>
                 ))}
               </ul>
             </section>
             <section class="stage-drawer__section">
-              <h4>Chats in this World</h4>
-              {sessions.filter((s) => s.world === worldSheet.id).length === 0 && <p class="stage-empty">None yet.</p>}
+              <h4>{t('Chats in this World')}</h4>
+              {sessions.filter((s) => s.world === worldSheet.id).length === 0 && <p class="stage-empty">{t('None yet.')}</p>}
               <ul class="stage-yourchats">
                 {sessions
                   .filter((s) => s.world === worldSheet.id)
@@ -734,8 +740,8 @@ export function Library(props: {
                     <li key={s.id} class="stage-yourchats__row">
                       <button class="stage-yourchats__item" onClick={() => onOpenChat(s.id)}>
                         <span class="stage-yourchats__text">
-                          <span class="stage-yourchats__title">{s.title || 'Untitled'}</span>
-                          <span class="stage-yourchats__sub">{(s.messages ?? 0) > 0 && <span>{s.messages} msg</span>}</span>
+                          <span class="stage-yourchats__title">{s.title || t('Untitled')}</span>
+                          <span class="stage-yourchats__sub">{(s.messages ?? 0) > 0 && <span>{t('%d msg', s.messages ?? 0)}</span>}</span>
                         </span>
                         {relativeTime(s.updated) && <span class="stage-yourchats__when">{relativeTime(s.updated)}</span>}
                       </button>
@@ -748,17 +754,17 @@ export function Library(props: {
                 <button
                   class="stage-worldsheet__play"
                   disabled={busy}
-                  title={`Run a play session in ${worldSheet.name} — the whole roster on stage, you direct`}
+                  title={t('Run a play session in %s — the whole roster on stage, you direct', worldSheet.name)}
                   onClick={() => void startPlayInWorld(worldSheet)}
                 >
-                  🎭 Play here
+                  {t('🎭 Play here')}
                 </button>
               )}
-              <button class="stage-worldsheet__export" title="Download this World as a bundle — its characters' cards ride along" onClick={() => void exportWorld(worldSheet)}>
-                ⬇ Export bundle
+              <button class="stage-worldsheet__export" title={t("Download this World as a bundle — its characters' cards ride along")} onClick={() => void exportWorld(worldSheet)}>
+                {t('⬇ Export bundle')}
               </button>
               <label class="stage-worldsheet__coverbtn">
-                🖼 {worldSheet.cover_url ? 'Change cover' : 'Set cover'}
+                🖼 {worldSheet.cover_url ? t('Change cover') : t('Set cover')}
                 <input
                   type="file"
                   accept="image/*"
@@ -777,12 +783,12 @@ export function Library(props: {
                   class="stage-worldsheet__coverbtn"
                   onClick={() => void updateWorld({ id: worldSheet.id, description: worldSheet.description ?? '', remove_cover: true })}
                 >
-                  Remove cover
+                  {t('Remove cover')}
                 </button>
               )}
             </div>
             <button class="stage-worldsheet__delete" onClick={() => void deleteWorld(worldSheet)}>
-              Delete this World
+              {t('Delete this World')}
             </button>
           </aside>
         </div>

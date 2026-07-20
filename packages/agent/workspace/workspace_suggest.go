@@ -23,6 +23,7 @@ import (
 
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -47,7 +48,7 @@ func (w *Workspace) SuggestReply(ctx context.Context, sess string, p ctrlproto.S
 	if ag == nil || ag.Client == nil {
 		// No credential resolved for this session yet (a credential-less boot
 		// before /login). Nothing to draft against.
-		return ctrlproto.SuggestResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "not logged in")
+		return ctrlproto.SuggestResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 	// Default to the session's live client + model; a per-generation override
 	// (Phase 7) resolves a fresh client for the chosen model instead.
@@ -142,7 +143,7 @@ func suggestMessage(role provider.Role, text string) provider.Message {
 func suggestGuidance(note string) string {
 	n := strings.TrimSpace(note)
 	if n == "" {
-		return "(no specific guidance — suggest a natural next line)"
+		return i18n.P("stage.suggest.no_guidance", "(no specific guidance — suggest a natural next line)")
 	}
 	return n
 }
@@ -204,62 +205,62 @@ func renderSuggestSystem(t suggestTarget, player userPersona, c *card.Card, lore
 			name = strings.TrimSpace(t.card.Name)
 		}
 		if name == "" {
-			name = "the character"
+			name = frameFallbackCharacter()
 		}
-		b.WriteString(strings.ReplaceAll(suggestActorTask, "{name}", name))
+		b.WriteString(strings.ReplaceAll(i18n.P("stage.suggest.actor", suggestActorTask), "{name}", name))
 		// A picked library card (W1) gives the richer voice — its authored fields —
 		// and supersedes a typed walk-on description.
 		if t.card != nil {
-			b.WriteString("\n\nWHO YOU ARE VOICING\n")
+			b.WriteString("\n\n" + i18n.P("stage.suggest.voicing", "WHO YOU ARE VOICING") + "\n")
 			writeField(&b, "name", t.card.Name)
 			writeField(&b, "description", t.card.Description)
 			writeField(&b, "personality", t.card.Personality)
 			writeField(&b, "scenario", t.card.Scenario)
 		} else if voice := strings.TrimSpace(t.voice); voice != "" {
-			b.WriteString("\n\nWHO YOU ARE VOICING\n")
+			b.WriteString("\n\n" + i18n.P("stage.suggest.voicing", "WHO YOU ARE VOICING") + "\n")
 			b.WriteString(name + ": " + voice + "\n")
 		}
 	case t.isNarrator():
-		b.WriteString(suggestNarratorTask)
+		b.WriteString(i18n.P("stage.suggest.narrator", suggestNarratorTask))
 	default:
-		b.WriteString(suggestTask)
+		b.WriteString(i18n.P("stage.suggest.task", suggestTask))
 	}
 	if loreBlock != "" {
-		b.WriteString("\n\nWHAT THE SPEAKER KNOWS OF THIS WORLD (lore)\n")
+		b.WriteString("\n\n" + i18n.P("stage.suggest.speaker_lore", "WHAT THE SPEAKER KNOWS OF THIS WORLD (lore)") + "\n")
 		b.WriteString(loreBlock + "\n")
 	}
 
 	// Who the player is — the voice to write for a "user" draft, and context to
 	// keep out of the mouth of a directed actor/narrator draft.
 	if t.isActor() || t.isNarrator() {
-		b.WriteString("\n\nTHE PLAYER IN THIS SCENE (context — do not write their words)\n")
+		b.WriteString("\n\n" + framePlayerContext() + "\n")
 	} else {
-		b.WriteString("\n\nWHO THE PLAYER IS\n")
+		b.WriteString("\n\n" + i18n.P("stage.suggest.who_player", "WHO THE PLAYER IS") + "\n")
 	}
 	who := player.brief()
 	if who == "" {
-		who = "(not specified — infer a natural voice from the conversation)"
+		who = i18n.P("stage.suggest.player_unspecified", "(not specified — infer a natural voice from the conversation)")
 	}
 	b.WriteString(who + "\n")
 
-	charName := "the character"
+	charName := frameFallbackCharacter()
 	if c != nil && strings.TrimSpace(c.Name) != "" {
 		charName = strings.TrimSpace(c.Name)
-		b.WriteString("\nTHE CHARACTER THE PLAYER IS TALKING TO (context only — do not speak as them)\n")
+		b.WriteString("\n" + i18n.P("stage.suggest.talking_to", "THE CHARACTER THE PLAYER IS TALKING TO (context only — do not speak as them)") + "\n")
 		writeField(&b, "name", c.Name)
 		writeField(&b, "description", c.Description)
 		writeField(&b, "personality", c.Personality)
 		writeField(&b, "scenario", c.Scenario)
 	}
 
-	b.WriteString("\nRECENT CONVERSATION (most recent last)\n")
+	b.WriteString("\n" + frameRecentConversation() + "\n")
 	playerLabel := strings.TrimSpace(player.Name)
 	if playerLabel == "" {
-		playerLabel = "Me"
+		playerLabel = framePlayerFallbackLabel()
 	}
 	tail := renderTranscriptTail(transcript, playerLabel, charName, suggestMaxTranscript)
 	if tail == "" {
-		tail = "(the scene has not started yet)"
+		tail = frameSceneNotStarted()
 	}
 	b.WriteString(tail + "\n")
 	return b.String()

@@ -9,6 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 )
 
 // The play cast on the wire. cast.add / cast.remove edit a play session's
@@ -26,7 +27,7 @@ func (w *Workspace) CastAdd(_ context.Context, sess string, p ctrlproto.CastMemb
 	name := strings.TrimSpace(p.Name)
 	ref := strings.TrimSpace(p.Ref)
 	if name == "" || ref == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "cast.add needs a name and a ref")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("cast.add needs a name and a ref"))
 	}
 	s, err := w.castSession(sess)
 	if err != nil {
@@ -39,7 +40,7 @@ func (w *Workspace) CastAdd(_ context.Context, sess string, p ctrlproto.CastMemb
 	if s.sess.Meta.Experience == "chat" {
 		boundName, _ := s.boundCharacter()
 		if ref == strings.TrimSpace(s.sess.Meta.Card) || strings.EqualFold(name, boundName) {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s is already on stage as the main character", name)
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("%s is already on stage as the main character", name))
 		}
 	}
 	next := s.castRefs()
@@ -57,7 +58,7 @@ func (w *Workspace) CastAdd(_ context.Context, sess string, p ctrlproto.CastMemb
 func (w *Workspace) CastRemove(_ context.Context, sess string, p ctrlproto.CastMemberParams) error {
 	name := strings.TrimSpace(p.Name)
 	if name == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "cast.remove needs a name")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("cast.remove needs a name"))
 	}
 	s, err := w.castSession(sess)
 	if err != nil {
@@ -65,7 +66,7 @@ func (w *Workspace) CastRemove(_ context.Context, sess string, p ctrlproto.CastM
 	}
 	next := s.castRefs()
 	if _, ok := next[name]; !ok {
-		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "no cast member %q", name)
+		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no cast member %q", name))
 	}
 	delete(next, name)
 	models := s.castModels()
@@ -91,13 +92,13 @@ func (w *Workspace) CastSpeak(_ context.Context, sess string, p ctrlproto.CastSp
 // split out so the turn path is testable with a gated client).
 func (s *wsSession) speak(actor string) error {
 	if actor == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "cast.speak needs an actor")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("cast.speak needs an actor"))
 	}
 	if s.sess.Meta.Experience != build.ExperiencePlay {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "a cast is only available for play sessions")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a cast is only available for play sessions"))
 	}
 	if _, ok := s.castRefs()[actor]; !ok {
-		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "no cast member %q", actor)
+		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no cast member %q", actor))
 	}
 	directive := directionDirective(fmt.Sprintf("Bring %s into the scene now — let them speak to this moment.", actor))
 	return s.promptBlocks(directive, nil)
@@ -116,10 +117,10 @@ func (w *Workspace) castSession(sess string) (*wsSession, error) {
 	// the directed-authorship roster, voiced on demand (post.line/suggest) with no
 	// warm agents. applyCast gates the play-only machinery.
 	if s.sess == nil || s.sess.Meta.Experience == "" {
-		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "a roster is only available in a chat or play session")
+		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a roster is only available in a chat or play session"))
 	}
 	if s.busy() {
-		return nil, ctrlproto.Errorf(ctrlproto.CodeBusy, "cannot change the roster while a turn is running")
+		return nil, ctrlproto.Errorf(ctrlproto.CodeBusy, "%s", i18n.T("cannot change the roster while a turn is running"))
 	}
 	return s, nil
 }
@@ -196,7 +197,7 @@ func (s *wsSession) applyCast(next map[string]string, models map[string]core.Cas
 	} else {
 		for name, ref := range next {
 			if _, err := s.ws.cardStore().Get(ref); err != nil {
-				return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown character card %q for %q", ref, name)
+				return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown character card %q for %q", ref, name))
 			}
 		}
 	}

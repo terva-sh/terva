@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
-import type { Client } from '../../platform/ctrlproto/client'
+import { t } from '../../i18n'
+import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { PersonaSummary, PersonaView, PersonaWriteParams } from '../../platform/ctrlproto/types'
 
 // A labeled input/textarea. Same shape as CardEditor's EditField (and the
@@ -102,10 +103,10 @@ export function formFromView(v: PersonaView): PersonaForm {
 // check is the client's, against the whole roster.
 export function duplicateName(base: string, taken: string[]): string {
   const used = new Set(taken.map((n) => n.trim().toLowerCase()))
-  const candidate = `${base} (my copy)`
+  const candidate = t('%s (my copy)', base)
   if (!used.has(candidate.toLowerCase())) return candidate
   for (let n = 2; n < 100; n++) {
-    const next = `${base} (my copy ${n})`
+    const next = t('%s (my copy %d)', base, n)
     if (!used.has(next.toLowerCase())) return next
   }
   return candidate
@@ -133,7 +134,7 @@ export function slugPreview(name: string): string {
 // ever say why. The sheet offers Duplicate for built-ins instead, which lands
 // here in create mode under a new name, so the built-in keeps flowing.
 export function PersonaEditor(props: {
-  client: Client
+  client: ClientLike
   // The persona to edit (yours), or the one to duplicate. Absent = a blank new one.
   persona?: PersonaSummary
   // duplicate: seed from `persona` but create under a NEW name rather than
@@ -196,7 +197,7 @@ export function PersonaEditor(props: {
     }
   }
 
-  const title = creating ? (duplicate ? `Duplicate ${persona?.name ?? ''}` : 'New persona') : `Edit ${persona?.name ?? ''}`
+  const title = creating ? (duplicate ? t('Duplicate %s', persona?.name ?? '') : t('New persona')) : t('Edit %s', persona?.name ?? '')
 
   return (
     <div class="stage-sheet-backdrop" onClick={onClose}>
@@ -210,7 +211,7 @@ export function PersonaEditor(props: {
 
         {duplicate && (
           <p class="stage-hint">
-            This makes your own copy under a new name. The original stays as it is, so updates to it keep reaching you.
+            {t('This makes your own copy under a new name. The original stays as it is, so updates to it keep reaching you.')}
           </p>
         )}
 
@@ -220,96 +221,98 @@ export function PersonaEditor(props: {
           </p>
         )}
 
-        {!form && !error && <p class="stage-empty">Loading…</p>}
+        {!form && !error && <p class="stage-empty">{t('Loading…')}</p>}
 
         {form && (
           <div class="stage-personaeditor__body">
             <EditField
-              label="Name"
+              label={t('Name')}
               value={form.name}
-              hint="How you refer to this persona. It also names the file it is saved in."
+              hint={t('How you refer to this persona. It also names the file it is saved in.')}
               onInput={(v) => set('name', v)}
             />
             {nameTaken && (
               <p class="stage-personaeditor__warn">
-                “{form.name.trim()}” is already in your roster. Saving under a name that matches a built-in would hide the
-                built-in instead of adding to it — pick another.
+                {t(
+                  '“%s” is already in your roster. Saving under a name that matches a built-in would hide the built-in instead of adding to it — pick another.',
+                  form.name.trim(),
+                )}
               </p>
             )}
             {nameUnusable && (
               <p class="stage-personaeditor__warn">
-                This name has no letters or digits to make a filename from. Add at least one.
+                {t('This name has no letters or digits to make a filename from. Add at least one.')}
               </p>
             )}
-            {creating && !!slug && <p class="stage-personaeditor__slug">Saves as {slug}.md</p>}
+            {creating && !!slug && <p class="stage-personaeditor__slug">{t('Saves as %s.md', slug)}</p>}
 
-            <EditField label="Emoji" value={form.emoji} hint="Shown beside the name in the roster." onInput={(v) => set('emoji', v)} />
-            <EditField label="Specialty" value={form.specialty} hint="One line: what this persona is for." onInput={(v) => set('specialty', v)} />
-            <EditField label="Summary" value={form.summary} area rows={2} onInput={(v) => set('summary', v)} />
+            <EditField label={t('Emoji')} value={form.emoji} hint={t('Shown beside the name in the roster.')} onInput={(v) => set('emoji', v)} />
+            <EditField label={t('Specialty')} value={form.specialty} hint={t('One line: what this persona is for.')} onInput={(v) => set('specialty', v)} />
+            <EditField label={t('Summary')} value={form.summary} area rows={2} onInput={(v) => set('summary', v)} />
             <EditField
-              label="Pronunciation"
+              label={t('Pronunciation')}
               value={form.pronunciation}
-              hint="Optional, for a name that is not obvious — e.g. SEP-pah."
+              hint={t('Optional, for a name that is not obvious — e.g. SEP-pah.')}
               onInput={(v) => set('pronunciation', v)}
             />
-            <EditField label="Accent colour" value={form.accent_color} hint="A hex colour, e.g. #e0af68." onInput={(v) => set('accent_color', v)} />
+            <EditField label={t('Accent colour')} value={form.accent_color} hint={t('A hex colour, e.g. #e0af68.')} onInput={(v) => set('accent_color', v)} />
 
             <EditField
-              label="Charter"
+              label={t('Charter')}
               value={form.charter}
               area
               rows={12}
-              hint="The behavioural body — what actually shapes how this persona acts. This is the substance of a persona."
+              hint={t('The behavioural body — what actually shapes how this persona acts. This is the substance of a persona.')}
               onInput={(v) => set('charter', v)}
             />
             <EditField
-              label="Introduction"
+              label={t('Introduction')}
               value={form.introduction}
               area
               rows={2}
-              hint="How the persona introduces itself when it takes over."
+              hint={t('How the persona introduces itself when it takes over.')}
               onInput={(v) => set('introduction', v)}
             />
 
             <EditField
-              label="Good for"
+              label={t('Good for')}
               value={form.good_for.join(', ')}
-              hint="Comma-separated. Also what makes this persona dispatchable to sub-agents."
+              hint={t('Comma-separated. Also what makes this persona dispatchable to sub-agents.')}
               onInput={(v) => set('good_for', splitList(v))}
             />
             <EditField
-              label="Avoid for"
+              label={t('Avoid for')}
               value={form.avoid_for.join(', ')}
-              hint="Comma-separated."
+              hint={t('Comma-separated.')}
               onInput={(v) => set('avoid_for', splitList(v))}
             />
             <EditField
-              label="Recommended skills"
+              label={t('Recommended skills')}
               value={form.recommended_skills.join(', ')}
-              hint="Comma-separated."
+              hint={t('Comma-separated.')}
               onInput={(v) => set('recommended_skills', splitList(v))}
             />
 
             <label class="stage-personaeditor__check">
               <input type="checkbox" checked={form.immersive} onChange={(e) => set('immersive', (e.target as HTMLInputElement).checked)} />
               <span>
-                Immersive — the charter owns the whole system prompt (roleplay) instead of layering on terva's own identity.
+                {t("Immersive — the charter owns the whole system prompt (roleplay) instead of layering on terva's own identity.")}
               </span>
             </label>
           </div>
         )}
 
         <div class="stage-personaeditor__bar">
-          {savedAt && !saving && <span class="stage-cardeditor__saved">Saved ✓</span>}
+          {savedAt && !saving && <span class="stage-cardeditor__saved">{t('Saved ✓')}</span>}
           <button class="stage-cardeditor__cancel" onClick={onClose}>
-            Close
+            {t('Close')}
           </button>
           <button
             class="stage-cardeditor__save"
             disabled={saving || !form || !form.name.trim() || nameTaken || nameUnusable}
             onClick={() => void save()}
           >
-            {saving ? 'Saving…' : creating ? 'Create persona' : 'Save changes'}
+            {saving ? t('Saving…') : creating ? t('Create persona') : t('Save changes')}
           </button>
         </div>
       </div>

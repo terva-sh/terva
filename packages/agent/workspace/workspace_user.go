@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/i18n"
 )
 
 // The user persona on the wire. user.bind writes SessionMeta (UserName +
@@ -30,7 +31,7 @@ func (w *Workspace) UserBind(_ context.Context, sess string, p ctrlproto.UserBin
 	if ref := strings.TrimSpace(p.Ref); ref != "" {
 		up, err := w.userPersonaStore().Get(ref)
 		if err != nil {
-			return ctrlproto.Errorf(ctrlproto.CodeNotFound, "no saved user persona %q", ref)
+			return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no saved user persona %q", ref))
 		}
 		name, desc, gender, pronouns = up.Name, up.Description, up.Gender, up.Pronouns
 	}
@@ -39,7 +40,7 @@ func (w *Workspace) UserBind(_ context.Context, sess string, p ctrlproto.UserBin
 		return err
 	}
 	if s.user == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the user persona is only available for chat/play sessions")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the user persona is only available for chat/play sessions"))
 	}
 	if err := s.sess.SetUserPersona(name, desc, gender, pronouns); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "set user persona: %v", err)

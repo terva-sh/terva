@@ -313,7 +313,7 @@ func localeOptions() []ctrlproto.SettingOption {
 // settingsAction applies a settings change: {action:"set", args:{key,value}}.
 func (s *wsSession) settingsAction(action string, args map[string]string) error {
 	if action != "set" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown settings action %q", action)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown settings action %q", action))
 	}
 	key, val := args["key"], args["value"]
 	switch key {
@@ -365,7 +365,7 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		switch val {
 		case "steps", "turns", "off":
 		default:
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown auto_compact %q (steps|turns|off)", val)
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown auto_compact %q (steps|turns|off)", val))
 		}
 		// Live for every session: Agent.AutoCompactPolicy re-reads config on each
 		// threshold check, so this applies on the next check with no rebuild.
@@ -377,7 +377,7 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		if val != "" {
 			f, err := strconv.ParseFloat(val, 32)
 			if err != nil || f < 0 || f > 2 {
-				return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "temperature must be a number between 0 and 2")
+				return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("temperature must be a number between 0 and 2"))
 			}
 			t := float32(f)
 			tp = &t
@@ -463,7 +463,7 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		// these settings labels) resolve in the new language on the next fetch;
 		// already-baked agent system prompts stay until a new session.
 		if !slices.Contains(availableLocales(), val) {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown language %q", val)
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown language %q", val))
 		}
 		if err := i18n.Configure(val, config.TervaHome()); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "configure locale: %v", err)
@@ -475,7 +475,7 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 	default:
 		f, ok := build.EngineFeatureByID(key)
 		if !ok {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown setting %q", key)
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown setting %q", key))
 		}
 		// An engine feature: persist the override, then flip every live
 		// session's agent through the feature's own Apply (new sessions read

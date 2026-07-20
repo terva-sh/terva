@@ -12,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -296,7 +297,7 @@ func (w *Workspace) Node(_ context.Context, sess, id, op string) (ctrlproto.Cont
 func (s *wsSession) contextNode(id, op string) (ctrlproto.ContextNode, error) {
 	ag := s.agent
 	if ag == nil {
-		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNoSession, "session has no agent")
+		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNoSession, "%s", i18n.T("session has no agent"))
 	}
 	switch op {
 	case "compaction":
@@ -304,7 +305,7 @@ func (s *wsSession) contextNode(id, op string) (ctrlproto.ContextNode, error) {
 	case "", "expand":
 		// the expand switch below
 	default:
-		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "context node op %q not supported", op)
+		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("context node op %q not supported", op))
 	}
 	switch {
 	case id == "sys":
@@ -335,7 +336,7 @@ func (s *wsSession) contextNode(id, op string) (ctrlproto.ContextNode, error) {
 	case strings.HasPrefix(id, "tr/m"):
 		return ctxMessageContentNode(id, ag.Messages())
 	}
-	return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "unknown context node %q", id)
+	return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown context node %q", id))
 }
 
 // extContextItems surfaces this session's extensions' context contributions of
@@ -493,7 +494,7 @@ func ctxOrderedGroups(byGroup map[string][]ctrlproto.ContextNode) []string {
 func ctxMessageContentNode(id string, msgs []provider.Message) (ctrlproto.ContextNode, error) {
 	idx, err := strconv.Atoi(strings.TrimPrefix(id, "tr/m"))
 	if err != nil || idx < 0 || idx >= len(msgs) {
-		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "no context message %q", id)
+		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no context message %q", id))
 	}
 	m := msgs[idx]
 	node := ctrlproto.ContextNode{
@@ -564,17 +565,17 @@ func ctxContentText(cs []provider.Content) string {
 // live in the transcript file); read-only.
 func (s *wsSession) revealCompaction(id string) (ctrlproto.ContextNode, error) {
 	if s.sess == nil {
-		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "reveal needs a persisted session")
+		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("reveal needs a persisted session"))
 	}
 	target := -1 // a live compaction summary reveals the latest checkpoint
 	if rest, ok := strings.CutPrefix(id, "ev/c"); ok {
 		n, err := strconv.Atoi(rest)
 		if err != nil {
-			return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "bad reveal id %q", id)
+			return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("bad reveal id %q", id))
 		}
 		target = n
 	} else if !strings.HasPrefix(id, "tr/m") {
-		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "not a compaction node %q", id)
+		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("not a compaction node %q", id))
 	}
 	span, err := core.RevealCompaction(s.sess.Path, target)
 	if err != nil {

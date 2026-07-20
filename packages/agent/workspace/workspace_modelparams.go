@@ -42,7 +42,7 @@ var paramHelp = map[string]func() string{
 func (w *Workspace) ModelParams(_ context.Context, p ctrlproto.ModelParamsParams) (ctrlproto.ModelParamsView, error) {
 	m, err := provider.FindModel(p.Provider, p.Model)
 	if err != nil {
-		return ctrlproto.ModelParamsView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "unknown model %q", p.Model)
+		return ctrlproto.ModelParamsView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown model %q", p.Model))
 	}
 	existing, has, err := provider.FindUserModel(config.UserModelsPath(), m.Provider, m.ID)
 	if err != nil {
@@ -81,7 +81,7 @@ func (w *Workspace) ModelParams(_ context.Context, p ctrlproto.ModelParamsParams
 func (w *Workspace) ModelParamsSet(_ context.Context, p ctrlproto.ModelParamsSetParams) error {
 	m, err := provider.FindModel(p.Provider, p.Model)
 	if err != nil {
-		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "unknown model %q", p.Model)
+		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown model %q", p.Model))
 	}
 	path := config.UserModelsPath()
 	existing, _, err := provider.FindUserModel(path, m.Provider, m.ID)
@@ -116,7 +116,7 @@ func (w *Workspace) ModelParamsSet(_ context.Context, p ctrlproto.ModelParamsSet
 func (w *Workspace) ModelParamsReset(_ context.Context, p ctrlproto.ModelParamsParams) error {
 	m, err := provider.FindModel(p.Provider, p.Model)
 	if err != nil {
-		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "unknown model %q", p.Model)
+		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown model %q", p.Model))
 	}
 	if _, err := provider.RemoveUserModel(config.UserModelsPath(), m.Provider, m.ID); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "save models.json: %v", err)

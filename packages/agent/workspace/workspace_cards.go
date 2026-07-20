@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/egress"
+	"terva.sh/terva/packages/i18n"
 )
 
 // The card library on the wire. The Workspace is just the access point — the
@@ -97,7 +98,7 @@ func (w *Workspace) CardsImport(ctx context.Context, p ctrlproto.CardImportParam
 			sc, err = w.cardStore().ImportBytes(data)
 		}
 	default:
-		return ctrlproto.CardView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "cards.import needs bytes, a path, or a url")
+		return ctrlproto.CardView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("cards.import needs bytes, a path, or a url"))
 	}
 	if err != nil {
 		return ctrlproto.CardView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "import card: %v", err)
@@ -141,7 +142,7 @@ func fetchCardBytes(ctx context.Context, guard *egress.Guard, rawURL string, max
 		return nil, fmt.Errorf("read %s: %w", rawURL, err)
 	}
 	if int64(len(data)) > maxBytes {
-		return nil, fmt.Errorf("card too large (over %d bytes)", maxBytes)
+		return nil, i18n.Errorf("card too large (over %d bytes)", maxBytes)
 	}
 	return data, nil
 }
@@ -149,7 +150,7 @@ func fetchCardBytes(ctx context.Context, guard *egress.Guard, rawURL string, max
 // CardsEdit replaces a card's data with an edited document.
 func (w *Workspace) CardsEdit(_ context.Context, p ctrlproto.CardEditParams) (ctrlproto.CardView, error) {
 	if len(p.Card) == 0 {
-		return ctrlproto.CardView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "cards.edit needs a card body")
+		return ctrlproto.CardView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("cards.edit needs a card body"))
 	}
 	sc, err := w.cardStore().Edit(p.ID, p.Card)
 	if err != nil {
@@ -190,7 +191,7 @@ func (w *Workspace) exportCard(sc build.StoredCard, format string) (ctrlproto.Ca
 	case "png":
 		path := w.cardStore().AvatarPath(sc.ID)
 		if path == "" {
-			return ctrlproto.CardExport{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "card %q has no avatar to embed in a PNG — export it as json", sc.ID)
+			return ctrlproto.CardExport{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("card %q has no avatar to embed in a PNG — export it as json", sc.ID))
 		}
 		avatar, err := os.ReadFile(path)
 		if err != nil {
@@ -202,7 +203,7 @@ func (w *Workspace) exportCard(sc build.StoredCard, format string) (ctrlproto.Ca
 		}
 		return ctrlproto.CardExport{Filename: name + ".png", MimeType: "image/png", Bytes: out}, nil
 	default:
-		return ctrlproto.CardExport{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown export format %q (png|json)", format)
+		return ctrlproto.CardExport{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown export format %q (png|json)", format))
 	}
 }
 

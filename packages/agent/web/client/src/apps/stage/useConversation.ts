@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import type { Client } from '../../platform/ctrlproto/client'
-import type { AskRequest, Decision, PermissionRequest, SessionInfo, TailInfo, VariantMark, WireEvent } from '../../platform/ctrlproto/types'
-import { type Item, applyEvent, mergeSnapshot } from '../../platform/conversation/store'
+import type { ClientLike } from '../../platform/ctrlproto/client'
+import type { Decision, SessionInfo, WireEvent } from '../../platform/ctrlproto/types'
+import { emptySessionState, reduceSession, type SessionState } from '../../platform/conversation/session'
 import { PACE_INTERVAL_MS, StreamPacer } from '../../platform/conversation/pacer'
 
 // useConversation subscribes to one session and folds its wire stream into the
@@ -18,104 +18,40 @@ import { PACE_INTERVAL_MS, StreamPacer } from '../../platform/conversation/pacer
 // still ran and persisted, but no events ever came back: the user's own message
 // never rendered, busy never cleared, and only a reload recovered it. The panel
 // re-subscribes explicitly for exactly this reason (app.tsx); Stage did not.
-export function useConversation(client: Client, sessionId: string, generation = 0) {
-  const [items, setItems] = useState<Item[]>([])
-  const [busy, setBusy] = useState(false)
-  const [info, setInfo] = useState<SessionInfo | null>(null)
-  const [tail, setTail] = useState<TailInfo | undefined>(undefined)
-  // msgMarks are message-scoped swipe positions (Option C) by effective index —
-  // an edited older message with alternatives — so the chat can draw a `‹n/m›`
-  // control on that message's row. The tail span stays in `tail` (drawn on the last
-  // response), so the two never render on the same message.
-  const [msgMarks, setMsgMarks] = useState<Map<number, VariantMark>>(new Map())
-  // epoch identifies the current transcript; edit/swipe/retry send it so the
-  // daemon refuses a stale index (CodeConflict) rather than editing the wrong
-  // message. The ref is what mergeSnapshot reads as the held epoch; the state
-  // mirror is what action handlers close over.
-  const [epoch, setEpoch] = useState(0)
-  const epochRef = useRef(0)
-  // A pending tool approval / question. Stage ignored both event types entirely,
-  // so a turn that reached for a gated tool parked on the daemon FOREVER with no
-  // prompt rendered and no way to answer — indistinguishable, from the user's
-  // side, from "I sent a message and nothing happened".
-  const [permission, setPermission] = useState<PermissionRequest | null>(null)
-  const [ask, setAsk] = useState<AskRequest | null>(null)
+export function useConversation(client: ClientLike, sessionId: string, generation = 0) {
+  // One state object, folded by the shared reducer. Stage used to hold seven
+  // useStates here and fold them with its own switch — a second copy of the
+  // panel's, which is how it came to be missing the panel's re-subscribe, its
+  // permission/ask handling, and its busy-clear on error. See
+  // platform/conversation/session.
+  const [state, setState] = useState<SessionState>(emptySessionState)
+  const { items, busy, info, tail, msgMarks, permission, ask } = state
+  const epoch = state.win.epoch
+  // The reducer needs the CURRENT state inside an effect that closes over the
+  // first one, so mirror it in a ref and drive from there.
+  const stateRef = useRef<SessionState>(emptySessionState)
+  const apply = (ev: WireEvent) => {
+    const next = reduceSession(stateRef.current, ev)
+    if (next === stateRef.current) return
+    stateRef.current = next
+    setState(next)
+  }
+  // Some state moves OPTIMISTICALLY, ahead of any wire event: busy on send and on
+  // a rejected command, a prompt dismissed the moment it is answered. Those go
+  // through the same ref, or the next event would fold onto a stale copy and undo
+  // them.
+  const patch = (fields: Partial<SessionState>) => {
+    stateRef.current = { ...stateRef.current, ...fields }
+    setState(stateRef.current)
+  }
+  const setBusy = (value: boolean) => {
+    if (stateRef.current.busy !== value) patch({ busy: value })
+  }
 
   useEffect(() => {
-    setItems([])
-    epochRef.current = 0
-    const handle = (ev: WireEvent) => {
-      if (ev.type === 'snapshot') {
-        const snap = ev.snapshot
-        if (!snap) return
-        const win = {
-          epoch: snap.epoch ?? 0,
-          base: snap.base ?? 0,
-          total: snap.total ?? (snap.messages?.length ?? 0),
-          messages: snap.messages ?? [],
-        }
-        setItems((prev) => mergeSnapshot(prev, win, epochRef.current))
-        epochRef.current = win.epoch
-        setEpoch(win.epoch)
-        // A snapshot lands at the end of every turn and carries busy
-        // authoritatively, so streaming→idle transitions ride it.
-        setBusy(!!snap.busy)
-        setInfo(snap.session ?? null)
-        setTail(snap.tail)
-        const marks = new Map<number, VariantMark>()
-        for (const m of snap.variant_marks ?? []) if (!m.span) marks.set(m.index, m)
-        setMsgMarks(marks)
-        // The snapshot carries anything still pending, so a re-subscribe (or a
-        // reload) recovers a prompt whose event was missed — the same self-heal
-        // the panel gets. Without this, a dropped permission_request would strand
-        // the turn even after the subscription came back.
-        setPermission(snap.permissions?.[0] ?? null)
-        setAsk(snap.asks?.[0] ?? null)
-      } else if (ev.type === 'session_updated') {
-        // A live model switch / rename / title settle rides session_updated, not a
-        // full snapshot (those only land at a turn's end). Fold it into info so the
-        // steering drawer's model picker reflects a switch immediately, the way the
-        // panel already does — without it the selector stayed stale until the next
-        // turn's snapshot.
-        const next = ev.info
-        if (next) setInfo((cur) => (cur ? { ...cur, ...next } : next))
-      } else if (ev.type === 'permission_request') {
-        setPermission(ev.permission ?? null)
-      } else if (ev.type === 'permission_resolved') {
-        // Clear only if it resolved the one we are showing — another client (the
-        // panel, a phone) may have answered it, and a stale id must not clear a
-        // newer prompt.
-        setPermission((p) => (p && ev.resolved?.call_id === p.call_id ? null : p))
-      } else if (ev.type === 'ask_request') {
-        setAsk(ev.ask ?? null)
-      } else if (ev.type === 'ask_resolved') {
-        setAsk((a) => (a && ev.resolved?.ask_id === a.ask_id ? null : a))
-      } else if (ev.type === 'turn_start') {
-        setBusy(true)
-      } else if (ev.type === 'turn_end' || ev.type === 'done') {
-        // The SECOND clearing path, and the reason a lost frame is no longer fatal.
-        // busy used to clear only on the end-of-turn snapshot, so if that snapshot
-        // never arrived (a dead subscription, a dropped frame) busy stayed true
-        // forever and submit() silently swallowed every later send — the composer
-        // wedged at "thinking…" with no way out but a reload.
-        //
-        // Tradeoff, deliberately taken: "done" means the turn's OUTPUT is complete,
-        // not that the engine released the turn slot (endTurn runs just after), so
-        // clearing here opens a sub-millisecond window where ▶/post could return
-        // ErrBusy. That is recoverable (clearBusyOnReject surfaces it) and no human
-        // can click inside it; a permanently wedged composer is not recoverable.
-        // The authoritative snapshot follows immediately and re-settles the truth.
-        setBusy(false)
-      } else if (ev.type === 'error') {
-        // An error ends the turn as surely as a done does. The panel clears busy
-        // here too; Stage previously folded the row and left busy stuck.
-        setBusy(false)
-        setItems((it) => applyEvent(it, ev))
-      } else {
-        setItems((it) => applyEvent(it, ev))
-      }
-    }
-    const pacer = new StreamPacer((ev) => handle(ev))
+    stateRef.current = emptySessionState
+    setState(emptySessionState)
+    const pacer = new StreamPacer((ev) => apply(ev))
     const prevOnEvent = client.onEvent
     client.onEvent = (sess, ev) => {
       if (sess === sessionId) pacer.push(ev)
@@ -168,9 +104,23 @@ export function useConversation(client: Client, sessionId: string, generation = 
       setBusy(false)
       throw e
     })
-  const retry = () => {
+  // retry regenerates the last response. Called bare it is the plain regenerate it
+  // has always been — an independent sample from the same prefix. With guidance it
+  // steers that one generation ("shorter", "have her refuse instead"); the daemon
+  // shows the model the take being replaced unless ignorePrior asks it not to,
+  // because guidance is usually relative and needs a referent. The guidance is
+  // request-scoped on the daemon — it never lands in the transcript, so the takes
+  // you swipe between stay honest about what produced them.
+  const retry = (guidance?: string, ignorePrior?: boolean) => {
     setBusy(true)
-    return clearBusyOnReject(client.send('turn.retry', { epoch }, sessionId))
+    const text = guidance?.trim() ?? ''
+    return clearBusyOnReject(
+      client.send(
+        'turn.retry',
+        text ? { epoch, guidance: text, ignore_prior: !!ignorePrior } : { epoch },
+        sessionId,
+      ),
+    )
   }
   // continueTurn (Phase 4d) extends the trailing assistant message in place — a
   // prefill continuation. Only offered when the session's provider supports it
@@ -201,11 +151,11 @@ export function useConversation(client: Client, sessionId: string, generation = 
   // it on the other clients watching the same session).
   const decide = (callID: string, decision: Decision) => {
     client.fire('approve', { call_id: callID, decision }, sessionId)
-    setPermission(null)
+    patch({ permission: null })
   }
   const answerAsk = (askID: string, text: string) => {
     client.fire('answer', { ask_id: askID, answer: { answer: text } }, sessionId)
-    setAsk(null)
+    patch({ ask: null })
   }
   // fork branches the session at index (inclusive): a new child session that shares
   // the transcript through that message and diverges from it, leaving this one

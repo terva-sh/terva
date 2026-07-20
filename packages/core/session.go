@@ -204,6 +204,38 @@ type SessionMeta struct {
 	World string `json:"world,omitempty"`
 }
 
+// SceneStateName is the reserved World-lore entry name for the pinned
+// scene-state card (SD4 — docs/proposals/session-doctor.md): the compact
+// always-in-context state note (in-fiction datetime, location, ledger facts,
+// active routines). The entry is ordinary lore on disk and in bundles, but
+// everything around it special-cases the name: world.lore.put forces it
+// always-on and shared, world_note may UPDATE it (the one exception to
+// append-only), the per-turn tail renders it as its own pinned block outside
+// the lore token budget, and the Stage client shows it above the composer
+// instead of in the lore list.
+const SceneStateName = "Scene state"
+
+// IsSceneState reports whether name addresses the pinned scene-state entry
+// (case-insensitive — every writer canonicalizes to SceneStateName, but reads
+// must tolerate hand-imported bundles that didn't).
+func IsSceneState(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), SceneStateName)
+}
+
+// StorySoFarName is the reserved World-lore entry holding the recap a scene
+// break writes (SD5): what happened in the scenes before this one, as
+// always-on shared lore. Unlike the scene-state pin it is an ORDINARY lore
+// entry in every respect — it lists and edits like any other, and the tail
+// budgets it like any other. Only sessions.next_scene treats the name
+// specially, replacing it so a fifth scene carries one cumulative recap
+// rather than four stacked ones.
+const StorySoFarName = "The story so far"
+
+// IsStorySoFar reports whether name addresses the recap entry.
+func IsStorySoFar(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), StorySoFarName)
+}
+
 // WorldLoreEntry is one entry of a session's World lore: minimal authoring
 // surface over the lore engine (name + trigger keys + always-on + content).
 // The full lore.Entry knob set (secondary keys, logic, order, recursion) stays
@@ -230,6 +262,19 @@ type WorldLoreEntry struct {
 	// of the moment they learned this entry (a world_reveal). A character in
 	// Audience but not Learned knew it from the start (an authored secret).
 	Learned map[string]string `json:"learned,omitempty"`
+	// PinnedAt is the message count when this entry's CONTENT was last written
+	// (SD6). Meaningful only on the scene-state pin, and the reason it exists is
+	// that the pin is the one entry that claims to be current: its frame tells
+	// the model to trust it over disagreeing prose in the history. Nothing keeps
+	// that promise automatically — the pin is only rewritten by a world_note, a
+	// hand edit, or an accepted doctor proposal — so a card carried across a
+	// scene break can sit unchanged while the scene plays past it, and the model
+	// obeys it exactly as designed. Stamping the write lets the author see the
+	// drift ("pinned 8 turns ago") and lets the doctor's evidence say how far
+	// behind the card is. It is a count, not a timestamp: what makes a pin stale
+	// is scene played since, not wall-clock time — a session resumed a week
+	// later is not stale, and eight fast turns are.
+	PinnedAt int `json:"pinned_at,omitempty"`
 }
 
 // sessionLine is the on-disk row type. Messages are written in the
@@ -1660,6 +1705,23 @@ func (s *Session) SetWorld(id string) error {
 		return nil
 	}
 	s.Meta.World = id
+	return s.writeMeta()
+}
+
+// SetParent records which session this one came from, for a successor that was
+// not produced by a fork — today the next scene of a story (SD5), which builds a
+// fresh session rather than branching one. BranchSession stamps Parent at
+// creation; this is the stamper for the paths that create first and learn their
+// lineage after. A no-op on a nil receiver.
+//
+// Parent means "came from", not "is a branch of": ForkPoint stays empty here,
+// which is what distinguishes a successor from a branch — a fork shares a
+// transcript prefix, a next scene shares only its world.
+func (s *Session) SetParent(id string) error {
+	if s == nil {
+		return nil
+	}
+	s.Meta.Parent = id
 	return s.writeMeta()
 }
 

@@ -7,6 +7,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/imagegen"
+	"terva.sh/terva/packages/i18n"
 )
 
 // Scene backdrops on the wire. The store is global (like cards), but a
@@ -42,7 +43,7 @@ func (w *Workspace) BackgroundsImport(_ context.Context, p ctrlproto.BackgroundI
 	case p.Path != "":
 		b, err = w.bgStore().ImportPath(p.Path)
 	default:
-		return ctrlproto.BackgroundView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "backgrounds.import needs bytes or a path")
+		return ctrlproto.BackgroundView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("backgrounds.import needs bytes or a path"))
 	}
 	if err != nil {
 		return ctrlproto.BackgroundView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "import background: %v", err)
@@ -65,7 +66,7 @@ func (w *Workspace) BackgroundBind(_ context.Context, sess string, p ctrlproto.B
 		return err
 	}
 	if p.Background != "" && w.bgStore().Path(p.Background) == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "background %q not found", p.Background)
+		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("background %q not found", p.Background))
 	}
 	if err := s.sess.SetBackground(p.Background); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "bind background: %v", err)
@@ -81,14 +82,14 @@ func (w *Workspace) BackgroundBind(_ context.Context, sess string, p ctrlproto.B
 func (w *Workspace) BackgroundsGenerate(ctx context.Context, sess string, p ctrlproto.BackgroundGenerateParams) (ctrlproto.BackgroundView, error) {
 	prompt := strings.TrimSpace(p.Prompt)
 	if prompt == "" {
-		return ctrlproto.BackgroundView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "backgrounds.generate needs a prompt")
+		return ctrlproto.BackgroundView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("backgrounds.generate needs a prompt"))
 	}
 	s, err := w.resolve(sess)
 	if err != nil {
 		return ctrlproto.BackgroundView{}, err
 	}
 	if s.imageRegistry == nil || s.imageRegistry.Len() == 0 {
-		return ctrlproto.BackgroundView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no image backend configured — set one up to generate scenes")
+		return ctrlproto.BackgroundView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no image backend configured — set one up to generate scenes"))
 	}
 	backend, err := s.imageRegistry.Resolve(strings.TrimSpace(p.Backend))
 	if err != nil {
@@ -104,7 +105,7 @@ func (w *Workspace) BackgroundsGenerate(ctx context.Context, sess string, p ctrl
 		return ctrlproto.BackgroundView{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "generate scene: %v", err)
 	}
 	if len(res.Images) == 0 || len(res.Images[0].Data) == 0 {
-		return ctrlproto.BackgroundView{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "generate scene: the backend returned no image")
+		return ctrlproto.BackgroundView{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("generate scene: the backend returned no image"))
 	}
 	bg, err := w.bgStore().ImportBytes(res.Images[0].Data)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/identity"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
 )
@@ -140,9 +141,9 @@ func ValidEndpointName(id string) error {
 	id = strings.TrimSpace(id)
 	switch {
 	case id == "":
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "name this endpoint, or leave the name empty to use the shared openai-compatible slot")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("name this endpoint, or leave the name empty to use the shared openai-compatible slot"))
 	case id == compatSharedSlot:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%q is the shared slot's own name; choose another", compatSharedSlot)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("%q is the shared slot's own name; choose another", compatSharedSlot))
 	}
 	// A provider id travels through config keys, a credential file, and a model
 	// picker. Keep it to something that cannot be mistaken for punctuation in any
@@ -151,13 +152,13 @@ func ValidEndpointName(id string) error {
 		if !(r == '-' || r == '_' || r == '.' ||
 			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
 			return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
-				"an endpoint name may use letters, digits, dash, underscore and dot only")
+				"%s", i18n.T("an endpoint name may use letters, digits, dash, underscore and dot only"))
 		}
 	}
 	for _, p := range append(auth.APIKeyProviders(), auth.OAuthProviders()...) {
 		if p == id {
 			return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
-				"%q is a provider terva already ships; choose another name", id)
+				"%s", i18n.T("%q is a provider terva already ships; choose another name", id))
 		}
 	}
 	return nil

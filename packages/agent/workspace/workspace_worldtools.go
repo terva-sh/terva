@@ -41,7 +41,11 @@ func (t *worldNoteTool) Description() string {
 	// collision path mentioned the other tool. The duplicate splits one fact
 	// across two entries with two audiences, and the ledger loses the moment
 	// it was learned.
-	return "Record a NEW piece of world knowledge the scene just established — a fact, an event, something a character now remembers. It becomes a World lore entry injected into future generations when relevant. Append-only: pick a fresh name; you cannot edit or remove existing entries. Scope it with `audience` when only some characters would know it. If an existing entry already covers this fact and the scene just exposed it to someone new, do not re-record it under a fresh name — use world_reveal to add them to that entry's audience instead."
+	//
+	// The scene-state sentence is the SD4 write path: the proposal's "model-
+	// writable through world_note" is exactly this carve-out, and the
+	// description is the only place the director learns the pin exists.
+	return "Record a NEW piece of world knowledge the scene just established — a fact, an event, something a character now remembers. It becomes a World lore entry injected into future generations when relevant. Append-only: pick a fresh name; you cannot edit or remove existing entries. Scope it with `audience` when only some characters would know it. If an existing entry already covers this fact and the scene just exposed it to someone new, do not re-record it under a fresh name — use world_reveal to add them to that entry's audience instead. One exception to append-only: the entry named \"" + core.SceneStateName + "\" is the pinned scene-state card (in-fiction date and time, location, ledger facts, active routines) — writing that name REPLACES its content, so keep it current and compact whenever the scene's clock, place, or ledger moves."
 }
 
 func (t *worldNoteTool) Schema() json.RawMessage {
@@ -89,6 +93,32 @@ func (t *worldNoteTool) Execute(_ context.Context, raw json.RawMessage, _ func(s
 		return worldToolErr("world_note: name and content are required"), nil
 	}
 	entries := t.s.sess.Meta.WorldLore
+	// The pinned scene-state card (SD4) is the one exception to append-only:
+	// writing its reserved name replaces the card's content in place. Keys and
+	// audience are discarded — the pin is always-on and shared by definition
+	// (see worldLoreFromWire, which normalizes user puts the same way).
+	if core.IsSceneState(name) {
+		entry := core.WorldLoreEntry{Name: core.SceneStateName, Constant: true, Content: content, Model: true}
+		next := make([]core.WorldLoreEntry, 0, len(entries)+1)
+		updated := false
+		for _, e := range entries {
+			if core.IsSceneState(e.Name) {
+				if !updated {
+					next = append(next, entry)
+					updated = true
+				}
+				continue
+			}
+			next = append(next, e)
+		}
+		if !updated {
+			next = append(next, entry)
+		}
+		if err := t.s.setWorldLore(next); err != nil {
+			return core.ToolResult{}, err
+		}
+		return worldToolOK("Updated the pinned scene state."), nil
+	}
 	for _, e := range entries {
 		if strings.EqualFold(e.Name, name) {
 			return worldToolErr(fmt.Sprintf("world_note: an entry named %q already exists — entries are append-only, pick a fresh name (or reveal the existing one with world_reveal)", e.Name)), nil

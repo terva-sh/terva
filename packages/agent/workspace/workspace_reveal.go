@@ -5,6 +5,7 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 )
 
 // History pages backward through the live transcript — the part a windowed snapshot
@@ -31,7 +32,7 @@ func (w *Workspace) History(_ context.Context, sess string, before, limit int, e
 	now := s.agent.TranscriptEpoch()
 	if epoch != 0 && epoch != now {
 		return ctrlproto.HistoryResult{}, ctrlproto.Errorf(ctrlproto.CodeConflict,
-			"the conversation changed while you were scrolling (it was compacted or cleared) — reload to see it")
+			"%s", i18n.T("the conversation changed while you were scrolling (it was compacted or cleared) — reload to see it"))
 	}
 	if limit <= 0 {
 		limit = ctrlproto.HistoryWindow
@@ -82,7 +83,7 @@ func (w *Workspace) Reveal(_ context.Context, sess string, ordinal int) (ctrlpro
 		// anything to cause: the client says "earlier turns unavailable" and the
 		// divider simply does not expand.
 		return ctrlproto.RevealResult{}, ctrlproto.Errorf(ctrlproto.CodeNotFound,
-			"this session was never written to disk, so the turns before the compaction are not recoverable")
+			"%s", i18n.T("this session was never written to disk, so the turns before the compaction are not recoverable"))
 	}
 	span, err := core.RevealCompaction(s.sess.Path, ordinal)
 	if err != nil {

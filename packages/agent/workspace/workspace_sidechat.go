@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -69,7 +70,7 @@ func (w *Workspace) SideChatOpen(ctx context.Context, sess string) (string, erro
 	if ag == nil || ag.Client == nil {
 		// No credential resolved for this session yet (a credential-less boot
 		// before /login). Nothing to complete against.
-		return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "not logged in")
+		return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 
 	_, model := s.currentModel()
@@ -88,7 +89,7 @@ func (w *Workspace) SideChatOpen(ctx context.Context, sess string) (string, erro
 	defer s.sidechatMu.Unlock()
 	if len(s.sidechats) >= maxOpenSideChats {
 		return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest,
-			"too many open side chats (%d); close one first", len(s.sidechats))
+			"%s", i18n.T("too many open side chats (%d); close one first", len(s.sidechats)))
 	}
 	if s.sidechats == nil {
 		s.sidechats = map[string]*sideChatSnapshot{}
@@ -110,10 +111,10 @@ func (w *Workspace) SideChatAsk(ctx context.Context, sess, id string, prior []ct
 	snap := s.sidechats[id]
 	s.sidechatMu.Unlock()
 	if snap == nil {
-		return "", ctrlproto.Errorf(ctrlproto.CodeNotFound, "unknown side chat %q (reopen it)", id)
+		return "", ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown side chat %q (reopen it)", id))
 	}
 	if strings.TrimSpace(question) == "" {
-		return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "empty side-chat question")
+		return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("empty side-chat question"))
 	}
 
 	// frozen system + frozen transcript + prior side-chat turns + this question.

@@ -1,6 +1,9 @@
 import { render } from 'preact'
 import { Stage } from './Stage'
 import { applyTheme, currentTheme } from './theme'
+// ui/ui.css first: it styles what the shared ui/ components and markdown.ts
+// emit, and importing it ahead of the app sheet lets the app override.
+import '../../ui/ui.css'
 import './stage.css'
 
 // Apply the saved theme before the first paint, so there is no flash of the

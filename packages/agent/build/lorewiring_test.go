@@ -227,6 +227,110 @@ func TestPerTurnContext_WorldLore(t *testing.T) {
 	}
 }
 
+// The pinned scene-state card (SD4) bypasses the lore Select entirely: it
+// renders as its own framed block AFTER the <lore> block, outside the token
+// budget — a long session is exactly when the budget is tightest and exactly
+// when the pinned clock/ledger matter most, so "constant but budget-droppable"
+// would fail it precisely on demand.
+func TestPerTurnContext_SceneStatePinned(t *testing.T) {
+	// A tiny budget that a peer constant entry overflows: the peer is dropped,
+	// the pin is not — it never entered the Select.
+	r := &Resolved{
+		loreConfig: lore.Config{TokenBudget: 10},
+		loreFired:  &LoreFiredRecord{},
+		worldLore:  &WorldLoreRecord{},
+		note:       &NoteRecord{},
+	}
+	r.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
+		{Name: "The Accord", Constant: true, Content: strings.Repeat("Magic is outlawed. ", 200)},
+		{Name: core.SceneStateName, Constant: true, Content: "Day 14, first light. The Hearthstone Inn. 3 silver owed."},
+		{Name: "Overflow", Constant: true, Content: strings.Repeat("side note ", 200)},
+	}))
+	r.note.Set("It is raining.")
+	got := r.PerTurnContext(&core.Agent{})()
+
+	if !strings.Contains(got, "CURRENT SCENE STATE") || !strings.Contains(got, "Day 14, first light") {
+		t.Fatalf("the scene-state card must render as a pinned block, got %q", got)
+	}
+	// Outside the <lore> block: the pin sits after </lore>, before the note.
+	if end := strings.Index(got, "</lore>"); end < 0 || strings.Index(got, "CURRENT SCENE STATE") < end {
+		t.Errorf("the pinned card must render outside (after) the lore block, got %q", got)
+	}
+	if strings.Index(got, "CURRENT SCENE STATE") > strings.Index(got, "It is raining.") {
+		t.Errorf("the author's note must still come last, got %q", got)
+	}
+	// The budget dropped a peer constant — but never the pin.
+	dropped := false
+	for _, f := range r.loreFired.Get() {
+		if f.Dropped {
+			dropped = true
+		}
+		if f.Name == core.SceneStateName {
+			t.Errorf("the pin must not ride the Select/budget at all, trace = %+v", f)
+		}
+	}
+	if !dropped {
+		t.Fatal("test setup: the budget should have dropped a peer entry (else the immunity claim is untested)")
+	}
+
+	// A live update (world_note / world.lore.put) lands next turn, like all
+	// world lore.
+	r.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
+		{Name: core.SceneStateName, Constant: true, Content: "Day 15, dusk. The north road."},
+	}))
+	if got := r.PerTurnContext(&core.Agent{})(); !strings.Contains(got, "Day 15, dusk") || strings.Contains(got, "Day 14") {
+		t.Errorf("live scene-state update not reflected: %q", got)
+	}
+
+	// A world record holding ONLY the pin still renders it (no other lore to
+	// carry the Select path).
+	solo := &Resolved{worldLore: &WorldLoreRecord{}, loreFired: &LoreFiredRecord{}}
+	solo.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
+		{Name: "scene state", Constant: true, Content: "Midnight, the docks."}, // case-insensitive match
+	}))
+	if got := solo.PerTurnContext(&core.Agent{})(); !strings.Contains(got, "CURRENT SCENE STATE") || !strings.Contains(got, "Midnight, the docks.") || strings.Contains(got, "<lore>") {
+		t.Errorf("a pin-only world must render the card and no lore block, got %q", got)
+	}
+}
+
+// Lore rides the tail AFTER the whole transcript, so an entry written to set a
+// scene up is the last thing the model reads long after the scene has played
+// past it. A dogfooded session lost a beat exactly this way: a setup entry said
+// the lieutenant was expected at the door and should be asked her team size;
+// she had been let in eight messages earlier; the model re-staged her arrival.
+// The frame is the fix — this block is reference, and the transcript wins.
+func TestPerTurnContext_LoreFramedAsReference(t *testing.T) {
+	r := &Resolved{loreFired: &LoreFiredRecord{}, worldLore: &WorldLoreRecord{}}
+	r.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
+		{Name: "First-Light Search", Keys: []string{"rope"}, Content: "The watch is expected at first light."},
+	}))
+	ag := &core.Agent{}
+	ag.SetMessages([]provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hand me the rope"}}},
+	})
+	got := r.PerTurnContext(ag)()
+
+	if !strings.Contains(got, "REFERENCE KNOWLEDGE") {
+		t.Fatalf("the tail lore block must be framed as reference, got %q", got)
+	}
+	// The frame introduces the block, so it must precede it.
+	if strings.Index(got, "REFERENCE KNOWLEDGE") > strings.Index(got, "<lore>") {
+		t.Errorf("the frame must introduce the lore block, got %q", got)
+	}
+	// The tiebreak is the whole point: without it the block reads as the current
+	// moment purely because it lands last.
+	if !strings.Contains(got, "the conversation is what actually happened") {
+		t.Errorf("the frame must hand the tiebreak to the transcript, got %q", got)
+	}
+
+	// The cached system prefix sits BEFORE the conversation, where the frame's
+	// "the conversation above" would name nothing — it must stay unframed.
+	prefix := lore.PlaceConstant([]lore.Entry{{Name: "House", Constant: true, Content: "House style."}})
+	if prefix == "" || strings.Contains(prefix, "REFERENCE KNOWLEDGE") {
+		t.Errorf("the cached prefix must not carry the tail frame, got %q", prefix)
+	}
+}
+
 func TestLoreSourcesOf(t *testing.T) {
 	srcs := loreSourcesOf([]lore.Entry{{Source: "vault.md"}, {Name: "NoSource"}})
 	if len(srcs) != 2 || srcs[0] != "vault.md" || srcs[1] != "NoSource" {

@@ -1,5 +1,6 @@
 import type { CardSummary, SessionInfo } from '../../platform/ctrlproto/types'
 import { relativeTime } from './format'
+import { t, tn } from '../../i18n'
 
 // CharacterChats is the resume-or-start sheet (rough-edge #2): tapping a
 // character that ALREADY has chats lands here — its existing conversations,
@@ -33,10 +34,10 @@ export function CharacterChats(props: {
             <h3>{card.name}</h3>
             <div class="stage-cardsheet__meta">
               <span>
-                {chats.length} chat{chats.length === 1 ? '' : 's'}
+                {tn(chats.length, '%d chat', '%d chats')}
               </span>
-              <button class="stage-charchats__details" title="Inspect the full character card" onClick={onDetails}>
-                Details
+              <button class="stage-charchats__details" title={t('Inspect the full character card')} onClick={onDetails}>
+                {t('Details')}
               </button>
             </div>
           </div>
@@ -46,25 +47,25 @@ export function CharacterChats(props: {
         </header>
 
         <button class="stage-sheet__start" disabled={busy} onClick={onNew}>
-          + New chat
+          {t('+ New chat')}
         </button>
 
         <ul class="stage-charchats__list">
           {chats.map((s) => (
             <li key={s.id} class="stage-charchats__row">
               <button class="stage-charchats__item" onClick={() => onOpen(s.id)}>
-                <span class="stage-charchats__title">{s.title || 'Untitled'}</span>
+                <span class="stage-charchats__title">{s.title || t('Untitled')}</span>
                 <span class="stage-charchats__sub">
-                  {s.experience === 'play' && <span class="stage-charchats__exp">play</span>}
+                  {s.experience === 'play' && <span class="stage-charchats__exp">{t('play')}</span>}
                   {(s.messages ?? 0) > 0 && (
                     <span>
-                      {s.messages} message{s.messages === 1 ? '' : 's'}
+                      {tn(s.messages ?? 0, '%d message', '%d messages')}
                     </span>
                   )}
                   {relativeTime(s.updated) && <span class="stage-charchats__when">{relativeTime(s.updated)}</span>}
                 </span>
               </button>
-              <button class="stage-charchats__del" title="Delete this chat" aria-label="Delete this chat" onClick={() => onDelete(s)}>
+              <button class="stage-charchats__del" title={t('Delete this chat')} aria-label={t('Delete this chat')} onClick={() => onDelete(s)}>
                 🗑
               </button>
             </li>

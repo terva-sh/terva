@@ -12,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -55,7 +56,7 @@ func (w *Workspace) CardsDoctor(ctx context.Context, p ctrlproto.DoctorParams) (
 	if err != nil {
 		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%v", err)
 	}
-	personaName, task := doctorPersona, doctorTask
+	personaName, task := doctorPersona, i18n.P("stage.doctor.task", doctorTask)
 	scene := ""
 	var s *wsSession
 	if strings.TrimSpace(p.Session) != "" {
@@ -64,9 +65,9 @@ func (w *Workspace) CardsDoctor(ctx context.Context, p ctrlproto.DoctorParams) (
 			return ctrlproto.DoctorResult{}, err
 		}
 		if s.sess == nil || s.sess.Meta.Experience == "" {
-			return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the editor grounds in a chat or play session")
+			return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the editor grounds in a chat or play session"))
 		}
-		personaName, task = editorPersona, editorTask
+		personaName, task = editorPersona, i18n.P("stage.editor.task", editorTask)
 		charName := strings.TrimSpace(sc.Card.Name)
 		boundName, _ := s.boundCharacter()
 		scene = renderEditorEvidence(charName, boundName, s.playerLabel(),
@@ -74,7 +75,7 @@ func (w *Workspace) CardsDoctor(ctx context.Context, p ctrlproto.DoctorParams) (
 	}
 	persona, err := build.ResolvePersona(personaName)
 	if err != nil || strings.TrimSpace(persona.Charter) == "" {
-		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "the %s persona is unavailable", personaName)
+		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", personaName))
 	}
 	// Resolve the client for this run: the workspace default model, or a
 	// per-generation override the caller picked (Phase 7).
@@ -185,15 +186,15 @@ Rules:
 // function for testability.
 func renderEditorEvidence(charName, boundName, playerLabel string, lore []core.WorldLoreEntry, transcript []provider.Message) string {
 	var b strings.Builder
-	b.WriteString("\nTHE PLAYED SCENE (most recent last) — your primary source\n")
+	b.WriteString("\n" + i18n.P("stage.editor.scene", "THE PLAYED SCENE (most recent last) — your primary source") + "\n")
 	tail := renderSceneTail(transcript, playerLabel, boundName, editorMaxTranscript)
 	if tail == "" {
-		tail = "(the scene has not started yet)"
+		tail = frameSceneNotStarted()
 	}
 	b.WriteString(tail + "\n")
-	b.WriteString("\nWHAT " + strings.ToUpper(charName) + " KNOWS OF THIS WORLD (their lore)\n")
+	b.WriteString("\n" + i18n.P("stage.editor.knows", "WHAT %s KNOWS OF THIS WORLD (their lore)", strings.ToUpper(charName)) + "\n")
 	if len(lore) == 0 {
-		b.WriteString("(nothing recorded)\n")
+		b.WriteString(i18n.P("stage.editor.nothing_recorded", "(nothing recorded)") + "\n")
 	}
 	for _, e := range lore {
 		b.WriteString("- " + e.Name + ": " + e.Content + "\n")
@@ -216,16 +217,7 @@ func renderSceneTail(msgs []provider.Message, playerLabel, charLabel string, bud
 		if text == "" {
 			continue
 		}
-		label := charLabel
-		switch {
-		case m.Role == provider.RoleUser:
-			label = playerLabel
-		case m.Meta[core.MetaActor] != "":
-			label = m.Meta[core.MetaActor]
-		case m.Meta[core.MetaSource] == core.MetaDirected || m.Meta[core.MetaSource] == core.MetaRouted:
-			label = "Narrator"
-		}
-		lines = append(lines, label+": "+text)
+		lines = append(lines, speakerLabel(m, playerLabel, charLabel)+": "+text)
 	}
 	start, total := 0, 0
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -248,20 +240,21 @@ func renderSceneTail(msgs []provider.Message, playerLabel, charLabel string, bud
 // deterministic lint findings, and (on a follow-up round) the author's decisions.
 func renderDoctorPrompt(fields map[string]string, findings []card.Finding, decisions []ctrlproto.DoctorDecision) string {
 	var b strings.Builder
-	b.WriteString("CHARACTER CARD\n")
-	// Stable field order so the prompt is deterministic.
+	b.WriteString(i18n.P("stage.doctor.card", "CHARACTER CARD") + "\n")
+	// Stable field order so the prompt is deterministic. The field names are the
+	// card spec's ids — structural, never translated.
 	for _, f := range []string{"name", "description", "personality", "scenario", "first_mes", "mes_example", "system_prompt", "post_history_instructions", "creator_notes"} {
 		v := strings.TrimSpace(fields[f])
 		if v == "" {
-			b.WriteString(f + ": (empty)\n")
+			b.WriteString(f + ": " + i18n.P("stage.doctor.empty", "(empty)") + "\n")
 			continue
 		}
 		b.WriteString(f + ":\n" + v + "\n\n")
 	}
 
-	b.WriteString("\nDETERMINISTIC LINT FINDINGS\n")
+	b.WriteString("\n" + i18n.P("stage.doctor.lint", "DETERMINISTIC LINT FINDINGS") + "\n")
 	if len(findings) == 0 {
-		b.WriteString("(none)\n")
+		b.WriteString(i18n.P("stage.doctor.none", "(none)") + "\n")
 	}
 	for _, f := range findings {
 		line := "- [" + f.Severity + "]"
@@ -276,13 +269,13 @@ func renderDoctorPrompt(fields map[string]string, findings []card.Finding, decis
 	}
 
 	if len(decisions) > 0 {
-		b.WriteString("\nYOUR PREVIOUS PROPOSALS AND THE AUTHOR'S DECISIONS\n")
+		b.WriteString("\n" + i18n.P("stage.doctor.decisions", "YOUR PREVIOUS PROPOSALS AND THE AUTHOR'S DECISIONS") + "\n")
 		for _, d := range decisions {
-			verdict := "ACCEPTED"
+			verdict := i18n.P("stage.doctor.accepted", "ACCEPTED")
 			if !d.Accepted {
-				verdict = "DECLINED"
+				verdict = i18n.P("stage.doctor.declined", "DECLINED")
 				if strings.TrimSpace(d.Reason) != "" {
-					verdict += " — reason: " + strings.TrimSpace(d.Reason)
+					verdict = i18n.P("stage.doctor.declined_reason", "DECLINED — reason: %s", strings.TrimSpace(d.Reason))
 				}
 			}
 			label := d.ProposalID
@@ -291,7 +284,7 @@ func renderDoctorPrompt(fields map[string]string, findings []card.Finding, decis
 			}
 			b.WriteString("- " + label + ": " + verdict + "\n")
 		}
-		b.WriteString("\nRevise your proposals in light of these decisions: keep the accepted changes out of the new list, and for each decline, either withdraw it or offer a different edit that respects the stated reason.\n")
+		b.WriteString("\n" + i18n.P("stage.doctor.revise", "Revise your proposals in light of these decisions: keep the accepted changes out of the new list, and for each decline, either withdraw it or offer a different edit that respects the stated reason.") + "\n")
 	}
 	return b.String()
 }
@@ -304,14 +297,14 @@ func renderDoctorPrompt(fields map[string]string, findings []card.Finding, decis
 func parseDoctorResult(raw string, fields map[string]string) (ctrlproto.DoctorResult, error) {
 	body := extractJSONObject(raw)
 	if body == "" {
-		return ctrlproto.DoctorResult{}, fmt.Errorf("the card doctor returned no usable suggestions")
+		return ctrlproto.DoctorResult{}, i18n.Errorf("the card doctor returned no usable suggestions")
 	}
 	var parsed struct {
 		Note      string                     `json:"note"`
 		Proposals []ctrlproto.DoctorProposal `json:"proposals"`
 	}
 	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
-		return ctrlproto.DoctorResult{}, fmt.Errorf("the card doctor returned malformed suggestions")
+		return ctrlproto.DoctorResult{}, i18n.Errorf("the card doctor returned malformed suggestions")
 	}
 	out := ctrlproto.DoctorResult{Note: strings.TrimSpace(parsed.Note)}
 	seen := map[string]bool{}

@@ -5,6 +5,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/mcp"
+	"terva.sh/terva/packages/i18n"
 )
 
 // The MCP management surface: the workspace's configured Model Context Protocol
@@ -57,11 +58,11 @@ func mcpStatus(m mcp.Info) string {
 // live, and rebuilds every session's tools (the servers are workspace-global).
 func (s *wsSession) mcpAction(action string, args map[string]string) error {
 	if s.ws == nil || s.ws.mcpAdapter == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "MCP is not enabled")
+		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("MCP is not enabled"))
 	}
 	name := args["name"]
 	if name == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "mcp: missing name")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("mcp: missing name"))
 	}
 	switch action {
 	case "toggle":
@@ -84,7 +85,7 @@ func (s *wsSession) mcpAction(action string, args map[string]string) error {
 		s.ws.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("mcp"))
 		return nil
 	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown mcp action %q", action)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown mcp action %q", action))
 	}
 }
 

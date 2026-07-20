@@ -177,7 +177,7 @@ func TestRetryRegeneratesKeepingTake(t *testing.T) {
 
 	sub := s.hub.add(func() ctrlproto.Event { return ctrlproto.SnapshotEvent(s.snapshot()) }, true)
 
-	if err := s.retry(s.agent.TranscriptEpoch()); err != nil {
+	if err := s.retry(ctrlproto.TurnRetryParams{Epoch: s.agent.TranscriptEpoch()}); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	close(cl.release) // let the regeneration land ("ok")
@@ -219,12 +219,12 @@ func TestRetryGuards(t *testing.T) {
 
 	// No response after the last user message → nothing to retry.
 	s.agent.SetMessages([]provider.Message{swipeMsg(provider.RoleUser, "u0")})
-	if err := s.retry(s.agent.TranscriptEpoch()); err == nil {
+	if err := s.retry(ctrlproto.TurnRetryParams{Epoch: s.agent.TranscriptEpoch()}); err == nil {
 		t.Error("retry with no response to regenerate should error")
 	}
 	// A stale epoch is refused (the transcript shifted under the client).
 	s.agent.SetMessages([]provider.Message{swipeMsg(provider.RoleUser, "u0"), swipeMsg(provider.RoleAssistant, "a0")})
-	if err := s.retry(s.agent.TranscriptEpoch() + 999); err == nil {
+	if err := s.retry(ctrlproto.TurnRetryParams{Epoch: s.agent.TranscriptEpoch() + 999}); err == nil {
 		t.Error("retry with a stale epoch should be refused")
 	}
 	if s.busy() {

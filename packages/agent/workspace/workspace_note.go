@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/i18n"
 )
 
 // The author's note on the wire. note.set writes SessionMeta.Note (a durable,
@@ -23,7 +24,7 @@ func (w *Workspace) NoteSet(_ context.Context, sess string, p ctrlproto.NoteSetP
 		return err
 	}
 	if s.note == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the author's note is only available for chat/play sessions")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the author's note is only available for chat/play sessions"))
 	}
 	text := strings.TrimSpace(p.Text)
 	if err := s.sess.SetNote(text); err != nil {

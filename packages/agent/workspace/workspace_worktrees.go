@@ -6,6 +6,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/worktree"
+	"terva.sh/terva/packages/i18n"
 )
 
 // worktreesView serves the "worktrees" surface: the managed-worktree list plus
@@ -21,7 +22,7 @@ import (
 // the worktree_* tools would report for the same session.
 func (s *wsSession) worktreesView() (*ctrlproto.WorktreeView, error) {
 	if !worktree.InRepo(s.cwd) {
-		return nil, ctrlproto.Errorf(ctrlproto.CodeNotFound, "no git repository at %s", s.cwd)
+		return nil, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no git repository at %s", s.cwd))
 	}
 	sessID := ""
 	if s.agent != nil {

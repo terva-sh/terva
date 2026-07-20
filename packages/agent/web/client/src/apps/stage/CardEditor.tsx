@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
-import type { Client } from '../../platform/ctrlproto/client'
+import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { CardSummary, CardView, CardLintFinding, CardLintResult, DoctorProposal, DoctorResult, DoctorDecision } from '../../platform/ctrlproto/types'
+import { m, t, tr } from '../../i18n'
 import { ModelPick } from './ModelPick'
 
 // The card fields the doctor may edit (mirrors the server's allow-list) — the
@@ -17,16 +18,17 @@ const DOCTOR_FIELDS = new Set<keyof EditForm>([
   'creator_notes',
 ])
 
+// m()-marked (a module-level table) and tr()-translated where rendered.
 const FIELD_LABELS: Record<string, string> = {
-  name: 'Name',
-  description: 'Description',
-  personality: 'Personality',
-  scenario: 'Scenario',
-  first_mes: 'First message',
-  mes_example: 'Example dialogue',
-  system_prompt: 'System prompt',
-  post_history_instructions: 'Post-history instructions',
-  creator_notes: 'Creator notes',
+  name: m('Name'),
+  description: m('Description'),
+  personality: m('Personality'),
+  scenario: m('Scenario'),
+  first_mes: m('First message'),
+  mes_example: m('Example dialogue'),
+  system_prompt: m('System prompt'),
+  post_history_instructions: m('Post-history instructions'),
+  creator_notes: m('Creator notes'),
 }
 
 // The editable slice of a CCv2 `data` object — every field the editor exposes.
@@ -111,7 +113,7 @@ function EditField(props: {
 // (cards.lint), refreshed on each save, so a fix — e.g. the malformed macro on a
 // so-so import — visibly clears. Unknown fields (extensions, character_book)
 // live only in rawDoc and round-trip untouched.
-export function CardEditor(props: { client: Client; card: CardSummary; onClose: () => void; onSaved: () => void }) {
+export function CardEditor(props: { client: ClientLike; card: CardSummary; onClose: () => void; onSaved: () => void }) {
   const { client, card, onClose, onSaved } = props
   const [rawDoc, setRawDoc] = useState<RawDoc | null>(null)
   const [form, setForm] = useState<EditForm | null>(null)
@@ -279,6 +281,10 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
   const warns = findings?.filter((f) => f.severity === 'warn').length ?? 0
   const infos = (findings?.length ?? 0) - warns
 
+  // A proposal's severity is a wire token ('warn'/'info'/'suggestion'): the CSS
+  // class uses it raw, but the displayed label is translated per known token.
+  const sevLabel = (s: string) => (s === 'warn' ? t('warn') : s === 'info' ? t('info') : s === 'suggestion' ? t('suggestion') : s)
+
   return (
     <div class="stage-sheet-backdrop" onClick={onClose}>
       <div class="stage-sheet stage-sheet--detail stage-cardeditor" onClick={(e) => e.stopPropagation()}>
@@ -291,9 +297,9 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
             </div>
           )}
           <div class="stage-cardsheet__id">
-            <h3>Edit — {form?.name || card.name}</h3>
+            <h3>{t('Edit — %s', form?.name || card.name)}</h3>
             <div class="stage-cardsheet__meta">
-              <span>Changes save to your library; the avatar and id stay put.</span>
+              <span>{t('Changes save to your library; the avatar and id stay put.')}</span>
             </div>
           </div>
           <button class="stage-drawer__close" onClick={onClose}>
@@ -310,7 +316,7 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
         {findings && findings.length > 0 && (
           <div class="stage-lint stage-cardeditor__lint">
             <div class="stage-lint__head">
-              <span>Findings</span>
+              <span>{t('Findings')}</span>
               <span class="stage-lint__counts">
                 {warns > 0 && <span class="stage-lint__count stage-lint__count--warn">⚠ {warns}</span>}
                 {infos > 0 && <span class="stage-lint__count stage-lint__count--info">ⓘ {infos}</span>}
@@ -336,7 +342,7 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
             </ul>
           </div>
         )}
-        {findings && findings.length === 0 && <p class="stage-lint__clean">✓ No lint findings.</p>}
+        {findings && findings.length === 0 && <p class="stage-lint__clean">{t('✓ No lint findings.')}</p>}
 
         <div class="stage-doctor">
           <div class="stage-doctor__head">
@@ -344,14 +350,14 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
               <span class="stage-doctor__emoji" aria-hidden="true">
                 🛠️
               </span>
-              <span>Card doctor</span>
-              <span class="stage-doctor__hint" title="Seppä, the card-craft persona, reads the card and its lint and suggests concrete edits you can apply." aria-label="about the card doctor">
+              <span>{t('Card doctor')}</span>
+              <span class="stage-doctor__hint" title={t('Seppä, the card-craft persona, reads the card and its lint and suggests concrete edits you can apply.')} aria-label={t('about the card doctor')}>
                 ⓘ
               </span>
             </div>
             {!proposals && (
               <button class="stage-doctor__run" disabled={doctorRunning || !form} onClick={() => void runDoctor()}>
-                {doctorRunning ? 'Consulting…' : 'Ask the doctor'}
+                {doctorRunning ? t('Consulting…') : t('Ask the doctor')}
               </button>
             )}
           </div>
@@ -365,7 +371,7 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
                 setOvProvider(p)
                 setOvModel(m)
               }}
-              defaultLabel="Workspace model"
+              defaultLabel={t('Workspace model')}
             />
           </div>
           {doctorError && (
@@ -374,34 +380,34 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
             </p>
           )}
           {doctorNote && <p class="stage-doctor__note">{doctorNote}</p>}
-          {proposals && proposals.length === 0 && !doctorNote && <p class="stage-doctor__note">No changes suggested — the card looks good.</p>}
+          {proposals && proposals.length === 0 && !doctorNote && <p class="stage-doctor__note">{t('No changes suggested — the card looks good.')}</p>}
           {proposals && proposals.length > 0 && (
             <>
               <ul class="stage-doctor__list">
                 {proposals.map((p) => (
                   <li key={p.id} class="stage-doctor__item">
                     <div class="stage-doctor__meta">
-                      <span class={`stage-doctor__sev stage-doctor__sev--${p.severity}`}>{p.severity}</span>
-                      <span class="stage-doctor__field">{FIELD_LABELS[p.field] ?? p.field}</span>
+                      <span class={`stage-doctor__sev stage-doctor__sev--${p.severity}`}>{sevLabel(p.severity)}</span>
+                      <span class="stage-doctor__field">{tr(FIELD_LABELS[p.field] ?? p.field)}</span>
                     </div>
                     {p.rationale && <p class="stage-doctor__why">{p.rationale}</p>}
                     <div class="stage-doctor__diff">
                       <div class="stage-doctor__before">
-                        <span class="stage-doctor__difflabel">Now</span>
-                        <p>{p.before?.trim() || '(empty)'}</p>
+                        <span class="stage-doctor__difflabel">{t('Now')}</span>
+                        <p>{p.before?.trim() || t('(empty)')}</p>
                       </div>
                       <div class="stage-doctor__after">
-                        <span class="stage-doctor__difflabel">Proposed</span>
+                        <span class="stage-doctor__difflabel">{t('Proposed')}</span>
                         <p>{p.after}</p>
                       </div>
                     </div>
                     {applied[p.id] ? (
-                      <div class="stage-doctor__verdict stage-doctor__verdict--applied">Applied ✓ — save to keep</div>
+                      <div class="stage-doctor__verdict stage-doctor__verdict--applied">{t('Applied ✓ — save to keep')}</div>
                     ) : declined[p.id] !== undefined ? (
                       <div class="stage-doctor__verdict stage-doctor__verdict--declined">
-                        <span>Declined{declined[p.id] ? `: ${declined[p.id]}` : ''}</span>
+                        <span>{t('Declined')}{declined[p.id] ? `: ${declined[p.id]}` : ''}</span>
                         <button class="stage-doctor__link" onClick={() => applyProposal(p)}>
-                          apply instead
+                          {t('apply instead')}
                         </button>
                       </div>
                     ) : decliningId === p.id ? (
@@ -409,7 +415,7 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
                         <textarea
                           class="stage-editfield__area stage-doctor__reason"
                           rows={2}
-                          placeholder="Why? (e.g. keep the backstory) — the doctor weighs this next pass"
+                          placeholder={t('Why? (e.g. keep the backstory) — the doctor weighs this next pass')}
                           value={reasonDraft}
                           onInput={(e) => setReasonDraft((e.target as HTMLTextAreaElement).value)}
                         />
@@ -421,17 +427,17 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
                               setReasonDraft('')
                             }}
                           >
-                            cancel
+                            {t('cancel')}
                           </button>
                           <button class="stage-doctor__apply" onClick={() => confirmDecline(p.id)}>
-                            Confirm decline
+                            {t('Confirm decline')}
                           </button>
                         </div>
                       </div>
                     ) : (
                       <div class="stage-doctor__actions">
                         <button class="stage-doctor__apply" onClick={() => applyProposal(p)}>
-                          Apply
+                          {t('Apply')}
                         </button>
                         <button
                           class="stage-doctor__declinebtn"
@@ -440,7 +446,7 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
                             setReasonDraft('')
                           }}
                         >
-                          Decline
+                          {t('Decline')}
                         </button>
                       </div>
                     )}
@@ -450,54 +456,54 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
               <div class="stage-doctor__footer">
                 {proposals.some((p) => !applied[p.id] && declined[p.id] === undefined) && (
                   <button class="stage-doctor__link" onClick={applyAll}>
-                    Apply all
+                    {t('Apply all')}
                   </button>
                 )}
                 <button class="stage-doctor__revise" disabled={doctorRunning || saving} onClick={() => void reviseDoctor()}>
-                  {doctorRunning ? 'Consulting…' : 'Save & ask again'}
+                  {doctorRunning ? t('Consulting…') : t('Save & ask again')}
                 </button>
               </div>
             </>
           )}
         </div>
 
-        {!form && !error && <p class="stage-empty">Loading…</p>}
+        {!form && !error && <p class="stage-empty">{t('Loading…')}</p>}
         {form && (
           <div class="stage-cardeditor__fields">
             <div class="stage-cardeditor__row">
-              <EditField label="Name" value={form.name} hint="The {{char}} macro and the card's display name." onInput={(v) => set('name', v)} />
-              <EditField label="Version" value={form.character_version} hint="The card author's version string, if any." onInput={(v) => set('character_version', v)} />
+              <EditField label={t('Name')} value={form.name} hint={t("The {{char}} macro and the card's display name.")} onInput={(v) => set('name', v)} />
+              <EditField label={t('Version')} value={form.character_version} hint={t("The card author's version string, if any.")} onInput={(v) => set('character_version', v)} />
             </div>
-            <EditField label="Creator" value={form.creator} hint="Who authored the card." onInput={(v) => set('creator', v)} />
+            <EditField label={t('Creator')} value={form.creator} hint={t('Who authored the card.')} onInput={(v) => set('creator', v)} />
             <EditField
-              label="Description"
+              label={t('Description')}
               value={form.description}
               area
               rows={6}
-              hint="The character's core prompt — baked into the cached prefix every turn."
+              hint={t("The character's core prompt — baked into the cached prefix every turn.")}
               onInput={(v) => set('description', v)}
             />
             <EditField
-              label="Personality"
+              label={t('Personality')}
               value={form.personality}
               area
-              hint="A short personality summary. Many cards fold this into the description instead."
+              hint={t('A short personality summary. Many cards fold this into the description instead.')}
               onInput={(v) => set('personality', v)}
             />
-            <EditField label="Scenario" value={form.scenario} area hint="The situation the roleplay opens in." onInput={(v) => set('scenario', v)} />
+            <EditField label={t('Scenario')} value={form.scenario} area hint={t('The situation the roleplay opens in.')} onInput={(v) => set('scenario', v)} />
             <EditField
-              label="First message"
+              label={t('First message')}
               value={form.first_mes}
               area
               rows={5}
-              hint="The opening line (greeting 1). Supports {{char}} / {{user}} macros."
+              hint={t('The opening line (greeting 1). Supports {{char}} / {{user}} macros.')}
               onInput={(v) => set('first_mes', v)}
             />
 
             <div class="stage-editfield">
               <span class="stage-editfield__label">
-                Alternate greetings
-                <span class="stage-editfield__hint" title="Extra openings the reader can swipe between at the start of a chat." aria-label="alternate greetings">
+                {t('Alternate greetings')}
+                <span class="stage-editfield__hint" title={t('Extra openings the reader can swipe between at the start of a chat.')} aria-label={t('alternate greetings')}>
                   ⓘ
                 </span>
               </span>
@@ -509,61 +515,61 @@ export function CardEditor(props: { client: Client; card: CardSummary; onClose: 
                     value={g}
                     onInput={(e) => setGreeting(i, (e.target as HTMLTextAreaElement).value)}
                   />
-                  <button class="stage-cardeditor__greeting-del" title="Remove this greeting" onClick={() => removeGreeting(i)}>
+                  <button class="stage-cardeditor__greeting-del" title={t('Remove this greeting')} onClick={() => removeGreeting(i)}>
                     ✕
                   </button>
                 </div>
               ))}
               <button class="stage-cardeditor__add" onClick={addGreeting}>
-                + Add greeting
+                {t('+ Add greeting')}
               </button>
             </div>
 
             <EditField
-              label="Example dialogue"
+              label={t('Example dialogue')}
               value={form.mes_example}
               area
               rows={5}
-              hint="Sample exchanges that teach the character's voice."
+              hint={t("Sample exchanges that teach the character's voice.")}
               onInput={(v) => set('mes_example', v)}
             />
             <EditField
-              label="System prompt"
+              label={t('System prompt')}
               value={form.system_prompt}
               area
-              hint="An override system prompt the card requests, if any."
+              hint={t('An override system prompt the card requests, if any.')}
               onInput={(v) => set('system_prompt', v)}
             />
             <EditField
-              label="Post-history instructions"
+              label={t('Post-history instructions')}
               value={form.post_history_instructions}
               area
-              hint="Appended AFTER the chat history each turn — strong, recency-weighted steering."
+              hint={t('Appended AFTER the chat history each turn — strong, recency-weighted steering.')}
               onInput={(v) => set('post_history_instructions', v)}
             />
             <EditField
-              label="Creator notes"
+              label={t('Creator notes')}
               value={form.creator_notes}
               area
-              hint="Shown to you only — never sent to the model."
+              hint={t('Shown to you only — never sent to the model.')}
               onInput={(v) => set('creator_notes', v)}
             />
             <EditField
-              label="Tags"
+              label={t('Tags')}
               value={form.tags.join(', ')}
-              hint="Comma-separated labels for browsing; not sent to the model."
-              onInput={(v) => set('tags', v.split(',').map((t) => t.trim()).filter((t) => t !== ''))}
+              hint={t('Comma-separated labels for browsing; not sent to the model.')}
+              onInput={(v) => set('tags', v.split(',').map((x) => x.trim()).filter((x) => x !== ''))}
             />
           </div>
         )}
 
         <div class="stage-cardeditor__bar">
-          {savedAt && !saving && <span class="stage-cardeditor__saved">Saved ✓</span>}
+          {savedAt && !saving && <span class="stage-cardeditor__saved">{t('Saved ✓')}</span>}
           <button class="stage-cardeditor__cancel" onClick={onClose}>
-            Close
+            {t('Close')}
           </button>
           <button class="stage-cardeditor__save" disabled={saving || !form} onClick={() => void save()}>
-            {saving ? 'Saving…' : 'Save changes'}
+            {saving ? t('Saving…') : t('Save changes')}
           </button>
         </div>
       </div>

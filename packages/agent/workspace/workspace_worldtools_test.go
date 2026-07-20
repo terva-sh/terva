@@ -142,6 +142,46 @@ func TestWorldLorePutPreservesLedger(t *testing.T) {
 	}
 }
 
+// world.lore.put addressed to the scene-state pin normalizes it — canonical
+// name, always-on, shared — and updates the existing card case-insensitively
+// instead of standing a second pin beside it.
+func TestWorldLorePutNormalizesSceneState(t *testing.T) {
+	w := draftWorkspace(t)
+	ctx := context.Background()
+	imported, err := w.CardsImport(ctx, ctrlproto.CardImportParams{Bytes: []byte(`{"name":"Elira","first_mes":"hi"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := w.CreateSession(ctx, ctrlproto.CreateOpts{Experience: "chat", Card: imported.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A keyed, audience-scoped put addressed to the pin: all of that is
+	// normalized away — a card only some characters can see isn't the scene's
+	// clock. No "needs keywords" rejection either: the pin is always-on by
+	// definition, whatever the form sent.
+	if err := w.WorldLorePut(ctx, info.ID, ctrlproto.WorldLorePutParams{
+		Entry: ctrlproto.WorldLoreEntry{Name: "scene state", Keys: []string{"day"}, Audience: []string{"Elira"}, Content: "Day 14."},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	live := w.live(info.ID)
+	pin := live.sess.Meta.WorldLore[0]
+	if pin.Name != core.SceneStateName || !pin.Constant || len(pin.Keys) != 0 || len(pin.Audience) != 0 {
+		t.Fatalf("pin = %+v (want canonical, constant, shared)", pin)
+	}
+	// A second put under different casing UPDATES the card — never two pins.
+	if err := w.WorldLorePut(ctx, info.ID, ctrlproto.WorldLorePutParams{
+		Entry: ctrlproto.WorldLoreEntry{Name: "SCENE STATE", Constant: true, Content: "Day 15."},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lore := live.sess.Meta.WorldLore
+	if len(lore) != 1 || lore[0].Content != "Day 15." || lore[0].Name != core.SceneStateName {
+		t.Fatalf("the pin must update in place, got %+v", lore)
+	}
+}
+
 // The World tools are the play director's — a chat session's registry must not
 // carry them (chat is pure conversation), a play session's must.
 func TestWorldToolsPlayOnly(t *testing.T) {
@@ -179,5 +219,60 @@ func TestWorldNoteDescriptionRedirectsToReveal(t *testing.T) {
 	}
 	if !strings.Contains(desc, "already covers") {
 		t.Errorf("the redirect should name the failure mode (an entry that already covers the fact):\n%s", desc)
+	}
+	// The SD4 write path: the description is the ONLY place the director
+	// learns the pin exists and that its name is the append-only exception.
+	if !strings.Contains(desc, core.SceneStateName) || !strings.Contains(desc, "REPLACES") {
+		t.Errorf("the description must teach the scene-state carve-out:\n%s", desc)
+	}
+}
+
+// The scene-state pin (SD4) is the one exception to world_note's append-only
+// rule: writing the reserved name replaces the card in place — normalized to
+// the canonical name, always-on, shared, model-flagged.
+func TestWorldNoteUpdatesSceneStatePin(t *testing.T) {
+	s := worldTestSession(t, &scriptedClient{}, nil)
+	s.sess.Meta.Experience = "play"
+	s.worldLore = &build.WorldLoreRecord{}
+	s.sess.Meta.WorldLore = []core.WorldLoreEntry{
+		{Name: "The betrayal", Constant: true, Content: "The guildmaster sold them out."},
+	}
+
+	// Create: no pin yet — the reserved name (any case, keys/audience noise
+	// discarded) lands the canonical always-on shared card.
+	if r := noteExec(t, s, `{"name":"scene STATE","content":"Day 14, first light.","keys":["day"],"audience":["Elira"]}`); r.IsError {
+		t.Fatalf("pin create should succeed: %+v", r)
+	}
+	got := s.sess.Meta.WorldLore
+	if len(got) != 2 {
+		t.Fatalf("pin should append once, got %+v", got)
+	}
+	pin := got[1]
+	if pin.Name != core.SceneStateName || !pin.Constant || !pin.Model || len(pin.Keys) != 0 || len(pin.Audience) != 0 {
+		t.Fatalf("pin = %+v (want canonical name, constant, model, no keys/audience)", pin)
+	}
+
+	// Update: the same name is NOT a collision — the card's content replaces
+	// in place, other entries untouched.
+	if r := noteExec(t, s, `{"name":"Scene state","content":"Day 15, dusk. The north road."}`); r.IsError {
+		t.Fatalf("pin update should succeed: %+v", r)
+	}
+	got = s.sess.Meta.WorldLore
+	if len(got) != 2 || got[1].Content != "Day 15, dusk. The north road." {
+		t.Fatalf("pin should update in place, got %+v", got)
+	}
+	if got[0].Name != "The betrayal" {
+		t.Errorf("other entries must be untouched, got %+v", got[0])
+	}
+	// The live tail record followed the update.
+	rec := s.worldLore.Get()
+	found := false
+	for _, e := range rec {
+		if e.Name == core.SceneStateName && strings.Contains(e.Content, "Day 15") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("tail record should carry the updated pin, got %+v", rec)
 	}
 }

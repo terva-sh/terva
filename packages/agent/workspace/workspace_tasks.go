@@ -9,6 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/worker"
+	"terva.sh/terva/packages/i18n"
 )
 
 // The tasks pane surfaces the workspace-global swarm of background agents. The
@@ -133,7 +134,7 @@ func (w *Workspace) hasTasks() bool {
 // taskAction dispatches a tasks-pane action to the swarm, then nudges clients.
 func (w *Workspace) taskAction(action string, args map[string]string) error {
 	if w.swarm == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "no swarm")
+		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("no swarm"))
 	}
 	id := args["id"]
 	var err error
@@ -150,7 +151,7 @@ func (w *Workspace) taskAction(action string, args map[string]string) error {
 		// Actions carry no result payload, so the new agent's id doesn't ride
 		// back — the caller sees it appear on the next tasks fetch instead.
 		if strings.TrimSpace(args["task"]) == "" {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "spawn: missing task")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("spawn: missing task"))
 		}
 		// A foreign backend goes through the SAME gate the model's swarm_spawn
 		// tool applies (external workers on + a registered backend), so the human
@@ -166,7 +167,7 @@ func (w *Workspace) taskAction(action string, args map[string]string) error {
 			Task: args["task"], Model: args["model"], Provider: args["provider"], Persona: args["persona"], Backend: backend,
 		})
 	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown tasks action %q", action)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown tasks action %q", action))
 	}
 	if err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "%v", err)

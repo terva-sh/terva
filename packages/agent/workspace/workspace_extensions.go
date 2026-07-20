@@ -5,6 +5,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/i18n"
 )
 
 // The extensions management surface: a read-only inventory + health rollup of
@@ -49,7 +50,7 @@ func (s *wsSession) extensionsView() *ctrlproto.ExtensionsView {
 func (s *wsSession) extensionsAction(action string, args map[string]string) error {
 	name := args["name"]
 	if name == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "extensions: missing name")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("extensions: missing name"))
 	}
 	switch action {
 	case "toggle":
@@ -83,7 +84,7 @@ func (s *wsSession) extensionsAction(action string, args map[string]string) erro
 		s.broadcast(ctrlproto.SurfaceUpdatedEvent("extensions"))
 		return nil
 	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown extensions action %q", action)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown extensions action %q", action))
 	}
 }
 

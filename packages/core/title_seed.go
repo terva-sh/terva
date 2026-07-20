@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -215,13 +216,13 @@ func BuildTitleSeed(msgs []provider.Message, budget int) string {
 
 	var b strings.Builder
 	if anchorIsCompaction {
-		b.WriteString("Summary of the session so far:\n")
+		b.WriteString(i18n.P("title.seed.summary", "Summary of the session so far:") + "\n")
 	} else {
-		b.WriteString("The conversation opens with:\n")
+		b.WriteString(i18n.P("title.seed.opens", "The conversation opens with:") + "\n")
 	}
 	b.WriteString(anchorText)
 	if len(picked) > 0 {
-		b.WriteString("\n\nMost recent exchanges:\n")
+		b.WriteString("\n\n" + i18n.P("title.seed.recent", "Most recent exchanges:") + "\n")
 		// picked is newest-first; emit chronologically.
 		for i := len(picked) - 1; i >= 0; i-- {
 			b.WriteString(picked[i].role)

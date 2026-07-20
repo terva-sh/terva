@@ -215,7 +215,7 @@ func (s *wsSession) surface(id string) (ctrlproto.Surface, error) {
 		// the session has no board (chat/play/--no-tools) so the TUI can say
 		// "unavailable" rather than show an empty, never-populated panel.
 		if !s.hasTaskBoard() {
-			return ctrlproto.Surface{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "no task board in this session")
+			return ctrlproto.Surface{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no task board in this session"))
 		}
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Tasks"), Kind: "taskboard", TaskBoard: taskBoardView(s.tasks)}, nil
 	case "worktrees":
@@ -266,7 +266,7 @@ func (s *wsSession) surface(id string) (ctrlproto.Surface, error) {
 	p := s.extPanels[id]
 	s.paneMu.Unlock()
 	if p == nil {
-		return ctrlproto.Surface{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "no surface %q", id)
+		return ctrlproto.Surface{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no surface %q", id))
 	}
 	title := p.title
 	if title == "" {
@@ -339,7 +339,7 @@ func (s *wsSession) surfaceAction(id, action string, args map[string]string) err
 	p := s.extPanels[id]
 	s.paneMu.Unlock()
 	if p == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "no actionable surface %q", id)
+		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no actionable surface %q", id))
 	}
 	switch action {
 	case "key":
@@ -353,7 +353,7 @@ func (s *wsSession) surfaceAction(id, action string, args map[string]string) err
 		s.extMgr.SendPanelClose(p.ext, p.id)
 		s.paneClose(p.ext, p.id)
 	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown surface action %q", action)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown surface action %q", action))
 	}
 	return nil
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
-import type { Client } from '../../platform/ctrlproto/client'
+import { m, t, tr } from '../../i18n'
+import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { ModelInfo } from '../../platform/ctrlproto/types'
 
 // Compact context-window label (200000 → "200k"). Stage keeps its own tiny
@@ -14,16 +15,18 @@ function ctxLabel(n?: number): string {
 // distinction you want BEFORE picking, when the same model id is reachable both
 // ways. Undefined (keyless backends: ollama, named endpoints) renders nothing:
 // we do not know, and a confident wrong badge is worse than no badge.
+// The titles are m()-marked and tr()-translated where rendered; the badge
+// texts are i18n-exempt — 'sub'/'api' are compact technical tokens, not prose.
 const AUTH_LABEL: Record<string, { text: string; title: string }> = {
-  oauth: { text: 'sub', title: 'Subscription — this provider is signed in with a plan, not a metered key' },
-  apikey: { text: 'api', title: 'API key — usage on this provider is billed per token' },
+  oauth: { text: 'sub', title: m('Subscription — this provider is signed in with a plan, not a metered key') },
+  apikey: { text: 'api', title: m('API key — usage on this provider is billed per token') },
 }
 
 function AuthChip({ auth }: { auth?: string }) {
   const l = auth ? AUTH_LABEL[auth] : undefined
   if (!l) return null
   return (
-    <span class={`stage-modelpick__auth stage-modelpick__auth--${auth}`} title={l.title}>
+    <span class={`stage-modelpick__auth stage-modelpick__auth--${auth}`} title={tr(l.title)}>
       {l.text}
     </span>
   )
@@ -41,7 +44,7 @@ function AuthChip({ auth }: { auth?: string }) {
 // effective on the next message, no recreate. The current model tracks info.model
 // from the snapshot (updated by the session_updated the daemon broadcasts).
 export function ModelPick(props: {
-  client: Client
+  client: ClientLike
   sessionId: string
   currentProvider?: string
   currentModel?: string
@@ -111,7 +114,7 @@ export function ModelPick(props: {
       }
     : models.find((m) => m.default)
   const inheritedTitle = inherited
-    ? `${defaultLabel || 'Default'}: ${inherited.id}${inherited.provider ? ` (${inherited.provider})` : ''}`
+    ? `${defaultLabel || t('Default')}: ${inherited.id}${inherited.provider ? ` (${inherited.provider})` : ''}`
     : ''
 
   // Fire-and-forget: the session_updated snapshot re-renders info.model, so we
@@ -151,7 +154,7 @@ export function ModelPick(props: {
     >
       <button
         class="stage-modelpick__star"
-        title={m.favorite ? 'Unfavorite' : 'Favorite'}
+        title={m.favorite ? t('Unfavorite') : t('Favorite')}
         onClick={(e) => {
           e.stopPropagation()
           toggleFav(m, !m.favorite)
@@ -161,7 +164,7 @@ export function ModelPick(props: {
       </button>
       <span class="stage-modelpick__id">{m.id}</span>
       {showProvider && (
-        <span class="stage-modelpick__prov" title={`Provider: ${m.provider}`}>
+        <span class="stage-modelpick__prov" title={t('Provider: %s', m.provider)}>
           {m.provider}
         </span>
       )}
@@ -173,10 +176,10 @@ export function ModelPick(props: {
   return (
     <div class="stage-modelpick">
       <div class="stage-modelpick__head">
-        <span class="stage-modelpick__label">Model</span>
+        <span class="stage-modelpick__label">{t('Model')}</span>
         <button
           class="stage-modelpick__current"
-          title={selecting ? 'Pick a model for this run' : 'Switch the model for this chat — takes effect on your next message'}
+          title={selecting ? t('Pick a model for this run') : t('Switch the model for this chat — takes effect on your next message')}
           onClick={() => setOpen((o) => !o)}
         >
           <span class="stage-modelpick__cur-id">{currentModel || defaultLabel || '—'}</span>
@@ -211,7 +214,7 @@ export function ModelPick(props: {
                 setOpen(false)
               }}
             >
-              <span class="stage-modelpick__id">{defaultLabel || 'Default'}</span>
+              <span class="stage-modelpick__id">{defaultLabel || t('Default')}</span>
               {/* The inherit row gets the same provenance a real row gets — id,
                   provider, billing — because choosing "inherit" over an explicit
                   pick is a comparison, and it cannot be made against a blank. */}
@@ -224,10 +227,10 @@ export function ModelPick(props: {
               {inherited && <AuthChip auth={inherited.auth} />}
             </div>
           )}
-          {models.length === 0 && !error && <p class="stage-empty">No models — check your provider login.</p>}
+          {models.length === 0 && !error && <p class="stage-empty">{t('No models — check your provider login.')}</p>}
           {favorites.length > 0 && (
             <div class="stage-modelpick__group">
-              <div class="stage-modelpick__provider">★ Favorites</div>
+              <div class="stage-modelpick__provider">{t('★ Favorites')}</div>
               {favorites.map((m) => renderRow(m, 'fav:', true))}
             </div>
           )}

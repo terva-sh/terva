@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
-import type { Client } from '../../platform/ctrlproto/client'
+import { t } from '../../i18n'
+import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { PersonaSummary, PersonaView } from '../../platform/ctrlproto/types'
 
 // A labeled long-text block; renders nothing when the value is empty (unlike the
@@ -47,7 +48,7 @@ function ListField(props: { label: string; items?: string[]; tone?: 'good' | 'av
 // why. Duplicating under a new name gets the same customization while leaving
 // the built-in live.
 export function PersonaSheet(props: {
-  client: Client
+  client: ClientLike
   persona: PersonaSummary
   onClose: () => void
   onEdit?: () => void
@@ -84,21 +85,21 @@ export function PersonaSheet(props: {
               {v.specialty && <span>{v.specialty}</span>}
               <span>{persona.origin}</span>
               {persona.namespace && <span>{persona.namespace}</span>}
-              {persona.immersive && <span class="stage-personasheet__immersive">immersive</span>}
+              {persona.immersive && <span class="stage-personasheet__immersive">{t('immersive')}</span>}
             </div>
           </div>
           {mine && onEdit && (
-            <button class="stage-cardsheet__edit" title="Edit this persona" onClick={onEdit}>
-              ✎ Edit
+            <button class="stage-cardsheet__edit" title={t('Edit this persona')} onClick={onEdit}>
+              {t('✎ Edit')}
             </button>
           )}
           {!mine && onDuplicate && (
             <button
               class="stage-cardsheet__edit"
-              title={`Make your own copy of ${persona.name} under a new name — the ${persona.origin} one stays as it is`}
+              title={t('Make your own copy of %s under a new name — the %s one stays as it is', persona.name, persona.origin)}
               onClick={onDuplicate}
             >
-              ⧉ Duplicate
+              {t('⧉ Duplicate')}
             </button>
           )}
           <button class="stage-drawer__close" onClick={onClose}>
@@ -111,23 +112,23 @@ export function PersonaSheet(props: {
             {error}
           </p>
         )}
-        {!view && !error && <p class="stage-empty">Loading…</p>}
+        {!view && !error && <p class="stage-empty">{t('Loading…')}</p>}
 
         {view && (
           <div class="stage-personasheet__body">
             {view.summary && <p class="stage-personasheet__summary">{view.summary}</p>}
-            <Field label="Introduction" value={view.introduction} />
-            <Field label="Charter" value={view.charter} />
-            <ListField label="Good for" items={view.good_for} tone="good" />
-            <ListField label="Avoid for" items={view.avoid_for} tone="avoid" />
-            <ListField label="Recommended skills" items={view.recommended_skills} />
-            <Field label="Pronunciation" value={view.pronunciation} />
+            <Field label={t('Introduction')} value={view.introduction} />
+            <Field label={t('Charter')} value={view.charter} />
+            <ListField label={t('Good for')} items={view.good_for} tone="good" />
+            <ListField label={t('Avoid for')} items={view.avoid_for} tone="avoid" />
+            <ListField label={t('Recommended skills')} items={view.recommended_skills} />
+            <Field label={t('Pronunciation')} value={view.pronunciation} />
           </div>
         )}
 
         {mine && onDelete && (
           <button class="stage-sheet__delete" onClick={onDelete}>
-            Delete persona
+            {t('Delete persona')}
           </button>
         )}
       </div>

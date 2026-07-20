@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
-import type { Client } from '../../platform/ctrlproto/client'
+import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { SuggestTurn, SuggestResult } from '../../platform/ctrlproto/types'
+import { t } from '../../i18n'
 import { useAutoGrow } from './autogrow'
 import { ModelPick } from './ModelPick'
 
@@ -28,7 +29,7 @@ import { ModelPick } from './ModelPick'
 type Target = 'user' | 'actor' | 'narrator' | 'direct'
 
 export function SuggestReply(props: {
-  client: Client
+  client: ClientLike
   sessionId: string
   initialNote?: string
   // The session roster (Worlds W2): characters kept on stage (name → card ref),
@@ -183,24 +184,24 @@ export function SuggestReply(props: {
     void run(rounds[last].note ?? '', rounds.slice(0, last))
   }
 
-  const composerHint = (n: string) => n.trim() || 'cold suggestion'
+  const composerHint = (n: string) => n.trim() || t('cold suggestion')
 
   const heading =
     target === 'user'
-      ? '✨ Suggest a reply'
+      ? t('✨ Suggest a reply')
       : target === 'narrator'
-        ? '🎭 Narrate a beat'
+        ? t('🎭 Narrate a beat')
         : target === 'direct'
-          ? '🎬 Direct the story'
-          : '🎭 Bring in a character'
+          ? t('🎬 Direct the story')
+          : t('🎭 Bring in a character')
   const sketchHint =
     target === 'user'
-      ? "Sketch what you want to say — a few words, the gist, or leave it blank and I'll suggest something in your voice."
+      ? t("Sketch what you want to say — a few words, the gist, or leave it blank and I'll suggest something in your voice.")
       : target === 'narrator'
-        ? "Sketch the beat — a scene change, an entrance, a shift in mood — or leave it blank and I'll write one."
-        : `Sketch what ${actorName.trim() || 'they'} says or does — or leave it blank and I'll voice them.`
+        ? t("Sketch the beat — a scene change, an entrance, a shift in mood — or leave it blank and I'll write one.")
+        : t("Sketch what %s says or does — or leave it blank and I'll voice them.", actorName.trim() || t('they'))
   const sketchPlaceholder =
-    target === 'user' ? 'e.g. push back, but stay flirty…' : target === 'narrator' ? 'e.g. night falls; a stranger slips in…' : 'e.g. warns them off, then softens…'
+    target === 'user' ? t('e.g. push back, but stay flirty…') : target === 'narrator' ? t('e.g. night falls; a stranger slips in…') : t('e.g. warns them off, then softens…')
 
   return (
     <div class="stage-sheet-backdrop" onClick={onClose}>
@@ -212,24 +213,24 @@ export function SuggestReply(props: {
           </button>
         </header>
 
-        <div class="stage-suggest__target" role="group" aria-label="Who speaks">
+        <div class="stage-suggest__target" role="group" aria-label={t('Who speaks')}>
           <button class={target === 'user' ? 'is-active' : ''} disabled={busy} onClick={() => switchTarget('user')}>
-            Me
+            {t('Me')}
           </button>
           <button class={target === 'actor' ? 'is-active' : ''} disabled={busy} onClick={() => switchTarget('actor')}>
-            🎭 Character
+            {t('🎭 Character')}
           </button>
           <button class={target === 'narrator' ? 'is-active' : ''} disabled={busy} onClick={() => switchTarget('narrator')}>
-            ✍ Narrator
+            {t('✍ Narrator')}
           </button>
           <button class={target === 'direct' ? 'is-active' : ''} disabled={busy} onClick={() => switchTarget('direct')}>
-            🎬 Direct
+            {t('🎬 Direct')}
           </button>
         </div>
 
         {target === 'actor' && Object.keys(roster).length > 0 && (
           <div class="stage-suggest__roster">
-            <span class="stage-suggest__roster-label">On stage</span>
+            <span class="stage-suggest__roster-label">{t('On stage')}</span>
             {Object.entries(roster).map(([name, ref]) => (
               <button
                 key={ref}
@@ -262,7 +263,7 @@ export function SuggestReply(props: {
                   setActorName(c ? c.name : '') // card name, or clear for a fresh walk-on
                 }}
               >
-                <option value="">Walk-on (type a character)…</option>
+                <option value="">{t('Walk-on (type a character)…')}</option>
                 {cards.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
@@ -272,12 +273,12 @@ export function SuggestReply(props: {
             )}
             {actorCard ? (
               <div class="stage-suggest__card-chosen">
-                <p class="stage-suggest__card-note">Voicing {actorName} from their card.</p>
+                <p class="stage-suggest__card-note">{t('Voicing %s from their card.', actorName)}</p>
                 {inRoster ? (
-                  <span class="stage-suggest__card-note">On stage.</span>
+                  <span class="stage-suggest__card-note">{t('On stage.')}</span>
                 ) : (
-                  <button class="stage-suggest__keep" disabled={busy} title="Keep this character on stage for the scene" onClick={() => void keepOnStage()}>
-                    ＋ Keep on stage
+                  <button class="stage-suggest__keep" disabled={busy} title={t('Keep this character on stage for the scene')} onClick={() => void keepOnStage()}>
+                    {t('＋ Keep on stage')}
                   </button>
                 )}
               </div>
@@ -286,14 +287,14 @@ export function SuggestReply(props: {
                 <input
                   class="stage-suggest__actor-name"
                   value={actorName}
-                  placeholder="Character name (e.g. Kael)"
+                  placeholder={t('Character name (e.g. Kael)')}
                   disabled={busy}
                   onInput={(e) => setActorName((e.target as HTMLInputElement).value)}
                 />
                 <input
                   class="stage-suggest__actor-voice"
                   value={actorVoice}
-                  placeholder="Who are they? (optional — a gruff dockmaster)"
+                  placeholder={t('Who are they? (optional — a gruff dockmaster)')}
                   disabled={busy}
                   onInput={(e) => setActorVoice((e.target as HTMLInputElement).value)}
                 />
@@ -315,7 +316,7 @@ export function SuggestReply(props: {
                 setOvProvider(p)
                 setOvModel(m)
               }}
-              defaultLabel="Session model"
+              defaultLabel={t('Session model')}
               defaultProvider={props.defaultProvider}
               defaultModel={props.defaultModel}
             />
@@ -331,13 +332,13 @@ export function SuggestReply(props: {
         {isDirect ? (
           <div class="stage-suggest__sketch">
             <p class="stage-suggest__hint">
-              Tell the story what happens next — the narrator writes it. Your direction steers one turn; it isn't spoken as your character.
+              {t("Tell the story what happens next — the narrator writes it. Your direction steers one turn; it isn't spoken as your character.")}
             </p>
             <textarea
               ref={noteRef}
               class="stage-suggest__note"
               value={note}
-              placeholder="e.g. Kael refuses the offer and storms out."
+              placeholder={t('e.g. Kael refuses the offer and storms out.')}
               rows={3}
               autofocus
               disabled={busy}
@@ -351,7 +352,7 @@ export function SuggestReply(props: {
             />
             <div class="stage-suggest__sketch-actions">
               <button class="stage-suggest__go" disabled={busy || !note.trim()} onClick={() => void directStory()}>
-                {busy ? 'Directing…' : 'Direct the story →'}
+                {busy ? t('Directing…') : t('Direct the story →')}
               </button>
             </div>
           </div>
@@ -378,10 +379,10 @@ export function SuggestReply(props: {
               <button
                 class="stage-suggest__go"
                 disabled={busy || needsName}
-                title={needsName ? 'Name the character first' : ''}
+                title={needsName ? t('Name the character first') : ''}
                 onClick={() => void run(note, [])}
               >
-                {busy ? 'Drafting…' : 'Draft it ✨'}
+                {busy ? t('Drafting…') : t('Draft it ✨')}
               </button>
             </div>
           </div>
@@ -391,7 +392,7 @@ export function SuggestReply(props: {
               {rounds.map((r, i) => (
                 <div key={i} class="stage-suggest__round">
                   <div class={`stage-suggest__guide ${r.note?.trim() ? '' : 'stage-suggest__guide--cold'}`}>
-                    {r.note?.trim() ? `“${r.note.trim()}”` : 'cold suggestion'}
+                    {r.note?.trim() ? `“${r.note.trim()}”` : t('cold suggestion')}
                   </div>
                   {i === last ? (
                     <textarea
@@ -405,8 +406,8 @@ export function SuggestReply(props: {
                   ) : (
                     <div class="stage-suggest__draft-past">
                       <div class="stage-suggest__draft-text">{r.draft}</div>
-                      <button class="stage-suggest__revert" title="Go back to this draft" onClick={() => revertTo(i)}>
-                        ↩ revert
+                      <button class="stage-suggest__revert" title={t('Go back to this draft')} onClick={() => revertTo(i)}>
+                        {t('↩ revert')}
                       </button>
                     </div>
                   )}
@@ -419,7 +420,7 @@ export function SuggestReply(props: {
                 ref={noteRef}
                 class="stage-suggest__note"
                 value={note}
-                placeholder="Refine it — “shorter”, “angrier”, “mention the locked door”…"
+                placeholder={t('Refine it — “shorter”, “angrier”, “mention the locked door”…')}
                 rows={2}
                 disabled={busy}
                 onInput={(e) => setNote((e.target as HTMLTextAreaElement).value)}
@@ -434,12 +435,12 @@ export function SuggestReply(props: {
                 <button
                   class="stage-suggest__refine-go"
                   disabled={busy || !note.trim()}
-                  title="Refine the draft with this note"
+                  title={t('Refine the draft with this note')}
                   onClick={() => void run(note, rounds)}
                 >
-                  {busy ? '…' : 'Refine'}
+                  {busy ? '…' : t('Refine')}
                 </button>
-                <button class="stage-suggest__regen" disabled={busy} title="Try the last note again" onClick={regenerate}>
+                <button class="stage-suggest__regen" disabled={busy} title={t('Try the last note again')} onClick={regenerate}>
                   ↻
                 </button>
               </div>
@@ -447,7 +448,7 @@ export function SuggestReply(props: {
 
             <footer class="stage-suggest__foot">
               <button class="stage-suggest__cancel" onClick={onClose}>
-                Cancel
+                {t('Cancel')}
               </button>
               {target === 'user' ? (
                 <button
@@ -459,16 +460,16 @@ export function SuggestReply(props: {
                     onClose()
                   }}
                 >
-                  Use this →
+                  {t('Use this →')}
                 </button>
               ) : (
                 <button
                   class="stage-suggest__use"
                   disabled={busy || !draft.trim()}
-                  title={`Post this ${target === 'narrator' ? 'beat' : 'line'} into the scene`}
+                  title={target === 'narrator' ? t('Post this beat into the scene') : t('Post this line into the scene')}
                   onClick={() => void post()}
                 >
-                  Post to scene →
+                  {t('Post to scene →')}
                 </button>
               )}
             </footer>

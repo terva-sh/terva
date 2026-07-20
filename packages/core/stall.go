@@ -2,7 +2,6 @@ package core
 
 import (
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -272,7 +271,7 @@ func (t *stallTracker) raiseThrashEscalation(tool string) {
 }
 
 func stallThrashReason(n int) string {
-	return fmt.Sprintf("stuck across %d different failing loops this turn — the nudges aren't breaking it", n)
+	return i18n.T("stuck across %d different failing loops this turn — the nudges aren't breaking it", n)
 }
 
 // escalation returns a raised escalation request without consuming it. The
@@ -294,9 +293,9 @@ func (t *stallTracker) stageHandoff(text string) { t.pending = text }
 
 func stallReason(tool string, count int, detail string) string {
 	if detail != "" {
-		return fmt.Sprintf("stuck on %s ×%d: %q", tool, count, detail)
+		return i18n.T("stuck on %s ×%d: %q", tool, count, detail)
 	}
-	return fmt.Sprintf("stuck on %s ×%d (the same call, repeated)", tool, count)
+	return i18n.T("stuck on %s ×%d (the same call, repeated)", tool, count)
 }
 
 // trip stages the one-turn nudge for a signature and reports whether this was its

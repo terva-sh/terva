@@ -153,15 +153,15 @@ func (s *wsSession) pickSpeaker(ctx context.Context, text string) speakerPick {
 	system := renderRouteSystem(boundName, roster, s.rosterHints(roster))
 	tail := renderTranscriptTail(ag.Messages(), s.playerLabel(), boundName, routeMaxTranscript)
 	if tail == "" {
-		tail = "(the scene has not started yet)"
+		tail = frameSceneNotStarted()
 	}
-	prompt := "RECENT CONVERSATION (most recent last)\n" + tail
+	prompt := frameRecentConversation() + "\n" + tail
 	if strings.TrimSpace(text) != "" {
-		prompt += "\n\nTHE PLAYER'S NEW MESSAGE\n" + s.playerLabel() + ": " + text
+		prompt += "\n\n" + i18n.P("stage.route.new_message", "THE PLAYER'S NEW MESSAGE") + "\n" + s.playerLabel() + ": " + text
 	} else {
-		prompt += "\n\nTHE PLAYER WAITS — the scene advances on its own; whoever the moment belongs to speaks or acts next."
+		prompt += "\n\n" + i18n.P("stage.route.wait", "THE PLAYER WAITS — the scene advances on its own; whoever the moment belongs to speaks or acts next.")
 	}
-	prompt += "\n\nWho speaks next? Reply with exactly one name."
+	prompt += "\n\n" + i18n.P("stage.route.pick", "Who speaks next? Reply with exactly one name.")
 	_, model := s.currentModel()
 	out, usage, err := streamText(ctx, ag.Client, provider.Request{
 		Model:     model,
@@ -238,7 +238,7 @@ func (s *wsSession) voiceLine(ctx context.Context, pick speakerPick, text string
 	}
 	line = strings.TrimSpace(line)
 	if line == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeInternal, "the routed speaker produced no line")
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the routed speaker produced no line"))
 	}
 
 	meta := map[string]string{core.MetaSource: core.MetaRouted}
@@ -285,7 +285,7 @@ func (s *wsSession) playerLabel() string {
 	if n := strings.TrimSpace(s.sess.Meta.UserName); n != "" {
 		return n
 	}
-	return "Me"
+	return framePlayerFallbackLabel()
 }
 
 // rosterHints resolves each roster character to a one-line hint (the card
@@ -354,6 +354,12 @@ func parseSpeaker(out, boundName string, roster map[string]string) speakerPick {
 	if ans == "narrator" || ans == "the narrator" {
 		return speakerPick{}
 	}
+	// The roster advertises the narrator under its translated name; accept that
+	// form too (the English match above stays, so a locale change mid-session
+	// cannot strand a reply either way).
+	if n := strings.ToLower(strings.TrimSpace(narratorName())); n != "" && ans == n {
+		return speakerPick{}
+	}
 	if strings.EqualFold(ans, boundName) {
 		return speakerPick{bound: true}
 	}
@@ -387,8 +393,8 @@ func parseSpeaker(out, boundName string, roster map[string]string) speakerPick {
 func renderRouteSystem(boundName string, roster map[string]string, hints map[string]string) string {
 	var b strings.Builder
 	b.WriteString(i18n.P("stage.route.task", routeTask))
-	b.WriteString("\n\nWHO IS ON STAGE\n")
-	b.WriteString("- " + boundName + " — the main character the player is talking to\n")
+	b.WriteString("\n\n" + i18n.P("stage.route.on_stage", "WHO IS ON STAGE") + "\n")
+	b.WriteString("- " + i18n.P("stage.route.main_hint", "%s — the main character the player is talking to", boundName) + "\n")
 	for _, name := range sortedNames(roster) {
 		b.WriteString("- " + name)
 		if h := hints[name]; h != "" {
@@ -396,7 +402,7 @@ func renderRouteSystem(boundName string, roster map[string]string, hints map[str
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("- Narrator — a scene/narration beat, when no single character should answer\n")
+	b.WriteString("- " + narratorName() + " — " + i18n.P("stage.route.narrator_hint", "a scene/narration beat, when no single character should answer") + "\n")
 	return b.String()
 }
 
@@ -476,7 +482,7 @@ func renderVoiceSystem(name string, c *card.Card, player userPersona, boundName 
 	} else {
 		b.WriteString(strings.ReplaceAll(i18n.P("stage.voice.actor", voiceActorTask), "{name}", name))
 		if c != nil {
-			b.WriteString("\n\nWHO YOU ARE\n")
+			b.WriteString("\n\n" + i18n.P("stage.voice.who_you_are", "WHO YOU ARE") + "\n")
 			writeField(&b, "name", c.Name)
 			writeField(&b, "description", c.Description)
 			writeField(&b, "personality", c.Personality)
@@ -484,25 +490,25 @@ func renderVoiceSystem(name string, c *card.Card, player userPersona, boundName 
 		}
 	}
 	if loreBlock != "" {
-		b.WriteString("\n\nWHAT EVERYONE ON STAGE KNOWS (world lore)\n")
+		b.WriteString("\n\n" + i18n.P("stage.voice.world_lore", "WHAT EVERYONE ON STAGE KNOWS (world lore)") + "\n")
 		b.WriteString(loreBlock + "\n")
 	}
-	b.WriteString("\n\nTHE PLAYER IN THIS SCENE (context — do not write their words)\n")
+	b.WriteString("\n\n" + framePlayerContext() + "\n")
 	who := player.brief()
 	if who == "" {
-		who = "(not specified — infer from the conversation)"
+		who = i18n.P("stage.voice.player_unspecified", "(not specified — infer from the conversation)")
 	}
 	b.WriteString(who + "\n")
 	if bound != nil && name != strings.TrimSpace(bound.Name) {
-		b.WriteString("\nTHE MAIN CHARACTER IN THE SCENE (context only — do not speak as them)\n")
+		b.WriteString("\n" + i18n.P("stage.voice.main_character", "THE MAIN CHARACTER IN THE SCENE (context only — do not speak as them)") + "\n")
 		writeField(&b, "name", bound.Name)
 		writeField(&b, "description", bound.Description)
 		writeField(&b, "personality", bound.Personality)
 	}
-	b.WriteString("\nRECENT CONVERSATION (most recent last)\n")
+	b.WriteString("\n" + frameRecentConversation() + "\n")
 	tail := renderTranscriptTail(transcript, playerLabel, boundName, voiceMaxTranscript)
 	if tail == "" {
-		tail = "(the scene has not started yet)"
+		tail = frameSceneNotStarted()
 	}
 	b.WriteString(tail + "\n")
 	return b.String()
@@ -512,7 +518,7 @@ func renderVoiceSystem(name string, c *card.Card, player userPersona, boundName 
 // lives in the system prompt, so this just pulls the trigger.
 func voiceInstruction(name string) string {
 	if name == "" {
-		return "(write the next narrative beat now)"
+		return i18n.P("stage.voice.cue.narrator", "(write the next narrative beat now)")
 	}
-	return "(write " + name + "'s next line now)"
+	return i18n.P("stage.voice.cue.actor", "(write %s's next line now)", name)
 }

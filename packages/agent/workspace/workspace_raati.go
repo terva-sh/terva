@@ -87,7 +87,7 @@ func (w *Workspace) raatiAction(s *wsSession, action string, args map[string]str
 		w.raati.mu.Lock()
 		if w.raati.running {
 			w.raati.mu.Unlock()
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "a deliberation is in progress")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a deliberation is in progress"))
 		}
 		w.raati.view = ctrlproto.RaatiView{}
 		w.raati.mu.Unlock()
@@ -96,7 +96,7 @@ func (w *Workspace) raatiAction(s *wsSession, action string, args map[string]str
 	case "show":
 		return w.raatiShow(args["id"])
 	}
-	return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown raati action %q", action)
+	return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown raati action %q", action))
 }
 
 // raatiSeatOverrides parses the form's per-seat level-2 bindings
@@ -113,7 +113,7 @@ func raatiSeatOverrides(args map[string]string, seats int) ([]raati.Binding, err
 			continue
 		}
 		if p == "" || m == "" {
-			return nil, fmt.Errorf("seat %d needs both provider and model", i+1)
+			return nil, i18n.Errorf("seat %d needs both provider and model", i+1)
 		}
 		out[i] = raati.Binding{Provider: p, Model: m}
 		chosen++
@@ -122,7 +122,7 @@ func raatiSeatOverrides(args map[string]string, seats int) ([]raati.Binding, err
 		return nil, nil
 	}
 	if chosen < seats {
-		return nil, fmt.Errorf("seat the whole panel or none: %d of %d seats chosen", chosen, seats)
+		return nil, i18n.Errorf("seat the whole panel or none: %d of %d seats chosen", chosen, seats)
 	}
 	return out, nil
 }
@@ -132,11 +132,11 @@ func raatiSeatOverrides(args map[string]string, seats int) ([]raati.Binding, err
 func (w *Workspace) raatiShow(id string) error {
 	nanos, ok := raatiRecordNanos(id)
 	if !ok {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "bad record id %q", id)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("bad record id %q", id))
 	}
 	raw, err := os.ReadFile(filepath.Join(config.TervaHome(), "raati", id))
 	if err != nil {
-		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "no record %q", id)
+		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no record %q", id))
 	}
 	var res raati.Result
 	if err := json.Unmarshal(raw, &res); err != nil {
@@ -147,7 +147,7 @@ func (w *Workspace) raatiShow(id string) error {
 	w.raati.mu.Lock()
 	if w.raati.running {
 		w.raati.mu.Unlock()
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "a deliberation is in progress")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a deliberation is in progress"))
 	}
 	w.raati.view = view
 	w.raati.mu.Unlock()
@@ -301,11 +301,11 @@ type raatiEvidenceSpec struct {
 // is bound to w.ctx (never the request), like every background worker.
 func (w *Workspace) raatiConvene(s *wsSession, args map[string]string) error {
 	if w.swarm == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "no swarm engine")
+		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("no swarm engine"))
 	}
 	question := strings.TrimSpace(args["question"])
 	if question == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "convene: missing question")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("convene: missing question"))
 	}
 	// Config loads up front: a named profile fills every form field
 	// the client omitted, BEFORE any of them parse below.
@@ -337,7 +337,7 @@ func (w *Workspace) raatiConvene(s *wsSession, args map[string]string) error {
 		// sets an inquiry mode (an omitted arg would be filled above).
 		inquire = ""
 	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "convene: inquire must be record or convener")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("convene: inquire must be record or convener"))
 	}
 	if inquire == "convener" && s == nil {
 		inquire = "record"
@@ -348,12 +348,12 @@ func (w *Workspace) raatiConvene(s *wsSession, args map[string]string) error {
 	case "3":
 		maxRounds = 3
 	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "convene: rounds must be 2 or 3")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("convene: rounds must be 2 or 3"))
 	}
 	level := 0
 	if v := strings.TrimSpace(args["level"]); v != "" {
 		if level, err = strconv.Atoi(v); err != nil {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "convene: bad level %q", v)
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("convene: bad level %q", v))
 		}
 	} else if lvl, ok, viaAuto := prof.PickLevel(tools.HighestRaatiLevel(w.provider, build.SwarmTierMap(uc.SwarmTiers), build.RaatiLevel2Bindings(uc), len(raati.DefaultPanel()))); ok {
 		// The profile's level (auto resolves against the workspace's
@@ -370,7 +370,7 @@ func (w *Workspace) raatiConvene(s *wsSession, args map[string]string) error {
 	case "", "summary", "full":
 		spec.conversation = mode
 	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "convene: bad conversation mode %q", mode)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("convene: bad conversation mode %q", mode))
 	}
 	if spec.conversation != "" && s != nil {
 		// Snapshot NOW: the panel judges the conversation as it stood
@@ -386,18 +386,18 @@ func (w *Workspace) raatiConvene(s *wsSession, args map[string]string) error {
 	switch level {
 	case 0:
 		if (prov == "") != (model == "") {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "convene: set provider and model together, or neither")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("convene: set provider and model together, or neither"))
 		}
 	case 1:
 		if model != "" {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "convene: level 1 picks a provider; its tier ladder picks the models")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("convene: level 1 picks a provider; its tier ladder picks the models"))
 		}
 	}
 	seats := len(raati.DefaultPanel())
 	var seatPool []raati.Binding
 	if level >= 2 {
 		if prov != "" || model != "" {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "convene: level 2 seats are chosen per seat (or come from raati.level2)")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("convene: level 2 seats are chosen per seat (or come from raati.level2)"))
 		}
 		// The form may seat the panel explicitly (provider_N/model_N),
 		// overriding the config's raati.level2 for this convening only.
@@ -448,7 +448,7 @@ func (w *Workspace) raatiConvene(s *wsSession, args map[string]string) error {
 
 	hook := raatiBoardHook{w}
 	if !hook.Begin(question, string(class), tools.RaatiLevelName(level), string(seatOrder)) {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "a deliberation is already in progress")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a deliberation is already in progress"))
 	}
 	go w.runRaati(hook, raati.Config{
 		Engine:      raati.SwarmEngine{Swarm: w.swarm},

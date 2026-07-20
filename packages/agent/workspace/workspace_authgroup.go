@@ -202,11 +202,11 @@ func (w *Workspace) dropFlow(id string) {
 func (w *Workspace) AuthLoginStart(_ context.Context, p ctrlproto.AuthLoginStartParams) (ctrlproto.AuthFlowStep, error) {
 	m := w.authManager()
 	if m == nil {
-		return ctrlproto.AuthFlowStep{}, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "this daemon does not serve provider logins")
+		return ctrlproto.AuthFlowStep{}, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("this daemon does not serve provider logins"))
 	}
 	provider := strings.TrimSpace(p.Provider)
 	if provider == "" {
-		return ctrlproto.AuthFlowStep{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no provider named")
+		return ctrlproto.AuthFlowStep{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no provider named"))
 	}
 
 	// The env-var providers are not a form at all: there is no key for terva to
@@ -232,7 +232,7 @@ func (w *Workspace) AuthLoginStart(_ context.Context, p ctrlproto.AuthLoginStart
 	case "oauth":
 		return w.startOAuth(m, provider, p.Local)
 	default:
-		return ctrlproto.AuthFlowStep{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "method must be apikey or oauth")
+		return ctrlproto.AuthFlowStep{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("method must be apikey or oauth"))
 	}
 }
 
@@ -352,7 +352,7 @@ func (w *Workspace) startOAuth(m *auth.Manager, provider string, local bool) (ct
 func (w *Workspace) AuthLoginSubmit(ctx context.Context, p ctrlproto.AuthLoginSubmitParams) error {
 	m := w.authManager()
 	if m == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "this daemon does not serve provider logins")
+		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("this daemon does not serve provider logins"))
 	}
 	fl := w.lookupFlow(p.Flow)
 	if fl == nil {
@@ -366,7 +366,7 @@ func (w *Workspace) AuthLoginSubmit(ctx context.Context, p ctrlproto.AuthLoginSu
 		// might disagree. A refusal that only came back as a method error would be
 		// the exception that forces the second path.
 		return w.failFlow(p.Flow, "", ctrlproto.Errorf(ctrlproto.CodeBusy,
-			"this login is no longer in progress; start it again"))
+			"%s", i18n.T("this login is no longer in progress; start it again")))
 	}
 	val := func(k string) string { return strings.TrimSpace(p.Values[k]) }
 
@@ -388,7 +388,7 @@ func (w *Workspace) AuthLoginSubmit(ctx context.Context, p ctrlproto.AuthLoginSu
 			n, err := strconv.Atoi(s)
 			if err != nil || n < 0 {
 				return w.failFlow(p.Flow, fl.provider, ctrlproto.Errorf(
-					ctrlproto.CodeBadRequest, "context window must be a whole number"))
+					ctrlproto.CodeBadRequest, "%s", i18n.T("context window must be a whole number")))
 			}
 			win = n
 		}
@@ -409,7 +409,7 @@ func (w *Workspace) AuthLoginSubmit(ctx context.Context, p ctrlproto.AuthLoginSu
 			// a model. The form says so too (RequiredUnless), but the form is an
 			// affordance and this is the authority.
 			return w.failFlow(p.Flow, fl.provider, ctrlproto.Errorf(ctrlproto.CodeBadRequest,
-				"a default model is required, or name this endpoint and terva will discover its models"))
+				"%s", i18n.T("a default model is required, or name this endpoint and terva will discover its models")))
 		}
 		if err := m.CompleteCompatAPIKey(ctx, val("base_url"), val("model"), val("api_key"), win); err != nil {
 			return authErr(err)
@@ -428,7 +428,7 @@ func (w *Workspace) AuthLoginSubmit(ctx context.Context, p ctrlproto.AuthLoginSu
 func (w *Workspace) AuthLoginCancel(_ context.Context, p ctrlproto.AuthFlowRef) error {
 	m := w.authManager()
 	if m == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "this daemon does not serve provider logins")
+		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("this daemon does not serve provider logins"))
 	}
 	m.CancelOAuth()
 	w.dropFlow(p.Flow)
@@ -439,11 +439,11 @@ func (w *Workspace) AuthLoginCancel(_ context.Context, p ctrlproto.AuthFlowRef) 
 func (w *Workspace) AuthLogout(_ context.Context, p ctrlproto.AuthLogoutParams) error {
 	m := w.authManager()
 	if m == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "this daemon does not serve provider logins")
+		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("this daemon does not serve provider logins"))
 	}
 	store := m.Store()
 	if store == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeInternal, "no credential store")
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("no credential store"))
 	}
 
 	targets := []string{p.Provider}
@@ -518,7 +518,7 @@ func (w *Workspace) saveEndpoint(ctx context.Context, name, baseURL, apiKey stri
 		}
 		c.Endpoints[name] = config.EndpointConfig{BaseURL: baseURL, ContextWindow: win}
 	}); err != nil {
-		return ctrlproto.Errorf(ctrlproto.CodeInternal, "could not save the endpoint: %v", err)
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("could not save the endpoint: %v", err))
 	}
 	// Only if there is one. A key written for a server that ignores keys is a
 	// secret stored for no reason.
@@ -526,7 +526,7 @@ func (w *Workspace) saveEndpoint(ctx context.Context, name, baseURL, apiKey stri
 		if m := w.authManager(); m != nil {
 			if store := m.Store(); store != nil {
 				if err := store.SetAPIKey(name, apiKey); err != nil {
-					return ctrlproto.Errorf(ctrlproto.CodeInternal, "endpoint saved, but its key was not: %v", err)
+					return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("endpoint saved, but its key was not: %v", err))
 				}
 			}
 		}
@@ -552,25 +552,25 @@ func (w *Workspace) saveEndpoint(ctx context.Context, name, baseURL, apiKey stri
 func (w *Workspace) AuthEndpointRemove(_ context.Context, p ctrlproto.AuthEndpointRemoveParams) error {
 	m := w.authManager()
 	if m == nil {
-		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "this daemon does not serve provider logins")
+		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("this daemon does not serve provider logins"))
 	}
 	id := strings.TrimSpace(p.ID)
 	if _, ok := configEndpoints()[id]; !ok {
 		// Refuse rather than no-op: "removed" for something that was never there
 		// would let a typo look like a success, and the operator would go on
 		// believing a backend is gone when it is still serving the agent.
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no endpoint named %q", id)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no endpoint named %q", id))
 	}
 	if err := config.MutateConfig(func(c *config.Config) {
 		delete(c.Endpoints, id)
 	}); err != nil {
-		return ctrlproto.Errorf(ctrlproto.CodeInternal, "could not remove the endpoint: %v", err)
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("could not remove the endpoint: %v", err))
 	}
 	// The key outlives the definition otherwise: a secret for a provider that no
 	// longer exists, which nothing would ever show the operator again.
 	if store := m.Store(); store != nil {
 		if err := store.Clear(id); err != nil {
-			return ctrlproto.Errorf(ctrlproto.CodeInternal, "endpoint removed, but its key was not: %v", err)
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("endpoint removed, but its key was not: %v", err))
 		}
 	}
 	w.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("providers"))

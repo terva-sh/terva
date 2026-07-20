@@ -7,6 +7,7 @@ import (
 	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -54,11 +55,25 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 		// because they are session-mutable. World entries lead the input so at
 		// equal Order the stable sort gives the world's shared facts budget and
 		// placement priority over a card's book.
+		//
+		// The pinned scene-state entry (SD4) is pulled OUT before the merge: it
+		// bypasses Select entirely because the token budget can drop a constant
+		// entry, and the state card must never be silently dropped — least of all
+		// in a long session, which is exactly when the budget is tightest and the
+		// pinned clock/ledger matter most. It renders as its own framed block
+		// right after the lore.
 		entries := triggered
+		sceneState := ""
 		if world != nil {
 			if ws := world.Get(); len(ws) > 0 {
 				merged := make([]lore.Entry, 0, len(ws)+len(triggered))
-				merged = append(merged, ws...)
+				for _, e := range ws {
+					if core.IsSceneState(e.Name) {
+						sceneState = strings.TrimSpace(e.Content)
+						continue
+					}
+					merged = append(merged, e)
+				}
 				merged = append(merged, triggered...)
 				entries = merged
 			}
@@ -73,8 +88,11 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 				rec.Set(loreFiredOf(res.Fired))
 			}
 			if s := lore.Render(fired); s != "" {
-				parts = append(parts, s)
+				parts = append(parts, loreReferenceFrame(s))
 			}
+		}
+		if sceneState != "" {
+			parts = append(parts, sceneStateFrame(sceneState))
 		}
 		// The user-persona description — who the user is in the story — sits after
 		// the world lore and before the card's instructions, framed so the model
@@ -111,6 +129,42 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 	}
 }
 
+// loreReferenceFrame frames the fired-lore block for the per-turn tail, where
+// it rides a synthetic user message AFTER the whole transcript — the most
+// recent thing the model reads before it writes.
+//
+// That position is why the frame exists. Lore is written to SET UP a scene and
+// is then never revised: a setup entry says "the lieutenant is expected at
+// first light and should be asked her team size", the scene plays, she arrives,
+// she is asked — and the entry still says she is expected, still fires on its
+// keys, and still lands last. Unframed, the model read it as the current
+// moment and re-staged an arrival that had already happened. So the frame does
+// one job: name this block as reference, not state, and hand the tiebreak to
+// the transcript.
+//
+// It is deliberately the INVERSE of sceneStateFrame's trust clause, and the
+// two are not in conflict — they are the hierarchy. The pin is maintained and
+// outranks stale prose; ordinary lore is not maintained and loses to it.
+//
+// Only the per-turn tail is framed. The cached prefix (PlaceConstant) and the
+// routed-voice system prompt sit BEFORE the conversation, where "the
+// conversation above" names nothing.
+func loreReferenceFrame(block string) string {
+	return i18n.P("lore.reference.frame",
+		"REFERENCE KNOWLEDGE (setting, characters, and what came before — background the scene draws on, not a record of where it stands now; where this disagrees with the conversation above, the conversation is what actually happened):") +
+		"\n" + block
+}
+
+// sceneStateFrame frames the pinned scene-state card (SD4) for the per-turn
+// tail. The trust clause is the point: the card's whole job is to outrank
+// stale prose — the clock in the history says evening long after the scene
+// moved to morning, and the model must know which one is current.
+func sceneStateFrame(content string) string {
+	return i18n.P("lore.scenestate.frame",
+		"CURRENT SCENE STATE (pinned — kept current by the author and the director; when older prose in the history disagrees, this card is what is true now):") +
+		"\n" + content
+}
+
 // userPersonaFrame frames the bound user-persona description so the model
 // attributes it to {{user}} (the human in the scene), not the character. The
 // name mirrors the {{user}} macro already baked into the charter/greeting.
@@ -124,7 +178,7 @@ func userPersonaFrame(name, pronouns, gender, desc string) string {
 		// clauses name the persona themselves, so they stand alone.
 		return id
 	}
-	return "About " + label + " (the user you are interacting with):\n" + d + "\n\n" + id
+	return i18n.P("persona.user.about", "About %s (the user you are interacting with):", label) + "\n" + d + "\n\n" + id
 }
 
 // UserPersonaLabel is how a prompt names the human in the scene: their bound
@@ -133,7 +187,7 @@ func UserPersonaLabel(name string) string {
 	if n := strings.TrimSpace(name); n != "" {
 		return n
 	}
-	return "The user"
+	return i18n.P("persona.user.label", "The user")
 }
 
 // UserPersonaIdentity renders the gender/pronoun clauses for the human in the
@@ -159,20 +213,20 @@ func UserPersonaIdentity(name, gender, pronouns string) []string {
 
 	var id []string
 	if g != "" {
-		id = append(id, label+"'s gender: "+g+".")
+		id = append(id, i18n.P("persona.user.gender", "%s's gender: %s.", label, g))
 	}
 	switch {
 	case pr != "":
-		id = append(id, "Refer to "+label+" with "+pr+" pronouns.")
+		id = append(id, i18n.P("persona.user.pronouns", "Refer to %s with %s pronouns.", label, pr))
 	case g != "":
 		// Gender stated, pronouns not. The old text asserted the gender and then, in
 		// the same breath, told the model not to assume one — so it either ignored
 		// the contradiction or ignored the gender. Say the true, narrower thing.
-		id = append(id, "Their pronouns are not stated — use their name or the second person rather than inferring pronouns from the above.")
-	case label == "The user":
-		id = append(id, "Refer to the user in the second person; do not assume a gender or pronouns they have not stated.")
+		id = append(id, i18n.P("persona.user.pronouns_unstated", "Their pronouns are not stated — use their name or the second person rather than inferring pronouns from the above."))
+	case strings.TrimSpace(name) == "":
+		id = append(id, i18n.P("persona.user.second_person", "Refer to the user in the second person; do not assume a gender or pronouns they have not stated."))
 	default:
-		id = append(id, "Refer to "+label+" by name or in the second person; do not assume a gender or pronouns they have not stated.")
+		id = append(id, i18n.P("persona.user.by_name", "Refer to %s by name or in the second person; do not assume a gender or pronouns they have not stated.", label))
 	}
 	return id
 }

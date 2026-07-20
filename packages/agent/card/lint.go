@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // Finding is one deterministic card-lint result — a fact or problem found by
@@ -76,7 +78,7 @@ func Lint(c Card) []Finding {
 		for _, snip := range malformedMacros(f.text) {
 			out = append(out, Finding{
 				Rule: "malformed-macro", Severity: SevWarn, Field: f.name,
-				Message: "A macro is malformed and will be sent to the model literally instead of expanding.",
+				Message: i18n.T("A macro is malformed and will be sent to the model literally instead of expanding."),
 				Detail:  snip,
 			})
 		}
@@ -84,7 +86,7 @@ func Lint(c Card) []Finding {
 			if !knownMacros[strings.ToLower(m[1])] {
 				out = append(out, Finding{
 					Rule: "unknown-macro", Severity: SevInfo, Field: f.name,
-					Message: "An unrecognized macro is not expanded and will be sent literally.",
+					Message: i18n.T("An unrecognized macro is not expanded and will be sent literally."),
 					Detail:  m[0],
 				})
 			}
@@ -104,7 +106,7 @@ func Lint(c Card) []Finding {
 		if t := estTokens(f.text); t > oversizedTokens {
 			out = append(out, Finding{
 				Rule: "oversized-field", Severity: SevWarn, Field: f.name,
-				Message: fmt.Sprintf("Field is large (~%d tokens) and is included in the prompt every turn.", t),
+				Message: i18n.T("Field is large (~%d tokens) and is included in the prompt every turn.", t),
 			})
 		}
 	}
@@ -113,26 +115,26 @@ func Lint(c Card) []Finding {
 	if strings.TrimSpace(c.FirstMes) == "" && len(c.AlternateGreetings) == 0 {
 		out = append(out, Finding{
 			Rule: "missing-greeting", Severity: SevWarn, Field: "first_mes",
-			Message: "The card has no greeting — a chat opens with nothing from the character.",
+			Message: i18n.T("The card has no greeting — a chat opens with nothing from the character."),
 		})
 	}
 	if strings.TrimSpace(c.Personality) == "" {
 		out = append(out, Finding{
 			Rule: "empty-personality", Severity: SevInfo, Field: "personality",
-			Message: "Personality is empty; the card relies on the description alone.",
+			Message: i18n.T("Personality is empty; the card relies on the description alone."),
 		})
 	}
 	if strings.TrimSpace(c.MesExample) == "" {
 		out = append(out, Finding{
 			Rule: "no-example-dialogue", Severity: SevInfo, Field: "mes_example",
-			Message: "No example dialogue — the model has less grounding for the character's voice.",
+			Message: i18n.T("No example dialogue — the model has less grounding for the character's voice."),
 		})
 	}
 	for _, f := range []lintField{{"description", c.Description}, {"personality", c.Personality}} {
 		if snip := reDirective.FindString(f.text); snip != "" {
 			out = append(out, Finding{
 				Rule: "embedded-directive", Severity: SevInfo, Field: f.name,
-				Message: "Roleplay rules are embedded in this field — they steer every turn; a system prompt or post-history is the stronger home.",
+				Message: i18n.T("Roleplay rules are embedded in this field — they steer every turn; a system prompt or post-history is the stronger home."),
 				Detail:  strings.TrimSpace(snip),
 			})
 		}

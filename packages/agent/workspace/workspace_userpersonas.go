@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/i18n"
 )
 
 var _ ctrlproto.UserPersonasController = (*Workspace)(nil)
@@ -34,7 +35,7 @@ func (w *Workspace) UserPersonasList(_ context.Context) (ctrlproto.UserPersonasL
 // which one is default.
 func (w *Workspace) UserPersonaSave(_ context.Context, p ctrlproto.UserPersonaView) (ctrlproto.UserPersonaView, error) {
 	if strings.TrimSpace(p.Name) == "" {
-		return ctrlproto.UserPersonaView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "a user persona needs a name")
+		return ctrlproto.UserPersonaView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a user persona needs a name"))
 	}
 	store := w.userPersonaStore()
 	up := build.UserPersona{Name: p.Name, Description: p.Description, Gender: p.Gender, Pronouns: p.Pronouns}

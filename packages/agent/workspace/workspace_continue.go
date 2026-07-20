@@ -5,6 +5,7 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -35,10 +36,10 @@ func (s *wsSession) continueTurn(epoch uint64) error {
 	msgs := s.agent.Messages()
 	n := len(msgs)
 	if n == 0 || msgs[n-1].Role != provider.RoleAssistant {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "there is no response to continue")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("there is no response to continue"))
 	}
 	if !s.agent.ContinuesAssistantPrefill() {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "this session's provider cannot continue an assistant message")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("this session's provider cannot continue an assistant message"))
 	}
 	turnCtx, err := s.beginTurn()
 	if err != nil {

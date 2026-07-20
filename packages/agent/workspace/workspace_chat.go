@@ -162,19 +162,19 @@ func (w *Workspace) chatConnect(sessID, name string) error {
 	svc, ok := chat.Lookup(name)
 	if !ok {
 		if name == "" {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no chat connectors compiled into this binary")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no chat connectors compiled into this binary"))
 		}
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown chat connector %q (available: %s)", name, chatServiceNames())
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown chat connector %q (available: %s)", name, chatServiceNames()))
 	}
 	if !svc.Configured(w.root) {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s: not configured — run `terva bot setup` first", svc.Name)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("%s: not configured — run `terva bot setup` first", svc.Name))
 	}
 	// A background `terva bot` daemon polling the same service is a second
 	// consumer: both race each update and one always loses, so messages arrive
 	// half-delivered. Stop it first.
 	if pid, alive, _ := chat.IsRunning(w.root, svc.Name); alive && pid > 0 {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
-			"%s: bot daemon already running (pid %d) — stop it with `terva bot stop` first", svc.Name, pid)
+			"%s", i18n.T("%s: bot daemon already running (pid %d) — stop it with `terva bot stop` first", svc.Name, pid))
 	}
 
 	w.chat.mu.Lock()
@@ -192,10 +192,10 @@ func (w *Workspace) chatConnect(sessID, name string) error {
 		w.chat.mu.Unlock()
 		if b.state == chatStateConnecting {
 			return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
-				"%s is still connecting — wait for it, or disconnect first", name)
+				"%s", i18n.T("%s is still connecting — wait for it, or disconnect first", name))
 		}
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
-			"%s is already connected — disconnect it first (one bridge per workspace: connector extensions share a single host slot)", name)
+			"%s", i18n.T("%s is already connected — disconnect it first (one bridge per workspace: connector extensions share a single host slot)", name))
 	}
 	w.chat.bridges[svc.Name] = &boundBridge{sess: sessID, state: chatStateConnecting}
 	// Bind under the registry lock: every slot mutation happens inside a
@@ -239,7 +239,7 @@ func (w *Workspace) chatDial(svc chat.Service, sessID string) {
 	}
 	w.chatSetError(svc.Name, err.Error())
 	w.chatChanged()
-	host.Notify("error", fmt.Sprintf("%s connect failed: %v", svc.Name, err))
+	host.Notify("error", i18n.T("%s connect failed: %v", svc.Name, err))
 }
 
 // chatDisconnect stops the live bridge and re-derives the bound session's tools,
@@ -261,7 +261,7 @@ func (w *Workspace) chatDisconnect() error {
 	}
 	w.chat.mu.Unlock()
 	if live == nil && sess == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no chat bridge is connected")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no chat bridge is connected"))
 	}
 	if live != nil {
 		live.Stop()
@@ -286,7 +286,7 @@ func (w *Workspace) chatRebind(sessID string) error {
 	}
 	w.chat.mu.Unlock()
 	if !found {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no chat bridge is connected")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no chat bridge is connected"))
 	}
 	// Both sessions change their model-facing tool set: the old one loses the
 	// chat-send tools, the new one gains them.
@@ -483,7 +483,7 @@ func (w *Workspace) chatAction(sessID, action string, args map[string]string) er
 		}
 		return w.chatRebind(target)
 	}
-	return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown chat action %q", action)
+	return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown chat action %q", action))
 }
 
 // chatServiceNames lists every registered service with its provenance tag.
@@ -511,16 +511,16 @@ func chatServiceTag(svc chat.Service) string {
 }
 
 func chatConnectedLabel(svc chat.Service, st chat.BridgeState) string {
-	label := svc.Name
+	name := svc.Name
 	if tag := chatServiceTag(svc); tag != "" {
-		label += " (" + tag + ")"
+		name += " (" + tag + ")"
 	}
-	label += " connected"
+	label := i18n.T("%s connected", name)
 	if st.Username != "" {
-		label += " as @" + st.Username
+		label += " " + i18n.T("as @%s", st.Username)
 	}
 	if st.PairedID == "" {
-		label += " — send /start to the bot to claim it"
+		label += " — " + i18n.T("send /start to the bot to claim it")
 	}
 	return label
 }

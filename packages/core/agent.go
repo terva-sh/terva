@@ -242,20 +242,28 @@ type Agent struct {
 	continuePrefill bool
 	continueResult  *continuedMessage
 
-	// advanceCue is set for the duration of one Advance turn (guarded by mu,
-	// cleared on return). It is the exact INVERSE of continuePrefill: it forces a
-	// NON-empty ephemeral tail, so the request always ends in a user block even
-	// when the transcript ends in assistant messages.
+	// stageCue is set for the duration of ONE turn (guarded by mu, cleared on
+	// return): a request-scoped instruction appended to the ephemeral tail, after
+	// the cache breakpoint, so it steers a single generation and costs no cache.
+	// Non-empty means "append this"; the empty string is the ordinary turn.
 	//
-	// That matters because Stage's directed authorship appends authored lines as
-	// assistant messages, so a scene can end with several of them. Dispatching a
-	// plain turn there sends a request whose last message is an assistant one —
-	// which on Anthropic is a PREFILL: the model would extend that line
-	// mid-sentence and the result would be appended as a NEW message (continuePrefill
-	// is false, so the in-place merge never fires), producing a bubble that starts
-	// mid-thought. Silent corruption, not an error. The cue guarantees a trailing
-	// user block on every provider, so the model writes the next beat instead.
-	advanceCue bool
+	// Two callers set it, for two different reasons. Advance needs it as the exact
+	// INVERSE of continuePrefill: it forces a NON-EMPTY ephemeral tail, so the
+	// request always ends in a user block even when the transcript ends in
+	// assistant messages. That matters because Stage's directed authorship appends
+	// authored lines as assistant messages, so a scene can end with several of
+	// them. Dispatching a plain turn there sends a request whose last message is an
+	// assistant one — which on Anthropic is a PREFILL: the model would extend that
+	// line mid-sentence and the result would be appended as a NEW message
+	// (continuePrefill is false, so the in-place merge never fires), producing a
+	// bubble that starts mid-thought. Silent corruption, not an error.
+	//
+	// ContinueWithCue sets it for a guided regenerate, where the transcript ends in
+	// a user message already and the cue is purely steering — the user's "what
+	// should be different" note, and optionally the withdrawn take it replaces.
+	// The cue text belongs to the CALLER (the workspace composes Stage's), so this
+	// stays a dumb request-scoped string rather than a menu of flags.
+	stageCue string
 
 	// sessionID / sessionPath identify the transcript file this
 	// conversation persists to: sessionID is the file basename without
@@ -1224,7 +1232,7 @@ func (a *Agent) Continue(ctx context.Context, sink func(AgentEvent)) error {
 //
 // The cue is load-bearing, not decoration. A scene may end in a run of authored
 // directed lines, which are assistant messages; the request would then end in an
-// assistant message, which Anthropic reads as a prefill to extend. See advanceCue.
+// assistant message, which Anthropic reads as a prefill to extend. See stageCue.
 // Single-flight like Prompt: ErrBusy if a run is already in progress.
 func (a *Agent) Advance(ctx context.Context, sink func(AgentEvent)) error {
 	release, ok := a.acquire()
@@ -1236,15 +1244,52 @@ func (a *Agent) Advance(ctx context.Context, sink func(AgentEvent)) error {
 		sink = func(AgentEvent) {}
 	}
 	sink = a.wrapSink(sink)
-	a.mu.Lock()
-	a.advanceCue = true
-	a.mu.Unlock()
-	defer func() {
-		a.mu.Lock()
-		a.advanceCue = false
-		a.mu.Unlock()
-	}()
+	defer a.setStageCue(i18n.P("stage.advance.cue",
+		"[Advance] Continue the scene from where it stands. Write the next beat as the character(s) whose turn it plainly is — do not narrate for the user, do not restate what just happened, and do not begin mid-sentence."))()
 	return a.runLoop(ctx, sink)
+}
+
+// ContinueWithCue runs one turn against the existing transcript with cue on the
+// ephemeral tail — Continue plus a request-scoped steer. It is what a GUIDED
+// regenerate runs: the workspace has already retracted the take being replaced
+// and truncated back to the last user message, and cue carries the user's note
+// about what should be different (and, unless they asked for a blind retry, the
+// withdrawn take itself).
+//
+// The cue is deliberately not persisted anywhere. A regenerate's takes all share
+// the transcript prefix they were generated from, so writing the guidance into
+// that prefix would put it in front of takes that never saw it — swipe back one
+// and the scene would claim an instruction that did not apply. Request-scoped
+// keeps every take's history honest, and keeps the guidance off the cache.
+//
+// An empty cue is exactly Continue. Single-flight like Prompt: ErrBusy if a run
+// is already in progress.
+func (a *Agent) ContinueWithCue(ctx context.Context, sink func(AgentEvent), cue string) error {
+	release, ok := a.acquire()
+	if !ok {
+		return ErrBusy
+	}
+	defer release()
+	if sink == nil {
+		sink = func(AgentEvent) {}
+	}
+	sink = a.wrapSink(sink)
+	defer a.setStageCue(cue)()
+	return a.runLoop(ctx, sink)
+}
+
+// setStageCue installs a request-scoped cue and returns the function that clears
+// it, so a turn can arm and disarm it in one deferred line. Both cue setters run
+// exactly one turn, and neither may leave the cue armed for the next one.
+func (a *Agent) setStageCue(cue string) func() {
+	a.mu.Lock()
+	a.stageCue = cue
+	a.mu.Unlock()
+	return func() {
+		a.mu.Lock()
+		a.stageCue = ""
+		a.mu.Unlock()
+	}
 }
 
 // ErrNoAssistantToContinue is returned by ContinueAssistant when the transcript
@@ -1971,7 +2016,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	contextProvider := a.ContextProvider
 	cacheKey := a.cacheID
 	continuePrefill := a.continuePrefill
-	advanceCue := a.advanceCue
+	stageCue := a.stageCue
 	msgs := make([]provider.Message, len(a.messages))
 	copy(msgs, a.messages)
 	a.mu.Unlock()
@@ -2054,19 +2099,19 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		}
 	}
 
-	// An advance turn rides a stage cue on the ephemeral tail — the inverse of the
-	// continue turn below. The tail must be NON-empty so the request ends in a user
-	// block even when the transcript ends in assistant messages (Stage's directed
-	// lines are authored as assistant messages, so a scene can end with a run of
-	// them). Without it, that trailing assistant is read as a prefill and the model
-	// extends the last authored line mid-sentence instead of writing the next beat.
-	// Appended after the cache breakpoint, so it costs no cache.
-	if advanceCue {
+	// A cued turn (advance, guided regenerate) rides its stage cue on the ephemeral
+	// tail — the inverse of the continue turn below. For advance the tail must be
+	// NON-empty so the request ends in a user block even when the transcript ends in
+	// assistant messages (Stage's directed lines are authored as assistant messages,
+	// so a scene can end with a run of them). Without it, that trailing assistant is
+	// read as a prefill and the model extends the last authored line mid-sentence
+	// instead of writing the next beat. Appended after the cache breakpoint, so it
+	// costs no cache. See stageCue.
+	if stageCue != "" {
 		if ephemeral != "" {
 			ephemeral += "\n\n"
 		}
-		ephemeral += i18n.P("stage.advance.cue",
-			"[Advance] Continue the scene from where it stands. Write the next beat as the character(s) whose turn it plainly is — do not narrate for the user, do not restate what just happened, and do not begin mid-sentence.")
+		ephemeral += stageCue
 	}
 
 	// A continue turn suppresses the ENTIRE ephemeral tail (the context provider

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
-import type { Client } from '../../platform/ctrlproto/client'
+import { t, tn } from '../../i18n'
+import { downloadExport } from '../../ui/browser'
+import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { CardSummary, CardView, CardExport, CardLintFinding, CardLintResult } from '../../platform/ctrlproto/types'
 
 // The normalized CCv2 `data` object inside CardView.raw (card.Marshal output is
@@ -55,7 +57,7 @@ function Field(props: { label: string; value?: string; hint?: string }) {
 // its raw CCv2 `data`; the ⓘ hints teach what each field drives (#10). The
 // deterministic lint findings render here too (S2b).
 export function CardSheet(props: {
-  client: Client
+  client: ClientLike
   card: CardSummary
   busy: boolean
   onClose: () => void
@@ -94,18 +96,7 @@ export function CardSheet(props: {
   const exportCard = async () => {
     setError('')
     try {
-      const res = await client.send<CardExport>('cards.export', { id: card.id })
-      const bin = atob(res.bytes)
-      const arr = new Uint8Array(bin.length)
-      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
-      const url = URL.createObjectURL(new Blob([arr], { type: res.mime_type }))
-      const a = document.createElement('a')
-      a.href = url
-      a.download = res.filename
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
+      downloadExport(await client.send<CardExport>('cards.export', { id: card.id }))
     } catch (e) {
       setError(String(e))
     }
@@ -127,12 +118,12 @@ export function CardSheet(props: {
             <div class="stage-cardsheet__meta">
               {card.creator && <span>{card.creator}</span>}
               {card.character_version && <span>v{card.character_version}</span>}
-              <span>{card.spec_version ? `spec ${card.spec_version}` : 'v1 card'}</span>
+              <span>{card.spec_version ? t('spec %s', card.spec_version) : t('v1 card')}</span>
             </div>
           </div>
           {onEdit && (
-            <button class="stage-cardsheet__edit" title="Edit this card" onClick={onEdit}>
-              ✎ Edit
+            <button class="stage-cardsheet__edit" title={t('Edit this card')} onClick={onEdit}>
+              {t('✎ Edit')}
             </button>
           )}
           <button class="stage-drawer__close" onClick={onClose}>
@@ -158,16 +149,16 @@ export function CardSheet(props: {
 
         <div class="stage-cardsheet__facts">
           <span>
-            {greetings} greeting{greetings === 1 ? '' : 's'}
+            {tn(greetings, '%d greeting', '%d greetings')}
           </span>
           {card.book_entries ? (
             <span>
-              · {card.book_entries} lore {card.book_entries === 1 ? 'entry' : 'entries'}
+              · {tn(card.book_entries, '%d lore entry', '%d lore entries')}
             </span>
           ) : null}
           {card.has_phi ? (
-            <span class="stage-cardsheet__phi" title="Has post-history instructions — a directive appended after the chat history each turn.">
-              · post-history
+            <span class="stage-cardsheet__phi" title={t('Has post-history instructions — a directive appended after the chat history each turn.')}>
+              {t('· post-history')}
             </span>
           ) : null}
         </div>
@@ -187,14 +178,14 @@ export function CardSheet(props: {
             </div>
           )}
           <button class="stage-sheet__start" disabled={busy} onClick={() => onStart(greeting)}>
-            Start chat
+            {t('Start chat')}
           </button>
         </div>
 
         {findings && findings.length > 0 && (
           <div class="stage-lint">
             <div class="stage-lint__head">
-              <span>Findings</span>
+              <span>{t('Findings')}</span>
               <span class="stage-lint__counts">
                 {warns > 0 && <span class="stage-lint__count stage-lint__count--warn">⚠ {warns}</span>}
                 {infos > 0 && <span class="stage-lint__count stage-lint__count--info">ⓘ {infos}</span>}
@@ -220,42 +211,42 @@ export function CardSheet(props: {
             </ul>
           </div>
         )}
-        {findings && findings.length === 0 && <p class="stage-lint__clean">✓ No lint findings.</p>}
+        {findings && findings.length === 0 && <p class="stage-lint__clean">{t('✓ No lint findings.')}</p>}
 
         <div class="stage-cardsheet__fields">
-          {!view && !error && <p class="stage-empty">Loading…</p>}
+          {!view && !error && <p class="stage-empty">{t('Loading…')}</p>}
           {data && (
             <>
-              <Field label="Description" value={data.description} hint="The character's core prompt — baked into the cached prefix every turn." />
-              <Field label="Personality" value={data.personality} hint="A short personality summary. Many cards fold this into the description instead." />
-              <Field label="Scenario" value={data.scenario} hint="The situation the roleplay opens in." />
+              <Field label={t('Description')} value={data.description} hint={t("The character's core prompt — baked into the cached prefix every turn.")} />
+              <Field label={t('Personality')} value={data.personality} hint={t('A short personality summary. Many cards fold this into the description instead.')} />
+              <Field label={t('Scenario')} value={data.scenario} hint={t('The situation the roleplay opens in.')} />
               <Field
-                label="First message"
+                label={t('First message')}
                 value={greetingText(data, greeting)}
-                hint="The opening line. Use the greeting picker above to preview alternates."
+                hint={t('The opening line. Use the greeting picker above to preview alternates.')}
               />
-              <Field label="Example dialogue" value={data.mes_example} hint="Sample exchanges that teach the character's voice." />
-              <Field label="System prompt" value={data.system_prompt} hint="An override system prompt the card requests, if any." />
+              <Field label={t('Example dialogue')} value={data.mes_example} hint={t("Sample exchanges that teach the character's voice.")} />
+              <Field label={t('System prompt')} value={data.system_prompt} hint={t('An override system prompt the card requests, if any.')} />
               <Field
-                label="Post-history instructions"
+                label={t('Post-history instructions')}
                 value={data.post_history_instructions}
-                hint="Appended AFTER the chat history each turn — strong, recency-weighted steering."
+                hint={t('Appended AFTER the chat history each turn — strong, recency-weighted steering.')}
               />
-              <Field label="Creator notes" value={data.creator_notes} hint="Shown to you only — never sent to the model." />
+              <Field label={t('Creator notes')} value={data.creator_notes} hint={t('Shown to you only — never sent to the model.')} />
               {book.length > 0 && (
                 <div class="stage-cardfield">
                   <div class="stage-cardfield__label">
-                    Lorebook
-                    <span class="stage-cardfield__hint" title="Keyword-triggered context entries imported onto the session's lore engine." aria-label="lorebook">
+                    {t('Lorebook')}
+                    <span class="stage-cardfield__hint" title={t("Keyword-triggered context entries imported onto the session's lore engine.")} aria-label={t('lorebook')}>
                       ⓘ
                     </span>
                   </div>
                   <ul class="stage-cardsheet__book">
                     {book.map((e, i) => (
                       <li key={i}>
-                        <span class="stage-cardsheet__book-name">{e.name || e.comment || `entry ${i + 1}`}</span>
+                        <span class="stage-cardsheet__book-name">{e.name || e.comment || t('entry %d', i + 1)}</span>
                         {e.constant ? (
-                          <span class="stage-cardsheet__book-tag">always on</span>
+                          <span class="stage-cardsheet__book-tag">{t('always on')}</span>
                         ) : (
                           (e.keys ?? []).slice(0, 6).map((k) => (
                             <span key={k} class="stage-cardsheet__book-key">
@@ -273,11 +264,11 @@ export function CardSheet(props: {
         </div>
 
         <button class="stage-sheet__export" onClick={() => void exportCard()}>
-          Export card
+          {t('Export card')}
         </button>
         {onDelete && (
           <button class="stage-sheet__delete" onClick={onDelete}>
-            Delete card
+            {t('Delete card')}
           </button>
         )}
       </div>

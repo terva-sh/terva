@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'preact/hooks'
-import type { Client } from '../../platform/ctrlproto/client'
-import type { SessionInfo, BackgroundView, BackgroundsListResult, CardView, DoctorProposal, DoctorResult, LoreView, Surface, UserPersonaView, UserPersonasListResult } from '../../platform/ctrlproto/types'
+import { t, tn } from '../../i18n'
+import { copyToClipboard, downloadExport } from '../../ui/browser'
+import { panelHref } from '../../ui/navlinks'
+import type { ClientLike } from '../../platform/ctrlproto/client'
+import type { SessionInfo, BackgroundView, BackgroundsListResult, CardView, DoctorProposal, DoctorResult, LoreView, SessionExport, Surface, UserPersonaView, UserPersonasListResult } from '../../platform/ctrlproto/types'
 import { ModelPick } from './ModelPick'
+import { SessionDoctor } from './SessionDoctor'
+import { SCENE_STATE_NAME, sceneStateOf, scenePinDrift } from './SceneState'
 
 async function fileToBase64(file: File): Promise<string> {
   const buf = new Uint8Array(await file.arrayBuffer())
@@ -14,6 +19,10 @@ async function fileToBase64(file: File): Promise<string> {
 // (UserPersonaView.gender/pronouns are plain strings), so "Other…" is just an
 // unlisted value — a new option needs no server change, and the lists stay
 // inclusive and editable right here.
+// i18n-exempt — these ARE the committed wire values (they reach the model's
+// prompt verbatim), not display-only labels; translating the label would
+// diverge from the stored value. Localizing identity options is a wire-level
+// question, not a render-time one.
 const PRONOUN_OPTIONS = ['she/her', 'he/him', 'they/them', 'she/they', 'he/they', 'it/its', 'any', 'ask']
 const GENDER_OPTIONS = ['Woman', 'Man', 'Non-binary', 'Genderfluid', 'Agender', 'Prefer not to say']
 
@@ -50,13 +59,13 @@ function IdentityField(props: {
           }
         }}
       >
-        <option value="">— unset —</option>
+        <option value="">{t('— unset —')}</option>
         {options.map((o) => (
           <option key={o} value={o}>
             {o}
           </option>
         ))}
-        <option value="__other__">Other…</option>
+        <option value="__other__">{t('Other…')}</option>
       </select>
       {showOther && (
         <input
@@ -78,7 +87,16 @@ function IdentityField(props: {
 // existing lore surface — ST's opacity complaint, answered by showing exactly
 // which entries drive the character and when). Author's note, user-persona
 // binding, and the activation trace are Phase-4 steering depth.
-export function Steering(props: { client: Client; sessionId: string; info: SessionInfo | null; onClose: () => void }) {
+// onNextScene opens the scene-break flow (SD5). It lives in Chat, which owns
+// session switching — the drawer only asks for it, optionally seeding a title
+// the doctor proposed.
+export function Steering(props: {
+  client: ClientLike
+  sessionId: string
+  info: SessionInfo | null
+  onClose: () => void
+  onNextScene?: (suggestedTitle: string) => void
+}) {
   const { client, sessionId, info, onClose } = props
   const [backgrounds, setBackgrounds] = useState<BackgroundView[]>([])
   const [lore, setLore] = useState<LoreView | null>(null)
@@ -92,6 +110,28 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
   // The author's note is edited locally and committed on blur; the snapshot fold
   // re-seeds it (from info.note) on a session switch or an external change.
   const [noteDraft, setNoteDraft] = useState(info?.note ?? '')
+  // Which diagnostics row last copied, so the button can confirm it landed —
+  // a clipboard write is otherwise completely silent.
+  const [copied, setCopied] = useState<'id' | 'path' | ''>('')
+  // Export is a round trip to the daemon on a long transcript, so the button
+  // says so rather than looking inert.
+  const [exporting, setExporting] = useState(false)
+  const exportStory = () => {
+    setError('')
+    setExporting(true)
+    client
+      .send<SessionExport>('sessions.export', { format: 'markdown' }, sessionId)
+      .then(downloadExport)
+      .catch((e: unknown) => setError(String(e)))
+      .finally(() => setExporting(false))
+  }
+  const copyRow = (which: 'id' | 'path', text: string) => {
+    void copyToClipboard(text).then((ok) => {
+      if (!ok) return
+      setCopied(which)
+      setTimeout(() => setCopied(''), 1200)
+    })
+  }
   useEffect(() => {
     setNoteDraft(info?.note ?? '')
   }, [sessionId, info?.note])
@@ -165,6 +205,8 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
   const audienceChoices = [...(boundName ? [boundName] : []), ...Object.keys(info?.cast ?? {})].filter((n, i, a) => a.indexOf(n) === i)
   const toggleAudience = (name: string) =>
     setLoreAudience((cur) => (cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name]))
+  // The scene-state pin renders above the composer (SD4), not in this list.
+  const worldLoreListed = (info?.world_lore ?? []).filter((e) => e.name.trim().toLowerCase() !== SCENE_STATE_NAME.toLowerCase())
 
   const loadBackgrounds = () =>
     client
@@ -189,7 +231,7 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
   const savePersona = (makeDefault: boolean) => {
     const name = userName.trim()
     if (!name) {
-      setError('Give your persona a name to save it.')
+      setError(t('Give your persona a name to save it.'))
       return
     }
     setError('')
@@ -213,7 +255,7 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
   // two verbs the panel's session drawer uses. Both broadcast session_updated, so
   // info.title and the chat header refresh live; no manual refetch here.
   const renameSession = () => {
-    const next = window.prompt('Rename this chat', info?.title || '')
+    const next = window.prompt(t('Rename this chat'), info?.title || '')
     if (next == null) return
     client.send('sessions.rename', { title: next.trim() }, sessionId).catch((e: unknown) => setError(String(e)))
   }
@@ -315,7 +357,7 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
       .send<{ name: string }>('worlds.save', info?.world ? {} : { name }, sessionId)
       .then((v) => {
         setWorldName('')
-        setWorldSavedNote(info?.world ? `Saved to “${v.name}”.` : `“${v.name}” is now a saved World — new chats can start inside it from the Library.`)
+        setWorldSavedNote(info?.world ? t('Saved to “%s”.', v.name) : t('“%s” is now a saved World — new chats can start inside it from the Library.', v.name))
       })
       .catch((e: unknown) => setError(String(e)))
       .finally(() => setWorldSaving(false))
@@ -412,7 +454,7 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
   // scene that just goes bare with nothing to explain it. Unbind FIRST, so a
   // failed delete leaves us merely unbound rather than bound to nothing.
   const deleteBg = async (id: string) => {
-    if (!window.confirm('Delete this backdrop? It is removed from the library for good, and any other chat using it loses its scene.')) return
+    if (!window.confirm(t('Delete this backdrop? It is removed from the library for good, and any other chat using it loses its scene.'))) return
     try {
       if (info?.background === id) await bind('')
       await client.send('backgrounds.delete', { id })
@@ -436,14 +478,14 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
     <div class="stage-drawer-backdrop" onClick={onClose}>
       <aside class="stage-drawer" onClick={(e) => e.stopPropagation()}>
         <header class="stage-drawer__head">
-          <h3>Steering</h3>
+          <h3>{t('Steering')}</h3>
           <button class="stage-drawer__close" onClick={onClose}>✕</button>
         </header>
         <nav class="stage-drawer__tabs">
-          <button class={`stage-drawer__tab ${tab === 'world' ? 'stage-drawer__tab--on' : ''}`} onClick={() => setTab('world')}>World</button>
-          <button class={`stage-drawer__tab ${tab === 'session' ? 'stage-drawer__tab--on' : ''}`} onClick={() => setTab('session')}>Session</button>
-          <button class={`stage-drawer__tab ${tab === 'you' ? 'stage-drawer__tab--on' : ''}`} onClick={() => setTab('you')}>You</button>
-          <button class={`stage-drawer__tab ${tab === 'scene' ? 'stage-drawer__tab--on' : ''}`} onClick={() => setTab('scene')}>Scene</button>
+          <button class={`stage-drawer__tab ${tab === 'world' ? 'stage-drawer__tab--on' : ''}`} onClick={() => setTab('world')}>{t('World')}</button>
+          <button class={`stage-drawer__tab ${tab === 'session' ? 'stage-drawer__tab--on' : ''}`} onClick={() => setTab('session')}>{t('Session')}</button>
+          <button class={`stage-drawer__tab ${tab === 'you' ? 'stage-drawer__tab--on' : ''}`} onClick={() => setTab('you')}>{t('You')}</button>
+          <button class={`stage-drawer__tab ${tab === 'scene' ? 'stage-drawer__tab--on' : ''}`} onClick={() => setTab('scene')}>{t('Scene')}</button>
         </nav>
         {error && (
           <p class="stage-error" onClick={() => setError('')}>
@@ -457,17 +499,17 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
         {tab === 'world' && (
         <>
         <section class="stage-drawer__section">
-          <h4>This World</h4>
+          <h4>{t('This World')}</h4>
           {info?.world ? (
             <>
-              <p class="stage-hint">This session belongs to a saved World. Its roster and lore here are a working copy — save your changes back when the World itself should remember them.</p>
+              <p class="stage-hint">{t('This session belongs to a saved World. Its roster and lore here are a working copy — save your changes back when the World itself should remember them.')}</p>
               <button class="stage-worldsave__go" disabled={worldSaving} onClick={saveWorld}>
-                {worldSaving ? 'Saving…' : 'Save changes to World'}
+                {worldSaving ? t('Saving…') : t('Save changes to World')}
               </button>
             </>
           ) : (
             <>
-              <p class="stage-hint">Save this session's World — the roster, its lore and secrets, who replies — as a named World you can start new chats inside.</p>
+              <p class="stage-hint">{t("Save this session's World — the roster, its lore and secrets, who replies — as a named World you can start new chats inside.")}</p>
               <form
                 class="stage-worldsave"
                 onSubmit={(e) => {
@@ -477,12 +519,12 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
               >
                 <input
                   class="stage-worldsave__name"
-                  placeholder="World name (e.g. Lowtown)"
+                  placeholder={t('World name (e.g. Lowtown)')}
                   value={worldName}
                   onInput={(e) => setWorldName((e.target as HTMLInputElement).value)}
                 />
                 <button type="submit" class="stage-worldsave__go" disabled={worldSaving || !worldName.trim()}>
-                  {worldSaving ? 'Saving…' : 'Save as World'}
+                  {worldSaving ? t('Saving…') : t('Save as World')}
                 </button>
               </form>
             </>
@@ -491,19 +533,19 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
         </section>
 
         <section class="stage-drawer__section">
-          <h4>On stage</h4>
+          <h4>{t('On stage')}</h4>
           {info?.experience === 'play' ? (
-            <p class="stage-hint">The play cast — with per-actor model pins — lives in the Session tab.</p>
+            <p class="stage-hint">{t('The play cast — with per-actor model pins — lives in the Session tab.')}</p>
           ) : (
             <>
-              <p class="stage-hint">Characters kept on stage. Voice one from the ✨ suggest menu (Character → pick from the roster); they share this World's lore. ✏️ enriches a character's card from what this scene established.</p>
-              {Object.keys(info?.cast ?? {}).length === 0 && <p class="stage-empty">No one yet — pick a character in the ✨ suggest menu and keep them on stage.</p>}
+              <p class="stage-hint">{t("Characters kept on stage. Voice one from the ✨ suggest menu (Character → pick from the roster); they share this World's lore. ✏️ enriches a character's card from what this scene established.")}</p>
+              {Object.keys(info?.cast ?? {}).length === 0 && <p class="stage-empty">{t('No one yet — pick a character in the ✨ suggest menu and keep them on stage.')}</p>}
               <ul class="stage-cast">
                 {boundName && info?.card && (
                   <li key="__bound" class="stage-cast__member">
                     <span class="stage-cast__name">{boundName}</span>
-                    <span class="stage-cast__ref">main character</span>
-                    <button class="stage-worldlore__act" title={`Enrich ${boundName}'s card from this scene`} onClick={() => runEnrich({ ref: info.card!, name: boundName })}>
+                    <span class="stage-cast__ref">{t('main character')}</span>
+                    <button class="stage-worldlore__act" title={t("Enrich %s's card from this scene", boundName)} onClick={() => runEnrich({ ref: info.card!, name: boundName })}>
                       ✏️
                     </button>
                   </li>
@@ -514,10 +556,10 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
                     <li key={name} class="stage-cast__member">
                       <span class="stage-cast__name">{name}</span>
                       <span class="stage-cast__ref">{ref}</span>
-                      <button class="stage-worldlore__act" title={`Enrich ${name}'s card from this scene`} onClick={() => runEnrich({ ref, name })}>
+                      <button class="stage-worldlore__act" title={t("Enrich %s's card from this scene", name)} onClick={() => runEnrich({ ref, name })}>
                         ✏️
                       </button>
-                      <button class="stage-cast__remove" title={`Remove ${name}`} onClick={() => void castRemove(name)}>
+                      <button class="stage-cast__remove" title={t('Remove %s', name)} onClick={() => void castRemove(name)}>
                         ✕
                       </button>
                     </li>
@@ -526,13 +568,13 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
               {enrich && (
                 <div class="stage-enrich">
                   <div class="stage-enrich__head">
-                    <h5 class="stage-enrich__title">✏️ Enrich {enrich.name} from this scene</h5>
-                    <button class="stage-worldlore__act" title="Close" onClick={resetEnrich}>✕</button>
+                    <h5 class="stage-enrich__title">{t('✏️ Enrich %s from this scene', enrich.name)}</h5>
+                    <button class="stage-worldlore__act" title={t('Close')} onClick={resetEnrich}>✕</button>
                   </div>
-                  {enrichRunning && <p class="stage-hint">The editor is reading the scene…</p>}
+                  {enrichRunning && <p class="stage-hint">{t('The editor is reading the scene…')}</p>}
                   {!enrichRunning && enrichNote && <p class="stage-hint">{enrichNote}</p>}
                   {!enrichRunning && enrichProposals && enrichProposals.length === 0 && !enrichNote && (
-                    <p class="stage-empty">Nothing to fold back yet — play a little more first.</p>
+                    <p class="stage-empty">{t('Nothing to fold back yet — play a little more first.')}</p>
                   )}
                   {!enrichRunning &&
                     (enrichProposals ?? []).map((p) => (
@@ -542,14 +584,14 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
                           <span class="stage-enrich__why">{p.rationale}</span>
                           <button
                             class={`stage-enrich__verdict ${enrichVerdicts[p.id] === true ? 'stage-enrich__verdict--on' : ''}`}
-                            title="Accept this edit"
+                            title={t('Accept this edit')}
                             onClick={() => setEnrichVerdicts((v) => ({ ...v, [p.id]: true }))}
                           >
                             ✓
                           </button>
                           <button
                             class={`stage-enrich__verdict ${enrichVerdicts[p.id] === false ? 'stage-enrich__verdict--off' : ''}`}
-                            title="Decline this edit"
+                            title={t('Decline this edit')}
                             onClick={() => setEnrichVerdicts((v) => ({ ...v, [p.id]: false }))}
                           >
                             ✗
@@ -560,7 +602,7 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
                         {enrichVerdicts[p.id] === false && (
                           <input
                             class="stage-enrich__reason"
-                            placeholder="Why not? (the editor revises with this)"
+                            placeholder={t('Why not? (the editor revises with this)')}
                             value={enrichReasons[p.id] ?? ''}
                             onInput={(e) => setEnrichReasons((r) => ({ ...r, [p.id]: (e.target as HTMLInputElement).value }))}
                           />
@@ -574,10 +616,10 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
                         disabled={enrichApplying || Object.values(enrichVerdicts).filter(Boolean).length === 0}
                         onClick={() => void enrichApply()}
                       >
-                        {enrichApplying ? 'Applying…' : `Apply ${Object.values(enrichVerdicts).filter(Boolean).length} accepted`}
+                        {enrichApplying ? t('Applying…') : tn(Object.values(enrichVerdicts).filter(Boolean).length, 'Apply %d accepted', 'Apply %d accepted')}
                       </button>
                       <button class="stage-worldlore-form__cancel" disabled={Object.keys(enrichVerdicts).length === 0} onClick={enrichRevise}>
-                        Revise with feedback
+                        {t('Revise with feedback')}
                       </button>
                     </div>
                   )}
@@ -585,23 +627,23 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
               )}
               {Object.entries(info?.cast ?? {}).filter(([, ref]) => ref !== info?.card).length > 0 && (
                 <label class="stage-coordination">
-                  <span class="stage-coordination__label">Who replies</span>
+                  <span class="stage-coordination__label">{t('Who replies')}</span>
                   <select
                     class="stage-coordination__select"
                     value={info?.coordination ?? ''}
                     onChange={(e) => void setCoordination((e.target as HTMLSelectElement).value)}
                   >
-                    <option value="">Auto — the meta-narrator picks</option>
-                    <option value="off">Only the main character</option>
+                    <option value="">{t('Auto — the meta-narrator picks')}</option>
+                    <option value="off">{t('Only the main character')}</option>
                     {Object.entries(info?.cast ?? {})
                       .filter(([, ref]) => ref !== info?.card)
                       .map(([name]) => (
                         <option key={name} value={`focus:${name}`}>
-                          Always {name}
+                          {t('Always %s', name)}
                         </option>
                       ))}
                   </select>
-                  <span class="stage-hint">Auto lets the story decide who answers each message — the main character, someone from the roster, or a narrator beat. Applies on your next message.</span>
+                  <span class="stage-hint">{t('Auto lets the story decide who answers each message — the main character, someone from the roster, or a narrator beat. Applies on your next message.')}</span>
                 </label>
               )}
             </>
@@ -609,17 +651,60 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
         </section>
 
         <section class="stage-drawer__section">
-          <h4>World lore</h4>
-          <p class="stage-hint">Shared facts about this world — everyone on stage sees them. A keyed entry injects when a keyword appears in recent messages; an always-on entry injects every turn. Edits apply on the next message.</p>
-          {(info?.world_lore ?? []).length === 0 && <p class="stage-empty">No World lore yet.</p>}
+          <h4>{t('World lore')}</h4>
+          <p class="stage-hint">{t('Shared facts about this world — everyone on stage sees them. A keyed entry injects when a keyword appears in recent messages; an always-on entry injects every turn. Edits apply on the next message.')}</p>
+          {/* The scene-state pin (SD4) is EDITED above the composer, not in this
+              list — but it must still be ACCOUNTED FOR here, because this is
+              where someone comes looking for "what is in this world's context".
+              Offering to pin one when there is none and then going silent once
+              there is meant the tab denied knowing about the card at exactly the
+              moment it existed — and the doctor's accept happens behind the
+              drawer's own backdrop, so that silence was the only thing the
+              author saw. Read-only on purpose: one editor for one card. */}
+          {sceneStateOf(info?.world_lore) ? (
+            <div class="stage-worldlore__pinned">
+              <div class="stage-worldlore__head">
+                <span class="stage-worldlore__name">📌 {t('Scene state')}</span>
+                <span class="stage-lore__keys">
+                  <span class="stage-lore__const">{t('always on')}</span>
+                  {scenePinDrift(info?.scene_pin_stale) > 0 && (
+                    <span
+                      class="stage-lore__badge stage-lore__badge--dropped"
+                      title={t('This card outranks the scene when they disagree, and nothing updates it on its own — check it against what has happened since, then doctor this session to refresh it.')}
+                    >
+                      {tn(scenePinDrift(info?.scene_pin_stale), 'pinned %d turn ago', 'pinned %d turns ago')}
+                    </span>
+                  )}
+                </span>
+              </div>
+              <p class="stage-lore__content">{sceneStateOf(info?.world_lore)?.content}</p>
+              <p class="stage-hint">{t('Pinned above the composer — open the card there to edit or unpin it.')}</p>
+            </div>
+          ) : (
+            <button
+              type="button"
+              class="stage-worldlore__pinbtn"
+              title={t('Pin a scene-state card — the in-fiction clock, location, and ledger, always in context, shown above the composer')}
+              onClick={() => {
+                setLoreEditing('')
+                setLoreName(SCENE_STATE_NAME)
+                setLoreAlways(true)
+                setLoreKeys('')
+                setLoreAudience([])
+              }}
+            >
+              {t('📌 Pin a scene-state card')}
+            </button>
+          )}
+          {worldLoreListed.length === 0 && <p class="stage-empty">{t('No World lore yet.')}</p>}
           <ul class="stage-worldlore">
-            {(info?.world_lore ?? []).map((e) => (
+            {worldLoreListed.map((e) => (
               <li key={e.name} class="stage-worldlore__entry">
                 <div class="stage-worldlore__head">
                   <span class="stage-worldlore__name">{e.name}</span>
                   <span class="stage-lore__keys">
                     {e.constant ? (
-                      <span class="stage-lore__const">always on</span>
+                      <span class="stage-lore__const">{t('always on')}</span>
                     ) : (
                       (e.keys ?? []).map((k) => (
                         <span key={k} class="stage-lore__key">
@@ -630,23 +715,24 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
                     {(e.audience ?? []).length > 0 && (
                       <span
                         class="stage-worldlore__audience"
-                        title={`Only these characters know this: ${(e.audience ?? [])
-                          .map((n) => (e.learned?.[n] ? `${n} (learned mid-scene)` : n))
-                          .join(', ')}`}
+                        title={t(
+                          'Only these characters know this: %s',
+                          (e.audience ?? []).map((n) => (e.learned?.[n] ? t('%s (learned mid-scene)', n) : n)).join(', '),
+                        )}
                       >
                         🔒 {(e.audience ?? []).join(', ')}
                       </span>
                     )}
                     {e.model && (
-                      <span class="stage-worldlore__model" title="Noted by the model during play (world_note)">
+                      <span class="stage-worldlore__model" title={t('Noted by the model during play (world_note)')}>
                         📝
                       </span>
                     )}
                   </span>
-                  <button class="stage-worldlore__act" title={`Edit ${e.name}`} onClick={() => worldLoreEdit(e)}>
+                  <button class="stage-worldlore__act" title={t('Edit %s', e.name)} onClick={() => worldLoreEdit(e)}>
                     ✎
                   </button>
-                  <button class="stage-worldlore__act" title={`Delete ${e.name}`} onClick={() => void worldLoreDelete(e.name)}>
+                  <button class="stage-worldlore__act" title={t('Delete %s', e.name)} onClick={() => void worldLoreDelete(e.name)}>
                     ✕
                   </button>
                 </div>
@@ -663,18 +749,18 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
           >
             <input
               class="stage-worldlore-form__name"
-              placeholder="Name (e.g. The Accord)"
+              placeholder={t('Name (e.g. The Accord)')}
               value={loreName}
               onInput={(e) => setLoreName((e.target as HTMLInputElement).value)}
             />
             <label class="stage-worldlore-form__always">
               <input type="checkbox" checked={loreAlways} onChange={(e) => setLoreAlways((e.target as HTMLInputElement).checked)} />
-              always on
+              {t('always on')}
             </label>
             {!loreAlways && (
               <input
                 class="stage-worldlore-form__keys"
-                placeholder="Trigger keywords, comma-separated (e.g. accord, council)"
+                placeholder={t('Trigger keywords, comma-separated (e.g. accord, council)')}
                 value={loreKeys}
                 onInput={(e) => setLoreKeys((e.target as HTMLInputElement).value)}
               />
@@ -682,20 +768,20 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
             <textarea
               class="stage-worldlore-form__content"
               rows={3}
-              placeholder="What everyone on stage should know when this fires."
+              placeholder={t('What everyone on stage should know when this fires.')}
               value={loreContent}
               onInput={(e) => setLoreContent((e.target as HTMLTextAreaElement).value)}
             />
             {audienceChoices.length > 0 && (
               <div class="stage-worldlore-form__audience">
-                <span class="stage-worldlore-form__audience-label">Who knows this{loreAudience.length === 0 ? ' — everyone' : ''}</span>
+                <span class="stage-worldlore-form__audience-label">{loreAudience.length === 0 ? t('Who knows this — everyone') : t('Who knows this')}</span>
                 <div class="stage-worldlore-form__audience-chips">
                   {audienceChoices.map((name) => (
                     <button
                       key={name}
                       type="button"
                       class={`stage-worldlore-form__chip ${loreAudience.includes(name) ? 'stage-worldlore-form__chip--on' : ''}`}
-                      title={loreAudience.includes(name) ? `${name} knows this` : `Limit this to ${name}`}
+                      title={loreAudience.includes(name) ? t('%s knows this', name) : t('Limit this to %s', name)}
                       onClick={() => toggleAudience(name)}
                     >
                       {loreAudience.includes(name) ? '🔒 ' : ''}
@@ -703,21 +789,44 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
                     </button>
                   ))}
                 </div>
-                <span class="stage-hint">No selection = everyone on stage. Select characters to make this a secret only they know — the others never see it.</span>
+                <span class="stage-hint">{t('No selection = everyone on stage. Select characters to make this a secret only they know — the others never see it.')}</span>
               </div>
             )}
             <div class="stage-worldlore-form__actions">
               <button type="submit" class="stage-worldlore-form__save" disabled={!loreName.trim() || !loreContent.trim() || (!loreAlways && parsedLoreKeys.length === 0)}>
-                {loreEditing ? 'Save entry' : 'Add entry'}
+                {loreEditing ? t('Save entry') : t('Add entry')}
               </button>
               {loreEditing && (
                 <button type="button" class="stage-worldlore-form__cancel" onClick={resetLoreForm}>
-                  Cancel
+                  {t('Cancel')}
                 </button>
               )}
             </div>
           </form>
         </section>
+        <SessionDoctor
+          client={client}
+          sessionId={sessionId}
+          onSceneBreak={props.onNextScene ? (title) => { onClose(); props.onNextScene?.(title) } : undefined}
+        />
+
+        {props.onNextScene && (
+          <section class="stage-drawer__section">
+            <h4>{t('Next scene')}</h4>
+            <p class="stage-hint">
+              {t('End this scene at a chapter boundary and open the next one in the same world. The cast, the lore, and the scene-state card carry over; a recap and a cold open are drafted for you to edit. This chat stays exactly as it is.')}
+            </p>
+            <button
+              class="stage-nextscene__open"
+              onClick={() => {
+                onClose()
+                props.onNextScene?.('')
+              }}
+            >
+              {t('🎬 Start the next scene…')}
+            </button>
+          </section>
+        )}
         </>
         )}
 
@@ -725,24 +834,74 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
         {tab === 'session' && (
         <>
         <section class="stage-drawer__section">
-          <h4>Session</h4>
+          <h4>{t('Session')}</h4>
           <dl class="stage-detail">
-            <dt>Title</dt>
+            <dt>{t('Title')}</dt>
             <dd class="stage-detail__title">
               <span>{info?.title || '—'}</span>
-              <button class="stage-title-btn" title="Rename this chat" onClick={renameSession}>✎</button>
-              <button class="stage-title-btn" title="Regenerate the title from the conversation" onClick={regenerateTitle}>✨</button>
+              <button class="stage-title-btn" title={t('Rename this chat')} onClick={renameSession}>✎</button>
+              <button class="stage-title-btn" title={t('Regenerate the title from the conversation')} onClick={regenerateTitle}>✨</button>
             </dd>
-            <dt>Mode</dt>
+            <dt>{t('Mode')}</dt>
+            {/* i18n-exempt — experience is the wire mode token ('chat'/'play'), shown verbatim */}
             <dd>{info?.experience || 'chat'}</dd>
           </dl>
           <ModelPick client={client} sessionId={sessionId} currentProvider={info?.provider} currentModel={info?.model} />
+          {/* The scene as something you can read elsewhere. Rendered by the
+              daemon, not here: the client cannot tell a card greeting from a
+              reply (the wire drops that source), and attribution already has
+              three implementations without adding a fourth. */}
+          <button class="stage-export" disabled={exporting} onClick={exportStory}>
+            {exporting ? t('Exporting…') : t('⬇ Export as story (.md)')}
+          </button>
+        </section>
+
+        {/* Diagnostics: the id and transcript path, so a dogfooding session can
+            be found on disk or named in a bug report without a round trip
+            through the panel to look them up. Both ride SessionInfo already. */}
+        <section class="stage-drawer__section">
+          <h4>{t('Diagnostics')}</h4>
+          <dl class="stage-detail">
+            <dt>{t('Session')}</dt>
+            <dd class="stage-copyrow">
+              <code>{sessionId}</code>
+              <button
+                class="stage-title-btn"
+                title={t('Copy the session id')}
+                aria-label={t('Copy the session id')}
+                onClick={() => copyRow('id', sessionId)}
+              >
+                {copied === 'id' ? '✓' : '⧉'}
+              </button>
+            </dd>
+            {info?.path && (
+              <>
+                <dt>{t('Path')}</dt>
+                <dd class="stage-copyrow">
+                  <code title={info.path}>{info.path}</code>
+                  <button
+                    class="stage-title-btn"
+                    title={t('Copy the transcript path')}
+                    aria-label={t('Copy the transcript path')}
+                    onClick={() => copyRow('path', info.path!)}
+                  >
+                    {copied === 'path' ? '✓' : '⧉'}
+                  </button>
+                </dd>
+              </>
+            )}
+          </dl>
+          {/* Context lives in the panel, deliberately: Stage stays a reading
+              surface, and the panel already renders the whole breakdown. */}
+          <a class="stage-nav-link stage-inspect" href={panelHref(sessionId, 'context')}>
+            {t('🔍 Inspect context in the panel')}
+          </a>
         </section>
 
         {info?.experience === 'play' && (
           <section class="stage-drawer__section">
-            <h4>Cast</h4>
-            <p class="stage-hint">Who the director can bring on stage during the scene. Each is a real agent with its own memory. Changing the cast rebuilds the prompt — the next reply starts uncached.</p>
+            <h4>{t('Cast')}</h4>
+            <p class="stage-hint">{t('Who the director can bring on stage during the scene. Each is a real agent with its own memory. Changing the cast rebuilds the prompt — the next reply starts uncached.')}</p>
             <ul class="stage-cast">
               {Object.entries(info.cast ?? {}).map(([name, ref]) => (
                 <li key={name} class="stage-cast__member">
@@ -751,14 +910,16 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
                   {info.cast_models?.[name]?.model && (
                     <span
                       class="stage-cast__model"
-                      title={`Pinned model — this actor runs on ${info.cast_models[name].model} instead of ${
-                        info?.model ? `the session model (${info.model})` : 'the session model'
-                      }`}
+                      title={
+                        info?.model
+                          ? t('Pinned model — this actor runs on %s instead of the session model (%s)', info.cast_models[name].model, info.model)
+                          : t('Pinned model — this actor runs on %s instead of the session model', info.cast_models[name].model)
+                      }
                     >
                       ⚙ {info.cast_models[name].model}
                     </span>
                   )}
-                  <button class="stage-cast__remove" title={`Remove ${name}`} onClick={() => void castRemove(name)}>
+                  <button class="stage-cast__remove" title={t('Remove %s', name)} onClick={() => void castRemove(name)}>
                     ✕
                   </button>
                 </li>
@@ -773,13 +934,13 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
             >
               <input
                 class="stage-cast-add__name"
-                placeholder="Name"
+                placeholder={t('Name')}
                 value={castName}
                 onInput={(e) => setCastName((e.target as HTMLInputElement).value)}
               />
               <input
                 class="stage-cast-add__ref"
-                placeholder="Persona or card"
+                placeholder={t('Persona or card')}
                 value={castRef}
                 onInput={(e) => setCastRef((e.target as HTMLInputElement).value)}
               />
@@ -793,13 +954,13 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
                     setCastProvider(p)
                     setCastModel(m)
                   }}
-                  defaultLabel="Session model"
+                  defaultLabel={t('Session model')}
                   defaultProvider={info?.provider}
                   defaultModel={info?.model}
                 />
               </div>
               <button type="submit" class="stage-cast-add__go" disabled={!castName.trim() || !castRef.trim()}>
-                Add
+                {t('Add')}
               </button>
             </form>
           </section>
@@ -810,8 +971,8 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
         {/* You tab: the persona you play in this story. */}
         {tab === 'you' && (
         <section class="stage-drawer__section">
-          <h4>You (in this story)</h4>
-          <p class="stage-hint">Who you are to the character. Changing your name rebuilds the prompt — the next reply starts uncached; the description applies on the next message. Save a persona to reuse it, or set a default that pre-fills every new chat.</p>
+          <h4>{t('You (in this story)')}</h4>
+          <p class="stage-hint">{t('Who you are to the character. Changing your name rebuilds the prompt — the next reply starts uncached; the description applies on the next message. Save a persona to reuse it, or set a default that pre-fills every new chat.')}</p>
           {savedPersonas.length > 0 && (
             <div class="stage-userpersonas">
               {savedPersonas.map((p) => (
@@ -820,7 +981,7 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
                     {p.default ? '★ ' : ''}
                     {p.name}
                   </button>
-                  <button class="stage-userpersona__del" title={`Delete ${p.name}`} onClick={() => p.ref && void deletePersona(p.ref)}>
+                  <button class="stage-userpersona__del" title={t('Delete %s', p.name)} onClick={() => p.ref && void deletePersona(p.ref)}>
                     ✕
                   </button>
                 </span>
@@ -830,7 +991,7 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
           <input
             class="stage-user-name"
             type="text"
-            placeholder="Your name (e.g. Kira)"
+            placeholder={t('Your name (e.g. Kira)')}
             value={userName}
             onInput={(e) => setUserName((e.target as HTMLInputElement).value)}
             onBlur={() => commitUser()}
@@ -838,7 +999,7 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
           <textarea
             class="stage-user-desc"
             rows={2}
-            placeholder="e.g. A wary courier who trusts no one."
+            placeholder={t('e.g. A wary courier who trusts no one.')}
             value={userDesc}
             onInput={(e) => setUserDesc((e.target as HTMLTextAreaElement).value)}
             onBlur={() => commitUser()}
@@ -846,8 +1007,8 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
           <div class="stage-identity-row">
             <IdentityField
               key={`pronouns-${sessionId}`}
-              label="Pronouns"
-              placeholder="e.g. xe/xem"
+              label={t('Pronouns')}
+              placeholder={t('e.g. xe/xem')}
               options={PRONOUN_OPTIONS}
               value={userPronouns}
               onChange={setUserPronouns}
@@ -855,8 +1016,8 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
             />
             <IdentityField
               key={`gender-${sessionId}`}
-              label="Gender"
-              placeholder="Describe it your way"
+              label={t('Gender')}
+              placeholder={t('Describe it your way')}
               options={GENDER_OPTIONS}
               value={userGender}
               onChange={setUserGender}
@@ -865,15 +1026,15 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
           </div>
           <div class="stage-userpersona-actions">
             <button class="stage-userpersona-save" disabled={!userName.trim()} onClick={() => savePersona(false)}>
-              Save persona
+              {t('Save persona')}
             </button>
             <button
               class="stage-userpersona-save"
               disabled={!userName.trim()}
-              title="Save this persona and pre-fill it into every new chat"
+              title={t('Save this persona and pre-fill it into every new chat')}
               onClick={() => savePersona(true)}
             >
-              Save as default
+              {t('Save as default')}
             </button>
           </div>
         </section>
@@ -883,12 +1044,12 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
         {tab === 'scene' && (
         <>
         <section class="stage-drawer__section">
-          <h4>Author's note</h4>
-          <p class="stage-hint">A steering instruction added to every turn — tone, pacing, what happens next. Applies on the next message.</p>
+          <h4>{t("Author's note")}</h4>
+          <p class="stage-hint">{t('A steering instruction added to every turn — tone, pacing, what happens next. Applies on the next message.')}</p>
           <textarea
             class="stage-note"
             rows={3}
-            placeholder="e.g. Keep replies short and tense. It is raining."
+            placeholder={t('e.g. Keep replies short and tense. It is raining.')}
             value={noteDraft}
             onInput={(e) => setNoteDraft((e.target as HTMLTextAreaElement).value)}
             onBlur={commitNote}
@@ -897,9 +1058,9 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
 
         <section class="stage-drawer__section">
           <div class="stage-drawer__head2">
-            <h4>Scene</h4>
+            <h4>{t('Scene')}</h4>
             <label class="stage-import">
-              + Import
+              {t('+ Import')}
               <input
                 type="file"
                 accept="image/*"
@@ -913,7 +1074,7 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
           </div>
           <div class="stage-bg-grid">
             <button class={`stage-bg-tile stage-bg-tile--none ${!info?.background ? 'stage-bg-tile--on' : ''}`} onClick={() => void bind('')}>
-              None
+              {t('None')}
             </button>
             {/* Each tile is wrapped so the remove control has somewhere to sit:
                 the tile itself is a bare button whose image is a CSS background,
@@ -930,8 +1091,8 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
                 />
                 <button
                   class="stage-bg-cell__del"
-                  title="Delete this backdrop"
-                  aria-label="Delete this backdrop"
+                  title={t('Delete this backdrop')}
+                  aria-label={t('Delete this backdrop')}
                   onClick={() => void deleteBg(b.id)}
                 >
                   ✕
@@ -948,26 +1109,26 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
           >
             <input
               class="stage-bg-gen__prompt"
-              placeholder="Describe a scene to generate…"
+              placeholder={t('Describe a scene to generate…')}
               value={scenePrompt}
               disabled={generating}
               onInput={(e) => setScenePrompt((e.target as HTMLInputElement).value)}
             />
             <button type="submit" class="stage-bg-gen__go" disabled={generating || !scenePrompt.trim()}>
-              {generating ? 'Painting…' : 'Generate'}
+              {generating ? t('Painting…') : t('Generate')}
             </button>
           </form>
         </section>
 
         <section class="stage-drawer__section">
-          <h4>Lorebook</h4>
-          {(!lore || lore.entries.length === 0) && <p class="stage-empty">No lorebook for this character.</p>}
+          <h4>{t('Lorebook')}</h4>
+          {(!lore || lore.entries.length === 0) && <p class="stage-empty">{t('No lorebook for this character.')}</p>}
           <ul class="stage-lore">
             {lore?.entries.map((e, i) => (
               <li key={i} class={`stage-lore__entry ${e.fired ? 'stage-lore__entry--fired' : ''}`}>
                 <div class="stage-lore__keys">
                   {e.constant ? (
-                    <span class="stage-lore__const">always on</span>
+                    <span class="stage-lore__const">{t('always on')}</span>
                   ) : (
                     (e.keys ?? []).map((k) => (
                       <span key={k} class={`stage-lore__key ${(e.matched_keys ?? []).includes(k) ? 'stage-lore__key--hit' : ''}`}>
@@ -975,8 +1136,8 @@ export function Steering(props: { client: Client; sessionId: string; info: Sessi
                       </span>
                     ))
                   )}
-                  {e.fired && !e.dropped_for_budget && <span class="stage-lore__badge stage-lore__badge--fired">fired last turn</span>}
-                  {e.dropped_for_budget && <span class="stage-lore__badge stage-lore__badge--dropped">budget dropped</span>}
+                  {e.fired && !e.dropped_for_budget && <span class="stage-lore__badge stage-lore__badge--fired">{t('fired last turn')}</span>}
+                  {e.dropped_for_budget && <span class="stage-lore__badge stage-lore__badge--dropped">{t('budget dropped')}</span>}
                 </div>
                 {e.content && <p class="stage-lore__content">{e.content}</p>}
               </li>

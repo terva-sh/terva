@@ -7,6 +7,7 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/i18n"
 )
 
 // Extension slash commands, surfaced to the browser as a pane of buttons rather
@@ -46,14 +47,14 @@ func (s *wsSession) commandsView() *ctrlproto.CommandsView {
 // args["args"]) and applies its response. Only the "run" action is defined.
 func (s *wsSession) commandAction(action string, args map[string]string) error {
 	if action != "run" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown commands action %q", action)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown commands action %q", action))
 	}
 	name := args["name"]
 	if name == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "commands run: missing name")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("commands run: missing name"))
 	}
 	if s.extMgr == nil || !s.extMgr.HasCommand(name) {
-		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "no command /%s", name)
+		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no command /%s", name))
 	}
 	ctx, cancel := context.WithTimeout(s.ws.ctx, webExtCommandTimeout)
 	defer cancel()

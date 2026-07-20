@@ -218,6 +218,28 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	var gate *core.ConfirmGate
 	if pol != nil {
 		gate = core.NewPolicyGate(pol, &webConfirmer{s: s})
+		// The confirm dialog's "always this tool — save to config" answer
+		// (ConfirmDecision.PersistTool) is honoured here. This is the ONLY
+		// production gate that installs the persist callback, and it serves
+		// both surfaces that reach a durable grant: the web app and the
+		// TUI-over-ctrlproto client both approve through this session's gate,
+		// so wiring it once makes the TUI dialog's promise true as well. The
+		// steps mirror the /permissions pane's add_rule exactly — write a
+		// USER-scope allow rule (the self-approval ban forbids only PROJECT
+		// allow), re-apply live so every session honours it without a restart,
+		// and refresh an open pane. addUserPermissionRule is idempotent, so a
+		// repeated grant is a no-op.
+		gate.SetPersist(func(tool string) {
+			if err := addUserPermissionRule(config.PermissionRuleConfig{
+				Tool:     tool,
+				Decision: string(core.RuleAllow),
+			}); err != nil {
+				s.diag(fmt.Sprintf("note: could not save always-allow rule for %q: %v", tool, err))
+				return
+			}
+			s.ws.refreshAllPolicies()
+			s.ws.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("permissions"))
+		})
 		r.AdoptReadOnlySet(pol.ReadOnly)
 	}
 	r.SetAsker(&webAsker{s: s})
@@ -735,26 +757,34 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 // turn seals, the tail's variants (the kept response plus the new one) are
 // re-derived from disk, so both are switchable via turn.swipe. Like prompt it
 // returns once the turn is accepted; the regeneration streams to subscribers.
+// p.Guidance turns it into a GUIDED regenerate: the same retract-and-rerun, with
+// a one-turn cue carrying what the user wants different (and, unless
+// p.IgnorePrior, the withdrawn take itself, since guidance is usually relative).
+// The cue is request-scoped and never persisted — see retryCue.
+//
 // Epoch/busy guarding matches edit/delete/swipe.
-func (s *wsSession) retry(epoch uint64) error {
-	if err := s.reviseGuard(epoch); err != nil {
+func (s *wsSession) retry(p ctrlproto.TurnRetryParams) error {
+	if err := s.reviseGuard(p.Epoch); err != nil {
 		return err
 	}
 	msgs := s.agent.Messages()
 	idx := lastResponseStart(msgs)
+	// idx == 0 means the transcript opens with model output nobody has answered —
+	// a card greeting, possibly with advances on top. Retracting from there would
+	// take the greeting with it, and a greeting is card content with its own swipe,
+	// not a take this verb owns. Left refused, as it always was.
 	if idx <= 0 || idx >= len(msgs) {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "nothing to retry")
+		// A scene ending on something the AUTHOR wrote gets its own sentence:
+		// "nothing to retry" reads as a malfunction when a reply is plainly on
+		// screen — it just is not one the model produced.
+		if idx >= len(msgs) && len(msgs) > 0 && isAuthoredLine(msgs[len(msgs)-1]) {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s",
+				i18n.T("this scene ends on a line you wrote — there is no model take to regenerate. Use advance to continue the scene."))
+		}
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("nothing to retry"))
 	}
-	// Refuse rather than silently destroy authored work. The retract span runs to
-	// the end of the transcript, so in a Stage scene it can contain directed lines
-	// the USER wrote (postDirected appends them as assistant messages). Those are
-	// not a model take to throw away and regenerate — and they were written in
-	// response to the take being retried, so keeping them across a regenerate would
-	// not be coherent either. Say so, and point at the two things that do work.
-	if n := directedCount(msgs[idx:]); n > 0 {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
-			"regenerating would discard %d line(s) you wrote into this scene. Delete them first if you meant to, or use advance to continue the scene instead", n)
-	}
+	// Compose the cue BEFORE the truncation below removes the span it quotes.
+	cue := retryCue(p, msgs[idx:])
 	turnCtx, err := s.beginTurn()
 	if err != nil {
 		return err
@@ -771,31 +801,103 @@ func (s *wsSession) retry(epoch uint64) error {
 	s.agent.TruncateTo(idx)
 	s.clearTail()
 	s.launchTurn(turnCtx, func(ctx context.Context) error {
-		return s.agent.Continue(ctx, nil)
+		// An empty cue is exactly Continue, so an unguided regenerate keeps its
+		// old behaviour to the byte: an independent sample from the same prefix.
+		return s.agent.ContinueWithCue(ctx, nil, cue)
 	}, s.seedTail)
 	return nil
 }
 
-// directedCount reports how many of msgs the user authored into the scene
-// (Stage's directed lines, tagged core.MetaDirected). A regenerate retracts a
-// whole span, so this is what tells retry whether that span is purely a model
-// take — the only thing it is allowed to throw away.
-func directedCount(msgs []provider.Message) int {
-	n := 0
-	for _, m := range msgs {
-		if m.Meta[core.MetaSource] == core.MetaDirected {
-			n++
+// retryCue builds the one-turn steer for a guided regenerate, or "" for a plain
+// one. span is the take being withdrawn (the transcript from the retract point
+// on), captured before the caller truncates it away.
+//
+// The prior take rides along by DEFAULT because regenerate guidance is almost
+// always relative — "shorter", "less purple", "have her refuse instead" — and a
+// model that cannot see what it is being asked to change is guessing at the
+// referent. IgnorePrior is the opt-out for when the last attempt went somewhere
+// the user wants no trace of, where showing it would anchor the retry to exactly
+// what they are trying to get away from.
+func retryCue(p ctrlproto.TurnRetryParams, span []provider.Message) string {
+	guidance := strings.TrimSpace(p.Guidance)
+	if guidance == "" {
+		return "" // a plain regenerate steers nothing and quotes nothing
+	}
+	cue := i18n.P("stage.retry.cue",
+		"[Retry] Your previous reply has been withdrawn and you are writing it again. What the user wants different this time: %s",
+		guidance)
+	if p.IgnorePrior {
+		return cue + "\n\n" + i18n.P("stage.retry.instruction",
+			"Write the reply itself — do not mention this note, the withdrawn attempt, or the fact that you are retrying, and do not begin mid-sentence.")
+	}
+	if prior := priorTakeText(span); prior != "" {
+		cue += "\n\n" + i18n.P("stage.retry.prior", "The withdrawn attempt was:\n\n%s", prior)
+		return cue + "\n\n" + i18n.P("stage.retry.instruction_prior",
+			"Write a fresh reply that follows the guidance. Do not reuse the withdrawn attempt's phrasing or structure, do not mention this note or the fact that you are retrying, and do not begin mid-sentence.")
+	}
+	return cue + "\n\n" + i18n.P("stage.retry.instruction",
+		"Write the reply itself — do not mention this note, the withdrawn attempt, or the fact that you are retrying, and do not begin mid-sentence.")
+}
+
+// retryPriorLimit caps how much of a withdrawn take rides in a retry cue. A model
+// take is bounded by its own max_tokens, so this never fires on the Stage prose
+// it was written for; it is the guard for an agent span that spent a turn
+// accumulating tool traffic, where quoting the whole thing back would cost more
+// than the regeneration.
+const retryPriorLimit = 8000
+
+// priorTakeText renders the withdrawn span as the model should see it: its prose
+// only, tool calls and reasoning left out (they are machinery, not the reply the
+// user is asking to change), truncated at retryPriorLimit.
+func priorTakeText(span []provider.Message) string {
+	var parts []string
+	for _, m := range span {
+		if m.Role != provider.RoleAssistant {
+			continue
+		}
+		if prose := messageProse(m); prose != "" {
+			parts = append(parts, prose)
 		}
 	}
-	return n
+	text := strings.TrimSpace(strings.Join(parts, "\n\n"))
+	if len(text) > retryPriorLimit {
+		text = strings.TrimSpace(text[:retryPriorLimit]) + i18n.P("stage.retry.prior_truncated", "\n\n[…truncated]")
+	}
+	return text
+}
+
+// isAuthoredLine reports whether the author wrote this message rather than the
+// model producing it: their own turn, or a line they directed into the scene
+// (postDirected appends those as ASSISTANT messages tagged core.MetaDirected, and
+// SD5's cold open arrives the same way).
+//
+// Both are boundaries for a regenerate, and for the same reason: a retract span
+// may contain only model output. Role alone cannot tell them apart, which is what
+// made a directed line look like a take.
+func isAuthoredLine(m provider.Message) bool {
+	return m.Role == provider.RoleUser || m.Meta[core.MetaSource] == core.MetaDirected
 }
 
 // lastResponseStart is the index where the last response span begins: just after
-// the last user message. It is the retract point for a regenerate. Returns 0 when
-// there is no user message (a greeting-only transcript is not a retry target).
+// the last thing the AUTHOR put in the scene. It is the retract point for a
+// regenerate — everything from here to the end is model output, which is the only
+// thing this verb may throw away.
+//
+// It used to anchor on the last USER message alone, and that had two costs. A
+// scene ending in "[directed line, model reply]" put the authored line inside the
+// retract span, so retry refused the whole thing rather than regenerating the
+// reply — protecting the line by declining to work. And a session whose transcript
+// holds no user message at all (SD5 opens a scene on a cold open, and ▶ Advance
+// answers without you typing) had no anchor, so retry reported "nothing to retry"
+// with a real model take on screen. Anchoring on authorship instead of on role
+// fixes both: the authored line bounds the span rather than poisoning it.
+//
+// Returns 0 when the author has put nothing in the scene yet — a greeting, or a
+// greeting plus advances. The caller refuses that: the greeting is card content
+// with its own swipe, not a take to regenerate.
 func lastResponseStart(msgs []provider.Message) int {
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == provider.RoleUser {
+		if isAuthoredLine(msgs[i]) {
 			return i + 1
 		}
 	}
@@ -1057,7 +1159,7 @@ func (s *wsSession) reviseGuard(epoch uint64) error {
 		return ctrlproto.ErrBusy
 	}
 	if s.agent.TranscriptEpoch() != epoch {
-		return ctrlproto.Errorf(ctrlproto.CodeConflict, "transcript changed since epoch %d; reload and retry", epoch)
+		return ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("transcript changed since epoch %d; reload and retry", epoch))
 	}
 	return nil
 }
@@ -1072,10 +1174,10 @@ func (s *wsSession) editMessage(epoch uint64, index int, text string) error {
 	}
 	msgs := s.agent.Messages()
 	if index < 0 || index >= len(msgs) {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "message index %d out of range", index)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("message index %d out of range", index))
 	}
 	if _, ok := s.diskIndex(index); !ok {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the resume-window summary at index %d cannot be edited", index)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the resume-window summary at index %d cannot be edited", index))
 	}
 	edited := reviseMessageText(msgs[index], text)
 	// An edit within the current response span (the tail) rides the tail suffix
@@ -1096,7 +1198,7 @@ func (s *wsSession) editMessage(epoch uint64, index int, text string) error {
 func (s *wsSession) editMessageAsVariant(msgs []provider.Message, index int, edited provider.Message) error {
 	prior := msgs[index]
 	if !s.agent.ReplaceMessage(index, edited) {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "message index %d out of range", index)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("message index %d out of range", index))
 	}
 	if disk, ok := s.diskIndex(index); ok {
 		_ = s.sess.AppendReplaceVariant(disk, edited, "edit") // keep_prior: retain the original as a take
@@ -1188,10 +1290,10 @@ func (s *wsSession) deleteMessage(epoch uint64, index int) error {
 	}
 	disk, ok := s.diskIndex(index)
 	if !ok {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the resume-window summary at index %d cannot be deleted", index)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the resume-window summary at index %d cannot be deleted", index))
 	}
 	if !s.agent.DeleteMessage(index) {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "message index %d out of range", index)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("message index %d out of range", index))
 	}
 	_ = s.sess.AppendAmend(core.AmendDelete, disk, nil, "delete")
 	s.clearTail()
@@ -1234,10 +1336,10 @@ func (s *wsSession) swipe(epoch uint64, variant int) error {
 	t := s.tail
 	s.mu.Unlock()
 	if len(t.takes) < 2 {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no alternatives to swipe")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no alternatives to swipe"))
 	}
 	if variant < 0 || variant >= len(t.takes) {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "variant %d out of range", variant)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("variant %d out of range", variant))
 	}
 	if variant == t.active {
 		return nil // already live — nothing to write
@@ -1246,7 +1348,7 @@ func (s *wsSession) swipe(epoch uint64, variant int) error {
 	if t.start > len(msgs) {
 		// The transcript shrank under the tracked span (should not happen — the
 		// mutators that could clear it, but be safe rather than index-panic).
-		return ctrlproto.Errorf(ctrlproto.CodeConflict, "tail changed; reload and retry")
+		return ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("tail changed; reload and retry"))
 	}
 	newMsgs := append(append([]provider.Message(nil), msgs[:t.start]...), t.takes[variant]...)
 	s.agent.SetMessages(newMsgs)
@@ -1277,17 +1379,17 @@ func (s *wsSession) swipeMessage(epoch uint64, index, variant int) error {
 	mv := s.msgVars[index]
 	s.mu.Unlock()
 	if mv == nil || mv.count < 2 {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no alternatives to swipe at %d", index)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no alternatives to swipe at %d", index))
 	}
 	if variant < 0 || variant >= mv.count {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "variant %d out of range", variant)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("variant %d out of range", variant))
 	}
 	if variant == mv.active {
 		return nil // already live — nothing to write
 	}
 	disk, ok := s.diskIndex(index)
 	if !ok {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the resume-window summary at index %d has no variants", index)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the resume-window summary at index %d has no variants", index))
 	}
 	// Lazily hydrate a resumed position's full take list on the first swipe. The
 	// take list lives on disk at the on-disk index, so hydrate + persist use it.
@@ -1295,12 +1397,12 @@ func (s *wsSession) swipeMessage(epoch uint64, index, variant int) error {
 	if takes == nil {
 		hydrated, ok, err := core.SessionMsgVariant(s.sess.Path, disk)
 		if err != nil || !ok || len(hydrated.Takes) != mv.count {
-			return ctrlproto.Errorf(ctrlproto.CodeConflict, "could not load variants at %d; reload and retry", index)
+			return ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("could not load variants at %d; reload and retry", index))
 		}
 		takes = hydrated.Takes
 	}
 	if !s.agent.ReplaceMessage(index, takes[variant]) {
-		return ctrlproto.Errorf(ctrlproto.CodeConflict, "message %d changed; reload and retry", index)
+		return ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("message %d changed; reload and retry", index))
 	}
 	_ = s.sess.AppendMsgSelect(disk, variant, "swipe")
 	s.mu.Lock()
@@ -1324,11 +1426,11 @@ func (s *wsSession) pruneVariants(epoch uint64, index int) error {
 	mv := s.msgVars[index]
 	s.mu.Unlock()
 	if mv == nil || mv.count < 2 {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no variants to prune at %d", index)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no variants to prune at %d", index))
 	}
 	disk, ok := s.diskIndex(index)
 	if !ok {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the resume-window summary at index %d has no variants", index)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the resume-window summary at index %d has no variants", index))
 	}
 	_ = s.sess.AppendSeal(disk, mv.active, "prune")
 	s.mu.Lock()
@@ -1350,20 +1452,20 @@ func (s *wsSession) dropVariant(epoch uint64, index, variant int) error {
 	mv := s.msgVars[index]
 	s.mu.Unlock()
 	if mv == nil || mv.count < 2 {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "no variants to drop at %d", index)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no variants to drop at %d", index))
 	}
 	if variant < 0 || variant >= mv.count {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "variant %d out of range", variant)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("variant %d out of range", variant))
 	}
 	disk, ok := s.diskIndex(index)
 	if !ok {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the resume-window summary at index %d has no variants", index)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the resume-window summary at index %d has no variants", index))
 	}
 	takes := mv.takes
 	if takes == nil {
 		hydrated, ok, err := core.SessionMsgVariant(s.sess.Path, disk)
 		if err != nil || !ok || len(hydrated.Takes) != mv.count {
-			return ctrlproto.Errorf(ctrlproto.CodeConflict, "could not load variants at %d; reload and retry", index)
+			return ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("could not load variants at %d; reload and retry", index))
 		}
 		takes = hydrated.Takes
 	}
@@ -1922,6 +2024,7 @@ func (s *wsSession) info() ctrlproto.SessionInfo {
 		Cast:            s.sess.Meta.Cast,
 		CastModels:      castRoutesToView(s.sess.Meta.CastModels),
 		WorldLore:       worldLoreToView(s.sess.Meta.WorldLore),
+		ScenePinStale:   scenePinStaleFor(s.sess.Meta.WorldLore, s.messageCount()),
 		Coordination:    s.sess.Meta.Coordination,
 		World:           s.sess.Meta.World,
 		Path:            s.sess.Path,

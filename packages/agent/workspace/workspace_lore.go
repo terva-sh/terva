@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/i18n"
 )
 
 // The lore inspector + editor surface: lists the session's authored keyword-
@@ -84,7 +84,7 @@ func (s *wsSession) loreAction(action string, args map[string]string) error {
 	case "save":
 		name := strings.TrimSpace(args["name"])
 		if name == "" {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "save: missing name")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("save: missing name"))
 		}
 		scope, err := s.loreScope(args["scope"])
 		if err != nil {
@@ -98,10 +98,10 @@ func (s *wsSession) loreAction(action string, args map[string]string) error {
 			}
 		}
 		if strings.TrimSpace(args["content"]) == "" {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "save: content is required")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("save: content is required"))
 		}
 		if !constant && len(keys) == 0 {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "save: a non-constant entry needs at least one key")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("save: a non-constant entry needs at least one key"))
 		}
 		if err := saveLoreEntry(s.cwd, scope, name, keys, constant, args["content"]); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save: %v", err)
@@ -109,7 +109,7 @@ func (s *wsSession) loreAction(action string, args map[string]string) error {
 	case "delete":
 		name := strings.TrimSpace(args["name"])
 		if name == "" {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "delete: missing name")
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("delete: missing name"))
 		}
 		scope, err := s.loreScope(args["scope"])
 		if err != nil {
@@ -119,7 +119,7 @@ func (s *wsSession) loreAction(action string, args map[string]string) error {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "delete: %v", err)
 		}
 	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown lore action %q", action)
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown lore action %q", action))
 	}
 	s.reloadLore()
 	s.broadcast(ctrlproto.SurfaceUpdatedEvent("lore"))
@@ -212,7 +212,7 @@ func (s *wsSession) loreEntryScope(name string) string {
 func (s *wsSession) loreScope(want string) (string, error) {
 	if want == "project" {
 		if !s.trusted.Load() {
-			return "", ctrlproto.Errorf(ctrlproto.CodeUnsupported, "project lore needs a trusted workspace")
+			return "", ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("project lore needs a trusted workspace"))
 		}
 		return "project", nil
 	}
@@ -254,7 +254,7 @@ func saveLoreEntry(cwd, scope, name string, keys []string, constant bool, conten
 	if _, ok, err := lore.ParseEntry(doc, "web"); err != nil {
 		return err
 	} else if !ok {
-		return fmt.Errorf("entry is disabled or invalid")
+		return i18n.Errorf("entry is disabled or invalid")
 	}
 	if err := os.MkdirAll(loreDir(cwd, scope), 0o755); err != nil {
 		return err
@@ -271,7 +271,7 @@ func saveLoreEntry(cwd, scope, name string, keys []string, constant bool, conten
 func deleteLoreEntry(cwd, scope, name string) error {
 	path := loreFile(cwd, scope, name)
 	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("not a web-managed lore entry")
+		return i18n.Errorf("not a web-managed lore entry")
 	}
 	return os.Remove(path)
 }
