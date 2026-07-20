@@ -12,9 +12,15 @@ package workspace
 //
 // Frozen deliberately: a turn landing on the session mid-dialogue (a queued
 // prompt, a paired chat DM, another device) must not shift the ground under a
-// side chat already in progress. Open captures the system prompt, the
-// transcript, and the client once; every ask runs against that capture plus the
-// side chat's own prior exchanges, which the client carries.
+// side chat already in progress. Open captures the system prompt, the per-turn
+// ephemeral tail, the transcript, and the client once; every ask runs against
+// that capture plus the side chat's own prior exchanges, which the client
+// carries.
+//
+// The tail is captured because it is NOT part of the system prompt — the agent
+// assembles it per request, and it is where the bound user persona lives. A side
+// chat that froze only the system prompt was the one surface in the session that
+// did not know who it was talking to.
 
 import (
 	"context"
@@ -40,6 +46,17 @@ type sideChatSnapshot struct {
 	msgs   []provider.Message
 	client provider.Client
 	model  string
+	// ephemeral is the session's per-turn tail as it stood at open time: the
+	// bound user persona (who you are, your stated gender and pronouns), the
+	// author's note, the World lore in play. It is NOT part of ag.System — the
+	// agent assembles it per request — so freezing the system prompt alone left a
+	// side chat as the one surface that did not know who it was talking to. It
+	// would say "he" about a persona whose pronouns every other prompt had right.
+	//
+	// Rendered ONCE here rather than per ask, which is the same freeze the rest of
+	// this struct gets: a note edit or a lore change landing mid-dialogue must not
+	// shift the ground under an overlay already open.
+	ephemeral string
 }
 
 // SideChatOpen freezes sess and returns an id naming the snapshot.
@@ -61,6 +78,10 @@ func (w *Workspace) SideChatOpen(ctx context.Context, sess string) (string, erro
 		msgs:   ag.Messages(), // Messages returns a copy; the freeze is real
 		client: ag.Client,
 		model:  model,
+		// ContextPreview, not ContextProvider: the side-effect-free twin. A real
+		// turn's provider records which lore entries fired, and opening an overlay
+		// must not write that state on the session's behalf.
+		ephemeral: ag.ContextPreview(),
 	}
 
 	s.sidechatMu.Lock()
@@ -111,9 +132,14 @@ func (w *Workspace) SideChatAsk(ctx context.Context, sess, id string, prior []ct
 		Model:    snap.model,
 		System:   snap.system,
 		Messages: msgs,
+		// The frozen per-turn tail, so the side chat knows the same things about
+		// the scene and the player that the conversation it is asking about does.
+		EphemeralContext: snap.ephemeral,
 		// No tools: a side chat is conversational, not agentic.
 	}
-	return streamText(ctx, snap.client, req)
+	out, usage, err := streamText(ctx, snap.client, req)
+	s.recordSideChannelUsage(usage)
+	return out, err
 }
 
 // SideChatClose releases the snapshot. Unknown id is a no-op.
@@ -128,6 +154,18 @@ func (w *Workspace) SideChatClose(ctx context.Context, sess, id string) error {
 	return nil
 }
 
+// recordSideChannelUsage books a one-off completion's spend against this
+// session's agent. Nil-safe on every hop: a cold session has no agent, and a
+// stream that failed before its usage event yields a zero Usage the agent
+// discards, so callers can hand back whatever streamText returned without
+// guarding first.
+func (s *wsSession) recordSideChannelUsage(u provider.Usage) {
+	if s == nil || s.agent == nil {
+		return
+	}
+	s.agent.RecordSideChannelUsage(u)
+}
+
 func sideChatMessage(role provider.Role, text string) provider.Message {
 	return provider.Message{
 		Role:    role,
@@ -139,24 +177,38 @@ func sideChatMessage(role provider.Role, text string) provider.Message {
 // streamText drains a one-off completion to its final text, honouring ctx
 // cancellation. The daemon twin of the BtwDialog goroutine that used to run in
 // the TUI against the crutch agent's client.
-func streamText(ctx context.Context, cl provider.Client, req provider.Request) (string, error) {
+//
+// It returns the request's usage as well, and every caller is expected to book
+// it (core.Agent.RecordSideChannelUsage). It used to drop EventUsage on the
+// floor, which made every side-channel call — the router's pick, the voiced
+// line, suggest, side chat — free as far as the session file was concerned.
+// Returning it rather than exposing an opt-in variant is the point: a caller now
+// has to look at the usage to ignore it.
+func streamText(ctx context.Context, cl provider.Client, req provider.Request) (string, provider.Usage, error) {
 	stream, err := cl.Stream(ctx, req)
 	if err != nil {
-		return "", err
+		return "", provider.Usage{}, err
 	}
 	var sb strings.Builder
+	var usage provider.Usage
 	for ev := range stream {
 		switch e := ev.(type) {
 		case provider.EventTextDelta:
 			sb.WriteString(e.Delta)
+		case provider.EventUsage:
+			// Assign, don't accumulate: a provider emits exactly one EventUsage
+			// per request (it folds its own cumulative refreshes internally).
+			usage = e.Usage
 		case provider.EventDone:
 			if e.Err != nil {
-				return "", e.Err
+				// The spend is real even when the turn errored out, so hand the
+				// usage back rather than swallowing it with the error.
+				return "", usage, e.Err
 			}
 		}
 	}
 	if ctx.Err() != nil {
-		return "", ctx.Err()
+		return "", usage, ctx.Err()
 	}
-	return sb.String(), nil
+	return sb.String(), usage, nil
 }

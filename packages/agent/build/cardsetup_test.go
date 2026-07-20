@@ -339,12 +339,12 @@ func TestPerTurnContext_UserPersona(t *testing.T) {
 	if fn == nil {
 		t.Fatal("expected a provider when a user-persona record is present")
 	}
-	want := "About Alice (the user you are interacting with):\nA weary courier who trusts no one.\n\nStay in character.\n\nIt is raining."
+	want := "About Alice (the user you are interacting with):\nA weary courier who trusts no one.\n\nRefer to Alice by name or in the second person; do not assume a gender or pronouns they have not stated.\n\nStay in character.\n\nIt is raining."
 	if got := fn(); got != want {
 		t.Errorf("user/PHI/note order = %q", got)
 	}
 	r.userDesc.Set("A seasoned smuggler.") // a live edit is visible on the next turn
-	want = "About Alice (the user you are interacting with):\nA seasoned smuggler.\n\nStay in character.\n\nIt is raining."
+	want = "About Alice (the user you are interacting with):\nA seasoned smuggler.\n\nRefer to Alice by name or in the second person; do not assume a gender or pronouns they have not stated.\n\nStay in character.\n\nIt is raining."
 	if got := fn(); got != want {
 		t.Errorf("live user-desc edit not reflected: %q", got)
 	}
@@ -360,19 +360,51 @@ func TestPerTurnContext_UserPersona(t *testing.T) {
 		t.Errorf("empty user-desc should render nothing, got %q", got)
 	}
 	empty.userDesc.Set("Quiet and observant.")
-	if got := fn2(); got != "About User (the user you are interacting with):\nQuiet and observant." {
+	if got := fn2(); got != "About User (the user you are interacting with):\nQuiet and observant.\n\nRefer to User by name or in the second person; do not assume a gender or pronouns they have not stated." {
 		t.Errorf("user-desc added after wiring should inject: %q", got)
 	}
 
 	// An unnamed persona falls back to a generic frame rather than an empty name.
 	unnamed := &Resolved{userDesc: &NoteRecord{}}
 	unnamed.userDesc.Set("A stranger.")
-	if got := unnamed.PerTurnContext(nil)(); got != "About The user (the user you are interacting with):\nA stranger." {
+	if got := unnamed.PerTurnContext(nil)(); got != "About The user (the user you are interacting with):\nA stranger.\n\nRefer to the user in the second person; do not assume a gender or pronouns they have not stated." {
 		t.Errorf("unnamed user-desc frame = %q", got)
 	}
 
 	// A coding session carries no user-persona record (nil).
 	if (&Resolved{}).User() != nil {
 		t.Error("a bare Resolved should carry no user-persona record")
+	}
+}
+
+// TestPerTurnContext_UserPersonaIdentity pins the state > steer > nothing ladder:
+// stated pronouns/gender are used and the "don't assume" steer is dropped; unset
+// keeps the steer (the fallback from the gender-inference fix).
+func TestPerTurnContext_UserPersonaIdentity(t *testing.T) {
+	// Stated pronouns + gender: use them, DROP the steer.
+	r := &Resolved{userDesc: &NoteRecord{}, userName: "Kira", userGender: "woman", userPronouns: "she/her"}
+	r.userDesc.Set("A shopkeeper.")
+	want := "About Kira (the user you are interacting with):\nA shopkeeper.\n\nKira's gender: woman. Refer to Kira with she/her pronouns."
+	if got := r.PerTurnContext(nil)(); got != want {
+		t.Errorf("stated identity frame =\n %q\nwant\n %q", got, want)
+	}
+
+	// Pronouns only, no gender: pronoun instruction, no gender line, no steer.
+	r2 := &Resolved{userDesc: &NoteRecord{}, userName: "Ash", userPronouns: "they/them"}
+	r2.userDesc.Set("An envoy.")
+	want2 := "About Ash (the user you are interacting with):\nAn envoy.\n\nRefer to Ash with they/them pronouns."
+	if got := r2.PerTurnContext(nil)(); got != want2 {
+		t.Errorf("pronoun-only frame = %q, want %q", got, want2)
+	}
+
+	// Unset: the "don't assume" steer stays. Wording is "they have not stated",
+	// not "this description does not state": the steer no longer depends on a
+	// description existing — it now fires for a persona that has only a name, which
+	// is the case that used to render nothing at all.
+	r3 := &Resolved{userDesc: &NoteRecord{}, userName: "Kira"}
+	r3.userDesc.Set("A shopkeeper.")
+	want3 := "About Kira (the user you are interacting with):\nA shopkeeper.\n\nRefer to Kira by name or in the second person; do not assume a gender or pronouns they have not stated."
+	if got := r3.PerTurnContext(nil)(); got != want3 {
+		t.Errorf("unstated frame keeps the steer = %q, want %q", got, want3)
 	}
 }

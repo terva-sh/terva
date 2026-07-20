@@ -228,6 +228,14 @@ type Args struct {
 	// user_name config. Empty falls back to config then the literal "User".
 	As string
 
+	// UserGender and UserPronouns are the bound user-persona's stated identity,
+	// threaded from session meta. They ride the uncached per-turn tail (the
+	// user-persona frame), not the cached prefix — so a mid-session change is a
+	// cheap tail rewire, unlike As (the {{user}} macro). Empty leaves the frame's
+	// "don't assume" steer in place.
+	UserGender   string
+	UserPronouns string
+
 	// Project / NoProject force project-scoped mode on / off for this run,
 	// overriding the `project_scoped` field in .terva/config.json. In
 	// project-scoped mode all data lives in a project-local home and only the

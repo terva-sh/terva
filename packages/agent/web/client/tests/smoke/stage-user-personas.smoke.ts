@@ -60,6 +60,8 @@ test('stage: saved user personas in the steering drawer', async ({ page }) => {
 
   await page.locator('.stage-steer-btn').click()
   await expect(page.locator('.stage-drawer')).toBeVisible()
+  // Since the S10 tab split, "You (in this story)" lives behind the You tab.
+  await page.locator('.stage-drawer__tab', { hasText: 'You' }).click()
 
   // The saved persona chips render; the default is starred.
   await expect(page.locator('.stage-userpersona')).toHaveCount(2)
@@ -69,10 +71,11 @@ test('stage: saved user personas in the steering drawer', async ({ page }) => {
   await page.locator('.stage-userpersona__pick', { hasText: 'Rook' }).click()
   await expect.poll(() => bound).toEqual({ ref: 'rook' })
 
-  // Typing a name + "Save persona" saves it.
+  // Typing a name + "Save persona" saves it (identity fields ride along since
+  // the persona gender/pronouns work, empty when unset).
   await page.locator('.stage-user-name').fill('Nova')
   await page.locator('.stage-userpersona-save', { hasText: 'Save persona' }).click()
-  await expect.poll(() => saved).toEqual({ name: 'Nova', description: '' })
+  await expect.poll(() => saved).toEqual({ name: 'Nova', description: '', gender: '', pronouns: '' })
 
   // "Save as default" saves and marks it the default.
   await page.locator('.stage-userpersona-save', { hasText: 'Save as default' }).click()

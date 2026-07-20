@@ -13,7 +13,7 @@ var _ ctrlproto.UserPersonasController = (*Workspace)(nil)
 func (w *Workspace) userPersonaStore() *build.UserPersonaStore { return build.NewUserPersonaStore() }
 
 func toUserPersonaView(p build.UserPersona) ctrlproto.UserPersonaView {
-	return ctrlproto.UserPersonaView{Ref: p.Ref, Name: p.Name, Description: p.Description, Default: p.Default}
+	return ctrlproto.UserPersonaView{Ref: p.Ref, Name: p.Name, Description: p.Description, Gender: p.Gender, Pronouns: p.Pronouns, Default: p.Default}
 }
 
 // UserPersonasList returns every saved user persona.
@@ -37,7 +37,7 @@ func (w *Workspace) UserPersonaSave(_ context.Context, p ctrlproto.UserPersonaVi
 		return ctrlproto.UserPersonaView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "a user persona needs a name")
 	}
 	store := w.userPersonaStore()
-	up := build.UserPersona{Name: p.Name, Description: p.Description}
+	up := build.UserPersona{Name: p.Name, Description: p.Description, Gender: p.Gender, Pronouns: p.Pronouns}
 	if existing, err := store.Get(p.Name); err == nil {
 		up.Default = existing.Default
 	}

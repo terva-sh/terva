@@ -35,18 +35,36 @@ func (r *Resolved) PerTurnContextPeek(ag *core.Agent) func() string {
 // tailProvider builds the per-turn tail closure. When record is true the
 // resulting closure notes which lore fired (for /lore); when false it is pure.
 func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
-	// A non-nil note/userDesc record keeps the tail live even with no lore/PHI, so
-	// a note or user-persona added later takes effect — see Resolve, which
-	// allocates them only for immersive sessions.
-	if r == nil || (len(r.loreTriggered) == 0 && r.postHistory == "" && r.note == nil && r.userDesc == nil) {
+	// A non-nil note/userDesc/worldLore record keeps the tail live even with no
+	// lore/PHI, so a note, user persona, or World lore added later takes effect —
+	// see Resolve, which allocates them only for immersive sessions.
+	if r == nil || (len(r.loreTriggered) == 0 && r.postHistory == "" && r.note == nil && r.userDesc == nil && r.worldLore == nil) {
 		return nil
 	}
 	triggered, cfg, phi, rec, note := r.loreTriggered, r.loreConfig, r.postHistory, r.loreFired, r.note
+	world := r.worldLore
 	userDesc, userName := r.userDesc, r.userName
+	userGender, userPronouns := r.userGender, r.userPronouns
 	return func() string {
 		var parts []string
-		if len(triggered) > 0 {
-			res := lore.Select(triggered, cfg, recentLoreScan(ag.Messages()), lore.ApproxTokens)
+		// World lore (read live, so a world.lore.* edit lands next turn) joins the
+		// file/card triggered entries in ONE Select: a shared budget, a shared
+		// activation trace, and constants fire unconditionally there — World
+		// constants deliberately ride this uncached tail, not the cached prefix,
+		// because they are session-mutable. World entries lead the input so at
+		// equal Order the stable sort gives the world's shared facts budget and
+		// placement priority over a card's book.
+		entries := triggered
+		if world != nil {
+			if ws := world.Get(); len(ws) > 0 {
+				merged := make([]lore.Entry, 0, len(ws)+len(triggered))
+				merged = append(merged, ws...)
+				merged = append(merged, triggered...)
+				entries = merged
+			}
+		}
+		if len(entries) > 0 {
+			res := lore.Select(entries, cfg, recentLoreScan(ag.Messages()), lore.ApproxTokens)
 			fired := res.All()
 			if record && rec != nil {
 				// Record the full activation trace (which entries fired, why, and
@@ -62,9 +80,20 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 		// the world lore and before the card's instructions, framed so the model
 		// attributes it to {{user}} rather than the character. Read live so a
 		// user.bind mid-session takes effect next turn (shared-pointer record).
-		if userDesc != nil {
-			if d := strings.TrimSpace(userDesc.Get()); d != "" {
-				parts = append(parts, userPersonaFrame(userName, d))
+		// Gated on the persona having ANY content — a description, a gender, or
+		// pronouns. It used to be gated on the DESCRIPTION alone, so a user who
+		// picked their pronouns from the dropdown and wrote no bio got nothing at
+		// all: not their pronouns, and not even the anti-inference steer this frame
+		// exists to carry. That is the likeliest way to fill the form in (the
+		// dropdowns are one click; the bio is work) and it was the one that silently
+		// did nothing.
+		{
+			d := ""
+			if userDesc != nil {
+				d = strings.TrimSpace(userDesc.Get())
+			}
+			if d != "" || strings.TrimSpace(userGender) != "" || strings.TrimSpace(userPronouns) != "" {
+				parts = append(parts, userPersonaFrame(userName, userPronouns, userGender, d))
 			}
 		}
 		if phi != "" {
@@ -85,11 +114,88 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 // userPersonaFrame frames the bound user-persona description so the model
 // attributes it to {{user}} (the human in the scene), not the character. The
 // name mirrors the {{user}} macro already baked into the charter/greeting.
-func userPersonaFrame(name, desc string) string {
-	if strings.TrimSpace(name) == "" {
-		name = "The user"
+func userPersonaFrame(name, pronouns, gender, desc string) string {
+	label := UserPersonaLabel(name)
+	id := strings.Join(UserPersonaIdentity(name, gender, pronouns), " ")
+	d := strings.TrimSpace(desc)
+	if d == "" {
+		// No bio to introduce, so no "About X:" header — a colon promising a
+		// description that never arrives reads as truncated output. The identity
+		// clauses name the persona themselves, so they stand alone.
+		return id
 	}
-	return "About " + name + " (the user you are interacting with):\n" + desc
+	return "About " + label + " (the user you are interacting with):\n" + d + "\n\n" + id
+}
+
+// UserPersonaLabel is how a prompt names the human in the scene: their bound
+// persona name, or "The user" when they have not given one.
+func UserPersonaLabel(name string) string {
+	if n := strings.TrimSpace(name); n != "" {
+		return n
+	}
+	return "The user"
+}
+
+// UserPersonaIdentity renders the gender/pronoun clauses for the human in the
+// scene. Exported because the side-channel prompts need exactly this and were
+// each hand-rolling a "Name: description" line that dropped identity entirely —
+// the suggest drafter (writing AS the player) and the routed voice call (writing
+// TO them) were the two paths most able to misgender someone, and the two that
+// knew least. One function now, so they cannot drift apart again.
+//
+// State > steer > nothing. When the persona STATES its identity, tell the model
+// to use it; when it does not, steer the model off inventing one (the dogfood
+// gender-inference bug: "his back" / "Shopkeeper Kira" for a persona whose
+// description gave no gender).
+func UserPersonaIdentity(name, gender, pronouns string) []string {
+	label := UserPersonaLabel(name)
+	g, pr := strings.TrimSpace(gender), strings.TrimSpace(pronouns)
+	// "Prefer not to say" is an answer, not a gender. Restating it as one ("their
+	// gender: Prefer not to say") tells the model nothing and reads as a value;
+	// the user declining to state it is precisely the case for the steer.
+	if strings.EqualFold(g, "prefer not to say") {
+		g = ""
+	}
+
+	var id []string
+	if g != "" {
+		id = append(id, label+"'s gender: "+g+".")
+	}
+	switch {
+	case pr != "":
+		id = append(id, "Refer to "+label+" with "+pr+" pronouns.")
+	case g != "":
+		// Gender stated, pronouns not. The old text asserted the gender and then, in
+		// the same breath, told the model not to assume one — so it either ignored
+		// the contradiction or ignored the gender. Say the true, narrower thing.
+		id = append(id, "Their pronouns are not stated — use their name or the second person rather than inferring pronouns from the above.")
+	case label == "The user":
+		id = append(id, "Refer to the user in the second person; do not assume a gender or pronouns they have not stated.")
+	default:
+		id = append(id, "Refer to "+label+" by name or in the second person; do not assume a gender or pronouns they have not stated.")
+	}
+	return id
+}
+
+// UserPersonaBrief is the compact one-block form for side-channel prompts: who
+// the player is, then how to refer to them. Empty only when nothing is bound at
+// all, so a caller can fall back to its own "not specified" wording.
+func UserPersonaBrief(name, desc, gender, pronouns string) string {
+	who := strings.TrimSpace(name)
+	if d := strings.TrimSpace(desc); d != "" {
+		if who != "" {
+			who += ": " + d
+		} else {
+			who = d
+		}
+	}
+	if who == "" && strings.TrimSpace(gender) == "" && strings.TrimSpace(pronouns) == "" {
+		return ""
+	}
+	if who == "" {
+		who = UserPersonaLabel(name)
+	}
+	return who + "\n" + strings.Join(UserPersonaIdentity(name, gender, pronouns), " ")
 }
 
 // recentLoreScan returns the visible text of recent messages, newest first,
@@ -307,4 +413,71 @@ func (r *Resolved) LoreFired() *LoreFiredRecord {
 		return nil
 	}
 	return r.loreFired
+}
+
+// WorldLoreRecord holds the session's live World lore entries behind a pointer
+// on Resolved, the same shared-pointer contract as NoteRecord: the workspace
+// (the world.lore.* goroutine) writes it, the per-turn tail closure (turn
+// goroutine) reads it — guarded by the mutex. Entries are stored in engine
+// form (lore.Entry) so the tail merges them straight into Select.
+type WorldLoreRecord struct {
+	mu      sync.Mutex
+	entries []lore.Entry
+}
+
+// Set replaces the World lore entries (a world.lore.* edit); nil clears them.
+func (w *WorldLoreRecord) Set(entries []lore.Entry) {
+	w.mu.Lock()
+	w.entries = entries
+	w.mu.Unlock()
+}
+
+// Get returns the current World lore entries (the slice the record holds —
+// callers must not mutate it; Set always replaces wholesale).
+func (w *WorldLoreRecord) Get() []lore.Entry {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.entries
+}
+
+// WorldLore returns the session's live World-lore record, or nil for a
+// non-immersive session. The workspace retains this pointer (seeding it from
+// persisted meta on materialize) so world.lore.* edits update the entries the
+// per-turn tail scans.
+func (r *Resolved) WorldLore() *WorldLoreRecord {
+	if r == nil {
+		return nil
+	}
+	return r.worldLore
+}
+
+// newWorldLoreRecord allocates a live World-lore record for an immersive
+// session, or nil for a coding session — the twin of newNoteRecord.
+func newWorldLoreRecord(immersive bool) *WorldLoreRecord {
+	if !immersive {
+		return nil
+	}
+	return &WorldLoreRecord{}
+}
+
+// WorldLoreEntries maps persisted World lore (SessionMeta.WorldLore) onto
+// engine entries for the per-turn scan. Source "world" tags the activation
+// trace; DefaultOrder keeps world entries peers of a card's book, with input
+// position (world first — see tailProvider) breaking the tie.
+func WorldLoreEntries(meta []core.WorldLoreEntry) []lore.Entry {
+	if len(meta) == 0 {
+		return nil
+	}
+	out := make([]lore.Entry, 0, len(meta))
+	for _, e := range meta {
+		out = append(out, lore.Entry{
+			Name:     e.Name,
+			Keys:     append([]string(nil), e.Keys...),
+			Constant: e.Constant,
+			Order:    lore.DefaultOrder,
+			Content:  e.Content,
+			Source:   "world",
+		})
+	}
+	return out
 }

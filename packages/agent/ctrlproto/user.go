@@ -25,5 +25,7 @@ type UserController interface {
 type UserBindParams struct {
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
+	Gender      string `json:"gender,omitempty"`
+	Pronouns    string `json:"pronouns,omitempty"`
 	Ref         string `json:"ref,omitempty"`
 }

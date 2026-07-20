@@ -20,6 +20,8 @@ type UserPersona struct {
 	Ref         string `json:"ref"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	Gender      string `json:"gender,omitempty"`
+	Pronouns    string `json:"pronouns,omitempty"`
 	Default     bool   `json:"default,omitempty"`
 }
 

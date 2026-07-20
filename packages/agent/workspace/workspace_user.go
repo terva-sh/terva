@@ -25,12 +25,14 @@ var _ ctrlproto.UserController = (*Workspace)(nil)
 func (w *Workspace) UserBind(_ context.Context, sess string, p ctrlproto.UserBindParams) error {
 	name := strings.TrimSpace(p.Name)
 	desc := strings.TrimSpace(p.Description)
+	gender := strings.TrimSpace(p.Gender)
+	pronouns := strings.TrimSpace(p.Pronouns)
 	if ref := strings.TrimSpace(p.Ref); ref != "" {
 		up, err := w.userPersonaStore().Get(ref)
 		if err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeNotFound, "no saved user persona %q", ref)
 		}
-		name, desc = up.Name, up.Description
+		name, desc, gender, pronouns = up.Name, up.Description, up.Gender, up.Pronouns
 	}
 	s, err := w.resolve(sess)
 	if err != nil {
@@ -39,7 +41,7 @@ func (w *Workspace) UserBind(_ context.Context, sess string, p ctrlproto.UserBin
 	if s.user == nil {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "the user persona is only available for chat/play sessions")
 	}
-	if err := s.sess.SetUserPersona(name, desc); err != nil {
+	if err := s.sess.SetUserPersona(name, desc, gender, pronouns); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "set user persona: %v", err)
 	}
 	// The description takes effect next turn for free — update the live tail record.
@@ -48,13 +50,16 @@ func (w *Workspace) UserBind(_ context.Context, sess string, p ctrlproto.UserBin
 	// deliberate rebuild: thread the new name into args, rebuild the prompt prefix
 	// (rebuildTools re-Resolves + SetSystem, emitting the honest prompt-rebuilt
 	// cache-bust notice), then re-wire the tail (reloadLore) so the triggered lore
-	// and the user-persona frame pick up the new {{user}} name too. An unchanged
-	// name skips all of it — a description-only edit stays a free tail update.
+	// and the user-persona frame pick up the new {{user}} name too. Gender/pronouns
+	// ride the uncached tail (Args → the user-persona frame), so a change there is a
+	// cheap tail rewire (reloadLore) with no cache bust. An unchanged name AND
+	// unchanged gender/pronouns skips it all — a description-only edit stays free.
 	s.mu.Lock()
 	nameChanged := s.args.As != name
-	if nameChanged {
-		s.args.As = name
-	}
+	tailIdentityChanged := s.args.UserGender != gender || s.args.UserPronouns != pronouns
+	s.args.As = name
+	s.args.UserGender = gender
+	s.args.UserPronouns = pronouns
 	s.mu.Unlock()
 	if nameChanged {
 		s.rebuildTools("user-persona")
@@ -69,6 +74,10 @@ func (w *Workspace) UserBind(_ context.Context, sess string, p ctrlproto.UserBin
 				s.seedDeferredGreeting(s.sess, rr.CardGreetings)
 			}
 		}
+	} else if tailIdentityChanged {
+		// Gender/pronouns only — re-wire the tail so the user-persona frame picks up
+		// the new values next turn, without the prefix rebuild a name change forces.
+		s.reloadLore()
 	}
 	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	return nil

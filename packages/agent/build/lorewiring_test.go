@@ -143,6 +143,90 @@ func TestPerTurnContext_RecordsBudgetDropped(t *testing.T) {
 	}
 }
 
+// World lore (Worlds L1) rides the same per-turn Select as file/card lore:
+// constants inject every turn, keyed entries fire on recent-message keywords,
+// and a live edit (world.lore.put) is visible on the next call with no rebuild
+// — the reason World constants stay OUT of the cached prefix.
+func TestPerTurnContext_WorldLore(t *testing.T) {
+	// DefaultOrder on the file entry mirrors ParseEntry's default — the
+	// equal-order case the placement rule below is about.
+	r := &Resolved{
+		loreTriggered: []lore.Entry{{Name: "vault", Keys: []string{"vault"}, Content: "The vault is sealed.", Order: lore.DefaultOrder, Source: "vault.md"}},
+		loreFired:     &LoreFiredRecord{},
+		worldLore:     &WorldLoreRecord{},
+	}
+	r.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
+		{Name: "The Accord", Constant: true, Content: "Magic is outlawed in the city."},
+		{Name: "Elira's debt", Keys: []string{"debt"}, Content: "Elira owes the guild a life."},
+	}))
+	ag := &core.Agent{}
+	ag.SetMessages([]provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "we approach the vault"}}},
+	})
+
+	fn := r.PerTurnContext(ag)
+	if fn == nil {
+		t.Fatal("expected a live tail with world lore present")
+	}
+	got := fn()
+	if !strings.Contains(got, "Magic is outlawed") {
+		t.Errorf("a constant world entry must inject every turn, got %q", got)
+	}
+	if !strings.Contains(got, "vault is sealed") {
+		t.Errorf("card/file lore must still fire alongside world lore, got %q", got)
+	}
+	if strings.Contains(got, "owes the guild") {
+		t.Errorf("an un-triggered keyed world entry must not inject, got %q", got)
+	}
+	// At equal Order the world's shared facts lead the card's book (stable sort,
+	// world entries first in the Select input).
+	if strings.Index(got, "Magic is outlawed") > strings.Index(got, "vault is sealed") {
+		t.Errorf("world lore should place before card/file lore, got %q", got)
+	}
+	// The activation trace tags world entries with Source "world"; a constant
+	// fires with no keys.
+	var world LoreFired
+	for _, f := range r.loreFired.Get() {
+		if f.Source == "world" {
+			world = f
+		}
+	}
+	if world.Name != "The Accord" || !world.Constant || len(world.Keys) != 0 {
+		t.Errorf("constant world entry trace = %+v", world)
+	}
+
+	// The keyed entry fires once its keyword enters the scan window.
+	ag.SetMessages([]provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "what about her debt?"}}},
+	})
+	if got := fn(); !strings.Contains(got, "owes the guild") {
+		t.Errorf("keyed world entry should fire on its keyword, got %q", got)
+	}
+
+	// A live edit lands on the next call — no rebuild, no cache bust.
+	r.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
+		{Name: "The Accord", Constant: true, Content: "The Accord has fallen."},
+	}))
+	if got := fn(); !strings.Contains(got, "Accord has fallen") || strings.Contains(got, "Magic is outlawed") {
+		t.Errorf("live world-lore edit not reflected: %q", got)
+	}
+
+	// A bare world record keeps the tail live (an entry added later injects),
+	// exactly like a note record.
+	empty := &Resolved{worldLore: &WorldLoreRecord{}, loreFired: &LoreFiredRecord{}}
+	fn2 := empty.PerTurnContext(&core.Agent{})
+	if fn2 == nil {
+		t.Fatal("a world-lore record must keep the tail live even with no lore/PHI/note")
+	}
+	if got := fn2(); got != "" {
+		t.Errorf("empty world lore should render nothing, got %q", got)
+	}
+	empty.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{{Name: "Seed", Constant: true, Content: "It begins."}}))
+	if got := fn2(); !strings.Contains(got, "It begins.") {
+		t.Errorf("world lore added after wiring should inject: %q", got)
+	}
+}
+
 func TestLoreSourcesOf(t *testing.T) {
 	srcs := loreSourcesOf([]lore.Entry{{Source: "vault.md"}, {Name: "NoSource"}})
 	if len(srcs) != 2 || srcs[0] != "vault.md" || srcs[1] != "NoSource" {

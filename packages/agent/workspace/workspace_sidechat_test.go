@@ -208,3 +208,77 @@ func TestSideChatOpenCap(t *testing.T) {
 		t.Fatalf("open past the cap of %d succeeded", maxOpenSideChats)
 	}
 }
+
+// A side chat was the one surface that did not know who it was talking to.
+//
+// The per-turn tail — the bound user persona (their stated gender and pronouns),
+// the author's note, the World lore in play — is NOT part of ag.System; the agent
+// assembles it per request. Freezing the system prompt alone therefore dropped
+// all of it, so /btw could say "he" about a persona whose pronouns every other
+// prompt in the session had right.
+func TestSideChatCarriesTheFrozenPerTurnTail(t *testing.T) {
+	w, s, cl := sidechatTestSession(t, "s1")
+	s.agent.SetContextProviderPeek(func() string {
+		return "About Kira (the user you are interacting with):\nA wary courier.\n\nRefer to Kira with she/her pronouns."
+	})
+
+	id, err := w.SideChatOpen(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := w.SideChatAsk(context.Background(), "s1", id, nil, "who am I talking to?"); err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+
+	req := cl.lastRequest(t)
+	if !strings.Contains(req.EphemeralContext, "she/her") {
+		t.Errorf("the player's pronouns never reached the side chat:\n%q", req.EphemeralContext)
+	}
+	if !strings.Contains(req.EphemeralContext, "A wary courier") {
+		t.Errorf("the persona description never reached the side chat:\n%q", req.EphemeralContext)
+	}
+}
+
+// Frozen means frozen: the tail is rendered once at open, like the system prompt
+// and the transcript beside it. A note edit or a lore change landing mid-dialogue
+// must not shift the ground under an overlay already in progress.
+func TestSideChatTailIsFrozenAtOpen(t *testing.T) {
+	w, s, cl := sidechatTestSession(t, "s1")
+	tail := "Refer to Kira with she/her pronouns."
+	s.agent.SetContextProviderPeek(func() string { return tail })
+
+	id, err := w.SideChatOpen(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// The live session changes underneath the open overlay.
+	tail = "Refer to Ash with they/them pronouns."
+
+	if _, err := w.SideChatAsk(context.Background(), "s1", id, nil, "still there?"); err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if got := cl.lastRequest(t).EphemeralContext; !strings.Contains(got, "she/her") {
+		t.Errorf("the tail moved under an open side chat: %q", got)
+	}
+}
+
+// Opening an overlay must not write per-turn state on the session's behalf: a
+// real turn's ContextProvider records which lore entries fired, and a side chat
+// firing them would corrupt the session's own accounting. ContextPreview is the
+// side-effect-free twin, and this pins that we use it.
+func TestSideChatOpenUsesTheSideEffectFreeProvider(t *testing.T) {
+	w, s, _ := sidechatTestSession(t, "s1")
+	liveCalls := 0
+	s.agent.SetContextProvider(func() string {
+		liveCalls++
+		return "live (records what fired)"
+	})
+	s.agent.SetContextProviderPeek(func() string { return "peeked" })
+
+	if _, err := w.SideChatOpen(context.Background(), "s1"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if liveCalls != 0 {
+		t.Errorf("opening a side chat called the side-effecting provider %d time(s)", liveCalls)
+	}
+}
