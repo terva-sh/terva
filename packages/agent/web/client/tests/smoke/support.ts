@@ -15,6 +15,14 @@ export type MockBackend = {
   subscribed: Promise<void>
   // Push one conversation event frame to the client (default: the smoke session).
   pushEvent: (event: Record<string, unknown>, sess?: string) => void
+  // How many `subscribe` frames have arrived, across ALL connections. A client
+  // must re-subscribe after a reconnect — server-side subscriptions are
+  // per-connection and die with the socket — so this counter is what proves it.
+  subscribeCount: () => number
+  // Drop the socket from the server side, the way a daemon restart, a laptop
+  // sleep, or a radio handoff does. The client reconnects on its own; the test
+  // then asserts what it does (or fails to do) on the new connection.
+  drop: () => void
 }
 
 export type MockBackendOptions = {
@@ -29,6 +37,7 @@ export type MockBackendOptions = {
 export async function installMockBackend(page: Page, opts: MockBackendOptions = {}): Promise<MockBackend> {
   let current: WebSocketRoute | null = null
   let markSubscribed: () => void = () => {}
+  let subscribes = 0
   const subscribed = new Promise<void>((r) => (markSubscribed = r))
 
   await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
@@ -48,7 +57,10 @@ export async function installMockBackend(page: Page, opts: MockBackendOptions = 
       if (f.kind === 'cmd') {
         // selectSession fires `subscribe` (a fire-and-forget cmd) once curRef is
         // set — that is our deterministic "ready for events" signal.
-        if (f.method === 'subscribe') markSubscribed()
+        if (f.method === 'subscribe') {
+          subscribes++
+          markSubscribed()
+        }
         // Only send()-style calls await a resp; fire()-style verbs (subscribe,
         // prompt, queue, …) ignore one, so a reply is harmless either way.
         if (f.id != null) {
@@ -70,6 +82,11 @@ export async function installMockBackend(page: Page, opts: MockBackendOptions = 
     pushEvent(event, sess = SMOKE_SESSION) {
       if (!current) throw new Error('mock backend: no active socket yet')
       current.send(JSON.stringify({ kind: 'event', sess, event }))
+    },
+    subscribeCount: () => subscribes,
+    drop() {
+      if (!current) throw new Error('mock backend: no active socket yet')
+      current.close()
     },
   }
 }

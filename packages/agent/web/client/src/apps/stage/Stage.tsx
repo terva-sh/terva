@@ -13,6 +13,13 @@ type View = { screen: 'library' } | { screen: 'chat'; session: string }
 export function Stage() {
   const [status, setStatus] = useState<Status>('connecting')
   const [ready, setReady] = useState(false)
+  // generation counts CONNECTIONS, not renders. Every hello — the first and every
+  // one after a reconnect — bumps it, and the chat's subscription effect depends on
+  // it. Server-side subscriptions live and die with the socket, so without this a
+  // reconnected Stage held a subscription the daemon no longer had: turns still ran
+  // (the socket was open) but nothing came back, so neither the user's message nor
+  // the reply ever rendered and only a reload recovered.
+  const [generation, setGeneration] = useState(0)
   const [view, setView] = useState<View>({ screen: 'library' })
 
   const clientRef = useRef<Client | null>(null)
@@ -21,7 +28,10 @@ export function Stage() {
 
   useEffect(() => {
     client.onStatus = setStatus
-    client.onReady = () => setReady(true)
+    client.onReady = () => {
+      setReady(true)
+      setGeneration((g) => g + 1)
+    }
     client.connect()
     return () => client.close()
   }, [client])
@@ -34,6 +44,7 @@ export function Stage() {
         key={view.session}
         client={client}
         sessionId={view.session}
+        generation={generation}
         onBack={() => setView({ screen: 'library' })}
         onOpenSession={(session) => setView({ screen: 'chat', session })}
       />

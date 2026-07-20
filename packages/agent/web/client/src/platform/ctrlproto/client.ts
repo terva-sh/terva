@@ -71,6 +71,12 @@ export class Client {
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
   private stopped = false
 
+  // The carrier's per-file upload bound, from the server hello (0 = unbounded /
+  // not yet connected). Read it before posting file bytes: going over does not
+  // return an error, it drops the socket, and the request dies with a generic
+  // "connection closed" that names nothing the user can act on.
+  maxUploadBytes = 0
+
   onEvent: (sess: string, ev: WireEvent) => void = () => {}
   onStatus: (s: Status) => void = () => {}
   onReady: (hello?: ServerHello) => void = () => {}
@@ -125,6 +131,7 @@ export class Client {
 
   private onFrame(f: Frame) {
     if (f.kind === 'hello') {
+      this.maxUploadBytes = f.hello?.max_upload_bytes ?? 0
       this.onStatus('open')
       this.onReady(f.hello)
       return
