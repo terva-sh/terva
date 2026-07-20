@@ -215,10 +215,10 @@ func TestSetUserPersonaRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetUserPersona("Kir", "a nervous apprentice"); err != nil {
+	if err := s.SetUserPersona("Kir", "a nervous apprentice", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetUserPersona("Kira", "a seasoned courier who trusts no one"); err != nil { // last wins
+	if err := s.SetUserPersona("Kira", "a seasoned courier who trusts no one", "woman", "she/her"); err != nil { // last wins
 		t.Fatal(err)
 	}
 	if err := s.AppendMessage(revUser("hi")); err != nil { // keep the session from being pruned on Close
@@ -237,7 +237,13 @@ func TestSetUserPersonaRoundTrips(t *testing.T) {
 	if got := s2.Meta.UserDescription; got != "a seasoned courier who trusts no one" {
 		t.Errorf("user description did not round-trip (last-wins): %q", got)
 	}
-	if err := s2.SetUserPersona("", ""); err != nil { // clear both halves
+	if got := s2.Meta.UserGender; got != "woman" {
+		t.Errorf("user gender did not round-trip (last-wins): %q", got)
+	}
+	if got := s2.Meta.UserPronouns; got != "she/her" {
+		t.Errorf("user pronouns did not round-trip (last-wins): %q", got)
+	}
+	if err := s2.SetUserPersona("", "", "", ""); err != nil { // clear all halves
 		t.Fatal(err)
 	}
 	_ = s2.Close()
@@ -249,5 +255,8 @@ func TestSetUserPersonaRoundTrips(t *testing.T) {
 	defer s3.Close()
 	if s3.Meta.UserName != "" || s3.Meta.UserDescription != "" {
 		t.Errorf("cleared user persona did not persist empty: name=%q desc=%q", s3.Meta.UserName, s3.Meta.UserDescription)
+	}
+	if s3.Meta.UserGender != "" || s3.Meta.UserPronouns != "" {
+		t.Errorf("cleared gender/pronouns did not persist empty: gender=%q pronouns=%q", s3.Meta.UserGender, s3.Meta.UserPronouns)
 	}
 }

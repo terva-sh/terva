@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"time"
 
 	"terva.sh/terva/packages/provider"
 )
@@ -82,6 +83,19 @@ func ReadReplayRows(path string) ([]ReplayRow, SessionMeta, error) {
 	}); err != nil {
 		return nil, SessionMeta{}, err
 	}
+	// Same zero-Time backfill OpenSession applies (see backfillZeroTimes): a
+	// pre-stamp-fix greeting row must not play back from year one.
+	last := meta.Started
+	for i := range rows {
+		if rows[i].Kind != ReplayRowMessage {
+			continue
+		}
+		if rows[i].Message.Time.IsZero() {
+			rows[i].Message.Time = last
+		} else {
+			last = rows[i].Message.Time
+		}
+	}
 	return rows, meta, nil
 }
 
@@ -107,6 +121,9 @@ func StreamReplayMessages(ctx context.Context, path string, maxBytes int64, fn f
 
 	row := 0
 	rep := &loadReport{}
+	// Streaming twin of backfillZeroTimes: the meta row leads the file, so its
+	// Started is in hand before any pre-stamp-fix zero-Time row streams past.
+	var last time.Time
 	// An oversized row is skipped by the reader (never hydrated); it still means
 	// the window is incomplete, so flag truncation.
 	onOversize := func(int64) { truncated = true }
@@ -127,11 +144,19 @@ func StreamReplayMessages(ctx context.Context, path string, maxBytes int64, fn f
 			}
 			if err := json.Unmarshal(line, &mrow); err == nil {
 				meta = mrow.Meta
+				if last.IsZero() {
+					last = meta.Started
+				}
 			}
 		case "message":
 			m, err := hydrateMessage(line, rep)
 			if err != nil || len(m.Content) == 0 {
 				return nil
+			}
+			if m.Time.IsZero() {
+				m.Time = last
+			} else {
+				last = m.Time
 			}
 			fn(row, m)
 			row++

@@ -152,7 +152,11 @@ type SessionMeta struct {
 	Experience string            `json:"experience,omitempty"` // "chat" | "play"
 	Card       string            `json:"card,omitempty"`       // card ref (library id or path)
 	Cast       map[string]string `json:"cast,omitempty"`       // actor name -> persona|card ref
-	Greeting   int               `json:"greeting,omitempty"`   // selected greeting index
+	// CastModels pins specific cast members to a provider+model (Phase 7); an actor
+	// with no entry inherits the session/host route. Parallel to Cast (keyed by the
+	// same actor name) so the ref map stays a plain name->ref.
+	CastModels map[string]CastRoute `json:"cast_models,omitempty"`
+	Greeting   int                  `json:"greeting,omitempty"` // selected greeting index
 	// Background is the scene backdrop bound to this session (a backgrounds-library
 	// id, served over /media/backgrounds/<id>). Unlike the creation spec above it
 	// is mutable mid-session (SetBackground), so it is presentation metadata the
@@ -172,6 +176,60 @@ type SessionMeta struct {
 	// last-wins meta row (SetUserPersona); empty for an unbound / coding session.
 	UserName        string `json:"user_name,omitempty"`
 	UserDescription string `json:"user_description,omitempty"`
+	// UserGender and UserPronouns are the persona's stated identity (free-form
+	// strings — the client offers an inclusive dropdown with an "Other" text
+	// escape, so these are never an enum). When set, the per-turn user-persona
+	// frame tells the model to use them; when unset, it steers the model away from
+	// inventing them. Both empty for an unbound / coding session.
+	UserGender   string `json:"user_gender,omitempty"`
+	UserPronouns string `json:"user_pronouns,omitempty"`
+	// WorldLore is the session's World lorebook — authored keyed-context entries
+	// scoped to this session (the Worlds proposal's L1: shared lore every
+	// character on stage sees). Like Note it is mutable mid-session and rides the
+	// uncached per-turn tail, so an edit takes effect next turn with no cache
+	// bust; a constant entry injects every turn, a keyed entry when its keywords
+	// appear in recent messages. Empty for coding sessions.
+	WorldLore []WorldLoreEntry `json:"world_lore,omitempty"`
+	// Coordination selects who answers a normal turn in a chat World with a
+	// roster (the Worlds W3 meta-narrator): "" = auto (the router picks a
+	// speaker), "off" = the bound character always answers (today's behavior),
+	// "focus:<name>" = that roster character always answers. Meaningless — and
+	// ignored — when the roster is empty (a World of one is invisible).
+	Coordination string `json:"coordination,omitempty"`
+	// World is the saved World this session belongs to (a worlds-library id,
+	// W5) — stamped when the session is created in a World or when its
+	// embedded World is promoted (worlds.save). Grouping metadata: the
+	// session's own Cast/WorldLore/Coordination remain its working copy;
+	// nothing here syncs live.
+	World string `json:"world,omitempty"`
+}
+
+// WorldLoreEntry is one entry of a session's World lore: minimal authoring
+// surface over the lore engine (name + trigger keys + always-on + content).
+// The full lore.Entry knob set (secondary keys, logic, order, recursion) stays
+// with file/card lore; World entries keep the schema a steering drawer can
+// edit.
+type WorldLoreEntry struct {
+	Name     string   `json:"name"`
+	Keys     []string `json:"keys,omitempty"`
+	Constant bool     `json:"constant,omitempty"`
+	Content  string   `json:"content"`
+	// Audience names the characters who know this entry (the L2 scoping axis):
+	// empty = everyone on stage (world-shared). A named character's generation
+	// is assembled with only the entries they are cleared for, so a secret they
+	// don't hold is ABSENT from their context — a structural guard, not a
+	// "don't mention this" instruction. The scene authority (the narrator, the
+	// play director, the router) always sees everything.
+	Audience []string `json:"audience,omitempty"`
+	// Model marks an entry the MODEL authored (the play director's world_note
+	// tool, W4b) rather than the user — the UI badges it 📝. The model's
+	// authority is append-only: it can add entries and reveal them, never edit
+	// or delete (those stay user verbs).
+	Model bool `json:"model,omitempty"`
+	// Learned is the learned-when ledger (L3): character → RFC 3339 timestamp
+	// of the moment they learned this entry (a world_reveal). A character in
+	// Audience but not Learned knew it from the start (an authored secret).
+	Learned map[string]string `json:"learned,omitempty"`
 }
 
 // sessionLine is the on-disk row type. Messages are written in the
@@ -201,6 +259,18 @@ type sessionLine struct {
 	// were billed at full price behind a label promising otherwise.
 	Strategy       string `json:"strategy,omitempty"`
 	FallbackReason string `json:"fallback_reason,omitempty"`
+
+	// At stamps WHEN this row was written, for row kinds whose payload carries no
+	// time of its own. Meta rows are the case that needs it: they are an
+	// append-only timeline of what changed, but SessionMeta carries only Started —
+	// the session's birth, identical on every row — so a reader could see THAT the
+	// model changed and never WHEN. Aligning a settings change against the message
+	// timeline was impossible; a dogfooding review could not distinguish deliberate
+	// model verification from a picker that failed to confirm what it had done.
+	//
+	// A pointer so omitempty actually omits it: a zero time.Time is not "empty" to
+	// encoding/json, and every other row kind must stay byte-identical.
+	At *time.Time `json:"at,omitempty"`
 }
 
 // sessionDirective is an append-only mutation instruction: a JSONL line that
@@ -511,7 +581,7 @@ func newSessionAt(p, cwd, providerName, model, version string) (*Session, error)
 		buf:       bufio.NewWriter(f),
 		freshFile: true,
 	}
-	if err := s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta}); err != nil {
+	if err := s.writeMeta(); err != nil {
 		f.Close()
 		return nil, err
 	}
@@ -838,6 +908,7 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 		messages = applyImageExclusions(messages, excludeImages)
 	}
 	messages = repairToolUseResultPairs(messages)
+	backfillZeroTimes(messages, meta.Started)
 	elapsed := time.Since(start)
 	out, err := privfs.OpenFile(path, os.O_APPEND|os.O_WRONLY)
 	if err != nil {
@@ -846,6 +917,26 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 	s := &Session{ID: meta.ID, Path: path, Meta: meta, TitleGenerated: titleGenerated, writer: out, buf: bufio.NewWriter(out), LoadWarnings: rep.warnings(path),
 		LoadStats: LoadStats{Elapsed: elapsed, Messages: len(messages), Amends: amends, TailTakes: tailTakes}}
 	return s, messages, nil
+}
+
+// backfillZeroTimes gives a Time-less message its neighbor's timestamp — the
+// previous timed row's, or the session's start for a leading row. Rows written
+// before the deferred-greeting stamp fix persisted Time as the zero value, and
+// session files are append-only, so the zero is permanent on disk; without
+// this every loaded consumer — a resumed session's wire snapshot, the replay
+// rows, an export — carries a year-one timestamp on the very first row of the
+// scene. Best-guess and load-only: disk bytes are never rewritten, and a
+// later persistence of the loaded transcript writing the guessed time is
+// strictly better than re-persisting year one.
+func backfillZeroTimes(msgs []provider.Message, started time.Time) {
+	last := started
+	for i := range msgs {
+		if msgs[i].Time.IsZero() {
+			msgs[i].Time = last
+		} else {
+			last = msgs[i].Time
+		}
+	}
 }
 
 // SessionTail reports the swipe state of a session's tail span without opening it
@@ -1098,12 +1189,14 @@ type SessionSummary struct {
 	// TitleGenerated reports machine provenance for Title (see
 	// Session.TitleGenerated); false for user renames and meta-line titles.
 	TitleGenerated bool
-	// Experience/Card/Background carry the immersive spec from meta so a cold
-	// session (a disk scan, never opened this run) still badges as chat/play and
-	// groups under its character — the Stage library reads them without waking it.
+	// Experience/Card/Background/World carry the immersive spec from meta so a
+	// cold session (a disk scan, never opened this run) still badges as
+	// chat/play and groups under its character — and its saved World (W5) —
+	// without waking it.
 	Experience string
 	Card       string
 	Background string
+	World      string
 	// Live/Busy are the session's live state, set only on the attached-TUI path
 	// (from ctrlproto.SessionInfo via SessionSummariesFromInfos): Live = the
 	// session is materialized in memory, Busy = a turn is in flight. A disk scan
@@ -1187,6 +1280,7 @@ func describeSession(path string) SessionSummary {
 				s.Experience = row.Meta.Experience
 				s.Card = row.Meta.Card
 				s.Background = row.Meta.Background
+				s.World = row.Meta.World
 			}
 		case "message":
 			s.MessageCount++
@@ -1435,7 +1529,18 @@ func (s *Session) UpdateModel(providerName, model string) error {
 	}
 	s.Meta.Provider = providerName
 	s.Meta.Model = model
-	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+	return s.writeMeta()
+}
+
+// writeMeta appends the session's current metadata as a timeline row, stamped
+// with the moment it changed.
+//
+// Every meta writer funnels through here rather than building the row itself, so
+// the stamp cannot be forgotten by the next one. See sessionLine.At for why the
+// rows needed a time of their own.
+func (s *Session) writeMeta() error {
+	now := time.Now().UTC()
+	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta, At: &now})
 }
 
 // StampVersion records the running build in the session file, so a session that
@@ -1460,7 +1565,7 @@ func (s *Session) StampVersion(version string) error {
 		return nil
 	}
 	s.Meta.Version = version
-	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+	return s.writeMeta()
 }
 
 // SetCreationSpec records the per-session creation parameters — the chosen
@@ -1478,7 +1583,7 @@ func (s *Session) SetCreationSpec(persona, experience, card string, cast map[str
 	s.Meta.Card = card
 	s.Meta.Cast = cast
 	s.Meta.Greeting = greeting
-	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+	return s.writeMeta()
 }
 
 // SetBackground binds (or, with "", clears) the session's scene backdrop and
@@ -1490,7 +1595,7 @@ func (s *Session) SetBackground(id string) error {
 		return nil
 	}
 	s.Meta.Background = id
-	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+	return s.writeMeta()
 }
 
 // SetNote sets (or, with "", clears) the session's author's note and writes a
@@ -1504,34 +1609,82 @@ func (s *Session) SetNote(text string) error {
 		return nil
 	}
 	s.Meta.Note = text
-	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+	return s.writeMeta()
 }
 
 // SetUserPersona binds (or, with empty strings, clears) the session's user
 // persona — who the user is in the story. Persisted as one last-wins meta row
 // carrying both halves; the caller applies the live effects (the description
 // updates the per-turn tail for free, the name rebuilds the cached prefix).
-func (s *Session) SetUserPersona(name, description string) error {
+func (s *Session) SetUserPersona(name, description, gender, pronouns string) error {
 	if s == nil {
 		return nil
 	}
 	s.Meta.UserName = name
 	s.Meta.UserDescription = description
-	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+	s.Meta.UserGender = gender
+	s.Meta.UserPronouns = pronouns
+	return s.writeMeta()
+}
+
+// SetWorldLore replaces (or, with a nil/empty slice, clears) the session's
+// World lore and writes a fresh meta row. Like SetNote it rides the last-wins
+// meta timeline — durable across a restart, editable any number of times — and
+// like the note it is a per-turn-tail input, never the cached prefix, so a
+// change takes effect next turn without a rebuild. A no-op on a nil receiver.
+func (s *Session) SetWorldLore(entries []WorldLoreEntry) error {
+	if s == nil {
+		return nil
+	}
+	s.Meta.WorldLore = entries
+	return s.writeMeta()
+}
+
+// SetCoordination sets who answers a normal turn in a chat World (the W3
+// meta-narrator setting): "" auto, "off", or "focus:<name>". A last-wins meta
+// row like the other stampers; takes effect on the next turn (the route
+// decision reads it fresh each prompt). A no-op on a nil receiver.
+func (s *Session) SetCoordination(mode string) error {
+	if s == nil {
+		return nil
+	}
+	s.Meta.Coordination = mode
+	return s.writeMeta()
+}
+
+// SetWorld stamps (or, with "", clears) the saved World this session belongs
+// to — membership metadata for grouping, a last-wins meta row like the other
+// stampers. A no-op on a nil receiver.
+func (s *Session) SetWorld(id string) error {
+	if s == nil {
+		return nil
+	}
+	s.Meta.World = id
+	return s.writeMeta()
+}
+
+// CastRoute pins a cast member to a specific provider+model (Phase 7 per-generation
+// routing). Empty fields mean "inherit the session/host route" — the default for an
+// unpinned actor.
+type CastRoute struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 // SetCast replaces (or, with a nil/empty map, clears) a play session's cast —
-// the actor-name → persona/card refs the director can voice via actor_spawn.
-// Like the other stampers it rides the last-wins meta timeline, so a mid-scene
-// cast change is durable across a restart. The caller rebuilds the actor_spawn
-// tool + cast addendum to apply it live (unlike the creation spec, which bakes
-// the cast at build time). A no-op on a nil receiver.
-func (s *Session) SetCast(cast map[string]string) error {
+// the actor-name → persona/card refs the director can voice via actor_spawn, plus
+// the parallel per-actor model pins (CastRoute; empty map = no pins). Like the
+// other stampers it rides the last-wins meta timeline, so a mid-scene cast change
+// is durable across a restart. The caller rebuilds the actor_spawn tool + cast
+// addendum to apply it live (unlike the creation spec, which bakes the cast at
+// build time). A no-op on a nil receiver.
+func (s *Session) SetCast(cast map[string]string, models map[string]CastRoute) error {
 	if s == nil {
 		return nil
 	}
 	s.Meta.Cast = cast
-	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+	s.Meta.CastModels = models
+	return s.writeMeta()
 }
 
 // AppendAmend writes an append-only transcript revision (see sessionAmend): a
@@ -1570,7 +1723,7 @@ func (s *Session) bumpFormatForAmend() error {
 		return nil
 	}
 	s.Meta.FormatVersion = sessionFormatVersionAmend
-	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta})
+	return s.writeMeta()
 }
 
 // AppendSelect writes a "select" amend (see sessionAmend): make take `variant` of
