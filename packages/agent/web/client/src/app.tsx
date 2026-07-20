@@ -1,6 +1,7 @@
 import type { VNode } from 'preact'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { ADDR_WORKSPACE, Client } from './ctrlproto'
+import type { ClientLike, ConnectableClient } from './ctrlproto'
 import { restartRejection } from './restart'
 import type {
   AskRequest,
@@ -79,16 +80,33 @@ import { buildConveneArgs, raatiResultCopyText, raatiUnitCopyText, raatiVerdictW
 import { applyServerCatalog, setLocale, t, tn } from './i18n'
 import { CopyButton } from './ui/CopyButton'
 import { humanBytes, humanCount } from './ui/formatting'
+import { stageHref, takeNavParams } from './ui/navlinks'
 
 const TOOL_VIEWS: ToolView[] = ['full', 'grouped', 'minimal', 'hidden']
+
+// Deep-link params from Stage (`?session=`, `?pane=`), read once at module load
+// because takeNavParams also strips them from the address bar. Fields are
+// cleared as they are consumed, so a reconnect does not re-apply them.
+const bootNav = takeNavParams()
 
 // How many live tiles the board streams at once (phase B). Each is one server
 // pump + one snapshot on subscribe; the cap bounds the reconnect snapshot storm
 // on a large workspace. The rest fall back to the periodic list's busy flag.
 const BOARD_SUB_CAP = 16
 
-export function App() {
-  const clientRef = useRef<Client | null>(null)
+// createClient is the transport seam. App owns the socket's LIFECYCLE — it
+// connects on mount and closes on unmount — so it takes a factory rather than an
+// instance; handing it a live client would split that ownership. Defaulting to
+// `new Client()` keeps main.tsx a bare <App />.
+//
+// It exists because App was untestable without it: `new Client()` sat inside the
+// mount effect with no prop, context or factory, so nothing could observe the
+// 1193 lines of orchestration below — the event demux, the reconnect
+// re-subscribe, the hello feature-gating. Stage had already solved this by
+// threading its client down as a prop, which is why Stage's screens have tests
+// and this one had none.
+export function App({ createClient = () => new Client() }: { createClient?: () => ConnectableClient } = {}) {
+  const clientRef = useRef<ConnectableClient | null>(null)
   const curRef = useRef('')
   const busyRef = useRef(false)
 
@@ -311,7 +329,7 @@ export function App() {
     [reloadModels],
   )
 
-  const refreshSessions = useCallback(async (c: Client): Promise<SessionInfo[]> => {
+  const refreshSessions = useCallback(async (c: ClientLike): Promise<SessionInfo[]> => {
     try {
       const res = await c.send<{ sessions: SessionInfo[] }>('sessions.list', null, '')
       setSessions(res.sessions ?? [])
@@ -417,7 +435,7 @@ export function App() {
   }, [])
 
   const newSession = useCallback(
-    async (c?: Client) => {
+    async (c?: ClientLike) => {
       const cl = c ?? clientRef.current
       if (!cl) return
       try {
@@ -637,7 +655,7 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    const c = new Client()
+    const c = createClient()
     clientRef.current = c
     c.onStatus = setStatus
     c.onEvent = (sess, ev) => {
@@ -716,7 +734,13 @@ export function App() {
         await newSession(c)
         return
       }
-      const target = (list.find((s) => s.current) ?? list[0]).id
+      // A `?session=` deep link (from Stage) outranks the server's `current`,
+      // but only while the session still exists and only on the FIRST connect —
+      // bootNav is consumed once, so a later reconnect falls back to the normal
+      // pick rather than dragging you back to where you arrived.
+      const linked = bootNav.session && list.some((s) => s.id === bootNav.session) ? bootNav.session : ''
+      if (linked) bootNav.session = ''
+      const target = linked || (list.find((s) => s.current) ?? list[0]).id
       if (target === curRef.current) {
         // Reconnect to the same session: selectSession would short-circuit on the
         // unchanged id and never re-subscribe, leaving the panel connected but
@@ -725,6 +749,19 @@ export function App() {
         c.fire('subscribe', null, target)
       } else {
         selectSession(target)
+      }
+      // `?pane=` opens a surface on arrival — this is what makes Stage's
+      // "inspect context" a single hop instead of a hunt. Consumed like the
+      // session, so it fires once and not on every reconnect.
+      //
+      // The two setters rather than openPane: openPane is declared below this
+      // effect, so naming it in the dependency array would evaluate it in its
+      // temporal dead zone during render. These are what it wraps, and useState
+      // setters are stable.
+      if (bootNav.pane) {
+        setActiveSurface(bootNav.pane)
+        setPaneOpen(true)
+        bootNav.pane = ''
       }
     }
     c.connect()
@@ -1341,7 +1378,12 @@ export function App() {
           </button>
         )}
         {stageEnabled && (
-          <a class="icon" href="/stage/" title={t('Open Stage')} aria-label={t('Open Stage')}>
+          <a
+            class="icon"
+            href={stageHref(curInfo?.experience ? curSess : '')}
+            title={t('Open Stage')}
+            aria-label={t('Open Stage')}
+          >
             🎭
           </a>
         )}
@@ -1514,7 +1556,7 @@ export function App() {
 // PaneHost is the switchable pane region — a right rail on desktop, a full sheet
 // on mobile. It shows a switcher of available surfaces and renders the active
 // one by kind (the generalization of the old context modal).
-function PaneHost({
+export function PaneHost({
   surfaces,
   active,
   data,
@@ -1617,7 +1659,7 @@ const RAATI_KANJI: Record<string, string> = {
   escalated: '保留',
 }
 
-function KanjiVerdict({ word, kanji, tone }: { word: string; kanji: string; tone: string }) {
+export function KanjiVerdict({ word, kanji, tone }: { word: string; kanji: string; tone: string }) {
   const [settled, setSettled] = useState(false)
   useEffect(() => {
     setSettled(false)
@@ -1627,7 +1669,7 @@ function KanjiVerdict({ word, kanji, tone }: { word: string; kanji: string; tone
   return <span class={`raati-kanji tone-${tone}${settled ? ' settled' : ' flash'}`}>{settled ? word : kanji}</span>
 }
 
-function RaatiBody({
+export function RaatiBody({
   v,
   onAction,
   models,
@@ -1715,6 +1757,7 @@ function RaatiBody({
     <div class="raati-body">
       <div class="raati-board">
         <div class="raati-head">
+          {/* i18n-exempt — the RAATI wordmark, part of the theater prop */}
           <span class="raati-logo">RAATI</span>
           {v.class ? <span class="raati-chip">{v.class}</span> : null}
           {v.seat_order ? <span class="raati-chip">{t('seats: %s', v.seat_order)}</span> : null}
@@ -1939,7 +1982,7 @@ function RaatiBody({
 // view states — the server pushes state, not events, so the feed is
 // synthesized client-side. Archive replays narrate nothing (the record
 // is history, not news); the feed clears when the board resets.
-function useRaatiTicker(v: RaatiView): string[] {
+export function useRaatiTicker(v: RaatiView): string[] {
   const [lines, setLines] = useState<string[]>([])
   const prevRef = useRef<RaatiView | null>(null)
   useEffect(() => {
@@ -1997,7 +2040,7 @@ function useRaatiTicker(v: RaatiView): string[] {
 
 // raatiWhenLabel compresses an RFC 3339 stamp for archive rows: time of
 // day for today's records, month-day for this year, full date otherwise.
-function raatiWhenLabel(when?: string): string {
+export function raatiWhenLabel(when?: string): string {
   if (!when) return ''
   const d = new Date(when)
   if (isNaN(d.getTime())) return when.slice(0, 10)
@@ -2010,7 +2053,7 @@ function raatiWhenLabel(when?: string): string {
   return d.getFullYear() === now.getFullYear() ? md : `${d.getFullYear()}-${md}`
 }
 
-function RaatiHistoryRow({ h, onShow }: { h: RaatiHistoryItem; onShow: () => void }) {
+export function RaatiHistoryRow({ h, onShow }: { h: RaatiHistoryItem; onShow: () => void }) {
   return (
     <button class="raati-history-row" onClick={onShow} title={h.question}>
       <div class="raati-history-top">
@@ -2036,7 +2079,7 @@ function RaatiHistoryRow({ h, onShow }: { h: RaatiHistoryItem; onShow: () => voi
   )
 }
 
-function RaatiBlock({ u }: { u: RaatiUnit }) {
+export function RaatiBlock({ u }: { u: RaatiUnit }) {
   const accent = u.accent || '#7aa2f7'
   return (
     <div class={`raati-block s-${u.status}`} style={{ borderColor: accent }}>
@@ -2078,7 +2121,7 @@ function RaatiBlock({ u }: { u: RaatiUnit }) {
   )
 }
 
-function RaatiVerdictPanel({ v }: { v: RaatiView }) {
+export function RaatiVerdictPanel({ v }: { v: RaatiView }) {
   const d = v.decision ?? ''
   return (
     <div class={`raati-verdict tone-${d}`}>
@@ -2110,7 +2153,7 @@ function RaatiVerdictPanel({ v }: { v: RaatiView }) {
 // RaatiInquiryList renders the panel's between-round Q&A docket — the
 // open (unanswered) questions matter most: the decision was made with
 // these gaps on the record.
-function RaatiInquiryList({ inquiries }: { inquiries: RaatiInquiry[] }) {
+export function RaatiInquiryList({ inquiries }: { inquiries: RaatiInquiry[] }) {
   return (
     <div class="raati-inquiries">
       <div class="raati-minority-title">{t('the panel asked')}</div>
@@ -2136,7 +2179,7 @@ function RaatiInquiryList({ inquiries }: { inquiries: RaatiInquiry[] }) {
 // Terva palette, not screen-accurate cyan. Web-client only — it consumes
 // the pushed surface like everything else, so there is no server change.
 
-function raatiTheaterSlots(units?: RaatiUnit[]): { top?: RaatiUnit; left?: RaatiUnit; right?: RaatiUnit } {
+export function raatiTheaterSlots(units?: RaatiUnit[]): { top?: RaatiUnit; left?: RaatiUnit; right?: RaatiUnit } {
   const u = units ?? []
   const byNum: Record<number, RaatiUnit> = {}
   let numbered = u.length > 0
@@ -2152,7 +2195,7 @@ function raatiTheaterSlots(units?: RaatiUnit[]): { top?: RaatiUnit; left?: Raati
   return { top: u[0], left: u[1], right: u[2] }
 }
 
-function MagiPanel({
+export function MagiPanel({
   u,
   pos,
   selected,
@@ -2190,7 +2233,7 @@ function MagiPanel({
   )
 }
 
-function RaatiTheater({
+export function RaatiTheater({
   v,
   lines,
   onAction,
@@ -2268,20 +2311,28 @@ function RaatiTheater({
       <div class="magi-stage">
         <header class="magi-header">
           <span class="magi-title left">質問</span>
+          {/* i18n-exempt×5 below — the MAGI-style HUD labels are part of the
+              theater prop, like the RAATI wordmark and the 解決 kanji: the
+              all-caps English IS the aesthetic, not interface prose. */}
           <div class="magi-info">
             <div>
+              {/* i18n-exempt */}
               <b>LEVEL</b> {v.binding || '—'}
             </div>
             <div>
+              {/* i18n-exempt */}
               <b>CLASS</b> {v.class || '—'}
             </div>
             <div>
+              {/* i18n-exempt */}
               <b>ROUND</b> {v.round ?? '—'}
             </div>
             <div>
+              {/* i18n-exempt */}
               <b>SEAT</b> {v.seat_order || '—'}
             </div>
             <div>
+              {/* i18n-exempt */}
               <b>MODE</b> {phase}
             </div>
           </div>
@@ -2296,6 +2347,7 @@ function RaatiTheater({
             {v.decision ? (
               <KanjiVerdict word={raatiVerdictWord(v.decision)} kanji={RAATI_KANJI[v.decision] ?? v.decision} tone={v.decision} />
             ) : (
+              // i18n-exempt — the RAATI wordmark, part of the theater prop
               <span class="magi-hub-logo">RAATI</span>
             )}
             {v.tally ? (
@@ -2367,11 +2419,12 @@ function RaatiTheater({
         ) : null}
         <footer class="magi-footer">
           <div class="magi-q">
-            <span class="raati-dim">question:</span> {v.question || '—'}
+            <span class="raati-dim">{t('question:')}</span> {v.question || '—'}
           </div>
           <div class="magi-access">
-            <span class="raati-dim">access:</span> {(v.when ?? '').replace('T', ' ').slice(0, 19) || 'MAGI_SYS'}
+            <span class="raati-dim">{t('access:')}</span> {(v.when ?? '').replace('T', ' ').slice(0, 19) || 'MAGI_SYS'}
             <button class="magi-exit-hint" title={t('Exit theater (Esc)')} onClick={onExit}>
+              {/* i18n-exempt — the Esc key's name */}
               <span class="magi-exit-key">esc: </span>
               {t('exit')}
             </button>
@@ -2382,7 +2435,7 @@ function RaatiTheater({
   )
 }
 
-function SurfaceView({
+export function SurfaceView({
   surface,
   onAction,
   onFetchNode,
@@ -2486,7 +2539,7 @@ interface AuthPaneProps {
 // authMessage unwraps a ctrlproto error for display. The daemon's text is the
 // useful part — "that key was not accepted", "this login was superseded" — and
 // inventing our own would be strictly less informative.
-function authMessage(e: unknown): string {
+export function authMessage(e: unknown): string {
   const m = e instanceof Error ? e.message : String(e)
   // Frames arrive as "code: message"; the code is for us, the message is for them.
   const i = m.indexOf(': ')
@@ -2503,7 +2556,7 @@ function authMessage(e: unknown): string {
 //
 // It is deliberately not called "Login": in this UI that word already means the
 // bearer-token form that let you in. This is about who the DAEMON can talk to.
-function ProvidersBody({
+export function ProvidersBody({
   v,
   flow,
   onStart,
@@ -2692,7 +2745,7 @@ function ProvidersBody({
 //
 // The mirror is bound to the session it was connected from; it does not follow
 // this tab. That is why the connected card names its session explicitly.
-function ChatBody({
+export function ChatBody({
   v,
   onAction,
 }: {
@@ -2786,7 +2839,7 @@ function ChatBody({
 // Clicking runs it: surface.action{action:"run", args:{name}}. The daemon
 // applies the command's response (opens a panel, submits a prompt, or posts a
 // one-shot note back into the conversation).
-function CommandsBody({
+export function CommandsBody({
   v,
   onAction,
 }: {
@@ -2831,7 +2884,7 @@ function CommandsBody({
 // card per installed/loaded extension with a status badge, version/scope, tool +
 // command counts, any crash reason, and an enable/disable toggle (persisted to
 // the project + applied live). Gated (untrusted) extensions can't be toggled on.
-function ExtensionsBody({
+export function ExtensionsBody({
   v,
   onAction,
 }: {
@@ -2886,7 +2939,7 @@ function ExtensionsBody({
 // (read-only). The mode's setter lives in Settings. Trust is workspace-global
 // and gates whether project-scoped rules/lore/extensions load, so it heads the
 // pane — granting it here is what unlocks the project scope elsewhere.
-function PermissionsBody({
+export function PermissionsBody({
   v,
   onAction,
   trusted,
@@ -2979,7 +3032,7 @@ function PermissionsBody({
 
 // AddRuleForm adds a user permission rule (tool + decision + optional args). The
 // rule persists to user config and applies live to every session.
-function AddRuleForm({
+export function AddRuleForm({
   onAction,
 }: {
   onAction: (id: string, action: string, args?: Record<string, string>) => void
@@ -3034,7 +3087,7 @@ function AddRuleForm({
 // entries and an add/edit form. Edits show in the pane immediately; the actual
 // per-turn injection applies to new sessions.
 type LoreDraft = { name: string; keys: string; constant: boolean; content: string; scope: string; existing: boolean }
-function LoreBody({
+export function LoreBody({
   v,
   onAction,
 }: {
@@ -3161,7 +3214,7 @@ function LoreBody({
 // status badge, scope, tool count, any startup error, and an enable/disable
 // toggle (reuses the extension card styles). Toggling restarts/stops the shared
 // server and rebuilds every session's tools.
-function MCPBody({
+export function MCPBody({
   v,
   onAction,
 }: {
@@ -3214,7 +3267,7 @@ function MCPBody({
 // each widget is a semantic node (meter → a bar, keyvalue → rows, …), so an
 // extension gets a rich pane without any per-extension client code. Actions fire
 // surface.action{action:"action", id:<action_id>} back to the extension.
-function WidgetBody({
+export function WidgetBody({
   id,
   widgets,
   onAction,
@@ -3233,7 +3286,7 @@ function WidgetBody({
   )
 }
 
-function WidgetNode({ w, onAction }: { w: Widget; onAction: (actionID: string) => void }): VNode | null {
+export function WidgetNode({ w, onAction }: { w: Widget; onAction: (actionID: string) => void }): VNode | null {
   const tone = w.tone && w.tone !== 'default' ? ` t-${w.tone}` : ''
   switch (w.type) {
     case 'heading':
@@ -3333,7 +3386,7 @@ function WidgetNode({ w, onAction }: { w: Widget; onAction: (actionID: string) =
 
 // WidgetGroup is a labelled, optionally-collapsible container (the tool-group
 // shape). Its own useState is why it's a component, not a switch branch.
-function WidgetGroup({ w, onAction }: { w: Widget; onAction: (actionID: string) => void }) {
+export function WidgetGroup({ w, onAction }: { w: Widget; onAction: (actionID: string) => void }) {
   const [open, setOpen] = useState(!(w.tone === 'muted'))
   const collapsible = !!w.label
   return (
@@ -3360,7 +3413,7 @@ function WidgetGroup({ w, onAction }: { w: Widget; onAction: (actionID: string) 
 
 // UsageSummary renders the shared usage picture: context gauge + cumulative
 // tokens/cost + subscription windows. Used by both the context and usage panes.
-function UsageSummary({
+export function UsageSummary({
   tokens,
   window,
   estimated,
@@ -3412,7 +3465,7 @@ function UsageSummary({
 
 // TasksBody renders the background-agent (swarm) dashboard: one row per task
 // with a status badge, live activity, expandable transcript tail, and actions.
-function TasksBody({
+export function TasksBody({
   list,
   onAction,
 }: {
@@ -3429,7 +3482,7 @@ function TasksBody({
   )
 }
 
-function TaskRow({
+export function TaskRow({
   task,
   onAction,
 }: {
@@ -3513,7 +3566,7 @@ function TaskRow({
 
 const wtSHA = (s: string) => (s.length > 7 ? s.slice(0, 7) : s)
 
-function wtStatus(it: WorktreeViewItem): { label: string; cls: string } {
+export function wtStatus(it: WorktreeViewItem): { label: string; cls: string } {
   if (it.unmanaged) return { label: 'unmanaged', cls: 's-unmanaged' }
   if (it.claimed_by === 'self') return { label: 'claimed(self)', cls: 's-self' }
   if (it.status === 'claimed' && it.claimed_by) return { label: `claimed(${it.claimed_by})`, cls: 's-claimed' }
@@ -3521,7 +3574,7 @@ function wtStatus(it: WorktreeViewItem): { label: string; cls: string } {
   return { label: 'available', cls: 's-available' }
 }
 
-function WorktreesBody({ v, onRefresh }: { v: WorktreeView; onRefresh?: () => void }) {
+export function WorktreesBody({ v, onRefresh }: { v: WorktreeView; onRefresh?: () => void }) {
   const [collect, setCollect] = useState(false)
   const pending = (v.collect ?? []).filter((c) => c.ahead > 0 || c.dirty).length
   return (
@@ -3548,7 +3601,7 @@ function WorktreesBody({ v, onRefresh }: { v: WorktreeView; onRefresh?: () => vo
   )
 }
 
-function WorktreeList({ v }: { v: WorktreeView }) {
+export function WorktreeList({ v }: { v: WorktreeView }) {
   const items = v.items ?? []
   if (!items.length)
     return <div class="pick-empty">{t('No worktrees yet — create one with the worktree_create tool.')}</div>
@@ -3562,7 +3615,7 @@ function WorktreeList({ v }: { v: WorktreeView }) {
             <div class="wt-row-head">
               <span class="wt-name">{it.name}</span>
               {here && <span class="wt-here">{t('here')}</span>}
-              {it.dirty && <span class="wt-dirty">✱dirty</span>}
+              {it.dirty && <span class="wt-dirty">{t('✱dirty')}</span>}
               <span class={`wt-status ${st.cls}`}>{st.label}</span>
             </div>
             <div class="wt-row-detail">
@@ -3585,7 +3638,7 @@ function WorktreeList({ v }: { v: WorktreeView }) {
 // WorktreeCollect is the read-only merge-back overview: per worktree, how far
 // its branch is ahead of base and the pending commit subjects. Like the TUI
 // view it ends with a reminder that merging back is a manual act.
-function WorktreeCollect({ items }: { items: WorktreeCollectItem[] }) {
+export function WorktreeCollect({ items }: { items: WorktreeCollectItem[] }) {
   if (!items.length) return <div class="pick-empty">{t('No worktrees to collect.')}</div>
   const pending = items.filter((it) => it.ahead > 0 || it.dirty).length
   return (
@@ -3595,8 +3648,8 @@ function WorktreeCollect({ items }: { items: WorktreeCollectItem[] }) {
           <div class="wt-row-head">
             <span class="wt-name">{it.name}</span>
             {it.branch && <span class="wt-branch">{it.branch}</span>}
-            {it.dirty && <span class="wt-dirty">✱dirty</span>}
-            {it.unpushed && <span class="wt-dirty">⇡unpushed</span>}
+            {it.dirty && <span class="wt-dirty">{t('✱dirty')}</span>}
+            {it.unpushed && <span class="wt-dirty">{t('⇡unpushed')}</span>}
             <span class="wt-ahead">{tn(it.ahead, '+%d commit', '+%d commits')}</span>
           </div>
           <div class="wt-row-detail">
@@ -3623,7 +3676,7 @@ function WorktreeCollect({ items }: { items: WorktreeCollectItem[] }) {
 
 // SettingsBody renders the settings pane: enum settings as selects, bool
 // settings as toggles. Changing one fires surface.action {action:"set"}.
-function SettingsBody({
+export function SettingsBody({
   v,
   onAction,
   onRestart,
@@ -3680,7 +3733,7 @@ function SettingsBody({
 // RestartRow is the daemon self-restart control, shown only when the server
 // advertised the capability. Two-step (arm, then confirm) so it can't fire on a
 // stray tap; it disarms itself after a few seconds.
-function RestartRow({ onRestart }: { onRestart: () => void }) {
+export function RestartRow({ onRestart }: { onRestart: () => void }) {
   const [armed, setArmed] = useState(false)
   const timer = useRef<number | undefined>(undefined)
   const disarm = () => {
@@ -3721,7 +3774,7 @@ function RestartRow({ onRestart }: { onRestart: () => void }) {
 // extension-owned panel (has an ext) is focusable and forwards keystrokes to the
 // extension via surface.action, so navigable panels (e.g. a memory browser) work
 // — the ext replies with a panel_render that re-fetches the surface.
-function PanelBody({
+export function PanelBody({
   id,
   p,
   onAction,
@@ -3748,11 +3801,11 @@ function PanelBody({
         {text || '(empty)'}
       </pre>
       {p.footer && <div class="panel-footer">{stripAnsi(p.footer)}</div>}
-      {interactive && <div class="panel-hint">click to focus, then arrows / enter / type</div>}
+      {interactive && <div class="panel-hint">{t('click to focus, then arrows / enter / type')}</div>}
       {p.ext && (
         <div class="panel-actions">
           <button class="btn sm" onClick={() => onAction(id, 'close')}>
-            Close panel
+            {t('Close panel')}
           </button>
         </div>
       )}
@@ -3763,7 +3816,7 @@ function PanelBody({
 // panelKey maps a browser KeyboardEvent to the extension panel key vocabulary
 // (mirrors the TUI's panelKeyName/panelKeyText). Returns null for keys not
 // forwarded (e.g. ctrl/meta combos).
-function panelKey(e: KeyboardEvent): { name: string; text?: string } | null {
+export function panelKey(e: KeyboardEvent): { name: string; text?: string } | null {
   const named: Record<string, string> = {
     ArrowUp: 'up',
     ArrowDown: 'down',
@@ -3784,7 +3837,7 @@ function panelKey(e: KeyboardEvent): { name: string; text?: string } | null {
   return null
 }
 
-function stripAnsi(s: string): string {
+export function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
   return s.replace(/\x1b\[[0-9;]*m/g, '')
 }
@@ -3795,7 +3848,7 @@ function stripAnsi(s: string): string {
 // and only a second, explicit "Redeem" performs the spend — there is no
 // auto-redeem. It self-fetches on mount and hides entirely when the provider
 // offers no resets, so it's invisible everywhere except a codex subscription.
-function ResetsSection({
+export function ResetsSection({
   onList,
   onConsume,
 }: {
@@ -3882,7 +3935,7 @@ function ResetsSection({
   )
 }
 
-function ResetRow({
+export function ResetRow({
   r,
   arming,
   busy,
@@ -3930,7 +3983,7 @@ function ResetRow({
   )
 }
 
-function ContextBody({
+export function ContextBody({
   d,
   onFetchNode,
   onListResets,
@@ -4047,7 +4100,7 @@ function ContextBody({
 // single largest message across the transcript is flagged. Stage 1 has no lazy
 // content fetch: every node is already inline (pre-expanded stubs), so expanding
 // only toggles visibility. See docs/proposals/context-inspector.md.
-function ContextTree({
+export function ContextTree({
   node,
   onFetchNode,
 }: {
@@ -4076,7 +4129,7 @@ function ContextTree({
 // visibility; an `expandable` node with no inline children fetches its content
 // via context.node on first open; a node carrying `content` shows it in a
 // scrollable body. Every level is collapsed by default — you drill in.
-function TreeNode({
+export function TreeNode({
   node,
   largestId,
   onFetchNode,
@@ -4143,7 +4196,7 @@ function TreeNode({
   )
 }
 
-function CtxRow({ label, bytes, note }: { label: string; bytes: number; note: string }) {
+export function CtxRow({ label, bytes, note }: { label: string; bytes: number; note: string }) {
   return (
     <div class="ctx-row">
       <span class="ctx-row-label">{label}</span>
@@ -4156,7 +4209,7 @@ function CtxRow({ label, bytes, note }: { label: string; bytes: number; note: st
 
 // WindowRow renders one subscription usage window: a labelled meter with the
 // percent used and a reset countdown (mirrors the TUI status bar's usage meter).
-function WindowRow({ w }: { w: UsageWindow }) {
+export function WindowRow({ w }: { w: UsageWindow }) {
   const known = w.used_percent >= 0
   const pct = known ? Math.min(100, w.used_percent) : 0
   const reset = w.resets_at ? countdown(w.resets_at) : ''
@@ -4172,7 +4225,7 @@ function WindowRow({ w }: { w: UsageWindow }) {
   )
 }
 
-function shortWindow(label: string): string {
+export function shortWindow(label: string): string {
   const l = label.trim().toLowerCase()
   if (l === 'weekly' || l === 'week') return 'wk'
   if (l === 'monthly' || l === 'month') return 'mo'
@@ -4180,7 +4233,7 @@ function shortWindow(label: string): string {
 }
 
 // countdown renders time until an RFC3339 instant as "3d17h" / "4h33m" / "12m".
-function countdown(iso: string): string {
+export function countdown(iso: string): string {
   const ms = new Date(iso).getTime() - Date.now()
   if (isNaN(ms) || ms <= 0) return ''
   const mins = Math.floor(ms / 60000)
