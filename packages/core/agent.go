@@ -242,6 +242,21 @@ type Agent struct {
 	continuePrefill bool
 	continueResult  *continuedMessage
 
+	// advanceCue is set for the duration of one Advance turn (guarded by mu,
+	// cleared on return). It is the exact INVERSE of continuePrefill: it forces a
+	// NON-empty ephemeral tail, so the request always ends in a user block even
+	// when the transcript ends in assistant messages.
+	//
+	// That matters because Stage's directed authorship appends authored lines as
+	// assistant messages, so a scene can end with several of them. Dispatching a
+	// plain turn there sends a request whose last message is an assistant one —
+	// which on Anthropic is a PREFILL: the model would extend that line
+	// mid-sentence and the result would be appended as a NEW message (continuePrefill
+	// is false, so the in-place merge never fires), producing a bubble that starts
+	// mid-thought. Silent corruption, not an error. The cue guarantees a trailing
+	// user block on every provider, so the model writes the next beat instead.
+	advanceCue bool
+
 	// sessionID / sessionPath identify the transcript file this
 	// conversation persists to: sessionID is the file basename without
 	// .jsonl (the id --resume accepts), sessionPath the absolute path.
@@ -1102,6 +1117,27 @@ func (a *Agent) SeedLastTurnUsage(u provider.Usage) {
 	a.cost.SetLastTurn(u)
 }
 
+// RecordSideChannelUsage books a request the agent did not itself run: the
+// daemon's one-off completions (the World router's pick, the line it voices,
+// suggest, side chat). They spend real money on the session's credentials, but
+// they never pass through Run, so nothing folded their usage in and nothing
+// wrote them a session row — a session's recorded cost was the cost of its
+// TURNS, silently understating what it actually spent.
+//
+// Total-only, deliberately: this is the same treatment compaction's
+// summarization request gets (cost.AddTotalOnly). The per-turn snapshot is the
+// CONTEXT gauge, and a side-channel request's prompt is not this session's
+// context — letting one overwrite the snapshot would leave every threshold check
+// reading a size the transcript never had. Firing the usage observers is what
+// persists the row, so the session file gains one line per side-channel call.
+func (a *Agent) RecordSideChannelUsage(u provider.Usage) {
+	if u == (provider.Usage{}) {
+		return
+	}
+	a.cost.AddTotalOnly(u)
+	a.fireUsage(u, a.cost.CumulativeTotal())
+}
+
 // acquire claims the single-flight guard. It returns a release func and
 // true on success, or nil and false if a run is already in progress.
 // Callers must defer release() once they hold the guard.
@@ -1176,6 +1212,38 @@ func (a *Agent) Continue(ctx context.Context, sink func(AgentEvent)) error {
 		sink = func(AgentEvent) {}
 	}
 	sink = a.wrapSink(sink)
+	return a.runLoop(ctx, sink)
+}
+
+// Advance runs one turn against the existing transcript with a request-scoped
+// stage cue on the ephemeral tail, so the model writes the NEXT beat rather than
+// extending what is already there. It is Stage's "▶ Advance": the scene moves on
+// without the user typing a line, and nothing but the model's own reply is
+// appended (unlike cast.speak / direct.turn, which persist a visible [Direction]
+// user message).
+//
+// The cue is load-bearing, not decoration. A scene may end in a run of authored
+// directed lines, which are assistant messages; the request would then end in an
+// assistant message, which Anthropic reads as a prefill to extend. See advanceCue.
+// Single-flight like Prompt: ErrBusy if a run is already in progress.
+func (a *Agent) Advance(ctx context.Context, sink func(AgentEvent)) error {
+	release, ok := a.acquire()
+	if !ok {
+		return ErrBusy
+	}
+	defer release()
+	if sink == nil {
+		sink = func(AgentEvent) {}
+	}
+	sink = a.wrapSink(sink)
+	a.mu.Lock()
+	a.advanceCue = true
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		a.advanceCue = false
+		a.mu.Unlock()
+	}()
 	return a.runLoop(ctx, sink)
 }
 
@@ -1903,6 +1971,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	contextProvider := a.ContextProvider
 	cacheKey := a.cacheID
 	continuePrefill := a.continuePrefill
+	advanceCue := a.advanceCue
 	msgs := make([]provider.Message, len(a.messages))
 	copy(msgs, a.messages)
 	a.mu.Unlock()
@@ -1983,6 +2052,21 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 			}
 			ephemeral += note
 		}
+	}
+
+	// An advance turn rides a stage cue on the ephemeral tail — the inverse of the
+	// continue turn below. The tail must be NON-empty so the request ends in a user
+	// block even when the transcript ends in assistant messages (Stage's directed
+	// lines are authored as assistant messages, so a scene can end with a run of
+	// them). Without it, that trailing assistant is read as a prefill and the model
+	// extends the last authored line mid-sentence instead of writing the next beat.
+	// Appended after the cache breakpoint, so it costs no cache.
+	if advanceCue {
+		if ephemeral != "" {
+			ephemeral += "\n\n"
+		}
+		ephemeral += i18n.P("stage.advance.cue",
+			"[Advance] Continue the scene from where it stands. Write the next beat as the character(s) whose turn it plainly is — do not narrate for the user, do not restate what just happened, and do not begin mid-sentence.")
 	}
 
 	// A continue turn suppresses the ENTIRE ephemeral tail (the context provider
