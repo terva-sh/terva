@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import type { Client } from '../../platform/ctrlproto/client'
-import type { CardView } from '../../platform/ctrlproto/types'
+import type { AskRequest, CardView } from '../../platform/ctrlproto/types'
 import type { Item } from '../../platform/conversation/store'
 import { renderMarkdown } from '../../markdown'
 import { useConversation } from './useConversation'
@@ -18,9 +18,33 @@ type Character = { name: string; avatar?: string }
 // was written to the original, so the edit box points out that branching keeps them.
 const BRANCH_HINT = 2
 
-export function Chat(props: { client: Client; sessionId: string; onBack: () => void; onOpenSession: (session: string) => void }) {
+// deleteWarning is the confirm text for removing a message. Deleting the last
+// message is a clean rewind; deleting one with a downstream is not, because those
+// replies were written to the message that is about to vanish and they stay. The
+// prompt has to say so — "This can't be undone" is true of both and distinguishes
+// nothing, and the scene reading crooked afterwards is the surprise worth spending
+// a sentence on. Exported for its own test: the arithmetic decides which of two
+// materially different things the user is agreeing to.
+export function deleteWarning(downstream: number): string {
+  if (downstream <= 0) return 'Delete this message? This can’t be undone.'
+  const s = downstream === 1 ? 'reply was' : 'replies were'
+  return (
+    `Delete this message? The ${downstream} ${s} written to it and will stay, ` +
+    'so the scene may not read straight afterwards. Branch instead to keep this thread intact.'
+  )
+}
+
+export function Chat(props: {
+  client: Client
+  sessionId: string
+  // Connection generation — bumped on every (re)connect so the subscription is
+  // re-established. See useConversation.
+  generation?: number
+  onBack: () => void
+  onOpenSession: (session: string) => void
+}) {
   const { client, sessionId, onOpenSession } = props
-  const { items, busy, info, tail, msgMarks, send, edit, swipe, swipeAt, pruneAt, dropAt, retry, continueTurn, fork, discardDraft } = useConversation(client, sessionId)
+  const { items, busy, info, tail, msgMarks, permission, ask, send, edit, deleteAt, swipe, swipeAt, pruneAt, dropAt, retry, continueTurn, advance, cancel, decide, answerAsk, fork, discardDraft } = useConversation(client, sessionId, props.generation)
   const [draft, setDraft] = useState('')
   const [character, setCharacter] = useState<Character | null>(null)
   const [editing, setEditing] = useState<{ idx: number; text: string } | null>(null)
@@ -41,8 +65,28 @@ export function Chat(props: { client: Client; sessionId: string; onBack: () => v
       .catch(() => {})
   }, [info?.card])
 
+  // Stick to the newest message: a chat lands at the bottom (where the composer
+  // is) on load, and follows new turns as they stream — unless the reader has
+  // scrolled up into history, in which case we leave them where they are.
+  const transcriptRef = useRef<HTMLElement>(null)
+  const stick = useRef(true)
+  useEffect(() => {
+    stick.current = true // a freshly opened session starts pinned to its end
+  }, [sessionId])
+  useLayoutEffect(() => {
+    const el = transcriptRef.current
+    if (el && stick.current) el.scrollTop = el.scrollHeight
+  }, [items, sessionId])
+  const onTranscriptScroll = () => {
+    const el = transcriptRef.current
+    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  }
+
   const bg = info?.background ? `/media/backgrounds/${info.background}` : ''
-  const title = character?.name || info?.title || 'Chat'
+  // A set session title wins over the card name (matching the Library's
+  // `title || name`), so a rename or ✨-regenerate from Steering shows here; an
+  // untitled chat falls back to the character it stars.
+  const title = info?.title || character?.name || 'Chat'
   const lastAssistantId = [...items].reverse().find((it) => it.kind === 'assistant')?.id
 
   const submit = () => {
@@ -60,6 +104,15 @@ export function Chat(props: { client: Client; sessionId: string; onBack: () => v
     if (!editing) return
     guard(edit(editing.idx, editing.text))
     setEditing(null)
+  }
+  // Delete a message outright. Confirms first (the Library's idiom for a
+  // destructive act), and closes the edit box before the snapshot lands — the
+  // indices below shift up by one, so an edit box still pointing at `idx` would
+  // be aimed at a different message than the one the user opened.
+  const deleteMessage = (index: number) => {
+    if (!window.confirm(deleteWarning(msgCount - 1 - index))) return
+    setEditing(null)
+    guard(deleteAt(index))
   }
   // Branch (fork) at a message: a new session that shares the transcript through it
   // and diverges, leaving this one intact — the coherence-preserving alternative to
@@ -89,11 +142,14 @@ export function Chat(props: { client: Client; sessionId: string; onBack: () => v
         <span class="stage-chat__title">{title}</span>
         <div class="stage-chat__right">
           <span class="stage-status">{busy ? 'thinking…' : ''}</span>
+          {/* Lean header: the way back to the panel, and Steering. Everything
+              else lives in the drawer's tabs. */}
+          <a class="stage-nav-link stage-nav-link--icon" href="/" title="Open the control panel" aria-label="Open the control panel">⌂</a>
           <button class="stage-steer-btn" title="Steering" onClick={() => setSteerOpen(true)}>☰</button>
         </div>
       </header>
 
-      <main class="stage-transcript">
+      <main class="stage-transcript" ref={transcriptRef} onScroll={onTranscriptScroll}>
         {error && <p class="stage-error" onClick={() => setError('')}>{error}</p>}
         {items.length === 0 && <p class="stage-empty">Say something to begin.</p>}
         {items.map((it) => (
@@ -108,6 +164,7 @@ export function Chat(props: { client: Client; sessionId: string; onBack: () => v
             onSaveEdit={saveEdit}
             onCancelEdit={() => setEditing(null)}
             onBranch={() => it.idx != null && branchAt(it.idx)}
+            onDelete={() => it.idx != null && deleteMessage(it.idx)}
             branchNote={
               editing != null && editing.idx === it.idx && it.idx != null && msgCount - 1 - it.idx >= BRANCH_HINT
                 ? `${msgCount - 1 - it.idx} messages below were written to this — Save keeps them, Branch starts a new thread.`
@@ -139,6 +196,43 @@ export function Chat(props: { client: Client; sessionId: string; onBack: () => v
         </div>
       )}
 
+      {/* A turn that reaches for a gated tool, or asks a question, blocks on the
+          user. Stage used to ignore both events, so the turn parked on the daemon
+          with nothing on screen — it just looked like nothing happened. Rendered
+          above the composer, where the answer is expected. */}
+      {permission && (
+        <div class="stage-interact">
+          <div class="stage-interact__head">
+            Approve tool: <code>{permission.tool}</code>
+          </div>
+          {permission.preview && <pre class="stage-interact__preview">{permission.preview.slice(0, 1500)}</pre>}
+          <div class="stage-interact__actions">
+            <button class="stage-interact__go" onClick={() => decide(permission.call_id, { allow: true })}>Allow</button>
+            <button onClick={() => decide(permission.call_id, { allow: true, remember_tool: true })}>Allow &amp; remember</button>
+            <button class="stage-interact__deny" onClick={() => decide(permission.call_id, { allow: false, reason: 'denied by user' })}>Deny</button>
+          </div>
+        </div>
+      )}
+
+      {ask && <AskPrompt request={ask} onAnswer={answerAsk} />}
+
+      {/* The working signal, at the bottom where the waiting happens. The header's
+          "thinking…" is easy to miss, and the per-message caret only appears once
+          the FIRST token lands — so the whole provider round-trip, which is exactly
+          when you wonder whether your submit registered, had nothing at all. Driven
+          off busy, not off streaming, so it covers that gap; and it lives outside
+          the transcript, so it does not scroll away when you read back. */}
+      {busy && (
+        <div class="stage-working" role="status" aria-live="polite">
+          <span class="stage-working__dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span class="stage-working__label">working…</span>
+        </div>
+      )}
+
       <footer class="stage-composer">
         <button
           class="stage-suggest-btn"
@@ -147,6 +241,17 @@ export function Chat(props: { client: Client; sessionId: string; onBack: () => v
           onClick={() => setSuggestOpen(true)}
         >
           ✨
+        </button>
+        {/* Advance: let the scene move on without you saying anything. The other
+            half of ✨ — that one drafts YOUR line, this one asks for theirs. */}
+        <button
+          class="stage-advance-btn"
+          title="Advance — let the scene continue without saying anything"
+          aria-label="Advance the scene"
+          disabled={busy}
+          onClick={() => guard(advance())}
+        >
+          ▶
         </button>
         <textarea
           ref={composerRef}
@@ -161,7 +266,18 @@ export function Chat(props: { client: Client; sessionId: string; onBack: () => v
             }
           }}
         />
-        <button onClick={submit} disabled={busy || !draft.trim()}>Send</button>
+        {/* Send becomes Stop while a turn runs (the panel's convention), so the
+            interrupt is where your hands already are and costs no extra room.
+            Stopping is what lets you get a word in: post.line / cast.speak / ▶ all
+            reject while a turn is in flight, and a cancelled turn keeps whatever
+            streamed as a normal truncated line, so the scene stays usable. */}
+        {busy ? (
+          <button class="stage-stop-btn" title="Stop — interrupt this turn so you can steer the scene" onClick={cancel}>
+            ■ Stop
+          </button>
+        ) : (
+          <button onClick={submit} disabled={!draft.trim()}>Send</button>
+        )}
       </footer>
 
       {steerOpen && <Steering client={client} sessionId={sessionId} info={info} onClose={() => setSteerOpen(false)} />}
@@ -171,6 +287,9 @@ export function Chat(props: { client: Client; sessionId: string; onBack: () => v
           client={client}
           sessionId={sessionId}
           initialNote={draft}
+          roster={info?.cast ?? {}}
+          defaultProvider={info?.provider}
+          defaultModel={info?.model}
           onClose={() => setSuggestOpen(false)}
           onUse={(text) => setDraft(text)}
         />
@@ -183,6 +302,42 @@ function initial(name?: string): string {
   return (name?.trim()?.[0] ?? '·').toUpperCase()
 }
 
+// AskPrompt renders a question the turn is blocked on: the offered options, plus
+// a free-text box when the asker allows one. Its own component because the custom
+// answer needs local state, which the Chat body has no business holding.
+function AskPrompt(props: { request: AskRequest; onAnswer: (id: string, text: string) => void }) {
+  const { request, onAnswer } = props
+  const [custom, setCustom] = useState('')
+  return (
+    <div class="stage-interact">
+      <div class="stage-interact__head">{request.question}</div>
+      {(request.options ?? []).length > 0 && (
+        <div class="stage-interact__actions">
+          {(request.options ?? []).map((option) => (
+            <button key={option} onClick={() => onAnswer(request.ask_id, option)}>
+              {option}
+            </button>
+          ))}
+        </div>
+      )}
+      {request.allow_custom && (
+        <form
+          class="stage-interact__custom"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (custom.trim()) onAnswer(request.ask_id, custom.trim())
+          }}
+        >
+          <input value={custom} placeholder="Your answer…" onInput={(e) => setCustom((e.target as HTMLInputElement).value)} />
+          <button class="stage-interact__go" type="submit" disabled={!custom.trim()}>
+            Answer
+          </button>
+        </form>
+      )}
+    </div>
+  )
+}
+
 function ChatRow(props: {
   item: Item
   character: Character | null
@@ -193,6 +348,7 @@ function ChatRow(props: {
   onSaveEdit: () => void
   onCancelEdit: () => void
   onBranch: () => void
+  onDelete: () => void
   branchNote: string | undefined
   onPrune: () => void
   onDropTake: (variant: number) => void
@@ -208,9 +364,15 @@ function ChatRow(props: {
 }) {
   const { item, character, editing, isLast, tail, mark, busy } = props
 
+  // The edit box grows with its content up to a CSS cap (like the composer),
+  // keyed on editText so it fits the whole message the instant editing opens —
+  // not a 4-line slit you scroll a long entry through. The ref sits idle (null)
+  // on every non-editing row, so the per-row hook is a no-op until this one edits.
+  const editRef = useAutoGrow(props.editText)
+
   const editBox = (
     <div class="stage-edit">
-      <textarea value={props.editText} onInput={(e) => props.onEditText((e.target as HTMLTextAreaElement).value)} />
+      <textarea ref={editRef} value={props.editText} onInput={(e) => props.onEditText((e.target as HTMLTextAreaElement).value)} />
       <div class="stage-edit__actions">
         <button onClick={props.onSaveEdit}>Save</button>
         <button class="stage-edit__cancel" onClick={props.onCancelEdit}>Cancel</button>
@@ -218,6 +380,13 @@ function ChatRow(props: {
         {mark && mark.variants > 1 && (
           <button class="stage-edit__prune" title="Discard this message's other versions" onClick={props.onPrune}>Keep only this</button>
         )}
+        {/* Rightmost and last, behind a confirm: the one action here that removes
+            rather than revises. Disabled mid-turn because the daemon refuses a
+            revision while one is running — better to look unavailable than to
+            answer a click with an error. */}
+        <button class="stage-edit__delete" title="Delete this message" disabled={busy} onClick={props.onDelete}>
+          🗑 Delete
+        </button>
       </div>
       {props.branchNote && <p class="stage-edit__note">{props.branchNote}</p>}
     </div>
@@ -237,16 +406,34 @@ function ChatRow(props: {
     ) : null
 
   switch (item.kind) {
-    case 'assistant':
+    case 'assistant': {
+      // A directed line (Phase 6) the user authored into the scene, or a routed
+      // line the meta-narrator handed to a character (Worlds W3): attribute it
+      // to the speaking character (or the narrator) with 🎭, not to the card's
+      // main character, and drop the (possibly misleading) card avatar.
+      const attributed = item.directed || item.routed
+      const speaker = attributed ? (item.actor?.trim() || 'Narrator') : character?.name
+      // Directed and routed are BOTH attributed, but they are not the same thing
+      // and used to render identically: a line you wrote into the scene yourself
+      // and a line the meta-narrator invented came out as the same unadorned
+      // "🎭 Narrator" beat, side by side, with nothing to tell them apart. The wire
+      // has always distinguished them; only the UI collapsed them.
+      const mark = item.directed ? '✍' : '🎭'
+      const kindClass = item.directed ? ' stage-row--directed' : item.routed ? ' stage-row--routed' : ''
+      const kindTitle = item.directed ? 'You wrote this line into the scene' : 'The meta-narrator handed this beat to a character'
       return (
-        <div class="stage-row stage-row--assistant">
-          {character?.avatar ? (
+        <div class={`stage-row stage-row--assistant${kindClass}${editing ? ' stage-row--editing' : ''}`}>
+          {!attributed && character?.avatar ? (
             <img class="stage-avatar" src={character.avatar} alt="" />
           ) : (
-            <div class="stage-avatar stage-avatar--blank" aria-hidden="true">{initial(character?.name)}</div>
+            <div class="stage-avatar stage-avatar--blank" aria-hidden="true">{attributed ? mark : initial(character?.name)}</div>
           )}
           <div class="stage-row__body">
-            {character?.name && <span class="stage-row__name">{character.name}</span>}
+            {speaker && (
+              <span class="stage-row__name" title={attributed ? kindTitle : undefined}>
+                {attributed ? `${mark} ${speaker}` : speaker}
+              </span>
+            )}
             {editing ? editBox : (
               <div class="stage-bubble" onClick={props.onStartEdit} dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
             )}
@@ -262,17 +449,27 @@ function ChatRow(props: {
                   </div>
                 )}
                 <button class="stage-regen" disabled={busy} title="Regenerate" onClick={props.onRetry}>↻</button>
-                {props.canContinue && (
-                  <button class="stage-continue" disabled={busy} title="Continue" onClick={props.onContinue}>⤸</button>
-                )}
+                <button
+                  class="stage-continue"
+                  disabled={busy || !props.canContinue}
+                  title={props.canContinue ? 'Continue' : "Continue isn't available for this model — assistant-prefill continue is Anthropic-only"}
+                  onClick={() => props.canContinue && props.onContinue()}
+                >⤸</button>
               </div>
             )}
           </div>
         </div>
       )
+    }
     case 'user':
+      // A [Direction] steer (Phase 6b / cast.speak) reads as a de-emphasized OOC
+      // note — the user directed the story, they didn't say this as their
+      // character — so it never renders as a player bubble.
+      if (item.directive) {
+        return <div class="stage-row stage-row--direction">🎬 {item.text}</div>
+      }
       return (
-        <div class="stage-row stage-row--user">
+        <div class={`stage-row stage-row--user${editing ? ' stage-row--editing' : ''}`}>
           <div class="stage-row__body">
             {editing ? editBox : (
               <div class="stage-bubble" onClick={props.onStartEdit} dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />

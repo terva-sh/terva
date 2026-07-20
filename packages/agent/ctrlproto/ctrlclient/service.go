@@ -355,6 +355,10 @@ func (s *Service) PersonasEdit(ctx context.Context, p ctrlproto.PersonaWritePara
 	return r, err
 }
 
+func (s *Service) PersonasDelete(ctx context.Context, p ctrlproto.PersonaDeleteParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodPersonasDelete, p, nil)
+}
+
 // --- backgrounds ---
 
 var _ ctrlproto.BackgroundsController = (*Service)(nil)
@@ -387,9 +391,9 @@ func (s *Service) BackgroundsGenerate(ctx context.Context, sess string, p ctrlpr
 
 // --- control group ---
 
-func (s *Service) Models(ctx context.Context) ([]ctrlproto.ModelInfo, error) {
+func (s *Service) Models(ctx context.Context, sess string) ([]ctrlproto.ModelInfo, error) {
 	var r ctrlproto.ModelsResult
-	err := s.c.Call(ctx, "", ctrlproto.MethodModelsList, nil, &r)
+	err := s.c.Call(ctx, sess, ctrlproto.MethodModelsList, nil, &r)
 	return r.Models, err
 }
 

@@ -25,8 +25,17 @@ type Placed = { idx?: number; history?: boolean }
 
 export type Item = Placed &
   (
-    | { kind: 'user'; id: string; text: string; images?: ImageAttachment[] }
-    | { kind: 'assistant'; id: string; text: string; streaming: boolean; images?: ImageAttachment[] }
+    // `directive` marks a [Direction] steer (Phase 6b / cast.speak): an
+    // out-of-character instruction the user gave to move the story, run as a turn.
+    // `text` is the instruction with the marker stripped; rendered as a
+    // de-emphasized 🎬 note, not as the player's dialogue.
+    | { kind: 'user'; id: string; text: string; images?: ImageAttachment[]; directive?: boolean }
+    // directed/actor mark a line the user authored into the scene via directed
+    // authorship (Phase 6) — a character's (actor set) or the narrator's (actor
+    // empty) turn — rendered with 🎭 attribution rather than as a model reply.
+    // routed marks a line the meta-narrator routed to a character (Worlds W3):
+    // model-produced but likewise 🎭-attributed to its actor, not the main card.
+    | { kind: 'assistant'; id: string; text: string; streaming: boolean; images?: ImageAttachment[]; directed?: boolean; routed?: boolean; actor?: string }
     | {
         kind: 'tool'
         id: string
@@ -78,6 +87,22 @@ export type Item = Placed &
 
 let seq = 0
 const nextID = () => `i${++seq}`
+
+// directionBody detects the [Direction] steer convention (Phase 6b / cast.speak):
+// an out-of-character direction the user gave, run as a turn. Returns the
+// instruction with the marker stripped, or null for an ordinary message.
+const DIRECTION_MARK = '[Direction]'
+export function directionBody(text: string): string | null {
+  return text.startsWith(DIRECTION_MARK) ? text.slice(DIRECTION_MARK.length).trim() : null
+}
+
+// userRow maps a user-role message to its item, splitting off a [Direction] steer
+// as a de-emphasized directive row rather than the player's dialogue.
+function userRow(text: string, images: ImageAttachment[] | undefined, id: string, placed: Placed): Item {
+  const dir = directionBody(text)
+  if (dir !== null) return { kind: 'user', id, text: dir, directive: true, ...placed }
+  return { kind: 'user', id, text, images, ...placed }
+}
 
 // msgID is a message's stable identity: (epoch, index). The daemon's transcriptEpoch
 // bumps ONLY on a wholesale replace and never on an append, so an index never moves
@@ -161,8 +186,8 @@ export function itemsFromMessages(msgs: WireMessage[], at: Placement): Item[] {
           : m.synthetic
             ? { kind: 'system', id, text, ...placed }
             : m.role === 'user'
-              ? { kind: 'user', id, text, images, ...placed }
-              : { kind: 'assistant', id, text, streaming: false, images, ...placed },
+              ? userRow(text, images, id, placed)
+              : { kind: 'assistant', id, text, streaming: false, images, directed: m.directed, routed: m.routed, actor: m.actor, ...placed },
       )
     }
     for (const b of m.content ?? []) {
@@ -312,6 +337,8 @@ export function applyEvent(items: Item[], ev: WireEvent): Item[] {
       const images = imageAttachments(ev.message?.content)
       if (!text && !images) return items
       if (ev.message?.synthetic) return [...items, { kind: 'system', id: nextID(), text }]
+      const dir = directionBody(text)
+      if (dir !== null) return [...items, { kind: 'user', id: nextID(), text: dir, directive: true }]
       return [...items, { kind: 'user', id: nextID(), text, images }]
     }
     case 'text_delta': {

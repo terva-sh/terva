@@ -145,6 +145,40 @@ func TestMessageWireRoundTrip(t *testing.T) {
 	}
 }
 
+// A directed line (Phase 6) surfaces typed Directed/Actor attribution on the
+// wire and round-trips back into its source/actor meta. A narrator beat is
+// directed with no actor; a plain assistant message stays undirected.
+func TestMessageWireDirected(t *testing.T) {
+	actor := provider.Message{
+		Role:    provider.RoleAssistant,
+		Meta:    map[string]string{MetaSource: MetaDirected, MetaActor: "Kael"},
+		Content: []provider.Content{provider.TextBlock{Text: "You're late."}},
+	}
+	w := MessageToWire(actor)
+	if !w.Directed || w.Actor != "Kael" {
+		t.Fatalf("actor line: directed=%v actor=%q, want true/Kael", w.Directed, w.Actor)
+	}
+	back := MessageFromWire(w)
+	if back.Meta[MetaSource] != MetaDirected || back.Meta[MetaActor] != "Kael" {
+		t.Errorf("actor meta did not round-trip: %+v", back.Meta)
+	}
+
+	beat := MessageToWire(provider.Message{
+		Role: provider.RoleAssistant,
+		Meta: map[string]string{MetaSource: MetaDirected},
+	})
+	if !beat.Directed || beat.Actor != "" {
+		t.Errorf("narrator beat: directed=%v actor=%q, want true/empty", beat.Directed, beat.Actor)
+	}
+	if b := MessageFromWire(beat); b.Meta[MetaSource] != MetaDirected || b.Meta[MetaActor] != "" {
+		t.Errorf("narrator meta did not round-trip: %+v", b.Meta)
+	}
+
+	if plain := MessageToWire(provider.Message{Role: provider.RoleAssistant}); plain.Directed || plain.Actor != "" {
+		t.Errorf("plain assistant message read as directed: %+v", plain)
+	}
+}
+
 // TestEventToWireFullImageData: the Full conversions carry image payloads
 // (Data alongside the usual size metadata) where the lean ones stay
 // size-only — the split the control plane relies on: broadcast full, strip

@@ -40,6 +40,8 @@ var notForwarded = map[string]string{
 	"CastController":         "Stage/play cast is web-only today; a Go client does not direct actors. Most likely of these to graduate to a forwarder — if the regular TUI grows a cast surface on the swarm-spawn machinery.",
 	"DoctorController":       "The LLM card doctor is a Stage card-craft control; web-only. Revisit for a TUI Stage.",
 	"SuggestController":      "Reply-suggestion drafting is a Stage composer aid; web-only. Revisit for a TUI Stage.",
+	"DirectController":       "Directed authorship (post an approved character/narrator line into the transcript) is a Stage composer commit; web-only. Revisit for a TUI Stage.",
+	"WorldController":        "World lore (session-scoped shared lorebook, Worlds L1) is edited from the Stage steering drawer; web-only. Revisit for a TUI Stage.",
 	"DraftController":        "Discarding an unpromoted draft on navigate-away is a Stage front-end cleanup; web-only. Revisit for a TUI Stage.",
 	"NoteController":         "Author's note is a Stage/play immersion control; web-only. Revisit for a TUI Stage.",
 	"VariantsController":     "Message-scoped variant cleanup (prune/drop) is a Stage editing control; web-only. Revisit for a TUI Stage.",

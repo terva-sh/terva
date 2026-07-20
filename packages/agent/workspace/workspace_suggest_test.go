@@ -13,6 +13,30 @@ func suggestMsg(role provider.Role, text string) provider.Message {
 	return provider.Message{Role: role, Content: []provider.Content{provider.TextBlock{Text: text}}, Time: time.Time{}}
 }
 
+// Worlds W1: voicing a library card writes the actor task for the card's name
+// and grounds the draft in the card's authored fields, superseding a typed voice.
+func TestRenderSuggestSystem_ActorFromCard(t *testing.T) {
+	c := &card.Card{
+		Name:        "Elira",
+		Description: "a mistress of the high tower",
+		Personality: "imperious, precise",
+		Scenario:    "the tower at dusk",
+	}
+	// A card is passed AND a stray typed voice — the card must win.
+	sys := renderSuggestSystem(suggestTarget{kind: "actor", voice: "ignored walk-on", card: c}, userPersona{Name: "Aria"}, nil, "", nil)
+	if !strings.Contains(sys, "next line for Elira") {
+		t.Errorf("actor task not written for the card's name:\n%s", sys)
+	}
+	for _, want := range []string{"a mistress of the high tower", "imperious, precise", "the tower at dusk"} {
+		if !strings.Contains(sys, want) {
+			t.Errorf("card voice missing %q:\n%s", want, sys)
+		}
+	}
+	if strings.Contains(sys, "ignored walk-on") {
+		t.Errorf("typed voice should be superseded by the card:\n%s", sys)
+	}
+}
+
 func TestRenderSuggestSystem_IncludesPersonaCardAndScene(t *testing.T) {
 	c := &card.Card{
 		Name:        "Kobeni",
@@ -24,7 +48,7 @@ func TestRenderSuggestSystem_IncludesPersonaCardAndScene(t *testing.T) {
 		suggestMsg(provider.RoleAssistant, "*She looks up from the register.* Oh — welcome!"),
 		suggestMsg(provider.RoleUser, "I grab a coffee."),
 	}
-	sys := renderSuggestSystem("Aki", "a tired regular", c, transcript)
+	sys := renderSuggestSystem(suggestTarget{}, userPersona{Name: "Aki", Description: "a tired regular"}, c, "", transcript)
 
 	for _, want := range []string{
 		"first person",         // the drafting instruction
@@ -44,7 +68,7 @@ func TestRenderSuggestSystem_IncludesPersonaCardAndScene(t *testing.T) {
 
 func TestRenderSuggestSystem_NoPersonaNoCard(t *testing.T) {
 	transcript := []provider.Message{suggestMsg(provider.RoleAssistant, "Hello there.")}
-	sys := renderSuggestSystem("", "", nil, transcript)
+	sys := renderSuggestSystem(suggestTarget{}, userPersona{}, nil, "", transcript)
 
 	if !strings.Contains(sys, "not specified") {
 		t.Errorf("expected an unspecified-player note, got:\n%s", sys)
@@ -59,7 +83,7 @@ func TestRenderSuggestSystem_NoPersonaNoCard(t *testing.T) {
 }
 
 func TestRenderSuggestSystem_EmptyTranscript(t *testing.T) {
-	sys := renderSuggestSystem("Aki", "", nil, nil)
+	sys := renderSuggestSystem(suggestTarget{}, userPersona{Name: "Aki"}, nil, "", nil)
 	if !strings.Contains(sys, "the scene has not started yet") {
 		t.Errorf("expected an empty-scene note, got:\n%s", sys)
 	}

@@ -23,6 +23,26 @@ type SuggestController interface {
 type SuggestParams struct {
 	History []SuggestTurn `json:"history,omitempty"`
 	Note    string        `json:"note,omitempty"`
+	// Provider/Model optionally draft on a specific model instead of the session's
+	// current one (Phase 7 per-generation routing). Empty = the session's model.
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	// Target selects whose line to draft (Phase 6 directed authorship). "" or
+	// "user" drafts the player's own reply (the default, and the only mode that
+	// fills the composer); "actor" drafts a named character's line in their voice;
+	// "narrator" drafts a narrative beat. TargetName is the actor's name and
+	// TargetVoice a short description of them — for a walk-on not yet in the cast;
+	// both are ignored unless Target=="actor". An actor/narrator draft is meant to
+	// be posted with post.line, not typed as the player.
+	Target      string `json:"target,omitempty"`
+	TargetName  string `json:"target_name,omitempty"`
+	TargetVoice string `json:"target_voice,omitempty"`
+	// TargetCard optionally voices a LIBRARY CARD instead of a typed walk-on
+	// (Worlds W1): a card ref the daemon resolves to the character's full voice
+	// (name, description, personality, scenario) for a faithful in-voice draft.
+	// Ignored unless Target=="actor"; when set it supersedes TargetVoice, and
+	// TargetName defaults to the card's name.
+	TargetCard string `json:"target_card,omitempty"`
 }
 
 // SuggestTurn is one completed round of the drafting back-and-forth: the

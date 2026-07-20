@@ -104,6 +104,35 @@ const (
 	MetaTokensBefore = "tokens_before"
 )
 
+// MetaSource is the meta key naming what produced a message when it was not an
+// ordinary model turn — "card:greeting" for a seeded opening, MetaDirected for a
+// user-directed line (below). MetaActor carries the speaking character's name on
+// a directed line.
+const (
+	MetaSource = "source"
+	MetaActor  = "actor"
+)
+
+// MetaDirected is the MetaSource value for a message the user AUTHORED into the
+// scene via Stage's directed-authorship surface (Phase 6) — a character's or the
+// narrator's line they drafted, approved, and posted at their reply boundary —
+// rather than one the model produced on its own turn. Its MetaActor names the
+// speaking character (absent/empty means a narrator beat). A display surface
+// renders it with the 🎭 attribution the cast machinery uses, not as an ordinary
+// model turn; the provider request builders merge it into any adjacent assistant
+// message (MergeAdjacentSameRole), so a directed line beside a real turn is one
+// turn on the wire.
+const MetaDirected = "stage:directed"
+
+// MetaRouted is the MetaSource value for a line the meta-narrator ROUTED (the
+// Worlds W3 coordinator): on a normal user turn in a World with several
+// characters, the router picked this speaker and their line was generated in
+// their voice — model-produced, unlike a MetaDirected line the user authored.
+// Its MetaActor names the speaking character (absent/empty means a narrator
+// beat). Renders with the same 🎭 attribution as a directed line; the provider
+// request builders likewise merge it into any adjacent assistant message.
+const MetaRouted = "stage:routed"
+
 // MetaClear marks a DISPLAY-ONLY divider standing in for a /clear checkpoint.
 //
 // Unlike a compaction, a clear leaves no message behind — it is an empty checkpoint
@@ -138,6 +167,18 @@ type WireMessage struct {
 	// into protocol — including keys we did not mean to hand a client.
 	Compaction   bool `json:"compaction,omitempty"`
 	TokensBefore int  `json:"tokens_before,omitempty"`
+	// Directed is true for an assistant message the user authored into the scene
+	// via directed authorship (Phase 6) — a character's or narrator's line they
+	// drafted and posted — rather than a model turn. Routed is true for a line
+	// the meta-narrator routed to a character on a normal turn (Worlds W3) —
+	// model-produced, in that character's voice. Actor is the speaking
+	// character's name for either; empty means the narrator. A client renders
+	// them with 🎭 attribution instead of as an ordinary assistant bubble. Typed
+	// fields and not the raw Meta map, for the reason Synthetic/Compaction give
+	// above.
+	Directed bool   `json:"directed,omitempty"`
+	Routed   bool   `json:"routed,omitempty"`
+	Actor    string `json:"actor,omitempty"`
 }
 
 // WireBlock is one piece of message content. Discriminate on Type:
@@ -318,6 +359,14 @@ func messageToWire(m provider.Message, imageData bool) WireMessage {
 		// renders without it.
 		w.TokensBefore, _ = strconv.Atoi(m.Meta[MetaTokensBefore])
 	}
+	switch m.Meta[MetaSource] {
+	case MetaDirected:
+		w.Directed = true
+		w.Actor = m.Meta[MetaActor] // empty = narrator
+	case MetaRouted:
+		w.Routed = true
+		w.Actor = m.Meta[MetaActor] // empty = narrator
+	}
 	return w
 }
 
@@ -391,6 +440,18 @@ func MessageFromWire(w WireMessage) provider.Message {
 		setMeta(MetaCompaction, "true")
 		if w.TokensBefore > 0 {
 			setMeta(MetaTokensBefore, strconv.Itoa(w.TokensBefore))
+		}
+	}
+	if w.Directed {
+		setMeta(MetaSource, MetaDirected)
+		if w.Actor != "" {
+			setMeta(MetaActor, w.Actor)
+		}
+	}
+	if w.Routed {
+		setMeta(MetaSource, MetaRouted)
+		if w.Actor != "" {
+			setMeta(MetaActor, w.Actor)
 		}
 	}
 	return m
