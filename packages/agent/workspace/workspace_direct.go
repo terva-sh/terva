@@ -16,6 +16,7 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -56,7 +57,7 @@ func (w *Workspace) directSession(sess string) (*wsSession, error) {
 		return nil, err
 	}
 	if s.sess == nil || s.sess.Meta.Experience == "" {
-		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "directed authorship is only available in a chat or play session")
+		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("directed authorship is only available in a chat or play session"))
 	}
 	return s, nil
 }
@@ -71,7 +72,7 @@ func (w *Workspace) directSession(sess string) (*wsSession, error) {
 func (s *wsSession) directTurn(text string) error {
 	body := strings.TrimSpace(text)
 	if body == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "direct: nothing to direct")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("direct: nothing to direct"))
 	}
 	return s.promptBlocks(directionDirective(body), nil)
 }
@@ -96,7 +97,7 @@ func (s *wsSession) directTurn(text string) error {
 // coordination off) there is nothing to decide, and advance is unchanged.
 func (s *wsSession) advance() error {
 	if len(s.agent.Messages()) == 0 {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "advance: there is no scene to continue yet")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("advance: there is no scene to continue yet"))
 	}
 	turnCtx, err := s.beginTurn()
 	if err != nil {
@@ -118,12 +119,33 @@ func (s *wsSession) advance() error {
 	return nil
 }
 
+// directionMark opens an out-of-character steer. It rides the transcript text
+// rather than the message meta because the model has to READ it — meta never
+// reaches the provider — which is also why recognizing one again is string work.
+const directionMark = "[Direction]"
+
 // directionDirective wraps an out-of-character direction in the [Direction]
 // marker the model reads as a steer (not the player's dialogue) and the Stage
 // client renders as a de-emphasized 🎬 note. Shared with cast.speak so both
 // directed turns carry one convention.
 func directionDirective(text string) string {
-	return "[Direction] " + text
+	return directionMark + " " + text
+}
+
+// directionBody is directionDirective read back: the steer without its marker,
+// and whether the message was one at all.
+//
+// It exists because until now this convention had a WRITER in Go and a reader
+// only in TypeScript (the Stage store's directionBody), so every Go surface that
+// walked a transcript saw a steer as ordinary player dialogue and had no way not
+// to. The story export is the first one where that was visibly wrong; it will
+// not be the last. Same name as the TS function on purpose — if the convention
+// ever changes, both ends should be findable by one grep.
+func directionBody(text string) (string, bool) {
+	if !strings.HasPrefix(text, directionMark) {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(text, directionMark)), true
 }
 
 // postDirected appends a user-directed line into the live transcript as an
@@ -140,7 +162,7 @@ func directionDirective(text string) string {
 func (s *wsSession) postDirected(actor, text string) error {
 	body := strings.TrimSpace(text)
 	if body == "" {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "post: nothing to post")
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("post: nothing to post"))
 	}
 	s.mu.Lock()
 	busy := s.turnCancel != nil
