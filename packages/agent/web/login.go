@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // The login page exists to keep the bearer token out of the URL.
@@ -40,7 +42,7 @@ const (
 // allowed to fetch the bundle yet. The style is inlined under a per-response
 // nonce so the strict style-src survives — see loginCSP.
 var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>
-<html lang="en">
+<html lang="{{.Lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -74,14 +76,14 @@ var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>
 <body>
 <main>
   <h1>terva</h1>
-  <p>This control panel needs its bearer token.</p>
+  <p>{{.Intro}}</p>
   {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
   <form method="post" action="{{.Action}}">
-    <label for="token">Token</label>
+    <label for="token">{{.TokenLabel}}</label>
     <input id="token" name="token" type="password" autocomplete="current-password"
            autofocus required spellcheck="false">
     <input type="hidden" name="next" value="{{.Next}}">
-    <button type="submit">Connect</button>
+    <button type="submit">{{.Connect}}</button>
   </form>
 </main>
 </body>
@@ -126,11 +128,17 @@ func serveLogin(w http.ResponseWriter, r *http.Request, status int, errMsg strin
 	if r.URL.Path == loginPath {
 		next = r.URL.Query().Get("next")
 	}
-	_ = loginTmpl.Execute(w, struct{ Nonce, Err, Action, Next string }{
-		Nonce:  n,
-		Err:    errMsg,
-		Action: loginPath,
-		Next:   safeNext(next),
+	// The page's fixed prose resolves here, at render time — the template is
+	// parsed at init, where translation would freeze English (the i18n.M rule).
+	_ = loginTmpl.Execute(w, struct{ Nonce, Err, Action, Next, Lang, Intro, TokenLabel, Connect string }{
+		Nonce:      n,
+		Err:        errMsg,
+		Action:     loginPath,
+		Next:       safeNext(next),
+		Lang:       i18n.ActiveLang(),
+		Intro:      i18n.T("This control panel needs its bearer token."),
+		TokenLabel: i18n.T("Token"),
+		Connect:    i18n.T("Connect"),
 	})
 }
 
@@ -155,7 +163,7 @@ func handleLogin(opts Options) http.HandlerFunc {
 		// No token configured means no token to type; the form should never
 		// have been offered, and accepting a POST here would be theatre.
 		if opts.Token == "" {
-			http.Error(w, "no token auth is configured", http.StatusNotFound)
+			http.Error(w, i18n.T("no token auth is configured"), http.StatusNotFound)
 			return
 		}
 		// GET is a browser ASKING for the form — the client bounces here when it
@@ -179,17 +187,17 @@ func handleLogin(opts Options) http.HandlerFunc {
 		who := clientIP(opts, r)
 		if !loginAttemptAllowed(who) {
 			fmt.Fprintf(os.Stderr, "terva web: throttling token guesses from %s\n", who)
-			serveLogin(w, r, http.StatusTooManyRequests, "Too many attempts. Wait a minute and try again.")
+			serveLogin(w, r, http.StatusTooManyRequests, i18n.T("Too many attempts. Wait a minute and try again."))
 			return
 		}
 		if err := r.ParseForm(); err != nil {
-			serveLogin(w, r, http.StatusBadRequest, "Malformed submission.")
+			serveLogin(w, r, http.StatusBadRequest, i18n.T("Malformed submission."))
 			return
 		}
 		if !constantTimeEqual(strings.TrimSpace(r.PostFormValue("token")), opts.Token) {
 			loginFailed(who)
 			fmt.Fprintf(os.Stderr, "terva web: rejected bad token from %s\n", who)
-			serveLogin(w, r, http.StatusUnauthorized, "That token was not accepted.")
+			serveLogin(w, r, http.StatusUnauthorized, i18n.T("That token was not accepted."))
 			return
 		}
 		loginSucceeded(who)

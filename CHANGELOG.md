@@ -11,6 +11,26 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.0](https://github.com/terva-sh/terva/releases/tag/v0.126.0) — 2026-07-19
+
+### Features
+
+- card: read CCv3 cards, survive oversized imports, and lint on the card sheet
+- stage: Stage is an installable, offline-capable PWA at /stage/
+- stage: Worlds — an ensemble stage with a roster, scoped lore, and a meta-narrator
+- stage: directed authorship — draft and post a line as anyone, or direct the story
+- stage: library upkeep — a persona editor, deletes that clean up, and titles that improve themselves
+- stage: model choice per session and per generation, with provider and billing on every row
+- stage: the immersive craft guards — six style levers for long scenes
+- stage: turns you can trust — reconnects resubscribe, approvals render, and Stop stops
+- stage: who you are reaches every prompt — gender and pronouns, pinned tense, side chats included
+- CHANGELOG.md — the release history, rendered from the same commits that make the notes
+
+### Fixes
+
+- session: timestamp the settings timeline, and rescue year-one greetings at load
+- workspace: every side-channel model call books its spend
+
 ## [v0.125.1](https://github.com/terva-sh/terva/releases/tag/v0.125.1) — 2026-07-19
 
 ### Features

@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/i18n"
 )
 
 // authMiddleware gates every request. The auth model is deliberately thin —
@@ -23,7 +24,7 @@ func authMiddleware(opts Options, next http.Handler) http.Handler {
 		if !hostAllowed(opts, r) {
 			fmt.Fprintf(os.Stderr, "terva web: rejected request with disallowed Host %q from %s\n", r.Host, r.RemoteAddr)
 			explainHostRejection(r)
-			http.Error(w, "forbidden: no auth is configured, so only a loopback Host is accepted (DNS-rebinding defense) — see the terva web log", http.StatusForbidden)
+			http.Error(w, i18n.T("forbidden: no auth is configured, so only a loopback Host is accepted (DNS-rebinding defense) — see the terva web log"), http.StatusForbidden)
 			return
 		}
 		if !authorized(opts, r) {

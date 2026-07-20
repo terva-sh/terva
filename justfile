@@ -133,8 +133,9 @@ web-build:
     # the overlay-merged copy at runtime). Regenerated here, like dist — commit
     # the result; there is no Node in `just ci` to gate it.
     npm --prefix packages/agent/web/client run i18n-extract
-    @mkdir -p packages/agent/web/client/src/locales
+    @mkdir -p packages/agent/web/client/src/locales/stage
     @for f in packages/i18n/locales/web/*.json; do case "$f" in */en.json) ;; *) cp "$f" packages/agent/web/client/src/locales/;; esac; done
+    @for f in packages/i18n/locales/stage/*.json; do case "$f" in */en.json) ;; *) [ -e "$f" ] && cp "$f" packages/agent/web/client/src/locales/stage/ || true;; esac; done
     npm --prefix packages/agent/web/client run build
     @echo "built web client -> packages/agent/web/client/dist (commit it)"
 
@@ -160,11 +161,11 @@ web-check-fast:
 # `web-build` does, then assert git sees no change. A test-only source commit
 # should pass this without a reviewer reading minified output.
 web-verify-dist: web-build
-    @if git diff --quiet -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json; then \
+    @if git diff --quiet -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json packages/i18n/locales/stage/en.json; then \
         echo "web-verify-dist: OK — committed web assets match a fresh build"; \
     else \
         echo "web-verify-dist: committed web assets DIFFER from a fresh build —"; \
-        git -c color.ui=never diff --stat -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json; \
+        git -c color.ui=never diff --stat -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json packages/i18n/locales/stage/en.json; \
         echo "  hashed-asset renames + index.html/sw.js only -> run 'just web-build' and commit;"; \
         echo "  unrelated or churning files                  -> the build may be nondeterministic; investigate."; \
         exit 1; \
@@ -199,11 +200,12 @@ web-check:
     npm --prefix packages/agent/web/client run i18n-check
     @echo "== web-check: regenerate catalogs + dist =="
     npm --prefix packages/agent/web/client run i18n-extract
-    @mkdir -p packages/agent/web/client/src/locales
+    @mkdir -p packages/agent/web/client/src/locales/stage
     @for f in packages/i18n/locales/web/*.json; do case "$f" in */en.json) ;; *) cp "$f" packages/agent/web/client/src/locales/;; esac; done
+    @for f in packages/i18n/locales/stage/*.json; do case "$f" in */en.json) ;; *) [ -e "$f" ] && cp "$f" packages/agent/web/client/src/locales/stage/ || true;; esac; done
     npm --prefix packages/agent/web/client run build
     @echo "== web-check: committed-asset determinism =="
-    @git diff --quiet -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json || { echo "committed web assets differ from a fresh build — run 'just web-build' and commit:"; git -c color.ui=never diff --stat -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json; exit 1; }
+    @git diff --quiet -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json packages/i18n/locales/stage/en.json || { echo "committed web assets differ from a fresh build — run 'just web-build' and commit:"; git -c color.ui=never diff --stat -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json packages/i18n/locales/stage/en.json; exit 1; }
     @echo "== web-check: prod-dep audit =="
     npm --prefix packages/agent/web/client audit --omit=dev --audit-level=high
     @echo "== web-check: tagged Go embed test =="

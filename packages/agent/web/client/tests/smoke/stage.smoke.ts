@@ -102,7 +102,13 @@ test('stage: library renders and a card opens an immersive chat', async ({ page 
   await expect(page.locator('.stage-row--assistant')).toHaveCount(2)
   await expect(page.locator('.stage-avatar').first()).toBeVisible()
   await expect(page.locator('.stage-swipe')).toBeVisible() // swipe arrows on the tail (2 takes)
-  await expect(page.locator('.stage-regen')).toBeVisible()
+  // Both regenerate affordances: the plain one (↻) and the guided twin (↻✎)
+  // that 43e986fb added beside it. Asserting each SPECIFICALLY is the point —
+  // a bare '.stage-regen' matched one element when this was written and two
+  // afterwards, which Playwright's strict mode fails rather than silently
+  // passing on the wrong one.
+  await expect(page.locator('.stage-regen:not(.stage-regen--guided)')).toBeVisible()
+  await expect(page.locator('.stage-regen--guided')).toBeVisible()
   // The continue affordance shows because the snapshot advertises supports_continue.
   await expect(page.locator('.stage-continue')).toBeVisible()
   if (process.env.STAGE_SHOT) await page.screenshot({ path: `${process.env.STAGE_SHOT}-chat.png`, fullPage: true })
