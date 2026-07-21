@@ -97,7 +97,12 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1rem 0;
+  /* viewport-fit=cover lets the page draw under the notch/curved corners; a
+     sticky bar pinned at top:0 then sits behind them, hidden and mis-tappable.
+     Fold the top safe-area inset into the padding so the bar's background fills
+     the unsafe strip and its controls sit below it. env() is 0 with no inset,
+     so desktop is unchanged. (The panel does the same on .topbar.) */
+  padding: calc(1rem + env(safe-area-inset-top)) 0 1rem;
   border-bottom: 1px solid var(--stage-line);
   position: sticky;
   top: 0;
@@ -2587,14 +2592,19 @@ button:disabled {
   overflow-y: auto;
   background: var(--stage-surface);
   border-left: 1px solid var(--stage-line);
-  padding: 1rem 1.1rem calc(1.5rem + env(safe-area-inset-bottom));
+  /* Full-height from the top, so under viewport-fit=cover its head lands behind
+     the notch. Inset the top like the topbar (and the bottom already insets for
+     the home indicator). */
+  padding: calc(1rem + env(safe-area-inset-top)) 1.1rem calc(1.5rem + env(safe-area-inset-bottom));
 }
 .stage-drawer__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   position: sticky;
-  top: -1rem;
+  /* -1rem eats the drawer's top padding so the head pins flush; add the inset so
+     the pinned head clears the notch too, matching the padding above. */
+  top: calc(env(safe-area-inset-top) - 1rem);
   background: var(--stage-surface);
   padding-top: 0.25rem;
 }
