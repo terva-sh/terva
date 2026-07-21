@@ -122,6 +122,28 @@ func TestEditorModeGates(t *testing.T) {
 	}
 }
 
+// EDITOR mode spends on the SESSION's own model — the one the author is playing
+// that scene on — not the workspace default. This is the fix for the enrich
+// surface that silently ran on the workspace model regardless of the session
+// agent; reverting the resolution to w.args makes the one request carry the
+// wrong (here, empty) model and this fails.
+func TestEditorModeRunsOnSessionModel(t *testing.T) {
+	cl := &scriptedClient{replies: []string{`{"note":"ok","proposals":[]}`}}
+	s := worldTestSession(t, cl, map[string]string{"Elira": "elira-ref"})
+	s.provider, s.model = "test", "session-model"
+
+	if _, err := cardsDoctor(context.Background(), s.ws, s, card.Card{Name: "Elira"}, ctrlproto.DoctorParams{}); err != nil {
+		t.Fatalf("cardsDoctor: %v", err)
+	}
+	reqs := cl.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("want exactly one model call, got %d", len(reqs))
+	}
+	if reqs[0].Model != "session-model" {
+		t.Errorf("editor ran on %q, want the session's model %q — enrich is ignoring the session agent", reqs[0].Model, "session-model")
+	}
+}
+
 func TestRenderDoctorPromptNoDecisionsOmitsSection(t *testing.T) {
 	out := renderDoctorPrompt(doctorFields(card.Card{Name: "Ivy"}), nil, nil)
 	if strings.Contains(out, "DECISIONS") {

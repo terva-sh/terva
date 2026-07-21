@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { NextSceneResult } from '../../platform/ctrlproto/types'
 import { t } from '../../i18n'
+import { ModelPick } from './ModelPick'
 
 // Start the next scene (SD5): end this scene at a chapter boundary and open a
 // fresh one in the same World. Dramaturgi drafts three things — a title, the
@@ -19,6 +20,10 @@ export function NextSceneSheet(props: {
   sessionId: string
   // The doctor's scene_break proposal seeds the title when it opens this.
   suggestedTitle?: string
+  // The session's provider/model, so the picker can name what the draft's
+  // default ("Session model") resolves to.
+  defaultProvider?: string
+  defaultModel?: string
   onOpenSession: (session: string) => void
   onClose: () => void
 }) {
@@ -38,12 +43,16 @@ export function NextSceneSheet(props: {
   const [worldID, setWorldID] = useState('')
   const [worldName, setWorldName] = useState('')
   const [groupWorld, setGroupWorld] = useState(true)
+  // Per-generation model override for the draft; empty = the session model (the
+  // daemon default). The commit spends no model, so only the draft carries it.
+  const [ovProvider, setOvProvider] = useState('')
+  const [ovModel, setOvModel] = useState('')
 
   const draft = () => {
     setDrafting(true)
     setError('')
     client
-      .send<NextSceneResult>('sessions.next_scene', {}, sessionId)
+      .send<NextSceneResult>('sessions.next_scene', { provider: ovProvider, model: ovModel }, sessionId)
       .then((r) => {
         // A re-draft replaces the fields wholesale — the author asked for a
         // different take, so keeping their edits would blend two drafts.
@@ -150,6 +159,21 @@ export function NextSceneSheet(props: {
             )}
           </>
         )}
+        {/* Which model drafts the scene — the session's by default, or a per-run
+            override. Takes effect on the next "Draft again". */}
+        <ModelPick
+          client={client}
+          sessionId={sessionId}
+          currentProvider={ovProvider}
+          currentModel={ovModel}
+          onSelect={(p, m) => {
+            setOvProvider(p)
+            setOvModel(m)
+          }}
+          defaultLabel={t('Session model')}
+          defaultProvider={props.defaultProvider}
+          defaultModel={props.defaultModel}
+        />
         <div class="stage-nextscene__acts">
           <button class="stage-nextscene__go" disabled={drafting || committing || !ready} onClick={commit}>
             {committing ? t('Opening…') : t('Start the scene')}

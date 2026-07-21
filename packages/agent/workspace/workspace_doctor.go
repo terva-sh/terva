@@ -56,8 +56,6 @@ func (w *Workspace) CardsDoctor(ctx context.Context, p ctrlproto.DoctorParams) (
 	if err != nil {
 		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%v", err)
 	}
-	personaName, task := doctorPersona, i18n.P("stage.doctor.task", doctorTask)
-	scene := ""
 	var s *wsSession
 	if strings.TrimSpace(p.Session) != "" {
 		s, err = w.resolve(p.Session)
@@ -67,8 +65,22 @@ func (w *Workspace) CardsDoctor(ctx context.Context, p ctrlproto.DoctorParams) (
 		if s.sess == nil || s.sess.Meta.Experience == "" {
 			return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the editor grounds in a chat or play session"))
 		}
+	}
+	return cardsDoctor(ctx, w, s, sc.Card, p)
+}
+
+// cardsDoctor is the whole verb after the card and (optional) session are
+// resolved: persona, evidence, model resolution, the one model call. Split from
+// the wrapper the way sessionsDoctor was, so the client resolution the outer
+// method could never reach under test — the split doctorRun was carved out to
+// dodge — now runs with a scripted session. A nil s is a plain Library-scoped
+// lint run; a non-nil s is EDITOR mode (Worlds W4), grounded in that scene.
+func cardsDoctor(ctx context.Context, w *Workspace, s *wsSession, c card.Card, p ctrlproto.DoctorParams) (ctrlproto.DoctorResult, error) {
+	personaName, task := doctorPersona, i18n.P("stage.doctor.task", doctorTask)
+	scene := ""
+	if s != nil {
 		personaName, task = editorPersona, i18n.P("stage.editor.task", editorTask)
-		charName := strings.TrimSpace(sc.Card.Name)
+		charName := strings.TrimSpace(c.Name)
 		boundName, _ := s.boundCharacter()
 		scene = renderEditorEvidence(charName, boundName, s.playerLabel(),
 			worldLoreFor(s.sess.Meta.WorldLore, charName), s.agent.Messages())
@@ -77,15 +89,33 @@ func (w *Workspace) CardsDoctor(ctx context.Context, p ctrlproto.DoctorParams) (
 	if err != nil || strings.TrimSpace(persona.Charter) == "" {
 		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", personaName))
 	}
-	// Resolve the client for this run: the workspace default model, or a
-	// per-generation override the caller picked (Phase 7).
-	cl, model, err := w.overrideClient(w.args, p.Provider, p.Model)
+	// Resolve the client for this run. In EDITOR mode (grounded in a session) the
+	// default is the session's OWN live client + model — the model the author is
+	// playing that scene on — the same rule the session doctor follows; a plain
+	// Library-scoped lint run has no session and falls back to the workspace
+	// default. Either way a per-generation override the caller picked (Phase 7)
+	// wins.
+	var cl provider.Client
+	var model string
+	if s != nil {
+		ag := s.agent
+		if ag == nil || ag.Client == nil {
+			return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
+		}
+		cl = ag.Client
+		_, model = s.currentModel()
+		if strings.TrimSpace(p.Model) != "" {
+			cl, model, err = w.overrideClient(s.argsSnapshot(), p.Provider, p.Model)
+		}
+	} else {
+		cl, model, err = w.overrideClient(w.args, p.Provider, p.Model)
+	}
 	if err != nil {
 		return ctrlproto.DoctorResult{}, err
 	}
 
-	findings := card.Lint(sc.Card)
-	fields := doctorFields(sc.Card)
+	findings := card.Lint(c)
+	fields := doctorFields(c)
 	system := persona.Charter + "\n\n" + task
 	user := renderDoctorPrompt(fields, findings, p.Decisions)
 	if scene != "" {

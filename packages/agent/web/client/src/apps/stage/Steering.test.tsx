@@ -147,3 +147,46 @@ describe('Steering — the World tab accounts for the scene-state pin', () => {
     expect(screen.queryByText('3 silver, owed since the spring fair.')).not.toBeNull()
   })
 })
+
+// Model transparency: the enrich editor carries a per-run model picker, so ✏️ must
+// only EXPAND the panel. It used to also fire cards.doctor the instant it was
+// clicked — before the picker was even on screen — so every run silently went to
+// the default model no matter what the picker was set to afterwards. Starting the
+// read is now its own button, taken after the model is chosen.
+describe('Steering — enrich starts on its own button, not on ✏️', () => {
+  function mountWorld(info: Partial<SessionInfo>) {
+    const client = fakeClient({
+      respond: (method) => (method === 'backgrounds.list' ? { backgrounds: BACKGROUNDS } : {}),
+    })
+    render(
+      <Steering
+        client={client}
+        sessionId="s1"
+        info={{ id: 's1', experience: 'chat', ...info } as SessionInfo}
+        onClose={() => {}}
+      />,
+    )
+    fireEvent.click(screen.getByText('World'))
+    return client
+  }
+
+  it('expands the editor on ✏️ without running it, and runs only on "Read the scene"', async () => {
+    const client = mountWorld({ cast: { Kael: 'card:kael' } })
+
+    fireEvent.click(await screen.findByTitle("Enrich Kael's card from this scene"))
+    // Expanding must NOT fire the model call — that is the whole bug.
+    expect(sentMethods(client)).not.toContain('cards.doctor')
+
+    // The dedicated start button appears once the panel is open.
+    const start = await screen.findByText('✨ Read the scene')
+    fireEvent.click(start)
+
+    await waitFor(() => expect(sentMethods(client)).toContain('cards.doctor'))
+    // ...and it targets the character whose ✏️ was clicked.
+    expect(client.send).toHaveBeenCalledWith(
+      'cards.doctor',
+      expect.objectContaining({ id: 'card:kael', session: 's1' }),
+      's1',
+    )
+  })
+})

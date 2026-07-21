@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { CardView, DoctorDecision, SessionDoctorResult, SessionProposal } from '../../platform/ctrlproto/types'
 import { t } from '../../i18n'
+import { ModelPick } from './ModelPick'
 
 // The session doctor (SD1–SD4 — Dramaturgi): read the played session and
 // propose the structure it has earned — lore entries, open threads, cast
@@ -34,6 +35,10 @@ function DoctorProposals(props: {
   sessionId: string
   ask?: DoctorAsk
   autorun?: boolean
+  // The session's provider/model, so the picker can name what "Session model"
+  // (the daemon's default for this call) actually resolves to.
+  defaultProvider?: string
+  defaultModel?: string
   // Accepting a scene_break opens the next-scene flow instead of writing
   // anything — the one proposal kind with no verb of its own. Absent where
   // that flow can't be reached, in which case the kind is not offered.
@@ -48,12 +53,15 @@ function DoctorProposals(props: {
   const [declining, setDeclining] = useState<Record<string, boolean>>({})
   const [promoDrafts, setPromoDrafts] = useState<Record<string, PromoDraft>>({})
   const [error, setError] = useState('')
+  // Per-generation model override; empty = the session model (the daemon default).
+  const [ovProvider, setOvProvider] = useState('')
+  const [ovModel, setOvModel] = useState('')
 
   const run = (decisions?: DoctorDecision[]) => {
     setRunning(true)
     setError('')
     client
-      .send<SessionDoctorResult>('sessions.doctor', { decisions, ...(ask ?? {}) }, sessionId)
+      .send<SessionDoctorResult>('sessions.doctor', { decisions, provider: ovProvider, model: ovModel, ...(ask ?? {}) }, sessionId)
       .then((r) => {
         // A scene_break has nowhere to go without the next-scene flow, and a
         // proposal you cannot accept is worse than none (the SD1 rule).
@@ -208,15 +216,38 @@ function DoctorProposals(props: {
 
   const undecided = (proposals ?? []).filter((p) => !verdicts[p.id]).length
 
+  // Which model the doctor runs on — the session's by default, or a per-run
+  // override. Takes effect on the next run/revise. Shown in both chromes so the
+  // billed call always names the model it will spend on.
+  const picker = (
+    <ModelPick
+      client={client}
+      sessionId={sessionId}
+      currentProvider={ovProvider}
+      currentModel={ovModel}
+      onSelect={(p, m) => {
+        setOvProvider(p)
+        setOvModel(m)
+      }}
+      defaultLabel={t('Session model')}
+      defaultProvider={props.defaultProvider}
+      defaultModel={props.defaultModel}
+    />
+  )
+
   if (proposals === null && !props.autorun) {
     return (
-      <button class="stage-doctor__run" disabled={running} onClick={() => run()}>
-        {running ? t('Reading the scene…') : t('🩺 Doctor this session')}
-      </button>
+      <>
+        {picker}
+        <button class="stage-doctor__run" disabled={running} onClick={() => run()}>
+          {running ? t('Reading the scene…') : t('🩺 Doctor this session')}
+        </button>
+      </>
     )
   }
   return (
     <>
+      {picker}
       {proposals === null && <p class="stage-hint">{t('Reading the scene…')}</p>}
       {note && <p class="stage-doctor__note">{note}</p>}
       {proposals?.length === 0 && !note && <p class="stage-hint">{t('Nothing to propose yet.')}</p>}
@@ -325,21 +356,40 @@ function DoctorProposals(props: {
 }
 
 // The Steering World-tab section (SD1): the whole-session sweep.
-export function SessionDoctor(props: { client: ClientLike; sessionId: string; onSceneBreak?: (suggestedTitle: string) => void }) {
+export function SessionDoctor(props: {
+  client: ClientLike
+  sessionId: string
+  defaultProvider?: string
+  defaultModel?: string
+  onSceneBreak?: (suggestedTitle: string) => void
+}) {
   return (
     <section class="stage-drawer__section stage-doctor">
       <h4>{t('Session doctor')}</h4>
       <p class="stage-hint">
         {t('Dramaturgi reads the whole scene and proposes what it has earned — lore worth keeping, promised callbacks, a walk-on ready for the cast, an up-to-date scene-state card. Nothing applies unless you accept it. One bounded model call, billed to this session.')}
       </p>
-      <DoctorProposals client={props.client} sessionId={props.sessionId} onSceneBreak={props.onSceneBreak} />
+      <DoctorProposals
+        client={props.client}
+        sessionId={props.sessionId}
+        defaultProvider={props.defaultProvider}
+        defaultModel={props.defaultModel}
+        onSceneBreak={props.onSceneBreak}
+      />
     </section>
   )
 }
 
 // The Chat overlay (SD2/SD3): a narrowed ask launched from a message's edit
 // actions — keep this moment as lore, or promote this walk-on. Runs on open.
-export function DoctorOverlay(props: { client: ClientLike; sessionId: string; ask: DoctorAsk; onClose: () => void }) {
+export function DoctorOverlay(props: {
+  client: ClientLike
+  sessionId: string
+  ask: DoctorAsk
+  defaultProvider?: string
+  defaultModel?: string
+  onClose: () => void
+}) {
   const heading = 'focus' in props.ask ? t('Keep this moment as lore') : t('Promote %s to the cast', props.ask.promote)
   return (
     <div class="stage-sheet-backdrop" onClick={props.onClose}>
@@ -350,7 +400,14 @@ export function DoctorOverlay(props: { client: ClientLike; sessionId: string; as
             ✕
           </button>
         </header>
-        <DoctorProposals client={props.client} sessionId={props.sessionId} ask={props.ask} autorun />
+        <DoctorProposals
+          client={props.client}
+          sessionId={props.sessionId}
+          ask={props.ask}
+          defaultProvider={props.defaultProvider}
+          defaultModel={props.defaultModel}
+          autorun
+        />
       </div>
     </div>
   )

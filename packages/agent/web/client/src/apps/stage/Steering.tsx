@@ -373,22 +373,43 @@ export function Steering(props: {
   // (with an optional reason the editor weighs on a revise round).
   const [enrichVerdicts, setEnrichVerdicts] = useState<Record<string, boolean>>({})
   const [enrichReasons, setEnrichReasons] = useState<Record<string, string>>({})
+  // Per-generation model override for the editor run; empty = the session model
+  // (the daemon's default now that editor mode resolves against the session).
+  const [enrichProvider, setEnrichProvider] = useState('')
+  const [enrichModel, setEnrichModel] = useState('')
   const resetEnrich = () => {
     setEnrich(null)
     setEnrichProposals(null)
     setEnrichNote('')
     setEnrichVerdicts({})
     setEnrichReasons({})
+    setEnrichProvider('')
+    setEnrichModel('')
   }
   useEffect(() => {
     resetEnrich()
   }, [sessionId])
+  // ✏️ EXPANDS the editor for a character without running it — the model picker
+  // and a dedicated "Read the scene" button live in the panel, so the run always
+  // uses the model you chose. (It used to fire cards.doctor the instant ✏️ was
+  // clicked, before the picker was even visible, so every run went to the default
+  // model no matter what you set the picker to afterwards.)
+  const openEnrich = (target: { ref: string; name: string }) => {
+    setEnrich(target)
+    setEnrichProposals(null)
+    setEnrichNote('')
+    setEnrichVerdicts({})
+    setEnrichReasons({})
+    setEnrichProvider('')
+    setEnrichModel('')
+    setError('')
+  }
   const runEnrich = (target: { ref: string; name: string }, decisions?: unknown[]) => {
     setEnrich(target)
     setEnrichRunning(true)
     setError('')
     client
-      .send<DoctorResult>('cards.doctor', { id: target.ref, session: sessionId, decisions }, sessionId)
+      .send<DoctorResult>('cards.doctor', { id: target.ref, session: sessionId, decisions, provider: enrichProvider, model: enrichModel }, sessionId)
       .then((r) => {
         setEnrichProposals(r.proposals ?? [])
         setEnrichNote(r.note ?? '')
@@ -545,7 +566,7 @@ export function Steering(props: {
                   <li key="__bound" class="stage-cast__member">
                     <span class="stage-cast__name">{boundName}</span>
                     <span class="stage-cast__ref">{t('main character')}</span>
-                    <button class="stage-worldlore__act" title={t("Enrich %s's card from this scene", boundName)} onClick={() => runEnrich({ ref: info.card!, name: boundName })}>
+                    <button class="stage-worldlore__act" title={t("Enrich %s's card from this scene", boundName)} onClick={() => openEnrich({ ref: info.card!, name: boundName })}>
                       ✏️
                     </button>
                   </li>
@@ -556,7 +577,7 @@ export function Steering(props: {
                     <li key={name} class="stage-cast__member">
                       <span class="stage-cast__name">{name}</span>
                       <span class="stage-cast__ref">{ref}</span>
-                      <button class="stage-worldlore__act" title={t("Enrich %s's card from this scene", name)} onClick={() => runEnrich({ ref, name })}>
+                      <button class="stage-worldlore__act" title={t("Enrich %s's card from this scene", name)} onClick={() => openEnrich({ ref, name })}>
                         ✏️
                       </button>
                       <button class="stage-cast__remove" title={t('Remove %s', name)} onClick={() => void castRemove(name)}>
@@ -571,6 +592,32 @@ export function Steering(props: {
                     <h5 class="stage-enrich__title">{t('✏️ Enrich %s from this scene', enrich.name)}</h5>
                     <button class="stage-worldlore__act" title={t('Close')} onClick={resetEnrich}>✕</button>
                   </div>
+                  {/* Which model the editor runs on — the session's by default, or a
+                      per-run override. Pick it before starting: it takes effect on
+                      "Read the scene" below and on each "Revise with feedback" round. */}
+                  <ModelPick
+                    client={client}
+                    sessionId={sessionId}
+                    currentProvider={enrichProvider}
+                    currentModel={enrichModel}
+                    onSelect={(p, m) => {
+                      setEnrichProvider(p)
+                      setEnrichModel(m)
+                    }}
+                    defaultLabel={t('Session model')}
+                    defaultProvider={info?.provider}
+                    defaultModel={info?.model}
+                  />
+                  {/* Not run yet: the picker above is live, so start the read with
+                      a dedicated button rather than firing on open. */}
+                  {!enrichRunning && enrichProposals === null && (
+                    <div class="stage-enrich__start">
+                      <p class="stage-hint">{t('Pick the model above, then read the scene to draft edits for %s’s card.', enrich.name)}</p>
+                      <button class="stage-worldlore-form__save" onClick={() => runEnrich(enrich)}>
+                        {t('✨ Read the scene')}
+                      </button>
+                    </div>
+                  )}
                   {enrichRunning && <p class="stage-hint">{t('The editor is reading the scene…')}</p>}
                   {!enrichRunning && enrichNote && <p class="stage-hint">{enrichNote}</p>}
                   {!enrichRunning && enrichProposals && enrichProposals.length === 0 && !enrichNote && (
@@ -807,6 +854,8 @@ export function Steering(props: {
         <SessionDoctor
           client={client}
           sessionId={sessionId}
+          defaultProvider={info?.provider}
+          defaultModel={info?.model}
           onSceneBreak={props.onNextScene ? (title) => { onClose(); props.onNextScene?.(title) } : undefined}
         />
 
