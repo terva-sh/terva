@@ -197,6 +197,10 @@ func (r *recorder) SessionsNextScene(_ context.Context, sess string, p NextScene
 	r.note("SessionsNextScene", sess, p)
 	return NextSceneResult{}, nil
 }
+func (r *recorder) SessionsRealize(_ context.Context, sess string, p RealizeParams) (RealizeResult, error) {
+	r.note("SessionsRealize", sess, p)
+	return RealizeResult{}, nil
+}
 
 // --- ModelParamsController ---
 func (r *recorder) ModelParams(_ context.Context, p ModelParamsParams) (ModelParamsView, error) {
@@ -308,6 +312,10 @@ func (r *recorder) WorldUpdate(_ context.Context, p WorldUpdateParams) (WorldVie
 	r.note("WorldUpdate", "", p)
 	return WorldView{}, nil
 }
+func (r *recorder) WorldSetCharacterModel(_ context.Context, p WorldSetCharacterModelParams) (WorldView, error) {
+	r.note("WorldSetCharacterModel", "", p)
+	return WorldView{}, nil
+}
 func (r *recorder) WorldsExport(_ context.Context, p WorldExportParams) (WorldExport, error) {
 	r.note("WorldsExport", "", p)
 	return WorldExport{}, nil
@@ -384,6 +392,7 @@ func dispatchCases() []dispatchCase {
 		{MethodWorldsList, nil, "WorldsList", nil},
 		{MethodWorldSave, WorldSaveParams{Name: "w-saved"}, "WorldSave", WorldSaveParams{Name: "w-saved"}},
 		{MethodWorldUpdate, WorldUpdateParams{ID: "w-upd", Name: "renamed"}, "WorldUpdate", WorldUpdateParams{ID: "w-upd", Name: "renamed"}},
+		{MethodWorldSetCharacterModel, WorldSetCharacterModelParams{ID: "w-cm", Character: "Elira", Model: "gpt-5"}, "WorldSetCharacterModel", WorldSetCharacterModelParams{ID: "w-cm", Character: "Elira", Model: "gpt-5"}},
 		{MethodWorldsExport, WorldExportParams{ID: "w-exp"}, "WorldsExport", WorldExportParams{ID: "w-exp"}},
 		{MethodWorldsImport, WorldImportParams{Path: "/w-imp"}, "WorldsImport", nil},
 		{MethodWorldDelete, WorldDeleteParams{ID: "w-del"}, "WorldDelete", WorldDeleteParams{ID: "w-del"}},
@@ -414,6 +423,7 @@ func dispatchCases() []dispatchCase {
 		{MethodCardsDoctor, DoctorParams{ID: "checked"}, "CardsDoctor", DoctorParams{ID: "checked"}},
 		{MethodSessionsDoctor, SessionDoctorParams{}, "SessionsDoctor", nil},
 		{MethodSessionsNextScene, NextSceneParams{Title: "scene 2"}, "SessionsNextScene", nil},
+		{MethodSessionsRealize, RealizeParams{}, "SessionsRealize", nil},
 		{MethodAuthLoginStart, AuthLoginStartParams{Provider: "anthropic"}, "AuthLoginStart", AuthLoginStartParams{Provider: "anthropic"}},
 		{MethodAuthLoginSubmit, AuthLoginSubmitParams{}, "AuthLoginSubmit", nil},
 		{MethodAuthLoginCancel, AuthFlowRef{}, "AuthLoginCancel", nil},

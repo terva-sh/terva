@@ -175,6 +175,11 @@ const (
 	// this session's live World state. Session in the frame.
 	MethodSessionsNextScene Method = "sessions.next_scene" // params NextSceneParams, result NextSceneResult (sess in frame)
 
+	// MethodSessionsRealize turns a cartographer conversation into a playable
+	// world (creator C3): propose extracts the structure with a Kartoittaja
+	// call, commit seeds a play session from it. Session in the frame.
+	MethodSessionsRealize Method = "sessions.realize" // params RealizeParams, result RealizeResult (sess in frame)
+
 	// MethodSessionsExport serializes a session for something outside terva.
 	//
 	// Deliberately ONE verb with a format discriminator rather than a verb per
@@ -237,12 +242,13 @@ const (
 	// into it, remove one. Membership reads ride SessionInfo.World. W5b adds
 	// sessionless metadata edits (rename/description/cover) and the bundle
 	// verbs — export a World with its cards embedded, import one elsewhere.
-	MethodWorldsList   Method = "worlds.list"   // result WorldsListResult
-	MethodWorldSave    Method = "worlds.save"   // params WorldSaveParams, result WorldView (sess in frame)
-	MethodWorldDelete  Method = "worlds.delete" // params WorldDeleteParams
-	MethodWorldUpdate  Method = "worlds.update" // params WorldUpdateParams, result WorldView
-	MethodWorldsExport Method = "worlds.export" // params WorldExportParams, result WorldExport
-	MethodWorldsImport Method = "worlds.import" // params WorldImportParams, result WorldView
+	MethodWorldsList             Method = "worlds.list"                // result WorldsListResult
+	MethodWorldSave              Method = "worlds.save"                // params WorldSaveParams, result WorldView (sess in frame)
+	MethodWorldDelete            Method = "worlds.delete"              // params WorldDeleteParams
+	MethodWorldUpdate            Method = "worlds.update"              // params WorldUpdateParams, result WorldView
+	MethodWorldSetCharacterModel Method = "worlds.set_character_model" // params WorldSetCharacterModelParams, result WorldView
+	MethodWorldsExport           Method = "worlds.export"              // params WorldExportParams, result WorldExport
+	MethodWorldsImport           Method = "worlds.import"              // params WorldImportParams, result WorldView
 
 	// Directed authorship (optional; served only by a DirectController). Posts an
 	// approved character/narrator line INTO the transcript — the commit half of
@@ -281,7 +287,7 @@ func (m Method) Group() Group {
 		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
 		MethodFilesList, MethodAuthProviders, MethodConversationReveal, MethodConversationHistory,
 		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose, MethodSuggestReply, MethodSessionsDoctor,
-		MethodSessionsNextScene, MethodSessionsExport:
+		MethodSessionsNextScene, MethodSessionsRealize, MethodSessionsExport:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault,
 		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
@@ -291,7 +297,7 @@ func (m Method) Group() Group {
 		MethodBackgroundsList, MethodBackgroundsImport, MethodBackgroundsDelete, MethodBackgroundBind, MethodBackgroundGenerate,
 		MethodNoteSet, MethodUserBind, MethodCastAdd, MethodCastRemove, MethodCastSpeak,
 		MethodWorldLorePut, MethodWorldLoreDelete, MethodWorldSet,
-		MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldsExport, MethodWorldsImport,
+		MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldSetCharacterModel, MethodWorldsExport, MethodWorldsImport,
 		MethodUserPersonasList, MethodUserPersonaSave, MethodUserPersonaDelete, MethodUserPersonaSetDefault:
 		return GroupControl
 	case MethodReplayControl, MethodReplayState:

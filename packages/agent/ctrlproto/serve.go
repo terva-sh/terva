@@ -597,6 +597,22 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		v, err := dc.SessionsNextScene(ctx, f.Sess, p)
 		s.respond(f.ID, v, err)
 
+	case MethodSessionsRealize:
+		// Same posture: the propose half is a Kartoittaja call, so a carrier
+		// without a model answers "unsupported".
+		dc, ok := s.svc.(DoctorController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "realize is not available here"))
+			return
+		}
+		var p RealizeParams
+		if err := f.Bind(&p); err != nil {
+			s.badReq(f.ID, err)
+			return
+		}
+		v, err := dc.SessionsRealize(ctx, f.Sess, p)
+		s.respond(f.ID, v, err)
+
 	case MethodSessionsExport:
 		// An explicit arm, never the trailing `default:` idiom — that binds the
 		// LAST verb's params struct to any new verb in the group, silently.
@@ -863,7 +879,7 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled world verb %q", f.Method)))
 		}
 
-	case MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldsExport, MethodWorldsImport:
+	case MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldSetCharacterModel, MethodWorldsExport, MethodWorldsImport:
 		wc, ok := s.svc.(WorldController)
 		if !ok {
 			s.write(ErrFrame(f.ID, CodeUnsupported, "the World is not available here"))
@@ -888,6 +904,14 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 				return
 			}
 			v, err := wc.WorldUpdate(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodWorldSetCharacterModel:
+			var p WorldSetCharacterModelParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := wc.WorldSetCharacterModel(ctx, p)
 			s.respond(f.ID, v, err)
 		case MethodWorldsExport:
 			var p WorldExportParams

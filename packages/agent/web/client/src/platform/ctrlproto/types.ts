@@ -860,6 +860,63 @@ export interface NextSceneResult {
   world_name?: string
 }
 
+// realize (creator C3 — docs/plans/creator-realize.md): turn a cartographer
+// conversation into a playable world. Two-phase, like next_scene — propose
+// extracts the structure (creates nothing), commit seeds a play session from the
+// author-edited proposal (spends nothing).
+export interface RealizeParams {
+  commit?: boolean
+  // The author-edited structure, sent on a commit.
+  proposal?: RealizeProposal
+  // Per-generation model override for the propose call; the default is the
+  // session's own. Ignored on a commit.
+  provider?: string
+  model?: string
+}
+
+export interface RealizeCharacter {
+  name: string
+  role?: string
+  description?: string
+  personality?: string
+  first_mes?: string
+  // The protagonist's play constraint (e.g. a language/ability quirk).
+  notes?: string
+}
+
+export interface RealizeLore {
+  name: string
+  keys?: string[]
+  always_on?: boolean
+  content: string
+}
+
+export interface RealizeProposal {
+  world: { name: string; description?: string }
+  // Who the AUTHOR plays; becomes the bound user persona, not a roster card.
+  protagonist: RealizeCharacter
+  // The NPCs the model voices; each becomes an imported card + a cast member.
+  roster?: RealizeCharacter[]
+  lore?: RealizeLore[]
+  cold_open?: string
+  // The roster name who delivers the cold open, or empty for narration.
+  cold_open_actor?: string
+  coordination?: string
+  // The cartographer's attribution ledger, shown so the author sees what to
+  // overrule. Propose only.
+  given_by_author?: string[]
+  invented_by_you?: string[]
+  // An optional remark — e.g. that the conversation has not converged yet.
+  note?: string
+}
+
+export interface RealizeResult {
+  // The extracted structure; absent on a commit.
+  proposal?: RealizeProposal
+  // The created play session; absent on a propose.
+  session?: SessionInfo
+}
+
 export interface CardsListResult {
   cards: CardSummary[]
 }
@@ -962,6 +1019,10 @@ export interface WorldView {
   name: string
   description?: string
   characters?: Record<string, string>
+  // character_models is the per-character default model (name → provider+model)
+  // a new session in this World seeds its cast from; empty = that actor inherits
+  // the session model. Edited via worlds.set_character_model.
+  character_models?: Record<string, CastRoute>
   lore?: WorldLoreEntry[]
   sessions?: number
   created?: string
@@ -994,6 +1055,16 @@ export interface WorldUpdateParams {
   description: string
   cover?: string
   remove_cover?: boolean
+}
+
+// WorldSetCharacterModelParams pins (or clears) one roster character's
+// World-scoped default model. Empty provider AND model clears the pin so the
+// character inherits the session model again.
+export interface WorldSetCharacterModelParams {
+  id: string
+  character: string
+  provider?: string
+  model?: string
 }
 
 // WorldExport is a World bundle serialized for download (worlds.export) — the
@@ -1441,6 +1512,7 @@ export type Verb =
   | 'sessions.generate_title'
   | 'sessions.list'
   | 'sessions.next_scene'
+  | 'sessions.realize'
   | 'sessions.rename'
   | 'sessions.resume'
   | 'sidechat.ask'
@@ -1475,6 +1547,7 @@ export type Verb =
   | 'worlds.import'
   | 'worlds.list'
   | 'worlds.save'
+  | 'worlds.set_character_model'
   | 'worlds.update'
 
 // VerbParams pins the params shape for the verbs whose Go struct this file
@@ -1486,6 +1559,7 @@ export type Verb =
 export interface VerbParams {
   'sessions.doctor': SessionDoctorParams
   'sessions.next_scene': NextSceneParams
+  'sessions.realize': RealizeParams
   'suggest.reply': SuggestParams
   'post.line': PostLineParams
   'direct.turn': DirectTurnParams
@@ -1494,6 +1568,7 @@ export interface VerbParams {
   'world.set': WorldSetParams
   'worlds.save': WorldSaveParams
   'worlds.update': WorldUpdateParams
+  'worlds.set_character_model': WorldSetCharacterModelParams
   'worlds.import': WorldImportParams
   'personas.create': PersonaWriteParams
   'personas.edit': PersonaWriteParams

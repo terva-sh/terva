@@ -31,6 +31,16 @@ type DoctorController interface {
 	// because its propose half is a Dramaturgi call with the same posture as the
 	// doctors — optional, and needs a model.
 	SessionsNextScene(ctx context.Context, sess string, p NextSceneParams) (NextSceneResult, error)
+
+	// SessionsRealize turns a cartographer conversation into a playable world
+	// (creator C3 — docs/plans/creator-realize.md). PROPOSE re-reads the
+	// converged planning chat with one bounded Kartoittaja call and returns the
+	// finished structure — World, protagonist, NPC roster, lore, cold open —
+	// creating nothing; COMMIT imports the roster as cards and seeds a play
+	// session (createSeededLocked) with the protagonist as the bound user
+	// persona and the cold open standing in for the greeting, spending nothing.
+	// Same posture as the doctors and next_scene, so it rides this controller.
+	SessionsRealize(ctx context.Context, sess string, p RealizeParams) (RealizeResult, error)
 }
 
 // DoctorParams names the card to examine and, on a follow-up round, the user's
