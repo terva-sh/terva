@@ -2340,6 +2340,24 @@ button:disabled {
   transform: scale(0.97);
 }
 
+/* On a phone all four controls (✨ ▶ textarea Send/Stop) cram onto one row and
+   starve the textarea down to a couple of words. Below the phone breakpoint, wrap
+   the composer: the textarea takes its own full-width row on top (order:-1), and
+   the buttons fall beneath it — ✨/▶ on the left, Send/Stop pushed to the right.
+   Desktop keeps the single-row layout where the width is there to spend. */
+@media (max-width: 560px) {
+  .stage-composer {
+    flex-wrap: wrap;
+  }
+  .stage-composer textarea {
+    order: -1;
+    flex: 1 1 100%;
+  }
+  .stage-composer > button:last-child {
+    margin-left: auto;
+  }
+}
+
 .stage-suggest {
   width: 100%;
   max-width: 720px;
