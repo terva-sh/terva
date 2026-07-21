@@ -190,6 +190,52 @@ button:disabled {
   border-radius: 12px;
 }
 
+/* Creator door (C1): the make-something entry point, sitting above the
+   pick-something library. Reads as an invitation, not a control — full-width and
+   accent-tinted so it is the first thing the eye lands on. */
+.stage-creator-door {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  width: 100%;
+  text-align: left;
+  margin: 0.5rem 0 0.25rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--stage-accent) 55%, var(--stage-line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--stage-accent) 10%, transparent);
+  color: var(--stage-fg);
+  transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+}
+.stage-creator-door:hover:not(:disabled) {
+  border-color: var(--stage-accent);
+  background: color-mix(in srgb, var(--stage-accent) 16%, transparent);
+}
+.stage-creator-door:active:not(:disabled) {
+  transform: scale(0.995);
+}
+.stage-creator-door:disabled {
+  opacity: 0.6;
+}
+.stage-creator-door__icon {
+  flex: 0 0 auto;
+  font-size: 1.6rem;
+}
+.stage-creator-door__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.stage-creator-door__title {
+  font-weight: 600;
+  font-size: 1rem;
+}
+.stage-creator-door__sub {
+  font-size: 0.82rem;
+  color: var(--stage-muted);
+}
+
 .stage-section-head {
   display: flex;
   align-items: baseline;
@@ -211,6 +257,30 @@ button:disabled {
 
 .stage-empty,
 .stage-error {
+  color: var(--stage-muted);
+}
+/* Creator empty state (C1): the grounded blank page. Centered and roomy — an
+   invitation to seed the cartographer, not a bare "say something". */
+.stage-creator-empty {
+  margin: auto;
+  max-width: 34rem;
+  padding: 2rem 1rem;
+  text-align: center;
+}
+.stage-creator-empty__icon {
+  font-size: 2.4rem;
+  margin-bottom: 0.5rem;
+}
+.stage-creator-empty__lead {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--stage-fg);
+}
+.stage-creator-empty__hint {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
   color: var(--stage-muted);
 }
 .stage-error {
@@ -507,9 +577,11 @@ button:disabled {
 .stage-yourchats__item:hover {
   border-color: var(--stage-accent);
 }
-/* Row delete: reveals on hover/focus of the row so it doesn't clutter the list,
-   but stays reachable (kept visible on narrow/touch where hover is unreliable). */
+/* Row actions (save-as-World, delete): reveal on hover/focus of the row so they
+   don't clutter the list, but stay reachable (kept visible on narrow/touch where
+   hover is unreliable). */
 .stage-yourchats__del,
+.stage-yourchats__world,
 .stage-charchats__del {
   flex: 0 0 auto;
   width: 2.3rem;
@@ -523,7 +595,9 @@ button:disabled {
   transition: opacity 0.12s;
 }
 .stage-yourchats__row:hover .stage-yourchats__del,
+.stage-yourchats__row:hover .stage-yourchats__world,
 .stage-yourchats__del:focus-visible,
+.stage-yourchats__world:focus-visible,
 .stage-charchats__row:hover .stage-charchats__del,
 .stage-charchats__del:focus-visible {
   opacity: 1;
@@ -533,8 +607,13 @@ button:disabled {
   border-color: #e06c76;
   color: #e06c76;
 }
+.stage-yourchats__world:hover {
+  border-color: var(--stage-accent);
+  color: var(--stage-fg);
+}
 @media (hover: none) {
   .stage-yourchats__del,
+  .stage-yourchats__world,
   .stage-charchats__del {
     opacity: 1;
   }
@@ -1492,6 +1571,34 @@ button:disabled {
   gap: 1rem;
 }
 
+/* "↓ Jump to latest" — a floating pill that returns the reader to the newest
+   line after scrolling up (the panel's ConversationTimeline has the same). It is
+   the transcript's last child and sticks to the bottom of its own scroll
+   viewport, so it always hovers just above the composer without knowing the
+   composer's height. align-self keeps it from stretching in the flex column. */
+.stage-jump {
+  position: sticky;
+  bottom: 0.5rem;
+  align-self: center;
+  z-index: 2;
+  padding: 0.4rem 0.95rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--stage-surface) 92%, transparent);
+  backdrop-filter: blur(6px);
+  color: var(--stage-fg);
+  font-size: 0.85rem;
+  font-weight: 500;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.stage-jump:hover {
+  border-color: var(--stage-accent);
+}
+.stage-jump:active {
+  transform: scale(0.97);
+}
+
 /* Avatar-anchored rows: the character's avatar sits beside its messages; the
  * user's turns align right without one. */
 .stage-row {
@@ -2105,6 +2212,194 @@ button:disabled {
   color: var(--stage-bg) !important;
   border-color: transparent !important;
   font-weight: 600;
+}
+
+/* --- realize: the creator's review sheet (C3) --- */
+
+.stage-realize {
+  width: min(46rem, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.85rem 1rem 1rem;
+  background: var(--stage-surface);
+  color: var(--stage-fg);
+  border: 1px solid var(--stage-line);
+  border-radius: 12px;
+}
+.stage-realize__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.stage-realize__head h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 1rem;
+}
+.stage-realize__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.stage-realize__section > h4 {
+  margin: 0.3rem 0 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--stage-muted);
+}
+.stage-realize input,
+.stage-realize textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 0.45rem 0.6rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.stage-realize input:focus,
+.stage-realize textarea:focus {
+  outline: none;
+  border-color: var(--stage-accent);
+}
+.stage-realize__title {
+  font-weight: 600;
+}
+.stage-realize__notes,
+.stage-realize__role,
+.stage-realize__keys {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--stage-muted);
+}
+.stage-realize__card,
+.stage-realize__lore {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+}
+.stage-realize__card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.stage-realize__card-name {
+  flex: 1;
+  font-weight: 600;
+}
+.stage-realize__opener,
+.stage-realize__always {
+  flex: 0 0 auto;
+}
+.stage-realize__drop {
+  flex: 0 0 auto;
+  padding: 0 0.3rem;
+  border: none;
+  background: none;
+  color: var(--stage-muted);
+  cursor: pointer;
+}
+.stage-realize__drop:hover {
+  color: var(--stage-danger);
+}
+.stage-realize__lore-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--stage-accent);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-realize__ledger {
+  font-size: 0.8rem;
+  color: var(--stage-muted);
+}
+.stage-realize__ledger summary {
+  cursor: pointer;
+}
+.stage-realize__ledger p {
+  margin: 0.3rem 0;
+}
+.stage-realize__model {
+  margin-top: 0.2rem;
+}
+.stage-realize__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+.stage-realize__acts button {
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-realize__acts button:hover:not(:disabled) {
+  border-color: var(--stage-accent);
+}
+.stage-realize__acts button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.stage-realize__go {
+  background: var(--stage-accent) !important;
+  color: var(--stage-bg) !important;
+  border-color: transparent !important;
+  font-weight: 600;
+}
+
+/* The realize call-to-action, above a creator conversation's composer. */
+.stage-chat > .stage-realize-bar {
+  position: relative;
+  z-index: 1;
+}
+.stage-realize-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0 0 0.5rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--stage-accent) 45%, var(--stage-line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--stage-accent) 8%, transparent);
+}
+.stage-realize-bar__label {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  color: var(--stage-muted);
+}
+.stage-realize-bar__go {
+  flex: 0 0 auto;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--stage-accent);
+  border-radius: 8px;
+  background: var(--stage-accent);
+  color: var(--stage-bg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.stage-realize-bar__go:hover {
+  opacity: 0.92;
 }
 
 /* --- the pinned scene-state card (SD4) --- */
@@ -2969,6 +3264,15 @@ button:disabled {
   flex-wrap: wrap;
   gap: 0.4rem;
 }
+/* World-sheet roster row: the name + Chat stay on top; the per-character model
+   picker wraps full-width beneath them (the cast-add model-pick pattern). */
+.stage-worldroster__member {
+  flex-wrap: wrap;
+}
+.stage-worldroster__member .stage-modelpick {
+  flex: 1 0 100%;
+  margin-top: 0.15rem;
+}
 /* Per-actor model pin (Phase 7): the pinned-model chip on a roster row, and the
    select-mode picker seated full-width below the name/ref/Add row. */
 .stage-cast__model {
@@ -3645,6 +3949,12 @@ button:disabled {
 .stage-enrich__actions {
   display: flex;
   gap: 0.5rem;
+}
+.stage-enrich__start {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-start;
 }
 
 /* The meta-narrator setting (W3): who answers a normal turn in this World. */

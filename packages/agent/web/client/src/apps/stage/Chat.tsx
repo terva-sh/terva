@@ -12,6 +12,8 @@ import { useConversation } from './useConversation'
 import { useAutoGrow } from './autogrow'
 import { Steering } from './Steering'
 import { SuggestReply } from './SuggestReply'
+import { RealizeSheet } from './RealizeSheet'
+import { CREATOR_PERSONA } from './creator'
 import { DoctorOverlay, type DoctorAsk } from './SessionDoctor'
 import { SceneStateCard, sceneStateOf } from './SceneState'
 import { NextSceneSheet } from './NextScene'
@@ -63,6 +65,9 @@ export function Chat(props: {
   const [guiding, setGuiding] = useState<{ text: string; ignorePrior: boolean } | null>(null)
   const [steerOpen, setSteerOpen] = useState(false)
   const [suggestOpen, setSuggestOpen] = useState(false)
+  // The realize review sheet (creator C3): open from a creator conversation to
+  // turn it into a playable world.
+  const [realizeOpen, setRealizeOpen] = useState(false)
   // A narrowed session-doctor ask (SD2/SD3), launched from a message's edit
   // actions: keep one moment as lore, or promote a walk-on the scene voiced.
   const [doctorAsk, setDoctorAsk] = useState<DoctorAsk | null>(null)
@@ -89,8 +94,12 @@ export function Chat(props: {
   // scrolled up into history, in which case we leave them where they are.
   const transcriptRef = useRef<HTMLElement>(null)
   const stick = useRef(true)
+  // Whether to offer a "↓ jump to latest" button — shown only once the reader has
+  // scrolled up off the newest line (mirrors the panel's ConversationTimeline).
+  const [showJump, setShowJump] = useState(false)
   useEffect(() => {
     stick.current = true // a freshly opened session starts pinned to its end
+    setShowJump(false)
   }, [sessionId])
   useLayoutEffect(() => {
     const el = transcriptRef.current
@@ -98,14 +107,28 @@ export function Chat(props: {
   }, [items, sessionId])
   const onTranscriptScroll = () => {
     const el = transcriptRef.current
-    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    stick.current = nearBottom
+    setShowJump(!nearBottom)
+  }
+  const jumpToLatest = () => {
+    const el = transcriptRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    stick.current = true
+    setShowJump(false)
   }
 
   const bg = info?.background ? `/media/backgrounds/${info.background}` : ''
+  // A creator session (C1) is a card-less chat with the cartographer: no card to
+  // name it, and an empty transcript that must prompt rather than sit blank.
+  const isCreator = info?.persona === CREATOR_PERSONA && !info?.card
   // A set session title wins over the card name (matching the Library's
   // `title || name`), so a rename or ✨-regenerate from Steering shows here; an
-  // untitled chat falls back to the character it stars.
-  const title = info?.title || character?.name || t('Chat')
+  // untitled chat falls back to the character it stars, or — with no card — to a
+  // workshop label for the creator.
+  const title = info?.title || character?.name || (isCreator ? t('Workshop') : t('Chat'))
   const lastAssistantId = [...items].reverse().find((it) => it.kind === 'assistant')?.id
 
   const submit = () => {
@@ -188,7 +211,21 @@ export function Chat(props: {
       </header>
 
       <main class="stage-transcript" ref={transcriptRef} onScroll={onTranscriptScroll}>
-        {items.length === 0 && <p class="stage-empty">{t('Say something to begin.')}</p>}
+        {items.length === 0 &&
+          (isCreator ? (
+            // The creator must not speak first (an ungrounded greeting is its most
+            // ungrounded output), so the blank page prompts and grounds instead —
+            // static copy, not a model turn (creator C1, Finding 1).
+            <div class="stage-creator-empty">
+              <div class="stage-creator-empty__icon" aria-hidden="true">🧭</div>
+              <p class="stage-creator-empty__lead">{t('Tell the cartographer what you have.')}</p>
+              <p class="stage-creator-empty__hint">
+                {t('A spark, a paragraph, a character you can already picture — or paste something you wrote. It draws your seed a few genuinely different ways, each one you could start playing tonight, and you keep the one that was already yours.')}
+              </p>
+            </div>
+          ) : (
+            <p class="stage-empty">{t('Say something to begin.')}</p>
+          ))}
         {items.map((it) => (
           <ChatRow
             key={it.id}
@@ -245,6 +282,14 @@ export function Chat(props: {
             onContinue={() => guard(continueTurn())}
           />
         ))}
+        {/* Sticks to the bottom of the transcript's own viewport, so it hovers
+            just above the composer no matter how tall the composer grows. Only
+            mounted while scrolled up, so it costs no layout at rest. */}
+        {showJump && (
+          <button class="stage-jump" onClick={jumpToLatest}>
+            ↓ {t('Jump to latest')}
+          </button>
+        )}
       </main>
 
       {Object.keys(cast).length > 0 && (
@@ -317,6 +362,17 @@ export function Chat(props: {
         </div>
       )}
 
+      {/* The exit from a creator conversation (C3): once there is something to
+          work from, offer to realize it into a playable world. */}
+      {isCreator && items.length > 0 && !busy && (
+        <div class="stage-realize-bar">
+          <span class="stage-realize-bar__label">{t('Happy with the shape of it?')}</span>
+          <button class="stage-realize-bar__go" onClick={() => setRealizeOpen(true)}>
+            {t('🧭 Realize this world →')}
+          </button>
+        </div>
+      )}
+
       <footer class="stage-composer">
         <button
           class="stage-suggest-btn"
@@ -374,13 +430,15 @@ export function Chat(props: {
         />
       )}
 
-      {doctorAsk && <DoctorOverlay client={client} sessionId={sessionId} ask={doctorAsk} onClose={() => setDoctorAsk(null)} />}
+      {doctorAsk && <DoctorOverlay client={client} sessionId={sessionId} ask={doctorAsk} defaultProvider={info?.provider} defaultModel={info?.model} onClose={() => setDoctorAsk(null)} />}
 
       {nextScene !== null && (
         <NextSceneSheet
           client={client}
           sessionId={sessionId}
           suggestedTitle={nextScene}
+          defaultProvider={info?.provider}
+          defaultModel={info?.model}
           onOpenSession={onOpenSession}
           onClose={() => setNextScene(null)}
         />
@@ -396,6 +454,17 @@ export function Chat(props: {
           defaultModel={info?.model}
           onClose={() => setSuggestOpen(false)}
           onUse={(text) => setDraft(text)}
+        />
+      )}
+
+      {realizeOpen && (
+        <RealizeSheet
+          client={client}
+          sessionId={sessionId}
+          defaultProvider={info?.provider}
+          defaultModel={info?.model}
+          onOpenSession={onOpenSession}
+          onClose={() => setRealizeOpen(false)}
         />
       )}
     </div>

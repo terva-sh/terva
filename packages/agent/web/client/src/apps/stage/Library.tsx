@@ -5,6 +5,8 @@ import { CardEditor } from './CardEditor'
 import { PersonaSheet } from './PersonaSheet'
 import { PersonaEditor } from './PersonaEditor'
 import { CharacterChats } from './CharacterChats'
+import { ModelPick } from './ModelPick'
+import { CREATOR_PERSONA } from './creator'
 import { relativeTime } from './format'
 import { t, tn, tr } from '../../i18n'
 import { panelHref } from '../../ui/navlinks'
@@ -166,6 +168,24 @@ export function Library(props: {
     }
   }
 
+  // Start something from nothing (creator C1): a card-less chat bound to the
+  // cartographer (Kartoittaja). Every other Library entry OPENS something you
+  // already have — a card, a World, a past chat — so making something you don't
+  // is its own door, not a tile in the character grid. The empty state the chat
+  // lands on does the grounding; the creator never speaks first.
+  const startCreator = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const opts: CreateOpts = { experience: 'chat', persona: CREATOR_PERSONA }
+      const res = await client.send<{ session: SessionInfo }>('sessions.create', opts)
+      onOpenChat(res.session.id)
+    } catch (e) {
+      setError(String(e))
+      setBusy(false)
+    }
+  }
+
   // Start a chat inside a saved World (W5): the World's roster, lore, and
   // coordination seed the new session; the picked character is who you talk to.
   const startChatInWorld = async (world: WorldView, cardRef: string) => {
@@ -251,6 +271,20 @@ export function Library(props: {
     } catch (e) {
       setError(String(e))
       return false
+    }
+  }
+
+  // Pin (or clear) one roster character's World-scoped default model: the model
+  // every new chat/play started in this World will give that character. Empty
+  // provider+model clears it back to inherit. Reuses the returned view to
+  // re-render the sheet without a reload round-trip.
+  const setCharacterModel = async (character: string, provider: string, model: string) => {
+    if (!worldSheet) return
+    try {
+      const view = await client.send<WorldView>('worlds.set_character_model', { id: worldSheet.id, character, provider, model })
+      setWorldSheet(view)
+    } catch (e) {
+      setError(String(e))
     }
   }
 
@@ -378,6 +412,26 @@ export function Library(props: {
     }
   }
 
+  // Turn a chat into a reusable World (worlds.save) — its roster, lore, and
+  // coordination become a named World you can start new chats inside, no scene
+  // break needed. The same primitive the Steering drawer's "Save as World" uses,
+  // surfaced here in the hub so it is findable from a chat you are not inside.
+  // Prompting for the name matches the Library's dialog idiom (window.confirm);
+  // only offered on chats not already in a World.
+  const saveAsWorld = async (s: SessionInfo) => {
+    const label = s.title || (s.card ? cardById.get(s.card)?.name : '') || t('this chat')
+    const name = window.prompt(t('Save “%s” as a World named:', label), '')
+    if (name == null) return
+    const trimmed = name.trim()
+    if (!trimmed) return
+    try {
+      await client.send<{ name: string }>('worlds.save', { name: trimmed }, s.id)
+      load()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
   return (
     <div class="stage">
       <header class="stage-topbar">
@@ -418,6 +472,16 @@ export function Library(props: {
           if (e.dataTransfer?.files?.length) void importFiles(e.dataTransfer.files)
         }}
       >
+        {/* The sixth entry point (creator C1): make something you don't have yet.
+            Its own door above the "pick something you have" library, because the
+            two are different acts. */}
+        <button class="stage-creator-door" disabled={busy} onClick={() => void startCreator()}>
+          <span class="stage-creator-door__icon" aria-hidden="true">🧭</span>
+          <span class="stage-creator-door__text">
+            <span class="stage-creator-door__title">{t('Start something new')}</span>
+            <span class="stage-creator-door__sub">{t('Talk it through with the cartographer — from a spark, a paragraph, or nothing yet.')}</span>
+          </span>
+        </button>
         <div class="stage-section-head">
           <h2>{t('Characters')}</h2>
           <label class="stage-import">
@@ -558,6 +622,11 @@ export function Library(props: {
                       </span>
                       {when && <span class="stage-yourchats__when">{when}</span>}
                     </button>
+                    {worldsSupported && !s.world && (
+                      <button class="stage-yourchats__world" title={t('Save this chat as a World')} aria-label={t('Save this chat as a World')} onClick={() => void saveAsWorld(s)}>
+                        🗺
+                      </button>
+                    )}
                     <button class="stage-yourchats__del" title={t('Delete this chat')} aria-label={t('Delete this chat')} onClick={() => void deleteSession(s)}>
                       🗑
                     </button>
@@ -721,11 +790,22 @@ export function Library(props: {
               {Object.keys(worldSheet.characters ?? {}).length === 0 && <p class="stage-empty">{t('No characters saved in this World.')}</p>}
               <ul class="stage-cast">
                 {Object.entries(worldSheet.characters ?? {}).map(([name, ref]) => (
-                  <li key={name} class="stage-cast__member">
+                  <li key={name} class="stage-cast__member stage-worldroster__member">
                     <span class="stage-cast__name">{name}</span>
                     <button class="stage-worldsheet__chat" disabled={busy} title={t('New chat with %s in %s', name, worldSheet.name)} onClick={() => void startChatInWorld(worldSheet, ref)}>
                       {t('Chat')}
                     </button>
+                    {/* This character's default model in this World — every new
+                        chat/play here seeds their route from it. "Inherit" = the
+                        session's own model. */}
+                    <ModelPick
+                      client={client}
+                      sessionId=""
+                      currentProvider={worldSheet.character_models?.[name]?.provider}
+                      currentModel={worldSheet.character_models?.[name]?.model}
+                      onSelect={(p, m) => void setCharacterModel(name, p, m)}
+                      defaultLabel={t('Inherit')}
+                    />
                   </li>
                 ))}
               </ul>
