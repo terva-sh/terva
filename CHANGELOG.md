@@ -11,6 +11,16 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.2](https://github.com/terva-sh/terva/releases/tag/v0.126.2) — 2026-07-20
+
+### Fixes
+
+- stage: keep the top bar out from under the iPhone notch
+
+### Other
+
+- web: a shared design base — a 16px input floor, resets, and an enforced --ui-* token contract
+
 ## [v0.126.1](https://github.com/terva-sh/terva/releases/tag/v0.126.1) — 2026-07-20
 
 ### Features
