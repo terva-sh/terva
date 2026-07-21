@@ -610,6 +610,49 @@ func TestWorldUpdateMetadata(t *testing.T) {
 	}
 }
 
+// worlds.set_character_model (B): the World-scoped per-character default model.
+// A pin lands in the doc and on the wire, an empty provider+model clears it, an
+// off-roster name is refused, and a missing World 404s. The pin is what a new
+// session in this World seeds its cast route from (workspace.go create path).
+func TestWorldSetCharacterModel(t *testing.T) {
+	w := draftWorkspace(t)
+	ctx := context.Background()
+	store := build.NewWorldStore()
+	doc, err := store.Save(build.WorldDoc{Name: "Lowtown", Characters: map[string]string{"Elira": "elira-ref"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := w.WorldSetCharacterModel(ctx, ctrlproto.WorldSetCharacterModelParams{ID: doc.ID, Character: "Elira", Provider: "openai", Model: "gpt-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := view.CharacterModels["Elira"]; got.Provider != "openai" || got.Model != "gpt-5" {
+		t.Fatalf("pin not on the wire view: %+v", view.CharacterModels)
+	}
+	if after, _ := store.Get(doc.ID); after.CharacterModels["Elira"].Model != "gpt-5" {
+		t.Errorf("pin did not persist to the doc: %+v", after.CharacterModels)
+	}
+
+	// Empty provider AND model clears the pin — the character inherits again.
+	view, err = w.WorldSetCharacterModel(ctx, ctrlproto.WorldSetCharacterModelParams{ID: doc.ID, Character: "Elira"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, still := view.CharacterModels["Elira"]; still {
+		t.Errorf("empty provider+model should clear the pin, got %+v", view.CharacterModels)
+	}
+
+	// An off-roster name is refused (a pin without its member is meaningless).
+	if _, err := w.WorldSetCharacterModel(ctx, ctrlproto.WorldSetCharacterModelParams{ID: doc.ID, Character: "Ghost", Model: "gpt-5"}); err == nil {
+		t.Error("a character not on the roster should be refused")
+	}
+	// A missing World 404s.
+	if _, err := w.WorldSetCharacterModel(ctx, ctrlproto.WorldSetCharacterModelParams{ID: "no-such-world", Character: "Elira", Model: "gpt-5"}); err == nil {
+		t.Error("setting a model on a missing World should 404")
+	}
+}
+
 // The defect the W5 live play-test found, fixed in W6: creating a PLAY session
 // inside a saved World must warm its actors from the roster's library cards
 // (the refs once resolved only as personas and creation failed outright). And

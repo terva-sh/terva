@@ -270,6 +270,41 @@ func (w *Workspace) WorldUpdate(_ context.Context, p ctrlproto.WorldUpdateParams
 	return worldDocToView(saved, 0), nil
 }
 
+// WorldSetCharacterModel pins (or clears) one roster character's World-scoped
+// default model — the model a new session started in this World seeds that
+// actor's route from (the create path passes CharacterModels to SetCast).
+// Sessionless, like WorldUpdate; an empty provider AND model clears the pin so
+// the character inherits the session/host model again. The id is stable, so the
+// pin sticks across renames.
+func (w *Workspace) WorldSetCharacterModel(_ context.Context, p ctrlproto.WorldSetCharacterModelParams) (ctrlproto.WorldView, error) {
+	name := strings.TrimSpace(p.Character)
+	if name == "" {
+		return ctrlproto.WorldView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("name a character to set a model for"))
+	}
+	store := build.NewWorldStore()
+	doc, err := store.Get(strings.TrimSpace(p.ID))
+	if err != nil {
+		return ctrlproto.WorldView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%v", err)
+	}
+	if _, ok := doc.Characters[name]; !ok {
+		return ctrlproto.WorldView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("%s is not on this World's roster", name))
+	}
+	provider, model := strings.TrimSpace(p.Provider), strings.TrimSpace(p.Model)
+	if provider == "" && model == "" {
+		delete(doc.CharacterModels, name)
+	} else {
+		if doc.CharacterModels == nil {
+			doc.CharacterModels = map[string]core.CastRoute{}
+		}
+		doc.CharacterModels[name] = core.CastRoute{Provider: provider, Model: model}
+	}
+	saved, err := store.Save(doc)
+	if err != nil {
+		return ctrlproto.WorldView{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "set character model: %v", err)
+	}
+	return worldDocToView(saved, 0), nil
+}
+
 // WorldsExport bundles a saved World for download (W5b): the WorldDoc plus
 // every roster character's card in its ordinary export form (a CCv2 PNG when
 // it retains an avatar, else the CCv2 JSON), plus the cover image. A roster
@@ -388,14 +423,15 @@ func (w *Workspace) WorldsImport(_ context.Context, p ctrlproto.WorldImportParam
 
 func worldDocToView(d build.WorldDoc, sessions int) ctrlproto.WorldView {
 	v := ctrlproto.WorldView{
-		ID:          d.ID,
-		Name:        d.Name,
-		Description: d.Description,
-		Characters:  d.Characters,
-		Lore:        worldLoreToView(d.Lore),
-		Sessions:    sessions,
-		Created:     ctrlTimeString(d.Created),
-		Updated:     ctrlTimeString(d.Updated),
+		ID:              d.ID,
+		Name:            d.Name,
+		Description:     d.Description,
+		Characters:      d.Characters,
+		CharacterModels: castRoutesToView(d.CharacterModels),
+		Lore:            worldLoreToView(d.Lore),
+		Sessions:        sessions,
+		Created:         ctrlTimeString(d.Created),
+		Updated:         ctrlTimeString(d.Updated),
 	}
 	if build.NewWorldStore().CoverPath(d.ID) != "" {
 		v.CoverURL = "/media/worlds/" + d.ID

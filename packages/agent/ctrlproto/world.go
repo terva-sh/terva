@@ -37,6 +37,11 @@ type WorldController interface {
 	// without a session (the Library sheet's verbs). The id never changes, so
 	// member-session grouping survives a rename.
 	WorldUpdate(ctx context.Context, p WorldUpdateParams) (WorldView, error)
+	// WorldSetCharacterModel sets (or clears) one roster character's World-scoped
+	// default model — the pin a new session in this World seeds its cast from.
+	// Sessionless, like WorldUpdate. Empty Provider AND Model clears the pin (the
+	// character inherits again); p.Character must be on the roster.
+	WorldSetCharacterModel(ctx context.Context, p WorldSetCharacterModelParams) (WorldView, error)
 	// WorldsExport serializes a saved World for download (W5b): a single JSON
 	// bundle carrying the WorldDoc, every roster character's card (each in its
 	// ordinary export form), and the cover image.
@@ -101,7 +106,13 @@ type WorldView struct {
 	Description string `json:"description,omitempty"`
 	// Characters is the roster (name → card ref); Lore the World's lorebook.
 	Characters map[string]string `json:"characters,omitempty"`
-	Lore       []WorldLoreEntry  `json:"lore,omitempty"`
+	// CharacterModels is the per-character default model (name → provider+model),
+	// the World-scoped model pin a new session in this World seeds its cast from
+	// (workspace.go's create path passes it to SetCast). Empty for a character =
+	// that actor inherits the session/host model. Edited via
+	// worlds.set_character_model.
+	CharacterModels map[string]CastRoute `json:"character_models,omitempty"`
+	Lore            []WorldLoreEntry     `json:"lore,omitempty"`
 	// Sessions is how many sessions belong to this World (SessionMeta.World).
 	Sessions int    `json:"sessions,omitempty"`
 	Created  string `json:"created,omitempty"` // RFC 3339
@@ -141,6 +152,15 @@ type WorldUpdateParams struct {
 	Description string `json:"description"`
 	Cover       []byte `json:"cover,omitempty"`
 	RemoveCover bool   `json:"remove_cover,omitempty"`
+}
+
+// WorldSetCharacterModelParams pins (or clears) one roster character's
+// World-scoped default model. Empty Provider AND Model clears the pin.
+type WorldSetCharacterModelParams struct {
+	ID        string `json:"id"`
+	Character string `json:"character"`
+	Provider  string `json:"provider,omitempty"`
+	Model     string `json:"model,omitempty"`
 }
 
 // WorldExportParams names the saved World to bundle.
