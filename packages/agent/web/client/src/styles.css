@@ -58,10 +58,14 @@
      properties resolve at use time, so the dark-scheme overrides below reach
      ui/ui.css through these without being restated. */
   --ui-bg: var(--bg);
+  --ui-surface: var(--panel);
   --ui-fg: var(--fg);
   --ui-muted: var(--muted);
   --ui-line: var(--line);
+  --ui-accent: var(--accent);
+  --ui-danger: var(--danger);
   --ui-ok: var(--ok);
+  --ui-radius: var(--radius);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -74,37 +78,13 @@
   }
 }
 
-* { box-sizing: border-box; }
-/* Convention #1: form controls shrink instead of overflowing. Without this a
-   <select> floors at its widest option (WebKit holds that floor even against
-   a max-width cap unless min-width is 0) and one long server-sent label turns
-   a pane into a horizontal scroller. */
-select, input, textarea, button { min-width: 0; max-width: 100%; }
-/* iOS Safari font boosting inflates arbitrary text nodes and blows out
-   min-content widths; pin the type scale to what we declared. */
-html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-/* Convention #6: a text-entry control never renders below 16px on a touch
-   device. iOS Safari force-zooms the page when a field with a smaller computed
-   font-size takes focus — and a zoomed page's visual viewport is NARROWER than
-   its layout viewport, so the composer's Send button falls off the right edge
-   and the whole page pans sideways, which nothing undoes but pinching back out.
-   (text-size-adjust above does not prevent this: that governs font boosting, a
-   different mechanism. Only the 16px floor does.)
-
-   !important is deliberate, and the one place in this sheet that earns it. This
-   is a floor on browser behavior, not a style preference: it has to beat every
-   component rule that sizes a field — which today range from `.set-input`
-   (0,1,0) to `.msg.queued.editing textarea` (0,3,1), and most of which say
-   `font: inherit`, a shorthand that silently resets font-size. A selector list
-   cannot outrank all of them, and a new component rule must not be able to
-   reopen the bug by accident. tests/smoke/overflow.smoke.ts holds the line.
-
-   pointer:coarse keeps the desktop density scale (--fs-detail et al) untouched. */
-@media (pointer: coarse) {
-  input:not([type='checkbox']):not([type='radio']), select, textarea {
-    font-size: max(16px, 1em) !important;
-  }
-}
+/* The global resets — box-sizing, the form-control shrink floor (old
+   Convention #1), the touch 16px input floor + text-size-adjust (old
+   Convention #6), tap-highlight, the focus ring and ::selection — all live in
+   ui/ui.css now, the one sheet both apps import first, so the panel and Stage
+   share one base instead of each carrying or missing a copy. Both are guarded:
+   tests/smoke/overflow.smoke.ts (panel render) and ui-conformance.test.ts (the
+   base + the --ui-* token contract). */
 html, body, #app { height: 100%; margin: 0; }
 body {
   font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif;

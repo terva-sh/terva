@@ -12,6 +12,8 @@
   --stage-accent: #c9a45a;
   --stage-user: #2c3a3f;
   --stage-ok: #7fbf8a;
+  --stage-danger: #d67a6a; /* also the --stage-status--closed red */
+  --stage-radius: 8px; /* Stage's common control/card radius */
   /* Text drawn ON --stage-accent. Near-black suits the three dark presets,
      whose accents are light; Parchment's accent is a mid-brown that near-black
      sits at ~3:1 against, so it overrides this below. */
@@ -20,10 +22,14 @@
      here rather than per preset: custom properties resolve at use time, so a
      data-theme override of --stage-* below flows through untouched. */
   --ui-bg: var(--stage-surface);
+  --ui-surface: var(--stage-surface-2);
   --ui-fg: var(--stage-fg);
   --ui-muted: var(--stage-muted);
   --ui-line: var(--stage-line);
+  --ui-accent: var(--stage-accent);
+  --ui-danger: var(--stage-danger);
   --ui-ok: var(--stage-ok);
+  --ui-radius: var(--stage-radius);
 }
 
 /* Theme presets (theme.ts): the base :root above is Dusk (the no-attribute
@@ -61,10 +67,9 @@
   --stage-user: #3a2530;
 }
 
-* {
-  box-sizing: border-box;
-}
-
+/* box-sizing, the control shrink floor, the 16px input floor, tap-highlight,
+   the focus ring, ::selection and the button type/cursor reset all live in
+   ui/ui.css now (imported first) — one shared base for both apps. */
 html,
 body {
   margin: 0;
@@ -73,11 +78,6 @@ body {
   font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
 
-button {
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-}
 button:disabled {
   cursor: default;
   opacity: 0.5;
@@ -127,7 +127,7 @@ button:disabled {
   color: var(--stage-accent);
 }
 .stage-status--closed {
-  color: #d67a6a;
+  color: var(--stage-danger);
 }
 
 /* The theme picker in the library header. */
@@ -209,7 +209,7 @@ button:disabled {
   color: var(--stage-muted);
 }
 .stage-error {
-  color: #d67a6a;
+  color: var(--stage-danger);
   /* Importing a multi-file selection reports one problem per line. */
   white-space: pre-line;
 }
@@ -220,8 +220,8 @@ button:disabled {
 .stage-error--live {
   margin: 0 0 0.4rem;
   padding: 0.45rem 0.7rem;
-  background: color-mix(in srgb, #d67a6a 16%, var(--stage-surface));
-  border: 1px solid color-mix(in srgb, #d67a6a 45%, transparent);
+  background: color-mix(in srgb, var(--stage-danger) 16%, var(--stage-surface));
+  border: 1px solid color-mix(in srgb, var(--stage-danger) 45%, transparent);
   border-radius: 8px;
   font-size: 0.85rem;
   cursor: pointer;
@@ -388,7 +388,7 @@ button:disabled {
   padding: 0.25rem 0.5rem 0.25rem 0.3rem;
 }
 .stage-userpersona__del:hover {
-  color: #d67a6a;
+  color: var(--stage-danger);
 }
 .stage-userpersona-actions {
   display: flex;
@@ -835,7 +835,7 @@ button:disabled {
 }
 /* Delete sits under Export deliberately: exporting is the thing you might want
    to do FIRST, and the order says so. Muted at rest like every other destructive
-   control in Stage, taking the shared #d67a6a only on hover. */
+   control in Stage, taking the shared --stage-danger only on hover. */
 .stage-sheet__delete {
   width: 100%;
   margin-top: 0.4rem;
@@ -847,8 +847,8 @@ button:disabled {
   cursor: pointer;
 }
 .stage-sheet__delete:hover {
-  color: #d67a6a;
-  border-color: #d67a6a;
+  color: var(--stage-danger);
+  border-color: var(--stage-danger);
 }
 
 /* --- character detail sheet (CardSheet) --- */
@@ -1739,7 +1739,7 @@ button:disabled {
 }
 /* Delete sits with the other secondary actions rather than being tinted red at
    rest — it is one of several things you can do to a message, not a hazard the
-   row has to shout about. The destructive colour (the same #d67a6a the chat and
+   row has to shout about. The destructive colour (the same --stage-danger the chat and
    persona deletes use) arrives on hover, once you are actually pointing at it. */
 .stage-edit__delete {
   background: var(--stage-surface-2) !important;
@@ -1747,7 +1747,7 @@ button:disabled {
   font-weight: 500 !important;
 }
 .stage-edit__delete:hover:not(:disabled) {
-  color: #d67a6a !important;
+  color: var(--stage-danger) !important;
 }
 .stage-edit__delete:disabled {
   opacity: 0.45;
@@ -1761,7 +1761,7 @@ button:disabled {
 }
 .stage-row--error {
   align-self: flex-start;
-  color: #d67a6a;
+  color: var(--stage-danger);
 }
 /* actor_spawn brought a cast member on stage — a light attribution chip, so a
    play scene reads as who just spoke rather than a raw tool call. */
@@ -2244,7 +2244,7 @@ button:disabled {
 .stage-scene-state__error {
   margin: 0;
   font-size: 0.8rem;
-  color: #d67a6a;
+  color: var(--stage-danger);
 }
 
 .stage-composer {
@@ -2934,7 +2934,7 @@ button:disabled {
   cursor: pointer;
 }
 .stage-cast__remove:hover {
-  color: #d67a6a;
+  color: var(--stage-danger);
 }
 .stage-cast-add {
   display: flex;
@@ -3085,8 +3085,8 @@ button:disabled {
   opacity: 1;
 }
 .stage-bg-cell__del:hover {
-  color: #d67a6a;
-  border-color: #d67a6a;
+  color: var(--stage-danger);
+  border-color: var(--stage-danger);
 }
 @media (hover: none) {
   .stage-bg-cell__del {
@@ -3838,7 +3838,7 @@ button:disabled {
   min-width: 0;
 }
 .stage-doctor__error {
-  color: #d67a6a;
+  color: var(--stage-danger);
 }
 
 /* The doctor overlay (SD2/SD3): a narrowed ask hosted in a sheet over the

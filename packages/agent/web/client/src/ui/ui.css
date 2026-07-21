@@ -16,6 +16,73 @@
  * a rule here on specificity/order.
  */
 
+/* --- shared base: the iOS touch zoom floor ---
+   Base behaviour, not a ui/ component rule, but it lives here because ui.css is
+   the one sheet BOTH entries import, and import first. The panel carried this in
+   styles.css; Stage imported neither and had no floor, so every Stage field —
+   all `font: inherit` off a 15px body — force-zoomed iOS Safari on focus. One
+   source now, both apps.
+
+   iOS Safari zooms the page when a field whose computed font-size is below 16px
+   takes focus, and a zoomed page's visual viewport is NARROWER than its layout
+   viewport, so a composer's Send button falls off the right edge and the whole
+   page pans sideways — nothing undoes it but pinching back out. Only the 16px
+   floor prevents this; text-size-adjust governs font boosting, a different
+   mechanism.
+
+   !important is deliberate and earned: a floor on browser behaviour, not a style
+   preference, so it must beat every component rule that sizes a field — most of
+   which say `font: inherit`, a shorthand that silently resets font-size. A new
+   component rule must not be able to reopen the bug by accident, so the element
+   selectors here (not a class list) catch every current and future field.
+   pointer:coarse leaves the desktop density scales untouched. ui-floor.test.ts
+   holds the line; the panel's tests/smoke/overflow.smoke.ts still exercises it. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']), select, textarea {
+    font-size: max(16px, 1em) !important;
+  }
+}
+
+/* --- shared base: resets & cross-cutting hygiene ---
+   One home for the browser-behaviour rules BOTH apps need. Each of these was a
+   drift risk while it lived in one app's sheet or nowhere: the copy button, the
+   16px floor and the notch inset were each "the panel had it, Stage didn't".
+   Element/global selectors so a new component is covered with no opt-in; each
+   app's sheet, imported after this one, still overrides any of it. */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* No grey tap-flash on touch — both apps want the same restrained feel. */
+* { -webkit-tap-highlight-color: transparent; }
+
+/* Convention #1 (was panel-only, styles.css): a form control shrinks instead of
+   overflowing. A <select> otherwise floors at its widest option (WebKit holds
+   that floor against a max-width cap unless min-width is 0) and one long
+   server-sent label turns a pane into a sideways scroller. Stage never had it. */
+select, input, textarea, button { min-width: 0; max-width: 100%; }
+
+/* Buttons inherit neither type nor cursor by default; both apps want both. */
+button { font: inherit; color: inherit; cursor: pointer; }
+
+/* A keyboard focus ring wherever a component hasn't drawn its own — a pure a11y
+   gain (mouse focus is untouched: :focus-visible is keyboard-only), at the
+   lowest specificity so any component :focus/:focus-visible rule still wins. */
+:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+
+::selection { background: color-mix(in srgb, var(--ui-accent) 30%, transparent); }
+
+/* --- the --ui-* token contract ---
+   The vocabulary this sheet (and the shared ui/ primitives to come) speak. Each
+   app MUST map every token below in its :root; ui-conformance.test.ts fails when
+   the base consumes a --ui-* an app doesn't define, so a shared rule can never
+   again out-run one app's palette the way the drifted rules above did.
+     surface  --ui-bg --ui-surface --ui-fg --ui-muted --ui-line
+     intent   --ui-accent --ui-danger --ui-ok
+     shape    --ui-radius
+   The spacing and type scales are deliberately NOT here yet — a shared scale is
+   a design decision (which step sizes?), not a mechanical move, so each app
+   keeps its own for now. Add them here the day a shared primitive needs them. */
+
 /* --- per-message copy (ui/CopyButton.tsx) --- */
 .copy-btn {
   position: absolute; top: 6px; right: 6px;
