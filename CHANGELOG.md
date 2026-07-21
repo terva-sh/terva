@@ -11,6 +11,25 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.1](https://github.com/terva-sh/terva/releases/tag/v0.126.1) — 2026-07-20
+
+### Features
+
+- i18n: Stage joins localization, and the operator prose crosses the wire
+- personas: Kartoittaja — the creator persona a seed pass chose
+- stage: export a session as a story
+- stage: the session doctor and the tools a played scene earns
+
+### Fixes
+
+- ctrlproto: a verb must be dispatched on an arm of its own
+- permissions: the durable tool-allow grant, wired and deduplicated
+- stage,web: the live bugs the shared layers were hiding
+
+### Other
+
+- web: a transport seam for the panel, and one fold for a session's events
+
 ## [v0.126.0](https://github.com/terva-sh/terva/releases/tag/v0.126.0) — 2026-07-19
 
 ### Features
