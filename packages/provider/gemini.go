@@ -175,8 +175,9 @@ func (c *geminiClient) buildRequest(req Request) (*gemRequest, string, error) {
 	if maxTok > 0 {
 		gc.MaxOutputTokens = &maxTok
 	}
-	if req.Reasoning != "" && m.Reasoning {
-		tc := geminiThinkingConfig(m.ID, req.Reasoning)
+	eff := EffectiveReasoning(req.Reasoning, req.ReasoningSet, m)
+	if eff != "" && m.Reasoning {
+		tc := geminiThinkingConfig(m.ID, eff)
 		if tc != nil {
 			gc.ThinkingConfig = tc
 		}

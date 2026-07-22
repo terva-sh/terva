@@ -74,6 +74,16 @@ type Model struct {
 	// params). Launch resolve order: --temperature flag > per-model > global
 	// config. One of the registry-driven scalar params (see ScalarParams).
 	Temperature *float32
+
+	// DefaultReasoning is the reasoning level this model uses when the user has
+	// set NO global level (--reasoning / config unset). A raw level string
+	// (off/minimum/low/medium/high/maximum/max); "" means no default (off), the
+	// prior behavior. Ships in the catalog and is overridable per-model via
+	// models.json `defaultReasoning`. NORMALIZED at the point of use, so a
+	// literal "off" here forces thinking off for the model unless the user sets a
+	// global level. Some endpoints (Kimi K3) silently downgrade to an older model
+	// when no thinking is sent, so their catalog rows set this to "high".
+	DefaultReasoning string
 }
 
 // EffectiveContextWindow is the window used for auto-compaction: the
@@ -251,7 +261,20 @@ var Catalog = []Model{
 
 	// ---- Kimi / Kimi Code ----
 	// Anthropic-messages on https://api.kimi.com/coding (no /v1 suffix;
-	// the Anthropic client appends /v1/messages itself).
+	// the Anthropic client appends /v1/messages itself). The subscription
+	// (device-code OAuth) and KIMI_API_KEY both resolve to this one `kimi`
+	// provider, so these rows serve both. k3's DefaultReasoning:"high" keeps
+	// it sending `thinking`: the endpoint silently downgrades to Kimi 2.6
+	// when a request arrives with no thinking, so a model default (not a
+	// hardcoded branch) keeps K3 answering as K3 unless the user sets a
+	// global level.
+	{
+		Provider: "kimi", ID: "k3", DisplayName: "Kimi K3",
+		ContextWindow: 1000000, MaxOutput: 32768, Reasoning: true,
+		DefaultReasoning: "high",
+		PriceInput:       0, PriceOutput: 0, PriceCacheRead: 0,
+		BaseURL: "https://api.kimi.com/coding",
+	},
 	{
 		Provider: "kimi", ID: "kimi-for-coding", DisplayName: "Kimi For Coding",
 		ContextWindow: 262144, MaxOutput: 32768, Reasoning: true,

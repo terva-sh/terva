@@ -71,7 +71,8 @@ type UserModel struct {
 	PriceCacheRead       float64         `json:"priceCacheRead"`
 	PriceCacheWrite      float64         `json:"priceCacheWrite"`
 	BaseURL              string          `json:"baseUrl,omitempty"`
-	Temperature          *float32        `json:"temperature,omitempty"` // default sampling temperature (0–2); nil = inherit
+	Temperature          *float32        `json:"temperature,omitempty"`      // default sampling temperature (0–2); nil = inherit
+	DefaultReasoning     string          `json:"defaultReasoning,omitempty"` // per-model reasoning level when no global level is set; "" = inherit
 	Capabilities         map[string]bool `json:"capabilities,omitempty"`
 	Input                []string        `json:"input"` // legacy capability spelling, see above
 	API                  string          `json:"api"`   // informational only
@@ -161,6 +162,7 @@ func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
 				PriceCacheWrite:      um.PriceCacheWrite,
 				BaseURL:              um.BaseURL,
 				Temperature:          um.Temperature,
+				DefaultReasoning:     um.DefaultReasoning,
 				Source:               "user",
 				Caps:                 caps,
 			}

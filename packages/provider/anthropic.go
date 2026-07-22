@@ -315,17 +315,18 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		}}
 	}
 
-	if req.Reasoning != "" && m.Reasoning {
+	eff := EffectiveReasoning(req.Reasoning, req.ReasoningSet, m)
+	if eff != "" && m.Reasoning {
 		if adaptive {
 			// Adaptive-thinking models (Opus 4.7+): the model decides when
 			// and how much to think; depth is steered by output_config.effort.
 			// Explicit budgets are rejected with a 400, so none is sent.
 			out.Thinking = &anthThinking{Type: "adaptive"}
-			if effort := AnthropicAdaptiveEffort(req.Reasoning); effort != "" {
+			if effort := AnthropicAdaptiveEffort(eff); effort != "" {
 				out.OutputConfig = &anthOutputConfig{Effort: effort}
 			}
 		} else {
-			budget := anthropicReasoningBudget(req.Reasoning)
+			budget := anthropicReasoningBudget(eff)
 			if budget > 0 {
 				// Reasoning requires max_tokens > budget. Keep at least a small
 				// answer budget while respecting the model's advertised output cap.

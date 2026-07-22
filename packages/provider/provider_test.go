@@ -208,10 +208,11 @@ func TestAnthropicAdaptiveThinking(t *testing.T) {
 
 	// Opus 4.8 -> adaptive thinking, effort set, no budget, no temperature.
 	wire, err := c.buildRequest(Request{
-		Model:       "claude-opus-4-8",
-		Reasoning:   "high",
-		Temperature: &temp,
-		Messages:    []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+		Model:        "claude-opus-4-8",
+		Reasoning:    "high",
+		ReasoningSet: true,
+		Temperature:  &temp,
+		Messages:     []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -231,9 +232,10 @@ func TestAnthropicAdaptiveThinking(t *testing.T) {
 
 	// maximum -> xhigh effort.
 	wire, err = c.buildRequest(Request{
-		Model:     "claude-opus-4-8",
-		Reasoning: "maximum",
-		Messages:  []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+		Model:        "claude-opus-4-8",
+		Reasoning:    "maximum",
+		ReasoningSet: true,
+		Messages:     []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -244,9 +246,10 @@ func TestAnthropicAdaptiveThinking(t *testing.T) {
 
 	// max -> native max effort, a separate tier above xhigh on adaptive models.
 	wire, err = c.buildRequest(Request{
-		Model:     "claude-opus-4-8",
-		Reasoning: "max",
-		Messages:  []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+		Model:        "claude-opus-4-8",
+		Reasoning:    "max",
+		ReasoningSet: true,
+		Messages:     []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -257,10 +260,11 @@ func TestAnthropicAdaptiveThinking(t *testing.T) {
 
 	// Opus 4.5 -> budget-based thinking, no output_config, temperature kept.
 	wire, err = c.buildRequest(Request{
-		Model:       "claude-opus-4-5",
-		Reasoning:   "high",
-		Temperature: &temp,
-		Messages:    []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+		Model:        "claude-opus-4-5",
+		Reasoning:    "high",
+		ReasoningSet: true,
+		Temperature:  &temp,
+		Messages:     []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -391,9 +395,10 @@ func TestAnthropicStreamHappyPath(t *testing.T) {
 func TestOpenAICompatAnthropicReasoningEffort(t *testing.T) {
 	c := innerOpenAI(NewOpenRouter("token", "")) // unwrap the usage-polling layer
 	wire, err := c.buildRequest(Request{
-		Model:     "anthropic/claude-opus-4.8",
-		Reasoning: "maximum",
-		Messages:  []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+		Model:        "anthropic/claude-opus-4.8",
+		Reasoning:    "maximum",
+		ReasoningSet: true,
+		Messages:     []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -403,9 +408,10 @@ func TestOpenAICompatAnthropicReasoningEffort(t *testing.T) {
 	}
 
 	wire, err = c.buildRequest(Request{
-		Model:     "gpt-5.1",
-		Reasoning: "maximum",
-		Messages:  []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+		Model:        "gpt-5.1",
+		Reasoning:    "maximum",
+		ReasoningSet: true,
+		Messages:     []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -28,6 +28,19 @@ func NormalizeReasoning(level string) string {
 	}
 }
 
+// EffectiveReasoning resolves the reasoning level for a turn against model m: an
+// explicitly-set global level (reasoningSet==true, incl. "" meaning the user
+// chose off) wins; otherwise the model's DefaultReasoning applies; otherwise
+// off. The result is NORMALIZED, so callers gate on `!= ""` and pass it to the
+// budget/effort mappers unchanged. Single home of the global-vs-model precedence,
+// shared by every backend's request builder.
+func EffectiveReasoning(reqReasoning string, reasoningSet bool, m Model) string {
+	if reasoningSet {
+		return NormalizeReasoning(reqReasoning)
+	}
+	return NormalizeReasoning(m.DefaultReasoning)
+}
+
 // ReasoningBudget returns terva's approximate token budget for thinking-capable
 // providers that accept explicit budgets.
 func ReasoningBudget(level string) int {

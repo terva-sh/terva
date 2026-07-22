@@ -42,3 +42,30 @@ func TestReasoningEffortMappings(t *testing.T) {
 		}
 	}
 }
+
+// EffectiveReasoning resolves the global-vs-model precedence: an explicitly-set
+// global level (incl. "" == off) wins; otherwise the model's DefaultReasoning;
+// otherwise off. The result is always normalized.
+func TestEffectiveReasoning(t *testing.T) {
+	cases := []struct {
+		name         string
+		reqReasoning string
+		reasoningSet bool
+		modelDefault string
+		want         string
+	}{
+		{"set high wins", "high", true, "low", "high"},
+		{"set explicit off wins over model default", "", true, "high", ""},
+		{"unset falls back to model default high", "", false, "high", "high"},
+		{"unset with no model default is off", "", false, "", ""},
+		{"unset with model default off is off", "", false, "off", ""},
+		{"model default normalized (Hi -> high)", "", false, "Hi", "high"},
+	}
+	for _, tc := range cases {
+		m := Model{DefaultReasoning: tc.modelDefault}
+		if got := EffectiveReasoning(tc.reqReasoning, tc.reasoningSet, m); got != tc.want {
+			t.Errorf("%s: EffectiveReasoning(%q, %v, {DefaultReasoning:%q})=%q want %q",
+				tc.name, tc.reqReasoning, tc.reasoningSet, tc.modelDefault, got, tc.want)
+		}
+	}
+}

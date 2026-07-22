@@ -36,6 +36,11 @@ type Agent struct {
 	Tools     Registry
 	MaxSteps  int
 	Reasoning string
+	// ReasoningSet reports the global reasoning level was explicitly chosen by
+	// the user (flag/config/settings, including "off"), so it wins over a
+	// model's DefaultReasoning. False means unset — fall back to the per-model
+	// default. Read at turn start under a.mu alongside Reasoning.
+	ReasoningSet bool
 
 	// VisibleTool, when non-nil, reports whether a registered tool is
 	// ADVERTISED to the model on a turn. It filters only the tool specs sent
@@ -1018,6 +1023,10 @@ func (a *Agent) SetReasoning(level string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.Reasoning = level
+	// A runtime set is an explicit user choice (the settings "reasoning"
+	// control), so it wins over any per-model DefaultReasoning from here on —
+	// including when level is "" (the user chose off).
+	a.ReasoningSet = true
 }
 
 // SetClientAndModel atomically swaps both the provider client and the
@@ -2009,6 +2018,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	a.mu.Lock()
 	model := a.Model
 	reasoning := a.Reasoning
+	reasoningSet := a.ReasoningSet
 	maxTokens := a.MaxTokens
 	temperature := a.Temperature
 	imageOutput := a.ImageOutput
@@ -2140,6 +2150,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		// tool here never affects callability or authority (retro H2·b).
 		Tools:            tools.SpecsVisible(tt.visible),
 		Reasoning:        reasoning,
+		ReasoningSet:     reasoningSet,
 		MaxTokens:        maxTokens,
 		Temperature:      temperature,
 		ImageOutput:      imageOutput,

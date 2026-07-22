@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // Scalar model parameters are the numeric/text per-model overrides that follow
@@ -125,6 +126,26 @@ var scalarParams = []ScalarParam{
 		Merge: func(dst *Model, src Model) {
 			if src.Temperature != nil {
 				dst.Temperature = src.Temperature
+			}
+		},
+	},
+	{
+		Key: "defaultReasoning", Label: "default reasoning", Kind: ScalarText,
+		Default:  func(m Model) string { return strOrDefault(m.DefaultReasoning, "off") },
+		Override: func(um UserModel) string { return um.DefaultReasoning },
+		SetOverride: func(um *UserModel, s string) error {
+			v := strings.ToLower(strings.TrimSpace(s))
+			switch v {
+			case "", "off", "none", "minimum", "minimal", "low", "medium", "high", "maximum", "max":
+				um.DefaultReasoning = v
+				return nil
+			default:
+				return fmt.Errorf("invalid reasoning level %q (want off|minimum|low|medium|high|maximum|max)", s)
+			}
+		},
+		Merge: func(dst *Model, src Model) {
+			if src.DefaultReasoning != "" {
+				dst.DefaultReasoning = src.DefaultReasoning
 			}
 		},
 	},

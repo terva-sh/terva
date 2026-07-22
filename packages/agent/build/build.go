@@ -41,7 +41,12 @@ type Resolved struct {
 	BaseURL       string
 	CWD           string
 	Reasoning     string
-	Temperature   *float32
+	// ReasoningSet reports the global reasoning level was explicitly chosen
+	// (--reasoning flag or config), so it wins over a model's DefaultReasoning.
+	// Derived from the RAW value before normalizing: non-empty raw (incl.
+	// "off"/"none") ⇒ set.
+	ReasoningSet bool
+	Temperature  *float32
 	// ImageOutput carries the resolved native image-output config (from the
 	// opt-in native_output block), or nil when off. The core agent forwards it
 	// only on a model that advertises CapImageOutput.
@@ -1074,7 +1079,13 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	})
 	sys := joinSegmentTexts(sysSegs)
 
-	reasoning := provider.NormalizeReasoning(firstNonEmpty(args.Reasoning, cfg.Reasoning))
+	// The set-signal is the RAW value (before normalizing): a non-empty raw
+	// level — including "off"/"none", which normalize to "" — means the user
+	// explicitly chose a global level, so it wins over a model's
+	// DefaultReasoning. Empty raw ⇒ unset ⇒ fall back to the per-model default.
+	rawReasoning := firstNonEmpty(args.Reasoning, cfg.Reasoning)
+	reasoning := provider.NormalizeReasoning(rawReasoning)
+	reasoningSet := rawReasoning != ""
 	// Temperature fall-through: --temperature flag > per-model (models.json) >
 	// global config default. AdaptiveThinking models reject sampling params,
 	// so temperature is never sent for them regardless of the layers.
@@ -1113,6 +1124,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		BaseURL:                  args.BaseURL,
 		CWD:                      args.CWD,
 		Reasoning:                reasoning,
+		ReasoningSet:             reasoningSet,
 		Temperature:              temperature,
 		ImageOutput:              imageOutput,
 		Insecure:                 args.Insecure,
@@ -1422,6 +1434,7 @@ func (r Resolved) NewAgent() *core.Agent {
 	a.MaxSteps = r.MaxSteps
 	a.MaxTokens = r.MaxOutput
 	a.Reasoning = r.Reasoning
+	a.ReasoningSet = r.ReasoningSet
 	a.Temperature = r.Temperature
 	a.ImageOutput = r.ImageOutput
 	// The front end's question channel, when there is one. The prefix-change

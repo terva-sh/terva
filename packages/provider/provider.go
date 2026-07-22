@@ -293,6 +293,11 @@ type Request struct {
 	// Claude) and clamped to the "maximum" effort elsewhere.
 	Reasoning string
 
+	// ReasoningSet reports the user explicitly chose the global reasoning level
+	// (including "off"), so it wins over a model's DefaultReasoning. False means
+	// unset — fall back to the model default.
+	ReasoningSet bool
+
 	// EphemeralContext is host-assembled, host-wrapped text injected into
 	// the model's context for THIS request only — never part of Messages
 	// and never persisted to the transcript. Providers append it as a

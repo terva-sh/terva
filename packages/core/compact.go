@@ -362,6 +362,7 @@ func warmCompactRequest(prefix promptPrefix, msgs []provider.Message, keepTail i
 		System:           prefix.system,
 		Tools:            prefix.tools,
 		Reasoning:        prefix.reasoning,
+		ReasoningSet:     prefix.reasoningSet,
 		Temperature:      prefix.temperature,
 		PromptCacheKey:   prefix.cacheKey,
 		MaxTokens:        compactMaxTokens,

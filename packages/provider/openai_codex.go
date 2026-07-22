@@ -230,7 +230,8 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 		PromptCacheKey:    req.PromptCacheKey,
 	}
 	if m.Reasoning {
-		if effort := OpenAICodexReasoningEffort(req.Reasoning, req.Model); effort != "" {
+		eff := EffectiveReasoning(req.Reasoning, req.ReasoningSet, m)
+		if effort := OpenAICodexReasoningEffort(eff, req.Model); effort != "" {
 			body.Reasoning = &codexReasoningConfig{Effort: effort}
 		}
 	}

@@ -133,7 +133,7 @@ func TestCodexResponseFailedTransience(t *testing.T) {
 // codex request builder must send it verbatim for those models.
 func TestGPT56UsesNativeMaxReasoningEffort(t *testing.T) {
 	c := NewOpenAICodex("token", "acct", "").(*codexClient)
-	wire, err := c.buildRequest(Request{Model: "gpt-5.6-sol", Reasoning: "max"})
+	wire, err := c.buildRequest(Request{Model: "gpt-5.6-sol", Reasoning: "max", ReasoningSet: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -59,6 +59,13 @@ type promptPrefix struct {
 	// do it.
 	reasoning string
 
+	// reasoningSet rides alongside reasoning so a compaction request rebuilt
+	// from this prefix resolves the SAME effective thinking level the live turn
+	// did (EffectiveReasoning takes both). Without it a user-set level that
+	// differs from the model's DefaultReasoning would resolve back to the model
+	// default in the warm request and miss the very cache it aims to reuse.
+	reasoningSet bool
+
 	// cacheKey is the provider's cache-routing key (Request.PromptCacheKey).
 	// Not prefix content — it selects WHICH cache the prefix is matched
 	// against, which here amounts to the same thing: right bytes, wrong route,
@@ -94,14 +101,15 @@ func (a *Agent) recordDispatch(client provider.Client, req provider.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.lastSent = &promptPrefix{
-		model:       req.Model,
-		client:      client,
-		system:      req.System,
-		tools:       tools,
-		reasoning:   req.Reasoning,
-		cacheKey:    req.PromptCacheKey,
-		temperature: req.Temperature,
-		sentAt:      time.Now(),
+		model:        req.Model,
+		client:       client,
+		system:       req.System,
+		tools:        tools,
+		reasoning:    req.Reasoning,
+		reasoningSet: req.ReasoningSet,
+		cacheKey:     req.PromptCacheKey,
+		temperature:  req.Temperature,
+		sentAt:       time.Now(),
 	}
 }
 
@@ -110,12 +118,13 @@ func (a *Agent) recordDispatch(client provider.Client, req provider.Request) {
 // must be held.
 func (a *Agent) livePrefixLocked() promptPrefix {
 	return promptPrefix{
-		model:     a.Model,
-		client:    a.Client,
-		system:    a.System,
-		tools:     a.Tools.SpecsVisible(a.turnToolsLocked(a.Tools).visible),
-		reasoning: a.Reasoning,
-		cacheKey:  a.cacheID,
+		model:        a.Model,
+		client:       a.Client,
+		system:       a.System,
+		tools:        a.Tools.SpecsVisible(a.turnToolsLocked(a.Tools).visible),
+		reasoning:    a.Reasoning,
+		reasoningSet: a.ReasoningSet,
+		cacheKey:     a.cacheID,
 	}
 }
 
@@ -266,13 +275,14 @@ func (a *Agent) compactionPrefix() (p promptPrefix, warm bool) {
 		return *a.lastSent, true
 	}
 	return promptPrefix{
-		model:       a.Model,
-		client:      a.Client,
-		system:      a.System,
-		tools:       a.Tools.SpecsVisible(a.turnToolsLocked(a.Tools).visible),
-		reasoning:   a.Reasoning,
-		cacheKey:    a.cacheID,
-		temperature: a.Temperature,
+		model:        a.Model,
+		client:       a.Client,
+		system:       a.System,
+		tools:        a.Tools.SpecsVisible(a.turnToolsLocked(a.Tools).visible),
+		reasoning:    a.Reasoning,
+		reasoningSet: a.ReasoningSet,
+		cacheKey:     a.cacheID,
+		temperature:  a.Temperature,
 	}, false
 }
 

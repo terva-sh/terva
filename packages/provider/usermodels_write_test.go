@@ -72,6 +72,57 @@ func TestApplyUserOverridesTemperature(t *testing.T) {
 	}
 }
 
+// DefaultReasoning round-trips through models.json into
+// Model.DefaultReasoning (the registry-driven scalar override + loader copy).
+func TestUserModelDefaultReasoning(t *testing.T) {
+	path := filepath.Join(testsupport.TempDir(t), "models.json")
+	body := `{"providers":{"kimi":{"models":[
+		{"id":"k3","defaultReasoning":"off"}
+	]}}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overrides, warnings := LoadUserModelsWithWarnings(path)
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	var got string
+	found := false
+	for _, o := range overrides {
+		if o.Model.ID == "k3" {
+			got = o.Model.DefaultReasoning
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("k3 override not loaded")
+	}
+	if got != "off" {
+		t.Errorf("defaultReasoning = %q, want off", got)
+	}
+}
+
+// applyUserOverrides merges a per-model defaultReasoning onto the base catalog
+// entry (a user "off" overriding a catalog "high"), and a nil override must not
+// clobber the base value.
+func TestApplyUserOverridesDefaultReasoning(t *testing.T) {
+	base := []Model{{Provider: "kimi", ID: "k3", DefaultReasoning: "high"}}
+	merged := applyUserOverrides(base, []UserOverride{
+		{Model: Model{Provider: "kimi", ID: "k3", DefaultReasoning: "off"}},
+	})
+	if merged[0].DefaultReasoning != "off" {
+		t.Errorf("defaultReasoning override not merged: %+v", merged[0])
+	}
+
+	base2 := []Model{{Provider: "kimi", ID: "k3", DefaultReasoning: "high"}}
+	merged2 := applyUserOverrides(base2, []UserOverride{
+		{Model: Model{Provider: "kimi", ID: "k3", ContextWindow: 100}},
+	})
+	if merged2[0].DefaultReasoning != "high" {
+		t.Errorf("a nil override must not clear the base defaultReasoning: %+v", merged2[0])
+	}
+}
+
 // TestUpsertInsertReplacePreserve: upsert inserts a new entry, replaces
 // an existing one by id, and never disturbs other providers' entries.
 func TestUpsertInsertReplacePreserve(t *testing.T) {
