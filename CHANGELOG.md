@@ -11,6 +11,20 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.6](https://github.com/terva-sh/terva/releases/tag/v0.126.6) — 2026-07-22
+
+### Features
+
+- card: lint example dialogue missing <START>, and teach the doctor to fix it
+- stage: sort the card library, and favorite cards to the top
+- web: every button shows a press — a shared :active feedback
+
+### Fixes
+
+- stage: the edit-message action row wraps, and reads as one primary
+- stage: the ⓘ hints work on touch, and the sort control gets room
+- web: freeze the notch insets so a top bar survives a fixed overlay
+
 ## [v0.126.5](https://github.com/terva-sh/terva/releases/tag/v0.126.5) — 2026-07-22
 
 ### Features
