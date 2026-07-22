@@ -107,3 +107,51 @@ describe('base-owned resets are not re-declared in an app sheet', () => {
     })
   }
 })
+
+describe('safe-area insets go through --safe-*, not raw env()', () => {
+  // The bug this guards (twice now): env(safe-area-inset-*) can go stale to 0
+  // after a fixed overlay on iOS, dropping a top bar under the notch. ui.css
+  // freezes the insets into --safe-* (ui/safearea.ts writes the frozen values);
+  // an app sheet must read var(--safe-*), never env() directly, or it re-opens
+  // the bug on any surface near an overlay. See ui.css "safe-area insets".
+  const rawEnv = /env\(\s*safe-area-inset-/
+  const SIDES = ['top', 'right', 'bottom', 'left']
+
+  it('ui.css declares all four --safe-* variables (the one sanctioned env() home)', () => {
+    const declared = declaredProps(base)
+    for (const side of SIDES) {
+      expect(declared.has(`--safe-${side}`), `ui.css must declare --safe-${side}`).toBe(true)
+    }
+  })
+
+  it('ui.css seeds --safe-* from env() (the correct pre-freeze / no-JS fallback)', () => {
+    for (const side of SIDES) {
+      expect(
+        new RegExp(`--safe-${side}\\s*:\\s*env\\(\\s*safe-area-inset-${side}`).test(base),
+        `ui.css must seed --safe-${side} from env(safe-area-inset-${side})`,
+      ).toBe(true)
+    }
+  })
+
+  for (const [name, sheet] of APPS) {
+    it(`${name} uses no raw env(safe-area-inset-*) — read var(--safe-*) instead`, () => {
+      expect(
+        rawEnv.test(sheet),
+        `${name} uses env(safe-area-inset-*) directly — replace it with var(--safe-*); ui.css owns the env() seed`,
+      ).toBe(false)
+    })
+  }
+})
+
+describe('every button has press feedback (the base :active)', () => {
+  // The tap-flash is suppressed globally, so without a base :active rule a tap
+  // gives no sign it registered — the panel had none at all. This can't verify
+  // the VISUAL, only that the shared base still declares press feedback for every
+  // button via a low-specificity button:active with a real cue.
+  it('ui.css declares the base button:active scale feedback', () => {
+    expect(
+      /button:active\s*\{\s*transform:\s*scale\(/.test(base),
+      'ui.css must give every button press feedback via a base `button:active { transform: scale(...) }`',
+    ).toBe(true)
+  })
+})
