@@ -1,6 +1,8 @@
 import { t, tn } from '../../i18n'
 import type { Group, SessionInfo } from '../../platform/ctrlproto/types'
+import type { GroupFilter } from '../../platform/groups'
 import { GroupMenu } from '../sessions/GroupMenu'
+import { GroupFilterBar } from '../sessions/GroupFilterBar'
 
 // SessionsBoard is the monitor view over N sessions: one tile per session, live
 // status at a glance, click a tile to focus it. Pure presentation — app.tsx
@@ -20,34 +22,25 @@ export function SessionsBoard(props: {
   onNew: () => void
   onRename: (session: SessionInfo) => void
   onDelete: (session: SessionInfo) => void
-  // Session groups (optional; absent on a daemon that doesn't serve them). The
-  // filter narrows the board (app.tsx applies it to the sessions prop); the
-  // per-tile menu files a session in or out of a group.
+  // Session groups (optional; absent on a daemon that doesn't serve them).
+  // `groups` (user groups) feeds the per-tile assign menu; `filterGroups` (user
+  // groups + the derived `stage` chip) feeds the include/exclude filter bar,
+  // which app.tsx applies to the sessions prop.
   groups?: Group[]
-  groupFilter?: string
-  onGroupFilter?: (id: string) => void
+  filterGroups?: Group[]
+  filter?: GroupFilter
+  onCycleGroup?: (id: string) => void
   onToggleGroup?: (session: SessionInfo, groupId: string) => void
   onCreateGroup?: (session: SessionInfo) => void
 }) {
   const groups = props.groups ?? []
+  const filterGroups = props.filterGroups ?? []
   return (
     <div class="board">
       <div class="board-head">
         <strong>{t('Sessions')}</strong>
-        {groups.length > 0 && props.onGroupFilter && (
-          <select
-            class="board-groupfilter"
-            value={props.groupFilter ?? ''}
-            onChange={(e) => props.onGroupFilter!((e.target as HTMLSelectElement).value)}
-            title={t('Show only sessions in a group')}
-          >
-            <option value="">{t('All groups')}</option>
-            {groups.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name} ({g.members.length})
-              </option>
-            ))}
-          </select>
+        {props.filter && props.onCycleGroup && (
+          <GroupFilterBar groups={filterGroups} filter={props.filter} onCycle={props.onCycleGroup} />
         )}
         <button class="btn" onClick={props.onNew}>
           + {t('New')}

@@ -414,7 +414,18 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .board-status.live { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
 
 /* session groups: the board/picker filter, and the per-session group menu */
-.board-groupfilter { font-size: var(--fs-detail); padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); margin-left: auto; }
+/* Session group filter (board + drawer head): tri-state chips — tap to cycle
+   off → show-only → hide → off. A system chip (the derived `stage` bucket) reads
+   italic; include fills with --user, exclude strikes through in --danger. */
+.groupfilter { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.groupfilter__chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--fg); font: inherit; font-size: var(--fs-detail); cursor: pointer; transition: border-color .12s ease; }
+.groupfilter__chip:hover { border-color: var(--user); }
+.groupfilter__chip[data-system] .groupfilter__name { font-style: italic; }
+.groupfilter__dot { width: 8px; height: 8px; border-radius: 50%; }
+.groupfilter__count { color: var(--muted); }
+.groupfilter__chip[data-state='include'] { border-color: var(--user); background: color-mix(in srgb, var(--user) 20%, var(--panel)); font-weight: 600; }
+.groupfilter__chip[data-state='exclude'] { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }
+.groupfilter__chip[data-state='exclude'] .groupfilter__name { text-decoration: line-through; color: var(--muted); }
 .groupmenu { position: relative; display: inline-flex; }
 .groupmenu-pop { position: absolute; right: 0; top: 100%; margin-top: 4px; z-index: 40; min-width: 168px; max-height: 260px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px #0006; padding: 4px; display: flex; flex-direction: column; gap: 2px; }
 .groupmenu-empty { font-size: var(--fs-detail); color: var(--muted); padding: 6px 8px; }

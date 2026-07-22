@@ -1,6 +1,8 @@
 import { t, tn } from '../../i18n'
 import type { Group, SessionInfo } from '../../platform/ctrlproto/types'
+import type { GroupFilter } from '../../platform/groups'
 import { GroupMenu } from './GroupMenu'
+import { GroupFilterBar } from './GroupFilterBar'
 
 export function SessionPicker(props: {
   sessions: SessionInfo[]
@@ -12,31 +14,21 @@ export function SessionPicker(props: {
   onDelete: (session: SessionInfo) => void
   onClose: () => void
   groups?: Group[]
-  groupFilter?: string
-  onGroupFilter?: (id: string) => void
+  filterGroups?: Group[]
+  filter?: GroupFilter
+  onCycleGroup?: (id: string) => void
   onToggleGroup?: (session: SessionInfo, groupId: string) => void
   onCreateGroup?: (session: SessionInfo) => void
 }) {
   const groups = props.groups ?? []
+  const filterGroups = props.filterGroups ?? []
   return (
     <div class="drawer-scrim" onClick={props.onClose}>
       <aside class="drawer" onClick={(event) => event.stopPropagation()}>
         <div class="drawer-head">
           <strong>{t('Sessions')}</strong>
-          {groups.length > 0 && props.onGroupFilter && (
-            <select
-              class="board-groupfilter"
-              value={props.groupFilter ?? ''}
-              onChange={(e) => props.onGroupFilter!((e.target as HTMLSelectElement).value)}
-              title={t('Show only sessions in a group')}
-            >
-              <option value="">{t('All groups')}</option>
-              {groups.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name} ({g.members.length})
-                </option>
-              ))}
-            </select>
+          {props.filter && props.onCycleGroup && (
+            <GroupFilterBar groups={filterGroups} filter={props.filter} onCycle={props.onCycleGroup} />
           )}
           <button class="btn" onClick={props.onNew}>
             + {t('New')}

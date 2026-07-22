@@ -62,6 +62,7 @@ import { SessionsBoard } from './features/board/SessionsBoard'
 import { SwarmLane } from './features/board/SwarmLane'
 import { applyBoardBusy, forgetBoardBusy, type BoardBusy } from './platform/board/store'
 import { applyBoardApproval, forgetBoardApprovals, waitingByAgent, type BoardApprovals } from './platform/board/approvals'
+import { applyGroupFilter, cycleGroup, stageSystemGroup, SYS_STAGE, type GroupFilter } from './platform/groups'
 import { AuthStepForm } from './features/providers/AuthStepForm'
 import { SessionInfo as SessionInfoView } from './features/sessions/SessionInfo'
 import { SessionPicker } from './features/sessions/SessionPicker'
@@ -119,9 +120,24 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const reI18n = useCallback(() => bumpI18n((n) => n + 1), [])
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   // Session groups (a membership bucket over sessions; absent on an older
-  // daemon). The filter narrows the board/picker to one group.
+  // daemon). The board/picker filter by include/exclude (platform/groups).
   const [sessionGroups, setSessionGroups] = useState<Group[]>([])
-  const [sessionGroupFilter, setSessionGroupFilter] = useState('')
+  // The session filter persists across reloads and DEFAULTS to hiding Stage play
+  // sessions (the derived `sys:stage` group) so they don't clutter the coding
+  // board; the user clears that chip to see them. A malformed stored value falls
+  // back to the default rather than throwing.
+  const [sessionFilter, setSessionFilter] = useState<GroupFilter>(() => {
+    const raw = localStorage.getItem('terva_session_filter')
+    if (raw) {
+      try {
+        const p = JSON.parse(raw)
+        if (Array.isArray(p?.include) && Array.isArray(p?.exclude)) return { include: p.include, exclude: p.exclude }
+      } catch {
+        /* fall through to default */
+      }
+    }
+    return { include: [], exclude: [SYS_STAGE] }
+  })
   const [curSess, setCurSess] = useState('')
   const [items, setItems] = useState<Item[]>([])
   // The compaction divider currently paging in its history, if any. The ref is the
@@ -381,6 +397,13 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     },
     [refreshSessions],
   )
+  // Cycle a chip in the board/picker group filter (off → show-only → hide → off).
+  const cycleSessionGroup = useCallback((id: string) => setSessionFilter((f) => cycleGroup(f, id)), [])
+  // Persist the filter so the "hide Stage" default (and any manual change) rides
+  // across reloads.
+  useEffect(() => {
+    localStorage.setItem('terva_session_filter', JSON.stringify(sessionFilter))
+  }, [sessionFilter])
 
   // Fetch the tasks surface for the board's swarm lane. Workspace-scoped (any
   // sess returns the global list), so it rides the focused session's address.
@@ -1351,10 +1374,14 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   )
 
   const current = sessions.find((s) => s.id === curSess)
-  // The board/picker show sessions narrowed to the active group (a filter on a
-  // since-deleted group resolves to all).
-  const activeSessionGroup = sessionGroups.find((g) => g.id === sessionGroupFilter) ?? null
-  const shownSessions = activeSessionGroup ? sessions.filter((s) => activeSessionGroup.members.includes(s.id)) : sessions
+  // The board/picker filter by include/exclude group. The chip list is the user's
+  // session groups plus a DERIVED `stage` group (every immersive session, from
+  // its experience flag) — the one the filter hides by default. Its members are
+  // synthesized here, never stored. filterGroups feeds the filter bar;
+  // sessionGroups (user-only) still feeds the per-session assign menu.
+  const stageGroup = stageSystemGroup(sessions, t('Stage'))
+  const filterGroups = stageGroup ? [stageGroup, ...sessionGroups] : sessionGroups
+  const shownSessions = applyGroupFilter(sessions, filterGroups, sessionFilter, (s) => s.id)
   // The focused session's tile reads the focus view's own busy state (its
   // subscription lives there, not in boardSubsRef); the rest come from the
   // board subscriptions. One merged map for the tiles.
@@ -1493,8 +1520,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           onDelete={del}
           onClose={() => setDrawer(false)}
           groups={sessionGroups}
-          groupFilter={sessionGroupFilter}
-          onGroupFilter={setSessionGroupFilter}
+          filterGroups={filterGroups}
+          filter={sessionFilter}
+          onCycleGroup={cycleSessionGroup}
           onToggleGroup={toggleSessionGroup}
           onCreateGroup={createSessionGroup}
         />
@@ -1517,8 +1545,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
                 onRename={rename}
                 onDelete={del}
                 groups={sessionGroups}
-                groupFilter={sessionGroupFilter}
-                onGroupFilter={setSessionGroupFilter}
+                filterGroups={filterGroups}
+                filter={sessionFilter}
+                onCycleGroup={cycleSessionGroup}
                 onToggleGroup={toggleSessionGroup}
                 onCreateGroup={createSessionGroup}
               />
