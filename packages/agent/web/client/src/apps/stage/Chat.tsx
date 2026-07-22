@@ -565,7 +565,7 @@ function ChatRow(props: {
     <div class="stage-edit">
       <textarea ref={editRef} value={props.editText} onInput={(e) => props.onEditText((e.target as HTMLTextAreaElement).value)} />
       <div class="stage-edit__actions">
-        <button onClick={props.onSaveEdit}>{t('Save')}</button>
+        <button class="stage-edit__save" onClick={props.onSaveEdit}>{t('Save')}</button>
         <button class="stage-edit__cancel" onClick={props.onCancelEdit}>{t('Cancel')}</button>
         <button class="stage-edit__branch" title={t('Start a new thread from here')} onClick={props.onBranch}>{t('⑂ Branch here')}</button>
         {mark && mark.variants > 1 && (
