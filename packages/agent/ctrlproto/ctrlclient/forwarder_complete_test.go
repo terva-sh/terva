@@ -37,18 +37,20 @@ import (
 // lives only in the web client today; a future "TUI Stage" would move the
 // relevant ones up to real forwarders (and off this list).
 var notForwarded = map[string]string{
-	"CastController":         "Stage/play cast is web-only today; a Go client does not direct actors. Most likely of these to graduate to a forwarder — if the regular TUI grows a cast surface on the swarm-spawn machinery.",
-	"DoctorController":       "The LLM card doctor is a Stage card-craft control; web-only. Revisit for a TUI Stage.",
-	"SuggestController":      "Reply-suggestion drafting is a Stage composer aid; web-only. Revisit for a TUI Stage.",
-	"DirectController":       "Directed authorship (post an approved character/narrator line into the transcript) is a Stage composer commit; web-only. Revisit for a TUI Stage.",
-	"WorldController":        "World lore (session-scoped shared lorebook, Worlds L1) is edited from the Stage steering drawer; web-only. Revisit for a TUI Stage.",
-	"DraftController":        "Discarding an unpromoted draft on navigate-away is a Stage front-end cleanup; web-only. Revisit for a TUI Stage.",
-	"NoteController":         "Author's note is a Stage/play immersion control; web-only. Revisit for a TUI Stage.",
-	"VariantsController":     "Message-scoped variant cleanup (prune/drop) is a Stage editing control; web-only. Revisit for a TUI Stage.",
-	"UserController":         "User-persona bind is a Stage/play immersion control; web-only. Revisit for a TUI Stage.",
-	"UserPersonasController": "Saved user personas are a Stage identity library; web-only. Revisit for a TUI Stage.",
-	"ContinueController":     "turn.continue is a Stage revision verb; web-only. Revisit for a TUI Stage.",
-	"ReplayController":       "Session replay/transport is a web player feature; no Go client drives it. Revisit for a TUI Stage.",
+	"CastController":          "Stage/play cast is web-only today; a Go client does not direct actors. Most likely of these to graduate to a forwarder — if the regular TUI grows a cast surface on the swarm-spawn machinery.",
+	"DoctorController":        "The LLM card doctor is a Stage card-craft control; web-only. Revisit for a TUI Stage.",
+	"SuggestController":       "Reply-suggestion drafting is a Stage composer aid; web-only. Revisit for a TUI Stage.",
+	"DirectController":        "Directed authorship (post an approved character/narrator line into the transcript) is a Stage composer commit; web-only. Revisit for a TUI Stage.",
+	"WorldController":         "World lore (session-scoped shared lorebook, Worlds L1) is edited from the Stage steering drawer; web-only. Revisit for a TUI Stage.",
+	"CardGroupsController":    "Card groups (a library-organizing membership bucket) are managed from the Stage library; web-only. Revisit for a TUI Stage.",
+	"SessionGroupsController": "Session groups (a membership bucket over chats/plays) are managed from the Stage library and the control panel; web-only. Revisit for a TUI Stage.",
+	"DraftController":         "Discarding an unpromoted draft on navigate-away is a Stage front-end cleanup; web-only. Revisit for a TUI Stage.",
+	"NoteController":          "Author's note is a Stage/play immersion control; web-only. Revisit for a TUI Stage.",
+	"VariantsController":      "Message-scoped variant cleanup (prune/drop) is a Stage editing control; web-only. Revisit for a TUI Stage.",
+	"UserController":          "User-persona bind is a Stage/play immersion control; web-only. Revisit for a TUI Stage.",
+	"UserPersonasController":  "Saved user personas are a Stage identity library; web-only. Revisit for a TUI Stage.",
+	"ContinueController":      "turn.continue is a Stage revision verb; web-only. Revisit for a TUI Stage.",
+	"ReplayController":        "Session replay/transport is a web player feature; no Go client drives it. Revisit for a TUI Stage.",
 }
 
 // controllerInterfaces returns every `type XController interface { … }` declared

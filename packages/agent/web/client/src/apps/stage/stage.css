@@ -993,6 +993,284 @@ button:disabled {
   border: 1px solid var(--stage-line);
   color: var(--stage-muted);
 }
+
+/* --- card groups: the library shelf, the grid filter, and the group sheet --- */
+
+.stage-cardgroups {
+  margin-bottom: 0.25rem;
+}
+.stage-cardgroups__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.stage-cardgroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 999px;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+.stage-cardgroup:hover {
+  border-color: var(--stage-accent);
+}
+.stage-cardgroup__dot {
+  flex: 0 0 auto;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+}
+.stage-cardgroup__count {
+  color: var(--stage-muted);
+  font-size: 0.78rem;
+}
+/* The grid filter select, seated in the Characters section head. */
+.stage-groupfilter {
+  margin-left: auto;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+/* The per-card group toggles inside the card detail sheet. */
+.stage-cardsheet__groups {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.stage-cardsheet__groups-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--stage-muted);
+}
+.stage-cardsheet__groups-empty {
+  font-size: 0.8rem;
+  color: var(--stage-muted);
+}
+.stage-cardsheet__grouprow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.stage-cardsheet__grouptoggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 999px;
+  background: var(--stage-surface-2);
+  color: var(--stage-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-cardsheet__grouptoggle--on {
+  border-color: var(--stage-accent);
+  background: color-mix(in srgb, var(--stage-accent) 16%, transparent);
+  color: var(--stage-fg);
+}
+
+/* The group sheet: a group's contents, rename, colour, and delete. */
+.stage-groupsheet {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.stage-groupsheet__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.stage-groupsheet__name {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.stage-groupsheet__colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.stage-groupsheet__swatch {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.stage-groupsheet__swatch--none {
+  background: var(--stage-surface-2);
+  border-color: var(--stage-line);
+  position: relative;
+}
+.stage-groupsheet__swatch--none::after {
+  content: '∅';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--stage-muted);
+  font-size: 0.8rem;
+}
+.stage-groupsheet__swatch--on {
+  border-color: var(--stage-fg);
+}
+.stage-groupsheet__acts {
+  display: flex;
+  gap: 0.5rem;
+}
+.stage-groupsheet__save,
+.stage-groupsheet__filter {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-groupsheet__save {
+  background: var(--stage-accent);
+  color: var(--stage-bg);
+  border-color: transparent;
+  font-weight: 600;
+}
+.stage-groupsheet__save:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.stage-groupsheet__count {
+  font-size: 0.82rem;
+  color: var(--stage-muted);
+}
+.stage-groupsheet__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.stage-groupsheet__card {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.stage-groupsheet__cardopen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--stage-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.stage-groupsheet__cardopen:hover {
+  border-color: var(--stage-line);
+  background: var(--stage-surface-2);
+}
+.stage-groupsheet__avatar {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 6px;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+.stage-groupsheet__avatar--blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--stage-surface-2);
+  color: var(--stage-muted);
+  font-weight: 600;
+}
+.stage-groupsheet__remove {
+  flex: 0 0 auto;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--stage-surface-2);
+  color: var(--stage-muted);
+  cursor: pointer;
+}
+.stage-groupsheet__remove:hover {
+  border-color: #e06c76;
+  color: #e06c76;
+}
+/* Session-group sheet: a chat row is a title + a muted timestamp (no avatar). */
+.stage-groupsheet__cardname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-groupsheet__when {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--stage-muted);
+}
+.stage-groupsheet__add {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.stage-groupsheet__addtoggle {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--stage-accent);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-groupsheet__addbtn {
+  flex: 0 0 auto;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--stage-surface-2);
+  color: var(--stage-accent);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.stage-groupsheet__addbtn:hover {
+  border-color: var(--stage-accent);
+}
 .stage-cardsheet__facts {
   display: flex;
   flex-wrap: wrap;

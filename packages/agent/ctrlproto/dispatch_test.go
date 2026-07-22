@@ -324,6 +324,38 @@ func (r *recorder) WorldsImport(_ context.Context, p WorldImportParams) (WorldVi
 	r.note("WorldsImport", "", p)
 	return WorldView{}, nil
 }
+func (r *recorder) CardGroupsList(context.Context) (CardGroupsResult, error) {
+	r.note("CardGroupsList", "", nil)
+	return CardGroupsResult{}, nil
+}
+func (r *recorder) CardGroupSave(_ context.Context, p CardGroupSaveParams) (GroupView, error) {
+	r.note("CardGroupSave", "", p)
+	return GroupView{}, nil
+}
+func (r *recorder) CardGroupDelete(_ context.Context, p CardGroupDeleteParams) error {
+	r.note("CardGroupDelete", "", p)
+	return nil
+}
+func (r *recorder) CardGroupSetMembers(_ context.Context, p CardGroupSetMembersParams) (GroupView, error) {
+	r.note("CardGroupSetMembers", "", p)
+	return GroupView{}, nil
+}
+func (r *recorder) SessionGroupsList(context.Context) (SessionGroupsResult, error) {
+	r.note("SessionGroupsList", "", nil)
+	return SessionGroupsResult{}, nil
+}
+func (r *recorder) SessionGroupSave(_ context.Context, p SessionGroupSaveParams) (GroupView, error) {
+	r.note("SessionGroupSave", "", p)
+	return GroupView{}, nil
+}
+func (r *recorder) SessionGroupDelete(_ context.Context, p SessionGroupDeleteParams) error {
+	r.note("SessionGroupDelete", "", p)
+	return nil
+}
+func (r *recorder) SessionGroupSetMembers(_ context.Context, p SessionGroupSetMembersParams) (GroupView, error) {
+	r.note("SessionGroupSetMembers", "", p)
+	return GroupView{}, nil
+}
 
 // dispatchCase is one verb, the params sent, and what must have happened.
 type dispatchCase struct {
@@ -396,6 +428,14 @@ func dispatchCases() []dispatchCase {
 		{MethodWorldsExport, WorldExportParams{ID: "w-exp"}, "WorldsExport", WorldExportParams{ID: "w-exp"}},
 		{MethodWorldsImport, WorldImportParams{Path: "/w-imp"}, "WorldsImport", nil},
 		{MethodWorldDelete, WorldDeleteParams{ID: "w-del"}, "WorldDelete", WorldDeleteParams{ID: "w-del"}},
+		{MethodCardGroupsList, nil, "CardGroupsList", nil},
+		{MethodCardGroupSave, CardGroupSaveParams{Name: "cg-new"}, "CardGroupSave", CardGroupSaveParams{Name: "cg-new"}},
+		{MethodCardGroupSetMembers, CardGroupSetMembersParams{ID: "cg-mem", Members: []string{"card-a"}}, "CardGroupSetMembers", CardGroupSetMembersParams{ID: "cg-mem", Members: []string{"card-a"}}},
+		{MethodCardGroupDelete, CardGroupDeleteParams{ID: "cg-del"}, "CardGroupDelete", CardGroupDeleteParams{ID: "cg-del"}},
+		{MethodSessionGroupsList, nil, "SessionGroupsList", nil},
+		{MethodSessionGroupSave, SessionGroupSaveParams{Name: "sg-new"}, "SessionGroupSave", SessionGroupSaveParams{Name: "sg-new"}},
+		{MethodSessionGroupSetMembers, SessionGroupSetMembersParams{ID: "sg-mem", Members: []string{"sess-a"}}, "SessionGroupSetMembers", SessionGroupSetMembersParams{ID: "sg-mem", Members: []string{"sess-a"}}},
+		{MethodSessionGroupDelete, SessionGroupDeleteParams{ID: "sg-del"}, "SessionGroupDelete", SessionGroupDeleteParams{ID: "sg-del"}},
 
 		// --- directed authorship: the if-chain's trailing arm was PostLine ---
 		{MethodPostLine, PostLineParams{Actor: "narrator", Text: "a line"}, "PostLine", PostLineParams{Actor: "narrator", Text: "a line"}},

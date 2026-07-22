@@ -250,6 +250,22 @@ const (
 	MethodWorldsExport           Method = "worlds.export"              // params WorldExportParams, result WorldExport
 	MethodWorldsImport           Method = "worlds.import"              // params WorldImportParams, result WorldView
 
+	// Card groups (optional; served only by a CardGroupsController). A group is a
+	// terva-owned membership bucket for browsing the card library — workspace-wide
+	// state like the worlds above, and distinct from a card's embedded CCv2 tags.
+	MethodCardGroupsList      Method = "cardgroups.list"        // result CardGroupsResult
+	MethodCardGroupSave       Method = "cardgroups.save"        // params CardGroupSaveParams, result GroupView
+	MethodCardGroupDelete     Method = "cardgroups.delete"      // params CardGroupDeleteParams
+	MethodCardGroupSetMembers Method = "cardgroups.set_members" // params CardGroupSetMembersParams, result GroupView
+
+	// Session groups (optional; served only by a SessionGroupsController). The
+	// same membership bucket over session ids, shown on both the Stage library and
+	// the control panel. Workspace-wide state, like the card groups above.
+	MethodSessionGroupsList      Method = "sessiongroups.list"        // result SessionGroupsResult
+	MethodSessionGroupSave       Method = "sessiongroups.save"        // params SessionGroupSaveParams, result GroupView
+	MethodSessionGroupDelete     Method = "sessiongroups.delete"      // params SessionGroupDeleteParams
+	MethodSessionGroupSetMembers Method = "sessiongroups.set_members" // params SessionGroupSetMembersParams, result GroupView
+
 	// Directed authorship (optional; served only by a DirectController). Posts an
 	// approved character/narrator line INTO the transcript — the commit half of
 	// Stage's suggest→review→post loop (Phase 6). Mutates the transcript (like an
@@ -298,6 +314,8 @@ func (m Method) Group() Group {
 		MethodNoteSet, MethodUserBind, MethodCastAdd, MethodCastRemove, MethodCastSpeak,
 		MethodWorldLorePut, MethodWorldLoreDelete, MethodWorldSet,
 		MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldSetCharacterModel, MethodWorldsExport, MethodWorldsImport,
+		MethodCardGroupsList, MethodCardGroupSave, MethodCardGroupDelete, MethodCardGroupSetMembers,
+		MethodSessionGroupsList, MethodSessionGroupSave, MethodSessionGroupDelete, MethodSessionGroupSetMembers,
 		MethodUserPersonasList, MethodUserPersonaSave, MethodUserPersonaDelete, MethodUserPersonaSetDefault:
 		return GroupControl
 	case MethodReplayControl, MethodReplayState:

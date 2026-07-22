@@ -940,6 +940,80 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled worlds verb %q", f.Method)))
 		}
 
+	case MethodCardGroupsList, MethodCardGroupSave, MethodCardGroupDelete, MethodCardGroupSetMembers:
+		cgc, ok := s.svc.(CardGroupsController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "card groups are not available here"))
+			return
+		}
+		switch f.Method {
+		case MethodCardGroupsList:
+			v, err := cgc.CardGroupsList(ctx)
+			s.respond(f.ID, v, err)
+		case MethodCardGroupSave:
+			var p CardGroupSaveParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := cgc.CardGroupSave(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodCardGroupSetMembers:
+			var p CardGroupSetMembersParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := cgc.CardGroupSetMembers(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodCardGroupDelete:
+			var p CardGroupDeleteParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, cgc.CardGroupDelete(ctx, p))
+		default:
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled card-group verb %q", f.Method)))
+		}
+
+	case MethodSessionGroupsList, MethodSessionGroupSave, MethodSessionGroupDelete, MethodSessionGroupSetMembers:
+		sgc, ok := s.svc.(SessionGroupsController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "session groups are not available here"))
+			return
+		}
+		switch f.Method {
+		case MethodSessionGroupsList:
+			v, err := sgc.SessionGroupsList(ctx)
+			s.respond(f.ID, v, err)
+		case MethodSessionGroupSave:
+			var p SessionGroupSaveParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := sgc.SessionGroupSave(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodSessionGroupSetMembers:
+			var p SessionGroupSetMembersParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := sgc.SessionGroupSetMembers(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodSessionGroupDelete:
+			var p SessionGroupDeleteParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, sgc.SessionGroupDelete(ctx, p))
+		default:
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled session-group verb %q", f.Method)))
+		}
+
 	case MethodPostLine, MethodDirectTurn, MethodTurnAdvance:
 		// Optional, like suggest — needs a live session's transcript, so a carrier
 		// without one answers "unsupported".

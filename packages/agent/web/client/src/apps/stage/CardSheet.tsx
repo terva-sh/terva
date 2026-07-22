@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { t, tn } from '../../i18n'
 import { downloadExport } from '../../ui/browser'
 import type { ClientLike } from '../../platform/ctrlproto/client'
-import type { CardSummary, CardView, CardExport, CardLintFinding, CardLintResult } from '../../platform/ctrlproto/types'
+import type { CardSummary, CardView, CardExport, CardLintFinding, CardLintResult, Group } from '../../platform/ctrlproto/types'
 
 // The normalized CCv2 `data` object inside CardView.raw (card.Marshal output is
 // { spec, spec_version, data }). Only the fields the sheet renders are typed;
@@ -67,8 +67,13 @@ export function CardSheet(props: {
   // already the "⋯ Details" button, and a destructive action reached by mistake
   // from a grid is worse than one reached deliberately from the detail sheet.
   onDelete?: () => void
+  // Card groups: every group (present only when the daemon serves them), and a
+  // toggle that files or unfiles THIS card. Distinct from the read-only CCv2 tags
+  // above — groups are terva's own organization, added and removed right here.
+  groups?: Group[]
+  onToggleGroup?: (groupId: string) => void
 }) {
-  const { client, card, busy, onClose, onStart, onEdit, onDelete } = props
+  const { client, card, busy, onClose, onStart, onEdit, onDelete, groups, onToggleGroup } = props
   const [view, setView] = useState<CardView | null>(null)
   const [findings, setFindings] = useState<CardLintFinding[] | null>(null)
   const [greeting, setGreeting] = useState(0)
@@ -144,6 +149,33 @@ export function CardSheet(props: {
                 {tg}
               </span>
             ))}
+          </div>
+        )}
+
+        {groups && onToggleGroup && (
+          <div class="stage-cardsheet__groups">
+            <span class="stage-cardsheet__groups-label">{t('Groups')}</span>
+            {groups.length === 0 ? (
+              <span class="stage-cardsheet__groups-empty">{t('No groups yet — make one from the library.')}</span>
+            ) : (
+              <div class="stage-cardsheet__grouprow">
+                {groups.map((g) => {
+                  const inIt = g.members.includes(card.id)
+                  return (
+                    <button
+                      key={g.id}
+                      class={`stage-cardsheet__grouptoggle ${inIt ? 'stage-cardsheet__grouptoggle--on' : ''}`}
+                      aria-pressed={inIt}
+                      onClick={() => onToggleGroup(g.id)}
+                    >
+                      {g.color && <span class="stage-cardgroup__dot" style={{ background: g.color }} aria-hidden="true" />}
+                      {inIt ? '✓ ' : '+ '}
+                      {g.name}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )}
 

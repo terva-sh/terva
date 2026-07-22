@@ -921,6 +921,61 @@ export interface CardsListResult {
   cards: CardSummary[]
 }
 
+// Group is a membership bucket the library browses by (Go ctrlproto.Group),
+// shared by the card-group and session-group namespaces. members are the LIVE
+// ids only (a card/session deleted since it was filed is filtered out), so a
+// count is just members.length. Distinct from a card's embedded CCv2 tags.
+export interface Group {
+  id: string
+  name: string
+  color?: string
+  members: string[]
+}
+
+export interface CardGroupsResult {
+  groups: Group[]
+}
+
+// CardGroupSaveParams creates (no id) or renames/recolours (id) a card group;
+// members are untouched here and ride cardgroups.set_members.
+export interface CardGroupSaveParams {
+  id?: string
+  name: string
+  color?: string
+}
+
+export interface CardGroupDeleteParams {
+  id: string
+}
+
+// CardGroupSetMembersParams replaces a group's members with the given card refs
+// (the sole membership mutation — send the group's whole new list).
+export interface CardGroupSetMembersParams {
+  id: string
+  members: string[]
+}
+
+// Session groups: the session-id twin of the card-group verbs, over the same
+// Group wire type. Shown on both the Stage library and the control panel.
+export interface SessionGroupsResult {
+  groups: Group[]
+}
+
+export interface SessionGroupSaveParams {
+  id?: string
+  name: string
+  color?: string
+}
+
+export interface SessionGroupDeleteParams {
+  id: string
+}
+
+export interface SessionGroupSetMembersParams {
+  id: string
+  members: string[]
+}
+
 // SuggestTurn is one completed round of the "suggest a reply" back-and-forth (Go
 // ctrlproto.SuggestTurn): the guidance the user gave and the draft the model
 // returned. Carried on every suggest.reply so the daemon stays stateless.
@@ -1459,6 +1514,10 @@ export type Verb =
   | 'backgrounds.import'
   | 'backgrounds.list'
   | 'cancel'
+  | 'cardgroups.delete'
+  | 'cardgroups.list'
+  | 'cardgroups.save'
+  | 'cardgroups.set_members'
   | 'cards.delete'
   | 'cards.doctor'
   | 'cards.edit'
@@ -1503,6 +1562,10 @@ export type Verb =
   | 'queue.set'
   | 'replay.control'
   | 'replay.state'
+  | 'sessiongroups.delete'
+  | 'sessiongroups.list'
+  | 'sessiongroups.save'
+  | 'sessiongroups.set_members'
   | 'sessions.create'
   | 'sessions.delete'
   | 'sessions.discard_draft'
@@ -1570,6 +1633,12 @@ export interface VerbParams {
   'worlds.update': WorldUpdateParams
   'worlds.set_character_model': WorldSetCharacterModelParams
   'worlds.import': WorldImportParams
+  'cardgroups.save': CardGroupSaveParams
+  'cardgroups.delete': CardGroupDeleteParams
+  'cardgroups.set_members': CardGroupSetMembersParams
+  'sessiongroups.save': SessionGroupSaveParams
+  'sessiongroups.delete': SessionGroupDeleteParams
+  'sessiongroups.set_members': SessionGroupSetMembersParams
   'personas.create': PersonaWriteParams
   'personas.edit': PersonaWriteParams
 }
