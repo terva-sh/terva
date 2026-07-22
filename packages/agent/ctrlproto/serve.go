@@ -486,7 +486,7 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		}
 		s.respond(f.ID, nil, ac.AuthEndpointRemove(ctx, p))
 
-	case MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint:
+	case MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint, MethodCardsFavorite:
 		// Optional, like the model-params group: a carrier with no card library
 		// simply does not implement it and says so, rather than failing deeper.
 		cc, ok := s.svc.(CardsController)
@@ -545,6 +545,13 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 				return
 			}
 			s.respond(f.ID, nil, cc.CardsDelete(ctx, p))
+		case MethodCardsFavorite:
+			var p CardFavoriteParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, cc.CardFavorite(ctx, p))
 		default:
 			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled card verb %q", f.Method)))
 		}

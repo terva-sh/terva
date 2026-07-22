@@ -3,11 +3,13 @@ package build
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/config"
@@ -45,6 +47,12 @@ type StoredCard struct {
 	// verbatim so an editor round-trips `extensions` it does not itself render.
 	Raw       []byte
 	AvatarExt string // "png" when an avatar was retained, else ""
+	// Added is when the card entered the library — the card directory's mtime,
+	// which is stamped when the dir is created at import and (unlike card.json's
+	// mtime) is NOT disturbed by an in-place edit of the card, so it stays the
+	// import time. Zero if the directory could not be stat'd. Powers the
+	// "recently added" sort; no separate storage or migration.
+	Added time.Time
 	// Warnings are non-fatal notes from the import that a user should see — a
 	// downscaled or dropped portrait, say. An imported card is usable with
 	// warnings; they explain what the library did to it, so a surprise (a
@@ -111,7 +119,11 @@ func (s *CardStore) Get(id string) (StoredCard, error) {
 	if err != nil {
 		return StoredCard{}, fmt.Errorf("card %q: %w", id, err)
 	}
-	return StoredCard{ID: id, Card: c, Raw: raw, AvatarExt: avatarExt(dir)}, nil
+	sc := StoredCard{ID: id, Card: c, Raw: raw, AvatarExt: avatarExt(dir)}
+	if fi, err := os.Stat(dir); err == nil {
+		sc.Added = fi.ModTime()
+	}
+	return sc, nil
 }
 
 // ImportPath imports a card from a server-local .png or .json path.
@@ -232,6 +244,73 @@ func (s *CardStore) AvatarPath(id string) string {
 		return ""
 	}
 	return filepath.Join(dir, cardAvatarName)
+}
+
+// cardFavoritesName is the flat set of favorited card ids, a sibling of the
+// cards/ directory (so it rides TERVA_HOME with the store). Favoriting is a
+// per-library preference — a highlight and a sort priority, not card data — so
+// it lives OUTSIDE the card: filing one never rewrites the card, and deleting a
+// card never touches this file (a stale id is filtered on read, like a group's
+// stale member).
+const cardFavoritesName = "card-favorites.json"
+
+func (s *CardStore) favoritesPath() string {
+	return filepath.Join(filepath.Dir(s.dir), cardFavoritesName)
+}
+
+// Favorites returns the set of favorited card ids. A missing file is an empty
+// set, never an error.
+func (s *CardStore) Favorites() (map[string]bool, error) {
+	raw, err := os.ReadFile(s.favoritesPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]bool{}, nil
+		}
+		return nil, err
+	}
+	var ids []string
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return nil, fmt.Errorf("card favorites: %w", err)
+	}
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set, nil
+}
+
+// SetFavorite adds or removes a card id from the favorites set. Idempotent; the
+// id is validated (a favorite is only meaningful for a real card id) and the set
+// is written sorted so the file is stable.
+func (s *CardStore) SetFavorite(id string, fav bool) error {
+	if err := validCardID(id); err != nil {
+		return err
+	}
+	set, err := s.Favorites()
+	if err != nil {
+		return err
+	}
+	if set[id] == fav {
+		return nil
+	}
+	if fav {
+		set[id] = true
+	} else {
+		delete(set, id)
+	}
+	ids := make([]string, 0, len(set))
+	for k := range set {
+		ids = append(ids, k)
+	}
+	sort.Strings(ids)
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.favoritesPath()), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(s.favoritesPath(), raw, 0o644)
 }
 
 // ResolveCardRef turns a --card / CreateOpts.Card reference into a path

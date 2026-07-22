@@ -127,6 +127,10 @@ func (r *recorder) CardsLint(_ context.Context, p CardLintParams) (CardLintResul
 	r.note("CardsLint", "", p)
 	return CardLintResult{}, nil
 }
+func (r *recorder) CardFavorite(_ context.Context, p CardFavoriteParams) error {
+	r.note("CardFavorite", "", p)
+	return nil
+}
 
 // --- CastController ---
 func (r *recorder) CastAdd(_ context.Context, sess string, p CastMemberParams) error {
@@ -391,6 +395,7 @@ func dispatchCases() []dispatchCase {
 		{MethodCardsExport, CardExportParams{ID: "exported"}, "CardsExport", CardExportParams{ID: "exported"}},
 		{MethodCardsLint, CardLintParams{ID: "linted"}, "CardsLint", CardLintParams{ID: "linted"}},
 		{MethodCardsDelete, CardDeleteParams{ID: "deleted"}, "CardsDelete", CardDeleteParams{ID: "deleted"}},
+		{MethodCardsFavorite, CardFavoriteParams{ID: "fav", Favorite: true}, "CardFavorite", CardFavoriteParams{ID: "fav", Favorite: true}},
 
 		// --- personas: the arm the original incident was found on ---
 		{MethodPersonasList, nil, "PersonasList", nil},

@@ -68,6 +68,62 @@ func TestCardStoreImportJSONListGet(t *testing.T) {
 	}
 }
 
+func TestCardStoreFavoritesAndAdded(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	st := NewCardStore()
+
+	a, err := st.ImportBytes([]byte(`{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"Aa","first_mes":"hi"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.ImportBytes([]byte(`{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"Bb","first_mes":"hi"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get stamps Added from the card directory mtime.
+	if got, _ := st.Get(a.ID); got.Added.IsZero() {
+		t.Error("Get must stamp Added from the card directory mtime")
+	}
+	// A fresh store has no favorites.
+	if favs, err := st.Favorites(); err != nil || len(favs) != 0 {
+		t.Fatalf("fresh favorites: %v, %d", err, len(favs))
+	}
+
+	// Favorite both; both stick, order-independent.
+	if err := st.SetFavorite(a.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetFavorite(b.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if favs, _ := st.Favorites(); !favs[a.ID] || !favs[b.ID] {
+		t.Fatalf("both should be favorited: %v", favs)
+	}
+	// Un-favorite removes only the one, and is idempotent.
+	if err := st.SetFavorite(a.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetFavorite(a.ID, false); err != nil {
+		t.Fatalf("un-favorite must be idempotent: %v", err)
+	}
+	if favs, _ := st.Favorites(); favs[a.ID] || !favs[b.ID] {
+		t.Fatalf("only b should remain: %v", favs)
+	}
+	// SetFavorite does not chase deletions — a stale id stays in the set until
+	// re-toggled (the controller filters it on read, like a group's stale member).
+	if err := st.Delete(b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if favs, _ := st.Favorites(); !favs[b.ID] {
+		t.Error("a stale favorite id should survive the card's deletion")
+	}
+	// A malformed id is refused.
+	if err := st.SetFavorite("../escape", true); err == nil {
+		t.Error("SetFavorite must reject an invalid id")
+	}
+}
+
 func TestCardStoreImportPNGKeepsOriginalAvatar(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	st := NewCardStore()

@@ -3,6 +3,7 @@ package ctrlproto
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // The character-card library on the wire. Cards were path-only before Stage;
@@ -39,6 +40,15 @@ type CardsController interface {
 	// model-free pass (malformed macros, oversized fields, missing greeting, …)
 	// that the Stage card doctor reads first to orient. Read-only.
 	CardsLint(ctx context.Context, p CardLintParams) (CardLintResult, error)
+	// CardFavorite sets or clears a card's favorite flag (highlight + pin to top).
+	// A per-library preference; it never touches the card JSON.
+	CardFavorite(ctx context.Context, p CardFavoriteParams) error
+}
+
+// CardFavoriteParams names the card and the desired favorite state.
+type CardFavoriteParams struct {
+	ID       string `json:"id"`
+	Favorite bool   `json:"favorite"`
 }
 
 // CardLintParams names the card to lint by its library id.
@@ -131,6 +141,13 @@ type CardSummary struct {
 	Greetings   int  `json:"greetings"`
 	BookEntries int  `json:"book_entries,omitempty"`
 	HasPHI      bool `json:"has_phi,omitempty"`
+	// Added is when the card entered the library (its directory mtime) — the sort
+	// key for "recently added". Zero/omitted if unknown.
+	Added time.Time `json:"added,omitempty"`
+	// Favorite is whether the card is favorited: the client highlights it and
+	// pins it to the top of the library. A per-library preference toggled by
+	// cards.favorite, never part of the card JSON.
+	Favorite bool `json:"favorite,omitempty"`
 }
 
 // CardView is one card in full: its summary plus the normalized card JSON, so a

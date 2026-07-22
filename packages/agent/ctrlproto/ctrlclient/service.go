@@ -339,6 +339,10 @@ func (s *Service) CardsLint(ctx context.Context, p ctrlproto.CardLintParams) (ct
 	return r, err
 }
 
+func (s *Service) CardFavorite(ctx context.Context, p ctrlproto.CardFavoriteParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodCardsFavorite, p, nil)
+}
+
 // --- persona library ---
 
 var _ ctrlproto.PersonasController = (*Service)(nil)

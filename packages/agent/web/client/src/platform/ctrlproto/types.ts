@@ -730,6 +730,11 @@ export interface CardSummary {
   greetings: number
   book_entries?: number
   has_phi?: boolean
+  // added is when the card entered the library (RFC 3339, its directory mtime) —
+  // the "recently added" sort key. favorite is whether it is favorited: the
+  // library highlights it and pins it to the top. Toggled by cards.favorite.
+  added?: string
+  favorite?: boolean
 }
 
 // CardView is one card in full: its summary plus the normalized card JSON, so an
@@ -1527,6 +1532,7 @@ export type Verb =
   | 'cards.doctor'
   | 'cards.edit'
   | 'cards.export'
+  | 'cards.favorite'
   | 'cards.get'
   | 'cards.import'
   | 'cards.lint'
@@ -1646,6 +1652,13 @@ export interface VerbParams {
   'sessiongroups.set_members': SessionGroupSetMembersParams
   'personas.create': PersonaWriteParams
   'personas.edit': PersonaWriteParams
+  'cards.favorite': CardFavoriteParams
+}
+
+// CardFavoriteParams toggles a card's favorite flag (highlight + pin to top).
+export interface CardFavoriteParams {
+  id: string
+  favorite: boolean
 }
 
 // ParamsFor is VerbParams[V] where the verb is mapped, and `unknown` otherwise.

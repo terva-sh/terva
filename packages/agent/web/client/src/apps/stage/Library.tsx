@@ -34,6 +34,13 @@ import type {
 
 type SessionsResult = { sessions: SessionInfo[] }
 
+// Card sort modes. Each has a NATURAL order (the label reads in that direction) —
+// name A→Z, the rest most-recent / most-first — and `reversed` flips it. Favorites
+// always float to the top, sorted among themselves by the same order.
+const CARD_SORT_MODES = ['name', 'added', 'used', 'chats'] as const
+type CardSortMode = (typeof CARD_SORT_MODES)[number]
+type CardSort = { mode: CardSortMode; reversed: boolean }
+
 // A row of group chips that doubles as the filter. Tapping a chip cycles its
 // state (off → show-only → hide → off); the "⋯" opens a user group for editing.
 // System chips (a derived Stage origin) filter but carry no "⋯" — there is
@@ -184,6 +191,20 @@ export function Library(props: {
   // The grid filter: include/exclude by group (empty = the whole library). Tap a
   // chip to cycle show-only → hide → off; see platform/groups.
   const [cardFilter, setCardFilter] = useState<GroupFilter>(emptyFilter)
+  // The grid sort, persisted across reloads. Defaults to the store's own order
+  // (alphabetical); a malformed stored value falls back to it.
+  const [cardSort, setCardSort] = useState<CardSort>(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem('terva_card_sort') || '')
+      if (CARD_SORT_MODES.includes(p?.mode) && typeof p?.reversed === 'boolean') return p
+    } catch {
+      /* fall through */
+    }
+    return { mode: 'name', reversed: false }
+  })
+  useEffect(() => {
+    localStorage.setItem('terva_card_sort', JSON.stringify(cardSort))
+  }, [cardSort])
   // A group opened for its contents (members + rename/recolour/delete).
   const [groupSheet, setGroupSheet] = useState<Group | null>(null)
   // Session groups — the same buckets over chats/plays. Same absence rule.
@@ -445,6 +466,35 @@ export function Library(props: {
   // system groups (no experience), so the chips are just the user's card groups.
   const visibleCards = applyGroupFilter(cards, cardGroups, cardFilter, (c) => c.id)
 
+  // Sort the filtered grid. Each mode's comparator yields its NATURAL order
+  // (name A→Z; added/used newest-first; chats most-first); `reversed` flips it;
+  // a name tiebreak keeps it stable. Favorites are partitioned to the top and
+  // sorted among themselves by the same order — "highlight and keep at the top".
+  const lastUsed = (id: string) =>
+    chatsForCard(id).reduce<string>((m, s) => (s.updated && s.updated > m ? s.updated : m), '')
+  const cardCmp = (a: CardSummary, b: CardSummary) => {
+    let d = 0
+    switch (cardSort.mode) {
+      case 'name':
+        break
+      case 'added':
+        d = (b.added ?? '').localeCompare(a.added ?? '')
+        break
+      case 'used':
+        d = lastUsed(b.id).localeCompare(lastUsed(a.id))
+        break
+      case 'chats':
+        d = chatsFor(b.id) - chatsFor(a.id)
+        break
+    }
+    if (d === 0) d = a.name.localeCompare(b.name)
+    return cardSort.reversed ? -d : d
+  }
+  const sortedCards = [
+    ...visibleCards.filter((c) => c.favorite).sort(cardCmp),
+    ...visibleCards.filter((c) => !c.favorite).sort(cardCmp),
+  ]
+
   // Create a group (cardgroups.save with no id). Named up front, filled later —
   // the whole point of an empty group is a bucket you pour cards into.
   const createCardGroup = async () => {
@@ -491,6 +541,19 @@ export function Library(props: {
       load()
     } catch (e) {
       setError(String(e))
+    }
+  }
+  // Favorite / unfavorite a card. Optimistic: flip local state now (the star and
+  // the pin-to-top respond instantly), then persist; the daemon broadcasts a
+  // library change, so a failed write self-corrects on the next load().
+  const toggleFavorite = async (card: CardSummary) => {
+    const favorite = !card.favorite
+    setCards((cs) => cs.map((c) => (c.id === card.id ? { ...c, favorite } : c)))
+    try {
+      await client.send('cards.favorite', { id: card.id, favorite })
+    } catch (e) {
+      setError(String(e))
+      load()
     }
   }
 
@@ -697,6 +760,29 @@ export function Library(props: {
         )}
         <div class="stage-section-head">
           <h2>{t('Characters')}</h2>
+          {cards.length > 1 && (
+            <div class="stage-cardsort">
+              <select
+                class="stage-cardsort__mode"
+                value={cardSort.mode}
+                onChange={(e) => setCardSort((s) => ({ ...s, mode: (e.target as HTMLSelectElement).value as CardSortMode }))}
+                title={t('Sort characters')}
+              >
+                <option value="name">{t('Alphabetical')}</option>
+                <option value="added">{t('Recently added')}</option>
+                <option value="used">{t('Recently used')}</option>
+                <option value="chats">{t('Most chats')}</option>
+              </select>
+              <button
+                class="stage-cardsort__dir"
+                onClick={() => setCardSort((s) => ({ ...s, reversed: !s.reversed }))}
+                title={t('Reverse order')}
+                aria-pressed={cardSort.reversed}
+              >
+                {cardSort.reversed ? '↑' : '↓'}
+              </button>
+            </div>
+          )}
           <label class="stage-import">
             {t('+ Import')}
             <input
@@ -743,8 +829,8 @@ export function Library(props: {
         )}
 
         <ul class="stage-grid">
-          {visibleCards.map((card) => (
-            <li key={card.id} class="stage-grid__cell">
+          {sortedCards.map((card) => (
+            <li key={card.id} class="stage-grid__cell" data-favorite={card.favorite ? '' : undefined}>
               <button
                 class="stage-card"
                 disabled={busy}
@@ -761,6 +847,14 @@ export function Library(props: {
                   {card.creator && <span class="stage-card__creator">{card.creator}</span>}
                   {chatsFor(card.id) > 0 && <span class="stage-card__count">·{chatsFor(card.id)}</span>}
                 </span>
+              </button>
+              <button
+                class="stage-card__fav"
+                title={card.favorite ? t('Unfavorite %s', card.name) : t('Favorite %s', card.name)}
+                aria-pressed={!!card.favorite}
+                onClick={() => void toggleFavorite(card)}
+              >
+                {card.favorite ? '★' : '☆'}
               </button>
               <button class="stage-card__more" title={t('Details')} onClick={() => setSheet(card)}>
                 ⋯

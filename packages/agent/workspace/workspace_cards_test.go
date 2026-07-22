@@ -94,6 +94,51 @@ func TestWorkspaceCardsCRUD(t *testing.T) {
 }
 
 // TestWorkspaceCardsErrors covers the wire error shapes.
+func TestWorkspaceCardFavorite(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	w, err := NewWorkspace(build.Args{Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t)}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	ctx := context.Background()
+
+	view, err := w.CardsImport(ctx, ctrlproto.CardImportParams{Bytes: []byte(`{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"Fav","first_mes":"hi"}}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := view.ID
+
+	// Summaries carry Added and are not favorited by default.
+	r, _ := w.CardsList(ctx)
+	if len(r.Cards) != 1 || r.Cards[0].Favorite {
+		t.Fatalf("default not favorite: %+v", r.Cards)
+	}
+	if r.Cards[0].Added.IsZero() {
+		t.Error("summary must carry Added (the recently-added sort key)")
+	}
+
+	// Favorite it → reflected in both list and get.
+	if err := w.CardFavorite(ctx, ctrlproto.CardFavoriteParams{ID: id, Favorite: true}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := w.CardsList(ctx); !r.Cards[0].Favorite {
+		t.Error("CardsList must mark the favorite")
+	}
+	if got, _ := w.CardsGet(ctx, ctrlproto.CardGetParams{ID: id}); !got.Favorite {
+		t.Error("CardsGet must mark the favorite")
+	}
+
+	// Clearing it un-marks.
+	if err := w.CardFavorite(ctx, ctrlproto.CardFavoriteParams{ID: id, Favorite: false}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := w.CardsList(ctx); r.Cards[0].Favorite {
+		t.Error("clearing favorite must un-mark")
+	}
+}
+
 func TestWorkspaceCardsErrors(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")

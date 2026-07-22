@@ -153,13 +153,14 @@ const (
 	// The character-card library (optional; served only by a CardsController).
 	// In the control group: a card is workspace-wide state that outlives any one
 	// session, like the model defaults above.
-	MethodCardsList   Method = "cards.list"   // result CardsListResult
-	MethodCardsGet    Method = "cards.get"    // params CardGetParams, result CardView
-	MethodCardsImport Method = "cards.import" // params CardImportParams, result CardView
-	MethodCardsEdit   Method = "cards.edit"   // params CardEditParams, result CardView
-	MethodCardsDelete Method = "cards.delete" // params CardDeleteParams
-	MethodCardsExport Method = "cards.export" // params CardExportParams, result CardExport
-	MethodCardsLint   Method = "cards.lint"   // params CardLintParams, result CardLintResult
+	MethodCardsList     Method = "cards.list"     // result CardsListResult
+	MethodCardsGet      Method = "cards.get"      // params CardGetParams, result CardView
+	MethodCardsImport   Method = "cards.import"   // params CardImportParams, result CardView
+	MethodCardsEdit     Method = "cards.edit"     // params CardEditParams, result CardView
+	MethodCardsDelete   Method = "cards.delete"   // params CardDeleteParams
+	MethodCardsExport   Method = "cards.export"   // params CardExportParams, result CardExport
+	MethodCardsLint     Method = "cards.lint"     // params CardLintParams, result CardLintResult
+	MethodCardsFavorite Method = "cards.favorite" // params CardFavoriteParams
 
 	// The LLM card doctor (optional; served only by a DoctorController). Reads a
 	// card + its deterministic lint and proposes structured per-field edits.
@@ -308,7 +309,7 @@ func (m Method) Group() Group {
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault,
 		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
 		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume,
-		MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint, MethodCardsDoctor,
+		MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint, MethodCardsFavorite, MethodCardsDoctor,
 		MethodPersonasList, MethodPersonasGet, MethodPersonasCreate, MethodPersonasEdit, MethodPersonasDelete,
 		MethodBackgroundsList, MethodBackgroundsImport, MethodBackgroundsDelete, MethodBackgroundBind, MethodBackgroundGenerate,
 		MethodNoteSet, MethodUserBind, MethodCastAdd, MethodCastRemove, MethodCastSpeak,

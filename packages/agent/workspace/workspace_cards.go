@@ -38,26 +38,47 @@ func (w *Workspace) cardName(ref string) string {
 	return strings.TrimSpace(sc.Card.Name)
 }
 
-// CardsList summarizes every stored card.
+// CardsList summarizes every stored card, each tagged with whether it is a
+// favorite (a stale favorite for a since-deleted card simply never matches).
 func (w *Workspace) CardsList(_ context.Context) (ctrlproto.CardsListResult, error) {
-	stored, err := w.cardStore().List()
+	store := w.cardStore()
+	stored, err := store.List()
 	if err != nil {
 		return ctrlproto.CardsListResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "list cards: %v", err)
 	}
+	favs, _ := store.Favorites() // best-effort: a read error just means nothing is highlighted
 	out := make([]ctrlproto.CardSummary, 0, len(stored))
 	for _, sc := range stored {
-		out = append(out, cardSummary(sc))
+		s := cardSummary(sc)
+		s.Favorite = favs[sc.ID]
+		out = append(out, s)
 	}
 	return ctrlproto.CardsListResult{Cards: out}, nil
 }
 
 // CardsGet returns one card in full.
 func (w *Workspace) CardsGet(_ context.Context, p ctrlproto.CardGetParams) (ctrlproto.CardView, error) {
-	sc, err := w.cardStore().Get(p.ID)
+	store := w.cardStore()
+	sc, err := store.Get(p.ID)
 	if err != nil {
 		return ctrlproto.CardView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%v", err)
 	}
-	return cardView(sc), nil
+	v := cardView(sc)
+	if favs, err := store.Favorites(); err == nil {
+		v.Favorite = favs[sc.ID]
+	}
+	return v, nil
+}
+
+// CardFavorite sets or clears a card's favorite flag and broadcasts the library
+// change so every open surface re-highlights. No existence check: favoriting is
+// idempotent metadata, and a stale entry is filtered on read (CardsList).
+func (w *Workspace) CardFavorite(_ context.Context, p ctrlproto.CardFavoriteParams) error {
+	if err := w.cardStore().SetFavorite(p.ID, p.Favorite); err != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "favorite card: %v", err)
+	}
+	w.broadcastLibraryChanged()
+	return nil
 }
 
 // CardsLint runs the deterministic card lint over a stored card — the card
@@ -246,6 +267,7 @@ func cardSummary(sc build.StoredCard) ctrlproto.CardSummary {
 		Tags:             c.Tags,
 		Greetings:        1 + len(c.AlternateGreetings),
 		HasPHI:           strings.TrimSpace(c.PostHistoryInstructions) != "",
+		Added:            sc.Added,
 	}
 	if c.CharacterBook != nil {
 		s.BookEntries = len(c.CharacterBook.Entries)
