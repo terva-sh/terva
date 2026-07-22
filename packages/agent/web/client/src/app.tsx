@@ -34,6 +34,7 @@ import type {
   ResetsListResult,
   ResetConsumeResult,
   SessionInfo,
+  Group,
   SettingsView,
   SkillInfo,
   Status,
@@ -117,6 +118,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [, bumpI18n] = useState(0)
   const reI18n = useCallback(() => bumpI18n((n) => n + 1), [])
   const [sessions, setSessions] = useState<SessionInfo[]>([])
+  // Session groups (a membership bucket over sessions; absent on an older
+  // daemon). The filter narrows the board/picker to one group.
+  const [sessionGroups, setSessionGroups] = useState<Group[]>([])
+  const [sessionGroupFilter, setSessionGroupFilter] = useState('')
   const [curSess, setCurSess] = useState('')
   const [items, setItems] = useState<Item[]>([])
   // The compaction divider currently paging in its history, if any. The ref is the
@@ -333,11 +338,49 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     try {
       const res = await c.send<{ sessions: SessionInfo[] }>('sessions.list', null, '')
       setSessions(res.sessions ?? [])
+      // Session groups ride the same refresh (and the sessions_changed event a
+      // group mutation broadcasts). An older daemon answers "unsupported".
+      c.send<{ groups: Group[] }>('sessiongroups.list', null, '')
+        .then((r) => setSessionGroups(r.groups ?? []))
+        .catch(() => {})
       return res.sessions ?? []
     } catch {
       return []
     }
   }, [])
+
+  // File a session in or out of a group (the sole membership mutation is the
+  // group's whole new list), then refresh so every tile's badge updates.
+  const toggleSessionGroup = useCallback(
+    async (s: SessionInfo, groupId: string) => {
+      const c = clientRef.current
+      if (!c) return
+      const g = sessionGroups.find((x) => x.id === groupId)
+      if (!g) return
+      const members = g.members.includes(s.id) ? g.members.filter((m) => m !== s.id) : [...g.members, s.id]
+      await c.send('sessiongroups.set_members', { id: g.id, members }, '').catch((e) => setToast(String(e)))
+      await refreshSessions(c)
+    },
+    [sessionGroups, refreshSessions],
+  )
+  // Create a group and drop this session into it in one step.
+  const createSessionGroup = useCallback(
+    async (s: SessionInfo) => {
+      const c = clientRef.current
+      if (!c) return
+      const name = window.prompt(t('Name the new group:'), '')
+      if (name == null || !name.trim()) return
+      try {
+        const g = await c.send<Group>('sessiongroups.save', { name: name.trim() }, '')
+        await c.send('sessiongroups.set_members', { id: g.id, members: [s.id] }, '')
+      } catch (e) {
+        setToast(String(e))
+        return
+      }
+      await refreshSessions(c)
+    },
+    [refreshSessions],
+  )
 
   // Fetch the tasks surface for the board's swarm lane. Workspace-scoped (any
   // sess returns the global list), so it rides the focused session's address.
@@ -1308,6 +1351,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   )
 
   const current = sessions.find((s) => s.id === curSess)
+  // The board/picker show sessions narrowed to the active group (a filter on a
+  // since-deleted group resolves to all).
+  const activeSessionGroup = sessionGroups.find((g) => g.id === sessionGroupFilter) ?? null
+  const shownSessions = activeSessionGroup ? sessions.filter((s) => activeSessionGroup.members.includes(s.id)) : sessions
   // The focused session's tile reads the focus view's own busy state (its
   // subscription lives there, not in boardSubsRef); the rest come from the
   // board subscriptions. One merged map for the tiles.
@@ -1437,7 +1484,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
 
       {drawer && (
         <SessionPicker
-          sessions={sessions}
+          sessions={shownSessions}
           current={curSess}
           onSelect={selectSession}
           onNew={() => newSession()}
@@ -1445,6 +1492,11 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           onGenerateTitle={generateTitle}
           onDelete={del}
           onClose={() => setDrawer(false)}
+          groups={sessionGroups}
+          groupFilter={sessionGroupFilter}
+          onGroupFilter={setSessionGroupFilter}
+          onToggleGroup={toggleSessionGroup}
+          onCreateGroup={createSessionGroup}
         />
       )}
 
@@ -1453,7 +1505,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           {viewMode === 'board' ? (
             <div class="board-view">
               <SessionsBoard
-                sessions={sessions}
+                sessions={shownSessions}
                 current={curSess}
                 liveBusy={liveBusy}
                 onSelect={(id) => {
@@ -1464,6 +1516,11 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
                 onNew={() => newSession()}
                 onRename={rename}
                 onDelete={del}
+                groups={sessionGroups}
+                groupFilter={sessionGroupFilter}
+                onGroupFilter={setSessionGroupFilter}
+                onToggleGroup={toggleSessionGroup}
+                onCreateGroup={createSessionGroup}
               />
               <SwarmLane
                 tasks={boardTasks}

@@ -1,5 +1,6 @@
 import { t, tn } from '../../i18n'
-import type { SessionInfo } from '../../platform/ctrlproto/types'
+import type { Group, SessionInfo } from '../../platform/ctrlproto/types'
+import { GroupMenu } from '../sessions/GroupMenu'
 
 // SessionsBoard is the monitor view over N sessions: one tile per session, live
 // status at a glance, click a tile to focus it. Pure presentation — app.tsx
@@ -19,11 +20,35 @@ export function SessionsBoard(props: {
   onNew: () => void
   onRename: (session: SessionInfo) => void
   onDelete: (session: SessionInfo) => void
+  // Session groups (optional; absent on a daemon that doesn't serve them). The
+  // filter narrows the board (app.tsx applies it to the sessions prop); the
+  // per-tile menu files a session in or out of a group.
+  groups?: Group[]
+  groupFilter?: string
+  onGroupFilter?: (id: string) => void
+  onToggleGroup?: (session: SessionInfo, groupId: string) => void
+  onCreateGroup?: (session: SessionInfo) => void
 }) {
+  const groups = props.groups ?? []
   return (
     <div class="board">
       <div class="board-head">
         <strong>{t('Sessions')}</strong>
+        {groups.length > 0 && props.onGroupFilter && (
+          <select
+            class="board-groupfilter"
+            value={props.groupFilter ?? ''}
+            onChange={(e) => props.onGroupFilter!((e.target as HTMLSelectElement).value)}
+            title={t('Show only sessions in a group')}
+          >
+            <option value="">{t('All groups')}</option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name} ({g.members.length})
+              </option>
+            ))}
+          </select>
+        )}
         <button class="btn" onClick={props.onNew}>
           + {t('New')}
         </button>
@@ -66,6 +91,14 @@ export function SessionsBoard(props: {
                   {s.usage?.cost_usd ? ' · $' + s.usage.cost_usd.toFixed(3) : ''}
                 </div>
                 <div class="board-tile-actions">
+                  {props.onToggleGroup && props.onCreateGroup && (
+                    <GroupMenu
+                      sessionId={s.id}
+                      groups={groups}
+                      onToggle={(gid) => props.onToggleGroup!(s, gid)}
+                      onCreate={() => props.onCreateGroup!(s)}
+                    />
+                  )}
                   <button
                     class="icon sm"
                     title={t('Rename')}

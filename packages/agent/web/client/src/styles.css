@@ -413,6 +413,19 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .board-status.busy { background: color-mix(in srgb, var(--user) 20%, transparent); color: var(--user); }
 .board-status.live { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
 
+/* session groups: the board/picker filter, and the per-session group menu */
+.board-groupfilter { font-size: var(--fs-detail); padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); margin-left: auto; }
+.groupmenu { position: relative; display: inline-flex; }
+.groupmenu-pop { position: absolute; right: 0; top: 100%; margin-top: 4px; z-index: 40; min-width: 168px; max-height: 260px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px #0006; padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.groupmenu-empty { font-size: var(--fs-detail); color: var(--muted); padding: 6px 8px; }
+.groupmenu-item { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: none; background: none; color: var(--fg); font: inherit; font-size: var(--fs-detail); text-align: left; border-radius: 6px; cursor: pointer; }
+.groupmenu-item:hover { background: color-mix(in srgb, var(--user) 12%, transparent); }
+.groupmenu-item.on { color: var(--user); }
+.groupmenu-check { width: 12px; flex: none; }
+.groupmenu-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.groupmenu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.groupmenu-new { color: var(--user); border-top: 1px solid var(--line); margin-top: 2px; }
+
 /* toast */
 .toast { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%); background: var(--danger); color: #fff; padding: 8px 14px; border-radius: 10px; max-width: 90vw; cursor: pointer; z-index: 30; box-shadow: 0 4px 16px #0004; }
 
