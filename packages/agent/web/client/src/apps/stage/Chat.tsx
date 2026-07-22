@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
-import type { AskRequest, CardView } from '../../platform/ctrlproto/types'
+import type { AskRequest, CardView, CreateOpts, SessionInfo } from '../../platform/ctrlproto/types'
 import type { Item } from '../../platform/conversation/store'
 import { t, tn } from '../../i18n'
 import { panelHref } from '../../ui/navlinks'
@@ -10,6 +10,7 @@ import { ImageGallery } from '../../ui/ImageGallery'
 import { Markdown } from '../../ui/Markdown'
 import { useConversation } from './useConversation'
 import { useAutoGrow } from './autogrow'
+import { ModelPick } from './ModelPick'
 import { Steering } from './Steering'
 import { SuggestReply } from './SuggestReply'
 import { RealizeSheet } from './RealizeSheet'
@@ -17,6 +18,8 @@ import { CREATOR_PERSONA } from './creator'
 import { DoctorOverlay, type DoctorAsk } from './SessionDoctor'
 import { SceneStateCard, sceneStateOf } from './SceneState'
 import { NextSceneSheet } from './NextScene'
+import { CardSheet } from './CardSheet'
+import { CardEditor } from './CardEditor'
 
 type Character = { name: string; avatar?: string }
 
@@ -57,6 +60,12 @@ export function Chat(props: {
   const { items, busy, info, tail, msgMarks, permission, ask, send, edit, deleteAt, swipe, swipeAt, pruneAt, dropAt, retry, continueTurn, advance, cancel, decide, answerAsk, fork, discardDraft } = useConversation(client, sessionId, props.generation)
   const [draft, setDraft] = useState('')
   const [character, setCharacter] = useState<Character | null>(null)
+  // The full bound card, kept so the header can open its detail/edit sheets
+  // without a round-trip to the Library. cardSheet = the view; cardEditing = the
+  // editor reached from it (same view→edit hand-off the Library grid uses).
+  const [cardView, setCardView] = useState<CardView | null>(null)
+  const [cardSheet, setCardSheet] = useState(false)
+  const [cardEditing, setCardEditing] = useState(false)
   const [editing, setEditing] = useState<{ idx: number; text: string } | null>(null)
   // The guided-regenerate box on the last response: null is closed, and ↻ stays a
   // one-click plain regenerate whether it is open or not. ignorePrior is per
@@ -79,15 +88,23 @@ export function Chat(props: {
   // it also fits text dropped in by ✨ Suggest and shrinks back after a send.
   const composerRef = useAutoGrow(draft)
 
-  // Resolve the character (name + avatar) from the session's card, for the
-  // avatar-anchored rows and the header.
-  useEffect(() => {
+  // Resolve the character from the session's card, for the avatar-anchored rows,
+  // the header, and the card sheets it opens. Kept as a callback so an edit that
+  // saves the card can refresh it in place (the card ref never changes, so the
+  // effect below won't refire on its own).
+  const loadCard = useCallback(() => {
     if (!info?.card) return
     client
       .send<CardView>('cards.get', { id: info.card })
-      .then((c) => setCharacter({ name: c.name, avatar: c.avatar_url }))
+      .then((c) => {
+        setCharacter({ name: c.name, avatar: c.avatar_url })
+        setCardView(c)
+      })
       .catch(() => {})
-  }, [info?.card])
+  }, [client, info?.card])
+  useEffect(() => {
+    loadCard()
+  }, [loadCard])
 
   // Stick to the newest message: a chat lands at the bottom (where the composer
   // is) on load, and follows new turns as they stream — unless the reader has
@@ -176,6 +193,17 @@ export function Chat(props: {
   // The transcript's message count, for sizing the downstream of a deep edit.
   const msgCount = items.reduce((n, it) => Math.max(n, (it.idx ?? -1) + 1), 0)
 
+  // Start a fresh chat with this same character — the card sheet's Start button,
+  // reachable from inside a scene without a trip back to the Library.
+  const startChatFrom = (greeting: number) => {
+    if (!info?.card) return
+    guard(
+      client
+        .send<{ session: SessionInfo }>('sessions.create', { experience: 'chat', card: info.card, greeting } as CreateOpts)
+        .then((r) => onOpenSession(r.session.id)),
+    )
+  }
+
   return (
     <div class="stage stage-chat" style={bg ? { backgroundImage: `url("${bg}")` } : undefined}>
       <div class="stage-chat__scrim" />
@@ -191,11 +219,32 @@ export function Chat(props: {
         >
           {t('‹ Library')}
         </button>
-        <span class="stage-chat__title">{title}</span>
+        {/* The character's portrait + name open its card — view every field,
+            or ✎ Edit — right from the scene, instead of backing out to the
+            Library to find it. Only a card-backed session has one to open; a
+            creator or plain-persona chat keeps the bare title. */}
+        {info?.card && cardView ? (
+          <button
+            class="stage-chat__cardbtn"
+            title={t('%s — view or edit their card', character?.name ?? title)}
+            onClick={() => setCardSheet(true)}
+          >
+            {cardView.avatar_url ? (
+              <img class="stage-chat__cardavatar" src={cardView.avatar_url} alt="" />
+            ) : (
+              <span class="stage-chat__cardavatar stage-chat__cardavatar--blank" aria-hidden="true">{initial(title)}</span>
+            )}
+            <span class="stage-chat__title">{title}</span>
+          </button>
+        ) : (
+          <span class="stage-chat__title">{title}</span>
+        )}
         <div class="stage-chat__right">
           <span class="stage-status">{busy ? t('thinking…') : ''}</span>
-          {/* Lean header: the way back to the panel, and Steering. Everything
-              else lives in the drawer's tabs. */}
+          {/* The model, up front: the config reached for most often in a quick
+              testing loop, now zero clicks to read and one to switch — the same
+              live models.switch the Steering drawer fires, surfaced here. */}
+          <ModelPick client={client} sessionId={sessionId} currentProvider={info?.provider} currentModel={info?.model} compact />
           {/* Carries the session, so the panel lands on THIS chat rather than
               whichever one it considers current. */}
           <a
@@ -465,6 +514,39 @@ export function Chat(props: {
           defaultModel={info?.model}
           onOpenSession={onOpenSession}
           onClose={() => setRealizeOpen(false)}
+        />
+      )}
+
+      {/* The bound character's card, opened from the header portrait. The view
+          sheet fetches the full card itself; a CardView already satisfies its
+          CardSummary prop, so the one Chat holds seeds it with no extra fetch.
+          ✎ Edit hands off to the editor, and a save refreshes the header. */}
+      {cardSheet && cardView && (
+        <CardSheet
+          client={client}
+          card={cardView}
+          busy={busy}
+          onClose={() => setCardSheet(false)}
+          onStart={(g) => {
+            setCardSheet(false)
+            startChatFrom(g)
+          }}
+          onEdit={() => {
+            setCardSheet(false)
+            setCardEditing(true)
+          }}
+        />
+      )}
+
+      {cardEditing && cardView && (
+        <CardEditor
+          client={client}
+          card={cardView}
+          onClose={() => setCardEditing(false)}
+          onSaved={() => {
+            setCardEditing(false)
+            loadCard()
+          }}
         />
       )}
     </div>

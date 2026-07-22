@@ -91,8 +91,11 @@ test('stage: provider groups carry the billing chip, and the collapsed button na
 
   // The collapsed button had the same ambiguity as a favorites row: a bare id does
   // not say which of the two backends this session is actually about to bill.
+  // Scope to the drawer picker — the header chip carries a __cur-id too now (but
+  // no provider qualifier: it drops to the tooltip in the compact chip).
+  const drawerPick = page.locator('.stage-modelpick:not(.stage-modelpick--compact)')
   await page.locator('.stage-modelpick__current').click()
   await expect(page.locator('.stage-modelpick__list')).toHaveCount(0)
-  await expect(page.locator('.stage-modelpick__cur-id')).toHaveText('deep-v4-pro')
-  await expect(page.locator('.stage-modelpick__cur-prov')).toHaveText('anthropic')
+  await expect(drawerPick.locator('.stage-modelpick__cur-id')).toHaveText('deep-v4-pro')
+  await expect(drawerPick.locator('.stage-modelpick__cur-prov')).toHaveText('anthropic')
 })

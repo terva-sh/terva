@@ -33,8 +33,9 @@ function AuthChip({ auth }: { auth?: string }) {
 }
 
 // ModelPick is the Stage-native model/provider picker, shared by every model
-// surface in Stage: the steering drawer's live session switch, the per-actor cast
-// pin, the Suggest/Direct per-generation override, and the card-doctor override.
+// surface in Stage: the chat header's one-tap switch (compact), the steering
+// drawer's live session switch, the per-actor cast pin, the Suggest/Direct
+// per-generation override, and the card-doctor override.
 // It lists the daemon's logged-in models grouped by provider with a "★ Favorites"
 // section floated to the top of the list — in BOTH modes, so a favourite is one
 // tap away wherever a model is chosen. It reuses the panel's verbs
@@ -63,8 +64,13 @@ export function ModelPick(props: {
   // don't.
   defaultProvider?: string
   defaultModel?: string
+  // Compact renders the collapsed control as a bare header chip (just "★ id",
+  // like the panel's model button) instead of the drawer's labeled block, and
+  // floats the open list as an absolute popover so it overlays rather than pushes
+  // the header taller. Header use only; live-switch mode (no onSelect).
+  compact?: boolean
 }) {
-  const { client, sessionId, currentProvider, currentModel, onSelect, defaultLabel } = props
+  const { client, sessionId, currentProvider, currentModel, onSelect, defaultLabel, compact } = props
   const { defaultProvider, defaultModel } = props
   const selecting = typeof onSelect === 'function'
   const [models, setModels] = useState<ModelInfo[]>([])
@@ -77,10 +83,13 @@ export function ModelPick(props: {
       .then((r) => setModels(r.models ?? []))
       .catch((e: unknown) => setError(String(e)))
 
-  // Lazily load the catalog the first time the picker is opened — a chat that
-  // never touches the model list never pays for it.
+  // Load the catalog whenever the picker opens — a chat that never touches the
+  // model list never pays for it, and reopening refetches so a provider logged in
+  // since the last open (a new Kimi key, say) shows up without remounting the
+  // component. The prior list stays on screen until the response lands, so there
+  // is no flash to empty.
   useEffect(() => {
-    if (open && models.length === 0) void load()
+    if (open) void load()
   }, [open])
 
   // Group by provider in catalog order; favorites get their own section at the
@@ -173,32 +182,52 @@ export function ModelPick(props: {
     </div>
   )
 
+  // The header chip's label: "★ id" when the current model is a favourite (known
+  // once the list has been opened once — before that we just name the id), else a
+  // bare "model" placeholder when the session has no model resolved yet.
+  const chipModel = models.find(isCurrent)
+  const chipLabel = currentModel ? `${chipModel?.favorite ? '★ ' : ''}${currentModel}` : t('model')
+
   return (
-    <div class="stage-modelpick">
-      <div class="stage-modelpick__head">
-        <span class="stage-modelpick__label">{t('Model')}</span>
+    <div class={`stage-modelpick${compact ? ' stage-modelpick--compact' : ''}`}>
+      {/* A tap-anywhere backdrop dismisses the header popover — it floats over the
+          scene, so it needs an explicit way to close that isn't the toggle. */}
+      {compact && open && <div class="stage-modelpick__backdrop" onClick={() => setOpen(false)} aria-hidden="true" />}
+      {compact ? (
         <button
-          class="stage-modelpick__current"
-          title={selecting ? t('Pick a model for this run') : t('Switch the model for this chat — takes effect on your next message')}
+          class="stage-modelpick__chip"
+          title={t('Switch the model for this chat — takes effect on your next message')}
           onClick={() => setOpen((o) => !o)}
         >
-          <span class="stage-modelpick__cur-id">{currentModel || defaultLabel || '—'}</span>
-          {/* Which provider the CURRENT model came from — the collapsed button had
-              the same ambiguity as a favorites row: a bare id does not say which
-              backend is about to be billed. Only when there is a model to qualify.
-              When nothing is overridden the same slot names the INHERITED model,
-              so "Session model" stops being a dead end: the qualifier answers
-              "which one?" at a glance, its tooltip adds the provider. */}
-          {currentModel && currentProvider ? (
-            <span class="stage-modelpick__cur-prov">{currentProvider}</span>
-          ) : !currentModel && inherited ? (
-            <span class="stage-modelpick__cur-prov" title={inheritedTitle}>
-              {inherited.id}
-            </span>
-          ) : null}
+          <span class="stage-modelpick__cur-id">{chipLabel}</span>
           <span class="stage-modelpick__caret" aria-hidden="true">{open ? '▴' : '▾'}</span>
         </button>
-      </div>
+      ) : (
+        <div class="stage-modelpick__head">
+          <span class="stage-modelpick__label">{t('Model')}</span>
+          <button
+            class="stage-modelpick__current"
+            title={selecting ? t('Pick a model for this run') : t('Switch the model for this chat — takes effect on your next message')}
+            onClick={() => setOpen((o) => !o)}
+          >
+            <span class="stage-modelpick__cur-id">{currentModel || defaultLabel || '—'}</span>
+            {/* Which provider the CURRENT model came from — the collapsed button had
+                the same ambiguity as a favorites row: a bare id does not say which
+                backend is about to be billed. Only when there is a model to qualify.
+                When nothing is overridden the same slot names the INHERITED model,
+                so "Session model" stops being a dead end: the qualifier answers
+                "which one?" at a glance, its tooltip adds the provider. */}
+            {currentModel && currentProvider ? (
+              <span class="stage-modelpick__cur-prov">{currentProvider}</span>
+            ) : !currentModel && inherited ? (
+              <span class="stage-modelpick__cur-prov" title={inheritedTitle}>
+                {inherited.id}
+              </span>
+            ) : null}
+            <span class="stage-modelpick__caret" aria-hidden="true">{open ? '▴' : '▾'}</span>
+          </button>
+        </div>
+      )}
       {error && (
         <p class="stage-error" onClick={() => setError('')}>
           {error}

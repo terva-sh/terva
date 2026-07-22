@@ -400,3 +400,84 @@ describe('Chat transcript fidelity', () => {
     expect(document.querySelector('.stage-edit')).not.toBeNull()
   })
 })
+
+// Reaching the character card from inside a scene: the header portrait opens the
+// same detail sheet → editor the Library grid does, so you don't back out of the
+// chat to inspect or edit the card you're playing. The gate matters — a creator
+// or plain-persona chat has no card, and the affordance must not appear then.
+describe('Chat character-card access from the header', () => {
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+  })
+
+  const card = {
+    id: 'kobeni-abc',
+    name: 'Kobeni',
+    avatar_url: 'data:image/png;base64,AAAA',
+    spec_version: '2.0',
+    greetings: 1,
+    raw: { spec: 'chara_card_v2', spec_version: '2.0', data: { description: 'a nervous new hire', first_mes: 'h-hi' } },
+  }
+
+  function mount(session: Record<string, unknown>) {
+    vi.useFakeTimers()
+    const client = fakeClient({
+      respond: (method) => {
+        if (method === 'cards.get') return card
+        if (method === 'cards.lint') return { findings: [] }
+        return {}
+      },
+    })
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
+    act(() => {
+      client.emit('s1', {
+        type: 'snapshot',
+        snapshot: {
+          epoch: 1,
+          base: 0,
+          total: 1,
+          busy: false,
+          session,
+          messages: [{ role: 'assistant', content: [{ type: 'text', text: 'h-hi' }] }],
+        },
+      } as unknown as WireEvent)
+      vi.advanceTimersByTime(64)
+    })
+    return client
+  }
+
+  // The card resolves via an async cards.get; flush the microtasks it rides.
+  const flush = () =>
+    act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+  it('opens the bound character’s card — view, then edit', async () => {
+    mount({ id: 's1', experience: 'chat', card: 'kobeni-abc' })
+    await flush()
+    const open = document.querySelector('.stage-chat__cardbtn') as HTMLElement | null
+    expect(open).not.toBeNull()
+    // The tooltip leads with the character name, which the header may truncate.
+    expect(open!.getAttribute('title')).toBe('Kobeni — view or edit their card')
+
+    fireEvent.click(open!)
+    await flush()
+    // The detail sheet, not the editor yet.
+    expect(document.querySelector('.stage-sheet--detail:not(.stage-cardeditor)')).not.toBeNull()
+
+    // ✎ Edit hands off to the editor — the Library grid's view→edit path.
+    fireEvent.click(screen.getByText('✎ Edit'))
+    await flush()
+    expect(document.querySelector('.stage-cardeditor')).not.toBeNull()
+  })
+
+  it('shows no card affordance on a card-less session, but keeps the model chip', async () => {
+    mount({ id: 's1', experience: 'chat', persona: 'kartoittaja' })
+    await flush()
+    expect(document.querySelector('.stage-chat__cardbtn')).toBeNull()
+    // The header model chip is unconditional — every session picks a model.
+    expect(document.querySelector('.stage-modelpick--compact')).not.toBeNull()
+  })
+})

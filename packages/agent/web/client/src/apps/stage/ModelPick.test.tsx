@@ -93,3 +93,65 @@ describe('ModelPick inherit row', () => {
     expect(screen.queryByText('gpt-5.6-sol')).toBeNull()
   })
 })
+
+const SWITCH_TITLE = 'Switch the model for this chat — takes effect on your next message'
+
+describe('ModelPick compact (header chip)', () => {
+  it('names the current model as a bare chip without loading the catalog', () => {
+    const client = stubClient()
+    render(<ModelPick client={client} sessionId="s1" currentProvider="openai-codex" currentModel="gpt-5.6-sol" compact />)
+    // The point of the header chip: the model reads at a glance, zero clicks — and
+    // no models.list round trip until you open it to switch.
+    expect(screen.getByText('gpt-5.6-sol')).toBeTruthy()
+    expect(client.send).not.toHaveBeenCalled()
+  })
+
+  it('live-switches this session on pick, then closes', async () => {
+    const client = stubClient()
+    render(<ModelPick client={client} sessionId="s1" currentProvider="openai-codex" currentModel="gpt-5.6-sol" compact />)
+    fireEvent.click(screen.getByTitle(SWITCH_TITLE))
+    await waitFor(() => expect(screen.getByText('glm-5.2')).toBeTruthy())
+    fireEvent.click(screen.getByText('glm-5.2').closest('.stage-modelpick__row')!)
+    // No onSelect in compact mode: the pick fires models.switch at THIS session —
+    // the Steering drawer's exact live-switch path, surfaced in the header.
+    const cmd = client.last('models.switch')
+    expect(cmd?.params).toEqual({ model: 'glm-5.2', provider: 'zai' })
+    expect(cmd?.sess).toBe('s1')
+    await waitFor(() => expect(screen.queryByText('glm-5.2')).toBeNull())
+  })
+
+  it('prefixes the chip with a star for a favourite current model once the catalog is known', async () => {
+    const favList: ModelInfo[] = [
+      { id: 'gpt-5.6-sol', provider: 'openai-codex', auth: 'oauth', favorite: true },
+      { id: 'glm-5.2', provider: 'zai', auth: 'apikey' },
+    ]
+    render(<ModelPick client={stubClient(favList)} sessionId="s1" currentProvider="openai-codex" currentModel="gpt-5.6-sol" compact />)
+    fireEvent.click(screen.getByTitle(SWITCH_TITLE))
+    // Matches the panel's model button once the list is loaded; the bare id shows
+    // before that (favourite state is only known from the catalog).
+    await waitFor(() => expect(screen.getByText('★ gpt-5.6-sol')).toBeTruthy())
+  })
+
+  it('refetches the catalog on every open, so a provider logged in since last time shows up', async () => {
+    const client = stubClient()
+    render(<ModelPick client={client} sessionId="s1" currentProvider="openai-codex" currentModel="gpt-5.6-sol" compact />)
+    fireEvent.click(screen.getByTitle(SWITCH_TITLE)) // open
+    await waitFor(() => expect(screen.getByText('glm-5.2')).toBeTruthy())
+    fireEvent.click(screen.getByTitle(SWITCH_TITLE)) // close
+    fireEvent.click(screen.getByTitle(SWITCH_TITLE)) // reopen
+    // The old "load once" guard left a reopened picker showing a stale list; now
+    // each open asks the daemon again.
+    await waitFor(() => expect(client.sent('models.list').length).toBeGreaterThanOrEqual(2))
+  })
+
+  it('closes the floating popover on an outside tap', async () => {
+    const { container } = render(
+      <ModelPick client={stubClient()} sessionId="s1" currentProvider="openai-codex" currentModel="gpt-5.6-sol" compact />,
+    )
+    fireEvent.click(screen.getByTitle(SWITCH_TITLE))
+    await waitFor(() => expect(screen.getByText('glm-5.2')).toBeTruthy())
+    // The header popover has no drawer scrim; its own backdrop is the dismiss.
+    fireEvent.click(container.querySelector('.stage-modelpick__backdrop')!)
+    await waitFor(() => expect(screen.queryByText('glm-5.2')).toBeNull())
+  })
+})

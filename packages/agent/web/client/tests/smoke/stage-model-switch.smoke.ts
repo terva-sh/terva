@@ -59,9 +59,26 @@ test('stage: switch the session model from the steering drawer', async ({ page }
   mock.pushEvent(snapshot('claude-opus-4-8'), SMOKE_SESSION)
   await expect(page.locator('.stage-row--assistant')).toBeVisible()
 
-  // Open the steering drawer; the Model line shows the session's current model.
+  // The model reads straight off the header now — zero clicks — and switches from
+  // there too (the headline of this change): the compact chip fires the very same
+  // models.switch the drawer does. A tap-anywhere backdrop dismisses its popover.
+  const chip = page.locator('.stage-modelpick--compact')
+  // Collapsed, the chip names the id; the ★ favourite marker only appears once the
+  // catalog is loaded (opened), matching the panel's model button.
+  await expect(chip.locator('.stage-modelpick__cur-id')).toHaveText('claude-opus-4-8')
+  await chip.locator('.stage-modelpick__chip').click()
+  await expect(chip.locator('.stage-modelpick__list')).toBeVisible()
+  await expect(chip.locator('.stage-modelpick__cur-id')).toHaveText('★ claude-opus-4-8')
+  await chip.locator('.stage-modelpick__row', { hasText: 'claude-sonnet-5' }).click()
+  await expect.poll(() => switched).toEqual({ model: 'claude-sonnet-5', provider: 'anthropic' })
+  await expect(chip.locator('.stage-modelpick__list')).toHaveCount(0)
+  switched = null
+
+  // The drawer's Model line is the other home for the same switcher. Scope the
+  // collapsed label to the drawer picker — the header chip carries one too now.
+  const drawerPick = page.locator('.stage-modelpick:not(.stage-modelpick--compact)')
   await page.locator('.stage-steer-btn').click()
-  await expect(page.locator('.stage-modelpick__cur-id')).toHaveText('claude-opus-4-8')
+  await expect(drawerPick.locator('.stage-modelpick__cur-id')).toHaveText('claude-opus-4-8')
 
   // Expand → a ★ Favorites group leads the provider groups (S10 favorites-
   // everywhere); the current model is highlighted in both homes.
@@ -81,7 +98,9 @@ test('stage: switch the session model from the steering drawer', async ({ page }
   await expect.poll(() => switched).toEqual({ model: 'gpt-5-codex', provider: 'openai-codex' })
   await expect(page.locator('.stage-modelpick__list')).toHaveCount(0)
 
-  // The daemon's session_updated (a fresh snapshot) re-renders the current model.
+  // The daemon's session_updated (a fresh snapshot) re-renders the current model
+  // in both homes — the drawer's Model line and the header chip.
   mock.pushEvent(snapshot('gpt-5-codex'), SMOKE_SESSION)
-  await expect(page.locator('.stage-modelpick__cur-id')).toHaveText('gpt-5-codex')
+  await expect(drawerPick.locator('.stage-modelpick__cur-id')).toHaveText('gpt-5-codex')
+  await expect(chip.locator('.stage-modelpick__cur-id')).toHaveText('gpt-5-codex')
 })
