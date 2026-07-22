@@ -1021,6 +1021,10 @@ button:disabled {
   max-width: min(720px, 94vw);
   max-height: 88vh;
   overflow-y: auto;
+  /* Contain any child that would otherwise measure wider than the sheet (a long
+     unbreakable token, a wide flex row) — without it, the overflow escaped this
+     fixed overlay and made the whole page horizontally draggable into deadspace. */
+  overflow-x: hidden;
 }
 .stage-cardsheet__head {
   display: flex;
@@ -1174,6 +1178,24 @@ button:disabled {
 }
 .stage-cardsheet__groups-empty {
   font-size: 0.8rem;
+  color: var(--stage-muted);
+}
+/* This card's default model — the same metadata shelf as the groups above. The
+   shared ModelPick brings its own bordered "Model" block, so this wrapper only
+   labels the row and stacks the picker below it. */
+.stage-cardsheet__defmodel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+.stage-cardsheet__defmodel-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--stage-muted);
 }
 .stage-cardsheet__grouprow {
@@ -1954,7 +1976,17 @@ button:disabled {
 /* --- chat (immersive) --- */
 
 .stage-chat {
+  /* The scene is fixed-height with its own internal scrollers, so nothing should
+     ever scroll the page sideways — clip belts against a stray wide child (a long
+     token in a bubble) turning the whole screen into a horizontal drag surface. */
+  overflow-x: clip;
+  /* dvh tracks the VISIBLE viewport, so the composer sits above mobile Safari's
+     bottom toolbar instead of behind it (100vh is the LARGE viewport, which
+     extends under the toolbar — the composer then hid there, only clearing once
+     the bottom safe-area inset grew). vh stays the fallback for anything without
+     dvh. The home-indicator clearance still rides --safe-bottom below. */
   height: 100vh;
+  height: 100dvh;
   position: relative;
   background-size: cover;
   background-position: center;
@@ -1968,24 +2000,84 @@ button:disabled {
   pointer-events: none;
   z-index: 0;
 }
-.stage-chat > .stage-topbar,
 .stage-chat > .stage-transcript,
 .stage-chat > .stage-composer {
   position: relative;
   z-index: 1;
 }
+/* The header sits ABOVE the transcript (both were z-index 1, so the later-painted
+   transcript won and the model chip's dropdown appeared behind the scene text).
+   Still below the Steering drawer (z-index 30). */
+.stage-chat > .stage-topbar {
+  position: relative;
+  z-index: 4;
+}
 .stage-chat .stage-topbar {
   background: transparent;
   border-bottom-color: rgba(255, 255, 255, 0.08);
+  /* Denser than the library header (back + character + model chip + panel link +
+     Steering), so a tighter gap than the base 1rem keeps it off a phone's edges. */
+  gap: 0.6rem;
 }
 
 .stage-back {
   border: none;
   background: none;
   color: var(--stage-accent);
+  /* Keep "‹ Library" on one line and at full width — it was wrapping to two rows
+     once the model chip crowded the header. The character name and the chip
+     ellipsize instead; the back link does not. */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .stage-chat__title {
   font-weight: 600;
+}
+/* The header's character button: portrait + name, a tap away from the card.
+   Shrinkable (min-width:0) so a long name yields before it pushes the right
+   cluster off a narrow phone. Styled as quiet text, not a chip — it sits where
+   the plain title used to. */
+.stage-chat__cardbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.15rem 0.3rem;
+  margin: -0.15rem 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--stage-fg);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.stage-chat__cardbtn:hover {
+  background: color-mix(in srgb, var(--stage-fg) 8%, transparent);
+}
+.stage-chat__cardbtn:active {
+  background: color-mix(in srgb, var(--stage-fg) 14%, transparent);
+}
+.stage-chat__cardbtn .stage-chat__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-chat__cardavatar {
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.stage-chat__cardavatar--blank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--stage-muted);
 }
 
 .stage-transcript {
@@ -3076,6 +3168,31 @@ button:disabled {
   .stage-composer > button:last-child {
     margin-left: auto;
   }
+  /* Two-line header on a phone, mirroring the panel's .topbar wrap: the back link
+     and character name keep the first row, and the control cluster — model chip,
+     panel link, Steering — wraps to a full-width second row. A single dense row
+     forced the name and a long model id to fight over the same strip; giving the
+     controls their own row lets each breathe. Desktop stays single-line. */
+  .stage-chat .stage-topbar {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    row-gap: 0.4rem;
+    /* Group back + name at the left; the desktop space-between would otherwise
+       fling the name to the right edge of its now half-empty first row. */
+    justify-content: flex-start;
+  }
+  /* flex-basis:100% is what forces the wrap: the cluster can't share the first
+     row, so it drops below and spans the width, right-aligned like a toolbar. */
+  .stage-chat__right {
+    flex-basis: 100%;
+    gap: 0.5rem;
+    justify-content: flex-end;
+  }
+  /* With a row to itself the chip shows far more of a long model id than the
+     ~7.5rem it got while sharing the top strip. */
+  .stage-modelpick__chip {
+    max-width: min(20rem, 66vw);
+  }
 }
 
 .stage-suggest {
@@ -3554,6 +3671,64 @@ button:disabled {
   border: 1px solid var(--stage-line);
   border-radius: 8px;
   padding: 0.3rem;
+}
+
+/* Compact: the header model chip + its floating popover. The chip mirrors the
+   panel's model button — a bare "★ id" you read at a glance and tap once to
+   switch. The list floats absolutely so opening it overlays the scene instead of
+   pushing the sticky header taller, and a fixed backdrop closes it on any outside
+   tap (a header popover has no drawer scrim of its own). */
+.stage-modelpick--compact {
+  position: relative;
+  margin-top: 0;
+  display: flex;
+  min-width: 0;
+}
+.stage-modelpick__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  /* Capped so a long model id (gemma-4-26b-a4b-it-…) ellipsizes instead of eating
+     the row and crushing the character name to two letters. */
+  max-width: 10rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--stage-fg);
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.stage-modelpick__chip:hover {
+  border-color: var(--stage-accent);
+}
+.stage-modelpick__chip:active {
+  background: var(--stage-surface);
+  border-color: var(--stage-accent);
+}
+.stage-modelpick__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+}
+.stage-modelpick--compact .stage-modelpick__list {
+  position: absolute;
+  z-index: 31;
+  top: calc(100% + 4px);
+  right: 0;
+  margin-top: 0;
+  width: min(20rem, 78vw);
+  max-height: min(60vh, 26rem);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.stage-modelpick--compact .stage-error {
+  position: absolute;
+  z-index: 31;
+  top: calc(100% + 4px);
+  right: 0;
+  width: min(20rem, 78vw);
 }
 .stage-modelpick__provider {
   display: flex;
