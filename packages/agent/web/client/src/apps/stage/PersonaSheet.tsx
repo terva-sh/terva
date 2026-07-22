@@ -74,7 +74,7 @@ export function PersonaSheet(props: {
 
   return (
     <div class="stage-sheet-backdrop" onClick={onClose}>
-      <div class="stage-sheet stage-personasheet" onClick={(e) => e.stopPropagation()}>
+      <div class="stage-sheet stage-sheet--detail stage-personasheet" onClick={(e) => e.stopPropagation()}>
         <header class="stage-personasheet__head">
           <span class="stage-personasheet__emoji" aria-hidden="true">
             {persona.emoji || '🎭'}

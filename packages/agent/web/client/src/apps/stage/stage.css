@@ -779,10 +779,8 @@ button:disabled {
 
 /* --- persona detail sheet (PersonaSheet) --- */
 
-.stage-personasheet {
-  max-height: 88vh;
-  overflow-y: auto;
-}
+/* The persona viewer is a .stage-sheet--detail (width + height + scroll come from
+   there, shared with the card sheet); this class only tags its inner layout. */
 .stage-personasheet__head {
   display: flex;
   align-items: flex-start;
@@ -940,6 +938,12 @@ button:disabled {
 /* The detail variant of the sheet is tall + scrollable: it carries the whole
    card, not just the quick-start controls. */
 .stage-sheet--detail {
+  /* The detail/edit variant carries full-width textareas (system prompt, post-
+     history, creator notes) and two-up field rows, so the base 420px — right for
+     the quick-start sheet — is cramped on a wide screen. Widen it; .stage-sheet's
+     width:100% still caps it to the viewport on a phone, so the wider cap only
+     bites once there's room. */
+  max-width: min(720px, 94vw);
   max-height: 88vh;
   overflow-y: auto;
 }
