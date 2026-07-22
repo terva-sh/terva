@@ -249,10 +249,20 @@ button:disabled {
   color: var(--stage-muted);
 }
 
+/* A link-style "+ New"/import affordance: accent text, no button chrome. The
+   shared base (ui.css) resets font/colour/cursor but deliberately NOT
+   background/border, so every non-default button must clear its own chrome —
+   see .stage-swipe/.stage-regen. Without this, the OS default grey pill shows. */
 .stage-import {
+  border: none;
+  background: none;
+  padding: 0;
   font-size: 0.8rem;
   color: var(--stage-accent);
   cursor: pointer;
+}
+.stage-import:hover {
+  text-decoration: underline;
 }
 
 .stage-empty,
