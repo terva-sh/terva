@@ -996,6 +996,15 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         // The one call in this client that carries a secret. It goes one way.
         await c.send('auth.login.submit', { flow, values }, '')
         setAuthFlow(null)
+        // The newly logged-in provider's models should appear at once, not only
+        // after the next reconnect — refresh the catalog now. Non-fatal: the
+        // login already succeeded.
+        try {
+          const res = await c.send<{ models: ModelInfo[] }>('models.list', null, curRef.current)
+          setModels(res.models ?? [])
+        } catch {
+          /* a models refresh failure does not undo the login */
+        }
       } catch (e) {
         // A refusal here is usually the provider rejecting the credential — a
         // mistyped key, a dead code — so it is the user's to fix, and the
