@@ -11,6 +11,19 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.3](https://github.com/terva-sh/terva/releases/tag/v0.126.3) — 2026-07-21
+
+### Features
+
+- stage: a default model per character, scoped to a World
+- stage: every agentic surface names the model it will use, and lets you change it
+- stage: the cartographer's door, world tools, and a jump-to-latest button
+- stage: turn a cartographer conversation into a playable world
+
+### Fixes
+
+- stage: the phone composer wraps to two rows on a narrow screen
+
 ## [v0.126.2](https://github.com/terva-sh/terva/releases/tag/v0.126.2) — 2026-07-20
 
 ### Fixes
