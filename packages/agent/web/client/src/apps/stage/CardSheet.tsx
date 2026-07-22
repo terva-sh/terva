@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { t, tn } from '../../i18n'
 import { downloadExport } from '../../ui/browser'
+import { Hint } from './Hint'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { CardSummary, CardView, CardExport, CardLintFinding, CardLintResult, Group } from '../../platform/ctrlproto/types'
 
@@ -39,11 +40,7 @@ function Field(props: { label: string; value?: string; hint?: string }) {
     <div class="stage-cardfield">
       <div class="stage-cardfield__label">
         {props.label}
-        {props.hint && (
-          <span class="stage-cardfield__hint" title={props.hint} aria-label={props.hint}>
-            ⓘ
-          </span>
-        )}
+        {props.hint && <Hint text={props.hint} />}
       </div>
       <p class={`stage-cardfield__value ${props.value?.trim() ? '' : 'stage-cardfield__value--empty'}`}>{props.value?.trim() || '—'}</p>
     </div>

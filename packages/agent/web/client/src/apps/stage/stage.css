@@ -102,7 +102,7 @@ button:disabled {
      Fold the top safe-area inset into the padding so the bar's background fills
      the unsafe strip and its controls sit below it. env() is 0 with no inset,
      so desktop is unchanged. (The panel does the same on .topbar.) */
-  padding: calc(1rem + env(safe-area-inset-top)) 0 1rem;
+  padding: calc(1rem + var(--safe-top)) 0 1rem;
   border-bottom: 1px solid var(--stage-line);
   position: sticky;
   top: 0;
@@ -238,8 +238,12 @@ button:disabled {
 
 .stage-section-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
+  /* Breathing room so the sort control never crowds "+ Import", and a wrap so the
+     cluster drops to its own line on a narrow phone instead of jamming together. */
+  gap: 0.6rem;
+  flex-wrap: wrap;
 }
 .stage-library h2 {
   margin: 1.75rem 0 0.75rem;
@@ -555,6 +559,67 @@ button:disabled {
   background: rgba(0, 0, 0, 0.55);
   color: var(--stage-fg);
   line-height: 1;
+}
+/* Favorite star, top-LEFT (⋯ owns top-right). Faint ☆ at rest so it does not
+   compete with the portrait; full-opacity accent ★ when favorited or hovered. */
+.stage-card__fav {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--stage-fg);
+  line-height: 1;
+  opacity: 0.5;
+  cursor: pointer;
+}
+.stage-card__fav:hover,
+.stage-grid__cell[data-favorite] .stage-card__fav {
+  opacity: 1;
+}
+.stage-grid__cell[data-favorite] .stage-card__fav {
+  color: var(--stage-accent);
+}
+/* A favorited card reads as pinned: an accent ring + a soft accent tint. */
+.stage-grid__cell[data-favorite] .stage-card {
+  border-color: var(--stage-accent);
+  background: color-mix(in srgb, var(--stage-accent) 8%, var(--stage-surface));
+}
+
+/* The grid sort control in the Characters section head: a mode select + a
+   reverse toggle (its arrow shows the current direction). */
+.stage-cardsort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+}
+.stage-cardsort__mode {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.82rem;
+}
+.stage-cardsort__dir {
+  width: 1.7rem;
+  height: 1.7rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  cursor: pointer;
+  line-height: 1;
+}
+.stage-cardsort__dir[aria-pressed='true'] {
+  border-color: var(--stage-accent);
+  color: var(--stage-accent);
 }
 
 /* --- "Your chats": the all-immersive-sessions, most-recent-first resume list --- */
@@ -1444,16 +1509,6 @@ button:disabled {
   color: var(--stage-muted);
   margin-bottom: 0.2rem;
 }
-.stage-cardfield__hint {
-  cursor: help;
-  color: var(--stage-line);
-  font-size: 0.85rem;
-  text-transform: none;
-  letter-spacing: 0;
-}
-.stage-cardfield__hint:hover {
-  color: var(--stage-accent);
-}
 .stage-cardfield__value {
   margin: 0;
   font-size: 0.9rem;
@@ -1539,9 +1594,61 @@ button:disabled {
   align-items: center;
   gap: 0.3rem;
 }
-.stage-editfield__hint {
-  cursor: help;
+/* A touch-usable ⓘ hint (see Hint.tsx). The bubble reveals on hover (desktop) AND
+   on :focus-within — a tap focuses the button, so it works on a phone where the
+   native title= tooltip it replaces never appeared. Resets the uppercase/tracking
+   it inherits from the field label so the explainer reads as body text. */
+.stage-infohint {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+}
+.stage-infohint__btn {
+  border: none;
+  background: none;
+  /* Padding grows the tap target; the negative block margin keeps the label row
+     from getting taller because of it. */
+  padding: 0.25rem;
+  margin: -0.25rem 0;
+  font: inherit;
+  line-height: 1;
+  color: inherit;
   opacity: 0.7;
+  cursor: help;
+}
+.stage-infohint__btn:hover,
+.stage-infohint__btn:focus-visible {
+  opacity: 1;
+  color: var(--stage-accent);
+}
+.stage-infohint__bubble {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  width: max-content;
+  max-width: min(16rem, 72vw);
+  padding: 0.4rem 0.55rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  color: var(--stage-fg);
+  font-size: 0.78rem;
+  font-weight: 400;
+  line-height: 1.35;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+.stage-infohint:hover .stage-infohint__bubble,
+.stage-infohint:focus-within .stage-infohint__bubble {
+  opacity: 1;
+  visibility: visible;
 }
 .stage-editfield__input,
 .stage-editfield__area {
@@ -1654,11 +1761,6 @@ button:disabled {
 }
 .stage-doctor__emoji {
   font-size: 1.1rem;
-}
-.stage-doctor__hint {
-  cursor: help;
-  opacity: 0.7;
-  font-weight: 400;
 }
 .stage-doctor__run {
   padding: 0.4rem 0.8rem;
@@ -2139,58 +2241,53 @@ button:disabled {
   font: inherit;
   resize: none;
 }
+/* A WRAPPING row of uniform pills. Each sizes to its own label and never shrinks
+   (the base ui.css min-width:0 would otherwise squeeze "Cancel" down to "Cance"),
+   so on a narrow screen the row flows onto more lines instead of clipping text or
+   two-lining a label. Every action is a calm secondary pill EXCEPT Save, the one
+   primary — which stops the row from reading as several competing gold buttons
+   (Keep as lore / Promote used to inherit the accent fill). Delete turns danger
+   only on hover, the same restraint the chat/persona deletes use. */
 .stage-edit__actions {
   display: flex;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
 }
 .stage-edit__actions button {
-  border: none;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  border: 1px solid var(--stage-line);
   border-radius: 6px;
-  padding: 0.3rem 0.75rem;
+  padding: 0.4rem 0.75rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.stage-edit__actions button:hover:not(:disabled) {
+  border-color: var(--stage-accent);
+}
+.stage-edit__actions .stage-edit__save {
+  border-color: transparent;
   background: var(--stage-accent);
   color: var(--stage-on-accent);
   font-weight: 600;
 }
-.stage-edit__cancel {
-  background: var(--stage-surface-2) !important;
-  color: var(--stage-fg) !important;
+.stage-edit__actions .stage-edit__delete:hover:not(:disabled) {
+  border-color: var(--stage-danger);
+  color: var(--stage-danger);
 }
-.stage-edit__branch {
-  background: var(--stage-surface-2) !important;
-  color: var(--stage-muted) !important;
-  font-weight: 500 !important;
-  margin-left: auto;
-}
-.stage-edit__branch:hover {
-  color: var(--stage-accent) !important;
+.stage-edit__delete:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 .stage-edit__note {
   margin: 0;
   font-size: 0.78rem;
   color: var(--stage-muted);
-}
-.stage-edit__prune {
-  background: var(--stage-surface-2) !important;
-  color: var(--stage-muted) !important;
-  font-weight: 500 !important;
-}
-.stage-edit__prune:hover {
-  color: var(--stage-accent) !important;
-}
-/* Delete sits with the other secondary actions rather than being tinted red at
-   rest — it is one of several things you can do to a message, not a hazard the
-   row has to shout about. The destructive colour (the same --stage-danger the chat and
-   persona deletes use) arrives on hover, once you are actually pointing at it. */
-.stage-edit__delete {
-  background: var(--stage-surface-2) !important;
-  color: var(--stage-muted) !important;
-  font-weight: 500 !important;
-}
-.stage-edit__delete:hover:not(:disabled) {
-  color: var(--stage-danger) !important;
-}
-.stage-edit__delete:disabled {
-  opacity: 0.45;
 }
 
 .stage-row--tool,
@@ -2878,7 +2975,7 @@ button:disabled {
 .stage-composer {
   display: flex;
   gap: 0.5rem;
-  padding: 0.75rem 0 calc(0.75rem + env(safe-area-inset-bottom));
+  padding: 0.75rem 0 calc(0.75rem + var(--safe-bottom));
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: color-mix(in srgb, var(--stage-bg) 60%, transparent);
   backdrop-filter: blur(6px);
@@ -2990,7 +3087,7 @@ button:disabled {
   background: var(--stage-surface);
   border: 1px solid var(--stage-line);
   border-radius: 14px 14px 0 0;
-  padding: 1rem 1.25rem calc(1.25rem + env(safe-area-inset-bottom));
+  padding: 1rem 1.25rem calc(1.25rem + var(--safe-bottom));
 }
 .stage-suggest__head {
   display: flex;
@@ -3236,7 +3333,7 @@ button:disabled {
   /* Full-height from the top, so under viewport-fit=cover its head lands behind
      the notch. Inset the top like the topbar (and the bottom already insets for
      the home indicator). */
-  padding: calc(1rem + env(safe-area-inset-top)) 1.1rem calc(1.5rem + env(safe-area-inset-bottom));
+  padding: calc(1rem + var(--safe-top)) 1.1rem calc(1.5rem + var(--safe-bottom));
 }
 .stage-drawer__head {
   display: flex;
@@ -3245,7 +3342,7 @@ button:disabled {
   position: sticky;
   /* -1rem eats the drawer's top padding so the head pins flush; add the inset so
      the pinned head clears the notch too, matching the padding above. */
-  top: calc(env(safe-area-inset-top) - 1rem);
+  top: calc(var(--safe-top) - 1rem);
   background: var(--stage-surface);
   padding-top: 0.25rem;
 }

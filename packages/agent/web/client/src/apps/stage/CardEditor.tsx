@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { CardSummary, CardView, CardLintFinding, CardLintResult, DoctorProposal, DoctorResult, DoctorDecision } from '../../platform/ctrlproto/types'
 import { m, t, tr } from '../../i18n'
+import { Hint } from './Hint'
 import { ModelPick } from './ModelPick'
 
 // The card fields the doctor may edit (mirrors the server's allow-list) — the
@@ -87,11 +88,7 @@ function EditField(props: {
     <label class="stage-editfield">
       <span class="stage-editfield__label">
         {props.label}
-        {props.hint && (
-          <span class="stage-editfield__hint" title={props.hint} aria-label={props.hint}>
-            ⓘ
-          </span>
-        )}
+        {props.hint && <Hint text={props.hint} />}
       </span>
       {props.area ? (
         <textarea
@@ -351,9 +348,10 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
                 🛠️
               </span>
               <span>{t('Card doctor')}</span>
-              <span class="stage-doctor__hint" title={t('Seppä, the card-craft persona, reads the card and its lint and suggests concrete edits you can apply.')} aria-label={t('about the card doctor')}>
-                ⓘ
-              </span>
+              <Hint
+                text={t('Seppä, the card-craft persona, reads the card and its lint and suggests concrete edits you can apply.')}
+                label={t('about the card doctor')}
+              />
             </div>
             {!proposals && (
               <button class="stage-doctor__run" disabled={doctorRunning || !form} onClick={() => void runDoctor()}>
@@ -503,9 +501,7 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
             <div class="stage-editfield">
               <span class="stage-editfield__label">
                 {t('Alternate greetings')}
-                <span class="stage-editfield__hint" title={t('Extra openings the reader can swipe between at the start of a chat.')} aria-label={t('alternate greetings')}>
-                  ⓘ
-                </span>
+                <Hint text={t('Extra openings the reader can swipe between at the start of a chat.')} label={t('alternate greetings')} />
               </span>
               {form.alternate_greetings.map((g, i) => (
                 <div key={i} class="stage-cardeditor__greeting">
