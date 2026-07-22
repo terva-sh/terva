@@ -360,6 +360,14 @@ func (r *recorder) SessionGroupSetMembers(_ context.Context, p SessionGroupSetMe
 	r.note("SessionGroupSetMembers", "", p)
 	return GroupView{}, nil
 }
+func (r *recorder) ModelDefaultFor(_ context.Context, p DefaultForParams) (DefaultForResult, error) {
+	r.note("ModelDefaultFor", "", p)
+	return DefaultForResult{}, nil
+}
+func (r *recorder) CardModelSet(_ context.Context, p CardModelSetParams) error {
+	r.note("CardModelSet", "", p)
+	return nil
+}
 
 // dispatchCase is one verb, the params sent, and what must have happened.
 type dispatchCase struct {
@@ -440,6 +448,8 @@ func dispatchCases() []dispatchCase {
 		{MethodSessionGroupsList, nil, "SessionGroupsList", nil},
 		{MethodSessionGroupSave, SessionGroupSaveParams{Name: "sg-new"}, "SessionGroupSave", SessionGroupSaveParams{Name: "sg-new"}},
 		{MethodSessionGroupSetMembers, SessionGroupSetMembersParams{ID: "sg-mem", Members: []string{"sess-a"}}, "SessionGroupSetMembers", SessionGroupSetMembersParams{ID: "sg-mem", Members: []string{"sess-a"}}},
+		{MethodModelDefaultFor, DefaultForParams{Card: "card-dm"}, "ModelDefaultFor", DefaultForParams{Card: "card-dm"}},
+		{MethodCardModelSet, CardModelSetParams{Card: "card-cm", Provider: "openai", Model: "gpt-5.6"}, "CardModelSet", CardModelSetParams{Card: "card-cm", Provider: "openai", Model: "gpt-5.6"}},
 		{MethodSessionGroupDelete, SessionGroupDeleteParams{ID: "sg-del"}, "SessionGroupDelete", SessionGroupDeleteParams{ID: "sg-del"}},
 
 		// --- directed authorship: the if-chain's trailing arm was PostLine ---

@@ -107,6 +107,45 @@ func TestNewSessionFallsBackToBootDefault(t *testing.T) {
 	}
 }
 
+// The effective-default resolver is the one authority every "what model is
+// default here?" surface routes through — the wire's models.default_for and the
+// session seed (createSeededLocked) alike. A card's stored pref outranks the
+// workspace default; a pref naming a model this workspace can't run degrades to
+// the workspace floor rather than seeding an unrunnable session.
+func TestEffectiveDefaultModelCardRung(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	cwd := testsupport.TempDir(t)
+	// Boot default openai/gpt-5, no configured default → the workspace floor is
+	// the boot model, source "workspace".
+	w := &Workspace{cwd: cwd, trusted: true, provider: "openai", model: "gpt-5"}
+
+	if p, m, src := w.effectiveDefaultModel("", ""); p != "openai" || m != "gpt-5" || src != ctrlproto.DefaultSourceWorkspace {
+		t.Fatalf("no card: %s/%s@%s, want openai/gpt-5@workspace", p, m, src)
+	}
+
+	// A card pref (a real catalog model, distinct from boot) wins, source "card".
+	if err := build.NewCardModelStore().Set("alice-abc123", "openai", "gpt-5.5"); err != nil {
+		t.Fatal(err)
+	}
+	if p, m, src := w.effectiveDefaultModel("alice-abc123", ""); p != "openai" || m != "gpt-5.5" || src != ctrlproto.DefaultSourceCard {
+		t.Errorf("card pref: %s/%s@%s, want openai/gpt-5.5@card", p, m, src)
+	}
+
+	// A card with no pref inherits the workspace floor.
+	if _, _, src := w.effectiveDefaultModel("bob-def456", ""); src != ctrlproto.DefaultSourceWorkspace {
+		t.Errorf("unset card should inherit the workspace, got source %s", src)
+	}
+
+	// A pref naming a model the catalog doesn't hold degrades to the floor rather
+	// than seeding a session that can't resolve.
+	if err := build.NewCardModelStore().Set("carol-777aaa", "openai", "no-such-model-xyz"); err != nil {
+		t.Fatal(err)
+	}
+	if p, m, src := w.effectiveDefaultModel("carol-777aaa", ""); p != "openai" || m != "gpt-5" || src != ctrlproto.DefaultSourceWorkspace {
+		t.Errorf("unresolvable pref should fall through: %s/%s@%s, want openai/gpt-5@workspace", p, m, src)
+	}
+}
+
 // A project default shadows the global one — but only while the workspace is
 // trusted, because that is the only condition under which the project config is
 // honored at all. Advertising an untrusted project default as "in force" would

@@ -43,6 +43,7 @@ var notForwarded = map[string]string{
 	"DirectController":        "Directed authorship (post an approved character/narrator line into the transcript) is a Stage composer commit; web-only. Revisit for a TUI Stage.",
 	"WorldController":         "World lore (session-scoped shared lorebook, Worlds L1) is edited from the Stage steering drawer; web-only. Revisit for a TUI Stage.",
 	"CardGroupsController":    "Card groups (a library-organizing membership bucket) are managed from the Stage library; web-only. Revisit for a TUI Stage.",
+	"CardModelController":     "Per-card default model (a Stage library metadata sidecar + the effective-default resolver) is managed from the Stage card UI; web-only. Revisit for a TUI Stage.",
 	"SessionGroupsController": "Session groups (a membership bucket over chats/plays) are managed from the Stage library and the control panel; web-only. Revisit for a TUI Stage.",
 	"DraftController":         "Discarding an unpromoted draft on navigate-away is a Stage front-end cleanup; web-only. Revisit for a TUI Stage.",
 	"NoteController":          "Author's note is a Stage/play immersion control; web-only. Revisit for a TUI Stage.",

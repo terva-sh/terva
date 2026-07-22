@@ -108,7 +108,18 @@ func cardsDoctor(ctx context.Context, w *Workspace, s *wsSession, c card.Card, p
 			cl, model, err = w.overrideClient(s.argsSnapshot(), p.Provider, p.Model)
 		}
 	} else {
-		cl, model, err = w.overrideClient(w.args, p.Provider, p.Model)
+		prov, mdl := p.Provider, p.Model
+		// No explicit override: if THIS card carries its own default model, the
+		// doctor honors it — the same authority (effectiveDefaultModel) the session
+		// seed uses, so a card's default propagates to its Library-scoped doctor run
+		// too, not just to the chats it starts. A card with no default keeps the
+		// workspace fallback overrideClient already applies for an empty model.
+		if strings.TrimSpace(mdl) == "" {
+			if dp, dm, src := w.effectiveDefaultModel(p.ID, ""); src == ctrlproto.DefaultSourceCard {
+				prov, mdl = dp, dm
+			}
+		}
+		cl, model, err = w.overrideClient(w.args, prov, mdl)
 	}
 	if err != nil {
 		return ctrlproto.DoctorResult{}, err

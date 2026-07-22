@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
-import type { CardSummary, CardView, CardLintFinding, CardLintResult, DoctorProposal, DoctorResult, DoctorDecision } from '../../platform/ctrlproto/types'
+import type { CardSummary, CardView, CardLintFinding, CardLintResult, DefaultForResult, DoctorProposal, DoctorResult, DoctorDecision } from '../../platform/ctrlproto/types'
 import { m, t, tr } from '../../i18n'
 import { Hint } from './Hint'
 import { ModelPick } from './ModelPick'
@@ -126,8 +126,11 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
   const [declined, setDeclined] = useState<Record<string, string>>({})
   const [decliningId, setDecliningId] = useState<string | null>(null)
   const [reasonDraft, setReasonDraft] = useState('')
-  // A per-generation model override for the doctor (Phase 7): empty = the
-  // workspace default. Run the doctor on a stronger/cheaper model without changing
+  // A per-generation model override for the doctor (Phase 7): empty = the card's
+  // effective default (Card → Workspace), which the daemon resolves on its own
+  // when this is blank. Seeded below from the card's own default when it has one,
+  // so the picker shows what the doctor will actually run on rather than a bare
+  // "Workspace model". Run the doctor on a stronger/cheaper model without changing
   // any session's model.
   const [ovProvider, setOvProvider] = useState('')
   const [ovModel, setOvModel] = useState('')
@@ -149,6 +152,19 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
       })
       .catch((e: unknown) => setError(String(e)))
     lint()
+    // Seed the doctor's model from the card's own default when it has one, so the
+    // picker names what the doctor will run on. Unsupported (old daemon) or no
+    // card default leaves the override empty — the picker's Default row, and the
+    // daemon's own fallback, then apply.
+    client
+      .send<DefaultForResult>('models.default_for', { card: card.id })
+      .then((d) => {
+        if (d.source === 'card') {
+          setOvProvider(d.provider)
+          setOvModel(d.model)
+        }
+      })
+      .catch(() => {})
   }, [card.id])
 
   const set = <K extends keyof EditForm>(key: K, value: EditForm[K]) => {

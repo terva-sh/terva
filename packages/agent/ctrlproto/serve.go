@@ -1021,6 +1021,32 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled session-group verb %q", f.Method)))
 		}
 
+	case MethodModelDefaultFor, MethodCardModelSet:
+		cmc, ok := s.svc.(CardModelController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "per-card default models are not available here"))
+			return
+		}
+		switch f.Method {
+		case MethodModelDefaultFor:
+			var p DefaultForParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := cmc.ModelDefaultFor(ctx, p)
+			s.respond(f.ID, v, err)
+		case MethodCardModelSet:
+			var p CardModelSetParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			s.respond(f.ID, nil, cmc.CardModelSet(ctx, p))
+		default:
+			s.write(ErrFrame(f.ID, CodeUnsupported, fmt.Sprintf("unhandled card-model verb %q", f.Method)))
+		}
+
 	case MethodPostLine, MethodDirectTurn, MethodTurnAdvance:
 		// Optional, like suggest — needs a live session's transcript, so a carrier
 		// without one answers "unsupported".

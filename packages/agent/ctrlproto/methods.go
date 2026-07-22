@@ -267,6 +267,14 @@ const (
 	MethodSessionGroupDelete     Method = "sessiongroups.delete"      // params SessionGroupDeleteParams
 	MethodSessionGroupSetMembers Method = "sessiongroups.set_members" // params SessionGroupSetMembersParams, result GroupView
 
+	// Per-card default model (optional; served only by a CardModelController). A
+	// card's default is terva-owned metadata like a group — a seed for a session
+	// started from the card, NOT stored on the card. models.default_for is the one
+	// authority that resolves the effective default for any context (Card → World →
+	// Workspace); cardmodel.set writes or clears a card's rung.
+	MethodModelDefaultFor Method = "models.default_for" // params DefaultForParams, result DefaultForResult
+	MethodCardModelSet    Method = "cardmodel.set"      // params CardModelSetParams
+
 	// Directed authorship (optional; served only by a DirectController). Posts an
 	// approved character/narrator line INTO the transcript — the commit half of
 	// Stage's suggest→review→post loop (Phase 6). Mutates the transcript (like an
@@ -317,6 +325,7 @@ func (m Method) Group() Group {
 		MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldSetCharacterModel, MethodWorldsExport, MethodWorldsImport,
 		MethodCardGroupsList, MethodCardGroupSave, MethodCardGroupDelete, MethodCardGroupSetMembers,
 		MethodSessionGroupsList, MethodSessionGroupSave, MethodSessionGroupDelete, MethodSessionGroupSetMembers,
+		MethodModelDefaultFor, MethodCardModelSet,
 		MethodUserPersonasList, MethodUserPersonaSave, MethodUserPersonaDelete, MethodUserPersonaSetDefault:
 		return GroupControl
 	case MethodReplayControl, MethodReplayState:

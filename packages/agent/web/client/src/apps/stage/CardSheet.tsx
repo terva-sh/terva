@@ -2,8 +2,9 @@ import { useEffect, useState } from 'preact/hooks'
 import { t, tn } from '../../i18n'
 import { downloadExport } from '../../ui/browser'
 import { Hint } from './Hint'
+import { ModelPick } from './ModelPick'
 import type { ClientLike } from '../../platform/ctrlproto/client'
-import type { CardSummary, CardView, CardExport, CardLintFinding, CardLintResult, Group } from '../../platform/ctrlproto/types'
+import type { CardSummary, CardView, CardExport, CardLintFinding, CardLintResult, DefaultForResult, Group } from '../../platform/ctrlproto/types'
 
 // The normalized CCv2 `data` object inside CardView.raw (card.Marshal output is
 // { spec, spec_version, data }). Only the fields the sheet renders are typed;
@@ -75,6 +76,13 @@ export function CardSheet(props: {
   const [findings, setFindings] = useState<CardLintFinding[] | null>(null)
   const [greeting, setGreeting] = useState(0)
   const [error, setError] = useState('')
+  // This card's effective default model (Card → World → Workspace), resolved by
+  // the daemon's one authority. `source === 'card'` means the card carries its
+  // own default, shown as an active pick; anything else means it inherits, and
+  // the picker's Default row names what from. Null until loaded; the whole block
+  // hides on an old daemon that doesn't serve models.default_for.
+  const [cardDefault, setCardDefault] = useState<DefaultForResult | null>(null)
+  const [cardModelSupported, setCardModelSupported] = useState(true)
 
   useEffect(() => {
     client
@@ -87,7 +95,24 @@ export function CardSheet(props: {
       .send<CardLintResult>('cards.lint', { id: card.id })
       .then((r) => setFindings(r.findings ?? []))
       .catch(() => setFindings(null))
+    // The card's default model rides its own fetch too — an unsupported verb just
+    // hides the row, it never blocks the sheet.
+    client
+      .send<DefaultForResult>('models.default_for', { card: card.id })
+      .then(setCardDefault)
+      .catch(() => setCardModelSupported(false))
   }, [card.id])
+
+  // Set or clear this card's default model. Empty strings clear it (fall back to
+  // the workspace default); the picker's Default row fires exactly that. Refetch
+  // so the picker reflects what the daemon now resolves.
+  const setCardModel = (provider: string, model: string) => {
+    setError('')
+    client
+      .send('cardmodel.set', { card: card.id, provider, model })
+      .then(() => client.send<DefaultForResult>('models.default_for', { card: card.id }).then(setCardDefault))
+      .catch((e: unknown) => setError(String(e)))
+  }
 
   const data = (view?.raw as { data?: CardData } | undefined)?.data
   const greetings = card.greetings || 1
@@ -173,6 +198,26 @@ export function CardSheet(props: {
                 })}
               </div>
             )}
+          </div>
+        )}
+
+        {/* This card's default model: terva-owned metadata like the groups above,
+            NOT stored on the card. A chat started from the card (and its doctor)
+            defaults to this; the Default row clears back to the workspace model. */}
+        {cardModelSupported && (
+          <div class="stage-cardsheet__defmodel">
+            <span class="stage-cardsheet__defmodel-label">
+              {t('Default model')}
+              <Hint text={t("The provider + model a chat started from this card opens on, before the workspace default. Stored as terva metadata — never written into the card.")} />
+            </span>
+            <ModelPick
+              client={client}
+              sessionId=""
+              onSelect={setCardModel}
+              currentProvider={cardDefault?.source === 'card' ? cardDefault.provider : undefined}
+              currentModel={cardDefault?.source === 'card' ? cardDefault.model : undefined}
+              defaultLabel={t('Workspace default')}
+            />
           </div>
         )}
 

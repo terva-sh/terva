@@ -1528,6 +1528,7 @@ export type Verb =
   | 'cardgroups.list'
   | 'cardgroups.save'
   | 'cardgroups.set_members'
+  | 'cardmodel.set'
   | 'cards.delete'
   | 'cards.doctor'
   | 'cards.edit'
@@ -1554,6 +1555,7 @@ export type Verb =
   | 'i18n.catalog'
   | 'message.delete'
   | 'message.edit'
+  | 'models.default_for'
   | 'models.favorite'
   | 'models.list'
   | 'models.params'
@@ -1647,6 +1649,8 @@ export interface VerbParams {
   'cardgroups.save': CardGroupSaveParams
   'cardgroups.delete': CardGroupDeleteParams
   'cardgroups.set_members': CardGroupSetMembersParams
+  'cardmodel.set': CardModelSetParams
+  'models.default_for': DefaultForParams
   'sessiongroups.save': SessionGroupSaveParams
   'sessiongroups.delete': SessionGroupDeleteParams
   'sessiongroups.set_members': SessionGroupSetMembersParams
@@ -1659,6 +1663,31 @@ export interface VerbParams {
 export interface CardFavoriteParams {
   id: string
   favorite: boolean
+}
+
+// CardModelSetParams sets or clears a card's default model. Empty provider AND
+// model clears it (drops the sidecar entry → back to the workspace default).
+export interface CardModelSetParams {
+  card: string
+  provider?: string
+  model?: string
+}
+
+// DefaultForParams asks the daemon to resolve the effective default model for a
+// context, walking Card → World → Workspace. Both fields optional; world has no
+// rung yet (reserved).
+export interface DefaultForParams {
+  card?: string
+  world?: string
+}
+
+// DefaultForResult is the resolved effective default. `source` names the rung
+// that supplied it — 'card' means this card carries its own default, so a picker
+// shows it as an active pick rather than an inherited one.
+export interface DefaultForResult {
+  provider: string
+  model: string
+  source: 'card' | 'world' | 'workspace'
 }
 
 // ParamsFor is VerbParams[V] where the verb is mapped, and `unknown` otherwise.

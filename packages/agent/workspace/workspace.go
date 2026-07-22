@@ -552,16 +552,14 @@ func (w *Workspace) createLocked(opts ctrlproto.CreateOpts) (*wsSession, error) 
 }
 
 func (w *Workspace) createSeededLocked(opts ctrlproto.CreateOpts, seed *sceneSeed) (*wsSession, error) {
-	// New sessions start on the configured default (models.set_default), read
-	// live so a default set earlier this session takes effect at once — NOT on
-	// whatever model another session was last switched to (switchModel no longer
-	// moves the workspace default). Fall back to the boot-resolved default
-	// (w.provider/w.model, which honors a launch --model and the catalog
-	// fallback) when config names no default. An explicit opts.Model wins below.
-	prov, model := w.provider, w.model
-	if dp, dm, _ := w.defaultModel(); dp != "" && dm != "" {
-		prov, model = dp, dm
-	}
+	// New sessions start on the effective default for this card/world — the one
+	// authority ModelDefaultFor also serves (Card → World → Workspace): a card's
+	// stored pref on top, then the reserved world rung, then the configured default
+	// (models.set_default; read live so a default set earlier this session takes
+	// effect at once), then the boot-resolved default (launch --model + catalog
+	// fallback). NOT whatever model another session was last switched to. An
+	// explicit opts.Model wins below.
+	prov, model, _ := w.effectiveDefaultModel(opts.Card, opts.World)
 	if opts.Model != "" {
 		// Honor an explicit provider: model ids can exist under several
 		// providers (subscription vs api-key), and the unqualified lookup may
