@@ -76,6 +76,7 @@
   "Discover and inject keyword-triggered context entries (lore) into the prompt when their trigger keys appear. Off is the persistent form of --no-lore.": "Discover and inject keyword-triggered context entries (lore) into the prompt when their trigger keys appear. Off is the persistent form of --no-lore.",
   "Escalate": "Escalate",
   "Escalate stuck loops to a stronger model": "Escalate stuck loops to a stronger model",
+  "Example dialogue has no <START> — each example conversation should begin with one, or multiple examples run together as a single example.": "Example dialogue has no <START> — each example conversation should begin with one, or multiple examples run together as a single example.",
   "Extensions": "Extensions",
   "External agent workers": "External agent workers",
   "Field is large (~%d tokens) and is included in the prompt every turn.": "Field is large (~%d tokens) and is included in the prompt every turn.",

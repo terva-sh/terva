@@ -129,6 +129,15 @@ func Lint(c Card) []Finding {
 			Rule: "no-example-dialogue", Severity: SevInfo, Field: "mes_example",
 			Message: i18n.T("No example dialogue — the model has less grounding for the character's voice."),
 		})
+	} else if !reStartDelim.MatchString(c.MesExample) {
+		// The <START> convention separates example conversations; without it the
+		// whole field is read as ONE example (ExampleBlocks returns a single
+		// block), so any distinct examples run together. Convention holds that
+		// every example — even a lone one — begins with <START>.
+		out = append(out, Finding{
+			Rule: "example-no-start", Severity: SevInfo, Field: "mes_example",
+			Message: i18n.T("Example dialogue has no <START> — each example conversation should begin with one, or multiple examples run together as a single example."),
+		})
 	}
 	for _, f := range []lintField{{"description", c.Description}, {"personality", c.Personality}} {
 		if snip := reDirective.FindString(f.text); snip != "" {

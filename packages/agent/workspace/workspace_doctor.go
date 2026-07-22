@@ -176,6 +176,7 @@ Respond with ONLY a JSON object (no prose, no code fences) of this exact shape:
 Rules:
 - "after" must be the entire new value of the field, not a fragment — the app replaces the field with it verbatim.
 - Only propose fields from the list above. Preserve {{char}} / {{user}} macros; fix broken ones to that exact form.
+- Example dialogue (mes_example) uses the <START> convention: every example conversation begins with a <START> line — even a single one. If examples run together without it, insert <START> before each so they read as separate examples, not one merged block.
 - Address the lint findings first, then propose taste improvements. Use "warn" severity for a lint warning you are fixing, "info" for a lint info, "suggestion" for an improvement the lint did not flag.
 - Make the smallest edit that does the job; keep the author's tone and intent.
 - If the author declined a previous proposal with a reason, honor it: withdraw or revise toward what they want, don't re-propose the same change.
@@ -205,6 +206,7 @@ Rules:
 - The played scene is your warrant: every proposal's rationale must trace to something that actually happened in it. Do not invent facts the scene doesn't show.
 - ENRICH, don't rewrite: extend fields with what play established (voice, relationships, learned facts, example dialogue lifted from their actual lines); keep the author's tone, format conventions, and every {{char}}/{{user}} macro. "after" is still the entire new value of the field.
 - A minimal character may grow personality/example dialogue from nothing; a rich one should change only where the scene genuinely moved them.
+- Any example dialogue (mes_example) you add or extend uses the <START> convention: every example conversation begins with a <START> line, even a single one.
 - If the scene contradicts the card, flag it ("warn") and propose the reconciliation the author most plausibly intends — never silently pick a side.
 - If the author declined a previous proposal with a reason, honor it: withdraw or revise, don't re-propose.
 - If there is not enough played material to justify edits, return an empty "proposals" array and say so in "note".`

@@ -71,6 +71,32 @@ func TestLintStructuralFacts(t *testing.T) {
 	}
 }
 
+func TestLintExampleNoStart(t *testing.T) {
+	// Example dialogue present but no <START> → flagged (distinct examples would
+	// otherwise be read as one merged block).
+	c := Card{Name: "N", Personality: "p", FirstMes: "hi", MesExample: "{{user}}: hi\n{{char}}: hello"}
+	by := findingsByRule(Lint(c))
+	if len(by["example-no-start"]) == 0 {
+		t.Fatal("expected example-no-start when mes_example has no <START>")
+	}
+	if by["example-no-start"][0].Severity != SevInfo {
+		t.Errorf("example-no-start should be info")
+	}
+	// A <START> anywhere (case-insensitive) clears it.
+	for _, ex := range []string{"<START>\n{{user}}: hi", "<start>\nx", "a<START>b"} {
+		c2 := Card{Name: "N", Personality: "p", FirstMes: "hi", MesExample: ex}
+		if len(findingsByRule(Lint(c2))["example-no-start"]) != 0 {
+			t.Errorf("a <START>-bearing example must not trip example-no-start: %q", ex)
+		}
+	}
+	// Empty mes_example is no-example-dialogue, never example-no-start.
+	c3 := Card{Name: "N", Personality: "p", FirstMes: "hi", MesExample: ""}
+	byEmpty := findingsByRule(Lint(c3))
+	if len(byEmpty["example-no-start"]) != 0 || len(byEmpty["no-example-dialogue"]) == 0 {
+		t.Error("empty mes_example must be no-example-dialogue, not example-no-start")
+	}
+}
+
 func TestLintOversizedField(t *testing.T) {
 	big := strings.Repeat("word ", 1000) // ~5000 chars → ~1250 tokens
 	c := Card{Name: "Z", Description: big, Personality: "p", FirstMes: "hi", MesExample: "e"}
