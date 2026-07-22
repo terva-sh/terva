@@ -221,7 +221,7 @@ body {
 
 /* mobile: the rail becomes a full-screen sheet over the chat */
 @media (max-width: 760px) {
-  .pane-rail { position: fixed; inset: 0; z-index: 45; width: auto; border-left: none; padding-top: env(safe-area-inset-top); }
+  .pane-rail { position: fixed; inset: 0; z-index: 45; width: auto; border-left: none; padding-top: var(--safe-top); }
 }
 
 /* top bar */
@@ -230,7 +230,7 @@ body {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  padding-top: max(8px, env(safe-area-inset-top));
+  padding-top: max(8px, var(--safe-top));
   border-bottom: 1px solid var(--line);
   background: var(--bg);
 }
@@ -344,7 +344,7 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .ask-custom input { flex: 1; font: inherit; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 
 /* composer */
-.composer { position: relative; display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
+.composer { position: relative; display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; padding-bottom: max(10px, var(--safe-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
 /* pasted/dropped image attachments, on their own row above the textarea */
 .composer-chips { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
 .composer-chip { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
@@ -360,7 +360,7 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 
 /* session drawer */
 .drawer-scrim { position: fixed; inset: 0; background: #0006; z-index: 20; display: flex; }
-.drawer { width: min(320px, 85vw); height: 100%; background: var(--bg); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top); }
+.drawer { width: min(320px, 85vw); height: 100%; background: var(--bg); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding-top: var(--safe-top); }
 .drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 12px; border-bottom: 1px solid var(--line); }
 .session-list { overflow-y: auto; flex: 1; }
 .session { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
@@ -1034,7 +1034,7 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 /* 760px = the canonical phone cutoff (convention #4; was a drifted 720px) —
    the theater is a fullscreen overlay, so the viewport IS its container. */
 @media (max-width: 760px) {
-  .magi-overlay { padding: calc(10px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left)); overflow-x: hidden; }
+  .magi-overlay { padding: calc(10px + var(--safe-top)) calc(10px + var(--safe-right)) calc(10px + var(--safe-bottom)) calc(10px + var(--safe-left)); overflow-x: hidden; }
   .magi-stage { min-width: 0; padding: 12px; gap: 10px; }
   .magi-title { font-size: clamp(20px, 7vw, 30px); }
   .magi-info { display: none; }

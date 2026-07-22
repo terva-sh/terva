@@ -55,6 +55,37 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 /* No grey tap-flash on touch — both apps want the same restrained feel. */
 * { -webkit-tap-highlight-color: transparent; }
 
+/* Press feedback for EVERY button. Suppressing the tap-flash above left a gap:
+   on touch, a tap showed nothing until the action landed, and the whole control
+   panel had no :active styling at all — a button gave no sign it registered the
+   press. A subtle scale-down (Stage's own convention) restores that, with no
+   colour token so it works in both apps and both themes, and no layout transform
+   on any button to clobber (verified). Lowest specificity — `button:active` —
+   so a component's own :active still wins; a disabled button never activates.
+   Under reduced-motion, dim instead of move. */
+button:active { transform: scale(0.97); }
+@media (prefers-reduced-motion: reduce) {
+  button:active { transform: none; filter: brightness(0.9); }
+}
+
+/* --- safe-area insets: consume var(--safe-*), never env() directly ---
+   iOS Safari can leave env(safe-area-inset-*) reading 0 after a fixed, full-
+   viewport overlay (a drawer or a sheet) is opened and dismissed — which drops a
+   safe-area-padded top bar UNDER the notch, into the status-bar touch-exclusion
+   zone where taps are swallowed. So the insets are FROZEN into these variables at
+   load (and on a genuine rotation) by ui/safearea.ts's trackSafeArea(), which
+   each app's entry calls; components read var(--safe-top) etc. The env() seeds
+   below are both the correct pre-freeze value and the no-JS / no-notch fallback
+   (0). Consuming env(safe-area-inset-*) directly re-opens the bug on any surface
+   near an overlay — so ui-conformance.test.ts fails on a raw one in an app sheet.
+   This is the shared home the notch fix (Stage-only, then) should always have had. */
+:root {
+  --safe-top: env(safe-area-inset-top);
+  --safe-right: env(safe-area-inset-right);
+  --safe-bottom: env(safe-area-inset-bottom);
+  --safe-left: env(safe-area-inset-left);
+}
+
 /* Convention #1 (was panel-only, styles.css): a form control shrinks instead of
    overflowing. A <select> otherwise floors at its widest option (WebKit holds
    that floor against a max-width cap unless min-width is 0) and one long

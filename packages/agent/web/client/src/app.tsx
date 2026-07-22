@@ -404,6 +404,18 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   useEffect(() => {
     localStorage.setItem('terva_session_filter', JSON.stringify(sessionFilter))
   }, [sessionFilter])
+  // While the sessions drawer is open, lock background scroll. On iOS a fixed
+  // overlay can otherwise leave the document scrolled when it closes — the other
+  // way the top bar ends up under the notch (the --safe-* freeze handles the
+  // inset itself). A no-op where nothing scrolls behind the overlay.
+  useEffect(() => {
+    if (!drawer) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prev
+    }
+  }, [drawer])
 
   // Fetch the tasks surface for the board's swarm lane. Workspace-scoped (any
   // sess returns the global list), so it rides the focused session's address.
