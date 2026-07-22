@@ -930,6 +930,11 @@ export interface Group {
   name: string
   color?: string
   members: string[]
+  // system marks a client-SYNTHESIZED group derived from session metadata (the
+  // `stage` bucket, a per-card/World origin) rather than a stored, user-curated
+  // one. Never sent to the daemon; it only gates the UI — a system chip filters
+  // but cannot be renamed, recoloured, deleted, or hand-filed. See platform/groups.ts.
+  system?: boolean
 }
 
 export interface CardGroupsResult {

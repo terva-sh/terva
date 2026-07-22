@@ -999,48 +999,84 @@ button:disabled {
 .stage-cardgroups {
   margin-bottom: 0.25rem;
 }
-.stage-cardgroups__chips {
+/* The group filter row. Each chip is a pill whose body toggles the filter
+   (data-state: off → include → exclude → off) and whose trailing "⋯" opens a
+   user group to edit; a system chip (a derived Stage origin) has no "⋯". One
+   control that both filters and manages — shared by the grid and "Your chats". */
+.stage-groupchips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
 }
-.stage-cardgroup {
+.stage-groupchip {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--stage-line);
+  border-radius: 999px;
+  background: var(--stage-surface-2);
+  overflow: hidden;
+  transition: border-color 0.12s ease;
+}
+.stage-groupchip:hover {
+  border-color: var(--stage-accent);
+}
+.stage-groupchip__filter {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
   padding: 0.3rem 0.7rem;
-  border: 1px solid var(--stage-line);
-  border-radius: 999px;
-  background: var(--stage-surface-2);
+  border: none;
+  background: none;
   color: var(--stage-fg);
   font: inherit;
   font-size: 0.85rem;
   cursor: pointer;
-  transition: border-color 0.12s ease;
 }
-.stage-cardgroup:hover {
-  border-color: var(--stage-accent);
-}
-.stage-cardgroup__dot {
+.stage-groupchip__dot {
   flex: 0 0 auto;
   width: 0.6rem;
   height: 0.6rem;
   border-radius: 50%;
 }
-.stage-cardgroup__count {
+.stage-groupchip__count {
   color: var(--stage-muted);
   font-size: 0.78rem;
 }
-/* The grid filter select, seated in the Characters section head. */
-.stage-groupfilter {
-  margin-left: auto;
-  padding: 0.25rem 0.5rem;
-  border: 1px solid var(--stage-line);
-  border-radius: 6px;
-  background: var(--stage-surface-2);
-  color: var(--stage-fg);
+/* A system (derived origin) chip reads italic so it is visibly not one of your
+   own groups. */
+.stage-groupchip[data-system] .stage-groupchip__name {
+  font-style: italic;
+}
+/* Show-only fills with the accent; Hide strikes through and mutes, so an
+   excluded group reads as "subtracted" at a glance. */
+.stage-groupchip[data-state='include'] {
+  border-color: var(--stage-accent);
+  background: color-mix(in srgb, var(--stage-accent) 22%, var(--stage-surface-2));
+}
+.stage-groupchip[data-state='include'] .stage-groupchip__filter {
+  font-weight: 600;
+}
+.stage-groupchip[data-state='exclude'] {
+  border-color: color-mix(in srgb, var(--stage-danger) 45%, var(--stage-line));
+  background: color-mix(in srgb, var(--stage-danger) 12%, var(--stage-surface-2));
+}
+.stage-groupchip[data-state='exclude'] .stage-groupchip__name {
+  text-decoration: line-through;
+  color: var(--stage-muted);
+}
+/* The "⋯" edit affordance — a hairline-divided second segment of the pill. */
+.stage-groupchip__manage {
+  border: none;
+  border-left: 1px solid var(--stage-line);
+  background: none;
+  color: var(--stage-muted);
+  padding: 0 0.5rem;
   font: inherit;
-  font-size: 0.82rem;
+  cursor: pointer;
+}
+.stage-groupchip__manage:hover {
+  color: var(--stage-fg);
+  background: color-mix(in srgb, var(--stage-fg) 8%, transparent);
 }
 
 /* The per-card group toggles inside the card detail sheet. */

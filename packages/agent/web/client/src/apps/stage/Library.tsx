@@ -14,6 +14,7 @@ import { t, tn, tr } from '../../i18n'
 import { panelHref } from '../../ui/navlinks'
 import { downloadExport } from '../../ui/browser'
 import type { ClientLike } from '../../platform/ctrlproto/client'
+import { applyGroupFilter, cycleGroup, emptyFilter, groupState, hasFilter, originGroups, type GroupFilter } from '../../platform/groups'
 import type {
   Status,
   CardSummary,
@@ -32,6 +33,52 @@ import type {
 } from '../../platform/ctrlproto/types'
 
 type SessionsResult = { sessions: SessionInfo[] }
+
+// A row of group chips that doubles as the filter. Tapping a chip cycles its
+// state (off → show-only → hide → off); the "⋯" opens a user group for editing.
+// System chips (a derived Stage origin) filter but carry no "⋯" — there is
+// nothing to edit. Shared by the card grid and the "Your chats" list.
+function GroupFilterChips(props: {
+  groups: Group[]
+  filter: GroupFilter
+  onCycle: (id: string) => void
+  onManage?: (g: Group) => void
+}) {
+  const { groups, filter, onCycle, onManage } = props
+  if (groups.length === 0) return null
+  return (
+    <div class="stage-groupchips" role="group" aria-label={t('Filter by group')}>
+      {groups.map((g) => {
+        const state = groupState(filter, g.id)
+        const title =
+          state === 'off'
+            ? t('Show only “%s”', g.name)
+            : state === 'include'
+              ? t('Hide “%s”', g.name)
+              : t('Clear the filter on “%s”', g.name)
+        return (
+          <span key={g.id} class="stage-groupchip" data-state={state} data-system={g.system ? '' : undefined}>
+            <button class="stage-groupchip__filter" onClick={() => onCycle(g.id)} aria-pressed={state !== 'off'} title={title}>
+              {g.color && <span class="stage-groupchip__dot" style={{ background: g.color }} aria-hidden="true" />}
+              <span class="stage-groupchip__name">{g.name}</span>
+              <span class="stage-groupchip__count">·{g.members.length}</span>
+            </button>
+            {onManage && !g.system && (
+              <button
+                class="stage-groupchip__manage"
+                onClick={() => onManage(g)}
+                title={t('Edit “%s”', g.name)}
+                aria-label={t('Edit “%s”', g.name)}
+              >
+                ⋯
+              </button>
+            )}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
 
 // Base64-encode a file's bytes for cards.import (Go decodes []byte from base64).
 // Built in chunks: a character card is a PNG whose pixels can run to tens of MB,
@@ -134,14 +181,15 @@ export function Library(props: {
   // stays absent.
   const [cardGroups, setCardGroups] = useState<Group[]>([])
   const [cardGroupsSupported, setCardGroupsSupported] = useState(false)
-  // The active grid filter (a group id, or '' for the whole library).
-  const [groupFilter, setGroupFilter] = useState('')
+  // The grid filter: include/exclude by group (empty = the whole library). Tap a
+  // chip to cycle show-only → hide → off; see platform/groups.
+  const [cardFilter, setCardFilter] = useState<GroupFilter>(emptyFilter)
   // A group opened for its contents (members + rename/recolour/delete).
   const [groupSheet, setGroupSheet] = useState<Group | null>(null)
   // Session groups — the same buckets over chats/plays. Same absence rule.
   const [sessionGroups, setSessionGroups] = useState<Group[]>([])
   const [sessionGroupsSupported, setSessionGroupsSupported] = useState(false)
-  const [chatGroupFilter, setChatGroupFilter] = useState('')
+  const [chatFilter, setChatFilter] = useState<GroupFilter>(emptyFilter)
   const [sessionGroupSheet, setSessionGroupSheet] = useState<Group | null>(null)
   const [busy, setBusy] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -381,17 +429,21 @@ export function Library(props: {
   // Every immersive session, most-recent first (the daemon lists by mtime), for
   // the "Your chats" resume list (#3). Coding sessions are excluded.
   const chats = sessions.filter((s) => s.experience === 'chat' || s.experience === 'play')
-  // Session-group filter narrows the chat list the same way the card filter
-  // narrows the grid; a filter on a since-deleted group resolves to all.
-  const activeChatGroup = sessionGroups.find((g) => g.id === chatGroupFilter) ?? null
-  const filteredChats = activeChatGroup ? chats.filter((s) => activeChatGroup.members.includes(s.id)) : chats
+  // Origin buckets derived from the chats themselves (Worlds W5 / seeding card):
+  // a system group per World or card that actually has a chat, so you can narrow
+  // "Your chats" to one story without ever filing anything. Prepended to the
+  // user's own session groups; both filter through the same include/exclude model.
+  const originChatGroups = originGroups(chats, (kind, id) =>
+    kind === 'world' ? worlds.find((w) => w.id === id)?.name : cardById.get(id)?.name,
+  )
+  const chatGroups = [...originChatGroups, ...sessionGroups]
+  const filteredChats = applyGroupFilter(chats, chatGroups, chatFilter, (s) => s.id)
   const CHATS_SHOWN = 6
   const visibleChats = showAllChats ? filteredChats : filteredChats.slice(0, CHATS_SHOWN)
 
-  // Card-group filtering: with a group picked, the grid shows only its members.
-  // A filter on a group since deleted resolves to null → the whole library.
-  const activeGroup = cardGroups.find((g) => g.id === groupFilter) ?? null
-  const visibleCards = activeGroup ? cards.filter((c) => activeGroup.members.includes(c.id)) : cards
+  // Card-group filtering shares the include/exclude model; cards have no derived
+  // system groups (no experience), so the chips are just the user's card groups.
+  const visibleCards = applyGroupFilter(cards, cardGroups, cardFilter, (c) => c.id)
 
   // Create a group (cardgroups.save with no id). Named up front, filled later —
   // the whole point of an empty group is a bucket you pour cards into.
@@ -422,7 +474,7 @@ export function Library(props: {
     if (!window.confirm(t('Delete the group “%s”? The cards in it are not deleted — only the grouping is.', g.name))) return
     try {
       await client.send('cardgroups.delete', { id: g.id })
-      if (groupFilter === g.id) setGroupFilter('')
+      setCardFilter((f) => ({ include: f.include.filter((x) => x !== g.id), exclude: f.exclude.filter((x) => x !== g.id) }))
       setGroupSheet(null)
       load()
     } catch (e) {
@@ -469,7 +521,7 @@ export function Library(props: {
     if (!window.confirm(t('Delete the group “%s”? The chats in it are not deleted — only the grouping is.', g.name))) return
     try {
       await client.send('sessiongroups.delete', { id: g.id })
-      if (chatGroupFilter === g.id) setChatGroupFilter('')
+      setChatFilter((f) => ({ include: f.include.filter((x) => x !== g.id), exclude: f.exclude.filter((x) => x !== g.id) }))
       setSessionGroupSheet(null)
       load()
     } catch (e) {
@@ -619,8 +671,8 @@ export function Library(props: {
           </span>
         </button>
         {/* Card groups (a browse-by bucket, distinct from a card's tags): tap a
-            chip to open a group's contents; use the Characters filter to narrow
-            the grid to one. Absent on an older daemon that lacks the verbs. */}
+            chip to show only that group, tap again to hide it, again to clear;
+            "⋯" opens a group to edit. Absent on an older daemon lacking the verbs. */}
         {cardGroupsSupported && (cardGroups.length > 0 || cards.length > 0) && (
           <div class="stage-cardgroups">
             <div class="stage-section-head">
@@ -634,35 +686,17 @@ export function Library(props: {
                 {t('Group cards to organize your library — freshly imported, in progress, ready to play, or however suits you.')}
               </p>
             ) : (
-              <div class="stage-cardgroups__chips">
-                {cardGroups.map((g) => (
-                  <button key={g.id} class="stage-cardgroup" onClick={() => setGroupSheet(g)}>
-                    {g.color && <span class="stage-cardgroup__dot" style={{ background: g.color }} aria-hidden="true" />}
-                    <span class="stage-cardgroup__name">{g.name}</span>
-                    <span class="stage-cardgroup__count">·{g.members.length}</span>
-                  </button>
-                ))}
-              </div>
+              <GroupFilterChips
+                groups={cardGroups}
+                filter={cardFilter}
+                onCycle={(id) => setCardFilter((f) => cycleGroup(f, id))}
+                onManage={(g) => setGroupSheet(g)}
+              />
             )}
           </div>
         )}
         <div class="stage-section-head">
           <h2>{t('Characters')}</h2>
-          {cardGroups.length > 0 && (
-            <select
-              class="stage-groupfilter"
-              value={groupFilter}
-              onChange={(e) => setGroupFilter((e.target as HTMLSelectElement).value)}
-              title={t('Show only cards in a group')}
-            >
-              <option value="">{t('All groups')}</option>
-              {cardGroups.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name} ({g.members.length})
-                </option>
-              ))}
-            </select>
-          )}
           <label class="stage-import">
             {t('+ Import')}
             <input
@@ -704,8 +738,8 @@ export function Library(props: {
           <p key={n} class="stage-note">{n}</p>
         ))}
         {cards.length === 0 && ready && <p class="stage-empty">{t('No characters yet — drop a card PNG here, paste a URL, or use Import.')}</p>}
-        {activeGroup && visibleCards.length === 0 && (
-          <p class="stage-empty">{t('No cards in “%s” yet — open a card’s ⋯ details to add it.', activeGroup.name)}</p>
+        {cards.length > 0 && hasFilter(cardFilter) && visibleCards.length === 0 && (
+          <p class="stage-empty">{t('No characters match the group filter — tap a highlighted chip to clear it.')}</p>
         )}
 
         <ul class="stage-grid">
@@ -781,49 +815,36 @@ export function Library(props: {
 
         {chats.length > 0 && (
           <>
-            {sessionGroupsSupported && (
+            {/* Chat groups: the derived origin chips (a World / card the chats came
+                from) come first, then your own session groups. Tap to show-only →
+                hide → clear; "⋯" edits a user group (origin chips have none). */}
+            {(sessionGroupsSupported || originChatGroups.length > 0) && (
               <div class="stage-cardgroups">
                 <div class="stage-section-head">
                   <h2>{t('Chat groups')}</h2>
-                  <button class="stage-import" onClick={() => void createSessionGroup()}>
-                    {t('+ New')}
-                  </button>
+                  {sessionGroupsSupported && (
+                    <button class="stage-import" onClick={() => void createSessionGroup()}>
+                      {t('+ New')}
+                    </button>
+                  )}
                 </div>
-                {sessionGroups.length === 0 ? (
+                {chatGroups.length === 0 ? (
                   <p class="stage-empty">{t('Group your chats — playtests, ongoing stories, whatever helps you find them again.')}</p>
                 ) : (
-                  <div class="stage-cardgroups__chips">
-                    {sessionGroups.map((g) => (
-                      <button key={g.id} class="stage-cardgroup" onClick={() => setSessionGroupSheet(g)}>
-                        {g.color && <span class="stage-cardgroup__dot" style={{ background: g.color }} aria-hidden="true" />}
-                        <span class="stage-cardgroup__name">{g.name}</span>
-                        <span class="stage-cardgroup__count">·{g.members.length}</span>
-                      </button>
-                    ))}
-                  </div>
+                  <GroupFilterChips
+                    groups={chatGroups}
+                    filter={chatFilter}
+                    onCycle={(id) => setChatFilter((f) => cycleGroup(f, id))}
+                    onManage={sessionGroupsSupported ? (g) => setSessionGroupSheet(g) : undefined}
+                  />
                 )}
               </div>
             )}
             <div class="stage-section-head">
               <h2>{t('Your chats')}</h2>
-              {sessionGroups.length > 0 && (
-                <select
-                  class="stage-groupfilter"
-                  value={chatGroupFilter}
-                  onChange={(e) => setChatGroupFilter((e.target as HTMLSelectElement).value)}
-                  title={t('Show only chats in a group')}
-                >
-                  <option value="">{t('All groups')}</option>
-                  {sessionGroups.map((g) => (
-                    <option key={g.id} value={g.id}>
-                      {g.name} ({g.members.length})
-                    </option>
-                  ))}
-                </select>
-              )}
             </div>
-            {activeChatGroup && filteredChats.length === 0 && (
-              <p class="stage-empty">{t('No chats in “%s” yet — open the group to add some.', activeChatGroup.name)}</p>
+            {hasFilter(chatFilter) && filteredChats.length === 0 && (
+              <p class="stage-empty">{t('No chats match the group filter — tap a highlighted chip to clear it.')}</p>
             )}
             <ul class="stage-yourchats">
               {visibleChats.map((s) => {
@@ -942,7 +963,7 @@ export function Library(props: {
           onSave={(name, color) => void saveCardGroup(groupSheet.id, name, color)}
           onDelete={() => void deleteCardGroup(groupSheet)}
           onFilter={() => {
-            setGroupFilter(groupSheet.id)
+            setCardFilter({ include: [groupSheet.id], exclude: [] })
             setGroupSheet(null)
           }}
           onClose={() => setGroupSheet(null)}
@@ -960,7 +981,7 @@ export function Library(props: {
           onSave={(name, color) => void saveSessionGroup(sessionGroupSheet.id, name, color)}
           onDelete={() => void deleteSessionGroup(sessionGroupSheet)}
           onFilter={() => {
-            setChatGroupFilter(sessionGroupSheet.id)
+            setChatFilter({ include: [sessionGroupSheet.id], exclude: [] })
             setSessionGroupSheet(null)
           }}
           onClose={() => setSessionGroupSheet(null)}
