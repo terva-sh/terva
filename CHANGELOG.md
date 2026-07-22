@@ -11,6 +11,18 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.5](https://github.com/terva-sh/terva/releases/tag/v0.126.5) — 2026-07-22
+
+### Features
+
+- stage: filter the library by group — show-only, hide, and derived origins
+- web: filter the session board by group, hiding Stage play by default
+
+### Fixes
+
+- stage: the "+ New" buttons follow the page style, not the OS default
+- stage: the card and persona detail sheets get room on a wide screen
+
 ## [v0.126.4](https://github.com/terva-sh/terva/releases/tag/v0.126.4) — 2026-07-21
 
 ### Features
