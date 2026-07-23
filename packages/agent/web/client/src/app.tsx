@@ -60,8 +60,10 @@ import { ModelParamsForm } from './features/models/ModelParamsForm'
 import { ModelPicker } from './features/models/ModelPicker'
 import { SessionsBoard } from './features/board/SessionsBoard'
 import { SwarmLane } from './features/board/SwarmLane'
+import { PanelLanding } from './features/landing/PanelLanding'
 import { applyBoardBusy, forgetBoardBusy, type BoardBusy } from './platform/board/store'
 import { applyBoardApproval, forgetBoardApprovals, waitingByAgent, type BoardApprovals } from './platform/board/approvals'
+import { pickBootTarget } from './platform/bootsession'
 import { applyGroupFilter, cycleGroup, stageSystemGroup, SYS_STAGE, type GroupFilter } from './platform/groups'
 import { AuthStepForm } from './features/providers/AuthStepForm'
 import { SessionInfo as SessionInfoView } from './features/sessions/SessionInfo'
@@ -85,6 +87,30 @@ import { humanBytes, humanCount } from './ui/formatting'
 import { stageHref, takeNavParams } from './ui/navlinks'
 
 const TOOL_VIEWS: ToolView[] = ['full', 'grouped', 'minimal', 'hidden']
+
+// Per-TAB session memory. sessionStorage (NOT localStorage) is deliberate: it is
+// scoped to the one tab, so a tab that has opened a session returns to it on
+// reload/reconnect, while two tabs never converge on one session. This is the
+// fix for the concurrent-client bug where a fresh panel with no `?session=`
+// deep link silently adopted the server's global `current` (latest-mtime)
+// session — so two clients drove the same session and a model switch or login
+// in one moved the other. A fresh tab now lands on the session picker instead.
+const TAB_SESSION_KEY = 'terva_tab_session'
+function rememberedTabSession(): string {
+  try {
+    return sessionStorage.getItem(TAB_SESSION_KEY) || ''
+  } catch {
+    return '' // private-mode / storage-disabled: no memory, land on the picker
+  }
+}
+function rememberTabSession(id: string) {
+  try {
+    if (id) sessionStorage.setItem(TAB_SESSION_KEY, id)
+    else sessionStorage.removeItem(TAB_SESSION_KEY)
+  } catch {
+    /* storage disabled — memory is best-effort */
+  }
+}
 
 // Deep-link params from Stage (`?session=`, `?pane=`), read once at module load
 // because takeNavParams also strips them from the address bar. Fields are
@@ -508,16 +534,47 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     pacerRef.current?.reset()
     curRef.current = id
     setCurSess(id)
+    rememberTabSession(id)
     c.fire('subscribe', null, id)
     setDrawer(false)
   }, [])
 
+  // goToLanding leaves the focused session and returns to the session picker
+  // (curSess === ''), the boot state for a tab with no remembered or deep-linked
+  // session. Mirrors selectSession's teardown but subscribes to nothing and
+  // forgets the tab's session, so a reload stays on the landing rather than
+  // re-adopting a session.
+  const goToLanding = useCallback(() => {
+    const c = clientRef.current
+    if (curRef.current && c) c.fire('unsubscribe', null, curRef.current)
+    setItems([])
+    winRef.current = { epoch: 0, base: 0, total: 0 }
+    setWin(winRef.current)
+    setPermission(null)
+    setAsk(null)
+    setBusy(false)
+    setCost(0)
+    setQueued([])
+    setCurInfo(null)
+    setInfoOpen(false)
+    setSurfaces([])
+    setSurfaceData(null)
+    pacerRef.current?.reset()
+    curRef.current = ''
+    setCurSess('')
+    rememberTabSession('')
+    setDrawer(false)
+  }, [])
+
   const newSession = useCallback(
-    async (c?: ClientLike) => {
-      const cl = c ?? clientRef.current
+    async (opts?: { persona?: string; model?: string; provider?: string }) => {
+      const cl = clientRef.current
       if (!cl) return
       try {
-        const res = await cl.send<{ session: SessionInfo }>('sessions.create', { title: '' }, '')
+        // CreateOpts already carries persona/model/provider — the landing's
+        // "new session" flow threads a chosen persona (and optional model) here
+        // so the harness opens in-character, which is how it is meant to be used.
+        const res = await cl.send<{ session: SessionInfo }>('sessions.create', { title: '', ...(opts ?? {}) }, '')
         await refreshSessions(cl)
         selectSession(res.session.id)
       } catch (e) {
@@ -603,8 +660,13 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         // the session-list entry live, without re-fetching.
         const info = ev.info
         if (!info) return
-        setCurInfo((cur) => (cur ? { ...cur, ...info } : info))
+        // The session-list row always updates. But the header (curInfo) belongs
+        // to the FRAMED session only: a session_updated rides the session's own
+        // hub so it should already be for curSess, yet a mis-addressed event must
+        // never overwrite the model/title of the session this tab is viewing.
         setSessions((ss) => ss.map((s) => (s.id === info.id ? { ...s, ...info } : s)))
+        if (info.id && info.id !== curRef.current) return
+        setCurInfo((cur) => (cur ? { ...cur, ...info } : info))
         return
       }
       case 'queue_updated':
@@ -808,18 +870,26 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         /* control group optional */
       }
       const list = await refreshSessions(c)
-      if (!list.length) {
-        await newSession(c)
-        return
-      }
-      // A `?session=` deep link (from Stage) outranks the server's `current`,
-      // but only while the session still exists and only on the FIRST connect —
-      // bootNav is consumed once, so a later reconnect falls back to the normal
-      // pick rather than dragging you back to where you arrived.
+      // A `?session=` deep link (from Stage) outranks everything, but only while
+      // the session still exists and only on the FIRST connect — bootNav is
+      // consumed once, so a later reconnect falls back to the normal pick rather
+      // than dragging you back to where you arrived.
       const linked = bootNav.session && list.some((s) => s.id === bootNav.session) ? bootNav.session : ''
       if (linked) bootNav.session = ''
-      const target = linked || (list.find((s) => s.current) ?? list[0]).id
-      if (target === curRef.current) {
+      // Precedence: deep link → this TAB's remembered session → the landing.
+      // Crucially NOT the server's global `current`, which every client shares
+      // and which made two panels converge on one session (a model switch or
+      // login in one moved the other). A fresh tab with no deep link and no
+      // memory lands on the picker and adopts NOTHING. See pickBootTarget.
+      const target = pickBootTarget({
+        linked,
+        remembered: rememberedTabSession(),
+        sessionIds: list.map((s) => s.id),
+      })
+      if (!target) {
+        // No session to resume: land on the session-focused picker.
+        goToLanding()
+      } else if (target === curRef.current) {
         // Reconnect to the same session: selectSession would short-circuit on the
         // unchanged id and never re-subscribe, leaving the panel connected but
         // frozen (no snapshot, no live events). Fire the subscribe explicitly —
@@ -844,7 +914,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     }
     c.connect()
     return () => c.close()
-  }, [newSession, refreshSessions, selectSession, refreshI18n])
+  }, [newSession, refreshSessions, selectSession, goToLanding, refreshI18n])
 
   // While the board is open, re-list on a slow cadence: a tile's busy/live moves
   // on a session's turn boundaries, which don't emit sessions_changed, so the
@@ -1309,10 +1379,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     {
       name: 'new',
       desc: t('Start a new session'),
-      run: () => {
-        const c = clientRef.current
-        if (c) void newSession(c)
-      },
+      run: () => void newSession(),
     },
     {
       name: 'help',
@@ -1383,15 +1450,13 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       const c = clientRef.current
       if (!c) return
       await c.send('sessions.delete', null, s.id).catch((e) => setToast(String(e)))
-      const list = await refreshSessions(c)
-      if (s.id === curRef.current) {
-        curRef.current = ''
-        setCurSess('')
-        if (list.length) selectSession(list[0].id)
-        else newSession(c)
-      }
+      await refreshSessions(c)
+      // Deleting the session you're in returns you to the landing picker rather
+      // than auto-adopting another session (consistent with boot: a tab only
+      // holds a session it explicitly opened).
+      if (s.id === curRef.current) goToLanding()
     },
-    [newSession, refreshSessions, selectSession],
+    [goToLanding, refreshSessions],
   )
 
   const current = sessions.find((s) => s.id === curSess)
@@ -1422,9 +1487,16 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           <span class="persona">{curInfo?.persona || 'terva'}</span>
           <span class="sess-title">{current?.title || curInfo?.title || t('new chat')}</span>
         </div>
-        <button class="icon" title={t('Session info')} onClick={() => setInfoOpen((v) => !v)}>
-          ⓘ
-        </button>
+        {/* Session-specific controls (info, board/focus, model) act on the
+            framed session, so they are hidden on the session-less landing —
+            in particular the model button would otherwise fire models.switch
+            with an empty session id, which the server resolves to the global
+            latest session (the concurrent-client bug this landing fixes). */}
+        {curSess && (
+          <button class="icon" title={t('Session info')} onClick={() => setInfoOpen((v) => !v)}>
+            ⓘ
+          </button>
+        )}
         <button
           class="icon"
           title={t('Tool calls: %s — click to cycle (box / grouped / minimal / hidden)', toolView)}
@@ -1439,22 +1511,26 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         >
           ⊞
         </button>
-        <button
-          class={`icon${viewMode === 'board' ? ' on' : ''}`}
-          title={t('Sessions board / focus view')}
-          onClick={() =>
-            setViewMode((m) => {
-              const next = m === 'board' ? 'focus' : 'board'
-              localStorage.setItem('terva_viewmode', next)
-              return next
-            })
-          }
-        >
-          ▦
-        </button>
-        <button class="model-btn" title={t('Switch model')} onClick={() => setPickerOpen(true)}>
-          {curModel ? (curModel.favorite ? '★ ' : '') + curModel.id : t('model')}
-        </button>
+        {curSess && (
+          <button
+            class={`icon${viewMode === 'board' ? ' on' : ''}`}
+            title={t('Sessions board / focus view')}
+            onClick={() =>
+              setViewMode((m) => {
+                const next = m === 'board' ? 'focus' : 'board'
+                localStorage.setItem('terva_viewmode', next)
+                return next
+              })
+            }
+          >
+            ▦
+          </button>
+        )}
+        {curSess && (
+          <button class="model-btn" title={t('Switch model')} onClick={() => setPickerOpen(true)}>
+            {curModel ? (curModel.favorite ? '★ ' : '') + curModel.id : t('model')}
+          </button>
+        )}
         {ctxPct >= 0 && ctxTok > 0 && (
           <button
             class={`ctx-chip${ctxPct >= 85 ? ' hot' : ctxPct >= 70 ? ' warn' : ''}`}
@@ -1551,7 +1627,33 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
 
       <div class="workspace">
         <div class="main">
-          {viewMode === 'board' ? (
+          {!curSess ? (
+            // Session-less boot state: the session-focused landing. A fresh tab
+            // lands here rather than adopting the global-current session.
+            <PanelLanding
+              client={clientRef.current}
+              status={status}
+              stageEnabled={stageEnabled}
+              models={models}
+              onNewSession={(opts) => void newSession(opts)}
+              sessions={shownSessions}
+              current={curSess}
+              liveBusy={liveBusy}
+              onSelect={(id) => {
+                selectSession(id)
+                setViewMode('focus')
+                localStorage.setItem('terva_viewmode', 'focus')
+              }}
+              onRename={rename}
+              onDelete={del}
+              groups={sessionGroups}
+              filterGroups={filterGroups}
+              filter={sessionFilter}
+              onCycleGroup={cycleSessionGroup}
+              onToggleGroup={toggleSessionGroup}
+              onCreateGroup={createSessionGroup}
+            />
+          ) : viewMode === 'board' ? (
             <div class="board-view">
               <SessionsBoard
                 sessions={shownSessions}
