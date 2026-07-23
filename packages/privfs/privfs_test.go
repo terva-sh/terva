@@ -115,7 +115,18 @@ func TestRepairOnceIsGatedByMarker(t *testing.T) {
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte("{}"), 0o644); err != nil {
+	// Force a known permissive starting state independent of the test umask:
+	// under a restrictive umask (a hardened service runs UMask=0077) both the
+	// dir and the file would already be private, leaving RepairOnce nothing to
+	// tighten and the assertion below vacuously false.
+	if err := os.Chmod(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(home, "config.json")
+	if err := os.WriteFile(config, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(config, 0o644); err != nil {
 		t.Fatal(err)
 	}
 

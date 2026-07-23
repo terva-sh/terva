@@ -116,6 +116,15 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 	}
 
 	total := scan.total
+	// An empty transcript on a swarm child is a timing state, not a filter
+	// miss, and reporting it as one sends the caller off re-filtering — which
+	// cannot fix it. Since the child now streams its transcript as it works
+	// (swarm_agent.go wires WireHeadlessSessionPersist), this window is short:
+	// it means the child has not produced its first message yet, or died
+	// before it could. Say which, rather than blaming the filters.
+	if swarmChild && scan.seen == 0 {
+		return toolErr(emptyChildTranscriptMsg(t.TervaHome, sessID)), nil
+	}
 	if a.Expand != nil {
 		if total == 0 {
 			return toolErr("session_inspect: no events match these filters, nothing to expand"), nil
@@ -149,6 +158,31 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 // a pathological multi-hundred-MiB file, far above any real session. A var so
 // tests can lower it without writing a giant fixture.
 var siScanCeiling int64 = 64 << 20
+
+// emptyChildTranscriptMsg explains a swarm child whose transcript has nothing
+// in it yet. The child's event log is the discriminator: it streams from the
+// first thing the child does, so a non-empty log with an empty transcript means
+// the child is alive and has simply not finished a message, while an empty log
+// means it never got that far.
+//
+// The recap promise is deliberately conditioned on swarm_spawn rather than
+// stated flat: trackSwarmAgent is wired through SwarmSpawnTool.OnSpawned only
+// when auto-swarm is on, so a child started from the TUI's /swarm gets no
+// [auto-swarm update]. Telling that caller to sit and wait for a push that
+// never arrives would trade one dead end for a worse one.
+func emptyChildTranscriptMsg(tervaHome, id string) string {
+	working := false
+	if tervaHome != "" {
+		if fi, err := os.Stat(swarm.AgentEventLogPath(swarm.DefaultRoot(tervaHome), id)); err == nil && fi.Size() > 0 {
+			working = true
+		}
+	}
+	state := "has not started writing a transcript — it may have failed before its first turn"
+	if working {
+		state = "is running but has not completed its first message yet"
+	}
+	return fmt.Sprintf("session_inspect: sub-agent %q %s. A sub-agent streams its transcript as it works, so this is a timing state, not a filter miss — no combination of event_kinds, limit, or cursor changes it, and inspecting again shortly will show whatever it has produced by then. If you spawned it with swarm_spawn you do not need to watch it at all: its findings are pushed to you as an [auto-swarm update] when the task ends.", id, state)
+}
 
 // streamReplay is core.StreamReplayMessages behind a package var so a test can
 // assert the swarm-child project-authorization gate runs BEFORE any transcript
@@ -191,6 +225,11 @@ type sessScan struct {
 	callName  map[string]string
 	callOrder []string
 
+	// seen counts every flattened event BEFORE the filters, so an empty
+	// result can be attributed: seen>0 with total==0 means the filters
+	// excluded everything, while seen==0 means the transcript itself carried
+	// nothing. Only the latter says anything about the session's state.
+	seen   int
 	total  int
 	limit  int
 	cursor *int
@@ -294,6 +333,7 @@ func (s *sessScan) addMessage(row int, m provider.Message) {
 // it: the expand target keeps its full text; a listed event keeps only its
 // snippet source. Everything else contributes to the count and is dropped.
 func (s *sessScan) add(e sessEvent) {
+	s.seen++
 	if s.kinds != nil && !s.kinds[e.Kind] {
 		return
 	}

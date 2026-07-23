@@ -428,3 +428,78 @@ func TestSessionInspectAuthorizesSwarmChildBeforeScan(t *testing.T) {
 		t.Error("transcript was scanned before the cross-project authorization gate ran")
 	}
 }
+
+// TestSessionInspectDiagnosesRunningChild pins the fix for the loop this
+// message used to cause. A sub-agent now streams its transcript as it works,
+// so an empty one means only that it has not completed its first message —
+// a narrow timing window rather than the whole task. Reporting that as "no
+// events match these filters" reads as a filter problem the caller can fix by
+// re-filtering, which it cannot; the result must name the real state instead.
+func TestSessionInspectDiagnosesRunningChild(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+	run := func(args string) core.ToolResult {
+		t.Helper()
+		res, err := tool.Execute(context.Background(), json.RawMessage(args), func(string) {})
+		if err != nil {
+			t.Fatalf("Execute(%s): %v", args, err)
+		}
+		return res
+	}
+
+	// Meta row only: exactly what a child that has not finished looks like.
+	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "working-1"), cwd)
+	// A live event log is the signal that it is mid-task rather than done.
+	if err := os.WriteFile(swarm.AgentEventLogPath(swarm.DefaultRoot(home), "working-1"),
+		[]byte(`{"type":"turn_start"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Every filter shape the caller might reach for must give the same answer,
+	// because varying them is precisely the dead end being closed.
+	for _, args := range []string{
+		`{"session_id":"working-1","event_kinds":["message"],"expand":-1}`,
+		`{"session_id":"working-1","event_kinds":["tool_call","tool_result","message"],"expand":0}`,
+		`{"session_id":"working-1","event_kinds":[],"limit":200}`,
+		`{"session_id":"working-1"}`,
+	} {
+		got := inspectText(t, run(args))
+		if strings.Contains(got, "no events match these filters") {
+			t.Fatalf("%s still blames the filters: %q", args, got)
+		}
+		if !strings.Contains(got, "is running but has not completed its first message") {
+			t.Errorf("%s should report the child as running, got: %q", args, got)
+		}
+		if !strings.Contains(got, "streams its transcript as it works") {
+			t.Errorf("%s should say the transcript is live, got: %q", args, got)
+		}
+		if !strings.Contains(got, "auto-swarm update") {
+			t.Errorf("%s should tell the caller the recap is pushed, got: %q", args, got)
+		}
+		// The push only happens for swarm_spawn children (auto-swarm wires
+		// the tracker through OnSpawned), so the promise must stay
+		// conditional — a /swarm-spawned child would otherwise be told to
+		// wait for an update that never comes.
+		if !strings.Contains(got, "If you spawned it with swarm_spawn") {
+			t.Errorf("%s states the recap unconditionally, got: %q", args, got)
+		}
+	}
+
+	// No event log yet — still diagnosed, just without the liveness claim.
+	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "cold-1"), cwd)
+	got := inspectText(t, run(`{"session_id":"cold-1","expand":-1}`))
+	if !strings.Contains(got, "may have failed before its first turn") {
+		t.Errorf("child with no event log should not claim to be running, got: %q", got)
+	}
+
+	// A FINISHED child whose filters genuinely exclude everything must keep the
+	// filter message — the diagnosis is about an empty transcript, not an empty
+	// match, and conflating them would hide a real filter mistake.
+	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "done-1"),
+		cwd, "task text", "the findings")
+	got = inspectText(t, run(`{"session_id":"done-1","tool_name":"nonexistent","expand":0}`))
+	if !strings.Contains(got, "no events match these filters") {
+		t.Errorf("a real filter miss on a finished child must still say so, got: %q", got)
+	}
+}

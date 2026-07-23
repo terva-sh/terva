@@ -71,8 +71,16 @@ func TestDirFSRepairsLegacyBoardMode(t *testing.T) {
 func TestLayeredFSMigratesLegacyBoardPrivately(t *testing.T) {
 	skipOnWindows(t)
 	upper, lower := filepath.Join(testsupport.TempDir(t), "up"), testsupport.TempDir(t)
-	if err := os.WriteFile(filepath.Join(lower, "tasks-s1.json"),
+	legacy := filepath.Join(lower, "tasks-s1.json")
+	if err := os.WriteFile(legacy,
 		[]byte(`{"tasks":[{"id":"T1","title":"legacy","status":"pending"}],"next_id":2}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Force the permissive legacy mode independent of the test umask — the
+	// closing assertion is that the lower copy is left exactly as found, which
+	// says nothing under a restrictive umask (a hardened service runs
+	// UMask=0077) that already created it 0600.
+	if err := os.Chmod(legacy, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -89,5 +97,5 @@ func TestLayeredFSMigratesLegacyBoardPrivately(t *testing.T) {
 
 	assertMode(t, filepath.Join(upper, "tasks-s1.json"), 0o600)
 	assertMode(t, upper, 0o700)
-	assertMode(t, filepath.Join(lower, "tasks-s1.json"), 0o644) // lower copy never mutated
+	assertMode(t, legacy, 0o644) // lower copy never mutated
 }

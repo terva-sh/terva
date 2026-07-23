@@ -474,3 +474,47 @@ func TestBashSpillDiscardedWhenComplete(t *testing.T) {
 		t.Fatal("non-truncated output should not advertise a full-output file")
 	}
 }
+
+// TestBashNamesCWDOnFailureOnly: a relative path that misses resolves against
+// the tool's cwd, not the file the model last touched, and "not found" alone
+// never says so. The failure footer must name the directory; a successful run
+// must stay byte-identical (the cwd is constant, so repeating it on every
+// result would be pure noise).
+func TestBashNamesCWDOnFailureOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix shell only")
+	}
+	dir := testsupport.TempDir(t)
+	tool := &BashTool{CWD: dir}
+
+	fail, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "./bin/test"}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fail.Content[0].(provider.TextBlock).Text; !strings.Contains(got, "(cwd: "+dir+")") {
+		t.Fatalf("failure footer does not name the cwd: %q", got)
+	}
+
+	ok, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "echo hi"}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ok.Content[0].(provider.TextBlock).Text; strings.Contains(got, "cwd:") {
+		t.Fatalf("successful result should not carry a cwd note: %q", got)
+	}
+}
+
+// TestBashDescriptionNamesTheRealCWD: the description is the only place the
+// model reliably reads before writing a path, so it must state the actual
+// directory rather than the phrase "the agent's cwd".
+func TestBashDescriptionNamesTheRealCWD(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	desc := (&BashTool{CWD: dir}).Description()
+	if !strings.Contains(desc, "Commands run in "+dir) {
+		t.Fatalf("description does not name the cwd: %q", desc)
+	}
+	// An unset CWD must still describe the tool, not print an empty path.
+	if generic := (&BashTool{}).Description(); strings.Contains(generic, "Commands run in ;") {
+		t.Fatalf("empty CWD produced a blank directory in the description: %q", generic)
+	}
+}

@@ -50,9 +50,31 @@ type bashArgs struct {
 
 const bashSchema = `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","description":"Maximum run time in seconds before the command is killed. Defaults to 120 if omitted."}},"required":["command"]}`
 
+// effectiveCWD is the directory commands actually run in: the configured CWD,
+// or the process working directory when the host left it empty. Both
+// Description and the failure footer name it, so the model is told the one
+// fact a relative path depends on — the value it otherwise has to guess.
+func (t *BashTool) effectiveCWD() string {
+	if t.CWD != "" {
+		return t.CWD
+	}
+	cwd, _ := os.Getwd()
+	return cwd
+}
+
 func (t *BashTool) Name() string { return "bash" }
 func (t *BashTool) Description() string {
-	return "Run a shell command (stdout+stderr merged). Prefer the dedicated tools over shell equivalents: read/write/edit for files (not cat, sed -i, echo >file), grep/glob for search (not grep, find, ls) — they are safer, reviewable, and cheaper. Commands run in the agent's cwd; avoid `cd` (pass paths instead). Git safety: never force-push, `reset --hard`, amend, skip hooks, or `git add -A` unless the user explicitly asks. Do not print or export secrets (.env, tokens, credentials). Slow commands should set an explicit timeout; the default kill is 120s. In exploratory multi-step scripts avoid `set -e` (one failing probe aborts the whole script and hides the rest); check exit codes explicitly instead. $TERVA_HOME is exported into the environment."
+	// Name the working directory concretely rather than calling it "the
+	// agent's cwd". A model that only knows the phrase writes `./bin/test`
+	// against whatever directory it assumes the project root is, and a
+	// session whose cwd is a parent of the repo it is working in fails that
+	// way repeatedly — each failure reported only as "not found", with
+	// nothing in the output naming the directory that made it wrong.
+	where := "the agent's cwd"
+	if cwd := t.effectiveCWD(); cwd != "" {
+		where = cwd
+	}
+	return "Run a shell command (stdout+stderr merged). Prefer the dedicated tools over shell equivalents: read/write/edit for files (not cat, sed -i, echo >file), grep/glob for search (not grep, find, ls) — they are safer, reviewable, and cheaper. Commands run in " + where + "; a relative path resolves against THAT directory, not the file you last read or edited — pass absolute paths (or `git -C`) for anything outside it, and avoid `cd`. Git safety: never force-push, `reset --hard`, amend, skip hooks, or `git add -A` unless the user explicitly asks. Do not print or export secrets (.env, tokens, credentials). Slow commands should set an explicit timeout; the default kill is 120s. In exploratory multi-step scripts avoid `set -e` (one failing probe aborts the whole script and hides the rest); check exit codes explicitly instead. $TERVA_HOME is exported into the environment."
 }
 func (t *BashTool) Schema() json.RawMessage { return json.RawMessage(bashSchema) }
 
@@ -67,10 +89,7 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	if err := t.Sandbox.CheckCommand(a.Command); err != nil {
 		return core.ToolResult{}, err
 	}
-	cwd := t.CWD
-	if cwd == "" {
-		cwd, _ = os.Getwd()
-	}
+	cwd := t.effectiveCWD()
 
 	// Apply an explicit timeout, or a sane default when the model omits
 	// one. timeoutDur is recorded so the result can tell the model how
@@ -212,6 +231,14 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	}
 	if timedOut {
 		fmt.Fprintf(&sb, " (timed out after %s)", humanDuration(timeoutDur))
+	}
+	// A non-zero exit is exactly where the working directory starts to
+	// matter, and the prompt line above echoes the command without it. Left
+	// unsaid, `./bin/test` → "not found" and `git diff` → "not a git
+	// repository" both read as a broken repo rather than the wrong
+	// directory. Named only on failure, so successful results are unchanged.
+	if exitCode != 0 && cwd != "" {
+		fmt.Fprintf(&sb, " (cwd: %s)", cwd)
 	}
 
 	// Surface the genuinely-full output only when we actually dropped
