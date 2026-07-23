@@ -13,7 +13,6 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extdriver"
-	"terva.sh/terva/packages/agent/extensions"
 )
 
 // extDoctorStaticRow is what a read-only manifest scan can tell about one
@@ -49,7 +48,7 @@ func extDoctor(version string) error {
 	cwd, _ := os.Getwd()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	mgr := extensions.New(config.TervaHome(), cwd, version, "", "", build.NonInteractiveExtHooks{})
+	mgr := build.NewExtensionManager(config.TervaHome(), cwd, version, "", "", build.NonInteractiveExtHooks{})
 	_ = mgr.Discover(ctx)
 	mgr.WaitForReady(3 * time.Second)
 	diags := mgr.Diagnostics()
@@ -150,6 +149,8 @@ func printExtDoctorRow(w io.Writer, row extDoctorStaticRow, diag extdriver.Exten
 		status = "disabled"
 	case row.Exec == "":
 		status = "theme-only"
+	case diag.FailedReason != "":
+		status = "failed to start"
 	case diag.Name == "":
 		status = "not loaded"
 	case diag.ReadyTimedOut:
@@ -188,6 +189,18 @@ func printExtDoctorRow(w io.Writer, row extDoctorStaticRow, diag extdriver.Exten
 	}
 	if logPath != "" {
 		fmt.Fprintf(w, "  log: %s\n", logPath)
+	}
+	// Why it isn't running, said here rather than left in the log. A launcher
+	// that reported progress before failing gets both lines: what it was doing
+	// and where it stopped, which is the difference between "my extension is
+	// broken" and "my extension needs longer to build than the deadline".
+	if diag.Bootstrapping != "" {
+		fmt.Fprintf(w, "  bootstrap: %s\n", diag.Bootstrapping)
+	}
+	if diag.FailedReason != "" {
+		fmt.Fprintf(w, "  failed: %s\n", diag.FailedReason)
+		fmt.Fprintln(w, "  hint: prebuild the extension, or raise extension_hello_timeout (seconds) in config.json")
+		return
 	}
 	if len(diag.Commands) > 0 {
 		fmt.Fprintln(w, "  commands:")

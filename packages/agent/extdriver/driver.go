@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,6 +125,20 @@ type Driver struct {
 	// with an error. Guarded by mu.
 	hostToolDispatch HostToolDispatcher
 
+	// failed remembers extensions that were claimed and then dropped because
+	// they could not be started — overwhelmingly a missed hello deadline. Load
+	// rolls the claim back so the name stays free for a retry, which also means
+	// the extension vanishes from every map the host reports on: `terva ext
+	// doctor` could only say "not loaded" and leave the reason sitting in a log
+	// file nobody opens. Keyed by manifest name; cleared when the same name
+	// loads successfully, and by Reset. Guarded by mu.
+	failed map[string]LoadFailure
+
+	// helloTimeout bounds the wait for each extension's hello frame. Starts at
+	// DefaultHelloTimeout; SetHelloTimeout overrides it from config. Guarded by
+	// mu, so a host that sets it late cannot race a concurrent spawn.
+	helloTimeout time.Duration
+
 	// sessionReader, if set, serves an extension's list_sessions /
 	// read_session (protocol 3). The driver does not own session
 	// storage, so the agent layer injects this; nil means session reads
@@ -172,7 +188,71 @@ func New(tervaHome, cwd, tervaVersion, provider, model string, hooks HostHooks) 
 		ext:          map[string]*Extension{},
 		commandIndex: map[string]*Extension{},
 		toolIndex:    map[string]*Extension{},
+		failed:       map[string]LoadFailure{},
+		helloTimeout: DefaultHelloTimeout,
 	}
+}
+
+// LoadFailure records an extension that was found and tried but could not be
+// started, so the host can report WHY instead of only that it isn't there.
+type LoadFailure struct {
+	Name    string
+	Dir     string
+	LogPath string
+	Reason  string
+}
+
+// recordFailure remembers why an extension could not be started. Called on
+// Load's rollback path, where the name claim is about to be released.
+func (d *Driver) recordFailure(mf Manifest, dir, logPath, reason string) {
+	d.mu.Lock()
+	if d.failed == nil {
+		d.failed = map[string]LoadFailure{}
+	}
+	d.failed[mf.Name] = LoadFailure{Name: mf.Name, Dir: dir, LogPath: logPath, Reason: reason}
+	d.mu.Unlock()
+}
+
+// Failures returns the extensions that could not be started this run, sorted
+// by name. Read-only reporting for `terva ext doctor` and the host's
+// extension surfaces.
+func (d *Driver) Failures() []LoadFailure {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]LoadFailure, 0, len(d.failed))
+	for _, f := range d.failed {
+		out = append(out, f)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// SetHelloTimeout overrides how long spawn waits for an extension's hello
+// frame. Call before Load / Discover; a value <= 0 restores the default.
+//
+// The knob exists because the deadline is really two questions wearing one
+// number: "is this process alive and speaking the protocol?" (seconds) and
+// "how long may it take to become that process?" (a launcher that compiles
+// its extension first: minutes). An extension cannot ask for more time,
+// because the thing that would ask is the artifact still being built — so
+// where prebuilding isn't possible, the operator has to say it instead.
+func (d *Driver) SetHelloTimeout(v time.Duration) {
+	if v <= 0 {
+		v = DefaultHelloTimeout
+	}
+	d.mu.Lock()
+	d.helloTimeout = v
+	d.mu.Unlock()
+}
+
+// HelloTimeout reports the current hello-frame deadline.
+func (d *Driver) HelloTimeout() time.Duration {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.helloTimeout <= 0 {
+		return DefaultHelloTimeout // zero-value Driver (tests construct these)
+	}
+	return d.helloTimeout
 }
 
 // Load registers a single extension whose manifest the host has already
@@ -208,6 +288,7 @@ func (d *Driver) Load(ctx context.Context, dir string, mf Manifest) error {
 		return nil
 	}
 	d.ext[mf.Name] = ext
+	delete(d.failed, mf.Name) // a retry that gets this far supersedes the old verdict
 	d.mu.Unlock()
 
 	if mf.Exec == "" {
@@ -224,6 +305,12 @@ func (d *Driver) Load(ctx context.Context, dir string, mf Manifest) error {
 			delete(d.ext, mf.Name)
 		}
 		d.mu.Unlock()
+		// Rolling the claim back is what keeps the name retryable, and also
+		// what would otherwise erase every trace of this extension from the
+		// host's view. Keep the verdict.
+		if !errors.Is(err, context.Canceled) {
+			d.recordFailure(mf, dir, ext.LogPath, err.Error())
+		}
 		return err
 	}
 
@@ -329,6 +416,7 @@ func (d *Driver) Reset(gracePeriod time.Duration) int {
 	d.ext = map[string]*Extension{}
 	d.commandIndex = map[string]*Extension{}
 	d.toolIndex = map[string]*Extension{}
+	d.failed = map[string]LoadFailure{} // a reload re-derives every verdict from scratch
 	d.mu.Unlock()
 
 	oldExts := make([]*Extension, 0, len(old))
@@ -535,34 +623,64 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 	// blocks on every spawn returning, so an unbounded Scan() here would
 	// hang the whole launch with no diagnostic.
 	//
-	// The blocking scanner.Scan() runs on its own goroutine; we race it
-	// against a timer. On timeout we kill the subprocess, which unblocks
-	// the goroutine's Scan() (stdout closes) so it can return and the
-	// channel send is consumed — no leaked reader goroutine.
+	// The blocking read runs on its own goroutine; we race it against a
+	// timer. On timeout we kill the subprocess, which unblocks the
+	// goroutine's read (stdout closes) so it can return and the channel
+	// send is consumed — no leaked reader goroutine.
+	//
+	// A launcher may send any number of `bootstrap` frames first (see
+	// bootstrapFrame): the deadline then measures SILENCE rather than total
+	// elapsed time, which is what lets a launcher that compiles before it
+	// can exec the protocol speaker stay legible instead of looking hung.
 	reader := bufio.NewReaderSize(stdout, 64*1024)
 	type helloRead struct {
 		line    []byte
 		tooLong bool
 		err     error
 	}
-	scanned := make(chan helloRead, 1)
-	go func() {
-		line, tooLong, err := extproto.ReadFrame(reader)
-		scanned <- helloRead{line, tooLong, err}
-	}()
+	readOne := func() <-chan helloRead {
+		ch := make(chan helloRead, 1)
+		go func() {
+			line, tooLong, err := extproto.ReadFrame(reader)
+			ch <- helloRead{line, tooLong, err}
+		}()
+		return ch
+	}
 
+	helloTimeout := d.HelloTimeout()
+	hardDeadline := time.Now().Add(maxBootstrapWait)
 	var got helloRead
-	select {
-	case got = <-scanned:
-	case <-time.After(HelloTimeout):
-		killExtensionGroup(cmd.Process)
-		<-scanned // ReadFrame returns once the killed process's stdout closes.
-		fmt.Fprintf(logFile, "[terva] extension %s failed to handshake within %s; killed and skipped\n", ext.Manifest.Name, HelloTimeout)
-		return fmt.Errorf("extension %s failed to send hello within %s", ext.Manifest.Name, HelloTimeout)
-	case <-ctx.Done():
-		killExtensionGroup(cmd.Process)
-		<-scanned
-		return ctx.Err()
+	for {
+		scanned := readOne()
+		select {
+		case got = <-scanned:
+		case <-time.After(helloTimeout):
+			killExtensionGroup(cmd.Process)
+			<-scanned // ReadFrame returns once the killed process's stdout closes.
+			fmt.Fprintf(logFile, "[terva] extension %s failed to handshake within %s; killed and skipped\n", ext.Manifest.Name, helloTimeout)
+			return fmt.Errorf("extension %s failed to send hello within %s", ext.Manifest.Name, helloTimeout)
+		case <-ctx.Done():
+			killExtensionGroup(cmd.Process)
+			<-scanned
+			return ctx.Err()
+		}
+		if got.tooLong || got.err != nil {
+			break // handled by the shared error paths below
+		}
+		msg, ok := bootstrapFrame(got.line)
+		if !ok {
+			break // the real hello (or something that will fail to parse as one)
+		}
+		// Still building. Extend the silence budget and tell the user, so a
+		// two-minute cold compile reads as progress instead of a hang. The
+		// hard deadline is what keeps a launcher that only ever reports
+		// progress from holding the slot forever.
+		if time.Now().After(hardDeadline) {
+			killExtensionGroup(cmd.Process)
+			fmt.Fprintf(logFile, "[terva] extension %s still bootstrapping after %s; killed and skipped\n", ext.Manifest.Name, maxBootstrapWait)
+			return fmt.Errorf("extension %s was still bootstrapping after %s", ext.Manifest.Name, maxBootstrapWait)
+		}
+		d.noteBootstrap(ext, msg, logFile)
 	}
 	if got.tooLong {
 		killExtensionGroup(cmd.Process)
@@ -661,13 +779,69 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 // even faster once they've started, so this rarely affects them.
 const readyIdleWindow = 250 * time.Millisecond
 
-// HelloTimeout bounds how long spawn() waits for an extension's hello
-// frame before giving up on it. Kept consistent with the 3s ready
-// grace terva uses elsewhere (see WaitForReady / Reload) so a slow but
-// legitimate runtime cold-start still has room to print hello. Past
-// this the subprocess is killed and the extension is skipped without
-// blocking the rest of Discover.
-const HelloTimeout = 3 * time.Second
+// DefaultHelloTimeout bounds how long spawn() waits for an extension's hello
+// frame before giving up on it. Past this the subprocess is killed and the
+// extension is skipped for the run, without blocking the rest of Discover.
+//
+// It used to be 3s, matched to the ready grace, because the whole wait sat on
+// terva's startup path and every second of it was a second the user spent
+// looking at nothing. The long-lived hosts now start extensions in the
+// background and take the wait at the first turn (extensions.StartAsync), so
+// the budget costs nothing on the common path and can be generous enough for
+// the case that kept losing: a launcher that builds its extension before
+// exec'ing it. A cold Go build of a small extension measured ~5.5s — inside
+// 10s, outside 3s.
+//
+// Not a licence to make it huge. The single-shot modes (-p, --json) still pay
+// it up front, and it is the only thing standing between terva and a hung
+// subprocess. Operators who need more (a cold Rust build) should raise it
+// deliberately via extension_hello_timeout, or better, prebuild.
+const DefaultHelloTimeout = 10 * time.Second
+
+// maxBootstrapWait is the absolute ceiling on the handshake, however much
+// progress an extension reports. The hello timeout answers "is this process
+// alive?"; bootstrap frames answer "how long may becoming that process take?"
+// — and the second question has no principled small answer, so it gets a
+// large, blunt one instead. A launcher that emits progress forever holds its
+// slot until here and no further.
+const maxBootstrapWait = 10 * time.Minute
+
+// bootstrapFrame reports whether line is a pre-hello progress frame, and its
+// message. A launcher that has to build its extension before it can exec the
+// thing that speaks the protocol emits these while it works:
+//
+//	{"type":"bootstrap","message":"compiling"}
+//
+// Deliberately a frame the LAUNCHER can print with one `printf` — the SDK
+// isn't running yet, and can't be, which is the whole difficulty. Unknown to
+// older hosts, which see an unparseable hello and skip the extension exactly
+// as they do today, so this is additive with no protocol bump.
+func bootstrapFrame(line []byte) (string, bool) {
+	var f extproto.BootstrapFromExt
+	if err := json.Unmarshal(line, &f); err != nil || f.Type != extproto.TypeBootstrap {
+		return "", false
+	}
+	return f.Message, true
+}
+
+// noteBootstrap records a bootstrap report where a human will find it: the
+// extension's log, its diagnostics (so `terva ext doctor` can say "building"
+// rather than "not loaded"), and the host's notify hook. Without the last one
+// a slow build is invisible until it either finishes or is killed — the
+// silence this whole mechanism exists to break.
+func (d *Driver) noteBootstrap(ext *Extension, msg string, logFile io.Writer) {
+	if msg == "" {
+		msg = "starting"
+	}
+	fmt.Fprintf(logFile, "[terva] extension %s bootstrapping: %s\n", ext.Manifest.Name, msg)
+	ext.mu.Lock()
+	ext.bootstrapping = msg
+	ext.diagnostics = append(ext.diagnostics, "bootstrap: "+msg)
+	ext.mu.Unlock()
+	if d.hooks != nil {
+		d.hooks.Notify(ext.Manifest.Name, "info", msg)
+	}
+}
 
 func (d *Driver) assumeReadyAfterIdle(ext *Extension) {
 	ext.mu.Lock()
@@ -706,6 +880,12 @@ const (
 	maxExtTools     = 64
 	maxExtCommands  = 64
 	maxExtEventSubs = 64 // bounds UNKNOWN event names; known events are always kept
+	// maxEssentialTools bounds how many tools ONE extension may mark
+	// essential (register_tool essential). An essential tool stays
+	// advertised every turn even under lazy visibility, so an unbounded set
+	// would let one extension defeat the context economy lazy mode exists
+	// for. Excess essential tools load deferred instead (and are logged).
+	maxEssentialTools = 3
 )
 
 // registerTool records a tool registration under the cap, indexing the
@@ -717,6 +897,23 @@ func (d *Driver) registerTool(ext *Extension, rt extproto.RegisterToolFromExt) {
 	if len(ext.tools) >= maxExtTools {
 		fmt.Fprintf(ext.logFile, "[terva] dropping tool %q: extension at the %d-tool cap\n", rt.Name, maxExtTools)
 		return
+	}
+	// Cap load-bearing (essential) tools per extension: honor the first
+	// maxEssentialTools, then downgrade the rest to ordinary deferred tools
+	// so an extension can't pin its whole surface always-visible under lazy
+	// mode. Counted over the already-stored (honored) set, so the cap is on
+	// what we actually advertise. Logged once here, at registration.
+	if rt.Essential {
+		honored := 0
+		for _, t := range ext.tools {
+			if t.Essential {
+				honored++
+			}
+		}
+		if honored >= maxEssentialTools {
+			fmt.Fprintf(ext.logFile, "[terva] tool %q asked to be essential but the extension is at the %d-essential cap; loading it deferred instead\n", rt.Name, maxEssentialTools)
+			rt.Essential = false
+		}
 	}
 	ext.tools = append(ext.tools, rt)
 	if _, exists := d.toolIndex[rt.Name]; !exists {
@@ -820,9 +1017,18 @@ type ExtensionDiagnostic struct {
 	Ready         bool
 	AutoReady     bool
 	ReadyTimedOut bool
-	Commands      []RegisteredCommandDiagnostic
-	Tools         []RegisteredToolDiagnostic
-	Messages      []string
+	// Bootstrapping is the last pre-hello progress message, when the extension
+	// reported one. Non-empty on an extension still building, and on one that
+	// built and then failed anyway.
+	Bootstrapping string
+	// FailedReason is why the extension could not be started at all. When set,
+	// the entry describes a load that was rolled back, so it carries no
+	// commands or tools — only the verdict, which would otherwise exist
+	// nowhere the user looks.
+	FailedReason string
+	Commands     []RegisteredCommandDiagnostic
+	Tools        []RegisteredToolDiagnostic
+	Messages     []string
 }
 
 // Diagnostics returns a snapshot of loaded-extension state for diagnostic
@@ -842,6 +1048,7 @@ func (d *Driver) Diagnostics() []ExtensionDiagnostic {
 		msgs := append([]string(nil), ext.diagnostics...)
 		autoReady := ext.autoReady
 		readyTimedOut := ext.readyTimedOut
+		bootstrapping := ext.bootstrapping
 		ext.mu.Unlock()
 
 		diag := ExtensionDiagnostic{
@@ -852,6 +1059,7 @@ func (d *Driver) Diagnostics() []ExtensionDiagnostic {
 			ThemeOnly:     ext.Manifest.Exec == "",
 			AutoReady:     autoReady,
 			ReadyTimedOut: readyTimedOut,
+			Bootstrapping: bootstrapping,
 			Messages:      msgs,
 		}
 		select {
@@ -876,6 +1084,26 @@ func (d *Driver) Diagnostics() []ExtensionDiagnostic {
 			})
 		}
 		out = append(out, diag)
+	}
+	// Extensions that never got off the ground. Load rolls their claim back, so
+	// they are in none of the maps above — and a doctor run that omits them can
+	// only report the ABSENCE of an extension the user can plainly see
+	// installed, with the reason left in a log file. Report the verdict.
+	failedNames := make([]string, 0, len(d.failed))
+	for name := range d.failed {
+		if _, live := d.ext[name]; !live {
+			failedNames = append(failedNames, name)
+		}
+	}
+	sort.Strings(failedNames)
+	for _, name := range failedNames {
+		f := d.failed[name]
+		out = append(out, ExtensionDiagnostic{
+			Name:         f.Name,
+			Dir:          f.Dir,
+			LogPath:      f.LogPath,
+			FailedReason: f.Reason,
+		})
 	}
 	return out
 }

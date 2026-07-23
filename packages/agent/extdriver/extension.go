@@ -150,6 +150,10 @@ type Extension struct {
 	autoReady     bool
 	readyTimedOut bool
 	diagnostics   []string
+	// bootstrapping holds the last pre-hello progress message, so a doctor run
+	// against an extension still compiling says "building" rather than the
+	// indistinguishable "not loaded".
+	bootstrapping string
 
 	// pending command invocations waiting on a CommandResponseFromExt
 	// keyed by the id we sent in CommandInvokedFromHost.
