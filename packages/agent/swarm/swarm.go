@@ -310,6 +310,18 @@ func AgentSessionPath(root, id string) string {
 	return filepath.Join(root, "agents", id, "session.json")
 }
 
+// AgentEventLogPath returns the durable event log for one agent id under a
+// swarm root — the companion to AgentSessionPath (see agentStateDir's layout).
+// Both stream as the child works, but the event log starts first: it carries
+// the child's very first activity, whereas the transcript gains a row only once
+// a message completes. An out-of-package reader that finds an empty transcript
+// therefore consults this to tell "running, nothing finished yet" apart from
+// "never got going", instead of reporting a live sub-agent as a dead one. Same
+// verbatim-id caveat as AgentSessionPath: path-validate untrusted ids first.
+func AgentEventLogPath(root, id string) string {
+	return filepath.Join(root, "agents", id, "events.jsonl")
+}
+
 // SpawnRequest configures a Spawn. Only Task is required; the rest
 // are optional. Model + Provider, when set, get baked into the
 // child argv as --model / --provider so the agent runs against the
@@ -430,7 +442,7 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 	if err := privfs.MkdirAll(stateDir); err != nil {
 		return nil, fmt.Errorf("swarm state dir: %w", err)
 	}
-	logPath := filepath.Join(stateDir, "events.jsonl")
+	logPath := AgentEventLogPath(f.cfg.Root, id)
 	sessionPath := AgentSessionPath(f.cfg.Root, id)
 	// Unix sockets have a hard 104-byte path limit on darwin and 108
 	// on linux. Long TERVA_HOME paths plus an agent slug blow that cap

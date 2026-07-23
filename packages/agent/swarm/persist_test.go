@@ -965,3 +965,30 @@ func snapshotIDs(ss []AgentSnapshot) []string {
 	}
 	return out
 }
+
+// TestAgentPathHelpersShareOneStateDir pins the layout the out-of-package
+// readers depend on: the transcript and the event log are siblings in one
+// agent state dir, and both exported helpers derive it the same way spawn
+// does. session_inspect reads an empty transcript and consults the event log
+// beside it to tell a working sub-agent from a finished-but-silent one; if
+// these two drifted apart it would silently stop finding the log and start
+// describing every running child as having produced nothing.
+func TestAgentPathHelpersShareOneStateDir(t *testing.T) {
+	root := testsupport.TempDir(t)
+	const id = "review-x-123000"
+
+	session := AgentSessionPath(root, id)
+	events := AgentEventLogPath(root, id)
+	if filepath.Dir(session) != filepath.Dir(events) {
+		t.Fatalf("helpers disagree on the state dir: %q vs %q", filepath.Dir(session), filepath.Dir(events))
+	}
+
+	// And that dir is the one Spawn actually writes into.
+	f := &Swarm{cfg: Config{Root: root}}
+	if got := f.agentStateDir(id); got != filepath.Dir(session) {
+		t.Errorf("agentStateDir = %q, helpers say %q", got, filepath.Dir(session))
+	}
+	if filepath.Base(events) != "events.jsonl" {
+		t.Errorf("event log basename = %q, want events.jsonl", filepath.Base(events))
+	}
+}

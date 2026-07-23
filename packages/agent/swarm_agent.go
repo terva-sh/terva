@@ -64,7 +64,26 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, build.BuildHookEngine(args, r.Trusted), nil, nil)
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
-	ag.AdoptSessionIdentity(sess)
+	// Stream every message, usage row, compaction, and image exclusion to disk
+	// as it happens — the same durable persistence ACP, rpc --session, the
+	// workspace daemon, and the bot daemon all wire. A swarm child is a
+	// long-lived headless front end like those, but was the one that instead
+	// batched its whole transcript out after the task finished. Two costs:
+	//
+	//   - Nothing could read a sub-agent while it worked. session_inspect on a
+	//     running child found a file holding only its meta row, so a coordinator
+	//     watching one had no way in until the task ended.
+	//   - The batch write indexed into a slice that compaction could move.
+	//     PromptWithPolicy auto-compacts mid-task; compaction REPLACES the
+	//     message slice with a shorter one, so a `for i := start; i < len(msgs)`
+	//     catch-up either wrote messages that no longer sat at those indices or,
+	//     once the compacted slice was shorter than start, wrote nothing at all
+	//     — losing the entire task's transcript in the case that needed it most.
+	//
+	// Observers are registered AFTER openOrCreateSession has replayed any prior
+	// transcript onto the agent, so a resumed child does not rewrite what it
+	// just loaded (the ordering rpc.go relies on too).
+	build.WireHeadlessSessionPersist(ag, sess)
 	// Tell session-keyed extensions the real session id before any turn
 	// runs, so per-session state persists for swarm agents too.
 	build.EmitSessionStart(extMgr, sess)
@@ -140,15 +159,16 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 			em.emit(ev.Type(), modes.EventToJSON(ev))
 		}
 
-		start := len(ag.Messages())
 		// PromptWithPolicy gives swarm subagents the same turn policy
 		// interactive/json/rpc users get: pre-turn auto-compact when a
 		// resumed transcript is near the window, and a compact-and-retry
 		// on HTTP 413. A long-running subagent would otherwise bounce off
 		// the context limit with no recovery. Compaction surfaces as
-		// compact_start/compact_end events the supervisor ignores.
+		// compact_start/compact_end events the supervisor ignores — and, via
+		// the observer wired above, as a compaction row in the transcript.
+		// Persistence is observer-driven, so there is no post-turn catch-up
+		// write here; adding one back would duplicate every message.
 		err := ag.PromptWithPolicy(c, prompt, nil, sink)
-		WriteNewTranscript(ag, sess, start)
 
 		// task_end is the explicit task-completion event the
 		// supervisor watches for (one whole ag.Prompt round). It is

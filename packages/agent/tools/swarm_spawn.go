@@ -319,9 +319,14 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	if untrusted {
 		sb.WriteString("note: UNTRUSTED workspace — the sub-agent runs without project extensions, skills, or context files.\n")
 	}
-	sb.WriteString("\nThe sub-agent is running in the background. Use /swarm in the TUI to monitor it; ")
-	fmt.Fprintf(&sb, "once it has run, session_inspect accepts %q as a session_id to read its transcript (the id is NOT a project session id). ", agent.ID)
-	sb.WriteString("This conversation continues immediately; do not wait for the sub-agent to finish before working on the next thing.")
+	// Lead with the fact that completion is PUSHED. "Once it has run,
+	// session_inspect accepts <id>" read as an instruction to go and look,
+	// and a caller with no way to wait invents one — polling the id, or
+	// watching the child's files change from a shell. Neither is needed.
+	sb.WriteString("\nThe sub-agent is running in the background. Use /swarm in the TUI to monitor it. ")
+	sb.WriteString("You do NOT need to wait or poll for it: when its task finishes you are re-invoked automatically with an [auto-swarm update] carrying its findings. ")
+	fmt.Fprintf(&sb, "If you do want to look in mid-run, session_inspect takes %q as a session_id and streams what the sub-agent has written so far (the id is NOT a project session id). ", agent.ID)
+	sb.WriteString("This conversation continues immediately; work on the next thing, or end your turn if nothing else is pending.")
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: sb.String()}},
 		Details: map[string]any{
