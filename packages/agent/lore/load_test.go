@@ -94,3 +94,53 @@ func TestDiscover_BadEntryReportedNotFatal(t *testing.T) {
 		t.Errorf("good entry should still load despite a sibling error")
 	}
 }
+
+// TestExtensionLoreIgnoresTheRunAllowlist pins a limitation the docs now state
+// rather than a behavior worth relying on: the per-run `--extensions`
+// allowlist narrows which extensions the manager LOADS AND SPAWNS, but the
+// bundle scanners walk the extension roots straight from disk and consult only
+// the manifest `enabled` flag. So an extension excluded from the run still
+// contributes its lore to the prompt.
+//
+// That matters because `--extensions` is documented as the least-privilege
+// flag for exposed agents. It restricts processes, not bundled content.
+// Consolidating discovery into one resolution result — after which this test
+// should be inverted, not deleted — is Phase 1 of
+// docs/proposals/managed-extension-catalog.md.
+func TestExtensionLoreIgnoresTheRunAllowlist(t *testing.T) {
+	home := testsupport.TempDir(t)
+	ext := func(dir, name, enabled, entry string) {
+		root := filepath.Join(home, "extensions", dir)
+		writeFile(t, filepath.Join(root, "extension.json"),
+			`{"name":"`+name+`","exec":"./run"`+enabled+`}`)
+		writeFile(t, filepath.Join(root, "lore", entry+".md"),
+			"---\nname: "+entry+"\nkeys: [k]\n---\nbody\n")
+	}
+	// Imagine a run of `--extensions calendar`: only `calendar` is allowed.
+	ext("calendar", "calendar", "", "calendar-lore")
+	ext("mail", "mail", "", "mail-lore")
+	// A disabled manifest is the mechanism that DOES exclude a bundle.
+	ext("archive", "archive", `,"enabled":false`, "archive-lore")
+
+	dirs := extensionLoreDirs(home, "", false)
+	has := func(want string) bool {
+		for _, d := range dirs {
+			if filepath.Base(filepath.Dir(d)) == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("calendar") {
+		t.Error("the allowlisted extension's lore should load")
+	}
+	if !has("mail") {
+		t.Error("a NON-allowlisted extension's lore still loads today; if this " +
+			"now fails the leak is closed — invert the assertion and update " +
+			"docs/extensions.md (Bundle contributions) and docs/cli.md (--extensions)")
+	}
+	if has("archive") {
+		t.Error("a manifest with enabled:false must contribute no lore — that is " +
+			"the documented way to exclude a bundle")
+	}
+}

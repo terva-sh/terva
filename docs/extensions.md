@@ -119,6 +119,14 @@ re-running a pack is safe. Lifecycle afterwards is the normal per-extension tool
 (`terva ext list` / `enable` / `disable` / `remove`) — a pack is a
 starting point, not a managed set.
 
+> **A pack is not a deployment lock.** It pins no versions, carries no digests,
+> and is consulted only at install time — nothing re-checks it afterwards, and
+> nothing stops the installed set from drifting via `ext install`, `remove`, or
+> an edit on disk. It answers "give me a reasonable starting set", not "this
+> agent runs exactly this code". If you need the latter — attesting which
+> immutable code a given account runs — a pack is the wrong tool. That contract
+> is the subject of the internal managed-extension-catalog proposal.
+
 Installing from a non-built-in pack (a URL or file) prints the entries
 and asks for confirmation first; `--yes` skips the prompt. The built-in
 core pack ships with terva and installs without prompting.
@@ -181,7 +189,20 @@ terva scans two directories on startup, in this order:
 1. **Project-local**: `./.terva/extensions/<name>/extension.json`
 2. **Global**: `$TERVA_HOME/extensions/<name>/extension.json`
 
-A project-local extension with the same name wins over a global one.
+A project-local extension whose **directory name** matches a global one wins.
+Note that precedence is by directory basename, not by the `name` field in the
+manifest — two different rules apply in sequence:
+
+1. **Discovery** deduplicates by directory basename, so the project copy of
+   `foo/` shadows the global `foo/`.
+2. **Loading** then claims the *manifest* name, first claim wins. If two
+   surviving directories declare the same manifest name, one is loaded and the
+   other is **dropped silently** — no error, no log line. Loads run in
+   parallel, so which copy wins is not deterministic.
+
+Keep each extension's directory name equal to its manifest name and the two
+rules agree. When they differ, a name collision becomes an invisible coin
+toss — so avoid it.
 On macOS `$TERVA_HOME` defaults to `~/Library/Application Support/terva/`;
 on Linux it's `$XDG_STATE_HOME/terva` or `~/.local/state/terva`.
 
@@ -189,11 +210,22 @@ on Linux it's `$XDG_STATE_HOME/terva` or `~/.local/state/terva`.
 > only its own extensions, none of your global/system ones, and all data kept in
 > the project — see [Project-scoped agents](#project-scoped-agents) below.
 
-Because each extension owns its own directory, the recommended place
-for extension state is inside that directory itself (for example
-`todos.json`, `settings.json`, or an auth/cache file used only by that
-extension). The host also passes this path back in `hello_ack` as
-`extension_dir` / `data_dir` so runtime code does not need to guess it.
+**Write state to `data_dir`, not to the install directory.** `hello_ack`
+passes back two *different* paths, and mixing them up is the usual cause of a
+read-only-filesystem failure on a managed install:
+
+- `extension_dir` — where the extension's code was installed. Treat it as
+  read-only. A root-managed or otherwise externally administered deployment may
+  make it literally read-only.
+- `data_dir` — the extension's own writable state directory,
+  `$TERVA_HOME/ext-data/<manifest name>`. Keyed by manifest name, so it is
+  stable even if the install location moves. This is where `todos.json`,
+  `settings.json`, or an auth/cache file belongs.
+
+The host falls back to using the install directory as `data_dir` only when
+there is no terva home or that directory cannot be created — a compatibility
+path for older colocated layouts, not a location to design against. Do not
+assume the two paths are equal.
 
 Each extension owns its own subdirectory. The `extension.json`
 manifest tells terva how to launch it:
@@ -401,6 +433,50 @@ about toolchains, target platforms, or release URLs. The launcher is the
 one place with the context to do build-or-download well — so that
 responsibility lives there, not in the host.
 
+> **The build must fit in the hello timeout.** terva waits **10 seconds** for
+> an extension's first `hello` frame; past that it kills the process group and
+> skips the extension for that run, recording the failure in the extension's
+> log rather than stopping startup. That budget covers the launcher *and* the
+> build it decides to run. A cold Go build of a small extension measured ~5.5s,
+> which fits — but a heavier toolchain on a cold cache will not, and the warm
+> path (step 1 below) is far inside it, so this mostly bites on a first-ever
+> launch, after `terva update`, or on a machine that has never built the
+> extension.
+>
+> **Where that wait is paid.** In the long-lived hosts — the interactive TUI,
+> `terva web`, `terva rpc` — extensions start in the *background*: the session
+> materializes immediately and the wait is taken by the first turn instead, so
+> a slow extension costs nothing unless you type faster than it boots. That is
+> what makes a 10-second budget affordable; it used to be 3, sized to what a
+> user would tolerate staring at an empty screen. The single-shot modes (`-p`,
+> `--json`) and ACP still pay it up front, because their first turn begins
+> right away.
+>
+> **Better than raising the deadline: say you're working.** A launcher can
+> print a [`bootstrap` frame](#bootstrap-optional-before-hello) before it
+> starts building and again as it goes; each one restarts the deadline, so the
+> host is measuring silence instead of elapsed time, and terva shows your
+> message rather than nothing. That is the actual split — "is this process
+> alive?" stays a question with a short answer, and "how long may the build
+> take?" stops being the same question. A build that reports progress can run
+> for minutes; one that goes quiet is still killed on schedule.
+>
+> **If the default is genuinely too tight** and the launcher can't report
+> progress, raise it with `extension_hello_timeout` (seconds) in
+> `~/.terva/config.json`, capped at 10 minutes. User-level only: it describes
+> how fast your machine builds, not a property of a repository, and a project
+> must not be able to make terva sit longer on its own extensions.
+>
+> **For anything deployed rather than developed, prebuild or prewarm.** Ship a
+> release binary, or build once out-of-band and let the launcher find it —
+> never let first contact with a service be a compile; that is the real fix,
+> and both the `bootstrap` frame and the timeout knob are for where it isn't
+> available. If an extension seems to "not load" on a fresh install but works
+> on the second try, this is why — and `terva ext doctor` now names it as
+> `failed to start` with the reason, rather than only reporting it absent.
+> Making the deployed catalog immutable and prebuilt is the motivation for the
+> internal managed-extension-catalog proposal.
+
 The launcher should try, in order:
 
 1. **Use the binary** if it's present and newer than the sources — just
@@ -523,6 +599,12 @@ contribute data alongside its executable:
   contributes no personas. A persona shipped with `good_for` tags
   becomes dispatchable to swarm sub-agents, so an extension can pair a
   capability (its tools) with the identity for using it.
+- **Lore**: a `lore/` directory beside `extension.json` joins keyed-context
+  discovery — the third tier after `$TERVA_HOME/lore/` and a trusted project's
+  `.terva/lore/` (see [personas.md](personas.md)). Like skills, it is scanned
+  from the global extensions root always and from a project root only when the
+  workspace is trusted, and a manifest with `enabled: false` contributes
+  nothing.
 - **Suggested permission rules**: a `permissions` array in the
   manifest (same shape as [permissions.md](permissions.md) rules).
   Like project rules, the extension layer may only *restrict*: `deny`
@@ -534,6 +616,18 @@ Hooks and MCP server declarations are deliberately **not**
 bundle-contributable: both mean running additional programs, and that
 stays an explicit user-config decision (see [hooks.md](hooks.md),
 [mcp.md](mcp.md)).
+
+> **`--extensions` does not narrow bundle contributions.** The per-run
+> allowlist is applied by the extension *manager*, which decides which
+> discovered extensions are **loaded and spawned**. The bundle scanners for
+> skills, personas, and lore walk the extension roots themselves and honor only
+> the manifest `enabled` flag and the user's `disable_extensions` — not the
+> allowlist. So `--extensions calendar` stops the `mail` extension's *process*
+> from starting while its skills, personas, and lore still reach the prompt. To
+> exclude a bundle's contributions entirely, disable the extension
+> (`disable_extensions`, or `enabled: false`) rather than relying on the
+> allowlist. Consolidating this into one resolution result is Phase 1 of the internal
+> managed-extension-catalog proposal.
 
 ## Lifecycle
 
@@ -548,7 +642,11 @@ stays an explicit user-config decision (see [hooks.md](hooks.md),
 3. **Hello handshake**: the extension sends a `hello` frame; terva
    replies with `hello_ack` containing the protocol version, the
    active provider/model/cwd, and the extension's own data directory
-   so it can persist files beside its manifest.
+   so it can persist files beside its manifest. A launcher that has to
+   build first may send `bootstrap` frames beforehand to report
+   progress and restart the deadline. An extension that never gets
+   this far is killed and skipped, and `terva ext doctor` reports it as
+   `failed to start` with the reason.
 4. **Registration**: the extension sends `register_command` frames.
    First-come-first-served: a name already taken by a built-in or by
    a previously-loaded extension is silently shadowed (logged in the
@@ -561,6 +659,14 @@ stays an explicit user-config decision (see [hooks.md](hooks.md),
 6. **Shutdown**: when terva exits, it sends `shutdown` and waits up to
    2s for the extension to send `shutdown_ack`. Holdouts are
    SIGTERM'd, then SIGKILL'd.
+
+In the long-lived hosts (interactive TUI, `terva web`, `terva rpc`) steps
+1–4 run on a background goroutine while the session comes up, and the
+first turn waits for them to finish — so extension tools are never
+missing from a turn the model actually runs, and startup no longer
+scales with the slowest extension's boot time. The single-shot modes run
+them before the first turn begins, which for them amounts to the same
+ordering.
 
 A crashing extension does not bring down terva. The slash command it
 owned simply stops working until the extension is fixed and terva is
@@ -685,7 +791,14 @@ user's trust, and the host's event loop. A few habits keep it a good neighbor:
   tight schemas and one-line descriptions, and keep context blocks to a few KB
   (the host trims larger). Trace a bloated window with `/context` — the
   **Extensions** tab shows what you inject, the **Overview** tab attributes size
-  across system prompt, tools, and transcript.
+  across system prompt, tools, and transcript. Under [lazy tool
+  visibility](standard-tools.md#lazy-tool-visibility-lazy_tools) your tools defer
+  behind `activate_tools` and cost nothing until the model asks for them — so if
+  your static guidance names a tool the model must use *before* others ("search
+  the index before reading"), mark just that one `ext.Essential()` (the
+  `"essential"` field on `register_tool`) to keep it advertised; leave the rest
+  deferred. The host caps essential tools per extension (3), so this stays a
+  scalpel, not a way to opt out of lazy mode.
 - **Feature-detect, and degrade gracefully.** Gate a protocol-N feature on
   `Host().ProtocolVersion`. Declare `RequireProtocol(n)` *only* when your
   extension genuinely can't function without it — it makes an older host refuse
@@ -772,6 +885,36 @@ letting it misbehave against a wire it doesn't fully speak. Declare it only
 when your extension genuinely can't function without that protocol level;
 otherwise feature-detect on `Host().ProtocolVersion` and degrade.
 
+#### `bootstrap` (optional, before `hello`)
+
+```json
+{"type":"bootstrap","message":"compiling extension"}
+```
+
+Sent by a **launcher**, zero or more times, before `hello`, to say "still
+working". Each frame restarts the hello deadline, so the host measures
+*silence* rather than total elapsed time, and shows your message so a long
+build reads as progress instead of a hang. An absolute ceiling (10 minutes)
+still applies.
+
+This is not an SDK feature and cannot be: the SDK isn't running yet, which is
+exactly the difficulty. A launcher that builds before it can `exec` the real
+extension emits it with one `printf`:
+
+```sh
+#!/bin/sh
+if [ ! -x ./weather ] || [ weather.go -nt ./weather ]; then
+  printf '%s\n' '{"type":"bootstrap","message":"building weather"}'
+  go build -o weather . || exit 1
+fi
+exec ./weather
+```
+
+Emit one before the build starts, and another every so often if the build is
+long enough that the host could time out between reports. Purely additive: a
+host that doesn't know the frame sees a malformed `hello` and skips the
+extension — which is what it did with a slow build anyway.
+
 #### `register_command`
 
 ```json
@@ -811,6 +954,23 @@ not be auto-allowed as read-only. Also additive/optional — empty means the hos
 falls back to the `read_only` bool, and an unknown value is treated as
 side-effecting (the safe default). From the Go SDK: `ext.WithAuthority(...)`,
 the counterpart to `ext.ReadOnly()`.
+
+The optional `"essential": true` field marks a **load-bearing** tool that must
+stay advertised to the model every turn, even when the host runs with [lazy tool
+visibility](standard-tools.md#lazy-tool-visibility-lazy_tools) and would otherwise
+defer your tools behind an `activate_tools` call. Use it for the tool your static guidance
+([`register_context`](#register_context-protocol-2)) tells the model to reach for
+before others — "search the index before reading a file" only works if the search
+tool is in the tool list when the model first wants to read, not sitting deferred
+while the prompt that names it is already in context. Only the tools you mark stay
+eager; the rest of your tools still lazy-load, so a big extension keeps the context
+savings for the tools the model rarely needs. The host **caps** how many tools one
+extension may mark essential (currently 3) — excess ones load deferred and the drop
+is logged — so an extension can't quietly pin its whole surface always-visible and
+defeat lazy mode. Additive/optional: an old host ignores it (the tool lazy-loads as
+before) and a host with lazy mode off advertises everything anyway, so it is a
+no-op there. `essential` is visibility only — the tool is still permission-gated
+exactly as before when actually called. From the Go SDK: `ext.Essential()`.
 
 #### `set_withdrawn_tools` (protocol 4)
 
@@ -931,10 +1091,17 @@ session directory is refused. Declare `RequireProtocol(3)`; an
 unsupported host returns an empty list / `not_found`.
 
 From the Go SDK, pass `ext.ReadOnly()` as a trailing option to declare
-it:
+it — `ext.WithAuthority(...)` and `ext.Essential()` are trailing options too,
+so a load-bearing read-only tool combines them:
 
 ```go
 e.Tool("branch_list", "List branches.", schema, handler, ext.ReadOnly())
+
+// A load-bearing search tool: stays advertised under lazy tool visibility so
+// the guidance that tells the model to use it first isn't pointing at a
+// deferred tool. See "Keep your model-facing footprint small" below.
+e.Tool("index_search", "Search the workspace index.", schema, handler,
+    ext.WithAuthority(ext.AuthorityLocalRead), ext.Essential())
 ```
 
 Tool names live in the same namespace as built-in tools (`read`,
@@ -1788,7 +1955,17 @@ Per-extension behaviour:
 - Extensions without a `.git/` directory (installed by `terva ext install ./local-path`) are skipped — there is no remote to pull from.
 - For the rest, terva stashes any dirty worktree state (including untracked runtime files like `todos.json` or `config.json`), runs `git pull --ff-only`, and pops the stash. If the pop produces conflicts, the conflict markers are left in place and you'll see a warning.
 - Diverged branches, offline pulls, or any other git failure are reported as `failed` and the next extension is processed. `terva update` itself never aborts because of an extension.
-- terva does **not** run any build step (`go build`, `npm install`, `make`) after the pull — building stays the extension's job. The recommended way to handle this is a [self-bootstrapping launcher](#recommended-a-self-bootstrapping-launcher): `terva update` pulls new source, and the next launch (or `/reload-ext`) rebuilds automatically because the sources are now newer than the binary. An extension that instead commits a prebuilt artifact (binary, transpiled JS) just keeps working from the pulled copy. Either way, if you need to force a rebuild now, do it manually and `/reload-ext`.
+- terva does **not** run any build step (`go build`, `npm install`, `make`) after the pull — building stays the extension's job. The recommended way to handle this is a [self-bootstrapping launcher](#recommended-a-self-bootstrapping-launcher): `terva update` pulls new source, and the next launch (or `/reload-ext`) rebuilds automatically because the sources are now newer than the binary. An extension that instead commits a prebuilt artifact (binary, transpiled JS) just keeps working from the pulled copy. Either way, if you need to force a rebuild now, do it manually and `/reload-ext`. **On a deployed service, prefer the prebuilt artifact**: the post-update rebuild happens on the next spawn and so competes with the 10-second hello timeout described [above](#recommended-a-self-bootstrapping-launcher), which is how an update can leave an extension silently skipped until something rebuilds it out-of-band.
+
+This whole flow assumes terva **owns** the install tree: it pulls into it,
+stashes into it, and writes there as the agent's own user. An externally
+administered deployment — code installed and updated by root, or an install
+tree mounted read-only — is outside what `terva update` models today. There,
+skip terva's updater entirely, change the tree by whatever provisions it, and
+restart the service; `terva ext upgrade` will report a failure rather than
+mutate a tree it does not own. Defining that contract properly (release
+identity, atomic switch, rollback) is the subject of the internal
+managed-extension-catalog proposal.
 
 ### Theme-only extensions
 
