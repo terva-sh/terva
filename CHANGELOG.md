@@ -11,6 +11,20 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.7](https://github.com/terva-sh/terva/releases/tag/v0.126.7) — 2026-07-22
+
+### Features
+
+- provider: a per-model default reasoning level, and Kimi K3
+- stage: a per-card default model
+- stage: pick the model and open the character's card from the session header
+
+### Fixes
+
+- stage: keep the phone chat header readable
+- stage: recover the safe-area insets on a cold PWA launch and behind Safari's toolbar
+- web: show a newly logged-in provider's models without a refresh
+
 ## [v0.126.6](https://github.com/terva-sh/terva/releases/tag/v0.126.6) — 2026-07-22
 
 ### Features
