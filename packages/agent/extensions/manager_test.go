@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -303,19 +302,24 @@ func TestHandshakeTimeoutSkipsExtension(t *testing.T) {
 
 	mgr := New(tmp, "", "0.0.0-test", "anthropic", "claude-opus-4-7", &stubHooks{})
 	defer mgr.Stop(time.Second)
+	// Shorten the deadline rather than sit out the shipping default: what this
+	// test asserts is that the timeout FIRES and bounds Discover, not what its
+	// value is (that is TestNewExtensionManagerAppliesTheConfiguredHelloTimeout).
+	const timeout = 2 * time.Second
+	mgr.SetHelloTimeout(timeout)
 
 	start := time.Now()
 	errs := mgr.Discover(context.Background())
 	elapsed := time.Since(start)
 
 	// Must return promptly after the handshake timeout, not hang.
-	if elapsed > extdriver.HelloTimeout+3*time.Second {
-		t.Fatalf("Discover took %s; expected to return near extdriver.HelloTimeout (%s)", elapsed, extdriver.HelloTimeout)
+	if elapsed > timeout+3*time.Second {
+		t.Fatalf("Discover took %s; expected to return near the hello timeout (%s)", elapsed, timeout)
 	}
 	// And it must actually have waited for the timeout, not bailed early
 	// for some other reason.
-	if elapsed < extdriver.HelloTimeout {
-		t.Fatalf("Discover returned in %s, before extdriver.HelloTimeout (%s)", elapsed, extdriver.HelloTimeout)
+	if elapsed < timeout {
+		t.Fatalf("Discover returned in %s, before the hello timeout (%s)", elapsed, timeout)
 	}
 	// The failure must be reported.
 	if len(errs) == 0 {

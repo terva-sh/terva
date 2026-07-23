@@ -792,7 +792,7 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args build.Args, r *build.
 // exist yet at agent-build time; a future slash-command/session-identity slice
 // would emit it after NewSession, mirroring how the headless modes defer it.
 func (f *acpFactory) setupACPExtensions(ctx context.Context, args build.Args, r *build.Resolved) (*extensions.Manager, func()) {
-	extMgr := extensions.New(config.TervaHome(), r.CWD, f.version, r.Provider, r.Model, build.NonInteractiveExtHooks{})
+	extMgr := build.NewExtensionManager(config.TervaHome(), r.CWD, f.version, r.Provider, r.Model, build.NonInteractiveExtHooks{})
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions)      // before Discover/LoadExplicit
 	extMgr.SetAllowedExtensions(args.WithExtensions)       // --extensions allowlist; --ext paths bypass

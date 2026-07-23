@@ -20,7 +20,10 @@ import (
 
 // Tunables. Fields on the Proxy (not consts) so tests can shrink them.
 const (
-	defaultHelloTimeout   = 3 * time.Second  // same grace as extensions
+	// A connector proxy is dialled on demand, not at startup, so its hello
+	// grace stays short and independent of extdriver.DefaultHelloTimeout —
+	// which was raised once extension loading moved off the startup path.
+	defaultHelloTimeout   = 3 * time.Second
 	defaultConnectTimeout = 30 * time.Second // service dial + auth round-trip
 	defaultSendTimeout    = 30 * time.Second // per send/send_image/send_file result
 	defaultRestartMax     = 3                // crashes tolerated per window

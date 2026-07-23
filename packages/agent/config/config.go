@@ -233,6 +233,22 @@ type Config struct {
 	// disabled. See docs/extensions.md.
 	DisableExtensions []string `json:"disable_extensions,omitempty"`
 
+	// ExtensionHelloTimeout overrides, in SECONDS, how long terva waits for an
+	// extension's first `hello` frame before killing the process group and
+	// skipping it for the run. 0 uses extdriver.DefaultHelloTimeout (10s).
+	//
+	// Raise it when a launcher builds its extension before exec'ing it and that
+	// build genuinely needs longer than the default — a cold Rust build, a
+	// machine with an empty module cache. The extension cannot ask for the time
+	// itself: the thing that would ask is the artifact still being compiled, so
+	// the operator has to say it instead. Prebuilding is the better answer
+	// wherever it's available; this is the escape hatch for where it isn't.
+	//
+	// User-level only, deliberately: it describes the machine's toolchain
+	// speed, not a repository, and a project must not be able to make terva sit
+	// longer on its own extensions. See docs/extensions.md.
+	ExtensionHelloTimeout int `json:"extension_hello_timeout,omitempty"`
+
 	// LazyTools enables lazy tool visibility (retro H2·b): only the core group
 	// of built-in coding tools plus LazyToolActive groups are advertised to the
 	// model; every other extension/MCP group starts hidden (still callable and
