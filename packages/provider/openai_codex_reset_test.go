@@ -103,9 +103,9 @@ func TestCodexListResetsCaches(t *testing.T) {
 
 	// Past the TTL it refetches — the cache is a rate limit, not a freeze.
 	inner := c.(*codexClient)
-	inner.mu.Lock()
+	inner.resetsMu.Lock()
 	inner.resetsAt = time.Now().Add(-resetsTTL - time.Second)
-	inner.mu.Unlock()
+	inner.resetsMu.Unlock()
 	if _, err := ClientListResets(ctx, c); err != nil {
 		t.Fatalf("list after TTL: %v", err)
 	}

@@ -188,3 +188,147 @@ func deepseekBalanceURL(baseURL string) string {
 	}
 	return "https://api.deepseek.com/user/balance"
 }
+
+// kimiUsageDetail is one window's counters. Kimi Code reports every number as a
+// STRING ("100") and every reset as RFC3339; `used` is present on the aggregate
+// but omitted on sub-windows (derive it from limit-remaining there).
+type kimiUsageDetail struct {
+	Limit     string `json:"limit"`
+	Used      string `json:"used"`
+	Remaining string `json:"remaining"`
+	ResetTime string `json:"resetTime"`
+}
+
+// kimiUsageResponse mirrors GET {base}/v1/usages. `usage` is the long-horizon
+// (weekly) aggregate with no window duration; each `limits[]` entry is a shorter
+// window (e.g. duration:300 timeUnit:TIME_UNIT_MINUTE = the 5h rolling window)
+// carrying its own duration. See docs — usage is body-only, never in headers.
+type kimiUsageResponse struct {
+	Usage  kimiUsageDetail `json:"usage"`
+	Limits []struct {
+		Window struct {
+			Duration int    `json:"duration"`
+			TimeUnit string `json:"timeUnit"`
+		} `json:"window"`
+		Detail kimiUsageDetail `json:"detail"`
+	} `json:"limits"`
+}
+
+// parseKimiUsage maps a /v1/usages body into subscription-plan windows. Pure (no
+// I/O) so it is table-testable, mirroring parseCodexUsageHeaders. Windows are
+// WindowPlan (a subscription budget, like Codex's 5h/weekly) — NOT WindowRateLimit,
+// which is reserved for ephemeral RPM/TPM windows off x-ratelimit-* headers.
+func parseKimiUsage(body []byte) (UsageSnapshot, bool) {
+	var r kimiUsageResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return UsageSnapshot{}, false
+	}
+	var windows []UsageWindow
+	// The top-level aggregate carries no duration, so label it from the
+	// fallback; the finer limits[] windows each carry an explicit duration.
+	if w, ok := kimiWindow(r.Usage, 0, "weekly"); ok {
+		windows = append(windows, w)
+	}
+	for _, l := range r.Limits {
+		mins := kimiWindowMinutes(l.Window.Duration, l.Window.TimeUnit)
+		if w, ok := kimiWindow(l.Detail, mins, "limit"); ok {
+			windows = append(windows, w)
+		}
+	}
+	if len(windows) == 0 {
+		return UsageSnapshot{}, false
+	}
+	return UsageSnapshot{Provider: "kimi", Windows: windows, CapturedAt: time.Now()}, true
+}
+
+// kimiWindow builds one UsageWindow from a detail block; ok=false when it names
+// no usable limit. Prefers an explicit `used`, else derives it from remaining.
+func kimiWindow(d kimiUsageDetail, minutes int, fallbackLabel string) (UsageWindow, bool) {
+	limit := parseKimiNum(d.Limit)
+	if limit <= 0 {
+		return UsageWindow{}, false
+	}
+	used := parseKimiNum(d.Used)
+	if strings.TrimSpace(d.Used) == "" && strings.TrimSpace(d.Remaining) != "" {
+		used = limit - parseKimiNum(d.Remaining)
+	}
+	pct := used / limit * 100
+	switch {
+	case pct < 0:
+		pct = 0
+	case pct > 100:
+		pct = 100
+	}
+	return UsageWindow{
+		Label:         windowLabel(minutes, fallbackLabel),
+		UsedPercent:   pct,
+		WindowMinutes: minutes,
+		ResetsAt:      parseCodexResetAt(d.ResetTime),
+		Kind:          WindowPlan,
+	}, true
+}
+
+// kimiWindowMinutes converts a {duration,timeUnit} window into minutes. Accepts
+// both the enum ("TIME_UNIT_MINUTE") and the bare unit ("MINUTE"); 0 when unknown.
+func kimiWindowMinutes(duration int, unit string) int {
+	switch strings.ToUpper(strings.TrimPrefix(strings.ToUpper(unit), "TIME_UNIT_")) {
+	case "MINUTE":
+		return duration
+	case "HOUR":
+		return duration * 60
+	case "DAY":
+		return duration * 1440
+	case "WEEK":
+		return duration * 10080
+	case "MONTH":
+		return duration * 43200
+	}
+	return 0
+}
+
+func parseKimiNum(s string) float64 {
+	v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	return v
+}
+
+// fetchKimiUsage returns a usageFetcher for Kimi Code's GET {base}/v1/usages.
+// Unlike the OpenRouter/DeepSeek fetchers (static API keys), Kimi's credential
+// is a rotating OAuth token, so it is resolved through cred on EVERY call — a
+// captured token would go stale on the next refresh. Auth uses x-api-key (the
+// same header the inference path sends) plus Kimi Code's X-Msh-* identity headers.
+func fetchKimiUsage(httpc *http.Client, cred CredentialSource, baseURL string, headers map[string]string) usageFetcher {
+	usagesURL := strings.TrimRight(baseURL, "/") + "/v1/usages"
+	return func(ctx context.Context) (UsageSnapshot, error) {
+		token, err := cred(ctx)
+		if err != nil {
+			return UsageSnapshot{}, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, usagesURL, nil)
+		if err != nil {
+			return UsageSnapshot{}, err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("x-api-key", token)
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := httpc.Do(req)
+		if err != nil {
+			return UsageSnapshot{}, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+			return UsageSnapshot{}, fmt.Errorf("kimi usage GET %s: status %d: %s", usagesURL, resp.StatusCode, strings.TrimSpace(string(b)))
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		if err != nil {
+			return UsageSnapshot{}, err
+		}
+		snap, ok := parseKimiUsage(body)
+		if !ok {
+			return UsageSnapshot{}, fmt.Errorf("kimi usage %s: no windows in response", usagesURL)
+		}
+		return snap, nil
+	}
+}

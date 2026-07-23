@@ -42,14 +42,16 @@ type codexClient struct {
 	baseURL   string
 	http      *http.Client
 
-	// Latest usage snapshot parsed from response headers (see
-	// recordUsageHeaders). Guarded by mu because Stream runs
-	// concurrently with UsageSnapshot reads from the TUI.
-	mu        sync.Mutex
-	lastUsage UsageSnapshot
-	hasUsage  bool
+	// usage holds the subscription-window snapshot parsed from response
+	// headers (see recordUsageHeaders); Stream writes it while the TUI reads
+	// it. Seeded across a client rebuild (see SeedUsage) so the meters survive
+	// a token refresh.
+	usage usageObservation
 
-	// Reset credits, cached for resetsTTL (see ListResets). Also under mu.
+	// Reset credits, cached for resetsTTL (see ListResets). Own guard: the
+	// reset cache is a distinct concern from the usage snapshot and the two
+	// are never touched together, so they do not share a lock.
+	resetsMu  sync.Mutex
 	resets    []UsageReset
 	hasResets bool
 	resetsAt  time.Time
@@ -532,9 +534,7 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 // it, and resets when a token refresh rebuilds the client (the next
 // turn repopulates from fresh headers).
 func (c *codexClient) UsageSnapshot() (UsageSnapshot, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.lastUsage, c.hasUsage
+	return c.usage.snapshot()
 }
 
 // SeedUsage primes the snapshot from a predecessor client, so a rebuild
@@ -543,29 +543,16 @@ func (c *codexClient) UsageSnapshot() (UsageSnapshot, bool) {
 // nothing about this subscription — and a live observation always wins over
 // a seed, since the seed is by definition at least one rebuild old.
 func (c *codexClient) SeedUsage(snap UsageSnapshot) {
-	if snap.Provider != "openai-codex" {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.hasUsage {
-		return
-	}
-	c.lastUsage = snap
-	c.hasUsage = true
+	c.usage.seed(snap, "openai-codex")
 }
 
 func (c *codexClient) recordUsageHeaders(h http.Header) {
 	snap, ok := parseCodexUsageHeaders(h)
-	if !ok {
-		return
+	if ok {
+		snap.Provider = "openai-codex"
+		snap.CapturedAt = time.Now()
 	}
-	snap.Provider = "openai-codex"
-	snap.CapturedAt = time.Now()
-	c.mu.Lock()
-	c.lastUsage = snap
-	c.hasUsage = true
-	c.mu.Unlock()
+	c.usage.record(snap, ok)
 }
 
 // parseCodexUsageHeaders reads the x-codex-* usage headers Codex returns

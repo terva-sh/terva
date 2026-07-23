@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -41,11 +40,11 @@ type openaiClient struct {
 	headers map[string]string
 	http    *http.Client
 
-	// usageMu guards the rate-limit snapshot parsed from response headers in
-	// Stream and read by UsageSnapshot from the TUI goroutine.
-	usageMu   sync.Mutex
-	lastUsage UsageSnapshot
-	hasUsage  bool
+	// usage holds the rate-limit snapshot parsed from response headers in
+	// Stream and read by UsageSnapshot from the TUI goroutine. Ephemeral
+	// (WindowRateLimit) — deliberately NOT seeded across a client rebuild, so
+	// no SeedUsage method is wired to it.
+	usage usageObservation
 }
 
 // NewOpenAI creates an OpenAI client using an API key. baseURL may be empty.
@@ -534,23 +533,17 @@ func (c *openaiClient) recordRateLimitHeaders(h http.Header) {
 		return
 	}
 	snap, ok := parseRateLimitHeaders(h, spec)
-	if !ok {
-		return
+	if ok {
+		snap.Provider = c.name
 	}
-	snap.Provider = c.name
-	c.usageMu.Lock()
-	c.lastUsage = snap
-	c.hasUsage = true
-	c.usageMu.Unlock()
+	c.usage.record(snap, ok)
 }
 
 // UsageSnapshot returns the rate-limit windows parsed from the most recent
 // response (the UsageReporter contract). ok=false until the first response
 // that carried usable x-ratelimit-* headers.
 func (c *openaiClient) UsageSnapshot() (UsageSnapshot, bool) {
-	c.usageMu.Lock()
-	defer c.usageMu.Unlock()
-	return c.lastUsage, c.hasUsage
+	return c.usage.snapshot()
 }
 
 func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {

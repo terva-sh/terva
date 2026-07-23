@@ -134,13 +134,13 @@ func parseCodexResetTime(s string) time.Time {
 const resetsTTL = 5 * time.Minute
 
 func (c *codexClient) ListResets(ctx context.Context) ([]UsageReset, error) {
-	c.mu.Lock()
+	c.resetsMu.Lock()
 	if c.hasResets && time.Since(c.resetsAt) < resetsTTL {
 		out := append([]UsageReset(nil), c.resets...) // copy: callers must not alias the cache
-		c.mu.Unlock()
+		c.resetsMu.Unlock()
 		return out, nil
 	}
-	c.mu.Unlock()
+	c.resetsMu.Unlock()
 
 	var resp codexResetCreditsResp
 	if err := c.whamJSON(ctx, http.MethodGet, "/wham/rate-limit-reset-credits", nil, &resp); err != nil {
@@ -154,11 +154,11 @@ func (c *codexClient) ListResets(ctx context.Context) ([]UsageReset, error) {
 		out = append(out, codexResetFromWire(cr))
 	}
 
-	c.mu.Lock()
+	c.resetsMu.Lock()
 	c.resets = append([]UsageReset(nil), out...)
 	c.hasResets = true
 	c.resetsAt = time.Now()
-	c.mu.Unlock()
+	c.resetsMu.Unlock()
 	return out, nil
 }
 
@@ -168,9 +168,9 @@ func (c *codexClient) ListResets(ctx context.Context) ([]UsageReset, error) {
 // there — the UI refreshes immediately after consuming, so this is not
 // theoretical.
 func (c *codexClient) invalidateResets() {
-	c.mu.Lock()
+	c.resetsMu.Lock()
 	c.resets, c.hasResets, c.resetsAt = nil, false, time.Time{}
-	c.mu.Unlock()
+	c.resetsMu.Unlock()
 }
 
 func (c *codexClient) ConsumeReset(ctx context.Context, id string) (UsageResetResult, error) {

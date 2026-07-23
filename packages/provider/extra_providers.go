@@ -180,13 +180,23 @@ func NewKimiCodingSourceWithHeaders(cred CredentialSource, baseURL string, heade
 	if baseURL == "" {
 		baseURL = "https://api.kimi.com/coding"
 	}
-	return &anthropicClient{
+	base := strings.TrimRight(baseURL, "/")
+	inner := &anthropicClient{
 		cred:    cred,
-		baseURL: strings.TrimRight(baseURL, "/"),
+		baseURL: base,
 		name:    "kimi",
 		headers: headers,
 		http:    &http.Client{Timeout: 0},
 	}
+	// Usage (/usage): Kimi Code reports subscription windows (5h rolling +
+	// weekly) from a dedicated GET {base}/v1/usages — body-only, nothing in
+	// response headers — so it takes the SAME pollingUsageClient wrapper as
+	// OpenRouter/DeepSeek rather than the header-parse path baked into the
+	// openai/codex clients. This is the anthropic-protocol proof that the poll
+	// mechanism is decomposed from the wire format: the wrapper only calls
+	// Stream/Name/Unwrap on its inner, and capability/reporter probes reach the
+	// anthropic client through Unwrap, so nothing about kimi's behavior forks.
+	return newPollingUsageClient(inner, usagePollTTL, fetchKimiUsage(&http.Client{Timeout: 0}, cred, base, headers))
 }
 
 // NewMinimaxAnthropic is the anthropic-messages flavor on
