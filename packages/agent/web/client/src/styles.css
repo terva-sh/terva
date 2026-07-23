@@ -1077,3 +1077,60 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .load-earlier button { font: inherit; font-size: var(--fs-note); color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
 .load-earlier button:hover:not(:disabled) { color: var(--fg); }
 .load-earlier button:disabled { opacity: .6; cursor: default; }
+
+/* --- Session-focused landing (features/landing/PanelLanding) --------------
+   The session-less boot state a fresh tab lands on: a "start new" hero over the
+   sessions you have, plus a persona roster. Panel-native, speaking the panel's
+   own tokens; shaped after Stage's Library but centred on sessions. */
+.landing { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow-y: auto; }
+.landing-top { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 2; }
+.landing-brand { font-weight: 600; letter-spacing: .02em; }
+.landing-top__spacer { flex: 1; }
+.landing-top__link { color: var(--muted); text-decoration: none; font-size: var(--fs-ui); padding: 4px 8px; border-radius: 8px; }
+.landing-top__link:hover { color: var(--fg); background: var(--panel); }
+
+.landing-body { display: flex; flex-direction: column; gap: 20px; padding: 20px 16px 32px; width: 100%; max-width: 900px; margin: 0 auto; }
+
+.landing-hero { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; padding: 18px 20px; border: 1px solid var(--line); border-radius: var(--radius); background: color-mix(in srgb, var(--accent) 7%, var(--bg)); cursor: pointer; }
+.landing-hero:hover { border-color: var(--accent); }
+.landing-hero__icon { font-size: 28px; line-height: 1; color: var(--accent); flex: none; }
+.landing-hero__text { display: flex; flex-direction: column; gap: 3px; }
+.landing-hero__title { font-weight: 600; font-size: 16px; }
+.landing-hero__sub { color: var(--muted); font-size: var(--fs-detail); }
+
+.landing-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.landing-section-head h2 { margin: 0; font-size: var(--fs-ui); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.landing-empty { color: var(--muted); font-size: var(--fs-detail); }
+
+.landing-persona-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.landing-persona { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); cursor: pointer; min-width: 0; }
+.landing-persona:hover { border-color: var(--muted); }
+.landing-persona__emoji { font-size: 20px; line-height: 1; flex: none; }
+/* Name over specialty: the name gets its own line so it is never squeezed by a
+   long, slash-separated specialty (which sits muted beneath it). */
+.landing-persona__text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.landing-persona__name { font-weight: 500; font-size: var(--fs-ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.landing-persona__spec { color: var(--muted); font-size: var(--fs-note); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* sheets — same weight as .modal, self-contained so the landing owns its chrome */
+.landing-scrim { position: fixed; inset: 0; background: #0006; z-index: 40; display: flex; align-items: flex-start; justify-content: center; padding: 10vh 12px 12px; }
+.landing-sheet { width: min(480px, 96vw); max-height: 82vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 16px; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 40px #0007; }
+.landing-sheet--detail { width: min(560px, 96vw); }
+.landing-sheet h3 { margin: 0; font-size: 15px; }
+.landing-field { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-detail); color: var(--muted); }
+.landing-field select { font: inherit; font-size: var(--fs-ui); color: var(--fg); padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.landing-sheet__actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+
+.landing-close { border: none; background: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; flex: none; }
+.landing-close:hover { color: var(--fg); }
+.landing-error { color: var(--danger); font-size: var(--fs-detail); cursor: pointer; }
+
+.landing-persona-detail__head { display: flex; align-items: flex-start; gap: 12px; }
+.landing-persona-detail__emoji { font-size: 30px; line-height: 1; flex: none; }
+.landing-persona-detail__id { flex: 1; min-width: 0; }
+.landing-persona-detail__id h3 { margin: 0 0 2px; font-size: 16px; }
+.landing-persona-detail__meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: var(--fs-note); }
+.landing-persona-detail__summary { font-size: var(--fs-ui); }
+.landing-persona-detail__field { margin-top: 8px; }
+.landing-persona-detail__label { margin-bottom: 3px; font-size: var(--fs-note); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.landing-persona-detail__body p { margin: 0; white-space: pre-wrap; }
