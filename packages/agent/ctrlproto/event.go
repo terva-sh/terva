@@ -150,11 +150,12 @@ const (
 	// uncached. Emitted only on a real diff (an identical rebuild is silent).
 	// Data keys: "scope" (system | tools | both), "reason" (approval-mode |
 	// auto-swarm | extension-reload | mcp-toggle | trust | tool-withdrawal |
-	// extension-context | chat-connect | chat-disconnect), and "context_tokens" (the approximate token count the
+	// extension-context | extensions-ready | chat-connect | chat-disconnect), and "context_tokens" (the approximate token count the
 	// next turn re-reads, from the last turn's usage; omitted when no turn has
 	// run yet). The extension-driven reasons (tool-withdrawal,
-	// extension-context) are suppressed to a host log when they fire before the
-	// first turn — a startup policy assertion invalidates no cache.
+	// extension-context, extensions-ready) are suppressed to a host log when
+	// they fire before the first turn — a startup policy assertion, or the
+	// background extension start landing its tools, invalidates no cache.
 	NoticePromptRebuilt = "prompt_rebuilt"
 )
 

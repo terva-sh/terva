@@ -45,6 +45,7 @@ type wsSession struct {
 	gate        *core.ConfirmGate      // nil in pure-yolo (no confirmation needed)
 	extMgr      *extensions.Manager    // this session's extension subprocesses
 	stopExt     func()                 // tears extMgr down on close
+	roSet       *core.ReadOnlySet      // the live policy's read-only set, so a rebuild's merges land where the gate reads them (nil in pure-yolo)
 	skillTool   *skills.Tool           // available skills, for /skill autocomplete (may be nil)
 	tasks       *tasktool.Controller   // the built-in task board (nil when the session has no base workspace tools)
 	loreEntries []lore.Entry           // discovered lore, for the lore inspector pane (nil when lore off)
@@ -52,6 +53,11 @@ type wsSession struct {
 	user        *build.NoteRecord      // live user-persona description record (nil for a coding session); user.bind writes it, the per-turn tail reads it
 	worldLore   *build.WorldLoreRecord // live World-lore record (nil for a coding session); world.lore.* writes it, the per-turn tail scans it
 	loreFired   *build.LoreFiredRecord // the last turn's lore activation trace (which entries fired, why, what the budget dropped); refreshed on reloadLore
+	// extReady is closed once this session's extensions have finished starting
+	// AND their tools have been merged into the agent. launchTurn waits on it,
+	// so the first turn can never go out against a half-registered extension
+	// set. Nil on bare test fixtures that skip buildSession.
+	extReady chan struct{}
 	// actorCast + warmActors back the --play director's actor_spawn tool: the
 	// closed declared cast and the live-actor cache that survives registry
 	// rebuilds (so re-injecting actor_spawn on reload keeps the warm scene).
@@ -241,6 +247,12 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 			s.ws.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("permissions"))
 		})
 		r.AdoptReadOnlySet(pol.ReadOnly)
+		// Retain it: every later rebuild re-merges extension and MCP tools, and
+		// MergeToolsForMode registers a read_only tool's name into whichever set
+		// the Resolved carries. A fresh Resolve carries a fresh one, so without
+		// this the gate would stop auto-allowing an extension's read-only tools
+		// after any rebuild — and the startup merge IS a rebuild now.
+		s.roSet = pol.ReadOnly
 	}
 	r.SetAsker(&webAsker{s: s})
 	r.SetEscalator(&sessionEscalator{s: s})
@@ -472,10 +484,29 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		s.seedMsgVars()
 	}
 
-	// Announce the session to extensions AFTER it exists, so a session-keyed
-	// extension (e.g. memory) learns the real id before the first tool call.
-	build.EmitSessionStart(extMgr, sess)
 	build.RebindTasks(r.Tasks, sess)
+
+	// Extensions start in the background (setupWebExtensions), so the session
+	// materializes without waiting on subprocess handshakes. Everything that
+	// needs a live extension is deferred to here: fold their tools into the
+	// agent, then announce the session so a session-keyed extension (e.g.
+	// memory) learns the real id. launchTurn blocks on extReady, so both land
+	// before the model's first turn — the same guarantee the synchronous build
+	// gave, just paid out of the user's typing time instead of their startup.
+	s.extReady = make(chan struct{})
+	go func() {
+		defer close(s.extReady)
+		extMgr.AwaitStarted(w.ctx)
+		if w.ctx.Err() != nil {
+			return // daemon shutting down; nothing left to rebuild for
+		}
+		// A session with no extensions loaded has nothing to merge, and the
+		// rebuild is a full re-Resolve — skip it rather than burn it on a no-op.
+		if extMgr.Count() > 0 {
+			s.rebuildTools("extensions-ready")
+		}
+		build.EmitSessionStart(extMgr, sess)
+	}()
 	return s, nil
 }
 
@@ -597,33 +628,45 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 	}
 }
 
-// setupWebExtensions builds this session's extension manager and merges its
-// tools into r before the agent is constructed. Mirrors the ACP per-session
-// setup (extensions only — no connectors, no MCP), returning a stop closure the
-// session calls on close. The manager is always non-nil (a --no-ext session
-// just has an empty tool set).
+// setupWebExtensions builds this session's extension manager and STARTS it in
+// the background. Mirrors the ACP per-session setup (extensions only — no
+// connectors, no MCP), returning a stop closure the session calls on close.
+// The manager is always non-nil (a --no-ext session just has an empty tool
+// set).
+//
+// Unlike the synchronous hosts it does NOT merge extension tools into r: the
+// subprocess handshake and ready wait are up to ~6s of latency terva does not
+// control, and paying them here means a client stares at nothing while an npx
+// cold start finishes. buildSession folds the tools in as soon as the start
+// completes, and launchTurn blocks on that signal, so the model still never
+// sees a turn with a half-registered extension set.
 func setupWebExtensions(ctx context.Context, args build.Args, r *build.Resolved, version string, s *wsSession) (*extensions.Manager, func()) {
 	// webExtHooks routes extension panel/status frames into the session's surface
 	// registry (broadcasting to clients); other hooks stay non-interactive no-ops.
-	extMgr := extensions.New(config.TervaHome(), r.CWD, version, r.Provider, r.Model, webExtHooks{s: s})
+	extMgr := build.NewExtensionManager(config.TervaHome(), r.CWD, version, r.Provider, r.Model, webExtHooks{s: s})
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions)
 	extMgr.SetAllowedExtensions(args.WithExtensions)
 	extMgr.SetConfigResolver(build.ResolveExtensionConfig)
 	build.WireSessionReader(extMgr, config.TervaHome(), r.CWD)
 	extMgr.SetProjectTrusted(r.Trusted)
-	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
-		s.diag(fmt.Sprintf("extension load: %v", e))
+	// Cancelling the start ctx on close aborts an in-flight spawn rather than
+	// leaving Stop to race it (Driver.Load rolls a cancelled claim back).
+	startCtx, cancelStart := context.WithCancel(ctx)
+	extMgr.StartAsync(startCtx, args.Exts, !args.NoExt, webStartupReadyGrace, func(err error) {
+		s.diag(fmt.Sprintf("extension load: %v", err))
+	})
+	return extMgr, func() {
+		cancelStart()
+		extMgr.Stop(2 * time.Second)
 	}
-	if !args.NoExt {
-		for _, e := range extMgr.Discover(ctx) {
-			s.diag(fmt.Sprintf("extension load: %v", e))
-		}
-	}
-	extMgr.WaitForReady(3 * time.Second)
-	r.MergeExtensionTools(&build.ExtToolAdapter{Mgr: extMgr})
-	return extMgr, func() { extMgr.Stop(2 * time.Second) }
 }
+
+// webStartupReadyGrace is how long a freshly spawned extension has to signal
+// ready before the session proceeds without it. Same value the reload path and
+// every other host use; it costs no startup latency here because the wait runs
+// behind the session build (see setupWebExtensions).
+const webStartupReadyGrace = 3 * time.Second
 
 // prompt starts a turn. The turn's context is derived from the workspace (not a
 // client connection), so a client disconnecting mid-turn does not abort the run
@@ -662,6 +705,23 @@ func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock) error 
 // if a turn is already running. The context is derived from the workspace (not a
 // client connection), so a client disconnecting mid-turn does not abort the run
 // other clients are watching. The caller runs the turn with launchTurn.
+// awaitExtensions blocks until this session's background extension start has
+// finished and its tools have been merged into the agent, or ctx is done. A
+// session built without the async start (a bare test fixture) returns at once.
+//
+// The agent pins its tool set once per turn, before the first model call, so
+// waiting here — rather than at prompt time — is what makes the first turn see
+// the same registry the synchronous build used to guarantee.
+func (s *wsSession) awaitExtensions(ctx context.Context) {
+	if s.extReady == nil {
+		return
+	}
+	select {
+	case <-s.extReady:
+	case <-ctx.Done():
+	}
+}
+
 func (s *wsSession) beginTurn() (context.Context, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -681,6 +741,12 @@ func (s *wsSession) beginTurn() (context.Context, error) {
 // claimed the slot with beginTurn.
 func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context) error, afterTurn func()) {
 	go func() {
+		// Extensions load in the background so the session materializes at
+		// once; this is where that debt comes due. The turn slot is already
+		// claimed, so a client shows a running turn rather than a stalled
+		// request — and in practice the wait is zero, because the user spent
+		// longer typing than the subprocesses spent handshaking.
+		s.awaitExtensions(turnCtx)
 		err := gen(turnCtx)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			s.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "error", Error: err.Error()}))
@@ -995,6 +1061,13 @@ func (s *wsSession) rebuildTools(reason string) {
 	if err != nil {
 		return
 	}
+	// Merge into the LIVE policy's read-only set, not the throwaway one this
+	// Resolve just minted: MergeToolsForMode registers each read_only tool
+	// there, and the confirm gate reads the policy's copy. Without this an
+	// extension's read-only tools would start prompting after any rebuild.
+	if s.roSet != nil {
+		rr.AdoptReadOnlySet(s.roSet)
+	}
 	// extMgr is always non-nil for a buildSession session; the guard keeps
 	// the settings verbs (approval / auto-swarm) safe on bare fixtures, same
 	// stance as the nil-tolerant apply helpers.
@@ -1079,7 +1152,7 @@ func (s *wsSession) notifyPromptRebuilt(toolsChanged, systemChanged bool, reason
 // invalidate — a user-initiated rebuild always warrants its confirmation.
 func isAutomaticRebuild(reason string) bool {
 	switch reason {
-	case "tool-withdrawal", "extension-context":
+	case "tool-withdrawal", "extension-context", "extensions-ready":
 		return true
 	default:
 		return false

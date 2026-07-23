@@ -108,6 +108,12 @@ type Manager struct {
 	// session_start and session_end stay paired. Opaque strings — no core
 	// dependency (the deps test forbids it). Guarded by mu.
 	lastAnnounced SessionIdentity
+
+	// started, when non-nil, is closed once StartAsync's background start
+	// sequence has finished. AwaitStarted joins it. Nil until StartAsync is
+	// called, so the hosts that still start synchronously (and every test
+	// fixture) are unaffected. Guarded by mu.
+	started chan struct{}
 }
 
 // SessionIdentity is the core-free snapshot the Manager remembers so it
@@ -257,6 +263,84 @@ func (m *Manager) Discover(ctx context.Context) []error {
 		errs = append(errs, e)
 	}
 	return errs
+}
+
+// StartAsync runs this manager's whole start sequence — LoadExplicit for
+// the --ext paths, then Discover (unless suppressed), then the ready wait —
+// on a background goroutine, and returns immediately.
+//
+// Every step of that sequence is a wait on a subprocess terva does not
+// control. Discover blocks up to extdriver.HelloTimeout per extension on the
+// hello handshake, and the ready wait blocks up to grace on top of it, so a
+// host that runs them inline pays both before it can show a session — dead
+// time for a user who hasn't typed yet, and the reason those graces have to
+// stay small. Backgrounding them turns the wait into something the user's own
+// typing latency covers.
+//
+// CONTRACT: extension tools, commands, panels and static context are NOT
+// registered when this returns. Join with AwaitStarted before the first model
+// call and rebuild the host's tool registry there — the agent pins its tool
+// set per turn, so a set installed before the turn begins is the set the model
+// sees. Static bundle contributions (skills, personas, lore) are read from
+// disk by their own scanners and never needed the subprocess at all, so they
+// are unaffected either way.
+//
+// Cancelling ctx aborts an in-flight start: spawn kills the subprocess it was
+// waiting on and Load rolls the name claim back, so a Stop racing a start
+// can't orphan a process.
+//
+// onErr, when non-nil, receives each per-extension load error as it is
+// produced. It runs on the background goroutine, so it must be safe to call
+// off the host's main goroutine.
+//
+// Second and later calls are no-ops: the first start owns the lifecycle.
+func (m *Manager) StartAsync(ctx context.Context, explicit []string, discover bool, grace time.Duration, onErr func(error)) {
+	m.mu.Lock()
+	if m.started != nil {
+		m.mu.Unlock()
+		return
+	}
+	done := make(chan struct{})
+	m.started = done
+	m.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		report := func(errs []error) {
+			if onErr == nil {
+				return
+			}
+			for _, err := range errs {
+				onErr(err)
+			}
+		}
+		// --ext paths first so they win name conflicts against installed
+		// extensions, exactly as in the synchronous hosts.
+		report(m.LoadExplicit(ctx, explicit))
+		if discover {
+			report(m.Discover(ctx))
+		}
+		if ctx.Err() != nil {
+			return // shutting down — nobody is left to consume the ready flags
+		}
+		m.Driver.WaitForReady(grace)
+	}()
+}
+
+// AwaitStarted blocks until StartAsync's sequence has finished or ctx is done.
+// It returns immediately when StartAsync was never called, so a host can call
+// it unconditionally on a manager it may have started synchronously.
+func (m *Manager) AwaitStarted(ctx context.Context) {
+	m.mu.RLock()
+	done := m.started
+	m.mu.RUnlock()
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 // searchDirs returns the directories the discoverer walks, in

@@ -13,7 +13,6 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/tools"
@@ -62,23 +61,23 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// host-hooks integration. Notify/Display calls from extensions
 	// emit RPC events instead of TUI lines so any consumer can react.
 	extHooks := &rpcExtHooks{}
-	extMgr := extensions.New(config.TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
+	extMgr := build.NewExtensionManager(config.TervaHome(), r.CWD, version, r.Provider, r.Model, extHooks)
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	extMgr.SetAllowedExtensions(args.WithExtensions)  // --extensions allowlist; --ext paths bypass
 	build.WireSessionReader(extMgr, config.TervaHome(), r.CWD)
 	extMgr.SetProjectTrusted(r.Trusted) // gate project ext dirs on Workspace Trust
-	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
-		fmt.Fprintln(os.Stderr, "extension load:", e)
-	}
-	if !args.NoExt {
-		for _, e := range extMgr.Discover(ctx) {
-			fmt.Fprintln(os.Stderr, "extension load:", e)
-		}
-	}
-	extMgr.WaitForReady(3 * time.Second)
+	// Start the subprocesses in the background rather than blocking the whole
+	// launch on their handshakes: rpc is a long-lived server a driver spawns
+	// and waits on, so up to ~6s of hello + ready grace is latency the driver
+	// pays before it can send anything. runPrompt / runCompact join the start
+	// below, so the first turn still sees the complete tool set.
+	startCtx, cancelStart := context.WithCancel(ctx)
 	defer extMgr.Stop(2 * time.Second)
-	r.MergeExtensionTools(&build.ExtToolAdapter{Mgr: extMgr})
+	defer cancelStart() // LIFO: abort an in-flight spawn before tearing down
+	extMgr.StartAsync(startCtx, args.Exts, !args.NoExt, 3*time.Second, func(err error) {
+		fmt.Fprintln(os.Stderr, "extension load:", err)
+	})
 	_, stopMCP := build.SetupMCP(ctx, args, &r)
 	defer stopMCP()
 
@@ -123,14 +122,20 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// current agent so freshly-registered extension tools become
 	// callable without restarting the rpc process.
 	adapter := &build.ExtToolAdapter{Mgr: extMgr}
-	extMgr.SetOnReload(func() {
+	mergeExtTools := func() {
 		resolved, err := build.Resolve(args, true)
 		if err != nil {
 			return
 		}
+		// Merge into the LIVE gate's read-only set: MergeToolsForMode records
+		// each read_only tool's name in whichever set the Resolved carries, and
+		// a fresh Resolve carries a fresh one — without this the gate stops
+		// auto-allowing an extension's read-only tools after a rebuild.
+		resolved.AdoptReadOnlySet(roSet)
 		resolved.MergeExtensionTools(adapter)
 		ag.SetTools(resolved.ToolRegistry)
-	})
+	}
+	extMgr.SetOnReload(mergeExtTools)
 
 	// Session persistence & resume. rpc mode is stateless by default — its
 	// long-standing contract ("RPC persists no session") — so a run with no
@@ -155,9 +160,22 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 		defer sess.Close()
 		build.WireHeadlessSessionPersist(ag, sess)
 	}
-	// Announce the session to extensions with its real identity when one exists
-	// (nil emits a bare session_start, identical to the prior unconditional emit).
-	build.EmitSessionStart(extMgr, sess)
+	// Everything that needs a live extension waits for the background start:
+	// fold their tools into the agent, then announce the session with its real
+	// identity (a nil session emits a bare session_start, as before). Both land
+	// before the first turn because runPrompt / runCompact block on extReady.
+	extReady := make(chan struct{})
+	go func() {
+		defer close(extReady)
+		extMgr.AwaitStarted(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if extMgr.Count() > 0 {
+			mergeExtTools()
+		}
+		build.EmitSessionStart(extMgr, sess)
+	}()
 
 	server := &rpcServer{
 		ctx:      ctx,
@@ -167,6 +185,7 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 		model:    r.Model,
 		out:      os.Stdout,
 		version:  version,
+		extReady: extReady,
 	}
 	extHooks.server = server
 	// Fill the confirm gate's nil-inner hole with the rpc carrier when the driver
@@ -263,6 +282,12 @@ type rpcServer struct {
 	model    string
 	out      io.Writer
 	version  string
+
+	// extReady is closed once the background extension start has finished and
+	// its tools have been merged into the agent. The turn verbs wait on it so
+	// a driver that prompts the instant the process answers `hello` still gets
+	// the complete tool set on turn 1. Nil in test fixtures.
+	extReady <-chan struct{}
 
 	writeMu      sync.Mutex
 	turnMu       sync.Mutex // serialises one prompt at a time
@@ -496,6 +521,19 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 	}
 }
 
+// awaitExtensions blocks until the background extension start has finished and
+// its tools have been merged into the agent, or ctx is done. Returns at once
+// on a fixture built without the async start.
+func (s *rpcServer) awaitExtensions(ctx context.Context) {
+	if s.extReady == nil {
+		return
+	}
+	select {
+	case <-s.extReady:
+	case <-ctx.Done():
+	}
+}
+
 // runPrompt executes a single prompt turn and streams events out.
 // Holds turnMu so a second concurrent prompt blocks until this one
 // finishes; the user can abort with the abort command.
@@ -511,6 +549,12 @@ func (s *rpcServer) runPrompt(id, message string, images []struct {
 	defer s.setCancel(nil)
 
 	s.writeResponse(id, "prompt", map[string]any{"started": true})
+
+	// Pay the background extension start's debt before the agent pins its tool
+	// set for this turn. After the ack, so the driver knows its prompt was
+	// accepted rather than watching a silent socket; on the dispatch goroutine,
+	// so the read loop stays responsive and `abort` still works while we wait.
+	s.awaitExtensions(subCtx)
 
 	imgs := make([]provider.ImageBlock, 0, len(images))
 	for _, im := range images {
@@ -574,6 +618,11 @@ func (s *rpcServer) runCompact(id string) {
 	defer s.setCancel(nil)
 
 	s.writeResponse(id, "compact", map[string]any{"started": true})
+
+	// Same barrier as runPrompt, in the same place: a compaction is a model
+	// call too, and an extension's intercept hooks must be live before it goes
+	// out.
+	s.awaitExtensions(subCtx)
 	// res.Summary, not res: the event's "summary" field is a string, and
 	// map[string]any would have accepted the whole struct without a murmur
 	// from the compiler — silently turning a documented string field into an
