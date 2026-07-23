@@ -431,6 +431,11 @@ type ExtensionToolInfo struct {
 	// neither in plan nor by the read-only auto-allow. Empty falls back
 	// to ReadOnly. MCP tools leave it empty (they have only readOnlyHint).
 	Authority string
+	// Essential carries the source's load-bearing declaration (extension
+	// register_tool essential): the tool stays advertised every turn even
+	// under lazy tool visibility, rather than deferring behind activate_tools
+	// with the rest of its group. Extension-only; MCP tools leave it false.
+	Essential bool
 }
 
 // toolSummariesFromRegistry rebuilds the system-prompt tool list

@@ -55,6 +55,12 @@ type ToolInfo struct {
 	// auto-allowable), so a network-read tool is not mistaken for a
 	// local read. Empty falls back to ReadOnly.
 	Authority string
+	// Essential carries the extension's load-bearing declaration
+	// (register_tool essential): the tool stays advertised every turn even
+	// under lazy tool visibility instead of deferring behind activate_tools.
+	// Already capped per extension at registration (registerTool), so this
+	// reflects the honored value, not the raw request.
+	Essential bool
 	// Withdrawn is set when the owning extension hid this tool for the
 	// session (set_withdrawn_tools, protocol 4). The model-facing merge
 	// feed skips withdrawn tools so they leave the registry and the system
@@ -80,6 +86,7 @@ func (d *Driver) Tools() []ToolInfo {
 				Schema:      t.Schema,
 				ReadOnly:    t.ReadOnly,
 				Authority:   t.Authority,
+				Essential:   t.Essential,
 				Withdrawn:   ext.withdrawnTools[t.Name], // nil-map read is false
 			})
 		}

@@ -209,10 +209,51 @@ type RegisterToolFromExt struct {
 	// host falls back to the ReadOnly bool. An unknown value is treated
 	// as side-effecting (safe default). See docs/standard-tools.md.
 	Authority string `json:"authority,omitempty"`
+	// Essential marks a load-bearing tool that must stay advertised every
+	// turn even under lazy tool visibility, instead of lazy-loading behind
+	// an activate_tools call like the rest of its extension's group. Use it
+	// for a tool the extension's static guidance (register_context) tells
+	// the model to reach for before others — "search the index before you
+	// read a file" — so the tool that guidance names is actually in the
+	// tools array, not sitting deferred while the prompt points at it. The
+	// tool keeps its extension capability group, so its non-essential
+	// siblings still lazy-load; this only pins THIS tool's visibility. The
+	// host caps how many tools one extension may mark essential (excess are
+	// loaded deferred and logged) so an extension can't defeat lazy mode
+	// wholesale. Additive/optional: an older host ignores it (the tool
+	// lazy-loads as before) and a host with lazy mode off advertises
+	// everything regardless, so it is a no-op there — hence no protocol bump.
+	Essential bool `json:"essential,omitempty"`
 }
 
 type ReadyFromExt struct {
 	Type string `json:"type"`
+}
+
+// TypeBootstrap names the pre-hello progress frame.
+const TypeBootstrap = "bootstrap"
+
+// BootstrapFromExt is sent BEFORE hello, zero or more times, by a launcher
+// that has to build or fetch the extension before it can exec the process that
+// speaks this protocol:
+//
+//	{"type":"bootstrap","message":"compiling extension"}
+//
+// It exists because the hello deadline conflates two questions — "is this
+// process alive?" (seconds) and "how long may becoming the real process take?"
+// (a cold compile: minutes) — and the extension cannot answer the second,
+// since the thing that would answer is the artifact still being built. Each
+// frame restarts the hello deadline, so the host measures silence rather than
+// total elapsed time, and reports the message so a long build reads as
+// progress instead of a hang. An absolute ceiling still applies.
+//
+// Handled entirely in the host's spawn path, never by the SDK: the SDK isn't
+// running yet, which is precisely the situation. A launcher emits it with one
+// `printf`. Additive — a host that doesn't know the frame treats it as a
+// malformed hello and skips the extension, which is what happens today anyway.
+type BootstrapFromExt struct {
+	Type    string `json:"type"`
+	Message string `json:"message,omitempty"`
 }
 
 // HostToolCallFromExt asks the host to run one of ITS tools (read, bash,

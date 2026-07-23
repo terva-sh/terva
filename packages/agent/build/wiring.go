@@ -64,6 +64,7 @@ func (a *ExtToolAdapter) Tools() []ExtensionToolInfo {
 			Schema:      t.Schema,
 			ReadOnly:    t.ReadOnly,
 			Authority:   t.Authority,
+			Essential:   t.Essential,
 		})
 	}
 	return out
@@ -75,6 +76,7 @@ func (a *ExtToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {
 		Name:        info.Name,
 		Description: info.Description,
 		Schema:      info.Schema,
+		Essential:   info.Essential,
 	})
 }
 

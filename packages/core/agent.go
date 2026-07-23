@@ -647,7 +647,10 @@ func (a *Agent) newlyActiveSincePin(pinned map[string]bool) []string {
 	var names []string
 	for name, t := range a.Tools {
 		g := ToolGroup(t)
-		if g == CoreToolGroup || pinned[g] || !a.activeGroups[g] {
+		// An essential tool was already advertised at the pin, so activating
+		// its group makes nothing "newly" live — skip it so a continuation
+		// never announces a tool the model could already call.
+		if g == CoreToolGroup || pinned[g] || !a.activeGroups[g] || ToolEssential(t) {
 			continue
 		}
 		names = append(names, name)
@@ -801,8 +804,11 @@ func (a *Agent) turnToolsLocked(reg Registry) turnTools {
 	}
 }
 
-// lazyVisible advertises a tool iff its group is core or currently active. A
-// name absent from reg is advertised (never hidden by a stale predicate).
+// lazyVisible advertises a tool iff its group is core or currently active, or
+// the tool is declared essential (load-bearing) by its extension — an essential
+// tool stays advertised even from an inactive group, so guidance that names it
+// isn't pointing at a deferred tool. A name absent from reg is advertised
+// (never hidden by a stale predicate).
 func lazyVisible(reg Registry, active map[string]bool) func(name string) bool {
 	return func(name string) bool {
 		t, ok := reg[name]
@@ -810,7 +816,7 @@ func lazyVisible(reg Registry, active map[string]bool) func(name string) bool {
 			return true
 		}
 		g := ToolGroup(t)
-		return g == CoreToolGroup || active[g]
+		return g == CoreToolGroup || active[g] || ToolEssential(t)
 	}
 }
 
@@ -822,7 +828,11 @@ func inactiveGroupNote(reg Registry, active map[string]bool) string {
 	byGroup := map[string][]string{}
 	for name, t := range reg {
 		g := ToolGroup(t)
-		if g == CoreToolGroup || active[g] {
+		// Essential tools are already advertised (lazyVisible), so they are
+		// not "inactive" — listing them here would tell the model to
+		// activate_tools for a tool it can already see. A group all of whose
+		// tools are essential drops out of the note entirely.
+		if g == CoreToolGroup || active[g] || ToolEssential(t) {
 			continue
 		}
 		byGroup[g] = append(byGroup[g], name)

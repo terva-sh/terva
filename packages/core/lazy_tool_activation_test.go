@@ -15,10 +15,12 @@ import (
 // capability group like a real extension / MCP tool.
 type extToolFake struct {
 	*flagTool
-	group string
+	group     string
+	essential bool
 }
 
 func (e *extToolFake) Extension() string { return e.group }
+func (e *extToolFake) Essential() bool   { return e.essential }
 
 // groupActivatorTool is a core tool (no Extension()) that activates a group
 // when called — a stand-in for the activate_tools tool, so a test can drive a
@@ -87,6 +89,10 @@ func extTool(name, group string) *extToolFake {
 	return &extToolFake{flagTool: &flagTool{name: name}, group: group}
 }
 
+func essentialExtTool(name, group string) *extToolFake {
+	return &extToolFake{flagTool: &flagTool{name: name}, group: group, essential: true}
+}
+
 // With lazy tools on and no always-active groups, only the core group is
 // advertised; the inactive groups' tools are hidden and summarized in the
 // cache-free capability note so the model can discover and activate them.
@@ -116,6 +122,41 @@ func TestLazyToolsAdvertisesCoreHidesInactiveWithNote(t *testing.T) {
 		if !strings.Contains(note, want) {
 			t.Errorf("capability note missing %q; note = %q", want, note)
 		}
+	}
+}
+
+// An essential (load-bearing) extension tool stays advertised even though its
+// group is inactive, while its non-essential sibling in the same group stays
+// hidden — and the capability note lists only the deferred sibling, never the
+// already-visible essential tool. This is the "guidance names a tool the model
+// must see" case: index_search rides along, index_rebuild waits for activation.
+func TestLazyToolsAdvertisesEssentialToolFromInactiveGroup(t *testing.T) {
+	reg := Registry{
+		"read":          &flagTool{name: "read"},
+		"index_search":  essentialExtTool("index_search", "index"),
+		"index_rebuild": extTool("index_rebuild", "index"),
+	}
+	client := &reqCaptureClient{}
+	a := NewAgent(client, "m", "sys", reg)
+	a.EnableLazyTools()
+
+	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	adv := specNames(client.tools[0])
+	if !adv["index_search"] {
+		t.Error("an essential tool must be advertised even from an inactive group")
+	}
+	if adv["index_rebuild"] {
+		t.Error("a non-essential sibling in the same group must stay hidden")
+	}
+	note := client.ephemeral[0]
+	if !strings.Contains(note, "index_rebuild") {
+		t.Errorf("the capability note should list the deferred sibling; note = %q", note)
+	}
+	if strings.Contains(note, "index_search") {
+		t.Errorf("the capability note must not list the already-advertised essential tool; note = %q", note)
 	}
 }
 

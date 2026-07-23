@@ -38,6 +38,19 @@ func exec(t *testing.T, inv Invoker, args json.RawMessage) core.ToolResult {
 	return res
 }
 
+// The wrapper surfaces the extension's load-bearing declaration through the
+// Essential() accessor core.ToolEssential reads — the link that keeps an
+// essential tool advertised under lazy visibility. Default is not essential.
+func TestEssentialAccessor(t *testing.T) {
+	inv := &fakeInvoker{}
+	if core.ToolEssential(New(inv, Info{Extension: "index", Name: "index_search", Essential: true})) != true {
+		t.Error("Info{Essential:true} must produce a tool core.ToolEssential reports as essential")
+	}
+	if core.ToolEssential(New(inv, Info{Extension: "index", Name: "index_rebuild"})) != false {
+		t.Error("a tool without Essential set must not be essential")
+	}
+}
+
 func TestExecuteTextRoundTrip(t *testing.T) {
 	inv := &fakeInvoker{resp: extproto.ToolResultFromExt{
 		Content: []extproto.ContentBlock{{Type: "text", Text: "hello"}},

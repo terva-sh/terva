@@ -484,6 +484,7 @@ type toolDef struct {
 	readOnly    bool
 	authority   string
 	ordered     bool
+	essential   bool
 }
 
 // ToolOption configures a tool at registration time. Pass options as the
@@ -595,6 +596,20 @@ const (
 // is gated like a side-effecting tool rather than admitted as read-only.
 // When both are set, authority wins.
 func WithAuthority(class string) ToolOption { return func(t *toolDef) { t.authority = class } }
+
+// Essential marks a load-bearing tool that must stay advertised to the model
+// every turn even when the host runs with lazy tool visibility — instead of
+// deferring behind an activate_tools call with the rest of this extension's
+// tools. Use it for a tool your static guidance (ContributeContext) tells the
+// model to reach for before others: "search the index before reading a file"
+// only works if the search tool is actually in the tool list when the model
+// first wants to read. Only the tools you mark stay eager; your other tools
+// still lazy-load, preserving the context savings for the ones the model
+// rarely needs. The host caps how many tools one extension may mark essential
+// (excess load deferred), and it is a no-op on an older host or with lazy mode
+// off (everything is advertised then anyway). Essential is visibility only —
+// the tool is still permission-gated exactly as before when actually called.
+func Essential() ToolOption { return func(t *toolDef) { t.essential = true } }
 
 // HostInfo is what the host (terva) tells us in HelloAck. Useful for
 // extensions that want to behave differently per provider.
@@ -1643,6 +1658,7 @@ func (e *Extension) Run() error {
 			Schema:      td.schema,
 			ReadOnly:    td.readOnly,
 			Authority:   td.authority,
+			Essential:   td.essential,
 		})
 	}
 	if contextContribution != "" {

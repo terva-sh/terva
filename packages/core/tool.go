@@ -110,6 +110,23 @@ func ToolGroup(t Tool) string {
 	return CoreToolGroup
 }
 
+// ToolEssential reports whether a tool is load-bearing — declared essential by
+// its extension (register_tool essential) so it stays advertised every turn
+// even when its capability group is inactive under lazy tool visibility. This
+// is what lets an extension whose static guidance names a tool ("search the
+// index before reading") keep that tool in the advertised set, instead of the
+// prompt pointing at a tool sitting deferred behind activate_tools. Read
+// through a structural interface, like ToolGroup, so core need not import the
+// wrapper package; built-ins and MCP tools never implement it (always false).
+// Essential is visibility only — a hidden or shown tool is dispatched and
+// permission-gated identically.
+func ToolEssential(t Tool) bool {
+	if e, ok := t.(interface{ Essential() bool }); ok {
+		return e.Essential()
+	}
+	return false
+}
+
 // Get looks up a tool by name.
 func (r Registry) Get(name string) (Tool, error) {
 	t, ok := r[name]

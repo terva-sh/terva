@@ -46,6 +46,30 @@ func TestRegisterToolCap(t *testing.T) {
 	}
 }
 
+// An extension may mark at most maxEssentialTools tools essential; excess
+// essential registrations still register but are downgraded to ordinary
+// (deferred) tools so they can't pin the whole surface always-visible.
+func TestRegisterEssentialToolCap(t *testing.T) {
+	d := &Driver{toolIndex: map[string]*Extension{}, commandIndex: map[string]*Extension{}}
+	ext := capTestExt(t)
+	total := maxEssentialTools + 5
+	for i := 0; i < total; i++ {
+		d.registerTool(ext, extproto.RegisterToolFromExt{Name: fmt.Sprintf("tool%d", i), Essential: true})
+	}
+	if len(ext.tools) != total {
+		t.Fatalf("all tools should still register, got %d want %d", len(ext.tools), total)
+	}
+	essential := 0
+	for _, tl := range ext.tools {
+		if tl.Essential {
+			essential++
+		}
+	}
+	if essential != maxEssentialTools {
+		t.Errorf("essential tools capped at %d, got %d", maxEssentialTools, essential)
+	}
+}
+
 func TestRegisterCommandCap(t *testing.T) {
 	d := &Driver{toolIndex: map[string]*Extension{}, commandIndex: map[string]*Extension{}}
 	ext := capTestExt(t)

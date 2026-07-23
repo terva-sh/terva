@@ -29,6 +29,23 @@ type tgGroupedExtTool struct{ tgExtTool }
 
 func (tgGroupedExtTool) ToolGroupName() string { return "scripting" }
 
+// tgEssentialTool is an extension tool that declares itself load-bearing.
+type tgEssentialTool struct{ tgExtTool }
+
+func (tgEssentialTool) Essential() bool { return true }
+
+func TestToolEssential(t *testing.T) {
+	if ToolEssential(tgPlainTool{}) {
+		t.Error("a plain built-in is never essential")
+	}
+	if ToolEssential(tgExtTool{}) {
+		t.Error("an extension tool without the accessor is not essential")
+	}
+	if !ToolEssential(tgEssentialTool{}) {
+		t.Error("a tool declaring Essential() true must be essential")
+	}
+}
+
 func TestToolGroupClassification(t *testing.T) {
 	cases := []struct {
 		name string

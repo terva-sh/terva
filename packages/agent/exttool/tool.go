@@ -40,6 +40,10 @@ type Info struct {
 	Name        string
 	Description string
 	Schema      json.RawMessage
+	// Essential surfaces the extension's load-bearing declaration through the
+	// wrapper's Essential() accessor, so core's lazy-visibility filter keeps
+	// the tool advertised even when its extension group is inactive.
+	Essential bool
 }
 
 // extensionTool wraps a single extension-registered tool as a
@@ -55,6 +59,7 @@ type extensionTool struct {
 	description string
 	schema      json.RawMessage
 	extension   string
+	essential   bool
 	invoker     Invoker
 	timeout     time.Duration
 }
@@ -68,6 +73,7 @@ func New(inv Invoker, info Info) core.Tool {
 		description: info.Description,
 		schema:      info.Schema,
 		extension:   info.Extension,
+		essential:   info.Essential,
 		invoker:     inv,
 		timeout:     60 * time.Second,
 	}
@@ -77,6 +83,11 @@ func (t *extensionTool) Name() string            { return t.name }
 func (t *extensionTool) Description() string     { return t.description }
 func (t *extensionTool) Schema() json.RawMessage { return t.schema }
 func (t *extensionTool) Extension() string       { return t.extension }
+
+// Essential reports the extension's load-bearing declaration for this tool.
+// core.ToolEssential reads it (a structural interface) to keep the tool
+// advertised under lazy visibility even when its extension group is inactive.
+func (t *extensionTool) Essential() bool { return t.essential }
 
 // Execute is what the agent calls when the LLM invokes the tool. It
 // hands args to the owning extension, waits up to t.timeout for the
