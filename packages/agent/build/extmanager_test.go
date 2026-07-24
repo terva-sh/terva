@@ -87,8 +87,7 @@ func TestHostsBuildExtensionManagersThroughBuild(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "dist", "vendor":
+			if testsupport.SkipScanDir(root, path, d) {
 				return fs.SkipDir
 			}
 			return nil

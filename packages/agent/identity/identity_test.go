@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestIdentityURLsAreWellFormed(t *testing.T) {
@@ -123,8 +125,7 @@ func TestNoUpstreamURLsInGoSources(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".claude", "bin", "node_modules":
+			if testsupport.SkipScanDir(root, path, d) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -191,8 +192,7 @@ func TestNoStrayOldNameInGoSources(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".claude", "bin", "dist", "node_modules":
+			if testsupport.SkipScanDir(root, path, d) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -251,8 +251,7 @@ func TestInternalHostOnlyInIdentityDefaults(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".claude", "bin", "dist", "node_modules":
+			if testsupport.SkipScanDir(root, path, d) {
 				return filepath.SkipDir
 			}
 			return nil

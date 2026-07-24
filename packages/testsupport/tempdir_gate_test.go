@@ -41,8 +41,7 @@ func TestNoRawTempDirInTests(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".claude", "bin", "dist", "node_modules":
+			if SkipScanDir(root, path, d) {
 				return filepath.SkipDir
 			}
 			return nil
