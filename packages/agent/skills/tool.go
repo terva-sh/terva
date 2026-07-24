@@ -94,14 +94,16 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage, progress func(
 
 	// Skill-driven tool activation (retro H2·b step 5): if the skill declares the
 	// tools it depends on (allowed-tools frontmatter), surface their capability
-	// groups under lazy tool visibility so they're advertised next turn. Strictly
-	// visibility — the permission/trust gate is untouched, so a hidden tool a
-	// skill reveals is still gated when called, and an untrusted workspace (whose
-	// extension tools were never loaded) has nothing to reveal. No-op off lazy.
+	// groups under lazy tool visibility so they're advertised. Loading a skill is
+	// itself a tool call, so the immediate post-tool refresh lands them on the
+	// next model step (by default). Strictly visibility — the permission/trust
+	// gate is untouched, so a hidden tool a skill reveals is still gated when
+	// called, and an untrusted workspace (whose extension tools were never loaded)
+	// has nothing to reveal. No-op off lazy.
 	if len(s.AllowedTools) > 0 {
 		if ag := core.AgentFromContext(ctx); ag != nil {
 			if activated := ag.ActivateGroupsForTools(s.AllowedTools); len(activated) > 0 {
-				body += fmt.Sprintf("\n\n(Activated tool group(s) for this skill: %s — available from your next turn; each still requires its normal permission.)", strings.Join(activated, ", "))
+				body += fmt.Sprintf("\n\n(Activated tool group(s) for this skill: %s — available on your next step; each still requires its normal permission.)", strings.Join(activated, ", "))
 			}
 		}
 	}

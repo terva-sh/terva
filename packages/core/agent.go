@@ -641,11 +641,21 @@ func (a *Agent) ActivationContinuationEnabled() bool {
 func (a *Agent) newlyActiveSincePin(pinned map[string]bool) []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.newlyActiveInLocked(a.Tools, pinned)
+}
+
+// newlyActiveInLocked is the shared body: tools in reg whose capability group is
+// active now but was not in pinned. The caller chooses reg — the natural-stop
+// activation gate scans live a.Tools (it will repin the whole turn against live
+// state anyway), while the immediate post-tool refresh passes pin.tools so it
+// reveals ONLY what the pinned registry held, never an unrelated concurrent
+// SetTools change. Caller holds a.mu.
+func (a *Agent) newlyActiveInLocked(reg Registry, pinned map[string]bool) []string {
 	if !a.lazyTools {
 		return nil
 	}
 	var names []string
-	for name, t := range a.Tools {
+	for name, t := range reg {
 		g := ToolGroup(t)
 		// An essential tool was already advertised at the pin, so activating
 		// its group makes nothing "newly" live — skip it so a continuation
@@ -1546,14 +1556,34 @@ func (a *Agent) activationGate(pin *turnPin) ContinuationGate {
 // pinned. A refresh is one tools-array cache write, the same write the next
 // Prompt would have paid. It shares newlyActiveSincePin with the activation
 // gate so a fired gate's "now live" promise and the re-pin can never disagree.
-func (a *Agent) repinForContinuation(pin turnPin) turnPin {
-	if !a.ActivationContinuationEnabled() {
+func (a *Agent) repinForContinuation(pin turnPin, enabled bool) turnPin {
+	if !enabled {
 		return pin
 	}
 	if len(a.newlyActiveSincePin(pin.turn.groups)) == 0 {
 		return pin
 	}
 	return a.pinTurn()
+}
+
+// repinActivatedVisibility is the immediate post-tool availability boundary: when
+// the tool batch just executed activated a group whose tools are in the PINNED
+// registry, refresh only the visibility half of the pin so the very next model
+// step advertises them — instead of making the model finish its reply and wait
+// for the natural-stop activation gate. It preserves pin.system and pin.tools
+// (never importing an unrelated concurrent SetSystem/SetTools) and recomputes
+// pin.turn against pin.tools alone. A no-op unless a pinned group became newly
+// visible, so no activation means no cache write; activation is monotonic, so
+// each group dirties the pin at most once. The caller gates this on the
+// activation-continuation flag snapshotted at runLoop entry.
+func (a *Agent) repinActivatedVisibility(pin turnPin) turnPin {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.newlyActiveInLocked(pin.tools, pin.turn.groups)) == 0 {
+		return pin
+	}
+	pin.turn = a.turnToolsLocked(pin.tools)
+	return pin
 }
 
 func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
@@ -1570,8 +1600,12 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 	// (default 1) — so a gate that always says "continue" can't loop the
 	// model forever. The built-in activation gate runs last: host
 	// correctness gates outrank the convenience continuation.
+	// Snapshot the activation-continuation setting once for the whole Prompt: a
+	// live toggle should take effect on the NEXT Prompt, never mix the
+	// immediate-refresh and natural-stop-gate semantics within one Prompt.
+	activationContinuation := a.ActivationContinuationEnabled()
 	gates := a.continuationGateSnapshot()
-	if a.ActivationContinuationEnabled() {
+	if activationContinuation {
 		gates = append(gates, a.activationGate(&pin))
 	}
 	gateFires := make([]int, len(gates))
@@ -1787,6 +1821,16 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 				}
 			}
 			_ = hadError
+			// Immediate tool activation: if this tool batch activated a group,
+			// advertise its tools on the very NEXT model step rather than waiting
+			// for the model to stop and the natural-stop activation gate to fire.
+			// Visibility-only against the pinned registry (repinActivatedVisibility)
+			// — a no-op unless a pinned group became newly visible, so it never
+			// churns the cache on an ordinary tool call. The gate stays as the
+			// fallback for a group activated OFF the tool path (host-side/async).
+			if activationContinuation {
+				pin = a.repinActivatedVisibility(pin)
+			}
 			continue
 		}
 
@@ -1798,7 +1842,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		// refreshes only when the ended segment activated a tool group —
 		// otherwise it is deliberately reused.
 		if ctx.Err() == nil && a.QueuedMessageCount() > 0 {
-			pin = a.repinForContinuation(pin)
+			pin = a.repinForContinuation(pin, activationContinuation)
 			continue
 		}
 
@@ -1817,7 +1861,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			if nudge, cause, ok := fireContinuationGate(gates, gateFires, stop); ok {
 				sink(EvContinuation{Cause: cause})
 				a.appendQueuedAsUser([]string{nudge}, true, sink)
-				pin = a.repinForContinuation(pin)
+				pin = a.repinForContinuation(pin, activationContinuation)
 				continue
 			}
 		}

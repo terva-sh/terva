@@ -34,7 +34,7 @@ type ActivateToolsTool struct{}
 func (t *ActivateToolsTool) Name() string { return "activate_tools" }
 
 func (t *ActivateToolsTool) Description() string {
-	return "Activate an installed tool group so its tools become available to call. Inactive groups and their tools are listed in the [inactive tool groups] context note; pass one group name (e.g. \"mail\" or \"mcp:github\"). Visibility only — activating a group never grants authority, so each revealed tool still requires its normal permission when used. The advertised tool set is pinned while you reply, so an activated group can never join this reply's remaining tool calls — call this once and never retry it in the same reply. Normally (automatic continuation, the default) finish your reply once you've activated what you need and you will be re-prompted immediately with the tools live; otherwise they join your NEXT turn."
+	return "Activate an installed tool group so its tools become available to call. Inactive groups and their tools are listed in the [inactive tool groups] context note; pass one group name (e.g. \"mail\" or \"mcp:github\"). Visibility only — activating a group never grants authority, so each revealed tool still requires its normal permission when used. Tool calls already emitted in this same reply can't change, but the activated group is available on your very next step (by default): call its tools directly then, and do not call activate_tools again for that group."
 }
 
 func (t *ActivateToolsTool) Schema() json.RawMessage {
@@ -66,13 +66,13 @@ func (t *ActivateToolsTool) Execute(ctx context.Context, raw json.RawMessage, _ 
 	autoContinue := agent.ActivationContinuationEnabled()
 	if !agent.ActivateGroup(group) {
 		if autoContinue {
-			return activateResult(fmt.Sprintf("Tool group %q is already active: %s. Retrying cannot make its tools appear sooner — if you activated it during this reply, just finish the reply: you will be re-prompted automatically with them live.", group, joined)), nil
+			return activateResult(fmt.Sprintf("Tool group %q is already active: %s. Its tools are available on your next model step — call them directly rather than re-activating; retrying cannot make them appear sooner.", group, joined)), nil
 		}
 		return activateResult(fmt.Sprintf("Tool group %q is already active: %s. Activation lands on your NEXT turn — if you activated it earlier THIS turn, retrying cannot make its tools appear sooner; continue with your currently advertised tools and use it next turn.", group, joined)), nil
 	}
 	var msg string
 	if autoContinue {
-		msg = fmt.Sprintf("Activated tool group %q — its tools (%s) go live the moment you finish this reply: you will be re-prompted automatically to continue with them available. They cannot appear during this reply's remaining tool calls, so do not retry. Each still requires its normal permission when called.", group, joined)
+		msg = fmt.Sprintf("Activated tool group %q: %s. These tools are available on your next model step — call them directly; do not call activate_tools again. Tool calls already emitted in this batch are unchanged. Visibility only: each still requires its normal permission when called.", group, joined)
 	} else {
 		msg = fmt.Sprintf("Activated tool group %q — its tools (%s) join your advertised set on your NEXT turn. They cannot appear during this turn's remaining tool calls, so do not retry; continue with your current tools. Each still requires its normal permission when called.", group, joined)
 	}
