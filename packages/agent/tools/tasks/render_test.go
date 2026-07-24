@@ -97,11 +97,17 @@ func TestRenderCardCollapsesAndOrders(t *testing.T) {
 	}
 	out := RenderCard(tasks)
 	lines := strings.Split(out, "\n")
-	if !strings.HasPrefix(lines[0], "blocked") {
-		t.Errorf("blocked should sort first:\n%s", out)
+	// The card now leads each open row with the task id (TW-013 F3), so the
+	// blocked task sorts first as its id + status, not a bare "blocked".
+	if !strings.HasPrefix(lines[0], "task-3  blocked") {
+		t.Errorf("blocked should sort first, id-led:\n%s", out)
 	}
-	if !strings.Contains(out, "blocked  C — missing fixture") {
-		t.Errorf("blocked reason missing:\n%s", out)
+	if !strings.Contains(out, "task-3  blocked  C — missing fixture") {
+		t.Errorf("blocked row missing id/reason:\n%s", out)
+	}
+	// Every open row carries the exact id task_update needs.
+	if !strings.Contains(out, "task-1  pending") || !strings.Contains(out, "task-2  active") {
+		t.Errorf("open rows must carry their ids:\n%s", out)
 	}
 	if !strings.Contains(out, "done (2)") || !strings.Contains(out, "cancelled (1)") {
 		t.Errorf("terminal tasks should collapse to counts:\n%s", out)

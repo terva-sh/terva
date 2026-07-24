@@ -318,10 +318,21 @@ func TestActivateNextUnknownTargetDoesNotMutate(t *testing.T) {
 
 func TestActivateNextSameIDRejected(t *testing.T) {
 	s := boundStore(t)
-	Create(s, json.RawMessage(`{"tasks":[{"title":"A"}]}`))
-	if text, isErr := Update(s, json.RawMessage(`{"id":"task-1","status":"done","activate_next":"task-1"}`)); !isErr ||
-		!strings.Contains(text, "different task") {
-		t.Errorf("activate_next naming the same task should error: %s", text)
+	Create(s, json.RawMessage(`{"tasks":[{"title":"A"},{"title":"Verify config"}]}`))
+	text, isErr := Update(s, json.RawMessage(`{"id":"task-1","status":"done","activate_next":"task-1"}`))
+	if !isErr {
+		t.Fatalf("activate_next naming the same task should error: %s", text)
+	}
+	// Corrective error (TW-013 F3): it states no mutation occurred and names a
+	// valid pending task to activate instead — not just what was wrong.
+	if !strings.Contains(text, "No state changed") {
+		t.Errorf("same-id error must state no mutation occurred:\n%s", text)
+	}
+	if !strings.Contains(text, "task-2") {
+		t.Errorf("same-id error should suggest a pending task to activate instead:\n%s", text)
+	}
+	if got := s.List(); got[0].Status != tasks.StatusPending {
+		t.Errorf("rejected same-id activate_next must not mutate: task-1 is %q", got[0].Status)
 	}
 }
 

@@ -253,7 +253,10 @@ func RenderCard(tasks []Task) string {
 }
 
 func cardRow(t Task) string {
-	row := fmt.Sprintf("%-8s %s", string(t.Status), displayLabel(t))
+	// Lead with the id (mirrors compactLine), so the every-turn card carries the
+	// exact handle task_update needs — not just a status and label a model must
+	// re-derive after compaction or a model switch (TW-013 F3).
+	row := fmt.Sprintf("%s  %-8s %s", t.ID, string(t.Status), displayLabel(t))
 	if t.Status == StatusBlocked {
 		if r := strings.TrimSpace(t.Evidence); r != "" {
 			row += " — " + CleanOneLine(r, cardReasonLen)

@@ -503,3 +503,35 @@ func TestSessionInspectDiagnosesRunningChild(t *testing.T) {
 		t.Errorf("a real filter miss on a finished child must still say so, got: %q", got)
 	}
 }
+
+// TestSessionInspectRejectsMixedModes covers TW-013 F2: expand selects EXPAND
+// MODE and ignores cursor/limit, so combining them is a padded/contradictory
+// call and is rejected with both corrected forms — not silently narrowed to
+// event #0. Runs before any transcript I/O, so it needs no seeded session.
+func TestSessionInspectRejectsMixedModes(t *testing.T) {
+	tool := &SessionInspectTool{TervaHome: testsupport.TempDir(t), CWD: testsupport.TempDir(t)}
+	for _, args := range []string{
+		`{"expand":0,"cursor":0}`, // the padded hazard: used to always return #0
+		`{"expand":0,"limit":40}`,
+		`{"expand":-1,"cursor":5}`,
+	} {
+		res, err := tool.Execute(context.Background(), json.RawMessage(args), func(string) {})
+		if err != nil {
+			t.Fatalf("%s: %v", args, err)
+		}
+		if !res.IsError {
+			t.Errorf("%s: expected a rejection, got: %q", args, inspectText(t, res))
+			continue
+		}
+		if txt := inspectText(t, res); !strings.Contains(txt, "LIST MODE") || !strings.Contains(txt, "EXPAND MODE") {
+			t.Errorf("%s: rejection should show both corrected forms:\n%s", args, txt)
+		}
+	}
+	// Bare expand:0 (no listing fields) is a legitimate EXPAND MODE call and must
+	// NOT trip the mixed-mode guard — it may fail later for other reasons, but not
+	// with the combine-them message.
+	res, _ := tool.Execute(context.Background(), json.RawMessage(`{"expand":0}`), func(string) {})
+	if res.IsError && strings.Contains(inspectText(t, res), "do not combine them") {
+		t.Errorf("bare expand:0 must not trip the mixed-mode guard:\n%s", inspectText(t, res))
+	}
+}

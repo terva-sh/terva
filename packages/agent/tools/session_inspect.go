@@ -46,7 +46,7 @@ type sessionInspectArgs struct {
 func (t *SessionInspectTool) Name() string { return "session_inspect" }
 
 func (t *SessionInspectTool) Description() string {
-	return "Inspect THIS session's transcript in a structured, bounded way — to see what happened without re-reading everything. With no arguments it shows the most recent window of events (tool calls, tool results with pass/fail, and message text). Filter with failures_only (only failed/errored tool results), tool_name, or event_kinds ([\"tool_call\",\"tool_result\",\"message\"]). Page with limit (default 40, cap 200) and cursor (an offset into the matching events, oldest=0; a next_cursor is returned when more remain — reuse the same filters). Each listed event carries its index (#n); pass expand with that n to read that ONE event's full text (paged with text_offset when long) — e.g. a sub-agent's complete findings. Negative expand counts from the end: event_kinds [\"message\"] with expand -1 is the most recent message in full, no listing needed. session_id defaults to the current session; pass another id from this project (a filename without .jsonl, as terva_status prints) or a swarm sub-agent id (as swarm_spawn and the [auto-swarm update] recap print) to inspect that transcript. Secrets are redacted and output is size-bounded."
+	return "Inspect THIS session's transcript in a structured, bounded way — to see what happened without re-reading everything. It has two MUTUALLY EXCLUSIVE modes; filters apply to both: failures_only (only failed/errored tool results), tool_name, or event_kinds ([\"tool_call\",\"tool_result\",\"message\"]). LIST MODE (the default — no expand): shows a window of matching events (tool calls, tool results with pass/fail, and message text), most recent by default. Page with limit (default 40, cap 200) and cursor (an offset into the matching events, oldest=0; a next_cursor is returned when more remain — reuse the same filters). Each listed event carries its index (#n). EXPAND MODE (set expand): reads ONE event's full text — pass an #n from a listing (paged with text_offset when long), e.g. a sub-agent's complete findings; negative counts from the end (event_kinds [\"message\"] with expand -1 is the most recent message in full, no listing needed). EXPAND ignores cursor/limit, so do NOT pass them together — a call that sets expand AND cursor/limit is rejected, not silently narrowed. session_id defaults to the current session; pass another id from this project (a filename without .jsonl, as terva_status prints) or a swarm sub-agent id (as swarm_spawn and the [auto-swarm update] recap print) to inspect that transcript. Secrets are redacted and output is size-bounded."
 }
 
 func (t *SessionInspectTool) Schema() json.RawMessage {
@@ -62,8 +62,8 @@ func (t *SessionInspectTool) Schema() json.RawMessage {
 				"description": "Restrict to these event kinds.",
 			},
 			"limit":       map[string]any{"type": "integer", "description": "Max events (default 40, cap 200)."},
-			"cursor":      map[string]any{"type": "integer", "description": "Offset into the matching events (oldest=0). Omit to get the most recent window."},
-			"expand":      map[string]any{"type": "integer", "description": "One matching event to read in full: #n from a listing with the SAME filters, or negative to count from the end (-1 = most recent match). Ignores limit/cursor."},
+			"cursor":      map[string]any{"type": "integer", "description": "LIST MODE only. Offset into the matching events (oldest=0). Omit to get the most recent window. Do not pass with expand (rejected)."},
+			"expand":      map[string]any{"type": "integer", "description": "EXPAND MODE. One matching event to read in full: #n from a listing with the SAME filters, or negative to count from the end (-1 = most recent match). Ignores — and must not be combined with — limit/cursor (rejected)."},
 			"text_offset": map[string]any{"type": "integer", "description": "With expand: byte offset into that event's text (default 0). Use the offset from the previous truncation notice to continue."},
 		},
 		"additionalProperties": false,
@@ -80,6 +80,18 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 	}
 	if a.Expand != nil && *a.Expand < -siExpandTailMax {
 		return toolErr(fmt.Sprintf("session_inspect: expand %d is too far back — negative expand reaches at most -%d; use the absolute #n from a listing (cursor pages older events)", *a.Expand, siExpandTailMax)), nil
+	}
+	// EXPAND MODE (expand set) reads ONE event in full and ignores the listing
+	// paging fields, so a call that ALSO sets cursor or a listing limit is
+	// contradictory — the model padded one mode's field into the other. Reject it
+	// with both corrected forms rather than silently dropping the listing intent:
+	// a padded expand:0 + cursor:0 would otherwise always return event #0 (TW-013
+	// F2). cursor is a pointer, so cursor:0 is a real value not "unset"; limit's
+	// default is applied downstream, so a non-zero limit here was set on purpose.
+	if a.Expand != nil && (a.Cursor != nil || a.Limit != 0) {
+		return toolErr("session_inspect: EXPAND MODE (expand set) reads one event in full and ignores cursor/limit — do not combine them:\n" +
+			"  LIST MODE:   omit expand — e.g. {\"event_kinds\":[\"tool_result\"],\"cursor\":0,\"limit\":40}\n" +
+			"  EXPAND MODE: omit cursor/limit — e.g. {\"event_kinds\":[\"tool_result\"],\"expand\":0}"), nil
 	}
 	path, sessID, swarmChild, err := t.resolvePath(ctx, a.SessionID)
 	if err != nil {

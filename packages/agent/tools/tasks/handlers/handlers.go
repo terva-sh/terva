@@ -242,14 +242,17 @@ func Update(s *tasks.Store, raw json.RawMessage) (string, bool) {
 	// half-applied transition).
 	nextID := strings.TrimSpace(in.ActivateNext)
 	if nextID != "" {
+		// Every branch here rejects BEFORE any mutation, so each says "No state
+		// changed." (kills the "did my close half-apply?" doubt) and, where it can,
+		// names the corrected next action instead of only what was wrong (TW-013 F3).
 		if patch.Status == nil || !isSteppingAway(*patch.Status) {
-			return "activate_next is only allowed when you step away from this task — set status to \"done\", \"cancelled\", or \"blocked\".", true
+			return "activate_next only applies when you step away from this task — set status to \"done\", \"cancelled\", or \"blocked\" in the same call, or omit activate_next to keep this task active. No state changed.", true
 		}
 		if nextID == strings.TrimSpace(in.ID) {
-			return "activate_next must name a different task than the one you're updating.", true
+			return fmt.Sprintf("activate_next cannot name the task you're closing (%s) — a task can't activate itself. To close it only, omit activate_next.%s No state changed.", nextID, suggestPending(s, nextID)), true
 		}
 		if !taskExists(s, nextID) {
-			return fmt.Sprintf("activate_next: no task with id %q.", nextID), true
+			return fmt.Sprintf("activate_next: no task with id %q — call task_list for the current ids.%s No state changed.", nextID, suggestPending(s, "")), true
 		}
 	}
 
@@ -326,6 +329,25 @@ func taskExists(s *tasks.Store, id string) bool {
 		}
 	}
 	return false
+}
+
+// suggestPending names a pending task the model can activate instead — turning a
+// rejected activate_next into an actionable next step. Skips exclude (the id
+// that was rejected) and only offers a pending task (never the one being
+// closed, which is active or terminal). Empty when the board has no other
+// pending task to point at, so the caller's sentence stays clean.
+func suggestPending(s *tasks.Store, exclude string) string {
+	for _, t := range s.List() {
+		if t.Status != tasks.StatusPending || t.ID == exclude {
+			continue
+		}
+		label := strings.TrimSpace(t.Title)
+		if label == "" {
+			label = strings.TrimSpace(t.ActiveForm)
+		}
+		return fmt.Sprintf(" To continue, activate a pending task, e.g. %s %q.", t.ID, tasks.CleanOneLine(label, 60))
+	}
+	return ""
 }
 
 // isSteppingAway reports whether a status takes the current task out of active
