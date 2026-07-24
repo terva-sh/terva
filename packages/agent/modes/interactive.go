@@ -248,6 +248,19 @@ type InteractiveConfig struct {
 	// which overlays live state the file's meta line can lag behind.
 	ListSessions func() []core.SessionSummary
 
+	// The session lifecycle verbs behind the /sessions picker. Nil means this
+	// frontend does not serve them — a replay carrier has no directory to move
+	// anything in — and the picker then does not offer the keys at all rather
+	// than offering keys that report "unavailable" after the fact.
+	//
+	// ArchiveSession and DeleteSession take a session FILE path (what the picker
+	// rows carry); RestoreArchivedSession takes an archived session's id, which
+	// is the only handle an archived transcript has.
+	ArchiveSession         func(path string) error
+	DeleteSession          func(path string) error
+	ListArchivedSessions   func() []core.ArchivedSession
+	RestoreArchivedSession func(id string) error
+
 	// NewSession closes the current session and starts a fresh one in
 	// the same cwd: the agent keeps its provider/model/tools but its
 	// transcript and running cost are reset, and a new session file is

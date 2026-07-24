@@ -188,6 +188,20 @@ func (r *recorder) SessionsExport(_ context.Context, sess string, p SessionExpor
 	return SessionExport{}, nil
 }
 
+// --- SessionArchiveController ---
+func (r *recorder) ArchiveSession(_ context.Context, sess string) (ArchivedSessionInfo, error) {
+	r.note("ArchiveSession", sess, nil)
+	return ArchivedSessionInfo{}, nil
+}
+func (r *recorder) ArchivedSessions(_ context.Context) ([]ArchivedSessionInfo, error) {
+	r.note("ArchivedSessions", "", nil)
+	return nil, nil
+}
+func (r *recorder) RestoreSession(_ context.Context, p RestoreSessionParams) (SessionInfo, error) {
+	r.note("RestoreSession", "", p)
+	return SessionInfo{}, nil
+}
+
 // --- DoctorController ---
 func (r *recorder) CardsDoctor(_ context.Context, p DoctorParams) (DoctorResult, error) {
 	r.note("CardsDoctor", "", p)
@@ -463,6 +477,13 @@ func dispatchCases() []dispatchCase {
 		{MethodVariantsDrop, VariantsDropParams{Epoch: 7, Index: 11, Variant: 2}, "DropVariant", variantArgs{Epoch: 7, Index: 11, Variant: 2}},
 		// A third positional site: turn.continue unpacks p.Epoch out of its params.
 		{MethodTurnContinue, TurnContinueParams{Epoch: 13}, "ContinueTurn", continueArgs{Epoch: 13}},
+
+		// --- archive: three verbs behind one outer case, and restore is the one
+		// that binds params. A default arm here would decode an archive frame as
+		// a restore. ---
+		{MethodSessionArchive, nil, "ArchiveSession", nil},
+		{MethodSessionsArchived, nil, "ArchivedSessions", nil},
+		{MethodSessionRestore, RestoreSessionParams{ID: "20260101-120000-aaaaaaaa"}, "RestoreSession", RestoreSessionParams{ID: "20260101-120000-aaaaaaaa"}},
 
 		// --- draft (optional, takes no params — it must still reach the right arm) ---
 		{MethodSessionDiscardDraft, nil, "DiscardDraft", nil},

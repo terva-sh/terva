@@ -1338,13 +1338,22 @@ func DescribeSessions(root, cwd string) []SessionSummary {
 }
 
 func describeSession(path string) SessionSummary {
-	s := SessionSummary{Path: path}
 	f, err := os.Open(path)
 	if err != nil {
-		return s
+		return SessionSummary{Path: path}
 	}
 	defer f.Close()
-	_ = forEachJSONLLine(f, func(line []byte) error {
+	return describeSessionFrom(path, f)
+}
+
+// describeSessionFrom summarises a transcript from an arbitrary reader.
+//
+// Split out from describeSession so an ARCHIVED session — the same JSONL behind
+// a gzip reader — produces the same summary as a live one, rather than the
+// archive browser growing a second, drifting description of what a session is.
+func describeSessionFrom(path string, r io.Reader) SessionSummary {
+	s := SessionSummary{Path: path}
+	_ = forEachJSONLLine(r, func(line []byte) error {
 		var head sessionLineHead
 		if err := json.Unmarshal(line, &head); err != nil {
 			return nil

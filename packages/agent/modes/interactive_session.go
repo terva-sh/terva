@@ -350,6 +350,7 @@ func (i *Interactive) applySessionSelection(path string) {
 func (i *Interactive) openSessionsDialog() {
 	i.sessionDialog.Rename = i.cfg.RenameSessionFile
 	i.sessionDialog.List = i.cfg.ListSessions
+	i.sessionDialog.ListArchived = i.cfg.ListArchivedSessions
 	i.sessionDialog.Open(i.cfg.TervaHome, i.cfg.CWD)
 }
 
@@ -730,6 +731,72 @@ func (i *Interactive) applyForkSelection(msgIdx int) {
 	i.mu.Lock()
 	i.statusOK = i18n.T("forked and switched to new branch at %s", friendlyPath(newPath))
 	i.statusErr = ""
+	i.mu.Unlock()
+	i.invalidate()
+}
+
+// The session lifecycle verbs, driven from the /sessions picker.
+//
+// Archive and delete are deliberately adjacent and deliberately different: one
+// moves a transcript into a compressed directory nothing lists, the other
+// destroys it. The picker confirms only the destructive one — asking twice for
+// a reversible act trains people to answer yes without reading.
+
+// archiveSessionAt archives the session at path and re-lists the picker so the
+// row leaves under the user's eyes.
+func (i *Interactive) archiveSessionAt(path string) {
+	if i.cfg.ArchiveSession == nil {
+		i.setStatusErr(i18n.T("archiving isn't available here"))
+		return
+	}
+	if err := i.cfg.ArchiveSession(path); err != nil {
+		i.setStatusErr(i18n.T("archive: %s", err.Error()))
+		return
+	}
+	i.sessionDialog.Refresh(i.cfg.TervaHome, i.cfg.CWD)
+	i.mu.Lock()
+	i.statusErr = ""
+	i.statusOK = i18n.T("archived — press A in /sessions to browse or restore it")
+	i.mu.Unlock()
+	i.invalidate()
+}
+
+// deleteSessionAt destroys the session at path. The picker has already
+// confirmed; this is the act itself.
+func (i *Interactive) deleteSessionAt(path string) {
+	if i.cfg.DeleteSession == nil {
+		i.setStatusErr(i18n.T("deleting isn't available here"))
+		return
+	}
+	if err := i.cfg.DeleteSession(path); err != nil {
+		i.setStatusErr(i18n.T("delete: %s", err.Error()))
+		return
+	}
+	i.sessionDialog.Refresh(i.cfg.TervaHome, i.cfg.CWD)
+	i.mu.Lock()
+	i.statusErr = ""
+	i.statusOK = i18n.T("deleted")
+	i.mu.Unlock()
+	i.invalidate()
+}
+
+// restoreArchivedSession brings an archived transcript back and drops the picker
+// onto the live list, where the restored session now is — leaving the user in
+// the archive staring at a row that just left it would be the wrong place.
+func (i *Interactive) restoreArchivedSession(id string) {
+	if i.cfg.RestoreArchivedSession == nil {
+		i.setStatusErr(i18n.T("restoring isn't available here"))
+		return
+	}
+	if err := i.cfg.RestoreArchivedSession(id); err != nil {
+		i.setStatusErr(i18n.T("restore: %s", err.Error()))
+		return
+	}
+	i.sessionDialog.ShowArchived(false)
+	i.sessionDialog.Refresh(i.cfg.TervaHome, i.cfg.CWD)
+	i.mu.Lock()
+	i.statusErr = ""
+	i.statusOK = i18n.T("restored — it is back in the session list")
 	i.mu.Unlock()
 	i.invalidate()
 }

@@ -774,6 +774,32 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		}
 		s.respond(f.ID, nil, uc.UserBind(ctx, f.Sess, p))
 
+	case MethodSessionArchive, MethodSessionsArchived, MethodSessionRestore:
+		ac, ok := s.svc.(SessionArchiveController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "session archiving is not available here"))
+			return
+		}
+		switch f.Method {
+		case MethodSessionArchive:
+			info, err := ac.ArchiveSession(ctx, f.Sess)
+			s.respond(f.ID, info, err)
+		case MethodSessionsArchived:
+			list, err := ac.ArchivedSessions(ctx)
+			s.respond(f.ID, ArchivedSessionsResult{Sessions: list}, err)
+		case MethodSessionRestore:
+			// Named, never a default arm: a default silently adopts whatever
+			// verb is added to the outer case list next, and would decode that
+			// verb's frame with THIS one's params.
+			var p RestoreSessionParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			info, err := ac.RestoreSession(ctx, p)
+			s.respond(f.ID, info, err)
+		}
+
 	case MethodSessionDiscardDraft:
 		dc, ok := s.svc.(DraftController)
 		if !ok {

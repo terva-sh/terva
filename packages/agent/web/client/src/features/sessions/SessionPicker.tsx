@@ -1,5 +1,5 @@
 import { t, tn } from '../../i18n'
-import type { Group, SessionInfo } from '../../platform/ctrlproto/types'
+import type { ArchivedSessionInfo, Group, SessionInfo } from '../../platform/ctrlproto/types'
 import type { GroupFilter } from '../../platform/groups'
 import { GroupMenu } from './GroupMenu'
 import { GroupFilterBar } from './GroupFilterBar'
@@ -15,6 +15,16 @@ export function SessionPicker(props: {
   onRename: (session: SessionInfo) => void
   onGenerateTitle: (session: SessionInfo) => void
   onDelete: (session: SessionInfo) => void
+  // Archiving is the middle verb: the session leaves this list without leaving
+  // the disk. Optional, so a panel served by a daemon that does not offer it
+  // renders no control rather than one that fails.
+  onArchive?: (session: SessionInfo) => void
+  // The archive browser. archived is null until it has been fetched once, which
+  // is what lets the toggle say "loading" rather than "empty".
+  archived?: ArchivedSessionInfo[] | null
+  showArchived?: boolean
+  onToggleArchived?: () => void
+  onRestore?: (id: string) => void
   onClose: () => void
   groups?: Group[]
   filterGroups?: Group[]
@@ -79,6 +89,15 @@ export function SessionPicker(props: {
               >
                 ✨
               </button>
+              {props.onArchive && (
+                <button
+                  class="icon sm"
+                  title={t('Archive')}
+                  onClick={(event) => (event.stopPropagation(), props.onArchive!(session))}
+                >
+                  ⤓
+                </button>
+              )}
               <button
                 class="icon sm"
                 title={t('Delete')}
@@ -89,7 +108,50 @@ export function SessionPicker(props: {
             </div>
           ))}
         </div>
+        {props.onToggleArchived && (
+          <div class="drawer-archive">
+            <button class="drawer-archive__toggle" onClick={props.onToggleArchived}>
+              {props.showArchived ? t('Hide archived') : archiveLabel(props.archived)}
+            </button>
+            {props.showArchived && props.archived && props.archived.length === 0 && (
+              <div class="drawer-archive__empty">{t('Nothing archived for this directory.')}</div>
+            )}
+            {props.showArchived &&
+              (props.archived ?? []).map((a) => (
+                <div class="session archived" key={a.id}>
+                  <div class="session-main">
+                    <div class="session-title">{a.title || a.preview || t('(untitled)')}</div>
+                    <div class="session-meta">
+                      {a.model ? a.model + ' · ' : ''}
+                      {tn(a.message_count ?? 0, '%d msg', '%d msgs')}
+                      {a.bytes ? ' · ' + humanBytes(a.bytes) : ''}
+                    </div>
+                  </div>
+                  {props.onRestore && (
+                    <button class="drawer-archive__restore" title={t('Restore')} onClick={() => props.onRestore!(a.id)}>
+                      {t('Restore')}
+                    </button>
+                  )}
+                </div>
+              ))}
+          </div>
+        )}
       </aside>
     </div>
   )
+}
+
+// archiveLabel counts what is in the archive when that is known. Before the
+// first fetch it cannot, and claiming "Archived (0)" would be a lie the user
+// would act on.
+export function archiveLabel(archived: ArchivedSessionInfo[] | null | undefined): string {
+  if (archived == null) return t('Archived')
+  return t('Archived (%s)', String(archived.length))
+}
+
+// humanBytes is what archiving bought, on the row that bought it.
+export function humanBytes(n: number): string {
+  if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + 'M'
+  if (n >= 1024) return Math.round(n / 1024) + 'K'
+  return n + 'B'
 }

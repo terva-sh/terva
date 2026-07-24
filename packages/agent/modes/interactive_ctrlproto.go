@@ -539,6 +539,7 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 				return
 			}
 			i.sessionDialog.List = i.cfg.ListSessions
+			i.sessionDialog.ListArchived = i.cfg.ListArchivedSessions
 			i.sessionDialog.Refresh(i.cfg.TervaHome, i.cfg.CWD)
 			i.invalidate()
 		})

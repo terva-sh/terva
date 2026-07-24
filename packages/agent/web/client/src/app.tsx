@@ -33,6 +33,7 @@ import type {
   WireFileEntry,
   ResetsListResult,
   ResetConsumeResult,
+  ArchivedSessionInfo,
   SessionInfo,
   Group,
   SettingsView,
@@ -1444,6 +1445,68 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     [refreshSessions],
   )
 
+  // Archive: the session leaves every list without leaving the disk. No confirm —
+  // it is reversible, and confirming a reversible act trains people to click
+  // through the one that is not.
+  const archive = useCallback(
+    async (s: SessionInfo) => {
+      const c = clientRef.current
+      if (!c) return
+      try {
+        await c.send('sessions.archive', null, s.id)
+      } catch (e) {
+        setToast(String(e))
+        return
+      }
+      setArchived(null) // the archive changed; re-fetch on next open
+      await refreshSessions(c)
+      setToast(t('Archived — find it under Archived in the session drawer'))
+      // Archiving the session you're in returns you to the landing, exactly as
+      // deleting it does: the session this tab held is no longer listed.
+      if (s.id === curRef.current) goToLanding()
+    },
+    [goToLanding, refreshSessions],
+  )
+
+  const [archived, setArchived] = useState<ArchivedSessionInfo[] | null>(null)
+  const [showArchived, setShowArchived] = useState(false)
+
+  const loadArchived = useCallback(async () => {
+    const c = clientRef.current
+    if (!c) return
+    try {
+      const r = await c.send<{ sessions: ArchivedSessionInfo[] }>('sessions.archived', null, '')
+      setArchived(r.sessions ?? [])
+    } catch (e) {
+      setToast(String(e))
+      setArchived([])
+    }
+  }, [])
+
+  const toggleArchived = useCallback(() => {
+    setShowArchived((on) => {
+      if (!on) void loadArchived()
+      return !on
+    })
+  }, [loadArchived])
+
+  const restore = useCallback(
+    async (id: string) => {
+      const c = clientRef.current
+      if (!c) return
+      try {
+        await c.send('sessions.restore', { id }, '')
+      } catch (e) {
+        setToast(String(e))
+        return
+      }
+      await loadArchived()
+      await refreshSessions(c)
+      setToast(t('Restored — it is back in the session list'))
+    },
+    [loadArchived, refreshSessions],
+  )
+
   const del = useCallback(
     async (s: SessionInfo) => {
       if (!window.confirm(t('Delete “%s”?', s.title || s.id))) return
@@ -1630,6 +1693,11 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           onRename={rename}
           onGenerateTitle={generateTitle}
           onDelete={del}
+          onArchive={archive}
+          archived={archived}
+          showArchived={showArchived}
+          onToggleArchived={toggleArchived}
+          onRestore={restore}
           onClose={() => setDrawer(false)}
           groups={sessionGroups}
           filterGroups={filterGroups}
@@ -1661,6 +1729,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               }}
               onRename={rename}
               onDelete={del}
+              onArchive={archive}
               groups={sessionGroups}
               filterGroups={filterGroups}
               filter={sessionFilter}
@@ -1682,6 +1751,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
                 onNew={() => newSession()}
                 onRename={rename}
                 onDelete={del}
+                onArchive={archive}
                 groups={sessionGroups}
                 filterGroups={filterGroups}
                 filter={sessionFilter}

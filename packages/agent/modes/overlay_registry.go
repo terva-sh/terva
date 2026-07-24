@@ -284,11 +284,17 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			ctrlC:  func() bool { i.sessionDialog.Close(); return true },
 			handleKey: func(k tui.Key) bool {
 				act := i.sessionDialog.HandleKey(k)
-				if act.Select {
+				switch {
+				case act.Select:
 					i.applySessionSelection(act.Path)
-				}
-				if act.GenerateTitle {
+				case act.GenerateTitle:
 					i.generateSessionTitle(act.Path)
+				case act.Archive:
+					i.archiveSessionAt(act.Path)
+				case act.Delete:
+					i.deleteSessionAt(act.Path)
+				case act.Restore:
+					i.restoreArchivedSession(act.ID)
 				}
 				return false
 			},
@@ -333,7 +339,10 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			ctrlC:  func() bool { i.logoutDialog.Close(); return true },
 			handleKey: func(k tui.Key) bool {
 				act := i.logoutDialog.HandleKey(k)
-				if act.Select {
+				switch {
+				case act.Select && act.Endpoint:
+					i.doRemoveEndpoint(act.Target)
+				case act.Select:
 					i.doLogout(act.Target)
 				}
 				return false

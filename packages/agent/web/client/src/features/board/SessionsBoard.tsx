@@ -22,6 +22,9 @@ export function SessionsBoard(props: {
   onNew: () => void
   onRename: (session: SessionInfo) => void
   onDelete: (session: SessionInfo) => void
+  // Archiving: the session leaves the list without leaving the disk. Optional,
+  // so a surface served by a daemon that does not offer it renders no control.
+  onArchive?: (session: SessionInfo) => void
   // Session groups (optional; absent on a daemon that doesn't serve them).
   // `groups` (user groups) feeds the per-tile assign menu; `filterGroups` (user
   // groups + the derived `stage` chip) feeds the include/exclude filter bar,
@@ -99,6 +102,15 @@ export function SessionsBoard(props: {
                   >
                     ✎
                   </button>
+                  {props.onArchive && (
+                    <button
+                      class="icon sm"
+                      title={t('Archive')}
+                      onClick={(e) => (e.stopPropagation(), props.onArchive!(s))}
+                    >
+                      ⤓
+                    </button>
+                  )}
                   <button
                     class="icon sm"
                     title={t('Delete')}

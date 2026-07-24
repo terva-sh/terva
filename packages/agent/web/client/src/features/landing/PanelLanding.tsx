@@ -15,6 +15,9 @@ type BoardPassthrough = {
   onSelect: (id: string) => void
   onRename: (s: SessionInfo) => void
   onDelete: (s: SessionInfo) => void
+  // Archiving: the session leaves the list without leaving the disk. Optional,
+  // so a surface served by a daemon that does not offer it renders no control.
+  onArchive?: (s: SessionInfo) => void
   groups?: Group[]
   filterGroups?: Group[]
   filter?: GroupFilter

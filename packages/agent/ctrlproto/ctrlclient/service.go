@@ -127,6 +127,29 @@ func (s *Service) DeleteSession(ctx context.Context, sess string) error {
 	return s.c.Call(ctx, sess, ctrlproto.MethodSessionDelete, nil, nil)
 }
 
+var _ ctrlproto.SessionArchiveController = (*Service)(nil)
+
+// The archive group. An attached TUI drives these over the wire; the in-process
+// TUI reaches the identical methods on the Workspace with no serialization.
+
+func (s *Service) ArchiveSession(ctx context.Context, sess string) (ctrlproto.ArchivedSessionInfo, error) {
+	var r ctrlproto.ArchivedSessionInfo
+	err := s.c.Call(ctx, sess, ctrlproto.MethodSessionArchive, nil, &r)
+	return r, err
+}
+
+func (s *Service) ArchivedSessions(ctx context.Context) ([]ctrlproto.ArchivedSessionInfo, error) {
+	var r ctrlproto.ArchivedSessionsResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodSessionsArchived, nil, &r)
+	return r.Sessions, err
+}
+
+func (s *Service) RestoreSession(ctx context.Context, p ctrlproto.RestoreSessionParams) (ctrlproto.SessionInfo, error) {
+	var r ctrlproto.SessionInfo
+	err := s.c.Call(ctx, "", ctrlproto.MethodSessionRestore, p, &r)
+	return r, err
+}
+
 func (s *Service) Usage(ctx context.Context, sess string) (core.WireUsage, error) {
 	var r ctrlproto.UsageResult
 	err := s.c.Call(ctx, sess, ctrlproto.MethodUsageGet, nil, &r)

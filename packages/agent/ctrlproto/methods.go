@@ -40,17 +40,23 @@ const (
 	// overwrites whatever title exists, manual renames included.
 	MethodSessionGenerateTitle Method = "sessions.generate_title" // result GenerateTitleResult (sess in frame)
 	MethodSessionDelete        Method = "sessions.delete"         // no params (sess in frame)
-	MethodSessionDiscardDraft  Method = "sessions.discard_draft"  // no params (sess in frame); served by an optional DraftController
-	MethodUsageGet             Method = "usage.get"               // result UsageResult (sess in frame)
-	MethodUsageSnapshot        Method = "usage.snapshot"          // params UsageSnapshotParams, result UsageSnapshotResult (sess in frame)
-	MethodResetsList           Method = "usage.resets.list"       // result ResetsListResult (sess in frame); read-only
-	MethodContextGet           Method = "context.get"             // result ContextResult (sess in frame)
-	MethodContextNode          Method = "context.node"            // params ContextNodeParams, result ContextNodeResult (sess in frame)
-	MethodSurfacesList         Method = "surfaces.list"           // result SurfacesResult (sess in frame)
-	MethodSurfaceGet           Method = "surface.get"             // params SurfaceGetParams, result SurfaceResult
-	MethodSurfaceAction        Method = "surface.action"          // params SurfaceActionParams (sess in frame)
-	MethodI18nCatalog          Method = "i18n.catalog"            // params I18nCatalogParams, result I18nCatalogResult (session-independent)
-	MethodFilesList            Method = "files.list"              // params FilesListParams, result FilesListResult (session-independent)
+	// MethodSessionArchive compresses sess's transcript into the directory's
+	// archive: it leaves every listing without leaving the disk. The middle
+	// verb between keeping a session in the picker forever and deleting it.
+	MethodSessionArchive      Method = "sessions.archive"       // result ArchivedSessionInfo (sess in frame)
+	MethodSessionsArchived    Method = "sessions.archived"      // result ArchivedSessionsResult; read-only
+	MethodSessionRestore      Method = "sessions.restore"       // params RestoreSessionParams, result SessionInfo
+	MethodSessionDiscardDraft Method = "sessions.discard_draft" // no params (sess in frame); served by an optional DraftController
+	MethodUsageGet            Method = "usage.get"              // result UsageResult (sess in frame)
+	MethodUsageSnapshot       Method = "usage.snapshot"         // params UsageSnapshotParams, result UsageSnapshotResult (sess in frame)
+	MethodResetsList          Method = "usage.resets.list"      // result ResetsListResult (sess in frame); read-only
+	MethodContextGet          Method = "context.get"            // result ContextResult (sess in frame)
+	MethodContextNode         Method = "context.node"           // params ContextNodeParams, result ContextNodeResult (sess in frame)
+	MethodSurfacesList        Method = "surfaces.list"          // result SurfacesResult (sess in frame)
+	MethodSurfaceGet          Method = "surface.get"            // params SurfaceGetParams, result SurfaceResult
+	MethodSurfaceAction       Method = "surface.action"         // params SurfaceActionParams (sess in frame)
+	MethodI18nCatalog         Method = "i18n.catalog"           // params I18nCatalogParams, result I18nCatalogResult (session-independent)
+	MethodFilesList           Method = "files.list"             // params FilesListParams, result FilesListResult (session-independent)
 
 	// MethodConversationReveal returns the turns a compaction checkpoint
 	// summarized away. They are not gone: a compaction row is an append-only
@@ -308,7 +314,8 @@ func (m Method) Group() Group {
 		MethodPostLine, MethodDirectTurn, MethodTurnAdvance, MethodVariantsPrune, MethodVariantsDrop, MethodSubscribe, MethodUnsubscribe:
 		return GroupConversation
 	case MethodSessionsList, MethodSessionCreate, MethodSessionResume, MethodSessionFork,
-		MethodSessionRename, MethodSessionGenerateTitle, MethodSessionDelete, MethodSessionDiscardDraft, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
+		MethodSessionRename, MethodSessionGenerateTitle, MethodSessionDelete, MethodSessionDiscardDraft,
+		MethodSessionArchive, MethodSessionsArchived, MethodSessionRestore, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
 		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
 		MethodFilesList, MethodAuthProviders, MethodConversationReveal, MethodConversationHistory,
 		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose, MethodSuggestReply, MethodSessionsDoctor,

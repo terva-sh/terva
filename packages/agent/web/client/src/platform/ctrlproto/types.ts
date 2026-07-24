@@ -74,6 +74,27 @@ export interface CastRoute {
   model?: string
 }
 
+// ArchivedSessionInfo is one row in the archive: a session whose transcript has
+// been compressed into a subdirectory no listing walks. It carries the same
+// descriptive fields a live row does, because an archive of opaque ids is one
+// nobody restores from, plus the sizes that only exist once archived.
+export interface ArchivedSessionInfo {
+  id: string
+  title?: string
+  provider?: string
+  model?: string
+  message_count?: number
+  total_cost?: number
+  preview?: string
+  started?: string
+  archived_at?: string
+  bytes?: number
+  original?: number
+  experience?: string
+  card?: string
+  world?: string
+}
+
 export interface SessionInfo {
   id: string
   title?: string
@@ -772,6 +793,10 @@ export interface DoctorProposal {
   rationale: string
   before: string
   after: string
+  // remove marks a proposal that CLEARS the field: `after` is empty and that is
+  // the point, so a surface must say "cleared" rather than render a blank box
+  // that reads as a broken proposal.
+  remove?: boolean
 }
 
 // DoctorResult is the payload of cards.doctor: the structured proposals plus an
@@ -1579,6 +1604,8 @@ export type Verb =
   | 'sessiongroups.list'
   | 'sessiongroups.save'
   | 'sessiongroups.set_members'
+  | 'sessions.archive'
+  | 'sessions.archived'
   | 'sessions.create'
   | 'sessions.delete'
   | 'sessions.discard_draft'
@@ -1590,6 +1617,7 @@ export type Verb =
   | 'sessions.next_scene'
   | 'sessions.realize'
   | 'sessions.rename'
+  | 'sessions.restore'
   | 'sessions.resume'
   | 'sidechat.ask'
   | 'sidechat.close'

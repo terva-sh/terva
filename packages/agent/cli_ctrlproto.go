@@ -399,6 +399,23 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		// The /sessions picker lists via the session group instead of its own
 		// disk scan — same store, but the service overlays live state (current
 		// model, settled title, usage) the file's meta line can lag behind.
+		// The lifecycle verbs the /sessions picker drives. All three go through
+		// the workspace, so an archive from the TUI and one from the web panel are
+		// the same act, with the same broadcast to every other client.
+		ArchiveSession: func(path string) error {
+			_, err := w.ArchiveSession(ctx, build.SessionIDFromPath(path))
+			return err
+		},
+		DeleteSession: func(path string) error {
+			return w.DeleteSession(ctx, build.SessionIDFromPath(path))
+		},
+		ListArchivedSessions: func() []core.ArchivedSession {
+			return core.ListArchivedSessions(config.TervaHome(), w.CWD())
+		},
+		RestoreArchivedSession: func(id string) error {
+			_, err := w.RestoreSession(ctx, ctrlproto.RestoreSessionParams{ID: id})
+			return err
+		},
 		ListSessions: func() []core.SessionSummary {
 			infos, err := w.Sessions(ctx)
 			if err != nil {

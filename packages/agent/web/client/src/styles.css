@@ -373,6 +373,18 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .session-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-meta { font-size: 12px; color: var(--muted); }
 
+/* Archive browser in the session drawer. Collapsed by default and fetched only
+   when opened: an archive is something you go looking for, not something that
+   should cost a round trip on every drawer open. */
+.drawer-archive { border-top: 1px solid var(--line); }
+.drawer-archive__toggle { display: block; width: 100%; text-align: left; padding: 10px 12px; border: 0; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+.drawer-archive__toggle:hover { background: var(--panel); color: var(--fg); }
+.drawer-archive__empty { padding: 10px 12px; font-size: 12px; color: var(--muted); }
+.session.archived { cursor: default; opacity: 0.85; }
+.session.archived:hover { background: none; }
+.drawer-archive__restore { flex: 0 0 auto; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
+.drawer-archive__restore:hover { border-color: var(--user); color: var(--user); }
+
 /* sessions board (stage 4.1) — one tile per session: monitor + focus + lifecycle.
    Renders in .main, so it follows the shell width. minmax(min(200px,100%),1fr)
    collapses to one column on a phone without a 200px min overflowing a narrow

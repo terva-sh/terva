@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { THEMES, applyTheme, currentTheme } from './theme'
 import { CardSheet } from './CardSheet'
-import { CardEditor } from './CardEditor'
 import { PersonaSheet } from './PersonaSheet'
 import { PersonaEditor } from './PersonaEditor'
 import { CharacterChats } from './CharacterChats'
@@ -161,13 +160,18 @@ export function Library(props: {
   ready: boolean
   status: Status
   onOpenChat: (session: string) => void
+  // ✎ hands off to the character studio rather than opening a sheet here. A null
+  // card means "make a new one" — the studio's create mode.
+  onEditCharacter: (card: CardSummary | null) => void
+  // The studio's other tab: the identities you play AS. Reachable from here and
+  // not only from inside a scene, because they outlive any one scene.
+  onEditYou: () => void
 }) {
-  const { client, ready, status, onOpenChat } = props
+  const { client, ready, status, onOpenChat, onEditCharacter } = props
   const [cards, setCards] = useState<CardSummary[]>([])
   const [personas, setPersonas] = useState<PersonaSummary[]>([])
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [sheet, setSheet] = useState<CardSummary | null>(null)
-  const [editor, setEditor] = useState<CardSummary | null>(null)
   const [personaSheet, setPersonaSheet] = useState<PersonaSummary | null>(null)
   // The persona editor's three entries: a blank new one, editing one of yours,
   // or duplicating a built-in under a new name. One state rather than three
@@ -663,6 +667,19 @@ export function Library(props: {
     }
   }
 
+  // Archive a chat: it leaves the hub without leaving the disk, compressed into
+  // a subdirectory nothing lists. No confirm, unlike delete — archiving is
+  // reversible, and confirming a reversible act only teaches people to click
+  // through the confirm that matters.
+  const archiveSession = async (s: SessionInfo) => {
+    try {
+      await client.send('sessions.archive', null, s.id)
+      load()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
   // Turn a chat into a reusable World (worlds.save) — its roster, lore, and
   // coordination become a named World you can start new chats inside, no scene
   // break needed. The same primitive the Steering drawer's "Save as World" uses,
@@ -689,6 +706,11 @@ export function Library(props: {
         {/* i18n-exempt — the terva Stage wordmark, a product name */}
         <h1 class="stage-brand">terva Stage</h1>
         <div class="stage-topbar__right">
+          {/* The identities you play as, out of the drawer: they belong to the
+              library, not to whichever scene happens to be open. */}
+          <button class="stage-nav-link stage-you-link" onClick={props.onEditYou} title={t('The identities you play as')}>
+            {t('🎭 You')}
+          </button>
           <a class="stage-nav-link" href={panelHref()} title={t('Open the control panel')}>{t('⌂ Panel')}</a>
           <select
             class="stage-theme-pick"
@@ -783,6 +805,13 @@ export function Library(props: {
               </button>
             </div>
           )}
+          {/* Making a character from nothing, which the Library could not do:
+              cards only ever arrived by file or URL. It opens the studio in
+              create mode — nothing is stored until the first save, so backing
+              out leaves no half-made card behind. */}
+          <button class="stage-import" onClick={() => onEditCharacter(null)}>
+            {t('+ New character')}
+          </button>
           <label class="stage-import">
             {t('+ Import')}
             <input
@@ -967,6 +996,9 @@ export function Library(props: {
                         🗺
                       </button>
                     )}
+                    <button class="stage-yourchats__archive" title={t('Archive this chat')} aria-label={t('Archive this chat')} onClick={() => void archiveSession(s)}>
+                      📥
+                    </button>
                     <button class="stage-yourchats__del" title={t('Delete this chat')} aria-label={t('Delete this chat')} onClick={() => void deleteSession(s)}>
                       🗑
                     </button>
@@ -1038,8 +1070,8 @@ export function Library(props: {
           onClose={() => setSheet(null)}
           onStart={(g) => void startChat(sheet, g)}
           onEdit={() => {
-            setEditor(sheet)
             setSheet(null)
+            onEditCharacter(sheet)
           }}
           onDelete={() => void deleteCard(sheet)}
         />
@@ -1081,8 +1113,6 @@ export function Library(props: {
           onClose={() => setSessionGroupSheet(null)}
         />
       )}
-
-      {editor && <CardEditor client={client} card={editor} onClose={() => setEditor(null)} onSaved={load} />}
 
       {personaSheet && (
         <PersonaSheet
