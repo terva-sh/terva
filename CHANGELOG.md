@@ -11,6 +11,21 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.9](https://github.com/terva-sh/terva/releases/tag/v0.126.9) — 2026-07-23
+
+### Features
+
+- core: activate lazy tool groups on the next model step, not a natural stop
+- persona: Mieli orients before multi-step work; drop the contradicting "Act first"
+- privfs: create secret-bearing config dirs owner-only; doctor diagnoses a permissive root
+- tools: sharpen the model/tool boundary for task state and session_inspect
+- web: a way back to the landing once a session is open
+- web: first-class planned-restart lifecycle
+
+### Fixes
+
+- ext: reap extension processes promptly instead of leaking zombies
+
 ## [v0.126.8](https://github.com/terva-sh/terva/releases/tag/v0.126.8) — 2026-07-23
 
 ### Features
