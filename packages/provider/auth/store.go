@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // Credentials is the on-disk schema.
@@ -321,7 +323,10 @@ func (s *Store) ClearOAuth(provider string) error {
 }
 
 func (s *Store) saveLocked(c Credentials) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	// Owner-only: this directory holds auth.json (OAuth tokens / API keys). Under
+	// a permissive umask a plain 0755 would leave the credential root traversable
+	// by other local users; privfs pins 0700 regardless of umask.
+	if err := privfs.MkdirAll(filepath.Dir(s.path)); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")

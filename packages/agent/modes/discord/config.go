@@ -18,6 +18,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // Config is the on-disk state for the discord connector.
@@ -56,7 +58,7 @@ func SaveConfig(tervaHome string, c Config) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(tervaHome, 0o755); err != nil {
+	if err := privfs.MkdirAll(tervaHome); err != nil {
 		return err
 	}
 	return os.WriteFile(ConfigPath(tervaHome), append(b, '\n'), 0o600)

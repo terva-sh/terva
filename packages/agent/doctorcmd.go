@@ -7,13 +7,16 @@ import (
 	"os/exec"
 	"runtime"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/privfs"
 )
 
 // runDoctorCommand dispatches `terva doctor`: a read-only report of this
 // process's effective privilege and deployment posture (uid/euid, no_new_privs,
-// core-dump limit, passwordless sudo). Returns (handled=true, err) when rawArgs
+// core-dump limit, passwordless sudo, config-root permissions). Returns
+// (handled=true, err) when rawArgs
 // starts with "doctor"; otherwise (false, nil) so the router falls through to
 // the flag parser. Mirrors runMigrateCommand's dispatch shape.
 //
@@ -52,10 +55,12 @@ usage:
   terva doctor --no-sudo  skip the sudo capability probe
 
 Reports process identity (uid/euid), whether new privileges are blocked
-(no_new_privs), whether core dumps are disabled, and whether passwordless
-sudo is available (a 'sudo -n true' probe). It reads only process metadata
-and never prints a secret value; the sudo probe runs a no-op command and
-discards its output. Linux-only facts report "unknown" on other platforms.`))
+(no_new_privs), whether core dumps are disabled, whether passwordless sudo is
+available (a 'sudo -n true' probe), and whether the config/credential root is
+owner-only (with a chmod repair when it is group/other-accessible). It reads
+only process and directory metadata and never prints a secret value; the sudo
+probe runs a no-op command and discards its output. Linux-only facts report
+"unknown" on other platforms.`))
 }
 
 // runDoctor gathers the posture facts and prints them. It never mutates
@@ -74,7 +79,37 @@ func runDoctor(w io.Writer, opts doctorOptions) error {
 	} else {
 		doctorLine(w, "sudo -n true", sudoProbe())
 	}
+	reportConfigPerms(w)
 	return nil
+}
+
+// reportConfigPerms diagnoses the permission posture of the directories that
+// hold private state — the config root (config.json carries plaintext extension
+// secrets; auth.json and the bot-token files live here too) and, when project
+// scoping has split them, the credential home that auth + trust resolve against.
+// It is read-only: it stats the directory mode and, when group/other-accessible,
+// prints a safe explicit repair command. It never opens a file, so no secret
+// value can reach the output. A missing directory reports "absent" — a fresh
+// install creates it owner-only.
+func reportConfigPerms(w io.Writer) {
+	seen := map[string]bool{}
+	report := func(label, dir string) {
+		if dir == "" || seen[dir] {
+			return
+		}
+		seen[dir] = true
+		d := privfs.InspectDir(dir)
+		switch {
+		case !d.Exists:
+			doctorLine(w, label, dir+"  absent (created owner-only on first write)")
+		case d.TooOpen:
+			doctorLine(w, label, fmt.Sprintf("%s  %#o  group/other-accessible — repair: %s", dir, d.Mode, d.RepairCommand()))
+		default:
+			doctorLine(w, label, fmt.Sprintf("%s  %#o  owner-only", dir, d.Mode))
+		}
+	}
+	report("config root", config.TervaHome())
+	report("credential dir", config.CredentialHome())
 }
 
 func doctorLine(w io.Writer, label, value string) {

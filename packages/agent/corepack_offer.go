@@ -9,6 +9,7 @@ import (
 	"golang.org/x/term"
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/privfs"
 )
 
 // First-run offer: when an interactive session starts with no extensions
@@ -114,7 +115,7 @@ func corePackAlreadyOffered() bool {
 }
 
 func markCorePackOffered() error {
-	if err := os.MkdirAll(config.TervaHome(), 0o755); err != nil {
+	if err := privfs.MkdirAll(config.TervaHome()); err != nil {
 		return err
 	}
 	return os.WriteFile(corePackOfferSentinel(), []byte("1\n"), 0o644)

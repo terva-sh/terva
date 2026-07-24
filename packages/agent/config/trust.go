@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/privfs"
 )
 
 // Workspace Trust gates project content that auto-acts — project-local
@@ -113,7 +114,7 @@ func LoadTrustStore() (TrustStore, error) {
 // SaveTrustStore writes trusted.json at mode 0600 (it encodes a
 // security decision; not world-readable), creating $TERVA_HOME.
 func SaveTrustStore(s TrustStore) error {
-	if err := os.MkdirAll(TervaHome(), 0o755); err != nil {
+	if err := privfs.MkdirAll(TervaHome()); err != nil {
 		return err
 	}
 	if s.Version == 0 {

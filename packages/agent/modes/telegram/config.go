@@ -14,6 +14,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // Config is the on-disk state for the telegram bridge.
@@ -48,7 +50,7 @@ func LoadConfig(tervaHome string) (Config, error) {
 
 // SaveConfig writes bot.json atomically.
 func SaveConfig(tervaHome string, c Config) error {
-	if err := os.MkdirAll(tervaHome, 0o755); err != nil {
+	if err := privfs.MkdirAll(tervaHome); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")

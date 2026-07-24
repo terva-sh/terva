@@ -160,6 +160,58 @@ func TestRepairOnceIsGatedByMarker(t *testing.T) {
 	}
 }
 
+func TestInspectDir(t *testing.T) {
+	skipOnWindows(t)
+	base := testsupport.TempDir(t)
+
+	// Missing directory: nothing to repair (a fresh install creates it private).
+	missing := filepath.Join(base, "does-not-exist")
+	if d := InspectDir(missing); d.Exists || d.TooOpen || d.RepairCommand() != "" {
+		t.Errorf("missing dir: %+v, want Exists=false TooOpen=false no-repair", d)
+	}
+
+	// A plain file at the path is not a private-state directory.
+	file := filepath.Join(base, "afile")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if d := InspectDir(file); d.Exists {
+		t.Errorf("file path reported as an existing dir: %+v", d)
+	}
+
+	mkdir := func(name string, mode os.FileMode) string {
+		p := filepath.Join(base, name)
+		if err := os.Mkdir(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil { // pin the mode past the test umask
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	// Owner-only: not too open, no repair.
+	priv := mkdir("priv", 0o700)
+	if d := InspectDir(priv); !d.Exists || d.TooOpen || d.Mode != 0o700 || d.RepairCommand() != "" {
+		t.Errorf("0700 dir: %+v, want Exists TooOpen=false Mode=0700 no-repair", d)
+	}
+
+	// Any group or other bit makes it too open, with an explicit chmod repair.
+	for _, mode := range []os.FileMode{0o750, 0o705, 0o755, 0o770, 0o701} {
+		p := mkdir("open-"+mode.String(), mode)
+		d := InspectDir(p)
+		if !d.Exists || !d.TooOpen {
+			t.Errorf("%#o dir: %+v, want Exists + TooOpen", mode, d)
+		}
+		if d.Mode != mode {
+			t.Errorf("%#o dir: Mode=%#o, want %#o", mode, d.Mode, mode)
+		}
+		if want := "chmod 700 " + p; d.RepairCommand() != want {
+			t.Errorf("%#o dir: RepairCommand=%q, want %q", mode, d.RepairCommand(), want)
+		}
+	}
+}
+
 func TestRepairOnceNoHomeIsNoop(t *testing.T) {
 	skipOnWindows(t)
 	missing := filepath.Join(testsupport.TempDir(t), "does-not-exist")

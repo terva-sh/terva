@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // The persisted unjail list: directories the user has declared may be worked
@@ -79,7 +81,7 @@ func LoadUnjailStore() (UnjailStore, error) {
 
 // SaveUnjailStore writes unjailed.json at mode 0600, creating $TERVA_HOME.
 func SaveUnjailStore(s UnjailStore) error {
-	if err := os.MkdirAll(TervaHome(), 0o755); err != nil {
+	if err := privfs.MkdirAll(TervaHome()); err != nil {
 		return err
 	}
 	if s.Version == 0 {

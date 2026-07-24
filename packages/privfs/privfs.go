@@ -119,3 +119,38 @@ func RepairOnce(home string) (int, error) {
 	_ = os.WriteFile(marker, []byte("terva tightened home permissions to 0600/0700\n"), FileMode)
 	return changed, repairErr
 }
+
+// DirPerm is the permission posture of a directory that is expected to hold
+// private state (credentials, tokens, plaintext config). It carries only mode
+// metadata — never a byte of the directory's contents — so it is safe to print.
+type DirPerm struct {
+	Path    string      // the directory inspected
+	Exists  bool        // false when nothing is on disk yet
+	Mode    os.FileMode // the permission bits (Perm()); zero when absent
+	TooOpen bool        // true when any group or other bit is set
+}
+
+// RepairCommand is the safe, explicit shell command an operator can run to
+// tighten a too-open directory to owner-only. Empty when the directory is
+// already private or absent. It names only the path, never any contents.
+func (d DirPerm) RepairCommand() string {
+	if !d.TooOpen {
+		return ""
+	}
+	return "chmod 700 " + d.Path
+}
+
+// InspectDir reports whether dir is group/world-accessible, reading only its
+// mode via a single stat — it never opens the directory or any file within, so
+// it cannot leak a secret. A missing directory is not "too open": a fresh
+// install creates it privately (see MkdirAll), so there is nothing to repair.
+// Used by `terva doctor` to diagnose a pre-existing permissive config root
+// without silently changing it.
+func InspectDir(dir string) DirPerm {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return DirPerm{Path: dir}
+	}
+	perm := info.Mode().Perm()
+	return DirPerm{Path: dir, Exists: true, Mode: perm, TooOpen: perm&0o077 != 0}
+}
