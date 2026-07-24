@@ -9,6 +9,9 @@ export function SessionPicker(props: {
   current: string
   onSelect: (id: string) => void
   onNew: () => void
+  // Leave the focused session for the landing. Absent when there is no session
+  // to leave (opened from the landing itself), in which case the row is hidden.
+  onGoLanding?: () => void
   onRename: (session: SessionInfo) => void
   onGenerateTitle: (session: SessionInfo) => void
   onDelete: (session: SessionInfo) => void
@@ -34,6 +37,11 @@ export function SessionPicker(props: {
             + {t('New')}
           </button>
         </div>
+        {props.onGoLanding && (
+          <button class="drawer-home" onClick={props.onGoLanding}>
+            ← {t('Back to landing')}
+          </button>
+        )}
         <div class="session-list">
           {props.sessions.map((session) => (
             <div

@@ -1483,10 +1483,22 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         <button class="icon" title={t('Sessions')} onClick={() => setDrawer((d) => !d)}>
           ☰
         </button>
-        <div class="ident">
-          <span class="persona">{curInfo?.persona || 'terva'}</span>
-          <span class="sess-title">{current?.title || curInfo?.title || t('new chat')}</span>
-        </div>
+        {/* The wordmark doubles as a home button: clicking it leaves the focused
+            session for the landing (goToLanding also forgets the tab's session, so
+            a reload stays on the landing). Only interactive when a session IS
+            focused — on the landing it is already home, so it renders as plain
+            text rather than a button that navigates nowhere. */}
+        {curSess ? (
+          <button class="ident ident-home" title={t('Back to landing')} onClick={goToLanding}>
+            <span class="persona">{curInfo?.persona || 'terva'}</span>
+            <span class="sess-title">{current?.title || curInfo?.title || t('new chat')}</span>
+          </button>
+        ) : (
+          <div class="ident">
+            <span class="persona">{curInfo?.persona || 'terva'}</span>
+            <span class="sess-title">{current?.title || curInfo?.title || t('new chat')}</span>
+          </div>
+        )}
         {/* Session-specific controls (info, board/focus, model) act on the
             framed session, so they are hidden on the session-less landing —
             in particular the model button would otherwise fire models.switch
@@ -1612,6 +1624,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           current={curSess}
           onSelect={selectSession}
           onNew={() => newSession()}
+          // Only offer "back to landing" when there is a focused session to
+          // leave; from the landing the drawer is already home.
+          onGoLanding={curSess ? goToLanding : undefined}
           onRename={rename}
           onGenerateTitle={generateTitle}
           onDelete={del}

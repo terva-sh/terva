@@ -362,6 +362,9 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .drawer-scrim { position: fixed; inset: 0; background: #0006; z-index: 20; display: flex; }
 .drawer { width: min(320px, 85vw); height: 100%; background: var(--bg); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding-top: var(--safe-top); }
 .drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 12px; border-bottom: 1px solid var(--line); }
+/* full-width "← back to landing" row above the session list (clears button chrome) */
+.drawer-home { display: block; width: 100%; text-align: left; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--fg); font: inherit; cursor: pointer; }
+.drawer-home:hover { background: var(--panel); }
 .session-list { overflow-y: auto; flex: 1; }
 .session { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .session:hover { background: var(--panel); }
@@ -445,6 +448,10 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .ident { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; line-height: 1.15; }
 .ident .persona { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ident .sess-title { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the wordmark doubling as a home button (clears its own button chrome, keeps
+   the .ident column layout); the persona underlines on hover to read as a link. */
+button.ident-home { background: none; border: 0; padding: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+button.ident-home:hover .persona { text-decoration: underline; }
 .btn.sm { font-size: 12px; padding: 3px 8px; }
 .mono { font-family: ui-monospace, SFMono-Regular, monospace; }
 
