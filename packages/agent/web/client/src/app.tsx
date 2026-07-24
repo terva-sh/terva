@@ -250,6 +250,12 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [surfaces, setSurfaces] = useState<SurfaceMeta[]>([])
   const [activeSurface, setActiveSurface] = useState('context')
   const [surfaceData, setSurfaceData] = useState<Surface | null>(null)
+  // The workspace drawer's own state — the landing has no session, so it cannot
+  // ask for surfaces (every one of them is served through a session handle, and
+  // an empty address MINTS one). It asks the session-independent verbs instead.
+  const [wsTab, setWsTab] = useState<'providers' | 'about'>('providers')
+  const [wsProviders, setWsProviders] = useState<ProvidersView | null>(null)
+  const [wsProvidersErr, setWsProvidersErr] = useState('')
   // The provider-login flow in progress, if any: the daemon hands us a step to
   // render, we hand back a name→value map. null means "show the provider list".
   const [authFlow, setAuthFlow] = useState<AuthFlowStep | null>(null)
@@ -596,6 +602,22 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     }
   }, [])
 
+  // The provider picture, without a session. auth.providers and the "providers"
+  // surface are the same data by construction (the daemon's own comment: one
+  // shape, one implementation, nothing to drift) — so the drawer renders it with
+  // the very same body the session rail uses, and a change to either follows.
+  const loadWorkspaceProviders = useCallback(async () => {
+    const c = clientRef.current
+    if (!c) return
+    setWsProvidersErr('')
+    try {
+      setWsProviders(await c.send<ProvidersView>('auth.providers', null, ''))
+    } catch (e) {
+      setWsProviders(null)
+      setWsProvidersErr(String(e))
+    }
+  }, [])
+
   const loadSurface = useCallback(async (id: string) => {
     const c = clientRef.current
     if (!c || !curRef.current) return
@@ -714,6 +736,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           setAuthBusy(false)
           setAuthErr(a.message ?? t('login failed'))
         }
+        // The workspace drawer's provider list has no surface_updated behind it
+        // (it is a plain verb, not a surface), so nothing else would move it —
+        // and this event is precisely the moment it went stale.
+        if (paneOpenRef.current && !curRef.current) void loadWorkspaceProviders()
         return
       }
       case 'locale_changed':
@@ -1416,6 +1442,15 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     loadSurface(activeSurface)
   }, [paneOpen, activeSurface, curSess, listSurfaces, loadSurface])
 
+  // ...and the workspace drawer when it opens with no session behind it.
+  // auth.providers is addressed to nothing on purpose (serve.go ignores Sess: a
+  // credential belongs to the daemon, not to a conversation), which is what lets
+  // this work on a landing that has not created a session yet.
+  useEffect(() => {
+    if (!paneOpen || curSess) return
+    void loadWorkspaceProviders()
+  }, [paneOpen, curSess, loadWorkspaceProviders])
+
   const rename = useCallback(
     async (s: SessionInfo) => {
       const title = window.prompt(t('Rename session'), s.title || '')
@@ -1579,9 +1614,11 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         >
           {toolView === 'full' ? '▤' : toolView === 'grouped' ? '⊟' : toolView === 'minimal' ? '≡' : '⌀'}
         </button>
+        {/* The same control opens two different rails, so it has to say which:
+            on the landing it is the workspace, not a session's panes. */}
         <button
           class={`icon${paneOpen ? ' on' : ''}`}
-          title={t('Panes (usage, settings, extensions)')}
+          title={curSess ? t('Panes (usage, settings, extensions)') : t('Workspace (providers, about)')}
           onClick={() => (paneOpen ? setPaneOpen(false) : openPane(activeSurface))}
         >
           ⊞
@@ -1806,7 +1843,32 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           )}
         </div>
 
-        {paneOpen && (
+        {/* Which rail depends on whether there is a session to be about. */}
+        {paneOpen && !curSess && (
+          <WorkspaceDrawer
+            tab={wsTab}
+            onTab={setWsTab}
+            providers={wsProviders}
+            err={wsProvidersErr}
+            auth={{
+              flow: authFlow,
+              busy: authBusy,
+              error: authErr,
+              start: startLogin,
+              submit: submitLogin,
+              cancel: cancelLogin,
+              logout: logoutProvider,
+              removeEndpoint,
+            }}
+            onClose={() => setPaneOpen(false)}
+            onRefresh={() => void loadWorkspaceProviders()}
+            onRestart={canRestart ? restart : undefined}
+            version={serverVersion}
+            trusted={!!curInfo?.trusted}
+            onTrust={trustWorkspace}
+          />
+        )}
+        {paneOpen && curSess && (
           <PaneHost
             surfaces={surfaces}
             active={activeSurface}
@@ -1933,6 +1995,123 @@ export function PaneHost({
             models={models}
             auth={auth}
           />
+        )}
+      </div>
+    </aside>
+  )
+}
+
+// WorkspaceDrawer is the right rail when there is no session behind it.
+//
+// The rail used to be one thing: a switcher over the SURFACES a session offers.
+// On the landing there is no session, every surface is served through a session
+// handle, and an empty address does not mean "no session" — it mints one. So the
+// panel refused to fetch, and the rail sat on "loading…" forever: a control that
+// opens onto nothing, which is worse than one that is not there.
+//
+// It is not that nothing belongs there. The daemon has facts of its own, and the
+// two most useful ones when you have not started anything yet are exactly these:
+// which providers you are signed in to (on a fresh panel, the answer is usually
+// "none", and this is where you fix it), and what this daemon is. Both are
+// served by verbs that ignore the session address by design, which is what makes
+// this possible without inventing a workspace surface.
+//
+// Providers renders through the SAME body as the session rail's providers pane,
+// because they are the same data — the daemon builds that surface by calling
+// auth.providers. Two renderers would drift; this one cannot.
+export function WorkspaceDrawer({
+  tab,
+  onTab,
+  providers,
+  err,
+  auth,
+  onClose,
+  onRefresh,
+  onRestart,
+  version,
+  trusted,
+  onTrust,
+}: {
+  tab: 'providers' | 'about'
+  onTab: (tab: 'providers' | 'about') => void
+  providers: ProvidersView | null
+  err: string
+  auth?: AuthPaneProps
+  onClose: () => void
+  onRefresh: () => void
+  onRestart?: () => void
+  version?: string
+  trusted?: boolean
+  onTrust?: (trust: boolean) => void
+}) {
+  return (
+    <aside class="pane-rail">
+      <div class="pane-head">
+        <div class="pane-tabrow">
+          <div class="pane-tabs">
+            <button class={`pane-tab${tab === 'providers' ? ' active' : ''}`} onClick={() => onTab('providers')}>
+              <span class="pane-tab-icon">🔑</span>
+              <span class="pane-tab-label">{t('Providers')}</span>
+            </button>
+            <button class={`pane-tab${tab === 'about' ? ' active' : ''}`} onClick={() => onTab('about')}>
+              <span class="pane-tab-icon">☰</span>
+              <span class="pane-tab-label">{t('About')}</span>
+            </button>
+          </div>
+          <button class="icon sm" title={t('Close panes')} onClick={onClose}>
+            ×
+          </button>
+        </div>
+      </div>
+      <div class="pane-body">
+        {tab === 'providers' && (
+          <>
+            {err && <div class="pick-empty">{err}</div>}
+            {!providers && !err && <div class="pick-empty">{t('loading…')}</div>}
+            {providers && (
+              <ProvidersBody
+                v={providers}
+                flow={auth?.flow ?? null}
+                onStart={(p, m) => auth?.start(p, m)}
+                onSubmit={(vals) => auth?.submit(vals)}
+                onCancel={() => auth?.cancel()}
+                onLogout={(p) => auth?.logout(p)}
+                onRemoveEndpoint={(id) => auth?.removeEndpoint(id)}
+                busy={auth?.busy ?? false}
+                error={auth?.error ?? ''}
+              />
+            )}
+          </>
+        )}
+        {tab === 'about' && (
+          <div class="ws-about">
+            <p class="ws-about__lead">
+              {t('This is the workspace itself — what is true of the daemon whether or not a session is open.')}
+            </p>
+            <dl class="ws-about__facts">
+              <dt>{t('Version')}</dt>
+              <dd>{version || t('unknown')}</dd>
+              <dt>{t('Workspace')}</dt>
+              <dd>{trusted ? t('trusted') : t('not trusted')}</dd>
+            </dl>
+            <div class="ws-about__actions">
+              <button class="btn" onClick={onRefresh}>
+                {t('Refresh')}
+              </button>
+              {onTrust && (
+                <button class="btn" onClick={() => onTrust(!trusted)}>
+                  {trusted ? t('Revoke trust') : t('Trust this workspace')}
+                </button>
+              )}
+              {/* Only offered when the daemon says it can restart itself — the
+                  same gate the session rail's settings pane uses. */}
+              {onRestart && (
+                <button class="btn" onClick={onRestart}>
+                  {t('Restart the daemon')}
+                </button>
+              )}
+            </div>
+          </div>
         )}
       </div>
     </aside>

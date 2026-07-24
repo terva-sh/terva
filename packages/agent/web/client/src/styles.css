@@ -537,6 +537,16 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .pick-meta { flex: none; font-size: 12px; color: var(--muted); }
 .pick-empty { padding: 20px 12px; color: var(--muted); text-align: center; }
 
+/* The workspace drawer's About tab — the daemon's own facts, shown where there
+   is no session to be about. Plain definition list rather than the settings
+   pane's controls: nothing here is a per-session setting. */
+.ws-about { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+.ws-about__lead { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.ws-about__facts { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: baseline; }
+.ws-about__facts dt { color: var(--muted); font-size: 12px; }
+.ws-about__facts dd { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.ws-about__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
 /* context / usage pane body */
 .ctx-body { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .ctx-bar-wrap { display: flex; flex-direction: column; gap: 4px; }

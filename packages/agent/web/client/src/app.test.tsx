@@ -185,3 +185,76 @@ describe('App transport lifecycle', () => {
     expect(document.querySelector('a[href*="/stage/"]')).not.toBeNull()
   })
 })
+
+// The right rail on the landing — a session-less panel.
+//
+// The rail is a switcher over the surfaces a SESSION offers, and every one of
+// them is served through a session handle. The empty address is not "no
+// session": the daemon resolves it by MINTING one, which is the concurrent-client
+// bug the landing exists to avoid. So the panel was right to refuse to fetch —
+// but it still opened the rail, which then sat on "loading…" forever. A control
+// that opens onto nothing.
+//
+// These pin the wiring, which the drawer's own component test cannot see: which
+// verb is sent, and which is NOT.
+describe('App workspace drawer (no session)', () => {
+  beforeEach(() => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+      key: (i: number) => [...store.keys()][i] ?? null,
+      get length() {
+        return store.size
+      },
+    })
+  })
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  const openDrawer = async () => {
+    const client = fakeClient({
+      respond: (method) =>
+        method === 'auth.providers' ? { providers: [{ id: 'anthropic', label: 'Anthropic' }], can_login: true } : {},
+    })
+    render(<App createClient={() => client} />)
+    await act(async () => {
+      client.onReady({ features: [] } as never)
+    })
+    const btn = document.querySelector('button[title="Workspace (providers, about)"]') as HTMLElement | null
+    expect(btn, 'the panes button must say it opens the workspace when there is no session').not.toBeNull()
+    await act(async () => {
+      btn!.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    return client
+  }
+
+  it('asks the session-independent verb, addressed to nothing', async () => {
+    const client = await openDrawer()
+    const call = client.last('auth.providers')
+    expect(call, 'the drawer must fetch providers without a session').toBeTruthy()
+    // Addressed to nothing ON PURPOSE — serve.go ignores Sess for this verb
+    // because a credential belongs to the daemon. This is what makes it safe
+    // where a surface fetch is not.
+    expect(call!.sess).toBe('')
+  })
+
+  it('never asks for surfaces without a session — that is what mints one', async () => {
+    const client = await openDrawer()
+    expect(client.sent('surfaces.list')).toHaveLength(0)
+    expect(client.sent('surface.get')).toHaveLength(0)
+  })
+
+  it('renders the providers rather than hanging on "loading…"', async () => {
+    await openDrawer()
+    expect(document.querySelector('.pane-rail')).not.toBeNull()
+    expect(screen.getByText('Anthropic')).toBeTruthy()
+    expect(screen.queryByText('loading…')).toBeNull()
+  })
+})
