@@ -657,6 +657,7 @@ button:disabled {
    hover is unreliable). */
 .stage-yourchats__del,
 .stage-yourchats__world,
+.stage-yourchats__archive,
 .stage-charchats__del {
   flex: 0 0 auto;
   width: 2.3rem;
@@ -671,8 +672,10 @@ button:disabled {
 }
 .stage-yourchats__row:hover .stage-yourchats__del,
 .stage-yourchats__row:hover .stage-yourchats__world,
+.stage-yourchats__row:hover .stage-yourchats__archive,
 .stage-yourchats__del:focus-visible,
 .stage-yourchats__world:focus-visible,
+.stage-yourchats__archive:focus-visible,
 .stage-charchats__row:hover .stage-charchats__del,
 .stage-charchats__del:focus-visible {
   opacity: 1;
@@ -681,6 +684,10 @@ button:disabled {
 .stage-charchats__del:hover {
   border-color: #e06c76;
   color: #e06c76;
+}
+.stage-yourchats__archive:hover {
+  border-color: var(--stage-accent);
+  color: var(--stage-accent);
 }
 .stage-yourchats__world:hover {
   border-color: var(--stage-accent);
@@ -1872,6 +1879,14 @@ button:disabled {
 .stage-doctor__after p {
   background: rgba(158, 206, 106, 0.12);
 }
+/* A removal proposes an EMPTY value, so its "after" must not wear the green of
+   new text — it reads as the deletion it is, in the same warning tint the
+   before-side uses for what is going away. */
+.stage-doctor__after--remove p {
+  background: rgba(224, 108, 118, 0.1);
+  color: var(--stage-muted);
+  font-style: italic;
+}
 .stage-doctor__difflabel {
   font-size: 0.65rem;
   text-transform: uppercase;
@@ -2068,6 +2083,51 @@ button:disabled {
   height: 1.6rem;
   border-radius: 50%;
   object-fit: cover;
+}
+/* The scene's two identities, kept adjacent: the topbar is space-between, so as
+   separate children the character drifted to the middle and the persona halfway
+   to the controls, reading as two unrelated things. */
+.stage-chat__who {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+/* "playing as …" — who you are, beside who you are playing with. Quieter than
+   the character button (that is the scene's subject; this is its lens), and it
+   yields first: min-width:0 + ellipsis so a long persona name shrinks instead of
+   pushing the control cluster off a phone. */
+.stage-chat__playingas {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  flex-shrink: 1;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--stage-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.stage-chat__playingas:hover {
+  color: var(--stage-fg);
+  border-color: var(--stage-line);
+  background: color-mix(in srgb, var(--stage-fg) 8%, transparent);
+}
+/* Unset reads as an invitation: a scene with no persona addresses you as the
+   literal "User", and nothing else says so. */
+.stage-chat__playingas--unset {
+  border-style: dashed;
+  border-color: var(--stage-line);
+}
+.stage-chat__playingas__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .stage-chat__cardavatar--blank {
   display: inline-flex;
@@ -3606,6 +3666,22 @@ button:disabled {
 .stage-doctor__model {
   margin: 0.1rem 0 0.4rem;
 }
+/* The steer box: what the author wants out of this consultation, above the model
+   row because it is the input that changes the answer most. */
+.stage-doctor__steer {
+  display: block;
+  margin: 0.35rem 0 0.5rem;
+}
+.stage-doctor__steerlabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--stage-muted);
+}
+.stage-doctor__steerbox {
+  margin-top: 0.2rem;
+}
 .stage-suggest__model .stage-modelpick,
 .stage-doctor__model .stage-modelpick {
   margin-top: 0;
@@ -4534,6 +4610,9 @@ button:disabled {
 .stage-enrich__text--after {
   border-left: 2px solid var(--stage-ok);
 }
+/* The enrich steer — optional direction for the run, sharing the reason box's
+   look because both are "tell the editor what you think" inputs. */
+.stage-enrich__steer,
 .stage-enrich__reason {
   width: 100%;
   min-width: 0;
@@ -4545,6 +4624,10 @@ button:disabled {
   color: var(--stage-fg);
   font: inherit;
   font-size: 0.78rem;
+}
+.stage-enrich__steer {
+  margin: 0.1rem 0 0.4rem;
+  resize: vertical;
 }
 .stage-enrich__actions {
   display: flex;
@@ -4824,4 +4907,221 @@ button:disabled {
 .stage-export:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* The character studio: the editor as a SCREEN rather than a sheet thrown over
+   whichever surface opened it. Same body as before, so the field/lint/doctor
+   styles all still apply — what changes is that it owns the viewport, scrolls
+   as a page, and has a topbar with a way back to where the trip started. */
+.stage-studio { display: flex; flex-direction: column; min-height: 100dvh; }
+.stage-studio__body { flex: 1; overflow-y: auto; display: flex; justify-content: center; padding: 1rem; }
+.stage-cardeditor--screen {
+  width: min(56rem, 100%);
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+/* The action bar sticks to the bottom of the viewport on a long card, so Save is
+   reachable without scrolling to the end of a description. */
+.stage-cardeditor--screen .stage-cardeditor__bar {
+  position: sticky;
+  bottom: 0;
+  background: var(--stage-bg);
+  border-top: 1px solid var(--stage-line);
+  padding-top: 0.6rem;
+}
+@media (max-width: 40rem) {
+  .stage-studio__body { padding: 0.5rem; }
+}
+.stage-studio__waiting { color: var(--stage-muted); padding: 2rem; }
+
+/* The studio's two tabs — who you play WITH, who you play AS. Both panes stay
+   mounted so a tab never costs an unsaved draft, so the inactive one is hidden
+   rather than removed. The [hidden] rule is NOT redundant with the UA
+   stylesheet's: `display: flex` below has higher specificity than
+   `[hidden] { display: none }`, so without it the "hidden" pane renders. */
+.stage-studio__tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--stage-line);
+}
+.stage-studio__tab {
+  border: none;
+  background: none;
+  color: var(--stage-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.stage-studio__tab:hover {
+  color: var(--stage-fg);
+  background: var(--stage-surface-2);
+}
+.stage-studio__tab--on {
+  color: var(--stage-accent);
+  border-bottom-color: var(--stage-accent);
+  font-weight: 600;
+}
+.stage-studio__pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+.stage-studio__pane[hidden] {
+  display: none;
+}
+
+/* The You editor: the studio's other half. One column, laid out like the card
+   editor beside it — the two identities in a story deserve the same room. */
+.stage-you {
+  width: min(48rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  align-self: flex-start;
+}
+.stage-you__editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.stage-you__editor h2,
+.stage-you__library h3 {
+  margin: 0;
+}
+.stage-you__desc {
+  resize: vertical;
+}
+.stage-you__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.stage-you__save,
+.stage-you__new {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 8px;
+  border: 1px solid var(--stage-line);
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  cursor: pointer;
+}
+.stage-you__save:hover:not(:disabled),
+.stage-you__new:hover {
+  border-color: var(--stage-accent);
+  color: var(--stage-accent);
+}
+.stage-you__save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The save confirmation. A library save has no visible consequence — the row was
+   already in the list under that name — so without a word back, the button reads
+   as having done nothing. */
+.stage-you__saved {
+  font-size: 0.8rem;
+  color: var(--stage-accent);
+}
+.stage-you__library {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid var(--stage-line);
+  padding-top: 1rem;
+}
+.stage-you__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.stage-you__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 10px;
+  padding: 0.4rem 0.6rem;
+  background: var(--stage-surface);
+}
+.stage-you__row--editing,
+.stage-you__row--playing {
+  border-color: var(--stage-accent);
+}
+.stage-you__pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  border: none;
+  background: none;
+  color: var(--stage-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0.1rem 0;
+}
+.stage-you__rowname {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.stage-you__rowdesc {
+  font-size: 0.78rem;
+  color: var(--stage-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.stage-you__badge {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--stage-accent);
+  border: 1px solid var(--stage-accent);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+}
+.stage-you__default,
+.stage-you__del {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--stage-muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 0.2rem 0.35rem;
+  border-radius: 6px;
+}
+.stage-you__default:hover,
+.stage-you__del:hover {
+  color: var(--stage-accent);
+  background: var(--stage-surface-2);
+}
+/* The Library's door into the You tab. A <button> where its neighbours are <a>,
+   so it needs the anchor styling reset back onto it. */
+.stage-you-link {
+  font-family: inherit;
+  background: none;
+  cursor: pointer;
 }

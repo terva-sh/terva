@@ -82,7 +82,7 @@ describe('Chat delete affordance', () => {
   function mountChat() {
     vi.useFakeTimers()
     const client = fakeClient()
-    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} onOpenStudio={() => {}} />)
     const snapshot: WireEvent = {
       type: 'snapshot',
       snapshot: {
@@ -187,7 +187,7 @@ describe('Chat scene-state card liveness', () => {
   it('raises the card on the put snapshot alone — no turn, no suggest', () => {
     vi.useFakeTimers()
     const client = fakeClient()
-    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} onOpenStudio={() => {}} />)
 
     // Nothing pinned yet.
     act(() => {
@@ -222,7 +222,7 @@ describe('Chat regenerate controls', () => {
   function mountWithReply() {
     vi.useFakeTimers()
     const client = fakeClient()
-    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} onOpenStudio={() => {}} />)
     act(() => {
       client.emit('s1', {
         type: 'snapshot',
@@ -280,7 +280,7 @@ describe('Chat surfaces a refusal where it happened', () => {
         throw new Error('nothing to retry')
       },
     })
-    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} onOpenStudio={() => {}} />)
     act(() => {
       client.emit('s1', {
         type: 'snapshot',
@@ -329,7 +329,7 @@ describe('Chat transcript fidelity', () => {
   function mountWith(messages: unknown[]) {
     vi.useFakeTimers()
     const client = fakeClient()
-    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} onOpenStudio={() => {}} />)
     act(() => {
       client.emit('s1', {
         type: 'snapshot',
@@ -406,9 +406,11 @@ describe('Chat transcript fidelity', () => {
 // chat to inspect or edit the card you're playing. The gate matters — a creator
 // or plain-persona chat has no card, and the affordance must not appear then.
 describe('Chat character-card access from the header', () => {
+  const onOpenStudio = vi.fn()
   afterEach(() => {
     cleanup()
     vi.useRealTimers()
+    onOpenStudio.mockReset()
   })
 
   const card = {
@@ -429,7 +431,7 @@ describe('Chat character-card access from the header', () => {
         return {}
       },
     })
-    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} />)
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} onOpenStudio={onOpenStudio} />)
     act(() => {
       client.emit('s1', {
         type: 'snapshot',
@@ -454,7 +456,7 @@ describe('Chat character-card access from the header', () => {
       await Promise.resolve()
     })
 
-  it('opens the bound character’s card — view, then edit', async () => {
+  it('opens the bound character’s card — view, then hands editing to the studio', async () => {
     mount({ id: 's1', experience: 'chat', card: 'kobeni-abc' })
     await flush()
     const open = document.querySelector('.stage-chat__cardbtn') as HTMLElement | null
@@ -464,13 +466,20 @@ describe('Chat character-card access from the header', () => {
 
     fireEvent.click(open!)
     await flush()
-    // The detail sheet, not the editor yet.
+    // The detail sheet, not the editor.
     expect(document.querySelector('.stage-sheet--detail:not(.stage-cardeditor)')).not.toBeNull()
 
-    // ✎ Edit hands off to the editor — the Library grid's view→edit path.
+    // ✎ Edit LEAVES the scene for the character studio rather than opening an
+    // editor over it. The editor mounted here is how a save could tear itself
+    // down mid-consultation: two hosts, two ideas of when it should close.
     fireEvent.click(screen.getByText('✎ Edit'))
     await flush()
-    expect(document.querySelector('.stage-cardeditor')).not.toBeNull()
+    expect(document.querySelector('.stage-cardeditor')).toBeNull()
+    expect(onOpenStudio).toHaveBeenCalledTimes(1)
+    expect(onOpenStudio.mock.calls[0][0]?.card?.id).toBe('kobeni-abc')
+    expect(onOpenStudio.mock.calls[0][0]?.tab).toBe('character')
+    // And the sheet closed behind it, so returning does not land on a stale one.
+    expect(document.querySelector('.stage-sheet--detail')).toBeNull()
   })
 
   it('shows no card affordance on a card-less session, but keeps the model chip', async () => {
@@ -479,5 +488,53 @@ describe('Chat character-card access from the header', () => {
     expect(document.querySelector('.stage-chat__cardbtn')).toBeNull()
     // The header model chip is unconditional — every session picks a model.
     expect(document.querySelector('.stage-modelpick--compact')).not.toBeNull()
+  })
+
+  // Who you are in the scene, beside who you are playing with. It was steerable
+  // only from a tab inside the drawer, so the answer to "who am I here" was
+  // invisible until you went looking for it.
+  it('names who you are playing as, and hands the You tab the scene', async () => {
+    mount({ id: 's1', experience: 'chat', card: 'kobeni-abc', user_name: 'Kira', user_description: 'A wary courier.', user_pronouns: 'she/her' })
+    await flush()
+    const chip = document.querySelector('.stage-chat__playingas') as HTMLElement | null
+    expect(chip).not.toBeNull()
+    expect(chip!.textContent).toContain('Kira')
+    expect(chip!.className).not.toContain('--unset')
+
+    fireEvent.click(chip!)
+    await flush()
+    expect(onOpenStudio).toHaveBeenCalledTimes(1)
+    // The You tab, carrying the scene it was opened from — without the session
+    // the tab would edit the saved library instead of steering this chat.
+    expect(onOpenStudio.mock.calls[0][0]?.tab).toBe('you')
+    expect(onOpenStudio.mock.calls[0][0]?.scene).toMatchObject({
+      session: 's1',
+      name: 'Kira',
+      description: 'A wary courier.',
+      pronouns: 'she/her',
+    })
+  })
+
+  // An unset persona is the case worth surfacing: the scene addresses you as the
+  // literal "User" and nothing else says so.
+  it('invites a persona when the scene has none', async () => {
+    mount({ id: 's1', experience: 'chat', card: 'kobeni-abc' })
+    await flush()
+    const chip = document.querySelector('.stage-chat__playingas') as HTMLElement | null
+    expect(chip).not.toBeNull()
+    expect(chip!.className).toContain('stage-chat__playingas--unset')
+  })
+
+  // ...but only where there IS a you to play: user.bind refuses a coding session,
+  // and the cartographer's workshop is a conversation ABOUT a story.
+  it('offers no persona on the creator workshop or a coding session', async () => {
+    mount({ id: 's1', experience: 'chat', persona: 'kartoittaja' })
+    await flush()
+    expect(document.querySelector('.stage-chat__playingas')).toBeNull()
+    cleanup()
+
+    mount({ id: 's1' })
+    await flush()
+    expect(document.querySelector('.stage-chat__playingas')).toBeNull()
   })
 })

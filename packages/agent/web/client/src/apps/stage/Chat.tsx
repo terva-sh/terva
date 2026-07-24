@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
-import type { AskRequest, CardView, CreateOpts, SessionInfo } from '../../platform/ctrlproto/types'
+import type { AskRequest, CardSummary, CardView, CreateOpts, SessionInfo } from '../../platform/ctrlproto/types'
 import type { Item } from '../../platform/conversation/store'
 import { t, tn } from '../../i18n'
 import { panelHref } from '../../ui/navlinks'
@@ -19,7 +19,8 @@ import { DoctorOverlay, type DoctorAsk } from './SessionDoctor'
 import { SceneStateCard, sceneStateOf } from './SceneState'
 import { NextSceneSheet } from './NextScene'
 import { CardSheet } from './CardSheet'
-import { CardEditor } from './CardEditor'
+import type { StudioTab } from './CharacterStudio'
+import type { ScenePersona } from './YouEditor'
 
 type Character = { name: string; avatar?: string }
 
@@ -55,17 +56,26 @@ export function Chat(props: {
   generation?: number
   onBack: () => void
   onOpenSession: (session: string) => void
+  // ✎ on the character's card, or "playing as …" in the header, leaves the scene
+  // for the studio. The scene is not torn down — Stage holds it as the studio's
+  // `back` — so the way out returns here. The editor used to open as a sheet over
+  // this screen, which is how a save could unmount it mid-consultation.
+  //
+  // Both doors carry the scene's persona, not just the one that asks for the You
+  // tab: a cold sessions.list row has no user fields, so the live chat is the only
+  // place that knows who you are here, and the tab has to work whichever way the
+  // studio was entered.
+  onOpenStudio: (o: { tab: StudioTab; card: CardSummary | null; scene: ScenePersona }) => void
 }) {
   const { client, sessionId, onOpenSession } = props
   const { items, busy, info, tail, msgMarks, permission, ask, send, edit, deleteAt, swipe, swipeAt, pruneAt, dropAt, retry, continueTurn, advance, cancel, decide, answerAsk, fork, discardDraft } = useConversation(client, sessionId, props.generation)
   const [draft, setDraft] = useState('')
   const [character, setCharacter] = useState<Character | null>(null)
-  // The full bound card, kept so the header can open its detail/edit sheets
-  // without a round-trip to the Library. cardSheet = the view; cardEditing = the
-  // editor reached from it (same view→edit hand-off the Library grid uses).
+  // The full bound card, kept so the header can open its detail sheet without a
+  // round-trip to the Library. Editing is NOT a sheet over this screen: ✎ hands
+  // off to the character studio, which owns the editor's whole lifecycle.
   const [cardView, setCardView] = useState<CardView | null>(null)
   const [cardSheet, setCardSheet] = useState(false)
-  const [cardEditing, setCardEditing] = useState(false)
   const [editing, setEditing] = useState<{ idx: number; text: string } | null>(null)
   // The guided-regenerate box on the last response: null is closed, and ↻ stays a
   // one-click plain regenerate whether it is open or not. ignorePrior is per
@@ -147,6 +157,13 @@ export function Chat(props: {
   // workshop label for the creator.
   const title = info?.title || character?.name || (isCreator ? t('Workshop') : t('Chat'))
   const lastAssistantId = [...items].reverse().find((it) => it.kind === 'assistant')?.id
+  // Only an immersive session has a user persona at all — user.bind refuses a
+  // coding session, and the creator's workshop is a conversation ABOUT a story
+  // rather than one you are inside. Gated on the experience the daemon reports,
+  // so a session whose info has not landed yet shows nothing rather than a
+  // control that would fail on the first click.
+  const isImmersive = (info?.experience === 'chat' || info?.experience === 'play') && !isCreator
+  const playingAs = (info?.user_name ?? '').trim()
 
   const submit = () => {
     const t = draft.trim()
@@ -193,6 +210,16 @@ export function Chat(props: {
   // The transcript's message count, for sizing the downstream of a deep edit.
   const msgCount = items.reduce((n, it) => Math.max(n, (it.idx ?? -1) + 1), 0)
 
+  // Who the author is in THIS scene, handed to the studio so its You tab steers
+  // this session rather than the saved library.
+  const scenePersona: ScenePersona = {
+    session: sessionId,
+    name: info?.user_name ?? '',
+    description: info?.user_description ?? '',
+    gender: info?.user_gender ?? '',
+    pronouns: info?.user_pronouns ?? '',
+  }
+
   // Start a fresh chat with this same character — the card sheet's Start button,
   // reachable from inside a scene without a trip back to the Library.
   const startChatFrom = (greeting: number) => {
@@ -219,26 +246,49 @@ export function Chat(props: {
         >
           {t('‹ Library')}
         </button>
-        {/* The character's portrait + name open its card — view every field,
-            or ✎ Edit — right from the scene, instead of backing out to the
-            Library to find it. Only a card-backed session has one to open; a
-            creator or plain-persona chat keeps the bare title. */}
-        {info?.card && cardView ? (
-          <button
-            class="stage-chat__cardbtn"
-            title={t('%s — view or edit their card', character?.name ?? title)}
-            onClick={() => setCardSheet(true)}
-          >
-            {cardView.avatar_url ? (
-              <img class="stage-chat__cardavatar" src={cardView.avatar_url} alt="" />
-            ) : (
-              <span class="stage-chat__cardavatar stage-chat__cardavatar--blank" aria-hidden="true">{initial(title)}</span>
-            )}
+        {/* Who is in this scene: the character, then you. One flex child, so the
+            topbar's space-between keeps the pair together instead of flinging
+            them to opposite ends of the strip. */}
+        <div class="stage-chat__who">
+          {/* The character's portrait + name open its card — view every field,
+              or ✎ Edit — right from the scene, instead of backing out to the
+              Library to find it. Only a card-backed session has one to open; a
+              creator or plain-persona chat keeps the bare title. */}
+          {info?.card && cardView ? (
+            <button
+              class="stage-chat__cardbtn"
+              title={t('%s — view or edit their card', character?.name ?? title)}
+              onClick={() => setCardSheet(true)}
+            >
+              {cardView.avatar_url ? (
+                <img class="stage-chat__cardavatar" src={cardView.avatar_url} alt="" />
+              ) : (
+                <span class="stage-chat__cardavatar stage-chat__cardavatar--blank" aria-hidden="true">{initial(title)}</span>
+              )}
+              <span class="stage-chat__title">{title}</span>
+            </button>
+          ) : (
             <span class="stage-chat__title">{title}</span>
-          </button>
-        ) : (
-          <span class="stage-chat__title">{title}</span>
-        )}
+          )}
+          {/* Who you are in this scene, next to who you are playing with. The
+              persona was steerable only from a tab inside the drawer, which is a
+              strange place for the answer to "who am I here" — it belongs where
+              the other half of the scene's identity already is. Unset it reads as
+              an invitation rather than a value, because a scene with no persona
+              addresses you as the literal "User" and nothing said so.
+              Immersive sessions only: user.bind is a bad request elsewhere, and
+              the cartographer's workshop has no "you" to play. */}
+          {isImmersive && (
+            <button
+              class={`stage-chat__playingas ${playingAs ? '' : 'stage-chat__playingas--unset'}`}
+              title={playingAs ? t('You are playing as %s — edit or switch', playingAs) : t('Set who you are in this scene')}
+              onClick={() => props.onOpenStudio({ tab: 'you', card: cardView, scene: scenePersona })}
+            >
+              <span class="stage-chat__playingas__icon" aria-hidden="true">🎭</span>
+              <span class="stage-chat__playingas__name">{playingAs || t('Who are you?')}</span>
+            </button>
+          )}
+        </div>
         <div class="stage-chat__right">
           <span class="stage-status">{busy ? t('thinking…') : ''}</span>
           {/* The model, up front: the config reached for most often in a quick
@@ -533,22 +583,11 @@ export function Chat(props: {
           }}
           onEdit={() => {
             setCardSheet(false)
-            setCardEditing(true)
+            props.onOpenStudio({ tab: 'character', card: cardView, scene: scenePersona })
           }}
         />
       )}
 
-      {cardEditing && cardView && (
-        <CardEditor
-          client={client}
-          card={cardView}
-          onClose={() => setCardEditing(false)}
-          onSaved={() => {
-            setCardEditing(false)
-            loadCard()
-          }}
-        />
-      )}
     </div>
   )
 }

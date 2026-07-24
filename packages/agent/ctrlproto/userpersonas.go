@@ -16,7 +16,9 @@ type UserPersonasController interface {
 	// default if the user set one.
 	UserPersonasList(ctx context.Context) (UserPersonasListResult, error)
 	// UserPersonaSave upserts a saved persona by a slug of its name, preserving its
-	// default status (changed only via UserPersonaSetDefault).
+	// default status (changed only via UserPersonaSetDefault). A Ref names the
+	// persona being edited, so a changed name RENAMES it instead of creating a
+	// second one; a rename onto a name already taken is refused.
 	UserPersonaSave(ctx context.Context, p UserPersonaView) (UserPersonaView, error)
 	// UserPersonaDelete removes a saved persona; a missing one is a no-op.
 	UserPersonaDelete(ctx context.Context, p UserPersonaRef) error
@@ -26,6 +28,11 @@ type UserPersonasController interface {
 }
 
 // UserPersonaView is one saved user persona (mirrors build.UserPersona).
+//
+// Ref is server-assigned on the way out (the name slug the persona is stored
+// under). On the way IN to userpersonas.save it identifies WHICH persona is
+// being edited: send it and a changed Name renames that persona, omit it and the
+// name alone decides, which makes a rename indistinguishable from a create.
 type UserPersonaView struct {
 	Ref         string `json:"ref,omitempty"`
 	Name        string `json:"name"`

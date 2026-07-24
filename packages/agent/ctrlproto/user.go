@@ -18,10 +18,11 @@ type UserController interface {
 }
 
 // UserBindParams carries the user persona to bind. Name is the {{user}} macro
-// (a prefix rebuild on change); Description rides the free per-turn tail. Ref is
-// reserved for binding a saved user-persona from the personas.* library — not
-// yet implemented, and rejected if set, so the wire shape is stable for that
-// upgrade without promising it today.
+// (a prefix rebuild on change); Description rides the free per-turn tail. Ref
+// names a SAVED persona (userpersonas.*) to apply instead — its stored fields
+// win over the inline ones. The bind COPIES those fields into the session, so a
+// later edit to the saved persona does not reach a scene already playing as it;
+// re-binding is what carries a change over.
 type UserBindParams struct {
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
