@@ -148,6 +148,32 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .code-copy.copied .ic-check { display: inline; }
 @media (hover: none) { .code-copy { opacity: .5; } }
 
+/* The block itself. A fenced block is the one piece of markdown that will not
+   wrap — a long line keeps its width — so unless it is told to scroll it grows
+   the layout instead, and on a phone the text simply ran out through the side
+   of the message. The panel had these rules; Stage never did, because they were
+   written under the panel's .md and Stage renders the same markdown-it output
+   under a class of its own. Keyed on .code-wrap, which markdown.ts emits on
+   every surface, so the block travels with the module like the button does.
+   The panel's .md pre still lands after this and keeps its own look.
+   max-width matters as much as overflow-x: as a scroll container the block
+   would otherwise still report its full content width to a flex parent and
+   push the bubble wide. */
+.code-wrap pre {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: .5em 0;
+  padding: 10px 12px;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-line);
+  border-radius: 8px;
+}
+.code-wrap pre code {
+  background: none;
+  padding: 0;
+  font-size: 12.5px;
+}
+
 /* --- inline image attachments (ui/ImageGallery.tsx) --- */
 .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .msg-image-link { display: block; line-height: 0; }

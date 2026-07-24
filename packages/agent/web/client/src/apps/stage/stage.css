@@ -2256,6 +2256,41 @@ button:disabled {
   color: var(--stage-muted);
   font-style: italic;
 }
+/* The rest of what markdown-it can put in a bubble. Fenced blocks are styled in
+   ui.css (they carry markdown.ts's .code-wrap); these two have no wrapper to
+   key on, and a scene had no rules for them at all — so inline code read as
+   ordinary prose and a table grew the bubble instead of scrolling inside it.
+   A stat block or an inventory table is exactly the sort of thing a play
+   session asks a model for, so this is not a corner. */
+.stage-bubble code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.9em;
+  background: color-mix(in srgb, var(--stage-muted) 18%, transparent);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+/* display:block is what makes overflow-x apply — a table is not a block box by
+   default and ignores it. Cells then keep their words whole so the table earns
+   a natural width and scrolls, rather than being crushed column by column. */
+.stage-bubble table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+}
+.stage-bubble th,
+.stage-bubble td {
+  border: 1px solid var(--stage-line);
+  padding: 4px 8px;
+  text-align: left;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.stage-bubble th {
+  background: var(--stage-surface-2);
+  white-space: nowrap;
+}
 
 .stage-caret {
   color: var(--stage-accent);

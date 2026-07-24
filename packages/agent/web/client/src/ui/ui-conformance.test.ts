@@ -155,3 +155,52 @@ describe('every button has press feedback (the base :active)', () => {
     ).toBe(true)
   })
 })
+
+// Wide content must scroll inside the message it belongs to, not push the
+// message wider than the screen. This is a whole class of bug rather than one
+// rule: markdown-it can put three things in a bubble that refuse to wrap — a
+// fenced code block, a table, and a long unbroken token — and each has its own
+// escape. The panel had the code and table rules; Stage rendered the same HTML
+// under a class of its own and got neither, so on a phone a stat block simply
+// ran out through the side of the bubble.
+//
+// Source-read, because vitest runs in CI and the Playwright smokes do not — the
+// same reason the rest of this file reads sheets rather than a rendered page. It
+// pins the DECLARATION, not the pixels; the screenshot is what confirms those.
+describe('wide markdown content is contained, not overflowing', () => {
+  // A rule's body, given a literal selector. Naive but sufficient: these
+  // selectors appear once, and a second definition would show up as a miss.
+  const ruleBody = (sheet: string, selector: string): string => {
+    const at = sheet.indexOf(selector + ' {')
+    if (at < 0) return ''
+    return sheet.slice(at, sheet.indexOf('}', at))
+  }
+
+  // Fenced blocks carry markdown.ts's .code-wrap on EVERY surface, so the base
+  // owning them is what makes them work in both apps at once.
+  it('ui.css contains fenced code blocks for every surface', () => {
+    const body = ruleBody(base, '.code-wrap pre')
+    expect(body, 'ui.css must style `.code-wrap pre` — markdown.ts emits it on every surface').not.toBe('')
+    expect(/overflow-x:\s*auto/.test(body), '`.code-wrap pre` needs overflow-x: auto or a long line grows the layout').toBe(true)
+    // Without this the block is a scroll container that still reports its full
+    // content width to a flex parent, which drags the bubble wide anyway.
+    expect(/max-width:\s*100%/.test(body), '`.code-wrap pre` needs max-width: 100% — overflow-x alone does not bound it').toBe(true)
+  })
+
+  // Tables have no wrapper to key on, so each app's own markdown-body class
+  // owns them. Both must, or one app scrolls and the other overflows.
+  const TABLE_OWNERS: Array<[string, string, string]> = [
+    ['panel (styles.css)', read('../styles.css'), '.md table'],
+    ['stage (stage.css)', read('../apps/stage/stage.css'), '.stage-bubble table'],
+  ]
+  for (const [name, sheet, selector] of TABLE_OWNERS) {
+    it(`${name} contains a wide table inside the message`, () => {
+      const body = ruleBody(sheet, selector)
+      expect(body, `${name} must style \`${selector}\``).not.toBe('')
+      expect(/overflow-x:\s*auto/.test(body), `${selector} needs overflow-x: auto`).toBe(true)
+      // A table is not a block box; overflow-x is ignored until it is one.
+      expect(/display:\s*block/.test(body), `${selector} needs display: block or overflow-x does nothing on a table`).toBe(true)
+      expect(/max-width:\s*100%/.test(body), `${selector} needs max-width: 100%`).toBe(true)
+    })
+  }
+})
