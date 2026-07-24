@@ -371,8 +371,13 @@ const plainSurface = `Your output is written straight to a plain-text stream wit
 const programSurface = `Your output is handed to a program as structured events, and that program decides how — or whether — to display it. Do not count on markdown being rendered.`
 
 // codingOutputConventions is the half of the old conventions paragraph that was
-// never about the surface at all: it is true whoever is reading.
-const codingOutputConventions = `Keep answers concise, and let tool calls speak for themselves rather than narrating them in prose before you invoke them. Act first, then summarise what you did.`
+// never about the surface at all: it is true whoever is reading. It no longer
+// says "Act first, then summarise": that was a timing directive, not output
+// discipline, and it contradicted Mieli's intent-first orientation
+// (personas/builtin/mieli.md — orient the user before the first tool call of a
+// multi-step task). The persona now owns when to speak; this owns the output
+// shape — concise, no per-call narration, summarise the result after.
+const codingOutputConventions = `Keep answers concise, and let tool calls carry the operational detail rather than narrating each one in prose. Summarise what you did and the outcome.`
 
 // fileEditConventions names terva's edit and write tools, so it ships only when
 // they do. The rationale it gives used to be a rendering claim ("edit renders as

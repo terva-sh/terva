@@ -109,7 +109,7 @@ func TestFileEditConventionsOnlyWhenTheToolsExist(t *testing.T) {
 		t.Errorf("--no-tools: the prompt must not name tools the model cannot call:\n%s", noTools)
 	}
 	// The output discipline is not about tools and survives either way.
-	if !strings.Contains(noTools, "Act first") {
+	if !strings.Contains(noTools, "let tool calls carry the operational detail") {
 		t.Errorf("output discipline is surface- and tool-independent:\n%s", noTools)
 	}
 }

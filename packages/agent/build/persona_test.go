@@ -91,12 +91,42 @@ func TestBuildSystemPrompt_IntroOverride(t *testing.T) {
 	if strings.Contains(got, "operating inside terva") {
 		t.Errorf("branded intro should be replaced by the override:\n%s", got)
 	}
-	if !strings.Contains(got, "Act first, then summarise") {
+	if !strings.Contains(got, "Summarise what you did and the outcome") {
 		t.Errorf("terva conventions should still bracket the end:\n%s", got)
 	}
 	segs := SystemSegments(opts)
 	if len(segs) == 0 || segs[0].Source != "persona:introduction" {
 		t.Errorf("first segment should be the labeled intro override, got %+v", segs)
+	}
+}
+
+// TestMieliCharter_IntentFirst pins the paired change from the dogfood
+// experiment (notes/mieli-intent-first-orientation.md): the built-in Mieli
+// charter tells the model to orient the user before nontrivial tool-driven work,
+// and the shared coding convention no longer carries the old "Act first" timing
+// directive that contradicted it. The two travel together — the persona owns the
+// collaboration style, the convention owns concise output with no per-call
+// narration — so reverting either half alone trips this test.
+func TestMieliCharter_IntentFirst(t *testing.T) {
+	p, err := loadEmbeddedPersona("mieli")
+	if err != nil {
+		t.Fatalf("load embedded mieli: %v", err)
+	}
+	if !strings.Contains(p.Charter, "before your first tool call") {
+		t.Errorf("mieli charter should carry the intent-first orientation contract:\n%s", p.Charter)
+	}
+
+	// A default (coding) assembly with Mieli's charter: intent-first present, the
+	// contradicting "Act first" gone, output discipline retained.
+	got := BuildSystemPrompt(SystemPromptOpts{PersonaName: p.Name, Charter: p.Charter})
+	if !strings.Contains(got, "before your first tool call") {
+		t.Errorf("assembled prompt should carry mieli's intent-first paragraph:\n%s", got)
+	}
+	if strings.Contains(got, "Act first") {
+		t.Errorf("the old \"Act first\" convention must not survive alongside intent-first:\n%s", got)
+	}
+	if !strings.Contains(got, "let tool calls carry the operational detail") {
+		t.Errorf("output discipline (concise, no per-call narration) should still ship:\n%s", got)
 	}
 }
 

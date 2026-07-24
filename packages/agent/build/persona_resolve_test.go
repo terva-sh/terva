@@ -214,7 +214,7 @@ func TestBuildSystemPrompt_CharterPlacement(t *testing.T) {
 	// Anchor on the surface-independent half of the conventions: the opening
 	// sentence now varies with where the output lands (see Surface), so keying
 	// the ordering check on it would make this test a hostage to the audience.
-	conv := strings.Index(got, "Act first, then summarise")
+	conv := strings.Index(got, "let tool calls carry the operational detail")
 	if intro < 0 || charter < 0 || conv < 0 {
 		t.Fatalf("missing a section: intro=%d charter=%d conv=%d\n%s", intro, charter, conv, got)
 	}
