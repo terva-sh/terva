@@ -11,6 +11,20 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.10](https://github.com/terva-sh/terva/releases/tag/v0.126.10) — 2026-07-24
+
+### Features
+
+- sessions: archive a session instead of only deleting it
+- stage: a character studio — one screen that owns making and editing
+- stage: tell the card doctor what you want, including what to cut
+- stage: the other half of the studio — who you play as
+
+### Fixes
+
+- providers: a named local endpoint works the moment you create it
+- stage: a save from the card editor no longer closes it mid-consultation
+
 ## [v0.126.9](https://github.com/terva-sh/terva/releases/tag/v0.126.9) — 2026-07-23
 
 ### Features
