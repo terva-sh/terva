@@ -58,6 +58,18 @@ type DoctorParams struct {
 	// rather than from card-craft lint alone. The same proposal shape and
 	// negotiation loop apply.
 	Session string `json:"session,omitempty"`
+
+	// Steer is the author's own instruction for this pass — "make her wearier",
+	// "cut the war backstory", "she should not know about the Accord yet". When
+	// set it is the doctor's primary warrant: lint findings and taste
+	// improvements stay in scope, but what the author asked for comes first.
+	// Empty runs the ordinary lint-led pass.
+	//
+	// Distinct from a DoctorDecision.Reason, which answers ONE proposal after
+	// the fact. A steer is standing direction the whole round works toward, so
+	// a client re-sends it on each revise — including an edited one, which is
+	// how an author changes course mid-negotiation.
+	Steer string `json:"steer,omitempty"`
 }
 
 // DoctorDecision is the user's verdict on one prior proposal: accepted, or
@@ -82,6 +94,14 @@ type DoctorProposal struct {
 	Rationale string `json:"rationale"`
 	Before    string `json:"before"`
 	After     string `json:"after"`
+
+	// Remove marks a proposal that CLEARS the field: After is empty and that is
+	// the point. It has to be said rather than inferred — an empty After on its
+	// own is indistinguishable from a model that had nothing to offer, and is
+	// still dropped. Without this the doctor could propose new text and changed
+	// text but never a deletion, so "drop the backstory paragraph" had no way to
+	// be expressed and was silently discarded.
+	Remove bool `json:"remove,omitempty"`
 }
 
 // DoctorResult is the payload of cards.doctor.

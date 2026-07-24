@@ -7,78 +7,13 @@ import type { SessionInfo, BackgroundView, BackgroundsListResult, CardView, Doct
 import { ModelPick } from './ModelPick'
 import { SessionDoctor } from './SessionDoctor'
 import { SCENE_STATE_NAME, sceneStateOf, scenePinDrift } from './SceneState'
+import { IdentityField, PRONOUN_OPTIONS, GENDER_OPTIONS } from './identity'
 
 async function fileToBase64(file: File): Promise<string> {
   const buf = new Uint8Array(await file.arrayBuffer())
   let binary = ''
   for (let i = 0; i < buf.length; i++) binary += String.fromCharCode(buf[i])
   return btoa(binary)
-}
-
-// Inclusive default option lists for the identity dropdowns. The wire is free-text
-// (UserPersonaView.gender/pronouns are plain strings), so "Other…" is just an
-// unlisted value — a new option needs no server change, and the lists stay
-// inclusive and editable right here.
-// i18n-exempt — these ARE the committed wire values (they reach the model's
-// prompt verbatim), not display-only labels; translating the label would
-// diverge from the stored value. Localizing identity options is a wire-level
-// question, not a render-time one.
-const PRONOUN_OPTIONS = ['she/her', 'he/him', 'they/them', 'she/they', 'he/they', 'it/its', 'any', 'ask']
-const GENDER_OPTIONS = ['Woman', 'Man', 'Non-binary', 'Genderfluid', 'Agender', 'Prefer not to say']
-
-// IdentityField is an inclusive dropdown with an "Other…" escape that reveals a
-// free-text input. The value it edits is always a plain string. Picking a preset
-// commits immediately (with the chosen value passed through, so the parent never
-// reads stale state); typing a custom value commits on blur.
-function IdentityField(props: {
-  label: string
-  placeholder: string
-  options: string[]
-  value: string
-  onChange: (v: string) => void
-  onCommit: (v: string) => void
-}) {
-  const { label, placeholder, options, value, onChange, onCommit } = props
-  const custom = value !== '' && !options.includes(value)
-  const [openOther, setOpenOther] = useState(custom)
-  const showOther = openOther || custom
-  return (
-    <label class="stage-identity">
-      <span class="stage-identity__label">{label}</span>
-      <select
-        class="stage-identity__select"
-        value={showOther ? '__other__' : value}
-        onChange={(e) => {
-          const v = (e.target as HTMLSelectElement).value
-          if (v === '__other__') {
-            setOpenOther(true)
-          } else {
-            setOpenOther(false)
-            onChange(v)
-            onCommit(v)
-          }
-        }}
-      >
-        <option value="">{t('— unset —')}</option>
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-        <option value="__other__">{t('Other…')}</option>
-      </select>
-      {showOther && (
-        <input
-          class="stage-identity__other"
-          type="text"
-          placeholder={placeholder}
-          value={value}
-          onInput={(e) => onChange((e.target as HTMLInputElement).value)}
-          onBlur={() => onCommit(value)}
-        />
-      )}
-    </label>
-  )
 }
 
 // The steering drawer — the progressive-disclosure power surface. This pass
@@ -377,6 +312,10 @@ export function Steering(props: {
   // (the daemon's default now that editor mode resolves against the session).
   const [enrichProvider, setEnrichProvider] = useState('')
   const [enrichModel, setEnrichModel] = useState('')
+  // The author's standing instruction for this enrichment — "keep her terse",
+  // "fold in what she learned about the ledger". Rides every round, the same
+  // steer the studio's card doctor takes.
+  const [enrichSteer, setEnrichSteer] = useState('')
   const resetEnrich = () => {
     setEnrich(null)
     setEnrichProposals(null)
@@ -385,6 +324,7 @@ export function Steering(props: {
     setEnrichReasons({})
     setEnrichProvider('')
     setEnrichModel('')
+    setEnrichSteer('')
   }
   useEffect(() => {
     resetEnrich()
@@ -402,6 +342,7 @@ export function Steering(props: {
     setEnrichReasons({})
     setEnrichProvider('')
     setEnrichModel('')
+    setEnrichSteer('')
     setError('')
   }
   const runEnrich = (target: { ref: string; name: string }, decisions?: unknown[]) => {
@@ -409,7 +350,7 @@ export function Steering(props: {
     setEnrichRunning(true)
     setError('')
     client
-      .send<DoctorResult>('cards.doctor', { id: target.ref, session: sessionId, decisions, provider: enrichProvider, model: enrichModel }, sessionId)
+      .send<DoctorResult>('cards.doctor', { id: target.ref, session: sessionId, decisions, steer: enrichSteer, provider: enrichProvider, model: enrichModel }, sessionId)
       .then((r) => {
         setEnrichProposals(r.proposals ?? [])
         setEnrichNote(r.note ?? '')
@@ -427,8 +368,16 @@ export function Steering(props: {
     runEnrich(enrich, decisions)
   }
   // Apply the accepted proposals: read the card's raw document, replace the
-  // accepted fields wholesale (the contract: `after` is the complete value),
-  // save through the ordinary cards.edit.
+  // accepted fields wholesale (the contract: `after` is the complete value —
+  // empty for a removal, which is the point of it), save through the ordinary
+  // cards.edit.
+  //
+  // The fields of a CCv2 document live under `data`, and cards.edit RE-PARSES
+  // what it is given: a field written at the top level of a v2 wrapper is parsed
+  // off and lost, so every accepted edit here used to be silently discarded
+  // while the panel closed as though it had landed. Mirror the parser's own
+  // branch — nested for a spec'd document, flat for a bare v1 one — rather than
+  // assuming either shape.
   const enrichApply = async () => {
     if (!enrich || !enrichProposals) return
     const accepted = enrichProposals.filter((p) => enrichVerdicts[p.id])
@@ -438,7 +387,11 @@ export function Steering(props: {
     try {
       const view = await client.send<CardView>('cards.get', { id: enrich.ref })
       const raw = { ...((view.raw ?? {}) as Record<string, unknown>) }
-      for (const p of accepted) raw[p.field] = p.after
+      const spec = typeof raw.spec === 'string' ? raw.spec : ''
+      const nested = spec.startsWith('chara_card_v') && typeof raw.data === 'object' && raw.data !== null
+      const fields = nested ? { ...(raw.data as Record<string, unknown>) } : raw
+      for (const p of accepted) fields[p.field] = p.after
+      if (nested) raw.data = fields
       await client.send('cards.edit', { id: enrich.ref, card: raw })
       resetEnrich()
     } catch (e) {
@@ -608,6 +561,16 @@ export function Steering(props: {
                     defaultProvider={info?.provider}
                     defaultModel={info?.model}
                   />
+                  {/* Optional direction for the run, the same steer the studio's
+                      card doctor takes. Stays put between rounds so "Revise with
+                      feedback" carries it too. */}
+                  <textarea
+                    class="stage-enrich__steer"
+                    rows={2}
+                    placeholder={t('Optional: what should change? e.g. keep her terse, fold in what she learned')}
+                    value={enrichSteer}
+                    onInput={(e) => setEnrichSteer((e.target as HTMLTextAreaElement).value)}
+                  />
                   {/* Not run yet: the picker above is live, so start the read with
                       a dedicated button rather than firing on open. */}
                   {!enrichRunning && enrichProposals === null && (
@@ -645,7 +608,11 @@ export function Steering(props: {
                           </button>
                         </div>
                         {p.before && <pre class="stage-enrich__text stage-enrich__text--before">{p.before}</pre>}
-                        <pre class="stage-enrich__text stage-enrich__text--after">{p.after}</pre>
+                        {/* A removal's `after` is empty on purpose — say so, or
+                            the proposal renders as a blank box. */}
+                        <pre class="stage-enrich__text stage-enrich__text--after">
+                          {p.remove ? t('(this field is cleared)') : p.after}
+                        </pre>
                         {enrichVerdicts[p.id] === false && (
                           <input
                             class="stage-enrich__reason"

@@ -39,7 +39,7 @@ func TestRenderDoctorPromptIncludesFieldsFindingsDecisions(t *testing.T) {
 	decisions := []ctrlproto.DoctorDecision{
 		{ProposalID: "p1", Field: "description", Accepted: false, Reason: "keep the backstory"},
 	}
-	out := renderDoctorPrompt(fields, findings, decisions)
+	out := renderDoctorPrompt(fields, findings, decisions, "")
 
 	for _, want := range []string{"Ivy", "A florist.", "Hey {{user)}.", "first_mes", "Malformed macro", "{{user)}", "DECLINED", "keep the backstory"} {
 		if !strings.Contains(out, want) {
@@ -145,12 +145,75 @@ func TestEditorModeRunsOnSessionModel(t *testing.T) {
 }
 
 func TestRenderDoctorPromptNoDecisionsOmitsSection(t *testing.T) {
-	out := renderDoctorPrompt(doctorFields(card.Card{Name: "Ivy"}), nil, nil)
+	out := renderDoctorPrompt(doctorFields(card.Card{Name: "Ivy"}), nil, nil, "")
 	if strings.Contains(out, "DECISIONS") {
 		t.Errorf("first-pass prompt should not carry a decisions section:\n%s", out)
 	}
 	if !strings.Contains(out, "(none)") {
 		t.Errorf("no findings should render as (none):\n%s", out)
+	}
+	if strings.Contains(out, "WHAT THE AUTHOR ASKED FOR") {
+		t.Errorf("an unsteered pass should not claim the author asked for anything:\n%s", out)
+	}
+}
+
+// The steer is the author's standing instruction for the pass. It must reach the
+// prompt as its own labeled section (a bare paste among the card fields would
+// read as card content), and it goes LAST — after the decisions — because it
+// directs the whole round rather than answering one proposal.
+func TestRenderDoctorPromptCarriesTheAuthorSteer(t *testing.T) {
+	decisions := []ctrlproto.DoctorDecision{{ProposalID: "p1", Field: "description", Accepted: false, Reason: "keep the backstory"}}
+	out := renderDoctorPrompt(doctorFields(card.Card{Name: "Ivy"}), nil, decisions, "  make her wearier, and cut the war years  ")
+
+	if !strings.Contains(out, "WHAT THE AUTHOR ASKED FOR") {
+		t.Errorf("steer section missing:\n%s", out)
+	}
+	if !strings.Contains(out, "make her wearier, and cut the war years") {
+		t.Errorf("the steer text itself is missing:\n%s", out)
+	}
+	// The doctor's default posture is lint-first; a steer has to outrank it or
+	// the author's instruction becomes a suggestion the model may skip.
+	if !strings.Contains(out, "primary warrant") {
+		t.Errorf("the steer is not framed as taking precedence:\n%s", out)
+	}
+	if strings.Index(out, "WHAT THE AUTHOR ASKED FOR") < strings.Index(out, "keep the backstory") {
+		t.Errorf("the steer should come after the per-proposal decisions:\n%s", out)
+	}
+}
+
+// Whitespace is not an instruction: a steer box the author tabbed through must
+// not add a section telling the doctor to prioritize nothing.
+func TestRenderDoctorPromptIgnoresABlankSteer(t *testing.T) {
+	out := renderDoctorPrompt(doctorFields(card.Card{Name: "Ivy"}), nil, nil, "   \n\t ")
+	if strings.Contains(out, "WHAT THE AUTHOR ASKED FOR") {
+		t.Errorf("a blank steer should add no section:\n%s", out)
+	}
+}
+
+// End to end through the verb: a steer accepted by the params and dropped on the
+// floor before the request is the shape of bug this whole PR exists to add, so
+// pin it at the wire rather than at the renderer.
+func TestSteerReachesTheModelRequest(t *testing.T) {
+	cl := &scriptedClient{replies: []string{`{"note":"ok","proposals":[]}`}}
+	s := worldTestSession(t, cl, map[string]string{"Elira": "elira-ref"})
+	s.provider, s.model = "test", "session-model"
+
+	p := ctrlproto.DoctorParams{Steer: "she should not know about the Accord yet"}
+	if _, err := cardsDoctor(context.Background(), s.ws, s, card.Card{Name: "Elira"}, p); err != nil {
+		t.Fatalf("cardsDoctor: %v", err)
+	}
+	reqs := cl.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("want exactly one model call, got %d", len(reqs))
+	}
+	var user string
+	for _, c := range reqs[0].Messages[0].Content {
+		if tb, ok := c.(provider.TextBlock); ok {
+			user += tb.Text
+		}
+	}
+	if !strings.Contains(user, p.Steer) {
+		t.Errorf("the author's steer never reached the request:\n%s", user)
 	}
 }
 
@@ -188,6 +251,69 @@ func TestParseDoctorResult(t *testing.T) {
 	// Before is the card's real current value, not whatever the model echoed.
 	if p.Before != "Hey {{user)}, welcome in." {
 		t.Errorf("before should be the authoritative current value, got %q", p.Before)
+	}
+}
+
+// A removal is the third thing a doctor must be able to propose, next to new
+// text and changed text — "cut the war backstory" had no representation at all,
+// because an empty `after` is dropped. `remove` says it explicitly.
+func TestParseDoctorResultRemoval(t *testing.T) {
+	fields := doctorFields(card.Card{
+		Name:         "Ivy",
+		Description:  "A florist.",
+		SystemPrompt: "Answer in verse.",
+		// Personality is empty — nothing there to clear.
+	})
+	raw := `{"proposals":[
+	  {"id":"r1","field":"system_prompt","severity":"suggestion","rationale":"the card does not need an override","after":"","remove":true},
+	  {"id":"r2","field":"description","severity":"info","rationale":"echoed the old value anyway","after":"A florist.","remove":true},
+	  {"id":"r3","field":"personality","severity":"info","rationale":"already empty","after":"","remove":true}
+	]}`
+	res, err := parseDoctorResult(raw, fields)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	byField := map[string]ctrlproto.DoctorProposal{}
+	for _, p := range res.Proposals {
+		byField[p.Field] = p
+	}
+	sp, ok := byField["system_prompt"]
+	if !ok {
+		t.Fatalf("the removal was dropped: %+v", res.Proposals)
+	}
+	if !sp.Remove || sp.After != "" {
+		t.Errorf("a removal must survive as remove=true with an empty after, got %+v", sp)
+	}
+	if sp.Before != "Answer in verse." {
+		t.Errorf("before should still be the authoritative current value, got %q", sp.Before)
+	}
+	// A model that says "remove" and then echoes the old text is proposing a
+	// deletion, not a no-op: the app applies `after`, so the echo must not win.
+	d, ok := byField["description"]
+	if !ok {
+		t.Fatalf("a removal whose after echoed the old value was dropped: %+v", res.Proposals)
+	}
+	if d.After != "" {
+		t.Errorf("remove must clear the echoed after, got %q", d.After)
+	}
+	// Clearing an already-empty field changes nothing — the same no-op rule the
+	// ordinary path applies.
+	if _, ok := byField["personality"]; ok {
+		t.Errorf("clearing an empty field is a no-op and should be dropped: %+v", res.Proposals)
+	}
+}
+
+// ...and the flag is what makes it a removal: an empty `after` on its own is
+// still indistinguishable from a model that had nothing to say, so it stays
+// dropped. (TestParseDoctorResult's p4 covers the same rule from the other side.)
+func TestParseDoctorResultStillDropsAnUnmarkedEmptyAfter(t *testing.T) {
+	fields := doctorFields(card.Card{Name: "Ivy", SystemPrompt: "Answer in verse."})
+	res, err := parseDoctorResult(`{"proposals":[{"id":"x","field":"system_prompt","after":""}]}`, fields)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(res.Proposals) != 0 {
+		t.Errorf("an empty after without remove should be dropped, got %+v", res.Proposals)
 	}
 }
 

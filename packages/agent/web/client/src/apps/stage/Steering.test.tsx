@@ -189,4 +189,86 @@ describe('Steering — enrich starts on its own button, not on ✏️', () => {
       's1',
     )
   })
+
+  it('carries the author’s steer into the run', async () => {
+    const client = mountWorld({ cast: { Kael: 'card:kael' } })
+    fireEvent.click(await screen.findByTitle("Enrich Kael's card from this scene"))
+
+    fireEvent.input(await screen.findByPlaceholderText(/what should change/i), { target: { value: 'keep her terse' } })
+    fireEvent.click(await screen.findByText('✨ Read the scene'))
+
+    await waitFor(() => expect(sentMethods(client)).toContain('cards.doctor'))
+    expect(client.send).toHaveBeenCalledWith('cards.doctor', expect.objectContaining({ steer: 'keep her terse' }), 's1')
+  })
+})
+
+// Applying an accepted enrichment wrote the field at the TOP LEVEL of the card
+// document. cards.edit re-parses what it is handed, and a CCv2 document's fields
+// live under `data` — so the parser read past every edit, re-saved the card
+// unchanged, and the panel closed as though the work had landed. A whole
+// promotion-from-play round trip that quietly did nothing.
+describe('Steering — an accepted enrichment reaches the card', () => {
+  const PROPOSAL = {
+    id: 'p1',
+    field: 'personality',
+    severity: 'suggestion',
+    rationale: 'the scene showed her stubborn',
+    before: 'wary',
+    after: 'wary, and stubborn about debts',
+  }
+
+  function mountEnrich(raw: unknown) {
+    const client = fakeClient({
+      respond: (method) => {
+        if (method === 'backgrounds.list') return { backgrounds: BACKGROUNDS }
+        if (method === 'cards.doctor') return { proposals: [PROPOSAL], note: '' }
+        if (method === 'cards.get') return { id: 'card:kael', name: 'Kael', raw }
+        return {}
+      },
+    })
+    const info: Partial<SessionInfo> = { cast: { Kael: 'card:kael' } }
+    render(
+      <Steering
+        client={client}
+        sessionId="s1"
+        info={{ id: 's1', experience: 'chat', ...info } as SessionInfo}
+        onClose={() => {}}
+      />,
+    )
+    fireEvent.click(screen.getByText('World'))
+    return client
+  }
+
+  async function acceptAndApply(client: ReturnType<typeof fakeClient>) {
+    fireEvent.click(await screen.findByTitle("Enrich Kael's card from this scene"))
+    fireEvent.click(await screen.findByText('✨ Read the scene'))
+    await waitFor(() => expect(sentMethods(client)).toContain('cards.doctor'))
+    fireEvent.click(await screen.findByTitle('Accept this edit'))
+    fireEvent.click(await screen.findByText(/Apply 1 accepted/))
+    await waitFor(() => expect(sentMethods(client)).toContain('cards.edit'))
+    const call = client.send.mock.calls.find((c) => c[0] === 'cards.edit')!
+    return (call[1] as { card: Record<string, unknown> }).card
+  }
+
+  it('writes into data on a CCv2 document, where the parser will read it', async () => {
+    const client = mountEnrich({ spec: 'chara_card_v2', spec_version: '2.0', data: { name: 'Kael', personality: 'wary' } })
+    const doc = await acceptAndApply(client)
+
+    expect((doc.data as Record<string, unknown>).personality).toBe('wary, and stubborn about debts')
+    // The top level is where the edit used to go — and where it was ignored.
+    expect(doc.personality).toBeUndefined()
+    // Everything else round-trips untouched.
+    expect((doc.data as Record<string, unknown>).name).toBe('Kael')
+    expect(doc.spec).toBe('chara_card_v2')
+  })
+
+  // A bare v1 card has no wrapper: its fields ARE the top level, and forcing a
+  // `data` object onto it would be the same bug pointing the other way.
+  it('writes at the top level of a flat v1 document', async () => {
+    const client = mountEnrich({ name: 'Kael', personality: 'wary' })
+    const doc = await acceptAndApply(client)
+
+    expect(doc.personality).toBe('wary, and stubborn about debts')
+    expect(doc.data).toBeUndefined()
+  })
 })

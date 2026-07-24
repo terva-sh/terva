@@ -128,7 +128,7 @@ func cardsDoctor(ctx context.Context, w *Workspace, s *wsSession, c card.Card, p
 	findings := card.Lint(c)
 	fields := doctorFields(c)
 	system := persona.Charter + "\n\n" + task
-	user := renderDoctorPrompt(fields, findings, p.Decisions)
+	user := renderDoctorPrompt(fields, findings, p.Decisions, p.Steer)
 	if scene != "" {
 		user += "\n" + scene
 	}
@@ -167,7 +167,7 @@ func doctorRun(ctx context.Context, cl provider.Client, model, system, user stri
 	return res, nil
 }
 
-const doctorTask = `You are being run as a one-shot card doctor. You receive a character card's fields, the deterministic lint findings, and — on a follow-up round — the author's decisions on your previous proposals.
+const doctorTask = `You are being run as a one-shot card doctor. You receive a character card's fields, the deterministic lint findings, sometimes an instruction from the author about what they want changed, and — on a follow-up round — their decisions on your previous proposals.
 
 Respond with ONLY a JSON object (no prose, no code fences) of this exact shape:
 
@@ -179,13 +179,16 @@ Respond with ONLY a JSON object (no prose, no code fences) of this exact shape:
       "field": "<one of: name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes>",
       "severity": "<warn | info | suggestion>",
       "rationale": "<short, concrete reason for the change>",
-      "after": "<the COMPLETE new value for that field — it replaces the field wholesale>"
+      "after": "<the COMPLETE new value for that field — it replaces the field wholesale>",
+      "remove": <optional, true ONLY when the proposal is to DELETE this field's content; then "after" must be "">
     }
   ]
 }
 
 Rules:
 - "after" must be the entire new value of the field, not a fragment — the app replaces the field with it verbatim.
+- To propose deleting a field's content, set "remove": true and leave "after" empty. An empty "after" WITHOUT "remove" is discarded, so a removal has to be stated, never implied.
+- When the author gives an instruction for this pass, it outranks your own taste: propose what they asked for first, then lint fixes, then improvements of your own.
 - Only propose fields from the list above. Preserve {{char}} / {{user}} macros; fix broken ones to that exact form.
 - Example dialogue (mes_example) uses the <START> convention: every example conversation begins with a <START> line — even a single one. If examples run together without it, insert <START> before each so they read as separate examples, not one merged block.
 - Address the lint findings first, then propose taste improvements. Use "warn" severity for a lint warning you are fixing, "info" for a lint info, "suggestion" for an improvement the lint did not flag.
@@ -196,7 +199,7 @@ Rules:
 // editorTask is the EDITOR mode's contract: the same JSON proposal shape as the
 // doctor (one parser, one negotiation loop, one client sheet), with promotion
 // rules — every edit traces to the played scene.
-const editorTask = `You are being run as a one-shot character editor. You receive a character card's fields, the deterministic lint findings, the PLAYED SCENE the character appeared in, what the character knows of the world, and — on a follow-up round — the author's decisions on your previous proposals.
+const editorTask = `You are being run as a one-shot character editor. You receive a character card's fields, the deterministic lint findings, the PLAYED SCENE the character appeared in, what the character knows of the world, sometimes an instruction from the author about what they want changed, and — on a follow-up round — their decisions on your previous proposals.
 
 Respond with ONLY a JSON object (no prose, no code fences) of this exact shape:
 
@@ -208,13 +211,16 @@ Respond with ONLY a JSON object (no prose, no code fences) of this exact shape:
       "field": "<one of: name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes>",
       "severity": "<warn | info | suggestion>",
       "rationale": "<what in the scene warrants this — name the moment>",
-      "after": "<the COMPLETE new value for that field — it replaces the field wholesale>"
+      "after": "<the COMPLETE new value for that field — it replaces the field wholesale>",
+      "remove": <optional, true ONLY when the proposal is to DELETE this field's content; then "after" must be "">
     }
   ]
 }
 
 Rules:
 - The played scene is your warrant: every proposal's rationale must trace to something that actually happened in it. Do not invent facts the scene doesn't show.
+- Removal ("remove": true with an empty "after") is for reconciling a contradiction the scene settled, or for what the author explicitly asked you to cut — not for trimming a card you find overlong. An empty "after" without "remove" is discarded.
+- When the author gives an instruction for this pass, it outranks your own reading of the scene: propose what they asked for first, still grounded in what was played.
 - ENRICH, don't rewrite: extend fields with what play established (voice, relationships, learned facts, example dialogue lifted from their actual lines); keep the author's tone, format conventions, and every {{char}}/{{user}} macro. "after" is still the entire new value of the field.
 - A minimal character may grow personality/example dialogue from nothing; a rich one should change only where the scene genuinely moved them.
 - Any example dialogue (mes_example) you add or extend uses the <START> convention: every example conversation begins with a <START> line, even a single one.
@@ -280,8 +286,10 @@ func renderSceneTail(msgs []provider.Message, playerLabel, charLabel string, bud
 }
 
 // renderDoctorPrompt assembles the user message: the card's editable fields, the
-// deterministic lint findings, and (on a follow-up round) the author's decisions.
-func renderDoctorPrompt(fields map[string]string, findings []card.Finding, decisions []ctrlproto.DoctorDecision) string {
+// deterministic lint findings, (on a follow-up round) the author's decisions,
+// and — last, so it is the final thing read before the model answers — the
+// author's own instruction for this pass, when they gave one.
+func renderDoctorPrompt(fields map[string]string, findings []card.Finding, decisions []ctrlproto.DoctorDecision, steer string) string {
 	var b strings.Builder
 	b.WriteString(i18n.P("stage.doctor.card", "CHARACTER CARD") + "\n")
 	// Stable field order so the prompt is deterministic. The field names are the
@@ -329,6 +337,15 @@ func renderDoctorPrompt(fields map[string]string, findings []card.Finding, decis
 		}
 		b.WriteString("\n" + i18n.P("stage.doctor.revise", "Revise your proposals in light of these decisions: keep the accepted changes out of the new list, and for each decline, either withdraw it or offer a different edit that respects the stated reason.") + "\n")
 	}
+
+	// The author's instruction goes LAST, after the decisions: it is standing
+	// direction for the whole round rather than an answer to one proposal, and
+	// it should be the final thing read before the model answers.
+	if s := strings.TrimSpace(steer); s != "" {
+		b.WriteString("\n" + i18n.P("stage.doctor.steer", "WHAT THE AUTHOR ASKED FOR — your primary warrant this pass") + "\n")
+		b.WriteString(s + "\n")
+		b.WriteString("\n" + i18n.P("stage.doctor.steer_rule", "Work toward this first: propose the edits it calls for — new text, changed text, or a removal — before any lint fix or taste improvement of your own. Where it conflicts with a lint finding or your own judgement, follow the author and say why in the rationale. If it asks for something a card field cannot express, say so in \"note\" rather than inventing one.") + "\n")
+	}
 	return b.String()
 }
 
@@ -336,7 +353,9 @@ func renderDoctorPrompt(fields map[string]string, findings []card.Finding, decis
 // it: proposals must name an editable field and carry an `after`. `before` is
 // filled from the card's actual current value (not the model's echo) so the
 // diff the user sees is trustworthy. Proposals whose `after` equals the current
-// value (a no-op) are dropped.
+// value (a no-op) are dropped, as are empty ones — unless they carry `remove`,
+// the explicit "clear this field", which is dropped only when the field is
+// already empty.
 func parseDoctorResult(raw string, fields map[string]string) (ctrlproto.DoctorResult, error) {
 	body := extractJSONObject(raw)
 	if body == "" {
@@ -357,7 +376,17 @@ func parseDoctorResult(raw string, fields map[string]string) (ctrlproto.DoctorRe
 		if !editable {
 			continue // the doctor may only touch known editable fields
 		}
-		if strings.TrimSpace(p.After) == "" || p.After == current {
+		after := p.After
+		if p.Remove {
+			// A removal IS an empty value, so it must skip the empty-after drop
+			// below. The echoed text is discarded rather than trusted: a model
+			// that says "remove" and then repeats the old value would otherwise
+			// apply as a no-op edit the user was told was a deletion.
+			after = ""
+			if strings.TrimSpace(current) == "" {
+				continue // nothing there to clear
+			}
+		} else if strings.TrimSpace(after) == "" || after == current {
 			continue // empty or no-op edit
 		}
 		id := strings.TrimSpace(p.ID)
@@ -375,7 +404,8 @@ func parseDoctorResult(raw string, fields map[string]string) (ctrlproto.DoctorRe
 			Severity:  sev,
 			Rationale: strings.TrimSpace(p.Rationale),
 			Before:    current, // authoritative current value, not the model's echo
-			After:     p.After,
+			After:     after,
+			Remove:    p.Remove,
 		})
 	}
 	// Deterministic order: warnings first, then by field.
