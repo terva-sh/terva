@@ -206,8 +206,9 @@ rather than patching a live one:
 | `raati_convene` | `raati.convene_tool` is set, in base workspace sessions only | *(unclassified — always prompts)* | the agent convenes its own deliberation panel. A convening spends real sub-agent turns, so every call hits the approval gate; the run mirrors onto the live raati pane. Skin-gated out of `--chat`/`--play`. See [raati.md](raati.md). |
 | `chat_send_image` / `chat_send_file` | a chat bridge is connected **and bound to this session**, and the connector advertises the capability | external mutation | sends into the paired chat. Bound per session, so a second session never sees another's chat tools. See [connectors.md](connectors.md). |
 | `terva_restart` | self-restart is enabled (`--allow-restart`) on a platform with `exec(2)`, in the TUI as well as web | *(unclassified — always prompts)* | re-execs the running binary in place, preserving the session. See below. |
+| `terva_arm_restart` | self-restart is enabled (`--allow-restart`), web session | *(unclassified — always prompts)* | declares that an imminent **supervisor** restart is planned for this session, just before the agent runs the supervisor command itself (e.g. `systemctl --user restart` to apply a changed unit — which `terva_restart`'s self-exec cannot do). Writes a short-lived on-disk marker so the SIGTERM that replaces the process is treated as planned: the interrupted command reconciles as expected (not a failure) and the exact session resumes. terva stays supervisor-agnostic — this only records intent. Shares `terva_restart`'s unclassified treatment for the same reason. |
 
-**`terva_restart` is the acknowledged exception to "no tool without an explicit
+**`terva_restart` (and its sibling `terva_arm_restart`) is the acknowledged exception to "no tool without an explicit
 authority class."** It is deliberately left out of the permission tables — not
 overlooked. There is no honest class for "replace the process image": it is not
 workspace mutation, not process execution in the `bash` sense, and any class we

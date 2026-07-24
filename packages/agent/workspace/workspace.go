@@ -14,6 +14,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/hooks"
+	"terva.sh/terva/packages/agent/restartmarker"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/worker"
@@ -103,6 +104,17 @@ type Workspace struct {
 	mu       sync.Mutex
 	sessions map[string]*wsSession
 
+	// restartMarker is a planned-restart marker recovered from disk at boot (nil
+	// unless the previous stop was an armed supervisor restart). It names the
+	// session that should resume and re-flavors that session's interrupted-call
+	// reconciliation as planned rather than a failure; consumed (set nil) on the
+	// first materialize of the marked session so it applies exactly once. mu.
+	restartMarker *restartmarker.Marker
+	// recoveredNotice is a "recovered from a planned restart" event staged under
+	// mu by sessionLocked and broadcast by resolve after the lock drops — the same
+	// after-unlock fan-out discipline the sessions-changed event uses. mu.
+	recoveredNotice *ctrlproto.Event
+
 	// credErr is the boot-time credential-resolution failure (nil once a
 	// credential resolves — RefreshDefaults clears it after an in-TUI login).
 	// A credential-less Workspace constructs fine: only sessions hard-require
@@ -163,6 +175,15 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 	// with no message row before any resume, so drafts never accrue. (The TUI/CLI
 	// path already prunes; the web daemon did not until here.)
 	core.PruneEmptySessions(w.root, w.cwd)
+	// Recover a planned-restart marker: an armed supervisor restart wrote it just
+	// before the SIGTERM that replaced the previous image. Consume it once here
+	// (removed from disk, so a crash mid-recovery cannot replay a stale
+	// generation); the first materialize of the marked session applies it — the
+	// empty-id default resolves to it (resume the exact live session) and its
+	// interrupted call reconciles as planned rather than a generic failure.
+	if m, ok := restartmarker.Consume(w.root, time.Now()); ok {
+		w.restartMarker = &m
+	}
 	w.personaName = r.Persona.Name
 	// Workspace-global swarm for the tasks pane. Construction does no I/O;
 	// Reload pulls previously-spawned agents off disk (shown as detached, like
@@ -434,9 +455,16 @@ func (w *Workspace) resolve(id string) (*wsSession, error) {
 	// created a fresh one). A board keys "which sessions can I subscribe to?"
 	// off Live, so tell it to re-list — broadcast after the unlock.
 	grew := err == nil && len(w.sessions) > had
+	// A planned-restart recovery staged its "recovered" notice while materializing
+	// the marked session; broadcast it after the unlock, alongside sessions-changed.
+	recovered := w.recoveredNotice
+	w.recoveredNotice = nil
 	w.mu.Unlock()
 	if grew {
 		w.BroadcastAll(ctrlproto.SessionsChangedEvent())
+	}
+	if recovered != nil {
+		w.BroadcastAll(*recovered)
 	}
 	return s, err
 }
@@ -467,7 +495,13 @@ func (w *Workspace) live(sess string) *wsSession {
 
 func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 	if id == "" {
-		if p := core.LatestSession(w.root, w.cwd); p != "" {
+		// A planned restart records which session was live; prefer resuming that
+		// exact one over the latest-on-disk heuristic (they differ when the daemon
+		// held several sessions). Falls back to latest-on-disk when unmarked or the
+		// marked session no longer exists.
+		if mid := w.markedSessionID(); mid != "" {
+			id = mid
+		} else if p := core.LatestSession(w.root, w.cwd); p != "" {
 			id = build.SessionIDFromPath(p)
 		} else {
 			return w.createLocked(ctrlproto.CreateOpts{})
@@ -483,9 +517,25 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, ctrlproto.ErrNoSession
 	}
-	sess, msgs, err := core.OpenSession(path)
+	// When this is the session a planned restart interrupted, reconcile its lost
+	// tool call as expected (a non-error explaining the planned restart) rather
+	// than the generic abort — so the agent does not read its own successful
+	// restart command as a failure. Applied exactly once: stage the "recovered"
+	// notice and drop the marker after this open.
+	var stub core.InterruptStub
+	planned := w.restartMarker != nil && w.restartMarker.Session == id
+	if planned {
+		stub = core.InterruptStub{Text: w.plannedInterruptText(), IsError: false}
+	}
+	sess, msgs, err := core.OpenSessionReconciled(path, stub)
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "open session: %v", err)
+	}
+	if planned {
+		// The marker did its job on this open — stage the recovered notice for
+		// resolve() to broadcast, then drop the marker so it applies exactly once.
+		w.recoveredNotice = w.recoveredRestartNotice(w.restartMarker, id)
+		w.restartMarker = nil
 	}
 	// Load-cost telemetry: a session that carries revision (edits/variants) logs
 	// how long its transcript took to reconstruct and how much amend machinery it
@@ -518,6 +568,42 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 	}
 	w.sessions[id] = s
 	return s, nil
+}
+
+// markedSessionID returns the planned-restart marker's session id when a marker
+// is set and that session still exists on disk, else "". Caller holds mu.
+func (w *Workspace) markedSessionID() string {
+	m := w.restartMarker
+	if m == nil || !validSessionID(m.Session) {
+		return ""
+	}
+	if _, err := os.Stat(w.sessionPath(m.Session)); err != nil {
+		return "" // marked session is gone — fall back rather than resume the wrong one
+	}
+	return m.Session
+}
+
+// plannedInterruptText reconciles the tool call a planned restart interrupted:
+// a non-error result telling the model the restart it requested succeeded and
+// this session resumed, so it does not read its own restart as a failure.
+func (w *Workspace) plannedInterruptText() string {
+	return fmt.Sprintf("Interrupted by the planned restart you requested — it succeeded and this session resumed on terva %s.", w.version)
+}
+
+// recoveredRestartNotice builds the typed "recovered from a planned restart"
+// event broadcast once the marked session materializes.
+func (w *Workspace) recoveredRestartNotice(m *restartmarker.Marker, session string) *ctrlproto.Event {
+	text := fmt.Sprintf("Recovered from a planned restart — now running terva %s.", w.version)
+	if m.Reason != "" {
+		text = fmt.Sprintf("Recovered from a planned restart (%s) — now running terva %s.", m.Reason, w.version)
+	}
+	e := ctrlproto.KindedNoticeEvent("info", ctrlproto.NoticeRestart, text, map[string]string{
+		"phase":        "recovered",
+		"from_version": m.FromVersion,
+		"to_version":   w.version,
+		"session":      session,
+	})
+	return &e
 }
 
 // sceneSeed carries a parent scene's LIVE state into the session createLocked

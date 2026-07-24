@@ -625,6 +625,12 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 	// unclassified in permissions.go so it always prompts before re-execing.
 	if relaunch.Enabled() {
 		r.ToolRegistry["terva_restart"] = &tools.RestartTool{}
+		// terva_arm_restart: declare a planned SUPERVISOR restart (the agent runs
+		// the supervisor command itself — e.g. a unit change terva_restart's
+		// self-exec cannot apply) so the interrupted call reconciles as planned and
+		// this exact session resumes. Same self-restart gate; also unclassified in
+		// permissions so it prompts before recording intent. Bound to this session.
+		r.ToolRegistry["terva_arm_restart"] = &tools.ArmRestartTool{Session: s.id, Home: w.root}
 	}
 }
 

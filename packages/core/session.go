@@ -903,7 +903,39 @@ type LoadStats struct {
 	TailTakes int
 }
 
+// InterruptStub is the synthetic tool_result injected for a tool_use that was
+// restored without a matching result (an interrupted or lost call). Text is the
+// model-visible explanation and IsError marks it a failure. A planned restart
+// reconciles its interrupted call as expected (IsError:false) rather than a
+// generic abort, so the agent does not read its own successful restart as a
+// failed tool call.
+type InterruptStub struct {
+	Text    string
+	IsError bool
+}
+
+// defaultInterruptStub reconciles an unmatched tool_use as a generic abort — the
+// long-standing behavior for a crash/stop or a lost result.
+var defaultInterruptStub = InterruptStub{Text: "tool call was aborted; no result recorded.", IsError: true}
+
+// OpenSession opens a session file, replaying it into a live transcript, with
+// any interrupted tool call reconciled as a generic abort (see InterruptStub).
 func OpenSession(path string) (*Session, []provider.Message, error) {
+	return openSession(path, defaultInterruptStub)
+}
+
+// OpenSessionReconciled is OpenSession with a caller-chosen reconciliation for
+// an interrupted tool call — e.g. a planned restart labels the interrupted call
+// as expected rather than a failure. A zero-value (empty Text) stub falls back
+// to the default abort.
+func OpenSessionReconciled(path string, stub InterruptStub) (*Session, []provider.Message, error) {
+	if stub.Text == "" {
+		stub = defaultInterruptStub
+	}
+	return openSession(path, stub)
+}
+
+func openSession(path string, stub InterruptStub) (*Session, []provider.Message, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
@@ -952,7 +984,7 @@ func OpenSession(path string) (*Session, []provider.Message, error) {
 	if len(excludeImages) > 0 {
 		messages = applyImageExclusions(messages, excludeImages)
 	}
-	messages = repairToolUseResultPairs(messages)
+	messages = repairToolUseResultPairsWith(messages, stub)
 	backfillZeroTimes(messages, meta.Started)
 	elapsed := time.Since(start)
 	out, err := privfs.OpenFile(path, os.O_APPEND|os.O_WRONLY)
@@ -1148,6 +1180,13 @@ func applyImageExclusions(msgs []provider.Message, excluded map[string]bool) []p
 //
 // Runs once per OpenSession call. No cost on the hot path.
 func repairToolUseResultPairs(msgs []provider.Message) []provider.Message {
+	return repairToolUseResultPairsWith(msgs, defaultInterruptStub)
+}
+
+// repairToolUseResultPairsWith is repairToolUseResultPairs with a caller-chosen
+// stub for the synthesized results — so a planned restart reconciles its
+// interrupted call as expected text (non-error) rather than a generic abort.
+func repairToolUseResultPairsWith(msgs []provider.Message, stub InterruptStub) []provider.Message {
 	if len(msgs) == 0 {
 		return msgs
 	}
@@ -1185,8 +1224,8 @@ func repairToolUseResultPairs(msgs []provider.Message) []provider.Message {
 			}
 			stubs = append(stubs, provider.ToolResultBlock{
 				CallID:  id,
-				Content: []provider.Content{provider.TextBlock{Text: "tool call was aborted; no result recorded."}},
-				IsError: true,
+				Content: []provider.Content{provider.TextBlock{Text: stub.Text}},
+				IsError: stub.IsError,
 			})
 		}
 		if len(stubs) == 0 {

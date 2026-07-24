@@ -95,16 +95,22 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 			// version change once the client reconnects to the new one; the
 			// bare semver (not the commit+date display string) keeps it short.
 			msg := i18n.T("terva is restarting — reconnecting shortly…")
-			if v := buildinfo.Get().Version; v != "" {
-				msg = i18n.T("terva v%s is restarting — reconnecting shortly…", v)
+			from := buildinfo.Get().Version
+			if from != "" {
+				msg = i18n.T("terva v%s is restarting — reconnecting shortly…", from)
 			}
-			ws.BroadcastAll(ctrlproto.NoticeEvent("info", "", msg))
+			ws.BroadcastAll(ctrlproto.KindedNoticeEvent("info", ctrlproto.NoticeRestart, msg, map[string]string{
+				"phase":        "restarting",
+				"from_version": from,
+			}))
 		})
 		// If the deferred exec fails, the process keeps serving on the old image
 		// and the socket never drops — so the client is still connected to hear
 		// that the restart it was promised did not happen.
 		relaunch.OnFailure(func(err error) {
-			ws.BroadcastAll(ctrlproto.NoticeEvent("error", "", i18n.T("restart failed — still running the current build: %s", err.Error())))
+			ws.BroadcastAll(ctrlproto.KindedNoticeEvent("error", ctrlproto.NoticeRestart,
+				i18n.T("restart failed — still running the current build: %s", err.Error()),
+				map[string]string{"phase": "failed"}))
 		})
 		fmt.Fprintln(os.Stderr, "terva web: self-restart enabled (control.restart, the terva_restart tool, and SIGHUP / `systemctl reload`)")
 	}

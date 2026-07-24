@@ -157,6 +157,15 @@ const (
 	// they fire before the first turn — a startup policy assertion, or the
 	// background extension start landing its tools, invalidates no cache.
 	NoticePromptRebuilt = "prompt_rebuilt"
+
+	// NoticeRestart: a daemon restart lifecycle event — one kind for the whole
+	// arc so a client (or a fleet control plane) can render "restart in progress"
+	// rather than a generic message, and distinguish it from a crash. Data keys:
+	// "phase" (restarting | failed | recovered), "from_version" (the outgoing
+	// build, when known), "to_version" (the running build; recovered only), and
+	// "session" (the session that resumed; recovered only). The text is always a
+	// self-sufficient human rendering, so a kind-unaware client still shows it.
+	NoticeRestart = "restart"
 )
 
 // Snapshot is a session's current state, delivered as the first event on a new

@@ -37,6 +37,35 @@ func TestRepairToolUseResultPairsAppendsStub(t *testing.T) {
 	}
 }
 
+// TestRepairWithPlannedStub covers the planned-restart reconciliation: an
+// interrupted call is reconciled with a caller-chosen NON-error result
+// explaining the planned restart, so the agent does not read its own restart
+// as a failure. Same structural repair, different stub text and IsError.
+func TestRepairWithPlannedStub(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "restart"}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{
+			provider.ToolCallBlock{ID: "t1", Name: "bash", Arguments: []byte(`{"cmd":"systemctl --user restart terva"}`)},
+		}},
+	}
+	planned := InterruptStub{Text: "Interrupted by the planned restart you requested — it succeeded.", IsError: false}
+	out := repairToolUseResultPairsWith(msgs, planned)
+	if len(out) != 3 || out[2].Role != provider.RoleTool {
+		t.Fatalf("expected a tool-role stub at index 2, got %d msgs", len(out))
+	}
+	tr, ok := out[2].Content[0].(provider.ToolResultBlock)
+	if !ok {
+		t.Fatalf("expected ToolResultBlock, got %T", out[2].Content[0])
+	}
+	if tr.IsError {
+		t.Error("planned reconciliation must NOT be an error result")
+	}
+	tb, ok := tr.Content[0].(provider.TextBlock)
+	if !ok || tb.Text != planned.Text {
+		t.Errorf("stub text = %v, want the planned text", tr.Content[0])
+	}
+}
+
 // TestRepairToolUseResultPairsMergesIntoExistingToolMessage covers
 // the case where a tool-role message exists but is missing one of
 // the call ids. The stub must be merged into it (no new message)
