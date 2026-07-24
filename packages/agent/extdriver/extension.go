@@ -138,6 +138,16 @@ type Extension struct {
 	// pipe.
 	writerDone chan struct{}
 
+	// waitDone is closed once the OS process has been harvested (cmd.Wait
+	// returned); waitErr records that Wait's result. reap() is the single
+	// cmd.Wait owner — see its doc for why there can be exactly one. Awaited
+	// by stopExtensions instead of calling Wait itself. Always non-nil (set
+	// in newExtension); it simply never closes for an extension that has no
+	// process (Exec == "").
+	waitOnce sync.Once
+	waitDone chan struct{}
+	waitErr  error
+
 	// readyCh is closed when the extension sends a ReadyFromExt
 	// frame, or when the host gives up waiting (registrationGrace).
 	readyCh   chan struct{}
@@ -216,12 +226,34 @@ func newExtension(mf Manifest, dir string) *Extension {
 		Manifest:         mf,
 		Dir:              dir,
 		readyCh:          make(chan struct{}),
+		waitDone:         make(chan struct{}),
 		pending:          map[string]chan extproto.CommandResponseFromExt{},
 		pendingTool:      map[string]chan extproto.ToolResultFromExt{},
 		pendingIntercept: map[string]chan extproto.EventInterceptResponseFromExt{},
 		eventSubs:        map[string]struct{}{},
 		interceptSubs:    map[string]struct{}{},
 	}
+}
+
+// reap harvests the extension's OS process exactly once and closes waitDone,
+// recording Wait's result in waitErr. It is the single cmd.Wait owner in the
+// driver, and that singularity is load-bearing for two reasons: os/exec
+// forbids calling Wait before the last read from the stdout pipe has completed
+// (so only a caller past reading may reap), and calling Wait twice on one Cmd
+// is a data race. The two legitimate callers both satisfy the first rule —
+// readLoop calls this from its defer, after the stream has ended, and spawn
+// calls it on a handshake failure after killing a child that never reached the
+// read loop. stopExtensions never calls Wait itself; it drives the process to
+// exit and awaits waitDone. The sync.Once makes a second caller a no-op that
+// still blocks on waitDone until the first has finished reaping.
+func (e *Extension) reap() {
+	e.waitOnce.Do(func() {
+		if e.cmd != nil {
+			e.waitErr = e.cmd.Wait()
+		}
+		close(e.waitDone)
+	})
+	<-e.waitDone
 }
 
 // Ready reports whether the extension has signalled ready (or the host

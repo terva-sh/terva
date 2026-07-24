@@ -559,7 +559,7 @@ func (d *Driver) WaitForReady(grace time.Duration) {
 // spawn launches the subprocess, hooks up pipes, logs stderr, and
 // runs the synchronous portion of the hello handshake. Asynchronous
 // frames are processed in a goroutine started here.
-func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
+func (d *Driver) spawn(ctx context.Context, ext *Extension) (retErr error) {
 	logsDir := filepath.Join(d.tervaHome, "logs")
 	_ = privfs.MkdirAll(logsDir)
 	logPath := filepath.Join(logsDir, "ext-"+ext.Manifest.Name+".log")
@@ -616,6 +616,20 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) error {
 	ext.cmd = cmd
 	ext.stdin = stdin
 	ext.stdout = stdout
+
+	// Past cmd.Start, every error return owns harvesting the child it started:
+	// reap() is the sole cmd.Wait owner, and on failure the read loop that
+	// would otherwise reap is never started (and Load drops the map claim, so
+	// stopExtensions can't reach it either). Kill first so the handshake paths
+	// that leave the child alive — a bad or wrong-typed hello — don't strand a
+	// live, untracked process; killing an already-dead group is a harmless
+	// no-op. The success path returns nil and hands reaping to readLoop.
+	defer func() {
+		if retErr != nil {
+			killExtensionGroup(ext.cmd.Process)
+			ext.reap()
+		}
+	}()
 
 	// Hello handshake. Read the extension's HelloFromExt with a deadline
 	// so a binary that never prints hello (a daemon, a REPL, a typo'd
@@ -1173,6 +1187,13 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 			d.hooks.Notify(ext.Manifest.Name, "error",
 				fmt.Sprintf("extension %q exited unexpectedly; its tools and commands are unavailable (see %s)", ext.Manifest.Name, ext.LogPath))
 		}
+		// The stream has ended, so every read from stdout is complete: this is
+		// the one place it is safe to harvest the OS process (os/exec forbids
+		// Wait before the last pipe read). reap is the sole cmd.Wait owner, so
+		// a self-exited extension is reaped promptly here instead of lingering
+		// as a zombie until teardown; a teardown-driven exit is reaped here too,
+		// with stopExtensions awaiting the same waitDone.
+		ext.reap()
 	}()
 
 	for {
@@ -1536,17 +1557,22 @@ func stopExtensions(exts []*Extension, gracePeriod time.Duration) {
 		if remaining <= 0 {
 			remaining = 100 * time.Millisecond
 		}
-		done := make(chan struct{})
-		go func() { _ = ext.cmd.Wait(); close(done) }()
+		// The read loop is the sole cmd.Wait owner (Extension.reap): closing
+		// stdin above drives the extension to EOF, its read loop exits, and its
+		// deferred reap harvests the process and closes waitDone. Escalate to
+		// the process group if it doesn't go on its own, then await that same
+		// completion — never calling Wait here, so there is exactly one Wait
+		// and no race with readLoop. (A child killed mid-handshake is reaped by
+		// spawn's own error path, which closes waitDone the same way.)
 		select {
-		case <-done:
+		case <-ext.waitDone:
 		case <-time.After(remaining):
 			terminateExtensionGroup(ext.cmd.Process)
 			select {
-			case <-done:
+			case <-ext.waitDone:
 			case <-time.After(time.Second):
 				killExtensionGroup(ext.cmd.Process)
-				<-done
+				<-ext.waitDone
 			}
 		}
 		if ext.logFile != nil {
