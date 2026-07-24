@@ -131,6 +131,18 @@ func (r *recorder) CardFavorite(_ context.Context, p CardFavoriteParams) error {
 	r.note("CardFavorite", "", p)
 	return nil
 }
+func (r *recorder) CardsHistory(_ context.Context, p CardHistoryParams) (CardHistoryResult, error) {
+	r.note("CardsHistory", "", p)
+	return CardHistoryResult{}, nil
+}
+func (r *recorder) CardsRestore(_ context.Context, p CardRestoreParams) (CardView, error) {
+	r.note("CardsRestore", "", p)
+	return CardView{}, nil
+}
+func (r *recorder) CardsRevision(_ context.Context, p CardRevisionParams) (CardRevisionView, error) {
+	r.note("CardsRevision", "", p)
+	return CardRevisionView{}, nil
+}
 
 // --- CastController ---
 func (r *recorder) CastAdd(_ context.Context, sess string, p CastMemberParams) error {
@@ -418,6 +430,19 @@ func dispatchCases() []dispatchCase {
 		{MethodCardsLint, CardLintParams{ID: "linted"}, "CardsLint", CardLintParams{ID: "linted"}},
 		{MethodCardsDelete, CardDeleteParams{ID: "deleted"}, "CardsDelete", CardDeleteParams{ID: "deleted"}},
 		{MethodCardsFavorite, CardFavoriteParams{ID: "fav", Favorite: true}, "CardFavorite", CardFavoriteParams{ID: "fav", Favorite: true}},
+		{MethodCardsHistory, CardHistoryParams{ID: "historied"}, "CardsHistory", CardHistoryParams{ID: "historied"}},
+		{
+			MethodCardsRestore,
+			CardRestoreParams{ID: "restored", Ref: "1700000000000"},
+			"CardsRestore",
+			CardRestoreParams{ID: "restored", Ref: "1700000000000"},
+		},
+		{
+			MethodCardsRevision,
+			CardRevisionParams{ID: "revised", Ref: "1700000000001"},
+			"CardsRevision",
+			CardRevisionParams{ID: "revised", Ref: "1700000000001"},
+		},
 
 		// --- personas: the arm the original incident was found on ---
 		{MethodPersonasList, nil, "PersonasList", nil},

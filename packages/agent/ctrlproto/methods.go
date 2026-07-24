@@ -167,6 +167,9 @@ const (
 	MethodCardsExport   Method = "cards.export"   // params CardExportParams, result CardExport
 	MethodCardsLint     Method = "cards.lint"     // params CardLintParams, result CardLintResult
 	MethodCardsFavorite Method = "cards.favorite" // params CardFavoriteParams
+	MethodCardsHistory  Method = "cards.history"  // params CardHistoryParams, result CardHistoryResult
+	MethodCardsRestore  Method = "cards.restore"  // params CardRestoreParams, result CardView
+	MethodCardsRevision Method = "cards.revision" // params CardRevisionParams, result CardRevisionView
 
 	// The LLM card doctor (optional; served only by a DoctorController). Reads a
 	// card + its deterministic lint and proposes structured per-field edits.
@@ -325,6 +328,7 @@ func (m Method) Group() Group {
 		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
 		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume,
 		MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint, MethodCardsFavorite, MethodCardsDoctor,
+		MethodCardsHistory, MethodCardsRestore, MethodCardsRevision,
 		MethodPersonasList, MethodPersonasGet, MethodPersonasCreate, MethodPersonasEdit, MethodPersonasDelete,
 		MethodBackgroundsList, MethodBackgroundsImport, MethodBackgroundsDelete, MethodBackgroundBind, MethodBackgroundGenerate,
 		MethodNoteSet, MethodUserBind, MethodCastAdd, MethodCastRemove, MethodCastSpeak,

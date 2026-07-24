@@ -5160,3 +5160,198 @@ button:disabled {
   background: none;
   cursor: pointer;
 }
+
+/* Card revision history, inside the editor. Same shell as the lint block above
+   it — a bordered surface-2 panel with an uppercase header — so the editor
+   reads as one column of sections rather than a pile of unrelated widgets. */
+.stage-cardhistory {
+  margin-bottom: 1rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  background: var(--stage-surface-2);
+  padding: 0.5rem 0.65rem;
+}
+.stage-cardhistory__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--stage-muted);
+  margin-bottom: 0.4rem;
+}
+.stage-cardhistory__count {
+  color: var(--stage-muted);
+}
+.stage-cardhistory__empty {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--stage-muted);
+}
+.stage-cardhistory__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+/* A row wraps rather than crushing the button off-screen: the confirm state
+   adds a sentence, and the editor is used on a phone. */
+.stage-cardhistory__item {
+  font-size: 0.85rem;
+}
+.stage-cardhistory__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.5rem;
+}
+/* The summary is the disclosure control: the whole line is the hit target, not
+   a caret a thumb has to find. Styled back to plain text — it is a button only
+   so it is focusable and announces its expanded state. */
+.stage-cardhistory__what {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 1;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.stage-cardhistory__caret {
+  color: var(--stage-muted);
+  font-size: 0.7rem;
+}
+.stage-cardhistory__changed {
+  color: var(--stage-muted);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-cardhistory__detail {
+  margin: 0.4rem 0 0.2rem;
+  padding: 0.4rem 0 0.1rem;
+  border-top: 1px solid var(--stage-line);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.stage-cardhistory__fieldhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.stage-cardhistory__fieldname {
+  color: var(--stage-fg);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.stage-cardhistory__only {
+  color: var(--stage-muted);
+  font-size: 0.72rem;
+}
+/* Side by side where there is room, stacked on a phone — a two-column diff at
+   390px would give each side ~20 characters. */
+.stage-cardhistory__pair {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+@media (min-width: 620px) {
+  .stage-cardhistory__pair {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.stage-cardhistory__side {
+  min-width: 0;
+}
+.stage-cardhistory__sidelabel {
+  display: block;
+  color: var(--stage-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+/* Clamped rather than truncated in JS, so the full text is still selectable and
+   a long description does not push the controls off the screen. */
+.stage-cardhistory__value {
+  margin: 0.1rem 0 0;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--stage-surface);
+  color: var(--stage-fg);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 7.5em;
+  overflow-y: auto;
+}
+.stage-cardhistory__use {
+  background: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  color: var(--stage-fg);
+  padding: 0.1rem 0.45rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.stage-cardhistory__use:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.stage-cardhistory__when {
+  color: var(--stage-fg);
+}
+.stage-cardhistory__name {
+  color: var(--stage-muted);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-cardhistory__confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.stage-cardhistory__warn {
+  color: var(--stage-muted);
+  font-size: 0.78rem;
+}
+.stage-cardhistory__restore,
+.stage-cardhistory__no {
+  background: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  color: var(--stage-fg);
+  padding: 0.15rem 0.5rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-cardhistory__yes {
+  background: var(--stage-accent);
+  border: 1px solid var(--stage-accent);
+  border-radius: 6px;
+  color: var(--stage-on-accent);
+  padding: 0.15rem 0.5rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-cardhistory__yes:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

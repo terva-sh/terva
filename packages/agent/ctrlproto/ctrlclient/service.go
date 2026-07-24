@@ -366,6 +366,24 @@ func (s *Service) CardFavorite(ctx context.Context, p ctrlproto.CardFavoritePara
 	return s.c.Call(ctx, "", ctrlproto.MethodCardsFavorite, p, nil)
 }
 
+func (s *Service) CardsHistory(ctx context.Context, p ctrlproto.CardHistoryParams) (ctrlproto.CardHistoryResult, error) {
+	var r ctrlproto.CardHistoryResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodCardsHistory, p, &r)
+	return r, err
+}
+
+func (s *Service) CardsRestore(ctx context.Context, p ctrlproto.CardRestoreParams) (ctrlproto.CardView, error) {
+	var r ctrlproto.CardView
+	err := s.c.Call(ctx, "", ctrlproto.MethodCardsRestore, p, &r)
+	return r, err
+}
+
+func (s *Service) CardsRevision(ctx context.Context, p ctrlproto.CardRevisionParams) (ctrlproto.CardRevisionView, error) {
+	var r ctrlproto.CardRevisionView
+	err := s.c.Call(ctx, "", ctrlproto.MethodCardsRevision, p, &r)
+	return r, err
+}
+
 // --- persona library ---
 
 var _ ctrlproto.PersonasController = (*Service)(nil)

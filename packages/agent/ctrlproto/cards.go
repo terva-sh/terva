@@ -43,6 +43,85 @@ type CardsController interface {
 	// CardFavorite sets or clears a card's favorite flag (highlight + pin to top).
 	// A per-library preference; it never touches the card JSON.
 	CardFavorite(ctx context.Context, p CardFavoriteParams) error
+	// CardsHistory lists a card's retained earlier revisions, newest first.
+	CardsHistory(ctx context.Context, p CardHistoryParams) (CardHistoryResult, error)
+	// CardsRestore puts a retained revision back. It is an ordinary edit under
+	// the skin, so the state it replaces is itself recorded and a restore can be
+	// undone in turn.
+	CardsRestore(ctx context.Context, p CardRestoreParams) (CardView, error)
+	// CardsRevision reads one retained revision in full, for comparing against
+	// the card as it stands. Read-only: it changes nothing.
+	CardsRevision(ctx context.Context, p CardRevisionParams) (CardRevisionView, error)
+}
+
+// Card revision history. Every write to a card goes through cards.edit — the
+// editor, the doctor's apply, enrich — and the store snapshots the OUTGOING
+// card there, so a pass that rewrote fields you never typed is recoverable
+// without the client having to remember to ask.
+//
+// A card keeps a bounded number of revisions: its original plus its most recent
+// changes. Restore records what it replaced, so trying one is safe.
+//
+// Two reads, deliberately split. cards.history is the LIST and stays small: it
+// carries which fields each revision differs in, but not their contents, so a
+// card with a large lorebook does not ship ten copies of it to render a list.
+// cards.revision fetches ONE revision in full, for the comparison a user asked
+// to see.
+
+// CardHistoryParams names the card whose revisions to list.
+type CardHistoryParams struct {
+	ID string `json:"id"`
+}
+
+// CardRevision is one retained earlier revision. Ref is opaque — the only thing
+// a client does with it is hand it back to cards.restore or cards.revision.
+// Name is the card's name AT that revision, so a list still reads correctly
+// after a rename.
+type CardRevision struct {
+	Ref   string    `json:"ref"`
+	Saved time.Time `json:"saved"`
+	Bytes int       `json:"bytes"`
+	Name  string    `json:"name,omitempty"`
+	// Fields are the CCv2 field names this revision differs from the card as it
+	// stands in — what restoring it would change. Computed against the SAVED
+	// card, so an editor holding unsaved edits is comparing against the store,
+	// not against its own draft. Empty means the revision matches the card.
+	Fields []string `json:"fields,omitempty"`
+	// Portrait is whether restoring this revision would also change the card's
+	// picture. The portrait lives outside the card document, so it is reported
+	// separately — without it a revision that replaced ONLY the image would read
+	// as identical to the card it plainly differs from.
+	Portrait bool `json:"portrait,omitempty"`
+}
+
+// CardRevisionParams names one revision to read in full.
+type CardRevisionParams struct {
+	ID  string `json:"id"`
+	Ref string `json:"ref"`
+}
+
+// CardRevisionView is one revision's stored card document, with the same
+// metadata its list entry carried. Raw is the normalized card JSON, in the
+// shape cards.get returns, so a client diffs two documents of one shape.
+type CardRevisionView struct {
+	Ref      string          `json:"ref"`
+	Saved    time.Time       `json:"saved"`
+	Name     string          `json:"name,omitempty"`
+	Fields   []string        `json:"fields,omitempty"`
+	Portrait bool            `json:"portrait,omitempty"`
+	Raw      json.RawMessage `json:"raw"`
+}
+
+// CardHistoryResult is the payload of cards.history, newest first. A card that
+// has never been edited has an empty list, which is a normal state.
+type CardHistoryResult struct {
+	Revisions []CardRevision `json:"revisions"`
+}
+
+// CardRestoreParams names the card and the revision to put back.
+type CardRestoreParams struct {
+	ID  string `json:"id"`
+	Ref string `json:"ref"`
 }
 
 // CardFavoriteParams names the card and the desired favorite state.

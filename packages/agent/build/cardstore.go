@@ -1,6 +1,7 @@
 package build
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -65,11 +66,18 @@ func (c StoredCard) HasAvatar() bool { return c.AvatarExt != "" }
 
 // CardStore is the library rooted at CardsDir(). The directory is created lazily
 // on the first import; a missing directory reads as an empty library.
-type CardStore struct{ dir string }
+type CardStore struct{ dir, historyDir string }
 
 // NewCardStore opens the library at the current $TERVA_HOME. Callers that set
 // TERVA_HOME (tests, project scope) must do so before constructing the store.
-func NewCardStore() *CardStore { return &CardStore{dir: CardsDir()} }
+func NewCardStore() *CardStore {
+	return &CardStore{dir: CardsDir(), historyDir: CardHistoryDir()}
+}
+
+// history is the revision log for this library. Resolved from the same
+// $TERVA_HOME reading that fixed dir, so a store cannot end up writing cards to
+// one home and their history to another.
+func (s *CardStore) history() *CardHistoryStore { return &CardHistoryStore{dir: s.historyDir} }
 
 // List returns every stored card, sorted by name then id. A card directory that
 // fails to parse is skipped rather than failing the whole listing.
@@ -150,14 +158,6 @@ func (s *CardStore) ImportBytes(data []byte) (StoredCard, error) {
 		return StoredCard{}, err
 	}
 	id := cardID(c.Name, raw)
-	dir := filepath.Join(s.dir, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return StoredCard{}, err
-	}
-	if err := os.WriteFile(filepath.Join(dir, cardJSONName), raw, 0o644); err != nil {
-		return StoredCard{}, err
-	}
-	ext := ""
 	var warnings []string
 	// More than one `chara` chunk means the parse had to choose. Say so: the
 	// candidates are routinely different REVISIONS of the character rather than
@@ -173,19 +173,23 @@ func (s *CardStore) ImportBytes(data []byte) (StoredCard, error) {
 	// arrival, so a lorebook that never fires has a stated reason rather than
 	// looking like a bug in the card.
 	warnings = append(warnings, card.UnsupportedV3Features(c)...)
+	var avatar []byte
 	if card.IsPNG(data) {
-		avatar, note := normalizeAvatar(data)
+		var note string
+		avatar, note = normalizeAvatar(data)
 		if note != "" {
 			warnings = append(warnings, note)
 		}
-		if avatar != nil {
-			if err := os.WriteFile(filepath.Join(dir, cardAvatarName), avatar, 0o644); err != nil {
-				return StoredCard{}, err
-			}
-			ext = "png"
-		}
 	}
-	return StoredCard{ID: id, Card: c, Raw: raw, AvatarExt: ext, Warnings: warnings}, nil
+	// noteReplacement: an import is the one write a person does not aim at a
+	// specific card. Edit and restore name their target, so landing on it is the
+	// point rather than a surprise worth a warning.
+	sc, err := s.write(id, c, raw, avatar, true)
+	if err != nil {
+		return StoredCard{}, err
+	}
+	sc.Warnings = append(warnings, sc.Warnings...)
+	return sc, nil
 }
 
 // Edit replaces a stored card's fields with a full edited card document
@@ -197,8 +201,7 @@ func (s *CardStore) Edit(id string, cardJSON []byte) (StoredCard, error) {
 	if err := validCardID(id); err != nil {
 		return StoredCard{}, err
 	}
-	dir := filepath.Join(s.dir, id)
-	if _, err := os.Stat(filepath.Join(dir, cardJSONName)); err != nil {
+	if _, err := os.Stat(filepath.Join(s.dir, id, cardJSONName)); err != nil {
 		if os.IsNotExist(err) {
 			return StoredCard{}, fmt.Errorf("card %q not found", id)
 		}
@@ -212,13 +215,110 @@ func (s *CardStore) Edit(id string, cardJSON []byte) (StoredCard, error) {
 	if err != nil {
 		return StoredCard{}, err
 	}
+	return s.write(id, c, raw, nil, false)
+}
+
+// RestoreRevision puts a retained revision back, portrait included. The picture
+// travels with the data because a revision may have been recorded by an IMPORT
+// that replaced both — restoring only half would leave a character wearing the
+// wrong face.
+func (s *CardStore) RestoreRevision(id, ref string) (StoredCard, error) {
+	if err := validCardID(id); err != nil {
+		return StoredCard{}, err
+	}
+	raw, err := s.history().Get(id, ref)
+	if err != nil {
+		return StoredCard{}, err
+	}
+	c, err := card.ParseJSON(raw)
+	if err != nil {
+		return StoredCard{}, err
+	}
+	// AvatarAsOf reports "no stored portrait" when the picture has not moved
+	// since that revision, in which case the card's current one is already right
+	// and write() is told to leave it alone.
+	avatar, _, err := s.history().AvatarAsOf(id, ref)
+	if err != nil {
+		return StoredCard{}, err
+	}
+	return s.write(id, c, raw, avatar, false)
+}
+
+// write is THE choke point every mutation of a stored card funnels through —
+// import, edit, restore — which is exactly why the snapshot lives here and not
+// in a caller. A path that rewrites fields nobody typed cannot opt out of being
+// undoable by forgetting to ask, and an import that lands on a card you already
+// have is one of those paths: its id is derived from the card's content, so
+// re-importing a file you have since edited resolves to the SAME directory.
+//
+// avatar nil means "leave the portrait alone" (an edit never reshoots it).
+// Non-nil replaces it, and the outgoing picture rides into the same revision as
+// the outgoing data. noteReplacement asks for a warning when this write landed
+// on a card that was already there — see replacedNote.
+func (s *CardStore) write(id string, c card.Card, raw, avatar []byte, noteReplacement bool) (StoredCard, error) {
+	dir := filepath.Join(s.dir, id)
+	// Missing files read as empty, which is exactly right for a first import:
+	// nothing is being replaced, so nothing is recorded.
+	prev, _ := os.ReadFile(filepath.Join(dir, cardJSONName))
+	prevAvatar, _ := os.ReadFile(filepath.Join(dir, cardAvatarName))
+	dataChanged := len(prev) > 0 && !bytes.Equal(prev, raw)
+	avatarChanged := len(prevAvatar) > 0 && len(avatar) > 0 && !bytes.Equal(prevAvatar, avatar)
+
+	var warnings []string
+	// A write that changes nothing loses nothing, so it must not consume a
+	// retention slot — otherwise a few idle saves would push the revisions that
+	// matter out of the window.
+	if dataChanged || avatarChanged {
+		outgoing := []byte(nil)
+		if avatarChanged {
+			outgoing = prevAvatar
+		}
+		// Best-effort, and deliberately BEFORE the write: a full disk under
+		// card-history must not stop you editing a character, but losing the old
+		// revision silently is not acceptable either, so a failure is reported as
+		// a warning on a write that otherwise succeeded. Snapshotting first means
+		// the worst case is a redundant snapshot (which the next write dedupes
+		// away) rather than a window where the old bytes are gone and unrecorded.
+		if err := s.history().Snapshot(id, prev, outgoing); err != nil {
+			warnings = append(warnings, fmt.Sprintf("could not record the previous revision: %v", err))
+		} else if noteReplacement {
+			warnings = append(warnings, replacedNote(dataChanged, avatarChanged)...)
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return StoredCard{}, err
+	}
 	if err := os.WriteFile(filepath.Join(dir, cardJSONName), raw, 0o644); err != nil {
 		return StoredCard{}, err
 	}
-	return StoredCard{ID: id, Card: c, Raw: raw, AvatarExt: avatarExt(dir)}, nil
+	if len(avatar) > 0 {
+		if err := os.WriteFile(filepath.Join(dir, cardAvatarName), avatar, 0o644); err != nil {
+			return StoredCard{}, err
+		}
+	}
+	return StoredCard{ID: id, Card: c, Raw: raw, AvatarExt: avatarExt(dir), Warnings: warnings}, nil
 }
 
-// Delete removes a card and its avatar from the library.
+// replacedNote says what a write displaced. An import that lands on a card you
+// already have used to be silent, and silence there read as "imported" when
+// what happened was "your edits were reverted" — the one outcome a person would
+// have wanted to be asked about.
+func replacedNote(dataChanged, avatarChanged bool) []string {
+	switch {
+	case dataChanged && avatarChanged:
+		return []string{"this replaced a card already in your library, including its portrait. The version you had is under Earlier versions."}
+	case avatarChanged:
+		return []string{"this replaced the portrait of a card already in your library. The picture you had is under Earlier versions."}
+	case dataChanged:
+		return []string{"this replaced a card already in your library. The version you had is under Earlier versions."}
+	}
+	return nil
+}
+
+// Delete removes a card, its avatar, and its revision history from the library.
+// History goes with it deliberately: a retained revision is the character's own
+// prose, so keeping it after a delete would leave behind exactly what the delete
+// was asked to remove.
 func (s *CardStore) Delete(id string) error {
 	if err := validCardID(id); err != nil {
 		return err
@@ -230,7 +330,13 @@ func (s *CardStore) Delete(id string) error {
 		}
 		return err
 	}
-	return os.RemoveAll(dir)
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	if err := s.history().Forget(id); err != nil {
+		return fmt.Errorf("card %q was deleted, but its saved revisions could not be removed: %w", id, err)
+	}
+	return nil
 }
 
 // AvatarPath returns the filesystem path of a card's retained avatar image, or

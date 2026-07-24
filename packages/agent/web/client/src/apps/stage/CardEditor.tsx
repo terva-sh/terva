@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { CardSummary, CardView, CardLintFinding, CardLintResult, DefaultForResult, DoctorProposal, DoctorResult, DoctorDecision } from '../../platform/ctrlproto/types'
-import { m, t, tr } from '../../i18n'
+import { t, tr } from '../../i18n'
+import { CardHistory } from './CardHistory'
+import { fieldLabel } from './carddiff'
 import { Hint } from './Hint'
 import { ModelPick } from './ModelPick'
 
@@ -18,19 +20,6 @@ const DOCTOR_FIELDS = new Set<keyof EditForm>([
   'post_history_instructions',
   'creator_notes',
 ])
-
-// m()-marked (a module-level table) and tr()-translated where rendered.
-const FIELD_LABELS: Record<string, string> = {
-  name: m('Name'),
-  description: m('Description'),
-  personality: m('Personality'),
-  scenario: m('Scenario'),
-  first_mes: m('First message'),
-  mes_example: m('Example dialogue'),
-  system_prompt: m('System prompt'),
-  post_history_instructions: m('Post-history instructions'),
-  creator_notes: m('Creator notes'),
-}
 
 // The editable slice of a CCv2 `data` object — every field the editor exposes.
 // Anything else in the stored document (extensions, character_book, unknown
@@ -149,6 +138,9 @@ export function CardEditor(props: {
   const [findings, setFindings] = useState<CardLintFinding[] | null>(null)
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(false)
+  // Bumped whenever the STORED card moves, so the revision list re-reads:
+  // a save adds a revision and changes what every other one differs in.
+  const [historyTick, setHistoryTick] = useState(0)
   const [error, setError] = useState('')
   const [proposals, setProposals] = useState<DoctorProposal[] | null>(null)
   const [doctorNote, setDoctorNote] = useState('')
@@ -332,13 +324,19 @@ export function CardEditor(props: {
         const v = await client.send<CardView>('cards.import', { bytes: encodeCardDoc(doc) })
         if (!v?.id) throw new Error(t('the card was not stored'))
         setCardId(v.id)
+        setRawDoc((v.raw as RawDoc) ?? doc)
         onCreated?.(v.id)
         setSavedAt(true)
         lint(v.id)
         onSaved()
         return true
       }
-      await client.send('cards.edit', { id: cardId, card: doc })
+      const saved = await client.send<CardView>('cards.edit', { id: cardId, card: doc })
+      // Hold the card as the STORE now has it (re-serialized canonically), so
+      // the history's comparison is against what was actually written rather
+      // than against the document this editor loaded some edits ago.
+      setRawDoc((saved?.raw as RawDoc) ?? doc)
+      setHistoryTick((n) => n + 1)
       setSavedAt(true)
       lint()
       onSaved()
@@ -497,7 +495,7 @@ export function CardEditor(props: {
                   <li key={p.id} class="stage-doctor__item">
                     <div class="stage-doctor__meta">
                       <span class={`stage-doctor__sev stage-doctor__sev--${p.severity}`}>{sevLabel(p.severity)}</span>
-                      <span class="stage-doctor__field">{tr(FIELD_LABELS[p.field] ?? p.field)}</span>
+                      <span class="stage-doctor__field">{tr(fieldLabel(p.field))}</span>
                     </div>
                     {p.rationale && <p class="stage-doctor__why">{p.rationale}</p>}
                     <div class="stage-doctor__diff">
@@ -672,6 +670,35 @@ export function CardEditor(props: {
             />
           </div>
         )}
+
+        {/* Below the fields, above the bar: the card's own past, in the screen
+            that produced it. Restoring reseeds the form from the returned card
+            and tells the caller the library moved, exactly as a save does.
+            currentData is the card AS SAVED, not the draft — a revision is
+            compared against the store, which is what the server diffed too. */}
+        <CardHistory
+          client={client}
+          cardId={cardId}
+          currentName={form?.name ?? ''}
+          currentData={(rawDoc?.data ?? {}) as Record<string, unknown>}
+          reloadKey={historyTick}
+          onRestored={(v) => {
+            const doc = (v.raw as RawDoc) ?? {}
+            setRawDoc(doc)
+            setForm(formFromData(doc.data ?? {}))
+            setProposals(null)
+            setApplied({})
+            setDeclined({})
+            lint(cardId)
+            onSaved()
+          }}
+          onUseField={(field, value) => {
+            // A DRAFT edit, not a write: it lands in the form beside everything
+            // else and goes out with the next Save. set() clears the saved flag,
+            // so the bar stops claiming the card is up to date.
+            set(field as keyof EditForm, value as EditForm[keyof EditForm])
+          }}
+        />
 
       <div class="stage-cardeditor__bar">
         {savedAt && !saving && <span class="stage-cardeditor__saved">{t('Saved ✓')}</span>}

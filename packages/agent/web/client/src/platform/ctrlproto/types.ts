@@ -1560,9 +1560,12 @@ export type Verb =
   | 'cards.export'
   | 'cards.favorite'
   | 'cards.get'
+  | 'cards.history'
   | 'cards.import'
   | 'cards.lint'
   | 'cards.list'
+  | 'cards.restore'
+  | 'cards.revision'
   | 'cast.add'
   | 'cast.remove'
   | 'cast.speak'
@@ -1685,6 +1688,72 @@ export interface VerbParams {
   'personas.create': PersonaWriteParams
   'personas.edit': PersonaWriteParams
   'cards.favorite': CardFavoriteParams
+  'cards.history': CardHistoryParams
+  'cards.restore': CardRestoreParams
+  'cards.revision': CardRevisionParams
+}
+
+// Card revision history. Every write to a card goes through cards.edit — the
+// editor, the doctor's apply, enrich — and the server snapshots the OUTGOING
+// card there, so a pass that rewrote fields the user never typed is
+// recoverable. A card keeps its original plus its most recent changes.
+
+export interface CardHistoryParams {
+  id: string
+}
+
+// CardRevision is one retained earlier revision. ref is opaque — the only thing
+// to do with it is hand it back to cards.restore. name is the card's name AT
+// that revision, so a list still reads correctly after a rename. saved is
+// RFC 3339; bytes is the revision's size.
+export interface CardRevision {
+  ref: string
+  saved: string
+  bytes: number
+  name?: string
+  // The CCv2 field names this revision differs from the card in — what
+  // restoring it would change. Computed against the SAVED card, so an editor
+  // holding unsaved edits is being compared to the store, not to its own draft.
+  // Absent/empty means the revision matches the card as it stands.
+  fields?: string[]
+  // Whether restoring this revision would also change the card's picture. The
+  // portrait lives outside the card document, so it is reported separately —
+  // without it a revision that replaced ONLY the image would read as identical
+  // to the card it plainly differs from.
+  portrait?: boolean
+}
+
+// CardRevisionParams reads one revision in full. Split from cards.history so a
+// list stays small: a card with a large lorebook would otherwise ship ten
+// copies of it just to render the list.
+export interface CardRevisionParams {
+  id: string
+  ref: string
+}
+
+// CardRevisionView is one revision's stored document. raw has the same shape
+// cards.get returns, so a client compares two documents of one shape.
+export interface CardRevisionView {
+  ref: string
+  saved: string
+  name?: string
+  fields?: string[]
+  portrait?: boolean
+  raw: unknown
+}
+
+// CardHistoryResult is the payload of cards.history, newest first. An empty
+// list means the card has never been edited — a normal state, not an error.
+export interface CardHistoryResult {
+  revisions: CardRevision[]
+}
+
+// CardRestoreParams puts a retained revision back. The restore is an ordinary
+// edit under the skin, so the state it replaces is itself recorded: restoring
+// the wrong revision is undoable.
+export interface CardRestoreParams {
+  id: string
+  ref: string
 }
 
 // CardFavoriteParams toggles a card's favorite flag (highlight + pin to top).

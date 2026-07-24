@@ -1,11 +1,13 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +25,8 @@ import (
 var _ ctrlproto.CardsController = (*Workspace)(nil)
 
 func (w *Workspace) cardStore() *build.CardStore { return build.NewCardStore() }
+
+func (w *Workspace) cardHistory() *build.CardHistoryStore { return build.NewCardHistoryStore() }
 
 // cardName resolves a stored card's display name from its library ref, or "" if
 // the ref is empty or the card can't be loaded. Used to title immersive sessions
@@ -176,6 +180,76 @@ func (w *Workspace) CardsEdit(_ context.Context, p ctrlproto.CardEditParams) (ct
 	sc, err := w.cardStore().Edit(p.ID, p.Card)
 	if err != nil {
 		return ctrlproto.CardView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "edit card: %v", err)
+	}
+	w.broadcastLibraryChanged()
+	return cardView(sc), nil
+}
+
+// CardsHistory lists a card's retained earlier revisions, newest first, each
+// naming the fields it differs from the card in — so a list can say what
+// restoring one would change without shipping ten copies of the document.
+func (w *Workspace) CardsHistory(_ context.Context, p ctrlproto.CardHistoryParams) (ctrlproto.CardHistoryResult, error) {
+	// Resolve the card first so an unknown id is "no such card" rather than an
+	// empty history, which reads as "this card has never been edited".
+	cur, err := w.cardStore().Get(p.ID)
+	if err != nil {
+		return ctrlproto.CardHistoryResult{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%v", err)
+	}
+	// Best-effort: a card with no portrait (a JSON import) reads as empty, which
+	// is the right comparison — every stored portrait then counts as a change.
+	curAvatar, _ := os.ReadFile(w.cardStore().AvatarPath(p.ID))
+	vs, err := w.cardHistory().List(p.ID, curAvatar)
+	if err != nil {
+		return ctrlproto.CardHistoryResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "read card history: %v", err)
+	}
+	out := ctrlproto.CardHistoryResult{Revisions: make([]ctrlproto.CardRevision, 0, len(vs))}
+	for _, v := range vs {
+		out.Revisions = append(out.Revisions, ctrlproto.CardRevision{
+			Ref: v.Ref, Saved: v.Saved, Bytes: v.Bytes, Name: v.Name,
+			Fields: card.ChangedFields(v.Card, cur.Card), Portrait: v.Portrait,
+		})
+	}
+	return out, nil
+}
+
+// CardsRevision reads one revision in full. Read-only — the diff a user asked
+// to see is rendered client-side from this and the card they already hold.
+func (w *Workspace) CardsRevision(_ context.Context, p ctrlproto.CardRevisionParams) (ctrlproto.CardRevisionView, error) {
+	cur, err := w.cardStore().Get(p.ID)
+	if err != nil {
+		return ctrlproto.CardRevisionView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%v", err)
+	}
+	raw, err := w.cardHistory().Get(p.ID, p.Ref)
+	if err != nil {
+		return ctrlproto.CardRevisionView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%v", err)
+	}
+	out := ctrlproto.CardRevisionView{Ref: p.Ref, Raw: raw}
+	if ms, err := strconv.ParseInt(p.Ref, 10, 64); err == nil {
+		out.Saved = time.UnixMilli(ms)
+	}
+	if av, ok, err := w.cardHistory().AvatarAsOf(p.ID, p.Ref); err == nil && ok {
+		curAvatar, _ := os.ReadFile(w.cardStore().AvatarPath(p.ID))
+		out.Portrait = !bytes.Equal(av, curAvatar)
+	}
+	// A snapshot that will not parse is still returned — the bytes are what the
+	// caller asked for — just without the labels that need a parse.
+	if c, err := card.ParseJSON(raw); err == nil {
+		out.Name = c.Name
+		out.Fields = card.ChangedFields(c, cur.Card)
+	}
+	return out, nil
+}
+
+// CardsRestore puts a retained revision back. It goes through the ordinary edit
+// path, so the state being replaced is snapshotted in turn — restoring the wrong
+// revision is itself undoable, which is why this ships without a preview.
+func (w *Workspace) CardsRestore(_ context.Context, p ctrlproto.CardRestoreParams) (ctrlproto.CardView, error) {
+	if _, err := w.cardHistory().Get(p.ID, p.Ref); err != nil {
+		return ctrlproto.CardView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%v", err)
+	}
+	sc, err := w.cardStore().RestoreRevision(p.ID, p.Ref)
+	if err != nil {
+		return ctrlproto.CardView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "restore card: %v", err)
 	}
 	w.broadcastLibraryChanged()
 	return cardView(sc), nil
