@@ -95,6 +95,47 @@ export default defineConfig({
               cacheableResponse: { statuses: [200] },
             },
           },
+          // Library media — card portraits, scene backdrops, world covers, all
+          // under /media/. The worker cached NONE of it: the precache globs sweep
+          // dist/ only, and the route above matches navigations. So every one of
+          // them was a network request, and a library of thirty characters was
+          // thirty requests each time the browser's five-minute copy lapsed —
+          // most visibly on a phone, which is where the library is browsed.
+          //
+          // This is a RUNTIME route, not a precache entry, which is what makes it
+          // legal here at all: /media/ sits behind the auth gate, and the standing
+          // rule is that nothing gated may be PRECACHED (the worker's install
+          // fetches those with no credential and throws the whole worker away on a
+          // 401 — see sw_gate_test.go). A runtime route only ever stores the
+          // answer to a request the page itself made, credential included.
+          //
+          // StaleWhileRevalidate rather than CacheFirst because these URLs are
+          // stable but not immutable: a card's id is derived from its JSON, not
+          // its portrait, so replacing the portrait keeps the URL. Serve the copy
+          // we have instantly, refresh behind it, and a changed portrait lands on
+          // the next look — rather than being frozen for a day.
+          {
+            urlPattern: ({ url, sameOrigin }) => sameOrigin && url.pathname.startsWith('/media/'),
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'terva-media',
+              // Same rule as the shell: a 401 is an answer, not an image. Without
+              // this, a request made after the credential lapsed would poison the
+              // cache with the login page's error for that portrait.
+              cacheableResponse: { statuses: [200] },
+              // A library is unbounded and a phone's storage is not. Oldest out
+              // first; an evicted portrait costs one fetch, which is what the
+              // whole route just saved.
+              //
+              // A week rather than a year, because nothing clears this cache when
+              // a credential lapses — no sign-out path does, here or for the shell
+              // cache that already behaves this way. Under stale-while-revalidate
+              // an expired entry costs exactly one fetch, so a short window buys
+              // the bound for almost nothing: a library opened even weekly never
+              // notices, and a device that stops being yours forgets sooner.
+              expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 7 },
+            },
+          },
         ],
       },
     }),

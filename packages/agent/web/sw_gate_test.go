@@ -156,3 +156,49 @@ func TestTheAppShellStaysGated(t *testing.T) {
 		}
 	}
 }
+
+// TestServiceWorkerCachesLibraryMedia is the other kind of SW bug: not a rule
+// broken, a route missing.
+//
+// Card portraits, scene backdrops and world covers all come from /media/, and the
+// worker cached none of it — the precache globs sweep dist/ only, and the single
+// runtime route matches navigations. So every portrait was a network request once
+// the browser's own five-minute copy lapsed, which for a library of thirty
+// characters is thirty requests each time it is opened, on the phone where the
+// library is actually browsed.
+//
+// Gate the shipped artefact, like the rules above: the config that produces this
+// has looked right while being wrong twice already.
+func TestServiceWorkerCachesLibraryMedia(t *testing.T) {
+	sw := swSource(t)
+	if !strings.Contains(sw, "terva-media") {
+		t.Error("sw.js registers no runtime cache for /media/: every card portrait is a " +
+			"network request on every visit. Check the runtimeCaching entry in vite.config.ts.")
+	}
+	// Stale-while-revalidate specifically. CacheFirst would freeze a replaced
+	// portrait for the whole expiration window: a card's id is derived from its
+	// JSON, not its image, so changing the image keeps the URL.
+	if !strings.Contains(sw, "StaleWhileRevalidate") {
+		t.Error("the /media/ route is not StaleWhileRevalidate: a replaced portrait would be " +
+			"served from cache until the entry expired, because its URL does not change")
+	}
+}
+
+// TestLibraryMediaIsCachedAtRUNTIMEOnly is the standing rule applied to the route
+// above, and the reason that route is legal at all.
+//
+// /media/ is behind the auth gate. A gated PRECACHE entry does not degrade the
+// worker, it stops the worker from existing — install fetches every manifest URL
+// with no credential and workbox discards the whole worker on a single non-OK
+// response (see TestThePrecacheManifestIsFetchableWithoutACredential above, and
+// the three times that bug shipped). A runtime route is a different thing
+// entirely: it only ever stores the answer to a request the page itself made,
+// credential included. So this asserts the distinction holds in the artefact.
+func TestLibraryMediaIsCachedAtRuntimeOnly(t *testing.T) {
+	for _, m := range precacheEntry.FindAllStringSubmatch(swSource(t), -1) {
+		if strings.Contains(m[1], "media") {
+			t.Errorf("sw.js PRECACHES %q: /media/ is gated, so a logged-out install takes a 401 "+
+				"there and throws the entire worker away. It must be cached at runtime only.", m[1])
+		}
+	}
+}

@@ -867,7 +867,12 @@ export function Library(props: {
                 onClick={() => openCharacter(card)}
               >
                 {card.avatar_url ? (
-                  <img class="stage-card__avatar" src={card.avatar_url} alt="" />
+                  // Lazy: the grid is every character you own, and without this
+                  // the whole library's portraits are requested at once on the
+                  // first visit — the browser's connection limit then serialises
+                  // them, so the ones you are actually looking at arrive behind
+                  // the ones you are not.
+                  <img class="stage-card__avatar" src={card.avatar_url} alt="" loading="lazy" />
                 ) : (
                   <div class="stage-card__avatar stage-card__avatar--blank" aria-hidden="true" />
                 )}
