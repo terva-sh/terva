@@ -11,6 +11,23 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.8](https://github.com/terva-sh/terva/releases/tag/v0.126.8) — 2026-07-23
+
+### Features
+
+- ext: a launcher can say it is still building, and a failure stays visible
+- ext: a load-bearing tool stays advertised under lazy visibility
+- ext: extensions load in the background, not before the session
+- ext: the extension handshake deadline is configurable, and longer
+- provider: kimi reports its subscription windows
+- web: a session-focused landing for the control panel
+
+### Fixes
+
+- swarm: stream a sub-agent's transcript as it works
+- tools: say what actually went wrong
+- web: the panel no longer converges concurrent clients on one session
+
 ## [v0.126.7](https://github.com/terva-sh/terva/releases/tag/v0.126.7) — 2026-07-22
 
 ### Features
