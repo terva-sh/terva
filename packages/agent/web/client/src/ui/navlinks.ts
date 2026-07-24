@@ -26,6 +26,12 @@ const SESSION_ID = /^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$/
 // allowed to open are listed, so a crafted URL cannot address arbitrary surfaces.
 const PANES = new Set(['context', 'tasks', 'worktree'])
 
+// Card ids are the store's own shape: a name slug plus a content hash, or the
+// bare hash for an unnamed card (build.cardID). The store already refuses a
+// separator or a "..", and this is the same refusal one step earlier — a
+// hand-edited URL should not reach the wire at all.
+const CARD_ID = /^[a-z0-9][a-z0-9-]{0,79}$/
+
 function href(base: string, params: Record<string, string | undefined>): string {
   const q = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
@@ -45,6 +51,11 @@ export function stageHref(session?: string): string {
   return href('/stage/', { session })
 }
 
+/** Link to Stage's character studio, opened on one character. */
+export function stageCardHref(card: string): string {
+  return href('/stage/', { card })
+}
+
 /**
  * Read the deep-link params and REMOVE them from the address bar.
  *
@@ -53,18 +64,21 @@ export function stageHref(session?: string): string {
  * them would mint a shell-cache entry per session id; and a later reload would
  * silently drag you back to a session you had since navigated away from.
  */
-export function takeNavParams(): { session: string; pane: string } {
-  if (typeof location === 'undefined') return { session: '', pane: '' }
+export function takeNavParams(): { session: string; pane: string; card: string } {
+  if (typeof location === 'undefined') return { session: '', pane: '', card: '' }
   const q = new URLSearchParams(location.search)
   const rawSession = q.get('session') ?? ''
   const rawPane = q.get('pane') ?? ''
+  const rawCard = q.get('card') ?? ''
   const session = SESSION_ID.test(rawSession) ? rawSession : ''
   const pane = PANES.has(rawPane) ? rawPane : ''
-  if ((rawSession || rawPane) && typeof history !== 'undefined' && history.replaceState) {
+  const card = CARD_ID.test(rawCard) ? rawCard : ''
+  if ((rawSession || rawPane || rawCard) && typeof history !== 'undefined' && history.replaceState) {
     q.delete('session')
     q.delete('pane')
+    q.delete('card')
     const rest = q.toString()
     history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + location.hash)
   }
-  return { session, pane }
+  return { session, pane, card }
 }

@@ -110,8 +110,40 @@ function EditField(props: {
 // (cards.lint), refreshed on each save, so a fix — e.g. the malformed macro on a
 // so-so import — visibly clears. Unknown fields (extensions, character_book)
 // live only in rawDoc and round-trip untouched.
-export function CardEditor(props: { client: ClientLike; card: CardSummary; onClose: () => void; onSaved: () => void }) {
-  const { client, card, onClose, onSaved } = props
+// onSaved means "a save landed — refresh your copy of this card". It does NOT
+// mean the user is finished: it fires on every save, including the intermediate
+// one "Save & ask again" performs so the doctor re-reads the improved card. A
+// caller that closes the editor from onSaved destroys the consultation in
+// progress. Closing is onClose, which Cancel and × already call.
+// A null `card` is a character being CREATED: there is nothing stored to fetch,
+// so the form starts blank and the first save imports it. Everything that reads
+// the stored card — the lint, the doctor, the per-card default model — waits
+// until there is one, rather than asking about an id that does not exist yet.
+// onCreated hands the minted id back so the host can adopt it (its route, its
+// title) and the next save edits instead of importing a second copy.
+// cards.import takes the document as BYTES (Go decodes []byte from base64), so a
+// character created here is serialized and imported exactly as a downloaded card
+// would be — one code path into the store rather than a second, create-only verb
+// that would have to keep pace with it.
+function encodeCardDoc(doc: unknown): string {
+  const json = new TextEncoder().encode(JSON.stringify(doc))
+  let s = ''
+  for (let i = 0; i < json.length; i += 0x8000) s += String.fromCharCode(...json.subarray(i, i + 0x8000))
+  return btoa(s)
+}
+
+export function CardEditor(props: {
+  client: ClientLike
+  card: CardSummary | null
+  onClose: () => void
+  onSaved: () => void
+  onCreated?: (id: string) => void
+}) {
+  const { client, card, onClose, onSaved, onCreated } = props
+  // The id this editor is bound to. Empty until a new character's first save
+  // mints one; from then on it is the card's, and save() switches from import
+  // to edit.
+  const [cardId, setCardId] = useState(card?.id ?? '')
   const [rawDoc, setRawDoc] = useState<RawDoc | null>(null)
   const [form, setForm] = useState<EditForm | null>(null)
   const [findings, setFindings] = useState<CardLintFinding[] | null>(null)
@@ -134,15 +166,29 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
   // any session's model.
   const [ovProvider, setOvProvider] = useState('')
   const [ovModel, setOvModel] = useState('')
+  // What the author wants out of this consultation, in their own words. It is
+  // standing direction, not a one-shot: it rides every round — including each
+  // "Save & ask again" — so editing it between rounds is how you change course,
+  // and clearing it returns the doctor to its ordinary lint-led pass. Per-
+  // proposal decline reasons answer a single proposal; this steers the lot.
+  const [steer, setSteer] = useState('')
 
-  const lint = () => {
+  const lint = (id = cardId) => {
+    if (!id) return // nothing stored to lint yet
     client
-      .send<CardLintResult>('cards.lint', { id: card.id })
+      .send<CardLintResult>('cards.lint', { id })
       .then((r) => setFindings(r.findings ?? []))
       .catch(() => setFindings(null))
   }
 
   useEffect(() => {
+    if (!card) {
+      // A new character: no fetch, an empty document, and a blank form. The
+      // spec wrapper is what cards.import expects to receive back on save.
+      setRawDoc({ spec: 'chara_card_v2', spec_version: '2.0', data: {} })
+      setForm(formFromData({}))
+      return
+    }
     client
       .send<CardView>('cards.get', { id: card.id })
       .then((v) => {
@@ -151,7 +197,7 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
         setForm(formFromData(doc.data ?? {}))
       })
       .catch((e: unknown) => setError(String(e)))
-    lint()
+    lint(card.id)
     // Seed the doctor's model from the card's own default when it has one, so the
     // picker names what the doctor will run on. Unsupported (old daemon) or no
     // card default leaves the override empty — the picker's Default row, and the
@@ -165,7 +211,7 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
         }
       })
       .catch(() => {})
-  }, [card.id])
+  }, [card?.id])
 
   const set = <K extends keyof EditForm>(key: K, value: EditForm[K]) => {
     setForm((f) => (f ? { ...f, [key]: value } : f))
@@ -183,7 +229,7 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
     setDoctorRunning(true)
     setDoctorError('')
     try {
-      const r = await client.send<DoctorResult>('cards.doctor', { id: card.id, provider: ovProvider, model: ovModel })
+      const r = await client.send<DoctorResult>('cards.doctor', { id: cardId, steer, provider: ovProvider, model: ovModel })
       setProposals(r.proposals ?? [])
       setDoctorNote(r.note ?? '')
     } catch (e) {
@@ -243,7 +289,7 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
     try {
       const decisions = buildDecisions()
       if (!(await save())) return // a failed save surfaces its own error; don't consult on a stale card
-      const r = await client.send<DoctorResult>('cards.doctor', { id: card.id, decisions, provider: ovProvider, model: ovModel })
+      const r = await client.send<DoctorResult>('cards.doctor', { id: cardId, decisions, steer, provider: ovProvider, model: ovModel })
       setProposals(r.proposals ?? [])
       setDoctorNote(r.note ?? '')
       setApplied({})
@@ -278,7 +324,21 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
         creator_notes: form.creator_notes,
         tags: form.tags,
       }
-      await client.send('cards.edit', { id: card.id, card: { ...rawDoc, data } })
+      const doc = { ...rawDoc, data }
+      if (!cardId) {
+        // First save of a new character: there is no stored card to edit, so
+        // import the document we have been assembling. The id the store mints
+        // is content-derived, so it only exists once there IS content.
+        const v = await client.send<CardView>('cards.import', { bytes: encodeCardDoc(doc) })
+        if (!v?.id) throw new Error(t('the card was not stored'))
+        setCardId(v.id)
+        onCreated?.(v.id)
+        setSavedAt(true)
+        lint(v.id)
+        onSaved()
+        return true
+      }
+      await client.send('cards.edit', { id: cardId, card: doc })
       setSavedAt(true)
       lint()
       onSaved()
@@ -298,27 +358,37 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
   // class uses it raw, but the displayed label is translated per known token.
   const sevLabel = (s: string) => (s === 'warn' ? t('warn') : s === 'info' ? t('info') : s === 'suggestion' ? t('suggestion') : s)
 
+  // A screen, not a modal. The editor used to be a sheet over whichever surface
+  // opened it, and the two hosts disagreed about what a save meant — one closed
+  // it mid-consultation. It now has one home (the character studio) that both
+  // the Library and a session navigate INTO, so there is one lifecycle instead
+  // of one per caller.
+  // A card reached by deep link is known only by its id until cards.get lands, so
+  // "no name yet" must not read as "new" — the header would announce a character
+  // that plainly exists as one being created.
+  const existing = Boolean(card || cardId)
+  const displayName = form?.name || card?.name || (existing ? t('Character') : t('New character'))
   return (
-    <div class="stage-sheet-backdrop" onClick={onClose}>
-      <div class="stage-sheet stage-sheet--detail stage-cardeditor" onClick={(e) => e.stopPropagation()}>
-        <header class="stage-cardsheet__head">
-          {card.avatar_url ? (
-            <img class="stage-cardsheet__avatar" src={card.avatar_url} alt="" />
-          ) : (
-            <div class="stage-cardsheet__avatar stage-cardsheet__avatar--blank" aria-hidden="true">
-              {(card.name[0] ?? '·').toUpperCase()}
-            </div>
-          )}
-          <div class="stage-cardsheet__id">
-            <h3>{t('Edit — %s', form?.name || card.name)}</h3>
-            <div class="stage-cardsheet__meta">
-              <span>{t('Changes save to your library; the avatar and id stay put.')}</span>
-            </div>
+    <div class="stage-cardeditor stage-cardeditor--screen">
+      <header class="stage-cardsheet__head">
+        {card?.avatar_url ? (
+          <img class="stage-cardsheet__avatar" src={card.avatar_url} alt="" />
+        ) : (
+          <div class="stage-cardsheet__avatar stage-cardsheet__avatar--blank" aria-hidden="true">
+            {(displayName[0] ?? '·').toUpperCase()}
           </div>
-          <button class="stage-drawer__close" onClick={onClose}>
-            ✕
-          </button>
-        </header>
+        )}
+        <div class="stage-cardsheet__id">
+          <h3>{existing ? t('Edit — %s', displayName) : t('New character')}</h3>
+          <div class="stage-cardsheet__meta">
+            <span>
+              {existing
+                ? t('Changes save to your library; the avatar and id stay put.')
+                : t('Give them a name and save — then the lint and the doctor can read them.')}
+            </span>
+          </div>
+        </div>
+      </header>
 
         {error && (
           <p class="stage-error" onClick={() => setError('')}>
@@ -370,11 +440,36 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
               />
             </div>
             {!proposals && (
-              <button class="stage-doctor__run" disabled={doctorRunning || !form} onClick={() => void runDoctor()}>
-                {doctorRunning ? t('Consulting…') : t('Ask the doctor')}
+              // The doctor reads the STORED card, so it has nothing to read
+              // until a new character has been saved once. Disabled and said
+              // plainly, rather than offered and then failing on an id that
+              // does not exist.
+              <button class="stage-doctor__run" disabled={doctorRunning || !form || !cardId} onClick={() => void runDoctor()}>
+                {doctorRunning ? t('Consulting…') : !cardId ? t('Save first') : t('Ask the doctor')}
               </button>
             )}
           </div>
+          {/* Say what you want out of this pass. The doctor works toward it
+              first — including cutting things — instead of only answering the
+              lint. Left in place between rounds on purpose: it is the standing
+              brief for the consultation, and an author who changes their mind
+              edits it rather than starting over. */}
+          <label class="stage-doctor__steer">
+            <span class="stage-doctor__steerlabel">
+              {t('What should change?')}
+              <Hint
+                text={t('Optional. Tell the doctor what you are after — “make her wearier”, “cut the war backstory”, “she should not know about the Accord yet” — and it proposes edits toward that first. Leave it empty for an ordinary read of the card and its lint.')}
+                label={t('about steering the doctor')}
+              />
+            </span>
+            <textarea
+              class="stage-editfield__area stage-doctor__steerbox"
+              rows={2}
+              placeholder={t('e.g. make her wearier, and cut the war backstory')}
+              value={steer}
+              onInput={(e) => setSteer((e.target as HTMLTextAreaElement).value)}
+            />
+          </label>
           <div class="stage-doctor__model">
             <ModelPick
               client={client}
@@ -410,9 +505,12 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
                         <span class="stage-doctor__difflabel">{t('Now')}</span>
                         <p>{p.before?.trim() || t('(empty)')}</p>
                       </div>
-                      <div class="stage-doctor__after">
-                        <span class="stage-doctor__difflabel">{t('Proposed')}</span>
-                        <p>{p.after}</p>
+                      {/* A removal's `after` is empty by design, so render what
+                          it MEANS — an empty box below "Proposed" reads as a
+                          broken suggestion rather than a deletion. */}
+                      <div class={`stage-doctor__after ${p.remove ? 'stage-doctor__after--remove' : ''}`}>
+                        <span class="stage-doctor__difflabel">{p.remove ? t('Proposed — remove') : t('Proposed')}</span>
+                        <p>{p.remove ? t('(this field is cleared)') : p.after}</p>
                       </div>
                     </div>
                     {applied[p.id] ? (
@@ -575,15 +673,14 @@ export function CardEditor(props: { client: ClientLike; card: CardSummary; onClo
           </div>
         )}
 
-        <div class="stage-cardeditor__bar">
-          {savedAt && !saving && <span class="stage-cardeditor__saved">{t('Saved ✓')}</span>}
-          <button class="stage-cardeditor__cancel" onClick={onClose}>
-            {t('Close')}
-          </button>
-          <button class="stage-cardeditor__save" disabled={saving || !form} onClick={() => void save()}>
-            {saving ? t('Saving…') : t('Save changes')}
-          </button>
-        </div>
+      <div class="stage-cardeditor__bar">
+        {savedAt && !saving && <span class="stage-cardeditor__saved">{t('Saved ✓')}</span>}
+        <button class="stage-cardeditor__cancel" onClick={onClose}>
+          {t('Close')}
+        </button>
+        <button class="stage-cardeditor__save" disabled={saving || !form} onClick={() => void save()}>
+          {saving ? t('Saving…') : existing ? t('Save changes') : t('Create character')}
+        </button>
       </div>
     </div>
   )
