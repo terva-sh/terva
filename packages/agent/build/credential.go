@@ -7,7 +7,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 )
 
-// Credential resolution reads the provider registry (ProviderByID) for each
+// Credential resolution reads the provider registry (providerByID) for each
 // provider's api-Key env vars, so it sits above the config layer with the
 // registry rather than inside it.
 
@@ -45,7 +45,7 @@ func ResolveCredentialFull(provider, explicit string) (cred, method, accountID s
 			return v, "oauth", "", nil
 		}
 	}
-	if spec, ok := ProviderByID[provider]; ok {
+	if spec, ok := specFor(provider); ok {
 		for _, ev := range spec.apiKeyEnv {
 			if v := os.Getenv(ev); v != "" {
 				return v, "apikey", "", nil

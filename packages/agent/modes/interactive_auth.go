@@ -65,7 +65,23 @@ func (i *Interactive) openLogoutDialog() {
 	// logins. Reconstructing that here is what produced two answers that could
 	// disagree.
 	var items []dialogs.LogoutItem
+	var endpoints []dialogs.LogoutItem
 	for _, p := range view.Providers {
+		// A named endpoint is the operator's own server, and it is listed even
+		// with no credential: most local servers want no key, so gating these
+		// rows on p.Method would hide exactly the ones a keyless LM Studio or
+		// llama.cpp produces — which is every endpoint terva has no other way to
+		// remove. Removing one is a different verb from logging out, so they are
+		// a separate block rather than mixed into the list above.
+		if p.Endpoint {
+			endpoints = append(endpoints, dialogs.LogoutItem{
+				Label:    p.Label,
+				Target:   p.ID,
+				Method:   i18n.T("endpoint - remove"),
+				Endpoint: true,
+			})
+			continue
+		}
 		if p.Method == "" {
 			continue
 		}
@@ -76,8 +92,9 @@ func (i *Interactive) openLogoutDialog() {
 		items = append(items, dialogs.LogoutItem{Label: p.Label, Target: p.ID, Method: method})
 	}
 	sort.Slice(items, func(a, b int) bool { return items[a].Label < items[b].Label })
+	sort.Slice(endpoints, func(a, b int) bool { return endpoints[a].Label < endpoints[b].Label })
 
-	if len(items) == 0 {
+	if len(items) == 0 && len(endpoints) == 0 {
 		i.mu.Lock()
 		i.statusOK = i18n.T("no credentials stored; already logged out")
 		i.statusErr = ""
@@ -85,9 +102,13 @@ func (i *Interactive) openLogoutDialog() {
 		i.invalidate()
 		return
 	}
+	// "all" logs out of every CREDENTIAL. It deliberately does not sweep up the
+	// endpoints below it: losing every local backend definition to a keystroke
+	// meant for expired tokens is not a recovery anyone wants.
 	if len(items) > 1 {
 		items = append(items, dialogs.LogoutItem{Label: "all", Target: "all"})
 	}
+	items = append(items, endpoints...)
 
 	i.logoutDialog.Open(items)
 	i.invalidate()
@@ -121,6 +142,40 @@ func (i *Interactive) doLogout(target string) {
 		return
 	}
 	i.statusOK = i18n.T("logged out of %s", target)
+}
+
+// doRemoveEndpoint forgets a named openai-compatible endpoint: the definition,
+// not just its key. The daemon owns the removal (config entry, stored key, and
+// the provider registration); this reports the result.
+//
+// Reachable only by picking an endpoint row in /logout. There is no
+// `/logout <endpoint>` spelling for it on purpose — a logout that silently
+// deleted the address of a machine, because the id happened to name an endpoint
+// rather than a provider, is not a surprise worth shipping.
+func (i *Interactive) doRemoveEndpoint(id string) {
+	ac := i.authController()
+	if ac == nil {
+		i.mu.Lock()
+		i.statusErr = i18n.T("this session's credentials are owned by the daemon")
+		i.mu.Unlock()
+		return
+	}
+	if err := ac.AuthEndpointRemove(i.runCtx, ctrlproto.AuthEndpointRemoveParams{ID: id}); err != nil {
+		i.mu.Lock()
+		i.statusErr = i18n.T("remove endpoint: %s", err.Error())
+		i.mu.Unlock()
+		return
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.statusErr = ""
+	if i.cfg.Provider == id {
+		// The backend this session has been talking to is the one that just went
+		// away. Say so here rather than letting the next turn discover it.
+		i.statusOK = i18n.T("removed endpoint %s — this session was using it; pick another with /model", id)
+		return
+	}
+	i.statusOK = i18n.T("removed endpoint %s", id)
 }
 
 // startLogin asks the daemon to begin a flow and renders whatever it describes.

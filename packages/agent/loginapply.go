@@ -1,6 +1,10 @@
 package agent
 
 import (
+	"context"
+	"time"
+
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
@@ -81,6 +85,23 @@ func ApplyLoginSuccess(store *auth.Store, providerID string, promoteDefault func
 		}
 	}
 
+	// A NAMED endpoint has the same problem from the other end: it carries no
+	// model at all, because the form deliberately does not ask for one — a named
+	// endpoint discovers what its server serves. So the login would leave behind a
+	// provider the user can see and cannot run: the session builds with an empty
+	// model id, and the server rejects the turn.
+	//
+	// Discover now, synchronously, unlike the async refreshes below. The caller is
+	// about to build a session on this provider (CarrierLogin), and a default that
+	// lands after that session is built is a default the user does not get. The
+	// endpoint was probed seconds ago by saveEndpoint, so this is a second call to
+	// a server already known to answer.
+	if cfg, err := config.LoadConfig(); err == nil {
+		if ep, ok := cfg.Endpoints[providerID]; ok {
+			adoptEndpointModels(providerID, ep, promoteDefault)
+		}
+	}
+
 	// Any fresh login can unlock more models than the baked catalog knows about
 	// — opencode-go is a subscription tier whose /v1/models list is
 	// upstream-controlled, and openrouter and kimi are likewise live. Force a
@@ -88,4 +109,43 @@ func ApplyLoginSuccess(store *auth.Store, providerID string, promoteDefault func
 	// Harmless for providers with no discovery endpoint, and for
 	// openai-compatible (handled above; the forced refresh skips it).
 	RefreshModelsForceAsync()
+}
+
+// adoptEndpointModels lists a named endpoint's models, registers them into the
+// active catalog, and makes one the default.
+//
+// Silent on failure by design: the endpoint IS saved and registered by the time
+// this runs, so a server that went away between the probe and here leaves the
+// operator with a provider they can still pick a model on once it is back —
+// which beats failing a login over a model list.
+func adoptEndpointModels(id string, ep config.EndpointConfig, promoteDefault func(providerName, model, scope string) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	defCtx := ep.ContextWindow
+	if defCtx <= 0 {
+		defCtx = unknownModelContext
+	}
+	// The key is optional and usually absent; ResolveCredential finds it under
+	// the endpoint's own id when the server does want one.
+	key, _, _ := build.ResolveCredential(id, "")
+	live, err := provider.DiscoverOpenAICompatible(ctx, ep.BaseURL, key, defCtx)
+	if err != nil || len(live) == 0 {
+		return
+	}
+	for _, m := range live {
+		// DiscoverOpenAICompatible stamps every model "openai-compatible" — it
+		// does not know which endpoint asked. Re-stamp, or these land under the
+		// shared slot and the endpoint's picker stays empty.
+		m.Provider = id
+		m.BaseURL = ep.BaseURL
+		m.Source = "live"
+		provider.RegisterExtraModel(m)
+	}
+	if promoteDefault == nil {
+		return
+	}
+	if model := build.EndpointDefaultModel(id); model != "" {
+		_ = promoteDefault(id, model, "global")
+	}
 }

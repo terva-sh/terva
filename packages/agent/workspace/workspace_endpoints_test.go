@@ -2,10 +2,14 @@ package workspace
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/provider/auth"
@@ -115,6 +119,93 @@ func TestAuthEndpointRemoveForgetsTheDefinition(t *testing.T) {
 	}
 	if _, ok := c.Endpoints["kept"]; !ok {
 		t.Error("removing one endpoint deleted another")
+	}
+}
+
+// Saving an endpoint must make it a PROVIDER, not just a config entry.
+//
+// This is the bug the whole change exists for: startup registration runs once,
+// before the TUI exists, so an endpoint created from /login stayed invisible to
+// Resolve for the life of the process. It showed up in /model — which reads
+// config directly — and every attempt to USE it fell through "unknown provider"
+// to anthropic, so the login reported "no credential for anthropic" while the
+// endpoint sat there saved and unusable until a restart.
+func TestSaveEndpointRegistersItImmediately(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"local-coder"}]}`)
+	}))
+	defer srv.Close()
+	seedConfig(t, "")
+	t.Cleanup(func() { build.UnregisterEndpoint("fresh-box") })
+
+	w := endpointWorkspace(t)
+	if err := w.saveEndpoint(context.Background(), "fresh-box", srv.URL+"/v1", "", 0); err != nil {
+		t.Fatalf("saveEndpoint: %v", err)
+	}
+
+	if !build.IsKnownProvider("fresh-box") {
+		t.Fatal("the endpoint is saved but not registered: Resolve cannot see it, so using it falls back to anthropic")
+	}
+	c, err := config.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Endpoints["fresh-box"]; !ok {
+		t.Error("the endpoint did not reach config.json, so no restart brings it back")
+	}
+}
+
+// Re-saving the same name is an EDIT — correcting a port, say — and must not be
+// refused as a collision or leave two rows for one backend.
+func TestSaveEndpointTwiceIsAnEdit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"local-coder"}]}`)
+	}))
+	defer srv.Close()
+	seedConfig(t, "")
+	t.Cleanup(func() { build.UnregisterEndpoint("edited-box") })
+
+	w := endpointWorkspace(t)
+	if err := w.saveEndpoint(context.Background(), "edited-box", srv.URL+"/v1", "", 0); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+	if err := w.saveEndpoint(context.Background(), "edited-box", srv.URL+"/v1", "", 65536); err != nil {
+		t.Fatalf("re-saving the same endpoint should be an edit, not a collision: %v", err)
+	}
+
+	var n int
+	for _, id := range build.ProviderIDs() {
+		if id == "edited-box" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("the endpoint appears %d times in the provider list, want exactly 1", n)
+	}
+	c, _ := config.LoadConfig()
+	if got := c.Endpoints["edited-box"].ContextWindow; got != 65536 {
+		t.Errorf("context window = %d, want the edited 65536", got)
+	}
+}
+
+// Removing an endpoint must also unregister it, or it stays a selectable
+// provider for the rest of the process: a backend the operator deleted, still
+// offering to serve turns until the next restart.
+func TestAuthEndpointRemoveUnregistersTheProvider(t *testing.T) {
+	seedConfig(t, `{"endpoints":{"doomed":{"baseUrl":"http://x.invalid/v1"}}}`)
+	t.Cleanup(func() { build.UnregisterEndpoint("doomed") })
+	if err := build.RegisterEndpoint("doomed", config.EndpointConfig{BaseURL: "http://x.invalid/v1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := endpointWorkspace(t)
+	if err := w.AuthEndpointRemove(context.Background(), ctrlproto.AuthEndpointRemoveParams{ID: "doomed"}); err != nil {
+		t.Fatalf("AuthEndpointRemove: %v", err)
+	}
+	if build.IsKnownProvider("doomed") {
+		t.Error("the removed endpoint is still a registered provider")
 	}
 }
 

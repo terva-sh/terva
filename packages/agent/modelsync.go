@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"terva.sh/terva/packages/agent/build"
@@ -73,6 +74,78 @@ func LoadCompatModel() {
 		Source:        "openai-compatible",
 	})
 }
+
+// EnsureEndpointModels gives each configured endpoint a model list BEFORE the
+// first Resolve, when the on-disk cache has none for it.
+//
+// An endpoint's models are DISCOVERED, never baked in, so on the first launch
+// after one is created the catalog has never heard of it — and Resolve is then
+// choosing between refusing to boot and asking the server to run the empty model
+// id. The async refreshes are the right tool everywhere else and the wrong one
+// here: they land after the session is already built.
+//
+// Short-deadlined and concurrent, because this sits on the startup path: a
+// server that is switched off must cost a second or two, not twenty, and must
+// never be the reason terva did not start. Endpoints the cache already covers
+// are skipped entirely, so the common launch does no I/O at all.
+func EnsureEndpointModels() {
+	cfg, err := config.LoadConfig()
+	if err != nil || len(cfg.Endpoints) == 0 {
+		return
+	}
+	type pending struct {
+		id string
+		ep config.EndpointConfig
+	}
+	var todo []pending
+	for id, ep := range cfg.Endpoints {
+		if strings.TrimSpace(ep.BaseURL) == "" {
+			continue
+		}
+		if len(provider.ModelsForProvider(id)) > 0 {
+			continue // the cache already answered for this one
+		}
+		todo = append(todo, pending{id, ep})
+	}
+	if len(todo) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), endpointWarmupTimeout)
+	defer cancel()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, p := range todo {
+		wg.Add(1)
+		go func(p pending) {
+			defer wg.Done()
+			defCtx := p.ep.ContextWindow
+			if defCtx <= 0 {
+				defCtx = unknownModelContext
+			}
+			cred, _, _ := build.ResolveCredential(p.id, "")
+			live, err := provider.DiscoverOpenAICompatible(ctx, p.ep.BaseURL, cred, defCtx)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			for _, m := range live {
+				// Discovery stamps everything "openai-compatible"; it does not
+				// know which endpoint asked.
+				m.Provider = p.id
+				m.BaseURL = p.ep.BaseURL
+				m.Source = "live"
+				provider.RegisterExtraModel(m)
+			}
+		}(p)
+	}
+	wg.Wait()
+}
+
+// endpointWarmupTimeout bounds the whole startup warm-up, not each endpoint:
+// they run concurrently, so several unreachable servers cost the same as one.
+const endpointWarmupTimeout = 3 * time.Second
 
 // unknownModelContext is the window assumed for a model nobody can describe:
 // the provider's /v1/models list names it, the baked catalog has never heard of
@@ -158,9 +231,18 @@ func ValidateAndRepairConfig() {
 		changed = true
 	}
 
-	// ollama and openai-compatible are open-catalogue: any model id the
-	// local/custom server understands is valid, so never rewrite it here.
-	openCatalogue := cfg.Provider == "ollama" || cfg.Provider == "openai-compatible"
+	// ollama, openai-compatible and the operator's own named endpoints are
+	// open-catalogue: any model id the local/custom server understands is valid,
+	// so never rewrite it here.
+	//
+	// Endpoints were missing from this list, and the omission was not cosmetic.
+	// An endpoint's models are DISCOVERED, and discovery has not run yet on the
+	// launch right after /login created it — so the id the operator just chose
+	// was "not in the active catalog", got repaired to the endpoint's default
+	// (which is "", since an endpoint has none), and terva then asked the server
+	// to run the empty model.
+	openCatalogue := cfg.Provider == "ollama" || cfg.Provider == "openai-compatible" ||
+		build.IsEndpointProvider(cfg.Provider, cfg)
 	if cfg.Provider != "" && cfg.Model != "" && !openCatalogue {
 		if _, err := provider.FindModel(cfg.Provider, cfg.Model); err != nil {
 			if m, err := provider.FindModel("", cfg.Model); err == nil {

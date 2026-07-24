@@ -23,9 +23,6 @@ func TestRegisterEndpoint(t *testing.T) {
 	if err := build.RegisterEndpoint("ep-ok-unit", config.EndpointConfig{BaseURL: "http://ep:9000/v1"}); err != nil {
 		t.Fatalf("a fresh endpoint should register: %v", err)
 	}
-	if _, ok := build.ProviderByID["ep-ok-unit"]; !ok {
-		t.Error("endpoint not added to providerByID")
-	}
 	if !build.IsKnownProvider("ep-ok-unit") {
 		t.Error("endpoint not added to knownProviders")
 	}

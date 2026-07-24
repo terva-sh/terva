@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/i18n"
@@ -510,14 +511,37 @@ func (w *Workspace) saveEndpoint(ctx context.Context, name, baseURL, apiKey stri
 	if err := auth.ProbeOpenAICompatible(ctx, baseURL, apiKey); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", err.Error())
 	}
+	ep := config.EndpointConfig{BaseURL: baseURL, ContextWindow: win}
+
+	// Register BEFORE writing config, for two reasons.
+	//
+	// It is the stricter check: it also knows the alias table, so a name like
+	// "gemini" or "codex" is refused here rather than written to config.json and
+	// then quietly dropped by the next startup's registration with a stderr line
+	// nobody is reading.
+	//
+	// And it is what makes the endpoint a PROVIDER rather than a config entry.
+	// Startup registration runs once, before the TUI exists, so an endpoint born
+	// mid-session used to stay invisible to Resolve for the life of the process:
+	// it appeared in /model (which reads config directly), and every attempt to
+	// USE it fell through to "unknown provider" → anthropic → "no credential for
+	// anthropic". The login reported failure while the endpoint sat there saved.
+	if err := build.RegisterOrReplaceEndpoint(name, ep); err != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s",
+			i18n.T("cannot use %q as an endpoint name: %v", name, err))
+	}
 	// MutateConfig, never LoadConfig+SaveConfig: SaveConfig is a whole-file
 	// overwrite, and the web has N sessions that can each be saving a setting.
 	if err := config.MutateConfig(func(c *config.Config) {
 		if c.Endpoints == nil {
 			c.Endpoints = map[string]config.EndpointConfig{}
 		}
-		c.Endpoints[name] = config.EndpointConfig{BaseURL: baseURL, ContextWindow: win}
+		c.Endpoints[name] = ep
 	}); err != nil {
+		// Leaving the registration behind would advertise a provider that no
+		// restart brings back — config.json is what survives, and it does not
+		// have this one.
+		build.UnregisterEndpoint(name)
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("could not save the endpoint: %v", err))
 	}
 	// Only if there is one. A key written for a server that ignores keys is a
@@ -566,6 +590,10 @@ func (w *Workspace) AuthEndpointRemove(_ context.Context, p ctrlproto.AuthEndpoi
 	}); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("could not remove the endpoint: %v", err))
 	}
+	// And out of the registry, or it stays a selectable provider for the rest of
+	// the process — a backend the operator removed, still offering to serve turns
+	// until the next restart.
+	build.UnregisterEndpoint(id)
 	// The key outlives the definition otherwise: a secret for a provider that no
 	// longer exists, which nothing would ever show the operator again.
 	if store := m.Store(); store != nil {

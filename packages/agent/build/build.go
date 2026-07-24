@@ -460,7 +460,7 @@ func toolSummariesFromRegistry(reg core.Registry, cached map[string]string) []To
 // (ollama, openai-compatible) — the caller special-cases those and
 // errors or uses whatever the user passed.
 func DefaultModelForProvider(prov string) string {
-	if spec, ok := ProviderByID[prov]; ok {
+	if spec, ok := specFor(prov); ok {
 		if spec.noDefaultModel {
 			return ""
 		}
@@ -472,10 +472,10 @@ func DefaultModelForProvider(prov string) string {
 }
 
 // IsKnownProvider reports whether name is a canonical provider id in
-// the registry (provider_registry.go). KnownProviders (the ordered id
-// list) and the providerAliases map are derived there too.
+// the registry (provider_registry.go). The ordered id list (ProviderIDs)
+// and the providerAliases map are derived there too.
 func IsKnownProvider(name string) bool {
-	_, ok := ProviderByID[name]
+	_, ok := specFor(name)
 	return ok
 }
 
@@ -488,7 +488,7 @@ func canonicalProvider(name string) string {
 	if n == "" {
 		return n
 	}
-	if canon, ok := providerAliases[n]; ok {
+	if canon, ok := aliasFor(n); ok {
 		return canon
 	}
 	return n
@@ -595,9 +595,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// Keyless local servers fall back to the harmless sentinel bearer.
 		compatCtx = ep.ContextWindow
 		compatBaseURL = ep.BaseURL
-		storedKey, _, _, _ := ResolveCredentialFull(provName, args.APIKey)
-		cred = firstNonEmpty(storedKey, "openai-compatible")
-		method = "apikey"
+		cred, method = endpointCredential(provName, args.APIKey)
 	} else if provName == "openai-compatible" {
 		// A user-configured OpenAI-compatible endpoint (local model
 		// server, gateway, ...). The base URL and model id were captured
@@ -632,11 +630,32 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// amazon-bedrock setup (AWS_BEARER_TOKEN_BEDROCK / AWS_PROFILE /
 		// IAM keys) when no config.json pins the provider, such as after
 		// pointing TERVA_HOME at a fresh home dir. Iteration order of
-		// KnownProviders defines fallback priority. ollama is skipped:
+		// ProviderIDs defines fallback priority. ollama is skipped:
 		// it has no credential and would always "match".
-		for _, other := range KnownProviders {
+		for _, other := range ProviderIDs() {
 			if other == provName || other == "ollama" || other == "openai-compatible" {
 				continue
+			}
+			// A named endpoint is reachable WITHOUT a credential — that is the
+			// whole point of pointing terva at your own server. Asking
+			// ResolveCredentialFull about a keyless one gets "no credential", so
+			// the scan used to walk straight past the only backend the operator
+			// could actually reach and report "no credential for anthropic".
+			// Endpoints sort after the built-ins in ProviderIDs, so this is the
+			// last resort it should be.
+			if ep, ok := cfg.Endpoints[other]; ok {
+				// Only if it can actually run something. An endpoint whose models
+				// have not been discovered has no model id to offer, and falling
+				// back onto it would trade "not logged in" — which boots, and
+				// which /login can fix — for a hard refusal to start at all.
+				if EndpointDefaultModel(other) == "" {
+					continue
+				}
+				provName = other
+				cred, method = endpointCredential(other, args.APIKey)
+				accountID, credErr = "", nil
+				compatCtx, compatBaseURL = ep.ContextWindow, ep.BaseURL
+				break
 			}
 			if c, m, a, err := ResolveCredentialFull(other, args.APIKey); err == nil {
 				provName = other
@@ -649,16 +668,25 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// ollama and openai-compatible are open-catalogue: the model id is
 	// whatever the local/custom server understands and has no baked-in
 	// catalog entry or default.
-	openCatalogue := provName == "ollama" || provName == "openai-compatible" || isEndpointProvider(provName, cfg)
+	openCatalogue := provName == "ollama" || provName == "openai-compatible" || IsEndpointProvider(provName, cfg)
 	// --model flag > project (trusted) > user config (eff.Config is the
 	// project-over-user read view; cfg stays the user layer for repairs).
 	model := firstNonEmpty(args.Model, eff.Config.Model)
 	if model == "" {
-		switch provName {
-		case "ollama":
+		switch {
+		case provName == "ollama":
 			return Resolved{}, fmt.Errorf("ollama requires --model (e.g. --model llama3)")
-		case "openai-compatible":
+		case provName == "openai-compatible":
 			return Resolved{}, fmt.Errorf("openai-compatible requires a model; set it during /login or pass --model")
+		case IsEndpointProvider(provName, cfg):
+			// A named endpoint has no baked-in default: DefaultModelForProvider
+			// returns "" for it, and an empty model id is not a harmless
+			// placeholder — it is serialized straight into the request body, and
+			// the server rejects the turn. Take what discovery found instead.
+			model = EndpointDefaultModel(provName)
+			if model == "" {
+				return Resolved{}, fmt.Errorf("endpoint %q has no model yet; pick one with /model or pass --model (terva lists an endpoint's models from its /v1/models)", provName)
+			}
 		default:
 			model = DefaultModelForProvider(provName)
 		}
@@ -676,8 +704,12 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// even if not in the baked-in catalog. For openai-compatible,
 		// prefer the user's configured default context window over the
 		// generic guess so auto-compaction and the context % are sane.
+		// compatCtx is the window the operator configured for THIS backend —
+		// the shared slot's from auth.json, a named endpoint's from its config
+		// entry. Either way it beats the generic guess, and using it is what
+		// keeps auto-compaction and the context gauge honest.
 		ctxWin := 32768
-		if provName == "openai-compatible" && compatCtx > 0 {
+		if compatCtx > 0 && (provName == "openai-compatible" || IsEndpointProvider(provName, cfg)) {
 			ctxWin = compatCtx
 		}
 		resolvedModel = provider.Model{
@@ -1318,7 +1350,7 @@ func (r Resolved) NewClient() provider.Client {
 }
 
 func (r Resolved) dispatchClient() provider.Client {
-	if spec, ok := ProviderByID[r.Provider]; ok {
+	if spec, ok := specFor(r.Provider); ok {
 		return spec.newClient(r)
 	}
 	if r.AuthMethod == "oauth" {
@@ -1740,7 +1772,7 @@ func kimiCodeHeaders() map[string]string {
 // guidance when a provider has no credential. Reads the registry
 // (provider_registry.go); empty/unknown falls back to ANTHROPIC.
 func envVarName(prov string) string {
-	if spec, ok := ProviderByID[prov]; ok && spec.envHint != "" {
+	if spec, ok := specFor(prov); ok && spec.envHint != "" {
 		return spec.envHint
 	}
 	return "ANTHROPIC"

@@ -332,35 +332,78 @@ var providerSpecs = []providerSpec{
 	},
 }
 
-// ProviderByID indexes providerSpecs by canonical id.
-var ProviderByID map[string]*providerSpec
+// The registry: what providers exist, in what order, under what names.
+//
+// It is NOT fixed at startup. A named openai-compatible endpoint becomes a
+// provider the moment the operator finishes /login, on the login goroutine,
+// while other sessions are resolving credentials on theirs. registryMu guards
+// all four collections and nothing outside this file touches them directly —
+// otherwise creating an endpoint mid-session is a concurrent map write against
+// every Resolve in flight.
+var registryMu sync.RWMutex
 
-// KnownProviders is the ordered list of canonical provider ids,
-// derived from providerSpecs. Resolve walks it for fallback priority;
-// keep it a []string so existing range loops are untouched.
-var KnownProviders []string
+// providerByID indexes providerSpecs by canonical id.
+var providerByID map[string]*providerSpec
+
+// knownProviders is the ordered list of canonical provider ids: the static
+// specs first, in registry order, then each endpoint as it registers. Resolve
+// walks it for fallback priority, so built-ins are preferred over an
+// endpoint — see ProviderIDs.
+var knownProviders []string
 
 // providerAliases maps every alias to its canonical id, derived from
 // providerSpecs. Kept as a map[string]string for canonicalProvider
 // and the alias round-trip test.
 var providerAliases map[string]string
 
+// endpointProviders records which ids RegisterEndpoint added. A built-in and an
+// endpoint are the same shape once registered, and only this says which is
+// which — so UnregisterEndpoint can refuse to delete a provider terva ships,
+// whatever id it is handed.
+var endpointProviders map[string]bool
+
+// ProviderIDs returns the ordered canonical provider ids. A COPY: the registry
+// grows when an endpoint is created, and a caller mid-range over the live slice
+// would be reading it as it is reallocated.
+func ProviderIDs() []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	return append([]string(nil), knownProviders...)
+}
+
+// specFor returns the registry entry for a canonical id.
+func specFor(id string) (*providerSpec, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	s, ok := providerByID[id]
+	return s, ok
+}
+
+// aliasFor resolves an alias to its canonical id.
+func aliasFor(name string) (string, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	canon, ok := providerAliases[name]
+	return canon, ok
+}
+
 func init() {
-	ProviderByID = make(map[string]*providerSpec, len(providerSpecs))
-	KnownProviders = make([]string, 0, len(providerSpecs))
+	providerByID = make(map[string]*providerSpec, len(providerSpecs))
+	knownProviders = make([]string, 0, len(providerSpecs))
 	providerAliases = map[string]string{}
+	endpointProviders = map[string]bool{}
 	for i := range providerSpecs {
 		spec := &providerSpecs[i]
-		if _, dup := ProviderByID[spec.id]; dup {
+		if _, dup := providerByID[spec.id]; dup {
 			panic(fmt.Sprintf("provider registry: duplicate id %q", spec.id))
 		}
-		ProviderByID[spec.id] = spec
-		KnownProviders = append(KnownProviders, spec.id)
+		providerByID[spec.id] = spec
+		knownProviders = append(knownProviders, spec.id)
 		for _, a := range spec.aliases {
 			if canon, dup := providerAliases[a]; dup {
 				panic(fmt.Sprintf("provider registry: alias %q already maps to %q", a, canon))
 			}
-			if _, clash := ProviderByID[a]; clash {
+			if _, clash := providerByID[a]; clash {
 				panic(fmt.Sprintf("provider registry: alias %q collides with a canonical id", a))
 			}
 			providerAliases[a] = spec.id
@@ -392,14 +435,42 @@ func RegisterEndpointsFromConfig() {
 
 // RegisterEndpoint adds one OpenAI-compatible endpoint as a dynamic provider.
 // The spec is heap-allocated (not appended to providerSpecs) so the pointers
-// init() stored in ProviderByID stay valid. Its credential resolves from the
+// init() stored in providerByID stay valid. Its credential resolves from the
 // endpoint's APIKeyEnv (set as apiKeyEnv) or auth.json — never inline config.
 func RegisterEndpoint(id string, ep config.EndpointConfig) error {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	return registerEndpointLocked(id, ep)
+}
+
+// RegisterOrReplaceEndpoint registers an endpoint, dropping any earlier
+// registration under the same name first.
+//
+// Replacing is what EDITING an endpoint needs. RegisterEndpoint refuses a name
+// already in the registry — correct when the name belongs to something else,
+// wrong when it belongs to the very endpoint being saved, which is what /login
+// does every time an operator corrects a port. It also keeps the id list honest:
+// a second registration must not leave two rows for one backend.
+//
+// The spec captures the base URL for its client closure, so a stale registration
+// is stale in that respect too (Resolve supplies the URL from config on top of
+// it, so this is belt-and-braces rather than the primary reason).
+//
+// A name held by a BUILT-IN provider is still refused — only an endpoint this
+// package registered can be displaced.
+func RegisterOrReplaceEndpoint(id string, ep config.EndpointConfig) error {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	unregisterEndpointLocked(strings.TrimSpace(id))
+	return registerEndpointLocked(id, ep)
+}
+
+func registerEndpointLocked(id string, ep config.EndpointConfig) error {
 	id = strings.TrimSpace(id)
 	if id == "" || strings.TrimSpace(ep.BaseURL) == "" {
 		return fmt.Errorf("needs a name and baseUrl")
 	}
-	if _, exists := ProviderByID[id]; exists {
+	if _, exists := providerByID[id]; exists {
 		return fmt.Errorf("name collides with an existing provider id")
 	}
 	if _, alias := providerAliases[id]; alias {
@@ -418,32 +489,77 @@ func RegisterEndpoint(id string, ep config.EndpointConfig) error {
 			return provider.NewOpenAI(r.Credential, firstNonEmpty(r.BaseURL, baseURL))
 		},
 	}
-	ProviderByID[id] = s
-	KnownProviders = append(KnownProviders, id)
+	providerByID[id] = s
+	knownProviders = append(knownProviders, id)
+	endpointProviders[id] = true
 	return nil
 }
 
-// UnregisterEndpoint removes a dynamically registered endpoint provider.
-// Production never needs it — endpoints register once at startup and live for
-// the process — it exists so tests that register endpoints can restore the
-// global registry (-count>1 reruns a test in the same process, where a
-// leftover registration collides with itself).
+// UnregisterEndpoint removes a dynamically registered endpoint provider: the
+// operator deleted it (AuthEndpointRemove), or a test is restoring the global
+// registry (-count>1 reruns a test in the same process, where a leftover
+// registration collides with itself).
+//
+// A built-in provider is never removed, whatever id is passed. The registry
+// holds both in the same map, so without endpointProviders a caller could
+// unregister "anthropic" and leave the process unable to resolve it.
 func UnregisterEndpoint(id string) {
-	if _, ok := ProviderByID[id]; !ok {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	unregisterEndpointLocked(id)
+}
+
+func unregisterEndpointLocked(id string) {
+	if !endpointProviders[id] {
 		return
 	}
-	delete(ProviderByID, id)
-	for i, k := range KnownProviders {
+	delete(endpointProviders, id)
+	delete(providerByID, id)
+	for i, k := range knownProviders {
 		if k == id {
-			KnownProviders = append(KnownProviders[:i], KnownProviders[i+1:]...)
+			knownProviders = append(knownProviders[:i], knownProviders[i+1:]...)
 			break
 		}
 	}
 }
 
-// isEndpointProvider reports whether id is a user-defined endpoint (vs a
-// built-in provider). Used by Resolve to give it openai-compatible treatment.
-func isEndpointProvider(id string, cfg config.Config) bool {
+// endpointCredential resolves a named endpoint's auth: the key stored under its
+// own id when the server wants one, and the harmless sentinel bearer when it
+// does not — which is the common case, since most local servers ignore the
+// header entirely. Never an error: an endpoint is defined by its address, not by
+// a credential, so "keyless" is a configuration and not a failure.
+func endpointCredential(id, argsKey string) (cred, method string) {
+	storedKey, _, _, _ := ResolveCredentialFull(id, argsKey)
+	return firstNonEmpty(storedKey, "openai-compatible"), "apikey"
+}
+
+// EndpointDefaultModel picks a default model id for a named endpoint from the
+// active catalog, or "" when discovery has not found it any.
+//
+// An endpoint has no baked-in default and the login form does not ask for one:
+// the models it serves are whatever its /v1/models list said, so the default has
+// to come from there. First in catalog order, which for a discovered endpoint is
+// the order the server itself listed — the single-model servers this mostly
+// serves (llama.cpp, vLLM) have exactly one, and on a server with several the
+// operator picks in /model anyway.
+func EndpointDefaultModel(id string) string {
+	for _, m := range provider.ModelsForProvider(id) {
+		if strings.TrimSpace(m.ID) != "" {
+			return m.ID
+		}
+	}
+	return ""
+}
+
+// IsEndpointProvider reports whether id is a user-defined endpoint (vs a
+// built-in provider), according to cfg. Resolve uses it to give the id
+// openai-compatible treatment: an open catalogue and an optional credential.
+//
+// It asks the CONFIG, not the registry, because the two answer different
+// questions: the registry says "can this process build a client for it", and
+// config.json says "is this the operator's own server". Startup registration
+// can have skipped a malformed entry, and the answer here must still be yes.
+func IsEndpointProvider(id string, cfg config.Config) bool {
 	_, ok := cfg.Endpoints[id]
 	return ok
 }
@@ -467,7 +583,7 @@ func EndpointNameFor(rawURL string, used map[string]bool) string {
 	if name == "" {
 		name = "endpoint"
 	}
-	if _, builtIn := ProviderByID[name]; builtIn {
+	if _, builtIn := specFor(name); builtIn {
 		name += "-ep" // never propose a name that collides with a built-in provider
 	}
 	base := name

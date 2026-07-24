@@ -268,7 +268,7 @@ func runModelsTiers(all bool) error {
 	// Which providers to show: logged-in (default) or every known provider.
 	// "Logged in" = a resolvable credential, plus ollama (needs no auth).
 	show := map[string]bool{}
-	for _, p := range build.KnownProviders {
+	for _, p := range build.ProviderIDs() {
 		if all {
 			show[p] = true
 			continue
@@ -286,7 +286,7 @@ func runModelsTiers(all bool) error {
 	// Stable order: knownProviders first (registry order), then extras sorted.
 	var order []string
 	seen := map[string]bool{}
-	for _, p := range build.KnownProviders {
+	for _, p := range build.ProviderIDs() {
 		if show[p] {
 			order = append(order, p)
 			seen[p] = true

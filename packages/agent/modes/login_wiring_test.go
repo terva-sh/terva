@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/tui"
 )
 
 // authCarrier is a fake carrier that serves the auth group, standing in for the
@@ -15,6 +16,9 @@ import (
 type authCarrier struct {
 	*fakeCarrier
 	step ctrlproto.AuthFlowStep
+	// view is what AuthProviders answers: who is logged in, and which rows are
+	// the operator's own endpoints.
+	view ctrlproto.ProvidersView
 
 	// Guarded: a submit is dispatched on its own goroutine (it talks to a provider
 	// over the network in production), so the recording races the assertion.
@@ -73,6 +77,16 @@ func (a *authCarrier) AuthEndpointRemove(_ context.Context, p ctrlproto.AuthEndp
 	a.endpointsRemoved = append(a.endpointsRemoved, p.ID)
 	a.mu.Unlock()
 	return nil
+}
+
+func (a *authCarrier) removedEndpoints() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.endpointsRemoved...)
+}
+
+func (a *authCarrier) AuthProviders(_ context.Context) (ctrlproto.ProvidersView, error) {
+	return a.view, nil
 }
 
 func newAuthCarrier(step ctrlproto.AuthFlowStep) *authCarrier {
@@ -198,5 +212,56 @@ func TestACarrierWithoutTheAuthGroupOffersNoLogin(t *testing.T) {
 	}
 	if h.i.authController() != nil {
 		t.Error("authController is non-nil on a carrier that does not serve the group")
+	}
+}
+
+// /logout is the only place an operator can get rid of a named endpoint, so it
+// has to LIST them — and list them even when they carry no credential, which is
+// the normal case: most local servers want no key, and gating these rows on a
+// stored method hides exactly the endpoints a keyless LM Studio or llama.cpp
+// produces. terva could create endpoints and never delete one.
+func TestLogoutPickerOffersEndpointRemoval(t *testing.T) {
+	fc := newAuthCarrier(ctrlproto.AuthFlowStep{})
+	fc.view = ctrlproto.ProvidersView{
+		CanLogin: true,
+		Providers: []ctrlproto.ProviderInfo{
+			{ID: "anthropic", Label: "Anthropic", Method: "apikey"},
+			// Keyless, exactly as a local server leaves it.
+			{ID: "workshop-3090", Label: "workshop-3090", Endpoint: true},
+		},
+	}
+	h := startInteractive(t, func(cfg *InteractiveConfig) {
+		cfg.Ready = true
+		cfg.Carrier = fc
+		cfg.CarrierSession = "s1"
+	})
+	i := h.i
+
+	onMain(t, i, func() { i.openLogoutDialog() })
+	if !i.logoutDialog.Active() {
+		t.Fatal("the picker did not open; with an endpoint present there is something to show")
+	}
+
+	// Row 0 is the credential, row 1 the endpoint. Drive to it and pick it.
+	onMain(t, i, func() {
+		act := i.logoutDialog.HandleKey(tui.Key{Kind: tui.KeyDown})
+		_ = act
+		act = i.logoutDialog.HandleKey(tui.Key{Kind: tui.KeyEnter})
+		if !act.Select {
+			t.Error("enter did not resolve the picker")
+		}
+		if !act.Endpoint {
+			t.Fatal("the endpoint row resolved as a logout; it would clear a key it does not have and leave the endpoint configured")
+		}
+		i.doRemoveEndpoint(act.Target)
+	})
+
+	if got := fc.removedEndpoints(); len(got) != 1 || got[0] != "workshop-3090" {
+		t.Fatalf("endpoints removed = %v, want [workshop-3090]", got)
+	}
+	// Removing an endpoint is not a logout: the credential verb must stay untouched,
+	// or "remove this machine" would also sign the operator out of a provider.
+	if out := fc.loggedOut(); len(out) != 0 {
+		t.Errorf("logouts = %v, want none: removing an endpoint is a different verb", out)
 	}
 }

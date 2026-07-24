@@ -248,6 +248,10 @@ func Run(rawArgs []string, version string) error {
 	// (which RegisterExtraModel writes with a generic 8192 max-output).
 	LoadCachedModels()
 	LoadCompatModel()
+	// Endpoints the cache does not cover yet — the first launch after /login
+	// created one. Everything below this line, Resolve included, then sees the
+	// models the operator's own server actually serves instead of nothing.
+	EnsureEndpointModels()
 	LoadUserModels()
 
 	// Repair config.json so a stale (provider, model) pair from an

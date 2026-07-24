@@ -18,7 +18,7 @@ import (
 // provider the user is signed out of, when in fact it is the one backend they
 // are certain to be able to reach.
 //
-// It lives here, in the package that owns KnownProviders and ResolveCredential,
+// It lives here, in the package that owns the provider registry and ResolveCredential,
 // because it used to live in three places at once — the TUI's picker, the web
 // daemon's, and ACP's. Each copy's doc comment claimed to mirror the next. When
 // named endpoints arrived, only the TUI's copy learned about them, so the web
@@ -35,7 +35,7 @@ func LoggedInProviders() []string {
 		seen[p] = true
 	}
 
-	for _, p := range KnownProviders {
+	for _, p := range ProviderIDs() {
 		if _, _, err := ResolveCredential(p, ""); err == nil {
 			add(p)
 		}
@@ -90,7 +90,7 @@ func LoggedInProviderSet() map[string]bool {
 // and the caller should render nothing rather than invent a label.
 func LoggedInProviderAuth() map[string]string {
 	out := map[string]string{}
-	for _, p := range KnownProviders {
+	for _, p := range ProviderIDs() {
 		if _, method, err := ResolveCredential(p, ""); err == nil && method != "" {
 			out[p] = method
 		}
