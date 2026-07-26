@@ -488,87 +488,103 @@ export function CardEditor(props: {
           )}
           {doctorNote && <p class="stage-doctor__note">{doctorNote}</p>}
           {proposals && proposals.length === 0 && !doctorNote && <p class="stage-doctor__note">{t('No changes suggested — the card looks good.')}</p>}
-          {proposals && proposals.length > 0 && (
+          {proposals && (
             <>
-              <ul class="stage-doctor__list">
-                {proposals.map((p) => (
-                  <li key={p.id} class="stage-doctor__item">
-                    <div class="stage-doctor__meta">
-                      <span class={`stage-doctor__sev stage-doctor__sev--${p.severity}`}>{sevLabel(p.severity)}</span>
-                      <span class="stage-doctor__field">{tr(fieldLabel(p.field))}</span>
-                    </div>
-                    {p.rationale && <p class="stage-doctor__why">{p.rationale}</p>}
-                    <div class="stage-doctor__diff">
-                      <div class="stage-doctor__before">
-                        <span class="stage-doctor__difflabel">{t('Now')}</span>
-                        <p>{p.before?.trim() || t('(empty)')}</p>
+              {proposals.length > 0 && (
+                <ul class="stage-doctor__list">
+                  {proposals.map((p) => (
+                    <li key={p.id} class="stage-doctor__item">
+                      <div class="stage-doctor__meta">
+                        <span class={`stage-doctor__sev stage-doctor__sev--${p.severity}`}>{sevLabel(p.severity)}</span>
+                        <span class="stage-doctor__field">{tr(fieldLabel(p.field))}</span>
                       </div>
-                      {/* A removal's `after` is empty by design, so render what
-                          it MEANS — an empty box below "Proposed" reads as a
-                          broken suggestion rather than a deletion. */}
-                      <div class={`stage-doctor__after ${p.remove ? 'stage-doctor__after--remove' : ''}`}>
-                        <span class="stage-doctor__difflabel">{p.remove ? t('Proposed — remove') : t('Proposed')}</span>
-                        <p>{p.remove ? t('(this field is cleared)') : p.after}</p>
+                      {p.rationale && <p class="stage-doctor__why">{p.rationale}</p>}
+                      <div class="stage-doctor__diff">
+                        <div class="stage-doctor__before">
+                          <span class="stage-doctor__difflabel">{t('Now')}</span>
+                          <p>{p.before?.trim() || t('(empty)')}</p>
+                        </div>
+                        {/* A removal's `after` is empty by design, so render what
+                            it MEANS — an empty box below "Proposed" reads as a
+                            broken suggestion rather than a deletion. */}
+                        <div class={`stage-doctor__after ${p.remove ? 'stage-doctor__after--remove' : ''}`}>
+                          <span class="stage-doctor__difflabel">{p.remove ? t('Proposed — remove') : t('Proposed')}</span>
+                          <p>{p.remove ? t('(this field is cleared)') : p.after}</p>
+                        </div>
                       </div>
-                    </div>
-                    {applied[p.id] ? (
-                      <div class="stage-doctor__verdict stage-doctor__verdict--applied">{t('Applied ✓ — save to keep')}</div>
-                    ) : declined[p.id] !== undefined ? (
-                      <div class="stage-doctor__verdict stage-doctor__verdict--declined">
-                        <span>{t('Declined')}{declined[p.id] ? `: ${declined[p.id]}` : ''}</span>
-                        <button class="stage-doctor__link" onClick={() => applyProposal(p)}>
-                          {t('apply instead')}
-                        </button>
-                      </div>
-                    ) : decliningId === p.id ? (
-                      <div class="stage-doctor__decline">
-                        <textarea
-                          class="stage-editfield__area stage-doctor__reason"
-                          rows={2}
-                          placeholder={t('Why? (e.g. keep the backstory) — the doctor weighs this next pass')}
-                          value={reasonDraft}
-                          onInput={(e) => setReasonDraft((e.target as HTMLTextAreaElement).value)}
-                        />
-                        <div class="stage-doctor__declineactions">
+                      {applied[p.id] ? (
+                        <div class="stage-doctor__verdict stage-doctor__verdict--applied">{t('Applied ✓ — save to keep')}</div>
+                      ) : declined[p.id] !== undefined ? (
+                        <div class="stage-doctor__verdict stage-doctor__verdict--declined">
+                          <span>{t('Declined')}{declined[p.id] ? `: ${declined[p.id]}` : ''}</span>
+                          <button class="stage-doctor__link" onClick={() => applyProposal(p)}>
+                            {t('apply instead')}
+                          </button>
+                        </div>
+                      ) : decliningId === p.id ? (
+                        <div class="stage-doctor__decline">
+                          <textarea
+                            class="stage-editfield__area stage-doctor__reason"
+                            rows={2}
+                            placeholder={t('Why? (e.g. keep the backstory) — the doctor weighs this next pass')}
+                            value={reasonDraft}
+                            onInput={(e) => setReasonDraft((e.target as HTMLTextAreaElement).value)}
+                          />
+                          <div class="stage-doctor__declineactions">
+                            <button
+                              class="stage-doctor__link"
+                              onClick={() => {
+                                setDecliningId(null)
+                                setReasonDraft('')
+                              }}
+                            >
+                              {t('cancel')}
+                            </button>
+                            <button class="stage-doctor__apply" onClick={() => confirmDecline(p.id)}>
+                              {t('Confirm decline')}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div class="stage-doctor__actions">
+                          <button class="stage-doctor__apply" onClick={() => applyProposal(p)}>
+                            {t('Apply')}
+                          </button>
                           <button
-                            class="stage-doctor__link"
+                            class="stage-doctor__declinebtn"
                             onClick={() => {
-                              setDecliningId(null)
+                              setDecliningId(p.id)
                               setReasonDraft('')
                             }}
                           >
-                            {t('cancel')}
-                          </button>
-                          <button class="stage-doctor__apply" onClick={() => confirmDecline(p.id)}>
-                            {t('Confirm decline')}
+                            {t('Decline')}
                           </button>
                         </div>
-                      </div>
-                    ) : (
-                      <div class="stage-doctor__actions">
-                        <button class="stage-doctor__apply" onClick={() => applyProposal(p)}>
-                          {t('Apply')}
-                        </button>
-                        <button
-                          class="stage-doctor__declinebtn"
-                          onClick={() => {
-                            setDecliningId(p.id)
-                            setReasonDraft('')
-                          }}
-                        >
-                          {t('Decline')}
-                        </button>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* ⚠️ The footer is OUTSIDE the length check on purpose.
+                  A pass that suggests nothing ("the card looks good") used to
+                  leave no way to run another: the head's "Ask the doctor" is
+                  gone once `proposals` is set, and this button used to live
+                  inside `length > 0`. The steer box and the model picker stayed
+                  right there, editable, with nothing to act on them — the only
+                  way to a second opinion was to leave the editor and come back.
+                  A terminal verdict is a resting point, not a dead end. */}
               <div class="stage-doctor__footer">
                 {proposals.some((p) => !applied[p.id] && declined[p.id] === undefined) && (
                   <button class="stage-doctor__link" onClick={applyAll}>
                     {t('Apply all')}
                   </button>
                 )}
+                {/* Saving first is not ceremony when there is nothing staged:
+                    the doctor reads the STORED card, so a hand-edit made after
+                    the verdict has to land before it can be read — otherwise a
+                    second pass re-reads the same card and reaches the same dead
+                    end, which is this bug wearing a different hat. An unchanged
+                    save writes no revision (CardStore.Edit dedupes). */}
                 <button class="stage-doctor__revise" disabled={doctorRunning || saving} onClick={() => void reviseDoctor()}>
                   {doctorRunning ? t('Consulting…') : t('Save & ask again')}
                 </button>
