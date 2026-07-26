@@ -11,6 +11,17 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.13](https://github.com/terva-sh/terva/releases/tag/v0.126.13) — 2026-07-26
+
+### Features
+
+- provider: optionally keep the model's reasoning in the session record
+
+### Fixes
+
+- core: a stuck loop that crosses a turn boundary keeps its place
+- tui: keep settings rows inside the dialog frame
+
 ## [v0.126.12](https://github.com/terva-sh/terva/releases/tag/v0.126.12) — 2026-07-25
 
 ### Features
