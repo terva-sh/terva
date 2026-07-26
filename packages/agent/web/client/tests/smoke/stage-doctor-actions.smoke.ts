@@ -80,7 +80,7 @@ test('stage: keep-as-lore and promote-to-cast run narrowed doctor asks', async (
   )
 
   // SD2 — mark the user's message as lore: focused run, accept, world.lore.put.
-  await page.locator('.stage-row--user .stage-bubble').click()
+  await page.locator('.stage-row--user .stage-msgedit').click()
   await page.locator('.stage-edit__lore').click()
   const sheet = page.locator('.stage-doctor-sheet')
   await expect(sheet).toBeVisible()
@@ -95,7 +95,7 @@ test('stage: keep-as-lore and promote-to-cast run narrowed doctor asks', async (
   // SD3 — promote the walk-on: the directed line's actions carry the button,
   // the run is narrowed to the actor, the prefilled seed applies as
   // cards.import + cast.add.
-  await page.locator('.stage-row--directed .stage-bubble').click()
+  await page.locator('.stage-row--directed .stage-msgedit').click()
   await expect(page.locator('.stage-edit__promote')).toBeVisible()
   await page.locator('.stage-edit__promote').click()
   await expect(sheet).toBeVisible()

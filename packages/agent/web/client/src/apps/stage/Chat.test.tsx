@@ -104,8 +104,10 @@ describe('Chat delete affordance', () => {
     return client
   }
 
+  // Editing is behind the row's ✎ now; clicking the message is for reading it.
   function openEditor(text: string) {
-    fireEvent.click(screen.getByText(text))
+    const row = screen.getByText(text).closest('.stage-row') as HTMLElement
+    fireEvent.click(row.querySelector('.stage-msgedit') as HTMLElement)
     return screen.getByTitle('Delete this message')
   }
 
@@ -262,6 +264,86 @@ describe('Chat regenerate controls', () => {
   })
 })
 
+// Editing a message lives behind ✎, not behind clicking the message.
+//
+// The bubble used to open the editor on any click, so wanting to copy a line
+// meant the message turned into a textarea under your hands. This is the CI-
+// gated half of that change; the smoke suite (stage-message-edit) covers what
+// only a real browser can — that a selection drag survives.
+describe('Chat message editing', () => {
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function mountWithScene() {
+    vi.useFakeTimers()
+    const client = fakeClient()
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} onOpenStudio={() => {}} />)
+    act(() => {
+      client.emit('s1', {
+        type: 'snapshot',
+        snapshot: {
+          epoch: 7,
+          base: 0,
+          total: 3,
+          busy: false,
+          messages: [
+            { role: 'user', content: [{ type: 'text', text: 'i step inside' }] },
+            { role: 'assistant', content: [{ type: 'text', text: 'the door shuts' }] },
+            { role: 'assistant', content: [{ type: 'text', text: 'she looks up' }] },
+          ],
+        },
+      } as unknown as WireEvent)
+      vi.advanceTimersByTime(64)
+    })
+    return client
+  }
+
+  const editors = () => document.querySelectorAll('.stage-edit textarea')
+
+  it('does not open the editor when the message itself is clicked', () => {
+    mountWithScene()
+    fireEvent.click(screen.getByText('the door shuts'))
+    expect(editors()).toHaveLength(0)
+  })
+
+  it('opens the editor from ✎', () => {
+    mountWithScene()
+    fireEvent.click(document.querySelectorAll('.stage-msgedit')[1] as HTMLElement)
+    expect(editors()).toHaveLength(1)
+    expect((editors()[0] as HTMLTextAreaElement).value).toBe('the door shuts')
+  })
+
+  it('offers ✎ on every message, not only the last', () => {
+    // The generation controls (↻, ↻✎, ⤸) belong to the last reply alone, which
+    // is why the bar could not simply be reused as-is: editing has to reach a
+    // message anywhere in the scene, including your own.
+    mountWithScene()
+    expect(document.querySelectorAll('.stage-msgedit')).toHaveLength(3)
+    expect(document.querySelectorAll('.stage-row--user .stage-msgedit')).toHaveLength(1)
+    expect(screen.getAllByTitle('Regenerate')).toHaveLength(1)
+  })
+
+  it('drops the row\'s ✎ while that row is being edited', () => {
+    // Its own bar would sit under the open edit box offering to open it again.
+    //
+    // BOTH row kinds are checked because each renders its own bar with its own
+    // guard: a version of this test that only edited the user row let a mutation
+    // through that dropped the assistant row's `!editing` entirely.
+    mountWithScene()
+    const pencils = () => document.querySelectorAll('.stage-msgedit')
+
+    fireEvent.click(pencils()[0] as HTMLElement) // your own message
+    expect(pencils()).toHaveLength(2)
+    fireEvent.click(screen.getByText('Cancel'))
+
+    fireEvent.click(pencils()[1] as HTMLElement) // a reply, mid-scene
+    expect(pencils()).toHaveLength(2)
+  })
+})
+
 // A refused action has to report where the user is looking. The transcript pins
 // itself to the bottom, so an error rendered INSIDE it — as this one was, as the
 // first child — scrolls out of view the instant a scene gets long. The daemon's
@@ -376,7 +458,11 @@ describe('Chat transcript fidelity', () => {
   // surface. The click handler used to be private to the panel's timeline, so
   // in Stage the button was decoration: it copied nothing, and because it sits
   // inside the bubble, clicking it opened the inline editor instead.
-  it('copies a code block, and does not open the editor doing it', async () => {
+  //
+  // The second half of that is no longer possible — the bubble opens nothing on
+  // any click (see "Chat message editing") — so this asserts the copy alone
+  // rather than keeping a guard that cannot fail.
+  it('copies a code block', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     mountWith([{ role: 'assistant', content: [{ type: 'text', text: '```\nls -la\n```' }] }])
@@ -388,16 +474,6 @@ describe('Chat transcript fidelity', () => {
     })
 
     expect(writeText).toHaveBeenCalledWith('ls -la\n')
-    // The bubble's tap-to-edit must not have fired underneath the copy.
-    expect(document.querySelector('.stage-edit')).toBeNull()
-  })
-
-  // A tap anywhere else in the bubble still edits — the copy guard must not have
-  // swallowed the row's own affordance.
-  it('still opens the editor on a tap that is not the copy button', () => {
-    mountWith([{ role: 'assistant', content: [{ type: 'text', text: 'the door shuts' }] }])
-    fireEvent.click(screen.getByText('the door shuts'))
-    expect(document.querySelector('.stage-edit')).not.toBeNull()
   })
 })
 

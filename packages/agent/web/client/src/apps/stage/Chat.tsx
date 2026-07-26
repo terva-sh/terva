@@ -351,6 +351,7 @@ export function Chat(props: {
             item={it}
             character={character}
             editing={editing != null && editing.idx === it.idx}
+            canEdit={it.idx != null && 'text' in it && !('streaming' in it && it.streaming)}
             editText={editing?.text ?? ''}
             onEditText={(t) => setEditing((e) => (e ? { ...e, text: t } : e))}
             onStartEdit={() => it.idx != null && 'text' in it && setEditing({ idx: it.idx, text: it.text })}
@@ -657,6 +658,10 @@ function ChatRow(props: {
   item: Item
   character: Character | null
   editing: boolean
+  // Whether this row has an editable message behind it. A streaming reply does
+  // not, and neither does a row the transcript has no index for — offering ✎
+  // there would be a button that answers with nothing.
+  canEdit: boolean
   editText: string
   onEditText: (t: string) => void
   onStartEdit: () => void
@@ -686,7 +691,7 @@ function ChatRow(props: {
   onCancelGuide: () => void
   onContinue: () => void
 }) {
-  const { item, character, editing, isLast, tail, mark, busy } = props
+  const { item, character, editing, canEdit, isLast, tail, mark, busy } = props
 
   // The edit box grows with its content up to a CSS cap (like the composer),
   // keyed on editText so it fits the whole message the instant editing opens —
@@ -694,13 +699,15 @@ function ChatRow(props: {
   // on every non-editing row, so the per-row hook is a no-op until this one edits.
   const editRef = useAutoGrow(props.editText)
 
-  // A bubble is both "copy this code block" and "tap to edit this message", and
-  // the copy button sits INSIDE the bubble — so a bare delegated listener on an
-  // ancestor would fire after the bubble had already opened the editor. Try the
-  // copy first and only fall through to editing when the click was not on one.
+  // A bubble is for READING: select a line, drag out a quotation, copy a code
+  // block. It used to open the editor on any click, so wanting a few words meant
+  // the message turned into a textarea under your hands and you backed out of it
+  // — every single time. Editing is a button now (✎, in the row's control bar).
+  //
+  // What remains is the code-block copy, whose button sits INSIDE the bubble and
+  // therefore needs this delegated listener rather than one on an ancestor.
   const onBubbleClick = (event: MouseEvent) => {
-    if (handleCodeCopyClick(event)) return
-    props.onStartEdit()
+    handleCodeCopyClick(event)
   }
 
   const editBox = (
@@ -732,6 +739,15 @@ function ChatRow(props: {
       {props.branchNote && <p class="stage-edit__note">{props.branchNote}</p>}
     </div>
   )
+
+  // ✎ lives at the LEFT of every control bar, the one position it can occupy on
+  // every row — most rows have nothing else in the bar, and on the last reply it
+  // stays clear of ↻✎, which is a different verb wearing a similar glyph.
+  const editBtn = canEdit ? (
+    <button class="stage-msgedit" title={t('Edit this message')} onClick={props.onStartEdit}>
+      ✎
+    </button>
+  ) : null
 
   // Message-scoped swipe (Option C): an edited message keeps its alternatives, so
   // its own row carries a `‹n/m›` control — independent of the tail's, which never
@@ -783,31 +799,40 @@ function ChatRow(props: {
             )}
             {item.streaming && <span class="stage-caret" aria-hidden="true">▋</span>}
             {msgSwipe}
-            {isLast && !editing && (
+            {/* The bar is no longer the last reply's alone: ✎ has to reach every
+                message, so the row that carries one carries a bar. On the last
+                reply it also holds the generation controls, which is where they
+                have always been. */}
+            {!editing && (canEdit || isLast) && (
               <div class="stage-controls">
-                {tail && tail.variants > 1 && (
-                  <div class="stage-swipe">
-                    <button disabled={busy || tail.active <= 0} onClick={() => props.onSwipe(tail.active - 1)}>◀</button>
-                    <span>{tail.active + 1}/{tail.variants}</span>
-                    <button disabled={busy || tail.active >= tail.variants - 1} onClick={() => props.onSwipe(tail.active + 1)}>▶</button>
-                  </div>
+                {editBtn}
+                {isLast && (
+                  <>
+                    {tail && tail.variants > 1 && (
+                      <div class="stage-swipe">
+                        <button disabled={busy || tail.active <= 0} onClick={() => props.onSwipe(tail.active - 1)}>◀</button>
+                        <span>{tail.active + 1}/{tail.variants}</span>
+                        <button disabled={busy || tail.active >= tail.variants - 1} onClick={() => props.onSwipe(tail.active + 1)}>▶</button>
+                      </div>
+                    )}
+                    <button class="stage-regen" disabled={busy} title={t('Regenerate')} onClick={props.onRetry}>↻</button>
+                    {/* The guided twin sits beside the plain one rather than replacing
+                        it: "just roll again" is the common case and stays one click,
+                        while "roll again, but shorter" gets a box to say so in. */}
+                    <button
+                      class="stage-regen stage-regen--guided"
+                      disabled={busy}
+                      title={t('Regenerate with guidance')}
+                      onClick={props.onOpenGuide}
+                    >↻✎</button>
+                    <button
+                      class="stage-continue"
+                      disabled={busy || !props.canContinue}
+                      title={props.canContinue ? t('Continue') : t("Continue isn't available for this model — assistant-prefill continue is Anthropic-only")}
+                      onClick={() => props.canContinue && props.onContinue()}
+                    >⤸</button>
+                  </>
                 )}
-                <button class="stage-regen" disabled={busy} title={t('Regenerate')} onClick={props.onRetry}>↻</button>
-                {/* The guided twin sits beside the plain one rather than replacing
-                    it: "just roll again" is the common case and stays one click,
-                    while "roll again, but shorter" gets a box to say so in. */}
-                <button
-                  class="stage-regen stage-regen--guided"
-                  disabled={busy}
-                  title={t('Regenerate with guidance')}
-                  onClick={props.onOpenGuide}
-                >↻✎</button>
-                <button
-                  class="stage-continue"
-                  disabled={busy || !props.canContinue}
-                  title={props.canContinue ? t('Continue') : t("Continue isn't available for this model — assistant-prefill continue is Anthropic-only")}
-                  onClick={() => props.canContinue && props.onContinue()}
-                >⤸</button>
               </div>
             )}
             {isLast && !editing && props.guiding && (
@@ -866,6 +891,8 @@ function ChatRow(props: {
               </>
             )}
             {msgSwipe}
+            {/* Your own messages had no bar at all — the bubble WAS the button. */}
+            {!editing && canEdit && <div class="stage-controls">{editBtn}</div>}
           </div>
         </div>
       )

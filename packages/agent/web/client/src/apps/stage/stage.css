@@ -499,6 +499,111 @@ button:disabled {
   cursor: default;
 }
 
+/* --- bulk edit (selection mode over the character grid) --- */
+
+.stage-bulkbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--stage-surface);
+  border: 1px solid var(--stage-accent);
+  border-radius: 10px;
+}
+.stage-bulkbar__count {
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-right: 0.2rem;
+}
+.stage-bulkbar__pick,
+.stage-bulkbar__act {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  background: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 999px;
+  color: var(--stage-fg);
+}
+.stage-bulkbar__pick:hover,
+.stage-bulkbar__act:hover {
+  border-color: var(--stage-accent);
+}
+/* The group chips push to their own end of the bar so the destructive-looking
+   "remove" state never sits next to the neutral select controls. */
+.stage-bulkbar__groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+.stage-bulkbar__group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  background: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 999px;
+  color: var(--stage-fg);
+}
+.stage-bulkbar__group:hover {
+  border-color: var(--stage-accent);
+}
+.stage-bulkbar__group.is-all {
+  border-color: var(--stage-accent);
+  background: color-mix(in srgb, var(--stage-accent) 16%, transparent);
+}
+.stage-bulkbar__group.is-some {
+  border-style: dashed;
+  border-color: var(--stage-accent);
+}
+.stage-bulkbar__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.stage-bulkbar__mark {
+  color: var(--stage-muted);
+  font-weight: 600;
+}
+
+/* While picking, the star and the ⋯ would be two more things to hit by
+   accident on a tile whose whole job is now to be picked. */
+.stage-grid.is-selecting .stage-card__fav,
+.stage-grid.is-selecting .stage-card__more {
+  display: none;
+}
+.stage-card__pick {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.4rem;
+  width: 1.15rem;
+  height: 1.15rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  line-height: 1;
+  /* --stage-line is right for a card's own edge but disappears against one at
+     this size: an empty box has nothing else to read as a checkbox. */
+  border: 1px solid var(--stage-muted);
+  border-radius: 5px;
+  background: var(--stage-bg);
+  z-index: 1;
+}
+.stage-grid__cell.is-picked .stage-card {
+  border-color: var(--stage-accent);
+  background: color-mix(in srgb, var(--stage-accent) 14%, var(--stage-surface));
+}
+.stage-grid__cell.is-picked .stage-card__pick {
+  border-color: var(--stage-accent);
+  color: var(--stage-accent);
+}
+
 .stage-grid {
   list-style: none;
   margin: 0;
@@ -830,6 +935,17 @@ button:disabled {
   margin-left: auto;
 }
 
+.stage-personashelf + .stage-personashelf {
+  margin-top: 0.7rem;
+}
+.stage-personashelf__name {
+  margin-bottom: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--stage-muted);
+}
 .stage-personas {
   list-style: none;
   margin: 0;
@@ -2332,7 +2448,8 @@ button:disabled {
 }
 .stage-swipe button,
 .stage-regen,
-.stage-continue {
+.stage-continue,
+.stage-msgedit {
   border: none;
   background: none;
   color: var(--stage-muted);
@@ -2340,8 +2457,27 @@ button:disabled {
 }
 .stage-swipe button:hover:not(:disabled),
 .stage-regen:hover:not(:disabled),
-.stage-continue:hover:not(:disabled) {
+.stage-continue:hover:not(:disabled),
+.stage-msgedit:hover:not(:disabled) {
   color: var(--stage-accent);
+}
+/* ✎ rides under EVERY message, not just the last, so it is quieter than the
+   generation controls it sits beside — a scene is read far more often than it is
+   edited, and a column of full-strength pencils down the transcript is a wall of
+   invitations to do something you rarely want. It comes up to full opacity on
+   hover, and on keyboard focus, which is the only way a tap-only device would
+   otherwise never see it at rest. */
+.stage-msgedit {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+.stage-msgedit:hover,
+.stage-msgedit:focus-visible {
+  opacity: 1;
+}
+/* Your own messages hang on the right, and so should their controls. */
+.stage-row--user .stage-controls {
+  justify-content: flex-end;
 }
 
 /* The guided-regenerate box, opened by ↻✎ under the last response. Sized and
@@ -3344,10 +3480,11 @@ button:disabled {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-/* The quote is for reading and copying, never for typing into: the bubble's own
-   cursor:text invites a click that does nothing here. */
+/* The quote is for reading and copying. It used to override the bubble's
+   cursor:text as well, because in the scene that cursor invited a click that
+   opened the editor — and there is nothing here to edit. Editing is a button
+   now, so cursor:text means what it says on both surfaces: selectable text. */
 .stage-suggest__quote-body .stage-bubble {
-  cursor: auto;
   user-select: text;
   -webkit-user-select: text;
 }

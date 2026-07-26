@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
 
 // Message-scoped variants (Option C): editing an OLDER message (not the last
 // response) keeps its alternatives, so a `‹n/m›` swipe control appears on THAT
@@ -61,7 +61,7 @@ test('stage: an edited older message gets its own swipe control', async ({ page 
   await expect(page.locator('.stage-swipe--msg')).toHaveCount(0)
 
   // Edit the OLDER assistant message (index 1).
-  await page.locator('.stage-bubble', { hasText: 'the first reply' }).click()
+  await editButtonFor(page, 'the first reply').click()
   await page.locator('.stage-edit textarea').fill('the first reply, revised')
   await page.locator('.stage-edit button', { hasText: 'Save' }).click()
   await expect.poll(() => edited).toEqual({ epoch: 1, index: 1, text: 'the first reply, revised' })

@@ -47,7 +47,7 @@ test('stage: a loaded chat lands at the bottom', async ({ page }) => {
 test('stage: the edit box spans the pane, clear of the scrollbar', async ({ page }) => {
   await openChat(page)
   const paneWidth = (await page.locator('.stage-transcript').boundingBox())!.width
-  await page.locator('.stage-bubble').last().click()
+  await page.locator('.stage-msgedit').last().click()
   const box = page.locator('.stage-edit textarea')
   await expect(box).toBeVisible()
   const editWidth = (await box.boundingBox())!.width

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
 
 // Variant cleanup (§9): a message with alternatives can be tidied — ✕ on its swipe
 // control drops the current take (variants.drop), and "Keep only this" in the edit
@@ -63,8 +63,8 @@ test('stage: drop a take and prune a message variant', async ({ page }) => {
   mock.pushEvent(snapshot({ epoch: 1, reply: 'take two', mark: { index: 1, variants: 2, active: 1 } }), SMOKE_SESSION)
   await expect(page.locator('.stage-swipe--msg span')).toHaveText('2/2')
 
-  // Tapping the message shows "Keep only this"; clicking prunes to the active take.
-  await page.locator('.stage-bubble', { hasText: 'take two' }).click()
+  // Editing the message shows "Keep only this"; clicking prunes to the active take.
+  await editButtonFor(page, 'take two').click()
   await page.locator('.stage-edit__prune').click()
   await expect.poll(() => pruned).toEqual({ epoch: 1, index: 1 })
   if (process.env.PRUNE_SHOT) await page.screenshot({ path: `${process.env.PRUNE_SHOT}.png`, fullPage: true })

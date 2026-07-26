@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
 
 // Fork-from-here (§8): editing a message with a long downstream offers "Branch
 // here" — a new session that shares the transcript through that message and
@@ -57,7 +57,7 @@ test('stage: a deep edit offers Branch here, which forks and navigates', async (
   await expect(page.locator('.stage-bubble', { hasText: 'the first reply' })).toBeVisible()
 
   // Editing that deep message surfaces the branch note and the Branch action.
-  await page.locator('.stage-bubble', { hasText: 'the first reply' }).click()
+  await editButtonFor(page, 'the first reply').click()
   await expect(page.locator('.stage-edit__note')).toContainText('Branch starts a new thread')
   if (process.env.FORK_SHOT) await page.screenshot({ path: `${process.env.FORK_SHOT}.png`, fullPage: true })
   await page.locator('.stage-edit__branch').click()

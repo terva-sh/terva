@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
 
 // Edit-as-variant (inline-editing MVP): editing the last response is
 // non-destructive — the daemon keeps the original as a swipeable take, so the
@@ -57,8 +57,8 @@ test('stage: editing the last response makes it a swipeable variant', async ({ p
   await expect(page.locator('.stage-bubble', { hasText: 'first take' })).toBeVisible()
   await expect(page.locator('.stage-swipe')).toHaveCount(0)
 
-  // Edit the response: click the bubble, rewrite, Save → posts message.edit.
-  await page.locator('.stage-bubble', { hasText: 'first take' }).click()
+  // Edit the response: press ✎, rewrite, Save → posts message.edit.
+  await editButtonFor(page, 'first take').click()
   await page.locator('.stage-edit textarea').fill('edited take')
   await page.locator('.stage-edit button', { hasText: 'Save' }).click()
   await expect.poll(() => edited).toEqual({ epoch: 1, index: 1, text: 'edited take' })

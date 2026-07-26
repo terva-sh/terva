@@ -120,12 +120,14 @@ describe('the quote is bounded and scrolls', () => {
     expect(ruleBody('.stage-suggest__quote')).toMatch(/min-height:\s*0/)
   })
 
-  it('keeps the quoted bubble selectable and not typable', () => {
+  it('keeps the quoted bubble selectable', () => {
     const rule = ruleBody('.stage-suggest__quote-body .stage-bubble')
     expect(rule).toMatch(/user-select:\s*text/)
-    // .stage-bubble sets cursor:text, which in the scene invites tap-to-edit.
-    // Here there is nothing to edit, so the invitation is withdrawn.
-    expect(rule).toMatch(/cursor:\s*auto/)
+    // This used to also assert `cursor: auto`, overriding the bubble's own
+    // cursor:text — which in the scene invited a click that opened the editor.
+    // Editing is a button now, so the override had no reason left and the
+    // assertion would have been describing a rule rather than defending one.
+    expect(rule).not.toMatch(/cursor:/)
   })
 })
 

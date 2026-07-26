@@ -9,6 +9,13 @@ import type { Page, WebSocketRoute } from '@playwright/test'
 
 export const SMOKE_SESSION = 'smoke'
 
+// The ✎ on the row carrying `hasText`. Editing moved off the bubble — a click
+// there is for selecting and copying — so a test that means "edit this message"
+// has to press the button, the same as a reader does.
+export function editButtonFor(page: Page, hasText: string) {
+  return page.locator('.stage-row', { has: page.locator('.stage-bubble', { hasText }) }).locator('.stage-msgedit')
+}
+
 export type MockBackend = {
   // Resolves once the client has subscribed to the smoke session, i.e. its
   // curRef is set and pushed events will be applied (not dropped as off-session).
