@@ -2,6 +2,7 @@ import type { Item } from '../../platform/conversation/store'
 import type { RevealFn } from './CompactionDivider'
 import { sequenceConversationItems } from './itemSequence'
 import { MessageContent } from './MessageContent'
+import { TimeGap } from './TimeGap'
 import { ToolGroup } from './ToolGroup'
 import type { ToolView } from './types'
 
@@ -21,7 +22,9 @@ export function ConversationItems({
   return (
     <>
       {sequenceConversationItems(items, toolView).map((entry) =>
-        entry.kind === 'tool-group' ? (
+        entry.kind === 'gap' ? (
+          <TimeGap key={entry.key} ms={entry.ms} />
+        ) : entry.kind === 'tool-group' ? (
           <ToolGroup
             key={entry.key}
             tools={entry.tools}

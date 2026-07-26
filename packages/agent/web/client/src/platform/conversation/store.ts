@@ -29,13 +29,18 @@ export type Item = Placed &
     // out-of-character instruction the user gave to move the story, run as a turn.
     // `text` is the instruction with the marker stripped; rendered as a
     // de-emphasized 🎬 note, not as the player's dialogue.
-    | { kind: 'user'; id: string; text: string; images?: ImageAttachment[]; directive?: boolean }
+    // `time` is when the message was made, straight off the wire (RFC 3339): the
+    // moment the user sent it, and for an assistant reply the moment its stream
+    // finished — which is what "when did the answer arrive" means. Absent while a
+    // reply is still streaming (it has not arrived yet) and from any daemon that
+    // does not send it; the panel simply shows no stamp.
+    | { kind: 'user'; id: string; text: string; images?: ImageAttachment[]; directive?: boolean; time?: string }
     // directed/actor mark a line the user authored into the scene via directed
     // authorship (Phase 6) — a character's (actor set) or the narrator's (actor
     // empty) turn — rendered with 🎭 attribution rather than as a model reply.
     // routed marks a line the meta-narrator routed to a character (Worlds W3):
     // model-produced but likewise 🎭-attributed to its actor, not the main card.
-    | { kind: 'assistant'; id: string; text: string; streaming: boolean; images?: ImageAttachment[]; directed?: boolean; routed?: boolean; actor?: string }
+    | { kind: 'assistant'; id: string; text: string; streaming: boolean; images?: ImageAttachment[]; directed?: boolean; routed?: boolean; actor?: string; time?: string }
     | {
         kind: 'tool'
         id: string
@@ -98,10 +103,10 @@ export function directionBody(text: string): string | null {
 
 // userRow maps a user-role message to its item, splitting off a [Direction] steer
 // as a de-emphasized directive row rather than the player's dialogue.
-function userRow(text: string, images: ImageAttachment[] | undefined, id: string, placed: Placed): Item {
+function userRow(text: string, images: ImageAttachment[] | undefined, id: string, placed: Placed, time?: string): Item {
   const dir = directionBody(text)
-  if (dir !== null) return { kind: 'user', id, text: dir, directive: true, ...placed }
-  return { kind: 'user', id, text, images, ...placed }
+  if (dir !== null) return { kind: 'user', id, text: dir, directive: true, time, ...placed }
+  return { kind: 'user', id, text, images, time, ...placed }
 }
 
 // msgID is a message's stable identity: (epoch, index). The daemon's transcriptEpoch
@@ -186,8 +191,8 @@ export function itemsFromMessages(msgs: WireMessage[], at: Placement): Item[] {
           : m.synthetic
             ? { kind: 'system', id, text, ...placed }
             : m.role === 'user'
-              ? userRow(text, images, id, placed)
-              : { kind: 'assistant', id, text, streaming: false, images, directed: m.directed, routed: m.routed, actor: m.actor, ...placed },
+              ? userRow(text, images, id, placed, m.time)
+              : { kind: 'assistant', id, text, streaming: false, images, directed: m.directed, routed: m.routed, actor: m.actor, time: m.time, ...placed },
       )
     }
     for (const b of m.content ?? []) {

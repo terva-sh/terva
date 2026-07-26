@@ -75,3 +75,37 @@ describe('MessageContent', () => {
     expect(screen.getByAltText('attached image')).toBeTruthy()
   })
 })
+
+// The arrival stamp. It answers "when did this land"; the gap markers in
+// itemSequence answer "how long was the silence".
+describe('MessageContent timestamps', () => {
+  const AT = '2026-08-01T09:04:00Z'
+  const clock = new Date(AT).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+
+  it('stamps a user message and an assistant reply on their own side', () => {
+    const u = show({ kind: 'user', id: 'u1', text: 'hi', time: AT })
+    expect(u.container.querySelector('.user-wrap .msg-time')?.textContent).toBe(clock)
+
+    const a = show({ kind: 'assistant', id: 'a1', text: 'hey', streaming: false, time: AT })
+    expect(a.container.querySelector('.assistant-wrap .msg-time')?.textContent).toBe(clock)
+  })
+
+  // The clock alone cannot settle a session resumed days later, so the full
+  // localized instant rides along behind it.
+  it('keeps the full instant in a tooltip', () => {
+    const { container } = show({ kind: 'user', id: 'u1', text: 'hi', time: AT })
+    const title = container.querySelector('.msg-time')?.getAttribute('title') ?? ''
+    expect(title).toContain('2026')
+    expect(title.length).toBeGreaterThan(clock.length)
+  })
+
+  // A reply still streaming has not arrived, and an older daemon sends no time
+  // at all. Both must leave the row exactly as it was, not show a blank stamp.
+  it('shows no stamp while streaming or when the wire carried no time', () => {
+    const streaming = show({ kind: 'assistant', id: 'a1', text: 'work', streaming: true, time: AT })
+    expect(streaming.container.querySelector('.msg-time')).toBeNull()
+
+    const untimed = show({ kind: 'user', id: 'u1', text: 'hi' })
+    expect(untimed.container.querySelector('.msg-time')).toBeNull()
+  })
+})

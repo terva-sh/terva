@@ -285,3 +285,33 @@ describe('applyEvent — stuck-loop hatch', () => {
     expect(applyEvent([], { type: 'escalation' } as WireEvent)).toHaveLength(0)
   })
 })
+
+// The wire has carried a per-message `time` all along and the render model
+// dropped it on the floor, which is why the panel could not say when anything
+// arrived. These pin the plumbing: a field that silently stops flowing here
+// takes the stamps and the gap markers with it and breaks nothing else.
+describe('itemsFromMessages — arrival times', () => {
+  const AT = '2026-08-01T09:04:00.123456789Z'
+
+  it('carries the wire time onto user and assistant items', () => {
+    const msgs: WireMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'hi' }], time: AT },
+      { role: 'assistant', content: [{ type: 'text', text: 'hey' }], time: AT },
+    ]
+    const items = itemsFromMessages(msgs, LIVE)
+    expect(items.map((i) => (i.kind === 'user' || i.kind === 'assistant' ? i.time : null))).toEqual([AT, AT])
+  })
+
+  // A [Direction] steer takes a different branch through userRow, and that
+  // branch had its own argument list to forget.
+  it('carries it through the directive branch too', () => {
+    const items = itemsFromMessages([{ role: 'user', content: [{ type: 'text', text: '[Direction] go' }], time: AT }], LIVE)
+    expect(items[0].kind === 'user' && items[0].directive).toBe(true)
+    expect(items[0].kind === 'user' && items[0].time).toBe(AT)
+  })
+
+  it('leaves the field absent when the daemon sends no time', () => {
+    const items = itemsFromMessages([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], LIVE)
+    expect(items[0].kind === 'user' && items[0].time).toBeUndefined()
+  })
+})

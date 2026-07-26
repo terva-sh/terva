@@ -1,7 +1,7 @@
 import { t } from '../../i18n'
 import type { Item } from '../../platform/conversation/store'
 import { CopyButton } from '../../ui/CopyButton'
-import { compact, truncate } from '../../ui/formatting'
+import { clockTime, compact, localInstant, truncate } from '../../ui/formatting'
 import { ImageGallery } from '../../ui/ImageGallery'
 import { Markdown } from '../../ui/Markdown'
 import { memo } from '../../ui/memo'
@@ -14,6 +14,22 @@ export type { ToolView } from './types'
 // The markdown memo that used to live here now lives in ui/Markdown, so Stage
 // gets it too — it had re-introduced the un-memoized render this comment was
 // written about. See that file for the measurement and the reasoning.
+// MessageTime is the arrival stamp under a bubble: a bare, muted time of day,
+// with the full localized instant behind it for the cases the clock alone
+// cannot settle — a session resumed days later, a transcript read after
+// midnight. Renders nothing at all when the message has no wire time (still
+// streaming, or an older daemon), so the row is unchanged rather than showing
+// a blank.
+export function MessageTime({ time }: { time?: string }) {
+  const clock = clockTime(time)
+  if (!clock) return null
+  return (
+    <span class="msg-time" title={localInstant(time)}>
+      {clock}
+    </span>
+  )
+}
+
 function AssistantMessage({ item }: { item: Extract<Item, { kind: 'assistant' }> }) {
   return (
     <div class="msg-wrap assistant-wrap">
@@ -22,6 +38,7 @@ function AssistantMessage({ item }: { item: Extract<Item, { kind: 'assistant' }>
         {item.images && <ImageGallery images={item.images} />}
       </div>
       {item.text && <CopyButton text={item.text} />}
+      <MessageTime time={item.time} />
     </div>
   )
 }
@@ -49,6 +66,7 @@ export const MessageContent = memo(function MessageContent({
             {item.images && <ImageGallery images={item.images} />}
           </div>
           {item.text && <CopyButton text={item.text} />}
+          <MessageTime time={item.time} />
         </div>
       )
     case 'assistant':
