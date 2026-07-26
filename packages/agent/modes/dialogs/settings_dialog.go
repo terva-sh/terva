@@ -194,8 +194,23 @@ func (d *SettingsDialog) Render(th tui.Theme, width int) []string {
 			}
 			plain = "  " + box + " " + it.Label + ": " + it.Options[it.Choice].Label
 		}
+		// The row is the one line that cannot wrap — it is the selectable
+		// target, and the cursor highlight pads it to width. Clamp it here, on
+		// the still-uncoloured text, so the frame is never overrun.
+		plain = truncate(plain, width)
+		// A hint rides inline only when the whole row still fits; otherwise it
+		// moves to its own wrapped line, the same treatment Desc gets.
+		// Appending it unconditionally is what pushed rows past the frame — the
+		// approval row alone paints 106 cells and overflowed every terminal
+		// narrower than that.
+		var hintLines []string
 		if it.Hint != "" {
-			plain += "  " + th.FG256(th.Muted, "("+it.Hint+")")
+			hint := "(" + it.Hint + ")"
+			if runewidth.StringWidth(plain)+2+runewidth.StringWidth(hint) <= width {
+				plain += "  " + th.FG256(th.Muted, hint)
+			} else {
+				hintLines = wrapSettingDescription(hint, width, 6)
+			}
 		}
 		if it.Disabled {
 			body = append(body, th.FG256(th.Muted, plain))
@@ -203,6 +218,9 @@ func (d *SettingsDialog) Render(th tui.Theme, width int) []string {
 			body = append(body, th.PadHighlight(plain, width))
 		} else {
 			body = append(body, plain)
+		}
+		for _, hint := range hintLines {
+			body = append(body, th.FG256(th.Muted, hint))
 		}
 		if it.Desc != "" {
 			for _, desc := range wrapSettingDescription(it.Desc, width, 6) {
@@ -253,7 +271,11 @@ func (d *SettingsDialog) renderOptions(th tui.Theme, width int) []string {
 	it := d.items[d.cursor]
 	lines := []string{FrameHeader(th, i18n.T("settings: %s", it.Label), width)}
 	if it.Desc != "" {
-		lines = append(lines, th.FG256(th.Muted, it.Desc))
+		// Wrapped, like the main view wraps the same string — emitting it raw
+		// here let any description longer than the terminal overrun the frame.
+		for _, desc := range wrapSettingDescription(it.Desc, width, 0) {
+			lines = append(lines, th.FG256(th.Muted, desc))
+		}
 	}
 	lines = append(lines, th.FG256(th.Muted, i18n.T("select with enter/space, esc to go back:")))
 	for idx, opt := range it.Options {
@@ -261,7 +283,7 @@ func (d *SettingsDialog) renderOptions(th tui.Theme, width int) []string {
 		if idx == it.Choice {
 			marker = "✓ "
 		}
-		plain := "  " + marker + opt.Label
+		plain := truncate("  "+marker+opt.Label, width)
 		if idx == d.optionCursor {
 			lines = append(lines, th.PadHighlight(plain, width))
 		} else {

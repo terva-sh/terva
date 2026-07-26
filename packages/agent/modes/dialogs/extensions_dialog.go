@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mattn/go-runewidth"
+
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
@@ -206,14 +208,28 @@ func verLang(it ExtInfo) string {
 	return v
 }
 
+// truncate shortens s to at most max painted cells, marking the cut with an
+// ellipsis. Both the measurement and the cut are in runes-and-cells, not
+// bytes: a byte-length comparison overstates the width of anything non-ASCII
+// (an em dash bills 3 bytes for 1 cell) and a byte-index cut lands inside a
+// multi-byte rune, emitting invalid UTF-8 that the terminal paints as a
+// replacement glyph. s must carry no ANSI escapes — every caller in this
+// package truncates before colouring.
 func truncate(s string, max int) string {
-	if max <= 1 || len(s) <= max {
+	if max <= 1 || runewidth.StringWidth(s) <= max {
 		return s
 	}
-	if max < 2 {
-		return s[:max]
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		w := runewidth.RuneWidth(r)
+		if used+w > max-1 { // reserve the last cell for the ellipsis
+			break
+		}
+		b.WriteRune(r)
+		used += w
 	}
-	return s[:max-1] + "…"
+	return b.String() + "…"
 }
 
 // ExtInfo is extensions.Info. The type moved down so the ctrlproto server and
