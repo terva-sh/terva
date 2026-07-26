@@ -48,6 +48,25 @@ export function deleteWarning(downstream: number): string {
   )
 }
 
+// replyTarget picks the scene line the suggest sheet drafts against: the newest
+// SPOKEN message, whoever spoke it. Exported for its own test — the rule is the
+// whole of whether the quote shows the right thing.
+//
+// Searched from the end rather than taken as the last item, because the tail is
+// routinely something nobody said: a notice, a tool row, a hatch, or the user's
+// own message when they have already typed. An attributed line (a posted
+// Character or Narrator beat) names its actor; an ordinary reply is the bound
+// character, whose name the transcript does not repeat per message.
+export function replyTarget(items: Item[], characterName?: string): { actor: string; text: string } | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.kind === 'assistant' && it.text.trim() !== '') {
+      return { actor: it.actor || characterName || '', text: it.text }
+    }
+  }
+  return undefined
+}
+
 export function Chat(props: {
   client: ClientLike
   sessionId: string
@@ -84,6 +103,7 @@ export function Chat(props: {
   const [guiding, setGuiding] = useState<{ text: string; ignorePrior: boolean } | null>(null)
   const [steerOpen, setSteerOpen] = useState(false)
   const [suggestOpen, setSuggestOpen] = useState(false)
+  const replyTo = replyTarget(items, character?.name)
   // The realize review sheet (creator C3): open from a creator conversation to
   // turn it into a playable world.
   const [realizeOpen, setRealizeOpen] = useState(false)
@@ -548,6 +568,7 @@ export function Chat(props: {
           client={client}
           sessionId={sessionId}
           initialNote={draft}
+          replyTo={replyTo}
           roster={info?.cast ?? {}}
           defaultProvider={info?.provider}
           defaultModel={info?.model}

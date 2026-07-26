@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { SuggestTurn, SuggestResult } from '../../platform/ctrlproto/types'
 import { t } from '../../i18n'
+import { Markdown } from '../../ui/Markdown'
 import { useAutoGrow } from './autogrow'
 import { ModelPick } from './ModelPick'
 
@@ -40,10 +41,30 @@ export function SuggestReply(props: {
   // that it inherits.
   defaultProvider?: string
   defaultModel?: string
+  // The scene line this is drafting against, quoted inside the sheet. The sheet
+  // covers the transcript and dims what is left of it, so without this the
+  // message you are answering is the one thing you cannot see while answering.
+  replyTo?: { actor?: string; text: string }
   onClose: () => void
   onUse: (text: string) => void
 }) {
-  const { client, sessionId, onClose, onUse } = props
+  const { client, sessionId, onClose, onUse, replyTo } = props
+  // Whether the pointer went down inside the sheet — see the backdrop below.
+  const pressedInside = useRef(false)
+  // The quote opens at its END, the way a chat does. You are answering the last
+  // thing said, and for a long beat that is the bottom of it — opening at the
+  // top would show the part you read several seconds ago and make you scroll to
+  // reach the part you are actually responding to. Scrolling up still works.
+  //
+  // Layout effect, not a plain one: the content is present synchronously (the
+  // markdown renders to innerHTML), so this lands before paint and there is no
+  // flash of the top. Keyed on the text so a beat that arrives while the sheet
+  // is open re-anchors rather than sitting mid-message.
+  const quoteRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = quoteRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [replyTo?.text])
   const roster = props.roster ?? {}
   const [rounds, setRounds] = useState<SuggestTurn[]>([])
   // Seed the sketch with whatever the user had already typed in the composer, so
@@ -204,7 +225,26 @@ export function SuggestReply(props: {
     target === 'user' ? t('e.g. push back, but stay flirty…') : target === 'narrator' ? t('e.g. night falls; a stranger slips in…') : t('e.g. warns them off, then softens…')
 
   return (
-    <div class="stage-sheet-backdrop" onClick={onClose}>
+    <div
+      class="stage-sheet-backdrop"
+      onPointerDown={(e) => {
+        // Where the press STARTED, not what is selected. A selection drag that
+        // begins on the quote and ends out here delivers its click to the
+        // backdrop — press and release have no closer common ancestor — so the
+        // sheet's stopPropagation never sees it, and dismissing would drop the
+        // selection mid-copy. Reading the live selection instead looks right and
+        // is not: the browser does not collapse it before the click dispatches,
+        // so the NEXT deliberate click outside gets swallowed too, and the sheet
+        // takes two taps to close. Only a real browser shows that.
+        pressedInside.current = e.target !== e.currentTarget
+      }}
+      onClick={() => {
+        // No reset needed: every click is preceded by a pointerdown that sets
+        // this, so the flag always describes the press that produced it.
+        if (pressedInside.current) return
+        onClose()
+      }}
+    >
       <div class="stage-suggest" onClick={(e) => e.stopPropagation()}>
         <header class="stage-suggest__head">
           <h3>{heading}</h3>
@@ -327,6 +367,21 @@ export function SuggestReply(props: {
           <p class="stage-error" onClick={() => setError('')}>
             {error}
           </p>
+        )}
+
+        {replyTo && replyTo.text.trim() !== '' && (
+          <figure class="stage-suggest__quote">
+            <figcaption class="stage-suggest__quote-head">
+              {replyTo.actor ? t('Replying to %s', replyTo.actor) : t('Replying to')}
+            </figcaption>
+            {/* Read-only, but real text: the same markdown and the same bubble
+                the scene uses, so what you select and copy is the message as you
+                saw it. Not a textarea — there is nothing here to edit, and an
+                editor would invite editing the transcript from the wrong place. */}
+            <div class="stage-suggest__quote-body" ref={quoteRef}>
+              <Markdown class="stage-bubble" text={replyTo.text} />
+            </div>
+          </figure>
         )}
 
         {isDirect ? (

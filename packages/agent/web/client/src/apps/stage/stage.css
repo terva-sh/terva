@@ -3316,6 +3316,42 @@ button:disabled {
   color: var(--stage-muted);
   font-size: 0.85rem;
 }
+/* The line being answered, quoted inside the sheet. The sheet is a bottom sheet
+   over a dimmed backdrop, so while you draft, the message you are drafting
+   against is both covered and greyed — the one thing you most want to reread.
+
+   Capped in vh and scrolled rather than allowed to grow: a long scene beat would
+   otherwise push the sketch box and its actions off the bottom of a phone, which
+   trades one hidden thing for another. min-height:0 is what lets the cap win
+   inside the sheet's flex column; without it a flex item refuses to shrink below
+   its content and the box grows anyway. */
+.stage-suggest__quote {
+  margin: 0 0 0.6rem;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+.stage-suggest__quote-head {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--stage-muted);
+  margin-bottom: 0.3rem;
+}
+.stage-suggest__quote-body {
+  min-height: 0;
+  max-height: 22vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* The quote is for reading and copying, never for typing into: the bubble's own
+   cursor:text invites a click that does nothing here. */
+.stage-suggest__quote-body .stage-bubble {
+  cursor: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 /* Directed-authorship target picker (Phase 6): Me / Character / Narrator / Direct.
    Wraps to two rows on a narrow modal rather than crushing four labels. */
 .stage-suggest__target {
