@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installMockBackend, panelSessionURL } from './support'
 
 // Flow: an image the ASSISTANT drew inline (native image output) renders in the
 // transcript. Agent-generated images ride the finalized assistant_message, not
@@ -8,7 +8,7 @@ import { installMockBackend } from './support'
 // since it needs the data: URL to actually decode to a raster.
 test('assistant-emitted inline image renders in the transcript', async ({ page }) => {
   const backend = await installMockBackend(page)
-  await page.goto('/')
+  await page.goto(panelSessionURL)
   await expect(page.locator('.topbar .dot.open')).toBeVisible()
   await backend.subscribed
 

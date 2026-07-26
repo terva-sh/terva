@@ -69,7 +69,11 @@ test('stage: switch the session model from the steering drawer', async ({ page }
   await chip.locator('.stage-modelpick__chip').click()
   await expect(chip.locator('.stage-modelpick__list')).toBeVisible()
   await expect(chip.locator('.stage-modelpick__cur-id')).toHaveText('★ claude-opus-4-8')
-  await chip.locator('.stage-modelpick__row', { hasText: 'claude-sonnet-5' }).click()
+  // .first() because a FAVOURITED model deliberately renders twice — once in the
+  // flat ★ Favorites section (which names its provider, since a bare id there
+  // does not say which) and once under its provider group. Either row switches;
+  // the assertion below is what proves the click landed.
+  await chip.locator('.stage-modelpick__row', { hasText: 'claude-sonnet-5' }).first().click()
   await expect.poll(() => switched).toEqual({ model: 'claude-sonnet-5', provider: 'anthropic' })
   await expect(chip.locator('.stage-modelpick__list')).toHaveCount(0)
   switched = null

@@ -54,11 +54,16 @@ test('stage: edit a card, fix a finding, and save', async ({ page }) => {
   await expect(page.locator('.stage-cardeditor')).toBeVisible()
 
   // Fields load from the card; the malformed-macro finding is shown.
-  await expect(page.locator('.stage-editfield', { hasText: 'Name' }).locator('input')).toHaveValue('Ivy')
+  // ⚠️ Scoped to the card editor. The studio keeps BOTH tabs mounted — switching
+  // to "You" must not cost an unsaved draft — so the persona pane's "Your name"
+  // is in the DOM at the same time and a bare .stage-editfield/'Name' matches it
+  // too.
+  const editor = page.locator('.stage-cardeditor')
+  await expect(editor.locator('.stage-editfield', { hasText: 'Name' }).locator('input')).toHaveValue('Ivy')
   await expect(page.locator('.stage-lint__item--warn')).toContainText('Malformed macro')
 
   // Fix the greeting's macro and save.
-  const firstMes = page.locator('.stage-editfield', { hasText: 'First message' }).locator('textarea')
+  const firstMes = editor.locator('.stage-editfield', { hasText: 'First message' }).locator('textarea')
   await firstMes.fill('Hey {{user}}, welcome in.')
   await page.locator('.stage-cardeditor__save').click()
 

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installMockBackend, panelSessionURL } from './support'
 
 // Flow 6: NO pane surface scrolls horizontally, at any width the pane actually
 // renders at (styles.css conventions #1–#3). The settings and raati panes both
@@ -189,7 +189,7 @@ for (const surface of SURFACES) {
   test(`${surface.title} pane stays one-axis at every width`, async ({ page }) => {
     await page.setViewportSize({ width: VIEWPORTS[0].width, height: VIEWPORTS[0].height })
     await installMockBackend(page, { respond })
-    await page.goto('/')
+    await page.goto(panelSessionURL)
     await page.locator('.topbar .dot.open').waitFor()
 
     await page.locator('.topbar button[title="Panes (usage, settings, extensions)"]').click()
@@ -258,7 +258,7 @@ for (const surface of SURFACES) {
 test('Worktrees merge-back view stays one-axis at every width', async ({ page }) => {
   await page.setViewportSize({ width: VIEWPORTS[0].width, height: VIEWPORTS[0].height })
   await installMockBackend(page, { respond })
-  await page.goto('/')
+  await page.goto(panelSessionURL)
   await page.locator('.topbar .dot.open').waitFor()
   await page.locator('.topbar button[title="Panes (usage, settings, extensions)"]').click()
   await page.locator('.pane-tab[title="Worktrees"]').click()
@@ -309,7 +309,7 @@ async function smallFields(page: Page): Promise<string[]> {
 test('the composer stays inside the viewport as it grows', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 })
   await installMockBackend(page, { respond })
-  await page.goto('/')
+  await page.goto(panelSessionURL)
   await page.locator('.topbar .dot.open').waitFor()
 
   const composer = page.locator('.composer textarea')

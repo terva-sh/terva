@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installMockBackend, panelSessionURL } from './support'
 
 // The Usage/context pane renders the lore activation trace (ContextBreakdown.
 // lore_fired) — the panel's home for the 4c trace (the Stage drawer is the other).
@@ -30,7 +30,7 @@ test('usage pane shows the lore activation trace', async ({ page }) => {
       return undefined
     },
   })
-  await page.goto('/')
+  await page.goto(panelSessionURL)
   await page.locator('.topbar .dot.open').waitFor()
 
   // Open the panes host and select the Context (usage) pane.

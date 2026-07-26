@@ -7,7 +7,20 @@ import type { Page, WebSocketRoute } from '@playwright/test'
 // lets a test push transcript events. See ../../src/platform/ctrlproto/client.ts
 // for the wire shapes this mirrors.
 
-export const SMOKE_SESSION = 'smoke'
+// A session id in the daemon's own format (YYYYMMDD-HHMMSS-<8 hex>).
+//
+// ⚠️ The shape is load-bearing, not decoration. takeNavParams validates
+// `?session=` against exactly this pattern and silently drops anything else, so
+// while this was the plain string 'smoke' the deep link could not be exercised
+// at all — every test that tried one landed on the session picker instead.
+export const SMOKE_SESSION = '20260101-120000-c0ffee01'
+
+// The panel's boot precedence is: `?session=` deep link → this tab's remembered
+// session → the landing (see platform/bootsession). A fresh tab deliberately
+// adopts NOTHING — the server's global `current` is shared between clients, and
+// following it made two panels drive one session. So a test that wants the
+// session shell has to ask for it by name; `goto('/')` lands on the picker.
+export const panelSessionURL = `/?session=${SMOKE_SESSION}`
 
 // The ✎ on the row carrying `hasText`. Editing moved off the bubble — a click
 // there is for selecting and copying — so a test that means "edit this message"

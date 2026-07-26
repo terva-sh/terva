@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, PNG_1x1_BASE64 } from './support'
+import { PNG_1x1_BASE64, installMockBackend, panelSessionURL } from './support'
 
 // Flow 4: an image reaching the composer via drop (and paste) is accepted and
 // rendered as an attachment chip. Both paths funnel through the same addFiles →
@@ -28,7 +28,7 @@ async function dispatchImage(page: import('@playwright/test').Page, kind: 'drop'
 
 test('dropping an image adds an attachment chip', async ({ page }) => {
   await installMockBackend(page)
-  await page.goto('/')
+  await page.goto(panelSessionURL)
   await expect(page.locator('footer.composer textarea')).toBeVisible()
 
   await dispatchImage(page, 'drop')
@@ -39,7 +39,7 @@ test('dropping an image adds an attachment chip', async ({ page }) => {
 
 test('pasting an image adds an attachment chip', async ({ page }) => {
   await installMockBackend(page)
-  await page.goto('/')
+  await page.goto(panelSessionURL)
   const ta = page.locator('footer.composer textarea')
   await ta.click()
 

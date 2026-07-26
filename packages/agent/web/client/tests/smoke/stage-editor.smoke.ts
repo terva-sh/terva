@@ -63,6 +63,14 @@ test('stage: enrich a character from the scene via the World tab', async ({ page
   await expect(bound).toContainText('Elira')
   await bound.locator('button[title*="Enrich"]').click()
 
+  // ✏️ EXPANDS the panel; it does not run. It used to fire cards.doctor on the
+  // click, which meant the run happened before the model picker was even on
+  // screen and every read went to the default model whatever you picked
+  // afterwards. The run is its own button now, below the picker.
+  await expect(page.locator('.stage-enrich__start')).toBeVisible()
+  expect(doctorCall, 'opening the editor must not run it').toBeNull()
+  await page.locator('.stage-enrich__start button').click()
+
   // The editor ran against THIS session.
   await expect.poll(() => doctorCall).not.toBeNull()
   expect(doctorCall).toMatchObject({ id: 'elira-1', session: SMOKE_SESSION })

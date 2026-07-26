@@ -56,6 +56,16 @@ test('stage: the You tab steers the scene it was opened from', async ({ page }) 
     SMOKE_SESSION,
   )
 
+  // ⚠️ Wait for the header to finish assembling BEFORE clicking into it.
+  //
+  // `.stage-chat__who` renders a bare title span until cards.get resolves, then
+  // swaps it for a button carrying the portrait — a much wider element — so the
+  // chip beside it jumps right at some point after the snapshot lands. Clicking
+  // the chip while that is still pending raced the shift and the navigation was
+  // simply lost: 1 run in 40 under contention sat on the chat screen forever.
+  // Waiting for the card button is waiting for the header's final layout.
+  await expect(page.locator('.stage-chat__cardbtn')).toBeVisible()
+
   // The scene header says who you are, beside who you are playing with.
   const chip = page.locator('.stage-chat__playingas')
   await expect(chip).toContainText('Kira')

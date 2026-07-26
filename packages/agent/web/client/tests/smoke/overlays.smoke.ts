@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installMockBackend, panelSessionURL } from './support'
 
 // Flow 5: overlays close through both the keyboard (Escape) and the backdrop
 // (scrim click) paths. The model picker is the representative modal — it has an
 // autofocused search input with an Escape handler and a click-to-dismiss scrim.
 test('model picker closes via Escape and via backdrop', async ({ page }) => {
   await installMockBackend(page)
-  await page.goto('/')
+  await page.goto(panelSessionURL)
 
   const openBtn = page.locator('button.model-btn')
   const scrim = page.locator('.modal-scrim')

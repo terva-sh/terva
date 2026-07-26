@@ -10,6 +10,25 @@ import { defineConfig, devices } from '@playwright/test'
 
 const PORT = Number(process.env.SMOKE_PORT ?? 4173)
 
+// CI runs this on the same musl (Alpine) image as every other job, where
+// Playwright's OWN Chromium — a glibc build — cannot start at all. The job
+// installs the distro's chromium and names it here.
+//
+// Unset locally, so a developer still gets Playwright's pinned browser, which is
+// the one to trust when the question is layout. CI's job is narrower: catch the
+// suite going stale against a UI that moved under it, and a slightly different
+// Chromium does that just as well. --no-sandbox because the container runs as
+// root; --disable-dev-shm-usage because the default /dev/shm in a container is
+// 64MB and Chromium will crash rendering into it.
+const systemChromium = process.env.PLAYWRIGHT_CHROMIUM_PATH
+  ? {
+      launchOptions: {
+        executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH,
+        args: ['--no-sandbox', '--disable-dev-shm-usage'],
+      },
+    }
+  : {}
+
 export default defineConfig({
   testDir: './tests/smoke',
   // *.smoke.ts, not *.spec.ts, so vitest's default glob (**/*.{test,spec}.ts)
@@ -21,17 +40,30 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? 'line' : 'list',
   timeout: 30_000,
+  // ⚠️ Left at the defaults ON PURPOSE. When the gate first flaked on the
+  // runner, one worker and a 15s assertion budget were the obvious reach — and
+  // both were wrong: the failure was a lost click, permanent, still red after
+  // 15s and after a retry. Widening the budget would have hidden nothing and
+  // slowed every real failure down. The cause was a test racing a header that
+  // was still assembling (stage-you-studio), and it is fixed there.
+  //
+  // If this suite flakes again, get the artifact (the CI job uploads the trace
+  // and a screenshot on failure) and find the cause. Do not start here.
   expect: { timeout: 5_000 },
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
     trace: 'on-first-retry',
+    // Uploaded as an artifact when CI goes red (see .forgejo/workflows/ci.yml):
+    // a browser failure that only happens on the runner leaves nothing else
+    // behind to read.
+    screenshot: 'only-on-failure',
     // The panel is a PWA; block its service worker so it can't cache assets or
     // interpose on navigation between runs, and so page.routeWebSocket is the
     // only thing standing in for the backend.
     serviceWorkers: 'block',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'], ...systemChromium } },
     // Mobile-Safari-like engine, scoped to the pane-overflow guard: the
     // settings pane's horizontal-scroll bug was WebKit-only (a select's
     // untruncated option text kept counting as scrollable overflow), so

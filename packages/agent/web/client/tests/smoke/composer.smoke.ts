@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installMockBackend, panelSessionURL } from './support'
 
 // Flow 3: the slash-command autocomplete preserves focus and keyboard behavior.
 // Focus stealing and swallowed keystrokes are classic real-browser regressions
 // that a DOM-only test misses.
 test('slash autocomplete: keeps focus, navigates with keys, Escape dismisses', async ({ page }) => {
   await installMockBackend(page)
-  await page.goto('/')
+  await page.goto(panelSessionURL)
 
   const ta = page.locator('footer.composer textarea')
   await ta.click()

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installMockBackend, panelSessionURL } from './support'
 
 // Flow 2: a pinned timeline follows streaming output; once the user scrolls up
 // (unpinning) it must NOT yank back to the bottom when more output arrives.
@@ -7,7 +7,7 @@ import { installMockBackend } from './support'
 // assert — it needs real layout and a real scroll container.
 test('pinned timeline follows streaming; unpinned does not jump', async ({ page }) => {
   const backend = await installMockBackend(page)
-  await page.goto('/')
+  await page.goto(panelSessionURL)
   await expect(page.locator('.topbar .dot.open')).toBeVisible()
   // Wait until the client has subscribed, so pushed events aren't dropped as
   // off-session.

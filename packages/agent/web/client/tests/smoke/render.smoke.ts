@@ -1,24 +1,41 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installMockBackend, panelSessionURL } from './support'
 
 // Flow 1: the shell renders at both desktop and narrow widths, and reaches the
 // connected state. A blank screen or a shell that only lays out at one width is
 // the kind of break happy-dom can't catch.
+//
+// There are TWO boot states to render since the panel stopped following the
+// server's global `current` session: a fresh tab lands on the session picker,
+// and a deep link opens the session shell. This used to cover only the second
+// and reach it by accident — `goto('/')` adopted the current session — so when
+// that stopped, the test failed against a landing it had never heard of.
 const viewports = [
   { name: 'desktop', size: { width: 1280, height: 800 } },
   { name: 'narrow', size: { width: 390, height: 780 } },
 ]
 
 for (const vp of viewports) {
-  test(`renders the control-panel shell at ${vp.name} width`, async ({ page }) => {
+  test(`renders the session picker at ${vp.name} width`, async ({ page }) => {
     await page.setViewportSize(vp.size)
     await installMockBackend(page)
     await page.goto('/')
 
+    await expect(page.locator('.landing')).toBeVisible()
+    await expect(page.locator('.landing-hero')).toBeVisible()
+    await expect(page.locator('.board')).toBeVisible()
+    // The mock hello flips the status dot from connecting (amber) to open (green).
+    await expect(page.locator('.landing-top .dot.open')).toBeVisible()
+  })
+
+  test(`renders the control-panel shell at ${vp.name} width`, async ({ page }) => {
+    await page.setViewportSize(vp.size)
+    await installMockBackend(page)
+    await page.goto(panelSessionURL)
+
     await expect(page.locator('.topbar')).toBeVisible()
     await expect(page.locator('footer.composer textarea')).toBeVisible()
     await expect(page.locator('.log')).toBeVisible()
-    // The mock hello flips the status dot from connecting (amber) to open (green).
     await expect(page.locator('.topbar .dot.open')).toBeVisible()
   })
 }
