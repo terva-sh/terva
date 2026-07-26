@@ -59,6 +59,12 @@ type WireEvent struct {
 	// turn_end (failed) and error
 	Error string `json:"error,omitempty"`
 
+	// user_message_rejected: the blocked prompt itself, IN FULL (the reason
+	// rides Text). Clients quote a truncated stub today; carrying the whole
+	// text is what lets a restore-to-composer client exist later without a
+	// wire change.
+	Rejected string `json:"rejected,omitempty"`
+
 	// stall / escalation (the stuck-loop hatch's live events). Nested rather
 	// than flattened: each carries several fields, and keeping them self-contained
 	// leaves the flat bag above readable — the same reason Message and Usage nest.
@@ -283,10 +289,13 @@ func eventToWire(ev AgentEvent, imageData bool) WireEvent {
 	case EvUserMessageRejected:
 		// A BeforeUserMessage guard refused the prompt before it reached the
 		// model. The reason is the human-facing "why", so it rides Text (the
-		// same field EvCompactStart's reason uses); a wire client shows it in
-		// the conversation area. Without this the rejection vanished on every
-		// non-in-process surface (web, --json).
+		// same field EvCompactStart's reason uses); the refused prompt rides
+		// Rejected so a client can quote it — a reason with no words attached
+		// stops meaning anything once the user forgets what they typed.
+		// Without this event the rejection vanished on every non-in-process
+		// surface (web, --json).
 		out.Text = e.Reason
+		out.Rejected = e.Text
 	case EvTurnEnd:
 		out.Stop = string(e.Stop)
 		if e.Err != nil {
@@ -313,10 +322,6 @@ func eventToWire(ev AgentEvent, imageData bool) WireEvent {
 			Auto:        e.Auto,
 			Disposition: string(e.Disposition),
 			Detail:      e.Detail,
-		}
-	case EvError:
-		if e.Err != nil {
-			out.Error = e.Err.Error()
 		}
 	}
 	return out

@@ -147,12 +147,6 @@ type EvDone struct{}
 
 func (EvDone) Type() string { return "done" }
 
-type EvError struct {
-	Err error
-}
-
-func (EvError) Type() string { return "error" }
-
 // EvCompactStart announces a policy-driven transcript compaction
 // (context near the window limit, or a 413-oversize retry). Hosts
 // surface it so the pause before the next turn doesn't read as a

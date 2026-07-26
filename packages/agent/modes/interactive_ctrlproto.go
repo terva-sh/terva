@@ -284,6 +284,18 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 				i.mu.Unlock()
 			}
 		}
+	case "user_message_rejected":
+		// An extension's intercept (BeforeUserMessage) refused the prompt:
+		// it never reached the model or the transcript, so without this
+		// banner the message would simply vanish — including a QUEUED one
+		// rejected at drain time, long after it was sent. Quote a stub of
+		// what was blocked; the reason alone stops meaning anything once the
+		// exact words are forgotten.
+		if quote := clipQuote(ev.Rejected, 80); quote != "" {
+			i.setStatusErr(i18n.T("message blocked: %s — “%s”", ev.Text, quote))
+		} else {
+			i.setStatusErr(i18n.T("message blocked: %s", ev.Text))
+		}
 	case "error":
 		// The turn failed (broadcast before the trailing done). Recoverable
 		// provider failures open the rescue picker — model-switch-and-retry,
@@ -1575,6 +1587,18 @@ func wireBlocksText(blocks []core.WireBlock) string {
 		sb.WriteString(c.Text)
 	}
 	return sb.String()
+}
+
+// clipQuote flattens a quoted stub to one line and caps it at max runes,
+// with an ellipsis when it cut anything — for banners that quote what a
+// guard refused without letting a pasted file take over the status line.
+func clipQuote(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 // wireImageBlocks extracts the image attachments a full-form wire message

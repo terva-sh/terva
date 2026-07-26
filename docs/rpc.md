@@ -237,7 +237,7 @@ Stream notifications during a `prompt` or `compact`. None carry an `id`.
 |---|---|---|
 | `turn_start` | `step` | Beginning of one model call (max-steps loop iteration) |
 | `user_message` | `message` | The submitted prompt as it was added to the transcript (see Message shape) |
-| `user_message_rejected` | `text` | A `BeforeUserMessage` guard refused the prompt: it never reached the model. `text` is the human-facing reason. On the initial-prompt path a `done` follows |
+| `user_message_rejected` | `text`, `rejected` | A `BeforeUserMessage` guard refused the prompt: it never reached the model. `text` is the human-facing reason; `rejected` is the blocked prompt itself, in full — clients quote a truncated stub. On the initial-prompt path a `done` follows |
 | `assistant_start` | (none) | About to receive assistant streaming |
 | `text_delta` | `delta` | Partial assistant text. Concatenate to build the full reply |
 | `tool_use_start` | `id`, `name` | The model began streaming a tool call |

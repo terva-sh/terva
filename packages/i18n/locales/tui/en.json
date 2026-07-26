@@ -231,6 +231,8 @@
   "lore — active entries (this run)": "lore — active entries (this run)",
   "mcp servers": "mcp servers",
   "message blocked by extension": "message blocked by extension",
+  "message blocked: %s": "message blocked: %s",
+  "message blocked: %s — “%s”": "message blocked: %s — “%s”",
   "migrated — old dir kept; restart terva to fully switch over": "migrated — old dir kept; restart terva to fully switch over",
   "mirror this session instead": "mirror this session instead",
   "mirroring session %s": "mirroring session %s",

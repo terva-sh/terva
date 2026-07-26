@@ -199,6 +199,22 @@ describe('applyEvent — error, notice, and synthetic items', () => {
     expect(e).toMatchObject({ kind: 'error', text: 'unknown error' })
   })
 
+  it('folds a rejection into a durable error notice quoting the blocked text', () => {
+    const items = applyEvent([], { type: 'user_message_rejected', text: 'contains a secret', rejected: 'deploy key is XYZ' })
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'notice', level: 'error' })
+    const text = (items[0] as Extract<Item, { kind: 'notice' }>).text
+    expect(text).toContain('contains a secret')
+    expect(text).toContain('deploy key is XYZ')
+  })
+
+  it('clips a long rejected prompt so the notice stays a line, not a document', () => {
+    const items = applyEvent([], { type: 'user_message_rejected', text: 'too long', rejected: 'y'.repeat(300) })
+    const text = (items[0] as Extract<Item, { kind: 'notice' }>).text
+    expect(text).toContain('…')
+    expect(text.length).toBeLessThan(200)
+  })
+
   it('appends a notice carrying level/ext/kind, and drops an empty notice', () => {
     const [n] = applyEvent([], {
       type: 'notice',

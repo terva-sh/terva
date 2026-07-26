@@ -93,6 +93,14 @@ export type Item = Placed &
 let seq = 0
 const nextID = () => `i${++seq}`
 
+// clip flattens a quoted stub to one line and caps it at max code points
+// (not UTF-16 units, so an emoji is not cut in half), with an ellipsis when
+// it cut anything.
+const clip = (s: string, max: number): string => {
+  const r = Array.from(s.trim().replace(/\s+/g, ' '))
+  return r.length <= max ? r.join('') : r.slice(0, max).join('') + '…'
+}
+
 // directionBody detects the [Direction] steer convention (Phase 6b / cast.speak):
 // an out-of-character direction the user gave, run as a turn. Returns the
 // instruction with the marker stripped, or null for an ordinary message.
@@ -380,6 +388,21 @@ export function applyEvent(items: Item[], ev: WireEvent): Item[] {
       const n = ev.notice
       if (!n?.text) return items
       return [...items, { kind: 'notice', id: nextID(), level: n.level, ext: n.ext, text: n.text, noticeKind: n.kind }]
+    }
+    case 'user_message_rejected': {
+      // An extension's intercept refused this prompt before it reached the
+      // model: no user bubble, no reply — without a row here the message
+      // simply vanishes, and a QUEUED one can be rejected while nobody is
+      // watching. A durable transcript row, not a toast, for that reason.
+      // Quote a stub of what was blocked (a reason with no words attached
+      // stops meaning anything once the exact words are forgotten); the full
+      // text rides ev.rejected, so restore-to-composer needs no wire change.
+      const why = ev.text || t('an extension blocked it')
+      const quote = clip(ev.rejected ?? '', 80)
+      const text = quote
+        ? t('message blocked: %s — “%s”', why, quote)
+        : t('message blocked: %s', why)
+      return [...items, { kind: 'notice', id: nextID(), level: 'error', text }]
     }
     case 'stall': {
       // Rung 1 of the stuck-loop hatch: the detector nudged a repeating model.

@@ -1471,6 +1471,10 @@ export interface WireEvent {
   message?: WireMessage
   stop?: string
   error?: string
+  // user_message_rejected: the refused prompt in full (text carries the
+  // guard's reason). Quoted truncated today; whole so a restore-to-composer
+  // client needs no wire change.
+  rejected?: string
   permission?: PermissionRequest
   ask?: AskRequest
   resolved?: { call_id?: string; ask_id?: string }

@@ -44,13 +44,15 @@ func (s *session) translateEvent(ev core.AgentEvent) {
 	case core.EvToolResult:
 		s.emitToolResult(e)
 
-	case core.EvError:
-		if e.Err != nil {
-			s.emit(map[string]any{
-				"sessionUpdate": UpdateAgentMessageChunk,
-				"content":       textContentBlock("Error: " + e.Err.Error()),
-			})
-		}
+	case core.EvUserMessageRejected:
+		// A BeforeUserMessage guard (extension intercept) refused the prompt:
+		// it never reached the model, so without a chunk the editor shows an
+		// empty turn with no explanation. titleLine caps the quoted stub the
+		// same way tool headers are capped.
+		s.emit(map[string]any{
+			"sessionUpdate": UpdateAgentMessageChunk,
+			"content":       textContentBlock("(message blocked: " + e.Reason + " — “" + titleLine(e.Text) + "”)"),
+		})
 
 	case core.EvCompactStart:
 		s.emit(map[string]any{

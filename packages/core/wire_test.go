@@ -48,7 +48,7 @@ func TestEventToWireGolden(t *testing.T) {
 			Cumulative: provider.Usage{InputTokens: 100, OutputTokens: 20, CostUSD: 0.1},
 		}, `{"type":"usage","usage":{"input":10,"output":2,"cache_read":0,"cache_write":0,"cost_usd":0.01},"cumulative":{"input":100,"output":20,"cache_read":0,"cache_write":0,"cost_usd":0.1}}`},
 		{"user_message_rejected", EvUserMessageRejected{Text: "do the bad thing", Reason: "blocked by extension guard"},
-			`{"type":"user_message_rejected","text":"blocked by extension guard"}`},
+			`{"type":"user_message_rejected","text":"blocked by extension guard","rejected":"do the bad thing"}`},
 		{"turn_end clean", EvTurnEnd{Stop: provider.StopEnd}, `{"type":"turn_end","stop":"end"}`},
 		{"turn_end error", EvTurnEnd{Stop: provider.StopError, Err: errors.New("boom")},
 			`{"type":"turn_end","stop":"error","error":"boom"}`},
