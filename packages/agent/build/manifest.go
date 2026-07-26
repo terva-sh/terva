@@ -16,8 +16,15 @@ type PromptSegment struct {
 	Text   string `json:"text"`
 
 	// Origin lists the files this segment's Text was read from, when it was
-	// read from files at all — the AGENTS.md chain, the --context-file set.
-	// Empty for everything terva generates rather than reads.
+	// read from files at all — the AGENTS.md chain, the --context-file set, the
+	// Persona file behind a charter. Empty for everything terva generates
+	// rather than reads.
+	//
+	// A charter's origin is tier-qualified rather than a filesystem path
+	// ("embedded:mieli.md", "ext:<bundle>:<rel>"), because a built-in Persona is
+	// a real file that is really not on disk. Only the pointer path in the
+	// worker composer treats an Origin as a path to re-root, and it runs on
+	// discovery-owned segments alone — whose origins are always real paths.
 	//
 	// It exists because the rendered Text embeds the paths as prose (`## /a/b`
 	// headings) and prose is not a data structure. Two callers need the paths

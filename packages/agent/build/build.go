@@ -306,19 +306,22 @@ func (r *Resolved) rebuildSystemPrompt() {
 		appendBlocks = append(append([]PromptSegment{}, r.systemAppend...), PromptSegment{Source: SourceExtensionContext, Text: r.extensionContext})
 	}
 	r.SystemSegments = SystemSegments(SystemPromptOpts{
-		CWD:           r.CWD,
-		Tools:         toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
-		Custom:        r.systemCustom,
-		Append:        appendBlocks,
-		TervaDocsDir:  filepath.Join(config.TervaHome(), "docs"),
-		StatusTool:    r.ToolRegistry["terva_status"] != nil,
-		PersonaName:   r.Persona.Name,
-		Charter:       r.Persona.Charter,
-		Experience:    r.Experience,
-		Surface:       r.Surface,
-		Portable:      r.Portable,
-		IntroOverride: r.introOverride,
-		IntroSource:   r.introSource,
+		CWD:               r.CWD,
+		Tools:             toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
+		Custom:            r.systemCustom,
+		Append:            appendBlocks,
+		TervaDocsDir:      filepath.Join(config.TervaHome(), "docs"),
+		StatusTool:        r.ToolRegistry["terva_status"] != nil,
+		PersonaName:       r.Persona.Name,
+		Charter:           r.Persona.Charter,
+		CharterOrigin:     r.Persona.Source,
+		BaseCharter:       r.Persona.Inherited,
+		BaseCharterOrigin: r.Persona.InheritedSource,
+		Experience:        r.Experience,
+		Surface:           r.Surface,
+		Portable:          r.Portable,
+		IntroOverride:     r.introOverride,
+		IntroSource:       r.introSource,
 	})
 	r.SystemPrompt = joinSegmentTexts(r.SystemSegments)
 }
@@ -1099,20 +1102,23 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	}
 
 	sysSegs := SystemSegments(SystemPromptOpts{
-		CWD:              args.CWD,
-		Tools:            summaries,
-		Custom:           custom,
-		Append:           append_,
-		TervaDocsDir:     docsDir,
-		TervaExamplesDir: examplesDir,
-		StatusTool:       reg["terva_status"] != nil,
-		PersonaName:      Persona.Name,
-		Charter:          Persona.Charter,
-		Experience:       args.Experience,
-		Surface:          SurfaceOf(args.Mode),
-		Portable:         args.Portable,
-		IntroOverride:    introOverride,
-		IntroSource:      introSource,
+		CWD:               args.CWD,
+		Tools:             summaries,
+		Custom:            custom,
+		Append:            append_,
+		TervaDocsDir:      docsDir,
+		TervaExamplesDir:  examplesDir,
+		StatusTool:        reg["terva_status"] != nil,
+		PersonaName:       Persona.Name,
+		Charter:           Persona.Charter,
+		CharterOrigin:     Persona.Source,
+		BaseCharter:       Persona.Inherited,
+		BaseCharterOrigin: Persona.InheritedSource,
+		Experience:        args.Experience,
+		Surface:           SurfaceOf(args.Mode),
+		Portable:          args.Portable,
+		IntroOverride:     introOverride,
+		IntroSource:       introSource,
 	})
 	sys := joinSegmentTexts(sysSegs)
 

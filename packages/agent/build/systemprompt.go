@@ -45,11 +45,30 @@ type SystemPromptOpts struct {
 	// PersonaName overrides the agent's name in the default identity line.
 	// Empty uses DefaultPersonaName ("Mieli"). Ignored when Custom is set.
 	PersonaName string
-	// Charter is a Persona's behavioral charter, inserted additively between
-	// the identity intro and the harness conventions (which stay last so they
-	// remain the final framing and a charter can't erode them). Empty adds
-	// nothing. Ignored when Custom is set.
+	// Charter is a Persona's behavioral charter, inserted between the identity
+	// intro and the harness conventions (which stay last so they remain the
+	// final framing and a charter can't erode them). Empty adds nothing.
+	// Ignored when Custom is set.
+	//
+	// "Additive" describes its relationship to terva's IDENTITY, which survives
+	// underneath it. It says nothing about other charters: exactly one charter
+	// is ever in the prompt, the selected Persona's. Choosing a Persona does not
+	// add to the default one's charter, it is chosen instead of it — which is
+	// why CharterOrigin exists.
 	Charter string
+	// BaseCharter is the charter a Persona INHERITED via `extends`, emitted as
+	// its own segment immediately before Charter so the specialization
+	// qualifies the general contract rather than the other way round. Empty for
+	// the overwhelming majority of Personas, which extend nothing.
+	// BaseCharterOrigin is the file it came from.
+	BaseCharter       string
+	BaseCharterOrigin string
+	// CharterOrigin is the Persona file Charter was read from — Persona.Source,
+	// so "embedded:mieli.md", "ext:<bundle>:<rel>", or an on-disk path. It rides
+	// onto the charter segment's Origin so a prompt dump can answer "which file
+	// put this instruction here", which is the question nobody could answer
+	// about a behaviour that silently was not inherited.
+	CharterOrigin string
 	// Experience reframes the default identity away from coding: "" (the
 	// coding-assistant identity), ExperienceChat (a conversational companion),
 	// or ExperiencePlay (acting in a simulated world through tools). It swaps
@@ -122,6 +141,16 @@ func joinSegmentTexts(segs []PromptSegment) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// charterOrigin wraps a Persona's source into a segment Origin list. Empty
+// stays empty: the legacy name-only Persona swap (TERVA_PERSONA_NAME) carries
+// no charter and no file, and an Origin pointing at nothing is worse than none.
+func charterOrigin(src string) []string {
+	if s := strings.TrimSpace(src); s != "" {
+		return []string{s}
+	}
+	return nil
+}
+
 // SystemSegments builds the ordered, labeled segments of the system prompt:
 // the identity block (a Persona intro, or a card's system_prompt, or a raw
 // Custom replace), the additive charter, terva's conventions, the optional
@@ -173,9 +202,27 @@ func SystemSegments(o SystemPromptOpts) []PromptSegment {
 		}
 		add(introSrc, intro)
 		add(SourceVessel, vessel)
-		// The charter is additive, between the identity and the conventions, so
-		// terva's harness conventions stay the final framing.
-		add(SourceCharter, strings.TrimSpace(o.Charter))
+		// The charter sits between the identity and the conventions, so terva's
+		// harness conventions stay the final framing. It carries its Origin: a
+		// charter is the one segment here that came from a file the user chose,
+		// and the dump should say which.
+		//
+		// An inherited base charter is a SECOND segment under the same source
+		// label, not a longer first one. Same rendered text either way (segments
+		// join on a blank line), but two segments keep two origins, so the dump
+		// can attribute each half to the file that wrote it — which is the only
+		// way "where did this instruction come from" stays answerable once a
+		// charter has more than one author.
+		addSeg(PromptSegment{
+			Source: SourceCharter,
+			Text:   strings.TrimSpace(o.BaseCharter),
+			Origin: charterOrigin(o.BaseCharterOrigin),
+		})
+		addSeg(PromptSegment{
+			Source: SourceCharter,
+			Text:   strings.TrimSpace(o.Charter),
+			Origin: charterOrigin(o.CharterOrigin),
+		})
 		add(SourceConventions, conventions(o))
 	}
 

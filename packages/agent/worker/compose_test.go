@@ -246,3 +246,25 @@ func TestOutOfTreePointersAreNotReRooted(t *testing.T) {
 		t.Errorf("in-tree file should re-root under the lease, got %q", got)
 	}
 }
+
+// A composed charter reaches the worker as two segments under one source
+// label. carryPortable used to ASSIGN, so the second overwrote the first and a
+// worker was briefed with the specialization stripped of the contract it
+// qualifies — a briefing that still looked complete.
+func TestBothHalvesOfAComposedCharterTravel(t *testing.T) {
+	r := loadedRepo(t)
+	r.SystemSegments = []build.PromptSegment{
+		{Source: build.SourceCharter, Text: "Inspect before changing.", Origin: []string{"embedded:mieli.md"}},
+		{Source: build.SourceCharter, Text: "Track what is in flight.", Origin: []string{"/personas/assistant.md"}},
+	}
+	b := Compose(r, demoTask(), Workspace{})
+	for _, want := range []string{"Inspect before changing.", "Track what is in flight."} {
+		if !strings.Contains(b.Identity.Charter, want) {
+			t.Errorf("briefing charter lost %q:\n%s", want, b.Identity.Charter)
+		}
+	}
+	// Order survives too: the base states the contract, the extension qualifies it.
+	if strings.Index(b.Identity.Charter, "Inspect") > strings.Index(b.Identity.Charter, "Track") {
+		t.Errorf("charter halves arrived out of order:\n%s", b.Identity.Charter)
+	}
+}

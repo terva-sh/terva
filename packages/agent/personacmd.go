@@ -21,7 +21,30 @@ const personaCharterBudget = 2000
 var (
 	personaMacroRe  = regexp.MustCompile(`\{\{char\}\}|\{\{user\}\}|<START>`)
 	personaAccentRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+	// Code regions, blanked before the macro scan. Fences first: a fenced block
+	// may contain backticks, and stripping spans first would leave its fence
+	// markers behind to pair up with the wrong thing.
+	personaFenceRe    = regexp.MustCompile("(?s)```.*?```")
+	personaCodeSpanRe = regexp.MustCompile("`[^`\n]*`")
 )
+
+// stripCodeRegions blanks fenced blocks and inline code spans.
+//
+// The macro check is about a macro that would be EMITTED: personas get no
+// substitution, so a `{{char}}` left over from a converted character card
+// reaches the model as four literal braces where a name should be. A macro
+// written as code is being SHOWN, not used — and terva ships two personas whose
+// whole job is editing character cards, so charters that discuss macros are a
+// normal thing to write, not a mistake.
+//
+// Blanking rather than deleting: a scan only asks whether a match EXISTS, and
+// splicing the text around removals could join two halves into a macro that was
+// never written.
+func stripCodeRegions(s string) string {
+	blank := func(m string) string { return strings.Repeat(" ", len(m)) }
+	return personaCodeSpanRe.ReplaceAllStringFunc(personaFenceRe.ReplaceAllStringFunc(s, blank), blank)
+}
 
 // runPersonaCommand dispatches `terva persona ...` subcommands. Returns
 // (handled=true, err) when rawArgs starts with "persona"; otherwise
@@ -129,6 +152,29 @@ func personaValidate(args []string) error {
 	return nil
 }
 
+// charterScopeNote states what a valid charter will actually do to the prompt.
+//
+// It exists because the one thing a persona author cannot see is the thing that
+// is NOT there. A charter replaces the default persona's outright — Mieli is a
+// default, not a base layer — so any operating guidance that ships in mieli.md
+// is absent from every run that selects something else. Nothing said so, and a
+// fleet ran for months on a persona missing the orientation contract before a
+// long session made the gap visible. One line here, at the moment someone is
+// authoring the file, is where that is cheapest to learn.
+// The composing case is the one where a bare char count would mislead: what
+// occupies the cached prefix is the ASSEMBLY, so that is the number reported,
+// broken down so the author can see which half they control.
+func charterScopeNote(p build.Persona) string {
+	if p.Immersive {
+		return fmt.Sprintf("%d-char charter, and it is the WHOLE prompt: immersive replaces terva's identity and harness conventions too, so include any operating guidance you want", len(p.Charter))
+	}
+	if p.Inherited != "" {
+		return fmt.Sprintf("%d-char charter assembled: %d inherited from %s, then your %d — the inherited half comes first, so yours qualifies it",
+			len(p.ComposedCharter()), len(p.Inherited), p.Extends, len(p.Charter))
+	}
+	return fmt.Sprintf("%d-char charter, and it is the ONLY charter in the prompt: a persona is chosen INSTEAD of the default (Mieli), so nothing of Mieli's charter comes with it", len(p.Charter))
+}
+
 // validateOnePersona prints a verdict for one file and reports whether it
 // passed (warnings don't fail).
 func validateOnePersona(path string) (ok bool) {
@@ -137,7 +183,7 @@ func validateOnePersona(path string) (ok bool) {
 		fmt.Printf("✗ %s: %v\n", path, err)
 		return false
 	}
-	var problems, warns []string
+	var problems, warns, notes []string
 	p, perr := build.ParsePersona(string(raw), path)
 	if perr != nil {
 		problems = append(problems, perr.Error())
@@ -148,15 +194,33 @@ func validateOnePersona(path string) (ok bool) {
 		if p.AccentColor != "" && !personaAccentRe.MatchString(p.AccentColor) {
 			problems = append(problems, fmt.Sprintf("accent_color %q is not a #RRGGBB hex value", p.AccentColor))
 		}
+		// Resolve `extends` here so the verdict is about the charter that will
+		// actually be assembled, not the half of it in this file. A bad extends
+		// is a hard error at run time (ResolvePersona composes on every path),
+		// so it must be a problem here too — reporting it as a warning would
+		// print a ✓ for a persona that cannot start.
+		composed, cerr := build.ComposeCharter(p)
+		if cerr != nil {
+			problems = append(problems, cerr.Error())
+		} else {
+			p = composed
+		}
 		// The static-block budget only applies to an ADDITIVE charter, which the
 		// host injects as a bounded block. An immersive charter becomes the whole
 		// system prompt (the --system-prompt path), so the budget does not bind.
-		if n := len(p.Charter); n > personaCharterBudget && !p.Immersive {
+		//
+		// It measures the ASSEMBLED charter, inherited half included. That is
+		// what lands in the cached prefix, and a budget that stops measuring the
+		// thing it protects is worse than one that occasionally warns.
+		if n := len(p.ComposedCharter()); n > personaCharterBudget && !p.Immersive {
 			warns = append(warns, fmt.Sprintf("charter is %d chars (over the %d static-block budget)", n, personaCharterBudget))
 		}
+		if p.Charter != "" {
+			notes = append(notes, charterScopeNote(p))
+		}
 	}
-	if personaMacroRe.Match(raw) {
-		problems = append(problems, "leftover SillyTavern macro ({{char}}/{{user}}/<START>) — clean it from the charter")
+	if personaMacroRe.MatchString(stripCodeRegions(string(raw))) {
+		problems = append(problems, "leftover SillyTavern macro ({{char}}/{{user}}/<START>) — personas get no macro substitution, so it reaches the model literally; write it as `code` if you meant to discuss it")
 	}
 
 	if len(problems) > 0 {
@@ -169,6 +233,9 @@ func validateOnePersona(path string) (ok bool) {
 	fmt.Printf("✓ %s — valid persona (%s)\n", path, p.Name)
 	for _, w := range warns {
 		fmt.Printf("    ⚠ %s\n", w)
+	}
+	for _, n := range notes {
+		fmt.Printf("    ℹ %s\n", n)
 	}
 	return true
 }

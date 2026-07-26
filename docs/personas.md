@@ -47,12 +47,18 @@ supports it.
   never replaces the identity). Keep it lean: write the specialty, not generic
   operating rules the model already knows. (For a persona that should *own* the
   identity rather than flavor it, see [Immersive personas](#immersive-personas).)
+
+  **"Additive" is about the identity, not about other charters** — see
+  [What a charter replaces](#what-a-charter-replaces) before you write one.
 - **`good_for`** — the dispatch/selection signal. A persona with a non-empty
   `good_for` is a *dispatchable specialist* (it appears in the swarm roster, see
   [Swarm dispatch](#swarm-dispatch)); the default Mieli has none.
 - **`immersive`** (optional, default `false`) — when `true`, the charter
   *replaces* the default identity instead of layering on it. See
   [Immersive personas](#immersive-personas).
+- **`extends`** (optional) — names a persona whose charter this one builds on;
+  today only `mieli`, the default. Its charter comes first, yours after. See
+  [Extending the default charter](#extending-the-default-charter).
 - **`agent_introduction`** (optional) — replaces terva's generated identity
   intro (the branded "You are *Name*, an expert coding assistant operating
   inside terva…" opening) with your own verbatim text, while **keeping** the
@@ -61,6 +67,80 @@ supports it.
   `immersive: true`.
 - The other fields are display/selection metadata. Validate a file with
   `terva persona validate <file>`.
+
+A persona gets **no macro substitution** — that is a [character card](#character-cards)
+feature. So a leftover `{{char}}`/`{{user}}`/`<START>` from a converted card
+reaches the model as literal text where a name should be, and validate rejects
+it. Writing about the macros is fine: put them in `code` spans or a fenced
+block, as the built-in card-editing personas do, and they are read as a mention
+rather than a mistake.
+
+## What a charter replaces
+
+Exactly **one** charter is ever in the prompt: the selected persona's. Charters
+do not stack, and there is no base charter underneath yours.
+
+Mieli is the **default persona**, not a base layer. So `--persona vartija` does
+not add Vartija's charter to Mieli's — it runs Vartija *instead of* Mieli, and
+every word of `mieli.md` is simply absent. That is deliberate: a security
+reviewer dispatched for one bounded question should not open with a
+collaboration preamble.
+
+It is worth stating because the absence is the one thing you cannot see. If a
+behaviour you expect is described in the default persona's charter — the
+orientation contract, say, where Mieli announces what it is about to inspect
+before a long tool-driven task — a custom persona does **not** inherit it. Write
+the parts you want into your own charter.
+
+```bash
+terva --dump-prompt | grep -A2 '\[charter'   # which file put the charter there
+terva persona validate ./mine.md             # says so before you ever run it
+```
+
+The prompt dump labels the charter segment with the persona file it came from
+(`embedded:mieli.md`, an on-disk path, or `ext:<bundle>:<file>`), so "where did
+this instruction come from" — and its harder twin, "why is this instruction
+missing" — have an answer that does not require reading the source.
+
+## Extending the default charter
+
+Sometimes you want the opposite of a clean slate: a long-lived, general-purpose
+agent that **adds** a domain to the default way of working rather than replacing
+it. Say so with `extends`:
+
+```markdown
+---
+name: Assistant
+extends: mieli
+specialty: administrative planning and progress tracking
+---
+
+Operate as a calm administrative partner. Track what is in flight, what is
+blocked, and what needs a decision.
+```
+
+The assembled charter is the base charter followed by yours, so your
+specialization qualifies the general contract rather than being qualified by it.
+Both halves keep their own provenance in `--dump-prompt`.
+
+- **Only `extends: mieli` works today** — the default persona, nothing else. A
+  general persona-to-persona graph is not shipped, so an unsupported value is an
+  error at startup rather than a silent no-op.
+- **Opt-in, never automatic.** A dispatched specialist must not inherit a
+  collaboration style it will never use, which is why the built-in crew extends
+  nothing and every shipped charter is self-contained.
+- **Not valid with `immersive: true`.** An immersive charter is already the
+  whole prompt, so there is nothing for a base to be additive to; the
+  combination fails validation instead of quietly picking a meaning.
+- **The 2000-char budget measures the assembly.** `persona validate` reports the
+  split — what you inherited, what you wrote — because the cached prefix carries
+  both and only one of them is yours to shorten.
+- It degrades gracefully in the other direction too: a host that predates the
+  field ignores the unknown key and loads the file exactly as before.
+
+Reach for it when you find yourself pasting a built-in charter into your own
+file. That copy is a fork with no link home — it stops tracking the original the
+moment either changes, and nothing reports the drift.
 
 ## Immersive personas
 
@@ -293,8 +373,8 @@ web tools *and* the deep-researcher charter.
 
 ```bash
 terva persona list                # the merged roster + provenance + overrides
-terva persona validate <file>...  # required name? non-empty charter? no
-                                  #   {{char}}/{{user}}/<START> macros? valid accent_color?
+terva persona validate <file>...  # required name? non-empty charter? no leftover
+                                  #   card macros? valid accent_color? resolvable extends?
 terva persona init [--force]      # copy the built-in crew into $TERVA_HOME/personas/ to fork
 ```
 

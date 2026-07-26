@@ -81,6 +81,7 @@ export interface PersonaForm {
   immersive: boolean
   introduction: string
   charter: string
+  extends: string
 }
 
 const EMPTY: PersonaForm = {
@@ -97,6 +98,7 @@ const EMPTY: PersonaForm = {
   immersive: false,
   introduction: '',
   charter: '',
+  extends: '',
 }
 
 export function formFromView(v: PersonaView): PersonaForm {
@@ -114,6 +116,11 @@ export function formFromView(v: PersonaView): PersonaForm {
     immersive: v.immersive ?? false,
     introduction: v.introduction ?? '',
     charter: v.charter ?? '',
+    // Round-tripped verbatim rather than through a checkbox. A checkbox would
+    // have to map some strings to on and everything else to off, and saving
+    // then rewrites the file with whatever the checkbox meant — erasing a value
+    // it could not represent.
+    extends: v.extends ?? '',
   }
 }
 
@@ -296,6 +303,12 @@ export function PersonaEditor(props: {
               rows={12}
               hint={t('The behavioural body — what actually shapes how this persona acts. This is the substance of a persona.')}
               onInput={(v) => set('charter', v)}
+            />
+            <EditField
+              label={t('Extends')}
+              value={form.extends}
+              hint={t("Optional. Name a persona whose charter this one builds on — today only “mieli”, the default. Its charter comes first, yours after. Leave empty and yours is the only charter in the prompt.")}
+              onInput={(v) => set('extends', v)}
             />
             <EditField
               label={t('Introduction')}

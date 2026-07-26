@@ -70,6 +70,15 @@ describe('formFromView', () => {
     expect(f.recommended_skills).toEqual([])
     expect(f.charter).toBe('')
     expect(f.immersive).toBe(false)
+    expect(f.extends).toBe('')
+  })
+
+  // extends is the field most easily lost: nothing in the editor prompts you to
+  // set it, so an edit that drops it deletes an inheritance the user never
+  // touched — and the result looks like a persona that simply never had one.
+  it('round-trips extends so an edit cannot silently drop the inheritance', () => {
+    const f = formFromView({ name: 'Assistant', ref: 'assistant', origin: 'user', extends: 'mieli' })
+    expect(f.extends).toBe('mieli')
   })
 })
 

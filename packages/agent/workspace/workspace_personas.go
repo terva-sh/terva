@@ -135,6 +135,7 @@ func paramsToPersona(p ctrlproto.PersonaWriteParams) build.Persona {
 		Immersive:         p.Immersive,
 		Introduction:      p.Introduction,
 		Charter:           p.Charter,
+		Extends:           p.Extends,
 	}
 }
 
@@ -166,6 +167,7 @@ func personaView(p build.Persona) ctrlproto.PersonaView {
 		AvoidFor:          p.AvoidFor,
 		Introduction:      p.Introduction,
 		Charter:           p.Charter,
+		Extends:           p.Extends,
 	}
 }
 

@@ -54,6 +54,11 @@ func MarshalPersona(p Persona) ([]byte, error) {
 		AvoidFor:          p.AvoidFor,
 		Immersive:         p.Immersive,
 		AgentIntroduction: strings.TrimSpace(p.Introduction),
+		// Extends, not the RESOLVED Inherited charter. Writing the resolved text
+		// back would turn a reference into the hand-copied fork that `extends`
+		// exists to replace — and it would do it the first time anyone opened
+		// the persona in an editor and pressed save.
+		Extends: strings.TrimSpace(p.Extends),
 	})
 	if err != nil {
 		return nil, err

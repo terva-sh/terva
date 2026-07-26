@@ -1215,6 +1215,7 @@ export interface PersonaView extends PersonaSummary {
   avoid_for?: string[]
   introduction?: string
   charter?: string
+  extends?: string
 }
 
 // PersonaWriteParams is the editable form — what personas.create/edit accept.
@@ -1237,6 +1238,9 @@ export interface PersonaWriteParams {
   immersive?: boolean
   introduction?: string
   charter?: string
+  // A persona whose charter this one builds on. Subject to the same warning as
+  // every other field above: an edit that does not send it back DELETES it.
+  extends?: string
 }
 
 export interface PersonasListResult {

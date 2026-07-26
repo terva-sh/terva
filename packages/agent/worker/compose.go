@@ -112,7 +112,15 @@ func carryPortable(b *Briefing, seg build.PromptSegment) {
 		// nothing here to send.
 		b.Identity.Intro = text
 	case build.SourceCharter:
-		b.Identity.Charter = text
+		// APPEND, not assign. A composed charter (`extends`) arrives as more
+		// than one segment under this label — the inherited base, then the
+		// persona that extends it — and an assignment kept only the last, which
+		// sent a worker the specialization stripped of the contract it
+		// qualifies. Silently: the briefing still looked complete.
+		if b.Identity.Charter != "" {
+			b.Identity.Charter += "\n\n"
+		}
+		b.Identity.Charter += text
 	case build.SourceIntroOverride, build.SourcePersonaIntro,
 		build.SourceCardSystem, build.SourceCardFraming:
 		// A persona or card that owns its intro outright. Same slot; it already

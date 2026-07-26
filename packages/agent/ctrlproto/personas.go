@@ -63,6 +63,11 @@ type PersonaWriteParams struct {
 	Immersive         bool     `json:"immersive,omitempty"`
 	Introduction      string   `json:"introduction,omitempty"`
 	Charter           string   `json:"charter,omitempty"`
+	// Extends names a persona whose charter this one builds on. A write
+	// REPLACES the whole file, so a client that renders a persona and saves it
+	// back must round-trip this field or it silently deletes the inheritance —
+	// the same class of quiet loss `extends` exists to fix.
+	Extends string `json:"extends,omitempty"`
 }
 
 // PersonasListResult is the payload of personas.list.
@@ -100,4 +105,5 @@ type PersonaView struct {
 	AvoidFor          []string `json:"avoid_for,omitempty"`
 	Introduction      string   `json:"introduction,omitempty"`
 	Charter           string   `json:"charter,omitempty"`
+	Extends           string   `json:"extends,omitempty"`
 }

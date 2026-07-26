@@ -255,3 +255,44 @@ func TestWorkspacePersonaDeleteUnknown(t *testing.T) {
 		t.Error("deleting an unknown persona should error")
 	}
 }
+
+// The control-plane leg of the round trip. A persona write REPLACES the file,
+// so `extends` has to survive create → get → edit or the library silently
+// deletes an inheritance the user never touched — and the deletion looks
+// exactly like a persona that never had one.
+func TestWorkspacePersonaExtendsSurvivesTheEditRoundTrip(t *testing.T) {
+	w := newPersonaWorkspace(t)
+	ctx := context.Background()
+	if err := config.TrustPath(w.cwd, false); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := w.PersonasCreate(ctx, ctrlproto.PersonaWriteParams{
+		Name: "Assistant", Extends: "mieli", Charter: "Track what is in flight.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Extends != "mieli" {
+		t.Errorf("create dropped extends: %+v", created)
+	}
+
+	got, err := w.PersonasGet(ctx, ctrlproto.PersonaGetParams{Name: created.Ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Extends != "mieli" {
+		t.Fatalf("get does not return extends, so no editor could send it back: %+v", got)
+	}
+
+	// The editor sends the view back, whole. That is the flow this guards.
+	edited, err := w.PersonasEdit(ctx, ctrlproto.PersonaWriteParams{
+		Name: got.Name, Extends: got.Extends, Charter: "Track what is in flight, and what is blocked.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.Extends != "mieli" {
+		t.Errorf("edit erased extends: %+v", edited)
+	}
+}

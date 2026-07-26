@@ -31,6 +31,13 @@ const BuiltinPersonasRoot = "personas/builtin"
 // the same path as --system-prompt/SYSTEM.md) — for roleplay and chat-companion
 // personas that need to own the identity, not just flavor it. An explicit
 // --system-prompt/SYSTEM.md still wins over an immersive Persona.
+//
+// "Additive" is about the IDENTITY and only the identity. Charters do not
+// stack: SystemSegments emits exactly one, this Persona's. Mieli is the
+// DEFAULT Persona rather than a base layer, so selecting any other Persona
+// means Mieli's charter is simply absent — not overridden, not merged. That
+// distinction is easy to lose because both live in the same field, and losing
+// it costs a fleet the operating guidance it thought it had.
 type Persona struct {
 	Name              string
 	Pronunciation     string
@@ -54,6 +61,24 @@ type Persona struct {
 	// agent_introduction frontmatter field. Ignored when Immersive is set.
 	Introduction string
 	Charter      string // the markdown body, trimmed
+	// Extends names a Persona whose charter this one builds on, from the
+	// `extends` frontmatter field. RAW and unresolved — see ComposeCharter for
+	// why resolution cannot happen at parse time, and for the v1 scope.
+	//
+	// Opt-in by design. A specialist dispatched for one bounded question must
+	// not inherit a collaboration style it will never use, so the population
+	// this serves is the narrow one: long-lived general-purpose agents that add
+	// a domain to the default way of working rather than replacing it.
+	//
+	// An older host ignores the unknown key and loads the file as it always
+	// did, which is why this is frontmatter rather than a body macro — a macro
+	// would emit its own literal text into the prompt on a host that predates it.
+	Extends string
+	// Inherited is the base charter ComposeCharter resolved from Extends, and
+	// InheritedSource is the file it came from. Both empty for the overwhelming
+	// majority of personas, which extend nothing.
+	Inherited       string
+	InheritedSource string
 	// Namespace groups the Persona: a team subdirectory under personas/, or the
 	// extension name for an extension-shipped Persona. "" = top-level. The
 	// qualified name is "<namespace>:<name>".
@@ -128,6 +153,7 @@ type personaFrontmatter struct {
 	AvoidFor          []string `yaml:"avoid_for,omitempty"`
 	Immersive         bool     `yaml:"immersive,omitempty"`
 	AgentIntroduction string   `yaml:"agent_introduction,omitempty"`
+	Extends           string   `yaml:"extends,omitempty"`
 }
 
 // ParsePersona parses a Persona .md (YAML frontmatter + charter body). A
@@ -155,6 +181,7 @@ func ParsePersona(raw, source string) (Persona, error) {
 		Immersive:         fm.Immersive,
 		Introduction:      strings.TrimSpace(fm.AgentIntroduction),
 		Charter:           strings.TrimSpace(body),
+		Extends:           strings.TrimSpace(fm.Extends),
 		Source:            source,
 	}
 	if p.Name == "" {
@@ -197,7 +224,23 @@ func splitPersonaFrontmatter(raw string) (string, string) {
 // When both Persona.md and default_persona are set, the file wins (with a
 // warning). A non-empty override or default_persona that resolves to nothing is
 // an error (fail-fast on a typo), like an explicitly-named missing context file.
+//
+// Charter composition (`extends`) happens HERE and nowhere else, on every path
+// out of selectPersona — one choke point a caller cannot route around, so a
+// persona can never reach a prompt with its `extends` unresolved. LookupPersona
+// deliberately does not compose: the persona LIBRARY shows what a file says,
+// while a RUN gets what the file assembles to.
 func ResolvePersona(override string) (Persona, error) {
+	p, err := selectPersona(override)
+	if err != nil {
+		return p, err
+	}
+	return ComposeCharter(p)
+}
+
+// selectPersona is the precedence walk described on ResolvePersona, returning
+// the persona as its file declares it — uncomposed.
+func selectPersona(override string) (Persona, error) {
 	if s := strings.TrimSpace(override); s != "" {
 		return loadPersonaByNameOrPath(s)
 	}
