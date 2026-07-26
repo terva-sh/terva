@@ -223,7 +223,13 @@ func Negotiate(local, remote Hello) Contract {
 }
 
 // ServerHello is the default server-side [Hello] for a full workspace
-// (all three groups + every feature). Carriers may trim it.
+// (all three groups + every serve-behavior feature). Carriers may trim it.
+// Presentation features gated on host state (FeatureStage) are appended by
+// the composition root, not here. A feature that serve.go changes behavior
+// on MUST appear in this list: Negotiate is a strict intersection, so a
+// server-behavior feature missing here is dead on the wire no matter how
+// many clients request it — TestServerHelloAdvertisesServeGatedFeatures
+// pins that.
 func ServerHello(agent, version string) Hello {
 	return Hello{
 		Role:     RoleServer,
@@ -231,6 +237,6 @@ func ServerHello(agent, version string) Hello {
 		Agent:    agent,
 		Version:  version,
 		Groups:   []Group{GroupConversation, GroupSession, GroupControl},
-		Features: []string{FeatureImages, FeatureResolveEvents, FeatureContextTree, FeatureImageData, FeatureFilesList, FeatureGenerateTitle, FeatureWorkspaceEvents},
+		Features: []string{FeatureImages, FeatureResolveEvents, FeatureContextTree, FeatureImageData, FeatureFilesList, FeatureGenerateTitle, FeatureWorkspaceEvents, FeatureHistoryWindow},
 	}
 }

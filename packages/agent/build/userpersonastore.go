@@ -78,7 +78,30 @@ func (s *UserPersonaStore) Get(ref string) (UserPersona, error) {
 	if slug == "" {
 		return UserPersona{}, fmt.Errorf("user persona: empty ref")
 	}
-	return s.read(filepath.Join(s.dir, slug+".json"))
+	p, err := s.read(filepath.Join(s.dir, slug+".json"))
+	if err != nil && os.IsNotExist(err) {
+		// Saved before slugs folded diacritics? The file sits under the old
+		// spelling; accept it only when it names this persona, so "Zoë"
+		// cannot pick up a distinct "Zo".
+		if old, ok := s.legacy(ref); ok {
+			return old, nil
+		}
+	}
+	return p, err
+}
+
+// legacy returns the persona filed under name's pre-diacritic-fold slug, if
+// that file exists and actually names this persona.
+func (s *UserPersonaStore) legacy(name string) (UserPersona, bool) {
+	slug := legacyCardSlug(name)
+	if slug == "" || slug == cardSlug(name) {
+		return UserPersona{}, false
+	}
+	old, err := s.read(filepath.Join(s.dir, slug+".json"))
+	if err != nil || !strings.EqualFold(old.Name, name) {
+		return UserPersona{}, false
+	}
+	return old, true
 }
 
 // Save upserts a persona keyed by a slug of its name, returning the stored form
@@ -99,6 +122,12 @@ func (s *UserPersonaStore) Save(p UserPersona) (UserPersona, error) {
 	if err := os.WriteFile(filepath.Join(s.dir, slug+".json"), raw, 0o644); err != nil {
 		return UserPersona{}, err
 	}
+	// The save lands on the folded slug; the same persona's pre-fold file
+	// would otherwise stay behind as a second List entry. s.legacy has
+	// name-checked, so a distinct persona's file is never touched.
+	if _, ok := s.legacy(p.Name); ok {
+		_ = os.Remove(filepath.Join(s.dir, legacyCardSlug(p.Name)+".json"))
+	}
 	return p, nil
 }
 
@@ -108,8 +137,17 @@ func (s *UserPersonaStore) Delete(ref string) error {
 	if slug == "" {
 		return fmt.Errorf("user persona: empty ref")
 	}
-	if err := os.Remove(filepath.Join(s.dir, slug+".json")); err != nil && !os.IsNotExist(err) {
-		return err
+	if err := os.Remove(filepath.Join(s.dir, slug+".json")); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		// Nothing under the folded slug — the persona may still be filed
+		// under its pre-fold spelling (name-checked, like Get).
+		if _, ok := s.legacy(ref); ok {
+			if lerr := os.Remove(filepath.Join(s.dir, legacyCardSlug(ref)+".json")); lerr != nil && !os.IsNotExist(lerr) {
+				return lerr
+			}
+		}
 	}
 	return nil
 }

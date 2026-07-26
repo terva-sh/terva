@@ -249,6 +249,16 @@ type Resolved struct {
 	userGender   string
 	userPronouns string
 
+	// tervaDocsDir / tervaExamplesDir are the doc-hint targets
+	// tervadocs/tervaexamples.EnsureInstalled resolved (empty when the install
+	// failed and the hint was suppressed), captured so rebuildSystemPrompt
+	// re-renders with exactly what Resolve rendered with. Re-deriving them at
+	// rebuild time is what silently dropped the examples hint on every
+	// post-resolve rebuild — and resurrected a docs hint pointing at a
+	// directory the failed install never wrote.
+	tervaDocsDir     string
+	tervaExamplesDir string
+
 	// SystemSegments is the labeled provenance of the current system prompt
 	// (the source SystemSegments produced), captured for the prompt-dump
 	// manifest. Kept in sync by rebuildSystemPrompt.
@@ -314,7 +324,8 @@ func (r *Resolved) rebuildSystemPrompt() {
 		Tools:             toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
 		Custom:            r.systemCustom,
 		Append:            appendBlocks,
-		TervaDocsDir:      filepath.Join(config.TervaHome(), "docs"),
+		TervaDocsDir:      r.tervaDocsDir,
+		TervaExamplesDir:  r.tervaExamplesDir,
 		StatusTool:        r.ToolRegistry["terva_status"] != nil,
 		PersonaName:       r.Persona.Name,
 		Charter:           r.Persona.Charter,
@@ -1213,6 +1224,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		systemAppend:             append_,
 		SystemSegments:           sysSegs,
 		systemCustom:             custom,
+		tervaDocsDir:             docsDir,
+		tervaExamplesDir:         examplesDir,
 		Persona:                  Persona,
 		toolDescriptions:         descMapFromSummaries(summaries),
 		ApprovalMode:             approval,

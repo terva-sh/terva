@@ -17,7 +17,8 @@
       "image-data",
       "files-list",
       "generate-title",
-      "workspace-events"
+      "workspace-events",
+      "history-window"
     ]
   }
 }

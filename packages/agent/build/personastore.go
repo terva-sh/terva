@@ -76,7 +76,10 @@ func MarshalPersona(p Persona) ([]byte, error) {
 
 // UserPersonaPath returns the on-disk library path for a persona name and
 // whether a file already exists there — how the control surface tells a create
-// (must be new) from an edit (may overwrite / shadow a built-in).
+// (must be new) from an edit (may overwrite / shadow a built-in). A persona
+// saved before slugs folded diacritics sits under the old spelling ("sepp.md"
+// for "Seppä"); that file is reported instead, so an edit lands on the persona
+// the user actually has — and WritePersona is what moves it to the folded stem.
 func UserPersonaPath(name string) (string, bool) {
 	slug := cardSlug(name)
 	if slug == "" {
@@ -86,27 +89,60 @@ func UserPersonaPath(name string) (string, bool) {
 	if _, err := os.Stat(p); err == nil {
 		return p, true
 	}
+	if legacy, ok := legacyPersonaFile(name); ok {
+		return legacy, true
+	}
 	return p, false
+}
+
+// legacyPersonaFile reports the pre-diacritic-fold library file for name, if
+// one is present AND actually names this persona — "Sepp" legitimately owns
+// sepp.md, and a lookup for "Seppä" must not claim it.
+func legacyPersonaFile(name string) (string, bool) {
+	legacy := legacyCardSlug(name)
+	if legacy == "" || legacy == cardSlug(name) {
+		return "", false
+	}
+	p := filepath.Join(PersonasDir(), legacy+".md")
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return "", false
+	}
+	old, err := ParsePersona(string(raw), p)
+	if err != nil || !strings.EqualFold(old.Name, name) {
+		return "", false
+	}
+	return p, true
 }
 
 // WritePersona writes a persona into the user library ($TERVA_HOME/personas),
 // returning the file path. Copy-to-edit of a built-in falls out for free: the
-// written user file shadows the embedded one by Key (user tier wins). Enforcing
-// the trust gate is the CALLER's job — this is the mechanism, not the policy.
+// written user file shadows the embedded one by Key (user tier wins) — which
+// is exactly why the file must land on the FOLDED slug ("seppa.md"), the stem
+// the built-in uses, never on a pre-fold spelling. Enforcing the trust gate is
+// the CALLER's job — this is the mechanism, not the policy.
 func WritePersona(p Persona) (string, error) {
 	raw, err := MarshalPersona(p)
 	if err != nil {
 		return "", err
 	}
-	dest, _ := UserPersonaPath(p.Name)
-	if dest == "" {
+	slug := cardSlug(p.Name)
+	if slug == "" {
 		return "", fmt.Errorf("persona: name %q has no usable filename", p.Name)
 	}
+	dest := filepath.Join(PersonasDir(), slug+".md")
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(dest, raw, 0o644); err != nil {
 		return "", err
+	}
+	// A file this persona minted before diacritic folding ("sepp.md") would
+	// otherwise linger as a second roster entry that still fails to shadow its
+	// built-in. legacyPersonaFile has name-checked, so this cannot remove a
+	// distinct persona's file.
+	if legacy, ok := legacyPersonaFile(p.Name); ok && legacy != dest {
+		_ = os.Remove(legacy)
 	}
 	return dest, nil
 }
