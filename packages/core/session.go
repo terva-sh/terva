@@ -394,6 +394,12 @@ type stallRecord struct {
 	Axis   string `json:"axis,omitempty"`   // spin (same call) | churn (same failure)
 	Tool   string `json:"tool,omitempty"`   // the tool the model looped on
 	Detail string `json:"detail,omitempty"` // the repeated error/guard slice; empty for spin
+	// Rung distinguishes the first nudge (1) from the firm hold-off that follows
+	// when the loop outlives it (2). Omitted on rung 1 and on every row written
+	// before rung 2 existed, so absent reads as 1 — which is what makes "the
+	// nudge fired and was ignored" distinguishable from "it fired and worked"
+	// without re-reading the whole transcript.
+	Rung int `json:"rung,omitempty"`
 }
 
 const (
@@ -2112,11 +2118,11 @@ func (s *Session) AppendStall(rec StallRecord) error {
 	if s == nil {
 		return nil
 	}
-	return s.writeLine(sessionLine{Type: recordStall, Stall: &stallRecord{
-		Axis:   rec.Axis,
-		Tool:   rec.Tool,
-		Detail: rec.Detail,
-	}})
+	row := &stallRecord{Axis: rec.Axis, Tool: rec.Tool, Detail: rec.Detail}
+	if rec.Rung > 1 {
+		row.Rung = rec.Rung // omitted for rung 1, which is what absent already means
+	}
+	return s.writeLine(sessionLine{Type: recordStall, Stall: row})
 }
 
 // AppendUsage writes a usage row to the session.

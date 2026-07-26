@@ -91,6 +91,41 @@ type Escalator interface {
 	Escalate(ctx context.Context, r EscalationRequest) (EscalationOutcome, error)
 }
 
+// stallHoldOff is the HOLD-OFF: the detector's second in-band note, a firmer
+// word that fires when a loop has outlived the first one and the hatch's later
+// rungs cannot act.
+//
+// Deliberately not called "rung 2" — the proposal's ladder already gives that
+// number to the human ask. This is a second note on rung 1's own channel, which
+// is why it needs no Asker, no target and no consent.
+//
+// It exists because the ladder used to terminate at rung 1 for any deployment
+// without an escalation target — which is every deployment until someone
+// configures one. The tracker would establish that a signature had crossed the
+// watermark, `maybeEscalate` would find nothing to escalate to, and the loop
+// would run on unremarked; in the session that produced TW-028, ten further
+// identical calls followed the single nudge inside one turn.
+//
+// This is deliberately the SMALLEST thing that closes that: no new threshold
+// (it rides stallEscalateAfterNudge, already the watermark), no new
+// configuration, and no refusal to dispatch. terva still does not decide on the
+// model's behalf — it just stops being silent. markEscalated has already fired
+// by the time this is called, so it speaks at most once per turn.
+//
+// The record carries Rung 2 — the count of in-band notes, not a hatch rung — so
+// a later reader can tell this from the first nudge, which is what makes "did
+// the second word land?" answerable from the session log the way the first
+// already is.
+func (a *Agent) stallHoldOff(sig *stallEscalation, sink func(AgentEvent)) {
+	if sig == nil {
+		return
+	}
+	a.stall.stageHandoff(stallHoldOffNudge(sig.tool, sig.count, sig.detail))
+	rec := StallRecord{Axis: sig.axis, Tool: sig.tool, Detail: sig.detail, Rung: 2}
+	a.fireStall(rec)
+	sink(EvStall{StallRecord: rec})
+}
+
 // maybeEscalate acts on a raised escalation request: under the auto policy it
 // swaps directly, otherwise it asks the user first. It returns stop=true only
 // when the user explicitly chooses to end the turn. Everything else — a swap, a
@@ -101,18 +136,31 @@ type Escalator interface {
 // escalation feature on, and an Escalator bound. In headless modes with no Asker
 // and auto off, there is no one to consent, so the nudge simply stood.
 func (a *Agent) maybeEscalate(ctx context.Context, sink func(AgentEvent)) (stop bool) {
-	if !a.stuckLoopEscalationOn() || a.Escalator == nil {
-		return false
-	}
 	sig, ok := a.stall.escalation()
 	if !ok {
 		return false
 	}
-	a.stall.markEscalated() // one offer per turn, whatever the outcome
+	a.stall.markEscalated() // one intervention per turn, whichever rung serves it
 
+	// Rung 3 needs three things: the feature on, an Escalator bound, and a target
+	// configured. Every one of them missing is the DEFAULT state rather than an
+	// edge case — no deployment has an escalation target until someone sets one —
+	// so each of these was a path where the tracker had already established that a
+	// loop crossed the watermark and then nothing whatsoever happened. That is the
+	// gap TW-028 named: with escalation unconfigured there was no rung between one
+	// nudge and silence. They fall through to the hold-off now.
+	//
+	// Note the gate: the hold-off is part of the DETECTOR, not of escalation. A
+	// deployment that turned stuck_loop_escalation off asked not to have its model
+	// swapped; it did not ask to stop being told it is looping.
+	if !a.stuckLoopEscalationOn() || a.Escalator == nil {
+		a.stallHoldOff(sig, sink)
+		return false
+	}
 	target, ok := a.Escalator.Target()
 	if !ok {
-		return false // inert without a configured target
+		a.stallHoldOff(sig, sink) // inert without a configured target
+		return false
 	}
 
 	// From here a target is configured, so an escalation decision is being made
@@ -130,7 +178,11 @@ func (a *Agent) maybeEscalate(ctx context.Context, sink func(AgentEvent)) (stop 
 	if !rec.Auto {
 		asker := a.Asker
 		if asker == nil {
-			return false // no channel to consent and not auto: the nudge stood, no decision made
+			// Nobody to consent and not auto — the unattended case, where a loop
+			// runs with no operator watching. The hold-off is the whole intervention
+			// available here, which is exactly when it matters most.
+			a.stallHoldOff(sig, sink)
+			return false
 		}
 		escalateOpt := i18n.T("Escalate")
 		stopOpt := i18n.T("Stop")

@@ -2,8 +2,10 @@ package core
 
 import (
 	"encoding/json"
+	"hash/fnv"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"terva.sh/terva/packages/i18n"
@@ -30,9 +32,25 @@ import (
 //
 // Two axes catch two different loops, and their union trips:
 //
-//   - spin: the same (tool, canonical args), regardless of result. Canonical args
-//     drop free-text "thought" fields so cosmetic prose churn can't hide a
-//     structural repeat. Catches a file re-read four times over.
+//   - spin: the same (tool, canonical args, result), i.e. REDUNDANT WORK — a call
+//     that returned what the model was already holding. Canonical args drop
+//     free-text "thought" fields so cosmetic prose churn can't hide a structural
+//     repeat. Catches a file re-read four times over.
+//
+//     The result is part of the key because "the same call" cannot be read off
+//     the arguments alone: a bounded batch loop repeats a byte-identical query on
+//     purpose, once per batch, because each preceding mutation removes that batch
+//     from the matching set — ten identical calls, ten different results, correct
+//     throughout. Keying on arguments alone nudged that loop with a claim that was
+//     simply false ("you already have the result"), and the model had to spend a
+//     turn rebutting it. A poll whose result keeps changing is not redundant work;
+//     it is the shape every self-consuming loop is written in.
+//
+//     The trade, stated plainly: a caller repeating a call whose output varies on
+//     its own — a clock, a growing log — no longer trips this axis. Those are the
+//     least harmful repeats available, since each one returns information the
+//     model did not have. Catching THAT would be a different axis (aimless
+//     polling), not a wider reading of this one.
 //   - error-churn: the same (tool, normalized error), regardless of args. Catches
 //     the death loop, whose args varied per call (a different `evidence` string
 //     each time) while the error was identical — the case an args-inclusive key
@@ -80,9 +98,36 @@ const stallWindow = 8
 const stallDetailMax = 120
 
 type stallStep struct {
-	spinKey  string // tool + canonical args
+	spinKey  string // tool + canonical args + result digest
 	churnKey string // tool + normalized result-class; "" when the result was productive
 	detail   string // readable error/guard slice for the nudge
+}
+
+// resultFingerprint digests what a call RETURNED, for the spin key.
+//
+// A digest rather than the text: a step is retained for the whole window, and
+// holding stallWindow tool results would make the detector a second copy of the
+// transcript. A collision would read two different results as identical, which
+// re-introduces exactly one false nudge — the failure this axis is being
+// narrowed to avoid — so the space is 64 bits rather than something shorter.
+//
+// The bytes are hashed AS THEY CAME. Normalizing volatile substrings out first
+// was tempting and is the wrong trade: it is guesswork about which parts of an
+// arbitrary tool's output are incidental, and over-normalizing puts the false
+// positive straight back. The consequence is a documented limitation — a tool
+// that stamps its own output (a timestamp, an elapsed time) never trips the
+// spin axis, because no two of its results are byte-identical. Among built-in
+// tools that is `bash` running a volatile command; the rest are stable, and
+// TestStallSpinIgnoresTimestampedResults pins the behaviour so it is a known
+// gap rather than a surprise.
+func resultFingerprint(tr provider.ToolResultBlock) string {
+	h := fnv.New64a()
+	if tr.IsError {
+		// An error and a success carrying the same text are not the same result.
+		_, _ = h.Write([]byte{1})
+	}
+	_, _ = h.Write([]byte(toolResultText(tr)))
+	return strconv.FormatUint(h.Sum64(), 36)
 }
 
 type stallTracker struct {
@@ -131,6 +176,16 @@ type stallEscalation struct {
 	tool      string
 	reason    string // "stuck on task_update ×5: <error>" — for the ask and handoff marker
 	signature string // the tripped signature, opaque to the host
+	// axis, count and detail are the same facts the reason prose was built from,
+	// kept structured because the hold-off (see Agent.stallHoldOff) speaks to the MODEL and needs to phrase them itself rather than quote a
+	// string written for a human consent prompt.
+	//
+	// axis is carried rather than derived. Inferring it from an empty detail is
+	// wrong: the read-dedup guard produces a churn signature with a non-error
+	// result, so "no detail" does not mean spin — it means nothing at all.
+	axis   string
+	count  int
+	detail string
 }
 
 // stallAxis names which detector axis tripped.
@@ -159,6 +214,12 @@ type StallRecord struct {
 	Axis   string // "spin" (same call repeated) | "churn" (same failure repeated)
 	Tool   string // the tool the model looped on
 	Detail string // the repeated error/guard slice; empty for spin
+	// Rung counts the detector's IN-BAND notes for this loop: 1 = the first
+	// nudge, 2 = the firmer hold-off that follows when the loop outlives it and
+	// the hatch's later rungs cannot act. It is not the proposal's hatch-rung
+	// number (where 2 is the human ask). Zero on records written before the
+	// hold-off existed, so a reader treats absent as 1.
+	Rung int
 }
 
 // reset clears the tracker for a new turn. A repeat across turns is usually the
@@ -258,7 +319,7 @@ func (t *stallTracker) observe(call, result provider.Message) []stallEvent {
 // turn (the recurrences after it are the next rung's concern), so at most one
 // record per distinct loop reaches the session log.
 func (t *stallTracker) record(tc provider.ToolCallBlock, tr provider.ToolResultBlock) (stallEvent, bool) {
-	step := stallStep{spinKey: tc.Name + "\x00" + canonicalArgs(tc.Arguments)}
+	step := stallStep{spinKey: tc.Name + "\x00" + canonicalArgs(tc.Arguments) + "\x00" + resultFingerprint(tr)}
 	if class, detail, ok := unproductiveResult(tr); ok {
 		step.churnKey = tc.Name + "\x00" + class
 		step.detail = detail
@@ -308,19 +369,19 @@ func (t *stallTracker) record(tc provider.ToolCallBlock, tr provider.ToolResultB
 	case churnN >= stallThreshold:
 		tripped := t.trip(churnSig, tc.Name, churnRung, step.detail)
 		if churnRung >= esc {
-			t.raiseEscalation(tc.Name, churnRung, step.detail, churnSig)
+			t.raiseEscalation(stallAxisChurn, tc.Name, churnRung, step.detail, churnSig)
 		}
 		if tripped {
-			t.raiseThrashEscalation(tc.Name) // a new distinct loop; escalate if enough have nudged
+			t.raiseThrashEscalation(stallAxisChurn, tc.Name) // a new distinct loop; escalate if enough have nudged
 			return stallEvent{axis: stallAxisChurn, tool: tc.Name, detail: step.detail}, true
 		}
 	case spinN >= stallThreshold:
 		tripped := t.trip(spinSig, tc.Name, spinRung, "")
 		if spinRung >= esc {
-			t.raiseEscalation(tc.Name, spinRung, "", spinSig)
+			t.raiseEscalation(stallAxisSpin, tc.Name, spinRung, "", spinSig)
 		}
 		if tripped {
-			t.raiseThrashEscalation(tc.Name)
+			t.raiseThrashEscalation(stallAxisSpin, tc.Name)
 			return stallEvent{axis: stallAxisSpin, tool: tc.Name}, true
 		}
 	}
@@ -338,11 +399,14 @@ func (t *stallTracker) note(sig string) {
 
 // raiseEscalation stages an escalation request, at most once per turn (escalated)
 // and never over an already-pending one.
-func (t *stallTracker) raiseEscalation(tool string, count int, detail, sig string) {
+func (t *stallTracker) raiseEscalation(axis, tool string, count int, detail, sig string) {
 	if t.escalated || t.escalate != nil {
 		return
 	}
-	t.escalate = &stallEscalation{tool: tool, reason: stallReason(tool, count, detail), signature: sig}
+	t.escalate = &stallEscalation{
+		tool: tool, reason: stallReason(tool, count, detail), signature: sig,
+		axis: axis, count: count, detail: detail,
+	}
 }
 
 // raiseThrashEscalation is the thrash trigger: it escalates once the number of
@@ -350,13 +414,16 @@ func (t *stallTracker) raiseEscalation(tool string, count int, detail, sig strin
 // each fresh nudge; a no-op until the count is reached, and idempotent after
 // (raiseEscalation's guard is shared via the escalate field). tool is the current
 // loop's tool, named only so the request carries something concrete.
-func (t *stallTracker) raiseThrashEscalation(tool string) {
+func (t *stallTracker) raiseThrashEscalation(axis, tool string) {
 	// Backs off by past declines: each "keep trying" demands more distinct loops
 	// before the next offer.
 	if len(t.nudged) < stallThrashThreshold+t.declines || t.escalated || t.escalate != nil {
 		return
 	}
-	t.escalate = &stallEscalation{tool: tool, reason: stallThrashReason(len(t.nudged)), signature: "thrash"}
+	t.escalate = &stallEscalation{
+		tool: tool, reason: stallThrashReason(len(t.nudged)), signature: "thrash",
+		axis: axis, count: len(t.nudged),
+	}
 }
 
 func stallThrashReason(n int) string {
@@ -495,6 +562,26 @@ func normalizeError(s string) string {
 	s = stallTookRe.ReplaceAllString(s, "")
 	s = stallWsRe.ReplaceAllString(s, " ")
 	return clip(strings.TrimSpace(s), stallDetailMax)
+}
+
+// stallHoldOffNudge is the hold-off: the firm word that follows when a loop
+// outlives its first nudge. Deliberately different prose, because repeating rung 1
+// verbatim is itself a loop — and pointedly more directive, since by this point
+// the gentler reading has been tried and did not land.
+//
+// It states the count (rung 1's phrasing invited "I'll try once more"), names
+// the two acceptable exits, and does not pretend to know which is right: terva
+// still refuses to decide on the model's behalf, it just stops being silent
+// while a provably unproductive loop runs.
+func stallHoldOffNudge(tool string, count int, detail string) string {
+	if detail != "" {
+		return i18n.P("stall.holdoff.error",
+			"[loop check] `%s` has now failed %d times with the same result: %q. The earlier note did not break this. Stop calling it — say what is blocking you and either take a different route or report that you are stuck.",
+			tool, count, detail)
+	}
+	return i18n.P("stall.holdoff.repeat",
+		"[loop check] `%s` has now been called %d times with the same arguments and the same result. The earlier note did not break this. Stop repeating it — use what you already have, take a different route, or report that you are stuck.",
+		tool, count)
 }
 
 func stallNudge(tool string, count int, detail string) string {

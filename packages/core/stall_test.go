@@ -282,17 +282,32 @@ func TestStallNudgeRidesTheEphemeralTailEndToEnd(t *testing.T) {
 	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
+	// The invariant is that EACH nudge rides exactly one dispatch — not that
+	// there is only one nudge. A loop that outlives the first gets rung 2 as
+	// well, so count the distinct notes and check none of them repeats.
+	seen := map[string]int{}
 	nudged, firstNudge := 0, -1
 	for i, req := range c.calls() {
 		if strings.Contains(req.EphemeralContext, "[loop check]") {
 			nudged++
+			seen[req.EphemeralContext]++
 			if firstNudge < 0 {
 				firstNudge = i
 			}
 		}
 	}
-	if nudged != 1 {
-		t.Errorf("the nudge must ride exactly one dispatch, got %d", nudged)
+	if nudged == 0 {
+		t.Fatal("the detector never nudged")
+	}
+	for text, n := range seen {
+		if n != 1 {
+			t.Errorf("a nudge rode %d dispatches; each must ride exactly one:\n%s", n, text)
+		}
+	}
+	// This loop runs long enough to cross the escalate watermark, and with no
+	// Escalator bound rung 2 speaks in rung 3's place — two distinct notes.
+	if len(seen) != 2 {
+		t.Errorf("expected rung 1 and rung 2 to each speak once, got %d distinct notes", len(seen))
 	}
 	if firstNudge < stallThreshold {
 		t.Errorf("the nudge fired at dispatch %d, before the detector could have tripped (threshold %d)", firstNudge, stallThreshold)

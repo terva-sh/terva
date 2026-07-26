@@ -42,9 +42,20 @@ func TestWiredPersistenceRecordsStall(t *testing.T) {
 		t.Fatalf("prompt: %v", err)
 	}
 
+	// Two rows: the loop runs past the escalate watermark, and with no escalation
+	// target rung 2 speaks in rung 3's place. Both are the detector's own work and
+	// both must land, for a plain user who never configured a swap target.
 	rows := readStallRows(t, path)
-	if len(rows) != 1 {
-		t.Fatalf("want exactly one stall row on disk, got %d — the observer was never joined to the session", len(rows))
+	if len(rows) != 2 {
+		t.Fatalf("want a rung-1 and a rung-2 stall row on disk, got %d — the observer was never joined to the session", len(rows))
+	}
+	// The rung is what makes "nudged and ignored" readable from the log later.
+	// Rung 1 omits it, so absent reads as 1.
+	if rows[0].Rung != 0 {
+		t.Errorf("the first nudge should omit rung (absent means 1), got %d", rows[0].Rung)
+	}
+	if rows[1].Rung != 2 {
+		t.Errorf("the hold-off should record rung 2, got %d", rows[1].Rung)
 	}
 	r := rows[0]
 	// The spin tool repeats identical args AND an identical error; churn is
@@ -64,6 +75,7 @@ type persistedStall struct {
 	Axis   string `json:"axis"`
 	Tool   string `json:"tool"`
 	Detail string `json:"detail"`
+	Rung   int    `json:"rung"`
 }
 
 func readStallRows(t *testing.T, path string) []persistedStall {

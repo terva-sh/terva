@@ -1824,13 +1824,15 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			// Feed the just-completed step to the stuck-loop detector; a trip
 			// stages a one-turn nudge that the next oneTurn rides on the
 			// ephemeral tail (never the transcript). If the loop has persisted
-			// past the nudge, rung 3 may offer to escalate to a stronger model
-			// (inert unless a host bound an Escalator). A user-chosen "stop"
-			// ends the turn cleanly; an escalation continues the loop on the new
-			// model with a handoff marker staged.
+			// past the nudge, rung 3 may offer to escalate to a stronger model —
+			// and where it cannot (no Escalator, no configured target, nobody to
+			// consent, which between them are the default state) rung 2 speaks
+			// once more instead of leaving the loop unremarked. A user-chosen
+			// "stop" ends the turn cleanly; an escalation continues the loop on
+			// the new model with a handoff marker staged.
 			if a.stallDetectionOn() {
 				for _, ev := range a.stall.observe(assistantMsg, toolMsg) {
-					rec := StallRecord{Axis: ev.axis, Tool: ev.tool, Detail: ev.detail}
+					rec := StallRecord{Axis: ev.axis, Tool: ev.tool, Detail: ev.detail, Rung: 1}
 					a.fireStall(rec)                // durable: the session row
 					sink(EvStall{StallRecord: rec}) // live: UI + extension observers
 				}

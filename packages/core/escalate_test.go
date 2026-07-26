@@ -334,15 +334,21 @@ func TestEscalationStopEndsTheTurn(t *testing.T) {
 	}
 }
 
-// A nil Escalator (the production state until the host binds one) is inert: the
-// loop is detected and nudged, nothing escalates, nothing panics.
+// A nil Escalator is the production state until a host binds one, and it used to
+// mean the ladder simply ended after rung 1: the tracker would establish that the
+// loop had crossed the watermark and then nothing happened at all. Rung 2 fills
+// that in — the model is told again, more firmly — while rung 3 stays every bit
+// as inert as before. Nothing escalates, nothing panics, no handoff marker.
 func TestEscalationInertWithoutAnEscalator(t *testing.T) {
 	a, c := escalatingAgent(t, nil, nil, false)
 	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
-	if n := countEphemeral(c, "[loop check]"); n != 1 {
-		t.Errorf("detection should still nudge with no Escalator, got %d", n)
+	if n := countEphemeral(c, "[loop check]"); n != 2 {
+		t.Errorf("with no Escalator the loop should draw both in-band rungs, got %d", n)
+	}
+	if n := countEphemeral(c, "The earlier note did not break this"); n != 1 {
+		t.Errorf("rung 2 should speak once, in rung 3's place, got %d", n)
 	}
 	if n := countEphemeral(c, "[handoff]"); n != 0 {
 		t.Errorf("nothing should escalate with no Escalator, got %d handoffs", n)
