@@ -330,10 +330,3 @@ func TestPerTurnContext_LoreFramedAsReference(t *testing.T) {
 		t.Errorf("the cached prefix must not carry the tail frame, got %q", prefix)
 	}
 }
-
-func TestLoreSourcesOf(t *testing.T) {
-	srcs := loreSourcesOf([]lore.Entry{{Source: "vault.md"}, {Name: "NoSource"}})
-	if len(srcs) != 2 || srcs[0] != "vault.md" || srcs[1] != "NoSource" {
-		t.Errorf("sources (source-or-name fallback) = %v", srcs)
-	}
-}

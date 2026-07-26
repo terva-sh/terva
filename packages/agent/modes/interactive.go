@@ -620,15 +620,6 @@ type Interactive struct {
 	// outside dialogs and popups). See keymap.go.
 	keymap []globalBinding
 
-	// swarmWatch tracks auto-swarm sub-agents the main agent spawned
-	// via swarm_spawn. Each entry holds the agent + the task text;
-	// a per-entry goroutine waits on the agent's terminal state. When
-	// every tracked entry has finished, the watcher flushes a single
-	// summary turn into the main chat (queued if the main agent is
-	// busy, run immediately if idle).
-	swarmWatchMu sync.Mutex
-	swarmWatch   []*swarmWatchEntry
-
 	// pendingFork is true when the user ran /session fork: the next
 	// jump-picker selection should branch off that message instead
 	// of scrolling. Flag resets after the action fires or the dialog

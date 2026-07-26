@@ -7,13 +7,13 @@ import (
 	"terva.sh/terva/packages/i18n"
 )
 
-// The daemon-side auto-swarm recap: the carrier twin of the legacy TUI's
-// swarmWatch (packages/agent/modes/interactive_swarm.go). swarm_spawn is
-// fire-and-forget — the coordinator moves on — so when every sub-agent it
-// spawned finishes, the host injects a single [auto-swarm update] recap as a
-// queued turn so the coordinator can synthesize their outcomes. Without this a
-// coordinator on the carrier never learns its sub-agents finished (it was only
-// ever wired on the legacy driver, via SwarmSpawnTool.OnSpawned).
+// The daemon-side auto-swarm recap — since the --tui-legacy driver's removal,
+// the ONLY swarm watcher (its modes-side twin was deleted after a recap
+// feature once landed there, in dead code, instead of here — recap changes
+// belong in THIS file). swarm_spawn is fire-and-forget — the coordinator
+// moves on — so when every sub-agent it spawned finishes, the host injects a
+// single [auto-swarm update] recap as a queued turn so the coordinator can
+// synthesize their outcomes.
 
 // swarmWaitGateMessage re-prompts a coordinator that tried to finish while its
 // spawned sub-agents are still running (see the swarm-hold continuation gate). Injected
@@ -140,6 +140,18 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 		// deliverable the coordinator must fold into the report.
 		if findings := snap.Findings(); findings != "" {
 			sb.WriteString(i18n.P("swarm.summary.findings", "   findings: %s", truncateForSummary(findings, 1500)))
+			sb.WriteByte('\n')
+		}
+		// Structured-deliverable verdict (schema spawns only): the free-text
+		// findings above can read fine while the machine contract silently
+		// failed, so the coordinator is told explicitly which it got. Ported
+		// from the deleted modes twin, where c7c22551 had landed it in code
+		// nothing called — this recap never said it in production before.
+		if len(snap.Deliverable) > 0 {
+			sb.WriteString(i18n.P("swarm.summary.deliverable_ok", "   deliverable: validated structured report (%d bytes; full JSON via the tasks surface)", len(snap.Deliverable)))
+			sb.WriteByte('\n')
+		} else if snap.DeliverableError != "" {
+			sb.WriteString(i18n.P("swarm.summary.deliverable_err", "   deliverable: contract NOT met — %s", truncateForSummary(snap.DeliverableError, 240)))
 			sb.WriteByte('\n')
 		}
 		// The retrieval handle for the findings the 1500-byte budget cut off:

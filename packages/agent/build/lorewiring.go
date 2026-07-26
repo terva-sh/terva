@@ -380,8 +380,9 @@ func (rec *LoreFiredRecord) Get() []LoreFired {
 	return append([]LoreFired(nil), rec.fired...)
 }
 
-// loreFiredOf maps a lore.Select trace to the record's form (resolving each
-// entry's display source the way loreSourcesOf does).
+// loreFiredOf maps a lore.Select trace to the record's form. An entry's
+// display source falls back to its name when it carries no Source (file
+// path / "card" / name).
 func loreFiredOf(fired []lore.Fired) []LoreFired {
 	out := make([]LoreFired, 0, len(fired))
 	for _, f := range fired {
@@ -396,19 +397,6 @@ func loreFiredOf(fired []lore.Fired) []LoreFired {
 			Keys:     f.Keys,
 			Dropped:  f.Dropped,
 		})
-	}
-	return out
-}
-
-// loreSourcesOf maps entries to their source labels (file path / "card" / name).
-func loreSourcesOf(entries []lore.Entry) []string {
-	out := make([]string, 0, len(entries))
-	for _, e := range entries {
-		s := e.Source
-		if s == "" {
-			s = e.Name
-		}
-		out = append(out, s)
 	}
 	return out
 }

@@ -47,6 +47,68 @@ func TestSwarmGuardHoldOnce(t *testing.T) {
 	}
 }
 
+// TestSwarmWatcherFinalisesOnTerminalCrash isolates the terminal-state
+// fallback: a sub-agent that crashes before ever emitting a task-level
+// turn_end must still be finalised by the Wait() waiter, so the batch flushes
+// and swarmWatch drains — one such zombie would otherwise wedge every future
+// recap in the session. (The recap test below has a "doomed" child, but in a
+// mixed batch; this pins the wedge case alone. Ported from the deleted
+// modes-side twin's test when that file went.)
+func TestSwarmWatcherFinalisesOnTerminalCrash(t *testing.T) {
+	root := testsupport.TempDir(t)
+	f := swarm.New(swarm.Config{
+		Root:     root,
+		RepoRoot: root,
+		NewRunner: func(a *swarm.Agent) swarm.Runner {
+			return swarm.RunnerFunc(func(ctx context.Context, sink swarm.Sink) error {
+				return errors.New("boom") // no turn_end, straight to terminal state
+			})
+		},
+	})
+	defer f.StopAll()
+
+	s := &wsSession{
+		agent: core.NewAgent(nil, "fake-model", "", core.Registry{}),
+		hub:   &wsHub{},
+	}
+	s.turnCancel = func() {}
+
+	a, err := f.Spawn(context.Background(), "crash task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.trackSwarmAgent(a, "crash task")
+	s.swarmWatchMu.Lock()
+	entry := s.swarmWatch[0]
+	s.swarmWatchMu.Unlock()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.swarmWatchMu.Lock()
+		n := len(s.swarmWatch)
+		s.swarmWatchMu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("entry never finalised after a no-turn-end crash (%d left) — the Wait() fallback is the only path that can fire here", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	q := s.agent.PendingQueuedMessages()
+	if len(q) != 1 || !strings.Contains(q[0], "boom") {
+		t.Fatalf("recap = %q, want exactly one entry carrying the crash error", q)
+	}
+
+	// A late second finalise (e.g. a straggling turn_end) must be a no-op:
+	// the first finaliser won and its outcome stands.
+	s.finalizeSwarmEntry(entry, "late")
+	if entry.err != "" {
+		t.Errorf("idempotent finalise overwrote err: got %q, want unchanged empty", entry.err)
+	}
+}
+
 // TestCarrierRecapFlowsToSessionQueue drives the full carrier recap path —
 // trackSwarmAgent → finalizeSwarmEntry → flushSwarmSummary → s.queue — with
 // real swarm agents, pinning the behaviour fixed in 67a690f/d64227e: ONE
