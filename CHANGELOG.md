@@ -11,6 +11,19 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.14](https://github.com/terva-sh/terva/releases/tag/v0.126.14) — 2026-07-26
+
+### Features
+
+- core: a loop that outlives its first nudge gets one firmer word
+- web: the transcript says when each message arrived, and how long the silence was
+- web: the usage pane fills in for poll-based providers, and dates its credits
+
+### Fixes
+
+- persona: the charter budget stops warning on personas terva itself ships
+- tools: an optional tool argument's zero value no longer means something else
+
 ## [v0.126.13](https://github.com/terva-sh/terva/releases/tag/v0.126.13) — 2026-07-26
 
 ### Features
