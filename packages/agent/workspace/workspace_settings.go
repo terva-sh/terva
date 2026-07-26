@@ -44,6 +44,16 @@ var reasoningOptions = []ctrlproto.SettingOption{
 	{Value: "max", Label: i18n.M("max — native max (GPT-5.6 / adaptive Claude)")},
 }
 
+// The labels describe what lands in the session record rather than naming the
+// provider's enum, since the choice only means anything as "how much of the
+// model's reasoning gets written down".
+var reasoningSummaryOptions = []ctrlproto.SettingOption{
+	{Value: "", Label: i18n.M("off")},
+	{Value: "auto", Label: i18n.M("auto — the provider's own detail level")},
+	{Value: "concise", Label: i18n.M("concise — a short précis per turn")},
+	{Value: "detailed", Label: i18n.M("detailed — fuller narration per turn")},
+}
+
 var autoCompactOptions = []ctrlproto.SettingOption{
 	{Value: "steps", Label: i18n.M("steps — condense mid-turn as the window fills")},
 	{Value: "turns", Label: i18n.M("turns — condense only at turn boundaries")},
@@ -116,6 +126,12 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Key: "reasoning", Label: i18n.T("Thinking"), Type: "enum",
 			Value: cfg.Reasoning, Options: localizeOptions(reasoningOptions),
 			Description: i18n.T("Reasoning effort. Applies live and becomes the default for new sessions."),
+		},
+		{
+			Key: "reasoning_summary", Label: i18n.T("Record thinking"), Type: "enum",
+			Value: cfg.ReasoningSummary, Options: localizeOptions(reasoningSummaryOptions),
+			Description: i18n.T("Persist a readable summary of the model's reasoning, so an unattended run can be reviewed for why it acted."),
+			Note:        i18n.T("openai-codex only — writes reasoning to disk"),
 		},
 		{
 			Key: "auto_title", Label: i18n.T("Auto-title sessions"), Type: "bool",
@@ -340,6 +356,19 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
 		s.ws.applyReasoning(val) // live to every session's agent
+	case "reasoning_summary":
+		// Validated strictly here (the surface is a closed enum) while the
+		// build path normalizes leniently — a hand-edited config.json falls
+		// back to off rather than 400ing every turn.
+		switch val {
+		case "", "auto", "concise", "detailed":
+		default:
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown reasoning_summary %q (auto|concise|detailed)", val))
+		}
+		if err := config.MutateConfig(func(c *config.Config) { c.ReasoningSummary = val }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+		s.ws.applyReasoningSummary(val) // live to every session's agent
 	case "auto_title":
 		on := val == "true"
 		if err := config.MutateConfig(func(c *config.Config) { c.AutoTitle = &on }); err != nil {
@@ -517,6 +546,23 @@ func (w *Workspace) applyReasoning(level string) {
 	for _, s := range sess {
 		if s.agent != nil {
 			s.agent.SetReasoning(level)
+		}
+	}
+}
+
+// applyReasoningSummary switches reasoning-summary persistence live on every
+// session's agent — the same fan-out as applyReasoning. The next turn's request
+// carries it; turns already in flight keep the value they started with.
+func (w *Workspace) applyReasoningSummary(mode string) {
+	w.mu.Lock()
+	sess := make([]*wsSession, 0, len(w.sessions))
+	for _, s := range w.sessions {
+		sess = append(sess, s)
+	}
+	w.mu.Unlock()
+	for _, s := range sess {
+		if s.agent != nil {
+			s.agent.SetReasoningSummary(mode)
 		}
 	}
 }

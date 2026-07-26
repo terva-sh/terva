@@ -28,6 +28,27 @@ func NormalizeReasoning(level string) string {
 	}
 }
 
+// NormalizeReasoningSummary canonicalizes the reasoning-summary setting onto
+// the values the OpenAI Responses backend accepts, and returns "" (off) for
+// anything it does not recognize.
+//
+// Unknown values are dropped rather than forwarded on purpose: this field
+// rides every request on the path, so a typo'd config would otherwise turn
+// into a 400 on every single turn instead of a silently absent summary.
+// Failing off degrades to today's behavior; failing open breaks the session.
+func NormalizeReasoningSummary(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "auto", "on", "true", "enabled":
+		return "auto"
+	case "concise", "short":
+		return "concise"
+	case "detailed", "full", "long":
+		return "detailed"
+	default:
+		return ""
+	}
+}
+
 // EffectiveReasoning resolves the reasoning level for a turn against model m: an
 // explicitly-set global level (reasoningSet==true, incl. "" meaning the user
 // chose off) wins; otherwise the model's DefaultReasoning applies; otherwise

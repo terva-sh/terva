@@ -262,6 +262,16 @@ func (i *Interactive) applyLocalSettingEffect(key, value string) {
 		i.statusOK = i18n.T("thinking level %s", label)
 		i.statusErr = ""
 		i.mu.Unlock()
+	case "reasoning_summary":
+		// Nothing local to cache: unlike `reasoning` there is no TUI label
+		// reading it back, and the daemon applies it live to every agent.
+		// Confirm the change so an enum landing on "off" still reads as an
+		// action rather than a silent no-op.
+		label := value
+		if label == "" {
+			label = "off"
+		}
+		i.setStatusOK(i18n.T("recorded thinking %s", label))
 	case "approval":
 		// Per-session posture (never persisted); shift+tab and the picker share it.
 		i.setStatusOK(i18n.T("approval mode %s (this session)", value))

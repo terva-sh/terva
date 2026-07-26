@@ -210,6 +210,18 @@ Reasoning levels (`--reasoning off|minimum|low|medium|high|maximum|max`, also co
 
 You can add additional Gemini model IDs to `models.json` under the `google` provider.
 
+#### Persisting reasoning summaries
+
+**Default: off.** Set it in `/settings` as **Record thinking** (the same row appears in the web settings pane), or set `"reasoning_summary"` in `config.json` to `"auto"`, `"concise"`, or `"detailed"`. It asks the model for a human-readable summary of its reasoning and keeps it in the session record alongside the opaque reasoning payload. Changing it applies live to every open session and becomes the default for new ones. This exists for reviewing unattended runs: without it a transcript shows *what* an agent did with no trace of *why*, and intent has to be reconstructed from the shape of the tool calls. Any unrecognized value is treated as off.
+
+Only the `openai-codex` path implements this today; other providers ignore the setting. Anthropic thinking blocks are still dropped before they become content, deliberately, and are not covered by it. Note also that OpenAI-compatible chat providers that emit `reasoning_content` (DeepSeek, Kimi, and similar) already persist readable reasoning unconditionally — this setting is not what governs them.
+
+Three things worth knowing before enabling it:
+
+- **It is written to disk, and it can quote.** A summary of a turn spent reading mail can quote that mail. Tool results in the same session file already carry comparable content, so this is not a new class of exposure, but it does make the file more quotable — account for it before widening who reads transcripts.
+- **The cost is on the input side, not generation.** The summary rides inside the reasoning tokens you already pay for, and a turn where the model does no reasoning emits no summary at all. What accrues is context: summaries persist into the transcript, so they are re-sent with it. terva deliberately does *not* replay the summary back to the provider as part of the reasoning item — the encrypted payload is what the model consumes — which keeps the per-turn replay cost unchanged.
+- **It is a readable record, not a visible one.** Summaries land in the session JSONL for after-the-fact review; the TUI and web UI do not display them. The one place a summary surfaces is an ACP client repainting a resumed session, and only for a turn that produced no visible text of its own — otherwise the turn repaints as the model's actual answer, unchanged.
+
 ### Local models with ollama
 
 terva works with [ollama](https://ollama.com) out of the box. Ollama serves an OpenAI-compatible API locally, so any model you have pulled works with terva.

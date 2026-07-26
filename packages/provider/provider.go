@@ -298,6 +298,16 @@ type Request struct {
 	// unset — fall back to the model default.
 	ReasoningSet bool
 
+	// ReasoningSummary asks the provider to emit a human-readable summary of
+	// its reasoning alongside the opaque payload, so an autonomous run's
+	// session record shows WHY it acted and not only what it did. Values are
+	// provider-defined; the OpenAI Responses/codex backend accepts "auto",
+	// "concise", and "detailed". Empty (the default) requests no summary and
+	// leaves the request byte-identical to one built without this field.
+	// Only the codex client acts on it today — a summary is only ever emitted
+	// when asked for, so this is inert everywhere else.
+	ReasoningSummary string
+
 	// EphemeralContext is host-assembled, host-wrapped text injected into
 	// the model's context for THIS request only — never part of Messages
 	// and never persisted to the transcript. Providers append it as a

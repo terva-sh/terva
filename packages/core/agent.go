@@ -42,6 +42,13 @@ type Agent struct {
 	// default. Read at turn start under a.mu alongside Reasoning.
 	ReasoningSet bool
 
+	// ReasoningSummary asks the provider for a human-readable summary of its
+	// reasoning, persisted into the transcript alongside the opaque payload so
+	// an unattended run can be reviewed for intent. "" (the default) is off and
+	// leaves requests unchanged. Read at turn start under a.mu alongside
+	// Reasoning; only the codex client acts on it.
+	ReasoningSummary string
+
 	// VisibleTool, when non-nil, reports whether a registered tool is
 	// ADVERTISED to the model on a turn. It filters only the tool specs sent
 	// in the request (SpecsVisible, in oneTurn); it never touches dispatch or
@@ -1047,6 +1054,15 @@ func (a *Agent) SetReasoning(level string) {
 	// control), so it wins over any per-model DefaultReasoning from here on —
 	// including when level is "" (the user chose off).
 	a.ReasoningSet = true
+}
+
+// SetReasoningSummary switches reasoning-summary persistence live ("" = off).
+// Read at turn start under the same lock, so the next turn picks it up with no
+// rebuild — and, unlike Reasoning, there is no per-model default to override.
+func (a *Agent) SetReasoningSummary(mode string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.ReasoningSummary = mode
 }
 
 // SetClientAndModel atomically swaps both the provider client and the
@@ -2073,6 +2089,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	model := a.Model
 	reasoning := a.Reasoning
 	reasoningSet := a.ReasoningSet
+	reasoningSummary := a.ReasoningSummary
 	maxTokens := a.MaxTokens
 	temperature := a.Temperature
 	imageOutput := a.ImageOutput
@@ -2205,6 +2222,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		Tools:            tools.SpecsVisible(tt.visible),
 		Reasoning:        reasoning,
 		ReasoningSet:     reasoningSet,
+		ReasoningSummary: reasoningSummary,
 		MaxTokens:        maxTokens,
 		Temperature:      temperature,
 		ImageOutput:      imageOutput,

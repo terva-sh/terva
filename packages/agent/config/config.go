@@ -22,10 +22,23 @@ import (
 
 // Config is the persisted user configuration.
 type Config struct {
-	Provider    string   `json:"provider"`
-	Model       string   `json:"model"`
-	Reasoning   string   `json:"reasoning"`
-	Temperature *float32 `json:"temperature,omitempty"`
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	Reasoning string `json:"reasoning"`
+	// ReasoningSummary persists a human-readable summary of the model's
+	// reasoning into the session record, so an unattended run can be reviewed
+	// for WHY it acted and not only what it did. "auto" | "concise" |
+	// "detailed"; empty (the default) is OFF, which keeps requests and session
+	// records byte-identical to a build without this setting.
+	//
+	// Off by default because it puts the model's reasoning on disk: a summary
+	// of a turn spent reading mail can quote that mail. Tool results in the
+	// same file already carry comparable content, so this is not a new class
+	// of exposure, but it does make the file more quotable — worth a decision
+	// rather than a default. Only the openai-codex path implements it; other
+	// providers ignore it. See docs/models.md § Persisting reasoning summaries.
+	ReasoningSummary string   `json:"reasoning_summary,omitempty"`
+	Temperature      *float32 `json:"temperature,omitempty"`
 	// FavoriteModels are "provider/id" keys pinned to the top of the /model
 	// picker (and surfaced as a cross-provider ★ Favorites view). Order is
 	// not significant; membership is.

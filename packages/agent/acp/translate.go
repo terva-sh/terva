@@ -250,12 +250,17 @@ func toolResultText(r core.ToolResult) string {
 // messageText flattens a transcript message's text/reasoning blocks to their
 // joined text, for replaying a loaded session as agent/user message chunks
 // (§10). Only conversational text is repainted: tool-call/result and image
-// blocks carry no chunk text and are skipped. Reasoning summaries are
-// included so a resumed assistant turn isn't blank when its visible output
-// was a thought summary.
+// blocks carry no chunk text and are skipped.
+//
+// A reasoning summary is a FALLBACK, not an addition: it is repainted only
+// when the turn produced no visible text, which is the case this exists for —
+// providers whose reasoning_content IS the whole assistant output would
+// otherwise replay as a blank turn. Where a turn has both (the codex path with
+// reasoning summaries enabled), repainting both would splice the model's
+// internal reasoning into its visible answer.
 func messageText(m provider.Message) string {
-	var sb strings.Builder
-	add := func(s string) {
+	var text, summary strings.Builder
+	add := func(sb *strings.Builder, s string) {
 		if s == "" {
 			return
 		}
@@ -267,12 +272,15 @@ func messageText(m provider.Message) string {
 	for _, c := range m.Content {
 		switch b := c.(type) {
 		case provider.TextBlock:
-			add(b.Text)
+			add(&text, b.Text)
 		case provider.ReasoningBlock:
-			add(b.Summary)
+			add(&summary, b.Summary)
 		}
 	}
-	return sb.String()
+	if text.Len() > 0 {
+		return text.String()
+	}
+	return summary.String()
 }
 
 // stopReasonFor maps the terminal turn state onto an ACP StopReason (§11).

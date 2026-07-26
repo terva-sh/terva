@@ -191,6 +191,11 @@ type codexImageGenCall struct {
 
 type codexReasoningConfig struct {
 	Effort string `json:"effort,omitempty"`
+	// Summary requests a human-readable précis of the model's reasoning
+	// ("auto" | "concise" | "detailed"). Omitted unless asked for: the
+	// backend streams reasoning_summary_* events only when this is set, and
+	// with it absent the reasoning item comes back with summary: [].
+	Summary string `json:"summary,omitempty"`
 }
 
 type codexRequest struct {
@@ -234,7 +239,11 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 	if m.Reasoning {
 		eff := EffectiveReasoning(req.Reasoning, req.ReasoningSet, m)
 		if effort := OpenAICodexReasoningEffort(eff, req.Model); effort != "" {
-			body.Reasoning = &codexReasoningConfig{Effort: effort}
+			// Summary rides the same block, so it is requested only where
+			// there is reasoning to summarize: a model without reasoning, or
+			// one whose effort resolves to off, sends no reasoning config at
+			// all and therefore asks for nothing.
+			body.Reasoning = &codexReasoningConfig{Effort: effort, Summary: req.ReasoningSummary}
 		}
 	}
 	for _, t := range req.Tools {
@@ -327,16 +336,23 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 			for _, c := range msg.Content {
 				switch v := c.(type) {
 				case ReasoningBlock:
-					item := codexReasoningItem{
+					// The summary is deliberately NOT replayed, even when we
+					// have one. The encrypted blob carries the reasoning the
+					// model actually consumes; the summary is a human-facing
+					// précis kept for the session record. Sending it back
+					// would re-bill it as input on every following turn and
+					// grow with transcript length, buying the model nothing.
+					// Both shapes are accepted by the backend (probed live),
+					// so this is a cost call, not a compatibility one — and
+					// the empty-summary shape is the one terva has always
+					// sent, which keeps enabling summaries from changing the
+					// replay path at all.
+					body.Input = append(body.Input, codexReasoningItem{
 						Type:             "reasoning",
 						ID:               v.ID,
 						EncryptedContent: v.Encrypted,
 						Summary:          []codexReasoningSummary{},
-					}
-					if v.Summary != "" {
-						item.Summary = []codexReasoningSummary{{Type: "summary_text", Text: v.Summary}}
-					}
-					body.Input = append(body.Input, item)
+					})
 				case TextBlock:
 					if v.Text == "" {
 						continue
@@ -861,6 +877,21 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 					it.textBuf.WriteString(p.Delta)
 					out <- EventTextDelta{Delta: p.Delta}
 				}
+			case "response.reasoning_summary_part.added":
+				// A summary arrives as SEVERAL parts under one output_index,
+				// told apart by summary_index, and each part is its own
+				// markdown-headed section. The deltas within a part must stay
+				// contiguous, so the break belongs here, at the part boundary,
+				// rather than in the delta handler. Without it the sections
+				// fuse into "**First heading****Second heading**" — which is
+				// the unreadable record this feature exists to replace.
+				var p struct {
+					OutputIndex int `json:"output_index"`
+				}
+				_ = json.Unmarshal([]byte(ev.Data), &p)
+				if it, ok := items[p.OutputIndex]; ok && it.kind == "reasoning" && it.summary.Len() > 0 {
+					it.summary.WriteString("\n\n")
+				}
 			case "response.reasoning_summary_text.delta":
 				var p struct {
 					OutputIndex int    `json:"output_index"`
@@ -919,14 +950,27 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 						if it.rawID == "" && p.Item.ID != "" {
 							it.rawID = p.Item.ID
 						}
-						for _, s := range p.Item.Summary {
-							if s.Text == "" {
-								continue
+						// The completed item repeats the whole summary as its
+						// authoritative parts, and the streaming deltas above
+						// have already accumulated that same text — so REPLACE
+						// here rather than append, or every summary is
+						// persisted twice. (Both paths are unreachable until
+						// summaries are requested, which is why the double
+						// write has never been observed.) Parts are separate
+						// markdown sections, so join them as such; the delta
+						// path stays as the fallback for a completed item that
+						// carries no parts.
+						if len(p.Item.Summary) > 0 {
+							it.summary.Reset()
+							for _, s := range p.Item.Summary {
+								if s.Text == "" {
+									continue
+								}
+								if it.summary.Len() > 0 {
+									it.summary.WriteString("\n\n")
+								}
+								it.summary.WriteString(s.Text)
 							}
-							if it.summary.Len() > 0 {
-								it.summary.WriteString("\n")
-							}
-							it.summary.WriteString(s.Text)
 						}
 					}
 				}

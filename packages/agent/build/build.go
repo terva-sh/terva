@@ -46,7 +46,11 @@ type Resolved struct {
 	// Derived from the RAW value before normalizing: non-empty raw (incl.
 	// "off"/"none") ⇒ set.
 	ReasoningSet bool
-	Temperature  *float32
+	// ReasoningSummary is the normalized reasoning_summary setting ("auto" |
+	// "concise" | "detailed"), or "" when off. Forwarded on every request; only
+	// the codex client asks for it, and only where reasoning is itself enabled.
+	ReasoningSummary string
+	Temperature      *float32
 	// ImageOutput carries the resolved native image-output config (from the
 	// opt-in native_output block), or nil when off. The core agent forwards it
 	// only on a model that advertises CapImageOutput.
@@ -1168,6 +1172,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		CWD:                      args.CWD,
 		Reasoning:                reasoning,
 		ReasoningSet:             reasoningSet,
+		ReasoningSummary:         provider.NormalizeReasoningSummary(cfg.ReasoningSummary),
 		Temperature:              temperature,
 		ImageOutput:              imageOutput,
 		Insecure:                 args.Insecure,
@@ -1478,6 +1483,7 @@ func (r Resolved) NewAgent() *core.Agent {
 	a.MaxTokens = r.MaxOutput
 	a.Reasoning = r.Reasoning
 	a.ReasoningSet = r.ReasoningSet
+	a.ReasoningSummary = r.ReasoningSummary
 	a.Temperature = r.Temperature
 	a.ImageOutput = r.ImageOutput
 	// The front end's question channel, when there is one. The prefix-change
