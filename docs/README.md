@@ -66,7 +66,7 @@ links would 404 for most readers:
 
 | path | what's in it |
 |---|---|
-| `docs/architecture/` | Subsystem-by-subsystem internals. A historical baseline (June 2026): specific file/line/size claims have drifted, but the mental model holds. |
+| `docs/architecture/` | Subsystem-by-subsystem internals, refreshed 2026-07-26 as an as-built record (docs 08/09 stay frozen June-2026 reviews; removals are logged in `ARCHIVE.md`, and `07-observations.md` is the standing review agenda). |
 | `docs/plans/` | Active work plans plus the living roadmap. Implemented plans move to `plans/archive/`. |
 | `docs/proposals/` | Active design proposals; implemented ones move to `proposals/archive/`. |
 | `docs/decisions/` | Architecture decision records (ADRs). |

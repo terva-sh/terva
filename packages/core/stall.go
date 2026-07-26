@@ -120,6 +120,13 @@ type stallStep struct {
 // tools that is `bash` running a volatile command; the rest are stable, and
 // TestStallSpinIgnoresTimestampedResults pins the behaviour so it is a known
 // gap rather than a surprise.
+//
+// It is not only built-ins. Minting a fresh handle per call is a stamp too, and
+// that is the shape recommended for bulk work — a search returning a selection
+// handle is exempt in both directions, including from a genuine spin. Tool
+// authors need to know that before they design a result, so the trade is
+// written down for them in docs/standard-tools.md ("A tool that stamps its
+// result opts itself out of spin detection"); keep the two in step.
 func resultFingerprint(tr provider.ToolResultBlock) string {
 	h := fnv.New64a()
 	if tr.IsError {

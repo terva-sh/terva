@@ -134,6 +134,45 @@ stated meaning) over pointer nil-ness, and where a padded value must be
 accepted, make it inert rather than active. `session_inspect` is the
 worked example: indices moved to 1-based so `0` is free to mean unset.
 
+**A tool that stamps its result opts itself out of spin detection.** The
+stuck-loop guard has two axes. The *churn* axis counts repeated failure; the
+*spin* axis counts repeated **redundant work**, keyed on the tool name, its
+canonical arguments, and a digest of what came back. That last part is
+deliberate — keying on arguments alone nudged a correct loop whose identical
+query returned something new each time, such as polling a job or re-reading a
+file being written.
+
+The cost of that correctness is exact and worth knowing before you design a
+result: **if no two of your results are byte-identical, your tool can never trip
+the spin axis.** A timestamp, an elapsed time, a request id, or a freshly minted
+handle is enough. Among built-ins that describes `bash` running a volatile
+command. It also describes the shape this document otherwise recommends for
+bulk work — a search that returns a selection handle mints a new one per call,
+so two identical searches against an unchanged mailbox are two different
+results.
+
+The consequence is not that such a tool is unguarded. The churn axis still
+catches it failing, the per-turn call budget still bounds it, and a human or an
+`activate_next`-style structure still sees the loop. What is lost is the
+specific case of a *successful* call repeated productively-looking forever —
+a filter that stopped narrowing, re-querying position zero against a set that
+never shrinks.
+
+Terva does not try to guess which parts of an arbitrary result are incidental.
+Normalizing volatile substrings out before hashing was considered and rejected:
+it is guesswork about someone else's output format, and over-normalizing puts
+back the false nudge the digest was added to remove. Declaring volatile fields
+in the schema was considered too — it puts the judgement where the knowledge is,
+but costs every tool author a new concept to learn and fails silently when left
+unset.
+
+So the trade is stated rather than solved. If your tool's result is stable when
+the underlying state is unchanged, it gets spin detection. If it stamps, it does
+not, and you should not rely on the loop guard to catch a runaway caller —
+bound the work yourself, with a cursor that provably advances or a filter that
+provably self-excludes. `TestStallSpinIgnoresTimestampedResults` pins the
+behaviour so it stays a known limitation rather than becoming a surprise.
+
 **Git-conditional built-ins**: the five `worktree_*` tools (folded in from the
 retired `terva-git-worktree` extension) join the registry only when the session
 cwd is — or has an immediate child that is — a git repository, decided once per
