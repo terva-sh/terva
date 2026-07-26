@@ -5,6 +5,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1016,63 +1017,158 @@ func (f *fakeFactory) ListSessions(cwd string) []SessionInfo {
 
 // ---- client-side JSON-RPC harness over the io.Pipe pair ----
 
+// harnessTimeout bounds every blocking read below. Its job is to turn a
+// stalled wire into a test FAILURE instead of a hang: a json.Decoder over an
+// io.Pipe has no read deadline, so a helper parked in Decode runs until Go's
+// 10-minute panic kills the whole binary (one lost frame once cost 777s of CI
+// on a single test). It is deliberately generous — these tests drive an
+// in-process fake over a pipe, so a healthy wait is sub-second and anything
+// approaching this bound is a deadlock, not slowness.
+const harnessTimeout = 30 * time.Second
+
 type harness struct {
 	t       *testing.T
 	enc     *json.Encoder
-	dec     *json.Decoder
 	nextID  int
 	updates chan map[string]any // session/update notifications
+
+	// frames carries every inbound frame in arrival order, filled by a pump
+	// goroutine. The indirection is what makes harnessTimeout enforceable:
+	// the waiters select on this channel instead of blocking in Decode.
+	frames chan frame
+	// readErr is the pump's terminal decode error. It is written before
+	// close(frames), and only read after a receive observes that close, so
+	// the close/receive edge publishes it without further synchronisation.
+	readErr error
+
+	// pending holds responses that arrived while a waiter was looking for a
+	// DIFFERENT id. JSON-RPC answers concurrent requests in any order, so a
+	// response landing "early" belongs to a waiter that has not run yet;
+	// discarding it strands that waiter forever.
+	pending map[int]frame
 }
 
+// newHarness takes SOLE OWNERSHIP of fromAgent: the pump reads it continuously
+// from here on, so a second decoder over the same pipe competes for frames and
+// one of the two starves. Read through the harness (read/readAny/awaitResponse)
+// rather than reaching around it. Writing to toAgent directly is fine.
 func newHarness(t *testing.T, toAgent io.Writer, fromAgent io.Reader) *harness {
 	h := &harness{
 		t:       t,
 		enc:     json.NewEncoder(toAgent),
-		dec:     json.NewDecoder(fromAgent),
 		updates: make(chan map[string]any, 64),
+		frames:  make(chan frame, 256),
+		pending: map[int]frame{},
 	}
+	// Closed on cleanup so the pump cannot outlive the test wedged on a send.
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	go h.pump(json.NewDecoder(fromAgent), done)
 	return h
+}
+
+// pump decodes inbound messages until the stream ends. It runs off the test
+// goroutine, so it must never touch h.t (t.Fatalf from a non-test goroutine is
+// invalid) — it records the error and closes h.frames, and the waiter reports.
+func (h *harness) pump(dec *json.Decoder, done <-chan struct{}) {
+	defer close(h.frames)
+	for {
+		var msg map[string]any
+		if err := dec.Decode(&msg); err != nil {
+			h.readErr = err
+			return
+		}
+		f := frame{id: msg["id"]}
+		if m, ok := msg["method"].(string); ok {
+			f.method = m
+			f.params, _ = msg["params"].(map[string]any)
+		} else {
+			f.result, _ = msg["result"].(map[string]any)
+			f.errObj, _ = msg["error"].(map[string]any)
+		}
+		select {
+		case h.frames <- f:
+		case <-done:
+			return
+		}
+	}
+}
+
+// nextFrame returns the next inbound frame, or an error if the stream ended or
+// nothing arrived within timeout. Every reader below is built on this, which is
+// the whole point: the previous helpers checked a deadline at the top of a loop
+// whose body then blocked in Decode indefinitely, so the check never ran again.
+func (h *harness) nextFrame(timeout time.Duration) (frame, error) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case f, ok := <-h.frames:
+		if !ok {
+			// A clean EOF means the agent hung up; anything else is a
+			// malformed frame. Name them differently — they fail for very
+			// different reasons.
+			if h.readErr != nil && !errors.Is(h.readErr, io.EOF) {
+				return frame{}, fmt.Errorf("decode: %w", h.readErr)
+			}
+			return frame{}, fmt.Errorf("agent stream closed")
+		}
+		return f, nil
+	case <-timer.C:
+		return frame{}, fmt.Errorf("timed out after %s", timeout)
+	}
+}
+
+// keep files a response for a waiter that has not asked for it yet. Frames
+// carrying a method are agent->client requests, not responses, and are not ours
+// to stash.
+func (h *harness) keep(f frame) {
+	if f.method != "" {
+		return
+	}
+	if rid, ok := f.id.(float64); ok {
+		h.pending[int(rid)] = f
+	}
+}
+
+// result unwraps a response frame, failing on a JSON-RPC error object.
+func (h *harness) result(reqID int, f frame) map[string]any {
+	h.t.Helper()
+	if f.errObj != nil {
+		h.t.Fatalf("request %d returned error: %v", reqID, f.errObj)
+	}
+	if f.result != nil {
+		return f.result
+	}
+	return map[string]any{}
 }
 
 // call sends a request and returns the matching response result. session/update
 // notifications that arrive while waiting are buffered onto h.updates.
 func (h *harness) call(method string, params any) map[string]any {
 	h.t.Helper()
-	h.nextID++
-	id := h.nextID
-	if err := h.enc.Encode(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"method":  method,
-		"params":  params,
-	}); err != nil {
-		h.t.Fatalf("encode %s: %v", method, err)
+	id := h.send(method, params)
+	if f, ok := h.pending[id]; ok {
+		delete(h.pending, id)
+		return h.result(id, f)
 	}
-	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if time.Now().After(deadline) {
-			h.t.Fatalf("timed out awaiting response to %s", method)
+		f, err := h.read1()
+		if err != nil {
+			h.t.Fatalf("awaiting response to %s: %v", method, err)
 		}
-		var msg map[string]any
-		if err := h.dec.Decode(&msg); err != nil {
-			h.t.Fatalf("decode while awaiting %s: %v", method, err)
+		if f.method != "" {
+			continue // an agent->client request; not what we are waiting on
 		}
-		if m, ok := msg["method"].(string); ok && m == MethodSessionUpdate {
-			if p, ok := msg["params"].(map[string]any); ok {
-				h.updates <- p
+		if rid, ok := f.id.(float64); ok && int(rid) == id {
+			if f.errObj != nil {
+				h.t.Fatalf("%s returned error: %v", method, f.errObj)
 			}
-			continue
-		}
-		// A response: match the id.
-		if rid, ok := msg["id"].(float64); ok && int(rid) == id {
-			if e, ok := msg["error"].(map[string]any); ok {
-				h.t.Fatalf("%s returned error: %v", method, e)
-			}
-			if r, ok := msg["result"].(map[string]any); ok {
-				return r
+			if f.result != nil {
+				return f.result
 			}
 			return map[string]any{}
 		}
+		h.keep(f)
 	}
 }
 
@@ -1129,35 +1225,31 @@ type frame struct {
 	errObj map[string]any
 }
 
-// read decodes one frame, buffering session/update notifications onto
-// h.updates so a caller scanning for a specific message never drops the
-// narration stream.
+// read returns the next frame that is not a session/update, buffering the
+// updates it skips onto h.updates so a caller scanning for a specific message
+// never drops the narration stream.
 func (h *harness) read() frame {
 	h.t.Helper()
+	f, err := h.read1()
+	if err != nil {
+		h.t.Fatalf("read: %v", err)
+	}
+	return f
+}
+
+// read1 is read without the t.Fatalf, so callers can name what they were
+// waiting for in the failure message.
+func (h *harness) read1() (frame, error) {
 	for {
-		var msg map[string]any
-		if err := h.dec.Decode(&msg); err != nil {
-			h.t.Fatalf("decode: %v", err)
+		f, err := h.nextFrame(harnessTimeout)
+		if err != nil {
+			return frame{}, err
 		}
-		f := frame{id: msg["id"]}
-		if m, ok := msg["method"].(string); ok {
-			f.method = m
-			if p, ok := msg["params"].(map[string]any); ok {
-				f.params = p
-			}
-			if m == MethodSessionUpdate {
-				h.updates <- f.params
-				continue
-			}
-			return f
+		if f.method == MethodSessionUpdate {
+			h.updates <- f.params
+			continue
 		}
-		if r, ok := msg["result"].(map[string]any); ok {
-			f.result = r
-		}
-		if e, ok := msg["error"].(map[string]any); ok {
-			f.errObj = e
-		}
-		return f
+		return f, nil
 	}
 }
 
@@ -1167,19 +1259,20 @@ func (h *harness) read() frame {
 // stream arrives first.
 func (h *harness) awaitPermission() (id any, toolCallID string) {
 	h.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if time.Now().After(deadline) {
-			h.t.Fatal("timed out awaiting session/request_permission")
+		f, err := h.read1()
+		if err != nil {
+			h.t.Fatalf("awaiting session/request_permission: %v", err)
 		}
-		f := h.read()
 		if f.method == MethodSessionRequestPermission {
 			tc, _ := f.params["toolCall"].(map[string]any)
 			id := f.id
 			tcid, _ := tc["toolCallId"].(string)
 			return id, tcid
 		}
-		// Ignore any other inbound request/response while we wait.
+		// Any response that overtakes the permission request belongs to a
+		// waiter that has not run yet — keep it rather than drop it.
+		h.keep(f)
 	}
 }
 
@@ -1188,14 +1281,23 @@ func (h *harness) awaitPermission() (id any, toolCallID string) {
 // reqID arrives, then returns its result. permHandler returns the outcome
 // map to reply with; a nil handler leaves permission requests unanswered
 // (used by the cancel test, where session/cancel resolves them instead).
+//
+// Responses to OTHER ids are kept, not dropped: two prompts in flight resolve
+// in whatever order their turns happen to be scheduled, so awaiting the first
+// one can very well see the second's response first.
 func (h *harness) awaitResponse(reqID int, permHandler func(toolCallID string) map[string]any) map[string]any {
 	h.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	// The response may already have landed while an earlier waiter was
+	// looking for a different id.
+	if f, ok := h.pending[reqID]; ok {
+		delete(h.pending, reqID)
+		return h.result(reqID, f)
+	}
 	for {
-		if time.Now().After(deadline) {
-			h.t.Fatalf("timed out awaiting response to request %d", reqID)
+		f, err := h.read1()
+		if err != nil {
+			h.t.Fatalf("awaiting response to request %d: %v", reqID, err)
 		}
-		f := h.read()
 		if f.method == MethodSessionRequestPermission {
 			if permHandler != nil {
 				tc, _ := f.params["toolCall"].(map[string]any)
@@ -1204,15 +1306,13 @@ func (h *harness) awaitResponse(reqID int, permHandler func(toolCallID string) m
 			}
 			continue
 		}
-		if rid, ok := f.id.(float64); ok && int(rid) == reqID {
-			if f.errObj != nil {
-				h.t.Fatalf("request %d returned error: %v", reqID, f.errObj)
-			}
-			if f.result != nil {
-				return f.result
-			}
-			return map[string]any{}
+		if f.method != "" {
+			continue // some other agent->client request
 		}
+		if rid, ok := f.id.(float64); ok && int(rid) == reqID {
+			return h.result(reqID, f)
+		}
+		h.keep(f)
 	}
 }
 
@@ -1243,14 +1343,14 @@ func (h *harness) expectUpdate() map[string]any {
 	default:
 	}
 	for {
-		var msg map[string]any
-		if err := h.dec.Decode(&msg); err != nil {
-			h.t.Fatalf("decode awaiting session/update: %v", err)
+		f, err := h.nextFrame(harnessTimeout)
+		if err != nil {
+			h.t.Fatalf("awaiting session/update: %v", err)
 		}
-		if m, _ := msg["method"].(string); m == MethodSessionUpdate {
-			p, _ := msg["params"].(map[string]any)
-			return p
+		if f.method == MethodSessionUpdate {
+			return f.params
 		}
+		h.keep(f)
 	}
 }
 
@@ -1435,30 +1535,24 @@ func TestACPMethodNotFound(t *testing.T) {
 	h := newHarness(t, caW, acR)
 	h.call(MethodInitialize, map[string]any{"protocolVersion": 1})
 
-	// Raw call to a bogus method, asserting the error code.
-	enc := json.NewEncoder(caW)
-	dec := json.NewDecoder(acR)
-	if err := enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 99, "method": "bogus/method"}); err != nil {
-		t.Fatal(err)
-	}
+	// A bogus method, asserting the error code. This reads through the harness
+	// rather than a second json.Decoder on acR: the harness pumps the inbound
+	// stream continuously, so any other decoder on the same pipe competes with
+	// it for frames and starves. h.call is no use here — it treats an error
+	// response as a test failure, and an error response is exactly the point.
+	id := h.send("bogus/method", nil)
 	for {
-		var resp map[string]any
-		if err := dec.Decode(&resp); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if m, ok := resp["method"].(string); ok && m == MethodSessionUpdate {
+		f := h.read()
+		if rid, ok := f.id.(float64); !ok || int(rid) != id {
 			continue
 		}
-		if rid, _ := resp["id"].(float64); int(rid) == 99 {
-			e, ok := resp["error"].(map[string]any)
-			if !ok {
-				t.Fatalf("expected method-not-found error; got %v", resp)
-			}
-			if code, _ := e["code"].(float64); int(code) != CodeMethodNotFound {
-				t.Errorf("error code = %v; want %d", e["code"], CodeMethodNotFound)
-			}
-			break
+		if f.errObj == nil {
+			t.Fatalf("expected method-not-found error; got result %v", f.result)
 		}
+		if code, _ := f.errObj["code"].(float64); int(code) != CodeMethodNotFound {
+			t.Errorf("error code = %v; want %d", f.errObj["code"], CodeMethodNotFound)
+		}
+		break
 	}
 	cancel()
 	_ = caW.Close()
@@ -1782,23 +1876,9 @@ func jsonEscape(s string) string {
 // §13 "replay before response" MUST).
 func (h *harness) readAny() frame {
 	h.t.Helper()
-	var msg map[string]any
-	if err := h.dec.Decode(&msg); err != nil {
-		h.t.Fatalf("decode: %v", err)
-	}
-	f := frame{id: msg["id"]}
-	if m, ok := msg["method"].(string); ok {
-		f.method = m
-		if p, ok := msg["params"].(map[string]any); ok {
-			f.params = p
-		}
-		return f
-	}
-	if r, ok := msg["result"].(map[string]any); ok {
-		f.result = r
-	}
-	if e, ok := msg["error"].(map[string]any); ok {
-		f.errObj = e
+	f, err := h.nextFrame(harnessTimeout)
+	if err != nil {
+		h.t.Fatalf("read: %v", err)
 	}
 	return f
 }
