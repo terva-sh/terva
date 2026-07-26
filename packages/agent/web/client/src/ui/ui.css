@@ -108,11 +108,48 @@ button { font: inherit; color: inherit; cursor: pointer; }
    the base consumes a --ui-* an app doesn't define, so a shared rule can never
    again out-run one app's palette the way the drifted rules above did.
      surface  --ui-bg --ui-surface --ui-fg --ui-muted --ui-line
-     intent   --ui-accent --ui-danger --ui-ok
+     intent   --ui-accent --ui-danger --ui-warn --ui-ok
      shape    --ui-radius
    The spacing and type scales are deliberately NOT here yet — a shared scale is
    a design decision (which step sizes?), not a mechanical move, so each app
    keeps its own for now. Add them here the day a shared primitive needs them. */
+
+/* --- shared: deadline urgency (ui/deadline.ts) ---
+   A row with an expiry reads the same five days out as it does forty minutes
+   out, so a scarce, irreversible thing (a usage-reset credit, a credential)
+   lapses unnoticed. These classes are the one place that look is decided, so a
+   second surface with a deadline inherits it rather than inventing a colour.
+
+   Two legible states over a continuous ramp. ui/deadline.ts sets --ui-urgency
+   (0 at five days out, 1 at the moment it lapses) and the tint mixes --ui-warn
+   toward --ui-danger by it, so the row warms steadily; the modifiers then draw
+   the two lines a glance can actually catch — a wash within the day, a ring
+   within four hours. Everything comes from the palette, so both apps and every
+   Stage theme get their own amber and red with no rule restated per theme.
+
+   A lapsed deadline gets NO class: it is over, not maximally urgent, and the
+   loudest row in a list should never be the one nothing can be done about.
+
+   outline rather than border for the ring: it draws inside the box and costs no
+   layout, so it cannot shift a row when it appears, and it does not fight a
+   consumer's own border (the panel's reset rows carry a border-bottom). */
+.ui-deadline {
+  /* The ramp position, 0..1. Declared here as the default so the class alone is
+     valid CSS; ui/deadline.ts overrides it inline per row. It is a runtime
+     INPUT, not a palette token, which is why the apps do not map it. */
+  --ui-urgency: 0;
+  --ui-deadline-tint: color-mix(in srgb, var(--ui-danger) calc(var(--ui-urgency) * 100%), var(--ui-warn));
+  border-radius: var(--ui-radius);
+  transition: background-color .2s ease, outline-color .2s ease;
+}
+.ui-deadline .ui-deadline-meta { color: var(--ui-deadline-tint); font-weight: 600; }
+.ui-deadline--soon, .ui-deadline--urgent {
+  background: color-mix(in srgb, var(--ui-deadline-tint) 14%, transparent);
+}
+.ui-deadline--urgent { outline: 1px solid var(--ui-danger); outline-offset: -1px; }
+@media (prefers-reduced-motion: reduce) {
+  .ui-deadline { transition: none; }
+}
 
 /* --- per-message copy (ui/CopyButton.tsx) --- */
 .copy-btn {

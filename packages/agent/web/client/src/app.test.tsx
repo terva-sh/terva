@@ -2,8 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/preact'
 
-import { App, countdown, CtxRow, shortWindow, wtStatus } from './app'
+import { App, countdown, CtxRow, ResetRow, shortWindow, wtStatus } from './app'
 import { fakeClient } from './platform/ctrlproto/testing'
+import { localInstant } from './ui/formatting'
 import { ADDR_WORKSPACE } from './platform/ctrlproto/types'
 
 // app.tsx held 47 top-level declarations behind ONE export, so 2689 lines of
@@ -90,6 +91,98 @@ describe('CtxRow', () => {
   it('omits the note element when there is no note', () => {
     const { container } = render(<CtxRow label="x" bytes={10} note="" />)
     expect(container.querySelector('.ctx-row-note')).toBeNull()
+  })
+})
+
+// A codex reset credit is scarce and irreversible, so WHEN it lapses is the
+// row's load-bearing fact. It used to render `expires_at.slice(0, 10)` — the
+// wire's UTC calendar date, with the time of day thrown away and the day itself
+// wrong for anyone whose local date differs from UTC at that instant.
+describe('ResetRow expiry', () => {
+  const row = (expires_at: string, status = 'available') =>
+    render(
+      <ResetRow
+        r={{ id: 'r1', title: 'reset credit', status, expires_at }}
+        arming={false}
+        busy={false}
+        onArm={() => {}}
+        onCancel={() => {}}
+        onRedeem={() => {}}
+      />,
+    )
+
+  it('renders the expiry in the viewer locale, not as the raw wire stamp', () => {
+    const iso = '2026-08-02T01:30:00Z'
+    const { container } = row(iso)
+    expect(container.textContent).toContain(localInstant(iso))
+    // The two shapes the slice produced: the bare ISO date, and no time at all.
+    expect(container.textContent).not.toContain('2026-08-02T')
+    expect(container.textContent).toContain(':')
+  })
+
+  // The precise instant stays reachable for anyone cross-checking against the
+  // provider's own console, which reports UTC.
+  it('keeps the exact wire instant as a tooltip', () => {
+    const { container } = row('2026-08-02T01:30:00Z')
+    expect(container.querySelector('.reset-meta')?.getAttribute('title')).toBe('2026-08-02T01:30:00Z')
+  })
+
+  // A spent credit reports that it is spent; the expiry is no longer the point.
+  it('reads as spent once redeemed', () => {
+    const { container } = row('2026-08-02T01:30:00Z', 'redeemed')
+    expect(container.textContent).toContain('spent')
+    expect(container.querySelector('.reset-btn')).toBeNull()
+  })
+
+  // "expires 2026-07-30" on a credit that lapsed last week reads as a future
+  // deadline. The TUI's dialog has always switched tense here; the web did not.
+  it('switches tense once the deadline has passed', () => {
+    const { container } = row(new Date(Date.now() - 86_400_000).toISOString())
+    expect(container.textContent).toContain('expired')
+    expect(container.textContent).not.toContain('expires')
+  })
+})
+
+// The urgency ramp. A row that reads the same five days out as forty minutes
+// out is how a scarce, irreversible credit lapses unnoticed.
+describe('ResetRow urgency', () => {
+  const inHours = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString()
+  const rowAt = (expires_at: string, status = 'available') =>
+    render(
+      <ResetRow
+        r={{ id: 'r1', title: 'reset credit', status, expires_at }}
+        arming={false}
+        busy={false}
+        onArm={() => {}}
+        onCancel={() => {}}
+        onRedeem={() => {}}
+      />,
+    ).container.querySelector('.reset-row') as HTMLElement
+
+  it('leaves a distant credit looking like any other row', () => {
+    const el = rowAt(inHours(24 * 7))
+    expect(el.className).not.toContain('ui-deadline')
+    expect(el.getAttribute('style')).toBeFalsy()
+  })
+
+  it('highlights within a day and rings within four hours', () => {
+    expect(rowAt(inHours(12)).className).toContain('ui-deadline--soon')
+    expect(rowAt(inHours(2)).className).toContain('ui-deadline--urgent')
+  })
+
+  // The ramp position rides an inline custom property; ui.css mixes the colour
+  // from it, so the component names no colour at all.
+  it('carries the ramp position and no colour of its own', () => {
+    const style = rowAt(inHours(60)).getAttribute('style') ?? ''
+    expect(style).toContain('--ui-urgency')
+    expect(style).not.toMatch(/#[0-9a-f]{3,6}|rgb\(/i)
+  })
+
+  // Redeemed and lapsed credits are both done with: neither should be the
+  // loudest row on screen.
+  it('does not mark a credit that is spent or already gone', () => {
+    expect(rowAt(inHours(2), 'redeemed').className).not.toContain('ui-deadline')
+    expect(rowAt(inHours(-2)).className).not.toContain('ui-deadline')
   })
 })
 

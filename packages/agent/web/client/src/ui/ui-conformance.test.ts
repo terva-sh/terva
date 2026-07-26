@@ -32,6 +32,7 @@ const CONTRACT = [
   '--ui-line',
   '--ui-accent',
   '--ui-danger',
+  '--ui-warn',
   '--ui-ok',
   '--ui-radius',
 ]
@@ -43,6 +44,17 @@ function consumedUiTokens(sheet: string): string[] {
   return [...s]
 }
 
+// Not every --ui-* the base reads is a PALETTE token an app must map. Some are
+// the base's own derived values (--ui-deadline-tint, mixed from two palette
+// tokens) and some are runtime inputs a component sets inline (--ui-urgency).
+// Both are declared in ui.css itself, so "the base declares it" is the test for
+// "this is not an app's obligation" — and it stays honest, because a token the
+// base merely reads still has to be mapped by both apps.
+function appOwedTokens(sheet: string): string[] {
+  const owned = declaredProps(sheet)
+  return consumedUiTokens(sheet).filter((t) => !owned.has(t))
+}
+
 // Every custom property a sheet declares (`--x:`), anywhere — :root, a
 // media/theme override, all count as "this sheet defines --x".
 function declaredProps(sheet: string): Set<string> {
@@ -52,7 +64,7 @@ function declaredProps(sheet: string): Set<string> {
 }
 
 describe('shared --ui-* token contract', () => {
-  const consumed = consumedUiTokens(base)
+  const consumed = appOwedTokens(base)
 
   it('base only consumes tokens that are in the documented contract', () => {
     for (const tok of consumed) {
@@ -154,6 +166,42 @@ describe('every button has press feedback (the base :active)', () => {
       'ui.css must give every button press feedback via a base `button:active { transform: scale(...) }`',
     ).toBe(true)
   })
+})
+
+// Deadline urgency is a shared LOOK, and the reason it is shared is that the
+// alternative — each surface picking its own amber — is what left a dozen raw
+// copies of one warning colour across the two sheets. These pin the parts that
+// make it palette-driven rather than bespoke: the ramp is mixed from tokens,
+// and the two states are drawn with tokens.
+describe('deadline urgency is drawn from the palette', () => {
+  it('mixes the ramp from --ui-warn toward --ui-danger by --ui-urgency', () => {
+    expect(
+      /--ui-deadline-tint:\s*color-mix\([^)]*var\(--ui-danger\)[^;]*var\(--ui-urgency[^;]*var\(--ui-warn\)/.test(base),
+      'ui.css must mix the deadline tint from --ui-warn toward --ui-danger by --ui-urgency, not from a literal',
+    ).toBe(true)
+  })
+
+  it('draws the urgent ring with --ui-danger', () => {
+    expect(
+      /\.ui-deadline--urgent\s*\{[^}]*outline:[^}]*var\(--ui-danger\)/.test(base),
+      'ui.css must draw the .ui-deadline--urgent ring from --ui-danger',
+    ).toBe(true)
+  })
+
+  // outline, not border: it costs no layout, so the ring cannot shift a row
+  // when it appears, and it does not fight a consumer's own border.
+  it('rings with outline so the row does not shift when it lands', () => {
+    expect(/\.ui-deadline--urgent\s*\{[^}]*border:/.test(base), '.ui-deadline--urgent must not use border').toBe(false)
+  })
+
+  for (const [name, sheet] of APPS) {
+    it(`${name} does not restate the deadline look`, () => {
+      expect(
+        /\.ui-deadline[a-z-]*\s*\{/.test(sheet),
+        `${name} styles a .ui-deadline* class — ui.css owns that look so both apps share it`,
+      ).toBe(false)
+    })
+  }
 })
 
 // Wide content must scroll inside the message it belongs to, not push the

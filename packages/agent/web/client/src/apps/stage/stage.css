@@ -13,6 +13,10 @@
   --stage-user: #2c3a3f;
   --stage-ok: #7fbf8a;
   --stage-danger: #d67a6a; /* also the --stage-status--closed red */
+  /* The step between ok and danger. Was two near-identical ambers copied into
+     the lint counts and the doctor severities; one token now, so a preset that
+     ever wants its own warning has a single place to say so. */
+  --stage-warn: #d6a86a;
   --stage-radius: 8px; /* Stage's common control/card radius */
   /* Text drawn ON --stage-accent. Near-black suits the three dark presets,
      whose accents are light; Parchment's accent is a mid-brown that near-black
@@ -28,6 +32,7 @@
   --ui-line: var(--stage-line);
   --ui-accent: var(--stage-accent);
   --ui-danger: var(--stage-danger);
+  --ui-warn: var(--stage-warn);
   --ui-ok: var(--stage-ok);
   --ui-radius: var(--stage-radius);
 }
@@ -1051,8 +1056,8 @@ button:disabled {
   border-color: color-mix(in srgb, var(--stage-ok) 40%, transparent);
 }
 .stage-personasheet__chip--avoid {
-  color: #d6a86a;
-  border-color: rgba(214, 168, 106, 0.4);
+  color: var(--stage-warn);
+  border-color: color-mix(in srgb, var(--stage-warn) 40%, transparent);
 }
 
 /* --- detail sheet --- */
@@ -1578,7 +1583,7 @@ button:disabled {
   gap: 0.5rem;
 }
 .stage-lint__count--warn {
-  color: #d6a86a;
+  color: var(--stage-warn);
 }
 .stage-lint__count--info {
   color: var(--stage-muted);
@@ -1601,7 +1606,7 @@ button:disabled {
   line-height: 1.4;
 }
 .stage-lint__item--warn .stage-lint__sev {
-  color: #d6a86a;
+  color: var(--stage-warn);
 }
 .stage-lint__item--info .stage-lint__sev {
   color: var(--stage-muted);
@@ -1955,8 +1960,8 @@ button:disabled {
   border: 1px solid var(--stage-line);
 }
 .stage-doctor__sev--warn {
-  color: #e0af68;
-  border-color: #e0af68;
+  color: var(--stage-warn);
+  border-color: var(--stage-warn);
 }
 .stage-doctor__sev--info {
   color: var(--stage-muted);
@@ -3201,11 +3206,11 @@ button:disabled {
   font-size: 0.68rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #d6a86a;
-  background: rgba(214, 168, 106, 0.16);
+  color: var(--stage-warn);
+  background: color-mix(in srgb, var(--stage-warn) 16%, transparent);
 }
 .stage-scene-state--stale {
-  border-color: rgba(214, 168, 106, 0.5);
+  border-color: color-mix(in srgb, var(--stage-warn) 50%, transparent);
 }
 .stage-scene-state--open {
   display: flex;
@@ -4363,8 +4368,8 @@ button:disabled {
   background: color-mix(in srgb, var(--stage-ok) 14%, transparent);
 }
 .stage-lore__badge--dropped {
-  color: #d6a86a;
-  background: rgba(214, 168, 106, 0.16);
+  color: var(--stage-warn);
+  background: color-mix(in srgb, var(--stage-warn) 16%, transparent);
 }
 .stage-lore__content {
   margin: 0;
@@ -4516,8 +4521,8 @@ button:disabled {
   font-size: 0.72rem;
   padding: 0.05rem 0.4rem;
   border-radius: 4px;
-  background: rgba(214, 168, 106, 0.16);
-  color: #d6a86a;
+  background: color-mix(in srgb, var(--stage-warn) 16%, transparent);
+  color: var(--stage-warn);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4609,7 +4614,7 @@ button:disabled {
   background: none;
   border: 1px solid var(--stage-line);
   border-radius: 8px;
-  color: #d6a86a;
+  color: var(--stage-warn);
   font-size: 0.8rem;
   cursor: pointer;
 }
@@ -4795,8 +4800,8 @@ button:disabled {
   color: var(--stage-ok);
 }
 .stage-enrich__verdict--off {
-  border-color: #d6a86a;
-  color: #d6a86a;
+  border-color: var(--stage-warn);
+  color: var(--stage-warn);
 }
 .stage-enrich__text {
   margin: 0;
@@ -4900,7 +4905,7 @@ button:disabled {
 .stage-personaeditor__warn {
   margin: -0.3rem 0 0;
   font-size: 0.78rem;
-  color: #d6a86a;
+  color: var(--stage-warn);
 }
 /* The filename a persona will take. Shown only while creating, where the name is
    still in play — an edit cannot change its own slug. */
@@ -4955,9 +4960,9 @@ button:disabled {
    not wear the same affirmative accent as "record this". Amber rather than red:
    retiring played-past lore is routine hygiene, not a danger. */
 .stage-doctor__accept--destructive {
-  background: rgba(214, 168, 106, 0.16);
-  color: #d6a86a;
-  border: 1px solid rgba(214, 168, 106, 0.5);
+  background: color-mix(in srgb, var(--stage-warn) 16%, transparent);
+  color: var(--stage-warn);
+  border: 1px solid color-mix(in srgb, var(--stage-warn) 50%, transparent);
 }
 .stage-doctor__decline,
 .stage-doctor__close {

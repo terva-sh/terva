@@ -46,6 +46,11 @@
   --user-fg: #ffffff;
   --accent: #b5651d; /* birch tar */
   --danger: #d1453b;
+  /* Amber, the step between "fine" and "wrong". It was used a dozen times as
+     `var(--warning)` and never actually declared, so every one of those
+     was the literal riding a fallback — the exact copied-colour drift the theme
+     guard exists to stop. Declared here, it is one value again. */
+  --warning: #d1901f;
   --ok: #2f9e44;
   --radius: 12px;
   /* density tokens (convention #5): pane-surface type + spacing */
@@ -64,6 +69,7 @@
   --ui-line: var(--line);
   --ui-accent: var(--accent);
   --ui-danger: var(--danger);
+  --ui-warn: var(--warning);
   --ui-ok: var(--ok);
   --ui-radius: var(--radius);
 }
@@ -158,7 +164,7 @@ body {
 .wt-tabs { flex: none; display: flex; gap: 2px; background: var(--panel); border-radius: 8px; padding: 2px; }
 .wt-tab { border: 0; background: transparent; color: var(--muted); font-size: var(--fs-detail); padding: 3px 10px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
 .wt-tab.active { background: var(--bg); color: var(--fg); }
-.wt-pending { font-size: var(--fs-note); font-weight: 600; padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--warning, #d1901f) 22%, transparent); color: var(--warning, #d1901f); }
+.wt-pending { font-size: var(--fs-note); font-weight: 600; padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--warning) 22%, transparent); color: var(--warning); }
 .wt-repo { flex: 1; min-width: 0; text-align: right; font-size: var(--fs-note); color: var(--muted); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wt-list { display: flex; flex-direction: column; gap: var(--gap-row); }
 .wt-row { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; }
@@ -169,8 +175,8 @@ body {
 .wt-status { flex: none; margin-left: auto; font-size: var(--fs-note); font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--panel); color: var(--muted); overflow-wrap: anywhere; }
 .wt-status.s-self { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
 .wt-status.s-claimed { background: color-mix(in srgb, var(--user) 18%, transparent); color: var(--user); }
-.wt-status.s-stale, .wt-status.s-unmanaged { background: color-mix(in srgb, var(--warning, #d1901f) 20%, transparent); color: var(--warning, #d1901f); }
-.wt-dirty { flex: none; font-size: var(--fs-note); color: var(--warning, #d1901f); }
+.wt-status.s-stale, .wt-status.s-unmanaged { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+.wt-dirty { flex: none; font-size: var(--fs-note); color: var(--warning); }
 .wt-ahead { flex: none; margin-left: auto; font-size: var(--fs-note); color: var(--muted); font-variant-numeric: tabular-nums; }
 .wt-row-detail { display: flex; gap: 8px; flex-wrap: wrap; font-size: var(--fs-detail); color: var(--muted); }
 .wt-branch { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
@@ -305,6 +311,17 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .msg-wrap { position: relative; display: flex; flex-direction: column; }
 .assistant-wrap { align-self: flex-start; max-width: 88%; }
 .user-wrap { align-self: flex-end; max-width: 88%; }
+/* The arrival stamp, tucked under its bubble on the bubble's own side. Muted
+   and fine-print sized on purpose: it is there to be READ WHEN LOOKED FOR, and
+   a transcript where every row shouts its clock time is a worse transcript. */
+.msg-time { font-size: var(--fs-note); color: var(--muted); padding: 2px 2px 0; font-variant-numeric: tabular-nums; }
+.user-wrap .msg-time { align-self: flex-end; }
+.assistant-wrap .msg-time { align-self: flex-start; }
+/* A silence long enough to say out loud — a hairline with the duration set into
+   it, the same centred-divider language as the compaction and clear rows. */
+.time-gap { display: flex; align-items: center; gap: 8px; align-self: stretch; color: var(--muted); font-size: var(--fs-note); }
+.time-gap::before, .time-gap::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.time-gap-label { flex: none; font-variant-numeric: tabular-nums; }
 .assistant-wrap .msg.assistant, .user-wrap .msg.user { max-width: 100%; }
 /* .copy-btn, .code-wrap/.code-copy and .msg-image* now live in ui/ui.css,
    alongside the components and the markdown renderer that emit them. */
@@ -403,16 +420,16 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .swarm-spawn { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .swarm-spawn-task { flex: 1 1 180px; min-width: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font-size: var(--fs-ui); }
 .swarm-spawn-backend { flex: none; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font-size: var(--fs-note); }
-.swarm-spawn-hint { padding: 0 14px 10px; font-size: var(--fs-detail); color: var(--warning, #d1901f); }
+.swarm-spawn-hint { padding: 0 14px 10px; font-size: var(--fs-detail); color: var(--warning); }
 .swarm-tile { gap: 4px; }
 .swarm-backend { flex: none; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 6px; background: var(--panel); color: var(--muted); margin-right: 6px; }
 .swarm-activity { font-size: var(--fs-detail); color: var(--muted); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .swarm-error { font-size: var(--fs-detail); color: var(--danger); overflow-wrap: anywhere; }
 /* a worker parked on a human approval: an actionable badge (click opens the
    session where the card lives) plus a whole-tile accent so it stands out. */
-.swarm-waiting { align-self: flex-start; flex: none; cursor: pointer; border: 0; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--warning, #d1901f) 22%, transparent); color: var(--warning, #d1901f); }
-.swarm-waiting:hover { background: color-mix(in srgb, var(--warning, #d1901f) 34%, transparent); }
-.board-tile.swarm-tile.waiting { border-color: var(--warning, #d1901f); }
+.swarm-waiting { align-self: flex-start; flex: none; cursor: pointer; border: 0; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--warning) 22%, transparent); color: var(--warning); }
+.swarm-waiting:hover { background: color-mix(in srgb, var(--warning) 34%, transparent); }
+.board-tile.swarm-tile.waiting { border-color: var(--warning); }
 /* worker-shaped fields on the pane's task rows (light up under a workers daemon) */
 .task-backend { flex: none; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 6px; background: var(--panel); color: var(--muted); }
 .task-cost { flex: none; font-size: var(--fs-note); color: var(--muted); font-family: ui-monospace, monospace; }
@@ -567,10 +584,14 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .ctx-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-top: 2px; }
 /* usage resets: banked reset credits + inline redeem confirm */
 .resets-count { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--accent); }
-.resets-list { display: flex; flex-direction: column; gap: 4px; }
+/* The rows carry side padding so the urgency wash and ring (ui.css
+   .ui-deadline) have something to sit in rather than hugging the text; the
+   negative margin keeps them aligned with the rest of the pane, and stays well
+   inside .ctx-body's 12px. */
+.resets-list { display: flex; flex-direction: column; gap: 4px; margin: 0 -6px; }
 .resets-err { font-size: 12px; color: var(--danger); }
 .resets-done { font-size: 12px; color: var(--accent); }
-.reset-row { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.reset-row { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 5px 6px; border-bottom: 1px solid var(--line); }
 .reset-row.spent { color: var(--muted); }
 .reset-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .reset-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -591,7 +612,7 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .ctx-msgs { border: 1px solid var(--line); border-radius: 8px; max-height: 34vh; overflow-y: auto; }
 .ctx-msg { display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; font-size: 12px; font-family: ui-monospace, monospace; }
 .ctx-msg:nth-child(odd) { background: color-mix(in srgb, var(--muted) 6%, transparent); }
-.ctx-msg.largest { color: var(--warning, #d1901f); }
+.ctx-msg.largest { color: var(--warning); }
 .ctx-msg-i { flex: none; width: 34px; color: var(--muted); }
 .ctx-msg-kind { flex: 1; min-width: 0; }
 .ctx-msg-b { flex: none; text-align: right; font-variant-numeric: tabular-nums; }
@@ -604,13 +625,13 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .ctx-lore-name { flex: 1; min-width: 0; font-weight: 600; }
 .ctx-lore-keys { flex: none; font-family: ui-monospace, monospace; color: var(--muted); }
 .ctx-lore-tag { flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
-.ctx-lore-tag.dropped { color: var(--warning, #d1901f); }
+.ctx-lore-tag.dropped { color: var(--warning); }
 /* context-tree outline: collapsible turns → messages */
 .ctx-tree { border: 1px solid var(--line); border-radius: 8px; max-height: 42vh; overflow-y: auto; padding: 2px 0; }
 .ctx-trow { display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; font-size: 12px; font-family: ui-monospace, monospace; border-radius: 4px; }
 .ctx-trow.has-kids { cursor: pointer; }
 .ctx-trow.has-kids:hover { background: color-mix(in srgb, var(--muted) 10%, transparent); }
-.ctx-trow.largest { color: var(--warning, #d1901f); }
+.ctx-trow.largest { color: var(--warning); }
 .ctx-tchev { flex: none; width: 12px; color: var(--muted); }
 .ctx-tlabel { flex: none; white-space: nowrap; }
 .ctx-tsummary { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

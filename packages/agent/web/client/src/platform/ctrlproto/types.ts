@@ -315,6 +315,47 @@ export interface UsageWindow {
   kind?: string
 }
 
+// CreditsInfo is a provider's credit balance, mirroring ctrlproto.CreditsInfo.
+// `unlimited` and `has_credits` give `balance` its meaning: some providers
+// report what is left, some what has been spent, some neither. Nothing renders
+// it yet — ContextBreakdown carries no credits field, so an OpenRouter/DeepSeek
+// balance still has no home on the web.
+export interface CreditsInfo {
+  unlimited?: boolean
+  has_credits?: boolean
+  balance?: number
+  used?: number
+}
+
+// UsageInfo is the provider's subscription picture for one session — the result
+// of usage.snapshot, mirroring ctrlproto.UsageInfo. Unlike
+// ContextBreakdown.usage_windows, which is the status picture, `windows` here
+// carries EVERY window the provider reports, rate-limit ones included;
+// filtering is the client's business. `has_data` false is a normal answer ("no
+// agent yet", or "this provider reports no usage"), not an error, and
+// `refreshable` marks a provider whose usage comes from an endpoint rather than
+// from response headers.
+export interface UsageInfo {
+  provider?: string
+  has_data?: boolean
+  windows?: UsageWindow[]
+  credits?: CreditsInfo
+  captured_at?: string
+  refreshable?: boolean
+}
+
+// UsageSnapshotParams is the payload of usage.snapshot. refresh=true pulls from
+// the provider's usage endpoint and BLOCKS server-side on that fetch, so it is
+// for a deliberate act (opening the pane, a new turn's usage), not for idle
+// polling; the daemon TTL-caches the result.
+export interface UsageSnapshotParams {
+  refresh?: boolean
+}
+
+export interface UsageSnapshotResult {
+  usage: UsageInfo
+}
+
 // ResetInfo is one consumable usage-reset credit (codex banked reset), mirroring
 // ctrlproto.ResetInfo. Times are RFC 3339 strings.
 export interface ResetInfo {
@@ -1700,6 +1741,7 @@ export interface VerbParams {
   'cards.history': CardHistoryParams
   'cards.restore': CardRestoreParams
   'cards.revision': CardRevisionParams
+  'usage.snapshot': UsageSnapshotParams
 }
 
 // Card revision history. Every write to a card goes through cards.edit — the

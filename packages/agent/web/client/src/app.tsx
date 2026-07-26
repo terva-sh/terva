@@ -43,6 +43,8 @@ import type {
   SurfaceMeta,
   TaskInfo,
   TaskList,
+  UsageInfo,
+  UsageSnapshotResult,
   UsageWindow,
   Widget,
   WireEvent,
@@ -84,7 +86,8 @@ import { PACE_INTERVAL_MS, StreamPacer } from './platform/conversation/pacer'
 import { buildConveneArgs, raatiResultCopyText, raatiUnitCopyText, raatiVerdictWord } from './raati'
 import { applyServerCatalog, setLocale, t, tn } from './i18n'
 import { CopyButton } from './ui/CopyButton'
-import { humanBytes, humanCount } from './ui/formatting'
+import { deadlineClass, deadlineOf, deadlineStyle } from './ui/deadline'
+import { humanBytes, humanCount, localInstant } from './ui/formatting'
 import { stageHref, takeNavParams } from './ui/navlinks'
 
 const TOOL_VIEWS: ToolView[] = ['full', 'grouped', 'minimal', 'hidden']
@@ -250,6 +253,11 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [surfaces, setSurfaces] = useState<SurfaceMeta[]>([])
   const [activeSurface, setActiveSurface] = useState('context')
   const [surfaceData, setSurfaceData] = useState<Surface | null>(null)
+  // The provider's usage picture, mirrored from the usage.snapshot verb. It
+  // exists because ContextBreakdown.usage_windows is a PASSIVE read of whatever
+  // the provider client happens to have observed already, and only half the
+  // providers ever observe anything that way — see loadUsageSnapshot.
+  const [usageSnap, setUsageSnap] = useState<UsageInfo | null>(null)
   // The workspace drawer's own state — the landing has no session, so it cannot
   // ask for surfaces (every one of them is served through a session handle, and
   // an empty address MINTS one). It asks the session-independent verbs instead.
@@ -631,6 +639,44 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     }
   }, [])
 
+  // loadUsageSnapshot mirrors the provider's subscription picture from the
+  // usage.snapshot verb.
+  //
+  // The pane cannot rely on ContextBreakdown.usage_windows alone: that field is
+  // filled from the provider client's already-observed snapshot, and providers
+  // fall into two families. Header-family clients (anthropic, codex,
+  // openai-compat) record their windows off every inference response, so the
+  // field is warm for free. Poll-family clients (kimi, openrouter, deepseek)
+  // report nothing at all until somebody calls their usage endpoint — and until
+  // this, nothing on the web ever did, so a kimi subscription rendered no
+  // windows whatsoever while the TUI showed them.
+  //
+  // refresh=true asks the daemon to make that call. It blocks server-side on
+  // the provider's GET, which is why it is a deliberate act rather than
+  // something the breakdown does on its own; the fetch is TTL-cached at the
+  // client (provider/usage_client.go), so calling this on every usage event
+  // costs one local round-trip and at most one provider GET a minute. For a
+  // header-family provider it degrades to the passive read, so it is safe to
+  // call for every provider. The TUI has kept the same mirror all along
+  // (modes/interactive_usage.go).
+  const loadUsageSnapshot = useCallback(async (refresh: boolean) => {
+    const c = clientRef.current
+    const sess = curRef.current
+    if (!c || !sess) return
+    try {
+      const r = await c.send<UsageSnapshotResult>('usage.snapshot', { refresh }, sess)
+      // A refresh blocks on the provider's endpoint, which is long enough for
+      // the user to switch sessions underneath it. Late arrivals belong to the
+      // session that asked, so drop them rather than showing one session's
+      // subscription picture under another's.
+      if (curRef.current !== sess) return
+      setUsageSnap(r.usage ?? null)
+    } catch {
+      /* older daemon, or the session group is unavailable — the breakdown's
+         own windows stand in, which is exactly the pre-mirror behaviour */
+    }
+  }, [])
+
   // refreshI18n fetches the daemon's effective string catalog (base ⊕ overlay)
   // and overlays it onto the bundle, then re-renders. Run on connect and when
   // the locale changes; best-effort (the bundle stands in on failure).
@@ -780,6 +826,12 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         // gauge, cumulative cost, and windows all move on a usage event.
         if (paneOpenRef.current && activeSurfaceRef.current === 'context') {
           loadSurface('context')
+          // Re-poll alongside it, or a poll-family provider's meter would stay
+          // frozen at whatever it read when the pane opened. Unthrottled, like
+          // the surface fetch beside it: this verb is far the cheaper of the
+          // two (that one rebuilds the whole context tree), and the provider
+          // GET behind it is TTL-capped at once a minute.
+          void loadUsageSnapshot(true)
         }
         return
       case 'permission_request':
@@ -809,7 +861,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       default:
         setItems((it) => applyEvent(it, ev))
     }
-  }, [listSurfaces, loadSurface, refreshI18n, refreshSessions, fetchBoardTasks])
+  }, [listSurfaces, loadSurface, loadUsageSnapshot, refreshI18n, refreshSessions, fetchBoardTasks])
 
   handleEventRef.current = handleEvent
 
@@ -1434,13 +1486,25 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     return sendPrompt(text, images)
   }
 
+  // A usage snapshot belongs to the session that produced it. Clear it when the
+  // session changes — declared ahead of the pane refresh below so the wipe
+  // lands before the re-fetch — or a provider that reports nothing would
+  // inherit the previous session's windows through statusWindows' fallback.
+  useEffect(() => {
+    setUsageSnap(null)
+  }, [curSess])
+
   // Refresh the pane when it opens, the active surface changes, or the session
   // changes; live panes also re-fetch on surface_updated (see handleEvent).
   useEffect(() => {
     if (!paneOpen || !curSess) return
     listSurfaces()
     loadSurface(activeSurface)
-  }, [paneOpen, activeSurface, curSess, listSurfaces, loadSurface])
+    // Opening the usage pane is the deliberate "show me where I stand" act, so
+    // it is the one that pays for a provider fetch — the same trigger the TUI
+    // uses for /usage.
+    if (activeSurface === 'context') void loadUsageSnapshot(true)
+  }, [paneOpen, activeSurface, curSess, listSurfaces, loadSurface, loadUsageSnapshot])
 
   // ...and the workspace drawer when it opens with no session behind it.
   // auth.providers is addressed to nothing on purpose (serve.go ignores Sess: a
@@ -1873,6 +1937,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
             surfaces={surfaces}
             active={activeSurface}
             data={surfaceData}
+            usage={usageSnap}
             err={surfaceErr}
             onActivate={setActiveSurface}
             onAction={surfaceAction}
@@ -1916,6 +1981,7 @@ export function PaneHost({
   surfaces,
   active,
   data,
+  usage,
   err,
   onActivate,
   onAction,
@@ -1934,6 +2000,7 @@ export function PaneHost({
   surfaces: SurfaceMeta[]
   active: string
   data: Surface | null
+  usage?: UsageInfo | null
   err: string
   onActivate: (id: string) => void
   onAction: (id: string, action: string, args?: Record<string, string>) => void
@@ -1983,6 +2050,7 @@ export function PaneHost({
         {data && (
           <SurfaceView
             surface={data}
+            usage={usage}
             onAction={onAction}
             onFetchNode={onFetchNode}
             onListResets={onListResets}
@@ -2910,6 +2978,7 @@ export function RaatiTheater({
 
 export function SurfaceView({
   surface,
+  usage,
   onAction,
   onFetchNode,
   onListResets,
@@ -2923,6 +2992,7 @@ export function SurfaceView({
   auth,
 }: {
   surface: Surface
+  usage?: UsageInfo | null
   onAction: (id: string, action: string, args?: Record<string, string>) => void
   onFetchNode: (id: string, op?: string) => Promise<ContextNode>
   onListResets: () => Promise<ResetsListResult>
@@ -2940,6 +3010,7 @@ export function SurfaceView({
       return surface.context ? (
         <ContextBody
           d={surface.context}
+          usage={usage}
           onFetchNode={onFetchNode}
           onListResets={onListResets}
           onConsumeReset={onConsumeReset}
@@ -3114,7 +3185,7 @@ export function ProvidersBody({
             </div>
           ) : null}
           {p.expiry && !p.expired ? (
-            <div class="ext-meta">{t('expires %s', new Date(p.expiry).toLocaleString())}</div>
+            <div class="ext-meta">{t('expires %s', localInstant(p.expiry))}</div>
           ) : null}
           {canLogin ? (
             <div class="prov-actions">
@@ -4424,14 +4495,27 @@ export function ResetRow({
   onRedeem: () => void
 }) {
   const available = r.status === 'available'
-  const expiry = r.expires_at ? r.expires_at.slice(0, 10) : ''
   const spent = r.status === 'redeemed'
+  const expiry = localInstant(r.expires_at)
+  const due = deadlineOf(r.expires_at)
+  // A redeemed credit has no deadline left to miss — it reads as spent, not as
+  // the most urgent row on screen.
+  const urgency = spent ? '' : deadlineClass(due)
+  let meta = r.status
+  if (spent) meta = t('spent')
+  else if (expiry && due.level === 'expired') meta = t('expired %s', expiry)
+  else if (expiry) meta = t('expires %s', expiry)
   return (
-    <div class={`reset-row${available ? '' : ' spent'}`}>
+    <div
+      class={`reset-row${available ? '' : ' spent'}${urgency ? ' ' + urgency : ''}`}
+      style={spent ? undefined : deadlineStyle(due)}
+    >
       <div class="reset-main">
         <span class="reset-title">{r.title || t('reset credit')}</span>
-        <span class="reset-meta">
-          {spent ? t('spent') : expiry ? t('expires %s', expiry) : r.status}
+        {/* ui-deadline-meta is inert without a .ui-deadline ancestor, so it can
+            ride every row rather than being toggled in step with the parent. */}
+        <span class="reset-meta ui-deadline-meta" title={r.expires_at || undefined}>
+          {meta}
         </span>
       </div>
       {available &&
@@ -4458,11 +4542,13 @@ export function ResetRow({
 
 export function ContextBody({
   d,
+  usage,
   onFetchNode,
   onListResets,
   onConsumeReset,
 }: {
   d: ContextBreakdown
+  usage?: UsageInfo | null
   onFetchNode: (id: string, op?: string) => Promise<ContextNode>
   onListResets: () => Promise<ResetsListResult>
   onConsumeReset: (id: string) => Promise<ResetConsumeResult>
@@ -4476,6 +4562,7 @@ export function ContextBody({
   // the flat message list when talking to a server without the context-tree feature.
   const transcriptNode = d.tree?.children?.find((c) => c.id === 'tr')
   const useTree = !!transcriptNode && (transcriptNode.children?.length ?? 0) > 0
+  const windows = statusWindows(d, usage)
   return (
     <div class="ctx-body">
       {(d.provider || d.model) && (
@@ -4491,7 +4578,7 @@ export function ContextBody({
         estimated={realTok === 0}
         cumulative={d.cumulative}
         subscription={d.subscription}
-        windows={d.usage_windows}
+        windows={windows}
       />
 
       <ResetsSection onList={onListResets} onConsume={onConsumeReset} />
@@ -4696,6 +4783,23 @@ export function WindowRow({ w }: { w: UsageWindow }) {
       {reset && <span class="ctx-win-reset">↻ {reset}</span>}
     </div>
   )
+}
+
+// statusWindows picks which subscription windows the usage pane renders.
+//
+// The breakdown's own list wins whenever it has one: it is refreshed by every
+// turn and already filtered to the status picture. The usage.snapshot mirror is
+// the fallback, and in practice it only ever fills in for the poll-family
+// providers whose breakdown list stays empty until their usage endpoint has
+// been called. Its windows are filtered here rather than server-side because
+// that verb deliberately returns everything the provider reports, rate-limit
+// windows included, and leaves the choice to the caller. Dropping them keeps
+// one meaning for this pane whichever family filled it — plan and credit
+// budgets, never ephemeral throughput limits.
+export function statusWindows(d: ContextBreakdown, usage?: UsageInfo | null): UsageWindow[] | undefined {
+  if (d.usage_windows?.length) return d.usage_windows
+  const fallback = usage?.windows?.filter((w) => w.kind !== 'rate_limit')
+  return fallback?.length ? fallback : undefined
 }
 
 export function shortWindow(label: string): string {
