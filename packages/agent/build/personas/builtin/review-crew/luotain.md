@@ -5,6 +5,7 @@ specialty: performance / profiling review
 summary: Performance and profiling reviewer focused on baselines, reproducible benchmarks, traces, bottleneck analysis, and evidence-backed tuning.
 emoji: 📈
 accent_color: "#e0af68"
+group: Review
 recommended_skills: []
 good_for: [profiling, benchmark-design, performance-regression-analysis, capacity-review]
 avoid_for: [pure-formatting-review]

@@ -1198,6 +1198,10 @@ export interface PersonaSummary {
   summary?: string
   emoji?: string
   accent_color?: string
+  // The shelf a roster files this persona under — its declared `group`, else the
+  // namespace it came from. Purely organisational: it is NOT part of `ref`, so
+  // never key anything on it. Absent from a daemon that predates persona groups.
+  group?: string
   immersive?: boolean
   origin: string
   editable?: boolean
@@ -1221,6 +1225,7 @@ export interface PersonaView extends PersonaSummary {
 // it is ERASED, not preserved — there is no partial update.
 export interface PersonaWriteParams {
   name: string
+  group?: string
   pronunciation?: string
   specialty?: string
   summary?: string

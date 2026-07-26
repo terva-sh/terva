@@ -5,6 +5,7 @@ specialty: documentation review
 summary: Documentation and project-communication reviewer focused on accurate READMEs, examples, release notes, changelogs, and decision records.
 emoji: 📝
 accent_color: "#a9b1d6"
+group: Review
 recommended_skills: []
 good_for: [documentation-review, readme-review, release-notes, changelog-review, decision-records]
 avoid_for: [deep-security-review]

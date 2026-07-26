@@ -58,6 +58,12 @@ type Persona struct {
 	// extension name for an extension-shipped Persona. "" = top-level. The
 	// qualified name is "<namespace>:<name>".
 	Namespace string
+	// Group is the shelf a roster files this Persona under ("Stage", "Review").
+	// Free text, from the `group` frontmatter field, and purely organisational:
+	// unlike Namespace it is NOT part of the ref, so renaming a group never
+	// invalidates a --persona flag or a session's recorded identity. That is
+	// exactly why it, and not Namespace, is the field a user may assign.
+	Group string
 	// Source is "embedded:<rel>" for a built-in, "ext:<name>:<rel>" for an
 	// extension bundle, an absolute/relative path for a user file, or "" for the
 	// legacy name-only swap (no charter).
@@ -91,6 +97,20 @@ func (p Persona) Phonetic() string { return strings.TrimSpace(p.Pronunciation) }
 // hand-authored on-disk file).
 func (p Persona) Builtin() bool { return strings.HasPrefix(p.Source, "embedded:") }
 
+// GroupLabel is the shelf a roster files this Persona under: its declared
+// `group`, falling back to its Namespace, else "" for ungrouped.
+//
+// The fallback is what makes a bundle self-organising: an extension shipping
+// five personas, or a team subdirectory under personas/, gets a shelf of its own
+// without anyone writing `group:` five times. Derived rather than stored, so
+// MarshalPersona never writes back a group the author did not choose.
+func (p Persona) GroupLabel() string {
+	if g := strings.TrimSpace(p.Group); g != "" {
+		return g
+	}
+	return strings.TrimSpace(p.Namespace)
+}
+
 // personaFrontmatter is the YAML head of a persona .md. omitempty keeps a
 // serialized persona (MarshalPersona) from emitting a wall of empty keys;
 // omitempty affects marshaling only, so parsing is unchanged (an absent optional
@@ -102,6 +122,7 @@ type personaFrontmatter struct {
 	Summary           string   `yaml:"summary,omitempty"`
 	Emoji             string   `yaml:"emoji,omitempty"`
 	AccentColor       string   `yaml:"accent_color,omitempty"`
+	Group             string   `yaml:"group,omitempty"`
 	RecommendedSkills []string `yaml:"recommended_skills,omitempty"`
 	GoodFor           []string `yaml:"good_for,omitempty"`
 	AvoidFor          []string `yaml:"avoid_for,omitempty"`
@@ -127,6 +148,7 @@ func ParsePersona(raw, source string) (Persona, error) {
 		Summary:           strings.TrimSpace(fm.Summary),
 		Emoji:             strings.TrimSpace(fm.Emoji),
 		AccentColor:       strings.TrimSpace(fm.AccentColor),
+		Group:             strings.TrimSpace(fm.Group),
 		RecommendedSkills: fm.RecommendedSkills,
 		GoodFor:           fm.GoodFor,
 		AvoidFor:          fm.AvoidFor,

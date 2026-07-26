@@ -5,6 +5,7 @@ specialty: maintainability / developer-experience review
 summary: Maintainability and developer-experience reviewer focused on clarity, refactoring seams, local workflows, onboarding, and sustainable project hygiene.
 emoji: 🛠️
 accent_color: "#c0caf5"
+group: Review
 recommended_skills: []
 good_for: [maintainability-review, developer-experience, refactor-planning, onboarding-review]
 avoid_for: [security-only-review]

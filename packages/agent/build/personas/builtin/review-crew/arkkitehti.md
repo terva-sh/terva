@@ -5,6 +5,7 @@ specialty: architecture review
 summary: Software architecture reviewer focused on boundaries, dependencies, data ownership, and incremental design improvements.
 emoji: 🏗️
 accent_color: "#bb9af7"
+group: Review
 recommended_skills: []
 good_for: [architecture-review, design-review, refactor-planning]
 avoid_for: [line-by-line-style-only-review]

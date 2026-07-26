@@ -13,7 +13,18 @@ import { t, tn, tr } from '../../i18n'
 import { panelHref } from '../../ui/navlinks'
 import { downloadExport } from '../../ui/browser'
 import type { ClientLike } from '../../platform/ctrlproto/client'
-import { applyGroupFilter, cycleGroup, emptyFilter, groupState, hasFilter, originGroups, type GroupFilter } from '../../platform/groups'
+import {
+  applyGroupFilter,
+  bulkMembers,
+  bulkState,
+  cycleGroup,
+  emptyFilter,
+  groupState,
+  hasFilter,
+  originGroups,
+  type GroupFilter,
+} from '../../platform/groups'
+import { personaGroupNames, shelvePersonas } from '../../platform/personagroups'
 import type {
   Status,
   CardSummary,
@@ -170,6 +181,7 @@ export function Library(props: {
   const { client, ready, status, onOpenChat, onEditCharacter } = props
   const [cards, setCards] = useState<CardSummary[]>([])
   const [personas, setPersonas] = useState<PersonaSummary[]>([])
+  const personaShelves = shelvePersonas(personas)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [sheet, setSheet] = useState<CardSummary | null>(null)
   const [personaSheet, setPersonaSheet] = useState<PersonaSummary | null>(null)
@@ -191,6 +203,11 @@ export function Library(props: {
   // embedded tags). An older daemon answers "unsupported" and the whole shelf
   // stays absent.
   const [cardGroups, setCardGroups] = useState<Group[]>([])
+  // Bulk edit: a selection of cards plus the one bar that acts on all of them.
+  // Off by default — the library's ordinary click must stay "open this
+  // character", which is what all but one visit is for.
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [cardGroupsSupported, setCardGroupsSupported] = useState(false)
   // The grid filter: include/exclude by group (empty = the whole library). Tap a
   // chip to cycle show-only → hide → off; see platform/groups.
@@ -547,6 +564,49 @@ export function Library(props: {
       setError(String(e))
     }
   }
+  // Add or remove the WHOLE selection to/from a group in one request. The
+  // membership verb replaces the member list, so bulk is not a loop over cards:
+  // it is a single write per group, and it either lands or it does not.
+  const bulkGroup = async (g: Group, add: boolean) => {
+    const members = bulkMembers(g.members, [...selected], add)
+    if (members.length === g.members.length && add) return // already all in
+    try {
+      const saved = await client.send<Group>('cardgroups.set_members', { id: g.id, members })
+      if (groupSheet?.id === g.id) setGroupSheet(saved)
+      load()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  // Favorite / unfavorite the whole selection. Per-card, unlike groups — the
+  // favourite verb takes one card — so this is the loop the group path avoids.
+  const bulkFavorite = async (favorite: boolean) => {
+    const ids = [...selected]
+    setCards((cs) => cs.map((c) => (selected.has(c.id) ? { ...c, favorite } : c)))
+    try {
+      await Promise.all(ids.map((id) => client.send('cards.favorite', { id, favorite })))
+    } catch (e) {
+      setError(String(e))
+    }
+    load()
+  }
+
+  const toggleSelected = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  // Leaving selection mode drops the selection: a hidden selection that acts on
+  // your next bulk click is the kind of surprise this bar exists to avoid.
+  const endSelecting = () => {
+    setSelecting(false)
+    setSelected(new Set())
+  }
+
   // Favorite / unfavorite a card. Optimistic: flip local state now (the star and
   // the pin-to-top respond instantly), then persist; the daemon broadcasts a
   // library change, so a failed write self-corrects on the next load().
@@ -805,6 +865,15 @@ export function Library(props: {
               </button>
             </div>
           )}
+          {cards.length > 1 && (
+            <button
+              class="stage-import"
+              aria-pressed={selecting}
+              onClick={() => (selecting ? endSelecting() : setSelecting(true))}
+            >
+              {selecting ? t('Done') : t('Select')}
+            </button>
+          )}
           {/* Making a character from nothing, which the Library could not do:
               cards only ever arrived by file or URL. It opens the studio in
               create mode — nothing is stored until the first save, so backing
@@ -857,15 +926,82 @@ export function Library(props: {
           <p class="stage-empty">{t('No characters match the group filter — tap a highlighted chip to clear it.')}</p>
         )}
 
-        <ul class="stage-grid">
+        {/* The bulk bar. It sits above the grid rather than floating over it:
+            the grid is the thing you are picking from, and a bar that covers
+            its last row while you work is the bug the suggest sheet already
+            taught us. */}
+        {selecting && (
+          <div class="stage-bulkbar">
+            <span class="stage-bulkbar__count">
+              {selected.size === 0 ? t('Pick characters to act on') : tn(selected.size, '%d selected', '%d selected')}
+            </span>
+            <button
+              class="stage-bulkbar__pick"
+              onClick={() =>
+                setSelected((prev) =>
+                  prev.size === sortedCards.length ? new Set() : new Set(sortedCards.map((c) => c.id)),
+                )
+              }
+            >
+              {selected.size === sortedCards.length ? t('Select none') : t('Select all')}
+            </button>
+            {selected.size > 0 && (
+              <>
+                {cardGroupsSupported && cardGroups.length > 0 && (
+                  <div class="stage-bulkbar__groups">
+                    {cardGroups.map((g) => {
+                      const state = bulkState(g, selected)
+                      // One control, two meanings: a group that already holds
+                      // ALL of the selection removes it; anything else adds.
+                      const add = state !== 'all'
+                      return (
+                        <button
+                          key={g.id}
+                          class={`stage-bulkbar__group is-${state}`}
+                          title={add ? t('Add the selected characters to %s', g.name) : t('Remove the selected characters from %s', g.name)}
+                          onClick={() => void bulkGroup(g, add)}
+                        >
+                          {g.color && <span class="stage-bulkbar__dot" style={{ background: g.color }} />}
+                          <span>{g.name}</span>
+                          <span class="stage-bulkbar__mark">{state === 'all' ? '−' : state === 'some' ? '±' : '+'}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                <button class="stage-bulkbar__act" title={t('Favorite the selected characters')} onClick={() => void bulkFavorite(true)}>
+                  ★
+                </button>
+                <button class="stage-bulkbar__act" title={t('Unfavorite the selected characters')} onClick={() => void bulkFavorite(false)}>
+                  ☆
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        <ul class={`stage-grid${selecting ? ' is-selecting' : ''}`}>
           {sortedCards.map((card) => (
-            <li key={card.id} class="stage-grid__cell" data-favorite={card.favorite ? '' : undefined}>
+            <li
+              key={card.id}
+              class={`stage-grid__cell${selecting && selected.has(card.id) ? ' is-picked' : ''}`}
+              data-favorite={card.favorite ? '' : undefined}
+            >
               <button
                 class="stage-card"
-                disabled={busy}
-                title={chatsFor(card.id) > 0 ? tn(chatsFor(card.id), '%d chat with %s', '%d chats with %s', chatsFor(card.id), card.name) : t('Chat with %s', card.name)}
-                onClick={() => openCharacter(card)}
+                disabled={busy && !selecting}
+                aria-pressed={selecting ? selected.has(card.id) : undefined}
+                title={
+                  selecting
+                    ? selected.has(card.id)
+                      ? t('Deselect %s', card.name)
+                      : t('Select %s', card.name)
+                    : chatsFor(card.id) > 0
+                      ? tn(chatsFor(card.id), '%d chat with %s', '%d chats with %s', chatsFor(card.id), card.name)
+                      : t('Chat with %s', card.name)
+                }
+                onClick={() => (selecting ? toggleSelected(card.id) : openCharacter(card))}
               >
+                {selecting && <span class="stage-card__pick" aria-hidden="true">{selected.has(card.id) ? '✓' : ''}</span>}
                 {card.avatar_url ? (
                   // Lazy: the grid is every character you own, and without this
                   // the whole library's portraits are requested at once on the
@@ -1030,19 +1166,29 @@ export function Library(props: {
                 {t('+ New')}
               </button>
             </div>
-            <ul class="stage-personas">
-              {personas.map((p) => (
-                <li key={p.ref}>
-                  <button class="stage-persona" title={t('About %s', p.name)} onClick={() => setPersonaSheet(p)}>
-                    <span class="stage-persona__emoji" aria-hidden="true">
-                      {p.emoji || '🎭'}
-                    </span>
-                    <span class="stage-persona__name">{p.name}</span>
-                    <span class="stage-persona__origin">{p.origin}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            {/* Shelved by group. A lone shelf goes unlabelled, so a roster with
+                one group — or a daemon too old to serve any — reads as the plain
+                list it always was. */}
+            {personaShelves.map((shelf) => (
+              <div key={shelf.name} class="stage-personashelf">
+                {personaShelves.length > 1 && (
+                  <div class="stage-personashelf__name">{shelf.name || t('Other')}</div>
+                )}
+                <ul class="stage-personas">
+                  {shelf.personas.map((p) => (
+                    <li key={p.ref}>
+                      <button class="stage-persona" title={t('About %s', p.name)} onClick={() => setPersonaSheet(p)}>
+                        <span class="stage-persona__emoji" aria-hidden="true">
+                          {p.emoji || '🎭'}
+                        </span>
+                        <span class="stage-persona__name">{p.name}</span>
+                        <span class="stage-persona__origin">{p.origin}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
         </>
       </main>
 
@@ -1142,6 +1288,7 @@ export function Library(props: {
           persona={personaEditor.persona}
           duplicate={personaEditor.mode === 'duplicate'}
           taken={personas.map((p) => p.name)}
+          groups={personaGroupNames(personas)}
           onClose={() => setPersonaEditor(null)}
           onSaved={load}
         />

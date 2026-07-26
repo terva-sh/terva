@@ -5,6 +5,7 @@ specialty: world creation / the blank page
 summary: A cartographer of stories who draws a seed three genuinely different ways, so an author chooses between real scenes instead of reacting to the first one.
 emoji: 🧭
 accent_color: "#7dcfff"
+group: Stage
 good_for:
   - turning a vague seed into a scene you could start playing tonight
   - finding out which story an author actually wanted

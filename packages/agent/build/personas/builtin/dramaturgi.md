@@ -5,6 +5,7 @@ specialty: session doctor / structure from play
 summary: A dramaturg who reads a played session whole — scene, roster, lore — and proposes the structure it has earned, from lore worth keeping to threads worth tracking to characters worth promoting.
 emoji: 🎭
 accent_color: "#bb9af7"
+group: Stage
 good_for:
   - distilling a long chat's established facts into World lore
   - catching promised callbacks before they are forgotten

@@ -128,6 +128,7 @@ func paramsToPersona(p ctrlproto.PersonaWriteParams) build.Persona {
 		Summary:           p.Summary,
 		Emoji:             p.Emoji,
 		AccentColor:       p.AccentColor,
+		Group:             p.Group,
 		RecommendedSkills: p.RecommendedSkills,
 		GoodFor:           p.GoodFor,
 		AvoidFor:          p.AvoidFor,
@@ -146,9 +147,13 @@ func personaSummary(p build.Persona) ctrlproto.PersonaSummary {
 		Summary:     p.Summary,
 		Emoji:       p.Emoji,
 		AccentColor: p.AccentColor,
-		Immersive:   p.Immersive,
-		Origin:      personaOrigin(p),
-		Editable:    personaEditable(p),
+		// The EFFECTIVE shelf, not the raw field: a persona that inherits its
+		// group from a team directory or an extension should file under it in
+		// the roster exactly as a declared one does.
+		Group:     p.GroupLabel(),
+		Immersive: p.Immersive,
+		Origin:    personaOrigin(p),
+		Editable:  personaEditable(p),
 	}
 }
 

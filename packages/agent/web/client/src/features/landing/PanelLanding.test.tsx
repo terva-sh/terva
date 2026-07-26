@@ -46,6 +46,32 @@ describe('PanelLanding', () => {
     await waitFor(() => expect(screen.getByText('Mieli')).toBeTruthy())
   })
 
+  // The roster used to depend on a race. app.tsx passes the client out of a ref
+  // populated in its mount effect, so the first render with a client is usually
+  // one where the socket is still connecting — Client.send rejects "not
+  // connected", the catch empties the roster, and nothing retried because the
+  // client identity never changed again. "No personas available." for the life
+  // of the tab.
+  it('waits for the socket rather than asking a connecting one', async () => {
+    const c = client()
+    const props = {
+      stageEnabled: false,
+      models,
+      onNewSession: () => {},
+      sessions: [],
+      current: '',
+      onSelect: () => {},
+      onRename: () => {},
+      onDelete: () => {},
+    }
+    const { rerender } = render(<PanelLanding client={c} status="connecting" {...props} />)
+    expect(screen.getByText('No personas available.')).toBeTruthy()
+    expect(c.send.mock.calls.some((call) => call[0] === 'personas.list')).toBe(false)
+
+    rerender(<PanelLanding client={c} status="open" {...props} />)
+    await waitFor(() => expect(screen.getByText('Mieli')).toBeTruthy())
+  })
+
   it('opens the new-session sheet from the hero', () => {
     landing()
     fireEvent.click(screen.getByText('Start a new session'))

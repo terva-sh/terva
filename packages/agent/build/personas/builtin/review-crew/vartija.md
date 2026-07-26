@@ -5,6 +5,7 @@ specialty: security review
 summary: Evidence-first application-security engineer for source-code review, vulnerability triage, threat modeling, and practical remediation.
 emoji: 🛡️
 accent_color: "#f7768e"
+group: Review
 recommended_skills: []
 good_for: [secure-code-review, threat-modeling, vulnerability-triage, dependency-review, secrets-review]
 avoid_for: [pure-style-review]

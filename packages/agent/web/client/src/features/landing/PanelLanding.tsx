@@ -3,6 +3,7 @@ import { t } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { Group, ModelInfo, PersonaSummary, PersonaView, SessionInfo } from '../../platform/ctrlproto/types'
 import type { GroupFilter } from '../../platform/groups'
+import { shelvePersonas } from '../../platform/personagroups'
 import { stageHref } from '../../ui/navlinks'
 import { SessionsBoard } from '../board/SessionsBoard'
 
@@ -60,16 +61,28 @@ export function PanelLanding(
   const [personas, setPersonas] = useState<PersonaSummary[]>([])
   const [detail, setDetail] = useState<PersonaSummary | null>(null)
   const [newOpen, setNewOpen] = useState(false)
+  const shelves = shelvePersonas(personas)
 
+  // ⚠️ Gated on the socket being OPEN, not merely on having a client.
+  //
+  // app.tsx hands this the client out of a ref, which is populated in its mount
+  // effect — so the first render this sees a client at all is typically one
+  // where the socket is still CONNECTING. Client.send rejects "not connected"
+  // there, the catch below turns that into an empty roster, and since the only
+  // other dependency is the client identity (which never changes again) nothing
+  // ever retried: the Personas section sat on "No personas available." for the
+  // life of the tab. Whether you saw a roster came down to which side of that
+  // race your machine landed on. Stage's library gates on `ready` for the same
+  // reason. Re-running on status also refills the roster after a reconnect.
   useEffect(() => {
-    if (!client) return
+    if (!client || status !== 'open') return
     // personas.list is optional (served only by a PersonasController); a daemon
     // without it just leaves the roster empty rather than erroring.
     client
       .send<{ personas: PersonaSummary[] }>('personas.list', null, '')
       .then((r) => setPersonas(r.personas ?? []))
       .catch(() => setPersonas([]))
-  }, [client])
+  }, [client, status])
 
   return (
     <div class="landing">
@@ -105,21 +118,30 @@ export function PanelLanding(
           {personas.length === 0 ? (
             <p class="landing-empty">{t('No personas available.')}</p>
           ) : (
-            <ul class="landing-persona-list">
-              {personas.map((p) => (
-                <li key={p.ref}>
-                  <button class="landing-persona" title={t('About %s', p.name)} onClick={() => setDetail(p)}>
-                    <span class="landing-persona__emoji" aria-hidden="true">
-                      {p.emoji || '🎭'}
-                    </span>
-                    <span class="landing-persona__text">
-                      <span class="landing-persona__name">{p.name}</span>
-                      {p.specialty && <span class="landing-persona__spec">{p.specialty}</span>}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            shelves.map((shelf) => (
+              <div key={shelf.name} class="landing-shelf">
+                {/* A lone shelf is the whole roster (one group, or a daemon that
+                    serves none) and goes unlabelled, so it reads as the plain
+                    list it has always been. Among several, the nameless one is
+                    the leftovers and says so. */}
+                {shelves.length > 1 && <h3 class="landing-shelf__name">{shelf.name || t('Other')}</h3>}
+                <ul class="landing-persona-list">
+                  {shelf.personas.map((p) => (
+                    <li key={p.ref}>
+                      <button class="landing-persona" title={t('About %s', p.name)} onClick={() => setDetail(p)}>
+                        <span class="landing-persona__emoji" aria-hidden="true">
+                          {p.emoji || '🎭'}
+                        </span>
+                        <span class="landing-persona__text">
+                          <span class="landing-persona__name">{p.name}</span>
+                          {p.specialty && <span class="landing-persona__spec">{p.specialty}</span>}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))
           )}
         </section>
       </div>
@@ -175,11 +197,17 @@ function NewSessionSheet(props: {
           <span>{t('Persona')}</span>
           <select value={persona} onChange={(e) => setPersona((e.target as HTMLSelectElement).value)}>
             <option value="">{t('No persona')}</option>
-            {props.personas.map((p) => (
-              <option key={p.ref} value={p.ref}>
-                {(p.emoji ? p.emoji + ' ' : '') + p.name}
-              </option>
-            ))}
+            {/* Sixteen flat options is a scroll; the same shelves make it a
+                menu. A lone unnamed shelf yields no optgroup at all. */}
+            {shelvePersonas(props.personas).map((shelf) =>
+              shelf.name ? (
+                <optgroup key={shelf.name} label={shelf.name}>
+                  {shelf.personas.map(personaOption)}
+                </optgroup>
+              ) : (
+                shelf.personas.map(personaOption)
+              ),
+            )}
           </select>
         </label>
         <label class="landing-field">
@@ -203,6 +231,16 @@ function NewSessionSheet(props: {
         </div>
       </div>
     </div>
+  )
+}
+
+// personaOption is one entry of the persona picker, shared by the shelved and
+// the flat rendering so they cannot drift apart.
+function personaOption(p: PersonaSummary) {
+  return (
+    <option key={p.ref} value={p.ref}>
+      {(p.emoji ? p.emoji + ' ' : '') + p.name}
+    </option>
   )
 }
 
@@ -242,6 +280,7 @@ function PersonaDetail(props: {
             <div class="landing-persona-detail__meta">
               {v.specialty && <span>{v.specialty}</span>}
               <span>{persona.origin}</span>
+              {v.group && <span>{v.group}</span>}
             </div>
           </div>
           <button class="landing-close" onClick={props.onClose} aria-label={t('Close')}>

@@ -5,6 +5,7 @@ specialty: character editor / promotion from play
 summary: A story editor who enriches a character's card from the scenes they have actually played — capturing the voice, relationships, and facts a session established, without overwriting the authored core.
 emoji: ✏️
 accent_color: "#9ece6a"
+group: Stage
 good_for:
   - promoting a minimal walk-on or roster character into a fuller card
   - folding what a scene established back into a character's fields

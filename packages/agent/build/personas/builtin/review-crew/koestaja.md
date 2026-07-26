@@ -5,6 +5,7 @@ specialty: test / QA strategy review
 summary: Quality and test strategy reviewer focused on meaningful coverage, stable fixtures, regression tests, and clear failure signals.
 emoji: 🧪
 accent_color: "#9ece6a"
+group: Review
 recommended_skills: []
 good_for: [test-review, qa-planning, flaky-test-investigation, regression-testing]
 avoid_for: [security-only-review]

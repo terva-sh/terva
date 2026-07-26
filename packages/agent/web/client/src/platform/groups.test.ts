@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { Group, SessionInfo } from './ctrlproto/types'
 import {
   applyGroupFilter,
+  bulkMembers,
+  bulkState,
   cycleGroup,
   emptyFilter,
   groupState,
@@ -144,5 +146,58 @@ describe('originGroups', () => {
   it('falls back to the ref when a name is unknown, never blank', () => {
     const out = originGroups([s('1', { experience: 'chat', card: 'mystery' })], nameOf)
     expect(out[0].name).toBe('mystery')
+  })
+})
+
+
+// Bulk membership: one selection, one request per group.
+describe('bulkState', () => {
+  const g: Group = { id: 'g', name: 'Ready', members: ['a', 'b'] }
+
+  it('reports how the whole selection sits in the group', () => {
+    expect(bulkState(g, new Set(['a', 'b']))).toBe('all')
+    expect(bulkState(g, new Set(['a', 'c']))).toBe('some')
+    expect(bulkState(g, new Set(['c', 'd']))).toBe('none')
+  })
+
+  it('calls an empty selection "none", not vacuously "all"', () => {
+    // Every chip would otherwise claim to hold a selection that does not exist.
+    expect(bulkState(g, new Set())).toBe('none')
+    expect(bulkState({ id: 'e', name: 'Empty', members: [] }, new Set())).toBe('none')
+  })
+
+  it('ignores members outside the selection', () => {
+    expect(bulkState({ id: 'g', name: 'Big', members: ['a', 'b', 'z'] }, new Set(['a', 'b']))).toBe('all')
+  })
+})
+
+describe('bulkMembers', () => {
+  it('adds the whole selection in one list', () => {
+    expect(bulkMembers(['a'], ['b', 'c'], true)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('removes the whole selection in one list', () => {
+    expect(bulkMembers(['a', 'b', 'c'], ['a', 'c'], false)).toEqual(['b'])
+  })
+
+  it('does not shuffle a card that is already a member to the end', () => {
+    // Member order is what a group's own sheet lists them in, so re-adding an
+    // existing member must be a no-op rather than a reorder.
+    expect(bulkMembers(['a', 'b', 'c'], ['a'], true)).toEqual(['a', 'b', 'c'])
+    expect(bulkMembers(['a', 'b', 'c'], ['c', 'd'], true)).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('collapses duplicates inside the selection', () => {
+    expect(bulkMembers([], ['a', 'a', 'b'], true)).toEqual(['a', 'b'])
+  })
+
+  it('leaves the list alone when the selection is not in it', () => {
+    expect(bulkMembers(['a', 'b'], ['z'], false)).toEqual(['a', 'b'])
+  })
+
+  it('never mutates the list it was given', () => {
+    const current = ['a', 'b']
+    bulkMembers(current, ['c'], true)
+    expect(current).toEqual(['a', 'b'])
   })
 })

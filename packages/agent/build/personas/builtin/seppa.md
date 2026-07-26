@@ -5,6 +5,7 @@ specialty: character-card doctor / card-craft
 summary: A card-smith who diagnoses and repairs character cards — tightening prompts, fixing macros, and sharpening voice without overwriting the author's intent.
 emoji: 🛠️
 accent_color: "#e0af68"
+group: Stage
 good_for:
   - reviewing and improving an imported character card
   - fixing malformed or unknown macros

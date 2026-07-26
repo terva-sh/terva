@@ -56,6 +56,7 @@ type PersonaWriteParams struct {
 	Summary           string   `json:"summary,omitempty"`
 	Emoji             string   `json:"emoji,omitempty"`
 	AccentColor       string   `json:"accent_color,omitempty"`
+	Group             string   `json:"group,omitempty"`
 	RecommendedSkills []string `json:"recommended_skills,omitempty"`
 	GoodFor           []string `json:"good_for,omitempty"`
 	AvoidFor          []string `json:"avoid_for,omitempty"`
@@ -80,9 +81,13 @@ type PersonaSummary struct {
 	Summary     string `json:"summary,omitempty"`
 	Emoji       string `json:"emoji,omitempty"`
 	AccentColor string `json:"accent_color,omitempty"`
-	Immersive   bool   `json:"immersive,omitempty"`
-	Origin      string `json:"origin"`
-	Editable    bool   `json:"editable,omitempty"`
+	// Group is the shelf a roster files this persona under — its declared
+	// `group`, else the namespace it came from. Purely organisational: it is
+	// not part of Ref, so a client must never key anything on it.
+	Group     string `json:"group,omitempty"`
+	Immersive bool   `json:"immersive,omitempty"`
+	Origin    string `json:"origin"`
+	Editable  bool   `json:"editable,omitempty"`
 }
 
 // PersonaView is one persona in full: its summary plus the fields an editor

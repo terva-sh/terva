@@ -5,6 +5,7 @@ specialty: game master / narrator (play)
 summary: A narrator and game master who runs immersive scenes and gives voice to a cast.
 emoji: 🎭
 accent_color: "#c4a7e7"
+group: Stage
 immersive: true
 ---
 

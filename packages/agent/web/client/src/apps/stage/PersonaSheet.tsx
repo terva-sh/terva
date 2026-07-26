@@ -84,7 +84,11 @@ export function PersonaSheet(props: {
             <div class="stage-personasheet__meta">
               {v.specialty && <span>{v.specialty}</span>}
               <span>{persona.origin}</span>
-              {persona.namespace && <span>{persona.namespace}</span>}
+              {v.group && <span>{v.group}</span>}
+              {/* The namespace only when it adds something: it is where the
+                  shelf name comes from by default, and repeating it reads as
+                  two facts when it is one. */}
+              {persona.namespace && persona.namespace !== v.group && <span>{persona.namespace}</span>}
               {persona.immersive && <span class="stage-personasheet__immersive">{t('immersive')}</span>}
             </div>
           </div>

@@ -137,6 +137,48 @@ describe('PersonaEditor', () => {
     expect(client.send.mock.calls.find((c) => c[0] === 'personas.edit')![1]).toMatchObject({ name: 'Scratch' })
   })
 
+  // A write REPLACES the persona file, so a field the editor forgets to re-send
+  // is ERASED. Group is the newest such field, and the failure would be silent:
+  // save an unrelated typo fix and the persona quietly falls off its shelf.
+  it('carries the group through an edit that never touched it', async () => {
+    const client = stubClient({ ...VIEW, ...MINE, group: 'Review' })
+    render(<PersonaEditor client={client} persona={MINE} taken={['Scratch']} onClose={() => {}} onSaved={() => {}} />)
+
+    await screen.findByDisplayValue('Scratch')
+    fireEvent.input(screen.getByLabelText(/Specialty/i, { selector: 'input' }), { target: { value: 'scratchpad' } })
+    fireEvent.click(screen.getByText('Save changes'))
+
+    await waitFor(() => expect(client.send.mock.calls.some((c) => c[0] === 'personas.edit')).toBe(true))
+    expect(client.send.mock.calls.find((c) => c[0] === 'personas.edit')![1]).toMatchObject({ group: 'Review' })
+  })
+
+  it('files a persona on a shelf you type, and suggests the ones that exist', async () => {
+    const client = stubClient({ ...VIEW, ...MINE })
+    render(
+      <PersonaEditor
+        client={client}
+        persona={MINE}
+        taken={['Scratch']}
+        groups={['Coding', 'Review']}
+        onClose={() => {}}
+        onSaved={() => {}}
+      />,
+    )
+
+    const group = (await screen.findByLabelText(/Group/i, { selector: 'input' })) as HTMLInputElement
+    // A datalist, not a select — the shelf you want may not exist yet.
+    expect(group.getAttribute('list')).toBe('stage-persona-groups')
+    expect([...document.querySelectorAll('#stage-persona-groups option')].map((o) => o.getAttribute('value'))).toEqual([
+      'Coding',
+      'Review',
+    ])
+
+    fireEvent.input(group, { target: { value: 'My crew' } })
+    fireEvent.click(screen.getByText('Save changes'))
+    await waitFor(() => expect(client.send.mock.calls.some((c) => c[0] === 'personas.edit')).toBe(true))
+    expect(client.send.mock.calls.find((c) => c[0] === 'personas.edit')![1]).toMatchObject({ group: 'My crew' })
+  })
+
   it('refuses to save a name already in the roster', async () => {
     const client = stubClient()
     render(<PersonaEditor client={client} taken={['Seppä']} onClose={() => {}} onSaved={() => {}} />)

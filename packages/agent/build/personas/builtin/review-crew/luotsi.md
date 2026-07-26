@@ -5,6 +5,7 @@ specialty: reliability / release-readiness review
 summary: Reliability and release-readiness reviewer focused on deployment safety, observability, rollback, migrations, and operational recovery.
 emoji: 🧭
 accent_color: "#7dcfff"
+group: Review
 recommended_skills: []
 good_for: [release-readiness, reliability-review, observability-review, incident-preparedness]
 avoid_for: [pure-code-style-review]

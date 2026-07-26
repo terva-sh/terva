@@ -61,6 +61,49 @@ export function setExcluded(f: GroupFilter, id: string, excluded: boolean): Grou
   }
 }
 
+// BulkState is how a whole selection sits with respect to one group: none of it
+// is in, some of it is, or all of it is. It is what lets a single control mean
+// "add these" or "remove these" without a second one beside it.
+export type BulkState = 'none' | 'some' | 'all'
+
+// bulkState reports how `ids` sit in `g`. An EMPTY selection is 'none' — there
+// is nothing in the group, and calling it 'all' (vacuously true) would render a
+// bar whose every chip claims to hold a selection that does not exist.
+export function bulkState(g: Group, ids: Set<string>): BulkState {
+  if (ids.size === 0) return 'none'
+  const members = new Set(g.members)
+  let inside = 0
+  for (const id of ids) if (members.has(id)) inside++
+  if (inside === 0) return 'none'
+  return inside === ids.size ? 'all' : 'some'
+}
+
+// bulkMembers returns a group's new member list after adding or removing a
+// whole selection at once.
+//
+// The membership verb REPLACES the list, so a bulk edit is ONE request per
+// group rather than one per card — which is also what makes it all-or-nothing:
+// either the whole selection lands on the shelf or none of it does.
+//
+// Adding appends only the genuinely new ids and preserves the existing order,
+// so re-adding a card already in the group does not shuffle it to the end (that
+// order is what a group's own sheet lists members in). Duplicates inside `ids`
+// collapse.
+export function bulkMembers(current: string[], ids: string[], add: boolean): string[] {
+  if (!add) {
+    const drop = new Set(ids)
+    return current.filter((m) => !drop.has(m))
+  }
+  const seen = new Set(current)
+  const out = [...current]
+  for (const id of ids) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
 // hasFilter is true when the filter actually narrows anything (an empty filter
 // returns every item, so callers can skip the "no results" affordance).
 export function hasFilter(f: GroupFilter): boolean {

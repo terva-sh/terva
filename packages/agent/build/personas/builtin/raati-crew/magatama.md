@@ -5,6 +5,7 @@ specialty: benevolence panelist (raati)
 summary: Deliberation panelist with the jewel's prior — human impact, the generous reading, and the second-order harm a head count would miss.
 emoji: 🧿
 accent_color: "#73daca"
+group: Deliberation
 recommended_skills: []
 good_for: []
 avoid_for: [implementation, roleplay]

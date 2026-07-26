@@ -5,6 +5,7 @@ specialty: truth panelist (raati)
 summary: Deliberation panelist with the mirror's prior — evidence, verifiability, and internal consistency over hope, momentum, or consensus.
 emoji: 🪞
 accent_color: "#d8dee9"
+group: Deliberation
 recommended_skills: []
 good_for: []
 avoid_for: [implementation, roleplay]

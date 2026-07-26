@@ -11,6 +11,10 @@ function EditField(props: {
   hint?: string
   area?: boolean
   rows?: number
+  // Existing values to suggest. A datalist, not a select: the point of these is
+  // that you may type one that does not exist yet.
+  options?: string[]
+  listId?: string
   onInput: (v: string) => void
 }) {
   return (
@@ -31,7 +35,21 @@ function EditField(props: {
           onInput={(e) => props.onInput((e.target as HTMLTextAreaElement).value)}
         />
       ) : (
-        <input class="stage-editfield__input" value={props.value} onInput={(e) => props.onInput((e.target as HTMLInputElement).value)} />
+        <>
+          <input
+            class="stage-editfield__input"
+            value={props.value}
+            list={props.options?.length ? props.listId : undefined}
+            onInput={(e) => props.onInput((e.target as HTMLInputElement).value)}
+          />
+          {!!props.options?.length && (
+            <datalist id={props.listId}>
+              {props.options.map((o) => (
+                <option key={o} value={o} />
+              ))}
+            </datalist>
+          )}
+        </>
       )}
     </label>
   )
@@ -56,6 +74,7 @@ export interface PersonaForm {
   summary: string
   emoji: string
   accent_color: string
+  group: string
   recommended_skills: string[]
   good_for: string[]
   avoid_for: string[]
@@ -71,6 +90,7 @@ const EMPTY: PersonaForm = {
   summary: '',
   emoji: '',
   accent_color: '',
+  group: '',
   recommended_skills: [],
   good_for: [],
   avoid_for: [],
@@ -87,6 +107,7 @@ export function formFromView(v: PersonaView): PersonaForm {
     summary: v.summary ?? '',
     emoji: v.emoji ?? '',
     accent_color: v.accent_color ?? '',
+    group: v.group ?? '',
     recommended_skills: v.recommended_skills ?? [],
     good_for: v.good_for ?? [],
     avoid_for: v.avoid_for ?? [],
@@ -144,6 +165,9 @@ export function PersonaEditor(props: {
   // not do (create only checks the user layer, so a built-in's name silently
   // shadows it).
   taken?: string[]
+  // The shelves the roster already has, offered as suggestions. Free text, so a
+  // new one is always one keystroke away.
+  groups?: string[]
   onClose: () => void
   onSaved: () => void
 }) {
@@ -248,6 +272,14 @@ export function PersonaEditor(props: {
 
             <EditField label={t('Emoji')} value={form.emoji} hint={t('Shown beside the name in the roster.')} onInput={(v) => set('emoji', v)} />
             <EditField label={t('Specialty')} value={form.specialty} hint={t('One line: what this persona is for.')} onInput={(v) => set('specialty', v)} />
+            <EditField
+              label={t('Group')}
+              value={form.group}
+              hint={t('The shelf this persona files under in the roster. Pick an existing one or type a new one.')}
+              options={props.groups}
+              listId="stage-persona-groups"
+              onInput={(v) => set('group', v)}
+            />
             <EditField label={t('Summary')} value={form.summary} area rows={2} onInput={(v) => set('summary', v)} />
             <EditField
               label={t('Pronunciation')}

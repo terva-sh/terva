@@ -48,6 +48,7 @@ func MarshalPersona(p Persona) ([]byte, error) {
 		Summary:           strings.TrimSpace(p.Summary),
 		Emoji:             strings.TrimSpace(p.Emoji),
 		AccentColor:       strings.TrimSpace(p.AccentColor),
+		Group:             strings.TrimSpace(p.Group),
 		RecommendedSkills: p.RecommendedSkills,
 		GoodFor:           p.GoodFor,
 		AvoidFor:          p.AvoidFor,

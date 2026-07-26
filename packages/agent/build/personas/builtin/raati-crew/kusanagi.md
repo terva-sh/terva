@@ -5,6 +5,7 @@ specialty: decisiveness panelist (raati)
 summary: Deliberation panelist with the sword's prior — risk, failure modes, and the cost of acting weighed honestly against the cost of standing still.
 emoji: 🗡️
 accent_color: "#8fa3bf"
+group: Deliberation
 recommended_skills: []
 good_for: []
 avoid_for: [implementation, roleplay]
