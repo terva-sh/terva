@@ -11,6 +11,20 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.12](https://github.com/terva-sh/terva/releases/tag/v0.126.12) — 2026-07-25
+
+### Features
+
+- personas: a charter can build on the default one instead of forking it
+- personas: the roster files onto shelves, and characters group in bulk
+- stage: editing a message is a button, not a tap on the message
+- stage: the suggest sheet quotes the line you are answering
+
+### Fixes
+
+- stage: a clean bill of health is not the end of the consultation
+- web: the session group menu stays inside the board
+
 ## [v0.126.11](https://github.com/terva-sh/terva/releases/tag/v0.126.11) — 2026-07-24
 
 ### Features
