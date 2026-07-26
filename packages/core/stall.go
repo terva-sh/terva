@@ -10,11 +10,16 @@ import (
 	"terva.sh/terva/packages/provider"
 )
 
-// A stall is repetition without progress inside a single turn: the same call, or
-// the same failure, over and over. stallTracker watches the (tool call, tool
-// result) steps of one turn and, when the model is provably spinning, produces a
-// one-turn nudge the harness rides on the ephemeral tail. It is the detector half
-// of docs/proposals/stuck-loop-escalation.md; the escalation rungs build on it.
+// A stall is repetition without progress: the same call, or the same failure,
+// over and over. stallTracker watches the (tool call, tool result) steps of a
+// turn and, when the model is provably spinning, produces a one-turn nudge the
+// harness rides on the ephemeral tail. It is the detector half of
+// docs/proposals/stuck-loop-escalation.md; the escalation rungs build on it.
+//
+// Tripping is a within-turn judgement, but a loop that outlives the turn it
+// started in does not start over: a signature still recurring at the boundary
+// carries its run length forward (see carried), so the ladder resumes at the
+// rung it reached instead of being refunded once per turn.
 //
 // It is deliberately generic — no tool is special-cased — because the models that
 // stall do so on whatever tool traps them (built-in, extension, or MCP), and even
@@ -97,6 +102,27 @@ type stallTracker struct {
 	// off by it, so each decline raises the bar for the next offer and a hopeless
 	// case is not re-asked every few calls.
 	declines int
+
+	// seen counts every recurrence of each signature THIS turn, unwindowed —
+	// distinct from the windowed counts record() derives from steps, which govern
+	// locality within a turn. It exists only to build carried at the turn
+	// boundary, so what crosses is the true run length rather than the last
+	// stallWindow of it.
+	seen map[string]int
+
+	// carried is how many times each signature recurred in EARLIER turns, and is
+	// the one piece of loop state that survives reset(). Without it a loop that
+	// spans a turn boundary restarts the ladder: the same signature, still
+	// failing the same way, is nudged again at its third recurrence as though the
+	// previous turn had not happened, and the escalation watermark it had already
+	// crossed has to be crossed again from zero.
+	//
+	// reset() rebuilds it from seen and keeps ONLY signatures that recurred in the
+	// turn just ended, so it cannot accumulate: a signature the model stopped
+	// repeating is forgotten at the next boundary. It deliberately does not affect
+	// whether a nudge trips — that stays a within-turn judgement (see record) — so
+	// a fresh turn still needs a real local pattern before anything fires.
+	carried map[string]int
 }
 
 // stallEscalation is the tracker's internal signal that a loop has persisted past
@@ -136,8 +162,37 @@ type StallRecord struct {
 }
 
 // reset clears the tracker for a new turn. A repeat across turns is usually the
-// user asking again, not the model stuck, so detection never spans a turn.
+// user asking again, not the model stuck, so counting starts over — with one
+// exception: a signature that was ALREADY recurring when the turn ended keeps
+// its run length (see carried), because that is precisely the case the "user
+// asking again" reading does not cover.
 func (t *stallTracker) reset() {
+	// Fold this turn's recurrences into carried BEFORE clearing, keeping only
+	// signatures that actually RECURRED — seen at least twice, here or earlier.
+	// That prune is what bounds the map: a signature the model stopped repeating
+	// does not survive the boundary, so only a live loop is remembered, and only
+	// for as long as it stays live.
+	//
+	// The >= 2 test matters more than it looks. A churn loop varies its arguments
+	// (that is what makes it churn), so every call also mints a BRAND NEW spin
+	// signature seen exactly once; carrying those would move a whole turn's worth
+	// of one-shot keys across every boundary to be dropped at the next one. A
+	// single occurrence is not a loop, and nothing downstream can act on it: a
+	// trip needs three recurrences within the new turn regardless.
+	var carry map[string]int
+	for sig, n := range t.seen {
+		total := t.carried[sig] + n
+		if total < 2 {
+			continue
+		}
+		if carry == nil {
+			carry = make(map[string]int, len(t.seen))
+		}
+		carry[sig] = total
+	}
+	t.carried = carry
+	t.seen = nil
+
 	t.steps = t.steps[:0]
 	t.nudged = nil
 	t.pending = ""
@@ -160,6 +215,13 @@ func (t *stallTracker) forgive() {
 	t.escalate = nil
 	t.escalated = false
 	t.declines++
+	// Cross-turn history goes too, and for the same reason as everything above:
+	// "keep trying" is the user overruling the ladder, so the ladder starts over.
+	// Leaving carried in place would re-cross the escalation watermark on the
+	// first recurrence and re-offer immediately — the exact re-asking that
+	// declines exists to prevent.
+	t.seen = nil
+	t.carried = nil
 }
 
 // observe records one turn step: pair each tool call in the assistant message
@@ -215,6 +277,24 @@ func (t *stallTracker) record(tc provider.ToolCallBlock, tr provider.ToolResultB
 			churnN++
 		}
 	}
+
+	// The signature strings trip() and raiseEscalation() key on; also how this
+	// step is counted for the turn, and looked up in what earlier turns saw.
+	spinSig := "spin\x00" + step.spinKey
+	churnSig := "churn\x00" + step.churnKey
+	t.note(spinSig)
+	if step.churnKey != "" {
+		t.note(churnSig)
+	}
+	// Recurrences from earlier turns count toward how far along the ladder this
+	// signature is — the escalation watermark, and the number the nudge reports —
+	// but NOT toward whether it trips at all. Tripping stays a within-window
+	// judgement so a new turn still needs a real local pattern (three
+	// recurrences) before anything fires: carrying it into the trip test would
+	// nudge on the first repeat after any boundary, which is the behaviour
+	// TestStallResetsPerTurn exists to forbid.
+	spinRung := spinN + t.carried[spinSig]
+	churnRung := churnN + t.carried[churnSig]
 	// Prefer the churn signal when both fire: it carries the error the model keeps
 	// hitting, which makes for a more useful nudge than "same call again".
 	//
@@ -226,18 +306,18 @@ func (t *stallTracker) record(tc provider.ToolCallBlock, tr provider.ToolResultB
 	}
 	switch {
 	case churnN >= stallThreshold:
-		tripped := t.trip("churn\x00"+step.churnKey, tc.Name, churnN, step.detail)
-		if churnN >= esc {
-			t.raiseEscalation(tc.Name, churnN, step.detail, "churn\x00"+step.churnKey)
+		tripped := t.trip(churnSig, tc.Name, churnRung, step.detail)
+		if churnRung >= esc {
+			t.raiseEscalation(tc.Name, churnRung, step.detail, churnSig)
 		}
 		if tripped {
 			t.raiseThrashEscalation(tc.Name) // a new distinct loop; escalate if enough have nudged
 			return stallEvent{axis: stallAxisChurn, tool: tc.Name, detail: step.detail}, true
 		}
 	case spinN >= stallThreshold:
-		tripped := t.trip("spin\x00"+step.spinKey, tc.Name, spinN, "")
-		if spinN >= esc {
-			t.raiseEscalation(tc.Name, spinN, "", "spin\x00"+step.spinKey)
+		tripped := t.trip(spinSig, tc.Name, spinRung, "")
+		if spinRung >= esc {
+			t.raiseEscalation(tc.Name, spinRung, "", spinSig)
 		}
 		if tripped {
 			t.raiseThrashEscalation(tc.Name)
@@ -245,6 +325,15 @@ func (t *stallTracker) record(tc provider.ToolCallBlock, tr provider.ToolResultB
 		}
 	}
 	return stallEvent{}, false
+}
+
+// note counts one more recurrence of sig in the current turn. Only reset() reads
+// the result, to decide what crosses the turn boundary.
+func (t *stallTracker) note(sig string) {
+	if t.seen == nil {
+		t.seen = map[string]int{}
+	}
+	t.seen[sig]++
 }
 
 // raiseEscalation stages an escalation request, at most once per turn (escalated)

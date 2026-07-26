@@ -1607,8 +1607,11 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 	// boundary refreshes it (repinForContinuation) — see pinTurn.
 	pin := a.pinTurn()
 
-	// Stuck-loop detection spans this turn's tool-use steps and no further: a
-	// repeat across turns is usually the user asking again, not the model stuck.
+	// Stuck-loop counting is scoped to this turn's tool-use steps: a repeat across
+	// turns is usually the user asking again, not the model stuck. reset keeps the
+	// one thing that reading does not explain — a signature that was still
+	// recurring when the last turn ended — so a loop spanning the boundary resumes
+	// its ladder rather than being handed a fresh budget.
 	a.stall.reset()
 
 	// The at-close continuation gates, snapshotted per Prompt like the
