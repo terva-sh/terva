@@ -13,10 +13,31 @@ import (
 	"terva.sh/terva/packages/i18n"
 )
 
-// personaCharterBudget is the soft size ceiling for a charter: it targets the
-// 2 KiB static-context-block budget so a persona stays cheap in the cached
-// prefix. Over budget is a warning, not a failure.
-const personaCharterBudget = 2000
+// personaCharterBudget is the soft size ceiling for a charter, guarding the
+// cached prefix. Over budget is a warning, not a failure.
+//
+// Where the number comes from, since the first one was inherited rather than
+// measured: it was 2000, targeting a 2 KiB cap on an extension's static context
+// block. That cap is now 8192 (extdriver's maxStaticContextBytes) and this never
+// followed — and it was the wrong thing to borrow from anyway, because an
+// extension's block is one of N while a charter is the single standing
+// instruction for the whole agent.
+//
+// 3500 is the largest charter terva itself ships (seppa, 2535) composed with the
+// default charter `extends` inherits (mieli, 666) — 3201 — plus headroom. Both
+// halves matter. Under 2000 the project warned on two of its own six top-level
+// personas, and a warning that fires on shipped content is one authors learn to
+// scroll past, taking the ✓/ℹ lines beside it. And `extends` shipped after 2000
+// was set, spending 666 before its author writes a word, so the persona `extends`
+// exists to serve — a long-lived agent adding a domain to the default — had a
+// third less room than a self-contained one.
+//
+// Deliberately close to that 3201 rather than up at the 8192 anchor: a soft warn
+// nothing reaches is not a budget. What it costs when reached is ~875 tokens
+// instead of ~500, against a cold prefix measured at ~10.7k (tool schemas
+// dominate it; the default system prompt is ~240), paid once per cache lifetime
+// rather than per turn.
+const personaCharterBudget = 3500
 
 var (
 	personaMacroRe  = regexp.MustCompile(`\{\{char\}\}|\{\{user\}\}|<START>`)

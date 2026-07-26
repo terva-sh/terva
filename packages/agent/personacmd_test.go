@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -150,14 +151,21 @@ func TestValidateRejectsABadExtends(t *testing.T) {
 	}
 }
 
-// The budget guards the cached prefix, so it must measure what lands there. A
-// 1,747-char charter inheriting Mieli's 664 is over the 2,000 budget even
-// though neither half is.
+// The budget guards the cached prefix, so it must measure what lands there: a
+// charter is sized here so that neither half is over on its own and the assembly
+// is. Sized off the budget rather than written down, so that moving the number
+// re-aims the fixture instead of quietly turning this into a test of nothing.
 func TestValidateBudgetsTheAssembledCharter(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	base, ok := build.LookupPersona("mieli")
+	if !ok {
+		t.Fatal("the default persona is not in the built-in library")
+	}
+	inherited := len(strings.TrimSpace(base.Charter))
+	own := personaCharterBudget - inherited + 100
 	dir := testsupport.TempDir(t)
 	p := filepath.Join(dir, "assistant.md")
-	body := "---\nname: Assistant\nextends: mieli\n---\n" + strings.Repeat("x", 1747)
+	body := "---\nname: Assistant\nextends: mieli\n---\n" + strings.Repeat("x", own)
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -165,13 +173,35 @@ func TestValidateBudgetsTheAssembledCharter(t *testing.T) {
 	if !ok {
 		t.Fatalf("an over-budget charter is a warning, not a failure:\n%s", out)
 	}
-	if !strings.Contains(out, "over the 2000") {
+	if !strings.Contains(out, fmt.Sprintf("over the %d", personaCharterBudget)) {
 		t.Errorf("assembled charter is over budget but validate did not say so:\n%s", out)
 	}
 	// And the note has to show the split, or the warning names a number the
 	// author cannot act on: they control only one of the two halves.
-	if !strings.Contains(out, "inherited from mieli") || !strings.Contains(out, "1747") {
+	if !strings.Contains(out, "inherited from mieli") || !strings.Contains(out, fmt.Sprint(own)) {
 		t.Errorf("verdict does not attribute the assembled size:\n%s", out)
+	}
+}
+
+// The other direction. Raising the ceiling to stop warning on shipped content is
+// only defensible while it still warns on something genuinely oversized — a
+// budget nothing can reach protects nothing. 6000 chars is well over twice the
+// largest charter terva ships, so this fails if the number is ever raised to the
+// point of being decorative.
+func TestBudgetStillWarnsOnAnOversizedCharter(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	dir := testsupport.TempDir(t)
+	p := filepath.Join(dir, "assistant.md")
+	body := "---\nname: Assistant\n---\n" + strings.Repeat("x", 6000)
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, ok := captureValidate(t, p)
+	if !ok {
+		t.Fatalf("an over-budget charter is a warning, not a failure:\n%s", out)
+	}
+	if !strings.Contains(out, "⚠") {
+		t.Errorf("a 6000-char charter did not warn — the budget has stopped meaning anything:\n%s", out)
 	}
 }
 
@@ -181,6 +211,39 @@ func TestValidateBudgetsTheAssembledCharter(t *testing.T) {
 // validate` called them invalid, which is the validator being wrong about the
 // only charters in the tree guaranteed to be right.
 func TestEveryBuiltinPersonaValidates(t *testing.T) {
+	eachBuiltinPersona(t, func(name, onDisk string) {
+		if out, ok := captureValidate(t, onDisk); !ok {
+			t.Errorf("built-in persona %s does not pass terva persona validate:\n%s", name, out)
+		}
+	})
+}
+
+// Passing is not enough: the budget warning fired on seppa and kartoittaja for
+// as long as it was set to 2000, because the test above only ever looked at
+// whether validate said ✗. A ⚠ on the project's own content is one authors learn
+// to scroll past, and it takes the ℹ lines beside it — including the note that
+// this charter REPLACES the default, which exists so a fleet does not silently
+// lose its operating guidance.
+//
+// So the library is the budget's evidence: if a number makes terva's own personas
+// look wrong, the number is wrong. Either the charter comes down or the ceiling
+// goes up, but the shipped crew stays clean at the default setting.
+func TestNoBuiltinPersonaWarns(t *testing.T) {
+	eachBuiltinPersona(t, func(name, onDisk string) {
+		out, _ := captureValidate(t, onDisk)
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "⚠") {
+				t.Errorf("built-in persona %s warns at the default settings:\n  %s", name, strings.TrimSpace(line))
+			}
+		}
+	})
+}
+
+// eachBuiltinPersona writes every embedded persona to a real file and hands it
+// over. Validating from disk is the path the CLI takes; a helper that fed the
+// bytes straight in would be a second validator to keep in sync.
+func eachBuiltinPersona(t *testing.T, check func(name, onDisk string)) {
+	t.Helper()
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	dir := testsupport.TempDir(t)
 	seen := 0
@@ -192,16 +255,12 @@ func TestEveryBuiltinPersonaValidates(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		// Validate from a real file: that is the path the CLI takes, and a
-		// helper reimplementing it would be a second validator to keep in sync.
 		onDisk := filepath.Join(dir, strings.ReplaceAll(p, "/", "_"))
 		if err := os.WriteFile(onDisk, raw, 0o644); err != nil {
 			return err
 		}
 		seen++
-		if out, ok := captureValidate(t, onDisk); !ok {
-			t.Errorf("built-in persona %s does not pass terva persona validate:\n%s", p, out)
-		}
+		check(p, onDisk)
 		return nil
 	})
 	if err != nil {

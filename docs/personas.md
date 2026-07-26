@@ -132,9 +132,11 @@ Both halves keep their own provenance in `--dump-prompt`.
 - **Not valid with `immersive: true`.** An immersive charter is already the
   whole prompt, so there is nothing for a base to be additive to; the
   combination fails validation instead of quietly picking a meaning.
-- **The 2000-char budget measures the assembly.** `persona validate` reports the
+- **The 3500-char budget measures the assembly.** `persona validate` reports the
   split — what you inherited, what you wrote — because the cached prefix carries
-  both and only one of them is yours to shorten.
+  both and only one of them is yours to shorten. The ceiling accounts for the
+  inherited half: extending Mieli spends 666 of it before you write a word, so
+  what is left over is still more than a self-contained charter ever had.
 - It degrades gracefully in the other direction too: a host that predates the
   field ignores the unknown key and loads the file exactly as before.
 
@@ -179,7 +181,7 @@ a role you are playing. ...
   operating guidance you actually want. A one-line "your output renders as
   Markdown" is usually enough — but if the persona will run somewhere that does
   *not* render markdown, say that instead, because nothing else will.
-- The 2000-char static-block budget that `persona validate` warns about does not
+- The 3500-char static-block budget that `persona validate` warns about does not
   apply to an immersive charter (it's the whole prompt, not a bounded block).
 - It degrades gracefully: a host that predates the field treats the persona as
   additive, so the same file still loads.
