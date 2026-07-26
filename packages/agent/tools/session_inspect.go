@@ -32,21 +32,78 @@ type SessionInspectTool struct {
 	Agent *core.Agent
 }
 
+// sessionInspectArgs is the wire shape. Every optional field here is INERT at
+// its zero value, and that is load-bearing rather than incidental.
+//
+// Cursor and Expand were both *int, and both chose behaviour by PRESENCE: a nil
+// Expand listed and a non-nil one expanded; a nil Cursor gave the most recent
+// window and `cursor: 0` paged from the oldest. A model that fills every
+// optional key in a schema — a common and entirely reasonable habit, since JSON
+// Schema gives it no way to see that presence is what matters — could therefore
+// not reach list mode at all, and could silently be handed the wrong end of the
+// transcript. That is exactly what happened: four rejected calls in a row, each
+// carrying {"cursor":0,"expand":0,...}, until the agent gave up and wrote its
+// review without the evidence it had gone looking for.
+//
+// The same root cause had already been diagnosed once (TW-013 F2 named this
+// very field) and answered with a better error message, which the model could
+// not act on because the correction it asked for was an OMISSION. So the fix
+// here is representational, not diagnostic: the indices are 1-based on the
+// wire, 0 means "unset", and a fully padded call lands on the sensible default
+// instead of an error.
 type sessionInspectArgs struct {
 	SessionID    string   `json:"session_id"`
 	EventKinds   []string `json:"event_kinds"`
 	ToolName     string   `json:"tool_name"`
 	FailuresOnly bool     `json:"failures_only"`
 	Limit        int      `json:"limit"`
-	Cursor       *int     `json:"cursor"`
-	Expand       *int     `json:"expand"`
+	Cursor       int      `json:"cursor"`
+	Expand       int      `json:"expand"`
 	TextOffset   int      `json:"text_offset"`
+}
+
+// The wire indices are 1-based (#1 is the first match) and the scan's are
+// 0-based, because every ring and window computation below is an offset. These
+// two convert at the boundary, which is the only place the bases meet.
+//
+// Cursor and Expand must move together: the listing prints an event's #n and
+// cursor is an offset into that same match sequence, so the "more: pass cursor
+// N" hint round-trips a coordinate a caller reads off a listing line. Rebasing
+// one without the other would put an off-by-one straight into that loop.
+
+// wireIndex renders a 0-based scan index as the 1-based coordinate a caller sees.
+func wireIndex(idx int) int { return idx + 1 }
+
+// cursorOffset converts a wire cursor to a scan offset. Nil means "the most
+// recent window" — the default a caller gets by saying nothing, or by saying 0.
+// A negative cursor cannot mean a page before the beginning, so it reads the
+// same way rather than erroring on a value with no other sensible meaning.
+func cursorOffset(cursor int) *int {
+	if cursor <= 0 {
+		return nil
+	}
+	off := cursor - 1
+	return &off
+}
+
+// expandTarget converts a wire expand to a scan index. Nil is list mode. A
+// positive index is 1-based and rebases; a negative one counts from the end and
+// is unchanged, so -1 is still the most recent match.
+func expandTarget(expand int) *int {
+	if expand == 0 {
+		return nil
+	}
+	idx := expand
+	if idx > 0 {
+		idx--
+	}
+	return &idx
 }
 
 func (t *SessionInspectTool) Name() string { return "session_inspect" }
 
 func (t *SessionInspectTool) Description() string {
-	return "Inspect THIS session's transcript in a structured, bounded way — to see what happened without re-reading everything. It has two MUTUALLY EXCLUSIVE modes; filters apply to both: failures_only (only failed/errored tool results), tool_name, or event_kinds ([\"tool_call\",\"tool_result\",\"message\"]). LIST MODE (the default — no expand): shows a window of matching events (tool calls, tool results with pass/fail, and message text), most recent by default. Page with limit (default 40, cap 200) and cursor (an offset into the matching events, oldest=0; a next_cursor is returned when more remain — reuse the same filters). Each listed event carries its index (#n). EXPAND MODE (set expand): reads ONE event's full text — pass an #n from a listing (paged with text_offset when long), e.g. a sub-agent's complete findings; negative counts from the end (event_kinds [\"message\"] with expand -1 is the most recent message in full, no listing needed). EXPAND ignores cursor/limit, so do NOT pass them together — a call that sets expand AND cursor/limit is rejected, not silently narrowed. session_id defaults to the current session; pass another id from this project (a filename without .jsonl, as terva_status prints) or a swarm sub-agent id (as swarm_spawn and the [auto-swarm update] recap print) to inspect that transcript. Secrets are redacted and output is size-bounded."
+	return "Inspect THIS session's transcript in a structured, bounded way — to see what happened without re-reading everything. EVERY argument is optional and 0 means \"not set\", so it is always safe to send them all as zeros: that is the default listing. It has two MUTUALLY EXCLUSIVE modes; filters apply to both: failures_only (only failed/errored tool results), tool_name, or event_kinds ([\"tool_call\",\"tool_result\",\"message\"]). LIST MODE (the default — expand 0): shows a window of matching events (tool calls, tool results with pass/fail, and message text), most recent by default. Page with limit (default 40, cap 200) and cursor (a 1-based position in the matching events, oldest=1; cursor 0 means the most recent window; a next_cursor is returned when more remain — reuse the same filters). Each listed event carries its index (#n, starting at #1). EXPAND MODE (expand non-zero): reads ONE event's full text — pass an #n from a listing (paged with text_offset when long), e.g. a sub-agent's complete findings; negative counts from the end (event_kinds [\"message\"] with expand -1 is the most recent message in full, no listing needed). EXPAND ignores cursor/limit, so do NOT give both a real value — a call that sets expand AND a non-zero cursor/limit is rejected, not silently narrowed. session_id defaults to the current session; pass another id from this project (a filename without .jsonl, as terva_status prints) or a swarm sub-agent id (as swarm_spawn and the [auto-swarm update] recap print) to inspect that transcript. Secrets are redacted and output is size-bounded."
 }
 
 func (t *SessionInspectTool) Schema() json.RawMessage {
@@ -62,8 +119,8 @@ func (t *SessionInspectTool) Schema() json.RawMessage {
 				"description": "Restrict to these event kinds.",
 			},
 			"limit":       map[string]any{"type": "integer", "description": "Max events (default 40, cap 200)."},
-			"cursor":      map[string]any{"type": "integer", "description": "LIST MODE only. Offset into the matching events (oldest=0). Omit to get the most recent window. Do not pass with expand (rejected)."},
-			"expand":      map[string]any{"type": "integer", "description": "EXPAND MODE. One matching event to read in full: #n from a listing with the SAME filters, or negative to count from the end (-1 = most recent match). Ignores — and must not be combined with — limit/cursor (rejected)."},
+			"cursor":      map[string]any{"type": "integer", "description": "LIST MODE only. 1-based position in the matching events (oldest = 1). 0 (or omitted) means the most recent window. Do not combine with a non-zero expand (rejected)."},
+			"expand":      map[string]any{"type": "integer", "description": "EXPAND MODE. One matching event to read in full: an #n from a listing with the SAME filters (1-based), or negative to count from the end (-1 = most recent match). 0 (or omitted) means list mode instead. Ignores — and must not be combined with — a non-zero limit/cursor (rejected)."},
 			"text_offset": map[string]any{"type": "integer", "description": "With expand: byte offset into that event's text (default 0). Use the offset from the previous truncation notice to continue."},
 		},
 		"additionalProperties": false,
@@ -78,20 +135,22 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 			return core.ToolResult{}, fmt.Errorf("invalid args: %w", err)
 		}
 	}
-	if a.Expand != nil && *a.Expand < -siExpandTailMax {
-		return toolErr(fmt.Sprintf("session_inspect: expand %d is too far back — negative expand reaches at most -%d; use the absolute #n from a listing (cursor pages older events)", *a.Expand, siExpandTailMax)), nil
+	if a.Expand < -siExpandTailMax {
+		return toolErr(fmt.Sprintf("session_inspect: expand %d is too far back — negative expand reaches at most -%d; use the absolute #n from a listing (cursor pages older events)", a.Expand, siExpandTailMax)), nil
 	}
-	// EXPAND MODE (expand set) reads ONE event in full and ignores the listing
-	// paging fields, so a call that ALSO sets cursor or a listing limit is
-	// contradictory — the model padded one mode's field into the other. Reject it
-	// with both corrected forms rather than silently dropping the listing intent:
-	// a padded expand:0 + cursor:0 would otherwise always return event #0 (TW-013
-	// F2). cursor is a pointer, so cursor:0 is a real value not "unset"; limit's
-	// default is applied downstream, so a non-zero limit here was set on purpose.
-	if a.Expand != nil && (a.Cursor != nil || a.Limit != 0) {
+	// EXPAND MODE reads ONE event in full and ignores the listing paging fields,
+	// so a call naming a real expand target AND a real cursor/limit is
+	// contradictory — the caller put one mode's field into the other. Reject it
+	// with both corrected forms rather than silently dropping the listing intent.
+	//
+	// This no longer fires on a padded call: with 0 meaning "unset" on both
+	// fields, {"cursor":0,"expand":0,"limit":0} is now simply the default
+	// listing. It fires only when both fields carry a value the caller had to
+	// choose, which is the case worth explaining.
+	if a.Expand != 0 && (a.Cursor != 0 || a.Limit != 0) {
 		return toolErr("session_inspect: EXPAND MODE (expand set) reads one event in full and ignores cursor/limit — do not combine them:\n" +
-			"  LIST MODE:   omit expand — e.g. {\"event_kinds\":[\"tool_result\"],\"cursor\":0,\"limit\":40}\n" +
-			"  EXPAND MODE: omit cursor/limit — e.g. {\"event_kinds\":[\"tool_result\"],\"expand\":0}"), nil
+			"  LIST MODE:   leave expand at 0 — e.g. {\"event_kinds\":[\"tool_result\"],\"cursor\":1,\"limit\":40}\n" +
+			"  EXPAND MODE: leave cursor/limit at 0 — e.g. {\"event_kinds\":[\"tool_result\"],\"expand\":1}"), nil
 	}
 	path, sessID, swarmChild, err := t.resolvePath(ctx, a.SessionID)
 	if err != nil {
@@ -137,13 +196,13 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 	if swarmChild && scan.seen == 0 {
 		return toolErr(emptyChildTranscriptMsg(t.TervaHome, sessID)), nil
 	}
-	if a.Expand != nil {
+	if a.Expand != 0 {
 		if total == 0 {
 			return toolErr("session_inspect: no events match these filters, nothing to expand"), nil
 		}
 		ev, idx := scan.resolveExpand()
 		if ev == nil {
-			return toolErr(fmt.Sprintf("session_inspect: expand %d is out of range — %d event(s) match these filters (#0–#%d, or -1 back to -%d)", *a.Expand, total, total-1, total)), nil
+			return toolErr(fmt.Sprintf("session_inspect: expand %d is out of range — %d event(s) match these filters (#1–#%d, or -1 back to -%d)", a.Expand, total, total, total)), nil
 		}
 		return expandSessionEvent(sessID, *ev, idx, a.TextOffset), nil
 	}
@@ -153,9 +212,9 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 	if scanTrunc {
 		body += scanCeilingNotice
 	}
-	details := map[string]any{"session_id": sessID, "total": total, "start": start, "count": end - start}
+	details := map[string]any{"session_id": sessID, "total": total, "start": wireIndex(start), "count": end - start}
 	if end < total {
-		details["next_cursor"] = end
+		details["next_cursor"] = wireIndex(end)
 	}
 	if scanTrunc {
 		details["scan_truncated"] = true
@@ -265,8 +324,8 @@ func newSessScan(a sessionInspectArgs) *sessScan {
 		failOnly: a.FailuresOnly,
 		callName: map[string]string{},
 		limit:    limit,
-		cursor:   a.Cursor,
-		expand:   a.Expand,
+		cursor:   cursorOffset(a.Cursor),
+		expand:   expandTarget(a.Expand),
 	}
 	if len(a.EventKinds) > 0 {
 		s.kinds = make(map[string]bool, len(a.EventKinds))
@@ -512,9 +571,19 @@ const (
 
 func renderSessionEvents(sessID string, window []sessEvent, total, start, end, limit int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "session %s — %d matching event(s); showing %d–%d\n", sessID, total, start+1, end)
+	// The header counted from 1 while the #n lines counted from 0, so "showing
+	// 1–5" listed #0–#4. Both are 1-based now, and a caller reading a coordinate
+	// off a line gets the one the header promised.
+	//
+	// Zero matches has no range to show: the old form rendered "showing 1–0",
+	// which reads as a bug in the tool rather than as an empty result.
+	if total == 0 {
+		fmt.Fprintf(&b, "session %s — no events match these filters\n", sessID)
+		return b.String()
+	}
+	fmt.Fprintf(&b, "session %s — %d matching event(s); showing %d–%d\n", sessID, total, wireIndex(start), end)
 	for i, e := range window {
-		line := fmt.Sprintf("[#%d row %d] %-12s %-16s %-4s %6dB  %s\n", start+i, e.Row, e.Kind, e.Tool, eventStatus(e), e.Bytes, eventSnippet(e.Text))
+		line := fmt.Sprintf("[#%d row %d] %-12s %-16s %-4s %6dB  %s\n", wireIndex(start+i), e.Row, e.Kind, e.Tool, eventStatus(e), e.Bytes, eventSnippet(e.Text))
 		if b.Len()+len(line) > siOutputMax {
 			b.WriteString("…(output truncated; narrow with filters or a smaller limit)\n")
 			return b.String()
@@ -522,14 +591,17 @@ func renderSessionEvents(sessID string, window []sessEvent, total, start, end, l
 		b.WriteString(line)
 	}
 	if end < total {
-		fmt.Fprintf(&b, "more: pass cursor %d (with the same filters) for the next %d\n", end, limit)
+		fmt.Fprintf(&b, "more: pass cursor %d (with the same filters) for the next %d\n", wireIndex(end), limit)
 	}
 	if start > 0 {
+		// Floors at the OLDEST page, which is wire cursor 1 — not 0, which now
+		// means "unset" and would hand back the most recent window instead of
+		// the earliest one the caller asked to walk back to.
 		earlier := start - limit
 		if earlier < 0 {
 			earlier = 0
 		}
-		fmt.Fprintf(&b, "earlier: pass cursor %d\n", earlier)
+		fmt.Fprintf(&b, "earlier: pass cursor %d\n", wireIndex(earlier))
 	}
 	return b.String()
 }
@@ -571,7 +643,7 @@ func expandSessionEvent(sessID string, e sessEvent, idx, textOffset int) core.To
 		chunk = chunk[:cut]
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "session %s — event #%d (row %d, %s", sessID, idx, e.Row, e.Kind)
+	fmt.Fprintf(&b, "session %s — event #%d (row %d, %s", sessID, wireIndex(idx), e.Row, e.Kind)
 	if e.Tool != "" {
 		fmt.Fprintf(&b, " %s", e.Tool)
 	}
@@ -581,9 +653,9 @@ func expandSessionEvent(sessID string, e sessEvent, idx, textOffset int) core.To
 	fmt.Fprintf(&b, "; bytes %d–%d of %d redacted)\n", textOffset, textOffset+len(chunk), len(text))
 	b.WriteString(chunk)
 	if truncated {
-		fmt.Fprintf(&b, "\n…more: pass expand %d with text_offset %d (same filters)\n", idx, textOffset+len(chunk))
+		fmt.Fprintf(&b, "\n…more: pass expand %d with text_offset %d (same filters)\n", wireIndex(idx), textOffset+len(chunk))
 	}
-	details := map[string]any{"session_id": sessID, "expand": idx, "text_offset": textOffset, "text_total": len(text)}
+	details := map[string]any{"session_id": sessID, "expand": wireIndex(idx), "text_offset": textOffset, "text_total": len(text)}
 	if truncated {
 		details["next_text_offset"] = textOffset + len(chunk)
 	}

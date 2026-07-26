@@ -108,13 +108,31 @@ network hosts. See `docs/plans/standard-tools-bucket2.md`.
 | `glob` | local read-only | path glob (`**` recurses); `.gitignore`-aware, paged |
 | `ask_user_question` | user interaction | structured clarifying question; permitted in every mode; interactive-only (headless returns a proceed-anyway result) |
 | `terva_status` | local read-only | session self-introspection |
-| `session_inspect` | local read-only | bounded, filterable view over a session transcript: this session, another session in the project, or a swarm sub-agent's (by its id); `expand` reads one event's full text in pages. Secrets redacted, input scan and output both capped. A sub-agent's transcript streams as it works, so a running one is inspectable mid-task; before its first message lands the result names that state rather than blaming the filters. |
+| `session_inspect` | local read-only | bounded, filterable view over a session transcript: this session, another session in the project, or a swarm sub-agent's (by its id); `expand` reads one event's full text in pages. Event indices and `cursor` are **1-based**, and `0` means "not set" on both — so a caller that fills every optional key with its zero value gets the default listing of the most recent window rather than an error or the wrong end of the transcript (see "Optionality" below). Secrets redacted, input scan and output both capped. A sub-agent's transcript streams as it works, so a running one is inspectable mid-task; before its first message lands the result names that state rather than blaming the filters. |
 | `task_create` / `task_update` / `task_list` / `task_archive` | local data | the built-in task board (folded in from the former `terva-tasks` extension): one active task at a time, evidence to close, archive generations, `task_list format:"markdown"` exports a checkbox worklog. The board persists per session under `$TERVA_HOME/tasks` (private modes) and its live state rides each turn as a context card. |
 | `activate_tools` | visibility only | present only when `lazy_tools` is on (see below); brings a hidden capability group into the advertised set. The advertised set is pinned while the model replies, so an activated group can never join the current reply's remaining calls — instead, activation continuation (on by default) automatically re-prompts the model with the tools live the moment it finishes that reply; with continuation off, the group lands on the NEXT turn. Its result echoes the group's schemas (capped at a 4 KB budget; past that, names only) so the model can compose that next call without waiting to see them. Grants no authority — revealed tools keep their normal permission gates. |
 
 `grep`/`glob` are jailed exactly like the file tools (cwd containment,
 symlink skip) and survive `plan` mode because they are classified
 read-only.
+
+**Optionality: a zero value must be inert, not a second meaning.** A tool
+argument whose behaviour depends on whether a key is *present* is unusable
+by a model that fills every key in the schema — a common habit, and one
+JSON Schema gives it no way to know is wrong. `session_inspect` had two
+such fields and both failed in one session: `expand` chose expand mode by
+presence, so `expand: 0` could not reach the listing at all (four
+rejections in a row, then the agent gave up); `cursor` chose the window by
+presence, so `cursor: 0` silently returned the *oldest* events to a caller
+asking for the most recent. A clearer error message had already been tried
+for the first of these and did not survive contact with the model, because
+the correction it asked for was an omission.
+
+So the rule for new tool arguments: **make the "unset" case expressible as
+a value.** Prefer a sentinel the schema can show (`0`, `""`, `-1` with a
+stated meaning) over pointer nil-ness, and where a padded value must be
+accepted, make it inert rather than active. `session_inspect` is the
+worked example: indices moved to 1-based so `0` is free to mean unset.
 
 **Git-conditional built-ins**: the five `worktree_*` tools (folded in from the
 retired `terva-git-worktree` extension) join the registry only when the session

@@ -98,9 +98,10 @@ func TestSessScanBoundsRetention(t *testing.T) {
 		}
 	}
 
-	// Cursor mode keeps exactly the requested page, in order.
-	cur := 10
-	s = newSessScan(sessionInspectArgs{Limit: 5, Cursor: &cur})
+	// Cursor mode keeps exactly the requested page, in order. Wire cursor 11 is
+	// scan offset 10 — the args are 1-based, the scan is 0-based, and this is a
+	// white-box test of the scan side.
+	s = newSessScan(sessionInspectArgs{Limit: 5, Cursor: 11})
 	for i := 0; i < 100; i++ {
 		s.addMessage(i, provider.Message{Role: provider.RoleAssistant,
 			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("event %d", i)}}})
@@ -110,9 +111,9 @@ func TestSessScanBoundsRetention(t *testing.T) {
 		t.Fatalf("cursor window = [%d,%d) len %d first %q, want [10,15) len 5 %q", start, end, len(events), events[0].Text, "event 10")
 	}
 
-	// Expand mode retains only the target, at full length.
-	exp := 42
-	s = newSessScan(sessionInspectArgs{Expand: &exp})
+	// Expand mode retains only the target, at full length. Wire expand 43 is
+	// scan index 42.
+	s = newSessScan(sessionInspectArgs{Expand: 43})
 	for i := 0; i < 100; i++ {
 		s.addMessage(i, provider.Message{Role: provider.RoleAssistant,
 			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("event %d %s", i, long)}}})
@@ -125,9 +126,9 @@ func TestSessScanBoundsRetention(t *testing.T) {
 	}
 
 	// A negative expand keeps a full-text tail ring and resolves from the end
-	// once the matches are counted.
-	tail := -2
-	s = newSessScan(sessionInspectArgs{Expand: &tail})
+	// once the matches are counted. Negatives are NOT rebased by the 1-based
+	// wire indices: -1 is still the most recent match.
+	s = newSessScan(sessionInspectArgs{Expand: -2})
 	for i := 0; i < 100; i++ {
 		s.addMessage(i, provider.Message{Role: provider.RoleAssistant,
 			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("event %d %s", i, long)}}})
@@ -262,11 +263,11 @@ func TestSessionInspectExpandPagesFullText(t *testing.T) {
 	}
 
 	// The listing advertises the #n coordinates expand consumes.
-	if got := inspectText(t, run(`{"session_id":"sess1"}`)); !strings.Contains(got, "[#0 row") {
+	if got := inspectText(t, run(`{"session_id":"sess1"}`)); !strings.Contains(got, "[#1 row") {
 		t.Errorf("listing should carry #n indexes, got: %q", got)
 	}
 
-	res := run(`{"session_id":"sess1","event_kinds":["message"],"expand":1}`)
+	res := run(`{"session_id":"sess1","event_kinds":["message"],"expand":2}`)
 	body := inspectText(t, res)
 	if !strings.Contains(body, "report line\nreport line") {
 		t.Errorf("expand must preserve newlines, got: %q", body[:120])
@@ -286,7 +287,7 @@ func TestSessionInspectExpandPagesFullText(t *testing.T) {
 		t.Errorf("truncation notice should name the continuation offset, got tail: %q", body[len(body)-120:])
 	}
 
-	res = run(fmt.Sprintf(`{"session_id":"sess1","event_kinds":["message"],"expand":1,"text_offset":%d}`, next))
+	res = run(fmt.Sprintf(`{"session_id":"sess1","event_kinds":["message"],"expand":2,"text_offset":%d}`, next))
 	det, ok = res.Details.(map[string]any)
 	if !ok {
 		t.Fatalf("details should be a map, got %T", res.Details)
@@ -309,10 +310,10 @@ func TestSessionInspectExpandPagesFullText(t *testing.T) {
 	// coordinate that stays stable as the session grows.
 	res = run(`{"session_id":"sess1","event_kinds":["message"],"expand":-1}`)
 	body = inspectText(t, res)
-	if res.IsError || !strings.Contains(body, "event #1") || !strings.Contains(body, "report line") {
-		t.Errorf("expand -1 should render the last message as its absolute #1, got (err=%v): %q", res.IsError, body[:200])
+	if res.IsError || !strings.Contains(body, "event #2") || !strings.Contains(body, "report line") {
+		t.Errorf("expand -1 should render the last message as its absolute #2, got (err=%v): %q", res.IsError, body[:200])
 	}
-	if !strings.Contains(body, fmt.Sprintf("expand 1 with text_offset %d", siExpandMax)) {
+	if !strings.Contains(body, fmt.Sprintf("expand 2 with text_offset %d", siExpandMax)) {
 		t.Errorf("continuation hint should carry the absolute index, got tail: %q", body[len(body)-120:])
 	}
 
@@ -498,21 +499,33 @@ func TestSessionInspectDiagnosesRunningChild(t *testing.T) {
 	// match, and conflating them would hide a real filter mistake.
 	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "done-1"),
 		cwd, "task text", "the findings")
-	got = inspectText(t, run(`{"session_id":"done-1","tool_name":"nonexistent","expand":0}`))
+	got = inspectText(t, run(`{"session_id":"done-1","tool_name":"nonexistent","expand":1}`))
 	if !strings.Contains(got, "no events match these filters") {
 		t.Errorf("a real filter miss on a finished child must still say so, got: %q", got)
 	}
+	// …and in list mode too, where the same miss used to render as the nonsense
+	// range "showing 1–0".
+	got = inspectText(t, run(`{"session_id":"done-1","tool_name":"nonexistent"}`))
+	if !strings.Contains(got, "no events match these filters") || strings.Contains(got, "showing") {
+		t.Errorf("an empty listing must say so, not print an empty range, got: %q", got)
+	}
 }
 
-// TestSessionInspectRejectsMixedModes covers TW-013 F2: expand selects EXPAND
-// MODE and ignores cursor/limit, so combining them is a padded/contradictory
-// call and is rejected with both corrected forms — not silently narrowed to
-// event #0. Runs before any transcript I/O, so it needs no seeded session.
+// TestSessionInspectRejectsMixedModes covers the mode conflict that survives
+// TW-031: a call naming a REAL expand target and a REAL cursor/limit is
+// contradictory and is rejected with both corrected forms, rather than silently
+// dropping one mode's intent.
+//
+// What no longer belongs here is the padded call. TW-013 F2 made {"expand":0,
+// "cursor":0} an error because expand's presence chose the mode; TW-031 makes 0
+// mean "unset" on both fields, so that same call is now simply the default
+// listing — see TestSessionInspectPaddedZeroArgsList. Runs before any
+// transcript I/O, so it needs no seeded session.
 func TestSessionInspectRejectsMixedModes(t *testing.T) {
 	tool := &SessionInspectTool{TervaHome: testsupport.TempDir(t), CWD: testsupport.TempDir(t)}
 	for _, args := range []string{
-		`{"expand":0,"cursor":0}`, // the padded hazard: used to always return #0
-		`{"expand":0,"limit":40}`,
+		`{"expand":2,"cursor":5}`,
+		`{"expand":2,"limit":40}`,
 		`{"expand":-1,"cursor":5}`,
 	} {
 		res, err := tool.Execute(context.Background(), json.RawMessage(args), func(string) {})
@@ -527,11 +540,66 @@ func TestSessionInspectRejectsMixedModes(t *testing.T) {
 			t.Errorf("%s: rejection should show both corrected forms:\n%s", args, txt)
 		}
 	}
-	// Bare expand:0 (no listing fields) is a legitimate EXPAND MODE call and must
-	// NOT trip the mixed-mode guard — it may fail later for other reasons, but not
-	// with the combine-them message.
-	res, _ := tool.Execute(context.Background(), json.RawMessage(`{"expand":0}`), func(string) {})
+	// A bare expand (no listing fields) is a legitimate EXPAND MODE call and must
+	// NOT trip the guard — it may fail later for other reasons, but not with the
+	// combine-them message.
+	res, _ := tool.Execute(context.Background(), json.RawMessage(`{"expand":2}`), func(string) {})
 	if res.IsError && strings.Contains(inspectText(t, res), "do not combine them") {
-		t.Errorf("bare expand:0 must not trip the mixed-mode guard:\n%s", inspectText(t, res))
+		t.Errorf("a bare expand must not trip the mixed-mode guard:\n%s", inspectText(t, res))
+	}
+}
+
+// TestSessionInspectPaddedZeroArgsList is TW-031's acceptance case, and it uses
+// the exact argument object from the session that produced the note: a model
+// asked to find its own failures filled in every optional key with its zero
+// value, and got four rejections in a row instead of a listing.
+//
+// Each zero must now be inert. expand 0 lists rather than expanding; cursor 0
+// means the most recent window rather than the oldest, which was the silent
+// half of the same defect — a caller asking for recent failures was handed the
+// beginning of the session with nothing in the output saying so.
+func TestSessionInspectPaddedZeroArgsList(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	// More messages than the window, so "oldest" and "most recent" differ and
+	// the cursor half of the defect is actually observable.
+	msgs := make([]string, 60)
+	for i := range msgs {
+		msgs[i] = fmt.Sprintf("message %02d", i)
+	}
+	writeSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd, msgs...)
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+
+	padded := `{"session_id":"sess1","cursor":0,"event_kinds":["message"],"expand":0,"limit":40,"text_offset":0}`
+	res, err := tool.Execute(context.Background(), json.RawMessage(padded), func(string) {})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("a fully padded call must reach list mode, got: %q", inspectText(t, res))
+	}
+	got := inspectText(t, res)
+	// The MOST RECENT window: the last message is present, the first is not.
+	if !strings.Contains(got, "message 59") {
+		t.Errorf("padded call should return the most recent window, got: %q", got)
+	}
+	if strings.Contains(got, "message 00") {
+		t.Errorf("padded cursor 0 returned the OLDEST window — the silent half of TW-031:\n%s", got)
+	}
+	// Indices are 1-based, so the first match is #1 and there is no #0 to
+	// collide with the unset value.
+	if strings.Contains(got, "[#0 ") {
+		t.Errorf("listing must be 1-based — #0 is the unset value, got: %q", got)
+	}
+
+	// Paging still works off the coordinates the listing prints: cursor 1 is the
+	// oldest page, and it must be a DIFFERENT window from the padded default.
+	res, _ = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","event_kinds":["message"],"cursor":1,"limit":40}`), func(string) {})
+	oldest := inspectText(t, res)
+	if !strings.Contains(oldest, "message 00") || !strings.Contains(oldest, "[#1 ") {
+		t.Errorf("cursor 1 should page from the oldest match at #1, got: %q", oldest)
+	}
+	if oldest == got {
+		t.Errorf("cursor 1 and cursor 0 must not return the same window")
 	}
 }
