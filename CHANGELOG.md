@@ -11,6 +11,18 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.11](https://github.com/terva-sh/terva/releases/tag/v0.126.11) — 2026-07-24
+
+### Features
+
+- cards: a character keeps its earlier versions
+- web: the control panel's right rail opens without a chat
+
+### Fixes
+
+- stage: wide content scrolls inside a message instead of out of it
+- web: the installed app keeps character portraits
+
 ## [v0.126.10](https://github.com/terva-sh/terva/releases/tag/v0.126.10) — 2026-07-24
 
 ### Features
