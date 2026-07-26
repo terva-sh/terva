@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -301,5 +303,90 @@ func TestStatusReportsProjectKey(t *testing.T) {
 	d, ok := res.Details.(map[string]any)
 	if !ok || d["project_id"] != core.ProjectKey("/tmp/proj") {
 		t.Errorf("details missing project_id: %#v", res.Details)
+	}
+}
+
+// TW-035: the extension line's shape. The wiring that supplies the list lives
+// in the merge and is tested there (TestMergeBindsExtensionIdentitiesToStatus);
+// these are about what the model reads once it arrives.
+func TestStatusExtensionLineFormatting(t *testing.T) {
+	many := make([]ExtensionIdentity, 0, 12)
+	for i := 0; i < 12; i++ {
+		many = append(many, ExtensionIdentity{Name: fmt.Sprintf("ext-%d", i), Version: "1.0.0"})
+	}
+	for _, tc := range []struct {
+		name string
+		in   []ExtensionIdentity
+		want []string
+		not  []string
+	}{
+		{
+			name: "version gains a v prefix when the manifest omits one",
+			in:   []ExtensionIdentity{{Name: "jmap-mail", Version: "0.14.0"}},
+			want: []string{"jmap-mail v0.14.0"},
+		},
+		{
+			name: "a manifest that already says v is not doubled",
+			in:   []ExtensionIdentity{{Name: "jmap-mail", Version: "v0.14.0"}},
+			want: []string{"jmap-mail v0.14.0"},
+			not:  []string{"vv0.14.0"},
+		},
+		{
+			// "I cannot tell you" and "it has none" are the same fact to a
+			// caller, and an empty gap reads as neither.
+			name: "a missing version says so rather than trailing off",
+			in:   []ExtensionIdentity{{Name: "homegrown", Version: ""}},
+			want: []string{"homegrown (no version)"},
+		},
+		{
+			// One fact among fifteen: a fleet with a dozen extensions must not
+			// push the context and cost lines off the end of what gets read.
+			name: "a long list is bounded and says how many it dropped",
+			in:   many,
+			want: []string{"ext-0 v1.0.0", "ext-7 v1.0.0", "+4 more"},
+			not:  []string{"ext-8", "ext-11"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fmtExtensions(tc.in)
+			for _, w := range tc.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("missing %q in: %s", w, got)
+				}
+			}
+			for _, n := range tc.not {
+				if strings.Contains(got, n) {
+					t.Errorf("unexpected %q in: %s", n, got)
+				}
+			}
+		})
+	}
+}
+
+// Details is what a later reader parses out of the session record, and the
+// whole point of reporting this is that a claim made during a session can be
+// checked afterwards — so it carries the full set, not the clipped line.
+func TestStatusDetailsCarriesEveryExtensionUnclipped(t *testing.T) {
+	many := make([]ExtensionIdentity, 0, 12)
+	for i := 0; i < 12; i++ {
+		many = append(many, ExtensionIdentity{Name: fmt.Sprintf("ext-%d", i), Version: "1.0.0"})
+	}
+	st := &StatusTool{}
+	st.SetExtensions(func() []ExtensionIdentity { return many })
+
+	res, err := st.Execute(context.Background(), json.RawMessage(`{}`), nil)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	details, ok := res.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("Details is not a map: %#v", res.Details)
+	}
+	got, ok := details["extensions"].([]ExtensionIdentity)
+	if !ok {
+		t.Fatalf("Details carries no extension list: %#v", details["extensions"])
+	}
+	if len(got) != len(many) {
+		t.Errorf("Details clipped the list to %d of %d — the record cannot be checked against what loaded", len(got), len(many))
 	}
 }

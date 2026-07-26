@@ -67,6 +67,43 @@ type StatusTool struct {
 	// embedder that never recorded it, a direct-construction test) is
 	// reported as unavailable rather than as empty fields.
 	Build buildinfo.Info
+
+	// SetExtensions binds this; see the setter. Guarded by mu because the
+	// merge that supplies it can re-run mid-session (a live approval-mode
+	// switch rebuilds the registry and re-merges) while Execute reads it.
+	extensions func() []ExtensionIdentity
+}
+
+// ExtensionIdentity is one loaded extension as terva_status reports it.
+//
+// Declared here rather than reusing extdriver's richer diagnostic type so this
+// package keeps no dependency on the extension machinery: the host passes a
+// closure at merge time. It also keeps the reported surface deliberately
+// narrow — name and version are what a model can act on; readiness, log paths
+// and diagnostics belong to `terva ext doctor`.
+type ExtensionIdentity struct {
+	Name    string
+	Version string
+}
+
+// SetExtensions binds the source of loaded-extension identities. Called from
+// the extension merge, which is the one point every surface (cli, acp, rpc,
+// web) already funnels through — so no surface can wire tools and forget this.
+// Re-callable: the merge is idempotent and may re-run.
+func (t *StatusTool) SetExtensions(fn func() []ExtensionIdentity) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.extensions = fn
+}
+
+func (t *StatusTool) extensionList() []ExtensionIdentity {
+	t.mu.RLock()
+	fn := t.extensions
+	t.mu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
 }
 
 // SetProvider re-binds the provider-identity facts after a live
@@ -87,7 +124,7 @@ func (t *StatusTool) SetProvider(provider, authMethod, baseURL string) {
 func (t *StatusTool) Name() string { return "terva_status" }
 
 func (t *StatusTool) Description() string {
-	return "Report your own runtime status: model, provider, the running terva binary's version/commit/build-date, process uptime, working directory, session id and transcript file, reasoning effort, and how full your context window is. Takes no arguments. Useful for deciding whether to summarize or wrap up before the context fills, and for reporting which build is serving this session."
+	return "Report your own runtime status: model, provider, the running terva binary's version/commit/build-date, the loaded extensions and their versions, process uptime, working directory, session id and transcript file, reasoning effort, and how full your context window is. Takes no arguments. Useful for deciding whether to summarize or wrap up before the context fills, and for reporting which build and which extension versions are serving this session — name them in anything you write down, so a later reader can check it against what actually shipped."
 }
 
 // No arguments. Providers that require an object schema accept an
@@ -148,6 +185,16 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 	// shell reports. Immutable, so it's whatever was recorded at startup.
 	if line := fmtBuild(t.Build); line != "" {
 		fmt.Fprintf(&sb, "version: %s\n", line)
+	}
+	// The extensions loaded into THIS session, with their versions. For an
+	// agent whose tool surface beyond files and shell is supplied by
+	// extensions, "what am I running" is only half answered by the binary — and
+	// the half that changes most often was the missing one. Naming them also
+	// makes anything the agent writes checkable later: a review headed with the
+	// extension version it ran against can be re-read against what shipped.
+	exts := t.extensionList()
+	if len(exts) > 0 {
+		fmt.Fprintf(&sb, "extensions: %s\n", fmtExtensions(exts))
 	}
 	// Uptime is read at call time (not construction): with the version
 	// line it confirms a self-restart really replaced the process —
@@ -240,8 +287,40 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 			"context_window": ctxWindow,
 			"context_used":   used,
 			"cumulative":     cum,
+			// Unclipped, unlike the text line: a session record is read by
+			// tools, and the reason to persist this at all is so a claim made
+			// during the session can be checked against what was loaded.
+			"extensions": exts,
 		},
 	}, nil
+}
+
+// extListMax bounds the text line. A fleet can load a dozen extensions, and
+// this is one fact among fifteen — the names past this point are a `terva ext`
+// away, and the full set still rides in Details for anything reading the
+// session record.
+const extListMax = 8
+
+// fmtExtensions renders the loaded set as one line: "jmap-mail v0.14.0,
+// terva-git-worktree v0.3.1". A version the manifest never declared reads as
+// "(no version)" rather than an empty gap, because "I could not tell you" and
+// "it has none" are the same fact to a caller and both are worth seeing.
+func fmtExtensions(exts []ExtensionIdentity) string {
+	parts := make([]string, 0, len(exts))
+	for i, e := range exts {
+		if i == extListMax {
+			parts = append(parts, fmt.Sprintf("+%d more", len(exts)-extListMax))
+			break
+		}
+		v := strings.TrimSpace(e.Version)
+		if v == "" {
+			v = "(no version)"
+		} else if !strings.HasPrefix(v, "v") {
+			v = "v" + v
+		}
+		parts = append(parts, e.Name+" "+v)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // fmtBuild renders the build identity as one line, e.g.

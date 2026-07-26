@@ -208,11 +208,16 @@ func Create(s *tasks.Store, raw json.RawMessage) (string, bool) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Created %d task(s):\n", len(created))
+	ids := make([]string, 0, len(created))
 	for _, t := range created {
 		fmt.Fprintf(&b, "  %s  %s  %s\n", t.ID, t.Status, t.Title)
+		ids = append(ids, t.ID)
 	}
 	b.WriteString("\n")
-	b.WriteString(tasks.RenderCompact(s.List()))
+	// Same treatment as Update: the tasks this call created keep their bodies,
+	// pre-existing ones get a status line. Creating a plan alongside an old one
+	// otherwise restates every note in it.
+	b.WriteString(tasks.RenderRoster(s.List(), ids...))
 	return b.String(), false
 }
 
@@ -317,7 +322,14 @@ func Update(s *tasks.Store, raw json.RawMessage) (string, bool) {
 		}
 	}
 	b.WriteString("\n")
-	b.WriteString(tasks.RenderCompact(list))
+	// Full bodies for the two rows the caller is acting on; one line for the
+	// rest. See RenderRoster — the every-turn task card already carries the
+	// orientation this used to restate.
+	detailed := []string{updated.ID}
+	if nextActivated != nil {
+		detailed = append(detailed, nextActivated.ID)
+	}
+	b.WriteString(tasks.RenderRoster(list, detailed...))
 	return b.String(), false
 }
 

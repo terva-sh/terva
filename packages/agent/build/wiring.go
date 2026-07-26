@@ -45,6 +45,28 @@ func (a *ExtToolAdapter) StaticContext() string {
 	return a.Mgr.StaticContext()
 }
 
+// Identities exposes the loaded extensions' names and versions to
+// MergeExtensionTools (a second optional ExtensionToolSource extension), which
+// hands them to terva_status. MCP sources do not implement it — an MCP server
+// declares no version terva can vouch for — so they are simply absent from the
+// report rather than listed as unknown.
+//
+// An extension that failed to load is skipped: it contributes no tools, so
+// naming it in "what am I running" would describe a surface the agent does not
+// have. `terva ext doctor` is where a failure is meant to surface, with the
+// reason attached.
+func (a *ExtToolAdapter) Identities() []tools.ExtensionIdentity {
+	diags := a.Mgr.Diagnostics()
+	out := make([]tools.ExtensionIdentity, 0, len(diags))
+	for _, d := range diags {
+		if d.FailedReason != "" {
+			continue
+		}
+		out = append(out, tools.ExtensionIdentity{Name: d.Name, Version: d.Version})
+	}
+	return out
+}
+
 func (a *ExtToolAdapter) Tools() []ExtensionToolInfo {
 	infos := a.Mgr.Tools()
 	out := make([]ExtensionToolInfo, 0, len(infos))

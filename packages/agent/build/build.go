@@ -361,6 +361,23 @@ func (r *Resolved) MergeExtensionTools(mgr ExtensionToolSource) {
 			changed = true
 		}
 	}
+	// Same optional-interface trick for the loaded set's identities, so
+	// terva_status can name the extensions it is running with. Bound here
+	// rather than at tool construction because the tools exist before any
+	// extension has loaded — and because this is the one call every surface
+	// already makes, so none of them can wire tools and forget it.
+	//
+	// A closure, not a snapshot: extensions reload and the approval-mode switch
+	// re-merges, so a value captured now would go stale silently.
+	if is, ok := mgr.(interface {
+		Identities() []tools.ExtensionIdentity
+	}); ok {
+		if st, err := r.ToolRegistry.Get("terva_status"); err == nil {
+			if status, isStatus := st.(*tools.StatusTool); isStatus {
+				status.SetExtensions(is.Identities)
+			}
+		}
+	}
 	if changed {
 		// Re-render the system prompt with the merged tool list. Skill
 		// addendum + extension static context are preserved by the

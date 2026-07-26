@@ -19,6 +19,48 @@ func RenderCompact(tasks []Task) string {
 	return strings.Join(lines, "\n")
 }
 
+// RenderRoster is the echo a MUTATING tool returns: the tasks named in
+// `detailed` at full width, every other task as one status line.
+//
+// Why not RenderCompact. That renders every task's evidence-or-note body, so
+// changing one row restated the whole plan — measured at ~2.4 KB per
+// task_update on a thirteen-task roster, and a wave agent calls it once per
+// batch by construction. The new information in that payload is one status word
+// and one evidence string the caller just wrote.
+//
+// The orientation it was providing is not lost, because it was already
+// redundant: the live roster is injected every turn as the ephemeral task card
+// (Controller.Ephemeral -> RenderCard), which carries id, status and label for
+// each open task and is re-rendered rather than accumulated. What the old echo
+// added on top of that card was the evidence bodies — and unlike the card, a
+// tool result stays in the transcript forever.
+//
+// So unchanged rows borrow cardRow, which is already this package's answer to
+// "what does a model need to stay oriented, cheaply", including the reason on a
+// blocked task. The changed and newly-activated rows keep their bodies, because
+// those are the two the caller is acting on. Anything more is one task_list
+// away, which is why that tool still renders everything.
+func RenderRoster(tasks []Task, detailed ...string) string {
+	if len(tasks) == 0 {
+		return "No tasks."
+	}
+	full := make(map[string]bool, len(detailed))
+	for _, id := range detailed {
+		if id = strings.TrimSpace(id); id != "" {
+			full[id] = true
+		}
+	}
+	lines := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		if full[t.ID] {
+			lines = append(lines, compactLine(t))
+		} else {
+			lines = append(lines, cardRow(t))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // RenderArchiveIndex renders the list of archived generations for
 // task_list {archived:true}: one line each with seq, date, task count, how many
 // are still open (non-terminal, matching the panel's notion of "open"), and an

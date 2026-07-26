@@ -577,3 +577,129 @@ func TestListGenerationNotFoundWithNoArchives(t *testing.T) {
 		t.Errorf("should steer to the no-arg current list:\n%s", text)
 	}
 }
+
+// TW-037. A mutating echo restated every task's evidence body, so changing one
+// row cost a multiple of the ROSTER rather than of the change. Nothing caught
+// it because no test had ever asserted on the trailing render at all — the
+// echo's shape was free to be anything.
+func TestUpdateEchoDoesNotRestateOtherEvidence(t *testing.T) {
+	s := boundStore(t)
+	mustCreate(t, s, `{"tasks":[
+		{"title":"Alpha"},{"title":"Beta"},{"title":"Gamma"}
+	]}`)
+	ids := taskIDs(t, s)
+	// Give the two bystanders evidence the echo must not repeat.
+	mustUpdate(t, s, `{"id":"`+ids[1]+`","status":"done","evidence":"BETA_EVIDENCE_MARKER"}`)
+	mustUpdate(t, s, `{"id":"`+ids[2]+`","status":"done","evidence":"GAMMA_EVIDENCE_MARKER"}`)
+
+	text := mustUpdate(t, s, `{"id":"`+ids[0]+`","status":"done","evidence":"ALPHA_EVIDENCE_MARKER"}`)
+
+	if !strings.Contains(text, "ALPHA_EVIDENCE_MARKER") {
+		t.Errorf("the changed task lost its own evidence:\n%s", text)
+	}
+	for _, marker := range []string{"BETA_EVIDENCE_MARKER", "GAMMA_EVIDENCE_MARKER"} {
+		if strings.Contains(text, marker) {
+			t.Errorf("echo restated an unchanged task's evidence (%s):\n%s", marker, text)
+		}
+	}
+	// Orientation is still there: every task is named, with its status.
+	for _, id := range ids {
+		if !strings.Contains(text, id) {
+			t.Errorf("echo dropped task %s entirely — the model can no longer see it:\n%s", id, text)
+		}
+	}
+}
+
+// The newly-activated task keeps its body: it is the other row the caller is
+// acting on, and its note is what says what to do next.
+func TestUpdateEchoKeepsTheActivatedTaskInFull(t *testing.T) {
+	s := boundStore(t)
+	mustCreate(t, s, `{"tasks":[
+		{"title":"First"},{"title":"Second","note":"NEXT_NOTE_MARKER"},{"title":"Third","note":"THIRD_NOTE_MARKER"}
+	]}`)
+	ids := taskIDs(t, s)
+	mustUpdate(t, s, `{"id":"`+ids[0]+`","status":"active"}`)
+
+	text := mustUpdate(t, s, `{"id":"`+ids[0]+`","status":"done","evidence":"did it","activate_next":"`+ids[1]+`"}`)
+
+	if !strings.Contains(text, "NEXT_NOTE_MARKER") {
+		t.Errorf("the activated task's note is missing — the model cannot see what is next:\n%s", text)
+	}
+	if strings.Contains(text, "THIRD_NOTE_MARKER") {
+		t.Errorf("an untouched task's note was restated:\n%s", text)
+	}
+}
+
+// The acceptance criterion itself: the echo must scale with the CHANGE, not
+// with the roster. Ten extra tasks carrying maximum-length evidence may add
+// only their status lines.
+func TestUpdateEchoScalesWithTheChangeNotTheRoster(t *testing.T) {
+	long := strings.Repeat("x", 300)
+
+	echoWith := func(extra int) int {
+		s := boundStore(t)
+		spec := `{"tasks":[{"title":"Target"}`
+		for i := 0; i < extra; i++ {
+			spec += `,{"title":"Filler"}`
+		}
+		spec += `]}`
+		mustCreate(t, s, spec)
+		ids := taskIDs(t, s)
+		for _, id := range ids[1:] {
+			mustUpdate(t, s, `{"id":"`+id+`","status":"done","evidence":"`+long+`"}`)
+		}
+		return len(mustUpdate(t, s, `{"id":"`+ids[0]+`","status":"done","evidence":"done it"}`))
+	}
+
+	small, large := echoWith(2), echoWith(12)
+	// 10 more rows, each carrying 300 chars of evidence. A status line is well
+	// under 60 bytes; restating the bodies would be 3000+.
+	if grew := large - small; grew > 10*60 {
+		t.Errorf("echo grew %d bytes for 10 extra tasks — it is still scaling with the roster", grew)
+	}
+}
+
+// task_list is the documented way to get everything, and trimming the echo is
+// only defensible while that stays true.
+func TestListStillRendersEveryEvidenceBody(t *testing.T) {
+	s := boundStore(t)
+	mustCreate(t, s, `{"tasks":[{"title":"Alpha"},{"title":"Beta"}]}`)
+	ids := taskIDs(t, s)
+	mustUpdate(t, s, `{"id":"`+ids[1]+`","status":"done","evidence":"BETA_EVIDENCE_MARKER"}`)
+
+	text, isErr := List(s, json.RawMessage(`{}`))
+	if isErr {
+		t.Fatalf("task_list failed: %s", text)
+	}
+	if !strings.Contains(text, "BETA_EVIDENCE_MARKER") {
+		t.Errorf("task_list stopped returning evidence — the escape hatch is gone:\n%s", text)
+	}
+}
+
+func mustCreate(t *testing.T, s *tasks.Store, args string) string {
+	t.Helper()
+	text, isErr := Create(s, json.RawMessage(args))
+	if isErr {
+		t.Fatalf("create: %s", text)
+	}
+	return text
+}
+
+func mustUpdate(t *testing.T, s *tasks.Store, args string) string {
+	t.Helper()
+	text, isErr := Update(s, json.RawMessage(args))
+	if isErr {
+		t.Fatalf("update: %s", text)
+	}
+	return text
+}
+
+func taskIDs(t *testing.T, s *tasks.Store) []string {
+	t.Helper()
+	list := s.List()
+	ids := make([]string, 0, len(list))
+	for _, task := range list {
+		ids = append(ids, task.ID)
+	}
+	return ids
+}
