@@ -127,16 +127,11 @@ dogfood NAME='':
 # Node.js; run after changing anything under packages/agent/web/client/src.
 web-build:
     npm --prefix packages/agent/web/client ci
-    # Extract the client's translatable strings into the reference catalog
-    # (packages/i18n/locales/web/en.json), then mirror the canonical web
-    # catalogs into the client bundle for offline/first-paint (the daemon serves
-    # the overlay-merged copy at runtime). Regenerated here, like dist — commit
-    # the result; there is no Node in `just ci` to gate it.
-    npm --prefix packages/agent/web/client run i18n-extract
-    @mkdir -p packages/agent/web/client/src/locales/stage
-    @for f in packages/i18n/locales/web/*.json; do case "$f" in */en.json) ;; *) cp "$f" packages/agent/web/client/src/locales/;; esac; done
-    @for f in packages/i18n/locales/stage/*.json; do case "$f" in */en.json) ;; *) [ -e "$f" ] && cp "$f" packages/agent/web/client/src/locales/stage/ || true;; esac; done
-    npm --prefix packages/agent/web/client run build
+    # Catalog extraction + mirroring + the Vite build live in scripts/web-dist.sh
+    # so this recipe and every determinism gate (web-check, ci-web-client, the
+    # remote web-client job) regenerate the SAME tree. Commit the result; those
+    # gates assert it matches a fresh build.
+    ./scripts/web-dist.sh regen
     @echo "built web client -> packages/agent/web/client/dist (commit it)"
 
 # Run the web client's unit tests (vitest over the pure store/transform logic).
@@ -160,16 +155,9 @@ web-check-fast:
 # deterministic product of the current source: regenerate them exactly as
 # `web-build` does, then assert git sees no change. A test-only source commit
 # should pass this without a reviewer reading minified output.
-web-verify-dist: web-build
-    @if git diff --quiet -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json packages/i18n/locales/stage/en.json; then \
-        echo "web-verify-dist: OK — committed web assets match a fresh build"; \
-    else \
-        echo "web-verify-dist: committed web assets DIFFER from a fresh build —"; \
-        git -c color.ui=never diff --stat -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json packages/i18n/locales/stage/en.json; \
-        echo "  hashed-asset renames + index.html/sw.js only -> run 'just web-build' and commit;"; \
-        echo "  unrelated or churning files                  -> the build may be nondeterministic; investigate."; \
-        exit 1; \
-    fi
+web-verify-dist:
+    npm --prefix packages/agent/web/client ci
+    ./scripts/web-dist.sh check
 
 # Tiered diff review (retro H6): split the changed files for a diff <spec> into
 # source vs generated (git's linguist-generated attribute; see .gitattributes),
@@ -187,8 +175,9 @@ diff-review spec="HEAD":
 # Complete local web gate (pre-push): unit tests, typecheck, i18n, catalog+dist
 # regeneration with a determinism check, prod-dep audit (fails on high/critical),
 # the tagged Go embed test, and a whitespace check. Installs node deps ONCE.
-# Node.js required; there is no Node in `just ci`, so this is the developer gate
-# for web-client changes — run it before pushing them.
+# Node.js required. `just ci` covers the vitest + dist-determinism subset when
+# npm is on the machine; this gate adds typecheck, the i18n check, the audit,
+# and the embed test — run it before pushing web-client changes.
 web-check:
     @echo "== web-check: install =="
     npm --prefix packages/agent/web/client ci
@@ -198,14 +187,8 @@ web-check:
     npm --prefix packages/agent/web/client run typecheck
     @echo "== web-check: i18n =="
     npm --prefix packages/agent/web/client run i18n-check
-    @echo "== web-check: regenerate catalogs + dist =="
-    npm --prefix packages/agent/web/client run i18n-extract
-    @mkdir -p packages/agent/web/client/src/locales/stage
-    @for f in packages/i18n/locales/web/*.json; do case "$f" in */en.json) ;; *) cp "$f" packages/agent/web/client/src/locales/;; esac; done
-    @for f in packages/i18n/locales/stage/*.json; do case "$f" in */en.json) ;; *) [ -e "$f" ] && cp "$f" packages/agent/web/client/src/locales/stage/ || true;; esac; done
-    npm --prefix packages/agent/web/client run build
-    @echo "== web-check: committed-asset determinism =="
-    @git diff --quiet -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json packages/i18n/locales/stage/en.json || { echo "committed web assets differ from a fresh build — run 'just web-build' and commit:"; git -c color.ui=never diff --stat -- packages/agent/web/client/dist packages/agent/web/client/src/locales packages/i18n/locales/web/en.json packages/i18n/locales/stage/en.json; exit 1; }
+    @echo "== web-check: regenerate catalogs + dist, committed-asset determinism =="
+    ./scripts/web-dist.sh check
     @echo "== web-check: prod-dep audit =="
     npm --prefix packages/agent/web/client audit --omit=dev --audit-level=high
     @echo "== web-check: tagged Go embed test =="
@@ -287,17 +270,32 @@ test-e2e *ARGS:
     go test -v ./e2e/ {{ARGS}}
 
 # Vet + gofmt check (non-mutating; the lint gate).
+#
+# gofmt runs over `scripts/go-sources.sh`, not over `.` — a filesystem walk
+# reaches into the sibling worktrees under .claude/worktrees/ and reports
+# another session's mid-edit file as this checkout's failure. See that script.
+# (`go vet ./...` needs no such care: a worktree carries its own go.mod, and Go
+# does not descend into a nested module.)
 lint:
     go vet ./...
-    @test -z "$(gofmt -l . | tee /dev/stderr)" || { echo "gofmt issues (run \`just fmt\`)"; exit 1; }
+    @files="$(scripts/go-sources.sh)"; \
+      test -n "$files" || { echo "no Go sources found — the file list is broken, not the tree"; exit 1; }; \
+      bad="$(printf '%s\n' "$files" | xargs gofmt -l)"; \
+      test -z "$bad" || { printf '%s\n' "$bad" >&2; echo "gofmt issues (run \`just fmt\`)"; exit 1; }
     # The i18n reference catalogs (locales/en.json + locales/prompts/en.json)
     # must match the wrapped T/P calls in packages/ and cmd/. Regenerate with
     # `go run ./cmd/terva-i18n-lint` and commit the result if this fails.
     go run ./cmd/terva-i18n-lint -check
 
 # Format all Go sources in place.
+#
+# Same file list as `lint`, and here it is load-bearing rather than tidy: this
+# WRITES. `gofmt -w .` reformatted files in sibling worktrees — editing another
+# session's uncommitted work with nothing said and no way to notice.
 fmt:
-    gofmt -w .
+    @files="$(scripts/go-sources.sh)"; \
+      test -n "$files" || { echo "no Go sources found — the file list is broken, not the tree"; exit 1; }; \
+      printf '%s\n' "$files" | xargs gofmt -w
 
 # Tidy go.mod / go.sum.
 tidy:
@@ -361,7 +359,8 @@ ci-workflows:
     go vet -tags terva_workflows ./packages/agent/
     go test -tags terva_workflows -race -run 'Workflow' ./packages/agent/
 
-# The web client's vitest suite, when this machine has Node.
+# The web client's vitest suite + the committed-dist determinism check, when
+# this machine has Node.
 #
 # This was deliberately left out of `just ci` once, on the grounds that ci is
 # pure Go and must keep working on a machine with no Node at all. That property
@@ -375,6 +374,11 @@ ci-workflows:
 # vitest assertion that pins the hello is what caught it — in the remote CI,
 # after the push, which is the expensive place to find out.
 #
+# The determinism check exists for the same reason with a worse failure mode:
+# the daemon serves the COMMITTED dist (go:embed), so a client-src change whose
+# author forgot `just web-build` ships a stale panel with every test green —
+# nothing red anywhere, just a panel that silently lacks the change.
+#
 # So: run it where Node exists, and SAY SO where it does not, rather than being
 # quietly green. A gate that passes because it skipped the check is not a gate.
 ci-web-client:
@@ -384,31 +388,34 @@ ci-web-client:
             npm --prefix packages/agent/web/client ci; \
         fi; \
         npm --prefix packages/agent/web/client test; \
+        ./scripts/web-dist.sh check; \
     else \
         echo "ci-web-client: SKIPPED — no npm on this machine."; \
-        echo "  The ci workflow DOES run vitest. If you touched packages/agent/web/client/src,"; \
-        echo "  run 'just web-test' somewhere with Node before you push."; \
+        echo "  The ci workflow DOES run vitest and the dist determinism check. If you"; \
+        echo "  touched packages/agent/web/client/src, run 'just web-check' somewhere"; \
+        echo "  with Node before you push."; \
     fi
 
 # fmt-check + vet + race tests + connector tag-matrix build + acp + web tag
-# build/test + the web client's vitest suite (Node-gated) + terva_pprof tag
-# build + public packaging drift check, as a pre-push gate.
+# build/test + the web client's vitest suite and dist determinism check
+# (Node-gated) + terva_pprof tag build + public packaging drift check, as a
+# pre-push gate.
 ci: lint test ci-acp ci-web ci-scripting ci-workflows ci-web-client
     go build -tags terva_no_telegram,terva_no_discord ./...
     # terva_pprof guard: the profiling endpoint (cmd/terva/pprof.go) only
     # compiles under this tag, so the default build can't catch a break in
     # it — same reason ci-acp exists. install-dev is the only shipping use.
     go build -tags terva_pprof ./cmd/terva
-    @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-overlay; fi
+    @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-overlay; else echo "ci: SKIPPED check-overlay (scripts/release.sh absent on this tree)"; fi
     # A shipped doc that links into docs/plans, docs/architecture, … resolves
     # here and 404s on the public mirror. Only a gate catches that.
-    @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-links; fi
+    @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-links; else echo "ci: SKIPPED check-links (scripts/release.sh absent on this tree)"; fi
     # An internal hostname or remote that reaches the public tree used to
     # surface only at cut time — days after the commit that introduced it, and
     # once at the cost of a whole release cycle over a URL in a test fixture.
     # Build the public tree here and scrub it, so it fails on the commit that
     # leaks it rather than on the release that would have shipped it.
-    @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-scrub; fi
+    @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-scrub; else echo "ci: SKIPPED check-scrub (scripts/release.sh absent on this tree)"; fi
 
 # Pre-release gate for a public cut: the full local CI, then the manual
 # reminders for what can only be verified on GitHub. The public release
