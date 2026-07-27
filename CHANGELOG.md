@@ -11,6 +11,16 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.17](https://github.com/terva-sh/terva/releases/tag/v0.126.17) — 2026-07-27
+
+### Features
+
+- watch a workflow run from anywhere, and know whether it is alive
+
+### Fixes
+
+- state a session captured at startup now keeps up with the session
+
 ## [v0.126.16](https://github.com/terva-sh/terva/releases/tag/v0.126.16) — 2026-07-26
 
 ### Features
