@@ -34,6 +34,9 @@ func TestApplyLoginSuccessAdoptsAnEndpointsModels(t *testing.T) {
 	provider.ResetCatalogLayers()
 	t.Cleanup(provider.ResetCatalogLayers)
 	t.Cleanup(func() { build.UnregisterEndpoint("workshop") })
+	// ApplyLoginSuccess fires a background model refresh; join it while this
+	// test's scratch home is still live, or it leaks into the tests after us.
+	t.Cleanup(waitModelRefresh)
 
 	ep := config.EndpointConfig{BaseURL: srv.URL + "/v1"}
 	if err := config.SaveConfig(config.Config{
@@ -94,6 +97,9 @@ func TestApplyLoginSuccessSurvivesAnUnreachableEndpoint(t *testing.T) {
 	provider.ResetCatalogLayers()
 	t.Cleanup(provider.ResetCatalogLayers)
 	t.Cleanup(func() { build.UnregisterEndpoint("gone-away") })
+	// Same join as above: even a refresh that discovers nothing is a leaked
+	// goroutine until it finishes.
+	t.Cleanup(waitModelRefresh)
 
 	// A port nothing is listening on: connection refused, immediately.
 	ep := config.EndpointConfig{BaseURL: "http://127.0.0.1:1/v1"}

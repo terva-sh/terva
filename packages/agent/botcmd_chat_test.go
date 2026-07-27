@@ -6,7 +6,16 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/chat"
+	"terva.sh/terva/packages/testsupport"
 )
+
+// scratchHome points $TERVA_HOME at a temp dir for the tests below that call
+// build.Resolve — Resolve installs docs/examples trees under the home, and
+// without this they land in the real home of whoever runs the suite.
+func scratchHome(t *testing.T) {
+	t.Helper()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+}
 
 // TestBotRunHelpReturnsEarly pins that `terva bot run --help` (and -h) prints
 // usage and stops, instead of falling through and trying to launch a bot (which
@@ -26,6 +35,7 @@ func TestBotRunHelpReturnsEarly(t *testing.T) {
 // (it does NOT set noTools). That's the gap the --no-tools fix opened — a bot
 // with its integrations but no host filesystem/shell.
 func TestNoWorkspaceToolsKeepsIntegrationsAndIdentity(t *testing.T) {
+	scratchHome(t)
 	if a, _ := build.ParseArgs([]string{"--no-workspace-tools"}); !a.NoWorkspaceTools {
 		t.Fatal("--no-workspace-tools should set NoWorkspaceTools")
 	}
@@ -58,6 +68,7 @@ func TestNoWorkspaceToolsKeepsIntegrationsAndIdentity(t *testing.T) {
 // identical to the credentialed path bot mode uses.)
 
 func TestChatBotHasNoToolsAndChatIdentity(t *testing.T) {
+	scratchHome(t)
 	r, err := build.Resolve(build.Args{Provider: "openai", Model: "gpt-5", Experience: build.ExperienceChat}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +85,7 @@ func TestChatBotHasNoToolsAndChatIdentity(t *testing.T) {
 }
 
 func TestPlayBotDropsBuiltinsKeepsIdentity(t *testing.T) {
+	scratchHome(t)
 	r, err := build.Resolve(build.Args{Provider: "openai", Model: "gpt-5", Experience: build.ExperiencePlay}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -91,6 +103,7 @@ func TestPlayBotDropsBuiltinsKeepsIdentity(t *testing.T) {
 }
 
 func TestDefaultBotIsAFullAgent(t *testing.T) {
+	scratchHome(t)
 	// No experience flag: the default bot keeps the built-in tools (and botRun
 	// additionally hosts extensions + MCP), so it is not "just a chat bot".
 	r, err := build.Resolve(build.Args{Provider: "openai", Model: "gpt-5"}, false)

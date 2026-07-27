@@ -32,6 +32,9 @@ func TestApplyResumedModel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
+		// An open session file inside the temp base can fail the TempDir
+		// RemoveAll on filesystems that silly-rename open files.
+		t.Cleanup(func() { _ = s.Close() })
 		return s
 	}
 

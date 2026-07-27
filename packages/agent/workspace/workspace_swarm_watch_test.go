@@ -16,6 +16,30 @@ import (
 // finalizing coordinator back exactly ONCE per batch of running sub-agents
 // (long enough to stop it racing off), then lets it idle so the queued
 // [auto-swarm update] recap re-engages it — never a loop while sub-agents run.
+// waitQueuedRecap waits for the batch flusher's recap to LAND in the session
+// queue. Waiting for swarmWatch to drain is not enough: flushSwarmSummary
+// takes the batch and nils the slice under swarmWatchMu, RELEASES the mutex,
+// and only then composes and queues the recap — so "drained" opens a window
+// where the queue is still empty. On a loaded CI runner that window is wide
+// enough to fail an immediate assertion; the queued message is the effect
+// these tests care about, so wait for it.
+func waitQueuedRecap(t *testing.T, s *wsSession) []string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if q := s.agent.PendingQueuedMessages(); len(q) > 0 {
+			return q
+		}
+		if time.Now().After(deadline) {
+			s.swarmWatchMu.Lock()
+			n := len(s.swarmWatch)
+			s.swarmWatchMu.Unlock()
+			t.Fatalf("no recap queued within deadline (%d swarm-watch entries still tracked)", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestSwarmGuardHoldOnce(t *testing.T) {
 	s := &wsSession{}
 
@@ -77,26 +101,14 @@ func TestSwarmWatcherFinalisesOnTerminalCrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.trackSwarmAgent(a, "crash task")
-	s.swarmWatchMu.Lock()
-	entry := s.swarmWatch[0]
-	s.swarmWatchMu.Unlock()
+	// Hold the entry from the tracker itself: reading s.swarmWatch[0] here
+	// raced the flush — this crash-fast child can finalise and drain the
+	// slice before the next line runs (CI run 1735, index out of range).
+	entry := s.trackSwarmAgentEntry(a, "crash task")
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		s.swarmWatchMu.Lock()
-		n := len(s.swarmWatch)
-		s.swarmWatchMu.Unlock()
-		if n == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("entry never finalised after a no-turn-end crash (%d left) — the Wait() fallback is the only path that can fire here", n)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	q := s.agent.PendingQueuedMessages()
+	// The Wait() fallback is the only finalise path that can fire here (the
+	// crash produces no turn_end); the queued recap is its observable effect.
+	q := waitQueuedRecap(t, s)
 	if len(q) != 1 || !strings.Contains(q[0], "boom") {
 		t.Fatalf("recap = %q, want exactly one entry carrying the crash error", q)
 	}
@@ -160,22 +172,7 @@ func TestCarrierRecapFlowsToSessionQueue(t *testing.T) {
 	s.trackSwarmAgent(a2, "doomed side quest")
 	close(release)
 
-	// The batch flush drains swarmWatch; wait for it.
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		s.swarmWatchMu.Lock()
-		n := len(s.swarmWatch)
-		s.swarmWatchMu.Unlock()
-		if n == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("swarm watch never drained (%d entries left)", n)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	q := s.agent.PendingQueuedMessages()
+	q := waitQueuedRecap(t, s)
 	if len(q) != 1 {
 		t.Fatalf("queued messages = %d, want exactly 1 batch recap: %q", len(q), q)
 	}

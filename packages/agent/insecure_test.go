@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestResolveInsecureGating pins the --insecure security boundary: it is
@@ -11,6 +12,10 @@ import (
 // explicit --base-url, and rejected everywhere else, so it can never
 // silently weaken TLS verification for a built-in provider.
 func TestResolveInsecureGating(t *testing.T) {
+	// Resolve installs docs/examples trees under $TERVA_HOME — scratch it,
+	// or this test writes into the real home of whoever runs the suite.
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+
 	// Allowed: openai-compatible with an explicit --base-url.
 	r, err := build.Resolve(build.Args{Provider: "openai-compatible", BaseURL: "https://host:8443", Model: "x", Insecure: true}, false)
 	if err != nil {

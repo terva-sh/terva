@@ -278,7 +278,7 @@ func ValidateAndRepairConfig() {
 // Silent on error: discovery is a nice-to-have. Callers can still use
 // the baked-in catalog if this fails.
 func RefreshModelsAsync() {
-	go refreshModels(false)
+	launchModelRefresh(false)
 }
 
 // RefreshModelsForceAsync runs a discovery that ignores the on-disk cache
@@ -290,11 +290,38 @@ func RefreshModelsAsync() {
 // endpoints, not which built-in providers have credentials, so a new login
 // alone doesn't invalidate it; forcing does.
 func RefreshModelsForceAsync() {
-	go refreshModels(true)
+	launchModelRefresh(true)
 }
 
-func refreshModels(force bool) {
-	cached, _ := provider.LoadCache(ModelCachePath())
+// modelRefreshWG tracks every in-flight background discovery so tests can
+// join them; production callers never wait (discovery is fire-and-forget by
+// design, bounded by refreshModels' internal 20s context).
+var modelRefreshWG sync.WaitGroup
+
+func launchModelRefresh(force bool) {
+	// The cache path is resolved HERE, not inside the goroutine: the refresh
+	// outlives its caller by up to 20s of HTTP, and $TERVA_HOME is mutable
+	// while it runs (t.Setenv). A write-time resolve let a refresh leaked by
+	// one test drop models-cache.json into a LATER test's scratch home in the
+	// middle of its TempDir cleanup — the "directory not empty" flake. The
+	// credential/config reads inside stay live on purpose; they only decide
+	// WHAT is discovered, never where the write lands.
+	cachePath := ModelCachePath()
+	modelRefreshWG.Add(1)
+	go func() {
+		defer modelRefreshWG.Done()
+		refreshModels(cachePath, force)
+	}()
+}
+
+// waitModelRefresh blocks until every in-flight background discovery has
+// finished. Test-only: a test whose call graph reaches RefreshModels*Async
+// (e.g. via ApplyLoginSuccess) must register `t.Cleanup(waitModelRefresh)`
+// after its TERVA_HOME setup, or the leaked goroutine outlives the test.
+func waitModelRefresh() { modelRefreshWG.Wait() }
+
+func refreshModels(cachePath string, force bool) {
+	cached, _ := provider.LoadCache(cachePath)
 	if refreshGated(cached, force) {
 		return
 	}
@@ -406,7 +433,7 @@ func refreshModels(force bool) {
 	// survive this landing at any time relative to other refreshes —
 	// precedence is structural, not call-ordered.
 	provider.SetLiveModels(all)
-	_ = provider.SaveCache(ModelCachePath(), provider.ModelCache{
+	_ = provider.SaveCache(cachePath, provider.ModelCache{
 		FetchedAt: time.Now().UTC(),
 		Version:   provider.ModelCacheVersion,
 		Endpoints: endpointsFingerprint(),
