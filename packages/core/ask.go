@@ -21,10 +21,11 @@ type UserAnswer struct {
 }
 
 // Asker surfaces a UserQuestion to the user and blocks until they reply
-// or ctx is cancelled. It is the question analog of Confirmer: each front
-// end (the interactive TUI, ACP) implements it, and headless modes that
-// have no one to ask leave it nil — the ask_user_question tool then
-// returns a model-readable "no channel" result rather than hanging.
+// or ctx is cancelled. It is the question analog of Confirmer. Exactly one
+// host binds it today — the workspace daemon (webAsker, re-bound on every
+// tool rebuild via bindResolvedChannels); every other mode, ACP included,
+// leaves it nil, and the ask_user_question tool then returns a
+// model-readable "no channel" result rather than hanging.
 //
 // Implementations must honor ctx: on cancellation return ctx.Err() so the
 // tool surfaces a cancellation rather than a bogus answer.

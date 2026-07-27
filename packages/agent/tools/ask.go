@@ -15,8 +15,9 @@ import (
 // permission policy permits it in every mode (see core.AuthUserInteraction).
 //
 // Asker is the front-end channel (set after the registry is built, like
-// the confirm gate's Confirmer). It is nil in modes with no one to ask
-// (print/json/rpc/swarm); the tool then returns a model-readable result
+// the confirm gate's Confirmer). Only the workspace host sets it; every
+// other mode — print/json/rpc/swarm, and today ACP and the SDK too —
+// leaves it nil, and the tool then returns a model-readable result
 // telling the agent to proceed on its best judgment rather than blocking.
 type AskUserTool struct {
 	Asker core.Asker

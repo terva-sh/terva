@@ -532,8 +532,10 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 	if r.ToolRegistry == nil {
 		return
 	}
-	// swarm_spawn: mirrors the CLI, and closes the prompt/tool gap (Resolve ships
-	// the auto-swarm system addendum, so the tool must exist to match).
+	// swarm_spawn: the workspace host is its ONLY registrant — no other mode
+	// offers it (docs/architecture/06-extensibility.md §1.5). Registered here to
+	// close the prompt/tool gap: Resolve ships the auto-swarm system addendum,
+	// so the tool must exist to match.
 	if build.HasBaseWorkspaceTools(args) && config.AutoSwarmEnabled() {
 		cfg, _ := config.LoadConfig()
 		r.ToolRegistry["swarm_spawn"] = &tools.SwarmSpawnTool{

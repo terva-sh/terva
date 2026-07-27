@@ -63,6 +63,9 @@ type fakeCarrier struct {
 	tasks      []ctrlproto.TaskInfo
 	surfActErr error
 	surfErr    error
+	// extView, when non-nil, replaces the hardcoded extensions surface — for
+	// tests that need config forms on the wire (ext_config_carrier_test.go).
+	extView *ctrlproto.ExtensionsView
 	// compactGate, when non-nil, parks Compact until closed — so a test can
 	// observe the busy slot held across the round-trip.
 	compactGate chan struct{}
@@ -246,6 +249,9 @@ func (f *fakeCarrier) Surface(ctx context.Context, sess, id string) (ctrlproto.S
 			Grants:   []string{"write"},
 		}}, nil
 	case "extensions":
+		if f.extView != nil {
+			return ctrlproto.Surface{ID: id, Kind: "extensions", Extensions: f.extView}, nil
+		}
 		return ctrlproto.Surface{ID: id, Kind: "extensions", Extensions: &ctrlproto.ExtensionsView{
 			Extensions: []ctrlproto.ExtensionInfo{
 				{Name: "memory", Scope: "global", Status: "running", Enabled: true,

@@ -113,6 +113,38 @@ func TestSwarmAgentArgsEmptyTaskOmitsPositional(t *testing.T) {
 	}
 }
 
+// TestSwarmAgentArgsPostureIsDeliberate pins the two flags the child argv
+// does NOT carry, because their absence is the security posture:
+//
+//   - no --approval: the child resolves ModeSwarmAgent's default, which is
+//     yolo with no gate object at all (build's mode-posture table pins the
+//     resolver side). Forwarding the parent's approval here would park child
+//     tool calls on prompts nobody is watching.
+//   - no --ext: the child still runs full default extension discovery and the
+//     user's MCP config (swarm_agent.go → the shared non-interactive setup) —
+//     absence means "no EXTRA paths", not "no extensions". Anyone tightening
+//     or loosening this pair is changing what a trusted project's code can do
+//     unattended at yolo; docs/architecture/06-extensibility.md §1.5 is the
+//     matrix that states the whole picture, and
+//     docs/proposals/multiplexed-extension-access.md the open proposal to
+//     change the extension half.
+//
+// The other terva-child argv builder (worker/terva.go) deliberately DOES
+// forward --approval — a supervised foreign worker keeps the caller's posture
+// (worker/posture_test.go). These two builders differing is intended; this
+// test exists so a well-meaning "consistency" edit can't silently align them.
+func TestSwarmAgentArgsPostureIsDeliberate(t *testing.T) {
+	args := swarmAgentArgs(swarmAgentArgsOpts{
+		Exe: "/terva", Dir: "/wt", SessionPath: "/s.json", InboxPath: "/in.sock",
+		Persona: "vartija", Task: "audit the auth path",
+	})
+	for _, banned := range []string{"--approval", "--ext", "--no-ext", "--no-mcp"} {
+		if i := indexOf(args, banned); i >= 0 {
+			t.Errorf("child argv carries %q — this posture flag's ABSENCE is load-bearing; read this test's comment before adding it: %v", banned, args)
+		}
+	}
+}
+
 // TestDefaultChildArgsSpawnIncludesTask pins the spawn shape: a
 // fresh (non-resuming) Agent produces argv that ends with the
 // original task as a positional, so the child runs it as the
