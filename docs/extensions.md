@@ -1602,8 +1602,58 @@ terva ext remove <name>           delete an extension directory
 terva ext enable <name>           re-enable a disabled extension
 terva ext disable <name>          disable without removing
 terva ext logs <name> [-f]        cat / tail the extension's stderr
+terva ext config <name> [verb]    show / get / set / unset its declared settings
 terva ext doctor                  diagnose extension discovery and registration
 ```
+
+### `terva ext config` — settings without a browser
+
+```
+terva ext config <name>                     show the declared settings and their values
+terva ext config <name> get <key>           print one value (never a secret)
+terva ext config <name> set <key>=<value>…  set one or more values
+terva ext config <name> set <key> --stdin   set one value read from stdin
+terva ext config <name> unset <key>…        clear back to the declared default
+```
+
+Values are typed and validated against the manifest's declared schema, exactly
+as the browser form and the terminal dialog are: a `bool` takes true/false, an
+`int` takes a whole number, a `select` takes one of its options, and anything
+else is refused before it is written.
+
+**Where the write goes matters.** A running terva owns `config.json` and pushes
+config changes to the live extension, so the command prefers to be a client of
+that instance — the same path the browser takes, applied live.
+
+It finds one in this order: `--endpoint`, then `TERVA_ATTACH` in the
+environment, then the record `terva web` publishes to
+`$TERVA_HOME/listen.json` when it binds. That last one means the common case
+needs no flags at all:
+
+```bash
+terva ext config jmap-mail set enable_sieve_tools=true
+```
+
+Discovery is safe here specifically because the record lives *inside* the home
+under discussion — a daemon named there is serving this `$TERVA_HOME` by
+construction. Nothing is probed: a daemon answering on some default port may be
+serving a different home entirely, and the handshake does not say which home it
+holds.
+
+With nothing serving, it writes `config.json` directly and says so, along with
+what that does not do — a terva already running keeps the old value until it
+reloads. `--offline` forces that path; a *named* endpoint that does not answer
+is an error rather than a silent fall back to the file.
+
+**Secrets.** A `secret`-typed field is never accepted on the command line, where
+it would be readable in `ps` and would land in shell history — pass it with
+`--stdin` or `--from-file <path>`. `get` refuses to print one and `show` reports
+only whether a value exists. Setting any other field leaves a stored secret
+alone; `unset <key>` is how one is cleared.
+
+**Vendored extensions.** A `--ext` load lives outside the install roots, so
+resolving it by name fails. Point at it with `--dir <path>`, or reach the terva
+that loaded it with `--endpoint` — that instance knows where it came from.
 
 `terva ext doctor` reads every installed manifest, then actually spawns the
 extensions and reports what each one registered (and why one failed to load) —
@@ -1934,6 +1984,7 @@ Future (no firm timeline):
 terva ext install <path|git-url>   # copy / clone into $TERVA_HOME/extensions/
 terva ext list                      # show installed extensions
 terva ext logs <name> [-f]          # cat or tail the extension's stderr log
+terva ext config <name> [verb]      # show / get / set / unset its declared settings
 terva ext enable <name>             # re-enable a disabled extension
 terva ext disable <name>            # disable without removing
 terva ext upgrade <name>...         # fast-forward-pull just these extensions

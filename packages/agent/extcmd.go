@@ -34,6 +34,8 @@ func runExtCommand(rawArgs []string, version string) (handled bool, err error) {
 		return true, extDoctor(version)
 	case "logs":
 		return true, extLogs(rawArgs[2:])
+	case "config":
+		return true, extConfig(rawArgs[2:], version)
 	case "enable":
 		return true, extToggle(rawArgs[2:], true)
 	case "disable":
@@ -64,6 +66,7 @@ usage:
   terva ext list                    list installed extensions and their state
   terva ext doctor                  diagnose extension discovery and registration
   terva ext logs <name> [-f]        cat / tail an extension's stderr log
+  terva ext config <name> [verb]    show / get / set / unset its declared settings
   terva ext enable <name>           re-enable a disabled extension
   terva ext disable <name>          disable without removing
   terva ext remove <name>           delete an extension directory

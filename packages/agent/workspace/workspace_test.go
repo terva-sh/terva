@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -1656,6 +1657,41 @@ func TestExtensionsConfigAction(t *testing.T) {
 	}
 	if err := s.extensionsAction("config", map[string]string{"name": "foo"}); err != nil {
 		t.Fatalf("config action: %v", err)
+	}
+	if ev := recvEvent(t, sub); ev.Type != ctrlproto.EventSurfaceUpdated || ev.SurfaceID != "extensions" {
+		t.Errorf("want surface_updated(extensions), got %+v", ev)
+	}
+}
+
+// TestExtensionsClearConfigKeyAction: the delete a submitted form cannot
+// express. A blank secret in a form means "keep what is stored", so clearing one
+// needs an operation of its own — and once it exists it is the single path for
+// clearing any field, which is what `terva ext config <name> unset <key>` rides.
+func TestExtensionsClearConfigKeyAction(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	if err := build.SetExtensionConfigValues("weather", map[string]json.RawMessage{
+		"api_key": json.RawMessage(`"sk-123"`),
+		"units":   json.RawMessage(`"fahrenheit"`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &wsSession{id: "x", hub: newWSHub(), cwd: testsupport.TempDir(t)}
+	sub := s.hub.add(nil, false)
+	if err := s.extensionsAction("clear_config_key", map[string]string{"name": "weather"}); err == nil {
+		t.Error("missing key should error")
+	}
+	if err := s.extensionsAction("clear_config_key", map[string]string{"name": "weather", "key": "api_key"}); err != nil {
+		t.Fatalf("clear_config_key: %v", err)
+	}
+	c, err := config.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Extensions["weather"]["api_key"]; ok {
+		t.Error("api_key survived the clear")
+	}
+	if got := string(c.Extensions["weather"]["units"]); got != `"fahrenheit"` {
+		t.Errorf("units = %s; the neighbour must survive", got)
 	}
 	if ev := recvEvent(t, sub); ev.Type != ctrlproto.EventSurfaceUpdated || ev.SurfaceID != "extensions" {
 		t.Errorf("want surface_updated(extensions), got %+v", ev)
