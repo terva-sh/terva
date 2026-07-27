@@ -787,6 +787,18 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .ext-badge.s-gated { color: #d9902f; border-color: #d9902f; }
 .ext-desc { font-size: 12px; color: var(--fg); overflow-wrap: anywhere; }
 .ext-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--muted); }
+/* extension config form — the browser's half of a declared schema */
+.ext-cfg-row { margin-top: 6px; }
+.ext-cfg { margin-top: 8px; display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.ext-cfg-field { display: flex; flex-direction: column; gap: 4px; }
+.ext-cfg-label { font-size: var(--fs-note); color: var(--muted); }
+.ext-cfg-req { color: var(--warning); margin-left: 3px; }
+/* Descriptions wrap: they are sentences from a manifest, and a truncated one
+   is worse than none — it is the only explanation of what the field does. */
+.ext-cfg-desc { font-size: var(--fs-detail); color: var(--muted); overflow-wrap: anywhere; }
+.ext-cfg-actions { display: flex; align-items: center; gap: 8px; }
+.ext-cfg-ok { font-size: var(--fs-note); color: var(--ok); }
+
 .ext-note { font-size: 11px; color: var(--danger); font-family: ui-monospace, SFMono-Regular, monospace; overflow-wrap: anywhere; }
 
 /* providers pane (kind=providers): the daemon's MODEL-PROVIDER credentials —

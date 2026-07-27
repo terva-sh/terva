@@ -889,6 +889,44 @@ type ExtensionInfo struct {
 	// action), but a client needs these to know when to offer the keys.
 	HasConfig bool `json:"has_config,omitempty"`
 	HasLog    bool `json:"has_log,omitempty"`
+
+	// Config is the declared schema with the user's saved values folded in —
+	// the whole form, ready to render. It travels because the alternative was
+	// for each client to read the manifest and config.json off local disk,
+	// which only works when the client IS the host: a browser has no
+	// filesystem, and an attached terminal has the wrong one. Configuring an
+	// extension was therefore possible from exactly one of the three surfaces.
+	//
+	// Populated only when HasConfig; empty otherwise.
+	Config []ExtensionConfigField `json:"config,omitempty"`
+}
+
+// ExtensionConfigField is one row of an extension's config form: what the
+// manifest declares, plus what the user has saved for it.
+//
+// NOTHING HERE IS A SECRET. A secret field sends HasSaved and never Saved —
+// the same rule ProvidersView follows, and for the same reason: this renders on
+// a screen someone else can see. The host keeps the stored value; a client that
+// submits a blank secret is understood to mean "leave it alone", never "clear
+// it", so the value never has to make the round trip.
+type ExtensionConfigField struct {
+	Key         string   `json:"key"`
+	Label       string   `json:"label,omitempty"`
+	Type        string   `json:"type,omitempty"` // string | bool | int | select | secret
+	Description string   `json:"description,omitempty"`
+	Required    bool     `json:"required,omitempty"`
+	Secret      bool     `json:"secret,omitempty"`
+	Options     []string `json:"options,omitempty"` // allowed values for type "select"
+	// Saved is the user's stored value in display form, "" when unset. Always
+	// empty for a secret field.
+	Saved string `json:"saved,omitempty"`
+	// Default is the manifest's default, shown as a hint rather than prefilled
+	// — a prefilled default is indistinguishable from a saved value, and
+	// submitting it would persist a value the user never chose.
+	Default string `json:"default,omitempty"`
+	// HasSaved reports that a SECRET field currently has a stored value, which
+	// is everything a client may know about it.
+	HasSaved bool `json:"has_saved,omitempty"`
 }
 
 // CommandsView is the extension-command pane: every slash command an extension

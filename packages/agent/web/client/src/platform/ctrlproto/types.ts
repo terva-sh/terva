@@ -704,6 +704,29 @@ export interface ExtensionInfo {
   tools?: number
   commands?: number
   note?: string
+  has_config?: boolean
+  // config is the declared schema with the user's saved values folded in — the
+  // whole form, ready to render. It travels because the browser has no
+  // filesystem to read a manifest from, so `has_config` used to advertise a
+  // capability with nothing behind it.
+  config?: ExtensionConfigField[]
+}
+
+// One row of an extension's config form. A SECRET field never carries `saved`,
+// only `has_saved` — the stored value stays on the host, and submitting a blank
+// secret means "leave it alone", never "clear it". Do not add a code path that
+// expects a secret's value to be here; there is deliberately none.
+export interface ExtensionConfigField {
+  key: string
+  label?: string
+  type?: string // string | bool | int | select | secret
+  description?: string
+  required?: boolean
+  secret?: boolean
+  options?: string[]
+  saved?: string
+  default?: string
+  has_saved?: boolean
 }
 
 export interface ExtensionsView {

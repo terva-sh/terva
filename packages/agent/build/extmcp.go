@@ -115,6 +115,49 @@ func ExtensionConfigSchema(cwd, name string) []extdriver.ConfigField {
 	if err != nil {
 		return nil
 	}
+	return ExtensionConfigSchemaIn(dir)
+}
+
+// ExtensionDirFor resolves where an extension lives, preferring the LIVE
+// extension's own directory over a search of the install roots.
+//
+// The running extension is the authority: it was loaded from somewhere, and it
+// remembers where. The root search is the fallback for a row with nothing
+// running behind it (a disabled or crashed extension), and it is only a
+// fallback because it cannot answer for a --ext load at all.
+func ExtensionDirFor(mgr *extensions.Manager, cwd, name string) string {
+	if mgr != nil {
+		for _, e := range mgr.All() {
+			if e.Manifest.Name == name {
+				return e.Dir
+			}
+		}
+	}
+	if dir, err := config.FindExtensionDirIn(cwd, name); err == nil {
+		return dir
+	}
+	return ""
+}
+
+// ExtensionConfigSchemaFor reads an extension's declared schema, resolving its
+// directory the reliable way first. This is what every caller should use when a
+// manager is in reach.
+func ExtensionConfigSchemaFor(mgr *extensions.Manager, cwd, name string) []extdriver.ConfigField {
+	return ExtensionConfigSchemaIn(ExtensionDirFor(mgr, cwd, name))
+}
+
+// ExtensionConfigSchemaIn reads the declared schema from a KNOWN directory.
+//
+// This is the form that works for every extension, and the name-based one above
+// is the fallback for a row with no live extension behind it. Resolving by name
+// searches the install roots, which a --ext load is outside of by construction —
+// so a vendored extension's schema was unreachable, and the config form
+// truthfully reported that it had found nothing while the manifest sat there
+// declaring fields.
+func ExtensionConfigSchemaIn(dir string) []extdriver.ConfigField {
+	if dir == "" {
+		return nil
+	}
 	raw, err := os.ReadFile(filepath.Join(dir, "extension.json"))
 	if err != nil {
 		return nil
@@ -226,6 +269,7 @@ func ListInstalledExtensions(cwd string, trusted bool, mgr *extensions.Manager) 
 				Commands:           cmdCount[m.Name],
 				Tools:              toolCount[m.Name],
 				HasConfig:          len(m.Config) > 0,
+				Dir:                filepath.Join(r.dir, e.Name()),
 			}
 			if _, err := os.Stat(filepath.Join(config.TervaHome(), "logs", "ext-"+m.Name+".log")); err == nil {
 				info.HasLog = true
@@ -253,7 +297,11 @@ func ListInstalledExtensions(cwd string, trusted bool, mgr *extensions.Manager) 
 				Language:    e.Manifest.Language,
 				Description: e.Manifest.Description,
 				LogPath:     e.LogPath,
-				Ready:       e.Ready(),
+				Dir:         e.Dir,
+				// Read from the running extension's own manifest rather than
+				// inferred from a root scan that never saw this extension.
+				HasConfig: len(ExtensionConfigSchemaIn(e.Dir)) > 0,
+				Ready:     e.Ready(),
 			})
 		}
 		out = appendUnrootedExtensions(out, seen, live, cmdCount, toolCount)
@@ -355,7 +403,12 @@ func ListMCPServers(cwd string, trusted bool, mgr *mcp.Manager) []mcp.Info {
 // readiness lives behind unexported state) so the dedup logic is unit-testable.
 type sessionExt struct {
 	Name, Version, Language, Description, LogPath string
-	Ready                                         bool
+	// Dir is the extension's own directory, straight from the loader. For a
+	// --ext load it is the only way to find the manifest again: it is outside
+	// every install root by definition.
+	Dir       string
+	HasConfig bool
+	Ready     bool
 }
 
 // appendUnrootedExtensions adds a "session"-scoped row for each live extension
@@ -379,6 +432,8 @@ func appendUnrootedExtensions(out []extensions.Info, seen map[string]bool, live 
 			Running:       e.Ready,
 			Commands:      cmdCount[e.Name],
 			Tools:         toolCount[e.Name],
+			HasConfig:     e.HasConfig,
+			Dir:           e.Dir,
 		}
 		if e.LogPath != "" {
 			if _, err := os.Stat(e.LogPath); err == nil {

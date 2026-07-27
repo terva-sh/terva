@@ -11,6 +11,7 @@ import type {
   ContextNode,
   Decision,
   ExtensionsView,
+  ExtensionConfigField,
   FilesListResult,
   LoreEntry,
   LoreView,
@@ -3575,8 +3576,132 @@ export function ExtensionsBody({
             <span>{tn(e.commands ?? 0, '%d command', '%d commands')}</span>
           </div>
           {e.note && <div class="ext-note">{e.note}</div>}
+          {e.has_config && (e.config ?? []).length > 0 && (
+            <ExtensionConfigForm
+              name={e.name}
+              fields={e.config ?? []}
+              onSave={(values) =>
+                onAction('extensions', 'set_config', { name: e.name, values: JSON.stringify(values) })
+              }
+            />
+          )}
         </div>
       ))}
+    </div>
+  )
+}
+
+// ExtensionConfigForm is the browser's half of an extension's declared config.
+//
+// It edits WORKING STRINGS and submits them as-is; the daemon types each one
+// against the schema before persisting. That split is deliberate — three
+// clients each deciding whether a field is a bool is three chances to write a
+// config the extension cannot read.
+//
+// A secret seeds EMPTY even when one is stored, and the placeholder says so.
+// The stored value is never sent here, and submitting the field blank leaves it
+// untouched on the host — which is what lets someone change the field next to a
+// secret without ever being handed it.
+export function ExtensionConfigForm({
+  name,
+  fields,
+  onSave,
+}: {
+  name: string
+  fields: ExtensionConfigField[]
+  onSave: (values: Record<string, string>) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [working, setWorking] = useState<Record<string, string>>({})
+  const [saved, setSaved] = useState(false)
+
+  // Seed from the server's values each time the form opens, so a re-open after
+  // a save shows what is actually stored rather than the last edit.
+  const start = () => {
+    const next: Record<string, string> = {}
+    for (const f of fields) next[f.key] = f.secret ? '' : (f.saved ?? '')
+    setWorking(next)
+    setSaved(false)
+    setOpen(true)
+  }
+  const set = (k: string, v: string) => setWorking((w) => ({ ...w, [k]: v }))
+
+  if (!open)
+    return (
+      <div class="ext-cfg-row">
+        <button class="btn sm" onClick={start}>
+          {t('Configure')}
+        </button>
+      </div>
+    )
+
+  return (
+    <div class="ext-cfg">
+      {fields.map((f) => (
+        <div class="ext-cfg-field" key={f.key}>
+          <label class="ext-cfg-label" for={`cfg-${name}-${f.key}`}>
+            {f.label || f.key}
+            {f.required && <span class="ext-cfg-req">*</span>}
+          </label>
+          {f.type === 'bool' ? (
+            <button
+              id={`cfg-${name}-${f.key}`}
+              class={`set-toggle${working[f.key] === 'true' ? ' on' : ''}`}
+              role="switch"
+              aria-checked={working[f.key] === 'true'}
+              onClick={() => set(f.key, working[f.key] === 'true' ? 'false' : 'true')}
+            >
+              <span class="set-knob" />
+            </button>
+          ) : f.type === 'select' ? (
+            <select
+              id={`cfg-${name}-${f.key}`}
+              class="set-input"
+              value={working[f.key] ?? ''}
+              onChange={(ev) => set(f.key, (ev.target as HTMLSelectElement).value)}
+            >
+              <option value="">{f.default ? t('default (%s)', f.default) : t('unset')}</option>
+              {(f.options ?? []).map((o) => (
+                <option value={o}>{o}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              id={`cfg-${name}-${f.key}`}
+              class="set-input"
+              type={f.secret ? 'password' : f.type === 'int' ? 'number' : 'text'}
+              value={working[f.key] ?? ''}
+              placeholder={
+                f.secret
+                  ? f.has_saved
+                    ? t('saved — leave blank to keep')
+                    : t('not set')
+                  : f.default
+                    ? t('default: %s', f.default)
+                    : ''
+              }
+              onInput={(ev) => set(f.key, (ev.target as HTMLInputElement).value)}
+            />
+          )}
+          {f.description && <div class="ext-cfg-desc">{f.description}</div>}
+        </div>
+      ))}
+      <div class="ext-cfg-actions">
+        <button
+          class="btn sm primary"
+          onClick={() => {
+            onSave(working)
+            setSaved(true)
+            setOpen(false)
+          }}
+        >
+          {t('Save')}
+        </button>
+        <button class="btn sm" onClick={() => setOpen(false)}>
+          {t('Cancel')}
+        </button>
+        {saved && <span class="ext-cfg-ok">{t('saved')}</span>}
+      </div>
     </div>
   )
 }

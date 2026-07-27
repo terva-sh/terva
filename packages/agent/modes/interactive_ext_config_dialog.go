@@ -12,11 +12,22 @@ import (
 
 // openExtConfigDialog populates and shows the config form for one extension.
 func (i *Interactive) openExtConfigDialog(name string) {
-	if i.extConfigDialog == nil || i.cfg.ExtensionConfigFields == nil {
+	if i.extConfigDialog == nil {
 		i.setStatusErr(i18n.T("extension config is not available in this build"))
 		return
 	}
-	fields := i.cfg.ExtensionConfigFields(name)
+	// Prefer the wire: the daemon owns the manifests and config.json, and on an
+	// attached terminal the local disk is a different machine's.
+	var fields []dialogs.ConfigField
+	switch {
+	case i.cfg.Carrier != nil:
+		fields = i.carrierExtConfigFields(name)
+	case i.cfg.ExtensionConfigFields != nil:
+		fields = i.cfg.ExtensionConfigFields(name)
+	default:
+		i.setStatusErr(i18n.T("extension config is not available in this build"))
+		return
+	}
 	if len(fields) == 0 {
 		// This dialog only opens from the /extensions list's config action,
 		// which is gated on the manifest declaring a schema. An empty form
@@ -37,17 +48,29 @@ func (i *Interactive) applyExtConfig(act dialogs.ExtConfigAction) {
 	if !act.Save {
 		return
 	}
-	if i.cfg.SetExtensionConfig == nil {
+	// One round trip on the carrier path: the daemon persists AND applies, so
+	// there is no window where the values are on disk but not in the running
+	// extension. The local path keeps its two steps — it is the same process,
+	// so there is no window to close.
+	switch {
+	case i.cfg.Carrier != nil:
+		if err := i.applyCarrierExtConfig(act.Name, act.Values); err != nil {
+			i.setStatusErr(err.Error())
+		} else {
+			i.setStatusOK(act.Name + " config saved")
+		}
+	case i.cfg.SetExtensionConfig != nil:
+		if err := i.cfg.SetExtensionConfig(act.Name, act.Values); err != nil {
+			i.setStatusErr(err.Error())
+		} else {
+			if i.cfg.ApplyExtensionConfig != nil {
+				i.cfg.ApplyExtensionConfig(act.Name)
+			}
+			i.setStatusOK(act.Name + " config saved")
+		}
+	default:
 		i.setStatusErr(i18n.T("extension config is not available in this build"))
 		return
-	}
-	if err := i.cfg.SetExtensionConfig(act.Name, act.Values); err != nil {
-		i.setStatusErr(err.Error())
-	} else {
-		if i.cfg.ApplyExtensionConfig != nil {
-			i.cfg.ApplyExtensionConfig(act.Name)
-		}
-		i.setStatusOK(act.Name + " config saved")
 	}
 	// The extension may have just become runnable (a required value filled),
 	// so refresh the /extensions list underneath — from the surface on the

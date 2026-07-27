@@ -2,6 +2,7 @@ package modes
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -950,6 +951,57 @@ func (i *Interactive) carrierListExtensions() []ExtInfo {
 		})
 	}
 	return out
+}
+
+// carrierExtConfigFields pulls one extension's config form off the extensions
+// surface.
+//
+// The form used to be built here from local disk, which is correct only when
+// the terminal and the daemon are the same process. Attached to a remote
+// daemon it read THIS machine's manifests and THIS machine's config.json —
+// the wrong filesystem, answering about the wrong extensions — so the hooks
+// were simply left unwired and the form was unavailable. Now the host builds
+// it and this renders what it is handed, which is the same thing the browser
+// gets.
+func (i *Interactive) carrierExtConfigFields(name string) []dialogs.ConfigField {
+	sf, err := i.cfg.Carrier.Surface(context.Background(), i.carrierSession(), "extensions")
+	if err != nil || sf.Extensions == nil {
+		return nil
+	}
+	for _, e := range sf.Extensions.Extensions {
+		if e.Name != name {
+			continue
+		}
+		out := make([]dialogs.ConfigField, 0, len(e.Config))
+		for _, f := range e.Config {
+			out = append(out, dialogs.ConfigField{
+				Key:         f.Key,
+				Label:       f.Label,
+				Type:        f.Type,
+				Description: f.Description,
+				Required:    f.Required,
+				Secret:      f.Secret,
+				Options:     f.Options,
+				Saved:       f.Saved,
+				Default:     f.Default,
+				HasSaved:    f.HasSaved,
+			})
+		}
+		return out
+	}
+	return nil
+}
+
+// applyCarrierExtConfig submits a form through the extensions surface. The
+// daemon types the values against the schema and persists them, then pushes
+// them to the running extension — one write, by the process that owns the file.
+func (i *Interactive) applyCarrierExtConfig(name string, values map[string]string) error {
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	return i.cfg.Carrier.SurfaceAction(context.Background(), i.carrierSession(), "extensions", "set_config",
+		map[string]string{"name": name, "values": string(raw)})
 }
 
 // applyCarrierExtensionToggle persists + applies an extension toggle through

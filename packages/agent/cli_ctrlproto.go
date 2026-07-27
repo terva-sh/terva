@@ -472,17 +472,12 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		// helpers the legacy entry wires. Only APPLYING a saved config to the
 		// running extension is daemon work, so that rides the extensions
 		// surface's "config" action (which the web client shares).
+		// The config form is NOT wired here any more: it rides the extensions
+		// surface, so the terminal reads and submits it exactly the way the
+		// browser does. Keeping a local-disk shortcut for the in-process case
+		// would be a second implementation of the same form — and the one that
+		// only ran here is precisely the one that would rot.
 		ReadLogTail: build.ReadLogTail,
-		ExtensionConfigFields: func(name string) []modes.ConfigField {
-			return extensionConfigFields(w.CWD(), name)
-		},
-		SetExtensionConfig: func(name string, values map[string]string) error {
-			return setExtensionConfigFromForm(w.CWD(), name, values)
-		},
-		ApplyExtensionConfig: func(name string) {
-			_ = w.SurfaceAction(ctx, iv.CarrierSessionID(), "extensions", "config",
-				map[string]string{"name": name})
-		},
 	})
 
 	// From here on the TUI owns the screen: route daemon diagnostics into the

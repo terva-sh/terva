@@ -48,4 +48,17 @@ type Info struct {
 	// HasConfig is true when the extension declares a `config` schema in
 	// its manifest — the 'c' key then opens the per-extension config form.
 	HasConfig bool
+
+	// Dir is where the extension actually lives, as the loader resolved it.
+	//
+	// It is here because the alternative — searching the install roots for a
+	// directory whose name matches — cannot find an extension that was loaded
+	// by path (`--ext /opt/vendor/thing`), which is exactly how a deployed
+	// terva vendors the extensions it ships with. Those extensions could
+	// therefore never be configured: the schema lookup searched two roots the
+	// extension was not in, found nothing, and reported "no configurable
+	// settings" about a manifest that declared several.
+	//
+	// Empty for a row the scan produced without a live extension behind it.
+	Dir string
 }
