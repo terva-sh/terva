@@ -159,6 +159,10 @@ export interface SessionInfo {
   trusted?: boolean
   context_tokens?: number
   context_window?: number
+  // subscription = the session's credential is a subscription (OAuth) login
+  // rather than a metered API key — tag the cost display "(sub)". Resolved
+  // daemon-side, where the credential lives.
+  subscription?: boolean
   // live = materialized in memory (subscribable); busy = a turn in flight.
   // Absent from an old daemon — read as unknown, not idle/cold. The board keys
   // its tile status off these (orchestration frontend stage 4.0).
@@ -519,6 +523,16 @@ export interface TaskInfo {
   // daemon serves it; the tile hides it otherwise, so the lane renders native
   // children today and lights up workers with no board change.
   backend?: string
+  dir?: string // agent working directory
+  // deliverable is the schema-validated structured report for a spawn that
+  // carried a deliverable schema; deliverable_error says why the contract was
+  // NOT met. Both absent for schema-less spawns and old daemons.
+  deliverable?: unknown
+  deliverable_error?: string
+  // lines is the full in-memory transcript (capped daemon-side at 2000 lines
+  // per agent) — what a transcript viewer scrolls. The list pane only needs
+  // tail; a carrier pays for lines only when a viewer asks.
+  lines?: string[]
 }
 
 export interface TaskList {
@@ -704,7 +718,15 @@ export interface ExtensionInfo {
   tools?: number
   commands?: number
   note?: string
+  // The per-scope toggle detail behind the enabled rollup, so a client can
+  // offer the same global (manifest) vs project (config) toggles the TUI does —
+  // status alone can't say WHICH scope disabled an extension.
+  global_enabled?: boolean
+  project_disabled?: boolean
+  user_config_disabled?: boolean
   has_config?: boolean
+  // has_log: a log file exists — offer the log viewer key.
+  has_log?: boolean
   // config is the declared schema with the user's saved values folded in — the
   // whole form, ready to render. It travels because the browser has no
   // filesystem to read a manifest from, so `has_config` used to advertise a
@@ -766,6 +788,12 @@ export interface MCPServerInfo {
   enabled: boolean
   tools?: number
   note?: string
+  // The per-scope toggle detail behind the enabled/status rollup (status
+  // collapses user- and project-disabled into one "disabled"), plus the live
+  // connection ground truth a masked status can't carry.
+  user_disabled?: boolean
+  project_disabled?: boolean
+  connected?: boolean
 }
 
 export interface MCPView {
@@ -1053,8 +1081,9 @@ export interface CardsListResult {
   cards: CardSummary[]
 }
 
-// Group is a membership bucket the library browses by (Go ctrlproto.Group),
-// shared by the card-group and session-group namespaces. members are the LIVE
+// Group is a membership bucket the library browses by (Go ctrlproto.GroupView —
+// named GroupView there because Group is already that package's method-group
+// type), shared by the card-group and session-group namespaces. members are the LIVE
 // ids only (a card/session deleted since it was filed is filtered out), so a
 // count is just members.length. Distinct from a card's embedded CCv2 tags.
 export interface Group {
@@ -1269,7 +1298,9 @@ export interface WorldExport {
 
 // WorldImportParams drives worlds.import: a World bundle upload (base64).
 export interface WorldImportParams {
-  bytes: string
+  // bytes (base64) or path (a file on the daemon's disk) — one must be present.
+  bytes?: string
+  path?: string
 }
 
 // CardExport is a card serialized for download: a CCv2 PNG or JSON. bytes is
@@ -1518,8 +1549,21 @@ export interface WireEscalation {
   detail?: string // failure cause, on a failed swap
 }
 
+// ReplayState is a replay session's transport (play/pause/seek/speed), carried
+// on 'replay_state' events so every client's scrubber converges. The web has no
+// replay surface today — mirrored because it is on the wire, not because
+// anything here reads it yet.
+export interface ReplayState {
+  playing: boolean
+  position: number // index of the next frame to emit
+  total: number // frames in the scene
+  speed: number // delay multiplier (2 = twice as fast)
+  mode?: string // effective | raw
+}
+
 export interface WireEvent {
   type: string
+  step?: number // turn_start
   delta?: string
   id?: string
   name?: string
@@ -1527,6 +1571,9 @@ export interface WireEvent {
   text?: string
   is_error?: boolean
   content?: WireBlock[]
+  // tool_result line-change counts (the status bar's Δ segment)
+  lines_added?: number
+  lines_removed?: number
   usage?: WireUsage
   cumulative?: WireUsage
   message?: WireMessage
@@ -1546,6 +1593,7 @@ export interface WireEvent {
   locale?: string
   notice?: Notice
   auth?: AuthState
+  replay?: ReplayState
   stall?: WireStall
   escalation?: WireEscalation
 }
