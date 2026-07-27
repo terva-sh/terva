@@ -11,6 +11,21 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.15](https://github.com/terva-sh/terva/releases/tag/v0.126.15) — 2026-07-26
+
+### Features
+
+- core,tui,web,acp: a blocked message says so, everywhere, and quotes what it blocked
+- tools: terva_status names its extensions, and an update stops restating the roster
+
+### Fixes
+
+- build,persona,ctrlproto: three things that were quietly wrong
+
+### Other
+
+- modes,workspace: one swarm watcher, not two, and the survivor gets the fixes
+
 ## [v0.126.14](https://github.com/terva-sh/terva/releases/tag/v0.126.14) — 2026-07-26
 
 ### Features
