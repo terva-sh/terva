@@ -256,6 +256,18 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 	defer client.Close()
 	go func() { _ = client.Run(runCtx) }()
 
+	// Say what we are waiting for. Everything below — the handshake, then
+	// sessions.list — happens BEFORE the TUI is constructed, so until it paints
+	// there is no renderer to show a spinner in and the terminal is simply
+	// blank. That silence can last the full attachConnectTimeout, and a blank
+	// terminal for eight seconds reads as a hung command rather than as a
+	// connection being made. (The web panel had the mirror-image problem: it
+	// painted immediately and filled the wait with empty lists.)
+	//
+	// stderr, untranslated, matching the discovery notice above: this is boot
+	// diagnostics on the way to a screen that replaces it.
+	fmt.Fprintf(os.Stderr, "terva attach: connecting to %s…\n", endpoint)
+
 	// First handshake, bounded: a wrong endpoint should say so, not spin.
 	deadline := time.Now().Add(attachConnectTimeout)
 	for !client.Connected() {
@@ -276,6 +288,11 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 	}
 	hello, _ := client.ServerHello()
 	svc := client.Service()
+
+	// The handshake is not the wait: sessions.list still has to answer before
+	// there is anything to attach to, and on a large workspace that is the
+	// longer half. Name it, so the remaining silence is accounted for.
+	fmt.Fprintln(os.Stderr, "terva attach: connected — loading this workspace's sessions…")
 
 	// Session binding, PWA-style: an explicit --resume <id> wins, else the
 	// daemon's current session, else the newest, else a fresh one.
