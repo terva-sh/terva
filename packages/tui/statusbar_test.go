@@ -173,18 +173,48 @@ func TestStatusBarTaskGlanceSegment(t *testing.T) {
 	}
 }
 
-func TestStatusBarNoYoloTag(t *testing.T) {
-	lines := StatusBar(StatusBarParams{
-		Theme:    Dark,
-		Provider: "openai",
-		Model:    "gpt-5.5",
-		CWD:      "/tmp/x",
-		NoYolo:   true,
-		Cols:     200,
+// The approval posture is the one segment a user must be able to trust at a
+// glance, so it gets asserted rather than assumed.
+//
+// This replaces TestStatusBarNoYoloTag, which drove the same segment through a
+// NoYolo bool. That field was superseded by ApprovalMode and its last writer
+// was InteractiveConfig.NoYolo — nil under every frontend once the direct
+// driver went away — so the tag it rendered could not appear. The successor had
+// no test of its own; this is it.
+func TestStatusBarApprovalModeTag(t *testing.T) {
+	tag := func(mode string) string {
+		return stripANSI(strings.Join(StatusBar(StatusBarParams{
+			Theme:        Dark,
+			Provider:     "openai",
+			Model:        "gpt-5.5",
+			CWD:          "/tmp/x",
+			ApprovalMode: mode,
+			Cols:         200,
+		}), "\n"))
+	}
+
+	if got := tag("workspace"); !strings.Contains(got, "workspace mode") {
+		t.Errorf("approval-mode tag missing: %q", got)
+	}
+
+	// Yolo runs every tool without asking, so it must render — and in the
+	// warning color, which is the whole reason it is a separate arm.
+	yolo := StatusBar(StatusBarParams{
+		Theme: Dark, Provider: "openai", Model: "gpt-5.5", CWD: "/tmp/x",
+		ApprovalMode: "yolo", Cols: 200,
 	})
-	joined := stripANSI(strings.Join(lines, "\n"))
-	if !strings.Contains(joined, "yolo mode disabled") {
-		t.Fatalf("no-yolo tag missing: %q", joined)
+	if got := stripANSI(strings.Join(yolo, "\n")); !strings.Contains(got, "yolo mode") {
+		t.Fatalf("yolo tag missing: %q", got)
+	}
+	warn := Dark.FG256(Dark.Warning, "yolo mode")
+	if !strings.Contains(strings.Join(yolo, "\n"), warn) {
+		t.Error("yolo must render in the warning color — the riskiest posture cannot be the quiet one")
+	}
+
+	// Empty means the carrier has not reported one yet; showing a mode we do
+	// not know would be worse than showing none.
+	if got := tag(""); strings.Contains(got, "mode") {
+		t.Errorf("no tag should render before the mode is known: %q", got)
 	}
 }
 

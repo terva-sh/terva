@@ -6,7 +6,6 @@ import (
 
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/swarm"
-	"terva.sh/terva/packages/agent/worker"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -29,12 +28,11 @@ import (
 // When neither backend is available the command tells the user the
 // feature is disabled instead of pretending to work.
 func (i *Interactive) runSwarm(ctx context.Context, args []string) {
-	// One callback set serves the whole dispatch: the legacy path drives the
-	// in-process *swarm.Swarm, the carrier path drives the tasks surface
+	// One callback set serves the whole dispatch, driving the tasks surface
 	// (spawn/stop/remove/send/resume verbs + the cached snapshot). spawn and
 	// resume return the affected agent's id when the backend can know it —
-	// surface actions carry no result payload, so the carrier's spawn returns
-	// "" and the status message omits the id (it shows up in the dashboard).
+	// surface actions carry no result payload, so spawn returns "" and the
+	// status message omits the id (it shows up in the dashboard).
 	var (
 		snapshotFn func() []swarm.AgentSnapshot
 		stopFn     func(id string) error
@@ -66,36 +64,6 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		// show current rows.
 		i.invalidateCarrierTasks()
 		i.fetchCarrierTasks()
-	case i.cfg.Swarm != nil:
-		snapshotFn = i.cfg.Swarm.SnapshotAll
-		stopFn = i.cfg.Swarm.Stop
-		removeFn = i.cfg.Swarm.Remove
-		spawnFn = func(task, model, provider, persona, backend string) (string, error) {
-			// A foreign backend runs through the same gate the model's swarm_spawn
-			// tool and the board's tasks-surface spawn use (worker.AllowSpawn), so
-			// this local /swarm path can't dispatch a worker they couldn't. Native
-			// (empty backend) stays ungated, as every /swarm spawn always was.
-			if backend != "" {
-				if err := worker.AllowSpawn(backend); err != nil {
-					return "", err
-				}
-			}
-			a, err := i.cfg.Swarm.SpawnReq(ctx, swarm.SpawnRequest{
-				Task: task, Model: model, Provider: provider, Persona: persona, Backend: backend,
-			})
-			if err != nil {
-				return "", err
-			}
-			return a.ID, nil
-		}
-		sendFn = i.cfg.Swarm.SendUserTurn
-		resumeFn = func(id string) (string, error) {
-			a, err := i.cfg.Swarm.Resume(ctx, id)
-			if err != nil {
-				return "", err
-			}
-			return a.ID, nil
-		}
 	default:
 		i.mu.Lock()
 		i.statusErr = i18n.T("swarm is disabled in this build")

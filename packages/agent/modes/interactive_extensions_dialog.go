@@ -10,19 +10,15 @@ import (
 // persisters, reload live, then refresh the list in place so the new
 // state (including a failed respawn) shows immediately.
 
-// openExtensionsDialog populates and shows the /extensions dialog.
+// openExtensionsDialog populates and shows the /extensions dialog. The
+// inventory rides the carrier's extensions surface — the only source since the
+// direct driver's removal took the host-callback path's last caller with it.
 func (i *Interactive) openExtensionsDialog() {
-	if i.cfg.Carrier != nil && i.extensionsDialog != nil {
-		// ctrlproto mode: the inventory rides the extensions surface.
-		i.extensionsDialog.Open(i.carrierListExtensions())
-		i.invalidate()
-		return
-	}
-	if i.extensionsDialog == nil || i.cfg.ListExtensions == nil {
+	if i.extensionsDialog == nil {
 		i.setStatusErr(i18n.T("extension management is not available in this build"))
 		return
 	}
-	i.extensionsDialog.Open(i.cfg.ListExtensions())
+	i.extensionsDialog.Open(i.carrierListExtensions())
 	i.invalidate()
 }
 
@@ -39,46 +35,5 @@ func (i *Interactive) applyExtensionToggle(act dialogs.ExtensionsAction) {
 		i.setStatusOK(act.Name + ": loaded via --ext for this run only — no persistent enable/disable")
 		return
 	}
-	if i.cfg.Carrier != nil {
-		i.applyCarrierExtensionToggle(act)
-		return
-	}
-
-	var err error
-	switch {
-	case act.ToggleGlobal:
-		if i.cfg.SetExtensionGlobalEnabled != nil {
-			err = i.cfg.SetExtensionGlobalEnabled(act.Name, act.On)
-		}
-	case act.ToggleProject:
-		if i.cfg.SetExtensionProjectEnabled != nil {
-			err = i.cfg.SetExtensionProjectEnabled(act.Name, act.On)
-		}
-	default:
-		return
-	}
-
-	if err != nil {
-		i.setStatusErr(err.Error())
-	} else {
-		if i.cfg.ApplyExtensionChange != nil {
-			i.cfg.ApplyExtensionChange(act.Name)
-		}
-		scope := "globally"
-		if act.ToggleProject {
-			scope = "for this project"
-		}
-		state := "enabled"
-		if !act.On {
-			state = "disabled"
-		}
-		i.setStatusOK(act.Name + " " + state + " " + scope)
-	}
-
-	// Refresh either way so the list reflects reality (config + live
-	// running state) after the attempt.
-	if i.extensionsDialog != nil && i.cfg.ListExtensions != nil {
-		i.extensionsDialog.SetItems(i.cfg.ListExtensions())
-	}
-	i.invalidate()
+	i.applyCarrierExtensionToggle(act)
 }

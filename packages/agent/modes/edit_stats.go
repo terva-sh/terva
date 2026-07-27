@@ -25,8 +25,6 @@ func (i *Interactive) swarmAgentCount() int {
 	switch {
 	case i.cfg.Carrier != nil && i.cfg.CarrierTasks:
 		rows = i.carrierTaskSnapshot()
-	case i.cfg.Swarm != nil:
-		rows = i.cfg.Swarm.SnapshotAll()
 	default:
 		return 0
 	}

@@ -532,7 +532,6 @@ func (i *Interactive) redraw() {
 		BusyPrefix:       snap.busyPrefix,
 		CWD:              i.cfg.CWD,
 		Locked:           i.cfg.Sandbox.Locked() || snap.carrierJailed,
-		NoYolo:           i.cfg.NoYolo,
 		ApprovalMode:     i.approvalModeLabel(),
 		Usage:            snap.cumUsage,
 		Subscription:     i.cfg.AuthMethod == "oauth" || snap.carrierSubscription,

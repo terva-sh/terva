@@ -53,7 +53,6 @@ type StatusBarParams struct {
 	BusyPrefix string // spinner + funny line when busy
 	CWD        string
 	Locked     bool // sandbox on?
-	NoYolo     bool // confirmation mode enabled? (legacy; ApprovalMode supersedes)
 	// ApprovalMode is the live approval mode (plan/ask/auto-edit/yolo).
 	// When non-empty it drives the tag instead of NoYolo; "yolo" shows
 	// nothing (the default needs no badge).
@@ -751,8 +750,6 @@ func segTags(p StatusBarParams) []string {
 		atoms = append(atoms, th.FG256(th.Warning, i18n.T("%s mode", p.ApprovalMode)))
 	case p.ApprovalMode != "":
 		atoms = append(atoms, th.FG256(color, i18n.T("%s mode", p.ApprovalMode)))
-	case p.NoYolo:
-		atoms = append(atoms, th.FG256(color, i18n.T("yolo mode disabled")))
 	}
 	if p.Locked {
 		atoms = append(atoms, th.FG256(color, i18n.T("jailed")))

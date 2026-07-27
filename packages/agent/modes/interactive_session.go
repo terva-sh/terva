@@ -29,34 +29,14 @@ import (
 // /migrate dialog. Project-only runs (no user dir to copy) finalize
 // the no-fallback marker right away — same rule as the CLI path.
 func (i *Interactive) openMigrateDialog() {
-	if i.cfg.Migration == nil || i.cfg.Migration.Plan == nil {
-		// The default (ctrlproto) TUI doesn't carry the interactive migrator for
-		// the pre-rename data directory — a one-time upgrade path that is now
-		// obsolete. Report it plainly rather than the cryptic host-wiring note.
-		i.mu.Lock()
-		i.statusErr = i18n.T("/migrate (the legacy data-directory migrator) isn't available in this TUI")
-		i.mu.Unlock()
-		i.invalidate()
-		return
-	}
-	st := i.cfg.Migration.Plan()
-	if st.NothingToDo {
-		i.mu.Lock()
-		i.statusOK = i18n.T("nothing to migrate — already on the terva data dir")
-		i.mu.Unlock()
-		i.invalidate()
-		return
-	}
-	if !st.UserDirApplicable && !st.AlreadyMigrated && i.cfg.Migration.Finalize != nil {
-		if err := i.cfg.Migration.Finalize(); err != nil {
-			i.mu.Lock()
-			i.statusErr = i18n.T("write the no-fallback marker: %s", err.Error())
-			i.mu.Unlock()
-			i.invalidate()
-			return
-		}
-	}
-	i.migrateDialog.Open(st)
+	// The pre-rename data directory's interactive migrator was the direct
+	// driver's; no frontend has carried it since that driver was removed, so
+	// this notice was already the only outcome. The one-time upgrade path it
+	// served is obsolete — the CLI still handles a migration if one is somehow
+	// still pending.
+	i.mu.Lock()
+	i.statusErr = i18n.T("/migrate (the legacy data-directory migrator) isn't available in this TUI")
+	i.mu.Unlock()
 	i.invalidate()
 }
 
@@ -251,7 +231,6 @@ func (i *Interactive) startNewSession() {
 		i.mu.Unlock()
 		return
 	}
-	i.resetLoreFired()
 	i.mu.Lock()
 	// The callback reset the session's transcript and cost; mirror that in
 	// the view and the status-bar meters. The pump copy is the source of

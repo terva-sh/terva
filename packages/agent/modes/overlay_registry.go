@@ -14,7 +14,6 @@ package modes
 // at the right priority position.
 
 import (
-	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -349,57 +348,10 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			render: func(cols int) []string { return i.logoutDialog.Render(i.cfg.Theme, cols) },
 		},
-		{ // zot→terva migration // rename:keep
-			active: i.migrateDialog.Active,
-			ctrlC: func() bool {
-				if i.migrateDialog.Loading() {
-					return false
-				}
-				i.migrateDialog.Close()
-				return true
-			},
-			handleKey: func(k tui.Key) bool {
-				act := i.migrateDialog.HandleKey(k)
-				switch {
-				case act.StartCopy:
-					// Make the on-disk session file whole BEFORE it gets
-					// copied, so the new dir's copy isn't missing the turns
-					// that only live in memory.
-					if i.cfg.FlushSession != nil {
-						i.cfg.FlushSession()
-					}
-					go func() {
-						res, err := i.cfg.Migration.CopyUserData()
-						i.runOnMain(func() {
-							i.migrateDialog.SetCopyResult(res, err)
-							i.invalidate()
-						})
-						i.invalidate()
-					}()
-				case act.RenameProject:
-					i.migrateDialog.SetRenameResult(i.cfg.Migration.RenameProject())
-				case act.RemoveAndExit:
-					if err := i.cfg.Migration.RemoveOldDir(); err != nil {
-						i.mu.Lock()
-						i.statusErr = i18n.T("remove old dir: %s", err.Error())
-						i.mu.Unlock()
-						i.migrateDialog.Close()
-						return false
-					}
-					// The legacy dir — including the live session file this
-					// process was writing — is gone. Exit now; cli.go skips
-					// its final flush and prints the restart message.
-					return true
-				case act.KeepOld:
-					i.mu.Lock()
-					i.statusOK = i18n.T("migrated — old dir kept; restart terva to fully switch over")
-					i.mu.Unlock()
-				}
-				return false
-			},
-			render:    func(cols int) []string { return i.migrateDialog.Render(i.cfg.Theme, cols) },
-			animating: i.migrateDialog.Loading,
-		},
+		// (The zot→terva migration overlay lived here. // rename:keep
+		// Its dialog could only be opened by openMigrateDialog, which lost its
+		// host hook with the direct driver and now only reports that the
+		// migrator is unavailable — so the overlay could never become active.)
 		{ // chat-connector ops
 			active: i.connectDialog.Active,
 			ctrlC:  func() bool { i.connectDialog.Close(); return true },

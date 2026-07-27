@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/modes/widgets"
 	"terva.sh/terva/packages/agent/skills"
@@ -25,17 +24,13 @@ import (
 
 // InteractiveConfig configures the interactive loop.
 type InteractiveConfig struct {
-	Terminal     tui.Terminal
-	Theme        tui.Theme
-	Model        string
-	Provider     string
-	AuthMethod   string // "apikey" | "oauth" — used to tag cost as (sub) in status bar
-	BaseURL      string
-	Reasoning    string
-	SystemPrompt string
-	Tools        core.Registry
-	MaxSteps     int
-	CWD          string
+	Terminal   tui.Terminal
+	Theme      tui.Theme
+	Model      string
+	Provider   string
+	AuthMethod string // "apikey" | "oauth" — used to tag cost as (sub) in status bar
+	Reasoning  string
+	CWD        string
 
 	// InlineImagesEnabled overrides terminal image rendering. nil means
 	// auto-detect and render when supported; false disables; true uses
@@ -119,10 +114,9 @@ type InteractiveConfig struct {
 	// back — see the no-new-seam rule in carrier.go.
 	Carrier        Carrier
 	CarrierSession string
-	// CarrierTasks enables /swarm on the carrier path (the tasks surface).
-	// The entry point sets it with the same gate as cfg.Swarm — withheld
-	// from immersive/no-tools sessions so the dashboard can't re-inject the
-	// coding skin there.
+	// CarrierTasks enables /swarm (the tasks surface). The entry point gates it
+	// on HasBaseWorkspaceTools — withheld from immersive/no-tools sessions so
+	// the dashboard can't re-inject the coding skin there.
 	CarrierTasks bool
 	// CarrierRemote marks the carrier as a network client of another process
 	// (terva attach) rather than the in-process workspace. Remote-only
@@ -175,26 +169,6 @@ type InteractiveConfig struct {
 	// browser is here too. Getting it wrong costs nothing worse than a browser
 	// that opens on the wrong machine and a paste-back form that still works.
 	CarrierLocal bool
-
-	// ApplyLoginStart, ApplyLogin and ApplyLogout are the host's side of a
-	// credential change: what a login MEANS beyond a secret landing on disk —
-	// registering a custom endpoint's model, promoting it to the default,
-	// re-discovering a provider's live model list, and toggling whether terva
-	// may borrow the Kimi CLI's token.
-	//
-	// One seam each, rather than the provider-specific logic that used to sit in
-	// handleAuthEvent: the daemon serving `terva web` cannot import this package,
-	// so anything spelled out here would have to be reimplemented there — and a
-	// web login that got it wrong would still report success while the thing the
-	// user just configured never appeared. See agent.ApplyLoginSuccess.
-	ApplyLoginStart func(providerID string) error
-	ApplyLogin      func(providerID string)
-	ApplyLogout     func(providerID string) error
-
-	// Migration wires /migrate to the zot→terva migration engine. // rename:keep
-	// Optional: when nil, /migrate reports that the host didn't
-	// enable it.
-	Migration *dialogs.MigrationHooks
 
 	// LoggedInProviders returns the list of provider names that
 	// currently have credentials. Used by /model to filter the
@@ -271,15 +245,11 @@ type InteractiveConfig struct {
 	// Optional: when nil, /new reports a clear error instead of no-oping.
 	NewSession func(providerName, model string) error
 
-	// ChangeCWD switches the running terva session's working directory
-	// to path. The host closes the current session, rebuilds the
-	// agent so tools / AGENTS.md / sandbox bind to the new cwd, and
-	// opens a fresh session there. Returns an error if path doesn't
-	// exist, isn't a directory, or the host can't rebuild the agent.
-	//
-	// Optional: not wired by every embedder. When nil the hidden /cd
-	// command surfaces a clear error rather than no-oping.
-	ChangeCWD func(path string) error
+	// (ChangeCWD switched the running session's working directory, rebuilding
+	// the agent against the new cwd. Only the direct driver ever supplied it;
+	// a carrier session is PINNED to its directory — sessions, trust,
+	// extensions and the permission policy all resolve from it — so the hidden
+	// /cd now says so unconditionally, which is what it already did.)
 
 	// Trusted is the Workspace Trust verdict for the launch cwd. When
 	// false the workspace is RESTRICTED: its project extensions, skills,
@@ -316,13 +286,14 @@ type InteractiveConfig struct {
 	// system prompt — so nothing further is needed for the change to take hold.
 	//
 	// It exists because /trust used to lie. The host hook was assumed to only
-	// PERSIST, with the live half done here by re-cd-ing through ChangeCWD; a
-	// host with no ChangeCWD therefore got "restart terva to load its project
+	// PERSIST, with the live half done here by re-cd-ing through a ChangeCWD
+	// hook; a host without one therefore got "restart terva to load its project
 	// extensions/skills/context". The ctrlproto hosts (the classic TUI and
-	// terva attach) have no ChangeCWD and never needed one — their Trust verb
+	// terva attach) never had that hook and never needed it — their Trust verb
 	// re-applies across every open session, daemon-side — so the message told
 	// people to restart for something that had already happened, which is how a
-	// working feature comes to be remembered as broken.
+	// working feature comes to be remembered as broken. (Being the only hosts
+	// left, they took ChangeCWD's last caller with them; it is gone now.)
 	TrustAppliesLive bool
 
 	// CurrentSessionPath returns the path of the live session file
@@ -358,66 +329,35 @@ type InteractiveConfig struct {
 	// (RefreshCompatModels and RefreshModels used to live here. They had exactly
 	// one caller between them — the login-success handler — and moved into
 	// agent.ApplyLoginSuccess with the rest of what a login means, so the daemon
-	// gets them for free rather than having to remember them.)
-
-	OnAssistant  func(m provider.Message)
-	OnToolResult func(id string, r core.ToolResult)
+	// gets them for free rather than having to remember them. ApplyLoginStart /
+	// ApplyLogin / ApplyLogout followed them there, and OnAssistant /
+	// OnToolResult went with the direct driver that used to call them — the
+	// carrier's event stream carries both.)
 
 	// Extensions, if non-nil, lets users invoke extension-registered
 	// slash commands (plus status segments, /context injection, panels,
 	// /reload-ext). Commands declared by extensions are looked up AFTER the
-	// built-in catalog so a built-in name always wins. The legacy path passes
-	// its *extensions.Manager directly; the carrier path passes a
-	// session-resolving adapter (see ExtensionHost).
+	// built-in catalog so a built-in name always wins. The carrier path passes
+	// a session-resolving adapter (see ExtensionHost).
 	Extensions ExtensionHost
 
-	// The /extensions dialog's host hooks, plumbed from the cli so this
-	// package never imports agent. ListExtensions returns the installed
-	// set + state; SetExtensionGlobalEnabled flips the manifest `enabled`
-	// flag; SetExtensionProjectEnabled adds/removes the name in this
-	// project's disable_extensions; ApplyExtensionChange surgically starts
-	// or stops just that one extension to match the new config (leaving
-	// every other extension running). All nil disables the /extensions
-	// command.
-	ListExtensions             func() []ExtInfo
-	SetExtensionGlobalEnabled  func(name string, on bool) error
-	SetExtensionProjectEnabled func(name string, on bool) error
-	ApplyExtensionChange       func(name string)
-
-	// The per-extension config form's host hooks (the 'c' key in the
-	// /extensions dialog). ExtensionConfigFields builds the form for one
-	// extension from its manifest schema + saved values;
-	// SetExtensionConfig types and persists the user's values under
-	// config.json extensions.<name>; ApplyExtensionConfig pushes the new
-	// values to the running extension (config_update). All nil disables the
-	// config form.
-	ExtensionConfigFields func(name string) []ConfigField
-	SetExtensionConfig    func(name string, values map[string]string) error
-	ApplyExtensionConfig  func(name string)
-
-	// The /mcp dialog's host hooks, plumbed from the cli the same way.
-	// ListMCP returns the configured servers + live state;
-	// SetMCPGlobalEnabled adds/removes the name in the user config's
-	// disable_mcp; SetMCPProjectEnabled does the same in this project's
-	// disable_mcp; ApplyMCPChange starts or stops just that one server to
-	// match the new config (and refreshes the tool registry). All nil
-	// disables the /mcp command.
-	ListMCP              func() []MCPInfo
-	SetMCPGlobalEnabled  func(name string, on bool) error
-	SetMCPProjectEnabled func(name string, on bool) error
-	ApplyMCPChange       func(name string)
+	// (The /extensions, per-extension-config and /mcp dialogs used to take
+	// eleven host callbacks here — ListExtensions, SetExtension*, ApplyExtension*,
+	// ListMCP, SetMCP*, ApplyMCPChange. They were the direct driver's half of
+	// those dialogs, and outlived it: every one was nil under every frontend,
+	// so each dialog's `case i.cfg.Carrier != nil` arm was the only reachable
+	// one. The dialogs now read the extensions/mcp surfaces unconditionally.)
 
 	// ReadLogTail returns the tail of a log file for the in-TUI log viewer
 	// (the 'l' key in /extensions and /mcp). kind is "ext" or "mcp". nil
 	// disables the viewer.
 	ReadLogTail func(kind, name string) []string
 
-	// Swarm, if non-nil, enables the /swarm slash command and the
-	// dashboard dialog. The cli constructs the Swarm once per
-	// interactive run and tears it down on exit. nil disables the
-	// feature entirely (used by embedders / tests that don't want
-	// subprocesses).
-	Swarm *swarm.Swarm
+	// (Swarm held the in-process *swarm.Swarm the direct driver ran agents on.
+	// /swarm and the dashboard now drive the daemon's tasks surface — see
+	// CarrierTasks — so the local engine had no caller left. The foreign-backend
+	// gate the local spawn path duplicated lives on daemon-side, in
+	// Workspace.AllowSpawn.)
 
 	// SkillSnapshot, if non-nil, returns the current list of
 	// discovered SKILL.md files. Re-invoked each time /skills opens
@@ -435,24 +375,11 @@ type InteractiveConfig struct {
 	// session, but any skill is still loadable by name (e.g. via /skill).
 	ReloadSkills func() []*skills.Skill
 
-	// LoreList, if non-nil, returns this run's active lore entries (file +
-	// card, constant + triggered) for the /lore command. nil when lore is
-	// off. Re-invoked each time /lore runs.
-	LoreList func() []lore.Entry
-
-	// LoreFired, if non-nil, returns the lore entry sources that fired on the
-	// most recent turn — shown by /lore as "fired last turn".
-	LoreFired func() []string
-
-	// LoreDropped, if non-nil, returns the lore entry sources the token
-	// budget dropped on the most recent turn — shown by /lore so budget
-	// overflow never truncates silently.
-	LoreDropped func() []string
-
-	// LoreFiredReset, if non-nil, clears the fired/dropped record. Called
-	// when the transcript is reset (/clear, /new) so /lore never reports
-	// lore that fired against a conversation that no longer exists.
-	LoreFiredReset func()
+	// (LoreList, LoreFired, LoreDropped and LoreFiredReset used to live here —
+	// the direct driver's half of /lore. /lore now reads the lore surface for
+	// the authored entries; the fired/dropped sections the last three fed were
+	// dark from the moment that driver went away. See lore_view.go for where
+	// the per-turn trace actually lives on the wire.)
 
 	// SkillCompletions, if non-nil, returns the skill names + descriptions
 	// offered as `/skill <name>` argument completions. It must be CHEAP — it
@@ -471,12 +398,6 @@ type InteractiveConfig struct {
 	// MarkChangelogShown call so the same version doesn't show
 	// again on the next launch.
 	OnChangelogDismiss func()
-
-	// NoYolo is true when --no-yolo was passed. Interactive opens
-	// a confirmation dialog before every tool call and blocks the
-	// tool until the user picks yes / always-this-tool /
-	// always-all / no. When false (default), tools run freely.
-	NoYolo bool
 }
 
 // ChangelogPayload mirrors agent.ChangelogInfo without the import
@@ -620,7 +541,6 @@ type Interactive struct {
 	sessionOpsDialog  *dialogs.SessionOpsDialog
 	sessionTreeDialog *dialogs.SessionTreeDialog
 	extPanel          *dialogs.ExtPanelDialog
-	migrateDialog     *dialogs.MigrateDialog
 	tasksDialog       *dialogs.TasksDialog
 	worktreeDialog    *dialogs.WorktreeDialog
 	workflowDialog    *dialogs.WorkflowDialog
@@ -1028,7 +948,6 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		sessionOpsDialog:  dialogs.NewSessionOpsDialog(),
 		sessionTreeDialog: dialogs.NewSessionTreeDialog(),
 		extPanel:          dialogs.NewExtPanelDialog(),
-		migrateDialog:     dialogs.NewMigrateDialog(),
 		tasksDialog:       dialogs.NewTasksDialog(),
 		worktreeDialog:    dialogs.NewWorktreeDialog(),
 		workflowDialog:    dialogs.NewWorkflowDialog(),

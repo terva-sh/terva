@@ -359,7 +359,6 @@ func (i *Interactive) slashClear(context.Context, []string, string) bool {
 			return false
 		}
 	}
-	i.resetLoreFired()
 	i.mu.Lock()
 	i.toolCalls = map[string]*tui.ToolCallView{}
 	i.toolOrder = nil
@@ -410,42 +409,13 @@ func (i *Interactive) slashStudy(ctx context.Context, parts []string, raw string
 // rather than parts, so paths with spaces survive. The host's
 // ChangeCWD hook handles validation, session close + reopen, agent
 // rebuild, sandbox re-rooting, and re-jail-if-jailed semantics.
-func (i *Interactive) slashCD(_ context.Context, parts []string, raw string) bool {
-	if i.cfg.ChangeCWD == nil {
-		// The default (ctrlproto) TUI pins each session to its working
-		// directory — sessions, trust, extensions, and the permission policy
-		// all resolve from it — so mid-session /cd isn't offered. Start terva
-		// in the target directory instead.
-		i.setStatusErr(i18n.T("/cd isn't available here — each session is pinned to its working directory; start terva in the target directory instead"))
-		return false
-	}
-	path := strings.TrimSpace(strings.TrimPrefix(raw, parts[0]))
-	if path == "" {
-		i.setStatusErr(i18n.T("/cd: missing path"))
-		return false
-	}
-	if err := i.cfg.ChangeCWD(path); err != nil {
-		i.mu.Lock()
-		i.statusErr = i18n.T("/cd: %s", err.Error())
-		i.statusOK = ""
-		i.mu.Unlock()
-		return false
-	}
-	// ChangeCWD has already updated i.cfg.CWD and swapped the
-	// agent + session. Reset transient TUI state so the new
-	// session opens clean.
-	i.mu.Lock()
-	i.toolCalls = map[string]*tui.ToolCallView{}
-	i.toolOrder = nil
-	i.turns.ResetGates()
-	i.helpBlock = nil
-	i.parkedTurn = 0
-	i.statusOK = i18n.T("cwd %s", i.cfg.CWD)
-	i.statusErr = ""
-	i.mu.Unlock()
-	i.fileSuggest.Reset()
-	i.fileSuggest.SetCWD(i.cfg.CWD)
-	i.invalidate()
+func (i *Interactive) slashCD(_ context.Context, _ []string, _ string) bool {
+	// Each session is pinned to its working directory — sessions, trust,
+	// extensions and the permission policy all resolve from it — so mid-session
+	// /cd isn't offered. This used to be a nil-check on a ChangeCWD host hook,
+	// but the direct driver that supplied it is gone and nothing else ever did,
+	// so this message was already the only outcome.
+	i.setStatusErr(i18n.T("/cd isn't available here — each session is pinned to its working directory; start terva in the target directory instead"))
 	return false
 }
 
@@ -542,30 +512,12 @@ func (i *Interactive) slashTrust(_ context.Context, parts []string, _ string) bo
 		return false
 	}
 
-	// Live re-apply: re-cd into the same dir rebuilds the agent with the
-	// now-trusted Resolve (project skills + context load immediately).
-	// Project EXTENSIONS need a /reload-ext (or restart) to spawn — the
-	// extension subprocesses aren't re-discovered by an agent rebuild.
-	// ChangeCWD already swaps agent + session and resets transient state.
-	if i.cfg.ChangeCWD != nil {
-		if err := i.cfg.ChangeCWD(cwd); err != nil {
-			i.setStatusOK("trusted " + cwd + " — restart terva to load its project extensions/skills/context")
-			return false
-		}
-		i.mu.Lock()
-		i.toolCalls = map[string]*tui.ToolCallView{}
-		i.toolOrder = nil
-		i.turns.ResetGates()
-		i.helpBlock = nil
-		i.parkedTurn = 0
-		i.statusOK = i18n.T("trusted %s — project skills/context loaded (/reload-ext for project extensions)", i.cfg.CWD)
-		i.statusErr = ""
-		i.mu.Unlock()
-		i.fileSuggest.Reset()
-		i.fileSuggest.SetCWD(i.cfg.CWD)
-		i.invalidate()
-		return false
-	}
+	// No live re-apply here: it used to re-cd into the same directory to rebuild
+	// against the now-trusted Resolve, through the same ChangeCWD host hook /cd
+	// used — which no frontend has supplied since the direct driver's removal,
+	// so this restart notice was already the only outcome. The daemon applies
+	// trust live through control.trust (cfg.TrustAppliesLive, handled above);
+	// that is the path a live re-apply belongs on if one is wanted again.
 	i.setStatusOK("trusted " + cwd + " — restart terva to load its project extensions/skills/context")
 	return false
 }
