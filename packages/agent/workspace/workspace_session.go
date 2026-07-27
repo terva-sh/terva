@@ -2,9 +2,9 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,10 +85,9 @@ type wsSession struct {
 	titleGenerated bool
 	persona        string
 	turnCtx        context.Context
-	turnCancel     context.CancelFunc // non-nil while a turn runs
-	curCallID      string             // the tool call currently at the gate (recordCall)
-	pendPerm       map[string]chan core.ConfirmDecision
-	pendAsk        map[string]chan core.UserAnswer
+	turnCancel     context.CancelFunc                     // non-nil while a turn runs
+	permPark       core.ParkTable[core.ConfirmDecision]   // parked webConfirmer/workerConfirmer waits
+	askPark        core.ParkTable[core.UserAnswer]        // parked webAsker waits
 	permReq        map[string]ctrlproto.PermissionRequest // details for the snapshot
 	askReq         map[string]ctrlproto.AskRequest        // details for the snapshot
 	askSeq         uint64
@@ -202,8 +201,6 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		// name is theirs to replace.
 		title:          sess.Meta.Title,
 		titleGenerated: sess.TitleGenerated,
-		pendPerm:       map[string]chan core.ConfirmDecision{},
-		pendAsk:        map[string]chan core.UserAnswer{},
 		permReq:        map[string]ctrlproto.PermissionRequest{},
 		askReq:         map[string]ctrlproto.AskRequest{},
 		extPanels:      map[string]*webPanel{},
@@ -235,9 +232,22 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		// allow), re-apply live so every session honours it without a restart,
 		// and refresh an open pane. addUserPermissionRule is idempotent, so a
 		// repeated grant is a no-op.
-		gate.SetPersist(func(tool string) {
+		gate.SetPersist(func(tool, argsPattern string) {
+			// argsPattern narrows the rule to the derived command scope
+			// ("^git status(?:\s|$)"); "" is the blanket grant. The pattern
+			// normally round-trips from our own deriver, but it crosses the
+			// wire through the client, so verify it still compiles rather
+			// than persisting a rule the compile layer would drop with a
+			// warning on every startup.
+			if argsPattern != "" {
+				if _, err := regexp.Compile(argsPattern); err != nil {
+					s.diag(fmt.Sprintf("note: ignoring always-allow rule for %q: bad args pattern %q: %v", tool, argsPattern, err))
+					return
+				}
+			}
 			if err := addUserPermissionRule(config.PermissionRuleConfig{
 				Tool:     tool,
+				Args:     argsPattern,
 				Decision: string(core.RuleAllow),
 			}); err != nil {
 				s.diag(fmt.Sprintf("note: could not save always-allow rule for %q: %v", tool, err))
@@ -246,6 +256,11 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 			s.ws.refreshAllPolicies()
 			s.ws.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("permissions"))
 		})
+		// The deriver that turns a bash call into the scoped "always allow
+		// <command>" options the dialog offers; bash-only, injected here so
+		// core stays free of shell parsing (same layering as the policy's
+		// DecomposeCommand).
+		gate.SetScopeDeriver(build.DeriveGrantScopes)
 		r.AdoptReadOnlySet(pol.ReadOnly)
 		// Retain it: every later rebuild re-merges extension and MCP tools, and
 		// MergeToolsForMode registers a read_only tool's name into whichever set
@@ -359,16 +374,12 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		s.model = r.Model
 	}
 
-	// Canonical tool-call ladder (hooks → gate → ext intercept). recordCall
-	// stays OUTSIDE the ladder so the web Confirmer learns the call id before
-	// gate.Check runs (the ACP §13 correlation seam). Tools execute one at a
-	// time, so exactly one call is current when Confirm fires.
+	// Canonical tool-call ladder (hooks → gate → ext intercept). The gate
+	// hands the call id straight to the confirmer (ConfirmWithCall), so no
+	// "current call" session state exists to collide when a host_tool_call
+	// approval parks concurrently with a model call's.
 	hookEng := w.hookEng
-	ladder := build.BuildBeforeToolExecute(w.ctx, hookEng, gate, extMgr)
-	ag.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
-		s.recordCall(call.ID)
-		return ladder(call)
-	}
+	ag.BeforeToolExecute = build.BuildBeforeToolExecute(w.ctx, hookEng, gate, extMgr)
 	build.WireHostToolDispatcher(ag, extMgr, gate)
 	if extMgr != nil {
 		ag.BeforeTurn = func(step int) (bool, string) {
@@ -1977,14 +1988,6 @@ func (s *wsSession) busy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.turnCancel != nil
-}
-
-// recordCall notes the tool call about to be gated, so the web Confirmer can
-// key its broadcast permission request to it.
-func (s *wsSession) recordCall(id string) {
-	s.mu.Lock()
-	s.curCallID = id
-	s.mu.Unlock()
 }
 
 func (s *wsSession) broadcast(ev ctrlproto.Event) { s.hub.broadcast(ev) }

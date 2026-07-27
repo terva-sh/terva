@@ -186,10 +186,10 @@ func TestHeadlessGatePlanModeAllowsReadOnly(t *testing.T) {
 	if gate == nil {
 		t.Fatal("plan mode must build a gate")
 	}
-	if ok, _, _ := gate.Check("read", nil, "f.txt"); !ok {
+	if ok, _, _ := gate.Check("read", nil, "f.txt", ""); !ok {
 		t.Error("plan in headless should allow read")
 	}
-	ok, reason, _ := gate.Check("bash", nil, "ls")
+	ok, reason, _ := gate.Check("bash", nil, "ls", "")
 	if ok {
 		t.Error("plan in headless must refuse bash")
 	}
@@ -209,11 +209,11 @@ func TestHeadlessGateAllowRuleRunsWithoutPrompt(t *testing.T) {
 		t.Fatal("ask mode must build a gate")
 	}
 	okArgs, _ := json.Marshal(map[string]string{"command": "git status"})
-	if ok, _, _ := gate.Check("bash", okArgs, "git status"); !ok {
+	if ok, _, _ := gate.Check("bash", okArgs, "git status", ""); !ok {
 		t.Error("explicit allow rule should run headless without a prompt")
 	}
 	otherArgs, _ := json.Marshal(map[string]string{"command": "git push"})
-	if ok, _, _ := gate.Check("bash", otherArgs, "git push"); ok {
+	if ok, _, _ := gate.Check("bash", otherArgs, "git push", ""); ok {
 		t.Error("unmatched call in ask mode must refuse headless")
 	}
 }

@@ -415,6 +415,26 @@ func decomposeBashForPolicy(toolName string, args json.RawMessage) []json.RawMes
 	return out
 }
 
+// DeriveGrantScopes is the narrow-grant deriver hosts install on a
+// ConfirmGate (core.ConfirmGate.SetScopeDeriver): for a bash call it turns
+// the command into the anchored "always allow <command>" options the
+// permission dialog offers next to the blanket grant. Bash-only on
+// purpose — other tools' args have no command grammar to anchor on, and
+// mode defaults already auto-allow the read-only ones. Same layering as
+// decomposeBashForPolicy above: the shell parsing stays out of core.
+func DeriveGrantScopes(toolName string, args json.RawMessage) []core.GrantScope {
+	if toolName != "bash" {
+		return nil
+	}
+	var a struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil
+	}
+	return tools.BashGrantScopes(a.Command)
+}
+
 // extensionPermissionRules collects suggested rules from installed
 // extension bundles (the `permissions` Key in extension.json — see
 // docs/extensions.md). Extensions are code the user installed, but

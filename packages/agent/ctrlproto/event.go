@@ -257,6 +257,21 @@ type PermissionRequest struct {
 	// session's OWN tool calls; omitempty keeps it off the wire for ordinary
 	// approvals and for old daemons that never set it.
 	Agent string `json:"agent,omitempty"`
+	// Scopes are the derived narrow-grant options for this call (bash
+	// only today): a dialog may offer "always allow <Display>" and echo
+	// the accepted Patterns back in Decision.PersistScopes. Derived
+	// daemon-side (the preview is truncated and clients must never parse
+	// it); empty for underivable commands and non-bash tools, and off
+	// the wire entirely for old daemons.
+	Scopes []GrantScope `json:"scopes,omitempty"`
+}
+
+// GrantScope is the wire form of [core.GrantScope]: one derived
+// narrow-grant option. Display is what the dialog shows ("git status"),
+// Pattern the RE2 a scoped grant persists.
+type GrantScope struct {
+	Display string `json:"display"`
+	Pattern string `json:"pattern"`
 }
 
 // AskRequest is a pending mid-turn question (the ask_user_question tool). The

@@ -41,15 +41,15 @@ func TestAuditLogRecord(t *testing.T) {
 	home := testsupport.TempDir(t)
 	a := newAuditLog(home)
 	now := time.Unix(1_700_000_000, 0)
-	a.Record(now, "bash", json.RawMessage(`{"command":"ls -la"}`), "yolo", true, "")
-	a.Record(now, "bash", json.RawMessage(`{"command":"rm -rf /"}`), "ask", false, "denied by rule")
+	a.Record(now, auditViaToolCall, "bash", json.RawMessage(`{"command":"ls -la"}`), "yolo", true, "")
+	a.Record(now, auditViaToolCall, "bash", json.RawMessage(`{"command":"rm -rf /"}`), "ask", false, "denied by rule")
 	a.Close()
 
 	recs := readAuditLines(t, home)
 	if len(recs) != 2 {
 		t.Fatalf("want 2 records, got %d", len(recs))
 	}
-	if recs[0].Tool != "bash" || recs[0].Mode != "yolo" || recs[0].Decision != "allow" {
+	if recs[0].Tool != "bash" || recs[0].Mode != "yolo" || recs[0].Decision != "allow" || recs[0].Via != auditViaToolCall {
 		t.Errorf("allow record wrong: %+v", recs[0])
 	}
 	if !strings.Contains(string(recs[0].Args), "ls -la") {
@@ -77,7 +77,7 @@ func TestAuditLogRecord(t *testing.T) {
 func TestAuditLogEdgeCases(t *testing.T) {
 	// nil receiver is a no-op (the off switch).
 	var nilLog *auditLog
-	nilLog.Record(time.Unix(0, 0), "bash", nil, "yolo", true, "") // must not panic
+	nilLog.Record(time.Unix(0, 0), auditViaToolCall, "bash", nil, "yolo", true, "") // must not panic
 
 	home := testsupport.TempDir(t)
 	a := newAuditLog(home)
@@ -88,7 +88,7 @@ func TestAuditLogEdgeCases(t *testing.T) {
 
 	// Oversized args collapse to a truncation note instead of a giant line.
 	big := `{"command":"` + strings.Repeat("x", 5000) + `"}`
-	a.Record(time.Unix(0, 0), "bash", json.RawMessage(big), "yolo", true, "")
+	a.Record(time.Unix(0, 0), auditViaToolCall, "bash", json.RawMessage(big), "yolo", true, "")
 	a.Close()
 	recs := readAuditLines(t, home)
 	if len(recs) != 1 || !strings.Contains(string(recs[0].Args), "truncated") {
@@ -121,5 +121,8 @@ func TestBeforeToolExecuteAudits(t *testing.T) {
 	}
 	if recs[0].Tool != "bash" || recs[0].Decision != "allow" || !strings.Contains(string(recs[0].Args), "echo hi") {
 		t.Errorf("ladder audit record wrong: %+v", recs[0])
+	}
+	if recs[0].Via != auditViaToolCall {
+		t.Errorf("ladder door must stamp via=%s, got %q", auditViaToolCall, recs[0].Via)
 	}
 }

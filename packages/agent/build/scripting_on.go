@@ -58,8 +58,16 @@ func wireScriptingHostCall(ag *core.Agent, gate *core.ConfirmGate) {
 		if !ok {
 			return core.ToolResult{}, fmt.Errorf("no such host tool %q", name)
 		}
+		// Like ext host_tool_call, this door checks the gate outside the
+		// BeforeToolExecute ladder, so it writes its own audit line — up to
+		// one per binding call, reads included — and mints its own call id
+		// (see hosttool.go: a borrowed id collides in the confirmer's
+		// pending map when two parks overlap).
 		preview := core.BuildPreview(args, 120)
-		if allowed, reason, _ := gate.Check(name, args, preview); !allowed {
+		callID := fmt.Sprintf("script-%s-%d", name, hostGateSeq.Add(1))
+		allowed, reason, _ := gate.Check(name, args, preview, callID)
+		recordGateAudit(auditViaScriptBinding, name, args, gate, allowed, reason)
+		if !allowed {
 			return core.ToolResult{}, fmt.Errorf("%q denied: %s", name, reason)
 		}
 		return target.Execute(ctx, args, nil)

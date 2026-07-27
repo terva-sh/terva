@@ -18,9 +18,11 @@ import (
 // Correlation (§13): the pending `tool_call` (status pending) is already on
 // the wire — the translator emits it from EvToolCall before executeTools
 // reaches BeforeToolExecute — so we only need to reference the right
-// toolCallId. The session records the toolCallId BeforeToolExecute is
-// currently gating (setCurrentCall), and tools run one at a time per agent,
-// so permContext() returns the correct id.
+// toolCallId. The gate passes the id being gated straight to
+// ConfirmWithCall; no "current call" session state exists to go stale or to
+// collide when a host_tool_call approval parks concurrently with a model
+// call's (a host-door id names no editor-visible tool_call, which an editor
+// renders as an uncorrelated ask — honest, where the borrowed id was wrong).
 //
 // Cancellation (§13): the round-trip blocks on the turn's context, so
 // session/cancel (which cancels that ctx) unblocks the request with a
@@ -36,7 +38,7 @@ type acpConfirmer struct {
 	sess *session
 }
 
-var _ core.Confirmer = (*acpConfirmer)(nil)
+var _ core.ConfirmerWithCall = (*acpConfirmer)(nil)
 
 // newConfirmer returns a confirmer to wire into a ConfirmGate. It is bound
 // to its session in handleSessionNew via bind once the session exists.
@@ -44,22 +46,17 @@ func newConfirmer() *acpConfirmer { return &acpConfirmer{} }
 
 func (c *acpConfirmer) bind(s *session) { c.sess = s }
 
-// recordCall is the BeforeToolExecute-side hook the host ladder calls with
-// the toolCallId it is about to gate, so a subsequent Confirm correlates
-// its session/request_permission with the right tool_call (§13). Tools run
-// one at a time per agent, so there is exactly one current call. No-op
-// until the confirmer is bound to a session.
-func (c *acpConfirmer) recordCall(toolCallID string) {
-	if c.sess != nil {
-		c.sess.setCurrentCall(toolCallID)
-	}
+// Confirm is the id-less fallback; the editor's ask then references no
+// tool_call, which it renders as an uncorrelated request.
+func (c *acpConfirmer) Confirm(toolName string, preview string) core.ConfirmDecision {
+	return c.ConfirmWithCall(toolName, preview, "")
 }
 
-// Confirm implements core.Confirmer. It runs synchronously on the turn
-// goroutine inside ConfirmGate.Check, which is reached only for calls the
-// policy says to ask about (allow/deny rules and plan-mode read-only
-// auto-allows short-circuit before us).
-func (c *acpConfirmer) Confirm(toolName string, _ string) core.ConfirmDecision {
+// ConfirmWithCall implements core.ConfirmerWithCall. It runs synchronously
+// on the turn goroutine inside ConfirmGate.Check, which is reached only for
+// calls the policy says to ask about (allow/deny rules and plan-mode
+// read-only auto-allows short-circuit before us).
+func (c *acpConfirmer) ConfirmWithCall(toolName string, _ string, callID string) core.ConfirmDecision {
 	if c.sess == nil {
 		// No session bound (should not happen) — refuse rather than run
 		// an unconfirmed call.
@@ -75,7 +72,7 @@ func (c *acpConfirmer) Confirm(toolName string, _ string) core.ConfirmDecision {
 		return core.ConfirmDecision{Allow: false, Reason: "tool call refused (remembered for this session)"}
 	}
 
-	turnCtx, callID := c.sess.permContext()
+	turnCtx := c.sess.turnContext()
 
 	params := RequestPermissionParams{
 		SessionID: c.sess.id,

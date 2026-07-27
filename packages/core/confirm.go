@@ -29,6 +29,35 @@ type ConfirmDecision struct {
 	// itself cannot write config; it reports through the OnPersist
 	// callback). Implies RememberTool for the current session.
 	PersistTool bool
+	// PersistScopes narrows a PersistTool grant to the given args
+	// patterns (RE2, one saved rule each) instead of the whole tool —
+	// the confirmer echoes back the Pattern of the GrantScopes it
+	// offered and the user accepted. A scoped grant deliberately does
+	// NOT set the session-wide tool grant: the persisted rules take
+	// over on the next policy refresh, and anything they don't match
+	// must keep prompting.
+	PersistScopes []string
+}
+
+// GrantScope is one derived narrow-grant option for a call: Display is the
+// human-readable form a dialog shows ("git status"), Pattern the RE2 the
+// host saves as a rule's args filter ("^git status(?:\s|$)"). The gate
+// never derives these itself — the host injects a deriver (SetScopeDeriver)
+// the same way the agent layer injects DecomposeCommand into the policy,
+// so core stays free of tool-specific parsing.
+type GrantScope struct {
+	Display string
+	Pattern string
+}
+
+// ConfirmRequest carries everything the gate knows about the call being
+// confirmed. Scopes, when non-empty, are the derived narrow-grant options
+// the dialog may offer alongside the blanket "always allow".
+type ConfirmRequest struct {
+	Tool    string
+	Preview string
+	CallID  string
+	Scopes  []GrantScope
 }
 
 // Confirmer asks the user to approve or refuse a single tool call.
@@ -41,6 +70,30 @@ type ConfirmDecision struct {
 // the tool name. It is intentionally short: no full tool outputs.
 type Confirmer interface {
 	Confirm(toolName string, preview string) ConfirmDecision
+}
+
+// ConfirmerWithCall is the optional upgrade for a Confirmer that needs the id
+// of the call being gated: the gate passes the model's tool-call id (or the
+// unique id a non-ladder door minted), so an implementation can key its
+// parked prompt on the call itself instead of smuggling the id in through a
+// host side-channel ahead of Check. That side-channel ("record the current
+// call, tools run one at a time") is exactly what a host_tool_call approval
+// racing a model call's breaks: two parks under one remembered id collide,
+// and the loser can never be answered. The gate prefers ConfirmWithCall
+// whenever the implementation offers it and a call id is known.
+type ConfirmerWithCall interface {
+	Confirmer
+	ConfirmWithCall(toolName, preview, callID string) ConfirmDecision
+}
+
+// ConfirmerWithRequest is the richest confirmer shape: the gate hands over
+// the whole ConfirmRequest, including any derived grant scopes, so the
+// dialog can offer a call-dependent "always allow <command>" option. The
+// gate prefers it over ConfirmerWithCall whenever the implementation
+// offers it.
+type ConfirmerWithRequest interface {
+	Confirmer
+	ConfirmWithRequest(req ConfirmRequest) ConfirmDecision
 }
 
 // ConfirmGate wraps a Confirmer with session-scoped memory for the
@@ -60,11 +113,17 @@ type ConfirmGate struct {
 	// that snapshots the pointer can use it lock-free afterward.
 	policy *PermissionPolicy
 
-	// onPersist, when set, is called with a tool name after the user
-	// asks for a durable allow grant (ConfirmDecision.PersistTool).
-	// The host wires this to its config store; the gate stays
-	// storage-agnostic.
-	onPersist func(toolName string)
+	// onPersist, when set, is called after the user asks for a durable
+	// allow grant (ConfirmDecision.PersistTool) — once per saved rule:
+	// argsPattern is the RE2 the grant is narrowed to, "" for a blanket
+	// tool grant. The host wires this to its config store; the gate
+	// stays storage-agnostic.
+	onPersist func(toolName, argsPattern string)
+
+	// scopeDeriver, when set, turns a call's args into the narrow-grant
+	// options offered to a ConfirmerWithRequest. Injected by the host
+	// (core never parses tool args itself); nil means no scoped options.
+	scopeDeriver func(toolName string, args json.RawMessage) []GrantScope
 
 	mu          sync.Mutex
 	allowAll    bool
@@ -91,13 +150,27 @@ func NewPolicyGate(policy *PermissionPolicy, inner Confirmer) *ConfirmGate {
 	}
 }
 
-// SetPersist installs the host callback for durable allow grants.
-func (g *ConfirmGate) SetPersist(fn func(toolName string)) {
+// SetPersist installs the host callback for durable allow grants. The
+// callback runs once per saved rule: argsPattern is the RE2 the grant is
+// narrowed to ("^git status(?:\s|$)"), or "" for a blanket tool grant.
+func (g *ConfirmGate) SetPersist(fn func(toolName, argsPattern string)) {
 	if g == nil {
 		return
 	}
 	g.mu.Lock()
 	g.onPersist = fn
+	g.mu.Unlock()
+}
+
+// SetScopeDeriver installs the hook that derives narrow-grant options from
+// a call's args. Nil-safe; a nil or absent deriver means confirmers are
+// offered no scoped options and grants stay tool-wide.
+func (g *ConfirmGate) SetScopeDeriver(fn func(toolName string, args json.RawMessage) []GrantScope) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.scopeDeriver = fn
 	g.mu.Unlock()
 }
 
@@ -184,12 +257,17 @@ func (g *ConfirmGate) Grants() (allowAll bool, tools []string) {
 // allowed, reason, modifiedArgs. modifiedArgs is always nil: the
 // gate never rewrites args; it only allows or denies.
 //
+// callID names the call being decided — the model's tool-call id on the
+// ladder door, a minted unique id on the host_tool_call / code_execution
+// doors, "" when the caller has nothing (a ConfirmerWithCall then falls back
+// to plain Confirm). The gate only forwards it; it never keys state on it.
+//
 // Order matters: the policy runs before the session cache so a deny
 // rule beats a remembered "always allow" — explicit config outranks
 // a session convenience.
 //
 // A nil ConfirmGate always allows (treat as yolo mode).
-func (g *ConfirmGate) Check(toolName string, args json.RawMessage, preview string) (bool, string, json.RawMessage) {
+func (g *ConfirmGate) Check(toolName string, args json.RawMessage, preview, callID string) (bool, string, json.RawMessage) {
 	if g == nil {
 		return true, "", nil
 	}
@@ -215,21 +293,56 @@ func (g *ConfirmGate) Check(toolName string, args json.RawMessage, preview strin
 		return false, "tool call refused: confirmation is required (--no-yolo / approval mode) and there is no interactive prompt in this mode; ask the user what to do instead", nil
 	}
 
-	decision := inner.Confirm(toolName, preview)
+	g.mu.Lock()
+	derive := g.scopeDeriver
+	g.mu.Unlock()
+	var scopes []GrantScope
+	if derive != nil {
+		scopes = derive(toolName, args)
+	}
+
+	var decision ConfirmDecision
+	switch cc := inner.(type) {
+	case ConfirmerWithRequest:
+		decision = cc.ConfirmWithRequest(ConfirmRequest{
+			Tool:    toolName,
+			Preview: preview,
+			CallID:  callID,
+			Scopes:  scopes,
+		})
+	case ConfirmerWithCall:
+		if callID != "" {
+			decision = cc.ConfirmWithCall(toolName, preview, callID)
+		} else {
+			decision = inner.Confirm(toolName, preview)
+		}
+	default:
+		decision = inner.Confirm(toolName, preview)
+	}
 
 	g.mu.Lock()
 	persist := g.onPersist
+	scoped := len(decision.PersistScopes) > 0
 	if decision.Allow {
 		if decision.RememberAll {
 			g.allowAll = true
 		}
-		if decision.RememberTool || decision.PersistTool {
+		// A scoped grant must NOT blanket-allow the tool for the
+		// session: the persisted rules pick up matching calls after the
+		// host's policy refresh, and everything else keeps prompting.
+		if (decision.RememberTool || decision.PersistTool) && !scoped {
 			g.allowedTool[toolName] = true
 		}
 	}
 	g.mu.Unlock()
 	if decision.Allow && decision.PersistTool && persist != nil {
-		persist(toolName)
+		if scoped {
+			for _, p := range decision.PersistScopes {
+				persist(toolName, p)
+			}
+		} else {
+			persist(toolName, "")
+		}
 	}
 
 	reason := strings.TrimSpace(decision.Reason)

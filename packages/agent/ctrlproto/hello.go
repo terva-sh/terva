@@ -45,16 +45,21 @@ const (
 // Feature strings name additive capabilities negotiated on top of the groups.
 // New capabilities land as features rather than protocol bumps, so an old
 // client simply never uses one a newer host advertises. This list will grow.
+//
+// Two kinds exist, and the split below is load-bearing. SERVE-BEHAVIOR
+// features change what serve.go does on the wire; every one of them MUST
+// join [ServerHello]'s list, because Negotiate is a strict intersection — a
+// serve-behavior feature missing there is dead no matter how many clients
+// request it (how history-window shipped dark). ROOT-APPENDED features (the
+// second block) are gated on host state the protocol layer can't see; the
+// composition root appends them, and they must NOT appear in the base list.
+// TestServerHelloAdvertisesServeGatedFeatures pins the distinction.
 const (
 	// FeatureImages advertises inbound image attachments on prompt.
 	FeatureImages = "images"
 	// FeatureResolveEvents advertises the permission_resolved / ask_resolved
 	// multi-client dismissal events.
 	FeatureResolveEvents = "resolve-events"
-	// FeatureRestart advertises that the daemon will serve control.restart
-	// (Tier-1 self-restart), so a client can show a restart control. Set by the
-	// composition root only when --web-allow-restart is passed.
-	FeatureRestart = "restart"
 	// FeatureContextTree advertises that context.get carries the hierarchical
 	// ContextBreakdown.Tree (section/turn/message outline). A client that sees it
 	// renders the collapsible tree; one that doesn't falls back to the flat
@@ -107,6 +112,16 @@ const (
 	// per contract, next to where image data is already stripped — so nothing that
 	// exists has to change, and no flag day is needed.
 	FeatureHistoryWindow = "history-window"
+)
+
+// Root-appended features: gated on host state (a flag, an enabled app), so
+// the composition root appends them to the hello it serves — never this
+// package, and never the base [ServerHello] list.
+const (
+	// FeatureRestart advertises that the daemon will serve control.restart
+	// (Tier-1 self-restart), so a client can show a restart control. Set by the
+	// composition root only when --web-allow-restart is passed.
+	FeatureRestart = "restart"
 	// FeatureStage advertises that this daemon serves the Stage app at /stage/
 	// (web_stage enabled). A panel reads it to show an "open in Stage" link only
 	// where the surface actually exists; it gates presentation, not a method group

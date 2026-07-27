@@ -436,6 +436,20 @@ export function Chat(props: {
           <div class="stage-interact__actions">
             <button class="stage-interact__go" onClick={() => decide(permission.call_id, { allow: true })}>{t('Allow')}</button>
             <button title={t('For the rest of this session')} onClick={() => decide(permission.call_id, { allow: true, remember_tool: true })}>{t('Allow & remember')}</button>
+            {permission.scopes && permission.scopes.length > 0 && (
+              <button
+                title={t('Saves a permanent allow rule scoped to this command')}
+                onClick={() =>
+                  decide(permission.call_id, {
+                    allow: true,
+                    persist_tool: true,
+                    persist_scopes: permission.scopes!.map((s) => s.pattern),
+                  })
+                }
+              >
+                {t('Always allow “%s”', permission.scopes.map((s) => s.display).join(', '))}
+              </button>
+            )}
             <button class="stage-interact__deny" onClick={() => decide(permission.call_id, { allow: false, reason: 'denied by user' })}>{t('Deny')}</button>
           </div>
         </div>

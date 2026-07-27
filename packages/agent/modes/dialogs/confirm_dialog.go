@@ -17,7 +17,11 @@ import (
 type ConfirmRequest struct {
 	ToolName string
 	Preview  string
-	Resp     chan core.ConfirmDecision
+	// Scopes are the gate's derived narrow-grant options (bash only
+	// today). When non-empty the dialog offers a sixth option: persist
+	// an allow rule scoped to these commands instead of the whole tool.
+	Scopes []core.GrantScope
+	Resp   chan core.ConfirmDecision
 }
 
 // ConfirmDialog is the inline prompt shown before every tool call
@@ -112,7 +116,14 @@ func (d *ConfirmDialog) AllowAllPending() {
 	}
 }
 
-// confirmOptions lists the five responses in vertical order. Keyed
+// confirmOption is one rendered choice: a translated label and the
+// decision picking it sends.
+type confirmOption struct {
+	label    string
+	decision core.ConfirmDecision
+}
+
+// confirmOptions lists the five fixed responses in vertical order. Keyed
 // by index so HandleKey can send the right decision.
 // confirmOptions labels are marked with i18n.M (declared at init) and
 // translated at render time. The Reason strings are NOT translated — they
@@ -143,6 +154,36 @@ var confirmOptions = []struct {
 	},
 }
 
+// optionsFor builds the option list for one request: the five fixed
+// responses, plus — when the gate derived grant scopes for the call — a
+// sixth, call-dependent one that persists rules scoped to the shown
+// commands. Appended LAST on purpose: the fixed numbering (and the "5 =
+// no" reflex) must never shift under a habitual answer, and a shifted
+// refusal that lands on a grant would be the worst possible misfire.
+func optionsFor(req *ConfirmRequest) []confirmOption {
+	opts := make([]confirmOption, 0, len(confirmOptions)+1)
+	for _, o := range confirmOptions {
+		opts = append(opts, confirmOption{label: i18n.T(o.label), decision: o.decision})
+	}
+	if len(req.Scopes) > 0 {
+		displays := make([]string, len(req.Scopes))
+		patterns := make([]string, len(req.Scopes))
+		for i, s := range req.Scopes {
+			displays[i] = s.Display
+			patterns[i] = s.Pattern
+		}
+		opts = append(opts, confirmOption{
+			label: i18n.T("yes, always “%s” — save (adds a permanent allow rule scoped to this command)", strings.Join(displays, ", ")),
+			decision: core.ConfirmDecision{
+				Allow:         true,
+				PersistTool:   true,
+				PersistScopes: patterns,
+			},
+		})
+	}
+	return opts
+}
+
 // HandleKey advances the selection or resolves the dialog. Returns
 // true when a decision was sent back to the agent (the dialog may
 // remain Active if there are more queued requests behind it).
@@ -153,6 +194,7 @@ func (d *ConfirmDialog) HandleKey(k tui.Key) bool {
 		return false
 	}
 	req := d.pending[0]
+	opts := optionsFor(req)
 
 	switch k.Kind {
 	case tui.KeyUp:
@@ -162,7 +204,7 @@ func (d *ConfirmDialog) HandleKey(k tui.Key) bool {
 		d.mu.Unlock()
 		return false
 	case tui.KeyDown:
-		if d.cursor < len(confirmOptions)-1 {
+		if d.cursor < len(opts)-1 {
 			d.cursor++
 		}
 		d.mu.Unlock()
@@ -181,7 +223,7 @@ func (d *ConfirmDialog) HandleKey(k tui.Key) bool {
 		req.Resp <- core.ConfirmDecision{Allow: false, Reason: "user cancelled"}
 		return true
 	case tui.KeyEnter:
-		selected := confirmOptions[d.cursor].decision
+		selected := opts[min(d.cursor, len(opts)-1)].decision
 		d.pending = d.pending[1:]
 		if len(d.pending) > 0 {
 			d.cursor = 0
@@ -192,11 +234,11 @@ func (d *ConfirmDialog) HandleKey(k tui.Key) bool {
 		return true
 	}
 
-	// Numeric shortcuts 1..5
-	if k.Kind == tui.KeyRune && k.Rune >= '1' && k.Rune <= '5' {
+	// Numeric shortcuts 1..N (N = 5 fixed options, 6 with a scoped grant).
+	if k.Kind == tui.KeyRune && k.Rune >= '1' && k.Rune <= '9' {
 		idx := int(k.Rune - '1')
-		if idx >= 0 && idx < len(confirmOptions) {
-			selected := confirmOptions[idx].decision
+		if idx >= 0 && idx < len(opts) {
+			selected := opts[idx].decision
 			d.pending = d.pending[1:]
 			if len(d.pending) > 0 {
 				d.cursor = 0
@@ -236,10 +278,11 @@ func (d *ConfirmDialog) Render(th tui.Theme, width int) []string {
 	}
 	lines = append(lines, toolLine)
 	lines = append(lines, "")
-	lines = append(lines, th.FG256(th.Muted, i18n.T("choose (\u2191/\u2193 or 1-5, enter to pick, esc to refuse):")))
+	opts := optionsFor(req)
+	lines = append(lines, th.FG256(th.Muted, i18n.T("choose (\u2191/\u2193 or 1-%d, enter to pick, esc to refuse):", len(opts))))
 
-	for i, opt := range confirmOptions {
-		label := i18n.T(opt.label)
+	for i, opt := range opts {
+		label := opt.label
 		prefix := fmt.Sprintf("  %d. ", i+1)
 		plain := prefix + label
 		// Truncate the tail if the line would exceed width; keeps

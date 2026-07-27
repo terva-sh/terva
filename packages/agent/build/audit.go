@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"terva.sh/terva/packages/core"
 )
 
 // auditLog is an append-only security record of tool calls: every call the
@@ -22,7 +24,11 @@ import (
 // (JSONL) — greppable by `tool`, parseable with jq.
 //
 // EVERY tool call is recorded, reads included: an audit log with blind spots
-// isn't one. Filter at read time (`jq 'select(.tool=="bash")'`).
+// isn't one. Filter at read time (`jq 'select(.tool=="bash")'`). That covers
+// all three doors into the gate, distinguished by `via`: the model tool-call
+// ladder (BuildBeforeToolExecute), extension host_tool_call dispatch, and
+// code_execution's script bindings — the latter two check the gate outside
+// the ladder, so they record their own lines.
 //
 // auditSink is the process-wide instance, set once at startup (Run): a single
 // append-only file per process, so a package var fits it the way a logger
@@ -47,9 +53,20 @@ func newAuditLog(home string) *auditLog {
 	return &auditLog{path: filepath.Join(home, "logs", "audit.log")}
 }
 
+// The three doors into the permission gate, named on each record's `via` so a
+// review can tell a model-issued call from an extension's host_tool_call from
+// a script binding. Absent on lines written before the field existed, which
+// were all auditViaToolCall — the other two doors recorded nothing then.
+const (
+	auditViaToolCall      = "tool_call"
+	auditViaHostToolCall  = "host_tool_call"
+	auditViaScriptBinding = "code_execution"
+)
+
 type auditRecord struct {
 	Time     string          `json:"time"`
 	PID      int             `json:"pid"`
+	Via      string          `json:"via,omitempty"`
 	Tool     string          `json:"tool"`
 	Mode     string          `json:"mode"`
 	Decision string          `json:"decision"` // "allow" | "deny"
@@ -60,7 +77,7 @@ type auditRecord struct {
 // Record appends one decision line. now is injected for testability. Best
 // effort: a write failure is latched so a broken log never breaks tool
 // execution, and a nil receiver is a no-op.
-func (a *auditLog) Record(now time.Time, tool string, args json.RawMessage, mode string, allowed bool, reason string) {
+func (a *auditLog) Record(now time.Time, via, tool string, args json.RawMessage, mode string, allowed bool, reason string) {
 	if a == nil {
 		return
 	}
@@ -88,6 +105,7 @@ func (a *auditLog) Record(now time.Time, tool string, args json.RawMessage, mode
 	line, err := json.Marshal(auditRecord{
 		Time:     now.UTC().Format(time.RFC3339),
 		PID:      os.Getpid(),
+		Via:      via,
 		Tool:     tool,
 		Mode:     mode,
 		Decision: decision,
@@ -134,3 +152,16 @@ func capAuditArgs(args json.RawMessage) json.RawMessage {
 // startup; the sink itself stays unexported so nothing outside can swap it
 // mid-run.
 func InitAudit(home string) { auditSink = newAuditLog(home) }
+
+// recordGateAudit writes one audit line for a gate decision reached outside
+// the model tool-call ladder (host_tool_call, code_execution bindings) — the
+// ladder's deferred audit never sees those checks, so each door records its
+// own. A nil gate reports the empty mode, matching the ladder's spelling for
+// a gateless (pure yolo) session.
+func recordGateAudit(via, tool string, args json.RawMessage, gate *core.ConfirmGate, allowed bool, reason string) {
+	mode := ""
+	if gate != nil {
+		mode = string(gate.Mode())
+	}
+	auditSink.Record(time.Now(), via, tool, args, mode, allowed, reason)
+}

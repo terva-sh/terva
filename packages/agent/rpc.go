@@ -301,14 +301,14 @@ type rpcServer struct {
 	// produce output.
 	inFlight sync.WaitGroup
 
-	// pending correlates an outstanding `ask` frame with the goroutine blocked
-	// in Confirm: the ask id maps to the channel the matching `approve` command
-	// delivers the decision on. Guarded by pendMu. Used only when the run opted
-	// into the ask/approve carrier (--rpc-approvals); otherwise Confirm is never
-	// wired and this stays empty.
-	pendMu  sync.Mutex
-	askSeq  int
-	pending map[string]chan core.ConfirmDecision
+	// asks correlates an outstanding `ask` frame with the goroutine blocked
+	// in Confirm: the matching `approve` command delivers the decision by ask
+	// id. Used only when the run opted into the ask/approve carrier
+	// (--rpc-approvals); otherwise Confirm is never wired and this stays
+	// empty. pendMu guards only the id counter.
+	pendMu sync.Mutex
+	askSeq int
+	asks   core.ParkTable[core.ConfirmDecision]
 }
 
 // rpcAuthToken returns the embedder-supplied RPC auth token. Both
@@ -423,6 +423,11 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 		if c := s.takeCancel(); c != nil {
 			c()
 		}
+		// An aborted turn must also unpark any approval still waiting on the
+		// driver: Confirm blocks outside the turn's context (BeforeToolExecute
+		// is ctx-free), so without this an abort left the prompt goroutine
+		// parked until the driver answered or the process ended.
+		s.asks.CancelAll(core.ConfirmDecision{Allow: false, Reason: "the turn was aborted before this approval was answered (fail closed)"})
 		s.writeResponse(id, cmd, nil)
 
 	case "approve":
@@ -440,7 +445,7 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 			s.writeError(id, cmd, err.Error())
 			return
 		}
-		ok := s.resolveAsk(id, core.ConfirmDecision{
+		ok := s.asks.Deliver(id, core.ConfirmDecision{
 			Allow:        req.Allow,
 			Reason:       req.Reason,
 			RememberTool: req.RememberTool,
@@ -761,8 +766,12 @@ func (s *rpcServer) busy() bool {
 // on the read loop, so blocking here leaves the read loop free to receive the
 // `approve` command that unblocks it.
 func (s *rpcServer) Confirm(toolName, preview string) core.ConfirmDecision {
-	id, ch := s.registerAsk()
-	defer s.forgetAsk(id)
+	s.pendMu.Lock()
+	s.askSeq++
+	id := fmt.Sprintf("ask-%d", s.askSeq)
+	s.pendMu.Unlock()
+	ch, release, _ := s.asks.Park(id) // monotonic ids never collide
+	defer release()
 	s.write(map[string]any{
 		"type":    "ask",
 		"id":      id,
@@ -777,42 +786,6 @@ func (s *rpcServer) Confirm(toolName, preview string) core.ConfirmDecision {
 		// model-readable reason rather than hanging the shutdown.
 		return core.ConfirmDecision{Allow: false, Reason: "approval request cancelled (session ending)"}
 	}
-}
-
-func (s *rpcServer) registerAsk() (string, chan core.ConfirmDecision) {
-	s.pendMu.Lock()
-	defer s.pendMu.Unlock()
-	if s.pending == nil {
-		s.pending = map[string]chan core.ConfirmDecision{}
-	}
-	s.askSeq++
-	id := fmt.Sprintf("ask-%d", s.askSeq)
-	ch := make(chan core.ConfirmDecision, 1) // buffered so resolveAsk never blocks
-	s.pending[id] = ch
-	return id, ch
-}
-
-func (s *rpcServer) forgetAsk(id string) {
-	s.pendMu.Lock()
-	delete(s.pending, id)
-	s.pendMu.Unlock()
-}
-
-// resolveAsk delivers a decision to the Confirm call waiting on id. Returns
-// false if there is no such pending request (a stale or duplicate approve),
-// which the caller surfaces as an error rather than dropping silently.
-func (s *rpcServer) resolveAsk(id string, d core.ConfirmDecision) bool {
-	s.pendMu.Lock()
-	ch, ok := s.pending[id]
-	if ok {
-		delete(s.pending, id)
-	}
-	s.pendMu.Unlock()
-	if !ok {
-		return false
-	}
-	ch <- d // buffered cap 1; never blocks
-	return true
 }
 
 // messagesToJSON serialises a transcript using the same schema as the

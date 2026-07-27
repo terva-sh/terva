@@ -24,7 +24,7 @@ func TestHeadlessConfirmGateRefusesWhenNoYolo(t *testing.T) {
 	if gate == nil {
 		t.Fatal("headlessConfirmGate returned nil with NoYolo set; want a refusing gate")
 	}
-	ok, reason, _ := gate.Check("bash", nil, "ls")
+	ok, reason, _ := gate.Check("bash", nil, "ls", "")
 	if ok {
 		t.Fatal("gate allowed a tool call under --no-yolo; want refusal")
 	}

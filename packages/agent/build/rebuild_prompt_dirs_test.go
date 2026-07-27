@@ -57,7 +57,7 @@ func TestRebuildSystemPromptKeepsResolvedPromptDirs(t *testing.T) {
 
 	// When EnsureInstalled fails, Resolve renders no hints — and a rebuild
 	// must not resurrect one from a re-derived path the install never wrote.
-	r.tervaDocsDir, r.tervaExamplesDir = "", ""
+	r.promptOpts.TervaDocsDir, r.promptOpts.TervaExamplesDir = "", ""
 	r.rebuildSystemPrompt()
 	src = segSources(r.SystemSegments)
 	if src[SourceTervaDocsHint] != 0 || src[SourceTervaExamplesHint] != 0 {

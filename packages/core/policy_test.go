@@ -132,6 +132,32 @@ func TestPolicyCompoundAllAllowedRuns(t *testing.T) {
 	}
 }
 
+// The split engages with ZERO rules too. Today that is behaviorally invisible
+// (every scope resolves to the same mode default), and this test pins the
+// mechanism so it stays true: the day any default becomes arg-sensitive, a
+// rules-gated split would silently judge a rules-free session's
+// `git diff && rm -rf /` as one unit. The sandbox splits unconditionally;
+// the policy must keep matching it.
+func TestPolicyCompoundSplitsWithoutRules(t *testing.T) {
+	calls := 0
+	p := &PermissionPolicy{
+		Mode:     ApprovalAsk,
+		ReadOnly: ro(),
+		Builtin:  builtins(),
+		DecomposeCommand: func(toolName string, args json.RawMessage) []json.RawMessage {
+			calls++
+			return decompAnd(toolName, args)
+		},
+	}
+	compound, _ := json.Marshal(map[string]string{"command": "git diff && rm -rf /"})
+	if v, _ := p.Evaluate("bash", compound); v != VerdictAsk {
+		t.Errorf("rules-free ask mode should ask, got %v", v)
+	}
+	if calls != 1 {
+		t.Errorf("decomposer should run once with zero rules, ran %d times", calls)
+	}
+}
+
 func TestPolicyRuleFirstMatchWins(t *testing.T) {
 	p := &PermissionPolicy{
 		Mode: ApprovalYolo,
@@ -277,11 +303,11 @@ func TestGateDenyRuleBeatsSessionAlwaysAllow(t *testing.T) {
 		return ConfirmDecision{Allow: true, RememberTool: true}
 	}))
 	lsArgs, _ := json.Marshal(map[string]string{"command": "ls"})
-	if ok, _, _ := g.Check("bash", lsArgs, "ls"); !ok {
+	if ok, _, _ := g.Check("bash", lsArgs, "ls", ""); !ok {
 		t.Fatal("first call should be allowed via confirmer")
 	}
 	rmArgs, _ := json.Marshal(map[string]string{"command": "rm -rf /tmp/x"})
-	if ok, _, _ := g.Check("bash", rmArgs, "rm -rf /tmp/x"); ok {
+	if ok, _, _ := g.Check("bash", rmArgs, "rm -rf /tmp/x", ""); ok {
 		t.Fatal("deny rule must beat remembered always-allow")
 	}
 }
@@ -291,22 +317,73 @@ func TestGatePersistCallback(t *testing.T) {
 		confirmFunc(func(tool, preview string) ConfirmDecision {
 			return ConfirmDecision{Allow: true, PersistTool: true}
 		}))
-	var persisted []string
-	g.SetPersist(func(tool string) { persisted = append(persisted, tool) })
+	var persisted [][2]string
+	g.SetPersist(func(tool, pattern string) { persisted = append(persisted, [2]string{tool, pattern}) })
 
-	if ok, _, _ := g.Check("bash", nil, "ls"); !ok {
+	if ok, _, _ := g.Check("bash", nil, "ls", ""); !ok {
 		t.Fatal("persist answer should allow the call")
 	}
-	if len(persisted) != 1 || persisted[0] != "bash" {
-		t.Fatalf("persist callback got %v, want [bash]", persisted)
+	if len(persisted) != 1 || persisted[0] != [2]string{"bash", ""} {
+		t.Fatalf("persist callback got %v, want one blanket bash grant", persisted)
 	}
 	// PersistTool implies session memory too: no second prompt.
 	calls := len(persisted)
-	if ok, _, _ := g.Check("bash", nil, "pwd"); !ok {
+	if ok, _, _ := g.Check("bash", nil, "pwd", ""); !ok {
 		t.Fatal("second call should ride session memory")
 	}
 	if len(persisted) != calls {
 		t.Error("session-cached call must not re-fire persist")
+	}
+}
+
+// A scoped grant (PersistScopes) persists one rule per pattern and — unlike
+// the blanket PersistTool — must NOT blanket-allow the tool for the session:
+// the saved rules take over for matching calls after the host's policy
+// refresh, and everything else keeps prompting.
+func TestGateScopedPersistSkipsSessionBlanket(t *testing.T) {
+	prompts := 0
+	g := NewPolicyGate(&PermissionPolicy{Mode: ApprovalAsk, ReadOnly: ro(), EditTools: edits()},
+		confirmFunc(func(tool, preview string) ConfirmDecision {
+			prompts++
+			return ConfirmDecision{Allow: true, PersistTool: true,
+				PersistScopes: []string{`^git status(?:\s|$)`}}
+		}))
+	var persisted [][2]string
+	g.SetPersist(func(tool, pattern string) { persisted = append(persisted, [2]string{tool, pattern}) })
+
+	if ok, _, _ := g.Check("bash", nil, "git status", ""); !ok {
+		t.Fatal("scoped persist answer should allow the call")
+	}
+	want := [2]string{"bash", `^git status(?:\s|$)`}
+	if len(persisted) != 1 || persisted[0] != want {
+		t.Fatalf("persist callback got %v, want [%v]", persisted, want)
+	}
+	// The next bash call must prompt again — no session-wide grant rode along.
+	if ok, _, _ := g.Check("bash", nil, "rm -rf /tmp/x", ""); !ok {
+		t.Fatal("second call should still be allowed (confirmer allows)")
+	}
+	if prompts != 2 {
+		t.Fatalf("prompts = %d, want 2 — a scoped grant must not blanket the session", prompts)
+	}
+}
+
+// The gate hands a ConfirmerWithRequest the derived scopes from the
+// injected deriver, and prefers that interface over ConfirmerWithCall.
+func TestGateScopeDeriverReachesConfirmer(t *testing.T) {
+	var got ConfirmRequest
+	g := NewPolicyGate(&PermissionPolicy{Mode: ApprovalAsk, ReadOnly: ro(), EditTools: edits()},
+		confirmReqFunc(func(req ConfirmRequest) ConfirmDecision {
+			got = req
+			return ConfirmDecision{Allow: false, Reason: "just looking"}
+		}))
+	g.SetScopeDeriver(func(tool string, args json.RawMessage) []GrantScope {
+		return []GrantScope{{Display: "git status", Pattern: `^git status(?:\s|$)`}}
+	})
+	if ok, _, _ := g.Check("bash", nil, "git status", "call_7"); ok {
+		t.Fatal("confirmer denied; gate must deny")
+	}
+	if got.Tool != "bash" || got.CallID != "call_7" || len(got.Scopes) != 1 || got.Scopes[0].Display != "git status" {
+		t.Fatalf("ConfirmRequest = %+v, want tool/call id/derived scope threaded through", got)
 	}
 }
 
@@ -315,17 +392,17 @@ func TestGateSetModeSwitchesEnforcement(t *testing.T) {
 	if g.Mode() != ApprovalYolo {
 		t.Fatalf("initial mode = %s", g.Mode())
 	}
-	if ok, _, _ := g.Check("bash", nil, ""); !ok {
+	if ok, _, _ := g.Check("bash", nil, "", ""); !ok {
 		t.Fatal("yolo should allow bash")
 	}
 	g.SetMode(ApprovalPlan)
 	if g.Mode() != ApprovalPlan {
 		t.Fatalf("mode after SetMode = %s", g.Mode())
 	}
-	if ok, _, _ := g.Check("bash", nil, ""); ok {
+	if ok, _, _ := g.Check("bash", nil, "", ""); ok {
 		t.Error("plan should refuse bash after live switch")
 	}
-	if ok, _, _ := g.Check("read", nil, ""); !ok {
+	if ok, _, _ := g.Check("read", nil, "", ""); !ok {
 		t.Error("plan should still allow read")
 	}
 }
@@ -342,7 +419,7 @@ func TestGateRulesAndGrantsSnapshot(t *testing.T) {
 	if rules := g.Rules(); len(rules) != 1 || rules[0].Tool != "bash" {
 		t.Fatalf("Rules() = %+v", rules)
 	}
-	if ok, _, _ := g.Check("read", nil, ""); !ok {
+	if ok, _, _ := g.Check("read", nil, "", ""); !ok {
 		t.Fatal("ask should allow once via confirmer")
 	}
 	all, tools := g.Grants()
@@ -365,7 +442,7 @@ func TestGateSetModeRaceSafe(t *testing.T) {
 		close(done)
 	}()
 	for i := 0; i < 1000; i++ {
-		_, _, _ = g.Check("bash", nil, "")
+		_, _, _ = g.Check("bash", nil, "", "")
 		_ = g.Mode()
 	}
 	<-done
@@ -375,6 +452,14 @@ func TestGateSetModeRaceSafe(t *testing.T) {
 type confirmFunc func(toolName, preview string) ConfirmDecision
 
 func (f confirmFunc) Confirm(toolName, preview string) ConfirmDecision { return f(toolName, preview) }
+
+// confirmReqFunc adapts a func to ConfirmerWithRequest for tests.
+type confirmReqFunc func(req ConfirmRequest) ConfirmDecision
+
+func (f confirmReqFunc) Confirm(toolName, preview string) ConfirmDecision {
+	return f(ConfirmRequest{Tool: toolName, Preview: preview})
+}
+func (f confirmReqFunc) ConfirmWithRequest(req ConfirmRequest) ConfirmDecision { return f(req) }
 
 // TestIsReadOnlyAuthority: only the two low-risk local classes (local-read
 // and the new local-data) are auto-allowable; everything else, and

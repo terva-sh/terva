@@ -517,7 +517,7 @@ func BuildBeforeToolExecute(ctx context.Context, hookEng *hooks.Engine, gate *co
 			if gate != nil {
 				mode = string(gate.Mode())
 			}
-			auditSink.Record(time.Now(), call.Name, args, mode, allowed, reason)
+			auditSink.Record(time.Now(), auditViaToolCall, call.Name, args, mode, allowed, reason)
 		}()
 
 		hookModified := false
@@ -539,7 +539,7 @@ func BuildBeforeToolExecute(ctx context.Context, hookEng *hooks.Engine, gate *co
 			// exit 2 is the enforcement spelling.
 		}
 		if !skipGate && gate != nil {
-			ok, denyReason, _ := gate.Check(call.Name, args, core.BuildPreview(args, 120))
+			ok, denyReason, _ := gate.Check(call.Name, args, core.BuildPreview(args, 120), call.ID)
 			if !ok {
 				return false, denyReason, nil
 			}

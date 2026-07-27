@@ -26,6 +26,32 @@ describe('PermissionRequest', () => {
     render(<PermissionRequest request={{ call_id: 'c1', tool: 'read', preview: 'x'.repeat(1600) }} onDecide={() => {}} />)
     expect(screen.getByText(/…$/).textContent).toHaveLength(1501)
   })
+
+  it('offers the scoped grant only when the daemon derived scopes, echoing the patterns', () => {
+    const onDecide = vi.fn()
+    render(
+      <PermissionRequest
+        request={{
+          call_id: 'c2',
+          tool: 'bash',
+          preview: 'git status',
+          scopes: [{ display: 'git status', pattern: '^git status(?:\\s|$)' }],
+        }}
+        onDecide={onDecide}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Always allow “git status”' }))
+    expect(onDecide).toHaveBeenCalledWith('c2', {
+      allow: true,
+      persist_tool: true,
+      persist_scopes: ['^git status(?:\\s|$)'],
+    })
+  })
+
+  it('renders no scoped button without scopes', () => {
+    render(<PermissionRequest request={{ call_id: 'c3', tool: 'bash', preview: 'ls' }} onDecide={() => {}} />)
+    expect(screen.queryByRole('button', { name: /Always allow/ })).toBeNull()
+  })
 })
 
 describe('AskRequest', () => {

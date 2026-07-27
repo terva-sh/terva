@@ -265,7 +265,23 @@ args preview with five choices:
 4. yes, always — skip all prompts this session;
 5. no — refuse, the model is told and can try something else.
 
-Session grants reset when the session ends; only option 3 persists.
+For a `bash` call the daemon also derives the command's shape and, when
+it can anchor it honestly, offers a sixth choice:
+
+6. yes, always **this command** — save: appends a permanent rule scoped
+   to the command instead of all of bash, e.g. `{"tool": "bash", "args":
+   "^git status(?:\\s|$)", "decision": "allow"}`. A compound line saves
+   one rule per command (`git status && ls` saves both anchors), and
+   every command on the line must be allowed for a future line to skip
+   the prompt. Unlike option 3, nothing session-wide rides along: bash
+   calls the rules don't match keep asking. The option is withheld —
+   never guessed — when the line resists honest anchoring (command
+   substitution, an env-var prefix, an expanded command word).
+
+Session grants reset when the session ends; only the **save** options
+(3 and 6) persist. The same choices appear in the web panel's approval
+card, which offers "Always allow “…”" whenever the daemon
+derived a scope.
 
 ## Revoking a session grant
 
@@ -297,10 +313,15 @@ jq 'select(.tool=="bash") | {time, mode, decision, cmd: .args.command}' \
   "$TERVA_HOME/logs/audit.log"
 ```
 
-Fields: `time` (UTC), `pid`, `tool`, `mode`, `decision` (`allow`/`deny`),
-`reason` (on deny), `args` (truncated past ~2 KB). **Every** call is
-recorded — reads included — so there are no blind spots; filter at read
-time. The file is created `0600` and, like the rest of `logs/`, is
+Fields: `time` (UTC), `pid`, `via`, `tool`, `mode`, `decision`
+(`allow`/`deny`), `reason` (on deny), `args` (truncated past ~2 KB).
+**Every** call is recorded — reads included — so there are no blind
+spots; filter at read time. All three doors into the gate record, and
+`via` says which one: `tool_call` (a model-issued call through the
+ladder), `host_tool_call` (an extension running a host tool), or
+`code_execution` (a script binding's read/grep/glob — up to one line
+per binding call). Lines written before `via` existed were all model
+tool calls; the other two doors recorded nothing then. The file is created `0600` and, like the rest of `logs/`, is
 excluded from the read jail, because tool arguments (bash commands, file
 writes) can carry secrets. It's append-only and lazily created, so a run
 that calls no tools never writes one; rotate or delete it yourself if it

@@ -8,6 +8,7 @@ import (
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // echoTool is a minimal core.Tool that echoes its "text" arg back.
@@ -53,6 +54,44 @@ func TestHostToolDispatcher(t *testing.T) {
 	content, isErr = d(context.Background(), "ext", "nope", args, false)
 	if !isErr || !strings.Contains(content[0].Text, "no such host tool") {
 		t.Errorf("unknown tool should error, got isErr=%v %+v", isErr, content)
+	}
+}
+
+// Both gate verdicts reached through the host_tool_call door land in the
+// audit log stamped via=host_tool_call — this door checks the gate outside
+// the BeforeToolExecute ladder, whose deferred audit never sees it.
+func TestHostToolDispatcherAudits(t *testing.T) {
+	home := testsupport.TempDir(t)
+	prev := auditSink
+	auditSink = newAuditLog(home)
+	t.Cleanup(func() { auditSink.Close(); auditSink = prev })
+
+	ag := &core.Agent{Tools: core.Registry{"echo": echoTool{}}}
+	// Allowed by a nil gate (the yolo spelling): one allow line, empty mode.
+	d := buildHostToolDispatcher(ag, nil, fakeHostToolSource{})
+	if _, isErr := d(context.Background(), "ext", "echo", json.RawMessage(`{"text":"hi"}`), false); isErr {
+		t.Fatal("expected the nil-gate call to pass")
+	}
+	// Denied by a plan-mode gate: one deny line carrying the reason.
+	gate := core.NewPolicyGate(&core.PermissionPolicy{
+		Mode:     core.ApprovalPlan,
+		ReadOnly: core.NewReadOnlySet("read"),
+	}, nil)
+	d2 := buildHostToolDispatcher(ag, gate, fakeHostToolSource{})
+	if _, isErr := d2(context.Background(), "ext", "echo", json.RawMessage(`{"text":"x"}`), false); !isErr {
+		t.Fatal("expected the plan-mode call to be denied")
+	}
+	auditSink.Close()
+
+	recs := readAuditLines(t, home)
+	if len(recs) != 2 {
+		t.Fatalf("want 2 audit records, got %d", len(recs))
+	}
+	if recs[0].Via != auditViaHostToolCall || recs[0].Decision != "allow" || recs[0].Tool != "echo" || recs[0].Mode != "" {
+		t.Errorf("allow record wrong: %+v", recs[0])
+	}
+	if recs[1].Via != auditViaHostToolCall || recs[1].Decision != "deny" || recs[1].Reason == "" {
+		t.Errorf("deny record wrong: %+v", recs[1])
 	}
 }
 

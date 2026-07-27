@@ -45,21 +45,20 @@ type AgentFactory interface {
 	// confirmer is the ACP confirmer the acp package owns; the factory
 	// wires it as the inner Confirmer of the session's ConfirmGate (via
 	// buildBeforeToolExecute) so a policy "ask" drives
-	// session/request_permission (§8). recordCall is the
-	// BeforeToolExecute-side hook the factory must invoke with each
-	// call.ID before the gate runs, so the confirmer can correlate its
-	// permission request to the right toolCallId (§13). Both are bound to
-	// the session by the acp package after construction.
-	NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer, recordCall func(toolCallID string)) (SessionAgent, error)
+	// session/request_permission (§8). The gate hands each call's id to
+	// ConfirmWithCall directly, so the permission request correlates to the
+	// right toolCallId with no factory-side hook (§13). The confirmer is
+	// bound to the session by the acp package after construction.
+	NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (SessionAgent, error)
 
 	// LoadSessionAgent reopens the durable session at sessionPath (the ACP
 	// sessionId), builds an agent for it with persistence hooks wired, and
 	// returns the same SessionAgent bundle plus the restored transcript
 	// (already repaired by OpenSession). The acp package rehydrates model
 	// context via SetMessages and replays the history to the editor BEFORE
-	// returning the load response (§13). mcpServers/confirmer/recordCall are
-	// wired as in NewSessionAgent.
-	LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer, recordCall func(toolCallID string)) (SessionAgent, []provider.Message, error)
+	// returning the load response (§13). mcpServers/confirmer are wired as
+	// in NewSessionAgent.
+	LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (SessionAgent, []provider.Message, error)
 
 	// ListSessions returns the durable sessions known to the host, newest
 	// first, optionally filtered to cwd (empty cwd means all working
@@ -500,7 +499,7 @@ func (s *agentServer) handleSessionNew(ctx context.Context, params json.RawMessa
 	// to the session after construction (the session does not exist yet).
 	confirmer := newConfirmer()
 
-	sa, err := s.factory.NewSessionAgent(ctx, p.CWD, p.MCPServers, confirmer, confirmer.recordCall)
+	sa, err := s.factory.NewSessionAgent(ctx, p.CWD, p.MCPServers, confirmer)
 	if err != nil {
 		return nil, errInternal("build agent: " + err.Error())
 	}
@@ -613,7 +612,7 @@ func (s *agentServer) handleSessionLoad(ctx context.Context, params json.RawMess
 
 	confirmer := newConfirmer()
 
-	sa, msgs, err := s.factory.LoadSessionAgent(ctx, p.SessionID, cwd, p.MCPServers, confirmer, confirmer.recordCall)
+	sa, msgs, err := s.factory.LoadSessionAgent(ctx, p.SessionID, cwd, p.MCPServers, confirmer)
 	if err != nil {
 		// A missing / unreadable session file is the resource-not-found case;
 		// anything else is an internal failure building the agent.

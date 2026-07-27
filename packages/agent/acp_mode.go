@@ -79,8 +79,8 @@ type acpFactory struct {
 // NewSessionAgent builds the agent + a fresh durable session at cwd, with
 // persistence hooks wired (§3). The ACP sessionId becomes the session's file
 // path, so a later session/load reopens exactly this transcript.
-func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer, recordCall func(string)) (acp.SessionAgent, error) {
-	r, ag, gate, cleanup, observe, extMgr, err := f.buildAgent(ctx, cwd, mcpServers, confirmer, recordCall)
+func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (acp.SessionAgent, error) {
+	r, ag, gate, cleanup, observe, extMgr, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
 	if err != nil {
 		return acp.SessionAgent{}, err
 	}
@@ -112,7 +112,7 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 // LoadSessionAgent reopens the durable session at sessionPath (the ACP
 // sessionId), builds an agent for it, wires persistence, and returns the
 // repaired transcript so the acp package can rehydrate + replay it (§10/§13).
-func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer, recordCall func(string)) (acp.SessionAgent, []provider.Message, error) {
+func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (acp.SessionAgent, []provider.Message, error) {
 	sess, msgs, err := core.OpenSession(sessionPath)
 	if err != nil {
 		// Propagate os.IsNotExist verbatim so the acp package maps a missing
@@ -128,7 +128,7 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 	if cwd == "" {
 		cwd = sess.Meta.CWD
 	}
-	r, ag, gate, cleanup, observe, extMgr, err := f.buildAgent(ctx, cwd, mcpServers, confirmer, recordCall)
+	r, ag, gate, cleanup, observe, extMgr, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
 	if err != nil {
 		_ = sess.Close()
 		return acp.SessionAgent{}, nil, err
@@ -316,7 +316,7 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 // servers. A TRUSTED project's .terva/config.json MCP — a source the editor does
 // NOT manage — IS merged (trust-gated, editor wins on a collision); see
 // setupACPMCP.
-func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer, recordCall func(string)) (build.Resolved, *core.Agent, *core.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, error) {
+func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (build.Resolved, *core.Agent, *core.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, error) {
 	// Each session resolves with its own cwd so tools, system prompt, and
 	// session dir bind to the editor-provided working directory.
 	args := f.args
@@ -396,17 +396,11 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// intercept). Passing extMgr in activates BOTH the extension tool-call
 	// intercept AND — through the confirm gate built above — the manifest
 	// permission rules. The ladder is nil-safe across all three args.
-	ladder := build.BuildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
-	// Wrap the ladder so the confirmer learns the toolCallId it is about to
-	// gate before gate.Check (and thus Confirm) runs — the §13 correlation
-	// seam. recordCall stays OUTSIDE the ladder so an extension tool's
-	// permission request still correlates to the ACP toolCallId. Tools execute
-	// one at a time per agent, so exactly one call is current when Confirm
-	// fires.
-	ag.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
-		recordCall(call.ID)
-		return ladder(call)
-	}
+	// The gate hands each call's id to ConfirmWithCall directly — the §13
+	// correlation seam — so no wrapper records a "current call" ahead of the
+	// ladder, and nothing collides when a host_tool_call approval parks
+	// concurrently with a model call's.
+	ag.BeforeToolExecute = build.BuildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
 	build.WireHostToolDispatcher(ag, extMgr, confirmGate)
 	// Apply the subset of the non-interactive extension hooks that make sense
 	// under ACP: BeforeTurn / BeforeAssistantMessage (extension turn +

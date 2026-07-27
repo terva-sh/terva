@@ -28,12 +28,10 @@ import (
 
 func newTestSession() *wsSession {
 	return &wsSession{
-		id:       "test",
-		hub:      newWSHub(),
-		pendPerm: map[string]chan core.ConfirmDecision{},
-		pendAsk:  map[string]chan core.UserAnswer{},
-		permReq:  map[string]ctrlproto.PermissionRequest{},
-		askReq:   map[string]ctrlproto.AskRequest{},
+		id:      "test",
+		hub:     newWSHub(),
+		permReq: map[string]ctrlproto.PermissionRequest{},
+		askReq:  map[string]ctrlproto.AskRequest{},
 	}
 }
 
@@ -158,11 +156,10 @@ func TestWebConfirmerApproveWins(t *testing.T) {
 	sub := s.hub.add(nil, false)
 	s.mu.Lock()
 	s.turnCtx = t.Context()
-	s.curCallID = "call_42"
 	s.mu.Unlock()
 
 	result := make(chan core.ConfirmDecision, 1)
-	go func() { result <- (&webConfirmer{s: s}).Confirm("bash", "ls -la") }()
+	go func() { result <- (&webConfirmer{s: s}).ConfirmWithCall("bash", "ls -la", "call_42") }()
 
 	ev := recvEvent(t, sub)
 	if ev.Type != ctrlproto.EventPermissionRequest || ev.Permission == nil {
@@ -224,11 +221,10 @@ func TestPendingPermissionRecordedForSnapshot(t *testing.T) {
 	s := newTestSession()
 	s.mu.Lock()
 	s.turnCtx = t.Context()
-	s.curCallID = "c9"
 	s.mu.Unlock()
 	sub := s.hub.add(nil, false)
 
-	go (&webConfirmer{s: s}).Confirm("bash", "ls -la")
+	go (&webConfirmer{s: s}).ConfirmWithCall("bash", "ls -la", "c9")
 
 	if ev := recvEvent(t, sub); ev.Type != ctrlproto.EventPermissionRequest {
 		t.Fatalf("want permission_request, got %q", ev.Type)
@@ -257,11 +253,10 @@ func TestWebConfirmerCancelFailsClosed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
 	s.turnCtx = ctx
-	s.curCallID = "c1"
 	s.mu.Unlock()
 
 	result := make(chan core.ConfirmDecision, 1)
-	go func() { result <- (&webConfirmer{s: s}).Confirm("bash", "rm -rf /") }()
+	go func() { result <- (&webConfirmer{s: s}).ConfirmWithCall("bash", "rm -rf /", "c1") }()
 	// Give Confirm a moment to park, then cancel the turn.
 	time.Sleep(20 * time.Millisecond)
 	cancel()
@@ -1760,7 +1755,7 @@ func TestPermissionsRuleAction(t *testing.T) {
 	w.sessions["x"] = s
 
 	// A tool the confirmer would allow.
-	if allowed, _, _ := gate.Check("mytool", nil, ""); !allowed {
+	if allowed, _, _ := gate.Check("mytool", nil, "", ""); !allowed {
 		t.Fatal("precondition: mytool should be allowed by the confirmer")
 	}
 
@@ -1768,7 +1763,7 @@ func TestPermissionsRuleAction(t *testing.T) {
 		t.Fatalf("add_rule: %v", err)
 	}
 	// Live: the deny rule now blocks mytool (deny beats the confirmer).
-	if allowed, _, _ := gate.Check("mytool", nil, ""); allowed {
+	if allowed, _, _ := gate.Check("mytool", nil, "", ""); allowed {
 		t.Error("deny rule should block mytool live")
 	}
 	if cfg, _ := config.LoadConfig(); len(cfg.Permissions) != 1 || cfg.Permissions[0].Tool != "mytool" {
@@ -1781,7 +1776,7 @@ func TestPermissionsRuleAction(t *testing.T) {
 	if err := s.permissionsAction("remove_rule", map[string]string{"tool": "mytool", "decision": "deny"}); err != nil {
 		t.Fatalf("remove_rule: %v", err)
 	}
-	if allowed, _, _ := gate.Check("mytool", nil, ""); !allowed {
+	if allowed, _, _ := gate.Check("mytool", nil, "", ""); !allowed {
 		t.Error("after removing the deny rule, mytool should be allowed again")
 	}
 	if cfg, _ := config.LoadConfig(); len(cfg.Permissions) != 0 {

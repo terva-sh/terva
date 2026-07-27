@@ -131,11 +131,14 @@ type Resolved struct {
 	// docs/plans/workspace-trust.md.
 	Trusted bool
 
-	// Bookkeeping for MergeExtensionTools. Captured at Resolve time
-	// so the system prompt can be rebuilt later without re-running
-	// resolve.
-	systemAppend []PromptSegment
-	systemCustom string
+	// promptOpts is the exact SystemPromptOpts Resolve rendered the system
+	// prompt with, captured whole so rebuildSystemPrompt starts from what
+	// Resolve used and overwrites ONLY the deliberately-live inputs (tool
+	// registry, extension context, persona). Any other field — including
+	// one added tomorrow — flows through every rebuild untouched,
+	// so the set-at-Resolve-but-dropped-on-rebuild bug class (#399's
+	// examples hint) is closed structurally, not field by field.
+	promptOpts SystemPromptOpts
 	// Persona is the resolved active Persona, captured so rebuildSystemPrompt
 	// re-renders with the same identity + charter rather than re-resolving.
 	Persona          Persona
@@ -213,16 +216,6 @@ type Resolved struct {
 	// take. Length 1 (or nil) means a single opening, no swipe. Empty when no card.
 	CardGreetings []string
 
-	// introOverride is the fully-resolved intro-slot override — a --card's
-	// system_prompt/framing ({{original}} + macros resolved) or, for a native
-	// additive Persona, its agent_introduction — captured so rebuildSystemPrompt
-	// reproduces the SAME intro on a mid-session re-render (e.g. after an
-	// extension merges tools). introSource is its provenance label. Empty when
-	// nothing overrides the default intro; both are ignored when systemCustom is
-	// set (an immersive Persona / --system-prompt owns the whole prompt).
-	introOverride string
-	introSource   string
-
 	// postHistory is a --card's post_history_instructions (macros + {{original}}
 	// resolved), injected by PerTurnContext into the uncached per-turn tail
 	// after the lore block. Empty when no card / no PHI.
@@ -248,16 +241,6 @@ type Resolved struct {
 	// → steer away from inventing them.
 	userGender   string
 	userPronouns string
-
-	// tervaDocsDir / tervaExamplesDir are the doc-hint targets
-	// tervadocs/tervaexamples.EnsureInstalled resolved (empty when the install
-	// failed and the hint was suppressed), captured so rebuildSystemPrompt
-	// re-renders with exactly what Resolve rendered with. Re-deriving them at
-	// rebuild time is what silently dropped the examples hint on every
-	// post-resolve rebuild — and resurrected a docs hint pointing at a
-	// directory the failed install never wrote.
-	tervaDocsDir     string
-	tervaExamplesDir string
 
 	// SystemSegments is the labeled provenance of the current system prompt
 	// (the source SystemSegments produced), captured for the prompt-dump
@@ -310,34 +293,26 @@ func (r *Resolved) AddExtraTools(extra []core.Tool) {
 }
 
 // rebuildSystemPrompt re-renders SystemPrompt from the captured
-// resolve-time materials plus the current tool registry and the
-// extensions' static context contribution. The single render path for
-// every post-resolve change (extra tools, extension-tool merge,
-// extension static context) so the inputs can't drift.
+// resolve-time opts plus the deliberately-live inputs: the current tool
+// registry (extra tools, extension-tool merge, MCP), the extensions'
+// static context contribution, and the persona. The single render path
+// for every post-resolve change so the inputs can't drift — everything
+// not overwritten here renders exactly as Resolve rendered it.
 func (r *Resolved) rebuildSystemPrompt() {
-	appendBlocks := r.systemAppend
+	opts := r.promptOpts
+	appendBlocks := opts.Append
 	if strings.TrimSpace(r.extensionContext) != "" {
-		appendBlocks = append(append([]PromptSegment{}, r.systemAppend...), PromptSegment{Source: SourceExtensionContext, Text: r.extensionContext})
+		appendBlocks = append(append([]PromptSegment{}, opts.Append...), PromptSegment{Source: SourceExtensionContext, Text: r.extensionContext})
 	}
-	r.SystemSegments = SystemSegments(SystemPromptOpts{
-		CWD:               r.CWD,
-		Tools:             toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions),
-		Custom:            r.systemCustom,
-		Append:            appendBlocks,
-		TervaDocsDir:      r.tervaDocsDir,
-		TervaExamplesDir:  r.tervaExamplesDir,
-		StatusTool:        r.ToolRegistry["terva_status"] != nil,
-		PersonaName:       r.Persona.Name,
-		Charter:           r.Persona.Charter,
-		CharterOrigin:     r.Persona.Source,
-		BaseCharter:       r.Persona.Inherited,
-		BaseCharterOrigin: r.Persona.InheritedSource,
-		Experience:        r.Experience,
-		Surface:           r.Surface,
-		Portable:          r.Portable,
-		IntroOverride:     r.introOverride,
-		IntroSource:       r.introSource,
-	})
+	opts.Tools = toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions)
+	opts.Append = appendBlocks
+	opts.StatusTool = r.ToolRegistry["terva_status"] != nil
+	opts.PersonaName = r.Persona.Name
+	opts.Charter = r.Persona.Charter
+	opts.CharterOrigin = r.Persona.Source
+	opts.BaseCharter = r.Persona.Inherited
+	opts.BaseCharterOrigin = r.Persona.InheritedSource
+	r.SystemSegments = SystemSegments(opts)
 	r.SystemPrompt = joinSegmentTexts(r.SystemSegments)
 }
 
@@ -1054,6 +1029,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// nothing to activate — and only with the base coding tools. Visibility only:
 	// it never grants authority (EnableLazyTools + the permission gate keep the
 	// full registry callable/gated), so it is classed read-only (no confirm).
+	// lazyVisibilityEngages keys on this registration: no reveal path, no
+	// hiding — a session outside this condition never gets EnableLazyTools.
 	if eff.Config.LazyTools && HasBaseWorkspaceTools(args) {
 		reg["activate_tools"] = &tools.ActivateToolsTool{}
 	}
@@ -1133,7 +1110,9 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		introSource = "persona:introduction"
 	}
 
-	sysSegs := SystemSegments(SystemPromptOpts{
+	// Captured whole on Resolved (promptOpts) so rebuildSystemPrompt starts
+	// from exactly this and overwrites only its deliberately-live inputs.
+	sysOpts := SystemPromptOpts{
 		CWD:               args.CWD,
 		Tools:             summaries,
 		Custom:            custom,
@@ -1151,7 +1130,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		Portable:          args.Portable,
 		IntroOverride:     introOverride,
 		IntroSource:       introSource,
-	})
+	}
+	sysSegs := SystemSegments(sysOpts)
 	sys := joinSegmentTexts(sysSegs)
 
 	// The set-signal is the RAW value (before normalizing): a non-empty raw
@@ -1221,11 +1201,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		EngineFeatures:           eff.Config.EngineFeatures,
 		EscalateAuto:             eff.Config.Escalation != nil && eff.Config.Escalation.Auto,
 		Trusted:                  trusted,
-		systemAppend:             append_,
+		promptOpts:               sysOpts,
 		SystemSegments:           sysSegs,
-		systemCustom:             custom,
-		tervaDocsDir:             docsDir,
-		tervaExamplesDir:         examplesDir,
 		Persona:                  Persona,
 		toolDescriptions:         descMapFromSummaries(summaries),
 		ApprovalMode:             approval,
@@ -1240,8 +1217,6 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		worldLore:                newWorldLoreRecord(args.Experience != ""),
 		CardGreeting:             CardGreeting,
 		CardGreetings:            cardGreetings,
-		introOverride:            introOverride,
-		introSource:              introSource,
 		postHistory:              cardPostHistory,
 		note:                     newNoteRecord(args.Experience != ""),
 		userDesc:                 newNoteRecord(args.Experience != ""),
@@ -1560,8 +1535,13 @@ func (r Resolved) NewAgent() *core.Agent {
 	// Lazy tool visibility (retro H2·b): advertise only the core group plus the
 	// configured always-active groups; the model brings the rest in on demand
 	// with activate_tools (registered above). Every host funnels through here,
-	// so the opt-in is universal (TUI, web, acp, chat, swarm children).
-	if r.LazyTools {
+	// so the opt-in is universal (TUI, web, acp, chat, swarm children) — but it
+	// engages only where the reveal path exists (lazyVisibilityEngages): hiding
+	// groups in a session that never registered activate_tools (chat, play,
+	// --no-tools, --no-workspace-tools) would bury extension and world tools
+	// with no way for the model to bring them back. Play acts ONLY through
+	// world-extension tools, so that is a hard break, not a degradation.
+	if lazyVisibilityEngages(&r) {
 		a.EnableLazyTools(r.LazyToolActive...)
 	}
 	// Engine features (docs/proposals/activation-continuation.md stage 3):

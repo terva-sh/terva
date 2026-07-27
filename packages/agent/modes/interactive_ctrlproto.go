@@ -696,7 +696,12 @@ func (i *Interactive) swapModelCarrier(prov, model string, rescue bool) {
 func (i *Interactive) enqueueCarrierPermission(req ctrlproto.PermissionRequest) {
 	sess := i.carrierSession() // capture: the answer must reach the session that asked
 	resp := make(chan core.ConfirmDecision, 1)
-	cr := &dialogs.ConfirmRequest{ToolName: req.Tool, Preview: req.Preview, Resp: resp}
+	cr := &dialogs.ConfirmRequest{
+		ToolName: req.Tool,
+		Preview:  req.Preview,
+		Scopes:   ctrlproto.CoreGrantScopes(req.Scopes),
+		Resp:     resp,
+	}
 	i.mu.Lock()
 	i.carrierPerm[req.CallID] = cr
 	i.mu.Unlock()

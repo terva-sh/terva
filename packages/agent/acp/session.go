@@ -120,7 +120,6 @@ type session struct {
 	// decision never re-prompts the editor (§8).
 	permMu      sync.Mutex
 	permTurnCtx context.Context
-	permCallID  string
 	permDecided map[string]bool // toolName -> allow (allow_always / reject_always)
 
 	// editSnapshots holds the pre-edit file contents captured when an
@@ -202,38 +201,27 @@ func (s *session) takeCancel() context.CancelFunc {
 func (s *session) beginTurnPermission(turnCtx context.Context) {
 	s.permMu.Lock()
 	s.permTurnCtx = turnCtx
-	s.permCallID = ""
 	s.permMu.Unlock()
 }
 
 func (s *session) endTurnPermission() {
 	s.permMu.Lock()
 	s.permTurnCtx = nil
-	s.permCallID = ""
 	s.permMu.Unlock()
 }
 
-// setCurrentCall records the toolCallId BeforeToolExecute is about to gate,
-// so the confirmer can correlate its session/request_permission with the
-// right tool_call (§13). Tools execute one at a time per agent, so exactly
-// one call is current at a time.
-func (s *session) setCurrentCall(toolCallID string) {
-	s.permMu.Lock()
-	s.permCallID = toolCallID
-	s.permMu.Unlock()
-}
-
-// permContext returns the current turn ctx + toolCallId for the confirmer.
-// The ctx is nil-guarded to context.Background() so a confirmer invoked
-// outside a tracked turn still has a usable (uncancellable) context.
-func (s *session) permContext() (context.Context, string) {
+// turnContext returns the current turn ctx for a permission round-trip,
+// nil-guarded to context.Background() so a confirmer invoked outside a
+// tracked turn still has a usable (uncancellable) context. The call id no
+// longer lives here: the gate hands it straight to ConfirmWithCall (§13).
+func (s *session) turnContext() context.Context {
 	s.permMu.Lock()
 	defer s.permMu.Unlock()
 	ctx := s.permTurnCtx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return ctx, s.permCallID
+	return ctx
 }
 
 // rememberDecision caches an allow_always / reject_always verdict for the

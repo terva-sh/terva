@@ -151,6 +151,34 @@ func TestRPCConfirmCancelledDenies(t *testing.T) {
 	}
 }
 
+// TestRPCAbortUnparksPendingApproval: `abort` must answer a parked approval,
+// not just cancel the turn context. Confirm blocks outside the turn's context
+// (BeforeToolExecute is ctx-free), so before the ParkTable migration an abort
+// during a pending approval left the prompt goroutine parked until the driver
+// answered or the process ended — the sharpest of the three turn-cancel gaps
+// found in the 2026-07 confirmer survey.
+func TestRPCAbortUnparksPendingApproval(t *testing.T) {
+	out := &syncBuf{}
+	s := &rpcServer{ctx: context.Background(), out: out}
+	got := make(chan core.ConfirmDecision, 1)
+	go func() { got <- s.Confirm("bash", "sleep 100") }()
+	waitForAsk(t, out)
+
+	s.dispatch("abort", "abort-1", nil)
+
+	select {
+	case d := <-got:
+		if d.Allow {
+			t.Error("an aborted approval must deny, not allow")
+		}
+		if !strings.Contains(d.Reason, "aborted") {
+			t.Errorf("Reason = %q, want it to name the abort", d.Reason)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Confirm stayed parked across abort — the gap this test pins")
+	}
+}
+
 // TestRPCGateRoutesThroughAskApprove is the whole point, end to end: a
 // core.ConfirmGate backed by the rpc server routes a would-be-refused tool call
 // through the wire and honours the driver's verdict. This is the "5th carrier"
@@ -166,7 +194,7 @@ func TestRPCGateRoutesThroughAskApprove(t *testing.T) {
 	}
 	got := make(chan res, 1)
 	go func() {
-		allow, reason, _ := gate.Check("bash", nil, "rm -rf /tmp/x")
+		allow, reason, _ := gate.Check("bash", nil, "rm -rf /tmp/x", "")
 		got <- res{allow, reason}
 	}()
 

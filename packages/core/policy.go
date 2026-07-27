@@ -319,10 +319,14 @@ func (p *PermissionPolicy) Evaluate(toolName string, args json.RawMessage) (Poli
 	// Compound-command decomposition. A single shell call can run several
 	// commands; judging each independently stops an allow rule scoped to
 	// one program from clearing the others (and lets an anchored deny
-	// match a command that isn't first on the line). Only engaged when
-	// rules exist — with no rules every scope resolves to the same mode
-	// default, so the split would change nothing but cost a parse.
-	if p.DecomposeCommand != nil && len(p.Rules) > 0 {
+	// match a command that isn't first on the line). Engaged whenever a
+	// decomposer is wired — including with zero rules, where today every
+	// scope resolves to the same mode default and only a parse is spent.
+	// That uniformity is deliberate: the moment any default becomes
+	// arg-sensitive, a rules-gated split would silently judge a rules-free
+	// session's `git diff && rm -rf /` as one unit. The sandbox has always
+	// split unconditionally; the policy now matches it.
+	if p.DecomposeCommand != nil {
 		if scopes := p.DecomposeCommand(toolName, args); len(scopes) >= 2 {
 			sawAsk := false
 			for _, sa := range scopes {

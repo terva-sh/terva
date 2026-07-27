@@ -17,27 +17,66 @@ import (
 // tells the others to dismiss their prompt.
 type webConfirmer struct{ s *wsSession }
 
-var _ core.Confirmer = (*webConfirmer)(nil)
+var _ core.ConfirmerWithRequest = (*webConfirmer)(nil)
+var _ core.ConfirmerWithCall = (*webConfirmer)(nil)
 
+// Confirm is the id-less fallback (a gate caller that knows no call id); it
+// mints a unique park key so even two id-less asks can never collide.
 func (c *webConfirmer) Confirm(toolName, preview string) core.ConfirmDecision {
+	return c.ConfirmWithRequest(core.ConfirmRequest{Tool: toolName, Preview: preview})
+}
+
+// ConfirmWithCall is kept for gate versions that predate ConfirmWithRequest.
+func (c *webConfirmer) ConfirmWithCall(toolName, preview, callID string) core.ConfirmDecision {
+	return c.ConfirmWithRequest(core.ConfirmRequest{Tool: toolName, Preview: preview, CallID: callID})
+}
+
+// ConfirmWithRequest parks this one call under its own id. The id arrives
+// from the gate — the model's tool-call id, or the unique id the
+// host_tool_call / script-binding door minted — never from session state:
+// the old curCallID side-channel assumed tools run one at a time, and a
+// host_tool_call approval parked concurrently with a model call's overwrote
+// its pending channel, wedging the loser until turn cancel
+// (TestWebConfirmerConcurrentParksDistinct). The gate's derived grant
+// scopes ride the broadcast so any client can offer the scoped "always
+// allow <command>" option.
+func (c *webConfirmer) ConfirmWithRequest(cr core.ConfirmRequest) core.ConfirmDecision {
 	s := c.s
 	s.mu.Lock()
-	callID := s.curCallID
 	turnCtx := s.turnCtx
 	s.mu.Unlock()
+
+	callID := cr.CallID
+	var (
+		ch      <-chan core.ConfirmDecision
+		release func()
+	)
+	if callID != "" {
+		var ok bool
+		ch, release, ok = s.permPark.Park(callID)
+		if !ok {
+			// A colliding id must never displace a live park (the pre-#408
+			// wedge); fall through and mint a unique one instead.
+			callID = ""
+		}
+	}
 	if callID == "" {
-		callID = "call" // fallback; recordCall normally sets the real id
+		callID = fmt.Sprintf("call-%d", atomic.AddUint64(&s.askSeq, 1))
+		ch, release, _ = s.permPark.Park(callID)
 	}
 
-	req := ctrlproto.PermissionRequest{CallID: callID, Tool: toolName, Preview: preview}
-	ch := make(chan core.ConfirmDecision, 1)
+	req := ctrlproto.PermissionRequest{
+		CallID:  callID,
+		Tool:    cr.Tool,
+		Preview: cr.Preview,
+		Scopes:  ctrlproto.GrantScopesFromCore(cr.Scopes),
+	}
 	s.mu.Lock()
-	s.pendPerm[callID] = ch
 	s.permReq[callID] = req
 	s.mu.Unlock()
 	defer func() {
+		release()
 		s.mu.Lock()
-		delete(s.pendPerm, callID)
 		delete(s.permReq, callID)
 		s.mu.Unlock()
 		s.broadcast(ctrlproto.PermissionResolvedEvent(callID))
@@ -63,9 +102,9 @@ func (c *webConfirmer) Confirm(toolName, preview string) core.ConfirmDecision {
 // for permission (over its backend's ask/approve carrier) lands on the same card
 // the session's own tool calls do, so one human answers for both.
 //
-// Unlike webConfirmer — scoped to the session's OWN in-flight call via
-// curCallID — it mints a stable per-request callID namespaced by the agent id,
-// so several workers' concurrent asks never collide in pendPerm. It parks on the
+// Unlike webConfirmer — keyed by the call id the gate passes down — it mints
+// a stable per-request callID namespaced by the agent id, so several workers'
+// concurrent asks never collide in pendPerm. It parks on the
 // daemon context rather than a turn context because a worker is not the session's
 // turn; the runner's handleAsk separately abandons the wait if the worker is
 // stopped first (racing this Confirm against the worker's own context).
@@ -85,14 +124,13 @@ func (c *workerConfirmer) Confirm(toolName, preview string) core.ConfirmDecision
 	// correlate this ask to the worker's lane tile; the callID prefix and the
 	// "worker <id>:" preview stay as human-facing labeling, not the contract.
 	req := ctrlproto.PermissionRequest{CallID: callID, Tool: toolName, Preview: preview, Agent: c.agentID}
-	ch := make(chan core.ConfirmDecision, 1)
+	ch, release, _ := s.permPark.Park(callID) // per-agent seq: never collides
 	s.mu.Lock()
-	s.pendPerm[callID] = ch
 	s.permReq[callID] = req
 	s.mu.Unlock()
 	defer func() {
+		release()
 		s.mu.Lock()
-		delete(s.pendPerm, callID)
 		delete(s.permReq, callID)
 		s.mu.Unlock()
 		s.broadcast(ctrlproto.PermissionResolvedEvent(callID))
@@ -118,14 +156,13 @@ func (a *webAsker) Ask(ctx context.Context, q core.UserQuestion) (core.UserAnswe
 	askID := fmt.Sprintf("ask_%d", atomic.AddUint64(&s.askSeq, 1))
 
 	req := ctrlproto.AskRequest{AskID: askID, Question: q.Question, Options: q.Options, AllowCustom: q.AllowCustom}
-	ch := make(chan core.UserAnswer, 1)
+	ch, release, _ := s.askPark.Park(askID) // minted seq: never collides
 	s.mu.Lock()
-	s.pendAsk[askID] = ch
 	s.askReq[askID] = req
 	s.mu.Unlock()
 	defer func() {
+		release()
 		s.mu.Lock()
-		delete(s.pendAsk, askID)
 		delete(s.askReq, askID)
 		s.mu.Unlock()
 		s.broadcast(ctrlproto.AskResolvedEvent(askID))
@@ -144,26 +181,10 @@ func (a *webAsker) Ask(ctx context.Context, q core.UserQuestion) (core.UserAnswe
 // approve delivers a decision to a parked webConfirmer. First answer wins; a
 // decision for an unknown/already-resolved call is a harmless no-op.
 func (s *wsSession) approve(callID string, d core.ConfirmDecision) {
-	s.mu.Lock()
-	ch := s.pendPerm[callID]
-	s.mu.Unlock()
-	if ch != nil {
-		select {
-		case ch <- d:
-		default:
-		}
-	}
+	s.permPark.Deliver(callID, d)
 }
 
 // answer delivers an answer to a parked webAsker. First answer wins.
 func (s *wsSession) answer(askID string, a core.UserAnswer) {
-	s.mu.Lock()
-	ch := s.pendAsk[askID]
-	s.mu.Unlock()
-	if ch != nil {
-		select {
-		case ch <- a:
-		default:
-		}
-	}
+	s.askPark.Deliver(askID, a)
 }

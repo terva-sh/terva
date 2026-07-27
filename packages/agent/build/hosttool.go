@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 
 	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extensions"
@@ -18,6 +19,11 @@ import (
 type hostToolSource interface {
 	HasTool(name string) bool
 }
+
+// hostGateSeq mints unique call ids for the gate doors that have no model
+// tool-call id (host_tool_call and code_execution's script bindings). Process
+// wide on purpose: uniqueness is the whole contract.
+var hostGateSeq atomic.Uint64
 
 // buildHostToolDispatcher returns the handler that runs host tools for
 // extension host_tool_call frames (protocol 3, extproto.HostToolCallFromExt).
@@ -46,9 +52,18 @@ func buildHostToolDispatcher(ag *core.Agent, gate *core.ConfirmGate, mgr hostToo
 		}
 		// Same permission gate as a model-issued call: an extension never
 		// bypasses approval. (silent is the extension's UI hint, not a
-		// permission override.)
+		// permission override.) This door checks the gate outside the
+		// BeforeToolExecute ladder, so it writes its own audit line — and it
+		// mints its own call id: host_tool_call dispatches on its own
+		// goroutine, so this approval can park CONCURRENTLY with a model
+		// call's, and a borrowed "current call" id would collide in the
+		// confirmer's pending map (the answer reaches one of them, the other
+		// wedges until turn cancel).
 		preview := core.BuildPreview(args, 120)
-		if allowed, reason, _ := gate.Check(toolName, args, preview); !allowed {
+		callID := fmt.Sprintf("hostcall-%s-%d", extName, hostGateSeq.Add(1))
+		allowed, reason, _ := gate.Check(toolName, args, preview, callID)
+		recordGateAudit(auditViaHostToolCall, toolName, args, gate, allowed, reason)
+		if !allowed {
 			return errOut(fmt.Sprintf("host_tool_call: %q denied: %s", toolName, reason))
 		}
 		res, err := tool.Execute(ctx, args, nil)

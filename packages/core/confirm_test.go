@@ -28,7 +28,7 @@ func (r *recordingConfirmer) Confirm(toolName, preview string) ConfirmDecision {
 
 func TestConfirmGateNilAllowsEverything(t *testing.T) {
 	var g *ConfirmGate
-	allow, reason, args := g.Check("bash", nil, "rm -rf /")
+	allow, reason, args := g.Check("bash", nil, "rm -rf /", "")
 	if !allow || reason != "" || args != nil {
 		t.Fatalf("nil gate should allow, got allow=%v reason=%q args=%s", allow, reason, args)
 	}
@@ -36,7 +36,7 @@ func TestConfirmGateNilAllowsEverything(t *testing.T) {
 
 func TestConfirmGateNilInnerRefuses(t *testing.T) {
 	g := NewConfirmGate(nil)
-	allow, reason, _ := g.Check("bash", nil, "ls")
+	allow, reason, _ := g.Check("bash", nil, "ls", "")
 	if allow {
 		t.Fatal("gate with nil inner should refuse")
 	}
@@ -51,10 +51,10 @@ func TestConfirmGateAllowOnce(t *testing.T) {
 		{Allow: true},
 	}}
 	g := NewConfirmGate(rc)
-	if allow, _, _ := g.Check("bash", nil, "ls"); !allow {
+	if allow, _, _ := g.Check("bash", nil, "ls", ""); !allow {
 		t.Fatal("call 1 should allow")
 	}
-	if allow, _, _ := g.Check("bash", nil, "ls"); !allow {
+	if allow, _, _ := g.Check("bash", nil, "ls", ""); !allow {
 		t.Fatal("call 2 should allow")
 	}
 	// Two calls, two confirmer invocations (no remember).
@@ -70,16 +70,16 @@ func TestConfirmGateRememberTool(t *testing.T) {
 	g := NewConfirmGate(rc)
 
 	// First call prompts and remembers.
-	if allow, _, _ := g.Check("bash", nil, "ls"); !allow {
+	if allow, _, _ := g.Check("bash", nil, "ls", ""); !allow {
 		t.Fatal("call 1 should allow")
 	}
 	// Second call short-circuits; confirmer must NOT be invoked.
-	if allow, _, _ := g.Check("bash", nil, "pwd"); !allow {
+	if allow, _, _ := g.Check("bash", nil, "pwd", ""); !allow {
 		t.Fatal("call 2 should allow from memory")
 	}
 	// Different tool still prompts.
 	rc.replies = append(rc.replies, ConfirmDecision{Allow: false, Reason: "no"})
-	if allow, reason, _ := g.Check("read", nil, "foo.txt"); allow || reason != "no" {
+	if allow, reason, _ := g.Check("read", nil, "foo.txt", ""); allow || reason != "no" {
 		t.Errorf("different tool should re-prompt; got allow=%v reason=%q", allow, reason)
 	}
 	if len(rc.calls) != 2 {
@@ -92,14 +92,14 @@ func TestConfirmGateRememberAll(t *testing.T) {
 		{Allow: true, RememberAll: true},
 	}}
 	g := NewConfirmGate(rc)
-	if allow, _, _ := g.Check("bash", nil, "ls"); !allow {
+	if allow, _, _ := g.Check("bash", nil, "ls", ""); !allow {
 		t.Fatal("call 1 should allow")
 	}
 	// From now on everything short-circuits.
-	if allow, _, _ := g.Check("read", nil, "foo.txt"); !allow {
+	if allow, _, _ := g.Check("read", nil, "foo.txt", ""); !allow {
 		t.Fatal("call 2 should allow")
 	}
-	if allow, _, _ := g.Check("write", nil, "bar.txt"); !allow {
+	if allow, _, _ := g.Check("write", nil, "bar.txt", ""); !allow {
 		t.Fatal("call 3 should allow")
 	}
 	if len(rc.calls) != 1 {
@@ -112,7 +112,7 @@ func TestConfirmGateRefuseSurfacesReason(t *testing.T) {
 		{Allow: false, Reason: "do not run sudo"},
 	}}
 	g := NewConfirmGate(rc)
-	allow, reason, _ := g.Check("bash", nil, "sudo rm -rf /")
+	allow, reason, _ := g.Check("bash", nil, "sudo rm -rf /", "")
 	if allow || reason != "do not run sudo" {
 		t.Errorf("want block + reason, got allow=%v reason=%q", allow, reason)
 	}
@@ -123,7 +123,7 @@ func TestConfirmGateRefuseEmptyReasonGetsDefault(t *testing.T) {
 		{Allow: false},
 	}}
 	g := NewConfirmGate(rc)
-	_, reason, _ := g.Check("bash", nil, "x")
+	_, reason, _ := g.Check("bash", nil, "x", "")
 	if reason == "" {
 		t.Fatal("empty reason must be replaced with a sensible default")
 	}
@@ -135,16 +135,16 @@ func TestConfirmGateAllowAllRuntime(t *testing.T) {
 	}}
 	g := NewConfirmGate(rc)
 	// Refuse first call
-	if allow, _, _ := g.Check("bash", nil, "ls"); allow {
+	if allow, _, _ := g.Check("bash", nil, "ls", ""); allow {
 		t.Fatal("call 1 should refuse")
 	}
 	// User types /yolo
 	g.AllowAll()
 	// All subsequent calls allowed without prompting.
-	if allow, _, _ := g.Check("bash", nil, "rm -rf tmp"); !allow {
+	if allow, _, _ := g.Check("bash", nil, "rm -rf tmp", ""); !allow {
 		t.Fatal("after AllowAll, should allow")
 	}
-	if allow, _, _ := g.Check("read", nil, "x"); !allow {
+	if allow, _, _ := g.Check("read", nil, "x", ""); !allow {
 		t.Fatal("after AllowAll, should allow any tool")
 	}
 	if len(rc.calls) != 1 {
@@ -159,7 +159,7 @@ func TestConfirmGateRevokeReprompts(t *testing.T) {
 	}}
 	g := NewConfirmGate(rc)
 
-	if allow, _, _ := g.Check("bash", nil, "ls"); !allow {
+	if allow, _, _ := g.Check("bash", nil, "ls", ""); !allow {
 		t.Fatal("call 1 should allow + remember")
 	}
 	// Grant is visible in the inspector snapshot.
@@ -171,7 +171,7 @@ func TestConfirmGateRevokeReprompts(t *testing.T) {
 	if all, tools := g.Grants(); all || len(tools) != 0 {
 		t.Fatalf("after Revoke, Grants() = (%v, %v), want (false, [])", all, tools)
 	}
-	if allow, _, _ := g.Check("bash", nil, "pwd"); !allow {
+	if allow, _, _ := g.Check("bash", nil, "pwd", ""); !allow {
 		t.Fatal("call 2 should allow (via the second queued reply)")
 	}
 	if len(rc.calls) != 2 {
@@ -187,10 +187,10 @@ func TestConfirmGateClearAllowAllKeepsToolGrants(t *testing.T) {
 		{Allow: true, RememberAll: true},  // then allow-all
 	}}
 	g := NewConfirmGate(rc)
-	if allow, _, _ := g.Check("edit", nil, "f"); !allow {
+	if allow, _, _ := g.Check("edit", nil, "f", ""); !allow {
 		t.Fatal("call 1 should allow + remember edit")
 	}
-	if allow, _, _ := g.Check("bash", nil, "ls"); !allow {
+	if allow, _, _ := g.Check("bash", nil, "ls", ""); !allow {
 		t.Fatal("call 2 should allow + remember-all")
 	}
 	if all, _ := g.Grants(); !all {
@@ -206,11 +206,11 @@ func TestConfirmGateClearAllowAllKeepsToolGrants(t *testing.T) {
 		t.Fatalf("per-tool grants should survive, got %v", tools)
 	}
 	// edit still short-circuits; a fresh tool prompts again.
-	if allow, _, _ := g.Check("edit", nil, "g"); !allow {
+	if allow, _, _ := g.Check("edit", nil, "g", ""); !allow {
 		t.Fatal("edit should still allow from its surviving grant")
 	}
 	rc.replies = append(rc.replies, ConfirmDecision{Allow: false, Reason: "no"})
-	if allow, _, _ := g.Check("read", nil, "x"); allow {
+	if allow, _, _ := g.Check("read", nil, "x", ""); allow {
 		t.Fatal("read should prompt again now that allowAll is cleared")
 	}
 }

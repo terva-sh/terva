@@ -26,11 +26,21 @@ export function PermissionRequest({
         >
           {t('Allow & remember')}
         </button>
-        {/* No "always — save to config" button yet, though the wire and the gate
-            both carry persist_tool: nothing installs ConfirmGate.SetPersist in a
-            production build, so the durable grant silently degrades to this
-            session only. Offering it here would repeat what the TUI's dialog
-            already claims and does not do. See docs/reviews/2026-07-20. */}
+        {request.scopes && request.scopes.length > 0 && (
+          <button
+            class="btn"
+            title={t('Saves a permanent allow rule scoped to this command')}
+            onClick={() =>
+              onDecide(request.call_id, {
+                allow: true,
+                persist_tool: true,
+                persist_scopes: request.scopes!.map((s) => s.pattern),
+              })
+            }
+          >
+            {t('Always allow “%s”', request.scopes.map((s) => s.display).join(', '))}
+          </button>
+        )}
         <button class="btn danger" onClick={() => onDecide(request.call_id, { allow: false, reason: 'denied by user' })}>
           {t('Deny')}
         </button>

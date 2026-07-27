@@ -36,13 +36,12 @@ func newAskSession(t *testing.T, id string) *wsSession {
 	t.Cleanup(func() { sess.Close() })
 
 	s := &wsSession{
-		id:      id,
-		ws:      &Workspace{ctx: context.Background(), diag: func(string) {}},
-		hub:     newWSHub(),
-		sess:    sess,
-		pendAsk: map[string]chan core.UserAnswer{},
-		askReq:  map[string]ctrlproto.AskRequest{},
-		args:    build.Args{Model: "claude-sonnet-4-5"},
+		id:     id,
+		ws:     &Workspace{ctx: context.Background(), diag: func(string) {}},
+		hub:    newWSHub(),
+		sess:   sess,
+		askReq: map[string]ctrlproto.AskRequest{},
+		args:   build.Args{Model: "claude-sonnet-4-5"},
 	}
 
 	// Build the registry the way buildSession does: asker bound.
@@ -108,7 +107,7 @@ func TestAskUserQuestionReachesTheFrontEndAfterRebuild(t *testing.T) {
 		for ctx.Err() == nil {
 			s.mu.Lock()
 			var id string
-			for k := range s.pendAsk {
+			for k := range s.askReq {
 				id = k
 				break
 			}

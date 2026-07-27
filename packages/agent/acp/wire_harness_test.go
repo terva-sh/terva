@@ -358,7 +358,7 @@ func (f *fakeFactory) lastNewAgent() *core.Agent {
 // A gate is built when askTool is set (the permission tests) OR when gateMode
 // is set (the Phase 4b mode tests want a live gate to SetMode on, seeded to a
 // known mode). The gate's mode is gateMode when set, else ApprovalAsk.
-func (f *fakeFactory) buildFakeAgentWithRegistry(reg core.Registry, confirmer core.Confirmer, recordCall func(string)) (*core.Agent, *core.ConfirmGate) {
+func (f *fakeFactory) buildFakeAgentWithRegistry(reg core.Registry, confirmer core.Confirmer) (*core.Agent, *core.ConfirmGate) {
 	if reg == nil {
 		reg = core.Registry{"edit": editFileTool{}}
 	}
@@ -386,13 +386,11 @@ func (f *fakeFactory) buildFakeAgentWithRegistry(reg core.Registry, confirmer co
 		Builtin:  map[string]bool{},
 	}
 	gate := core.NewPolicyGate(pol, confirmer)
-	ladder := func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
-		ok, reason, _ := gate.Check(call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120))
-		return ok, reason, nil
-	}
+	// The gate forwards call.ID to ConfirmWithCall itself — no correlation
+	// wrapper, mirroring production.
 	ag.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
-		recordCall(call.ID)
-		return ladder(call)
+		ok, reason, _ := gate.Check(call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120), call.ID)
+		return ok, reason, nil
 	}
 	return ag, gate
 }
@@ -412,7 +410,7 @@ func (f *fakeFactory) buildFakeAgentWithRegistry(reg core.Registry, confirmer co
 // compiled the same way buildPermissionPolicy compiles it, the real
 // InterceptToolCall, and the production ACP OnEvent composition (bindSession is
 // untouched production code).
-func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confirmer core.Confirmer, recordCall func(string)) (*core.Agent, *core.ConfirmGate, func(core.AgentEvent), func(), *extensions.Manager) {
+func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confirmer core.Confirmer) (*core.Agent, *core.ConfirmGate, func(core.AgentEvent), func(), *extensions.Manager) {
 	extMgr := extensions.New(f.extRoot, cwd, "test", "fake", "fake-model", nonInteractiveExtHooksStub{})
 	// Discover the on-disk fake extension; any load error surfaces as a failed
 	// assertion downstream (no tools registered), so it is not swallowed.
@@ -464,11 +462,11 @@ func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confi
 	}
 	gate := core.NewPolicyGate(pol, confirmer)
 
-	// Canonical ladder: gate.Check FIRST, then the extension intercept; the
-	// recordCall correlation wrapper stays OUTSIDE so an extension tool's
-	// permission request still carries the ACP toolCallId.
-	ladder := func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
-		ok, reason, _ := gate.Check(call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120))
+	// Canonical ladder: gate.Check FIRST (forwarding call.ID to the
+	// confirmer itself), then the extension intercept — mirroring
+	// production's BuildBeforeToolExecute with no correlation wrapper.
+	ag.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+		ok, reason, _ := gate.Check(call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120), call.ID)
 		if !ok {
 			return false, reason, nil
 		}
@@ -480,10 +478,6 @@ func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confi
 			return true, "", res.ModifiedArgs
 		}
 		return true, "", nil
-	}
-	ag.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
-		recordCall(call.ID)
-		return ladder(call)
 	}
 	ag.BeforeTurn = func(step int) (bool, string) {
 		res := extMgr.InterceptTurnStart(ctx, step)
@@ -770,11 +764,11 @@ func (f *fakeFactory) sessionModel() (prov, model string) {
 	return "fake", model
 }
 
-func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer, recordCall func(string)) (SessionAgent, error) {
+func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (SessionAgent, error) {
 	// Extension path: build a real extensions.Manager + the ext-aware agent,
 	// exactly mirroring the production buildAgent extension wiring.
 	if f.extRoot != "" {
-		ag, gate, observe, cleanup, extMgr := f.buildExtensionAgent(ctx, cwd, confirmer, recordCall)
+		ag, gate, observe, cleanup, extMgr := f.buildExtensionAgent(ctx, cwd, confirmer)
 		sess, err := f.newDurableSession(cwd)
 		if err != nil {
 			cleanup()
@@ -805,7 +799,7 @@ func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServer
 	}
 
 	reg, cleanup := f.startMCP(ctx, mcpServers)
-	ag, gate := f.buildFakeAgentWithRegistry(reg, confirmer, recordCall)
+	ag, gate := f.buildFakeAgentWithRegistry(reg, confirmer)
 	sess, err := f.newDurableSession(cwd)
 	if err != nil {
 		cleanup()
@@ -842,13 +836,13 @@ func (f *fakeFactory) emptyExtContextFunc() func() []ContextItem {
 	return func() []ContextItem { return nil }
 }
 
-func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer, recordCall func(string)) (SessionAgent, []provider.Message, error) {
+func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (SessionAgent, []provider.Message, error) {
 	sess, msgs, err := core.OpenSession(sessionPath)
 	if err != nil {
 		return SessionAgent{}, nil, err
 	}
 	if f.extRoot != "" {
-		ag, gate, observe, cleanup, extMgr := f.buildExtensionAgent(ctx, cwd, confirmer, recordCall)
+		ag, gate, observe, cleanup, extMgr := f.buildExtensionAgent(ctx, cwd, confirmer)
 		wireFakePersist(ag, sess)
 		f.loadedMu.Lock()
 		f.loadedAgent = ag
@@ -879,7 +873,7 @@ func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd str
 		}, msgs, nil
 	}
 	reg, cleanup := f.startMCP(ctx, mcpServers)
-	ag, gate := f.buildFakeAgentWithRegistry(reg, confirmer, recordCall)
+	ag, gate := f.buildFakeAgentWithRegistry(reg, confirmer)
 	wireFakePersist(ag, sess)
 	_ = cwd
 	f.loadedMu.Lock()

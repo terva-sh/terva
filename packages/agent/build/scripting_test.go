@@ -26,6 +26,35 @@ func TestScriptingClassification(t *testing.T) {
 	}
 }
 
+// Each script binding call through code_execution's HostCall lands in the
+// audit log stamped via=code_execution — like ext host_tool_call, this door
+// checks the gate outside the BeforeToolExecute ladder.
+func TestScriptingHostCallAudits(t *testing.T) {
+	home := testsupport.TempDir(t)
+	prev := auditSink
+	auditSink = newAuditLog(home)
+	t.Cleanup(func() { auditSink.Close(); auditSink = prev })
+
+	ag := &core.Agent{Tools: core.Registry{
+		"code_execution": &tools.CodeExecutionTool{},
+		"echo":           echoTool{},
+	}}
+	wireScriptingHostCall(ag, nil) // nil gate = yolo spelling: allowed, empty mode
+	ce := ag.Tools["code_execution"].(*tools.CodeExecutionTool)
+	if ce.HostCall == nil {
+		t.Fatal("HostCall not wired")
+	}
+	if _, err := ce.HostCall(context.Background(), "echo", json.RawMessage(`{"text":"hi"}`)); err != nil {
+		t.Fatalf("HostCall: %v", err)
+	}
+	auditSink.Close()
+
+	recs := readAuditLines(t, home)
+	if len(recs) != 1 || recs[0].Via != auditViaScriptBinding || recs[0].Tool != "echo" || recs[0].Decision != "allow" {
+		t.Fatalf("want one allow record via %s for echo, got %+v", auditViaScriptBinding, recs)
+	}
+}
+
 func TestScriptingRegistryAndPlanMode(t *testing.T) {
 	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
 	ce, ok := reg["code_execution"]
