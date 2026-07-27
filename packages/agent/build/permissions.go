@@ -76,11 +76,14 @@ var interactiveTools = map[string]bool{
 	"ask_user_question": true,
 }
 
-// BuiltinTools names every first-party tool terva registers. Workspace
-// mode trusts these (and read-only tools) and asks only for foreign
-// extension/MCP tools. Lists names that may not be registered in a
-// given session (swarm_spawn, chat_send_*) so they classify correctly
-// whenever they are; anything not listed is treated as foreign.
+// BuiltinTools names the first-party tools workspace mode trusts (alongside
+// read-only tools); it asks only for foreign extension/MCP tools — and for
+// the three first-party names deliberately kept OUT of this set (see
+// toolclass_test.go's outside-trusted-origin list: generate_image and the
+// restart pair prompt on purpose). Lists names that may not be registered in
+// a given session (swarm_spawn, chat_send_*, the play tools) so they
+// classify correctly whenever they are; anything not listed is treated as
+// foreign.
 var BuiltinTools = map[string]bool{
 	"read":              true,
 	"write":             true,
@@ -106,6 +109,17 @@ var BuiltinTools = map[string]bool{
 	"worktree_claim":    true,
 	"worktree_release":  true,
 	"worktree_remove":   true,
+	// The play-and-deliberation four, trusted by decision (2026-07-27) after
+	// the classification audit found them prompting as foreign while
+	// swarm_spawn — which spawns TOOL-BEARING children at yolo — was trusted.
+	// world_note/world_reveal touch only narrative state (append + reveal;
+	// edits stay user verbs); actor_spawn voices a cast the user declared at
+	// session creation, which WAS the consent; raati_convene spends model
+	// calls but holds no tool authority and has swarm_spawn's live opt-in.
+	"world_note":    true,
+	"world_reveal":  true,
+	"actor_spawn":   true,
+	"raati_convene": true,
 }
 
 // ResolveApprovalMode picks the effective mode: flag beats the
