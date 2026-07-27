@@ -29,6 +29,26 @@ import (
 // SIGINT/SIGTERM cancel the context so the server drains and ws.Close() tears
 // down every session's agent and extension subprocesses — the graceful stop a
 // systemd-managed daemon needs.
+// webCredentialBoot decides what starting with no credential means for this
+// daemon, and returns the error to die on — or nil to carry on without one.
+//
+// The question is not "is there a credential" but "can anything reachable from
+// here supply one". With provider login enabled the browser is a login flow: the
+// Providers pane stores a credential and clears this very error, so sessions
+// work from that moment without a restart. Refusing to boot would put the only
+// remedy behind the daemon that refused to start — exactly the bind a machine
+// with no terminal is in, told to log in at a TUI it does not have.
+//
+// Without login there is no route to a credential at all, so the failure stands.
+// It names the flag rather than only the problem, because "start it differently"
+// is the actionable half and the operator is already at a shell.
+func webCredentialBoot(credErr error, allowLogin bool) error {
+	if credErr == nil || allowLogin {
+		return nil
+	}
+	return fmt.Errorf("%w\nterva web: nothing here can sign in — start with --web-allow-login (which needs --web-token or --web-auth-header) to log in from the control panel", credErr)
+}
+
 func runWebMode(ctx context.Context, args build.Args, version string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -43,6 +63,26 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		return err
 	}
 	args.WebToken = tok
+
+	// Whether this daemon can accept a provider login is settled here, before
+	// anything else, because it answers two questions rather than one: it gates
+	// the Providers pane, and it decides whether starting with no credential is
+	// a recoverable state or a dead end (see the boot check below).
+	//
+	// Login is refused on an unauthenticated listener for the same reason
+	// self-restart is, one rung higher. Writing the credential terva uses to
+	// reach a model provider is categorically more authority than driving a
+	// conversation, and a stranger who could reach an open port must never be
+	// able to revoke the operator's subscription or point the daemon at their
+	// own endpoint. Loopback-only or a scoped CIDR is a bounded audience;
+	// blanket --web-insecure with no auth is not.
+	unscopedInsecure := args.WebInsecure && len(args.WebInsecureCIDRs) == 0
+	noListenerAuth := unscopedInsecure && args.WebToken == "" && args.WebAuthHeader == ""
+	allowLogin := args.AllowWebLogin
+	if allowLogin && noListenerAuth {
+		fmt.Fprintln(os.Stderr, "terva web: refusing provider login on an insecure (no-auth) listener — add --web-token, --web-auth-header, or scope it with --web-insecure-cidr")
+		allowLogin = false
+	}
 	// Workspace prep below (credential resolve, MCP server spawn + tool listing)
 	// runs BEFORE the listener binds, so a refreshing browser sees
 	// connection-refused until it finishes — announce it, and time it so a slow
@@ -57,11 +97,29 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		return err
 	}
 	defer ws.Close()
-	// The web daemon has no login flow, so a credential-less Workspace (fine
-	// for the TUI, which opens /login) is a hard startup error here — checked
-	// before the ready announcement, which must never precede a failure.
-	if err := ws.CredentialErr(); err != nil {
+	// A credential-less start is fatal only when nothing reachable can fix it.
+	//
+	// With provider login enabled the browser IS a login flow — the Providers
+	// pane adds, repairs and revokes credentials, and a login there clears this
+	// very error (applyCredential → RefreshDefaults), so sessions work from that
+	// moment without a restart. Refusing to boot would put the only remedy
+	// behind the daemon that refuses to start, which is precisely the bind a
+	// machine with no terminal is in: it was told to log in at the TUI it does
+	// not have. So boot, say plainly that nothing is configured, and let the
+	// operator sign in.
+	//
+	// Without login the daemon has no way to acquire a credential at all, so the
+	// failure stands — and names the flag that would have made it recoverable,
+	// because "start it differently" is the actionable half.
+	//
+	// Checked before the ready announcement either way: that line must never
+	// precede a failure.
+	if err := webCredentialBoot(ws.CredentialErr(), allowLogin); err != nil {
 		return err
+	}
+	if err := ws.CredentialErr(); err != nil {
+		fmt.Fprintf(os.Stderr, "terva web: %v\n", err)
+		fmt.Fprintln(os.Stderr, "terva web: starting anyway — sign in from the control panel's Providers pane; sessions can start once a credential lands")
 	}
 	fmt.Fprintf(os.Stderr, "terva web: workspace ready (took %s)\n", time.Since(begin).Round(10*time.Millisecond))
 	cfg, _ := config.LoadConfig()
@@ -74,8 +132,7 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 	// trusted source range (the operator's overlay network), so restart is allowed
 	// alongside it.
 	allowRestart := args.AllowRestart
-	unscopedInsecure := args.WebInsecure && len(args.WebInsecureCIDRs) == 0
-	if allowRestart && unscopedInsecure && args.WebToken == "" && args.WebAuthHeader == "" {
+	if allowRestart && noListenerAuth {
 		fmt.Fprintln(os.Stderr, "terva web: refusing self-restart on an insecure (no-auth) listener — add --web-token, --web-auth-header, or scope it with --web-insecure-cidr")
 		allowRestart = false
 	}
@@ -122,28 +179,12 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 	// restart is off the signal is swallowed with a log instead of killing it.
 	installReloadHandler(ctx)
 
-	// Provider login is opt-in, and refused on an unauthenticated listener for the
-	// same reason self-restart is — one rung higher. Writing the credential terva
-	// uses to reach a model provider is categorically more authority than driving
-	// a conversation, and a stranger who could reach an open port must never be
-	// able to revoke the operator's subscription or point the daemon at their own
-	// endpoint. Loopback-only or a scoped CIDR is a bounded audience; blanket
-	// --web-insecure with no auth is not.
-	//
-	// Note what this does NOT do: it does not relax the credential-less boot check
-	// above. terva still will not start the web daemon without a credential. The
-	// first login on a machine happens at the TUI, or is pre-seeded by whatever
-	// provisioned the box; this is for the second provider, and for the
-	// subscription that expired.
 	// Stage is enabled by the --web-stage flag OR the web_stage config knob, so a
 	// deployment can turn it on without a launch flag (config read once at start).
 	allowStage := args.WebStage || cfg.WebStage
 
-	allowLogin := args.AllowWebLogin
-	if allowLogin && unscopedInsecure && args.WebToken == "" && args.WebAuthHeader == "" {
-		fmt.Fprintln(os.Stderr, "terva web: refusing provider login on an insecure (no-auth) listener — add --web-token, --web-auth-header, or scope it with --web-insecure-cidr")
-		allowLogin = false
-	}
+	// allowLogin was settled at the top, because the credential-less boot check
+	// depends on it — this is where the machinery it gates gets wired.
 	if allowLogin {
 		mgr := auth.NewManager(config.AuthStoreFor())
 		defer mgr.Close()

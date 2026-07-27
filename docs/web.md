@@ -41,7 +41,7 @@ Flags:
 | `--web-insecure-cidr` | — | grant **no**-auth access to these source IP/CIDR(s) only (comma-separated; loopback always allowed) — the scoped, safer form of `--web-insecure` for a trusted overlay network (see [Auth](#auth)) |
 | `--allow-restart` | off | enable Tier-1 self-restart (see [Self-restart](#self-restart)); `--web-allow-restart` is the accepted older spelling |
 | `--web-stage` | off | mount **Stage**, the immersive chat/play surface, at `/stage/` — a second web app alongside the panel, gated by the same auth, opted into per deployment (see [Stage](#stage-the-immersive-chatplay-surface)) |
-| `--web-allow-login` | off | serve the provider-login group so the web UI can add / repair / revoke the **model-provider** credential (Anthropic/OpenAI/Kimi/…). Off by default and, like `--allow-restart`, must never ride an unauthenticated listener — writing a credential is more authority than driving a conversation. Does not relax the credential-less boot check; it's for adding a *second* provider or replacing an expired subscription (see [Auth](#auth)) |
+| `--web-allow-login` | off | serve the provider-login group so the web UI can add / repair / revoke the **model-provider** credential (Anthropic/OpenAI/Kimi/…). Off by default and, like `--allow-restart`, must never ride an unauthenticated listener — writing a credential is more authority than driving a conversation. **Also decides what a credential-less start means**: with login on, the daemon boots with no credential at all and you sign in from the panel; with it off there is no route to one, so that start is refused (see [Auth](#auth)) |
 
 Standard flags apply too: `--cwd` pins the workspace, `--model` / `--provider`
 pick the default, `--yolo` runs without approval prompts, `--jail` / `--no-jail`
@@ -187,6 +187,31 @@ address with no auth mode is refused unless you pass `--web-insecure`.
   overlay, has full owner access — so use it only where you trust the network;
   layer a token or forward-auth on top for anything shared.
 
+### The first model-provider credential
+
+The auth above gates *reaching* the panel. A separate credential lets terva reach
+a **model provider**, and on a box with no terminal there used to be no way to
+supply the first one: the daemon refused to start without it, and the pane that
+could add it lives inside the daemon that would not start.
+
+`--web-allow-login` resolves that, because it is what decides whether a
+credential-less start is recoverable:
+
+```bash
+# no credential anywhere — boots, serves, and waits for you to sign in
+TERVA_WEB_TOKEN="$(openssl rand -hex 24)" \
+  terva web --web-addr 0.0.0.0:8730 --web-allow-login
+```
+
+The daemon starts, says it has none, and serves the panel; sign in from the
+Providers pane and sessions work from that moment — no restart. Without
+`--web-allow-login` nothing reachable can supply a credential, so a
+credential-less start is still refused, and the error names the flag.
+
+A credential seeded any other way — `/login` at a terminal, an API key in the
+environment, a provisioned `auth.json` — works as before and makes all of this
+moot.
+
 **DNS-rebinding defense.** In no-auth mode terva also requires the request's
 `Host` to be a loopback name, so a malicious web page can't rebind its own
 hostname to `127.0.0.1` and drive your local panel through your browser.
@@ -327,7 +352,8 @@ inject a key.
 ```
 # install (see the comments in terva-web.socket for the full sequence)
 cp examples/deploy/systemd/terva-{web.socket,web.service,attach.service} ~/.config/systemd/user/
-terva login <provider>          # the daemon refuses to boot with no credential
+# credentials: either seed one first (run `terva`, then /login), or start the
+# daemon with --web-allow-login and sign in from the panel's Providers pane
 systemctl --user enable --now terva-web.socket terva-attach.service
 loginctl enable-linger $USER
 

@@ -806,8 +806,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 
 	var credFailure error
 	if credErr != nil {
-		credFailure = &CredentialError{fmt.Errorf("%w; set %s_API_KEY, pass --api-key, or run `terva` and /login",
-			credErr, envVarName(provName))}
+		credFailure = &CredentialError{noCredentialError(provName, userPickedProvider)}
 		if requireCred {
 			return Resolved{}, credFailure
 		}
@@ -1817,12 +1816,38 @@ func kimiCodeHeaders() map[string]string {
 	}
 }
 
-// envVarName returns the short token shown in "set <X>_API_KEY"
-// guidance when a provider has no credential. Reads the registry
-// (provider_registry.go); empty/unknown falls back to ANTHROPIC.
-func envVarName(prov string) string {
+// envAPIKeyName returns the environment variable that credentials a provider
+// ("OPENAI_API_KEY"), or "" when the registry declares none.
+//
+// Empty rather than a fallback, deliberately. This used to answer ANTHROPIC for
+// anything it did not recognise, so a named endpoint or a provider added without
+// an env hint was told to set ANTHROPIC_API_KEY — advice that cannot work, for a
+// vendor the operator may have no account with. A provider whose credential does
+// not come from the environment has no env var to name, and saying nothing is
+// the honest answer; the caller drops the clause.
+func envAPIKeyName(prov string) string {
 	if spec, ok := specFor(prov); ok && spec.envHint != "" {
-		return spec.envHint
+		return spec.envHint + "_API_KEY"
 	}
-	return "ANTHROPIC"
+	return ""
+}
+
+// noCredentialError phrases a missing credential around the one thing that
+// changes what the reader should do: whether a provider was actually CHOSEN.
+//
+// When one was, naming it and its environment variable is exactly the help
+// wanted. When one was not, the name in hand is only the default, and by the
+// time this runs the fallback scan above has already asked every other provider
+// and been told no — so the true statement is that nothing is configured
+// anywhere. Naming the default there reads as "terva requires this vendor",
+// which is both false and the least useful thing to tell someone whose account
+// is with another one.
+func noCredentialError(prov string, picked bool) error {
+	if !picked {
+		return fmt.Errorf("no credentials found for any provider — sign in with /login (in the terminal, or the control panel's Providers pane), export the API key of a provider you have an account with, or pass --provider with --api-key")
+	}
+	if env := envAPIKeyName(prov); env != "" {
+		return fmt.Errorf("no credential for %s; set %s, pass --api-key, or sign in with /login", prov, env)
+	}
+	return fmt.Errorf("no credential for %s; pass --api-key, or sign in with /login", prov)
 }

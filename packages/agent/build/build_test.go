@@ -374,3 +374,58 @@ func TestCanonicalProviderAliasesAreKnown(t *testing.T) {
 		}
 	}
 }
+
+// The credential message is read by someone who has not chosen a provider as
+// often as by someone who has, and those want different sentences. Naming the
+// DEFAULT provider to the first reader says "terva requires this vendor", which
+// is false, and is the least useful thing to tell someone whose account is
+// elsewhere.
+func TestNoCredentialErrorDoesNotNameAVendorNobodyChose(t *testing.T) {
+	generic := noCredentialError("anthropic", false).Error()
+	for _, vendor := range []string{"anthropic", "ANTHROPIC", "openai", "OPENAI"} {
+		if strings.Contains(generic, vendor) {
+			t.Errorf("an unchosen provider must not be named: %q appears in %q", vendor, generic)
+		}
+	}
+	if !strings.Contains(generic, "any provider") {
+		t.Errorf("the generic message should say nothing is configured anywhere, got %q", generic)
+	}
+	// The routes out must include the browser: this message reaches a daemon
+	// operator who may have no terminal at all.
+	if !strings.Contains(generic, "Providers pane") {
+		t.Errorf("the generic message should name the panel's login route, got %q", generic)
+	}
+
+	// A provider that WAS chosen is named, with its own environment variable.
+	picked := noCredentialError("openai", true).Error()
+	if !strings.Contains(picked, "openai") || !strings.Contains(picked, "OPENAI_API_KEY") {
+		t.Errorf("a chosen provider should be named with its own env var, got %q", picked)
+	}
+	if strings.Contains(picked, "ANTHROPIC") {
+		t.Errorf("a chosen provider's message must not mention another vendor, got %q", picked)
+	}
+}
+
+// envAPIKeyName answers "" for a provider the registry has no env hint for. It
+// used to answer ANTHROPIC for anything unrecognised, so a named endpoint was
+// told to set ANTHROPIC_API_KEY — advice that cannot work, for a vendor the
+// operator may have no account with.
+func TestEnvAPIKeyNameHasNoVendorFallback(t *testing.T) {
+	if got := envAPIKeyName("anthropic"); got != "ANTHROPIC_API_KEY" {
+		t.Errorf("envAPIKeyName(anthropic) = %q", got)
+	}
+	if got := envAPIKeyName("openai"); got != "OPENAI_API_KEY" {
+		t.Errorf("envAPIKeyName(openai) = %q", got)
+	}
+	for _, unknown := range []string{"my-endpoint", "", "not-a-provider"} {
+		if got := envAPIKeyName(unknown); got != "" {
+			t.Errorf("envAPIKeyName(%q) = %q; want \"\" so the caller drops the clause", unknown, got)
+		}
+	}
+	// A provider with no env hint gets a message with no env clause at all,
+	// rather than one naming a variable that credentials something else.
+	msg := noCredentialError("my-endpoint", true).Error()
+	if strings.Contains(msg, "API_KEY") {
+		t.Errorf("no env var to name means no env advice, got %q", msg)
+	}
+}
