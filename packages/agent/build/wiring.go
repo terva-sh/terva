@@ -474,14 +474,23 @@ func (NonInteractiveExtHooks) RefreshTools() {}
 // repo cannot run code on tool calls until the user trusts it (Phase 6). Every
 // call site must thread the real verdict; defaulting to true would re-open the
 // RCE-on-clone gap this gate closes.
-func BuildHookEngine(args Args, trusted bool) *hooks.Engine {
+func buildHookEngine(args Args, trusted, liveTrust bool) *hooks.Engine {
 	user, err := config.LoadConfig()
 	if err != nil {
 		return nil
 	}
 	cfg := config.MergeHookConfigs(user.Hooks, config.TrustedProjectHooks(args.CWD, trusted))
 	if cfg == nil {
-		return nil
+		// Nothing applies NOW. For a long-lived host that can flip trust
+		// mid-run, that is not the same as nothing ever applying: an untrusted
+		// repo with hooks on disk needs an engine standing by, or trusting it
+		// would have nowhere to put them (HookSpecsFor is how the specs then
+		// arrive). One with no hooks anywhere still gets nil — an engine whose
+		// chains can only ever be empty is a log file for no reason.
+		if !liveTrust || config.ProjectHooksOnDisk(args.CWD) == nil {
+			return nil
+		}
+		cfg = &hooks.Config{}
 	}
 	logf := func(string, ...any) {}
 	var logCloser io.Closer
@@ -493,9 +502,50 @@ func BuildHookEngine(args Args, trusted bool) *hooks.Engine {
 			}
 		}
 	}
-	eng := hooks.NewEngine(*cfg, args.CWD, logf)
+	// Only the live-trust host bypasses NewEngine's nil-for-empty guard; a
+	// fixed-trust host keeps the cheap nil it has always had for an empty set.
+	newEngine := hooks.NewEngine
+	if liveTrust {
+		newEngine = hooks.NewStandingEngine
+	}
+	eng := newEngine(*cfg, args.CWD, logf)
+	if eng == nil {
+		// Empty set on a fixed-trust host: hand back the cheap nil, but do not
+		// leak the log file we just opened for it.
+		if logCloser != nil {
+			_ = logCloser.Close()
+		}
+		return nil
+	}
 	eng.SetCloser(logCloser)
 	return eng
+}
+
+// BuildHookEngine builds the hook engine for a host whose trust verdict is
+// fixed for the process's lifetime (the one-shot CLI, rpc, acp, a swarm child).
+// nil means no hook can ever fire here.
+func BuildHookEngine(args Args, trusted bool) *hooks.Engine {
+	return buildHookEngine(args, trusted, false)
+}
+
+// BuildLiveTrustHookEngine builds it for a host that can flip Workspace Trust
+// while running (the workspace daemon behind `terva web` and the TUI). It
+// differs in one way: it returns a standing engine when the project has hooks
+// on disk that trust would admit, so HookSpecsFor has somewhere to put them.
+// Pair it with HookSpecsFor on every trust change.
+func BuildLiveTrustHookEngine(args Args, trusted bool) *hooks.Engine {
+	return buildHookEngine(args, trusted, true)
+}
+
+// HookSpecsFor is the merged hook config for a trust verdict — what a host
+// hands to Engine.SetSpecs when the verdict changes. Kept beside the builder so
+// the launch merge and the re-merge cannot drift.
+func HookSpecsFor(args Args, trusted bool) *hooks.Config {
+	user, err := config.LoadConfig()
+	if err != nil {
+		return nil
+	}
+	return config.MergeHookConfigs(user.Hooks, config.TrustedProjectHooks(args.CWD, trusted))
 }
 
 // BuildBeforeToolExecute composes the tool-call ladder in its

@@ -170,7 +170,7 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 		cwd:      r.CWD,
 		provider: r.Provider,
 		model:    r.Model,
-		hookEng:  build.BuildHookEngine(args, r.Trusted),
+		hookEng:  build.BuildLiveTrustHookEngine(args, r.Trusted),
 		ctx:      ctx,
 		cancel:   cancel,
 		sessions: map[string]*wsSession{},
@@ -1580,12 +1580,14 @@ func (w *Workspace) Untrust(ctx context.Context) error {
 // injectExtraTools, and a tool that captured the old answer on the way past
 // would be wrong for the rest of the session.
 //
-// Not re-derived here, and a known gap: project HOOKS. They are merged into the
-// workspace hook engine at construction (BuildHookEngine's TrustedProjectHooks)
-// and reach a session through a closure the agent holds for its lifetime, so a
-// newly trusted project's pre/post-tool hooks do not start running until the
-// next launch. Fixing that needs a re-wire seam on the tool-call ladder rather
-// than another line here.
+// Project HOOKS are re-derived too, and were the last reader that was not.
+// They used to be merged into the hook engine at construction and reach a
+// session through a closure the agent holds for its lifetime, so a newly
+// trusted repo's pre/post-tool hooks stayed inert until the next launch. The
+// engine's SPECS are now swapped in place instead: the closure keeps pointing
+// at the same engine — no re-wiring of the tool-call ladder, no re-opened log
+// file, no Close racing a hook that is mid-run — and the next tool call reads
+// the new chain.
 func (w *Workspace) applyTrust(ctx context.Context, trusted bool) {
 	w.trusted.Store(trusted)
 	w.mu.Lock()
@@ -1602,6 +1604,7 @@ func (w *Workspace) applyTrust(ctx context.Context, trusted bool) {
 	// Those are restrictions the user just opted into by trusting the repo — its
 	// extensions are now spawning — so they have to land now, not next launch.
 	w.refreshAllPolicies()
+	w.hookEng.SetSpecs(build.HookSpecsFor(w.args, trusted))
 }
 
 func (w *Workspace) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {

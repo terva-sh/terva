@@ -118,6 +118,13 @@ type postEvent struct {
 // Engine evaluates the configured hooks. A nil *Engine is inert, so
 // call sites need no guards.
 type Engine struct {
+	// specMu guards pre/post, which are REPLACED (never mutated) when the
+	// host re-derives them — a Workspace Trust flip changes which project
+	// hooks apply, and that must reach a running session rather than waiting
+	// for the next launch. Readers snapshot the slice header under RLock and
+	// iterate outside it; SetSpecs assigns fresh slices, so an in-flight chain
+	// finishes against the set it started with rather than tearing.
+	specMu    sync.RWMutex
 	pre, post []Spec
 	cwd       string
 	// logf reports hook misbehavior (timeouts, bad JSON, non-zero
@@ -138,9 +145,25 @@ type Engine struct {
 // NewEngine builds an engine from config, or nil when no hooks are
 // configured. logf may be nil.
 func NewEngine(cfg Config, cwd string, logf func(string, ...any)) *Engine {
+	// No hooks, no engine: a nil *Engine is a no-op on every method, so a host
+	// with nothing configured pays nothing. Right for every caller whose hook
+	// set is fixed for the process's lifetime — which is all of them except a
+	// host that can flip Workspace Trust while running. See NewStandingEngine.
 	if len(cfg.PreToolUse) == 0 && len(cfg.PostToolUse) == 0 {
 		return nil
 	}
+	return NewStandingEngine(cfg, cwd, logf)
+}
+
+// NewStandingEngine builds an engine even when cfg is empty.
+//
+// For a host whose hook set can CHANGE while it runs: a project's hooks are
+// trust-gated, so an untrusted repo starts with an empty set that trusting it
+// fills in. NewEngine would hand back nil there, and nil is not a thing
+// SetSpecs can fill — the emptiness at launch would become permanent, which is
+// the bug this exists to avoid. Callers that cannot flip trust should use
+// NewEngine and get the cheap nil.
+func NewStandingEngine(cfg Config, cwd string, logf func(string, ...any)) *Engine {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
@@ -182,6 +205,41 @@ const (
 	hookOutputCap = 1 << 20
 )
 
+// SetSpecs replaces the hook chains with cfg's, atomically from a caller's
+// point of view. A nil cfg clears them.
+//
+// This exists so trust can be LIVE. Project hooks are trust-gated, and the
+// engine used to be built once at launch with the verdict of that moment, so
+// trusting a repo mid-session left its hooks inert until restart — the one
+// reader the trust census could not call live. Replacing the specs rather than
+// the Engine keeps the log sink and the in-flight correlator intact, and avoids
+// closing a file another goroutine is mid-write on.
+func (e *Engine) SetSpecs(cfg *Config) {
+	if e == nil {
+		return
+	}
+	e.specMu.Lock()
+	defer e.specMu.Unlock()
+	if cfg == nil {
+		e.pre, e.post = nil, nil
+		return
+	}
+	e.pre = append([]Spec(nil), cfg.PreToolUse...)
+	e.post = append([]Spec(nil), cfg.PostToolUse...)
+}
+
+func (e *Engine) preSpecs() []Spec {
+	e.specMu.RLock()
+	defer e.specMu.RUnlock()
+	return e.pre
+}
+
+func (e *Engine) postSpecs() []Spec {
+	e.specMu.RLock()
+	defer e.specMu.RUnlock()
+	return e.post
+}
+
 // RunPre runs the pre-tool-use chain in config order. The first
 // decisive answer (allow / deny) stops the chain; ask and no-opinion
 // continue. Argument rewrites accumulate. Hook failures (timeout,
@@ -194,7 +252,7 @@ func (e *Engine) RunPre(ctx context.Context, tool string, args json.RawMessage) 
 	}
 	res := PreResult{}
 	cur := args
-	for i, s := range e.pre {
+	for i, s := range e.preSpecs() {
 		if !s.matches(tool) {
 			continue
 		}
@@ -259,7 +317,7 @@ func (e *Engine) RunPre(ctx context.Context, tool string, args json.RawMessage) 
 // from the OnEvent fanout with the two tool events; everything else
 // is ignored. Safe on a nil engine and for concurrent use.
 func (e *Engine) Observe(eventType, id, tool string, args json.RawMessage, isError bool) {
-	if e == nil || len(e.post) == 0 {
+	if e == nil || len(e.postSpecs()) == 0 {
 		return
 	}
 	switch eventType {
@@ -282,7 +340,7 @@ func (e *Engine) Observe(eventType, id, tool string, args json.RawMessage, isErr
 
 func (e *Engine) runPost(ev postEvent) {
 	payload, _ := json.Marshal(ev)
-	for i, s := range e.post {
+	for i, s := range e.postSpecs() {
 		if !s.matches(ev.Tool) {
 			continue
 		}

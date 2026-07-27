@@ -1170,6 +1170,23 @@ func ResolveConfig(cwd string, trustProject bool) EffectiveConfig {
 // engine — this is the trust gate the historical "user-config only" ban was a
 // proxy for (Workspace Trust Phase 6). A malformed project config degrades to
 // nil with a stderr note rather than aborting launch, matching ResolveConfig.
+// ProjectHooksOnDisk reports the project's hook config REGARDLESS of trust —
+// "are there project hooks at all", not "do they apply".
+//
+// Only a host that can flip trust while running has any business asking. It
+// uses the answer to decide whether to keep a hook engine standing by for a
+// repo whose hooks are currently withheld; trusting one must not require a
+// restart just because there was nothing to build an engine from at launch.
+// Never use it to decide whether to RUN a hook — TrustedProjectHooks is the
+// only honest answer to that.
+func ProjectHooksOnDisk(cwd string) *hooks.Config {
+	pc, err := LoadProjectConfig(cwd)
+	if err != nil || pc == nil {
+		return nil
+	}
+	return pc.Hooks
+}
+
 func TrustedProjectHooks(cwd string, trustProject bool) *hooks.Config {
 	if !trustProject {
 		return nil
