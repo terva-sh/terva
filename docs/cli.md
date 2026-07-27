@@ -228,7 +228,7 @@ own detailed screen — `terva <command> --help`.
 
 Two ways to drive terva from another program:
 
-- **Go in-process**: import `terva.sh/terva/packages/agent/sdk`. One `Runtime` per project; `Prompt(ctx, text, images)` returns a channel of `Event`. Small example in `examples/sdk/`.
+- **Go in-process**: import `terva.sh/terva/packages/agent/sdk`. One `Runtime` per project; `Prompt(ctx, text, images)` returns a channel of `Event`. Small example in `examples/sdk/`. Your `config.json` permission rules apply: a `deny` holds, and a call needing approval is refused unless the embedding supplies a `Confirmer` (`Config.Yolo` opts out). Extensions, MCP, hooks, and the audit log are not wired — the package doc says what the embedder owns.
 - **Any language, out-of-process**: spawn `terva rpc` as a subprocess and exchange newline-delimited JSON over its stdin/stdout. Wire format and event schema in [docs/rpc.md](rpc.md). Reference clients live under `examples/rpc/`.
 
 Both interfaces share the same event schema, so transcripts captured by one can be replayed through the other.

@@ -19,6 +19,28 @@
 // Runtime per project / cwd. The Cancel call interrupts the active
 // prompt; subsequent prompts work normally.
 //
+// # What the SDK wires, and what an embedder owns
+//
+// The runtime is deliberately thinner than the terva binary's hosts. It
+// resolves the provider, builds the tool registry, and applies the USER's
+// permission rules from config.json — a `deny` rule means the same thing
+// here as it does in the TUI. A tool call those rules say to *ask* about is
+// refused unless Config.Confirmer is set, because a library has nobody to
+// prompt; that is the same fail-closed posture `terva -p` and `terva rpc`
+// take. Config.Yolo opts out of the rules entirely, by name.
+//
+// The embedder owns everything else, and none of it is wired here:
+//
+//   - extensions and MCP servers — not loaded, so an extension's tools,
+//     hooks, and status segments are absent
+//   - hooks — pre/post-tool hooks from config do not run
+//   - the audit log — calls are not recorded to $TERVA_HOME
+//   - session persistence — NoSess is forced; use Messages/SetMessages
+//
+// The sandbox is available but OPT-IN: set Config.Lock to confine tools to
+// CWD. Without it, bash and the file tools reach the whole filesystem the
+// host process can. If the embedding runs untrusted input, set it.
+//
 // For a non-Go consumer, run `terva rpc` and speak the same JSON
 // schema over stdin/stdout. See docs/rpc.md.
 package sdk
@@ -105,6 +127,26 @@ type Config struct {
 
 	// Lock confines tools to CWD. Same effect as the /jail command.
 	Lock bool
+
+	// Confirmer answers tool calls the user's permission rules say to ask
+	// about. Nil means nobody can be asked, and such a call is REFUSED with
+	// a model-readable reason rather than run unconfirmed — the same
+	// fail-closed posture every other headless host takes.
+	//
+	// Supply one when the embedding has a human in it (a chat UI, a
+	// dashboard, a terminal of your own): the callback receives the tool
+	// name and a preview of the call and returns the decision.
+	Confirmer core.Confirmer
+
+	// Yolo runs every tool without consulting the user's permission rules.
+	// The escape hatch for an embedding that owns its own policy — a
+	// sandboxed worker, a test harness — and does not want the user's
+	// config.json rules applied to it.
+	//
+	// This is opt-IN because the default has to be the honest one: a `deny`
+	// rule a user wrote in their config means the same thing in every host
+	// that runs their tools, this one included.
+	Yolo bool
 }
 
 // Runtime is one terva agent session. Safe for use from one goroutine
@@ -166,7 +208,34 @@ func New(cfg Config) (*Runtime, error) {
 		r.Sandbox.Lock()
 	}
 	r.AddExtraTools(cfg.ExtraTools)
+	// The user's permission rules apply here too. Until this landed the SDK
+	// was the one host that built an agent with no gate at all: a `deny` rule
+	// in the user's config.json was silently unenforced, and every tool ran
+	// unasked. An embedder can still opt out with Yolo — deliberately, and by
+	// name.
+	//
+	// A nil policy is the pure-yolo fast path (no rules, no mode override):
+	// the same "no gate needed" answer every headless host gets, reached the
+	// same way. And no stderr notes — that is HeadlessConfirmGate's job, and
+	// it belongs to a CLI; a library writing to its host program's stderr is
+	// a bug. The embedder chose this posture in code and can read it there.
+	//
+	// AdoptReadOnlySet runs BEFORE NewAgent, as in the CLI: it is what lets
+	// read_only-annotated tools join the classification the gate keys on.
+	var gate *core.ConfirmGate
+	if !cfg.Yolo {
+		if pol, _ := build.BuildPermissionPolicy(args); pol != nil {
+			gate = core.NewPolicyGate(pol, cfg.Confirmer)
+			r.AdoptReadOnlySet(pol.ReadOnly)
+		}
+	}
 	ag := r.NewAgent()
+	if gate != nil {
+		// nil hook engine and nil extension manager: the SDK wires neither
+		// (see the package doc's "what an embedder owns"). The gate is the
+		// one thing the USER owns, so it is the one thing installed here.
+		ag.BeforeToolExecute = build.BuildBeforeToolExecute(context.Background(), nil, gate, nil)
+	}
 	return &Runtime{
 		agent:    ag,
 		provider: r.Provider,
