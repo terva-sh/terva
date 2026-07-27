@@ -1,11 +1,11 @@
 // Package egress is terva's shared outbound-network safety guard: the
-// SSRF / private-network defense intended as the single chokepoint for
-// network-touching features terva itself drives. The first consumer is
-// Stage's card URL import (packages/agent/workspace.fetchCardBytes), which
-// exercises this package end-to-end so it cannot silently go dead; it was
-// staged ahead of that for the MCP HTTP transport
-// (docs/plans/mcp-http-transport.md) and host-side web policy. The rules
-// live here, tested, instead of being re-derived per tool.
+// SSRF / private-network defense that is the single chokepoint for
+// network-touching features terva itself drives. Consumers: Stage's card
+// URL import (packages/agent/workspace.fetchCardBytes, no allowlist), the
+// MCP Streamable-HTTP transport (packages/agent/mcp, configured host
+// allowlisted — which --approval-http rides), and the extension pack
+// fetcher (packages/agent/extpack.go, no allowlist). The rules live here,
+// tested, instead of being re-derived per tool.
 //
 // The guard blocks connections to non-public addresses — loopback,
 // RFC1918 private ranges, link-local (including the 169.254.169.254 cloud
@@ -42,7 +42,12 @@ type Option func(*Guard)
 
 // AllowHost permits a specific hostname (case-insensitive) even if it
 // resolves to an otherwise-blocked address. Use for an intentional local
-// service (e.g. a self-hosted search instance on localhost).
+// service (e.g. a self-hosted MCP server on localhost): the user named
+// this host on purpose, so it is trusted wherever it points. Honored by
+// CheckURL and by Client's dialer, which checks the PRE-resolution
+// hostname — the Control hook alone cannot honor it, because the dialer
+// hands Control the resolved IP with the name already gone. A caller
+// wiring Control directly into its own dialer gets the IP policy only.
 func AllowHost(host string) Option {
 	return func(g *Guard) { g.allowHosts[strings.ToLower(strings.TrimSpace(host))] = true }
 }
@@ -173,6 +178,28 @@ func (g *Guard) Control(network, address string, _ syscall.RawConn) error {
 	return g.checkIP(ip)
 }
 
+// hostAllowed reports whether hostname is on the explicit allowlist.
+func (g *Guard) hostAllowed(host string) bool {
+	return g.allowHosts[strings.ToLower(strings.TrimSpace(host))]
+}
+
+// dialContext enforces the guard on one dial. The AllowHost check happens
+// here, on the pre-resolution hostname: an allowlisted name is the user's
+// explicit intent and dials without the IP gate (so localhost services
+// work), while every other address — redirect targets included — goes
+// through Control against the post-resolution IP.
+func (g *Guard) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	d := &net.Dialer{Timeout: 30 * time.Second}
+	if !g.allowAll && !g.hostAllowed(host) {
+		d.Control = g.Control
+	}
+	return d.DialContext(ctx, network, addr)
+}
+
 // Client returns an *http.Client that enforces the guard at dial time and
 // re-validates every redirect hop, stripping the Authorization header
 // when a redirect crosses to a different host so ambient credentials are
@@ -183,14 +210,11 @@ func (g *Guard) Client(timeout time.Duration, maxRedirects int) *http.Client {
 	if maxRedirects <= 0 {
 		maxRedirects = 10
 	}
-	dialer := &net.Dialer{Timeout: 30 * time.Second, Control: g.Control}
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialer.DialContext(ctx, network, addr)
-			},
-			Proxy: http.ProxyFromEnvironment,
+			DialContext: g.dialContext,
+			Proxy:       http.ProxyFromEnvironment,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {

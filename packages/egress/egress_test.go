@@ -1,10 +1,13 @@
 package egress
 
 import (
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCheckIPBlocksNonPublic(t *testing.T) {
@@ -76,6 +79,55 @@ func TestAllowHostBypass(t *testing.T) {
 	// CheckURL consults the host allowlist before resolving.
 	if err := g.CheckURL("http://localhost:11984/search"); err != nil {
 		t.Errorf("allowlisted host should pass CheckURL: %v", err)
+	}
+}
+
+// AllowHost must be honored where it matters: at the DIAL. The original
+// test above asserted only CheckURL, which hid that Client's Control hook
+// still blocked the allowlisted host's loopback IP — the documented
+// "intentional local service" use case did not actually work.
+func TestAllowHostReachesTheDial(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+	host, _, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Without the allowlist the same fetch must be blocked at dial time.
+	if _, err := New().Client(5*time.Second, 0).Get(srv.URL); err == nil {
+		t.Fatal("a loopback fetch without an allowlist must be blocked")
+	} else if !strings.Contains(err.Error(), "egress blocked") {
+		t.Fatalf("want an egress-blocked error, got: %v", err)
+	}
+
+	resp, err := New(AllowHost(host)).Client(5*time.Second, 0).Get(srv.URL)
+	if err != nil {
+		t.Fatalf("an AllowHost'd loopback service must be reachable through Client: %v", err)
+	}
+	resp.Body.Close()
+}
+
+// The allowlisted origin does not launder redirect targets: a hop to any
+// OTHER host goes through the IP gate and a private target stays blocked.
+func TestAllowHostDoesNotLaunderRedirects(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://10.255.255.1/steal", http.StatusFound)
+	}))
+	defer srv.Close()
+	host, _, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = New(AllowHost(host)).Client(5*time.Second, 0).Get(srv.URL)
+	if err == nil {
+		t.Fatal("a redirect from an allowlisted origin to a private address must be blocked")
+	}
+	if !strings.Contains(err.Error(), "egress blocked") {
+		t.Fatalf("want an egress-blocked error, got: %v", err)
 	}
 }
 

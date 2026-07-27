@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"terva.sh/terva/packages/egress"
 )
 
 // An extension pack is a hosted manifest naming a set of extensions to
@@ -172,9 +174,11 @@ func resolvePack(arg string) (Pack, string, error) {
 }
 
 // fetchPackURL GETs a pack manifest over HTTPS with a short timeout and a
-// hard size cap.
+// hard size cap, through the egress guard with no allowlist: a pack URL is
+// an arbitrary string handed to the CLI, so loopback, private ranges, and
+// the metadata endpoint are refused — same posture as the card importer.
 func fetchPackURL(url string) ([]byte, error) {
-	return fetchPackWith(&http.Client{Timeout: 15 * time.Second}, url)
+	return fetchPackWith(egress.New().Client(15*time.Second, 0), url)
 }
 
 // fetchPackWith is the client-injectable core of fetchPackURL so tests

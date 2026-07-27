@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/egress"
 	"terva.sh/terva/packages/lineframe"
 )
 
@@ -56,12 +58,29 @@ func newHTTPTransport(cfg ServerConfig, _ string, _ io.Writer) (transport, error
 	if err != nil {
 		return nil, err
 	}
-	// No client-level timeout: an SSE response stream can legitimately stay open,
-	// and each request is bounded by the caller's context instead.
+	u, err := url.Parse(cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("mcp %q: invalid url: %w", cfg.URL, err)
+	}
+	// All requests go through the egress guard with the CONFIGURED host
+	// allowlisted: the user named this endpoint on purpose (a localhost MCP
+	// server is the common case, and config is already inside the trust
+	// boundary), so the guard's job here is not to second-guess the
+	// configured host — it is to confine everything else the client could
+	// be steered to: a redirect to another host re-validates and dials
+	// against the post-resolution IP (private ranges and the metadata
+	// endpoint stay blocked), and the Authorization header is stripped when
+	// a redirect crosses hosts. Custom `headers` entries are NOT stripped
+	// on a cross-host redirect — don't put credentials in them for a server
+	// you don't control.
+	//
+	// No client-level timeout: an SSE response stream can legitimately stay
+	// open, and each request is bounded by the caller's context instead.
+	guard := egress.New(egress.AllowHost(u.Hostname()))
 	return &httpTransport{
 		url:     cfg.URL,
 		headers: headers,
-		client:  &http.Client{},
+		client:  guard.Client(0, 0),
 		in:      make(chan []byte, 16),
 		closeCh: make(chan struct{}),
 	}, nil

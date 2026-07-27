@@ -3,6 +3,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -249,6 +250,43 @@ func TestHTTPTransportErrorSurfaces(t *testing.T) {
 	// It must not have waited out the 60s tool timeout.
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Errorf("error took %s — it should be prompt, not a timeout", elapsed)
+	}
+}
+
+// TestHTTPTransportConfinesRedirects: the configured host is trusted (the
+// user named it), but it must not be able to steer the client anywhere
+// else private — a redirect to an RFC1918 target is refused by the egress
+// guard, promptly, instead of being followed.
+func TestHTTPTransportConfinesRedirects(t *testing.T) {
+	f := &fakeHTTPMCP{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if bytes.Contains(body, []byte(`"tools/call"`)) {
+			// 307 keeps the POST + body on the hop, the worst case.
+			http.Redirect(w, r, "http://10.255.255.1/mcp", http.StatusTemporaryRedirect)
+			return
+		}
+		f.handler(w, r)
+	}))
+	defer srv.Close()
+
+	cl, err := Start(context.Background(), "remote", ServerConfig{Transport: "http", URL: srv.URL}, "", nil)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer cl.Stop()
+
+	start := time.Now()
+	_, err = cl.CallTool(context.Background(), "echo", nil)
+	if err == nil {
+		t.Fatal("a redirect to a private address must fail the call")
+	}
+	if !strings.Contains(err.Error(), "egress blocked") {
+		t.Errorf("error should come from the egress guard, got: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("refusal took %s — the guard rejects before dialing, this should be prompt", elapsed)
 	}
 }
 
