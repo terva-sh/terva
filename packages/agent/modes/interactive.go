@@ -311,6 +311,20 @@ type InteractiveConfig struct {
 	// disables /untrust.
 	UntrustWorkspace func() error
 
+	// TrustAppliesLive reports that TrustWorkspace/UntrustWorkspace do the whole
+	// job themselves — reload the extensions, rebuild the tools, re-render the
+	// system prompt — so nothing further is needed for the change to take hold.
+	//
+	// It exists because /trust used to lie. The host hook was assumed to only
+	// PERSIST, with the live half done here by re-cd-ing through ChangeCWD; a
+	// host with no ChangeCWD therefore got "restart terva to load its project
+	// extensions/skills/context". The ctrlproto hosts (the classic TUI and
+	// terva attach) have no ChangeCWD and never needed one — their Trust verb
+	// re-applies across every open session, daemon-side — so the message told
+	// people to restart for something that had already happened, which is how a
+	// working feature comes to be remembered as broken.
+	TrustAppliesLive bool
+
 	// CurrentSessionPath returns the path of the live session file
 	// on disk (the one every AppendMessage writes to). Used by
 	// /session export so the exporter ships the exact bytes on
@@ -819,6 +833,7 @@ type Interactive struct {
 	// mu; keyed by session like the task board above.
 	carrierWorktrees        *ctrlproto.WorktreeView
 	carrierWorktreesSession string
+
 
 	// carrierMessages is the pump-owned transcript on the carrier path —
 	// the wire twin of the crutch agent's Messages(), and what buildChat

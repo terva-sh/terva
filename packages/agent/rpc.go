@@ -132,6 +132,11 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 		// a fresh Resolve carries a fresh one — without this the gate stops
 		// auto-allowing an extension's read-only tools after a rebuild.
 		resolved.AdoptReadOnlySet(roSet)
+		// Same survivor rule for the task board: the ephemeral card and the
+		// open-work gate above are bound to r.Tasks, and this resolve carries a
+		// fresh controller over an unbound store. Adopting it would leave the
+		// model writing tasks it can no longer see, and the durable board frozen.
+		resolved.UseTasks(r.Tasks)
 		resolved.MergeExtensionTools(adapter)
 		ag.SetTools(resolved.ToolRegistry)
 	}

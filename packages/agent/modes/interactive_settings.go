@@ -275,6 +275,24 @@ func (i *Interactive) applyLocalSettingEffect(key, value string) {
 	case "approval":
 		// Per-session posture (never persisted); shift+tab and the picker share it.
 		i.setStatusOK(i18n.T("approval mode %s (this session)", value))
+	case "trust":
+		// The daemon has already persisted the verdict and re-applied it across
+		// every session. What is local is the TUI's own copy: the /status line,
+		// and the untrusted reminder that would otherwise keep nagging about a
+		// workspace the user just trusted. Same state /trust and /untrust set,
+		// reached from the settings pane instead.
+		i.mu.Lock()
+		i.cfg.Trusted = on
+		cwd := i.cfg.CWD
+		i.mu.Unlock()
+		if i.cfg.Extensions != nil {
+			i.cfg.Extensions.SetProjectTrusted(on)
+		}
+		if on {
+			i.setStatusOK(i18n.T("trusted %s — its project extensions, skills, and context are loaded now", cwd))
+		} else {
+			i.setStatusOK(i18n.T("untrusted %s — its project extensions, skills, and context are unloaded", cwd))
+		}
 	default:
 		i.setStatusOK(i18n.T("setting updated"))
 	}

@@ -269,8 +269,9 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		// after any rebuild — and the startup merge IS a rebuild now.
 		s.roSet = pol.ReadOnly
 	}
-	r.SetAsker(&webAsker{s: s})
-	r.SetEscalator(&sessionEscalator{s: s})
+	// See workspace_toolchannels.go: these live on the tool INSTANCE, so the
+	// identical call has to run again on every rebuild.
+	s.bindResolvedChannels(&r)
 
 	// Per-session extensions, like ACP: each session owns its manager (own
 	// announced session, own host-tool dispatcher, own context), so concurrent
@@ -380,7 +381,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// approval parks concurrently with a model call's.
 	hookEng := w.hookEng
 	ag.BeforeToolExecute = build.BuildBeforeToolExecute(w.ctx, hookEng, gate, extMgr)
-	build.WireHostToolDispatcher(ag, extMgr, gate)
+	s.bindAgentChannels(ag, gate)
 	if extMgr != nil {
 		ag.BeforeTurn = func(step int) (bool, string) {
 			res := extMgr.InterceptTurnStart(w.ctx, step)
@@ -1098,20 +1099,31 @@ func (s *wsSession) rebuildTools(reason string) {
 	// Keep the workspace-shared sandbox (and its live /jail state) across the
 	// rebuild — Resolve just minted a fresh unlocked one for the new tools.
 	rr.UseSandbox(s.ws.sandbox)
-	// Re-bind the ask channel. Unlike the confirmer — which lives on the
-	// long-lived gate and so survives a rebuild untouched — the asker lives on
-	// the tool instance, and Resolve just minted a fresh ask_user_question with
-	// a nil Asker. Without this the rebuilt tool reports "no interactive
-	// channel" for the rest of the session, with the front end sitting right
-	// there, question dialog wired and waiting.
+	// Same treatment for the session's task board, and the same reason. The pane,
+	// the status glance, and the model's per-turn task card all read the
+	// controller bound at session build; adopting this resolve's fresh one would
+	// point the task tools at a store none of them render — so the board would
+	// exist, never change, and the model would lose sight of its own open work.
+	rr.UseTasks(s.tasks)
+	// Re-bind the channels that live on a TOOL INSTANCE rather than on a
+	// long-lived object (the confirmer, by contrast, lives on the gate and
+	// survives a rebuild untouched). Resolve just minted fresh tools with nil
+	// channels; without this they fail for the rest of the session with the
+	// front end sitting right there. See workspace_toolchannels.go for the full
+	// list and why it is a list.
 	//
 	// Not a corner case: a rebuild fires before the first turn whenever an
 	// extension asserts its tool policy, and again on entering plan mode — the
 	// one mode that deliberately keeps ask_user_question, precisely so the agent
 	// can ask when requirements are unclear.
-	rr.SetAsker(&webAsker{s: s})
-	rr.SetEscalator(&sessionEscalator{s: s})
+	s.bindResolvedChannels(&rr)
 	toolsChanged := s.agent.SetTools(rr.ToolRegistry)
+	// The other half of the same rule, and the one this rebuild used to skip:
+	// code_execution's gated dispatcher binds onto the freshly-minted tool, so
+	// without this the tool fails closed ("not wired to the approval gate") for
+	// the rest of the session. After SetTools, because it reaches the instance
+	// through the agent's registry.
+	s.bindAgentChannels(s.agent, s.gate)
 	// The system prompt carries view state too — the prompt's tool list, the
 	// auto-swarm nudge, an extension's static context — so install the
 	// freshly-resolved render alongside the tools (same fidelity as

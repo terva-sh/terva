@@ -532,6 +532,24 @@ export interface TaskList {
   workers_enabled?: boolean
 }
 
+// The model's own task board (kind=taskboard) — what the agent is tracking via
+// the built-in task_* tools. Distinct from TaskList above, which is the swarm of
+// background sub-agents (the pane titled "Agents"). Read-only: the model owns
+// this list, and editing it from a client would create a state it cannot see it
+// lost.
+export interface TaskBoardItem {
+  id: string
+  status: string // pending | active | blocked | done | cancelled
+  title: string
+  active_form?: string
+  evidence?: string
+  note?: string
+}
+
+export interface TaskBoardView {
+  tasks: TaskBoardItem[]
+}
+
 // Managed git worktrees (kind=worktrees): the built-in worktree engine's list
 // plus the merge-back (collect) overview, both riding one fetch. Read-only, and
 // not Live — no push event exists for worktree changes, so the pane fetches on
@@ -747,6 +765,13 @@ export interface PermissionsView {
   rules?: PermissionRuleInfo[]
   allow_all?: boolean
   grants?: string[]
+  // Workspace Trust for this directory — whether project-supplied extensions,
+  // skills, and context files load. The panel surfaces the toggle in the
+  // workspace drawer and (like every client) in the settings pane; these ride
+  // the permissions view so an inspector can state the whole posture in one
+  // place. cwd is empty against a daemon predating the field.
+  cwd?: string
+  trusted?: boolean
 }
 
 // Notice is a one-shot host-originated message shown in the conversation area
@@ -770,6 +795,7 @@ export interface Surface {
   context?: ContextBreakdown
   usage?: UsageView
   tasks?: TaskList
+  task_board?: TaskBoardView
   settings?: SettingsView
   panel?: PanelView
   widgets?: Widget[]

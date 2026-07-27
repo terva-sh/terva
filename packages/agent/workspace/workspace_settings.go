@@ -122,6 +122,17 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Description: i18n.T("How tool calls are gated for this session."),
 			Note:        i18n.T("per-session — not saved (a security posture, like the TUI)"),
 		},
+		// Workspace Trust sits next to the approval mode because it is the other
+		// half of the same question. Before this it was reachable only as a slash
+		// command, so a TUI user with the settings pane open had no way to see
+		// whether the directory was trusted, let alone change it — the web panel
+		// has had the toggle in its workspace drawer since trust shipped.
+		{
+			Key: "trust", Label: i18n.T("Trust this workspace"), Type: "bool",
+			Value:       boolStr(s.trusted.Load()),
+			Description: i18n.T("Load this directory's project extensions, skills, and context files. Off is the safe default for a cloned repo: its code cannot run and its instructions cannot steer the agent."),
+			Note:        i18n.T("this directory only — recorded outside the project, applies live to every session"),
+		},
 		{
 			Key: "reasoning", Label: i18n.T("Thinking"), Type: "enum",
 			Value: cfg.Reasoning, Options: localizeOptions(reasoningOptions),
@@ -351,6 +362,23 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		s.args.Approval = val
 		s.mu.Unlock()
 		s.rebuildTools("approval-mode")
+	case "trust":
+		// The same verbs /trust and the web drawer's button call, so one act with
+		// one meaning wherever it is spelled: persist the verdict, then apply it
+		// to every open session. Workspace-scoped, not session-scoped — trusting
+		// from one session trusts the directory.
+		var err error
+		if val == "true" {
+			err = s.ws.Trust(s.ws.ctx, false)
+		} else {
+			err = s.ws.Untrust(s.ws.ctx)
+		}
+		if err != nil {
+			return err
+		}
+		// The permissions pane shows the verdict, so it is stale the moment this
+		// lands. Broadcast to every client, not just the one that toggled.
+		s.ws.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("permissions"))
 	case "reasoning":
 		if err := config.MutateConfig(func(c *config.Config) { c.Reasoning = val }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)

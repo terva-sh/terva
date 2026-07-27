@@ -797,16 +797,46 @@ func (i *Interactive) refreshCarrierApprovalMode() {
 	}()
 }
 
+// renderTrustPosture is the Workspace Trust block of the /permissions
+// inspector: whether this directory may load project-supplied extensions,
+// skills, and context, and where to change it.
+//
+// The pane listed approval rules and said nothing about trust, which reads as a
+// complete answer to "what may this session do" when it is half of one. An
+// empty CWD means a daemon that predates the field — render nothing rather
+// than assert an untrusted workspace on missing data.
+func renderTrustPosture(th tui.Theme, pv ctrlproto.PermissionsView) []string {
+	if pv.CWD == "" {
+		return nil
+	}
+	state := th.FG256(th.Warning, i18n.T("restricted"))
+	hint := i18n.T("project extensions, skills, and context files are NOT loaded here. /trust to load them.")
+	if pv.Trusted {
+		state = th.FG256(th.Accent, i18n.T("trusted"))
+		hint = i18n.T("project extensions, skills, and context files load here. /untrust to stop.")
+	}
+	return []string{
+		"",
+		th.FG256(th.Accent, tui.Bold(i18n.T("workspace trust"))) + "  " + state + th.FG256(th.Muted, "  "+pv.CWD),
+		th.FG256(th.Muted, "  "+hint),
+	}
+}
+
 // renderPermissionsWireView paints the /permissions inspector from the wire
 // PermissionsView — the ctrlproto twin of the legacy gate-reading renderer,
 // producing the same info lines + selectable grants.
 func renderPermissionsWireView(th tui.Theme, pv ctrlproto.PermissionsView) (info []string, grants []dialogs.PermGrant) {
 	if pv.Mode == "yolo" && len(pv.Rules) == 0 && !pv.AllowAll && len(pv.Grants) == 0 {
-		return []string{th.FG256(th.Muted, i18n.T("no permission gate (yolo): every tool runs without asking."))}, nil
+		// Even with no gate there is still a trust verdict, and it is the only
+		// thing left holding a cloned repo back — so it is the one line worth
+		// printing here rather than a bare "nothing to inspect".
+		return append([]string{th.FG256(th.Muted, i18n.T("no permission gate (yolo): every tool runs without asking."))},
+			renderTrustPosture(th, pv)...), nil
 	}
 	var out []string
 	out = append(out, th.FG256(th.Accent, tui.Bold(i18n.T("approval mode")))+"  "+pv.Mode)
 	out = append(out, th.FG256(th.Muted, "  "+i18n.T("change it in /settings; flags --approval / --no-yolo set the startup default.")))
+	out = append(out, renderTrustPosture(th, pv)...)
 	out = append(out, "")
 
 	decColor := func(d string) string {

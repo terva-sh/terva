@@ -10,6 +10,16 @@ import (
 	"terva.sh/terva/packages/testsupport"
 )
 
+// bareWorkspace is a Workspace with just a cwd and a trust verdict — enough for
+// the config-level verbs, which touch neither sessions nor a provider. The trust
+// verdict is atomic (it moves with Trust/Untrust), so it can't be a field in a
+// struct literal.
+func bareWorkspace(cwd string, trusted bool) *Workspace {
+	w := &Workspace{cwd: cwd}
+	w.trusted.Store(trusted)
+	return w
+}
+
 // SetDefaultModel is what the web panel and an attach-mode TUI's ctrl+d both
 // land on. It writes config and must NOT touch a live session — switching a
 // model and adopting it as the default are separate acts.
@@ -17,7 +27,7 @@ func TestSetDefaultModelWritesScope(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	cwd := testsupport.TempDir(t)
 	ctx := context.Background()
-	w := &Workspace{cwd: cwd, trusted: true}
+	w := bareWorkspace(cwd, true)
 
 	if err := w.SetDefaultModel(ctx, "anthropic", "claude-opus-4-8", ctrlproto.ScopeGlobal); err != nil {
 		t.Fatalf("global: %v", err)
@@ -49,7 +59,7 @@ func TestSetDefaultModelWritesScope(t *testing.T) {
 func TestSetDefaultModelRejectsBadInput(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	ctx := context.Background()
-	w := &Workspace{cwd: testsupport.TempDir(t), trusted: true}
+	w := bareWorkspace(testsupport.TempDir(t), true)
 
 	if err := w.SetDefaultModel(ctx, "anthropic", "claude-opus-4-8", "everywhere"); err == nil {
 		t.Error("an unknown scope must be refused, not silently written somewhere")
@@ -117,7 +127,8 @@ func TestEffectiveDefaultModelCardRung(t *testing.T) {
 	cwd := testsupport.TempDir(t)
 	// Boot default openai/gpt-5, no configured default → the workspace floor is
 	// the boot model, source "workspace".
-	w := &Workspace{cwd: cwd, trusted: true, provider: "openai", model: "gpt-5"}
+	w := bareWorkspace(cwd, true)
+	w.provider, w.model = "openai", "gpt-5"
 
 	if p, m, src := w.effectiveDefaultModel("", ""); p != "openai" || m != "gpt-5" || src != ctrlproto.DefaultSourceWorkspace {
 		t.Fatalf("no card: %s/%s@%s, want openai/gpt-5@workspace", p, m, src)
@@ -155,7 +166,7 @@ func TestDefaultModelPrecedence(t *testing.T) {
 	cwd := testsupport.TempDir(t)
 	ctx := context.Background()
 
-	trusted := &Workspace{cwd: cwd, trusted: true}
+	trusted := bareWorkspace(cwd, true)
 	if err := trusted.SetDefaultModel(ctx, "anthropic", "claude-opus-4-8", ctrlproto.ScopeGlobal); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +185,7 @@ func TestDefaultModelPrecedence(t *testing.T) {
 	}
 
 	// Same directory, same project config — but untrusted, so it does not count.
-	untrusted := &Workspace{cwd: cwd, trusted: false}
+	untrusted := bareWorkspace(cwd, false)
 	prov, model, scope = untrusted.defaultModel()
 	if prov != "anthropic" || model != "claude-opus-4-8" || scope != ctrlproto.ScopeGlobal {
 		t.Errorf("an untrusted project default must not shadow the global one, got %s/%s@%s", prov, model, scope)

@@ -43,6 +43,7 @@ import type {
   SurfaceMeta,
   TaskInfo,
   TaskList,
+  TaskBoardView,
   UsageInfo,
   UsageSnapshotResult,
   UsageWindow,
@@ -3119,6 +3120,8 @@ export function SurfaceView({
       ) : null
     case 'tasks':
       return surface.tasks ? <TasksBody list={surface.tasks} onAction={onAction} /> : null
+    case 'taskboard':
+      return surface.task_board ? <TaskBoardBody v={surface.task_board} /> : null
     case 'worktrees':
       return (
         <WorktreesBody
@@ -4217,6 +4220,59 @@ export function wtStatus(it: WorktreeViewItem): { label: string; cls: string } {
   if (it.status === 'claimed' && it.claimed_by) return { label: `claimed(${it.claimed_by})`, cls: 's-claimed' }
   if (it.stale_reason) return { label: 'stale', cls: 's-stale' }
   return { label: 'available', cls: 's-available' }
+}
+
+// TaskBoardBody renders what the MODEL is tracking — the built-in task_* list —
+// as opposed to TasksBody, which is the swarm of background sub-agents.
+//
+// Read-only by design. The model owns this list; a human toggling a status here
+// would change state the model has no way to learn it lost, and the next
+// task_update would silently overwrite the edit. Watching is the affordance.
+//
+// Ordering is the store's, not re-sorted here: the model's sequence is the plan,
+// and re-grouping by status would hide the order the work is meant to happen in.
+// taskStatusLabel spells each status literally so the extractor can see it —
+// t(it.status) would be one line shorter and untranslatable.
+function taskStatusLabel(status: string): string {
+  switch (status) {
+    case 'pending':
+      return t('pending')
+    case 'active':
+      return t('active')
+    case 'blocked':
+      return t('blocked')
+    case 'done':
+      return t('done')
+    case 'cancelled':
+      return t('cancelled')
+    default:
+      return status
+  }
+}
+
+export function TaskBoardBody({ v }: { v: TaskBoardView }) {
+  const items = v.tasks ?? []
+  if (!items.length)
+    return <div class="pick-empty">{t('Nothing tracked yet — tasks appear here as the agent plans its work.')}</div>
+  const open = items.filter((i) => i.status === 'pending' || i.status === 'active').length
+  return (
+    <div class="tb-body">
+      <div class="tb-head">{t('%s of %s open', String(open), String(items.length))}</div>
+      {items.map((it) => (
+        <div class={`tb-row ${it.status}`} key={it.id}>
+          <div class="tb-row-head">
+            <span class={`tb-status ${it.status}`}>{taskStatusLabel(it.status)}</span>
+            {/* The active form ("running the tests") is what the model says it
+                is DOING; fall back to the title when it is absent. */}
+            <span class="tb-title">{it.status === 'active' && it.active_form ? it.active_form : it.title}</span>
+            <span class="tb-id mono">{it.id}</span>
+          </div>
+          {it.note && <div class="tb-note">{it.note}</div>}
+          {it.evidence && <div class="tb-evidence mono">{it.evidence}</div>}
+        </div>
+      ))}
+    </div>
+  )
 }
 
 export function WorktreesBody({ v, onRefresh }: { v: WorktreeView; onRefresh?: () => void }) {

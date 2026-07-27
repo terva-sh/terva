@@ -24,9 +24,16 @@ import (
 
 // permissionsView builds the permissions pane from the session's gate.
 func (s *wsSession) permissionsView() *ctrlproto.PermissionsView {
-	v := &ctrlproto.PermissionsView{Mode: string(core.ApprovalYolo)}
+	// Trust is set before the gate check: a pure-yolo session has no approval
+	// rules to inspect but still has a trust posture, and it is the one a yolo
+	// user most wants stated — nothing is asking, so trust is what is left.
+	v := &ctrlproto.PermissionsView{
+		Mode:    string(core.ApprovalYolo),
+		CWD:     s.cwd,
+		Trusted: s.trusted.Load(),
+	}
 	if s.gate == nil {
-		return v // pure-yolo: no gate, nothing to inspect
+		return v // pure-yolo: no gate, nothing else to inspect
 	}
 	v.Mode = string(s.gate.Mode())
 	for _, r := range s.gate.Rules() {

@@ -1433,6 +1433,33 @@ func (r *Resolved) UseSandbox(s *tools.Sandbox) {
 	}
 }
 
+// UseTasks replaces this resolve's task controller with a caller-owned one and
+// re-points the registered task tools at it — the sandbox treatment for the task
+// board, and for the same reason.
+//
+// Every Resolve mints a fresh controller over a fresh store, which is right for
+// a NEW session and wrong for a rebuild: the host's pointer (the pane, the
+// status glance) and the agent's per-turn task card are both bound to the
+// controller from session build, while a rebuild would install tools writing
+// somewhere else. The model then records work that nothing renders — and, worse,
+// that its own card no longer shows, so it cannot see the list it is working
+// from. One board per session, surviving every rebuild, is the only arrangement
+// where those three agree.
+//
+// Only names the resolve actually registered are replaced, so a --tools
+// allowlist or a plan-mode withdrawal that dropped a task tool keeps it dropped.
+func (r *Resolved) UseTasks(ctrl *tasktool.Controller) {
+	if r == nil || ctrl == nil {
+		return
+	}
+	r.Tasks = ctrl
+	for _, t := range ctrl.Tools() {
+		if _, ok := r.ToolRegistry[t.Name()]; ok {
+			r.ToolRegistry[t.Name()] = t
+		}
+	}
+}
+
 // SetAsker wires the front-end question channel into the registered
 // ask_user_question tool. The cli calls it once the interactive front
 // end (the Asker) exists — the same construction-order unknot as

@@ -116,7 +116,19 @@ func (s *wsSession) surfaceList() []ctrlproto.SurfaceMeta {
 		{ID: "settings", Title: i18n.T("Settings"), Icon: "⚙️", Kind: "settings", Scope: "session", Actions: true},
 	}
 	if s.ws != nil && s.ws.hasTasks() {
-		metas = append(metas, ctrlproto.SurfaceMeta{ID: "tasks", Title: i18n.T("Tasks"), Icon: "🐝", Kind: "tasks", Scope: "workspace", Live: true, Actions: true})
+		// Titled "Agents", id still "tasks": the id is wire contract and clients
+		// key off it, but the pane shows background SUB-AGENTS, and calling it
+		// Tasks collided with the model's own task board — two panes, one name,
+		// different data. "Agents" is what it always was.
+		metas = append(metas, ctrlproto.SurfaceMeta{ID: "tasks", Title: i18n.T("Agents"), Icon: "🐝", Kind: "tasks", Scope: "workspace", Live: true, Actions: true})
+	}
+	// The model's own task board. Session-scoped (each session tracks its own
+	// work) and Live — buildSession broadcasts surface_updated("taskboard") at
+	// every turn end, which is the only time it can change. Read-only on purpose:
+	// the model owns this list, and a human editing it mid-turn would create a
+	// state the model cannot see it lost.
+	if s.hasTaskBoard() {
+		metas = append(metas, ctrlproto.SurfaceMeta{ID: "taskboard", Title: i18n.T("Tasks"), Icon: "✓", Kind: "taskboard", Scope: "session", Live: true})
 	}
 	if s.ws != nil && s.ws.swarm != nil {
 		// The deliberation board is always offered (an idle board is the
@@ -207,13 +219,13 @@ func (s *wsSession) surface(id string) (ctrlproto.Surface, error) {
 		b := s.contextBreakdown()
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Usage"), Kind: "context", Context: &b}, nil
 	case "tasks":
-		return ctrlproto.Surface{ID: id, Title: i18n.T("Tasks"), Kind: "tasks", Tasks: s.ws.taskList()}, nil
+		return ctrlproto.Surface{ID: id, Title: i18n.T("Agents"), Kind: "tasks", Tasks: s.ws.taskList()}, nil
 	case "taskboard":
-		// The per-session task board (built-in task_* tools). Fetched by explicit
-		// id from the TUI's /tasks panel + status glance; deliberately not in
-		// surfaceList (no web tab yet), see workspace_taskboard.go. NotFound when
-		// the session has no board (chat/play/--no-tools) so the TUI can say
-		// "unavailable" rather than show an empty, never-populated panel.
+		// The per-session task board (built-in task_* tools) — what the MODEL is
+		// tracking, as opposed to the "tasks" pane above, which is the swarm.
+		// NotFound when the session has no board (chat/play/--no-tools) so a
+		// client can say "unavailable" rather than show an empty panel that will
+		// never populate.
 		if !s.hasTaskBoard() {
 			return ctrlproto.Surface{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no task board in this session"))
 		}

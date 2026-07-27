@@ -529,6 +529,15 @@ func (i *Interactive) slashTrust(_ context.Context, parts []string, _ string) bo
 		i.cfg.Extensions.SetProjectTrusted(true)
 	}
 
+	// The host did the whole job (the ctrlproto carriers reload extensions,
+	// rebuild tools and re-render the prompt across every open session). Say so
+	// — this used to fall through to the restart note below and send people
+	// looking for a problem that had already been fixed.
+	if i.cfg.TrustAppliesLive {
+		i.setStatusOK(i18n.T("trusted %s — its project extensions, skills, and context are loaded now", cwd))
+		return false
+	}
+
 	// Live re-apply: re-cd into the same dir rebuilds the agent with the
 	// now-trusted Resolve (project skills + context load immediately).
 	// Project EXTENSIONS need a /reload-ext (or restart) to spawn — the
@@ -573,6 +582,15 @@ func (i *Interactive) slashUntrust(_ context.Context, _ []string, _ string) bool
 	i.cfg.Trusted = false
 	cwd := i.cfg.CWD
 	i.mu.Unlock()
+	if i.cfg.Extensions != nil {
+		i.cfg.Extensions.SetProjectTrusted(false)
+	}
+	if i.cfg.TrustAppliesLive {
+		// The ctrlproto carriers tear the project content back down on the spot,
+		// so unlike the note below this is not a next-launch promise.
+		i.setStatusOK(i18n.T("untrusted %s — its project extensions, skills, and context are unloaded", cwd))
+		return false
+	}
 	i.setStatusOK("untrusted " + cwd + " — its project content will not load on the next launch")
 	return false
 }

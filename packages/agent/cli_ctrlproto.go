@@ -460,6 +460,10 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		UntrustWorkspace: func() error {
 			return w.Untrust(ctx)
 		},
+		// Workspace.Trust/Untrust reload the extensions, rebuild the tools and
+		// re-render the system prompt for every open session, so /trust has
+		// nothing left to do — and must not tell the user to restart.
+		TrustAppliesLive: true,
 
 		// --- extension log viewer + config form ---
 		// In-process affordances the wire only flags (ExtensionInfo.HasLog/

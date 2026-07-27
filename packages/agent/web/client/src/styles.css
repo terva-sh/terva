@@ -138,6 +138,27 @@ body {
    container that pane-internal @container rules respond to. */
 .pane-body { flex: 1; overflow-y: auto; overflow-x: clip; min-height: 0; overflow-wrap: anywhere; container: pane / inline-size; }
 
+/* task board (what the MODEL is tracking — the built-in task_* list).
+   Distinct from the .task-* block below, which is the swarm of sub-agents. */
+.tb-body { padding: var(--pad-pane); display: flex; flex-direction: column; gap: var(--gap-row); }
+.tb-head { font-size: var(--fs-note); color: var(--muted); font-variant-numeric: tabular-nums; }
+.tb-row { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; }
+.tb-row.active { border-color: color-mix(in srgb, var(--user) 45%, var(--line)); }
+/* Finished work stays legible but recedes, so the open rows read first. */
+.tb-row.done, .tb-row.cancelled { opacity: .62; }
+.tb-row-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.tb-status { flex: none; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 7px; border-radius: 999px; background: var(--panel); color: var(--muted); }
+.tb-status.active { background: color-mix(in srgb, var(--user) 20%, transparent); color: var(--user); }
+.tb-status.done { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+.tb-status.blocked { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+.tb-status.cancelled { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+/* Titles wrap rather than ellipsize: a truncated task is unreadable, and this
+   pane is a list of sentences, not a table of names. */
+.tb-title { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-ui); }
+.tb-id { flex: none; margin-left: auto; font-size: var(--fs-note); color: var(--muted); }
+.tb-note { font-size: var(--fs-detail); color: var(--muted); overflow-wrap: anywhere; }
+.tb-evidence { font-size: var(--fs-detail); color: var(--muted); overflow-wrap: anywhere; }
+
 /* tasks pane (background swarm agents) */
 .tasks-body { padding: var(--pad-pane); display: flex; flex-direction: column; gap: var(--gap-row); }
 .task-row { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }

@@ -345,10 +345,18 @@ ci-web:
 # `test` already covers it — this guards the tagged tool + build wiring,
 # same discipline as ci-acp/ci-web. The tag is what links sobek into the
 # binary; the default build stays interpreter-free.
+#
+# The workspace package is in here too, and not decoratively: code_execution's
+# gate binding lives on the TOOL INSTANCE, so it is the session rebuild in
+# workspace that can drop it — which it did, silently, until a user hit
+# "code_execution is not wired to the approval gate in this session". Without
+# the tag that tool does not exist, so an untagged run of the rebuild guard
+# cannot see the field at all.
 ci-scripting:
     go build -tags terva_scripting ./...
-    go vet -tags terva_scripting ./packages/agent/tools/ ./packages/agent/build/
+    go vet -tags terva_scripting ./packages/agent/tools/ ./packages/agent/build/ ./packages/agent/workspace/
     go test -tags terva_scripting -race -run 'CodeExecution|Scripting' ./packages/agent/tools/ ./packages/agent/build/
+    go test -tags terva_scripting -race -run 'ToolChannel|RebuildTools' ./packages/agent/workspace/
 
 # The workflow engine's CLI seam (behind -tags terva_workflows): build/vet/
 # test the `terva workflow` subcommand wiring. The engine itself

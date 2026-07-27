@@ -718,6 +718,16 @@ type PermissionsView struct {
 	Rules    []PermissionRule `json:"rules,omitempty"`
 	AllowAll bool             `json:"allow_all,omitempty"` // "always allow everything" was chosen this session
 	Grants   []string         `json:"grants,omitempty"`    // tools granted "always allow" this session
+
+	// CWD and Trusted are the workspace's Workspace Trust posture: whether this
+	// directory may load project-supplied extensions, skills, and context.
+	//
+	// Shown HERE because it is the other half of "what is this session allowed
+	// to do", and a pane that lists approval rules while staying silent about
+	// trust reads as complete when it is not. The toggle lives in the settings
+	// pane with the rest of the switches (key "trust"); this is the inspector.
+	CWD     string `json:"cwd,omitempty"`
+	Trusted bool   `json:"trusted,omitempty"`
 }
 
 // PermissionRule is one compiled approval rule for the inspector: which tool

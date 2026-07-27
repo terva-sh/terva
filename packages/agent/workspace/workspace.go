@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"terva.sh/terva/packages/agent/build"
@@ -121,11 +122,20 @@ type Workspace struct {
 	// a credential (buildSession's own Resolve). Guarded by mu.
 	credErr error
 
-	// trusted is the launch cwd's Workspace Trust verdict, captured at
-	// construction for hosts that need it before any session exists (the
-	// TUI's credential-less login boot). Immutable after NewWorkspace —
-	// live trust flips ride Trust/Untrust, which reload sessions directly.
-	trusted bool
+	// trusted is the cwd's Workspace Trust verdict — resolved at construction
+	// (hosts need it before any session exists, e.g. the TUI's credential-less
+	// login boot) and MOVED by Trust/Untrust.
+	//
+	// It has to move. Everything that reads a trust verdict without holding a
+	// session reads this one: swarm_spawn's spawn gate (injectExtraTools hands
+	// it w.Trusted), defaultModel's project-default check, the swarm worktree
+	// prober. While it was a launch-time snapshot, `/trust` wrote the store,
+	// reloaded every session, told the user it had worked — and swarm_spawn
+	// went on refusing "this workspace is untrusted" until terva restarted.
+	//
+	// Atomic rather than mu-guarded because the readers are tool closures on
+	// the call path, and a spawn must not queue behind a session build.
+	trusted atomic.Bool
 
 	// personaName labels the default persona for hosts that need it before
 	// any session exists (same audience as trusted). Immutable.
@@ -165,10 +175,10 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 		cancel:   cancel,
 		sessions: map[string]*wsSession{},
 		credErr:  r.CredentialErr,
-		trusted:  r.Trusted,
 		sandbox:  r.Sandbox, // shared across sessions; carries the initial jail lock
 		diag:     func(m string) { fmt.Fprintln(os.Stderr, m) },
 	}
+	w.trusted.Store(r.Trusted)
 	// Sweep leaked empty sessions at boot: a Stage chat opened for preview defers
 	// its greeting (no message rows), so a daemon hard-killed before that draft's
 	// Close can leave a meta-only file behind. PruneEmptySessions removes any file
@@ -332,9 +342,9 @@ func (w *Workspace) Defaults() (provider, model string) {
 	return w.provider, w.model
 }
 
-// Trusted reports the launch cwd's Workspace Trust verdict captured at
-// construction (see the field note; live flips ride Trust/Untrust).
-func (w *Workspace) Trusted() bool { return w.trusted }
+// Trusted reports the cwd's current Workspace Trust verdict — the one verdict
+// every session-less reader consults, kept current by Trust/Untrust.
+func (w *Workspace) Trusted() bool { return w.trusted.Load() }
 
 // Sandbox returns the workspace-shared filesystem sandbox. The in-process TUI
 // carrier passes it to InteractiveConfig so /jail and /unjail toggle the same
@@ -1562,9 +1572,22 @@ func (w *Workspace) Untrust(ctx context.Context) error {
 	return nil
 }
 
-// applyTrust brings every open session in line with a new trust verdict. Trust
-// is workspace-global (keyed on w.cwd), so one verdict fans out to all sessions.
+// applyTrust brings the workspace and every open session in line with a new
+// trust verdict. Trust is workspace-global (keyed on w.cwd), so one verdict
+// fans out to all sessions.
+//
+// The workspace verdict moves FIRST: a session rebuild below re-runs
+// injectExtraTools, and a tool that captured the old answer on the way past
+// would be wrong for the rest of the session.
+//
+// Not re-derived here, and a known gap: project HOOKS. They are merged into the
+// workspace hook engine at construction (BuildHookEngine's TrustedProjectHooks)
+// and reach a session through a closure the agent holds for its lifetime, so a
+// newly trusted project's pre/post-tool hooks do not start running until the
+// next launch. Fixing that needs a re-wire seam on the tool-call ladder rather
+// than another line here.
 func (w *Workspace) applyTrust(ctx context.Context, trusted bool) {
+	w.trusted.Store(trusted)
 	w.mu.Lock()
 	sess := make([]*wsSession, 0, len(w.sessions))
 	for _, s := range w.sessions {
@@ -1574,6 +1597,11 @@ func (w *Workspace) applyTrust(ctx context.Context, trusted bool) {
 	for _, s := range sess {
 		s.setTrusted(ctx, trusted)
 	}
+	// Trust gates one layer of the permission policy: the deny/ask rules a
+	// PROJECT extension bundle suggests (BuildPermissionPolicy's trust argument).
+	// Those are restrictions the user just opted into by trusting the repo — its
+	// extensions are now spawning — so they have to land now, not next launch.
+	w.refreshAllPolicies()
 }
 
 func (w *Workspace) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {

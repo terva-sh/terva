@@ -446,6 +446,11 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 		},
 		TrustWorkspace:   func(parent bool) error { return svc.Trust(ctx, parent) },
 		UntrustWorkspace: func() error { return svc.Untrust(ctx) },
+		// The daemon's Trust verb re-applies across every open session before it
+		// returns, so by the time this comes back the change is already in force
+		// — here even more plainly than locally, since "restart terva" would mean
+		// restarting the wrong process.
+		TrustAppliesLive: true,
 	})
 
 	bridgeMu.Lock()

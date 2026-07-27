@@ -210,7 +210,11 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	// stderr line buried in the child's own event log.
 	untrusted := t.Trusted != nil && !t.Trusted()
 	if untrusted && !a.AllowUntrusted {
-		return toolErr("swarm_spawn: this workspace is untrusted, so sub-agents would run WITHOUT its project extensions, skills, and context files. Ask the user to trust it (run `terva trust`, or restart and accept the trust prompt), then retry. If the user explicitly wants degraded sub-agents instead, retry with allow_untrusted: true."), nil
+		// The advice has to name a fix that works right now. It used to offer
+		// "restart and accept the trust prompt", which was the only thing that
+		// worked while this gate read a launch-time snapshot — and which is now
+		// the slowest of three options. /trust applies to the running session.
+		return toolErr("swarm_spawn: this workspace is untrusted, so sub-agents would run WITHOUT its project extensions, skills, and context files. Ask the user to trust it — `/trust` in the TUI, the trust toggle in settings, or `terva trust` in a shell — then retry. It takes effect immediately; no restart. If the user explicitly wants degraded sub-agents instead, retry with allow_untrusted: true."), nil
 	}
 
 	persona := strings.TrimSpace(a.Persona)
