@@ -11,6 +11,17 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.18](https://github.com/terva-sh/terva/releases/tag/v0.126.18) — 2026-07-27
+
+### Features
+
+- extensions: terva ext config, so a setting can be changed without a browser
+- web: a daemon publishes where it can be reached, so clients stop guessing
+
+### Fixes
+
+- extensions: a vendored extension can be configured, and from any client
+
 ## [v0.126.17](https://github.com/terva-sh/terva/releases/tag/v0.126.17) — 2026-07-27
 
 ### Features
