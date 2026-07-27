@@ -88,12 +88,12 @@ type Record struct {
 	// Args as given, so a rerun can be reproduced exactly.
 	Args json.RawMessage `json:"args,omitempty"`
 
-	// PID of the launching process. Recorded but deliberately NOT probed:
-	// telling "still running" from "crashed" needs liveness, and a bare pid
-	// lies after reuse. Both read as Incomplete below, which is honest and is
-	// the same next action either way — look at the counts and decide whether
-	// to resume. The field is here so a later heartbeat has somewhere to land
-	// without a migration.
+	// PID of the launching process. Recorded for diagnosis — matching a run to
+	// something in a process list, or to a log line — and deliberately NOT
+	// probed for liveness. A pid lies after reuse: the number outlives the
+	// process, so a probe can find something very much alive that has nothing
+	// to do with this run. Heartbeat below is what answers that question, and
+	// it is the field a reader should consult.
 	PID int `json:"pid,omitempty"`
 
 	// Heartbeat is when the running process last said it was alive, RFC3339.
