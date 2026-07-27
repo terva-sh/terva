@@ -11,6 +11,19 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.16](https://github.com/terva-sh/terva/releases/tag/v0.126.16) — 2026-07-26
+
+### Features
+
+- build: a shadowed machine persona announces itself
+- permissions: "always allow" on bash can save the command, not the whole tool
+- workflow: a run's work is visible from the control panel, not just the terminal that started it
+
+### Fixes
+
+- agent: a background model refresh stops writing into another test's home
+- egress: every config-driven escape now dials through the guard
+
 ## [v0.126.15](https://github.com/terva-sh/terva/releases/tag/v0.126.15) — 2026-07-26
 
 ### Features
