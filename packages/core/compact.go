@@ -199,8 +199,8 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		// transcript flattened into one user block. It matches nothing the
 		// provider has cached, by construction — every compaction on this path is
 		// a full-price cold re-read of the whole conversation. That is the cost
-		// cache_aware_compaction exists to remove, and until it defaults on, this
-		// is what a compaction costs.
+		// cache_aware_compaction (shipped on) exists to remove; this path now
+		// serves the warm arm's fallbacks and explicit opt-outs.
 		s, u, _, cerr := a.drainSummary(ctx, prefix.client, coldCompactRequest(prefix, transcript, midTurn), sink)
 		usage = usage.Add(u)
 		if cerr != nil {

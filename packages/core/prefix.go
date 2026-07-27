@@ -287,8 +287,9 @@ func (a *Agent) compactionPrefix() (p promptPrefix, warm bool) {
 }
 
 // SetCacheAwareCompaction toggles the cache-aware summarizer (the engine
-// feature cache_aware_compaction, default OFF). Off, a compaction builds its
-// own bespoke prefix — its own system prompt, no tools, the transcript
+// feature cache_aware_compaction; the shipped default — ON — lives in
+// build/enginefeatures.go, core's zero value stays off). Off, a compaction
+// builds its own bespoke prefix — its own system prompt, no tools, the transcript
 // flattened into one text block — which by construction matches nothing the
 // provider has cached, so every compaction is a full-price cold read of the
 // whole conversation. On, it summarizes against the WARM prefix and pays cache
