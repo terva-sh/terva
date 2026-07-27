@@ -93,6 +93,18 @@ func (w *Workspace) WorkflowRun(_ context.Context, p ctrlproto.WorkflowGetParams
 			})
 		}
 	}
+	// The agents in flight: started, not yet reported back. On a RUNNING run
+	// this is what it is doing right now; on a crashed one it is what it was
+	// doing when it stopped, which is what an operator reads before deciding
+	// whether to resume.
+	if inflight, ferr := runs.InFlightCalls(root, p.ID); ferr == nil {
+		for _, f := range inflight {
+			view.InFlight = append(view.InFlight, ctrlproto.WorkflowAgent{
+				Label:   f.Label,
+				AgentID: f.AgentID,
+			})
+		}
+	}
 	return view, nil
 }
 
@@ -115,5 +127,16 @@ func workflowRunInfo(root string, r runs.Record) ctrlproto.WorkflowRunInfo {
 		ScriptAt:  r.ScriptAt,
 		Err:       r.Err,
 		Resumable: r.Resumable(done),
+		Running:   len(inFlightNames(root, r.RunID)),
 	}
+}
+
+// inFlightNames is the count half of the in-flight read, kept out of the list
+// row's hot path shape: the list needs "how many", the opened run needs "which".
+func inFlightNames(root, runID string) []runs.InFlight {
+	f, err := runs.InFlightCalls(root, runID)
+	if err != nil {
+		return nil
+	}
+	return f
 }

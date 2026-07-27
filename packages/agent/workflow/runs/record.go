@@ -96,6 +96,16 @@ type Record struct {
 	// without a migration.
 	PID int `json:"pid,omitempty"`
 
+	// Heartbeat is when the running process last said it was alive, RFC3339.
+	// This is the liveness the PID could never supply: a pid lies after reuse,
+	// but a timestamp the runner has to keep rewriting cannot — if it stops
+	// advancing, the process that was advancing it is gone.
+	//
+	// Absent on a record written before this existed, and on one written by a
+	// runner that never got to its first tick. Both fall back to the old
+	// answer (incomplete), so an old run reads exactly as it always did.
+	Heartbeat string `json:"heartbeat,omitempty"`
+
 	// Filled in at the end. Agents is the total the script asked for
 	// (spawned + replayed); Cached is how many replayed.
 	Agents  int     `json:"agents,omitempty"`
@@ -108,25 +118,61 @@ type Record struct {
 type Status string
 
 const (
-	// StatusIncomplete covers running, crashed, and interrupted alike. The
-	// record cannot tell them apart without liveness, and saying "running"
-	// about a dead run would be worse than saying nothing.
+	// StatusIncomplete is the honest "cannot tell": a run with no closing
+	// record and no usable heartbeat. It covers a run from before heartbeats
+	// existed, and one that died before its first tick.
 	StatusIncomplete Status = "incomplete"
-	StatusDone       Status = "done"
-	StatusFailed     Status = "failed"
+	// StatusRunning is a run whose heartbeat is fresh — a process is alive and
+	// still working. Only ever claimed on evidence.
+	StatusRunning Status = "running"
+	// StatusCrashed is a run whose heartbeat stopped advancing without a
+	// closing record: the process died without getting to write its ending.
+	// Before, this was indistinguishable from a run still in flight, so an
+	// operator waited on work that had already stopped.
+	StatusCrashed Status = "crashed"
+	StatusDone    Status = "done"
+	StatusFailed  Status = "failed"
 )
 
-// Status derives the outcome. Absent Ended means the run never wrote its
-// closing record — see StatusIncomplete.
-func (r Record) Status() Status {
+// HeartbeatInterval is how often a running workflow restamps its record.
+const HeartbeatInterval = 10 * time.Second
+
+// heartbeatGrace is how long a heartbeat may go unrefreshed before the run is
+// called crashed. Three intervals, not one: a loaded machine, a slow disk, or a
+// process descheduled mid-tick must not be reported dead while it is working.
+// The cost of waiting is a stale "running" for half a minute; the cost of being
+// hasty is telling someone to re-pay for a run that was about to finish.
+const heartbeatGrace = 3 * HeartbeatInterval
+
+// Status derives the outcome, as of now.
+func (r Record) Status() Status { return r.StatusAt(time.Now()) }
+
+// StatusAt is Status against a supplied clock, so the liveness rule is testable
+// without sleeping.
+//
+// Ended wins over any heartbeat: a run that wrote its closing record is
+// finished, whatever a stale tick says. Only an unfinished run consults
+// liveness at all.
+func (r Record) StatusAt(now time.Time) Status {
 	switch {
-	case r.Ended == "":
-		return StatusIncomplete
-	case r.Err != "":
+	case r.Ended != "" && r.Err != "":
 		return StatusFailed
-	default:
+	case r.Ended != "":
 		return StatusDone
 	}
+	beat, err := time.Parse(time.RFC3339, r.Heartbeat)
+	if r.Heartbeat == "" || err != nil {
+		return StatusIncomplete // no evidence either way — the old answer
+	}
+	// A heartbeat from the FUTURE is not evidence of life; it is a clock skew
+	// between the writer and this reader (a run recorded on another machine, a
+	// container with a drifted clock). Treat it as fresh rather than crashed:
+	// over-reporting life is recoverable by looking again, and calling a live
+	// run dead invites re-paying for work in flight.
+	if now.Sub(beat) > heartbeatGrace {
+		return StatusCrashed
+	}
+	return StatusRunning
 }
 
 // Resumable reports whether resuming this run could save work: it did not
@@ -136,8 +182,17 @@ func (r Record) Status() Status {
 // killed mid-flight is `incomplete`, and either can be sitting on completed
 // agents — the CLI has always printed a resume hint on failure for exactly that
 // reason. Only a clean finish has nothing left to replay.
+// A run that is still RUNNING is not resumable, and this is the reason the
+// check is not simply "!= done": resuming a live run would start a second
+// process against the same journal, double-paying for the calls in flight and
+// racing the writer that owns the file. Before liveness existed the case could
+// not be detected, so "incomplete" had to include it.
 func (r Record) Resumable(completed int) bool {
-	return r.Status() != StatusDone && completed > 0
+	switch r.Status() {
+	case StatusDone, StatusRunning:
+		return false
+	}
+	return completed > 0
 }
 
 func recordPath(root, runID string) string { return filepath.Join(root, runID, recordName) }
@@ -217,6 +272,32 @@ func CompletedCalls(root, runID string) int {
 // finished run's output is readable without re-running the script.
 func Results(root, runID string) ([]JournalResult, error) {
 	return readResults(filepath.Join(root, runID))
+}
+
+// InFlightCalls returns the agents that started and have not reported back —
+// what the run is working on, by the label the script gave it.
+func InFlightCalls(root, runID string) ([]InFlight, error) {
+	return readInFlight(filepath.Join(root, runID))
+}
+
+// Beat restamps a run's heartbeat. Called on a ticker by the running process;
+// this is the whole liveness mechanism.
+//
+// It re-reads the record before rewriting rather than restamping a caller's
+// copy, because the closing write carries counts and a cost this one must not
+// clobber if the two ever interleave. A read failure is a no-op: a missing
+// heartbeat degrades the run to "incomplete", which is the pre-liveness answer
+// and safe, while a partial rewrite would corrupt the record itself.
+func Beat(root, runID string, at time.Time) error {
+	rec, err := ReadRecord(root, runID)
+	if err != nil {
+		return err
+	}
+	if rec.Ended != "" {
+		return nil // finished between ticks; nothing to claim
+	}
+	rec.Heartbeat = at.UTC().Format(time.RFC3339)
+	return WriteRecord(root, rec)
 }
 
 // FindIncomplete returns the newest incomplete run of the same script in the

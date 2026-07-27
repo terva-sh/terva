@@ -70,6 +70,10 @@ func runWorkflowList() error {
 		if total > 0 {
 			agents = fmt.Sprintf("%d/%d", done, total)
 		}
+		// "+3" is the difference between a run to wait for and one to resume.
+		if flying, ferr := runs.InFlightCalls(workflowsRoot(), r.RunID); ferr == nil && len(flying) > 0 {
+			agents += fmt.Sprintf("+%d", len(flying))
+		}
 		line := fmt.Sprintf("%-16s  %-10s  %-14s  agents %-7s  $%.4f  %s",
 			r.RunID, r.Status(), truncField(r.Name, 14), agents, r.CostUSD, r.Started)
 		if r.Resumable(done) {
@@ -130,6 +134,18 @@ func runWorkflowShow(argv []string) error {
 	}
 	if rec.Err != "" {
 		fmt.Fprintln(os.Stderr, i18n.T("  error: %s", rec.Err))
+	}
+	// What it is working on, or was working on when it stopped — the labels a
+	// started row carries, which every reader used to discard.
+	if flying, ferr := runs.InFlightCalls(root, runID); ferr == nil && len(flying) > 0 {
+		fmt.Fprintln(os.Stderr, i18n.T("  in flight: %d", len(flying)))
+		for _, f := range flying {
+			name := f.Label
+			if name == "" {
+				name = f.AgentID
+			}
+			fmt.Fprintln(os.Stderr, "    "+name)
+		}
 	}
 	if rec.Resumable(done) {
 		fmt.Fprintln(os.Stderr, i18n.T("  resume with: terva workflow run %s --resume %s", orDash(rec.ScriptAt), runID))

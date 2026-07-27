@@ -180,6 +180,10 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		i.runSwarm(ctx, parts[1:])
 		return false
 	},
+	"/workflows": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.openWorkflowsDialog()
+		return false
+	},
 	"/extensions": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 		i.openExtensionsDialog()
 		return false

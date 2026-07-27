@@ -30,12 +30,15 @@ type WorkflowsController interface {
 
 // WorkflowRunInfo is one row in the dashboard.
 //
-// Status is "incomplete", "done" or "failed" — never "running". Telling a live
-// run from a crashed one needs liveness the record cannot supply (a bare pid
-// lies after reuse), and claiming "running" about a dead run would be worse
-// than saying nothing. Completed/Agents is what an operator actually reads:
-// "1/6" is the whole finding, because it says how much work is sitting on disk
-// waiting to be replayed instead of paid for again.
+// Status is "running", "crashed", "done", "failed", or "incomplete". The first
+// two are earned: a running process restamps a heartbeat on the record, so a
+// fresh stamp means alive and a stopped one means the process died without
+// writing its ending. "incomplete" survives as the honest "cannot tell" — a run
+// recorded before heartbeats existed, or one that died before its first tick.
+//
+// Completed/Agents is what an operator actually reads: "1/6" is the whole
+// finding, because it says how much work is sitting on disk waiting to be
+// replayed instead of paid for again.
 type WorkflowRunInfo struct {
 	ID      string `json:"id"`
 	Name    string `json:"name,omitempty"` // the script's meta.name
@@ -51,10 +54,15 @@ type WorkflowRunInfo struct {
 	CWD       string  `json:"cwd,omitempty"`
 	ScriptAt  string  `json:"script_at,omitempty"`
 	Err       string  `json:"error,omitempty"`
+	// Running is how many agents have started and not yet reported back.
+	// Alongside Completed it separates "6 done, nothing moving" from "6 done,
+	// 4 in flight" — the difference between a run to resume and one to wait for.
+	Running int `json:"running,omitempty"`
 	// Resumable: resuming would replay real work. Derived server-side because
-	// the rule is the server's and has already changed once — a FAILED run
-	// counts, not just an interrupted one, since a script that threw can still
-	// be sitting on completed agents.
+	// the rule is the server's and has already changed twice — a FAILED run
+	// counts (a script that threw can still be sitting on completed agents),
+	// and a RUNNING one does not, because resuming a live run would start a
+	// second process against the same journal.
 	Resumable bool `json:"resumable,omitempty"`
 }
 
@@ -83,6 +91,18 @@ type WorkflowRunView struct {
 	Script  string              `json:"script,omitempty"`
 	Args    json.RawMessage     `json:"args,omitempty"`
 	Results []WorkflowRunResult `json:"results,omitempty"`
+	// InFlight is the agents that started and have not reported back, by the
+	// label the script gave them. On a running run that is the answer to "what
+	// is it doing"; on a crashed one, to "what was it doing when it stopped".
+	InFlight []WorkflowAgent `json:"in_flight,omitempty"`
+}
+
+// WorkflowAgent names one agent with no result yet. Deliberately thin: there is
+// no per-agent progress to report, because a workflow agent journals once, at
+// the end. Knowing WHICH slices are outstanding is the whole signal.
+type WorkflowAgent struct {
+	Label   string `json:"label,omitempty"`
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 // WorkflowRunResult is one completed agent call: the label that names it

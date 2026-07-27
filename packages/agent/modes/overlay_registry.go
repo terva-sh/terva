@@ -529,6 +529,35 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			hideCaretFallback: true,
 		},
+		{ // workflow runs: /workflows (list + Overview/Script/Results tabs)
+			active: i.workflowDialog.Active,
+			ctrlC:  func() bool { i.workflowDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				act := i.workflowDialog.HandleKey(k)
+				switch {
+				case act.Close:
+					i.workflowDialog.Close()
+				case act.Refresh:
+					go i.refreshWorkflowRuns()
+				case act.OpenRun != "":
+					// Fetched off the key handler: a run's record carries the whole
+					// script and every journaled result (one was 98 KB), and the
+					// panel must stay painted while that lands.
+					go i.fetchWorkflowRun(act.OpenRun)
+				}
+				return false
+			},
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				avail := rows - 10
+				if avail < 3 {
+					avail = 3
+				}
+				i.workflowDialog.MaxRows = avail
+				return i.workflowDialog.Render(i.cfg.Theme, cols)
+			},
+			hideCaretFallback: true,
+		},
 		{ // jump-to-turn picker (also backs /fork's turn selection)
 			active: i.jumpDialog.Active,
 			ctrlC: func() bool {

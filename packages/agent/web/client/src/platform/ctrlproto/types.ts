@@ -1759,16 +1759,17 @@ export type Verb =
 
 // WorkflowRunInfo is one row of workflows.list.
 //
-// `status` is never "running": telling a live run from a crashed one needs
-// liveness the run record cannot supply, so an unfinished run reads
-// "incomplete" — honest, and the same next action either way. `completed` of
-// `agents` is the number an operator actually reads, because it says how much
-// finished work is sitting on disk waiting to be replayed rather than paid for
-// a second time.
+// `status` distinguishes a live run from a dead one: a running process restamps
+// a heartbeat on its record, so `running` and `crashed` are earned rather than
+// guessed. `incomplete` remains the honest "cannot tell" — a run recorded before
+// heartbeats, or one that died before its first tick. `completed` of `agents`
+// is the number an operator actually reads, because it says how much finished
+// work is sitting on disk waiting to be replayed rather than paid for a second
+// time; `running` alongside it separates a run to wait for from one to resume.
 export interface WorkflowRunInfo {
   id: string
   name?: string
-  status: 'incomplete' | 'done' | 'failed'
+  status: 'incomplete' | 'running' | 'crashed' | 'done' | 'failed'
   started?: string
   ended?: string
   completed: number
@@ -1778,6 +1779,7 @@ export interface WorkflowRunInfo {
   cwd?: string
   script_at?: string
   error?: string
+  running?: number
   resumable?: boolean
 }
 
@@ -1809,6 +1811,16 @@ export interface WorkflowRunView {
   script?: string
   args?: unknown
   results?: WorkflowRunResult[]
+  in_flight?: WorkflowAgent[]
+}
+
+// WorkflowAgent is one agent with no result yet — a slice the run is still
+// working on, or was working on when it stopped. Thin on purpose: a workflow
+// agent journals once, at the end, so there is no per-agent progress to report
+// and knowing WHICH slices are outstanding is the whole signal.
+export interface WorkflowAgent {
+  label?: string
+  agent_id?: string
 }
 
 // VerbParams pins the params shape for the verbs whose Go struct this file

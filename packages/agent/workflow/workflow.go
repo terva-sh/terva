@@ -192,7 +192,12 @@ func Run(ctx context.Context, eng Engine, script []byte, opts Options) (res Resu
 	}
 	// A record that cannot be written is not a reason to refuse the run — the
 	// work is still worth doing and the journal still protects it.
+	rec.Heartbeat = rec.Started // alive as of launch, before the first tick
 	_ = runs.WriteRecord(opts.Root, rec)
+
+	// Registered FIRST so it runs LAST: defers are LIFO, and the closing record
+	// must be the final write. The heartbeat stopper below is registered after
+	// it and therefore runs before it.
 	defer func() {
 		rec.Ended = opts.now().UTC().Format(time.RFC3339)
 		rec.Agents, rec.Cached, rec.CostUSD = res.Agents, res.CachedAgents, res.CostUSD
@@ -200,6 +205,38 @@ func Run(ctx context.Context, eng Engine, script []byte, opts Options) (res Resu
 			rec.Err = err.Error()
 		}
 		_ = runs.WriteRecord(opts.Root, rec)
+	}()
+
+	// The heartbeat. A reader can now tell a run that is working from one whose
+	// process died — the distinction the recorded PID could never give, because
+	// a pid lies after reuse. A stopped ticker is what makes a crash legible:
+	// the last stamp simply stops advancing, so no shutdown path has to
+	// remember to mark anything, including the ones that never get to run
+	// (SIGKILL, a panic, a lost machine).
+	beatDone := make(chan struct{})
+	beatStopped := make(chan struct{})
+	go func() {
+		defer close(beatStopped)
+		t := time.NewTicker(runs.HeartbeatInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-beatDone:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				_ = runs.Beat(opts.Root, runID, opts.now())
+			}
+		}
+	}()
+	// Wait for the ticker to actually exit, not just signal it. Beat re-reads
+	// the record and skips a finished run, but a tick that read BEFORE the
+	// closing write could still land after it and drop the counts and the cost.
+	// Waiting removes the window instead of narrowing it.
+	defer func() {
+		close(beatDone)
+		<-beatStopped
 	}()
 
 	progress := opts.Progress

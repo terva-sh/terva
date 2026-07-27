@@ -102,6 +102,7 @@ var registry = []Spec{
 		CancelsTurn: true},
 
 	{Name: "/swarm", Group: groupAgents, Desc: "supervise background agents that share this working directory"},
+	{Name: "/workflows", Group: groupAgents, Aliases: []string{"/workflow"}, Desc: "inspect workflow runs: status, cost, the script as it ran, and every journaled result"},
 	{Name: "/extensions", Group: groupAgents, Aliases: []string{"/ext"}, Desc: "list installed extensions; enable/disable globally or per-project"},
 	{Name: "/reload-ext", Group: groupAgents, Desc: "hot-reload all extensions (re-read manifests and respawn)", CancelsTurn: true},
 	{Name: "/mcp", Group: groupAgents, Desc: "list MCP servers; enable/disable globally or per-project"},

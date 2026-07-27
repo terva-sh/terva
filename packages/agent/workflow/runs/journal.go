@@ -147,16 +147,19 @@ type JournalResult struct {
 	Result  json.RawMessage `json:"result"`
 }
 
-// scanResults walks a run's result rows read-only, in file order.
-//
-// Every reader goes through here rather than through OpenJournal, and the
-// distinction is not stylistic: OpenJournal takes a WRITE handle and creates
-// both the directory and the file if they are missing. That is right for a run
-// about to append to it and wrong for anything merely looking — a dashboard
-// listing every run on the machine would otherwise mint a journal inside each
-// one it found without a run in flight, and hold a writer on the journals of
-// the runs that do.
-func scanResults(dir string, fn func(journalRow)) error {
+// InFlight is one agent that started and has not reported back — what the run
+// is working on right now.
+type InFlight struct {
+	Label   string `json:"label,omitempty"`
+	AgentID string `json:"agent_id,omitempty"`
+	Key     string `json:"key,omitempty"`
+}
+
+// scanRows walks every row of a run's journal read-only, in file order. The
+// read-only discipline is scanResults' (see below) and matters just as much
+// here: a dashboard listing every run must not mint journals in the ones it
+// finds without a run in flight.
+func scanRows(dir string, fn func(journalRow)) error {
 	f, err := os.Open(filepath.Join(dir, journalName))
 	if err != nil {
 		return err
@@ -173,12 +176,72 @@ func scanResults(dir string, fn func(journalRow)) error {
 		if err := json.Unmarshal(line, &row); err != nil {
 			continue // a torn tail line is not a reason to lose the rest
 		}
-		if row.Type != "result" {
-			continue
-		}
 		fn(row)
 	}
 	return sc.Err()
+}
+
+// readInFlight returns the agents that started and never resulted, in start
+// order.
+//
+// The data was always here. The runner has journaled a "started" row per agent
+// since labels landed; every reader filtered to type=="result" and threw the
+// rest away, so "which agents are working right now" was on disk and unread —
+// the same shape as the run record itself being unreachable before the
+// dashboard existed.
+//
+// Started-minus-resulted, not a live process probe: an agent whose row is
+// started with no result either is working or died with the run. Which of those
+// it is, is the RUN's question, and the record's heartbeat answers it — so a
+// crashed run's in-flight list reads as "what it was doing when it stopped",
+// which is exactly what an operator wants before deciding to resume.
+func readInFlight(dir string) ([]InFlight, error) {
+	var order []InFlight
+	done := map[string]bool{}
+	seen := map[string]bool{}
+	err := scanRows(dir, func(row journalRow) {
+		switch row.Type {
+		case "started":
+			// Keyed, and deduped by key: a resumed run re-journals a started row
+			// for a call it is retrying, and the same call listed twice would
+			// read as two agents doing one job.
+			if row.Key == "" || seen[row.Key] {
+				return
+			}
+			seen[row.Key] = true
+			order = append(order, InFlight{Label: row.Label, AgentID: row.AgentID, Key: row.Key})
+		case "result":
+			done[row.Key] = true
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := order[:0]
+	for _, f := range order {
+		if !done[f.Key] {
+			out = append(out, f)
+		}
+	}
+	return out, nil
+}
+
+// scanResults walks a run's result rows read-only, in file order.
+//
+// Every reader goes through here rather than through OpenJournal, and the
+// distinction is not stylistic: OpenJournal takes a WRITE handle and creates
+// both the directory and the file if they are missing. That is right for a run
+// about to append to it and wrong for anything merely looking — a dashboard
+// listing every run on the machine would otherwise mint a journal inside each
+// one it found without a run in flight, and hold a writer on the journals of
+// the runs that do.
+func scanResults(dir string, fn func(journalRow)) error {
+	return scanRows(dir, func(row journalRow) {
+		if row.Type != "result" {
+			return
+		}
+		fn(row)
+	})
 }
 
 // countResults reports how many distinct calls a run journaled — what --resume

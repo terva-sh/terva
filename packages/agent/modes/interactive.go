@@ -623,6 +623,7 @@ type Interactive struct {
 	migrateDialog     *dialogs.MigrateDialog
 	tasksDialog       *dialogs.TasksDialog
 	worktreeDialog    *dialogs.WorktreeDialog
+	workflowDialog    *dialogs.WorkflowDialog
 
 	// overlays is the priority-ordered modal registry: key routing,
 	// rendering, cursor ownership, and tick animation for every
@@ -834,6 +835,12 @@ type Interactive struct {
 	carrierWorktrees        *ctrlproto.WorktreeView
 	carrierWorktreesSession string
 
+	// workflowRuns / workflowView cache the /workflows panel's two fetches.
+	// Workspace-scoped, not session-scoped (a run belongs to the host, not to a
+	// conversation), so unlike the worktree cache above there is no session key
+	// to invalidate against.
+	workflowRuns []ctrlproto.WorkflowRunInfo
+	workflowView *ctrlproto.WorkflowRunView
 
 	// carrierMessages is the pump-owned transcript on the carrier path —
 	// the wire twin of the crutch agent's Messages(), and what buildChat
@@ -1024,6 +1031,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		migrateDialog:     dialogs.NewMigrateDialog(),
 		tasksDialog:       dialogs.NewTasksDialog(),
 		worktreeDialog:    dialogs.NewWorktreeDialog(),
+		workflowDialog:    dialogs.NewWorkflowDialog(),
 		suggest:           newSlashSuggester(),
 		fileSuggest:       widgets.NewFileSuggester(),
 		spin:              widgets.NewSpinner(cfg.Theme),
