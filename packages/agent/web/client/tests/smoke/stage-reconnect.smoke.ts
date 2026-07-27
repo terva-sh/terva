@@ -38,7 +38,9 @@ test('stage: re-subscribes after a reconnect and keeps rendering', async ({ page
   const first = mock.subscribeCount()
   expect(first).toBeGreaterThan(0)
 
-  // The socket dies under us. Nothing in the UI says so.
+  // The socket dies under us. (It used to say nothing at all about that; the
+  // connection banner does now — see boot-state.smoke.ts. This test is still
+  // about the invisible half: whether the new socket carries a subscription.)
   mock.drop()
 
   // The client reconnects on its own; Stage must re-subscribe on the NEW socket.

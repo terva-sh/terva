@@ -25,7 +25,7 @@ export function useConversation(client: ClientLike, sessionId: string, generatio
   // permission/ask handling, and its busy-clear on error. See
   // platform/conversation/session.
   const [state, setState] = useState<SessionState>(emptySessionState)
-  const { items, busy, info, tail, msgMarks, permission, ask } = state
+  const { items, loaded, busy, info, tail, msgMarks, permission, ask } = state
   const epoch = state.win.epoch
   // The reducer needs the CURRENT state inside an effect that closes over the
   // first one, so mirror it in a ref and drive from there.
@@ -167,5 +167,5 @@ export function useConversation(client: ClientLike, sessionId: string, generatio
   // navigate-away cleanup. It is a guarded no-op on a real session, so it is safe
   // to fire on every back-out; fire-and-forget, the session is being left anyway.
   const discardDraft = () => client.fire('sessions.discard_draft', null, sessionId)
-  return { items, busy, info, tail, msgMarks, epoch, permission, ask, send, edit, deleteAt, swipe, swipeAt, pruneAt, dropAt, retry, continueTurn, advance, cancel, decide, answerAsk, fork, discardDraft }
+  return { items, loaded, busy, info, tail, msgMarks, epoch, permission, ask, send, edit, deleteAt, swipe, swipeAt, pruneAt, dropAt, retry, continueTurn, advance, cancel, decide, answerAsk, fork, discardDraft }
 }

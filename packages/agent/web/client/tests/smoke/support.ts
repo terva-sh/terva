@@ -43,6 +43,14 @@ export type MockBackend = {
   // sleep, or a radio handoff does. The client reconnects on its own; the test
   // then asserts what it does (or fails to do) on the new connection.
   drop: () => void
+  // Answer a withheld handshake (see deferHello). A no-op unless deferHello was
+  // set, and safe to call before the client has connected — the reply goes out
+  // as soon as its hello arrives.
+  sendHello: () => void
+  // Answer every parked call to a held verb (see holdMethods) with `result`, and
+  // stop holding it. The result is passed in rather than recomputed, so a test
+  // says plainly what the delayed answer IS.
+  release: (method: string, result?: unknown) => void
 }
 
 export type MockBackendOptions = {
@@ -52,6 +60,36 @@ export type MockBackendOptions = {
   // session address — some verbs (sessions.delete, note.set) carry their target
   // there rather than in params.
   respond?: (method: string, params: unknown, sess?: string) => unknown
+  // Hold the server hello back until sendHello() is called, so a test can watch
+  // the client while it is still CONNECTING.
+  //
+  // Every other smoke wants the handshake to land instantly, and it does — which
+  // is why the boot state went untested for so long: the mock made the window
+  // where the panel has painted but knows nothing about the workspace
+  // vanishingly small, exactly as a loopback daemon does. That window is where
+  // the panel used to claim an empty workspace, so testing it means being able
+  // to hold it open.
+  deferHello?: boolean
+  // Withhold the response to these verbs until release() answers them.
+  //
+  // deferHello holds the WHOLE boot, which is the right tool when the surface
+  // under test is the landing. It is the wrong one for anything that only
+  // renders once a session is picked (the board's lanes), because picking a
+  // session needs the hello. Those lanes' real window is "connected, session
+  // chosen, this one verb still in flight" — and that is what this holds open.
+  holdMethods?: string[]
+  // Close the FIRST connection immediately; serve the second normally. The
+  // client reconnects on its own after ~1.5s.
+  //
+  // This exists to make a race deterministic. An effect that fires once at mount
+  // and sends on a still-connecting socket wins or loses purely on how fast the
+  // handshake completes — on loopback (and against this mock) it often wins, so
+  // a test written against the plain boot passes with the bug present. Failing
+  // the first connection removes the coin flip: whatever the mount flush did, it
+  // died with that socket, so only an effect that re-runs when the connection
+  // comes back can produce any data at all. It is also a real scenario — a
+  // daemon restarting as the panel loads.
+  dropFirstConnection?: boolean
 }
 
 export async function installMockBackend(page: Page, opts: MockBackendOptions = {}): Promise<MockBackend> {
@@ -59,9 +97,32 @@ export async function installMockBackend(page: Page, opts: MockBackendOptions = 
   let markSubscribed: () => void = () => {}
   let subscribes = 0
   const subscribed = new Promise<void>((r) => (markSubscribed = r))
+  // The handshake hold. `releaseHello` starts true unless the test defers it, so
+  // every existing smoke keeps the instant handshake it was written against.
+  // `helloPending` remembers a client hello that arrived while held, so release
+  // order does not matter.
+  let releaseHello = !opts.deferHello
+  let helloPending = false
+  const flushHello = () => {
+    if (!helloPending || !current) return
+    helloPending = false
+    current.send(JSON.stringify({ kind: 'hello', hello: { protocol: 1, features: [] } }))
+  }
+  // Per-verb holds. `held` is what is still being withheld; `parked` is the
+  // request ids waiting on each, so a verb the client retries (a poll) parks
+  // every attempt and release() answers them all.
+  const held = new Set(opts.holdMethods ?? [])
+  const parked = new Map<string, number[]>()
+
+  let connections = 0
 
   await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
     current = ws
+    connections++
+    if (opts.dropFirstConnection && connections === 1) {
+      ws.close()
+      return
+    }
     ws.onMessage((raw) => {
       let f: { kind?: string; id?: number; method?: string; params?: unknown; sess?: string }
       try {
@@ -71,7 +132,10 @@ export async function installMockBackend(page: Page, opts: MockBackendOptions = 
       }
       if (f.kind === 'hello') {
         // Minimal server hello → the client flips status to "open" and boots.
-        ws.send(JSON.stringify({ kind: 'hello', hello: { protocol: 1, features: [] } }))
+        // Under deferHello it is parked until the test releases it; a reconnect
+        // re-arms the same hold, so a dropped socket also stays down until asked.
+        helloPending = true
+        if (releaseHello) flushHello()
         return
       }
       if (f.kind === 'cmd') {
@@ -84,6 +148,11 @@ export async function installMockBackend(page: Page, opts: MockBackendOptions = 
         // Only send()-style calls await a resp; fire()-style verbs (subscribe,
         // prompt, queue, …) ignore one, so a reply is harmless either way.
         if (f.id != null) {
+          const method = f.method ?? ''
+          if (held.has(method)) {
+            parked.set(method, [...(parked.get(method) ?? []), f.id])
+            return
+          }
           const result =
             opts.respond?.(f.method ?? '', f.params, f.sess) ??
             (f.method === 'models.list'
@@ -107,6 +176,17 @@ export async function installMockBackend(page: Page, opts: MockBackendOptions = 
     drop() {
       if (!current) throw new Error('mock backend: no active socket yet')
       current.close()
+    },
+    sendHello() {
+      releaseHello = true
+      flushHello()
+    },
+    release(method, result = {}) {
+      held.delete(method)
+      const ids = parked.get(method) ?? []
+      parked.delete(method)
+      if (!current) return
+      for (const id of ids) current.send(JSON.stringify({ kind: 'resp', id, result }))
     },
   }
 }

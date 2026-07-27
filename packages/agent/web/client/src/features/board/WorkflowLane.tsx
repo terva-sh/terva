@@ -1,5 +1,6 @@
 import { t, tn } from '../../i18n'
 import { localInstant } from '../../ui/formatting'
+import { Placeholder } from '../../ui/Loading'
 import type { WorkflowRunInfo } from '../../platform/ctrlproto/types'
 
 // WorkflowLane is the board's THIRD lane: the workflow runs this host has on
@@ -23,6 +24,11 @@ import type { WorkflowRunInfo } from '../../platform/ctrlproto/types'
 // verbs; this renders WorkflowRunInfo[] and emits intent.
 export function WorkflowLane(props: {
   runs: WorkflowRunInfo[]
+  // Whether workflows.list has answered — the poll that fills `runs` is gated on
+  // the socket being open, so a board that boots before the connection has one
+  // frame where "no runs" is a claim it cannot have checked. Optional, so a
+  // caller without the flag keeps the old behaviour.
+  loaded?: boolean
   onOpen: (id: string) => void
   onRefresh?: () => void
 }) {
@@ -37,7 +43,9 @@ export function WorkflowLane(props: {
           </button>
         )}
       </div>
-      {props.runs.length === 0 ? (
+      {props.runs.length === 0 && props.loaded === false ? (
+        <Placeholder label={t('Loading workflow runs…')} rows={1} />
+      ) : props.runs.length === 0 ? (
         <div class="board-empty">
           {t('No workflow runs on this host yet. `terva workflow run <script.js>` leaves one here.')}
         </div>

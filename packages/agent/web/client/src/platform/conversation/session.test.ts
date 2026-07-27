@@ -26,6 +26,41 @@ function fold(events: WireEvent[], from: SessionState = emptySessionState): Sess
   return events.reduce(reduceSession, from)
 }
 
+// An empty transcript is two states, and nothing else in here separates them.
+// The subscribe is fire-and-forget and the snapshot arrives later as an event,
+// so Stage rendered "Say something to begin." over a session with a full history
+// until it landed. `loaded` is the seam that tells "no messages" from "no
+// answer"; both apps read it to choose a placeholder over an empty state.
+describe('reduceSession — loaded', () => {
+  it('starts unloaded, because an initial value is not an answer', () => {
+    expect(emptySessionState.loaded).toBe(false)
+  })
+
+  it('becomes loaded on the snapshot — the only event that carries the whole transcript', () => {
+    expect(fold([snapshot()]).loaded).toBe(true)
+  })
+
+  // A snapshot may legitimately carry epoch 0, which is why win.epoch cannot
+  // stand in for this flag — the obvious shortcut, and a wrong one.
+  it('becomes loaded even on an empty snapshot at epoch 0', () => {
+    const s = fold([snapshot({ epoch: 0, total: 0, messages: [] })])
+    expect(s.loaded).toBe(true)
+    expect(s.items).toHaveLength(0)
+    expect(s.win.epoch).toBe(0)
+  })
+
+  // A delta says one message changed; it does not say we hold all of them. A
+  // turn arriving before the snapshot (or after a missed one) must not be read
+  // as the transcript having been answered.
+  it('stays unloaded through events that are not snapshots', () => {
+    expect(fold([ev({ type: 'turn_start' }), ev({ type: 'error', error: 'boom' }), ev({ type: 'done' })]).loaded).toBe(false)
+  })
+
+  it('stays loaded once loaded', () => {
+    expect(fold([snapshot(), ev({ type: 'turn_start' })]).loaded).toBe(true)
+  })
+})
+
 describe('reduceSession — busy', () => {
   it('raises busy on turn_start and clears it on turn_end', () => {
     expect(fold([ev({ type: 'turn_start' })]).busy).toBe(true)

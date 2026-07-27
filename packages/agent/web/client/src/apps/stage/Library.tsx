@@ -11,6 +11,7 @@ import { CREATOR_PERSONA } from './creator'
 import { relativeTime } from './format'
 import { t, tn, tr } from '../../i18n'
 import { panelHref } from '../../ui/navlinks'
+import { ConnectionBanner, Placeholder } from '../../ui/Loading'
 import { downloadExport } from '../../ui/browser'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import {
@@ -183,6 +184,21 @@ export function Library(props: {
   const [personas, setPersonas] = useState<PersonaSummary[]>([])
   const personaShelves = shelvePersonas(personas)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
+  // Which of the library's lists have ANSWERED.
+  //
+  // `ready` is not this. It says the hello landed, which is when load() is
+  // allowed to start — every verb it fires is a further round trip, so the whole
+  // window between the hello and each answer had "No characters yet" and "No
+  // Worlds yet" on screen off a useState default. One flag per shelf, because
+  // they answer independently and a slow verb must not hold up a fast one's
+  // rows. Set on rejection too: a refusal is an answer (this daemon serves
+  // none); only the state BEFORE the ask must claim nothing.
+  //
+  // Worlds is deliberately not here — that whole shelf is gated on
+  // `worldsSupported`, which only the answer sets, so an unanswered worlds.list
+  // renders nothing rather than an empty shelf.
+  const [loaded, setLoaded] = useState({ cards: false, sessions: false, personas: false })
+  const didLoad = (key: 'cards' | 'sessions' | 'personas') => setLoaded((l) => ({ ...l, [key]: true }))
   const [sheet, setSheet] = useState<CardSummary | null>(null)
   const [personaSheet, setPersonaSheet] = useState<PersonaSummary | null>(null)
   // The persona editor's three entries: a blank new one, editing one of yours,
@@ -243,9 +259,21 @@ export function Library(props: {
   const [theme, setTheme] = useState(currentTheme())
 
   const load = () => {
-    client.send<CardsListResult>('cards.list', {}).then((r) => setCards(r.cards ?? [])).catch((e: unknown) => setError(String(e)))
-    client.send<PersonasListResult>('personas.list', {}).then((r) => setPersonas(r.personas ?? [])).catch(() => {})
-    client.send<SessionsResult>('sessions.list', {}).then((r) => setSessions(r.sessions ?? [])).catch(() => {})
+    client
+      .send<CardsListResult>('cards.list', {})
+      .then((r) => setCards(r.cards ?? []))
+      .catch((e: unknown) => setError(String(e)))
+      .finally(() => didLoad('cards'))
+    client
+      .send<PersonasListResult>('personas.list', {})
+      .then((r) => setPersonas(r.personas ?? []))
+      .catch(() => {})
+      .finally(() => didLoad('personas'))
+    client
+      .send<SessionsResult>('sessions.list', {})
+      .then((r) => setSessions(r.sessions ?? []))
+      .catch(() => {})
+      .finally(() => didLoad('sessions'))
     // Saved Worlds (W5) — an older daemon answers "unsupported"; the shelf just
     // stays absent.
     client
@@ -792,6 +820,10 @@ export function Library(props: {
         </div>
       </header>
 
+      {/* The chip above says the word, but at 0.75rem in the corner of a header
+          it is not what you notice when the library looks empty. This is. */}
+      <ConnectionBanner status={status} />
+
       <main
         class={`stage-library ${dragging ? 'stage-library--drag' : ''}`}
         onDragOver={(e) => {
@@ -921,7 +953,13 @@ export function Library(props: {
         {notes.map((n) => (
           <p key={n} class="stage-note">{n}</p>
         ))}
-        {cards.length === 0 && ready && <p class="stage-empty">{t('No characters yet — drop a card PNG here, paste a URL, or use Import.')}</p>}
+        {/* `ready` alone was not enough here: it only means the hello landed, and
+            cards.list is a further round trip, so this still asserted an empty
+            library for the length of that call. */}
+        {cards.length === 0 && !loaded.cards && <Placeholder label={t('Loading your characters…')} rows={2} />}
+        {cards.length === 0 && loaded.cards && (
+          <p class="stage-empty">{t('No characters yet — drop a card PNG here, paste a URL, or use Import.')}</p>
+        )}
         {cards.length > 0 && hasFilter(cardFilter) && visibleCards.length === 0 && (
           <p class="stage-empty">{t('No characters match the group filter — tap a highlighted chip to clear it.')}</p>
         )}
@@ -1051,6 +1089,10 @@ export function Library(props: {
                 />
               </label>
             </div>
+            {/* No placeholder needed: the whole shelf is gated on
+                `worldsSupported`, which only the answer sets — so an
+                unanswered worlds.list renders nothing at all rather than
+                claiming you have no Worlds. */}
             {worlds.length === 0 && (
               <p class="stage-empty">{t('No Worlds yet — save a chat as one (Steering → World tab) or import a World bundle.')}</p>
             )}
@@ -1074,6 +1116,19 @@ export function Library(props: {
                 </li>
               ))}
             </ul>
+          </>
+        )}
+
+        {/* Your chats never claimed emptiness — the whole section is gated on
+            having some — but it said nothing either, so a library still fetching
+            them looked like a library with none. Name the wait under its own
+            heading, so the section that is about to appear has a place already. */}
+        {chats.length === 0 && !loaded.sessions && (
+          <>
+            <div class="stage-section-head">
+              <h2>{t('Your chats')}</h2>
+            </div>
+            <Placeholder label={t('Loading your chats…')} rows={2} />
           </>
         )}
 
@@ -1166,6 +1221,10 @@ export function Library(props: {
                 {t('+ New')}
               </button>
             </div>
+            {/* Unlike the sections above, an unanswered roster here rendered no
+                sentence — just a bare empty list under a heading, which reads as
+                "this workspace has no personas" just as convincingly. */}
+            {personas.length === 0 && !loaded.personas && <Placeholder label={t('Loading personas…')} rows={2} />}
             {/* Shelved by group. A lone shelf goes unlabelled, so a roster with
                 one group — or a daemon too old to serve any — reads as the plain
                 list it always was. */}

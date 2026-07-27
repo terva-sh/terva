@@ -1,6 +1,7 @@
 import { t, tn } from '../../i18n'
 import type { Group, SessionInfo } from '../../platform/ctrlproto/types'
 import type { GroupFilter } from '../../platform/groups'
+import { Placeholder } from '../../ui/Loading'
 import { GroupMenu } from '../sessions/GroupMenu'
 import { GroupFilterBar } from '../sessions/GroupFilterBar'
 
@@ -12,6 +13,14 @@ import { GroupFilterBar } from '../sessions/GroupFilterBar'
 // (orchestration frontend stage 4.1; docs/proposals/orchestration-frontend.md).
 export function SessionsBoard(props: {
   sessions: SessionInfo[]
+  // Whether sessions.list has ANSWERED. An empty list means two different
+  // things, and this is the only thing that tells them apart: before the first
+  // answer the board showed "No sessions in this workspace yet." off a useState
+  // default, so a panel that had merely finished painting asserted an empty
+  // workspace to anyone who opened it faster than the socket connected.
+  // Optional so a caller that has no such flag (a test double, an embedding)
+  // keeps the old behaviour rather than being stuck on a placeholder forever.
+  loaded?: boolean
   current: string
   // liveBusy[id], when set, is the authoritative turn-in-flight state from a
   // live subscription (phase B) — it flips at turn latency and wins over the
@@ -49,7 +58,9 @@ export function SessionsBoard(props: {
           + {t('New')}
         </button>
       </div>
-      {props.sessions.length === 0 ? (
+      {props.sessions.length === 0 && props.loaded === false ? (
+        <Placeholder label={t('Loading sessions…')} rows={2} />
+      ) : props.sessions.length === 0 ? (
         <div class="board-empty">{t('No sessions in this workspace yet.')}</div>
       ) : (
         <div class="board-grid">

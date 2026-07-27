@@ -7,6 +7,7 @@ import { panelHref } from '../../ui/navlinks'
 import { handleCodeCopyClick } from '../../ui/codecopy'
 import { truncate } from '../../ui/formatting'
 import { ImageGallery } from '../../ui/ImageGallery'
+import { ConnectionBanner, Placeholder } from '../../ui/Loading'
 import { Markdown } from '../../ui/Markdown'
 import { useConversation } from './useConversation'
 import { useAutoGrow } from './autogrow'
@@ -70,6 +71,15 @@ export function replyTarget(items: Item[], characterName?: string): { actor: str
 export function Chat(props: {
   client: ClientLike
   sessionId: string
+  // The socket's state, for the connection banner. A scene has no empty-state
+  // lie to fix (an unanswered transcript renders as an empty transcript, which
+  // is what a new scene looks like anyway) — but it is where a drop is easiest
+  // to mistake for the model simply taking its time.
+  //
+  // Optional: a caller with nothing to say about the connection renders no
+  // banner, rather than having a default stand in and assert one state or the
+  // other on its behalf.
+  status?: string
   // Connection generation — bumped on every (re)connect so the subscription is
   // re-established. See useConversation.
   generation?: number
@@ -87,7 +97,7 @@ export function Chat(props: {
   onOpenStudio: (o: { tab: StudioTab; card: CardSummary | null; scene: ScenePersona }) => void
 }) {
   const { client, sessionId, onOpenSession } = props
-  const { items, busy, info, tail, msgMarks, permission, ask, send, edit, deleteAt, swipe, swipeAt, pruneAt, dropAt, retry, continueTurn, advance, cancel, decide, answerAsk, fork, discardDraft } = useConversation(client, sessionId, props.generation)
+  const { items, loaded, busy, info, tail, msgMarks, permission, ask, send, edit, deleteAt, swipe, swipeAt, pruneAt, dropAt, retry, continueTurn, advance, cancel, decide, answerAsk, fork, discardDraft } = useConversation(client, sessionId, props.generation)
   const [draft, setDraft] = useState('')
   const [character, setCharacter] = useState<Character | null>(null)
   // The full bound card, kept so the header can open its detail sheet without a
@@ -329,8 +339,20 @@ export function Chat(props: {
         </div>
       </header>
 
+      {/* A scene that stops answering mid-turn is exactly where a dropped socket
+          looks like the model thinking. Say which it is. */}
+      {props.status && <ConnectionBanner status={props.status} />}
+
       <main class="stage-transcript" ref={transcriptRef} onScroll={onTranscriptScroll}>
+        {/* The transcript's own empty-vs-unloaded split, and the sharpest case of
+            it anywhere: the subscribe is fire-and-forget and the snapshot arrives
+            later as an event, so opening a scene with three hundred messages in
+            it said "Say something to begin." until it landed. Both empty states
+            below are claims about a conversation, so neither may be made before
+            the snapshot has answered. */}
+        {items.length === 0 && !loaded && <Placeholder label={t('Loading this scene…')} rows={2} />}
         {items.length === 0 &&
+          loaded &&
           (isCreator ? (
             // The creator must not speak first (an ungrounded greeting is its most
             // ungrounded output), so the blank page prompts and grounds instead —

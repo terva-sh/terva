@@ -125,6 +125,7 @@ export function Stage() {
         key={view.session}
         client={client}
         sessionId={view.session}
+        status={status}
         generation={generation}
         onBack={() => setView({ screen: 'library' })}
         onOpenSession={(session) => setView({ screen: 'chat', session })}

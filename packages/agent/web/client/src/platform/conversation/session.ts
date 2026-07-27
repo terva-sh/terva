@@ -34,6 +34,18 @@ export interface SessionState {
   /** The rendered transcript. */
   items: Item[]
   /**
+   * Whether a snapshot has ever landed — i.e. whether `items` is an ANSWER or
+   * just the initial value.
+   *
+   * An empty transcript means two different things and nothing else here can
+   * tell them apart. The subscribe is fire-and-forget and the snapshot arrives
+   * later as an event, so a scene opened on a session with three hundred
+   * messages rendered "Say something to begin." until it did. `win.epoch` looks
+   * like it would serve — it does not: a snapshot may legitimately carry
+   * epoch 0, so 0 cannot mean "none yet".
+   */
+  loaded: boolean
+  /**
    * The live window this client holds: which epoch, and which slice of it.
    * A merge KEEPS what sat above the incoming snapshot's base, so the held base
    * is the LOWER of the two — not the snapshot's. Getting that wrong silently
@@ -53,6 +65,7 @@ export interface SessionState {
 
 export const emptySessionState: SessionState = {
   items: [],
+  loaded: false,
   win: { epoch: 0, base: 0, total: 0 },
   busy: false,
   info: null,
@@ -93,6 +106,10 @@ export function reduceSession(state: SessionState, ev: WireEvent): SessionState 
       return {
         ...state,
         items: mergeSnapshot(state.items, incoming, held.epoch),
+        // The one place this can be set: a snapshot is the only event that
+        // carries the transcript as a whole. A delta says a message changed, not
+        // that we now hold all of them.
+        loaded: true,
         win: { epoch: incoming.epoch, base, total: incoming.total },
         // A snapshot lands at the end of every turn and carries busy
         // authoritatively, so streaming→idle transitions ride it.

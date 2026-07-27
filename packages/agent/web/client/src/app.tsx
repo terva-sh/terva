@@ -93,6 +93,7 @@ import { PACE_INTERVAL_MS, StreamPacer } from './platform/conversation/pacer'
 import { buildConveneArgs, raatiResultCopyText, raatiUnitCopyText, raatiVerdictWord } from './raati'
 import { applyServerCatalog, setLocale, t, tn } from './i18n'
 import { CopyButton } from './ui/CopyButton'
+import { ConnectionBanner } from './ui/Loading'
 import { deadlineClass, deadlineOf, deadlineStyle } from './ui/deadline'
 import { humanBytes, humanCount, localInstant } from './ui/formatting'
 import { stageHref, takeNavParams } from './ui/navlinks'
@@ -156,6 +157,14 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [, bumpI18n] = useState(0)
   const reI18n = useCallback(() => bumpI18n((n) => n + 1), [])
   const [sessions, setSessions] = useState<SessionInfo[]>([])
+  // Whether sessions.list has ever ANSWERED. Distinct from `status === 'open'`,
+  // which only means the hello landed — the list is a further round trip inside
+  // onReady. Without this the empty array above (a useState default, not an
+  // answer) rendered as "No sessions in this workspace yet.", so a panel that
+  // had merely finished painting asserted an empty workspace. Only a successful
+  // list flips it: a rejected one leaves us with no answer at all, which is the
+  // placeholder's case and not the empty state's.
+  const [sessionsLoaded, setSessionsLoaded] = useState(false)
   // Session groups (a membership bucket over sessions; absent on an older
   // daemon). The board/picker filter by include/exclude (platform/groups).
   const [sessionGroups, setSessionGroups] = useState<Group[]>([])
@@ -212,6 +221,11 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // The board's second lane: the workspace swarm (the tasks surface), fetched
   // while the board is open and refreshed by surface_updated("tasks").
   const [boardTasks, setBoardTasks] = useState<TaskInfo[]>([])
+  // Whether the tasks surface has answered. Boot into board mode and the lane
+  // renders before the fetch resolves — as "No swarm agents running.", which is
+  // exactly the claim an operator opening the board to check on a swarm would
+  // read as an answer.
+  const [boardTasksLoaded, setBoardTasksLoaded] = useState(false)
   // The spawn capability the tasks surface advertises: which worker backends a
   // human may dispatch, and whether external workers are enabled (foreign spawn
   // is gated on it — the picker shows them greyed otherwise).
@@ -236,6 +250,11 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // replay carrier, which has no run root at all) renders no lane instead of an
   // empty one that looks like "no runs".
   const [workflowRuns, setWorkflowRuns] = useState<WorkflowRunInfo[]>([])
+  // Whether workflows.list has answered. The poll that fills it is itself gated
+  // on the socket being open (see its effect), so on a panel that boots straight
+  // into board mode this lane provably has not asked yet — and said so as "No
+  // workflow runs on this host yet."
+  const [workflowRunsLoaded, setWorkflowRunsLoaded] = useState(false)
   const [workflowsOn, setWorkflowsOn] = useState(true)
   // The opened run: null while none, and while one is loading (the modal shows
   // its own loading state off `wfOpen`).
@@ -420,6 +439,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     try {
       const res = await c.send<{ sessions: SessionInfo[] }>('sessions.list', null, '')
       setSessions(res.sessions ?? [])
+      setSessionsLoaded(true)
       // Session groups ride the same refresh (and the sessions_changed event a
       // group mutation broadcasts). An older daemon answers "unsupported".
       c.send<{ groups: Group[] }>('sessiongroups.list', null, '')
@@ -499,6 +519,15 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       setBoardApprovals((s) => forgetBoardApprovals(s, new Set(tasks.map((tk) => tk.id))))
     } catch {
       setBoardTasks([])
+    } finally {
+      // In `finally` rather than only on success, deliberately: the catch above
+      // already treats ANY error as an answer of "no agents", so marking the
+      // fetch answered here matches the contract this function already has
+      // instead of quietly changing it. The pre-existing wart that survives:
+      // a transient failure (a dropped socket) still blanks the lane rather
+      // than holding the last list. The connection banner now explains that
+      // case, which is the part the operator could not previously see at all.
+      setBoardTasksLoaded(true)
     }
   }, [])
 
@@ -515,11 +544,15 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     try {
       const res = await c.send<WorkflowRunsResult>('workflows.list', undefined, '')
       setWorkflowRuns(res.runs ?? [])
+      setWorkflowRunsLoaded(true)
       setWorkflowsOn(true)
     } catch (e) {
       if (String((e as { message?: string })?.message || '').startsWith('unsupported')) {
         setWorkflowsOn(false)
         setWorkflowRuns([])
+        // A refusal IS an answer — the lane is about to disappear, but for the
+        // frame before it does it must not claim the host has no runs.
+        setWorkflowRunsLoaded(true)
       }
     }
   }, [])
@@ -1066,6 +1099,18 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       clearBoardSubs() // leaving the board: drop its live subscriptions
       return
     }
+    // Gated on the socket being OPEN, and not on viewMode alone — the same trap
+    // the workflow lane below already documents, which this effect had too.
+    //
+    // viewMode is persisted, so a panel reopened on the board runs this on its
+    // FIRST render, while the socket is still connecting. Client.send rejects
+    // "not connected" immediately there; fetchBoardTasks catches that and leaves
+    // the lane empty. With viewMode as the only real dependency nothing ever
+    // re-ran it: the swarm lane sat empty for the life of the page, and (once it
+    // could tell empty from unloaded) would have gone on to state positively
+    // that no agents were running. sessions.list survived only because a 4s poll
+    // happens to re-issue it; the tasks surface has no such poll.
+    if (status !== 'open') return
     if (clientRef.current) refreshSessions(clientRef.current)
     fetchBoardTasks() // the swarm lane; refreshed thereafter by surface_updated("tasks")
     // The 4s poll now only refreshes tile metadata (cost, message counts) and
@@ -1074,7 +1119,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       if (clientRef.current) refreshSessions(clientRef.current)
     }, 4000)
     return () => clearInterval(id)
-  }, [viewMode, refreshSessions, fetchBoardTasks, clearBoardSubs])
+  }, [viewMode, status, refreshSessions, fetchBoardTasks, clearBoardSubs])
 
   // The workflow lane on its own, slower cadence, and only while something could
   // still be moving.
@@ -1818,8 +1863,18 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
             🎭
           </a>
         )}
-        <span class={`dot ${status}`} title={status} />
+        {/* Colour-only was the whole of this signal: no text, no aria-label, so
+            it read as nothing at all to a colourblind or screen-reader user.
+            The visible message lives in the banner below (the top bar is
+            already wrapping to two rows on a phone and has no room for a
+            word); this makes the indicator itself announce what it means. */}
+        <span class={`dot ${status}`} role="img" title={status} aria-label={t('connection: %s', status)} />
       </header>
+
+      {/* Under the bar, in flow: the one place a not-connected panel says so out
+          loud. Silent on a fast local connect (it waits out a grace period),
+          immediate once the connection has been live and then dropped. */}
+      <ConnectionBanner status={status} />
 
       {infoOpen && (
         <SessionInfoView
@@ -1917,6 +1972,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               models={models}
               onNewSession={(opts) => void newSession(opts)}
               sessions={shownSessions}
+              loaded={sessionsLoaded}
               current={curSess}
               liveBusy={liveBusy}
               onSelect={(id) => {
@@ -1938,6 +1994,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
             <div class="board-view">
               <SessionsBoard
                 sessions={shownSessions}
+                loaded={sessionsLoaded}
                 current={curSess}
                 liveBusy={liveBusy}
                 onSelect={(id) => {
@@ -1958,6 +2015,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               />
               <SwarmLane
                 tasks={boardTasks}
+                loaded={boardTasksLoaded}
                 backends={boardBackends}
                 workersEnabled={boardWorkersEnabled}
                 onSpawn={spawnWorker}
@@ -1972,6 +2030,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               {workflowsOn && (
                 <WorkflowLane
                   runs={workflowRuns}
+                  loaded={workflowRunsLoaded}
                   onOpen={openWorkflowRun}
                   onRefresh={fetchWorkflowRuns}
                 />

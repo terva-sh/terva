@@ -65,6 +65,33 @@ describe('SessionsBoard', () => {
   })
 
   it('renders an empty state when there are no sessions', () => {
+    render(<SessionsBoard sessions={[]} loaded current="" onSelect={noop} onNew={noop} onRename={noop} onDelete={noop} />)
+    expect(screen.getByText('No sessions in this workspace yet.')).toBeTruthy()
+  })
+
+  // An empty list means two different things, and before `loaded` existed the
+  // board could not tell them apart: it rendered "No sessions in this workspace
+  // yet." off app.tsx's useState default, so a panel that had merely finished
+  // painting told you your workspace was empty while the socket was still
+  // connecting. sessions.list is a round trip AFTER the hello, so `open` is not
+  // enough either — only the answer settles it.
+  it('does not claim an empty workspace before sessions.list has answered', () => {
+    const { rerender } = render(
+      <SessionsBoard sessions={[]} loaded={false} current="" onSelect={noop} onNew={noop} onRename={noop} onDelete={noop} />,
+    )
+    expect(screen.queryByText('No sessions in this workspace yet.')).toBeNull()
+    expect(screen.getByText('Loading sessions…')).toBeTruthy()
+
+    // …and the moment it answers "none", the empty state is the honest thing.
+    rerender(<SessionsBoard sessions={[]} loaded current="" onSelect={noop} onNew={noop} onRename={noop} onDelete={noop} />)
+    expect(screen.queryByText('Loading sessions…')).toBeNull()
+    expect(screen.getByText('No sessions in this workspace yet.')).toBeTruthy()
+  })
+
+  // Optional prop: a caller that has no such flag (an embedding, an older test)
+  // must keep the previous behaviour rather than be stuck on a placeholder that
+  // nothing will ever clear.
+  it('keeps the plain empty state for a caller that passes no loaded flag', () => {
     render(<SessionsBoard sessions={[]} current="" onSelect={noop} onNew={noop} onRename={noop} onDelete={noop} />)
     expect(screen.getByText('No sessions in this workspace yet.')).toBeTruthy()
   })

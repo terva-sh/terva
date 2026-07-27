@@ -4,6 +4,7 @@ import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { Group, ModelInfo, PersonaSummary, PersonaView, SessionInfo } from '../../platform/ctrlproto/types'
 import type { GroupFilter } from '../../platform/groups'
 import { shelvePersonas } from '../../platform/personagroups'
+import { Placeholder } from '../../ui/Loading'
 import { stageHref } from '../../ui/navlinks'
 import { SessionsBoard } from '../board/SessionsBoard'
 
@@ -11,6 +12,9 @@ import { SessionsBoard } from '../board/SessionsBoard'
 // still owns the session list, subscriptions, and verbs (web layering rules).
 type BoardPassthrough = {
   sessions: SessionInfo[]
+  // Passed straight through: whether sessions.list has answered, so the grid
+  // shows a placeholder rather than claiming an empty workspace during connect.
+  loaded?: boolean
   current: string
   liveBusy?: Record<string, boolean>
   onSelect: (id: string) => void
@@ -59,6 +63,11 @@ export function PanelLanding(
 ) {
   const { client, status, stageEnabled, models, onNewSession, ...board } = props
   const [personas, setPersonas] = useState<PersonaSummary[]>([])
+  // Whether personas.list has ANSWERED — an empty roster means "this daemon
+  // serves none", and until the effect below has run it means nothing at all.
+  // Conflating the two is what put "No personas available." on screen during
+  // every connect, under a roster the client had provably not asked for yet.
+  const [personasLoaded, setPersonasLoaded] = useState(false)
   const [detail, setDetail] = useState<PersonaSummary | null>(null)
   const [newOpen, setNewOpen] = useState(false)
   const shelves = shelvePersonas(personas)
@@ -80,8 +89,17 @@ export function PanelLanding(
     // without it just leaves the roster empty rather than erroring.
     client
       .send<{ personas: PersonaSummary[] }>('personas.list', null, '')
-      .then((r) => setPersonas(r.personas ?? []))
-      .catch(() => setPersonas([]))
+      .then((r) => {
+        setPersonas(r.personas ?? [])
+        setPersonasLoaded(true)
+      })
+      // A refusal is still an answer — this daemon serves no roster — so the
+      // empty state is the honest thing to show. Only the state BEFORE the ask
+      // is the one that must not claim anything.
+      .catch(() => {
+        setPersonas([])
+        setPersonasLoaded(true)
+      })
   }, [client, status])
 
   return (
@@ -95,7 +113,10 @@ export function PanelLanding(
             🎭 {t('Stage')}
           </a>
         )}
-        <span class={`dot ${status}`} title={status} />
+        {/* Same indicator as the app's top bar, and it carried the same flaw:
+            colour with no text and no label. The visible wording is the
+            connection banner app.tsx renders above this screen. */}
+        <span class={`dot ${status}`} role="img" title={status} aria-label={t('connection: %s', status)} />
       </header>
 
       <div class="landing-body">
@@ -115,7 +136,9 @@ export function PanelLanding(
           <div class="landing-section-head">
             <h2>{t('Personas')}</h2>
           </div>
-          {personas.length === 0 ? (
+          {personas.length === 0 && !personasLoaded ? (
+            <Placeholder label={t('Loading personas…')} rows={2} />
+          ) : personas.length === 0 ? (
             <p class="landing-empty">{t('No personas available.')}</p>
           ) : (
             shelves.map((shelf) => (

@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks'
 import { t } from '../../i18n'
+import { Placeholder } from '../../ui/Loading'
 import type { TaskInfo } from '../../platform/ctrlproto/types'
 
 // SwarmLane is the board's SECOND lane: the workspace's background swarm agents,
@@ -21,6 +22,12 @@ import type { TaskInfo } from '../../platform/ctrlproto/types'
 // swarm_spawn tool does, and rejects a foreign spawn it wouldn't allow.
 export function SwarmLane(props: {
   tasks: TaskInfo[]
+  // Whether the tasks surface has ANSWERED. Same split as the other two lanes:
+  // an empty `tasks` is a useState default until surface.get('tasks') replies,
+  // and "No swarm agents running." is a claim about running processes — the one
+  // an operator opening the board to check on a swarm is there to read.
+  // Optional, so a caller without the flag keeps the old behaviour.
+  loaded?: boolean
   backends?: string[]
   workersEnabled?: boolean
   onAction: (id: string, action: string, args?: Record<string, string>) => void
@@ -103,7 +110,9 @@ export function SwarmLane(props: {
         </div>
       )}
 
-      {props.tasks.length === 0 ? (
+      {props.tasks.length === 0 && props.loaded === false ? (
+        <Placeholder label={t('Loading swarm agents…')} rows={1} />
+      ) : props.tasks.length === 0 ? (
         <div class="board-empty">{t('No swarm agents running.')}</div>
       ) : (
         <div class="board-grid">

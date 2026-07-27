@@ -219,3 +219,63 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .msg-image-link { display: block; line-height: 0; }
 .msg-image { max-width: min(320px, 100%); max-height: 320px; border-radius: 8px; border: 1px solid var(--ui-line); }
+
+/* --- boot state: placeholders + the connection banner (ui/Loading.tsx) ---
+   These are shared because the bug they fix was identical on both surfaces: a
+   list that had not been answered yet rendered the same markup as a list that
+   had been answered "nothing", so the panel opened on "No sessions in this
+   workspace yet." and Stage on an empty library while the socket was still
+   connecting. See ui/Loading.tsx for the reasoning; these are the visuals. */
+
+/* A placeholder must read as "not yet", never as content. Muted label, then a
+   few inert bars at the rhythm of the rows they stand in for, so the eye sees
+   a shape settling rather than a page that has finished and found nothing. */
+.ui-placeholder { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; }
+.ui-placeholder__label { font-size: 13px; color: var(--ui-muted); }
+.ui-placeholder__row {
+  display: block; height: 34px; border-radius: var(--ui-radius);
+  background: var(--ui-surface); border: 1px solid var(--ui-line);
+  animation: ui-placeholder-pulse 1.4s ease-in-out infinite;
+}
+/* Stagger so the group reads as one settling surface rather than three things
+   blinking in lockstep. */
+.ui-placeholder__row:nth-child(3) { animation-delay: .18s; }
+.ui-placeholder__row:nth-child(4) { animation-delay: .36s; }
+@keyframes ui-placeholder-pulse { 0%, 100% { opacity: .45; } 50% { opacity: .9; } }
+
+/* The banner is in FLOW, not fixed: it sits under the top bar and pushes the
+   content down. Fixed would have to cover something, and the one thing it would
+   cover is the top bar — i.e. every control you might reach for during a
+   reconnect. Pushing instead costs a layout shift on a state change that is
+   already a layout-wide event. */
+.ui-conn-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--ui-fg);
+  background: color-mix(in srgb, var(--ui-warn) 16%, var(--ui-bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--ui-warn) 45%, var(--ui-line));
+}
+/* A drop after we HAVE been connected is a different event from a slow boot:
+   something you were reading has gone stale. Danger, not warning. */
+.ui-conn-banner--lost {
+  background: color-mix(in srgb, var(--ui-danger) 16%, var(--ui-bg));
+  border-bottom-color: color-mix(in srgb, var(--ui-danger) 45%, var(--ui-line));
+}
+.ui-conn-banner__text { min-width: 0; }
+.ui-conn-banner__spinner {
+  flex: none; width: 13px; height: 13px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--ui-fg) 25%, transparent);
+  border-top-color: var(--ui-warn);
+  animation: ui-spin .8s linear infinite;
+}
+.ui-conn-banner--lost .ui-conn-banner__spinner { border-top-color: var(--ui-danger); }
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+
+/* Reduced motion: the state must still be legible, so hold the spinner and the
+   bars at full strength rather than hiding them — the words carry the message
+   and the colour carries the severity. */
+@media (prefers-reduced-motion: reduce) {
+  .ui-placeholder__row, .ui-conn-banner__spinner { animation: none; }
+  .ui-placeholder__row { opacity: .7; }
+}

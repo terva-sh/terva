@@ -19,9 +19,31 @@ describe('SwarmLane', () => {
   })
 
   it('keeps the lane (with a spawn affordance) when empty but spawning is possible', () => {
-    const { container } = render(<SwarmLane tasks={[]} onAction={noop} onSpawn={noop} backends={[]} />)
+    const { container } = render(<SwarmLane tasks={[]} loaded onAction={noop} onSpawn={noop} backends={[]} />)
     expect(container.querySelector('.board-lane')).not.toBeNull()
     expect(screen.getByRole('button', { name: '+ Spawn' })).toBeTruthy()
+    expect(screen.getByText('No swarm agents running.')).toBeTruthy()
+  })
+
+  // "No swarm agents running." is a claim about live processes — the one an
+  // operator opens the board to read. Before `loaded` it was rendered off a
+  // useState default, so a board that booted before surface.get('tasks')
+  // answered reported a quiet swarm it had never asked about.
+  it('does not report a quiet swarm before the tasks surface has answered', () => {
+    const { rerender } = render(<SwarmLane tasks={[]} loaded={false} onAction={noop} onSpawn={noop} backends={[]} />)
+    expect(screen.queryByText('No swarm agents running.')).toBeNull()
+    expect(screen.getByText('Loading swarm agents…')).toBeTruthy()
+    // The spawn affordance stays reachable while we wait — the lane is not a
+    // read-only readout and "+ Spawn" needs no data to work.
+    expect(screen.getByRole('button', { name: '+ Spawn' })).toBeTruthy()
+
+    rerender(<SwarmLane tasks={[]} loaded onAction={noop} onSpawn={noop} backends={[]} />)
+    expect(screen.queryByText('Loading swarm agents…')).toBeNull()
+    expect(screen.getByText('No swarm agents running.')).toBeTruthy()
+  })
+
+  it('keeps the plain empty state for a caller that passes no loaded flag', () => {
+    render(<SwarmLane tasks={[]} onAction={noop} onSpawn={noop} backends={[]} />)
     expect(screen.getByText('No swarm agents running.')).toBeTruthy()
   })
 

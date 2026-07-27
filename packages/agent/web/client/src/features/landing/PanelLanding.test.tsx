@@ -65,11 +65,43 @@ describe('PanelLanding', () => {
       onDelete: () => {},
     }
     const { rerender } = render(<PanelLanding client={c} status="connecting" {...props} />)
-    expect(screen.getByText('No personas available.')).toBeTruthy()
+    // …and while it waits it must not CLAIM anything. This assertion used to
+    // read getByText('No personas available.') — it pinned the second half of
+    // the same bug in place: the roster was not merely unfetched, it was on
+    // screen announcing a result nobody had asked for.
+    expect(screen.queryByText('No personas available.')).toBeNull()
+    expect(screen.getByText('Loading personas…')).toBeTruthy()
     expect(c.send.mock.calls.some((call) => call[0] === 'personas.list')).toBe(false)
 
     rerender(<PanelLanding client={c} status="open" {...props} />)
     await waitFor(() => expect(screen.getByText('Mieli')).toBeTruthy())
+  })
+
+  // A daemon with no PersonasController refuses personas.list. That refusal IS
+  // an answer, so the empty state is right — the placeholder must not become a
+  // permanent shimmer on a surface that will never have a roster.
+  it('shows the empty state once a refusal answers the roster', async () => {
+    const c = fakeClient({
+      respond: (method) => {
+        if (method === 'personas.list') throw new Error('unsupported: personas.list')
+        return {}
+      },
+    })
+    render(
+      <PanelLanding
+        client={c}
+        status="open"
+        stageEnabled={false}
+        models={models}
+        onNewSession={() => {}}
+        sessions={[]}
+        current=""
+        onSelect={() => {}}
+        onRename={() => {}}
+        onDelete={() => {}}
+      />,
+    )
+    await waitFor(() => expect(screen.getByText('No personas available.')).toBeTruthy())
   })
 
   it('opens the new-session sheet from the hero', () => {
