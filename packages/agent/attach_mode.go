@@ -120,14 +120,37 @@ func normalizeAttachURL(raw string) (attachEndpoint, error) {
 	return attachEndpoint{URL: u.String()}, nil
 }
 
+// resolveAttachTarget fills in an omitted endpoint from the daemon record this
+// home's `terva web` publishes, reporting whether it came from there.
+//
+// Without it, `terva attach` with no argument could only mean terva web's
+// loopback default — which is wrong for every deployment serving a filesystem
+// socket, i.e. exactly the ones a bare `terva attach` would be most useful for.
+// An explicit argument always wins; a missing or stale record falls through to
+// the old default, so the no-daemon case behaves exactly as it always did.
+func resolveAttachTarget(raw string) (string, bool) {
+	if raw != "" {
+		return raw, false
+	}
+	rec, ok := config.ReadListenRecord()
+	if !ok || rec.Endpoint == "" {
+		return "", false
+	}
+	return rec.Endpoint, true
+}
+
 // attachConnectTimeout bounds the pre-TUI wait for the first handshake, so a
 // wrong URL fails with a clear error instead of a silent retry loop.
 const attachConnectTimeout = 8 * time.Second
 
 func runAttachMode(ctx context.Context, args build.Args, version string) error {
-	endpoint, err := normalizeAttachURL(args.AttachURL)
+	raw, discovered := resolveAttachTarget(args.AttachURL)
+	endpoint, err := normalizeAttachURL(raw)
 	if err != nil {
 		return err
+	}
+	if discovered {
+		fmt.Fprintf(os.Stderr, "terva attach: found a daemon at %s\n", endpoint)
 	}
 
 	// Self-restart (--allow-restart): the attach CLIENT re-execs itself into the

@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestNormalizeAttachURL(t *testing.T) {
@@ -55,5 +57,31 @@ func TestParseAttachArgs(t *testing.T) {
 	a, err = build.ParseArgs([]string{"--attach", "--token", "x"})
 	if err != nil || a.AttachURL != "" || a.Token != "x" {
 		t.Fatalf("--attach then flag: %+v, %v", a, err)
+	}
+}
+
+// `terva attach` with no argument used to mean terva web's loopback default,
+// which is wrong for every deployment serving a filesystem socket — exactly the
+// ones a bare `terva attach` is most useful for. The daemon record fills it in.
+func TestResolveAttachTargetUsesTheDaemonRecord(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+
+	// No record: unchanged behaviour, normalizeAttachURL supplies the default.
+	if raw, found := resolveAttachTarget(""); raw != "" || found {
+		t.Errorf("resolveAttachTarget with no record = %q, %v; want the old fallthrough", raw, found)
+	}
+
+	stop, err := config.PublishListenRecord(config.ListenRecord{Endpoint: "unix:/run/terva.sock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	raw, found := resolveAttachTarget("")
+	if !found || raw != "unix:/run/terva.sock" {
+		t.Errorf("resolveAttachTarget = %q, %v; want the published endpoint", raw, found)
+	}
+	// An explicit argument always wins, and is never reported as discovered.
+	if raw, found := resolveAttachTarget("ws://elsewhere:9/ws"); found || raw != "ws://elsewhere:9/ws" {
+		t.Errorf("an explicit endpoint must win: %q, %v", raw, found)
 	}
 }

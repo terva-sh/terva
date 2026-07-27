@@ -170,8 +170,32 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		return fmt.Errorf("--web-insecure-cidr: %w", err)
 	}
 
+	// Publish where this daemon can be reached, so a client on this machine can
+	// find it without being told — `terva attach` with no argument, and
+	// `terva ext config`, which must go THROUGH the running instance because
+	// that instance owns config.json. The record is scoped to $TERVA_HOME, so it
+	// can only ever name a daemon serving the same home the reader resolved.
+	stopRecord := func() {}
+	defer func() { stopRecord() }()
+	onListen := func(network, addr string) {
+		stop, err := config.PublishListenRecord(config.ListenRecord{
+			Endpoint: config.EndpointForListener(network, addr),
+			Version:  version,
+			Auth:     args.WebToken != "" || args.WebAuthHeader != "",
+		})
+		if err != nil {
+			// Discovery is a convenience; failing to publish must not take the
+			// daemon down. Say so once — a client that then cannot find it
+			// should have a reason to point at.
+			fmt.Fprintf(os.Stderr, "terva web: could not publish %s (clients will need an explicit endpoint): %v\n", config.ListenRecordPath(), err)
+			return
+		}
+		stopRecord = stop
+	}
+
 	return web.Serve(ctx, ws, web.Options{
 		Addr:           args.WebAddr,
+		OnListen:       onListen,
 		AuthHeader:     args.WebAuthHeader,
 		TrustedProxies: trustedProxies,
 		Token:          args.WebToken,

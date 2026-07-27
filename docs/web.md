@@ -252,6 +252,15 @@ this form is for `terva attach unix:/path/to/terva.sock` and programmatic
 ctrlproto clients; a stale socket left by a crash is cleared on the next
 start, and a live daemon's socket is refused rather than stolen.
 
+Clients need not be told the path. Whatever the daemon binds — TCP, a
+filesystem socket, or a systemd-passed fd — it publishes as
+`$TERVA_HOME/listen.json` (`0600`, no secret in it: an `auth` flag says a
+token is required, never what it is), refreshes a heartbeat while it runs,
+and removes it on exit. `terva attach` with no URL and `terva ext config`
+with no `--endpoint` read that record, so both reach the daemon serving
+*this* home without a flag. A record that stops being heartbeated — a crash
+— reads as absent rather than as a daemon that will not answer.
+
 ### systemd socket activation
 
 When `LISTEN_FDS` names the process (a `.socket` unit started the service),

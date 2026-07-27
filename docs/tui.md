@@ -52,8 +52,13 @@ Extension-registered commands appear under a divider at the bottom of the popup,
 ### Attaching to a running daemon (`terva attach`)
 
 `terva attach [URL]` runs this same TUI as a **client** of a running `terva
-web` daemon instead of hosting the workspace in-process (default endpoint
-`ws://127.0.0.1:8730/ws`; `--token` matches the daemon's `--web-token` — or
+web` daemon instead of hosting the workspace in-process. **With no URL it finds
+the daemon serving this `$TERVA_HOME`**: `terva web` publishes its bound endpoint
+to `$TERVA_HOME/listen.json` when it starts and removes it when it stops, so a
+bare `terva attach` reaches a daemon on a filesystem socket without being told
+where. A stale record (the daemon crashed — the file is heartbeated) is ignored,
+and the old `ws://127.0.0.1:8730/ws` default still applies when nothing is
+serving. (Explicit URL forms: `--token` matches the daemon's `--web-token` — or
 `--token-file PATH` / `TERVA_WEB_TOKEN` to keep the secret off the command line,
 the same three sources the daemon reads under its own `--web-token*` spellings
 (see the persistent-attach note below); bare `host:port` and `http(s)://` forms normalize, and

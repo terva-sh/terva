@@ -59,6 +59,18 @@ type Options struct {
 	// product from the control panel, opted into per deployment.
 	AllowStage bool
 
+	// OnListen is called once, after the control listener binds and before any
+	// connection is served, with the listener's network ("unix" or "tcp") and
+	// its address. It reports what was ACTUALLY bound, which is the only honest
+	// source under systemd socket activation — the unit chooses the address and
+	// Addr never held it.
+	//
+	// The composition root uses this to publish where the daemon can be reached
+	// (see config.PublishListenRecord). It lives here as a callback rather than
+	// a write from this package because web owns a transport, not state under
+	// $TERVA_HOME.
+	OnListen func(network, addr string)
+
 	// unixListener marks the effective listener as a unix domain socket —
 	// set by Serve (from the unix: address form or an adopted systemd
 	// socket), never by callers. The socket file's permissions are the auth
@@ -138,6 +150,10 @@ func Serve(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) er
 		defer cancel()
 		_ = srv.Shutdown(sc)
 	}()
+
+	if opts.OnListen != nil {
+		opts.OnListen(ln.Addr().Network(), ln.Addr().String())
+	}
 
 	fmt.Fprintf(os.Stderr, "terva web: ready — serving on %s\n", display)
 	if opts.unixListener {
