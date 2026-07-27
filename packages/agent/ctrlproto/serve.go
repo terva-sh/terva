@@ -824,6 +824,30 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 			s.respond(f.ID, info, err)
 		}
 
+	case MethodWorkflowsList, MethodWorkflowsGet:
+		wc, ok := s.svc.(WorkflowsController)
+		if !ok {
+			s.write(ErrFrame(f.ID, CodeUnsupported, "workflow runs are not available here"))
+			return
+		}
+		switch f.Method {
+		case MethodWorkflowsList:
+			list, err := wc.WorkflowRuns(ctx)
+			s.respond(f.ID, WorkflowRunsResult{Runs: list}, err)
+		case MethodWorkflowsGet:
+			// Named, never a default arm — the same reason the archive group
+			// spells both of its verbs out: a default silently adopts the next
+			// verb added to the outer case list and decodes its frame with
+			// THIS one's params.
+			var p WorkflowGetParams
+			if err := f.Bind(&p); err != nil {
+				s.badReq(f.ID, err)
+				return
+			}
+			v, err := wc.WorkflowRun(ctx, p)
+			s.respond(f.ID, v, err)
+		}
+
 	case MethodSessionDiscardDraft:
 		dc, ok := s.svc.(DraftController)
 		if !ok {

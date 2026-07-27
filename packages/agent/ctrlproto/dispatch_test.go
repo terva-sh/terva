@@ -214,6 +214,16 @@ func (r *recorder) RestoreSession(_ context.Context, p RestoreSessionParams) (Se
 	return SessionInfo{}, nil
 }
 
+// --- WorkflowsController ---
+func (r *recorder) WorkflowRuns(_ context.Context) ([]WorkflowRunInfo, error) {
+	r.note("WorkflowRuns", "", nil)
+	return nil, nil
+}
+func (r *recorder) WorkflowRun(_ context.Context, p WorkflowGetParams) (WorkflowRunView, error) {
+	r.note("WorkflowRun", "", p)
+	return WorkflowRunView{}, nil
+}
+
 // --- DoctorController ---
 func (r *recorder) CardsDoctor(_ context.Context, p DoctorParams) (DoctorResult, error) {
 	r.note("CardsDoctor", "", p)
@@ -509,6 +519,11 @@ func dispatchCases() []dispatchCase {
 		{MethodSessionArchive, nil, "ArchiveSession", nil},
 		{MethodSessionsArchived, nil, "ArchivedSessions", nil},
 		{MethodSessionRestore, RestoreSessionParams{ID: "20260101-120000-aaaaaaaa"}, "RestoreSession", RestoreSessionParams{ID: "20260101-120000-aaaaaaaa"}},
+
+		// --- workflows: two verbs behind one outer case, and get is the one that
+		// binds params. Same trap as archive above. ---
+		{MethodWorkflowsList, nil, "WorkflowRuns", nil},
+		{MethodWorkflowsGet, WorkflowGetParams{ID: "wf_abc123"}, "WorkflowRun", WorkflowGetParams{ID: "wf_abc123"}},
 
 		// --- draft (optional, takes no params — it must still reach the right arm) ---
 		{MethodSessionDiscardDraft, nil, "DiscardDraft", nil},

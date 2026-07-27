@@ -5,6 +5,7 @@ import (
 
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider"
 )
 
 // The daemon-side auto-swarm recap — since the --tui-legacy driver's removal,
@@ -36,8 +37,18 @@ type swarmWatchEntry struct {
 // or is stopped before ever emitting one — otherwise one zombie entry would
 // wedge every future recap (the batch flushes only when ALL entries are done).
 func (s *wsSession) trackSwarmAgent(a *swarm.Agent, task string) {
+	s.trackSwarmAgentEntry(a, task)
+}
+
+// trackSwarmAgentEntry is trackSwarmAgent returning the tracked entry — the
+// shape a test needs to hold the entry across the batch's lifetime. Reading
+// it back from s.swarmWatch instead is a race: a crash-fast child can
+// finalise and FLUSH (which nils the slice) between this returning and the
+// caller's next line, which is exactly the index-out-of-range CI run 1735
+// died on. trackSwarmAgent itself keeps the OnSpawned func shape.
+func (s *wsSession) trackSwarmAgentEntry(a *swarm.Agent, task string) *swarmWatchEntry {
 	if s == nil || a == nil {
-		return
+		return nil
 	}
 	entry := &swarmWatchEntry{agent: a, task: task}
 	s.swarmWatchMu.Lock()
@@ -50,6 +61,7 @@ func (s *wsSession) trackSwarmAgent(a *swarm.Agent, task string) {
 		a.Wait()
 		s.finalizeSwarmEntry(entry, "")
 	}()
+	return entry
 }
 
 // swarmGuardHold reports whether the coordinator should be held back from
@@ -113,9 +125,24 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 	var sb strings.Builder
 	sb.WriteString(i18n.P("swarm.summary.header", "[auto-swarm update] %d sub-agent(s) finished:", len(batch)))
 	sb.WriteString("\n\n")
+	var batchUsage provider.Usage
 	for idx, e := range batch {
 		snap := e.agent.Snapshot()
 		status := snap.RecapStatus()
+		// Book what this child spent against the session that ordered it, and
+		// sum the batch for the closing line. A failed child still counts: it
+		// spent real money before it died, and the whole point of this is that
+		// the coordinator's record match what its decisions cost.
+		//
+		// Safe to add rather than diff here because a batch entry is finalised
+		// once (trackSwarmAgent's two finalisers are idempotent), so each
+		// child's cumulative is booked exactly once.
+		if u := snap.Usage; u != (provider.Usage{}) {
+			batchUsage = batchUsage.Add(u)
+			if s.agent != nil {
+				s.agent.RecordDelegatedUsage(u)
+			}
+		}
 		task := snap.Task
 		if task == "" {
 			task = e.task
@@ -128,6 +155,13 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 		}
 		sb.WriteString(i18n.P("swarm.summary.task", "   task: %s", truncateForSummary(task, 240)))
 		sb.WriteByte('\n')
+		// What this one cost. Delegation is the only action whose price is
+		// unbounded by the coordinator's own turn, and the recap is where a
+		// coordinator learns the outcome — so it is where the price belongs.
+		if snap.Usage.CostUSD > 0 {
+			sb.WriteString(i18n.P("swarm.summary.cost", "   cost: $%.4f", snap.Usage.CostUSD))
+			sb.WriteByte('\n')
+		}
 		if snap.Err != "" {
 			sb.WriteString(i18n.P("swarm.summary.error", "   error: %s", truncateForSummary(snap.Err, 240)))
 			sb.WriteByte('\n')
@@ -163,6 +197,13 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 			sb.WriteByte('\n')
 		}
 		sb.WriteString("\n")
+	}
+	// The batch total, last, where a reader lands. One run measured $24.49 of
+	// delegated spend against a launching session that recorded $5.36 — the
+	// coordinator could have reported the small number in good faith.
+	if batchUsage.CostUSD > 0 {
+		sb.WriteString(i18n.P("swarm.summary.batch_cost", "Batch cost: $%.4f across %d sub-agent(s), spent on this session's credentials.", batchUsage.CostUSD, len(batch)))
+		sb.WriteString("\n\n")
 	}
 	sb.WriteString(i18n.P("swarm.summary.instruction", "This is observed state from sub-agents you spawned, not a new user request. Briefly summarise the collective outcome for the user, referencing the agents by id. If any failed, suggest a follow-up; otherwise confirm completion. Do not spawn new sub-agents unless the user asks."))
 	s.queue(sb.String())

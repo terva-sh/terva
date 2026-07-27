@@ -58,6 +58,13 @@ const (
 	MethodI18nCatalog         Method = "i18n.catalog"           // params I18nCatalogParams, result I18nCatalogResult (session-independent)
 	MethodFilesList           Method = "files.list"             // params FilesListParams, result FilesListResult (session-independent)
 
+	// The workflow dashboard (optional; served only by a WorkflowsController).
+	// Read-only and session-independent: a run is a workspace artifact, not a
+	// session, and observing one needs no authority — which is why these sit
+	// here rather than in the control group. See workflows.go.
+	MethodWorkflowsList Method = "workflows.list" // result WorkflowRunsResult; read-only
+	MethodWorkflowsGet  Method = "workflows.get"  // params WorkflowGetParams, result WorkflowRunView; read-only
+
 	// MethodConversationReveal returns the turns a compaction checkpoint
 	// summarized away. They are not gone: a compaction row is an append-only
 	// checkpoint the loader honors, never a rewrite of the rows above it, so the
@@ -322,7 +329,8 @@ func (m Method) Group() Group {
 		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
 		MethodFilesList, MethodAuthProviders, MethodConversationReveal, MethodConversationHistory,
 		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose, MethodSuggestReply, MethodSessionsDoctor,
-		MethodSessionsNextScene, MethodSessionsRealize, MethodSessionsExport:
+		MethodSessionsNextScene, MethodSessionsRealize, MethodSessionsExport,
+		MethodWorkflowsList, MethodWorkflowsGet:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault,
 		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
@@ -742,28 +750,58 @@ type Decision struct {
 	RememberTool bool   `json:"remember_tool,omitempty"`
 	RememberAll  bool   `json:"remember_all,omitempty"`
 	PersistTool  bool   `json:"persist_tool,omitempty"`
+	// PersistScopes narrows a persist_tool grant to these args patterns
+	// (the Pattern fields of the offered PermissionRequest.Scopes, echoed
+	// back) — one saved rule per pattern instead of a blanket tool rule.
+	PersistScopes []string `json:"persist_scopes,omitempty"`
 }
 
 // Core converts a wire Decision to the core type.
 func (d Decision) Core() core.ConfirmDecision {
 	return core.ConfirmDecision{
-		Allow:        d.Allow,
-		Reason:       d.Reason,
-		RememberTool: d.RememberTool,
-		RememberAll:  d.RememberAll,
-		PersistTool:  d.PersistTool,
+		Allow:         d.Allow,
+		Reason:        d.Reason,
+		RememberTool:  d.RememberTool,
+		RememberAll:   d.RememberAll,
+		PersistTool:   d.PersistTool,
+		PersistScopes: d.PersistScopes,
 	}
 }
 
 // DecisionFromCore converts a core decision to its wire form.
 func DecisionFromCore(c core.ConfirmDecision) Decision {
 	return Decision{
-		Allow:        c.Allow,
-		Reason:       c.Reason,
-		RememberTool: c.RememberTool,
-		RememberAll:  c.RememberAll,
-		PersistTool:  c.PersistTool,
+		Allow:         c.Allow,
+		Reason:        c.Reason,
+		RememberTool:  c.RememberTool,
+		RememberAll:   c.RememberAll,
+		PersistTool:   c.PersistTool,
+		PersistScopes: c.PersistScopes,
 	}
+}
+
+// GrantScopesFromCore converts derived core grant scopes to their wire form.
+func GrantScopesFromCore(scopes []core.GrantScope) []GrantScope {
+	if len(scopes) == 0 {
+		return nil
+	}
+	out := make([]GrantScope, len(scopes))
+	for i, s := range scopes {
+		out[i] = GrantScope{Display: s.Display, Pattern: s.Pattern}
+	}
+	return out
+}
+
+// CoreGrantScopes converts wire grant scopes back to the core type.
+func CoreGrantScopes(scopes []GrantScope) []core.GrantScope {
+	if len(scopes) == 0 {
+		return nil
+	}
+	out := make([]core.GrantScope, len(scopes))
+	for i, s := range scopes {
+		out[i] = core.GrantScope{Display: s.Display, Pattern: s.Pattern}
+	}
+	return out
 }
 
 // Answer is the wire form of [core.UserAnswer] carried in [AnswerParams].

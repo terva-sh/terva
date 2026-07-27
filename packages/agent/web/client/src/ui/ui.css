@@ -160,6 +160,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
   cursor: pointer; opacity: 0; transition: opacity .12s, color .12s, border-color .12s;
 }
 .msg-wrap:hover .copy-btn, .copy-btn:focus-visible { opacity: 1; }
+/* The inline variant (CopyButton `inline`): a control in flow, on a surface with
+   no hovered row to reveal it. Without this it is both invisible and out of
+   place, since the base is absolutely positioned into a bubble's corner. */
+.copy-btn.inline { position: static; opacity: 1; }
 .copy-btn:hover { color: var(--ui-fg); border-color: var(--ui-muted); }
 .copy-btn.copied { opacity: 1; color: var(--ui-ok); border-color: var(--ui-ok); }
 /* touch devices have no hover — keep it faintly visible so it's discoverable. */

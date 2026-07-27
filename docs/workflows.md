@@ -98,7 +98,7 @@ Spawns one sub-agent on the swarm and resolves when its task ends.
 
 | opt | meaning |
 |---|---|
-| `label` | display name in narration (defaults to a prompt prefix) |
+| `label` | the agent's name: narration, its state directory, and its journal row (defaults to a prompt prefix) |
 | `phase` | progress-group title (display only) |
 | `model` | model override for this agent |
 | `provider` | provider override |
@@ -202,6 +202,18 @@ included. The semantics that follow:
 - **Identical calls share one slot.** Two `agent()` calls with byte-identical
   prompt and opts are the same key; if you want N independent attempts at the
   same prompt, vary the `label` by index.
+- **A row carries its label.** `{type, key, agent_id, label, result}` — so a
+  finished run can be read back to the slice that produced each report without
+  the narration that printed both. Narration is a stderr stream, and an
+  interrupted run leaves it wherever that stream happened to land.
+
+**Label your agents.** The id is the handle for everything durable: the
+`swarm/agents/<id>/` state directory, the journal's `agent_id`, and the argument
+`session_inspect` takes to read a sub-agent's transcript. Unlabelled, it is
+slugged from the prompt — and a fan-out shares its prompt preamble by
+construction, so six agents mint six ids differing only in a numeric suffix.
+Labelled, they read `core-engine-…`, `providers-cli-…`, and a sub-agent's full
+transcript is one paged, redacted `session_inspect` call away.
 
 ## Bounds
 
@@ -227,7 +239,29 @@ terva workflow run <script.js> [flags]
   --concurrency N       max simultaneous agents (0 = min(16, cores−2))
   --timeout DUR         bound the whole run (e.g. 30m; 0 = none)
   --cwd DIR             working directory the agents share (default: current)
+
+terva workflow list
+  every run, newest first: id, status, name, completed/total agents, cost
+
+terva workflow show <run-id> [--script]
+  the run's record and its journaled results; --script prints the source
 ```
+
+**Finding a run again.** Each run writes `run.json` beside its journal — the
+script source, the launch coordinates, times, agent counts and cost. That is
+what makes `list` and `show` possible without the launching terminal, which
+matters most for a run that was **interrupted**: a failed run prints its
+`--resume` hint on the way out, an interrupted one dies before it can, and its
+completed agents sit on disk unreachable in practice.
+
+A run with no `ended` reads as `incomplete` rather than `running` — telling
+those apart needs liveness, and claiming "running" about a dead run is worse
+than saying nothing. Either way the next action is the same: look at the counts
+and decide whether to resume.
+
+Starting a script that has an incomplete prior run in the same cwd says so
+before spawning, matched on the script **source** rather than its path — resume
+keys on content, so an edited file at the same path would replay nothing.
 
 stdout carries exactly one thing: the script's return value as JSON (so runs
 compose with `jq` and pipelines). Narration, the run summary (agents run /
@@ -237,6 +271,41 @@ stderr.
 The CLI host drives **native sub-agents only**; an `agent()` call naming a
 `backend:` fails loudly rather than running the work under the wrong
 identity.
+
+## Watching runs from the control panel
+
+`terva web`'s board has a **Workflows** lane beside the sessions and the swarm:
+every run on the host, newest first, with its status, completed-of-total agents,
+cost, and — for a run worth resuming — what resuming would replay. Clicking one
+opens it: the record, **the script as it ran**, and every report it journaled,
+each collapsed behind its size so a 98 KB deliverable does not land in the page
+uninvited.
+
+Reading the script there is the point. A run's definition used to exist only in
+whatever `.js` file the operator launched from, so inspecting one meant shell
+access to the host and a file that may since have moved or been edited; the
+source in the record is the copy that answers *what ran*.
+
+Two honest limits, both consequences of `terva workflow run` being a separate
+foreground process:
+
+- **The daemon does not see the engine.** It reads what a run leaves on disk, so
+  the lane knows a run exists only once it has written its opening record, and
+  learns of progress by re-reading the journal. It polls while any run is
+  unfinished and stops when they all close; a run that starts while the board is
+  open needs the lane's **Refresh**.
+- **No run is ever shown as "running."** Same reason as `list`: distinguishing
+  live from crashed needs liveness the record cannot supply.
+
+Serving the lane needs no workflow engine in the binary. The engine is behind
+`-tags terva_workflows` because it links a JavaScript runtime; the artifacts it
+writes are plain JSON, read through `packages/agent/workflow/runs`, which imports
+nothing but the standard library. A lean `terva web` therefore serves runs made
+by a full binary on the same machine.
+
+Wire surface: `workflows.list` and `workflows.get`, both read-only and in the
+**session** group rather than control — observing a run needs no authority to
+change anything.
 
 ## Claude Code compatibility
 

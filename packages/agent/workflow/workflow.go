@@ -13,12 +13,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"runtime"
 	"sync"
 	"time"
 
 	"terva.sh/terva/packages/agent/jsengine"
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/workflow/runs"
 )
 
 // agentLifetimeCap is a runaway-loop backstop, far above any real run.
@@ -82,6 +84,19 @@ type Options struct {
 	Progress func(string)
 	// Timeout bounds the whole run; <=0 means no bound beyond ctx.
 	Timeout time.Duration
+	// CWD and ScriptPath are recorded, not used: they are what makes a run
+	// identifiable afterwards, and what FindIncomplete matches a rerun against.
+	CWD        string
+	ScriptPath string
+	// Now is a clock seam for tests; defaults to time.Now.
+	Now func() time.Time
+}
+
+func (o Options) now() time.Time {
+	if o.Now != nil {
+		return o.Now()
+	}
+	return time.Now()
 }
 
 // Result is a completed run.
@@ -151,11 +166,41 @@ func Run(ctx context.Context, eng Engine, script []byte, opts Options) (res Resu
 	if opts.Root == "" {
 		return res, fmt.Errorf("workflow: Options.Root is required")
 	}
-	j, err := openJournal(fmt.Sprintf("%s/%s", opts.Root, runID))
+	j, err := runs.OpenJournal(fmt.Sprintf("%s/%s", opts.Root, runID))
 	if err != nil {
 		return res, err
 	}
-	defer j.close()
+	defer j.Close()
+
+	// The run record, opened now and closed in a defer, so a run that is
+	// INTERRUPTED leaves the started half behind rather than nothing. That is
+	// the case the record exists for: a failed run prints its resume hint on
+	// the way out, an interrupted one dies before it can.
+	rec := runs.Record{
+		RunID:    runID,
+		Name:     meta.Name,
+		Started:  opts.now().UTC().Format(time.RFC3339),
+		CWD:      opts.CWD,
+		ScriptAt: opts.ScriptPath,
+		Script:   string(script),
+		PID:      os.Getpid(),
+	}
+	if opts.Args != nil {
+		if b, merr := json.Marshal(opts.Args); merr == nil {
+			rec.Args = b
+		}
+	}
+	// A record that cannot be written is not a reason to refuse the run — the
+	// work is still worth doing and the journal still protects it.
+	_ = runs.WriteRecord(opts.Root, rec)
+	defer func() {
+		rec.Ended = opts.now().UTC().Format(time.RFC3339)
+		rec.Agents, rec.Cached, rec.CostUSD = res.Agents, res.CachedAgents, res.CostUSD
+		if err != nil {
+			rec.Err = err.Error()
+		}
+		_ = runs.WriteRecord(opts.Root, rec)
+	}()
 
 	progress := opts.Progress
 	if progress == nil {
@@ -197,11 +242,11 @@ func Run(ctx context.Context, eng Engine, script []byte, opts Options) (res Resu
 		if err := eng.AllowBackend(req.Backend); err != nil {
 			return nil, err
 		}
-		key, err := agentKey(prompt, agentOpts)
+		key, err := runs.AgentKey(prompt, agentOpts)
 		if err != nil {
 			return nil, err
 		}
-		if raw, ok := j.lookup(key); ok {
+		if raw, ok := j.Lookup(key); ok {
 			mu.Lock()
 			cached++
 			mu.Unlock()
@@ -235,7 +280,7 @@ func Run(ctx context.Context, eng Engine, script []byte, opts Options) (res Resu
 			return nil, nil
 		}
 		progress(fmt.Sprintf("agent %s: running (%s)", label, h.ID()))
-		j.started(key, h.ID())
+		j.Started(key, h.ID(), label)
 		out := h.AwaitTask(bctx)
 		mu.Lock()
 		spentUSD += out.CostUSD
@@ -244,7 +289,7 @@ func Run(ctx context.Context, eng Engine, script []byte, opts Options) (res Resu
 			progress(fmt.Sprintf("agent %s: failed: %s", label, out.Err))
 			return nil, nil
 		}
-		if err := j.result(key, out.AgentID, out.Result); err != nil {
+		if err := j.Result(key, out.AgentID, label, out.Result); err != nil {
 			return nil, fmt.Errorf("journal write: %w", err)
 		}
 		progress(fmt.Sprintf("agent %s: done", label))
@@ -294,6 +339,12 @@ func buildSpawnRequest(prompt string, opts map[string]any) (swarm.SpawnRequest, 
 		case "label":
 			if s, ok := v.(string); ok && s != "" {
 				label = s
+				// Also to the spawn, so the agent's state dir and journal row
+				// are named after the slice rather than after the shared
+				// prompt preamble. Set only when the script actually gave a
+				// label: the narration fallback below is a truncated prompt,
+				// which is what the id would have been slugged from anyway.
+				req.Label = s
 			}
 		case "phase":
 			// Progress grouping only; participates in the cache key, not

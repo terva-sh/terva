@@ -209,6 +209,8 @@ Every command is a `cmd` frame; the server answers with a `resp` (a bare ok, a
 | `surface.get` | `{id}` → `{surface}` | one pane's content |
 | `surface.action` | `{id, action, args?}` | act on a pane (e.g. forward a keypress; `extensions`/`mcp` `toggle` takes `{name, enabled, scope: global\|project}`; `tasks` takes `spawn {task, model?, provider?, persona?}` / `stop`/`remove`/`resume` `{id}` / `send {id, text}` — actions return no payload, so a spawned agent's id arrives via the next `tasks` fetch) |
 | `i18n.catalog` | `{lang?}` → `{catalog}` | the effective web string catalog (session-independent) |
+| `workflows.list` | → `{runs:[WorkflowRunInfo]}` | every workflow run on the host, newest first: status (`incomplete`\|`done`\|`failed` — never "running", which would need liveness the run record cannot supply), completed-of-total agents, cost, and whether resuming would replay real work. Session-independent; optional, served only by a `WorkflowsController` |
+| `workflows.get` | `{id}` → `{run, script?, args?, results?}` | one run opened: the record, **the script as it ran** (recorded at launch, not re-read from disk), and each journaled result with its label and byte size. The id is path-validated — it names a directory under the run root and arrives from a network client |
 
 **control**
 

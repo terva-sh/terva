@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,5 +130,75 @@ func TestFailedSpawnReleasesClaimedID(t *testing.T) {
 	f.mu.Unlock()
 	if leaked != 0 {
 		t.Fatalf("%d claimed id(s) leaked by a failed spawn", leaked)
+	}
+}
+
+// TW-041. An id is slugged from the task, and a fan-out shares its prompt
+// preamble by construction — that is what makes it a fan-out. taskSlug caps at
+// 24 characters, so six agents off one preamble minted six ids differing only
+// in the entropy suffix: unique, and unreadable.
+//
+// The cost was not cosmetic. The id is the handle for the state dir, the
+// workflow journal's agent_id, and session_inspect's sub-agent argument — so an
+// unreadable id turned an available tool into an invisible one, and a real run
+// scraped a /tmp log with Python instead of reading transcripts.
+func TestLabelNamesTheAgentID(t *testing.T) {
+	f := newIDCollisionSwarm(t)
+	defer f.StopAll()
+
+	preamble := "You are one member of an independent review panel. Review slice: "
+	a, err := f.SpawnReq(context.Background(), SpawnRequest{
+		Task:  preamble + "the core engine",
+		Label: "core-engine",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(a.ID, "core-engine-") {
+		t.Errorf("id %q is not named from the label", a.ID)
+	}
+	if strings.HasPrefix(a.ID, "you-are-one-member") {
+		t.Errorf("id %q is still slugged from the shared preamble", a.ID)
+	}
+}
+
+// An unlabelled spawn must behave exactly as before — the whole change is which
+// text the id is NAMED from, for callers that supply one.
+func TestUnlabelledAgentIDIsUnchanged(t *testing.T) {
+	f := newIDCollisionSwarm(t)
+	defer f.StopAll()
+
+	a, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "review the core engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(a.ID, "review-the-core-engine-") {
+		t.Errorf("unlabelled id %q is no longer slugged from the task", a.ID)
+	}
+}
+
+// Labels are the script author's, so two slices can share one. The id must stay
+// unique regardless: claimAgentID re-mints under the swarm lock, and this swarm's
+// clock is frozen so the entropy suffix cannot save it.
+func TestCollidingLabelsStillMintDistinctIDs(t *testing.T) {
+	f := newIDCollisionSwarm(t)
+	defer f.StopAll()
+
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		a, err := f.SpawnReq(context.Background(), SpawnRequest{
+			Task:  "slice " + string(rune('a'+i)),
+			Label: "same-label",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[a.ID] {
+			t.Fatalf("two agents share id %q — a label collision became a state-dir collision", a.ID)
+		}
+		seen[a.ID] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("want 3 distinct ids, got %d", len(seen))
 	}
 }

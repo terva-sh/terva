@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/provider"
 )
 
 // Status is the high-level lifecycle state of an Agent.
@@ -245,6 +246,13 @@ func (f *Swarm) ActiveSession() string {
 	return f.activeSession
 }
 
+// Root is the swarm state root this instance was configured with — the anchor
+// every sibling on-disk layout hangs off (agents/, workflows/). Exposed so a
+// host reads it from the swarm it actually has rather than recomputing
+// DefaultRoot(TervaHome()) and quietly disagreeing with it under a test that
+// passed a tempdir.
+func (f *Swarm) Root() string { return f.cfg.Root }
+
 // agentStateDir is the per-agent state directory laid out as:
 //
 //	<root>/agents/<id>/
@@ -264,16 +272,27 @@ func (f *Swarm) agentStateDir(id string) string {
 // children shared one state dir (session.json, events.jsonl, meta.json).
 // Collisions re-mint with a bumped suffix under the lock; the caller must
 // release the claim via f.claimed once registered (or on a failed spawn).
-func (f *Swarm) claimAgentID(task string) string {
+func (f *Swarm) claimAgentID(nameSource string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	base := newAgentID(task, f.cfg.Now())
+	base := newAgentID(nameSource, f.cfg.Now())
 	id := base
 	for i := 1; f.idTakenLocked(id); i++ {
 		id = fmt.Sprintf("%s-%d", base, i)
 	}
 	f.claimed[id] = true
 	return id
+}
+
+// agentNameSource picks the text an agent's id is slugged from: the caller's
+// Label when it gave one, else the task. Only the NAME changes — the id keeps
+// its entropy suffix and still goes through claimAgentID, so two agents
+// labelled the same are still distinct (the suffix, then a bumped counter).
+func agentNameSource(req SpawnRequest) string {
+	if s := strings.TrimSpace(req.Label); s != "" {
+		return s
+	}
+	return req.Task
 }
 
 // idTakenLocked reports whether an agent id is already in use: claimed by an
@@ -327,7 +346,16 @@ func AgentEventLogPath(root, id string) string {
 // child argv as --model / --provider so the agent runs against the
 // chosen model regardless of the parent's current selection.
 type SpawnRequest struct {
-	Task     string
+	Task string
+	// Label, when set, is the human-meaningful name this agent is known by,
+	// and the text its id is slugged from. It does not reach the child — it
+	// changes what the agent is CALLED, not what it does or is told.
+	//
+	// It exists because the id is the handle for every durable artifact: the
+	// swarm/agents/<id>/ state dir, the workflow journal's agent_id, and the
+	// argument session_inspect takes to read a sub-agent's transcript. Slugged
+	// from the task, a fan-out's agents are indistinguishable to a reader.
+	Label    string
 	Model    string // optional override; child resolves default if empty
 	Provider string // optional override; usually paired with Model
 	// Persona, when set, is baked into the child's --persona flag so the
@@ -403,7 +431,15 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 	if task == "" {
 		return nil, errors.New("swarm: empty task")
 	}
-	id := f.claimAgentID(task)
+	// The id is NAMED from the label when the caller supplied one, and from
+	// the task text otherwise. A fan-out shares its prompt preamble by
+	// construction — that is what makes it a fan-out — and taskSlug caps at 24
+	// characters, so six agents off one preamble mint six ids that differ only
+	// in the entropy suffix. That is unique but unreadable, and an id nobody
+	// can read is an id nobody looks up: it turned session_inspect, which
+	// resolves a sub-agent transcript from exactly this id, into a tool that
+	// was available and invisible.
+	id := f.claimAgentID(agentNameSource(req))
 	// Every early return below must release the claim, or the id (and its
 	// suffix) would stay burned for the life of the process. Registration
 	// clears claimedID so the deferred release is a no-op on success.
@@ -827,6 +863,10 @@ type AgentSnapshot struct {
 	// needs and otherwise cannot see.
 	CostUSD float64
 
+	// Usage is CostUSD with its token counts when the backend reported them.
+	// A parent booking a child's spend needs both.
+	Usage provider.Usage
+
 	// Persona is the persona the sub-agent booted as (empty = host
 	// default). Surfaced so the dashboard and the auto-swarm summary can
 	// label each sub-agent by the specialist that ran it.
@@ -932,6 +972,7 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		Model:             a.Model,
 		Provider:          a.Provider,
 		CostUSD:           a.costUSD,
+		Usage:             a.usage,
 		Persona:           a.Persona,
 		Experience:        a.Experience,
 		Substrate:         a.Substrate,

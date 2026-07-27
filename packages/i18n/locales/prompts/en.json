@@ -118,6 +118,8 @@
   "swarm.roster.footer": "Dispatch a persona only by a name from this list, picking the one whose focus matches the sub-task; omit `persona` for a general-purpose sub-agent.",
   "swarm.roster.intro": "Specialist personas you can dispatch — pass the name as swarm_spawn's `persona` parameter to boot a sub-agent as that specialist:",
   "swarm.summary.agent_line": "%d. agent %s — status: %s",
+  "swarm.summary.batch_cost": "Batch cost: $%.4f across %d sub-agent(s), spent on this session's credentials.",
+  "swarm.summary.cost": "   cost: $%.4f",
   "swarm.summary.deliverable_err": "   deliverable: contract NOT met — %s",
   "swarm.summary.deliverable_ok": "   deliverable: validated structured report (%d bytes; full JSON via the tasks surface)",
   "swarm.summary.error": "   error: %s",

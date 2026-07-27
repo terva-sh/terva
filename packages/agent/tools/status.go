@@ -268,6 +268,18 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 			}
 			sb.WriteByte('\n')
 		}
+		// Delegated spend, named separately. It is already inside the totals
+		// above — a subset, not an addition — but a single merged figure hides
+		// which is which, and the delegated part is the one that can dwarf the
+		// rest: one measured run spent $24.49 through sub-agents against $5.36
+		// of its own turns.
+		if del := agent.DelegatedCost(); del.CostUSD > 0 {
+			fmt.Fprintf(&sb, "  of which delegated to sub-agents: $%.4f", del.CostUSD)
+			if del.InputTokens > 0 || del.OutputTokens > 0 {
+				fmt.Fprintf(&sb, " (%s in / %s out)", fmtTokens(del.InputTokens+del.CacheReadTokens+del.CacheWriteTokens), fmtTokens(del.OutputTokens))
+			}
+			sb.WriteByte('\n')
+		}
 	}
 
 	return core.ToolResult{
@@ -287,6 +299,13 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 			"context_window": ctxWindow,
 			"context_used":   used,
 			"cumulative":     cum,
+			// A subset of cumulative, not an addition — see the text line.
+			"delegated": func() provider.Usage {
+				if haveAgent {
+					return agent.DelegatedCost()
+				}
+				return provider.Usage{}
+			}(),
 			// Unclipped, unlike the text line: a session record is read by
 			// tools, and the reason to persist this at all is so a claim made
 			// during the session can be checked against what was loaded.

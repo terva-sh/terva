@@ -303,9 +303,10 @@ type Agent struct {
 	lastSent *promptPrefix
 
 	// cacheAwareCompaction summarizes against the warm prefix instead of a
-	// bespoke one (engine feature cache_aware_compaction, default off). Guarded
-	// by mu and read at compaction time, so a settings toggle applies without
-	// rebuilding the agent. See SetCacheAwareCompaction.
+	// bespoke one (engine feature cache_aware_compaction; zero value off here,
+	// shipped default on in build/enginefeatures.go). Guarded by mu and read at
+	// compaction time, so a settings toggle applies without rebuilding the
+	// agent. See SetCacheAwareCompaction.
 	cacheAwareCompaction bool
 
 	// prefixGuard offers a compaction before a cache-invalidating change lands
@@ -1189,6 +1190,33 @@ func (a *Agent) RecordSideChannelUsage(u provider.Usage) {
 	}
 	a.cost.AddTotalOnly(u)
 	a.fireUsage(u, a.cost.CumulativeTotal())
+}
+
+// RecordDelegatedUsage books what a sub-agent spent on this session's behalf.
+//
+// The measured gap this closes: one workflow run spent $24.4936 while its
+// launching session's record ended at $5.3602 — 16% of what the task actually
+// cost. Nothing was missing from disk; every child writes its own cumulative,
+// and the workflow runner already summed them for a line on stderr. The number
+// was computed and then discarded at the process boundary.
+//
+// Booked as delegated rather than as the session's own, so the two stay
+// distinguishable — see CostTracker.AddDelegated. Callers must pass a
+// CUMULATIVE-TO-DELTA value: a child reports its running total, so a caller
+// watching one must book the increment, not the total, or a chatty child is
+// counted once per event it emits.
+func (a *Agent) RecordDelegatedUsage(u provider.Usage) {
+	if u == (provider.Usage{}) {
+		return
+	}
+	a.cost.AddDelegated(u)
+	a.fireUsage(u, a.cost.CumulativeTotal())
+}
+
+// DelegatedCost returns the part of the cumulative total that sub-agents spent
+// on this session's behalf. Always <= Cost().
+func (a *Agent) DelegatedCost() provider.Usage {
+	return a.cost.DelegatedTotal()
 }
 
 // acquire claims the single-flight guard. It returns a release func and

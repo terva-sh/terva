@@ -214,6 +214,18 @@ export interface PermissionRequest {
   // (workerConfirmer sets it; a session's own tool call leaves it empty). The
   // board correlates it to the swarm-lane tile of the stalled worker.
   agent?: string
+  // Derived narrow-grant options (bash only today): the daemon parsed the
+  // command and offers "always allow <display>"; a client that takes it
+  // echoes the patterns back in Decision.persist_scopes. Never derive from
+  // the preview — it is truncated.
+  scopes?: GrantScope[]
+}
+
+// One derived narrow-grant option: display is shown to the user
+// ("git status"), pattern is the RE2 a scoped grant persists.
+export interface GrantScope {
+  display: string
+  pattern: string
 }
 
 export interface AskRequest {
@@ -1545,6 +1557,10 @@ export interface Decision {
   // Save a permanent allow rule for this tool to the user's config — outlives
   // the session. Implies remember_tool for the current one.
   persist_tool?: boolean
+  // Narrow a persist_tool grant to these args patterns (echo the pattern
+  // fields of the request's scopes): one saved rule per pattern instead of
+  // a blanket tool rule, and no session-wide grant rides along.
+  persist_scopes?: string[]
 }
 
 export type Status = 'connecting' | 'open' | 'closed'
@@ -1710,6 +1726,64 @@ export type Verb =
   | 'worlds.save'
   | 'worlds.set_character_model'
   | 'worlds.update'
+  | 'workflows.get'
+  | 'workflows.list'
+
+// --- the workflow dashboard (ctrlproto/workflows.go) ---
+
+// WorkflowRunInfo is one row of workflows.list.
+//
+// `status` is never "running": telling a live run from a crashed one needs
+// liveness the run record cannot supply, so an unfinished run reads
+// "incomplete" — honest, and the same next action either way. `completed` of
+// `agents` is the number an operator actually reads, because it says how much
+// finished work is sitting on disk waiting to be replayed rather than paid for
+// a second time.
+export interface WorkflowRunInfo {
+  id: string
+  name?: string
+  status: 'incomplete' | 'done' | 'failed'
+  started?: string
+  ended?: string
+  completed: number
+  agents?: number
+  cached?: number
+  cost_usd?: number
+  cwd?: string
+  script_at?: string
+  error?: string
+  resumable?: boolean
+}
+
+export interface WorkflowRunsResult {
+  runs: WorkflowRunInfo[]
+}
+
+export interface WorkflowGetParams {
+  id: string
+}
+
+// WorkflowRunResult is one completed agent call. `label` is the script's name
+// for the slice — the generated agent id is unreadable for a fan-out that shares
+// a prompt preamble, which is what made these reports unfindable in the first
+// place. `bytes` ships alongside the body so a large report can be collapsed
+// behind its size instead of pasted into the page.
+export interface WorkflowRunResult {
+  label?: string
+  agent_id?: string
+  bytes?: number
+  result?: unknown
+}
+
+// WorkflowRunView is one run, opened. `script` is the source AS IT RAN, recorded
+// at launch — not read back from `script_at`, which may have moved, been edited,
+// or belong to another machine.
+export interface WorkflowRunView {
+  run: WorkflowRunInfo
+  script?: string
+  args?: unknown
+  results?: WorkflowRunResult[]
+}
 
 // VerbParams pins the params shape for the verbs whose Go struct this file
 // mirrors. It is deliberately PARTIAL: a verb absent here still type-checks its
@@ -1746,6 +1820,7 @@ export interface VerbParams {
   'cards.restore': CardRestoreParams
   'cards.revision': CardRevisionParams
   'usage.snapshot': UsageSnapshotParams
+  'workflows.get': WorkflowGetParams
 }
 
 // Card revision history. Every write to a card goes through cards.edit — the

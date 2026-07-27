@@ -23,6 +23,10 @@ type CostTracker struct {
 	mu       sync.Mutex
 	Total    provider.Usage
 	LastTurn provider.Usage
+	// Delegated is the part of Total spent by sub-agents on this session's
+	// behalf, rather than by its own turns. A subset of Total, never added
+	// alongside it.
+	Delegated provider.Usage
 }
 
 // Add folds u into the running total, records u as the last-turn
@@ -45,6 +49,33 @@ func (c *CostTracker) AddTotalOnly(u provider.Usage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Total = c.Total.Add(u)
+}
+
+// AddDelegated folds u into the running total AND into a second, delegated
+// tally. The total is what the session spent; the delegated tally is how much
+// of it a sub-agent spent on the session's behalf.
+//
+// Both, not either. A merged figure hides which is which, and a separate one
+// leaves the headline understating what the session caused — a coordinator
+// could spend an order of magnitude more than its record shows and truthfully
+// report the small number. Delegation is the one action whose cost is unbounded
+// by the coordinator's own turn, so it is the one that most needs saying.
+//
+// Total-only for the same reason as AddTotalOnly: a sub-agent's prompt is not
+// this session's context, and letting it overwrite the per-turn snapshot would
+// leave every compaction threshold reading a size the transcript never had.
+func (c *CostTracker) AddDelegated(u provider.Usage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Total = c.Total.Add(u)
+	c.Delegated = c.Delegated.Add(u)
+}
+
+// DelegatedTotal returns the delegated tally under the tracker lock.
+func (c *CostTracker) DelegatedTotal() provider.Usage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Delegated
 }
 
 // CumulativeTotal returns the cumulative usage under the tracker lock.

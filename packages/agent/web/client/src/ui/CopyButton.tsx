@@ -5,7 +5,14 @@ import { copyToClipboard } from './browser'
 // CopyButton copies `text` to the clipboard and flashes a check for ~1.2s. Used
 // on assistant replies (the raw markdown source, so fenced code round-trips) and
 // wherever a one-tap copy helps.
-export function CopyButton({ text, label }: { text: string; label?: string }) {
+//
+// `inline` picks the variant. The default is bubble chrome: pinned to a message
+// corner and invisible until the row is hovered, which is right when the copy is
+// incidental to reading. Anywhere it is a control in its own right — a header
+// bar over a code block, a row holding a command meant to be run — that default
+// renders NOTHING a user can see or reach, and being absolutely positioned it
+// does not even sit where it was placed. Pass `inline` there.
+export function CopyButton({ text, label, inline }: { text: string; label?: string; inline?: boolean }) {
   const [copied, setCopied] = useState(false)
   const onClick = useCallback(() => {
     void copyToClipboard(text).then((ok) => {
@@ -16,7 +23,12 @@ export function CopyButton({ text, label }: { text: string; label?: string }) {
   }, [text])
   const title = copied ? t('Copied') : label || t('Copy')
   return (
-    <button class={`copy-btn${copied ? ' copied' : ''}`} title={title} aria-label={title} onClick={onClick}>
+    <button
+      class={`copy-btn${inline ? ' inline' : ''}${copied ? ' copied' : ''}`}
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+    >
       {copied ? (
         <svg
           viewBox="0 0 24 24"

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"terva.sh/terva/packages/provider"
 )
 
 // Agent is one supervised task. Public fields are immutable after
@@ -171,6 +173,13 @@ type Agent struct {
 	// which replays those same events through IngestEvent. Guarded by mu.
 	costUSD float64
 
+	// usage is the same figure with its token counts, when the backend
+	// reported them. Kept beside costUSD rather than replacing it because a
+	// foreign backend may price its work without reporting tokens, and a
+	// dollar figure with zero tokens beside it is honest — it says "not
+	// reported" rather than "none". Guarded by mu.
+	usage provider.Usage
+
 	// OnTurnEnd, if set, fires once per TASK-level turn_end the runner
 	// observes from the child daemon — i.e. once each time the child's
 	// ag.Prompt returns, not after every internal turn of its
@@ -293,16 +302,21 @@ func (a *Agent) setLastAssistant(txt string) {
 	a.mu.Unlock()
 }
 
-// setCost records the worker's cumulative spend from a task_end. The value is
-// the vendor's running session total (not a per-turn delta), so it REPLACES the
-// stored cost rather than adding to it. A non-positive value is ignored, so a
-// task_end with no cost never zeroes a real figure.
-func (a *Agent) setCost(usd float64) {
-	if usd <= 0 {
+// setUsage records the worker's cumulative usage. The value is the vendor's
+// running session total (not a per-turn delta), so it REPLACES the stored
+// figure rather than adding to it. A zero value is ignored, so an event with no
+// usage never wipes a real one.
+//
+// Cumulative-not-delta is why a parent booking this must diff against what it
+// last saw: a child emits one of these per turn, and adding them would count
+// the same spend once per event.
+func (a *Agent) setUsage(u provider.Usage) {
+	if u == (provider.Usage{}) {
 		return
 	}
 	a.mu.Lock()
-	a.costUSD = usd
+	a.usage = u
+	a.costUSD = u.CostUSD
 	a.mu.Unlock()
 }
 

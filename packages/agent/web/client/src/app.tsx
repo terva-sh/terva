@@ -50,6 +50,9 @@ import type {
   WireEvent,
   WireMessage,
   WireUsage,
+  WorkflowRunInfo,
+  WorkflowRunsResult,
+  WorkflowRunView,
   WorktreeCollectItem,
   WorktreeView,
   WorktreeViewItem,
@@ -63,6 +66,8 @@ import { ModelParamsForm } from './features/models/ModelParamsForm'
 import { ModelPicker } from './features/models/ModelPicker'
 import { SessionsBoard } from './features/board/SessionsBoard'
 import { SwarmLane } from './features/board/SwarmLane'
+import { WorkflowLane } from './features/board/WorkflowLane'
+import { WorkflowRunDetail } from './features/board/WorkflowRunDetail'
 import { PanelLanding } from './features/landing/PanelLanding'
 import { applyBoardBusy, forgetBoardBusy, type BoardBusy } from './platform/board/store'
 import { applyBoardApproval, forgetBoardApprovals, waitingByAgent, type BoardApprovals } from './platform/board/approvals'
@@ -201,6 +206,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     () => (localStorage.getItem('terva_viewmode') === 'board' ? 'board' : 'focus'),
   )
   const viewModeRef = useRef(viewMode)
+  const wfLiveRef = useRef(false)
   // The board's second lane: the workspace swarm (the tasks surface), fetched
   // while the board is open and refreshed by surface_updated("tasks").
   const [boardTasks, setBoardTasks] = useState<TaskInfo[]>([])
@@ -220,6 +226,20 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // its dispatching session's stream — the focused one or a board sub); read only
   // in board mode, to badge the stalled lane tile.
   const [boardApprovals, setBoardApprovals] = useState<BoardApprovals>({})
+  // The board's THIRD lane: workflow runs this host has on disk. Read from the
+  // run records, not from a live engine — `terva workflow run` is a separate
+  // foreground process this daemon never sees, so what is knowable is what a run
+  // LEFT. `workflowsOn` starts true and latches off the first time the daemon
+  // answers `unsupported`, which is how a build without the controller (or a
+  // replay carrier, which has no run root at all) renders no lane instead of an
+  // empty one that looks like "no runs".
+  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRunInfo[]>([])
+  const [workflowsOn, setWorkflowsOn] = useState(true)
+  // The opened run: null while none, and while one is loading (the modal shows
+  // its own loading state off `wfOpen`).
+  const [wfOpen, setWfOpen] = useState('')
+  const [wfView, setWfView] = useState<WorkflowRunView | null>(null)
+  const [wfErr, setWfErr] = useState('')
   const [curInfo, setCurInfo] = useState<SessionInfo | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
   const [queued, setQueued] = useState<string[]>([])
@@ -287,6 +307,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   paneOpenRef.current = paneOpen
   activeSurfaceRef.current = activeSurface
   viewModeRef.current = viewMode
+  // Whether any run could still be moving. Read by the workflow poll below, so
+  // a board full of finished runs stops re-scanning journals it already read.
+  wfLiveRef.current = workflowRuns.some((r) => r.status === 'incomplete')
 
   const cycleToolView = useCallback(() => {
     setToolView((v) => {
@@ -474,6 +497,42 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       setBoardApprovals((s) => forgetBoardApprovals(s, new Set(tasks.map((tk) => tk.id))))
     } catch {
       setBoardTasks([])
+    }
+  }, [])
+
+  // Fetch the workflow run list for the board's third lane. Session-independent
+  // (a run belongs to the workspace), so it passes no session address at all.
+  //
+  // An `unsupported` refusal is a capability answer, not a failure: it means
+  // this daemon does not serve the verb, and the lane should disappear rather
+  // than sit there empty. Any other error leaves the last list up — a dropped
+  // poll should not blank a lane the operator is reading.
+  const fetchWorkflowRuns = useCallback(async () => {
+    const c = clientRef.current
+    if (!c) return
+    try {
+      const res = await c.send<WorkflowRunsResult>('workflows.list', undefined, '')
+      setWorkflowRuns(res.runs ?? [])
+      setWorkflowsOn(true)
+    } catch (e) {
+      if (String((e as { message?: string })?.message || '').startsWith('unsupported')) {
+        setWorkflowsOn(false)
+        setWorkflowRuns([])
+      }
+    }
+  }, [])
+
+  // Open one run: its record, the script as it ran, and the reports it journaled.
+  const openWorkflowRun = useCallback(async (id: string) => {
+    const c = clientRef.current
+    if (!c) return
+    setWfOpen(id)
+    setWfView(null)
+    setWfErr('')
+    try {
+      setWfView(await c.send<WorkflowRunView>('workflows.get', { id }, ''))
+    } catch (e) {
+      setWfErr((e as { message?: string })?.message || t('could not open that run'))
     }
   }, [])
 
@@ -1014,6 +1073,29 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     }, 4000)
     return () => clearInterval(id)
   }, [viewMode, refreshSessions, fetchBoardTasks, clearBoardSubs])
+
+  // The workflow lane on its own, slower cadence, and only while something could
+  // still be moving.
+  //
+  // There is no broadcast to hang this on: a run is written by a separate
+  // foreground process the daemon knows nothing about, so polling is the only
+  // way the lane learns anything. It is also not free — each poll re-reads every
+  // run's journal to count what completed — so it stops as soon as every run has
+  // closed. A run that starts while the board sits open needs the lane's Refresh,
+  // which is the honest trade until a run can announce itself.
+  // Gated on `status` and not just on viewMode, because a panel that BOOTS into
+  // board mode (the view is persisted) runs this effect before the socket is
+  // open. A send on a still-connecting socket rejects, and with viewMode as the
+  // only dependency nothing would ever change again — the lane would sit empty
+  // for the life of the page. Same shape that once broke the persona shelves.
+  useEffect(() => {
+    if (viewMode !== 'board' || !workflowsOn || status !== 'open') return
+    fetchWorkflowRuns()
+    const id = setInterval(() => {
+      if (wfLiveRef.current) fetchWorkflowRuns()
+    }, 10000)
+    return () => clearInterval(id)
+  }, [viewMode, workflowsOn, status, fetchWorkflowRuns])
 
   // Keep the board's live subscriptions in step with the live tiles: when the
   // set of live sessions changes (a materialize, a delete, a new spawn), re-aim
@@ -1750,6 +1832,18 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         />
       )}
 
+      {wfOpen && (
+        <WorkflowRunDetail
+          view={wfView}
+          err={wfErr}
+          onClose={() => {
+            setWfOpen('')
+            setWfView(null)
+            setWfErr('')
+          }}
+        />
+      )}
+
       {/* The settings form OWNS the overlay while it is open. Leaving the model
           list behind it invites picking a second model mid-edit, and the typing
           would go to whichever one the form still thought it was editing. */}
@@ -1873,6 +1967,13 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
                   localStorage.setItem('terva_viewmode', 'focus')
                 }}
               />
+              {workflowsOn && (
+                <WorkflowLane
+                  runs={workflowRuns}
+                  onOpen={openWorkflowRun}
+                  onRefresh={fetchWorkflowRuns}
+                />
+              )}
             </div>
           ) : (
             <>

@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -276,4 +279,180 @@ func (h gateHandle) AwaitTask(context.Context) Outcome {
 	}
 	raw, _ := json.Marshal("ok: " + h.task)
 	return Outcome{AgentID: h.id, Result: raw}
+}
+
+// TW-041. `label` was narration only: it reached progress() and nothing else,
+// so the durable artifacts — the agent's state dir and the journal row — were
+// named after the shared prompt preamble. Reading a row back to a slice meant
+// matching agent_id through the narration line that printed both, and narration
+// is a stderr stream that an interrupted run leaves nowhere.
+func TestLabelReachesTheSpawnAndTheJournal(t *testing.T) {
+	eng := &fakeEngine{}
+	opts := runOpts(t)
+	res, err := Run(context.Background(), eng, []byte(testScript), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var labels []string
+	for _, r := range eng.requests {
+		labels = append(labels, r.Label)
+	}
+	for _, want := range []string{"a", "b"} {
+		if !slices.Contains(labels, want) {
+			t.Errorf("label %q never reached a SpawnRequest; got %v", want, labels)
+		}
+	}
+	// The unlabelled third agent must not invent one — its id stays slugged
+	// from the task, exactly as before.
+	for _, r := range eng.requests {
+		if strings.Contains(r.Task, "gamma") && r.Label != "" {
+			t.Errorf("an unlabelled agent() gained label %q", r.Label)
+		}
+	}
+
+	rows := readJournalRows(t, opts.Root, res.RunID)
+	got := map[string]bool{}
+	for _, r := range rows {
+		if r.Type == "result" && r.Label != "" {
+			got[r.Label] = true
+		}
+	}
+	for _, want := range []string{"a", "b"} {
+		if !got[want] {
+			t.Errorf("journal has no result row labelled %q — a row still cannot be read back to a slice", want)
+		}
+	}
+}
+
+// The label must NOT change what a call is keyed by. Resume matches on key
+// alone, and key hashes the full (prompt, opts) pair — label included, as it
+// always did. Rewriting how an id is NAMED must not invalidate a journal.
+func TestResumeStillReplaysAfterLabelsReachTheSpawn(t *testing.T) {
+	opts := runOpts(t)
+	eng := &fakeEngine{}
+	res, err := Run(context.Background(), eng, []byte(testScript), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng.spawns != 3 {
+		t.Fatalf("first run spawned %d, want 3", eng.spawns)
+	}
+
+	eng2 := &fakeEngine{}
+	opts2 := opts
+	opts2.ResumeID = res.RunID
+	if _, err := Run(context.Background(), eng2, []byte(testScript), opts2); err != nil {
+		t.Fatal(err)
+	}
+	if eng2.spawns != 0 {
+		t.Errorf("resume spawned %d agents; every call should have replayed", eng2.spawns)
+	}
+}
+
+// A journal written BEFORE this change has no `label` field at all. It must
+// still resume — the field is additive and resume never reads it.
+func TestJournalWrittenWithoutLabelsStillResumes(t *testing.T) {
+	opts := runOpts(t)
+	eng := &fakeEngine{}
+	res, err := Run(context.Background(), eng, []byte(testScript), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Rewrite the journal as the old code would have written it: same rows,
+	// no label key. A fixture that still contained the field would prove
+	// nothing about the format it is meant to stand in for.
+	path := filepath.Join(opts.Root, res.RunID, "journal.jsonl")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		if _, had := m["label"]; !had {
+			t.Fatal("fixture is not exercising anything: the row had no label to strip")
+		}
+		delete(m, "label")
+		b, _ := json.Marshal(m)
+		out.Write(b)
+		out.WriteByte('\n')
+	}
+	if err := os.WriteFile(path, []byte(out.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	eng2 := &fakeEngine{}
+	opts2 := opts
+	opts2.ResumeID = res.RunID
+	if _, err := Run(context.Background(), eng2, []byte(testScript), opts2); err != nil {
+		t.Fatalf("a pre-label journal failed to resume: %v", err)
+	}
+	if eng2.spawns != 0 {
+		t.Errorf("resume from a pre-label journal spawned %d agents; want 0", eng2.spawns)
+	}
+}
+
+// journalLine mirrors the on-disk row deliberately rather than importing the
+// writer's struct: what this asserts is the FORMAT — the field names a resume
+// (and every reader in runs/) matches on — and a mirror is what makes a rename
+// on either side show up here instead of passing silently.
+type journalLine struct {
+	Type  string `json:"type"`
+	Label string `json:"label"`
+}
+
+func readJournalRows(t *testing.T, root, runID string) []journalLine {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, runID, "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []journalLine
+	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var r journalLine
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(err)
+		}
+		rows = append(rows, r)
+	}
+	return rows
+}
+
+// TW-039 acceptance: a resumed run must not double-count the agents it replayed
+// from the journal. It does not, because a journal hit returns before the spawn
+// and therefore before the spend is folded in — but that is a property of where
+// an early return sits, which is exactly the kind of thing a later refactor
+// moves without noticing. Pinned.
+func TestResumeDoesNotRebillReplayedAgents(t *testing.T) {
+	opts := runOpts(t)
+	eng := &fakeEngine{}
+	first, err := Run(context.Background(), eng, []byte(testScript), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.CostUSD <= 0 {
+		t.Fatalf("first run reported $%.4f — the fixture bills nothing, so this proves nothing", first.CostUSD)
+	}
+
+	eng2 := &fakeEngine{}
+	opts2 := opts
+	opts2.ResumeID = first.RunID
+	second, err := Run(context.Background(), eng2, []byte(testScript), opts2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng2.spawns != 0 {
+		t.Fatalf("resume spawned %d agents; the run is not fully replayed so the cost check below is meaningless", eng2.spawns)
+	}
+	if second.CostUSD != 0 {
+		t.Errorf("a fully replayed run billed $%.4f — replayed agents are being charged twice", second.CostUSD)
+	}
 }

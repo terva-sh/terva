@@ -13,6 +13,7 @@ import (
 
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/provider"
 )
 
 // execRunner spawns `terva --swarm-agent <inbox> --session <path>` in
@@ -87,8 +88,8 @@ func IngestEvent(ev Event, log *EventLog, sink Sink, a *Agent) {
 		// Record the worker's cumulative spend as it flows by, so the snapshot
 		// shows current cost. Both event shapes are cumulative — see setCost —
 		// so this is last-wins, never a sum.
-		if cost, ok := costFromEvent(ev); ok {
-			a.setCost(cost)
+		if u, ok := costFromEvent(ev); ok {
+			a.setUsage(u)
 		}
 	}
 	if step, errMsg, ok := taskLevelTurnEnd(ev); ok && a != nil {
@@ -119,20 +120,45 @@ func IngestEvent(ev Event, log *EventLog, sink Sink, a *Agent) {
 //     the claude translator.
 //
 // Both numbers are cumulative session totals, not per-turn deltas.
-func costFromEvent(ev Event) (float64, bool) {
+func costFromEvent(ev Event) (provider.Usage, bool) {
 	switch ev.Type {
 	case "usage":
+		// The `usage` event carries the child's whole cumulative, not just its
+		// price. Reading only cost_usd was enough while the figure never left
+		// the dashboard; it is not enough to book against a parent session,
+		// whose totals are tokens AND dollars.
 		if cum, ok := ev.Data["cumulative"].(map[string]any); ok {
-			if cost, ok := cum["cost_usd"].(float64); ok {
-				return cost, true
+			u := usageFromMap(cum)
+			if u != (provider.Usage{}) {
+				return u, true
 			}
 		}
 	case "task_end":
-		if cost, ok := ev.Data["cost_usd"].(float64); ok {
-			return cost, true
+		// A foreign backend may price its work without reporting tokens at
+		// all. Cost alone is honest — zero tokens beside a real dollar figure
+		// says "not reported", which is true.
+		if cost, ok := ev.Data["cost_usd"].(float64); ok && cost > 0 {
+			return provider.Usage{CostUSD: cost}, true
 		}
 	}
-	return 0, false
+	return provider.Usage{}, false
+}
+
+// usageFromMap decodes the wire's cumulative object. JSON numbers arrive as
+// float64 through the map, so the token counts are converted rather than
+// asserted.
+func usageFromMap(m map[string]any) provider.Usage {
+	num := func(k string) float64 {
+		v, _ := m[k].(float64)
+		return v
+	}
+	return provider.Usage{
+		InputTokens:      int(num("input_tokens")),
+		OutputTokens:     int(num("output_tokens")),
+		CacheReadTokens:  int(num("cache_read_tokens")),
+		CacheWriteTokens: int(num("cache_write_tokens")),
+		CostUSD:          num("cost_usd"),
+	}
 }
 
 // swarmAgentArgsOpts captures every dynamic input to swarmAgentArgs

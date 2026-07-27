@@ -150,6 +150,24 @@ func (s *Service) RestoreSession(ctx context.Context, p ctrlproto.RestoreSession
 	return r, err
 }
 
+var _ ctrlproto.WorkflowsController = (*Service)(nil)
+
+// The workflow dashboard, read-only. Session-independent: a run belongs to the
+// workspace, not to whichever session happens to be open, so both calls pass an
+// empty sess like the archive listing above does.
+
+func (s *Service) WorkflowRuns(ctx context.Context) ([]ctrlproto.WorkflowRunInfo, error) {
+	var r ctrlproto.WorkflowRunsResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodWorkflowsList, nil, &r)
+	return r.Runs, err
+}
+
+func (s *Service) WorkflowRun(ctx context.Context, p ctrlproto.WorkflowGetParams) (ctrlproto.WorkflowRunView, error) {
+	var r ctrlproto.WorkflowRunView
+	err := s.c.Call(ctx, "", ctrlproto.MethodWorkflowsGet, p, &r)
+	return r, err
+}
+
 func (s *Service) Usage(ctx context.Context, sess string) (core.WireUsage, error) {
 	var r ctrlproto.UsageResult
 	err := s.c.Call(ctx, sess, ctrlproto.MethodUsageGet, nil, &r)
