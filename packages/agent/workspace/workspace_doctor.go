@@ -133,7 +133,15 @@ func cardsDoctor(ctx context.Context, w *Workspace, s *wsSession, c card.Card, p
 		user += "\n" + scene
 	}
 
-	return doctorRun(ctx, cl, model, system, user, fields, s)
+	res, err := doctorRun(ctx, cl, model, system, user, fields, s)
+	if err != nil {
+		return res, err
+	}
+	// Post-#398 a user persona slugging to the machine stem genuinely
+	// shadows the built-in here — announce it rather than run silently on
+	// an identity the author may have forgotten they overrode.
+	res.Note = build.MachinePersonaNotice(personaName, persona, res.Note)
+	return res, nil
 }
 
 // doctorRun is the doctor's one model call: stream, book, parse. Split from

@@ -140,6 +140,9 @@ func sessionsDoctor(ctx context.Context, s *wsSession, p ctrlproto.SessionDoctor
 	if err != nil {
 		return res, err
 	}
+	// Announce a shadowed dramaturg (see MachinePersonaNotice) — the
+	// narrowing below keeps notes, so this survives focus/promote runs too.
+	res.Note = build.MachinePersonaNotice(dramaturgPersona, persona, res.Note)
 	// A narrowed run keeps only what its button promised: mark-as-lore returns
 	// only lore/threads (no promotions, no scene-state rewrites), promote
 	// returns only the named character's promotion.

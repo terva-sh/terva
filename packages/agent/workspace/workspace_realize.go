@@ -90,6 +90,8 @@ func proposeRealize(ctx context.Context, s *wsSession, p ctrlproto.RealizeParams
 	if err != nil {
 		return ctrlproto.RealizeResult{}, err
 	}
+	// Announce a shadowed cartographer (see MachinePersonaNotice).
+	proposal.Note = build.MachinePersonaNotice(realizePersona, persona, proposal.Note)
 	return ctrlproto.RealizeResult{Proposal: proposal}, nil
 }
 

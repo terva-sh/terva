@@ -13,6 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/i18n"
 )
 
 // BuiltinPersonasFS embeds the shipped Persona crew. Mirrors the skills
@@ -236,6 +237,39 @@ func ResolvePersona(override string) (Persona, error) {
 		return p, err
 	}
 	return ComposeCharter(p)
+}
+
+// MachineBoundPersonaStems names the built-in personas machine flows resolve
+// BY LITERAL STEM — the card doctor ("seppa"), the story editor
+// ("toimittaja"), the session dramaturg ("dramaturgi"), the world realizer
+// ("kartoittaja") — rather than by the user picking one. A user persona
+// whose folded slug equals one of these stems shadows the built-in inside
+// those flows too. That is deliberate (it is how the machine personas are
+// customized) but silent, and an override need not honor the structured
+// output contract the flow parses — so each flow announces the shadow via
+// MachinePersonaNotice, and a workspace test asserts every flow's stem is
+// enrolled here (the self-enrolling-set pattern): a new machine-bound stem
+// cannot ship without joining this set.
+var MachineBoundPersonaStems = map[string]bool{
+	"seppa":       true,
+	"toimittaja":  true,
+	"dramaturgi":  true,
+	"kartoittaja": true,
+}
+
+// MachinePersonaNotice composes a machine flow's user-facing note when stem
+// resolved to a persona other than the built-in, prepending the shadow
+// announcement to the flow's own note (which may be empty). With the
+// built-in in play it returns note unchanged.
+func MachinePersonaNotice(stem string, p Persona, note string) string {
+	if p.Builtin() {
+		return note
+	}
+	n := i18n.T("this run used your persona override for %q (%s), not the built-in", stem, p.Source)
+	if strings.TrimSpace(note) == "" {
+		return n
+	}
+	return n + "\n" + note
 }
 
 // selectPersona is the precedence walk described on ResolvePersona, returning
