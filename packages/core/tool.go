@@ -39,6 +39,14 @@ type ToolResult struct {
 	// wire (status-bar Δ segment on remote clients); zero for everything else.
 	LinesAdded   int
 	LinesRemoved int
+	// Shared are files this call published for the human reading the transcript
+	// (see [SharedFile]). Like Details it is not sent to the LLM — the model's
+	// copy is a line of Content saying the share happened — but unlike Details it
+	// is first-class, because Details stops at the event wire and a card only the
+	// in-process UI can see is no use to the remote panel this exists for.
+	//
+	// Each entry's CallID is filled in by the agent loop, not by the tool.
+	Shared []SharedFile
 }
 
 // Registry is a name->Tool map.

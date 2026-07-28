@@ -22,6 +22,8 @@ var featureConstants = map[string]string{
 	"FeatureWorkspaceEvents": FeatureWorkspaceEvents,
 	"FeatureHistoryWindow":   FeatureHistoryWindow,
 	"FeatureStage":           FeatureStage,
+	"FeatureAttachments":     FeatureAttachments,
+	"FeatureSharedFiles":     FeatureSharedFiles,
 }
 
 // TestServerHelloAdvertisesServeGatedFeatures pins the invariant that every

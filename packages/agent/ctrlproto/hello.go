@@ -127,6 +127,29 @@ const (
 	// where the surface actually exists; it gates presentation, not a method group
 	// (the library verbs the Stage app uses live in the always-on control group).
 	FeatureStage = "stage"
+	// FeatureAttachments advertises that this CARRIER can accept a file upload,
+	// so a client may stage arbitrary files and name them in [PromptParams].
+	//
+	// Root-appended rather than base, because it is a property of the carrier
+	// and not of the protocol: uploads ride an HTTP route the web server mounts
+	// (POST /upload), and a native client on a unix socket has nowhere to send
+	// bytes. Resolving ids on prompt is unconditional — the daemon does that for
+	// whoever asks — so nothing in this package gates on the feature. It exists
+	// so a panel shows a drop target only where a drop can actually go.
+	//
+	// The inbound-image path is FeatureImages and is unaffected: images still
+	// ride the prompt frame inline, because vision needs the bytes in the turn.
+	FeatureAttachments = "attachments"
+	// FeatureSharedFiles advertises that this CARRIER serves the files an agent
+	// published with share_file, so a client may render them as things to view,
+	// play, or download rather than as text about a file.
+	//
+	// Root-appended for FeatureAttachments' reason, pointed the other way:
+	// downloads ride an HTTP route the web server mounts (GET /shared/), and a
+	// native client on a unix socket has nowhere to fetch from. The RECORD still
+	// reaches every client on the wire (core.SharedFile rides the tool result
+	// either way) — what the feature gates is whether there is a link behind it.
+	FeatureSharedFiles = "shared-files"
 )
 
 // Hello is the handshake frame each side sends once at connect time. The
@@ -170,6 +193,16 @@ type Hello struct {
 	// bound is what lets the panel say "this file is 19.6 MB, the limit is 24 MB"
 	// instead. Carrier-owned (web/conn.go), so the composition root sets it.
 	MaxUploadBytes int64 `json:"max_upload_bytes,omitempty"`
+	// MaxAttachmentBytes is the largest file the carrier's ATTACHMENT route will
+	// stage, or 0 when the carrier has none (see [FeatureAttachments]).
+	//
+	// Separate from MaxUploadBytes because the two bounds constrain different
+	// things and differ by an order of magnitude: MaxUploadBytes is what fits in
+	// one wire frame, while an attachment never enters a frame at all — it is
+	// streamed to disk over HTTP and only its id rides the prompt. A client that
+	// checks an attachment against the frame bound would refuse files the daemon
+	// would happily take. Carrier-owned, so the composition root sets it.
+	MaxAttachmentBytes int64 `json:"max_attachment_bytes,omitempty"`
 }
 
 const (

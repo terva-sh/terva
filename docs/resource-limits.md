@@ -50,10 +50,15 @@ and the connection survives.
 | MCP server stdout | 4 MiB | `mcp` (default) | skip frame; that response times out, connection lives |
 | ACP JSON-RPC | 16 MiB | `acp.acpMaxFrameBytes` | skip frame |
 | `terva rpc` NDJSON | 16 MiB | `rpc.rpcMaxFrameBytes` | skip frame + error frame to caller |
-| Web WebSocket message | 16 MiB | `web/conn.go` `maxFrameBytes` | **connection closed** (WebSocket `SetReadLimit`, not lineframe) |
+| Web WebSocket message | 32 MiB | `web/conn.go` `maxFrameBytes` | **connection closed** (WebSocket `SetReadLimit`, not lineframe) |
 
-The 16 MiB tier (ACP, rpc, web) carries model prompts/results, which run larger
-than a control frame; the 4 MiB tier is the historical carrier ceiling.
+The 16 MiB tier (ACP, rpc) carries model prompts/results, which run larger than
+a control frame; the 4 MiB tier is the historical carrier ceiling. The web
+carrier sits above both at 32 MiB, and advertises `Hello.MaxUploadBytes`
+(≈24 MiB, the base64-inflated file that fits inside one) so a client can refuse
+an oversized file *before* sending it — an over-limit frame is not an error, it
+closes the socket, and the request then dies with a generic dead-socket message
+that names nothing the user can act on.
 
 ## Provider event streams (network-facing, reject)
 
@@ -124,6 +129,10 @@ runaway server can't OOM the process.
 | Boundary | Limit | Where | On exceed |
 | --- | --- | --- | --- |
 | Character card (PNG import) | 8 MiB | `card.maxCharaBytes` | rejected |
+| Web file attachment (per file) | 100 MB | `attach.MaxBytes` | rejected whole (413) |
+| Web file attachment (whole staging area) | 2 GiB | `attach.CapBytes` | oldest evicted, sweeper |
+| Shared file, agent → user (per file) | 100 MB | `attach.MaxBytes` | rejected whole (tool error) |
+| Shared file (whole share area) | 2 GiB | `attach.ShareCapBytes` | oldest evicted, sweeper |
 | Model-turn image-recovery rounds | 16 | `core.maxImageRecoveryRounds` | stop peeling images off the turn |
 | TUI clipboard paste | 2 MiB | `tui.maxPasteBytes` | paste truncated |
 
@@ -136,6 +145,43 @@ line is permanent, transport failure is transient and wrapped), the ACP/rpc
 read loops through their package tests, the `read`/`grep` truncation paths
 (`tools/*_test.go`), and the error-sidecar bound (`core/session_error_test.go`).
 
+Also directly exercised: the attachment caps
+(`packages/agent/attach/attach_test.go` — the per-file limit rejects whole and
+leaves nothing behind, the exact-limit boundary is accepted, and the sweeper's
+TTL/size/grace rules), the same for the outbound direction
+(`packages/agent/attach/share_test.go`, which also pins that each store sweeps on
+its OWN policy — a share still young at the inbound TTL is the case that breaks
+if the constants are ever read globally), and both routes' refusals
+(`packages/agent/web/upload_test.go` — over-cap, cross-origin, unauthenticated,
+sessionless; `shared_test.go` — unauthenticated, unresolvable, and the inline
+allowlist).
+
 Boundaries without a dedicated bound-checking test — worth adding as they're
 touched — include the image-gen body caps, the character-card cap, the Discord
 attachment cap, and the WebSocket frame limit.
+
+## A note on the attachment staging area
+
+The per-file cap is the only one here that a user meets routinely, and it is a
+**reject**, not a truncate: half an export or half a database dump is silent
+corruption, and unlike a wire frame there is no long-lived stream to keep alive
+by skipping it. The route streams the multipart part straight to disk rather
+than letting `FormFile` materialize it first, so a 100 MB upload is written
+once, into a directory terva owns and sweeps — not twice, with the first copy
+left in `os.TempDir`.
+
+The area's own bound is enforced by a sweep rather than at write time (24h TTL,
+then oldest-first eviction over `CapBytes`), with a one-hour grace window that
+protects a just-staged file. Without it, a burst of uploads could evict the very
+files the message being composed is about to reference — the one deletion here
+that waiting cannot undo.
+
+The outbound area (`$TERVA_HOME/shared`, files the agent handed the user with
+`share_file`) runs the same machinery with a **7-day** TTL. The asymmetry is
+deliberate rather than an oversight: an uploaded file has done its job the moment
+the agent has read it, while a shared one IS the deliverable, and the obvious way
+to want it is to reopen the session days later. The size cap and grace window are
+unchanged — the backstop is about not letting a runaway agent fill the disk, and
+that concern does not care which way the files were going. Each store carries its
+own `attach.Policy` and starts its own sweeper, so neither retention can silently
+become the other's.

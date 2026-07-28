@@ -108,4 +108,67 @@ describe('sequenceConversationItems gap markers', () => {
     const entries = sequenceConversationItems(items, 'grouped')
     expect(entries.map((e) => e.key)).toEqual(['u1', 'tg-t1', 'gap-a1', 'a1'])
   })
+
+  // A shared file must never end up inside a tool group. ToolGroup renders
+  // collapsed by default, so a card left in there is a download the user never
+  // sees — which is the whole feature not happening.
+  describe('shared files', () => {
+    const shared = (id: string, file: string): Item => ({
+      kind: 'tool',
+      id,
+      name: 'share_file',
+      args: {},
+      shared: [{ id: 'shr_' + id, call_id: id, name: file, kind: 'document' }],
+    })
+
+    it('lifts a share out of the collapsed group it was published from', () => {
+      const items = [tool('t1'), shared('t2', 'report.pdf')]
+      const entries = sequenceConversationItems(items, 'grouped')
+      expect(entries.map((e) => e.kind)).toEqual(['tool-group', 'shared'])
+      expect(entries.map((e) => e.key)).toEqual(['tg-t1', 'sh-shr_t2'])
+    })
+
+    it('puts the card after the group rather than splitting the run', () => {
+      const items = [tool('t1'), shared('t2', 'a.png'), tool('t3')]
+      const entries = sequenceConversationItems(items, 'grouped')
+      expect(entries.map((e) => e.key)).toEqual(['tg-t1', 'sh-shr_t2'])
+      expect((entries[0] as { tools: Item[] }).tools).toHaveLength(3)
+    })
+
+    it('follows its own row when tools are not grouped', () => {
+      const items = [user('u1'), shared('t1', 'clip.mp3'), user('u2')]
+      const entries = sequenceConversationItems(items, 'full')
+      expect(entries.map((e) => e.key)).toEqual(['u1', 't1', 'sh-shr_t1', 'u2'])
+    })
+
+    // Even where the tool ROW is suppressed, the card is not: hiding the
+    // machinery is not the same as hiding what it produced for you.
+    it.each(['minimal', 'hidden'] as const)('survives %s tool view', (toolView) => {
+      const items = [shared('t1', 'export.csv')]
+      const entries = sequenceConversationItems(items, toolView)
+      expect(entries.map((e) => e.kind)).toContain('shared')
+    })
+
+    it('emits one card per file, in order', () => {
+      const items: Item[] = [
+        {
+          kind: 'tool',
+          id: 't1',
+          name: 'share_file',
+          args: {},
+          shared: [
+            { id: 'shr_a', call_id: 't1', name: 'a.png', kind: 'image' },
+            { id: 'shr_b', call_id: 't1', name: 'b.pdf', kind: 'document' },
+          ],
+        },
+      ]
+      const entries = sequenceConversationItems(items, 'grouped')
+      expect(entries.map((e) => e.key)).toEqual(['tg-t1', 'sh-shr_a', 'sh-shr_b'])
+    })
+
+    it('leaves a transcript with no shares exactly as it was', () => {
+      const items = [user('u1'), tool('t1')]
+      expect(sequenceConversationItems(items, 'grouped').map((e) => e.kind)).toEqual(['item', 'tool-group'])
+    })
+  })
 })

@@ -24,6 +24,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"terva.sh/terva/packages/agent/attach"
 	"terva.sh/terva/packages/agent/ctrlproto"
 )
 
@@ -330,6 +331,25 @@ func newMux(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) *
 	// $TERVA_HOME, which must never boot without a credential. Kept above the "/"
 	// catch-all only for readability; ServeMux matches the longest prefix.
 	mux.Handle("/media/", authMiddleware(opts, securityHeaders(http.HandlerFunc(serveMedia))))
+	// File attachments the user drops on the composer. Auth-gated like /media/,
+	// and same-origin checked on top: a multipart POST is a CORS-simple request,
+	// so without that check a hostile page could write into the staging area of a
+	// no-auth loopback daemon. Never precached, for the same reason /media/ isn't.
+	// The bound is passed, not read inside the route, so this line is the single
+	// place it is decided — the same value serveWS advertises as
+	// MaxAttachmentBytes, which is what a client sizes a file against before
+	// spending a long upload on it.
+	mux.Handle(uploadPath, authMiddleware(opts, securityHeaders(uploadHandler(attach.NewStore(), attach.MaxBytes))))
+	// Files the AGENT shared back. Auth-gated like the two above and never
+	// precached; it sets its own Content-Security-Policy over the app's, because
+	// unlike /media/ the bytes here were chosen by the model. No origin check:
+	// this is a GET a browser makes by navigating or by an <img>/<audio> src, so
+	// there is often no Origin at all, and reading a file the owner's own agent
+	// produced is not a state change to defend against.
+	//
+	// The store is passed for uploadHandler's reason: which area is served is
+	// this line's decision, not something the route reaches out and decides.
+	mux.Handle(sharedPath, authMiddleware(opts, securityHeaders(sharedHandler(attach.NewShareStore()))))
 	// The Stage app (second MPA entry), mounted only when web_stage is enabled.
 	// ServeMux matches the longer /stage/ prefix over "/".
 	if opts.AllowStage {
@@ -383,17 +403,35 @@ var upgrader = websocket.Upgrader{
 	// clients) or one whose host matches the request host. The auth gate is the
 	// primary boundary; this closes the drive-by-CSRF hole a token in a query
 	// param would otherwise leave open.
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true
-		}
-		if u, err := url.Parse(origin); err == nil && strings.EqualFold(u.Host, r.Host) {
-			return true
-		}
-		fmt.Fprintf(os.Stderr, "terva web: rejected cross-origin handshake from %s (origin %q)\n", r.RemoteAddr, origin)
-		return false
-	},
+	CheckOrigin: func(r *http.Request) bool { return sameOrigin(r, "handshake") },
+}
+
+// sameOrigin reports whether a request may be honored given its Origin header.
+//
+// A missing Origin is allowed: native clients (terva attach, a curl script) send
+// none, and the header is not something a browser lets a page forge. An Origin
+// whose host matches the request's Host is same-origin and allowed. Anything
+// else is a cross-site request and refused.
+//
+// Both state-changing browser-reachable entry points share this. The WebSocket
+// needs it because a token in a query param would otherwise be drive-by
+// usable; the upload route needs it because multipart/form-data is a CORS-SIMPLE
+// content type, so the browser sends the POST without a preflight and only
+// withholds the response — by which time the file is already staged. In no-auth
+// loopback mode (hostAllowed accepts a loopback Host) that is the only thing
+// standing between a hostile page and the staging area.
+//
+// what names the rejected operation in the log line.
+func sameOrigin(r *http.Request, what string) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	if u, err := url.Parse(origin); err == nil && strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	fmt.Fprintf(os.Stderr, "terva web: rejected cross-origin %s from %s (origin %q)\n", what, r.RemoteAddr, origin)
+	return false
 }
 
 func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, w http.ResponseWriter, r *http.Request) {
@@ -426,6 +464,15 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	hello.CWD = opts.CWD
 	hello.Jailed = opts.Jailed
 	hello.MaxUploadBytes = maxUploadBytes
+	// This carrier mounts POST /upload, so a client may stage files and name
+	// them on a prompt. Advertised here rather than in the base hello because it
+	// is the CARRIER that can take bytes — a native client on a unix socket has
+	// no such route, and should not offer a drop target that goes nowhere.
+	hello.Features = append(hello.Features, ctrlproto.FeatureAttachments)
+	hello.MaxAttachmentBytes = attach.MaxBytes
+	// ...and GET /shared/, so the panel can turn a share record into something
+	// the user can actually click. Same carrier-not-protocol reasoning.
+	hello.Features = append(hello.Features, ctrlproto.FeatureSharedFiles)
 	if opts.AllowRestart {
 		hello.Features = append(hello.Features, ctrlproto.FeatureRestart)
 	}

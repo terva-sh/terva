@@ -1234,7 +1234,44 @@ func (a *Agent) acquire() (release func(), ok bool) {
 // sink must not block the caller for long; buffer as needed. Prompt is
 // single-flight: it returns ErrBusy if another Prompt/Continue/Compact
 // is already in progress.
+// UserMessageExtras is what a host attaches to a user turn beyond the words the
+// user typed: a preamble the host assembled, and metadata to stamp on the
+// stored message. The zero value is an ordinary prompt.
+//
+// Preamble becomes its OWN leading text block rather than being glued onto the
+// front of Text. The model sees the same thing either way — providers
+// concatenate a message's text blocks — but a client can then render the user's
+// words alone and present the preamble however it likes, instead of showing a
+// bubble whose first nine lines are machine prose. It also keeps the preamble
+// out of anything that reads "the user's message" for another purpose; the
+// session-title seed is the one that bit us.
+type UserMessageExtras struct {
+	Preamble string
+	Meta     map[string]string
+}
+
+// withMeta returns m with key set, without writing into the caller's map. The
+// extras a host hands Prompt are its own — one may well be a package-level table
+// reused across turns — and stamping into it would edit every message that ever
+// shared it.
+func withMeta(m map[string]string, key, value string) map[string]string {
+	out := make(map[string]string, len(m)+1)
+	for k, v := range m {
+		out[k] = v
+	}
+	out[key] = value
+	return out
+}
+
+// Prompt starts a turn with the user's text and any inline images.
 func (a *Agent) Prompt(ctx context.Context, text string, images []provider.ImageBlock, sink func(AgentEvent)) error {
+	return a.PromptExtra(ctx, text, images, UserMessageExtras{}, sink)
+}
+
+// PromptExtra is Prompt with a host-assembled preamble and message metadata.
+// See [UserMessageExtras]. Prompt is this with a zero value, so there is one
+// implementation and no twin to drift.
+func (a *Agent) PromptExtra(ctx context.Context, text string, images []provider.ImageBlock, extras UserMessageExtras, sink func(AgentEvent)) error {
 	release, ok := a.acquire()
 	if !ok {
 		return ErrBusy
@@ -1262,13 +1299,27 @@ func (a *Agent) Prompt(ctx context.Context, text string, images []provider.Image
 		}
 	}
 	content := []provider.Content{}
+	// The preamble leads, and stays a block of its own — see UserMessageExtras.
+	// It is deliberately NOT subject to BeforeUserMessage above: that guard
+	// judges what the USER said, and the preamble is the host's own words.
+	if extras.Preamble != "" {
+		content = append(content, provider.TextBlock{Text: extras.Preamble})
+	}
 	if text != "" {
 		content = append(content, provider.TextBlock{Text: text})
 	}
 	for _, img := range images {
 		content = append(content, img)
 	}
-	user := provider.Message{Role: provider.RoleUser, Content: content, Time: time.Now()}
+	user := provider.Message{Role: provider.RoleUser, Content: content, Time: time.Now(), Meta: extras.Meta}
+	// Record the preamble HERE, where it is prepended, rather than leaving each
+	// host to remember to say so alongside whatever else it stamped. A host that
+	// assembled a preamble and no metadata is not exotic — it is what "every
+	// attachment expired" looks like — and readers that skip the block key off
+	// this, so the fact and the block have to be produced together.
+	if extras.Preamble != "" {
+		user.Meta = withMeta(user.Meta, MetaPreamble, "true")
+	}
 
 	a.mu.Lock()
 	a.messages = append(a.messages, user)
@@ -2417,6 +2468,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 // a single tool-role message carrying all results.
 func (a *Agent) executeTools(ctx context.Context, msg provider.Message, tools Registry, sink func(AgentEvent)) (provider.Message, bool) {
 	var results []provider.Content
+	var shared []SharedFile
 	hadError := false
 
 	for _, c := range msg.Content {
@@ -2428,6 +2480,14 @@ func (a *Agent) executeTools(ctx context.Context, msg provider.Message, tools Re
 		if res.IsError {
 			hadError = true
 		}
+		// Stamp the call id here rather than trusting the tool with it: a tool
+		// cannot know its own call, so it also cannot claim another one's, and
+		// the client's card-to-row mapping is the loop's fact, not the tool's
+		// claim. Done before the sink so the live event carries it too.
+		for i := range res.Shared {
+			res.Shared[i].CallID = tc.ID
+		}
+		shared = append(shared, res.Shared...)
 		results = append(results, provider.ToolResultBlock{
 			CallID:  tc.ID,
 			Content: res.Content,
@@ -2436,11 +2496,22 @@ func (a *Agent) executeTools(ctx context.Context, msg provider.Message, tools Re
 		sink(EvToolResult{ID: tc.ID, Result: res})
 	}
 
-	return provider.Message{
+	out := provider.Message{
 		Role:    provider.RoleTool,
 		Content: results,
 		Time:    time.Now(),
-	}, hadError
+	}
+	// The shares ride the message's Meta, NOT its content: the model gets the
+	// text line each tool returned and nothing retrievable, while the record
+	// persists with the turn so a transcript reopened later still offers the
+	// downloads. A record that will not marshal is dropped rather than fatal —
+	// the turn's actual work is in Content, and losing a card must not lose it.
+	if len(shared) > 0 {
+		if raw, err := json.Marshal(shared); err == nil {
+			out.Meta = map[string]string{MetaShared: string(raw)}
+		}
+	}
+	return out, hadError
 }
 
 // agentCtxKey carries the executing *Agent through the context passed
@@ -2466,8 +2537,28 @@ func AgentFromContext(ctx context.Context) *Agent {
 	return a
 }
 
+// abortedToolResult is the answer for a call that did not run because the turn
+// it belonged to had ended. It is an error result rather than a silent skip:
+// the model gets a tool-role reply for every call it made (some providers
+// reject a transcript missing one), and the transcript records WHY, which is
+// the only place a later reader can learn that the tool was skipped rather
+// than that it ran and did nothing.
+func abortedToolResult(why string) ToolResult {
+	return ToolResult{
+		Content: []provider.Content{provider.TextBlock{Text: "aborted: " + why}},
+		IsError: true,
+	}
+}
+
 func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools Registry, sink func(AgentEvent)) ToolResult {
 	ctx = ContextWithAgent(ctx, a)
+	// A cancelled turn dispatches nothing further. Tools receive ctx, but a
+	// tool is not obliged to read it — write, edit, glob and grep never do,
+	// because for a filesystem call there is nothing to interrupt — so the
+	// turn's own loop is the only place that can promise a cancel is a cancel.
+	if ctx.Err() != nil {
+		return abortedToolResult("the turn was cancelled before this tool call started")
+	}
 	// Dispatch against the registry PINNED for this turn (passed down from
 	// runLoop), not a live read of a.Tools: the turn runs on its own
 	// goroutine while the host may swap the registry from another (model
@@ -2502,6 +2593,16 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools
 				Content: []provider.Content{provider.TextBlock{Text: reason}},
 				IsError: true,
 			}
+		}
+		// The ladder can block for MINUTES waiting on a human in a chat or an
+		// orchestrator over MCP — and those confirmers wait on the HOST's
+		// context, not this turn's, so cancelling the turn does not unpark
+		// them. Without this check an approval that arrives after `/stop` runs
+		// the tool: the user was told "cancelled the current turn" and the
+		// write landed anyway. An answer for a turn that no longer exists is
+		// too late by definition, whatever it says.
+		if ctx.Err() != nil {
+			return abortedToolResult("the turn was cancelled while this tool call waited for approval, so the approval arrived too late to run it")
 		}
 		if len(modified) > 0 && json.Valid(modified) {
 			args = modified

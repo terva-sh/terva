@@ -863,6 +863,119 @@ Enter applies the highlighted row. The TUI's `@`-picker Tab runs the same
 semantics — both implementations are pinned to one shared golden-fixture
 file, so they cannot drift.
 
+## File attachments
+
+Drag any file onto the composer (or paste one) and it rides the next message.
+Two destinations, chosen by what the file is:
+
+- **An image** goes inline, base64 in the prompt frame, because that is the only
+  form a vision model can see. Capped at 10 MB — the frame is 32 MiB and base64
+  inflates by ~4/3, so this leaves room for the JSON envelope and your text.
+- **Everything else** — an email-filters export, a CSV, a log, a PDF, and an
+  image too large to inline — is uploaded to the daemon (`POST /upload`, auth-
+  gated and same-origin checked) and staged under
+  `$TERVA_HOME/attachments/<session>/`. The message then carries only the
+  upload's **id**; the daemon resolves the path, name, type, and size itself, so
+  nothing a client claims about a file is taken on trust.
+
+The turn tells the model what was attached and where, and it reads them with its
+ordinary tools. That instruction is a block of its own on the message, not part
+of what you typed: the panel shows the files as inert labels above your words
+and never renders the staging path, which is the model's copy and wraps to nine
+lines on a phone. The labels are deliberately not clickable — an uploaded
+attachment is not retrievable from them, because the bytes are swept on a TTL
+and an affordance that failed most of the time would be worse than none. `$TERVA_HOME/attachments` is a sandbox **read-only** root, so a
+jailed agent can read a staged file and copy what it wants into the workspace,
+but never write back into the staging area.
+
+Staged files are **not permanent, and messages do not pretend otherwise.** A
+sweeper (daemon start, then hourly) removes anything past a 24-hour TTL and, if
+the whole area exceeds 2 GiB, evicts oldest-first — never touching a file staged
+in the last hour, so a message being composed cannot lose its own attachments. A
+message keeps the record of what was attached; if you re-open it much later, the
+paths it names may be gone. Ask the agent to copy anything worth keeping into
+the workspace during the turn.
+
+A file can also lapse between the drop and the send — a composer left open
+overnight is enough. The send still goes: the model is told how many
+attachments it is not getting, and the message says "*N attachments had
+expired*" beside whatever survived, so an answer that ignores a file is never
+left unexplained.
+
+The composer only offers this where the daemon advertises the `attachments`
+hello feature, which the web carrier sets because it is the carrier that mounts
+the upload route. A client connected some other way (`terva attach` over a unix
+socket) has nowhere to POST bytes and says so rather than dropping the file
+silently.
+
+Per-file limit: 100 MB, advertised as `Hello.MaxAttachmentBytes`. Over it, the
+upload is rejected whole rather than truncated — half an export is silent
+corruption. See [resource-limits.md](resource-limits.md).
+
+## Shared files (the agent hands you one)
+
+The other direction. When the agent has produced something you should *have* —
+an export, a chart, a log slice, a PDF it fetched — it calls **`share_file`**,
+and the file appears in the transcript as a card: an image you can see, an audio
+or video clip you can play, or a chip you can click to download. Before this it
+could only tell you a path, which is no use from a browser on another machine.
+
+Mechanically it copies the file into `$TERVA_HOME/shared/<session>/` and the turn
+records an id. The panel builds `GET /shared/<session>/<id>` from it, which is
+**auth-gated exactly like `/media/`** — the `terva_token` cookie authenticates a
+plain `<img src>` or `<a download>`, so no token ever rides a file URL. Pasting
+that URL into another browser gets a 401: a shared file is yours, not a link you
+can forward.
+
+It **copies**, deliberately. A hardlink would be free, but then an agent editing
+the file afterwards would retroactively change what it already handed you, and a
+download that quietly serves different bytes than the transcript described is
+worse than no download.
+
+Three things about how the bytes come back, because the route serves content the
+*model* chose from the same origin your session cookie lives on:
+
+- **Everything downloads by default** (`Content-Disposition: attachment`). Only
+  the panel asks for inline rendering, and only a closed allowlist of media types
+  gets it: PNG/JPEG/GIF/WebP/AVIF, MP3/OGG/WAV/FLAC, MP4/WebM.
+- **SVG is not on that list, despite being an image.** An inline SVG executes
+  script in this origin, and so does an HTML file; both come back as downloads no
+  matter what is asked for. An agent cannot turn a hostile file into script
+  execution by choosing an extension.
+- The content type is **derived from what landed on disk**, never from a name the
+  agent picked, and the response carries `X-Content-Type-Options: nosniff` plus
+  its own `Content-Security-Policy: sandbox`.
+
+Shared files outlive uploads but are **not permanent either**: a 7-day TTL, and
+oldest-first eviction above 2 GiB. Seven days rather than the inbound 24 hours
+because the two ends are not symmetric — an uploaded file has done its job once
+the agent has read it, while a shared one is the deliverable and the obvious way
+to want it is to reopen the session next week. Past that, the card still says
+what was shared and says it is no longer available; ask for it again.
+
+The card knows that without asking. Each record carries an `expires_at` — the
+file's own modification time plus the store's TTL, which is the same arithmetic
+the sweeper performs — so a card goes inert on the deadline for **every** kind
+of file. It used to infer the answer from an `<img>` failing to load, which
+works only where there is an image: a document, a clip, and a track all kept
+offering a download long after the bytes were gone, and the user found out by
+clicking. The image's load failure is still watched, because `expires_at` is an
+upper bound and eviction above the size cap can take a file sooner.
+
+A daemon too old to send the field sends nothing, and a client reads that as
+*unknown* rather than as expired — the opposite reading would silently withdraw
+every download on a mixed-version deployment.
+
+The card renders where the daemon advertises the `shared-files` hello feature —
+the web carrier, because the web carrier is what mounts the route. The record
+itself reaches every client either way; the feature is only whether there is a
+link behind it.
+
+`$TERVA_HOME/shared` is deliberately **not** a sandbox root, unlike the inbound
+`attachments/`. The agent publishes through the tool, never by writing there, so
+a grant would buy it nothing and would let a jailed session read every other
+session's deliverables.
+
 ## Queued messages
 
 Sending while a turn is running queues the message (shown as a dashed bubble).

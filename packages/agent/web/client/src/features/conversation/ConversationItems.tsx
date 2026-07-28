@@ -2,6 +2,7 @@ import type { Item } from '../../platform/conversation/store'
 import type { RevealFn } from './CompactionDivider'
 import { sequenceConversationItems } from './itemSequence'
 import { MessageContent } from './MessageContent'
+import { SharedFileCard } from './SharedFileCard'
 import { TimeGap } from './TimeGap'
 import { ToolGroup } from './ToolGroup'
 import type { ToolView } from './types'
@@ -11,6 +12,8 @@ export function ConversationItems({
   toolView,
   onReveal,
   revealingID,
+  sess = '',
+  canDownload = false,
 }: {
   items: Item[]
   toolView: ToolView
@@ -18,12 +21,19 @@ export function ConversationItems({
   // stays renderable from a test (and from any host that has not wired it).
   onReveal?: RevealFn
   revealingID?: string
+  // The session a shared file's download URL is scoped to, and whether this
+  // carrier serves one at all. Both default off so the component stays
+  // renderable from a test; a share then shows as an inert label.
+  sess?: string
+  canDownload?: boolean
 }) {
   return (
     <>
       {sequenceConversationItems(items, toolView).map((entry) =>
         entry.kind === 'gap' ? (
           <TimeGap key={entry.key} ms={entry.ms} />
+        ) : entry.kind === 'shared' ? (
+          <SharedFileCard key={entry.key} file={entry.file} sess={sess} canDownload={canDownload} />
         ) : entry.kind === 'tool-group' ? (
           <ToolGroup
             key={entry.key}

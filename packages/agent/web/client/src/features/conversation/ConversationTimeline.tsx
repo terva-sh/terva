@@ -19,6 +19,8 @@ export function ConversationTimeline({
   earlier,
   onLoadEarlier,
   loadingEarlier,
+  sess,
+  canDownload,
 }: {
   items: Item[]
   busy: boolean
@@ -33,6 +35,10 @@ export function ConversationTimeline({
   earlier?: number
   onLoadEarlier?: () => void
   loadingEarlier?: boolean
+  // Passed straight through to a shared-file card: the session its download URL
+  // is scoped to, and whether this carrier serves one.
+  sess?: string
+  canDownload?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const pinnedRef = useRef(true)
@@ -80,7 +86,14 @@ export function ConversationTimeline({
             </button>
           </div>
         )}
-        <ConversationItems items={items} toolView={toolView} onReveal={onReveal} revealingID={revealingID} />
+        <ConversationItems
+          items={items}
+          toolView={toolView}
+          onReveal={onReveal}
+          revealingID={revealingID}
+          sess={sess}
+          canDownload={canDownload}
+        />
         {busy && items[items.length - 1]?.kind !== 'assistant' && <div class="working">{t('working…')}</div>}
         {queued.map((text, index) => (
           <QueuedMessage

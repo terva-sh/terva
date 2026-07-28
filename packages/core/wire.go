@@ -45,6 +45,11 @@ type WireEvent struct {
 	// tool_result line-change counts (the status bar's Δ segment)
 	LinesAdded   int `json:"lines_added,omitempty"`
 	LinesRemoved int `json:"lines_removed,omitempty"`
+	// tool_result: files this call published for the user (see [SharedFile]).
+	// First-class for the same reason the line counts are — ToolResult.Details
+	// never reaches the wire, and a card the remote panel cannot see is the
+	// whole feature missing.
+	Shared []SharedFile `json:"shared,omitempty"`
 
 	// usage
 	Usage      *WireUsage `json:"usage,omitempty"`
@@ -153,6 +158,112 @@ const MetaRouted = "stage:routed"
 // and the conversation before it, "crossed" once you have chosen to look anyway.
 const MetaClear = "clear"
 
+// MetaPreamble marks a message whose FIRST content block is a host-assembled
+// preamble rather than anything the user typed (see [UserMessageExtras]).
+//
+// It is stamped by the one place that can know — the prompt path that prepends
+// the block — so every reader of "the user's message" can skip it without
+// guessing from the text. Two do: the client, which would otherwise render nine
+// lines of machine prose above two lines of question, and the session-title
+// seed, which would otherwise name the session after a $TERVA_HOME path.
+//
+// Deliberately NOT inferred from [MetaAttachments]. That was the first shape of
+// this, and it broke in the one case the feature was designed around: when
+// every attachment a message named had already been swept, the preamble was
+// still emitted (to tell the model what it was not getting) while the
+// attachment list was empty — so both readers stopped skipping, and the prose
+// they exist to hide became the user's bubble and the session's title. A
+// preamble is a fact about the content; attachments are a fact about the files.
+const MetaPreamble = "preamble"
+
+// MetaAttachments records the files a user attached to this message, as a JSON
+// array of [WireAttachment]. It is DESCRIPTIVE, not a handle: the model is told
+// where to read the files by the message's preamble block, and this exists so a
+// client can render what was attached without showing that preamble's machine
+// prose (an absolute staging path wraps to nine lines on a phone).
+//
+// It lists only what RESOLVED — a label for a file the daemon could not find
+// would be a claim it cannot support. What went missing is counted in
+// [MetaAttachmentsMissing] instead.
+//
+// The record deliberately outlives the files. A staged attachment is swept on a
+// TTL, so a message reopened days later still says what was attached and simply
+// cannot offer it — which is why the client renders these as inert labels and
+// not as anything clickable.
+const MetaAttachments = "attachments"
+
+// MetaAttachmentsMissing counts the attachments a message named that no longer
+// resolved when it was sent, as a decimal string.
+//
+// The model is told this in the preamble, and the client needs it for the same
+// reason: a send whose files had all expired must not render as a message with
+// no attachments at all. That is what "suppress the preamble" would otherwise
+// turn it into — the user attaches two files, both lapse, and the panel shows a
+// bare question with nothing to explain why the answer ignores them.
+const MetaAttachmentsMissing = "attachments_missing"
+
+// WireAttachment describes one file a user attached to a message: enough for a
+// client to label it, and nothing more. No path and no id — the file is not
+// retrievable from here, deliberately. Sending files the other way (agent to
+// user) is [SharedFile], which is a separate flow and deliberately not this
+// shape: an inbound label is inert, an outbound one is a link.
+type WireAttachment struct {
+	Name string `json:"name"`
+	Kind string `json:"kind"` // image | audio | video | document
+	Mime string `json:"mime,omitempty"`
+	Size int64  `json:"size,omitempty"`
+}
+
+// MetaShared records the files a tool call in this message published FOR the
+// user, as a JSON array of [SharedFile]. It rides the tool-role message rather
+// than living in a store of its own, which is what makes history paging,
+// conversation.reveal, and resume place each card correctly for free — the
+// record travels with the turn that produced it and there is nothing to join.
+//
+// The model never sees this. Its copy is the tool result's text line ("shared
+// report.pdf with the user"), which is all it needs to refer to the file in
+// prose; the record is for the client, and putting a retrievable handle in the
+// transcript would put it in every subsequent request.
+const MetaShared = "shared"
+
+// SharedFile is one file the agent published for the user to look at, play, or
+// download — the outbound counterpart to [WireAttachment], and unlike it, a
+// handle: ID resolves against the daemon's share store, and the web panel builds
+// a download URL from it.
+//
+// It is one type across three surfaces — [ToolResult.Shared], [WireEvent.Shared]
+// on a live tool_result, and [WireMessage.Shared] on replay — because it is the
+// same record at each, and a conversion between identical shapes is only a place
+// for them to drift apart.
+//
+// CallID is stamped by the agent loop, not by the tool: one tool-role message
+// can carry results from several calls, and the client needs to know which card
+// belongs to which. A tool has no way to know its own call id, which is also why
+// it has no way to claim someone else's.
+type SharedFile struct {
+	ID      string `json:"id"`
+	CallID  string `json:"call_id,omitempty"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"` // image | audio | video | document
+	Mime    string `json:"mime,omitempty"`
+	Size    int64  `json:"size,omitempty"`
+	Caption string `json:"caption,omitempty"`
+	// ExpiresAt (RFC3339) is when the share store's sweeper becomes entitled to
+	// remove the bytes. It is what lets a client stop offering a download it
+	// knows will fail, for EVERY kind of file — the alternative is inferring
+	// liveness from a failed request, which only works where there is an element
+	// that fails, i.e. an image, i.e. one kind of four.
+	//
+	// An upper bound, not a promise: cap eviction can take a file earlier, so a
+	// download may still 404 before this. The record is deliberately kept in the
+	// transcript afterwards — a message reopened next year still says what was
+	// shared, it just no longer pretends to hand it over.
+	//
+	// Empty from a daemon that does not send it; a client must treat that as
+	// "unknown", not as "expired".
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
 // WireMessage is one transcript entry on the wire.
 type WireMessage struct {
 	Role    string      `json:"role"`
@@ -185,6 +296,31 @@ type WireMessage struct {
 	Directed bool   `json:"directed,omitempty"`
 	Routed   bool   `json:"routed,omitempty"`
 	Actor    string `json:"actor,omitempty"`
+	// Attachments are the files the user attached to this message and that still
+	// resolved when it was sent (see [MetaAttachments]). A client renders them
+	// as inert labels beside the message.
+	//
+	// Typed, like every field above, for the reason stated there.
+	Attachments []WireAttachment `json:"attachments,omitempty"`
+	// AttachmentsMissing counts the attachments this message named that had
+	// already been swept (see [MetaAttachmentsMissing]). A client says so rather
+	// than rendering a message that looks like it carried nothing.
+	AttachmentsMissing int `json:"attachments_missing,omitempty"`
+	// Preamble reports that Content[0] is the host's own words, not the user's
+	// (see [MetaPreamble]) — the block naming the attachments' absolute staging
+	// paths, which the model needs and a human reads as noise. A client drops
+	// that block and renders the fields above in its place.
+	//
+	// Its own field rather than something inferred from Attachments: a message
+	// can carry a preamble with nothing left to label, which is exactly when
+	// inferring it went wrong.
+	Preamble bool `json:"preamble,omitempty"`
+	// Shared are the files tool calls in this message published for the user
+	// (see [MetaShared]). Present only on a tool-role message, and each entry
+	// names the call it came from, so a client can put the card beside the right
+	// tool row — or, better, outside it: a tool group renders collapsed, and a
+	// download the user cannot see is a download that did not happen.
+	Shared []SharedFile `json:"shared,omitempty"`
 }
 
 // WireBlock is one piece of message content. Discriminate on Type:
@@ -281,6 +417,7 @@ func eventToWire(ev AgentEvent, imageData bool) WireEvent {
 		out.Result = contentToWire(e.Result.Content, imageData)
 		out.LinesAdded = e.Result.LinesAdded
 		out.LinesRemoved = e.Result.LinesRemoved
+		out.Shared = e.Result.Shared
 	case EvUsage:
 		u := usageToWire(e.Usage)
 		c := usageToWire(e.Cumulative)
@@ -371,6 +508,20 @@ func messageToWire(m provider.Message, imageData bool) WireMessage {
 	case MetaRouted:
 		w.Routed = true
 		w.Actor = m.Meta[MetaActor] // empty = narrator
+	}
+	// A malformed list or count is not worth failing a transcript over — the
+	// message still renders, just without its labels.
+	if raw := m.Meta[MetaAttachments]; raw != "" {
+		_ = json.Unmarshal([]byte(raw), &w.Attachments)
+	}
+	w.AttachmentsMissing, _ = strconv.Atoi(m.Meta[MetaAttachmentsMissing])
+	// Read independently of the two above: a preamble survives its attachments.
+	w.Preamble = m.Meta[MetaPreamble] == "true"
+	// Same tolerance, same reason: a share whose record failed to parse costs the
+	// user a download card, and failing the whole transcript over it would cost
+	// them the conversation.
+	if raw := m.Meta[MetaShared]; raw != "" {
+		_ = json.Unmarshal([]byte(raw), &w.Shared)
 	}
 	return w
 }
