@@ -48,6 +48,14 @@ type Session struct {
 	// worth keeping.
 	messagesAppended int
 
+	// persistedLore is the World lorebook as the FILE currently reads it — the
+	// fold of every lore row and pre-v4 meta row seen on load, plus whatever this
+	// process has written since. SetWorldLore diffs the incoming book against it
+	// to write only what changed, so it must track the disk rather than the live
+	// Meta.WorldLore (which the caller has already replaced by the time it lands
+	// here). Guarded by writeMu with the writes it describes.
+	persistedLore []WorldLoreEntry
+
 	// pendingGreeting holds a deferred, re-derivable opening set (a Stage card's
 	// first_mes + alternate_greetings) seeded into the LIVE transcript but not yet
 	// written to disk, so a chat the user only previews stays a meta-only draft the
@@ -105,14 +113,22 @@ type Session struct {
 //	  transcript as if nothing happened — hence a session only declares
 //	  v3 once it actually holds an amend (bumpFormatForAmend), and a
 //	  pre-amend build then warns instead of misleading.
+//	4 — the World lorebook rides `lore` rows (see recordLore) instead of
+//	  the meta row's world_lore, and a meta row at this version carries
+//	  no lore authority. Same hazard as v3, sharper: an older loader
+//	  skips the lore rows and reads the last meta row's absent book as
+//	  an EMPTY one, presenting a session whose secrets and scene state
+//	  are gone. Declared only once a session actually holds a lore row,
+//	  so a coding session — which never has a book — never claims it.
 //
-// A fresh session is stamped sessionFormatVersion; the amend bump lifts
-// it to sessionFormatVersionAmend on the first revision. This build READS
-// up to sessionFormatVersionAmend without warning; a file declaring more
-// warns (Session.LoadWarnings) and loads best-effort.
+// A fresh session is stamped sessionFormatVersion; the amend and lore bumps
+// lift it as those rows first appear. This build READS up to
+// sessionFormatVersionLore without warning; a file declaring more warns
+// (Session.LoadWarnings) and loads best-effort.
 const (
 	sessionFormatVersion      = 2
 	sessionFormatVersionAmend = 3
+	sessionFormatVersionLore  = 4
 )
 
 // SessionMeta is written as the first line of every session file.
@@ -189,6 +205,13 @@ type SessionMeta struct {
 	// uncached per-turn tail, so an edit takes effect next turn with no cache
 	// bust; a constant entry injects every turn, a keyed entry when its keywords
 	// appear in recent messages. Empty for coding sessions.
+	//
+	// The json tag is a READ path, not a write one: from format version 4 the
+	// book is persisted as `lore` rows (see recordLore) and writeMeta strips this
+	// field from the row it writes. The tag stays because sessions written before
+	// v4 keep their book here forever — an append-only file is never rewritten —
+	// and because export re-marshals those rows through this struct, so removing
+	// it would drop the lorebook out of every legacy session that got exported.
 	WorldLore []WorldLoreEntry `json:"world_lore,omitempty"`
 	// Coordination selects who answers a normal turn in a chat World with a
 	// roster (the Worlds W3 meta-narrator): "" = auto (the router picks a
@@ -291,6 +314,7 @@ type sessionLine struct {
 	Cumulative *provider.Usage   `json:"cumulative,omitempty"`
 	Directive  *sessionDirective `json:"directive,omitempty"`
 	Amend      *sessionAmend     `json:"amend,omitempty"`
+	Lore       *sessionLore      `json:"lore,omitempty"`
 	Escalation *escalationRecord `json:"escalation,omitempty"`
 	Stall      *stallRecord      `json:"stall,omitempty"`
 
@@ -955,11 +979,19 @@ func openSession(path string, stub InterruptStub) (*Session, []provider.Message,
 	rep := &loadReport{}
 	var walkErr error
 	var amends, tailTakes int
+	// book folds the World lorebook across BOTH storage forms in file order, so a
+	// session that predates the lore rows, one written entirely with them, and one
+	// that migrated mid-file all reconstruct the same way.
+	var book []WorldLoreEntry
 	start := time.Now()
 	messages, walkErr = walkSession(f, rep, sessionWalkHooks{
 		onMeta: func(m SessionMeta, _ []byte) {
 			meta = m
 			titleGenerated = false
+			book = foldMetaLore(book, m)
+		},
+		onLore: func(op sessionLore, _ []byte) {
+			book = applyLoreOp(book, op)
 		},
 		onRename: func(title, source string, _ []byte) {
 			// The latest rename row IS the session's title; without this a
@@ -981,7 +1013,9 @@ func openSession(path string, stub InterruptStub) (*Session, []provider.Message,
 	if walkErr != nil {
 		return nil, nil, walkErr
 	}
-	if meta.FormatVersion > sessionFormatVersionAmend {
+	// The folded book is the session's lore, whichever form carried it.
+	meta.WorldLore = book
+	if meta.FormatVersion > sessionFormatVersionLore {
 		rep.newerFormat = meta.FormatVersion
 	}
 	// Apply append-only directives before repair so the rebuilt transcript
@@ -998,7 +1032,8 @@ func openSession(path string, stub InterruptStub) (*Session, []provider.Message,
 		return nil, nil, err
 	}
 	s := &Session{ID: meta.ID, Path: path, Meta: meta, TitleGenerated: titleGenerated, writer: out, buf: bufio.NewWriter(out), LoadWarnings: rep.warnings(path),
-		LoadStats: LoadStats{Elapsed: elapsed, Messages: len(messages), Amends: amends, TailTakes: tailTakes}}
+		persistedLore: cloneLore(book),
+		LoadStats:     LoadStats{Elapsed: elapsed, Messages: len(messages), Amends: amends, TailTakes: tailTakes}}
 	return s, messages, nil
 }
 
@@ -1287,6 +1322,11 @@ type SessionSummary struct {
 	Card       string
 	Background string
 	World      string
+	// Persona is the agent persona the session was created with, read from meta
+	// like the fields above. It is what a materialize replays, so it is also what
+	// makes a session depend on a persona continuing to exist — see
+	// SessionsUsingPersona.
+	Persona string
 	// Live/Busy are the session's live state, set only on the attached-TUI path
 	// (from ctrlproto.SessionInfo via SessionSummariesFromInfos): Live = the
 	// session is materialized in memory, Busy = a turn is in flight. A disk scan
@@ -1343,6 +1383,86 @@ func DescribeSessions(root, cwd string) []SessionSummary {
 	return summaries
 }
 
+// SessionsMatching returns summaries for every live session under root — across
+// ALL project directories, not just one cwd — that keep satisfies, newest first.
+//
+// It exists for the questions a library DELETE has to ask: what did this card,
+// or this persona, leave behind? Those live in $TERVA_HOME and are global, while
+// sessions are bucketed per working directory, so a per-project answer is the
+// wrong answer — it reports that nothing depends on a thing another project's
+// chats are built on.
+//
+// Deliberately not folded into DescribeSessions: this reads every project's
+// transcripts, which is right for a question asked once before a delete and
+// wrong for one asked on every dialog open.
+//
+// Archived sessions (.jsonl.gz) are not scanned — see SessionsUsingCard for why
+// that matters and what it costs.
+func SessionsMatching(root string, keep func(SessionSummary) bool) []SessionSummary {
+	buckets, err := os.ReadDir(filepath.Join(root, "sessions"))
+	if err != nil {
+		return nil
+	}
+	var out []SessionSummary
+	for _, b := range buckets {
+		if !b.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, "sessions", b.Name())
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !isSessionTranscriptName(e.Name()) {
+				continue
+			}
+			if s := describeSession(filepath.Join(dir, e.Name())); keep(s) {
+				out = append(out, s)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Started.After(out[j].Started) })
+	return out
+}
+
+// SessionsUsingPersona returns every live session created with the named
+// persona. A session replays its persona on every materialize, so deleting one
+// changes how each of these opens (it falls back to the workspace default and
+// says so) — the count is what lets a caller say how many before doing it.
+func SessionsUsingPersona(root, persona string) []SessionSummary {
+	persona = strings.TrimSpace(persona)
+	if persona == "" {
+		return nil
+	}
+	return SessionsMatching(root, func(s SessionSummary) bool {
+		return strings.EqualFold(strings.TrimSpace(s.Persona), persona)
+	})
+}
+
+// SessionsUsingCard returns every live session bound to the given card id.
+//
+// Unlike a persona, a card cannot be fallen back from: it IS the character, and
+// a session re-resolves SessionMeta.Card on every materialize, so evicting the
+// card stops those chats opening for good. That is why the count gates the
+// delete rather than merely annotating it.
+//
+// Archived sessions are excluded, and the exclusion is a decision rather than an
+// oversight: DeleteSession removes the .jsonl and never the .jsonl.gz, so
+// counting archives would make a card with one permanently undeletable. The cost
+// is that archiving a chat releases its card, and restoring that archive later
+// finds the character gone — a trade the user makes explicitly, unlike the one
+// this scan exists to prevent.
+func SessionsUsingCard(root, cardID string) []SessionSummary {
+	cardID = strings.TrimSpace(cardID)
+	if cardID == "" {
+		return nil
+	}
+	return SessionsMatching(root, func(s SessionSummary) bool {
+		return strings.TrimSpace(s.Card) == cardID
+	})
+}
+
 func describeSession(path string) SessionSummary {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1380,6 +1500,7 @@ func describeSessionFrom(path string, r io.Reader) SessionSummary {
 				s.Card = row.Meta.Card
 				s.Background = row.Meta.Background
 				s.World = row.Meta.World
+				s.Persona = row.Meta.Persona
 			}
 		case "message":
 			s.MessageCount++
@@ -1635,11 +1756,36 @@ func (s *Session) UpdateModel(providerName, model string) error {
 // with the moment it changed.
 //
 // Every meta writer funnels through here rather than building the row itself, so
-// the stamp cannot be forgotten by the next one. See sessionLine.At for why the
-// rows needed a time of their own.
+// the stamp cannot be forgotten by the next one — and so the lorebook can be
+// stripped in exactly one place. See sessionLine.At for why the rows needed a
+// time of their own.
 func (s *Session) writeMeta() error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.writeMetaLocked()
+}
+
+// writeMetaLocked is writeMeta's body; the caller must hold writeMu. Used by
+// SetWorldLore, which bumps the format version and appends its lore rows as one
+// critical section.
+//
+// The row is a COPY of s.Meta so the strip below can't disturb the live session.
+func (s *Session) writeMetaLocked() error {
 	now := time.Now().UTC()
-	return s.writeLine(sessionLine{Type: "meta", Meta: &s.Meta, At: &now})
+	row := s.Meta
+	if row.FormatVersion >= sessionFormatVersionLore {
+		// The book has its own rows from here on. Leaving it here as well would
+		// restore the duplication the rows exist to remove, and would put a second
+		// copy on disk that can disagree with the first.
+		//
+		// Conditional on the version because it is also what tells a READER whether
+		// this row's absent book means "stored elsewhere" or "cleared". A session
+		// carrying a pre-v4 book that has not been edited yet keeps re-emitting it
+		// here, unchanged, until the first lore edit migrates it — stripping
+		// unconditionally would make the next SetNote silently erase the lorebook.
+		row.WorldLore = nil
+	}
+	return s.writeLineLocked(sessionLine{Type: "meta", Meta: &row, At: &now})
 }
 
 // StampVersion records the running build in the session file, so a session that
@@ -1723,19 +1869,6 @@ func (s *Session) SetUserPersona(name, description, gender, pronouns string) err
 	s.Meta.UserDescription = description
 	s.Meta.UserGender = gender
 	s.Meta.UserPronouns = pronouns
-	return s.writeMeta()
-}
-
-// SetWorldLore replaces (or, with a nil/empty slice, clears) the session's
-// World lore and writes a fresh meta row. Like SetNote it rides the last-wins
-// meta timeline — durable across a restart, editable any number of times — and
-// like the note it is a per-turn-tail input, never the cached prefix, so a
-// change takes effect next turn without a rebuild. A no-op on a nil receiver.
-func (s *Session) SetWorldLore(entries []WorldLoreEntry) error {
-	if s == nil {
-		return nil
-	}
-	s.Meta.WorldLore = entries
 	return s.writeMeta()
 }
 

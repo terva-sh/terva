@@ -14,7 +14,7 @@ package workspace
 // see MergeExtensionTools), so these register with the director's other tools
 // (actor_spawn) via injectExtraTools. Edits and deletion stay user verbs
 // (world.lore.put/delete); promotion stays a user action. Both tools reuse
-// setWorldLore, so the persisted meta, the live tail record, and every open
+// setWorldLore, so the persisted lorebook, the live tail record, and every open
 // steering drawer stay in step.
 
 import (

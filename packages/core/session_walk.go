@@ -49,6 +49,10 @@ type sessionWalkHooks struct {
 	onMsgVariants func(vars map[int]MsgVariants)
 	// onMeta fires for each meta row, with the parsed metadata.
 	onMeta func(m SessionMeta, line []byte)
+	// onLore fires for each World-lore row, with the parsed op. The reader folds
+	// it (applyLoreOp); the walk keeps no book of its own, because the pre-v4
+	// half of the fold lives on the meta rows and only the reader sees both.
+	onLore func(op sessionLore, line []byte)
 	// onRename fires for each rename row, with the new title and its source.
 	onRename func(title, source string, line []byte)
 }
@@ -294,6 +298,17 @@ func walkSession(r io.Reader, rep *loadReport, h sessionWalkHooks) ([]provider.M
 					return nil
 				}
 				h.onMeta(row.Meta, line)
+			}
+		case recordLore:
+			if h.onLore != nil {
+				var row struct {
+					Lore sessionLore `json:"lore"`
+				}
+				if err := json.Unmarshal(line, &row); err != nil {
+					rep.corruptLines++
+					return nil
+				}
+				h.onLore(row.Lore, line)
 			}
 		case "rename":
 			if h.onRename != nil {

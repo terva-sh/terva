@@ -13,8 +13,9 @@ import (
 )
 
 // World lore on the wire (Worlds L1). world.lore.put / world.lore.delete write
-// SessionMeta.WorldLore (a durable, last-wins meta row) AND update the live
-// build.WorldLoreRecord the per-turn tail scans, then broadcast a snapshot so
+// SessionMeta.WorldLore (durable as append-only lore rows — core.recordLore)
+// AND update the live build.WorldLoreRecord the per-turn tail scans, then
+// broadcast a snapshot so
 // the steering drawer re-renders. The two writes keep the persisted value and
 // the live-injected value in step; an edit takes effect on the next turn with
 // no cache bust. Optional controller, like NoteController.
@@ -439,8 +440,11 @@ func worldDocToView(d build.WorldDoc, sessions int) ctrlproto.WorldView {
 	return v
 }
 
-// setWorldLore persists the new entry list (last-wins meta row), updates the
-// live record the per-turn tail scans, and broadcasts the new snapshot. The
+// setWorldLore persists the new entry list (core.SetWorldLore appends only what
+// changed), updates the live record the per-turn tail scans, and broadcasts the
+// new snapshot. Passing the whole book every time is deliberate — the diff that
+// makes the write incremental lives below core's API, so these callers never
+// have to assemble ops. The
 // record gets only what the tail's speaker may see (L2): the tail feeds the
 // BOUND character's generations in a chat, so it is audience-filtered for
 // them; a play session's tail feeds the director, who sees everything.
