@@ -71,10 +71,13 @@ describe('archive drawer labelling', () => {
     expect(archiveLabel([])).toContain('0')
   })
 
-  it('reports compressed sizes in units a human reads', async () => {
-    const { humanBytes } = await import('./SessionPicker')
-    expect(humanBytes(512)).toBe('512B')
-    expect(humanBytes(2048)).toBe('2K')
-    expect(humanBytes(5 * 1024 * 1024)).toBe('5.0M')
+  // Compressed sizes read through the shared ui/formatting.humanBytes now — the
+  // archive's own `2K`/`5.0M` was one of three formats for the same number, and
+  // two of them met a few rows apart in this very drawer. Its behaviour is
+  // asserted once, in ui/formatting.test.ts.
+  it('formats sizes through the shared helper, not a private copy', async () => {
+    const src = read('features/sessions/SessionPicker.tsx')
+    expect(src).toContain("from '../../ui/formatting'")
+    expect(src, 'a private byte formatter is what drifted last time').not.toContain('export function humanBytes')
   })
 })

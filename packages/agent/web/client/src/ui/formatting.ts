@@ -1,7 +1,22 @@
+import { t } from '../i18n'
+
+// humanBytes is the ONE byte formatter. There were three — this one, the
+// archive browser's (`2K`, `5.0M`) and Stage's (`4 KB`, `512 bytes`) — so the
+// same file could be a different size depending on which panel you read it in,
+// and the drawer showed two of the three formats a few rows apart.
+//
+// This shape wins because it is what the most callers already render and what
+// the newest code (the attachment chips and labels) adopted. Stage's units were
+// the only translated ones, so that marking is what came across rather than
+// being dropped: a unit suffix is not universally English.
+//
+// ⚠️ t() is render-time. Every caller must be inside a render or a handler —
+// hoisting this into a module-level constant would freeze the units at the
+// bundle's language and stop following a live locale change.
 export function humanBytes(n: number): string {
-  if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + ' MB'
-  if (n >= 1 << 10) return (n / (1 << 10)).toFixed(1) + ' KB'
-  return n + ' B'
+  if (n >= 1 << 20) return t('%s MB', (n / (1 << 20)).toFixed(1))
+  if (n >= 1 << 10) return t('%s KB', (n / (1 << 10)).toFixed(1))
+  return t('%d B', n)
 }
 
 export function humanCount(n: number): string {

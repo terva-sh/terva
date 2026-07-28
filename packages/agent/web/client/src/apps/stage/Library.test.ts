@@ -1,13 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { formatBytes, importError } from './Library'
+import { importError } from './Library'
 
-describe('formatBytes', () => {
-  it('scales to the unit a person would use', () => {
-    expect(formatBytes(512)).toBe('512 bytes')
-    expect(formatBytes(4096)).toBe('4 KB')
-    expect(formatBytes(19647777)).toBe('18.7 MB')
-  })
-})
+// formatBytes is gone — Stage renders through ui/formatting.humanBytes, the one
+// byte formatter, and its scaling is asserted in ui/formatting.test.ts. Stage's
+// units were the translated ones, so the shared helper took the t() marking with
+// it rather than trading three formats for one untranslated format.
 
 describe('importError', () => {
   // The bug this whole path exists for: an oversized upload is not answered with

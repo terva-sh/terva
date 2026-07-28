@@ -1,9 +1,11 @@
 import { t, tn } from '../../i18n'
 import type { Group, SessionInfo } from '../../platform/ctrlproto/types'
 import type { GroupFilter } from '../../platform/groups'
+import { sectionSessions } from '../../platform/sessionstatus'
 import { Placeholder } from '../../ui/Loading'
 import { GroupMenu } from '../sessions/GroupMenu'
 import { GroupFilterBar } from '../sessions/GroupFilterBar'
+import { SessionSection, useColdGroup } from '../sessions/SessionSection'
 
 // SessionsBoard is the monitor view over N sessions: one tile per session, live
 // status at a glance, click a tile to focus it. Pure presentation — app.tsx
@@ -47,6 +49,63 @@ export function SessionsBoard(props: {
 }) {
   const groups = props.groups ?? []
   const filterGroups = props.filterGroups ?? []
+  const sections = sectionSessions(props.sessions, props.liveBusy, Date.now())
+  // Unlike the drawer the board stays mounted while you are on it, so an
+  // expanded cold group has to survive the 4s re-list rather than snapping shut
+  // under the reader every four seconds.
+  const [coldOpen, toggleCold] = useColdGroup(sections)
+
+  // No per-tile status pill. The group header above the tile already says the
+  // word, and saying it twice on every tile was the loudest thing on a screen
+  // whose whole job is to let you find the one session that is moving.
+  const tile = (s: SessionInfo) => {
+    return (
+      <div
+        key={s.id}
+        class={`board-tile${s.id === props.current ? ' active' : ''}`}
+        role="button"
+        tabIndex={0}
+        onClick={() => props.onSelect(s.id)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            props.onSelect(s.id)
+          }
+        }}
+      >
+        <div class="board-tile-head">
+          <span class="board-tile-title">{s.title || s.id}</span>
+        </div>
+        <div class="board-tile-meta">
+          {s.model ? s.model + ' · ' : ''}
+          {tn(s.messages, '%d msg', '%d msgs')}
+          {s.usage?.cost_usd ? ' · $' + s.usage.cost_usd.toFixed(3) : ''}
+        </div>
+        <div class="board-tile-actions">
+          {props.onToggleGroup && props.onCreateGroup && (
+            <GroupMenu
+              sessionId={s.id}
+              groups={groups}
+              onToggle={(gid) => props.onToggleGroup!(s, gid)}
+              onCreate={() => props.onCreateGroup!(s)}
+            />
+          )}
+          <button class="icon sm" title={t('Rename')} onClick={(e) => (e.stopPropagation(), props.onRename(s))}>
+            ✎
+          </button>
+          {props.onArchive && (
+            <button class="icon sm" title={t('Archive')} onClick={(e) => (e.stopPropagation(), props.onArchive!(s))}>
+              ⤓
+            </button>
+          )}
+          <button class="icon sm" title={t('Delete')} onClick={(e) => (e.stopPropagation(), props.onDelete(s))}>
+            ×
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div class="board">
       <div class="board-head">
@@ -63,77 +122,23 @@ export function SessionsBoard(props: {
       ) : props.sessions.length === 0 ? (
         <div class="board-empty">{t('No sessions in this workspace yet.')}</div>
       ) : (
-        <div class="board-grid">
-          {props.sessions.map((s) => {
-            // A subscribed tile's busy comes from its stream (authoritative, at
-            // turn latency); an unsubscribed one falls back to the list's
-            // point-in-time flag. Either way it's one value per tile — never
-            // mixed — so tiles don't flicker between two truths.
-            const streamed = props.liveBusy?.[s.id]
-            const busy = streamed ?? !!s.busy
-            const live = streamed !== undefined || !!s.live
-            const status = busy ? 'busy' : live ? 'live' : 'cold'
-            const label = busy ? t('busy') : live ? t('idle') : t('cold')
-            return (
-              <div
-                key={s.id}
-                class={`board-tile${s.id === props.current ? ' active' : ''}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => props.onSelect(s.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    props.onSelect(s.id)
-                  }
-                }}
-              >
-                <div class="board-tile-head">
-                  <span class="board-tile-title">{s.title || s.id}</span>
-                  <span class={`board-status ${status}`}>{label}</span>
-                </div>
-                <div class="board-tile-meta">
-                  {s.model ? s.model + ' · ' : ''}
-                  {tn(s.messages, '%d msg', '%d msgs')}
-                  {s.usage?.cost_usd ? ' · $' + s.usage.cost_usd.toFixed(3) : ''}
-                </div>
-                <div class="board-tile-actions">
-                  {props.onToggleGroup && props.onCreateGroup && (
-                    <GroupMenu
-                      sessionId={s.id}
-                      groups={groups}
-                      onToggle={(gid) => props.onToggleGroup!(s, gid)}
-                      onCreate={() => props.onCreateGroup!(s)}
-                    />
-                  )}
-                  <button
-                    class="icon sm"
-                    title={t('Rename')}
-                    onClick={(e) => (e.stopPropagation(), props.onRename(s))}
-                  >
-                    ✎
-                  </button>
-                  {props.onArchive && (
-                    <button
-                      class="icon sm"
-                      title={t('Archive')}
-                      onClick={(e) => (e.stopPropagation(), props.onArchive!(s))}
-                    >
-                      ⤓
-                    </button>
-                  )}
-                  <button
-                    class="icon sm"
-                    title={t('Delete')}
-                    onClick={(e) => (e.stopPropagation(), props.onDelete(s))}
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
+        <>
+          <SessionSection status="busy" label={t('busy')} count={sections.busy.length}>
+            <div class="board-grid">{sections.busy.map(tile)}</div>
+          </SessionSection>
+          <SessionSection status="idle" label={t('idle')} count={sections.idle.length}>
+            <div class="board-grid">{sections.idle.map(tile)}</div>
+          </SessionSection>
+          <SessionSection
+            status="cold"
+            label={t('cold')}
+            count={sections.cold.length}
+            open={coldOpen}
+            onToggle={toggleCold}
+          >
+            <div class="board-grid">{sections.cold.map(tile)}</div>
+          </SessionSection>
+        </>
       )}
     </div>
   )
