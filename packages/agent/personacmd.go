@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -112,12 +112,12 @@ default_persona in config.json or a $TERVA_HOME/persona.md file.`))
 // (where each persona is sourced from, and what it overrides).
 func personaList() error {
 	type row struct {
-		p         build.Persona
+		p         persona.Persona
 		overrides []string // origins shadowed by this winner, lower tiers first
 	}
 	seen := map[string]int{}
 	var rows []row
-	for _, set := range build.PersonaTiers() {
+	for _, set := range persona.Tiers() {
 		for _, p := range set {
 			k := p.Key()
 			if idx, ok := seen[k]; ok {
@@ -185,7 +185,7 @@ func personaValidate(args []string) error {
 // The composing case is the one where a bare char count would mislead: what
 // occupies the cached prefix is the ASSEMBLY, so that is the number reported,
 // broken down so the author can see which half they control.
-func charterScopeNote(p build.Persona) string {
+func charterScopeNote(p persona.Persona) string {
 	if p.Immersive {
 		return fmt.Sprintf("%d-char charter, and it is the WHOLE prompt: immersive replaces terva's identity and harness conventions too, so include any operating guidance you want", len(p.Charter))
 	}
@@ -205,7 +205,7 @@ func validateOnePersona(path string) (ok bool) {
 		return false
 	}
 	var problems, warns, notes []string
-	p, perr := build.ParsePersona(string(raw), path)
+	p, perr := persona.Parse(string(raw), path)
 	if perr != nil {
 		problems = append(problems, perr.Error())
 	} else {
@@ -220,7 +220,7 @@ func validateOnePersona(path string) (ok bool) {
 		// is a hard error at run time (ResolvePersona composes on every path),
 		// so it must be a problem here too — reporting it as a warning would
 		// print a ✓ for a persona that cannot start.
-		composed, cerr := build.ComposeCharter(p)
+		composed, cerr := persona.ComposeCharter(p)
 		if cerr != nil {
 			problems = append(problems, cerr.Error())
 		} else {
@@ -270,13 +270,13 @@ func personaInit(args []string) error {
 			force = true
 		}
 	}
-	dir := build.PersonasDir()
+	dir := persona.Dir()
 	written, skipped := 0, 0
-	err := fs.WalkDir(build.BuiltinPersonasFS, build.BuiltinPersonasRoot, func(p string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(persona.BuiltinFS, persona.BuiltinRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		rel := strings.TrimPrefix(p, build.BuiltinPersonasRoot+"/")
+		rel := strings.TrimPrefix(p, persona.BuiltinRoot+"/")
 		dest := filepath.Join(dir, filepath.FromSlash(rel))
 		if !force {
 			if _, statErr := os.Stat(dest); statErr == nil {
@@ -284,7 +284,7 @@ func personaInit(args []string) error {
 				return nil
 			}
 		}
-		raw, readErr := fs.ReadFile(build.BuiltinPersonasFS, p)
+		raw, readErr := fs.ReadFile(persona.BuiltinFS, p)
 		if readErr != nil {
 			return readErr
 		}

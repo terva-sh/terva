@@ -1,9 +1,12 @@
 package build
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -39,9 +42,13 @@ type providerSpec struct {
 	// resolution, openai-compatible).
 	apiKeyEnv []string
 	// newClient builds the provider.Client for a resolved credential
-	// set. Lives here rather than the provider package because it
-	// needs Resolved + the OAuth refresh wrapper, which are agent-side.
-	newClient func(r Resolved) provider.Client
+	// set. It takes [clientConfig] rather than the whole [Resolved]:
+	// across every entry below these closures read five fields, and
+	// depending on the 57-field container for five of them is what
+	// pinned this registry inside `build` (07's question 8, step b).
+	// Lives here rather than the provider package because it needs the
+	// OAuth refresh wrapper, which is agent-side.
+	newClient func(c clientConfig) provider.Client
 }
 
 // providerSpecs is the registry, ordered. Order is meaningful: the
@@ -55,11 +62,11 @@ var providerSpecs = []providerSpec{
 		// ResolveCredentialFull (it yields method "oauth"); the
 		// apikey env is listed here.
 		apiKeyEnv: []string{"ANTHROPIC_API_KEY"},
-		newClient: func(r Resolved) provider.Client {
-			if r.AuthMethod == "oauth" {
-				return provider.NewAnthropicOAuthSource(r.credentialSource(), r.BaseURL)
+		newClient: func(c clientConfig) provider.Client {
+			if c.AuthMethod == "oauth" {
+				return provider.NewAnthropicOAuthSource(c.credentialSource(), c.BaseURL)
 			}
-			return provider.NewAnthropic(r.Credential, r.BaseURL)
+			return provider.NewAnthropic(c.Credential, c.BaseURL)
 		},
 	},
 	{
@@ -67,7 +74,7 @@ var providerSpecs = []providerSpec{
 		defaultModel: "gpt-5",
 		envHint:      "OPENAI",
 		apiKeyEnv:    []string{"OPENAI_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewOpenAI(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewOpenAI(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "openai-codex",
@@ -76,8 +83,8 @@ var providerSpecs = []providerSpec{
 		envHint:      "OPENAI",
 		// No apiKeyEnv: the ChatGPT/Codex subscription route
 		// intentionally ignores OPENAI_API_KEY so both can coexist.
-		newClient: func(r Resolved) provider.Client {
-			return provider.NewOpenAICodexSource(r.credentialSource(), r.AccountID, r.BaseURL)
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewOpenAICodexSource(c.credentialSource(), c.AccountID, c.BaseURL)
 		},
 	},
 	{
@@ -85,7 +92,7 @@ var providerSpecs = []providerSpec{
 		defaultModel: "gpt-5",
 		envHint:      "OPENAI",
 		apiKeyEnv:    []string{"OPENAI_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewOpenAIResponses(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewOpenAIResponses(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "kimi",
@@ -93,14 +100,14 @@ var providerSpecs = []providerSpec{
 		defaultModel: "kimi-for-coding",
 		envHint:      "KIMI",
 		apiKeyEnv:    []string{"KIMI_API_KEY", "MOONSHOT_API_KEY"},
-		newClient: func(r Resolved) provider.Client {
+		newClient: func(c clientConfig) provider.Client {
 			// kimi-coding speaks anthropic-messages on
 			// api.kimi.com/coding; subscription OAuth wraps the same
 			// Anthropic-shaped client.
-			if r.AuthMethod == "oauth" {
-				return provider.NewKimiCodingSourceWithHeaders(r.credentialSource(), r.BaseURL, kimiCodeHeaders())
+			if c.AuthMethod == "oauth" {
+				return provider.NewKimiCodingSourceWithHeaders(c.credentialSource(), c.BaseURL, kimiCodeHeaders())
 			}
-			return provider.NewKimiCodingWithHeaders(r.Credential, r.BaseURL, kimiCodeHeaders())
+			return provider.NewKimiCodingWithHeaders(c.Credential, c.BaseURL, kimiCodeHeaders())
 		},
 	},
 	{
@@ -108,7 +115,7 @@ var providerSpecs = []providerSpec{
 		defaultModel: "deepseek-v4-pro",
 		envHint:      "DEEPSEEK",
 		apiKeyEnv:    []string{"DEEPSEEK_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewDeepSeek(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewDeepSeek(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "google",
@@ -116,13 +123,13 @@ var providerSpecs = []providerSpec{
 		defaultModel: "gemini-2.5-pro",
 		envHint:      "GEMINI",
 		apiKeyEnv:    []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewGemini(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewGemini(c.Credential, c.BaseURL) },
 	},
 	{
 		id:             "ollama",
 		noDefaultModel: true,
 		envHint:        "OLLAMA",
-		newClient:      func(r Resolved) provider.Client { return provider.NewOpenAI(r.Credential, r.BaseURL) },
+		newClient:      func(c clientConfig) provider.Client { return provider.NewOpenAI(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "moonshotai",
@@ -130,42 +137,42 @@ var providerSpecs = []providerSpec{
 		defaultModel: "kimi-k2.6",
 		envHint:      "MOONSHOT",
 		apiKeyEnv:    []string{"MOONSHOT_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewMoonshot(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewMoonshot(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "moonshotai-cn",
 		defaultModel: "kimi-k2.6",
 		envHint:      "MOONSHOT",
 		apiKeyEnv:    []string{"MOONSHOT_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewMoonshotCN(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewMoonshotCN(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "cerebras",
 		defaultModel: "qwen-3-235b-a22b-instruct-2507",
 		envHint:      "CEREBRAS",
 		apiKeyEnv:    []string{"CEREBRAS_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewCerebras(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewCerebras(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "groq",
 		defaultModel: "llama-3.3-70b-versatile",
 		envHint:      "GROQ",
 		apiKeyEnv:    []string{"GROQ_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewGroq(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewGroq(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "xai",
 		defaultModel: "grok-code-fast-1",
 		envHint:      "XAI",
 		apiKeyEnv:    []string{"XAI_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewXAI(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewXAI(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "together",
 		defaultModel: "Qwen/Qwen3-Coder-480B-A35B-Instruct",
 		envHint:      "TOGETHER",
 		apiKeyEnv:    []string{"TOGETHER_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewTogether(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewTogether(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "huggingface",
@@ -173,43 +180,43 @@ var providerSpecs = []providerSpec{
 		defaultModel: "moonshotai/Kimi-K2-Instruct",
 		envHint:      "HF",
 		apiKeyEnv:    []string{"HF_TOKEN"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewHuggingFace(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewHuggingFace(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "openrouter",
 		defaultModel: "anthropic/claude-sonnet-4.5",
 		envHint:      "OPENROUTER",
 		apiKeyEnv:    []string{"OPENROUTER_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewOpenRouter(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewOpenRouter(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "mistral",
 		defaultModel: "mistral-large-latest",
 		envHint:      "MISTRAL",
 		apiKeyEnv:    []string{"MISTRAL_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewMistral(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewMistral(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "zai",
 		defaultModel: "glm-4.7",
 		envHint:      "ZAI",
 		apiKeyEnv:    []string{"ZAI_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewZAI(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewZAI(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "xiaomi",
 		defaultModel: "mimo-v2.5",
 		envHint:      "XIAOMI",
 		apiKeyEnv:    []string{"XIAOMI_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewXiaomi(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewXiaomi(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "xiaomi-token-plan-ams",
 		defaultModel: "mimo-v2.5",
 		envHint:      "XIAOMI_TOKEN_PLAN_AMS",
 		apiKeyEnv:    []string{"XIAOMI_TOKEN_PLAN_AMS_API_KEY"},
-		newClient: func(r Resolved) provider.Client {
-			return provider.NewXiaomiTokenPlan("ams", r.Credential, r.BaseURL)
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewXiaomiTokenPlan("ams", c.Credential, c.BaseURL)
 		},
 	},
 	{
@@ -217,8 +224,8 @@ var providerSpecs = []providerSpec{
 		defaultModel: "mimo-v2.5",
 		envHint:      "XIAOMI_TOKEN_PLAN_CN",
 		apiKeyEnv:    []string{"XIAOMI_TOKEN_PLAN_CN_API_KEY"},
-		newClient: func(r Resolved) provider.Client {
-			return provider.NewXiaomiTokenPlan("cn", r.Credential, r.BaseURL)
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewXiaomiTokenPlan("cn", c.Credential, c.BaseURL)
 		},
 	},
 	{
@@ -226,8 +233,8 @@ var providerSpecs = []providerSpec{
 		defaultModel: "mimo-v2.5",
 		envHint:      "XIAOMI_TOKEN_PLAN_SGP",
 		apiKeyEnv:    []string{"XIAOMI_TOKEN_PLAN_SGP_API_KEY"},
-		newClient: func(r Resolved) provider.Client {
-			return provider.NewXiaomiTokenPlan("sgp", r.Credential, r.BaseURL)
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewXiaomiTokenPlan("sgp", c.Credential, c.BaseURL)
 		},
 	},
 	{
@@ -235,21 +242,21 @@ var providerSpecs = []providerSpec{
 		defaultModel: "MiniMax-M2.7",
 		envHint:      "MINIMAX",
 		apiKeyEnv:    []string{"MINIMAX_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewMinimaxAnthropic(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewMinimaxAnthropic(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "minimax-cn",
 		defaultModel: "MiniMax-M2.7",
 		envHint:      "MINIMAX_CN",
 		apiKeyEnv:    []string{"MINIMAX_CN_API_KEY", "MINIMAX_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewMinimaxCNAnthropic(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewMinimaxCNAnthropic(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "fireworks",
 		defaultModel: "accounts/fireworks/models/kimi-k2p6",
 		envHint:      "FIREWORKS",
 		apiKeyEnv:    []string{"FIREWORKS_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewFireworksAnthropic(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewFireworksAnthropic(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "vercel-ai-gateway",
@@ -257,8 +264,8 @@ var providerSpecs = []providerSpec{
 		defaultModel: "anthropic/claude-sonnet-4.5",
 		envHint:      "AI_GATEWAY",
 		apiKeyEnv:    []string{"AI_GATEWAY_API_KEY"},
-		newClient: func(r Resolved) provider.Client {
-			return provider.NewVercelGatewayAnthropic(r.Credential, r.BaseURL)
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewVercelGatewayAnthropic(c.Credential, c.BaseURL)
 		},
 	},
 	{
@@ -266,14 +273,14 @@ var providerSpecs = []providerSpec{
 		defaultModel: "claude-sonnet-4-5",
 		envHint:      "OPENCODE",
 		apiKeyEnv:    []string{"OPENCODE_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewOpenCode(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewOpenCode(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "opencode-go",
 		defaultModel: "kimi-k2.6",
 		envHint:      "OPENCODE",
 		apiKeyEnv:    []string{"OPENCODE_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewOpenCodeGo(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewOpenCodeGo(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "amazon-bedrock",
@@ -282,7 +289,7 @@ var providerSpecs = []providerSpec{
 		envHint:      "AWS",
 		// No apiKeyEnv: bedrock has bespoke multi-source AWS credential
 		// resolution (handled specially in ResolveCredentialFull).
-		newClient: func(r Resolved) provider.Client { return provider.NewBedrock(r.Credential, r.BaseURL) },
+		newClient: func(c clientConfig) provider.Client { return provider.NewBedrock(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "google-vertex",
@@ -290,7 +297,7 @@ var providerSpecs = []providerSpec{
 		defaultModel: "gemini-2.5-pro",
 		envHint:      "GOOGLE_CLOUD",
 		apiKeyEnv:    []string{"GOOGLE_CLOUD_API_KEY"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewGoogleVertex(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewGoogleVertex(c.Credential, c.BaseURL) },
 	},
 	{
 		id:           "azure-openai-responses",
@@ -298,8 +305,8 @@ var providerSpecs = []providerSpec{
 		defaultModel: "gpt-5",
 		envHint:      "AZURE_OPENAI",
 		apiKeyEnv:    []string{"AZURE_OPENAI_API_KEY"},
-		newClient: func(r Resolved) provider.Client {
-			return provider.NewAzureOpenAIResponses(r.Credential, r.BaseURL)
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewAzureOpenAIResponses(c.Credential, c.BaseURL)
 		},
 	},
 	{
@@ -308,27 +315,27 @@ var providerSpecs = []providerSpec{
 		defaultModel: "claude-sonnet-4.5",
 		envHint:      "COPILOT_GITHUB_TOKEN",
 		apiKeyEnv:    []string{"COPILOT_GITHUB_TOKEN", "GITHUB_COPILOT_TOKEN"},
-		newClient:    func(r Resolved) provider.Client { return provider.NewGithubCopilot(r.Credential, r.BaseURL) },
+		newClient:    func(c clientConfig) provider.Client { return provider.NewGithubCopilot(c.Credential, c.BaseURL) },
 	},
 	{
 		id:        "cloudflare-workers-ai",
 		aliases:   []string{"cloudflare", "workers-ai"},
 		envHint:   "CLOUDFLARE",
 		apiKeyEnv: []string{"CLOUDFLARE_API_KEY"},
-		newClient: func(r Resolved) provider.Client { return provider.NewCloudflareWorkersAI(r.Credential, r.BaseURL) },
+		newClient: func(c clientConfig) provider.Client { return provider.NewCloudflareWorkersAI(c.Credential, c.BaseURL) },
 	},
 	{
 		id:        "cloudflare-ai-gateway",
 		envHint:   "CLOUDFLARE",
 		apiKeyEnv: []string{"CLOUDFLARE_API_KEY"},
-		newClient: func(r Resolved) provider.Client { return provider.NewCloudflareAIGateway(r.Credential, r.BaseURL) },
+		newClient: func(c clientConfig) provider.Client { return provider.NewCloudflareAIGateway(c.Credential, c.BaseURL) },
 	},
 	{
 		id:             "openai-compatible",
 		noDefaultModel: true,
 		// envHint left empty: falls back to ANTHROPIC, matching the
 		// historical envVarName behavior for this id.
-		newClient: func(r Resolved) provider.Client { return provider.NewOpenAI(r.Credential, r.BaseURL) },
+		newClient: func(c clientConfig) provider.Client { return provider.NewOpenAI(c.Credential, c.BaseURL) },
 	},
 }
 
@@ -485,8 +492,8 @@ func registerEndpointLocked(id string, ep config.EndpointConfig) error {
 		id:             id,
 		noDefaultModel: true,
 		apiKeyEnv:      apiKeyEnv,
-		newClient: func(r Resolved) provider.Client {
-			return provider.NewOpenAI(r.Credential, firstNonEmpty(r.BaseURL, baseURL))
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewOpenAI(c.Credential, firstNonEmpty(c.BaseURL, baseURL))
 		},
 	}
 	providerByID[id] = s
@@ -606,4 +613,61 @@ func SanitizeID(s string) string {
 		}
 	}
 	return strings.Trim(b.String(), "-")
+}
+
+// clientConfig is the slice of [Resolved] a provider's newClient actually reads.
+//
+// The registry entries used to take the whole Resolved. Across all ~35 of them
+// the closures touch five fields, and that dependency on the DI container's
+// output type is what made provider_registry.go unliftable — a subpackage taking
+// Resolved would import `build`, which imports the registry (07's question 8).
+// Narrowing the parameter is the step that has to come before any move.
+type clientConfig struct {
+	Provider   string // selects the OAuth token to refresh; see credentialSource
+	Credential string
+	BaseURL    string
+	AuthMethod string
+	AccountID  string
+}
+
+func (c clientConfig) credentialSource() provider.CredentialSource {
+	tokenProvider := c.Provider
+	if tokenProvider == "openai-codex" {
+		tokenProvider = "openai"
+	}
+	var mu sync.Mutex
+	return func(context.Context) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		tok, _ := config.RefreshIfExpired(tokenProvider, config.LoadOAuthToken(tokenProvider))
+		if tok == nil {
+			return "", nil
+		}
+		return tok.AccessToken, nil
+	}
+}
+
+func kimiCodeHeaders() map[string]string {
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "unknown"
+	}
+	deviceID := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		if b, err := os.ReadFile(filepath.Join(home, ".kimi", "device_id")); err == nil {
+			deviceID = strings.TrimSpace(string(b))
+		}
+	}
+	if deviceID == "" {
+		deviceID = "zot" // rename:keep — bound to existing kimi device sessions
+	}
+	return map[string]string{
+		"User-Agent":         "KimiCLI/1.41.0",
+		"X-Msh-Platform":     "kimi_cli",
+		"X-Msh-Version":      "1.41.0",
+		"X-Msh-Device-Name":  host,
+		"X-Msh-Device-Model": runtime.GOOS + "-" + runtime.GOARCH,
+		"X-Msh-Os-Version":   runtime.GOOS,
+		"X-Msh-Device-Id":    deviceID,
+	}
 }

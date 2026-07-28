@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -19,9 +20,9 @@ const personaRosterTripwire = 30
 // carrying a non-empty good_for tag set. Filtering on good_for keeps the roster
 // small, curated, and low-confusability (distinct tags) — which is what keeps
 // an injected manifest reliable as the crew grows.
-func dispatchablePersonas() []Persona {
-	all := AllPersonas()
-	out := make([]Persona, 0, len(all))
+func dispatchablePersonas() []persona.Persona {
+	all := persona.All()
+	out := make([]persona.Persona, 0, len(all))
 	for _, p := range all {
 		if len(p.GoodFor) > 0 {
 			out = append(out, p)
@@ -47,7 +48,7 @@ func DispatchablePersonaNames() []string {
 // coordinator reads to pick a specialist. Tier 1 of progressive disclosure:
 // name + specialty + good_for only — the charter resolves in the sub-agent.
 // Returns "" when nothing is dispatchable.
-func personaRoster(ps []Persona) string {
+func personaRoster(ps []persona.Persona) string {
 	if len(ps) == 0 {
 		return ""
 	}
@@ -96,7 +97,7 @@ func ResolveDispatchPersona(name string) (string, error) {
 	if strings.ContainsAny(s, `/\`) || strings.HasSuffix(s, ".md") {
 		return "", fmt.Errorf("persona %q must be a built-in/installed name, not a path", s)
 	}
-	p, err := loadPersonaByName(s)
+	p, err := persona.LoadByName(s)
 	if err != nil {
 		return "", err
 	}

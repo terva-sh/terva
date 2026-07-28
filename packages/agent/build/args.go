@@ -8,63 +8,10 @@ import (
 	"strconv"
 	"strings"
 
+	"terva.sh/terva/packages/agent/mode"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
-)
-
-// Mode is the CLI run mode.
-type Mode string
-
-const (
-	ModeInteractive Mode = "interactive"
-	ModePrint       Mode = "print"
-	ModeJSON        Mode = "json"
-	ModeRPC         Mode = "rpc"
-	// ModeACP is the Agent Client Protocol mode (editor↔agent JSON-RPC 2.0
-	// on stdio — Zed and other ACP clients). Routed via the `terva acp`
-	// subcommand and selected by --acp. The wire implementation is an
-	// opt-in build (-tags terva_acp); the no-tag binary routes here too but
-	// exits with "acp mode not built in".
-	ModeACP Mode = "acp"
-	// ModeSwarmAgent is the long-lived, headless daemon mode used by
-	// swarm-spawned agents. The binary opens a unix-socket inbox at
-	// the path provided by --swarm-agent, reads supervisor messages
-	// off it ("user ...", "cancel", "shutdown"), runs each user turn
-	// against a persistent session, and streams JSONL events on
-	// stdout. See packages/agent/swarm/inbox.go for the wire protocol.
-	ModeSwarmAgent Mode = "swarm-agent"
-	// ModeWeb is the browser control-panel mode: a local HTTP server that
-	// speaks ctrlproto over a WebSocket to a self-hosted terva workspace
-	// (chat + sessions + models). Routed via `terva web` / --web. The server
-	// is an opt-in build (-tags terva_web); the no-tag binary routes here too
-	// but exits with "web mode not built in".
-	ModeWeb Mode = "web"
-	// ModeAttach runs the interactive TUI as a CLIENT of a running daemon
-	// (`terva attach [URL]` / --attach): the same Interactive loop, but the
-	// carrier is a reconnecting ctrlproto WebSocket client instead of an
-	// in-process Workspace. Sessions, credentials, extensions, and tools all
-	// live daemon-side; the TUI renders and controls. See
-	// docs/proposals/archive/tui-attach.md (stage 2).
-	ModeAttach Mode = "attach"
-	// ModeReplay plays a recorded session transcript back through the
-	// interactive TUI as a deterministic, transport-controlled scene (the
-	// session player). Routed via `terva replay <file>` / --replay. It backs
-	// the TUI with a read-only replay carrier instead of a live Workspace, so
-	// it needs no credential and rejects prompts. See
-	// docs/proposals/session-player.md.
-	ModeReplay Mode = "replay"
-	// ModeBot is the chat-connector daemon (`terva bot run`): a full agent
-	// whose user is a Discord/Slack conversation. It is NOT set by a flag —
-	// `bot run` is routed before the mode switch and parses its own tail, so
-	// runBotRun stamps it after ParseArgs.
-	//
-	// It exists because a bot is neither interactive nor headless and both
-	// answers are wrong for it. It used to inherit ParseArgs's ModeInteractive
-	// default, which quietly made two decisions: the prompt told a Discord bot
-	// its output rendered in a TUI (see Surface), and resolveJail confined it to
-	// the cwd. The first was a bug; the second was right, and is now said out
-	// loud rather than inherited.
-	ModeBot Mode = "bot"
 )
 
 // Portable-mode values for Args.Portable / SystemPromptOpts.Portable.
@@ -76,7 +23,7 @@ const (
 
 // Args holds parsed command-line options.
 type Args struct {
-	Mode     Mode
+	Mode     mode.Mode
 	Provider string
 	Model    string
 	APIKey   string
@@ -84,7 +31,7 @@ type Args struct {
 	BaseURL string // override provider base URL (for tests/self-hosted)
 
 	// ReplayPath is the recorded session transcript to play back (--replay /
-	// `terva replay <file>`, Mode == ModeReplay).
+	// `terva replay <file>`, Mode == mode.Replay).
 	ReplayPath string
 
 	// Web control-panel mode (--web / `terva web`, build tag terva_web).
@@ -122,7 +69,7 @@ type Args struct {
 	// distinct product from the control panel, opted into per deployment.
 	WebStage bool
 
-	// Attach mode (`terva attach [URL]` / --attach, Mode == ModeAttach).
+	// Attach mode (`terva attach [URL]` / --attach, Mode == mode.Attach).
 	// AttachURL is the daemon endpoint — a full ws:// or wss:// URL, or a
 	// bare host:port that normalizes to ws://host:port/ws; empty means the
 	// local default (ws://127.0.0.1:8730/ws, terva web's default listener).
@@ -263,6 +210,26 @@ type Args struct {
 	// `terva trust`. See resolveTrust / docs/plans/workspace-trust.md.
 	Trust bool
 
+	// TrustPin, when non-nil, is the Workspace Trust verdict Resolve must use
+	// instead of consulting the store. No flag sets it; it exists for a host
+	// whose posture is FIXED for the process's lifetime and that nonetheless
+	// re-resolves (rpc, whose tool-set rebuild re-runs the whole of Resolve to
+	// get a fresh registry).
+	//
+	// Without it, "fixed for the process's lifetime" was almost true: the
+	// extension manager and the hook engine held the launch verdict while a
+	// rebuild re-read the store, so a `terva trust` run in another terminal
+	// could give the model a trusted repo's project skills inside a process
+	// whose extensions and hooks were still gated as untrusted. A SPLIT posture
+	// is worse than either consistent one, and it is not something the process
+	// could notice about itself.
+	//
+	// A live-trust host (the workspace daemon, ACP) must leave this nil: there
+	// the store IS the answer, written by the trust verb a moment earlier.
+	// Note the asymmetry with Trust above — that one can only force trust ON,
+	// which is why pinning needs its own tri-state field rather than a reuse.
+	TrustPin *bool
+
 	// Exts is a list of directory paths the user passed via --ext.
 	// Each must contain an extension.json. Loaded for one session
 	// only; never persisted. Take precedence over installed exts of
@@ -391,11 +358,11 @@ type Args struct {
 
 	// SwarmAgent is the inbox-socket path when this process is a
 	// swarm-spawned agent. Empty in every other mode. Set by
-	// --swarm-agent <path>; presence flips Mode to ModeSwarmAgent.
+	// --swarm-agent <path>; presence flips Mode to mode.SwarmAgent.
 	SwarmAgent string
 
 	// DeliverableSchema is the structured-deliverable contract for a swarm
-	// child (ModeSwarmAgent only): the JSON schema its report must match.
+	// child (mode.SwarmAgent only): the JSON schema its report must match.
 	// Populated by the swarm-agent bootstrap from
 	// TERVA_SWARM_DELIVERABLE_SCHEMA — the supervisor's runner sets the env
 	// var; there is deliberately no flag (a schema is a JSON blob with no
@@ -413,9 +380,27 @@ type Args struct {
 	SwarmWorktrees *bool
 }
 
+// permInputs is how Args presents itself to package permissions — the seven
+// fields the resolvers read, and no way to reach the other sixty-six. The
+// projection lives here rather than there for the same reason
+// Resolved.clientConfig does: the container knows how to narrow itself, the
+// consumer does not reach in. It is also what keeps package permissions from
+// importing this one, which is the whole point of the split.
+func (a Args) PermInputs() permissions.Inputs {
+	return permissions.Inputs{
+		Mode:     a.Mode,
+		CWD:      a.CWD,
+		Approval: a.Approval,
+		NoYolo:   a.NoYolo,
+		Jail:     a.Jail,
+		NoJail:   a.NoJail,
+		Trust:    a.Trust,
+	}
+}
+
 // ParseArgs parses the process arguments (excluding argv[0]).
 func ParseArgs(in []string) (Args, error) {
-	a := Args{Mode: ModeInteractive, MaxSteps: 0, WithSkills: true}
+	a := Args{Mode: mode.Interactive, MaxSteps: 0, WithSkills: true}
 	positional := []string{}
 	taskFromFile := false
 
@@ -435,17 +420,17 @@ func ParseArgs(in []string) (Args, error) {
 		case "-v", "--version":
 			a.Version = true
 		case "-p", "--print":
-			a.Mode = ModePrint
+			a.Mode = mode.Print
 		case "--json":
-			a.Mode = ModeJSON
+			a.Mode = mode.JSON
 		case "--rpc":
-			a.Mode = ModeRPC
+			a.Mode = mode.RPC
 		case "--acp":
-			a.Mode = ModeACP
+			a.Mode = mode.ACP
 		case "--web":
-			a.Mode = ModeWeb
+			a.Mode = mode.Web
 		case "--attach":
-			a.Mode = ModeAttach
+			a.Mode = mode.Attach
 			// Optional URL: consume the next token when it isn't a flag.
 			if i+1 < len(in) && !strings.HasPrefix(in[i+1], "-") {
 				i++
@@ -462,7 +447,7 @@ func ParseArgs(in []string) (Args, error) {
 			if err != nil {
 				return a, err
 			}
-			a.Mode = ModeReplay
+			a.Mode = mode.Replay
 			a.ReplayPath = v
 		case "--web-addr":
 			v, err := want(&i, arg)
@@ -786,7 +771,7 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.SwarmAgent = v
-			a.Mode = ModeSwarmAgent
+			a.Mode = mode.SwarmAgent
 		case "--swarm-worktrees":
 			// Explicit opt-in for per-agent swarm worktree isolation;
 			// overrides the user config's swarm_worktrees for this run.

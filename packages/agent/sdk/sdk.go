@@ -52,6 +52,8 @@ import (
 	"sync"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/mode"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -184,7 +186,7 @@ func effectiveMaxSteps(n int) int {
 // credential is available for the requested provider.
 func New(cfg Config) (*Runtime, error) {
 	args := build.Args{
-		Mode:               build.ModeJSON, // headless
+		Mode:               mode.JSON, // headless
 		Provider:           cfg.Provider,
 		Model:              cfg.Model,
 		CWD:                cfg.CWD,
@@ -224,7 +226,7 @@ func New(cfg Config) (*Runtime, error) {
 	// read_only-annotated tools join the classification the gate keys on.
 	var gate *core.ConfirmGate
 	if !cfg.Yolo {
-		if pol, _ := build.BuildPermissionPolicy(args); pol != nil {
+		if pol, _ := permissions.BuildPolicy(args.PermInputs()); pol != nil {
 			gate = core.NewPolicyGate(pol, cfg.Confirmer)
 			r.AdoptReadOnlySet(pol.ReadOnly)
 		}

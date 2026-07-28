@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -111,7 +112,7 @@ func TestCastSkinActive(t *testing.T) {
 }
 
 func TestKertojaPersonaIsImmersiveGM(t *testing.T) {
-	p, err := ResolvePersona("kertoja")
+	p, err := persona.Resolve("kertoja")
 	if err != nil {
 		t.Fatalf("resolve kertoja: %v", err)
 	}

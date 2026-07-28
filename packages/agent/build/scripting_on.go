@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 )
@@ -31,8 +32,8 @@ func init() {
 	// themselves. The classification follows the binding set — a future
 	// mutating binding (bash, write) MUST remove this readOnlyTools entry
 	// in the same commit (docs/plans/jsengine-code-execution-and-workflows.md).
-	readOnlyTools["code_execution"] = true
-	BuiltinTools["code_execution"] = true
+	permissions.RegisterReadOnly("code_execution")
+	permissions.RegisterBuiltin("code_execution")
 	extraBuiltinTools = append(extraBuiltinTools, func(cwd string, sandbox *tools.Sandbox) (string, core.Tool) {
 		return "code_execution", &tools.CodeExecutionTool{}
 	})

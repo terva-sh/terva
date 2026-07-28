@@ -1,4 +1,4 @@
-package build
+package persona
 
 import (
 	"encoding/json"
@@ -21,7 +21,7 @@ func nsFromRel(rel string) string {
 }
 
 // stem is the file stem of the Persona's Source ("review-crew/vartija.md" → "vartija").
-func (p Persona) stem() string { return personaStem(p.Source) }
+func (p Persona) stem() string { return stemOf(p.Source) }
 
 // Qualified is the display name: "<namespace>:<name>", or the bare name when
 // top-level.
@@ -92,11 +92,11 @@ func (p Persona) Origin() string {
 	}
 }
 
-// PersonaTiers returns the Persona library in precedence order: user on-disk >
+// Tiers returns the Persona library in precedence order: user on-disk >
 // extension bundles > embedded crew. Resolution returns the first match; the
 // merged roster dedups by qualified name keeping the highest tier.
-func PersonaTiers() [][]Persona {
-	return [][]Persona{listOnDiskPersonas(), listExtensionPersonas(), listEmbeddedPersonas()}
+func Tiers() [][]Persona {
+	return [][]Persona{listOnDisk(), listExtensionPersonas(), listEmbedded()}
 }
 
 // extPersonaRoot is one enabled extension's personas/ directory + its namespace.
@@ -165,7 +165,7 @@ func listExtensionPersonas() []Persona {
 	var out []Persona
 	for _, er := range extensionPersonaRoots(config.TervaHome(), userDisabled) {
 		ns := er.namespace
-		out = append(out, readPersonasFromFS(os.DirFS(er.dir), ".",
+		out = append(out, readFromFS(os.DirFS(er.dir), ".",
 			func(rel string) string { return "ext:" + ns + ":" + rel },
 			func(string) string { return ns })...)
 	}

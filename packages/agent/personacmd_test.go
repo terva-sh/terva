@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -41,14 +41,14 @@ func TestValidateOnePersona(t *testing.T) {
 // charter leaves OUT. Pin the two things it must say: the size, and that the
 // default persona's charter does not come along.
 func TestCharterScopeNote(t *testing.T) {
-	additive := charterScopeNote(build.Persona{Name: "Assistant", Charter: strings.Repeat("x", 1747)})
+	additive := charterScopeNote(persona.Persona{Name: "Assistant", Charter: strings.Repeat("x", 1747)})
 	for _, want := range []string{"1747", "ONLY charter", "Mieli"} {
 		if !strings.Contains(additive, want) {
 			t.Errorf("additive note %q is missing %q", additive, want)
 		}
 	}
 
-	immersive := charterScopeNote(build.Persona{Name: "Data", Charter: "You are Data.", Immersive: true})
+	immersive := charterScopeNote(persona.Persona{Name: "Data", Charter: "You are Data.", Immersive: true})
 	if !strings.Contains(immersive, "WHOLE prompt") {
 		t.Errorf("immersive note %q should say the charter owns the whole prompt", immersive)
 	}
@@ -157,7 +157,7 @@ func TestValidateRejectsABadExtends(t *testing.T) {
 // re-aims the fixture instead of quietly turning this into a test of nothing.
 func TestValidateBudgetsTheAssembledCharter(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	base, ok := build.LookupPersona("mieli")
+	base, ok := persona.Lookup("mieli")
 	if !ok {
 		t.Fatal("the default persona is not in the built-in library")
 	}
@@ -247,11 +247,11 @@ func eachBuiltinPersona(t *testing.T, check func(name, onDisk string)) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	dir := testsupport.TempDir(t)
 	seen := 0
-	err := fs.WalkDir(build.BuiltinPersonasFS, build.BuiltinPersonasRoot, func(p string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(persona.BuiltinFS, persona.BuiltinRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".md") || strings.EqualFold(filepath.Base(p), "README.md") {
 			return err
 		}
-		raw, err := fs.ReadFile(build.BuiltinPersonasFS, p)
+		raw, err := fs.ReadFile(persona.BuiltinFS, p)
 		if err != nil {
 			return err
 		}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
@@ -113,7 +114,7 @@ func TestBundlePermissionRulesRestrictOnly(t *testing.T) {
 		},
 	}, nil)
 
-	pol, warns := build.BuildPermissionPolicy(build.Args{CWD: testsupport.TempDir(t)})
+	pol, warns := permissions.BuildPolicy(build.Args{CWD: testsupport.TempDir(t)}.PermInputs())
 	if pol == nil {
 		t.Fatal("bundle rules exist; policy must be non-nil")
 	}
@@ -160,7 +161,7 @@ func TestBundleRulesOrderedBetweenProjectAndUser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pol, _ := build.BuildPermissionPolicy(build.Args{CWD: proj})
+	pol, _ := permissions.BuildPolicy(build.Args{CWD: proj}.PermInputs())
 	if pol == nil || len(pol.Rules) != 3 {
 		t.Fatalf("rules = %+v", pol)
 	}

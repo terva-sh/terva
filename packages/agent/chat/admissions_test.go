@@ -4,8 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"terva.sh/terva/packages/testsupport"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func TestAdmissionsScopedApproveAndRevokeScope(t *testing.T) {

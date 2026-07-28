@@ -1,4 +1,4 @@
-package build
+package persona
 
 import (
 	"os"
@@ -24,7 +24,7 @@ func freshHome(t *testing.T) string {
 // creator + the 3 raati panelists); the team READMEs are not personas.
 func TestEmbeddedCrew(t *testing.T) {
 	freshHome(t)
-	got := listEmbeddedPersonas()
+	got := listEmbedded()
 	if len(got) != 16 {
 		names := make([]string, len(got))
 		for i, p := range got {
@@ -75,10 +75,10 @@ func TestEmbeddedCrew(t *testing.T) {
 }
 
 func TestParsePersona_RequiresName(t *testing.T) {
-	if _, err := ParsePersona("---\nsummary: x\n---\nbody", "t.md"); err == nil {
+	if _, err := Parse("---\nsummary: x\n---\nbody", "t.md"); err == nil {
 		t.Fatal("expected error for missing name")
 	}
-	p, err := ParsePersona("---\nname: Foo\ngood_for: [a, b]\n---\nThe charter.", "t.md")
+	p, err := Parse("---\nname: Foo\ngood_for: [a, b]\n---\nThe charter.", "t.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestParsePersona_RequiresName(t *testing.T) {
 // Default resolution lands on the embedded Mieli, charter included.
 func TestResolvePersona_DefaultIsMieli(t *testing.T) {
 	freshHome(t)
-	p, err := ResolvePersona("")
+	p, err := Resolve("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestResolvePersona_DefaultIsMieli(t *testing.T) {
 func TestResolvePersona_ByName(t *testing.T) {
 	freshHome(t)
 	for _, name := range []string{"vartija", "Vartija", "koestaja"} {
-		p, err := ResolvePersona(name)
+		p, err := Resolve(name)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -117,7 +117,7 @@ func TestResolvePersona_ByName(t *testing.T) {
 			t.Errorf("%s charter has leftover macros", name)
 		}
 	}
-	if _, err := ResolvePersona("nope-not-real"); err == nil {
+	if _, err := Resolve("nope-not-real"); err == nil {
 		t.Error("expected error for unknown persona name")
 	}
 }
@@ -128,7 +128,7 @@ func TestResolvePersona_ByPath(t *testing.T) {
 	if err := os.WriteFile(path, []byte("---\nname: Custom\n---\nBespoke charter."), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, err := ResolvePersona(path)
+	p, err := Resolve(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestResolvePersona_RootFileWinsOverConfig(t *testing.T) {
 	if err := config.SaveConfig(config.Config{DefaultPersona: "koestaja"}); err != nil {
 		t.Fatal(err)
 	}
-	p, err := ResolvePersona("")
+	p, err := Resolve("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestResolvePersona_DefaultPersonaPointer(t *testing.T) {
 	if err := config.SaveConfig(config.Config{DefaultPersona: "luotsi"}); err != nil {
 		t.Fatal(err)
 	}
-	p, err := ResolvePersona("")
+	p, err := Resolve("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestResolvePersona_OnDiskShadowsEmbedded(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "vartija.md"), []byte("---\nname: Vartija\nsummary: ONDISK\n---\nForked charter."), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, err := ResolvePersona("vartija")
+	p, err := Resolve("vartija")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,34 +196,11 @@ func TestResolvePersona_LegacyNameOnly(t *testing.T) {
 	if err := config.SaveConfig(config.Config{PersonaName: "Aria"}); err != nil {
 		t.Fatal(err)
 	}
-	p, err := ResolvePersona("")
+	p, err := Resolve("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.Name != "Aria" || p.Charter != "" {
 		t.Fatalf("legacy name-only: %+v", p)
-	}
-}
-
-// The charter lands between the identity intro and the harness conventions,
-// and is dropped when a Custom prompt replaces the identity.
-func TestBuildSystemPrompt_CharterPlacement(t *testing.T) {
-	got := BuildSystemPrompt(SystemPromptOpts{PersonaName: "Vartija", Charter: "REVIEW-AS-SECURITY"})
-	intro := strings.Index(got, "You are Vartija,")
-	charter := strings.Index(got, "REVIEW-AS-SECURITY")
-	// Anchor on the surface-independent half of the conventions: the opening
-	// sentence now varies with where the output lands (see Surface), so keying
-	// the ordering check on it would make this test a hostage to the audience.
-	conv := strings.Index(got, "let tool calls carry the operational detail")
-	if intro < 0 || charter < 0 || conv < 0 {
-		t.Fatalf("missing a section: intro=%d charter=%d conv=%d\n%s", intro, charter, conv, got)
-	}
-	if !(intro < charter && charter < conv) {
-		t.Fatalf("order wrong: intro=%d charter=%d conv=%d", intro, charter, conv)
-	}
-
-	custom := BuildSystemPrompt(SystemPromptOpts{Custom: "BESPOKE", PersonaName: "Vartija", Charter: "REVIEW-AS-SECURITY"})
-	if strings.Contains(custom, "REVIEW-AS-SECURITY") {
-		t.Errorf("charter must be ignored under Custom:\n%s", custom)
 	}
 }

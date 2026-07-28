@@ -5,6 +5,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -46,11 +47,11 @@ func TestNormalizeAttachURL(t *testing.T) {
 
 func TestParseAttachArgs(t *testing.T) {
 	a, err := build.ParseArgs([]string{"--attach"})
-	if err != nil || a.Mode != build.ModeAttach || a.AttachURL != "" {
+	if err != nil || a.Mode != mode.Attach || a.AttachURL != "" {
 		t.Fatalf("--attach: %+v, %v", a, err)
 	}
 	a, err = build.ParseArgs([]string{"--attach", "host:8730", "--token", "sekrit"})
-	if err != nil || a.Mode != build.ModeAttach || a.AttachURL != "host:8730" || a.Token != "sekrit" {
+	if err != nil || a.Mode != mode.Attach || a.AttachURL != "host:8730" || a.Token != "sekrit" {
 		t.Fatalf("--attach with URL+token: %+v, %v", a, err)
 	}
 	// The optional URL must not swallow a following flag.

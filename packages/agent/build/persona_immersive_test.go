@@ -3,6 +3,8 @@ package build
 import (
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/agent/persona"
 )
 
 const immersivePersonaRaw = `---
@@ -17,7 +19,7 @@ You are Lieutenant Commander Data, operations and science officer. You command
 a starship through its systems, exposed to you as tools.`
 
 func TestPersonaImmersiveParse(t *testing.T) {
-	p, err := ParsePersona(immersivePersonaRaw, "test")
+	p, err := persona.Parse(immersivePersonaRaw, "test")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -30,25 +32,25 @@ func TestPersonaImmersiveParse(t *testing.T) {
 }
 
 func TestImmersiveCustomPrecedence(t *testing.T) {
-	imm, _ := ParsePersona(immersivePersonaRaw, "test")
+	imm, _ := persona.Parse(immersivePersonaRaw, "test")
 	additive := imm
 	additive.Immersive = false
 
 	cases := []struct {
 		name   string
 		custom string
-		p      Persona
+		p      persona.Persona
 		want   string // "" means keep additive path
 	}{
 		{"immersive, no custom -> charter wins", "", imm, imm.Charter},
 		{"explicit custom always wins", "SYSTEM.md body", imm, ""},
 		{"additive persona -> no replace", "", additive, ""},
-		{"immersive but empty charter -> no replace", "", Persona{Immersive: true}, ""},
+		{"immersive but empty charter -> no replace", "", persona.Persona{Immersive: true}, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := immersiveCustom(c.custom, c.p); got != c.want {
-				t.Fatalf("immersiveCustom(%q,...) = %q, want %q", c.custom, got, c.want)
+			if got := persona.ImmersiveCustom(c.custom, c.p); got != c.want {
+				t.Fatalf("persona.ImmersiveCustom(%q,...) = %q, want %q", c.custom, got, c.want)
 			}
 		})
 	}
@@ -58,7 +60,7 @@ func TestImmersiveCustomPrecedence(t *testing.T) {
 // charter produces a coding-assistant-framed prompt when additive, and a
 // charter-only prompt when immersive.
 func TestImmersiveReplacesIdentity(t *testing.T) {
-	p, _ := ParsePersona(immersivePersonaRaw, "test")
+	p, _ := persona.Parse(immersivePersonaRaw, "test")
 
 	// Additive path: Custom empty, name+charter layered.
 	additive := BuildSystemPrompt(SystemPromptOpts{
@@ -73,7 +75,7 @@ func TestImmersiveReplacesIdentity(t *testing.T) {
 	}
 
 	// Immersive path: routing sets Custom = charter.
-	custom := immersiveCustom("", p)
+	custom := persona.ImmersiveCustom("", p)
 	immersive := BuildSystemPrompt(SystemPromptOpts{
 		Custom:      custom,
 		PersonaName: p.Name,

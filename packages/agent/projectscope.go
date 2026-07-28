@@ -7,6 +7,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/envcompat"
 )
 
@@ -130,9 +131,7 @@ func maybeEnableProjectScope(args build.Args) (string, error) {
 	// off) is a confusing, near-empty half-agent that still moves data into the
 	// repo. The user trusts once — `terva trust` (or `terva project trust`) —
 	// and re-runs; `--trust` grants it for a single run.
-	trustArgs := args
-	trustArgs.CWD = cwd
-	if !build.ResolveTrustState(trustArgs).IsTrusted() {
+	if !permissions.ResolveTrustState(cwd, args.Trust).IsTrusted() {
 		return "", fmt.Errorf(
 			"project-scoped agent in %s is not trusted.\n"+
 				"A scoped project runs its OWN config, extensions, hooks, and system prompt, so it must be trusted first:\n"+

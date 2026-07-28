@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -85,8 +85,8 @@ func cardsDoctor(ctx context.Context, w *Workspace, s *wsSession, c card.Card, p
 		scene = renderEditorEvidence(charName, boundName, s.playerLabel(),
 			worldLoreFor(s.sess.Meta.WorldLore, charName), s.agent.Messages())
 	}
-	persona, err := build.ResolvePersona(personaName)
-	if err != nil || strings.TrimSpace(persona.Charter) == "" {
+	pers, err := persona.Resolve(personaName)
+	if err != nil || strings.TrimSpace(pers.Charter) == "" {
 		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", personaName))
 	}
 	// Resolve the client for this run. In EDITOR mode (grounded in a session) the
@@ -127,7 +127,7 @@ func cardsDoctor(ctx context.Context, w *Workspace, s *wsSession, c card.Card, p
 
 	findings := card.Lint(c)
 	fields := doctorFields(c)
-	system := persona.Charter + "\n\n" + task
+	system := pers.Charter + "\n\n" + task
 	user := renderDoctorPrompt(fields, findings, p.Decisions, p.Steer)
 	if scene != "" {
 		user += "\n" + scene
@@ -140,7 +140,7 @@ func cardsDoctor(ctx context.Context, w *Workspace, s *wsSession, c card.Card, p
 	// Post-#398 a user persona slugging to the machine stem genuinely
 	// shadows the built-in here — announce it rather than run silently on
 	// an identity the author may have forgotten they overrode.
-	res.Note = build.MachinePersonaNotice(personaName, persona, res.Note)
+	res.Note = persona.MachineNotice(personaName, pers, res.Note)
 	return res, nil
 }
 

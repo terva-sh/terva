@@ -1,4 +1,4 @@
-package build
+package permissions
 
 import (
 	"os"
@@ -9,7 +9,8 @@ import (
 	"terva.sh/terva/packages/testsupport"
 )
 
-// Tests for the Args-shaped trust policy that stays in agent (trust_cli.go).
+// Tests for the trust policy layer (trust_cli.go): the store and the on-disk
+// state are config's, the per-launch resolution is this package's.
 // The store, paths and on-disk state are tested in packages/agent/config.
 
 func TestMovedDirNotTrusted(t *testing.T) {
@@ -44,20 +45,21 @@ func TestResolveTrustPrecedence(t *testing.T) {
 	withRepo.Add(repo, false)
 
 	cases := []struct {
-		name  string
-		args  Args
-		store config.TrustStore
-		want  config.TrustState
+		name   string
+		cwd    string
+		forced bool
+		store  config.TrustStore
+		want   config.TrustState
 	}{
-		{"default untrusted", Args{CWD: repo}, empty, config.TrustRestricted},
-		{"--trust one-shot trusts", Args{CWD: repo, Trust: true}, empty, config.TrustGranted},
-		{"store entry trusts", Args{CWD: repo}, withRepo, config.TrustGranted},
-		{"store entry does not trust other dir", Args{CWD: other}, withRepo, config.TrustRestricted},
-		{"--trust wins even off-store", Args{CWD: other, Trust: true}, withRepo, config.TrustGranted},
+		{"default untrusted", repo, false, empty, config.TrustRestricted},
+		{"--trust one-shot trusts", repo, true, empty, config.TrustGranted},
+		{"store entry trusts", repo, false, withRepo, config.TrustGranted},
+		{"store entry does not trust other dir", other, false, withRepo, config.TrustRestricted},
+		{"--trust wins even off-store", other, true, withRepo, config.TrustGranted},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := resolveTrust(c.args, c.store); got != c.want {
+			if got := resolveTrust(c.cwd, c.forced, c.store); got != c.want {
 				t.Errorf("resolveTrust = %v, want %v", got, c.want)
 			}
 		})
@@ -69,7 +71,7 @@ func TestTrustFlagDoesNotPersist(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	repo := testsupport.TempDir(t)
 
-	if got := ResolveTrustState(Args{CWD: repo, Trust: true}); got != config.TrustGranted {
+	if got := ResolveTrustState(repo, true); got != config.TrustGranted {
 		t.Fatalf("--trust should grant for the run, got %v", got)
 	}
 	// The store file must not have been created/written by the flag.

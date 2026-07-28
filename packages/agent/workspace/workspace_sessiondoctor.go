@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -66,8 +66,8 @@ func sessionsDoctor(ctx context.Context, s *wsSession, p ctrlproto.SessionDoctor
 	if ag == nil || ag.Client == nil {
 		return ctrlproto.SessionDoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
-	persona, err := build.ResolvePersona(dramaturgPersona)
-	if err != nil || strings.TrimSpace(persona.Charter) == "" {
+	pers, err := persona.Resolve(dramaturgPersona)
+	if err != nil || strings.TrimSpace(pers.Charter) == "" {
 		return ctrlproto.SessionDoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", dramaturgPersona))
 	}
 	// Default to the session's live client + model; an override resolves fresh.
@@ -123,7 +123,7 @@ func sessionsDoctor(ctx context.Context, s *wsSession, p ctrlproto.SessionDoctor
 
 	req := provider.Request{
 		Model:     model,
-		System:    persona.Charter + "\n\n" + dramaturgTask,
+		System:    pers.Charter + "\n\n" + dramaturgTask,
 		MaxTokens: 8000,
 		Messages: []provider.Message{{
 			Role:    provider.RoleUser,
@@ -142,7 +142,7 @@ func sessionsDoctor(ctx context.Context, s *wsSession, p ctrlproto.SessionDoctor
 	}
 	// Announce a shadowed dramaturg (see MachinePersonaNotice) — the
 	// narrowing below keeps notes, so this survives focus/promote runs too.
-	res.Note = build.MachinePersonaNotice(dramaturgPersona, persona, res.Note)
+	res.Note = persona.MachineNotice(dramaturgPersona, pers, res.Note)
 	// A narrowed run keeps only what its button promised: mark-as-lore returns
 	// only lore/threads (no promotions, no scene-state rewrites), promote
 	// returns only the named character's promotion.

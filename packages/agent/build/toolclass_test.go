@@ -3,12 +3,13 @@ package build
 import (
 	"testing"
 
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
 
-// The tool-classification maps (BuiltinTools, readOnlyTools, EditTools,
-// interactiveTools) are what the permission ladder trusts, and nothing tied
+// The tool-classification maps (builtin, readOnly, editTools,
+// interactive) are what the permission ladder trusts, and nothing tied
 // them to the registry they describe — 10-permissions.md flagged the
 // duplication, and grounding it found live drift: several first-party tools
 // are registered but absent from the trusted-origin set, with nothing
@@ -39,10 +40,11 @@ var registeredElsewhere = map[string]string{
 	"terva_arm_restart": "workspace injectExtraTools, iff relaunch enabled",
 	"chat_send_image":   "workspace injectExtraTools, iff a chat bridge is bound",
 	"chat_send_file":    "workspace injectExtraTools, iff a chat bridge is bound",
+	"share_file":        "workspace injectExtraTools — every session the workspace host serves",
 }
 
 // outsideTrustedOrigin is the first-party set deliberately absent from
-// BuiltinTools: in workspace approval mode these prompt as FOREIGN tools, by
+// builtin: in workspace approval mode these prompt as FOREIGN tools, by
 // decision (maintainer call, 2026-07-27 — the same audit moved the four
 // play/deliberation tools INTO the trusted set). Moving one of these is a
 // behavior change: it stops prompting in workspace mode.
@@ -72,13 +74,13 @@ func toolUniverse(t *testing.T) map[string]bool {
 func TestEveryFirstPartyToolDeclaresItsTrustOrigin(t *testing.T) {
 	universe := toolUniverse(t)
 	for name := range universe {
-		_, trusted := BuiltinTools[name]
+		trusted := permissions.IsBuiltin(name)
 		_, excused := outsideTrustedOrigin[name]
 		switch {
 		case !trusted && !excused:
-			t.Errorf("first-party tool %q is neither in BuiltinTools nor on the outside-trusted-origin list — in workspace mode it will prompt as foreign, and nothing records whether that is chosen", name)
+			t.Errorf("first-party tool %q is neither in builtin nor on the outside-trusted-origin list — in workspace mode it will prompt as foreign, and nothing records whether that is chosen", name)
 		case trusted && excused:
-			t.Errorf("%q is in BuiltinTools AND on the outside-trusted-origin list — delete the stale entry", name)
+			t.Errorf("%q is in builtin AND on the outside-trusted-origin list — delete the stale entry", name)
 		}
 	}
 	for name := range outsideTrustedOrigin {
@@ -90,9 +92,9 @@ func TestEveryFirstPartyToolDeclaresItsTrustOrigin(t *testing.T) {
 
 func TestBuiltinToolsNamesOnlyLiveTools(t *testing.T) {
 	universe := toolUniverse(t)
-	for name := range BuiltinTools {
+	for _, name := range permissions.BuiltinNames() {
 		if !universe[name] {
-			t.Errorf("BuiltinTools trusts %q, which no longer registers anywhere — a stale trusted-origin entry outlives its tool", name)
+			t.Errorf("builtin trusts %q, which no longer registers anywhere — a stale trusted-origin entry outlives its tool", name)
 		}
 	}
 }
@@ -100,19 +102,19 @@ func TestBuiltinToolsNamesOnlyLiveTools(t *testing.T) {
 // The three narrower maps only ever refine the first-party set; a name in one
 // of them that is not first-party would classify a foreign tool by accident.
 func TestClassificationMapsRefineBuiltinTools(t *testing.T) {
-	for name := range readOnlyTools {
-		if !BuiltinTools[name] {
-			t.Errorf("readOnlyTools[%q] is not in BuiltinTools", name)
+	for _, name := range permissions.ReadOnlyNames() {
+		if !permissions.IsBuiltin(name) {
+			t.Errorf("readOnly[%q] is not in builtin", name)
 		}
 	}
-	for name := range EditTools {
-		if !BuiltinTools[name] {
-			t.Errorf("EditTools[%q] is not in BuiltinTools", name)
+	for _, name := range permissions.EditToolNames() {
+		if !permissions.IsBuiltin(name) {
+			t.Errorf("editTools[%q] is not in builtin", name)
 		}
 	}
-	for name := range interactiveTools {
-		if !BuiltinTools[name] {
-			t.Errorf("interactiveTools[%q] is not in BuiltinTools", name)
+	for _, name := range permissions.InteractiveNames() {
+		if !permissions.IsBuiltin(name) {
+			t.Errorf("interactive[%q] is not in builtin", name)
 		}
 	}
 }

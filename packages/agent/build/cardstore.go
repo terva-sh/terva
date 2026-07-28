@@ -2,8 +2,6 @@ package build
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,12 +9,10 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
-
-	"golang.org/x/text/unicode/norm"
 
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/slug"
 )
 
 // The character-card library. Cards were path-only before Stage: --card pointed
@@ -115,7 +111,7 @@ func (s *CardStore) List() ([]StoredCard, error) {
 
 // Get loads one card by id.
 func (s *CardStore) Get(id string) (StoredCard, error) {
-	if err := validCardID(id); err != nil {
+	if err := slug.ValidID(id); err != nil {
 		return StoredCard{}, err
 	}
 	dir := filepath.Join(s.dir, id)
@@ -160,12 +156,12 @@ func (s *CardStore) ImportBytes(data []byte) (StoredCard, error) {
 	if err != nil {
 		return StoredCard{}, err
 	}
-	id := cardID(c.Name, raw)
+	id := slug.ID(c.Name, raw)
 	// A card imported before slugs folded diacritics is filed under the old
 	// spelling ("zo-<hash>" for "Zoë"). The content-hash half is unchanged, so
 	// point the import at that directory rather than minting a duplicate
 	// beside it — re-import stays idempotent across the fold.
-	if legacy := cardIDFrom(legacyCardSlug(c.Name), raw); legacy != id {
+	if legacy := slug.IDFrom(slug.Legacy(c.Name), raw); legacy != id {
 		if _, err := os.Stat(filepath.Join(s.dir, id)); os.IsNotExist(err) {
 			if _, err := os.Stat(filepath.Join(s.dir, legacy)); err == nil {
 				id = legacy
@@ -212,7 +208,7 @@ func (s *CardStore) ImportBytes(data []byte) (StoredCard, error) {
 // portrait. The payload is validated (a card needs a name) before anything is
 // written.
 func (s *CardStore) Edit(id string, cardJSON []byte) (StoredCard, error) {
-	if err := validCardID(id); err != nil {
+	if err := slug.ValidID(id); err != nil {
 		return StoredCard{}, err
 	}
 	if _, err := os.Stat(filepath.Join(s.dir, id, cardJSONName)); err != nil {
@@ -237,7 +233,7 @@ func (s *CardStore) Edit(id string, cardJSON []byte) (StoredCard, error) {
 // that replaced both — restoring only half would leave a character wearing the
 // wrong face.
 func (s *CardStore) RestoreRevision(id, ref string) (StoredCard, error) {
-	if err := validCardID(id); err != nil {
+	if err := slug.ValidID(id); err != nil {
 		return StoredCard{}, err
 	}
 	raw, err := s.history().Get(id, ref)
@@ -334,7 +330,7 @@ func replacedNote(dataChanged, avatarChanged bool) []string {
 // prose, so keeping it after a delete would leave behind exactly what the delete
 // was asked to remove.
 func (s *CardStore) Delete(id string) error {
-	if err := validCardID(id); err != nil {
+	if err := slug.ValidID(id); err != nil {
 		return err
 	}
 	dir := filepath.Join(s.dir, id)
@@ -356,7 +352,7 @@ func (s *CardStore) Delete(id string) error {
 // AvatarPath returns the filesystem path of a card's retained avatar image, or
 // "" if the card has none or the id is invalid. The /media route serves it.
 func (s *CardStore) AvatarPath(id string) string {
-	if validCardID(id) != nil {
+	if slug.ValidID(id) != nil {
 		return ""
 	}
 	dir := filepath.Join(s.dir, id)
@@ -403,7 +399,7 @@ func (s *CardStore) Favorites() (map[string]bool, error) {
 // id is validated (a favorite is only meaningful for a real card id) and the set
 // is written sorted so the file is stable.
 func (s *CardStore) SetFavorite(id string, fav bool) error {
-	if err := validCardID(id); err != nil {
+	if err := slug.ValidID(id); err != nil {
 		return err
 	}
 	set, err := s.Favorites()
@@ -447,7 +443,7 @@ func ResolveCardRef(ref string) (string, error) {
 	if fi, err := os.Stat(ref); err == nil && !fi.IsDir() {
 		return ref, nil
 	}
-	if validCardID(ref) == nil {
+	if slug.ValidID(ref) == nil {
 		p := filepath.Join(CardsDir(), ref, cardJSONName)
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
 			return p, nil
@@ -462,84 +458,4 @@ func avatarExt(dir string) string {
 		return "png"
 	}
 	return ""
-}
-
-// cardID is a stable, human-legible library id: a slug of the card name plus a
-// short content hash. The hash makes an import idempotent and disambiguates two
-// cards that share a name.
-func cardID(name string, normalized []byte) string {
-	return cardIDFrom(cardSlug(name), normalized)
-}
-
-// cardIDFrom is cardID with the slug already chosen — ImportBytes uses it to
-// probe the id an existing entry was filed under before diacritic folding.
-func cardIDFrom(slug string, normalized []byte) string {
-	sum := sha256.Sum256(normalized)
-	h := hex.EncodeToString(sum[:])[:12]
-	if slug == "" {
-		return h
-	}
-	return slug + "-" + h
-}
-
-// cardSlug lowercases a name and keeps [a-z0-9], collapsing every other run to a
-// single dash, capped so an absurd name can't make an absurd directory. A letter
-// carrying diacritics folds to its base letter first (NFD splits off the
-// combining marks, which are then skipped), so "Seppä" slugs to "seppa" — the
-// stem the built-in crew file uses, which is what lets a user copy shadow it by
-// Key — rather than losing the letter to a dash.
-func cardSlug(name string) string {
-	var b strings.Builder
-	prevDash := false
-	for _, r := range norm.NFD.String(strings.ToLower(strings.TrimSpace(name))) {
-		if unicode.Is(unicode.Mn, r) {
-			continue // a stripped diacritic is not a word boundary
-		}
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			prevDash = false
-		} else if b.Len() > 0 && !prevDash {
-			b.WriteByte('-')
-			prevDash = true
-		}
-		if b.Len() >= 32 {
-			break
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}
-
-// legacyCardSlug is cardSlug as it behaved before diacritic folding: a
-// non-ASCII letter collapsed to a dash instead of its base letter, so "Seppä"
-// minted "sepp" and "Zoë" minted "zo". It exists only so the stores can find
-// files written under the old spelling (UserPersonaPath, UserPersonaStore,
-// ImportBytes); never mint a new name with it. Identical to cardSlug for
-// pure-ASCII names — callers use "legacy != current" as the cheap "could a
-// pre-fold file even exist" test.
-func legacyCardSlug(name string) string {
-	var b strings.Builder
-	prevDash := false
-	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			prevDash = false
-		} else if b.Len() > 0 && !prevDash {
-			b.WriteByte('-')
-			prevDash = true
-		}
-		if b.Len() >= 32 {
-			break
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}
-
-// validCardID rejects ids that could escape the library directory. Ids come off
-// the wire (cards.get / cards.edit / cards.delete), so a "../../etc" id must not
-// resolve to a real path.
-func validCardID(id string) error {
-	if id == "" || strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
-		return fmt.Errorf("invalid card id %q", id)
-	}
-	return nil
 }

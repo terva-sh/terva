@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -63,7 +63,7 @@ scanning) live in a lore.json at the directory root. Disable for a run with
 // load, honoring Workspace Trust for the project tier).
 func loreList() error {
 	cwd, _ := os.Getwd()
-	trusted := build.ResolveTrustState(build.Args{CWD: cwd}).IsTrusted()
+	trusted := permissions.ResolveTrustState(cwd, false).IsTrusted()
 	entries, _, errs := lore.Discover(config.TervaHome(), cwd, trusted)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)

@@ -1,4 +1,4 @@
-package build
+package persona
 
 import (
 	"strings"
@@ -17,8 +17,8 @@ func TestRaatiCrewChartersCarryBallotContract(t *testing.T) {
 		"every reply ends with your current ballot",
 		"never to close the gap with the panel",
 	}
-	dir := BuiltinPersonasRoot + "/raati-crew"
-	entries, err := BuiltinPersonasFS.ReadDir(dir)
+	dir := BuiltinRoot + "/raati-crew"
+	entries, err := BuiltinFS.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read embedded raati-crew dir: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestRaatiCrewChartersCarryBallotContract(t *testing.T) {
 			continue
 		}
 		charters++
-		raw, err := BuiltinPersonasFS.ReadFile(dir + "/" + name)
+		raw, err := BuiltinFS.ReadFile(dir + "/" + name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
@@ -38,7 +38,7 @@ func TestRaatiCrewChartersCarryBallotContract(t *testing.T) {
 				t.Errorf("%s is missing the ballot contract (marker %q)", name, marker)
 			}
 		}
-		p, err := ParsePersona(string(raw), "embedded:raati-crew/"+name)
+		p, err := Parse(string(raw), "embedded:raati-crew/"+name)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}

@@ -1,4 +1,4 @@
-package build
+package permissions
 
 import (
 	"encoding/json"
@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -68,7 +67,7 @@ func TestBuildPermissionPolicyGatesProjectExtRules(t *testing.T) {
 	})
 
 	// Untrusted (default): no gate built (pure yolo + no applicable rules).
-	pol, _ := BuildPermissionPolicy(Args{CWD: proj})
+	pol, _ := BuildPolicy(Inputs{CWD: proj})
 	if pol != nil {
 		// If a policy exists it must NOT carry the project-ext rule.
 		for _, r := range pol.Rules {
@@ -79,7 +78,7 @@ func TestBuildPermissionPolicyGatesProjectExtRules(t *testing.T) {
 	}
 
 	// Trusted: the suggested ask rule applies.
-	polT, _ := BuildPermissionPolicy(Args{CWD: proj, Trust: true})
+	polT, _ := BuildPolicy(Inputs{CWD: proj, Trust: true})
 	if polT == nil {
 		t.Fatal("trusted workspace with a project-ext suggested rule should build a gate")
 	}
@@ -113,7 +112,7 @@ func TestTrustDoesNotUnlockProjectAllow(t *testing.T) {
 	// self-approval-ban warning. (With the lone allow rule dropped and no
 	// other rules under the default yolo mode, the policy is nil — the
 	// no-gate fast path — which itself proves the allow never took.)
-	pol, warns := BuildPermissionPolicy(Args{CWD: proj, Trust: true})
+	pol, warns := BuildPolicy(Inputs{CWD: proj, Trust: true})
 	if pol != nil {
 		for _, r := range pol.Rules {
 			if r.Source == "project" && r.Decision == core.RuleAllow {
@@ -129,49 +128,5 @@ func TestTrustDoesNotUnlockProjectAllow(t *testing.T) {
 	}
 	if !sawBan {
 		t.Errorf("expected the self-approval-ban warning even for a trusted project, got %v", warns)
-	}
-}
-
-// Trust via the STORE (persisted) loads project skills, just like
-// --trust does — exercised end-to-end through Resolve.
-func TestResolveTrustViaStoreLoadsProjectSkills(t *testing.T) {
-	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	t.Setenv("OPENAI_API_KEY", "test-key")
-	if err := config.SaveConfig(config.Config{Provider: "openai", Model: "gpt-5"}); err != nil {
-		t.Fatal(err)
-	}
-	proj := testsupport.TempDir(t)
-	skillDir := filepath.Join(proj, ".terva", "skills", "repo-skill")
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	body := "---\nname: repo-skill\ndescription: REPO-SKILL-MARKER\n---\nbody"
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Untrusted (default): the project skill is NOT in the manifest.
-	// WithSkills mirrors ParseArgs's default (user skills load).
-	rOff, err := Resolve(Args{CWD: proj, WithSkills: true}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(rOff.SystemPrompt, "REPO-SKILL-MARKER") {
-		t.Fatal("untrusted workspace leaked a project skill into the system prompt")
-	}
-
-	// Persist trust in the store, then re-resolve: the project skill loads.
-	if err := config.TrustPath(proj, false); err != nil {
-		t.Fatal(err)
-	}
-	rOn, err := Resolve(Args{CWD: proj, WithSkills: true}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !rOn.Trusted {
-		t.Fatal("store entry should make Resolve report the workspace trusted")
-	}
-	if !strings.Contains(rOn.SystemPrompt, "REPO-SKILL-MARKER") {
-		t.Fatalf("store-trusted workspace should load its project skill:\n%s", rOn.SystemPrompt)
 	}
 }

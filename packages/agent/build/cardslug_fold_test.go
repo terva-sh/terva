@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -15,58 +16,34 @@ import (
 // built-in uses, so a copy-to-edit silently never shadows — and the card
 // doctor, which resolves its persona by the literal stem "seppa", never sees
 // the edit.
-
-func TestCardSlugFoldsDiacritics(t *testing.T) {
-	cases := []struct{ name, want string }{
-		{"Seppä", "seppa"},
-		{"Zoë", "zoe"},
-		{"Café au Lait", "cafe-au-lait"},
-		{"Custom One", "custom-one"},
-		{"!!!", ""},
-	}
-	for _, c := range cases {
-		if got := cardSlug(c.name); got != c.want {
-			t.Errorf("cardSlug(%q) = %q, want %q", c.name, got, c.want)
-		}
-	}
-	// The legacy slugger is pinned too: stores probe it to find files minted
-	// before the fold, so its behaviour must stay exactly what shipped.
-	if got := legacyCardSlug("Seppä"); got != "sepp" {
-		t.Errorf("legacyCardSlug(Seppä) = %q, want sepp", got)
-	}
-	if got := legacyCardSlug("Zoë"); got != "zo" {
-		t.Errorf("legacyCardSlug(Zoë) = %q, want zo", got)
-	}
-	// For pure-ASCII names the two agree — that equality is the cheap
-	// "no pre-fold file can exist" test every fallback site relies on.
-	if legacyCardSlug("Custom One") != cardSlug("Custom One") {
-		t.Error("legacyCardSlug should equal cardSlug for ASCII names")
-	}
-}
+//
+// The string handling itself is pinned in slug/slug_test.go. What stays here is
+// the end-to-end half: that the stems actually reach disk, shadow, migrate, and
+// leave a distinct neighbour's file alone.
 
 // A user copy of built-in Seppä must land on seppa.md and shadow the embedded
-// crew member — ResolvePersona("seppa") is the exact lookup the card doctor
+// crew member — persona.Resolve("seppa") is the exact lookup the card doctor
 // performs (workspace_doctor.go's doctorPersona), so this pins that the edit
 // actually takes effect there.
 func TestWritePersonaFoldedSlugShadowsBuiltin(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
-	dest, err := WritePersona(Persona{Name: "Seppä", Charter: "custom charter for the smith"})
+	dest, err := persona.Write(persona.Persona{Name: "Seppä", Charter: "custom charter for the smith"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(dest, "seppa.md") {
 		t.Fatalf("copy-to-edit landed on %q, want .../seppa.md — this stem is what shadows the built-in", dest)
 	}
-	got, err := ResolvePersona("seppa")
+	got, err := persona.Resolve("seppa")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Charter != "custom charter for the smith" {
-		t.Errorf("ResolvePersona(seppa) returned charter %q — the user copy does not shadow the built-in", got.Charter)
+		t.Errorf("persona.Resolve(seppa) returned charter %q — the user copy does not shadow the built-in", got.Charter)
 	}
 	n := 0
-	for _, p := range AllPersonas() {
+	for _, p := range persona.All() {
 		if p.Key() == got.Key() {
 			n++
 		}
@@ -82,24 +59,24 @@ func TestWritePersonaFoldedSlugShadowsBuiltin(t *testing.T) {
 func TestWritePersonaMigratesPreFoldFile(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
-	raw, err := MarshalPersona(Persona{Name: "Seppä", Charter: "old edit"})
+	raw, err := persona.Marshal(persona.Persona{Name: "Seppä", Charter: "old edit"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := filepath.Join(PersonasDir(), "sepp.md")
-	if err := os.MkdirAll(PersonasDir(), 0o755); err != nil {
+	legacy := filepath.Join(persona.Dir(), "sepp.md")
+	if err := os.MkdirAll(persona.Dir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(legacy, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	p, exists := UserPersonaPath("Seppä")
+	p, exists := persona.UserPath("Seppä")
 	if !exists || p != legacy {
-		t.Fatalf("UserPersonaPath(Seppä) = (%q, %v), want the pre-fold file %q to be found", p, exists, legacy)
+		t.Fatalf("persona.UserPath(Seppä) = (%q, %v), want the pre-fold file %q to be found", p, exists, legacy)
 	}
 
-	dest, err := WritePersona(Persona{Name: "Seppä", Charter: "new edit"})
+	dest, err := persona.Write(persona.Persona{Name: "Seppä", Charter: "new edit"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,12 +86,12 @@ func TestWritePersonaMigratesPreFoldFile(t *testing.T) {
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 		t.Errorf("pre-fold sepp.md should be removed by the migrating save (stat err %v)", err)
 	}
-	got, err := ResolvePersona("seppa")
+	got, err := persona.Resolve("seppa")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Charter != "new edit" {
-		t.Errorf("ResolvePersona(seppa) charter = %q, want the migrated edit", got.Charter)
+		t.Errorf("persona.Resolve(seppa) charter = %q, want the migrated edit", got.Charter)
 	}
 }
 
@@ -123,28 +100,28 @@ func TestWritePersonaMigratesPreFoldFile(t *testing.T) {
 func TestWritePersonaLeavesDistinctLegacyNameAlone(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
-	raw, err := MarshalPersona(Persona{Name: "Sepp", Charter: "a different persona entirely"})
+	raw, err := persona.Marshal(persona.Persona{Name: "Sepp", Charter: "a different persona entirely"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	seppFile := filepath.Join(PersonasDir(), "sepp.md")
-	if err := os.MkdirAll(PersonasDir(), 0o755); err != nil {
+	seppFile := filepath.Join(persona.Dir(), "sepp.md")
+	if err := os.MkdirAll(persona.Dir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(seppFile, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if p, exists := UserPersonaPath("Seppä"); exists {
-		t.Fatalf("UserPersonaPath(Seppä) claimed %q, which belongs to Sepp", p)
+	if p, exists := persona.UserPath("Seppä"); exists {
+		t.Fatalf("persona.UserPath(Seppä) claimed %q, which belongs to Sepp", p)
 	}
-	if _, err := WritePersona(Persona{Name: "Seppä", Charter: "the smith"}); err != nil {
+	if _, err := persona.Write(persona.Persona{Name: "Seppä", Charter: "the smith"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(seppFile); err != nil {
 		t.Errorf("saving Seppä must not remove Sepp's file: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(PersonasDir(), "seppa.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(persona.Dir(), "seppa.md")); err != nil {
 		t.Errorf("Seppä's own file missing: %v", err)
 	}
 }

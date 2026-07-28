@@ -1,4 +1,4 @@
-package build
+package persona
 
 import (
 	"os"
@@ -13,7 +13,7 @@ func TestNamespaceAndRef(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("TERVA_PERSONA_NAME", "")
 	byRef := map[string]Persona{}
-	for _, p := range listEmbeddedPersonas() {
+	for _, p := range listEmbedded() {
 		byRef[p.Ref()] = p
 	}
 	if m, ok := byRef["mieli"]; !ok || m.Namespace != "" {
@@ -65,24 +65,20 @@ func TestExtensionPersonaDiscovery(t *testing.T) {
 	writeExtPersona(t, home, "websearch", "websearch", true, "deep-researcher.md",
 		"---\nname: Deep Researcher\nspecialty: web research\ngood_for: [web-research]\n---\nResearch the web rigorously; cite and verify.")
 
-	p, err := loadPersonaByName("websearch:deep-researcher")
+	p, err := LoadByName("websearch:deep-researcher")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.Namespace != "websearch" || !p.FromExtension() || p.Origin() != "ext:websearch" || p.Ref() != "websearch:deep-researcher" {
 		t.Fatalf("ext persona provenance wrong: ns=%q source=%q origin=%q ref=%q", p.Namespace, p.Source, p.Origin(), p.Ref())
 	}
-	if _, err := loadPersonaByName("deep-researcher"); err != nil {
+	if _, err := LoadByName("deep-researcher"); err != nil {
 		t.Errorf("bare deep-researcher should resolve to the extension's: %v", err)
 	}
-	found := false
-	for _, dp := range dispatchablePersonas() {
-		if dp.Ref() == "websearch:deep-researcher" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("ext persona with good_for should be dispatchable")
+	// good_for survives the frontmatter round trip. What that makes the persona
+	// eligible FOR is build's question — TestExtensionPersonaIsDispatchable.
+	if len(p.GoodFor) != 1 || p.GoodFor[0] != "web-research" {
+		t.Errorf("good_for = %v, want [web-research]", p.GoodFor)
 	}
 }
 
@@ -92,7 +88,7 @@ func TestExtensionPersonaDisabled(t *testing.T) {
 	t.Setenv("TERVA_PERSONA_NAME", "")
 	// manifest enabled:false → not loaded (follows skills).
 	writeExtPersona(t, home, "off-ext", "off-ext", false, "x.md", "---\nname: X\n---\nbody")
-	if _, err := loadPersonaByName("off-ext:x"); err == nil {
+	if _, err := LoadByName("off-ext:x"); err == nil {
 		t.Error("manifest-disabled extension persona must not load")
 	}
 	// config disable_extensions → not loaded (closing the skill-path gap).
@@ -100,7 +96,7 @@ func TestExtensionPersonaDisabled(t *testing.T) {
 	if err := config.SaveConfig(config.Config{DisableExtensions: []string{"cfg-off"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadPersonaByName("cfg-off:y"); err == nil {
+	if _, err := LoadByName("cfg-off:y"); err == nil {
 		t.Error("config-disabled extension persona must not load")
 	}
 }
@@ -120,7 +116,7 @@ func TestUserOverridesExtensionPersona(t *testing.T) {
 		[]byte("---\nname: Deep Researcher\nsummary: MINE\ngood_for: [web-research]\n---\nmy charter"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, err := loadPersonaByName("websearch:deep-researcher")
+	p, err := LoadByName("websearch:deep-researcher")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +124,7 @@ func TestUserOverridesExtensionPersona(t *testing.T) {
 		t.Fatalf("user persona should override the extension's: from-ext=%v summary=%q", p.FromExtension(), p.Summary)
 	}
 	count := 0
-	for _, ap := range AllPersonas() {
+	for _, ap := range All() {
 		if ap.Ref() == "websearch:deep-researcher" {
 			count++
 			if ap.Summary != "MINE" {

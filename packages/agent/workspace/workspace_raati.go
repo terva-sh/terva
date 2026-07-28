@@ -24,6 +24,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/agent/raati"
 	"terva.sh/terva/packages/agent/run"
 	"terva.sh/terva/packages/agent/tools"
@@ -966,7 +967,7 @@ func unitByName(v *ctrlproto.RaatiView, name string) *ctrlproto.RaatiUnit {
 func panelAccents(panel []raati.Unit) map[string]string {
 	out := make(map[string]string, len(panel))
 	for _, u := range panel {
-		if p, err := build.LoadPersonaByName(u.Persona); err == nil {
+		if p, err := persona.LoadByName(u.Persona); err == nil {
 			out[u.Name] = p.AccentColor
 		}
 	}

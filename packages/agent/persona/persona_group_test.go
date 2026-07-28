@@ -1,4 +1,4 @@
-package build
+package persona
 
 import (
 	"strings"
@@ -13,21 +13,21 @@ import (
 // recorded identity.
 
 func TestPersonaGroupParsesAndRoundTrips(t *testing.T) {
-	p, err := ParsePersona("---\nname: Scratch\ngroup: My crew\n---\nbody", "scratch.md")
+	p, err := Parse("---\nname: Scratch\ngroup: My crew\n---\nbody", "scratch.md")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if p.Group != "My crew" {
 		t.Fatalf("Group = %q, want %q", p.Group, "My crew")
 	}
-	raw, err := MarshalPersona(p)
+	raw, err := Marshal(p)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 	if !strings.Contains(string(raw), "group: My crew") {
 		t.Fatalf("marshal dropped the group:\n%s", raw)
 	}
-	back, err := ParsePersona(string(raw), "scratch.md")
+	back, err := Parse(string(raw), "scratch.md")
 	if err != nil {
 		t.Fatalf("reparse: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestPersonaGroupParsesAndRoundTrips(t *testing.T) {
 func TestPersonaWithoutAGroupWritesNoGroupKey(t *testing.T) {
 	// omitempty, so an author who never chose a shelf does not find one added
 	// to their file the first time the editor saves it.
-	raw, err := MarshalPersona(Persona{Name: "Scratch", Charter: "body"})
+	raw, err := Marshal(Persona{Name: "Scratch", Charter: "body"})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestEveryBuiltinPersonaHasAGroup(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
-	for _, p := range listEmbeddedPersonas() {
+	for _, p := range listEmbedded() {
 		seen[p.Name] = true
 		got := p.GroupLabel()
 		if got == "" {

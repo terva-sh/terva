@@ -119,11 +119,3 @@ func RaatiProfiles(uc config.Config) map[string]raati.Profile {
 	}
 	return out
 }
-
-// LoadPersonaByName exposes the by-name persona lookup to callers outside
-// build (the raati board colors panel blocks by persona accent). Unlike
-// ResolvePersona, an empty name is NOT defaulted — the caller always
-// passes a specific panelist name.
-func LoadPersonaByName(name string) (Persona, error) {
-	return loadPersonaByName(name)
-}

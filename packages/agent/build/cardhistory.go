@@ -11,6 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/slug"
 )
 
 // A card's edit history is terva-owned metadata about a card, so — like a card
@@ -90,7 +91,7 @@ func NewCardHistoryStore() *CardHistoryStore { return &CardHistoryStore{dir: Car
 // and a state already at the head of the log — measured over BOTH halves, so a
 // re-import that changes only the pixels is still recorded.
 func (s *CardHistoryStore) Snapshot(cardID string, prev, prevAvatar []byte) error {
-	if err := validCardID(cardID); err != nil {
+	if err := slug.ValidID(cardID); err != nil {
 		return err
 	}
 	if len(prev) == 0 {
@@ -205,7 +206,7 @@ func (s *CardHistoryStore) List(cardID string, currentAvatar []byte) ([]CardVers
 
 // Get loads one retained revision's card JSON.
 func (s *CardHistoryStore) Get(cardID, ref string) ([]byte, error) {
-	if err := validCardID(cardID); err != nil {
+	if err := slug.ValidID(cardID); err != nil {
 		return nil, err
 	}
 	if err := validVersionRef(ref); err != nil {
@@ -230,7 +231,7 @@ func (s *CardHistoryStore) Get(cardID, ref string) ([]byte, error) {
 // revision recorded one, the picture has not moved since and the card's current
 // avatar is already correct.
 func (s *CardHistoryStore) AvatarAsOf(cardID, ref string) ([]byte, bool, error) {
-	if err := validCardID(cardID); err != nil {
+	if err := slug.ValidID(cardID); err != nil {
 		return nil, false, err
 	}
 	if err := validVersionRef(ref); err != nil {
@@ -262,7 +263,7 @@ func (s *CardHistoryStore) AvatarAsOf(cardID, ref string) ([]byte, bool, error) 
 // stray history is the character's own prose, and leaving it on disk after a
 // delete is a surprise rather than a convenience.
 func (s *CardHistoryStore) Forget(cardID string) error {
-	if err := validCardID(cardID); err != nil {
+	if err := slug.ValidID(cardID); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(filepath.Join(s.dir, cardID)); err != nil {
@@ -274,7 +275,7 @@ func (s *CardHistoryStore) Forget(cardID string) error {
 // refs lists a card's revision refs, oldest first. A missing directory is an
 // empty history.
 func (s *CardHistoryStore) refs(cardID string) ([]string, error) {
-	if err := validCardID(cardID); err != nil {
+	if err := slug.ValidID(cardID); err != nil {
 		return nil, err
 	}
 	entries, err := os.ReadDir(filepath.Join(s.dir, cardID))

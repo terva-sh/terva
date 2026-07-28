@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/slug"
 )
 
 // A Group is a lightweight, terva-owned membership bucket — a way to organize
@@ -183,9 +184,9 @@ func dedupe(members []string) []string {
 func groupID(name string, now time.Time) string {
 	sum := sha256.Sum256([]byte(name + now.Format(time.RFC3339Nano)))
 	h := hex.EncodeToString(sum[:])[:8]
-	slug := cardSlug(name)
-	if slug == "" {
+	stem := slug.Of(name)
+	if stem == "" {
 		return h
 	}
-	return slug + "-" + h
+	return stem + "-" + h
 }

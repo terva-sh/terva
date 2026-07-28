@@ -1,4 +1,4 @@
-package build
+package persona
 
 import (
 	"os"
@@ -9,7 +9,7 @@ import (
 	"terva.sh/terva/packages/testsupport"
 )
 
-// TestMarshalPersonaRoundTrips — ParsePersona(MarshalPersona(p)) == p, so the
+// TestMarshalPersonaRoundTrips — Parse(Marshal(p)) == p, so the
 // library can write a persona and read it back unchanged.
 func TestMarshalPersonaRoundTrips(t *testing.T) {
 	p := Persona{
@@ -26,11 +26,11 @@ func TestMarshalPersonaRoundTrips(t *testing.T) {
 		Introduction:      "You meet Aria at the crossroads.",
 		Charter:           "You are Aria, a wandering bard who speaks in verse.",
 	}
-	raw, err := MarshalPersona(p)
+	raw, err := Marshal(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := ParsePersona(string(raw), "test")
+	got, err := Parse(string(raw), "test")
 	if err != nil {
 		t.Fatalf("marshal output does not re-parse: %v\n%s", err, raw)
 	}
@@ -44,7 +44,7 @@ func TestMarshalPersonaRoundTrips(t *testing.T) {
 }
 
 func TestMarshalPersonaRequiresName(t *testing.T) {
-	if _, err := MarshalPersona(Persona{Charter: "x"}); err == nil {
+	if _, err := Marshal(Persona{Charter: "x"}); err == nil {
 		t.Error("marshaling a nameless persona should error")
 	}
 }
@@ -52,11 +52,11 @@ func TestMarshalPersonaRequiresName(t *testing.T) {
 func TestWritePersonaAndLookup(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
-	if _, exists := UserPersonaPath("Custom One"); exists {
+	if _, exists := UserPath("Custom One"); exists {
 		t.Fatal("no user file should exist before a write")
 	}
 
-	dest, err := WritePersona(Persona{Name: "Custom One", Summary: "mine", Charter: "You are Custom."})
+	dest, err := Write(Persona{Name: "Custom One", Summary: "mine", Charter: "You are Custom."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,14 +67,14 @@ func TestWritePersonaAndLookup(t *testing.T) {
 		t.Fatalf("persona file not written: %v", err)
 	}
 
-	got, ok := LookupPersona("Custom One")
+	got, ok := Lookup("Custom One")
 	if !ok {
-		t.Fatal("written persona not found by LookupPersona")
+		t.Fatal("written persona not found by Lookup")
 	}
 	if got.Summary != "mine" || got.Builtin() {
 		t.Errorf("looked-up persona wrong: %+v", got)
 	}
-	if _, exists := UserPersonaPath("Custom One"); !exists {
-		t.Error("UserPersonaPath should now report the file exists")
+	if _, exists := UserPath("Custom One"); !exists {
+		t.Error("UserPath should now report the file exists")
 	}
 }

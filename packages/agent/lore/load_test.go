@@ -3,8 +3,9 @@ package lore
 import (
 	"os"
 	"path/filepath"
-	"terva.sh/terva/packages/testsupport"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 func writeFile(t *testing.T, path, content string) {

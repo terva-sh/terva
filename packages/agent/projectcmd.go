@@ -10,6 +10,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -455,7 +456,7 @@ func runProjectStatus() error {
 		return err
 	}
 	scoped := resolveProjectScoped(build.Args{CWD: cwd}, cwd)
-	trusted := build.ResolveTrustState(build.Args{CWD: cwd}).IsTrusted()
+	trusted := permissions.ResolveTrustState(cwd, false).IsTrusted()
 
 	fmt.Printf("project: %s\n", cwd)
 	fmt.Printf("  scoped:  %v\n", scoped)

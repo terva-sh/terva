@@ -3,6 +3,8 @@ package build
 import (
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/agent/persona"
 )
 
 // The charter is the one system segment whose text a user chose by picking a
@@ -114,7 +116,7 @@ func TestComposedCharterKeepsBothOrigins(t *testing.T) {
 // Splitting the segment must not change what the model reads. Two segments join
 // on a blank line, which is exactly how ComposedCharter joins the same halves.
 func TestComposedSegmentsMatchTheComposedCharterText(t *testing.T) {
-	p := Persona{
+	p := persona.Persona{
 		Charter:   "Track what is in flight.",
 		Inherited: "Inspect before changing.",
 	}

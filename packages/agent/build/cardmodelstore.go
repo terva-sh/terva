@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/slug"
 )
 
 // A card's default model is terva-owned metadata, kept OUTSIDE the card exactly
@@ -43,7 +44,7 @@ func NewCardModelStore() *CardModelStore { return &CardModelStore{dir: CardModel
 // Get loads a card's pref. The bool is false (with no error) when the card has
 // none — the common case — so a fallback lookup reads cleanly as "not set".
 func (s *CardModelStore) Get(cardID string) (CardModel, bool, error) {
-	if err := validCardID(cardID); err != nil {
+	if err := slug.ValidID(cardID); err != nil {
 		return CardModel{}, false, err
 	}
 	raw, err := os.ReadFile(filepath.Join(s.dir, cardID+".json"))
@@ -70,7 +71,7 @@ func (s *CardModelStore) Get(cardID string) (CardModel, bool, error) {
 // provider is allowed — the resolver disambiguates it against the catalog like
 // any unqualified id.
 func (s *CardModelStore) Set(cardID, provider, model string) error {
-	if err := validCardID(cardID); err != nil {
+	if err := slug.ValidID(cardID); err != nil {
 		return err
 	}
 	if provider == "" && model == "" {
@@ -89,7 +90,7 @@ func (s *CardModelStore) Set(cardID, provider, model string) error {
 // Delete drops a card's pref. A card that never had one is not an error — the
 // end state (no pref) is the same either way.
 func (s *CardModelStore) Delete(cardID string) error {
-	if err := validCardID(cardID); err != nil {
+	if err := slug.ValidID(cardID); err != nil {
 		return err
 	}
 	err := os.Remove(filepath.Join(s.dir, cardID+".json"))

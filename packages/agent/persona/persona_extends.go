@@ -1,4 +1,4 @@
-package build
+package persona
 
 import (
 	"fmt"
@@ -34,8 +34,8 @@ const extendsBase = "mieli"
 // the persona with Inherited/InheritedSource filled. A persona that extends
 // nothing comes back untouched.
 //
-// This runs at SELECTION time (ResolvePersona), never at parse time.
-// ParsePersona is called for every file in the library to build a roster, so a
+// This runs at SELECTION time (Resolve), never at parse time.
+// Parse is called for every file in the library to build a roster, so a
 // catalog lookup inside it would be a walk nested in a walk, and a persona that
 // failed to resolve would vanish from `persona list` — silently, which is the
 // exact failure this whole area is being fixed for. Parsing therefore always
@@ -58,7 +58,7 @@ func ComposeCharter(p Persona) (Persona, error) {
 		return p, fmt.Errorf("persona %s: `extends: %s` is not supported — only `extends: %s` (the default persona) works today", where, ref, extendsBase)
 	}
 
-	base, ok := LookupPersona(ref)
+	base, ok := Lookup(ref)
 	if !ok {
 		return p, fmt.Errorf("persona %s: `extends: %s` — no persona named %q was found", where, ref, ref)
 	}

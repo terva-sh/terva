@@ -9,6 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -132,7 +133,7 @@ func TestWorkspacePersonaCopyToEditBuiltin(t *testing.T) {
 	if edited.Origin != "user" || !edited.Editable {
 		t.Errorf("copy-to-edit should yield a user persona: %+v", edited.PersonaSummary)
 	}
-	if _, exists := build.UserPersonaPath("Mieli"); !exists {
+	if _, exists := persona.UserPath("Mieli"); !exists {
 		t.Error("copy-to-edit should have written a user file")
 	}
 }
@@ -160,7 +161,7 @@ func TestWorkspacePersonaDelete(t *testing.T) {
 	if err := w.PersonasDelete(ctx, ctrlproto.PersonaDeleteParams{Name: "Scratch"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := build.UserPersonaPath("Scratch"); exists {
+	if _, exists := persona.UserPath("Scratch"); exists {
 		t.Error("the user file should be gone")
 	}
 	r, err := w.PersonasList(ctx)
@@ -188,7 +189,7 @@ func TestWorkspacePersonaDeleteRefusesABuiltin(t *testing.T) {
 	if !strings.Contains(err.Error(), "built-in") {
 		t.Errorf("the refusal should say WHY it cannot go: %v", err)
 	}
-	if _, ok := build.LookupPersona("Mieli"); !ok {
+	if _, ok := persona.Lookup("Mieli"); !ok {
 		t.Error("the built-in must survive a refused delete")
 	}
 }
@@ -209,7 +210,7 @@ func TestWorkspacePersonaDeleteUnshadowsABuiltin(t *testing.T) {
 	if err := w.PersonasDelete(ctx, ctrlproto.PersonaDeleteParams{Name: "Mieli"}); err != nil {
 		t.Fatal(err)
 	}
-	restored, ok := build.LookupPersona("Mieli")
+	restored, ok := persona.Lookup("Mieli")
 	if !ok {
 		t.Fatal("deleting the shadow should reveal the built-in, not remove the persona")
 	}
@@ -238,7 +239,7 @@ func TestWorkspacePersonaDeleteRequiresTrust(t *testing.T) {
 	if err := w.PersonasDelete(ctx, ctrlproto.PersonaDeleteParams{Name: "Scratch"}); err == nil {
 		t.Fatal("an untrusted workspace must not delete a persona")
 	}
-	if _, exists := build.UserPersonaPath("Scratch"); !exists {
+	if _, exists := persona.UserPath("Scratch"); !exists {
 		t.Error("the persona must survive a refused delete")
 	}
 }

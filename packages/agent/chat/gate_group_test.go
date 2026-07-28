@@ -4,8 +4,9 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
-	"terva.sh/terva/packages/testsupport"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // groupGate builds a v2 gate over the fake connector with a paired

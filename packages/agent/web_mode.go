@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/web"
 	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/buildinfo"
@@ -123,7 +124,7 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 	}
 	fmt.Fprintf(os.Stderr, "terva web: workspace ready (took %s)\n", time.Since(begin).Round(10*time.Millisecond))
 	cfg, _ := config.LoadConfig()
-	fmt.Fprintf(os.Stderr, "terva web: approval mode %q (tool calls that need approval prompt in the browser)\n", build.ResolveApprovalMode(args, cfg))
+	fmt.Fprintf(os.Stderr, "terva web: approval mode %q (tool calls that need approval prompt in the browser)\n", permissions.ResolveApprovalMode(args.PermInputs(), cfg))
 
 	// Self-restart is opt-in and must never ride on an unauthenticated,
 	// non-loopback listener open to ANY peer — the one place a stranger could

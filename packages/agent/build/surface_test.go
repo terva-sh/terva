@@ -4,24 +4,16 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/testsupport"
 )
 
-// allModeConstants is every run mode terva has. Like allSourceConstants next
-// door, it is written out rather than derived: adding a mode should make you
-// answer "where do this mode's words land?" instead of inheriting an answer.
-var allModeConstants = []Mode{
-	ModeInteractive,
-	ModePrint,
-	ModeJSON,
-	ModeRPC,
-	ModeACP,
-	ModeSwarmAgent,
-	ModeWeb,
-	ModeAttach,
-	ModeReplay,
-	ModeBot,
-}
+// allModeConstants is every run mode terva has. The roster is mode.All() now,
+// not a copy written out here: this file used to own it, which meant the
+// permissions table next door was checked against the SURFACE test file's idea
+// of what modes exist. A new constant in package mode fails both tables on its
+// own, without either test being told.
+var allModeConstants = mode.All()
 
 func TestSurfaceTableIsExhaustive(t *testing.T) {
 	for _, m := range allModeConstants {
@@ -40,7 +32,7 @@ func TestSurfaceTableIsExhaustive(t *testing.T) {
 // handed headings it never asked for. So an unclassified mode must claim
 // nothing, which is what SurfacePlain does.
 func TestSurfaceFailsClosed(t *testing.T) {
-	for _, m := range []Mode{"", "some-future-mode"} {
+	for _, m := range []mode.Mode{"", "some-future-mode"} {
 		if got := SurfaceOf(m); got != SurfacePlain {
 			t.Errorf("SurfaceOf(%q) = %q, want %q — an unknown mode must not be promised a renderer", m, got, SurfacePlain)
 		}
@@ -50,7 +42,7 @@ func TestSurfaceFailsClosed(t *testing.T) {
 // The regression this whole commit exists to prevent: the conventions segment
 // asserting a TUI to an agent that does not have one.
 func TestConventionsDoNotClaimAnUnrenderedSurfaceRenders(t *testing.T) {
-	for _, m := range []Mode{ModePrint, ModeJSON, ModeRPC, ModeBot} {
+	for _, m := range []mode.Mode{mode.Print, mode.JSON, mode.RPC, mode.Bot} {
 		text := conventions(SystemPromptOpts{Surface: SurfaceOf(m)})
 		if strings.Contains(text, "Use markdown freely") {
 			t.Errorf("mode %q (surface %q) is told to use markdown freely, but nothing renders it:\n%s", m, SurfaceOf(m), text)
@@ -58,14 +50,14 @@ func TestConventionsDoNotClaimAnUnrenderedSurfaceRenders(t *testing.T) {
 	}
 	// ...and the converse: the TUI must still be told it renders markdown, or
 	// the fix has quietly cost every human reader their formatting.
-	if text := conventions(SystemPromptOpts{Surface: SurfaceOf(ModeInteractive)}); !strings.Contains(text, "Use markdown freely") {
+	if text := conventions(SystemPromptOpts{Surface: SurfaceOf(mode.Interactive)}); !strings.Contains(text, "Use markdown freely") {
 		t.Errorf("the TUI renders markdown and must still be told so:\n%s", text)
 	}
 }
 
 // A bot's user is a chat room, and chat clients render a subset of markdown.
 func TestBotIsToldItIsSpeakingIntoAChat(t *testing.T) {
-	text := conventions(SystemPromptOpts{Surface: SurfaceOf(ModeBot)})
+	text := conventions(SystemPromptOpts{Surface: SurfaceOf(mode.Bot)})
 	for _, want := range []string{"chat message", "skip headings and tables"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("bot conventions should mention %q:\n%s", want, text)
@@ -79,14 +71,14 @@ func TestBotIsToldItIsSpeakingIntoAChat(t *testing.T) {
 // now, in every Experience.
 func TestExperienceConventionsAreAlsoSurfaceAware(t *testing.T) {
 	for _, exp := range []string{ExperienceChat, ExperiencePlay} {
-		bot := conventions(SystemPromptOpts{Experience: exp, Surface: SurfaceOf(ModeBot)})
+		bot := conventions(SystemPromptOpts{Experience: exp, Surface: SurfaceOf(mode.Bot)})
 		if !strings.Contains(bot, "chat message") {
 			t.Errorf("%s in a bot should be told it posts chat messages:\n%s", exp, bot)
 		}
 		if !strings.Contains(bot, "in character") {
 			t.Errorf("%s must keep its in-character discipline:\n%s", exp, bot)
 		}
-		tui := conventions(SystemPromptOpts{Experience: exp, Surface: SurfaceOf(ModeInteractive)})
+		tui := conventions(SystemPromptOpts{Experience: exp, Surface: SurfaceOf(mode.Interactive)})
 		if !strings.Contains(tui, "Use markdown freely") {
 			t.Errorf("%s in the TUI still renders markdown:\n%s", exp, tui)
 		}
@@ -124,13 +116,13 @@ func TestFileEditConventionsOnlyWhenTheToolsExist(t *testing.T) {
 // switch, so --dump-prompt cannot reach it from the command line.
 func TestResolveDerivesTheSurfaceFromTheMode(t *testing.T) {
 	cases := []struct {
-		mode Mode
+		mode mode.Mode
 		want string
 	}{
-		{ModeInteractive, "Use markdown freely"},
-		{ModeBot, "posted as a chat message"},
-		{ModePrint, "plain-text stream"},
-		{ModeRPC, "handed to a program"},
+		{mode.Interactive, "Use markdown freely"},
+		{mode.Bot, "posted as a chat message"},
+		{mode.Print, "plain-text stream"},
+		{mode.RPC, "handed to a program"},
 	}
 	for _, c := range cases {
 		r, err := Resolve(Args{Mode: c.mode, CWD: testsupport.TempDir(t)}, false)

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/i18n"
 )
@@ -105,7 +106,7 @@ func BuildActorCast(raw map[string]string, cwd string) (map[string]tools.CastMem
 		}
 		// Persona names first (the original vocabulary — existing play sessions
 		// keep resolving exactly as before), then the card library.
-		if _, perr := ResolvePersona(ref); perr == nil {
+		if _, perr := persona.Resolve(ref); perr == nil {
 			cast[name] = tools.CastMember{Persona: ref}
 			continue
 		} else if p, cerr := ResolveCardRef(ref); cerr == nil {

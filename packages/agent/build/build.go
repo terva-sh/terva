@@ -1,20 +1,20 @@
 package build
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
-	"sync"
 
 	tervadocs "terva.sh/terva"
 	tervaexamples "terva.sh/terva/examples"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/imagegen"
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/agent/mode"
+	"terva.sh/terva/packages/agent/permissions"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/tools/tasks"
@@ -141,7 +141,7 @@ type Resolved struct {
 	promptOpts SystemPromptOpts
 	// Persona is the resolved active Persona, captured so rebuildSystemPrompt
 	// re-renders with the same identity + charter rather than re-resolving.
-	Persona          Persona
+	Persona          persona.Persona
 	toolDescriptions map[string]string
 	// extensionContext is the extensions' aggregated static context
 	// contribution (register_context), folded into the cached system
@@ -526,7 +526,13 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// project context_files, and (threaded onward to the extension
 	// manager) project extensions. The safe core loads regardless. See
 	// docs/plans/workspace-trust.md.
-	trusted := ResolveTrustState(args).IsTrusted()
+	trusted := permissions.ResolveTrustState(args.CWD, args.Trust).IsTrusted()
+	// A fixed-trust host pins the verdict so a re-resolve cannot read a store
+	// that moved under it and hand back a tool set gated differently from the
+	// extensions and hooks the process is actually running. See Args.TrustPin.
+	if args.TrustPin != nil {
+		trusted = *args.TrustPin
+	}
 
 	// eff is the layered (project-over-user) read view; cfg is the pristine,
 	// writable user layer. Every existing read/repair below stays on cfg so
@@ -813,10 +819,11 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	}
 
 	sandbox := tools.NewSandbox(args.CWD)
-	if resolveJail(args) {
+	perms := args.PermInputs()
+	if permissions.ResolveJail(perms) {
 		sandbox.Lock()
 	}
-	approval := effectiveApprovalMode(args)
+	approval := permissions.EffectiveApprovalMode(perms)
 	visionCapable := resolvedModel.Has(provider.CapImageInput)
 	// Image generation is opt-in (an `image` config block); the generate_image
 	// tool is registered only when a backend resolves. Separate from the chat
@@ -831,34 +838,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// host has them on disk even with no source checkout — and the docs' own
 	// ../examples/deploy/… links resolve against them.
 	examplesDir, _ := tervaexamples.EnsureInstalled(config.TervaHome())
-	// terva's own state lives under $TERVA_HOME, outside the cwd jail. A
-	// jailed agent still needs to read the non-sensitive, shared dirs —
-	// its docs (referenced in the system prompt), installed skills/themes,
-	// and installed extensions plus their data — so register them as
-	// read-only roots: readable by read/grep/glob, never writable.
-	//
-	// Deliberately EXCLUDED as sensitive: auth.json (credentials),
-	// config.json, sessions/ and swarm/ (transcripts), and logs/ — which
-	// aggregates stderr from MCP servers, the bot, connectors, and hooks
-	// and is a secret-leak sink. Only specific subdirs are added, never
-	// $TERVA_HOME itself.
 	home := config.TervaHome()
-	sandbox.AddReadOnlyRoot(
-		docsDir,
-		examplesDir,
-		filepath.Join(home, "extensions"),
-		filepath.Join(home, "ext-data"),
-		filepath.Join(home, "skills"),
-		filepath.Join(home, "themes"),
-	)
-	// logs/ as a whole is a secret-leak sink (MCP/bot/connector/hooks
-	// stderr can carry tokens and chat content), so expose ONLY the
-	// extension logs the agent needs for debugging, by name — not the dir.
-	sandbox.AddReadOnlyGlob(filepath.Join(home, "logs"), "ext-*.log")
-	// The bash tool spills over-long output to $TMPDIR/terva-bash-*.log and
-	// points the model at it; allow reading those (the agent's own output)
-	// so a jailed agent can page the spill via `read` without /unjail.
-	sandbox.AddReadOnlyGlob(os.TempDir(), "terva-bash-*.log")
+	grantReadOnlyRoots(sandbox, home, docsDir, examplesDir)
 
 	// Skill discovery: scan project + global locations + built-in
 	// skills shipped with the binary. If any are found, register
@@ -978,7 +959,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// instead of its findings (plan R2/E.2; the review-crew charters carry
 	// the same contract in their own voice, this covers Persona-less
 	// children too).
-	if args.Mode == ModeSwarmAgent {
+	if args.Mode == mode.SwarmAgent {
 		append_ = append(append_, PromptSegment{Source: SourceSwarmChild, Text: SwarmChildAddendum()})
 		// A schema-carrying spawn (the structured-deliverable contract)
 		// gets the deliver_result tool bound to its schema plus the
@@ -1047,7 +1028,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// default_persona config → embedded Mieli). Its name + charter shape the
 	// default identity; a --system-prompt/SYSTEM.md Custom prompt still wins
 	// (BuildSystemPrompt ignores PersonaName/Charter when Custom is set).
-	Persona, err := ResolvePersona(args.Persona)
+	active, err := persona.Resolve(args.Persona)
 	if err != nil {
 		return Resolved{}, err
 	}
@@ -1070,7 +1051,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		if cerr != nil {
 			return Resolved{}, cerr
 		}
-		Persona = ci.Persona
+		active = ci.Persona
 		CardGreeting = ci.greeting
 		cardGreetings = ci.greetings
 		cardIntroOverride = ci.introOverride
@@ -1095,7 +1076,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// as --system-prompt. An explicit --system-prompt / SYSTEM.md still wins (we
 	// only fill an empty custom), so the precedence stays
 	// flag > SYSTEM.md > immersive-Persona > additive-Persona > default.
-	if c := immersiveCustom(custom, Persona); c != "" {
+	if c := persona.ImmersiveCustom(custom, active); c != "" {
 		custom = c
 	}
 
@@ -1104,8 +1085,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// via agent_introduction. A run is one or the other, so a non-card Persona's
 	// field only applies when there's no card override.
 	introOverride, introSource := cardIntroOverride, cardIntroSource
-	if introOverride == "" && strings.TrimSpace(Persona.Introduction) != "" {
-		introOverride = strings.TrimSpace(Persona.Introduction)
+	if introOverride == "" && strings.TrimSpace(active.Introduction) != "" {
+		introOverride = strings.TrimSpace(active.Introduction)
 		introSource = "persona:introduction"
 	}
 
@@ -1119,11 +1100,11 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		TervaDocsDir:      docsDir,
 		TervaExamplesDir:  examplesDir,
 		StatusTool:        reg["terva_status"] != nil,
-		PersonaName:       Persona.Name,
-		Charter:           Persona.Charter,
-		CharterOrigin:     Persona.Source,
-		BaseCharter:       Persona.Inherited,
-		BaseCharterOrigin: Persona.InheritedSource,
+		PersonaName:       active.Name,
+		Charter:           active.Charter,
+		CharterOrigin:     active.Source,
+		BaseCharter:       active.Inherited,
+		BaseCharterOrigin: active.InheritedSource,
 		Experience:        args.Experience,
 		Surface:           SurfaceOf(args.Mode),
 		Portable:          args.Portable,
@@ -1202,7 +1183,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		Trusted:                  trusted,
 		promptOpts:               sysOpts,
 		SystemSegments:           sysSegs,
-		Persona:                  Persona,
+		Persona:                  active,
 		toolDescriptions:         descMapFromSummaries(summaries),
 		ApprovalMode:             approval,
 		Experience:               args.Experience,
@@ -1364,12 +1345,23 @@ func (r Resolved) NewClient() provider.Client {
 	return c
 }
 
+// clientConfig is how Resolved presents itself to a registry entry.
+func (r Resolved) clientConfig() clientConfig {
+	return clientConfig{
+		Provider:   r.Provider,
+		Credential: r.Credential,
+		BaseURL:    r.BaseURL,
+		AuthMethod: r.AuthMethod,
+		AccountID:  r.AccountID,
+	}
+}
+
 func (r Resolved) dispatchClient() provider.Client {
 	if spec, ok := specFor(r.Provider); ok {
-		return spec.newClient(r)
+		return spec.newClient(r.clientConfig())
 	}
 	if r.AuthMethod == "oauth" {
-		return provider.NewAnthropicOAuthSource(r.credentialSource(), r.BaseURL)
+		return provider.NewAnthropicOAuthSource(r.clientConfig().credentialSource(), r.BaseURL)
 	}
 	return provider.NewAnthropic(r.Credential, r.BaseURL)
 }
@@ -1388,22 +1380,6 @@ func (r Resolved) dispatchClient() provider.Client {
 // terva process is picked up, and on refresh failure falls through with the
 // stale token so the request surfaces a clear provider 401 rather than a bare
 // refresh error (the prior wrapper's behavior).
-func (r Resolved) credentialSource() provider.CredentialSource {
-	tokenProvider := r.Provider
-	if tokenProvider == "openai-codex" {
-		tokenProvider = "openai"
-	}
-	var mu sync.Mutex
-	return func(context.Context) (string, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		tok, _ := config.RefreshIfExpired(tokenProvider, config.LoadOAuthToken(tokenProvider))
-		if tok == nil {
-			return "", nil
-		}
-		return tok.AccessToken, nil
-	}
-}
 
 // UseSandbox replaces the sandbox pointer that every tool in r's
 // registry references. Used to keep the /jail state stable across
@@ -1724,7 +1700,7 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 	// is exactly what plan mode wants when requirements are unclear.
 	if approval == core.ApprovalPlan {
 		for name := range all {
-			if !readOnlyTools[name] && !interactiveTools[name] {
+			if !permissions.IsReadOnly(name) && !permissions.IsInteractive(name) {
 				delete(all, name)
 			}
 		}
@@ -1789,31 +1765,6 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-func kimiCodeHeaders() map[string]string {
-	host, _ := os.Hostname()
-	if host == "" {
-		host = "unknown"
-	}
-	deviceID := ""
-	if home, err := os.UserHomeDir(); err == nil {
-		if b, err := os.ReadFile(filepath.Join(home, ".kimi", "device_id")); err == nil {
-			deviceID = strings.TrimSpace(string(b))
-		}
-	}
-	if deviceID == "" {
-		deviceID = "zot" // rename:keep — bound to existing kimi device sessions
-	}
-	return map[string]string{
-		"User-Agent":         "KimiCLI/1.41.0",
-		"X-Msh-Platform":     "kimi_cli",
-		"X-Msh-Version":      "1.41.0",
-		"X-Msh-Device-Name":  host,
-		"X-Msh-Device-Model": runtime.GOOS + "-" + runtime.GOARCH,
-		"X-Msh-Os-Version":   runtime.GOOS,
-		"X-Msh-Device-Id":    deviceID,
-	}
 }
 
 // envAPIKeyName returns the environment variable that credentials a provider

@@ -14,6 +14,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/hooks"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -94,7 +95,7 @@ func TestLadderGateSeesRewrittenArgs(t *testing.T) {
 		pol := &core.PermissionPolicy{
 			Mode:     core.ApprovalYolo,
 			Rules:    []core.PermissionRule{{Tool: "bash", Args: regexp.MustCompile(pattern), Decision: core.RuleDeny, Source: "user"}},
-			ReadOnly: build.BuiltinReadOnlySet(), EditTools: build.EditTools,
+			ReadOnly: permissions.BuiltinReadOnlySet(), EditTools: permissions.EditToolSet(),
 		}
 		return core.NewPolicyGate(pol, nil)
 	}

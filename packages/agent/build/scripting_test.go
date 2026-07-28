@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -18,10 +19,10 @@ func TestScriptingClassification(t *testing.T) {
 	if !ScriptingSupported() {
 		t.Fatal("ScriptingSupported must be true under terva_scripting")
 	}
-	if !readOnlyTools["code_execution"] {
+	if !permissions.IsReadOnly("code_execution") {
 		t.Fatal("code_execution must classify read-only (its binding set is read-only)")
 	}
-	if !BuiltinTools["code_execution"] {
+	if !permissions.IsBuiltin("code_execution") {
 		t.Fatal("code_execution must classify as a first-party builtin")
 	}
 }

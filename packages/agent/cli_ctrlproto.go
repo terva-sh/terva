@@ -20,6 +20,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/core"
@@ -332,7 +333,7 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		OpenSessionsOnBoot:  args.Resume && args.ResumeID == "",
 		Trusted:             bootTrusted,
 		GatedContentPresent: config.HasGatedProjectContent(w.CWD()),
-		JailNotice:          build.JailNoticeFor(args).Message(),
+		JailNotice:          permissions.JailNoticeFor(args.PermInputs()).Message(),
 
 		// --- in-TUI login ---
 		// The TUI drives the workspace's AuthController, exactly as the web panel

@@ -1,5 +1,7 @@
 package build
 
+import "terva.sh/terva/packages/agent/mode"
+
 // Surface is what becomes of the agent's words once it has said them.
 //
 // terva's conventions segment used to open "Your output renders in a TUI that
@@ -49,27 +51,27 @@ const (
 // modeSurface is the one table: every Mode constant has exactly one row, and
 // TestSurfaceTableIsExhaustive pins that. A new run mode does not get to
 // inherit an answer by accident — it has to say where its words go.
-var modeSurface = map[Mode]Surface{
+var modeSurface = map[mode.Mode]Surface{
 	// Rendered for a person.
-	ModeInteractive: SurfaceRendered, // the TUI
-	ModeAttach:      SurfaceRendered, // the same TUI, over a socket
-	ModeReplay:      SurfaceRendered, // the same TUI, reading a recording
-	ModeWeb:         SurfaceRendered, // the browser
-	ModeACP:         SurfaceRendered, // an editor's agent pane (Zed renders markdown)
+	mode.Interactive: SurfaceRendered, // the TUI
+	mode.Attach:      SurfaceRendered, // the same TUI, over a socket
+	mode.Replay:      SurfaceRendered, // the same TUI, reading a recording
+	mode.Web:         SurfaceRendered, // the browser
+	mode.ACP:         SurfaceRendered, // an editor's agent pane (Zed renders markdown)
 	// A swarm child's stdout is NDJSON, but the text inside it is read by the
 	// supervising agent and shown in the swarm pane. Both want markdown; the
 	// envelope is not the audience.
-	ModeSwarmAgent: SurfaceRendered,
+	mode.SwarmAgent: SurfaceRendered,
 
 	// A chat message.
-	ModeBot: SurfaceChat,
+	mode.Bot: SurfaceChat,
 
 	// Bytes on a stream.
-	ModePrint: SurfacePlain,
+	mode.Print: SurfacePlain,
 
 	// Somebody else's program.
-	ModeJSON: SurfaceProgram, // also the SDK, which resolves as ModeJSON
-	ModeRPC:  SurfaceProgram,
+	mode.JSON: SurfaceProgram, // also the SDK, which resolves as mode.JSON
+	mode.RPC:  SurfaceProgram,
 }
 
 // SurfaceOf classifies a run mode's output surface.
@@ -80,7 +82,7 @@ var modeSurface = map[Mode]Surface{
 // Wrongly telling a rendered surface "markdown will not render" costs some
 // prettiness; wrongly telling an unrendered one "markdown will render" is the
 // bug we are here to fix, and it is silent.
-func SurfaceOf(m Mode) Surface {
+func SurfaceOf(m mode.Mode) Surface {
 	if s, ok := modeSurface[m]; ok {
 		return s
 	}

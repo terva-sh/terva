@@ -1,10 +1,11 @@
-package build
+package permissions
 
 import (
 	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -18,15 +19,15 @@ func unjailScratch(t *testing.T) string {
 // That is the whole point of the feature.
 func TestPersistedUnjailLowersTheJail(t *testing.T) {
 	dir := unjailScratch(t)
-	args := Args{Mode: ModeInteractive, CWD: dir}
+	args := Inputs{Mode: mode.Interactive, CWD: dir}
 
-	if !resolveJail(args) {
+	if !ResolveJail(args) {
 		t.Fatal("precondition: interactive should be jailed by default")
 	}
 	if err := config.UnjailPath(dir, false); err != nil {
 		t.Fatal(err)
 	}
-	if resolveJail(args) {
+	if ResolveJail(args) {
 		t.Error("a saved unjail rule did not lower the jail")
 	}
 }
@@ -39,11 +40,11 @@ func TestFlagsBeatTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !resolveJail(Args{Mode: ModeInteractive, CWD: dir, Jail: true}) {
+	if !ResolveJail(Inputs{Mode: mode.Interactive, CWD: dir, Jail: true}) {
 		t.Error("--jail did not override a saved unjail rule")
 	}
 	// And the long-standing flag precedence is untouched.
-	if resolveJail(Args{Mode: ModeInteractive, CWD: dir, Jail: true, NoJail: true}) {
+	if ResolveJail(Inputs{Mode: mode.Interactive, CWD: dir, Jail: true, NoJail: true}) {
 		t.Error("--no-jail no longer beats --jail")
 	}
 }
@@ -55,7 +56,7 @@ func TestUnrelatedDirectoryIsUnaffected(t *testing.T) {
 	if err := config.UnjailPath(other, false); err != nil {
 		t.Fatal(err)
 	}
-	if !resolveJail(Args{Mode: ModeInteractive, CWD: dir}) {
+	if !ResolveJail(Inputs{Mode: mode.Interactive, CWD: dir}) {
 		t.Error("unjailing one directory lowered the jail in another")
 	}
 }
@@ -70,7 +71,7 @@ func TestNoticeCallsOutTheAutoApprovedCombination(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n := ResolveJailNotice(Args{Mode: ModeInteractive, CWD: dir}, config.Config{})
+	n := ResolveJailNotice(Inputs{Mode: mode.Interactive, CWD: dir}, config.Config{})
 	if !n.Persisted {
 		t.Fatal("notice did not report the saved rule")
 	}
@@ -84,7 +85,7 @@ func TestNoticeCallsOutTheAutoApprovedCombination(t *testing.T) {
 
 	// Under an always-prompting mode the pairing does not apply: the user is
 	// asked before every foreign call, so the message stays plain.
-	n = ResolveJailNotice(Args{Mode: ModeInteractive, CWD: dir, Approval: "ask"}, config.Config{})
+	n = ResolveJailNotice(Inputs{Mode: mode.Interactive, CWD: dir, Approval: "ask"}, config.Config{})
 	if n.AutoApproved {
 		t.Error("ask mode does not auto-approve; the notice must not claim it does")
 	}
@@ -100,7 +101,7 @@ func TestNoNoticeWhenTheUserPassedAFlag(t *testing.T) {
 	if err := config.UnjailPath(dir, false); err != nil {
 		t.Fatal(err)
 	}
-	if msg := ResolveJailNotice(Args{Mode: ModeInteractive, CWD: dir, NoJail: true}, config.Config{}).Message(); msg != "" {
+	if msg := ResolveJailNotice(Inputs{Mode: mode.Interactive, CWD: dir, NoJail: true}, config.Config{}).Message(); msg != "" {
 		t.Errorf("message = %q, want silence when --no-jail was passed", msg)
 	}
 }
@@ -108,7 +109,7 @@ func TestNoNoticeWhenTheUserPassedAFlag(t *testing.T) {
 // No rule, no noise.
 func TestNoNoticeWithoutARule(t *testing.T) {
 	dir := unjailScratch(t)
-	if msg := ResolveJailNotice(Args{Mode: ModeInteractive, CWD: dir}, config.Config{}).Message(); msg != "" {
+	if msg := ResolveJailNotice(Inputs{Mode: mode.Interactive, CWD: dir}, config.Config{}).Message(); msg != "" {
 		t.Errorf("message = %q, want silence for an ordinary directory", msg)
 	}
 }

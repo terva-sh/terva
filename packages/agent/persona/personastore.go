@@ -1,4 +1,4 @@
-package build
+package persona
 
 import (
 	"fmt"
@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"terva.sh/terva/packages/agent/slug"
 )
 
 // The persona side of the library. Unlike cards (untrusted data), a persona
@@ -14,20 +15,20 @@ import (
 // CONTROL surface gates create/edit; this file is just the read/serialize/write
 // mechanics the workspace calls after it has checked trust.
 //
-// Personas already had a rich read side (AllPersonas / PersonaTiers / Origin);
+// Personas already had a rich read side (All / Tiers / Origin);
 // what was missing was a way to WRITE one back (persona files were hand-authored
-// or copied verbatim by `persona init`). MarshalPersona + WritePersona close
+// or copied verbatim by `persona init`). Marshal + Write close
 // that, so the control plane can create a new persona and copy-to-edit a
 // built-in, both landing in the user library at $TERVA_HOME/personas.
 
-// LookupPersona finds a persona by a bare name/stem or a "namespace:name" ref,
+// Lookup finds a persona by a bare name/stem or a "namespace:name" ref,
 // across every tier (user on-disk > extension > embedded), returning the
 // highest-precedence match.
-func LookupPersona(query string) (Persona, bool) {
+func Lookup(query string) (Persona, bool) {
 	if strings.TrimSpace(query) == "" {
 		return Persona{}, false
 	}
-	for _, p := range AllPersonas() {
+	for _, p := range All() {
 		if p.matches(query) {
 			return p, true
 		}
@@ -35,13 +36,13 @@ func LookupPersona(query string) (Persona, bool) {
 	return Persona{}, false
 }
 
-// MarshalPersona serializes a persona to its on-disk .md form (YAML frontmatter
-// + charter body) — the inverse of ParsePersona, so a round-trip is stable.
-func MarshalPersona(p Persona) ([]byte, error) {
+// Marshal serializes a persona to its on-disk .md form (YAML frontmatter
+// + charter body) — the inverse of Parse, so a round-trip is stable.
+func Marshal(p Persona) ([]byte, error) {
 	if strings.TrimSpace(p.Name) == "" {
 		return nil, fmt.Errorf("persona: missing required name")
 	}
-	front, err := yaml.Marshal(personaFrontmatter{
+	front, err := yaml.Marshal(frontmatter{
 		Name:              strings.TrimSpace(p.Name),
 		Pronunciation:     strings.TrimSpace(p.Pronunciation),
 		Specialty:         strings.TrimSpace(p.Specialty),
@@ -74,18 +75,18 @@ func MarshalPersona(p Persona) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// UserPersonaPath returns the on-disk library path for a persona name and
+// UserPath returns the on-disk library path for a persona name and
 // whether a file already exists there — how the control surface tells a create
 // (must be new) from an edit (may overwrite / shadow a built-in). A persona
 // saved before slugs folded diacritics sits under the old spelling ("sepp.md"
 // for "Seppä"); that file is reported instead, so an edit lands on the persona
-// the user actually has — and WritePersona is what moves it to the folded stem.
-func UserPersonaPath(name string) (string, bool) {
-	slug := cardSlug(name)
-	if slug == "" {
+// the user actually has — and Write is what moves it to the folded stem.
+func UserPath(name string) (string, bool) {
+	stem := slug.Of(name)
+	if stem == "" {
 		return "", false
 	}
-	p := filepath.Join(PersonasDir(), slug+".md")
+	p := filepath.Join(Dir(), stem+".md")
 	if _, err := os.Stat(p); err == nil {
 		return p, true
 	}
@@ -99,38 +100,38 @@ func UserPersonaPath(name string) (string, bool) {
 // one is present AND actually names this persona — "Sepp" legitimately owns
 // sepp.md, and a lookup for "Seppä" must not claim it.
 func legacyPersonaFile(name string) (string, bool) {
-	legacy := legacyCardSlug(name)
-	if legacy == "" || legacy == cardSlug(name) {
+	legacy := slug.Legacy(name)
+	if legacy == "" || legacy == slug.Of(name) {
 		return "", false
 	}
-	p := filepath.Join(PersonasDir(), legacy+".md")
+	p := filepath.Join(Dir(), legacy+".md")
 	raw, err := os.ReadFile(p)
 	if err != nil {
 		return "", false
 	}
-	old, err := ParsePersona(string(raw), p)
+	old, err := Parse(string(raw), p)
 	if err != nil || !strings.EqualFold(old.Name, name) {
 		return "", false
 	}
 	return p, true
 }
 
-// WritePersona writes a persona into the user library ($TERVA_HOME/personas),
+// Write writes a persona into the user library ($TERVA_HOME/personas),
 // returning the file path. Copy-to-edit of a built-in falls out for free: the
 // written user file shadows the embedded one by Key (user tier wins) — which
 // is exactly why the file must land on the FOLDED slug ("seppa.md"), the stem
 // the built-in uses, never on a pre-fold spelling. Enforcing the trust gate is
 // the CALLER's job — this is the mechanism, not the policy.
-func WritePersona(p Persona) (string, error) {
-	raw, err := MarshalPersona(p)
+func Write(p Persona) (string, error) {
+	raw, err := Marshal(p)
 	if err != nil {
 		return "", err
 	}
-	slug := cardSlug(p.Name)
-	if slug == "" {
+	stem := slug.Of(p.Name)
+	if stem == "" {
 		return "", fmt.Errorf("persona: name %q has no usable filename", p.Name)
 	}
-	dest := filepath.Join(PersonasDir(), slug+".md")
+	dest := filepath.Join(Dir(), stem+".md")
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
@@ -147,17 +148,17 @@ func WritePersona(p Persona) (string, error) {
 	return dest, nil
 }
 
-// DeletePersona removes a persona from the user library ($TERVA_HOME/personas),
-// the inverse of WritePersona. It touches ONLY the user tier: the embedded crew
+// Delete removes a persona from the user library ($TERVA_HOME/personas),
+// the inverse of Write. It touches ONLY the user tier: the embedded crew
 // and extension bundles are not on disk here and are unaffected, so deleting a
 // user file that shadowed a built-in un-shadows it and the built-in becomes
 // visible again — the way back from a copy-to-edit.
 //
 // Reports whether a file was removed, so a caller can tell "deleted" from
 // "there was nothing of yours by that name" and answer accordingly. As with
-// WritePersona, the trust gate is the CALLER's job.
-func DeletePersona(name string) (bool, error) {
-	dest, exists := UserPersonaPath(name)
+// Write, the trust gate is the CALLER's job.
+func Delete(name string) (bool, error) {
+	dest, exists := UserPath(name)
 	if dest == "" {
 		return false, fmt.Errorf("persona: name %q has no usable filename", name)
 	}

@@ -1,6 +1,8 @@
 package build
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -80,5 +82,38 @@ func TestResolveDispatchPersona(t *testing.T) {
 	}
 	if got, err := ResolveDispatchPersona("   "); err != nil || got != "" {
 		t.Fatalf("blank -> (%q, %v); want empty/no-error", got, err)
+	}
+}
+
+// An extension's persona is dispatchable on the same terms as a built-in: the
+// filter is good_for, not provenance. The persona package proves the field
+// survives discovery (TestExtensionPersonaDiscovery); this proves the roster
+// acts on it, which is the half that lives here.
+func TestExtensionPersonaIsDispatchable(t *testing.T) {
+	home := testsupport.TempDir(t)
+	t.Setenv("TERVA_HOME", home)
+	t.Setenv("TERVA_PERSONA_NAME", "")
+
+	dir := filepath.Join(home, "extensions", "websearch")
+	if err := os.MkdirAll(filepath.Join(dir, "personas"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "extension.json"),
+		[]byte(`{"name":"websearch","exec":"x","enabled":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "personas", "deep-researcher.md"),
+		[]byte("---\nname: Deep Researcher\nspecialty: web research\ngood_for: [web-research]\n---\nResearch rigorously."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+	for _, dp := range dispatchablePersonas() {
+		if dp.Ref() == "websearch:deep-researcher" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("ext persona with good_for should be dispatchable")
 	}
 }

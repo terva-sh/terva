@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -15,7 +15,7 @@ import (
 // The card doctor's system prompt is the Seppä persona's charter; it must resolve
 // by its ASCII stem (the constant the doctor uses).
 func TestDoctorPersonaResolves(t *testing.T) {
-	p, err := build.ResolvePersona(doctorPersona)
+	p, err := persona.Resolve(doctorPersona)
 	if err != nil {
 		t.Fatalf("resolve doctor persona %q: %v", doctorPersona, err)
 	}
@@ -55,7 +55,7 @@ func TestRenderDoctorPromptIncludesFieldsFindingsDecisions(t *testing.T) {
 // The editor (W4) is the doctor's session mode: its persona must resolve and
 // read like a promotion-from-play editor, not a card-lint smith.
 func TestEditorPersonaResolves(t *testing.T) {
-	p, err := build.ResolvePersona(editorPersona)
+	p, err := persona.Resolve(editorPersona)
 	if err != nil {
 		t.Fatalf("resolve editor persona %q: %v", editorPersona, err)
 	}

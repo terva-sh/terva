@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -14,7 +14,7 @@ import (
 // The session doctor's persona must resolve by its stem and read like a
 // structure-from-play dramaturg, not a card smith or a character editor.
 func TestDramaturgPersonaResolves(t *testing.T) {
-	p, err := build.ResolvePersona(dramaturgPersona)
+	p, err := persona.Resolve(dramaturgPersona)
 	if err != nil {
 		t.Fatalf("resolve %q: %v", dramaturgPersona, err)
 	}

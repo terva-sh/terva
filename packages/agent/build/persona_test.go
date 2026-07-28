@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -108,7 +109,7 @@ func TestBuildSystemPrompt_IntroOverride(t *testing.T) {
 // collaboration style, the convention owns concise output with no per-call
 // narration — so reverting either half alone trips this test.
 func TestMieliCharter_IntentFirst(t *testing.T) {
-	p, err := loadEmbeddedPersona("mieli")
+	p, err := persona.LoadBuiltin("mieli")
 	if err != nil {
 		t.Fatalf("load embedded mieli: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestMieliCharter_IntentFirst(t *testing.T) {
 // lands on Persona.Introduction (trimmed).
 func TestParsePersona_AgentIntroduction(t *testing.T) {
 	raw := "---\nname: Kaisa\nagent_introduction: You are Kaisa, a deep-sea cartographer.\n---\nCharter body here."
-	p, err := ParsePersona(raw, "test")
+	p, err := persona.Parse(raw, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,8 +152,8 @@ func TestParsePersona_AgentIntroduction(t *testing.T) {
 // "all tasks complete" housekeeping reply — see review-crew/README.md).
 func TestReviewCrewChartersCarryDeliverableContract(t *testing.T) {
 	const marker = "your final message is your entire\ndeliverable"
-	dir := BuiltinPersonasRoot + "/review-crew"
-	entries, err := BuiltinPersonasFS.ReadDir(dir)
+	dir := persona.BuiltinRoot + "/review-crew"
+	entries, err := persona.BuiltinFS.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read embedded review-crew dir: %v", err)
 	}
@@ -163,7 +164,7 @@ func TestReviewCrewChartersCarryDeliverableContract(t *testing.T) {
 			continue
 		}
 		charters++
-		raw, err := BuiltinPersonasFS.ReadFile(dir + "/" + name)
+		raw, err := persona.BuiltinFS.ReadFile(dir + "/" + name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
@@ -173,5 +174,28 @@ func TestReviewCrewChartersCarryDeliverableContract(t *testing.T) {
 	}
 	if charters < 7 {
 		t.Fatalf("expected the full 7-charter crew, found %d", charters)
+	}
+}
+
+// The charter lands between the identity intro and the harness conventions,
+// and is dropped when a Custom prompt replaces the identity.
+func TestBuildSystemPrompt_CharterPlacement(t *testing.T) {
+	got := BuildSystemPrompt(SystemPromptOpts{PersonaName: "Vartija", Charter: "REVIEW-AS-SECURITY"})
+	intro := strings.Index(got, "You are Vartija,")
+	charter := strings.Index(got, "REVIEW-AS-SECURITY")
+	// Anchor on the surface-independent half of the conventions: the opening
+	// sentence now varies with where the output lands (see Surface), so keying
+	// the ordering check on it would make this test a hostage to the audience.
+	conv := strings.Index(got, "let tool calls carry the operational detail")
+	if intro < 0 || charter < 0 || conv < 0 {
+		t.Fatalf("missing a section: intro=%d charter=%d conv=%d\n%s", intro, charter, conv, got)
+	}
+	if !(intro < charter && charter < conv) {
+		t.Fatalf("order wrong: intro=%d charter=%d conv=%d", intro, charter, conv)
+	}
+
+	custom := BuildSystemPrompt(SystemPromptOpts{Custom: "BESPOKE", PersonaName: "Vartija", Charter: "REVIEW-AS-SECURITY"})
+	if strings.Contains(custom, "REVIEW-AS-SECURITY") {
+		t.Errorf("charter must be ignored under Custom:\n%s", custom)
 	}
 }

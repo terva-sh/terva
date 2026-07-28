@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/mcp"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -107,7 +108,7 @@ func TestTrustedProjectHooksFire(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = config.UntrustPath(proj) })
-		trusted := build.ResolveTrustState(build.Args{CWD: proj}).IsTrusted()
+		trusted := permissions.ResolveTrustState(proj, false).IsTrusted()
 		if !trusted {
 			t.Fatal("store entry should resolve the workspace as trusted")
 		}
@@ -318,7 +319,7 @@ func TestTrustedProjectHooksFlowThroughResolveVerdict(t *testing.T) {
 	writeProjectConfig(t, proj, jsonHooksConfig(stub, "deny"))
 
 	args := build.Args{CWD: proj, Trust: true}
-	trusted := build.ResolveTrustState(args).IsTrusted()
+	trusted := permissions.ResolveTrustState(args.CWD, args.Trust).IsTrusted()
 	if !trusted {
 		t.Fatal("--trust must resolve to trusted")
 	}

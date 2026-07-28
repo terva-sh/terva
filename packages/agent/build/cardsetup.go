@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/agent/persona"
 )
 
 // cardIdentity is a loaded --card resolved for this run: an additive Persona
@@ -15,7 +16,7 @@ import (
 // framing), the opening greeting to seed, and the card's character_book
 // mapped onto ephemeral lore entries.
 type cardIdentity struct {
-	Persona       Persona
+	Persona       persona.Persona
 	greeting      string   // the SELECTED greeting (greetings[greetingIdx]) — the active opening
 	greetings     []string // first_mes + all alternate_greetings, macro-substituted, in card order — the swipeable openings
 	introOverride string   // the card's intro block (system_prompt with {{original}} resolved, else the short framing)
@@ -60,7 +61,7 @@ func loadCardIdentity(path, Experience string, greetingIdx int, userName string)
 		allGreetings = append(allGreetings, strings.TrimSpace(card.Substitute(g, charName, userName)))
 	}
 	ci := cardIdentity{
-		Persona: Persona{
+		Persona: persona.Persona{
 			Name:    charName,
 			Charter: buildCardCharter(c, charName, userName),
 			Source:  "card:" + filepath.Base(path),

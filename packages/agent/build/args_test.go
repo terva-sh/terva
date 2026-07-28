@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -94,7 +95,7 @@ func TestParseArgsTaskReadsFileIntoPrompt(t *testing.T) {
 		t.Fatalf("task prompt = %q, want the file body with the trailing newline trimmed", a.Prompt)
 	}
 	// It preloads an interactive run (not a mode change).
-	if a.Mode != ModeInteractive {
+	if a.Mode != mode.Interactive {
 		t.Errorf("--task must not change the mode, got %q", a.Mode)
 	}
 }

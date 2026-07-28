@@ -1,4 +1,25 @@
-package build
+// Package persona is terva's persona library: the shipped crew, the user's own
+// files under $TERVA_HOME/personas, and the ones extensions bring — parsed,
+// namespaced, layered, and composed into the charter an agent runs as.
+//
+// It is a library, not a stage of the build. Nothing here reads Args or
+// Resolved; nothing here knows how a system prompt gets assembled. That is what
+// let it leave package build at all, and it is the property to preserve: a
+// persona is a document with a name, a charter, and a provenance, and this
+// package's whole job is turning files into that.
+//
+// Three tiers resolve by precedence — user, then extension, then built-in — so
+// a user file shadows the crew member it shares a stem with. The stem is the
+// shadowing mechanism, which is why it comes from packages/agent/slug rather
+// than from anything here: a persona and a card must agree on how a name
+// becomes a filename, or the shadow silently misses.
+//
+// The consumer of all this lives in build: persona_dispatch.go decides which
+// personas a swarm may dispatch and renders them into a system prompt. That
+// stayed behind deliberately. Injecting a roster into a prompt is a question
+// about prompts, and it needs vocabulary (the auto-swarm addendum) that has
+// nothing to do with what a persona is.
+package persona
 
 import (
 	"embed"
@@ -16,14 +37,14 @@ import (
 	"terva.sh/terva/packages/i18n"
 )
 
-// BuiltinPersonasFS embeds the shipped Persona crew. Mirrors the skills
+// BuiltinFS embeds the shipped Persona crew. Mirrors the skills
 // package's all:builtin embed, but personas are a file per item (with optional
 // team subdirectories) rather than a directory per item.
 //
 //go:embed all:personas/builtin
-var BuiltinPersonasFS embed.FS
+var BuiltinFS embed.FS
 
-const BuiltinPersonasRoot = "personas/builtin"
+const BuiltinRoot = "personas/builtin"
 
 // Persona is a resolved Persona: identity + display metadata + a behavioral
 // charter. By default the charter is layered *additively* on top of terva's
@@ -96,11 +117,11 @@ type Persona struct {
 	Source string
 }
 
-// immersiveCustom returns the charter to use as the entire system-prompt
+// ImmersiveCustom returns the charter to use as the entire system-prompt
 // identity when an immersive Persona should own it, or "" to keep the additive
 // path. An explicit custom prompt (--system-prompt / SYSTEM.md) always wins, so
 // a non-empty custom short-circuits to "".
-func immersiveCustom(custom string, p Persona) string {
+func ImmersiveCustom(custom string, p Persona) string {
 	if custom == "" && p.Immersive && strings.TrimSpace(p.Charter) != "" {
 		return p.Charter
 	}
@@ -129,7 +150,7 @@ func (p Persona) Builtin() bool { return strings.HasPrefix(p.Source, "embedded:"
 // The fallback is what makes a bundle self-organising: an extension shipping
 // five personas, or a team subdirectory under personas/, gets a shelf of its own
 // without anyone writing `group:` five times. Derived rather than stored, so
-// MarshalPersona never writes back a group the author did not choose.
+// Marshal never writes back a group the author did not choose.
 func (p Persona) GroupLabel() string {
 	if g := strings.TrimSpace(p.Group); g != "" {
 		return g
@@ -137,11 +158,11 @@ func (p Persona) GroupLabel() string {
 	return strings.TrimSpace(p.Namespace)
 }
 
-// personaFrontmatter is the YAML head of a persona .md. omitempty keeps a
-// serialized persona (MarshalPersona) from emitting a wall of empty keys;
+// frontmatter is the YAML head of a persona .md. omitempty keeps a
+// serialized persona (Marshal) from emitting a wall of empty keys;
 // omitempty affects marshaling only, so parsing is unchanged (an absent optional
 // field already meant its zero value).
-type personaFrontmatter struct {
+type frontmatter struct {
 	Name              string   `yaml:"name"`
 	Pronunciation     string   `yaml:"pronunciation,omitempty"`
 	Specialty         string   `yaml:"specialty,omitempty"`
@@ -157,12 +178,12 @@ type personaFrontmatter struct {
 	Extends           string   `yaml:"extends,omitempty"`
 }
 
-// ParsePersona parses a Persona .md (YAML frontmatter + charter body). A
+// Parse parses a Persona .md (YAML frontmatter + charter body). A
 // missing `name` is an error — unlike skills, a Persona with no identity is
 // not usable.
-func ParsePersona(raw, source string) (Persona, error) {
-	front, body := splitPersonaFrontmatter(raw)
-	var fm personaFrontmatter
+func Parse(raw, source string) (Persona, error) {
+	front, body := splitFrontmatter(raw)
+	var fm frontmatter
 	if strings.TrimSpace(front) != "" {
 		if err := yaml.Unmarshal([]byte(front), &fm); err != nil {
 			return Persona{}, fmt.Errorf("persona %s: parse frontmatter: %w", source, err)
@@ -191,10 +212,10 @@ func ParsePersona(raw, source string) (Persona, error) {
 	return p, nil
 }
 
-// splitPersonaFrontmatter splits "---\n<yaml>\n---\n<body>", returning
+// splitFrontmatter splits "---\n<yaml>\n---\n<body>", returning
 // (frontmatter, body), or ("", raw) when no frontmatter is present. Mirrors
 // skills.splitFrontmatter, which is private to that package.
-func splitPersonaFrontmatter(raw string) (string, string) {
+func splitFrontmatter(raw string) (string, string) {
 	rest := strings.TrimLeft(raw, " \t\r\n")
 	if !strings.HasPrefix(rest, "---") {
 		return "", raw
@@ -213,7 +234,7 @@ func splitPersonaFrontmatter(raw string) (string, string) {
 	return front, body
 }
 
-// ResolvePersona resolves the active Persona for a run:
+// Resolve resolves the active Persona for a run:
 //
 //  1. override (--Persona): a built-in/on-disk name, or a path; user-provided
 //     ⇒ trusted.
@@ -227,19 +248,19 @@ func splitPersonaFrontmatter(raw string) (string, string) {
 // an error (fail-fast on a typo), like an explicitly-named missing context file.
 //
 // Charter composition (`extends`) happens HERE and nowhere else, on every path
-// out of selectPersona — one choke point a caller cannot route around, so a
-// persona can never reach a prompt with its `extends` unresolved. LookupPersona
+// out of selectOne — one choke point a caller cannot route around, so a
+// persona can never reach a prompt with its `extends` unresolved. Lookup
 // deliberately does not compose: the persona LIBRARY shows what a file says,
 // while a RUN gets what the file assembles to.
-func ResolvePersona(override string) (Persona, error) {
-	p, err := selectPersona(override)
+func Resolve(override string) (Persona, error) {
+	p, err := selectOne(override)
 	if err != nil {
 		return p, err
 	}
 	return ComposeCharter(p)
 }
 
-// MachineBoundPersonaStems names the built-in personas machine flows resolve
+// MachineBoundStems names the built-in personas machine flows resolve
 // BY LITERAL STEM — the card doctor ("seppa"), the story editor
 // ("toimittaja"), the session dramaturg ("dramaturgi"), the world realizer
 // ("kartoittaja") — rather than by the user picking one. A user persona
@@ -247,21 +268,21 @@ func ResolvePersona(override string) (Persona, error) {
 // those flows too. That is deliberate (it is how the machine personas are
 // customized) but silent, and an override need not honor the structured
 // output contract the flow parses — so each flow announces the shadow via
-// MachinePersonaNotice, and a workspace test asserts every flow's stem is
+// MachineNotice, and a workspace test asserts every flow's stem is
 // enrolled here (the self-enrolling-set pattern): a new machine-bound stem
 // cannot ship without joining this set.
-var MachineBoundPersonaStems = map[string]bool{
+var MachineBoundStems = map[string]bool{
 	"seppa":       true,
 	"toimittaja":  true,
 	"dramaturgi":  true,
 	"kartoittaja": true,
 }
 
-// MachinePersonaNotice composes a machine flow's user-facing note when stem
+// MachineNotice composes a machine flow's user-facing note when stem
 // resolved to a persona other than the built-in, prepending the shadow
 // announcement to the flow's own note (which may be empty). With the
 // built-in in play it returns note unchanged.
-func MachinePersonaNotice(stem string, p Persona, note string) string {
+func MachineNotice(stem string, p Persona, note string) string {
 	if p.Builtin() {
 		return note
 	}
@@ -272,11 +293,11 @@ func MachinePersonaNotice(stem string, p Persona, note string) string {
 	return n + "\n" + note
 }
 
-// selectPersona is the precedence walk described on ResolvePersona, returning
+// selectOne is the precedence walk described on Resolve, returning
 // the persona as its file declares it — uncomposed.
-func selectPersona(override string) (Persona, error) {
+func selectOne(override string) (Persona, error) {
 	if s := strings.TrimSpace(override); s != "" {
-		return loadPersonaByNameOrPath(s)
+		return loadByNameOrPath(s)
 	}
 
 	cfg, _ := config.LoadConfig()
@@ -287,68 +308,68 @@ func selectPersona(override string) (Persona, error) {
 		if strings.TrimSpace(cfg.DefaultPersona) != "" {
 			fmt.Fprintf(os.Stderr, "terva: both %s and default_persona are set; using %s\n", rootFile, rootFile)
 		}
-		return ParsePersona(string(raw), rootFile)
+		return Parse(string(raw), rootFile)
 	case !errors.Is(err, os.ErrNotExist):
 		return Persona{}, fmt.Errorf("read %s: %w", rootFile, err)
 	}
 
 	if name := strings.TrimSpace(cfg.DefaultPersona); name != "" {
-		return loadPersonaByName(name)
+		return LoadByName(name)
 	}
 
 	// Embedded default, preserving the legacy name-only override. A custom name
 	// (set the old way) is a bare swap with no charter, exactly as before.
 	name := config.PersonaName()
 	if name == config.DefaultPersonaName {
-		return loadEmbeddedPersona("mieli")
+		return LoadBuiltin("mieli")
 	}
 	return Persona{Name: name}, nil
 }
 
-// loadPersonaByNameOrPath treats a value containing a slash or ending in .md as
+// loadByNameOrPath treats a value containing a slash or ending in .md as
 // a file path, otherwise as a Persona name resolved against personas/**.
-func loadPersonaByNameOrPath(s string) (Persona, error) {
+func loadByNameOrPath(s string) (Persona, error) {
 	if strings.Contains(s, "/") || strings.HasSuffix(s, ".md") {
 		raw, err := os.ReadFile(s)
 		if err != nil {
 			return Persona{}, fmt.Errorf("read persona %s: %w", s, err)
 		}
-		return ParsePersona(string(raw), s)
+		return Parse(string(raw), s)
 	}
-	return loadPersonaByName(s)
+	return LoadByName(s)
 }
 
-// loadPersonaByName finds a Persona by a bare name/stem or a qualified
+// LoadByName finds a Persona by a bare name/stem or a qualified
 // "namespace:name", case-insensitive, searching user > extension > embedded so
 // a higher tier shadows a lower one of the same qualified name.
-func loadPersonaByName(query string) (Persona, error) {
-	for _, set := range PersonaTiers() {
+func LoadByName(query string) (Persona, error) {
+	for _, set := range Tiers() {
 		for _, p := range set {
 			if p.matches(query) {
 				return p, nil
 			}
 		}
 	}
-	return Persona{}, fmt.Errorf("persona %q not found (looked in %s, extension bundles, and the built-in crew)", query, PersonasDir())
+	return Persona{}, fmt.Errorf("persona %q not found (looked in %s, extension bundles, and the built-in crew)", query, Dir())
 }
 
-// loadEmbeddedPersona loads a single built-in Persona by file stem from the
+// LoadBuiltin loads a single built-in Persona by file stem from the
 // top level of the embedded crew (e.g. "mieli").
-func loadEmbeddedPersona(stem string) (Persona, error) {
-	raw, err := fs.ReadFile(BuiltinPersonasFS, path.Join(BuiltinPersonasRoot, stem+".md"))
+func LoadBuiltin(stem string) (Persona, error) {
+	raw, err := fs.ReadFile(BuiltinFS, path.Join(BuiltinRoot, stem+".md"))
 	if err != nil {
 		return Persona{}, fmt.Errorf("load built-in persona %q: %w", stem, err)
 	}
-	return ParsePersona(string(raw), "embedded:"+stem+".md")
+	return Parse(string(raw), "embedded:"+stem+".md")
 }
 
-// AllPersonas returns the merged roster across tiers (user > extension >
+// All returns the merged roster across tiers (user > extension >
 // embedded), deduped by qualified name (a higher tier shadows a lower one of
 // the same namespace:stem), sorted by qualified name.
-func AllPersonas() []Persona {
+func All() []Persona {
 	seen := map[string]bool{}
 	var out []Persona
-	for _, set := range PersonaTiers() {
+	for _, set := range Tiers() {
 		for _, p := range set {
 			k := p.Key()
 			if seen[k] {
@@ -362,30 +383,30 @@ func AllPersonas() []Persona {
 	return out
 }
 
-// PersonasDir is the on-disk Persona library, $TERVA_HOME/personas.
-func PersonasDir() string { return filepath.Join(config.TervaHome(), "personas") }
+// Dir is the on-disk Persona library, $TERVA_HOME/personas.
+func Dir() string { return filepath.Join(config.TervaHome(), "personas") }
 
-func listEmbeddedPersonas() []Persona {
-	return readPersonasFromFS(BuiltinPersonasFS, BuiltinPersonasRoot,
+func listEmbedded() []Persona {
+	return readFromFS(BuiltinFS, BuiltinRoot,
 		func(rel string) string { return "embedded:" + rel },
 		nsFromRel)
 }
 
-func listOnDiskPersonas() []Persona {
-	dir := PersonasDir()
+func listOnDisk() []Persona {
+	dir := Dir()
 	if _, err := os.Stat(dir); err != nil {
 		return nil
 	}
-	return readPersonasFromFS(os.DirFS(dir), ".",
+	return readFromFS(os.DirFS(dir), ".",
 		func(rel string) string { return filepath.Join(dir, filepath.FromSlash(rel)) },
 		nsFromRel)
 }
 
-// readPersonasFromFS walks root in fsys, parsing every .md (except README.md)
+// readFromFS walks root in fsys, parsing every .md (except README.md)
 // into a Persona. sourceFor and nsFor map the path RELATIVE to root onto
 // Persona.Source and Persona.Namespace. Unparseable files are skipped so one
 // broken file can't hide the rest.
-func readPersonasFromFS(fsys fs.FS, root string, sourceFor, nsFor func(rel string) string) []Persona {
+func readFromFS(fsys fs.FS, root string, sourceFor, nsFor func(rel string) string) []Persona {
 	var out []Persona
 	_ = fs.WalkDir(fsys, root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -402,7 +423,7 @@ func readPersonasFromFS(fsys fs.FS, root string, sourceFor, nsFor func(rel strin
 		if root != "." {
 			rel = strings.TrimPrefix(p, root+"/")
 		}
-		if Persona, err := ParsePersona(string(raw), sourceFor(rel)); err == nil {
+		if Persona, err := Parse(string(raw), sourceFor(rel)); err == nil {
 			Persona.Namespace = nsFor(rel)
 			out = append(out, Persona)
 		}
@@ -412,10 +433,10 @@ func readPersonasFromFS(fsys fs.FS, root string, sourceFor, nsFor func(rel strin
 	return out
 }
 
-// personaStem returns the file stem of a Source, handling all three source
+// stemOf returns the file stem of a Source, handling all three source
 // shapes: "embedded:review-crew/vartija.md", "ext:websearch:deep-researcher.md"
 // (colons, not path separators, prefix the bundle), and "/path/to/vartija.md".
-func personaStem(source string) string {
+func stemOf(source string) string {
 	s := source
 	switch {
 	case strings.HasPrefix(s, "embedded:"):

@@ -268,7 +268,7 @@ type InteractiveConfig struct {
 	// there is nothing to say. Non-empty when a SAVED rule took the jail down
 	// for this directory — a decision the user made once and would otherwise
 	// only learn about from the absence of a "jailed" badge, which is no
-	// signal at all. Set by the host from build.JailNoticeFor.
+	// signal at all. Set by the host from permissions.JailNoticeFor.
 	JailNotice string
 
 	// TrustWorkspace persists trust for the current cwd (parent=true also

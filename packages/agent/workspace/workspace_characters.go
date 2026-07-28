@@ -3,6 +3,7 @@ package workspace
 import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/persona"
 )
 
 // The "Characters" surface — the content library as a workspace pane. It is a
@@ -21,7 +22,7 @@ func (s *wsSession) charactersView() *ctrlproto.CharactersView {
 			v.Cards = append(v.Cards, cardSummary(sc))
 		}
 	}
-	for _, p := range build.AllPersonas() {
+	for _, p := range persona.All() {
 		v.Personas = append(v.Personas, personaSummary(p))
 	}
 	return v

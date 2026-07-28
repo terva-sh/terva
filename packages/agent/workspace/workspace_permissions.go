@@ -8,9 +8,9 @@ import (
 	"slices"
 	"strings"
 
-	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 )
@@ -221,7 +221,7 @@ func (w *Workspace) refreshAllPolicies() {
 		// A nil policy (yolo + no rules) means "no rules" — clear them, or a
 		// just-removed rule would linger on the gate.
 		var rules []core.PermissionRule
-		if pol, _ := build.BuildPermissionPolicy(s.argsSnapshot()); pol != nil {
+		if pol, _ := permissions.BuildPolicy(s.argsSnapshot().PermInputs()); pol != nil {
 			rules = pol.Rules
 		}
 		s.gate.SetRules(rules)

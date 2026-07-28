@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -41,10 +41,10 @@ func TestPersonaWriteChainPreservesEveryField(t *testing.T) {
 	// The name is the file identity and the lookup key.
 	params.Name = "chain-sentinel"
 
-	if _, err := build.WritePersona(paramsToPersona(params)); err != nil {
+	if _, err := persona.Write(paramsToPersona(params)); err != nil {
 		t.Fatalf("WritePersona: %v", err)
 	}
-	stored, ok := build.LookupPersona("chain-sentinel")
+	stored, ok := persona.Lookup("chain-sentinel")
 	if !ok {
 		t.Fatal("the persona just written is not findable by name")
 	}
@@ -64,7 +64,7 @@ func TestPersonaWriteChainPreservesEveryField(t *testing.T) {
 		name := pv.Type().Field(i).Name
 		want := fmt.Sprint(pv.Field(i).Interface())
 		if sf := storedV.FieldByName(name); !sf.IsValid() {
-			t.Errorf("build.Persona has no %s field for wire field of that name — paramsToPersona cannot be carrying it", name)
+			t.Errorf("persona.Persona has no %s field for wire field of that name — paramsToPersona cannot be carrying it", name)
 		} else if got := fmt.Sprint(sf.Interface()); got != want {
 			t.Errorf("Persona.%s after write+lookup = %q, want %q — a link in the write chain dropped it", name, got, want)
 		}

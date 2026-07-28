@@ -24,6 +24,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -61,7 +62,7 @@ func proposeNextScene(ctx context.Context, s *wsSession, p ctrlproto.NextScenePa
 	if len(msgs) == 0 {
 		return ctrlproto.NextSceneResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("this scene has not been played yet"))
 	}
-	persona, err := build.ResolvePersona(dramaturgPersona)
+	persona, err := persona.Resolve(dramaturgPersona)
 	if err != nil || strings.TrimSpace(persona.Charter) == "" {
 		return ctrlproto.NextSceneResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", dramaturgPersona))
 	}

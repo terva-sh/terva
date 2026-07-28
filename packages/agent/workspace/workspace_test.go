@@ -18,7 +18,9 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
@@ -599,7 +601,7 @@ func TestWorkspaceSnapshotRebroadcastOnTurnEnd(t *testing.T) {
 	cl := &gatedTurnClient{started: make(chan struct{}, 1), release: make(chan struct{})}
 	s := newTurnTestSession(t, cl)
 
-	if err := s.prompt("hi", nil); err != nil {
+	if err := s.prompt("hi", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	<-cl.started
@@ -751,7 +753,7 @@ func TestWorkspaceTurnErrorEmitsErrorThenDone(t *testing.T) {
 	s := newTurnTestSession(t, cl)
 	sub := s.hub.add(nil, true)
 
-	if err := s.prompt("hi", nil); err != nil {
+	if err := s.prompt("hi", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	<-cl.started
@@ -792,7 +794,7 @@ func TestWorkspaceTurnErrorPersistsToSidecar(t *testing.T) {
 	s := newTurnTestSession(t, cl)
 	sub := s.hub.add(nil, true)
 
-	if err := s.prompt("hi", nil); err != nil {
+	if err := s.prompt("hi", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	<-cl.started
@@ -826,7 +828,7 @@ func TestWorkspaceQueueRestartsAfterTurn(t *testing.T) {
 	sub := s.hub.add(nil, true)
 
 	cl.release <- struct{}{}
-	if err := s.prompt("first", nil); err != nil {
+	if err := s.prompt("first", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	// The agent's "done" means the run loop is past its final queued-message
@@ -1937,7 +1939,7 @@ func TestWorkspaceTrust(t *testing.T) {
 	if !s.info().Trusted {
 		t.Fatal("SessionInfo.Trusted should reflect the grant")
 	}
-	if !build.ResolveTrustState(w.args).IsTrusted() {
+	if !permissions.ResolveTrustState(w.args.CWD, w.args.Trust).IsTrusted() {
 		t.Fatal("Trust should persist to the trust store")
 	}
 	if ev := recvEvent(t, sub); ev.Type != ctrlproto.EventSessionUpdated {
@@ -1950,7 +1952,7 @@ func TestWorkspaceTrust(t *testing.T) {
 	if s.trusted.Load() {
 		t.Fatal("session should be untrusted after Untrust")
 	}
-	if build.ResolveTrustState(w.args).IsTrusted() {
+	if permissions.ResolveTrustState(w.args.CWD, w.args.Trust).IsTrusted() {
 		t.Fatal("Untrust should drop the workspace from the trust store")
 	}
 }
@@ -2372,7 +2374,7 @@ func TestSettingsSurface(t *testing.T) {
 	// Isolate the home: the approval/auto-swarm verbs now trigger a live
 	// rebuild whose Resolve must not read (or repair) the real user config.
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	pol, _ := build.BuildPermissionPolicy(build.Args{Mode: build.ModeWeb})
+	pol, _ := permissions.BuildPolicy(build.Args{Mode: mode.Web}.PermInputs())
 	if pol == nil {
 		t.Skip("no policy for web mode")
 	}

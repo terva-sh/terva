@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -127,7 +128,7 @@ func TestResolve_SwarmChildDeliverableAddendum(t *testing.T) {
 	}
 	dir := testsupport.TempDir(t)
 
-	resolve := func(mode build.Mode) *build.Resolved {
+	resolve := func(mode mode.Mode) *build.Resolved {
 		t.Helper()
 		r, err := build.Resolve(build.Args{CWD: dir, Mode: mode}, false)
 		if err != nil {
@@ -144,14 +145,14 @@ func TestResolve_SwarmChildDeliverableAddendum(t *testing.T) {
 		return false
 	}
 
-	child := resolve(build.ModeSwarmAgent)
+	child := resolve(mode.SwarmAgent)
 	if !hasSeg(child) {
 		t.Fatal("swarm child must carry the deliverable-contract segment")
 	}
 	if !strings.Contains(child.SystemPrompt, "ONLY your final assistant message") {
 		t.Error("child system prompt missing the deliverable contract text")
 	}
-	if hasSeg(resolve(build.ModeInteractive)) {
+	if hasSeg(resolve(mode.Interactive)) {
 		t.Error("an interactive session must not carry the swarm-child contract")
 	}
 }

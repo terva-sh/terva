@@ -1,4 +1,4 @@
-package build
+package persona
 
 import (
 	"os"
@@ -11,7 +11,7 @@ import (
 )
 
 // writeUserPersona drops a persona into $TERVA_HOME/personas so the tier
-// machinery (and therefore LookupPersona) can see it.
+// machinery (and therefore Lookup) can see it.
 func writeUserPersona(t *testing.T, stem, body string) string {
 	t.Helper()
 	dir := filepath.Join(os.Getenv("TERVA_HOME"), "personas")
@@ -33,13 +33,13 @@ func TestComposeCharterInheritsTheDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := ParsePersona(string(raw), path)
+	p, err := Parse(string(raw), path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Parsing does not compose: the roster shows what a file says.
 	if p.Inherited != "" {
-		t.Errorf("ParsePersona resolved extends; composition belongs at selection time")
+		t.Errorf("Parse resolved extends; composition belongs at selection time")
 	}
 
 	got, err := ComposeCharter(p)
@@ -76,9 +76,9 @@ func TestExtendingPersonaGetsTheOrientationContract(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	writeUserPersona(t, "assistant", "---\nname: Assistant\nextends: mieli\n---\nTrack what is in flight.")
 
-	p, err := ResolvePersona("assistant")
+	p, err := Resolve("assistant")
 	if err != nil {
-		t.Fatalf("ResolvePersona: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 	if !strings.Contains(p.ComposedCharter(), "before your first tool call") {
 		t.Errorf("an extending persona did not inherit the orientation contract:\n%s", p.ComposedCharter())
@@ -92,7 +92,7 @@ func TestNonExtendingPersonaIsUnchanged(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	writeUserPersona(t, "plain", "---\nname: Plain\n---\nJust this.")
 
-	p, err := ResolvePersona("plain")
+	p, err := Resolve("plain")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestNonExtendingPersonaIsUnchanged(t *testing.T) {
 // shipped crew would reverse that decision silently.
 func TestBuiltinCrewDoesNotExtend(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	for _, p := range listEmbeddedPersonas() {
+	for _, p := range listEmbedded() {
 		if p.Extends != "" {
 			t.Errorf("built-in %s declares extends: %q — specialists must stay self-contained", p.Source, p.Extends)
 		}
@@ -140,7 +140,7 @@ func TestComposeCharterRejections(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-			p, err := ParsePersona(tc.file, "test.md")
+			p, err := Parse(tc.file, "test.md")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -166,7 +166,7 @@ func TestComposeCharterRejectsSelfExtension(t *testing.T) {
 	path := writeUserPersona(t, "mieli", "---\nname: Mieli\nextends: mieli\n---\nMy own take.")
 
 	raw, _ := os.ReadFile(path)
-	p, err := ParsePersona(string(raw), path)
+	p, err := Parse(string(raw), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,14 +185,14 @@ func TestComposeCharterRejectsAChain(t *testing.T) {
 	path := writeUserPersona(t, "assistant", "---\nname: Assistant\nextends: mieli\n---\nMine.")
 
 	raw, _ := os.ReadFile(path)
-	p, _ := ParsePersona(string(raw), path)
+	p, _ := Parse(string(raw), path)
 	_, cerr := ComposeCharter(p)
 	if cerr == nil || !strings.Contains(cerr.Error(), "chains are not supported") {
 		t.Fatalf("chain error = %v, want one refusing the chain", cerr)
 	}
 }
 
-// ResolvePersona is the single choke point. If a caller could reach a prompt
+// Resolve is the single choke point. If a caller could reach a prompt
 // without composing, `extends` would be a field that works only sometimes —
 // which is worse than one that does not exist.
 func TestResolvePersonaComposesOnEveryPath(t *testing.T) {
@@ -201,7 +201,7 @@ func TestResolvePersonaComposesOnEveryPath(t *testing.T) {
 	t.Run("by name", func(t *testing.T) {
 		t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 		writeUserPersona(t, "assistant", body)
-		p, err := ResolvePersona("assistant")
+		p, err := Resolve("assistant")
 		if err != nil || p.Inherited == "" {
 			t.Fatalf("name path: inherited %q, err %v", p.Inherited, err)
 		}
@@ -210,7 +210,7 @@ func TestResolvePersonaComposesOnEveryPath(t *testing.T) {
 	t.Run("by path", func(t *testing.T) {
 		t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 		path := writeUserPersona(t, "assistant", body)
-		p, err := ResolvePersona(path)
+		p, err := Resolve(path)
 		if err != nil || p.Inherited == "" {
 			t.Fatalf("path path: inherited %q, err %v", p.Inherited, err)
 		}
@@ -222,7 +222,7 @@ func TestResolvePersonaComposesOnEveryPath(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(home, "persona.md"), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		p, err := ResolvePersona("")
+		p, err := Resolve("")
 		if err != nil || p.Inherited == "" {
 			t.Fatalf("root-file path: inherited %q, err %v", p.Inherited, err)
 		}
@@ -234,7 +234,7 @@ func TestResolvePersonaComposesOnEveryPath(t *testing.T) {
 		if err := config.SaveConfig(config.Config{DefaultPersona: "assistant"}); err != nil {
 			t.Fatal(err)
 		}
-		p, err := ResolvePersona("")
+		p, err := Resolve("")
 		if err != nil || p.Inherited == "" {
 			t.Fatalf("default_persona path: inherited %q, err %v", p.Inherited, err)
 		}
@@ -247,12 +247,12 @@ func TestResolvePersonaComposesOnEveryPath(t *testing.T) {
 func TestResolvePersonaFailsOnABadExtends(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	writeUserPersona(t, "broken", "---\nname: Broken\nextends: nosuchpersona\n---\nMine.")
-	if _, err := ResolvePersona("broken"); err == nil {
-		t.Fatal("ResolvePersona accepted an unsupported extends")
+	if _, err := Resolve("broken"); err == nil {
+		t.Fatal("Resolve accepted an unsupported extends")
 	}
 }
 
-// The round trip is where a new frontmatter field goes to die: MarshalPersona
+// The round trip is where a new frontmatter field goes to die: Marshal
 // writes an explicit field list, so a field added to the parser and forgotten
 // here is DELETED the first time anyone saves the persona from an editor. That
 // is the same silent replacement `extends` exists to fix, so it gets a test of
@@ -261,14 +261,14 @@ func TestExtendsSurvivesAWriteReadRoundTrip(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	original := Persona{Name: "Assistant", Extends: "mieli", Charter: "Track what is in flight."}
 
-	raw, err := MarshalPersona(original)
+	raw, err := Marshal(original)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw), "extends: mieli") {
 		t.Fatalf("marshaled persona has no extends:\n%s", raw)
 	}
-	back, err := ParsePersona(string(raw), "round-trip.md")
+	back, err := Parse(string(raw), "round-trip.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestMarshalDoesNotBakeTheInheritedCharterIn(t *testing.T) {
 		Inherited:       "Work as a calm, practical coding collaborator.",
 		InheritedSource: "embedded:mieli.md",
 	}
-	raw, err := MarshalPersona(p)
+	raw, err := Marshal(p)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,6 +18,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -56,8 +57,8 @@ func proposeRealize(ctx context.Context, s *wsSession, p ctrlproto.RealizeParams
 		return ctrlproto.RealizeResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 	msgs := ag.Messages()
-	persona, err := build.ResolvePersona(realizePersona)
-	if err != nil || strings.TrimSpace(persona.Charter) == "" {
+	pers, err := persona.Resolve(realizePersona)
+	if err != nil || strings.TrimSpace(pers.Charter) == "" {
 		return ctrlproto.RealizeResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", realizePersona))
 	}
 	cl := ag.Client
@@ -73,7 +74,7 @@ func proposeRealize(ctx context.Context, s *wsSession, p ctrlproto.RealizeParams
 	user := renderRealizeEvidence(s.playerLabel(), msgs)
 	req := provider.Request{
 		Model:     model,
-		System:    persona.Charter + "\n\n" + realizeTask,
+		System:    pers.Charter + "\n\n" + realizeTask,
 		MaxTokens: 12000,
 		Messages: []provider.Message{{
 			Role:    provider.RoleUser,
@@ -91,7 +92,7 @@ func proposeRealize(ctx context.Context, s *wsSession, p ctrlproto.RealizeParams
 		return ctrlproto.RealizeResult{}, err
 	}
 	// Announce a shadowed cartographer (see MachinePersonaNotice).
-	proposal.Note = build.MachinePersonaNotice(realizePersona, persona, proposal.Note)
+	proposal.Note = persona.MachineNotice(realizePersona, pers, proposal.Note)
 	return ctrlproto.RealizeResult{Proposal: proposal}, nil
 }
 
