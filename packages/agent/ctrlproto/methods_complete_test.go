@@ -1,23 +1,25 @@
 package ctrlproto
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"sort"
+	"strings"
 	"testing"
 )
 
-// Adding a verb means touching four places: the Method constant, Group(),
-// serve.go's hand-written dispatch switch, and every WorkspaceService
-// implementation. The compiler catches only the last one.
+// Adding a verb means touching three places: the Method constant, Group(), and
+// the dispatch table. The compiler catches none of them on its own.
 //
-// A method missing from Group() gets the empty group. One missing from the
-// dispatch switch falls through to `unknown method`. Both fail at runtime, on
-// a client with no idea why its call vanished.
+// A method missing from Group() gets the empty group, which is not a routing
+// error anywhere. One missing from the table answers `unknown method`. Both fail
+// at runtime, on a client with no idea why its call vanished.
 //
-// These read the source rather than a hand-kept list, so a new constant
-// enrolls itself.
+// The Group() check reads the SOURCE, because Group() is a switch and a switch
+// can only be asked what it covers by parsing it. The dispatch check does not:
+// the table is data, so it is a lookup. Both enroll a new constant automatically.
 
 // methodConstants returns every `MethodX Method = "..."` declared in methods.go.
 func methodConstants(t *testing.T) map[string]bool {
@@ -83,48 +85,6 @@ func caseIdents(t *testing.T, file, fn string) map[string]bool {
 	return out
 }
 
-// singletonCaseIdents collects only the identifiers that appear ALONE in a case
-// clause — `case MethodX:`, never `case MethodX, MethodY:`.
-//
-// This is the distinction that matters for dispatch. serve.go groups related
-// verbs behind one outer clause (`case MethodA, MethodB, MethodC:`) that resolves
-// the controller once, then re-switches on f.Method to bind each verb's own
-// params. caseIdents cannot tell those two layers apart: it harvests the outer
-// group list too, so a verb named ONLY there — and therefore actually handled by
-// the inner `default:` with another verb's params bound — still counts as
-// dispatched. That is exactly how personas.delete came to be dispatched as
-// PersonasEdit, binding {name} as a write and overwriting the persona with an
-// empty one (see the backstop comment in serve.go).
-//
-// Requiring a singleton case means every verb must be named on an arm of its
-// own, so the group list alone can no longer satisfy the check.
-func singletonCaseIdents(t *testing.T, file, fn string) map[string]bool {
-	t.Helper()
-	f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", file, err)
-	}
-	out := map[string]bool{}
-	for _, d := range f.Decls {
-		fd, ok := d.(*ast.FuncDecl)
-		if !ok || fd.Name.Name != fn {
-			continue
-		}
-		ast.Inspect(fd, func(n ast.Node) bool {
-			if cc, ok := n.(*ast.CaseClause); ok && len(cc.List) == 1 {
-				if id, ok := cc.List[0].(*ast.Ident); ok {
-					out[id.Name] = true
-				}
-			}
-			return true
-		})
-	}
-	if len(out) == 0 {
-		t.Fatalf("no singleton case identifiers found in %s:%s — was it renamed?", file, fn)
-	}
-	return out
-}
-
 func methodsMissingFrom(all, have map[string]bool) []string {
 	var out []string
 	for name := range all {
@@ -145,26 +105,68 @@ func TestEveryMethodHasAGroup(t *testing.T) {
 	}
 }
 
-// Every Method must be dispatched. serve.go's switch is hand-written, and a
-// missing case silently answers `unknown method`.
+// Every Method must be dispatched.
+//
+// This used to PARSE serve.go's switch with go/ast, because a hand-written switch
+// has no other way to be asked what it covers, and a missing case silently
+// answered `unknown method` to a client with no idea why its call vanished.
+//
+// Dispatch is a map now, so the question is a lookup. Worth noting what that
+// change RETIRED rather than moved: its companion test,
+// TestEveryMethodIsDispatchedExplicitly, existed because the switch let several
+// verbs share one outer `case MethodA, MethodB, MethodC:` and re-switch inside —
+// a verb named only in that outer list fell to the inner `default:` and ran
+// another verb's handler with its params bound to the wrong struct. It shipped
+// seven times; personas.delete ran as PersonasEdit and overwrote the persona with
+// an empty one. A map key cannot be shared and there is no inner default, so the
+// bug is now impossible rather than guarded, and the test that guarded it is gone
+// with the shape that made it necessary.
 func TestEveryMethodIsDispatched(t *testing.T) {
-	all := methodConstants(t)
-	if got := methodsMissingFrom(all, caseIdents(t, "serve.go", "handle")); len(got) > 0 {
-		t.Fatalf("methods missing from serve.go's dispatch switch: %v", got)
+	special := map[Method]string{
+		MethodSubscribe:   "serveState owns the event pump; no service call to table",
+		MethodUnsubscribe: "cancels the pump subscribe registered",
+	}
+	var missing []string
+	for name, m := range methodValues(t) {
+		if _, ok := dispatch[m]; ok {
+			continue
+		}
+		if _, ok := special[m]; ok {
+			continue
+		}
+		missing = append(missing, fmt.Sprintf("%s (%q)", name, m))
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Fatalf("methods with no entry in the dispatch table (dispatch_table.go) — add "+
+			"one, or a `special` entry here saying why serveState answers it:\n  %s",
+			strings.Join(missing, "\n  "))
+	}
+	// The reverse direction: an entry for a verb that no longer exists would sit
+	// there forever, since a map lookup never complains about an unused key.
+	all := map[Method]bool{}
+	for _, m := range methodValues(t) {
+		all[m] = true
+	}
+	var stale []string
+	for m := range dispatch {
+		if !all[m] {
+			stale = append(stale, string(m))
+		}
+	}
+	sort.Strings(stale)
+	if len(stale) > 0 {
+		t.Fatalf("dispatch table has entries for verbs that are not Method constants: %v", stale)
 	}
 }
 
-// Every Method must be dispatched on an arm of ITS OWN, not merely named in a
-// group's outer case list. TestEveryMethodIsDispatched above cannot see the
-// difference, and the gap is not theoretical: a verb reached only through a
-// group's `default:` runs another verb's handler with its params bound to the
-// wrong struct — silently, and destructively for delete/set/bind verbs. See
-// singletonCaseIdents.
-func TestEveryMethodIsDispatchedExplicitly(t *testing.T) {
-	all := methodConstants(t)
-	if got := methodsMissingFrom(all, singletonCaseIdents(t, "serve.go", "handle")); len(got) > 0 {
-		t.Fatalf("methods never named on a case arm of their own in serve.go's dispatch "+
-			"(a group's outer case list does not count — such a verb is handled by the "+
-			"group's default with another verb's params): %v", got)
+// A verb serveState answers itself must NOT also be in the table: the table would
+// never be consulted for it (handle returns first), so the entry would be dead
+// code that reads as live dispatch.
+func TestServeStateVerbsAreNotAlsoTabled(t *testing.T) {
+	for _, m := range []Method{MethodSubscribe, MethodUnsubscribe} {
+		if _, ok := dispatch[m]; ok {
+			t.Errorf("%s is answered by serveState AND has a dispatch entry; the entry is unreachable", m)
+		}
 	}
 }

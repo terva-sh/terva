@@ -27,14 +27,17 @@ import (
 // recorder that captures which controller method fired and with what, then
 // asserts both.
 //
-// Scope is the OPTIONAL controllers — the grouped arms, where every trap lived,
-// where the destructive verbs live (cards.delete, worlds.delete, world.set,
-// backgrounds.bind, userpersona.set_default, cast.remove, post_line), and where
-// the three positional call sites live. The mandatory WorkspaceService verbs sit
-// on singleton top-level cases where the fallthrough bug cannot occur; they are
-// enumerated in notCovered below with a reason each, so a NEW verb cannot join
-// either set unnoticed — covered + notCovered must equal every Method constant,
-// the same shape as forwarder_complete_test.go.
+// Scope is EVERY verb. This file carries the optional controllers — the grouped
+// arms, where every trap lived, where the destructive verbs live (cards.delete,
+// worlds.delete, world.set, backgrounds.bind, userpersona.set_default,
+// cast.remove, post_line), and where the three positional call sites live.
+// dispatch_mandatory_test.go carries the mandatory WorkspaceService surface and
+// explains why its singleton arms need the same assertions.
+//
+// notCovered below now holds only the two verbs that are not a service call at
+// all. Covered + notCovered must still equal every Method constant, so a NEW verb
+// cannot join neither set unnoticed — the same shape as
+// forwarder_complete_test.go.
 //
 // Worth knowing what this buys, concretely: transposing the last two arguments
 // of vc.DropVariant(ctx, sess, p.Epoch, p.Index, p.Variant) — both int, so the
@@ -418,7 +421,7 @@ const dispatchSess = "sess-42"
 // Every case sends DISTINCT field values, so a struct bound from the wrong verb
 // shows up as a mismatch rather than a coincidental zero-value match.
 func dispatchCases() []dispatchCase {
-	return []dispatchCase{
+	cases := []dispatchCase{
 		// --- model params: default: used to fall through to Reset ---
 		{MethodModelParams, ModelParamsParams{Provider: "anthropic", Model: "opus"}, "ModelParams", ModelParamsParams{Provider: "anthropic", Model: "opus"}},
 		{MethodModelParamsSet, ModelParamsSetParams{Provider: "openai", Model: "gpt"}, "ModelParamsSet", nil},
@@ -547,6 +550,9 @@ func dispatchCases() []dispatchCase {
 		{MethodAuthEndpointRemove, AuthEndpointRemoveParams{}, "AuthEndpointRemove", nil},
 		{MethodReplayState, nil, "ReplayState", nil},
 	}
+	// The mandatory WorkspaceService surface runs through the same assertions;
+	// see dispatch_mandatory_test.go for why its singleton arms still need them.
+	return append(cases, mandatoryDispatchCases()...)
 }
 
 // allGroups is every negotiable group, so group gating never masks a dispatch
@@ -609,6 +615,22 @@ func TestDispatchForwardsTheFrameSession(t *testing.T) {
 		"WorldSave": true, "PruneVariants": true, "DropVariant": true, "SuggestReply": true,
 		"SessionsDoctor": true, "SessionsNextScene": true, "ReplayState": true,
 		"SessionsExport": true,
+
+		// The mandatory surface's session-scoped verbs. Everything that mutates or
+		// reads ONE conversation belongs here; the four that are deliberately
+		// workspace-wide (Catalog, ListFiles, AuthProviders, SetFavoriteModel,
+		// SetDefaultModel, Trust, Untrust, Restart, Sessions, CreateSession) are
+		// absent because serve.go passes them no session on purpose.
+		"Prompt": true, "Queue": true, "SetQueue": true, "Cancel": true,
+		"Compact": true, "Clear": true, "EditMessage": true, "DeleteMessage": true,
+		"SwipeTurn": true, "SwipeMessage": true, "RetryTurn": true, "Approve": true,
+		"Answer": true, "ResumeSession": true, "ForkSession": true,
+		"RenameSession": true, "GenerateSessionTitle": true, "DeleteSession": true,
+		"Usage": true, "UsageSnapshot": true, "ListResets": true, "ConsumeReset": true,
+		"SideChatOpen": true, "SideChatAsk": true, "SideChatClose": true,
+		"Context": true, "Node": true, "History": true, "Reveal": true,
+		"Surfaces": true, "Surface": true, "SurfaceAction": true,
+		"Models": true, "SwitchModel": true, "ReplayControl": true,
 	}
 	for _, tc := range dispatchCases() {
 		if !sessionScoped[tc.want] {
@@ -640,43 +662,19 @@ func TestDispatchForwardsTheFrameSession(t *testing.T) {
 // it must account for EVERY Method constant, so a new verb cannot quietly join
 // neither set.
 var notCovered = map[Method]string{
-	// The mandatory WorkspaceService surface. Every one of these is dispatched
-	// by a singleton `case` on the top-level switch — no group, no inner switch,
-	// so the fallthrough bug this table exists for cannot occur there. Three are
-	// additionally driven end-to-end by wire_test.go.
-	MethodSubscribe:     "wire_test round trip",
-	MethodPrompt:        "wire_test round trip",
-	MethodApprove:       "wire_test asserts the bound decision",
-	MethodReplayControl: "wire_test asserts the bound params",
-	MethodAuthProviders: "wire_test drives it",
+	// The two verbs that are not a service call at all. Both are answered by
+	// serveState itself — subscribe spawns the session's event pump and registers
+	// a cancel in s.subs; unsubscribe cancels it — so there is no controller
+	// method for the recorder to observe and nothing this table could assert.
+	// wire_test.go round-trips both against a live pump, which is the only place
+	// their behaviour is visible.
+	MethodSubscribe:   "not a service call — serveState owns the pump; wire_test round-trips it",
+	MethodUnsubscribe: "not a service call — cancels the pump registered by subscribe",
 
-	MethodUnsubscribe: "mandatory, ungrouped", MethodQueue: "mandatory, ungrouped",
-	MethodQueueSet: "mandatory, ungrouped", MethodCancel: "mandatory, ungrouped",
-	MethodCompact: "mandatory, ungrouped", MethodClear: "mandatory, ungrouped",
-	MethodAnswer: "mandatory, ungrouped", MethodMessageEdit: "mandatory, ungrouped",
-	MethodMessageDelete: "mandatory, ungrouped", MethodTurnSwipe: "mandatory, ungrouped",
-	MethodTurnRetry:    "mandatory, ungrouped",
-	MethodSideChatOpen: "mandatory, ungrouped", MethodSideChatAsk: "mandatory, ungrouped",
-	MethodSideChatClose: "mandatory, ungrouped",
-	MethodSessionsList:  "mandatory, ungrouped", MethodSessionCreate: "mandatory, ungrouped",
-	MethodSessionDelete: "mandatory, ungrouped", MethodSessionRename: "mandatory, ungrouped",
-	MethodSessionGenerateTitle: "mandatory, ungrouped", MethodSessionFork: "mandatory, ungrouped",
-	MethodSessionResume: "mandatory, ungrouped",
-	MethodModelsList:    "mandatory, ungrouped", MethodModelSwitch: "mandatory, ungrouped",
-	MethodModelFavorite: "mandatory, ungrouped", MethodModelSetDefault: "mandatory, ungrouped",
-	MethodSurfaceGet: "mandatory, ungrouped", MethodSurfaceAction: "mandatory, ungrouped",
-	MethodSurfacesList: "mandatory, ungrouped",
-	MethodContextGet:   "mandatory, ungrouped", MethodContextNode: "mandatory, ungrouped",
-	MethodFilesList: "mandatory, ungrouped", MethodI18nCatalog: "mandatory, ungrouped",
-	MethodUsageSnapshot: "mandatory, ungrouped", MethodResetsList: "mandatory, ungrouped",
-	MethodResetsConsume: "mandatory, ungrouped",
-	MethodRestart:       "mandatory, ungrouped", MethodTrust: "mandatory, ungrouped",
-	MethodUntrust:             "mandatory, ungrouped",
-	MethodConversationHistory: "mandatory, ungrouped", MethodConversationReveal: "mandatory, ungrouped",
-
-	// A genuine dead verb: a typed client method exists but nothing calls it;
-	// the TUI gauge moved to usage.snapshot and orphaned it.
-	MethodUsageGet: "no caller on any surface — see docs/reviews/2026-07-20",
+	// One verb, two destinations, chosen from the payload: this table is keyed by
+	// method and cannot hold both rows. TestTurnSwipeRoutesByIndexPresence drives
+	// both branches (dispatch_mandatory_test.go).
+	MethodTurnSwipe: "routes to two methods by payload — see TestTurnSwipeRoutesByIndexPresence",
 }
 
 // methodValues parses methods.go for `MethodX Method = "verb"`, returning
