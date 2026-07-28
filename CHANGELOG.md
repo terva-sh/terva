@@ -11,6 +11,24 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.126.19](https://github.com/terva-sh/terva/releases/tag/v0.126.19) — 2026-07-27
+
+### Features
+
+- permissions: the play tools stop paying for swarm_spawn's free pass
+- sdk: a user's permission rules mean the same thing in an embedding
+- trust,lore: a trusted repo's hooks run now, and /lore says what fired
+
+### Fixes
+
+- attach: the pre-TUI wait says what it is waiting for
+- web: a daemon with no credentials says so generically, and can be fixed from the panel
+- web: a surface that has not loaded stops claiming it is empty
+
+### Other
+
+- modes: the TUI's injection seam stops advertising capabilities nothing has
+
 ## [v0.126.18](https://github.com/terva-sh/terva/releases/tag/v0.126.18) — 2026-07-27
 
 ### Features

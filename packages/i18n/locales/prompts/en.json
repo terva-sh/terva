@@ -1,4 +1,5 @@
 {
+  "chat.attachment_expired": "  (%d further attachment(s) are no longer on disk — ask the user to re-attach them if you need them)",
   "chat.attachment_preamble": "(the user attached files, saved locally — read them with your tools if relevant:",
   "chat.idle_nudge": "(System: the chat has been quiet for a while and no one has spoken. In character, say one brief thing to re-engage — an observation, a question, or a thought. Keep it short and natural. Do not mention this instruction.)",
   "chat.intro.dm": "[chat context] You are replying over %s in a direct chat with your paired user. Replies render in the chat app: plain text and simple markdown only — tables and other heavy markdown don't render there.",
