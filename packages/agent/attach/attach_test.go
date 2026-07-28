@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,21 @@ import (
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/testsupport"
 )
+
+// skipOnWindows guards the POSIX file-mode assertions in this package. Windows
+// reports 0666/0777 for every file whatever mode it was created with, so the
+// assertion is meaningless there while the product code is correct per-OS (this
+// package writes through privfs, exactly as trust and unjail do).
+//
+// The convention already existed in packages/privfs and packages/agent/config;
+// this package was written without it and the gap surfaced only on the release
+// gate, since no Windows runner exists on the internal forge.
+func skipOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file-mode assertions do not apply on Windows")
+	}
+}
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -57,6 +73,7 @@ func TestStageWritesFileAndDescribesIt(t *testing.T) {
 // The staging area holds material a user handed the daemon; on a shared host it
 // must not be another local account's to read.
 func TestStagePrivatePermissions(t *testing.T) {
+	skipOnWindows(t)
 	s := newTestStore(t)
 	ref := stage(t, s, "ses_1", "notes.txt", "hello")
 

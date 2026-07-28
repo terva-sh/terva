@@ -21,7 +21,14 @@ packages/i18n/locales/**/*.json text eol=lf
 # default) poisons the embedded bytes: charter tests match multi-line
 # markers, and shipped prompt text should not vary by build host. Pin
 # every embedded persona to LF.
-packages/agent/build/personas/**/*.md text eol=lf
+#
+# This path is a STRING, and the personas have moved once already: when the
+# library became its own package the pin stayed pointing at the old directory,
+# the charters came through a Windows checkout as CRLF, and the marker match
+# failed for all seven review-crew charters. persona_pin_test.go joins this line
+# to the directory persona.go actually embeds, so the next move fails a test
+# instead of a release.
+packages/agent/persona/personas/**/*.md text eol=lf
 
 # Generated artifacts committed so a plain `go build -tags terva_web` needs no
 # JS/Node toolchain (see `just web-build`). Mark them linguist-generated so the

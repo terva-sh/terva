@@ -154,6 +154,7 @@ func TestPublishRejectsOverLimitAndLeavesNothing(t *testing.T) {
 // Shares are the agent's output about the user's work; on a shared host they are
 // no more another local account's business than the inbound area is.
 func TestPublishPrivatePermissions(t *testing.T) {
+	skipOnWindows(t)
 	s := newTestShareStore(t)
 	ref, err := s.Publish("ses_1", srcFile(t, "secret.txt", "hello"), "")
 	if err != nil {
