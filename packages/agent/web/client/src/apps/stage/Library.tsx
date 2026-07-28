@@ -13,6 +13,9 @@ import { t, tn, tr } from '../../i18n'
 import { panelHref } from '../../ui/navlinks'
 import { ConnectionBanner, Placeholder } from '../../ui/Loading'
 import { downloadExport } from '../../ui/browser'
+// Stage's own formatBytes is gone: it is ui/formatting's humanBytes, which took
+// this one's translated units with it rather than dropping them.
+import { humanBytes } from '../../ui/formatting'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import {
   applyGroupFilter,
@@ -31,6 +34,7 @@ import type {
   CardSummary,
   CardView,
   PersonaSummary,
+  PersonaView,
   SessionInfo,
   CardsListResult,
   PersonasListResult,
@@ -112,11 +116,6 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(parts.join(''))
 }
 
-export function formatBytes(n: number): string {
-  if (n >= 1 << 20) return t('%s MB', (n / (1 << 20)).toFixed(1))
-  if (n >= 1 << 10) return t('%d KB', Math.round(n / (1 << 10)))
-  return t('%d bytes', n)
-}
 
 // importError turns a failed cards.import into something a user can act on.
 //
@@ -131,7 +130,7 @@ export function formatBytes(n: number): string {
 export function importError(e: unknown, file?: File): string {
   const msg = e instanceof Error ? e.message : String(e)
   if (/not connected|connection closed/i.test(msg)) {
-    const size = file ? ` (${formatBytes(file.size)})` : ''
+    const size = file ? ` (${humanBytes(file.size)})` : ''
     return t(
       'Lost the connection to terva while uploading%s. If the file is large this is likely its size — the daemon closes the socket on an oversized upload. Otherwise the daemon may have restarted; it should reconnect on its own.',
       size,
@@ -142,24 +141,64 @@ export function importError(e: unknown, file?: File): string {
   return msg.replace(/^Error:\s*/, '').replace(/^[a-zA-Z]+:\s*/, '')
 }
 
-// cardDeleteWarning is the confirm text for cards.delete.
+// cardDeleteWarning is the confirm text for cards.delete, asked only when the
+// card has no chats on it.
 //
 // The house style for these (deleteSession, deleteWorld) is to say what SURVIVES
-// — "its chats keep their own copies". A card is the case where that reassurance
-// would be a lie: `cards.delete` is an `os.RemoveAll` on the card's directory
-// with no in-use check, and a session re-resolves `SessionMeta.Card` on every
-// materialize, so every chat bound to this card stops reopening once it is
-// evicted. Nothing warns you later and nothing brings it back, so the count is
-// the whole message. Exported for its own test.
-export function cardDeleteWarning(name: string, chats: number): string {
-  const head = t('Delete “%s”? The card and its avatar are removed for good.', name)
+// — "its chats keep their own copies". A card used to be the case where that
+// reassurance would be a lie, so this said how many chats the delete would
+// break. It no longer can: the daemon REFUSES while chats are bound, because a
+// session re-resolves SessionMeta.Card on every materialize and the card's bytes
+// are gone for good. So the count moved out of this sentence and into
+// cardInUseMessage, and what is left is the plain irreversibility.
+// Exported for its own test.
+export function cardDeleteWarning(name: string): string {
+  return t('Delete “%s”? The card and its avatar are removed for good.', name)
+}
+
+// cardInUseMessage explains a delete that will not happen, and what to do about
+// it. Shown INSTEAD of the confirm — asking "are you sure?" about something the
+// daemon is going to refuse teaches a user that yes means no.
+//
+// Archiving is offered alongside deleting because it genuinely releases the
+// card: an archived transcript is not scanned. That trade (the restored chat
+// finds its character gone) is the user's to make deliberately, which is the
+// whole difference from the one this refusal prevents.
+export function cardInUseMessage(name: string, chats: number): string {
+  const head = tn(
+    Math.max(chats, 1),
+    '“%s” still has %d chat.',
+    '“%s” still has %d chats.',
+    name,
+    Math.max(chats, 1),
+  )
+  return `${head}\n\n${t('A chat cannot open without its card, so the card stays until those chats are deleted or archived.')}`
+}
+
+// personaDeleteWarning is the confirm text for personas.delete.
+//
+// The counterpart to cardDeleteWarning above, and deliberately a gentler
+// sentence, because the two failures are not the same. A chat whose CARD is
+// evicted stops opening — the card is the character. A chat whose PERSONA is
+// deleted still opens: the daemon falls back to the workspace default and says
+// so on load. So this follows the house style of naming what survives, and the
+// count is here to say what CHANGES rather than what breaks.
+//
+// A persona that shadows a built-in is the case with nothing to warn about at
+// all: deleting the copy un-shadows the original, so the name those chats
+// replay still resolves — to the built-in it was copied from. Exported for its
+// own test.
+export function personaDeleteWarning(name: string, chats: number, shadowsBuiltin: boolean): string {
+  if (shadowsBuiltin) {
+    return t('Delete your “%s”? The built-in of the same name comes back in its place.', name)
+  }
+  const head = t("Delete the persona “%s”? This can't be undone.", name)
   if (chats <= 0) return head
   const tail = tn(
     chats,
-    '%d chat with %s will no longer open — a chat needs its card to resume. Export the card first if you might want it back.',
-    '%d chats with %s will no longer open — a chat needs its card to resume. Export the card first if you might want it back.',
+    '%d chat was created with it. It still opens — in your default persona’s voice, not this one.',
+    '%d chats were created with it. They still open — in your default persona’s voice, not this one.',
     chats,
-    name,
   )
   return `${head}\n\n${tail}`
 }
@@ -388,7 +427,7 @@ export function Library(props: {
       for (const file of Array.from(files)) {
         const limit = client.maxUploadBytes
         if (limit > 0 && file.size > limit) {
-          throw new Error(t('%s is %s, over the %s upload limit.', file.name, formatBytes(file.size), formatBytes(limit)))
+          throw new Error(t('%s is %s, over the %s upload limit.', file.name, humanBytes(file.size), humanBytes(limit)))
         }
         await client.send<WorldView>('worlds.import', { bytes: await fileToBase64(file) })
       }
@@ -454,8 +493,8 @@ export function Library(props: {
           t(
             '%s is %s, over the %s upload limit. Character cards carry their portrait as the image itself, so an oversized one is usually a wallpaper-sized picture — re-export it at a smaller resolution, or import it by URL instead.',
             file.name,
-            formatBytes(file.size),
-            formatBytes(limit),
+            humanBytes(file.size),
+            humanBytes(limit),
           ),
         )
         continue
@@ -700,7 +739,15 @@ export function Library(props: {
   // it is evicted or the daemon restarts. That is invisible from here and
   // permanent, so the count goes in the confirm.
   const deleteCard = async (card: CardSummary) => {
-    if (!window.confirm(cardDeleteWarning(card.name, chatsFor(card.id)))) return
+    // The daemon is the authority here — it counts chats across EVERY project,
+    // while this list is only the current one — but when the answer is already
+    // visible locally, say so instead of asking a question whose yes is refused.
+    const bound = chatsFor(card.id)
+    if (bound > 0) {
+      setError(cardInUseMessage(card.name, bound))
+      return
+    }
+    if (!window.confirm(cardDeleteWarning(card.name))) return
     try {
       await client.send('cards.delete', { id: card.id })
       setSheet(null)
@@ -719,10 +766,24 @@ export function Library(props: {
   // comes back rather than the entry disappearing.
   const deletePersona = async (p: PersonaSummary) => {
     const shadows = personas.some((o) => o.ref !== p.ref && o.name.trim().toLowerCase() === p.name.trim().toLowerCase())
-    const msg = shadows
-      ? t('Delete your “%s”? The built-in of the same name comes back in its place.', p.name)
-      : t("Delete the persona “%s”? This can't be undone.", p.name)
-    if (!window.confirm(msg)) return
+    // Ask what else depends on the name before offering to remove it. The count
+    // comes from personas.get rather than the loaded session list because that
+    // list is this project's, and a persona is every project's — and because
+    // SessionInfo.persona is filled only for a MATERIALIZED session, so counting
+    // client-side would miss every chat that has not been opened this run.
+    //
+    // Best-effort: a daemon that cannot answer must not block the delete, so a
+    // failure here falls through to the plain confirm.
+    let used = 0
+    if (!shadows) {
+      try {
+        const view = (await client.send('personas.get', { name: p.ref })) as PersonaView
+        used = view?.sessions_using ?? 0
+      } catch {
+        // leave the count at zero and ask the plain question
+      }
+    }
+    if (!window.confirm(personaDeleteWarning(p.name, used, shadows))) return
     try {
       await client.send('personas.delete', { name: p.ref })
       setPersonaSheet(null)

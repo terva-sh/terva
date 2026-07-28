@@ -106,4 +106,15 @@ type PersonaView struct {
 	Introduction      string   `json:"introduction,omitempty"`
 	Charter           string   `json:"charter,omitempty"`
 	Extends           string   `json:"extends,omitempty"`
+	// SessionsUsing counts the sessions — across every project, not just this
+	// one — that were CREATED with this persona and replay it on every
+	// materialize. It answers the question a delete raises: how much else does
+	// this name hold up? Those sessions stay openable if the persona goes (the
+	// build falls back to the default and says so), but they lose the voice they
+	// were written in, so a client offering to delete should say how many.
+	//
+	// Reported by PersonasGet only. Deriving it reads every project's
+	// transcripts, which is right for a question asked once before a delete and
+	// wrong for one asked on every library open — so PersonasList omits it.
+	SessionsUsing int `json:"sessions_using,omitempty"`
 }

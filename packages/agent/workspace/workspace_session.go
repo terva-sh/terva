@@ -18,6 +18,7 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/imagegen"
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/raati"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
@@ -160,8 +161,13 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// workspace launch defaults on every build, including a fresh materialize
 	// after a daemon restart. Resolve turns these into the active persona,
 	// experience mode, card identity, and cast.
+	// replayedPersona is the persona this session persisted, remembered so the
+	// resolve below can tell "the session named a persona that is gone" apart
+	// from every other reason a build fails. Empty when the session names none.
+	replayedPersona := ""
 	if sess.Meta.Persona != "" {
 		args.Persona = sess.Meta.Persona
+		replayedPersona = sess.Meta.Persona
 	}
 	if sess.Meta.Experience != "" {
 		args.Experience = sess.Meta.Experience
@@ -208,12 +214,37 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		reviseHead:     reviseHead,
 	}
 
-	pol, warns := build.BuildPermissionPolicy(args)
+	pol, warns := permissions.BuildPolicy(args.PermInputs())
 	for _, wn := range warns {
 		s.diag(fmt.Sprintf("note: %s", wn))
 	}
 
 	r, err := build.Resolve(args, true)
+	if err != nil && replayedPersona != "" {
+		// The session names a persona that no longer resolves — deleted from the
+		// user library, or in an extension bundle that is not loaded. Replaying it
+		// unconditionally made that a refusal to open the session AT ALL: the
+		// transcript is intact and simply unreachable, over a name, with no way
+		// back a user could guess (recreate a persona spelled exactly that).
+		//
+		// So fall back to the workspace default and say so. A session that opens
+		// in a different voice is recoverable — recreate the persona, or rebind
+		// it — while one that will not open is not, and the trigger is an ordinary
+		// workflow: duplicate a built-in to edit it, play, delete the copy.
+		//
+		// Retried rather than pre-checked so the "does this persona resolve" rule
+		// stays in exactly one place (build's own resolution, extension bundles
+		// and namespacing included). If the persona was NOT the problem the retry
+		// fails the same way, and the original error is what the caller sees.
+		retry := args
+		retry.Persona = w.args.Persona
+		if rr, rerr := build.Resolve(retry, true); rerr == nil {
+			args, r, err = retry, rr, nil
+			s.diag(fmt.Sprintf("note: %s", i18n.T(
+				"persona %q is no longer available, so this session opened with the default one instead; recreate it, or pick another, to change that",
+				replayedPersona)))
+		}
+	}
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "resolve: %v", err)
 	}
@@ -260,7 +291,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		// <command>" options the dialog offers; bash-only, injected here so
 		// core stays free of shell parsing (same layering as the policy's
 		// DecomposeCommand).
-		gate.SetScopeDeriver(build.DeriveGrantScopes)
+		gate.SetScopeDeriver(permissions.DeriveGrantScopes)
 		r.AdoptReadOnlySet(pol.ReadOnly)
 		// Retain it: every later rebuild re-merges extension and MCP tools, and
 		// MergeToolsForMode registers a read_only tool's name into whichever set
@@ -613,6 +644,21 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			}
 		}
 	}
+	// share_file: hand a local file to whoever is holding this session — the web
+	// panel renders it as an image, a player, or a download. Bound to THIS
+	// session, like the chat tools below, so a share can only ever land in the
+	// conversation that produced it.
+	//
+	// Base workspace sessions only, on the skin gate that keeps raati_convene out
+	// of --chat/--play: those sessions have no filesystem tools to produce a file
+	// with, and an immersive scene is not a place to hand someone a download.
+	// Where they DO want to send the user a picture, that is chat_send_image
+	// below, over the bridge they are actually being held on.
+	if s != nil && build.HasBaseWorkspaceTools(args) {
+		r.ToolRegistry["share_file"] = &tools.ShareFileTool{
+			CWD: r.CWD, Sandbox: w.sandbox, Publisher: sharePublisher{w: w, sess: s.id},
+		}
+	}
 	// chat_send_image / chat_send_file: only while a bridge is connected AND
 	// bound to THIS session, so a second session never sees another's chat tools.
 	// A declarative input, exactly like AutoSwarmEnabled above — connect and
@@ -694,17 +740,17 @@ const webStartupReadyGrace = 3 * time.Second
 // A chat World with a roster routes through the meta-narrator first (Worlds
 // W3, workspace_route.go); everything else — including the queue-restart path,
 // which re-enters here — is today's turn.
-func (s *wsSession) prompt(text string, images []ctrlproto.Image) error {
+func (s *wsSession) prompt(text string, images []ctrlproto.Image, extras core.UserMessageExtras) error {
 	if s.shouldRoute(text, images) {
 		return s.routedTurn(text)
 	}
-	return s.promptBlocks(text, toImageBlocks(images))
+	return s.promptBlocks(text, toImageBlocks(images), extras)
 }
 
 // promptBlocks is prompt over already-decoded image blocks. The chat bridge
 // delivers provider.ImageBlock directly (it never speaks ctrlproto), and both
 // entries must claim the same turn slot, so they share one body.
-func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock) error {
+func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock, extras core.UserMessageExtras) error {
 	turnCtx, err := s.beginTurn()
 	if err != nil {
 		return err
@@ -716,7 +762,7 @@ func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock) error 
 	s.launchTurn(turnCtx, func(ctx context.Context) error {
 		// sink is nil: the agent's OnEvent (set in buildSession) fans every event
 		// out, so Continue() and any internal re-prompt stream too.
-		return s.agent.PromptWithPolicy(ctx, text, imgs, nil)
+		return s.agent.PromptWithPolicyExtra(ctx, text, imgs, extras, nil)
 	}, nil)
 	return nil
 }
@@ -825,7 +871,7 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 			_ = s.compact(s.ws.ctx)
 		}
 		if restart {
-			if perr := s.prompt(next, nil); perr != nil {
+			if perr := s.prompt(next, nil, core.UserMessageExtras{}); perr != nil {
 				// Raced a client Prompt that claimed the slot between endTurn
 				// and here: re-arm at the front so the new turn's first safe
 				// boundary delivers it instead of losing it.
@@ -1716,15 +1762,20 @@ func (s *wsSession) clearTail() {
 // and the trust-gated panes. Project skills/context are baked into the system
 // prompt and only change on the next session — deliberate, matching /trust.
 func (s *wsSession) setTrusted(ctx context.Context, trusted bool) {
+	// Before ApplyTrust: reloadLore reads this atomic for the verdict it
+	// discovers against, and s.info() reports it to every client.
 	s.trusted.Store(trusted)
-	if s.extMgr != nil {
-		s.extMgr.SetProjectTrusted(trusted)
-		s.extMgr.Reload(ctx, webReloadGrace) // fires rebuildTools via SetOnReload
-	} else {
-		s.rebuildTools("trust")
-	}
-	s.reloadLore()
-	s.broadcast(ctrlproto.SessionUpdatedEvent(s.info()))
+	build.ApplyTrust(ctx, trusted, build.TrustSurfaces{
+		Args:  s.argsSnapshot(),
+		Ext:   s.extMgr,
+		Grace: webReloadGrace,
+		// Only reached when there is no manager to fire SetOnReload for us —
+		// bare fixtures, never a buildSession session.
+		Rebuild: func() { s.rebuildTools("trust") },
+		Lore:    s.reloadLore,
+		After:   func() { s.broadcast(ctrlproto.SessionUpdatedEvent(s.info())) },
+		// Hooks: workspace-scoped, moved by applyTrust before this loop runs.
+	})
 }
 
 // settleTitle gives an untitled session a name once its first exchange exists,
@@ -1966,7 +2017,7 @@ func (s *wsSession) queue(text string) {
 		return
 	}
 	s.mu.Unlock()
-	if err := s.prompt(text, nil); err != nil {
+	if err := s.prompt(text, nil, core.UserMessageExtras{}); err != nil {
 		// Raced a concurrent Prompt that claimed the slot first: queue onto the
 		// turn that beat us (its boundaries / endTurn shift deliver it).
 		if s.agent.QueueMessage(text) {

@@ -1,38 +1,56 @@
 import { describe, expect, it } from 'vitest'
-import { cardDeleteWarning } from './Library'
+import { cardDeleteWarning, cardInUseMessage } from './Library'
 
-// The house style for a destructive confirm in Stage is to say what SURVIVES
-// ("its chats keep their own copies — only the saved World goes"). A card is the
-// case where that reassurance would be a lie: cards.delete is an os.RemoveAll on
-// the card's directory with no in-use check, and a session re-resolves
-// SessionMeta.Card on every materialize — so every chat bound to the card stops
-// reopening. Nothing warns later and nothing brings it back.
+// cards.delete used to be an os.RemoveAll with no in-use check, and a session
+// re-resolves SessionMeta.Card on every materialize — so every chat bound to the
+// card stopped reopening, permanently, with the bytes gone. The confirm counted
+// them and let it happen anyway. The daemon now REFUSES while chats are bound,
+// so these two messages split: one asks about an irreversible delete that will
+// go through, the other explains one that will not.
 describe('cardDeleteWarning', () => {
   it('says the card and avatar are gone for good', () => {
-    const msg = cardDeleteWarning('Kobeni', 0)
+    const msg = cardDeleteWarning('Kobeni')
     expect(msg).toContain('“Kobeni”')
     expect(msg).toMatch(/for good/)
   })
 
-  it('claims no collateral when nothing is bound to the card', () => {
-    expect(cardDeleteWarning('Kobeni', 0)).not.toMatch(/no longer open/)
+  // It is only ever asked when nothing is bound, so it must not carry the old
+  // "chats will break" clause — that outcome is now impossible.
+  it('does not claim any chat is about to break', () => {
+    expect(cardDeleteWarning('Kobeni')).not.toMatch(/no longer open|still has/)
   })
+})
 
-  it('names the chats that will stop opening, and points at Export', () => {
-    const msg = cardDeleteWarning('Kobeni', 3)
-    expect(msg).toContain('3 chats with Kobeni will no longer open')
-    // Export is the only way to get the card back, and the sheet has that button
-    // directly above Delete — the confirm is the moment to say so.
-    expect(msg).toMatch(/Export the card first/)
+describe('cardInUseMessage', () => {
+  it('names the card and how many chats hold it', () => {
+    const msg = cardInUseMessage('Kobeni', 3)
+    expect(msg).toContain('“Kobeni”')
+    expect(msg).toContain('3 chats')
   })
 
   it('agrees with itself about a single chat', () => {
-    expect(cardDeleteWarning('Kobeni', 1)).toContain('1 chat with Kobeni will no longer open')
+    expect(cardInUseMessage('Kobeni', 1)).toContain('1 chat.')
   })
 
-  // A negative can only come from a count bug, and must not reach the user as
-  // "-1 chats" at the moment they approve something irreversible.
-  it('treats an impossible count as none', () => {
-    expect(cardDeleteWarning('Kobeni', -2)).toBe(cardDeleteWarning('Kobeni', 0))
+  // The refusal is only useful if it says how to get past it, and archiving is
+  // the path that keeps the chats — it genuinely releases the card, because an
+  // archived transcript is not scanned.
+  it('says what to do about it, including archiving', () => {
+    expect(cardInUseMessage('Kobeni', 2)).toMatch(/deleted or archived/)
+  })
+
+  // It must not read as a question. A user shown "are you sure?" for something
+  // the daemon will refuse learns that yes means no.
+  it('states a fact rather than asking permission', () => {
+    expect(cardInUseMessage('Kobeni', 2)).not.toMatch(/\?/)
+  })
+
+  // A zero or negative can only come from a count bug. The message is still
+  // shown (the daemon refused, so something IS bound) and must not say "0 chats".
+  it('never claims zero chats when it is explaining a refusal', () => {
+    for (const n of [0, -2]) {
+      expect(cardInUseMessage('Kobeni', n)).not.toMatch(/0 chats?\b/)
+      expect(cardInUseMessage('Kobeni', n)).toContain('1 chat.')
+    }
   })
 })
