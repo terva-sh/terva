@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../../i18n'
 import type { SkillInfo, WireFileEntry } from '../../platform/ctrlproto/types'
 import type { ImageAttachment } from '../../platform/conversation/images'
+import { humanBytes } from '../../ui/formatting'
 import { atComplete } from './atcomplete'
-import { fileToAttachment } from './attachments'
+import { fileToAttachment, tooLargeToAttach, type FileAttachment } from './attachments'
 
 // matchFiles ranks the workspace file list against an @-query: substring
 // hits first (earlier is better), then subsequence hits (the TUI ranks with
@@ -63,12 +64,30 @@ export function Composer({
   files,
   onFilesNeeded,
   onCancel,
+  onUpload,
+  canAttachFiles = false,
+  maxAttachmentBytes = 0,
+  sessionID,
 }: {
   busy: boolean
-  onSend: (text: string, images: ImageAttachment[]) => boolean
+  onSend: (text: string, images: ImageAttachment[], attachments: FileAttachment[]) => boolean
   onToast: (message: string) => void
   commands: SlashCommand[]
   skills: SkillInfo[]
+  // onUpload stages one file with the daemon. Injected rather than imported so
+  // the composer stays ignorant of which session it is in — and so a test can
+  // drive the drop path without a server.
+  onUpload?: (f: File) => Promise<FileAttachment | { error: string }>
+  // canAttachFiles is the daemon's answer to "can I take a file at all"
+  // (ctrlproto FeatureAttachments). False on a carrier with no upload route, and
+  // then a dropped non-image is refused out loud rather than vanishing.
+  canAttachFiles?: boolean
+  maxAttachmentBytes?: number
+  // sessionID is the session a staged file belongs to. The composer does not
+  // send it anywhere — onUpload closes over it host-side — but it has to KNOW
+  // when it changes, because a staged id is only meaningful against the session
+  // directory it was staged into. See the effect below.
+  sessionID?: string
   // files is the daemon's workspace listing for the @-stage: null while the
   // daemon doesn't serve files.list (or nothing is fetched yet). The stage
   // calls onFilesNeeded when it activates, so the fetch is lazy — nothing
@@ -79,9 +98,33 @@ export function Composer({
 }) {
   const [text, setText] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
+  const [attachments, setAttachments] = useState<FileAttachment[]>([])
+  // Names of files whose upload is in flight, so a big drop shows progress
+  // rather than nothing until it lands.
+  const [uploading, setUploading] = useState<string[]>([])
   const [sel, setSel] = useState(0)
   const [dismissed, setDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+  // The session a staged file was staged INTO, readable from inside an upload
+  // that is still in flight. A ref, not the prop, because the callback below
+  // closed over the session it started in and needs to compare against the
+  // session that is current when it lands.
+  const sessionRef = useRef(sessionID)
+
+  // Staged attachments do not survive a session change, because a staged id
+  // means nothing outside the session directory it was written to: the daemon
+  // resolves ids against the session it is prompted on, so sending these in
+  // another session would report every one of them as expired.
+  //
+  // Only the attachments. Text and images are session-agnostic — a draft is
+  // worth carrying across a switch, and an inline image rides the frame itself
+  // — which is why this is an effect rather than a `key` on the component, the
+  // blunter fix that would throw away a half-written message too.
+  useEffect(() => {
+    sessionRef.current = sessionID
+    setAttachments([])
+    setUploading([])
+  }, [sessionID])
   // Auto-grow to content (capped at 40% of the viewport), and shrink back when
   // cleared — so multiline is visible and signals there's more context in play.
   //
@@ -106,25 +149,70 @@ export function Composer({
     return () => vv?.removeEventListener('resize', grow)
   }, [text])
 
-  // addFiles reads image files (from paste or drop) into attachments, toasting
-  // any that are the wrong type or too big rather than silently dropping them.
-  const addFiles = async (files: File[]) => {
-    const results = await Promise.all(files.map(fileToAttachment))
-    const ok: ImageAttachment[] = []
-    for (const result of results) {
-      if (result && 'error' in result) onToast(result.error)
-      else if (result) ok.push(result)
+  // addFiles takes anything dropped or pasted and routes it by what the file is,
+  // never silently discarding one.
+  //
+  // An allowlisted image under the frame budget rides the prompt inline, because
+  // that is the only form vision can see. Everything else — a big image
+  // included — is staged with the daemon, which hands back an id the prompt will
+  // name. Before this, a non-image was filtered out at the drop handler and the
+  // user got no feedback at all.
+  const addFiles = async (dropped: File[]) => {
+    const inline: ImageAttachment[] = []
+    const toStage: File[] = []
+    for (const f of dropped) {
+      const image = await fileToAttachment(f)
+      if (image) inline.push(image)
+      else toStage.push(f)
     }
-    if (ok.length) setImages((current) => [...current, ...ok])
+    if (inline.length) setImages((current) => [...current, ...inline])
+    if (!toStage.length) return
+    if (!canAttachFiles || !onUpload) {
+      onToast(t('This daemon cannot take file attachments'))
+      return
+    }
+    const sized = toStage.filter((f) => {
+      if (!tooLargeToAttach(f, maxAttachmentBytes)) return true
+      onToast(t('%s is too large (max %s)', f.name || t('file'), humanBytes(maxAttachmentBytes)))
+      return false
+    })
+    if (!sized.length) return
+    const names = sized.map((f) => f.name)
+    // The session these are being staged into. An upload is not instant, so the
+    // one that is current when it LANDS may not be the one it was written for.
+    const startedOn = sessionRef.current
+    setUploading((current) => [...current, ...names])
+    await Promise.all(
+      sized.map(async (f) => {
+        const result = await onUpload(f)
+        // Drop this file's own pending entry, matched by name rather than by
+        // rebuilding the list, so two uploads finishing at once don't clobber
+        // each other's progress.
+        setUploading((current) => {
+          const at = current.indexOf(f.name)
+          return at < 0 ? current : [...current.slice(0, at), ...current.slice(at + 1)]
+        })
+        // The user moved on while this was uploading. The file is staged under
+        // the session they left, so chipping it here would hand THIS session an
+        // id it cannot resolve — the effect above clears the chips, and an
+        // in-flight upload is the one path that can add one back afterwards. Its
+        // error is dropped for the same reason: a failure in a session the user
+        // has left is not something they can act on.
+        if (sessionRef.current !== startedOn) return
+        if ('error' in result) onToast(result.error)
+        else setAttachments((current) => [...current, result])
+      }),
+    )
   }
 
   const submit = () => {
-    if (!text.trim() && images.length === 0) return
-    // Clear only if the send was accepted (a busy image send is refused so the
-    // attachments aren't lost).
-    if (onSend(text, images)) {
+    if (!text.trim() && images.length === 0 && attachments.length === 0) return
+    // Clear only if the send was accepted (a busy send carrying attachments is
+    // refused, so they aren't lost).
+    if (onSend(text, images, attachments)) {
       setText('')
       setImages([])
+      setAttachments([])
       setDismissed(false)
     }
   }
@@ -135,7 +223,7 @@ export function Composer({
       setText('/' + command.name + ' ')
       ref.current?.focus()
     } else {
-      onSend('/' + command.name, [])
+      onSend('/' + command.name, [], [])
       setText('')
     }
     setDismissed(false)
@@ -207,10 +295,13 @@ export function Composer({
       class="composer"
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
-        const files = [...(event.dataTransfer?.files ?? [])].filter((file) => file.type.startsWith('image/'))
-        if (files.length) {
+        // Every file, not just images: addFiles decides which ride inline and
+        // which are staged with the daemon. Filtering here is what used to make
+        // a dropped .csv disappear with no explanation.
+        const dropped = [...(event.dataTransfer?.files ?? [])]
+        if (dropped.length) {
           event.preventDefault()
-          void addFiles(files)
+          void addFiles(dropped)
         }
       }}
     >
@@ -233,7 +324,7 @@ export function Composer({
           ))}
         </div>
       )}
-      {images.length > 0 && (
+      {(images.length > 0 || attachments.length > 0 || uploading.length > 0) && (
         <div class="composer-chips">
           {images.map((image, index) => (
             <div key={index} class="composer-chip">
@@ -248,6 +339,26 @@ export function Composer({
               </button>
             </div>
           ))}
+          {attachments.map((file) => (
+            <div key={file.id} class="composer-chip composer-chip--file" title={file.name}>
+              <span class="chip-name">{file.name}</span>
+              <span class="chip-size">{humanBytes(file.size)}</span>
+              <button
+                class="chip-x"
+                title={t('Remove')}
+                aria-label={t('Remove')}
+                onClick={() => setAttachments((current) => current.filter((f) => f.id !== file.id))}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {uploading.map((name, index) => (
+            <div key={'up' + index} class="composer-chip composer-chip--file is-uploading" title={name}>
+              <span class="chip-name">{name}</span>
+              <span class="chip-size">{t('uploading…')}</span>
+            </div>
+          ))}
         </div>
       )}
       <textarea
@@ -256,13 +367,16 @@ export function Composer({
         value={text}
         placeholder={t('Message terva…')}
         onPaste={(event) => {
-          const files = [...(event.clipboardData?.items ?? [])]
-            .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+          // Any pasted file, same as a drop. Text paste is untouched: only
+          // clipboard items of kind "file" are taken, so pasting a CSV's
+          // CONTENTS still lands as text, which is usually what was meant.
+          const pasted = [...(event.clipboardData?.items ?? [])]
+            .filter((item) => item.kind === 'file')
             .map((item) => item.getAsFile())
             .filter((file): file is File => file != null)
-          if (files.length) {
+          if (pasted.length) {
             event.preventDefault()
-            void addFiles(files)
+            void addFiles(pasted)
           }
         }}
         onInput={(event) => {

@@ -52,7 +52,7 @@ func TestWebSocketOverUnixSocket(t *testing.T) {
 	if hello, ok := client.ServerHello(); !ok || hello.Version != "9.9.9" {
 		t.Fatalf("server hello over unix = %+v ok=%v", hello, ok)
 	}
-	if err := client.Service().Prompt(context.Background(), "s1", "over-unix", nil); err != nil {
+	if err := client.Service().Prompt(context.Background(), "s1", ctrlproto.PromptParams{Text: "over-unix"}); err != nil {
 		t.Fatalf("Prompt over unix socket: %v", err)
 	}
 	svc.mu.Lock()

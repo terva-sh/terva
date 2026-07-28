@@ -388,6 +388,18 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .composer-chip { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
 .composer-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .chip-x { position: absolute; top: 1px; right: 1px; width: 18px; height: 18px; line-height: 16px; padding: 0; border: 0; border-radius: 50%; background: #000a; color: #fff; font-size: 14px; cursor: pointer; }
+/* A file chip is a label, not a thumbnail: it sizes to its name (bounded, so a
+   long one truncates instead of pushing the row) rather than to the image
+   chip's 56px square. The right padding clears the absolutely-positioned ×. */
+.composer-chip--file { width: auto; height: auto; max-width: min(220px, 60vw); display: flex; align-items: baseline; gap: 6px; padding: 6px 30px 6px 10px; background: var(--panel); }
+.composer-chip--file .chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--fg); }
+.composer-chip--file .chip-size { flex: none; font-size: 11px; color: var(--muted); }
+.composer-chip--file.is-uploading { opacity: .6; }
+/* The × is pinned to the top corner of the 56px image chip, which on a chip
+   only as tall as one line of text leaves it riding above the centre. Centre it
+   on this variant instead — measured, not eyeballed: the button is 18px on a
+   34px chip, so top-alignment was 6px out. */
+.composer-chip--file .chip-x { top: 50%; right: 4px; transform: translateY(-50%); }
 /* slash-command autocomplete, anchored above the composer */
 .slash-menu { position: absolute; left: 12px; right: 12px; bottom: calc(100% - 2px); max-height: 45vh; overflow-y: auto; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 -4px 16px rgba(0,0,0,.18); padding: 4px; z-index: 20; }
 .slash-item { display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left; padding: 6px 10px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; cursor: pointer; }
@@ -410,6 +422,23 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .session-main { flex: 1; min-width: 0; }
 .session-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-meta { font-size: 12px; color: var(--muted); }
+
+/* busy / idle / cold group headers, over the drawer's rows and the board's grid
+   alike (features/sessions/SessionSection). Panel-only chrome, so it is here and
+   not in the shared ui.css that Stage also imports. The cold header is a
+   disclosure; the other two are labels. */
+.session-section__head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 12px 6px; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.session-section__head--toggle { border: 0; background: none; font-family: inherit; text-align: left; cursor: pointer; }
+.session-section__head--toggle:hover { color: var(--fg); }
+/* A fixed slot, present in every header (empty in the two that do not toggle)
+   so all three labels start on the same x. Filled triangles rather than the
+   small ▾/▸ pair, which at header size rendered as an identical speck whether
+   the group was open or shut — the state was there and unreadable. */
+.session-section__caret { flex: none; width: 9px; font-size: 9px; line-height: 1; color: var(--muted); }
+.session-section__count { flex: none; margin-left: auto; font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+/* The busy header carries the accent its rows would have; idle and cold stay
+   muted, so a working session is findable without reading a word. */
+.session-section--busy .session-section__label { color: var(--user); }
 
 /* Archive browser in the session drawer. Collapsed by default and fetched only
    when opened: an archive is something you go looking for, not something that
@@ -462,8 +491,10 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .board-tile-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; font-size: var(--fs-ui); }
 .board-tile-meta { font-size: var(--fs-detail); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-tile-actions { display: flex; gap: 6px; justify-content: flex-end; }
+/* The run pill in the workflow lane — the board's own tiles carry no status of
+   their own any more, since the group header above them says it once. `cold`
+   falls through to the base, which is what "cannot tell" should look like. */
 .board-status { flex: none; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 7px; border-radius: 999px; background: var(--panel); color: var(--muted); }
-.board-status.busy { background: color-mix(in srgb, var(--user) 20%, transparent); color: var(--user); }
 .board-status.live { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
 .board-status.failed { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
 
@@ -1260,3 +1291,52 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .landing-persona-detail__field { margin-top: 8px; }
 .landing-persona-detail__label { margin-bottom: 3px; font-size: var(--fs-note); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .landing-persona-detail__body p { margin: 0; white-space: pre-wrap; }
+
+/* Files a user attached to a message. Inert labels, not controls: the staged
+   bytes are swept on a TTL, so by the time an old message is reread the file is
+   usually gone and a download affordance would fail more often than it worked.
+   Sits above the text inside the bubble, mirroring the composer's chip row. */
+/* The copy button floats over the bubble's top-right corner, and this row is
+   the bubble's first child — so it sits directly under it. Reserve the
+   button's width, or the label's size text renders beneath the icon
+   (measured: a 6.8px overlap before this). */
+.msg-files { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; padding-right: 32px; }
+.msg-file { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; padding: 3px 8px; border-radius: 6px; background: color-mix(in srgb, currentColor 12%, transparent); font-size: 12px; }
+.msg-file__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-file__size { flex: none; opacity: .7; }
+/* Files the message named that were already swept. Dimmed and italic so it
+   reads as an absence rather than as another attachment sitting beside the
+   ones that survived. */
+.msg-file--gone { font-style: italic; opacity: .65; background: none; border: 1px dashed color-mix(in srgb, currentColor 30%, transparent); }
+
+/* Files the AGENT shared back. A row of the transcript in its own right, not a
+   decoration inside a tool row — sequenceConversationItems lifts these out of
+   the tool group precisely because a group renders collapsed, and a download
+   nobody can see is the feature not happening. Hence the full-width card and
+   the border: it should read as something addressed to you.
+
+   Everything here is real, unlike .msg-file above: the id resolves and the
+   route serves, so the whole card is a link. */
+.shared-file { max-width: min(520px, 100%); margin: 6px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+/* The media well is inside an <a>, so currentColor here is the LINK colour —
+   tinting the letterbox blue, and (when the media fails to load) rendering the
+   alt text as underlined blue link text where a chart should be. Both are fixed
+   by not inheriting either. */
+.shared-file__media { display: block; width: 100%; background: color-mix(in srgb, var(--muted) 10%, transparent); color: var(--muted); text-decoration: none; font-size: var(--fs-note); }
+/* An <img> in an <a> is inline by default, which leaves a descender's worth of
+   background under it and makes the card look misaligned against the row. */
+.shared-file__media img { display: block; width: 100%; max-height: 320px; object-fit: contain; }
+.shared-file__media audio, .shared-file__media video { display: block; width: 100%; }
+.shared-file__media video { max-height: 320px; background: #000; }
+.shared-file__row { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; color: inherit; text-decoration: none; font-size: var(--fs-ui); }
+a.shared-file__row:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.shared-file__icon { flex: none; opacity: .65; align-self: center; }
+.shared-file__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* flex:none and margin-left:auto together: the size pins to the right edge and
+   never shrinks, so a long filename ellipsizes instead of squeezing it away. */
+.shared-file__size { flex: none; margin-left: auto; opacity: .7; font-variant-numeric: tabular-nums; }
+.shared-file__caption { padding: 0 10px 8px; color: var(--muted); font-size: var(--fs-note); }
+/* No route behind it (see SharedFileCard): still says what was shared, offers
+   nothing, and looks like it offers nothing. */
+.shared-file--inert { opacity: .75; }
+.shared-file--inert .shared-file__row { cursor: default; }

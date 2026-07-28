@@ -7,6 +7,7 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -83,7 +84,7 @@ func (s *wsSession) applyCommandResponse(ext string, resp extproto.CommandRespon
 		}
 	case "prompt":
 		if resp.Prompt != "" {
-			if err := s.prompt(resp.Prompt, nil); err != nil {
+			if err := s.prompt(resp.Prompt, nil, core.UserMessageExtras{}); err != nil {
 				s.broadcast(ctrlproto.NoticeEvent("error", ext, err.Error()))
 			}
 		}

@@ -31,14 +31,18 @@ describe('fileToAttachment', () => {
     vi.unstubAllGlobals()
   })
 
-  it('rejects unsafe image types before reading', async () => {
+  // null is no longer "we threw this away" — it is "this is not inline-able,
+  // stage it as a file instead", which is what the composer does with it. An SVG
+  // stays off the inline path (in a data:/blob: context it is a script
+  // container, not merely an image) but is a perfectly good attachment.
+  it('refuses unsafe image types the inline path, leaving them to be staged', async () => {
     await expect(fileToAttachment(file({ type: 'image/svg+xml' }))).resolves.toBeNull()
   })
 
-  it('reports the existing localized size-limit error', async () => {
-    await expect(fileToAttachment(file({ size: maxImageBytes + 1, name: 'large.png' }))).resolves.toEqual({
-      error: 'large.png is too large (max 10 MB)',
-    })
+  // Over the inline budget is not an error any more: the file is too big for a
+  // wire frame, which is exactly what the upload route exists for.
+  it('refuses an oversized image the inline path rather than erroring', async () => {
+    await expect(fileToAttachment(file({ size: maxImageBytes + 1, name: 'large.png' }))).resolves.toBeNull()
   })
 
   it('accepts a file exactly at the size limit (boundary is >, not >=)', async () => {

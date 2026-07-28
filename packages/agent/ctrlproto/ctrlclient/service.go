@@ -27,8 +27,8 @@ var _ ctrlproto.WorkspaceService = (*Service)(nil)
 
 // --- conversation group ---
 
-func (s *Service) Prompt(ctx context.Context, sess, text string, images []ctrlproto.Image) error {
-	return s.c.Call(ctx, sess, ctrlproto.MethodPrompt, ctrlproto.PromptParams{Text: text, Images: images}, nil)
+func (s *Service) Prompt(ctx context.Context, sess string, p ctrlproto.PromptParams) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodPrompt, p, nil)
 }
 
 func (s *Service) Queue(ctx context.Context, sess, text string) error {

@@ -65,6 +65,66 @@ export interface WireMessage {
   // Render with 🎭 attribution, not as an ordinary assistant bubble.
   directed?: boolean
   actor?: string
+  // Files the user attached to this message and that still resolved when it was
+  // sent.
+  //
+  // Inert by design: no path, no id, nothing to click. A staged file is swept
+  // on a TTL, so a message reopened later still says what was attached and
+  // simply cannot offer it.
+  attachments?: WireAttachment[]
+  // How many attachments this message named that had already been swept. Shown
+  // so a send whose files all lapsed does not render as one that carried none.
+  attachments_missing?: number
+  // Content[0] is the host's preamble, not the user's words — the block naming
+  // the staging paths, which the model needs and a human reads as nine wrapped
+  // lines of noise. Drop it and render the two fields above instead; see
+  // blockText.
+  //
+  // Its own flag, not inferred from `attachments`: a message can carry the
+  // preamble with nothing left to label, and inferring it meant the prose
+  // surfaced in exactly that case.
+  preamble?: boolean
+  // Files tool calls in this message published FOR the user. Present only on a
+  // tool-role message; each names the call it came from. The replay half of the
+  // pair whose live half is WireEvent.shared.
+  shared?: SharedFile[]
+}
+
+// WireAttachment describes one file a user attached: enough to label it, and
+// nothing more. Mirrors core.WireAttachment.
+export interface WireAttachment {
+  name: string
+  kind: string // image | audio | video | document
+  mime?: string
+  size?: number
+}
+
+// SharedFile is one file the AGENT published for the user, via share_file.
+// Mirrors core.SharedFile.
+//
+// The outbound counterpart to WireAttachment, and unlike it a HANDLE: `id`
+// resolves against the daemon's share store, and GET /shared/<sess>/<id> serves
+// the bytes. Hence a card you can view, play, or download, where an inbound
+// attachment is an inert label.
+//
+// call_id is stamped by the agent loop, so one tool-role message carrying
+// several calls' results still says which row each card belongs to.
+export interface SharedFile {
+  id: string
+  call_id?: string
+  name: string
+  kind: string // image | audio | video | document
+  mime?: string
+  size?: number
+  caption?: string
+  // RFC3339. When the daemon's sweeper may remove the bytes, so the card can
+  // stop offering a download it knows will fail — for a document and a clip as
+  // well as an image, which is the point: only an image has an element whose
+  // failure could otherwise tell us anything.
+  //
+  // An upper bound (cap eviction can be earlier), and ABSENT means unknown, not
+  // expired — a daemon older than the field sends nothing.
+  expires_at?: string
 }
 
 // CastRoute is one cast member's pinned provider+model (Phase 7); empty fields
@@ -1349,6 +1409,14 @@ export interface PersonaView extends PersonaSummary {
   introduction?: string
   charter?: string
   extends?: string
+  // How many sessions — across every project — were created with this persona
+  // and replay it whenever they open. Reported by personas.get only; the list
+  // omits it because deriving it reads every project's transcripts.
+  //
+  // Deleting the persona does not break those sessions (the daemon falls back to
+  // the default persona and says so on load), but they lose the voice they were
+  // written in, so the delete confirm says how many.
+  sessions_using?: number
 }
 
 // PersonaWriteParams is the editable form — what personas.create/edit accept.
@@ -1574,6 +1642,9 @@ export interface WireEvent {
   // tool_result line-change counts (the status bar's Δ segment)
   lines_added?: number
   lines_removed?: number
+  // tool_result: files this call published for the user. The live half of the
+  // pair whose replay half is WireMessage.shared.
+  shared?: SharedFile[]
   usage?: WireUsage
   cumulative?: WireUsage
   message?: WireMessage
@@ -1630,6 +1701,12 @@ export interface ServerHello {
   // closes the socket, and the in-flight request then fails with a generic
   // dead-socket message that explains nothing.
   max_upload_bytes?: number
+  // The largest file the ATTACHMENT route will stage (Go
+  // Hello.MaxAttachmentBytes), or absent when this carrier has no such route.
+  // Separate from max_upload_bytes, and much larger: an attachment never enters
+  // a wire frame — it is POSTed to /upload and only its id rides the prompt — so
+  // checking one against the frame bound would refuse files the daemon accepts.
+  max_attachment_bytes?: number
 }
 
 export interface Frame {

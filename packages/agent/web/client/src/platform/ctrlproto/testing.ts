@@ -53,6 +53,10 @@ export interface FakeClientOptions {
   respond?: (method: Verb, params: unknown, sess: string) => unknown
   /** Seed for maxUploadBytes; 0 (the default) means unbounded, as when cold. */
   maxUploadBytes?: number
+  /** Seed for maxAttachmentBytes; 0 (the default) means the carrier didn't say. */
+  maxAttachmentBytes?: number
+  /** Whether this fake carrier claims an upload route (ctrlproto "attachments"). */
+  canAttachFiles?: boolean
 }
 
 export function fakeClient(opts: FakeClientOptions = {}): FakeClient {
@@ -93,6 +97,8 @@ export function fakeClient(opts: FakeClientOptions = {}): FakeClient {
 
   const client: FakeClient = {
     maxUploadBytes: opts.maxUploadBytes ?? 0,
+    maxAttachmentBytes: opts.maxAttachmentBytes ?? 0,
+    canAttachFiles: opts.canAttachFiles ?? false,
     onEvent: () => {},
     onStatus: () => {},
     onReady: () => {},

@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"terva.sh/terva/packages/core"
 	"testing"
 
 	"terva.sh/terva/packages/agent/card"
@@ -28,7 +29,7 @@ func TestRoutedTurnBooksBothSideChannelCalls(t *testing.T) {
 		booked = append(booked, u)
 	})
 
-	if err := s.prompt("I open the door.", nil); err != nil {
+	if err := s.prompt("I open the door.", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	drainUntil(t, sub, "done")

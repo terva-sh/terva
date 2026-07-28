@@ -1,7 +1,8 @@
-import { t } from '../../i18n'
+import { t, tn } from '../../i18n'
 import type { Item } from '../../platform/conversation/store'
+import type { WireAttachment } from '../../platform/ctrlproto/types'
 import { CopyButton } from '../../ui/CopyButton'
-import { clockTime, compact, localInstant, truncate } from '../../ui/formatting'
+import { clockTime, compact, humanBytes, localInstant, truncate } from '../../ui/formatting'
 import { ImageGallery } from '../../ui/ImageGallery'
 import { Markdown } from '../../ui/Markdown'
 import { memo } from '../../ui/memo'
@@ -27,6 +28,40 @@ export function MessageTime({ time }: { time?: string }) {
     <span class="msg-time" title={localInstant(time)}>
       {clock}
     </span>
+  )
+}
+
+// AttachedFiles labels what the user attached to a message.
+//
+// Deliberately inert — no link, no button, no download. The bytes live in a
+// staging area the daemon sweeps on a TTL, so by the time anyone reads an old
+// message the file is usually gone; an affordance that failed most of the time
+// would be worse than none. (Sending files the other way — agent to user — is a
+// separate flow and will not reuse this.)
+//
+// It renders instead of, not beside, the host preamble that names the staging
+// paths: the store drops that block when the message's `preamble` flag is set.
+//
+// missing counts attachments that had already been swept when the message was
+// sent, and is said out loud rather than omitted. A file can lapse between being
+// dropped on the composer and the send — a phone tab left open overnight is
+// enough — and a message that quietly showed nothing would leave the user
+// reading an answer that ignores files they believe they attached.
+function AttachedFiles({ files, missing }: { files: WireAttachment[]; missing?: number }) {
+  return (
+    <div class="msg-files">
+      {files.map((f, i) => (
+        <span key={i} class="msg-file" title={f.mime ? `${f.name} — ${f.mime}` : f.name}>
+          <span class="msg-file__name">{f.name}</span>
+          {f.size ? <span class="msg-file__size">{humanBytes(f.size)}</span> : null}
+        </span>
+      ))}
+      {missing ? (
+        <span class="msg-file msg-file--gone" title={t('Staged files are removed 24 hours after upload')}>
+          {tn(missing, '%d attachment had expired', '%d attachments had expired')}
+        </span>
+      ) : null}
+    </div>
   )
 }
 
@@ -62,6 +97,11 @@ export const MessageContent = memo(function MessageContent({
       return (
         <div class="msg-wrap user-wrap">
           <div class="msg user">
+            {/* Coerced, not truthy-tested: both operands are numbers, and a bare
+                `0 || 0` renders as a literal "0" in the bubble. */}
+            {!!(item.attachments?.length || item.attachmentsMissing) && (
+              <AttachedFiles files={item.attachments ?? []} missing={item.attachmentsMissing} />
+            )}
             {item.text}
             {item.images && <ImageGallery images={item.images} />}
           </div>

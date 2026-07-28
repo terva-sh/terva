@@ -307,7 +307,7 @@ func TestCarrierRejectsMutations(t *testing.T) {
 		return errors.As(err, &ce) && ce.Code == ctrlproto.CodeUnsupported
 	}
 	ctx := context.Background()
-	if err := c.Prompt(ctx, "", "hi", nil); !unsup(err) {
+	if err := c.Prompt(ctx, "", ctrlproto.PromptParams{Text: "hi"}); !unsup(err) {
 		t.Errorf("Prompt: want CodeUnsupported, got %v", err)
 	}
 	if err := c.Compact(ctx, ""); !unsup(err) {

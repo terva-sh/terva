@@ -5,7 +5,7 @@ const PROTOCOL = 1
 // The bearer token, when the page was handed one explicitly. Normally there is
 // none here and the cookie does the work; ?token= is the one-click link, and the
 // localStorage key is a manual escape hatch (nothing in the app writes it).
-function authToken(): string {
+export function authToken(): string {
   return (
     new URLSearchParams(location.search).get('token') ||
     localStorage.getItem('terva_token') ||
@@ -84,6 +84,8 @@ export interface ClientLike {
   onStatus: (s: Status) => void
   onReady: (hello?: ServerHello) => void
   maxUploadBytes: number
+  maxAttachmentBytes: number
+  canAttachFiles: boolean
 }
 
 // ConnectableClient adds the socket lifecycle. Deliberately separate from
@@ -109,6 +111,13 @@ export class Client implements ConnectableClient {
   // return an error, it drops the socket, and the request dies with a generic
   // "connection closed" that names nothing the user can act on.
   maxUploadBytes = 0
+
+  // The attachment route's per-file bound, and whether this carrier has such a
+  // route at all. Both come from the hello: a daemon reached over a unix socket
+  // has nowhere to POST bytes, so the composer must not offer a drop target that
+  // silently goes nowhere.
+  maxAttachmentBytes = 0
+  canAttachFiles = false
 
   onEvent: (sess: string, ev: WireEvent) => void = () => {}
   onStatus: (s: Status) => void = () => {}
@@ -165,6 +174,8 @@ export class Client implements ConnectableClient {
   private onFrame(f: Frame) {
     if (f.kind === 'hello') {
       this.maxUploadBytes = f.hello?.max_upload_bytes ?? 0
+      this.maxAttachmentBytes = f.hello?.max_attachment_bytes ?? 0
+      this.canAttachFiles = (f.hello?.features ?? []).includes('attachments')
       this.onStatus('open')
       this.onReady(f.hello)
       return

@@ -124,11 +124,11 @@ func newFakeCarrier() *fakeCarrier {
 	}
 }
 
-func (f *fakeCarrier) Prompt(ctx context.Context, sess, text string, images []ctrlproto.Image) error {
+func (f *fakeCarrier) Prompt(ctx context.Context, sess string, p ctrlproto.PromptParams) error {
 	if f.promptErr != nil {
 		return f.promptErr
 	}
-	f.prompts <- text
+	f.prompts <- p.Text
 	return nil
 }
 

@@ -74,7 +74,7 @@ func (s *wsSession) directTurn(text string) error {
 	if body == "" {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("direct: nothing to direct"))
 	}
-	return s.promptBlocks(directionDirective(body), nil)
+	return s.promptBlocks(directionDirective(body), nil, core.UserMessageExtras{})
 }
 
 // advance runs one turn against the transcript as it stands — no user message,

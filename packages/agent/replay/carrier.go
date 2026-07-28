@@ -399,7 +399,7 @@ func (c *Carrier) Answer(ctx context.Context, sess, askID string, a core.UserAns
 	return nil
 }
 
-func (c *Carrier) Prompt(ctx context.Context, sess, text string, images []ctrlproto.Image) error {
+func (c *Carrier) Prompt(ctx context.Context, sess string, p ctrlproto.PromptParams) error {
 	return unsupported("prompt")
 }
 func (c *Carrier) Queue(ctx context.Context, sess, text string) error { return unsupported("queue") }

@@ -78,7 +78,7 @@ func TestWorkspacePostTurnAutoCompact(t *testing.T) {
 	s.agent.SetMessages(seed)
 
 	sub := s.hub.add(nil, true)
-	if err := s.prompt("hi", nil); err != nil {
+	if err := s.prompt("hi", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	drainUntil(t, sub, "done")

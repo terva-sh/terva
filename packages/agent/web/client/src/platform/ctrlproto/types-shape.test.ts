@@ -72,6 +72,7 @@ const clientOnly: Record<string, string[]> = {
 // entry must go.
 const notMirrored: Record<string, string> = {
   Answer: 'ask answers are sent as literals, like every request payload',
+  AttachmentRef: 'a bare staged-file id, sent inline inside prompt params (like Image)',
   AuthFlowRef: 'a single-field flow handle, echoed back inside auth params',
   Error: 'mirrored inline as Frame.error',
   Image: 'a prompt attachment, sent inline inside prompt params',

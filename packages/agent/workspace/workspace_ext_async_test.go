@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"terva.sh/terva/packages/core"
 	"testing"
 	"time"
 
@@ -112,7 +113,7 @@ func TestTurnWaitsForTheBackgroundExtensionStart(t *testing.T) {
 	extReady := make(chan struct{})
 	s.extReady = extReady
 
-	if err := s.prompt("hi", nil); err != nil {
+	if err := s.prompt("hi", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	// Negative window: with the barrier removed the turn reaches the provider in

@@ -97,7 +97,7 @@ func TestMidTurnDrainBroadcastsTheQueue(t *testing.T) {
 
 	queues := collectQueueEvents(t, s)
 
-	if err := s.prompt("run the tool", nil); err != nil {
+	if err := s.prompt("run the tool", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	<-tool.entered // parked inside the tool: the turn is live and mid-step

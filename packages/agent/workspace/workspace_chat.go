@@ -25,6 +25,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -569,7 +570,7 @@ func (h *chatWsHost) SubmitOrQueue(text string, images []provider.ImageBlock) {
 	// Submit through the INTERNAL seam, not Workspace.Prompt: the client-facing
 	// entries mirror OnUserTyped back out to the chat, and a message that
 	// arrived from the chat must not be echoed to it.
-	if err := s.promptBlocks(text, images); err != nil {
+	if err := s.promptBlocks(text, images, core.UserMessageExtras{}); err != nil {
 		// Busy: queue behind the running turn. Text-only, matching the queue's
 		// contract — images only ever reach an immediately-started turn.
 		s.queue(text)

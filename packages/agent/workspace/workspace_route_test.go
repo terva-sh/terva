@@ -72,7 +72,7 @@ func TestRoutedTurnVoicesRosterPick(t *testing.T) {
 	s := worldTestSession(t, cl, map[string]string{"Elira": "elira-ref"})
 	sub := s.hub.add(nil, true)
 
-	if err := s.prompt("I open the door.", nil); err != nil {
+	if err := s.prompt("I open the door.", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	drainUntil(t, sub, "done")
@@ -120,7 +120,7 @@ func TestRoutedTurnFallsBackToBound(t *testing.T) {
 	s := worldTestSession(t, cl, map[string]string{"Elira": "elira-ref"})
 	sub := s.hub.add(nil, true)
 
-	if err := s.prompt("hello?", nil); err != nil {
+	if err := s.prompt("hello?", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	drainUntil(t, sub, "done")
@@ -140,7 +140,7 @@ func TestFocusSkipsRouter(t *testing.T) {
 	s.sess.Meta.Coordination = "focus:Elira"
 	sub := s.hub.add(nil, true)
 
-	if err := s.prompt("Elira, the plan?", nil); err != nil {
+	if err := s.prompt("Elira, the plan?", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	drainUntil(t, sub, "done")

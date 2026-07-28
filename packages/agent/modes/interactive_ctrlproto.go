@@ -588,7 +588,7 @@ func (i *Interactive) startTurnCarrier(parent context.Context, prompt string, im
 	i.mu.Unlock()
 	i.resetTurnUI()
 	go func() {
-		if err := c.Prompt(parent, sess, prompt, toCtrlImages(images)); err != nil {
+		if err := c.Prompt(parent, sess, ctrlproto.PromptParams{Text: prompt, Images: toCtrlImages(images)}); err != nil {
 			// The daemon refused the dispatch (lost a busy race to another
 			// producer, or an internal failure). Release the never-started
 			// local slot; on busy, queue instead so the text isn't lost.

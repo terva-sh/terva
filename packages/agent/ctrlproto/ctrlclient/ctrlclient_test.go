@@ -72,7 +72,8 @@ type fakeSvc struct {
 	events  chan ctrlproto.Event
 }
 
-func (f *fakeSvc) Prompt(_ context.Context, sess, text string, _ []ctrlproto.Image) error {
+func (f *fakeSvc) Prompt(_ context.Context, sess string, p ctrlproto.PromptParams) error {
+	text := p.Text
 	if text == "busy" {
 		return ctrlproto.Errorf(ctrlproto.CodeBusy, "a turn is already running")
 	}
@@ -182,7 +183,7 @@ func TestHandshakeAndCalls(t *testing.T) {
 		t.Fatalf("server hello = %+v ok=%v, want test-daemon 9.9.9", hello, ok)
 	}
 
-	if err := svc.Prompt(ctx, "s1", "hello", nil); err != nil {
+	if err := svc.Prompt(ctx, "s1", ctrlproto.PromptParams{Text: "hello"}); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
 	list, err := svc.Sessions(ctx)
@@ -197,7 +198,7 @@ func TestHandshakeAndCalls(t *testing.T) {
 
 func TestWireErrorCodePreserved(t *testing.T) {
 	h := newHarness(t)
-	err := h.client.Service().Prompt(context.Background(), "s1", "busy", nil)
+	err := h.client.Service().Prompt(context.Background(), "s1", ctrlproto.PromptParams{Text: "busy"})
 	var ce *ctrlproto.Error
 	if !errors.As(err, &ce) || ce.Code != ctrlproto.CodeBusy {
 		t.Fatalf("err = %v, want *ctrlproto.Error with code busy", err)

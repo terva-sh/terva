@@ -2,7 +2,7 @@
 // ctrlproto event stream (and the initial snapshot). Kept separate from the
 // wire types so rendering has one stable shape to switch on.
 import { t } from '../../i18n'
-import type { WireEvent, WireMessage, WireBlock } from '../ctrlproto/types'
+import type { WireEvent, WireMessage, WireBlock, WireAttachment, SharedFile } from '../ctrlproto/types'
 import { isSafeImageMime, type ImageAttachment } from './images'
 
 export type { ImageAttachment } from './images'
@@ -34,13 +34,30 @@ export type Item = Placed &
     // finished — which is what "when did the answer arrive" means. Absent while a
     // reply is still streaming (it has not arrived yet) and from any daemon that
     // does not send it; the panel simply shows no stamp.
-    | { kind: 'user'; id: string; text: string; images?: ImageAttachment[]; directive?: boolean; time?: string }
+    | {
+        kind: 'user'
+        id: string
+        text: string
+        images?: ImageAttachment[]
+        attachments?: WireAttachment[]
+        // How many of this message's attachments were already swept when it was
+        // sent. Rendered as a lapsed-files note, so a send whose files had all
+        // expired does not look like one that carried nothing.
+        attachmentsMissing?: number
+        directive?: boolean
+        time?: string
+      }
     // directed/actor mark a line the user authored into the scene via directed
     // authorship (Phase 6) — a character's (actor set) or the narrator's (actor
     // empty) turn — rendered with 🎭 attribution rather than as a model reply.
     // routed marks a line the meta-narrator routed to a character (Worlds W3):
     // model-produced but likewise 🎭-attributed to its actor, not the main card.
     | { kind: 'assistant'; id: string; text: string; streaming: boolean; images?: ImageAttachment[]; directed?: boolean; routed?: boolean; actor?: string; time?: string }
+    // `shared` are files this call published for the user (share_file). They
+    // hang off the tool item because that is where the wire puts them, but they
+    // are NOT rendered here — sequenceConversationItems lifts them into rows of
+    // their own, since a tool group renders collapsed and a download nobody can
+    // see is the feature missing.
     | {
         kind: 'tool'
         id: string
@@ -49,6 +66,7 @@ export type Item = Placed &
         result?: string
         error?: boolean
         images?: ImageAttachment[]
+        shared?: SharedFile[]
       }
     | { kind: 'error'; id: string; text: string }
   // host-injected (synthetic) user-role message, e.g. a continue-on-open-work
@@ -111,10 +129,18 @@ export function directionBody(text: string): string | null {
 
 // userRow maps a user-role message to its item, splitting off a [Direction] steer
 // as a de-emphasized directive row rather than the player's dialogue.
-function userRow(text: string, images: ImageAttachment[] | undefined, id: string, placed: Placed, time?: string): Item {
+function userRow(
+  text: string,
+  images: ImageAttachment[] | undefined,
+  id: string,
+  placed: Placed,
+  time?: string,
+  attachments?: WireAttachment[],
+  attachmentsMissing?: number,
+): Item {
   const dir = directionBody(text)
   if (dir !== null) return { kind: 'user', id, text: dir, directive: true, time, ...placed }
-  return { kind: 'user', id, text, images, time, ...placed }
+  return { kind: 'user', id, text, images, attachments, attachmentsMissing, time, ...placed }
 }
 
 // msgID is a message's stable identity: (epoch, index). The daemon's transcriptEpoch
@@ -148,11 +174,17 @@ export type Placement =
   | { history?: false; epoch: number; base: number }
   | { history: true; compactionOrdinal: number }
 
-function blockText(blocks: WireBlock[] | undefined): string {
-  return (blocks ?? [])
-    .filter((b) => b.type === 'text' && b.text)
-    .map((b) => b.text as string)
-    .join('')
+// blockText concatenates a message's text blocks.
+//
+// skipPreamble drops the FIRST text block, which is how a message carrying
+// attachments hides the host's preamble — the block naming their absolute
+// staging paths. The model needs it; a reader does not, and on a phone it wraps
+// to nine lines above the two the user actually typed. The daemon says so with
+// the message's own `preamble` flag, stamped where the block is prepended, so
+// this is a contract rather than a guess about the text.
+function blockText(blocks: WireBlock[] | undefined, skipPreamble = false): string {
+  const texts = (blocks ?? []).filter((b) => b.type === 'text' && b.text).map((b) => b.text as string)
+  return (skipPreamble ? texts.slice(1) : texts).join('')
 }
 
 // imageAttachments pulls the renderable image blocks out of a content list —
@@ -188,9 +220,11 @@ export function itemsFromMessages(msgs: WireMessage[], at: Placement): Item[] {
     const id = live ? msgID(at.epoch, at.base + i) : nextID()
     const ordinal = live ? -1 : at.compactionOrdinal
 
-    const text = blockText(m.content)
+    const text = blockText(m.content, !!m.preamble)
     const images = imageAttachments(m.content)
-    if (text || images) {
+    // A message can be nothing BUT a preamble and a lapsed-file count: the user
+    // attached a file, typed no words, and it expired before the send.
+    if (text || images || m.attachments?.length || m.attachments_missing) {
       out.push(
         // Checked before role: a compaction summary IS role 'user', and reading
         // the role first is exactly how it used to render as a user bubble.
@@ -199,7 +233,7 @@ export function itemsFromMessages(msgs: WireMessage[], at: Placement): Item[] {
           : m.synthetic
             ? { kind: 'system', id, text, ...placed }
             : m.role === 'user'
-              ? userRow(text, images, id, placed, m.time)
+              ? userRow(text, images, id, placed, m.time, m.attachments, m.attachments_missing)
               : { kind: 'assistant', id, text, streaming: false, images, directed: m.directed, routed: m.routed, actor: m.actor, time: m.time, ...placed },
       )
     }
@@ -225,6 +259,14 @@ export function itemsFromMessages(msgs: WireMessage[], at: Placement): Item[] {
           t.images = imageAttachments(b.content)
         }
       }
+    }
+    // Shares ride the tool-role MESSAGE, not its blocks, so they attach after
+    // the block walk — each to the call it names. A share whose call is not in
+    // this window (paged away above it) is dropped rather than orphaned: the
+    // card belongs beside its row, and a row that is not here has no beside.
+    for (const f of m.shared ?? []) {
+      const t = f.call_id ? byCall.get(f.call_id) : undefined
+      if (t) t.shared = [...(t.shared ?? []), f]
     }
   })
   return out
@@ -379,7 +421,15 @@ export function applyEvent(items: Item[], ev: WireEvent): Item[] {
       const idx = items.findIndex((it) => it.kind === 'tool' && it.id === ev.id)
       if (idx < 0) return items
       const t = items[idx] as Extract<Item, { kind: 'tool' }>
-      const updated = { ...t, result: blockText(ev.content), error: ev.is_error, images: imageAttachments(ev.content) }
+      const updated = {
+        ...t,
+        result: blockText(ev.content),
+        error: ev.is_error,
+        images: imageAttachments(ev.content),
+        // The live half of what itemsFromMessages joins on replay. No call_id
+        // check here: the event IS the call, and the daemon stamps them to match.
+        shared: ev.shared?.length ? ev.shared : undefined,
+      }
       return [...items.slice(0, idx), updated, ...items.slice(idx + 1)]
     }
     case 'error':

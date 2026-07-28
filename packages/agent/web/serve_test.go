@@ -470,7 +470,8 @@ func (f *fakeWS) Subscribe(ctx context.Context, sess string) (<-chan ctrlproto.E
 	return ch, nil
 }
 
-func (f *fakeWS) Prompt(ctx context.Context, sess, text string, images []ctrlproto.Image) error {
+func (f *fakeWS) Prompt(ctx context.Context, sess string, p ctrlproto.PromptParams) error {
+	text := p.Text
 	f.mu.Lock()
 	f.prompts = append(f.prompts, text)
 	f.mu.Unlock()

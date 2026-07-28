@@ -581,8 +581,8 @@ func (f *fakeSvc) Subscribe(ctx context.Context, sess string) (<-chan Event, err
 	return ch, nil
 }
 
-func (f *fakeSvc) Prompt(ctx context.Context, sess, text string, images []Image) error {
-	f.broadcast(sess, ConversationEvent(core.WireEvent{Type: "text_delta", Delta: "hello " + text}))
+func (f *fakeSvc) Prompt(ctx context.Context, sess string, p PromptParams) error {
+	f.broadcast(sess, ConversationEvent(core.WireEvent{Type: "text_delta", Delta: "hello " + p.Text}))
 	f.broadcast(sess, PermissionEvent(PermissionRequest{CallID: "call_1", Tool: "bash", Preview: "ls -la"}))
 	f.broadcast(sess, ConversationEvent(core.WireEvent{Type: "turn_end", Stop: "end_turn"}))
 	return nil

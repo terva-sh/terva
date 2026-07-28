@@ -70,6 +70,11 @@ export type MockBackendOptions = {
   // the panel used to claim an empty workspace, so testing it means being able
   // to hold it open.
   deferHello?: boolean
+  // Features the server hello advertises, and the attachment ceiling it names.
+  // Default [] / 0 — the panel gates surfaces on these, so a test that wants one
+  // (the composer's file drop, behind "attachments") has to ask for it.
+  features?: string[]
+  maxAttachmentBytes?: number
   // Withhold the response to these verbs until release() answers them.
   //
   // deferHello holds the WHOLE boot, which is the right tool when the surface
@@ -106,7 +111,16 @@ export async function installMockBackend(page: Page, opts: MockBackendOptions = 
   const flushHello = () => {
     if (!helloPending || !current) return
     helloPending = false
-    current.send(JSON.stringify({ kind: 'hello', hello: { protocol: 1, features: [] } }))
+    current.send(
+      JSON.stringify({
+        kind: 'hello',
+        hello: {
+          protocol: 1,
+          features: opts.features ?? [],
+          max_attachment_bytes: opts.maxAttachmentBytes ?? 0,
+        },
+      }),
+    )
   }
   // Per-verb holds. `held` is what is still being withheld; `parked` is the
   // request ids waiting on each, so a verb the client retries (a poll) parks

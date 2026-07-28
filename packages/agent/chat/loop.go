@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/agent/attach"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -1020,24 +1021,11 @@ func (l *Loop) promptText(m Message) string {
 	for _, n := range l.takeNotes(m.ChatID) {
 		b.WriteString(n + "\n")
 	}
-	if len(m.Files) > 0 {
-		b.WriteString(i18n.P("chat.attachment_preamble", "(the user attached files, saved locally — read them with your tools if relevant:"))
-		b.WriteByte('\n')
-		for _, f := range m.Files {
-			fmt.Fprintf(&b, "  %s — %s", f.Path, f.Kind)
-			if f.MimeType != "" {
-				fmt.Fprintf(&b, ", %s", f.MimeType)
-			}
-			if f.Size > 0 {
-				fmt.Fprintf(&b, ", %d bytes", f.Size)
-			}
-			if f.Duration > 0 {
-				fmt.Fprintf(&b, ", %s", f.Duration.Round(100*time.Millisecond))
-			}
-			b.WriteString("\n")
-		}
-		b.WriteString(")\n")
-	}
+	// One renderer for every inbound attachment path: a connector's staged files
+	// here, the web client's uploads in workspace.Prompt. missing is 0 because
+	// these files were moved into place by the host, not resolved by id, so
+	// there is nothing that could have expired between then and now.
+	b.WriteString(attach.Manifest(attachRefs(m.Files), 0))
 	if b.Len() > 0 {
 		b.WriteString("\n")
 	}
@@ -1052,6 +1040,28 @@ func (l *Loop) promptText(m Message) string {
 	}
 	b.WriteString(m.Text)
 	return b.String()
+}
+
+// attachRefs adapts a connector's staged files to the shared manifest type.
+// The connector wire carries Kind and Duration itself (a voice note's length is
+// something only the service knows), so they pass through rather than being
+// re-derived from the mime type.
+func attachRefs(files []FileAttachment) []attach.Ref {
+	if len(files) == 0 {
+		return nil
+	}
+	refs := make([]attach.Ref, 0, len(files))
+	for _, f := range files {
+		refs = append(refs, attach.Ref{
+			Name:     f.Name,
+			Mime:     f.MimeType,
+			Kind:     f.Kind,
+			Size:     f.Size,
+			Duration: f.Duration,
+			Path:     f.Path,
+		})
+	}
+	return refs
 }
 
 // takeChatIntro returns the [chat context] line exactly once per chat:

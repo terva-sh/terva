@@ -74,18 +74,96 @@ describe('Composer attachments', () => {
     expect(screen.queryByAltText('attached image')).toBeNull()
   })
 
-  it('accepts image drops, ignores non-images, and toasts conversion errors', async () => {
+  // The gap this whole feature closes: a dropped .csv used to be filtered out at
+  // the drop handler, with no chip, no toast, and nothing sent. It must now be
+  // staged and named on the send.
+  it('stages a dropped non-image instead of discarding it', async () => {
     vi.stubGlobal('FileReader', SuccessfulFileReader)
-    const onToast = vi.fn()
-    const { container } = render(<Composer {...props({ onToast })} />)
+    const onUpload = vi.fn().mockResolvedValue({
+      id: 'att_1', name: 'notes.txt', mime: 'text/plain', kind: 'document', size: 4,
+    })
+    const { container } = render(<Composer {...props({ onUpload, canAttachFiles: true })} />)
     const footer = container.querySelector('.composer') as HTMLElement
-    const oversized = { type: 'image/png', size: 11 * 1024 * 1024, name: 'large.png' } as File
     const textFile = new File(['text'], 'notes.txt', { type: 'text/plain' })
 
-    fireEvent.drop(footer, { dataTransfer: { files: [textFile, imageFile(), oversized] } })
+    fireEvent.drop(footer, { dataTransfer: { files: [textFile] } })
+
+    await waitFor(() => expect(onUpload).toHaveBeenCalledWith(textFile))
+    expect(await screen.findByText('notes.txt')).toBeTruthy()
+  })
+
+  // An image goes inline (vision needs the bytes in the turn); everything beside
+  // it is staged. One drop, two destinations.
+  it('routes an image inline and a document to the upload route in one drop', async () => {
+    vi.stubGlobal('FileReader', SuccessfulFileReader)
+    const onUpload = vi.fn().mockResolvedValue({
+      id: 'att_1', name: 'notes.txt', mime: 'text/plain', kind: 'document', size: 4,
+    })
+    const { container } = render(<Composer {...props({ onUpload, canAttachFiles: true })} />)
+    const footer = container.querySelector('.composer') as HTMLElement
+    const textFile = new File(['text'], 'notes.txt', { type: 'text/plain' })
+
+    fireEvent.drop(footer, { dataTransfer: { files: [textFile, imageFile()] } })
+
     expect(await screen.findByAltText('attached image')).toBeTruthy()
-    await waitFor(() => expect(onToast).toHaveBeenCalledWith('large.png is too large (max 10 MB)'))
-    expect(container.querySelectorAll('.composer-chip')).toHaveLength(1)
+    await waitFor(() => expect(container.querySelectorAll('.composer-chip')).toHaveLength(2))
+    expect(onUpload).toHaveBeenCalledTimes(1)
+  })
+
+  // An image too big to inline is not an error — the upload route is exactly
+  // where it belongs.
+  it('stages an image that is too large to ride the frame', async () => {
+    vi.stubGlobal('FileReader', SuccessfulFileReader)
+    const onUpload = vi.fn().mockResolvedValue({
+      id: 'att_1', name: 'large.png', mime: 'image/png', kind: 'image', size: 11 * 1024 * 1024,
+    })
+    const { container } = render(<Composer {...props({ onUpload, canAttachFiles: true })} />)
+    const footer = container.querySelector('.composer') as HTMLElement
+    const oversized = { type: 'image/png', size: 11 * 1024 * 1024, name: 'large.png' } as File
+
+    fireEvent.drop(footer, { dataTransfer: { files: [oversized] } })
+
+    await waitFor(() => expect(onUpload).toHaveBeenCalledWith(oversized))
+  })
+
+  // Refused out loud. Silently dropping the file is the behavior being fixed,
+  // so a carrier with no upload route must not reintroduce it.
+  it('toasts rather than discards when the daemon cannot take files', async () => {
+    const onToast = vi.fn()
+    const { container } = render(<Composer {...props({ onToast, canAttachFiles: false })} />)
+    const footer = container.querySelector('.composer') as HTMLElement
+
+    fireEvent.drop(footer, { dataTransfer: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } })
+
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith('This daemon cannot take file attachments'))
+  })
+
+  // Over the daemon's advertised ceiling, refuse before spending the upload.
+  it('refuses a file past the advertised limit without uploading it', async () => {
+    const onToast = vi.fn()
+    const onUpload = vi.fn()
+    const { container } = render(
+      <Composer {...props({ onToast, onUpload, canAttachFiles: true, maxAttachmentBytes: 1024 })} />,
+    )
+    const footer = container.querySelector('.composer') as HTMLElement
+    const big = { type: 'text/plain', size: 4096, name: 'huge.log' } as File
+
+    fireEvent.drop(footer, { dataTransfer: { files: [big] } })
+
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith('huge.log is too large (max 1.0 KB)'))
+    expect(onUpload).not.toHaveBeenCalled()
+  })
+
+  it('surfaces an upload failure and stages no chip for it', async () => {
+    const onToast = vi.fn()
+    const onUpload = vi.fn().mockResolvedValue({ error: 'notes.txt could not be uploaded' })
+    const { container } = render(<Composer {...props({ onToast, onUpload, canAttachFiles: true })} />)
+    const footer = container.querySelector('.composer') as HTMLElement
+
+    fireEvent.drop(footer, { dataTransfer: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } })
+
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith('notes.txt could not be uploaded'))
+    expect(container.querySelectorAll('.composer-chip')).toHaveLength(0)
   })
 
   it('sends attachments without text, retaining rejected sends and clearing accepted sends', async () => {
@@ -96,12 +174,130 @@ describe('Composer attachments', () => {
     await screen.findByAltText('attached image')
 
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    expect(onSend).toHaveBeenLastCalledWith('', [{ mime: 'image/png', data: 'UE5H' }])
+    expect(onSend).toHaveBeenLastCalledWith('', [{ mime: 'image/png', data: 'UE5H' }], [])
     expect(screen.getByAltText('attached image')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(onSend).toHaveBeenCalledTimes(2)
     await waitFor(() => expect(screen.queryByAltText('attached image')).toBeNull())
+  })
+
+  // The send names the staged file by id, and a refused send keeps the chip so
+  // the upload isn't spent for nothing.
+  it('names staged files on the send and keeps them when it is refused', async () => {
+    const staged = { id: 'att_1', name: 'notes.txt', mime: 'text/plain', kind: 'document', size: 4 }
+    const onSend = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true)
+    const { container } = render(
+      <Composer {...props({ onSend, onUpload: vi.fn().mockResolvedValue(staged), canAttachFiles: true })} />,
+    )
+    const footer = container.querySelector('.composer') as HTMLElement
+    fireEvent.drop(footer, { dataTransfer: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } })
+    await screen.findByText('notes.txt')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(onSend).toHaveBeenLastCalledWith('', [], [staged])
+    expect(screen.getByText('notes.txt')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.queryByText('notes.txt')).toBeNull())
+  })
+})
+
+// A staged id is only meaningful against the session directory it was written
+// to — the daemon resolves ids against the session it is prompted on. The
+// composer keeps its identity across a session switch (no key on the element,
+// and the focus view renders it either way), so without this the chips ride
+// along and every one of them reports as expired on the far side.
+describe('Composer attachments are session-scoped', () => {
+  const staged = { id: 'att_1', name: 'notes.txt', mime: 'text/plain', kind: 'document', size: 4 }
+  const drop = (container: Element, name = 'notes.txt') =>
+    fireEvent.drop(container.querySelector('.composer') as HTMLElement, {
+      dataTransfer: { files: [new File(['x'], name, { type: 'text/plain' })] },
+    })
+
+  it('drops staged chips when the session changes', async () => {
+    const onUpload = vi.fn().mockResolvedValue(staged)
+    const { container, rerender } = render(
+      <Composer {...props({ onUpload, canAttachFiles: true, sessionID: 'ses_a' })} />,
+    )
+    drop(container)
+    await screen.findByText('notes.txt')
+
+    rerender(<Composer {...props({ onUpload, canAttachFiles: true, sessionID: 'ses_b' })} />)
+
+    await waitFor(() => expect(screen.queryByText('notes.txt')).toBeNull())
+  })
+
+  // Only the attachments. A half-written message is not session-specific and
+  // throwing it away would be a worse bug than the one being fixed — which is
+  // what a `key` on the component would have done.
+  it('keeps the typed draft across the same change', async () => {
+    const onUpload = vi.fn().mockResolvedValue(staged)
+    const { container, rerender } = render(
+      <Composer {...props({ onUpload, canAttachFiles: true, sessionID: 'ses_a' })} />,
+    )
+    const textarea = screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement
+    fireEvent.input(textarea, { target: { value: 'half a thought' } })
+    drop(container)
+    await screen.findByText('notes.txt')
+
+    rerender(<Composer {...props({ onUpload, canAttachFiles: true, sessionID: 'ses_b' })} />)
+
+    await waitFor(() => expect(screen.queryByText('notes.txt')).toBeNull())
+    expect((screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement).value).toBe('half a thought')
+  })
+
+  // The case clearing state alone does NOT fix: an upload still in flight when
+  // the session changes. Its promise resolves afterwards and appends a chip for
+  // a file staged under the session the user left, putting back exactly what
+  // the switch cleared.
+  it('discards an upload that lands after the session changed', async () => {
+    let land: (v: typeof staged) => void = () => {}
+    const onUpload = vi.fn().mockReturnValue(new Promise<typeof staged>((res) => { land = res }))
+    const { container, rerender } = render(
+      <Composer {...props({ onUpload, canAttachFiles: true, sessionID: 'ses_a' })} />,
+    )
+    drop(container)
+    await waitFor(() => expect(onUpload).toHaveBeenCalled())
+
+    rerender(<Composer {...props({ onUpload, canAttachFiles: true, sessionID: 'ses_b' })} />)
+    land(staged)
+
+    await waitFor(() => expect(container.querySelectorAll('.composer-chip--file')).toHaveLength(0))
+    expect(screen.queryByText('notes.txt')).toBeNull()
+  })
+
+  // …and its failure is not announced either: a toast about a session the user
+  // has left names a file they can no longer see and cannot re-drop from here.
+  it('swallows an upload error that lands after the session changed', async () => {
+    const onToast = vi.fn()
+    let land: (v: { error: string }) => void = () => {}
+    const onUpload = vi.fn().mockReturnValue(new Promise<{ error: string }>((res) => { land = res }))
+    const { container, rerender } = render(
+      <Composer {...props({ onToast, onUpload, canAttachFiles: true, sessionID: 'ses_a' })} />,
+    )
+    drop(container)
+    await waitFor(() => expect(onUpload).toHaveBeenCalled())
+
+    rerender(<Composer {...props({ onToast, onUpload, canAttachFiles: true, sessionID: 'ses_b' })} />)
+    land({ error: 'notes.txt could not be uploaded' })
+
+    await waitFor(() => expect(container.querySelectorAll('.composer-chip')).toHaveLength(0))
+    expect(onToast).not.toHaveBeenCalled()
+  })
+
+  // A carrier that never says which session it is on (no sessionID at all) must
+  // not have its chips cleared on every render by an effect comparing undefined
+  // to undefined — that would make the feature unusable rather than wrong.
+  it('leaves chips alone when the session never changes', async () => {
+    const onUpload = vi.fn().mockResolvedValue(staged)
+    const { container, rerender } = render(<Composer {...props({ onUpload, canAttachFiles: true })} />)
+    drop(container)
+    await screen.findByText('notes.txt')
+
+    rerender(<Composer {...props({ onUpload, canAttachFiles: true })} />)
+
+    expect(screen.getByText('notes.txt')).toBeTruthy()
   })
 })
 
@@ -138,7 +334,7 @@ describe('Composer autocomplete', () => {
 
     fireEvent.input(textarea, { target: { value: '/comp' } })
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false })
-    expect(onSend).toHaveBeenCalledWith('/compact', [])
+    expect(onSend).toHaveBeenCalledWith('/compact', [], [])
     expect(textarea.value).toBe('')
     expect(screen.queryByRole('listbox')).toBeNull()
   })
@@ -297,7 +493,7 @@ describe('Composer core interaction', () => {
 
     textareaScrollHeight = 30
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    expect(onSend).toHaveBeenCalledWith('multiple\nlines', [])
+    expect(onSend).toHaveBeenCalledWith('multiple\nlines', [], [])
     await waitFor(() => expect(textarea.value).toBe(''))
     expect(textarea.style.height).toBe('30px')
   })
@@ -342,7 +538,7 @@ describe('Composer core interaction', () => {
     fireEvent.input(textarea, { target: { value: 'hello' } })
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false })
 
-    expect(onSend).toHaveBeenCalledWith('hello', [])
+    expect(onSend).toHaveBeenCalledWith('hello', [], [])
     expect(textarea.value).toBe('')
   })
 
@@ -357,7 +553,7 @@ describe('Composer core interaction', () => {
     expect(textarea.value).toBe('line')
 
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    expect(onSend).toHaveBeenCalledWith('line', [])
+    expect(onSend).toHaveBeenCalledWith('line', [], [])
     expect(textarea.value).toBe('line')
 
     onSend.mockClear()
@@ -379,7 +575,7 @@ describe('Composer core interaction', () => {
 
     fireEvent.input(textarea, { target: { value: 'queue this' } })
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false })
-    expect(onSend).toHaveBeenCalledWith('queue this', [])
+    expect(onSend).toHaveBeenCalledWith('queue this', [], [])
     expect(textarea.value).toBe('')
   })
 })

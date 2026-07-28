@@ -190,6 +190,78 @@ describe('applyEvent — tool results', () => {
   })
 })
 
+// A share reaches the client twice — live on the tool_result event, and on
+// replay via the tool-role message that persisted it. Both must land on the
+// same item, or a card vanishes the moment you refresh the panel.
+describe('shared files', () => {
+  const share = (id: string, name: string, call = 't1') => ({ id, call_id: call, name, kind: 'document' })
+
+  const toolItem = (items: Item[]) => items.find((i) => i.kind === 'tool') as Extract<Item, { kind: 'tool' }>
+
+  it('lands a live share on its tool item', () => {
+    let items = applyEvent([], { type: 'tool_call', id: 't1', name: 'share_file' })
+    items = applyEvent(items, {
+      type: 'tool_result',
+      id: 't1',
+      content: [{ type: 'text', text: 'shared' }],
+      shared: [share('shr_a', 'report.pdf')],
+    })
+    expect(toolItem(items).shared).toEqual([share('shr_a', 'report.pdf')])
+  })
+
+  it('leaves a result with no shares undefined rather than empty', () => {
+    let items = applyEvent([], { type: 'tool_call', id: 't1', name: 'bash' })
+    items = applyEvent(items, { type: 'tool_result', id: 't1', content: [{ type: 'text', text: 'ok' }] })
+    expect(toolItem(items).shared).toBeUndefined()
+  })
+
+  it('joins a replayed share to its call', () => {
+    const msgs: WireMessage[] = [
+      { role: 'assistant', content: [{ type: 'tool_call', id: 't1', name: 'share_file' }] },
+      {
+        role: 'tool',
+        content: [{ type: 'tool_result', call_id: 't1', content: [{ type: 'text', text: 'shared' }] }],
+        shared: [share('shr_a', 'report.pdf')],
+      },
+    ]
+    expect(toolItem(itemsFromMessages(msgs, LIVE)).shared).toEqual([share('shr_a', 'report.pdf')])
+  })
+
+  // One tool-role message can carry several calls' results, which is the whole
+  // reason call_id is on the record.
+  it('routes each replayed share to its own call', () => {
+    const msgs: WireMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_call', id: 't1', name: 'share_file' },
+          { type: 'tool_call', id: 't2', name: 'share_file' },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          { type: 'tool_result', call_id: 't1', content: [] },
+          { type: 'tool_result', call_id: 't2', content: [] },
+        ],
+        shared: [share('shr_a', 'a.png', 't1'), share('shr_b', 'b.pdf', 't2')],
+      },
+    ]
+    const tools = itemsFromMessages(msgs, LIVE).filter((i) => i.kind === 'tool') as Extract<Item, { kind: 'tool' }>[]
+    expect(tools.map((t) => t.shared?.map((f) => f.id))).toEqual([['shr_a'], ['shr_b']])
+  })
+
+  // A window that starts below the call has no row for the card to sit beside.
+  // Dropping it is right: an orphan would render at the top of the transcript,
+  // detached from anything that explains it.
+  it('drops a share whose call is not in this window', () => {
+    const msgs: WireMessage[] = [
+      { role: 'tool', content: [{ type: 'tool_result', call_id: 'gone', content: [] }], shared: [share('shr_a', 'a.pdf', 'gone')] },
+    ]
+    expect(itemsFromMessages(msgs, LIVE).some((i) => i.kind === 'tool')).toBe(false)
+  })
+})
+
 describe('applyEvent — error, notice, and synthetic items', () => {
   it('appends an error item, falling back to a generic message', () => {
     expect(applyEvent([], { type: 'error', error: 'kaboom' })).toEqual([
@@ -329,5 +401,78 @@ describe('itemsFromMessages — arrival times', () => {
   it('leaves the field absent when the daemon sends no time', () => {
     const items = itemsFromMessages([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], LIVE)
     expect(items[0].kind === 'user' && items[0].time).toBeUndefined()
+  })
+})
+
+// A message carrying attachments leads with the host's preamble block — the one
+// naming their absolute staging paths. The model needs it; a reader does not,
+// and on a phone it wraps to nine lines above the two the user actually typed.
+// The message's own `preamble` flag is the signal to drop it.
+describe('attachment preamble suppression', () => {
+  const withMessage = (content: { type: string; text?: string }[], extra: Record<string, unknown> = {}) =>
+    itemsFromMessages([{ role: 'user', content, ...extra }] as unknown as WireMessage[], LIVE)
+  const withAttachments = (content: { type: string; text?: string }[], attachments?: unknown[]) =>
+    withMessage(content, attachments ? { attachments, preamble: true } : {})
+
+  it('drops the preamble block and keeps the user text', () => {
+    const items = withAttachments(
+      [
+        { type: 'text', text: '(the user attached files…\n  /home/u/.terva/attachments/s1/att_1-filters.xml — document\n)\n' },
+        { type: 'text', text: 'check these filters' },
+      ],
+      [{ name: 'filters.xml', kind: 'document', size: 12403 }],
+    )
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'user', text: 'check these filters' })
+    expect((items[0] as { attachments?: unknown[] }).attachments).toHaveLength(1)
+  })
+
+  // Without the flag there is no preamble, so nothing may be dropped — this is
+  // every message that has ever existed, and eating its first block would be a
+  // spectacular regression.
+  it('keeps every block when no preamble is declared', () => {
+    const items = withAttachments([{ type: 'text', text: 'just a question' }])
+    expect(items[0]).toMatchObject({ kind: 'user', text: 'just a question' })
+  })
+
+  // An attachment sent with no words of its own still has to produce a row, or
+  // the message vanishes from the transcript entirely.
+  it('renders a row for an attachment-only message', () => {
+    const items = withAttachments(
+      [{ type: 'text', text: '(the user attached files…)' }],
+      [{ name: 'filters.xml', kind: 'document', size: 12403 }],
+    )
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'user', text: '' })
+    expect((items[0] as { attachments?: unknown[] }).attachments).toHaveLength(1)
+  })
+
+  // The case that made the flag its own field. Every file the message named had
+  // been swept, so there is a preamble and NOTHING to label. Keying suppression
+  // off the attachment list left the manifest prose sitting in the user's
+  // bubble — the exact text the whole mechanism exists to hide.
+  it('drops the preamble when every attachment expired', () => {
+    const items = withMessage(
+      [
+        { type: 'text', text: '(the user attached files…\n  (2 further attachment(s) are no longer on disk…)\n)\n' },
+        { type: 'text', text: 'check these filters' },
+      ],
+      { preamble: true, attachments_missing: 2 },
+    )
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'user', text: 'check these filters', attachmentsMissing: 2 })
+    expect((items[0] as { attachments?: unknown[] }).attachments).toBeUndefined()
+  })
+
+  // …and the row still exists when that is ALL the message was: a file dropped
+  // with no words, lapsed before the send. Suppressing the preamble without
+  // this leaves an empty message that renders as nothing at all.
+  it('renders a row for a message whose only content was expired attachments', () => {
+    const items = withMessage([{ type: 'text', text: '(the user attached files…)' }], {
+      preamble: true,
+      attachments_missing: 1,
+    })
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'user', text: '', attachmentsMissing: 1 })
   })
 })

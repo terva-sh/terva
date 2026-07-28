@@ -22,6 +22,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/chat"
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -179,7 +180,7 @@ func TestClientPromptMirrorsToTheChat(t *testing.T) {
 	conn := newFakeChatConn(chat.Capabilities{})
 	startFakeBridge(t, w, "s1", conn)
 
-	if err := w.Prompt(context.Background(), "s1", "typed locally", nil); err != nil {
+	if err := w.Prompt(context.Background(), "s1", ctrlproto.PromptParams{Text: "typed locally"}); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 

@@ -362,6 +362,23 @@ func (m Method) Group() Group {
 type PromptParams struct {
 	Text   string  `json:"text"`
 	Images []Image `json:"images,omitempty"`
+	// Attachments name files the client already staged with the carrier (see
+	// [FeatureAttachments]). Unlike Images, no bytes ride this frame: the daemon
+	// resolves each id to a path and tells the model where to read it.
+	Attachments []AttachmentRef `json:"attachments,omitempty"`
+}
+
+// AttachmentRef names one staged file by the id its upload returned.
+//
+// The id is all a client sends. Name, type, and size are resolved daemon-side
+// from what is actually on disk, so a client cannot misdescribe a file to the
+// model — and cannot name a path at all, which is what keeps the reference from
+// being a way to point the agent at an arbitrary file.
+//
+// A struct rather than a bare id string so the reference can gain fields later
+// without a wire break.
+type AttachmentRef struct {
+	ID string `json:"id"`
 }
 
 // QueueParams is the payload of [MethodQueue].

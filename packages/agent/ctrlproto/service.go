@@ -25,10 +25,15 @@ type WorkspaceService interface {
 	// --- conversation group ---
 
 	// Prompt starts a turn on sess with the given user text and optional
-	// images. It returns once the turn is accepted (not when it finishes);
-	// progress streams to every [Subscribe] channel for sess. Returns a
-	// [CodeBusy] error if a turn is already running on sess.
-	Prompt(ctx context.Context, sess, text string, images []Image) error
+	// images and staged attachments. It returns once the turn is accepted (not
+	// when it finishes); progress streams to every [Subscribe] channel for sess.
+	// Returns a [CodeBusy] error if a turn is already running on sess.
+	//
+	// It takes the wire params rather than positional arguments because what a
+	// prompt carries keeps growing (text, then images, then attachments) and
+	// every added payload would otherwise break all four implementations and
+	// every caller.
+	Prompt(ctx context.Context, sess string, p PromptParams) error
 
 	// Queue enqueues text to be delivered at the next safe boundary of the
 	// running turn on sess (the multi-device / interject story). If no turn is

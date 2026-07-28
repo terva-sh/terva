@@ -79,6 +79,7 @@ import { AuthStepForm } from './features/providers/AuthStepForm'
 import { SessionInfo as SessionInfoView } from './features/sessions/SessionInfo'
 import { SessionPicker } from './features/sessions/SessionPicker'
 import type { ImageAttachment } from './platform/conversation/images'
+import { uploadFile, type FileAttachment } from './features/conversation/attachments'
 import {
   applyEvent,
   mergeSnapshot,
@@ -269,6 +270,15 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // Whether the daemon serves the Stage app (--web-stage). When set, the topbar
   // shows a link across to /stage/; the panel is otherwise unaware of Stage.
   const [stageEnabled, setStageEnabled] = useState(false)
+  // Whether this carrier can stage file attachments (ctrlproto "attachments"),
+  // and the per-file ceiling it advertised. 0 = it did not say, so let the
+  // daemon be the judge rather than inventing a bound client-side.
+  const [canAttachFiles, setCanAttachFiles] = useState(false)
+  const [maxAttachmentBytes, setMaxAttachmentBytes] = useState(0)
+  // ...and whether it serves the files an agent shared BACK (ctrlproto
+  // "shared-files"). The record reaches every client either way; this is
+  // whether there is a link behind it, or only a label.
+  const [canDownloadShares, setCanDownloadShares] = useState(false)
   // The daemon's workspace file listing for the composer's @-stage, fetched
   // lazily on first "@" and refreshed by TTL (the tree moves as the agent
   // works). null = feature absent or nothing fetched yet.
@@ -1007,6 +1017,12 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       setCanRestart(!!hello?.features?.includes('restart'))
       setStageEnabled(!!hello?.features?.includes('stage'))
       canListFiles.current = !!hello?.features?.includes('files-list')
+      // Whether this carrier has an upload route at all, and what it will take.
+      // Gating the composer on it keeps a drop target from appearing where a
+      // drop would go nowhere (a native client over a unix socket).
+      setCanAttachFiles(!!hello?.features?.includes('attachments'))
+      setMaxAttachmentBytes(hello?.max_attachment_bytes ?? 0)
+      setCanDownloadShares(!!hello?.features?.includes('shared-files'))
       // Subscribe to the workspace itself, once per connection. It is not a
       // session: it does not change when the focused session does, and it must
       // stay subscribed even when no session is focused at all — which is the
@@ -1121,6 +1137,30 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     return () => clearInterval(id)
   }, [viewMode, status, refreshSessions, fetchBoardTasks, clearBoardSubs])
 
+  // The same re-list for the DRAWER, which groups its rows by busy/idle/cold and
+  // so needs those flags to be true while it is open.
+  //
+  // Deliberately its own effect rather than a widened gate on the board's: that
+  // one also owns clearBoardSubs() and fetchBoardTasks(), and opening the drawer
+  // in focus mode must not touch either. In focus mode the board effect returns
+  // immediately, so without this nothing re-lists at a turn boundary — a session
+  // that started working while you were reading would sit in COLD until some
+  // unrelated sessions_changed happened to fire.
+  //
+  // sessions.list is a disk scan plus a live overlay and never materializes a
+  // cold session (ctrlproto SessionInfo.Live), so polling it cannot wake
+  // anything up. Gated on the socket being OPEN and not on `drawer` alone — a
+  // send on a still-connecting socket rejects, and the drawer would then hold
+  // whatever the list said before it opened.
+  useEffect(() => {
+    if (!drawer || status !== 'open') return
+    if (clientRef.current) refreshSessions(clientRef.current)
+    const id = setInterval(() => {
+      if (clientRef.current) refreshSessions(clientRef.current)
+    }, 4000)
+    return () => clearInterval(id)
+  }, [drawer, status, refreshSessions])
+
   // The workflow lane on its own, slower cadence, and only while something could
   // still be moving.
   //
@@ -1176,17 +1216,19 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     )
   }, [])
 
-  // sendPrompt dispatches a turn, optionally with pasted image attachments.
-  // Returns true when it consumed the input (so the composer can clear). Images
-  // ride only the prompt path — the queue verb is text-only server-side — so a
-  // send with images while busy is refused rather than silently dropping them.
-  const sendPrompt = useCallback((text: string, images?: ImageAttachment[]): boolean => {
+  // sendPrompt dispatches a turn, optionally with pasted images and staged file
+  // attachments. Returns true when it consumed the input (so the composer can
+  // clear). Both kinds of attachment ride only the prompt path — the queue verb
+  // is text-only server-side — so a send carrying either while busy is refused
+  // rather than silently dropping them on the floor.
+  const sendPrompt = useCallback((text: string, images?: ImageAttachment[], attachments?: FileAttachment[]): boolean => {
     const c = clientRef.current
     const hasImages = !!images && images.length > 0
-    if (!c || !curRef.current || (!text.trim() && !hasImages)) return false
+    const hasFiles = !!attachments && attachments.length > 0
+    if (!c || !curRef.current || (!text.trim() && !hasImages && !hasFiles)) return false
     if (busyRef.current) {
-      if (hasImages) {
-        setToast(t('Finish the current turn before attaching images (the queue is text-only).'))
+      if (hasImages || hasFiles) {
+        setToast(t('Finish the current turn before attaching files (the queue is text-only).'))
         return false
       }
       setQueued((q) => [...q, text])
@@ -1194,10 +1236,20 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       return true
     }
     setBusy(true)
-    const wireImages = hasImages ? images!.map((im) => ({ mime_type: im.mime, data: im.data })) : undefined
-    c.fire('prompt', wireImages ? { text, images: wireImages } : { text }, curRef.current)
+    const params: { text: string; images?: unknown[]; attachments?: { id: string }[] } = { text }
+    if (hasImages) params.images = images!.map((im) => ({ mime_type: im.mime, data: im.data }))
+    // Only the id: the daemon resolves name, type, and size from what it
+    // actually wrote, so nothing the client believes about the file is trusted.
+    if (hasFiles) params.attachments = attachments!.map((f) => ({ id: f.id }))
+    c.fire('prompt', params, curRef.current)
     return true
   }, [])
+
+  // stageFile uploads to the session the composer is currently on. The concrete
+  // id, never the empty "current session" shorthand: staging is keyed by session
+  // directory, and a prompt frame's blank sess resolves daemon-side to something
+  // the upload would not have matched.
+  const stageFile = useCallback((f: File) => uploadFile(f, curRef.current), [])
 
   const decide = useCallback((callID: string, d: Decision) => {
     clientRef.current?.fire('approve', { call_id: callID, decision: d }, curRef.current)
@@ -1600,10 +1652,11 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // intercepted and run; anything else (including a message that merely starts
   // with "/") is sent as a normal prompt. Returns true when the input was
   // consumed so the composer clears its text + attachments. Slash commands are
-  // only recognized when no image is attached (an image send is always a prompt).
-  const onSubmit = (text: string, images?: ImageAttachment[]): boolean => {
+  // only recognized when nothing is attached (a send carrying an image or a
+  // staged file is always a prompt — a slash command would discard it).
+  const onSubmit = (text: string, images?: ImageAttachment[], attachments?: FileAttachment[]): boolean => {
     const trimmed = text.trim()
-    if (trimmed.startsWith('/') && !(images && images.length)) {
+    if (trimmed.startsWith('/') && !(images && images.length) && !(attachments && attachments.length)) {
       const sp = trimmed.indexOf(' ')
       const head = (sp === -1 ? trimmed.slice(1) : trimmed.slice(1, sp)).toLowerCase()
       const cmd = slashCommands.find((c) => c.name === head)
@@ -1612,7 +1665,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         return true
       }
     }
-    return sendPrompt(text, images)
+    return sendPrompt(text, images, attachments)
   }
 
   // A usage snapshot belongs to the session that produced it. Clear it when the
@@ -1937,6 +1990,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         <SessionPicker
           sessions={shownSessions}
           current={curSess}
+          liveBusy={liveBusy}
           onSelect={selectSession}
           onNew={() => newSession()}
           // Only offer "back to landing" when there is a focused session to
@@ -2050,6 +2104,8 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
                 earlier={win.base}
                 onLoadEarlier={loadEarlier}
                 loadingEarlier={loadingEarlier}
+                sess={curSess}
+                canDownload={canDownloadShares}
               />
 
               {permission && <PermissionRequestView request={permission} onDecide={decide} />}
@@ -2064,6 +2120,16 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
                 files={fileList}
                 onFilesNeeded={() => void requestFiles()}
                 onCancel={() => clientRef.current?.fire('cancel', null, curRef.current)}
+                onUpload={stageFile}
+                canAttachFiles={canAttachFiles}
+                maxAttachmentBytes={maxAttachmentBytes}
+                // Not for sending — stageFile closes over the session itself.
+                // The composer needs it to know when the session CHANGED, so
+                // ids staged into the one you left do not ride a prompt here.
+                // This element keeps its identity across a session switch (no
+                // key, and both branches of the view-mode ternary render it),
+                // so nothing else would clear them.
+                sessionID={curSess}
               />
             </>
           )}

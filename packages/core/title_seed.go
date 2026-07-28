@@ -100,9 +100,21 @@ func snapForward(runes []rune, pos int) int {
 // messageText concatenates a message's text blocks. Tool calls, tool
 // results, and reasoning blocks are skipped everywhere in the seed: they are
 // high-volume and near-zero-signal for a title.
+//
+// So is a host preamble. A message carrying attachments leads with a block
+// naming their absolute staging paths, and seeding a session title off that
+// yields a title made of a $TERVA_HOME path instead of the question the user
+// asked. MetaPreamble marks that block — set by the prompt path that prepends
+// it, so it is there whether or not any attachment survived to be listed.
 func messageText(m provider.Message) string {
 	var b strings.Builder
-	for _, c := range m.Content {
+	content := m.Content
+	if m.Meta[MetaPreamble] == "true" && len(content) > 0 {
+		if _, ok := content[0].(provider.TextBlock); ok {
+			content = content[1:]
+		}
+	}
+	for _, c := range content {
 		if tb, ok := c.(provider.TextBlock); ok && tb.Text != "" {
 			if b.Len() > 0 {
 				b.WriteString("\n")

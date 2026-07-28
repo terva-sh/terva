@@ -286,6 +286,14 @@ func (a *Agent) CanCompact(keepTail int) bool {
 // Compaction progress is reported through sink as EvCompactStart /
 // EvCompactEnd so streaming consumers can surface it.
 func (a *Agent) PromptWithPolicy(ctx context.Context, prompt string, images []provider.ImageBlock, sink func(AgentEvent)) error {
+	return a.PromptWithPolicyExtra(ctx, prompt, images, UserMessageExtras{}, sink)
+}
+
+// PromptWithPolicyExtra is PromptWithPolicy carrying a host-assembled preamble
+// and message metadata (see [UserMessageExtras]). PromptWithPolicy is this with
+// a zero value — one implementation, so the compaction and 413-retry policy
+// cannot drift between the two entry points.
+func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images []provider.ImageBlock, extras UserMessageExtras, sink func(AgentEvent)) error {
 	// A nil sink is legal — the Workspace/web carrier passes nil and relies on
 	// the agent's OnEvent fan-out (via EmitLifecycle below). Prompt normalizes
 	// its own nil sink, but the compact closure calls sink directly, so without
@@ -321,13 +329,16 @@ func (a *Agent) PromptWithPolicy(ctx context.Context, prompt string, images []pr
 			return fmt.Errorf("auto-compact before prompt: %w", err)
 		}
 	}
-	err := a.Prompt(ctx, prompt, images, sink)
+	// Both attempts carry the extras: a retry that dropped the preamble would
+	// re-send the turn without the attachment manifest, and the model would be
+	// asked about files it had just been told about and now could not see.
+	err := a.PromptExtra(ctx, prompt, images, extras, sink)
 	if err != nil && ctx.Err() == nil && (IsPayloadTooLargeError(err) || IsContextLengthError(err)) &&
 		a.autoCompactMode() != AutoCompactOff {
 		if cerr := compact("request too large; retrying"); cerr != nil {
 			return err
 		}
-		return a.Prompt(ctx, prompt, images, sink)
+		return a.PromptExtra(ctx, prompt, images, extras, sink)
 	}
 	return err
 }

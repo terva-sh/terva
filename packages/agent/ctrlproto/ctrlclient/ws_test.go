@@ -73,7 +73,7 @@ func TestWebSocketRoundTripAndReconnect(t *testing.T) {
 	if hello, ok := client.ServerHello(); !ok || hello.Version != "1.2.3" {
 		t.Fatalf("server hello = %+v ok=%v", hello, ok)
 	}
-	if err := client.Service().Prompt(context.Background(), "s1", "over-ws", nil); err != nil {
+	if err := client.Service().Prompt(context.Background(), "s1", ctrlproto.PromptParams{Text: "over-ws"}); err != nil {
 		t.Fatalf("Prompt over ws: %v", err)
 	}
 
@@ -86,7 +86,7 @@ func TestWebSocketRoundTripAndReconnect(t *testing.T) {
 		defer cmu.Unlock()
 		return connects >= 2 && client.Connected()
 	})
-	if err := client.Service().Prompt(context.Background(), "s1", "after-reconnect", nil); err != nil {
+	if err := client.Service().Prompt(context.Background(), "s1", ctrlproto.PromptParams{Text: "after-reconnect"}); err != nil {
 		t.Fatalf("Prompt after reconnect: %v", err)
 	}
 	svc.mu.Lock()

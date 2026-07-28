@@ -101,7 +101,7 @@ func (s *wsSession) speak(actor string) error {
 		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("no cast member %q", actor))
 	}
 	directive := directionDirective(fmt.Sprintf("Bring %s into the scene now — let them speak to this moment.", actor))
-	return s.promptBlocks(directive, nil)
+	return s.promptBlocks(directive, nil, core.UserMessageExtras{})
 }
 
 // castSession resolves sess and gates cast edits: a cast is a --play concept, and
