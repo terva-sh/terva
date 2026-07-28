@@ -16,6 +16,7 @@ package modes
 import (
 	"context"
 	"strings"
+
 	"terva.sh/terva/packages/agent/config"
 
 	"terva.sh/terva/packages/agent/slash"
@@ -497,11 +498,12 @@ func (i *Interactive) slashTrust(_ context.Context, parts []string, _ string) bo
 	cwd := i.cfg.CWD
 	i.mu.Unlock()
 
-	// Let the extension manager search the now-trusted project dir on its
-	// next (re)discovery, so /reload-ext picks up project extensions.
-	if i.cfg.Extensions != nil {
-		i.cfg.Extensions.SetProjectTrusted(true)
-	}
+	// No extension-gate flip here. It used to set the project-trust flag on the
+	// TUI's own extension host, from when the TUI OWNED a manager; the carrier
+	// resolves to the daemon session's manager, which TrustWorkspace above has
+	// already flipped AND reloaded. Setting it again afterwards changed nothing
+	// and read as a second, partial apply of an event that belongs in one place
+	// (build.ApplyTrust).
 
 	// The host did the whole job (the ctrlproto carriers reload extensions,
 	// rebuild tools and re-render the prompt across every open session). Say so
@@ -538,9 +540,8 @@ func (i *Interactive) slashUntrust(_ context.Context, _ []string, _ string) bool
 	i.cfg.Trusted = false
 	cwd := i.cfg.CWD
 	i.mu.Unlock()
-	if i.cfg.Extensions != nil {
-		i.cfg.Extensions.SetProjectTrusted(false)
-	}
+	// See slashTrust: the carrier's manager is the daemon's, already flipped and
+	// reloaded by UntrustWorkspace above.
 	if i.cfg.TrustAppliesLive {
 		// The ctrlproto carriers tear the project content back down on the spot,
 		// so unlike the note below this is not a next-launch promise.

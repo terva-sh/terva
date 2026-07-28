@@ -47,10 +47,12 @@ import (
 //     /trust, /untrust — trust (or untrust) the session's workspace from inside
 //     the editor — the only in-editor way to trust a workspace over ACP. /trust
 //     persists the cwd's trust verdict (/trust parent trusts descendants too)
-//     and reloads the extension manager so project extensions go live now;
-//     project skills/context are baked into the prompt at build time, so they
-//     apply on a NEW session. /untrust is the inverse. Both re-advertise the
-//     command catalog (the reload may change the extension command set).
+//     and applies it live: project extensions reload, trust-gated project hooks
+//     start (or stop) running, and the model's tool set is rebuilt so what the
+//     flip admitted is reachable. Project skills/context are baked into the
+//     prompt at build time, so that half applies on a NEW session. /untrust is
+//     the inverse. Both re-advertise the command catalog (the reload may change
+//     the extension command set).
 //   - EXCLUDED (TUI-only pickers / dialogs the ACP frontend can't drive, or
 //     verbs already covered by an ACP-native mechanism): /model and
 //     /sessions in particular — the editor already has the model *config
@@ -678,12 +680,13 @@ func runReloadExtCommand(ctx context.Context, sess *session, _ string) string {
 // (until this, ACP only restricted + logged a warning). The optional argument
 // "parent" trusts the whole tree under the cwd (so every repo beneath it is
 // trusted), mirroring the TUI's `/trust parent`. The host's trustWorkspace
-// closure persists the verdict and makes project content go live for this
-// session by reloading the extension manager — so project extensions are
-// discovered now. Project skills and context, however, are baked into the
-// session's system prompt at build time and can't be re-injected mid-session,
-// so the confirmation says they take effect on a NEW session. Because the reload
-// may have added extension commands, we re-advertise the catalog afterwards (the
+// closure persists the verdict and then applies it live for this session: the
+// project's extensions reload, its trust-gated hooks start running on the next
+// tool call, and the model's tool set is rebuilt so what the flip admitted is
+// actually reachable. Project skills and context are baked into the session's
+// system prompt at build time and can't be re-injected mid-session, so the
+// confirmation says that half lands on a NEW session. Because the reload may
+// have added extension commands, we re-advertise the catalog afterwards (the
 // same lockstep /reload-ext keeps). No model call; resolves end_turn. With no
 // trustWorkspace closure (host didn't wire it) it degrades to a clear note.
 func runTrustCommand(_ context.Context, sess *session, arg string) string {
@@ -702,7 +705,7 @@ func runTrustCommand(_ context.Context, sess *session, arg string) string {
 	if parent {
 		scope = "this directory and its descendants"
 	}
-	sess.chunk("Trusted " + scope + "; project extensions reloaded — skills and context apply to new sessions.")
+	sess.chunk("Trusted " + scope + "; its project extensions and hooks are live now — skills and context land in the system prompt on a new session.")
 	// Re-advertise the command catalog: the reload may have brought project
 	// extensions (and their commands) online, and the editor only learns commands
 	// from available_commands_update.
@@ -712,10 +715,12 @@ func runTrustCommand(_ context.Context, sess *session, arg string) string {
 
 // runUntrustCommand executes /untrust natively: the symmetric inverse of
 // /trust. The host's untrustWorkspace closure drops the session cwd from the
-// trust store and reloads the extension manager with trust withdrawn, so project
-// extensions are torn down this session; project skills/context (prompt-baked)
-// stay until a new session. Re-advertises the catalog afterwards. No model call;
-// resolves end_turn. With no untrustWorkspace closure it degrades to a note.
+// trust store and applies the withdrawal live, so the project's extensions are
+// torn down and its hooks stop running THIS session — the direction that matters
+// most, since a hook is a program the repo runs on every tool call. Project
+// skills/context (prompt-baked) stay until a new session. Re-advertises the
+// catalog afterwards. No model call; resolves end_turn. With no
+// untrustWorkspace closure it degrades to a note.
 func runUntrustCommand(_ context.Context, sess *session, _ string) string {
 	if sess.untrustWorkspace == nil {
 		sess.chunk("Workspace trust isn't available over ACP in this build; nothing to untrust.")
@@ -725,7 +730,7 @@ func runUntrustCommand(_ context.Context, sess *session, _ string) string {
 		sess.chunk("untrust: " + err.Error())
 		return StopEndTurn
 	}
-	sess.chunk("Untrusted this directory; project extensions unloaded — skills and context stop on new sessions.")
+	sess.chunk("Untrusted this directory; its project extensions and hooks stopped — skills and context clear from the system prompt on a new session.")
 	// Re-advertise the command catalog: dropping the project extensions removes
 	// their commands, and the editor only learns the change from
 	// available_commands_update.

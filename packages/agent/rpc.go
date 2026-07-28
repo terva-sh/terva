@@ -15,6 +15,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/lineframe"
@@ -48,13 +49,13 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// core.ConfirmGate.Check). headlessConfirmGate also prints the
 	// one-line stderr note. nil when yolo is on (gate.Check on a nil
 	// *core.ConfirmGate always allows).
-	confirmGate, roSet := build.HeadlessConfirmGate(args, "rpc")
+	confirmGate, roSet := permissions.HeadlessConfirmGate(args.PermInputs())
 	r, err := build.Resolve(args, true)
 	if err != nil {
 		return err
 	}
-	build.WarnRestrictedWorkspace(args, r.Trusted)
-	build.WarnPersistentlyUnjailed(args)
+	permissions.WarnRestrictedWorkspace(args.CWD, r.Trusted)
+	permissions.WarnPersistentlyUnjailed(args.PermInputs())
 	r.AdoptReadOnlySet(roSet)
 
 	// Extensions: same lifecycle as interactive mode, minus the
@@ -78,7 +79,9 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	extMgr.StartAsync(startCtx, args.Exts, !args.NoExt, 3*time.Second, func(err error) {
 		fmt.Fprintln(os.Stderr, "extension load:", err)
 	})
-	_, stopMCP := build.SetupMCP(ctx, args, &r)
+	// The adapter comes back so the rebuild below can re-merge these servers'
+	// tools; a fresh Resolve carries none of them.
+	mcpAdapter, stopMCP := build.SetupMCP(ctx, args, &r)
 	defer stopMCP()
 
 	ag := r.NewAgent()
@@ -121,25 +124,31 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// `reload_ext` if/when added). Rebuilds the tool registry on the
 	// current agent so freshly-registered extension tools become
 	// callable without restarting the rpc process.
-	adapter := &build.ExtToolAdapter{Mgr: extMgr}
-	mergeExtTools := func() {
-		resolved, err := build.Resolve(args, true)
-		if err != nil {
-			return
-		}
-		// Merge into the LIVE gate's read-only set: MergeToolsForMode records
-		// each read_only tool's name in whichever set the Resolved carries, and
-		// a fresh Resolve carries a fresh one — without this the gate stops
-		// auto-allowing an extension's read-only tools after a rebuild.
-		resolved.AdoptReadOnlySet(roSet)
-		// Same survivor rule for the task board: the ephemeral card and the
-		// open-work gate above are bound to r.Tasks, and this resolve carries a
-		// fresh controller over an unbound store. Adopting it would leave the
-		// model writing tasks it can no longer see, and the durable board frozen.
-		resolved.UseTasks(r.Tasks)
-		resolved.MergeExtensionTools(adapter)
-		ag.SetTools(resolved.ToolRegistry)
+	//
+	// The survivor rule lives in build.LiveToolSet, shared with the acp host —
+	// it is the thing that has to put the read-only set, the task board, the
+	// sandbox and BOTH tool sources back onto a fresh Resolve. rpc used to
+	// spell it out here and was missing the MCP re-merge, so an rpc worker with
+	// any extension installed lost every editor/config MCP tool the moment the
+	// background extension start finished, before its first turn.
+	//
+	// TrustPin is what makes rpc's stated posture — fixed for the process's
+	// lifetime, since there is no trust verb on this wire — actually hold. The
+	// extension manager and the hook engine above were seeded with r.Trusted;
+	// pinning the rebuild to the same verdict stops a `terva trust` elsewhere
+	// from giving the model a trusted repo's project skills inside a process
+	// whose extensions and hooks are still gated as untrusted.
+	rebuildArgs := args
+	rebuildArgs.TrustPin = &r.Trusted
+	liveTools := build.LiveToolSet{
+		Args:     rebuildArgs,
+		ReadOnly: roSet,
+		Tasks:    r.Tasks,
+		Sandbox:  r.Sandbox,
+		Ext:      extMgr,
+		MCP:      mcpAdapter,
 	}
+	mergeExtTools := func() { liveTools.Rebuild(ag) }
 	extMgr.SetOnReload(mergeExtTools)
 
 	// Session persistence & resume. rpc mode is stateless by default — its

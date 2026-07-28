@@ -18,6 +18,7 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/mcp"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
@@ -80,7 +81,7 @@ type acpFactory struct {
 // persistence hooks wired (§3). The ACP sessionId becomes the session's file
 // path, so a later session/load reopens exactly this transcript.
 func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (acp.SessionAgent, error) {
-	r, ag, gate, cleanup, observe, extMgr, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
+	r, ag, gate, cleanup, observe, extMgr, applyTrust, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
 	if err != nil {
 		return acp.SessionAgent{}, err
 	}
@@ -104,8 +105,8 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 		InvokeExtCommand: acpInvokeExtCommand(extMgr),
 		ExtContext:       acpExtContext(extMgr),
 		ReloadExtensions: acpReloadExtensions(extMgr),
-		TrustWorkspace:   acpTrustWorkspace(ctx, r.CWD, extMgr),
-		UntrustWorkspace: acpUntrustWorkspace(ctx, r.CWD, extMgr),
+		TrustWorkspace:   acpTrustWorkspace(ctx, r.CWD, applyTrust),
+		UntrustWorkspace: acpUntrustWorkspace(ctx, r.CWD, applyTrust),
 	}, nil
 }
 
@@ -128,7 +129,7 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 	if cwd == "" {
 		cwd = sess.Meta.CWD
 	}
-	r, ag, gate, cleanup, observe, extMgr, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
+	r, ag, gate, cleanup, observe, extMgr, applyTrust, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
 	if err != nil {
 		_ = sess.Close()
 		return acp.SessionAgent{}, nil, err
@@ -157,8 +158,8 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 		InvokeExtCommand: acpInvokeExtCommand(extMgr),
 		ExtContext:       acpExtContext(extMgr),
 		ReloadExtensions: acpReloadExtensions(extMgr),
-		TrustWorkspace:   acpTrustWorkspace(ctx, r.CWD, extMgr),
-		UntrustWorkspace: acpUntrustWorkspace(ctx, r.CWD, extMgr),
+		TrustWorkspace:   acpTrustWorkspace(ctx, r.CWD, applyTrust),
+		UntrustWorkspace: acpUntrustWorkspace(ctx, r.CWD, applyTrust),
 	}, msgs, nil
 }
 
@@ -316,7 +317,12 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 // servers. A TRUSTED project's .terva/config.json MCP — a source the editor does
 // NOT manage — IS merged (trust-gated, editor wins on a collision); see
 // setupACPMCP.
-func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (build.Resolved, *core.Agent, *core.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, error) {
+//
+// The applyTrust func it returns is the live half of /trust and /untrust: the
+// ACP twin of Workspace.applyTrust, closed over the pieces a flip has to move
+// (hook engine, extension manager, tool set). It is what makes ACP a live-trust
+// host rather than one whose verdict is fixed at launch.
+func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (build.Resolved, *core.Agent, *core.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, func(context.Context, bool), error) {
 	// Each session resolves with its own cwd so tools, system prompt, and
 	// session dir bind to the editor-provided working directory.
 	args := f.args
@@ -338,7 +344,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// reaches the gate here regardless of whether the manager has finished
 	// spawning. Merging the extension TOOLS below is what makes those rules
 	// reachable (the model can now call the tool).
-	pol, polWarns := build.BuildPermissionPolicy(args)
+	pol, polWarns := permissions.BuildPolicy(args.PermInputs())
 	for _, w := range polWarns {
 		fmt.Fprintf(os.Stderr, "note: %s\n", w)
 	}
@@ -358,13 +364,13 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 
 	r, err := build.Resolve(args, true)
 	if err != nil {
-		return build.Resolved{}, nil, nil, nil, nil, nil, err
+		return build.Resolved{}, nil, nil, nil, nil, nil, nil, err
 	}
 	// ACP untrusted = restricted for now (Phase 4 — an editor
 	// session/request_permission trust prompt — is deferred). Log a
 	// warning naming how to enable; --trust still works over the wire.
-	build.WarnRestrictedWorkspace(args, r.Trusted)
-	build.WarnPersistentlyUnjailed(args)
+	permissions.WarnRestrictedWorkspace(args.CWD, r.Trusted)
+	permissions.WarnPersistentlyUnjailed(args.PermInputs())
 	r.AdoptReadOnlySet(roSet)
 
 	// Wire this session's extensions (tools + read-only classification) BEFORE
@@ -378,8 +384,10 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	extMgr, stopExt := f.setupACPExtensions(ctx, args, &r)
 	// Wire the editor-provided MCP servers AFTER extensions so their tools are
 	// in the registry the agent receives (mirrors setupMCP's order in the
-	// headless modes). stopMCP is never nil. Honors --no-mcp.
-	stopMCP := f.setupACPMCP(ctx, args, &r, mcpServers)
+	// headless modes). stopMCP is never nil. Honors --no-mcp. The adapter comes
+	// back so a later tool-set rebuild can re-merge these servers' tools — a
+	// fresh Resolve carries none of them.
+	mcpAdapter, stopMCP := f.setupACPMCP(ctx, args, &r, mcpServers)
 	// One cleanup func stops BOTH subprocess sets (extensions + MCP). The acp
 	// package calls it on session close, rebind, and disconnect, so neither
 	// leaks. Extensions stop first (they may hold context the MCP teardown
@@ -391,7 +399,14 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	}
 
 	ag := r.NewAgent()
-	hookEng := build.BuildHookEngine(args, r.Trusted)
+	// ACP is NOT a fixed-trust host: /trust and /untrust flip Workspace Trust
+	// over the wire, mid-session. The live-trust engine is what makes that
+	// reachable — it keeps a standing engine for an untrusted project whose
+	// hooks are on disk, so acpApplyTrust has somewhere to put the specs.
+	// BuildHookEngine (which this used to call) returns nil in exactly that
+	// case, and a newly trusted repo's pre/post-tool hooks stayed inert until
+	// the editor opened a new session.
+	hookEng := build.BuildLiveTrustHookEngine(args, r.Trusted)
 	// Canonical tool-call ladder (pre-hooks, confirm gate, extension
 	// intercept). Passing extMgr in activates BOTH the extension tool-call
 	// intercept AND — through the confirm gate built above — the manifest
@@ -457,7 +472,51 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 			build.ObserveAgentEventForHooks(hookEng, ev)
 		}
 	}
-	return r, ag, confirmGate, cleanup, observe, extMgr, nil
+
+	// The tool set the model sees, rebuilt from a fresh Resolve — the survivor
+	// rule lives in build.LiveToolSet, shared with rpc. Note the ABSENT
+	// TrustPin: unlike rpc, ACP can flip Workspace Trust mid-session, and the
+	// trust verb persists the verdict before applying it, so re-reading the
+	// store is how the rebuild learns what /trust just decided.
+	liveTools := build.LiveToolSet{
+		Args:     args,
+		ReadOnly: roSet,
+		Tasks:    r.Tasks,
+		Sandbox:  r.Sandbox,
+		Ext:      extMgr,
+		MCP:      mcpAdapter,
+	}
+	rebuildTools := func() { liveTools.Rebuild(ag) }
+	// An extension reload has to reach the model, or a freshly discovered
+	// extension's tools are running subprocesses nothing can call. This covers
+	// /reload-ext as well as the reload a trust flip triggers.
+	if extMgr != nil {
+		extMgr.SetOnReload(rebuildTools)
+	}
+	// The live half of /trust and /untrust. Every surface a flip has to reach is
+	// named in the literal, and the order they move in belongs to ApplyTrust —
+	// shared with the daemon, so the two hosts cannot disagree about whether a
+	// withdrawal stops the repo's programs before or after it stops showing the
+	// repo to the model.
+	//
+	// Project skills and context files are baked into the system prompt at
+	// resolve time and still land on a NEW session — the same deliberate limit
+	// the interactive and daemon paths have, and what the /trust confirmation
+	// says. (The skill TOOL returns on the rebuild, and keyed lore on the Lore
+	// re-derivation; only the prompt-baked halves wait.)
+	applyTrust := func(tctx context.Context, trusted bool) {
+		build.ApplyTrust(tctx, trusted, build.TrustSurfaces{
+			Args:    args,
+			Hooks:   hookEng,
+			Ext:     extMgr,
+			Grace:   acpReloadGrace,
+			Rebuild: rebuildTools,
+			Lore:    func() { build.RewireLoreContext(ag, args) },
+			// After: the acp session has no client to broadcast to — the
+			// command's own confirmation chunk is the notification.
+		})
+	}
+	return r, ag, confirmGate, cleanup, observe, extMgr, applyTrust, nil
 }
 
 // acpExtCommands builds the SessionAgent.ExtCommands snapshot from a session's
@@ -605,45 +664,42 @@ func acpReloadExtensions(extMgr *extensions.Manager) func(context.Context) acp.R
 
 // acpTrustWorkspace builds the SessionAgent.TrustWorkspace closure: it persists
 // cwd's Workspace Trust verdict (TrustPath, parent marking "trust descendants
-// too") and then makes the now-trusted project content go live for the session
-// by flipping the extension manager to trusted and reloading it — so project
-// extensions are discovered immediately, mirroring what the interactive /trust
-// does via the /cd rebuild + /reload-ext. Project skills/context are baked into
-// the system prompt at build time and can't be re-injected mid-session, so they
-// take effect on a new session (the ACP command's confirmation says so). The
-// extension reload reuses the same acpReloadGrace /reload-ext uses. Returns nil
-// when there is no extension manager so /trust degrades to a note (the trust
-// store would still be writable, but with nothing to load live there is no ACP
-// affordance to honor here — the host always wires a manager in production).
-func acpTrustWorkspace(ctx context.Context, cwd string, extMgr *extensions.Manager) func(parent bool) error {
-	if extMgr == nil {
+// too") and then hands off to acpApplyTrust, which makes the now-trusted
+// project content go live for this session — hooks, extensions, and the tool
+// set the model sees. Project skills/context are baked into the system prompt at
+// build time and can't be re-injected mid-session, so they take effect on a new
+// session (the ACP command's confirmation says so).
+//
+// The persist and the apply are split on purpose: persisting is what /trust
+// MEANS, applying is what makes it true for the session already open. Doing only
+// the first is what left ACP holding a launch snapshot.
+func acpTrustWorkspace(ctx context.Context, cwd string, apply func(context.Context, bool)) func(parent bool) error {
+	if apply == nil {
 		return nil
 	}
 	return func(parent bool) error {
 		if err := config.TrustPath(cwd, parent); err != nil {
 			return err
 		}
-		extMgr.SetProjectTrusted(true)
-		extMgr.Reload(ctx, acpReloadGrace)
+		apply(ctx, true)
 		return nil
 	}
 }
 
 // acpUntrustWorkspace builds the SessionAgent.UntrustWorkspace closure: the
 // symmetric inverse of acpTrustWorkspace. It drops cwd from the trust store
-// (UntrustPath), flips the extension manager back to untrusted, and reloads it
-// so the project extensions are torn down this session. Returns nil with no
-// extension manager so /untrust degrades to a note.
-func acpUntrustWorkspace(ctx context.Context, cwd string, extMgr *extensions.Manager) func() error {
-	if extMgr == nil {
+// (UntrustPath) and applies the withdrawal live, so the project's extensions
+// are torn down and its hooks stop running for this session rather than at the
+// next launch.
+func acpUntrustWorkspace(ctx context.Context, cwd string, apply func(context.Context, bool)) func() error {
+	if apply == nil {
 		return nil
 	}
 	return func() error {
 		if err := config.UntrustPath(cwd); err != nil {
 			return err
 		}
-		extMgr.SetProjectTrusted(false)
-		extMgr.Reload(ctx, acpReloadGrace)
+		apply(ctx, false)
 		return nil
 	}
 }
@@ -682,9 +738,9 @@ func renderPanelText(p *extproto.PanelSpec) string {
 func synthYoloPolicy() *core.PermissionPolicy {
 	return &core.PermissionPolicy{
 		Mode:      core.ApprovalYolo,
-		ReadOnly:  build.BuiltinReadOnlySet(),
-		EditTools: build.EditTools,
-		Builtin:   build.BuiltinTools,
+		ReadOnly:  permissions.BuiltinReadOnlySet(),
+		EditTools: permissions.EditToolSet(),
+		Builtin:   permissions.BuiltinSet(),
 	}
 }
 
@@ -703,10 +759,13 @@ func synthYoloPolicy() *core.PermissionPolicy {
 // session down. Per-server stderr goes to $TERVA_HOME/logs/mcp-<name>.log, like
 // the headless modes. Warnings surface to stderr: session/new|load runs before
 // the first turn, so there is no agent_message sink to route them to yet.
-func (f *acpFactory) setupACPMCP(ctx context.Context, args build.Args, r *build.Resolved, mcpServers json.RawMessage) func() {
+// It returns the tool adapter alongside the stop func so a later rebuild can
+// re-merge these servers' tools onto a fresh Resolve; nil when no server ran, in
+// which case there is nothing to re-merge.
+func (f *acpFactory) setupACPMCP(ctx context.Context, args build.Args, r *build.Resolved, mcpServers json.RawMessage) (*build.MCPToolAdapter, func()) {
 	noop := func() {}
 	if args.NoMCP {
-		return noop
+		return nil, noop
 	}
 	servers, warns := acp.ParseMCPServers(mcpServers)
 	for _, w := range warns {
@@ -740,7 +799,7 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args build.Args, r *build.
 		delete(cfg.Servers, name)
 	}
 	if len(cfg.Servers) == 0 {
-		return noop
+		return nil, noop
 	}
 
 	stderrFor := func(server string) io.Writer {
@@ -758,8 +817,9 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args build.Args, r *build.
 	for _, w := range mgr.Warnings() {
 		fmt.Fprintln(os.Stderr, "note:", w)
 	}
-	r.MergeExtensionTools(&build.MCPToolAdapter{Mgr: mgr})
-	return mgr.StopAll
+	adapter := &build.MCPToolAdapter{Mgr: mgr}
+	r.MergeExtensionTools(adapter)
+	return adapter, mgr.StopAll
 }
 
 // setupACPExtensions builds a per-session extensions.Manager, applies the
@@ -823,9 +883,7 @@ func (f *acpFactory) skillSnapshot(cwd string) func() []*skills.Skill {
 	}
 	// Resolve trust once for this cwd so the picker matches what was
 	// loaded for the model (project skills hidden while restricted).
-	trustArgs := f.args
-	trustArgs.CWD = cwd
-	trusted := build.ResolveTrustState(trustArgs).IsTrusted()
+	trusted := permissions.ResolveTrustState(cwd, f.args.Trust).IsTrusted()
 	return func() []*skills.Skill {
 		userHome, _ := os.UserHomeDir()
 		list, _ := skills.Discover(config.TervaHome(), cwd, userHome, f.args.WithSkills, trusted)

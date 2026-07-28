@@ -37,10 +37,13 @@ type ExtensionHost interface {
 	SendPanelClose(extName, panelID string) error
 	// Reload re-scans + respawns extensions (/reload-ext).
 	Reload(ctx context.Context, grace time.Duration) extensions.ReloadStats
-	// SetProjectTrusted flips the project-extension trust gate on a live /trust.
-	SetProjectTrusted(trusted bool)
+	// No SetProjectTrusted: the trust-gate flip belongs to whoever OWNS the
+	// manager, which under every surviving frontend is the daemon, applying it
+	// through build.ApplyTrust alongside the reload it has to pair with. A
+	// front end reaching in to set the flag afterwards was a second, partial
+	// apply of an event that has one home.
 }
 
 // *extensions.Manager is the legacy-path ExtensionHost (methods promoted from
-// its embedded *extdriver.Driver, plus Reload / SetProjectTrusted).
+// its embedded *extdriver.Driver, plus Reload).
 var _ ExtensionHost = (*extensions.Manager)(nil)

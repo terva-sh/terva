@@ -285,9 +285,8 @@ func (i *Interactive) applyLocalSettingEffect(key, value string) {
 		i.cfg.Trusted = on
 		cwd := i.cfg.CWD
 		i.mu.Unlock()
-		if i.cfg.Extensions != nil {
-			i.cfg.Extensions.SetProjectTrusted(on)
-		}
+		// No extension-gate flip: see slashTrust. The daemon owns the manager
+		// this TUI's carrier resolves to, and already flipped and reloaded it.
 		if on {
 			i.setStatusOK(i18n.T("trusted %s — its project extensions, skills, and context are loaded now", cwd))
 		} else {

@@ -2,19 +2,24 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"terva.sh/terva/packages/agent/attach"
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/hooks"
+	"terva.sh/terva/packages/agent/permissions"
+	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/agent/restartmarker"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/tools"
@@ -47,6 +52,18 @@ type Workspace struct {
 	provider string // default provider for new sessions
 	model    string // default model for new sessions
 	hookEng  *hooks.Engine
+
+	// attachments is the staging area for files a client uploaded. Held on the
+	// workspace so every session resolves ids through one store, and so the
+	// daemon owns the sweeper that reaps them (see NewWorkspace).
+	attachments *attach.Store
+
+	// shared is the same machinery pointed the other way: files the agent
+	// published FOR the user through share_file, which the web carrier serves
+	// as downloads. A second store rather than a second directory in the first,
+	// because the two retain for different lengths of time (attach.SharePolicy)
+	// and only one of them is a sandbox root.
+	shared *attach.Store
 
 	// sandbox is the workspace-shared filesystem sandbox (rooted at cwd).
 	// Every session's tools are re-pointed at it (buildSession / rebuildTools
@@ -177,8 +194,18 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 		credErr:  r.CredentialErr,
 		sandbox:  r.Sandbox, // shared across sessions; carries the initial jail lock
 		diag:     func(m string) { fmt.Fprintln(os.Stderr, m) },
+
+		attachments: attach.NewStore(),
+		shared:      attach.NewShareStore(),
 	}
 	w.trusted.Store(r.Trusted)
+	// Reap staged attachments: expired ones, and the oldest once the area is
+	// over its cap. The first pass runs now because a daemon killed mid-turn
+	// left files with nothing to clean them — startup is when that debt is paid.
+	w.attachments.StartSweeper(ctx)
+	// The outbound area gets its own sweeper because it gets its own policy: a
+	// shared file is the deliverable and outlives an upload sevenfold.
+	w.shared.StartSweeper(ctx)
 	// Sweep leaked empty sessions at boot: a Stage chat opened for preview defers
 	// its greeting (no message rows), so a daemon hard-killed before that draft's
 	// Close can leave a meta-only file behind. PruneEmptySessions removes any file
@@ -669,7 +696,7 @@ func (w *Workspace) createSeededLocked(opts ctrlproto.CreateOpts, seed *sceneSee
 	// CodeBadRequest rather than a CodeInternal from the deferred Resolve.
 	// Template is accepted on the wire but not yet applied (reserved).
 	if opts.Persona != "" {
-		if _, err := build.ResolvePersona(opts.Persona); err != nil {
+		if _, err := persona.Resolve(opts.Persona); err != nil {
 			return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown persona %q: %v", opts.Persona, err))
 		}
 	}
@@ -808,16 +835,83 @@ func (w *Workspace) createSeededLocked(opts ctrlproto.CreateOpts, seed *sceneSee
 // stays a complete record of the conversation. The bridge's own inbound messages
 // submit through wsSession.prompt instead, which is how a chat-originated prompt
 // avoids echoing itself back — the origin is the entry point, not a flag.
-func (w *Workspace) Prompt(ctx context.Context, sess, text string, images []ctrlproto.Image) error {
+func (w *Workspace) Prompt(ctx context.Context, sess string, p ctrlproto.PromptParams) error {
 	s, err := w.resolve(sess)
 	if err != nil {
 		return err
 	}
-	if err := s.prompt(text, images); err != nil {
+	if err := s.prompt(p.Text, p.Images, w.attachmentExtras(s.id, p)); err != nil {
 		return err
 	}
-	w.mirrorUserTyped(s.id, text)
+	// The chat mirror gets what the USER typed, not the manifest: the phone
+	// thread is a record of the conversation, and staged paths are host-local
+	// plumbing that means nothing on the other end.
+	w.mirrorUserTyped(s.id, p.Text)
 	return nil
+}
+
+// attachmentExtras turns the ids a client named into the two things a user turn
+// carries about its attachments: the PREAMBLE that tells the model where to read
+// them, and the METADATA that lets a client say what was attached.
+//
+// They are separate on purpose. The preamble is machine prose ending in an
+// absolute staging path — necessary for the model, and nine wrapped lines of
+// noise above the user's own words on a phone. Keeping it a distinct block lets
+// the panel render the metadata instead and drop the preamble; see
+// core.UserMessageExtras.
+//
+// Resolution is against the session's real id, and only ids the client staged
+// under that session resolve — an id alone can neither name a path nor reach
+// another session's files (see attach.Store.Resolve).
+//
+// Ids that no longer resolve do not fail the send. A staged file is allowed to
+// expire out from under the message that named it, and refusing the whole prompt
+// would turn a stale composer into a dead one; the preamble says how many went
+// missing instead.
+func (w *Workspace) attachmentExtras(sessID string, p ctrlproto.PromptParams) core.UserMessageExtras {
+	if len(p.Attachments) == 0 {
+		return core.UserMessageExtras{}
+	}
+	var refs []attach.Ref
+	missing := len(p.Attachments)
+	// A workspace assembled without a store (a test double, a carrier that never
+	// staged anything) has no way to resolve an id. Report them all as gone
+	// rather than dereferencing nothing — "the files expired" is already a state
+	// every caller downstream handles.
+	if w.attachments != nil {
+		ids := make([]string, 0, len(p.Attachments))
+		for _, a := range p.Attachments {
+			ids = append(ids, a.ID)
+		}
+		refs, missing = w.attachments.ResolveAll(sessID, ids)
+	}
+	extras := core.UserMessageExtras{
+		Preamble: attach.Manifest(refs, missing),
+		Meta:     map[string]string{},
+	}
+	// Only what resolved is DESCRIBED: a label for a file the daemon could not
+	// find would be a claim it cannot support.
+	if len(refs) > 0 {
+		described := make([]core.WireAttachment, 0, len(refs))
+		for _, r := range refs {
+			described = append(described, core.WireAttachment{
+				Name: r.Name, Kind: r.Kind, Mime: r.Mime, Size: r.Size,
+			})
+		}
+		if encoded, err := json.Marshal(described); err == nil {
+			extras.Meta[core.MetaAttachments] = string(encoded)
+		}
+	}
+	// What did NOT resolve is COUNTED. The model learns this from the preamble;
+	// the client needs its own copy, because the preamble is the block it drops.
+	// Without the count, a send whose files had all lapsed would reach the panel
+	// indistinguishable from a message that never carried any — the user asks
+	// about two attachments and sees a bare question with no hint of why the
+	// answer ignores them.
+	if missing > 0 {
+		extras.Meta[core.MetaAttachmentsMissing] = strconv.Itoa(missing)
+	}
+	return extras
 }
 
 func (w *Workspace) Queue(ctx context.Context, sess, text string) error {
@@ -1006,7 +1100,7 @@ func (w *Workspace) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, erro
 	}
 	// Trust is workspace-global (keyed on w.cwd), so every session in this list
 	// shares one verdict; a live session overrides with its own live flag below.
-	wsTrusted := build.ResolveTrustState(w.args).IsTrusted()
+	wsTrusted := permissions.ResolveTrustState(w.args.CWD, w.args.Trust).IsTrusted()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	out := make([]ctrlproto.SessionInfo, 0, len(summaries))
@@ -1580,16 +1674,22 @@ func (w *Workspace) Untrust(ctx context.Context) error {
 // injectExtraTools, and a tool that captured the old answer on the way past
 // would be wrong for the rest of the session.
 //
-// Project HOOKS are re-derived too, and were the last reader that was not.
-// They used to be merged into the hook engine at construction and reach a
-// session through a closure the agent holds for its lifetime, so a newly
-// trusted repo's pre/post-tool hooks stayed inert until the next launch. The
-// engine's SPECS are now swapped in place instead: the closure keeps pointing
-// at the same engine — no re-wiring of the tool-call ladder, no re-opened log
+// Then the workspace-SCOPED surface, which is the hook engine — one engine
+// behind every session, so it cannot travel in setTrusted with the rest. Its
+// SPECS are swapped in place rather than the engine replaced: the tool-call
+// ladder keeps pointing at the same object — no re-wiring, no re-opened log
 // file, no Close racing a hook that is mid-run — and the next tool call reads
 // the new chain.
+//
+// The hooks used to move LAST here, after the per-session loop, and that was an
+// ordering bug rather than a taste: a session's extension reload can take up to
+// webReloadGrace, and for that whole window an untrusted repo's pre-tool-use
+// hook was still in the chain for any tool call a running turn made. The rule
+// ApplyTrust encodes — on a withdrawal, stop what the repo RUNS before you stop
+// showing it — puts them first.
 func (w *Workspace) applyTrust(ctx context.Context, trusted bool) {
 	w.trusted.Store(trusted)
+	build.ApplyTrust(ctx, trusted, build.TrustSurfaces{Args: w.args, Hooks: w.hookEng})
 	w.mu.Lock()
 	sess := make([]*wsSession, 0, len(w.sessions))
 	for _, s := range w.sessions {
@@ -1604,7 +1704,6 @@ func (w *Workspace) applyTrust(ctx context.Context, trusted bool) {
 	// Those are restrictions the user just opted into by trusting the repo — its
 	// extensions are now spawning — so they have to land now, not next launch.
 	w.refreshAllPolicies()
-	w.hookEng.SetSpecs(build.HookSpecsFor(w.args, trusted))
 }
 
 func (w *Workspace) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {

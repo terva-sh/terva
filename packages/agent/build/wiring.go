@@ -522,17 +522,22 @@ func buildHookEngine(args Args, trusted, liveTrust bool) *hooks.Engine {
 }
 
 // BuildHookEngine builds the hook engine for a host whose trust verdict is
-// fixed for the process's lifetime (the one-shot CLI, rpc, acp, a swarm child).
+// fixed for the process's lifetime (the one-shot CLI, rpc, a swarm child).
 // nil means no hook can ever fire here.
+//
+// The test of "fixed" is whether the host has a way to CHANGE the verdict, not
+// whether it happens to be long-lived. acp was on this list and should not have
+// been: it carries /trust and /untrust on its wire, so a newly trusted repo's
+// hooks stayed inert until the editor opened a new session.
 func BuildHookEngine(args Args, trusted bool) *hooks.Engine {
 	return buildHookEngine(args, trusted, false)
 }
 
 // BuildLiveTrustHookEngine builds it for a host that can flip Workspace Trust
-// while running (the workspace daemon behind `terva web` and the TUI). It
-// differs in one way: it returns a standing engine when the project has hooks
-// on disk that trust would admit, so HookSpecsFor has somewhere to put them.
-// Pair it with HookSpecsFor on every trust change.
+// while running (the workspace daemon behind `terva web` and the TUI, and the
+// acp editor session). It differs in one way: it returns a standing engine when
+// the project has hooks on disk that trust would admit, so HookSpecsFor has
+// somewhere to put them. Pair it with HookSpecsFor on every trust change.
 func BuildLiveTrustHookEngine(args Args, trusted bool) *hooks.Engine {
 	return buildHookEngine(args, trusted, true)
 }

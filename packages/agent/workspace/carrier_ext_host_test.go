@@ -39,7 +39,6 @@ func TestCarrierExtHostNilSafe(t *testing.T) {
 			t.Errorf("host %d: SendPanelClose err = %v, want nil", i, err)
 		}
 		_ = c.Reload(context.Background(), 0) // must not panic
-		c.SetProjectTrusted(true)             // must not panic
 		if _, err := c.Invoke(context.Background(), "foo", "", time.Second); err == nil {
 			t.Errorf("host %d: Invoke with no session should error", i)
 		}

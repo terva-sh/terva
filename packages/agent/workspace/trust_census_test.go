@@ -31,9 +31,12 @@ import (
 // This is the STATIC half. It can tell that a read exists and that someone
 // classified it; it cannot tell whether a claimed live twin is real, because a
 // reader that captures the launch answer and one that re-resolves look the same
-// to a parser. workspace_trust_live_sweep_test.go is the behavioural half: it
-// flips trust on a live workspace and asserts what actually moves — including
-// project hooks, which were the last reader with no live twin at all.
+// to a parser. The behavioural halves live with their hosts:
+// workspace_trust_live_sweep_test.go flips trust on a live workspace and asserts
+// what actually moves, and ../acp_trust_live_test.go does the same for the ACP
+// session — the host that had a trust verb on its wire and no live twin behind
+// it, so /trust persisted the verdict and the open session went on running the
+// launch answer.
 //
 // Key format: "<dir>/<file>:<receiver>.Trusted" → occurrence count.
 type trustReads struct {
@@ -65,10 +68,11 @@ var trustCensus = map[string]trustReads{
 	"workspace.go:r.Trusted":         {2, "launch seed of the live atomic, plus the hook engine's seed — live since 2026-07-27: applyTrust re-merges the trust-gated project hooks and swaps the engine's SPECS in place (build.HookSpecsFor + Engine.SetSpecs), so the pointer is stable while the chain is current. Behaviourally covered by TestATrustFlipStartsAndStopsProjectHooks"},
 	"workspace_session.go:r.Trusted": {4, "session-build snapshots with live twins: setTrusted re-runs lore discovery and SetProjectTrusted; the cast re-derives on rebuild"},
 	"../build/wiring.go:r.Trusted":   {2, "the hook/MCP merge implementations are snapshot-by-construction; liveness is their CALLERS' contract, classified per host here"},
-	"../rpc.go:r.Trusted":            {3, "rpc has no trust verb at all — the posture is fixed for the process's lifetime by design"},
+	"../rpc.go:r.Trusted":            {4, "rpc has no trust verb at all — the posture is fixed for the process's lifetime by design, and since 2026-07-28 provably so: the extension-manager and hook-engine seeds, plus the TrustPin the tool rebuild resolves against, so the one path that re-runs Resolve cannot read a store that moved under it. Behaviourally covered by build's TestATrustPinOverridesTheStoreInBothDirections"},
 	"../cli.go:r.Trusted":            {6, "one-shot processes: launch is the lifetime"},
 	"../swarm_agent.go:r.Trusted":    {2, "one-shot child process: launch is the lifetime"},
-	"../acp_mode.go:r.Trusted":       {5, "launch snapshot with NO live twin: ACP's editor-MCP merge and hook engine do not re-run on a trust flip — the known gap after the /trust-immediacy work, next to rpc's"},
+	// --- live readers in another package ---
+	"../acp_mode.go:r.Trusted": {5, "live since 2026-07-28: ACP carries /trust and /untrust on the wire, and acpApplyTrust re-derives both halves on a flip — the hook engine's SPECS (BuildLiveTrustHookEngine + HookSpecsFor, the workspace's own mechanism) and the model's tool set (build.LiveToolSet). These are the launch SEEDS of state that is now re-resolved. Behaviourally covered by TestAnACPTrustFlipStartsAndStopsProjectHooks and TestAnACPTrustFlipPutsAProjectSkillInReachOfTheModel"},
 }
 
 func TestEveryTrustReadIsClassified(t *testing.T) {

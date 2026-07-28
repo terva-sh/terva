@@ -145,14 +145,11 @@ func (s *wsSession) reloadLore() {
 	// Live triggered-lore: a fresh Resolve rebuilds loreTriggered from the edited
 	// files; swap its per-turn provider onto the running agent — AND its
 	// side-effect-free peek twin, so the /context size view reflects the edited
-	// lore too (not the stale pre-edit set). Best-effort — skipped if Resolve
-	// fails (e.g. no credential in a test).
-	if s.agent != nil {
-		if rr, err := build.Resolve(args, true); err == nil {
-			s.agent.SetContextProvider(rr.PerTurnContext(s.agent))
-			s.agent.SetContextProviderPeek(rr.PerTurnContextPeek(s.agent))
-			s.rewireTail(rr)
-		}
+	// lore too (not the stale pre-edit set). Shared with the acp host, which
+	// needs the same swap on a trust flip and nothing else here. Best-effort —
+	// nil when Resolve fails (e.g. no credential in a test).
+	if rr := build.RewireLoreContext(s.agent, args); rr != nil {
+		s.rewireTail(*rr)
 	}
 }
 

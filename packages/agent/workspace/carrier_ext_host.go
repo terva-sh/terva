@@ -105,12 +105,6 @@ func (c CarrierExtHost) Reload(ctx context.Context, grace time.Duration) extensi
 	return extensions.ReloadStats{}
 }
 
-func (c CarrierExtHost) SetProjectTrusted(trusted bool) {
-	if m := c.mgr(); m != nil {
-		m.SetProjectTrusted(trusted)
-	}
-}
-
 // NewCarrierExtHost binds an extension host to a workspace and a late-resolved
 // session id. sess is a func because the carrier TUI learns its session only
 // after the workspace is running.
