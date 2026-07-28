@@ -17,6 +17,8 @@ import (
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/external"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/mode"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
@@ -445,7 +447,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	// learn where its words land (build.SurfaceOf), and resolveJail reads it to
 	// keep the built-in file/shell tools confined to the cwd, which is the
 	// posture a bot has always had and must keep.
-	args.Mode = build.ModeBot
+	args.Mode = mode.Bot
 	// `terva bot run --help` / -h: print bot usage and stop, rather than
 	// falling through and trying to launch (ParseArgs records Help but the run
 	// path never checked it).
@@ -506,7 +508,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	// gate the print/json modes use. Honors --no-ext / --no-mcp / --no-tools,
 	// and the --chat / --play meta-modes (chat → no tools at all; play → the
 	// extension/MCP tools, built-in coding tools off) via Resolve + the merge.
-	gate, roSet := build.HeadlessConfirmGate(args, "bot")
+	gate, roSet := permissions.HeadlessConfirmGate(args.PermInputs())
 	resolved.AdoptReadOnlySet(roSet)
 	// Extensions (and the MCP servers wired inside the same setup) get
 	// their OWN lifetime context, not the signal-cancelled one: the

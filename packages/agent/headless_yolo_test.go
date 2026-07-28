@@ -7,6 +7,8 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/agent/mode"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -20,7 +22,7 @@ import (
 // them unconfirmed.
 func TestHeadlessConfirmGateRefusesWhenNoYolo(t *testing.T) {
 	withTempHome(t) // isolate from any real config / installed-extension rules
-	gate, _ := build.HeadlessConfirmGate(build.Args{NoYolo: true, CWD: testsupport.TempDir(t)}, "print")
+	gate, _ := permissions.HeadlessConfirmGate(build.Args{Mode: mode.Print, NoYolo: true, CWD: testsupport.TempDir(t)}.PermInputs())
 	if gate == nil {
 		t.Fatal("headlessConfirmGate returned nil with NoYolo set; want a refusing gate")
 	}
@@ -37,7 +39,7 @@ func TestHeadlessConfirmGateRefusesWhenNoYolo(t *testing.T) {
 // there is no gate (yolo mode runs tools unconfirmed, as before).
 func TestHeadlessConfirmGateNilWhenYolo(t *testing.T) {
 	withTempHome(t) // a real installed extension's permission rules would otherwise force a gate
-	if g, _ := build.HeadlessConfirmGate(build.Args{NoYolo: false, CWD: testsupport.TempDir(t)}, "json"); g != nil {
+	if g, _ := permissions.HeadlessConfirmGate(build.Args{Mode: mode.JSON, NoYolo: false, CWD: testsupport.TempDir(t)}.PermInputs()); g != nil {
 		t.Fatalf("headlessConfirmGate returned non-nil with yolo on: %v", g)
 	}
 }
@@ -52,7 +54,7 @@ func TestWireNonInteractiveGateRefusesToolCall(t *testing.T) {
 	withTempHome(t)
 	ag := core.NewAgent(nil, "test", "", core.Registry{})
 	extMgr := extensions.New(testsupport.TempDir(t), testsupport.TempDir(t), "test", "openai", "gpt-5", build.NonInteractiveExtHooks{})
-	gate, _ := build.HeadlessConfirmGate(build.Args{NoYolo: true, CWD: testsupport.TempDir(t)}, "print")
+	gate, _ := permissions.HeadlessConfirmGate(build.Args{Mode: mode.Print, NoYolo: true, CWD: testsupport.TempDir(t)}.PermInputs())
 
 	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, gate, nil, nil, nil)
 

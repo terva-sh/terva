@@ -18,8 +18,10 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/hooks"
+	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/modes/dialogs"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/run"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
@@ -210,7 +212,7 @@ func Run(rawArgs []string, version string) error {
 		// than falling through to the generic top-level screen (web/acp are
 		// build-tag modes routed via an argv shim, so their --help lands here).
 		switch args.Mode {
-		case build.ModeWeb:
+		case mode.Web:
 			build.PrintWebHelp()
 		default:
 			PrintHelp(version)
@@ -278,21 +280,21 @@ func Run(rawArgs []string, version string) error {
 		return runPromptDump(args)
 	}
 	switch args.Mode {
-	case build.ModePrint:
+	case mode.Print:
 		return runPrintMode(ctx, args, version)
-	case build.ModeJSON:
+	case mode.JSON:
 		return runJSONMode(ctx, args, version)
-	case build.ModeRPC:
+	case mode.RPC:
 		return runRPCMode(ctx, args, version)
-	case build.ModeACP:
+	case mode.ACP:
 		return runACPMode(ctx, args, version)
-	case build.ModeWeb:
+	case mode.Web:
 		return runWebMode(ctx, args, version)
-	case build.ModeReplay:
+	case mode.Replay:
 		return runReplayMode(ctx, args, version)
-	case build.ModeAttach:
+	case mode.Attach:
 		return runAttachMode(ctx, args, version)
-	case build.ModeSwarmAgent:
+	case mode.SwarmAgent:
 		return runSwarmAgentMode(ctx, args, version)
 	default:
 		return runInteractiveCtrlproto(ctx, args, version)
@@ -396,13 +398,13 @@ func wireBotAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extension
 }
 
 func runPrintMode(ctx context.Context, args build.Args, version string) error {
-	confirmGate, roSet := build.HeadlessConfirmGate(args, "print")
+	confirmGate, roSet := permissions.HeadlessConfirmGate(args.PermInputs())
 	r, err := build.Resolve(args, true)
 	if err != nil {
 		return err
 	}
-	build.WarnRestrictedWorkspace(args, r.Trusted)
-	build.WarnPersistentlyUnjailed(args)
+	permissions.WarnRestrictedWorkspace(args.CWD, r.Trusted)
+	permissions.WarnPersistentlyUnjailed(args.PermInputs())
 	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
@@ -439,13 +441,13 @@ func runPrintMode(ctx context.Context, args build.Args, version string) error {
 }
 
 func runJSONMode(ctx context.Context, args build.Args, version string) error {
-	confirmGate, roSet := build.HeadlessConfirmGate(args, "json")
+	confirmGate, roSet := permissions.HeadlessConfirmGate(args.PermInputs())
 	r, err := build.Resolve(args, true)
 	if err != nil {
 		return err
 	}
-	build.WarnRestrictedWorkspace(args, r.Trusted)
-	build.WarnPersistentlyUnjailed(args)
+	permissions.WarnRestrictedWorkspace(args.CWD, r.Trusted)
+	permissions.WarnPersistentlyUnjailed(args.PermInputs())
 	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
@@ -491,7 +493,7 @@ func userNameResolved(args build.Args) bool {
 	if strings.TrimSpace(args.As) != "" {
 		return true
 	}
-	trusted := build.ResolveTrustState(args).IsTrusted()
+	trusted := permissions.ResolveTrustState(args.CWD, args.Trust).IsTrusted()
 	return strings.TrimSpace(config.ResolveConfig(args.CWD, trusted).UserName) != ""
 }
 

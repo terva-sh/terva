@@ -11,6 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/modes"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/envcompat"
@@ -45,13 +46,13 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 		args.DeliverableSchema = json.RawMessage(s)
 	}
 
-	confirmGate, roSet := build.HeadlessConfirmGate(args, "swarm-agent")
+	confirmGate, roSet := permissions.HeadlessConfirmGate(args.PermInputs())
 	r, err := build.Resolve(args, true)
 	if err != nil {
 		return err
 	}
-	build.WarnRestrictedWorkspace(args, r.Trusted)
-	build.WarnPersistentlyUnjailed(args)
+	permissions.WarnRestrictedWorkspace(args.CWD, r.Trusted)
+	permissions.WarnPersistentlyUnjailed(args.PermInputs())
 	r.AdoptReadOnlySet(roSet)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
