@@ -124,38 +124,46 @@ func ExportSession(srcPath, dstPath string) (string, error) {
 	defer dst.Close()
 	bw := bufio.NewWriter(dst)
 
-	// Rewrite the meta row: strip the cwd (the importing user has
-	// their own) and keep everything else identical. ID stays so the
-	// export is traceable; the importer will rotate to a fresh ID.
-	exportMeta := *head.Meta
-	exportMeta.CWD = ""
-	metaLine, err := json.Marshal(sessionLine{Type: "meta", Meta: &exportMeta})
-	if err != nil {
-		return "", fmt.Errorf("export: marshal meta: %w", err)
-	}
-	if _, err := bw.Write(metaLine); err != nil {
-		return "", err
-	}
-	if err := bw.WriteByte('\n'); err != nil {
-		return "", err
-	}
-
-	// Stream every non-meta row verbatim. Use ReadBytes instead of
+	// Stream every row, rewriting the meta ones. Use ReadBytes instead of
 	// bufio.Scanner: large sessions can contain very long JSONL rows
 	// (image blocks, big tool outputs, compacted history) that exceed
 	// Scanner's token limit and fail with "token too long".
+	//
+	// EVERY meta row, not just the first. They are an append-only, last-wins
+	// timeline — SetCreationSpec writes the second one, and a session's mode,
+	// card, cast, greeting, lorebook, note, background, bound user, and every
+	// model switch are all written after creation. Keeping only the first
+	// exported a session's birth certificate instead of the session: an
+	// exported --play session imported as a plain coding session, with its
+	// World lore gone.
+	//
+	// What actually had to be removed is the CWD, which every meta row carries
+	// and which belongs to the exporting user. So it is stripped per row —
+	// dropping the rows was a blunt way to achieve that, and it took the state
+	// with it. IDs stay so the export is traceable; the importer rotates them.
 	r := bufio.NewReader(src)
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(line) > 0 {
 			line = bytes.TrimRight(line, "\r\n")
 			var h sessionLineHead
-			if err := json.Unmarshal(line, &h); err == nil && h.Type != "meta" {
-				if _, werr := bw.Write(line); werr != nil {
-					return "", werr
+			if uerr := json.Unmarshal(line, &h); uerr == nil {
+				out := line
+				if h.Type == "meta" {
+					if out, uerr = metaRowWithoutCWD(line); uerr != nil {
+						// A meta row we cannot re-marshal is dropped rather
+						// than emitted with the cwd still in it. Losing one
+						// row's state beats leaking a path.
+						out = nil
+					}
 				}
-				if werr := bw.WriteByte('\n'); werr != nil {
-					return "", werr
+				if len(out) > 0 {
+					if _, werr := bw.Write(out); werr != nil {
+						return "", werr
+					}
+					if werr := bw.WriteByte('\n'); werr != nil {
+						return "", werr
+					}
 				}
 			}
 		}
@@ -170,6 +178,28 @@ func ExportSession(srcPath, dstPath string) (string, error) {
 		return "", err
 	}
 	return outPath, nil
+}
+
+// metaRowWithoutCWD re-emits a meta row with its CWD cleared and everything
+// else untouched.
+//
+// It round-trips through SessionMeta rather than editing the JSON, so a field
+// added to the struct travels without anyone remembering this function exists —
+// which is the failure mode that produced the bug it fixes. The cost is that a
+// field NOT on the struct is dropped; that is already true of every meta row
+// terva writes, since the same struct marshals them.
+func metaRowWithoutCWD(line []byte) ([]byte, error) {
+	var row sessionLine
+	if err := json.Unmarshal(line, &row); err != nil || row.Meta == nil {
+		if err == nil {
+			err = errors.New("meta row carries no meta object")
+		}
+		return nil, err
+	}
+	row.Meta.CWD = ""
+	// At is preserved: the timeline's own ordering information is part of what
+	// makes a later row meaningful.
+	return json.Marshal(row)
 }
 
 // ImportSession copies the .tervasession file at srcPath into the
@@ -241,18 +271,37 @@ func ImportSession(srcPath, root, cwd, version string) (string, error) {
 		return "", err
 	}
 
-	// Rewind the source and stream every non-meta row. Avoid
-	// bufio.Scanner so exported sessions with huge JSONL rows import
-	// cleanly.
+	// Rewind and stream the rest. Avoid bufio.Scanner so exported sessions with
+	// huge JSONL rows import cleanly.
+	//
+	// Meta rows are replayed rather than dropped, because everything a session
+	// IS beyond its birth — mode, card, cast, greeting, lorebook, note,
+	// background, bound user, and each model switch — is written in a row after
+	// the first. Dropping them imported a Stage session as a plain coding one.
+	//
+	// They are replayed with this import's IDENTITY forced onto each, which is
+	// the part that cannot be inherited: the source's id names a session that
+	// does not exist here, its cwd is another machine's, its start time and
+	// version describe the export rather than this copy, and its Parent points
+	// at a branch that was not imported. Everything else is the state being
+	// preserved and passes through untouched — so the model/provider timeline
+	// still lines up with the messages interleaved between the rows.
 	if _, err := src.Seek(0, io.SeekStart); err != nil {
 		return "", fmt.Errorf("import: rewind: %w", err)
 	}
 	if err := forEachJSONLLine(src, func(line []byte) error {
 		var h sessionLineHead
-		if err := json.Unmarshal(line, &h); err != nil || h.Type == "meta" {
+		if err := json.Unmarshal(line, &h); err != nil {
 			return nil
 		}
-		if _, err := bw.Write(line); err != nil {
+		out := line
+		if h.Type == "meta" {
+			var err error
+			if out, err = importedMetaRow(line, importMeta); err != nil {
+				return nil // unreadable row: keep the import, lose that step
+			}
+		}
+		if _, err := bw.Write(out); err != nil {
 			return err
 		}
 		return bw.WriteByte('\n')
@@ -263,6 +312,35 @@ func ImportSession(srcPath, root, cwd, version string) (string, error) {
 		return "", err
 	}
 	return outPath, nil
+}
+
+// importedMetaRow re-emits a source meta row under the importing session's
+// identity, keeping every field that describes the session's STATE.
+//
+// owner supplies the four fields that are this copy's rather than the
+// original's, plus Parent/ForkPoint, which are cleared: the source's parent
+// names a branch that was not imported, and a dangling parent id makes the
+// tree picker render a session hanging off nothing.
+//
+// Written as a whitelist of what to overwrite rather than a whitelist of what
+// to keep, deliberately: a new SessionMeta field is state by default and
+// travels on its own, which is the opposite of the arrangement that lost
+// fourteen of them.
+func importedMetaRow(line []byte, owner SessionMeta) ([]byte, error) {
+	var row sessionLine
+	if err := json.Unmarshal(line, &row); err != nil {
+		return nil, err
+	}
+	if row.Meta == nil {
+		return nil, errors.New("meta row carries no meta object")
+	}
+	row.Meta.ID = owner.ID
+	row.Meta.CWD = owner.CWD
+	row.Meta.Started = owner.Started
+	row.Meta.Version = owner.Version
+	row.Meta.Parent = ""
+	row.Meta.ForkPoint = 0
+	return json.Marshal(row)
 }
 
 // BranchSession creates a new session in root/cwd that contains the
@@ -293,23 +371,29 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 	}
 	defer src.Close()
 
-	// Read the parent's EFFECTIVE meta so the child copies model/provider and
-	// the whole creation spec (persona + immersive experience/card/cast/greeting)
-	// and records the parent id. Meta rows are an append-only timeline whose LAST
-	// entry wins — the spec is stamped by a meta row written after NewSession's —
-	// so the first line alone would miss it. Scan the file and keep the last meta.
+	// Read the parent's EFFECTIVE state so the child continues the same session
+	// rather than the workspace default. Meta rows are an append-only timeline
+	// whose LAST entry wins — every mutable setting is stamped by a row written
+	// after NewSession's — so the first line alone would miss all of it. Scan the
+	// file and keep the last meta, folding the lorebook across both of its
+	// storage forms as the loader does.
 	sc := bufio.NewScanner(src)
 	sc.Buffer(make([]byte, 0, 64*1024), 20*1024*1024)
 	var parentMeta SessionMeta
+	var parentLore []WorldLoreEntry
 	haveMeta := false
 	for sc.Scan() {
 		var head sessionLine
 		if err := json.Unmarshal(sc.Bytes(), &head); err != nil {
 			continue
 		}
-		if head.Type == "meta" && head.Meta != nil {
+		switch {
+		case head.Type == "meta" && head.Meta != nil:
 			parentMeta = *head.Meta
+			parentLore = foldMetaLore(parentLore, *head.Meta)
 			haveMeta = true
+		case head.Type == recordLore && head.Lore != nil:
+			parentLore = applyLoreOp(parentLore, *head.Lore)
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -334,27 +418,37 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 	defer dst.Close()
 	bw := bufio.NewWriter(dst)
 
-	// Write the branch meta. The child re-serializes its prefix as typed v2
-	// message rows (no amends), so it declares the base format version, and it
-	// inherits the parent's creation spec — persona + immersive
-	// experience/card/cast/greeting — so a branch continues the SAME kind of
-	// session (a forked Stage chat stays that chat) rather than the workspace
-	// default.
-	branchMeta := SessionMeta{
-		ID:            newID,
-		CWD:           cwd,
-		Model:         parentMeta.Model,
-		Provider:      parentMeta.Provider,
-		Started:       time.Now().UTC(),
-		Version:       version,
-		FormatVersion: sessionFormatVersion,
-		Parent:        parentMeta.ID,
-		ForkPoint:     upToMessageIdx,
-		Persona:       parentMeta.Persona,
-		Experience:    parentMeta.Experience,
-		Card:          parentMeta.Card,
-		Cast:          parentMeta.Cast,
-		Greeting:      parentMeta.Greeting,
+	// Write the branch meta. The child inherits the parent's whole state — a
+	// forked Stage session must continue as the SAME session, which means not
+	// just its creation spec but its author's note, backdrop, bound user persona,
+	// coordination, World, cast-model pins and lorebook.
+	//
+	// Written as a whitelist of what to OVERWRITE rather than one of what to
+	// keep. The old shape listed five fields and silently dropped the other nine
+	// as they were added over time, which is the same arrangement that lost
+	// fourteen fields on import (see importedMetaRow): a new SessionMeta field
+	// must be state that travels by default, or the next one added is lost the
+	// day it ships and nobody finds out until a fork looks wrong.
+	branchMeta := parentMeta
+	branchMeta.ID = newID
+	branchMeta.CWD = cwd
+	branchMeta.Started = time.Now().UTC()
+	branchMeta.Version = version
+	branchMeta.Parent = parentMeta.ID
+	branchMeta.ForkPoint = upToMessageIdx
+	// The child re-serializes its prefix as typed message rows and copies no
+	// amends, so it declares the base format version — raised below only if it
+	// actually carries a lore row.
+	branchMeta.FormatVersion = sessionFormatVersion
+	// A title is a name for a conversation, and the branch is a different one.
+	// Inheriting it would also mark the child's title as user-chosen (a meta-row
+	// title reads as manual), which is what blocks automatic re-titling — so the
+	// fork would keep a name describing the scene it diverged from, forever.
+	branchMeta.Title = ""
+	// The lorebook travels as its own row, below.
+	branchMeta.WorldLore = nil
+	if len(parentLore) > 0 {
+		branchMeta.FormatVersion = sessionFormatVersionLore
 	}
 	metaLine, err := json.Marshal(sessionLine{Type: "meta", Meta: &branchMeta})
 	if err != nil {
@@ -365,6 +459,21 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 	}
 	if err := bw.WriteByte('\n'); err != nil {
 		return "", err
+	}
+	// One set row establishes the inherited book. The parent's incremental
+	// history is its own; the child starts from the state, not the story of how
+	// it got there.
+	if len(parentLore) > 0 {
+		loreLine, err := json.Marshal(sessionLine{Type: recordLore, Lore: &sessionLore{Op: LoreOpSet, Entries: parentLore}})
+		if err != nil {
+			return "", fmt.Errorf("branch: marshal lore: %w", err)
+		}
+		if _, err := bw.Write(loreLine); err != nil {
+			return "", err
+		}
+		if err := bw.WriteByte('\n'); err != nil {
+			return "", err
+		}
 	}
 
 	// Reconstruct the effective transcript the same way OpenSession does:

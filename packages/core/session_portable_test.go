@@ -344,3 +344,210 @@ func TestBuildSessionTree(t *testing.T) {
 		t.Errorf("want 2 children, got %d", len(rootNode.Children))
 	}
 }
+
+// A session's state does not live in its first meta row. Meta rows are an
+// append-only, last-wins timeline: SetCreationSpec writes the SECOND one, and
+// everything a Stage session is — its mode, card, cast, greeting, lorebook,
+// note, background, bound user — is written after creation, as is every model
+// switch. A round trip that keeps only the first row therefore hands back a
+// session's birth certificate instead of the session.
+//
+// This is the test that was missing: the suite exercised messages, which are
+// non-meta rows and were always streamed, so the whole meta timeline could be
+// dropped by both sides without a single failure.
+func TestExportImportPreservesTheWholeMetaTimeline(t *testing.T) {
+	root := testsupport.TempDir(t)
+	sess, err := NewSession(root, "/path/to/project", "anthropic", "claude-opus-4-7", "0.0.0-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each of these appends its own meta row; none of them is the first.
+	if err := sess.SetCreationSpec("kobeni", "play", "card_123", map[string]string{"Ada": "card_ada"}, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.SetWorldLore([]WorldLoreEntry{{Name: "The Vault", Content: "sealed since the war", Constant: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.SetNote("keep it tense"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.SetBackground("bg_rain"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.SetUserPersona("Mara", "a courier", "", "she/her"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.SetCoordination("focus:Ada"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.UpdateModel("openai", "gpt-5"); err != nil {
+		t.Fatal(err)
+	}
+	_ = sess.AppendMessage(provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.Content{provider.TextBlock{Text: "hello"}},
+	})
+	_ = sess.Close()
+
+	before, _, err := OpenSession(sess.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = before.Close()
+
+	exportPath, err := ExportSession(sess.Path, testsupport.TempDir(t))
+	if err != nil {
+		t.Fatalf("ExportSession: %v", err)
+	}
+	imported, err := ImportSession(exportPath, testsupport.TempDir(t), "/somewhere/else", "0.0.0-test")
+	if err != nil {
+		t.Fatalf("ImportSession: %v", err)
+	}
+	after, _, err := OpenSession(imported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Close()
+
+	a, b := before.Meta, after.Meta
+	for _, c := range []struct {
+		field     string
+		got, want any
+	}{
+		{"Experience", b.Experience, a.Experience},
+		{"Card", b.Card, a.Card},
+		{"Greeting", b.Greeting, a.Greeting},
+		{"Persona", b.Persona, a.Persona},
+		{"Note", b.Note, a.Note},
+		{"Background", b.Background, a.Background},
+		{"UserName", b.UserName, a.UserName},
+		{"UserDescription", b.UserDescription, a.UserDescription},
+		{"UserPronouns", b.UserPronouns, a.UserPronouns},
+		{"Coordination", b.Coordination, a.Coordination},
+		{"Model", b.Model, a.Model},
+		{"Provider", b.Provider, a.Provider},
+		{"len(Cast)", len(b.Cast), len(a.Cast)},
+		{"len(WorldLore)", len(b.WorldLore), len(a.WorldLore)},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %v after the round trip, want %v", c.field, c.got, c.want)
+		}
+	}
+	if len(b.WorldLore) == 1 && b.WorldLore[0].Content != "sealed since the war" {
+		t.Errorf("lore entry survived by name but lost its content: %+v", b.WorldLore[0])
+	}
+	if b.Cast["Ada"] != "card_ada" {
+		t.Errorf("cast = %v, want Ada -> card_ada", b.Cast)
+	}
+}
+
+// The export must not carry the exporting user's working directory — not in
+// the first meta row and not in any later one, which is the reason later rows
+// were being dropped rather than an argument for dropping them.
+func TestExportStripsTheCWDFromEveryMetaRow(t *testing.T) {
+	root := testsupport.TempDir(t)
+	sess, err := NewSession(root, "/home/someone/secret-project", "anthropic", "m", "0.0.0-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.SetNote("later row"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.SetBackground("bg"); err != nil {
+		t.Fatal(err)
+	}
+	_ = sess.AppendMessage(provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.Content{provider.TextBlock{Text: "hi"}},
+	})
+	_ = sess.Close()
+
+	exportPath, err := ExportSession(sess.Path, testsupport.TempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(exportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "secret-project") {
+		t.Error("the export names the exporting user's cwd")
+	}
+	// And prove the later rows are actually there to have been stripped, or the
+	// assertion above passes for the wrong reason.
+	var metaRows int
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		var h sessionLineHead
+		if json.Unmarshal([]byte(line), &h) == nil && h.Type == "meta" {
+			metaRows++
+		}
+	}
+	if metaRows < 3 {
+		t.Errorf("export carries %d meta row(s); the source had a creation row plus a note and a background", metaRows)
+	}
+}
+
+// Replaying the source's meta rows must not replay its IDENTITY. Each row
+// carries id, cwd, started, version and possibly a parent — all of which
+// describe the exporting user's session, not this copy of it. Getting this
+// wrong is worse than the bug it fixes: a last-wins row would quietly hand the
+// imported session the original's id and another machine's path.
+func TestImportKeepsItsOwnIdentityAcrossEveryReplayedRow(t *testing.T) {
+	root := testsupport.TempDir(t)
+	parent, err := NewSession(root, "/original/cwd", "anthropic", "m", "0.0.0-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A forked session: Parent names a branch that will not be imported.
+	if err := parent.SetParent("some-other-session-id"); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.SetNote("a later row"); err != nil {
+		t.Fatal(err)
+	}
+	_ = parent.AppendMessage(provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.Content{provider.TextBlock{Text: "hi"}},
+	})
+	originalID := parent.Meta.ID
+	_ = parent.Close()
+
+	exportPath, err := ExportSession(parent.Path, testsupport.TempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := ImportSession(exportPath, testsupport.TempDir(t), "/my/cwd", "1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _, err := OpenSession(imported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if s.Meta.ID == originalID {
+		t.Error("the imported session kept the original's id — a replayed meta row won last")
+	}
+	if s.Meta.CWD != "/my/cwd" {
+		t.Errorf("CWD = %q, want the importing user's", s.Meta.CWD)
+	}
+	if s.Meta.Version != "1.2.3" {
+		t.Errorf("Version = %q, want the importing build's", s.Meta.Version)
+	}
+	if s.Meta.Parent != "" {
+		t.Errorf("Parent = %q — it names a session that was not imported", s.Meta.Parent)
+	}
+	// …while the state on those same rows still arrived.
+	if s.Meta.Note != "a later row" {
+		t.Errorf("Note = %q, want the state from the replayed row", s.Meta.Note)
+	}
+	// And no row anywhere in the file names the exporter's directory.
+	body, err := os.ReadFile(imported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "/original/cwd") {
+		t.Error("the imported file names the exporting user's cwd")
+	}
+}
