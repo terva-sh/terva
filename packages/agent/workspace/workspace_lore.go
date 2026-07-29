@@ -148,7 +148,13 @@ func (s *wsSession) reloadLore() {
 	// lore too (not the stale pre-edit set). Shared with the acp host, which
 	// needs the same swap on a trust flip and nothing else here. Best-effort —
 	// nil when Resolve fails (e.g. no credential in a test).
-	if rr := build.RewireLoreContext(s.agent, args); rr != nil {
+	//
+	// The tail this run installs replaces the whole provider, so it has to carry
+	// the live cards buildSession stacked on top of the last one. Same accessor
+	// both paths use, because this ran three ways — a lore edit, a user-persona
+	// change, a trust flip — and each one silently took the extension cards and
+	// the task card away from the model for the rest of the session.
+	if rr := build.RewireLoreContext(s.agent, args, s.ephemeralTail()); rr != nil {
 		s.rewireTail(*rr)
 	}
 }

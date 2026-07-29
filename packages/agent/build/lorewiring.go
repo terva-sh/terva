@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 
+	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
@@ -304,29 +305,88 @@ func composeEphemeral(providers ...func() string) func() string {
 	}
 }
 
-// WireExtEphemeral folds an extension manager's live context cards into the
-// agent's per-turn tail — BOTH the live provider and its side-effect-free
-// sizing twin, so /context never undercounts what a turn actually sends.
-// Extension context is placed BEFORE the run's own tail: a card's
-// post_history_instructions must stay last (its after-everything position,
-// matching SillyTavern's PHI semantics — see tailProvider), so nothing may be
-// appended after it. Every mode's ext wiring goes through here; composing the
-// two providers by hand invites the drift this helper exists to prevent.
-func WireExtEphemeral(ag *core.Agent, ephemeral func() string) {
-	ag.ContextProvider = composeEphemeral(ephemeral, ag.ContextProvider)
-	ag.ContextProviderPeek = composeEphemeral(ephemeral, ag.ContextProviderPeek)
+// EphemeralTail names the live cards that sit ON TOP of a run's own per-turn
+// tail, and — through compose — fixes the order they sit in.
+//
+// The per-turn context is a stack. Its bottom is the run's own tail: the
+// triggered lore entries, then a card's post_history_instructions, which must
+// stay last of everything (its after-history position, matching SillyTavern's
+// PHI semantics — see tailProvider), so nothing may be appended after it. Above
+// that sit the cards that change between turns: an extension manager's, and the
+// built-in task board's.
+//
+// The fields ARE the list, for the usual reason: this stack is assembled in one
+// place — a host's session build — and RE-assembled in another. RewireLoreContext
+// re-derives the run's tail whenever a lore edit, a user-persona change or a
+// trust flip changes what belongs in it, and it used to install that fresh tail
+// BARE. Both live cards vanished for the rest of the session: the model lost
+// sight of its own open work and of every extension's context, silently, in the
+// three hosts that re-derive. One type, one order, both paths.
+type EphemeralTail struct {
+	// Ext is the extension manager's live context cards
+	// (extensions.Manager.EphemeralContext). nil when a host runs none — which
+	// is not a reason to withhold the task card, so it is a field here rather
+	// than a condition around the call.
+	Ext func() string
+
+	// Tasks is the session's task controller, whose card tells the model what
+	// work it has open. It follows the CONTROLLER, not the extension manager:
+	// the board is a first-party feature and must not be switched off by an
+	// unrelated subsystem being absent.
+	Tasks *tasktool.Controller
 }
 
-// WireTasksEphemeral folds the built-in task controller's live context card into
-// the agent's per-turn tail (live provider + sizing twin), the same way
-// WireExtEphemeral folds extension cards — through composeEphemeral, so the card
-// sits before the run's own lore/PHI tail. nil ctrl is a no-op.
-func WireTasksEphemeral(ag *core.Agent, ctrl *tasktool.Controller) {
-	if ctrl == nil {
+// compose stacks this tail's cards onto base, the run's own per-turn tail.
+//
+// composeEphemeral puts each NEW provider FIRST, so the order here reverses
+// into what the model reads: task card, then extension cards, then the run's
+// tail. That is the order every host has always sent, and the reason the two
+// wiring calls this replaced had to stay in their original sequence.
+//
+// base must be a RUN TAIL, never an already-composed provider: composing onto
+// one of those would fold the same cards in a second time. Both callers pass a
+// bare tail — the build path passes what NewAgent installed, the rewire path
+// passes the fresh Resolve's — which is also why the rewire can hand the whole
+// composed result to SetContextProvider in one write, instead of reading the
+// live provider back out from under a turn that may be running.
+func (t EphemeralTail) compose(base func() string) func() string {
+	out := composeEphemeral(t.Ext, base)
+	if t.Tasks != nil {
+		out = composeEphemeral(t.Tasks.Ephemeral, out)
+	}
+	return out
+}
+
+// ExtEphemeral is m's live context-card provider, or nil when there is no
+// manager.
+//
+// It exists so a host can fill EphemeralTail.Ext unconditionally instead of
+// guarding the wiring call — guarding the call is how the task card came to be
+// nested under an extension check in three hosts. Note that the method value
+// cannot simply be taken from a nil manager: Manager embeds *extdriver.Driver,
+// so `m.EphemeralContext` dereferences m where it is written, not where it is
+// called.
+func ExtEphemeral(m *extensions.Manager) func() string {
+	if m == nil {
+		return nil
+	}
+	return m.EphemeralContext
+}
+
+// WireEphemeralTail folds the live cards onto the agent's per-turn tail at
+// session build — BOTH the live provider and its side-effect-free sizing twin,
+// so /context never undercounts what a turn actually sends.
+//
+// Call it once per session, after the agent exists and OUTSIDE any extension
+// check. Every mode's wiring goes through here; composing the providers by hand
+// invites the drift this helper exists to prevent, and hand-composition is
+// exactly how the re-derivation path came to disagree with the build path.
+func WireEphemeralTail(ag *core.Agent, t EphemeralTail) {
+	if ag == nil {
 		return
 	}
-	ag.ContextProvider = composeEphemeral(ctrl.Ephemeral, ag.ContextProvider)
-	ag.ContextProviderPeek = composeEphemeral(ctrl.Ephemeral, ag.ContextProviderPeek)
+	ag.ContextProvider = t.compose(ag.ContextProvider)
+	ag.ContextProviderPeek = t.compose(ag.ContextProviderPeek)
 }
 
 // RebindTasks re-keys the built-in task store to a session so the board follows

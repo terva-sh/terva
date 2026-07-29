@@ -50,17 +50,17 @@ func TestPerTurnContextPeek_DoesNotRecord(t *testing.T) {
 	}
 }
 
-// WireExtEphemeral must (a) compose BOTH the live provider and the sizing
+// WireEphemeralTail must (a) compose BOTH the live provider and the sizing
 // twin — the interactive path once composed only the live one, so /context
 // undercounted the tail whenever lore was active alongside an extension —
 // and (b) place extension context BEFORE the run's tail, so a card's
 // post_history_instructions stays last.
-func TestWireExtEphemeral_PeekInSyncAndPHILast(t *testing.T) {
+func TestWireEphemeralTail_PeekInSyncAndPHILast(t *testing.T) {
 	tail := func() string { return "triggered lore\n\nStay terse. (PHI)" }
 	ag := &core.Agent{}
 	ag.ContextProvider = tail
 	ag.ContextProviderPeek = tail
-	WireExtEphemeral(ag, func() string { return "ext: world state" })
+	WireEphemeralTail(ag, EphemeralTail{Ext: func() string { return "ext: world state" }})
 
 	want := "ext: world state\n\ntriggered lore\n\nStay terse. (PHI)"
 	if got := ag.ContextProvider(); got != want {
@@ -72,7 +72,7 @@ func TestWireExtEphemeral_PeekInSyncAndPHILast(t *testing.T) {
 
 	// A run with no tail of its own still gets the ext context on both.
 	bare := &core.Agent{}
-	WireExtEphemeral(bare, func() string { return "ext only" })
+	WireEphemeralTail(bare, EphemeralTail{Ext: func() string { return "ext only" }})
 	if bare.ContextProvider() != "ext only" || bare.ContextProviderPeek() != "ext only" {
 		t.Error("ext context should stand alone when the run has no tail")
 	}

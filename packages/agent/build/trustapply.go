@@ -109,13 +109,21 @@ func ApplyTrust(ctx context.Context, trusted bool, s TrustSurfaces) {
 // fire. Constant lore is a different matter: it is baked into the system prompt
 // at resolve time and lands on the next session, like skills and context files.
 //
+// tail is the live cards the session build stacked on top of that run tail, and
+// it is REQUIRED for the same reason TrustSurfaces' fields are: this function
+// installs a whole provider, so anything not named here is a thing it takes
+// away. It used to install the fresh tail bare, which dropped the extension
+// cards and the task card for the rest of the session — invisibly, since what
+// remained was a perfectly valid tail, just missing two layers. A host with
+// neither passes a zero EphemeralTail and says so at the call site.
+//
 // Best-effort: a Resolve that fails (no credential, in a test) leaves the
 // current provider standing rather than clearing it, and reports nil.
 //
 // The resolve is handed back because it is the expensive part and a caller
 // usually has more to re-point at it — the daemon re-seeds its per-turn tail
 // records from the same one rather than paying for a second.
-func RewireLoreContext(ag *core.Agent, args Args) *Resolved {
+func RewireLoreContext(ag *core.Agent, args Args, tail EphemeralTail) *Resolved {
 	if ag == nil {
 		return nil
 	}
@@ -123,7 +131,10 @@ func RewireLoreContext(ag *core.Agent, args Args) *Resolved {
 	if err != nil {
 		return nil
 	}
-	ag.SetContextProvider(r.PerTurnContext(ag))
-	ag.SetContextProviderPeek(r.PerTurnContextPeek(ag))
+	// Rebuilt from the parts, not layered onto what is already installed — see
+	// EphemeralTail.compose. The setters, because unlike the build path this
+	// runs against an agent that may be mid-turn.
+	ag.SetContextProvider(tail.compose(r.PerTurnContext(ag)))
+	ag.SetContextProviderPeek(tail.compose(r.PerTurnContextPeek(ag)))
 	return &r
 }

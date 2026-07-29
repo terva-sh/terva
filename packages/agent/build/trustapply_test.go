@@ -172,7 +172,7 @@ func TestRewireLoreContextFollowsTheVerdict(t *testing.T) {
 	if err := config.TrustPath(cwd, false); err != nil {
 		t.Fatal(err)
 	}
-	if rr := RewireLoreContext(ag, args); rr == nil {
+	if rr := RewireLoreContext(ag, args, EphemeralTail{}); rr == nil {
 		t.Fatal("RewireLoreContext reported no resolve; a caller relying on it for its own re-pointing would " +
 			"silently skip that work")
 	}

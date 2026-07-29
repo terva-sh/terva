@@ -395,20 +395,15 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 		ag.AddEventObserver(wsObserve)
 		ag.AddEventObserver(func(ev core.AgentEvent) { build.FanoutAgentEvent(extMgr, ev) })
 		ag.AddEventObserver(func(ev core.AgentEvent) { build.ObserveAgentEventForHooks(hookEng, ev) })
-		// Inject extensions' live context cards into the model each turn (live
-		// provider + sizing twin; ext context before the tail so PHI stays last).
-		build.WireExtEphemeral(ag, extMgr.EphemeralContext)
 	}
 
-	// The built-in task board is not an extension: its card and its open-work
-	// gate follow the CONTROLLER, not the manager.
-	//
-	// Wired last, after the extension cards, because composeEphemeral puts each
-	// new provider FIRST — so wiring order reverses into the composed tail, and
-	// this is the order the helper has always produced (tasks card, then ext
-	// cards, then the run's own lore/PHI tail). Hoisting these above the
-	// extension block would silently swap the first two.
-	build.WireTasksEphemeral(ag, tasksCtrl)
+	// The live cards the model reads each turn: the extension managers' and the
+	// built-in task board's, stacked onto the run's own lore/PHI tail. One call
+	// outside the extension check, because the board is not an extension — its
+	// card and its open-work gate follow the CONTROLLER, not the manager — and
+	// because build.EphemeralTail owns the order, which the re-derivation path
+	// has to reproduce exactly.
+	build.WireEphemeralTail(ag, build.EphemeralTail{Ext: build.ExtEphemeral(extMgr), Tasks: tasksCtrl})
 	ag.AddContinuationGate(build.OpenWorkGate(extMgr, tasksCtrl))
 }
 

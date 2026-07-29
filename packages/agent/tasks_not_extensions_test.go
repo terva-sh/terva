@@ -24,7 +24,10 @@ import (
 
 var extManagerCheck = regexp.MustCompile(`^\s*if\s+extMgr\s*!=\s*nil\s*\{`)
 
-var taskWiringVerbs = []string{"WireTasksEphemeral(", "OpenWorkGate("}
+// The card wiring is now one call carrying both layers (build.WireEphemeralTail),
+// so the nesting this guards would take the EXTENSION cards down with the task
+// card — a strictly worse version of the same mistake, and still invisible.
+var taskWiringVerbs = []string{"WireEphemeralTail(", "OpenWorkGate("}
 
 func TestTheTaskBoardIsNotWiredUnderAnExtensionCheck(t *testing.T) {
 	var checked int
