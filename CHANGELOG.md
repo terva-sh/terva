@@ -11,6 +11,29 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.127.1](https://github.com/terva-sh/terva/releases/tag/v0.127.1) — 2026-07-28
+
+### Features
+
+- web: drop any file on the composer, staged where a jailed agent can read it
+- web: the agent can hand a file back, and the transcript shows it as a card
+- web: the session list is grouped by what is actually in play
+
+### Fixes
+
+- build: an unrecognized run mode is granted nothing, not everything
+- core: a cancelled turn runs no more tools
+- core: an exported session carries every field it persists, and so does a fork
+- trust: trusting a workspace from an editor reaches the session it was typed in
+- windows: the embedded personas keep their line endings, and the mode checks skip where they cannot apply
+- workspace: a chat outlives the persona it was made with, and a card with chats stays
+
+### Other
+
+- build: the container splits into the packages that own its questions
+- core: the lorebook gets its own rows, and an edit costs one entry
+- ctrlproto: dispatch becomes a table, and two guards become unnecessary
+
 ## [v0.126.19](https://github.com/terva-sh/terva/releases/tag/v0.126.19) — 2026-07-27
 
 ### Features
