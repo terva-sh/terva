@@ -86,39 +86,18 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 
 	ag := r.NewAgent()
 	hookEng := build.BuildHookEngine(args, r.Trusted)
-	// Canonical tool-call ladder (pre-hooks, confirm gate, extension
-	// intercept) — shared with every other mode.
-	ag.BeforeToolExecute = build.BuildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
-	build.WireHostToolDispatcher(ag, extMgr, confirmGate)
-	ag.BeforeTurn = func(step int) (bool, string) {
-		r := extMgr.InterceptTurnStart(ctx, step)
-		return !r.Block, r.Reason
-	}
-	ag.BeforeAssistantMessage = func(text string) (bool, string, string) {
-		r := extMgr.InterceptAssistantMessage(ctx, text)
-		if r.Block {
-			return false, r.Reason, ""
-		}
-		return true, "", r.ReplaceText
-	}
-	ag.BeforeUserMessage = func(text string) (bool, string, string) {
-		r := extMgr.InterceptUserMessage(ctx, text)
-		if r.Block {
-			return false, r.Reason, ""
-		}
-		return true, "", r.ReplaceText
-	}
-	wsObserve := build.WorkspaceChangeObserver(tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), extMgr)
-	// Registration order is delivery order.
-	ag.AddEventObserver(wsObserve)
-	ag.AddEventObserver(func(ev core.AgentEvent) { build.FanoutAgentEvent(extMgr, ev) })
-	ag.AddEventObserver(func(ev core.AgentEvent) { build.ObserveAgentEventForHooks(hookEng, ev) })
-	// Inject extensions' live context cards into the model each turn (live
-	// provider + sizing twin; ext context before the tail so PHI stays last).
-	build.WireExtEphemeral(ag, extMgr.EphemeralContext)
-	build.WireTasksEphemeral(ag, r.Tasks)
-	// Re-prompt once at close if an extension flags open work or a task is open.
-	ag.AddContinuationGate(build.OpenWorkGate(extMgr, r.Tasks))
+	// The canonical launch wiring — tool-call ladder, extension intercepts,
+	// event observers, context cards, open-work gate — shared with print, json,
+	// bot and swarm. rpc used to reproduce all eleven steps inline, verbatim and
+	// in the same order, which is a copy that can only ever drift.
+	//
+	// acp and the daemon do NOT share it, and that is deliberate rather than an
+	// oversight: both differ in the observer stage for reasons their own
+	// comments give — acp returns its observer so the acp package can compose it
+	// AFTER the session/update translator instead of clobbering it, and the
+	// daemon registers a client broadcast ahead of the extension observers.
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, hookEng,
+		tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), r.Tasks)
 
 	// /reload-ext hot-reload callback (also triggered via rpc
 	// `reload_ext` if/when added). Rebuilds the tool registry on the
@@ -174,6 +153,12 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 		defer sess.Close()
 		build.WireHeadlessSessionPersist(ag, sess)
 	}
+	// Key the built-in task board to the session. rpc is the one host that
+	// SPLITS the binding event: the board binds here, at session-open, while the
+	// announcement waits for the background extension start below — a manager
+	// with no extensions started yet has nobody to announce to. BindSession with
+	// a nil Ext is that first half, and the goroutine's is the second.
+	build.BindSession(build.SessionBinding{Agent: ag, Tasks: r.Tasks, Session: sess})
 	// Everything that needs a live extension waits for the background start:
 	// fold their tools into the agent, then announce the session with its real
 	// identity (a nil session emits a bare session_start, as before). Both land
@@ -188,7 +173,10 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 		if extMgr.Count() > 0 {
 			mergeExtTools()
 		}
-		build.EmitSessionStart(extMgr, sess)
+		// The second half of the binding: the board was keyed at session-open,
+		// so a subscriber acting on this announcement finds it already loaded —
+		// which is the ordering BindSession exists to hold.
+		build.BindSession(build.SessionBinding{Ext: extMgr, Session: sess})
 	}()
 
 	server := &rpcServer{
@@ -437,11 +425,10 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 		if c := s.takeCancel(); c != nil {
 			c()
 		}
-		// An aborted turn must also unpark any approval still waiting on the
-		// driver: Confirm blocks outside the turn's context (BeforeToolExecute
-		// is ctx-free), so without this an abort left the prompt goroutine
-		// parked until the driver answered or the process ended.
-		s.asks.CancelAll(core.ConfirmDecision{Allow: false, Reason: "the turn was aborted before this approval was answered (fail closed)"})
+		// The turn's approvals unpark on their own now: Confirm takes the turn's
+		// context, which takeCancel just cancelled. This sweep used to be the
+		// only thing that released them, and it released ALL of them — every
+		// parked ask, including any that did not belong to the aborted turn.
 		s.writeResponse(id, cmd, nil)
 
 	case "approve":
@@ -779,7 +766,12 @@ func (s *rpcServer) busy() bool {
 // It runs on the prompt goroutine (a tool call inside PromptWithPolicy), never
 // on the read loop, so blocking here leaves the read loop free to receive the
 // `approve` command that unblocks it.
-func (s *rpcServer) Confirm(toolName, preview string) core.ConfirmDecision {
+// ctx is the turn's: aborting the turn unparks this wait directly. The abort
+// command used to sweep every parked ask instead (asks.CancelAll), because
+// nothing here could see the turn end — which also cancelled asks that did not
+// belong to the aborted turn. rpc runs one turn at a time, so that was safe
+// rather than correct.
+func (s *rpcServer) Confirm(ctx context.Context, toolName, preview string) core.ConfirmDecision {
 	s.pendMu.Lock()
 	s.askSeq++
 	id := fmt.Sprintf("ask-%d", s.askSeq)
@@ -795,6 +787,8 @@ func (s *rpcServer) Confirm(toolName, preview string) core.ConfirmDecision {
 	select {
 	case d := <-ch:
 		return d
+	case <-ctx.Done():
+		return core.ConfirmDecision{Allow: false, Reason: "the turn was aborted before this approval was answered (fail closed)"}
 	case <-s.ctx.Done():
 		// The session is going away; deny so the tool call unwinds with a
 		// model-readable reason rather than hanging the shutdown.
