@@ -11,6 +11,23 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.128.0](https://github.com/terva-sh/terva/releases/tag/v0.128.0) — 2026-07-29
+
+### Features
+
+- acp: an ACP session tells extensions it exists
+
+### Fixes
+
+- permissions: a cancelled turn takes its approval question with it
+- tasks: an rpc or editor session keeps the task board it opened
+
+### Other
+
+- model: a model swap is one event, and it reaches the dispatch tools
+- session: binding a session is one event, in one order
+- wiring: the permission gate does not depend on extensions
+
 ## [v0.127.1](https://github.com/terva-sh/terva/releases/tag/v0.127.1) — 2026-07-28
 
 ### Features
