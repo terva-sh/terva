@@ -707,11 +707,25 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 			model = DefaultModelForProvider(provName)
 		}
 	}
-	// If the resolved model belongs to a different provider (e.g. config
-	// says gpt-5 but we fell back to anthropic), pick that provider's default.
+	// If the model belongs to a different provider (e.g. config says gpt-5 but
+	// we fell back to anthropic), the pair is incoherent — take that provider's
+	// default instead.
+	//
+	// "Belongs to a different provider" has to be asked of THIS provider first.
+	// A bare FindModel returns the catalogue's first match, and plenty of ids
+	// are listed under several providers: gpt-5-pro and gpt-5-codex sit under
+	// azure-openai-responses before openai. Asking bare, the answer for
+	// openai/gpt-5-pro was "that is an azure model", and a session that
+	// explicitly named it was silently moved to openai's default — at launch,
+	// and again on every rebuild after a switch to one. It is the same
+	// provider-hop the /model verb guards against (switchModel resolves a bare
+	// id against the current provider first); Resolve knows the provider
+	// outright, so it never needed to guess.
 	if !openCatalogue {
-		if m, err := provider.FindModel("", model); err == nil && m.Provider != provName {
-			model = DefaultModelForProvider(provName)
+		if _, err := provider.FindModel(provName, model); err != nil {
+			if m, err := provider.FindModel("", model); err == nil && m.Provider != provName {
+				model = DefaultModelForProvider(provName)
+			}
 		}
 	}
 	resolvedModel, err := provider.FindModel(provName, model)
