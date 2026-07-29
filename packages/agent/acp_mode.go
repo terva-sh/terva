@@ -91,6 +91,7 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 		return acp.SessionAgent{}, err
 	}
 	build.WireHeadlessSessionPersist(ag, sess)
+	build.BindSession(build.SessionBinding{Agent: ag, Tasks: r.Tasks, Ext: extMgr, Session: sess})
 	return acp.SessionAgent{
 		Agent:            ag,
 		Session:          sess,
@@ -134,7 +135,10 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 		_ = sess.Close()
 		return acp.SessionAgent{}, nil, err
 	}
+	// As in NewSessionAgent: a resumed session reopens the board it left behind
+	// rather than an empty one, and announces itself to subscribing extensions.
 	build.WireHeadlessSessionPersist(ag, sess)
+	build.BindSession(build.SessionBinding{Agent: ag, Tasks: r.Tasks, Ext: extMgr, Session: sess})
 	// Re-point the agent at the session's OWN stored model, not just the menu:
 	// before this, ACP resume DISPLAYED the stored model (a prior model switch,
 	// recorded in meta) but RAN on the resolved default until a later switch
@@ -269,7 +273,14 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 	// endpoint (rpc.go's rejection rationale).
 	if target.Provider == currentProvider {
 		if cur, curErr := provider.FindModel(currentProvider, currentModel); curErr == nil && cur.BaseURL == target.BaseURL {
-			return acp.ModelSwitch{Provider: target.Provider, Model: target.ID, Reuse: true}, nil
+			sw := acp.ModelSwitch{Provider: target.Provider, Model: target.ID, Reuse: true}
+			// A nil Client is how the shared event spells "same endpoint, new
+			// id" — and it still re-points the host-routed dispatch tools,
+			// which an id swap changes just as much as a rebuild does.
+			sw.Apply = func(ag *core.Agent) {
+				build.ApplyModelSwap(build.ModelSwap{Agent: ag, Provider: sw.Provider, Model: sw.Model})
+			}
+			return sw, nil
 		}
 	}
 
@@ -290,14 +301,25 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 	if !r.HasCredential() {
 		return acp.ModelSwitch{}, fmt.Errorf("no credential resolved for provider %q", target.Provider)
 	}
-	return acp.ModelSwitch{
+	sw := acp.ModelSwitch{
 		Provider:   r.Provider,
 		Model:      r.Model,
 		Client:     r.NewClient(),
 		Reuse:      false,
 		AuthMethod: r.AuthMethod,
 		BaseURL:    r.BaseURL,
-	}, nil
+	}
+	sw.Apply = func(ag *core.Agent) {
+		build.ApplyModelSwap(build.ModelSwap{
+			Agent:      ag,
+			Client:     sw.Client,
+			Provider:   sw.Provider,
+			Model:      sw.Model,
+			AuthMethod: sw.AuthMethod,
+			BaseURL:    sw.BaseURL,
+		})
+	}
+	return sw, nil
 }
 
 // buildAgent resolves args for cwd and constructs the agent with the canonical
@@ -415,7 +437,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// correlation seam — so no wrapper records a "current call" ahead of the
 	// ladder, and nothing collides when a host_tool_call approval parks
 	// concurrently with a model call's.
-	ag.BeforeToolExecute = build.BuildBeforeToolExecute(ctx, hookEng, confirmGate, extMgr)
+	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, confirmGate, extMgr)
 	build.WireHostToolDispatcher(ag, extMgr, confirmGate)
 	// Apply the subset of the non-interactive extension hooks that make sense
 	// under ACP: BeforeTurn / BeforeAssistantMessage (extension turn +
@@ -444,9 +466,17 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 			return true, "", res.ReplaceText
 		}
 		build.WireExtEphemeral(ag, extMgr.EphemeralContext)
-		build.WireTasksEphemeral(ag, r.Tasks)
-		ag.AddContinuationGate(build.OpenWorkGate(extMgr, r.Tasks))
 	}
+	// The task board is not an extension, so its card and its open-work gate sit
+	// OUTSIDE the manager check — they follow r.Tasks. They were nested inside
+	// it, which made a built-in board's visibility depend on whether this
+	// session happened to have an extension manager.
+	//
+	// Still after the extension cards: composeEphemeral puts each new provider
+	// first, so wiring order reverses into the composed tail and this preserves
+	// the order the session has always sent.
+	build.WireTasksEphemeral(ag, r.Tasks)
+	ag.AddContinuationGate(build.OpenWorkGate(extMgr, r.Tasks))
 	// observe is the extension-side event sink: it fans every event out to the
 	// extensions and feeds the two tool events into the hook correlator —
 	// exactly what wireNonInteractiveAgentExtHooks assigns to OnEvent, but here
@@ -842,9 +872,14 @@ func (f *acpFactory) setupACPMCP(ctx context.Context, args build.Args, r *build.
 //
 // Load errors are best-effort stderr notes, never fatal: one broken extension
 // must not take the session down, exactly as in the headless/interactive
-// paths. session_start is NOT emitted here — the durable session does not
-// exist yet at agent-build time; a future slash-command/session-identity slice
-// would emit it after NewSession, mirroring how the headless modes defer it.
+// paths.
+//
+// session_start is not emitted HERE — the durable session does not exist yet at
+// agent-build time. It is emitted by the build.BindSession call in
+// NewSessionAgent / LoadSessionAgent, which is where it does, mirroring how the
+// headless modes defer it. (That was the plan this comment used to describe as
+// future work; the manager is per-session, so each announces exactly one
+// session and Manager.Stop supplies the matching session_end.)
 func (f *acpFactory) setupACPExtensions(ctx context.Context, args build.Args, r *build.Resolved) (*extensions.Manager, func()) {
 	extMgr := build.NewExtensionManager(config.TervaHome(), r.CWD, f.version, r.Provider, r.Model, build.NonInteractiveExtHooks{})
 	extMgr.SetContextDisabled(r.DisableContextExtensions)
