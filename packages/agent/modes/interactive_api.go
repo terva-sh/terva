@@ -105,15 +105,25 @@ func (i *Interactive) CancelTurn() {
 	}
 }
 
-// Confirm implements core.Confirmer. The agent goroutine calls
-// this synchronously before every tool invocation when --no-yolo is
-// active. We push the request onto the confirmDialog queue, trigger
-// a redraw, and block the caller until the user answers.
+// Confirm implements core.Confirmer: push the request onto the confirmDialog
+// queue, trigger a redraw, and block until the user answers or ctx ends.
 //
-// If the session is cancelled or the TUI exits mid-prompt, any
-// pending request is refused via CancelAll so the agent doesn't
-// deadlock.
-func (i *Interactive) Confirm(toolName string, preview string) core.ConfirmDecision {
+// NOTE ON THE LIVE PATH: no gate is wired to this today. The TUI runs as a front
+// end over ctrlproto, so the parking happens in the daemon's webConfirmer and
+// this process receives an already-parked permission request to render (see
+// interactive_ctrlproto.go's "Confirmer inversion"). It is kept — and held to
+// the interface by the assertion below — because it is the in-process answer for
+// any host that drives Interactive directly, and because a Confirmer that claims
+// the interface in a comment while failing to satisfy it is the kind of quiet
+// untruth this file cannot afford.
+//
+// The ctx select is what the CancelAll sweep used to stand in for: a cancelled
+// turn refuses immediately instead of waiting for the front end to remember to
+// clear the queue. CancelAll remains for the case ctx cannot cover — the TUI
+// exiting out from under a request nobody is waiting on any more.
+var _ core.Confirmer = (*Interactive)(nil)
+
+func (i *Interactive) Confirm(ctx context.Context, toolName string, preview string) core.ConfirmDecision {
 	resp := make(chan core.ConfirmDecision, 1)
 	i.confirmDialog.Enqueue(&dialogs.ConfirmRequest{
 		ToolName: toolName,
@@ -121,7 +131,12 @@ func (i *Interactive) Confirm(toolName string, preview string) core.ConfirmDecis
 		Resp:     resp,
 	})
 	i.invalidate()
-	return <-resp
+	select {
+	case d := <-resp:
+		return d
+	case <-ctx.Done():
+		return core.ConfirmDecision{Allow: false, Reason: "tool call refused: the turn was cancelled before this approval was answered"}
+	}
 }
 
 // Ask implements core.Asker. The ask_user_question tool calls this

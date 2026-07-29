@@ -51,7 +51,7 @@ func TestAnApprovalThatLandsAfterACancelDoesNotRunTheTool(t *testing.T) {
 
 	// Stand in for a confirmer blocked on the daemon's context: it is still
 	// waiting when the turn is cancelled, and then it says yes.
-	ag.BeforeToolExecute = func(provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	ag.BeforeToolExecute = func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		cancel()
 		return true, "", nil
 	}
@@ -77,7 +77,7 @@ func TestAnApprovalThatLandsAfterACancelDoesNotRunTheTool(t *testing.T) {
 func TestACancelledTurnDispatchesNoFurtherTools(t *testing.T) {
 	tool := &cancelProbeTool{}
 	var asked atomic.Bool
-	ag := &Agent{BeforeToolExecute: func(provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	ag := &Agent{BeforeToolExecute: func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		asked.Store(true)
 		return true, "", nil
 	}}
@@ -103,7 +103,7 @@ func TestACancelledTurnDispatchesNoFurtherTools(t *testing.T) {
 // worst possible reason.
 func TestALiveTurnStillRunsItsTools(t *testing.T) {
 	tool := &cancelProbeTool{}
-	ag := &Agent{BeforeToolExecute: func(provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	ag := &Agent{BeforeToolExecute: func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		return true, "", nil
 	}}
 
@@ -124,7 +124,7 @@ func TestACancelMidBatchStopsTheRemainingCalls(t *testing.T) {
 	tool := &cancelProbeTool{}
 	var dispatched atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
-	ag := &Agent{BeforeToolExecute: func(provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	ag := &Agent{BeforeToolExecute: func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		if dispatched.Add(1) == 1 {
 			cancel() // the first call's approval outlived the turn
 		}

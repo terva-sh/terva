@@ -118,7 +118,7 @@ func TestVisibleToolHiddenStillDispatchesAndGates(t *testing.T) {
 	a.VisibleTool = func(name string) bool { return name != "secret" }
 
 	gateFired := false
-	a.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	a.BeforeToolExecute = func(_ context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		if call.Name == "secret" {
 			gateFired = true
 		}

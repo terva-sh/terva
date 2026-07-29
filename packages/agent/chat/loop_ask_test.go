@@ -101,10 +101,22 @@ type askFakeConnector struct {
 	*fakeConnector
 	asked  chan Ask
 	answer Answer
+	// hold, when non-nil, keeps the ask outstanding until it is closed — a
+	// question nobody has answered yet. Honouring ctx while parked is what a
+	// real connector does, and a fake that did not would let a confirmer pass
+	// these tests while ignoring cancellation.
+	hold chan struct{}
 }
 
 func (f *askFakeConnector) Ask(ctx context.Context, a Ask) (Answer, error) {
 	f.asked <- a
+	if f.hold != nil {
+		select {
+		case <-f.hold:
+		case <-ctx.Done():
+			return Answer{}, ctx.Err()
+		}
+	}
 	return f.answer, nil
 }
 

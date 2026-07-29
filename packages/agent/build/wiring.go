@@ -559,8 +559,16 @@ func HookSpecsFor(args Args, trusted bool) *hooks.Config {
 // extension intercept. One implementation shared by every mode so
 // the ladders cannot drift apart. hookEng, gate, and extMgr may each
 // be nil.
-func BuildBeforeToolExecute(ctx context.Context, hookEng *hooks.Engine, gate *core.ConfirmGate, extMgr *extensions.Manager) func(provider.ToolCallBlock) (bool, string, json.RawMessage) {
-	return func(call provider.ToolCallBlock) (allowed bool, reason string, modArgs json.RawMessage) {
+//
+// The ladder takes the TURN's context, per call, rather than closing over the
+// host's at wiring time. All three rungs can block — a hook is a subprocess, the
+// gate can wait on a human for minutes, an intercept is an RPC — and each was
+// previously bounded only by the process's lifetime, so cancelling a turn left
+// them running for a turn that no longer existed. The per-call context is a
+// descendant of the one the host used to pass, so anything carried in it is
+// still there; what it adds is an end.
+func BuildBeforeToolExecute(hookEng *hooks.Engine, gate *core.ConfirmGate, extMgr *extensions.Manager) func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	return func(ctx context.Context, call provider.ToolCallBlock) (allowed bool, reason string, modArgs json.RawMessage) {
 		args := call.Arguments
 		// Audit every call with the gate's decision and the mode in force, so
 		// even a yolo session leaves a durable record of what ran and why it
@@ -594,7 +602,7 @@ func BuildBeforeToolExecute(ctx context.Context, hookEng *hooks.Engine, gate *co
 			// exit 2 is the enforcement spelling.
 		}
 		if !skipGate && gate != nil {
-			ok, denyReason, _ := gate.Check(call.Name, args, core.BuildPreview(args, 120), call.ID)
+			ok, denyReason, _ := gate.Check(ctx, call.Name, args, core.BuildPreview(args, 120), call.ID)
 			if !ok {
 				return false, denyReason, nil
 			}

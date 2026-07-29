@@ -51,7 +51,7 @@ func TestServeApprovalsRoutesToConfirmer(t *testing.T) {
 	var sawTool, sawPreview string
 	r := &Runner{
 		agent: &swarm.Agent{ID: "w-7"},
-		confirmer: confirmFunc(func(tool, preview string) core.ConfirmDecision {
+		confirmer: confirmFunc(func(_ context.Context, tool, preview string) core.ConfirmDecision {
 			sawTool, sawPreview = tool, preview
 			return core.ConfirmDecision{Allow: true}
 		}),
@@ -117,7 +117,7 @@ func TestServeApprovalsDeniesMalformed(t *testing.T) {
 	}
 	r := &Runner{
 		agent: &swarm.Agent{ID: "w"},
-		confirmer: confirmFunc(func(string, string) core.ConfirmDecision {
+		confirmer: confirmFunc(func(context.Context, string, string) core.ConfirmDecision {
 			return core.ConfirmDecision{Allow: true}
 		}),
 	}
@@ -157,9 +157,12 @@ func TestServeApprovalsCancelDenies(t *testing.T) {
 	blocked := make(chan struct{})
 	r := &Runner{
 		agent: &swarm.Agent{ID: "slow"},
-		confirmer: confirmFunc(func(string, string) core.ConfirmDecision {
+		confirmer: confirmFunc(func(ctx context.Context, _, _ string) core.ConfirmDecision {
 			close(blocked)
-			select {} // never answers — the human walked away
+			// The human walked away. The worker's context is what ends the
+			// wait — a Confirmer that parks is required to honour it.
+			<-ctx.Done()
+			return core.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
 		}),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -221,7 +224,7 @@ func TestRunServesApprovalSocketForBackend(t *testing.T) {
 			return exec.Command("true"), nil // a child that exits immediately
 		},
 	}
-	confirmer := confirmFunc(func(string, string) core.ConfirmDecision {
+	confirmer := confirmFunc(func(context.Context, string, string) core.ConfirmDecision {
 		return core.ConfirmDecision{Allow: true}
 	})
 

@@ -22,13 +22,13 @@ var _ core.ConfirmerWithCall = (*webConfirmer)(nil)
 
 // Confirm is the id-less fallback (a gate caller that knows no call id); it
 // mints a unique park key so even two id-less asks can never collide.
-func (c *webConfirmer) Confirm(toolName, preview string) core.ConfirmDecision {
-	return c.ConfirmWithRequest(core.ConfirmRequest{Tool: toolName, Preview: preview})
+func (c *webConfirmer) Confirm(ctx context.Context, toolName, preview string) core.ConfirmDecision {
+	return c.ConfirmWithRequest(ctx, core.ConfirmRequest{Tool: toolName, Preview: preview})
 }
 
 // ConfirmWithCall is kept for gate versions that predate ConfirmWithRequest.
-func (c *webConfirmer) ConfirmWithCall(toolName, preview, callID string) core.ConfirmDecision {
-	return c.ConfirmWithRequest(core.ConfirmRequest{Tool: toolName, Preview: preview, CallID: callID})
+func (c *webConfirmer) ConfirmWithCall(ctx context.Context, toolName, preview, callID string) core.ConfirmDecision {
+	return c.ConfirmWithRequest(ctx, core.ConfirmRequest{Tool: toolName, Preview: preview, CallID: callID})
 }
 
 // ConfirmWithRequest parks this one call under its own id. The id arrives
@@ -40,12 +40,13 @@ func (c *webConfirmer) ConfirmWithCall(toolName, preview, callID string) core.Co
 // (TestWebConfirmerConcurrentParksDistinct). The gate's derived grant
 // scopes ride the broadcast so any client can offer the scoped "always
 // allow <command>" option.
-func (c *webConfirmer) ConfirmWithRequest(cr core.ConfirmRequest) core.ConfirmDecision {
+// ctx is this CALL's context. It used to read s.turnCtx off the session under
+// the mutex, which answers a subtly different question — "the turn this session
+// is running now" rather than "the turn this call belongs to" — and answered nil
+// for any door that ran outside a turn, leaving the park with nothing to cancel
+// it.
+func (c *webConfirmer) ConfirmWithRequest(ctx context.Context, cr core.ConfirmRequest) core.ConfirmDecision {
 	s := c.s
-	s.mu.Lock()
-	turnCtx := s.turnCtx
-	s.mu.Unlock()
-
 	callID := cr.CallID
 	var (
 		ch      <-chan core.ConfirmDecision
@@ -84,14 +85,10 @@ func (c *webConfirmer) ConfirmWithRequest(cr core.ConfirmRequest) core.ConfirmDe
 
 	s.broadcast(ctrlproto.PermissionEvent(req))
 
-	var done <-chan struct{}
-	if turnCtx != nil {
-		done = turnCtx.Done()
-	}
 	select {
 	case d := <-ch:
 		return d
-	case <-done:
+	case <-ctx.Done():
 		// Cancelled (client cancel / shutdown): fail closed.
 		return core.ConfirmDecision{Allow: false, Reason: "cancelled"}
 	}
@@ -104,10 +101,15 @@ func (c *webConfirmer) ConfirmWithRequest(cr core.ConfirmRequest) core.ConfirmDe
 //
 // Unlike webConfirmer — keyed by the call id the gate passes down — it mints
 // a stable per-request callID namespaced by the agent id, so several workers'
-// concurrent asks never collide in pendPerm. It parks on the
-// daemon context rather than a turn context because a worker is not the session's
-// turn; the runner's handleAsk separately abandons the wait if the worker is
-// stopped first (racing this Confirm against the worker's own context).
+// concurrent asks never collide in pendPerm.
+//
+// It waits on TWO lifetimes, because a worker's approval sits between them: the
+// ctx passed in is the WORKER's (the runner cancels it when the worker is
+// stopped — a worker is not the session's turn, and must not be unparked by a
+// turn ending), and c.ctx is the daemon's, which outlives every worker and
+// unparks the wait on shutdown. The runner used to supply the first half itself
+// by calling Confirm on a goroutine and selecting around it, which left a parked
+// goroutine per unanswered ask.
 type workerConfirmer struct {
 	s       *wsSession
 	ctx     context.Context // daemon lifetime; unblocks a parked wait on shutdown
@@ -117,7 +119,7 @@ type workerConfirmer struct {
 
 var _ core.Confirmer = (*workerConfirmer)(nil)
 
-func (c *workerConfirmer) Confirm(toolName, preview string) core.ConfirmDecision {
+func (c *workerConfirmer) Confirm(ctx context.Context, toolName, preview string) core.ConfirmDecision {
 	s := c.s
 	callID := fmt.Sprintf("worker-%s-%d", c.agentID, c.seq.Add(1))
 	// Agent carries the worker id as a first-class field so a board can
@@ -140,6 +142,8 @@ func (c *workerConfirmer) Confirm(toolName, preview string) core.ConfirmDecision
 	select {
 	case d := <-ch:
 		return d
+	case <-ctx.Done():
+		return core.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
 	case <-c.ctx.Done():
 		return core.ConfirmDecision{Allow: false, Reason: "cancelled (session ending)"}
 	}

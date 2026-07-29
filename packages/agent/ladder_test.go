@@ -45,12 +45,12 @@ func ladderEngine(t *testing.T, mode string) *hooks.Engine {
 	return e
 }
 
-func callBash(fn func(provider.ToolCallBlock) (bool, string, json.RawMessage)) (bool, string, json.RawMessage) {
-	return fn(provider.ToolCallBlock{ID: "T1", Name: "bash", Arguments: []byte(`{"command":"ls"}`)})
+func callBash(fn func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage)) (bool, string, json.RawMessage) {
+	return fn(context.Background(), provider.ToolCallBlock{ID: "T1", Name: "bash", Arguments: []byte(`{"command":"ls"}`)})
 }
 
 func TestLadderHookDenyRefusesBeforeGate(t *testing.T) {
-	fn := build.BuildBeforeToolExecute(context.Background(), ladderEngine(t, "deny"), nil, nil)
+	fn := build.BuildBeforeToolExecute(ladderEngine(t, "deny"), nil, nil)
 	allowed, reason, _ := callBash(fn)
 	if allowed {
 		t.Fatal("hook deny must refuse")
@@ -64,19 +64,19 @@ func TestLadderHookAllowSkipsRefusingGate(t *testing.T) {
 	// A refusing gate (nil inner, ask policy) would block this call;
 	// the user hook's allow is final and skips it.
 	gate := core.NewConfirmGate(nil)
-	fn := build.BuildBeforeToolExecute(context.Background(), ladderEngine(t, "allow"), gate, nil)
+	fn := build.BuildBeforeToolExecute(ladderEngine(t, "allow"), gate, nil)
 	if allowed, reason, _ := callBash(fn); !allowed {
 		t.Fatalf("hook allow should skip the gate, got refusal %q", reason)
 	}
 	// Sanity: without the hook the same gate refuses.
-	fn = build.BuildBeforeToolExecute(context.Background(), nil, gate, nil)
+	fn = build.BuildBeforeToolExecute(nil, gate, nil)
 	if allowed, _, _ := callBash(fn); allowed {
 		t.Fatal("control: gate alone should refuse")
 	}
 }
 
 func TestLadderHookRewriteFlowsToModifiedArgs(t *testing.T) {
-	fn := build.BuildBeforeToolExecute(context.Background(), ladderEngine(t, "rewrite"), nil, nil)
+	fn := build.BuildBeforeToolExecute(ladderEngine(t, "rewrite"), nil, nil)
 	allowed, _, modified := callBash(fn)
 	if !allowed {
 		t.Fatal("rewrite-only hook must not block")
@@ -99,11 +99,11 @@ func TestLadderGateSeesRewrittenArgs(t *testing.T) {
 		}
 		return core.NewPolicyGate(pol, nil)
 	}
-	fn := build.BuildBeforeToolExecute(context.Background(), ladderEngine(t, "rewrite"), mkGate(`^ls$`), nil)
+	fn := build.BuildBeforeToolExecute(ladderEngine(t, "rewrite"), mkGate(`^ls$`), nil)
 	if allowed, _, _ := callBash(fn); !allowed {
 		t.Error("deny rule on the original args must not fire after rewrite")
 	}
-	fn = build.BuildBeforeToolExecute(context.Background(), ladderEngine(t, "rewrite"), mkGate(`^echo rewritten$`), nil)
+	fn = build.BuildBeforeToolExecute(ladderEngine(t, "rewrite"), mkGate(`^echo rewritten$`), nil)
 	if allowed, _, _ := callBash(fn); allowed {
 		t.Error("deny rule on the rewritten args must fire")
 	}

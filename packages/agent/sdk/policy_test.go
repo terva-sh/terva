@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -64,7 +65,7 @@ func TestUserDenyRuleReachesTheEmbeddedAgent(t *testing.T) {
 	if rt.agent.BeforeToolExecute == nil {
 		t.Fatal("sdk.New built an agent with no tool gate — a user's permission rules are unenforced")
 	}
-	allowed, reason, _ := rt.agent.BeforeToolExecute(provider.ToolCallBlock{
+	allowed, reason, _ := rt.agent.BeforeToolExecute(t.Context(), provider.ToolCallBlock{
 		Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`),
 	})
 	if allowed {
@@ -93,7 +94,7 @@ func TestAnAskWithNoConfirmerFailsClosed(t *testing.T) {
 	if rt.agent.BeforeToolExecute == nil {
 		t.Fatal("no gate installed")
 	}
-	allowed, reason, _ := rt.agent.BeforeToolExecute(provider.ToolCallBlock{
+	allowed, reason, _ := rt.agent.BeforeToolExecute(t.Context(), provider.ToolCallBlock{
 		Name: "write", Arguments: json.RawMessage(`{"path":"/tmp/x","content":"y"}`),
 	})
 	if allowed {
@@ -110,7 +111,7 @@ type recordingConfirmer struct {
 	answer bool
 }
 
-func (c *recordingConfirmer) Confirm(toolName, preview string) core.ConfirmDecision {
+func (c *recordingConfirmer) Confirm(_ context.Context, toolName, preview string) core.ConfirmDecision {
 	c.asked = append(c.asked, toolName)
 	return core.ConfirmDecision{Allow: c.answer}
 }
@@ -129,7 +130,7 @@ func TestASuppliedConfirmerIsConsulted(t *testing.T) {
 	}
 	conf := &recordingConfirmer{answer: true}
 	rt := newRuntime(t, Config{Confirmer: conf})
-	allowed, _, _ := rt.agent.BeforeToolExecute(provider.ToolCallBlock{
+	allowed, _, _ := rt.agent.BeforeToolExecute(t.Context(), provider.ToolCallBlock{
 		Name: "write", Arguments: json.RawMessage(`{"path":"/tmp/x","content":"y"}`),
 	})
 	if len(conf.asked) == 0 {
@@ -147,7 +148,7 @@ func TestYoloOptsOutOfUserRules(t *testing.T) {
 	if rt.agent.BeforeToolExecute == nil {
 		return // no gate at all is the intended yolo shape
 	}
-	allowed, _, _ := rt.agent.BeforeToolExecute(provider.ToolCallBlock{
+	allowed, _, _ := rt.agent.BeforeToolExecute(t.Context(), provider.ToolCallBlock{
 		Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`),
 	})
 	if !allowed {

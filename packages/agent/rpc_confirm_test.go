@@ -76,7 +76,7 @@ func TestRPCConfirmAsksAndAwaitsApprove(t *testing.T) {
 			s := &rpcServer{ctx: context.Background(), out: out}
 
 			got := make(chan core.ConfirmDecision, 1)
-			go func() { got <- s.Confirm("bash", "rm -rf /tmp/x") }()
+			go func() { got <- s.Confirm(context.Background(), "bash", "rm -rf /tmp/x") }()
 
 			id := waitForAsk(t, out)
 			// The driver answers on the read loop, exactly as run() would. dispatch
@@ -105,7 +105,7 @@ func TestRPCConfirmRememberFlagsCross(t *testing.T) {
 	out := &syncBuf{}
 	s := &rpcServer{ctx: context.Background(), out: out}
 	got := make(chan core.ConfirmDecision, 1)
-	go func() { got <- s.Confirm("read", "/etc/hosts") }()
+	go func() { got <- s.Confirm(context.Background(), "read", "/etc/hosts") }()
 	id := waitForAsk(t, out)
 	s.dispatch("approve", id, []byte(`{"type":"approve","id":"`+id+`","allow":true,"remember_tool":true}`))
 	d := <-got
@@ -138,7 +138,7 @@ func TestRPCConfirmCancelledDenies(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &rpcServer{ctx: ctx, out: out}
 	got := make(chan core.ConfirmDecision, 1)
-	go func() { got <- s.Confirm("bash", "sleep 100") }()
+	go func() { got <- s.Confirm(context.Background(), "bash", "sleep 100") }()
 	waitForAsk(t, out)
 	cancel()
 	select {
@@ -152,16 +152,24 @@ func TestRPCConfirmCancelledDenies(t *testing.T) {
 }
 
 // TestRPCAbortUnparksPendingApproval: `abort` must answer a parked approval,
-// not just cancel the turn context. Confirm blocks outside the turn's context
-// (BeforeToolExecute is ctx-free), so before the ParkTable migration an abort
-// during a pending approval left the prompt goroutine parked until the driver
-// answered or the process ended — the sharpest of the three turn-cancel gaps
+// not just cancel the turn context — the sharpest of the three turn-cancel gaps
 // found in the 2026-07 confirmer survey.
+//
+// The mechanism changed under this test and the property did not. It used to
+// hold because abort swept every parked ask (asks.CancelAll), which was the only
+// thing that could reach a Confirm blocking outside the turn's context. Confirm
+// now takes the turn's context, so what abort has to do is exactly what it
+// already did for the turn itself: cancel it. The test wires the turn cancel the
+// way runPrompt does, so it exercises the real path rather than the sweep.
 func TestRPCAbortUnparksPendingApproval(t *testing.T) {
 	out := &syncBuf{}
 	s := &rpcServer{ctx: context.Background(), out: out}
+	turnCtx, cancelTurn := context.WithCancel(context.Background())
+	defer cancelTurn()
+	s.setCancel(cancelTurn)
+
 	got := make(chan core.ConfirmDecision, 1)
-	go func() { got <- s.Confirm("bash", "sleep 100") }()
+	go func() { got <- s.Confirm(turnCtx, "bash", "sleep 100") }()
 	waitForAsk(t, out)
 
 	s.dispatch("abort", "abort-1", nil)
@@ -194,7 +202,7 @@ func TestRPCGateRoutesThroughAskApprove(t *testing.T) {
 	}
 	got := make(chan res, 1)
 	go func() {
-		allow, reason, _ := gate.Check("bash", nil, "rm -rf /tmp/x", "")
+		allow, reason, _ := gate.Check(context.Background(), "bash", nil, "rm -rf /tmp/x", "")
 		got <- res{allow, reason}
 	}()
 

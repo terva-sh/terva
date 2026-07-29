@@ -101,7 +101,7 @@ func TestApprovalHTTPAllow(t *testing.T) {
 	}
 	defer stop()
 
-	d := confirmer.Confirm("Write", "worker w-7: write app.txt")
+	d := confirmer.Confirm(context.Background(), "Write", "worker w-7: write app.txt")
 	if !d.Allow {
 		t.Fatalf("remote allow did not open the gate: %+v", d)
 	}
@@ -135,7 +135,7 @@ func TestApprovalHTTPDeny(t *testing.T) {
 	}
 	defer stop()
 
-	d := confirmer.Confirm("Write", "worker w-7: write app.txt")
+	d := confirmer.Confirm(context.Background(), "Write", "worker w-7: write app.txt")
 	if d.Allow {
 		t.Fatalf("remote deny opened the gate: %+v", d)
 	}
@@ -158,7 +158,7 @@ func TestApprovalHTTPCustomTool(t *testing.T) {
 	}
 	defer stop()
 
-	if d := confirmer.Confirm("Bash", "worker w-1: rm tmp"); !d.Allow {
+	if d := confirmer.Confirm(context.Background(), "Bash", "worker w-1: rm tmp"); !d.Allow {
 		t.Fatalf("custom-tool allow did not open the gate: %+v", d)
 	}
 	if calledAs, _, _ := f.snapshot(); calledAs != "gate_check" {
@@ -181,7 +181,7 @@ func TestApprovalHTTPBearer(t *testing.T) {
 	}
 	defer stop()
 
-	if d := confirmer.Confirm("Write", "worker w-1: touch x"); !d.Allow {
+	if d := confirmer.Confirm(context.Background(), "Write", "worker w-1: touch x"); !d.Allow {
 		t.Fatalf("authed allow did not open the gate: %+v", d)
 	}
 	if _, _, sawAuth := f.snapshot(); sawAuth != "Bearer t0ken" {
@@ -255,7 +255,7 @@ func TestApprovalHTTPFailsClosedOnError(t *testing.T) {
 		t.Fatal("handshake never completed; test would not exercise the mid-run failure")
 	}
 
-	d := confirmer.Confirm("Write", "worker w-1: write secret")
+	d := confirmer.Confirm(context.Background(), "Write", "worker w-1: write secret")
 	if d.Allow {
 		t.Fatalf("a 500 on the confirmation call opened the gate: %+v", d)
 	}

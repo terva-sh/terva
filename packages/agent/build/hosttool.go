@@ -61,7 +61,7 @@ func buildHostToolDispatcher(ag *core.Agent, gate *core.ConfirmGate, mgr hostToo
 		// wedges until turn cancel).
 		preview := core.BuildPreview(args, 120)
 		callID := fmt.Sprintf("hostcall-%s-%d", extName, hostGateSeq.Add(1))
-		allowed, reason, _ := gate.Check(toolName, args, preview, callID)
+		allowed, reason, _ := gate.Check(ctx, toolName, args, preview, callID)
 		recordGateAudit(auditViaHostToolCall, toolName, args, gate, allowed, reason)
 		if !allowed {
 			return errOut(fmt.Sprintf("host_tool_call: %q denied: %s", toolName, reason))

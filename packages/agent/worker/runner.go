@@ -392,24 +392,19 @@ func (r *Runner) pumpStdin(brief Briefing, listener *swarm.Listener, lerr error,
 // human card, labelled with the worker id so the human knows whose action it is,
 // whichever backend asked.
 //
-// core.Confirmer.Confirm takes no context, so it runs off-goroutine and races
-// the worker's teardown: a worker stopped before the human answers denies
-// (leaving at most one bounded parked goroutine per unanswered ask) rather than
-// hanging the caller. A nil Confirmer — a resumed worker whose session is gone —
-// denies cleanly with a reason instead of waiting on an answer that never comes.
+// ctx is the worker's: a worker stopped while a human is still looking at the
+// prompt unparks and denies. That used to need a goroutine and a select here,
+// because Confirm took no context — which meant every unanswered ask left one
+// parked goroutine behind, bounded but real. Confirm takes the context now, so
+// the wait is just a call.
+//
+// A nil Confirmer — a resumed worker whose session is gone — denies cleanly with
+// a reason instead of waiting on an answer that never comes.
 func (r *Runner) decide(ctx context.Context, tool, preview string) core.ConfirmDecision {
 	if r.confirmer == nil {
 		return core.ConfirmDecision{Allow: false, Reason: "no approver is available for this worker; denied"}
 	}
-	label := "worker " + r.agent.ID + ": " + preview
-	dch := make(chan core.ConfirmDecision, 1)
-	go func() { dch <- r.confirmer.Confirm(tool, label) }()
-	select {
-	case d := <-dch:
-		return d
-	case <-ctx.Done():
-		return core.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
-	}
+	return r.confirmer.Confirm(ctx, tool, "worker "+r.agent.ID+": "+preview)
 }
 
 // handleAsk routes one worker approval request (rpc-native carrier) to the

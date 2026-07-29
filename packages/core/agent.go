@@ -92,7 +92,16 @@ type Agent struct {
 	// tool will see, which lets guards redact / augment / patch the
 	// model's request without rewriting the transcript. Empty or
 	// malformed modifiedArgs is ignored.
-	BeforeToolExecute func(call provider.ToolCallBlock) (allowed bool, reason string, modifiedArgs json.RawMessage)
+	//
+	// ctx is the turn's, and every rung of the ladder behind this hook can
+	// block on a human or a network: a pre-tool-use hook is a subprocess, the
+	// confirm gate can wait minutes for an approval, an extension intercept is
+	// an RPC. All three must stop when the turn does, which they can only do if
+	// the turn's context reaches them — so it is a parameter rather than
+	// something the host closes over at wiring time. A host that captured its
+	// own long-lived context here was the reason a cancelled turn's approval
+	// could still land.
+	BeforeToolExecute func(ctx context.Context, call provider.ToolCallBlock) (allowed bool, reason string, modifiedArgs json.RawMessage)
 
 	// BeforeTurn, if set, is called before each turn's model call.
 	// Returning (allowed=false, reason) aborts the turn; reason is
@@ -2584,7 +2593,7 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools
 	// action; rewrites are invisible to the model (they apply only
 	// to the execution).
 	if a.BeforeToolExecute != nil {
-		allowed, reason, modified := a.BeforeToolExecute(tc)
+		allowed, reason, modified := a.BeforeToolExecute(ctx, tc)
 		if !allowed {
 			if reason == "" {
 				reason = "tool call refused by extension guard"
@@ -2595,12 +2604,14 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools
 			}
 		}
 		// The ladder can block for MINUTES waiting on a human in a chat or an
-		// orchestrator over MCP — and those confirmers wait on the HOST's
-		// context, not this turn's, so cancelling the turn does not unpark
-		// them. Without this check an approval that arrives after `/stop` runs
-		// the tool: the user was told "cancelled the current turn" and the
-		// write landed anyway. An answer for a turn that no longer exists is
-		// too late by definition, whatever it says.
+		// orchestrator over MCP. Those confirmers now take this turn's context
+		// and unpark when it is cancelled, but that makes the race narrower, not
+		// absent: an approval delivered a moment BEFORE the cancel still returns
+		// allow, and the hook and extension rungs answer on their own schedule
+		// too. Without this check the tool then runs after the user was told
+		// "cancelled the current turn" — the write landed anyway. An answer for
+		// a turn that no longer exists is too late by definition, whatever it
+		// says, and whatever unparked it.
 		if ctx.Err() != nil {
 			return abortedToolResult("the turn was cancelled while this tool call waited for approval, so the approval arrived too late to run it")
 		}

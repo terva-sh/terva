@@ -81,7 +81,7 @@ func acpProjectSkill(t *testing.T, cwd, name string) {
 // these tests are actually asking about.
 type allowingConfirmer struct{}
 
-func (allowingConfirmer) Confirm(string, string) core.ConfirmDecision {
+func (allowingConfirmer) Confirm(context.Context, string, string) core.ConfirmDecision {
 	return core.ConfirmDecision{Allow: true}
 }
 
@@ -127,7 +127,7 @@ func acpHookVerdict(t *testing.T, ag *core.Agent) (denied bool, reason string) {
 	if ag.BeforeToolExecute == nil {
 		t.Fatal("the ACP agent wired no tool-call ladder, so nothing could gate a call")
 	}
-	allowed, why, _ := ag.BeforeToolExecute(provider.ToolCallBlock{
+	allowed, why, _ := ag.BeforeToolExecute(context.Background(), provider.ToolCallBlock{
 		Name:      "bash",
 		Arguments: json.RawMessage(`{"command":"echo hi"}`),
 	})

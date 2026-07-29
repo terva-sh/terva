@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -61,15 +62,33 @@ type ConfirmRequest struct {
 }
 
 // Confirmer asks the user to approve or refuse a single tool call.
-// Implementations block until the user responds (or the agent's
-// context is cancelled, in which case they should return
-// Allow=false with a cancellation reason).
+// Implementations block until the user responds.
+//
+// ctx is the CALL's context — the turn the tool call belongs to. An
+// implementation that parks MUST select on ctx.Done() and return Allow=false
+// with a cancellation reason when it fires. This is a hard requirement, not a
+// courtesy: the caller blocks in ConfirmGate.Check, which blocks the turn
+// goroutine, so a confirmer that ignores cancellation holds a cancelled turn
+// open for as long as its own timeout allows.
+//
+// Before this parameter existed, four hosts each solved that privately and
+// differently. rpc swept every parked ask on abort (blunt: it cancels other
+// turns' asks too, and its own comment named the cause — "BeforeToolExecute is
+// ctx-free"). The web daemon and ACP each stashed the live turn's context on
+// the session and read it back at park time — which answers "the session's
+// current turn", not "the turn this call belongs to". The TUI selected on
+// nothing at all and relied on the front end to sweep. Bot mode parked on the
+// DAEMON's context, so a cancelled turn's approval held the confirmer's mutex
+// until the ask timed out and the next turn's first question queued behind it.
+//
+// One parameter replaces four answers, and it is the one the call site always
+// had.
 //
 // preview is a short one-line summary of the args (the shell
 // command, the file path, the URL) that the TUI shows alongside
 // the tool name. It is intentionally short: no full tool outputs.
 type Confirmer interface {
-	Confirm(toolName string, preview string) ConfirmDecision
+	Confirm(ctx context.Context, toolName string, preview string) ConfirmDecision
 }
 
 // ConfirmerWithCall is the optional upgrade for a Confirmer that needs the id
@@ -83,7 +102,7 @@ type Confirmer interface {
 // whenever the implementation offers it and a call id is known.
 type ConfirmerWithCall interface {
 	Confirmer
-	ConfirmWithCall(toolName, preview, callID string) ConfirmDecision
+	ConfirmWithCall(ctx context.Context, toolName, preview, callID string) ConfirmDecision
 }
 
 // ConfirmerWithRequest is the richest confirmer shape: the gate hands over
@@ -93,7 +112,7 @@ type ConfirmerWithCall interface {
 // offers it.
 type ConfirmerWithRequest interface {
 	Confirmer
-	ConfirmWithRequest(req ConfirmRequest) ConfirmDecision
+	ConfirmWithRequest(ctx context.Context, req ConfirmRequest) ConfirmDecision
 }
 
 // ConfirmGate wraps a Confirmer with session-scoped memory for the
@@ -266,8 +285,13 @@ func (g *ConfirmGate) Grants() (allowAll bool, tools []string) {
 // rule beats a remembered "always allow" — explicit config outranks
 // a session convenience.
 //
+// ctx is the calling turn's context. It reaches the inner Confirmer unchanged;
+// the gate itself never parks, so it is the confirmer's to honour. A door that
+// is not a turn (a worker's ask, a shutdown-scoped prompt) passes the context it
+// genuinely lives under rather than a turn's.
+//
 // A nil ConfirmGate always allows (treat as yolo mode).
-func (g *ConfirmGate) Check(toolName string, args json.RawMessage, preview, callID string) (bool, string, json.RawMessage) {
+func (g *ConfirmGate) Check(ctx context.Context, toolName string, args json.RawMessage, preview, callID string) (bool, string, json.RawMessage) {
 	if g == nil {
 		return true, "", nil
 	}
@@ -301,10 +325,18 @@ func (g *ConfirmGate) Check(toolName string, args json.RawMessage, preview, call
 		scopes = derive(toolName, args)
 	}
 
+	// A call that is already cancelled must not be asked about: the answer can
+	// only arrive too late to be used, and asking spends a human's attention on
+	// a turn that has stopped. Every confirmer would deny on its own ctx select
+	// anyway; doing it here means the prompt never reaches a screen.
+	if err := ctx.Err(); err != nil {
+		return false, "tool call refused: the turn was cancelled before this call could be approved", nil
+	}
+
 	var decision ConfirmDecision
 	switch cc := inner.(type) {
 	case ConfirmerWithRequest:
-		decision = cc.ConfirmWithRequest(ConfirmRequest{
+		decision = cc.ConfirmWithRequest(ctx, ConfirmRequest{
 			Tool:    toolName,
 			Preview: preview,
 			CallID:  callID,
@@ -312,12 +344,12 @@ func (g *ConfirmGate) Check(toolName string, args json.RawMessage, preview, call
 		})
 	case ConfirmerWithCall:
 		if callID != "" {
-			decision = cc.ConfirmWithCall(toolName, preview, callID)
+			decision = cc.ConfirmWithCall(ctx, toolName, preview, callID)
 		} else {
-			decision = inner.Confirm(toolName, preview)
+			decision = inner.Confirm(ctx, toolName, preview)
 		}
 	default:
-		decision = inner.Confirm(toolName, preview)
+		decision = inner.Confirm(ctx, toolName, preview)
 	}
 
 	g.mu.Lock()

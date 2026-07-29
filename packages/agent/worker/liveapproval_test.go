@@ -149,7 +149,7 @@ type recordingConfirmer struct {
 	calls []struct{ tool, preview string }
 }
 
-func (c *recordingConfirmer) Confirm(tool, preview string) core.ConfirmDecision {
+func (c *recordingConfirmer) Confirm(_ context.Context, tool, preview string) core.ConfirmDecision {
 	c.mu.Lock()
 	c.calls = append(c.calls, struct{ tool, preview string }{tool, preview})
 	d := c.decision

@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -32,8 +33,8 @@ func TestWebConfirmerConcurrentParksDistinct(t *testing.T) {
 
 	r1 := make(chan core.ConfirmDecision, 1)
 	r2 := make(chan core.ConfirmDecision, 1)
-	go func() { r1 <- c.ConfirmWithCall("bash", "model call", "call-A") }()
-	go func() { r2 <- c.ConfirmWithCall("bash", "host tool call", "hostcall-ext-1") }()
+	go func() { r1 <- c.ConfirmWithCall(context.Background(), "bash", "model call", "call-A") }()
+	go func() { r2 <- c.ConfirmWithCall(context.Background(), "bash", "host tool call", "hostcall-ext-1") }()
 	waitCond(t, "both Confirms parked under their own ids", func() bool {
 		return s.permPark.Len() == 2
 	})
@@ -66,8 +67,8 @@ func TestWebConfirmerIDLessFallbackMintsUnique(t *testing.T) {
 	c := &webConfirmer{s: s}
 	r1 := make(chan core.ConfirmDecision, 1)
 	r2 := make(chan core.ConfirmDecision, 1)
-	go func() { r1 <- c.Confirm("bash", "first") }()
-	go func() { r2 <- c.Confirm("bash", "second") }()
+	go func() { r1 <- c.Confirm(context.Background(), "bash", "first") }()
+	go func() { r2 <- c.Confirm(context.Background(), "bash", "second") }()
 	waitCond(t, "both id-less Confirms parked separately", func() bool {
 		return s.permPark.Len() == 2
 	})
@@ -96,7 +97,7 @@ func TestWorkerConfirmerCarriesAgentID(t *testing.T) {
 	sub := s.hub.add(nil, false)
 
 	c := &workerConfirmer{s: s, ctx: t.Context(), agentID: "wk7"}
-	go c.Confirm("bash", "worker wk7: ls -la")
+	go c.Confirm(context.Background(), "bash", "worker wk7: ls -la")
 
 	ev := recvEvent(t, sub)
 	if ev.Type != ctrlproto.EventPermissionRequest {

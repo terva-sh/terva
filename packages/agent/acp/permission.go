@@ -3,6 +3,7 @@
 package acp
 
 import (
+	"context"
 	"encoding/json"
 
 	"terva.sh/terva/packages/core"
@@ -48,15 +49,20 @@ func (c *acpConfirmer) bind(s *session) { c.sess = s }
 
 // Confirm is the id-less fallback; the editor's ask then references no
 // tool_call, which it renders as an uncorrelated request.
-func (c *acpConfirmer) Confirm(toolName string, preview string) core.ConfirmDecision {
-	return c.ConfirmWithCall(toolName, preview, "")
+func (c *acpConfirmer) Confirm(ctx context.Context, toolName string, preview string) core.ConfirmDecision {
+	return c.ConfirmWithCall(ctx, toolName, preview, "")
 }
 
 // ConfirmWithCall implements core.ConfirmerWithCall. It runs synchronously
 // on the turn goroutine inside ConfirmGate.Check, which is reached only for
 // calls the policy says to ask about (allow/deny rules and plan-mode
 // read-only auto-allows short-circuit before us).
-func (c *acpConfirmer) ConfirmWithCall(toolName string, _ string, callID string) core.ConfirmDecision {
+//
+// ctx is this call's turn. It used to fetch the session's current turn context
+// instead (sess.turnContext()) — the same answer in the ordinary case, but the
+// session's idea of "the turn" rather than the caller's, and nil-shaped for any
+// door that reaches the gate outside one.
+func (c *acpConfirmer) ConfirmWithCall(ctx context.Context, toolName string, _ string, callID string) core.ConfirmDecision {
 	if c.sess == nil {
 		// No session bound (should not happen) — refuse rather than run
 		// an unconfirmed call.
@@ -72,21 +78,19 @@ func (c *acpConfirmer) ConfirmWithCall(toolName string, _ string, callID string)
 		return core.ConfirmDecision{Allow: false, Reason: "tool call refused (remembered for this session)"}
 	}
 
-	turnCtx := c.sess.turnContext()
-
 	params := RequestPermissionParams{
 		SessionID: c.sess.id,
 		ToolCall:  PermissionToolCall{ToolCallID: callID},
 		Options:   permissionOptions(),
 	}
 
-	raw, err := c.sess.srv.conn.request(turnCtx, MethodSessionRequestPermission, params)
+	raw, err := c.sess.srv.conn.request(ctx, MethodSessionRequestPermission, params)
 	if err != nil {
 		// Cancellation (turn ctx cancelled) or a transport error both
 		// resolve as a refusal with a cancellation reason — the turn then
 		// winds down and the prompt resolves stopReason "cancelled" (the
 		// turnCtx.Err() check in handleSessionPrompt drives that).
-		if turnCtx.Err() != nil {
+		if ctx.Err() != nil {
 			return core.ConfirmDecision{Allow: false, Reason: "tool call cancelled"}
 		}
 		return core.ConfirmDecision{Allow: false, Reason: "permission request failed: " + err.Error()}

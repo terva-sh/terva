@@ -45,7 +45,7 @@ func TestMCPApprovalConfirmerRoutesThroughBridge(t *testing.T) {
 		confirmer, stop := startTestConfirmer(t, bridgeBin, sock)
 		defer stop()
 
-		d := confirmer.Confirm("bash", "rm -rf /tmp/x")
+		d := confirmer.Confirm(context.Background(), "bash", "rm -rf /tmp/x")
 		if !d.Allow {
 			t.Errorf("decision = %+v, want allow", d)
 		}
@@ -68,7 +68,7 @@ func TestMCPApprovalConfirmerRoutesThroughBridge(t *testing.T) {
 		confirmer, stop := startTestConfirmer(t, bridgeBin, sock)
 		defer stop()
 
-		d := confirmer.Confirm("write", "/etc/hosts")
+		d := confirmer.Confirm(context.Background(), "write", "/etc/hosts")
 		if d.Allow {
 			t.Errorf("decision = %+v, want deny", d)
 		}
@@ -84,7 +84,7 @@ func TestMCPApprovalConfirmerRoutesThroughBridge(t *testing.T) {
 		confirmer, stop := startTestConfirmer(t, bridgeBin, sock)
 		defer stop()
 
-		d := confirmer.Confirm("bash", "rm -rf /")
+		d := confirmer.Confirm(context.Background(), "bash", "rm -rf /")
 		if d.Allow {
 			t.Errorf("a lost orchestrator must deny, got %+v", d)
 		}

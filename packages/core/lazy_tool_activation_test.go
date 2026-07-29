@@ -519,7 +519,7 @@ func TestActivateGroupsForToolsVisibilityOnly(t *testing.T) {
 	a.EnableLazyTools()
 
 	gateFired := false
-	a.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	a.BeforeToolExecute = func(_ context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		if call.Name == "danger_tool" {
 			gateFired = true
 		}
@@ -657,7 +657,7 @@ func TestImmediateActivationNewlyVisibleToolExecutes(t *testing.T) {
 	a.EnableLazyTools()
 
 	gateFired := false
-	a.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	a.BeforeToolExecute = func(_ context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		if call.Name == "mail_send" {
 			gateFired = true
 		}

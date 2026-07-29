@@ -34,7 +34,7 @@ func TestBeforeToolExecuteModifiesArgs(t *testing.T) {
 	a := NewAgent(nil, "test", "", reg)
 
 	newArgs := json.RawMessage(`{"command":"echo GUARDED: ls"}`)
-	a.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	a.BeforeToolExecute = func(_ context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		return true, "", newArgs
 	}
 
@@ -60,7 +60,7 @@ func TestBeforeToolExecuteInvalidJSONIgnored(t *testing.T) {
 	reg := Registry{"echo": rec}
 	a := NewAgent(nil, "test", "", reg)
 
-	a.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	a.BeforeToolExecute = func(_ context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		return true, "", json.RawMessage(`{not json`)
 	}
 
@@ -83,7 +83,7 @@ func TestBeforeToolExecuteBlockSurfacesReason(t *testing.T) {
 	reg := Registry{"echo": rec}
 	a := NewAgent(nil, "test", "", reg)
 
-	a.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	a.BeforeToolExecute = func(_ context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
 		return false, "nope", nil
 	}
 

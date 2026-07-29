@@ -13,9 +13,14 @@ import (
 	"terva.sh/terva/packages/core"
 )
 
-type confirmFunc func(tool, preview string) core.ConfirmDecision
+// confirmFunc takes the context because the real ones do: a Confirmer that
+// parks is required to unpark on it, and a fake that quietly ignored it would
+// let a test pass against an implementation the interface forbids.
+type confirmFunc func(ctx context.Context, tool, preview string) core.ConfirmDecision
 
-func (f confirmFunc) Confirm(tool, preview string) core.ConfirmDecision { return f(tool, preview) }
+func (f confirmFunc) Confirm(ctx context.Context, tool, preview string) core.ConfirmDecision {
+	return f(ctx, tool, preview)
+}
 
 // TestRecognizeAndEncodeTervaApproval pins the two rpc ask/approve halves: an
 // `ask` event is recognised into an Ask, and a decision round-trips into the
@@ -61,7 +66,7 @@ func TestHandleAskRoutesToConfirmerAndReplies(t *testing.T) {
 		agent:   &swarm.Agent{ID: "flaky-42"},
 		backend: tervaBackend(),
 		stdin:   pw,
-		confirmer: confirmFunc(func(tool, preview string) core.ConfirmDecision {
+		confirmer: confirmFunc(func(_ context.Context, tool, preview string) core.ConfirmDecision {
 			sawPreview = preview
 			return core.ConfirmDecision{Allow: true}
 		}),
@@ -125,9 +130,12 @@ func TestHandleAskCancelDeniesRatherThanHangs(t *testing.T) {
 		agent:   &swarm.Agent{ID: "slow-1"},
 		backend: tervaBackend(),
 		stdin:   pw,
-		confirmer: confirmFunc(func(tool, preview string) core.ConfirmDecision {
+		confirmer: confirmFunc(func(ctx context.Context, tool, preview string) core.ConfirmDecision {
 			close(blocked)
-			select {} // never answers — the human walked away
+			// The human walked away. What ends this wait is the worker's
+			// context — which is the whole point of Confirm taking one.
+			<-ctx.Done()
+			return core.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
 		}),
 	}
 

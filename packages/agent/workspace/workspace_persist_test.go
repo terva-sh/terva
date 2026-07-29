@@ -14,7 +14,7 @@ import (
 // tool — save to config" choice (ConfirmDecision.PersistTool).
 type persistConfirmer struct{}
 
-func (persistConfirmer) Confirm(tool, preview string) core.ConfirmDecision {
+func (persistConfirmer) Confirm(_ context.Context, tool, preview string) core.ConfirmDecision {
 	return core.ConfirmDecision{Allow: true, PersistTool: true}
 }
 
@@ -52,7 +52,7 @@ func TestDurableGrantPersistsToUserConfig(t *testing.T) {
 	// buildSession wired onto this gate.
 	live.gate.SetConfirmer(persistConfirmer{})
 
-	if ok, _, _ := live.gate.Check("bash", nil, "ls", ""); !ok {
+	if ok, _, _ := live.gate.Check(context.Background(), "bash", nil, "ls", ""); !ok {
 		t.Fatal("a persist answer should allow the call")
 	}
 
@@ -75,10 +75,10 @@ func TestDurableGrantPersistsToUserConfig(t *testing.T) {
 // but narrowed to the derived command patterns the gate offered.
 type scopedPersistConfirmer struct{}
 
-func (scopedPersistConfirmer) Confirm(tool, preview string) core.ConfirmDecision {
+func (scopedPersistConfirmer) Confirm(_ context.Context, tool, preview string) core.ConfirmDecision {
 	return core.ConfirmDecision{Allow: true}
 }
-func (scopedPersistConfirmer) ConfirmWithRequest(req core.ConfirmRequest) core.ConfirmDecision {
+func (scopedPersistConfirmer) ConfirmWithRequest(_ context.Context, req core.ConfirmRequest) core.ConfirmDecision {
 	if len(req.Scopes) == 0 {
 		return core.ConfirmDecision{Allow: true}
 	}
@@ -117,7 +117,7 @@ func TestScopedGrantPersistsAndComposes(t *testing.T) {
 	live.gate.SetConfirmer(scopedPersistConfirmer{})
 
 	gitArgs, _ := json.Marshal(map[string]string{"command": "git status"})
-	if ok, _, _ := live.gate.Check("bash", gitArgs, "git status", ""); !ok {
+	if ok, _, _ := live.gate.Check(context.Background(), "bash", gitArgs, "git status", ""); !ok {
 		t.Fatal("the scoped persist answer should allow the call")
 	}
 
@@ -140,7 +140,7 @@ func TestScopedGrantPersistsAndComposes(t *testing.T) {
 	// command must auto-allow WITHOUT the confirmer: swap in a confirmer
 	// that fails the test if consulted.
 	live.gate.SetConfirmer(tripwireConfirmer{t: t, note: "a matching call must ride the persisted rule, not the prompt"})
-	if ok, _, _ := live.gate.Check("bash", gitArgs, "git status", ""); !ok {
+	if ok, _, _ := live.gate.Check(context.Background(), "bash", gitArgs, "git status", ""); !ok {
 		t.Fatal("the persisted scoped rule should auto-allow the same command")
 	}
 
@@ -148,7 +148,7 @@ func TestScopedGrantPersistsAndComposes(t *testing.T) {
 	// scoped grant is not a blanket.
 	live.gate.SetConfirmer(persistConfirmer{})
 	rmArgs, _ := json.Marshal(map[string]string{"command": "rm -rf /tmp/x"})
-	if ok, _, _ := live.gate.Check("bash", rmArgs, "rm -rf /tmp/x", ""); !ok {
+	if ok, _, _ := live.gate.Check(context.Background(), "bash", rmArgs, "rm -rf /tmp/x", ""); !ok {
 		t.Fatal("a non-matching command should still prompt (and this confirmer allows)")
 	}
 }
@@ -159,7 +159,7 @@ type tripwireConfirmer struct {
 	note string
 }
 
-func (c tripwireConfirmer) Confirm(tool, preview string) core.ConfirmDecision {
+func (c tripwireConfirmer) Confirm(_ context.Context, tool, preview string) core.ConfirmDecision {
 	c.t.Errorf("confirmer consulted for %s %q: %s", tool, preview, c.note)
 	return core.ConfirmDecision{Allow: false, Reason: "tripwire"}
 }

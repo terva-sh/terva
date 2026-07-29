@@ -33,11 +33,27 @@ type mcpApprovalConfirmer struct {
 	tool   string // the permission-prompt tool to call on the endpoint
 }
 
-func (c *mcpApprovalConfirmer) Confirm(toolName, preview string) core.ConfirmDecision {
+// withEitherDone returns a context cancelled when either parent is. The two
+// lifetimes here are genuinely independent — the caller's is a turn's or a
+// worker's, c.ctx is the rpc server's — so neither is an ancestor of the other
+// and a select on one alone would miss the other's end. AfterFunc costs no
+// goroutine and is released by the returned cancel.
+func withEitherDone(a, b context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(a)
+	stop := context.AfterFunc(b, cancel)
+	return ctx, func() { stop(); cancel() }
+}
+
+// ctx is the calling turn's; c.ctx is the server's. The call is bounded by
+// whichever ends first — an orchestrator that never answers no longer holds a
+// cancelled turn open for the full approval timeout.
+func (c *mcpApprovalConfirmer) Confirm(ctx context.Context, toolName, preview string) core.ConfirmDecision {
 	// terva already has a rendered preview, so pass it directly — the endpoint
 	// prefers an explicit preview over one derived from Claude-style input.
 	args, _ := json.Marshal(map[string]any{"tool_name": toolName, "preview": preview})
-	res, err := c.client.CallTool(c.ctx, c.tool, args)
+	callCtx, cancel := withEitherDone(ctx, c.ctx)
+	defer cancel()
+	res, err := c.client.CallTool(callCtx, c.tool, args)
 	if err != nil {
 		return core.ConfirmDecision{Allow: false, Reason: "approval endpoint unreachable: " + err.Error()}
 	}

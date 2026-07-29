@@ -59,10 +59,10 @@ func TestPlanModeAdmitsReadOnlyExtensionTools(t *testing.T) {
 	if _, ok := r.ToolRegistry["mutate_things"]; ok {
 		t.Fatal("mutating tool must stay out of the plan-mode registry")
 	}
-	if ok, _, _ := gate.Check("peek_things", nil, "", ""); !ok {
+	if ok, _, _ := gate.Check(context.Background(), "peek_things", nil, "", ""); !ok {
 		t.Error("gate should allow the admitted read-only tool in plan mode")
 	}
-	if ok, _, _ := gate.Check("mutate_things", nil, "", ""); ok {
+	if ok, _, _ := gate.Check(context.Background(), "mutate_things", nil, "", ""); ok {
 		t.Error("gate backstop must still refuse the mutating tool")
 	}
 }
@@ -84,12 +84,12 @@ func TestNonPlanModeMergeMarksReadOnly(t *testing.T) {
 		{Extension: "x", Name: "mutate_things", Schema: []byte(`{}`)},
 	}})
 
-	if ok, _, _ := gate.Check("peek_things", nil, "", ""); !ok {
+	if ok, _, _ := gate.Check(context.Background(), "peek_things", nil, "", ""); !ok {
 		t.Error("auto-edit should auto-allow the annotated read-only tool")
 	}
 	// The mutating one falls to the prompt; with a nil inner
 	// Confirmer that is a refusal — proving it was NOT auto-allowed.
-	if ok, _, _ := gate.Check("mutate_things", nil, "", ""); ok {
+	if ok, _, _ := gate.Check(context.Background(), "mutate_things", nil, "", ""); ok {
 		t.Error("auto-edit must not auto-allow an unannotated extension tool")
 	}
 }
@@ -120,13 +120,13 @@ func TestAuthorityOverridesReadOnly(t *testing.T) {
 	if pol.ReadOnly.Has("web_fetch") {
 		t.Error("network-read tool must not join the read-only set despite read_only=true")
 	}
-	if ok, _, _ := gate.Check("web_fetch", nil, "", ""); ok {
+	if ok, _, _ := gate.Check(context.Background(), "web_fetch", nil, "", ""); ok {
 		t.Error("workspace must not auto-allow a network-read tool (it should prompt/refuse)")
 	}
 	if !pol.ReadOnly.Has("peek_things") {
 		t.Error("local-read authority should join the read-only set")
 	}
-	if ok, _, _ := gate.Check("peek_things", nil, "", ""); !ok {
+	if ok, _, _ := gate.Check(context.Background(), "peek_things", nil, "", ""); !ok {
 		t.Error("workspace should auto-allow a local-read tool")
 	}
 }
@@ -170,7 +170,7 @@ func TestAuthorityLocalDataAutoAllowed(t *testing.T) {
 	if !pol.ReadOnly.Has("memory") {
 		t.Error("local-data authority should join the auto-allow set")
 	}
-	if ok, _, _ := gate.Check("memory", nil, "", ""); !ok {
+	if ok, _, _ := gate.Check(context.Background(), "memory", nil, "", ""); !ok {
 		t.Error("workspace should auto-allow a local-data tool (no prompt)")
 	}
 
