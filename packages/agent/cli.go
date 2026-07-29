@@ -348,40 +348,67 @@ func setupNonInteractiveExtensions(ctx context.Context, args build.Args, r *buil
 }
 
 func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate, hookEng *hooks.Engine, differ *tools.WorkspaceDiffer, tasksCtrl *tasktool.Controller) {
-	if ag == nil || extMgr == nil {
+	if ag == nil {
 		return
 	}
-	wsObserve := build.WorkspaceChangeObserver(differ, extMgr)
-	ag.BeforeToolExecute = build.BuildBeforeToolExecute(ctx, hookEng, gate, extMgr)
+	// Everything up to the extension check is wired whether or not this host
+	// has extensions, because none of it is ABOUT extensions.
+	//
+	// The gate especially. This used to sit below a combined
+	// `ag == nil || extMgr == nil` early return, which made the permission gate
+	// conditional on an extension manager existing — the one thing that must
+	// never be conditional on anything. No caller reaches it today (every one
+	// sources its manager from setupNonInteractiveExtensions, which always
+	// builds one; under --no-ext it is live-but-toolless precisely so the hook
+	// wiring stays uniform), and the SDK avoids the helper entirely for this
+	// reason: it calls BuildBeforeToolExecute(nil, gate, nil) directly, which is
+	// the configuration this early return would have silently disarmed.
+	//
+	// build.WireHostToolDispatcher already has this shape — it binds the
+	// scripting host call for any agent and returns early only for the
+	// extension-specific half.
+	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, gate, extMgr)
 	build.WireHostToolDispatcher(ag, extMgr, gate)
-	ag.BeforeTurn = func(step int) (bool, string) {
-		res := extMgr.InterceptTurnStart(ctx, step)
-		return !res.Block, res.Reason
-	}
-	ag.BeforeAssistantMessage = func(text string) (bool, string, string) {
-		res := extMgr.InterceptAssistantMessage(ctx, text)
-		if res.Block {
-			return false, res.Reason, ""
+
+	// The extension-shaped half, and only it, is conditional.
+	if extMgr != nil {
+		wsObserve := build.WorkspaceChangeObserver(differ, extMgr)
+		ag.BeforeTurn = func(step int) (bool, string) {
+			res := extMgr.InterceptTurnStart(ctx, step)
+			return !res.Block, res.Reason
 		}
-		return true, "", res.ReplaceText
-	}
-	ag.BeforeUserMessage = func(text string) (bool, string, string) {
-		res := extMgr.InterceptUserMessage(ctx, text)
-		if res.Block {
-			return false, res.Reason, ""
+		ag.BeforeAssistantMessage = func(text string) (bool, string, string) {
+			res := extMgr.InterceptAssistantMessage(ctx, text)
+			if res.Block {
+				return false, res.Reason, ""
+			}
+			return true, "", res.ReplaceText
 		}
-		return true, "", res.ReplaceText
+		ag.BeforeUserMessage = func(text string) (bool, string, string) {
+			res := extMgr.InterceptUserMessage(ctx, text)
+			if res.Block {
+				return false, res.Reason, ""
+			}
+			return true, "", res.ReplaceText
+		}
+		// Registration order is delivery order.
+		ag.AddEventObserver(wsObserve)
+		ag.AddEventObserver(func(ev core.AgentEvent) { build.FanoutAgentEvent(extMgr, ev) })
+		ag.AddEventObserver(func(ev core.AgentEvent) { build.ObserveAgentEventForHooks(hookEng, ev) })
+		// Inject extensions' live context cards into the model each turn (live
+		// provider + sizing twin; ext context before the tail so PHI stays last).
+		build.WireExtEphemeral(ag, extMgr.EphemeralContext)
 	}
-	// Registration order is delivery order.
-	ag.AddEventObserver(wsObserve)
-	ag.AddEventObserver(func(ev core.AgentEvent) { build.FanoutAgentEvent(extMgr, ev) })
-	ag.AddEventObserver(func(ev core.AgentEvent) { build.ObserveAgentEventForHooks(hookEng, ev) })
-	// Inject extensions' live context cards into the model each turn (live
-	// provider + sizing twin; ext context before the tail so PHI stays last).
-	build.WireExtEphemeral(ag, extMgr.EphemeralContext)
-	// Inject the built-in task board's live card the same way.
+
+	// The built-in task board is not an extension: its card and its open-work
+	// gate follow the CONTROLLER, not the manager.
+	//
+	// Wired last, after the extension cards, because composeEphemeral puts each
+	// new provider FIRST — so wiring order reverses into the composed tail, and
+	// this is the order the helper has always produced (tasks card, then ext
+	// cards, then the run's own lore/PHI tail). Hoisting these above the
+	// extension block would silently swap the first two.
 	build.WireTasksEphemeral(ag, tasksCtrl)
-	// Re-prompt once at close if an extension flags open work or a task is open.
 	ag.AddContinuationGate(build.OpenWorkGate(extMgr, tasksCtrl))
 }
 
@@ -418,12 +445,10 @@ func runPrintMode(ctx context.Context, args build.Args, version string) error {
 		}
 	}
 	defer sess.Close()
-	ag.AdoptSessionIdentity(sess)
-	// Tell session-keyed extensions the real session id before any turn
-	// runs, so per-session state persists in headless modes too.
-	build.EmitSessionStart(extMgr, sess)
-	// Follow the active session with the built-in task board too.
-	build.RebindTasks(r.Tasks, sess)
+	// Adopt the identity, key the board, then announce — one event in one order,
+	// shared with every other host (build.BindSession). This site used to
+	// announce before keying the board.
+	build.BindSession(build.SessionBinding{Agent: ag, Tasks: r.Tasks, Ext: extMgr, Session: sess})
 
 	prompt := args.Prompt
 	if prompt == "" {
@@ -461,12 +486,10 @@ func runJSONMode(ctx context.Context, args build.Args, version string) error {
 		}
 	}
 	defer sess.Close()
-	ag.AdoptSessionIdentity(sess)
-	// Tell session-keyed extensions the real session id before any turn
-	// runs, so per-session state persists in headless modes too.
-	build.EmitSessionStart(extMgr, sess)
-	// Follow the active session with the built-in task board too.
-	build.RebindTasks(r.Tasks, sess)
+	// Adopt the identity, key the board, then announce — one event in one order,
+	// shared with every other host (build.BindSession). This site used to
+	// announce before keying the board.
+	build.BindSession(build.SessionBinding{Agent: ag, Tasks: r.Tasks, Ext: extMgr, Session: sess})
 
 	prompt := args.Prompt
 	if prompt == "" {
@@ -692,16 +715,17 @@ func applyResumedModel(ag *core.Agent, base build.Args, sess *core.Session, buil
 	if !r.HasCredential() {
 		return builtProv, builtModel, fmt.Sprintf("no credential for the session's stored model %s/%s; continuing on %s/%s", sp, sm, builtProv, builtModel)
 	}
-	nc := r.NewClient()
-	if snap, ok := ag.Usage(); ok {
-		provider.SeedClientUsage(nc, snap)
-	}
-	ag.SetClientAndModel(nc, r.Model)
-	if st, ok := ag.LookupTool("terva_status"); ok {
-		if stt, ok := st.(*tools.StatusTool); ok {
-			stt.SetProvider(r.Provider, r.AuthMethod, r.BaseURL)
-		}
-	}
+	// The shared model-swap event: a resume onto the session's stored model is
+	// the same move as a live switch, and was the one copy of this sequence
+	// carrying no note about the three others it matched.
+	build.ApplyModelSwap(build.ModelSwap{
+		Agent:      ag,
+		Client:     r.NewClient(),
+		Provider:   r.Provider,
+		Model:      r.Model,
+		AuthMethod: r.AuthMethod,
+		BaseURL:    r.BaseURL,
+	})
 	return r.Provider, r.Model, ""
 }
 
