@@ -1833,8 +1833,14 @@ func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forc
 	// the host-routed dispatch refresh are one event, shared with the acp, bot
 	// and resume paths (build.ApplyModelSwap). What stays here is the part only
 	// the daemon has: its own model record, the session file, and the clients.
+	//
+	// A non-nil Client is exactly "the endpoint moved" — the branch above builds
+	// one only when the target does not share the current client's provider and
+	// base URL — so it is also the answer to whether the launch-time key/URL
+	// overrides still describe this session. setModel takes it because the args
+	// it updates are what the next rebuild re-resolves from.
 	swap.After = func() {
-		s.setModel(swap.Provider, swap.Model)
+		s.setModel(swap.Provider, swap.Model, swap.Client != nil)
 		prov, model := s.currentModel()
 		_ = s.sess.UpdateModel(prov, model)
 	}

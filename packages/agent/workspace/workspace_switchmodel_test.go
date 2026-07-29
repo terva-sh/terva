@@ -72,7 +72,7 @@ func TestSwitchModelSameEndpointSwapsInPlace(t *testing.T) {
 	s.ws = w
 	s.sess = sess
 	s.agent = &core.Agent{Model: "same-a"}
-	s.setModel("openai-compatible", "same-a")
+	s.setModel("openai-compatible", "same-a", false)
 
 	if err := w.switchModel(s, "openai-compatible", "same-b", false); err != nil {
 		t.Fatalf("switchModel: %v", err)
@@ -111,7 +111,7 @@ func TestSwitchModelBareIDPrefersCurrentProvider(t *testing.T) {
 	s.ws = w
 	s.sess = sess
 	s.agent = &core.Agent{Model: "cur-model"}
-	s.setModel("openai-compatible", "cur-model")
+	s.setModel("openai-compatible", "cur-model", false)
 
 	// Same endpoint under the current provider, so the preferred resolution
 	// swaps in place; landing on openai would instead rebuild (and fail on
@@ -145,7 +145,7 @@ func TestSwitchModelRefreshesHostRoutedTool(t *testing.T) {
 	s.ws = w
 	s.sess = sess
 	s.agent = &core.Agent{Model: "same-a"}
-	s.setModel("openai-compatible", "same-a")
+	s.setModel("openai-compatible", "same-a", false)
 
 	// All three host-routed dispatch tools must be refreshed generically.
 	spawn := &tools.SwarmSpawnTool{HostProvider: "openai-compatible", HostModel: "same-a"}

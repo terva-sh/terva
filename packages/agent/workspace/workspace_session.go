@@ -432,14 +432,16 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 			}
 			return true, "", res.ReplaceText
 		}
-		build.WireExtEphemeral(ag, extMgr.EphemeralContext)
 	}
-	// The task board is not an extension: its card follows r.Tasks, not the
-	// manager. It was nested in the check above, which made a built-in board's
-	// visibility depend on whether this session had extensions. Still after the
-	// extension cards — composeEphemeral puts each new provider first, so wiring
-	// order reverses into the composed tail.
-	build.WireTasksEphemeral(ag, r.Tasks)
+	// The live cards the model reads each turn. Outside the check above: the
+	// task board is not an extension — its card follows r.Tasks, not the
+	// manager — and it was nested there, which made a built-in board's
+	// visibility depend on whether this session had extensions.
+	//
+	// The order lives in build.EphemeralTail, which reloadLore reproduces on
+	// every lore edit, user-persona change and trust flip. It used to re-derive
+	// the run's tail and install it bare, taking both cards away.
+	build.WireEphemeralTail(ag, s.ephemeralTail())
 	// Don't let the coordinator declare "finished" while it has open work —
 	// an extension's blocking context (protocol), OR sub-agents it spawned that
 	// are still running. Registration order is priority: open work outranks the
@@ -1106,9 +1108,28 @@ func (s *wsSession) endTurn(turnCtx context.Context, err error) (next string, re
 	return next, restart
 }
 
-// argsSnapshot copies the session's resolved args under s.mu. Args is
-// immutable after buildSession EXCEPT Approval (a live settings switch), so
-// every Resolve-time reader must snapshot instead of touching s.args bare.
+// ephemeralTail names the live cards this session stacks on top of the model's
+// per-turn tail. One accessor, so buildSession and reloadLore cannot disagree
+// about what a re-derived tail has to carry — which is exactly how they came to
+// disagree: the re-derivation installed the run's own tail bare.
+//
+// Both fields are written once during buildSession, before the session is
+// published, so this reads them without s.mu like the other build-time state.
+func (s *wsSession) ephemeralTail() build.EphemeralTail {
+	return build.EphemeralTail{Ext: build.ExtEphemeral(s.extMgr), Tasks: s.tasks}
+}
+
+// argsSnapshot copies the session's resolved args under s.mu.
+//
+// s.args is NOT immutable after buildSession, and reading it as if it were is
+// how a live change gets reverted by the next rebuild. Several live verbs write
+// into it so that rebuildTools' fresh Resolve reproduces the session as it now
+// stands rather than as it launched — the approval mode, the user's identity,
+// the cast, the model. session_liveargs_test.go holds that list and requires a
+// reason for each, because a field that a verb moves but a rebuild re-resolves
+// from the launch value fails silently and only on the second event.
+//
+// So every Resolve-time reader must snapshot instead of touching s.args bare.
 func (s *wsSession) argsSnapshot() build.Args {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2227,9 +2248,34 @@ func (s *wsSession) busyNow() bool {
 	return s.turnCancel != nil
 }
 
-func (s *wsSession) setModel(prov, model string) {
+// setModel records this session's live model identity — on the session AND in
+// the args every later Resolve reads.
+//
+// s.args is not a launch snapshot. rebuildTools re-resolves from it on every
+// extension reload, MCP toggle, approval switch and trust flip, and a fresh
+// Resolve re-mints the tools that CARRY the model's identity: terva_status
+// (provider, auth method, base URL), the host-routed dispatch tools
+// swarm_spawn / actor_spawn / raati_convene, which injectExtraTools stamps with
+// the resolve's provider+model, and read, whose SupportsVision is the resolved
+// model's image capability. Leaving Provider/Model at their launch values
+// meant the next rebuild silently put back two of the three steps
+// build.ApplyModelSwap had just performed: sub-agents spawned afterwards ran on
+// the pre-swap model, and terva_status reported the pre-swap endpoint, for the
+// rest of the session. buildSession seeds these same two fields from session
+// meta on every build — this is the live half of that, and the reason a daemon
+// restart already got it right while the running session did not.
+//
+// rebuiltClient says the swap replaced the provider client, i.e. the endpoint
+// moved. The launch-time key/URL overrides then pin an endpoint this session
+// has left, so they go — the same clearing switchModel does to build the
+// replacement client, and acpFactory.SwitchModel to resolve the target's creds.
+func (s *wsSession) setModel(prov, model string, rebuiltClient bool) {
 	s.mu.Lock()
 	s.provider, s.model = prov, model
+	s.args.Provider, s.args.Model = prov, model
+	if rebuiltClient {
+		s.args.APIKey, s.args.BaseURL = "", ""
+	}
 	s.mu.Unlock()
 }
 
