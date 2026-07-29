@@ -117,17 +117,27 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// pinning the rebuild to the same verdict stops a `terva trust` elsewhere
 	// from giving the model a trusted repo's project skills inside a process
 	// whose extensions and hooks are still gated as untrusted.
-	rebuildArgs := args
-	rebuildArgs.TrustPin = &r.Trusted
-	liveTools := build.LiveToolSet{
-		Args:     rebuildArgs,
-		ReadOnly: roSet,
-		Tasks:    r.Tasks,
-		Sandbox:  r.Sandbox,
-		Ext:      extMgr,
-		MCP:      mcpAdapter,
+	//
+	// Assembled inside the closure rather than once here, and with the model
+	// taken from the AGENT: `set_model` moves the agent mid-session, and a
+	// struct holding the launch pair would re-resolve the model the process
+	// started on — re-minting read with the launch model's vision capability.
+	// The agent is the authority on its own model, and rpc's provider cannot
+	// move (a cross-provider or cross-endpoint switch is rejected outright a
+	// few hundred lines below), so this pair is complete. See LiveToolSet.Args.
+	mergeExtTools := func() {
+		rebuildArgs := args
+		rebuildArgs.TrustPin = &r.Trusted
+		rebuildArgs.Model = ag.Model
+		build.LiveToolSet{
+			Args:     rebuildArgs,
+			ReadOnly: roSet,
+			Tasks:    r.Tasks,
+			Sandbox:  r.Sandbox,
+			Ext:      extMgr,
+			MCP:      mcpAdapter,
+		}.Rebuild(ag)
 	}
-	mergeExtTools := func() { liveTools.Rebuild(ag) }
 	extMgr.SetOnReload(mergeExtTools)
 
 	// Session persistence & resume. rpc mode is stateless by default — its

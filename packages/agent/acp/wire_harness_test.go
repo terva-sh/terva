@@ -201,6 +201,16 @@ type fakeFactory struct {
 	lastSwitch  ModelSwitch
 	switchCalls int
 
+	// recordedSwaps is every RecordModelSwap the acp package fired, in order.
+	// In production this is how a host keeps whatever it RE-RESOLVES from in
+	// step with a switch; a test asserts it is called, once, beside Apply, with
+	// the resolved pair and whether the endpoint moved.
+	recordedSwaps []recordedSwap
+
+	// noRecordSwap leaves SessionAgent.RecordModelSwap nil — a host that
+	// re-resolves nothing, which the switch path must tolerate.
+	noRecordSwap bool
+
 	// root is the session storage root (a temp TERVA_HOME). When set, the
 	// factory creates a real durable core.Session under it and wires the
 	// agent's persistence hooks — exercising the Phase 3 durable-session
@@ -795,6 +805,7 @@ func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServer
 			ReloadExtensions: reloadExtensionsForTest(extMgr, &f.extReloads),
 			TrustWorkspace:   f.trustWorkspaceFn(),
 			UntrustWorkspace: f.untrustWorkspaceFn(),
+			RecordModelSwap:  f.recordSwapFn(),
 		}, nil
 	}
 
@@ -822,6 +833,7 @@ func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServer
 		ExtContext:       f.emptyExtContextFunc(),
 		TrustWorkspace:   f.trustWorkspaceFn(),
 		UntrustWorkspace: f.untrustWorkspaceFn(),
+		RecordModelSwap:  f.recordSwapFn(),
 	}, nil
 }
 
@@ -870,6 +882,7 @@ func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd str
 			ReloadExtensions: reloadExtensionsForTest(extMgr, &f.extReloads),
 			TrustWorkspace:   f.trustWorkspaceFn(),
 			UntrustWorkspace: f.untrustWorkspaceFn(),
+			RecordModelSwap:  f.recordSwapFn(),
 		}, msgs, nil
 	}
 	reg, cleanup := f.startMCP(ctx, mcpServers)
@@ -898,6 +911,7 @@ func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd str
 		Skills:           f.skillSnapshot(),
 		TrustWorkspace:   f.trustWorkspaceFn(),
 		UntrustWorkspace: f.untrustWorkspaceFn(),
+		RecordModelSwap:  f.recordSwapFn(),
 	}, msgs, nil
 }
 
@@ -2171,4 +2185,35 @@ func TestACPSessionLoadUnknownIsNotFound(t *testing.T) {
 	cancel()
 	_ = caW.Close()
 	_ = acW.Close()
+}
+
+// recordedSwap is one RecordModelSwap call: the pair the host was told to
+// re-resolve from next time, and whether the endpoint moved with it.
+type recordedSwap struct {
+	provider      string
+	model         string
+	rebuiltClient bool
+}
+
+// recordSwapFn is the fake host's RecordModelSwap. Production closes this over
+// the args its tool-set rebuild re-resolves from; the fake just records, so a
+// test can assert the acp package fires it beside ModelSwitch.Apply — the two
+// halves of a switch that live in different scopes and must not separate.
+func (f *fakeFactory) recordSwapFn() func(provider, model string, rebuiltClient bool) {
+	if f.noRecordSwap {
+		return nil
+	}
+	return func(prov, model string, rebuiltClient bool) {
+		f.switchMu.Lock()
+		f.recordedSwaps = append(f.recordedSwaps, recordedSwap{prov, model, rebuiltClient})
+		f.switchMu.Unlock()
+	}
+}
+
+// swapsRecorded snapshots what the host was told, under the lock the fake
+// writes with.
+func (f *fakeFactory) swapsRecorded() []recordedSwap {
+	f.switchMu.Lock()
+	defer f.switchMu.Unlock()
+	return append([]recordedSwap(nil), f.recordedSwaps...)
 }

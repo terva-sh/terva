@@ -432,3 +432,86 @@ func assertInvalidParams(t *testing.T, h *harness, method string, params any) {
 		}
 	}
 }
+
+// A model switch has two halves in two scopes. ModelSwitch.Apply moves the
+// running agent and the tool instances hanging off it; RecordModelSwap moves
+// what the HOST re-resolves from when it later rebuilds the tool set. Apply is
+// built per switch by a factory with no session; RecordModelSwap is built per
+// session by the composition root. This package is the only thing holding both,
+// so it is the only thing that can keep them together — and when they came
+// apart, an ACP switch lasted exactly until the next extension reload or
+// /trust flip, which re-minted terva_status naming the provider the session had
+// switched away from.
+//
+// Both cases matter, because the endpoint flag is what tells the host whether
+// its launch-time key/URL pins still describe the session.
+func TestACPSetConfigOptionRecordsTheSwapForTheHost(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		target    string
+		crossProv bool
+		wantProv  string
+		wantPins  bool // rebuiltClient: the endpoint moved
+	}{
+		{"same provider reuses the client", "alt-model", false, "fake", false},
+		{"cross provider rebuilds it", "cross-model", true, "other", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			factory := &fakeFactory{
+				client: &textTurnClient{reply: "hi"},
+				tools:  core.Registry{},
+				models: modelMenu(),
+			}
+			if tc.crossProv {
+				factory.switchClient = &textTurnClient{reply: "switched"}
+			}
+			h, sid, teardown := permSetup(t, factory)
+			defer teardown()
+
+			h.call(MethodSessionSetConfigOpt, map[string]any{
+				"sessionId": sid,
+				"configId":  ConfigIDModel,
+				"value":     tc.target,
+			})
+
+			got := factory.swapsRecorded()
+			if len(got) != 1 {
+				t.Fatalf("RecordModelSwap fired %d times, want exactly 1 — a switch the host "+
+					"never hears about survives only until its next tool-set rebuild", len(got))
+			}
+			if got[0].model != tc.target {
+				t.Errorf("recorded model = %q, want %q", got[0].model, tc.target)
+			}
+			if got[0].provider != tc.wantProv {
+				t.Errorf("recorded provider = %q, want %q", got[0].provider, tc.wantProv)
+			}
+			if got[0].rebuiltClient != tc.wantPins {
+				t.Errorf("recorded rebuiltClient = %v, want %v — this is how the host learns "+
+					"whether its launch-time endpoint pins still apply", got[0].rebuiltClient, tc.wantPins)
+			}
+		})
+	}
+}
+
+// A host that re-resolves nothing wires no hook, and that must stay a supported
+// shape rather than a panic on the switch path.
+func TestACPSetConfigOptionToleratesNoRecordHook(t *testing.T) {
+	factory := &fakeFactory{
+		client:       &textTurnClient{reply: "hi"},
+		tools:        core.Registry{},
+		models:       modelMenu(),
+		noRecordSwap: true,
+	}
+	h, sid, teardown := permSetup(t, factory)
+	defer teardown()
+
+	res := h.call(MethodSessionSetConfigOpt, map[string]any{
+		"sessionId": sid,
+		"configId":  ConfigIDModel,
+		"value":     "alt-model",
+	})
+	configOptions, _ := res["configOptions"].([]any)
+	if model := findConfigOption(t, configOptions, ConfigIDModel); model == nil || model["currentValue"] != "alt-model" {
+		t.Fatalf("the switch did not land without a record hook: %v", res)
+	}
+}

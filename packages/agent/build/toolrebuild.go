@@ -37,6 +37,16 @@ type LiveToolSet struct {
 	// Args is re-resolved to produce the fresh base registry. It carries the
 	// approval mode and, through the trust store or a pin, the Workspace Trust
 	// verdict the new tool set is gated on.
+	//
+	// It is read when Rebuild RUNS, not when the session is built, and that
+	// distinction is load-bearing: a fresh Resolve re-mints every tool that
+	// carries the session's identity — terva_status's provider/auth/base URL,
+	// and read's SupportsVision, which is the resolved model's image
+	// capability. A host whose model can move mid-session must therefore hand
+	// this struct the CURRENT pair, not the one it launched with, or the
+	// rebuild reverts the swap. Freezing the launch pair into a long-lived
+	// LiveToolSet is how both fixed-shape hosts came to do exactly that; both
+	// now assemble the struct inside their rebuild closure.
 	Args Args
 
 	// ReadOnly is the LIVE gate's read-only set, not the throwaway one a fresh

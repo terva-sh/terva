@@ -110,6 +110,26 @@ type SessionAgent struct {
 	// exactly as before extensions were wired.
 	ObserveEvent func(core.AgentEvent)
 
+	// RecordModelSwap tells the host that this session's model has moved, so
+	// whatever the host RE-RESOLVES from — its tool-set rebuild — tracks the
+	// swap instead of restoring the model the session was built on.
+	//
+	// It exists because a swap has two halves in different scopes.
+	// ModelSwitch.Apply moves the running agent and is built per SWITCH, by a
+	// factory that has no session; this is built per SESSION, in the host's
+	// composition root, where the rebuild args live. This package is the only
+	// thing that holds both, so it calls them together — the two must not
+	// separate, which is the whole reason the shared swap event exists.
+	//
+	// Without it a switch held only until the next rebuild (an extension
+	// reload, a /trust flip): terva_status went back to naming the provider the
+	// session had switched away from, and read's vision support was re-derived
+	// from the launch model. rebuiltClient says the endpoint moved, so the
+	// host's launch-time key/URL pins no longer describe this session.
+	//
+	// nil is allowed and means the host re-resolves nothing.
+	RecordModelSwap func(provider, model string, rebuiltClient bool)
+
 	// Sandbox is the session's filesystem/shell confinement, shared by
 	// pointer across every tool in the agent's registry (the same value the
 	// TUI's /jail and /unjail toggle). Carried so the native /jail and
@@ -558,6 +578,7 @@ func (s *agentServer) bindSession(id, cwd string, sa SessionAgent, confirmer *ac
 	sess.reloadExtensions = sa.ReloadExtensions
 	sess.trustWorkspace = sa.TrustWorkspace
 	sess.untrustWorkspace = sa.UntrustWorkspace
+	sess.recordSwap = sa.RecordModelSwap
 	sess.setModel(sa.Provider, sa.Model)
 	// Seed the session's mode from the gate (ApprovalYolo when there is no
 	// gate), so the mode menu's currentModeId matches what the gate enforces.

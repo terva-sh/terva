@@ -73,6 +73,13 @@ type session struct {
 	trustWorkspace   func(parent bool) error
 	untrustWorkspace func() error
 
+	// recordSwap tells the host a model switch landed, so whatever the host
+	// re-resolves from tracks it (SessionAgent.RecordModelSwap). Called beside
+	// ModelSwitch.Apply — the two are halves of one event in different scopes,
+	// and this package is the only thing holding both. nil when the host
+	// re-resolves nothing.
+	recordSwap func(provider, model string, rebuiltClient bool)
+
 	// modelMu guards the session's current provider/model, the seed for the
 	// model config option's currentValue and the source for a model switch's
 	// "from" side. session/set_config_option updates these after a successful

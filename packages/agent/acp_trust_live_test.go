@@ -105,15 +105,15 @@ func acpTestSession(t *testing.T, cwd string, mcpServers json.RawMessage) (ag *c
 	}
 	ctx := context.Background()
 	f := &acpFactory{ctx: ctx, args: args, version: "test"}
-	r, ag, _, cleanup, _, _, applyTrust, err := f.buildAgent(ctx, cwd, mcpServers, allowingConfirmer{})
+	r, ag, _, cleanup, _, _, hooks, err := f.buildAgent(ctx, cwd, mcpServers, allowingConfirmer{})
 	if err != nil {
 		t.Fatalf("buildAgent: %v", err)
 	}
 	t.Cleanup(cleanup)
-	if applyTrust == nil {
-		t.Fatal("buildAgent wired no applyTrust — /trust would persist the verdict and change nothing about the open session")
+	if hooks.ApplyTrust == nil {
+		t.Fatal("buildAgent wired no ApplyTrust — /trust would persist the verdict and change nothing about the open session")
 	}
-	trust, untrust = acpTrustWorkspace(ctx, cwd, applyTrust), acpUntrustWorkspace(ctx, cwd, applyTrust)
+	trust, untrust = acpTrustWorkspace(ctx, cwd, hooks.ApplyTrust), acpUntrustWorkspace(ctx, cwd, hooks.ApplyTrust)
 	if trust == nil || untrust == nil {
 		t.Fatal("the ACP trust closures came back nil, so /trust and /untrust would degrade to notes")
 	}

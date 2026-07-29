@@ -111,6 +111,14 @@ func (s *agentServer) handleSetConfigOption(params json.RawMessage) (any, error)
 	}
 	sw.Apply(sess.agent)
 	sess.setModel(sw.Provider, sw.Model)
+	// The other half of the same event, and it must not drift from the line
+	// above: Apply moved the agent and the tool instances hanging off it, this
+	// moves what the host RE-RESOLVES from. Skip it and the swap lasts until the
+	// next tool-set rebuild, which re-mints those instances from the model the
+	// session was built on. A nil hook is a host that re-resolves nothing.
+	if sess.recordSwap != nil {
+		sess.recordSwap(sw.Provider, sw.Model, sw.Client != nil)
+	}
 
 	// Persist the model change so a later session/load restores it (§4b). The
 	// durable session keeps the most recent meta entry.

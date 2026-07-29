@@ -81,7 +81,7 @@ type acpFactory struct {
 // persistence hooks wired (§3). The ACP sessionId becomes the session's file
 // path, so a later session/load reopens exactly this transcript.
 func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (acp.SessionAgent, error) {
-	r, ag, gate, cleanup, observe, extMgr, applyTrust, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
+	r, ag, gate, cleanup, observe, extMgr, hooks, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
 	if err != nil {
 		return acp.SessionAgent{}, err
 	}
@@ -106,8 +106,9 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 		InvokeExtCommand: acpInvokeExtCommand(extMgr),
 		ExtContext:       acpExtContext(extMgr),
 		ReloadExtensions: acpReloadExtensions(extMgr),
-		TrustWorkspace:   acpTrustWorkspace(ctx, r.CWD, applyTrust),
-		UntrustWorkspace: acpUntrustWorkspace(ctx, r.CWD, applyTrust),
+		TrustWorkspace:   acpTrustWorkspace(ctx, r.CWD, hooks.ApplyTrust),
+		UntrustWorkspace: acpUntrustWorkspace(ctx, r.CWD, hooks.ApplyTrust),
+		RecordModelSwap:  hooks.RecordSwap,
 	}, nil
 }
 
@@ -130,7 +131,7 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 	if cwd == "" {
 		cwd = sess.Meta.CWD
 	}
-	r, ag, gate, cleanup, observe, extMgr, applyTrust, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
+	r, ag, gate, cleanup, observe, extMgr, hooks, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
 	if err != nil {
 		_ = sess.Close()
 		return acp.SessionAgent{}, nil, err
@@ -148,6 +149,16 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 	if note != "" {
 		fmt.Fprintln(os.Stderr, "terva:", note)
 	}
+	// A resume onto the session's stored model is a model swap — the same
+	// build.ApplyModelSwap the /model verb runs — so it needs the same second
+	// half. Without this the session RUNS on its stored model while its rebuild
+	// args still name the one it was built with, and the first extension reload
+	// hands the model a terva_status naming the wrong provider. applyResumedModel
+	// always builds a fresh client when it moves at all, so a move is a moved
+	// endpoint; when it declines to move it returns the built pair unchanged and
+	// this records what is already true.
+	moved := prov != r.Provider || model != r.Model
+	hooks.RecordSwap(prov, model, moved)
 	return acp.SessionAgent{
 		Agent:            ag,
 		Session:          sess,
@@ -162,8 +173,9 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 		InvokeExtCommand: acpInvokeExtCommand(extMgr),
 		ExtContext:       acpExtContext(extMgr),
 		ReloadExtensions: acpReloadExtensions(extMgr),
-		TrustWorkspace:   acpTrustWorkspace(ctx, r.CWD, applyTrust),
-		UntrustWorkspace: acpUntrustWorkspace(ctx, r.CWD, applyTrust),
+		TrustWorkspace:   acpTrustWorkspace(ctx, r.CWD, hooks.ApplyTrust),
+		UntrustWorkspace: acpUntrustWorkspace(ctx, r.CWD, hooks.ApplyTrust),
+		RecordModelSwap:  hooks.RecordSwap,
 	}, msgs, nil
 }
 
@@ -344,7 +356,7 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 // ACP twin of Workspace.applyTrust, closed over the pieces a flip has to move
 // (hook engine, extension manager, tool set). It is what makes ACP a live-trust
 // host rather than one whose verdict is fixed at launch.
-func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (build.Resolved, *core.Agent, *core.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, func(context.Context, bool), error) {
+func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (build.Resolved, *core.Agent, *core.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, acpSessionHooks, error) {
 	// Each session resolves with its own cwd so tools, system prompt, and
 	// session dir bind to the editor-provided working directory.
 	args := f.args
@@ -386,7 +398,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 
 	r, err := build.Resolve(args, true)
 	if err != nil {
-		return build.Resolved{}, nil, nil, nil, nil, nil, nil, err
+		return build.Resolved{}, nil, nil, nil, nil, nil, acpSessionHooks{}, err
 	}
 	// ACP untrusted = restricted for now (Phase 4 — an editor
 	// session/request_permission trust prompt — is deferred). Log a
@@ -465,17 +477,17 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 			}
 			return true, "", res.ReplaceText
 		}
-		build.WireExtEphemeral(ag, extMgr.EphemeralContext)
 	}
-	// The task board is not an extension, so its card and its open-work gate sit
-	// OUTSIDE the manager check — they follow r.Tasks. They were nested inside
-	// it, which made a built-in board's visibility depend on whether this
-	// session happened to have an extension manager.
+	// The live cards the model reads each turn. Outside the manager check: the
+	// task board is not an extension, so its card and its open-work gate follow
+	// r.Tasks. They were nested inside it, which made a built-in board's
+	// visibility depend on whether this session happened to have extensions.
 	//
-	// Still after the extension cards: composeEphemeral puts each new provider
-	// first, so wiring order reverses into the composed tail and this preserves
-	// the order the session has always sent.
-	build.WireTasksEphemeral(ag, r.Tasks)
+	// The order lives in build.EphemeralTail now, which is also what the trust
+	// flip's Lore re-derivation below reproduces — the two used to be written
+	// out separately, and the re-derivation wrote neither.
+	ephemeral := build.EphemeralTail{Ext: build.ExtEphemeral(extMgr), Tasks: r.Tasks}
+	build.WireEphemeralTail(ag, ephemeral)
 	ag.AddContinuationGate(build.OpenWorkGate(extMgr, r.Tasks))
 	// observe is the extension-side event sink: it fans every event out to the
 	// extensions and feeds the two tool events into the hook correlator —
@@ -508,15 +520,45 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// TrustPin: unlike rpc, ACP can flip Workspace Trust mid-session, and the
 	// trust verb persists the verdict before applying it, so re-reading the
 	// store is how the rebuild learns what /trust just decided.
-	liveTools := build.LiveToolSet{
-		Args:     args,
-		ReadOnly: roSet,
-		Tasks:    r.Tasks,
-		Sandbox:  r.Sandbox,
-		Ext:      extMgr,
-		MCP:      mcpAdapter,
+	//
+	// Assembled HERE, inside the closure, rather than once at session build: the
+	// editor can switch this session's model, recordSwap below moves args with
+	// it, and a struct holding a launch-time copy would re-resolve the model the
+	// session started on. See LiveToolSet.Args.
+	rebuildTools := func() {
+		build.LiveToolSet{
+			Args:     args,
+			ReadOnly: roSet,
+			Tasks:    r.Tasks,
+			Sandbox:  r.Sandbox,
+			Ext:      extMgr,
+			MCP:      mcpAdapter,
+		}.Rebuild(ag)
 	}
-	rebuildTools := func() { liveTools.Rebuild(ag) }
+
+	// recordSwap is this session's half of a model switch — the acp equivalent
+	// of ModelSwap.After, which is where the daemon does the same thing.
+	//
+	// build.ApplyModelSwap moves the running agent, and the acp package's
+	// ModelSwitch.Apply carries it; neither can reach the args this host
+	// re-resolves from, because SwitchModel is a factory method and the factory
+	// has no session. So the acp package joins the two, calling this beside
+	// Apply — the only place that knows both.
+	//
+	// Without it the swap held until the next rebuild (an extension reload, a
+	// /trust flip), which re-minted terva_status naming the provider the session
+	// had switched away from and re-derived read's vision support from the
+	// launch model.
+	recordSwap := func(prov, model string, rebuiltClient bool) {
+		args.Provider, args.Model = prov, model
+		if rebuiltClient {
+			// A rebuilt client means the endpoint moved, so the launch-time
+			// key/URL overrides now pin one this session has left — the same
+			// clearing SwitchModel does on the copy it resolves the replacement
+			// from, and the daemon's setModel on its own args.
+			args.APIKey, args.BaseURL = "", ""
+		}
+	}
 	// An extension reload has to reach the model, or a freshly discovered
 	// extension's tools are running subprocesses nothing can call. This covers
 	// /reload-ext as well as the reload a trust flip triggers.
@@ -541,12 +583,36 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 			Ext:     extMgr,
 			Grace:   acpReloadGrace,
 			Rebuild: rebuildTools,
-			Lore:    func() { build.RewireLoreContext(ag, args) },
+			Lore:    func() { build.RewireLoreContext(ag, args, ephemeral) },
 			// After: the acp session has no client to broadcast to — the
 			// command's own confirmation chunk is the notification.
 		})
 	}
-	return r, ag, confirmGate, cleanup, observe, extMgr, applyTrust, nil
+	return r, ag, confirmGate, cleanup, observe, extMgr, acpSessionHooks{
+		ApplyTrust: applyTrust,
+		RecordSwap: recordSwap,
+	}, nil
+}
+
+// acpSessionHooks are the per-session host closures buildAgent hands back —
+// the ones that close over state only the composition root has (this session's
+// args, hook engine, extension manager, rebuild) and that the acp package
+// invokes when the editor asks for something.
+//
+// A struct rather than more return values: buildAgent already returns seven,
+// and each of these is the same kind of thing. It is also the list, in the
+// TrustSurfaces sense — a host event that has to reach back into the build
+// scope goes here, where the next one is visible next to the last.
+type acpSessionHooks struct {
+	// ApplyTrust brings this session in line with a new Workspace Trust
+	// verdict (build.ApplyTrust's four surfaces, in its order).
+	ApplyTrust func(ctx context.Context, trusted bool)
+
+	// RecordSwap records a model switch into the args this session
+	// re-resolves from, so a later tool-set rebuild reproduces the swap
+	// instead of restoring the launch model. rebuiltClient says the endpoint
+	// moved.
+	RecordSwap func(prov, model string, rebuiltClient bool)
 }
 
 // acpExtCommands builds the SessionAgent.ExtCommands snapshot from a session's
