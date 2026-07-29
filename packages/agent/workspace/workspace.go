@@ -1808,10 +1808,8 @@ func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forc
 		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown model %q", modelID))
 	}
 	cur, curErr := provider.FindModel(curProv, curModel)
-	if switchReusesClient(curProv, cur, curErr, target, forceRebuild) {
-		s.agent.SetModel(target.ID)
-		s.setModel(target.Provider, target.ID)
-	} else {
+	swap := build.ModelSwap{Agent: s.agent, Provider: target.Provider, Model: target.ID}
+	if !switchReusesClient(curProv, cur, curErr, target, forceRebuild) {
 		next := w.args
 		next.Provider = target.Provider
 		next.Model = target.ID
@@ -1824,39 +1822,23 @@ func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forc
 		if !r.HasCredential() {
 			return ctrlproto.Errorf(ctrlproto.CodeUnauthorized, "%s", i18n.T("no credential for provider %q", r.Provider))
 		}
-		nc := r.NewClient()
-		// Carry the passively-observed usage snapshot across the rebuild
-		// (same-provider swaps only; the seeder rejects foreign snapshots).
-		// Without this a re-login or endpoint change blanks the status-bar
-		// meters until the next turn's headers arrive.
-		if snap, ok := s.agent.Usage(); ok {
-			provider.SeedClientUsage(nc, snap)
-		}
-		s.agent.SetClientAndModel(nc, r.Model)
-		s.setModel(r.Provider, r.Model)
-		// SetClientAndModel keeps the agent's registry, so terva_status
-		// still carries the OLD provider identity: re-bind it to the target
-		// provider/auth/endpoint. Without this the tool reports the prior
-		// provider and — because FindModel(oldProvider, newModel) misses —
-		// loses the context-window size after the swap.
-		if st, ok := s.agent.LookupTool("terva_status"); ok {
-			if stt, ok := st.(*tools.StatusTool); ok {
-				stt.SetProvider(r.Provider, r.AuthMethod, r.BaseURL)
-			}
-		}
+		// A resolved target names its own endpoint and auth: the swap carries
+		// the whole identity, not just the id. Leaving Client nil above is the
+		// same-endpoint shortcut — see ModelSwap.Client.
+		swap.Client = r.NewClient()
+		swap.Provider, swap.Model = r.Provider, r.Model
+		swap.AuthMethod, swap.BaseURL = r.AuthMethod, r.BaseURL
 	}
-	prov, model := s.currentModel()
-	// A mid-session model swap must refresh every host-routed dispatch tool
-	// (swarm_spawn, ...) so a sub-agent spawned afterward inherits the
-	// CURRENT provider/model and resolves tiers against it, not the stale
-	// pre-swap route. Generic over HostRouted so this covers both the
-	// same-endpoint id-swap and the rebuild path, and any future such tool.
-	for _, tl := range s.agent.ToolsSnapshot() {
-		if hr, ok := tl.(tools.HostRouted); ok {
-			hr.SetHost(prov, model)
-		}
+	// The usage carry-over, the client install, the terva_status re-bind and
+	// the host-routed dispatch refresh are one event, shared with the acp, bot
+	// and resume paths (build.ApplyModelSwap). What stays here is the part only
+	// the daemon has: its own model record, the session file, and the clients.
+	swap.After = func() {
+		s.setModel(swap.Provider, swap.Model)
+		prov, model := s.currentModel()
+		_ = s.sess.UpdateModel(prov, model)
 	}
-	_ = s.sess.UpdateModel(prov, model)
+	build.ApplyModelSwap(swap)
 	// A per-session switch changes ONLY this session; it must not move the
 	// workspace default new sessions inherit — that is models.set_default's job
 	// (SetDefaultModel writes config). Before Stage 2 this wrote w.provider/

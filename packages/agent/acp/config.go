@@ -5,9 +5,7 @@ package acp
 import (
 	"encoding/json"
 
-	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
-	"terva.sh/terva/packages/provider"
 )
 
 // Phase 4b: model selection (config options) + approval mode (session modes).
@@ -98,31 +96,20 @@ func (s *agentServer) handleSetConfigOption(params json.RawMessage) (any, error)
 		return nil, errInvalidParams(err.Error())
 	}
 
-	// Apply the switch to the live agent. Reuse means the existing client
-	// serves the new model (SetModel in place); otherwise the host built a
-	// fresh client for the target model and we swap both atomically while
-	// keeping the transcript (SetClientAndModel — §10/§14).
-	if sw.Reuse {
-		sess.agent.SetModel(sw.Model)
-	} else {
-		// Carry the usage snapshot across the rebuild (same-provider swaps
-		// only; the seeder rejects foreign snapshots), mirroring
-		// Workspace.switchModel.
-		if snap, ok := sess.agent.Usage(); ok {
-			provider.SeedClientUsage(sw.Client, snap)
-		}
-		sess.agent.SetClientAndModel(sw.Client, sw.Model)
-		// The client swap keeps the tool registry, so terva_status still
-		// carries the previous provider identity — re-bind it, or the tool
-		// reports the old provider and loses the context-window size
-		// (FindModel(oldProvider, newModel) misses). Mirrors
-		// Workspace.switchModel in the web/ctrlproto path.
-		if st, ok := sess.agent.LookupTool("terva_status"); ok {
-			if stt, ok := st.(*tools.StatusTool); ok {
-				stt.SetProvider(sw.Provider, sw.AuthMethod, sw.BaseURL)
-			}
-		}
+	// Apply the switch to the live agent through the host's swap closure, which
+	// is the same event the daemon, bot mode and the resume path go through
+	// (build.ApplyModelSwap) — so the four cannot drift on what a swap
+	// consists of: the usage carry-over, the client install, the terva_status
+	// re-bind, and re-pointing every host-routed dispatch tool (§10/§14).
+	//
+	// This used to be spelled out here, in a copy whose own comments named the
+	// file it was copied from.
+	if sw.Apply == nil {
+		// The host built a switch it cannot apply. Say so rather than
+		// recording the new model and telling the editor it took effect.
+		return nil, errInternal("model switch is not applicable: the host supplied no applier")
 	}
+	sw.Apply(sess.agent)
 	sess.setModel(sw.Provider, sw.Model)
 
 	// Persist the model change so a later session/load restores it (§4b). The

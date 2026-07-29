@@ -20,7 +20,6 @@ import (
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/procenv"
-	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/privfs"
@@ -549,9 +548,9 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 			fmt.Fprintln(os.Stderr, "session:", serr)
 		}
 	}
-	// Tell session-keyed extensions the real session id before any turn runs.
-	build.EmitSessionStart(extMgr, sess)
-	build.RebindTasks(resolved.Tasks, sess)
+	// Key the board and announce the session, in that order — see
+	// build.BindSession. This site used to announce first.
+	build.BindSession(build.SessionBinding{Agent: agent, Tasks: resolved.Tasks, Ext: extMgr, Session: sess})
 
 	var loop *chat.Loop
 	loop = &chat.Loop{
@@ -592,28 +591,26 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 			if err != nil {
 				return err
 			}
-			nc := next.NewClient()
-			// Carry the usage snapshot across the rebuild (same-provider
-			// swaps only; the seeder rejects foreign snapshots), mirroring
-			// Workspace.switchModel.
-			if snap, ok := loop.Agent.Usage(); ok {
-				provider.SeedClientUsage(nc, snap)
-			}
-			loop.SetClientAndModel(nc, next.Model)
-			loop.UpdateStatusContext(next.Provider, next.AuthMethod, next.CWD)
-			// UpdateStatusContext refreshes the /status connector command;
-			// terva_status (what the MODEL sees) reads a separate tool that
-			// SetClientAndModel doesn't touch. Rebind it too, or a
-			// cross-provider config change leaves the model reporting the old
-			// provider and losing the context-window size. The tool is shared
-			// across every per-chat agent (one resolved.ToolRegistry), so one
-			// call covers them all. Mirrors Workspace.switchModel (web) and the
-			// ACP path.
-			if st, ok := loop.Agent.LookupTool("terva_status"); ok {
-				if stt, ok := st.(*tools.StatusTool); ok {
-					stt.SetProvider(next.Provider, next.AuthMethod, next.BaseURL)
-				}
-			}
+			// The shared model-swap event (build.ApplyModelSwap) — the same one
+			// the daemon, acp and the resume path go through. Swap is the one
+			// piece bot mode does differently: the loop fans one client out to
+			// every per-chat agent, so it owns the assignment. Everything else
+			// (usage carry-over, terva_status, the host-routed dispatch tools)
+			// is the event's, and loop.Agent is the right reader for all of it
+			// because the tool registry is shared across those agents.
+			build.ApplyModelSwap(build.ModelSwap{
+				Agent:      loop.Agent,
+				Client:     next.NewClient(),
+				Provider:   next.Provider,
+				Model:      next.Model,
+				AuthMethod: next.AuthMethod,
+				BaseURL:    next.BaseURL,
+				Swap:       func(c provider.Client, m string) { loop.SetClientAndModel(c, m) },
+				// UpdateStatusContext refreshes the /status CONNECTOR command,
+				// which is bot mode's alone — terva_status, what the model sees,
+				// is the event's job.
+				After: func() { loop.UpdateStatusContext(next.Provider, next.AuthMethod, next.CWD) },
+			})
 			return nil
 		},
 	}

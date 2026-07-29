@@ -388,8 +388,8 @@ func (f *fakeFactory) buildFakeAgentWithRegistry(reg core.Registry, confirmer co
 	gate := core.NewPolicyGate(pol, confirmer)
 	// The gate forwards call.ID to ConfirmWithCall itself — no correlation
 	// wrapper, mirroring production.
-	ag.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
-		ok, reason, _ := gate.Check(call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120), call.ID)
+	ag.BeforeToolExecute = func(ctx context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+		ok, reason, _ := gate.Check(ctx, call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120), call.ID)
 		return ok, reason, nil
 	}
 	return ag, gate
@@ -465,8 +465,8 @@ func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confi
 	// Canonical ladder: gate.Check FIRST (forwarding call.ID to the
 	// confirmer itself), then the extension intercept — mirroring
 	// production's BuildBeforeToolExecute with no correlation wrapper.
-	ag.BeforeToolExecute = func(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
-		ok, reason, _ := gate.Check(call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120), call.ID)
+	ag.BeforeToolExecute = func(ctx context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+		ok, reason, _ := gate.Check(ctx, call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120), call.ID)
 		if !ok {
 			return false, reason, nil
 		}
@@ -931,6 +931,18 @@ func (f *fakeFactory) SwitchModel(currentProvider, currentModel, targetModelID s
 			client = &textTurnClient{reply: "switched"}
 		}
 		sw = ModelSwitch{Provider: target.Provider, Model: target.ID, Client: client, Reuse: false}
+	}
+	// The host supplies the applier; in production it closes over
+	// build.ApplyModelSwap, which is where the swap's own steps (usage
+	// carry-over, terva_status, the host-routed dispatch tools) are tested.
+	// What this fake owes the acp tests is only the observable effect on the
+	// session's agent — that a switch reaches it at all.
+	sw.Apply = func(ag *core.Agent) {
+		if sw.Client != nil {
+			ag.SetClientAndModel(sw.Client, sw.Model)
+			return
+		}
+		ag.SetModel(sw.Model)
 	}
 
 	f.switchMu.Lock()

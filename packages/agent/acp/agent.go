@@ -287,6 +287,19 @@ type ModelSwitch struct {
 	Reuse      bool
 	AuthMethod string // "apikey" | "oauth" | "" — the target's, for Reuse==false
 	BaseURL    string // target endpoint, for Reuse==false
+
+	// Apply moves ag onto this model. The HOST supplies it, closing over
+	// build.ApplyModelSwap — the one event the daemon, bot mode and the resume
+	// path also go through, so the four cannot drift on what a swap consists
+	// of. This package stays out of the composition root, exactly as it does
+	// for the agent, the extension manager and the trust applier it is handed.
+	//
+	// REQUIRED. A ModelSwitch that describes a target and cannot move anything
+	// onto it is not a switch, and handleSetConfigOption reports a nil one as an
+	// internal error rather than answering the editor with a success the session
+	// did not have. A silently-unapplied swap is the precise shape of bug this
+	// event exists to end.
+	Apply func(ag *core.Agent)
 }
 
 // AgentInfo is the {name, version} terva reports in initialize.
