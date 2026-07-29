@@ -77,23 +77,24 @@ func TestTheSharedRebuildCarriesEverySurvivorTheWorkspaceDoes(t *testing.T) {
 }
 
 // The other half of the same rule: a host must not hand-roll a third copy. Both
-// fixed-shape hosts go through the shared helper, and neither swaps a tool set
-// onto its agent by itself — which is the move that would put the survivor list
-// back into three places.
+// fixed-shape hosts go through the shared helper — which is the positive
+// direction, and stays here because only a named list can fail when a host
+// SILENTLY LOSES its rebuild.
+//
+// The negative direction — nobody ELSE swaps a tool set — moved to
+// host_census_test.go's TestNoHostSwapsAToolSetOutsideTheTwoRebuilds, because
+// asking two named files whether they misbehave cannot answer the question the
+// rule is actually about: whether a third implementation appeared somewhere
+// nobody thought to look.
 func TestTheFixedShapeHostsRebuildThroughTheSharedHelper(t *testing.T) {
 	for _, file := range []string{"rpc.go", "acp_mode.go"} {
 		b, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatalf("read %s: %v", file, err)
 		}
-		src := string(b)
-		if !strings.Contains(src, "build.LiveToolSet{") {
+		if !strings.Contains(string(b), "build.LiveToolSet{") {
 			t.Errorf("%s does not build a build.LiveToolSet — if this host stopped rebuilding its tool set, say so here; "+
 				"if it grew its own rebuild, that is the third copy this guard exists to prevent", file)
-		}
-		if strings.Contains(src, ".SetTools(") {
-			t.Errorf("%s swaps a tool set onto its agent directly; the survivor list belongs in build.LiveToolSet, "+
-				"not in a host", file)
 		}
 	}
 }

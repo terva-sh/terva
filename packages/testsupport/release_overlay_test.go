@@ -2,6 +2,7 @@ package testsupport
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -235,6 +236,155 @@ func TestEveryHeldBackDocGivesAReason(t *testing.T) {
 	for entry, why := range docsHeldBack {
 		if len(strings.TrimSpace(why)) < 20 {
 			t.Errorf("%s is held back with no real reason (%q) — say what makes it private", entry, why)
+		}
+	}
+}
+
+// ---- the EXCLUDES array itself ----
+//
+// The checks above join docs/ to EXCLUDES. These two join EXCLUDES to the
+// REPOSITORY, which is the direction that has actually cost a release.
+//
+// An EXCLUDES entry is a PATH STRING, and a rename invalidates it in total
+// silence: the array still parses, the release still builds, and the thing that
+// was private now ships. That is not a hypothetical — the same failure in
+// .gitattributes moved the embedded personas out from under their line-ending
+// pin, and it surfaced as seven charter tests failing on a Windows runner with a
+// message about a missing paragraph. A release is a push to a public mirror, so
+// the equivalent here has no recovery at all.
+
+// excludesNamingNothingTracked are EXCLUDES entries that deliberately name a
+// path the repository does not track, with the reason. The overlay is built from
+// TRACKED files, so an entry like this strips nothing; it is a closed door with a
+// second lock. Fine to keep — but say so, or it is indistinguishable from an
+// entry left behind by a rename, which is the failure these guards exist to catch.
+var excludesNamingNothingTracked = map[string]string{
+	"web-tools-evaluation-report.md": "gitignored by /*-report.md, so it can never be committed and never reaches the overlay; the entry is belt-and-braces against the ignore rule changing",
+}
+
+// trackedPaths is every path git tracks. Tracked-ness — not presence on disk —
+// is the right question: the overlay is built from the tracked set, and an
+// untracked local artifact is present on one machine and absent on another,
+// which would make a disk check fail for some developers and not others.
+func trackedPaths(t *testing.T) []string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", repoRoot, "ls-files", "-z").Output()
+	if err != nil {
+		t.Fatalf("git ls-files: %v (these guards read the tracked set; without it they cannot check anything)", err)
+	}
+	var paths []string
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	if len(paths) < 100 {
+		t.Fatalf("git tracks only %d paths; the listing is not seeing them and every check below would pass vacuously", len(paths))
+	}
+	return paths
+}
+
+// covers reports whether an EXCLUDES entry accounts for a tracked path: the
+// entry either IS the path, or is a directory prefix of it.
+func covers(entry, path string) bool {
+	return path == entry || strings.HasPrefix(path, entry+"/")
+}
+
+// TestEveryExcludeStillStripsSomething is the rename tripwire. An entry that
+// matches no tracked path is either stale or — the dangerous reading — pointing
+// at where something private USED to live, while the thing itself moved
+// somewhere the overlay no longer excludes.
+func TestEveryExcludeStillStripsSomething(t *testing.T) {
+	requireSourceTree(t)
+	tracked := trackedPaths(t)
+
+	for entry := range releaseExcludes(t) {
+		var hit bool
+		for _, p := range tracked {
+			if covers(entry, p) {
+				hit = true
+				break
+			}
+		}
+		reason, excused := excludesNamingNothingTracked[entry]
+		switch {
+		case hit && excused:
+			t.Errorf("EXCLUDES %q is listed as naming nothing tracked (%q), but it now strips real files — "+
+				"delete the stale excuse", entry, reason)
+		case !hit && !excused:
+			t.Errorf("EXCLUDES %q matches no tracked path. Either it is stale, or whatever it kept private "+
+				"was RENAMED and is now shipping to the public mirror under its new path. Point the entry at "+
+				"the new one, or record here why it strips nothing.", entry)
+		case !hit && excused && len(strings.TrimSpace(reason)) < 20:
+			t.Errorf("EXCLUDES %q is excused with no real reason (%q)", entry, reason)
+		}
+	}
+}
+
+// rootThatShips is every tracked top-level entry that IS public. A snapshot, for
+// the same reason docsThatShip is one: it makes a NEW root entry fail here
+// instead of shipping unexamined. The root is where a maintainer note or a
+// scratch directory lands first, and there are only ~30 of them.
+var rootThatShips = []string{
+	".gitattributes", ".gitignore", ".goreleaser.yaml", "CHANGELOG.md", "Dockerfile",
+	"LICENSE", "README.md", "assets", "cmd", "docs", "docs.go", "docs_test.go", "e2e",
+	"examples", "go.mod", "go.sum", "install.ps1", "install.sh", "justfile", "packages",
+	"scripts", "testdata",
+}
+
+// TestEveryRootEntryIsPublishedOrExcluded generalises the docs/ check to the
+// place a new private thing is most likely to appear. docs/ was covered because
+// that is where the leak was noticed; nothing covered the root, where AGENTS.md,
+// experiments/ and two .just files already live behind EXCLUDES.
+func TestEveryRootEntryIsPublishedOrExcluded(t *testing.T) {
+	requireSourceTree(t)
+	excludes := releaseExcludes(t)
+	ships := map[string]bool{}
+	for _, p := range rootThatShips {
+		ships[p] = true
+	}
+
+	seen := map[string]bool{}
+	var unclassified, both []string
+	for _, p := range trackedPaths(t) {
+		root := p
+		if i := strings.IndexByte(p, '/'); i >= 0 {
+			root = p[:i]
+		}
+		if seen[root] {
+			continue
+		}
+		seen[root] = true
+		// An entry is excluded if EXCLUDES names it, or names a parent of it.
+		excluded := false
+		for e := range excludes {
+			if covers(e, root) {
+				excluded = true
+				break
+			}
+		}
+		switch {
+		case !excluded && !ships[root]:
+			unclassified = append(unclassified, root)
+		case excluded && ships[root]:
+			both = append(both, root)
+		}
+	}
+	sort.Strings(unclassified)
+	if len(unclassified) > 0 {
+		t.Errorf("tracked top-level entries classified neither public nor excluded:\n  %s\n"+
+			"Everything tracked ships to the public mirror unless release.sh excludes it, and a release "+
+			"cannot be taken back. Add each to rootThatShips, or to release.sh's EXCLUDES.",
+			strings.Join(unclassified, "\n  "))
+	}
+	if len(both) > 0 {
+		sort.Strings(both)
+		t.Errorf("root entries both excluded and listed as shipping — delete the wrong one: %s",
+			strings.Join(both, ", "))
+	}
+	for _, p := range rootThatShips {
+		if !seen[p] {
+			t.Errorf("rootThatShips names %s, which git no longer tracks — delete the entry", p)
 		}
 	}
 }

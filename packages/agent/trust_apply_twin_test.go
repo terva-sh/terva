@@ -2,7 +2,6 @@ package agent
 
 import (
 	"os"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -79,59 +78,11 @@ func TestTheDaemonMovesItsWorkspaceScopedSurfaceFirst(t *testing.T) {
 	}
 }
 
-// The steps ApplyTrust performs must not ALSO be performed by a host. Each of
-// these is a step that, done outside the shared event, is done in isolation from
-// the other three — and its ordering relative to them becomes accidental.
+// The third half of this rule — that no host performs one of ApplyTrust's steps
+// on its own — lives in host_census_test.go, as
+// TestNoTrustStepHappensOutsideTheSharedEvent.
 //
-// `except` is what separates a FLIP from a launch SEED. Every host tells its
-// freshly built manager the verdict it resolved with, which is not the event
-// this guard is about; the seed is recognisable because its argument is the
-// Resolved's own field. Nothing else is excused.
-var trustStepsOwnedByApplyTrust = []struct {
-	pattern *regexp.Regexp
-	except  *regexp.Regexp
-	why     string
-}{
-	{
-		pattern: regexp.MustCompile(`HookSpecsFor\(`),
-		why:     "swapping hook specs is step 1 of the flip; a host doing it alone decides for itself whether the repo stops executing before or after it stops being visible, which is the ordering bug the daemon had",
-	},
-	{
-		pattern: regexp.MustCompile(`\.SetProjectTrusted\(`),
-		except:  regexp.MustCompile(`\.SetProjectTrusted\(r\.Trusted\)`),
-		why:     "flipping the extension gate has to be paired with the reload that acts on it, which is what ApplyTrust does — a bare flip changes nothing until something else reloads, so it reads as applied when it is not (the TUI carried exactly this for three verbs)",
-	},
-}
-
-func TestNoHostPerformsATrustStepOutsideTheSharedEvent(t *testing.T) {
-	files := append([]string{"rpc.go", "cli.go", "swarm_agent.go", "modes/slash_registry.go", "modes/interactive_settings.go"}, trustHosts...)
-	var checked int
-	for _, file := range files {
-		b, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatalf("read %s: %v", file, err)
-		}
-		for _, line := range strings.Split(string(b), "\n") {
-			code := strings.TrimSpace(line)
-			if code == "" || strings.HasPrefix(code, "//") {
-				continue
-			}
-			for _, step := range trustStepsOwnedByApplyTrust {
-				if !step.pattern.MatchString(code) {
-					continue
-				}
-				if step.except != nil && step.except.MatchString(code) {
-					checked++ // an excused launch seed still proves the pattern matches real code
-					continue
-				}
-				t.Errorf("%s performs a trust-flip step outside build.ApplyTrust:\n    %s\n  %s", file, code, step.why)
-			}
-		}
-	}
-	// Without this the whole guard passes vacuously the day a spelling changes:
-	// zero matches and zero failures look identical from the outside.
-	if checked == 0 {
-		t.Error("no trust-step spelling matched anywhere, not even the launch seeds every host has — the patterns " +
-			"have gone stale and this guard is now checking nothing")
-	}
-}
+// It moved because the version here checked eight files BY NAME, and the files
+// it did not name were every host nobody had examined: the SDK, bot mode, the
+// deliberation clerks. A guard against forgetting a host cannot itself hold a
+// list of the hosts somebody remembered.
