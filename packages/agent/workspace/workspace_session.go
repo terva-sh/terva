@@ -411,7 +411,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// "current call" session state exists to collide when a host_tool_call
 	// approval parks concurrently with a model call's.
 	hookEng := w.hookEng
-	ag.BeforeToolExecute = build.BuildBeforeToolExecute(w.ctx, hookEng, gate, extMgr)
+	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, gate, extMgr)
 	s.bindAgentChannels(ag, gate)
 	if extMgr != nil {
 		ag.BeforeTurn = func(step int) (bool, string) {
@@ -433,8 +433,13 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 			return true, "", res.ReplaceText
 		}
 		build.WireExtEphemeral(ag, extMgr.EphemeralContext)
-		build.WireTasksEphemeral(ag, r.Tasks)
 	}
+	// The task board is not an extension: its card follows r.Tasks, not the
+	// manager. It was nested in the check above, which made a built-in board's
+	// visibility depend on whether this session had extensions. Still after the
+	// extension cards — composeEphemeral puts each new provider first, so wiring
+	// order reverses into the composed tail.
+	build.WireTasksEphemeral(ag, r.Tasks)
 	// Don't let the coordinator declare "finished" while it has open work —
 	// an extension's blocking context (protocol), OR sub-agents it spawned that
 	// are still running. Registration order is priority: open work outranks the
@@ -527,7 +532,12 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		s.seedMsgVars()
 	}
 
-	build.RebindTasks(r.Tasks, sess)
+	// First half of the shared session-binding event: identity and the task
+	// board, at session-open. The announcement is the second half, below —
+	// the daemon splits it for the same reason rpc does, because its extensions
+	// start in the background. The ORDER the split preserves is the point: the
+	// board is loaded before anything is told the session exists.
+	build.BindSession(build.SessionBinding{Agent: ag, Tasks: r.Tasks, Session: sess})
 
 	// Extensions start in the background (setupWebExtensions), so the session
 	// materializes without waiting on subprocess handshakes. Everything that
@@ -548,7 +558,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		if extMgr.Count() > 0 {
 			s.rebuildTools("extensions-ready")
 		}
-		build.EmitSessionStart(extMgr, sess)
+		build.BindSession(build.SessionBinding{Ext: extMgr, Session: sess})
 	}()
 	return s, nil
 }

@@ -85,9 +85,10 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 	// transcript onto the agent, so a resumed child does not rewrite what it
 	// just loaded (the ordering rpc.go relies on too).
 	build.WireHeadlessSessionPersist(ag, sess)
-	// Tell session-keyed extensions the real session id before any turn
-	// runs, so per-session state persists for swarm agents too.
-	build.EmitSessionStart(extMgr, sess)
+	// The shared session-binding event. A swarm child has no task board
+	// (wireNonInteractiveAgentExtHooks is handed a nil controller for it), so
+	// that field is nil here — visible as a decision rather than an omission.
+	build.BindSession(build.SessionBinding{Agent: ag, Ext: extMgr, Session: sess})
 
 	// Open the inbox listener BEFORE emitting agent_ready so the
 	// supervisor can dial through on the very first send. The
