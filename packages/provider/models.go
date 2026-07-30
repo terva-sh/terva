@@ -263,14 +263,22 @@ var Catalog = []Model{
 	// Anthropic-messages on https://api.kimi.com/coding (no /v1 suffix;
 	// the Anthropic client appends /v1/messages itself). The subscription
 	// (device-code OAuth) and KIMI_API_KEY both resolve to this one `kimi`
-	// provider, so these rows serve both. k3's DefaultReasoning:"high" keeps
-	// it sending `thinking`: the endpoint silently downgrades to Kimi 2.6
-	// when a request arrives with no thinking, so a model default (not a
-	// hardcoded branch) keeps K3 answering as K3 unless the user sets a
-	// global level.
+	// provider, so these rows serve both. The k3 rows' DefaultReasoning:
+	// "high" keeps them sending `thinking`: the endpoint silently
+	// downgrades to Kimi 2.6 when a request arrives with no thinking, so a
+	// model default (not a hardcoded branch) keeps K3 answering as K3
+	// unless the user sets a global level. k3-256k is the same model
+	// behind a 256k window instead of 1M.
 	{
 		Provider: "kimi", ID: "k3", DisplayName: "Kimi K3",
 		ContextWindow: 1000000, MaxOutput: 32768, Reasoning: true,
+		DefaultReasoning: "high",
+		PriceInput:       0, PriceOutput: 0, PriceCacheRead: 0,
+		BaseURL: "https://api.kimi.com/coding",
+	},
+	{
+		Provider: "kimi", ID: "k3-256k", DisplayName: "Kimi K3 256k",
+		ContextWindow: 262144, MaxOutput: 32768, Reasoning: true,
 		DefaultReasoning: "high",
 		PriceInput:       0, PriceOutput: 0, PriceCacheRead: 0,
 		BaseURL: "https://api.kimi.com/coding",

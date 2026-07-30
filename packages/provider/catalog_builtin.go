@@ -260,6 +260,10 @@ var builtinCatalog = []Model{
 	{Provider: "mistral", ID: "pixtral-12b", DisplayName: "Pixtral 12B", ContextWindow: 128000, MaxOutput: 128000, Reasoning: false, PriceInput: 0.15, PriceOutput: 0.15, PriceCacheRead: 0, BaseURL: "https://api.mistral.ai"},
 	{Provider: "mistral", ID: "pixtral-large-latest", DisplayName: "Pixtral Large (latest)", ContextWindow: 128000, MaxOutput: 128000, Reasoning: false, PriceInput: 2, PriceOutput: 6, PriceCacheRead: 0, BaseURL: "https://api.mistral.ai"},
 	// ----- moonshotai -----
+	// k3-256k is K3 behind a 256k window; priced as K3 ($3/$15, $0.30
+	// cache-hit — flat across the window) until a dedicated public price
+	// for the 256k id appears.
+	{Provider: "moonshotai", ID: "k3-256k", DisplayName: "Kimi K3 256k", ContextWindow: 262144, MaxOutput: 262144, Reasoning: true, PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, BaseURL: "https://api.moonshot.ai/v1"},
 	{Provider: "moonshotai", ID: "kimi-k2-0711-preview", DisplayName: "Kimi K2 0711", ContextWindow: 131072, MaxOutput: 16384, Reasoning: false, PriceInput: 0.6, PriceOutput: 2.5, PriceCacheRead: 0.15, BaseURL: "https://api.moonshot.ai/v1"},
 	{Provider: "moonshotai", ID: "kimi-k2-0905-preview", DisplayName: "Kimi K2 0905", ContextWindow: 262144, MaxOutput: 262144, Reasoning: false, PriceInput: 0.6, PriceOutput: 2.5, PriceCacheRead: 0.15, BaseURL: "https://api.moonshot.ai/v1"},
 	{Provider: "moonshotai", ID: "kimi-k2-thinking", DisplayName: "Kimi K2 Thinking", ContextWindow: 262144, MaxOutput: 262144, Reasoning: true, PriceInput: 0.6, PriceOutput: 2.5, PriceCacheRead: 0.15, BaseURL: "https://api.moonshot.ai/v1"},
@@ -268,6 +272,7 @@ var builtinCatalog = []Model{
 	{Provider: "moonshotai", ID: "kimi-k2.5", DisplayName: "Kimi K2.5", ContextWindow: 262144, MaxOutput: 262144, Reasoning: true, PriceInput: 0.6, PriceOutput: 3, PriceCacheRead: 0.1, BaseURL: "https://api.moonshot.ai/v1"},
 	{Provider: "moonshotai", ID: "kimi-k2.6", DisplayName: "Kimi K2.6", ContextWindow: 262144, MaxOutput: 262144, Reasoning: true, PriceInput: 0.95, PriceOutput: 4, PriceCacheRead: 0.16, BaseURL: "https://api.moonshot.ai/v1"},
 	// ----- moonshotai-cn -----
+	{Provider: "moonshotai-cn", ID: "k3-256k", DisplayName: "Kimi K3 256k", ContextWindow: 262144, MaxOutput: 262144, Reasoning: true, PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, BaseURL: "https://api.moonshot.cn/v1"},
 	{Provider: "moonshotai-cn", ID: "kimi-k2-0711-preview", DisplayName: "Kimi K2 0711", ContextWindow: 131072, MaxOutput: 16384, Reasoning: false, PriceInput: 0.6, PriceOutput: 2.5, PriceCacheRead: 0.15, BaseURL: "https://api.moonshot.cn/v1"},
 	{Provider: "moonshotai-cn", ID: "kimi-k2-0905-preview", DisplayName: "Kimi K2 0905", ContextWindow: 262144, MaxOutput: 262144, Reasoning: false, PriceInput: 0.6, PriceOutput: 2.5, PriceCacheRead: 0.15, BaseURL: "https://api.moonshot.cn/v1"},
 	{Provider: "moonshotai-cn", ID: "kimi-k2-thinking", DisplayName: "Kimi K2 Thinking", ContextWindow: 262144, MaxOutput: 262144, Reasoning: true, PriceInput: 0.6, PriceOutput: 2.5, PriceCacheRead: 0.15, BaseURL: "https://api.moonshot.cn/v1"},
