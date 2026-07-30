@@ -17,6 +17,10 @@ import (
 // balance/limit barely moves between /usage opens, and the GET isn't free.
 const usagePollTTL = 60 * time.Second
 
+// usageWarmTimeout bounds a background warm. Nothing waits on it, so it must
+// not be able to hold a goroutine open indefinitely against a hung endpoint.
+const usageWarmTimeout = 10 * time.Second
+
 // usageFetcher pulls a provider's usage/balance from its dedicated endpoint.
 type usageFetcher func(ctx context.Context) (UsageSnapshot, error)
 
@@ -35,6 +39,18 @@ type pollingUsageClient struct {
 	snap    UsageSnapshot
 	have    bool
 	fetched time.Time
+
+	// attempted is the backoff clock for BACKGROUND warms only — it moves on
+	// every warm, and on every successful fetch from either path. fetched moves
+	// only on success, so a failing endpoint would otherwise be re-fetched by
+	// every passive read forever. An explicit RefreshUsage deliberately ignores
+	// this: a user opening /usage after a failure is asking to try again now.
+	attempted time.Time
+
+	// warming is the single-flight guard for the background warm. Several
+	// readers can land between one warm starting and its result arriving; only
+	// the first should spend a request.
+	warming bool
 }
 
 func newPollingUsageClient(inner Client, ttl time.Duration, fetch usageFetcher) *pollingUsageClient {
@@ -50,10 +66,62 @@ func (c *pollingUsageClient) Stream(ctx context.Context, req Request) (<-chan Ev
 // UsageSnapshot returns the cached credits merged with the inner client's
 // (passively-observed) snapshot — e.g. OpenRouter's credits + its rate-limit
 // windows. Non-blocking; ok=false until either source has data.
+//
+// It also WARMS the cache in the background when it is stale, and that is the
+// difference between a poll-family provider's meters moving on their own and
+// standing still. Providers report usage two ways. A header-family client
+// (anthropic, codex, openai-compatible) records its windows off every inference
+// response, so this passive read is kept warm as a side effect of talking to
+// the model. A poll-family client reports nothing until somebody calls its
+// endpoint — and the only caller was an explicit refresh, i.e. a user opening
+// /usage. Between those, every passive read returned the same frozen numbers:
+// the status bar, the panel's meters and the context breakdown all showed
+// whatever the last /usage happened to fetch, indefinitely.
+//
+// Warming here rather than at each caller is deliberate. The staleness belongs
+// to this client — it is the thing that knows its numbers come from a GET and
+// when that GET last ran — and every host reads usage through this method, so
+// fixing it once covers the ones that never knew the distinction existed.
+//
+// The read stays non-blocking and returns what is cached right now; the fetch
+// lands for the NEXT read. Cost is bounded twice over: single-flighted, and no
+// more than one request per ttl even when the endpoint is failing.
 func (c *pollingUsageClient) UsageSnapshot() (UsageSnapshot, bool) {
+	// Read first, THEN warm. Warming first lets the fetch land between the two
+	// statements, so the same call could return either the old numbers or the
+	// new ones depending on how a goroutine was scheduled — an answer that
+	// varies for no reason the caller can see, and a flake in anything
+	// asserting on the pre-warm value.
 	credits, have := c.cachedCredits()
 	inner, innerOK := ClientUsage(c.inner)
+	c.warmIfStale()
 	return mergeUsage(credits, have, inner, innerOK)
+}
+
+// warmIfStale kicks a background fetch when the cache is older than ttl and no
+// warm is already running. Returns immediately in every case.
+func (c *pollingUsageClient) warmIfStale() {
+	c.mu.Lock()
+	if c.warming || (!c.attempted.IsZero() && time.Since(c.attempted) < c.ttl) {
+		c.mu.Unlock()
+		return
+	}
+	c.warming = true
+	c.attempted = time.Now()
+	c.mu.Unlock()
+
+	go func() {
+		// Its own context: nothing is waiting on this, so it cannot inherit a
+		// caller's deadline, and it must not outlive a hung endpoint either.
+		ctx, cancel := context.WithTimeout(context.Background(), usageWarmTimeout)
+		defer cancel()
+		defer func() {
+			c.mu.Lock()
+			c.warming = false
+			c.mu.Unlock()
+		}()
+		c.fetchCredits(ctx)
+	}()
 }
 
 // RefreshUsage refreshes the credits (TTL-aware, blocking) and merges them with
@@ -89,11 +157,16 @@ func (c *pollingUsageClient) fetchCredits(ctx context.Context) (UsageSnapshot, b
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err != nil {
+		// fetched deliberately does NOT move: an explicit refresh should retry
+		// on the next /usage rather than serve a stale number for a full ttl.
+		// The background warm has its own clock (attempted) precisely because
+		// it cannot afford that — see warmIfStale.
 		return c.snap, c.have
 	}
 	c.snap = snap
 	c.have = true
 	c.fetched = time.Now()
+	c.attempted = c.fetched
 	return c.snap, true
 }
 

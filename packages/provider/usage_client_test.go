@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -72,34 +73,40 @@ func TestFetchDeepSeekBalance(t *testing.T) {
 	}
 }
 
-// The TTL cache: the passive getter never fetches, and a refresh inside the TTL
-// serves the cache instead of re-hitting the endpoint.
+// The TTL cache: a refresh inside the TTL serves the cache instead of
+// re-hitting the endpoint, and the passive getter never blocks on one.
+//
+// This test used to assert that the passive getter never fetched AT ALL, and
+// that was the bug rather than the contract: for a poll-family provider the
+// passive read is the only thing the status bar and the context breakdown ever
+// call, so "never fetches" meant "never updates". It now warms in the
+// background — still returning immediately, still serving whatever is cached at
+// the moment of the call — so what this pins is that the READ does not block
+// and does not re-fetch behind a warm cache. Cold-start warming has its own
+// tests in usage_warm_test.go.
 func TestPollingUsageClientTTL(t *testing.T) {
-	calls := 0
+	var calls atomic.Int64 // a background warm shares this counter now
 	fetch := func(ctx context.Context) (UsageSnapshot, error) {
-		calls++
-		return UsageSnapshot{Provider: "x", Credits: &Credits{Balance: float64(calls)}}, nil
+		return UsageSnapshot{Provider: "x", Credits: &Credits{Balance: float64(calls.Add(1))}}, nil
 	}
 	c := newPollingUsageClient(nil, time.Minute, fetch) // inner unused by these methods
 
-	if _, ok := c.UsageSnapshot(); ok || calls != 0 {
-		t.Fatalf("UsageSnapshot before refresh: ok=%v calls=%d (must be empty, no fetch)", ok, calls)
-	}
-
 	s1, ok := c.RefreshUsage(context.Background())
-	if !ok || calls != 1 {
-		t.Fatalf("first refresh: ok=%v calls=%d, want ok + 1 fetch", ok, calls)
+	if !ok || calls.Load() != 1 {
+		t.Fatalf("first refresh: ok=%v calls=%d, want ok + 1 fetch", ok, calls.Load())
 	}
 	s2, _ := c.RefreshUsage(context.Background())
-	if calls != 1 {
-		t.Errorf("second refresh within TTL re-fetched; calls=%d", calls)
+	if calls.Load() != 1 {
+		t.Errorf("second refresh within TTL re-fetched; calls=%d", calls.Load())
 	}
 	if s1.Credits.Balance != s2.Credits.Balance {
 		t.Errorf("cached snapshot changed across TTL: %v vs %v", s1.Credits.Balance, s2.Credits.Balance)
 	}
 
-	if snap, ok := c.UsageSnapshot(); !ok || snap.Credits.Balance != 1 || calls != 1 {
-		t.Errorf("cached getter = %+v ok=%v calls=%d", snap, ok, calls)
+	// The passive getter serves that same cache, and does not spend a fetch to
+	// do it: the refresh above left the cache inside its TTL.
+	if snap, ok := c.UsageSnapshot(); !ok || snap.Credits.Balance != 1 || calls.Load() != 1 {
+		t.Errorf("cached getter = %+v ok=%v calls=%d", snap, ok, calls.Load())
 	}
 }
 
