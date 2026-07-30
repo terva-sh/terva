@@ -40,6 +40,7 @@ type globalBinding struct {
 	kind  tui.KeyKind
 	alt   bool   // chord requires Alt held
 	shift bool   // chord requires Shift held
+	ctrl  bool   // chord requires Ctrl held
 	name  string // stable action name (docs, future rebind config)
 	run   func(ctx context.Context, k tui.Key) keyOutcome
 }
@@ -57,6 +58,9 @@ func (i *Interactive) dispatchGlobalKey(ctx context.Context, k tui.Key) (handled
 		if b.shift && !k.Shift {
 			continue
 		}
+		if b.ctrl && !k.Ctrl {
+			continue
+		}
 		switch b.run(ctx, k) {
 		case keyQuit:
 			return true, true
@@ -69,9 +73,11 @@ func (i *Interactive) dispatchGlobalKey(ctx context.Context, k tui.Key) (handled
 	return false, false
 }
 
-// keyInsertNewline inserts a newline for a modified Enter (Alt or Shift).
-// The real key is forwarded to the editor, whose KeyEnter handler turns a
-// modified Enter into a newline while a bare Enter still submits.
+// keyInsertNewline inserts a newline for a modified Enter (Alt, Shift, or
+// Ctrl). The real key is forwarded to the editor, whose KeyEnter handler
+// turns a modified Enter into a newline while a bare Enter still submits.
+// The binding exists so the chord beats the slash/@ popups downstream,
+// which otherwise claim every KeyEnter to commit their selection.
 func (i *Interactive) keyInsertNewline(_ context.Context, k tui.Key) keyOutcome {
 	i.ed.HandleKey(k)
 	return keyHandled
@@ -86,6 +92,7 @@ func (i *Interactive) buildGlobalKeymap() []globalBinding {
 		{kind: tui.KeyCtrlD, name: "quit-when-idle", run: i.keyCtrlD},
 		{kind: tui.KeyCtrlL, name: "repaint", run: i.keyRepaint},
 		{kind: tui.KeyCtrlO, name: "toggle-tool-expand", run: i.keyToggleExpand},
+		{kind: tui.KeyCtrlS, name: "stash-draft", run: i.keyStashDraft},
 		{kind: tui.KeyCtrlT, name: "cycle-tool-display", run: i.keyCycleToolDisplay},
 		{kind: tui.KeyCtrlV, name: "paste-clipboard-image", run: i.keyPasteClipboard},
 		{kind: tui.KeyShiftTab, name: "cycle-approval-mode", run: i.keyCycleApprovalMode},
@@ -111,6 +118,7 @@ func (i *Interactive) buildGlobalKeymap() []globalBinding {
 		{kind: tui.KeyDown, name: "cursor-down-or-scroll", run: i.keyDown},
 		{kind: tui.KeyEnter, alt: true, name: "insert-newline", run: i.keyInsertNewline},
 		{kind: tui.KeyEnter, shift: true, name: "insert-newline-shift", run: i.keyInsertNewline},
+		{kind: tui.KeyEnter, ctrl: true, name: "insert-newline-ctrl", run: i.keyInsertNewline},
 	}
 }
 

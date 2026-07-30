@@ -44,6 +44,7 @@ const (
 	KeyCtrlF
 	KeyCtrlW
 	KeyCtrlO
+	KeyCtrlS
 	KeyCtrlT
 	KeyCtrlV
 	KeyPaste
@@ -95,12 +96,28 @@ func (r *Reader) Read() (Key, error) {
 		return Key{Kind: KeyCtrlW}, nil
 	case b == 0x0f:
 		return Key{Kind: KeyCtrlO}, nil
+	case b == 0x13:
+		// XOFF under software flow control, but raw mode (term.MakeRaw)
+		// clears IXON, so the byte reaches us as an ordinary chord.
+		return Key{Kind: KeyCtrlS}, nil
 	case b == 0x14:
 		return Key{Kind: KeyCtrlT}, nil
 	case b == 0x16:
 		return Key{Kind: KeyCtrlV}, nil
-	case b == '\r', b == '\n':
+	case b == '\r':
 		return Key{Kind: KeyEnter}, nil
+	case b == '\n':
+		// Ctrl+J, reported as a Ctrl-modified Enter. Raw mode clears
+		// ICRNL, so the Enter key itself always arrives as CR (0x0d) —
+		// a bare LF can only be ctrl+j, or the ctrl+enter that every
+		// terminal without an enhanced keyboard protocol collapses onto
+		// the same byte. Treating it as a modified Enter gives the
+		// editor a newline chord that needs no terminal support at all,
+		// which matters because shift+enter and alt+enter only survive
+		// the wire on terminals that speak the kitty keyboard protocol
+		// or xterm modifyOtherKeys (iTerm2 and Terminal.app send a bare
+		// CR for both by default).
+		return Key{Kind: KeyEnter, Ctrl: true}, nil
 	case b == '\t':
 		return Key{Kind: KeyTab}, nil
 	case b == 0x7f, b == 0x08:

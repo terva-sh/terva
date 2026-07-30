@@ -16,7 +16,9 @@ import (
 // translated at render time by renderHelpBlock).
 var helpKeyRows = [][2]string{
 	{"enter", i18n.M("submit the current input")},
-	{"shift+enter / alt+enter", i18n.M("insert a newline")},
+	{"ctrl+j", i18n.M("insert a newline (works in every terminal)")},
+	{"shift+enter / alt+enter", i18n.M("insert a newline (needs a terminal that reports modified enter)")},
+	{"\\ then enter", i18n.M("insert a newline (the backslash is consumed)")},
 	{"tab", i18n.M("complete the highlighted slash command")},
 	{"esc", i18n.M("cancel the current turn (while busy) - clear the input (while idle)")},
 	{"ctrl+c", i18n.M("exit (while idle) - cancel the current turn (while busy)")},
@@ -28,6 +30,7 @@ var helpKeyRows = [][2]string{
 	{"ctrl+l", i18n.M("redraw the screen")},
 	{"ctrl+o", i18n.M("expand / collapse long tool results")},
 	{"ctrl+t", i18n.M("cycle tool display (boxes - minimal - grouped - hidden)")},
+	{"ctrl+s", i18n.M("set the current draft aside / bring it back (it also returns after you send)")},
 	{"ctrl+v", i18n.M("paste a clipboard image into the prompt (also /paste)")},
 	{"pgup / pgdn", i18n.M("scroll the chat one page up / down")},
 	{"up / down", i18n.M("move within multi-line input - scroll chat at input edge")},
