@@ -11,6 +11,15 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.128.1](https://github.com/terva-sh/terva/releases/tag/v0.128.1) — 2026-07-29
+
+### Fixes
+
+- acp,rpc: the editor and rpc hosts re-resolve from the model they are running
+- build: a model named with its provider is not swapped for the default
+- web: a model switch survives the next tool-set rebuild
+- a re-derived per-turn tail keeps the model's live context cards
+
 ## [v0.128.0](https://github.com/terva-sh/terva/releases/tag/v0.128.0) — 2026-07-29
 
 ### Features
