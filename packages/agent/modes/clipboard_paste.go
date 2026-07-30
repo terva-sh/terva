@@ -50,6 +50,21 @@ func preparePromptWithClipboardImages(text string, pending []clipboardImageAttac
 	return out, images
 }
 
+// nextClipboardMarker allocates the visible marker for a new clipboard
+// attachment. It numbers from a session counter, not len(pending)+1:
+// stashing a draft (ctrl+s) moves its attachments out of the pending
+// list, and a fresh #1 pasted while the stash holds its own #1 would
+// collide — at submit the first match strips every occurrence of the
+// marker text and the second image silently drops. The counter rewinds
+// only when no attachment anywhere still holds a marker.
+func (i *Interactive) nextClipboardMarker() string {
+	if len(i.clipboardImages) == 0 && (i.stash == nil || len(i.stash.images) == 0) {
+		i.clipImageSeq = 0
+	}
+	i.clipImageSeq++
+	return fmt.Sprintf("[clipboard image #%d]", i.clipImageSeq)
+}
+
 // pasteClipboard reads an image off the system clipboard, stashes it, and
 // drops a visible "[clipboard image #N]" marker at the cursor. Bound to
 // ctrl+v (clean on macOS / native Linux) and the /paste command (works
@@ -66,7 +81,7 @@ func (i *Interactive) pasteClipboard() {
 		i.setStatusErr(i18n.T("clipboard has no image to paste"))
 		return
 	}
-	marker := fmt.Sprintf("[clipboard image #%d]", len(i.clipboardImages)+1)
+	marker := i.nextClipboardMarker()
 	i.clipboardImages = append(i.clipboardImages, clipboardImageAttachment{
 		marker: marker,
 		image:  provider.ImageBlock{MimeType: "image/png", Data: data},

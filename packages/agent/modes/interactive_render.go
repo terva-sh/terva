@@ -582,13 +582,18 @@ func (i *Interactive) redraw() {
 		queue = append(queue, i.cfg.Theme.FG256(i.cfg.Theme.Muted, hint))
 	}
 
+	// Parked-draft row (ctrl+s) or, while a stash-worthy draft is being
+	// typed against a running turn, the one-line nudge that the stash
+	// exists. Same visual family as the sliding-in chips.
+	stashRows := i.stashRows(cols)
+
 	// Bottom-sticky sections (always visible, never scroll). Each
 	// non-empty subsection (dialog, suggest popup, sliding-in queue)
 	// is preceded by one blank row so it has air above the chat
 	// content. The status block and editor get their own dedicated
 	// blanks so spacing stays consistent whether or not a dialog or
 	// popup is showing.
-	bottom := make([]string, 0, len(dialog)+len(suggest)+len(queue)+len(edLines)+9)
+	bottom := make([]string, 0, len(dialog)+len(suggest)+len(queue)+len(stashRows)+len(edLines)+9)
 	if len(dialog) > 0 {
 		bottom = append(bottom, "")
 	}
@@ -604,6 +609,7 @@ func (i *Interactive) redraw() {
 	if !i.swarmDialog.Active() {
 		bottom = append(bottom, suggest...)
 		bottom = append(bottom, queue...)
+		bottom = append(bottom, stashRows...)
 		bottom = append(bottom, "")
 		bottom = append(bottom, statusLines...)
 		bottom = append(bottom, "")

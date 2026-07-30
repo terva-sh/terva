@@ -409,6 +409,12 @@ You can keep typing while the agent is working. Pressing `enter` during a turn q
 
 To recover the most recently queued message back into the editor (to tweak it before it runs), press `Option+↑`. In VS Code's integrated terminal that chord doesn't survive xterm.js's macOS key handling — use `Option+Shift+↑` there. terva's hint line under the sliding-in queue adapts automatically based on `$TERM_PROGRAM`.
 
+## Setting a draft aside (`ctrl+s`)
+
+Queuing covers messages you've already submitted; `ctrl+s` covers the one you haven't. The situation it exists for: you start composing a reply while the agent is still responding, and the response turns out to end in a question you need to answer before your draft makes sense to send. Press `ctrl+s` to set the draft aside — it parks above the status bar as `set aside: <text>` (cursor position, collapsed pastes, and pending clipboard images all preserved) and the editor clears so you can type the answer. The moment you send it, the parked draft drops back into the editor and you continue where you left off.
+
+`ctrl+s` again brings the draft back early; pressed with a draft on both sides it swaps them. A muted hint appears once you've typed a few characters of a draft while a turn is running — the situation where you're most likely to need it — and stays through the turn's end, which is when the question you have to answer actually lands.
+
 Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jump`, `/btw`, `/sessions`, `/skills`, `/context`, `/lore`, `/tasks`, `/status`, `/usage`, `/resets`, `/settings`, `/permissions`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/new`, `/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`, `/restart`, `/trust`, `/untrust`, `/migrate`, `/cd`) cancel the active turn first and then run.
 
 
@@ -427,6 +433,7 @@ Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jum
 | `ctrl+d` | Exit on empty input. |
 | `ctrl+l` | Redraw the screen. |
 | `ctrl+o` | Expand or collapse long tool results (read, write, edit, bash outputs over ~12 lines). Also overrides `ctrl+t`'s minimal/grouped/hidden modes with full boxes. |
+| `ctrl+s` | Set the current draft aside to answer the agent first (press again to bring it back; it also returns on its own after your next message goes out). See [Setting a draft aside](#setting-a-draft-aside-ctrls). |
 | `ctrl+t` | Cycle tool display: boxes → minimal one-liners → grouped → hidden. Errors stay visible; `ctrl+o` recovers everything. |
 | `ctrl+v` | Paste an image from the system clipboard into the prompt (same as `/paste`). Text paste needs no key — it arrives as a bracketed paste. |
 | `@` | Open the file picker. Browse files and directories in the working directory. |

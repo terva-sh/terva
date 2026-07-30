@@ -89,6 +89,82 @@ func (e *Editor) SubmitValue() string {
 	return raw
 }
 
+// EditorState is a snapshot of the editor's complete buffer state: the
+// visible lines, the cursor, and the hidden bodies behind paste and
+// file/dir placeholders. State()/Restore() exist for callers that park
+// a draft aside and bring it back later — the one round trip SetValue
+// cannot make, because SetValue drops the placeholder maps (correctly:
+// the placeholders they back are gone from the text it installs).
+// Both directions deep-copy, so a snapshot never aliases live edits.
+type EditorState struct {
+	lines            []string
+	cursorR, cursorC int
+	pastes           map[int]string
+	pasteSeq         int
+	files            map[int]string
+	fileSeq          int
+	dirs             map[int]string
+	dirSeq           int
+}
+
+// Value returns the snapshot's buffer as a single string, placeholder
+// form — what was visible on screen when the snapshot was taken.
+func (s EditorState) Value() string { return strings.Join(s.lines, "\n") }
+
+// State captures the editor's current buffer, cursor, and placeholder
+// bodies. The editor itself is untouched.
+func (e *Editor) State() EditorState {
+	return EditorState{
+		lines:    append([]string(nil), e.Lines...),
+		cursorR:  e.CursorR,
+		cursorC:  e.CursorC,
+		pastes:   copyIntMap(e.pastes),
+		pasteSeq: e.pasteSeq,
+		files:    copyIntMap(e.files),
+		fileSeq:  e.fileSeq,
+		dirs:     copyIntMap(e.dirs),
+		dirSeq:   e.dirSeq,
+	}
+}
+
+// Restore reinstates a snapshot taken by State, cursor position and
+// placeholder bodies included.
+func (e *Editor) Restore(s EditorState) {
+	e.Lines = append([]string(nil), s.lines...)
+	if len(e.Lines) == 0 {
+		e.Lines = []string{""}
+	}
+	e.CursorR = clamp(s.cursorR, 0, len(e.Lines)-1)
+	e.CursorC = clamp(s.cursorC, 0, runeLen(e.Lines[e.CursorR]))
+	e.pastes = copyIntMap(s.pastes)
+	e.pasteSeq = s.pasteSeq
+	e.files = copyIntMap(s.files)
+	e.fileSeq = s.fileSeq
+	e.dirs = copyIntMap(s.dirs)
+	e.dirSeq = s.dirSeq
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func copyIntMap(m map[int]string) map[int]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[int]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 // SetValue replaces the buffer and places the cursor at the end.
 // Also drops any stored pastes because the placeholders they back
 // are now gone from the visible text.
@@ -128,10 +204,22 @@ func (e *Editor) HandleKey(k Key) (submit bool) {
 		}
 		e.insert(string(k.Rune))
 	case KeyEnter:
-		// Shift+Enter and Alt+Enter insert a newline (terminals that
-		// report a modified Enter via the enhanced keyboard protocol);
-		// a bare Enter submits.
-		if k.Shift || k.Alt {
+		// Any modified Enter inserts a newline; a bare Enter submits.
+		// Shift+Enter and Alt+Enter only reach us on terminals that
+		// speak the kitty keyboard protocol or xterm modifyOtherKeys —
+		// Ctrl covers ctrl+j, which is a plain 0x0a byte and therefore
+		// works everywhere (see the Reader's LF case).
+		if k.Shift || k.Alt || k.Ctrl {
+			e.newline()
+			return false
+		}
+		// Last-resort chord for terminals that report none of the
+		// above: a lone backslash immediately before the cursor turns
+		// Enter into a newline and is consumed, shell-style. An escaped
+		// backslash ("\\") is left alone and submits, so text that
+		// genuinely ends in a backslash is still reachable.
+		if e.trailingLineContinuation() {
+			e.backspace()
 			e.newline()
 			return false
 		}
@@ -465,6 +553,22 @@ func (e *Editor) insert(s string) {
 	e.Lines = newLines
 	e.CursorR += len(parts) - 1
 	e.CursorC = runeLen(last)
+}
+
+// trailingLineContinuation reports whether the cursor sits directly
+// after a single, unescaped backslash — the shell's line-continuation
+// shape. Only an odd run of backslashes counts: "foo\" continues,
+// "foo\\" is a literal backslash and submits.
+func (e *Editor) trailingLineContinuation() bool {
+	r := []rune(e.Lines[e.CursorR])
+	if e.CursorC == 0 || e.CursorC > len(r) {
+		return false
+	}
+	n := 0
+	for i := e.CursorC - 1; i >= 0 && r[i] == '\\'; i-- {
+		n++
+	}
+	return n%2 == 1
 }
 
 func (e *Editor) newline() {
