@@ -43,7 +43,7 @@ func PadDialogFrame(lines []string) []string {
 	}
 
 	out := append([]string(nil), lines...)
-	if isFrameHeaderLine(out[0]) && (len(out) == 1 || strings.TrimSpace(widgets.StripANSIBytes(out[1])) != "") {
+	if HeaderPadRows(out) > 0 {
 		out = append(out[:1], append([]string{""}, out[1:]...)...)
 	}
 
@@ -52,6 +52,23 @@ func PadDialogFrame(lines []string) []string {
 		out = append(out[:last], append([]string{""}, out[last:]...)...)
 	}
 	return out
+}
+
+// HeaderPadRows reports how many rows PadDialogFrame will insert after
+// the frame header — 1 when the body doesn't already start blank, else 0.
+//
+// Exported because a dialog that owns a caret has to answer "which row
+// is my caret on, in the block the host actually paints", and the host
+// pads that block after the dialog has rendered it. Hand-copying the
+// condition into each such dialog is how the caret ends up one row off.
+func HeaderPadRows(lines []string) int {
+	if len(lines) == 0 || !isFrameHeaderLine(lines[0]) {
+		return 0
+	}
+	if len(lines) > 1 && strings.TrimSpace(widgets.StripANSIBytes(lines[1])) == "" {
+		return 0
+	}
+	return 1
 }
 
 func isFrameHeaderLine(line string) bool {

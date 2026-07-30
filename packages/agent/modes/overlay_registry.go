@@ -121,7 +121,24 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				i.questionDialog.HandleKey(k)
 				return false
 			},
-			render: func(cols int) []string { return i.questionDialog.Render(i.cfg.Theme, cols) },
+			render: func(cols int) []string {
+				// Budget the body from the terminal height: a typed answer
+				// now wraps onto as many rows as it needs, and an unbounded
+				// one would push the frame (and the chat above it) off
+				// screen. Reserve the dialog chrome (header + rule + frame
+				// padding ≈ 4) and the status/editor band (≈ 6).
+				_, rows := i.cfg.Terminal.Size()
+				avail := rows - 10
+				if avail < 4 {
+					avail = 4
+				}
+				i.questionDialog.MaxRows = avail
+				return i.questionDialog.Render(i.cfg.Theme, cols)
+			},
+			// Only reports a row while a free-text answer is being typed;
+			// the multiple-choice view has no caret and returns -1, which
+			// leaves the fallback (the main editor) in charge.
+			cursor: i.questionDialog.CursorPos,
 		},
 		{ // login
 			active: i.dialog.Active,
