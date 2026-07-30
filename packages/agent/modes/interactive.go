@@ -577,6 +577,17 @@ type Interactive struct {
 	// non-empty input.
 	inputHistoryIndex int
 
+	// inputLog records everything submitted from this keyboard, in
+	// order: prompts, `!shell` escapes, and `/slash` commands alike.
+	// The transcript can only supply the prompts — a `!` escape and a
+	// slash command never become messages — so recall used to skip
+	// them entirely and a command could not be re-run without retyping
+	// it. inputHistory() splices this over the transcript-derived tail
+	// to put commands back inline with the prompts they sat between.
+	// Guarded by mu: appended from the main loop, cleared by
+	// SwitchCarrierSession on the session-load goroutine.
+	inputLog []inputLogEntry
+
 	// lastCtrlC is when the user last pressed ctrl+c. The first press
 	// clears the editor / cancels a turn / shows a hint; a second press
 	// within ctrlCExitWindow exits. Mirrors the python-repl convention.
@@ -668,6 +679,25 @@ type Interactive struct {
 	// whose marker survived and drops the rest; cleared after every submit.
 	// UI-goroutine only (key/slash handlers and submit), so no mutex.
 	clipboardImages []clipboardImageAttachment
+
+	// clipImageSeq numbers the "[clipboard image #N]" markers. A plain
+	// len(clipboardImages)+1 would restart at #1 whenever the pending list
+	// empties — which it does when a draft is stashed — and two attachments
+	// carrying the same marker text can't be told apart at submit time (the
+	// first match strips every occurrence; the second image silently drops).
+	// The counter resets only when no attachment anywhere (pending or
+	// stashed) still holds a marker. UI-goroutine only, like the list.
+	clipImageSeq int
+
+	// stash is the parked draft (ctrl+s): the full editor state plus the
+	// clipboard images that were pending when it was set aside. Nil when
+	// nothing is parked. stashHintArmed is the discoverability nudge: set
+	// once the user has typed a bit of a reply WHILE a turn is in flight —
+	// the situation the stash exists for — and it survives the turn's end,
+	// which is exactly when the agent's question lands and the user needs
+	// the hint. Both are main-loop-only state, like ed.
+	stash          *draftStash
+	stashHintArmed bool
 
 	// carrierPerm / carrierAsk track the ctrlproto path's pending
 	// permission/ask round-trips by wire id, so an EventPermissionResolved /

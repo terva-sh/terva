@@ -52,6 +52,12 @@ func (i *Interactive) clearFileSuggestQuery() {
 }
 
 func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
+	// Re-evaluate the draft-stash nudge on the way out of every key,
+	// whichever branch consumed it — the arming condition (a bit of
+	// draft typed while a turn is in flight) and the disarming ones
+	// (draft emptied, stash taken) are both reached from many paths.
+	defer i.refreshStashHint()
+
 	// Any key that isn't ctrl+c invalidates an armed ctrl+c-exit, so
 	// pressing ctrl+c then typing then ctrl+c much later doesn't quit
 	// unexpectedly. The hint message also goes stale; clear it.
@@ -126,6 +132,13 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 			if name := i.suggest.Selection(i.ed.Value()); name != "" {
 				i.ed.Clear()
 				i.suggest.Reset()
+				// This is the second way a slash command runs from the
+				// keyboard (the submit branch below is the other), so
+				// recall has to be fed here too — and with the completed
+				// name, which is what the user would want to re-run, not
+				// the "/lo" prefix they actually typed.
+				i.recordInput(name, false)
+				i.inputHistoryIndex = -1
 				return i.runSlash(ctx, name)
 			}
 		case tui.KeyEsc:
@@ -240,6 +253,7 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		i.fileSuggest.Reset()
 
 		if cmd, ok := shellEscapeCommand(text); ok {
+			i.recordInput(text, false)
 			i.startShellEscape(ctx, cmd)
 			return false
 		}
@@ -251,6 +265,10 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 				head = text[:idx]
 				rest = strings.TrimSpace(text[idx:])
 			}
+			// Recorded before the known/unknown split so a mistyped
+			// command is recallable and fixable rather than lost with
+			// the editor the submit just cleared.
+			i.recordInput(text, false)
 			if !isKnownSlashCommand(text) {
 				// Try extensions before giving up. Extensions register
 				// commands by bare name (no leading slash); strip it here.
@@ -279,9 +297,14 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		}
 
 		if !i.ready() {
+			// Logged as out-of-thread: it never became a turn, so it
+			// will never appear in the transcript, but the user still
+			// wants the text back after logging in.
+			i.recordInput(text, false)
 			i.setStatusErr("not logged in. type /login first.")
 			return false
 		}
+		i.recordInput(text, true)
 		// The chat mirror lives daemon-side: Workspace.Prompt echoes a
 		// client-originated prompt into the paired chat, so every client
 		// mirrors, not just this keyboard.
@@ -294,6 +317,10 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		} else {
 			i.startTurn(ctx, text)
 		}
+		// The message that displaced a parked draft is on its way
+		// (sent, or queued for the turn boundary) — bring the draft
+		// back so the user resumes where they left off.
+		i.popStashedDraft()
 	}
 	return false
 }
@@ -339,9 +366,65 @@ func (i *Interactive) handleInputHistoryKey(k tui.Key) bool {
 	return true
 }
 
+// inputLogEntry is one thing the user submitted from this keyboard.
+// inThread marks the submissions that became a turn, and so also show
+// up in the transcript — the join key inputHistory() uses to avoid
+// listing this session's prompts twice.
+type inputLogEntry struct {
+	text     string
+	inThread bool
+}
+
+// maxInputLog caps the per-session log. Deep enough that recall covers
+// a long working session, bounded so a scripted or very long-lived
+// session can't grow it without limit.
+const maxInputLog = 500
+
+// recordInput appends a submission to the recall log. Consecutive
+// duplicates collapse, shell-history style, so holding enter on the
+// same command doesn't bury everything else.
+//
+// Locked because SwitchCarrierSession clears the log, and it runs on the
+// session-load goroutine, not the main loop.
+func (i *Interactive) recordInput(text string, inThread bool) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if n := len(i.inputLog); n > 0 && i.inputLog[n-1].text == text {
+		// Keep the newer entry's inThread: a command re-run as a prompt
+		// (or vice versa) should count the way it landed this time.
+		i.inputLog[n-1].inThread = inThread
+		return
+	}
+	i.inputLog = append(i.inputLog, inputLogEntry{text: text, inThread: inThread})
+	if len(i.inputLog) > maxInputLog {
+		i.inputLog = append(i.inputLog[:0], i.inputLog[len(i.inputLog)-maxInputLog:]...)
+	}
+}
+
+// inputHistory returns what Left/Right walks: the prompts already in
+// the transcript, followed by everything typed this session.
+//
+// The two sources overlap — a prompt sent this session is in both — so
+// the transcript is truncated by the number of in-thread submissions
+// the log holds, and the log supplies that tail instead. That is what
+// puts `!` escapes and `/slash` commands back in the position they were
+// actually typed, rather than lumped at one end. The transcript still
+// owns everything from before this process started (a resumed session,
+// or a prompt another client sent), which the log cannot know about.
+//
+// Truncation is clamped: /clear empties the transcript while the log
+// keeps its entries, and recall staying useful across a /clear is the
+// behaviour we want anyway. A session SWITCH is the case that does not
+// survive — SwitchCarrierSession empties the log, because the join it
+// anchors is to one thread's tail and means nothing against another's.
 func (i *Interactive) inputHistory() []string {
+	// carrierTranscript takes mu, so read the transcript before locking
+	// for the log — mu is a plain Mutex and does not re-enter.
 	msgs := i.carrierTranscript()
-	hist := make([]string, 0, len(msgs))
+	cold := make([]string, 0, len(msgs))
 	for _, m := range msgs {
 		if m.Role != provider.RoleUser || core.IsToolImageMirror(m) {
 			continue
@@ -350,7 +433,25 @@ func (i *Interactive) inputHistory() []string {
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		hist = append(hist, text)
+		cold = append(cold, text)
+	}
+	i.mu.Lock()
+	log := append([]inputLogEntry(nil), i.inputLog...)
+	i.mu.Unlock()
+
+	mine := 0
+	for _, e := range log {
+		if e.inThread {
+			mine++
+		}
+	}
+	if mine > len(cold) {
+		mine = len(cold)
+	}
+	hist := make([]string, 0, len(cold)-mine+len(log))
+	hist = append(hist, cold[:len(cold)-mine]...)
+	for _, e := range log {
+		hist = append(hist, e.text)
 	}
 	return hist
 }
