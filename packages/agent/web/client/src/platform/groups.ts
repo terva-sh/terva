@@ -18,6 +18,10 @@ import type { Group, SessionInfo } from './ctrlproto/types'
 // coding-session list. `sys:` ids can never collide with a stored group's id.
 export const SYS_STAGE = 'sys:stage'
 
+// The reserved id of the "Ungrouped" system group: everything that is in no
+// user group yet. Derived like the others, so it needs no verb and no storage.
+export const SYS_UNGROUPED = 'sys:ungrouped'
+
 // GroupFilter is include/exclude by group id. include empty ⇒ every item is in
 // scope; a non-empty include narrows to the union of those groups. exclude then
 // subtracts anything in any listed group. Both are plain id lists so the filter
@@ -202,4 +206,39 @@ export function originGroups(
     entry.members.push(s.id)
   }
   return [...byId.entries()].map(([id, e]) => ({ id, name: e.name, members: e.members, system: true }))
+}
+
+// ungroupedGroup synthesizes the "Ungrouped" chip: every item that no USER
+// group holds. Always returned, even with no members.
+//
+// It exists for the case a library is hardest to face — an import that arrives
+// as one flat list of hundreds, all of it needing to be filed. Sorting and
+// searching help you find a card; neither tells you which ones you have already
+// dealt with. Filtering to this group turns the pile into a work queue that
+// visibly shrinks: file a batch, and they leave the view. The chip's own count
+// is the progress bar.
+//
+// label is passed in, like stageSystemGroup — i18n stays in the component.
+//
+// SYSTEM groups are not "grouped". They are derived from what an item already
+// is (a session's origin), so counting them would mark items as filed that the
+// user never filed — and for a derived group that covers everything, the queue
+// would read empty before any work was done.
+//
+// Returned even when empty on purpose. A filter naming a group that no longer
+// exists degrades to "show everything" (see applyGroupFilter), which for this
+// chip would mean the moment you file the last card, the whole library floods
+// back — the opposite of the "you're done" the empty queue should report.
+export function ungroupedGroup<T>(items: T[], groups: Group[], label: string, idOf: (item: T) => string): Group {
+  const filed = new Set<string>()
+  for (const g of groups) {
+    if (g.system) continue
+    for (const m of g.members) filed.add(m)
+  }
+  return {
+    id: SYS_UNGROUPED,
+    name: label,
+    members: items.map(idOf).filter((id) => !filed.has(id)),
+    system: true,
+  }
 }

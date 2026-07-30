@@ -26,8 +26,10 @@ import {
   groupState,
   hasFilter,
   originGroups,
+  ungroupedGroup,
   type GroupFilter,
 } from '../../platform/groups'
+import { cardQueryTerms, matchesCardQuery } from '../../platform/cardsearch'
 import { personaGroupNames, shelvePersonas } from '../../platform/personagroups'
 import type {
   Status,
@@ -267,6 +269,7 @@ export function Library(props: {
   // The grid filter: include/exclude by group (empty = the whole library). Tap a
   // chip to cycle show-only → hide → off; see platform/groups.
   const [cardFilter, setCardFilter] = useState<GroupFilter>(emptyFilter)
+  const [cardQuery, setCardQuery] = useState('')
   // The grid sort, persisted across reloads. Defaults to the store's own order
   // (alphabetical); a malformed stored value falls back to it.
   const [cardSort, setCardSort] = useState<CardSort>(() => {
@@ -550,9 +553,31 @@ export function Library(props: {
   const CHATS_SHOWN = 6
   const visibleChats = showAllChats ? filteredChats : filteredChats.slice(0, CHATS_SHOWN)
 
-  // Card-group filtering shares the include/exclude model; cards have no derived
-  // system groups (no experience), so the chips are just the user's card groups.
-  const visibleCards = applyGroupFilter(cards, cardGroups, cardFilter, (c) => c.id)
+  // Card-group filtering shares the include/exclude model, plus one derived
+  // chip: "Ungrouped", everything no user group holds yet.
+  //
+  // It is the affordance a freshly imported library needs. Sorting and
+  // searching both help you FIND a card; neither tells you which ones you have
+  // already filed, so a flat import of hundreds has no visible progress and no
+  // end. Filtering to this chip makes the pile a queue — file a batch and they
+  // leave the view, and the chip's own count is how much is left.
+  //
+  // It must be in the list handed to applyGroupFilter as well as to the chips:
+  // the filter drops any id it cannot find a group for, so a chip that filtered
+  // through a list it was not in would silently do nothing.
+  const cardChipGroups = [...cardGroups, ungroupedGroup(cards, cardGroups, t('Ungrouped'), (c) => c.id)]
+
+  // Free text narrows on top of the groups, over name / creator / tags. Tags
+  // are the ones that earn their place: an imported library arrives tagged,
+  // which is how it was organized where it came from, so a query can pull a
+  // cluster out of a flat import in one go — search, select all, file.
+  const cardTerms = cardQueryTerms(cardQuery)
+  const visibleCards = applyGroupFilter(cards, cardChipGroups, cardFilter, (c) => c.id).filter((c) =>
+    matchesCardQuery(c, cardTerms),
+  )
+  // Whether the grid is narrowed AT ALL — either half can be the reason it is
+  // empty, so the "nothing matches" affordance has to ask about both.
+  const cardsNarrowed = hasFilter(cardFilter) || cardTerms.length > 0
 
   // Sort the filtered grid. Each mode's comparator yields its NATURAL order
   // (name A→Z; added/used newest-first; chats most-first); `reversed` flips it;
@@ -925,7 +950,7 @@ export function Library(props: {
               </p>
             ) : (
               <GroupFilterChips
-                groups={cardGroups}
+                groups={cardChipGroups}
                 filter={cardFilter}
                 onCycle={(id) => setCardFilter((f) => cycleGroup(f, id))}
                 onManage={(g) => setGroupSheet(g)}
@@ -935,6 +960,21 @@ export function Library(props: {
         )}
         <div class="stage-section-head">
           <h2>{t('Characters')}</h2>
+          {/* Narrowing by name, creator or tag. First in the row because it is
+              the fastest way through a big library, and because pairing it with
+              the group chips above is the whole organizing loop: narrow to a
+              cluster, select it, file it. Type=search so a phone offers the
+              right keyboard and a clear affordance. */}
+          {cards.length > 1 && (
+            <input
+              class="stage-cardsearch"
+              type="search"
+              value={cardQuery}
+              onInput={(e) => setCardQuery((e.target as HTMLInputElement).value)}
+              placeholder={t('Search characters')}
+              aria-label={t('Search characters by name, creator or tag')}
+            />
+          )}
           {cards.length > 1 && (
             <div class="stage-cardsort">
               <select
@@ -1021,8 +1061,17 @@ export function Library(props: {
         {cards.length === 0 && loaded.cards && (
           <p class="stage-empty">{t('No characters yet — drop a card PNG here, paste a URL, or use Import.')}</p>
         )}
-        {cards.length > 0 && hasFilter(cardFilter) && visibleCards.length === 0 && (
-          <p class="stage-empty">{t('No characters match the group filter — tap a highlighted chip to clear it.')}</p>
+        {/* Either half can be the reason nothing shows, so the message names
+            the one that is actually on rather than sending the user to clear a
+            chip when it was the search that emptied the grid. */}
+        {cards.length > 0 && cardsNarrowed && visibleCards.length === 0 && (
+          <p class="stage-empty">
+            {cardTerms.length > 0 && hasFilter(cardFilter)
+              ? t('No characters match the search and the group filter.')
+              : cardTerms.length > 0
+                ? t('No characters match “%s”.', cardQuery.trim())
+                : t('No characters match the group filter — tap a highlighted chip to clear it.')}
+          </p>
         )}
 
         {/* The bulk bar. It sits above the grid rather than floating over it:

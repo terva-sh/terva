@@ -707,6 +707,27 @@ button:disabled {
   gap: 0.3rem;
   margin-left: auto;
 }
+/* The card search field. Sized like the sort control beside it, and allowed to
+   take the slack in the header row so it stays usable as the row wraps on a
+   phone — it is the control you reach for most in a library big enough to need
+   one. No font-size floor here: the shared sheet's `pointer: coarse` rule
+   already floors every field at 16px, which is what stops iOS zooming on
+   focus. */
+.stage-cardsearch {
+  flex: 1 1 10rem;
+  min-width: 7rem;
+  max-width: 18rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.82rem;
+}
+.stage-cardsearch::placeholder {
+  color: var(--stage-muted);
+}
 .stage-cardsort__mode {
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--stage-line);

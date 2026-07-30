@@ -6,6 +6,8 @@ import {
   bulkState,
   cycleGroup,
   emptyFilter,
+  SYS_UNGROUPED,
+  ungroupedGroup,
   groupState,
   originGroups,
   pruneFilter,
@@ -199,5 +201,61 @@ describe('bulkMembers', () => {
     const current = ['a', 'b']
     bulkMembers(current, ['c'], true)
     expect(current).toEqual(['a', 'b'])
+  })
+})
+
+// The "Ungrouped" chip is what makes a flat import finishable: it turns the
+// pile into a queue that visibly shrinks as cards are filed.
+describe('ungroupedGroup', () => {
+  const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+  const idOf = (i: { id: string }) => i.id
+
+  it('holds exactly what no user group holds', () => {
+    const groups: Group[] = [{ id: 'g1', name: 'Fantasy', members: ['a'] }]
+    expect(ungroupedGroup(items, groups, 'Ungrouped', idOf).members).toEqual(['b', 'c'])
+  })
+
+  it('shrinks as cards are filed — the progress the count reports', () => {
+    const before: Group[] = [{ id: 'g1', name: 'Fantasy', members: [] }]
+    const after: Group[] = [{ id: 'g1', name: 'Fantasy', members: ['a', 'b'] }]
+    expect(ungroupedGroup(items, before, 'Ungrouped', idOf).members).toHaveLength(3)
+    expect(ungroupedGroup(items, after, 'Ungrouped', idOf).members).toHaveLength(1)
+  })
+
+  it('counts membership across ALL user groups, not just the first', () => {
+    const groups: Group[] = [
+      { id: 'g1', name: 'Fantasy', members: ['a'] },
+      { id: 'g2', name: 'Sci-fi', members: ['b'] },
+    ]
+    expect(ungroupedGroup(items, groups, 'Ungrouped', idOf).members).toEqual(['c'])
+  })
+
+  // A system group is derived from what an item already IS, not from anything
+  // the user filed. Counting one would mark cards done that nobody touched —
+  // and a derived group covering everything would empty the queue outright.
+  it('ignores system groups when deciding what is filed', () => {
+    const groups: Group[] = [{ id: 'sys:everything', name: 'All', members: ['a', 'b', 'c'], system: true }]
+    expect(ungroupedGroup(items, groups, 'Ungrouped', idOf).members).toEqual(['a', 'b', 'c'])
+  })
+
+  // Returned even when empty: applyGroupFilter drops a filter naming a group
+  // that does not exist, so a vanishing chip would flood the whole library back
+  // the instant the last card was filed.
+  it('still exists when everything has been filed', () => {
+    const groups: Group[] = [{ id: 'g1', name: 'All', members: ['a', 'b', 'c'] }]
+    const g = ungroupedGroup(items, groups, 'Ungrouped', idOf)
+    expect(g.id).toBe(SYS_UNGROUPED)
+    expect(g.members).toEqual([])
+  })
+
+  it('filters through the ordinary include machinery, needing no special case', () => {
+    const groups: Group[] = [{ id: 'g1', name: 'Fantasy', members: ['a'] }]
+    const ung = ungroupedGroup(items, groups, 'Ungrouped', idOf)
+    const visible = applyGroupFilter(items, [...groups, ung], { include: [SYS_UNGROUPED], exclude: [] }, idOf)
+    expect(visible.map(idOf)).toEqual(['b', 'c'])
+  })
+
+  it('is marked system, so its chip carries no edit affordance', () => {
+    expect(ungroupedGroup(items, [], 'Ungrouped', idOf).system).toBe(true)
   })
 })
