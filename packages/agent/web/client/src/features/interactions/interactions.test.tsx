@@ -59,7 +59,7 @@ describe('AskRequest', () => {
     const onAnswer = vi.fn()
     render(<AskRequest request={{ ask_id: 'a1', question: 'Choose', options: ['One', 'Two'] }} onAnswer={onAnswer} />)
     fireEvent.click(screen.getByRole('button', { name: 'Two' }))
-    expect(onAnswer).toHaveBeenCalledWith('a1', 'Two')
+    expect(onAnswer).toHaveBeenCalledWith('a1', [{ answer: 'Two' }])
   })
 
   it('trims and submits a custom answer', () => {
@@ -67,6 +67,91 @@ describe('AskRequest', () => {
     render(<AskRequest request={{ ask_id: 'a2', question: 'Explain', allow_custom: true }} onAnswer={onAnswer} />)
     fireEvent.input(screen.getByPlaceholderText('custom answer…'), { target: { value: '  details  ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    expect(onAnswer).toHaveBeenCalledWith('a2', 'details')
+    expect(onAnswer).toHaveBeenCalledWith('a2', [{ answer: 'details' }])
+  })
+
+  // Found by screenshot, not by assertion: a lone question showing only
+  // its option buttons was rendering a permanently-disabled Send beneath
+  // them with nothing to submit. Clicking an option is the submit.
+  it('shows no submit button for a lone question until an input is open', () => {
+    render(
+      <AskRequest
+        request={{ ask_id: 'a6', question: 'Choose', options: ['One', 'Two'], allow_custom: true }}
+        onAnswer={() => {}}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Type my own answer…' }))
+    expect(screen.getByRole('button', { name: 'Send' })).not.toBeNull()
+  })
+
+  // A question with no options is free text whether or not allow_custom is
+  // set. Requiring the flag left an optionless ask rendering a card with
+  // nothing at all to answer with — and optionless is the tool's own
+  // default shape.
+  it('offers an input for an optionless question without allow_custom', () => {
+    const onAnswer = vi.fn()
+    render(<AskRequest request={{ ask_id: 'a3', question: 'Name it?' }} onAnswer={onAnswer} />)
+    fireEvent.input(screen.getByPlaceholderText('custom answer…'), { target: { value: 'svc' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(onAnswer).toHaveBeenCalledWith('a3', [{ answer: 'svc' }])
+  })
+
+  // A set is answered in one pass: every question on one card, one submit,
+  // answers positional.
+  it('answers a question set in one submit', () => {
+    const onAnswer = vi.fn()
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'a4',
+          question: 'Which database?',
+          questions: [
+            { question: 'Which database?', options: ['Postgres', 'SQLite'] },
+            { question: 'Migrate when?', options: ['Now', 'At deploy'] },
+            { question: 'Name it?' },
+          ],
+        }}
+        onAnswer={onAnswer}
+      />,
+    )
+    // Picking does NOT send while the rest is unanswered.
+    fireEvent.click(screen.getByRole('button', { name: 'SQLite' }))
+    expect(onAnswer).not.toHaveBeenCalled()
+    expect(
+      (screen.getByRole('button', { name: 'Send answers' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'At deploy' }))
+    fireEvent.input(screen.getByPlaceholderText('custom answer…'), { target: { value: 'billing' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send answers' }))
+    expect(onAnswer).toHaveBeenCalledWith('a4', [
+      { answer: 'SQLite' },
+      { answer: 'At deploy' },
+      { answer: 'billing' },
+    ])
+  })
+
+  // Revising before submit is the point of showing the set at once.
+  it('sends the revised choice, not the first one', () => {
+    const onAnswer = vi.fn()
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'a5',
+          question: 'One?',
+          questions: [
+            { question: 'One?', options: ['a', 'b'] },
+            { question: 'Two?', options: ['x', 'y'] },
+          ],
+        }}
+        onAnswer={onAnswer}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'a' }))
+    fireEvent.click(screen.getByRole('button', { name: 'x' }))
+    fireEvent.click(screen.getByRole('button', { name: 'b' })) // changed my mind
+    fireEvent.click(screen.getByRole('button', { name: 'Send answers' }))
+    expect(onAnswer).toHaveBeenCalledWith('a5', [{ answer: 'b' }, { answer: 'x' }])
   })
 })

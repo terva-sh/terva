@@ -113,7 +113,7 @@ func TestAskUserQuestionReachesTheFrontEndAfterRebuild(t *testing.T) {
 			}
 			s.mu.Unlock()
 			if id != "" {
-				s.answer(id, core.UserAnswer{Answer: "stow"})
+				s.answer(id, []core.UserAnswer{{Answer: "stow"}})
 				return
 			}
 			time.Sleep(2 * time.Millisecond)

@@ -274,13 +274,58 @@ type GrantScope struct {
 	Pattern string `json:"pattern"`
 }
 
-// AskRequest is a pending mid-turn question (the ask_user_question tool). The
-// client renders it and replies with [WorkspaceService.Answer] using AskID.
-type AskRequest struct {
-	AskID       string   `json:"ask_id"`
+// AskQuestion is one question within an [AskRequest].
+type AskQuestion struct {
 	Question    string   `json:"question"`
 	Options     []string `json:"options,omitempty"`
 	AllowCustom bool     `json:"allow_custom,omitempty"`
+}
+
+// AskRequest is a pending mid-turn ask (the ask_user_question tool) — one
+// or more questions posed together, answered in one submit. The client
+// renders it and replies with [WorkspaceService.Answer] using AskID,
+// sending one answer per question in order.
+//
+// Questions is the whole set and is always populated. The singular
+// Question/Options/AllowCustom fields mirror Questions[0] so a client
+// built before question sets still renders and answers the first one
+// rather than showing an empty card.
+type AskRequest struct {
+	AskID       string        `json:"ask_id"`
+	Question    string        `json:"question"`
+	Options     []string      `json:"options,omitempty"`
+	AllowCustom bool          `json:"allow_custom,omitempty"`
+	Questions   []AskQuestion `json:"questions,omitempty"`
+}
+
+// NewAskRequest builds a request from a question set, keeping the
+// singular mirror fields in step with Questions[0]. Callers should use
+// this rather than composing the struct, so the two can never disagree.
+func NewAskRequest(askID string, qs []core.UserQuestion) AskRequest {
+	r := AskRequest{AskID: askID}
+	for _, q := range qs {
+		r.Questions = append(r.Questions, AskQuestion{Question: q.Question, Options: q.Options, AllowCustom: q.AllowCustom})
+	}
+	if len(r.Questions) > 0 {
+		r.Question = r.Questions[0].Question
+		r.Options = r.Questions[0].Options
+		r.AllowCustom = r.Questions[0].AllowCustom
+	}
+	return r
+}
+
+// Set returns the request's questions in core form. Falls back to the
+// singular mirror fields when Questions is absent, so a request decoded
+// from an older peer still yields one question.
+func (r AskRequest) Set() []core.UserQuestion {
+	if len(r.Questions) == 0 {
+		return []core.UserQuestion{{Question: r.Question, Options: r.Options, AllowCustom: r.AllowCustom}}
+	}
+	out := make([]core.UserQuestion, 0, len(r.Questions))
+	for _, q := range r.Questions {
+		out = append(out, core.UserQuestion{Question: q.Question, Options: q.Options, AllowCustom: q.AllowCustom})
+	}
+	return out
 }
 
 // Resolved identifies which pending request an [EventPermissionResolved] /

@@ -21,7 +21,13 @@ import (
 func newCtrlprotoTestInteractive() *Interactive {
 	th := tui.Dark
 	return &Interactive{
-		cfg:            InteractiveConfig{Theme: th},
+		cfg: InteractiveConfig{Theme: th},
+		// A real Interactive always has an editor (NewInteractive mints
+		// one), and handleKey's deferred stash-hint refresh reads it on
+		// EVERY exit path — including the one where an overlay consumed
+		// the key. A fixture without one only looks fine until a test
+		// drives handleKey rather than a dialog directly.
+		ed:             tui.NewEditor(""),
 		dirty:          make(chan struct{}, 8),
 		turns:          newTurnEngine(),
 		toolCalls:      map[string]*tui.ToolCallView{},
@@ -106,7 +112,7 @@ type approvedCall struct {
 
 type answeredAsk struct {
 	askID string
-	a     core.UserAnswer
+	a     []core.UserAnswer
 }
 
 func newFakeCarrier() *fakeCarrier {
@@ -170,8 +176,8 @@ func (f *fakeCarrier) Approve(ctx context.Context, sess, callID string, d core.C
 	return nil
 }
 
-func (f *fakeCarrier) Answer(ctx context.Context, sess, askID string, a core.UserAnswer) error {
-	f.answers <- answeredAsk{askID, a}
+func (f *fakeCarrier) Answer(ctx context.Context, sess, askID string, answers []core.UserAnswer) error {
+	f.answers <- answeredAsk{askID, answers}
 	return nil
 }
 
@@ -1113,7 +1119,7 @@ func TestCarrierAskInversion(t *testing.T) {
 	}
 	i.questionDialog.HandleKey(tui.Key{Kind: tui.KeyEnter}) // pick "a"
 	got := recv(t, fc.answers, "answer")
-	if got.askID != "ask_1" || got.a.Answer != "a" {
+	if got.askID != "ask_1" || len(got.a) != 1 || got.a[0].Answer != "a" {
 		t.Fatalf("answer = %+v", got)
 	}
 
@@ -1277,4 +1283,100 @@ func waitForCond(t *testing.T, cond func() bool, what string) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// TestCarrierAskSetInversion: a question set arrives as ONE ask, is
+// answered across tabs, and goes back as one positional answer set.
+func TestCarrierAskSetInversion(t *testing.T) {
+	i := newCtrlprotoTestInteractive()
+	fc := newFakeCarrier()
+	i.cfg.Carrier = fc
+
+	i.handleCarrierEvent(ctrlproto.AskEvent(ctrlproto.AskRequest{
+		AskID:    "ask_1",
+		Question: "which db?",
+		Options:  []string{"pg", "sqlite"},
+		Questions: []ctrlproto.AskQuestion{
+			{Question: "which db?", Options: []string{"pg", "sqlite"}},
+			{Question: "migrate when?", Options: []string{"now", "later"}},
+			{Question: "name it?"},
+		},
+	}))
+	if !i.questionDialog.Active() {
+		t.Fatal("a question set should open the dialog")
+	}
+
+	i.questionDialog.HandleKey(tui.Key{Kind: tui.KeyDown})  // -> sqlite
+	i.questionDialog.HandleKey(tui.Key{Kind: tui.KeyEnter}) // -> q2
+	i.questionDialog.HandleKey(tui.Key{Kind: tui.KeyEnter}) // q2 default, -> q3
+	for _, r := range "svc" {
+		i.questionDialog.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
+	}
+	i.questionDialog.HandleKey(tui.Key{Kind: tui.KeyEnter}) // -> submit
+	if !i.questionDialog.Active() {
+		t.Fatal("the set was sent before the submit tab")
+	}
+	i.questionDialog.HandleKey(tui.Key{Kind: tui.KeyEnter}) // send
+
+	got := recv(t, fc.answers, "answer")
+	if got.askID != "ask_1" || len(got.a) != 3 {
+		t.Fatalf("answer = %+v, want three answers for ask_1", got)
+	}
+	for idx, want := range []string{"sqlite", "now", "svc"} {
+		if got.a[idx].Declined || got.a[idx].Answer != want {
+			t.Fatalf("answer %d = %+v, want %q", idx, got.a[idx], want)
+		}
+	}
+}
+
+// An ask from a daemon built before question sets carries only the
+// singular fields; it must still open as one question and answer.
+func TestCarrierAskWithoutQuestionsFallsBack(t *testing.T) {
+	i := newCtrlprotoTestInteractive()
+	fc := newFakeCarrier()
+	i.cfg.Carrier = fc
+
+	i.handleCarrierEvent(ctrlproto.AskEvent(ctrlproto.AskRequest{
+		AskID: "ask_old", Question: "which?", Options: []string{"a", "b"},
+	}))
+	i.questionDialog.HandleKey(tui.Key{Kind: tui.KeyEnter})
+	got := recv(t, fc.answers, "answer")
+	if len(got.a) != 1 || got.a[0].Answer != "a" {
+		t.Fatalf("legacy ask answered as %+v", got.a)
+	}
+}
+
+// shift+tab is the global approval-mode cycle. The dialog has to win it
+// while it is up, or moving back a tab silently changes the session's
+// permission posture.
+func TestQuestionSetShiftTabDoesNotCycleApprovalMode(t *testing.T) {
+	i := newCtrlprotoTestInteractive()
+	fc := newFakeCarrier()
+	i.cfg.Carrier = fc
+	i.keymap = i.buildGlobalKeymap()
+	i.overlays = i.buildOverlays()
+
+	i.handleCarrierEvent(ctrlproto.AskEvent(ctrlproto.AskRequest{
+		AskID: "ask_1", Question: "one?",
+		Questions: []ctrlproto.AskQuestion{{Question: "one?"}, {Question: "two?"}},
+	}))
+
+	i.handleKey(t.Context(), tui.Key{Kind: tui.KeyShiftTab})
+	if len(fc.surfActs) > 0 {
+		t.Fatalf("shift+tab reached the approval-mode cycle: %d surface action(s)", len(fc.surfActs))
+	}
+	// ...and it did move the dialog's tab (backwards off tab 1 = submit).
+	rows := i.questionDialog.Render(i.cfg.Theme, 60)
+	if !strings.Contains(widgets.StripANSIBytes(rows[0]), "ready to send") {
+		t.Fatalf("shift+tab did not move the tab: %q", widgets.StripANSIBytes(rows[0]))
+	}
+
+	// Positive control: with the dialog gone the same key DOES cycle the
+	// approval mode, so the assertion above is about the dialog winning
+	// the key and not about the chord being wired to nothing.
+	i.questionDialog.CancelAll()
+	i.handleKey(t.Context(), tui.Key{Kind: tui.KeyShiftTab})
+	if act := recv(t, fc.surfActs, "approval-mode cycle"); act.action != "set" {
+		t.Fatalf("shift+tab with no dialog = %+v, want the settings action", act)
+	}
 }

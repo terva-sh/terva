@@ -88,7 +88,7 @@ type wsSession struct {
 	turnCtx        context.Context
 	turnCancel     context.CancelFunc                     // non-nil while a turn runs
 	permPark       core.ParkTable[core.ConfirmDecision]   // parked webConfirmer/workerConfirmer waits
-	askPark        core.ParkTable[core.UserAnswer]        // parked webAsker waits
+	askPark        core.ParkTable[[]core.UserAnswer]      // parked webAsker waits (one answer per question)
 	permReq        map[string]ctrlproto.PermissionRequest // details for the snapshot
 	askReq         map[string]ctrlproto.AskRequest        // details for the snapshot
 	askSeq         uint64

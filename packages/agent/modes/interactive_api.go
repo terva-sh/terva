@@ -140,23 +140,21 @@ func (i *Interactive) Confirm(ctx context.Context, toolName string, preview stri
 }
 
 // Ask implements core.Asker. The ask_user_question tool calls this
-// synchronously; we enqueue the question on the dialog, redraw, and block
-// until the user answers or the turn is cancelled (CancelTurn declines
-// every pending question so the tool goroutine unblocks). ctx
+// synchronously; we enqueue the question set on the dialog, redraw, and
+// block until the user submits or the turn is cancelled (CancelTurn
+// declines every pending ask so the tool goroutine unblocks). ctx
 // cancellation is honored so a closing session doesn't deadlock the tool.
-func (i *Interactive) Ask(ctx context.Context, q core.UserQuestion) (core.UserAnswer, error) {
-	resp := make(chan core.UserAnswer, 1)
-	i.questionDialog.Enqueue(&dialogs.QuestionRequest{
-		Question:    q.Question,
-		Options:     q.Options,
-		AllowCustom: q.AllowCustom,
-		Resp:        resp,
-	})
+func (i *Interactive) Ask(ctx context.Context, qs []core.UserQuestion) ([]core.UserAnswer, error) {
+	if len(qs) == 0 {
+		return nil, nil
+	}
+	resp := make(chan []core.UserAnswer, 1)
+	i.questionDialog.Enqueue(&dialogs.QuestionRequest{Questions: qs, Resp: resp})
 	i.invalidate()
 	select {
 	case ans := <-resp:
-		return ans, nil
+		return core.PadAnswers(ans, len(qs)), nil
 	case <-ctx.Done():
-		return core.UserAnswer{}, ctx.Err()
+		return nil, ctx.Err()
 	}
 }

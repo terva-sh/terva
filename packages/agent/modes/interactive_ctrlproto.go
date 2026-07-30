@@ -213,6 +213,11 @@ func (i *Interactive) SwitchCarrierSession(id string) error {
 	i.carrierMessages = nil
 	i.carrierMessagesRev++
 	i.carrierQueued = nil
+	// The recall log joins to THIS thread's tail (inputHistory counts its
+	// in-thread entries off the transcript). Against another session's
+	// transcript that count is meaningless and would hide the tail of the
+	// new session's own prompts, so the log goes with the thread.
+	i.inputLog = nil
 	i.carrierUsage = ctrlproto.UsageInfo{}
 	i.carrierChat = ctrlproto.ChatView{}
 	// Drop the old session's task board now so the /tasks panel and status glance
@@ -734,8 +739,10 @@ func (i *Interactive) dismissCarrierPermission(callID string) {
 // enqueueCarrierAsk mirrors enqueueCarrierPermission for the Asker seam.
 func (i *Interactive) enqueueCarrierAsk(req ctrlproto.AskRequest) {
 	sess := i.carrierSession() // capture: the answer must reach the session that asked
-	resp := make(chan core.UserAnswer, 1)
-	qr := &dialogs.QuestionRequest{Question: req.Question, Options: req.Options, AllowCustom: req.AllowCustom, Resp: resp}
+	resp := make(chan []core.UserAnswer, 1)
+	// Set() falls back to the singular mirror fields, so an ask from a
+	// daemon built before question sets still arrives as one question.
+	qr := &dialogs.QuestionRequest{Questions: req.Set(), Resp: resp}
 	i.mu.Lock()
 	i.carrierAsk[req.AskID] = qr
 	i.mu.Unlock()

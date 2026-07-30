@@ -49,8 +49,9 @@ type raatiBoard struct {
 	// test-seam rule as summarize.
 	answer func(ctx context.Context, question, evidence string, qs []raati.Inquiry) []raati.Inquiry
 	// ask, when set, replaces the convener ask (rung 2) — a test seam;
-	// the real path surfaces webAsker dialogs on the convening session.
-	ask func(ctx context.Context, s *wsSession, q core.UserQuestion) (core.UserAnswer, error)
+	// the real path surfaces a webAsker dialog on the convening session.
+	// Takes the whole batch, one answer back per question.
+	ask func(ctx context.Context, s *wsSession, set []core.UserQuestion) ([]core.UserAnswer, error)
 }
 
 // raatiView snapshots the board for surface.get, attaching the archive
@@ -773,42 +774,71 @@ func (w *Workspace) setRaatiPhase(phase string) {
 const raatiInquiryAskTimeout = 5 * time.Minute
 
 // raatiAskConvener is the inquiry gap's rung 2: questions the record
-// couldn't answer surface as ask dialogs on the convening session, one
-// per question (free-text), first client to answer wins. A dismissal,
-// an empty reply, or the shared deadline leaves the question on the
-// record as open — fail open, never stall.
+// couldn't answer surface as ask dialogs on the convening session
+// (free-text), first client to answer wins. A dismissal, an empty
+// reply, or the shared deadline leaves the question on the record as
+// open — fail open, never stall.
+//
+// The whole docket goes over as ONE ask, so the convener sees what is
+// being asked before answering any of it and submits once, instead of
+// being interrupted per question with no view of the rest. A docket
+// longer than [core.MaxAskQuestions] is split into consecutive asks
+// rather than one unreadable dialog; they share the single deadline.
 func (w *Workspace) raatiAskConvener(ctx context.Context, s *wsSession, question string, qs []raati.Inquiry) []raati.Inquiry {
 	if s == nil {
 		return qs
 	}
 	ask := w.raati.ask
 	if ask == nil {
-		ask = func(ctx context.Context, s *wsSession, q core.UserQuestion) (core.UserAnswer, error) {
-			return (&webAsker{s: s}).Ask(ctx, q)
+		ask = func(ctx context.Context, s *wsSession, set []core.UserQuestion) ([]core.UserAnswer, error) {
+			return (&webAsker{s: s}).Ask(ctx, set)
 		}
 	}
+	// Index the open questions so answers can be written back to the
+	// right inquiry: the set skips the ones the clerk already answered.
+	var open []int
+	for i := range qs {
+		if qs[i].Source == raati.SourceUnanswered {
+			open = append(open, i)
+		}
+	}
+	if len(open) == 0 {
+		return qs
+	}
+
 	deadline, cancel := context.WithTimeout(ctx, raatiInquiryAskTimeout)
 	defer cancel()
-	for i := range qs {
-		if qs[i].Source != raati.SourceUnanswered {
-			continue
-		}
+	for start := 0; start < len(open); start += core.MaxAskQuestions {
 		if deadline.Err() != nil {
 			break
 		}
-		ans, err := ask(deadline, s, core.UserQuestion{
-			Question: i18n.T("The raati clerk could not answer this from the record — %s asks: %s\n\nAnswer from your own knowledge, or dismiss to leave it on the record as open.",
-				qs[i].Unit, qs[i].Question),
-			AllowCustom: true,
-		})
-		if err != nil || ans.Declined || strings.TrimSpace(ans.Answer) == "" {
+		batch := open[start:min(start+core.MaxAskQuestions, len(open))]
+		set := make([]core.UserQuestion, 0, len(batch))
+		for _, i := range batch {
+			set = append(set, core.UserQuestion{
+				Question: i18n.T("The raati clerk could not answer this from the record — %s asks: %s\n\nAnswer from your own knowledge, or dismiss to leave it on the record as open.",
+					qs[i].Unit, qs[i].Question),
+				AllowCustom: true,
+			})
+		}
+		answers, err := ask(deadline, s, set)
+		if err != nil {
 			continue
 		}
-		a := strings.TrimSpace(ans.Answer)
-		if len(a) > raatiInquiryAnswerCap {
-			a = a[:raatiInquiryAnswerCap]
+		answers = core.PadAnswers(answers, len(batch))
+		for n, i := range batch {
+			if answers[n].Declined {
+				continue
+			}
+			a := strings.TrimSpace(answers[n].Answer)
+			if a == "" {
+				continue
+			}
+			if len(a) > raatiInquiryAnswerCap {
+				a = a[:raatiInquiryAnswerCap]
+			}
+			qs[i].Answer, qs[i].Source = a, raati.SourceConvener
 		}
-		qs[i].Answer, qs[i].Source = a, raati.SourceConvener
 	}
 	return qs
 }

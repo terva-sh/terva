@@ -388,7 +388,7 @@ func (a *Agent) offerCompactOnPrefixChange(ctx context.Context, compact func(rea
 	}
 
 	compactNow := i18n.T("Compact first")
-	ans, err := asker.Ask(ctx, UserQuestion{
+	ans, err := AskOne(ctx, asker, UserQuestion{
 		Question: i18n.T(
 			"Since your last message %s, so the provider's cached prompt no longer matches: the next request re-reads %s tokens at full price instead of serving them from cache. Compact the conversation first? The summary is written against the prompt that is still cached, so it costs a fraction of the re-read.",
 			reason, fmtTokenCount(tokens)),

@@ -65,9 +65,9 @@ func TestLivePrefixGuard(t *testing.T) {
 
 	var asked []core.UserQuestion
 	// SetAsker must precede NewAgent: that is where the agent picks it up.
-	r.SetAsker(askerFunc(func(_ context.Context, q core.UserQuestion) (core.UserAnswer, error) {
-		asked = append(asked, q)
-		return core.UserAnswer{Answer: q.Options[0]}, nil // "Compact first"
+	r.SetAsker(askerFunc(func(_ context.Context, qs []core.UserQuestion) ([]core.UserAnswer, error) {
+		asked = append(asked, qs...)
+		return []core.UserAnswer{{Answer: qs[0].Options[0]}}, nil // "Compact first"
 	}))
 	ag := r.NewAgent()
 
@@ -134,8 +134,8 @@ func TestLivePrefixGuard(t *testing.T) {
 	fmt.Printf("\nsummary produced:\n%s\n", compaction.Summary)
 }
 
-type askerFunc func(context.Context, core.UserQuestion) (core.UserAnswer, error)
+type askerFunc func(context.Context, []core.UserQuestion) ([]core.UserAnswer, error)
 
-func (f askerFunc) Ask(ctx context.Context, q core.UserQuestion) (core.UserAnswer, error) {
-	return f(ctx, q)
+func (f askerFunc) Ask(ctx context.Context, qs []core.UserQuestion) ([]core.UserAnswer, error) {
+	return f(ctx, qs)
 }

@@ -65,7 +65,7 @@ var dispatch = map[Method]handler{
 		return svc.Approve(ctx, f.Sess, p.CallID, p.Decision.Core())
 	}),
 	MethodAnswer: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p AnswerParams) error {
-		return svc.Answer(ctx, f.Sess, p.AskID, p.Answer.Core())
+		return svc.Answer(ctx, f.Sess, p.AskID, p.Core())
 	}),
 
 	// -------------------------------------------------------------------- session

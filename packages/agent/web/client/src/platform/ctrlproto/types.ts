@@ -292,11 +292,27 @@ export interface GrantScope {
   pattern: string
 }
 
+export interface AskQuestion {
+  question: string
+  options?: string[]
+  allow_custom?: boolean
+}
+
+// One mid-turn ask: a set of questions posed together and answered in one
+// submit. `questions` is the whole set; the singular fields mirror
+// questions[0] so a daemon built before question sets is still readable.
 export interface AskRequest {
   ask_id: string
   question: string
   options?: string[]
   allow_custom?: boolean
+  questions?: AskQuestion[]
+}
+
+// askQuestions normalises the two shapes into the list to render.
+export function askQuestions(r: AskRequest): AskQuestion[] {
+  if (r.questions?.length) return r.questions
+  return [{ question: r.question, options: r.options, allow_custom: r.allow_custom }]
 }
 
 export interface SkillInfo {

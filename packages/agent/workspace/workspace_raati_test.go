@@ -360,18 +360,25 @@ func TestFoldRaatiInquiryEvent(t *testing.T) {
 }
 
 // TestRaatiAskConvener: rung 2 — questions the record couldn't answer
-// surface as per-question asks on the convening session; answers land
-// with source convener, declines stay open, and everything already
-// answered is never re-asked.
+// surface as ONE ask on the convening session carrying the whole open
+// docket; answers land with source convener, declines stay open, and
+// everything already answered is never re-asked.
 func TestRaatiAskConvener(t *testing.T) {
 	w := &Workspace{}
 	var asked []string
-	w.raati.ask = func(_ context.Context, _ *wsSession, q core.UserQuestion) (core.UserAnswer, error) {
-		asked = append(asked, q.Question)
-		if strings.Contains(q.Question, "budget") {
-			return core.UserAnswer{Answer: "yes — Q3 has headroom"}, nil
+	sets := 0
+	w.raati.ask = func(_ context.Context, _ *wsSession, set []core.UserQuestion) ([]core.UserAnswer, error) {
+		sets++
+		out := make([]core.UserAnswer, len(set))
+		for i, q := range set {
+			asked = append(asked, q.Question)
+			if strings.Contains(q.Question, "budget") {
+				out[i] = core.UserAnswer{Answer: "yes — Q3 has headroom"}
+				continue
+			}
+			out[i] = core.UserAnswer{Declined: true}
 		}
-		return core.UserAnswer{Declined: true}, nil
+		return out, nil
 	}
 	qs := []raati.Inquiry{
 		{Unit: "YATA-1", Question: "is there budget?", Source: raati.SourceUnanswered, Round: 1},
@@ -381,6 +388,9 @@ func TestRaatiAskConvener(t *testing.T) {
 	out := w.raatiAskConvener(context.Background(), &wsSession{}, "ship it?", qs)
 	if len(asked) != 2 {
 		t.Fatalf("asked = %v, want the two open questions only", asked)
+	}
+	if sets != 1 {
+		t.Fatalf("the docket went over in %d asks, want 1 — the convener should see it whole", sets)
 	}
 	if out[0].Source != raati.SourceConvener || out[0].Answer != "yes — Q3 has headroom" {
 		t.Errorf("answered inquiry = %+v", out[0])
@@ -397,9 +407,9 @@ func TestRaatiAskConvener(t *testing.T) {
 // the docket open instead of stalling the deliberation.
 func TestRaatiAskConvenerDeadline(t *testing.T) {
 	w := &Workspace{}
-	w.raati.ask = func(ctx context.Context, _ *wsSession, _ core.UserQuestion) (core.UserAnswer, error) {
+	w.raati.ask = func(ctx context.Context, _ *wsSession, set []core.UserQuestion) ([]core.UserAnswer, error) {
 		<-ctx.Done()
-		return core.UserAnswer{Declined: true}, ctx.Err()
+		return nil, ctx.Err()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()

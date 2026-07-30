@@ -83,10 +83,18 @@ func (s *Service) Approve(ctx context.Context, sess, callID string, d core.Confi
 	}, nil)
 }
 
-func (s *Service) Answer(ctx context.Context, sess, askID string, a core.UserAnswer) error {
-	return s.c.Call(ctx, sess, ctrlproto.MethodAnswer, ctrlproto.AnswerParams{
-		AskID: askID, Answer: ctrlproto.AnswerFromCore(a),
-	}, nil)
+func (s *Service) Answer(ctx context.Context, sess, askID string, answers []core.UserAnswer) error {
+	p := ctrlproto.AnswerParams{AskID: askID}
+	for _, a := range answers {
+		p.Answers = append(p.Answers, ctrlproto.AnswerFromCore(a))
+	}
+	// Mirror the first answer into the singular field too, so a daemon
+	// built before question sets still resolves a one-question ask
+	// instead of reading an empty Answer and delivering a blank reply.
+	if len(answers) > 0 {
+		p.Answer = ctrlproto.AnswerFromCore(answers[0])
+	}
+	return s.c.Call(ctx, sess, ctrlproto.MethodAnswer, p, nil)
 }
 
 func (s *Service) Subscribe(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {

@@ -17,15 +17,22 @@ type recordingAsker struct {
 	answer func(q UserQuestion) UserAnswer
 }
 
-func (r *recordingAsker) Ask(_ context.Context, q UserQuestion) (UserAnswer, error) {
+// Ask answers the whole set positionally, so the fake keeps the Asker
+// contract (one answer per question) that the real front ends keep.
+func (r *recordingAsker) Ask(_ context.Context, qs []UserQuestion) ([]UserAnswer, error) {
 	r.mu.Lock()
-	r.asked = append(r.asked, q)
+	r.asked = append(r.asked, qs...)
 	fn := r.answer
 	r.mu.Unlock()
-	if fn == nil {
-		return UserAnswer{Declined: true}, nil
+	out := make([]UserAnswer, len(qs))
+	for i, q := range qs {
+		if fn == nil {
+			out[i] = UserAnswer{Declined: true}
+			continue
+		}
+		out[i] = fn(q)
 	}
-	return fn(q), nil
+	return out, nil
 }
 
 // reloadedTool is a DIFFERENT advertised spec, which is the thing that matters:

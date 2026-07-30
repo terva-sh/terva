@@ -631,7 +631,7 @@ func (f *fakeSvc) Approve(ctx context.Context, sess, callID string, d core.Confi
 	return nil
 }
 
-func (f *fakeSvc) Answer(ctx context.Context, sess, askID string, a core.UserAnswer) error {
+func (f *fakeSvc) Answer(ctx context.Context, sess, askID string, answers []core.UserAnswer) error {
 	f.mu.Lock()
 	f.answers = append(f.answers, askID)
 	f.mu.Unlock()

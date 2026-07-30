@@ -186,7 +186,7 @@ func (a *Agent) maybeEscalate(ctx context.Context, sink func(AgentEvent)) (stop 
 		}
 		escalateOpt := i18n.T("Escalate")
 		stopOpt := i18n.T("Stop")
-		ans, err := asker.Ask(ctx, UserQuestion{
+		ans, err := AskOne(ctx, asker, UserQuestion{
 			Question: i18n.T(
 				"The model appears stuck (%s). Escalate to %s (%s) to finish this step? This sends the conversation to that provider.",
 				sig.reason, target.Model, target.Provider),

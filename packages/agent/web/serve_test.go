@@ -513,7 +513,9 @@ func (f *fakeWS) SideChatClose(ctx context.Context, sess, id string) error { ret
 func (f *fakeWS) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
 	return nil
 }
-func (f *fakeWS) Answer(ctx context.Context, sess, askID string, a core.UserAnswer) error { return nil }
+func (f *fakeWS) Answer(ctx context.Context, sess, askID string, answers []core.UserAnswer) error {
+	return nil
+}
 func (f *fakeWS) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, error) {
 	return []ctrlproto.SessionInfo{{ID: "s1"}}, nil
 }

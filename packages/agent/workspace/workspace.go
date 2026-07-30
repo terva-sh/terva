@@ -1025,9 +1025,9 @@ func (w *Workspace) Approve(ctx context.Context, sess, callID string, d core.Con
 	return nil
 }
 
-func (w *Workspace) Answer(ctx context.Context, sess, askID string, a core.UserAnswer) error {
+func (w *Workspace) Answer(ctx context.Context, sess, askID string, answers []core.UserAnswer) error {
 	if s := w.live(sess); s != nil {
-		s.answer(askID, a)
+		s.answer(askID, answers)
 	}
 	return nil
 }

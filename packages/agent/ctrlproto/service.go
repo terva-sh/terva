@@ -109,9 +109,10 @@ type WorkspaceService interface {
 	// ignored.
 	Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error
 
-	// Answer resolves a pending question previously surfaced as an
-	// [EventAskRequest] event with the matching askID. First answer wins.
-	Answer(ctx context.Context, sess, askID string, a core.UserAnswer) error
+	// Answer resolves a pending ask previously surfaced as an
+	// [EventAskRequest] event with the matching askID, one answer per
+	// question in the order asked. First answer wins.
+	Answer(ctx context.Context, sess, askID string, answers []core.UserAnswer) error
 
 	// Subscribe returns a stream of events for sess: the conversation
 	// [core.WireEvent] stream plus the control events (permission/ask

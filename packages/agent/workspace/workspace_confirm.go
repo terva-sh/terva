@@ -155,11 +155,14 @@ type webAsker struct{ s *wsSession }
 
 var _ core.Asker = (*webAsker)(nil)
 
-func (a *webAsker) Ask(ctx context.Context, q core.UserQuestion) (core.UserAnswer, error) {
+func (a *webAsker) Ask(ctx context.Context, qs []core.UserQuestion) ([]core.UserAnswer, error) {
 	s := a.s
+	if len(qs) == 0 {
+		return nil, nil
+	}
 	askID := fmt.Sprintf("ask_%d", atomic.AddUint64(&s.askSeq, 1))
 
-	req := ctrlproto.AskRequest{AskID: askID, Question: q.Question, Options: q.Options, AllowCustom: q.AllowCustom}
+	req := ctrlproto.NewAskRequest(askID, qs)
 	ch, release, _ := s.askPark.Park(askID) // minted seq: never collides
 	s.mu.Lock()
 	s.askReq[askID] = req
@@ -176,9 +179,12 @@ func (a *webAsker) Ask(ctx context.Context, q core.UserQuestion) (core.UserAnswe
 
 	select {
 	case ans := <-ch:
-		return ans, nil
+		// A client is free to send a short set (an older one answers only
+		// the first question); the Asker contract to core is one answer
+		// per question, so square it here rather than at every caller.
+		return core.PadAnswers(ans, len(qs)), nil
 	case <-ctx.Done():
-		return core.UserAnswer{Declined: true}, ctx.Err()
+		return core.PadAnswers(nil, len(qs)), ctx.Err()
 	}
 }
 
@@ -188,7 +194,7 @@ func (s *wsSession) approve(callID string, d core.ConfirmDecision) {
 	s.permPark.Deliver(callID, d)
 }
 
-// answer delivers an answer to a parked webAsker. First answer wins.
-func (s *wsSession) answer(askID string, a core.UserAnswer) {
-	s.askPark.Deliver(askID, a)
+// answer delivers an answer set to a parked webAsker. First answer wins.
+func (s *wsSession) answer(askID string, answers []core.UserAnswer) {
+	s.askPark.Deliver(askID, answers)
 }

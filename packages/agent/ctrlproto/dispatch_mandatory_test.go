@@ -83,8 +83,8 @@ type approveArgs struct {
 }
 
 type answerArgs struct {
-	AskID  string
-	Answer core.UserAnswer
+	AskID   string
+	Answers []core.UserAnswer
 }
 
 type historyArgs struct {
@@ -195,8 +195,8 @@ func (r *recorder) Approve(_ context.Context, sess, callID string, d core.Confir
 	return nil
 }
 
-func (r *recorder) Answer(_ context.Context, sess, askID string, a core.UserAnswer) error {
-	r.note("Answer", sess, answerArgs{AskID: askID, Answer: a})
+func (r *recorder) Answer(_ context.Context, sess, askID string, answers []core.UserAnswer) error {
+	r.note("Answer", sess, answerArgs{AskID: askID, Answers: answers})
 	return nil
 }
 
@@ -404,9 +404,9 @@ func mandatoryDispatchCases() []dispatchCase {
 		},
 		{
 			MethodAnswer,
-			AnswerParams{AskID: "ask-1", Answer: Answer{Answer: "yes"}},
+			AnswerParams{AskID: "ask-1", Answers: []Answer{{Answer: "yes"}}},
 			"Answer",
-			answerArgs{AskID: "ask-1", Answer: core.UserAnswer{Answer: "yes"}},
+			answerArgs{AskID: "ask-1", Answers: []core.UserAnswer{{Answer: "yes"}}},
 		},
 
 		// --- session ---

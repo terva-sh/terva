@@ -283,10 +283,10 @@ func TestWebAskerAnswerWins(t *testing.T) {
 
 	result := make(chan core.UserAnswer, 1)
 	go func() {
-		ans, _ := (&webAsker{s: s}).Ask(context.Background(), core.UserQuestion{
+		ans, _ := (&webAsker{s: s}).Ask(context.Background(), []core.UserQuestion{{
 			Question: "Which approach?", Options: []string{"a", "b"}, AllowCustom: true,
-		})
-		result <- ans
+		}})
+		result <- core.PadAnswers(ans, 1)[0]
 	}()
 
 	ev := recvEvent(t, sub)
@@ -296,7 +296,7 @@ func TestWebAskerAnswerWins(t *testing.T) {
 	if ev.Ask.Question != "Which approach?" || len(ev.Ask.Options) != 2 || !ev.Ask.AllowCustom {
 		t.Fatalf("ask payload: %+v", ev.Ask)
 	}
-	s.answer(ev.Ask.AskID, core.UserAnswer{Answer: "b"})
+	s.answer(ev.Ask.AskID, []core.UserAnswer{{Answer: "b"}})
 	select {
 	case ans := <-result:
 		if ans.Answer != "b" {

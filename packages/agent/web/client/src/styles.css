@@ -380,6 +380,12 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .ask-custom { display: flex; gap: 8px; margin-top: 8px; }
 .ask-custom input { flex: 1; font: inherit; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+/* a question set: each question is its own block inside the one card, with
+   a single submit at the bottom, so answering the set is one action. */
+.ask-question + .ask-question { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.ask-question + .ask-question + .card-actions, .ask-question ~ .card-actions { margin-top: 14px; }
+.ask-num { color: var(--muted); margin-right: 2px; }
+.ask .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 
 /* composer */
 .composer { position: relative; display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; padding-bottom: max(10px, var(--safe-bottom)); border-top: 1px solid var(--line); background: var(--bg); }

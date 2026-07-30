@@ -400,9 +400,28 @@ type ApproveParams struct {
 }
 
 // AnswerParams is the payload of [MethodAnswer].
+//
+// Answers carries one entry per question in the [AskRequest], in the same
+// order. Answer is the single-question form an older client sends; when
+// Answers is empty it stands in as the only answer, so the ask a client
+// built before question sets still resolves.
 type AnswerParams struct {
-	AskID  string `json:"ask_id"`
-	Answer Answer `json:"answer"`
+	AskID   string   `json:"ask_id"`
+	Answer  Answer   `json:"answer,omitempty"`
+	Answers []Answer `json:"answers,omitempty"`
+}
+
+// Core returns the answer set, folding a single-question client's Answer
+// in when it sent no Answers.
+func (p AnswerParams) Core() []core.UserAnswer {
+	if len(p.Answers) == 0 {
+		return []core.UserAnswer{p.Answer.Core()}
+	}
+	out := make([]core.UserAnswer, 0, len(p.Answers))
+	for _, a := range p.Answers {
+		out = append(out, a.Core())
+	}
+	return out
 }
 
 // RenameParams is the payload of [MethodSessionRename].

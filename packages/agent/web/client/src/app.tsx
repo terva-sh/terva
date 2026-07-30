@@ -1256,8 +1256,15 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setPermission(null)
   }, [])
 
-  const answer = useCallback((askID: string, text: string) => {
-    clientRef.current?.fire('answer', { ask_id: askID, answer: { answer: text } }, curRef.current)
+  const answer = useCallback((askID: string, answers: { answer: string }[]) => {
+    // `answers` is the set, one per question in the order asked; `answer`
+    // mirrors the first so a daemon built before question sets still
+    // resolves a one-question ask instead of reading an empty reply.
+    clientRef.current?.fire(
+      'answer',
+      { ask_id: askID, answer: answers[0] ?? { answer: '' }, answers },
+      curRef.current,
+    )
     setAsk(null)
   }, [])
 
