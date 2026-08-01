@@ -39,6 +39,7 @@ const (
 	SourceCast                = "cast"
 	SourceSwarmChild          = "swarm-child"
 	SourceTasks               = "tasks"
+	SourceMemory              = "memory"
 	SourceExtensionContext    = "extension-context"
 
 	// Tail region (per-turn, after the cache breakpoint).
@@ -116,14 +117,21 @@ var segmentPortability = map[string]Portability{
 	SourceVessel: PortabilityHarnessLocal,
 	// conventions names terva's edit/write tools and asserts a TUI that a
 	// headless worker does not have.
-	SourceConventions:         PortabilityHarnessLocal,
-	SourceTervaDocsHint:       PortabilityHarnessLocal, // points at terva's installed docs
-	SourceTervaExamplesHint:   PortabilityHarnessLocal, // points at terva's installed deploy examples
-	SourceStatusToolHint:      PortabilityHarnessLocal, // names terva_status
-	SourceAutoSwarm:           PortabilityHarnessLocal, // advertises swarm_spawn
-	SourceCast:                PortabilityHarnessLocal, // advertises actor_spawn
-	SourceSwarmChild:          PortabilityHarnessLocal, // the native child's protocol
-	SourceTasks:               PortabilityHarnessLocal, // terva's task-tool policy
+	SourceConventions:       PortabilityHarnessLocal,
+	SourceTervaDocsHint:     PortabilityHarnessLocal, // points at terva's installed docs
+	SourceTervaExamplesHint: PortabilityHarnessLocal, // points at terva's installed deploy examples
+	SourceStatusToolHint:    PortabilityHarnessLocal, // names terva_status
+	SourceAutoSwarm:         PortabilityHarnessLocal, // advertises swarm_spawn
+	SourceCast:              PortabilityHarnessLocal, // advertises actor_spawn
+	SourceSwarmChild:        PortabilityHarnessLocal, // the native child's protocol
+	SourceTasks:             PortabilityHarnessLocal, // terva's task-tool policy
+	// Harness-local because the block LEADS with terva's memory-tool curation
+	// policy, which names a tool a foreign agent does not have. The facts under
+	// it — what this repo does, how this person works — are genuinely portable,
+	// and splitting the rendered block so a briefing can carry them without the
+	// policy is worth doing; until then this fails closed, which is the safe
+	// direction the table is designed around.
+	SourceMemory:              PortabilityHarnessLocal,
 	SourceRestrictedWorkspace: PortabilityHarnessLocal, // terva's trust/jail model
 	// The footer states the date and cwd. A foreign agent is told its own cwd by
 	// its own harness, and the date belongs in the briefing if it matters — so

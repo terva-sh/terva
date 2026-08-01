@@ -1,6 +1,7 @@
 package build
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -301,8 +302,15 @@ func (r *Resolved) AddExtraTools(extra []core.Tool) {
 func (r *Resolved) rebuildSystemPrompt() {
 	opts := r.promptOpts
 	appendBlocks := opts.Append
+	// Durable memory rides the CACHED prefix, deliberately: it is a frozen block
+	// refreshed at a session boundary and after a compaction (RefreshMemory),
+	// never per write. Read live from the registry's tool so the prompt and the
+	// tool can never disagree about what is stored.
+	if mem := MemoryBlock(r); strings.TrimSpace(mem) != "" {
+		appendBlocks = append(append([]PromptSegment{}, appendBlocks...), PromptSegment{Source: SourceMemory, Text: mem})
+	}
 	if strings.TrimSpace(r.extensionContext) != "" {
-		appendBlocks = append(append([]PromptSegment{}, opts.Append...), PromptSegment{Source: SourceExtensionContext, Text: r.extensionContext})
+		appendBlocks = append(append([]PromptSegment{}, appendBlocks...), PromptSegment{Source: SourceExtensionContext, Text: r.extensionContext})
 	}
 	opts.Tools = toolSummariesFromRegistry(r.ToolRegistry, r.toolDescriptions)
 	opts.Append = appendBlocks
@@ -335,6 +343,19 @@ func (r *Resolved) MergeExtensionTools(mgr ExtensionToolSource) {
 	// extension's commands/panels/static context below still register.
 	var changed bool
 	if r.Experience != ExperienceChat && !r.NoTools {
+		// Stand down BEFORE the merge, not after. Both orders delete core's
+		// memory tool; only this one lets the extension's replace it, because
+		// the merge skips any name already in the registry (built-ins win on
+		// conflict). Standing down afterwards left the name EMPTY — core gone,
+		// the extension's already skipped, and nothing to re-run the merge —
+		// so a user with the old extension installed had no memory tool at all.
+		//
+		// Core defers rather than winning so the transition is safe in EITHER
+		// direction: a user who pins the old extension is never broken by
+		// upgrading terva, and one who retires it gets core's memory on the
+		// next launch. When the extension is gone for good this becomes dead
+		// code and comes out.
+		r.standDownForExtensionMemory(mgr)
 		changed = MergeToolsForMode(r.ToolRegistry, r.ApprovalMode, r.readOnlySet, mgr)
 	}
 	// Pull the source's static context contribution (register_context)
@@ -383,21 +404,34 @@ func (r *Resolved) MergeExtensionTools(mgr ExtensionToolSource) {
 // two cannot drift; the live switch rebuilds reg from scratch and
 // re-merges, which is why this is registry-only (no system-prompt
 // coupling).
+// ExtToolReadOnly resolves an extension tool's read-only classification: a
+// declared authority wins (local-read and local-data are auto-allowable), so a
+// network-read tool is not mistaken for a local read even if it also set the
+// legacy read_only bool. An empty authority falls back to that bool.
+func ExtToolReadOnly(info ExtensionToolInfo) bool {
+	if info.Authority != "" {
+		return core.IsReadOnlyAuthority(info.Authority)
+	}
+	return info.ReadOnly
+}
+
+// ExtToolRegisters reports whether the merge would admit this tool under mode,
+// ignoring name collisions. Exported and shared because a caller that decides
+// something on the strength of "an extension supplies X" — the memory
+// stand-down is the one that matters — must ask the same question the merge
+// will, or it acts on a tool that never arrives.
+func ExtToolRegisters(info ExtensionToolInfo, mode core.ApprovalMode) bool {
+	return mode != core.ApprovalPlan || ExtToolReadOnly(info)
+}
+
 func MergeToolsForMode(reg core.Registry, mode core.ApprovalMode, roSet *core.ReadOnlySet, mgr ExtensionToolSource) bool {
 	if mgr == nil || reg == nil {
 		return false
 	}
 	changed := false
 	for _, info := range mgr.Tools() {
-		// Read-only classification: a declared authority wins (local-read
-		// and local-data are auto-allowable), so a network-read tool is not
-		// mistaken for a local read even if it also set the legacy
-		// read_only bool. An empty authority falls back to that bool.
-		readOnly := info.ReadOnly
-		if info.Authority != "" {
-			readOnly = core.IsReadOnlyAuthority(info.Authority)
-		}
-		if mode == core.ApprovalPlan && !readOnly {
+		readOnly := ExtToolReadOnly(info)
+		if !ExtToolRegisters(info, mode) {
 			continue
 		}
 		if _, exists := reg[info.Name]; exists {
@@ -816,9 +850,19 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		return Resolved{}, fmt.Errorf("openai-compatible requires a base url; set it during /login or pass --base-url")
 	}
 
-	// If the model has a base URL, credentials are optional (local
-	// models like ollama don't need real API keys).
-	if resolvedModel.BaseURL != "" && credErr != nil {
+	// Credentials are optional only where the ENDPOINT is one terva reaches
+	// without them: ollama, an openai-compatible login, a named endpoint, or a
+	// models.json entry whose baseUrl pins a server the user runs.
+	//
+	// "The model has a base URL" was far too wide a test for that. Nearly every
+	// BUILT-IN catalog row carries one — it is how kimi, deepseek, fireworks,
+	// minimax and the rest name their HOSTED api — so a missing or lapsed
+	// credential for any of them resolved to the sentinel below and shipped the
+	// literal string "ollama" as the API key. What came back was a 401 from the
+	// vendor, and the "not logged in" the user should have been shown at
+	// resolution time never appeared at all.
+	keyless := openCatalogue || resolvedModel.Source == "user"
+	if keyless && resolvedModel.BaseURL != "" && credErr != nil {
 		cred = "ollama"
 		credErr = nil
 		requireCred = false
@@ -826,7 +870,19 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 
 	var credFailure error
 	if credErr != nil {
-		credFailure = &CredentialError{noCredentialError(provName, userPickedProvider)}
+		// A LAPSED login keeps its own words. noCredentialError's two phrasings
+		// both describe an account that was never configured — "set KIMI_API_KEY",
+		// "no credentials found for any provider" — which is the wrong errand to
+		// send someone on when the credential is right there on disk and only the
+		// grant has expired. The remedy is one /login, and saying so is the
+		// difference between a 30-second fix and hunting an API key that was
+		// never the mechanism.
+		var expired *ExpiredLoginError
+		if errors.As(credErr, &expired) {
+			credFailure = &CredentialError{credErr}
+		} else {
+			credFailure = &CredentialError{noCredentialError(provName, userPickedProvider)}
+		}
 		if requireCred {
 			return Resolved{}, credFailure
 		}
@@ -853,7 +909,9 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// ../examples/deploy/… links resolve against them.
 	examplesDir, _ := tervaexamples.EnsureInstalled(config.TervaHome())
 	home := config.TervaHome()
-	grantReadOnlyRoots(sandbox, home, docsDir, examplesDir)
+	// docsDir/examplesDir no longer need a grant: a jailed agent may read
+	// anywhere except the secret roots registered here.
+	restrictSensitiveReads(sandbox, home)
 
 	// Skill discovery: scan project + global locations + built-in
 	// skills shipped with the binary. If any are found, register
@@ -1449,6 +1507,59 @@ func (r *Resolved) UseTasks(ctrl *tasktool.Controller) {
 	}
 }
 
+// UseFiles keeps a session's file-state tracker across a tool rebuild.
+//
+// Same rule as UseTasks and UseMemory. A rebuild fires on any extension policy
+// assertion and on entering plan mode; a fresh tracker there would forget every
+// file the model has read, and the edit tool's staleness note would then tell it
+// "this session has not read x.go" about a file it read a minute earlier —
+// confidently wrong, which is worse than silent.
+func (r *Resolved) UseFiles(fs *tools.FileState) {
+	if r == nil || fs == nil || r.ToolRegistry == nil {
+		return
+	}
+	if rt, ok := r.ToolRegistry["read"].(*tools.ReadTool); ok {
+		rt.Files = fs
+	}
+	if wt, ok := r.ToolRegistry["write"].(*tools.WriteTool); ok {
+		wt.Files = fs
+	}
+	if et, ok := r.ToolRegistry["edit"].(*tools.EditTool); ok {
+		et.Files = fs
+	}
+}
+
+// Files returns this resolve's shared file-state tracker, or nil when the
+// registry has no file tools (chat/play/--no-tools). The accessor exists so a
+// host can hand the SAME tracker to the next rebuild without reaching into the
+// registry itself.
+func (r *Resolved) Files() *tools.FileState {
+	if r == nil || r.ToolRegistry == nil {
+		return nil
+	}
+	if rt, ok := r.ToolRegistry["read"].(*tools.ReadTool); ok {
+		return rt.Files
+	}
+	return nil
+}
+
+// UseMemory keeps a session's long-lived memory stores across a tool rebuild.
+//
+// Same rule as UseTasks, and the same reason: the injected block, the /memory
+// pane, and the model's own writes all read the stores bound at session build.
+// Adopting a rebuild's freshly-minted ones would point the tool at stores
+// nothing else renders — memory would appear to work, and every write would
+// land where no surface is looking. A rebuild fires on any extension policy
+// assertion and on entering plan mode, so this is not a corner case.
+func (r *Resolved) UseMemory(mt *tools.MemoryTool) {
+	if r == nil || mt == nil {
+		return
+	}
+	if _, ok := r.ToolRegistry["memory"]; ok {
+		r.ToolRegistry["memory"] = mt
+	}
+}
+
 // SetAsker wires the front-end question channel into the registered
 // ask_user_question tool. The cli calls it once the interactive front
 // end (the Asker) exists — the same construction-order unknot as
@@ -1650,16 +1761,39 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 	if !HasBaseWorkspaceTools(args) {
 		return core.Registry{}
 	}
+	// One FileState shared by read/write/edit: the point is that an edit can ask
+	// what a READ saw, so three separate trackers would answer nothing. Survives
+	// tool rebuilds via Resolved.UseFiles — a rebuild minting a fresh one would
+	// silently forget every file the model had read, and the staleness note
+	// would start claiming files were never read at all.
+	files := tools.NewFileState()
 	all := map[string]core.Tool{
-		"read":              &tools.ReadTool{CWD: cwd, Sandbox: sandbox, SupportsVision: visionCapable},
-		"write":             &tools.WriteTool{CWD: cwd, Sandbox: sandbox},
-		"edit":              &tools.EditTool{CWD: cwd, Sandbox: sandbox},
-		"bash":              &tools.BashTool{CWD: cwd, Sandbox: sandbox, Env: map[string]string{"TERVA_HOME": config.TervaHome()}},
-		"grep":              &tools.GrepTool{CWD: cwd, Sandbox: sandbox},
-		"glob":              &tools.GlobTool{CWD: cwd, Sandbox: sandbox},
-		"terva_status":      &tools.StatusTool{Provider: provName, CWD: cwd, AuthMethod: authMethod, BaseURL: args.BaseURL, Build: buildinfo.Get()},
-		"session_inspect":   &tools.SessionInspectTool{TervaHome: config.TervaHome(), CWD: cwd},
+		"read":         &tools.ReadTool{CWD: cwd, Sandbox: sandbox, SupportsVision: visionCapable, Files: files},
+		"write":        &tools.WriteTool{CWD: cwd, Sandbox: sandbox, Files: files},
+		"edit":         &tools.EditTool{CWD: cwd, Sandbox: sandbox, Files: files},
+		"bash":         &tools.BashTool{CWD: cwd, Sandbox: sandbox, Env: map[string]string{"TERVA_HOME": config.TervaHome()}},
+		"grep":         &tools.GrepTool{CWD: cwd, Sandbox: sandbox},
+		"glob":         &tools.GlobTool{CWD: cwd, Sandbox: sandbox},
+		"terva_status": &tools.StatusTool{Provider: provName, CWD: cwd, AuthMethod: authMethod, BaseURL: args.BaseURL, Build: buildinfo.Get()},
+		// The SAME sandbox the file tools get: `path` is bounded by the read
+		// policy, so inspecting a transcript by path reaches exactly what `read`
+		// reaches — a downloaded session yes, another project's sessions no.
+		"session_inspect": &tools.SessionInspectTool{TervaHome: config.TervaHome(), CWD: cwd, Sandbox: sandbox},
+		// Cross-session recall. No sandbox field because there is no path to
+		// bound: it only ever opens this cwd's sessions directory, so its reach
+		// is fixed by construction rather than by policy.
+		"session_search":    &tools.SessionSearchTool{TervaHome: config.TervaHome(), CWD: cwd},
 		"ask_user_question": &tools.AskUserTool{},
+	}
+	// Durable memory. The stores are bound here (not lazily) so the tool and the
+	// injected block read one instance per session and cannot diverge; Adopt
+	// carries a retired extension's files forward on first touch, the same shape
+	// the worktree tools used when they were folded in. A bind failure is not
+	// fatal — the store falls back to in-memory, so a session still runs.
+	if !args.NoMemory {
+		if mt := newMemoryTool(cwd); mt != nil {
+			all["memory"] = mt
+		}
 	}
 	// generate_image is opt-in and only useful with a backend, so it enters
 	// the set only when one is configured. It's mutating (not read-only), so

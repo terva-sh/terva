@@ -115,7 +115,7 @@ func (s *wsSession) surfaceList() []ctrlproto.SurfaceMeta {
 		{ID: "context", Title: i18n.T("Usage"), Icon: "📊", Kind: "context", Scope: "session", Live: true},
 		{ID: "settings", Title: i18n.T("Settings"), Icon: "⚙️", Kind: "settings", Scope: "session", Actions: true},
 	}
-	if s.ws != nil && s.ws.hasTasks() {
+	if s.ws != nil && s.ws.hasTasks(s.id) {
 		// Titled "Agents", id still "tasks": the id is wire contract and clients
 		// key off it, but the pane shows background SUB-AGENTS, and calling it
 		// Tasks collided with the model's own task board — two panes, one name,
@@ -157,6 +157,13 @@ func (s *wsSession) surfaceList() []ctrlproto.SurfaceMeta {
 	}
 	if len(s.loreSnapshot()) > 0 {
 		metas = append(metas, ctrlproto.SurfaceMeta{ID: "lore", Title: i18n.T("Lore"), Icon: "📖", Kind: "lore", Scope: "session", Actions: true})
+	}
+	// Offered whenever memory is ON, not only when it holds something: an empty
+	// memory is a state a user should be able to see (and is the state right
+	// before the first fact lands), unlike lore, where an absent pane means
+	// there are no entries anywhere to inspect.
+	if s.hasMemory() {
+		metas = append(metas, ctrlproto.SurfaceMeta{ID: "memory", Title: i18n.T("Memory"), Icon: "🧠", Kind: "memory", Scope: "session", Live: true, Actions: true})
 	}
 	if s.ws != nil && s.ws.mcpAdapter != nil && len(build.ListMCPServers(s.cwd, s.trusted.Load(), s.ws.mcpAdapter.Mgr)) > 0 {
 		metas = append(metas, ctrlproto.SurfaceMeta{ID: "mcp", Title: i18n.T("MCP"), Icon: "🔗", Kind: "mcp", Scope: "workspace", Actions: true})
@@ -219,7 +226,7 @@ func (s *wsSession) surface(id string) (ctrlproto.Surface, error) {
 		b := s.contextBreakdown()
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Usage"), Kind: "context", Context: &b}, nil
 	case "tasks":
-		return ctrlproto.Surface{ID: id, Title: i18n.T("Agents"), Kind: "tasks", Tasks: s.ws.taskList()}, nil
+		return ctrlproto.Surface{ID: id, Title: i18n.T("Agents"), Kind: "tasks", Tasks: s.ws.taskList(s.id)}, nil
 	case "taskboard":
 		// The per-session task board (built-in task_* tools) — what the MODEL is
 		// tracking, as opposed to the "tasks" pane above, which is the swarm.
@@ -252,6 +259,14 @@ func (s *wsSession) surface(id string) (ctrlproto.Surface, error) {
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Permissions"), Kind: "permissions", Permissions: s.permissionsView()}, nil
 	case "lore":
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Lore"), Kind: "lore", Lore: s.loreView()}, nil
+	case "memory":
+		// NotFound rather than an empty pane when memory is off (--no-memory):
+		// a client can then say "switched off" instead of showing a list that
+		// will never populate and reads as broken.
+		if !s.hasMemory() {
+			return ctrlproto.Surface{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("memory is not enabled for this session"))
+		}
+		return ctrlproto.Surface{ID: id, Title: i18n.T("Memory"), Kind: "memory", Memory: s.memoryView()}, nil
 	case "characters":
 		return ctrlproto.Surface{ID: id, Title: i18n.T("Characters"), Kind: "characters", Characters: s.charactersView()}, nil
 	case "mcp":
@@ -319,7 +334,7 @@ func mapExtWidgets(ws []extproto.Widget) []ctrlproto.Widget {
 
 func (s *wsSession) surfaceAction(id, action string, args map[string]string) error {
 	if id == "tasks" {
-		return s.ws.taskAction(action, args)
+		return s.ws.taskAction(s.id, action, args)
 	}
 	if id == "raati" {
 		return s.ws.raatiAction(s, action, args)
@@ -341,6 +356,9 @@ func (s *wsSession) surfaceAction(id, action string, args map[string]string) err
 	}
 	if id == "lore" {
 		return s.loreAction(action, args)
+	}
+	if id == "memory" {
+		return s.memoryAction(action, args)
 	}
 	if id == "chat" {
 		// The issuing session is the bind target for connect: the mirror lands

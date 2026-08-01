@@ -118,6 +118,10 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		i.slashLore()
 		return false
 	},
+	"/memory": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.slashMemory()
+		return false
+	},
 	"/tasks": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 		i.openTasksDialog()
 		return false

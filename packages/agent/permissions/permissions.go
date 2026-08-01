@@ -59,7 +59,12 @@ var readOnly = map[string]bool{
 	"glob":            true,
 	"terva_status":    true,
 	"session_inspect": true,
-	"skill":           true,
+	// Cross-session search reads this project's own transcripts and writes
+	// nothing — the same class as session_inspect, and the same reason it must
+	// survive plan-mode pruning: recalling what a previous session decided is
+	// exactly the work plan mode exists to do.
+	"session_search": true,
+	"skill":          true,
 	// The task tools mutate only terva's own task board under $TERVA_HOME — never
 	// the workspace — so they auto-admit and stay available in plan mode like a
 	// read-only tool (the built-in equivalent of the former extension's
@@ -69,6 +74,13 @@ var readOnly = map[string]bool{
 	"task_create":  true,
 	"task_update":  true,
 	"task_archive": true,
+	// memory is the same case as the task board: it writes ONLY terva's own
+	// durable memory files under $TERVA_HOME, never the workspace, so it never
+	// appears in a diff and auto-admits. Staying available in plan mode is the
+	// point rather than an accident — a model that cannot record what it just
+	// learned, in the mode meant for investigation, loses exactly the findings
+	// that mode exists to produce.
+	"memory": true,
 	// activate_tools only changes which tool schemas are advertised this session
 	// (lazy tool visibility, retro H2·b) — visibility, never authority — so it
 	// auto-admits without a confirm, like session_inspect. Each tool it reveals
@@ -128,11 +140,13 @@ var builtin = map[string]bool{
 	"glob":              true,
 	"terva_status":      true,
 	"session_inspect":   true,
+	"session_search":    true,
 	"skill":             true,
 	"task_list":         true,
 	"task_create":       true,
 	"task_update":       true,
 	"task_archive":      true,
+	"memory":            true,
 	"activate_tools":    true,
 	"deliver_result":    true,
 	"swarm_spawn":       true,
@@ -396,11 +410,14 @@ func (n JailNotice) Message() string {
 	if !n.Persisted {
 		return ""
 	}
+	// Says WRITE, not "read and write": reads are unconfined whether or not
+	// the jail is on, so naming them here implied the rule had granted
+	// something it did not, and buried the thing it actually granted.
 	if n.AutoApproved {
 		return fmt.Sprintf("unjailed by a saved rule for %s, and the approval mode auto-approves built-in tools: "+
-			"they may read and write anywhere without asking. `terva jail` to undo", n.Entry.Real)
+			"they may write anywhere without asking. `terva jail` to undo", n.Entry.Real)
 	}
-	return fmt.Sprintf("unjailed by a saved rule for %s — tools may read and write outside it. `terva jail` to undo", n.Entry.Real)
+	return fmt.Sprintf("unjailed by a saved rule for %s — tools may write outside it. `terva jail` to undo", n.Entry.Real)
 }
 
 // JailNoticeFor is ResolveJailNotice with the user config loaded, for the call

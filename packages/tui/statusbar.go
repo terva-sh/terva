@@ -108,6 +108,11 @@ type StatusBarParams struct {
 	// renders the segment absent (no tasks / not this mode).
 	TaskGlance string
 
+	// MemoryGlance is the durable-memory count (e.g. "🧠 7"); empty renders the
+	// segment absent — memory switched off, nothing saved yet, or the cache not
+	// yet filled. All three are honestly "nothing to show" rather than zero.
+	MemoryGlance string
+
 	// WorktreeGlance is the managed-worktree count line (e.g.
 	// "worktrees 3 · 1 yours"), computed by worktree.StatusGlance from the
 	// /worktree panel's cache; empty renders the segment absent (no
@@ -195,6 +200,7 @@ const (
 	SegReplay   SegmentID = "replay"
 	SegTasks    SegmentID = "tasks"
 	SegWorktree SegmentID = "worktrees"
+	SegMemory   SegmentID = "memory"
 )
 
 // segmentFunc renders one segment into zero or more pre-styled atoms.
@@ -223,6 +229,7 @@ var statusSegments = map[SegmentID]segmentFunc{
 	SegReplay:   segReplay,
 	SegTasks:    segTasks,
 	SegWorktree: segWorktree,
+	SegMemory:   segMemory,
 }
 
 // defaultStatusRows is the built-in layout: identity + spend on row 1
@@ -248,7 +255,7 @@ func defaultStatusRows(hideWorkspace bool) [][]SegmentID {
 	return [][]SegmentID{
 		{SegReplay, SegCWD, SegGit, SegEdits, SegModel, SegThinking, SegTokens, SegCost},
 		{SegContext, SegUsage, SegSwarm},
-		{SegTags, SegTasks, SegWorktree, SegBridge, SegExt},
+		{SegTags, SegTasks, SegWorktree, SegMemory, SegBridge, SegExt},
 	}
 }
 
@@ -570,6 +577,16 @@ func segSwarm(p StatusBarParams) []string {
 func segTasks(p StatusBarParams) []string {
 	if s := strings.TrimSpace(p.TaskGlance); s != "" {
 		return []string{p.Theme.FG256(p.Theme.StatusColor(SegTasks, p.Theme.Accent), s)}
+	}
+	return nil
+}
+
+// segMemory renders the durable-memory count — how many facts terva is
+// carrying into future sessions. Muted: it is context for the session, not a
+// call to act on, and it should not compete with the task glance beside it.
+func segMemory(p StatusBarParams) []string {
+	if s := strings.TrimSpace(p.MemoryGlance); s != "" {
+		return []string{p.Theme.FG256(p.Theme.StatusColor(SegMemory, p.Theme.Muted), s)}
 	}
 	return nil
 }

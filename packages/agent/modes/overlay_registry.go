@@ -239,6 +239,18 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			render: func(cols int) []string { return i.extensionsDialog.Render(i.cfg.Theme, cols) },
 		},
+		{ // durable memory (/memory)
+			active: i.memoryDialog.Active,
+			ctrlC:  func() bool { i.memoryDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				act := i.memoryDialog.HandleKey(k)
+				if act.Remove || act.Clear || act.Reload {
+					i.applyMemoryAction(act)
+				}
+				return false
+			},
+			render: func(cols int) []string { return i.memoryDialog.Render(i.cfg.Theme, cols) },
+		},
 		{ // mcp manager (/mcp)
 			active: i.mcpDialog.Active,
 			ctrlC:  func() bool { i.mcpDialog.Close(); return true },

@@ -61,6 +61,18 @@ type LiveToolSet struct {
 	// tasks it can no longer see and the durable board frozen.
 	Tasks *tasktool.Controller
 
+	// Memory is the session's durable-memory tool, holding the bound stores.
+	// Same rule as Tasks: a fresh resolve mints fresh stores, and adopting them
+	// would leave the model writing facts that no pane and no injected block
+	// reads — memory would appear to work and quietly go nowhere.
+	Memory *tools.MemoryTool
+
+	// Files is the session's file-state tracker (what the model has seen of
+	// each path). Same rule as Tasks and Memory: a fresh resolve mints an empty
+	// one, and the edit tool's staleness note would then claim files were never
+	// read that the model read minutes earlier.
+	Files *tools.FileState
+
 	// Sandbox is the session's sandbox — the object /jail and /unjail mutate.
 	// Rebuilt tools must consult the same one, or those verbs report success
 	// and adjust something nothing reads.
@@ -89,6 +101,8 @@ func (s LiveToolSet) Rebuild(ag *core.Agent) bool {
 	}
 	r.AdoptReadOnlySet(s.ReadOnly)
 	r.UseTasks(s.Tasks)
+	r.UseMemory(s.Memory)
+	r.UseFiles(s.Files)
 	r.UseSandbox(s.Sandbox)
 	if s.Ext != nil {
 		r.MergeExtensionTools(&ExtToolAdapter{Mgr: s.Ext})

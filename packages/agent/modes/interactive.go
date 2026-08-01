@@ -519,6 +519,7 @@ type Interactive struct {
 	modelDialog       *dialogs.ModelDialog
 	modelEditDialog   *dialogs.ModelEditDialog
 	extensionsDialog  *dialogs.ExtensionsDialog
+	memoryDialog      *dialogs.MemoryDialog
 	extConfigDialog   *dialogs.ExtConfigDialog
 	mcpDialog         *dialogs.MCPDialog
 	logDialog         *dialogs.LogDialog
@@ -776,6 +777,13 @@ type Interactive struct {
 	// verify it still matches the live session before landing, and lets reads
 	// ignore a board left over from a previous binding. Guarded by mu.
 	carrierTaskBoardSession string
+	// carrierMemory caches the durable-memory surface for the status glance,
+	// filled by the pump (refreshCarrierMemory) and read every frame. Same
+	// push-fill contract as the task board: the render path never fetches.
+	// Nil means memory is off in this session, or nothing has been fetched yet —
+	// both render as no glance, which is the honest answer for each.
+	carrierMemory        *ctrlproto.MemoryView
+	carrierMemorySession string
 
 	// carrierWorktrees caches the "worktrees" surface (the built-in worktree
 	// engine's list + collect view) backing /worktree and the status glance.
@@ -956,6 +964,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		modelDialog:       dialogs.NewModelDialog(),
 		modelEditDialog:   dialogs.NewModelEditDialog(),
 		extensionsDialog:  dialogs.NewExtensionsDialog(),
+		memoryDialog:      dialogs.NewMemoryDialog(),
 		extConfigDialog:   dialogs.NewExtConfigDialog(),
 		mcpDialog:         dialogs.NewMCPDialog(),
 		logDialog:         dialogs.NewLogDialog(),

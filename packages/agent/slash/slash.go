@@ -83,6 +83,7 @@ var registry = []Spec{
 	{Name: "/context", Group: groupContext, Desc: "context breakdown (token sizes) + what extensions inject"},
 	{Name: "/reveal", Group: groupContext, Desc: "show the conversation from before a /clear (scrolling up already walks back through compactions, but stops there)"},
 	{Name: "/lore", Group: groupContext, Desc: "list this run's active lore (keyed-context) entries"},
+	{Name: "/memory", Group: groupContext, Desc: "the agent's durable memory — facts it carries into future sessions; prune or clear them"},
 	{Name: "/tasks", Group: groupContext, Desc: "show the agent's task list (the built-in task tracker)"},
 	{Name: "/worktree", Group: groupContext, Desc: "managed git worktrees: list, cd into one, or review the merge-back overview"},
 

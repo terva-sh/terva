@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
+
+	"terva.sh/terva/packages/core"
 )
 
 // Field-length and count caps. Display fields are normalized to one line and
@@ -24,32 +26,11 @@ const (
 	MaxGenerations = 50
 )
 
-// CleanOneLine collapses a value to a single safe display line: newlines, tabs,
-// and other control characters (including ANSI escapes) are dropped or turned
-// into spaces, runs of whitespace are collapsed, the result is trimmed, and it
-// is truncated to max runes with an ellipsis. This defuses display-injection via
-// task fields and the host-supplied session title, and bounds output size.
-// max <= 0 means no length limit.
-func CleanOneLine(s string, max int) string {
-	s = strings.Map(func(r rune) rune {
-		switch r {
-		case '\n', '\r', '\t':
-			return ' '
-		}
-		if r < 0x20 || r == 0x7f {
-			return -1 // drop other control chars (e.g. ESC)
-		}
-		return r
-	}, s)
-	s = strings.Join(strings.Fields(s), " ")
-	if max > 0 {
-		r := []rune(s)
-		if len(r) > max {
-			return strings.TrimSpace(string(r[:max])) + "…"
-		}
-	}
-	return s
-}
+// CleanOneLine is core.CleanOneLine, kept as a name in this package because
+// every call site here reads as a task-field sanitizer. The implementation moved
+// to core when memory needed the same one: two copies of a sanitizer means a fix
+// to one leaves the other accepting what it was meant to reject.
+func CleanOneLine(s string, max int) string { return core.CleanOneLine(s, max) }
 
 // safeSessionID reports whether id can be used verbatim in a filename: a
 // non-empty run of [A-Za-z0-9._-] (<=128) with no "..", and not "." or "..".

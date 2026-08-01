@@ -290,6 +290,15 @@ type Args struct {
 	// `lore`, default true); the `terva lore` CLI is unaffected.
 	NoLore bool
 
+	// NoMemory disables agent-curated durable memory for this run, entirely:
+	// the memory tool is not registered, no block is injected, and no memory
+	// file is read or written. "Off" for a capability that writes durable state
+	// has to mean the state is not written — a tool still recording facts the
+	// user opted out of would not be off. Sibling of --no-skill / --no-lore /
+	// --no-ext / --no-mcp. Memory is on by default (config `memory`, default
+	// true).
+	NoMemory bool
+
 	// NoYolo turns on per-tool confirmation. Before each tool
 	// invocation the TUI prompts the user with the tool name + args
 	// and waits for an explicit yes/no. The user can also pick
@@ -701,6 +710,8 @@ func ParseArgs(in []string) (Args, error) {
 			a.NoSkill = true
 		case "--no-lore":
 			a.NoLore = true
+		case "--no-memory":
+			a.NoMemory = true
 		case "--dump-prompt":
 			a.DumpPrompt = "text"
 		case "--with-skills", "--with-skill":

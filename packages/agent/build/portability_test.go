@@ -34,6 +34,7 @@ var allSourceConstants = []string{
 	SourceCast,
 	SourceSwarmChild,
 	SourceTasks,
+	SourceMemory,
 	SourceExtensionContext,
 	SourceCardPostHistory,
 }

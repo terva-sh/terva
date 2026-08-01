@@ -225,6 +225,8 @@ func (i *Interactive) SwitchCarrierSession(id string) error {
 	// (surface_updated("taskboard") or the resync) refills it under the new id.
 	i.carrierTaskBoard = nil
 	i.carrierTaskBoardSession = id
+	i.carrierMemory = nil
+	i.carrierMemorySession = id
 	i.armCarrierBind()
 	if info.Provider != "" {
 		i.cfg.Provider = info.Provider
@@ -481,6 +483,7 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		// Resync the task-board cache so the status glance is populated on
 		// (re)subscribe/resume/session-switch without waiting for the next turn.
 		go i.refreshCarrierTaskBoard()
+		go i.refreshCarrierMemory()
 		// Same for the worktree cache — its only other fill points are the
 		// /worktree panel's open and refresh (no push event exists for it).
 		go i.refreshCarrierWorktrees()
@@ -533,6 +536,11 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 			// cache off the pump so the status glance and an open /tasks panel
 			// re-render — but never auto-open the panel.
 			go i.refreshCarrierTaskBoard()
+		case ev.SurfaceID == "memory":
+			// A fact was saved, pruned, or reloaded — by this client, another, or
+			// the model. Refresh off the pump so the glance and an open /memory
+			// panel re-render; never auto-open the panel.
+			go i.refreshCarrierMemory()
 		case ev.SurfaceID == "chat":
 			// connect/disconnect/rebind, from this client or another.
 			go i.fetchCarrierChat()
