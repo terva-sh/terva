@@ -36,11 +36,27 @@ func (r *Resolved) PerTurnContextPeek(ag *core.Agent) func() string {
 
 // tailProvider builds the per-turn tail closure. When record is true the
 // resulting closure notes which lore fired (for /lore); when false it is pure.
+//
+// Archived durable memory joins here rather than as an EphemeralTail field,
+// which matters: this is derived from Resolved and installed at exactly two
+// places (NewAgent and the lore/trust rewire), so every host gets it without
+// filling anything in. A field on EphemeralTail would have to be set by each of
+// the three hosts that build one, and forgetting one is the failure that type
+// exists to prevent — it is the same shape as the bug where both live cards
+// vanished from the three hosts that re-derive.
 func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
+	if r == nil {
+		return nil
+	}
 	// A non-nil note/userDesc/worldLore record keeps the tail live even with no
 	// lore/PHI, so a note, user persona, or World lore added later takes effect —
-	// see Resolve, which allocates them only for immersive sessions.
-	if r == nil || (len(r.loreTriggered) == 0 && r.postHistory == "" && r.note == nil && r.userDesc == nil && r.worldLore == nil) {
+	// see Resolve, which allocates them only for immersive sessions. Archived
+	// memory keeps it live for the same reason: the closure reads the archive
+	// every turn, so a session that starts with nothing archived still fires the
+	// entry it archives at turn three.
+	memoryRecall := r.MemoryRecall(ag, record)
+	if len(r.loreTriggered) == 0 && r.postHistory == "" && r.note == nil && r.userDesc == nil &&
+		r.worldLore == nil && memoryRecall == nil {
 		return nil
 	}
 	triggered, cfg, phi, rec, note := r.loreTriggered, r.loreConfig, r.postHistory, r.loreFired, r.note
@@ -49,6 +65,18 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 	userGender, userPronouns := r.userGender, r.userPronouns
 	return func() string {
 		var parts []string
+		// Archived durable memory leads the tail, which puts it FURTHEST from the
+		// generation point of anything here. That is the right end for it: in an
+		// immersive session the scene material — world lore, the pinned state
+		// card, the persona, the card's post-history instructions — has to stay
+		// nearest the model's output, and the agent's own recollections must not
+		// come between the scene and the writing of it. In a coding session
+		// nothing else is present and the position is moot.
+		if memoryRecall != nil {
+			if s := strings.TrimSpace(memoryRecall()); s != "" {
+				parts = append(parts, s)
+			}
+		}
 		// World lore (read live, so a world.lore.* edit lands next turn) joins the
 		// file/card triggered entries in ONE Select: a shared budget, a shared
 		// activation trace, and constants fire unconditionally there — World

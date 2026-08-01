@@ -120,12 +120,17 @@ func TestRetryAfterAdvanceFromAColdOpen(t *testing.T) {
 	if err := s.retry(ctrlproto.TurnRetryParams{Epoch: s.agent.TranscriptEpoch()}); err != nil {
 		t.Fatalf("retry after an advance from a cold open was refused: %v", err)
 	}
-	close(cl.release)
 
-	// The cold open is the author's; only the model's beat may be retracted.
+	// Assert BEFORE releasing the gated client. The retract completes inside
+	// retry(); releasing lets the replacement turn append its own take, so an
+	// assertion after the release is racing that append and reads two messages
+	// whenever the turn goroutine wins. Seen once under full-suite load, as
+	// "[*Dawn finds the shop cold.* ok]" — the retract had worked perfectly and
+	// the reply had simply already landed.
 	if got := s.agent.Messages(); len(got) != 1 || reviseText(got[0]) != "*Dawn finds the shop cold.*" {
 		t.Errorf("the cold open did not survive the retract: %v", reviseTexts(s.agent.Messages()))
 	}
+	close(cl.release)
 }
 
 // TestRetryRegeneratesTheReplyToADirectedLine is the case the old anchor got
@@ -154,9 +159,9 @@ func TestRetryRegeneratesTheReplyToADirectedLine(t *testing.T) {
 	if err := s.retry(ctrlproto.TurnRetryParams{Epoch: s.agent.TranscriptEpoch()}); err != nil {
 		t.Fatalf("the model's reply to a directed line should be retryable: %v", err)
 	}
-	close(cl.release)
-
-	// Exactly the model's reply was retracted; the authored line is untouched.
+	// Before the release, for the reason given above: the replacement turn
+	// appends a fourth message the moment it is unblocked, and this assertion
+	// counts messages.
 	got := reviseTexts(s.agent.Messages())
 	if len(got) != 3 {
 		t.Fatalf("retract took the wrong span: %v", got)
@@ -164,6 +169,7 @@ func TestRetryRegeneratesTheReplyToADirectedLine(t *testing.T) {
 	if got[2] != "*Mistress Elira reads the note.*" {
 		t.Errorf("the authored line did not survive: %v", got)
 	}
+	close(cl.release)
 }
 
 // A scene ending on your own line has no take under the button, and saying

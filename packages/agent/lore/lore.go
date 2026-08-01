@@ -191,6 +191,17 @@ func trimAll(in []string) []string {
 	return out
 }
 
+// SplitFrontmatter splits "---\n<yaml>\n---\n<body>", returning (frontmatter,
+// body), or ("", raw) when no frontmatter is present.
+//
+// Exported for the durable-memory archive, whose files are lore entries with a
+// few extra fields of their own (when they were archived, and why). It parses
+// them with ParseEntry — the shared half — and needs the raw frontmatter back to
+// pull its own fields, which yaml would otherwise discard as unknown. Without
+// this it would need a fourth copy of a splitter the tree already has three of
+// (splitPersonaFrontmatter, skills.splitFrontmatter, this).
+func SplitFrontmatter(raw string) (string, string) { return splitFrontmatter(raw) }
+
 // splitFrontmatter splits "---\n<yaml>\n---\n<body>", returning
 // (frontmatter, body), or ("", raw) when no frontmatter is present. Copied
 // from splitPersonaFrontmatter (persona.go) / skills.splitFrontmatter, both

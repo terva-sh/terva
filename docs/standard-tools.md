@@ -108,7 +108,7 @@ network hosts. See `docs/plans/standard-tools-bucket2.md`.
 | `glob` | local read-only | path glob (`**` recurses); `.gitignore`-aware, paged |
 | `ask_user_question` | user interaction | structured clarifying question(s); permitted in every mode; interactive-only (headless returns a proceed-anyway result). `questions[]` asks up to 8 at once as ONE interruption — the TUI shows them as tabs with a submit pane, the web client stacks them in one card — and returns every answer together; the singular `question` form still works |
 | `terva_status` | local read-only | session self-introspection |
-| `session_inspect` | local read-only | bounded, filterable view over a session transcript: this session, another session in the project, or a swarm sub-agent's (by its id); `expand` reads one event's full text in pages. Event indices and `cursor` are **1-based**, and `0` means "not set" on both — so a caller that fills every optional key with its zero value gets the default listing of the most recent window rather than an error or the wrong end of the transcript (see "Optionality" below). Secrets redacted, input scan and output both capped. A sub-agent's transcript streams as it works, so a running one is inspectable mid-task; before its first message lands the result names that state rather than blaming the filters. |
+| `session_inspect` | local read-only | bounded, filterable view over a session transcript: this session, another session in the project, or a swarm sub-agent's (by its id); `expand` reads one event's full text in pages, and `stats` returns a whole-session rollup (cost, cache hit rate, dead turns, tool-call and failure histograms, provider errors) in one pass instead of paging for it. Event kinds cover `tool_call`, `tool_result`, `message`, `usage` (a turn's cost and cache accounting) and `error` (a provider failure from the `.errors.jsonl` sidecar, placed against the turn it killed) — the last two are how a session's cost and its outages become answerable at all; nothing else records them. Event indices and `cursor` are **1-based**, and `0` means "not set" on both — so a caller that fills every optional key with its zero value gets the default listing of the most recent window rather than an error or the wrong end of the transcript (see "Optionality" below). Secrets redacted, input scan and output both capped. A sub-agent's transcript streams as it works, so a running one is inspectable mid-task; before its first message lands the result names that state rather than blaming the filters. |
 | `task_create` / `task_update` / `task_list` / `task_archive` | local data | the built-in task board (folded in from the former `terva-tasks` extension): one active task at a time, evidence to close, archive generations, `task_list format:"markdown"` exports a checkbox worklog. The board persists per session under `$TERVA_HOME/tasks` (private modes) and its live state rides each turn as a context card. |
 | `activate_tools` | visibility only | present only when `lazy_tools` is on (see below); brings a hidden capability group into the advertised set. The advertised set is pinned while the model replies, so an activated group can never join the current reply's remaining calls — instead, activation continuation (on by default) automatically re-prompts the model with the tools live the moment it finishes that reply; with continuation off, the group lands on the NEXT turn. Its result echoes the group's schemas (capped at a 4 KB budget; past that, names only) so the model can compose that next call without waiting to see them. Grants no authority — revealed tools keep their normal permission gates. |
 
@@ -300,10 +300,11 @@ local code; each must meet the acceptance bar below before being treated
 as fully blessed (some promotion work is still tracked in the bucket-2
 plan).
 
-Three of them ship in the built-in **core pack** (`packages/agent/packs/core.json`,
-installed by `terva ext pack install`): `index`, `memory`, and `web`. That pack
-is the blessed set — a starting point an operator opts into, not something
-terva loads on its own.
+Two of them ship in the built-in **core pack** (`packages/agent/packs/core.json`,
+installed by `terva ext pack install`): `index` and `web`. That pack is the
+blessed set — a starting point an operator opts into, not something terva loads
+on its own. It offers nothing superseded, which
+`TestTheCorePackOffersNothingSuperseded` keeps true.
 
 - **Index** — `index` (`github.com/terva-sh/terva-ext-index`): a workspace code
   index and search. It exists to replace repeated `bash grep`/`rg` sweeps — and
@@ -316,12 +317,39 @@ terva loads on its own.
   at load with a pointer — and its state migrates on first touch (existing
   checkouts stay valid at their extension-era paths). `--swarm-worktrees`
   now leases directly from the built-in engine.
-- **Memory** — `memory` (`github.com/terva-sh/terva-ext-memory`): cross-session
-  memory, scoped per workspace and per user, so an agent can carry facts forward
-  instead of re-deriving them every session. The natural home for the
-  **local-data** authority — a store confined to the extension's own
-  `$TERVA_HOME/ext-data/<name>` dir, never the user's workspace, which is what
-  makes that class auto-allowable in the first place.
+- **Memory** — **folded into core built-ins** (the `memory` tool, its injected
+  block, `/memory` and the status glance; see `docs/proposals/memory-in-core.md`).
+  The standalone `terva-ext-memory` extension is superseded — an installed copy
+  is skipped at load with a pointer, and `ext doctor` recommends removing it.
+  Removal is safe: it deletes the extension directory only, so
+  `ext-data/memory/` survives and the built-in copies it forward on first use.
+  It remains the reference case for the **local-data** authority — a store
+  confined to `$TERVA_HOME`, never the user's workspace, which is what makes
+  that class auto-allowable in the first place.
+
+  Each scope has **two tiers**, split by which side of the prompt cache they sit
+  on (`docs/proposals/memory-archive-retrieval.md`):
+
+  | | active | archived |
+  |---|---|---|
+  | verbs | `add` / `replace` / `remove` | `archive` / `search` / `recall` / `promote` / `forget` |
+  | where it rides | the cached system prefix, every request | the uncached per-turn tail, only when its keys match |
+  | shape | one terse line, 1024 runes | multi-line, 8 KiB |
+  | scope cap | 16 KiB project / 4 KiB user | 2 MiB per scope |
+  | on disk | `memory.md` / `user.md` bullets | `archive/<id>.md`, YAML frontmatter + body |
+
+  Archiving is a cache split, not a file move: an archived entry costs nothing
+  until a turn's own words reach it, which is why the archive can be two orders
+  of magnitude larger. The price of not being always-on is a **retrieval spec** —
+  `keys`, optionally `secondary_keys` — supplied by whoever archives the entry.
+  Key on what someone would *type* when they need the fact, not on the
+  identifiers inside it: the entry holds the cause and the question describes the
+  symptom, and an entry keyed on its own vocabulary is measurably the way this
+  fails. Matching is `lore.Select` (whole words, scan depth 6, a per-turn token
+  budget), so activation, priority and budget behave exactly as they do for lore.
+  Archive files are ordinary markdown and hand-editable; a file that will not
+  parse is reported by the tool rather than skipped, because an entry that cannot
+  fire has no other symptom.
 - **Web** (adopted; niceties pending — bucket-2 Phase C) — `web_search`/`web_fetch`/
   `web_images` are implemented by the hardened `zot-web` extension
   (`github.com/terva-sh/zot-web`), which loads under terva via the preserved
