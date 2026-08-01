@@ -126,7 +126,9 @@ const descCreate = "Create tasks for multi-step work. Decompose the job and pass
 	"(default 'pending'), and `note`. Ids are system-assigned — never supply your own. " +
 	"Don't create tasks for trivial one-step requests."
 
-const descUpdate = "Update a task by `id` — mainly status transitions. Mark a task " +
+const descUpdate = "Update a task by `id` — mainly status transitions. `id` alone " +
+	"changes nothing and is rejected: always send the field you want to change with it. " +
+	"Mark a task " +
 	"'active' before working it; only one task is active at a time. Provide " +
 	"`evidence` when setting 'done' or 'blocked', and use 'blocked' (not 'done') if " +
 	"the work is failing or incomplete. May also patch `title`, `active_form`, `note`. " +

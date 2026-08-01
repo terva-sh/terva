@@ -246,6 +246,23 @@ func Update(s *tasks.Store, raw json.RawMessage) (string, bool) {
 	// validated BEFORE any mutation so a bad request changes nothing (no
 	// half-applied transition).
 	nextID := strings.TrimSpace(in.ActivateNext)
+
+	// A patch that changes nothing is refused rather than applied. The store would
+	// accept it happily — every field is optional, so an id on its own is a valid
+	// patch — bump UpdatedAt, and hand back "Updated task-62 → pending: <the same
+	// title>". That success line is the trap: the model reads back the value it was
+	// trying to change, concludes the write didn't land, and sends the identical
+	// call again. A real session spent 40+ consecutive task_update calls on exactly
+	// this, narrating its own diagnosis correctly ("calling it with only an id is a
+	// no-op") between the calls and then making the call again.
+	//
+	// So the result has to disagree with the request. Named fields, not just "bad
+	// args": a model that had the shape wrong needs the shape, and "No state
+	// changed." is the same reassurance the activate_next branches below give.
+	if !mutatingPatch(patch, nextID) {
+		return `task_update needs something to change: pass at least one of status, title, active_form, note, or evidence alongside id — e.g. {"id":"` + strings.TrimSpace(in.ID) + `","status":"active"}. An id on its own asks for no change, so nothing was written. No state changed.`, true
+	}
+
 	if nextID != "" {
 		// Every branch here rejects BEFORE any mutation, so each says "No state
 		// changed." (kills the "did my close half-apply?" doubt) and, where it can,
@@ -365,6 +382,34 @@ func suggestPending(s *tasks.Store, exclude string) string {
 // isSteppingAway reports whether a status takes the current task out of active
 // focus — done (finished), cancelled (abandoned), or blocked (parked) — which is
 // exactly when activate_next ("close/park this, focus the next") makes sense.
+// mutatingPatch reports whether a task_update request asks for any change at
+// all. It mirrors the store's own ignore rules rather than just testing for
+// non-nil pointers, because the one field the store silently drops is the one a
+// model is most likely to send badly: a title that cleans to nothing is applied
+// as no title at all (store.Update), which is a no-op wearing a success message.
+//
+// The other pointers count as mutating whenever they are present, including when
+// set to "": clearing a note or an evidence line is a real edit, and an
+// active_form patch is always assigned (a blank one falls back to the title).
+// Asking for the status a task already holds also counts — it is a coherent
+// request, not a malformed one, and treating it as an error here would make
+// activate_next's second store call (which sets the next task active) refuse a
+// task that was already active, after the first call had already applied.
+func mutatingPatch(p tasks.UpdatePatch, nextID string) bool {
+	switch {
+	case p.Status != nil, p.ActiveForm != nil, p.Note != nil, p.Evidence != nil:
+		return true
+	case p.Title != nil && tasks.CleanOneLine(*p.Title, tasks.MaxTitleLen) != "":
+		return true
+	case nextID != "":
+		// Not a change on its own — it is rejected a few lines down without a
+		// stepping-away status — but it is an intent to change something, and that
+		// branch's message is the more useful one to reach.
+		return true
+	}
+	return false
+}
+
 func isSteppingAway(s tasks.Status) bool {
 	return s == tasks.StatusDone || s == tasks.StatusCancelled || s == tasks.StatusBlocked
 }

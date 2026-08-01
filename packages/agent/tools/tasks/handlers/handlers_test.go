@@ -212,6 +212,58 @@ func TestUpdateAbsentVsEmpty(t *testing.T) {
 	}
 }
 
+// A patch with nothing to patch must be refused, not applied and reported as a
+// success. The success line is what makes an id-only call loopable: it echoes
+// the value the model was trying to change, which reads as "the write didn't
+// land", so the model sends the same call again.
+func TestUpdateRejectsAPatchThatChangesNothing(t *testing.T) {
+	s := boundStore(t)
+	Create(s, json.RawMessage(`{"tasks":[{"title":"A"}]}`))
+	before := s.List()[0]
+
+	for _, args := range []string{
+		`{"id":"task-1"}`,
+		`{"id":"task-1","title":"   "}`, // the store silently drops a blank title
+	} {
+		text, isErr := Update(s, json.RawMessage(args))
+		if !isErr {
+			t.Fatalf("%s: want an error, got success:\n%s", args, text)
+		}
+		if !strings.Contains(text, "No state changed.") {
+			t.Errorf("%s: should say nothing was written:\n%s", args, text)
+		}
+		// The message has to name what to send instead — a model that had the
+		// shape wrong learns nothing from "bad args".
+		for _, field := range []string{"status", "title", "active_form", "note", "evidence"} {
+			if !strings.Contains(text, field) {
+				t.Errorf("%s: message omits the %q field:\n%s", args, field, text)
+			}
+		}
+		if got := s.List()[0]; got != before {
+			t.Errorf("%s: the task was mutated: %+v -> %+v", args, before, got)
+		}
+	}
+}
+
+// The refusal is narrow: anything that genuinely changes state still applies,
+// including clearing a field and re-asserting the status a task already holds.
+func TestUpdateAllowsEveryPatchThatChangesSomething(t *testing.T) {
+	s := boundStore(t)
+	Create(s, json.RawMessage(`{"tasks":[{"title":"A","note":"n"}]}`))
+	for _, args := range []string{
+		`{"id":"task-1","note":""}`,
+		`{"id":"task-1","evidence":""}`,
+		`{"id":"task-1","active_form":""}`,
+		`{"id":"task-1","title":"B"}`,
+		`{"id":"task-1","status":"pending"}`, // already pending: coherent, not malformed
+		`{"id":"task-1","status":"active"}`,
+	} {
+		if text, isErr := Update(s, json.RawMessage(args)); isErr {
+			t.Errorf("%s: should have applied, got error:\n%s", args, text)
+		}
+	}
+}
+
 func TestUpdateActivateNext(t *testing.T) {
 	s := boundStore(t)
 	Create(s, json.RawMessage(`{"tasks":[{"title":"A"},{"title":"B"},{"title":"C"}]}`))
