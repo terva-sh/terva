@@ -870,6 +870,16 @@ type AgentSnapshot struct {
 	Dir      string
 	Status   Status
 	Activity string
+
+	// Turns, ToolCalls and LastEvent are the progress counters behind the
+	// dashboard's "is it still working?" column. Activity says what the
+	// agent is doing at one instant and reads "idle" between events; these
+	// only ever climb, so a watcher reads the DIFFERENCE between two looks.
+	// LastEvent is zero when nothing has arrived yet. See Agent.noteProgress.
+	Turns     int
+	ToolCalls int
+	LastEvent time.Time
+
 	Started  time.Time
 	Finished time.Time
 	Err      string
@@ -1027,6 +1037,7 @@ func (a *Agent) Snapshot() AgentSnapshot {
 	return AgentSnapshot{
 		ID: a.ID, Task: a.Task, Dir: a.Dir,
 		Status: a.status, Activity: a.activity,
+		Turns: a.turns, ToolCalls: a.toolCalls, LastEvent: a.lastEvent,
 		Started: a.Started, Finished: a.finished,
 		Err: errStr, Tail: tail, Lines: lines,
 		LastAssistant:     a.lastAssistant,

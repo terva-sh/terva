@@ -85,6 +85,9 @@ func IngestEvent(ev Event, log *EventLog, sink Sink, a *Agent) {
 	}
 	applyEventToSink(ev, sink)
 	if a != nil {
+		// Advance the progress counters. Every event counts as a heartbeat,
+		// so this is unconditional — unlike cost, which only some carry.
+		a.noteProgress(ev)
 		// Record the worker's cumulative spend as it flows by, so the snapshot
 		// shows current cost. Both event shapes are cumulative — see setCost —
 		// so this is last-wins, never a sum.

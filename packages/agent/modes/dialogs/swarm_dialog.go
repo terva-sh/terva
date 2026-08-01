@@ -1073,9 +1073,9 @@ func (d *SwarmDialog) Render(th tui.Theme, width int) []string {
 		return out
 	}
 
-	// Column header for readability.
-	header := fmt.Sprintf("  %-9s  %-26s  %-8s  %s", i18n.T("STATUS"), i18n.T("ID"), i18n.T("AGE"), i18n.T("ACTIVITY"))
-	out = append(out, th.FG256(th.Muted, header))
+	// Column header for readability. Built from the same width the rows get
+	// so it never advertises a column they dropped.
+	out = append(out, th.FG256(th.Muted, swarmListHeader(width-2)))
 
 	for i, r := range d.rows {
 		row := formatSwarmRow(r, width-2)
@@ -1100,6 +1100,13 @@ func (d *SwarmDialog) renderTranscript(th tui.Theme, width int) []string {
 	// still shows it — and the transcript cursor-row math (which counts fixed
 	// header rows) needs no change.
 	statusLine := i18n.T("status: %s, %s", a.Status, a.Activity)
+	// Same progress figures as the list row. Worth repeating here because
+	// this is the view a user opens when they suspect an agent is stuck, and
+	// a transcript that has not moved looks identical either way.
+	if q := quietFor(*a); q != "" {
+		statusLine += i18n.T(" (quiet %s)", q)
+	}
+	statusLine += i18n.T(" · %d turns, %d tools", a.Turns, a.ToolCalls)
 	if a.CostUSD > 0 {
 		statusLine += fmt.Sprintf(" · $%.4f", a.CostUSD)
 	}
@@ -1394,17 +1401,75 @@ func (d *SwarmDialog) renderPromptEditor(th tui.Theme, width int, out []string) 
 	return out
 }
 
+// swarmRowFixedWidth is what STATUS + ID + AGE and their gutters cost, and
+// swarmProgressWidth what TURNS + TOOLS add. Named so the header and the row
+// formatter make the same width decision from the same numbers — they are two
+// printf strings that must agree, and a literal in each is how they stop.
+const (
+	swarmRowFixedWidth  = 9 + 2 + 26 + 2 + 8 + 2
+	swarmProgressWidth  = 5 + 2 + 5 + 2
+	swarmMinActivityCol = 16
+)
+
+// swarmProgressFits reports whether the dashboard is wide enough to carry the
+// progress columns AND leave the activity column readable.
+//
+// On a narrow terminal the counters yield. Activity is the older and denser
+// signal — "tool: run_tests" says more in one glance than any number — and
+// buying two columns by clipping it away would be a downgrade, not a feature.
+func swarmProgressFits(maxWidth int) bool {
+	return maxWidth-swarmRowFixedWidth-swarmProgressWidth >= swarmMinActivityCol
+}
+
+// swarmListHeader is the column header, matched to whatever formatSwarmRow
+// will emit at this width.
+func swarmListHeader(maxWidth int) string {
+	if swarmProgressFits(maxWidth) {
+		return fmt.Sprintf("  %-9s  %-26s  %-8s  %5s  %5s  %s",
+			i18n.T("STATUS"), i18n.T("ID"), i18n.T("AGE"),
+			i18n.T("TURNS"), i18n.T("TOOLS"), i18n.T("ACTIVITY"))
+	}
+	return fmt.Sprintf("  %-9s  %-26s  %-8s  %s",
+		i18n.T("STATUS"), i18n.T("ID"), i18n.T("AGE"), i18n.T("ACTIVITY"))
+}
+
+// quietFor is how long since this agent last emitted anything — the heartbeat
+// that separates "idle between two tool calls" from "wedged twenty minutes
+// ago". Activity cannot tell those apart: it reads "idle" for both.
+//
+// Empty for a terminal agent, where nothing is expected to arrive and a
+// counter climbing forever would read as a fault, and empty before the first
+// event, where there is genuinely nothing to report yet.
+func quietFor(r swarm.AgentSnapshot) string {
+	if r.Status != swarm.StatusRunning && r.Status != swarm.StatusPending {
+		return ""
+	}
+	if r.LastEvent.IsZero() {
+		return ""
+	}
+	return formatAge(r.LastEvent)
+}
+
 // formatSwarmRow is the one-line summary shown per agent.
 //
 // Layout (fixed-width columns, then free-form activity):
 //
-//	STATUS    ID                          AGE       ACTIVITY
-//	● run     fix-login-12345             3m        editing main.go
-//	✓ done    write-tests-67890           1h        done
+//	STATUS    ID                          AGE       TURNS  TOOLS  ACTIVITY
+//	● run     fix-login-12345             3m           14     62  editing main.go · 4s
+//	✓ done    write-tests-67890           1h            9     31  done
+//
+// TURNS and TOOLS only ever climb, and the "· 4s" is time since the agent's
+// last event. Between them they answer the question a single activity word
+// cannot: two agents both showing "idle" at 31m are not in the same state if
+// one has moved 62 tool calls and spoke 4 seconds ago and the other has moved
+// none since it started.
 func formatSwarmRow(r swarm.AgentSnapshot, maxWidth int) string {
 	status := statusLabel(r.Status)
 	age := formatAge(r.Started)
 	left := fmt.Sprintf("%-9s  %-26s  %-8s  ", status, truncateLineSafe(r.ID, 26), age)
+	if swarmProgressFits(maxWidth) {
+		left += fmt.Sprintf("%5d  %5d  ", r.Turns, r.ToolCalls)
+	}
 	room := maxWidth - len([]rune(left))
 	if room < 10 {
 		room = 10
@@ -1412,6 +1477,12 @@ func formatSwarmRow(r swarm.AgentSnapshot, maxWidth int) string {
 	act := strings.ReplaceAll(r.Activity, "\n", " ")
 	if act == "" {
 		act = r.Task
+	}
+	// Quiet time rides the activity cell rather than taking a column of its
+	// own: it qualifies the activity ("idle, and has been for 6m") and is
+	// meaningless without it.
+	if q := quietFor(r); q != "" {
+		act += " · " + q
 	}
 	if len([]rune(act)) > room {
 		act = string([]rune(act)[:room-3]) + "..."

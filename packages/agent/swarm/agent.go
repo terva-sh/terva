@@ -148,6 +148,28 @@ type Agent struct {
 	finished   time.Time
 	lastErr    error
 
+	// turns / toolCalls / lastEvent are the agent's progress counters —
+	// the answer to "is it still working?", which activity alone cannot
+	// give. activity is a LEVEL: it flickers between "thinking", "tool: x"
+	// and "idle" as events land, and a dashboard that catches it at rest
+	// shows "idle" for an agent that is mid-turn. These are MONOTONIC, so
+	// a watcher reads change over time instead of a moment: a counter that
+	// climbed is proof of life, and one frozen for minutes beside a rising
+	// age is a stall the user can see without opening the transcript.
+	//
+	// turns counts per-turn turn_start (one model round-trip each), not
+	// task-level turn_end — the latter fires once per ag.Prompt and would
+	// sit at 0 or 1 for the whole of a long autonomous run, which is
+	// exactly the case this exists to make legible.
+	//
+	// lastEvent is when ANY event last arrived, taken from the event's own
+	// timestamp so a replayed log dates a detached agent honestly rather
+	// than stamping every one of its events with the moment terva booted.
+	// Guarded by mu.
+	turns     int
+	toolCalls int
+	lastEvent time.Time
+
 	// lastAssistant is the text of the most recent assistant_message
 	// the child emitted — i.e. the sub-agent's latest answer, which for
 	// a task-scoped dispatch (e.g. a review specialist) is its findings.
@@ -298,6 +320,39 @@ func (a *Agent) setActivity(msg string) {
 	a.mu.Lock()
 	a.activity = strings.TrimSpace(msg)
 	a.mu.Unlock()
+}
+
+// noteProgress advances the monotonic progress counters from one event.
+//
+// The single classifier for both routes an event can take into an agent:
+// IngestEvent for a live runner, replayEventsIntoAgent for a log read back
+// off disk. Those two are already near-twins, and a twin that misses a patch
+// is how a resumed agent ends up reporting zero work forever — so they share
+// this rather than each growing their own switch.
+func (a *Agent) noteProgress(ev Event) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// Any event at all is a heartbeat, including the ones below that count
+	// for nothing else: a child streaming stdout for ten minutes is working,
+	// and a dashboard that called that silence would be lying.
+	if !ev.Time.IsZero() && ev.Time.After(a.lastEvent) {
+		a.lastEvent = ev.Time
+	}
+	switch ev.Type {
+	case "turn_start":
+		a.turns++
+	case "tool_call":
+		a.toolCalls++
+	}
+}
+
+// Progress returns the agent's monotonic counters and the timestamp of its
+// most recent event (zero when nothing has arrived yet). Exported for the
+// same reason Activity is: a dashboard reads it without holding the swarm.
+func (a *Agent) Progress() (turns, toolCalls int, lastEvent time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.turns, a.toolCalls, a.lastEvent
 }
 
 // setLastAssistant records the child's latest assistant answer. A

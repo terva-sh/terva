@@ -281,6 +281,11 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 func replayEventsIntoAgent(a *Agent, evs []Event) {
 	terminal := false
 	for _, ev := range evs {
+		// Same counters a live runner keeps (IngestEvent), rebuilt from the
+		// log so a detached agent reports the work it actually did instead
+		// of zero. Each event carries its own timestamp, so the recovered
+		// lastEvent is when the agent really went quiet.
+		a.noteProgress(ev)
 		switch ev.Type {
 		case "assistant_message":
 			var parts []string

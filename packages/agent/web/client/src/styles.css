@@ -480,6 +480,9 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .swarm-tile { gap: 4px; }
 .swarm-backend { flex: none; font-size: var(--fs-note); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 6px; background: var(--panel); color: var(--muted); margin-right: 6px; }
 .swarm-activity { font-size: var(--fs-detail); color: var(--muted); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Progress counters sit under the activity line and are deliberately plainer:
+   activity is the headline, these are the numbers you watch move. */
+.swarm-progress { font-size: var(--fs-detail); color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .swarm-error { font-size: var(--fs-detail); color: var(--danger); overflow-wrap: anywhere; }
 /* a worker parked on a human approval: an actionable badge (click opens the
    session where the card lives) plus a whole-tile accent so it stands out. */

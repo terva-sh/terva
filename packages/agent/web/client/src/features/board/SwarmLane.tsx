@@ -20,6 +20,36 @@ import type { TaskInfo } from '../../platform/ctrlproto/types'
 // Foreign options grey out when workers are disabled — offerable, so the picker
 // stays discoverable, but gated; the daemon applies the SAME gate the model's
 // swarm_spawn tool does, and rejects a foreign spawn it wouldn't allow.
+// quietFor is how long since an agent last emitted anything, in the same
+// compact shape the TUI dashboard uses (3s / 5m / 2h / 1d) so the two
+// dashboards read the same. Empty for a terminal agent — nothing is expected
+// to arrive, and a counter climbing forever there reads as a fault.
+function quietFor(task: TaskInfo, running: boolean): string {
+  if (!running || !task.last_event) return ''
+  const ms = Date.now() - new Date(task.last_event).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  const secs = Math.floor(ms / 1000)
+  if (secs < 60) return t('%ds', secs)
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return t('%dm', mins)
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return t('%dh', hours)
+  return t('%dd', Math.floor(hours / 24))
+}
+
+// swarmProgress is the tile's "is it still working?" line. The activity string
+// above it is a level that reads "idle" between events; turns and tool calls
+// only climb, so watching them is what distinguishes an agent mid-run from one
+// that stopped. Empty against an old daemon, which sends none of these.
+function swarmProgress(task: TaskInfo, running: boolean): string {
+  const parts: string[] = []
+  if (task.turns) parts.push(t('%d turns', task.turns))
+  if (task.tool_calls) parts.push(t('%d tools', task.tool_calls))
+  const quiet = quietFor(task, running)
+  if (quiet) parts.push(t('quiet %s', quiet))
+  return parts.join(' · ')
+}
+
 export function SwarmLane(props: {
   tasks: TaskInfo[]
   // Whether the tasks surface has ANSWERED. Same split as the other two lanes:
@@ -148,6 +178,9 @@ export function SwarmLane(props: {
                     : ''}
                 </div>
                 {task.activity && <div class="swarm-activity">{task.activity}</div>}
+                {swarmProgress(task, running) && (
+                  <div class="swarm-progress">{swarmProgress(task, running)}</div>
+                )}
                 {task.error && <div class="swarm-error">{task.error}</div>}
                 <div class="board-tile-actions">
                   {running && (

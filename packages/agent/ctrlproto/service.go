@@ -1115,9 +1115,18 @@ type TaskInfo struct {
 	Task     string `json:"task"`
 	Status   string `json:"status"` // pending|running|done|failed|killed|detached
 	Activity string `json:"activity,omitempty"`
-	Model    string `json:"model,omitempty"`
-	Provider string `json:"provider,omitempty"`
-	Persona  string `json:"persona,omitempty"`
+	// Turns, ToolCalls and LastEvent are the progress counters (see
+	// swarm.AgentSnapshot). Activity is a level and reads "idle" between
+	// events; these climb, so a client renders progress instead of a guess.
+	// LastEvent is RFC 3339, absent before the agent's first event.
+	// omitempty on the counts: an old daemon sends nothing and a client shows
+	// nothing, rather than a confident 0 for work it cannot see.
+	Turns     int    `json:"turns,omitempty"`
+	ToolCalls int    `json:"tool_calls,omitempty"`
+	LastEvent string `json:"last_event,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	Persona   string `json:"persona,omitempty"`
 	// Backend names the worker backend driving this agent ("claude", "terva",
 	// …), or "" for a native terva child (see swarm.AgentSnapshot.Backend). On
 	// the wire so a dashboard can say WHAT is running: a mixed roster of native
