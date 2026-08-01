@@ -120,6 +120,34 @@ func TestCarrierUsageFetchErrorKeepsMirror(t *testing.T) {
 	}
 }
 
+// waitUsageRefresh blocks until the daemon is asked for a REFRESHED snapshot,
+// draining the passive (refresh=false) reads a fixture makes along the way.
+//
+// It waits on the effect rather than polling a wall-clock budget. The previous
+// shape — sleep 5ms, re-read a slice, give up at 2s — was a race between a
+// background goroutine getting scheduled and a deadline being spent mostly
+// asleep, and it lost on a loaded CI runner under -race while passing ~90 local
+// runs under deliberate contention. The timeout below is a backstop that fires
+// only on a genuine hang, not a budget the work has to beat: a passing run
+// blocks for microseconds and never reaches it.
+func waitUsageRefresh(t *testing.T, fc *fakeCarrier) {
+	t.Helper()
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case refresh := <-fc.usageRefreshes:
+			if refresh {
+				return
+			}
+		case <-timeout:
+			fc.mu.Lock()
+			calls := append([]bool(nil), fc.usageCalls...)
+			fc.mu.Unlock()
+			t.Fatalf("/usage never asked the daemon to refresh; UsageSnapshot calls: %v", calls)
+		}
+	}
+}
+
 // Opening /usage asks the daemon to refresh; the daemon falls back to the
 // cached snapshot for providers with no usage endpoint, so refresh=true is
 // always safe to send.
@@ -129,17 +157,52 @@ func TestOpenUsageDialogRequestsRefresh(t *testing.T) {
 
 	i.openUsageDialog()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		fc.mu.Lock()
-		calls := append([]bool(nil), fc.usageCalls...)
-		fc.mu.Unlock()
-		for _, refresh := range calls {
-			if refresh {
-				return // saw the refresh=true call
-			}
+	waitUsageRefresh(t, fc)
+}
+
+// The dialog must be OPEN before the refresh is kicked off, because the
+// refresh's completion hop is gated on Active(). Opened second, a fast answer
+// — which is what the daemon gives for providers it serves from cache — lands
+// while Active() is still false, and the fresh snapshot is silently dropped:
+// the modal renders the pre-refresh picture, and can sit on "fetching…" with
+// the data already in the mirror.
+//
+// Asserting on ordering rather than on a rendered string keeps this pinned to
+// the cause. The race the same ordering produced is covered by -race on the
+// test above; this one covers what the user would have seen.
+func TestUsageDialogIsOpenBeforeTheRefreshIsRequested(t *testing.T) {
+	i, fc := newUsageTestInteractive()
+	i.fetchCarrierUsage(false)
+	drainUsageRefreshes(fc)
+
+	activeAtRequest := make(chan bool, 4)
+	fc.onUsageSnapshot = func(refresh bool) {
+		if refresh {
+			activeAtRequest <- i.usageDialog.Active()
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("/usage never asked the daemon to refresh")
+
+	i.openUsageDialog()
+
+	select {
+	case active := <-activeAtRequest:
+		if !active {
+			t.Fatal("the refresh was requested before the dialog opened; its result " +
+				"lands on an inactive dialog and is discarded")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("/usage never asked the daemon to refresh")
+	}
+}
+
+// drainUsageRefreshes empties the signal channel so a test observes only the
+// calls it provoked, not the fixture's seeding read.
+func drainUsageRefreshes(fc *fakeCarrier) {
+	for {
+		select {
+		case <-fc.usageRefreshes:
+		default:
+			return
+		}
+	}
 }

@@ -514,8 +514,15 @@ func (i *Interactive) redraw() {
 	// colour) was pre-rendered into the snapshot — the spinner's
 	// state is shared with turn goroutines.
 	ctxMax := 0
+	// The status bar shows the operator's models.json name when they set one
+	// — that override exists because a local model's id can be longer than
+	// the whole bar. A model the local catalog can't resolve (an attach
+	// client skewed from the daemon) keeps the raw id, which is what the bar
+	// showed before names existed.
+	modelLabel := i.cfg.Model
 	if m, err := provider.FindModel(i.cfg.Provider, i.cfg.Model); err == nil {
 		ctxMax = m.ContextWindow
+		modelLabel = m.Label()
 	}
 	// The daemon's answer beats the local catalog: an attach client whose
 	// build skews from the daemon's would otherwise gauge against the wrong
@@ -526,7 +533,7 @@ func (i *Interactive) redraw() {
 	statusLines := tui.StatusBar(tui.StatusBarParams{
 		Theme:            i.cfg.Theme,
 		Provider:         i.cfg.Provider,
-		Model:            i.cfg.Model,
+		Model:            modelLabel,
 		Reasoning:        i.cfg.Reasoning,
 		Busy:             ts.busy,
 		BusyPrefix:       snap.busyPrefix,
@@ -545,6 +552,7 @@ func (i *Interactive) redraw() {
 		Git:              snap.git,
 		SwarmAgents:      i.swarmAgentCount(),
 		TaskGlance:       i.taskBoardGlance(),
+		MemoryGlance:     i.memoryGlance(),
 		WorktreeGlance:   i.worktreeGlance(),
 		SessionName:      i.sessionShortName(),
 		Replay:           i.replayScrubber(),
@@ -606,6 +614,16 @@ func (i *Interactive) redraw() {
 	// reach handleKey — it routes them to swarmDialog.HandleKey
 	// before the editor ever sees them — so the only effect of this
 	// branch is visual.
+	// edStart is where the editor actually begins inside the band, captured
+	// while the band is BUILT. The caret used to be placed by a second
+	// expression that re-added the same pieces from the other side of the
+	// function, and the two drifted the moment a section was added here and
+	// not there: the parked-draft rows landed in the band but not in the
+	// arithmetic, so the caret drew two rows high — on the status bar — while
+	// the text it moved through stayed down in the editor. One layout, counted
+	// once. -1 while the swarm dashboard owns the bottom and there is no main
+	// editor to point at.
+	edStart := -1
 	if !i.swarmDialog.Active() {
 		bottom = append(bottom, suggest...)
 		bottom = append(bottom, queue...)
@@ -613,6 +631,7 @@ func (i *Interactive) redraw() {
 		bottom = append(bottom, "")
 		bottom = append(bottom, statusLines...)
 		bottom = append(bottom, "")
+		edStart = len(bottom)
 		bottom = append(bottom, edLines...)
 	}
 
@@ -766,12 +785,13 @@ func (i *Interactive) redraw() {
 	if len(dialog) > 0 {
 		dialogLead = 1
 	}
-	// +2 accounts for the blank row above statusLines (so the
-	// status block has air above it) and the blank row between
-	// statusLines and edLines (input breathing room). Without
-	// these the rendered cursor would land on a blank instead of
-	// inside the editor row.
-	cursorRow := dialogLead + len(dialog) + len(suggest) + len(queue) + 1 + len(statusLines) + 1 + curR
+	// The editor's own offset within the band (edStart) plus the caret's row
+	// within the editor. edStart already carries dialogLead and the dialog
+	// block — the band starts with them — so nothing is re-added here.
+	cursorRow := -1
+	if edStart >= 0 {
+		cursorRow = edStart + curR
+	}
 	cursorCol := curC
 	if activeOv != nil {
 		r, c := -1, 0

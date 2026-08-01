@@ -85,6 +85,15 @@ type questionDraft struct {
 // cursor column.
 const answerIndent = "  "
 
+// optionIndent is the left pad an option row renders under.
+// optionContIndent is the deeper pad a wrapped option's continuation
+// rows take, so a fold reads as more of the same option rather than as
+// the next one.
+const (
+	optionIndent     = "  "
+	optionContIndent = "    "
+)
+
 func NewQuestionDialog() *QuestionDialog { return &QuestionDialog{} }
 
 // rows returns the selectable rows for question q: one per option, plus
@@ -445,31 +454,33 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 	// list, so both share one budget: build the list, let the question
 	// yield rows to it, then window the list around whatever the user is
 	// pointing at (the caret while typing, the selection while choosing).
+	//
+	// focus/focusEnd is that pointed-at row span: one row for the caret,
+	// but every row of the highlighted option once options wrap.
 	var (
 		hint     string
 		listRows []string
+		owner    []int // choice mode: the option each list row belongs to
 		focus    int
+		focusEnd int
 	)
 	if dr.typing {
 		hint = d.typingHint(len(req.Questions))
 		listRows, focus, caretCol = answerRowsOf(dr.input, width)
 		caretCol += len(answerIndent)
+		focusEnd = focus + 1
 	} else {
 		hint = d.chooseHint(len(req.Questions))
-		focus = dr.cursor
-		for _, row := range questionRows(q) {
-			plain := "  " + row
-			if width > 5 {
-				// Rune-safe: the byte slice this replaced cut multibyte
-				// text mid-rune, and the built-in "Type my own answer…"
-				// row ends in one.
-				plain = truncateLineSafe(plain, width-2)
-			}
-			listRows = append(listRows, plain)
-		}
+		listRows, owner = optionRowsOf(q, width)
+		focus, focusEnd = ownerSpan(owner, dr.cursor)
 	}
 	qRows, budget := d.budgetLocked(qRows, len(listRows), len(strip))
-	listRows, focus = windowRows(listRows, focus, budget)
+	start, end := windowSpan(len(listRows), focus, focusEnd, budget)
+	listRows = listRows[start:end]
+	if owner != nil {
+		owner = owner[start:end]
+	}
+	focus -= start
 
 	lines = append(lines, strip...)
 	for _, wl := range qRows {
@@ -483,7 +494,9 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 			lines = append(lines, answerIndent+l)
 			continue
 		}
-		if i == focus {
+		// The highlight follows the OPTION, not one row: a wrapped
+		// option is selected across every row it folded onto.
+		if i < len(owner) && owner[i] == dr.cursor {
 			lines = append(lines, th.PadHighlight(l, width))
 		} else {
 			lines = append(lines, th.FG256(th.Muted, l))
@@ -560,8 +573,14 @@ func (d *QuestionDialog) submitBodyLocked(th tui.Theme, req *QuestionRequest, wi
 			}
 			lines = append(lines, pad+th.FG256(th.Muted, wl))
 		}
-		for _, wl := range wrapPlain(label, width-8) {
-			lines = append(lines, "     → "+th.FG256(colour, wl))
+		// The arrow marks the answer once; a wrapped one continues under
+		// it rather than sprouting a second arrow mid-sentence.
+		for n, wl := range wrapPlain(label, width-8) {
+			pad := "     → "
+			if n > 0 {
+				pad = "       "
+			}
+			lines = append(lines, pad+th.FG256(colour, wl))
 		}
 	}
 	// Budget the review against the same MaxRows the question tabs use:
@@ -632,21 +651,85 @@ func truncatedRows(rows []string, n int) []string {
 	return out
 }
 
-// windowRows clips rows to at most n, keeping the row the caret is on
-// visible and biasing toward the tail — where a caret that is simply
-// typing forward lives. Returns the window and the caret's row inside it.
-func windowRows(rows []string, caret, n int) ([]string, int) {
-	if n <= 0 || len(rows) <= n {
-		return rows, caret
+// windowSpan clips a list of total rows to at most n, keeping the rows
+// in [from,to) visible — the caret's row while typing, every row of the
+// highlighted option while choosing — and biasing toward the tail,
+// where a caret typing forward and a selection walking down both live.
+// A span taller than the window shows its head. Returns the window's
+// bounds, so a caller windowing a parallel slice can cut it alike.
+func windowSpan(total, from, to, n int) (start, end int) {
+	if n <= 0 || total <= n {
+		return 0, total
 	}
-	start := caret - n + 1
+	if to > n {
+		start = to - n
+	}
+	if start > from {
+		start = from
+	}
+	if start > total-n {
+		start = total - n
+	}
 	if start < 0 {
 		start = 0
 	}
-	if start > len(rows)-n {
-		start = len(rows) - n
+	return start, start + n
+}
+
+// optionWidth is the column budget one option's text wraps to: the
+// dialog width less the frame margin and the deepest indent an option
+// row carries, so a continuation row still fits inside the frame.
+func optionWidth(width int) int {
+	w := width - 2 - len(optionContIndent)
+	if w < 8 {
+		w = 8
 	}
-	return rows[start : start+n], caret - start
+	return w
+}
+
+// optionRowsOf renders q's selectable rows, folding any option wider
+// than the dialog onto continuation rows, and reports which option each
+// rendered row belongs to.
+//
+// Options used to be truncated at the right edge, which hid the tail of
+// exactly the long answers a user most needs to read before choosing —
+// and unlike a truncated question, there was no way to see the rest.
+// The question text and the typed answer already wrap; the option list
+// wraps the same way, and the highlight covers every row of the
+// selected option so a fold still reads as one choice.
+func optionRowsOf(q core.UserQuestion, width int) (rows []string, owner []int) {
+	limit := optionWidth(width)
+	for i, row := range questionRows(q) {
+		for n, wl := range wrapPlain(row, limit) {
+			pad := optionIndent
+			if n > 0 {
+				pad = optionContIndent
+			}
+			rows = append(rows, pad+wl)
+			owner = append(owner, i)
+		}
+	}
+	return rows, owner
+}
+
+// ownerSpan reports the row range [from,to) that option occupies in the
+// rows optionRowsOf returned. An option with no rows (an out-of-range
+// cursor) windows from the top rather than reporting a bogus span.
+func ownerSpan(owner []int, option int) (from, to int) {
+	from = -1
+	for i, o := range owner {
+		if o != option {
+			continue
+		}
+		if from < 0 {
+			from = i
+		}
+		to = i + 1
+	}
+	if from < 0 {
+		return 0, 0
+	}
+	return from, to
 }
 
 // answerWidth is the column budget the answer editor wraps to: the
@@ -669,30 +752,22 @@ func answerRowsOf(ed *tui.Editor, width int) (rows []string, caretRow, caretCol 
 	return ed.Render(answerWidth(width))
 }
 
-// wrapPlain hard-wraps s to width columns on spaces (cheap; the question
-// text is plain at this point so byte length tracks columns closely
-// enough for the dialog).
+// wrapPlain folds s to width COLUMNS, one paragraph per newline, using
+// the same visible-width wrap the rest of the TUI folds with.
+//
+// It used to count bytes and break only on spaces, which is wrong in
+// the two ways that matter to text a model wrote: multibyte runes
+// measured wide and wrapped early, and a single unbroken token — a
+// path, a URL, an id — was emitted whole and ran off the right edge no
+// matter how narrow the frame. tui.WrapANSILine measures columns and
+// splits an over-long token, so every row it returns fits.
 func wrapPlain(s string, width int) []string {
 	if width <= 0 {
 		return []string{s}
 	}
 	var out []string
 	for _, para := range strings.Split(s, "\n") {
-		line := ""
-		for _, word := range strings.Fields(para) {
-			if line == "" {
-				line = word
-			} else if len(line)+1+len(word) <= width {
-				line += " " + word
-			} else {
-				out = append(out, line)
-				line = word
-			}
-		}
-		out = append(out, line)
-	}
-	if len(out) == 0 {
-		return []string{""}
+		out = append(out, tui.WrapANSILine(para, width)...)
 	}
 	return out
 }

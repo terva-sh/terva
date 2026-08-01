@@ -95,13 +95,30 @@ func (i *Interactive) usageRefreshable() bool {
 // opens: when the provider reports no usage, the dialog renders a "doesn't
 // report usage limits" line rather than failing. It then refreshes in the
 // background and updates the open dialog when the result lands.
+//
+// OPEN FIRST, then refresh. The order is load-bearing twice over, and used to
+// be the other way round:
+//
+//   - fetchCarrierUsage's completion hop is gated on usageDialog.Active(). A
+//     refresh that landed before Open ran therefore threw its result away, and
+//     Open then rendered the snapshot captured above — from BEFORE the refresh
+//     — with the loading flag computed from that same stale read. The daemon
+//     answers instantly from cache for providers with no usage endpoint (the
+//     comment on fetchCarrierUsage says so), which is exactly when that race
+//     is winnable, and the dialog could sit on "fetching…" with the data
+//     already in the mirror.
+//   - UsageDialog carries no lock; runOnMain is what keeps it single-goroutine,
+//     and runOnMain falls back to running inline when its action buffer is
+//     saturated. Spawning the refresh before Open put that inline path in a
+//     genuine data race with Open's writes — caught by -race, 3 hits in 500
+//     runs. Creating the goroutine after Open orders the two.
 func (i *Interactive) openUsageDialog() {
 	snap, ok := i.currentUsage()
 	// Only show "fetching…" when there is nothing cached to render yet AND the
 	// provider is one that actually goes out to fetch.
 	loading := !ok && i.usageRefreshable()
-	i.refreshUsageAsync(true)
 	i.usageDialog.Open(i.cfg.Provider, snap, ok, loading)
+	i.refreshUsageAsync(true)
 	i.invalidate()
 }
 

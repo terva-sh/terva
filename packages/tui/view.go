@@ -326,6 +326,53 @@ func classifyToolRun(m provider.Message) (member bool, res []provider.ToolResult
 	return false, nil
 }
 
+// packToolBlocks splits one tool run into the blocks a reduced display draws
+// with a blank row between them. run is the run's messages; base is the index
+// of run[0] in the full transcript, so the returned indices address that.
+//
+// The split is the model's OWN grouping, and it is the one thing about a run's
+// shape worth showing. A message carrying several results is a batch the model
+// asked for in one breath — it judged those calls independent, which is a fact
+// about the work. A sequence of one-call messages is the opposite: each call
+// waited for the last, because each informed the next. Those two read
+// differently and should look different.
+//
+// What must NOT survive is the accident: six independent one-call messages are
+// six paragraphs only because each was its own message, and nothing about the
+// work changes if the model had batched them. So consecutive singles coalesce
+// into one block, and only a real batch boundary earns a blank row.
+//
+// The arity is trustworthy because executeTools returns exactly one tool
+// message per assistant message, carrying every result. The count on the tool
+// message IS the count of tool_use blocks the model emitted — not an artifact
+// of how results were packed on the way back.
+func packToolBlocks(run []provider.Message, base int) [][]int {
+	var blocks [][]int
+	var singles []int
+	flush := func() {
+		if len(singles) > 0 {
+			blocks = append(blocks, singles)
+			singles = nil
+		}
+	}
+	for off, m := range run {
+		idx := base + off
+		_, res := classifyToolRun(m)
+		if len(res) > 1 {
+			// A batch stands alone. Whatever singles preceded it close first,
+			// so the blank lands between them and not inside either.
+			flush()
+			blocks = append(blocks, []int{idx})
+			continue
+		}
+		// One result, or none at all — the assistant's tool-calls-only half,
+		// which renders nothing and must not split the block it sits in.
+		singles = append(singles, idx)
+	}
+	flush()
+	return blocks
+}
+
 // groupedToolLine renders the ToolDisplayGrouped summary for one run of
 // tool calls: a muted disclosure line carrying the call count, the shared
 // name summary (summarizeToolNames — identical to the web UI, pinned by
@@ -588,7 +635,17 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 	// single summary line. ExpandAll (ctrl+o) makes effectiveToolDisplay
 	// report Full, so grouping is off and the per-message boxes render —
 	// the same escape hatch minimal/hidden use.
-	grouped := v.effectiveToolDisplay() == ToolDisplayGrouped
+	display := v.effectiveToolDisplay()
+	grouped := display == ToolDisplayGrouped
+	// Reduced displays render a call as ONE muted row, which makes a run of
+	// them a list — and a list is not separated by blank lines. The separator
+	// below is per MESSAGE, so without this the spacing tracks how the model
+	// happened to BATCH its calls: six results in one tool message render
+	// flush, the same six in six messages render as six paragraphs. Nothing
+	// about the transcript's meaning differs between those, so nothing about
+	// its shape should. Full boxes are the opposite case and keep the blank —
+	// two boxes flush against each other read as one malformed box.
+	packed := display == ToolDisplayMinimal || display == ToolDisplayHidden
 	appendMsg := func(idx int) {
 		anchors = append(anchors, MessageAnchor{MessageIdx: idx, Row: len(out)})
 		out = append(out, rendered[idx]...)
@@ -636,6 +693,49 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 				if len(names) > 0 {
 					out = append(out, v.groupedToolLine(names, failed, width))
 					out = append(out, "")
+				}
+				idx = end
+				continue
+			}
+		}
+		if packed {
+			if member, _ := classifyToolRun(msgs[idx]); member {
+				// Same run boundaries grouped mode uses — classifyToolRun
+				// already knows that prose breaks a run, that a tool-calls-only
+				// assistant message renders nothing and stays inside it, and
+				// that a compaction or /clear divider ends it. The only
+				// difference here is what gets emitted: every member's own
+				// rows, rather than one summary line standing in for them.
+				end := idx
+				for end < len(msgs) {
+					if mem, _ := classifyToolRun(msgs[end]); !mem {
+						break
+					}
+					end++
+				}
+				// Inside the run, split on the model's own grouping: a batch it
+				// asked for in one message is one block, consecutive one-call
+				// messages coalesce into another, and a blank row separates them.
+				for _, block := range packToolBlocks(msgs[idx:end], idx) {
+					wrote := false
+					for _, j := range block {
+						// Anchor to where this message's rows land. One that
+						// renders nothing (the assistant's tool-calls-only half,
+						// or a hidden success) anchors to the next row that does,
+						// so /jump still reaches a visible line.
+						anchors = append(anchors, MessageAnchor{MessageIdx: j, Row: len(out)})
+						if len(rendered[j]) == 0 {
+							continue
+						}
+						out = append(out, rendered[j]...)
+						wrote = true
+					}
+					// A block that drew nothing gets no separator — hidden mode
+					// swallows a run of successful calls entirely, and a blank
+					// would be the only trace left of it.
+					if wrote {
+						out = append(out, "")
+					}
 				}
 				idx = end
 				continue

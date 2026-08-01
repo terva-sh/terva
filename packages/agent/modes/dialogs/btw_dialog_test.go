@@ -105,14 +105,53 @@ func waitUntil(t *testing.T, what string, pred func() bool, diag ...func() strin
 	t.Fatalf("timed out waiting for %s%s", what, detail)
 }
 
+// Reply sentinels for the tests that wait on a reply APPEARING IN THE PANE.
+//
+// They have to be strings the dialog's own chrome can never contain, and that is
+// not a stylistic preference — it is the root cause of a flake that was open for
+// two weeks and cost a release go-live. The old sentinel was "the answer"; the
+// spinner picks a phrase at random from tui.Theme.SpinnerMessages, one of which
+// is "googling the answer (not really)". Whenever that phrase came up, the wait
+// predicate matched the SPINNER, returned before the ask goroutine had run, and
+// the next assertion reported the seed as never asked — with a rendered pane
+// showing a spinner and no reply, which is exactly what the failure looked like.
+//
+// It is a ~1-in-22 coin flip that then needs to win a scheduling race, which is
+// why 300 local iterations under -race came back clean and it only ever surfaced
+// on loaded CI.
+//
+// TestReplySentinelsCannotCollideWithChrome keeps this true as phrases are added.
+const (
+	sentinelReply      = "ZZREPLYZZ"
+	sentinelFirstReply = "ZZFIRSTREPLYZZ"
+)
+
+// The sentinels above are only load-bearing while nothing the dialog renders on
+// its own contains them. A new spinner phrase is the way that quietly stops
+// being true, so this enrols from the real list rather than a copy.
+func TestReplySentinelsCannotCollideWithChrome(t *testing.T) {
+	phrases := tui.Dark.SpinnerMessages
+	if len(phrases) == 0 {
+		t.Fatal("no spinner phrases; this guard would pass vacuously")
+	}
+	for _, s := range []string{sentinelReply, sentinelFirstReply} {
+		for _, p := range phrases {
+			if strings.Contains(p, s) {
+				t.Errorf("spinner phrase %q contains the reply sentinel %q — a wait predicate "+
+					"looking for that sentinel will match the spinner and return before any reply exists", p, s)
+			}
+		}
+	}
+}
+
 // A seeded open asks immediately, and the reply lands on the turn.
 func TestBtwDialogSeededAskCompletes(t *testing.T) {
-	a := &scriptedAsker{reply: "the answer"}
+	a := &scriptedAsker{reply: sentinelReply}
 	d := NewBtwDialog()
 	d.Open(tui.Dark, a, testsupport.TempDir(t), "why is the sky blue", func() {})
 
 	waitUntil(t, "the reply to render", func() bool {
-		return strings.Contains(strings.Join(d.Render(tui.Dark, 80), "\n"), "the answer")
+		return strings.Contains(strings.Join(d.Render(tui.Dark, 80), "\n"), sentinelReply)
 	}, func() string { return askerState(a, d, 80) })
 
 	_, questions, _ := a.snapshot()
@@ -124,11 +163,11 @@ func TestBtwDialogSeededAskCompletes(t *testing.T) {
 // The dialog replays its OWN prior exchanges on the second ask; the frozen main
 // transcript is the asker's, never the dialog's.
 func TestBtwDialogReplaysItsOwnPriorTurns(t *testing.T) {
-	a := &scriptedAsker{reply: "first reply"}
+	a := &scriptedAsker{reply: sentinelFirstReply}
 	d := NewBtwDialog()
 	d.Open(tui.Dark, a, testsupport.TempDir(t), "first question", func() {})
 	waitUntil(t, "the first reply", func() bool {
-		return strings.Contains(strings.Join(d.Render(tui.Dark, 80), "\n"), "first reply")
+		return strings.Contains(strings.Join(d.Render(tui.Dark, 80), "\n"), sentinelFirstReply)
 	})
 
 	// Second question, typed.
@@ -151,7 +190,7 @@ func TestBtwDialogReplaysItsOwnPriorTurns(t *testing.T) {
 	if len(priors[0]) != 0 {
 		t.Fatalf("first ask carried prior turns: %v", priors[0])
 	}
-	if len(priors[1]) != 1 || priors[1][0].User != "first question" || priors[1][0].Assistant != "first reply" {
+	if len(priors[1]) != 1 || priors[1][0].User != "first question" || priors[1][0].Assistant != sentinelFirstReply {
 		t.Fatalf("second ask's prior = %v, want the first exchange", priors[1])
 	}
 }
@@ -163,11 +202,11 @@ func TestBtwDialogReplaysItsOwnPriorTurns(t *testing.T) {
 // Before the fix it did, dropping the cursor one row below the editor.
 func TestBtwDialogCursorLandsOnEditorAfterTurn(t *testing.T) {
 	const width = 80
-	a := &scriptedAsker{reply: "a reply"}
+	a := &scriptedAsker{reply: sentinelReply}
 	d := NewBtwDialog()
 	d.Open(tui.Dark, a, testsupport.TempDir(t), "a question", func() {})
 	waitUntil(t, "the reply", func() bool {
-		return strings.Contains(strings.Join(d.Render(tui.Dark, width), "\n"), "a reply")
+		return strings.Contains(strings.Join(d.Render(tui.Dark, width), "\n"), sentinelReply)
 	})
 
 	// Type a marker into the editor without submitting it.

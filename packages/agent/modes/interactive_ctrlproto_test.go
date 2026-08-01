@@ -102,6 +102,17 @@ type fakeCarrier struct {
 	usage      ctrlproto.UsageInfo
 	usageCalls []bool
 	usageErr   error
+	// usageRefreshes publishes each call's refresh flag as it happens, so a
+	// test can WAIT for a call a background goroutine makes instead of polling
+	// usageCalls against a wall-clock budget. Buffered and sent to
+	// non-blockingly: most callers reach UsageSnapshot synchronously on the test
+	// goroutine, and a blocking send with nobody draining would deadlock them.
+	usageRefreshes chan bool
+	// onUsageSnapshot, when set, runs inside UsageSnapshot with no lock held —
+	// a seam for observing what the CALLER's state was at the moment the daemon
+	// was asked, which is the only place an ordering bug between opening the
+	// dialog and requesting the refresh is visible.
+	onUsageSnapshot func(refresh bool)
 }
 
 type approvedCall struct {
@@ -127,6 +138,9 @@ func newFakeCarrier() *fakeCarrier {
 		subs:     make(chan string, 4),
 		switches: make(chan [2]string, 4),
 		surfActs: make(chan surfAct, 8),
+		// Deep enough that the per-step and turn-over refreshes a busy fixture
+		// makes cannot fill it before a waiter reads.
+		usageRefreshes: make(chan bool, 64),
 	}
 }
 
@@ -158,8 +172,22 @@ func (f *fakeCarrier) SetQueue(ctx context.Context, sess string, texts []string)
 // compile.
 func (f *fakeCarrier) UsageSnapshot(ctx context.Context, sess string, refresh bool) (ctrlproto.UsageInfo, error) {
 	f.mu.Lock()
+	hook := f.onUsageSnapshot
+	f.mu.Unlock()
+	if hook != nil {
+		hook(refresh) // no lock held: the hook reads caller state
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.usageCalls = append(f.usageCalls, refresh)
+	// Published BEFORE the error branch and before fetchCarrierUsage's
+	// runOnMain hop, so "the daemon was asked" is observable even when the
+	// answer fails or the UI queue is never pumped. Non-blocking: a full buffer
+	// means nobody is waiting.
+	select {
+	case f.usageRefreshes <- refresh:
+	default:
+	}
 	if f.usageErr != nil {
 		return ctrlproto.UsageInfo{}, f.usageErr
 	}
