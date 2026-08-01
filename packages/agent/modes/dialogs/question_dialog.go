@@ -46,6 +46,16 @@ type QuestionDialog struct {
 	// session/tasks browsers do. 0 means unbounded. Set by the host
 	// ahead of each render, on the main loop, like theirs.
 	MaxRows int
+
+	// confirmSkip is armed by an esc that would decline the ask, and
+	// disarmed by any other key. Skipping is the one action here that
+	// cannot be undone — the agent has already been told to proceed
+	// without you by the time you notice — and esc is also the key
+	// people press to back out of a text field, so a single press was
+	// answering the whole ask by reflex. The second press is the
+	// answer; the first one only says what it would do. Mirrors the
+	// memory dialog's press-c-again clear.
+	confirmSkip bool
 }
 
 // questionDraft is the user's working answer to one question.
@@ -125,6 +135,7 @@ func (d *QuestionDialog) Enqueue(req *QuestionRequest) {
 // options goes straight to free-text entry. Caller holds mu.
 func (d *QuestionDialog) reset(req *QuestionRequest) {
 	d.tab = 0
+	d.confirmSkip = false
 	d.drafts = make([]questionDraft, len(req.Questions))
 	for i, q := range req.Questions {
 		d.drafts[i] = questionDraft{input: tui.NewEditor(""), typing: len(q.Options) == 0}
@@ -149,6 +160,7 @@ func (d *QuestionDialog) CancelAll() {
 	d.pending = nil
 	d.drafts = nil
 	d.tab = 0
+	d.confirmSkip = false
 	d.mu.Unlock()
 	for _, req := range pending {
 		select {
@@ -173,6 +185,7 @@ func (d *QuestionDialog) advance() {
 	d.pending = d.pending[1:]
 	d.drafts = nil
 	d.tab = 0
+	d.confirmSkip = false
 	if len(d.pending) > 0 {
 		d.reset(d.pending[0])
 	}
@@ -192,6 +205,7 @@ func (d *QuestionDialog) Remove(req *QuestionRequest) {
 		if idx == 0 {
 			d.drafts = nil
 			d.tab = 0
+			d.confirmSkip = false
 			if len(d.pending) > 0 {
 				d.reset(d.pending[0])
 			}
@@ -213,10 +227,41 @@ func (d *QuestionDialog) HandleKey(k tui.Key) bool {
 		d.reset(req) // defensive: a request that never got armed
 	}
 
+	// Any key that is not another esc disarms a pending skip. A
+	// confirmation that survives an arrow key confirms nothing.
+	armed := d.confirmSkip
+	if k.Kind != tui.KeyEsc {
+		d.confirmSkip = false
+	}
+
 	// Esc declines the WHOLE ask, from any tab, so the agent always
 	// unblocks. There is deliberately no per-question skip: a free-text
 	// answer left empty is the way to decline just one.
 	if k.Kind == tui.KeyEsc || k.Kind == tui.KeyCtrlC {
+		// First, though: esc inside free-text entry is far more likely to
+		// mean "get me out of this field" than "answer nothing at all".
+		// When the question has options, that is where it goes — back to
+		// the list it was reached from, cursor still on the custom row,
+		// draft kept so returning resumes it. Without this the custom row
+		// was a trapdoor: nothing on screen offered a way back, and the
+		// key everyone tries first ended the ask.
+		if k.Kind == tui.KeyEsc && !d.onSubmitTabLocked(req) {
+			q := req.Questions[d.tab]
+			if dr := &d.drafts[d.tab]; dr.typing && len(q.Options) > 0 {
+				dr.typing = false
+				d.confirmSkip = false
+				d.mu.Unlock()
+				return false
+			}
+		}
+		// A bare esc arms; the second one skips. Ctrl+c is left unguarded
+		// — it is the deliberate abort, and a dialog the agent is blocked
+		// on must keep one key that always ends it.
+		if k.Kind == tui.KeyEsc && !armed {
+			d.confirmSkip = true
+			d.mu.Unlock()
+			return false
+		}
 		n := len(req.Questions)
 		d.advance()
 		d.mu.Unlock()
@@ -465,7 +510,7 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 		focusEnd int
 	)
 	if dr.typing {
-		hint = d.typingHint(len(req.Questions))
+		hint = d.typingHint(len(req.Questions), len(q.Options) > 0)
 		listRows, focus, caretCol = answerRowsOf(dr.input, width)
 		caretCol += len(answerIndent)
 		focusEnd = focus + 1
@@ -474,7 +519,22 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 		listRows, owner = optionRowsOf(q, width)
 		focus, focusEnd = ownerSpan(owner, dr.cursor)
 	}
-	qRows, budget := d.budgetLocked(qRows, len(listRows), len(strip))
+	// The hint was the last row here that nothing bounded, which held only
+	// while the hints stayed shorter than the narrowest terminal anyone
+	// used. It is clipped now, like the memory pane's key hints: a
+	// shortened hint reads as a narrow window, a row past the frame reads
+	// as a rendering bug.
+	//
+	// The skip warning takes its place but WRAPS instead, because it is
+	// not chrome — it is the sentence someone reads before doing the one
+	// irreversible thing in this dialog, and a clip would take the
+	// consequence off the end of it.
+	hintRows, hintColour := []string{clipLine(hint, width)}, th.Muted
+	if d.confirmSkip {
+		hintRows, hintColour = wrapPlain(d.skipWarning(len(req.Questions)), width), th.Warning
+	}
+
+	qRows, budget := d.budgetLocked(qRows, len(listRows), len(strip), len(hintRows))
 	start, end := windowSpan(len(listRows), focus, focusEnd, budget)
 	listRows = listRows[start:end]
 	if owner != nil {
@@ -487,7 +547,12 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 		lines = append(lines, "  "+th.FG256(th.Tool, wl))
 	}
 	lines = append(lines, "")
-	lines = append(lines, th.FG256(th.Muted, hint))
+	// The warning takes the hint's place rather than a row of its own: it
+	// appears on a keypress, and a body that grows under the user shifts
+	// everything below it mid-read.
+	for _, hr := range hintRows {
+		lines = append(lines, th.FG256(hintColour, hr))
+	}
 	listTop := len(lines)
 	for i, l := range listRows {
 		if dr.typing {
@@ -508,7 +573,17 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 	return lines, listTop + focus, caretCol
 }
 
-func (d *QuestionDialog) typingHint(n int) string {
+// typingHint labels the answer field. What esc does depends on where the
+// field was reached from, so the hint has to say which: from the custom
+// row it goes back to the options, and a question with no options has
+// nowhere to go back to.
+func (d *QuestionDialog) typingHint(n int, hasOptions bool) string {
+	if hasOptions {
+		if n > 1 {
+			return i18n.T("type your answer · enter for next · tab moves · esc returns to the options:")
+		}
+		return i18n.T("type your answer, enter to submit, esc returns to the options:")
+	}
 	if n > 1 {
 		return i18n.T("type your answer · enter for next · tab moves · esc skips all:")
 	}
@@ -520,6 +595,17 @@ func (d *QuestionDialog) chooseHint(n int) string {
 		return i18n.T("choose ↑/↓ · enter for next · tab moves · esc skips all:")
 	}
 	return i18n.T("choose (↑/↓, enter to pick, esc to skip):")
+}
+
+// skipWarning is the line the first esc puts up in place of the hint. It
+// names what would be skipped and what the agent does next, because
+// "skipped" on its own reads as "nothing happens" — the agent in fact
+// proceeds on its own judgment, which is the part worth a second press.
+func (d *QuestionDialog) skipWarning(n int) string {
+	if n > 1 {
+		return i18n.T("esc again skips ALL %d questions — the agent proceeds without your answers", n)
+	}
+	return i18n.T("esc again skips this question — the agent proceeds without your answer")
 }
 
 // stripLocked renders the tab strip: one numbered chip per question,
@@ -583,13 +669,23 @@ func (d *QuestionDialog) submitBodyLocked(th tui.Theme, req *QuestionRequest, wi
 			lines = append(lines, pad+th.FG256(colour, wl))
 		}
 	}
+	// Same substitution as the question tabs: esc arms here too, so the
+	// warning replaces the hint rather than being one the review tab
+	// never shows. Wrapped, and counted against the budget, for the same
+	// reason it is over there.
+	hintRows, hintColour := []string{clipLine(i18n.T("enter sends · tab to revisit · esc skips all"), width)}, th.Muted
+	if d.confirmSkip {
+		hintRows, hintColour = wrapPlain(d.skipWarning(len(req.Questions)), width), th.Warning
+	}
 	// Budget the review against the same MaxRows the question tabs use:
 	// the strip above it and the blank + hint below it are already spent.
-	if avail := d.MaxRows - chrome - 2; d.MaxRows > 0 && len(lines) > avail {
+	if avail := d.MaxRows - chrome - 1 - len(hintRows); d.MaxRows > 0 && len(lines) > avail {
 		lines = truncatedRows(lines, max(avail, 1))
 	}
 	lines = append(lines, "")
-	lines = append(lines, th.FG256(th.Muted, i18n.T("enter sends · tab to revisit · esc skips all")))
+	for _, hr := range hintRows {
+		lines = append(lines, th.FG256(hintColour, hr))
+	}
 	return lines
 }
 
@@ -604,14 +700,18 @@ func (d *QuestionDialog) submitBodyLocked(th tui.Theme, req *QuestionRequest, wi
 // is not, and a body taller than the terminal pushes the frame — and the
 // chat above it — off screen. The question yields first (it is static
 // text the user has already read); the list keeps at least a few rows so
-// the caret or the selection always has somewhere to sit. Caller holds mu.
-func (d *QuestionDialog) budgetLocked(qRows []string, listRows, chrome int) (question []string, listBudget int) {
+// the caret or the selection always has somewhere to sit.
+//
+// hint is how many rows the hint (or the skip warning standing in for it)
+// actually takes: it was assumed to be one, which silently overran the
+// budget by a row on any terminal narrow enough to fold it. Caller holds mu.
+func (d *QuestionDialog) budgetLocked(qRows []string, listRows, chrome, hint int) (question []string, listBudget int) {
 	if d.MaxRows <= 0 || listRows <= 0 {
 		return qRows, listRows
 	}
 	// Fixed body chrome in either mode: the blank after the question and
-	// the hint line below it, plus anything the tab strip already spent.
-	avail := d.MaxRows - 2 - chrome
+	// the hint below it, plus anything the tab strip already spent.
+	avail := d.MaxRows - 1 - max(hint, 1) - chrome
 	if avail < 2 {
 		avail = 2
 	}

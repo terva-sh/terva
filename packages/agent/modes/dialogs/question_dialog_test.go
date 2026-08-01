@@ -51,9 +51,13 @@ func TestQuestionDialogSelect(t *testing.T) {
 func TestQuestionDialogDecline(t *testing.T) {
 	d := NewQuestionDialog()
 	resp := ask1(d, core.UserQuestion{Question: "x?", Options: []string{"a"}})
+	d.HandleKey(tui.Key{Kind: tui.KeyEsc}) // arms the skip; does not answer
+	if !d.Active() {
+		t.Fatal("a single esc answered the ask; it should arm the skip and wait")
+	}
 	d.HandleKey(tui.Key{Kind: tui.KeyEsc})
 	if ans := one(t, resp); !ans.Declined {
-		t.Fatalf("esc should decline, got %+v", ans)
+		t.Fatalf("esc esc should decline, got %+v", ans)
 	}
 }
 

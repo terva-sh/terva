@@ -242,7 +242,9 @@ func TestQuestionDialogAnswerAcceptsPaste(t *testing.T) {
 }
 
 // Esc still declines the whole question rather than clearing the draft:
-// the agent goroutine is blocked on the answer and has to unblock.
+// the agent goroutine is blocked on the answer and has to unblock. This
+// question has no options, so there is no list for esc to fall back to —
+// it arms the skip, and the second press answers.
 func TestQuestionDialogEscDeclinesWhileTyping(t *testing.T) {
 	d := NewQuestionDialog()
 	resp := ask1(d, core.UserQuestion{Question: "Name?"})
@@ -250,8 +252,12 @@ func TestQuestionDialogEscDeclinesWhileTyping(t *testing.T) {
 		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
 	}
 	d.HandleKey(tui.Key{Kind: tui.KeyEsc})
+	if !d.Active() {
+		t.Fatal("a single esc answered the ask; it should arm the skip and wait")
+	}
+	d.HandleKey(tui.Key{Kind: tui.KeyEsc})
 	if ans := one(t, resp); !ans.Declined {
-		t.Fatalf("esc while typing should decline, got %+v", ans)
+		t.Fatalf("esc esc while typing should decline, got %+v", ans)
 	}
 }
 

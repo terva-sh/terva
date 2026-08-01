@@ -176,7 +176,8 @@ func TestQuestionSetEscDeclinesEverything(t *testing.T) {
 	d := NewQuestionDialog()
 	resp := threeQuestions(d)
 	d.HandleKey(tui.Key{Kind: tui.KeyTab}) // somewhere in the middle
-	d.HandleKey(tui.Key{Kind: tui.KeyEsc})
+	d.HandleKey(tui.Key{Kind: tui.KeyEsc}) // arms
+	d.HandleKey(tui.Key{Kind: tui.KeyEsc}) // confirms
 
 	ans := <-resp
 	if len(ans) != 3 {
