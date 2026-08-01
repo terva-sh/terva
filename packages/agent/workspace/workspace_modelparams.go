@@ -23,6 +23,9 @@ import (
 // paramHelp explains the settings whose names do not. Keyed by provider's own
 // param key, so a renamed key drops its help rather than misattributing it.
 var paramHelp = map[string]func() string{
+	"name": func() string {
+		return i18n.T("What to call this model on screen, in place of its id. Worth setting for local models whose ids run long. Empty uses the id.")
+	},
 	"desiredContextWindow": func() string {
 		return i18n.T("The working window that drives auto-condensing — not the model's ceiling. Keep a large-window model but condense earlier.")
 	},

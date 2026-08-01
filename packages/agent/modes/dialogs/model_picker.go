@@ -246,8 +246,8 @@ func (p *modelPicker) renderRows(th tui.Theme, width int) []string {
 		plain := fmt.Sprintf(" %s%s%s   %s %s%s  %s%s",
 			curMark, favMark,
 			padRight(m.Provider, p.provW),
-			padRight(m.ID, p.idW),
-			reason, vision, tag, m.DisplayName)
+			padRight(pickerLead(m), p.idW),
+			reason, vision, tag, pickerTrail(m))
 		if i == p.cursor {
 			lines = append(lines, th.PadHighlight(plain, width))
 		} else {
@@ -358,20 +358,42 @@ func normalizeModelQuery(s string) string {
 }
 
 // columnWidths returns the display-cell width of the longest provider
-// name and the longest model id in rows. Each column is clamped to a
-// minimum so a single-row filter still renders sensibly.
+// name and the longest lead label in rows. Each column is clamped to a
+// minimum so a single-row filter still renders sensibly, and the lead
+// column to a MAXIMUM so one ollama id
+// (hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_XL and friends)
+// cannot widen every other row off the terminal. padRight ellipsizes
+// whatever overruns; the full text still trails the row.
 func columnWidths(rows []provider.Model) (provW, idW int) {
-	const minProv, minID = 6, 12
+	const minProv, minID, maxID = 6, 12, 32
 	provW, idW = minProv, minID
 	for _, m := range rows {
 		if w := runewidth.StringWidth(m.Provider); w > provW {
 			provW = w
 		}
-		if w := runewidth.StringWidth(m.ID); w > idW {
+		if w := runewidth.StringWidth(pickerLead(m)); w > idW {
 			idW = w
 		}
 	}
+	if idW > maxID {
+		idW = maxID
+	}
 	return
+}
+
+// pickerLead and pickerTrail split a row into the column you scan and the
+// detail that follows it. Normally that is id then display name. A model
+// the operator renamed in models.json SWAPS them: their name leads and the
+// id trails. The id is the thing they renamed away from, so burying it
+// would be wrong — but it has no business setting the column width for
+// every other row either.
+func pickerLead(m provider.Model) string { return m.Label() }
+
+func pickerTrail(m provider.Model) string {
+	if m.DisplayNameSet && m.DisplayName != "" {
+		return m.ID
+	}
+	return m.DisplayName
 }
 
 // padRight returns s padded with spaces on the right so its display

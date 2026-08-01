@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -161,5 +162,51 @@ func TestModelsCarryProviderAuthSoDuplicateIDsAreDistinguishable(t *testing.T) {
 	}
 	if len(got) != 3 {
 		t.Fatalf("expected all three backends to offer the shared id, got %v", got)
+	}
+}
+
+// The web picker can only render a name the daemon actually sends, and
+// ModelInfo carried no display name at all until now — which is why a
+// models.json rename was visible in the TUI and invisible in the browser.
+// Renamed is what tells a client it may substitute the name for the id.
+func TestModelsCarryTheOperatorsDisplayName(t *testing.T) {
+	seedCreds(t, "")
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.Endpoints = map[string]config.EndpointConfig{
+			"workshop": {BaseURL: "http://127.0.0.1:1234/v1"},
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	provider.ResetCatalogLayers()
+	defer provider.ResetCatalogLayers()
+	provider.SetUserModels([]provider.Model{
+		{Provider: "workshop", ID: "hf.co/unsloth/Qwen3-Coder-30B:Q4_K_XL", DisplayName: "Qwen Coder"},
+		{Provider: "workshop", ID: "plain-local-id"},
+	})
+
+	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
+	models, err := w.Models(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Models: %v", err)
+	}
+
+	byID := map[string]ctrlproto.ModelInfo{}
+	for _, m := range models {
+		byID[m.ID] = m
+	}
+	named, ok := byID["hf.co/unsloth/Qwen3-Coder-30B:Q4_K_XL"]
+	if !ok {
+		t.Fatal("the renamed model never reached the listing")
+	}
+	if named.DisplayName != "Qwen Coder" || !named.Renamed {
+		t.Errorf("renamed model went over the wire as %q renamed=%v", named.DisplayName, named.Renamed)
+	}
+	plain, ok := byID["plain-local-id"]
+	if !ok {
+		t.Fatal("the un-renamed model never reached the listing")
+	}
+	if plain.Renamed {
+		t.Errorf("a model with no models.json name must not be flagged renamed (name=%q)", plain.DisplayName)
 	}
 }

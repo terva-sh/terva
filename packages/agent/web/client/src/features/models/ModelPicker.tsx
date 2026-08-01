@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../../i18n'
 import type { ModelInfo } from '../../platform/ctrlproto/types'
 import { humanCount } from '../../ui/formatting'
+import { renamedTo } from './label'
 
 // ModelPicker is the searchable model switcher: a filter box over favorites +
 // per-provider groups, each row a click-to-switch with its own ★ toggle and a
@@ -39,8 +40,13 @@ export function ModelPicker({
   const searchRef = useRef<HTMLInputElement>(null)
   useEffect(() => searchRef.current?.focus(), [])
   const needle = q.trim().toLowerCase()
+  // A renamed model has to stay findable by BOTH spellings: the operator
+  // searches for the name they gave it, someone reading a log searches the id.
   const match = (model: ModelInfo) =>
-    !needle || model.id.toLowerCase().includes(needle) || model.provider.toLowerCase().includes(needle)
+    !needle ||
+    model.id.toLowerCase().includes(needle) ||
+    model.provider.toLowerCase().includes(needle) ||
+    (!!model.renamed && (model.display_name ?? '').toLowerCase().includes(needle))
   const favMatched = favorites.filter(match)
   const groupsMatched = groups
     .map(([provider, models]) => [provider, models.filter(match)] as [string, ModelInfo[]])
@@ -88,10 +94,19 @@ export function ModelPicker({
       >
         ⚙
       </button>
-      <span class="pick-id">{model.id}</span>
-      <span class="pick-meta">
+      <span class="pick-id">{renamedTo(model) ?? model.id}</span>
+      {/* The id follows the name rather than being replaced by it: it is what
+          the operator renamed away from, and the only spelling that appears in
+          logs, sessions, and --model. It ellipsizes when the row is tight, so
+          the title carries it in full — the tail of a local id (:Q4_K_XL) is
+          the quantization, not decoration. */}
+      <span class="pick-meta" title={renamedTo(model) ? model.id : undefined}>
         {model.provider}
         {model.context_window ? ' · ' + humanCount(model.context_window) : ''}
+        {/* Last, so that when the row is tight the ellipsis eats the id rather
+            than the context window: the id is recoverable from the title, the
+            window is not shown anywhere else on the row. */}
+        {renamedTo(model) ? ' · ' + model.id : ''}
       </span>
     </div>
   )

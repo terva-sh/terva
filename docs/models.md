@@ -108,11 +108,37 @@ Place a `models.json` in `$TERVA_HOME` (macOS: `~/Library/Application Support/te
 }
 ```
 
-Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `desiredContextWindow`, `maxTokens`, `temperature`, `capabilities`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`. `contextWindow` is the model's total token budget (the hard ceiling: it drives the context gauge and clamps `maxTokens`); `desiredContextWindow` is an optional smaller *working* window that moves the auto-compaction thresholds only — compact earlier on a large-window model, e.g. to stay under a long-context pricing surcharge, without pretending the model is smaller; `maxTokens` is the cap on a single response; `temperature` (0–2) is the model's default sampling temperature, used when no `--temperature` flag is given and ignored for adaptive-thinking models (which reject sampling params); `capabilities` is an object of explicit capability assertions — `image-input`, `image-output`, `reasoning` — that override what terva would otherwise infer (`{"image-input": false}` on a vision-less local model, say). These are editable in-app from the `/model` picker with `Ctrl+E`. Several are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog — see [Local models](#local-models-with-ollama).
+Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `desiredContextWindow`, `maxTokens`, `temperature`, `capabilities`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`. `name` is what to call the model on screen **in place of its id** — see [Renaming a model](#renaming-a-model); `contextWindow` is the model's total token budget (the hard ceiling: it drives the context gauge and clamps `maxTokens`); `desiredContextWindow` is an optional smaller *working* window that moves the auto-compaction thresholds only — compact earlier on a large-window model, e.g. to stay under a long-context pricing surcharge, without pretending the model is smaller; `maxTokens` is the cap on a single response; `temperature` (0–2) is the model's default sampling temperature, used when no `--temperature` flag is given and ignored for adaptive-thinking models (which reject sampling params); `capabilities` is an object of explicit capability assertions — `image-input`, `image-output`, `reasoning` — that override what terva would otherwise infer (`{"image-input": false}` on a vision-less local model, say). These are editable in-app from the `/model` picker with `Ctrl+E`. Several are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog — see [Local models](#local-models-with-ollama).
 
 Provider keys are normalized: `openai-codex` and `openai-responses` map to `openai`, `anthropic-messages` maps to `anthropic`, `moonshot`, `moonshot-ai`, and `kimi-code` map to `kimi`, and `deepseek-chat` and `deepseek-ai` map to `deepseek`. Built-in provider ids such as `groq`, `openrouter`, `github-copilot`, `amazon-bedrock`, `google-vertex`, `azure-openai-responses`, `fireworks`, `vercel-ai-gateway`, `mistral`, and `xai` can also be used directly.
 
 User-defined models show `source: user` in `--list-models` and take precedence over both the baked-in catalog and live-discovered models. Missing or invalid files are silently ignored.
+
+### Renaming a model
+
+Local model ids get long — `hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_XL` is wider than most status bars. `name` gives the model a label to wear instead:
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "models": [
+        { "id": "hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_XL", "name": "Qwen Coder" }
+      ]
+    }
+  }
+}
+```
+
+Set it by hand, or in-app: `/model` → `Ctrl+E` → **display name** in the terminal, or the ⚙ on a row in the web picker. Either way it lands in `models.json` and applies immediately — no restart.
+
+The name replaces the id in the status bar, in the `/model` picker's first column, and on the web's model button. It does **not** replace it in `/status`, which shows `name (id)` — that view exists to tell you what you are actually talking to.
+
+Renaming is presentational only. The **id remains the identity**: it is what goes to the provider, what `--model` matches, what sessions record, and what a `models.json` entry is keyed by. Both spellings search in the picker, so a renamed model is still findable by its id.
+
+Only names *you* set displace an id. Built-in catalog models keep showing their ids in these places, because a catalog name (`Claude Sonnet 4.5 (latest)`) is longer than the id it would replace.
+
+Names are single-line plain text: escape sequences and control characters are stripped, runs of whitespace collapse, and anything past 64 characters is trimmed — a name is rendered straight into a terminal, so an ESC in one would repaint the frame rather than just look wrong. terva warns on load when it has to adjust a name you wrote by hand.
 
 ### Kimi Code
 

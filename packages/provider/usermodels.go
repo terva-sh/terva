@@ -149,10 +149,19 @@ func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
 			for _, w := range capWarnings {
 				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s: %s", normalized, um.ID, w))
 			}
+			// A hand-written name reaches the status bar as raw text, so it
+			// goes through the same door the editor writes through. Say so
+			// when the file loses characters, or the operator sees a name
+			// they didn't type and has nothing to go on.
+			name := SanitizeDisplayName(um.Name)
+			if name != um.Name {
+				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s name was adjusted to %q (control characters and line breaks are not renderable, and names are capped at %d characters)", normalized, um.ID, name, MaxDisplayNameRunes))
+			}
 			m := Model{
 				Provider:             normalized,
 				ID:                   um.ID,
-				DisplayName:          um.Name,
+				DisplayName:          name,
+				DisplayNameSet:       name != "",
 				ContextWindow:        um.ContextWindow,
 				DesiredContextWindow: um.DesiredContextWindow,
 				MaxOutput:            um.MaxTokens,
@@ -245,9 +254,17 @@ func SetUserOverrides(overrides []UserOverride) {
 // for callers that build models programmatically (mostly tests): every
 // field including Reasoning is treated as explicitly set. nil clears
 // the user layer.
+//
+// A non-empty DisplayName counts as explicitly set for the same reason,
+// so a caller that spells one out gets it — the merge asks
+// DisplayNameSet, which the JSON loader derives from the raw entry and a
+// hand-built Model has no other way to assert.
 func SetUserModels(models []Model) {
 	overrides := make([]UserOverride, 0, len(models))
 	for _, m := range models {
+		if m.DisplayName != "" {
+			m.DisplayNameSet = true
+		}
 		overrides = append(overrides, UserOverride{Model: m, ReasoningSet: true})
 	}
 	SetUserOverrides(overrides)
@@ -290,12 +307,9 @@ func applyUserOverrides(base []Model, overrides []UserOverride) []Model {
 		if um.PriceCacheWrite > 0 {
 			existing.PriceCacheWrite = um.PriceCacheWrite
 		}
-		if um.DisplayName != "" && um.DisplayName != um.ID {
-			existing.DisplayName = um.DisplayName
-		}
-		// Scalar overrides (base url, context window, max tokens,
-		// temperature) merge through the shared registry, so adding a scalar
-		// parameter needs no edit here — just a ScalarParam entry.
+		// Scalar overrides (display name, base url, context window, max
+		// tokens, temperature) merge through the shared registry, so adding a
+		// scalar parameter needs no edit here — just a ScalarParam entry.
 		for _, p := range scalarParams {
 			p.Merge(&existing, um)
 		}

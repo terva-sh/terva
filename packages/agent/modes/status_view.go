@@ -17,6 +17,7 @@ import (
 	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -27,6 +28,7 @@ type statusFacts struct {
 	Uptime    time.Duration
 	Provider  string
 	Model     string
+	ModelName string // the operator's models.json name; "" = they set none
 	Auth      string // rendered as-is ("subscription (oauth)", "api key"); "" = omit
 	Reasoning string
 	CWD       string
@@ -78,6 +80,11 @@ func (i *Interactive) slashStatus() {
 			subscription = subscription || bd.Subscription
 		}
 	}
+	// Resolved after the carrier has had its say, so a session that switched
+	// model mid-flight names the model it is actually on.
+	if m, err := provider.FindModel(f.Provider, f.Model); err == nil && m.DisplayNameSet {
+		f.ModelName = m.DisplayName
+	}
 	switch {
 	case subscription:
 		f.Auth = i18n.T("subscription (oauth)")
@@ -113,6 +120,12 @@ func statusRows(th tui.Theme, f statusFacts) []string {
 
 	if f.Provider != "" || f.Model != "" {
 		model := f.Model
+		// Name AND id, never name instead of id: /status is the view you open
+		// to find out what you are actually talking to, and a nickname alone
+		// can't answer that.
+		if f.ModelName != "" {
+			model = f.ModelName + " (" + f.Model + ")"
+		}
 		if f.Provider != "" {
 			model = f.Provider + " / " + model
 		}

@@ -52,7 +52,7 @@ func TestModelEditNumericField(t *testing.T) {
 	d := NewModelEditDialog()
 	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x", ContextWindow: 200000}, provider.UserModel{}, false)
 
-	d.HandleKey(kind(tui.KeyDown)) // -> context window (index 1)
+	moveTo(d, "contextWindow")
 	d.HandleKey(kind(tui.KeyEnter))
 	d.HandleKey(rn('1'))
 	d.HandleKey(rn('a')) // ignored: digits only
@@ -128,7 +128,7 @@ func TestModelEditPreservesUnmanagedFields(t *testing.T) {
 	d := NewModelEditDialog()
 	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, existing, true)
 
-	d.HandleKey(kind(tui.KeyDown)) // -> context window
+	moveTo(d, "contextWindow")
 	d.HandleKey(kind(tui.KeyEnter))
 	for _, r := range "123000" {
 		d.HandleKey(rn(r))

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Scalar model parameters are the numeric/text per-model overrides that follow
@@ -54,6 +55,32 @@ type ScalarParam struct {
 }
 
 var scalarParams = []ScalarParam{
+	{
+		Key: "name", Label: "display name", Kind: ScalarText,
+		// The merged model can't report what a cleared override would fall
+		// back to (the underlying layer's name is gone by the time we see
+		// it), so a renamed model shows the id — the floor, and the exact
+		// answer for the local models this override exists for.
+		Default: func(m Model) string {
+			if m.DisplayNameSet {
+				return m.ID
+			}
+			return strOrDefault(m.DisplayName, m.ID)
+		},
+		Override:    func(um UserModel) string { return um.Name },
+		SetOverride: func(um *UserModel, s string) error { um.Name = SanitizeDisplayName(s); return nil },
+		// DisplayNameSet, not a src.DisplayName != src.ID heuristic. The
+		// loader backfills DisplayName = ID when `name` is absent, so the
+		// string comparison was the only way to ask "did the operator
+		// actually write a name" — and it silently ignored a name that
+		// equalled the id. The flag answers it directly.
+		Merge: func(dst *Model, src Model) {
+			if src.DisplayNameSet && src.DisplayName != "" {
+				dst.DisplayName = src.DisplayName
+				dst.DisplayNameSet = true
+			}
+		},
+	},
 	{
 		Key: "baseUrl", Label: "base url", Kind: ScalarText,
 		Default:     func(m Model) string { return strOrDefault(m.BaseURL, "provider default") },
@@ -154,6 +181,82 @@ var scalarParams = []ScalarParam{
 // ScalarParams returns the editor-managed scalar model parameters, in editor
 // row order. The slice is shared; callers must not mutate it.
 func ScalarParams() []ScalarParam { return scalarParams }
+
+// MaxDisplayNameRunes bounds a models.json `name`. Not a layout decision —
+// the render sites do their own width clamping — just a sanity ceiling so a
+// pasted essay can't become a model's name.
+const MaxDisplayNameRunes = 64
+
+// SanitizeDisplayName makes an operator-supplied model name safe to print.
+//
+// Unlike every other scalar override, this one is rendered raw into a
+// terminal status bar and picker rows, so an ESC in it is not a cosmetic
+// problem: it repaints the frame. Escape sequences, C0/C1 controls, and DEL
+// are dropped outright; the remaining whitespace is collapsed to single
+// spaces so a multi-line paste becomes one line rather than a torn status
+// bar. Applied at BOTH doors — the editor's SetOverride and the loader —
+// because models.json is hand-edited at least as often as it is written.
+func SanitizeDisplayName(s string) string {
+	// Escape forms have to be told apart rather than closed on "the next
+	// plausible terminator": '[' is itself in the CSI final-byte range, so a
+	// single-state skip ends ESC[31m immediately and emits "31m".
+	const (
+		stNormal = iota
+		stEscape // consumed ESC, the next byte says which form
+		stCSI    // ESC [ — parameter/intermediate bytes, then one final byte
+		stString // ESC ] P X ^ _ — runs until BEL or ST
+		stStrEsc // inside a string escape, saw ESC (expecting the ST backslash)
+	)
+	var b strings.Builder
+	b.Grow(len(s))
+	state := stNormal
+	for _, r := range s {
+		switch state {
+		case stEscape:
+			switch r {
+			case '[':
+				state = stCSI
+			case ']', 'P', 'X', '^', '_':
+				state = stString
+			default:
+				state = stNormal // two-character escape; this WAS its final byte
+			}
+			continue
+		case stCSI:
+			if r < 0x20 || r > 0x3f { // anything else ends it, malformed or not
+				state = stNormal
+			}
+			continue
+		case stString:
+			switch r {
+			case 0x07:
+				state = stNormal
+			case 0x1b:
+				state = stStrEsc
+			}
+			continue
+		case stStrEsc:
+			state = stNormal
+			continue
+		}
+		switch {
+		case r == 0x1b:
+			state = stEscape
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == utf8.RuneError:
+			// Controls become a space so "a\nb" reads as "a b", not "ab".
+			// RuneError catches raw C1 bytes too: 0x9b on its own is invalid
+			// UTF-8, so ranging yields the replacement rune, not 0x9b.
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	out := strings.Join(strings.Fields(b.String()), " ")
+	if runes := []rune(out); len(runes) > MaxDisplayNameRunes {
+		out = strings.TrimSpace(string(runes[:MaxDisplayNameRunes]))
+	}
+	return out
+}
 
 func strOrDefault(s, def string) string {
 	if s == "" {
