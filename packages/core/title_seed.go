@@ -42,6 +42,14 @@ const clipMarker = " [… truncated …] "
 // sections.
 const compactionSummaryHeader = "## Context Summary (compacted)"
 
+// StripCompactionHeader removes that prefix from a summary's text. Exported for
+// the hosts' instant-title fallback, which reaches a compaction summary by a
+// different route than BuildTitleSeed and used to name sessions after the
+// document's scaffolding instead of its subject.
+func StripCompactionHeader(s string) string {
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), compactionSummaryHeader))
+}
+
 // ClipMiddle truncates s to at most budget characters (runes) by cutting
 // from the middle, keeping the head and tail around an elision marker:
 // openings carry intent, endings carry the concrete ask (messages) or the
@@ -172,7 +180,7 @@ func BuildTitleSeed(msgs []provider.Message, budget int) string {
 	}
 	anchorText := messageText(msgs[anchorIdx])
 	if anchorIsCompaction {
-		anchorText = strings.TrimSpace(strings.TrimPrefix(anchorText, compactionSummaryHeader))
+		anchorText = StripCompactionHeader(anchorText)
 	}
 
 	// Recent exchanges: user/assistant text after the anchor, per-message

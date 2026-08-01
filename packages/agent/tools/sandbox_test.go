@@ -125,26 +125,10 @@ func TestSandboxDisplayPath(t *testing.T) {
 	}
 }
 
-func TestReadToolRejectsOutsideWhenLocked(t *testing.T) {
-	root := testsupport.TempDir(t)
-	outside := testsupport.TempDir(t)
-	outsideFile := filepath.Join(outside, "a.txt")
-	os.WriteFile(outsideFile, []byte("x"), 0o644)
-
-	sb := NewSandbox(root)
-	sb.Lock()
-	tool := &ReadTool{CWD: root, Sandbox: sb}
-
-	_, err := tool.Execute(context.Background(),
-		mustJSONRaw(t, map[string]any{"path": outsideFile}), nil)
-	if err == nil {
-		t.Fatal("expected sandbox error")
-	}
-}
-
-// A read-only root is readable by the read-side check but never
-// writable, and paths outside every root are still blocked for reads.
-func TestSandboxReadOnlyRoot(t *testing.T) {
+// Reads are unconfined when jailed; writes are not. The read jail was
+// withdrawn because bash was never path-jailed, so every refused read was one
+// `cat` away — it confined nothing and cost turns.
+func TestSandboxJailedReadsAreUnconfined(t *testing.T) {
 	root := testsupport.TempDir(t)
 	docs := testsupport.TempDir(t)
 	docFile := filepath.Join(docs, "tui.md")
@@ -152,17 +136,16 @@ func TestSandboxReadOnlyRoot(t *testing.T) {
 	outside := testsupport.TempDir(t)
 
 	sb := NewSandbox(root)
-	sb.AddReadOnlyRoot(docs)
 	sb.Lock()
 
-	if err := sb.CheckPathRead(docFile); err != nil {
-		t.Errorf("read-only root should be readable: %v", err)
+	for _, p := range []string{docFile, filepath.Join(outside, "x"), "/etc/hosts"} {
+		if err := sb.CheckPathRead(p); err != nil {
+			t.Errorf("CheckPathRead(%s) = %v, want reads unconfined", p, err)
+		}
 	}
+	// The write jail is the half that still holds.
 	if err := sb.CheckPath(docFile); err == nil {
-		t.Error("read-only root must NOT be writable")
-	}
-	if err := sb.CheckPathRead(filepath.Join(outside, "x")); err == nil {
-		t.Error("path outside all roots should be blocked even for reads")
+		t.Error("a path outside the root must NOT be writable")
 	}
 	inside := filepath.Join(root, "f.txt")
 	if err := sb.CheckPathRead(inside); err != nil {
@@ -173,29 +156,29 @@ func TestSandboxReadOnlyRoot(t *testing.T) {
 	}
 }
 
-// End-to-end: the read tool can read a file in a read-only root while
-// jailed — the property that makes the shipped docs usable under /jail.
-func TestReadToolReadsReadOnlyRootWhenLocked(t *testing.T) {
+// End-to-end through the tool: a jailed read reaches outside the root. This is
+// the batch of eight refusals in B1 of the 2026-07-30 session-harness review,
+// reduced to one call.
+func TestReadToolReadsOutsideRootWhenLocked(t *testing.T) {
 	root := testsupport.TempDir(t)
 	docs := testsupport.TempDir(t)
 	docFile := filepath.Join(docs, "rpc.md")
 	os.WriteFile(docFile, []byte("rpc docs body"), 0o644)
 
 	sb := NewSandbox(root)
-	sb.AddReadOnlyRoot(docs)
 	sb.Lock()
 	tool := &ReadTool{CWD: root, Sandbox: sb}
 
 	if _, err := tool.Execute(context.Background(),
 		mustJSONRaw(t, map[string]any{"path": docFile}), nil); err != nil {
-		t.Fatalf("jailed read of a read-only root should succeed: %v", err)
+		t.Fatalf("jailed read outside the root should succeed: %v", err)
 	}
 }
 
-// A read-only glob exposes only matching files DIRECTLY inside its dir;
-// non-matching files, the dir itself, and nested matches stay blocked,
-// and matches are never writable.
-func TestSandboxReadOnlyGlob(t *testing.T) {
+// A secret root denies its whole tree; an exception carves back only matching
+// files DIRECTLY inside it. Nested matches and non-matching siblings stay
+// denied, and the denial binds bash as well as the file tools.
+func TestSandboxSecretRootAndException(t *testing.T) {
 	root := testsupport.TempDir(t)
 	logs := testsupport.TempDir(t)
 	mk := func(name string) string {
@@ -208,7 +191,8 @@ func TestSandboxReadOnlyGlob(t *testing.T) {
 	mcpLog := mk("mcp-foo.log")
 
 	sb := NewSandbox(root)
-	sb.AddReadOnlyGlob(logs, "ext-*.log")
+	sb.AddSecretRoot(logs)
+	sb.AddSecretException(logs, "ext-*.log")
 	sb.Lock()
 
 	if err := sb.CheckPathRead(extLog); err != nil {
@@ -216,26 +200,85 @@ func TestSandboxReadOnlyGlob(t *testing.T) {
 	}
 	for _, bad := range []string{botLog, mcpLog} {
 		if err := sb.CheckPathRead(bad); err == nil {
-			t.Errorf("%s should be blocked (not ext-*.log)", filepath.Base(bad))
+			t.Errorf("%s should be denied (not ext-*.log)", filepath.Base(bad))
 		}
 	}
-	// The dir itself isn't a root, so grep/glob across logs/ is denied.
+	// The dir itself is denied, so grep/glob cannot sweep it.
 	if err := sb.CheckPathRead(logs); err == nil {
-		t.Error("the logs dir itself should not be readable (no grep across it)")
+		t.Error("the secret dir itself should not be readable (no grep across it)")
 	}
-	// Non-recursive: a matching name in a subdir doesn't qualify.
+	// Non-recursive: a matching name in a subdir does not qualify.
 	sub := filepath.Join(logs, "sub")
 	os.MkdirAll(sub, 0o755)
 	if err := sb.CheckPathRead(filepath.Join(sub, "ext-x.log")); err == nil {
-		t.Error("glob is non-recursive; nested file should be blocked")
+		t.Error("the exception is non-recursive; a nested file should stay denied")
 	}
-	// Read-only: a match is never writable.
+	// Denied for writes too, exception or not.
 	if err := sb.CheckPath(extLog); err == nil {
-		t.Error("read-only glob match must not be writable")
+		t.Error("a secret-root file must not be writable")
+	}
+	// And bash sees the same denial.
+	if err := sb.CheckCommand("cat " + botLog); err == nil {
+		t.Error("bash must not read a secret-root file either")
+	}
+	if err := sb.CheckCommand("tail " + extLog); err != nil {
+		t.Errorf("bash should reach the carved-out exception: %v", err)
 	}
 }
 
 func mustJSONRaw(t *testing.T, v any) []byte {
 	t.Helper()
 	return mustJSON(t, v)
+}
+
+// TestSandboxDestructiveTargetsMatchWholeArguments pins B2 of the 2026-07-30
+// session-harness review. The banned list held the literal "rm -rf /", matched
+// with strings.Contains, so it fired on `rm -rf /tmp/dol-upstream-analysis` —
+// on every absolute path, in fact. `rm -rf ./x` passed and `rm -rf /tmp/x` did
+// not, and the model simply switched to `mktemp -d` and deleted the same tree
+// through a name the guard could not read.
+func TestSandboxDestructiveTargetsMatchWholeArguments(t *testing.T) {
+	sb := NewSandbox(testsupport.TempDir(t))
+	sb.Lock()
+
+	// Still banned: the target IS a root.
+	for _, c := range []string{
+		"rm -rf /",
+		"rm -rf /*",
+		"rm -rf ~",
+		"rm -rf ~/",
+		"rm -rf $HOME",
+		"rm -fr /",
+		"rm -r -f /",
+		"rm --recursive --force /",
+		"rm -rf '/'",
+		`rm -rf "$HOME"`,
+		"dd of=/dev/disk0 if=x",
+	} {
+		if err := sb.CheckCommand(c); err == nil {
+			t.Errorf("expected %q to be banned", c)
+		}
+	}
+
+	// Allowed: a path UNDER a root, which is the ordinary case the old
+	// substring match broke.
+	for _, c := range []string{
+		"rm -rf /tmp/dol-upstream-analysis",
+		"rm -rf /tmp/scratch && git clone https://example.invalid/x /tmp/scratch",
+		"rm -rf ~/Library/Caches/terva-test",
+		"rm -rf $HOME/scratch",
+		"rm -rf ./build",
+		"rm -f /tmp/one-file",
+		"dd of=/tmp/image.bin if=/tmp/src",
+	} {
+		if err := sb.CheckCommand(c); err != nil {
+			t.Errorf("expected %q to be allowed, got: %v", c, err)
+		}
+	}
+
+	// A compound line is still decomposed, so a root deletion cannot hide
+	// behind a harmless leading command.
+	if err := sb.CheckCommand("ls && rm -rf /"); err == nil {
+		t.Error("a root deletion after && must still be caught")
+	}
 }

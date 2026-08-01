@@ -42,6 +42,10 @@ type transcriptEpocher interface{ TranscriptEpoch() uint64 }
 type ReadTool struct {
 	CWD     string
 	Sandbox *Sandbox // when jailed, confines reads to the sandbox root
+	// Files records what the model has seen of each path, so a later failed
+	// edit can distinguish "you got the code wrong" from "the file moved since
+	// you read it". Shared with write and edit; nil disables the tracking.
+	Files *FileState
 
 	// SupportsVision reports whether the active model can consume image
 	// pixels. When true, reading an image file returns an inline
@@ -204,6 +208,16 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 
 	if looksBinary(data) {
 		return core.ToolResult{}, fmt.Errorf("%s looks binary; refusing to read as text", a.Path)
+	}
+
+	// Remember what the model just saw, so a later failed edit can say whether
+	// the file moved underneath it. Only when we hold the COMPLETE file: past
+	// the hard cap `data` is a prefix, and a digest of a prefix would never
+	// match a later full read — it would report every file as changed. A paged
+	// read (offset/limit) still records, because the question this answers is
+	// "did the file change since you looked", and it did look.
+	if !truncFile {
+		t.Files.Record(path, data, "read")
 	}
 
 	lines := strings.Split(string(data), "\n")

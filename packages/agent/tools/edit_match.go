@@ -235,10 +235,98 @@ func occurrenceLines(body, needle string, max int) string {
 // transcript when oldText was huge.
 const didYouMeanLines = 12
 
-// didYouMean anchors on oldText's first non-blank line and, when that
-// line exists in the file, returns the file's actual block from there
-// so the model sees exactly what to copy. Empty when no anchor hits.
+// nearestScanBudget bounds the nearest-block search at
+// bodyLines × oldLines comparisons. A huge oldText against a huge file
+// would otherwise turn a failed edit into a long stall; past the budget
+// the search is skipped and the error says so rather than hanging.
+const nearestScanBudget = 4_000_000
+
+// nearestMinScore is the fraction of lines that must match (whitespace-
+// insensitively) before a block is worth showing. Below it the "closest"
+// block is noise, and printing noise as a suggestion is worse than
+// admitting nothing resembles the text.
+const nearestMinScore = 0.5
+
+// didYouMean explains a not-found oldText with evidence from the file.
+//
+// It used to do exactly one thing: anchor on oldText's first non-blank
+// line and, if that line existed VERBATIM (after TrimSpace), show the
+// file's block from there. When the anchor missed it returned "", and the
+// error was the bare "oldText not found in <path>" — no anchor, no
+// content, no reason. A reviewed session hit both tiers: the good one
+// resolved in a single step, twice; the bare one told the model nothing
+// it did not already know.
+//
+// So the ladder now always ends in evidence:
+//
+//  1. whitespace-only divergence — the block IS there, but its internal
+//     spacing changed. This is the formatter case (gofmt realigning
+//     struct fields is intra-line, so the tolerant matcher's uniform
+//     indent shift cannot see it), and it is worth naming outright
+//     because the model's text is otherwise correct.
+//  2. exact first-line anchor — the original behaviour.
+//  3. nearest block by line similarity — when nothing anchors, show the
+//     closest thing rather than nothing.
+//  4. nothing resembles it — say so, with the file's line count, so the
+//     model re-reads instead of guessing again.
 func didYouMean(body, oldText string) string {
+	if ws := whitespaceOnlyDivergence(body, oldText); ws != "" {
+		return ws
+	}
+	if a := anchorDivergence(body, oldText); a != "" {
+		return a
+	}
+	if n := nearestBlock(body, oldText); n != "" {
+		return n
+	}
+	return fmt.Sprintf(" (%d lines); no block in the file resembles it — re-read the file and copy the exact bytes",
+		len(strings.Split(body, "\n")))
+}
+
+// whitespaceOnlyDivergence reports a block whose lines equal oldText's
+// after collapsing every whitespace run — the file has the text, only
+// spaced differently.
+//
+// The tolerant matcher already handles a UNIFORM indent shift, so what
+// reaches here is intra-line: `Origin: x` becoming `Origin:    x` when a
+// formatter realigned a struct literal. The model's text is right and its
+// bytes are stale, which is a different instruction ("re-copy the line")
+// from "you got the code wrong".
+func whitespaceOnlyDivergence(body, oldText string) string {
+	oldLines := splitNonEmptyTail(oldText)
+	if len(oldLines) == 0 {
+		return ""
+	}
+	bodyLines := strings.Split(body, "\n")
+	if len(oldLines) > len(bodyLines) {
+		return ""
+	}
+	for i := 0; i+len(oldLines) <= len(bodyLines); i++ {
+		match := true
+		for k, ol := range oldLines {
+			if collapseWS(bodyLines[i+k]) != collapseWS(ol) {
+				match = false
+				break
+			}
+		}
+		if !match {
+			continue
+		}
+		end := i + len(oldLines)
+		if end-i > didYouMeanLines {
+			end = i + didYouMeanLines
+		}
+		return fmt.Sprintf("; lines %d-%d match it apart from whitespace — a formatter has probably run since you read the file. Copy these bytes:\n%s",
+			i+1, i+len(oldLines), strings.Join(bodyLines[i:end], "\n"))
+	}
+	return ""
+}
+
+// anchorDivergence is the original first-line anchor: oldText's first
+// non-blank line exists verbatim in the file, but the block from there
+// diverges. Showing the file's actual block is what let a model
+// self-correct without another read round-trip.
+func anchorDivergence(body, oldText string) string {
 	anchor := ""
 	for _, l := range strings.Split(oldText, "\n") {
 		if strings.TrimSpace(l) != "" {
@@ -254,7 +342,7 @@ func didYouMean(body, oldText string) string {
 		if strings.TrimSpace(bl) != anchor {
 			continue
 		}
-		n := len(strings.Split(strings.TrimSuffix(oldText, "\n"), "\n"))
+		n := len(splitNonEmptyTail(oldText))
 		if n > didYouMeanLines {
 			n = didYouMeanLines
 		}
@@ -266,4 +354,72 @@ func didYouMean(body, oldText string) string {
 			i+1, strings.Join(bodyLines[i:end], "\n"))
 	}
 	return ""
+}
+
+// nearestBlock finds the window most similar to oldText and shows it.
+// Similarity is the fraction of lines equal after whitespace collapse, so
+// a block that drifted by an edit or two still scores well while unrelated
+// code does not.
+//
+// Bounded two ways: the scan is skipped past nearestScanBudget
+// comparisons, and a best score under nearestMinScore reports nothing —
+// a "closest" block that resembles nothing is a wrong suggestion, and a
+// model given one will act on it.
+func nearestBlock(body, oldText string) string {
+	oldLines := splitNonEmptyTail(oldText)
+	if len(oldLines) == 0 {
+		return ""
+	}
+	bodyLines := strings.Split(body, "\n")
+	if len(oldLines) > len(bodyLines) {
+		return ""
+	}
+	if len(bodyLines)*len(oldLines) > nearestScanBudget {
+		return ""
+	}
+	oldNorm := make([]string, len(oldLines))
+	for i, l := range oldLines {
+		oldNorm[i] = collapseWS(l)
+	}
+	bestAt, bestHits := -1, 0
+	for i := 0; i+len(oldNorm) <= len(bodyLines); i++ {
+		hits := 0
+		for k, on := range oldNorm {
+			if on != "" && collapseWS(bodyLines[i+k]) == on {
+				hits++
+			}
+		}
+		if hits > bestHits {
+			bestAt, bestHits = i, hits
+		}
+	}
+	if bestAt < 0 || float64(bestHits)/float64(len(oldNorm)) < nearestMinScore {
+		return ""
+	}
+	end := bestAt + len(oldNorm)
+	if end-bestAt > didYouMeanLines {
+		end = bestAt + didYouMeanLines
+	}
+	if end > len(bodyLines) {
+		end = len(bodyLines)
+	}
+	return fmt.Sprintf("; nothing matches its first line. The closest block is at line %d (%d of %d lines match) — actual content there:\n%s",
+		bestAt+1, bestHits, len(oldNorm), strings.Join(bodyLines[bestAt:end], "\n"))
+}
+
+// splitNonEmptyTail splits oldText into lines, dropping the trailing empty
+// element a final newline produces — the line count callers want is the
+// number of lines of CONTENT.
+func splitNonEmptyTail(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+}
+
+// collapseWS reduces a line to its non-whitespace shape: every run of
+// spaces and tabs becomes one space, and the ends are trimmed. Two lines
+// with the same collapse differ only in spacing.
+func collapseWS(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

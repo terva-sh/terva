@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -16,6 +18,9 @@ import (
 type EditTool struct {
 	CWD     string
 	Sandbox *Sandbox
+	// Files records what the model has seen of each path (see ReadTool.Files).
+	// Read on a failed match to say whether the file moved underneath the edit.
+	Files *FileState
 }
 
 type editOp struct {
@@ -98,7 +103,13 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		}
 		s, err := resolveSpans(body, e, i+1, a.Path)
 		if err != nil {
-			return core.ToolResult{}, err
+			// The match failed. Whether the file MOVED since the model last saw
+			// it is the one thing the diagnostics above cannot derive from the
+			// bytes alone, and it changes what the model should do: re-copy the
+			// block (stale bytes, correct intent) rather than re-derive the edit
+			// (wrong intent). Appended, never substituted — the did-you-mean
+			// evidence is still the actionable part.
+			return core.ToolResult{}, fmt.Errorf("%w%s", err, t.stalenessNote(path, orig))
 		}
 		spans = append(spans, s...)
 	}
@@ -139,6 +150,8 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	if err := os.WriteFile(path, final, 0o644); err != nil {
 		return core.ToolResult{}, err
 	}
+	// The model now knows this file exactly — it just produced it.
+	t.Files.Record(path, final, "edit")
 
 	diff := unifiedDiff(a.Path, string(orig), strings.ReplaceAll(newBody, "\r\n", "\n"))
 	// The tool-call header renders the path above the result, so the
@@ -351,4 +364,42 @@ func lcsDiff(a, b []string) []diffOp {
 		j--
 	}
 	return ops
+}
+
+// stalenessAgeFloor is how recent a "changed since you saw it" gets reported
+// without an age. Under it the age is noise — the model saw the file moments
+// ago and the duration adds nothing — and printing "0s ago" reads like a bug.
+const stalenessAgeFloor = 2 * time.Second
+
+// stalenessNote explains a failed match in terms of what happened to the file,
+// when the harness knows. Three cases, three different instructions:
+//
+//   - never seen: the model is editing a file it did not read. That is the
+//     likeliest reason an exact-match edit misses, and no amount of
+//     did-you-mean evidence says it.
+//   - seen and unchanged: the file is exactly as the model left it, so the
+//     mismatch is in the model's text. Worth saying, because it rules OUT the
+//     explanation it would otherwise reach for.
+//   - seen and changed: something rewrote the file — a formatter, a build step,
+//     the user, a sub-agent. The model's text was probably right when it was
+//     written; re-copy rather than re-derive.
+//
+// Returns "" rather than guessing when there is nothing to say.
+func (t *EditTool) stalenessNote(path string, current []byte) string {
+	changed, since, how, ok := t.Files.Changed(path, current)
+	if !ok {
+		return "\n(this session has not read " + filepath.Base(path) + " — read it first so oldText matches the bytes on disk)"
+	}
+	if !changed {
+		return "\n(the file is byte-identical to what you last saw, so the difference is in oldText, not on disk)"
+	}
+	verb := "read"
+	if how == "write" || how == "edit" {
+		verb = "wrote"
+	}
+	if since < stalenessAgeFloor {
+		return fmt.Sprintf("\n(the file has CHANGED since you %s it — something else rewrote it; re-copy the block rather than re-deriving the edit)", verb)
+	}
+	return fmt.Sprintf("\n(the file has CHANGED since you %s it %s ago — something else rewrote it; re-copy the block rather than re-deriving the edit)",
+		verb, humanDuration(since.Round(time.Second)))
 }

@@ -105,24 +105,44 @@ func TestShareFilePassesTheRelabelThrough(t *testing.T) {
 }
 
 // A jailed agent can share what it could already read, and nothing else. The
-// gate is the sandbox's read check, so the answer tracks the read-only roots
+// gate is the sandbox's read check, so the answer tracks the secret roots
 // rather than being a second, drifting list.
-func TestShareFileRefusesWhatTheJailWouldNotLetItRead(t *testing.T) {
+//
+// Since reads stopped being confined to the working directory, "what it could
+// already read" is wider — but the invariant is unchanged and still the point:
+// the agent could paste any of this into the conversation itself, so refusing
+// to hand it over through the share store would protect nothing. A secret root
+// is refused on both routes.
+func TestShareFileTracksTheReadCheck(t *testing.T) {
 	cwd := testsupport.TempDir(t)
-	outside := filepath.Join(testsupport.TempDir(t), "secrets.env")
-	if err := os.WriteFile(outside, []byte("TOKEN=1"), 0o600); err != nil {
+	elsewhere := testsupport.TempDir(t)
+	ordinary := filepath.Join(elsewhere, "report.md")
+	if err := os.WriteFile(ordinary, []byte("# report"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	secretDir := testsupport.TempDir(t)
+	secret := filepath.Join(secretDir, "auth.json")
+	if err := os.WriteFile(secret, []byte("TOKEN=1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	sb := NewSandbox(cwd)
+	sb.AddSecretRoot(secretDir)
 	sb.Lock()
 	pub := &stubPublisher{ref: core.SharedFile{ID: "shr_a"}}
 	tool := &ShareFileTool{CWD: cwd, Sandbox: sb, Publisher: pub}
 
-	if _, err := tool.Execute(context.Background(), shareArgs(t, map[string]any{"path": outside}), nil); err == nil {
-		t.Fatal("Execute(outside the jail) succeeded, want a sandbox refusal")
+	// Readable, therefore shareable.
+	if _, err := tool.Execute(context.Background(), shareArgs(t, map[string]any{"path": ordinary}), nil); err != nil {
+		t.Fatalf("Execute(a readable file outside the jail) = %v, want success", err)
 	}
-	if len(pub.calls) != 0 {
-		t.Errorf("the publisher was called %d times for a refused path, want 0", len(pub.calls))
+	// A secret root is refused, and the publisher never sees it.
+	before := len(pub.calls)
+	if _, err := tool.Execute(context.Background(), shareArgs(t, map[string]any{"path": secret}), nil); err == nil {
+		t.Fatal("Execute(a secret root) succeeded, want a sandbox refusal")
+	}
+	if len(pub.calls) != before {
+		t.Errorf("the publisher was called for a refused path (%d → %d)", before, len(pub.calls))
 	}
 }
 

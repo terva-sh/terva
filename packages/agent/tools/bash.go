@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"terva.sh/terva/packages/core"
@@ -74,7 +75,12 @@ func (t *BashTool) Description() string {
 	if cwd := t.effectiveCWD(); cwd != "" {
 		where = cwd
 	}
-	return "Run a shell command (stdout+stderr merged). Prefer the dedicated tools over shell equivalents: read/write/edit for files (not cat, sed -i, echo >file), grep/glob for search (not grep, find, ls) — they are safer, reviewable, and cheaper. Commands run in " + where + "; a relative path resolves against THAT directory, not the file you last read or edited — pass absolute paths (or `git -C`) for anything outside it, and avoid `cd`. Git safety: never force-push, `reset --hard`, amend, skip hooks, or `git add -A` unless the user explicitly asks. Do not print or export secrets (.env, tokens, credentials). Slow commands should set an explicit timeout; the default kill is 120s. In exploratory multi-step scripts avoid `set -e` (one failing probe aborts the whole script and hides the rest); check exit codes explicitly instead. $TERVA_HOME is exported into the environment."
+	// Name the interpreter. When bash is absent the commands run under
+	// /bin/sh — which on Debian-family hosts is dash, where a model's
+	// reflexive ${PIPESTATUS[0]} and <(...) are syntax errors rather than
+	// features. Saying so is the difference between the model writing POSIX
+	// and the model discovering the dialect one dead turn at a time.
+	return "Run a shell command under " + shellName() + " (stdout+stderr merged). Prefer the dedicated tools over shell equivalents: read/write/edit for files (not cat, sed -i, echo >file), grep/glob for search (not grep, find, ls) — they are safer, reviewable, and cheaper. Commands run in " + where + "; a relative path resolves against THAT directory, not the file you last read or edited — pass absolute paths (or `git -C`) for anything outside it, and avoid `cd`. Git safety: never force-push, `reset --hard`, amend, skip hooks, or `git add -A` unless the user explicitly asks. Do not print or export secrets (.env, tokens, credentials). Slow commands should set an explicit timeout; the default kill is 120s. In exploratory multi-step scripts avoid `set -e` (one failing probe aborts the whole script and hides the rest); check exit codes explicitly instead. $TERVA_HOME is exported into the environment."
 }
 func (t *BashTool) Schema() json.RawMessage { return json.RawMessage(bashSchema) }
 
@@ -258,6 +264,9 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		spill.Discard()
 	}
 	fmt.Fprintf(&sb, "  Took %s", humanDuration(elapsed))
+	if hint := matchExitHint(exitCode, a.Command); hint != "" {
+		sb.WriteString("\n" + hint)
+	}
 
 	isErr := exitCode != 0 || ctx.Err() != nil || timedOut
 	return core.ToolResult{
@@ -373,9 +382,128 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
+// matchExitCommands are commands whose exit status 1 means "found nothing" or
+// "not equal" rather than "failed". A pipeline ending in one of these reports
+// 1 on the healthy path, and the model reads a red result off a green build.
+var matchExitCommands = map[string]bool{
+	"grep": true, "egrep": true, "fgrep": true, "rg": true, "ag": true,
+	"diff": true, "cmp": true, "test": true, "[": true,
+}
+
+// matchExitHint explains an exit 1 that a match-style command produced by
+// finding nothing. Verification pipelines of the shape
+//
+//	cargo test ... | grep -c FAILED
+//
+// exit 1 precisely when the tests all passed, and the result comes back marked
+// as an error over a body reading "0". Observed 13 times in one session, each
+// one re-running a full test suite to re-confirm the same green build: the
+// harness cannot know intent, but it can name the convention.
+//
+// Deliberately narrow — only exit 1, only when the last stage is a match-style
+// command. A broader hint would fire on genuine failures and teach the model to
+// discount real exit codes.
+func matchExitHint(exitCode int, command string) string {
+	if exitCode != 1 {
+		return ""
+	}
+	name := lastPipelineCommand(command)
+	if !matchExitCommands[name] {
+		return ""
+	}
+	return fmt.Sprintf("[hint] a pipeline's exit status is its LAST command's, and %s exits 1 when it finds no match — "+
+		"if the work before the pipe succeeded, read the output above rather than the exit code. "+
+		"To report the status you actually mean, end with an explicit check (e.g. `... ; echo \"failures: $(... | grep -c X)\"`).", name)
+}
+
+// lastPipelineCommand returns the command word of the final pipeline stage of
+// the final statement in cmd — the process whose status the shell reports.
+// Quote-aware so a `;` or `|` inside an argument doesn't split a statement;
+// returns "" when it cannot tell.
+func lastPipelineCommand(cmd string) string {
+	var (
+		seg    strings.Builder
+		quote  rune
+		escape bool
+	)
+	reset := func() { seg.Reset() }
+	for _, r := range cmd {
+		switch {
+		case escape:
+			escape = false
+			seg.WriteRune(r)
+		case r == '\\' && quote != '\'':
+			escape = true
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+			seg.WriteRune(r)
+		case r == '\'' || r == '"':
+			quote = r
+			seg.WriteRune(r)
+		case r == '|' || r == ';' || r == '\n' || r == '&':
+			// Every one of these ends the stage whose status would be
+			// reported, so the last segment standing is the one that matters.
+			reset()
+		default:
+			seg.WriteRune(r)
+		}
+	}
+	fields := strings.Fields(seg.String())
+	for _, f := range fields {
+		// Skip a leading env assignment (FOO=bar cmd ...); the command word is
+		// the first field that isn't one.
+		if strings.Contains(f, "=") && !strings.HasPrefix(f, "=") {
+			continue
+		}
+		return filepath.Base(strings.Trim(f, `"'`))
+	}
+	return ""
+}
+
+// shellPath is the interpreter every command runs under, resolved once.
+var shellPath = sync.OnceValue(resolveShell)
+
+// resolveShell picks the interpreter for the `bash` tool. It prefers a real
+// bash from PATH and falls back to /bin/sh.
+//
+// The tool is NAMED bash and no model writes POSIX for a tool called bash. On
+// Debian and Ubuntu /bin/sh is dash, so `${PIPESTATUS[0]}` and `<(...)` — the
+// two constructs a model reaches for when it wants a pipeline's real exit code
+// or wants to diff two command outputs — die with "Bad substitution" and
+// "Syntax error: \"(\" unexpected". The failure is also silently
+// platform-dependent: macOS's /bin/sh is bash in POSIX mode and swallows most
+// of it, so the same command is portable on the developer's laptop and broken
+// on the Linux host. Resolving bash first makes the tool mean what its name
+// says; the /bin/sh fallback keeps busybox images working.
+//
+// PATH (not a hardcoded /bin/bash) so a Homebrew bash 5 wins over macOS's
+// bundled 3.2 — the newer shell is a superset, and nothing here depends on the
+// older one's gaps.
+func resolveShell() string {
+	if runtime.GOOS == "windows" {
+		return "cmd"
+	}
+	if p, err := exec.LookPath("bash"); err == nil {
+		return p
+	}
+	return "/bin/sh"
+}
+
+// shellName is the resolved shell's base name, for the tool description. A
+// model told which shell it has writes for that shell; a model told only "a
+// shell command" writes bash and finds out the hard way.
+func shellName() string {
+	if runtime.GOOS == "windows" {
+		return "cmd"
+	}
+	return filepath.Base(shellPath())
+}
+
 func newShellCmd(ctx context.Context, command string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
 		return exec.CommandContext(ctx, "cmd", "/C", command)
 	}
-	return exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	return exec.CommandContext(ctx, shellPath(), "-c", command)
 }

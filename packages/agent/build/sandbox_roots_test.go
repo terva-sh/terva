@@ -10,10 +10,10 @@ import (
 	"terva.sh/terva/packages/testsupport"
 )
 
-// grantedSandbox builds a locked sandbox over a throwaway home whose every
+// restrictedSandbox builds a locked sandbox over a throwaway home whose every
 // candidate directory exists, so a denial is a real policy decision rather than
 // a path that simply wasn't there.
-func grantedSandbox(t *testing.T) (sb *tools.Sandbox, home, cwd string) {
+func restrictedSandbox(t *testing.T) (sb *tools.Sandbox, home, cwd string) {
 	t.Helper()
 	home = testsupport.TempDir(t)
 	cwd = testsupport.TempDir(t)
@@ -31,16 +31,17 @@ func grantedSandbox(t *testing.T) (sb *tools.Sandbox, home, cwd string) {
 		}
 	}
 	sb = tools.NewSandbox(cwd)
-	grantReadOnlyRoots(sb, home, filepath.Join(home, "docs"), filepath.Join(home, "examples"))
+	restrictSensitiveReads(sb, home)
 	sb.Lock()
 	return sb, home, cwd
 }
 
 // The shared, non-sensitive state a jailed agent is meant to reach — including
 // the attachments staging area, which exists precisely so the agent can read
-// what the user handed it.
-func TestGrantReadOnlyRootsAllowsSharedState(t *testing.T) {
-	sb, home, _ := grantedSandbox(t)
+// what the user handed it. These needed an explicit grant when reads were
+// confined to the working directory; now they simply are not denied.
+func TestRestrictSensitiveReadsAllowsSharedState(t *testing.T) {
+	sb, home, _ := restrictedSandbox(t)
 
 	for _, rel := range []string{
 		"docs/web.md",
@@ -53,24 +54,23 @@ func TestGrantReadOnlyRootsAllowsSharedState(t *testing.T) {
 		"logs/ext-memory.log",
 	} {
 		if err := sb.CheckPathRead(filepath.Join(home, rel)); err != nil {
-			t.Errorf("CheckPathRead(%s) = %v, want it granted", rel, err)
+			t.Errorf("CheckPathRead(%s) = %v, want it readable", rel, err)
 		}
 	}
 }
 
-// The exclusions were a comment with nothing enforcing them. Credentials,
-// config, and transcripts stay out of reach, and logs/ is readable only through
-// the ext-*.log glob — never as a directory and never for its other files,
-// which aggregate MCP/bot/connector stderr.
+// Credentials, trust state, and transcripts stay out of reach. logs/ is
+// readable only through the ext-*.log exception — never as a directory and
+// never for its other files, which aggregate MCP/bot/connector stderr.
 //
-// shared/ is here rather than in the grants above, one line away from
-// attachments/, because the two areas run the same machinery in opposite
-// directions: the agent reads what it was handed and only writes what it hands
-// back — and it writes that through share_file, which talks to the store, not
-// through the sandbox. A grant would add nothing but the ability to read every
-// other session's deliverables.
-func TestGrantReadOnlyRootsRefusesSensitiveState(t *testing.T) {
-	sb, home, _ := grantedSandbox(t)
+// shared/ is denied one line away from attachments/ being allowed, because the
+// two areas run the same machinery in opposite directions: the agent reads what
+// it was handed and only writes what it hands back — and it writes that through
+// share_file, which talks to the store, not through the sandbox. Reading it
+// would add nothing but the ability to enumerate every other session's
+// deliverables.
+func TestRestrictSensitiveReadsRefusesSensitiveState(t *testing.T) {
+	sb, home, _ := restrictedSandbox(t)
 
 	for _, rel := range []string{
 		"auth.json",
@@ -84,36 +84,68 @@ func TestGrantReadOnlyRootsRefusesSensitiveState(t *testing.T) {
 		"logs", // the dir itself, so grep/glob can't sweep it
 		attach.ShareDirName + "/ses_1/shr_abc-report.pdf",
 		attach.ShareDirName, // and not as a directory either
-		"",                  // $TERVA_HOME itself is never a root
 	} {
 		if err := sb.CheckPathRead(filepath.Join(home, rel)); err == nil {
-			t.Errorf("CheckPathRead(%s) was granted, want it refused", rel)
+			t.Errorf("CheckPathRead(%s) was allowed, want it refused", rel)
 		}
 	}
 }
 
-// Every grant is read-only. The agent copies a staged attachment into its
-// workspace; it never writes back into $TERVA_HOME, and in particular the
-// staging area is the sweeper's to reap, not the model's.
-func TestGrantReadOnlyRootsGrantsNoWrites(t *testing.T) {
-	sb, home, _ := grantedSandbox(t)
+// The deny list binds bash too. Enforcing it on the file tools alone would
+// rebuild, for the one case that matters, the split posture this sandbox
+// abandoned: refused by `read`, handed over by `cat`.
+func TestRestrictSensitiveReadsBindsBash(t *testing.T) {
+	sb, home, _ := restrictedSandbox(t)
 
-	for _, rel := range []string{
-		"docs/web.md",
-		"skills/release/SKILL.md",
-		attach.DirName + "/ses_1/att_abc-filters.xml",
-		"logs/ext-memory.log",
+	for _, cmd := range []string{
+		"cat " + filepath.Join(home, "auth.json"),
+		"grep -r token " + filepath.Join(home, "logs"),
+		"head -5 " + filepath.Join(home, "sessions/abc/session.jsonl"),
+		"ls " + filepath.Join(home, attach.ShareDirName),
 	} {
-		if err := sb.CheckPath(filepath.Join(home, rel)); err == nil {
-			t.Errorf("CheckPath(%s) was granted, want every read-only root to refuse writes", rel)
+		if err := sb.CheckCommand(cmd); err == nil {
+			t.Errorf("CheckCommand(%q) was allowed, want it refused", cmd)
+		}
+	}
+
+	// ...and does not fire on the paths it never denied, nor on bare words
+	// that merely look like denied directory names.
+	for _, cmd := range []string{
+		"cat " + filepath.Join(home, "docs/web.md"),
+		"tail " + filepath.Join(home, "logs/ext-memory.log"),
+		"go test ./packages/agent/sessions",
+		"echo sessions swarm logs",
+		"git log --oneline -5",
+	} {
+		if err := sb.CheckCommand(cmd); err != nil {
+			t.Errorf("CheckCommand(%q) = %v, want it allowed", cmd, err)
 		}
 	}
 }
 
-// The jail root itself is unaffected by the grants: still readable, still
-// writable. A regression here would be far worse than a missing grant.
-func TestGrantReadOnlyRootsLeavesJailRootWritable(t *testing.T) {
-	sb, _, cwd := grantedSandbox(t)
+// Reads outside the working directory are no longer refused: the bash tool was
+// never path-jailed, so every such refusal cost a turn and confined nothing.
+// This is B1 of docs/reviews/2026-07-30-session-harness-friction-review.md — a
+// batch of eight parallel reads under /tmp was rejected, and the same bytes
+// arrived one turn later through `git show | awk`.
+func TestJailedReadsReachOutsideTheRoot(t *testing.T) {
+	sb, _, _ := restrictedSandbox(t)
+	scratch := testsupport.TempDir(t)
+	target := filepath.Join(scratch, "game", "03-JavaScript", "time.js")
+
+	if err := sb.CheckPathRead(target); err != nil {
+		t.Errorf("CheckPathRead(%s) = %v, want reads unconfined when jailed", target, err)
+	}
+	// WRITES are unchanged — that is the half the jail still enforces.
+	if err := sb.CheckPath(target); err == nil {
+		t.Errorf("CheckPath(%s) was allowed; the write jail must still hold", target)
+	}
+}
+
+// The jail root itself: still readable, still writable. A regression here
+// would be far worse than an over-broad read.
+func TestRestrictSensitiveReadsLeavesJailRootWritable(t *testing.T) {
+	sb, _, cwd := restrictedSandbox(t)
 	target := filepath.Join(cwd, "src", "main.go")
 
 	if err := sb.CheckPathRead(target); err != nil {

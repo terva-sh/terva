@@ -49,6 +49,8 @@ type wsSession struct {
 	roSet       *core.ReadOnlySet      // the live policy's read-only set, so a rebuild's merges land where the gate reads them (nil in pure-yolo)
 	skillTool   *skills.Tool           // available skills, for /skill autocomplete (may be nil)
 	tasks       *tasktool.Controller   // the built-in task board (nil when the session has no base workspace tools)
+	memory      *tools.MemoryTool      // durable memory, bound once at session build (nil when --no-memory)
+	files       *tools.FileState       // what the model has seen of each path; survives tool rebuilds
 	loreEntries []lore.Entry           // discovered lore, for the lore inspector pane (nil when lore off)
 	note        *build.NoteRecord      // live author's-note record (nil for a coding session); note.set writes it, the per-turn tail reads it
 	user        *build.NoteRecord      // live user-persona description record (nil for a coding session); user.bind writes it, the per-turn tail reads it
@@ -352,6 +354,13 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	s.gate = gate
 	s.skillTool = r.SkillTool
 	s.tasks = r.Tasks
+	// Retain the memory tool for the same reason as the task board: the pane and
+	// the injected block read the stores it bound, and a rebuild must not swap
+	// them out from under either.
+	s.memory, _ = r.ToolRegistry["memory"].(*tools.MemoryTool)
+	// Same retention rule as the task board and memory: a rebuild must not
+	// forget which files the model has read.
+	s.files = r.Files()
 	s.args = args
 	s.cwd = r.CWD
 	// Retain the live author's-note record (immersive sessions only) and seed it
@@ -601,6 +610,21 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			OnSpawned: s.trackSwarmAgent,
 		}
 	}
+	// terva_status reports spend by sub-agents that are still RUNNING, which the
+	// session's delegated total cannot include (a child is booked only when its
+	// recap flushes). Bound here rather than in Resolve because the swarm belongs
+	// to the workspace, and bound on every rebuild for the same reason
+	// swarm_spawn is: a rebuilt registry mints a fresh StatusTool, and a status
+	// tool that silently lost its swarm would under-report during exactly the
+	// window this exists for.
+	//
+	// Not gated on AutoSwarmEnabled: agents dispatched manually through /swarm
+	// spend real money too, and a nil swarm reports nothing anyway.
+	if w.swarm != nil {
+		if st, ok := r.ToolRegistry["terva_status"].(*tools.StatusTool); ok {
+			st.Swarm = w.swarm
+		}
+	}
 	// The model's World hands (Worlds W4b): the play director records world
 	// knowledge (world_note) and marks characters learning secrets
 	// (world_reveal). Play-only — chat is pure conversation (no tools), and
@@ -817,6 +841,18 @@ func (s *wsSession) beginTurn() (context.Context, error) {
 // there), re-broadcasts the authoritative snapshot, and handles titling,
 // post-turn auto-compact, and the queued-message restart. The caller must have
 // claimed the slot with beginTurn.
+//
+// ErrBusy is excluded from both the error banner and the sidecar, alongside
+// Canceled. It means a run was already in progress and this one was refused —
+// a control-flow rejection, not a turn that died. The post-turn auto-compact
+// races a client prompt by design (the call site says so: "benign for an
+// opportunistic pass"), and the loser's ErrBusy was landing in the sidecar as
+// if it were a provider failure. In a reviewed 25-hour session that was the
+// ONLY sidecar row, and it was spurious — the compaction it lost to succeeded.
+// This matters more now that session_inspect reads the sidecar and interleaves
+// it with the transcript: a rejection that never started is not a turn death,
+// and counting it as one misdirects the next review. The sidecar's job is to
+// explain turns that died.
 func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context) error, afterTurn func()) {
 	go func() {
 		// Extensions load in the background so the session materializes at
@@ -826,7 +862,7 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		// longer typing than the subprocesses spent handshaking.
 		s.awaitExtensions(turnCtx)
 		err := gen(turnCtx)
-		if err != nil && !errors.Is(err, context.Canceled) {
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, core.ErrBusy) {
 			s.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "error", Error: err.Error()}))
 			// The banner is transient; persist the failure to the session's
 			// error sidecar (alongside the transcript, not in it) so a red X is
@@ -1184,6 +1220,8 @@ func (s *wsSession) rebuildTools(reason string) {
 	// point the task tools at a store none of them render — so the board would
 	// exist, never change, and the model would lose sight of its own open work.
 	rr.UseTasks(s.tasks)
+	rr.UseMemory(s.memory)
+	rr.UseFiles(s.files)
 	// Re-bind the channels that live on a TOOL INSTANCE rather than on a
 	// long-lived object (the confirmer, by contrast, lives on the gate and
 	// survives a rebuild untouched). Resolve just minted fresh tools with nil
@@ -2012,7 +2050,24 @@ func (s *wsSession) retitleAfterCompaction(ctx context.Context) {
 
 // firstUserText returns the text of the first user message in a transcript, the
 // seed for a session title.
+//
+// Compaction summaries are skipped. They are synthetic messages carrying the
+// user role, so after a compaction the transcript's first user message is the
+// summary — and titling an untitled session then (a resume, a restart, any turn
+// that finds s.title empty) produced a title made of the summary's own
+// scaffolding: "## Context Summary (compacted)  ## Goal The user is building…",
+// truncated at 60 characters. Observed verbatim in a reviewed session.
+//
+// core.BuildTitleSeed, which feeds the model-generated phase, already handles
+// this — it anchors on the compaction deliberately and strips the header. This
+// is the instant phase-1 fallback, which did not, and which is what actually
+// names the session when the model call is off or fails.
+//
+// Falls back to the first summary's own text when there is nothing else, with
+// the header stripped, so a fully-compacted transcript still yields a title
+// about the work rather than about the document.
 func firstUserText(msgs []provider.Message) string {
+	var summary string
 	for _, m := range msgs {
 		if m.Role != provider.RoleUser {
 			continue
@@ -2023,11 +2078,19 @@ func firstUserText(msgs []provider.Message) string {
 				sb.WriteString(tb.Text)
 			}
 		}
-		if t := strings.TrimSpace(sb.String()); t != "" {
-			return t
+		t := strings.TrimSpace(sb.String())
+		if t == "" {
+			continue
 		}
+		if m.Meta[core.MetaCompaction] == "true" {
+			if summary == "" {
+				summary = core.StripCompactionHeader(t)
+			}
+			continue
+		}
+		return t
 	}
-	return ""
+	return summary
 }
 
 // queue injects text at the next safe boundary of the running turn (the

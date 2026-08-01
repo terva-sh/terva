@@ -452,6 +452,41 @@ func TestFirstUserText(t *testing.T) {
 	}
 }
 
+// A compaction summary is a synthetic message carrying the USER role, so after
+// a compaction it is the transcript's first user message. Titling an untitled
+// session then — a resume, a restart, any turn that finds the title empty —
+// produced a title made of the summary's own scaffolding. Seen verbatim in a
+// reviewed session: "## Context Summary (compacted)  ## Goal The user is
+// building…", truncated at 60 characters. core.BuildTitleSeed (the model-
+// generated phase) already skipped these; this is the instant fallback, which
+// is what actually names the session when the model call is off or fails.
+func TestFirstUserTextSkipsCompactionSummaries(t *testing.T) {
+	summary := provider.Message{
+		Role:    provider.RoleUser,
+		Meta:    map[string]string{core.MetaCompaction: "true"},
+		Content: []provider.Content{provider.TextBlock{Text: "## Context Summary (compacted)\n\n## Goal\nThe user is building a simulator"}},
+	}
+	real := provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.Content{provider.TextBlock{Text: "extend the encounter engine"}},
+	}
+
+	// The real ask wins even though the summary precedes it.
+	if got := firstUserText([]provider.Message{summary, real}); got != "extend the encounter engine" {
+		t.Errorf("firstUserText = %q, want the real user message", got)
+	}
+
+	// With nothing but summaries, fall back to the summary's SUBJECT rather
+	// than its header — a title about the work, not about the document.
+	got := firstUserText([]provider.Message{summary})
+	if strings.Contains(got, "Context Summary (compacted)") {
+		t.Errorf("title seed still carries the compaction scaffolding: %q", got)
+	}
+	if !strings.Contains(got, "The user is building a simulator") {
+		t.Errorf("title seed lost the summary's subject: %q", got)
+	}
+}
+
 func TestCleanTitle(t *testing.T) {
 	cases := map[string]string{
 		"\"Refactor the parser.\"": "Refactor the parser",
@@ -1470,18 +1505,18 @@ func TestSessionSummariesFromInfos(t *testing.T) {
 func TestTaskActionSpawnValidation(t *testing.T) {
 	w := &Workspace{}
 	var ce *ctrlproto.Error
-	if err := w.taskAction("spawn", map[string]string{"task": "x"}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeUnsupported {
+	if err := w.taskAction("s1", "spawn", map[string]string{"task": "x"}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeUnsupported {
 		t.Fatalf("spawn without swarm = %v, want CodeUnsupported", err)
 	}
 	w.swarm = swarm.New(swarm.Config{Root: testsupport.TempDir(t), RepoRoot: testsupport.TempDir(t)})
-	if err := w.taskAction("spawn", map[string]string{"task": "   "}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeBadRequest {
+	if err := w.taskAction("s1", "spawn", map[string]string{"task": "   "}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeBadRequest {
 		t.Fatalf("spawn with blank task = %v, want CodeBadRequest", err)
 	}
 	// A foreign backend runs the human spawn through the SAME gate the model's
 	// swarm_spawn tool uses; an unregistered name is refused before any spawn —
 	// whichever way the external-workers knob is set (disabled → "disabled";
 	// enabled → worker.Lookup's "unknown backend"). Either way, nothing launches.
-	if err := w.taskAction("spawn", map[string]string{"task": "x", "backend": "nonesuch-backend"}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeBadRequest {
+	if err := w.taskAction("s1", "spawn", map[string]string{"task": "x", "backend": "nonesuch-backend"}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeBadRequest {
 		t.Fatalf("spawn with an unknown backend = %v, want CodeBadRequest", err)
 	}
 	if n := len(w.swarm.SnapshotAll()); n != 0 {
@@ -2355,13 +2390,13 @@ func TestExtPanelSurface(t *testing.T) {
 func TestTasksSurface(t *testing.T) {
 	tmp := testsupport.TempDir(t)
 	w := &Workspace{root: tmp, cwd: tmp, sessions: map[string]*wsSession{}, swarm: swarm.New(swarm.Config{Root: tmp, RepoRoot: tmp})}
-	if tl := w.taskList(); tl == nil || len(tl.Tasks) != 0 {
+	if tl := w.taskList("s1"); tl == nil || len(tl.Tasks) != 0 {
 		t.Fatalf("empty swarm should yield empty task list, got %+v", tl)
 	}
-	if err := w.taskAction("bogus", nil); err == nil {
+	if err := w.taskAction("s1", "bogus", nil); err == nil {
 		t.Error("unknown tasks action should error")
 	}
-	if err := w.taskAction("stop", map[string]string{"id": "nope"}); err == nil {
+	if err := w.taskAction("s1", "stop", map[string]string{"id": "nope"}); err == nil {
 		t.Error("stopping a missing agent should error")
 	}
 	s := &wsSession{id: "x", ws: w, hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
@@ -2438,4 +2473,68 @@ func titleOf(list []ctrlproto.SessionInfo, id string) string {
 		}
 	}
 	return "<not found>"
+}
+
+// ErrBusy means a run was already in progress and this one was refused — a
+// control-flow rejection, not a turn that died. The post-turn auto-compact races
+// a client prompt by design ("benign for an opportunistic pass", per its call
+// site), and the loser's ErrBusy was landing in the error sidecar as a provider
+// failure and on every client as a red banner. In a reviewed 25-hour session
+// that spurious row was the ONLY sidecar entry; the compaction it lost to had
+// succeeded. session_inspect now reads the sidecar and interleaves it with the
+// transcript, so a rejection that never started would be counted as a turn death
+// by the next review.
+func TestWorkspaceBusyIsNotLoggedAsATurnFailure(t *testing.T) {
+	s := newTurnTestSession(t, &gatedTurnClient{started: make(chan struct{}, 1), release: make(chan struct{})})
+	sub := s.hub.add(nil, true)
+
+	turnCtx, err := s.beginTurn()
+	if err != nil {
+		t.Fatalf("beginTurn: %v", err)
+	}
+	s.launchTurn(turnCtx, func(context.Context) error { return core.ErrBusy }, nil)
+
+	// "done" still fires — a consumer's busy state must not stick just because
+	// the refusal is silent.
+	_, seen := drainUntil(t, sub, "done")
+	for _, ev := range seen {
+		if ev.Type == "error" {
+			t.Errorf("a busy rejection must not broadcast an error banner: %+v", ev)
+		}
+	}
+	waitIdle(t, s)
+
+	if b, err := os.ReadFile(s.sess.ErrorLogPath()); err == nil && len(b) > 0 {
+		t.Errorf("a busy rejection must not reach the error sidecar, got: %s", b)
+	}
+}
+
+// The exclusion must stay narrow: a genuine provider failure is exactly what the
+// sidecar exists to record, and silencing it would make a red X unrecoverable.
+func TestWorkspaceRealFailureStillReachesTheSidecar(t *testing.T) {
+	s := newTurnTestSession(t, &gatedTurnClient{started: make(chan struct{}, 1), release: make(chan struct{})})
+	sub := s.hub.add(nil, true)
+
+	turnCtx, err := s.beginTurn()
+	if err != nil {
+		t.Fatalf("beginTurn: %v", err)
+	}
+	s.launchTurn(turnCtx, func(context.Context) error { return errors.New("provider exploded") }, nil)
+
+	_, seen := drainUntil(t, sub, "done")
+	var sawError bool
+	for _, ev := range seen {
+		if ev.Type == "error" {
+			sawError = true
+		}
+	}
+	if !sawError {
+		t.Error("a real failure must still broadcast an error banner")
+	}
+	waitIdle(t, s)
+
+	b, err := os.ReadFile(s.sess.ErrorLogPath())
+	if err != nil || !strings.Contains(string(b), "provider exploded") {
+		t.Errorf("a real failure must reach the sidecar, got %q (err=%v)", b, err)
+	}
 }

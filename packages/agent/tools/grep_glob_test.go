@@ -194,21 +194,33 @@ func TestGrepInvalidRegex(t *testing.T) {
 	}
 }
 
-func TestGrepGlobJailEscape(t *testing.T) {
-	// A locked sandbox rooted at a subdir must refuse a path arg that
-	// climbs out of it.
+// grep and glob are read tools, so a locked sandbox no longer confines them to
+// the root — bash was never confined either, and refusing them only cost turns
+// (B1, docs/reviews/2026-07-30-session-harness-friction-review.md). What they
+// must still refuse is a registered secret root.
+func TestGrepGlobReadOutsideJailButNotSecrets(t *testing.T) {
 	dir := seedTree(t)
 	sub := filepath.Join(dir, "pkg")
+	secret := filepath.Join(dir, "docs")
 	sb := NewSandbox(sub)
+	sb.AddSecretRoot(secret)
 	sb.Lock()
 
 	g := &GrepTool{CWD: sub, Sandbox: sb}
-	if _, err := g.Execute(context.Background(), mustJSON(t, map[string]any{"pattern": "hello", "path": ".."}), nil); err == nil {
-		t.Error("grep should reject path escaping the jail")
+	if _, err := g.Execute(context.Background(), mustJSON(t, map[string]any{"pattern": "hello", "path": ".."}), nil); err != nil {
+		t.Errorf("grep outside the jail root should be allowed: %v", err)
 	}
 	gl := &GlobTool{CWD: sub, Sandbox: sb}
+	if _, err := gl.Execute(context.Background(), mustJSON(t, map[string]any{"pattern": "*", "path": ".."}), nil); err != nil {
+		t.Errorf("glob outside the jail root should be allowed: %v", err)
+	}
+
+	// The secret root is still refused, to both.
+	if _, err := g.Execute(context.Background(), mustJSON(t, map[string]any{"pattern": "hello", "path": "../docs"}), nil); err == nil {
+		t.Error("grep should refuse a secret root")
+	}
 	if _, err := gl.Execute(context.Background(), mustJSON(t, map[string]any{"pattern": "*", "path": "../docs"}), nil); err == nil {
-		t.Error("glob should reject path escaping the jail")
+		t.Error("glob should refuse a secret root")
 	}
 }
 

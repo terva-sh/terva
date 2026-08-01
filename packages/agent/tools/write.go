@@ -18,6 +18,8 @@ import (
 type WriteTool struct {
 	CWD     string
 	Sandbox *Sandbox
+	// Files records what the model has seen of each path (see ReadTool.Files).
+	Files *FileState
 }
 
 type writeArgs struct {
@@ -67,6 +69,8 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 	if err := os.WriteFile(path, []byte(a.Content), perm); err != nil {
 		return core.ToolResult{}, err
 	}
+	// The model now knows this file exactly — it just authored it.
+	t.Files.Record(path, []byte(a.Content), "write")
 	// os.WriteFile applies perm only when it creates the file, and even then the
 	// umask masks it; on an overwrite it changes nothing. Chmod pins the exact
 	// bits so an explicit mode is honored under any umask and on an overwrite.

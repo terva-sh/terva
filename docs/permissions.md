@@ -5,14 +5,35 @@ Two orthogonal controls decide what the agent may do:
 - the **approval mode** and **permission rules** decide *whether a tool
   call runs at all* (this page);
 - the **sandbox** (`/jail` in [tui.md](tui.md)) bounds *what a running
-  tool can touch* (paths under the cwd, command heuristics).
+  tool can touch* (writes under the cwd, command heuristics).
 
 They compose: a call must pass the approval layer first, then run
 within whatever the sandbox permits. Keeping the axes separate is
 deliberate — a single conflated "trust level" is the known failure
 mode in this design space. The interactive default pairs them: the
 `workspace` approval mode trusts your built-in tools *because* the
-sandbox (jailed by default) bounds them to the working directory.
+sandbox (jailed by default) bounds their **writes** to the working
+directory.
+
+### What the jail does and does not confine
+
+The jail is a **write** boundary plus a set of command heuristics. It is
+deliberately not a read boundary:
+
+- **Writes** (`write`, `edit`, image output, chat attachments) are confined
+  to the working directory.
+- **Reads** (`read`, `grep`, `glob`, `share_file`) are not confined. The
+  `bash` tool has never been path-jailed — it cannot be, short of not
+  shipping a shell — so a refused read was always one `cat` away. Enforcing
+  containment on one tool and not the other confined nothing and cost turns:
+  the model would hit the refusal, then route around it through `bash` on the
+  next turn.
+- **Secrets are denied outright**, to reads *and* to `bash`, jailed or not:
+  `auth.json`, `config.json`, `trusted.json`, `unjailed.json`, `sessions/`,
+  `swarm/`, `logs/` (except `ext-*.log`), and `shared/`. `/unjail` does not
+  lift these. Like the rest of the sandbox this is a speed bump rather than a
+  boundary — a runtime-assembled path or an interpreter walks past it — but
+  it is the same speed bump on every route.
 
 ## Approval modes
 
@@ -82,10 +103,11 @@ to write outside of is not thereby one whose code you want executing.
 **One combination is worth saying out loud**, and terva says it at
 startup rather than leaving you to infer it: a saved unjail rule
 *together with* an auto-approving mode (`workspace`, `yolo`) means the
-built-in tools may read and write anywhere **without asking**. The jail
-is what made `workspace` safe to leave alone — built-ins are
-auto-approved precisely *because* they were confined. Take the jail away
-and that premise goes with it.
+built-in tools may **write** anywhere without asking. The jail is what
+made `workspace` safe to leave alone — built-ins are auto-approved
+precisely *because* their writes were confined. Take the jail away and
+that premise goes with it. (Reads are already unconfined either way; the
+secret deny list above holds regardless.)
 
 Tools that are not classified read-only — including every extension
 tool — are treated as mutating. In headless modes (`-p`, `--json`,
@@ -115,7 +137,7 @@ would be wrong. The classes (`core.Authority`):
 
 | Authority | Meaning | Example |
 |---|---|---|
-| `local-read` | reads files/state under the jail; no process/network/external effect | `read`, `grep`, `glob`, `terva_status`, `session_inspect`, `skill`, `worktree_list`, `code_execution` (read-only exactly as long as every function it exposes is — see [scripting.md](scripting.md#permissions)) |
+| `local-read` | reads files/state (not the secret deny list); no process/network/external effect | `read`, `grep`, `glob`, `terva_status`, `session_inspect`, `skill`, `worktree_list`, `code_execution` (read-only exactly as long as every function it exposes is — see [scripting.md](scripting.md#permissions)) |
 | `local-data` | reads **and writes** the tool's own host-managed data store — for an extension, its `$TERVA_HOME/ext-data/<name>` — and nothing else: never your workspace, a process, the network, or an external service. Auto-allowable like `local-read`, because the write never leaves private, host-controlled storage | `task_create`/`task_update`/`task_list`/`task_archive`; a memory/notes extension tool |
 | `workspace-mutation` | writes files / edits workspace state | `write`, `edit` |
 | `process-execution` | runs commands / subprocesses | `bash` |
