@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"terva.sh/terva/packages/agent/swarm"
@@ -30,6 +32,12 @@ type SessionInspectTool struct {
 	// carries no agent (direct calls, tests). Bound after the agent is built,
 	// with the same ctx-wins semantics as terva_status.
 	Agent *core.Agent
+	// Sandbox is the SAME read policy the read tool applies, and it is what
+	// bounds the `path` argument. Holding the tool to read's reach — no more, no
+	// less — is what makes an arbitrary path safe to accept: see resolveFromPath.
+	// Nil is the unjailed default and permits everything, exactly as it does for
+	// read.
+	Sandbox *Sandbox
 }
 
 // sessionInspectArgs is the wire shape. Every optional field here is INERT at
@@ -52,7 +60,12 @@ type SessionInspectTool struct {
 // wire, 0 means "unset", and a fully padded call lands on the sensible default
 // instead of an error.
 type sessionInspectArgs struct {
-	SessionID    string   `json:"session_id"`
+	SessionID string `json:"session_id"`
+	// Path names a session-shaped JSONL anywhere the READ tool can reach it —
+	// a transcript the user downloaded, one copied out of another checkout, one
+	// written by a different machine. See resolveFromPath for why this grants no
+	// access the model does not already have.
+	Path         string   `json:"path"`
 	EventKinds   []string `json:"event_kinds"`
 	ToolName     string   `json:"tool_name"`
 	FailuresOnly bool     `json:"failures_only"`
@@ -60,6 +73,7 @@ type sessionInspectArgs struct {
 	Cursor       int      `json:"cursor"`
 	Expand       int      `json:"expand"`
 	TextOffset   int      `json:"text_offset"`
+	Stats        bool     `json:"stats"`
 }
 
 // The wire indices are 1-based (#1 is the first match) and the scan's are
@@ -103,7 +117,7 @@ func expandTarget(expand int) *int {
 func (t *SessionInspectTool) Name() string { return "session_inspect" }
 
 func (t *SessionInspectTool) Description() string {
-	return "Inspect THIS session's transcript in a structured, bounded way — to see what happened without re-reading everything. EVERY argument is optional and 0 means \"not set\", so it is always safe to send them all as zeros: that is the default listing. It has two MUTUALLY EXCLUSIVE modes; filters apply to both: failures_only (only failed/errored tool results), tool_name, or event_kinds ([\"tool_call\",\"tool_result\",\"message\"]). LIST MODE (the default — expand 0): shows a window of matching events (tool calls, tool results with pass/fail, and message text), most recent by default. Page with limit (default 40, cap 200) and cursor (a 1-based position in the matching events, oldest=1; cursor 0 means the most recent window; a next_cursor is returned when more remain — reuse the same filters). Each listed event carries its index (#n, starting at #1). EXPAND MODE (expand non-zero): reads ONE event's full text — pass an #n from a listing (paged with text_offset when long), e.g. a sub-agent's complete findings; negative counts from the end (event_kinds [\"message\"] with expand -1 is the most recent message in full, no listing needed). EXPAND ignores cursor/limit, so do NOT give both a real value — a call that sets expand AND a non-zero cursor/limit is rejected, not silently narrowed. session_id defaults to the current session; pass another id from this project (a filename without .jsonl, as terva_status prints) or a swarm sub-agent id (as swarm_spawn and the [auto-swarm update] recap print) to inspect that transcript. Secrets are redacted and output is size-bounded."
+	return "Inspect THIS session's transcript in a structured, bounded way — to see what happened without re-reading everything. EVERY argument is optional and 0 means \"not set\", so it is always safe to send them all as zeros: that is the default listing. STATS MODE (stats true) is the one to reach for first when the question is \"what happened in this session / what did it cost\": one bounded rollup — cost, cache hit rate, dead turns, tool-call and failure histograms, provider errors — that no amount of paging through events would give you cheaply. The other two modes are MUTUALLY EXCLUSIVE and share the filters: failures_only (only failed/errored tool results), tool_name, or event_kinds ([\"tool_call\",\"tool_result\",\"message\",\"usage\",\"error\"]). LIST MODE (the default — expand 0): shows a window of matching events (tool calls, tool results with pass/fail, message text, and per-turn usage), most recent by default. USAGE events carry what a turn cost and how much of its input hit the prefix cache — event_kinds [\"usage\"] alone is how you answer \"where did this session's money go\", which nothing else in the transcript can tell you; expand one for its full token breakdown. Page with limit (default 40, cap 200) and cursor (a 1-based position in the matching events, oldest=1; cursor 0 means the most recent window; a next_cursor is returned when more remain — reuse the same filters). Each listed event carries its index (#n, starting at #1). EXPAND MODE (expand non-zero): reads ONE event's full text — pass an #n from a listing (paged with text_offset when long), e.g. a sub-agent's complete findings; negative counts from the end (event_kinds [\"message\"] with expand -1 is the most recent message in full, no listing needed). EXPAND ignores cursor/limit, so do NOT give both a real value — a call that sets expand AND a non-zero cursor/limit is rejected, not silently narrowed. session_id defaults to the current session; pass another id from this project (a filename without .jsonl, as terva_status prints) or a swarm sub-agent id (as swarm_spawn and the [auto-swarm update] recap print) to inspect that transcript. To inspect a transcript FILE instead — one downloaded from another machine, or handed to you by the user — pass path (any .jsonl you could open with the read tool); it is mutually exclusive with session_id. Secrets are redacted and output is size-bounded."
 }
 
 func (t *SessionInspectTool) Schema() json.RawMessage {
@@ -111,17 +125,19 @@ func (t *SessionInspectTool) Schema() json.RawMessage {
 		"type": "object",
 		"properties": map[string]any{
 			"session_id":    map[string]any{"type": "string", "description": "Session to inspect (filename without .jsonl), or a swarm sub-agent id spawned from this project. Omit for the current session."},
+			"path":          map[string]any{"type": "string", "description": "Path to a session .jsonl anywhere you could read it with the read tool — e.g. a transcript downloaded from another machine. Mutually exclusive with session_id. Another project's sessions under $TERVA_HOME stay unreadable."},
 			"failures_only": map[string]any{"type": "boolean", "description": "Only failed/errored tool results."},
 			"tool_name":     map[string]any{"type": "string", "description": "Only events for this tool."},
 			"event_kinds": map[string]any{
 				"type":        "array",
-				"items":       map[string]any{"type": "string", "enum": []string{"tool_call", "tool_result", "message"}},
-				"description": "Restrict to these event kinds.",
+				"items":       map[string]any{"type": "string", "enum": []string{"tool_call", "tool_result", "message", "usage", "error"}},
+				"description": "Restrict to these event kinds. \"usage\" is a turn's cost and cache accounting; use it alone to see where a session spent its money. \"error\" is a provider failure from the error sidecar (auth, overload, rate limit), placed against the turn it killed.",
 			},
 			"limit":       map[string]any{"type": "integer", "description": "Max events (default 40, cap 200)."},
 			"cursor":      map[string]any{"type": "integer", "description": "LIST MODE only. 1-based position in the matching events (oldest = 1). 0 (or omitted) means the most recent window. Do not combine with a non-zero expand (rejected)."},
 			"expand":      map[string]any{"type": "integer", "description": "EXPAND MODE. One matching event to read in full: an #n from a listing with the SAME filters (1-based), or negative to count from the end (-1 = most recent match). 0 (or omitted) means list mode instead. Ignores — and must not be combined with — a non-zero limit/cursor (rejected)."},
 			"text_offset": map[string]any{"type": "integer", "description": "With expand: byte offset into that event's text (default 0). Use the offset from the previous truncation notice to continue."},
+			"stats":       map[string]any{"type": "boolean", "description": "STATS MODE. Return a whole-session rollup instead of events: message counts, span, cost, cache hit rate, dead turns, tool-call and failure histograms, provider errors. Ignores the other filters — the numbers always describe the whole session. Start here when the question is \"what happened / what did this cost\" rather than \"show me event N\"."},
 		},
 		"additionalProperties": false,
 	})
@@ -152,7 +168,36 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 			"  LIST MODE:   leave expand at 0 — e.g. {\"event_kinds\":[\"tool_result\"],\"cursor\":1,\"limit\":40}\n" +
 			"  EXPAND MODE: leave cursor/limit at 0 — e.g. {\"event_kinds\":[\"tool_result\"],\"expand\":1}"), nil
 	}
-	path, sessID, swarmChild, err := t.resolvePath(ctx, a.SessionID)
+	// stats is whole-session by construction, so pairing it with an expand
+	// target is a contradiction rather than a narrowing. The listing filters
+	// are NOT an error here — a padded call carrying them is the common shape,
+	// and stats simply ignores them (said so in the schema).
+	if a.Stats && a.Expand != 0 {
+		return toolErr("session_inspect: STATS MODE (stats true) summarises the whole session and EXPAND MODE reads one event — pick one:\n" +
+			"  STATS:  {\"stats\":true}\n" +
+			"  EXPAND: {\"expand\":1}"), nil
+	}
+	// session_id and path both name a transcript, by different means. A call
+	// carrying both has contradicted itself, and picking one silently would send
+	// back an analysis of a file the caller did not ask about — the worst
+	// outcome, since nothing in the output would reveal the substitution.
+	if a.SessionID != "" && a.Path != "" {
+		return toolErr("session_inspect: session_id and path both name a transcript — pass one:\n" +
+			"  BY ID:   {\"session_id\":\"20260729-184207-2f58d72f\"}  (a session of this project, or a swarm sub-agent)\n" +
+			"  BY PATH: {\"path\":\"~/Downloads/20260729-184207-2f58d72f.jsonl\"}  (any transcript you can read)"), nil
+	}
+
+	var (
+		path       string
+		sessID     string
+		swarmChild bool
+		err        error
+	)
+	if a.Path != "" {
+		path, sessID, err = t.resolveFromPath(a.Path)
+	} else {
+		path, sessID, swarmChild, err = t.resolvePath(ctx, a.SessionID)
+	}
 	if err != nil {
 		return toolErr("session_inspect: " + err.Error()), nil
 	}
@@ -161,30 +206,49 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 	// swarm child's transcript lives under the shared swarm root, not the project
 	// sessions dir, so the sessions-dir jail can't confine it — and a known
 	// cross-project child id must not be able to impose transcript-parsing work
-	// before rejection. The child recorded the cwd it was spawned with; only
-	// children of THIS project's cwd are inspectable. Reads just the meta row;
-	// fails closed on a missing meta (empty cwd ≠ this project).
+	// before rejection.
+	//
+	// Ownership comes from the SPAWN RECORD, not from the child's cwd. Those are
+	// the same directory only when the child shares the host's tree; under
+	// --swarm-worktrees every child is leased its own worktree, whose path hashes
+	// to a different project bucket than its parent's. Reading the cwd therefore
+	// rejected every leased child of the very project asking — the flag that
+	// makes sub-agents safe silently disabled the tool that watches them, and it
+	// survived because an unleased child's Dir IS its parent's RepoRoot, which is
+	// the only case the tests covered.
+	//
+	// Fails closed: an unknown agent yields an empty origin, which matches no
+	// project.
 	if swarmChild {
-		childMeta, merr := core.ReadSessionMeta(path)
-		if merr != nil {
-			return toolErr("session_inspect: could not read the session transcript"), nil
-		}
-		if core.SessionsDir(t.TervaHome, childMeta.CWD) != core.SessionsDir(t.TervaHome, t.CWD) {
+		if !swarmChildFromProject(t.TervaHome, t.CWD, swarm.AgentOrigin(swarm.DefaultRoot(t.TervaHome), sessID)) {
 			return toolErr(fmt.Sprintf("session_inspect: swarm sub-agent %q was not spawned from this project", sessID)), nil
 		}
 	}
 
+	// The error sidecar is a separate file and tiny by nature (one short line
+	// per provider failure). Read it whole up front so its rows can interleave
+	// into the event stream by timestamp — a turn that died on an overload
+	// leaves the transcript merely quiet, and this is the only record of why.
+	sideErrs, _ := core.ReadSessionErrors(path)
+
+	if a.Stats {
+		return sessionStats(ctx, path, sessID, sideErrs)
+	}
+
 	scan := newSessScan(a)
+	scan.pending = sideErrs
 	// One bounded streaming pass: the transcript is never hydrated whole.
 	// Retained state is the match count, at most one page of snippets (or the
 	// single expand target's text), and the bounded call-id correlations.
-	_, scanTrunc, err := streamReplay(ctx, path, siScanCeiling, scan.addMessage)
+	_, scanTrunc, err := streamReplay(ctx, path, siScanCeiling, scan.addRow)
 	if err != nil {
 		if ctx.Err() != nil {
 			return core.ToolResult{}, ctx.Err() // propagate cancellation, don't bury it
 		}
 		return toolErr("session_inspect: could not read the session transcript"), nil
 	}
+	// Anything timestamped after the last message lands at the end.
+	scan.drainErrors(time.Time{})
 
 	total := scan.total
 	// An empty transcript on a swarm child is a timing state, not a filter
@@ -225,6 +289,231 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 	}, nil
 }
 
+// sessionStats renders a whole-session rollup: what the session did, what
+// failed, and what it cost. It is the cheap direction — a fixed-size summary
+// over an arbitrarily long transcript — and it exists because the alternative
+// is not "page through the events", it is "give up".
+//
+// Reaching these numbers by listing meant walking hundreds of events at a
+// retrieval cost proportional to the whole context, which in a large session
+// runs to dollars per pass. That is the same trap that made a truncated swarm
+// recap expensive: an answer that is technically reachable but priced so the
+// caller never asks. Everything here is derived in ONE streaming pass.
+//
+// Deliberately ignores the listing filters. A half-filtered rollup invites
+// exactly the misreading a rollup is for — "the session spent $3" when that was
+// one tool's share — so the numbers always describe the whole session.
+func sessionStats(ctx context.Context, path, sessID string, sideErrs []core.SessionError) (core.ToolResult, error) {
+	var (
+		tools      = map[string]int{}
+		failures   = map[string]int{}
+		roles      = map[string]int{}
+		callName   = map[string]string{}
+		usage      provider.Usage
+		turns      int
+		deadTurns  int
+		compaction int
+		first      time.Time
+		last       time.Time
+		// Sub-agent spend booked against this session, kept out of the rollup
+		// above so the cache-hit rate describes THIS session's requests.
+		delegated      provider.Usage
+		delegatedTurns int
+	)
+	_, truncated, err := streamReplay(ctx, path, siScanCeiling, func(_ int, r core.ReplayRow) {
+		switch r.Kind {
+		case core.ReplayRowUsage:
+			// A sub-agent's spend is not a turn of THIS session, and mixing it
+			// in wrecks the one number here worth acting on: a fresh child's
+			// prompt is transcript-sized with nothing cached, so it reads as
+			// this session's cache collapsing. Counted, named, kept apart.
+			if r.Delegated {
+				delegatedTurns++
+				delegated = delegated.Add(r.Usage)
+				return
+			}
+			turns++
+			usage = usage.Add(r.Usage)
+			// A turn that recorded no tokens AND no cost never reached the
+			// model: the request died before it was billed. In the reviewed
+			// session each of these was a turn the user had to re-drive by hand.
+			if r.Usage.InputTokens == 0 && r.Usage.OutputTokens == 0 && r.Usage.CostUSD == 0 {
+				deadTurns++
+			}
+		case core.ReplayRowCompaction:
+			compaction++
+		case core.ReplayRowMessage:
+			m := r.Message
+			roles[string(m.Role)]++
+			if !m.Time.IsZero() {
+				if first.IsZero() {
+					first = m.Time
+				}
+				last = m.Time
+			}
+			for _, c := range m.Content {
+				switch b := c.(type) {
+				case provider.ToolCallBlock:
+					tools[b.Name]++
+					if b.ID != "" && len(callName) < siMaxOutstandingCalls {
+						callName[b.ID] = b.Name
+					}
+				case provider.ToolResultBlock:
+					if !b.IsError {
+						continue
+					}
+					name := callName[b.CallID]
+					if name == "" {
+						name = "(unknown)"
+					}
+					failures[name]++
+					delete(callName, b.CallID)
+				}
+			}
+		}
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return core.ToolResult{}, ctx.Err()
+		}
+		return toolErr("session_inspect: could not read the session transcript"), nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "session %s — summary\n\n", sessID)
+
+	fmt.Fprintf(&b, "messages: %d user, %d assistant, %d tool\n", roles["user"], roles["assistant"], roles["tool"])
+	if !first.IsZero() && last.After(first) {
+		fmt.Fprintf(&b, "span: %s → %s (%s)\n",
+			first.Format("2006-01-02 15:04:05"), last.Format("15:04:05"), last.Sub(first).Round(time.Second))
+	}
+	if compaction > 0 {
+		fmt.Fprintf(&b, "compactions: %d\n", compaction)
+	}
+
+	// A model with no published rate prices at zero, so a real session reports
+	// $0.0000. Printing that as a dollar figure over "billed turns" says the
+	// session was free; one reviewed session moved 112 million tokens and read
+	// as costing nothing. Absence of a price is not a measurement of spend, and
+	// this tool exists so an agent can reason about its own economics — so name
+	// the distinction rather than rendering it as zero.
+	//
+	// Subscriptions used to land here and no longer do: every subscription
+	// provider now carries its models' published rates, so the readout is an
+	// ESTIMATE of what the tokens would have cost rather than a zero (see
+	// "a subscription still has a price, it just isn't yours"). What is left is
+	// a model with no rate at all — a local endpoint, an uncatalogued model —
+	// and github-copilot, which bills per premium request rather than per token.
+	// The wording follows: saying "subscription" here would now name the two
+	// cases that are no longer it.
+	if usage.CostUSD == 0 && usage.InputTokens+usage.CacheReadTokens+usage.OutputTokens > 0 {
+		fmt.Fprintf(&b, "\ncost: not priced — no published rate for this model, over %d turn(s)\n", turns)
+	} else {
+		fmt.Fprintf(&b, "\ncost: $%.4f over %d billed turn(s)\n", usage.CostUSD+delegated.CostUSD, turns)
+	}
+	fmt.Fprintf(&b, "  uncached input %d, cache reads %d, output %d\n",
+		usage.InputTokens, usage.CacheReadTokens, usage.OutputTokens)
+	if total := usage.InputTokens + usage.CacheReadTokens; total > 0 {
+		// The single most actionable number here. A low rate on a long session
+		// means the context is being re-sent at full price, turn after turn.
+		// Computed over this session's OWN requests: a sub-agent starts cold by
+		// definition, so counting its prompts here would report delegation as a
+		// caching failure.
+		fmt.Fprintf(&b, "  cache hit rate %.1f%% of input\n", float64(usage.CacheReadTokens)/float64(total)*100)
+	}
+	if delegatedTurns > 0 {
+		// Inside the cost above, not added to it — the same subset relationship
+		// terva_status draws, and for the same reason: a coordinator can spend
+		// an order of magnitude more through sub-agents than on its own turns.
+		fmt.Fprintf(&b, "  of which delegated to sub-agents: $%.4f over %d record(s), %d in / %d out (excluded from the hit rate above)\n",
+			delegated.CostUSD, delegatedTurns,
+			delegated.InputTokens+delegated.CacheReadTokens+delegated.CacheWriteTokens, delegated.OutputTokens)
+	}
+	if deadTurns > 0 {
+		fmt.Fprintf(&b, "  %d turn(s) recorded zero tokens and zero cost — they died before reaching the model\n", deadTurns)
+	}
+
+	if len(tools) > 0 {
+		b.WriteString("\ntool calls:\n")
+		writeCountTable(&b, tools, siStatsTopN)
+	}
+	if len(failures) > 0 {
+		b.WriteString("\nfailed tool results:\n")
+		writeCountTable(&b, failures, siStatsTopN)
+	}
+
+	if len(sideErrs) > 0 {
+		fmt.Fprintf(&b, "\nprovider errors (%d, from the error sidecar):\n", len(sideErrs))
+		byText := map[string]int{}
+		for _, e := range sideErrs {
+			byText[eventSnippet(labelSessionError(e))]++
+		}
+		writeCountTable(&b, byText, siStatsTopN)
+		b.WriteString("  (event_kinds [\"error\"] lists these in place, against the turns they killed)\n")
+	}
+
+	if truncated {
+		b.WriteString("\n" + scanCeilingNotice)
+	}
+	return core.ToolResult{
+		Content: []provider.Content{provider.TextBlock{Text: b.String()}},
+		Details: map[string]any{
+			"session_id": sessID, "cost_usd": usage.CostUSD, "turns": turns,
+			"input_tokens": usage.InputTokens, "cache_read_tokens": usage.CacheReadTokens,
+			"output_tokens": usage.OutputTokens, "dead_turns": deadTurns,
+			"provider_errors": len(sideErrs),
+		},
+	}, nil
+}
+
+// labelSessionError renders a sidecar row as one line. The provider is
+// prepended only when the message does not already carry it: the error text is
+// stamped by the client, which usually prefixes its own name, and blindly
+// prepending produced "openai-codex: openai-codex: …".
+func labelSessionError(e core.SessionError) string {
+	text := e.Error
+	if e.Provider != "" && !strings.HasPrefix(text, e.Provider+":") {
+		text = e.Provider + ": " + text
+	}
+	if e.Model != "" {
+		text += "  [" + e.Model + "]"
+	}
+	return text
+}
+
+// siStatsTopN bounds each rollup table so a session with a long tail of
+// one-off tool names cannot push the summary past a readable size.
+const siStatsTopN = 25
+
+// writeCountTable renders a name→count map, largest first, ties broken by name
+// so repeated calls on one transcript render identically.
+func writeCountTable(b *strings.Builder, counts map[string]int, top int) {
+	type row struct {
+		name string
+		n    int
+	}
+	rows := make([]row, 0, len(counts))
+	for k, v := range counts {
+		rows = append(rows, row{k, v})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].n != rows[j].n {
+			return rows[i].n > rows[j].n
+		}
+		return rows[i].name < rows[j].name
+	})
+	shown := rows
+	if top > 0 && len(shown) > top {
+		shown = shown[:top]
+	}
+	for _, r := range shown {
+		fmt.Fprintf(b, "  %5d  %s\n", r.n, r.name)
+	}
+	if len(rows) > len(shown) {
+		fmt.Fprintf(b, "  …and %d more\n", len(rows)-len(shown))
+	}
+}
+
 // siScanCeiling caps the transcript bytes one call will scan — a guard against
 // a pathological multi-hundred-MiB file, far above any real session. A var so
 // tests can lower it without writing a giant fixture.
@@ -255,10 +544,28 @@ func emptyChildTranscriptMsg(tervaHome, id string) string {
 	return fmt.Sprintf("session_inspect: sub-agent %q %s. A sub-agent streams its transcript as it works, so this is a timing state, not a filter miss — no combination of event_kinds, limit, or cursor changes it, and inspecting again shortly will show whatever it has produced by then. If you spawned it with swarm_spawn you do not need to watch it at all: its findings are pushed to you as an [auto-swarm update] when the task ends.", id, state)
 }
 
-// streamReplay is core.StreamReplayMessages behind a package var so a test can
+// swarmChildFromProject reports whether a sub-agent spawned at origin belongs to
+// the project rooted at cwd. Shared by session_inspect's authorization gate and
+// session_search's enumeration filter so the two cannot drift — a second copy of
+// this predicate is precisely the twin this repo keeps finding.
+//
+// Ownership comes from the SPAWN RECORD, not the child's cwd: under
+// --swarm-worktrees a child is leased its own worktree, which hashes to a
+// different project bucket than its parent's, so comparing cwds rejects every
+// leased child of the very project asking.
+//
+// Fails closed — an empty origin (unknown or malformed agent) matches nothing.
+func swarmChildFromProject(tervaHome, cwd, origin string) bool {
+	if origin == "" {
+		return false
+	}
+	return core.SessionsDir(tervaHome, origin) == core.SessionsDir(tervaHome, cwd)
+}
+
+// streamReplay is core.StreamReplayRows behind a package var so a test can
 // assert the swarm-child project-authorization gate runs BEFORE any transcript
 // scan (the cross-project parsing-DoS the reorder closes).
-var streamReplay = core.StreamReplayMessages
+var streamReplay = core.StreamReplayRows
 
 const scanCeilingNotice = "note: part of the transcript was skipped — an oversized row, or the 64 MiB scan ceiling was reached; totals and windows may not cover the whole file (some events may be missing)\n"
 
@@ -309,6 +616,10 @@ type sessScan struct {
 	ring       []sessEvent // page/ring storage; nil in expand mode
 	expandEv   *sessEvent
 	expandRing []sessEvent // tail ring for a negative expand; nil otherwise
+
+	// pending holds sidecar errors not yet placed into the stream, oldest
+	// first. Drained by timestamp as messages pass (see drainErrors).
+	pending []core.SessionError
 }
 
 func newSessScan(a sessionInspectArgs) *sessScan {
@@ -379,6 +690,45 @@ func (s *sessScan) takeCall(id string) string {
 	name := s.callName[id]
 	delete(s.callName, id)
 	return name
+}
+
+// addRow dispatches one streamed replay row into the scan. Usage rows carry no
+// text, so they bypass the message flattening entirely.
+func (s *sessScan) addRow(row int, r core.ReplayRow) {
+	switch r.Kind {
+	case core.ReplayRowMessage:
+		// Sidecar errors are timestamped, not row-numbered, so they are placed
+		// just before the first message that postdates them. That puts an
+		// overload immediately after the turn it killed, which is the only
+		// position from which it explains anything.
+		s.drainErrors(r.Message.Time)
+		s.addMessage(row, r.Message)
+	case core.ReplayRowUsage:
+		s.addUsage(row, r.Usage, r.Cumulative)
+	}
+}
+
+// drainErrors emits every pending sidecar error at or before cutoff. A zero
+// cutoff drains the rest, for the errors that postdate the last message.
+func (s *sessScan) drainErrors(cutoff time.Time) {
+	for len(s.pending) > 0 {
+		e := s.pending[0]
+		if !cutoff.IsZero() && e.Time.After(cutoff) {
+			return
+		}
+		s.pending = s.pending[1:]
+		// Row -1: a sidecar row has no transcript row, and inventing one would
+		// collide with a real event's stable reference. Rendered as "-".
+		s.add(sessEvent{Row: -1, Kind: "error", IsError: true, Bytes: len(e.Error), Text: labelSessionError(e)})
+	}
+}
+
+// addUsage flattens one usage row into an event. What a turn cost — and how
+// much of its input hit the prefix cache — is not derivable from the messages,
+// so without this the tool can describe everything a session did except what it
+// spent doing it.
+func (s *sessScan) addUsage(row int, u, cum provider.Usage) {
+	s.add(sessEvent{Row: row, Kind: "usage", Usage: &usageEvent{Usage: u, Cumulative: cum}})
 }
 
 func (s *sessScan) addMessage(row int, m provider.Message) {
@@ -508,6 +858,43 @@ func clipSnippetSource(s string) string {
 // child's transcript under the swarm root (swarmChild=true); the caller must
 // then enforce the project confinement the sessions-dir jail provides here,
 // against the transcript's own recorded cwd.
+// resolveFromPath admits a session-shaped JSONL by filesystem path, bounded by
+// the SAME read policy the read tool applies.
+//
+// That equivalence is the whole security argument, and it is worth stating
+// plainly because "let a tool open an arbitrary path" reads like a hole. It is
+// not one here: every byte reachable this way is already reachable with `read`
+// or `cat`. What the model gains is a LENS, not access — the structured,
+// redacted, bounded view of a transcript it could otherwise only page through as
+// raw JSONL, which is precisely what defeated two harness reviews (both were
+// handed a session file from another machine and had to analyze it with an
+// out-of-tree script).
+//
+// The converse holds too, and is what keeps the project scoping intact:
+// $TERVA_HOME/sessions and swarm/ are registered secret roots, so a path
+// pointing into ANOTHER project's transcripts is refused here exactly as it is
+// for read — with the deny list's own message, which already says that bash
+// cannot reach it either and /unjail does not lift it. Cross-project inspection
+// therefore remains closed, and closes with an explanation rather than a
+// puzzling "no such session".
+func (t *SessionInspectTool) resolveFromPath(raw string) (path, id string, err error) {
+	p := resolvePath(t.CWD, raw)
+	if err := t.Sandbox.CheckPathRead(p); err != nil {
+		return "", "", err
+	}
+	info, serr := os.Stat(p)
+	if serr != nil {
+		return "", "", fmt.Errorf("cannot read %q: %w", t.Sandbox.DisplayPath(p, raw), serr)
+	}
+	if info.IsDir() {
+		return "", "", fmt.Errorf("%s is a directory, not a session transcript", t.Sandbox.DisplayPath(p, raw))
+	}
+	// The id is only a label on the output. Derived from the filename so a
+	// downloaded transcript still reports the id it was recorded under, which is
+	// what a reader correlates against everything else about that session.
+	return p, core.SessionIDFromPath(p), nil
+}
+
 func (t *SessionInspectTool) resolvePath(ctx context.Context, sessionID string) (path, id string, swarmChild bool, err error) {
 	if sessionID != "" {
 		if strings.ContainsAny(sessionID, `/\`) || strings.Contains(sessionID, "..") {
@@ -542,12 +929,57 @@ func (t *SessionInspectTool) resolvePath(ctx context.Context, sessionID string) 
 // sessEvent is one flattened, inspectable transcript event.
 type sessEvent struct {
 	Row     int    // source transcript row (a stable reference, not the cursor)
-	Kind    string // tool_call | tool_result | message
+	Kind    string // tool_call | tool_result | message | usage
 	Role    string
 	Tool    string // tool name (a call's own, or a result's via call_id correlation)
 	IsError bool
 	Bytes   int
 	Text    string
+
+	// Usage is set when Kind == "usage" — the only event kind whose payload is
+	// numbers rather than text, so it renders from these fields instead of Text
+	// and is unaffected by the snippet/expand byte budgets.
+	Usage *usageEvent
+}
+
+// usageEvent is a turn's recorded cost alongside the session's running total.
+type usageEvent struct {
+	Usage      provider.Usage
+	Cumulative provider.Usage
+}
+
+// line renders a usage event for a listing: the turn's own numbers, then the
+// running total. Uncached input and cache reads are kept SEPARATE rather than
+// summed into one "input" figure, because the ratio between them is the whole
+// signal — the same token count costs an order of magnitude more when it misses
+// the prefix cache, and a combined number hides exactly that.
+func (u *usageEvent) line() string {
+	return fmt.Sprintf("in %d  cached %d  out %d  $%.4f  (session $%.4f)",
+		u.Usage.InputTokens, u.Usage.CacheReadTokens, u.Usage.OutputTokens,
+		u.Usage.CostUSD, u.Cumulative.CostUSD)
+}
+
+// detail renders a usage event for expand mode: every recorded field, one per
+// line, including the cache-write and cumulative token counts the one-line form
+// leaves out.
+func (u *usageEvent) detail() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "turn:\n")
+	fmt.Fprintf(&b, "  input_tokens       %d   (uncached — billed at full rate)\n", u.Usage.InputTokens)
+	fmt.Fprintf(&b, "  cache_read_tokens  %d\n", u.Usage.CacheReadTokens)
+	fmt.Fprintf(&b, "  cache_write_tokens %d\n", u.Usage.CacheWriteTokens)
+	fmt.Fprintf(&b, "  output_tokens      %d\n", u.Usage.OutputTokens)
+	fmt.Fprintf(&b, "  cost_usd           %.6f\n", u.Usage.CostUSD)
+	if total := u.Usage.InputTokens + u.Usage.CacheReadTokens; total > 0 {
+		fmt.Fprintf(&b, "  cache hit rate     %.1f%% of input\n",
+			float64(u.Usage.CacheReadTokens)/float64(total)*100)
+	}
+	fmt.Fprintf(&b, "session cumulative:\n")
+	fmt.Fprintf(&b, "  input_tokens       %d\n", u.Cumulative.InputTokens)
+	fmt.Fprintf(&b, "  cache_read_tokens  %d\n", u.Cumulative.CacheReadTokens)
+	fmt.Fprintf(&b, "  output_tokens      %d\n", u.Cumulative.OutputTokens)
+	fmt.Fprintf(&b, "  cost_usd           %.6f\n", u.Cumulative.CostUSD)
+	return b.String()
 }
 
 func flattenResultText(blocks []provider.Content) string {
@@ -583,7 +1015,21 @@ func renderSessionEvents(sessID string, window []sessEvent, total, start, end, l
 	}
 	fmt.Fprintf(&b, "session %s — %d matching event(s); showing %d–%d\n", sessID, total, wireIndex(start), end)
 	for i, e := range window {
-		line := fmt.Sprintf("[#%d row %d] %-12s %-16s %-4s %6dB  %s\n", wireIndex(start+i), e.Row, e.Kind, e.Tool, eventStatus(e), e.Bytes, eventSnippet(e.Text))
+		// A usage event has no tool, status, or byte count — forcing it through
+		// the text-event columns would print three empty fields and a "0B" that
+		// reads as a defect. It shares only the [#n row r] kind prefix, so a
+		// caller still reads coordinates off it the same way.
+		var line string
+		switch {
+		case e.Usage != nil:
+			line = fmt.Sprintf("[#%d row %d] %-12s %s\n", wireIndex(start+i), e.Row, e.Kind, e.Usage.line())
+		case e.Kind == "error":
+			// No transcript row and no tool: a sidecar error is placed by
+			// timestamp, so "row -" says it has no row rather than showing -1.
+			line = fmt.Sprintf("[#%d row -] %-12s %s\n", wireIndex(start+i), e.Kind, eventSnippet(e.Text))
+		default:
+			line = fmt.Sprintf("[#%d row %d] %-12s %-16s %-4s %6dB  %s\n", wireIndex(start+i), e.Row, e.Kind, e.Tool, eventStatus(e), e.Bytes, eventSnippet(e.Text))
+		}
 		if b.Len()+len(line) > siOutputMax {
 			b.WriteString("…(output truncated; narrow with filters or a smaller limit)\n")
 			return b.String()
@@ -624,6 +1070,22 @@ func eventStatus(e sessEvent) string {
 // oldest-first coordinate space cursor uses (the #n each listing line shows);
 // the caller resolves it to the one retained event (range-checked there).
 func expandSessionEvent(sessID string, e sessEvent, idx, textOffset int) core.ToolResult {
+	// A usage event's payload is a fixed handful of numbers, so it is always
+	// rendered whole: there is nothing for textOffset to page through, and
+	// reporting a byte range over it would invite a second call that returns
+	// the same thing.
+	if e.Usage != nil {
+		body := fmt.Sprintf("session %s — event #%d (row %d, usage)\n%s", sessID, wireIndex(idx), e.Row, e.Usage.detail())
+		return core.ToolResult{
+			Content: []provider.Content{provider.TextBlock{Text: body}},
+			Details: map[string]any{
+				"session_id": sessID, "expand": wireIndex(idx),
+				"input_tokens": e.Usage.Usage.InputTokens, "cache_read_tokens": e.Usage.Usage.CacheReadTokens,
+				"cache_write_tokens": e.Usage.Usage.CacheWriteTokens, "output_tokens": e.Usage.Usage.OutputTokens,
+				"cost_usd": e.Usage.Usage.CostUSD, "cumulative_cost_usd": e.Usage.Cumulative.CostUSD,
+			},
+		}
+	}
 	text := core.RedactSecrets(e.Text)
 	if textOffset < 0 {
 		textOffset = 0

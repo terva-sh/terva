@@ -39,6 +39,11 @@ type ReplayRow struct {
 	// Usage/Cumulative are set when Kind == ReplayRowUsage, as recorded.
 	Usage      provider.Usage
 	Cumulative provider.Usage
+	// Delegated marks a usage row as a SUB-AGENT's spend booked against this
+	// session rather than a request this session sent. A cost or cache-hit
+	// rollup that mixes them reports the child's cold prompt as the parent
+	// missing its cache.
+	Delegated bool
 
 	// Checkpoint is the summary output a compaction folded its input into,
 	// set when Kind == ReplayRowCompaction. Honoring it replaces the live
@@ -70,8 +75,8 @@ func ReadReplayRows(path string) ([]ReplayRow, SessionMeta, error) {
 		onMessage: func(m provider.Message, _ int, _ []byte) {
 			rows = append(rows, ReplayRow{Kind: ReplayRowMessage, Message: m})
 		},
-		onUsage: func(u, cum provider.Usage, _ int, _ []byte) {
-			rows = append(rows, ReplayRow{Kind: ReplayRowUsage, Usage: u, Cumulative: cum})
+		onUsage: func(u, cum provider.Usage, _ int, delegated bool, _ []byte) {
+			rows = append(rows, ReplayRow{Kind: ReplayRowUsage, Usage: u, Cumulative: cum, Delegated: delegated})
 		},
 		onCompaction: func(out, _ []provider.Message, _ int, _ []byte) {
 			// walkSession aliases `out` as its live effective transcript after the
@@ -112,7 +117,29 @@ func ReadReplayRows(path string) ([]ReplayRow, SessionMeta, error) {
 // streamed so far still delivered. ctx is checked per delivered row so a long
 // scan aborts promptly (returning ctx.Err()). Corrupt rows are skipped
 // (best-effort, like the loader). The meta row is returned whenever present.
+//
+// Callers that also want the per-turn usage rows — what a turn cost, and how
+// much of it hit the prefix cache — want [StreamReplayRows], which this
+// delegates to. Cost is not derivable from the messages alone.
 func StreamReplayMessages(ctx context.Context, path string, maxBytes int64, fn func(row int, m provider.Message)) (meta SessionMeta, truncated bool, err error) {
+	return StreamReplayRows(ctx, path, maxBytes, func(row int, r ReplayRow) {
+		if r.Kind == ReplayRowMessage {
+			fn(row, r.Message)
+		}
+	})
+}
+
+// StreamReplayRows is StreamReplayMessages' general form: it delivers message
+// AND usage rows in file order, under the same retain-nothing, bounded-input,
+// cancellable contract. A usage row carries the turn's own Usage plus the
+// running Cumulative exactly as recorded.
+//
+// Compaction rows are still counted but not hydrated — a checkpoint's message
+// set is the one row whose payload is unbounded in the number of messages it
+// holds, and materializing it would defeat the streaming guarantee the callers
+// of this function are here for. Anything needing checkpoints wants
+// ReadReplayRows.
+func StreamReplayRows(ctx context.Context, path string, maxBytes int64, fn func(row int, r ReplayRow)) (meta SessionMeta, truncated bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return SessionMeta{}, false, err
@@ -158,9 +185,22 @@ func StreamReplayMessages(ctx context.Context, path string, maxBytes int64, fn f
 			} else {
 				last = m.Time
 			}
-			fn(row, m)
+			fn(row, ReplayRow{Kind: ReplayRowMessage, Message: m})
 			row++
-		case "usage", "compaction":
+		case "usage":
+			// Decoded, unlike compaction: a usage row is two fixed-size token
+			// structs, so hydrating it costs nothing the stream cares about.
+			// A corrupt one is skipped like any other row, but still consumes
+			// its row number so coordinates stay aligned with ReadReplayRows.
+			var urow struct {
+				Usage      provider.Usage `json:"usage"`
+				Cumulative provider.Usage `json:"cumulative"`
+			}
+			if err := json.Unmarshal(line, &urow); err == nil {
+				fn(row, ReplayRow{Kind: ReplayRowUsage, Usage: urow.Usage, Cumulative: urow.Cumulative})
+			}
+			row++
+		case "compaction":
 			row++
 		}
 		return nil

@@ -73,9 +73,11 @@ func (r *sessionHistoryReader) ReadSession(_ /*extName*/, sessionID string) ([]e
 }
 
 // SessionIDFromPath turns a session file path into its stable id (the
-// file name without the .jsonl extension).
+// file name without the .jsonl extension). Kept as the name a dozen call
+// sites already use; the implementation moved to core so the tool layer can
+// share it without a second copy.
 func SessionIDFromPath(path string) string {
-	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	return core.SessionIDFromPath(path)
 }
 
 // LooksLikeSessionID reports whether s has the session filename-stem shape

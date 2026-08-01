@@ -190,6 +190,45 @@ func writeSessionFixture(t *testing.T, path, cwd string, msgs ...string) {
 	}
 }
 
+// writeSwarmChildFixture lays down a swarm sub-agent the way a real spawn does:
+// its transcript AND the meta.json spawn record that says which project owns
+// it. origin is the spawning swarm's RepoRoot; dir is where the child actually
+// runs, which differs from origin exactly when the child was leased a worktree.
+// Ownership is read from origin, so passing a lease path as dir must not change
+// who the child belongs to.
+func writeSwarmChildFixture(t *testing.T, home, id, origin, dir string, msgs ...string) {
+	t.Helper()
+	root := swarm.DefaultRoot(home)
+	writeSessionFixture(t, swarm.AgentSessionPath(root, id), dir, msgs...)
+	meta := map[string]any{
+		"id": id, "task": "task text", "dir": dir, "origin": origin,
+		"session_path": swarm.AgentSessionPath(root, id),
+	}
+	b, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "agents", id, "meta.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeLegacySwarmChildFixture is a spawn record from before `origin` existed:
+// dir only. Ownership must still resolve for the unleased case, which is all
+// such a record can honestly claim.
+func writeLegacySwarmChildFixture(t *testing.T, home, id, dir string, msgs ...string) {
+	t.Helper()
+	root := swarm.DefaultRoot(home)
+	writeSessionFixture(t, swarm.AgentSessionPath(root, id), dir, msgs...)
+	b, err := json.Marshal(map[string]any{"id": id, "task": "task text", "dir": dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "agents", id, "meta.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func inspectText(t *testing.T, r core.ToolResult) string {
 	t.Helper()
 	var b strings.Builder
@@ -219,8 +258,7 @@ func TestSessionInspectResolvesSwarmChild(t *testing.T) {
 	}
 
 	// A child spawned from this project's cwd is inspectable by its agent id.
-	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "review-x-123000"),
-		cwd, "task text", "the full findings report")
+	writeSwarmChildFixture(t, home, "review-x-123000", cwd, cwd, "task text", "the full findings report")
 	res := run(`{"session_id":"review-x-123000"}`)
 	if res.IsError {
 		t.Fatalf("swarm child id should resolve, got error: %q", inspectText(t, res))
@@ -230,8 +268,8 @@ func TestSessionInspectResolvesSwarmChild(t *testing.T) {
 	}
 
 	// A child of ANOTHER project is refused (fails closed on cwd mismatch).
-	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "other-999000"),
-		testsupport.TempDir(t), "task", "secret findings")
+	other := testsupport.TempDir(t)
+	writeSwarmChildFixture(t, home, "other-999000", other, other, "task", "secret findings")
 	res = run(`{"session_id":"other-999000"}`)
 	if !res.IsError || !strings.Contains(inspectText(t, res), "not spawned from this project") {
 		t.Errorf("cross-project child must be refused, got (err=%v): %q", res.IsError, inspectText(t, res))
@@ -241,6 +279,86 @@ func TestSessionInspectResolvesSwarmChild(t *testing.T) {
 	res = run(`{"session_id":"missing-000"}`)
 	if !res.IsError || !strings.Contains(inspectText(t, res), "no such session or swarm sub-agent") {
 		t.Errorf("unknown id should name both id kinds, got (err=%v): %q", res.IsError, inspectText(t, res))
+	}
+}
+
+// Under --swarm-worktrees every sub-agent is leased its own directory, so its
+// cwd is a worktree path that hashes to a DIFFERENT project bucket than its
+// parent's. The ownership guard used to read that cwd, which meant turning on
+// the flag that isolates sub-agents silently disabled the tool that watches
+// them: in one reviewed session two of three session_inspect calls were refused
+// for a child the model had spawned itself, seconds earlier, from this project.
+func TestSessionInspectResolvesLeasedSwarmChild(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	// A lease: a real per-agent worktree directory, nothing like the repo root.
+	lease := filepath.Join(testsupport.TempDir(t), "worktrees", "migrate-two-613549")
+	if err := os.MkdirAll(lease, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSwarmChildFixture(t, home, "migrate-two-613549", cwd, lease, "task text", "the migration report")
+
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"migrate-two-613549"}`), func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("a leased child of THIS project must be inspectable, got: %q", inspectText(t, res))
+	}
+	if got := inspectText(t, res); !strings.Contains(got, "the migration report") {
+		t.Errorf("listing should show the leased child's events, got: %q", got)
+	}
+
+	// The lease must not become a back door either: a child leased by ANOTHER
+	// project stays refused, even though its worktree is equally foreign to both.
+	otherLease := filepath.Join(testsupport.TempDir(t), "worktrees", "foreign-1")
+	if err := os.MkdirAll(otherLease, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSwarmChildFixture(t, home, "foreign-1", testsupport.TempDir(t), otherLease, "task", "secret findings")
+	res, err = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"foreign-1"}`), func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(inspectText(t, res), "not spawned from this project") {
+		t.Errorf("another project's leased child must stay refused, got (err=%v): %q", res.IsError, inspectText(t, res))
+	}
+}
+
+// A spawn record written before `origin` existed carries only `dir`. For the
+// unleased children those records describe, dir IS the parent's repo root, so
+// ownership must still resolve rather than failing every pre-upgrade agent.
+func TestSessionInspectAcceptsLegacySpawnRecord(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	writeLegacySwarmChildFixture(t, home, "legacy-1", cwd, "task text", "older findings")
+
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"legacy-1"}`), func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("a legacy unleased child must still resolve, got: %q", inspectText(t, res))
+	}
+}
+
+// No spawn record at all means no claim of ownership — fail closed rather than
+// falling back to the transcript's own cwd, which an attacker-ish caller could
+// have written.
+func TestSessionInspectFailsClosedWithoutSpawnRecord(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "orphan-1"), cwd, "task", "findings")
+
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"orphan-1"}`), func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(inspectText(t, res), "not spawned from this project") {
+		t.Errorf("a child with no spawn record must be refused, got (err=%v): %q", res.IsError, inspectText(t, res))
 	}
 }
 
@@ -405,7 +523,7 @@ func TestSessScanCallOrderCompactsHealthy(t *testing.T) {
 func TestSessionInspectAuthorizesSwarmChildBeforeScan(t *testing.T) {
 	scanned := false
 	old := streamReplay
-	streamReplay = func(ctx context.Context, path string, maxBytes int64, fn func(int, provider.Message)) (core.SessionMeta, bool, error) {
+	streamReplay = func(ctx context.Context, path string, maxBytes int64, fn func(int, core.ReplayRow)) (core.SessionMeta, bool, error) {
 		scanned = true
 		return old(ctx, path, maxBytes, fn)
 	}
@@ -414,8 +532,8 @@ func TestSessionInspectAuthorizesSwarmChildBeforeScan(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
 	// A child whose meta records a FOREIGN cwd, with a marker in the body.
-	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "foreign-123"),
-		testsupport.TempDir(t), "SHOULD_NOT_BE_SCANNED")
+	foreign := testsupport.TempDir(t)
+	writeSwarmChildFixture(t, home, "foreign-123", foreign, foreign, "SHOULD_NOT_BE_SCANNED")
 
 	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"foreign-123"}`), func(string) {})
@@ -450,7 +568,7 @@ func TestSessionInspectDiagnosesRunningChild(t *testing.T) {
 	}
 
 	// Meta row only: exactly what a child that has not finished looks like.
-	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "working-1"), cwd)
+	writeSwarmChildFixture(t, home, "working-1", cwd, cwd)
 	// A live event log is the signal that it is mid-task rather than done.
 	if err := os.WriteFile(swarm.AgentEventLogPath(swarm.DefaultRoot(home), "working-1"),
 		[]byte(`{"type":"turn_start"}`+"\n"), 0o600); err != nil {
@@ -488,7 +606,7 @@ func TestSessionInspectDiagnosesRunningChild(t *testing.T) {
 	}
 
 	// No event log yet — still diagnosed, just without the liveness claim.
-	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "cold-1"), cwd)
+	writeSwarmChildFixture(t, home, "cold-1", cwd, cwd)
 	got := inspectText(t, run(`{"session_id":"cold-1","expand":-1}`))
 	if !strings.Contains(got, "may have failed before its first turn") {
 		t.Errorf("child with no event log should not claim to be running, got: %q", got)
@@ -497,8 +615,7 @@ func TestSessionInspectDiagnosesRunningChild(t *testing.T) {
 	// A FINISHED child whose filters genuinely exclude everything must keep the
 	// filter message — the diagnosis is about an empty transcript, not an empty
 	// match, and conflating them would hide a real filter mistake.
-	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "done-1"),
-		cwd, "task text", "the findings")
+	writeSwarmChildFixture(t, home, "done-1", cwd, cwd, "task text", "the findings")
 	got = inspectText(t, run(`{"session_id":"done-1","tool_name":"nonexistent","expand":1}`))
 	if !strings.Contains(got, "no events match these filters") {
 		t.Errorf("a real filter miss on a finished child must still say so, got: %q", got)
@@ -601,5 +718,273 @@ func TestSessionInspectPaddedZeroArgsList(t *testing.T) {
 	}
 	if oldest == got {
 		t.Errorf("cursor 1 and cursor 0 must not return the same window")
+	}
+}
+
+// writeUsageSessionFixture writes a transcript that interleaves messages with
+// the usage rows a real session records, so the scan sees both kinds.
+func writeUsageSessionFixture(t *testing.T, path, cwd string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `{"type":"meta","meta":{"id":"x","cwd":%q,"format_version":2}}`+"\n", cwd)
+	b.WriteString(`{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}` + "\n")
+	// A cheap turn that mostly hit the prefix cache.
+	b.WriteString(`{"type":"usage","usage":{"input_tokens":2178,"output_tokens":77,"cache_read_tokens":225792,"cache_write_tokens":0,"cost_usd":0.1261},"cumulative":{"input_tokens":2178,"output_tokens":77,"cache_read_tokens":225792,"cache_write_tokens":0,"cost_usd":0.1261}}` + "\n")
+	b.WriteString(`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"world"}]}}` + "\n")
+	// The expensive twin: same context, almost none of it cached.
+	b.WriteString(`{"type":"usage","usage":{"input_tokens":218844,"output_tokens":236,"cache_read_tokens":8704,"cache_write_tokens":0,"cost_usd":1.1057},"cumulative":{"input_tokens":221022,"output_tokens":313,"cache_read_tokens":234496,"cache_write_tokens":0,"cost_usd":1.2318}}` + "\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSessionInspectSurfacesUsage pins D1 of the 2026-07-30 session-harness
+// review: what a turn COST is recorded in the transcript but was unreachable
+// from inside terva, because event_kinds had no "usage". A session could be
+// described in full except for the one axis that explains its bill.
+func TestSessionInspectSurfacesUsage(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	writeUsageSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd)
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","event_kinds":["usage"]}`), func(string) {})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("usage listing errored: %s", inspectText(t, res))
+	}
+	got := inspectText(t, res)
+	if !strings.Contains(got, "2 matching event(s)") {
+		t.Errorf("want both usage rows, got:\n%s", got)
+	}
+	// Uncached input and cache reads must stay SEPARATE — the ratio is the
+	// signal, and a summed "input" figure hides the expensive turn entirely.
+	if !strings.Contains(got, "in 218844") || !strings.Contains(got, "cached 8704") {
+		t.Errorf("usage line must report uncached input and cache reads separately, got:\n%s", got)
+	}
+	if !strings.Contains(got, "$1.1057") {
+		t.Errorf("usage line must carry the turn cost, got:\n%s", got)
+	}
+	// A usage event has no tool or byte count; it must not render the text
+	// columns and print a "0B" that reads as a defect.
+	if strings.Contains(got, "0B") {
+		t.Errorf("usage line must not render the text-event byte column, got:\n%s", got)
+	}
+
+	// Expand gives the full breakdown, including the cache hit rate the
+	// one-line form leaves out.
+	res, err = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","event_kinds":["usage"],"expand":2}`), func(string) {})
+	if err != nil {
+		t.Fatalf("Execute expand: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("usage expand errored: %s", inspectText(t, res))
+	}
+	det := inspectText(t, res)
+	for _, want := range []string{"cache_read_tokens  8704", "cache_write_tokens 0", "cost_usd           1.105700", "cache hit rate", "session cumulative"} {
+		if !strings.Contains(det, want) {
+			t.Errorf("expanded usage missing %q, got:\n%s", want, det)
+		}
+	}
+
+	// failures_only is about failed TOOL RESULTS; a usage row is not a failure
+	// and must not be swept in by it.
+	res, _ = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","failures_only":true}`), func(string) {})
+	if fo := inspectText(t, res); strings.Contains(fo, "usage") {
+		t.Errorf("failures_only must exclude usage events, got:\n%s", fo)
+	}
+}
+
+// writeErrorSidecar writes the .errors.jsonl companion for a transcript.
+func writeErrorSidecar(t *testing.T, transcript string, rows ...string) {
+	t.Helper()
+	if err := os.WriteFile(core.ErrorLogPathFor(transcript), []byte(strings.Join(rows, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSessionInspectPlacesSidecarErrors pins D3 of the 2026-07-30
+// session-harness review. Provider failures — auth, overload, rate limit — are
+// recorded in a sidecar file that no tool could reach, so a turn that died on
+// an overload left the transcript looking merely quiet. Correlating the two by
+// hand is what turned "the session felt flaky" into a diagnosis.
+func TestSessionInspectPlacesSidecarErrors(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Two user turns with the same text: the overload between them is the
+	// reason the second exists.
+	body := `{"type":"meta","meta":{"id":"x","cwd":"` + cwd + `","format_version":2}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"push now"}],"time":"2026-07-30T12:46:04-05:00"}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"push now"}],"time":"2026-07-30T12:55:03-05:00"}}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeErrorSidecar(t, path,
+		`{"time":"2026-07-30T17:46:06Z","error":"openai-codex: Our servers are currently overloaded. Please try again later.","provider":"openai-codex","model":"gpt-5.6-sol"}`)
+
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1"}`), func(string) {})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := inspectText(t, res)
+
+	if !strings.Contains(got, "overloaded") {
+		t.Fatalf("sidecar error never reached the listing:\n%s", got)
+	}
+	// Placed BETWEEN the two turns, not bolted onto either end — that ordering
+	// is the whole point, and it is what makes the retype legible.
+	first := strings.Index(got, "push now")
+	errAt := strings.Index(got, "overloaded")
+	last := strings.LastIndex(got, "push now")
+	if !(first < errAt && errAt < last) {
+		t.Errorf("error should sit between the two turns (%d < %d < %d):\n%s", first, errAt, last, got)
+	}
+	// The provider prefix is not doubled: the client already stamps its name
+	// into the message text.
+	if strings.Contains(got, "openai-codex: openai-codex:") {
+		t.Errorf("provider prefix doubled:\n%s", got)
+	}
+	// A sidecar row has no transcript row, and must not claim one.
+	if strings.Contains(got, "row -1") {
+		t.Errorf("sidecar event rendered a fake row number:\n%s", got)
+	}
+
+	// Filterable on its own.
+	res, _ = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","event_kinds":["error"]}`), func(string) {})
+	if only := inspectText(t, res); !strings.Contains(only, "1 matching event") {
+		t.Errorf(`event_kinds ["error"] should match exactly the sidecar row, got:\n%s`, only)
+	}
+}
+
+// TestSessionInspectStats pins D2: a whole-session rollup, derived in one
+// streaming pass. Reaching these numbers by listing meant walking every event
+// at a retrieval cost proportional to the whole context — technically possible,
+// priced so nobody asks.
+func TestSessionInspectStats(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"meta","meta":{"id":"x","cwd":"` + cwd + `","format_version":2}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"tool_call","id":"c1","name":"read","arguments":{}}]}}
+{"type":"message","message":{"role":"tool","content":[{"type":"tool_result","call_id":"c1","is_error":true,"content":[{"type":"text","text":"jailed"}]}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"tool_call","id":"c2","name":"bash","arguments":{}}]}}
+{"type":"message","message":{"role":"tool","content":[{"type":"tool_result","call_id":"c2","content":[{"type":"text","text":"ok"}]}]}}
+{"type":"usage","usage":{"input_tokens":1000,"output_tokens":50,"cache_read_tokens":9000,"cache_write_tokens":0,"cost_usd":0.5},"cumulative":{"input_tokens":1000,"output_tokens":50,"cache_read_tokens":9000,"cache_write_tokens":0,"cost_usd":0.5}}
+{"type":"usage","usage":{"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0},"cumulative":{"input_tokens":1000,"output_tokens":50,"cache_read_tokens":9000,"cache_write_tokens":0,"cost_usd":0.5}}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeErrorSidecar(t, path,
+		`{"time":"2026-07-30T17:46:06Z","error":"Our servers are currently overloaded.","provider":"openai-codex","model":"gpt-5.6-sol"}`)
+
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","stats":true}`), func(string) {})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("stats errored: %s", inspectText(t, res))
+	}
+	got := inspectText(t, res)
+	for _, want := range []string{
+		"cost: $0.5000 over 2 billed turn(s)",
+		"cache hit rate 90.0% of input",
+		"1 turn(s) recorded zero tokens and zero cost", // the dead turn
+		"1  read", // tool-call histogram
+		"1  bash",
+		"provider errors (1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stats missing %q:\n%s", want, got)
+		}
+	}
+	// The failure histogram attributes to the CALLING tool, via call_id.
+	failAt := strings.Index(got, "failed tool results:")
+	if failAt < 0 || !strings.Contains(got[failAt:], "read") {
+		t.Errorf("failed-result histogram should name read:\n%s", got)
+	}
+	// Machine-readable too, so a caller can act without parsing prose.
+	det, ok := res.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("Details = %T, want map[string]any", res.Details)
+	}
+	if det["cost_usd"] != 0.5 || det["dead_turns"] != 1 {
+		t.Errorf("details = %v, want cost_usd 0.5 and dead_turns 1", det)
+	}
+
+	// stats and expand are contradictory modes, not a narrowing.
+	res, _ = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","stats":true,"expand":1}`), func(string) {})
+	if !res.IsError {
+		t.Error("stats + expand should be rejected, not silently resolved")
+	}
+	// ...but a padded call carrying the listing filters is fine: stats ignores
+	// them, and rejecting the common shape is the TW-031 mistake again.
+	res, _ = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","stats":true,"cursor":0,"limit":0,"expand":0,"text_offset":0}`), func(string) {})
+	if res.IsError {
+		t.Errorf("a fully padded stats call must work: %s", inspectText(t, res))
+	}
+}
+
+// A model with no published rate prices at zero, so a real session reports
+// cost_usd 0 on every turn. Rendering that as "$0.0000 over N billed turn(s)"
+// says the session was free; one reviewed session moved 112 million tokens and
+// read exactly that way. Absence of a price is not a measurement of spend.
+//
+// The fixture sets cost_usd 0 explicitly, so it stays valid whatever the
+// catalogue prices — which is what makes it a test of the RENDERING rule rather
+// than of any one provider's rates.
+func TestSessionInspectStatsNamesUnpricedCost(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	path := filepath.Join(core.SessionsDir(home, cwd), "subs.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"meta","meta":{"id":"x","cwd":"` + cwd + `","format_version":2}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
+{"type":"usage","usage":{"input_tokens":2193445,"output_tokens":452267,"cache_read_tokens":109350656,"cache_write_tokens":0,"cost_usd":0},"cumulative":{"input_tokens":2193445,"output_tokens":452267,"cache_read_tokens":109350656,"cache_write_tokens":0,"cost_usd":0}}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"subs","stats":true}`), func(string) {})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := inspectText(t, res)
+	if strings.Contains(got, "$0.0000") {
+		t.Errorf("an unpriced session must not report a dollar figure:\n%s", got)
+	}
+	if !strings.Contains(got, "not priced") {
+		t.Errorf("stats should say the model carries no published rate:\n%s", got)
+	}
+	// "subscription" would now name the one case this is NOT: every subscription
+	// provider carries published rates, so its readout is an estimate, not a zero.
+	if strings.Contains(got, "subscription") {
+		t.Errorf("the unpriced line still blames subscriptions, which are priced now:\n%s", got)
+	}
+	// The token counts are the real signal and must survive.
+	if !strings.Contains(got, "109350656") {
+		t.Errorf("cache-read tokens missing from an unpriced rollup:\n%s", got)
+	}
+	// A genuinely zero-token session is a different thing and keeps the old shape.
+	if !strings.Contains(got, "cache hit rate") {
+		t.Errorf("cache hit rate should still be reported:\n%s", got)
 	}
 }
