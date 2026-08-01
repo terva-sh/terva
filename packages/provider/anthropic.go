@@ -653,14 +653,23 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 		return httpReq, nil
 	}
 
+	// c.Name(), not "anthropic": this client also drives every
+	// Anthropic-Messages-compatible third party (kimi-coding, minimax,
+	// fireworks, vercel-ai-gateway). The wire format is Anthropic's; the
+	// PROVIDER is whoever answered, and that is what the reader needs. A
+	// hardcoded label sent kimi's expired-subscription 401 to the rescue
+	// picker as "anthropic/k3-256k" — naming a vendor the request never
+	// reached, and one whose login the user would then go and check.
+	// ExtractFailedProvider reads ProviderError.Provider, so this is also
+	// what decides whether the picker can drop the pair that just failed.
 	resp, err := doStreamWithRetry(ctx, c.http, newReq)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: %w", err)
+		return nil, fmt.Errorf("%s: %w", c.Name(), err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		snippet := errorBodySnippet(resp.Body)
 		resp.Body.Close()
-		return nil, NewHTTPError("anthropic", resp.StatusCode, resp.Header.Get("Retry-After"), snippet)
+		return nil, NewHTTPError(c.Name(), resp.StatusCode, resp.Header.Get("Retry-After"), snippet)
 	}
 
 	out := make(chan Event, 16)
@@ -679,7 +688,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 	}
 	out <- EventStart{Model: req.Model, Provider: c.Name()}
 
-	stream := newSSEStream(resp.Body, "anthropic")
+	stream := newSSEStream(resp.Body, c.Name())
 	defer stream.Close() // owns resp.Body: closes it, then unparks the reader
 	raw := stream.Events()
 
@@ -741,7 +750,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 	}
 
 	sendDone := func() {
-		usage.CostUSD = ComputeCost(model, usage)
+		ApplyCost(model, &usage)
 		out <- EventUsage{Usage: usage}
 		out <- EventDone{Stop: stop, Err: finalErr, Message: assembleMsg()}
 	}
@@ -765,7 +774,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 					finalErr = stream.Err()
 				default:
 					stop = StopError
-					finalErr = NewStreamDeathError("anthropic", "message_stop")
+					finalErr = NewStreamDeathError(c.Name(), "message_stop")
 				}
 				sendDone()
 				return
@@ -915,7 +924,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 				// Anthropic's documented transient error types — 529 overloaded,
 				// 500 api_error, 429 rate_limit_error — are all in the shared
 				// vocabulary. Its error frame has no `code`, only a `type`.
-				finalErr = NewAPIError("anthropic", e.Error.Type+": "+e.Error.Message,
+				finalErr = NewAPIError(c.Name(), e.Error.Type+": "+e.Error.Message,
 					transientErrorCode("", e.Error.Type, e.Error.Message))
 				sendDone()
 				return

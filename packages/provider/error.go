@@ -157,18 +157,40 @@ func transientHTTPStatus(status int) bool {
 	return false
 }
 
-// retryAdvice is the sentence OpenAI's backend puts in a generic server error
-// when it carries no machine-readable code at all: "…You can retry your request,
-// or contact support…". It is the server instructing the client to retry, which
-// is a fact and not a guess — but it is the LAST thing consulted, only after both
-// the transient and the permanent vocabularies below have declined to recognize
-// the error, so a permanent failure whose prose happens to mention retrying can
-// never reach it.
+// retryAdvice holds the sentences a backend puts in a generic server error when
+// it carries no machine-readable code at all. Each is the server INSTRUCTING the
+// client to retry, which is a fact and not a guess:
 //
-// This is the one prose match allowed anywhere in the retry path. Agent.
-// canRetryError used to hold a list of them and it retried "prompt is too long:
-// 208500 tokens" because "500" matched.
-const retryAdvice = "you can retry your request"
+//   - "…You can retry your request, or contact support…" — OpenAI's generic 500.
+//   - "Our servers are currently overloaded. Please try again later." — what the
+//     ChatGPT backend sends under load, with code and type both empty. Without
+//     this entry it classified as PERMANENT, so the turn died on the first
+//     attempt with the user's message already consumed into the transcript;
+//     three of them in one session, twice leaving the user to retype by hand
+//     (docs/reviews/2026-07-30-session-harness-friction-review.md, A1).
+//
+// These are the LAST thing consulted, only after both the transient and the
+// permanent vocabularies below have declined to recognize the error, so a
+// permanent failure whose prose happens to mention retrying can never reach
+// them. Keep the phrases long enough to be an instruction rather than a word:
+// Agent.canRetryError used to hold a list of needles and it retried "prompt is
+// too long: 208500 tokens" because "500" matched.
+var retryAdvice = []string{
+	"you can retry your request",
+	"try again later",
+}
+
+// saysRetry reports whether msg carries one of the server's own retry
+// instructions.
+func saysRetry(msg string) bool {
+	msg = strings.ToLower(msg)
+	for _, advice := range retryAdvice {
+		if strings.Contains(msg, advice) {
+			return true
+		}
+	}
+	return false
+}
 
 // transientErrorCode is the retry policy for errors delivered INSIDE an
 // otherwise-healthy stream — the sibling of [transientHTTPStatus], for the axis
@@ -213,7 +235,7 @@ func transientErrorCode(code, kind, msg string) bool {
 			return false
 		}
 	}
-	return strings.Contains(strings.ToLower(msg), retryAdvice)
+	return saysRetry(msg)
 }
 
 // ParseRetryAfter parses a Retry-After header value: either delay

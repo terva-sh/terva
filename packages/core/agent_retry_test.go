@@ -277,3 +277,35 @@ func TestAgentDoesNotRetryQuotaExhaustion(t *testing.T) {
 		t.Fatalf("Stream calls = %d; want 1 (quota exhaustion is not transient)", got)
 	}
 }
+
+// TestAgentStillRefusesQuotaExhaustionThatSaysTryAgainLater guards the widened
+// prose list: "try again later" now means retry, but a usage-limit refusal that
+// happens to end with the same courtesy must still fail fast rather than burn
+// attempts against a wall it cannot get past.
+func TestAgentStillRefusesQuotaExhaustionThatSaysTryAgainLater(t *testing.T) {
+	client := &politeQuotaClient{}
+	a := NewAgent(client, "fake-model", "system", Registry{})
+	a.RetryBaseDelay = time.Millisecond
+
+	if err := a.Prompt(context.Background(), "hello", nil, nil); err == nil {
+		t.Fatal("Prompt should surface the quota error")
+	}
+	if got := atomic.LoadInt32(&client.calls); got != 1 {
+		t.Fatalf("Stream calls = %d; want 1 (quota exhaustion is not retryable, however politely phrased)", got)
+	}
+}
+
+type politeQuotaClient struct{ calls int32 }
+
+func (c *politeQuotaClient) Name() string { return "quota-fake" }
+
+func (c *politeQuotaClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	atomic.AddInt32(&c.calls, 1)
+	out := make(chan provider.Event, 2)
+	go func() {
+		defer close(out)
+		out <- provider.EventDone{Stop: provider.StopError,
+			Err: provider.NewHTTPError("quota-fake", 429, "", "You have hit your monthly usage limit. Please try again later.")}
+	}()
+	return out, nil
+}

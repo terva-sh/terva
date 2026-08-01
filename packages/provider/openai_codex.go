@@ -794,7 +794,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 	}
 
 	sendDone := func() {
-		usage.CostUSD = ComputeCost(model, usage)
+		ApplyCost(model, &usage)
 		out <- EventUsage{Usage: usage}
 		out <- EventDone{Stop: stop, Err: finalErr, Message: assemble()}
 	}
@@ -1061,10 +1061,19 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				if code == "" {
 					code = p.Error.Code
 				}
-				kind := p.Type
-				if kind == "" {
-					kind = p.Error.Type
-				}
+				// The error KIND comes only from the nested object. On this
+				// frame the top-level "type" is the dispatch key this switch
+				// already matched — the literal string "error" — not an error
+				// vocabulary word, so reading it here would shadow the nested
+				// type with a value that means nothing to the classifier.
+				//
+				// That is not hypothetical: a nested
+				// {"type":"error","error":{"type":"invalid_request_error"}} was
+				// classified on "error", never saw its own permanent code, and
+				// fell through to the prose fallback. It came out permanent
+				// only because the prose happened not to match — so the bug was
+				// invisible until the fallback learned a second phrase.
+				kind := p.Error.Type
 				stop = StopError
 				finalErr = NewAPIError("openai-codex", msg, transientErrorCode(code, kind, msg))
 				sawTerminal = true
