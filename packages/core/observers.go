@@ -170,6 +170,25 @@ func (a *Agent) AddStallObserver(fn func(StallRecord)) {
 	a.obsMu.Unlock()
 }
 
+// AddRetryObserver registers fn to fire each time a transient provider failure
+// is retried, from EITHER ladder — the turn loop or compaction (see
+// RetryRecord.Phase). Hosts persist a "retry" session row here.
+//
+// An observer rather than only an event because the two ladders reach the user
+// through different plumbing: the turn loop has an event sink to emit EvRetry
+// on, and compaction has only a text sink for the summary it is streaming.
+// Threading an event sink into Compact would change public API across every
+// host and the SDK to reach the one path that lacks it; an observer is
+// entry-point-agnostic and reaches all of them. nil is a no-op.
+func (a *Agent) AddRetryObserver(fn func(RetryRecord)) {
+	if fn == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.retryObs = append(a.retryObs, fn)
+	a.obsMu.Unlock()
+}
+
 // AddTailObserver registers fn to fire when the ephemeral tail's COMPOSITION
 // changes — the block of text appended to every request after the prompt-cache
 // breakpoint, which is composed per request and otherwise discarded (see
@@ -388,6 +407,20 @@ func (a *Agent) fireStall(rec StallRecord) {
 	a.obsMu.RLock()
 	obs := make([]func(StallRecord), len(a.stallObs))
 	copy(obs, a.stallObs)
+	a.obsMu.RUnlock()
+	for _, fn := range obs {
+		fn(rec)
+	}
+}
+
+// fireRetry runs with a.mu released, like its siblings — observers call back
+// into the host, which reads the agent. Both ladders call it: the compaction
+// one holds the agent lock for the whole compaction, so this must never be
+// invoked under it.
+func (a *Agent) fireRetry(rec RetryRecord) {
+	a.obsMu.RLock()
+	obs := make([]func(RetryRecord), len(a.retryObs))
+	copy(obs, a.retryObs)
 	a.obsMu.RUnlock()
 	for _, fn := range obs {
 		fn(rec)

@@ -307,7 +307,17 @@ export interface GrantScope {
 
 export interface AskQuestion {
   question: string
+  // Optional 1-3 word name for the question, for a surface with room for
+  // a label but not a sentence (the terminal puts it on the question's
+  // tab). Mirrored here because the wire carries it; this client renders
+  // the questions in full and has nothing to shorten, so nothing reads it
+  // yet.
+  slug?: string
   options?: string[]
+  // The options are not mutually exclusive: pick any number. The model
+  // declares this — nothing infers it from the option text — so a client
+  // must not decide for itself that a list looks additive.
+  multi_select?: boolean
   allow_custom?: boolean
 }
 
@@ -318,6 +328,7 @@ export interface AskRequest {
   ask_id: string
   question: string
   options?: string[]
+  multi_select?: boolean
   allow_custom?: boolean
   questions?: AskQuestion[]
 }
@@ -325,7 +336,14 @@ export interface AskRequest {
 // askQuestions normalises the two shapes into the list to render.
 export function askQuestions(r: AskRequest): AskQuestion[] {
   if (r.questions?.length) return r.questions
-  return [{ question: r.question, options: r.options, allow_custom: r.allow_custom }]
+  return [
+    {
+      question: r.question,
+      options: r.options,
+      multi_select: r.multi_select,
+      allow_custom: r.allow_custom,
+    },
+  ]
 }
 
 export interface SkillInfo {
@@ -629,6 +647,13 @@ export interface TaskInfo {
   task: string
   status: string
   activity?: string
+  // turns / tool_calls climb monotonically and last_event (RFC 3339) is when
+  // the agent last emitted anything. activity is a level that reads "idle"
+  // between events, so these are what tell a watcher an agent is still moving.
+  // All absent from an old daemon — render nothing rather than a confident 0.
+  turns?: number
+  tool_calls?: number
+  last_event?: string
   model?: string
   provider?: string
   persona?: string
@@ -1716,14 +1741,18 @@ export interface ChatView {
 }
 
 // WireStall / WireEscalation are the payloads of the stuck-loop hatch's live
-// events (Go core.WireStall / WireEscalation). A `stall` is a detector nudge
-// (rung 1); an `escalation` is a model swap resolving (rung 3), disposition ∈
+// events (Go core.WireStall / WireEscalation). A `stall` is the detector acting
+// on a loop (see rung); an `escalation` is a model swap resolving, disposition ∈
 // switched | declined | stopped | failed. Both are informational — shown
-// in-stream, never joining the transcript.
+// in-stream, never joining the transcript — though a stall at rung 4 is followed
+// by the turn ending.
 export interface WireStall {
   axis?: string // spin (same call) | churn (same failure)
   tool?: string
   detail?: string
+  // What the detector did: absent/1 nudged, 2 held off, 3 refused to dispatch
+  // the call, 4 ended the turn (detail then carries why).
+  rung?: number
 }
 
 export interface WireEscalation {
@@ -1735,6 +1764,23 @@ export interface WireEscalation {
   auto?: boolean
   disposition?: string
   detail?: string // failure cause, on a failed swap
+}
+
+// WireRetry is the payload of a `retry` event (Go core.WireRetry): a turn
+// attempt hit a transient provider failure and the agent is waiting before
+// trying again. Informational like the two above — it never joins the
+// transcript — but it is the difference between a visible backoff and a silent
+// stall that reads as an immediate death.
+//
+// attempt is 1-based and counts the attempt that just FAILED, so attempt/max
+// renders directly as "2 of 6". delay_ms is a number because clients do
+// arithmetic on it (a countdown, a spinner label).
+export interface WireRetry {
+  provider?: string
+  attempt?: number
+  max?: number
+  delay_ms?: number
+  error?: string // the provider's own message, without its name prefix
 }
 
 // ReplayState is a replay session's transport (play/pause/seek/speed), carried
@@ -1787,6 +1833,7 @@ export interface WireEvent {
   replay?: ReplayState
   stall?: WireStall
   escalation?: WireEscalation
+  retry?: WireRetry
 }
 
 // ServerHello is the handshake frame the server sends back (role "server").

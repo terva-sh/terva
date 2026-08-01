@@ -227,8 +227,11 @@ func TestAgentDoesNotRetryPermanentProviderError(t *testing.T) {
 	}
 }
 
-// TestRetryDelayHonorsRetryAfter: a server-stated Retry-After wins
-// over exponential backoff, capped at 30s.
+// TestRetryDelayHonorsRetryAfter: a server-stated Retry-After wins over
+// exponential backoff, capped at MaxRetryDelay — the same ceiling terva's own
+// backoff climbs to. One bound, not two: a header asking for a wait terva would
+// take on its own judgement is not hostile, and the cap exists to stop the
+// pathological case, not to second-guess a cooperative one.
 func TestRetryDelayHonorsRetryAfter(t *testing.T) {
 	a := NewAgent(&retryFakeClient{}, "fake-model", "system", Registry{})
 	a.RetryBaseDelay = 2 * time.Second
@@ -238,12 +241,49 @@ func TestRetryDelayHonorsRetryAfter(t *testing.T) {
 		t.Errorf("retryDelay with Retry-After = %v, want 7s", got)
 	}
 	huge := provider.NewHTTPError("x", 429, "600", "slow down")
-	if got := a.retryDelay(0, huge); got != 30*time.Second {
-		t.Errorf("retryDelay with huge Retry-After = %v, want 30s cap", got)
+	if got := a.retryDelay(0, huge); got != MaxRetryDelay {
+		t.Errorf("retryDelay with huge Retry-After = %v, want the %v cap", got, MaxRetryDelay)
 	}
 	without := provider.NewHTTPError("x", 503, "", "unavailable")
 	if got := a.retryDelay(1, without); got != 4*time.Second {
 		t.Errorf("retryDelay fallback = %v, want base*2 = 4s", got)
+	}
+}
+
+// TestRetryBackoffCurve pins the whole default curve, because the numbers ARE
+// the decision: 14s of total patience was too short for the provider overloads
+// it mostly meets, and the fix is only meaningful if the tail actually reaches
+// a minute. Doubling early (cheap blips recover in seconds) and flat at the
+// ceiling late (an overloaded backend gets waited out).
+func TestRetryBackoffCurve(t *testing.T) {
+	a := NewAgent(&retryFakeClient{}, "fake-model", "system", Registry{})
+	err := provider.NewAPIError("openai-codex", "overloaded", true)
+
+	want := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second,
+		16 * time.Second, 32 * time.Second, MaxRetryDelay}
+	if a.MaxRetries != len(want) {
+		t.Fatalf("MaxRetries = %d, want %d (the curve below has one entry per retry)", a.MaxRetries, len(want))
+	}
+	var total time.Duration
+	for i, w := range want {
+		got := a.retryDelay(i, err)
+		if got != w {
+			t.Errorf("retryDelay(%d) = %v, want %v", i, got, w)
+		}
+		total += got
+	}
+	if total < 2*time.Minute {
+		t.Errorf("total patience = %v, want at least 2m", total)
+	}
+	// The last wait is the one the operator asked for: a full minute before
+	// terva gives up on a backend that said "try again later".
+	if want[len(want)-1] != 60*time.Second {
+		t.Errorf("final backoff = %v, want 60s", want[len(want)-1])
+	}
+	// A host that sets an absurd MaxRetries must not wrap the shift into a
+	// zero-length "wait".
+	if got := a.retryDelay(64, err); got != MaxRetryDelay {
+		t.Errorf("retryDelay(64) = %v, want the %v cap (shift guard)", got, MaxRetryDelay)
 	}
 }
 

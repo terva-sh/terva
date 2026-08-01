@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"time"
 
 	"terva.sh/terva/packages/provider"
 )
@@ -194,3 +195,59 @@ type EvEscalation struct {
 }
 
 func (EvEscalation) Type() string { return "escalation" }
+
+// EvRetry announces that a turn attempt failed with a transient provider error
+// and the agent is about to sleep before trying again.
+//
+// It exists because the retry was previously invisible. A codex overload
+// ("Our servers are currently overloaded. Please try again later.") classifies
+// transient and was retried on schedule — but nothing said so, so the user saw
+// a silent ~20s stall and then the server's raw sentence, which is exactly what
+// one immediate failure looks like. Measured on a real session: four turns died
+// that way, and the operator reported the backoff as missing when it had in
+// fact run every time (docs/reviews/…, and the 2026-08-01 errors sidecar).
+//
+// Attempt is 1-based and counts the attempt that just FAILED; Max is the
+// configured ceiling, so "2 of 6" is directly renderable. Delay is how long the
+// agent will wait before the next attempt. Err is the provider's message —
+// hosts show it because "overloaded" and "stream died" call for different
+// patience from a watching human.
+type EvRetry struct {
+	Provider string
+	Attempt  int
+	Max      int
+	Delay    time.Duration
+	Err      string
+}
+
+func (EvRetry) Type() string { return "retry" }
+
+// RetryPhase names which ladder retried. The turn loop and the compaction
+// ladder share the same code (canRetryError / retryDelay / sleepRetry) but not
+// the same price: a summarization request carries the whole transcript, so six
+// compaction retries cost far more than six turn retries. "Which one was it" is
+// the first question anyone asks of a retry record, which is why it is a field
+// and not something to infer from surrounding rows.
+type RetryPhase string
+
+const (
+	RetryPhaseTurn       RetryPhase = "turn"
+	RetryPhaseCompaction RetryPhase = "compaction"
+)
+
+// RetryRecord is what a transient retry produced, handed to retry observers
+// (observers.go). Hosts persist it as a "retry" session row.
+//
+// It is the durable half of EvRetry, and for a retry that WORKS it is the only
+// trace left anywhere: the failed attempt is dropped from the transcript by
+// design, the error sidecar records only failures nothing recovered, and the
+// live event dies with the turn. Absorbing a provider outage cleanly was, until
+// this row, indistinguishable from having been slow for no reason.
+type RetryRecord struct {
+	Phase    RetryPhase
+	Provider string
+	Attempt  int // 1-based; the attempt that just failed
+	Max      int
+	Delay    time.Duration // the wait taken after this failure
+	Err      string
+}

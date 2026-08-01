@@ -802,6 +802,17 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 		defer mu.Unlock()
 		_ = sess.AppendStall(rec)
 	})
+	// A transient provider failure was waited out. This is the only durable
+	// trace a SUCCESSFUL retry leaves: the abandoned attempt is dropped from the
+	// transcript on purpose, and the error sidecar only records failures nothing
+	// recovered — so absorbing an outage cleanly used to look identical to being
+	// slow. Fires for both ladders; rec.Phase says which, and the compaction one
+	// is the expensive half (each attempt carries the whole transcript).
+	ag.AddRetryObserver(func(rec core.RetryRecord) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = sess.AppendRetry(rec)
+	})
 	// What the harness appended to the request after the cache breakpoint — the
 	// generalization of the stall row above. The tail is composed per request and
 	// discarded, so without this a session file holds the model's REACTION to a

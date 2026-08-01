@@ -332,6 +332,7 @@ type sessionLine struct {
 	Lore       *sessionLore            `json:"lore,omitempty"`
 	Escalation *escalationRecord       `json:"escalation,omitempty"`
 	Stall      *stallRecord            `json:"stall,omitempty"`
+	Retry      *retryRecord            `json:"retry,omitempty"`
 	Tail       *tailRecord             `json:"tail,omitempty"`
 	Prefix     *prefixDivergenceRecord `json:"prefix,omitempty"`
 	ToolGroup  *toolGroupRecord        `json:"tool_group,omitempty"`
@@ -444,6 +445,34 @@ type stallRecord struct {
 	Rung int `json:"rung,omitempty"`
 }
 
+// retryRecord rides a "retry" row: a provider call failed transiently and the
+// agent waited before trying again.
+//
+// It exists because a retry that succeeds leaves no trace anywhere. The failed
+// attempt is dropped from the transcript on purpose (an abandoned attempt must
+// not be replayed), the error sidecar records only failures that were never
+// recovered, and the live event is gone the moment the turn ends. So the
+// healthiest possible outcome — terva absorbed a provider outage and carried on
+// — was also the most completely invisible one, and a session that spent two
+// minutes waiting out an overloaded backend read afterwards as a session that
+// was simply slow.
+//
+// Phase is the field that motivated the row: the turn loop and the compaction
+// ladder retry through the SAME code but cost wildly different amounts, since a
+// summarization request is transcript-sized. "Which ladder" is the first
+// question anyone asks of these rows.
+//
+// Informational on the same terms as the two above: never in the transcript,
+// skipped by the loader's defaultless row-type switch, so resume is unaffected.
+type retryRecord struct {
+	Phase    string `json:"phase,omitempty"`    // turn | compaction
+	Provider string `json:"provider,omitempty"` // empty for a bare transport failure
+	Attempt  int    `json:"attempt,omitempty"`  // 1-based; the attempt that failed
+	Max      int    `json:"max,omitempty"`
+	DelayMS  int64  `json:"delay_ms,omitempty"` // the wait taken after this failure
+	Error    string `json:"error,omitempty"`
+}
+
 // tailRecord rides a "tail" row: the composition of the ephemeral tail — what
 // the harness appended to the request after the prompt-cache breakpoint — at the
 // moment it changed. The generalization of stallRecord above, which records one
@@ -511,6 +540,7 @@ const (
 	directiveExcludeImage = "exclude_image"
 	recordEscalation      = "escalation"
 	recordStall           = "stall"
+	recordRetry           = "retry"
 	recordAmend           = "amend"
 	recordTail            = "tail"
 	recordPrefix          = "prefix"
@@ -2364,6 +2394,27 @@ func (s *Session) AppendStall(rec StallRecord) error {
 		row.Rung = rec.Rung // omitted for rung 1, which is what absent already means
 	}
 	return s.writeLine(sessionLine{Type: recordStall, Stall: row})
+}
+
+// AppendRetry records that a provider call was retried after a transient
+// failure (see retryRecord). The durable half of EvRetry, and the only trace a
+// SUCCESSFUL retry leaves — the recovered attempt is dropped from the
+// transcript, and the error sidecar only ever sees failures nothing recovered.
+//
+// Append only and informational; the loader skips it, so it never affects the
+// rebuilt transcript or resume.
+func (s *Session) AppendRetry(rec RetryRecord) error {
+	if s == nil {
+		return nil
+	}
+	return s.writeLine(sessionLine{Type: recordRetry, Retry: &retryRecord{
+		Phase:    string(rec.Phase),
+		Provider: rec.Provider,
+		Attempt:  rec.Attempt,
+		Max:      rec.Max,
+		DelayMS:  rec.Delay.Milliseconds(),
+		Error:    rec.Err,
+	}})
 }
 
 // AppendTail records the ephemeral tail's composition at the moment it changed

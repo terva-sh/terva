@@ -152,6 +152,7 @@ type Agent struct {
 	queueDrainedObs        []func(drained []string)
 	escalationObs          []func(EscalationRecord)
 	stallObs               []func(StallRecord)
+	retryObs               []func(RetryRecord)
 	tailObs                []func(TailRecord)
 	prefixDivObs           []func(PrefixDivergence)
 	toolGroupObs           []func(group string)
@@ -380,12 +381,15 @@ var agentEpochSeq atomic.Uint64
 // NewAgent returns an Agent with sensible defaults.
 func NewAgent(client provider.Client, model, system string, tools Registry) *Agent {
 	return &Agent{
-		Client:          client,
-		Model:           model,
-		System:          system,
-		Tools:           tools,
-		MaxSteps:        0, // 0 = unlimited
-		MaxRetries:      3,
+		Client:   client,
+		Model:    model,
+		System:   system,
+		Tools:    tools,
+		MaxSteps: 0, // 0 = unlimited
+		// Six retries with the doubling base below is 2+4+8+16+32+60 = ~2min of
+		// patience, ending on the MaxRetryDelay tail. Three (14s) was too short
+		// for the provider overloads it mostly meets — see MaxRetryDelay.
+		MaxRetries:      6,
 		RetryBaseDelay:  2 * time.Second,
 		transcriptEpoch: agentEpochSeq.Add(1) << 32,
 	}
@@ -1989,6 +1993,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			err          error
 		)
 		imageRounds := 0
+		var retriedFor time.Duration // backoff actually slept this step
 		// A continue turn deliberately leaves its prefill target (the trailing
 		// assistant message) LAST so oneTurn can extend it in place. The retry/
 		// image-recovery drops below key on "last message is assistant" — which is
@@ -2031,6 +2036,26 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 				}
 			}
 			if !a.canRetryError(err, attempt) {
+				// Give up, but SAY that we tried. This message is read by three
+				// surfaces — the red banner, the session error sidecar, and the
+				// rescue dialog's reason — and all three previously showed the
+				// provider's bare sentence, which reads as one immediate
+				// failure. A sidecar row saying only "servers are overloaded"
+				// is what made a working backoff look absent during forensics.
+				//
+				// Wrapped with %w so the typed classification underneath
+				// (ProviderError, transport errors) keeps working; the suffix
+				// deliberately carries no digit-colon pair that could trip the
+				// prose heuristics in ClassifyRecoverable.
+				if attempt > 0 {
+					// retriedFor is what was actually SLEPT, accumulated as each
+					// wait was taken — not the curve recomputed, which would
+					// misreport every time a server's Retry-After overrode it.
+					// It excludes the request time on top: a number that
+					// undercounts honestly beats one that guesses.
+					err = fmt.Errorf("%w (gave up after %d attempts over %s)",
+						err, attempt+1, retriedFor.Round(time.Second))
+				}
 				break
 			}
 			// This attempt is being retried: drop its (possibly partial)
@@ -2041,9 +2066,28 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			if !continuePrefill {
 				a.dropLastAssistantMessage()
 			}
-			if sleepErr := sleepRetry(ctx, a.retryDelay(attempt, err)); sleepErr != nil {
+			// Announce the wait BEFORE taking it. A transient retry used to be
+			// entirely silent, which made a working backoff look like no
+			// backoff at all: the user sat through ~20s of nothing and then got
+			// the provider's raw sentence, indistinguishable from a single
+			// immediate failure. The sink is the same one the turn's text rides,
+			// so every host that renders a turn can render this.
+			delay := a.retryDelay(attempt, err)
+			rec := RetryRecord{
+				Phase:    RetryPhaseTurn,
+				Provider: providerOf(err),
+				Attempt:  attempt + 1, // 1-based: the attempt that just failed
+				Max:      a.MaxRetries,
+				Delay:    delay,
+				Err:      retryErrMsg(err),
+			}
+			sink(EvRetry{Provider: rec.Provider, Attempt: rec.Attempt,
+				Max: rec.Max, Delay: rec.Delay, Err: rec.Err}) // live: the UI
+			a.fireRetry(rec) // durable: the session row
+			if sleepErr := sleepRetry(ctx, delay); sleepErr != nil {
 				return sleepErr
 			}
+			retriedFor += delay
 		}
 		// The turn is final (success or non-retryable error). Persist and
 		// emit the kept assistant message exactly once, before propagating
@@ -2119,6 +2163,13 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 					sink(EvStall{StallRecord: rec}) // live: UI + extension observers
 				}
 				if a.maybeEscalate(ctx, sink) {
+					sink(EvDone{})
+					return nil
+				}
+				// And when even refusing to run the call did not break it, the
+				// turn ends. Checked after escalation so a swap still wins: the
+				// incoming model is pardoned there and gets its own strikes.
+				if a.stallGiveUp(sink) {
 					sink(EvDone{})
 					return nil
 				}
@@ -2222,23 +2273,68 @@ func isNonRetryableProviderLimit(msg string) bool {
 	return false
 }
 
+// MaxRetryDelay caps a single backoff wait, and with the default base and
+// ceiling it is the LAST wait the agent takes before giving up: 2s, 4s, 8s,
+// 16s, 32s, 60s.
+//
+// The old curve stopped at 8s — three retries, 14s of patience total. That is
+// not enough for the failure it most often meets. "Our servers are currently
+// overloaded, please try again later" is a load shedder, and a load shedder
+// measured in seconds is asking to be waited out in tens of seconds; a session
+// lost four turns to it inside half an hour, each after ~20s of trying. A
+// minute at the tail costs one more paused turn when the provider is genuinely
+// down, and saves the user retyping a prompt when it is merely busy.
+//
+// The tail is the expensive part on purpose: the early waits stay short so an
+// ordinary transport blip still recovers in seconds.
+const MaxRetryDelay = 60 * time.Second
+
 // retryDelay returns the wait before retry attempt n. A server-stated
-// Retry-After wins over the default exponential backoff, capped so a
-// hostile or misconfigured header can't stall the turn for minutes.
+// Retry-After wins over the default exponential backoff. Both are capped at
+// MaxRetryDelay, so a hostile or misconfigured header can't stall the turn for
+// longer than terva would wait on its own judgement.
 func (a *Agent) retryDelay(attempt int, err error) time.Duration {
 	var pe *provider.ProviderError
 	if errors.As(err, &pe) && pe.RetryAfter > 0 {
-		const maxRetryAfter = 30 * time.Second
-		if pe.RetryAfter > maxRetryAfter {
-			return maxRetryAfter
-		}
-		return pe.RetryAfter
+		return min(pe.RetryAfter, MaxRetryDelay)
 	}
 	base := a.RetryBaseDelay
 	if base <= 0 {
 		base = 2 * time.Second
 	}
-	return base * time.Duration(1<<attempt)
+	// Shift-guard: attempt is bounded by MaxRetries, but a host is free to set
+	// that to anything, and 1<<64 is not a long wait — it is zero.
+	if attempt >= 32 {
+		return MaxRetryDelay
+	}
+	return min(base*time.Duration(1<<attempt), MaxRetryDelay)
+}
+
+// providerOf and retryErrMsg pull the two things a retry notice needs out of
+// whatever the client returned. A bare transport failure carries no provider
+// name and no ProviderError wrapper, so both degrade to something renderable
+// rather than to a panic or an empty line.
+func providerOf(err error) string {
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) {
+		return pe.Provider
+	}
+	return ""
+}
+
+func retryErrMsg(err error) string {
+	if err == nil {
+		return ""
+	}
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) && pe.Msg != "" {
+		// Msg alone, not Error(): the provider name and status are separate
+		// fields on the event, and a renderer that wants "openai-codex: http
+		// 503: …" can compose it. Repeating them inside the message is how a
+		// status line ends up saying the provider's name twice.
+		return pe.Msg
+	}
+	return err.Error()
 }
 
 // imageRejectedNote replaces an image the provider refused to accept. It tells
@@ -2715,6 +2811,27 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools
 	// turn's own loop is the only place that can promise a cancel is a cancel.
 	if ctx.Err() != nil {
 		return abortedToolResult("the turn was cancelled before this tool call started")
+	}
+	// The stuck-loop detector's last rung before the turn ends: a call it has
+	// already proved redundant is answered without being run. Placed ahead of the
+	// registry lookup because the claim being made is "this call is not
+	// dispatched", which is true whether or not the tool still exists.
+	//
+	// Every earlier rung is a note the model may agree with and ignore; this one
+	// changes the RESULT, which is the only channel a determined loop is still
+	// reading. The tracker is turn-goroutine state and this is the turn goroutine
+	// (executeTools runs the calls in order), so it needs no lock — the same
+	// reason observe() does not.
+	if a.stallDetectionOn() {
+		if reason, refused := a.stall.refuse(tc); refused {
+			rec := StallRecord{Axis: stallAxisSpin, Tool: tc.Name, Rung: 3}
+			a.fireStall(rec)
+			sink(EvStall{StallRecord: rec})
+			return ToolResult{
+				Content: []provider.Content{provider.TextBlock{Text: reason}},
+				IsError: true,
+			}
+		}
 	}
 	// Dispatch against the registry PINNED for this turn (passed down from
 	// runLoop), not a live read of a.Tools: the turn runs on its own

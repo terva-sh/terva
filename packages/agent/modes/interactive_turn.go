@@ -7,6 +7,7 @@ package modes
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,6 +200,85 @@ func autoCompactNoteLine(th tui.Theme, msg string) string {
 // the marker the carrier handler matches to find and replace that one line, so
 // repeated nudges update a single counted note instead of stacking.
 const stallNudgeGlyph = "⟳"
+
+// stallRefuseGlyph and stallStopGlyph lead the detector's two ACTING rungs: a
+// call answered without being dispatched, and the turn ended because that was
+// ignored too. Each is its own coalescing marker (see coalesceHatchNote), so a
+// refusal never overwrites the nudge line that preceded it — the two counts are
+// separate facts about the same loop. Single-width, like every other hatch
+// glyph, so a note cannot widen a frame.
+const (
+	stallRefuseGlyph = "⊘"
+	stallStopGlyph   = "⊗"
+)
+
+// retryGlyph leads the coalesced transient-retry note and is its coalescing
+// marker, like the stall glyphs above. Deliberately NOT ⟳ — that one already
+// means "the model is looping", and a provider backoff is the opposite
+// situation (nothing is repeating; something upstream is unavailable).
+// Single-width, checked: a wider glyph would push the note past the frame.
+const retryGlyph = "⧖"
+
+// shortDuration renders a backoff wait the way a person says it: "8s", "1m",
+// "1m30s" — never "1m0s" or "8.000000001s", which is what Duration.String does
+// with a computed value.
+func shortDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	d = d.Round(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	mins := int(d / time.Minute)
+	secs := int((d % time.Minute) / time.Second)
+	if secs == 0 {
+		return fmt.Sprintf("%dm", mins)
+	}
+	return fmt.Sprintf("%dm%ds", mins, secs)
+}
+
+// clampNote trims a provider's own error prose to something that fits beside a
+// note's own words. Providers write whole sentences ("Our servers are currently
+// overloaded. Please try again later.") and the note already carries the
+// provider, the attempt, and the wait.
+func clampNote(s string, max int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max <= 1 {
+		return "…"
+	}
+	return strings.TrimRight(string(r[:max-1]), " ") + "…"
+}
+
+// coalesceHatchNote strips any existing note led by glyph out of notes and
+// returns the count that the replacement line should carry: one more than the
+// line it replaced, or 1 when there was none. A wedged run fires these many
+// times over, and a growing stack of near-identical notes is noise — one line
+// that counts up says the same thing in a line the eye can hold.
+//
+// The count self-resets when the line is gone, since notes clear on the next
+// prompt; it deliberately does not live in the event, which reports single
+// occurrences.
+func coalesceHatchNote(notes *[]string, glyph string, count int) int {
+	kept := (*notes)[:0:0]
+	found := false
+	for _, note := range *notes {
+		if strings.Contains(note, glyph) {
+			found = true
+			continue
+		}
+		kept = append(kept, note)
+	}
+	*notes = kept
+	if found {
+		return count + 1
+	}
+	return 1
+}
 
 // hatchNoteLine styles a stuck-loop-hatch heads-up (a detector nudge or a model
 // escalation) as an inline chat-area note, the same shape as autoCompactNoteLine

@@ -75,15 +75,37 @@ type WireEvent struct {
 	// leaves the flat bag above readable — the same reason Message and Usage nest.
 	Stall      *WireStall      `json:"stall,omitempty"`
 	Escalation *WireEscalation `json:"escalation,omitempty"`
+	Retry      *WireRetry      `json:"retry,omitempty"`
 }
 
-// WireStall is the payload of a "stall" event: the stuck-loop detector nudged
-// (rung 1). axis is which axis caught the loop, tool the tool it looped on,
-// detail the repeated error slice (churn only).
+// WireRetry is the payload of a "retry" event: a turn attempt hit a transient
+// provider error and the agent is waiting before trying again.
+//
+// delay_ms rather than a duration string because every client that renders it
+// does arithmetic on it (a countdown, a spinner label), and a client that only
+// prints it can format a number. attempt is 1-based and counts the attempt that
+// just failed, so attempt/max renders directly as "2 of 6".
+type WireRetry struct {
+	Provider string `json:"provider,omitempty"`
+	Attempt  int    `json:"attempt,omitempty"`
+	Max      int    `json:"max,omitempty"`
+	DelayMS  int64  `json:"delay_ms,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// WireStall is the payload of a "stall" event: the stuck-loop detector acted on
+// a loop. axis is which axis caught it, tool the tool it looped on, detail the
+// repeated error slice (churn only) or the reason the turn ended (rung 4).
+//
+// rung says WHAT it did — 1 nudge, 2 hold-off, 3 refused to dispatch the call,
+// 4 ended the turn — and a renderer needs it, because those are four different
+// things to tell a user, not four intensities of the same one. Omitted when 1,
+// which is also what an older peer sends, so absent reads as the nudge.
 type WireStall struct {
 	Axis   string `json:"axis,omitempty"`
 	Tool   string `json:"tool,omitempty"`
 	Detail string `json:"detail,omitempty"`
+	Rung   int    `json:"rung,omitempty"`
 }
 
 // WireEscalation is the payload of an "escalation" event: rung 3 resolved.
@@ -452,7 +474,15 @@ func eventToWire(ev AgentEvent, imageData bool) WireEvent {
 		u := usageToWire(e.Usage)
 		out.Usage = &u
 	case EvStall:
-		out.Stall = &WireStall{Axis: e.Axis, Tool: e.Tool, Detail: e.Detail}
+		out.Stall = &WireStall{Axis: e.Axis, Tool: e.Tool, Detail: e.Detail, Rung: e.Rung}
+	case EvRetry:
+		out.Retry = &WireRetry{
+			Provider: e.Provider,
+			Attempt:  e.Attempt,
+			Max:      e.Max,
+			DelayMS:  e.Delay.Milliseconds(),
+			Error:    e.Err,
+		}
 	case EvEscalation:
 		out.Escalation = &WireEscalation{
 			Reason:      e.Reason,
