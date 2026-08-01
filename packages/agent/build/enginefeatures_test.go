@@ -196,3 +196,37 @@ func TestEscalationAutoFromConfig(t *testing.T) {
 		t.Error("escalation.auto=true must arm auto-escalate at the build funnel")
 	}
 }
+
+// Prefix-divergence recording ships ON, and that default is the whole design:
+// a diagnostic shipped off is never enabled at the moment the rare thing
+// happens, and this one's value is entirely retrospective — reading rows back
+// out of a session nobody knew would go wrong. Two measured sessions lost 10.5%
+// and 32.2% of their spend to zero-cache turns with no trace of why.
+//
+// Like the others, the shipped default lives ONLY here: core.NewAgent's zero
+// value is off, so a flip back to default-off would pass every core test.
+func TestPrefixDivergenceRecordingShipsOnAndCanBeSwitchedOff(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !r.NewAgent().PrefixDivergenceRecordingEnabled() {
+		t.Error("prefix_divergence_recording must default ON — a diagnostic that ships off is never on when the rare event happens")
+	}
+
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.EngineFeatures = map[string]bool{"prefix_divergence_recording": false}
+	}); err != nil {
+		t.Fatalf("override config: %v", err)
+	}
+	r, err = Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve with override: %v", err)
+	}
+	if r.NewAgent().PrefixDivergenceRecordingEnabled() {
+		t.Error("engine_features.prefix_divergence_recording=false must switch it off at build")
+	}
+}

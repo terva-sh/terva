@@ -107,6 +107,29 @@ var EngineFeatures = []EngineFeature{
 		Default: true,
 		Apply:   func(a *core.Agent, on bool) { a.SetStuckLoopEscalation(on) },
 	},
+	{
+		ID:    "prefix_divergence_recording",
+		Title: i18n.M("Record cache-invalidating prompt changes"),
+		Desc:  i18n.M("Providers cache by matching the start of the prompt, so a conversation only stays cheap while each request merely APPENDS to the last. When something rebuilds the prompt instead, everything after the change is re-read at full price and nothing says so — it shows up only as a cost you cannot explain. This records what changed and where, in the session file, whenever it happens."),
+		// ON, and the argument for that is the whole point: a diagnostic that
+		// ships off is never enabled at the moment the rare thing happens, and
+		// this one's entire value is retrospective — reading rows back out of a
+		// session nobody knew would go wrong. Two measured sessions lost 10.5%
+		// and 32.2% of their spend to zero-cache turns with no trace of why.
+		//
+		// It earns "always on" by being quiet and cheap. Quiet: it writes only
+		// when the prompt was rebuilt rather than extended, which is never in a
+		// healthy session. Cheap: measured at 2.6ms and 1.8MB for a 1500-message,
+		// 797KB transcript (BenchmarkBuildPrefixLadder) — around 0.02% of a
+		// request that spends seconds at the provider.
+		//
+		// The toggle exists anyway, for the case that benchmark does NOT cover: a
+		// transcript carrying large images, whose bytes are re-hashed per request.
+		// Nobody has measured that, and an off switch is cheaper than finding out
+		// the hard way.
+		Default: true,
+		Apply:   func(a *core.Agent, on bool) { a.SetPrefixDivergenceRecording(on) },
+	},
 }
 
 // EngineFeatureByID resolves a feature by its id (the settings-action lookup).

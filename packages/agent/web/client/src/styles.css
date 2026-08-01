@@ -649,8 +649,12 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .pick-promote { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--panel); }
 .pick-promote-q { min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-detail); color: var(--fg); }
 .pick-promote-btns { display: flex; gap: 6px; flex: none; }
-.pick-id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 13px; }
-.pick-meta { flex: none; font-size: 12px; color: var(--muted); }
+/* The label keeps a floor and the meta yields. A renamed model puts a long
+   local id into .pick-meta, and while that was flex:none it took the width it
+   wanted and squeezed the name — the thing the operator renamed the model to
+   read — down to a single glyph. */
+.pick-id { flex: 1 1 auto; min-width: 10ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 13px; }
+.pick-meta { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
 .pick-empty { padding: 20px 12px; color: var(--muted); text-align: center; }
 
 /* The workspace drawer's About tab — the daemon's own facts, shown where there
@@ -681,6 +685,33 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .ctx-win-pct { flex: none; width: 34px; text-align: right; }
 .ctx-win-reset { flex: none; color: var(--muted); }
 .ctx-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-top: 2px; }
+
+/* prompt-cache reading: hit-rate gauge, last-request split, per-request strip.
+   Reuses .ctx-bar/.ctx-usage above — but note the POLARITY is inverted from the
+   context gauge: a full bar is the good state, so .hot is applied at the low
+   end, not the high one. */
+.ctx-cache { display: flex; flex-direction: column; gap: 8px; }
+.ctx-cache-none { font-size: 12px; color: var(--muted); }
+.ctx-usage-cost.bad { color: var(--danger); }
+/* One column per request, oldest left. align-items:flex-end so the bars grow up
+   from a shared baseline; without it a short bar floats mid-row and the strip
+   stops reading as a chart. min-width 0 on the bars lets a full ring of 32
+   squeeze into a narrow pane rather than overflowing it.
+
+   Each column carries its own TRACK. Without one the strip is a row of fills
+   with nothing behind them, and since a healthy session sits at 90-something
+   percent for every request, that renders as one solid block with a gap in it —
+   the break reads as missing data rather than as an empty column. The track is
+   what makes a short bar legible as a low reading. (The screenshot is the only
+   thing that catches this: every unit assertion about the inline heights passes
+   either way.) */
+.ctx-cache-strip { display: flex; align-items: flex-end; gap: 3px; height: 28px; }
+.ctx-cache-bar { flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end; background: var(--panel); border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+/* A px floor rather than a percentage one in the markup: the DOM keeps the
+   honest height (a total miss is 0%) and CSS is what stops the red stub
+   disappearing into the track. */
+.ctx-cache-fill { width: 100%; min-height: 3px; background: var(--user); }
+.ctx-cache-fill.hot { background: var(--danger); }
 /* usage resets: banked reset credits + inline redeem confirm */
 .resets-count { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--accent); }
 /* The rows carry side padding so the urgency wash and ring (ui.css

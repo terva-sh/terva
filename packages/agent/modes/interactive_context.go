@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
@@ -144,7 +145,109 @@ func renderContextOverview(th tui.Theme, b ctrlproto.ContextBreakdown) []string 
 	out = append(out, row(i18n.T("TOTAL"), b.TotalBytes, pctSuffix))
 	out = append(out, "")
 	out = append(out, muted("  "+i18n.T("sizes are bytes; token counts are ~bytes/4 estimates")))
+	out = append(out, renderCacheSection(th, b.Cache)...)
 	return out
+}
+
+// sparkLevels are the eight bar heights a hit rate quantizes to. Eight is what
+// the block-element range gives; a rate is a fraction, so the mapping is exact
+// enough that the shape is the signal and nobody reads a height as a number.
+var sparkLevels = []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+
+// renderCacheSection paints the prompt-cache reading below the size breakdown.
+//
+// It sits under the byte estimates on purpose, and reads as their counterweight:
+// everything above is terva guessing what it is about to send, this is the
+// provider reporting what it actually read and what it charged for. The two
+// disagreeing is informative — a big transcript with a high hit rate costs
+// almost nothing, which the byte total alone would never tell you.
+func renderCacheSection(th tui.Theme, c *ctrlproto.ContextCache) []string {
+	muted := func(s string) string { return th.FG256(th.Muted, s) }
+	if c == nil {
+		// A daemon older than this field. Say nothing rather than "0%".
+		return nil
+	}
+	out := []string{"", muted("  " + strings.Repeat("─", 38))}
+
+	if !c.Supported {
+		if c.Session.Input+c.Session.CacheRead+c.Session.CacheWrite == 0 {
+			return append(out, muted("  "+i18n.T("prompt cache")+"    "+i18n.T("no requests yet")))
+		}
+		// Real traffic, no cache reported: an endpoint without a prefix cache, or
+		// prompts under its minimum cacheable size. Not a 0% hit rate — there is
+		// nothing here to be missing.
+		return append(out, muted("  "+i18n.T("prompt cache")+"    "+
+			i18n.T("this provider reported no cache activity")))
+	}
+
+	sessRate, _ := usageRate(c.Session)
+	head := fmt.Sprintf("  %-15s %s", i18n.T("prompt cache"),
+		th.FG256(th.MeterColor(100-sessRate*100), fmt.Sprintf("%3.0f%% ", sessRate*100)+i18n.T("hit")))
+	if saved := c.Session.CacheSavedUSD; saved != 0 {
+		// Sign it in words, not with a minus buried in a currency. A session that
+		// keeps rewriting a prefix it never reads back costs MORE than no cache,
+		// and "-$0.42 saved" is a sentence people read as a saving.
+		if saved > 0 {
+			head += muted(fmt.Sprintf("   %s $%.2f", i18n.T("saved"), saved))
+		} else {
+			head += th.FG256(th.Warning, fmt.Sprintf("   %s $%.2f", i18n.T("cost extra"), -saved))
+		}
+	}
+	out = append(out, head)
+
+	if last := c.LastRequest; last.Input+last.CacheRead+last.CacheWrite > 0 {
+		rate, _ := usageRate(last)
+		parts := []string{i18n.T("%s read", humanCount(last.CacheRead))}
+		if last.CacheWrite > 0 {
+			parts = append(parts, i18n.T("%s written", humanCount(last.CacheWrite)))
+		}
+		parts = append(parts, i18n.T("%s fresh", humanCount(last.Input)))
+		out = append(out, muted(fmt.Sprintf("    %-13s %s  ", i18n.T("last request"),
+			strings.Join(parts, " · ")))+
+			th.FG256(th.MeterColor(100-rate*100), fmt.Sprintf("(%.0f%%)", rate*100)))
+	}
+
+	if len(c.Recent) > 1 {
+		out = append(out, muted(fmt.Sprintf("    %-13s ", i18n.T("last %d", len(c.Recent))))+
+			cacheSpark(th, c.Recent))
+	}
+	return out
+}
+
+// cacheSpark draws one cell per recent request, height and colour by hit rate.
+//
+// Per-request rather than averaged because the average is the one thing already
+// on the line above. What this adds is WHERE the cache broke: a prefix change
+// shows up as a single notch in an otherwise full bar, and that notch is the
+// whole diagnosis — it dates the invalidation to a request, which is what makes
+// it possible to remember what was changed just before it.
+func cacheSpark(th tui.Theme, recent []ctrlproto.CacheSample) string {
+	var sb strings.Builder
+	for _, s := range recent {
+		rate := s.HitRate
+		if rate < 0 {
+			rate = 0
+		} else if rate > 1 {
+			rate = 1
+		}
+		level := int(rate * float64(len(sparkLevels)))
+		if level >= len(sparkLevels) {
+			level = len(sparkLevels) - 1
+		}
+		sb.WriteString(th.FG256(th.MeterColor(100-rate*100), string(sparkLevels[level])))
+	}
+	return sb.String()
+}
+
+// usageRate is CacheHitRate over the wire shape, so the renderers do not each
+// re-derive the denominator. Same definition as provider.Usage.CacheHitRate:
+// cache reads over the whole prompt, cached and not.
+func usageRate(u core.WireUsage) (rate float64, ok bool) {
+	prompt := u.Input + u.CacheRead + u.CacheWrite
+	if prompt <= 0 {
+		return 0, false
+	}
+	return float64(u.CacheRead) / float64(prompt), true
 }
 
 func humanBytes(n int) string {

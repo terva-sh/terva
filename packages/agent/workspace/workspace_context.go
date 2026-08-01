@@ -157,7 +157,42 @@ func (s *wsSession) contextBreakdown() ctrlproto.ContextBreakdown {
 	b.Cumulative = uv.Cumulative
 	b.Subscription = uv.Subscription
 	b.UsageWindows = uv.Windows
+	b.Cache = cacheView(ag.LastTurnUsage(), ag.Cost(), ag.RecentUsage())
 	return b
+}
+
+// cacheView reduces the agent's usage records to the prompt-cache picture.
+//
+// A free function over three usage values rather than a method, so the TUI's
+// in-process path and the control plane's serialized one cannot diverge: both
+// render from what this returns, and a test can hand it usage without standing
+// up a workspace.
+func cacheView(last, session provider.Usage, recent []provider.Usage) *ctrlproto.ContextCache {
+	c := &ctrlproto.ContextCache{
+		LastRequest: core.UsageToWire(last),
+		Session:     core.UsageToWire(session),
+	}
+	// Supported is read off the SESSION, not the last request. A turn can
+	// legitimately show no cache activity on a provider that caches — the first
+	// request of a session writes but does not read, and a prompt under the
+	// minimum cacheable size does neither. Only "nothing, ever, all session"
+	// means there is no cache here.
+	c.Supported = session.CacheReadTokens > 0 || session.CacheWriteTokens > 0
+	for _, u := range recent {
+		rate, ok := u.CacheHitRate()
+		if !ok {
+			// A response the provider reported no prompt tokens for. Drawing it
+			// as a 0% bar would put a phantom miss in the strip.
+			continue
+		}
+		c.Recent = append(c.Recent, ctrlproto.CacheSample{
+			HitRate:      rate,
+			PromptTokens: u.PromptTokens(),
+			WriteTokens:  u.CacheWriteTokens,
+			SavedUSD:     u.CacheSavedUSD,
+		})
+	}
+	return c
 }
 
 // usageWindows maps the provider's usage windows to the wire form, dropping

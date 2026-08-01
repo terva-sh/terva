@@ -630,7 +630,7 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 	}
 
 	sendDone := func() {
-		usage.CostUSD = ComputeCost(model, usage)
+		ApplyCost(model, &usage)
 		out <- EventUsage{Usage: usage}
 		out <- EventDone{Stop: stop, Err: finalErr, Message: assembleMsg()}
 	}

@@ -500,7 +500,7 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 				nonCompactedRows = append(nonCompactedRows, append([]byte(nil), line...))
 			}
 		},
-		onUsage: func(_, _ provider.Usage, effLen int, line []byte) {
+		onUsage: func(_, _ provider.Usage, effLen int, _ bool, line []byte) {
 			if !sawCompaction && effLen < upToMessageIdx {
 				nonCompactedRows = append(nonCompactedRows, append([]byte(nil), line...))
 			}

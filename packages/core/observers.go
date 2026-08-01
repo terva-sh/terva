@@ -69,6 +69,27 @@ func (a *Agent) AddUsageObserver(fn func(u, cumulative provider.Usage)) {
 	a.obsMu.Unlock()
 }
 
+// AddDelegatedUsageObserver registers fn to fire when a sub-agent's spend is
+// booked against this session (RecordDelegatedUsage), carrying the child's
+// increment plus this session's cumulative total. Hosts persist it as a usage
+// row MARKED delegated.
+//
+// Separate from AddUsageObserver because the two answer different questions and
+// only one of them is "what did this session's last request cost". Delegated
+// spend was already kept out of the last-turn snapshot and out of RecentUsage()
+// — whose comment warns that folding it in "would put a transcript-sized cold
+// read in the middle of the strip labelled as a cache miss" — but it reached
+// the persistence observer anyway, so the row on disk had exactly that defect.
+// nil is a no-op.
+func (a *Agent) AddDelegatedUsageObserver(fn func(u, cumulative provider.Usage)) {
+	if fn == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.delegatedUsageObs = append(a.delegatedUsageObs, fn)
+	a.obsMu.Unlock()
+}
+
 // AddTranscriptCompactedObserver registers fn to fire after Compact replaces
 // the in-memory transcript with the synthetic summary plus kept tail. Message
 // observers do not fire for that wholesale replacement, so hosts append an
@@ -95,6 +116,23 @@ func (a *Agent) AddImageExcludedObserver(fn func(sha256Hex string)) {
 	}
 	a.obsMu.Lock()
 	a.imageExcludedObs = append(a.imageExcludedObs, fn)
+	a.obsMu.Unlock()
+}
+
+// AddToolGroupActivatedObserver registers fn to fire when a capability group is
+// newly activated (activate_tools, or a skill's allowed-tools surfacing). Hosts
+// persist a "tool_group" session row so the activation survives a resume.
+//
+// Without it, activation is in-memory only: NewAgent rebuilds activeGroups from
+// config, so every --resume silently drops what the model activated, changing
+// the tools array the provider has cached the whole transcript behind. nil is a
+// no-op.
+func (a *Agent) AddToolGroupActivatedObserver(fn func(group string)) {
+	if fn == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.toolGroupObs = append(a.toolGroupObs, fn)
 	a.obsMu.Unlock()
 }
 
@@ -129,6 +167,44 @@ func (a *Agent) AddStallObserver(fn func(StallRecord)) {
 	}
 	a.obsMu.Lock()
 	a.stallObs = append(a.stallObs, fn)
+	a.obsMu.Unlock()
+}
+
+// AddTailObserver registers fn to fire when the ephemeral tail's COMPOSITION
+// changes — the block of text appended to every request after the prompt-cache
+// breakpoint, which is composed per request and otherwise discarded (see
+// TailRecord). Hosts persist a "tail" session row here, because nothing else
+// does: a session file records the model's reaction to a prompt injection and
+// never the injection itself, which left one review inferring what the model had
+// been shown by reading the harness source.
+//
+// Fires on change, not per request, so a session whose tail is stable writes one
+// row rather than one per turn. nil is a no-op.
+func (a *Agent) AddTailObserver(fn func(TailRecord)) {
+	if fn == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.tailObs = append(a.tailObs, fn)
+	a.obsMu.Unlock()
+}
+
+// AddPrefixDivergenceObserver registers fn to fire when a dispatch's cacheable
+// prefix diverges from the previous dispatch's at a rung the two SHARE — i.e.
+// the transcript was rebuilt rather than extended, so the provider re-reads
+// everything from that point at full price.
+//
+// Never fires for an ordinary append, which is every healthy request. Hosts
+// persist a "prefix" session row, because this is the one cost driver that
+// leaves no other trace: a mutated prefix looks identical to a healthy one in
+// the transcript, and shows up only as a cache-read figure that nothing explains.
+// nil is a no-op.
+func (a *Agent) AddPrefixDivergenceObserver(fn func(PrefixDivergence)) {
+	if fn == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.prefixDivObs = append(a.prefixDivObs, fn)
 	a.obsMu.Unlock()
 }
 
@@ -238,6 +314,26 @@ func (a *Agent) fireUsage(u, cumulative provider.Usage) {
 	}
 }
 
+func (a *Agent) fireTail(rec TailRecord) {
+	a.obsMu.RLock()
+	obs := make([]func(TailRecord), len(a.tailObs))
+	copy(obs, a.tailObs)
+	a.obsMu.RUnlock()
+	for _, fn := range obs {
+		fn(rec)
+	}
+}
+
+func (a *Agent) firePrefixDivergence(d PrefixDivergence) {
+	a.obsMu.RLock()
+	obs := make([]func(PrefixDivergence), len(a.prefixDivObs))
+	copy(obs, a.prefixDivObs)
+	a.obsMu.RUnlock()
+	for _, fn := range obs {
+		fn(d)
+	}
+}
+
 func (a *Agent) fireTranscriptCompacted(messages []provider.Message, res CompactResult) {
 	a.obsMu.RLock()
 	obs := make([]func(messages []provider.Message, res CompactResult), len(a.transcriptCompactedObs))
@@ -255,6 +351,26 @@ func (a *Agent) fireImageExcluded(sha256Hex string) {
 	a.obsMu.RUnlock()
 	for _, fn := range obs {
 		fn(sha256Hex)
+	}
+}
+
+func (a *Agent) fireDelegatedUsage(u, cumulative provider.Usage) {
+	a.obsMu.RLock()
+	obs := make([]func(u, cumulative provider.Usage), len(a.delegatedUsageObs))
+	copy(obs, a.delegatedUsageObs)
+	a.obsMu.RUnlock()
+	for _, fn := range obs {
+		fn(u, cumulative)
+	}
+}
+
+func (a *Agent) fireToolGroupActivated(group string) {
+	a.obsMu.RLock()
+	obs := make([]func(group string), len(a.toolGroupObs))
+	copy(obs, a.toolGroupObs)
+	a.obsMu.RUnlock()
+	for _, fn := range obs {
+		fn(group)
 	}
 }
 

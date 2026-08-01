@@ -13,11 +13,18 @@
 //   - RESULT and EVENT shapes are unchecked. Responses are cast, not validated.
 
 export interface WireUsage {
+  // input is the UNCACHED remainder of the prompt, never the whole prompt —
+  // every decoder normalizes to that. So the prompt is input + cache_read +
+  // cache_write, and the same sum is the context gauge.
   input: number
   output: number
   cache_read: number
   cache_write: number
   cost_usd: number
+  // What the prompt cache was worth on these tokens, priced per response by
+  // whichever model answered it. Signed: negative means cache writes outran the
+  // reads they bought. Absent from a server that predates it.
+  cache_saved_usd?: number
 }
 
 export interface WireBlock {
@@ -267,6 +274,12 @@ export interface ModelInfo {
   // subscription plan, 'apikey' bills per token. Absent for keyless backends
   // (ollama, named endpoints) — that means unknown, so render nothing.
   auth?: 'oauth' | 'apikey'
+  // display_name is the model's human label; renamed says the operator chose
+  // it in models.json rather than it coming from the catalog. Only swap it in
+  // for the id when renamed — catalog names are LONGER than the ids they
+  // would replace, so preferring them makes the list harder to scan.
+  display_name?: string
+  renamed?: boolean
 }
 
 export interface PermissionRequest {
@@ -499,6 +512,36 @@ export interface ContextBreakdown {
   // ext_bytes ephemeral tail, why (matched keys), and what the budget dropped.
   // The Usage pane's home for the 4c trace (the Stage drawer is the other).
   lore_fired?: ContextLoreEntry[]
+  // cache is the prompt-cache reading. Absent from a server that predates it —
+  // which is why the panel keys off presence, not off zeroes.
+  cache?: ContextCache
+}
+
+// ContextCache is what the provider's prompt cache did for this session.
+//
+// Counterweight to everything else on the panel: the byte fields are terva
+// estimating what it is about to send, these are TOKENS the provider counted
+// and billed. A large transcript with a high hit rate costs almost nothing,
+// which the byte total on its own would never say.
+export interface ContextCache {
+  // false means the provider reported no cache activity all session — no prefix
+  // cache, or prompts under its cacheable minimum. Distinct from a 0% hit rate,
+  // which means a cache exists and is missing.
+  supported: boolean
+  last_request: WireUsage
+  session: WireUsage
+  // Per-request tail, oldest first, capped server-side. Empty until this agent
+  // has run a request — including on a resumed session, where the totals above
+  // carry the history instead.
+  recent?: CacheSample[]
+}
+
+// CacheSample is one request reduced to what a strip draws.
+export interface CacheSample {
+  hit_rate: number // cache_read / prompt, in [0,1]
+  prompt_tokens: number // input + cache_read + cache_write
+  write_tokens?: number
+  saved_usd?: number // signed; negative when a write went unread
 }
 
 // ContextLoreEntry is one entry of ContextBreakdown.lore_fired.
@@ -854,6 +897,66 @@ export interface LoreView {
   can_project?: boolean
 }
 
+// Durable-memory pane (kind=memory): the agent's curated facts in both scopes,
+// with each scope's budget so a reader can see how close it is to refusing the
+// next write rather than discovering it when the model reports a refusal.
+export interface MemoryScope {
+  label: string
+  // The ACTIVE tier: facts in the model's cached system prefix on every request.
+  entries?: string[]
+  // The SERIALIZED size the cap is measured against — not the sum of entry
+  // lengths, which understates it by the file header and the bullets. Same
+  // number the store refuses on, so the pane and the refusal cannot disagree.
+  bytes: number
+  max_bytes: number
+  max_count: number
+
+  // The ARCHIVED tier: out of that prefix entirely, injected into the per-turn
+  // tail only when the conversation matches an entry's triggers. Separate from
+  // entries because the budgets are separate and the sizes differ by two orders
+  // of magnitude — folding archived bytes into the fraction above would say
+  // archiving brings a scope closer to refusing the next write, which is the
+  // opposite of what it does.
+  archived?: MemoryArchivedEntry[]
+  archived_bytes?: number
+  archived_max_bytes?: number
+  // Archive files that are present but unreadable. Carried because such an entry
+  // is inert — it occupies the budget, never fires, and has no other symptom at
+  // all — so a pane that does not show it is the only place a user could have
+  // found out.
+  problems?: string[]
+}
+
+// One archived memory. Keys ride along because the archive's failure mode is
+// silent: an entry keyed on the answer's vocabulary rather than the question's
+// simply never fires and produces nothing to notice, and seeing the triggers
+// beside the entry is the only cheap way anyone catches it.
+export interface MemoryArchivedEntry {
+  // The scope-qualified id ("project:the-id") — the name every surface shows and
+  // the one an action must send back.
+  ref: string
+  title?: string
+  keys?: string[]
+  secondary_keys?: string[]
+  bytes?: number
+  text?: string
+  // Last turn's activation trace, as LoreEntry carries it and for the same
+  // reason. dropped_for_budget separates "fired and was cut" from "never fired",
+  // which look identical from outside and need opposite fixes.
+  fired?: boolean
+  matched_keys?: string[]
+  dropped_for_budget?: boolean
+}
+
+export interface MemoryView {
+  user: MemoryScope
+  project: MemoryScope
+  // False when the session has no resolvable project: project memory is then
+  // in-memory only, and the pane says so rather than showing a list that will
+  // never persist.
+  project_bound?: boolean
+}
+
 // MCP management pane (kind=mcp): the workspace's MCP servers with live status +
 // an enable/disable toggle.
 export interface MCPServerInfo {
@@ -930,6 +1033,7 @@ export interface Surface {
   extensions?: ExtensionsView
   permissions?: PermissionsView
   lore?: LoreView
+  memory?: MemoryView
   mcp?: MCPView
   raati?: RaatiView
   chat?: ChatView

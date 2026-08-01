@@ -72,6 +72,48 @@ func TestWireHeadlessSessionPersistWritesTurns(t *testing.T) {
 	}
 }
 
+// The ephemeral tail — what the harness appends to a request after the
+// prompt-cache breakpoint — is composed per request and discarded, so nothing
+// ever recorded it. A session file held the model's REACTION to a prompt
+// injection and no trace of the injection, which left a review inferring what
+// the model had been shown by reading the harness source.
+//
+// The observer existing in core is not the same as a host writing the row. That
+// distinction has bitten here before: AddImageExcludedObserver was fired by the
+// agent and writable by core.Session for a whole release while no host joined
+// them, and both doc comments claimed otherwise.
+func TestWireHeadlessSessionPersistWritesTheEphemeralTail(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	sess, err := core.NewSession(dir, dir, "prov", "fake-model", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ag := core.NewAgent(&onePassClient{reply: "sure"}, "fake-model", "", core.Registry{})
+	ag.ContextProvider = func() string { return "[task] finish the migration" }
+	build.WireHeadlessSessionPersist(ag, sess)
+
+	if err := ag.Prompt(context.Background(), "go", nil, func(core.AgentEvent) {}); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	b, err := os.ReadFile(sess.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if !strings.Contains(got, `"type":"tail"`) {
+		t.Fatalf("no tail row was written:\n%s", got)
+	}
+	// The text, not merely the fact that something fired.
+	if !strings.Contains(got, "finish the migration") {
+		t.Errorf("the tail row does not carry what the model was shown:\n%s", got)
+	}
+}
+
 // twoTurnToolClient streams a tool call on its first turn and a final text
 // reply on its second, so a caller can observe the transcript from INSIDE the
 // task — during the tool's Execute, after turn one has been persisted but well

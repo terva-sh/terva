@@ -367,6 +367,10 @@ type WireUsage struct {
 	CacheRead  int     `json:"cache_read"`
 	CacheWrite int     `json:"cache_write"`
 	CostUSD    float64 `json:"cost_usd"`
+	// CacheSavedUSD is what the prompt cache was worth on these tokens, priced
+	// per response by the model that answered it (provider.ApplyCost). Signed:
+	// negative means cache writes outran the reads they bought.
+	CacheSavedUSD float64 `json:"cache_saved_usd,omitempty"`
 }
 
 // EventToWire converts an AgentEvent to its canonical wire form. Image
@@ -639,12 +643,21 @@ func ContentFromWire(blocks []WireBlock) []provider.Content {
 	return out
 }
 
-func usageToWire(u provider.Usage) WireUsage {
+// UsageToWire converts a provider usage record to its wire form.
+//
+// Exported because the workspace kept a byte-identical private twin of it, and
+// a twin is how a field gets added to one wire path and not the other: the
+// control plane's status payloads went through the copy while the event stream
+// went through this one. One converter, both callers.
+func UsageToWire(u provider.Usage) WireUsage {
 	return WireUsage{
-		Input:      u.InputTokens,
-		Output:     u.OutputTokens,
-		CacheRead:  u.CacheReadTokens,
-		CacheWrite: u.CacheWriteTokens,
-		CostUSD:    u.CostUSD,
+		Input:         u.InputTokens,
+		Output:        u.OutputTokens,
+		CacheRead:     u.CacheReadTokens,
+		CacheWrite:    u.CacheWriteTokens,
+		CostUSD:       u.CostUSD,
+		CacheSavedUSD: u.CacheSavedUSD,
 	}
 }
+
+func usageToWire(u provider.Usage) WireUsage { return UsageToWire(u) }

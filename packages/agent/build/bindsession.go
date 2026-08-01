@@ -57,9 +57,18 @@ type SessionBinding struct {
 //
 // Three hosts did both halves and two of them had this backwards.
 func BindSession(b SessionBinding) {
-	// 1. Who the agent thinks it is.
+	// 1. Who the agent thinks it is — and, from the same session, which
+	//    capability groups a previous run of it activated. Both are identity in
+	//    the sense that matters to the provider: AdoptSessionIdentity sets the
+	//    cache ROUTE, RestoreActiveGroups keeps the tools array on that route
+	//    byte-identical to what is already cached. Restoring here rather than in
+	//    NewAgent is forced: NewAgent runs before the session is known, and it
+	//    is NewAgent's EnableLazyTools that resets the set in the first place.
 	if b.Agent != nil {
 		b.Agent.AdoptSessionIdentity(b.Session)
+		if b.Session != nil {
+			b.Agent.RestoreActiveGroups(b.Session.ActiveToolGroups)
+		}
 	}
 	// 2. The board, loaded from the incoming session's file.
 	RebindTasks(b.Tasks, b.Session)

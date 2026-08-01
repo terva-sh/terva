@@ -7,7 +7,9 @@ import type {
   AskRequest,
   CatalogView,
   CommandsView,
+  CacheSample,
   ContextBreakdown,
+  ContextCache,
   ContextNode,
   Decision,
   ExtensionsView,
@@ -66,6 +68,7 @@ import { AskRequest as AskRequestView } from './features/interactions/AskRequest
 import { PermissionRequest as PermissionRequestView } from './features/interactions/PermissionRequest'
 import { ModelParamsForm } from './features/models/ModelParamsForm'
 import { ModelPicker } from './features/models/ModelPicker'
+import { modelLabel } from './features/models/label'
 import { SessionsBoard } from './features/board/SessionsBoard'
 import { SwarmLane } from './features/board/SwarmLane'
 import { WorkflowLane } from './features/board/WorkflowLane'
@@ -1893,7 +1896,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         )}
         {curSess && (
           <button class="model-btn" title={t('Switch model')} onClick={() => setPickerOpen(true)}>
-            {curModel ? (curModel.favorite ? '★ ' : '') + curModel.id : t('model')}
+            {curModel ? (curModel.favorite ? '★ ' : '') + modelLabel(curModel) : t('model')}
           </button>
         )}
         {ctxPct >= 0 && ctxTok > 0 && (
@@ -4325,6 +4328,7 @@ export function UsageSummary({
   cumulative,
   subscription,
   windows,
+  cache,
 }: {
   tokens: number
   window: number
@@ -4332,6 +4336,7 @@ export function UsageSummary({
   cumulative: WireUsage
   subscription?: boolean
   windows?: UsageWindow[]
+  cache?: ContextCache
 }) {
   const pct = window > 0 ? Math.min(100, (tokens / window) * 100) : 0
   const note = estimated && tokens === 0 ? ' — ' + t('no turn yet') : estimated ? ' — ' + t('estimated') : ''
@@ -4364,7 +4369,126 @@ export function UsageSummary({
           ))}
         </div>
       )}
+      <CacheSummary cache={cache} />
     </>
+  )
+}
+
+// hitRate is cache reads over the whole prompt — the same definition the server
+// uses (provider.Usage.CacheHitRate), including the "no prompt at all" case,
+// which must not read as a 0% miss.
+export function hitRate(u: WireUsage): number | null {
+  const prompt = (u.input || 0) + (u.cache_read || 0) + (u.cache_write || 0)
+  if (prompt <= 0) return null
+  return (u.cache_read || 0) / prompt
+}
+
+// CacheSummary is the prompt-cache reading: how much of what the model read came
+// from cache, what that was worth, and how it moved request by request.
+//
+// It sits below the gauge and the totals because it explains them. A 180k
+// context that costs pennies and a 180k context that costs dollars look
+// identical on every other row of this pane; the difference is entirely here.
+export function CacheSummary({ cache }: { cache?: ContextCache }) {
+  // A server that predates the field sends nothing. Rendering an empty cache
+  // would report a working cache as dead.
+  if (!cache) return null
+
+  const sessPrompt = (cache.session.input || 0) + (cache.session.cache_read || 0) + (cache.session.cache_write || 0)
+  if (!cache.supported) {
+    return (
+      <div class="ctx-cache">
+        <div class="ctx-section-label">{t('Prompt cache')}</div>
+        <div class="ctx-cache-none">
+          {sessPrompt === 0
+            ? t('no requests yet')
+            : /* Real traffic and no cache reported: an endpoint without a prefix
+                 cache, or prompts under its cacheable minimum. Saying "0%" here
+                 would send someone hunting a cache that does not exist. */
+              t('this provider reported no cache activity')}
+        </div>
+      </div>
+    )
+  }
+
+  const rate = hitRate(cache.session) ?? 0
+  const pct = rate * 100
+  const saved = cache.session.cache_saved_usd || 0
+  const last = cache.last_request
+  const lastRate = hitRate(last)
+  const recent = cache.recent ?? []
+
+  return (
+    <div class="ctx-cache">
+      <div class="ctx-section-label">{t('Prompt cache')}</div>
+      <div class="ctx-bar-wrap">
+        <div class="ctx-bar">
+          {/* Polarity is inverted from the context gauge next to it: a FULL bar
+              is the good state here, and the alarm colour belongs at the empty
+              end. */}
+          <div class={`ctx-bar-fill${pct < 50 ? ' hot' : ''}`} style={{ width: pct + '%' }} />
+        </div>
+        <div class="ctx-bar-label">
+          {t('%s of the prompt served from cache, this session', pct.toFixed(0) + '%')}
+        </div>
+      </div>
+      <div class="ctx-usage">
+        {lastRate !== null && (
+          // Words, not glyphs. The three shares round to similar-looking
+          // numbers on a steady turn ("2k" written, "2k" fresh), and a row of
+          // bare counts behind ⚡/✎/◦ is unreadable at a glance however good
+          // the tooltips are.
+          <>
+            <span title={t('the last request')}>{t('%s read', humanCount(last.cache_read || 0))}</span>
+            {(last.cache_write || 0) > 0 && <span>{t('%s written', humanCount(last.cache_write || 0))}</span>}
+            <span>{t('%s fresh', humanCount(last.input || 0))}</span>
+          </>
+        )}
+        {saved !== 0 && (
+          // A cache that never gets read back costs 25% MORE than no cache at
+          // all, so this figure is signed — and "saved -$0.42" is a phrase that
+          // reads as a saving. Change the words, not just the sign.
+          <span class={`ctx-usage-cost${saved < 0 ? ' bad' : ''}`}>
+            {saved > 0
+              ? t('saved $%s', saved.toFixed(2))
+              : t('cost $%s extra', Math.abs(saved).toFixed(2))}
+          </span>
+        )}
+      </div>
+      {recent.length > 1 && (
+        <>
+          <CacheStrip samples={recent} />
+          <div class="ctx-bar-label">{t('hit rate over the last %d requests', recent.length)}</div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// CacheStrip draws one bar per recent request, oldest left.
+//
+// The average is already on the line above; what this adds is WHERE. A prefix
+// change — a model switch, an extension reload, a tool set that moved — shows up
+// as one short bar in an otherwise full strip, and that bar dates the
+// invalidation to a request you can still remember making.
+export function CacheStrip({ samples }: { samples: CacheSample[] }) {
+  return (
+    <div class="ctx-cache-strip" role="img" aria-label={t('cache hit rate over the last %d requests', samples.length)}>
+      {samples.map((s, i) => {
+        const pct = Math.max(0, Math.min(1, s.hit_rate)) * 100
+        return (
+          <div
+            key={i}
+            class="ctx-cache-bar"
+            title={t('%s hit · %s prompt tokens', pct.toFixed(0) + '%', humanCount(s.prompt_tokens))}
+          >
+            {/* The honest height, including 0 for a total miss. Keeping that
+                mark visible is a min-height in CSS, not a lie in the markup. */}
+            <div class={`ctx-cache-fill${pct < 50 ? ' hot' : ''}`} style={{ height: pct + '%' }} />
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -4377,6 +4501,10 @@ export function TasksBody({
   list: TaskList
   onAction: (id: string, action: string, args?: Record<string, string>) => void
 }) {
+  // No archived tally. An archived agent is unreachable from terva on purpose
+  // (swarm.Archive), and a count here would be the read path that grows into a
+  // list. The Archive button's own title says where the record goes; after that
+  // it is the filesystem's, not ours.
   if (!list.tasks.length) return <div class="pick-empty">{t('no background agents')}</div>
   return (
     <div class="tasks-body">
@@ -4448,6 +4576,15 @@ export function TaskRow({
         {task.status === 'detached' && (
           <button class="btn sm" onClick={(e) => (e.stopPropagation(), act('resume'))}>
             {t('Resume')}
+          </button>
+        )}
+        {removable && (
+          <button
+            class="btn sm"
+            title={t('compress the transcript into swarm/archive/ and drop it from terva — one way, no undo, recover it with gunzip')}
+            onClick={(e) => (e.stopPropagation(), act('archive'))}
+          >
+            {t('Archive')}
           </button>
         )}
         {removable && (
@@ -4993,6 +5130,7 @@ export function ContextBody({
         cumulative={d.cumulative}
         subscription={d.subscription}
         windows={windows}
+        cache={d.cache}
       />
 
       <ResetsSection onList={onListResets} onConsume={onConsumeReset} />

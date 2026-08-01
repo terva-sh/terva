@@ -516,6 +516,54 @@ type ContextBreakdown struct {
 	// Stage drawer is the other): it turns the lore share of the tail from a byte
 	// total into "which entries, and why." Empty when no lore fired last turn.
 	LoreFired []ContextLoreEntry `json:"lore_fired,omitempty"`
+
+	// Cache is the prompt-cache reading: what the last request and the session
+	// as a whole got out of the provider's cache. Nil from a server that
+	// predates it; every field inside it is derived from usage the agent
+	// already had, so it costs nothing to assemble.
+	Cache *ContextCache `json:"cache,omitempty"`
+}
+
+// ContextCache is the prompt-cache picture for a session: the last request, the
+// session total, and the recent per-request tail the two summarize.
+//
+// Sizes here are TOKENS the provider counted, not the byte estimates the rest of
+// the breakdown carries. That is the whole reason this is worth showing next to
+// them: everything above is terva guessing at what it is about to send, and this
+// is the provider reporting what it actually read and what it charged.
+type ContextCache struct {
+	// Supported is false when the provider reported no cache activity at all
+	// across the session — a backend with no prefix cache, or a transcript that
+	// never reached the minimum cacheable size. Distinguishing that from a 0%
+	// hit rate is the difference between "your cache is broken" and "there is
+	// no cache here to break".
+	Supported bool `json:"supported"`
+
+	// LastRequest is the newest response's usage; Session is the running total.
+	// Both carry the tokens and the money, so a client renders a rate, a volume
+	// and a saving from one struct without a price table of its own.
+	LastRequest core.WireUsage `json:"last_request"`
+	Session     core.WireUsage `json:"session"`
+
+	// Recent is the per-request tail, oldest first — the order a strip is drawn
+	// in. Capped server-side (core.recentCap). Empty until this agent has run a
+	// request, including on a resumed session; the totals above carry that
+	// history instead.
+	Recent []CacheSample `json:"recent,omitempty"`
+}
+
+// CacheSample is one request's cache reading, reduced to what a strip draws.
+//
+// A rate rather than the raw counts: the strip's job is the SHAPE — which
+// request broke the prefix — and a hit rate normalizes across the wildly
+// different prompt sizes a turn's steps have. PromptTokens rides along so a
+// client can weight, or tell a 200-token probe apart from a 200k turn in a
+// tooltip.
+type CacheSample struct {
+	HitRate      float64 `json:"hit_rate"`      // cache_read / prompt, in [0,1]
+	PromptTokens int     `json:"prompt_tokens"` // input + cache_read + cache_write
+	WriteTokens  int     `json:"write_tokens,omitempty"`
+	SavedUSD     float64 `json:"saved_usd,omitempty"` // signed; negative when a write went unread
 }
 
 // ContextLoreEntry is one entry of the [ContextBreakdown.LoreFired] activation
@@ -637,7 +685,7 @@ type SurfaceMeta struct {
 	ID      string `json:"id"`              // "context", "usage", "status", "ext:<name>:<panel>"
 	Title   string `json:"title"`           // switcher label
 	Icon    string `json:"icon,omitempty"`  // glyph/emoji hint
-	Kind    string `json:"kind"`            // context | usage | panel | widgets | settings | tasks | commands | extensions | permissions | lore | mcp | raati | characters
+	Kind    string `json:"kind"`            // context | usage | panel | widgets | settings | tasks | commands | extensions | permissions | lore | memory | mcp | raati | characters
 	Scope   string `json:"scope,omitempty"` // session | workspace
 	Live    bool   `json:"live,omitempty"`  // pushes EventSurfaceUpdated
 	Actions bool   `json:"actions,omitempty"`
@@ -662,6 +710,7 @@ type Surface struct {
 	Extensions  *ExtensionsView   `json:"extensions,omitempty"`  // kind=extensions
 	Permissions *PermissionsView  `json:"permissions,omitempty"` // kind=permissions
 	Lore        *LoreView         `json:"lore,omitempty"`        // kind=lore
+	Memory      *MemoryView       `json:"memory,omitempty"`      // kind=memory
 	MCP         *MCPView          `json:"mcp,omitempty"`         // kind=mcp
 	Raati       *RaatiView        `json:"raati,omitempty"`       // kind=raati
 	Chat        *ChatView         `json:"chat,omitempty"`        // kind=chat
@@ -841,6 +890,77 @@ type MCPServerInfo struct {
 type LoreView struct {
 	Entries    []LoreEntry `json:"entries"`
 	CanProject bool        `json:"can_project,omitempty"` // project-scope authoring available (trusted workspace)
+}
+
+// MemoryView is the durable-memory pane (kind=memory): the agent's curated
+// facts in both scopes, with the caps so a user reading the pane can see how
+// close a scope is to refusing the next write rather than discovering it when
+// the model reports a refusal.
+//
+// Two scopes rather than one list because they are answerable to different
+// questions — "what does terva know about this repo" and "what does it know
+// about me" — and because a user clearing one almost never means the other.
+type MemoryView struct {
+	User    MemoryScope `json:"user"`
+	Project MemoryScope `json:"project"`
+	// ProjectBound is false when this session has no resolvable project (a
+	// --no-session run, or no cwd): project memory is then in-memory only and
+	// the pane says so rather than showing an empty list that will never
+	// persist.
+	ProjectBound bool `json:"project_bound,omitempty"`
+}
+
+// MemoryScope is one scope's entries and its budget. Bytes/MaxBytes are the
+// SERIALIZED size the cap is actually measured against, not the sum of the
+// entry lengths — the same number the store refuses against, so the pane and
+// the refusal cannot disagree.
+//
+// Entries is the ACTIVE tier — the facts in the cached system prefix on every
+// request. Archived is the keyed tier, absent from that prefix and injected only
+// when the conversation matches an entry's triggers. They are separate lists
+// rather than one flagged list because their budgets are separate, their sizes
+// differ by two orders of magnitude, and the interesting question about an
+// archived entry ("would this ever fire?") does not apply to an active one.
+type MemoryScope struct {
+	Label    string   `json:"label"`
+	Entries  []string `json:"entries,omitempty"`
+	Bytes    int      `json:"bytes"`
+	MaxBytes int      `json:"max_bytes"`
+	MaxCount int      `json:"max_count"`
+
+	Archived         []MemoryArchivedEntry `json:"archived,omitempty"`
+	ArchivedBytes    int                   `json:"archived_bytes,omitempty"`
+	ArchivedMaxBytes int                   `json:"archived_max_bytes,omitempty"`
+	// Problems are archive files that are present but unreadable. Carried on the
+	// wire because such an entry is INERT — it occupies the budget, never fires,
+	// and has no other symptom at all — so a pane that does not show it is the
+	// only place the user could have found out.
+	Problems []string `json:"problems,omitempty"`
+}
+
+// MemoryArchivedEntry is one archived memory for the pane.
+//
+// Keys ride along because the archive's failure mode is silent: a spec keyed on
+// the answer's vocabulary rather than the question's simply never fires, and
+// produces no output to notice. Seeing the triggers next to the entry is the
+// only cheap way anyone catches that. Fired/MatchedKeys/DroppedForBudget are the
+// same activation trace LoreEntry carries, for the same reason — they answer
+// "why is this in my context", and DroppedForBudget separates "fired and was
+// cut" from "never fired", which look identical from outside and need opposite
+// fixes.
+type MemoryArchivedEntry struct {
+	// Ref is the scope-qualified id ("project:the-id") — the name every surface
+	// shows and the one an action must send back.
+	Ref           string   `json:"ref"`
+	Title         string   `json:"title,omitempty"`
+	Keys          []string `json:"keys,omitempty"`
+	SecondaryKeys []string `json:"secondary_keys,omitempty"`
+	Bytes         int      `json:"bytes,omitempty"`
+	Text          string   `json:"text,omitempty"`
+
+	Fired            bool     `json:"fired,omitempty"`
+	MatchedKeys      []string `json:"matched_keys,omitempty"`
+	DroppedForBudget bool     `json:"dropped_for_budget,omitempty"`
 }
 
 // LoreEntry is one lore entry for the inspector.
@@ -1266,4 +1386,17 @@ type ModelInfo struct {
 	// the id alone cannot express. Empty for keyless backends (ollama, named
 	// endpoints): unknown, not "neither" — render nothing rather than a guess.
 	Auth string `json:"auth,omitempty"`
+	// DisplayName is the model's human label, and Renamed says where it came
+	// from: true means the operator chose it in models.json (`name`), false
+	// means the catalog or live discovery supplied it.
+	//
+	// A client that would otherwise print the raw id should swap in
+	// DisplayName ONLY when Renamed. Catalog names run longer than the ids
+	// they would replace ("Claude Sonnet 4.5 (latest)" vs claude-sonnet-4-5),
+	// so preferring them unconditionally makes a picker worse, not better —
+	// whereas an operator's name is the whole point of the override. Both
+	// fields are omitempty and additive: a peer that predates them keeps
+	// rendering ids, which is exactly what it did before.
+	DisplayName string `json:"display_name,omitempty"`
+	Renamed     bool   `json:"renamed,omitempty"`
 }

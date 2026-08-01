@@ -90,6 +90,14 @@ type Session struct {
 	// session carries amends), and available to a future debug surface.
 	LoadStats LoadStats
 
+	// ActiveToolGroups are the capability groups this session activated, in
+	// first-activation order (from its tool_group rows). A resume re-marks them
+	// on the agent — see Agent.RestoreActiveGroups — so the tools array it
+	// advertises matches what the provider cached the transcript behind. Empty
+	// for a session that never activated a group, and for every session written
+	// before tool_group rows existed: those resume as they always did.
+	ActiveToolGroups []string
+
 	// TitleGenerated reports whether the title OpenSession loaded (the last
 	// rename row, reflected into Meta.Title) was machine-generated
 	// (RenameSessionGenerated) rather than a user rename. Provenance decides
@@ -306,17 +314,27 @@ type WorldLoreEntry struct {
 // prefers the discriminator and falls back to field presence for v1
 // files.
 type sessionLine struct {
-	Type       string            `json:"type"`
-	Meta       *SessionMeta      `json:"meta,omitempty"`
-	Message    *wireMessage      `json:"message,omitempty"`
-	Messages   []wireMessage     `json:"messages,omitempty"`
-	Usage      *provider.Usage   `json:"usage,omitempty"`
-	Cumulative *provider.Usage   `json:"cumulative,omitempty"`
-	Directive  *sessionDirective `json:"directive,omitempty"`
-	Amend      *sessionAmend     `json:"amend,omitempty"`
-	Lore       *sessionLore      `json:"lore,omitempty"`
-	Escalation *escalationRecord `json:"escalation,omitempty"`
-	Stall      *stallRecord      `json:"stall,omitempty"`
+	Type       string          `json:"type"`
+	Meta       *SessionMeta    `json:"meta,omitempty"`
+	Message    *wireMessage    `json:"message,omitempty"`
+	Messages   []wireMessage   `json:"messages,omitempty"`
+	Usage      *provider.Usage `json:"usage,omitempty"`
+	Cumulative *provider.Usage `json:"cumulative,omitempty"`
+	// Delegated marks a usage row as a SUB-AGENT's spend booked against this
+	// session, not a request this session sent. Without it the two are
+	// byte-identical on disk, and a child's cold prompt — large input, no cache
+	// read — reads exactly like a parent cache collapse to anything analysing
+	// the file. RecentUsage() and the last-turn snapshot already excluded
+	// delegated spend in memory for that reason; the row did not.
+	Delegated  bool                    `json:"delegated,omitempty"`
+	Directive  *sessionDirective       `json:"directive,omitempty"`
+	Amend      *sessionAmend           `json:"amend,omitempty"`
+	Lore       *sessionLore            `json:"lore,omitempty"`
+	Escalation *escalationRecord       `json:"escalation,omitempty"`
+	Stall      *stallRecord            `json:"stall,omitempty"`
+	Tail       *tailRecord             `json:"tail,omitempty"`
+	Prefix     *prefixDivergenceRecord `json:"prefix,omitempty"`
+	ToolGroup  *toolGroupRecord        `json:"tool_group,omitempty"`
 
 	// Strategy and FallbackReason ride "compaction" rows only, and only when the
 	// cache-aware summarizer is in play ("cold" is the default and stays
@@ -426,12 +444,77 @@ type stallRecord struct {
 	Rung int `json:"rung,omitempty"`
 }
 
+// tailRecord rides a "tail" row: the composition of the ephemeral tail — what
+// the harness appended to the request after the prompt-cache breakpoint — at the
+// moment it changed. The generalization of stallRecord above, which records one
+// of the tail's five blocks and was for a long time the only one recorded at
+// all. Informational on the same terms: never in the transcript, skipped by the
+// loader's defaultless row-type switch, so resume is unaffected.
+//
+// Written on CHANGE, so a reader reconstructs any request's tail as the last row
+// at or before it. That is what affords carrying the text: the rows are rare.
+type tailRecord struct {
+	// Blocks is deliberately NOT omitempty. An empty composition is a
+	// meaningful row — it is what ends the previous one — and a reader must be
+	// able to tell "the tail became empty here" from a row that failed to encode.
+	Blocks []tailBlockRow `json:"blocks"`
+}
+
+type tailBlockRow struct {
+	ID string `json:"id"`
+	// Bytes is the block's TRUE size, always, even when Text below is clipped.
+	// Reporting the clipped length instead would make the row lie about what the
+	// model was charged for, which is most of what a reader comes here to learn.
+	Bytes     int    `json:"bytes"`
+	Text      string `json:"text,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+// tailTextCap clips a single block's recorded text. Only the host block can
+// realistically reach it (an extension's task card, a long lore tail); the
+// harness-authored notes are bounded by their own construction. Generous,
+// because these rows are written on change and a session produces a handful.
+const tailTextCap = 8 << 10
+
+// prefixDivergenceRecord rides a "prefix" row: the request's cacheable prefix
+// diverged from the previous request's at a point the two shared, so the
+// provider re-read everything after it at full price.
+//
+// The only durable trace of the single largest cost driver in a long session. A
+// rebuilt prefix is invisible in the transcript — same conversation, same
+// messages, different bytes — and surfaces only as a cache-read figure with no
+// explanation. Informational like stall and tail: never in the transcript,
+// skipped by the loader.
+type prefixDivergenceRecord struct {
+	// Rung is the first differing element and Label names it ("tools",
+	// "system", "message 12", "truncated").
+	Rung  int    `json:"rung"`
+	Label string `json:"label,omitempty"`
+	// Messages and PrevMessages scale it: diverging at message 12 of 340 is a
+	// rewrite of ancient history; at 339 of 340 it is tail churn.
+	Messages     int `json:"messages"`
+	PrevMessages int `json:"prev_messages"`
+	// CachedTokens is what the previous request had cached — the bill.
+	CachedTokens int `json:"cached_tokens,omitempty"`
+}
+
+// toolGroupRecord rides a "tool_group" row: a capability group the model
+// brought into view this session (activate_tools, or a skill surfacing its
+// allowed-tools). Replayed on load so a resume advertises the same tools array
+// the provider has cached the transcript behind.
+type toolGroupRecord struct {
+	Group string `json:"group"`
+}
+
 const (
 	recordDirective       = "directive"
 	directiveExcludeImage = "exclude_image"
 	recordEscalation      = "escalation"
 	recordStall           = "stall"
 	recordAmend           = "amend"
+	recordTail            = "tail"
+	recordPrefix          = "prefix"
+	recordToolGroup       = "tool_group"
 )
 
 // Amend op values for [Session.AppendAmend], exported so callers that persist a
@@ -867,9 +950,22 @@ func SessionUsageDetail(path string) (cumulative, lastTurn provider.Usage, err e
 			sinceLastTurn = sinceLastTurn.Add(*row.Usage)
 		case "usage":
 			var row struct {
+				Usage      provider.Usage `json:"usage"`
 				Cumulative provider.Usage `json:"cumulative"`
+				Delegated  bool           `json:"delegated"`
 			}
 			if err := json.Unmarshal(line, &row); err != nil {
+				return nil
+			}
+			// A sub-agent's spend is real but is not a TURN of this session, so
+			// it takes the compaction path: folded into the total, never made
+			// the baseline for lastTurn. Left on the usage path, a session whose
+			// final row was a child's would resume with the CHILD's prompt size
+			// as its context gauge — and a child is routinely larger than its
+			// parent, so the first threshold check would auto-compact a
+			// transcript that never grew.
+			if row.Delegated {
+				sinceLastTurn = sinceLastTurn.Add(row.Usage)
 				return nil
 			}
 			if haveCum {
@@ -983,6 +1079,11 @@ func openSession(path string, stub InterruptStub) (*Session, []provider.Message,
 	// session that predates the lore rows, one written entirely with them, and one
 	// that migrated mid-file all reconstruct the same way.
 	var book []WorldLoreEntry
+	// Activated capability groups, in first-activation order. Deduped because
+	// the same group can be re-activated across resumes (which is exactly the
+	// symptom this replay removes) and the restore path wants the set.
+	var activeGroups []string
+	activeGroupSeen := map[string]bool{}
 	start := time.Now()
 	messages, walkErr = walkSession(f, rep, sessionWalkHooks{
 		onMeta: func(m SessionMeta, _ []byte) {
@@ -1005,6 +1106,12 @@ func openSession(path string, stub InterruptStub) (*Session, []provider.Message,
 		onDirective: func(d sessionDirective, _ []byte) {
 			if d.Op == directiveExcludeImage && d.SHA256 != "" {
 				excludeImages[strings.ToLower(d.SHA256)] = true
+			}
+		},
+		onToolGroup: func(group string, _ []byte) {
+			if !activeGroupSeen[group] {
+				activeGroupSeen[group] = true
+				activeGroups = append(activeGroups, group)
 			}
 		},
 		onAmend: func(_ string, _ int, _ []byte) { amends++ },
@@ -1032,8 +1139,9 @@ func openSession(path string, stub InterruptStub) (*Session, []provider.Message,
 		return nil, nil, err
 	}
 	s := &Session{ID: meta.ID, Path: path, Meta: meta, TitleGenerated: titleGenerated, writer: out, buf: bufio.NewWriter(out), LoadWarnings: rep.warnings(path),
-		persistedLore: cloneLore(book),
-		LoadStats:     LoadStats{Elapsed: elapsed, Messages: len(messages), Amends: amends, TailTakes: tailTakes}}
+		persistedLore:    cloneLore(book),
+		ActiveToolGroups: activeGroups,
+		LoadStats:        LoadStats{Elapsed: elapsed, Messages: len(messages), Amends: amends, TailTakes: tailTakes}}
 	return s, messages, nil
 }
 
@@ -2258,6 +2366,73 @@ func (s *Session) AppendStall(rec StallRecord) error {
 	return s.writeLine(sessionLine{Type: recordStall, Stall: row})
 }
 
+// AppendTail records the ephemeral tail's composition at the moment it changed
+// (see tailRecord). The agent fires this on change, not per request, so this
+// writes a handful of rows per session and can afford to carry each block's
+// text — which is the part that matters, since the review that motivated the row
+// turned on a note's WORDING and no size would have shown it.
+//
+// Append only and informational; the loader skips it, so it never affects the
+// rebuilt transcript or resume.
+func (s *Session) AppendTail(rec TailRecord) error {
+	if s == nil {
+		return nil
+	}
+	// Non-nil even when empty, so the row encodes as [] rather than null: an
+	// empty composition is the row that ends the previous one, and must not read
+	// as a row whose payload went missing.
+	rows := make([]tailBlockRow, 0, len(rec.Blocks))
+	for _, b := range rec.Blocks {
+		row := tailBlockRow{ID: b.ID, Bytes: len(b.Text), Text: b.Text}
+		if len(b.Text) > tailTextCap {
+			// Bytes above already holds the true size; only Text is clipped.
+			row.Text, row.Truncated = b.Text[:tailTextCap], true
+		}
+		rows = append(rows, row)
+	}
+	return s.writeLine(sessionLine{Type: recordTail, Tail: &tailRecord{Blocks: rows}})
+}
+
+// SessionIDFromPath turns a session file path into its stable id — the file
+// name without the .jsonl extension.
+//
+// Lives here, rather than in the build package that long owned it, because the
+// tool layer needs it too and build imports tools. A second copy over there
+// would have been a twin of the kind this repository keeps paying for.
+func SessionIDFromPath(path string) string {
+	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
+}
+
+// AppendPrefixDivergence records that the cacheable prefix was rebuilt rather
+// than extended (see prefixDivergenceRecord). Append only and informational; the
+// loader skips it, so it never affects the rebuilt transcript or resume.
+func (s *Session) AppendPrefixDivergence(d PrefixDivergence) error {
+	if s == nil {
+		return nil
+	}
+	return s.writeLine(sessionLine{Type: recordPrefix, Prefix: &prefixDivergenceRecord{
+		Rung:         d.Rung,
+		Label:        d.Label,
+		Messages:     d.MsgCount,
+		PrevMessages: d.PrevMsgCount,
+		CachedTokens: d.CachedTokens,
+	}})
+}
+
+// AppendToolGroupActivation records that a capability group was activated, so a
+// resume can re-mark it (Load collects these into Session.ActiveToolGroups).
+//
+// Written per activation rather than as a replace-the-set row: the log is
+// append-only, activation is monotonic within a session, and one row per event
+// keeps WHEN it happened readable against the usage rows either side of it —
+// which is how the cost of an activation was measured in the first place.
+func (s *Session) AppendToolGroupActivation(group string) error {
+	if s == nil || group == "" {
+		return nil
+	}
+	return s.writeLine(sessionLine{Type: recordToolGroup, ToolGroup: &toolGroupRecord{Group: group}})
+}
+
 // AppendUsage writes a usage row to the session.
 func (s *Session) AppendUsage(u, cum provider.Usage) error {
 	if s == nil {
@@ -2266,12 +2441,76 @@ func (s *Session) AppendUsage(u, cum provider.Usage) error {
 	return s.writeLine(sessionLine{Type: "usage", Usage: &u, Cumulative: &cum})
 }
 
-// sessionError is one row of the error sidecar (see LogError).
-type sessionError struct {
+// AppendDelegatedUsage writes a usage row for spend a SUB-AGENT incurred on this
+// session's behalf, marked so readers can separate it from this session's own
+// requests.
+//
+// Same row type on purpose: the cumulative figure must stay a single coherent
+// timeline, so a crash still recovers the true total. Only the attribution
+// differs — and it has to be on the row, because a fresh sub-agent's usage
+// (transcript-sized input, nothing cached) is otherwise indistinguishable from
+// this session's cache collapsing.
+func (s *Session) AppendDelegatedUsage(u, cum provider.Usage) error {
+	if s == nil {
+		return nil
+	}
+	return s.writeLine(sessionLine{Type: "usage", Usage: &u, Cumulative: &cum, Delegated: true})
+}
+
+// SessionError is one row of the error sidecar (see LogError). Exported
+// because the sidecar is where a session's provider failures live and nothing
+// else records them: a turn that died on a 401 or an overload leaves the
+// transcript looking merely quiet, and the only evidence of what happened is
+// here. Reading it back is what lets terva explain its own bad sessions.
+type SessionError struct {
 	Time     time.Time `json:"time"`
 	Error    string    `json:"error"`
 	Provider string    `json:"provider,omitempty"`
 	Model    string    `json:"model,omitempty"`
+}
+
+// sessionError is the internal alias LogError writes through.
+type sessionError = SessionError
+
+// sessionErrorScanCeiling bounds one sidecar read. The file holds one short
+// line per provider failure, so a healthy session's is a few hundred bytes;
+// this only ever trips on a pathological retry storm.
+const sessionErrorScanCeiling = 1 << 20
+
+// ReadSessionErrors reads a transcript's error sidecar in file order. A
+// missing sidecar is not an error — it is the normal case, meaning the session
+// had no provider failures — and returns no rows. Corrupt rows are skipped
+// like everywhere else in the loader, so a partially-written tail still yields
+// everything before it.
+func ReadSessionErrors(transcriptPath string) ([]SessionError, error) {
+	path := ErrorLogPathFor(transcriptPath)
+	if path == "" {
+		return nil, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	var out []SessionError
+	walkErr := forEachJSONLLineBounded(f, jsonlPerLineCeiling, sessionErrorScanCeiling, nil, func(line []byte) error {
+		var row SessionError
+		if err := json.Unmarshal(line, &row); err == nil && strings.TrimSpace(row.Error) != "" {
+			out = append(out, row)
+		}
+		return nil
+	})
+	if errors.Is(walkErr, errJSONLCumulative) {
+		walkErr = nil // bounded read: everything up to the ceiling still counts
+	}
+	if walkErr != nil {
+		return out, walkErr
+	}
+	return out, nil
 }
 
 // ErrorLogPath returns the path of the session's error sidecar — the

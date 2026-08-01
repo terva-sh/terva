@@ -742,10 +742,31 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 		defer mu.Unlock()
 		_ = sess.AppendUsage(u, cum)
 	})
+	// Sub-agent spend, on its own row marker. Same stream (the cumulative
+	// figure has to stay one coherent timeline so a crash recovers the true
+	// total), different attribution — without which a child's cold prompt reads
+	// as this session's cache collapsing to every offline analysis.
+	ag.AddDelegatedUsageObserver(func(u, cum provider.Usage) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = sess.AppendDelegatedUsage(u, cum)
+	})
 	ag.AddTranscriptCompactedObserver(func(messages []provider.Message, res core.CompactResult) {
 		mu.Lock()
 		defer mu.Unlock()
 		_ = sess.AppendCompaction(messages, res)
+	})
+	// Lazy-tool activations. activeGroups is in-memory and NewAgent rebuilds it
+	// from config, so without this row a --resume silently drops what the model
+	// activated — and the tools array sits AHEAD of the system prompt and every
+	// message in the provider's cached prefix. The resumed run therefore
+	// invalidates the whole transcript, then invalidates it again when the model
+	// notices the tool is missing and re-activates. Measured at ~$3.13 on one
+	// 225-request session, from a single lost group.
+	ag.AddToolGroupActivatedObserver(func(group string) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = sess.AppendToolGroupActivation(group)
 	})
 	// Image-rejection recovery: the agent drops an image the provider 400'd on
 	// and fires this. Persisting an exclude_image directive is what makes the
@@ -780,6 +801,25 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 		mu.Lock()
 		defer mu.Unlock()
 		_ = sess.AppendStall(rec)
+	})
+	// What the harness appended to the request after the cache breakpoint — the
+	// generalization of the stall row above. The tail is composed per request and
+	// discarded, so without this a session file holds the model's REACTION to a
+	// prompt injection and no trace of the injection. Fires on change, so a
+	// session whose tail is stable grows one row, not one per turn.
+	ag.AddTailObserver(func(rec core.TailRecord) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = sess.AppendTail(rec)
+	})
+	// The cacheable prefix was rebuilt rather than extended, so the provider
+	// re-read everything after the divergence at full price. Nothing else records
+	// it: a mutated prefix is invisible in the transcript and shows up only as a
+	// cache-read figure with no explanation.
+	ag.AddPrefixDivergenceObserver(func(d core.PrefixDivergence) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = sess.AppendPrefixDivergence(d)
 	})
 }
 

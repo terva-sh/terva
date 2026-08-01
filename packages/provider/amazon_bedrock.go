@@ -762,7 +762,7 @@ func (c *bedrockClient) runStream(ctx context.Context, resp *http.Response, req 
 				usage.CacheReadTokens = d.Usage.CacheReadInputTokens
 				usage.CacheWriteTokens = d.Usage.CacheWriteInputTokens
 				if m, err := FindModel("amazon-bedrock", req.Model); err == nil {
-					usage.CostUSD = ComputeCost(m, usage)
+					ApplyCost(m, &usage)
 				}
 				out <- EventUsage{Usage: usage}
 			}

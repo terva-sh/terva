@@ -146,11 +146,15 @@ type Agent struct {
 	eventObs               []func(AgentEvent)
 	messageObs             []func(provider.Message)
 	usageObs               []func(u, cumulative provider.Usage)
+	delegatedUsageObs      []func(u, cumulative provider.Usage)
 	transcriptCompactedObs []func(messages []provider.Message, res CompactResult)
 	imageExcludedObs       []func(sha256Hex string)
 	queueDrainedObs        []func(drained []string)
 	escalationObs          []func(EscalationRecord)
 	stallObs               []func(StallRecord)
+	tailObs                []func(TailRecord)
+	prefixDivObs           []func(PrefixDivergence)
+	toolGroupObs           []func(group string)
 	continuationGates      []ContinuationGate
 
 	// ContextProvider, if set, is called once per turn to obtain
@@ -223,6 +227,28 @@ type Agent struct {
 	// deliberate cache write, never mid-turn churn. Off = advertise all (default).
 	lazyTools    bool
 	activeGroups map[string]bool
+	// baseGroups is the configured always-active set EnableLazyTools was given,
+	// kept so RestoreActiveGroups can rebuild "config plus this session's"
+	// without unioning in whatever the outgoing session had activated.
+	baseGroups []string
+	// capNoteFP/capNoteShown decay the inactive-group note: the fingerprint of
+	// the set last dispatched, and how many dispatches have carried the full
+	// inventory for it. Past capabilityNoteVerboseTurns the tail carries the
+	// one-line form instead, and a changed set restarts the run. Guarded by mu;
+	// advanced only by commitCapabilityNote, after a request actually lands.
+	capNoteFP    string
+	capNoteShown int
+	// tailFP is the fingerprint (block IDs, never their text) of the ephemeral
+	// tail last recorded, so a tail row is written when the composition CHANGES
+	// and not once per request. Guarded by mu; see recordTail.
+	tailFP string
+	// lastLadder is the digest ladder of the last dispatched prefix, so the next
+	// dispatch can locate where it diverged. Guarded by mu; see prefixwatch.go.
+	// prefixDivRecording gates the comparison (engine feature
+	// prefix_divergence_recording; the shipped default — ON — lives in
+	// build/enginefeatures.go, core's zero value stays off).
+	lastLadder         *prefixLadder
+	prefixDivRecording bool
 	// activationContinuationOff disables the built-in activation gate
 	// (docs/proposals/activation-continuation.md): a segment that activated a
 	// group is auto-continued with the tools live. The zero value keeps it ON
@@ -622,9 +648,11 @@ func (a *Agent) EnableLazyTools(active ...string) {
 	defer a.mu.Unlock()
 	a.lazyTools = true
 	a.activeGroups = make(map[string]bool, len(active))
+	a.baseGroups = make([]string, 0, len(active))
 	for _, g := range active {
 		if g != "" && g != CoreToolGroup {
 			a.activeGroups[g] = true
+			a.baseGroups = append(a.baseGroups, g)
 		}
 	}
 }
@@ -690,20 +718,78 @@ func (a *Agent) newlyActiveInLocked(reg Registry, pinned map[string]bool) []stri
 // false if it was already active (or is the always-on core group). Visibility
 // only — it never grants authority, and it takes effect at the next turn's pin
 // (one deliberate cache write), never mid-turn.
+//
+// Fires the tool-group observer on a real activation so hosts can PERSIST it.
+// That is not bookkeeping: the tools array sits ahead of the system prompt and
+// every message in the provider's cached prefix, so a resume that forgets an
+// activated group re-sends a different tools array and invalidates the whole
+// transcript — then invalidates it a second time when the model notices the
+// tool is gone and re-activates. One measured session paid ~$3.13 that way.
 func (a *Agent) ActivateGroup(group string) bool {
 	if group == "" || group == CoreToolGroup {
 		return false
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.activeGroups == nil {
 		a.activeGroups = map[string]bool{}
 	}
 	if a.activeGroups[group] {
+		a.mu.Unlock()
 		return false
 	}
 	a.activeGroups[group] = true
+	a.mu.Unlock()
+	// Outside the lock: an observer persists to the session, and a host that
+	// called back into the agent under a.mu would deadlock.
+	a.fireToolGroupActivated(group)
 	return true
+}
+
+// RestoreActiveGroups makes the active set exactly the configured always-active
+// groups plus the ones the given session activated. Called at session binding.
+//
+// It REPLACES rather than unions, because binding also happens on a session
+// SWITCH (resume, fork, /new, /cd). Unioning would let a group activated in the
+// outgoing session leak into the incoming one, which advertises tools that
+// session has no tool_group row for — so its next resume would drop them and
+// pay the very invalidation this exists to prevent. Replacing keeps "the active
+// set" meaning "what THIS session activated", the only reading that survives a
+// switch.
+//
+// A group whose extension is no longer installed is harmless: visibility
+// resolves against the live registry, which has no tools in it.
+//
+// Deliberately does NOT fire the observer — these activations are already on
+// disk, and re-firing would append a duplicate row per group on every resume,
+// growing the file without bound.
+func (a *Agent) RestoreActiveGroups(groups []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.lazyTools {
+		return
+	}
+	a.activeGroups = make(map[string]bool, len(a.baseGroups)+len(groups))
+	for _, g := range a.baseGroups {
+		a.activeGroups[g] = true
+	}
+	for _, g := range groups {
+		if g != "" && g != CoreToolGroup {
+			a.activeGroups[g] = true
+		}
+	}
+}
+
+// ActiveGroups returns the currently activated capability groups, sorted.
+// Exported so a host can report them and so the resume path is testable.
+func (a *Agent) ActiveGroups() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, 0, len(a.activeGroups))
+	for g := range a.activeGroups {
+		out = append(out, g)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ToolsInGroup returns the names of registered tools in a capability group,
@@ -747,8 +833,8 @@ func (a *Agent) ToolSpecsInGroup(group string) []provider.Tool {
 // skipped. Returns the groups newly activated (for a load notice), sorted.
 func (a *Agent) ActivateGroupsForTools(names []string) []string {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if !a.lazyTools {
+		a.mu.Unlock()
 		return nil
 	}
 	if a.activeGroups == nil {
@@ -768,6 +854,13 @@ func (a *Agent) ActivateGroupsForTools(names []string) []string {
 		activated = append(activated, g)
 	}
 	sort.Strings(activated)
+	a.mu.Unlock()
+	// Persisted like an activate_tools activation, and for the same reason: a
+	// skill-surfaced group changes the tools array, so a resume that forgot it
+	// would pay the same double invalidation. Fired outside the lock.
+	for _, g := range activated {
+		a.fireToolGroupActivated(g)
+	}
 	return activated
 }
 
@@ -797,16 +890,23 @@ func (a *Agent) AdvertisedTools() (visible func(name string) bool, filtered bool
 // are gone from the window, but their names are not free).
 func (a *Agent) CapabilityNote() string {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.turnToolsLocked(a.Tools).capabilityNote
+	tt := a.turnToolsLocked(a.Tools)
+	a.mu.Unlock()
+	// Peeked, not the raw full note: past the verbose run the tail carries the
+	// one-line form, and /context accounting for the long one would overstate
+	// what deferred discovery costs on a settled session. Peek does not advance
+	// the decay, so inspecting the context never changes what the next turn sends.
+	return a.peekCapabilityNote(tt)
 }
 
 // turnTools is the per-turn tool-advertisement decision, pinned as a unit so the
 // advertised specs and the capability note the model reads can never drift.
 type turnTools struct {
-	visible        func(name string) bool // nil = advertise every registered tool
-	capabilityNote string                 // inactive-group summary for the ephemeral tail (lazy mode)
-	groups         map[string]bool        // active-group snapshot at the pin (lazy mode; nil otherwise); never mutated
+	visible         func(name string) bool // nil = advertise every registered tool
+	capabilityNote  string                 // inactive-group summary for the ephemeral tail (lazy mode)
+	capabilityBrief string                 // the standing one-line form of the same
+	capabilityFP    string                 // fingerprint of the inactive set; a change re-shows the full note
+	groups          map[string]bool        // active-group snapshot at the pin (lazy mode; nil otherwise); never mutated
 }
 
 // turnToolsLocked resolves this turn's advertisement; a.mu must be held. An
@@ -824,10 +924,55 @@ func (a *Agent) turnToolsLocked(reg Registry) turnTools {
 	for g := range a.activeGroups {
 		active[g] = true
 	}
+	groups, _ := inactiveGroups(reg, active)
 	return turnTools{
-		visible:        lazyVisible(reg, active),
-		capabilityNote: inactiveGroupNote(reg, active),
-		groups:         active,
+		visible:         lazyVisible(reg, active),
+		capabilityNote:  inactiveGroupNote(reg, active),
+		capabilityBrief: inactiveGroupBrief(reg, active),
+		capabilityFP:    strings.Join(groups, "\x00"),
+		groups:          active,
+	}
+}
+
+// capabilityNoteVerboseTurns is how many dispatches carry the full inactive-group
+// inventory before it degrades to the one-line form. Three is enough for the
+// model to have seen and weighed the offer; past that the same list re-arriving
+// several hundred times is not information, and a model that answers it once
+// then sees its own answer in the transcript answers it forever.
+const capabilityNoteVerboseTurns = 3
+
+// peekCapabilityNote picks the form this dispatch should carry, WITHOUT
+// advancing the decay — oneTurn is re-entered per retry attempt, and a retried
+// request must carry the same tail as the attempt it replaces. commitCapability
+// advances it once a request actually reaches the provider, mirroring how the
+// stall nudge is peeked and only cleared after recordDispatch.
+func (a *Agent) peekCapabilityNote(tt turnTools) string {
+	if tt.capabilityNote == "" {
+		return ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if tt.capabilityFP != a.capNoteFP || a.capNoteShown < capabilityNoteVerboseTurns {
+		return tt.capabilityNote
+	}
+	return tt.capabilityBrief
+}
+
+// commitCapabilityNote records that a dispatch carried the note. A changed
+// inactive set restarts the verbose run, so a newly installed extension is
+// announced in full rather than inheriting the previous set's silence.
+func (a *Agent) commitCapabilityNote(tt turnTools) {
+	if tt.capabilityNote == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if tt.capabilityFP != a.capNoteFP {
+		a.capNoteFP, a.capNoteShown = tt.capabilityFP, 1
+		return
+	}
+	if a.capNoteShown < capabilityNoteVerboseTurns {
+		a.capNoteShown++
 	}
 }
 
@@ -852,6 +997,54 @@ func lazyVisible(reg Registry, active map[string]bool) func(name string) bool {
 // nothing is hidden. It lists tool names (not schemas) so discovery costs a few
 // bytes, not the whole schema (retro H2·b: the cache-cheap capability line).
 func inactiveGroupNote(reg Registry, active map[string]bool) string {
+	groups, byGroup := inactiveGroups(reg, active)
+	if len(groups) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	// Model-facing prompt injection (rides the ephemeral tail like the
+	// context-pressure note), so it is translatable via the prompts catalog.
+	//
+	// Phrased as an INVENTORY, and explicitly excused from reply. The previous
+	// wording opened "Call activate_tools with a group name to load them" — an
+	// imperative, arriving every single turn, which a model reads as a question
+	// being re-asked. One reviewed session shows exactly that: after the model
+	// answered it once, 109 of the next 217 assistant messages opened by
+	// answering it again, 44 of them with the identical sentence "Same answer
+	// on the tool groups — not needed." The note itself is ephemeral and costs
+	// no cache; the model's ANSWER is an assistant message, so it lands in the
+	// transcript, is re-sent every turn thereafter, and survives compaction.
+	// A construct designed to cost nothing generated permanent transcript debt.
+	b.WriteString(i18n.P("tools.lazy.inactive_groups",
+		"[inactive tool groups] Installed capabilities whose tool schemas are not loaded this turn. This is an inventory, not a request — it needs no reply and no acknowledgement. If a task calls for one, `activate_tools <group>` loads it; loading is visibility only, and each tool still requires its normal permission when used:"))
+	for _, g := range groups {
+		names := byGroup[g]
+		sort.Strings(names)
+		fmt.Fprintf(&b, "\n  - %s: %s", g, strings.Join(names, ", "))
+	}
+	return b.String()
+}
+
+// inactiveGroupBrief is the note's standing form: group names only, one line,
+// no per-tool inventory. The full note is information the first few times it
+// appears and noise for the several hundred turns after, during which the
+// inactive set has not changed and the model has already decided. This keeps
+// activate_tools' description honest (it points at "the [inactive tool groups]
+// note") without re-asking.
+func inactiveGroupBrief(reg Registry, active map[string]bool) string {
+	groups, _ := inactiveGroups(reg, active)
+	if len(groups) == 0 {
+		return ""
+	}
+	return i18n.P("tools.lazy.inactive_groups_brief",
+		"[inactive tool groups] %s — `activate_tools <group>` loads one if a task needs it. Informational; no reply needed.",
+		strings.Join(groups, ", "))
+}
+
+// inactiveGroups collects the hidden groups and their tool names, both sorted.
+// The fingerprint the decay keys on is derived from this, so a group appearing
+// or disappearing re-shows the full note while a stable set stays quiet.
+func inactiveGroups(reg Registry, active map[string]bool) ([]string, map[string][]string) {
 	byGroup := map[string][]string{}
 	for name, t := range reg {
 		g := ToolGroup(t)
@@ -865,24 +1058,14 @@ func inactiveGroupNote(reg Registry, active map[string]bool) string {
 		byGroup[g] = append(byGroup[g], name)
 	}
 	if len(byGroup) == 0 {
-		return ""
+		return nil, nil
 	}
 	groups := make([]string, 0, len(byGroup))
 	for g := range byGroup {
 		groups = append(groups, g)
 	}
 	sort.Strings(groups)
-	var b strings.Builder
-	// Model-facing prompt injection (rides the ephemeral tail like the
-	// context-pressure note), so it is translatable via the prompts catalog.
-	b.WriteString(i18n.P("tools.lazy.inactive_groups",
-		"[inactive tool groups] These capabilities are installed but their tool schemas are not loaded. Call activate_tools with a group name to load them; activation is visibility only — each tool still requires its normal permission when used:"))
-	for _, g := range groups {
-		names := byGroup[g]
-		sort.Strings(names)
-		fmt.Fprintf(&b, "\n  - %s: %s", g, strings.Join(names, ", "))
-	}
-	return b.String()
+	return groups, byGroup
 }
 
 // SetSystem swaps the system prompt under the agent's lock — the live twin of
@@ -1180,6 +1363,13 @@ func (a *Agent) SeedLastTurnUsage(u provider.Usage) {
 	a.cost.SetLastTurn(u)
 }
 
+// RecentUsage returns the tail of per-response usage records, oldest first —
+// the cache strip's data. Empty until this agent has run a request, including
+// on a resumed session; see CostTracker.recent for why it is not rehydrated.
+func (a *Agent) RecentUsage() []provider.Usage {
+	return a.cost.RecentUsage()
+}
+
 // RecordSideChannelUsage books a request the agent did not itself run: the
 // daemon's one-off completions (the World router's pick, the line it voices,
 // suggest, side chat). They spend real money on the session's credentials, but
@@ -1219,7 +1409,11 @@ func (a *Agent) RecordDelegatedUsage(u provider.Usage) {
 		return
 	}
 	a.cost.AddDelegated(u)
-	a.fireUsage(u, a.cost.CumulativeTotal())
+	// The DELEGATED observer, not the usage one. AddDelegated already keeps this
+	// out of the last-turn snapshot; firing the plain usage hook put it back on
+	// disk as an ordinary row, where a child's transcript-sized cold prompt is
+	// indistinguishable from this session's cache collapsing.
+	a.fireDelegatedUsage(u, a.cost.CumulativeTotal())
 }
 
 // DelegatedCost returns the part of the cumulative total that sub-agents spent
@@ -2208,93 +2402,21 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 
 	// Pull host ephemeral context (e.g. an extension's live task card)
 	// outside the lock; it rides the request only, never the transcript.
-	var ephemeral string
+	// Called even on a continue turn, whose tail is discarded, because the
+	// provider closure is the host's and may have side effects of its own.
+	var hostContext string
 	if contextProvider != nil {
-		ephemeral = contextProvider()
+		hostContext = contextProvider()
 	}
 
-	// Lazy tool visibility (retro H2·b): surface the groups hidden this turn so
-	// the model can discover and activate_tools them. Rides the cache-free
-	// ephemeral tail (pinned with the visibility that produced it, so the note
-	// and the advertised specs never disagree) rather than the cached system
-	// prefix, so bringing a group in is a tools-array cache write only — the
-	// note itself never costs cache.
-	if tt.capabilityNote != "" {
-		if ephemeral != "" {
-			ephemeral += "\n\n"
-		}
-		ephemeral += tt.capabilityNote
-	}
-
-	// Context-pressure note: past ContextWarnFraction the model is told
-	// how full its window is instead of relying on it to poll
-	// terva_status (models don't re-poll). Rides the cache-free
-	// ephemeral tail so it refreshes every step and never lands in the
-	// transcript.
-	if used, window := a.ContextUsage(); window > 0 && used > 0 {
-		if f := float64(used) / float64(window); f >= ContextWarnFraction {
-			// The closing sentence must match the actual compaction policy:
-			// with auto_compact "off" there is no 85% valve — telling the
-			// model one exists invites it to defer summarization to a
-			// harness intervention that will never come.
-			var note string
-			if a.autoCompactMode() == AutoCompactOff {
-				note = i18n.P("context.pressure.no_autocompact",
-					"[context pressure] Your context window is %d%% full (%s of %s tokens). Be economical: prefer targeted reads over whole-file dumps, and summarize or persist important findings now. Automatic compaction is disabled for this session: past the limit, requests fail until the transcript is compacted — wrap up, or suggest the user run /compact.",
-					int(f*100), fmtTokenCount(used), fmtTokenCount(window))
-			} else {
-				note = i18n.P("context.pressure",
-					"[context pressure] Your context window is %d%% full (%s of %s tokens). Be economical: prefer targeted reads over whole-file dumps, and summarize or persist important findings now. Past %d%% the transcript is auto-compacted.",
-					int(f*100), fmtTokenCount(used), fmtTokenCount(window), int(AutoCompactThreshold*100))
-			}
-			// Delegation guidance deliberately does NOT ride this note: by
-			// 70% it's too late to restructure the work. The context-shield
-			// nudge lives in the always-on swarm system addendum instead
-			// (AutoSwarmSystemAddendum), where it shapes the plan from
-			// turn one.
-			if ephemeral != "" {
-				ephemeral += "\n\n"
-			}
-			ephemeral += note
-		}
-	}
-
-	// Stuck-loop nudge: when the detector tripped on the previous step, ride its
-	// one-turn note on the ephemeral tail. Peeked (not consumed) here because
-	// oneTurn is re-entered per retry attempt — the note must survive a failed
-	// attempt and clear only once a request actually reaches the provider
-	// (clearNudge, after recordDispatch below).
-	if a.stallDetectionOn() {
-		if note := a.stall.nudge(); note != "" {
-			if ephemeral != "" {
-				ephemeral += "\n\n"
-			}
-			ephemeral += note
-		}
-	}
-
-	// A cued turn (advance, guided regenerate) rides its stage cue on the ephemeral
-	// tail — the inverse of the continue turn below. For advance the tail must be
-	// NON-empty so the request ends in a user block even when the transcript ends in
-	// assistant messages (Stage's directed lines are authored as assistant messages,
-	// so a scene can end with a run of them). Without it, that trailing assistant is
-	// read as a prefill and the model extends the last authored line mid-sentence
-	// instead of writing the next beat. Appended after the cache breakpoint, so it
-	// costs no cache. See stageCue.
-	if stageCue != "" {
-		if ephemeral != "" {
-			ephemeral += "\n\n"
-		}
-		ephemeral += stageCue
-	}
-
-	// A continue turn suppresses the ENTIRE ephemeral tail (the context provider
-	// plus the lazy-tool / context-pressure / stall notes assembled above), so the
-	// trailing assistant message is genuinely the last message in the request —
-	// the Anthropic prefill only continues it when nothing follows it.
-	if continuePrefill {
-		ephemeral = ""
-	}
+	// The ephemeral tail: host context, the inactive-tool inventory, the
+	// context-pressure note, the stuck-loop nudge, a Stage cue — everything
+	// appended after the prompt-cache breakpoint. Composed as identified blocks
+	// (see tail.go) rather than concatenated here, so recordTail below can say
+	// WHICH of them the model was shown without re-deriving the assembly, and so
+	// this and any other renderer of the tail cannot drift apart.
+	tail := a.composeTail(tt, hostContext, stageCue, continuePrefill)
+	ephemeral := TailText(tail)
 
 	req := provider.Request{
 		Model:  model,
@@ -2337,9 +2459,35 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	// moment, and this then becomes the only record of what is actually cached.
 	a.recordDispatch(client, req)
 
+	// Locate any prefix divergence from the previous dispatch. Placed beside
+	// recordDispatch because both answer "what did we just put on the wire",
+	// and both must see the request as sent rather than as intended.
+	a.watchPrefix(req, req.Messages)
+
 	// The request landed, so any stuck-loop nudge it carried has been delivered:
 	// drop it so it rides exactly one dispatch, not every subsequent step.
+	// Unconditional, unlike the capability note below, and the asymmetry is
+	// deliberate: a nudge lives for one TURN (runLoop resets the tracker at every
+	// turn boundary), so the suppressed-tail case cannot arise — a continue turn
+	// starts with an empty pending and arms nothing, and clearing an empty one is
+	// a no-op. Gating it here would imply a hazard that does not exist.
 	a.stall.clearNudge()
+
+	// The inactive-group inventory has now been shown once more, and decays to
+	// its one-line form after a few dispatches. Gated on the tail actually having
+	// carried it, because this counter DOES span turns: a continue turn
+	// suppresses the whole tail, and marking the note delivered there would spend
+	// the verbose run on requests the model never saw it in — decaying the
+	// inventory to one line before it had ever been read in full.
+	if tailHas(tail, TailCapabilityFull, TailCapabilityBrief) {
+		a.commitCapabilityNote(tt)
+	}
+
+	// Record what the model was shown, if it differs from last time. The tail is
+	// otherwise unauditable — composed per request and discarded — which left a
+	// post-hoc review able to see a model's reaction to a prompt injection and
+	// never the injection.
+	a.recordTail(tail, continuePrefill)
 
 	sink(EvAssistantStart{})
 

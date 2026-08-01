@@ -194,12 +194,37 @@ type Tool struct {
 }
 
 // Usage aggregates token counts and cost for a turn.
+//
+// InputTokens is the UNCACHED remainder of the prompt, never the whole
+// prompt. Anthropic reports it that way natively; the OpenAI, Codex and
+// Gemini decoders subtract their cached count to match. Every consumer
+// depends on that normalization — the context gauge, the compaction
+// thresholds and CacheHitRate all read the prompt as
+// input+cache_read+cache_write, which double-counts the moment a decoder
+// stops subtracting.
 type Usage struct {
 	InputTokens      int     `json:"input_tokens"`
 	OutputTokens     int     `json:"output_tokens"`
 	CacheReadTokens  int     `json:"cache_read_tokens"`
 	CacheWriteTokens int     `json:"cache_write_tokens"`
 	CostUSD          float64 `json:"cost_usd"`
+
+	// CacheSavedUSD is what the prompt cache saved on this usage: the
+	// counterfactual cost of the same prompt tokens at full input price,
+	// minus what was actually billed for them. Output is untouched by
+	// caching and plays no part.
+	//
+	// Stamped per response, at the prices of the model that answered it
+	// (ApplyCost), because it cannot be recovered later: a session that
+	// switches models mid-way has no single price sheet, and the usage row
+	// records no model. Summed by Add, so a session total stays exact
+	// across switches.
+	//
+	// Signed on purpose. Writing a cache costs MORE than not caching
+	// (Anthropic bills creation at 1.25x input), so a session that keeps
+	// invalidating its prefix and re-writing it genuinely runs negative —
+	// which is the single most useful thing this number can say.
+	CacheSavedUSD float64 `json:"cache_saved_usd,omitempty"`
 }
 
 // Add returns u plus v.
@@ -210,7 +235,29 @@ func (u Usage) Add(v Usage) Usage {
 		CacheReadTokens:  u.CacheReadTokens + v.CacheReadTokens,
 		CacheWriteTokens: u.CacheWriteTokens + v.CacheWriteTokens,
 		CostUSD:          u.CostUSD + v.CostUSD,
+		CacheSavedUSD:    u.CacheSavedUSD + v.CacheSavedUSD,
 	}
+}
+
+// PromptTokens is everything the model read: the uncached remainder plus
+// whatever came from, or went into, the cache. The denominator of every
+// cache ratio, and the same sum the context gauge shows.
+func (u Usage) PromptTokens() int {
+	return u.InputTokens + u.CacheReadTokens + u.CacheWriteTokens
+}
+
+// CacheHitRate is the share of the prompt served from cache, in [0,1].
+//
+// Zero prompt tokens returns (0, false) rather than 0: "no requests yet"
+// and "every request missed" are different states, and a panel that draws
+// an empty bar for both says the cache is failing when nothing has been
+// asked of it. Every caller must decide which it is showing.
+func (u Usage) CacheHitRate() (rate float64, ok bool) {
+	prompt := u.PromptTokens()
+	if prompt <= 0 {
+		return 0, false
+	}
+	return float64(u.CacheReadTokens) / float64(prompt), true
 }
 
 // StopReason describes why a turn ended.

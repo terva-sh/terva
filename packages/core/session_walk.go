@@ -30,10 +30,17 @@ type sessionWalkHooks struct {
 	// the 0-based checkpoint index within the file.
 	onCompaction func(out, before []provider.Message, ordinal int, line []byte)
 	// onUsage fires for each usage row; effLen is the effective-transcript length
-	// at that point (usage rows do not change it).
-	onUsage func(u, cum provider.Usage, effLen int, line []byte)
+	// at that point (usage rows do not change it). delegated marks a SUB-AGENT's
+	// spend booked against this session rather than a request it sent — a
+	// distinction any cost or cache-hit analysis has to make, because a fresh
+	// child's usage looks exactly like the parent's cache collapsing.
+	onUsage func(u, cum provider.Usage, effLen int, delegated bool, line []byte)
 	// onDirective fires for each append-only directive row (e.g. exclude_image).
 	onDirective func(d sessionDirective, line []byte)
+	// onToolGroup fires for each tool_group row — a capability group activated
+	// during the session, which a resume must re-mark to keep the tools array
+	// (and so the provider's cached prefix) identical.
+	onToolGroup func(group string, line []byte)
 	// onAmend fires for each amend row AFTER it is applied to the effective
 	// transcript, with the op and the (as-written) index.
 	onAmend func(op string, index int, line []byte)
@@ -148,12 +155,13 @@ func walkSession(r io.Reader, rep *loadReport, h sessionWalkHooks) ([]provider.M
 				var row struct {
 					Usage      provider.Usage `json:"usage"`
 					Cumulative provider.Usage `json:"cumulative"`
+					Delegated  bool           `json:"delegated"`
 				}
 				if err := json.Unmarshal(line, &row); err != nil {
 					rep.corruptLines++
 					return nil
 				}
-				h.onUsage(row.Usage, row.Cumulative, len(effective), line)
+				h.onUsage(row.Usage, row.Cumulative, len(effective), row.Delegated, line)
 			}
 		case recordDirective:
 			if h.onDirective != nil {
@@ -165,6 +173,19 @@ func walkSession(r io.Reader, rep *loadReport, h sessionWalkHooks) ([]provider.M
 					return nil
 				}
 				h.onDirective(row.Directive, line)
+			}
+		case recordToolGroup:
+			if h.onToolGroup != nil {
+				var row struct {
+					ToolGroup toolGroupRecord `json:"tool_group"`
+				}
+				if err := json.Unmarshal(line, &row); err != nil {
+					rep.corruptLines++
+					return nil
+				}
+				if row.ToolGroup.Group != "" {
+					h.onToolGroup(row.ToolGroup.Group, line)
+				}
 			}
 		case recordAmend:
 			// An amend revises the effective transcript in place, in file order —
