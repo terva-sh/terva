@@ -11,6 +11,22 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.129.0](https://github.com/terva-sh/terva/releases/tag/v0.129.0) — 2026-07-29
+
+### Features
+
+- ask: a question is rarely alone, so ask_user_question can pose a set
+- provider: kimi k3-256k, the K3 model behind a 256k window
+- stage: a flat library says what is unfiled, and can be searched
+- tui: ctrl+s sets a draft aside and returns it after you answer
+- tui: recall remembers the commands, not just the prompts
+
+### Fixes
+
+- provider: a poll-family provider's usage warms itself
+- tui: a newline chord that does not need the terminal's permission
+- tui: the answer to a question is a text box, not a rune buffer
+
 ## [v0.128.1](https://github.com/terva-sh/terva/releases/tag/v0.128.1) — 2026-07-29
 
 ### Fixes
