@@ -336,6 +336,38 @@ describe('applyEvent — stuck-loop hatch', () => {
     expect(items).toHaveLength(2) // the user message + the single coalesced hatch
   })
 
+  // Rungs 1–2 are things terva said; 3–4 are things it did. They coalesce on
+  // their own glyphs so a pane never reads "nudged 9×" while calls were in fact
+  // being blocked and the turn was ending.
+  it('counts refusals apart from nudges', () => {
+    let items: Item[] = []
+    for (let n = 0; n < 4; n++) {
+      items = applyEvent(items, { type: 'stall', stall: { axis: 'spin', tool: 'task_update' } } as WireEvent)
+    }
+    for (let n = 0; n < 2; n++) {
+      items = applyEvent(items, { type: 'stall', stall: { axis: 'spin', tool: 'task_update', rung: 3 } } as WireEvent)
+    }
+    const h = hatch(items)
+    expect(h).toHaveLength(2)
+    expect(h[0]).toMatchObject({ glyph: '⟳', count: 4 })
+    expect(h[1]).toMatchObject({ glyph: '⊘', tone: 'err', count: 2 })
+    expect(h[1].text).toContain('task_update')
+    expect(h[1].text).toContain('not dispatched')
+  })
+
+  it('renders the give-up as a single terminal note carrying the reason', () => {
+    const ev = {
+      type: 'stall',
+      stall: { axis: 'spin', tool: 'task_update', rung: 4, detail: 'ended the turn: task_update repeated 7×' },
+    } as WireEvent
+    let items = applyEvent([], ev)
+    items = applyEvent(items, ev) // delivered twice must not stack
+    const h = hatch(items)
+    expect(h).toHaveLength(1)
+    expect(h[0]).toMatchObject({ tone: 'err', glyph: '⊗' })
+    expect(h[0].text).toContain('ended the turn')
+  })
+
   it('renders a switched escalation as an ok note with the target', () => {
     const h = hatch(
       applyEvent([], {

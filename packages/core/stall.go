@@ -85,20 +85,59 @@ const stallEscalateAfterNudge = 2
 // across >= 3 loops) in a turn is a thrash worth escalating.
 const stallThrashThreshold = 3
 
+// stallRefuseAfterHoldOff is how many MORE times a spinning signature must recur
+// past the hold-off before the detector stops DISPATCHING it (see refuse). Two,
+// so the refusal lands at stallThreshold + stallEscalateAfterNudge + this = 7
+// byte-identical results — a call that has been nudged, held off, and repeated
+// twice more since.
+//
+// This reverses "deliberately NOT taken: refusing to dispatch the call after N
+// recurrences" in docs/proposals/stuck-loop-escalation.md, on evidence the
+// proposal did not have. A session logged 40+ consecutive identical task_update
+// calls AFTER both in-band notes had landed, and the transcript settles the
+// question the proposal was weighing: between the calls the model narrates the
+// correct diagnosis of its own bug ("calling it with only an id is a no-op") and
+// then makes the identical call again. Prose cannot break that loop, because the
+// model's own prose already says the right thing. Only the result can, and only
+// by differing.
+//
+// The false-positive trade the proposal feared is bounded by where the watermark
+// sits: the spin axis already requires the same call to have returned the SAME
+// result seven times inside a window of eight, so a refusal can only ever land on
+// a call whose output is provably not moving.
+const stallRefuseAfterHoldOff = 2
+
+// stallRefuseMax is how many calls may be refused in one turn before the harness
+// stops the turn outright. Three: the first two refusals are the model's chance
+// to do something else now that the harness has acted rather than talked, and a
+// model still repeating a call it has been told twice will not be run is not
+// going to recover inside this turn. Each refusal costs a model round trip and no
+// tool execution, so the ceiling bounds the burn at three cheap steps.
+const stallRefuseMax = 3
+
 // stallWindow bounds how far back a recurrence still counts, so a signature seen
 // once long ago and once more now does not trip. Wide enough to catch an
 // oscillation between two failing calls (A,B,A,B,A → three A's in five steps) AND
 // to reach the escalate watermark (stallThreshold + stallEscalateAfterNudge),
 // narrow enough that unrelated earlier work falls off. Invariant:
-// stallWindow >= stallThreshold + stallEscalateAfterNudge, or escalation could
-// never fire because the count would fall out of the window first.
+// stallWindow >= stallThreshold + stallEscalateAfterNudge + stallRefuseAfterHoldOff,
+// or the later rungs could never fire because the count would fall out of the
+// window first. Pinned by TestStallLadderFitsInsideTheWindow.
 const stallWindow = 8
+
+// stallRefuseAt is the windowed run length at which a spinning call stops being
+// dispatched.
+const stallRefuseAt = stallThreshold + stallEscalateAfterNudge + stallRefuseAfterHoldOff
 
 // stallDetailMax clips the error slice shown to the model in the nudge.
 const stallDetailMax = 120
 
 type stallStep struct {
-	spinKey  string // tool + canonical args + result digest
+	// dispKey is tool + canonical args: everything about a call that is knowable
+	// BEFORE it runs, which is what the refusal rung has to match on (the spin key
+	// below cannot be evaluated pre-dispatch, since half of it is the result).
+	dispKey  string
+	spinKey  string // dispKey + result digest
 	churnKey string // tool + normalized result-class; "" when the result was productive
 	detail   string // readable error/guard slice for the nudge
 }
@@ -148,6 +187,17 @@ type stallTracker struct {
 	escalate  *stallEscalation
 	escalated bool
 
+	// refused holds the ids of calls the tracker declined to dispatch this turn,
+	// so observe skips their results. A refusal is the HARNESS's answer, not
+	// evidence about the model's tool use, and recording it would corrupt the very
+	// window the refusal is derived from: the refusal steps would push the spinning
+	// signature out of the window and lift the block after a single refused call.
+	refused map[string]bool
+	// refusals counts them, and is what the give-up watermark reads.
+	refusals int
+	// giveUp is raised once refusals reaches stallRefuseMax: the turn ends.
+	giveUp *stallGiveUp
+
 	// declines counts how many times the user answered "keep trying" to an
 	// escalation offer this turn. forgive() bumps it and wipes the loop state so
 	// the model gets a fresh window (breathing room); both escalate triggers back
@@ -195,6 +245,18 @@ type stallEscalation struct {
 	detail string
 }
 
+// stallGiveUp is the tracker's signal that the ladder has run out: a call was
+// refused stallRefuseMax times and the model kept making it. The harness turns
+// this into an ended turn (agent.go), which is the only rung left once refusing
+// to run the call has itself been ignored.
+type stallGiveUp struct {
+	tool     string
+	refusals int
+	// count is the run length that got the call blocked in the first place, so the
+	// note can say how long this went on rather than only how it ended.
+	count int
+}
+
 // stallAxis names which detector axis tripped.
 const (
 	stallAxisSpin  = "spin"  // the same call, repeated
@@ -221,11 +283,16 @@ type StallRecord struct {
 	Axis   string // "spin" (same call repeated) | "churn" (same failure repeated)
 	Tool   string // the tool the model looped on
 	Detail string // the repeated error/guard slice; empty for spin
-	// Rung counts the detector's IN-BAND notes for this loop: 1 = the first
-	// nudge, 2 = the firmer hold-off that follows when the loop outlives it and
-	// the hatch's later rungs cannot act. It is not the proposal's hatch-rung
-	// number (where 2 is the human ask). Zero on records written before the
-	// hold-off existed, so a reader treats absent as 1.
+	// Rung counts how far the detector went for this loop, not the proposal's
+	// hatch-rung number (where 2 is the human ask): 1 = the first nudge, 2 = the
+	// firmer hold-off that follows when the loop outlives it and the hatch's later
+	// rungs cannot act, 3 = a call refused rather than dispatched, 4 = the turn
+	// ended because the refusals were ignored too. Zero on records written before
+	// the hold-off existed, so a reader treats absent as 1.
+	//
+	// 1 and 2 are things terva SAID; 3 and 4 are things it DID. Reading the split
+	// out of a session log is the whole point of recording the number: it answers
+	// how often talking was enough.
 	Rung int
 }
 
@@ -267,6 +334,23 @@ func (t *stallTracker) reset() {
 	t.escalate = nil
 	t.escalated = false
 	t.declines = 0
+	t.pardon()
+}
+
+// pardon drops the refusal ledger without touching the loop history: refusals
+// start from zero, and a turn that had given up no longer has. It is what a new
+// turn gets (via reset), what "keep trying" gets (via forgive), and what a model
+// arriving on an escalation swap gets — the incoming model should not inherit the
+// outgoing one's strikes.
+//
+// The steps stay deliberately. They are the evidence that this call's output is
+// not moving, which is as true for the next model as it was for the last one; an
+// incoming model that reads the handoff marker and repeats the failing call
+// anyway is refused at once, and still gets stallRefuseMax chances of its own.
+func (t *stallTracker) pardon() {
+	t.refused = nil
+	t.refusals = 0
+	t.giveUp = nil
 }
 
 // forgive gives the model a fresh window after the user declines an escalation
@@ -283,6 +367,7 @@ func (t *stallTracker) forgive() {
 	t.escalate = nil
 	t.escalated = false
 	t.declines++
+	t.pardon()
 	// Cross-turn history goes too, and for the same reason as everything above:
 	// "keep trying" is the user overruling the ladder, so the ladder starts over.
 	// Leaving carried in place would re-cross the escalation watermark on the
@@ -314,6 +399,9 @@ func (t *stallTracker) observe(call, result provider.Message) []stallEvent {
 		if !ok {
 			continue // dispatched with no result — nothing to judge
 		}
+		if t.refused[tc.ID] {
+			continue // never dispatched; the result is the harness's own refusal
+		}
 		if ev, ok := t.record(tc, tr); ok {
 			events = append(events, ev)
 		}
@@ -326,7 +414,8 @@ func (t *stallTracker) observe(call, result provider.Message) []stallEvent {
 // turn (the recurrences after it are the next rung's concern), so at most one
 // record per distinct loop reaches the session log.
 func (t *stallTracker) record(tc provider.ToolCallBlock, tr provider.ToolResultBlock) (stallEvent, bool) {
-	step := stallStep{spinKey: tc.Name + "\x00" + canonicalArgs(tc.Arguments) + "\x00" + resultFingerprint(tr)}
+	dispKey := dispatchKey(tc)
+	step := stallStep{dispKey: dispKey, spinKey: dispKey + "\x00" + resultFingerprint(tr)}
 	if class, detail, ok := unproductiveResult(tr); ok {
 		step.churnKey = tc.Name + "\x00" + class
 		step.detail = detail
@@ -393,6 +482,95 @@ func (t *stallTracker) record(tc provider.ToolCallBlock, tr provider.ToolResultB
 		}
 	}
 	return stallEvent{}, false
+}
+
+// dispatchKey identifies a call by what is knowable before it runs.
+func dispatchKey(tc provider.ToolCallBlock) string {
+	return tc.Name + "\x00" + canonicalArgs(tc.Arguments)
+}
+
+// spinRun reports how much of the current window is one call repeating itself
+// with an unchanging result: it finds the most recent step for this dispatch key
+// and counts how many steps in the window share that step's FULL spin key. It
+// also returns that step's signature, so the caller can add what earlier turns
+// saw of it.
+//
+// Deriving the block from the live window rather than latching a blocked set is
+// what makes it expire on its own. A model that breaks off and does other work
+// pushes the spinning signature out of the window, and the call it was refused
+// for is dispatched again — because by then the premise of the refusal ("nothing
+// about this is changing") has stopped being true. A latched set would keep
+// refusing a call that had become legitimate again, which is the false positive
+// the proposal warned about, made permanent for the length of a turn.
+func (t *stallTracker) spinRun(key string) (int, string) {
+	spin := ""
+	for i := len(t.steps) - 1; i >= 0; i-- {
+		if t.steps[i].dispKey == key {
+			spin = t.steps[i].spinKey
+			break
+		}
+	}
+	if spin == "" {
+		return 0, ""
+	}
+	n := 0
+	for _, s := range t.steps {
+		if s.spinKey == spin {
+			n++
+		}
+	}
+	return n, "spin\x00" + spin
+}
+
+// refuse is the detector's last rung before the turn ends: it reports whether
+// this call should be answered without running it, and the text to answer with.
+//
+// Only the SPIN axis can be refused, and the reason is structural rather than a
+// judgement about which loop deserves it: churn varies its arguments by
+// definition, so there is nothing to recognise a churning call by before it runs.
+// Blocking by tool name instead would take out every bash command because one of
+// them kept failing. Churn's terminal rung is the nudge, the hold-off, and — when
+// its args happen to be identical too — this.
+//
+// It takes two counts to refuse, composed the way trip and the escalate
+// watermark already compose: a real LOCAL pattern (stallThreshold recurrences
+// inside the window, so a fresh turn cannot refuse on its first repeat) and a
+// total RUN of stallRefuseAt including what earlier turns saw of the same
+// signature. Inside one turn the local count is the binding one and this reduces
+// to "seven identical results".
+//
+// The cross-turn half is not theoretical. A loop does not necessarily end when
+// the user speaks: in the session behind this rung the user typed an instruction
+// naming the exact missing field, and the very next call was the identical
+// no-op again. Counting only within the turn hands a wedged model a fresh
+// allowance every time its user tries to intervene — which is the moment the
+// evidence that it is wedged is strongest, not weakest.
+//
+// Calling it has side effects (the strike is counted, the give-up may be raised),
+// so it is called exactly once per dispatch, by runOneTool.
+func (t *stallTracker) refuse(tc provider.ToolCallBlock) (string, bool) {
+	n, sig := t.spinRun(dispatchKey(tc))
+	if n < stallThreshold || n+t.carried[sig] < stallRefuseAt {
+		return "", false
+	}
+	n += t.carried[sig]
+	if t.refused == nil {
+		t.refused = map[string]bool{}
+	}
+	t.refused[tc.ID] = true
+	t.refusals++
+	if t.refusals >= stallRefuseMax && t.giveUp == nil {
+		t.giveUp = &stallGiveUp{tool: tc.Name, refusals: t.refusals, count: n}
+	}
+	return stallRefusal(tc.Name, n, stallRefuseMax-t.refusals), true
+}
+
+// gaveUp consumes a raised give-up. Consuming rather than peeking keeps the turn
+// from ending twice on one signal if the caller is re-entered.
+func (t *stallTracker) gaveUp() (*stallGiveUp, bool) {
+	g := t.giveUp
+	t.giveUp = nil
+	return g, g != nil
 }
 
 // note counts one more recurrence of sig in the current turn. Only reset() reads
@@ -589,6 +767,34 @@ func stallHoldOffNudge(tool string, count int, detail string) string {
 	return i18n.P("stall.holdoff.repeat",
 		"[loop check] `%s` has now been called %d times with the same arguments and the same result. The earlier note did not break this. Stop repeating it — use what you already have, take a different route, or report that you are stuck.",
 		tool, count)
+}
+
+// stallRefusal is what a refused call gets back instead of running. It is
+// delivered as a tool ERROR, which is the point: the two notes above ride the
+// ephemeral tail as advice the model is free to agree with and then ignore —
+// and did — while this is the tool result itself, and it says something the
+// previous one did not.
+//
+// It states plainly that nothing ran (a model that thinks the call landed will
+// go looking for its effects), why running it again cannot help, and how many
+// repeats are left before the turn ends. The last part is the one piece of
+// leverage prose has here: it is not another opinion about looping, it is notice
+// of what the harness will do next.
+func stallRefusal(tool string, count, remaining int) string {
+	if remaining <= 0 {
+		return i18n.P("stall.refusal.final",
+			"[loop check] `%s` was NOT run. This exact call has returned the same result %d times and neither note broke the loop, so terva stopped dispatching it. Nothing changed, and this turn ends here.",
+			tool, count)
+	}
+	return i18n.P("stall.refusal",
+		"[loop check] `%s` was NOT run — terva refused to dispatch it. This exact call has already returned the same result %d times, so running it again cannot tell you anything new. Nothing changed. Use what you already have, take a different route, or stop and say what is blocking you. Repeat it %d more time(s) and the turn ends.",
+		tool, count, remaining)
+}
+
+// stallGiveUpNote is the last word, addressed to the USER rather than the model:
+// the harness ended the turn, and this says why it was entitled to.
+func stallGiveUpNote(tool string, refusals, count int) string {
+	return i18n.T("ended the turn: %s repeated %d× with the same result, then %d× more after terva stopped running it", tool, count, refusals)
 }
 
 func stallNudge(tool string, count int, detail string) string {

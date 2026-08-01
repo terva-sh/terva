@@ -126,6 +126,39 @@ func (a *Agent) stallHoldOff(sig *stallEscalation, sink func(AgentEvent)) {
 	sink(EvStall{StallRecord: rec})
 }
 
+// stallGiveUp ends the turn when the detector's refusal rung has itself been
+// ignored stallRefuseMax times. It reports stop=true, which runLoop turns into a
+// clean end of turn — the model keeps its transcript, the refusals are in it, and
+// the user is handed back control with a note saying why.
+//
+// This is the one place terva decides FOR the model, and the bar is deliberately
+// high: a call has to have returned the same result seven times, survived two
+// in-band notes, and then been re-issued three more times after the harness
+// started answering it without running it. Everything short of that leaves the
+// turn running.
+//
+// Nothing is appended to the transcript beyond the refusals already in it. A
+// synthetic assistant message would be a claim the model did not make, and the
+// refused tool results say the same thing more honestly to whoever resumes.
+func (a *Agent) stallGiveUp(sink func(AgentEvent)) bool {
+	g, ok := a.stall.gaveUp()
+	if !ok {
+		return false
+	}
+	rec := StallRecord{
+		Axis: stallAxisSpin,
+		Tool: g.tool,
+		// The note is the DETAIL rather than a fabricated error slice: this rung
+		// has no tool error to quote (the calls stopped running), and a reader of
+		// the session row needs the reason the turn ended.
+		Detail: stallGiveUpNote(g.tool, g.refusals, g.count),
+		Rung:   4,
+	}
+	a.fireStall(rec)
+	sink(EvStall{StallRecord: rec})
+	return true
+}
+
 // maybeEscalate acts on a raised escalation request: under the auto policy it
 // swaps directly, otherwise it asks the user first. It returns stop=true only
 // when the user explicitly chooses to end the turn. Everything else — a swap, a
@@ -235,6 +268,10 @@ func (a *Agent) maybeEscalate(ctx context.Context, sink func(AgentEvent)) (stop 
 	}
 	a.recordEscalation(sink, rec, EscalationSwitched, out.Note)
 	a.stall.stageHandoff(handoffMarker(out.ToModel, sig.reason))
+	// The strikes belonged to the model that just left. Clearing them keeps the
+	// stronger model from inheriting a turn that was one refusal from ending —
+	// escalating exists to give the step another chance, and it would not be one.
+	a.stall.pardon()
 	return false
 }
 

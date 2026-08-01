@@ -54,6 +54,11 @@ func TestEventToWireGolden(t *testing.T) {
 			`{"type":"turn_end","stop":"error","error":"boom"}`},
 		{"stall", EvStall{StallRecord: StallRecord{Axis: "churn", Tool: "task_update", Detail: "activate_next must name a different task"}},
 			`{"type":"stall","stall":{"axis":"churn","tool":"task_update","detail":"activate_next must name a different task"}}`},
+		// The acting rungs put the number on the wire; a renderer cannot tell a
+		// refusal from a nudge without it. Rung 1 stays absent (omitempty), which
+		// is also what an older peer sends.
+		{"stall refused", EvStall{StallRecord: StallRecord{Axis: "spin", Tool: "task_update", Rung: 3}},
+			`{"type":"stall","stall":{"axis":"spin","tool":"task_update","rung":3}}`},
 		{"escalation", EvEscalation{EscalationRecord: EscalationRecord{
 			Reason: "stuck on task_update", Tool: "task_update", FromModel: "gemma-4-26b",
 			ToProvider: "openai-codex", ToModel: "gpt-5.6-sol", Auto: true, Disposition: EscalationSwitched,

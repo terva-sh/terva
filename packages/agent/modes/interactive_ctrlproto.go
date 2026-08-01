@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -345,6 +346,12 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 	case "compact_end":
 		i.turns.markCompacting(false)
 		i.mu.Lock()
+		// Unconditional: the heads-up note announces work IN PROGRESS, and the
+		// compaction is over whichever way it ended. Stripping it only on
+		// success left a failed compaction rendering "condensing history before
+		// sending..." directly under "compaction failed", where it sat until
+		// the next SUCCESSFUL compaction, a /clear, or the notes-clearing key.
+		i.extNotes = stripAutoCompactNotes(i.extNotes)
 		if ev.Error != "" {
 			i.statusErr = i18n.T("compaction failed: %s", ev.Error)
 			i.statusOK = ""
@@ -353,7 +360,6 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 			// overlay + caches like the legacy post-compact cleanup.
 			i.statusErr = ""
 			i.statusOK = i.pendingPostCompactNote
-			i.extNotes = stripAutoCompactNotes(i.extNotes)
 			i.lastCtxInput = 0
 			i.toolCalls = map[string]*tui.ToolCallView{}
 			i.toolOrder = nil
@@ -368,32 +374,34 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		i.spin.Start() // back to the normal spinner for the turn that follows
 		i.mu.Unlock()
 	case "stall":
-		// Rung 1 of the stuck-loop hatch: the detector caught a repeating model
-		// and nudged it. Coalesce into ONE line that counts up rather than
-		// appending a note per nudge — a wedged run fires many, and a growing
-		// stack of identical notes is noise. The turn continues on the same model,
-		// so no spinner/status change.
+		// The detector caught a repeating model. Rungs 1–2 are things terva SAID
+		// to it and rungs 3–4 are things terva DID, so they get their own glyphs
+		// and their own coalescing: a run of nudges and a run of refusals are two
+		// different facts, and reading "nudged 9×" while calls were being blocked
+		// would understate what happened. The turn continues on the same model in
+		// every case except rung 4, which ended it.
 		if ev.Stall == nil {
 			break
 		}
 		th := i.cfg.Theme
 		i.mu.Lock()
-		hadOld := false
-		kept := i.extNotes[:0:0]
-		for _, note := range i.extNotes {
-			if strings.Contains(note, stallNudgeGlyph) {
-				hadOld = true // drop the previous coalesced line; a fresh one replaces it
-				continue
+		switch {
+		case ev.Stall.Rung >= 4:
+			// Terminal, once per turn: never coalesced, and it carries the reason
+			// core wrote so the user is not left guessing why the turn stopped.
+			line := hatchNoteLine(th, th.Error, stallStopGlyph, ev.Stall.Detail)
+			if !slices.Contains(i.extNotes, line) {
+				i.extNotes = append(i.extNotes, line)
 			}
-			kept = append(kept, note)
+		case ev.Stall.Rung == 3:
+			i.stallRefusals = coalesceHatchNote(&i.extNotes, stallRefuseGlyph, i.stallRefusals)
+			msg := i18n.T("loop not breaking — refused to run %s %d× this turn (the call was not dispatched)", orDash(ev.Stall.Tool), i.stallRefusals)
+			i.extNotes = append(i.extNotes, hatchNoteLine(th, th.Error, stallRefuseGlyph, msg))
+		default:
+			i.stallNudges = coalesceHatchNote(&i.extNotes, stallNudgeGlyph, i.stallNudges)
+			msg := i18n.T("loop detected — nudged the model %d× this turn to break out (latest tool: %s)", i.stallNudges, orDash(ev.Stall.Tool))
+			i.extNotes = append(i.extNotes, hatchNoteLine(th, th.Warning, stallNudgeGlyph, msg))
 		}
-		if hadOld {
-			i.stallNudges++
-		} else {
-			i.stallNudges = 1 // self-resets when the line is gone (notes clear on the next prompt)
-		}
-		msg := i18n.T("loop detected — nudged the model %d× this turn to break out (latest tool: %s)", i.stallNudges, orDash(ev.Stall.Tool))
-		i.extNotes = append(kept, hatchNoteLine(th, th.Warning, stallNudgeGlyph, msg))
 		i.mu.Unlock()
 	case "escalation":
 		// Rung 3: the harness swapped (or tried to) to a stronger model. Word the
@@ -426,6 +434,39 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		if !dup {
 			i.extNotes = append(i.extNotes, line)
 		}
+		i.mu.Unlock()
+	case "retry":
+		// A transient provider failure; the agent is waiting before trying
+		// again. This note is the whole point of the event: the backoff always
+		// ran, but silently, so a working retry was indistinguishable from an
+		// immediate death — a ~20s pause and then the provider's raw sentence.
+		//
+		// Coalesced like the stall nudges: six retries are one fact with a
+		// rising count, not six lines. The count comes from the event rather
+		// than a local tally so it stays right across a reconnect, and the line
+		// is phrased to read correctly AFTER the fact too — it stays in the
+		// transcript once the turn recovers, where "retry 3 of 6" is the useful
+		// record and "waiting 8s" would be a stale claim.
+		if ev.Retry == nil {
+			break
+		}
+		th := i.cfg.Theme
+		r := ev.Retry
+		// A bare transport failure carries no provider name, and orDash's em
+		// dash would read as "— failed — retry 1 of 6" — two dashes and no
+		// subject. Name the thing that failed instead.
+		subject := r.Provider
+		if subject == "" {
+			subject = i18n.T("the request")
+		}
+		msg := i18n.T("%s failed — retry %d of %d in %s",
+			subject, r.Attempt, r.Max, shortDuration(time.Duration(r.DelayMS)*time.Millisecond))
+		if detail := clampNote(r.Error, 72); detail != "" {
+			msg += " · " + detail
+		}
+		i.mu.Lock()
+		coalesceHatchNote(&i.extNotes, retryGlyph, 0)
+		i.extNotes = append(i.extNotes, hatchNoteLine(th, th.Warning, retryGlyph, msg))
 		i.mu.Unlock()
 	case ctrlproto.EventPermissionRequest:
 		if ev.Permission != nil {

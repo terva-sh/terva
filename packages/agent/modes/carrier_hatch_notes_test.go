@@ -62,6 +62,64 @@ func TestCarrierStallEventsCoalesceIntoOneCountedNote(t *testing.T) {
 	}
 }
 
+// Rungs 3 and 4 are things terva DID, and they must not disappear into the
+// nudge counter. A pane reading "nudged the model 9×" while calls were being
+// blocked and the turn was ending understates all of it.
+func TestCarrierStallActingRungsReadDistinctly(t *testing.T) {
+	i := newNotesTestInteractive()
+	stall := func(rung int, detail string) {
+		i.handleCarrierEvent(ctrlproto.ConversationEvent(core.WireEvent{
+			Type:  "stall",
+			Stall: &core.WireStall{Axis: "spin", Tool: "task_update", Detail: detail, Rung: rung},
+		}))
+	}
+	stall(1, "")
+	stall(1, "")
+	stall(3, "")
+	stall(3, "")
+	stall(4, "ended the turn: task_update repeated 7× with the same result")
+
+	var nudge, refusal, stop string
+	for _, note := range i.extNotes {
+		switch {
+		case strings.Contains(note, stallStopGlyph):
+			stop = note
+		case strings.Contains(note, stallRefuseGlyph):
+			refusal = note
+		case strings.Contains(note, stallNudgeGlyph):
+			nudge = note
+		}
+	}
+	if len(i.extNotes) != 3 {
+		t.Fatalf("want one line per rung reached, got %d: %q", len(i.extNotes), i.extNotes)
+	}
+	// Each rung coalesces on its OWN glyph, so the counts stay separate.
+	if !strings.Contains(nudge, "nudged") || !strings.Contains(nudge, "2") {
+		t.Errorf("the nudge line should still count nudges: %q", nudge)
+	}
+	if !strings.Contains(refusal, "refused to run") || !strings.Contains(refusal, "2") {
+		t.Errorf("the refusal line should count refusals separately: %q", refusal)
+	}
+	if !strings.Contains(stop, "ended the turn") {
+		t.Errorf("the terminal line should say the turn ended and why: %q", stop)
+	}
+}
+
+// The terminal note fires once per turn and must not stack if the event is
+// somehow delivered twice.
+func TestCarrierStallGiveUpNoteIsNotRepeated(t *testing.T) {
+	i := newNotesTestInteractive()
+	for n := 0; n < 3; n++ {
+		i.handleCarrierEvent(ctrlproto.ConversationEvent(core.WireEvent{
+			Type:  "stall",
+			Stall: &core.WireStall{Axis: "spin", Tool: "task_update", Detail: "ended the turn", Rung: 4},
+		}))
+	}
+	if len(i.extNotes) != 1 {
+		t.Fatalf("the give-up note should appear once, got %d: %q", len(i.extNotes), i.extNotes)
+	}
+}
+
 func TestCarrierEscalationEventNotesByDisposition(t *testing.T) {
 	cases := []struct {
 		name string

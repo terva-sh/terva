@@ -653,6 +653,12 @@ type Interactive struct {
 	// extNotes: it resets implicitly when those clear on the next prompt.
 	stallNudges int
 
+	// stallRefusals is the same counter for the rung the detector ACTS on — calls
+	// answered without being dispatched. Counted apart from the nudges above
+	// because "nudged 9×" and "refused to run it 3×" describe different things
+	// terva did, and collapsing them into one line would hide the second.
+	stallRefusals int
+
 	// shellBlock holds the rendered terminal-log lines of the most
 	// recent !command shell escape. It lives below the transcript
 	// (under extNotes) until the user sends their next prompt or runs

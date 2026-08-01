@@ -455,21 +455,35 @@ export function applyEvent(items: Item[], ev: WireEvent): Item[] {
       return [...items, { kind: 'notice', id: nextID(), level: 'error', text }]
     }
     case 'stall': {
-      // Rung 1 of the stuck-loop hatch: the detector nudged a repeating model.
-      // Coalesce into ONE counting item — a wedged run fires many nudges, and a
-      // growing stack of identical notes is noise.
+      // The stuck-loop hatch acted. rung says what it did, and the three cases
+      // are deliberately not one counter: 1–2 are things terva SAID to the model,
+      // 3 is a call it refused to dispatch, 4 is the turn ending. Absent rung
+      // reads as the nudge, which is also what an older daemon sends.
       const s = ev.stall
       if (!s) return items
-      const prev = items.findIndex((it) => it.kind === 'hatch' && it.glyph === '⟳')
+      if ((s.rung ?? 1) >= 4) {
+        // Terminal and once per turn: dedup rather than coalesce, and show the
+        // reason core wrote — the turn stopped, and the user is owed why.
+        const text = s.detail || t('loop not breaking — terva ended the turn')
+        if (items.some((it) => it.kind === 'hatch' && it.glyph === '⊗' && it.text === text)) return items
+        return [...items, { kind: 'hatch', id: nextID(), tone: 'err', glyph: '⊗', text }]
+      }
+      // Coalesce into ONE counting item per glyph — a wedged run fires many, and
+      // a growing stack of identical notes is noise.
+      const refused = s.rung === 3
+      const glyph = refused ? '⊘' : '⟳'
+      const prev = items.findIndex((it) => it.kind === 'hatch' && it.glyph === glyph)
       const count = prev >= 0 ? ((items[prev] as Extract<Item, { kind: 'hatch' }>).count ?? 1) + 1 : 1
       const id = prev >= 0 ? items[prev].id : nextID()
       const line: Item = {
         kind: 'hatch',
         id,
-        tone: 'accent',
-        glyph: '⟳',
+        tone: refused ? 'err' : 'accent',
+        glyph,
         count,
-        text: t('loop detected — nudged the model %d× this turn to break out (latest tool: %s)', count, s.tool || '—'),
+        text: refused
+          ? t('loop not breaking — refused to run %s %d× this turn (the call was not dispatched)', s.tool || '—', count)
+          : t('loop detected — nudged the model %d× this turn to break out (latest tool: %s)', count, s.tool || '—'),
       }
       return prev >= 0 ? [...items.slice(0, prev), line, ...items.slice(prev + 1)] : [...items, line]
     }
