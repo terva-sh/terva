@@ -70,6 +70,17 @@ type questionDraft struct {
 	// cursor is the highlighted row: an option index, or the trailing
 	// "type my own answer" row when the question allows custom text.
 	cursor int
+	// ticked is the selection set for a MultiSelect question, keyed by
+	// option index. It exists SEPARATELY from cursor because the two answer
+	// different questions — where you are looking, and what you have chosen
+	// — and on a single-select question those happen to coincide. Folding
+	// them together is what makes a multi-select list impossible: a cursor
+	// cannot hold "these three", and it cannot hold "none of them" distinctly
+	// from "I haven't moved yet".
+	//
+	// Nil until armed; read through tickedSet so a defensive path that never
+	// called reset still renders.
+	ticked map[int]bool
 	// visited is true once the tab has been shown. It is what the strip's
 	// tick means — "you have looked at this" — rather than "an answer
 	// exists", which is true of every choice question from the start and
@@ -159,6 +170,7 @@ func (d *QuestionDialog) reset(req *QuestionRequest) {
 			note:    tui.NewEditor(""),
 			noteFor: -1,
 			typing:  len(q.Options) == 0,
+			ticked:  map[int]bool{},
 		}
 	}
 	d.drafts[0].visited = true
@@ -359,6 +371,23 @@ func (d *QuestionDialog) HandleKey(k tui.Key) bool {
 			d.mu.Unlock()
 			return false
 		}
+		// On a multi-select list the typed entry is one value among the ticks,
+		// so the answer is resolved the way it is from the list — never as the
+		// text alone. Sending it alone here would have thrown away everything
+		// already ticked, and done it at the moment of commit.
+		if q.MultiSelect && len(q.Options) > 0 {
+			dr.typing, dr.noting = false, false
+			if len(req.Questions) == 1 {
+				ans := dr.answer(q)
+				d.advance()
+				d.mu.Unlock()
+				req.Resp <- []core.UserAnswer{ans}
+				return true
+			}
+			d.gotoTabLocked(d.tab + 1)
+			d.mu.Unlock()
+			return false
+		}
 		answer := strings.TrimSpace(ed.SubmitValue())
 		if len(req.Questions) == 1 {
 			if answer == "" {
@@ -396,13 +425,39 @@ func (d *QuestionDialog) HandleKey(k tui.Key) bool {
 		return false
 	}
 
+	// Space ticks. Multi-select only: on a single-select list every row is
+	// already mutually exclusive with every other, so a toggle there could
+	// only ever produce a state the question does not have.
+	//
+	// A separate key from enter on purpose. Enter is the commit everywhere
+	// else in this dialog, and a list where it sometimes commits and
+	// sometimes ticks would make the one irreversible key ambiguous.
+	if k.Kind == tui.KeyRune && !k.Alt && k.Rune == ' ' && q.MultiSelect && len(q.Options) > 0 {
+		if customRow(q, dr.cursor) {
+			// Nothing to tick — the custom entry counts once it has text. Open
+			// the editor, which is what the row is for.
+			dr.typing, dr.noting = true, false
+			d.mu.Unlock()
+			return false
+		}
+		set := dr.tickedSet()
+		set[dr.cursor] = !set[dr.cursor]
+		d.mu.Unlock()
+		return false
+	}
+
 	// n annotates the highlighted option: "this one, but …". Not offered
 	// on the custom row, which already IS free text — a note on a note is
-	// nothing. The note is bound to the option it was written against, so
-	// moving the cursor elsewhere leaves it behind rather than quietly
-	// attaching it to a different answer.
+	// nothing. On a single-select question the note is bound to the option it
+	// was written against, so moving the cursor elsewhere leaves it behind
+	// rather than quietly attaching it to a different answer; on a
+	// multi-select one it belongs to the whole answer (see noteTextFor).
 	if k.Kind == tui.KeyRune && !k.Alt && (k.Rune == 'n' || k.Rune == 'N') && !customRow(q, dr.cursor) && len(q.Options) > 0 {
-		if dr.noteFor != dr.cursor {
+		// Re-arm only when the note is moving to a different option. A
+		// multi-select note is not bound to one, so it is never re-armed —
+		// pressing n from a different row must reopen what was written, not
+		// silently replace it with a blank field.
+		if dr.noteFor != dr.cursor && !(q.MultiSelect && len(q.Options) > 0) {
 			dr.note = tui.NewEditor("")
 			dr.noteFor = dr.cursor
 		}
@@ -473,6 +528,35 @@ func (d *QuestionDialog) answersLocked(req *QuestionRequest) []core.UserAnswer {
 // highlighted option; free text lands on what was typed, and an empty
 // box is a decline for that question alone.
 func (dr questionDraft) answer(q core.UserQuestion) core.UserAnswer {
+	// Multi-select first, and specifically BEFORE the free-text branch: on a
+	// list, typed text is one more value beside the ticks, not a replacement
+	// for them. Falling through would have made reaching the custom row
+	// silently discard everything already ticked.
+	if q.MultiSelect && len(q.Options) > 0 {
+		chosen := make([]string, 0, len(q.Options)+1)
+		for i, opt := range q.Options {
+			if dr.ticked[i] {
+				chosen = append(chosen, opt)
+			}
+		}
+		// Inclusion of the custom entry is its non-emptiness — there is no
+		// separate tick for it. A row whose text IS the answer cannot be
+		// "selected but blank", and giving it a tick of its own would invent a
+		// state with nothing behind it.
+		if q.AllowCustom && dr.input != nil {
+			if typed := strings.TrimSpace(dr.input.SubmitValue()); typed != "" {
+				chosen = append(chosen, typed)
+			}
+		}
+		// Never Declined, and chosen is non-nil even when empty: nothing ticked
+		// is the ANSWER "none of these", which is a different fact from
+		// refusing to answer. Only esc declines a multi-select.
+		return core.UserAnswer{
+			Answer:  strings.Join(chosen, ", "),
+			Answers: chosen,
+			Note:    dr.noteTextFor(q),
+		}
+	}
 	// A note is an addendum to a choice, so it never puts the draft into
 	// the free-text branch: the option is still the answer.
 	if (dr.typing && !dr.noting) || len(q.Options) == 0 {
@@ -488,7 +572,46 @@ func (dr questionDraft) answer(q core.UserQuestion) core.UserAnswer {
 	if dr.cursor < 0 || dr.cursor >= len(q.Options) {
 		return core.UserAnswer{Declined: true}
 	}
-	return core.UserAnswer{Answer: q.Options[dr.cursor], Note: dr.noteText()}
+	return core.UserAnswer{Answer: q.Options[dr.cursor], Note: dr.noteTextFor(q)}
+}
+
+// noteTextFor is the note as it applies to this question.
+//
+// On a single-select question a note is about the CHOICE — "Postgres, but
+// watch the connection limits" says nothing useful once the cursor moves to
+// SQLite — so it applies only while its own option is selected. On a
+// multi-select one there is no single option to be about: several are ticked
+// and the note is about the answer as a whole, so it applies throughout and is
+// not lost by moving the cursor after writing it.
+func (dr questionDraft) noteTextFor(q core.UserQuestion) string {
+	if dr.note == nil {
+		return ""
+	}
+	if q.MultiSelect && len(q.Options) > 0 {
+		return strings.TrimSpace(dr.note.SubmitValue())
+	}
+	return dr.noteText()
+}
+
+// tickedCount is how many real options are ticked. The custom entry is
+// excluded: it counts only once it has text, and that is answer()'s business.
+func (dr questionDraft) tickedCount(q core.UserQuestion) int {
+	n := 0
+	for i := range q.Options {
+		if dr.ticked[i] {
+			n++
+		}
+	}
+	return n
+}
+
+// tickedSet is the draft's selection map, materialised on demand so a draft
+// that skipped reset still takes a toggle instead of panicking on a nil write.
+func (dr *questionDraft) tickedSet() map[int]bool {
+	if dr.ticked == nil {
+		dr.ticked = map[int]bool{}
+	}
+	return dr.ticked
 }
 
 // noteText is the note as it applies right now: empty unless one was
@@ -519,6 +642,13 @@ func (dr questionDraft) addendumFor(q core.UserQuestion, i int) string {
 			return ""
 		}
 		return strings.TrimSpace(dr.input.SubmitValue())
+	}
+	// A multi-select note belongs to the question, not to whichever row the
+	// cursor happened to be on when it was typed. Hanging it under that row
+	// would draw it as scoped to one option while it is sent with all of
+	// them — the list renders it below itself instead (see optionRowsOf).
+	if q.MultiSelect && len(q.Options) > 0 {
+		return ""
 	}
 	if dr.note == nil || dr.noteFor != i {
 		return ""
@@ -651,6 +781,12 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 			// field that says only "note:" leaves the user to remember
 			// which row they were on — and the row is off screen now.
 			label = i18n.T("note on “%s”:", clipLine(optionAt(q, dr.noteFor), max(width/2, 12)))
+			// Except on a multi-select question, where the note is bound to no
+			// single option — noteFor stays -1 there, and naming it rendered a
+			// heading of "note on “”:". Say what it is actually attached to.
+			if q.MultiSelect && len(q.Options) > 0 {
+				label = i18n.T("note on your selection:")
+			}
 			field = dr.note
 		}
 		listRows, focus, caretCol = answerRowsOf(field, width)
@@ -658,6 +794,14 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 		focusEnd = focus + 1
 	} else {
 		label = i18n.T("choose an answer:")
+		// The count, because on a multi-select list enter sends whatever is
+		// ticked — including nothing, which is a real answer ("none of these")
+		// and therefore one the user has to be able to see they are about to
+		// give. "choose an answer" would also be a lie about a list you can
+		// give several to.
+		if q.MultiSelect && len(q.Options) > 0 {
+			label = i18n.T("choose any that apply — %d selected:", dr.tickedCount(q))
+		}
 		listRows, owner = optionRowsOf(q, width, dr)
 		focus, focusEnd = ownerSpan(owner, dr.cursor)
 	}
@@ -756,8 +900,17 @@ func (d *QuestionDialog) keyRows(req *QuestionRequest, q core.UserQuestion, dr q
 		} else {
 			parts = append(parts, i18n.T("↑/↓ pick"))
 		}
+		// Space is named FIRST on a multi-select list. It is the key that does
+		// the thing the question is asking for, and a list where the obvious
+		// key (enter) sends instead of selecting needs the selecting key said
+		// out loud before it.
+		if q.MultiSelect && len(q.Options) > 0 {
+			parts = append(parts, i18n.T("space ticks"))
+		}
 		if set {
 			parts = append(parts, i18n.T("enter next"))
+		} else if q.MultiSelect && len(q.Options) > 0 {
+			parts = append(parts, i18n.T("enter sends ticked"))
 		} else {
 			parts = append(parts, i18n.T("enter answers"))
 		}
@@ -896,6 +1049,14 @@ func (d *QuestionDialog) submitBodyLocked(th tui.Theme, req *QuestionRequest, wi
 		colour := th.Tool
 		if ans.Declined {
 			label = i18n.T("(no answer — will be skipped)")
+			colour = th.Muted
+		} else if label == "" && q.MultiSelect {
+			// Nothing ticked is an ANSWER, and this tab exists to show what is
+			// about to be sent. Left as the empty string it renders as a blank
+			// line, which reads as a rendering fault rather than as a decision
+			// — and it is the one row on this tab a user would most want to
+			// catch before pressing enter.
+			label = i18n.T("(none of the options)")
 			colour = th.Muted
 		}
 		for n, wl := range wrapPlain(strconv.Itoa(i+1)+". "+q.Question, width-4) {
@@ -1069,19 +1230,42 @@ func optionRowsOf(q core.UserQuestion, width int, dr questionDraft) (rows []stri
 	// that stops counting halfway reads as broken rather than as a hint
 	// about which ones are typeable.
 	lead := len(strconv.Itoa(len(all))) + 2 // "12. "
-	limit := optionWidth(width) - lead
+	// A tick box, on a multi-select question only. It is what says the list
+	// is additive: without it a highlighted row and a chosen row look
+	// identical, and the user has no way to tell what pressing enter will
+	// send. Fixed width so the option text still aligns down the column.
+	multi := q.MultiSelect && len(q.Options) > 0
+	box := 0
+	if multi {
+		box = 4 // "[x] "
+	}
+	limit := optionWidth(width) - lead - box
 	if limit < 8 {
 		limit = 8
 	}
 	for i, row := range all {
 		num := strconv.Itoa(i + 1)
+		mark := ""
+		if multi {
+			// The custom row's box tracks whether it HAS text, because that is
+			// what decides whether it is sent — a box that could be ticked
+			// while the field was empty would promise a value that is not there.
+			on := dr.ticked[i]
+			if customRow(q, i) {
+				on = dr.input != nil && strings.TrimSpace(dr.input.SubmitValue()) != ""
+			}
+			mark = "[ ] "
+			if on {
+				mark = "[x] "
+			}
+		}
 		for n, wl := range wrapPlain(row, limit) {
 			// Continuations align under the text, not under the number:
 			// a fold that lines up with the digits reads as another
 			// option whose number went missing.
-			pad := optionIndent + strings.Repeat(" ", lead)
+			pad := optionIndent + strings.Repeat(" ", lead+box)
 			if n == 0 {
-				pad = optionIndent + num + "." + strings.Repeat(" ", lead-len(num)-1)
+				pad = optionIndent + num + "." + strings.Repeat(" ", lead-len(num)-1) + mark
 			}
 			rows = append(rows, pad+wl)
 			owner = append(owner, i)
@@ -1097,8 +1281,23 @@ func optionRowsOf(q core.UserQuestion, width int, dr questionDraft) (rows []stri
 				if n > 0 {
 					mark = "  "
 				}
-				rows = append(rows, optionIndent+strings.Repeat(" ", lead)+mark+wl)
+				rows = append(rows, optionIndent+strings.Repeat(" ", lead+box)+mark+wl)
 				owner = append(owner, i)
+			}
+		}
+	}
+	// A multi-select note is about the whole answer, so it renders BELOW the
+	// list rather than under a row. owner -1 keeps it out of the highlight:
+	// no cursor position owns it, which is exactly the claim being made.
+	if multi {
+		if note := dr.noteTextFor(q); note != "" {
+			for n, wl := range wrapPlain(i18n.T("note: ")+note, optionWidth(width)-2) {
+				mark := "↳ "
+				if n > 0 {
+					mark = "  "
+				}
+				rows = append(rows, optionIndent+mark+wl)
+				owner = append(owner, -1)
 			}
 		}
 	}

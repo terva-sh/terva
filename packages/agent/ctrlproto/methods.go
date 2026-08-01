@@ -1,6 +1,10 @@
 package ctrlproto
 
-import "terva.sh/terva/packages/core"
+import (
+	"strings"
+
+	"terva.sh/terva/packages/core"
+)
 
 // Method names a command carried in a [KindCmd] frame. Names are grouped by
 // method group; the group a method belongs to gates whether a peer may call it
@@ -841,8 +845,16 @@ func CoreGrantScopes(scopes []GrantScope) []core.GrantScope {
 }
 
 // Answer is the wire form of [core.UserAnswer] carried in [AnswerParams].
+//
+// Answers holds every choice for a multi-select question; Answer mirrors it as
+// a joined list, the same singular-mirrors-plural shape [AskRequest] uses for
+// questions. The mirror is what a peer built before multi-select reads, and it
+// is filled on both conversions rather than at the call sites, so a client that
+// sends only Answers and one that sends only Answer are indistinguishable
+// downstream.
 type Answer struct {
-	Answer string `json:"answer,omitempty"`
+	Answer  string   `json:"answer,omitempty"`
+	Answers []string `json:"answers,omitempty"`
 	// Note is an addendum to a chosen option (see core.UserAnswer). Its
 	// own field, not text folded into Answer, so a reader can still tell
 	// which option was picked.
@@ -850,12 +862,21 @@ type Answer struct {
 	Declined bool   `json:"declined,omitempty"`
 }
 
-// Core converts a wire Answer to the core type.
+// Core converts a wire Answer to the core type, filling the singular mirror
+// when a multi-select client sent only the list.
 func (a Answer) Core() core.UserAnswer {
-	return core.UserAnswer{Answer: a.Answer, Note: a.Note, Declined: a.Declined}
+	single := a.Answer
+	if single == "" && len(a.Answers) > 0 {
+		single = strings.Join(a.Answers, ", ")
+	}
+	return core.UserAnswer{Answer: single, Answers: a.Answers, Note: a.Note, Declined: a.Declined}
 }
 
 // AnswerFromCore converts a core answer to its wire form.
 func AnswerFromCore(a core.UserAnswer) Answer {
-	return Answer{Answer: a.Answer, Note: a.Note, Declined: a.Declined}
+	single := a.Answer
+	if single == "" && len(a.Answers) > 0 {
+		single = strings.Join(a.Answers, ", ")
+	}
+	return Answer{Answer: single, Answers: a.Answers, Note: a.Note, Declined: a.Declined}
 }

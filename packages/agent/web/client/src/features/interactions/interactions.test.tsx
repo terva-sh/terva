@@ -220,4 +220,111 @@ describe('AskRequest', () => {
       { answer: 'y', note: 'only if the migration lands' },
     ])
   })
+
+  // Multi-select: the options are not mutually exclusive, so ticking one
+  // cannot mean "done" and the answer has to carry the whole list.
+  it('accumulates ticks and sends the list', () => {
+    const onAnswer = vi.fn()
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'm1',
+          question: 'Which to enable?',
+          options: ['redis', 'postgres', 's3'],
+          multi_select: true,
+        }}
+        onAnswer={onAnswer}
+      />,
+    )
+    // A lone single-select question answers on click. A multi-select one
+    // must NOT — the next tick is the point of the question.
+    fireEvent.click(screen.getByRole('button', { name: /^[☐☑] redis$/ }))
+    expect(onAnswer).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /^[☐☑] s3$/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(onAnswer).toHaveBeenCalledWith('m1', [
+      { answer: 'redis, s3', answers: ['redis', 's3'] },
+    ])
+  })
+
+  it('unticks an option that is clicked twice', () => {
+    const onAnswer = vi.fn()
+    render(
+      <AskRequest
+        request={{ ask_id: 'm2', question: 'Which?', options: ['a', 'b'], multi_select: true }}
+        onAnswer={onAnswer}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^[☐☑] a$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^[☐☑] b$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^[☐☑] a$/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(onAnswer).toHaveBeenCalledWith('m2', [{ answer: 'b', answers: ['b'] }])
+  })
+
+  // "None of these" is an ANSWER to "which of these should I enable?", not a
+  // refusal to answer. Gating Send on one tick would leave that user only two
+  // ways out: agree to something they don't want, or dismiss the card — which
+  // declines every other question in the set with it.
+  it('lets an empty multi-select be submitted', () => {
+    const onAnswer = vi.fn()
+    render(
+      <AskRequest
+        request={{ ask_id: 'm3', question: 'Which?', options: ['a', 'b'], multi_select: true }}
+        onAnswer={onAnswer}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(onAnswer).toHaveBeenCalledWith('m3', [{ answer: '', answers: [] }])
+  })
+
+  // A ticked box and an unticked one must not be announced identically; the
+  // checkmark glyph is decoration and a screen reader never sees it.
+  it('marks multi-select options as toggles for assistive tech', () => {
+    render(
+      <AskRequest
+        request={{ ask_id: 'm4', question: 'Which?', options: ['a', 'b'], multi_select: true }}
+        onAnswer={() => {}}
+      />,
+    )
+    const a = screen.getByRole('button', { name: /^[☐☑] a$/ })
+    expect(a.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(a)
+    expect(screen.getByRole('button', { name: /^[☐☑] a$/ }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  // allow_custom means "as well as the options" — on a list of choices the
+  // user's own item sits beside the offered ones rather than replacing them.
+  it('adds a typed entry alongside the ticked ones', () => {
+    const onAnswer = vi.fn()
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'm5',
+          question: 'Which?',
+          options: ['a', 'b'],
+          multi_select: true,
+          allow_custom: true,
+        }}
+        onAnswer={onAnswer}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^[☐☑] a$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Add my own/ }))
+    fireEvent.input(screen.getByPlaceholderText('custom answer…'), { target: { value: '  c  ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(onAnswer).toHaveBeenCalledWith('m5', [{ answer: 'a, c', answers: ['a', 'c'] }])
+  })
+
+  // Single-select is untouched: it still answers on click and still sends no
+  // list, so a daemon reading `answers` never sees one where none was chosen.
+  it('leaves single-select answering on click with no list', () => {
+    const onAnswer = vi.fn()
+    render(
+      <AskRequest request={{ ask_id: 'm6', question: 'Which?', options: ['a', 'b'] }} onAnswer={onAnswer} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'b' }))
+    expect(onAnswer).toHaveBeenCalledWith('m6', [{ answer: 'b' }])
+  })
 })

@@ -17,8 +17,19 @@ type UserQuestion struct {
 	// name or a number but not a sentence. Front ends fall back to the
 	// position when it is empty, so it is never required and never the
 	// only way to tell two questions apart. [SanitizeSlug] bounds it.
-	Slug        string
-	Options     []string
+	Slug    string
+	Options []string
+	// MultiSelect lets the user choose ANY NUMBER of Options rather than
+	// exactly one — "which of these should I enable?" against "which of
+	// these should I use?".
+	//
+	// The MODEL declares it; nothing infers it. Whether a set of options is
+	// mutually exclusive is a fact about the decision, not about the strings,
+	// and the model already settled it when it wrote them. A front end
+	// guessing from the wording would be re-deciding, worse, something that
+	// was known — and getting it wrong in the permissive direction silently
+	// widens what the user is agreeing to.
+	MultiSelect bool
 	AllowCustom bool
 }
 
@@ -50,9 +61,39 @@ func SanitizeSlug(s string) string {
 // choice actionable. A front end that has no way to attach one simply
 // leaves it empty; nothing downstream requires it.
 type UserAnswer struct {
-	Answer   string
+	Answer string
+	// Answers carries every choice when the question was MultiSelect. It is
+	// additive rather than a replacement for Answer: every reader in the tree
+	// predates it and reads Answer, so widening the type must not quietly
+	// change what those readers see.
+	//
+	// Read choices through [UserAnswer.Chosen] rather than either field. Two
+	// parallel fields is exactly the shape that invites reading the wrong one
+	// — a single-select caller checking Answers finds nil, a multi-select
+	// caller checking Answer finds one of several and cannot tell it was one
+	// of several. Chosen is the answer to "what did they pick"; the fields are
+	// how it is carried.
+	Answers  []string
 	Note     string
 	Declined bool
+}
+
+// Chosen returns every option the user picked, for single- and multi-select
+// alike, so a caller never has to know which shape produced it. A decline, or
+// an answer with nothing in it, returns nil rather than a slice holding an
+// empty string — "they picked nothing" and "they picked the empty option" are
+// different, and only the first one is real.
+func (a UserAnswer) Chosen() []string {
+	if a.Declined {
+		return nil
+	}
+	if len(a.Answers) > 0 {
+		return a.Answers
+	}
+	if a.Answer == "" {
+		return nil
+	}
+	return []string{a.Answer}
 }
 
 // MaxAskQuestions caps one ask. A set is meant to be the handful of

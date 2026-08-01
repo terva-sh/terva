@@ -30,6 +30,7 @@ type askQuestion struct {
 	Question    string   `json:"question"`
 	Slug        string   `json:"slug,omitempty"`
 	Options     []string `json:"options,omitempty"`
+	MultiSelect bool     `json:"multi_select,omitempty"`
 	AllowCustom bool     `json:"allow_custom,omitempty"`
 }
 
@@ -37,6 +38,7 @@ type askArgs struct {
 	Question    string        `json:"question"`
 	Slug        string        `json:"slug,omitempty"`
 	Options     []string      `json:"options,omitempty"`
+	MultiSelect bool          `json:"multi_select,omitempty"`
 	AllowCustom bool          `json:"allow_custom,omitempty"`
 	Questions   []askQuestion `json:"questions,omitempty"`
 }
@@ -48,16 +50,24 @@ type askArgs struct {
 // the whole document. Use single quotes.
 const slugDesc = `Optional 1-3 word name for this question ('auth method', 'rollout order'), used where a front end has room for a label but not the whole question — the terminal shows it on the question's tab. Name the DECISION, not the answer. Optional, dropped if longer than 3 words or 24 characters, and never a substitute for a clear question.`
 
+// multiSelectDesc is shared by both shapes for the same reason slugDesc is.
+// Phrased around whether the options are mutually EXCLUSIVE rather than around
+// how many the user may tick: that is the property the model actually knows,
+// and it is the one nothing else can recover afterwards.
+const multiSelectDesc = `Set true when the options are NOT mutually exclusive and the user may pick any number of them ('which of these should I enable?'). Leave false — the default — when exactly one answer makes sense ('which of these should I use?'). Only you can say which it is; nothing infers it from the option text.`
+
 const askSchema = `{"type":"object","properties":{` +
 	`"question":{"type":"string","description":"The question to ask the user. Be specific. Use this for a single question; use 'questions' to ask several at once."},` +
 	`"slug":{"type":"string","description":"` + slugDesc + `"},` +
 	`"options":{"type":"array","items":{"type":"string"},"description":"Optional multiple-choice answers. Omit for a free-form question."},` +
-	`"allow_custom":{"type":"boolean","description":"When options are given, also let the user type their own answer instead of picking one."},` +
+	`"multi_select":{"type":"boolean","description":"` + multiSelectDesc + `"},` +
+	`"allow_custom":{"type":"boolean","description":"When options are given, also let the user type their own answer as well as picking from them."},` +
 	`"questions":{"type":"array","maxItems":8,"description":"Ask several related questions in ONE interruption instead of stalling the turn once per question. The user sees them together and answers at their own pace before submitting. Prefer this whenever more than one thing is unclear.","items":{"type":"object","properties":{` +
 	`"question":{"type":"string","description":"The question to ask. Be specific."},` +
 	`"slug":{"type":"string","description":"` + slugDesc + ` Most useful here: a set is navigated by tab, and named tabs say what is behind each one."},` +
 	`"options":{"type":"array","items":{"type":"string"},"description":"Optional multiple-choice answers. Omit for a free-form question."},` +
-	`"allow_custom":{"type":"boolean","description":"When options are given, also let the user type their own answer instead of picking one."}` +
+	`"multi_select":{"type":"boolean","description":"` + multiSelectDesc + `"},` +
+	`"allow_custom":{"type":"boolean","description":"When options are given, also let the user type their own answer as well as picking from them."}` +
 	`},"required":["question"]}}` +
 	`}}`
 
@@ -106,7 +116,7 @@ func (a askArgs) questions() ([]core.UserQuestion, error) {
 	if strings.TrimSpace(a.Question) != "" {
 		qs = append(qs, core.UserQuestion{
 			Question: a.Question, Slug: core.SanitizeSlug(a.Slug),
-			Options: a.Options, AllowCustom: a.AllowCustom,
+			Options: a.Options, MultiSelect: a.MultiSelect, AllowCustom: a.AllowCustom,
 		})
 	}
 	for _, q := range a.Questions {
@@ -115,7 +125,7 @@ func (a askArgs) questions() ([]core.UserQuestion, error) {
 		}
 		qs = append(qs, core.UserQuestion{
 			Question: q.Question, Slug: core.SanitizeSlug(q.Slug),
-			Options: q.Options, AllowCustom: q.AllowCustom,
+			Options: q.Options, MultiSelect: q.MultiSelect, AllowCustom: q.AllowCustom,
 		})
 	}
 	if len(qs) == 0 {
@@ -125,6 +135,37 @@ func (a askArgs) questions() ([]core.UserQuestion, error) {
 		return nil, fmt.Errorf("too many questions in one call (%d, max %d) — ask the most blocking ones now and the rest after you have those answers", len(qs), core.MaxAskQuestions)
 	}
 	return qs, nil
+}
+
+// renderChoice writes what the user picked in a form the model cannot misread.
+//
+// Every multi-select answer is rendered with its relationship named, because
+// all three cases are ambiguous without it:
+//
+//   - "A, B" alone cannot be told from ONE option whose text contains a comma,
+//     and the difference decides whether the model does one thing or two.
+//   - One tick out of five is not the same fact as one option out of five. The
+//     user could have taken more and chose not to, which is a decision, and the
+//     bare option text throws it away.
+//   - No ticks at all is an ANSWER — "none of these" — not an absence of one.
+//     Rendered as empty it reads as a front-end bug, and the model would be
+//     right to distrust it.
+//
+// A declined question never reaches here; the caller renders that. A
+// single-select answer keeps its plain shape, which is what the model has been
+// reading all along.
+func renderChoice(q core.UserQuestion, a core.UserAnswer) string {
+	if !q.MultiSelect {
+		return a.Answer
+	}
+	switch chosen := a.Chosen(); len(chosen) {
+	case 0:
+		return "none of the options"
+	case 1:
+		return "only: " + chosen[0]
+	default:
+		return "all of: " + strings.Join(chosen, ", ")
+	}
 }
 
 // askResult renders the answers for the model. A single question keeps
@@ -141,8 +182,11 @@ func askResult(qs []core.UserQuestion, answers []core.UserAnswer) core.ToolResul
 				Details: map[string]any{"asked": true, "declined": true},
 			}
 		}
-		text := "User answered: " + answers[0].Answer
+		text := "User answered: " + renderChoice(qs[0], answers[0])
 		details := map[string]any{"asked": true, "answer": answers[0].Answer}
+		if chosen := answers[0].Chosen(); qs[0].MultiSelect {
+			details["answers"] = chosen
+		}
 		// The note is rendered on its own line, and labelled. Appended to
 		// the answer it would read as part of the option the user picked,
 		// which is the one reading it must not have: the choice is what to
@@ -167,7 +211,7 @@ func askResult(qs []core.UserQuestion, answers []core.UserAnswer) core.ToolResul
 			declined++
 			sb.WriteString("(declined)")
 		} else {
-			sb.WriteString(answers[i].Answer)
+			sb.WriteString(renderChoice(q, answers[i]))
 			if answers[i].Note != "" {
 				sb.WriteString("\n   note: " + answers[i].Note)
 			}
@@ -176,6 +220,9 @@ func askResult(qs []core.UserQuestion, answers []core.UserAnswer) core.ToolResul
 			"question": q.Question,
 			"answer":   answers[i].Answer,
 			"declined": answers[i].Declined,
+		}
+		if q.MultiSelect {
+			entry["answers"] = answers[i].Chosen()
 		}
 		if answers[i].Note != "" {
 			entry["note"] = answers[i].Note

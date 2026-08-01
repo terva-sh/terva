@@ -280,9 +280,15 @@ type AskQuestion struct {
 	// Slug is the question's optional short name (see core.UserQuestion).
 	// Front ends that have room for a label but not a sentence — the
 	// TUI's tab strip — show it; the rest ignore it and lose nothing.
-	Slug        string   `json:"slug,omitempty"`
-	Options     []string `json:"options,omitempty"`
-	AllowCustom bool     `json:"allow_custom,omitempty"`
+	Slug    string   `json:"slug,omitempty"`
+	Options []string `json:"options,omitempty"`
+	// MultiSelect means the options are not mutually exclusive (see
+	// core.UserQuestion). A client that predates it ignores the field and
+	// renders a single-choice control — which is the safe direction to
+	// degrade: the user under-answers rather than agreeing to more than they
+	// meant, and the model reads exactly what was picked either way.
+	MultiSelect bool `json:"multi_select,omitempty"`
+	AllowCustom bool `json:"allow_custom,omitempty"`
 }
 
 // AskRequest is a pending mid-turn ask (the ask_user_question tool) — one
@@ -298,6 +304,7 @@ type AskRequest struct {
 	AskID       string        `json:"ask_id"`
 	Question    string        `json:"question"`
 	Options     []string      `json:"options,omitempty"`
+	MultiSelect bool          `json:"multi_select,omitempty"`
 	AllowCustom bool          `json:"allow_custom,omitempty"`
 	Questions   []AskQuestion `json:"questions,omitempty"`
 }
@@ -308,11 +315,12 @@ type AskRequest struct {
 func NewAskRequest(askID string, qs []core.UserQuestion) AskRequest {
 	r := AskRequest{AskID: askID}
 	for _, q := range qs {
-		r.Questions = append(r.Questions, AskQuestion{Question: q.Question, Slug: q.Slug, Options: q.Options, AllowCustom: q.AllowCustom})
+		r.Questions = append(r.Questions, AskQuestion{Question: q.Question, Slug: q.Slug, Options: q.Options, MultiSelect: q.MultiSelect, AllowCustom: q.AllowCustom})
 	}
 	if len(r.Questions) > 0 {
 		r.Question = r.Questions[0].Question
 		r.Options = r.Questions[0].Options
+		r.MultiSelect = r.Questions[0].MultiSelect
 		r.AllowCustom = r.Questions[0].AllowCustom
 	}
 	return r
@@ -323,11 +331,11 @@ func NewAskRequest(askID string, qs []core.UserQuestion) AskRequest {
 // from an older peer still yields one question.
 func (r AskRequest) Set() []core.UserQuestion {
 	if len(r.Questions) == 0 {
-		return []core.UserQuestion{{Question: r.Question, Options: r.Options, AllowCustom: r.AllowCustom}}
+		return []core.UserQuestion{{Question: r.Question, Options: r.Options, MultiSelect: r.MultiSelect, AllowCustom: r.AllowCustom}}
 	}
 	out := make([]core.UserQuestion, 0, len(r.Questions))
 	for _, q := range r.Questions {
-		out = append(out, core.UserQuestion{Question: q.Question, Slug: q.Slug, Options: q.Options, AllowCustom: q.AllowCustom})
+		out = append(out, core.UserQuestion{Question: q.Question, Slug: q.Slug, Options: q.Options, MultiSelect: q.MultiSelect, AllowCustom: q.AllowCustom})
 	}
 	return out
 }
