@@ -114,6 +114,8 @@
   "stall.holdoff.repeat": "[loop check] `%s` has now been called %d times with the same arguments and the same result. The earlier note did not break this. Stop repeating it — use what you already have, take a different route, or report that you are stuck.",
   "stall.nudge.error": "[loop check] You have called `%s` %d times with the same result: %q. Retrying it unchanged will not help — read the current state (e.g. task_list) or take a different action.",
   "stall.nudge.repeat": "[loop check] You have called `%s` with the same arguments %d times. You already have the result; use what you have or do something different rather than repeat it.",
+  "stall.refusal": "[loop check] `%s` was NOT run — terva refused to dispatch it. This exact call has already returned the same result %d times, so running it again cannot tell you anything new. Nothing changed. Use what you already have, take a different route, or stop and say what is blocking you. Repeat it %d more time(s) and the turn ends.",
+  "stall.refusal.final": "[loop check] `%s` was NOT run. This exact call has returned the same result %d times and neither note broke the loop, so terva stopped dispatching it. Nothing changed, and this turn ends here.",
   "study.dir": "Read and understand everything in the directory %s.",
   "study.dir.current": "Read and understand everything in the current directory.",
   "study.file": "Read and understand the file %s.",

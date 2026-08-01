@@ -11,6 +11,26 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.130.0](https://github.com/terva-sh/terva/releases/tag/v0.130.0) — 2026-07-31
+
+### Features
+
+- auth: refresh a subscription before it lapses, not after
+- context: show what the prompt cache is actually doing
+- extensions: retire the bundled extensions the harness now replaces
+- memory: a second tier that costs nothing until you ask for it
+- memory: durable memory the harness owns, not an extension beside it
+- models: give a model the name you call it, not the one it shipped with
+- swarm: tell the coordinator what its sub-agents are spending
+- tools: cross-session search that can actually see the session
+- tools: session_inspect can say what a session cost and what broke
+
+### Fixes
+
+- provider: name whoever answered, and retry what asked to be retried
+- tools: say what went wrong, and stop reporting success as failure
+- tui: four things the terminal drew wrong
+
 ## [v0.129.0](https://github.com/terva-sh/terva/releases/tag/v0.129.0) — 2026-07-29
 
 ### Features
