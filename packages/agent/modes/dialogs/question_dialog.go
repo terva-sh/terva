@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mattn/go-runewidth"
+
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
@@ -331,6 +333,19 @@ func (d *QuestionDialog) HandleKey(k tui.Key) bool {
 		return false
 	}
 
+	// Digit shortcuts: 1-9 jump straight to that row, the way the confirm
+	// gate's do. Free only in choice mode — the answer editor above owns
+	// every rune while typing — and deliberately a JUMP, not a jump-and-
+	// answer, so a mistyped digit costs a cursor move rather than an
+	// answer sent. Enter is still the commit, from every route in.
+	if k.Kind == tui.KeyRune && k.Rune >= '1' && k.Rune <= '9' {
+		if idx := int(k.Rune - '1'); idx < pickable(q) {
+			dr.cursor = idx
+		}
+		d.mu.Unlock()
+		return false
+	}
+
 	switch k.Kind {
 	case tui.KeyUp:
 		if dr.cursor > 0 {
@@ -485,7 +500,7 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 	// The tab strip, for a set only.
 	var strip []string
 	if len(req.Questions) > 1 {
-		strip = append(strip, answerIndent+d.stripLocked(th, req), "")
+		strip = append(strip, answerIndent+d.stripLocked(th, req, width), "")
 	}
 	if d.onSubmitTabLocked(req) {
 		return append(strip, d.submitBodyLocked(th, req, width, len(strip))...), -1, -1
@@ -503,38 +518,55 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 	// focus/focusEnd is that pointed-at row span: one row for the caret,
 	// but every row of the highlighted option once options wrap.
 	var (
-		hint     string
+		label    string
 		listRows []string
 		owner    []int // choice mode: the option each list row belongs to
 		focus    int
 		focusEnd int
 	)
 	if dr.typing {
-		hint = d.typingHint(len(req.Questions), len(q.Options) > 0)
+		label = i18n.T("your answer:")
 		listRows, focus, caretCol = answerRowsOf(dr.input, width)
 		caretCol += len(answerIndent)
 		focusEnd = focus + 1
 	} else {
-		hint = d.chooseHint(len(req.Questions))
+		label = i18n.T("choose an answer:")
 		listRows, owner = optionRowsOf(q, width)
 		focus, focusEnd = ownerSpan(owner, dr.cursor)
 	}
-	// The hint was the last row here that nothing bounded, which held only
-	// while the hints stayed shorter than the narrowest terminal anyone
-	// used. It is clipped now, like the memory pane's key hints: a
-	// shortened hint reads as a narrow window, a row past the frame reads
-	// as a rendering bug.
-	//
-	// The skip warning takes its place but WRAPS instead, because it is
-	// not chrome — it is the sentence someone reads before doing the one
-	// irreversible thing in this dialog, and a clip would take the
-	// consequence off the end of it.
-	hintRows, hintColour := []string{clipLine(hint, width)}, th.Muted
+
+	// The keys sit under the list, where the submit tab has always put
+	// them, rather than in the label above it. There are more of them than
+	// one line above the options could hold without dropping the two —
+	// tab and ctrl+u — that nothing else advertises.
+	keyRows, keyColour := d.keyRows(req, q, dr, width), th.Muted
 	if d.confirmSkip {
-		hintRows, hintColour = wrapPlain(d.skipWarning(len(req.Questions)), width), th.Warning
+		// The warning takes the legend's place rather than a row of its
+		// own: it appears on a keypress, and a body that grows under the
+		// user shifts everything below it mid-read. It WRAPS where the
+		// legend clips, because it is not chrome — it is the sentence
+		// someone reads before doing the one irreversible thing here, and
+		// a clip would take the consequence off the end of it.
+		keyRows, keyColour = wrapIndented(d.skipWarning(len(req.Questions)), width), th.Warning
 	}
 
-	qRows, budget := d.budgetLocked(qRows, len(listRows), len(strip), len(hintRows))
+	// A wrapped warning is several rows, and on a short terminal those
+	// rows are not free: chrome that outgrows MaxRows cannot be paid for
+	// by shrinking the list, which has a floor of its own. So the legend
+	// yields too — last, after the question, and never below one row,
+	// because the key it names is on that row. The ellipsis truncatedRows
+	// leaves says the sentence was cut.
+	if d.MaxRows > 0 {
+		if room := max(d.MaxRows-(len(strip)+3)-2, 1); len(keyRows) > room {
+			keyRows = truncatedRows(keyRows, room)
+		}
+	}
+
+	// Everything in the body that is neither the question nor the list:
+	// the strip and its blank, the blank under the question, the label,
+	// the blank above the legend, and the legend itself.
+	chrome := len(strip) + 3 + len(keyRows)
+	qRows, budget := d.budgetLocked(qRows, len(listRows), chrome)
 	start, end := windowSpan(len(listRows), focus, focusEnd, budget)
 	listRows = listRows[start:end]
 	if owner != nil {
@@ -547,12 +579,7 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 		lines = append(lines, "  "+th.FG256(th.Tool, wl))
 	}
 	lines = append(lines, "")
-	// The warning takes the hint's place rather than a row of its own: it
-	// appears on a keypress, and a body that grows under the user shifts
-	// everything below it mid-read.
-	for _, hr := range hintRows {
-		lines = append(lines, th.FG256(hintColour, hr))
-	}
+	lines = append(lines, "  "+th.FG256(th.Muted, clipLine(label, width-2)))
 	listTop := len(lines)
 	for i, l := range listRows {
 		if dr.typing {
@@ -567,37 +594,72 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 			lines = append(lines, th.FG256(th.Muted, l))
 		}
 	}
+	lines = append(lines, "")
+	for _, kr := range keyRows {
+		lines = append(lines, th.FG256(keyColour, kr))
+	}
 	if !dr.typing {
 		return lines, -1, -1
 	}
 	return lines, listTop + focus, caretCol
 }
 
-// typingHint labels the answer field. What esc does depends on where the
-// field was reached from, so the hint has to say which: from the custom
-// row it goes back to the options, and a question with no options has
-// nowhere to go back to.
-func (d *QuestionDialog) typingHint(n int, hasOptions bool) string {
-	if hasOptions {
-		if n > 1 {
-			return i18n.T("type your answer · enter for next · tab moves · esc returns to the options:")
+// keyRows is the legend under the list: what you can press, from here,
+// right now. It is mode-specific because a key that does nothing in the
+// mode you are in is worse than one you were never told about — it is
+// the same reason the tab hints only appear for a set.
+//
+// One clipped row. The keys are ordered by how often they are wanted,
+// so a clip on a narrow terminal takes esc (which every dialog here
+// shares) before it takes tab (which nothing else advertises).
+func (d *QuestionDialog) keyRows(req *QuestionRequest, q core.UserQuestion, dr questionDraft, width int) []string {
+	var parts []string
+	set := len(req.Questions) > 1
+	switch {
+	case dr.typing:
+		if set {
+			parts = append(parts, i18n.T("enter next"))
+		} else {
+			parts = append(parts, i18n.T("enter submits"))
 		}
-		return i18n.T("type your answer, enter to submit, esc returns to the options:")
+		parts = append(parts, i18n.T("ctrl+u clears"))
+	default:
+		if n := pickable(q); n > 0 {
+			parts = append(parts, i18n.T("↑/↓ or 1-%d pick", n))
+		} else {
+			parts = append(parts, i18n.T("↑/↓ pick"))
+		}
+		if set {
+			parts = append(parts, i18n.T("enter next"))
+		} else {
+			parts = append(parts, i18n.T("enter answers"))
+		}
 	}
-	if n > 1 {
-		return i18n.T("type your answer · enter for next · tab moves · esc skips all:")
+	if set {
+		parts = append(parts, i18n.T("tab/⇧tab question"))
 	}
-	return i18n.T("type your answer, enter to submit, esc to skip:")
+	switch {
+	case dr.typing && len(q.Options) > 0:
+		parts = append(parts, i18n.T("esc back to options"))
+	case set:
+		parts = append(parts, i18n.T("esc skips all"))
+	default:
+		parts = append(parts, i18n.T("esc skips"))
+	}
+	return []string{"  " + clipLine(strings.Join(parts, " · "), width-2)}
 }
 
-func (d *QuestionDialog) chooseHint(n int) string {
-	if n > 1 {
-		return i18n.T("choose ↑/↓ · enter for next · tab moves · esc skips all:")
+// wrapIndented folds s under the body's two-column indent, so a wrapped
+// line stays inside the frame the indent narrowed.
+func wrapIndented(s string, width int) []string {
+	rows := wrapPlain(s, width-2)
+	for i, r := range rows {
+		rows[i] = "  " + r
 	}
-	return i18n.T("choose (↑/↓, enter to pick, esc to skip):")
+	return rows
 }
 
-// skipWarning is the line the first esc puts up in place of the hint. It
+// skipWarning is the line the first esc puts up in place of the legend. It
 // names what would be skipped and what the agent does next, because
 // "skipped" on its own reads as "nothing happens" — the agent in fact
 // proceeds on its own judgment, which is the part worth a second press.
@@ -613,30 +675,70 @@ func (d *QuestionDialog) skipWarning(n int) string {
 // than truncated question text — a question clipped to eight columns
 // tells you less than its position does, and numbers never overflow.
 // Caller holds mu.
-func (d *QuestionDialog) stripLocked(th tui.Theme, req *QuestionRequest) string {
-	var b strings.Builder
+func (d *QuestionDialog) stripLocked(th tui.Theme, req *QuestionRequest, width int) string {
+	// Three tiers, most informative first: name every question, then name
+	// only the one you are on, then bare numbers. A tier is used only if
+	// it FITS — a slug clipped to eight columns tells you less than the
+	// position does, which is why this was numbers-only to begin with.
+	// Questions without a slug stay numbers in every tier; the model is
+	// not obliged to name them, and one named chip beside three numbered
+	// ones still says more than four numbers.
+	for _, named := range []func(i int) bool{
+		func(int) bool { return true },
+		func(i int) bool { return i == d.tab },
+		func(int) bool { return false },
+	} {
+		styled, plain := d.stripTextLocked(th, req, named)
+		if runewidth.StringWidth(plain) <= width-len(answerIndent) {
+			return styled
+		}
+	}
+	// Even bare numbers overflow (a set of eight on a very narrow
+	// terminal). Clip the PLAIN text rather than break the frame: clipping
+	// a styled string can cut an escape sequence in half.
+	_, plain := d.stripTextLocked(th, req, func(int) bool { return false })
+	return clipLine(plain, width-len(answerIndent))
+}
+
+// stripTextLocked builds the strip, naming the chips `named` selects, and
+// returns it both styled and plain.
+//
+// Plain is not "the styled one with the theme left zero": a zero theme
+// still emits escape sequences, and measuring those as if they were
+// visible columns rejected every tier that actually fit. The width test
+// above needs text with no escapes in it at all, so both are built here
+// in one pass rather than derived from each other. Caller holds mu.
+func (d *QuestionDialog) stripTextLocked(th tui.Theme, req *QuestionRequest, named func(i int) bool) (styled, plain string) {
+	var s, p strings.Builder
+	write := func(raw, coloured string) {
+		p.WriteString(raw)
+		s.WriteString(coloured)
+	}
 	for i, q := range req.Questions {
 		if i > 0 {
-			b.WriteString("  ")
+			write("  ", "  ")
 		}
 		chip := strconv.Itoa(i + 1)
+		if slug := core.SanitizeSlug(q.Slug); slug != "" && named(i) {
+			chip += " " + slug
+		}
 		if d.drafts[i].visited && !d.drafts[i].answer(q).Declined {
 			chip += "✓"
 		}
 		if i == d.tab {
-			b.WriteString(th.FG256(th.Accent, "▸"+chip))
+			write("▸"+chip, th.FG256(th.Accent, "▸"+chip))
 		} else {
-			b.WriteString(" " + th.FG256(th.Muted, chip))
+			write(" "+chip, " "+th.FG256(th.Muted, chip))
 		}
 	}
-	b.WriteString(th.FG256(th.Muted, "  │ "))
+	write("  │ ", th.FG256(th.Muted, "  │ "))
 	submit := i18n.T("submit")
 	if d.onSubmitTabLocked(req) {
-		b.WriteString(th.FG256(th.Accent, "▸"+submit))
+		write("▸"+submit, th.FG256(th.Accent, "▸"+submit))
 	} else {
-		b.WriteString(" " + th.FG256(th.Muted, submit))
+		write(" "+submit, " "+th.FG256(th.Muted, submit))
 	}
-	return b.String()
+	return s.String(), p.String()
 }
 
 // submitBodyLocked renders the review tab: every question with the
@@ -673,9 +775,10 @@ func (d *QuestionDialog) submitBodyLocked(th tui.Theme, req *QuestionRequest, wi
 	// warning replaces the hint rather than being one the review tab
 	// never shows. Wrapped, and counted against the budget, for the same
 	// reason it is over there.
-	hintRows, hintColour := []string{clipLine(i18n.T("enter sends · tab to revisit · esc skips all"), width)}, th.Muted
+	hintRows := []string{"  " + clipLine(i18n.T("enter sends · tab/⇧tab to revisit · esc skips all"), width-2)}
+	hintColour := th.Muted
 	if d.confirmSkip {
-		hintRows, hintColour = wrapPlain(d.skipWarning(len(req.Questions)), width), th.Warning
+		hintRows, hintColour = wrapIndented(d.skipWarning(len(req.Questions)), width), th.Warning
 	}
 	// Budget the review against the same MaxRows the question tabs use:
 	// the strip above it and the blank + hint below it are already spent.
@@ -702,16 +805,15 @@ func (d *QuestionDialog) submitBodyLocked(th tui.Theme, req *QuestionRequest, wi
 // text the user has already read); the list keeps at least a few rows so
 // the caret or the selection always has somewhere to sit.
 //
-// hint is how many rows the hint (or the skip warning standing in for it)
-// actually takes: it was assumed to be one, which silently overran the
-// budget by a row on any terminal narrow enough to fold it. Caller holds mu.
-func (d *QuestionDialog) budgetLocked(qRows []string, listRows, chrome, hint int) (question []string, listBudget int) {
+// chrome is every body row that is neither the question nor the list —
+// the tab strip, the blanks, the label, the key legend. It used to be a
+// partial count with the rest hardcoded here, which silently overran the
+// budget by a row the first time one of those wrapped. Caller holds mu.
+func (d *QuestionDialog) budgetLocked(qRows []string, listRows, chrome int) (question []string, listBudget int) {
 	if d.MaxRows <= 0 || listRows <= 0 {
 		return qRows, listRows
 	}
-	// Fixed body chrome in either mode: the blank after the question and
-	// the hint below it, plus anything the tab strip already spent.
-	avail := d.MaxRows - 1 - max(hint, 1) - chrome
+	avail := d.MaxRows - chrome
 	if avail < 2 {
 		avail = 2
 	}
@@ -798,18 +900,39 @@ func optionWidth(width int) int {
 // wraps the same way, and the highlight covers every row of the
 // selected option so a fold still reads as one choice.
 func optionRowsOf(q core.UserQuestion, width int) (rows []string, owner []int) {
-	limit := optionWidth(width)
-	for i, row := range questionRows(q) {
+	all := questionRows(q)
+	// Every row is numbered, and 1-9 of them are also shortcuts. Numbering
+	// past 9 rather than stopping there because the number is a LABEL
+	// first — it is how the row below the fold is referred to, and a list
+	// that stops counting halfway reads as broken rather than as a hint
+	// about which ones are typeable.
+	lead := len(strconv.Itoa(len(all))) + 2 // "12. "
+	limit := optionWidth(width) - lead
+	if limit < 8 {
+		limit = 8
+	}
+	for i, row := range all {
+		num := strconv.Itoa(i + 1)
 		for n, wl := range wrapPlain(row, limit) {
-			pad := optionIndent
-			if n > 0 {
-				pad = optionContIndent
+			// Continuations align under the text, not under the number:
+			// a fold that lines up with the digits reads as another
+			// option whose number went missing.
+			pad := optionIndent + strings.Repeat(" ", lead)
+			if n == 0 {
+				pad = optionIndent + num + "." + strings.Repeat(" ", lead-len(num)-1)
 			}
 			rows = append(rows, pad+wl)
 			owner = append(owner, i)
 		}
 	}
 	return rows, owner
+}
+
+// pickable is how many of q's rows have a digit shortcut: all of them up
+// to 9. Zero when the question has no rows at all, so the legend can say
+// "↑/↓ pick" rather than promising a range that does not exist.
+func pickable(q core.UserQuestion) int {
+	return min(len(questionRows(q)), 9)
 }
 
 // ownerSpan reports the row range [from,to) that option occupies in the

@@ -28,23 +28,34 @@ type AskUserTool struct {
 // original one-question form still works.
 type askQuestion struct {
 	Question    string   `json:"question"`
+	Slug        string   `json:"slug,omitempty"`
 	Options     []string `json:"options,omitempty"`
 	AllowCustom bool     `json:"allow_custom,omitempty"`
 }
 
 type askArgs struct {
 	Question    string        `json:"question"`
+	Slug        string        `json:"slug,omitempty"`
 	Options     []string      `json:"options,omitempty"`
 	AllowCustom bool          `json:"allow_custom,omitempty"`
 	Questions   []askQuestion `json:"questions,omitempty"`
 }
 
+// slugDesc is shared by both shapes so the two cannot drift into
+// describing the same field differently.
+// The schema is a hand-written JSON literal, so a description may not
+// contain a double quote — it lands inside a JSON string and invalidates
+// the whole document. Use single quotes.
+const slugDesc = `Optional 1-3 word name for this question ('auth method', 'rollout order'), used where a front end has room for a label but not the whole question — the terminal shows it on the question's tab. Name the DECISION, not the answer. Optional, dropped if longer than 3 words or 24 characters, and never a substitute for a clear question.`
+
 const askSchema = `{"type":"object","properties":{` +
 	`"question":{"type":"string","description":"The question to ask the user. Be specific. Use this for a single question; use 'questions' to ask several at once."},` +
+	`"slug":{"type":"string","description":"` + slugDesc + `"},` +
 	`"options":{"type":"array","items":{"type":"string"},"description":"Optional multiple-choice answers. Omit for a free-form question."},` +
 	`"allow_custom":{"type":"boolean","description":"When options are given, also let the user type their own answer instead of picking one."},` +
 	`"questions":{"type":"array","maxItems":8,"description":"Ask several related questions in ONE interruption instead of stalling the turn once per question. The user sees them together and answers at their own pace before submitting. Prefer this whenever more than one thing is unclear.","items":{"type":"object","properties":{` +
 	`"question":{"type":"string","description":"The question to ask. Be specific."},` +
+	`"slug":{"type":"string","description":"` + slugDesc + ` Most useful here: a set is navigated by tab, and named tabs say what is behind each one."},` +
 	`"options":{"type":"array","items":{"type":"string"},"description":"Optional multiple-choice answers. Omit for a free-form question."},` +
 	`"allow_custom":{"type":"boolean","description":"When options are given, also let the user type their own answer instead of picking one."}` +
 	`},"required":["question"]}}` +
@@ -93,13 +104,19 @@ func (t *AskUserTool) Execute(ctx context.Context, raw json.RawMessage, progress
 func (a askArgs) questions() ([]core.UserQuestion, error) {
 	var qs []core.UserQuestion
 	if strings.TrimSpace(a.Question) != "" {
-		qs = append(qs, core.UserQuestion{Question: a.Question, Options: a.Options, AllowCustom: a.AllowCustom})
+		qs = append(qs, core.UserQuestion{
+			Question: a.Question, Slug: core.SanitizeSlug(a.Slug),
+			Options: a.Options, AllowCustom: a.AllowCustom,
+		})
 	}
 	for _, q := range a.Questions {
 		if strings.TrimSpace(q.Question) == "" {
 			return nil, fmt.Errorf("every entry in questions needs a question")
 		}
-		qs = append(qs, core.UserQuestion{Question: q.Question, Options: q.Options, AllowCustom: q.AllowCustom})
+		qs = append(qs, core.UserQuestion{
+			Question: q.Question, Slug: core.SanitizeSlug(q.Slug),
+			Options: q.Options, AllowCustom: q.AllowCustom,
+		})
 	}
 	if len(qs) == 0 {
 		return nil, fmt.Errorf("question is required")

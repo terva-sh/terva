@@ -276,7 +276,11 @@ type GrantScope struct {
 
 // AskQuestion is one question within an [AskRequest].
 type AskQuestion struct {
-	Question    string   `json:"question"`
+	Question string `json:"question"`
+	// Slug is the question's optional short name (see core.UserQuestion).
+	// Front ends that have room for a label but not a sentence — the
+	// TUI's tab strip — show it; the rest ignore it and lose nothing.
+	Slug        string   `json:"slug,omitempty"`
 	Options     []string `json:"options,omitempty"`
 	AllowCustom bool     `json:"allow_custom,omitempty"`
 }
@@ -304,7 +308,7 @@ type AskRequest struct {
 func NewAskRequest(askID string, qs []core.UserQuestion) AskRequest {
 	r := AskRequest{AskID: askID}
 	for _, q := range qs {
-		r.Questions = append(r.Questions, AskQuestion{Question: q.Question, Options: q.Options, AllowCustom: q.AllowCustom})
+		r.Questions = append(r.Questions, AskQuestion{Question: q.Question, Slug: q.Slug, Options: q.Options, AllowCustom: q.AllowCustom})
 	}
 	if len(r.Questions) > 0 {
 		r.Question = r.Questions[0].Question
@@ -323,7 +327,7 @@ func (r AskRequest) Set() []core.UserQuestion {
 	}
 	out := make([]core.UserQuestion, 0, len(r.Questions))
 	for _, q := range r.Questions {
-		out = append(out, core.UserQuestion{Question: q.Question, Options: q.Options, AllowCustom: q.AllowCustom})
+		out = append(out, core.UserQuestion{Question: q.Question, Slug: q.Slug, Options: q.Options, AllowCustom: q.AllowCustom})
 	}
 	return out
 }

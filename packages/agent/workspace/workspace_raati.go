@@ -818,6 +818,10 @@ func (w *Workspace) raatiAskConvener(ctx context.Context, s *wsSession, question
 			set = append(set, core.UserQuestion{
 				Question: i18n.T("The raati clerk could not answer this from the record — %s asks: %s\n\nAnswer from your own knowledge, or dismiss to leave it on the record as open.",
 					qs[i].Unit, qs[i].Question),
+				// The asking unit names the tab. These questions carry two
+				// paragraphs of framing each, so without a slug a docket of
+				// eight is eight anonymous numbers.
+				Slug:        qs[i].Unit,
 				AllowCustom: true,
 			})
 		}

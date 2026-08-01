@@ -25,17 +25,18 @@ func choiceLines(t *testing.T, d *QuestionDialog, th tui.Theme, width int) []str
 	rows := d.Render(th, width)
 	start := -1
 	for i, r := range rows {
-		if strings.Contains(widgets.StripANSIBytes(r), "choose") {
+		if strings.Contains(widgets.StripANSIBytes(r), "choose an answer") {
 			start = i + 1
 			break
 		}
 	}
 	if start < 0 {
-		t.Fatalf("no choose hint in render:\n%s", strings.Join(rows, "\n"))
+		t.Fatalf("no choose label in render:\n%s", strings.Join(rows, "\n"))
 	}
 	var out []string
 	for _, r := range rows[start:] {
-		if isFrameRuleLine(r) {
+		// The bare blank ends the option list; the key legend follows it.
+		if r == "" || isFrameRuleLine(r) {
 			break
 		}
 		out = append(out, r)
@@ -93,8 +94,10 @@ func TestQuestionDialogLongOptionWrapsAndKeepsHighlight(t *testing.T) {
 	for _, r := range first {
 		plain = append(plain, widgets.StripANSIBytes(r))
 	}
-	if got := strings.Join(strings.Fields(strings.Join(plain, " ")), " "); got != long {
-		t.Fatalf("wrapped option lost text:\n got %q\nwant %q", got, long)
+	// The rows carry the option's number now, so that is what comes back
+	// out of them.
+	if want, got := "1. "+long, strings.Join(strings.Fields(strings.Join(plain, " ")), " "); got != want {
+		t.Fatalf("wrapped option lost text:\n got %q\nwant %q", got, want)
 	}
 }
 
@@ -185,7 +188,7 @@ func TestQuestionDialogOptionTallerThanTheBandShowsItsHead(t *testing.T) {
 		t.Fatalf("body is %d rows, want <= %d:\n%s", body, maxRows, strings.Join(rendered, "\n"))
 	}
 	first := widgets.StripANSIBytes(choiceLines(t, d, th, width)[0])
-	if !strings.HasPrefix(strings.TrimSpace(first), "the first words") {
+	if !strings.HasPrefix(strings.TrimSpace(first), "1. the first words") {
 		t.Fatalf("window opened mid-answer; first option row is %q", first)
 	}
 }

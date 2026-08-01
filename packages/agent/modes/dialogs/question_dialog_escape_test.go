@@ -36,7 +36,7 @@ func TestQuestionDialogEscFromCustomAnswerReturnsToOptions(t *testing.T) {
 	for _, r := range "mine" {
 		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
 	}
-	if !strings.Contains(plainRender(d, 50), "type your answer") {
+	if !strings.Contains(plainRender(d, 50), "your answer:") {
 		t.Fatal("precondition: the custom row should have opened the answer field")
 	}
 
@@ -48,7 +48,7 @@ func TestQuestionDialogEscFromCustomAnswerReturnsToOptions(t *testing.T) {
 	if !strings.Contains(body, "alpha") || !strings.Contains(body, "beta") {
 		t.Fatalf("the option list did not come back:\n%s", body)
 	}
-	if !strings.Contains(body, "choose") {
+	if !strings.Contains(body, "choose an answer") {
 		t.Fatalf("still in the answer field after esc:\n%s", body)
 	}
 
@@ -76,7 +76,7 @@ func TestQuestionDialogAnswerFieldSaysHowToGoBack(t *testing.T) {
 	})
 	d.HandleKey(tui.Key{Kind: tui.KeyDown})
 	d.HandleKey(tui.Key{Kind: tui.KeyEnter})
-	if got := plainRender(d, 70); !strings.Contains(got, "esc returns to the options") {
+	if got := plainRender(d, 70); !strings.Contains(got, "esc back to options") {
 		t.Fatalf("the answer field does not offer a way back:\n%s", got)
 	}
 
@@ -84,7 +84,7 @@ func TestQuestionDialogAnswerFieldSaysHowToGoBack(t *testing.T) {
 	// claim otherwise — there esc still means skip.
 	d2 := NewQuestionDialog()
 	_ = ask1(d2, core.UserQuestion{Question: "Name?"})
-	if got := plainRender(d2, 70); strings.Contains(got, "returns to the options") {
+	if got := plainRender(d2, 70); strings.Contains(got, "back to options") {
 		t.Fatalf("an option-less question promises a list it does not have:\n%s", got)
 	}
 }

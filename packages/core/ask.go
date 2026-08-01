@@ -1,15 +1,40 @@
 package core
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // UserQuestion is one structured clarification the agent asks the user
 // mid-turn. Options, when non-empty, are presented as a multiple choice;
 // AllowCustom additionally lets the user type a free-form answer. With no
 // options the question is always free-form.
 type UserQuestion struct {
-	Question    string
+	Question string
+	// Slug is an optional 1-3 word name for the question, for front ends
+	// that must refer to it in less room than the question itself takes —
+	// the TUI's tab strip is one chip per question, and a chip can hold a
+	// name or a number but not a sentence. Front ends fall back to the
+	// position when it is empty, so it is never required and never the
+	// only way to tell two questions apart. [SanitizeSlug] bounds it.
+	Slug        string
 	Options     []string
 	AllowCustom bool
+}
+
+// SanitizeSlug bounds a model-supplied slug to something a chip can
+// hold: one line, single-spaced, at most three words and 24 columns.
+// Anything longer is dropped rather than clipped — half a name in a tab
+// strip is worse than a number, which at least says where you are.
+func SanitizeSlug(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return ""
+	}
+	if len(strings.Split(s, " ")) > 3 || len([]rune(s)) > 24 {
+		return ""
+	}
+	return s
 }
 
 // UserAnswer is the user's reply to one question. Answer holds the chosen

@@ -10,24 +10,33 @@ import (
 	"terva.sh/terva/packages/tui"
 )
 
-// answerLines returns the rendered rows between the "type your answer"
-// hint and the closing frame rule — i.e. the answer field itself.
+// answerLines returns the rendered rows between the "your answer:" label
+// and the blank that separates the field from the key legend — i.e. the
+// answer field itself. The field's own rows always carry the indent, so
+// the bare "" that ends them is unambiguous.
 func answerLines(t *testing.T, d *QuestionDialog, width int) []string {
+	t.Helper()
+	return listLinesAfter(t, d, width, "your answer:")
+}
+
+// listLinesAfter is the shared body-slicer: the rows between the label
+// row containing marker and the blank row that ends the list.
+func listLinesAfter(t *testing.T, d *QuestionDialog, width int, marker string) []string {
 	t.Helper()
 	rows := d.Render(tui.Theme{}, width)
 	start := -1
 	for i, r := range rows {
-		if strings.Contains(widgets.StripANSIBytes(r), "type your answer") {
+		if strings.Contains(widgets.StripANSIBytes(r), marker) {
 			start = i + 1
 			break
 		}
 	}
 	if start < 0 {
-		t.Fatalf("no answer prompt in render: %q", rows)
+		t.Fatalf("no %q label in render: %q", marker, rows)
 	}
 	var out []string
 	for _, r := range rows[start:] {
-		if isFrameRuleLine(r) {
+		if r == "" || isFrameRuleLine(r) {
 			break
 		}
 		out = append(out, widgets.StripANSIBytes(r))
