@@ -1073,10 +1073,39 @@ that doesn't support it answers with an error result.
 #### `list_sessions` / `read_session` (protocol 3)
 
 Read-only, project-scoped access to past session transcripts, so an
-extension can index prior conversations — e.g. a session-search store
-building an FTS index. `list_sessions` returns the active project's
-sessions; `read_session` returns one transcript flattened to role+text
-(the shape a text index wants, not the full tool-call structure).
+extension can index prior conversations. `list_sessions` returns the
+active project's sessions; `read_session` returns one transcript
+flattened to role+text.
+
+> **Cross-session search now ships in core as the `session_search` tool,
+> and a search extension built on this bridge is superseded by it.**
+>
+> The flattening is why. Role+text drops tool calls, their arguments, and
+> their results — on a measured coding session that is **2% of the
+> searchable bytes**, and the 98% dropped is where file paths, commands,
+> and command output live. Searching one real project for a filename
+> found **24 matches at full fidelity against 1** through this bridge,
+> and that one was incidental. The bridge also cannot see swarm
+> sub-agents at all: their transcripts live under the swarm state root,
+> which `list_sessions` never enumerates.
+>
+> The bridge is unchanged and still supported — it remains the right
+> surface for an extension that wants conversation *text* (topic
+> clustering, summarisation, export). It is the wrong surface for
+> recall, which is why that moved in-tree.
+>
+> The `session-search` extension is retired accordingly — it is in
+> `supersededExtensions`, so an installed copy is **skipped at load**
+> with a pointer to `terva ext remove session-search`, the same way
+> `git-worktree` and `memory` were retired. Nothing is lost by not
+> loading it: its state was an FTS index *derived* from the
+> transcripts, and core keeps no index, so there is no adoption step —
+> the transcripts were always the source of truth.
+>
+> Superseding keys on the EXTENSION name, not the tool name. A
+> third-party extension under a different name may still register a
+> tool called `session_search`; built-ins win that collision, so core's
+> stays live.
 
 ```json
 {"type":"list_sessions","id":"l1"}
