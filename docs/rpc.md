@@ -129,7 +129,9 @@ cached), `"warm"` (the `cache_aware_compaction` engine feature: the conversation
 own prompt prefix, so the transcript is served from cache), or
 `"warm_fallback_cold"`, which adds a `fallback_reason` — `tool_use` (the model had
 its tools live, as it must, and used one instead of summarizing),
-`rejected_too_large`, `error`, or `empty_summary`.
+`rejected_too_large`, `provider_unavailable` (the provider was down for the whole
+of the transient-retry ladder — a fact about the provider, not about the warm
+arm), `error`, or `empty_summary`.
 
 `usage` is the summarization call's own spend, summed across both attempts when a
 warm one fell back. **This is the only way to tell whether a warm compaction
@@ -254,7 +256,7 @@ Stream notifications during a `prompt` or `compact`. None carry an `id`.
 | `compact_done` | `summary` | Result of an explicit `compact` (summary text; empty on a no-op). Not terminal — a `done` follows |
 | `compact_start` | `text` | An automatic, policy-driven compaction began inside a `prompt` (`text` carries the reason) |
 | `compact_end` | optional `error` | The automatic compaction finished (before the prompt's `done`); empty `error` means success. Not terminal |
-| `stall` | `stall` (`axis`, `tool`, optional `detail`) | The stuck-loop detector nudged a repeating model (rung 1 of the escalation hatch). `axis` is `spin` (same call) or `churn` (same failure). Informational; the turn continues |
+| `stall` | `stall` (`axis`, `tool`, optional `detail`, optional `rung`) | The stuck-loop detector acted on a repeating model. `axis` is `spin` (same call) or `churn` (same failure). `rung` is what it did: absent/`1` nudged, `2` held off, `3` refused to dispatch the call, `4` ended the turn (`detail` then carries why). Informational, and the turn continues — except at `rung` 4, which is followed by `done` |
 | `escalation` | `escalation` (`reason`, `tool`, `from_model`, `to_provider`, `to_model`, `auto`, `disposition`, optional `detail`) | The hatch resolved a model escalation (rung 3). `disposition` is `switched`, `declined`, `stopped`, or `failed`; `detail` carries a failure's cause. Informational |
 | `ext_notify` | `extension`, `level`, `message` | An extension raised a note (its `notify` frame). RPC-specific, not a `core.WireEvent` |
 | `ext_display` | `extension`, `text` | An extension asked to show text (its `display` frame) |

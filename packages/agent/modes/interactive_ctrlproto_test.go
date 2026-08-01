@@ -439,6 +439,18 @@ func TestCarrierCompactLifecycle(t *testing.T) {
 	if i.statusErr == "" {
 		t.Fatal("failed compact_end should set statusErr")
 	}
+	// ...and takes the heads-up note down with it. The note announces work in
+	// progress; the compaction is over whichever way it ended. Stripping it only
+	// on success left "condensing history before retrying ..." rendered directly
+	// under "compaction failed", where it stayed until the next SUCCESSFUL
+	// compaction — so the pane claimed a compaction was running for as long as
+	// the session went on without one.
+	for _, note := range i.extNotes {
+		if strings.Contains(note, i18n.T(noteCondensingBeforeSend)) ||
+			strings.Contains(note, i18n.T(noteCondensingBeforeRetry)) {
+			t.Fatalf("the condensing note survived a failed compaction: %q", note)
+		}
+	}
 }
 
 // TestStartTurnCarrierDispatch: an idle dispatch claims the slot and Prompts

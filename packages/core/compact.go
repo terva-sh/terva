@@ -148,6 +148,13 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		fallbackReason string
 	)
 
+	// One transient-retry allowance for the WHOLE compaction, shared by both
+	// summarizers. See drainSummaryRetrying for why it is shared rather than
+	// per-strategy: a warm attempt that already burned the budget waiting out an
+	// overloaded provider must not hand the cold fallback a fresh one to burn
+	// against the same provider, at full price.
+	retries := 0
+
 	// The cache-aware path: summarize against the prefix the provider already
 	// holds. Only worth attempting when a prefix was actually dispatched —
 	// otherwise there is nothing warm to be aware of.
@@ -169,17 +176,18 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 			}
 		}
 
-		// Anything short of usable text falls through to the bespoke path below,
-		// and both failure modes are ordinary rather than exotic. The model can
-		// answer a summarization ask with a tool_use — its tools are still
-		// advertised, because withdrawing them would have invalidated the very
-		// cache we came for. And the request can simply not fit: the warm path
+		// Anything short of usable text — AFTER the transient ladder above has run
+		// its course — falls through to the bespoke path below, and both failure
+		// modes are ordinary rather than exotic. The model can answer a
+		// summarization ask with a tool_use — its tools are still advertised,
+		// because withdrawing them would have invalidated the very cache we came
+		// for. And the request can simply not fit: the warm path
 		// re-sends the whole transcript PLUS the live system and tools, making it
 		// slightly larger than the flattened cold prompt — so a compaction
 		// triggered by a context-overflow 413 is precisely the one most likely to
 		// overflow again. The fallback is not a safety net bolted onto the design;
 		// it is the second half of it.
-		s, u, stop, werr := a.drainSummary(ctx, prefix.client, warmCompactRequest(prefix, msgs, keepTail, midTurn), warmSink)
+		s, u, stop, werr := a.drainSummaryRetrying(ctx, prefix.client, warmCompactRequest(prefix, msgs, keepTail, midTurn), warmSink, &retries)
 		usage = usage.Add(u)
 		switch {
 		case werr == nil && s != "":
@@ -201,7 +209,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		// a full-price cold re-read of the whole conversation. That is the cost
 		// cache_aware_compaction (shipped on) exists to remove; this path now
 		// serves the warm arm's fallbacks and explicit opt-outs.
-		s, u, _, cerr := a.drainSummary(ctx, prefix.client, coldCompactRequest(prefix, transcript, midTurn), sink)
+		s, u, _, cerr := a.drainSummaryRetrying(ctx, prefix.client, coldCompactRequest(prefix, transcript, midTurn), sink, &retries)
 		usage = usage.Add(u)
 		if cerr != nil {
 			return CompactResult{}, cerr
@@ -406,6 +414,15 @@ func warmFallbackReason(stop provider.StopReason, err error) string {
 		if IsPayloadTooLargeError(err) || IsContextLengthError(err) {
 			return "rejected_too_large"
 		}
+		// The transient ladder is already exhausted by the time this runs (see
+		// drainSummaryRetrying), so an error that is STILL transient means the
+		// provider was down for the whole of it. That is a fact about the
+		// provider, not about the cache-aware strategy, and bucketing it as
+		// "error" would read in the A/B as the warm path failing.
+		var pe *provider.ProviderError
+		if (errors.As(err, &pe) && pe.Transient) || provider.IsTransportError(err) {
+			return "provider_unavailable"
+		}
 		return "error"
 	case stop == provider.StopToolUse:
 		return "tool_use"
@@ -454,6 +471,85 @@ func (a *Agent) drainSummary(ctx context.Context, client provider.Client, req pr
 		}
 	}
 	return strings.TrimSpace(sb.String()), usage, stop, err
+}
+
+// drainSummaryRetrying is drainSummary wrapped in the turn loop's
+// transient-failure ladder — the SAME canRetryError / retryDelay pair runLoop
+// uses, so the two cannot drift about what counts as transient or how long to
+// wait for it.
+//
+// It exists because compaction had no ladder at all, and the gap was worst
+// exactly where it hurt most. A provider overload ("Our servers are currently
+// overloaded. Please try again later.") reaches us as an in-stream error frame,
+// which is past the point doStreamWithRetry covers — that one retries only
+// failures that happen before the response headers. So the single class of
+// failure the wire protocol itself labels transient was the one class nothing
+// retried, and it killed compactions on the first try. The result is the worst
+// available outcome: the transcript stays at full size precisely when it was
+// too big, which is how a session ends up wedged against the context limit with
+// no way back down.
+//
+// retries is the allowance SHARED across a compaction's warm and cold attempts.
+// It counts retries actually TAKEN rather than attempts made, and that
+// distinction is what makes sharing safe: a warm attempt that fails
+// non-transiently — a tool_use answer, an oversize rejection — spends nothing,
+// so the cold fallback still gets the full budget it would have had.
+func (a *Agent) drainSummaryRetrying(ctx context.Context, client provider.Client, req provider.Request, sink func(delta string), retries *int) (summary string, usage provider.Usage, stop provider.StopReason, err error) {
+	for {
+		// Per-attempt, and deliberately distinct from the caller's own streamed
+		// flag: a stream that dies mid-summary has already put text in front of
+		// the user, and the next attempt's summary would read as a continuation
+		// of the abandoned one.
+		streamed := false
+		attemptSink := sink
+		if sink != nil {
+			attemptSink = func(delta string) {
+				if delta != "" {
+					streamed = true
+				}
+				sink(delta)
+			}
+		}
+
+		s, u, st, aerr := a.drainSummary(ctx, client, req, attemptSink)
+		// Accumulate across attempts, abandoned ones included. a.cost has
+		// already folded each attempt into the cumulative total, and
+		// SessionUsageDetail subtracts CompactResult.Usage back out of the
+		// last-turn delta — so under-reporting here hands the difference to the
+		// context gauge as phantom turn spend.
+		usage = usage.Add(u)
+		summary, stop, err = s, st, aerr
+
+		if aerr == nil || !a.canRetryError(aerr, *retries) {
+			return summary, usage, stop, err
+		}
+		delay := a.retryDelay(*retries, aerr)
+		// The compaction ladder's half of the retry record. It has no event
+		// sink to emit EvRetry on — only the text sink it is streaming the
+		// summary into — so the observer is the whole of its visibility, and
+		// without it a compaction that waits out a two-minute outage is
+		// indistinguishable from one that was mysteriously slow. Phase is what
+		// separates these from turn retries in the log: each of these carries
+		// the entire transcript.
+		a.fireRetry(RetryRecord{
+			Phase:    RetryPhaseCompaction,
+			Provider: providerOf(aerr),
+			Attempt:  *retries + 1, // 1-based, matching the turn ladder
+			Max:      a.MaxRetries,
+			Delay:    delay,
+			Err:      retryErrMsg(aerr),
+		})
+		*retries++
+		if streamed && sink != nil {
+			sink("\n\n" + i18n.T("[the summarizer was interrupted; retrying]") + "\n\n")
+		}
+		if sleepErr := sleepRetry(ctx, delay); sleepErr != nil {
+			// Cancelled while backing off. Report the cancellation rather than
+			// the provider error it was waiting out: the turn is over either
+			// way, and callers key off context.Canceled to stay quiet about it.
+			return summary, usage, stop, sleepErr
+		}
+	}
 }
 
 // The executed-actions ledger: a deterministic record of the state-changing tool
