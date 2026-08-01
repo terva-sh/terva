@@ -80,6 +80,24 @@ type SwarmSpawnTool struct {
 	// means the host doesn't track trust; the gate is skipped.
 	Trusted func() bool
 
+	// ConfirmUntrusted asks the USER whether to spawn into an untrusted
+	// workspace, and is the whole reason that case is no longer a flat
+	// refusal. Allowing runs the sub-agents degraded; refusing returns a
+	// tool error saying so, which is the model's cue to stop asking and
+	// let the user trust the workspace first.
+	//
+	// A host-injected closure for the same reason AllowBackend is one:
+	// this package cannot import build (that would cycle), so the host
+	// hands down a door onto its ConfirmGate. reason carries the gate's
+	// refusal text so the model can tell "the user said no" from "there
+	// was nobody to ask".
+	//
+	// Nil means this host has no interactive gate — headless, rpc, a
+	// sub-agent's own registry — and the old refusal-with-guidance stands.
+	// That is deliberate: a mode with no human attached must not block a
+	// turn waiting for one.
+	ConfirmUntrusted func(ctx context.Context, preview string) (allow bool, reason string)
+
 	// AllowBackend gates and validates the `backend` argument — a request to run
 	// the task on a NON-terva agent (see the worker package) instead of a native
 	// sub-agent. The host supplies it: this package cannot import the worker
@@ -210,11 +228,26 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	// stderr line buried in the child's own event log.
 	untrusted := t.Trusted != nil && !t.Trusted()
 	if untrusted && !a.AllowUntrusted {
-		// The advice has to name a fix that works right now. It used to offer
-		// "restart and accept the trust prompt", which was the only thing that
-		// worked while this gate read a launch-time snapshot — and which is now
-		// the slowest of three options. /trust applies to the running session.
-		return toolErr("swarm_spawn: this workspace is untrusted, so sub-agents would run WITHOUT its project extensions, skills, and context files. Ask the user to trust it — `/trust` in the TUI, the trust toggle in settings, or `terva trust` in a shell — then retry. It takes effect immediately; no restart. If the user explicitly wants degraded sub-agents instead, retry with allow_untrusted: true."), nil
+		// Ask the USER, not the model. This used to be a tool error whose
+		// text told the model to "ask the user to trust it" — and in a
+		// 17.5-hour session that hit it five times across 24 hours, the
+		// model relayed it exactly zero times: not one of its 195
+		// user-facing messages mentioned trust. A refusal only a human can
+		// clear cannot be delivered through a channel the human never
+		// reads, so it goes to the approval gate instead, where allowing
+		// means "run degraded" and refusing means "I would rather fix the
+		// trust".
+		if t.ConfirmUntrusted != nil {
+			allow, reason := t.ConfirmUntrusted(ctx, untrustedSpawnPreview)
+			if !allow {
+				return toolErr("swarm_spawn: " + untrustedDeclined(reason)), nil
+			}
+		} else {
+			// No gate wired (headless, rpc, a host with no confirmer). The
+			// advice has to name a fix that works right now: /trust applies
+			// to the running session, no restart.
+			return toolErr("swarm_spawn: this workspace is untrusted, so sub-agents would run WITHOUT its project extensions, skills, and context files. Ask the user to trust it — `/trust` in the TUI, the trust toggle in settings, or `terva trust` in a shell — then retry. It takes effect immediately; no restart. If the user explicitly wants degraded sub-agents instead, retry with allow_untrusted: true."), nil
+		}
 	}
 
 	persona := strings.TrimSpace(a.Persona)
@@ -402,4 +435,23 @@ func truncateTask(s string, n int) string {
 		return s
 	}
 	return s[:n-3] + "..."
+}
+
+// untrustedSpawnPreview is what the approval prompt shows. It has to carry
+// the whole decision on its own: the dialog gives the user a tool name and
+// this line, and the tool name alone ("swarm_spawn_untrusted") says nothing
+// about what allowing costs.
+const untrustedSpawnPreview = "workspace is untrusted — sub-agents would run WITHOUT its project extensions, skills and context files. Allow to spawn degraded; refuse and trust the workspace (/trust) to spawn with full context."
+
+// untrustedDeclined is the model's half of a refusal. It says what the user
+// chose so the model stops re-attempting the spawn — the failure mode this
+// whole change exists to fix was a model that hit the same wall five times —
+// and names allow_untrusted as the explicit override rather than leaving the
+// model to rediscover it.
+func untrustedDeclined(reason string) string {
+	msg := "the user declined to spawn sub-agents into this untrusted workspace"
+	if reason != "" {
+		msg += " (" + reason + ")"
+	}
+	return msg + ". Do NOT retry the spawn: either the user is about to trust the workspace (`/trust`, the settings toggle, or `terva trust` — it takes effect immediately, no restart) and you should wait for them to say so, or they want this work done in the main session instead. Retry only if the user explicitly asks for degraded sub-agents, and then pass allow_untrusted: true."
 }

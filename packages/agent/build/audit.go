@@ -61,6 +61,10 @@ const (
 	auditViaToolCall      = "tool_call"
 	auditViaHostToolCall  = "host_tool_call"
 	auditViaScriptBinding = "code_execution"
+	// The untrusted-spawn door: swarm_spawn asking the user whether to run
+	// sub-agents degraded. Outside the ladder like the two above, so it
+	// records its own line.
+	auditViaUntrustedSpawn = "untrusted_spawn"
 )
 
 type auditRecord struct {
