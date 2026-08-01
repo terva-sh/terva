@@ -1259,7 +1259,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setPermission(null)
   }, [])
 
-  const answer = useCallback((askID: string, answers: { answer: string }[]) => {
+  const answer = useCallback((askID: string, answers: { answer: string; note?: string }[]) => {
     // `answers` is the set, one per question in the order asked; `answer`
     // mirrors the first so a daemon built before question sets still
     // resolves a one-question ask instead of reading an empty reply.

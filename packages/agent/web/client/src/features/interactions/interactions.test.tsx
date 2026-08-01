@@ -154,4 +154,70 @@ describe('AskRequest', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send answers' }))
     expect(onAnswer).toHaveBeenCalledWith('a5', [{ answer: 'b' }, { answer: 'x' }])
   })
+  // A note is an addendum to a chosen option — "mostly this, but…" — and
+  // travels in its own field so the daemon can still tell WHICH option was
+  // picked. Folded into the answer string that distinction is gone.
+  it('sends a note alongside the chosen option', () => {
+    const onAnswer = vi.fn()
+    render(<AskRequest request={{ ask_id: 'a6', question: 'Choose', options: ['One', 'Two'] }} onAnswer={onAnswer} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add a note…' }))
+    fireEvent.input(screen.getByPlaceholderText(/note on your answer/), {
+      target: { value: 'mostly this, but check the limits' },
+    })
+    // A lone question answers on click UNTIL a note is open: the note has
+    // to go with the choice, so clicking an option now only selects it.
+    fireEvent.click(screen.getByRole('button', { name: 'Two' }))
+    expect(onAnswer).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(onAnswer).toHaveBeenCalledWith('a6', [
+      { answer: 'Two', note: 'mostly this, but check the limits' },
+    ])
+  })
+
+  it('omits an empty note rather than sending a blank field', () => {
+    const onAnswer = vi.fn()
+    render(<AskRequest request={{ ask_id: 'a7', question: 'Choose', options: ['One'] }} onAnswer={onAnswer} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add a note…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'One' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(onAnswer).toHaveBeenCalledWith('a7', [{ answer: 'One' }])
+  })
+
+  // Free text IS the user's own words; a note on it would be a second box
+  // for the same thing.
+  it('offers no note on a free-text question', () => {
+    render(<AskRequest request={{ ask_id: 'a8', question: 'Name?' }} onAnswer={() => {}} />)
+    expect(screen.queryByRole('button', { name: 'Add a note…' })).toBeNull()
+  })
+
+  it('keeps each question\'s note with its own answer in a set', () => {
+    const onAnswer = vi.fn()
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'a9',
+          question: 'One?',
+          questions: [
+            { question: 'One?', options: ['a', 'b'] },
+            { question: 'Two?', options: ['x', 'y'] },
+          ],
+        }}
+        onAnswer={onAnswer}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'a' }))
+    fireEvent.click(screen.getByRole('button', { name: 'y' }))
+    const noteButtons = screen.getAllByRole('button', { name: 'Add a note…' })
+    fireEvent.click(noteButtons[1])
+    fireEvent.input(screen.getByPlaceholderText(/note on your answer/), {
+      target: { value: 'only if the migration lands' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send answers' }))
+    expect(onAnswer).toHaveBeenCalledWith('a9', [
+      { answer: 'a' },
+      { answer: 'y', note: 'only if the migration lands' },
+    ])
+  })
 })

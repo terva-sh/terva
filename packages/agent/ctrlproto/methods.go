@@ -842,16 +842,20 @@ func CoreGrantScopes(scopes []GrantScope) []core.GrantScope {
 
 // Answer is the wire form of [core.UserAnswer] carried in [AnswerParams].
 type Answer struct {
-	Answer   string `json:"answer,omitempty"`
+	Answer string `json:"answer,omitempty"`
+	// Note is an addendum to a chosen option (see core.UserAnswer). Its
+	// own field, not text folded into Answer, so a reader can still tell
+	// which option was picked.
+	Note     string `json:"note,omitempty"`
 	Declined bool   `json:"declined,omitempty"`
 }
 
 // Core converts a wire Answer to the core type.
 func (a Answer) Core() core.UserAnswer {
-	return core.UserAnswer{Answer: a.Answer, Declined: a.Declined}
+	return core.UserAnswer{Answer: a.Answer, Note: a.Note, Declined: a.Declined}
 }
 
 // AnswerFromCore converts a core answer to its wire form.
 func AnswerFromCore(a core.UserAnswer) Answer {
-	return Answer{Answer: a.Answer, Declined: a.Declined}
+	return Answer{Answer: a.Answer, Note: a.Note, Declined: a.Declined}
 }

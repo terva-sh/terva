@@ -80,6 +80,20 @@ type questionDraft struct {
 	// directly (a question with no options) or by selecting the custom
 	// row.
 	typing bool
+	// noting is true when the open field is a NOTE on the highlighted
+	// option rather than an answer replacing it. The two are separate
+	// editors, not one with a flag: a user who types a custom answer,
+	// goes back, and then annotates an option must not find the custom
+	// text sitting in the note field, and a note must not be lost by
+	// visiting the custom row.
+	noting bool
+	// note holds the addendum, and noteFor is the option index it was
+	// written against. Bound to an option rather than to the question
+	// because a note is about a specific choice — "Postgres, but watch
+	// the connection limits" says nothing useful once the cursor moves
+	// to SQLite, so it applies only while that option is the selection.
+	note    *tui.Editor
+	noteFor int
 	// input is a real tui.Editor rather than a []rune buffer. The buffer
 	// version rendered as one unwrapped line, so an answer longer than
 	// the dialog ran off the right edge and out of sight, and it
@@ -140,7 +154,12 @@ func (d *QuestionDialog) reset(req *QuestionRequest) {
 	d.confirmSkip = false
 	d.drafts = make([]questionDraft, len(req.Questions))
 	for i, q := range req.Questions {
-		d.drafts[i] = questionDraft{input: tui.NewEditor(""), typing: len(q.Options) == 0}
+		d.drafts[i] = questionDraft{
+			input:   tui.NewEditor(""),
+			note:    tui.NewEditor(""),
+			noteFor: -1,
+			typing:  len(q.Options) == 0,
+		}
 	}
 	d.drafts[0].visited = true
 }
@@ -250,7 +269,7 @@ func (d *QuestionDialog) HandleKey(k tui.Key) bool {
 		if k.Kind == tui.KeyEsc && !d.onSubmitTabLocked(req) {
 			q := req.Questions[d.tab]
 			if dr := &d.drafts[d.tab]; dr.typing && len(q.Options) > 0 {
-				dr.typing = false
+				dr.typing, dr.noting = false, false
 				d.confirmSkip = false
 				d.mu.Unlock()
 				return false
@@ -304,16 +323,30 @@ func (d *QuestionDialog) HandleKey(k tui.Key) bool {
 	dr := &d.drafts[d.tab]
 
 	if dr.typing {
-		if dr.input == nil {
-			dr.input = tui.NewEditor("")
-		}
+		ed := dr.editor()
 		// The editor owns every editing key, including the modified-Enter
 		// newline chords; it reports submit only for a bare Enter.
-		if !dr.input.HandleKey(k) {
+		if !ed.HandleKey(k) {
 			d.mu.Unlock()
 			return false
 		}
-		answer := strings.TrimSpace(dr.input.SubmitValue())
+		// A note commits back to the option it annotates rather than
+		// standing in for it, so the answer is resolved the same way the
+		// review tab resolves it.
+		if dr.noting {
+			dr.typing = false
+			if len(req.Questions) == 1 {
+				ans := dr.answer(q)
+				d.advance()
+				d.mu.Unlock()
+				req.Resp <- []core.UserAnswer{ans}
+				return true
+			}
+			d.gotoTabLocked(d.tab + 1)
+			d.mu.Unlock()
+			return false
+		}
+		answer := strings.TrimSpace(ed.SubmitValue())
 		if len(req.Questions) == 1 {
 			if answer == "" {
 				// Empty submission: keep the prompt open rather than
@@ -346,6 +379,21 @@ func (d *QuestionDialog) HandleKey(k tui.Key) bool {
 		return false
 	}
 
+	// n annotates the highlighted option: "this one, but …". Not offered
+	// on the custom row, which already IS free text — a note on a note is
+	// nothing. The note is bound to the option it was written against, so
+	// moving the cursor elsewhere leaves it behind rather than quietly
+	// attaching it to a different answer.
+	if k.Kind == tui.KeyRune && (k.Rune == 'n' || k.Rune == 'N') && !customRow(q, dr.cursor) && len(q.Options) > 0 {
+		if dr.noteFor != dr.cursor {
+			dr.note = tui.NewEditor("")
+			dr.noteFor = dr.cursor
+		}
+		dr.typing, dr.noting = true, true
+		d.mu.Unlock()
+		return false
+	}
+
 	switch k.Kind {
 	case tui.KeyUp:
 		if dr.cursor > 0 {
@@ -358,15 +406,19 @@ func (d *QuestionDialog) HandleKey(k tui.Key) bool {
 	case tui.KeyEnter:
 		// The trailing row is the custom-answer affordance when allowed.
 		if customRow(q, dr.cursor) {
-			dr.typing = true
+			dr.typing, dr.noting = true, false
 			d.mu.Unlock()
 			return false
 		}
 		if len(req.Questions) == 1 {
-			answer := q.Options[dr.cursor]
+			// Through answer(), not by reading q.Options here: this was a
+			// second copy of the same resolution, and the copy is what
+			// dropped the note — the review tab composed choice + note
+			// while enter sent the bare option.
+			ans := dr.answer(q)
 			d.advance()
 			d.mu.Unlock()
-			req.Resp <- []core.UserAnswer{{Answer: answer}}
+			req.Resp <- []core.UserAnswer{ans}
 			return true
 		}
 		// In a set the highlight already IS the answer, so enter just
@@ -404,7 +456,9 @@ func (d *QuestionDialog) answersLocked(req *QuestionRequest) []core.UserAnswer {
 // highlighted option; free text lands on what was typed, and an empty
 // box is a decline for that question alone.
 func (dr questionDraft) answer(q core.UserQuestion) core.UserAnswer {
-	if dr.typing || len(q.Options) == 0 {
+	// A note is an addendum to a choice, so it never puts the draft into
+	// the free-text branch: the option is still the answer.
+	if (dr.typing && !dr.noting) || len(q.Options) == 0 {
 		text := ""
 		if dr.input != nil {
 			text = strings.TrimSpace(dr.input.SubmitValue())
@@ -417,7 +471,31 @@ func (dr questionDraft) answer(q core.UserQuestion) core.UserAnswer {
 	if dr.cursor < 0 || dr.cursor >= len(q.Options) {
 		return core.UserAnswer{Declined: true}
 	}
-	return core.UserAnswer{Answer: q.Options[dr.cursor]}
+	return core.UserAnswer{Answer: q.Options[dr.cursor], Note: dr.noteText()}
+}
+
+// noteText is the note as it applies right now: empty unless one was
+// written against the option the cursor is on. A note left behind on
+// another option is kept in the draft — going back to that option brings
+// it back — but it is not sent with a different answer.
+func (dr questionDraft) noteText() string {
+	if dr.note == nil || dr.noteFor != dr.cursor {
+		return ""
+	}
+	return strings.TrimSpace(dr.note.SubmitValue())
+}
+
+// editor is the field the open entry belongs to. Nil-safe: a draft that
+// was never armed still has to take a keypress without panicking.
+func (dr *questionDraft) editor() *tui.Editor {
+	target := &dr.input
+	if dr.noting {
+		target = &dr.note
+	}
+	if *target == nil {
+		*target = tui.NewEditor("")
+	}
+	return *target
 }
 
 // Render draws the dialog for the head request.
@@ -526,12 +604,20 @@ func (d *QuestionDialog) bodyLocked(th tui.Theme, width int) (lines []string, ca
 	)
 	if dr.typing {
 		label = i18n.T("your answer:")
-		listRows, focus, caretCol = answerRowsOf(dr.input, width)
+		field := dr.input
+		if dr.noting {
+			// Naming the option the note is attached to, because a note
+			// field that says only "note:" leaves the user to remember
+			// which row they were on — and the row is off screen now.
+			label = i18n.T("note on “%s”:", clipLine(optionAt(q, dr.noteFor), max(width/2, 12)))
+			field = dr.note
+		}
+		listRows, focus, caretCol = answerRowsOf(field, width)
 		caretCol += len(answerIndent)
 		focusEnd = focus + 1
 	} else {
 		label = i18n.T("choose an answer:")
-		listRows, owner = optionRowsOf(q, width)
+		listRows, owner = optionRowsOf(q, width, dr)
 		focus, focusEnd = ownerSpan(owner, dr.cursor)
 	}
 
@@ -633,6 +719,15 @@ func (d *QuestionDialog) keyRows(req *QuestionRequest, q core.UserQuestion, dr q
 			parts = append(parts, i18n.T("enter next"))
 		} else {
 			parts = append(parts, i18n.T("enter answers"))
+		}
+		// Only where it does something: the custom row is already free
+		// text, so there is nothing there for a note to add.
+		if len(q.Options) > 0 && !customRow(q, dr.cursor) {
+			if dr.noteText() != "" {
+				parts = append(parts, i18n.T("n edits note"))
+			} else {
+				parts = append(parts, i18n.T("n adds note"))
+			}
 		}
 	}
 	if set {
@@ -770,6 +865,15 @@ func (d *QuestionDialog) submitBodyLocked(th tui.Theme, req *QuestionRequest, wi
 			}
 			lines = append(lines, pad+th.FG256(colour, wl))
 		}
+		// The note is listed under its answer, not merged into it: this
+		// tab is where the set is checked before it is sent, and merging
+		// them would hide the one part the user wrote by hand.
+		for _, wl := range wrapPlain(ans.Note, width-10) {
+			if ans.Note == "" {
+				break
+			}
+			lines = append(lines, "       ↳ "+th.FG256(th.Muted, wl))
+		}
 	}
 	// Same substitution as the question tabs: esc arms here too, so the
 	// warning replaces the hint rather than being one the review tab
@@ -899,8 +1003,9 @@ func optionWidth(width int) int {
 // The question text and the typed answer already wrap; the option list
 // wraps the same way, and the highlight covers every row of the
 // selected option so a fold still reads as one choice.
-func optionRowsOf(q core.UserQuestion, width int) (rows []string, owner []int) {
+func optionRowsOf(q core.UserQuestion, width int, dr questionDraft) (rows []string, owner []int) {
 	all := questionRows(q)
+	note := dr.noteText()
 	// Every row is numbered, and 1-9 of them are also shortcuts. Numbering
 	// past 9 rather than stopping there because the number is a LABEL
 	// first — it is how the row below the fold is referred to, and a list
@@ -924,8 +1029,33 @@ func optionRowsOf(q core.UserQuestion, width int) (rows []string, owner []int) {
 			rows = append(rows, pad+wl)
 			owner = append(owner, i)
 		}
+		// A note rides under the option it annotates, owned by it — so it
+		// travels with the selection through the window and wears the
+		// same highlight. An answer the user has added something to must
+		// look different from one they merely picked, or the note is
+		// invisible until the submit tab.
+		if note != "" && i == dr.noteFor {
+			for n, wl := range wrapPlain(note, limit-2) {
+				mark := "↳ "
+				if n > 0 {
+					mark = "  "
+				}
+				rows = append(rows, optionIndent+strings.Repeat(" ", lead)+mark+wl)
+				owner = append(owner, i)
+			}
+		}
 	}
 	return rows, owner
+}
+
+// optionAt names option i, or "" when i is out of range — the label the
+// note field puts in its own heading.
+func optionAt(q core.UserQuestion, i int) string {
+	rows := questionRows(q)
+	if i < 0 || i >= len(rows) {
+		return ""
+	}
+	return rows[i]
 }
 
 // pickable is how many of q's rows have a digit shortcut: all of them up

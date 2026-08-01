@@ -141,9 +141,19 @@ func askResult(qs []core.UserQuestion, answers []core.UserAnswer) core.ToolResul
 				Details: map[string]any{"asked": true, "declined": true},
 			}
 		}
+		text := "User answered: " + answers[0].Answer
+		details := map[string]any{"asked": true, "answer": answers[0].Answer}
+		// The note is rendered on its own line, and labelled. Appended to
+		// the answer it would read as part of the option the user picked,
+		// which is the one reading it must not have: the choice is what to
+		// act on, the note is what to account for while doing it.
+		if note := answers[0].Note; note != "" {
+			text += "\nTheir note on that answer: " + note
+			details["note"] = note
+		}
 		return core.ToolResult{
-			Content: []provider.Content{provider.TextBlock{Text: "User answered: " + answers[0].Answer}},
-			Details: map[string]any{"asked": true, "answer": answers[0].Answer},
+			Content: []provider.Content{provider.TextBlock{Text: text}},
+			Details: details,
 		}
 	}
 
@@ -158,12 +168,19 @@ func askResult(qs []core.UserQuestion, answers []core.UserAnswer) core.ToolResul
 			sb.WriteString("(declined)")
 		} else {
 			sb.WriteString(answers[i].Answer)
+			if answers[i].Note != "" {
+				sb.WriteString("\n   note: " + answers[i].Note)
+			}
 		}
-		details = append(details, map[string]any{
+		entry := map[string]any{
 			"question": q.Question,
 			"answer":   answers[i].Answer,
 			"declined": answers[i].Declined,
-		})
+		}
+		if answers[i].Note != "" {
+			entry["note"] = answers[i].Note
+		}
+		details = append(details, entry)
 	}
 	if declined > 0 {
 		sb.WriteString("\n\nFor each question marked (declined), proceed with your best judgment and state the assumption you made.")

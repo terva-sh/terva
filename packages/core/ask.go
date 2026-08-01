@@ -41,8 +41,17 @@ func SanitizeSlug(s string) string {
 // option or the typed text; Declined is true when the user dismissed the
 // prompt without answering (the agent should proceed with its best
 // judgment, not block).
+//
+// Note is an addendum attached to a CHOSEN option — "this one, but watch
+// the connection limits" — and is deliberately a separate field rather
+// than text folded into Answer. Folded in, the reader can no longer tell
+// "the user chose Postgres" from "the user wrote a sentence containing
+// the word Postgres", which is exactly the distinction that makes the
+// choice actionable. A front end that has no way to attach one simply
+// leaves it empty; nothing downstream requires it.
 type UserAnswer struct {
 	Answer   string
+	Note     string
 	Declined bool
 }
 
