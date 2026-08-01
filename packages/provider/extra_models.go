@@ -6,19 +6,18 @@ package provider
 //   - openai-responses: terva-specific provider id for the public OpenAI
 //     Responses API (api.openai.com/v1/responses). Separate from
 //     `openai` (Chat Completions) and `openai-codex` (ChatGPT subscription).
-//   - kimi/kimi-k2-thinking: matches the Anthropic-Messages endpoint
-//     at api.kimi.com/coding; not present in the bulk builtin file
-//     because the `kimi` provider lives in models.go alongside the
-//     other curated providers.
+//
+// kimi/kimi-k2-thinking used to live here too, on the stated grounds that it
+// was "not present in the bulk builtin file". It was — and catalog_builtin.go's
+// own header said the reverse, that curated providers are not duplicated into
+// it. Both comments described the arrangement each file wanted rather than the
+// one that existed, and which copy `FindModel` returned came down to the
+// alphabetical order of two init functions. The row is curated in models.go
+// now, with its four siblings.
 
 func init() { Catalog = append(Catalog, supplementCatalog...) }
 
 var supplementCatalog = []Model{
-	// ----- kimi (anthropic-messages on api.kimi.com/coding) -----
-	{Provider: "kimi", ID: "kimi-k2-thinking", DisplayName: "Kimi K2 Thinking",
-		ContextWindow: 262144, MaxOutput: 32000, Reasoning: true,
-		BaseURL: "https://api.kimi.com/coding"},
-
 	// ----- openai-responses (public OpenAI Responses API) -----
 	{Provider: "openai-responses", ID: "gpt-5", DisplayName: "GPT-5 (Responses)",
 		ContextWindow: 400000, MaxOutput: 128000, Reasoning: true,

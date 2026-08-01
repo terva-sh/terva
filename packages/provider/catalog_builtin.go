@@ -223,7 +223,9 @@ var builtinCatalog = []Model{
 	{Provider: "huggingface", ID: "zai-org/GLM-5", DisplayName: "GLM-5", ContextWindow: 202752, MaxOutput: 131072, Reasoning: true, PriceInput: 1, PriceOutput: 3.2, PriceCacheRead: 0.2, BaseURL: "https://router.huggingface.co/v1"},
 	{Provider: "huggingface", ID: "zai-org/GLM-5.1", DisplayName: "GLM-5.1", ContextWindow: 202752, MaxOutput: 131072, Reasoning: true, PriceInput: 1, PriceOutput: 3.2, PriceCacheRead: 0.2, BaseURL: "https://router.huggingface.co/v1"},
 	// ----- kimi -----
-	{Provider: "kimi", ID: "kimi-k2-thinking", DisplayName: "Kimi K2 Thinking", ContextWindow: 262144, MaxOutput: 32768, Reasoning: true, PriceInput: 0, PriceOutput: 0, PriceCacheRead: 0, BaseURL: "https://api.kimi.com/coding"},
+	// The kimi rows are curated in models.go (see the header above): the
+	// provider is one of the seed set, and its k2-thinking row used to be
+	// duplicated here in violation of that rule.
 	// ----- minimax -----
 	{Provider: "minimax", ID: "MiniMax-M2.7", DisplayName: "MiniMax-M2.7", ContextWindow: 204800, MaxOutput: 131072, Reasoning: true, PriceInput: 0.3, PriceOutput: 1.2, PriceCacheRead: 0.06, PriceCacheWrite: 0.375, BaseURL: "https://api.minimax.io/anthropic"},
 	{Provider: "minimax", ID: "MiniMax-M2.7-highspeed", DisplayName: "MiniMax-M2.7-highspeed", ContextWindow: 204800, MaxOutput: 131072, Reasoning: true, PriceInput: 0.6, PriceOutput: 2.4, PriceCacheRead: 0.06, PriceCacheWrite: 0.375, BaseURL: "https://api.minimax.io/anthropic"},

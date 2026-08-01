@@ -84,6 +84,27 @@ type Model struct {
 	// global level. Some endpoints (Kimi K3) silently downgrade to an older model
 	// when no thinking is sent, so their catalog rows set this to "high".
 	DefaultReasoning string
+
+	// DisplayNameSet marks a DisplayName the operator chose in models.json
+	// (`name`), as opposed to one the catalog or live discovery supplied.
+	// The distinction is what lets a surface that shows the raw id — the
+	// status bar, the picker's id column — swap in the operator's name
+	// WITHOUT also swapping in catalog names, which run longer than the ids
+	// they'd replace ("Claude Sonnet 4.5 (latest)" vs claude-sonnet-4-5).
+	// Set by applyUserOverrides; never by the catalog or live layers.
+	DisplayNameSet bool
+}
+
+// Label is the model's name for a surface that would otherwise print the
+// raw id: the operator's models.json `name` when they set one, the id
+// otherwise. Catalog display names deliberately do NOT win here — see
+// DisplayNameSet. Surfaces that show name and id side by side (the picker's
+// second column, `terva models`) want DisplayName directly instead.
+func (m Model) Label() string {
+	if m.DisplayNameSet && m.DisplayName != "" {
+		return m.DisplayName
+	}
+	return m.ID
 }
 
 // EffectiveContextWindow is the window used for auto-compaction: the
@@ -269,24 +290,59 @@ var Catalog = []Model{
 	// model default (not a hardcoded branch) keeps K3 answering as K3
 	// unless the user sets a global level. k3-256k is the same model
 	// behind a 256k window instead of 1M.
+	//
+	// PRICES ARE THE MOONSHOT PLATFORM'S LIST RATES, not what a Kimi Code
+	// subscriber is billed — which is nothing per token. That is deliberate
+	// and it is what every other subscription provider here does: the
+	// openai-codex rows carry OpenAI's list prices, and the status bar
+	// renders the result as "$0.529 ~$0.71/hr (sub)" — an estimate of what
+	// the session WOULD have cost, with "(sub)" saying no real money moved.
+	//
+	// These rows carried explicit zeros until 2026-07-30, on the premise that
+	// a subscription has no price. The result was "$0.000 (sub)" on every
+	// Kimi session — the badge with nothing to badge, and the one provider
+	// where the readout said nothing. Prices mirror the first-party
+	// moonshotai rows for the same models (catalog_builtin.go), which is the
+	// only published rate either model has.
+	//
+	// PriceCacheWrite is deliberately unset, as on every moonshotai row:
+	// Moonshot publishes a cache-hit rate and no separate cache-WRITE rate,
+	// and no observed kimi response has ever reported cache_creation tokens.
+	// If one ever does, this is the field that needs a source — leaving it
+	// zero would price cache writes as free and overstate what caching saved.
 	{
 		Provider: "kimi", ID: "k3", DisplayName: "Kimi K3",
 		ContextWindow: 1000000, MaxOutput: 32768, Reasoning: true,
 		DefaultReasoning: "high",
-		PriceInput:       0, PriceOutput: 0, PriceCacheRead: 0,
+		PriceInput:       3, PriceOutput: 15, PriceCacheRead: 0.3,
 		BaseURL: "https://api.kimi.com/coding",
 	},
 	{
 		Provider: "kimi", ID: "k3-256k", DisplayName: "Kimi K3 256k",
 		ContextWindow: 262144, MaxOutput: 32768, Reasoning: true,
 		DefaultReasoning: "high",
-		PriceInput:       0, PriceOutput: 0, PriceCacheRead: 0,
+		PriceInput:       3, PriceOutput: 15, PriceCacheRead: 0.3,
 		BaseURL: "https://api.kimi.com/coding",
 	},
 	{
+		// The K2-generation rows. kimi-for-coding is the plan's legacy id and
+		// has no published rate of its own; it is priced as K2 Thinking, its
+		// generation-mate on the same endpoint and window. A proxy, and said
+		// so — the same treatment moonshotai/k3-256k already gets.
 		Provider: "kimi", ID: "kimi-for-coding", DisplayName: "Kimi For Coding",
 		ContextWindow: 262144, MaxOutput: 32768, Reasoning: true,
-		PriceInput: 0, PriceOutput: 0, PriceCacheRead: 0,
+		PriceInput: 0.6, PriceOutput: 2.5, PriceCacheRead: 0.15,
+		BaseURL: "https://api.kimi.com/coding",
+	},
+	{
+		// Curated here rather than in the two places it used to sit. It was
+		// listed in BOTH catalog_builtin.go and extra_models.go, each with a
+		// comment asserting it was not in the other; which of the two won was
+		// down to the alphabetical order of their init functions. Its four
+		// siblings live here, so it does too.
+		Provider: "kimi", ID: "kimi-k2-thinking", DisplayName: "Kimi K2 Thinking",
+		ContextWindow: 262144, MaxOutput: 32768, Reasoning: true,
+		PriceInput: 0.6, PriceOutput: 2.5, PriceCacheRead: 0.15,
 		BaseURL: "https://api.kimi.com/coding",
 	},
 
@@ -703,4 +759,40 @@ func ComputeCost(m Model, u Usage) float64 {
 		float64(u.OutputTokens)*m.PriceOutput/per +
 		float64(u.CacheReadTokens)*m.PriceCacheRead/per +
 		float64(u.CacheWriteTokens)*m.PriceCacheWrite/per
+}
+
+// CacheSavings returns what the prompt cache was worth on this response:
+// the prompt billed at full input price, minus the prompt as actually
+// billed. Negative when cache writes outweigh the reads they enabled.
+//
+// A model with no cache pricing (PriceCacheRead and PriceCacheWrite both
+// zero) returns 0 rather than the full prompt price. Free reads would
+// otherwise report the whole prompt as "saved" on every local ollama turn,
+// where the honest answer is that nothing was billed and nothing was saved.
+func CacheSavings(m Model, u Usage) float64 {
+	if m.PriceCacheRead == 0 && m.PriceCacheWrite == 0 {
+		return 0
+	}
+	const per = 1_000_000.0
+	uncached := float64(u.PromptTokens()) * m.PriceInput / per
+	billed := float64(u.InputTokens)*m.PriceInput/per +
+		float64(u.CacheReadTokens)*m.PriceCacheRead/per +
+		float64(u.CacheWriteTokens)*m.PriceCacheWrite/per
+	return uncached - billed
+}
+
+// ApplyCost stamps both money fields on a usage record from the model that
+// produced it. The single place a decoder prices a response.
+//
+// It exists so the two stay together. CacheSavedUSD can only be computed
+// here — the model is in scope, and by the time the usage row is read back
+// the price sheet that applied to it is gone (a session switches models;
+// the row records no model). A decoder that set CostUSD and forgot the
+// savings would silently report a session as having saved nothing, so
+// TestEveryProviderPricesThroughApplyCost holds every decoder to this door
+// — and finds a new one by what it assigns, not by a list someone has to
+// remember to extend.
+func ApplyCost(m Model, u *Usage) {
+	u.CostUSD = ComputeCost(m, *u)
+	u.CacheSavedUSD = CacheSavings(m, *u)
 }

@@ -1288,7 +1288,32 @@ func unionStrings(a, b []string) []string {
 }
 
 // AuthStoreFor returns the auth.Store backed by AuthPath().
-func AuthStoreFor() *auth.Store { return auth.NewStore(AuthPath()) }
+//
+// One Store per path, shared. A Store serializes its writers with a mutex it
+// OWNS, so minting a fresh one per call — which this used to do — handed every
+// caller a private lock and ordered nothing between them: two goroutines
+// refreshing two providers' tokens each read the file, each changed their own
+// field, and each wrote the whole document back over the other's work.
+//
+// Keyed by path because TERVA_HOME is redirectable (project scoping, tests):
+// two paths are two files and must not share a lock, and a test that points
+// TERVA_HOME somewhere new must not inherit the previous home's Store.
+var (
+	authStoresMu sync.Mutex
+	authStores   = map[string]*auth.Store{}
+)
+
+func AuthStoreFor() *auth.Store {
+	path := AuthPath()
+	authStoresMu.Lock()
+	defer authStoresMu.Unlock()
+	if s, ok := authStores[path]; ok {
+		return s
+	}
+	s := auth.NewStore(path)
+	authStores[path] = s
+	return s
+}
 
 func KimiCLIFallbackDisabled() bool {
 	_, err := os.Stat(KimiCLIFallbackDisabledPath())
@@ -1373,55 +1398,79 @@ func LoadOAuthToken(providerName string) *auth.OAuthToken {
 	return nil
 }
 
+// OAuthProviderFor maps a stored-credential name to the flow that minted it.
+// Providers with no OAuth route return false rather than an error, so a caller
+// sweeping every stored credential can skip them without special-casing.
+func OAuthProviderFor(providerName string) (auth.OAuthProvider, bool) {
+	switch providerName {
+	case "anthropic":
+		return auth.AnthropicOAuth, true
+	case "openai":
+		return auth.OpenAIOAuth, true
+	case "kimi":
+		return auth.KimiOAuth, true
+	}
+	return auth.OAuthProvider{}, false
+}
+
 // RefreshIfExpired returns a usable OAuth token for the given provider,
-// refreshing it synchronously when it's past (or near) expiry. The
-// refreshed token is persisted to auth.json.
+// refreshing it when it has entered its refresh window — which is well BEFORE
+// expiry (auth.OAuthToken.StaleFor), so a refresh normally happens with hours
+// of the old token still valid. That margin is what a failed attempt has left
+// to retry in.
 //
-// Failures return the original token unchanged — the caller then makes
-// a request with the stale access_token, which will 401. That's still
-// better than crashing at credential-resolution time.
+// The refresh runs under the auth file lock and re-reads the stored token after
+// acquiring it, so several instances hitting this at once cost one refresh call
+// between them rather than one each. See auth.Store.RefreshOAuth for why that
+// is a correctness property and not just courtesy.
+//
+// A failure returns the error. It does NOT return the stale token as usable:
+// an access token past its expiry authenticates nothing, so handing it back
+// only moves the failure to the provider, several layers away from the login
+// that lapsed. Inside the refresh window but not yet expired, the current token
+// still works and comes back with the error attached.
 func RefreshIfExpired(providerName string, tok *auth.OAuthToken) (*auth.OAuthToken, error) {
 	if tok == nil {
 		return &auth.OAuthToken{}, fmt.Errorf("nil token")
 	}
-	if !tok.Expired() {
+	if !tok.NeedsRefresh() {
 		return tok, nil
 	}
 	if tok.RefreshToken == "" {
 		return tok, fmt.Errorf("%s oauth token expired and no refresh_token available — run /login again", providerName)
 	}
-
-	var op auth.OAuthProvider
-	switch providerName {
-	case "anthropic":
-		op = auth.AnthropicOAuth
-	case "openai":
-		op = auth.OpenAIOAuth
-	case "kimi":
-		op = auth.KimiOAuth
-	default:
+	op, ok := OAuthProviderFor(providerName)
+	if !ok {
 		return tok, fmt.Errorf("unknown provider %q", providerName)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	next, err := op.Refresh(ctx, tok.RefreshToken)
+	next, err := AuthStoreFor().RefreshOAuth(providerName, func(cur *auth.OAuthToken) (*auth.OAuthToken, error) {
+		if cur.RefreshToken == "" {
+			return nil, fmt.Errorf("no refresh_token available — run /login again")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		minted, err := op.Refresh(ctx, cur.RefreshToken)
+		if err != nil {
+			return nil, err
+		}
+		// Preserve the refresh token if the server omitted it (Anthropic often
+		// does). A server that DID send one has rotated it, and the old one is
+		// spent — which is exactly why this must not be racing another instance.
+		if minted.RefreshToken == "" {
+			minted.RefreshToken = cur.RefreshToken
+		}
+		// Carry over account id (openai) / id_token across refreshes.
+		if minted.AccountID == "" {
+			minted.AccountID = cur.AccountID
+		}
+		if minted.IDToken == "" {
+			minted.IDToken = cur.IDToken
+		}
+		return minted, nil
+	})
 	if err != nil {
-		return tok, fmt.Errorf("refresh %s: %w", providerName, err)
-	}
-	// Preserve the refresh token if the server omitted it (Anthropic often does).
-	if next.RefreshToken == "" {
-		next.RefreshToken = tok.RefreshToken
-	}
-	// Carry over account id (openai) / id_token across refreshes.
-	if next.AccountID == "" {
-		next.AccountID = tok.AccountID
-	}
-	if next.IDToken == "" {
-		next.IDToken = tok.IDToken
-	}
-	if err := AuthStoreFor().SetOAuth(providerName, *next); err != nil {
-		return next, fmt.Errorf("persist refreshed token: %w", err)
+		return next, fmt.Errorf("refresh %s: %w", providerName, err)
 	}
 	return next, nil
 }

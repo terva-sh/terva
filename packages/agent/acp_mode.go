@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/acp"
+	"terva.sh/terva/packages/agent/authrefresh"
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extensions"
@@ -38,6 +39,16 @@ import (
 // cancels the in-flight turn (and any outstanding permission), and one turn
 // runs at a time per session.
 func runACPMode(ctx context.Context, args build.Args, version string) error {
+	// acp.Serve runs the editor's connection for as long as the editor keeps it
+	// open — a session map, turns, and a closeSessions teardown on disconnect —
+	// so its stored subscriptions age exactly like the TUI's and the web
+	// daemon's. Binding core.Agent directly rather than through the workspace,
+	// it does not inherit the refresher NewWorkspace starts, so it starts its
+	// own. Reported on stderr: ACP owns stdout for the JSON-RPC framing, and a
+	// stray line there is a protocol error, not a message.
+	defer authrefresh.Start(ctx, func(provider string, err error) {
+		fmt.Fprintf(os.Stderr, "terva: %s login expired and could not be refreshed (%v) — sign in again with /login\n", provider, err)
+	})()
 	factory := &acpFactory{ctx: ctx, args: args, version: version}
 	return acp.Serve(ctx, os.Stdin, os.Stdout, factory, acp.AgentInfo{
 		Name:    "terva",
@@ -525,11 +536,20 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// editor can switch this session's model, recordSwap below moves args with
 	// it, and a struct holding a launch-time copy would re-resolve the model the
 	// session started on. See LiveToolSet.Args.
+	// The memory tool holds this session's bound stores. Captured once, outside
+	// the closure: a fresh Resolve mints fresh stores, and adopting those would
+	// leave the model writing facts nothing reads. Nil when memory is off.
+	memTool, _ := r.ToolRegistry["memory"].(*tools.MemoryTool)
+	// Captured once, for the same reason as memTool: a rebuild's fresh tracker
+	// would forget every file the model has read.
+	fileState := r.Files()
 	rebuildTools := func() {
 		build.LiveToolSet{
 			Args:     args,
 			ReadOnly: roSet,
 			Tasks:    r.Tasks,
+			Memory:   memTool,
+			Files:    fileState,
 			Sandbox:  r.Sandbox,
 			Ext:      extMgr,
 			MCP:      mcpAdapter,

@@ -159,7 +159,7 @@ func (m *Manager) Create(env Env, args CreateArgs) (*CreateResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lock repo: %w", err)
 	}
-	defer lk.release()
+	defer lk.Release()
 
 	reg, err := loadRegistry(r)
 	if err != nil {
@@ -306,7 +306,7 @@ func (m *Manager) Claim(env Env, args ClaimArgs) (*ClaimResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lock repo: %w", err)
 	}
-	defer lk.release()
+	defer lk.Release()
 
 	reg, err := loadRegistry(r)
 	if err != nil {
@@ -380,7 +380,7 @@ func (m *Manager) Release(env Env, args ReleaseArgs) (*ReleaseResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lock repo: %w", err)
 	}
-	defer lk.release()
+	defer lk.Release()
 
 	reg, err := loadRegistry(r)
 	if err != nil {
@@ -471,7 +471,7 @@ func (m *Manager) List(env Env, filter ListFilter) (*ListResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lock repo: %w", err)
 	}
-	defer lk.release()
+	defer lk.Release()
 
 	reg, err := loadRegistry(r)
 	if err != nil {
@@ -604,7 +604,7 @@ func (m *Manager) Remove(env Env, args RemoveArgs) (*RemoveResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lock repo: %w", err)
 	}
-	defer lk.release()
+	defer lk.Release()
 
 	reg, err := loadRegistry(r)
 	if err != nil {
@@ -704,7 +704,7 @@ func (m *Manager) Collect(env Env) (*CollectResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lock repo: %w", err)
 	}
-	defer lk.release()
+	defer lk.Release()
 
 	reg, err := loadRegistry(r)
 	if err != nil {

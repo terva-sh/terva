@@ -40,9 +40,16 @@ func TestKimiK3256kMirrorsK3ExceptWindow(t *testing.T) {
 	}
 }
 
-// The Moonshot platform (global and CN) also serves k3-256k. Unlike the
-// kimi (Kimi Code) rows these are pay-per-token, so the rows must carry
-// K3's published pricing rather than the subscription's zeros.
+// The Moonshot platform (global and CN) also serves k3-256k, pay-per-token, so
+// the rows must carry K3's published pricing.
+//
+// This comment used to end "rather than the subscription's zeros", which is
+// where the Kimi Code readout lost its number: the zeros on the kimi rows were
+// not an omission but a stated position, and the position was wrong. A
+// subscription's cost readout is an estimate of what the tokens WOULD have
+// cost — that is what "(sub)" qualifies, and what openai-codex has always
+// shown. The kimi rows carry these same rates now; see
+// TestKimiCodeRowsCarryTheMoonshotListPrice, which pins them to this one.
 func TestMoonshotK3256kRows(t *testing.T) {
 	withCatalogState(t)
 	ResetCatalogLayers()

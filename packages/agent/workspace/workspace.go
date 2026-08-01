@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/attach"
+	"terva.sh/terva/packages/agent/authrefresh"
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
@@ -164,6 +165,23 @@ type Workspace struct {
 	// overrides it via SetDiag — a stray stderr write would corrupt the
 	// full-screen alternate-screen UI. Always non-nil after NewWorkspace.
 	diag func(string)
+
+	// authRefreshStop halts the proactive OAuth refresher (see NewWorkspace).
+	authRefreshStop func()
+}
+
+// diagf reports a host-side diagnostic, reading the sink UNDER THE LOCK.
+//
+// The other diag call sites run on the request path, after SetDiag has long
+// since landed. The refresher does not: it fires on its own goroutine and can
+// race the host installing its sink, which is a plain data race on the field.
+func (w *Workspace) diagf(format string, args ...any) {
+	w.mu.Lock()
+	fn := w.diag
+	w.mu.Unlock()
+	if fn != nil {
+		fn(fmt.Sprintf(format, args...))
+	}
 }
 
 var _ ctrlproto.WorkspaceService = (*Workspace)(nil)
@@ -206,6 +224,21 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 	// The outbound area gets its own sweeper because it gets its own policy: a
 	// shared file is the deliverable and outlives an upload sevenfold.
 	w.shared.StartSweeper(ctx)
+	// Keep stored subscriptions alive while this instance runs. It belongs here
+	// rather than in either host because the Workspace is what BOTH long-lived
+	// hosts build — the TUI's carrier and the web daemon — so wiring it once
+	// covers both and cannot be forgotten by whichever grows next.
+	//
+	// The sweep covers every stored OAuth credential, not just the selected
+	// provider's: boot resolves one, and the credential you are NOT using is
+	// precisely the one that quietly ages out. It runs immediately, so opening
+	// terva inside a token's refresh window is enough to keep that grant alive.
+	//
+	// Reported through diag, which the TUI redirects into its own notification
+	// surface (SetDiag) — a stray stderr write would corrupt the display.
+	w.authRefreshStop = authrefresh.Start(ctx, func(provider string, err error) {
+		w.diagf("%s login expired and could not be refreshed (%v) — sign in again with /login", provider, err)
+	})
 	// Sweep leaked empty sessions at boot: a Stage chat opened for preview defers
 	// its greeting (no message rows), so a daemon hard-killed before that draft's
 	// Close can leave a meta-only file behind. PruneEmptySessions removes any file
@@ -418,6 +451,13 @@ func (w *Workspace) Close() error {
 		delete(w.sessions, id)
 	}
 	w.mu.Unlock()
+	// Before cancel, so the sweep goroutine is joined rather than left to
+	// notice a cancelled context on its own schedule — it may be mid-refresh,
+	// holding the auth lock, and the next instance should not queue behind a
+	// dying one.
+	if w.authRefreshStop != nil {
+		w.authRefreshStop()
+	}
 	w.cancel()
 	if w.mcpStop != nil {
 		w.mcpStop() // StopAll + closeLogs, once for the daemon
@@ -462,15 +502,10 @@ func validSessionID(id string) bool {
 // sessionread.go). NewSession's Meta.ID is a separate UUID; the filename is the
 // stable, path-addressable handle, so it is what crosses the wire.
 
-func toCtrlUsage(u provider.Usage) core.WireUsage {
-	return core.WireUsage{
-		Input:      u.InputTokens,
-		Output:     u.OutputTokens,
-		CacheRead:  u.CacheReadTokens,
-		CacheWrite: u.CacheWriteTokens,
-		CostUSD:    u.CostUSD,
-	}
-}
+// toCtrlUsage was a byte-identical copy of core's converter, and stayed one
+// field behind it. It forwards now; the name is kept because a dozen call sites
+// read better with it.
+func toCtrlUsage(u provider.Usage) core.WireUsage { return core.UsageToWire(u) }
 
 func ctrlTimeString(t time.Time) string {
 	if t.IsZero() {
@@ -1562,6 +1597,8 @@ func (w *Workspace) Models(ctx context.Context, sess string) ([]ctrlproto.ModelI
 			Current:       m.ID == curModel && m.Provider == curProv,
 			Favorite:      favs[favModelKey(m.Provider, m.ID)],
 			Auth:          authMethod[m.Provider],
+			DisplayName:   m.DisplayName,
+			Renamed:       m.DisplayNameSet,
 		}
 		if m.ID == defModel && m.Provider == defProv {
 			info.Default, info.DefaultScope = true, defScope

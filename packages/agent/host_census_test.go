@@ -433,3 +433,82 @@ func TestTheLiveTrustHostListMatchesTheCensus(t *testing.T) {
 		}
 	}
 }
+
+// A host that stays up while its credentials age must keep them alive.
+//
+// The refresher exists because refresh used to be entirely demand-driven: it
+// ran for the provider a turn was about to use, and for nothing else. A
+// long-lived host therefore let every credential it was not using go stale, and
+// the grant behind it eventually with it — recoverable only by a re-login the
+// user did not know they needed until a turn failed.
+//
+// NewWorkspace starts one, which covers the TUI and the web daemon in a single
+// wiring. It covers nothing else: acp and rpc bind core.Agent directly and
+// never build a workspace, so they inherited nothing and nobody noticed until
+// the question was asked out loud. That is the identical shape as the trust
+// flip above — a cross-host invariant wired in whichever host it was reported
+// against — and it gets the identical treatment.
+//
+// The list is written by ANSWERING, not by naming: a host either starts a
+// refresher or records why its credentials cannot go stale under it.
+var noRefresherHosts = map[string]string{
+	"packages/agent/cli.go": "the print and json hosts, which resolve, run one prompt, and exit. " +
+		"Interactive does not build its agent here — it routes to runInteractiveCtrlproto, which builds " +
+		"the workspace, and the workspace starts the refresher for every session it holds. A one-shot " +
+		"cannot outlive a refresh window, and starting a background sweep for a process about to exit " +
+		"would spend a grant to no end.",
+	"packages/agent/sdk/sdk.go": "an embedder's Runtime, which may well be long-lived — but a LIBRARY " +
+		"that silently spawns a goroutine writing to the caller's auth.json is not a decision this " +
+		"package gets to make for them. The embedder holds the process and can call authrefresh.Start " +
+		"itself; what it must not get is a background writer it never asked for.",
+	"packages/agent/swarm_agent.go": "a swarm child is launched by a parent turn and lives for one task. " +
+		"It finishes long inside the refresh window of the credential it inherited, and its parent — the " +
+		"TUI, the daemon, bot mode — is the host keeping that credential alive.",
+	"packages/agent/workspace/workspace_raati.go": "the deliberation panel's summarizer and clerks are " +
+		"throwaway agents built inside a live workspace, for the length of one deliberation. The " +
+		"workspace that built them started the refresher.",
+	"packages/agent/workspace/workspace_session.go": "every session the workspace holds. NewWorkspace " +
+		"starts one refresher for all of them — per-session sweeps would be N processes' worth of " +
+		"contention on one lock for a file that has one copy of each credential.",
+}
+
+var startsRefresher = regexp.MustCompile(`authrefresh\.Start\(`)
+
+func TestEveryAgentHostHasARecordedCredentialRefreshPosture(t *testing.T) {
+	starts := map[string]bool{}
+	for _, f := range census(t) {
+		for _, code := range f.code {
+			if startsRefresher.MatchString(code) {
+				starts[f.path] = true
+			}
+		}
+	}
+	// The workspace starts one for every host it builds, so a host that reaches
+	// its agent through NewWorkspace is covered by that and not by its own call.
+	// cli.go binds the workspace to the TUI; web_mode.go builds one too.
+	seen := map[string]bool{}
+	for _, h := range agentHosts(t) {
+		seen[h.path] = true
+		_, recorded := noRefresherHosts[h.path]
+		switch {
+		case starts[h.path] && recorded:
+			t.Errorf("%s starts a credential refresher but is also recorded as not needing one — delete "+
+				"the entry, it describes a posture this host no longer has", h.path)
+		case !starts[h.path] && !recorded:
+			t.Errorf("%s builds an agent but neither starts a credential refresher nor records why it "+
+				"does not need one.\n"+
+				"  A host that outlives a token's refresh window and does not refresh it lets the grant "+
+				"behind it lapse, and the user finds out from a 401 on a provider they were not even "+
+				"using.\n"+
+				"  Either start authrefresh.Start, or add an entry to noRefresherHosts saying what keeps "+
+				"this host's credentials fresh (it is short-lived; it inherits the workspace's; it holds "+
+				"no credential at all).", h.path)
+		}
+	}
+	for path := range noRefresherHosts {
+		if !seen[path] {
+			t.Errorf("noRefresherHosts names %s, which no longer builds an agent — delete the entry rather "+
+				"than leaving a decision standing for a host that is gone", path)
+		}
+	}
+}

@@ -1,15 +1,13 @@
 package worktree
 
-import (
-	"os"
-	"path/filepath"
-)
+import "terva.sh/terva/packages/filelock"
 
-// openLockFile creates the lockfile's directory and opens (creating if absent)
-// the file both platform lock implementations lock against.
-func openLockFile(path string) (*os.File, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	return os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
-}
+// The registry lock and the liveness probe were written here and moved to
+// packages/filelock when auth.json needed the same cross-process guarantee.
+// Copying them would have left a twin to fix twice; these are the seams that
+// keep this package's call sites (and its tests, which drive pidAlive directly)
+// reading the way they always did.
+
+func acquireLock(path string) (*filelock.Lock, error) { return filelock.Acquire(path) }
+
+func pidAlive(pid int) bool { return filelock.PIDAlive(pid) }

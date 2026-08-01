@@ -265,7 +265,7 @@ func (p OAuthProvider) doTokenRequest(ctx context.Context, payload map[string]st
 	defer resp.Body.Close()
 	respBody, _ := readCappedBody(resp.Body, maxTokenBodyBytes)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("token http %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return nil, newTokenError(resp.StatusCode, respBody)
 	}
 	var raw struct {
 		AccessToken  string `json:"access_token"`
@@ -288,8 +288,15 @@ func (p OAuthProvider) doTokenRequest(ctx context.Context, payload map[string]st
 		Scope:        raw.Scope,
 		ClientID:     p.ClientID,
 	}
+	// Stamp both ends of the life, not just the far one. The refresh window is
+	// a fraction of the lifetime (OAuthToken.StaleFor), and expires_in is the
+	// only place that lifetime is ever stated — once this response is
+	// discarded, expiry alone cannot say whether it came from an 8-hour token
+	// or a 10-day one.
 	if raw.ExpiresIn > 0 {
-		tok.Expiry = time.Now().Add(time.Duration(raw.ExpiresIn) * time.Second)
+		now := time.Now()
+		tok.IssuedAt = now
+		tok.Expiry = now.Add(time.Duration(raw.ExpiresIn) * time.Second)
 	}
 	// Capture id_token & account id for providers that use OIDC (OpenAI).
 	// This lets the OpenAI Codex provider send chatgpt-account-id.

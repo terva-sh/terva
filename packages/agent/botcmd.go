@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"terva.sh/terva/packages/agent/authrefresh"
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/external"
@@ -526,6 +527,17 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	if err != nil {
 		return err
 	}
+
+	// Bot mode is the longest-lived host there is: a chat-ops daemon left
+	// running for days, whose owner is not watching a terminal. It builds no
+	// workspace, so it inherits no refresher — and it is the host where a
+	// silently lapsed credential is least likely to be noticed, because the
+	// failure surfaces as a bot that has stopped answering rather than as an
+	// error someone is looking at. Found by the census in host_census_test.go,
+	// not by anyone reporting it.
+	defer authrefresh.Start(ctx, func(provider string, err error) {
+		fmt.Fprintf(os.Stderr, "terva: %s login expired and could not be refreshed (%v) — sign in again with /login\n", provider, err)
+	})()
 
 	agent := resolved.NewAgent()
 	wireBotAgentExtHooks(ctx, agent, extMgr, gate, args, &resolved, resolved.Tasks)

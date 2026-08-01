@@ -1,6 +1,6 @@
 //go:build windows
 
-package worktree
+package filelock
 
 import (
 	"os"
@@ -8,13 +8,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// fileLock is the Windows twin of the unix flock: LockFileEx on the registry
-// lockfile. The extension this package was folded in from never ran under
-// Windows CI; this port does, so the lock has to be real here too. The OS
-// releases the lock if the holding process dies.
-type fileLock struct{ f *os.File }
+// Lock is the Windows twin of the unix flock: LockFileEx on the lockfile. The
+// OS releases the lock if the holding process dies.
+type Lock struct{ f *os.File }
 
-func acquireLock(path string) (*fileLock, error) {
+// Acquire blocks until the lock at path is held.
+func Acquire(path string) (*Lock, error) {
 	f, err := openLockFile(path)
 	if err != nil {
 		return nil, err
@@ -24,10 +23,12 @@ func acquireLock(path string) (*fileLock, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	return &fileLock{f: f}, nil
+	return &Lock{f: f}, nil
 }
 
-func (l *fileLock) release() {
+// Release drops the lock. Safe on a nil Lock, so a caller can defer it
+// alongside an error return.
+func (l *Lock) Release() {
 	if l == nil || l.f == nil {
 		return
 	}
@@ -36,10 +37,10 @@ func (l *fileLock) release() {
 	_ = l.f.Close()
 }
 
-// pidAlive reports whether pid names a live process: open a query-only handle
+// PIDAlive reports whether pid names a live process: open a query-only handle
 // and check the process hasn't exited. Access denied means it exists but isn't
 // ours — alive for our purposes, matching the unix EPERM stance.
-func pidAlive(pid int) bool {
+func PIDAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}

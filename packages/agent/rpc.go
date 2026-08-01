@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/agent/authrefresh"
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extproto"
@@ -57,6 +58,17 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	permissions.WarnRestrictedWorkspace(args.CWD, r.Trusted)
 	permissions.WarnPersistentlyUnjailed(args.PermInputs())
 	r.AdoptReadOnlySet(roSet)
+
+	// rpc is a long-lived server a driver spawns and holds open, so its stored
+	// subscriptions age exactly like the TUI's and the web daemon's — and,
+	// binding core.Agent directly rather than through the workspace, it does not
+	// inherit the refresher that NewWorkspace starts. Wired here rather than
+	// left to the workspace it does not build; see the census in
+	// host_census_test.go, which is what makes that a decision instead of an
+	// oversight.
+	defer authrefresh.Start(ctx, func(provider string, err error) {
+		fmt.Fprintf(os.Stderr, "terva: %s login expired and could not be refreshed (%v) — sign in again with /login\n", provider, err)
+	})()
 
 	// Extensions: same lifecycle as interactive mode, minus the
 	// host-hooks integration. Notify/Display calls from extensions
@@ -125,6 +137,13 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// The agent is the authority on its own model, and rpc's provider cannot
 	// move (a cross-provider or cross-endpoint switch is rejected outright a
 	// few hundred lines below), so this pair is complete. See LiveToolSet.Args.
+	// The memory tool holds this session's bound stores. Captured once, outside
+	// the closure: a fresh Resolve mints fresh stores, and adopting those would
+	// leave the model writing facts nothing reads. Nil when memory is off.
+	memTool, _ := r.ToolRegistry["memory"].(*tools.MemoryTool)
+	// Captured once, for the same reason as memTool: a rebuild's fresh tracker
+	// would forget every file the model has read.
+	fileState := r.Files()
 	mergeExtTools := func() {
 		rebuildArgs := args
 		rebuildArgs.TrustPin = &r.Trusted
@@ -133,6 +152,8 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 			Args:     rebuildArgs,
 			ReadOnly: roSet,
 			Tasks:    r.Tasks,
+			Memory:   memTool,
+			Files:    fileState,
 			Sandbox:  r.Sandbox,
 			Ext:      extMgr,
 			MCP:      mcpAdapter,

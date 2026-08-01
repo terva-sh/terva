@@ -5,11 +5,50 @@ import (
 	"os"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/provider/auth"
 )
 
 // Credential resolution reads the provider registry (providerByID) for each
 // provider's api-Key env vars, so it sits above the config layer with the
 // registry rather than inside it.
+
+// ExpiredLoginError marks a stored subscription whose access token has expired
+// and whose refresh was REFUSED: the account is configured, but the grant is
+// gone. It is deliberately not the same as "no credential" — the remedy differs
+// ("sign in again" vs "configure a provider"), and the two used to be
+// indistinguishable because the refresh error was dropped on the floor and the
+// dead access token handed back anyway. What the user then saw was a 401 named
+// after the WIRE FORMAT ("anthropic: http 401") on a provider they had never
+// logged out of.
+type ExpiredLoginError struct {
+	Provider string
+	Err      error
+}
+
+func (e *ExpiredLoginError) Error() string {
+	return fmt.Sprintf("%s login expired and could not be refreshed (%v); sign in again with /login", e.Provider, e.Err)
+}
+
+func (e *ExpiredLoginError) Unwrap() error { return e.Err }
+
+// oauthCredential resolves a stored OAuth token into a usable access token,
+// refreshing (and persisting) one that has expired.
+//
+// A refresh FAILURE returns the error instead of the token. An expired access
+// token authenticates nothing, so handing it back buys exactly one thing: a 401
+// from the provider, several layers away from the login that lapsed and wearing
+// the wire client's name rather than its own.
+//
+// provider is terva's provider id (what the user picked, what the message
+// names); oauthName is the OAuth provider the token was issued by, which is not
+// always the same — openai-codex tokens are minted by "openai".
+func oauthCredential(provider, oauthName string, tok *auth.OAuthToken) (*auth.OAuthToken, error) {
+	next, err := config.RefreshIfExpired(oauthName, tok)
+	if err != nil {
+		return nil, &ExpiredLoginError{Provider: provider, Err: err}
+	}
+	return next, nil
+}
 
 // ResolveCredential returns the credential (api Key or oauth access
 // token), the method ("apikey"/"oauth"), and an error when no
@@ -71,7 +110,10 @@ func ResolveCredentialFull(provider, explicit string) (cred, method, accountID s
 			return c.Anthropic.APIKey, "apikey", "", nil
 		}
 		if c.Anthropic.OAuth != nil && c.Anthropic.OAuth.AccessToken != "" {
-			tok, _ := config.RefreshIfExpired("anthropic", c.Anthropic.OAuth)
+			tok, terr := oauthCredential("anthropic", "anthropic", c.Anthropic.OAuth)
+			if terr != nil {
+				return "", "", "", terr
+			}
 			return tok.AccessToken, "oauth", "", nil
 		}
 	case "openai":
@@ -80,23 +122,44 @@ func ResolveCredentialFull(provider, explicit string) (cred, method, accountID s
 		}
 	case "openai-codex":
 		if c.OpenAI.OAuth != nil && c.OpenAI.OAuth.AccessToken != "" {
-			tok, _ := config.RefreshIfExpired("openai", c.OpenAI.OAuth)
+			tok, terr := oauthCredential("openai-codex", "openai", c.OpenAI.OAuth)
+			if terr != nil {
+				return "", "", "", terr
+			}
 			return tok.AccessToken, "oauth", tok.AccountID, nil
 		}
 	case "kimi":
 		if c.Kimi.APIKey != "" {
 			return c.Kimi.APIKey, "apikey", "", nil
 		}
+		// A dead stored subscription must not SHADOW the CLI's token. Borrowing
+		// the official Kimi Code CLI's login is the whole reason terva can run
+		// kimi without one of its own, and returning terva's expired token
+		// unconditionally stepped in front of it — so a lapsed terva login broke
+		// kimi even on a machine where the CLI was signed in and working. Keep
+		// the first refusal to report if the fallback has nothing either: it
+		// names the login the user actually made.
+		var expired error
 		if c.Kimi.OAuth != nil && c.Kimi.OAuth.AccessToken != "" {
-			tok, _ := config.RefreshIfExpired("kimi", c.Kimi.OAuth)
-			return tok.AccessToken, "oauth", "", nil
+			tok, terr := oauthCredential("kimi", "kimi", c.Kimi.OAuth)
+			if terr == nil {
+				return tok.AccessToken, "oauth", "", nil
+			}
+			expired = terr
 		}
-		if config.KimiCLIFallbackDisabled() {
-			break
+		if !config.KimiCLIFallbackDisabled() {
+			if cli := config.LoadKimiCodeCLIToken(); cli != nil && cli.AccessToken != "" {
+				tok, terr := oauthCredential("kimi", "kimi", cli)
+				if terr == nil {
+					return tok.AccessToken, "oauth", "", nil
+				}
+				if expired == nil {
+					expired = terr
+				}
+			}
 		}
-		if tok := config.LoadKimiCodeCLIToken(); tok != nil && tok.AccessToken != "" {
-			tok, _ = config.RefreshIfExpired("kimi", tok)
-			return tok.AccessToken, "oauth", "", nil
+		if expired != nil {
+			return "", "", "", expired
 		}
 	case "deepseek":
 		if c.DeepSeek.APIKey != "" {
