@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extdriver"
+	"terva.sh/terva/packages/agent/extensions"
 )
 
 // extDoctorStaticRow is what a read-only manifest scan can tell about one
@@ -143,6 +144,11 @@ func printExtDoctorRow(w io.Writer, row extDoctorStaticRow, diag extdriver.Exten
 	switch {
 	case row.Error != "":
 		status = "error"
+	case extensions.Superseded(row.Name) != "":
+		// Checked high: a superseded extension is installed, enabled and
+		// manifest-valid, so every later branch would call it "not loaded" —
+		// true, unhelpful, and indistinguishable from a crash.
+		status = "superseded"
 	case row.Shadowed:
 		status = "shadowed"
 	case !row.Enabled:
@@ -168,6 +174,20 @@ func printExtDoctorRow(w io.Writer, row extDoctorStaticRow, diag extdriver.Exten
 	}
 	if row.Error != "" {
 		fmt.Fprintf(w, "  error: %s\n", row.Error)
+		return
+	}
+	// Superseded is the one status here with a recommended action, so it says
+	// what to do and pre-empts the question that stops people doing it: whether
+	// removing the extension throws away the memories it accumulated.
+	//
+	// It does not. `ext remove` deletes the extension DIRECTORY only; the
+	// extension's ext-data/<name>/ is untouched, and terva's built-in copies it
+	// forward on first use (memory.Adopt, and the same shape for git-worktree).
+	// Pinned by TestExtRemoveLeavesExtensionDataBehind so this stays true.
+	if why := extensions.Superseded(row.Name); why != "" {
+		fmt.Fprintf(w, "  note: %s\n", why)
+		fmt.Fprintf(w, "  your data is kept: removing the extension does not touch %s, which terva promotes on first use\n",
+			filepath.Join("ext-data", row.Name))
 		return
 	}
 	if row.Shadowed {

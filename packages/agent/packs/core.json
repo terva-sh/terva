@@ -10,11 +10,6 @@
       "description": "Workspace code index and search."
     },
     {
-      "name": "memory",
-      "source": "https://github.com/terva-sh/terva-ext-memory.git",
-      "description": "Workspace and user cross session memory."
-    },
-    {
       "name": "web",
       "source": "https://github.com/terva-sh/zot-web.git",
       "description": "Web search and content fetching."
