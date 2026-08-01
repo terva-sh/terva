@@ -86,7 +86,15 @@ func ClassifyRecoverable(err error) (bool, string) {
 		return true, i18n.T("permission denied: %s", shortErrorText(msg))
 	case containsAnyText(low, "http 429", " 429:", "rate limit", "rate_limit", "too many requests", "quota"):
 		return true, i18n.T("rate limited: %s", shortErrorText(msg))
-	case containsAnyText(low, "http 500", "http 502", "http 503", "http 504", " 500:", " 502:", " 503:", " 504:", "upstream connect error", "service unavailable", "internal server error", "bad gateway", "gateway timeout"):
+	// "overloaded" carries no status code and reaches this prose fallback intact:
+	// it is how BOTH Anthropic ("overloaded_error") and codex ("Our servers are
+	// currently overloaded. Please try again later.") phrase capacity pressure,
+	// and neither wording matches a needle above. The typed path catches it when
+	// the error is still a *provider.ProviderError — but a host that rebuilds the
+	// error from wire text (the TUI carrier does exactly that, errors.New(ev.Error))
+	// has no type left, so without this the most common recoverable provider
+	// failure there is skipped the model-switch rescue and shown as a dead end.
+	case containsAnyText(low, "http 500", "http 502", "http 503", "http 504", " 500:", " 502:", " 503:", " 504:", "upstream connect error", "service unavailable", "internal server error", "bad gateway", "gateway timeout", "overloaded"):
 		return true, i18n.T("provider unavailable: %s", shortErrorText(msg))
 	}
 
@@ -325,8 +333,27 @@ func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images
 	a.offerCompactOnPrefixChange(ctx, compact)
 
 	if a.ShouldAutoCompact(AutoCompactThreshold) && a.CanCompact(AutoCompactKeepTail) {
-		if err := compact("context near limit"); err != nil {
-			return fmt.Errorf("auto-compact before prompt: %w", err)
+		// A failed compaction does NOT fail the turn — the same reasoning
+		// offerCompactOnPrefixChange spells out below, which this site did not
+		// inherit. The user asked for a message to be sent, not for it to be
+		// dropped because a precaution failed.
+		//
+		// And it IS only a precaution here. AutoCompactThreshold is 0.85, so the
+		// request the abort refused to send would almost always have fit. Worse,
+		// this is the one compaction site that runs BEFORE PromptExtra appends the
+		// user's message, so aborting was also the one that lost it: not in the
+		// transcript, not in the queue, and — because the carrier rebuilds turn
+		// errors from wire text, where the typed provider error is gone — not
+		// reliably in the rescue dialog either.
+		//
+		// If the transcript genuinely no longer fits, the oversize retry below is
+		// the designed catch, and the provider's own "prompt is too long" is a
+		// better error than "auto-compact before prompt: overloaded" ever was.
+		if cerr := compact("context near limit"); cerr != nil && ctx.Err() != nil {
+			// Cancelled mid-compaction: the user asked to stop, so don't dispatch
+			// the turn they just interrupted. A provider failure is non-fatal; a
+			// cancellation is not.
+			return cerr
 		}
 	}
 	// Both attempts carry the extras: a retry that dropped the preamble would

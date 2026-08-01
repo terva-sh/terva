@@ -98,3 +98,90 @@ func TestWorkspacePostTurnAutoCompact(t *testing.T) {
 		t.Fatalf("transcript head is not a compaction summary; %d messages", len(msgs))
 	}
 }
+
+// saturatedThenFailingClient saturates the gauge on the turn, then refuses the
+// compaction the way an overloaded provider does.
+type saturatedThenFailingClient struct{ calls int32 }
+
+func (c *saturatedThenFailingClient) Name() string { return "saturated-failing" }
+
+func (c *saturatedThenFailingClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	call := atomic.AddInt32(&c.calls, 1)
+	out := make(chan provider.Event, 4)
+	go func() {
+		defer close(out)
+		if call == 1 {
+			out <- provider.EventUsage{Usage: provider.Usage{InputTokens: 190_000}}
+			out <- provider.EventDone{Stop: provider.StopEnd, Message: provider.Message{
+				Role:    provider.RoleAssistant,
+				Content: []provider.Content{provider.TextBlock{Text: "ok"}},
+			}}
+			return
+		}
+		out <- provider.EventDone{Stop: provider.StopError, Err: provider.NewAPIError(
+			"openai-codex", "Our servers are currently overloaded. Please try again later.", true)}
+	}()
+	return out, nil
+}
+
+// Announce, then say how it ended. This host told clients a compaction had
+// started and then discarded the error, so a failure was indistinguishable from
+// one still running — on the path that is also its PRIMARY auto-compaction.
+// Success and the nothing-to-do case were both already announced; only failure
+// was mute, which is the one a user actually needs to act on.
+func TestWorkspacePostTurnAutoCompactAnnouncesFailure(t *testing.T) {
+	cl := &saturatedThenFailingClient{}
+	tmp := testsupport.TempDir(t)
+	sess, err := core.NewSession(tmp, tmp, "p", "claude-sonnet-4-5", "test")
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	agent := core.NewAgent(cl, "claude-sonnet-4-5", "", core.Registry{})
+	agent.MaxRetries = 0 // the ladder is proven elsewhere; this is about the report
+	s := &wsSession{
+		id:    "autocompact-fail",
+		ws:    &Workspace{ctx: context.Background(), diag: func(string) {}},
+		hub:   newWSHub(),
+		sess:  sess,
+		agent: agent,
+		title: "titled",
+	}
+	s.agent.AddEventObserver(func(ev core.AgentEvent) {
+		s.broadcast(ctrlproto.ConversationEvent(core.EventToWire(ev)))
+	})
+	seed := make([]provider.Message, 0, 8)
+	for range 4 {
+		seed = append(seed,
+			provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "q"}}},
+			provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "a"}}},
+		)
+	}
+	s.agent.SetMessages(seed)
+
+	sub := s.hub.add(nil, true)
+	if err := s.prompt("hi", nil, core.UserMessageExtras{}); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	drainUntil(t, sub, "done")
+
+	start, _ := drainUntil(t, sub, ctrlproto.EventNotice)
+	if start.Notice == nil || !strings.Contains(start.Notice.Text, "compacting") {
+		t.Fatalf("want the auto-compact announcement, got %+v", start.Notice)
+	}
+	end, _ := drainUntil(t, sub, ctrlproto.EventNotice)
+	if end.Notice == nil {
+		t.Fatal("the announcement was never followed by an outcome — the failure is still mute")
+	}
+	if end.Notice.Level != "error" {
+		t.Errorf("outcome notice level = %q; want %q so clients can surface it as a failure", end.Notice.Level, "error")
+	}
+	if !strings.Contains(end.Notice.Text, "overloaded") {
+		t.Errorf("outcome notice = %q; it must quote the provider's reason, not just say something went wrong", end.Notice.Text)
+	}
+
+	// The transcript is untouched: a failed compaction summarized nothing.
+	if msgs := s.agent.Messages(); len(msgs) > 0 && msgs[0].Meta["compaction"] == "true" {
+		t.Error("a failed compaction still replaced the transcript")
+	}
+}

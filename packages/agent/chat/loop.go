@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -425,7 +426,16 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 	// paired user's NEXT message doesn't pay the latency. Failures are
 	// non-fatal — the turn itself succeeded.
 	if turnErr == nil && ctx.Err() == nil && agent.ShouldAutoCompact(core.AutoCompactThreshold) && agent.CanCompact(core.AutoCompactKeepTail) {
-		_, _ = agent.Compact(ctx, core.AutoCompactKeepTail, nil)
+		// Non-fatal, but not silent. The paired user is told when a compaction
+		// starts (the EvCompactStart notice above), and a discarded error here
+		// meant the one that ran on their behalf after the turn could fail with
+		// nothing said at all — leaving the next message to pay a latency, or hit
+		// a limit, that had already been diagnosed and thrown away.
+		if _, cerr := agent.Compact(ctx, core.AutoCompactKeepTail, nil); cerr != nil &&
+			!errors.Is(cerr, context.Canceled) && !errors.Is(cerr, core.ErrNothingToCompact) {
+			_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID,
+				Text: i18n.T("note: could not condense conversation history (%s); the next message may be slower.", cerr.Error())})
+		}
 	}
 
 	reply := strings.TrimSpace(lastAssistantText)
