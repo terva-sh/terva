@@ -89,6 +89,7 @@ type wsSession struct {
 	persona        string
 	turnCtx        context.Context
 	turnCancel     context.CancelFunc                     // non-nil while a turn runs
+	compacting     bool                                   // true while compact() holds the agent; the session's SECOND busy state (see compact)
 	permPark       core.ParkTable[core.ConfirmDecision]   // parked webConfirmer/workerConfirmer waits
 	askPark        core.ParkTable[[]core.UserAnswer]      // parked webAsker waits (one answer per question)
 	permReq        map[string]ctrlproto.PermissionRequest // details for the snapshot
@@ -590,7 +591,7 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 	// so the tool must exist to match.
 	if build.HasBaseWorkspaceTools(args) && config.AutoSwarmEnabled() {
 		cfg, _ := config.LoadConfig()
-		r.ToolRegistry["swarm_spawn"] = &tools.SwarmSpawnTool{
+		spawnTool := &tools.SwarmSpawnTool{
 			Swarm:           w.swarm,
 			Enabled:         config.AutoSwarmEnabled,
 			HostProvider:    r.Provider,
@@ -609,6 +610,13 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			// OnSpawned wiring; without it a coordinator never learns they're done).
 			OnSpawned: s.trackSwarmAgent,
 		}
+		// The untrusted-workspace case asks the USER instead of refusing at
+		// the model. Wired only when this session has a gate: nil means pure
+		// yolo or a non-interactive mode, where there is nobody to ask, and
+		// the tool keeps its refusal-with-guidance rather than blocking a
+		// turn on a prompt that can never be answered.
+		spawnTool.ConfirmUntrusted = build.UntrustedSpawnConfirmer(s.gate)
+		r.ToolRegistry["swarm_spawn"] = spawnTool
 	}
 	// terva_status reports spend by sub-agents that are still RUNNING, which the
 	// session's delegated total cannot include (a child is booked only when its
@@ -795,11 +803,29 @@ func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock, extras
 	// choice is now history); the freshly generated response has no alternatives
 	// until it is retried, so drop the switchable set.
 	s.clearTail()
+	// refused records the one outcome that must never lose the user's words: the
+	// agent held its single-flight and turned this dispatch away. The slot was
+	// already claimed by beginTurn, so promptBlocks has returned nil and the
+	// caller's own "queue it instead" fallback is long past — this is the last
+	// place that still knows the text.
+	var refused atomic.Bool
 	s.launchTurn(turnCtx, func(ctx context.Context) error {
 		// sink is nil: the agent's OnEvent (set in buildSession) fans every event
 		// out, so Continue() and any internal re-prompt stream too.
-		return s.agent.PromptWithPolicyExtra(ctx, text, imgs, extras, nil)
-	}, nil)
+		err := s.agent.PromptWithPolicyExtra(ctx, text, imgs, extras, nil)
+		if errors.Is(err, core.ErrBusy) {
+			refused.Store(true)
+		}
+		return err
+	}, func() {
+		// Runs after endTurn, so this lands on a settled queue rather than one
+		// the release is still shifting. Front, not back: this text was composed
+		// before anything queued behind it.
+		if refused.Load() {
+			s.agent.RequeueFront(text)
+			s.broadcastQueue()
+		}
+	})
 	return nil
 }
 
@@ -916,7 +942,16 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		// benign for an opportunistic pass.
 		if err == nil && !restart && s.agent.ShouldAutoCompact(core.AutoCompactThreshold) && s.agent.CanCompact(core.AutoCompactKeepTail) {
 			s.broadcast(ctrlproto.NoticeEvent("info", "", i18n.T("Context is nearly full — compacting the conversation.")))
-			_ = s.compact(s.ws.ctx)
+			// Announce, then say how it ended. The discarded error made this the
+			// worst of the compaction sites to watch: clients were told a
+			// compaction had started and then never told anything again, so a
+			// failure was indistinguishable from one still running — on the path
+			// that is also this host's PRIMARY auto-compaction. s.compact already
+			// broadcasts its own success and no-op notices; only the failure was
+			// mute.
+			if cerr := s.compact(s.ws.ctx); cerr != nil && !errors.Is(cerr, context.Canceled) {
+				s.broadcast(ctrlproto.NoticeEvent("error", "", i18n.T("Could not compact the conversation: %s", cerr.Error())))
+			}
 		}
 		if restart {
 			if perr := s.prompt(next, nil, core.UserMessageExtras{}); perr != nil {
@@ -1128,7 +1163,13 @@ func (s *wsSession) diskIndex(i int) (int, bool) {
 // concurrent queue() lands either before the shift (delivered by the restart)
 // or after the release (sees idle and starts its own turn) — never in between.
 func (s *wsSession) endTurn(turnCtx context.Context, err error) (next string, restart bool) {
-	failed := err != nil || turnCtx.Err() != nil
+	// ErrBusy is NOT a failed turn — it is a turn that never started, because
+	// something else held the agent. Counting it as failure drained the whole
+	// pending queue: every follow-up the user had lined up, discarded because a
+	// dispatch lost a race it should simply have waited out. The drop rule
+	// exists for interrupts ("stale follow-ups must not fire after an
+	// interrupt"), and a refusal is not an interrupt.
+	failed := (err != nil && !errors.Is(err, core.ErrBusy)) || turnCtx.Err() != nil
 	s.mu.Lock()
 	s.turnCtx, s.turnCancel = nil, nil
 	var dropped []string
@@ -1311,11 +1352,20 @@ func isAutomaticRebuild(reason string) bool {
 // a benign notice rather than an error.
 func (s *wsSession) compact(ctx context.Context) error {
 	s.mu.Lock()
-	busy := s.turnCancel != nil
-	s.mu.Unlock()
-	if busy {
+	if s.turnCancel != nil || s.compacting {
+		s.mu.Unlock()
 		return ctrlproto.ErrBusy
 	}
+	// Mark the session busy for the whole compaction. Without this the session
+	// reads as IDLE while the agent's single-flight is held, and queue() —
+	// which decides busy-vs-idle by turnCancel — dispatches the user's next
+	// message straight into an agent that then refuses it with ErrBusy, an
+	// error launchTurn deliberately swallows. The message was lost outright.
+	// See endCompacting for the other half (the queue has to drain here too,
+	// because a compaction never reaches endTurn).
+	s.compacting = true
+	s.mu.Unlock()
+	defer s.endCompacting()
 	// Non-nil sink: Compact streams summary deltas and calls it unconditionally.
 	if _, err := s.agent.Compact(ctx, core.AutoCompactKeepTail, func(string) {}); err != nil {
 		if errors.Is(err, core.ErrNothingToCompact) {
@@ -2102,7 +2152,10 @@ func firstUserText(msgs []provider.Message) string {
 // endTurn queue shift (which holds the same lock).
 func (s *wsSession) queue(text string) {
 	s.mu.Lock()
-	if s.turnCancel != nil {
+	// compacting counts as busy. It is not a turn, but it holds the agent's
+	// single-flight just as hard, and dispatching into it gets the prompt
+	// refused with an ErrBusy that nothing surfaces — the text simply vanished.
+	if s.turnCancel != nil || s.compacting {
 		queued := s.agent.QueueMessage(text)
 		s.mu.Unlock()
 		if queued {
@@ -2117,6 +2170,39 @@ func (s *wsSession) queue(text string) {
 		if s.agent.QueueMessage(text) {
 			s.broadcastQueue()
 		}
+	}
+}
+
+// endCompacting releases the compacting flag and settles the queue that built
+// up behind it, mirroring endTurn's release semantics.
+//
+// The drain is not optional. endTurn is the only other place a queue is
+// shifted, and a compaction never reaches it — so without this a message
+// queued during compaction would sit untouched until the user happened to send
+// another one, which is the "it never slid in" half of the bug. Unlike endTurn
+// this never DROPS the queue: a compaction is not a turn the user interrupted,
+// and the messages behind it were composed for the conversation that is about
+// to continue.
+//
+// The flag is cleared and the queue shifted under one lock hold for the same
+// reason endTurn does it: a concurrent queue() must land either before the
+// shift (and be delivered by the restart) or after the release (and start its
+// own turn), never in the gap between.
+func (s *wsSession) endCompacting() {
+	s.mu.Lock()
+	s.compacting = false
+	next, restart := s.agent.ShiftQueuedMessage()
+	s.mu.Unlock()
+	if !restart {
+		return
+	}
+	s.broadcastQueue()
+	if err := s.prompt(next, nil, core.UserMessageExtras{}); err != nil {
+		// Something claimed the slot between the release and here. Re-arm at
+		// the front so that turn's first safe boundary delivers it, exactly as
+		// the endTurn restart path does.
+		s.agent.RequeueFront(next)
+		s.broadcastQueue()
 	}
 }
 
