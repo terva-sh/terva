@@ -304,6 +304,19 @@ func (d *QuestionDialog) HandleKey(k tui.Key) bool {
 			d.mu.Unlock()
 			return false
 		}
+		// alt+1..9 jumps straight to a question, so question 5 of 8 is one
+		// keypress rather than four tabs. Alt-qualified because the bare
+		// digits already pick an OPTION, and a dialog where 3 means one
+		// thing in the list and another in the strip is worse than no
+		// shortcut. It works from the answer field too — the editor never
+		// sees an alt-digit — which is where the walk is most tedious.
+		if k.Kind == tui.KeyRune && k.Alt && k.Rune >= '1' && k.Rune <= '9' {
+			if n := int(k.Rune - '1'); n < len(req.Questions) {
+				d.gotoTabLocked(n)
+			}
+			d.mu.Unlock()
+			return false
+		}
 	}
 
 	// The submit tab: enter sends everything.
@@ -371,7 +384,11 @@ func (d *QuestionDialog) HandleKey(k tui.Key) bool {
 	// every rune while typing — and deliberately a JUMP, not a jump-and-
 	// answer, so a mistyped digit costs a cursor move rather than an
 	// answer sent. Enter is still the commit, from every route in.
-	if k.Kind == tui.KeyRune && k.Rune >= '1' && k.Rune <= '9' {
+	// A BARE digit. Alt qualifies the same digits for moving between
+	// questions, so without this check alt+2 also picked option 2 — and
+	// in a single-question ask, where there is nothing to jump to, that
+	// was the only thing it did.
+	if k.Kind == tui.KeyRune && !k.Alt && k.Rune >= '1' && k.Rune <= '9' {
 		if idx := int(k.Rune - '1'); idx < pickable(q) {
 			dr.cursor = idx
 		}
@@ -384,7 +401,7 @@ func (d *QuestionDialog) HandleKey(k tui.Key) bool {
 	// nothing. The note is bound to the option it was written against, so
 	// moving the cursor elsewhere leaves it behind rather than quietly
 	// attaching it to a different answer.
-	if k.Kind == tui.KeyRune && (k.Rune == 'n' || k.Rune == 'N') && !customRow(q, dr.cursor) && len(q.Options) > 0 {
+	if k.Kind == tui.KeyRune && !k.Alt && (k.Rune == 'n' || k.Rune == 'N') && !customRow(q, dr.cursor) && len(q.Options) > 0 {
 		if dr.noteFor != dr.cursor {
 			dr.note = tui.NewEditor("")
 			dr.noteFor = dr.cursor
@@ -480,6 +497,30 @@ func (dr questionDraft) answer(q core.UserQuestion) core.UserAnswer {
 // it back — but it is not sent with a different answer.
 func (dr questionDraft) noteText() string {
 	if dr.note == nil || dr.noteFor != dr.cursor {
+		return ""
+	}
+	return strings.TrimSpace(dr.note.SubmitValue())
+}
+
+// addendumFor is the text hanging under row i of the option list: the
+// note written against that option, or the answer parked on the custom
+// row. Both are KEPT when the user steps away, and both are now shown
+// where they were left.
+//
+// They used to be invisible from the list — the note only rendered while
+// its own option was selected, and a typed custom answer left no trace at
+// all once you escaped back to the options. Text you wrote and cannot see
+// reads as text you lost, which is the thing that makes someone type it
+// twice. What applies at submit is a separate question, answered by
+// noteText and by answer(); this is only about being able to see it.
+func (dr questionDraft) addendumFor(q core.UserQuestion, i int) string {
+	if customRow(q, i) {
+		if dr.input == nil {
+			return ""
+		}
+		return strings.TrimSpace(dr.input.SubmitValue())
+	}
+	if dr.note == nil || dr.noteFor != i {
 		return ""
 	}
 	return strings.TrimSpace(dr.note.SubmitValue())
@@ -731,7 +772,10 @@ func (d *QuestionDialog) keyRows(req *QuestionRequest, q core.UserQuestion, dr q
 		}
 	}
 	if set {
-		parts = append(parts, i18n.T("tab/⇧tab question"))
+		// alt+N is named beside tab rather than on its own: they are the
+		// same job, and the strip above already shows the numbers it
+		// refers to.
+		parts = append(parts, i18n.T("tab or alt+1-%d question", min(len(req.Questions), 9)))
 	}
 	switch {
 	case dr.typing && len(q.Options) > 0:
@@ -758,11 +802,16 @@ func wrapIndented(s string, width int) []string {
 // names what would be skipped and what the agent does next, because
 // "skipped" on its own reads as "nothing happens" — the agent in fact
 // proceeds on its own judgment, which is the part worth a second press.
+// It also says how to get OUT of it. The warning takes the key legend's
+// row, so while it is up the only keys named on screen are the one that
+// skips — and someone who hit esc by reflex needs the other one. "Any
+// other key" rather than a specific key because that is literally the
+// rule, and naming one would imply the rest do something else.
 func (d *QuestionDialog) skipWarning(n int) string {
 	if n > 1 {
-		return i18n.T("esc again skips ALL %d questions — the agent proceeds without your answers", n)
+		return i18n.T("esc again skips ALL %d questions — the agent proceeds without your answers · any other key carries on", n)
 	}
-	return i18n.T("esc again skips this question — the agent proceeds without your answer")
+	return i18n.T("esc again skips this question — the agent proceeds without your answer · any other key carries on")
 }
 
 // stripLocked renders the tab strip: one numbered chip per question,
@@ -883,6 +932,15 @@ func (d *QuestionDialog) submitBodyLocked(th tui.Theme, req *QuestionRequest, wi
 	hintColour := th.Muted
 	if d.confirmSkip {
 		hintRows, hintColour = wrapIndented(d.skipWarning(len(req.Questions)), width), th.Warning
+	}
+	// The legend yields under pressure here too, and for the reason it
+	// does on the question tabs: a wrapped warning is several rows, and
+	// clipping only the review below it cannot pay for chrome that has
+	// already outgrown MaxRows. Reserve the blank and one review row.
+	if d.MaxRows > 0 {
+		if room := max(d.MaxRows-chrome-2, 1); len(hintRows) > room {
+			hintRows = truncatedRows(hintRows, room)
+		}
 	}
 	// Budget the review against the same MaxRows the question tabs use:
 	// the strip above it and the blank + hint below it are already spent.
@@ -1005,7 +1063,6 @@ func optionWidth(width int) int {
 // selected option so a fold still reads as one choice.
 func optionRowsOf(q core.UserQuestion, width int, dr questionDraft) (rows []string, owner []int) {
 	all := questionRows(q)
-	note := dr.noteText()
 	// Every row is numbered, and 1-9 of them are also shortcuts. Numbering
 	// past 9 rather than stopping there because the number is a LABEL
 	// first — it is how the row below the fold is referred to, and a list
@@ -1029,13 +1086,13 @@ func optionRowsOf(q core.UserQuestion, width int, dr questionDraft) (rows []stri
 			rows = append(rows, pad+wl)
 			owner = append(owner, i)
 		}
-		// A note rides under the option it annotates, owned by it — so it
-		// travels with the selection through the window and wears the
-		// same highlight. An answer the user has added something to must
-		// look different from one they merely picked, or the note is
-		// invisible until the submit tab.
-		if note != "" && i == dr.noteFor {
-			for n, wl := range wrapPlain(note, limit-2) {
+		// A note — or a parked custom answer — rides under the row it
+		// belongs to, owned by it, so it travels with the selection
+		// through the window and wears the same highlight. A row the
+		// user has written something against must not look identical to
+		// one they merely moved past.
+		if add := dr.addendumFor(q, i); add != "" {
+			for n, wl := range wrapPlain(add, limit-2) {
 				mark := "↳ "
 				if n > 0 {
 					mark = "  "

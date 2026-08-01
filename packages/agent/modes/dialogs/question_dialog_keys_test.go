@@ -29,8 +29,8 @@ func TestQuestionSetLegendNamesTabMovement(t *testing.T) {
 	_ = askN(d,
 		core.UserQuestion{Question: "one?", Options: []string{"a"}},
 		core.UserQuestion{Question: "two?", Options: []string{"b"}})
-	if got := legendRow(t, d, 90); !strings.Contains(got, "tab/⇧tab") {
-		t.Fatalf("a set does not advertise tab movement: %q", got)
+	if got := legendRow(t, d, 90); !strings.Contains(got, "tab or alt+1-2 question") {
+		t.Fatalf("a set does not advertise how to move between questions: %q", got)
 	}
 
 	// A single question has nowhere to tab to, and offering the key there
