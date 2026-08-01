@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"sort"
 	"strings"
 
 	"terva.sh/terva/packages/agent/swarm"
@@ -113,6 +114,54 @@ func (s *wsSession) finalizeSwarmEntry(entry *swarmWatchEntry, errMsg string) {
 	s.flushSwarmSummary(batch)
 }
 
+// swarmFindingsBatchBudget is the total bytes of sub-agent findings one recap
+// will inline, shared across the batch.
+//
+// It was 1500 bytes PER CHILD, and that was the expensive setting. Inlining is
+// paid once, at the uncached input rate, and is then part of the cached prefix
+// for the rest of the session. Fetching the remainder with session_inspect is
+// paid per call at whatever the whole context costs — in a 200k-token
+// conversation roughly $0.50 a call, no matter how few bytes come back. One
+// reviewed session spent $3.50, 8.6% of its total, paging two reports of 12 KB
+// and 37 KB back through six such calls; inlining both outright would have cost
+// about $0.06. Truncating to protect the context spent an order of magnitude
+// more money than it saved.
+//
+// 48 KB is roughly 12k tokens: large enough that a normal batch of review
+// reports lands whole, small enough to stay a rounding error against a large
+// context. The session_inspect handle remains for anything past it.
+const swarmFindingsBatchBudget = 48 << 10
+
+// findingsBudgets divides swarmFindingsBatchBudget across the batch, max-min
+// fair: every child gets an equal share, and a child that needs less than its
+// share hands the remainder back to the ones that need more. So a single child
+// may use the whole budget, while a batch of ten short reports still prints all
+// ten in full rather than truncating each at a tenth.
+//
+// Takes the sizes rather than the entries: the allocation is arithmetic over
+// demand and has no business reaching into an agent snapshot to get it.
+func findingsBudgets(need []int) []int {
+	order := make([]int, len(need))
+	for i := range need {
+		order[i] = i
+	}
+	// Smallest need first, so each pass recomputes the share over exactly the
+	// children still unsatisfied.
+	sort.Slice(order, func(a, b int) bool { return need[order[a]] < need[order[b]] })
+	out := make([]int, len(need))
+	remaining, left := swarmFindingsBatchBudget, len(need)
+	for _, i := range order {
+		share := remaining / left
+		if need[i] < share {
+			share = need[i]
+		}
+		out[i] = share
+		remaining -= share
+		left--
+	}
+	return out
+}
+
 // flushSwarmSummary composes the recap describing every sub-agent's outcome and
 // injects it via the session queue so the coordinator picks it up at the next
 // safe boundary (or immediately, if idle). Phrased as observed state, not a
@@ -125,10 +174,26 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 	var sb strings.Builder
 	sb.WriteString(i18n.P("swarm.summary.header", "[auto-swarm update] %d sub-agent(s) finished:", len(batch)))
 	sb.WriteString("\n\n")
+	// Snapshot once per entry: Findings is consulted for the budget split and
+	// again when rendering, and a live child could otherwise answer the two
+	// calls differently — allocating against one report and printing another.
+	snaps := make([]swarm.AgentSnapshot, len(batch))
+	need := make([]int, len(batch))
+	for i, e := range batch {
+		snaps[i] = e.agent.Snapshot()
+		need[i] = len(snaps[i].Findings())
+	}
+	budgets := findingsBudgets(need)
 	var batchUsage provider.Usage
 	for idx, e := range batch {
-		snap := e.agent.Snapshot()
-		status := snap.RecapStatus()
+		snap := snaps[idx]
+		// The snapshot's own Err and the batch entry's turn error are two ways
+		// the same task can have failed; either one makes "completed" a lie.
+		turnErr := snap.Err
+		if turnErr == "" {
+			turnErr = e.err
+		}
+		status := snap.RecapStatus(turnErr)
 		// Book what this child spent against the session that ordered it, and
 		// sum the batch for the closing line. A failed child still counts: it
 		// spent real money before it died, and the whole point of this is that
@@ -170,10 +235,19 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 			sb.WriteByte('\n')
 		}
 		// The sub-agent's own answer — its findings — not a tail of tool
-		// output. Generous budget: for a review specialist this IS the
-		// deliverable the coordinator must fold into the report.
+		// output. For a review specialist this IS the deliverable the
+		// coordinator must fold into the report, so the budget is generous;
+		// see findingsBudgets for why generous is also the CHEAP option.
 		if findings := snap.Findings(); findings != "" {
-			sb.WriteString(i18n.P("swarm.summary.findings", "   findings: %s", truncateForSummary(findings, 1500)))
+			sb.WriteString(i18n.P("swarm.summary.findings", "   findings: %s", truncateForSummary(findings, budgets[idx])))
+			sb.WriteByte('\n')
+		} else {
+			// Say it plainly. Printing nothing here reads as "findings omitted
+			// for brevity" — a coordinator has no way to tell an absent field
+			// from an empty one, and the old tail fallback existed precisely
+			// because silence looked worse than noise. Silence is not the
+			// alternative; a statement is.
+			sb.WriteString(i18n.P("swarm.summary.no_findings", "   findings: none — this sub-agent produced no answer"))
 			sb.WriteByte('\n')
 		}
 		// Structured-deliverable verdict (schema spawns only): the free-text

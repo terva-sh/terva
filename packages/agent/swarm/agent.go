@@ -28,7 +28,18 @@ type Agent struct {
 	// in the shared host cwd — there it inherits the dispatcher's posture.
 	// A lease is a git worktree, NOT a security sandbox, so this gates
 	// AUTONOMY, not privilege. Persisted in meta.json so Resume keeps it.
-	Leased  bool
+	Leased bool
+	// Origin is the RepoRoot of the swarm that spawned this agent — the
+	// project the agent BELONGS to, as distinct from Dir, the directory it
+	// happens to run in. The two are equal for a shared-cwd agent and differ
+	// for a leased one, which is exactly why Dir cannot answer "whose child is
+	// this": under --swarm-worktrees every child's cwd is a leased worktree
+	// path that hashes to a different project bucket than its parent's. Tools
+	// that authorize by project (session_inspect) must read this, not Dir.
+	// Persisted in meta.json; empty on records written before it existed, and
+	// callers fall back to Dir there (correct for the unleased case, which is
+	// the only one those older records could have gotten right anyway).
+	Origin  string
 	Started time.Time
 
 	// Model and Provider, when non-empty, override the child

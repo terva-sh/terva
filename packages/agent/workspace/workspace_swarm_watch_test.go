@@ -192,3 +192,105 @@ func TestCarrierRecapFlowsToSessionQueue(t *testing.T) {
 		}
 	}
 }
+
+// TestFindingsBudgetsAreMaxMinFair pins C1 of the 2026-07-30 session-harness
+// review: the findings budget is shared across the batch, not a fixed slice per
+// child, so a lone big report is inlined whole rather than truncated at a
+// fraction it never needed to be. The old per-child 1500-byte cap is what
+// forced a 37 KB report through six paged session_inspect calls, at $3.50 —
+// 8.6% of that session — to retrieve what inlining would have cost about $0.06.
+func TestFindingsBudgetsAreMaxMinFair(t *testing.T) {
+	sum := func(b []int) int {
+		n := 0
+		for _, v := range b {
+			n += v
+		}
+		return n
+	}
+	const big, short = 40 << 10, 100
+
+	// A single child may use the whole budget.
+	if got := findingsBudgets([]int{big}); got[0] != big {
+		t.Errorf("lone child budget = %d, want its full %d bytes", got[0], big)
+	}
+
+	// A child needing less than its share hands the remainder back, so a short
+	// report and a long one are both served in full when the total fits.
+	got := findingsBudgets([]int{short, big})
+	if got[0] != short || got[1] != big {
+		t.Errorf("budgets = %v, want both served in full (%d, %d)", got, short, big)
+	}
+
+	// Oversubscribed: the total is respected and split evenly between two
+	// children that both want more than half.
+	got = findingsBudgets([]int{big, big})
+	if total := sum(got); total > swarmFindingsBatchBudget {
+		t.Errorf("batch budget overrun: %d > %d", total, swarmFindingsBatchBudget)
+	}
+	if got[0] != got[1] {
+		t.Errorf("equal demand should split evenly, got %d and %d", got[0], got[1])
+	}
+
+	// Ten short reports all land in full rather than each being cut to a tenth.
+	many := make([]int, 10)
+	for i := range many {
+		many[i] = short
+	}
+	for i, b := range findingsBudgets(many) {
+		if b != short {
+			t.Errorf("child %d budget = %d, want its full %d bytes", i, b, short)
+		}
+	}
+
+	// Degenerate inputs must not divide by zero or hand back nonsense.
+	if got := findingsBudgets(nil); len(got) != 0 {
+		t.Errorf("empty batch = %v, want no budgets", got)
+	}
+	if got := findingsBudgets([]int{0, 0}); got[0] != 0 || got[1] != 0 {
+		t.Errorf("zero demand = %v, want zeros", got)
+	}
+}
+
+// TestRecapNamesATurnErrorFailure drives A2 and A3 of the 2026-07-30
+// session-harness review through the real recap formatter.
+//
+// The child in that session died on a provider overload before writing a single
+// assistant message. Its daemon stayed healthy, so Status never reached
+// StatusFailed and the recap said "status: completed" one line above
+// "turn error: …overloaded…". Its findings, meanwhile, were the transcript
+// tail: terva's own stderr banner plus the coordinator's task prompt echoed
+// back, presented as the review it had asked for.
+func TestRecapNamesATurnErrorFailure(t *testing.T) {
+	s := &wsSession{
+		agent: core.NewAgent(nil, "fake-model", "", core.Registry{}),
+		hub:   &wsHub{},
+	}
+	s.turnCancel = func() {}
+
+	// A live daemon that produced nothing, whose turn carried the error.
+	s.flushSwarmSummary([]*swarmWatchEntry{{
+		agent: &swarm.Agent{ID: "review-docs-world-format-952000"},
+		task:  "Review docs/world-format.md for the first executable MVP",
+		done:  true,
+		err:   "openai-codex: Our servers are currently overloaded. Please try again later.",
+	}})
+
+	q := waitQueuedRecap(t, s)
+	if len(q) != 1 {
+		t.Fatalf("queued messages = %d, want 1 recap: %q", len(q), q)
+	}
+	recap := q[0]
+
+	if strings.Contains(recap, "status: completed") {
+		t.Errorf("a child that produced nothing was reported completed:\n%s", recap)
+	}
+	for _, want := range []string{
+		"status: failed",
+		"turn error: openai-codex: Our servers are currently overloaded.",
+		"findings: none — this sub-agent produced no answer",
+	} {
+		if !strings.Contains(recap, want) {
+			t.Errorf("recap missing %q:\n%s", want, recap)
+		}
+	}
+}

@@ -331,6 +331,11 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	sb.WriteString("You do NOT need to wait or poll for it: when its task finishes you are re-invoked automatically with an [auto-swarm update] carrying its findings. ")
 	fmt.Fprintf(&sb, "If you do want to look in mid-run, session_inspect takes %q as a session_id and streams what the sub-agent has written so far (the id is NOT a project session id). ", agent.ID)
 	sb.WriteString("This conversation continues immediately; work on the next thing, or end your turn if nothing else is pending.")
+	// What the OTHER outstanding sub-agents have cost so far. Delegation is the
+	// only action whose price is unbounded by the coordinator's own turn, and
+	// until now that price arrived only in the recap — after the next spawn
+	// decision had already been made.
+	sb.WriteString(spawnCostFooter(t.Swarm))
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: sb.String()}},
 		Details: map[string]any{

@@ -28,27 +28,45 @@ func (w *Workspace) pollTasks() {
 	t := time.NewTicker(taskPollInterval)
 	defer t.Stop()
 	var lastSig string
-	var lastAny bool
+	var lastIDs string
 	for {
 		select {
 		case <-w.ctx.Done():
 			return
 		case <-t.C:
+			// Unscoped on purpose: this is a CHANGE SIGNAL, not data. Each
+			// session re-fetches and gets its own scoped list, so the poller
+			// only has to notice that something, somewhere, moved.
 			snaps := w.swarm.SnapshotAll()
 			sig := taskSignature(snaps)
 			if sig == lastSig {
 				continue
 			}
 			lastSig = sig
-			// Whether the pane exists at all toggles with agent presence; tell
-			// clients to re-list so the tab appears/disappears.
-			if any := len(snaps) > 0; any != lastAny {
-				lastAny = any
+			// Whether the pane exists toggles per SESSION now, and this loop
+			// has no session — so it re-lists whenever the set of agents
+			// changes rather than when the global count crosses zero. A spawn
+			// in one session must be able to make the tab appear in that
+			// session while the workspace-wide count was never zero.
+			if ids := taskIDs(snaps); ids != lastIDs {
+				lastIDs = ids
 				w.BroadcastAll(ctrlproto.SurfacesChangedEvent())
 			}
 			w.BroadcastAll(ctrlproto.SurfaceUpdatedEvent("tasks"))
 		}
 	}
+}
+
+// taskIDs fingerprints only WHICH agents exist — the input to "should this
+// session have a tasks tab at all", which changes far less often than the
+// activity churn taskSignature tracks.
+func taskIDs(snaps []swarm.AgentSnapshot) string {
+	var b strings.Builder
+	for _, s := range snaps {
+		b.WriteString(s.ID)
+		b.WriteByte('|')
+	}
+	return b.String()
 }
 
 // taskSignature is a cheap fingerprint of the swarm state — enough to detect a
@@ -87,12 +105,15 @@ func (w *Workspace) BroadcastAll(ev ctrlproto.Event) {
 	w.events().broadcast(ev)
 }
 
-// taskList builds the tasks pane from the swarm snapshot.
-func (w *Workspace) taskList() *ctrlproto.TaskList {
+// taskList builds the tasks pane from the swarm snapshot, scoped to the
+// session asking. The swarm is workspace-global and its agents outlive the run
+// that spawned them, so without a scope every conversation inherits every other
+// conversation's background work — including yesterday's, in another repo.
+func (w *Workspace) taskList(sessionID string) *ctrlproto.TaskList {
 	if w.swarm == nil {
 		return &ctrlproto.TaskList{}
 	}
-	snaps := w.swarm.SnapshotAll()
+	snaps := w.swarm.SnapshotFor(sessionID)
 	out := make([]ctrlproto.TaskInfo, 0, len(snaps))
 	for _, s := range snaps {
 		out = append(out, ctrlproto.TaskInfo{
@@ -118,21 +139,37 @@ func (w *Workspace) taskList() *ctrlproto.TaskList {
 	// Advertise the spawn capability so the board's swarm lane can offer a
 	// backend picker (native is implicit; foreign backends are listed even when
 	// disabled so the UI can grey them with a hint) — see TaskList.Backends.
+	// No archived tally rides here. An archived record is unreachable from
+	// terva by design (swarm.Archive), and a count is a read path — the one
+	// that grows into a list, then into "open it just to look".
 	return &ctrlproto.TaskList{Tasks: out, Backends: worker.Names(), WorkersEnabled: config.ExternalWorkersEnabled()}
 }
 
-// hasTasks reports whether the tasks pane should be offered: auto-swarm is on
-// (so the agent can spawn) or agents already exist (e.g. detached from a prior
-// run).
-func (w *Workspace) hasTasks() bool {
+// hasTasks reports whether the tasks pane should be offered to this session:
+// auto-swarm is on (so the agent can spawn) or agents this session can see
+// already exist (e.g. detached from a prior run). Scoped for the same reason
+// taskList is — an empty pane is better than a pane full of another
+// conversation's agents.
+func (w *Workspace) hasTasks(sessionID string) bool {
 	if w.swarm == nil {
 		return false
 	}
-	return config.AutoSwarmEnabled() || len(w.swarm.SnapshotAll()) > 0
+	return config.AutoSwarmEnabled() || len(w.swarm.SnapshotFor(sessionID)) > 0
 }
 
 // taskAction dispatches a tasks-pane action to the swarm, then nudges clients.
-func (w *Workspace) taskAction(action string, args map[string]string) error {
+//
+// archive is one-way, has no undo verb, and leaves nothing terva can read back
+// (see swarm.Archive). It is offered beside remove because the pair IS the
+// choice: keep the transcript on disk, or don't keep it at all.
+//
+// sessionID is the conversation acting. It stamps a spawn — the board used to
+// send none at all, so every agent started from the pane landed unscoped and
+// showed up in every session forever. Stop/remove/resume/send take an id that
+// only reaches the client through a scoped list, so they are not re-checked
+// here; the scope is a view, not a permission boundary (same user, same
+// machine, and a cross-session stop is a reasonable thing to want).
+func (w *Workspace) taskAction(sessionID, action string, args map[string]string) error {
 	if w.swarm == nil {
 		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("no swarm"))
 	}
@@ -143,6 +180,8 @@ func (w *Workspace) taskAction(action string, args map[string]string) error {
 		err = w.swarm.Stop(id)
 	case "remove":
 		err = w.swarm.Remove(id)
+	case "archive":
+		err = w.swarm.Archive(id)
 	case "resume":
 		_, err = w.swarm.Resume(w.ctx, id)
 	case "send":
@@ -164,7 +203,8 @@ func (w *Workspace) taskAction(action string, args map[string]string) error {
 			}
 		}
 		_, err = w.swarm.SpawnReq(w.ctx, swarm.SpawnRequest{
-			Task: args["task"], Model: args["model"], Provider: args["provider"], Persona: args["persona"], Backend: backend,
+			Task: args["task"], Model: args["model"], Provider: args["provider"], Persona: args["persona"],
+			Backend: backend, SessionID: sessionID,
 		})
 	default:
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown tasks action %q", action))

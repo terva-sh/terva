@@ -61,6 +61,11 @@ type agentMeta struct {
 	// ran with (a leased worker stays autonomous; an explicit override persists).
 	Approval string `json:"approval,omitempty"`
 	Leased   bool   `json:"leased,omitempty"`
+	// Origin is the spawning swarm's RepoRoot — the project this agent belongs
+	// to. Durable because it is the only record of ownership that survives
+	// worktree isolation: Dir is a lease path that hashes to a different
+	// project than its parent, so a tool authorizing by project cannot use it.
+	Origin string `json:"origin,omitempty"`
 	// Schema is the structured-deliverable contract (see Agent.Schema). A
 	// revived agent must keep it or its next turn would silently drop the
 	// validation the dispatcher asked for.
@@ -99,6 +104,7 @@ func writeAgentMeta(stateDir string, a *Agent) error {
 		Backend:      a.Backend,
 		Approval:     a.Approval,
 		Leased:       a.Leased,
+		Origin:       a.Origin,
 		Schema:       a.Schema,
 		InboxPath:    a.InboxPath,
 		EventLogPath: a.EventLogPath,
@@ -237,6 +243,7 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 		Backend:      m.Backend,
 		Approval:     m.Approval,
 		Leased:       m.Leased,
+		Origin:       m.Origin,
 		Schema:       m.Schema,
 		InboxPath:    m.InboxPath,
 		EventLogPath: m.EventLogPath,
@@ -400,6 +407,9 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Experience: existing.Experience, Substrate: existing.Substrate, Card: existing.Card,
 		Backend:  existing.Backend,
 		Approval: existing.Approval, Leased: existing.Leased,
+		// Origin is spawn-time ownership; dropping it here would persist an
+		// empty origin and permanently orphan the agent from its project.
+		Origin:    existing.Origin,
 		Schema:    existing.Schema,
 		InboxPath: existing.InboxPath, EventLogPath: existing.EventLogPath,
 		SessionPath: existing.SessionPath,
@@ -423,6 +433,7 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Backend:      m.Backend,
 		Approval:     m.Approval,
 		Leased:       m.Leased,
+		Origin:       m.Origin,
 		Schema:       m.Schema,
 		SessionID:    m.SessionID,
 		InboxPath:    m.InboxPath,

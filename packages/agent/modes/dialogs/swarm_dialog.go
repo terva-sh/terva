@@ -38,6 +38,12 @@ type SwarmDialog struct {
 	snapshot func() []swarm.AgentSnapshot
 	stop     func(id string) error
 	remove   func(id string) error
+	// archive is installed by SetArchive rather than taken as an Open
+	// parameter: Open and OpenViewing already carry seven positional callbacks
+	// between them across ~40 call sites, and an optional one that no-ops when
+	// nil reads better than an eighth every caller has to pass. Nil means the
+	// key is simply not offered, which is right for a host with no swarm.
+	archive func(id string) error
 	// spawn accepts an optional model + provider override (empty
 	// strings mean "let the child resolve its own default"). The cli
 	// adapter forwards these to swarm.Swarm.SpawnReq.
@@ -179,6 +185,11 @@ func (d *SwarmDialog) Open(
 // CursorPos returns the row/col for the terminal cursor while an
 // inline editor (spawn or prompt) is active so the caret blinks in
 // the right spot. Returns -1, -1 when no input is being captured.
+// SetArchive installs the one-way archive callback (swarm.Archive: compress the
+// record, move it out of the live tree, forget it). Optional — a dialog without
+// one does not offer the key at all, rather than offering it and failing.
+func (d *SwarmDialog) SetArchive(fn func(id string) error) { d.archive = fn }
+
 func (d *SwarmDialog) CursorPos(width int) (row, col int) {
 	if !d.Active() {
 		return -1, -1
@@ -426,7 +437,7 @@ func promptDisabledHint(s swarm.Status) string {
 // terminal ones it's a no-op and the user usually wants 'r' (remove)
 // to clear out the agent's state instead.
 func killDisabledHint(s swarm.Status) string {
-	return i18n.T("kill: agent is %s; nothing to stop (press r to remove)", string(s))
+	return i18n.T("kill: agent is %s; nothing to stop (a archives it, r removes it)", string(s))
 }
 
 // FriendlySendErr turns a raw send error into a status-bar message
@@ -569,6 +580,16 @@ func (d *SwarmDialog) HandleKey(k tui.Key) (closed bool, msg, errMsg string) {
 					return false, "", i18n.T("remove: %s", err)
 				}
 				return false, i18n.T("removed %s", a.ID), ""
+			}
+		case 'a':
+			if a := d.selected(); a != nil && d.archive != nil {
+				if err := d.archive(a.ID); err != nil {
+					return false, "", i18n.T("archive: %s", err)
+				}
+				// Name the destination. "Archived" on its own reads as a gentler
+				// delete; the transcript being on disk and readable without
+				// terva is the whole difference from 'r'.
+				return false, i18n.T("archived %s — compressed under swarm/archive/", a.ID), ""
 			}
 		}
 	}
@@ -992,7 +1013,7 @@ func (d *SwarmDialog) Render(th tui.Theme, width int) []string {
 		return d.renderTranscript(th, width)
 	}
 
-	out := []string{FrameHeader(th, i18n.T("swarm (n new, p prompt, R resume, ↑/↓ move, enter view, k kill, r remove, esc close)"), width)}
+	out := []string{FrameHeader(th, i18n.T("swarm (n new, p prompt, R resume, ↑/↓ move, enter view, k kill, a archive, r remove, esc close)"), width)}
 	if d.prompting {
 		return d.renderPromptEditor(th, width, out)
 	}

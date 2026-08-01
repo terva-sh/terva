@@ -37,6 +37,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		snapshotFn func() []swarm.AgentSnapshot
 		stopFn     func(id string) error
 		removeFn   func(id string) error
+		archiveFn  func(id string) error
 		spawnFn    func(task, model, provider, persona, backend string) (string, error)
 		sendFn     func(id, text string) error
 		resumeFn   func(id string) (string, error)
@@ -46,6 +47,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		snapshotFn = i.carrierTaskSnapshot
 		stopFn = func(id string) error { return i.carrierTaskAction("stop", map[string]string{"id": id}) }
 		removeFn = func(id string) error { return i.carrierTaskAction("remove", map[string]string{"id": id}) }
+		archiveFn = func(id string) error { return i.carrierTaskAction("archive", map[string]string{"id": id}) }
 		spawnFn = func(task, model, provider, persona, backend string) (string, error) {
 			return "", i.carrierTaskAction("spawn", map[string]string{
 				"task": task, "model": model, "provider": provider, "persona": persona, "backend": backend,
@@ -113,6 +115,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 
 	switch sub {
 	case "", "list", "ls", "ps":
+		i.swarmDialog.SetArchive(archiveFn)
 		i.swarmDialog.Open(
 			snapshotFn,
 			stopFn,
@@ -182,11 +185,29 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 			return
 		}
 		i.swarmStatus(i18n.T("removed %s", rest), "")
+	case "archive":
+		if rest == "" {
+			i.swarmStatus("", i18n.T("/swarm archive <id>: missing id"))
+			return
+		}
+		if archiveFn == nil {
+			i.swarmStatus("", i18n.T("archive is unavailable in this build"))
+			return
+		}
+		if err := archiveFn(rest); err != nil {
+			i.swarmStatus("", i18n.T("archive: %s", err.Error()))
+			return
+		}
+		// Say where it went. "Archived" alone reads like a softer delete, and
+		// the one thing the user needs to know is that the transcript is still
+		// on disk and reachable without terva.
+		i.swarmStatus(i18n.T("archived %s — compressed under swarm/archive/", rest), "")
 	case "logs", "log", "view":
 		if rest == "" {
 			i.swarmStatus("", i18n.T("/swarm logs <id>: missing id"))
 			return
 		}
+		i.swarmDialog.SetArchive(archiveFn)
 		ok := i.swarmDialog.OpenViewing(
 			rest,
 			snapshotFn,

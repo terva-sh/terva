@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -49,6 +50,13 @@ type StatusTool struct {
 	CWD        string
 	AuthMethod string // "apikey" | "oauth" | ""
 	BaseURL    string // non-empty only for custom / self-hosted endpoints
+
+	// Swarm, when set, lets the status line report spend by sub-agents that are
+	// still running — which the session's delegated total cannot include, since
+	// a child is booked against the parent only once its recap flushes. Nil
+	// wherever swarm is not wired (bot mode, a sub-agent's own status), and the
+	// line is simply omitted.
+	Swarm *swarm.Swarm
 
 	// Agent is the fallback conversation this tool reports on when the
 	// dispatch context carries no agent (direct Execute calls, tests).
@@ -281,6 +289,16 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 			sb.WriteByte('\n')
 		}
 	}
+	// Spend by sub-agents STILL RUNNING, which the delegated figure above cannot
+	// include: a child's spend is booked against this session only when its recap
+	// flushes. Without this line, "of which delegated" silently understates for
+	// as long as a swarm is in flight — which is exactly the window in which a
+	// coordinator is deciding whether to spawn more.
+	if line := liveDelegatedLine(t.Swarm); line != "" {
+		sb.WriteString("  ")
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
 
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: sb.String()}},
@@ -305,6 +323,13 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 					return agent.DelegatedCost()
 				}
 				return provider.Usage{}
+			}(),
+			// NOT a subset of cumulative: sub-agents still running have not been
+			// booked against this session yet, so this is spend that exists and
+			// is nowhere in the figures above.
+			"delegated_in_flight": func() provider.Usage {
+				u, _ := t.Swarm.InFlightSpend()
+				return u
 			}(),
 			// Unclipped, unlike the text line: a session record is read by
 			// tools, and the reason to persist this at all is so a claim made

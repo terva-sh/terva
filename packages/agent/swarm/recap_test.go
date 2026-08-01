@@ -21,24 +21,79 @@ func TestRecapStatusCollapsesDaemonRunning(t *testing.T) {
 		{StatusKilled, "killed"},
 	}
 	for _, c := range cases {
-		if got := (AgentSnapshot{Status: c.in}).RecapStatus(); got != c.want {
+		if got := (AgentSnapshot{Status: c.in}).RecapStatus(""); got != c.want {
 			t.Errorf("RecapStatus(%q) = %q; want %q", c.in, got, c.want)
 		}
 	}
 }
 
+// TestRecapStatusReportsTurnError pins A2 of the 2026-07-30 session-harness
+// review. A child whose only turn died on a provider error never reaches
+// StatusFailed — the daemon is alive and idle, which is precisely the state
+// the collapse above calls "completed". So the recap printed
+//
+//	status: completed
+//	turn error: openai-codex: Our servers are currently overloaded.
+//
+// on adjacent lines. A coordinator reading the first line reports a review as
+// delivered when nothing was produced.
+func TestRecapStatusReportsTurnError(t *testing.T) {
+	const overload = "openai-codex: Our servers are currently overloaded. Please try again later."
+
+	// Died before producing anything: a failure, whatever the daemon's status.
+	got := (AgentSnapshot{Status: StatusRunning}).RecapStatus(overload)
+	if got != "failed" {
+		t.Errorf("RecapStatus with a turn error and no findings = %q; want failed", got)
+	}
+
+	// Delivered its report, THEN hit an error: the task produced something, so
+	// it is not a plain failure — but it is not clean either.
+	got = (AgentSnapshot{Status: StatusRunning, LastAssistant: "## Review\n- finding 1"}).RecapStatus(overload)
+	if got != "completed with errors" {
+		t.Errorf("RecapStatus with a turn error and findings = %q; want completed with errors", got)
+	}
+
+	// A real terminal status still wins over the turn-error axis.
+	if got := (AgentSnapshot{Status: StatusKilled}).RecapStatus(overload); got != "killed" {
+		t.Errorf("RecapStatus(killed) = %q; want killed", got)
+	}
+
+	// Whitespace is not an error.
+	if got := (AgentSnapshot{Status: StatusRunning}).RecapStatus("   "); got != "completed" {
+		t.Errorf("RecapStatus with a blank turn error = %q; want completed", got)
+	}
+}
+
 // TestFindingsPrefersLastAssistant pins that the recap surfaces the
-// sub-agent's actual answer, falling back to the transcript tail only
-// when no assistant message was captured.
+// sub-agent's actual answer, and NOTHING when there was none.
 func TestFindingsPrefersLastAssistant(t *testing.T) {
 	if got := (AgentSnapshot{LastAssistant: "the findings", Tail: "ok pkg/x"}).Findings(); got != "the findings" {
 		t.Errorf("Findings with LastAssistant = %q; want the assistant answer", got)
 	}
-	if got := (AgentSnapshot{Tail: "  ok pkg/x  "}).Findings(); got != "ok pkg/x" {
-		t.Errorf("Findings fallback = %q; want trimmed tail", got)
-	}
 	if got := (AgentSnapshot{LastAssistant: "   "}).Findings(); got != "" {
 		t.Errorf("Findings with blank-only fields = %q; want empty", got)
+	}
+}
+
+// TestFindingsNeverReturnsTranscriptTail pins A3 of the 2026-07-30
+// session-harness review. Findings used to fall back to the transcript tail
+// when no assistant message was captured, on the theory that some answer beats
+// none. The tail is raw transcript lines with their role prefixes intact, so a
+// child that died before its first message reported findings of terva's own
+// stderr banner followed by the coordinator's task prompt echoed back — read,
+// reasonably, as the sub-agent's deliverable.
+func TestFindingsNeverReturnsTranscriptTail(t *testing.T) {
+	tail := "stderr: terva: unjailed by a saved rule for /Users/x/project, and the approval mode " +
+		"auto-approves built-in tools: they may read and write anywhere without asking. `terva jail` to undo\n" +
+		"user: Review docs/world-format.md for the first executable MVP of this Go repository."
+
+	if got := (AgentSnapshot{Tail: tail}).Findings(); got != "" {
+		t.Errorf("Findings fell back to the transcript tail:\n%q", got)
+	}
+	// The tail is still retained on the snapshot for callers that genuinely
+	// want raw transcript — it just is not the child's answer.
+	if (AgentSnapshot{Tail: tail}).Tail == "" {
+		t.Error("Tail should still be available on the snapshot")
 	}
 }
 

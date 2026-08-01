@@ -757,12 +757,10 @@ func TestRemoveAlsoCleansStateDir(t *testing.T) {
 	}
 }
 
-// TestActiveSessionScopesSnapshotAll proves the session filter the
-// user asked for: a single Swarm with agents spawned under two
-// different active sessions only surfaces the agents matching the
-// currently-active session via SnapshotAll. Switching the active
-// session re-narrows the view without touching agent state.
-func TestActiveSessionScopesSnapshotAll(t *testing.T) {
+// TestSessionScopesSnapshot proves the session filter: one Swarm holding
+// agents from two sessions answers each session with only its own, from the
+// same object at the same moment and with no state change in between.
+func TestSessionScopesSnapshot(t *testing.T) {
 	root := testsupport.TempDir(t)
 	f := New(Config{
 		Root: root, RepoRoot: root,
@@ -772,19 +770,16 @@ func TestActiveSessionScopesSnapshotAll(t *testing.T) {
 	})
 
 	// Spawn one agent under session A and one under session B.
-	f.SetActiveSession("sess-A")
-	aA, err := f.Spawn(context.Background(), "task A")
+	aA, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "task A", SessionID: "sess-A"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.SetActiveSession("sess-B")
-	aB, err := f.Spawn(context.Background(), "task B")
+	aB, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "task B", SessionID: "sess-B"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Both agents must carry the session id they were spawned under,
-	// regardless of any later SetActiveSession.
+	// Both agents carry the session id they were spawned under.
 	if aA.SessionID != "sess-A" {
 		t.Errorf("aA.SessionID = %q; want sess-A", aA.SessionID)
 	}
@@ -792,22 +787,20 @@ func TestActiveSessionScopesSnapshotAll(t *testing.T) {
 		t.Errorf("aB.SessionID = %q; want sess-B", aB.SessionID)
 	}
 
-	// Active session B → only aB visible.
-	only := snapshotIDs(f.SnapshotAll())
+	// Asking as B sees only B; asking as A sees only A. Both answers come from
+	// the SAME Swarm with no state change between them, which is the property a
+	// mutable "active session" could not provide.
+	only := snapshotIDs(f.SnapshotFor("sess-B"))
 	if len(only) != 1 || only[0] != aB.ID {
 		t.Errorf("scoped to sess-B, snapshot ids = %v; want [%s]", only, aB.ID)
 	}
-
-	// Switch back to A → only aA visible.
-	f.SetActiveSession("sess-A")
-	only = snapshotIDs(f.SnapshotAll())
+	only = snapshotIDs(f.SnapshotFor("sess-A"))
 	if len(only) != 1 || only[0] != aA.ID {
 		t.Errorf("scoped to sess-A, snapshot ids = %v; want [%s]", only, aA.ID)
 	}
 
-	// Clear the scope → both visible.
-	f.SetActiveSession("")
-	all := snapshotIDs(f.SnapshotAll())
+	// No scope → both visible.
+	all := snapshotIDs(f.SnapshotFor(""))
 	if len(all) != 2 {
 		t.Errorf("unscoped snapshot ids = %v; want both agents", all)
 	}
@@ -837,8 +830,7 @@ func TestSessionIDPersistsAcrossReload(t *testing.T) {
 	}
 
 	f := mkSwarm()
-	f.SetActiveSession("sess-keep")
-	a, err := f.Spawn(context.Background(), "persist me")
+	a, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "persist me", SessionID: "sess-keep"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -850,15 +842,13 @@ func TestSessionIDPersistsAcrossReload(t *testing.T) {
 	if loaded, errs := g.Reload(); loaded != 1 || len(errs) > 0 {
 		t.Fatalf("reload loaded=%d errs=%v; want 1 / no errs", loaded, errs)
 	}
-	g.SetActiveSession("sess-keep")
-	got := snapshotIDs(g.SnapshotAll())
+	got := snapshotIDs(g.SnapshotFor("sess-keep"))
 	if len(got) != 1 || got[0] != a.ID {
 		t.Errorf("after reload + scope to sess-keep, ids = %v; want [%s]", got, a.ID)
 	}
 
-	// Scope to a different session: agent must be hidden.
-	g.SetActiveSession("sess-other")
-	if got := snapshotIDs(g.SnapshotAll()); len(got) != 0 {
+	// Ask as a different session: agent must be hidden.
+	if got := snapshotIDs(g.SnapshotFor("sess-other")); len(got) != 0 {
 		t.Errorf("scoped to other session, ids = %v; want []", got)
 	}
 }
@@ -877,7 +867,7 @@ func TestEmptySessionIDIsVisibleFromAnyScope(t *testing.T) {
 			return RunnerFunc(func(ctx context.Context, _ Sink) error { <-ctx.Done(); return ctx.Err() })
 		},
 	})
-	// No SetActiveSession call → agent spawned with empty SessionID.
+	// No stamp on the request → agent spawned with empty SessionID.
 	a, err := f.Spawn(context.Background(), "legacy")
 	if err != nil {
 		t.Fatal(err)
@@ -887,8 +877,7 @@ func TestEmptySessionIDIsVisibleFromAnyScope(t *testing.T) {
 	}
 
 	for _, scope := range []string{"", "any-session", "some-other"} {
-		f.SetActiveSession(scope)
-		got := snapshotIDs(f.SnapshotAll())
+		got := snapshotIDs(f.SnapshotFor(scope))
 		if len(got) != 1 || got[0] != a.ID {
 			t.Errorf("scope=%q: ids = %v; want legacy agent visible", scope, got)
 		}
@@ -913,8 +902,7 @@ func TestResumePreservesSessionID(t *testing.T) {
 		},
 	})
 
-	f.SetActiveSession("sess-scope")
-	a, err := f.Spawn(context.Background(), "scoped task")
+	a, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "scoped task", SessionID: "sess-scope"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -948,12 +936,10 @@ func TestResumePreservesSessionID(t *testing.T) {
 	}
 
 	// And the scope filter must still find it only under its session.
-	f.SetActiveSession("sess-scope")
-	if got := snapshotIDs(f.SnapshotAll()); len(got) != 1 || got[0] != id {
+	if got := snapshotIDs(f.SnapshotFor("sess-scope")); len(got) != 1 || got[0] != id {
 		t.Errorf("scoped to sess-scope after resume, ids = %v; want [%s]", got, id)
 	}
-	f.SetActiveSession("other")
-	if got := snapshotIDs(f.SnapshotAll()); len(got) != 0 {
+	if got := snapshotIDs(f.SnapshotFor("other")); len(got) != 0 {
 		t.Errorf("scoped to other after resume, ids = %v; want []", got)
 	}
 }

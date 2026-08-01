@@ -200,7 +200,6 @@ type Swarm struct {
 	// "show everything" behaviour is preserved — important for
 	// tests and any scripted use of the Swarm that doesn't bother
 	// with sessions.
-	activeSession string
 }
 
 // New constructs a Swarm from cfg. Missing config fields are filled
@@ -224,27 +223,14 @@ func New(cfg Config) *Swarm {
 	return s
 }
 
-// SetActiveSession scopes the dashboard view (and Spawn stamping)
-// to a particular host terva session id. Pass empty to clear the
-// scope and revert to "show every agent" (the original behaviour).
-//
-// Existing in-memory agents keep their SessionID; only the filter
-// applied at snapshot time changes. So swapping the active session
-// with /sessions instantly re-narrows the dashboard without
-// touching any agent state.
-func (f *Swarm) SetActiveSession(id string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.activeSession = id
-}
-
-// ActiveSession returns the current scope, mostly for tests and
-// diagnostics. Empty means "no scope; show everything".
-func (f *Swarm) ActiveSession() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.activeSession
-}
+// There is deliberately no SetActiveSession. Scope is an ARGUMENT — see
+// SnapshotFor — because a workspace hosts many sessions at once and a single
+// mutable "current session" on a shared Swarm is a value that is wrong for
+// every session but the last one to write it. The field existed, was
+// documented, was tested, and was never called by a production host; what it
+// would have done in the web daemon is let one browser tab renarrow another
+// tab's dashboard. Spawn takes the same treatment: SpawnRequest.SessionID is
+// the stamp, with no swarm-wide fallback to inherit.
 
 // Root is the swarm state root this instance was configured with — the anchor
 // every sibling on-disk layout hangs off (agents/, workflows/). Exposed so a
@@ -307,6 +293,11 @@ func (f *Swarm) idTakenLocked(id string) bool {
 	if _, exists := f.agents[id]; exists {
 		return true
 	}
+	// An archived record carries the same id and must never be minted onto:
+	// the new agent's archive would collide with a record nothing can recover.
+	if f.archivedIDTaken(id) {
+		return true
+	}
 	if _, err := os.Stat(f.agentStateDir(id)); err == nil {
 		return true
 	}
@@ -329,6 +320,37 @@ func AgentSessionPath(root, id string) string {
 	return filepath.Join(root, "agents", id, "session.json")
 }
 
+// AgentIDsWithOrigin lists every LIVE agent id under a swarm root paired with
+// the project it was spawned from, sorted by id (which is creation order — see
+// Reload). An agent whose meta is missing or malformed is skipped rather than
+// reported with an empty origin: an empty origin matches no project, and a
+// caller that filters on equality would silently treat it as belonging to
+// whoever asked with an empty cwd.
+//
+// It walks agents/ only. Archived records are unreachable from terva by
+// standing rule (archive.go) — a read path here is exactly the "first a count,
+// then a list" erosion that rule exists to stop.
+//
+// Origin is returned rather than compared here because what counts as "the same
+// project" is a sessions-directory question the core package owns, and swarm
+// does not import core.
+func AgentIDsWithOrigin(root string) map[string]string {
+	entries, err := os.ReadDir(filepath.Join(root, "agents"))
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if origin := AgentOrigin(root, e.Name()); origin != "" {
+			out[e.Name()] = origin
+		}
+	}
+	return out
+}
+
 // AgentEventLogPath returns the durable event log for one agent id under a
 // swarm root — the companion to AgentSessionPath (see agentStateDir's layout).
 // Both stream as the child works, but the event log starts first: it carries
@@ -339,6 +361,29 @@ func AgentSessionPath(root, id string) string {
 // verbatim-id caveat as AgentSessionPath: path-validate untrusted ids first.
 func AgentEventLogPath(root, id string) string {
 	return filepath.Join(root, "agents", id, "events.jsonl")
+}
+
+// AgentOrigin returns the working directory of the swarm that spawned agent id
+// — the project it belongs to — reading the durable meta.json under root. Out
+// of package because authorizing "is this MY sub-agent" is a question only the
+// spawn record can answer: under --swarm-worktrees the child's own cwd is a
+// leased worktree that hashes to a different project bucket than its parent's,
+// so comparing cwds rejects every leased child of the very project asking.
+//
+// Falls back to the agent's Dir when the record predates the origin field. That
+// is the historical comparison and stays correct for an unleased child, whose
+// Dir IS its parent's RepoRoot; it cannot resurrect ownership for an older
+// leased record, which never recorded it. Returns "" when there is no such
+// agent, which callers must treat as "not mine" — failing closed.
+func AgentOrigin(root, id string) string {
+	m, err := readAgentMeta(filepath.Join(root, "agents", id))
+	if err != nil {
+		return ""
+	}
+	if m.Origin != "" {
+		return m.Origin
+	}
+	return m.Dir
 }
 
 // SpawnRequest configures a Spawn. Only Task is required; the rest
@@ -491,22 +536,18 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		return nil, fmt.Errorf("swarm inbox path: %w", err)
 	}
 
-	// The spawning conversation's own session id wins — a daemon hosts many
-	// sessions, so a per-spawn stamp is the only value that is always right.
-	// Fall back to the swarm-wide SetActiveSession scope (snapshotted under
-	// the lock; reading it unlocked would race a concurrent set).
+	// The spawning conversation's own session id, and nothing else — a daemon
+	// hosts many sessions, so a per-spawn stamp is the only value that is ever
+	// right. An empty stamp means the caller did not know its session, and the
+	// agent lands unscoped (visible everywhere) rather than mis-scoped.
 	sessionID := strings.TrimSpace(req.SessionID)
-	if sessionID == "" {
-		f.mu.Lock()
-		sessionID = f.activeSession
-		f.mu.Unlock()
-	}
 
 	a := &Agent{
 		ID:           id,
 		Task:         task,
 		Dir:          dir,
 		Leased:       leased,
+		Origin:       f.cfg.RepoRoot,
 		Started:      f.cfg.Now(),
 		Model:        strings.TrimSpace(req.Model),
 		Provider:     strings.TrimSpace(req.Provider),
@@ -911,25 +952,39 @@ type AgentSnapshot struct {
 // ever describes agents whose task has finished (or that terminated), so
 // collapse the non-terminal states to "completed" and pass real failures
 // through.
-func (s AgentSnapshot) RecapStatus() string {
+//
+// turnErr is the batch entry's recorded turn error (empty when there was
+// none). It is a SEPARATE axis from Status: a child whose only turn died on
+// a provider error never reaches StatusFailed — the daemon is alive and
+// idle, which is exactly the state this function collapses to "completed".
+// So the recap printed "status: completed" directly above "turn error: …",
+// two adjacent lines contradicting each other, and a coordinator that read
+// only the first would report a review as done when none was produced.
+func (s AgentSnapshot) RecapStatus(turnErr string) string {
 	switch s.Status {
 	case StatusFailed:
 		return "failed"
 	case StatusKilled:
 		return "killed"
-	default:
-		// running / done / detached / pending: the task reached the
-		// recap, so from the coordinator's view it completed.
-		return "completed"
 	}
+	// A turn error with nothing to show for it is a failure however healthy
+	// the daemon looks. If the child DID produce findings before the error,
+	// the task still delivered — say so, but do not call it clean.
+	if strings.TrimSpace(turnErr) != "" {
+		if s.Findings() == "" {
+			return "failed"
+		}
+		return "completed with errors"
+	}
+	// running / done / detached / pending: the task reached the
+	// recap, so from the coordinator's view it completed.
+	return "completed"
 }
 
 // Findings returns the sub-agent's answer for the recap: its last
-// complete assistant message when captured, else the transcript tail as
-// a fallback (older/detached agents, or a task that ended before
-// emitting assistant text). Prefer this over Tail directly so a
-// coordinator sees the actual result rather than a slice of interleaved
-// tool output.
+// complete assistant message when captured. Prefer this over Tail
+// directly so a coordinator sees the actual result rather than a slice
+// of interleaved tool output.
 //
 // Guard interaction: a child that delivers its report and THEN gets the
 // finalize-guard nudge (open tracked items) often answers the nudge with
@@ -939,15 +994,22 @@ func (s AgentSnapshot) RecapStatus() string {
 // re-states (or extends) its report after the nudge still wins on
 // length, so the newer text is preferred whenever it plausibly carries
 // the findings.
+//
+// It returns EMPTY when the child never produced assistant text. This used
+// to fall back to the transcript tail, on the theory that some answer beats
+// none. It does not: the tail is raw transcript lines with their role
+// prefixes intact, so a child that died before its first message reported
+// findings of "stderr: terva: unjailed by a saved rule …" followed by its
+// own task prompt echoed back — terva's operator-facing banner and the
+// coordinator's own words, presented as the deliverable. A caller that can
+// distinguish "no findings" from findings can say so; one handed plausible
+// prose cannot. Callers render the empty case explicitly.
 func (s AgentSnapshot) Findings() string {
 	last := strings.TrimSpace(s.LastAssistant)
 	if pre := strings.TrimSpace(s.PreGuardAssistant); len(pre) > len(last) {
 		return pre
 	}
-	if last != "" {
-		return last
-	}
-	return strings.TrimSpace(s.Tail)
+	return last
 }
 
 // Snapshot copies the live agent state into a value the caller can
@@ -986,26 +1048,32 @@ func (a *Agent) Snapshot() AgentSnapshot {
 	}
 }
 
-// SnapshotAll returns snapshots of every agent in creation order,
-// scoped to the active session when one is set.
+// SnapshotAll returns snapshots of every agent in creation order, unscoped.
+// The listing scripted callers and diagnostics want; a host with a session in
+// hand wants SnapshotFor.
+func (f *Swarm) SnapshotAll() []AgentSnapshot { return f.SnapshotFor("") }
+
+// SnapshotFor returns snapshots of the agents visible from one host session,
+// in creation order.
 //
 // Scoping rules:
-//   - activeSession == "": no filter, every agent is returned
-//     (historical behaviour; used by tests and scripted callers).
-//   - activeSession != "": include only agents whose SessionID
-//     matches activeSession OR is empty. The empty-id pass-through
-//     keeps pre-upgrade agents (their meta.json was written before
-//     session_id existed) visible from any session so the user
-//     doesn't lose access after the schema bump.
-func (f *Swarm) SnapshotAll() []AgentSnapshot {
+//   - sessionID == "": no filter, every agent is returned. A caller that does
+//     not know its session sees the whole swarm rather than nothing — losing
+//     access to a running agent is worse than showing one extra.
+//   - sessionID != "": include agents whose SessionID matches, OR is empty.
+//     The empty-id pass-through keeps pre-upgrade agents visible from any
+//     session — their meta.json was written before session_id existed, and
+//     they would otherwise vanish on the upgrade that added the filter.
+//
+// Scope arrives as an argument rather than as state on the Swarm because the
+// Swarm is shared by every session in a workspace: the web daemon can be
+// serving several at once, and each must get its own answer from the same
+// object at the same moment.
+func (f *Swarm) SnapshotFor(sessionID string) []AgentSnapshot {
 	agents := f.List()
-	f.mu.Lock()
-	active := f.activeSession
-	f.mu.Unlock()
-
 	out := make([]AgentSnapshot, 0, len(agents))
 	for _, a := range agents {
-		if active != "" && a.SessionID != "" && a.SessionID != active {
+		if sessionID != "" && a.SessionID != "" && a.SessionID != sessionID {
 			continue
 		}
 		out = append(out, a.Snapshot())
@@ -1013,6 +1081,37 @@ func (f *Swarm) SnapshotAll() []AgentSnapshot {
 	// Sort by start time for a stable, deterministic listing.
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Started.Before(out[j].Started) })
 	return out
+}
+
+// InFlightSpend reports what sub-agents that have NOT finished have spent so
+// far, and how many of them there are. Scoped to the active session the same
+// way SnapshotAll is, so one conversation never reports another's children.
+//
+// This closes a visibility gap, not a measurement one: a child's cumulative
+// usage is already updated live (IngestEvent -> setUsage, on every usage event),
+// but nothing asked for it until the child finished. A coordinator therefore
+// learned what delegation cost only in the recap — in one measured session,
+// $15.63 and 39% of the total, seven minutes after the decisions that spent it.
+//
+// Deliberately IN-FLIGHT only, and the boundary matters. Spend by a finished
+// child is booked against the parent by the recap (RecordDelegatedUsage), so it
+// is already in Agent.DelegatedCost; counting it here too would double it in the
+// mind of anyone reading both numbers. The cost of that choice is a brief
+// undercount for a child that has finished but whose recap has not yet flushed —
+// preferable to a figure that is sometimes double, and it is stated wherever
+// this is rendered.
+func (f *Swarm) InFlightSpend() (usage provider.Usage, agents int) {
+	if f == nil {
+		return provider.Usage{}, 0
+	}
+	for _, s := range f.SnapshotAll() {
+		if s.Status != StatusPending && s.Status != StatusRunning {
+			continue
+		}
+		agents++
+		usage = usage.Add(s.Usage)
+	}
+	return usage, agents
 }
 
 // agentSink is the Sink the Swarm hands to each Runner.
