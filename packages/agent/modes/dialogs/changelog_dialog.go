@@ -21,8 +21,20 @@ type ChangelogDialog struct {
 	version string
 	url     string
 	body    string
-	scroll  int
+	vp      Viewport
+	// MaxRows is the body height the host budgets from the terminal
+	// (dialogs.BodyBudget). 0 falls back to changelogFallbackRows.
+	MaxRows int
 }
+
+// changelogFallbackRows is the body height when no host has sized this dialog
+// (tests, direct callers). ChromeRows is measured by TestDialogChromeIsDeclared.
+const changelogFallbackRows = 18
+
+// ChromeRows is the non-body rows Render emits: header, the version/url lines,
+// the more-below indicator and the closing rule. Declared here, beside Render,
+// because Render is what decides it.
+func (d *ChangelogDialog) ChromeRows() int { return 5 }
 
 func NewChangelogDialog() *ChangelogDialog { return &ChangelogDialog{} }
 
@@ -32,7 +44,7 @@ func (d *ChangelogDialog) Open(version, url, body string) {
 	d.version = version
 	d.url = url
 	d.body = strings.TrimSpace(body)
-	d.scroll = 0
+	d.vp.Reset()
 }
 
 // Close hides the dialog.
@@ -57,23 +69,9 @@ func (d *ChangelogDialog) HandleKey(k tui.Key) (closed bool) {
 	if !d.Active() {
 		return false
 	}
-	switch k.Kind {
-	case tui.KeyUp:
-		if d.scroll > 0 {
-			d.scroll--
-		}
-		return false
-	case tui.KeyDown:
-		d.scroll++
-		return false
-	case tui.KeyPageUp:
-		d.scroll -= 8
-		if d.scroll < 0 {
-			d.scroll = 0
-		}
-		return false
-	case tui.KeyPageDown:
-		d.scroll += 8
+	// Scroll keys are handled in common (↑/↓, PgUp/PgDn, Home/End); ANY other
+	// key dismisses, which is this dialog's whole interaction.
+	if d.vp.HandleKey(k) {
 		return false
 	}
 	d.Close()
@@ -110,23 +108,17 @@ func (d *ChangelogDialog) Render(th tui.Theme, width int) []string {
 		}
 	}
 
-	const maxRows = 18
-	if d.scroll > len(bodyLines)-1 {
-		d.scroll = len(bodyLines) - 1
+	maxRows := d.MaxRows
+	if maxRows <= 0 {
+		maxRows = changelogFallbackRows
 	}
-	if d.scroll < 0 {
-		d.scroll = 0
+	// Indent before windowing so the shared renderer's more-above/below markers
+	// keep their own alignment rather than inheriting the body's.
+	for i, line := range bodyLines {
+		bodyLines[i] = "    " + line
 	}
-	end := d.scroll + maxRows
-	if end > len(bodyLines) {
-		end = len(bodyLines)
-	}
-	for _, line := range bodyLines[d.scroll:end] {
-		out = append(out, "    "+line)
-	}
-	if end < len(bodyLines) {
-		out = append(out, "  "+th.FG256(th.Muted, i18n.T("\u2193 %d more lines (down/pgdn)", len(bodyLines)-end)))
-	}
+	d.vp.Fit(len(bodyLines), maxRows)
+	out = append(out, d.vp.Rows(th, bodyLines)...)
 	out = append(out, FrameRuleColor(th, width, th.Accent))
 	return out
 }

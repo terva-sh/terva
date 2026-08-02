@@ -33,7 +33,7 @@ import (
 type WorkflowDialog struct {
 	active   bool
 	selected int
-	scroll   int
+	vp       Viewport
 
 	// open is the run currently opened, "" while the list is showing. Kept as an
 	// id rather than an index so a refresh that reorders the list (a new run
@@ -74,6 +74,10 @@ func (t wfTab) label() string {
 	}
 }
 
+// ChromeRows is the non-body rows Render emits: header, the blank, the footer
+// and the closing rule.
+func (d *WorkflowDialog) ChromeRows() int { return 4 }
+
 func NewWorkflowDialog() *WorkflowDialog { return &WorkflowDialog{} }
 
 func (d *WorkflowDialog) Active() bool { return d != nil && d.active }
@@ -82,7 +86,7 @@ func (d *WorkflowDialog) Active() bool { return d != nil && d.active }
 func (d *WorkflowDialog) Open(listFn func() []ctrlproto.WorkflowRunInfo, viewFn func() *ctrlproto.WorkflowRunView) {
 	d.active = true
 	d.selected = 0
-	d.scroll = 0
+	d.vp.Reset()
 	d.open = ""
 	d.tab = wfOverview
 	d.err = ""
@@ -99,7 +103,7 @@ func (d *WorkflowDialog) Close() {
 	d.err = ""
 	d.loading = false
 	d.selected = 0
-	d.scroll = 0
+	d.vp.Reset()
 }
 
 // SetError shows a fetch failure in place of the body. Cleared by any
@@ -140,7 +144,7 @@ func (d *WorkflowDialog) HandleKey(k tui.Key) WorkflowAction {
 			d.open = ""
 			d.err = ""
 			d.loading = false
-			d.scroll = 0
+			d.vp.Reset()
 			return WorkflowAction{}
 		}
 		return WorkflowAction{Close: true}
@@ -150,7 +154,7 @@ func (d *WorkflowDialog) HandleKey(k tui.Key) WorkflowAction {
 			if d.selected >= 0 && d.selected < len(rs) {
 				d.open = rs[d.selected].ID
 				d.tab = wfOverview
-				d.scroll = 0
+				d.vp.Reset()
 				d.err = ""
 				d.loading = true
 				return WorkflowAction{OpenRun: d.open}
@@ -178,24 +182,22 @@ func (d *WorkflowDialog) HandleKey(k tui.Key) WorkflowAction {
 		d.cycleTab(1)
 	case tui.KeyUp, tui.KeyMouseWheelUp:
 		if d.open != "" {
-			if d.scroll > 0 {
-				d.scroll--
-			}
+			d.vp.HandleKey(k)
 		} else if d.selected > 0 {
 			d.selected--
 		}
 	case tui.KeyDown, tui.KeyMouseWheelDown:
 		if d.open != "" {
-			d.scroll++
+			d.vp.HandleKey(k)
 		} else if n := len(d.runs()); d.selected < n-1 {
 			d.selected++
 		}
-	case tui.KeyPageUp:
-		if d.scroll -= 5; d.scroll < 0 {
-			d.scroll = 0
+	default:
+		// PgUp/PgDn/Home/End only mean anything inside an opened run; on the
+		// list the selection is the cursor and there is no body to scroll.
+		if d.open != "" {
+			d.vp.HandleKey(k)
 		}
-	case tui.KeyPageDown:
-		d.scroll += 5
 	}
 	return WorkflowAction{}
 }
@@ -209,7 +211,7 @@ func (d *WorkflowDialog) cycleTab(delta int) {
 	}
 	n := len(wfTabs)
 	d.tab = wfTabs[((int(d.tab)+delta)%n+n)%n]
-	d.scroll = 0
+	d.vp.Reset()
 }
 
 func (d *WorkflowDialog) Render(th tui.Theme, width int) []string {
@@ -225,23 +227,18 @@ func (d *WorkflowDialog) Render(th tui.Theme, width int) []string {
 	}
 
 	out := []string{FrameHeader(th, title, width)}
-	if len(body) > d.MaxRows && d.MaxRows > 0 {
+	d.vp.Fit(len(body), d.MaxRows)
+	if d.MaxRows > 0 && d.vp.Scrollable() {
 		if d.open == "" {
 			// One body line per run, so the selection maps 1:1 and the cursor
 			// must stay inside the window (the WorktreeDialog rule).
-			d.scroll = clampViewTop(d.scroll, d.selected, d.MaxRows, len(body))
-		} else {
-			if d.scroll > len(body)-d.MaxRows {
-				d.scroll = len(body) - d.MaxRows
-			}
-			if d.scroll < 0 {
-				d.scroll = 0
-			}
+			d.vp.RevealPadded(d.selected, cursorPadRows)
 		}
-		body = body[d.scroll : d.scroll+d.MaxRows]
+		start, end := d.vp.Window()
+		body = body[start:end]
 		footer = i18n.T("↑/↓ scroll · %s", footer)
 	} else {
-		d.scroll = 0
+		d.vp.Reset()
 	}
 	out = append(out, body...)
 	out = append(out, "", th.FG256(th.Muted, "  "+footer))

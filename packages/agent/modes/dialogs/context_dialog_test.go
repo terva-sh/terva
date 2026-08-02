@@ -81,16 +81,58 @@ func TestContextDialogScrollClamp(t *testing.T) {
 	body := make([]string, 50)
 	d := NewContextDialog()
 	d.Open("", "", body, nil)
+	_ = d.Render(tui.Theme{}, 80) // give the viewport its geometry
 
 	// Scroll up at the top stays at 0.
 	d.HandleKey(tui.Key{Kind: tui.KeyUp})
-	if d.scroll != 0 {
-		t.Fatalf("scroll up at top = %d; want 0", d.scroll)
+	if d.vp.Offset() != 0 {
+		t.Fatalf("scroll up at top = %d; want 0", d.vp.Offset())
 	}
-	// Render clamps an over-scroll to the last full page.
-	d.scroll = 1000
+	// Paging past the end stops at the last full page rather than scrolling the
+	// body off the top of the pane.
+	for range 100 {
+		d.HandleKey(tui.Key{Kind: tui.KeyPageDown})
+	}
 	_ = d.Render(tui.Theme{}, 80)
-	if want := len(body) - contextBodyRows; d.scroll != want {
-		t.Fatalf("scroll clamped to %d; want %d", d.scroll, want)
+	if want := len(body) - contextBodyRows; d.vp.Offset() != want {
+		t.Fatalf("scroll clamped to %d; want %d", d.vp.Offset(), want)
+	}
+}
+
+// The keys this panel was missing. End is the one that prompted the change: on
+// a real session the transcript list runs to hundreds of rows, and reaching the
+// foot of it by ↓ or PgDn is not a thing anyone does.
+func TestContextDialogJumpsToTopAndBottom(t *testing.T) {
+	d := NewContextDialog()
+	d.Open("", "", make([]string, 300), nil)
+	_ = d.Render(tui.Theme{}, 80)
+
+	d.HandleKey(tui.Key{Kind: tui.KeyEnd})
+	_ = d.Render(tui.Theme{}, 80)
+	if want := 300 - contextBodyRows; d.vp.Offset() != want {
+		t.Errorf("end = %d; want %d, with the last line at the foot of a full pane", d.vp.Offset(), want)
+	}
+
+	d.HandleKey(tui.Key{Kind: tui.KeyHome})
+	_ = d.Render(tui.Theme{}, 80)
+	if d.vp.Offset() != 0 {
+		t.Errorf("home = %d; want 0", d.vp.Offset())
+	}
+}
+
+// Switching tabs shows unrelated content, so it starts at the top. Carrying the
+// offset across would open the new tab part-read at a position that means
+// nothing in it.
+func TestContextDialogTabSwitchReturnsToTheTop(t *testing.T) {
+	d := NewContextDialog()
+	d.Open("", "", make([]string, 300), make([]string, 300))
+	_ = d.Render(tui.Theme{}, 80)
+
+	d.HandleKey(tui.Key{Kind: tui.KeyEnd})
+	_ = d.Render(tui.Theme{}, 80)
+	d.HandleKey(tui.Key{Kind: tui.KeyTab})
+	_ = d.Render(tui.Theme{}, 80)
+	if d.vp.Offset() != 0 {
+		t.Errorf("tab switch kept offset %d; want the top of the new tab", d.vp.Offset())
 	}
 }

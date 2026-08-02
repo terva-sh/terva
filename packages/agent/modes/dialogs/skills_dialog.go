@@ -17,7 +17,25 @@ type SkillsDialog struct {
 	skills  []*skills.Skill
 	cursor  int
 	viewing *skills.Skill // when non-nil, render the body instead of the list
-	scroll  int           // body view scroll offset (in lines)
+	vp      Viewport      // body view scroll state
+	// MaxRows is the body height the host budgets from the terminal
+	// (dialogs.BodyBudget). 0 falls back to the standalone constants.
+	MaxRows int
+}
+
+const (
+	skillsListFallbackRows = 12
+	skillsBodyFallbackRows = 16
+)
+
+// ChromeRows is the non-body rows Render emits. The two views differ — the
+// reading view spends a row on the scroll indicator the list does not — so this
+// reports whichever is showing rather than one number for both.
+func (d *SkillsDialog) ChromeRows() int {
+	if d.viewing != nil {
+		return 4
+	}
+	return 3
 }
 
 func NewSkillsDialog() *SkillsDialog { return &SkillsDialog{} }
@@ -28,7 +46,7 @@ func (d *SkillsDialog) Open(s []*skills.Skill) {
 	d.skills = s
 	d.cursor = 0
 	d.viewing = nil
-	d.scroll = 0
+	d.vp.Reset()
 }
 
 // Close hides the dialog.
@@ -52,20 +70,9 @@ func (d *SkillsDialog) HandleKey(k tui.Key) (closed bool) {
 		switch k.Kind {
 		case tui.KeyEsc, tui.KeyEnter:
 			d.viewing = nil
-			d.scroll = 0
-		case tui.KeyUp:
-			if d.scroll > 0 {
-				d.scroll--
-			}
-		case tui.KeyDown:
-			d.scroll++
-		case tui.KeyPageUp:
-			d.scroll -= 8
-			if d.scroll < 0 {
-				d.scroll = 0
-			}
-		case tui.KeyPageDown:
-			d.scroll += 8
+			d.vp.Reset()
+		default:
+			d.vp.HandleKey(k)
 		}
 		return false
 	}
@@ -86,7 +93,7 @@ func (d *SkillsDialog) HandleKey(k tui.Key) (closed bool) {
 	case tui.KeyEnter:
 		if len(d.skills) > 0 {
 			d.viewing = d.skills[d.cursor]
-			d.scroll = 0
+			d.vp.Reset()
 		}
 	}
 	return false
@@ -110,7 +117,10 @@ func (d *SkillsDialog) Render(th tui.Theme, width int) []string {
 		return out
 	}
 
-	const maxRows = 12
+	maxRows := d.MaxRows
+	if maxRows <= 0 {
+		maxRows = skillsListFallbackRows
+	}
 	start, end := visibleWindow(d.cursor, len(d.skills), maxRows)
 	if start > 0 {
 		out = append(out, WindowMoreAbove(th, start))
@@ -148,23 +158,17 @@ func (d *SkillsDialog) renderBody(th tui.Theme, width int) []string {
 		}
 	}
 
-	const maxRows = 16
-	if d.scroll > len(bodyLines)-1 {
-		d.scroll = len(bodyLines) - 1
+	maxRows := d.MaxRows
+	if maxRows <= 0 {
+		maxRows = skillsBodyFallbackRows
 	}
-	if d.scroll < 0 {
-		d.scroll = 0
+	// Indent before windowing so the shared more-above/below markers keep their
+	// own alignment rather than inheriting the body's.
+	for i, line := range bodyLines {
+		bodyLines[i] = "    " + line
 	}
-	end := d.scroll + maxRows
-	if end > len(bodyLines) {
-		end = len(bodyLines)
-	}
-	for _, line := range bodyLines[d.scroll:end] {
-		out = append(out, "    "+line)
-	}
-	if end < len(bodyLines) {
-		out = append(out, "  "+th.FG256(th.Muted, i18n.T("\u2193 %d more lines (down/pgdn)", len(bodyLines)-end)))
-	}
+	d.vp.Fit(len(bodyLines), maxRows)
+	out = append(out, d.vp.Rows(th, bodyLines)...)
 	out = append(out, FrameRule(th, width))
 	return out
 }

@@ -17,13 +17,17 @@ import (
 type TasksDialog struct {
 	active     bool
 	showDone   bool
-	scroll     int
+	vp         Viewport
 	snapshotFn func() []tasks.Task
 
 	// MaxRows caps the body height; the overlay sets it from the terminal size
 	// each frame so a long list stays inside the bottom band. 0 = unlimited.
 	MaxRows int
 }
+
+// ChromeRows is the non-body rows Render emits: header, the blank, the footer
+// and the closing rule.
+func (d *TasksDialog) ChromeRows() int { return 4 }
 
 func NewTasksDialog() *TasksDialog { return &TasksDialog{} }
 
@@ -34,14 +38,14 @@ func (d *TasksDialog) Active() bool { return d != nil && d.active }
 func (d *TasksDialog) Open(snapshotFn func() []tasks.Task) {
 	d.active = true
 	d.showDone = false
-	d.scroll = 0
+	d.vp.Reset()
 	d.snapshotFn = snapshotFn
 }
 
 func (d *TasksDialog) Close() {
 	d.active = false
 	d.snapshotFn = nil
-	d.scroll = 0
+	d.vp.Reset()
 }
 
 // TasksAction reports what the host should do after a key. Close is the only
@@ -55,20 +59,10 @@ func (d *TasksDialog) HandleKey(k tui.Key) TasksAction {
 	case tui.KeyRune:
 		if k.Rune == 'd' || k.Rune == 'D' {
 			d.showDone = !d.showDone
-			d.scroll = 0
+			d.vp.Reset()
 		}
-	case tui.KeyUp, tui.KeyMouseWheelUp:
-		if d.scroll > 0 {
-			d.scroll--
-		}
-	case tui.KeyDown, tui.KeyMouseWheelDown:
-		d.scroll++
-	case tui.KeyPageUp:
-		if d.scroll -= 5; d.scroll < 0 {
-			d.scroll = 0
-		}
-	case tui.KeyPageDown:
-		d.scroll += 5
+	default:
+		d.vp.HandleKey(k)
 	}
 	return TasksAction{}
 }
@@ -86,18 +80,12 @@ func (d *TasksDialog) Render(th tui.Theme, width int) []string {
 	// tasks.PanelLines is the single source of the layout (sort, done/cancelled
 	// collapse, empty-state text); we only theme and window its output.
 	body := tasks.PanelLines(rows, d.showDone)
-	scrollable := d.MaxRows > 0 && len(body) > d.MaxRows
+	d.vp.Fit(len(body), d.MaxRows)
+	scrollable := d.MaxRows > 0 && d.vp.Scrollable()
 	visible := body
 	if scrollable {
-		if d.scroll > len(body)-d.MaxRows {
-			d.scroll = len(body) - d.MaxRows
-		}
-		if d.scroll < 0 {
-			d.scroll = 0
-		}
-		visible = body[d.scroll : d.scroll+d.MaxRows]
-	} else {
-		d.scroll = 0
+		start, end := d.vp.Window()
+		visible = body[start:end]
 	}
 	for _, l := range visible {
 		out = append(out, colorTaskLine(th, l))

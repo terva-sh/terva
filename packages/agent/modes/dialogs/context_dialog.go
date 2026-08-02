@@ -19,9 +19,12 @@ import (
 // Both bodies are pre-rendered, styled lines frozen at Open time; the
 // dialog only switches tabs and scrolls.
 type ContextDialog struct {
-	active      bool
-	tab         int // 0 = overview, 1 = extensions
-	scroll      int
+	active bool
+	tab    int // 0 = overview, 1 = extensions
+	vp     Viewport
+	// MaxRows is the body height the host budgets from the terminal
+	// (dialogs.BodyBudget). 0 falls back to contextBodyRows.
+	MaxRows     int
 	sessionID   string
 	sessionPath string
 	overview    []string
@@ -33,6 +36,21 @@ const (
 	contextBodyRows = 14
 )
 
+// bodyRows is the height to window the body to: the host's budget when it set
+// one, else the standalone fallback.
+func (d *ContextDialog) bodyRows() int {
+	if d.MaxRows > 0 {
+		return d.MaxRows
+	}
+	return contextBodyRows
+}
+
+// ChromeRows is the non-body rows Render emits at their WORST case: header, tab
+// bar, session id, session path, the blank, both scroll indicators, the key
+// hint and the closing rule. The two indicators and the two session lines are
+// conditional, which is exactly why this is a maximum.
+func (d *ContextDialog) ChromeRows() int { return 9 }
+
 func NewContextDialog() *ContextDialog { return &ContextDialog{} }
 
 func (d *ContextDialog) Active() bool { return d != nil && d.active }
@@ -41,7 +59,7 @@ func (d *ContextDialog) Active() bool { return d != nil && d.active }
 func (d *ContextDialog) Open(sessionID, sessionPath string, overview, exts []string) {
 	d.active = true
 	d.tab = 0
-	d.scroll = 0
+	d.vp.Reset()
 	d.sessionID = sessionID
 	d.sessionPath = sessionPath
 	d.overview = overview
@@ -52,7 +70,7 @@ func (d *ContextDialog) Close() {
 	d.active = false
 	d.overview = nil
 	d.exts = nil
-	d.scroll = 0
+	d.vp.Reset()
 	d.tab = 0
 }
 
@@ -98,23 +116,16 @@ func (d *ContextDialog) HandleKey(k tui.Key) (closed bool) {
 		return true
 	case tui.KeyTab, tui.KeyRight:
 		d.tab = (d.tab + 1) % contextTabCount
-		d.scroll = 0
+		// A new tab is unrelated content; holding the offset would open it
+		// part-read. The viewport's geometry is refreshed by the next Fit.
+		d.vp.Reset()
 	case tui.KeyShiftTab, tui.KeyLeft:
 		d.tab = (d.tab + contextTabCount - 1) % contextTabCount
-		d.scroll = 0
-	case tui.KeyUp:
-		if d.scroll > 0 {
-			d.scroll--
-		}
-	case tui.KeyDown:
-		d.scroll++ // clamped against the body length in Render
-	case tui.KeyPageUp:
-		d.scroll -= contextBodyRows
-		if d.scroll < 0 {
-			d.scroll = 0
-		}
-	case tui.KeyPageDown:
-		d.scroll += contextBodyRows
+		d.vp.Reset()
+	default:
+		// ↑/↓, PgUp/PgDn, Home/End — one implementation, shared with every other
+		// scrolling dialog.
+		d.vp.HandleKey(k)
 	}
 	return false
 }
@@ -135,28 +146,9 @@ func (d *ContextDialog) Render(th tui.Theme, width int) []string {
 	lines = append(lines, "")
 
 	body := d.wrappedBody(width)
-	maxScroll := len(body) - contextBodyRows
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if d.scroll > maxScroll {
-		d.scroll = maxScroll
-	}
-	start := d.scroll
-	end := start + contextBodyRows
-	if end > len(body) {
-		end = len(body)
-	}
-	if start > 0 {
-		lines = append(lines, WindowMoreAbove(th, start))
-	}
-	for i := start; i < end; i++ {
-		lines = append(lines, body[i])
-	}
-	if end < len(body) {
-		lines = append(lines, WindowMoreBelow(th, len(body), end))
-	}
-	lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("←→/tab switch · ↑/↓ scroll · esc")))
+	d.vp.Fit(len(body), d.bodyRows())
+	lines = append(lines, d.vp.Rows(th, body)...)
+	lines = append(lines, th.FG256(th.Muted, "  "+i18n.T("←→/tab switch · ↑/↓ scroll · home/end · esc")))
 	lines = append(lines, FrameRule(th, width))
 	return lines
 }

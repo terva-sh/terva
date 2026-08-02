@@ -35,8 +35,17 @@ type PermissionsDialog struct {
 	info   []string
 	grants []PermGrant
 	cursor int
-	scroll int
+	vp     Viewport
+	// MaxRows is the body height the host budgets from the terminal
+	// (dialogs.BodyBudget). 0 falls back to permissionsFallbackRows.
+	MaxRows int
 }
+
+const permissionsFallbackRows = 18
+
+// ChromeRows is the non-body rows Render emits: header, the more-below
+// indicator and the closing rule.
+func (d *PermissionsDialog) ChromeRows() int { return 3 }
 
 func NewPermissionsDialog() *PermissionsDialog { return &PermissionsDialog{} }
 
@@ -47,7 +56,7 @@ func (d *PermissionsDialog) Open(info []string, grants []PermGrant) {
 	d.info = info
 	d.grants = grants
 	d.cursor = 0
-	d.scroll = 0
+	d.vp.Reset()
 }
 
 // Refresh swaps in freshly-derived content after a revoke while keeping
@@ -82,13 +91,11 @@ func (d *PermissionsDialog) HandleKey(k tui.Key) permissionsAction {
 		if d.cursor < len(d.grants)-1 {
 			d.cursor++
 		}
-	case tui.KeyPageUp:
-		d.scroll -= 8
-		if d.scroll < 0 {
-			d.scroll = 0
-		}
-	case tui.KeyPageDown:
-		d.scroll += 8
+	case tui.KeyPageUp, tui.KeyPageDown, tui.KeyHome, tui.KeyEnd:
+		// Paging moves the body under a cursor that stays put, which is what it
+		// did before; the cursor is re-revealed at render if paging left it
+		// off-screen. Home/End are new here and come free with the shared handler.
+		d.vp.HandleKey(k)
 	case tui.KeyEsc:
 		d.Close()
 		return permissionsAction{Close: true}
@@ -158,27 +165,16 @@ func (d *PermissionsDialog) Render(th tui.Theme, width int) []string {
 	}
 
 	// Keep the cursor's line inside the scroll window.
-	const maxRows = 18
-	cursorLine := grantStart + d.cursor
-	if cursorLine >= d.scroll+maxRows {
-		d.scroll = cursorLine - maxRows + 1
+	maxRows := d.MaxRows
+	if maxRows <= 0 {
+		maxRows = permissionsFallbackRows
 	}
-	if cursorLine < d.scroll {
-		d.scroll = cursorLine
-	}
-	if d.scroll > len(body)-1 {
-		d.scroll = len(body) - 1
-	}
-	if d.scroll < 0 {
-		d.scroll = 0
-	}
-	end := d.scroll + maxRows
-	if end > len(body) {
-		end = len(body)
-	}
+	d.vp.Fit(len(body), maxRows)
+	d.vp.Reveal(grantStart + d.cursor)
+	start, end := d.vp.Window()
 
 	out := []string{FrameHeaderColor(th, title, width, th.Accent)}
-	out = append(out, body[d.scroll:end]...)
+	out = append(out, body[start:end]...)
 	if end < len(body) {
 		out = append(out, "  "+th.FG256(th.Muted, i18n.T("↓ %d more (down/pgdn)", len(body)-end)))
 	}

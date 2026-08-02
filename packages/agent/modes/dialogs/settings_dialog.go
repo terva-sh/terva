@@ -22,7 +22,7 @@ type SettingsDialog struct {
 	// height — without the cap the full settings list is taller than
 	// a 24-row terminal and the header clips off the top. 0 = no cap.
 	MaxRows int
-	scroll  int
+	vp      Viewport
 }
 
 type SettingsItem struct {
@@ -55,6 +55,11 @@ type SettingsAction struct {
 	Close       bool
 }
 
+// ChromeRows is the non-body rows Render emits at their worst case: header,
+// hint line, BOTH scroll indicators and the closing rule. A fixture showing only
+// one indicator measures 4, which is exactly the trap this must not fall into.
+func (d *SettingsDialog) ChromeRows() int { return 5 }
+
 func NewSettingsDialog() *SettingsDialog { return &SettingsDialog{} }
 
 func (d *SettingsDialog) Open(items []SettingsItem) bool {
@@ -65,7 +70,7 @@ func (d *SettingsDialog) Open(items []SettingsItem) bool {
 	d.cursor = 0
 	d.selecting = false
 	d.optionCursor = 0
-	d.scroll = 0
+	d.vp.Reset()
 	d.active = true
 	return true
 }
@@ -235,30 +240,13 @@ func (d *SettingsDialog) Render(th tui.Theme, width int) []string {
 	if maxRows <= 0 || maxRows > len(body) {
 		maxRows = len(body)
 	}
-	if cursorLine < d.scroll {
-		d.scroll = cursorLine
-	}
-	if cursorLine >= d.scroll+maxRows {
-		d.scroll = cursorLine - maxRows + 1
-	}
-	if d.scroll > len(body)-maxRows {
-		d.scroll = len(body) - maxRows
-	}
-	if d.scroll < 0 {
-		d.scroll = 0
-	}
-	end := d.scroll + maxRows
+	d.vp.Fit(len(body), maxRows)
+	d.vp.Reveal(cursorLine)
 
 	var lines []string
 	lines = append(lines, FrameHeader(th, i18n.T("settings"), width))
 	lines = append(lines, th.FG256(th.Muted, i18n.T("change with enter/space, esc to close:")))
-	if d.scroll > 0 {
-		lines = append(lines, WindowMoreAbove(th, d.scroll))
-	}
-	lines = append(lines, body[d.scroll:end]...)
-	if end < len(body) {
-		lines = append(lines, WindowMoreBelow(th, len(body), end))
-	}
+	lines = append(lines, d.vp.Rows(th, body)...)
 	lines = append(lines, FrameRule(th, width))
 	return lines
 }
