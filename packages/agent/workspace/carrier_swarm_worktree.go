@@ -3,7 +3,9 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"time"
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
@@ -57,14 +59,14 @@ func (w *Workspace) acquireSwarmWorktree(ctx context.Context, req swarm.Worktree
 	// gate: a restricted host is handled there, so there's no lease to narrate.
 	// The engine result fills the git facts directly — the contract
 	// worktree_provenance.go held open for the extension to populate.
-	if w.diag != nil && w.Trusted() {
+	if w.Trusted() {
 		if store, terr := config.LoadTrustStore(); terr == nil {
 			short := res.HeadCommit
 			if len(short) > 12 {
 				short = short[:12]
 			}
 			facts := &extProvenance{Branch: res.Branch, Base: res.BaseRef, Commit: short}
-			w.diag(newWorktreeProvenance(ctx, store, w.cwd, res.Path, facts).Render())
+			w.recordSwarmLease(newWorktreeProvenance(ctx, store, w.cwd, res.Path, facts))
 		}
 	}
 	return swarm.WorktreeLease{
@@ -73,6 +75,133 @@ func (w *Workspace) acquireSwarmWorktree(ctx context.Context, req swarm.Worktree
 			// Release, never remove: keep the worktree + branch for
 			// review/merge. Best-effort — the agent is already terminal.
 			_, _ = swarmWorktreeMgr.Release(env, worktree.ReleaseArgs{Name: name})
+			// And retract the "runs restricted" claim. Agent.finish guarantees
+			// this runs exactly once on every terminal path — done, failed,
+			// killed, Stop, StopAll, detached cleanup — which is why the record
+			// can be live state rather than a log line. Nothing else in the
+			// system knows the sub-agent stopped.
+			w.releaseSwarmLease()
 		},
 	}, nil
+}
+
+// recordSwarmLease adds a leased worktree to the live batch and rewrites the
+// note. A lease arriving with nothing live starts a fresh batch: the previous
+// swarm's record has already been read (or cleared with the block on the next
+// prompt), and carrying its count forward would report worktrees that this
+// swarm never leased.
+func (w *Workspace) recordSwarmLease(p worktreeProvenance) {
+	w.mu.Lock()
+	if w.swarmLive == 0 {
+		w.swarmBatch = nil
+	}
+	w.swarmBatch = append(w.swarmBatch, p)
+	w.swarmLive++
+	w.startSwarmTrustWatchLocked()
+	msg := renderSwarmWorktreeNote(w.swarmBatch, w.swarmLive)
+	w.mu.Unlock()
+	w.note(swarmWorktreeNoteKey, msg, "info")
+}
+
+// swarmTrustPollInterval paces the trust-store mtime probe behind the lease
+// note's grant hint. A var so tests can crank it down.
+var swarmTrustPollInterval = 2 * time.Second
+
+// startSwarmTrustWatchLocked starts the goroutine that keeps the lease note's
+// grant hint tracking the LIVE trust store. Caller holds w.mu. Lazy — a
+// workspace that never swarms never runs it — and singular: one watcher serves
+// every batch for the workspace's lifetime, exiting with w.ctx.
+//
+// A poll, not a change-notification API: the writer that matters is `terva
+// trust` in ANOTHER process (the note's own hint says to run it in a shell),
+// which no in-process hook can see, and one stat every couple of seconds is
+// cheaper than growing a filesystem-watcher dependency for a single file.
+func (w *Workspace) startSwarmTrustWatchLocked() {
+	if w.swarmTrustWatch || w.ctx == nil {
+		return
+	}
+	w.swarmTrustWatch = true
+	go w.watchSwarmTrust()
+}
+
+func (w *Workspace) watchSwarmTrust() {
+	// seen==false forces a re-probe on the first tick that finds the file,
+	// closing the window between the lease's own store read and this
+	// goroutine's first stat.
+	var lastMod time.Time
+	var lastSize int64
+	seen := false
+	t := time.NewTicker(swarmTrustPollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-t.C:
+		}
+		fi, err := os.Stat(config.TrustStorePath())
+		if err != nil {
+			// A vanished store is an empty store (LoadTrustStore says so) —
+			// still a change the note must reflect, exactly once.
+			if seen {
+				seen = false
+				w.refreshSwarmWorktreeTrust()
+			}
+			continue
+		}
+		if seen && fi.ModTime().Equal(lastMod) && fi.Size() == lastSize {
+			continue
+		}
+		seen, lastMod, lastSize = true, fi.ModTime(), fi.Size()
+		w.refreshSwarmWorktreeTrust()
+	}
+}
+
+// refreshSwarmWorktreeTrust re-probes the CURRENT trust verdict for every
+// worktree in the batch and rewrites the note when any changed. Trusted — the
+// lease-time verdict — is deliberately left alone: it reports how the
+// sub-agent actually boots, and a grant cannot reach an agent already running.
+// Only the grant hint (and its all-granted acknowledgment) follows the store.
+func (w *Workspace) refreshSwarmWorktreeTrust() {
+	store, err := config.LoadTrustStore()
+	if err != nil {
+		// A corrupt store is a hard error everywhere trust is ENFORCED; here
+		// it just means the note keeps its last-known facts.
+		return
+	}
+	w.mu.Lock()
+	changed := false
+	for i := range w.swarmBatch {
+		now, _ := worktreeTrustVerdict(store, w.swarmBatch[i].Path)
+		if w.swarmBatch[i].TrustedNow != now {
+			w.swarmBatch[i].TrustedNow = now
+			changed = true
+		}
+	}
+	var msg string
+	if changed {
+		msg = renderSwarmWorktreeNote(w.swarmBatch, w.swarmLive)
+	}
+	w.mu.Unlock()
+	if changed {
+		w.note(swarmWorktreeNoteKey, msg, "info")
+	}
+}
+
+// releaseSwarmLease counts one lease down and rewrites the note, which flips to
+// the past tense once the last one goes. The batch is KEPT: a released worktree
+// survives for review, so its path is still the thing an operator would act on.
+//
+// Clamped at zero rather than trusting the count. The release hook is
+// exactly-once per agent by contract, but this is host state mutated from swarm
+// goroutines, and a negative live count would render "ran" over a note that is
+// in fact still live.
+func (w *Workspace) releaseSwarmLease() {
+	w.mu.Lock()
+	if w.swarmLive > 0 {
+		w.swarmLive--
+	}
+	msg := renderSwarmWorktreeNote(w.swarmBatch, w.swarmLive)
+	w.mu.Unlock()
+	w.note(swarmWorktreeNoteKey, msg, "info")
 }

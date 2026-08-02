@@ -48,7 +48,7 @@ var trustCensus = map[string]trustReads{
 	// --- live readers ---
 	"workspace_session.go:w.Trusted":    {1, "live: the METHOD VALUE handed to SwarmSpawnTool.Trusted — the spawn gate reads through it at call time"},
 	"../tools/swarm_spawn.go:t.Trusted": {1, "live: nil-check of the closure field the workspace wires; the verdict itself comes from calling it"},
-	"worktree_provenance.go:p.Trusted":  {2, "live-reresolve: derived per prober run from the trust store by worktreeTrustVerdict"},
+	"worktree_provenance.go:p.Trusted":  {6, "live-reresolve at capture, then DELIBERATELY frozen: worktreeTrustVerdict re-reads the store on every lease, and the record it produces is retained in Workspace.swarmBatch for the note (renderSwarmWorktreeNote's restricted count, swarmWorktreeGrantHint's/swarmWorktreeAllGranted's lease-time side, the TrustedNow seed). The frozen reads must NOT re-resolve — the record states the posture each sub-agent BOOTED with, and a `terva trust` granted afterwards does not retroactively give a child extensions it never loaded. The live twin is the TrustedNow field (not counted here — different selector): re-probed against the current store by refreshSwarmWorktreeTrust via the workspace's trust-store watcher, it drives ONLY the grant hint and its acknowledgment, which closed the old stale-advice cost this entry used to carry"},
 	// --- wire data (a view field, refreshed by fetch/broadcast) ---
 	"workspace.go:info.Trusted":                    {1, "wire-data producer: SessionInfo.Trusted written from the live per-session atomic"},
 	"../modes/interactive_ctrlproto.go:pv.Trusted": {1, "wire-data: PermissionsView rendered by the permissions pane, re-fetched on surface_updated"},
