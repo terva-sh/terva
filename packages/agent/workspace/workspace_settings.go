@@ -162,7 +162,7 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 		},
 		{
 			Key: "lazy_tools", Label: i18n.T("Lazy tool loading"), Type: "bool",
-			Value:       boolStr(cfg.LazyTools),
+			Value:       boolStr(cfg.LazyToolsOn()),
 			Description: i18n.T("Advertise only the core coding tools at first and let the agent load extension/MCP tool groups on demand (activate_tools), trimming the tool schemas that fill context every turn."),
 			Note:        i18n.T("applies to new sessions"),
 		},
@@ -248,12 +248,30 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Note:        i18n.T("applies live per spawn"),
 		})
 	}
+	// Deliberation panels, next to the other agent-capability toggles. The
+	// spare-host knob nests under the tool the way the nudge nests under
+	// auto_swarm: meaningless until convening exists, re-appearing when it
+	// flips on (the surface re-fetches).
+	items = append(items, ctrlproto.SettingItem{
+		Key: "raati_convene", Label: i18n.T("Deliberation panels (raati)"), Type: "bool",
+		Value:       boolStr(cfg.Raati.ConveneTool),
+		Description: i18n.T("Offer the raati_convene tool, letting the agent convene a multi-model panel on a high-stakes or hard-to-reverse decision. One convening spends roughly six sub-agent model turns."),
+		Note:        i18n.T("on applies to new sessions; off refuses the next convening live"),
+	})
+	if cfg.Raati.ConveneTool {
+		items = append(items, ctrlproto.SettingItem{
+			Key: "raati_spare_host", Label: i18n.T("Panels spare this session's provider"), Type: "bool",
+			Value:       boolStr(cfg.Raati.SpareHost),
+			Description: i18n.T("Seat auto-resolved panels on a different provider than the session's own, when swarm_tiers or raati.level2 configure one. Panel traffic on the session's account competes for its provider-side prompt cache — a measured convening evicted the session's 200K cached context, which it then re-read at full price."),
+			Note:        i18n.T("applies to the next convening"),
+		})
+	}
 	// Engine features project into the same pane (the seam build.EngineFeatures
 	// declares). A lazy-tools-bound feature nests under the lazy_tools toggle
 	// the same way the nudge nests under auto_swarm: hidden while meaningless,
 	// re-appearing when the parent flips on (the surface re-fetches).
 	for _, f := range build.EngineFeatures {
-		if f.RequiresLazyTools && !cfg.LazyTools {
+		if f.RequiresLazyTools && !cfg.LazyToolsOn() {
 			continue
 		}
 		items = append(items, ctrlproto.SettingItem{
@@ -402,12 +420,28 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		if err := config.MutateConfig(func(c *config.Config) { c.AutoTitle = &on }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
+	case "raati_convene":
+		// Persist-only: registration happens at session build, so turning it
+		// ON reaches new sessions — but the tool's Enabled func re-reads the
+		// config per call, so turning it OFF refuses the next convening in
+		// every session that already has the tool.
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.Raati.ConveneTool = on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "raati_spare_host":
+		// Live via the tool's SpareHost func — the next convening seats
+		// under the new policy, no rebuild.
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.Raati.SpareHost = on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
 	case "lazy_tools":
 		// Persist-only, like auto_title: lazy visibility is resolved at session
 		// build (NewAgent → EnableLazyTools + the activate_tools registration),
 		// so it applies to new sessions rather than reshaping a running one.
 		on := val == "true"
-		if err := config.MutateConfig(func(c *config.Config) { c.LazyTools = on }); err != nil {
+		if err := config.MutateConfig(func(c *config.Config) { c.LazyTools = &on }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
 	case "web_stage":

@@ -35,10 +35,17 @@ func TestSettingsEngineFeatureTogglesLiveAgents(t *testing.T) {
 	}
 
 	// Hidden while lazy_tools is off; listed (default true) once it is on.
+	// lazy_tools defaults ON since 2026-08-01, so the "off" arm has to seed an
+	// explicit false — an empty config no longer means off.
+	off := false
+	if err := config.MutateConfig(func(c *config.Config) { c.LazyTools = &off }); err != nil {
+		t.Fatalf("seed lazy_tools=false: %v", err)
+	}
 	if _, ok := settingsItem(s.settingsView(), "activation_continuation"); ok {
 		t.Error("activation_continuation should be hidden while lazy_tools is off")
 	}
-	if err := config.MutateConfig(func(c *config.Config) { c.LazyTools = true }); err != nil {
+	on := true
+	if err := config.MutateConfig(func(c *config.Config) { c.LazyTools = &on }); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
 	item, ok := settingsItem(s.settingsView(), "activation_continuation")
@@ -75,5 +82,54 @@ func TestSettingsEngineFeatureTogglesLiveAgents(t *testing.T) {
 	// A key that is neither a known setting nor an engine feature still errors.
 	if err := s.settingsAction("set", map[string]string{"key": "nope", "value": "true"}); err == nil {
 		t.Error("an unknown setting key must error")
+	}
+}
+
+// The deliberation toggles: raati_convene lists with the config's value, the
+// spare-host knob nests under it the way the nudge nests under auto_swarm
+// (hidden until convening exists), and each set persists to the user
+// config's raati block — the same block the tool's live reads consult.
+func TestSettingsRaatiConveneAndSpareHost(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
+	s := &wsSession{id: "s1", ws: w, hub: newWSHub()}
+	w.sessions[s.id] = s
+	s.agent = core.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{})
+
+	item, ok := settingsItem(s.settingsView(), "raati_convene")
+	if !ok {
+		t.Fatal("raati_convene must be listed")
+	}
+	if item.Type != "bool" || item.Value != "false" {
+		t.Errorf("item = %+v; want a bool defaulting false (convening is opt-in spend)", item)
+	}
+	if _, ok := settingsItem(s.settingsView(), "raati_spare_host"); ok {
+		t.Error("raati_spare_host should be hidden while convening is off")
+	}
+
+	if err := s.settingsAction("set", map[string]string{"key": "raati_convene", "value": "true"}); err != nil {
+		t.Fatalf("set raati_convene true: %v", err)
+	}
+	cfg, _ := config.LoadConfig()
+	if !cfg.Raati.ConveneTool {
+		t.Fatal("raati.convene_tool must persist")
+	}
+	spare, ok := settingsItem(s.settingsView(), "raati_spare_host")
+	if !ok {
+		t.Fatal("raati_spare_host should be listed once convening is on")
+	}
+	if spare.Value != "false" {
+		t.Errorf("spare = %+v; want default false (seating stays as configured)", spare)
+	}
+
+	if err := s.settingsAction("set", map[string]string{"key": "raati_spare_host", "value": "true"}); err != nil {
+		t.Fatalf("set raati_spare_host true: %v", err)
+	}
+	cfg, _ = config.LoadConfig()
+	if !cfg.Raati.SpareHost {
+		t.Fatal("raati.spare_host must persist")
+	}
+	if spare, _ = settingsItem(s.settingsView(), "raati_spare_host"); spare.Value != "true" {
+		t.Errorf("the view must reflect the set, got %+v", spare)
 	}
 }
