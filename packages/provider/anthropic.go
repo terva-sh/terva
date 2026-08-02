@@ -76,6 +76,11 @@ type anthropicClient struct {
 
 	// headers carries extra request headers (e.g. Kimi Code's X-Msh-*).
 	headers map[string]string
+
+	// usage caches the subscription windows parsed off the most recent
+	// successful response — the UsageReporter half of /usage. Shared store,
+	// same as the openai client's.
+	usage usageObservation
 }
 
 // NewAnthropic creates an Anthropic client using an API key. baseURL may be empty.
@@ -672,9 +677,33 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 		return nil, NewHTTPError(c.Name(), resp.StatusCode, resp.Header.Get("Retry-After"), snippet)
 	}
 
+	// Capture the unified subscription windows off every successful response
+	// (free, passive — the same trade the openai client makes). Until this,
+	// /usage told an Anthropic subscriber their provider reported nothing while
+	// the numbers rode every response they had ever made.
+	c.recordUsageHeaders(resp.Header)
+
 	out := make(chan Event, 16)
 	go c.runStream(ctx, resp, req, out)
 	return out, nil
+}
+
+// recordUsageHeaders parses anthropic-ratelimit-unified-* into the cached
+// snapshot. Nothing is recorded when the headers are absent, so an API-key
+// account (no subscription, no windows) keeps reporting nothing rather than
+// reporting zeros it would be wrong to draw.
+func (c *anthropicClient) recordUsageHeaders(h http.Header) {
+	snap, ok := parseAnthropicUsageHeaders(h)
+	if ok {
+		snap.Provider = c.Name()
+	}
+	c.usage.record(snap, ok)
+}
+
+// UsageSnapshot returns the windows parsed from the most recent response (the
+// UsageReporter contract). ok=false until one carried usable headers.
+func (c *anthropicClient) UsageSnapshot() (UsageSnapshot, bool) {
+	return c.usage.snapshot()
 }
 
 func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {
@@ -738,11 +767,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 				}
 			case "tool_use":
 				tc := be.toolCall
-				args := be.toolArgs.String()
-				if args == "" {
-					args = "{}"
-				}
-				tc.Arguments = json.RawMessage(args)
+				tc.Arguments, tc.RawArguments = FinalizeToolArguments(be.toolArgs.String())
 				content = append(content, tc)
 			}
 		}
