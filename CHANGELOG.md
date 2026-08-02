@@ -11,6 +11,27 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.130.1](https://github.com/terva-sh/terva/releases/tag/v0.130.1) — 2026-08-01
+
+### Features
+
+- ask: "mostly this, but —" is now a thing you can say
+- ask: the model can declare a question multiple-choice
+- core: a retry that works now leaves a trace
+- core: the stuck-loop ladder stops dispatching, then stops the turn
+- dialogs: the ask dialog stops keeping its keys a secret
+- swarm: the dashboard now shows work done, not just what it is doing now
+- swarm: the untrusted-workspace refusal now asks the person who can fix it
+
+### Fixes
+
+- core: a compaction that hits an overloaded provider now waits it out
+- core: a failed compaction stops taking the turn down with it
+- dialogs: drafts you cannot see are drafts you type twice
+- dialogs: the two esc presses the ask dialog treated as one
+- tasks: a task_update that changes nothing said "Updated" and meant it
+- workspace: a message sent during compaction is no longer thrown away
+
 ## [v0.130.0](https://github.com/terva-sh/terva/releases/tag/v0.130.0) — 2026-07-31
 
 ### Features
