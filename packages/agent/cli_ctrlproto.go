@@ -484,6 +484,9 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	// From here on the TUI owns the screen: route daemon diagnostics into the
 	// ext-notes block instead of stderr, which would corrupt the frame.
 	w.SetDiag(func(msg string) { iv.Notify("workspace", "info", msg) })
+	// Keyed notes REPLACE their predecessor instead of stacking one line per
+	// change — the swarm worktree record is live state, not an event log.
+	w.SetNoteSink(func(key, msg, level string) { iv.ReplaceNote("workspace", key, msg, level) })
 
 	return iv.Run(ctx)
 }

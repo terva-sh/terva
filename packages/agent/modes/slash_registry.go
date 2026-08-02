@@ -374,7 +374,7 @@ func (i *Interactive) slashClear(context.Context, []string, string) bool {
 	i.parkedTurn = 0
 	i.parkedTotal = 0
 	i.scrollOffset = 0
-	i.extNotes = nil
+	i.resetNotes()
 	i.shellBlock = nil
 	i.view.InvalidateRenderCache()
 	// Clear the screen + scrollback too, so a cleared conversation actually

@@ -247,7 +247,7 @@ func (i *Interactive) startNewSession() {
 	i.parkedTurn = 0
 	i.parkedTotal = 0
 	i.scrollOffset = 0
-	i.extNotes = nil
+	i.resetNotes()
 	i.helpBlock = nil
 	i.statusErr = ""
 	i.statusOK = i18n.T("started a new session")
@@ -309,7 +309,7 @@ func (i *Interactive) applySessionSelection(path string) {
 		// length change as a delta and jump the viewport.
 		i.prevChatLen = 0
 		i.prevChatCols = 0
-		i.extNotes = nil
+		i.resetNotes()
 		i.view.InvalidateRenderCache()
 		// The transcript comes from the pump: LoadSession re-binds the
 		// carrier, which drops the old messages and arms the tail cap for

@@ -6,6 +6,7 @@ package modes
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -129,6 +130,14 @@ func (i *Interactive) appendExtensionNote(extName, msg, level string) {
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	i.appendExtensionNoteLocked(extName, msg, level)
+}
+
+// appendExtensionNoteLocked is the body, for callers that already hold mu and
+// must not drop it mid-way — ReplaceNote's retract and re-add have to be one
+// critical section or two concurrent rewrites of the same key interleave into
+// a duplicate. Caller holds mu.
+func (i *Interactive) appendExtensionNoteLocked(extName, msg, level string) {
 	color := i.cfg.Theme.Muted
 	switch level {
 	case "warn":
@@ -144,6 +153,75 @@ func (i *Interactive) appendExtensionNote(extName, msg, level string) {
 		i.statusErr = ""
 		i.extNotes = append(i.extNotes, prefix+i.cfg.Theme.FG256(color, line))
 	}
+}
+
+// ReplaceNote sets the one note owned by key, dropping whatever that key put
+// up before. It is for a note that tracks a CHANGING fact rather than
+// announcing an event — the swarm's worktree lease record is the first: how
+// many worktrees are leased and whether they run restricted is true until it
+// is not, and a fresh line per change stacks a history of superseded claims
+// above the input.
+//
+// Every note the key ever wrote is dropped, not just the last one, so a caller
+// that raced itself cannot leave an orphan behind. A multi-line message is
+// tracked whole and retracted whole.
+//
+// An empty message retracts without leaving anything. That is the one thing
+// ClearNotes cannot express here: it strips by EXTENSION, so a workspace note
+// clearing itself would also take the permission-policy warnings and
+// extension-load errors that share the [workspace] label.
+func (i *Interactive) ReplaceNote(extName, key, message, level string) {
+	i.mu.Lock()
+	changed := i.dropKeyedNote(key)
+	if message != "" {
+		before := len(i.extNotes)
+		i.appendExtensionNoteLocked(extName, message, level)
+		if len(i.extNotes) > before {
+			if i.notesByKey == nil {
+				i.notesByKey = map[string][]string{}
+			}
+			// The EXACT rendered lines, not the message: the theme has already
+			// coloured them by now, so matching on the text would miss.
+			i.notesByKey[key] = append([]string(nil), i.extNotes[before:]...)
+			changed = true
+		}
+	}
+	i.mu.Unlock()
+	if changed {
+		i.invalidate()
+	}
+}
+
+// dropKeyedNote removes every line key currently owns. Caller holds mu.
+func (i *Interactive) dropKeyedNote(key string) bool {
+	owned := i.notesByKey[key]
+	if len(owned) == 0 {
+		return false
+	}
+	kept := i.extNotes[:0:0]
+	for _, line := range i.extNotes {
+		if slices.Contains(owned, line) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	i.extNotes = kept
+	delete(i.notesByKey, key)
+	return true
+}
+
+// resetNotes drops the whole sticky block AND the keyed-note bookkeeping.
+//
+// The two must move together: a stale entry in notesByKey outlives the line it
+// names, and the next ReplaceNote for that key then scans for lines that are
+// no longer there — leaving the new note as a second copy of a note that was
+// supposed to have exactly one. Every site that clears the block calls this,
+// so there is no version of the reset that can forget half of it.
+//
+// Caller holds mu.
+func (i *Interactive) resetNotes() {
+	i.extNotes = nil
+	clear(i.notesByKey)
 }
 
 // extStatusSegments returns the extensions' current status-bar segments

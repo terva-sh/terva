@@ -136,7 +136,7 @@ func (i *Interactive) resetTurnUI() {
 	i.toolCalls = map[string]*tui.ToolCallView{}
 	i.toolOrder = nil
 	i.shellBlock = nil // sending a prompt clears any parked shell-escape log
-	i.extNotes = nil   // ext notes are one-shot; a new prompt clears them
+	i.resetNotes()     // ext notes are one-shot; a new prompt clears them
 	i.scrollOffset = 0 // jump back to the bottom on new turn
 	// Reset the auto-follow baseline so the very next render doesn't
 	// see a synthetic shrink between "last frame had the previous

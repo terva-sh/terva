@@ -647,6 +647,15 @@ type Interactive struct {
 	// transcript) until cleared by /clear or another reset.
 	extNotes []string
 
+	// notesByKey records, per ReplaceNote key, the exact rendered lines that
+	// key currently owns in extNotes — the bookkeeping that lets a note which
+	// tracks a CHANGING fact (the swarm's live worktree leases) rewrite itself
+	// instead of stacking one superseded claim per change.
+	//
+	// Cleared with extNotes by resetNotes, never on its own: an entry that
+	// outlives its line makes the next rewrite append a duplicate.
+	notesByKey map[string][]string
+
 	// stallNudges counts stuck-loop nudges in the current run so the "loop
 	// detected" note coalesces into ONE line that counts up, instead of stacking
 	// a note per nudge (a wedged run fires many). Tied to the note's presence in
