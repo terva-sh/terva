@@ -103,7 +103,10 @@ func TestASingleLeaseGetsItsExactPathNotAParentGrant(t *testing.T) {
 func TestTheGrantHintIsPasteable(t *testing.T) {
 	dir := "/Users/x/Library/Application Support/terva/worktrees/dol-clone-7c1/worktrees"
 	got := renderSwarmWorktreeNote(batchUnder(dir, 2, false), 2)
-	if !strings.Contains(got, "'"+dir+"'") {
+	// batchUnder runs the literal through filepath.Join, so on Windows the
+	// hint correctly prints the backslash-native form — compare against that,
+	// not the Unix spelling of this fixture.
+	if !strings.Contains(got, "'"+filepath.FromSlash(dir)+"'") {
 		t.Errorf("the path is not quoted whole:\n%s", got)
 	}
 	if strings.Contains(got, "…") {
