@@ -7,8 +7,9 @@ import (
 
 // UserQuestion is one structured clarification the agent asks the user
 // mid-turn. Options, when non-empty, are presented as a multiple choice;
-// AllowCustom additionally lets the user type a free-form answer. With no
-// options the question is always free-form.
+// AllowCustom additionally lets the user type a free-form answer, and
+// defaults to open unless the model closed the set. With no options the
+// question is always free-form.
 type UserQuestion struct {
 	Question string
 	// Slug is an optional 1-3 word name for the question, for front ends
@@ -30,6 +31,15 @@ type UserQuestion struct {
 	// was known — and getting it wrong in the permissive direction silently
 	// widens what the user is agreeing to.
 	MultiSelect bool
+
+	// AllowCustom lets the user type an answer of their own instead of
+	// picking one of Options. It is RESOLVED by the time it gets here: the
+	// tool accepts a tri-state from the model and defaults an unstated one
+	// to true, so false at this point means the model deliberately closed
+	// the set, not that it forgot to open it.
+	//
+	// With no options the question is free-form regardless, and every front
+	// end offers the input without consulting this.
 	AllowCustom bool
 }
 
@@ -121,9 +131,10 @@ const MaxAskQuestions = 8
 // Implementations must honor ctx: on cancellation return ctx.Err() so the
 // tool surfaces a cancellation rather than a bogus answer.
 //
-// Exactly one host binds this today — the workspace daemon (webAsker,
-// re-bound on every tool rebuild via bindResolvedChannels); every other
-// mode, ACP included, leaves it nil, and the ask_user_question tool then
+// Two hosts bind this today: the workspace daemon (webAsker, re-bound on
+// every tool rebuild via bindResolvedChannels) and the chat bridge
+// (chat.ChatAsker, over the connector's ask surface). Every other mode,
+// ACP included, leaves it nil, and the ask_user_question tool then
 // returns a model-readable "no channel" result rather than hanging.
 type Asker interface {
 	Ask(ctx context.Context, qs []UserQuestion) ([]UserAnswer, error)
