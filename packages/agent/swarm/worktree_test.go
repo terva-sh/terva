@@ -272,3 +272,53 @@ func flagValue(args []string, flag string) string {
 	}
 	return ""
 }
+
+// SharedTree opts ONE spawn out of a swarm that leases. The acquirer must not
+// even be consulted: raati spawns a panelist per seat per round, and asking a
+// git-backed acquirer for a checkout nobody can use is the cost being removed,
+// not just the directory it hands back.
+func TestSharedTreeSpawnNeverAsksForALease(t *testing.T) {
+	spy := &acquirerSpy{dir: testsupport.TempDir(t)}
+	f := newWorktreeSwarm(t, spy, func(a *Agent) Runner {
+		return RunnerFunc(func(ctx context.Context, sink Sink) error { return nil })
+	})
+
+	a, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "cast a ballot", SharedTree: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := atomic.LoadInt32(&spy.calls); n != 0 {
+		t.Errorf("acquirer consulted %d× for a shared-tree spawn; want 0", n)
+	}
+	if a.Leased {
+		t.Error("a shared-tree agent reports Leased")
+	}
+	if a.Dir != f.cfg.RepoRoot {
+		t.Errorf("Dir = %q, want the host RepoRoot %q", a.Dir, f.cfg.RepoRoot)
+	}
+}
+
+// ...and it is per-SPAWN, not a mode. A shared-tree spawn must not disturb the
+// isolation of one that asked for it, or opting a panelist out would quietly
+// un-isolate the coding sub-agent beside it.
+func TestSharedTreeDoesNotDisarmTheLeaseForOtherSpawns(t *testing.T) {
+	leased := testsupport.TempDir(t)
+	spy := &acquirerSpy{dir: leased}
+	f := newWorktreeSwarm(t, spy, func(a *Agent) Runner {
+		return RunnerFunc(func(ctx context.Context, sink Sink) error { return nil })
+	})
+
+	if _, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "ballot", SharedTree: true}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "write the patch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.Leased || b.Dir != leased {
+		t.Errorf("the isolated spawn lost its lease: Leased=%v Dir=%q want true/%q", b.Leased, b.Dir, leased)
+	}
+	if n := atomic.LoadInt32(&spy.calls); n != 1 {
+		t.Errorf("acquirer called %d×; want exactly 1 (the spawn that wanted a tree)", n)
+	}
+}
