@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
+import { useCallback } from 'preact/hooks'
 import { t, tn } from '../../i18n'
 import type { Item } from '../../platform/conversation/store'
 import { handleCodeCopyClick } from '../../ui/codecopy'
+import { usePinnedTail } from '../../ui/pinnedtail'
 import type { RevealFn } from './CompactionDivider'
 import { ConversationItems } from './ConversationItems'
 import { QueuedMessage } from './QueuedMessage'
@@ -40,32 +41,9 @@ export function ConversationTimeline({
   sess?: string
   canDownload?: boolean
 }) {
-  const ref = useRef<HTMLDivElement>(null)
-  const pinnedRef = useRef(true)
-  const [showJump, setShowJump] = useState(false)
-
-  const onScroll = () => {
-    const element = ref.current
-    if (!element) return
-    // Pinned = within 80px of the bottom. Scrolling up unpins so the stream
-    // stops yanking the view back (TUI behavior).
-    const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80
-    pinnedRef.current = nearBottom
-    setShowJump(!nearBottom)
-  }
-
-  useEffect(() => {
-    const element = ref.current
-    if (element && pinnedRef.current) element.scrollTop = element.scrollHeight
-  }, [items, busy, queued])
-
-  const jump = () => {
-    const element = ref.current
-    if (!element) return
-    element.scrollTop = element.scrollHeight
-    pinnedRef.current = true
-    setShowJump(false)
-  }
+  // Land at the newest message and follow the stream, unless the reader has
+  // scrolled up to read something (ui/pinnedtail).
+  const { ref, onScroll, showJump, jumpToLatest: jump } = usePinnedTail<HTMLDivElement>([items, busy, queued])
 
   // Delegated copy for code blocks: markdown renders a .code-copy button per
   // block (see markdown.ts), and one listener here copies the adjacent <pre>'s

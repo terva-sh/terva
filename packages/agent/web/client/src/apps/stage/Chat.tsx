@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { AskRequest, CardSummary, CardView, CreateOpts, SessionInfo } from '../../platform/ctrlproto/types'
 import type { Item } from '../../platform/conversation/store'
@@ -7,6 +7,7 @@ import { panelHref } from '../../ui/navlinks'
 import { handleCodeCopyClick } from '../../ui/codecopy'
 import { truncate } from '../../ui/formatting'
 import { ImageGallery } from '../../ui/ImageGallery'
+import { usePinnedTail } from '../../ui/pinnedtail'
 import { ConnectionBanner, Placeholder } from '../../ui/Loading'
 import { Markdown } from '../../ui/Markdown'
 import { useConversation } from './useConversation'
@@ -148,34 +149,15 @@ export function Chat(props: {
 
   // Stick to the newest message: a chat lands at the bottom (where the composer
   // is) on load, and follows new turns as they stream — unless the reader has
-  // scrolled up into history, in which case we leave them where they are.
-  const transcriptRef = useRef<HTMLElement>(null)
-  const stick = useRef(true)
-  // Whether to offer a "↓ jump to latest" button — shown only once the reader has
-  // scrolled up off the newest line (mirrors the panel's ConversationTimeline).
-  const [showJump, setShowJump] = useState(false)
-  useEffect(() => {
-    stick.current = true // a freshly opened session starts pinned to its end
-    setShowJump(false)
-  }, [sessionId])
-  useLayoutEffect(() => {
-    const el = transcriptRef.current
-    if (el && stick.current) el.scrollTop = el.scrollHeight
-  }, [items, sessionId])
-  const onTranscriptScroll = () => {
-    const el = transcriptRef.current
-    if (!el) return
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-    stick.current = nearBottom
-    setShowJump(!nearBottom)
-  }
-  const jumpToLatest = () => {
-    const el = transcriptRef.current
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-    stick.current = true
-    setShowJump(false)
-  }
+  // scrolled up into history, in which case we leave them where they are. The
+  // session id re-pins: opening another chat starts at ITS end regardless of
+  // where you were in the last one (ui/pinnedtail).
+  const {
+    ref: transcriptRef,
+    onScroll: onTranscriptScroll,
+    showJump,
+    jumpToLatest,
+  } = usePinnedTail<HTMLElement>([items, sessionId], sessionId)
 
   const bg = info?.background ? `/media/backgrounds/${info.background}` : ''
   // A creator session (C1) is a card-less chat with the cartographer: no card to

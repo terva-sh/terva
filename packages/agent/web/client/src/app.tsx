@@ -101,6 +101,7 @@ import { ConnectionBanner } from './ui/Loading'
 import { deadlineClass, deadlineOf, deadlineStyle } from './ui/deadline'
 import { humanBytes, humanCount, localInstant } from './ui/formatting'
 import { stageHref, takeNavParams } from './ui/navlinks'
+import { usePinnedTail } from './ui/pinnedtail'
 
 const TOOL_VIEWS: ToolView[] = ['full', 'grouped', 'minimal', 'hidden']
 
@@ -3030,11 +3031,12 @@ export function RaatiTheater({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onExit])
-  const tickerRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const el = tickerRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [lines])
+  // The ticker follows the deliberation, but a deliberation is precisely when
+  // an operator scrolls back to re-read an earlier event — so it unpins like
+  // every other feed rather than snapping to the newest line under them. No
+  // jump button: the pane is four lines tall, and it re-pins the moment they
+  // scroll back down.
+  const { ref: tickerRef, onScroll: onTickerScroll } = usePinnedTail<HTMLDivElement>([lines])
   const slots = raatiTheaterSlots(v.units)
   const idle = !v.running && (v.units?.length ?? 0) === 0 && !v.decision && !v.error
   const [sel, setSel] = useState<string | null>(null)
@@ -3188,7 +3190,7 @@ export function RaatiTheater({
           {(v.inquiries?.length ?? 0) > 0 ? <RaatiInquiryList inquiries={v.inquiries ?? []} /> : null}
         </div>
         {lines.length > 0 ? (
-          <div class="magi-ticker" ref={tickerRef} aria-live="polite">
+          <div class="magi-ticker" ref={tickerRef} onScroll={onTickerScroll} aria-live="polite">
             {lines.map((l, i) => (
               <div key={i} class="magi-ticker-line">
                 {l}
