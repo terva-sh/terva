@@ -267,10 +267,22 @@ type Config struct {
 	// model; every other extension/MCP group starts hidden (still callable and
 	// still permission-gated) and is offered through a one-line capability note,
 	// so the model brings a group in with activate_tools only when it needs it —
-	// trimming the tool schemas that otherwise fill context every turn. Off by
-	// default; a user-level preference (not project-overridable). See
-	// docs/proposals/lazy-tool-visibility.md.
-	LazyTools bool `json:"lazy_tools,omitempty"`
+	// trimming the tool schemas that otherwise fill context every turn.
+	//
+	// nil/missing means the default, which is ON since 2026-08-01; false opts
+	// out. A user-level preference (not project-overridable).
+	//
+	// It shipped off by default because flipping it was unsafe: hiding engaged
+	// even where activate_tools was not registered, so a chat/play/--no-tools
+	// session could hide extension and world tools with no reveal path. That is
+	// fixed — lazyVisibilityEngages keys the hiding on the reveal path's own
+	// registration — so the default is now the one the feature was built for.
+	//
+	// A session with nothing beyond the core group is unaffected: there is
+	// nothing to hide, and lazy mode is a no-op. Read it through LazyToolsOn(),
+	// never directly, so the default lives in exactly one place.
+	// See docs/proposals/lazy-tool-visibility.md.
+	LazyTools *bool `json:"lazy_tools,omitempty"`
 
 	// WebStage mounts the Stage immersive chat/play surface at /stage/ (and
 	// advertises it in the hello) when `terva web` starts — the config-file twin
@@ -358,16 +370,78 @@ type EndpointConfig struct {
 }
 
 // TierConfig pins the weak/medium/strong swarm sub-agent models for one
-// provider (the provider id is the map key in Config.SwarmTiers). Any field
+// provider (the provider id is the map key in Config.SwarmTiers). Any rung
 // may be empty, in which case that tier falls back to terva's built-in
 // family guess for the provider, then to the host model. The ids should be
 // real models in that provider's catalog; `terva models tiers` validates
 // them and shows what each tier currently resolves to.
 type TierConfig struct {
-	Weak   string `json:"weak,omitempty"`
-	Medium string `json:"medium,omitempty"`
-	Strong string `json:"strong,omitempty"`
+	Weak   TierRung `json:"weak,omitzero"`
+	Medium TierRung `json:"medium,omitzero"`
+	Strong TierRung `json:"strong,omitzero"`
 }
+
+// TierRung is one rung of a ladder: which model, and how hard it thinks.
+//
+// Two wire shapes, because most rungs only ever wanted the first:
+//
+//	"weak": "gpt-5-nano"
+//	"weak": { "model": "k3", "reasoning": "off" }
+//
+// The object form exists for the providers that ship one good model and no
+// cheap sibling — DeepSeek and Kimi in the built-in table, and most gateways.
+// "K3 with thinking off" and "K3 at high" really are different amounts of
+// compute for different money, and before this a ladder could not say so: a
+// rung was a model id, and three rungs on one id resolved to three identical
+// children.
+//
+// Reasoning is a level string (off | minimum | low | medium | high | maximum),
+// the same vocabulary as --reasoning, which is where it ends up. Empty leaves
+// the effort to the child, exactly as before.
+type TierRung struct {
+	Model     string `json:"model,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"`
+}
+
+// UnmarshalJSON accepts the bare-string form and the object form. The bare
+// string has been the only shape since tiers shipped, so it stays the shape a
+// config that never asked for efforts keeps.
+func (r *TierRung) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		return nil
+	}
+	if s[0] == '"' {
+		return json.Unmarshal(b, &r.Model)
+	}
+	// A distinct type, so unmarshalling the object form does not recurse
+	// back into this method.
+	var obj struct {
+		Model     string `json:"model"`
+		Reasoning string `json:"reasoning"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return fmt.Errorf("swarm tier rung: want a model id or {\"model\": …, \"reasoning\": …}, got %s", s)
+	}
+	r.Model, r.Reasoning = obj.Model, obj.Reasoning
+	return nil
+}
+
+// MarshalJSON writes back the shape that was meant: a bare string when the
+// rung is only a model, so round-tripping a config that never mentioned
+// reasoning does not rewrite every tier into an object.
+func (r TierRung) MarshalJSON() ([]byte, error) {
+	if r.Reasoning == "" {
+		return json.Marshal(r.Model)
+	}
+	return json.Marshal(struct {
+		Model     string `json:"model,omitempty"`
+		Reasoning string `json:"reasoning,omitempty"`
+	}{r.Model, r.Reasoning})
+}
+
+// IsZero lets `omitzero` drop an unset rung instead of writing "".
+func (r TierRung) IsZero() bool { return r.Model == "" && r.Reasoning == "" }
 
 // EscalationConfig names the stronger model rung 3 switches to. Provider and
 // Model are both required for escalation to do anything — a partial target is
@@ -395,12 +469,41 @@ type RaatiConfig struct {
 	// Off by default: one convening spends roughly six sub-agent model
 	// turns at the chosen level's bindings.
 	ConveneTool bool `json:"convene_tool,omitempty"`
+	// SpareHost seats auto-resolved panels away from the convening
+	// session's provider when the config offers an alternative (a full
+	// swarm_tiers ladder or raati.level2 seat on another provider).
+	// Panel traffic on the session's own account competes for that
+	// account's provider-side prompt cache: five same-account panel
+	// units measured alongside one session evicted its 200K cached
+	// prefix, and the session re-read it at full price. Best-effort —
+	// with no alternative configured, the panel seats as before.
+	SpareHost bool `json:"spare_host,omitempty"`
 	// Level2 seats rigor level 2 (käräjät): one exact provider+model
 	// binding per seat — three entries for the default panel. Cross-
 	// provider entries are the point: real error decorrelation needs
 	// different weights, not different hats. How the pool maps onto
 	// seats is SeatOrder's business.
 	Level2 []RaatiBindingConfig `json:"level2,omitempty"`
+	// AutoPanel seats level 2 from the strong model of each provider the
+	// operator is logged into, when Level2 says nothing — so a panel
+	// exists without anyone hand-writing three bindings.
+	//
+	// OFF by default, and the toggle is the point rather than an
+	// afterthought. Every other raati default is a shape (how many
+	// rounds, which vote rule); this one SPENDS, on providers chosen
+	// for terva by terva, at each one's most expensive model, six
+	// sub-agent turns at a time. A default that reaches into a
+	// credential the operator added for something else entirely has to
+	// be asked for out loud. Until it is, the auto panel does not
+	// resolve, is not offered, and level 2 stays unavailable exactly as
+	// it is today.
+	AutoPanel bool `json:"auto_panel,omitempty"`
+	// AutoPanelProviders restricts and orders the draw: only these
+	// providers, in this order. Empty means every logged-in provider in
+	// the registry's order (what `terva models tiers` lists). This is
+	// the knob for "use these three, not whichever three came first" —
+	// terva does not rank your providers by quality and will not start.
+	AutoPanelProviders []string `json:"auto_panel_providers,omitempty"`
 	// SeatOrder maps the binding pool onto panel seats:
 	//   "convene" (default) — shuffled once per convening; seats keep
 	//     their binding across both rounds, so per-unit prompt cache
@@ -570,6 +673,17 @@ type StatusLineScript struct {
 	// child.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 }
+
+// LazyToolsOn reports whether lazy tool visibility is enabled: the default
+// (ON) unless the user explicitly wrote false.
+//
+// It exists so the default lives in ONE place. The sibling default-on knobs
+// (Lore, InlineImagesEnabled, …) are each re-derived inline as
+// `c.X == nil || *c.X` at four or more call sites, which is a default that can
+// drift from itself the first time someone writes the expression slightly
+// differently — the class docs/practices/06-operating-and-evidence.md calls out.
+// A new reader of LazyTools should call this rather than add a fifth spelling.
+func (c Config) LazyToolsOn() bool { return c.LazyTools == nil || *c.LazyTools }
 
 // StatusLineRows returns the configured status-bar row layout, or nil
 // when unset (nil-safe on the optional StatusLine block).

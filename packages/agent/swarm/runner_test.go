@@ -196,3 +196,40 @@ func safeAt(xs []string, i int) string {
 	}
 	return xs[i]
 }
+
+// A tier can be a cheaper model, a smaller amount of thinking, or both — on a
+// provider that ships one good model the effort is the only lever there is.
+// The child only obeys one if the flag actually reaches it.
+func TestSwarmAgentArgsReasoning(t *testing.T) {
+	args := swarmAgentArgs(swarmAgentArgsOpts{
+		Exe: "/terva", Dir: "/wt", SessionPath: "/s.json", InboxPath: "/in.sock",
+		Model: "k3", Provider: "kimi", Reasoning: "off", Task: "triage this",
+	})
+	ri := indexOf(args, "--reasoning")
+	if ri < 0 || safeAt(args, ri+1) != "off" {
+		t.Fatalf("argv missing --reasoning off: %v", args)
+	}
+	if ri+1 >= len(args)-1 {
+		t.Fatalf("--reasoning must precede the positional task: %v", args)
+	}
+	// Untiered spawns have always let the child resolve its own effort, and
+	// a flag pinning it to nothing would change that for every one of them.
+	none := swarmAgentArgs(swarmAgentArgsOpts{
+		Exe: "/terva", Dir: "/wt", SessionPath: "/s.json", InboxPath: "/in.sock", Task: "t",
+	})
+	if indexOf(none, "--reasoning") >= 0 {
+		t.Fatalf("empty reasoning should omit --reasoning: %v", none)
+	}
+}
+
+// The effort has to survive a restart the same way the model does: a resumed
+// agent that silently reverted to full thinking would quietly double what a
+// weak-tier delegation costs.
+func TestDefaultChildArgsCarriesReasoning(t *testing.T) {
+	a := &Agent{ID: "x", Task: "t", Dir: "/wt", Model: "k3", Provider: "kimi", Reasoning: "low"}
+	args := defaultChildArgs("/terva", a, "/s.json", "/in.sock")
+	ri := indexOf(args, "--reasoning")
+	if ri < 0 || safeAt(args, ri+1) != "low" {
+		t.Fatalf("resumed argv missing --reasoning low: %v", args)
+	}
+}

@@ -49,6 +49,12 @@ type Agent struct {
 	// keeps using the same model across terva restarts.
 	Model    string
 	Provider string
+	// Reasoning, when non-empty, pins the child's thinking effort
+	// (--reasoning). It is part of the same override set as Model: a tier
+	// can be a cheaper MODEL, a smaller amount of THINKING, or both, and a
+	// provider that ships one good model has only the second lever.
+	// Persisted alongside Model so Resume keeps it.
+	Reasoning string
 
 	// Persona, when non-empty, is baked into the child's --persona flag so
 	// the sub-agent boots as that persona. Persisted in meta.json so Resume

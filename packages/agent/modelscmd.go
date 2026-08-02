@@ -10,6 +10,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/raati"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -307,8 +308,8 @@ func runModelsTiers(all bool) error {
 	fmt.Println()
 
 	for _, p := range order {
-		models, sources := tools.SwarmTierLadder(p, overrides)
-		mapped := models[0] != "" || models[1] != "" || models[2] != ""
+		picks, sources := tools.SwarmTierLadder(p, overrides)
+		mapped := !picks[0].IsZero() || !picks[1].IsZero() || !picks[2].IsZero()
 		header := p
 		if !mapped {
 			header += "   (no tier mapping — `tier` is ignored; sub-agents use the host model)"
@@ -320,16 +321,16 @@ func runModelsTiers(all bool) error {
 			catalog[m.ID] = true
 		}
 		for i, name := range ranks {
-			id := models[i]
-			if id == "" {
+			pick := picks[i]
+			if pick.Model == "" {
 				fmt.Printf("  %-7s —\n", name)
 				continue
 			}
 			note := sources[i]
-			if sources[i] == "override" && len(catalog) > 0 && !catalog[id] {
+			if sources[i] == "override" && len(catalog) > 0 && !catalog[pick.Model] {
 				note += ", NOT in this provider's catalog"
 			}
-			fmt.Printf("  %-7s %-30s %s\n", name, id, note)
+			fmt.Printf("  %-7s %-40s %s\n", name, pick.Label(), note)
 		}
 		if !mapped {
 			printTierScaffold(p)
@@ -337,6 +338,13 @@ func runModelsTiers(all bool) error {
 		fmt.Println()
 	}
 	fmt.Printf("Configure per provider in %s under \"swarm_tiers\". See docs/models.md.\n", config.ConfigPath())
+
+	// The strong rungs above are also what a raati auto panel draws from, and
+	// "which models will actually sit on the panel" has nowhere else to be
+	// asked. Printed unconditionally, including when the feature is off —
+	// finding out that it is off is the most common reason to look.
+	fmt.Println()
+	fmt.Print(build.AutoPanelReport(cfg, len(raati.DefaultPanel())))
 	return nil
 }
 
@@ -354,6 +362,12 @@ func printTierScaffold(providerID string) {
 	}
 	if len(ids) > 0 {
 		fmt.Printf("  candidates: %s  (`terva --list-models` for the full list)\n", strings.Join(ids, ", "))
+	}
+	// The scaffold above assumes three models to choose between. A provider
+	// serving one good model has none, which used to mean no ladder at all —
+	// so say the other shape exists, right where someone is looking for it.
+	if len(ids) == 1 {
+		fmt.Printf("  one model? a rung can name an effort instead: { \"weak\": { %q: \"...\", \"reasoning\": \"off\" } }\n", "model")
 	}
 }
 

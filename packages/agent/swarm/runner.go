@@ -177,6 +177,7 @@ type swarmAgentArgsOpts struct {
 	Task        string
 	Model       string
 	Provider    string
+	Reasoning   string
 	Persona     string
 	Experience  string
 	Substrate   string
@@ -210,6 +211,7 @@ func defaultChildArgs(exe string, a *Agent, sessionPath, inboxPath string) []str
 		Task:        task,
 		Model:       a.Model,
 		Provider:    a.Provider,
+		Reasoning:   a.Reasoning,
 		Persona:     a.Persona,
 		Experience:  a.Experience,
 		Substrate:   a.Substrate,
@@ -232,6 +234,9 @@ func swarmAgentArgs(opts swarmAgentArgsOpts) []string {
 	}
 	if opts.Provider != "" {
 		args = append(args, "--provider", opts.Provider)
+	}
+	if opts.Reasoning != "" {
+		args = append(args, "--reasoning", opts.Reasoning)
 	}
 	if opts.Persona != "" {
 		// Flag, so it must precede the positional task below.

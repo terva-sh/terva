@@ -300,12 +300,13 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	}
 
 	req := swarm.SpawnRequest{
-		Task:     task,
-		Model:    route.Model,
-		Provider: route.Provider,
-		Persona:  persona,
-		Backend:  backend,
-		Schema:   a.DeliverableSchema,
+		Task:      task,
+		Model:     route.Model,
+		Provider:  route.Provider,
+		Reasoning: route.Reasoning,
+		Persona:   persona,
+		Backend:   backend,
+		Schema:    a.DeliverableSchema,
 	}
 	// Stamp the spawn with the host conversation's session id so the child's
 	// meta.json records which conversation it belongs to and the /swarm
@@ -337,8 +338,8 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		fmt.Fprintf(&sb, "backend: %s (external worker)\n", backend)
 	}
 	switch {
-	case route.TierModel != "":
-		fmt.Fprintf(&sb, "model: %s (tier %s)\n", route.Model, tier)
+	case !route.Tier.IsZero():
+		fmt.Fprintf(&sb, "model: %s (tier %s)\n", route.Tier.Label(), tier)
 	case tier != "" && route.Inherited:
 		fmt.Fprintf(&sb, "model: %s (tier %s unavailable for %s; host model)\n", route.Model, tier, route.Provider)
 	case route.Inherited && route.Model != "":
@@ -387,8 +388,15 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 type spawnRoute struct {
 	Model     string
 	Provider  string
-	Inherited bool   // both model+provider were omitted → inherits the host route
-	TierModel string // the tier-resolved model, when a tier produced one
+	Inherited bool // both model+provider were omitted → inherits the host route
+	// Tier is what the tier resolved to, when one did. A tier can move the
+	// MODEL, the thinking EFFORT, or both — on a provider that ships one
+	// good model the effort is the only lever there is — so the whole pick
+	// is kept rather than just the id.
+	Tier TierPick
+	// Reasoning is the effort the child is pinned to; empty lets it resolve
+	// its own, which is what an untiered spawn has always done.
+	Reasoning string
 }
 
 // resolveSpawnRoute pins the sub-agent's (model, provider) pair. An explicit
@@ -411,8 +419,8 @@ func resolveSpawnRoute(a swarmSpawnArgs, hostProvider, hostModel string, tiers S
 		route.Inherited = true
 		providerID = strings.TrimSpace(hostProvider)
 		if tier != "" {
-			route.TierModel = ResolveSwarmTier(hostProvider, hostModel, tier, tiers)
-			model = route.TierModel
+			route.Tier = ResolveSwarmTier(hostProvider, hostModel, tier, tiers)
+			model, route.Reasoning = route.Tier.Model, route.Tier.Reasoning
 		}
 		if model == "" {
 			model = strings.TrimSpace(hostModel)

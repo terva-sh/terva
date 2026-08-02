@@ -376,7 +376,26 @@ terva --provider openai-compatible \
 
 When auto-swarm is on, the agent can pick a model *strength* for each background sub-agent it spawns via a `tier` of `weak`, `medium`, or `strong` — so routine sub-tasks run on a cheap model and only the hard ones use a strong one. A tier always resolves **for the host's own provider** (a sub-agent stays on the provider you're using) and is **capped at the host model's tier**: a weak host can't spawn a strong child. Tiers are a per-provider concept — each provider maps `weak`/`medium`/`strong` to its own models.
 
-terva ships a built-in mapping for **Anthropic only** (`weak`→haiku, `medium`→sonnet, `strong`→opus — these family names are unambiguous, so they survive version bumps). **Every other provider — including gateways like opencode-go, OpenRouter, and LiteLLM — has no built-in mapping**, so `tier` is ignored there and sub-agents fall back to the full host model (which is why a `tier: weak` spawn on opencode-go still costs host-model price). To get cheap tiers on those providers, configure them yourself.
+terva ships a built-in mapping for the providers whose model families it can name without guessing:
+
+| provider | weak | medium | strong |
+|---|---|---|---|
+| Anthropic | haiku | sonnet | opus |
+| GitHub Copilot | haiku | sonnet | opus |
+| Google | flash-lite | flash | pro |
+| OpenAI | nano | mini | the plain flagship |
+| OpenAI (Codex subscription) | mini | *(named models — see below)* | *(named models)* |
+| DeepSeek | flash | — | pro |
+| Kimi | K2 | — | K3 |
+
+Most rows are **family names**, matched as substrings, so they survive version bumps (`claude-opus-4-5` → `4-8`) with no edits. Two rows are not:
+
+- **DeepSeek and Kimi have no middle model to point at**, so their ladder has two rungs. A `tier: weak` spawn gets the cheap model, which is the point; but a two-rung ladder is not a ladder, so it does **not** satisfy raati rigor level 1 (see [raati.md](raati.md)).
+- **Codex names its generations sol / terra / luna**, which say nothing about capability and don't recur, so its rungs list actual model ids newest-first and fall through to the previous generation. That row wants a touch when a new generation lands.
+
+A resolved tier never picks a *speculative* catalog entry — a model terva knows about from the vendor's CLI but that isn't live on their API yet. Those 404 today, and a tier is dispatched, not suggested. Pin one by id in `swarm_tiers` if you want it anyway.
+
+**Every other provider — including gateways like opencode-go, OpenRouter, and LiteLLM — has no built-in mapping**, so `tier` is ignored there and sub-agents fall back to the full host model (which is why a `tier: weak` spawn on opencode-go still costs host-model price). To get cheap tiers on those providers, configure them yourself.
 
 **See what resolves today, and what to set:**
 
@@ -402,3 +421,36 @@ Providers with no mapping are flagged, with a ready-to-paste config block and ca
 ```
 
 The ids must be real models in that provider's catalog (`terva models tiers` flags ones that aren't). Your entries **override** the built-in guesses; a **partial** map is fine — any tier you leave out falls back to the built-in guess for that provider, then to the host model. The host-cap rule still applies: when terva can identify the host model's own tier (by your configured ids or the built-in families), it never resolves a *stronger* tier than the host.
+
+### A rung can name a thinking level instead of a model
+
+Strength is not only a matter of *which* model. A reasoning model with thinking off is meaningfully cheaper and faster than the same model at high — which is the only ladder available on a provider that ships one good model and no cheap sibling. Write a rung as an object to say so:
+
+```json
+{
+  "swarm_tiers": {
+    "kimi": {
+      "weak":   { "model": "k3", "reasoning": "off" },
+      "medium": { "model": "k3", "reasoning": "medium" },
+      "strong": { "model": "k3", "reasoning": "high" }
+    }
+  }
+}
+```
+
+`reasoning` takes the same values as `--reasoning` (`off`, `minimum`, `low`, `medium`, `high`, `maximum`) and is passed to the sub-agent as that flag. The bare-string form is unchanged and still means "this model, its own default effort".
+
+**Naming only an effort is legal** and useful — the rung borrows its built-in model:
+
+```json
+{ "swarm_tiers": { "anthropic": { "weak": { "reasoning": "off" } } } }
+```
+
+resolves weak to Haiku with thinking off. Repeating the id would only invite it to drift from the built-in one.
+
+Two consequences worth knowing:
+
+- **The host cap stops applying to a one-model ladder.** The cap exists to stop a weak host reaching for a stronger *model*; when one id sits on several rungs, ranking the host is ambiguous by construction, so terva declines to rank it and every tier resolves uncapped. Without that, a `k3` host would rank as the weak rung and *every* spawn would land on thinking-off.
+- **The built-in table never names an effort.** terva recognises model families; it does not guess how hard you want your sub-agents to think.
+
+A thinking ladder counts as a full ladder for raati rigor level 1 — with one restriction, covered in [raati.md](raati.md).

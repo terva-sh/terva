@@ -352,20 +352,17 @@ func (w *Workspace) raatiConvene(s *wsSession, args map[string]string) error {
 	default:
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("convene: rounds must be 2 or 3"))
 	}
-	level := 0
+	level, levelViaAuto := 0, false
 	if v := strings.TrimSpace(args["level"]); v != "" {
 		if level, err = strconv.Atoi(v); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("convene: bad level %q", v))
 		}
-	} else if lvl, ok, viaAuto := prof.PickLevel(tools.HighestRaatiLevel(w.provider, build.SwarmTierMap(uc.SwarmTiers), build.RaatiLevel2Bindings(uc), len(raati.DefaultPanel()))); ok {
+	} else if lvl, ok, auto := prof.PickLevel(tools.HighestRaatiLevel(tools.SpareHostLadder(w.provider, uc.Raati.SpareHost, build.SwarmTierMap(uc.SwarmTiers), build.RaatiLevel2Bindings(uc)), build.SwarmTierMap(uc.SwarmTiers), build.RaatiLevel2Bindings(uc), len(raati.DefaultPanel()))); ok {
 		// The profile's level (auto resolves against the workspace's
 		// own provider — a form-picked provider override doesn't move
-		// the ladder check). A gate auto-landing on the correlated
-		// level refuses; an explicit form pick is the human's call.
-		if rerr := tools.RefuseCorrelatedGate(args["profile"], class, lvl, viaAuto); rerr != nil {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "convene: %v", rerr)
-		}
-		level = lvl
+		// the ladder check). The gate honesty check runs once the seats
+		// are known, below; an explicit form pick is the human's call.
+		level, levelViaAuto = lvl, auto
 	}
 	spec := raatiEvidenceSpec{user: args["evidence"]}
 	switch mode := strings.TrimSpace(args["conversation"]); mode {
@@ -429,9 +426,22 @@ func (w *Workspace) raatiConvene(s *wsSession, args map[string]string) error {
 	if seatPool != nil {
 		level2 = seatPool
 	}
-	pool, err := tools.ResolveRaatiBindings(level, hostProv, hostModel, build.SwarmTierMap(uc.SwarmTiers), level2, seats)
+	// The ladder provider for level 1: an explicit form pick is the
+	// human's call and stands; otherwise raati.spare_host may move the
+	// ladder off the session's account (tools.SpareHostLadder).
+	ladderProv := hostProv
+	if prov == "" {
+		ladderProv = tools.SpareHostLadder(hostProv, uc.Raati.SpareHost, build.SwarmTierMap(uc.SwarmTiers), build.RaatiLevel2Bindings(uc))
+	}
+	pool, err := tools.ResolveRaatiBindings(level, hostProv, hostModel, ladderProv, build.SwarmTierMap(uc.SwarmTiers), level2, seats)
 	if err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%v", err)
+	}
+	// Read the resolved SEATS, not the level: a ladder that is one model at
+	// several thinking efforts is a real advisory panel and not three
+	// independent judges, so it cannot hold an auto-resolved gate.
+	if rerr := tools.RefuseCorrelatedGate(args["profile"], class, pool, levelViaAuto); rerr != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "convene: %v", rerr)
 	}
 	// Seat order: the form's explicit pick wins, else the user config,
 	// else the shuffled-per-convene default.
@@ -439,7 +449,7 @@ func (w *Workspace) raatiConvene(s *wsSession, args map[string]string) error {
 	if seatOrderRaw == "" {
 		seatOrderRaw = uc.Raati.SeatOrder
 	}
-	seatOrder, err := raati.ParseSeatOrder(seatOrderRaw)
+	seatOrder, err := raati.SeatOrderFor(seatOrderRaw, pool)
 	if err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%v", err)
 	}
@@ -892,6 +902,14 @@ func (h raatiBoardHook) End(err error) {
 func raatiConveneEnabled() bool {
 	uc, err := config.LoadConfig()
 	return err == nil && uc.Raati.ConveneTool
+}
+
+// raatiSpareHost is the tool's live read of raati.spare_host: seat
+// auto-resolved panels off the session's provider account so panel
+// traffic does not evict the session's provider-side prompt cache.
+func raatiSpareHost() bool {
+	uc, err := config.LoadConfig()
+	return err == nil && uc.Raati.SpareHost
 }
 
 // applyRaatiEvent folds one coordinator event into the board and

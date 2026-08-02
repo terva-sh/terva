@@ -184,6 +184,9 @@ func raatiRun(args build.Args, o raatiOpts) error {
 	// win. Seats are the exception: pinned seats replace raati.level2
 	// and no flag can (the human has --provider/--model for level 0).
 	var prof raati.Profile
+	// Whether the level came from a profile's "auto" rather than a flag —
+	// the gate honesty check below only refuses auto resolutions.
+	levelViaAuto := false
 	if o.profile != "" {
 		if prof, err = raati.ProfileFor(build.RaatiProfiles(uc), o.profile); err != nil {
 			return err
@@ -194,11 +197,8 @@ func raatiRun(args build.Args, o raatiOpts) error {
 			}
 		}
 		if !o.levelSet {
-			if lvl, ok, viaAuto := prof.PickLevel(tools.HighestRaatiLevel(r.Provider, build.SwarmTierMap(uc.SwarmTiers), build.RaatiLevel2Bindings(uc), len(raati.DefaultPanel()))); ok {
-				if rerr := tools.RefuseCorrelatedGate(o.profile, o.class, lvl, viaAuto); rerr != nil {
-					return rerr
-				}
-				o.level = lvl
+			if lvl, ok, auto := prof.PickLevel(tools.HighestRaatiLevel(r.Provider, build.SwarmTierMap(uc.SwarmTiers), build.RaatiLevel2Bindings(uc), len(raati.DefaultPanel()))); ok {
+				o.level, levelViaAuto = lvl, auto
 			}
 		}
 		if !o.singleRound && prof.SingleRound != nil {
@@ -220,15 +220,24 @@ func raatiRun(args build.Args, o raatiOpts) error {
 		}
 		level2 = prof.Seats
 	}
-	pool, err := tools.ResolveRaatiBindings(o.level, r.Provider, r.Model, build.SwarmTierMap(uc.SwarmTiers), level2, len(raati.DefaultPanel()))
+	// The CLI convene runs standalone — there is no live session whose
+	// provider cache panel traffic could evict — so raati.spare_host does
+	// not apply here and the ladder stays on the resolved provider.
+	pool, err := tools.ResolveRaatiBindings(o.level, r.Provider, r.Model, r.Provider, build.SwarmTierMap(uc.SwarmTiers), level2, len(raati.DefaultPanel()))
 	if err != nil {
 		return err
+	}
+	// The gate honesty check reads the resolved SEATS: a ladder that is one
+	// model at several thinking efforts is a real advisory panel and not
+	// three independent judges.
+	if rerr := tools.RefuseCorrelatedGate(o.profile, o.class, pool, levelViaAuto); rerr != nil {
+		return rerr
 	}
 	seatOrderRaw := o.seatOrder
 	if seatOrderRaw == "" {
 		seatOrderRaw = uc.Raati.SeatOrder
 	}
-	seatOrder, err := raati.ParseSeatOrder(seatOrderRaw)
+	seatOrder, err := raati.SeatOrderFor(seatOrderRaw, pool)
 	if err != nil {
 		return err
 	}

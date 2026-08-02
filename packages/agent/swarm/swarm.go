@@ -403,6 +403,10 @@ type SpawnRequest struct {
 	Label    string
 	Model    string // optional override; child resolves default if empty
 	Provider string // optional override; usually paired with Model
+	// Reasoning is an optional thinking-effort override (off | minimum |
+	// low | medium | high | maximum). Empty lets the child resolve its own,
+	// which is what every spawn did before tiers could name an effort.
+	Reasoning string
 	// Persona, when set, is baked into the child's --persona flag so the
 	// sub-agent boots as that persona (a name resolved against the trusted
 	// library, or a path for human-initiated spawns). Empty = host default.
@@ -414,6 +418,23 @@ type SpawnRequest struct {
 	Experience string
 	Substrate  string
 	Card       string
+
+	// SharedTree runs this agent in the host's RepoRoot even when the swarm was
+	// configured to lease per-agent directories. It is for a spawn that cannot
+	// use one: an agent given no tools has nothing to do with a private
+	// checkout, and leasing it one costs a directory, the git setup, and a
+	// permanent entry in the worktree registry that a human then has to clean
+	// up — for an agent that could not have written a byte.
+	//
+	// raati's panelists are the case that named it. They are spawned tool-less
+	// (Experience "chat") to read evidence and vote, and they accounted for 36
+	// of the 44 unclaimed worktrees on the machine where this was found.
+	//
+	// It suppresses the LEASE, never isolation somebody asked for: a spawn that
+	// might write leaves this false and keeps its own directory. The swarm
+	// still knows nothing about git — this says "shares the host's directory",
+	// and what a directory means stays the host's business.
+	SharedTree bool
 
 	// Backend selects a worker backend — an agent that is not terva (see
 	// Agent.Backend). Empty means a native terva swarm agent, which is what
@@ -500,7 +521,7 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 	dir := f.cfg.RepoRoot
 	leased := false
 	var releaseWorktree func()
-	if f.cfg.AcquireWorktree != nil {
+	if f.cfg.AcquireWorktree != nil && !req.SharedTree {
 		lease, err := f.cfg.AcquireWorktree(ctx, WorktreeReq{
 			AgentID:  id,
 			Task:     task,
@@ -551,6 +572,7 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		Started:      f.cfg.Now(),
 		Model:        strings.TrimSpace(req.Model),
 		Provider:     strings.TrimSpace(req.Provider),
+		Reasoning:    strings.TrimSpace(req.Reasoning),
 		Persona:      strings.TrimSpace(req.Persona),
 		Experience:   strings.TrimSpace(req.Experience),
 		Substrate:    strings.TrimSpace(req.Substrate),

@@ -43,15 +43,31 @@ type Unit struct {
 	Persona  string `json:"persona"`
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
+	// Reasoning is the thinking effort this seat runs at (off | minimum |
+	// low | medium | high | maximum). Empty leaves it to the unit's own
+	// default. It is part of the BINDING, not a detail of it: a reasoning
+	// model with thinking off is a materially different judge from the same
+	// weights at high, which is what lets one model span a ladder.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // BindingLabel renders the seat's effective binding for records and
-// boards ("provider/model"), or "" when the seat inherits.
+// boards ("provider/model", plus the effort when the seat pins one), or
+// "" when the seat inherits.
+//
+// The effort belongs in the label for the same reason the model does: the
+// seats line is how a reader of a verdict knows what actually judged their
+// question. On a one-model ladder it is the ONLY thing distinguishing the
+// seats, and a label that omitted it would render three identical panelists.
 func (u Unit) BindingLabel() string {
 	if u.Provider == "" && u.Model == "" {
 		return ""
 	}
-	return u.Provider + "/" + u.Model
+	label := u.Provider + "/" + u.Model
+	if u.Reasoning != "" {
+		label += " @" + u.Reasoning
+	}
+	return label
 }
 
 // Binding is an exact provider+model pin for one seat — what a rigor
@@ -59,6 +75,28 @@ func (u Unit) BindingLabel() string {
 type Binding struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	// Reasoning is the thinking effort for this seat; empty inherits.
+	// Two bindings that differ ONLY here are still two different judges.
+	Reasoning string `json:"reasoning,omitempty"`
+}
+
+// SameWeights reports whether every binding in a pool is the same
+// provider+model — a pool that decorrelates by thinking effort alone, or
+// not at all.
+//
+// This is the question the honesty rules turn on, so it is asked once here
+// rather than re-derived at each level. An empty or single-seat pool is
+// trivially "same": there is nothing for a second opinion to disagree with.
+func SameWeights(pool []Binding) bool {
+	if len(pool) < 2 {
+		return true
+	}
+	for _, b := range pool[1:] {
+		if b.Provider != pool[0].Provider || b.Model != pool[0].Model {
+			return false
+		}
+	}
+	return true
 }
 
 // SeatOrder is how the binding pool maps onto panel seats.
@@ -83,6 +121,48 @@ const (
 	// the question + evidence re-read per seat per round.
 	SeatOrderTurn SeatOrder = "turn"
 )
+
+// SameEffort reports whether every binding runs at the same thinking
+// effort. Together with SameWeights it separates "three copies of one
+// judge" from "one model deliberately spanning a ladder".
+func SameEffort(pool []Binding) bool {
+	if len(pool) < 2 {
+		return true
+	}
+	for _, b := range pool[1:] {
+		if b.Reasoning != pool[0].Reasoning {
+			return false
+		}
+	}
+	return true
+}
+
+// SeatOrderFor parses a configured seat order AND applies the one default
+// that depends on the panel: a pool whose seats share weights and differ
+// only in thinking effort reshuffles PER TURN rather than once per
+// convening.
+//
+// The reason is what such a ladder is made of. With three different models,
+// "no model owns a prior across deliberations" is enough — the weights
+// disagree on their own. With one model at three efforts, the only thing
+// distinguishing the seats IS the effort, so holding it fixed for a whole
+// deliberation fuses "the benevolence seat" with "the one that wasn't
+// thinking" for every round of it. Rotating per turn is what keeps the
+// effort a property of the round instead of a property of the prior.
+//
+// Only the DEFAULT is upgraded. An operator who wrote "convene" gets
+// convene: turn costs real prompt cache (round two respawns every seat cold)
+// and that trade is theirs to refuse.
+func SeatOrderFor(configured string, pool []Binding) (SeatOrder, error) {
+	order, err := ParseSeatOrder(configured)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(configured) == "" && len(pool) > 1 && SameWeights(pool) && !SameEffort(pool) {
+		return SeatOrderTurn, nil
+	}
+	return order, nil
+}
 
 // ParseSeatOrder maps a user-supplied seat order onto a SeatOrder;
 // empty means the SeatOrderConvene default.
@@ -489,7 +569,14 @@ func Convene(ctx context.Context, cfg Config, question, evidence string) (*Resul
 			Persona:    u.Persona,
 			Model:      u.Model,
 			Provider:   u.Provider,
+			Reasoning:  u.Reasoning,
 			Experience: "chat", // tool-less: panelists evaluate, they don't act
+			// ...and an agent that cannot act cannot use a private checkout.
+			// Under --swarm-worktrees every panelist was leasing a git worktree
+			// it never wrote to, then releasing it — release keeps the tree for
+			// review, which is right for a coding sub-agent and pointless for a
+			// ballot. One convening left one worktree per seat, forever.
+			SharedTree: true,
 		})
 		if err != nil {
 			stopAll()
@@ -557,13 +644,15 @@ func Convene(ctx context.Context, cfg Config, question, evidence string) (*Resul
 				b := cfg.Bindings[perm2[i]]
 				s.blindAgentID, s.blindProvider, s.blindModel = s.handle.AgentID(), s.unit.Provider, s.unit.Model
 				_ = cfg.Engine.Stop(s.blindAgentID)
-				s.unit.Provider, s.unit.Model = b.Provider, b.Model
+				s.unit.Provider, s.unit.Model, s.unit.Reasoning = b.Provider, b.Model, b.Reasoning
 				h, rerr := cfg.Engine.SpawnUnit(ctx, swarm.SpawnRequest{
 					Task:       round2ColdPrompt(s.unit, len(units), class, question, evidence, blind[i], others(blind, i), digest, solicit2),
 					Persona:    s.unit.Persona,
 					Model:      b.Model,
 					Provider:   b.Provider,
+					Reasoning:  b.Reasoning,
 					Experience: "chat",
+					SharedTree: true, // same as round one: a ballot needs no checkout
 				})
 				if rerr != nil {
 					s.markAbsent(i18n.T("could not reseat for the final round: %s", rerr.Error()))
@@ -784,7 +873,7 @@ func installWatcher(h UnitHandle) <-chan string {
 func assignSeatBindings(units []Unit, pool []Binding, perm []int) {
 	for i := range units {
 		b := pool[perm[i]]
-		units[i].Provider, units[i].Model = b.Provider, b.Model
+		units[i].Provider, units[i].Model, units[i].Reasoning = b.Provider, b.Model, b.Reasoning
 	}
 }
 

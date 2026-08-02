@@ -639,19 +639,28 @@ func ObserveAgentEventForHooks(eng *hooks.Engine, ev core.AgentEvent) {
 }
 
 // SwarmTierMap converts the user config's per-provider tier pins into the
-// tools-layer override map (provider -> {tier -> model id}). Empty tier fields
-// are dropped so they fall back to the built-in family guess; an all-empty
-// result is nil so resolution is a clean no-op.
+// tools-layer override map (provider -> {tier -> pick}). Empty rungs are
+// dropped so they fall back to the built-in family guess; an all-empty result
+// is nil so resolution is a clean no-op.
+//
+// A rung carrying ONLY a reasoning level survives: "the built-in model for
+// this rung, thinking this hard" is a complete instruction, and the resolver
+// fills the model in. That is the cheapest way to get a real ladder out of a
+// provider whose families terva already knows.
 func SwarmTierMap(tiers map[string]config.TierConfig) tools.SwarmTierMap {
 	if len(tiers) == 0 {
 		return nil
 	}
 	out := make(tools.SwarmTierMap, len(tiers))
 	for prov, tc := range tiers {
-		m := map[string]string{}
-		for tier, id := range map[string]string{"weak": tc.Weak, "medium": tc.Medium, "strong": tc.Strong} {
-			if strings.TrimSpace(id) != "" {
-				m[tier] = strings.TrimSpace(id)
+		m := map[string]tools.TierPick{}
+		for tier, rung := range map[string]config.TierRung{"weak": tc.Weak, "medium": tc.Medium, "strong": tc.Strong} {
+			p := tools.TierPick{
+				Model:     strings.TrimSpace(rung.Model),
+				Reasoning: strings.TrimSpace(rung.Reasoning),
+			}
+			if !p.IsZero() {
+				m[tier] = p
 			}
 		}
 		if len(m) > 0 {
@@ -831,6 +840,16 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 		mu.Lock()
 		defer mu.Unlock()
 		_ = sess.AppendPrefixDivergence(d)
+	})
+	// Which connection/edge each dispatch physically rode. The prefix row
+	// above proves the BYTES were stable through a cache collapse; this row is
+	// the other half — whether the request re-dialed or changed edge colo —
+	// so a floor-pinned run can finally be read against transport churn
+	// instead of ending at "provider-side".
+	ag.AddTransportObserver(func(ti provider.TransportInfo) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = sess.AppendTransport(ti)
 	})
 }
 

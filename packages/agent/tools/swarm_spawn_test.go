@@ -9,7 +9,7 @@ import "testing"
 func TestResolveSpawnRoute(t *testing.T) {
 	// Deterministic tier override so resolution doesn't depend on the live
 	// catalog: anthropic/weak -> a fixed id.
-	tiers := SwarmTierMap{"anthropic": {"weak": "claude-weak-test", "medium": "claude-medium-test"}}
+	tiers := SwarmTierMap{"anthropic": {"weak": {Model: "claude-weak-test"}, "medium": {Model: "claude-medium-test"}}}
 
 	cases := []struct {
 		name                    string
@@ -78,8 +78,8 @@ func TestResolveSpawnRoute(t *testing.T) {
 			if route.Inherited != c.wantInherited {
 				t.Errorf("inherited = %v, want %v", route.Inherited, c.wantInherited)
 			}
-			if (route.TierModel != "") != c.wantTier {
-				t.Errorf("tierModel = %q, want tier-resolved=%v", route.TierModel, c.wantTier)
+			if !route.Tier.IsZero() != c.wantTier {
+				t.Errorf("tier pick = %+v, want tier-resolved=%v", route.Tier, c.wantTier)
 			}
 		})
 	}
