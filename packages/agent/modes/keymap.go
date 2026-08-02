@@ -177,8 +177,10 @@ func (i *Interactive) keyCtrlC(context.Context, tui.Key) keyOutcome {
 // keyEsc dismisses transient overlays (the /help block, extension
 // notes, a parked shell-escape log) before considering the running
 // turn — a casual Esc after /help on a busy turn must not rip the
-// turn away. While a slash/file popup is open the key passes through
-// to the popup's own Esc handling downstream.
+// turn away. The ✖/✓ status lines clear on every Esc that reaches
+// here, without consuming the press. While a slash/file popup is
+// open the key passes through to the popup's own Esc handling
+// downstream.
 func (i *Interactive) keyEsc(context.Context, tui.Key) keyOutcome {
 	if i.suggest.Active(i.ed.Value()) || i.fileSuggest.Active(i.ed.Value()) {
 		return keyPass
@@ -190,19 +192,34 @@ func (i *Interactive) keyEsc(context.Context, tui.Key) keyOutcome {
 	// running; if a !command is in flight, esc must fall through to
 	// the cancel path below instead of just hiding the (empty) block.
 	hadShell := len(i.shellBlock) > 0 && !i.shellRunning
+	// The ✖/✓ status lines are chrome too — a worktree sweep's removed/kept
+	// report otherwise sits pinned until the next prompt — but they RIDE
+	// ALONG rather than consuming the press: a persistent ambient status
+	// ("not logged in", re-asserted by anything that needs a credential)
+	// would otherwise tax every draft-clearing Esc with a wasted keypress.
+	hadStatus := i.statusErr != "" || i.statusOK != ""
 	if hadHelp {
 		i.helpBlock = nil
 	}
 	if hadNotes {
-		i.extNotes = nil
+		i.resetNotes()
 	}
 	if hadShell {
 		i.shellBlock = nil
+	}
+	if hadStatus {
+		i.statusErr = ""
+		i.statusOK = ""
 	}
 	i.mu.Unlock()
 	if hadHelp || hadNotes || hadShell {
 		i.invalidate()
 		return keyHandled
+	}
+	if hadStatus {
+		// Redraw without the lines; the key still falls through to the
+		// cancel path / the editor, so one Esc does everything it used to.
+		i.invalidate()
 	}
 	if i.turns.Busy() && i.turns.cancelActive() {
 		// If a confirm or question dialog is pending, resolve it so the
