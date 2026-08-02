@@ -110,7 +110,7 @@ network hosts. See `docs/plans/standard-tools-bucket2.md`.
 | `terva_status` | local read-only | session self-introspection |
 | `session_inspect` | local read-only | bounded, filterable view over a session transcript: this session, another session in the project, or a swarm sub-agent's (by its id); `expand` reads one event's full text in pages, and `stats` returns a whole-session rollup (cost, cache hit rate, dead turns, tool-call and failure histograms, provider errors) in one pass instead of paging for it. Event kinds cover `tool_call`, `tool_result`, `message`, `usage` (a turn's cost and cache accounting) and `error` (a provider failure from the `.errors.jsonl` sidecar, placed against the turn it killed) — the last two are how a session's cost and its outages become answerable at all; nothing else records them. Event indices and `cursor` are **1-based**, and `0` means "not set" on both — so a caller that fills every optional key with its zero value gets the default listing of the most recent window rather than an error or the wrong end of the transcript (see "Optionality" below). Secrets redacted, input scan and output both capped. A sub-agent's transcript streams as it works, so a running one is inspectable mid-task; before its first message lands the result names that state rather than blaming the filters. |
 | `task_create` / `task_update` / `task_list` / `task_archive` | local data | the built-in task board (folded in from the former `terva-tasks` extension): one active task at a time, evidence to close, archive generations, `task_list format:"markdown"` exports a checkbox worklog. The board persists per session under `$TERVA_HOME/tasks` (private modes) and its live state rides each turn as a context card. |
-| `activate_tools` | visibility only | present only when `lazy_tools` is on (see below); brings a hidden capability group into the advertised set. The advertised set is pinned while the model replies, so an activated group can never join the current reply's remaining calls — instead, activation continuation (on by default) automatically re-prompts the model with the tools live the moment it finishes that reply; with continuation off, the group lands on the NEXT turn. Its result echoes the group's schemas (capped at a 4 KB budget; past that, names only) so the model can compose that next call without waiting to see them. Grants no authority — revealed tools keep their normal permission gates. |
+| `activate_tools` | visibility only | present when `lazy_tools` is on, which is the default (see below); brings a hidden capability group into the advertised set. The advertised set is pinned while the model replies, so an activated group can never join the current reply's remaining calls — instead, activation continuation (on by default) automatically re-prompts the model with the tools live the moment it finishes that reply; with continuation off, the group lands on the NEXT turn. Its result echoes the group's schemas (capped at a 4 KB budget; past that, names only) so the model can compose that next call without waiting to see them. Grants no authority — revealed tools keep their normal permission gates. |
 
 `grep`/`glob` are jailed exactly like the file tools (cwd containment,
 symlink skip) and survive `plan` mode because they are classified
@@ -195,10 +195,21 @@ old `terva-tasks` extension migrate forward automatically on their next write
 #### Lazy tool visibility (`lazy_tools`)
 
 With many extensions/MCP servers attached, most of the tool surface is noise
-most of the time. Setting `lazy_tools: true` in `config.json` advertises only
-the core group plus the groups named in `lazy_tool_active` (e.g.
-`["mcp:github"]`); everything else is summarized in a per-turn
-`[inactive tool groups]` note the model can act on with `activate_tools`.
+most of the time. Lazy tool visibility advertises only the core group plus the
+groups named in `lazy_tool_active` (e.g. `["mcp:github"]`); everything else is
+summarized in a per-turn `[inactive tool groups]` note the model can act on
+with `activate_tools`.
+
+**On by default since 2026-08-01.** Set `"lazy_tools": false` in `config.json`
+(or turn it off in the settings pane) to advertise everything up front. It
+shipped opt-in while flipping it was unsafe — hiding could engage in sessions
+where `activate_tools` was never registered, leaving no reveal path — and that
+is fixed, so the default is now the one the feature was built for.
+
+**A session with nothing beyond the core group is unaffected**: there is
+nothing to hide, so lazy mode is a no-op. The change is only visible to setups
+that actually have extension or MCP tools — which is exactly who pays for them
+in context every turn.
 Visibility only: hidden tools remain callable and permission-gated, so no
 authority changes hands. Activation never lands mid-reply (the advertised set
 is pinned per segment); by default the model is automatically continued with

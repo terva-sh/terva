@@ -1083,7 +1083,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// full registry callable/gated), so it is classed read-only (no confirm).
 	// lazyVisibilityEngages keys on this registration: no reveal path, no
 	// hiding — a session outside this condition never gets EnableLazyTools.
-	if eff.Config.LazyTools && HasBaseWorkspaceTools(args) {
+	if eff.Config.LazyToolsOn() && HasBaseWorkspaceTools(args) {
 		reg["activate_tools"] = &tools.ActivateToolsTool{}
 	}
 
@@ -1248,7 +1248,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		SkillTool:                skillTool,
 		DisableContextExtensions: eff.Config.DisableContextExtensions,
 		DisableExtensions:        eff.Config.DisableExtensions,
-		LazyTools:                eff.Config.LazyTools,
+		LazyTools:                eff.Config.LazyToolsOn(),
 		LazyToolActive:           eff.Config.LazyToolActive,
 		EngineFeatures:           eff.Config.EngineFeatures,
 		EscalateAuto:             eff.Config.Escalation != nil && eff.Config.Escalation.Auto,

@@ -470,3 +470,49 @@ func TestRaatiProfileLevelParsing(t *testing.T) {
 		}
 	}
 }
+
+// lazy_tools is DEFAULT ON (2026-08-01). A tri-state is what makes that
+// expressible: with the old plain bool, "the user wrote false" and "the user
+// wrote nothing" were the same value, so a default-on knob could not be
+// switched off at all.
+//
+// Pinned here rather than left implicit because a default is exactly the kind
+// of thing a later refactor flips back without noticing — the field is written
+// from a settings toggle, read in four places, and nothing else asserts which
+// way an absent key falls.
+func TestLazyToolsDefaultsOnAndExplicitFalseWins(t *testing.T) {
+	var unset Config
+	if !unset.LazyToolsOn() {
+		t.Error("an absent lazy_tools must mean ON — that is the shipped default")
+	}
+
+	off := false
+	if (Config{LazyTools: &off}).LazyToolsOn() {
+		t.Error(`an explicit "lazy_tools": false must beat the default`)
+	}
+
+	on := true
+	if !(Config{LazyTools: &on}).LazyToolsOn() {
+		t.Error(`an explicit "lazy_tools": true must stay on`)
+	}
+
+	// The tri-state has to survive the JSON round trip in both non-default
+	// directions, since that is how the settings toggle persists it.
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"absent", `{}`, true},
+		{"explicit false", `{"lazy_tools":false}`, false},
+		{"explicit true", `{"lazy_tools":true}`, true},
+	} {
+		var c Config
+		if err := json.Unmarshal([]byte(tc.raw), &c); err != nil {
+			t.Fatalf("%s: unmarshal: %v", tc.name, err)
+		}
+		if got := c.LazyToolsOn(); got != tc.want {
+			t.Errorf("%s: LazyToolsOn() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

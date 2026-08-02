@@ -2207,15 +2207,38 @@ func TestSettingsLazyTools(t *testing.T) {
 	if it == nil || it.Type != "bool" {
 		t.Fatalf("no lazy_tools bool row in the settings view: %+v", s.settingsView().Items)
 	}
-	if it.Value != "false" {
-		t.Errorf("lazy_tools default = %q, want false", it.Value)
+	if it.Value != "true" {
+		t.Errorf("lazy_tools default = %q, want true (default ON since 2026-08-01)", it.Value)
 	}
 
-	if err := s.settingsAction("set", map[string]string{"key": "lazy_tools", "value": "true"}); err != nil {
-		t.Fatalf("enable lazy_tools: %v", err)
+	// DISABLING is the direction worth asserting now. Under a default-on knob
+	// the old assertion (`!cfg.LazyToolsOn()` after setting "true") could not
+	// fail: the effective value is true whether or not the write landed. Assert
+	// the STORED pointer, which distinguishes "persisted" from "defaulted".
+	if err := s.settingsAction("set", map[string]string{"key": "lazy_tools", "value": "false"}); err != nil {
+		t.Fatalf("disable lazy_tools: %v", err)
 	}
-	if cfg, _ := config.LoadConfig(); !cfg.LazyTools {
-		t.Error("enabling lazy_tools must persist to config")
+	cfg, _ := config.LoadConfig()
+	if cfg.LazyTools == nil {
+		t.Fatal("disabling lazy_tools must persist an explicit false, not leave it unset")
+	}
+	if *cfg.LazyTools {
+		t.Error("disabling lazy_tools must persist false")
+	}
+	if cfg.LazyToolsOn() {
+		t.Error("an explicit false must beat the default-on")
+	}
+	if it := find(); it == nil || it.Value != "false" {
+		t.Errorf("the view should reflect lazy_tools=false, got %+v", it)
+	}
+
+	// And back on, so the round trip is pinned in both directions.
+	if err := s.settingsAction("set", map[string]string{"key": "lazy_tools", "value": "true"}); err != nil {
+		t.Fatalf("re-enable lazy_tools: %v", err)
+	}
+	cfg, _ = config.LoadConfig()
+	if cfg.LazyTools == nil || !*cfg.LazyTools {
+		t.Error("re-enabling lazy_tools must persist an explicit true")
 	}
 	if it := find(); it == nil || it.Value != "true" {
 		t.Errorf("the view should reflect lazy_tools=true, got %+v", it)
