@@ -30,7 +30,19 @@ import? 'forge.just'
 # conventional ~/workspace layout (set the env var where it differs).
 mirror_url := env_var_or_default("TERVA_MIRROR_DIR", env_var_or_default("HOME", "~") + "/workspace/github.com/terva-sh/terva")
 
-# Local/untagged builds ship as 0.0.0; release tags override this via goreleaser.
+# 0.0.0 is a SENTINEL, not the version a local build reports. cmd/terva/main.go
+# treats it as "nothing was stamped" and falls through to Go's module build
+# info, so `just install` off an untagged commit reports a pseudo-version like
+#   0.130.2-0.20260801072026-3b009656fe62 (140fa59, 2026-08-01T20:58:57Z)
+# meaning "a dev build somewhere after v0.130.1". That leading semver is a
+# PLACEHOLDER for the next cut, not a claim that it happened — the tree is ahead
+# of v0.130.1 and the eventual tag could as easily be v0.131.0.
+#
+# Read the PARENTHESISED commit, never the leading semver: it comes from the
+# ldflag below and is exactly what was built. The hash inside the pseudo-version
+# is Go's own VCS stamp and in a git worktree names the PRIMARY checkout's HEAD —
+# a different commit entirely. Only a goreleaser build from a tag reports a
+# version worth quoting.
 version := "0.0.0"
 commit   := `git rev-parse --short HEAD 2>/dev/null || echo unknown`
 date     := `date -u +%Y-%m-%dT%H:%M:%SZ`

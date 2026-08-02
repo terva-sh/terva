@@ -20,8 +20,13 @@ import (
 // terva.sh/terva/cmd/terva@vX.Y.Z`, plain `go build`) recover what
 // they can from the embedded module build info instead.
 var (
-	// 0.0.0 is the pre-release placeholder for local / untagged
-	// builds; anything real overrides it via ldflags or build info.
+	// 0.0.0 is a SENTINEL meaning "no version was stamped", not a
+	// version anything reports: main() below treats it as absent and
+	// falls through to the module build info. The justfile stamps it
+	// on EVERY local build, so a local binary's version always comes
+	// from build info in practice — a pseudo-version like
+	// 0.130.2-0.<ts>-<commit>, which reads "a dev build after
+	// v0.130.1" and does NOT mean 0.130.2 was cut.
 	version = "0.0.0"
 	commit  = ""
 	date    = ""
@@ -32,6 +37,14 @@ var (
 // stamps the module version, and VCS builds carry vcs.revision and
 // vcs.time. Empty results mean the info isn't there (e.g. a (devel)
 // module version), and the ldflags defaults stand.
+//
+// ⚠️ The commit Go derives here is NOT reliably the commit being built.
+// Go resolves VCS state from the repository, and from a git worktree it
+// reports the PRIMARY checkout's HEAD — so a worktree build's recovered
+// revision (and the hash embedded in a pseudo-version built from it)
+// names a tree you did not build. Only the ldflag-stamped commit is
+// trustworthy, which is why it wins whenever it is set: this fallback
+// fills in `commit` only when nothing stamped one.
 func buildInfoVersion(bi *debug.BuildInfo) (v, c, d string) {
 	if bi == nil {
 		return "", "", ""
