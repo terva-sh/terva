@@ -51,9 +51,19 @@ func (ImageBlock) isContent() {}
 
 // ToolCallBlock is an assistant-issued call to a tool.
 type ToolCallBlock struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Arguments is ALWAYS valid JSON — see FinalizeToolArguments, which every
+	// provider routes its streamed buffer through. Callers may marshal a block
+	// without checking; an invalid value here would break the session writer,
+	// the request builders, and the ctrlproto wire alike.
 	Arguments json.RawMessage `json:"arguments"`
+	// RawArguments holds the model's original argument text when it could not
+	// be parsed or repaired, and is empty otherwise. Arguments is "{}" in that
+	// case, so the block stays marshalable while the evidence of what the model
+	// tried to send survives for the transcript and for the error the model is
+	// given back.
+	RawArguments string `json:"raw_arguments,omitempty"`
 }
 
 func (ToolCallBlock) isContent() {}

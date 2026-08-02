@@ -155,6 +155,8 @@ type Agent struct {
 	retryObs               []func(RetryRecord)
 	tailObs                []func(TailRecord)
 	prefixDivObs           []func(PrefixDivergence)
+	cacheCliffObs          []func(CacheCliff)
+	transportObs           []func(provider.TransportInfo)
 	toolGroupObs           []func(group string)
 	continuationGates      []ContinuationGate
 
@@ -250,6 +252,18 @@ type Agent struct {
 	// build/enginefeatures.go, core's zero value stays off).
 	lastLadder         *prefixLadder
 	prefixDivRecording bool
+	// cliffEpoch counts the ladder's non-append divergences (and dispatches
+	// with no predecessor to compare against). The cache-cliff detector uses
+	// it to tell "the provider dropped us" from "we rebuilt the prefix" —
+	// see cachecliff.go. Guarded by mu, as is cliffState.
+	cliffEpoch int
+	cliffState cacheCliffState
+	// transportRecording gates relaying provider transport forensics
+	// (EventTransport → observers → the session's "net" rows). Engine feature
+	// transport_recording; like prefixDivRecording, the shipped default (ON)
+	// lives in build/enginefeatures.go and core's zero value stays off.
+	// Guarded by mu.
+	transportRecording bool
 	// activationContinuationOff disables the built-in activation gate
 	// (docs/proposals/activation-continuation.md): a segment that activated a
 	// group is auto-continued with the tools live. The zero value keeps it ON
@@ -365,6 +379,12 @@ type Agent struct {
 	// (runLoop resets and observes; oneTurn reads the nudge), so it carries no
 	// lock — unlike stallDetect, which a host may toggle from another goroutine.
 	stall stallTracker
+
+	// pressure is the context-warning cadence (which band has been announced,
+	// how long since). Same discipline and same reason as stall: touched only
+	// on the turn goroutine — composeTail peeks it, oneTurn commits once the
+	// tail is settled — so it carries no lock.
+	pressure pressureTracker
 
 	// queued holds user messages submitted while the agent is busy.
 	// The loop appends them as normal user messages at safe
@@ -2579,6 +2599,13 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		a.commitCapabilityNote(tt)
 	}
 
+	// Advance the context-warning cadence. Driven off what the tail ACTUALLY
+	// carried rather than by re-deciding, so the bookkeeping cannot disagree
+	// with what the model was shown — and so a continue turn, which suppresses
+	// the whole tail, counts as "not delivered" instead of silently spending
+	// the interval.
+	a.commitContextPressure(tailHas(tail, TailPressure))
+
 	// Record what the model was shown, if it differs from last time. The tail is
 	// otherwise unauditable — composed per request and discarded — which left a
 	// post-hoc review able to see a model's reaction to a prompt injection and
@@ -2605,10 +2632,15 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 			sink(EvToolUseArgs{ID: e.ID, Delta: e.Delta})
 		case provider.EventToolEnd:
 			sink(EvToolUseEnd{ID: e.ID})
+		case provider.EventTransport:
+			if a.TransportRecordingEnabled() {
+				a.fireTransport(e.Info)
+			}
 		case provider.EventUsage:
 			cum := a.cost.Add(e.Usage)
 			sink(EvUsage{Usage: e.Usage, Cumulative: cum})
 			a.fireUsage(e.Usage, cum)
+			a.observeDispatchCache(e.Usage)
 		case provider.EventDone:
 			stop = e.Stop
 			finalErr = e.Err
@@ -2845,6 +2877,21 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools
 	if !ok {
 		return ToolResult{
 			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("unknown tool %q", tc.Name)}},
+			IsError: true,
+		}
+	}
+
+	// Arguments that never parsed. The provider kept the model's original text
+	// rather than discarding it, so the model can be told what is actually
+	// wrong instead of being handed encoding/json's "invalid character '\t' in
+	// string literal" — which names a character class, no location, and no
+	// remedy. A model given that re-sends the identical bytes, because nothing
+	// in it says what to change; that is what the stall detector kept catching.
+	// Running the tool on the "{}" placeholder would be worse still: it would
+	// fail on a missing required field and blame the wrong thing entirely.
+	if tc.RawArguments != "" {
+		return ToolResult{
+			Content: []provider.Content{provider.TextBlock{Text: unparseableArgsMessage(tc.Name, tc.RawArguments)}},
 			IsError: true,
 		}
 	}

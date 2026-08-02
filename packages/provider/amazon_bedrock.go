@@ -720,12 +720,9 @@ func (c *bedrockClient) runStream(ctx context.Context, resp *http.Response, req 
 				continue
 			}
 			if st.isToolUse {
-				args := st.toolArgs.String()
-				if args == "" {
-					args = "{}"
-				}
+				args, unparsed := FinalizeToolArguments(st.toolArgs.String())
 				finalMsg.Content = append(finalMsg.Content, ToolCallBlock{
-					ID: st.toolID, Name: st.toolName, Arguments: json.RawMessage(args),
+					ID: st.toolID, Name: st.toolName, Arguments: args, RawArguments: unparsed,
 				})
 				out <- EventToolEnd{ID: st.toolID}
 			} else if st.text.Len() > 0 {

@@ -592,12 +592,9 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 					}
 				}
 			case "tool_use":
-				args := b.toolArgs.String()
-				if args == "" || !json.Valid([]byte(args)) {
-					args = "{}"
-				}
+				args, unparsed := FinalizeToolArguments(b.toolArgs.String())
 				content = append(content, ToolCallBlock{
-					ID: b.toolID, Name: b.toolName, Arguments: json.RawMessage(args),
+					ID: b.toolID, Name: b.toolName, Arguments: args, RawArguments: unparsed,
 				})
 			}
 		}

@@ -141,7 +141,7 @@ func (a *Agent) composeTail(tt turnTools, hostContext, stageCue string, continue
 		blocks = append(blocks, TailBlock{ID: id, Text: note})
 	}
 
-	if note := a.contextPressureNote(); note != "" {
+	if note := a.peekContextPressureNote(); note != "" {
 		blocks = append(blocks, TailBlock{ID: TailPressure, Text: note})
 	}
 
@@ -164,18 +164,12 @@ func (a *Agent) composeTail(tt turnTools, hostContext, stageCue string, continue
 	return blocks
 }
 
-// contextPressureNote warns the model how full its window is once past
-// ContextWarnFraction, instead of relying on it to poll terva_status (models do
-// not re-poll). Empty below the threshold, or when the window size is unknown.
-func (a *Agent) contextPressureNote() string {
+// contextPressureText renders the note. WHETHER to render it is
+// peekContextPressureNote's decision — see context_pressure.go, which turned
+// this from a level trigger that rode 18% of a real session's requests into a
+// band-and-interval one.
+func (a *Agent) contextPressureText(f float64) string {
 	used, window := a.ContextUsage()
-	if window <= 0 || used <= 0 {
-		return ""
-	}
-	f := float64(used) / float64(window)
-	if f < ContextWarnFraction {
-		return ""
-	}
 	// The closing sentence must match the actual compaction policy: with
 	// auto_compact "off" there is no 85% valve — telling the model one exists
 	// invites it to defer summarization to a harness intervention that will never

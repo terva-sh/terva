@@ -102,8 +102,12 @@ func TestTailFingerprintIgnoresChangingText(t *testing.T) {
 	a := NewAgent(client, "gpt-5.6-sol", "sys", Registry{})
 	got := collectTail(a)
 
-	// Past the warn fraction, and moving each turn.
-	for i, used := range []int{210_000, 215_000, 220_000} {
+	// Past the warn fraction and CLIMBING A BAND each turn (272k window: 71%,
+	// 81%, 86%). The band has to escalate for the note to ride every request —
+	// inside one band the cadence deliberately stays quiet, which is a
+	// different property, asserted in context_pressure_test.go. What this test
+	// needs is three requests that all carry the note with different text.
+	for i, used := range []int{195_000, 220_000, 235_000} {
 		a.SeedLastTurnUsage(provider.Usage{InputTokens: used})
 		if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
 			t.Fatalf("Prompt %d: %v", i, err)
