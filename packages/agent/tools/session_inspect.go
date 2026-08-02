@@ -620,6 +620,13 @@ type sessScan struct {
 	// pending holds sidecar errors not yet placed into the stream, oldest
 	// first. Drained by timestamp as messages pass (see drainErrors).
 	pending []core.SessionError
+
+	// lastUsageAt is the previous stamped usage row's time, for the gap between
+	// consecutive dispatches. Zero until the first stamped row, and never
+	// advanced by an unstamped one — a gap measured across a legacy row would
+	// span an unknown number of requests and read as a long idle that never
+	// happened.
+	lastUsageAt time.Time
 }
 
 func newSessScan(a sessionInspectArgs) *sessScan {
@@ -704,7 +711,15 @@ func (s *sessScan) addRow(row int, r core.ReplayRow) {
 		s.drainErrors(r.Message.Time)
 		s.addMessage(row, r.Message)
 	case core.ReplayRowUsage:
-		s.addUsage(row, r.Usage, r.Cumulative)
+		// A usage row is the closest event to the request a sidecar error
+		// killed — closer than the next message, which may be many tool calls
+		// later. Guarded on the zero time because drainErrors treats a zero
+		// cutoff as "drain everything", so an unstamped legacy row would empty
+		// the queue here and hang every later error off the wrong turn.
+		if !r.At.IsZero() {
+			s.drainErrors(r.At)
+		}
+		s.addUsage(row, r.Usage, r.Cumulative, r.At)
 	}
 }
 
@@ -727,8 +742,15 @@ func (s *sessScan) drainErrors(cutoff time.Time) {
 // much of its input hit the prefix cache — is not derivable from the messages,
 // so without this the tool can describe everything a session did except what it
 // spent doing it.
-func (s *sessScan) addUsage(row int, u, cum provider.Usage) {
-	s.add(sessEvent{Row: row, Kind: "usage", Usage: &usageEvent{Usage: u, Cumulative: cum}})
+func (s *sessScan) addUsage(row int, u, cum provider.Usage, at time.Time) {
+	ev := &usageEvent{Usage: u, Cumulative: cum, At: at}
+	if !at.IsZero() {
+		if !s.lastUsageAt.IsZero() {
+			ev.Since = at.Sub(s.lastUsageAt)
+		}
+		s.lastUsageAt = at
+	}
+	s.add(sessEvent{Row: row, Kind: "usage", Usage: ev})
 }
 
 func (s *sessScan) addMessage(row int, m provider.Message) {
@@ -946,6 +968,16 @@ type sessEvent struct {
 type usageEvent struct {
 	Usage      provider.Usage
 	Cumulative provider.Usage
+
+	// At is when the request was billed, zero for rows written before usage rows
+	// carried a stamp. Since is the gap from the previous stamped dispatch, zero
+	// when there is no previous one to measure from.
+	//
+	// The gap is here because a prefix cache ages out on IDLE time, so "did this
+	// miss because the prefix expired" is a question about the interval between
+	// requests and nothing else in the transcript records it.
+	At    time.Time
+	Since time.Duration
 }
 
 // line renders a usage event for a listing: the turn's own numbers, then the
@@ -964,6 +996,13 @@ func (u *usageEvent) line() string {
 // leaves out.
 func (u *usageEvent) detail() string {
 	var b strings.Builder
+	if !u.At.IsZero() {
+		fmt.Fprintf(&b, "at                   %s", u.At.Format(time.RFC3339))
+		if u.Since > 0 {
+			fmt.Fprintf(&b, "   (%s after the previous dispatch)", u.Since.Round(time.Second))
+		}
+		b.WriteString("\n")
+	}
 	fmt.Fprintf(&b, "turn:\n")
 	fmt.Fprintf(&b, "  input_tokens       %d   (uncached — billed at full rate)\n", u.Usage.InputTokens)
 	fmt.Fprintf(&b, "  cache_read_tokens  %d\n", u.Usage.CacheReadTokens)

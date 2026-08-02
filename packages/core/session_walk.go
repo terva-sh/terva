@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"io"
+	"time"
 
 	"terva.sh/terva/packages/provider"
 )
@@ -34,7 +35,11 @@ type sessionWalkHooks struct {
 	// spend booked against this session rather than a request it sent — a
 	// distinction any cost or cache-hit analysis has to make, because a fresh
 	// child's usage looks exactly like the parent's cache collapsing.
-	onUsage func(u, cum provider.Usage, effLen int, delegated bool, line []byte)
+	//
+	// at is when the row was written, ZERO for rows predating the stamp — every
+	// consumer must treat a zero time as "unknown" rather than as a real instant,
+	// because the sessions worth analyzing are mostly older than the field.
+	onUsage func(u, cum provider.Usage, effLen int, delegated bool, at time.Time, line []byte)
 	// onDirective fires for each append-only directive row (e.g. exclude_image).
 	onDirective func(d sessionDirective, line []byte)
 	// onToolGroup fires for each tool_group row — a capability group activated
@@ -156,12 +161,17 @@ func walkSession(r io.Reader, rep *loadReport, h sessionWalkHooks) ([]provider.M
 					Usage      provider.Usage `json:"usage"`
 					Cumulative provider.Usage `json:"cumulative"`
 					Delegated  bool           `json:"delegated"`
+					At         *time.Time     `json:"at"`
 				}
 				if err := json.Unmarshal(line, &row); err != nil {
 					rep.corruptLines++
 					return nil
 				}
-				h.onUsage(row.Usage, row.Cumulative, len(effective), row.Delegated, line)
+				var at time.Time
+				if row.At != nil {
+					at = *row.At
+				}
+				h.onUsage(row.Usage, row.Cumulative, len(effective), row.Delegated, at, line)
 			}
 		case recordDirective:
 			if h.onDirective != nil {

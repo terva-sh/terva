@@ -44,6 +44,12 @@ type ReplayRow struct {
 	// rollup that mixes them reports the child's cold prompt as the parent
 	// missing its cache.
 	Delegated bool
+	// At is when a usage row was written, ZERO for rows from before the stamp
+	// existed. Unlike Message.Time it is NOT backfilled from a neighbour: a
+	// message's time only has to order the scene, while this one is read to
+	// measure gaps between dispatches, and a guessed instant would answer that
+	// question with a fabrication rather than an absence.
+	At time.Time
 
 	// Checkpoint is the summary output a compaction folded its input into,
 	// set when Kind == ReplayRowCompaction. Honoring it replaces the live
@@ -75,8 +81,8 @@ func ReadReplayRows(path string) ([]ReplayRow, SessionMeta, error) {
 		onMessage: func(m provider.Message, _ int, _ []byte) {
 			rows = append(rows, ReplayRow{Kind: ReplayRowMessage, Message: m})
 		},
-		onUsage: func(u, cum provider.Usage, _ int, delegated bool, _ []byte) {
-			rows = append(rows, ReplayRow{Kind: ReplayRowUsage, Usage: u, Cumulative: cum, Delegated: delegated})
+		onUsage: func(u, cum provider.Usage, _ int, delegated bool, at time.Time, _ []byte) {
+			rows = append(rows, ReplayRow{Kind: ReplayRowUsage, Usage: u, Cumulative: cum, Delegated: delegated, At: at})
 		},
 		onCompaction: func(out, _ []provider.Message, _ int, _ []byte) {
 			// walkSession aliases `out` as its live effective transcript after the
@@ -195,9 +201,14 @@ func StreamReplayRows(ctx context.Context, path string, maxBytes int64, fn func(
 			var urow struct {
 				Usage      provider.Usage `json:"usage"`
 				Cumulative provider.Usage `json:"cumulative"`
+				At         *time.Time     `json:"at"`
 			}
 			if err := json.Unmarshal(line, &urow); err == nil {
-				fn(row, ReplayRow{Kind: ReplayRowUsage, Usage: urow.Usage, Cumulative: urow.Cumulative})
+				out := ReplayRow{Kind: ReplayRowUsage, Usage: urow.Usage, Cumulative: urow.Cumulative}
+				if urow.At != nil {
+					out.At = *urow.At
+				}
+				fn(row, out)
 			}
 			row++
 		case "compaction":

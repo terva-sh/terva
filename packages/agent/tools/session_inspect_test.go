@@ -808,6 +808,110 @@ func writeErrorSidecar(t *testing.T, transcript string, rows ...string) {
 	}
 }
 
+// TestSessionInspectUsesUsageStamps pins what the `at` field on usage rows buys.
+//
+// Both halves failed before the stamp existed, and both were needed to diagnose
+// the 2026-08-01 codex cache collapse by hand:
+//
+//   - the GAP between dispatches, because a prefix cache ages out on idle time,
+//     so "did this miss because the prefix expired" is a question about the
+//     interval and nothing else in the transcript records it;
+//   - a sidecar error placed against the DISPATCH it killed rather than the next
+//     message, which in a tool-heavy turn can be many calls later — the ordering
+//     is what says whether the collapse began before the overload or after it.
+func TestSessionInspectUsesUsageStamps(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Two dispatches 7 minutes apart, with the overload landing between them.
+	body := `{"type":"meta","meta":{"id":"x","cwd":"` + cwd + `","format_version":2}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"go"}],"time":"2026-08-01T12:00:00Z"}}
+{"type":"usage","usage":{"input_tokens":10,"output_tokens":2,"cache_read_tokens":9728,"cache_write_tokens":0,"cost_usd":0.1},"cumulative":{"input_tokens":10,"output_tokens":2,"cache_read_tokens":9728,"cache_write_tokens":0,"cost_usd":0.1},"at":"2026-08-01T12:00:30Z"}
+{"type":"usage","usage":{"input_tokens":200000,"output_tokens":5,"cache_read_tokens":9728,"cache_write_tokens":0,"cost_usd":1.0},"cumulative":{"input_tokens":200010,"output_tokens":7,"cache_read_tokens":19456,"cache_write_tokens":0,"cost_usd":1.1},"at":"2026-08-01T12:07:30Z"}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeErrorSidecar(t, path,
+		`{"time":"2026-08-01T12:01:00Z","error":"openai-codex: Our servers are currently overloaded. Please try again later.","provider":"openai-codex","model":"gpt-5.6-sol"}`)
+
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1"}`), func(string) {})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := inspectText(t, res)
+
+	// The error postdates the first dispatch and predates the second, so it must
+	// sit between them. Before the stamp it could only be placed against a
+	// message, and here there is no later message to hang it on at all.
+	firstDispatch := strings.Index(got, "in 10 ")
+	overload := strings.Index(got, "overloaded")
+	second := strings.Index(got, "in 200000")
+	if firstDispatch < 0 || overload < 0 || second < 0 {
+		t.Fatalf("missing an expected event (dispatch=%d overload=%d second=%d):\n%s", firstDispatch, overload, second, got)
+	}
+	if !(firstDispatch < overload && overload < second) {
+		t.Errorf("overload must sit between the two dispatches, got order %d/%d/%d:\n%s", firstDispatch, overload, second, got)
+	}
+
+	// The gap rides expand mode, where the full token breakdown already lives.
+	res, err = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","event_kinds":["usage"],"expand":-1}`), func(string) {})
+	if err != nil {
+		t.Fatalf("Execute expand: %v", err)
+	}
+	detail := inspectText(t, res)
+	if !strings.Contains(detail, "2026-08-01T12:07:30Z") {
+		t.Errorf("expanded usage must report when it was billed, got:\n%s", detail)
+	}
+	if !strings.Contains(detail, "7m0s after the previous dispatch") {
+		t.Errorf("expanded usage must report the gap from the previous dispatch, got:\n%s", detail)
+	}
+}
+
+// TestSessionInspectToleratesUnstampedUsage guards the legacy path: every
+// session worth analyzing today predates the stamp. An unstamped row must not
+// drain the pending sidecar errors (drainErrors reads a zero cutoff as "drain
+// everything"), or every later error would hang off the wrong turn.
+func TestSessionInspectToleratesUnstampedUsage(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"meta","meta":{"id":"x","cwd":"` + cwd + `","format_version":2}}
+{"type":"usage","usage":{"input_tokens":10,"output_tokens":2,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.1},"cumulative":{"input_tokens":10,"output_tokens":2,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.1}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"later"}],"time":"2026-08-01T12:30:00Z"}}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeErrorSidecar(t, path,
+		`{"time":"2026-08-01T12:20:00Z","error":"openai-codex: overloaded","provider":"openai-codex","model":"gpt-5.6-sol"}`)
+
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1"}`), func(string) {})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := inspectText(t, res)
+	// The error is newer than the unstamped usage row and older than the
+	// message, so the message is what must place it.
+	usage := strings.Index(got, "in 10 ")
+	overload := strings.Index(got, "overloaded")
+	msg := strings.Index(got, "later")
+	if usage < 0 || overload < 0 || msg < 0 {
+		t.Fatalf("missing an expected event (usage=%d overload=%d msg=%d):\n%s", usage, overload, msg, got)
+	}
+	if !(usage < overload && overload < msg) {
+		t.Errorf("an unstamped usage row must not claim the error; want usage<overload<message, got %d/%d/%d:\n%s", usage, overload, msg, got)
+	}
+}
+
 // TestSessionInspectPlacesSidecarErrors pins D3 of the 2026-07-30
 // session-harness review. Provider failures — auth, overload, rate limit — are
 // recorded in a sidecar file that no tool could reach, so a turn that died on
