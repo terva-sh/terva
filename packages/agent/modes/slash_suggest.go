@@ -38,6 +38,7 @@ const slashSuggestPageSize = 8
 
 type slashSuggester struct {
 	cursor int
+	vp     dialogs.Viewport
 
 	// jailed tracks whether the sandbox is currently locked. It is used
 	// to hide state-dependent commands from the autocomplete popup.
@@ -423,7 +424,12 @@ func (s *slashSuggester) Render(input string, th tui.Theme, width int) []string 
 	}
 	// Window the matches around the cursor so the popup fits short
 	// terminals and PageUp/PageDown visibly change what's shown.
-	start, end := dialogs.CursorWindow(s.cursor, len(m), s.maxRows)
+	// Centred: the match list is rebuilt on every keystroke, so the rows under
+	// the cursor change constantly and holding the cursor still reads better
+	// than scrolling only at the edges.
+	s.vp.Fit(len(m), s.maxRows)
+	s.vp.Center(s.cursor)
+	start, end := s.vp.Window()
 	var lines []string
 	if start > 0 {
 		lines = append(lines, dialogs.WindowMoreAbove(th, start))

@@ -109,24 +109,6 @@ func (p *listPicker) render(th tui.Theme, width int) []string {
 	return lines
 }
 
-// CursorWindow returns the [start, end) slice bounds of a window of
-// at most maxRows rows over total rows, centered on cursor and
-// clamped to the list edges. With total <= maxRows the whole list is
-// returned.
-func CursorWindow(cursor, total, maxRows int) (start, end int) {
-	if maxRows <= 0 || total <= maxRows {
-		return 0, total
-	}
-	start = cursor - maxRows/2
-	if start < 0 {
-		start = 0
-	}
-	if start+maxRows > total {
-		start = total - maxRows
-	}
-	return start, start + maxRows
-}
-
 // WindowMoreAbove / windowMoreBelow are the standard muted "N more
 // above/below" indicator rows around a windowed list render. Every
 // scrolling dialog routes through these so the wording, styling, and

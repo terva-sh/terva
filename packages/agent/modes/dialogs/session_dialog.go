@@ -30,7 +30,7 @@ type SessionDialog struct {
 
 	// viewTop is the index of the first session currently drawn.
 	// Adjusted to follow the cursor on up/down moves.
-	viewTop int
+	vp Viewport
 
 	// Rename, when set, persists a rename instead of the default direct
 	// core.RenameSession write. The ctrlproto path routes it through the
@@ -140,6 +140,16 @@ type sessionDialogAction struct {
 	ID      string
 }
 
+// ChromeRows is the non-body rows Render emits at their worst case: header,
+// filter/hint lines, both scroll indicators and the closing rule.
+func (d *SessionDialog) ChromeRows() int { return 6 }
+
+// cursorPadRows keeps a navigated list scrolling a couple of rows BEFORE the
+// cursor reaches an edge, so you can see where you are heading. It was
+// clampViewTop's private constant; naming it here makes the three dialogs that
+// share the behaviour visibly share the number too.
+const cursorPadRows = 2
+
 func NewSessionDialog() *SessionDialog { return &SessionDialog{} }
 
 // Open populates the dialog from root + cwd and shows it. Empty
@@ -163,7 +173,7 @@ func (d *SessionDialog) Open(root, cwd string) {
 	}
 	d.sessions = filtered
 	d.cursor = 0
-	d.viewTop = 0
+	d.vp.Reset()
 	d.archived = false
 	d.confirming = false
 	d.active = true
@@ -241,17 +251,18 @@ func (d *SessionDialog) Render(th tui.Theme, width int) []string {
 	if window <= 0 || window >= total {
 		window = total
 	}
-	d.viewTop = clampViewTop(d.viewTop, d.cursor, window, total)
-	viewBot := d.viewTop + window
-	if viewBot > total {
-		viewBot = total
-	}
+	// The offset follows the cursor here rather than the scroll keys, with
+	// clampViewTop's two-row padding; the viewport supplies the storage, the
+	// clamp and the window bounds.
+	d.vp.Fit(total, window)
+	d.vp.RevealPadded(d.cursor, cursorPadRows)
+	viewTop, viewBot := d.vp.Window()
 
 	// Top indicator: how many rows are above the viewport.
-	if d.viewTop > 0 {
-		lines = append(lines, WindowMoreAbove(th, d.viewTop))
+	if viewTop > 0 {
+		lines = append(lines, WindowMoreAbove(th, viewTop))
 	}
-	for i := d.viewTop; i < viewBot; i++ {
+	for i := viewTop; i < viewBot; i++ {
 		plain := "  " + d.rowPlain(i, width-2)
 		if i == d.cursor {
 			lines = append(lines, th.PadHighlight(plain, width))
@@ -265,37 +276,6 @@ func (d *SessionDialog) Render(th tui.Theme, width int) []string {
 	}
 	lines = append(lines, FrameRule(th, width))
 	return lines
-}
-
-// clampViewTop returns a viewTop that keeps cursor visible in a
-// window of the given size over a list of `total` rows. Leaves one
-// row of padding above/below where possible so moving the cursor
-// doesn't land right on the top/bottom edge — easier to see what
-// direction you're moving.
-func clampViewTop(viewTop, cursor, window, total int) int {
-	if window <= 0 || total <= 0 {
-		return 0
-	}
-	if window >= total {
-		return 0
-	}
-	pad := 2
-	if window < 6 {
-		pad = 0
-	}
-	if cursor < viewTop+pad {
-		viewTop = cursor - pad
-	}
-	if cursor >= viewTop+window-pad {
-		viewTop = cursor - window + pad + 1
-	}
-	if viewTop < 0 {
-		viewTop = 0
-	}
-	if viewTop+window > total {
-		viewTop = total - window
-	}
-	return viewTop
 }
 
 // FormatSessionRowPlain returns the session row body without any ANSI
@@ -527,7 +507,7 @@ func (d *SessionDialog) ShowArchived(on bool) {
 	}
 	d.archived = on
 	d.cursor = 0
-	d.viewTop = 0
+	d.vp.Reset()
 	d.confirming = false
 	if on {
 		d.archivedRows = d.ListArchived()
@@ -555,7 +535,8 @@ func (d *SessionDialog) Refresh(root, cwd string) {
 			cur = d.archivedRows[d.cursor].ID
 		}
 		d.archivedRows = d.ListArchived()
-		d.cursor, d.viewTop = 0, 0
+		d.cursor = 0
+		d.vp.Reset()
 		for i := range d.archivedRows {
 			if d.archivedRows[i].ID == cur {
 				d.cursor = i

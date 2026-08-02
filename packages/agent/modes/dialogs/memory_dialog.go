@@ -27,7 +27,11 @@ type MemoryDialog struct {
 	// scopes carries each scope's budget for the footer, in render order.
 	scopes []MemoryScopeInfo
 	cursor int
-	status string
+	vp     Viewport
+	// MaxRows is the body height the host budgets from the terminal
+	// (dialogs.BodyBudget). 0 falls back to memoryFallbackRows.
+	MaxRows int
+	status  string
 	// confirmClear holds the scope a pending `c` is waiting to confirm. Clearing
 	// is the one irreversible action on this surface — the entries are gone from
 	// the file, and the model spent real turns deciding they were worth keeping —
@@ -218,6 +222,12 @@ func scopeLabel(scopes []MemoryScopeInfo, scope string) string {
 }
 
 // Render returns the dialog lines.
+const memoryFallbackRows = 12
+
+// ChromeRows is the non-body rows Render emits at their worst case.
+// Verified by TestEveryDialogFitsItsOwnBudget rather than counted by eye.
+func (d *MemoryDialog) ChromeRows() int { return 6 }
+
 func (d *MemoryDialog) Render(th tui.Theme, width int) []string {
 	if !d.Active() {
 		return nil
@@ -238,8 +248,17 @@ func (d *MemoryDialog) Render(th tui.Theme, width int) []string {
 	lines = append(lines, th.FG256(th.Muted, clipLine(
 		i18n.T("↑/↓ · d delete · c clear active · r reload from disk · esc"), width)))
 
-	const maxRows = 12
-	start, end := CursorWindow(d.cursor, len(d.rows), maxRows)
+	maxRows := d.MaxRows
+	if maxRows <= 0 {
+		maxRows = memoryFallbackRows
+	}
+	// Centred: this list is filtered and rebuilt under the cursor, so
+	// holding the cursor still and moving the content reads better than
+	// scrolling only at the edges. Named here rather than implied by
+	// whichever windowing helper was reached for.
+	d.vp.Fit(len(d.rows), maxRows)
+	d.vp.Center(d.cursor)
+	start, end := d.vp.Window()
 	lastScope := ""
 	// A header for the scope the window OPENS in, so a scrolled view never shows
 	// rows whose scope is off-screen above them.

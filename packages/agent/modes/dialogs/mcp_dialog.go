@@ -14,7 +14,11 @@ type MCPDialog struct {
 	active bool
 	items  []MCPInfo
 	cursor int
-	status string
+	vp     Viewport
+	// MaxRows is the body height the host budgets from the terminal
+	// (dialogs.BodyBudget). 0 falls back to mcpFallbackRows.
+	MaxRows int
+	status  string
 }
 
 func NewMCPDialog() *MCPDialog { return &MCPDialog{} }
@@ -124,6 +128,12 @@ func mcpStateLabel(it MCPInfo) string {
 }
 
 // Render returns the dialog lines.
+const mcpFallbackRows = 12
+
+// ChromeRows is the non-body rows Render emits at their worst case.
+// Verified by TestEveryDialogFitsItsOwnBudget rather than counted by eye.
+func (d *MCPDialog) ChromeRows() int { return 5 }
+
 func (d *MCPDialog) Render(th tui.Theme, width int) []string {
 	if !d.Active() {
 		return nil
@@ -139,8 +149,17 @@ func (d *MCPDialog) Render(th tui.Theme, width int) []string {
 
 	lines = append(lines, th.FG256(th.Muted, i18n.T("↑/↓ · g enable/disable (global) · p project on/off · l log · esc")))
 
-	const maxRows = 12
-	start, end := CursorWindow(d.cursor, len(d.items), maxRows)
+	maxRows := d.MaxRows
+	if maxRows <= 0 {
+		maxRows = mcpFallbackRows
+	}
+	// Centred: this list is filtered and rebuilt under the cursor, so
+	// holding the cursor still and moving the content reads better than
+	// scrolling only at the edges. Named here rather than implied by
+	// whichever windowing helper was reached for.
+	d.vp.Fit(len(d.items), maxRows)
+	d.vp.Center(d.cursor)
+	start, end := d.vp.Window()
 	for i := start; i < end; i++ {
 		it := d.items[i]
 		tools := "-"

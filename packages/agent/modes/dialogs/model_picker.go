@@ -25,7 +25,8 @@ type modelPicker struct {
 	cursor  int
 	current string // currently active model id ("" = no you-are-here marker)
 	query   string // live filter text typed by the user
-	maxRows int    // scroll window height
+	vp      Viewport
+	maxRows int // scroll window height
 
 	// favorites are "provider/id" keys pinned to the top of the list and
 	// flagged with a ★. Set before setCatalog (nil = no favorites, e.g. the
@@ -209,7 +210,11 @@ func (p *modelPicker) hintLine(base string) string {
 // The caller renders its own header, hint, and empty states.
 func (p *modelPicker) renderRows(th tui.Theme, width int) []string {
 	var lines []string
-	start, end := CursorWindow(p.cursor, len(p.view), p.maxRows)
+	// Centred: the model list is filtered as you type, so the rows under the
+	// cursor change constantly and holding the cursor still reads better.
+	p.vp.Fit(len(p.view), p.maxRows)
+	p.vp.Center(p.cursor)
+	start, end := p.vp.Window()
 	for i := start; i < end; i++ {
 		m := p.view[i]
 		reason := " "

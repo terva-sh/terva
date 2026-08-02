@@ -28,6 +28,10 @@ type JumpDialog struct {
 	all     []jumpTarget
 	visible []jumpTarget // filtered subset
 	cursor  int
+	vp      Viewport
+	// MaxRows is the body height the host budgets from the terminal
+	// (dialogs.BodyBudget). 0 falls back to jumpFallbackRows.
+	MaxRows int
 	filter  string
 }
 
@@ -98,6 +102,12 @@ func (d *JumpDialog) applyFilter() {
 }
 
 // Render draws the dialog.
+const jumpFallbackRows = 12
+
+// ChromeRows is the non-body rows Render emits at their worst case.
+// Verified by TestEveryDialogFitsItsOwnBudget rather than counted by eye.
+func (d *JumpDialog) ChromeRows() int { return 5 }
+
 func (d *JumpDialog) Render(th tui.Theme, width int) []string {
 	if !d.Active() {
 		return nil
@@ -126,8 +136,17 @@ func (d *JumpDialog) Render(th tui.Theme, width int) []string {
 
 	// Cap the visible window so a 200-turn session doesn't push the
 	// editor off screen. Center around the cursor.
-	const maxRows = 12
-	start, end := CursorWindow(d.cursor, len(d.visible), maxRows)
+	maxRows := d.MaxRows
+	if maxRows <= 0 {
+		maxRows = jumpFallbackRows
+	}
+	// Centred: this list is filtered and rebuilt under the cursor, so
+	// holding the cursor still and moving the content reads better than
+	// scrolling only at the edges. Named here rather than implied by
+	// whichever windowing helper was reached for.
+	d.vp.Fit(len(d.visible), maxRows)
+	d.vp.Center(d.cursor)
+	start, end := d.vp.Window()
 	if start > 0 {
 		lines = append(lines, WindowMoreAbove(th, start))
 	}

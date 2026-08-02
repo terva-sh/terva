@@ -68,7 +68,10 @@ func TestListPickerRenderShape(t *testing.T) {
 	}
 }
 
-func TestCursorWindow(t *testing.T) {
+// Ported from TestCursorWindow when CursorWindow folded into Viewport.Center.
+// The cases are unchanged: centring is the same behaviour under a new name, and
+// this is what says so.
+func TestViewportCenterMatchesTheOldCursorWindow(t *testing.T) {
 	cases := []struct {
 		cursor, total, maxRows int
 		wantStart, wantEnd     int
@@ -79,16 +82,19 @@ func TestCursorWindow(t *testing.T) {
 		{29, 30, 10, 20, 30}, // bottom clamp
 		{4, 30, 10, 0, 10},   // near top clamp
 		{0, 0, 10, 0, 0},     // empty
-		{3, 7, 0, 0, 7},      // no cap
+		{3, 7, 0, 0, 7},      // no cap — rows unset means show everything
 	}
 	for _, c := range cases {
-		s, e := CursorWindow(c.cursor, c.total, c.maxRows)
+		var v Viewport
+		v.Fit(c.total, c.maxRows)
+		v.Center(c.cursor)
+		s, e := v.Window()
 		if s != c.wantStart || e != c.wantEnd {
-			t.Errorf("cursorWindow(%d,%d,%d) = (%d,%d), want (%d,%d)",
+			t.Errorf("Center(%d) over (%d,%d) = (%d,%d), want (%d,%d)",
 				c.cursor, c.total, c.maxRows, s, e, c.wantStart, c.wantEnd)
 		}
 		if c.maxRows > 0 && c.total > 0 && (c.cursor < s || c.cursor >= e) {
-			t.Errorf("cursorWindow(%d,%d,%d): cursor outside window [%d,%d)",
+			t.Errorf("Center(%d) over (%d,%d): cursor outside window [%d,%d)",
 				c.cursor, c.total, c.maxRows, s, e)
 		}
 	}
