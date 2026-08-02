@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptrace"
 	"runtime"
 	"strconv"
 	"strings"
@@ -510,8 +511,14 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 		return nil, fmt.Errorf("openai-codex: %w", err)
 	}
 
+	// Transport forensics: which connection/edge this dispatch rode, next to
+	// the usage row it produced (see transport.go for the mystery it serves).
+	// The trace context wraps each attempt's request, so the capture always
+	// describes the attempt whose response we return.
+	capture := &transportCapture{}
 	newReq := func() (*http.Request, error) {
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL, bytes.NewReader(body))
+		traceCtx := httptrace.WithClientTrace(ctx, capture.trace())
+		httpReq, err := http.NewRequestWithContext(traceCtx, "POST", c.baseURL, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
@@ -541,6 +548,7 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 	c.recordUsageHeaders(resp.Header)
 
 	out := make(chan Event, 16)
+	out <- EventTransport{Info: capture.info(resp)}
 	go c.runStream(ctx, resp, req, out)
 	return out, nil
 }
@@ -772,12 +780,9 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 					content = append(content, ImageBlock{MimeType: it.imgMime, Data: it.imgData, ID: it.imgID})
 				}
 			case "function_call":
-				args := it.argsBuf.String()
-				if args == "" || !json.Valid([]byte(args)) {
-					args = "{}"
-				}
+				args, unparsed := FinalizeToolArguments(it.argsBuf.String())
 				content = append(content, ToolCallBlock{
-					ID: it.callID, Name: it.name, Arguments: json.RawMessage(args),
+					ID: it.callID, Name: it.name, Arguments: args, RawArguments: unparsed,
 				})
 			case "reasoning":
 				if it.encrypted == "" && it.summary.Len() == 0 && it.rawID == "" {

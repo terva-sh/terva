@@ -130,6 +130,21 @@ var EngineFeatures = []EngineFeature{
 		Default: true,
 		Apply:   func(a *core.Agent, on bool) { a.SetPrefixDivergenceRecording(on) },
 	},
+	{
+		ID:    "transport_recording",
+		Title: i18n.M("Record which connection each request rode"),
+		Desc:  i18n.M("Some cache misses have nothing to do with the prompt: the request simply reached the provider over a fresh connection or a different edge, and landed on a machine that had never seen the conversation. This records the transport picture of each request — connection reuse, edge identifier, the provider's request id — next to its usage row, on providers that report it, so an unexplained expensive stretch can be read against how those requests physically travelled."),
+		// ON, for the prefix recorder's reason: this diagnostic's value is
+		// retrospective, and the sessions it exists for are the ones nobody
+		// knew would go wrong (one measured session burned ~$100 of full-price
+		// re-reads with byte-stable prompts — the layer this records was the
+		// only one with no data). It is quiet in the sense that matters —
+		// one small row per request, no extra network traffic, a few header
+		// reads — and the off switch exists for anyone who would rather not
+		// persist edge/request identifiers in session files.
+		Default: true,
+		Apply:   func(a *core.Agent, on bool) { a.SetTransportRecording(on) },
+	},
 }
 
 // EngineFeatureByID resolves a feature by its id (the settings-action lookup).

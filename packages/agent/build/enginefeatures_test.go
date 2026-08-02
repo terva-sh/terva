@@ -32,7 +32,8 @@ func TestEngineFeaturesApplyAtNewAgent(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
-	if err := config.MutateConfig(func(c *config.Config) { c.LazyTools = true }); err != nil {
+	on := true
+	if err := config.MutateConfig(func(c *config.Config) { c.LazyTools = &on }); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
 	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
@@ -228,5 +229,31 @@ func TestPrefixDivergenceRecordingShipsOnAndCanBeSwitchedOff(t *testing.T) {
 	}
 	if r.NewAgent().PrefixDivergenceRecordingEnabled() {
 		t.Error("engine_features.prefix_divergence_recording=false must switch it off at build")
+	}
+}
+
+func TestTransportRecordingShipsOnAndCanBeSwitchedOff(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !r.NewAgent().TransportRecordingEnabled() {
+		t.Error("transport_recording must default ON — its value is retrospective, and the sessions it exists for are the ones nobody knew would go wrong")
+	}
+
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.EngineFeatures = map[string]bool{"transport_recording": false}
+	}); err != nil {
+		t.Fatalf("override config: %v", err)
+	}
+	r, err = Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve with override: %v", err)
+	}
+	if r.NewAgent().TransportRecordingEnabled() {
+		t.Error("engine_features.transport_recording=false must switch it off at build")
 	}
 }

@@ -228,12 +228,19 @@ func (a *Agent) watchPrefix(req provider.Request, msgs []provider.Message) {
 	a.mu.Unlock()
 
 	if prev == nil {
-		return // first dispatch: nothing to diverge from
+		// First dispatch: nothing to diverge from — and nothing for the
+		// cache-cliff detector to hold a baseline against either.
+		a.bumpCliffEpoch()
+		return
 	}
 	d := comparePrefixLadders(*prev, cur)
 	if d.Appended {
 		return
 	}
+	// A non-append is a legitimate full-price re-read (compaction, tool or
+	// model change); the epoch bump tells the cache-cliff detector this
+	// dispatch's miss is explained. See cachecliff.go.
+	a.bumpCliffEpoch()
 	last := a.cost.LastTurnUsage()
 	d.CachedTokens = last.CacheReadTokens + last.CacheWriteTokens
 	a.firePrefixDivergence(d)
@@ -264,3 +271,23 @@ func (a *Agent) PrefixDivergenceRecordingEnabled() bool {
 }
 
 func (a *Agent) prefixDivergenceRecordingOn() bool { return a.PrefixDivergenceRecordingEnabled() }
+
+// SetTransportRecording toggles relaying provider transport forensics to
+// observers (engine feature transport_recording, default ON — same shipped-on
+// rationale as the prefix recorder: a diagnostic that ships off is never on
+// when the rare thing happens). Off, the provider still captures — one
+// httptrace callback and three header reads — but core drops the event, so
+// nothing fires and no "net" row is written.
+func (a *Agent) SetTransportRecording(on bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.transportRecording = on
+}
+
+// TransportRecordingEnabled reports whether transport forensics are relayed.
+// Exported for the settings surface and the build-funnel default test.
+func (a *Agent) TransportRecordingEnabled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.transportRecording
+}
