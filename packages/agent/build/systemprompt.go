@@ -231,7 +231,7 @@ func SystemSegments(o SystemPromptOpts) []PromptSegment {
 	// chat/play (and any --no-tools run) there's nothing to read it with, so the
 	// hint would just be a dead instruction — drop it.
 	if d := strings.TrimSpace(o.TervaDocsDir); d != "" && hasTool(o.Tools, "read") {
-		add(SourceTervaDocsHint, i18n.P("system.docs_hint", "Terva's own docs are installed under %s; use the read tool there when you need details about terva RPC, extensions, skills, or built-in behaviour.", d))
+		add(SourceTervaDocsHint, i18n.P("system.docs_hint", "Terva's own docs are installed under %s; read README.md there for the index, and design/ for how the harness works and why. Use the read tool when you need details about terva RPC, extensions, skills, or built-in behaviour.", d))
 	}
 	if d := strings.TrimSpace(o.TervaExamplesDir); d != "" && hasTool(o.Tools, "read") {
 		add(SourceTervaExamplesHint, i18n.P("system.examples_hint", "Deployment and setup examples — systemd units, reverse-proxy configs, container recipes — are installed under %s; read them when bootstrapping or configuring a terva host.", d))
