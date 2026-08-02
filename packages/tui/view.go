@@ -2486,8 +2486,13 @@ func shortArgsFromParsed(tool string, v any) string {
 		}
 		return s
 	}
+	// The one argument worth putting in the header. A tool whose subject is
+	// not a file or a command still has one — `raati_convene` spends six
+	// sub-agent turns on a QUESTION, and without it here the header rendered
+	// as `{"class":"advisory","converge":true,"evidence":"Reposi…`: the whole
+	// point of the call, cut off behind the arguments that qualify it.
 	var primary string
-	for _, k := range []string{"path", "file_path", "command"} {
+	for _, k := range []string{"path", "file_path", "command", "question"} {
 		if s, ok := x[k].(string); ok {
 			primary = s
 			break
