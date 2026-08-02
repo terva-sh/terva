@@ -104,7 +104,21 @@ func renderContextOverview(th tui.Theme, b ctrlproto.ContextBreakdown) []string 
 		}
 	}
 
-	var out []string
+	rule := muted("  " + strings.Repeat("─", 38))
+
+	// The headline first: how full the window is, and how much of it the provider
+	// is actually re-reading. Those are the two numbers people open this panel
+	// for, and the breakdown below only answers "why" — which is worth reading
+	// once they say there is something to explain.
+	//
+	// They used to sit at the BOTTOM, under a per-message list that is one line
+	// per message. On the sessions where context is worth inspecting at all, that
+	// list is hundreds of lines, so the two summary numbers were reliably off the
+	// end of the modal behind a scroll nobody had a reason to perform.
+	out := []string{contextHeadline(th, b)}
+	out = append(out, renderCacheSection(th, b.Cache)...)
+	out = append(out, "", rule)
+
 	sysSuffix := ""
 	if b.ExtGuidanceBytes > 0 {
 		sysSuffix = "  " + i18n.T("(incl. ext guidance)")
@@ -136,17 +150,48 @@ func renderContextOverview(th tui.Theme, b ctrlproto.ContextBreakdown) []string 
 			out = append(out, muted(line))
 		}
 	}
-	out = append(out, muted("  "+strings.Repeat("─", 38)))
-	pctSuffix := ""
-	if b.Window > 0 {
-		pct := float64(b.TotalBytes) / float64(b.Window*4) * 100 // total/4 ~ tokens; window in tokens
-		pctSuffix = "  " + i18n.T("(%.0f%% of %s window)", pct, humanCount(b.Window))
-	}
-	out = append(out, row(i18n.T("TOTAL"), b.TotalBytes, pctSuffix))
+	out = append(out, rule)
+	// The byte total stays here, at the foot of the rows it is the sum of. The
+	// headline reports the size of the context; this reports what these rows add
+	// up to. Reading it as a duplicate of the headline is the one misreading to
+	// avoid, which is why they are labelled differently and why only this one
+	// carries the ~estimate note directly beneath it.
+	out = append(out, row(i18n.T("TOTAL"), b.TotalBytes, ""))
 	out = append(out, "")
 	out = append(out, muted("  "+i18n.T("sizes are bytes; token counts are ~bytes/4 estimates")))
-	out = append(out, renderCacheSection(th, b.Cache)...)
 	return out
+}
+
+// contextHeadline is the one-line answer to "how full is it". It prefers the
+// provider's real last-turn token count over terva's byte estimate, the same
+// preference the web gauge and the status bar already make — promoting a number
+// to the headline obliges it to be the best one available, and a /context modal
+// that disagreed with the status bar two lines above it would be worse than no
+// modal. Falls back to the estimate (marked ~) before the first turn, when there
+// is no measurement to prefer.
+func contextHeadline(th tui.Theme, b ctrlproto.ContextBreakdown) string {
+	muted := func(s string) string { return th.FG256(th.Muted, s) }
+	tok, est := b.ContextTokens, false
+	if tok == 0 {
+		tok, est = b.TotalBytes/4, true
+	}
+	tilde := ""
+	if est {
+		tilde = "~"
+	}
+	if b.Window <= 0 {
+		// No declared window: a percentage would need a denominator we do not have.
+		return muted(fmt.Sprintf("  %-15s %s%s", i18n.T("context"), tilde, humanCount(tok)) +
+			"  " + i18n.T("tokens"))
+	}
+	pct := float64(tok) / float64(b.Window) * 100
+	head := muted(fmt.Sprintf("  %-15s %s%s / %s %s", i18n.T("context"),
+		tilde, humanCount(tok), humanCount(b.Window), i18n.T("tokens")))
+	head += th.FG256(th.MeterColor(pct), fmt.Sprintf("  (%.0f%%)", pct))
+	if est {
+		head += muted("  " + i18n.T("estimated by size"))
+	}
+	return head
 }
 
 // sparkLevels are the eight bar heights a hit rate quantizes to. Eight is what
@@ -154,20 +199,22 @@ func renderContextOverview(th tui.Theme, b ctrlproto.ContextBreakdown) []string 
 // enough that the shape is the signal and nobody reads a height as a number.
 var sparkLevels = []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 
-// renderCacheSection paints the prompt-cache reading below the size breakdown.
+// renderCacheSection paints the prompt-cache reading directly under the context
+// headline, as its counterweight: the line above is how much context there is,
+// this is how much of it the provider actually re-read and charged for. The two
+// disagreeing is the whole point — a big transcript with a high hit rate costs
+// almost nothing, which a size alone would never tell you.
 //
-// It sits under the byte estimates on purpose, and reads as their counterweight:
-// everything above is terva guessing what it is about to send, this is the
-// provider reporting what it actually read and what it charged for. The two
-// disagreeing is informative — a big transcript with a high hit rate costs
-// almost nothing, which the byte total alone would never tell you.
+// Returns its lines with NO leading blank or rule: it is placed in two different
+// positions' worth of surrounding chrome over its life, and a section that
+// carries its own separators can only be correct in one of them.
 func renderCacheSection(th tui.Theme, c *ctrlproto.ContextCache) []string {
 	muted := func(s string) string { return th.FG256(th.Muted, s) }
 	if c == nil {
 		// A daemon older than this field. Say nothing rather than "0%".
 		return nil
 	}
-	out := []string{"", muted("  " + strings.Repeat("─", 38))}
+	var out []string
 
 	if !c.Supported {
 		if c.Session.Input+c.Session.CacheRead+c.Session.CacheWrite == 0 {
