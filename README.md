@@ -32,7 +32,7 @@ scripting, and an embeddable RPC/SDK.
 
 - one static binary.
 - built-in providers for Anthropic, OpenAI/Codex/Responses, Kimi, DeepSeek, Google Gemini/Vertex, GitHub Copilot, Bedrock, Azure OpenAI, OpenRouter, Groq, Cerebras, xAI, Together, Hugging Face, Mistral, Moonshot, Z.AI, Xiaomi, MiniMax, Fireworks, Vercel AI Gateway, OpenCode, Cloudflare AI, Ollama, and any OpenAI-compatible local/custom endpoint.
-- the built-in tool set: read, write, edit, bash, read-only grep/glob search, `terva_status` for agent self-introspection, a `task_*` board the agent plans with, and `session_inspect` for reading its own past transcripts. Under lazy tool visibility the model activates hidden groups on demand via `activate_tools`.
+- the built-in tool set: read, write, edit, bash, read-only grep/glob search, `terva_status` for agent self-introspection, a `task_*` board the agent plans with, and `session_inspect` for reading its own past transcripts. Extension and MCP tool groups start hidden by default and the model activates the ones it needs via `activate_tools`, so a large integration surface costs no context until it is used (`"lazy_tools": false` opts out).
 - a permission system: approval modes (`plan`/`ask`/`auto-edit`/`workspace`/`yolo`) plus typed permission rules. Interactive sessions default to **`workspace`** (built-in tools and reads run; foreign extension/MCP tools that can have side effects ask) and are **sandboxed to the working directory** by default. See [docs/permissions.md](docs/permissions.md).
 - pre/post tool-use **hooks** (veto, rewrite, or observe tool calls with your own scripts; [docs/hooks.md](docs/hooks.md)) and an **MCP client** (attach Model Context Protocol servers as tools; [docs/mcp.md](docs/mcp.md)).
 - run modes beyond the two UIs: an **editor integration over ACP** (Agent Client Protocol — drive terva from Zed and other ACP editors), print, json, and a JSON-RPC server for embedding. Every front end is a thin client of one agent loop and one event stream, spoken over the `ctrlproto` control plane ([docs/controllers.md](docs/controllers.md)).
@@ -135,6 +135,16 @@ terva --help
 [docs/cli.md](docs/cli.md).
 
 ## Documentation
+
+[docs/README.md](docs/README.md) maps the whole set. Two entry points depending
+on what you want:
+
+| | |
+|---|---|
+| **[docs/design/](docs/design/README.md)** | **How terva works, and why** — the agent loop, context economics and the prefix cache, the permission chokepoint, the control plane, the extension seams, and the lessons behind each. Written for a programmer who does not necessarily write Go |
+| **[docs/practices/](docs/practices/README.md)** | **Practices for agentic harnesses** — what we and the field have learned about building this kind of system, generalized for a harness that is not terva, with the evidence behind each claim graded |
+
+The reference guides:
 
 | Doc | What's in it |
 |---|---|

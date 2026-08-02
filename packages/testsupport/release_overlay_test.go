@@ -53,6 +53,13 @@ var docsThatShip = []string{
 	"docs/controllers.md",
 	"docs/debugging-prompts.md",
 	"docs/deploy.md",
+	// design/ and practices/ are DIRECTORIES that ship — everything else on
+	// this list is a single top-level page. Two other places record the same
+	// decision and must agree: release.sh's EXCLUDES (by omission), and
+	// docs.go's shippedSubdirs + go:embed globs, which decide whether they also
+	// reach $TERVA_HOME/docs for the agent to read. docs_test.go's
+	// TestEveryDocsSubdirIsClassified guards that half.
+	"docs/design",
 	"docs/extensions.md",
 	"docs/fork.md",
 	"docs/hooks.md",
@@ -64,6 +71,7 @@ var docsThatShip = []string{
 	"docs/permissions.md",
 	"docs/personas.md",
 	"docs/positioning.md",
+	"docs/practices",
 	"docs/profiling.md",
 	"docs/providers.md",
 	"docs/raati.md",

@@ -1,14 +1,31 @@
 # terva documentation
 
-terva is a coding-agent harness — a single Go binary that drives an LLM agent
-loop against your filesystem and shell, with a hand-rolled TUI, a browser
-control panel, out-of-process extensions and chat connectors, and origin-aware
-permissions. This page maps everything under `docs/`.
+terva is a harness for tool-using agents — a single Go binary running a
+permissioned agent loop, projected through many front ends and extensible in
+any language. It ships wired for coding — read, write, and run across your
+project — but the core is general: hand it extensions or MCP servers and it
+operates whatever they expose, all under one permission and policy model.
+This page maps everything under `docs/`.
 
-**New here?** Start with the [CLI reference](cli.md) — it opens with
+**Want to run it?** Start with the [CLI reference](cli.md) — it opens with
 [the ways to run terva](cli.md#ways-to-run-terva) (the terminal UI, the web
 daemon, and a terminal attached to that daemon) and when to use each — then dig
 into your front end: the [TUI guide](tui.md) or the [web panel](web.md).
+
+**Want to understand it?** Start with [terva by design](design/README.md) — how
+the harness works and why, in ordinary programming vocabulary. It assumes no Go.
+
+**Building your own harness?** [practices/](practices/README.md) is what we and
+the field have learned about this category, generalized and evidence-graded.
+
+## Understanding terva
+
+| Doc | About |
+|---|---|
+| [design/](design/README.md) | **How terva works, and why** — the agent loop, context economics, the permission chokepoint, the control plane, the extension seams, and the lessons behind each. Language-agnostic |
+| [practices/](practices/README.md) | **Best practices for agentic harnesses** — generalized guidance for anyone building one, with the evidence behind each claim graded |
+| [positioning.md](positioning.md) | Where terva sits in the landscape |
+| [fork.md](fork.md) | Lineage — how terva relates to zot, and where the compat promises end |
 
 ## User & operator guides
 
@@ -53,23 +70,21 @@ into your front end: the [TUI guide](tui.md) or the [web panel](web.md).
 | [providers.md](providers.md) | Provider setup & auth |
 | [profiling.md](profiling.md) | Profiling terva |
 | [resource-limits.md](resource-limits.md) | Resource limits |
-| [fork.md](fork.md) | Lineage — how terva relates to zot, and where the compat promises end |
-| [positioning.md](positioning.md) | Where terva sits in the landscape |
 
 ## Engineering records (development repository only)
 
-The pages above are the shipped documentation. The engineering record — design
-proposals, work plans, architecture notes, decision records, reviews — lives in
-the development repository and is **not part of the public release tree**, since
-it references internal infrastructure. It is named here, not linked, because the
-links would 404 for most readers:
+The pages above are the shipped documentation. The engineering record — the
+Go-level implementation notes, design proposals, work plans, decision records,
+reviews — lives in the development repository and is **not part of the public
+release tree**, since it references internal infrastructure. It is named here,
+not linked, because the links would 404 for most readers:
 
 | path | what's in it |
 |---|---|
-| `docs/architecture/` | Subsystem-by-subsystem internals, refreshed 2026-07-26 as an as-built record (docs 08/09 stay frozen June-2026 reviews; removals are logged in `ARCHIVE.md`, and `07-observations.md` is the standing review agenda). |
+| `docs/architecture/` | The **implementation tier**: subsystem-by-subsystem internals cited to Go files and symbols, refreshed 2026-07-26 as an as-built record (docs 08/09 stay frozen June-2026 reviews; removals are logged in `ARCHIVE.md`, and `07-observations.md` is the standing review agenda). The conceptual counterpart of each doc ships publicly in [`design/`](design/README.md). |
 | `docs/plans/` | Active work plans plus the living roadmap. Implemented plans move to `plans/archive/`. |
 | `docs/proposals/` | Active design proposals; implemented ones move to `proposals/archive/`. |
-| `docs/decisions/` | Architecture decision records (ADRs). |
+| `docs/decisions/` | Decision records — both the load-bearing calls we took and the directions we declined, each with what would reopen it. |
 | `docs/reviews/` | Point-in-time whole-project review findings. |
 | `docs/vanity/` | The terva.sh vanity-site sources. |
 | `docs/working-agreements.md` | Conventions for planning and validating larger changes. |
