@@ -14,6 +14,7 @@ package modes
 // at the right priority position.
 
 import (
+	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -128,11 +129,7 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				// screen. Reserve the dialog chrome (header + rule + frame
 				// padding ≈ 4) and the status/editor band (≈ 6).
 				_, rows := i.cfg.Terminal.Size()
-				avail := rows - 10
-				if avail < 4 {
-					avail = 4
-				}
-				i.questionDialog.MaxRows = avail
+				i.questionDialog.MaxRows = dialogs.BodyBudget(rows, i.questionDialog.ChromeRows())
 				return i.questionDialog.Render(i.cfg.Theme, cols)
 			},
 			// Only reports a row while a free-text answer is being typed;
@@ -207,7 +204,11 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				i.logDialog.HandleKey(k)
 				return false
 			},
-			render: func(cols int) []string { return i.logDialog.Render(i.cfg.Theme, cols) },
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				i.logDialog.MaxRows = dialogs.BodyBudget(rows, i.logDialog.ChromeRows())
+				return i.logDialog.Render(i.cfg.Theme, cols)
+			},
 		},
 		{ // per-extension config form (/extensions → c) — above the manager
 			// so it captures keys while open (it opens on top of it).
@@ -237,7 +238,11 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				}
 				return false
 			},
-			render: func(cols int) []string { return i.extensionsDialog.Render(i.cfg.Theme, cols) },
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				i.extensionsDialog.MaxRows = dialogs.BodyBudget(rows, i.extensionsDialog.ChromeRows())
+				return i.extensionsDialog.Render(i.cfg.Theme, cols)
+			},
 		},
 		{ // durable memory (/memory)
 			active: i.memoryDialog.Active,
@@ -249,7 +254,11 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				}
 				return false
 			},
-			render: func(cols int) []string { return i.memoryDialog.Render(i.cfg.Theme, cols) },
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				i.memoryDialog.MaxRows = dialogs.BodyBudget(rows, i.memoryDialog.ChromeRows())
+				return i.memoryDialog.Render(i.cfg.Theme, cols)
+			},
 		},
 		{ // mcp manager (/mcp)
 			active: i.mcpDialog.Active,
@@ -264,7 +273,11 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				}
 				return false
 			},
-			render: func(cols int) []string { return i.mcpDialog.Render(i.cfg.Theme, cols) },
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				i.mcpDialog.MaxRows = dialogs.BodyBudget(rows, i.mcpDialog.ChromeRows())
+				return i.mcpDialog.Render(i.cfg.Theme, cols)
+			},
 		},
 		{ // /context: size breakdown + per-extension injected text
 			active: i.contextDialog.Active,
@@ -273,7 +286,11 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				i.contextDialog.HandleKey(k)
 				return false
 			},
-			render: func(cols int) []string { return i.contextDialog.Render(i.cfg.Theme, cols) },
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				i.contextDialog.MaxRows = dialogs.BodyBudget(rows, i.contextDialog.ChromeRows())
+				return i.contextDialog.Render(i.cfg.Theme, cols)
+			},
 		},
 		{ // /usage: subscription usage windows (read-only)
 			active: i.usageDialog.Active,
@@ -332,11 +349,7 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				// and leave the remainder for session rows. Minimum of 3
 				// rows so even a very small terminal shows something.
 				_, rows := i.cfg.Terminal.Size()
-				avail := rows - 12
-				if avail < 3 {
-					avail = 3
-				}
-				i.sessionDialog.MaxRows = avail
+				i.sessionDialog.MaxRows = dialogs.BodyBudget(rows, i.sessionDialog.ChromeRows())
 				return i.sessionDialog.Render(i.cfg.Theme, cols)
 			},
 			cursor: func(int) (int, int) { return i.sessionDialog.CursorPos() },
@@ -409,11 +422,7 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				// window indicators, rule, frame padding ≈ 7) plus the
 				// status/editor band (≈ 6).
 				_, rows := i.cfg.Terminal.Size()
-				avail := rows - 13
-				if avail < 4 {
-					avail = 4
-				}
-				i.settingsDialog.MaxRows = avail
+				i.settingsDialog.MaxRows = dialogs.BodyBudget(rows, i.settingsDialog.ChromeRows())
 				return i.settingsDialog.Render(i.cfg.Theme, cols)
 			},
 		},
@@ -472,11 +481,7 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				// the editor (~3), status line (~2), and dialog chrome
 				// (header + hint + rule, ~5).
 				_, rows := i.cfg.Terminal.Size()
-				avail := rows - 10
-				if avail < 3 {
-					avail = 3
-				}
-				i.tasksDialog.MaxRows = avail
+				i.tasksDialog.MaxRows = dialogs.BodyBudget(rows, i.tasksDialog.ChromeRows())
 				return i.tasksDialog.Render(i.cfg.Theme, cols)
 			},
 			hideCaretFallback: true,
@@ -496,16 +501,16 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 					// same /cd the retired extension submitted.
 					i.worktreeDialog.Close()
 					i.SubmitSlash("/cd " + act.CdPath)
+				case act.RemoveName != "":
+					go i.removeWorktree(act.RemoveName)
+				case act.RemoveAvailable:
+					go i.removeAvailableWorktrees()
 				}
 				return false
 			},
 			render: func(cols int) []string {
 				_, rows := i.cfg.Terminal.Size()
-				avail := rows - 10
-				if avail < 3 {
-					avail = 3
-				}
-				i.worktreeDialog.MaxRows = avail
+				i.worktreeDialog.MaxRows = dialogs.BodyBudget(rows, i.worktreeDialog.ChromeRows())
 				return i.worktreeDialog.Render(i.cfg.Theme, cols)
 			},
 			hideCaretFallback: true,
@@ -530,11 +535,7 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			render: func(cols int) []string {
 				_, rows := i.cfg.Terminal.Size()
-				avail := rows - 10
-				if avail < 3 {
-					avail = 3
-				}
-				i.workflowDialog.MaxRows = avail
+				i.workflowDialog.MaxRows = dialogs.BodyBudget(rows, i.workflowDialog.ChromeRows())
 				return i.workflowDialog.Render(i.cfg.Theme, cols)
 			},
 			hideCaretFallback: true,
@@ -563,7 +564,11 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				}
 				return false
 			},
-			render: func(cols int) []string { return i.jumpDialog.Render(i.cfg.Theme, cols) },
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				i.jumpDialog.MaxRows = dialogs.BodyBudget(rows, i.jumpDialog.ChromeRows())
+				return i.jumpDialog.Render(i.cfg.Theme, cols)
+			},
 		},
 		{ // btw side-chat
 			active: i.btwDialog.Active,
@@ -589,7 +594,11 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				i.skillsDialog.HandleKey(k)
 				return false
 			},
-			render: func(cols int) []string { return i.skillsDialog.Render(i.cfg.Theme, cols) },
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				i.skillsDialog.MaxRows = dialogs.BodyBudget(rows, i.skillsDialog.ChromeRows())
+				return i.skillsDialog.Render(i.cfg.Theme, cols)
+			},
 		},
 		{ // changelog overlay
 			active: i.changelogDialog.Active,
@@ -605,7 +614,11 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				}
 				return false
 			},
-			render: func(cols int) []string { return i.changelogDialog.Render(i.cfg.Theme, cols) },
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				i.changelogDialog.MaxRows = dialogs.BodyBudget(rows, i.changelogDialog.ChromeRows())
+				return i.changelogDialog.Render(i.cfg.Theme, cols)
+			},
 		},
 		{ // permissions inspector
 			active: i.permissionsDialog.Active,
@@ -624,7 +637,11 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				}
 				return false
 			},
-			render: func(cols int) []string { return i.permissionsDialog.Render(i.cfg.Theme, cols) },
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				i.permissionsDialog.MaxRows = dialogs.BodyBudget(rows, i.permissionsDialog.ChromeRows())
+				return i.permissionsDialog.Render(i.cfg.Theme, cols)
+			},
 		},
 	}
 }

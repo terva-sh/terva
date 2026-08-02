@@ -11,9 +11,26 @@ type LogDialog struct {
 	title  string
 	lines  []string
 	top    int // index of the first visible line
+	// MaxRows is the body height the host budgets from the terminal
+	// (dialogs.BodyBudget). 0 falls back to logViewRows.
+	MaxRows int
 }
 
 const logViewRows = 16
+
+// bodyRows is the height to window to: the host's budget when set, else the
+// standalone fallback.
+func (d *LogDialog) bodyRows() int {
+	if d.MaxRows > 0 {
+		return d.MaxRows
+	}
+	return logViewRows
+}
+
+// ChromeRows is the non-body rows Render emits: header, the key-hint line, BOTH
+// scroll indicators and the closing rule. The hint line is the one a count taken
+// off a single screenshot forgets — TestEveryDialogFitsItsOwnBudget caught it.
+func (d *LogDialog) ChromeRows() int { return 5 }
 
 func NewLogDialog() *LogDialog { return &LogDialog{} }
 
@@ -33,10 +50,10 @@ func (d *LogDialog) Active() bool { return d != nil && d.active }
 func (d *LogDialog) Close()       { d.active = false }
 
 func (d *LogDialog) maxTop() int {
-	if len(d.lines) <= logViewRows {
+	if len(d.lines) <= d.bodyRows() {
 		return 0
 	}
-	return len(d.lines) - logViewRows
+	return len(d.lines) - d.bodyRows()
 }
 
 func (d *LogDialog) clampTop() {
@@ -59,9 +76,9 @@ func (d *LogDialog) HandleKey(k tui.Key) (closed bool) {
 	case tui.KeyDown:
 		d.top++
 	case tui.KeyPageUp:
-		d.top -= logViewRows
+		d.top -= d.bodyRows()
 	case tui.KeyPageDown:
-		d.top += logViewRows
+		d.top += d.bodyRows()
 	case tui.KeyHome:
 		d.top = 0
 	case tui.KeyEnd:
@@ -93,7 +110,7 @@ func (d *LogDialog) Render(th tui.Theme, width int) []string {
 		FrameHeader(th, d.title, width),
 		th.FG256(th.Muted, "↑/↓ · PgUp/PgDn · g/G top/bottom · esc"),
 	}
-	end := d.top + logViewRows
+	end := d.top + d.bodyRows()
 	if end > len(d.lines) {
 		end = len(d.lines)
 	}

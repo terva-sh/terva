@@ -670,6 +670,12 @@ func (dr *questionDraft) editor() *tui.Editor {
 }
 
 // Render draws the dialog for the head request.
+// ChromeRows is the non-body rows Render emits at their worst case: header,
+// the question text, the hint line and the closing rule. A wrapped question can
+// add rows, which is why the host's budget is a floor-checked maximum and this
+// is a worst case rather than a typical one.
+func (d *QuestionDialog) ChromeRows() int { return 4 }
+
 func (d *QuestionDialog) Render(th tui.Theme, width int) []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
