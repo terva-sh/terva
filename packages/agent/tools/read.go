@@ -40,8 +40,12 @@ type transcriptEpocher interface{ TranscriptEpoch() uint64 }
 
 // ReadTool reads file contents from disk.
 type ReadTool struct {
-	CWD     string
-	Sandbox *Sandbox // when jailed, confines reads to the sandbox root
+	CWD string
+	// Sandbox gates reads through CheckPathRead, which is a DENY LIST over
+	// the registered secret roots — NOT containment to the sandbox root. A
+	// jailed agent may read anywhere else by design; see CheckPathRead for
+	// why confining reads while bash stays unjailed confined nothing.
+	Sandbox *Sandbox
 	// Files records what the model has seen of each path, so a later failed
 	// edit can distinguish "you got the code wrong" from "the file moved since
 	// you read it". Shared with write and edit; nil disables the tracking.
@@ -123,8 +127,10 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		return core.ToolResult{}, fmt.Errorf("path is required")
 	}
 	path := resolvePath(t.CWD, a.Path)
-	// Read-side check: permits the jail root plus any read-only roots
-	// (e.g. $TERVA_HOME/docs) so a jailed agent can inspect them.
+	// Read-side check: a deny list over the secret roots, not containment.
+	// A jailed agent reads anywhere else — including $TERVA_HOME/docs, which
+	// the system prompt points it at — because bash was never path-jailed and
+	// confining one read path while leaving the other open confined nothing.
 	if err := t.Sandbox.CheckPathRead(path); err != nil {
 		return core.ToolResult{}, err
 	}

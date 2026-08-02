@@ -343,8 +343,9 @@ spots; filter at read time. All three doors into the gate record, and
 ladder), `host_tool_call` (an extension running a host tool), or
 `code_execution` (a script binding's read/grep/glob — up to one line
 per binding call). Lines written before `via` existed were all model
-tool calls; the other two doors recorded nothing then. The file is created `0600` and, like the rest of `logs/`, is
-excluded from the read jail, because tool arguments (bash commands, file
-writes) can carry secrets. It's append-only and lazily created, so a run
+tool calls; the other two doors recorded nothing then. The file is created `0600` and, like the rest of `logs/`, sits on the
+read **deny list** — never readable by `read` or by `bash`, and `/unjail`
+does not lift it — because tool arguments (bash commands, file writes)
+can carry secrets. It's append-only and lazily created, so a run
 that calls no tools never writes one; rotate or delete it yourself if it
 grows.

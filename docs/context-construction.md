@@ -173,7 +173,10 @@ First match wins per skill name. User-installed skills shadow built-in skills wi
 
 At startup terva does **not** inject every skill body into the prompt. Instead it appends a compact manifest containing skill names, descriptions, and source pointers. The full body is loaded later only if the model calls the built-in `skill` tool.
 
-Parsed skill frontmatter includes fields such as `name`, `description`, `allowed-tools`, and `permissions`, but `allowed-tools` and `permissions` are currently parsed for forward compatibility and are **not enforced** by terva.
+Parsed skill frontmatter includes fields such as `name`, `description`, `allowed-tools`, and `permissions`. The two are not in the same state, and the difference matters:
+
+- `allowed-tools` **is wired**: it drives lazy-visibility activation, so loading a skill reveals the tools it names. It is a *visibility hint, not a grant* — a revealed tool keeps its normal permission gate. See [skills.md](skills.md).
+- `permissions` is still **parsed but not enforced**, present for forward compatibility only. Do not rely on it to restrict anything.
 
 ## Auto-swarm context
 
@@ -350,15 +353,31 @@ headless modes** (`--jail`/`--no-jail` override; see
 [permissions.md](permissions.md)). In the TUI, `/jail` locks it and
 `/unjail` unlocks it at runtime.
 
-When locked:
+When locked, the jail is a **write** boundary plus a set of command
+heuristics. It is deliberately **not** a read boundary — see
+[permissions.md](permissions.md#what-the-jail-does-and-does-not-confine) for the
+full statement and the reasoning:
 
-- `read`, `write`, and `edit` call `Sandbox.CheckPath`.
-- Paths are resolved/canonicalized with symlinks considered.
-- Paths outside the sandbox root are rejected.
-- Nonexistent targets are checked by resolving the nearest existing parent so symlink escapes are still caught.
+- **Writes** — `write`, `edit` and the other mutating tools call
+  `Sandbox.CheckPath`, which confines them to the working directory. Paths are
+  resolved and canonicalized with symlinks considered, and a nonexistent target
+  is checked by resolving its nearest existing parent, so a symlink escape is
+  still caught.
+- **Reads** — `read`, `grep`, `glob` and friends call `Sandbox.CheckPathRead`,
+  which is a **deny list, not a containment check**: a jailed agent may read
+  anywhere except the registered secret roots. This is deliberate. `bash` has
+  never been path-jailed — it cannot be, short of not shipping a shell — so
+  anything a read refused was always one `cat` away, and enforcing containment
+  on one tool and not the other confined nothing while costing turns.
+- **Secrets are denied outright**, to reads *and* to `bash`, jailed or not:
+  `auth.json`, `config.json`, `trusted.json`, `unjailed.json`, `sessions/`,
+  `swarm/`, `logs/` (except `ext-*.log`), and `shared/`. `/unjail` does not lift
+  these.
 - `bash` calls `Sandbox.CheckCommand`, which blocks obvious escape/destructive patterns such as `sudo`, `su`, `rm -rf /`, `cd /`, `cd ~`, `cd ..`, recursive `chmod`/`chown`, `mkfs`, and dangerous `dd` forms.
 
-The jail is a guardrail, not a hard security boundary.
+The jail is a guardrail, not a hard security boundary — including the secret
+denials, which a runtime-assembled path or an interpreter walks past. It is the
+same speed bump on every route, not a wall.
 
 ## Extension effects on context
 
